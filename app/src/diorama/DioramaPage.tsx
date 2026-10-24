@@ -76,6 +76,32 @@ export default function DioramaPage() {
     sceneRef.current?.setReducedMotion(reducedMotion);
   }, [reducedMotion]);
 
+  // Frame the board inside the part of the stage the floating overlay leaves uncovered.
+  useEffect(() => {
+    const stage = stageRef.current;
+    const overlay = stage?.querySelector<HTMLElement>(".dio-overlay");
+    const scene = sceneRef.current;
+    if (!stage || !overlay || !scene || status.kind !== "ready") return;
+    const measure = () => {
+      const box = stage.getBoundingClientRect();
+      const middle = box.top + box.height / 2;
+      let top = 0;
+      let bottom = 0;
+      for (const child of Array.from(overlay.children)) {
+        const r = child.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) continue;
+        if (r.top + r.height / 2 < middle) top = Math.max(top, r.bottom - box.top);
+        else bottom = Math.max(bottom, box.bottom - r.top);
+      }
+      scene.setViewInsets({ top, right: 0, bottom, left: 0 });
+    };
+    const observer = new ResizeObserver(measure);
+    observer.observe(stage);
+    for (const child of Array.from(overlay.children)) observer.observe(child);
+    measure();
+    return () => observer.disconnect();
+  }, [status.kind]);
+
   const project = useCallback((target: PickTarget) => sceneRef.current?.project(target) ?? null, []);
   const resetView = useCallback(() => sceneRef.current?.resetView(), []);
 
