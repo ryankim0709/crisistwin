@@ -18,6 +18,13 @@ import type {
 import type { IgnitionProblem } from "../fire/scheduledTypes";
 import { toSolverInput, validateScenario } from "./scenario";
 import { gridBox, gridCoversScenario } from "./useRegionBoard";
+import { arrivalsOf, type CrewDispatch } from "./crewDispatch";
+
+/** Resources sent from fire stations for a run, or why they were not. */
+export interface RunDispatch {
+  dispatch: CrewDispatch | null;
+  note: string | null;
+}
 
 /** A prebuilt region board offered for a run; `grid` is null while it is still loading. */
 export interface RunBoard {
@@ -54,7 +61,7 @@ function deepFreeze<T>(value: T): T {
 export interface StudioRunController {
   state: StudioRunState;
   /** With a loaded `board` covering every enabled fire, the run is solved on that board. */
-  run: (scenario: StudioScenario, board?: RunBoard) => void;
+  run: (scenario: StudioScenario, board?: RunBoard, crews?: RunDispatch) => void;
   cancel: () => void;
   markStale: () => void;
 }
@@ -93,6 +100,7 @@ export function useStudioRun(): StudioRunController {
       snapshot: StudioScenario,
       landscape: CachedLandscape,
       boardId: string | null,
+      crews: RunDispatch | null,
     ) => {
       setState((previous) => ({
         ...previous,
@@ -129,6 +137,8 @@ export function useStudioRun(): StudioRunController {
             attribution: landscape.grid.attribution,
             elevationComplete: landscape.grid.elevationComplete,
             firefighting: response.firefighting,
+            crewDispatch: crews?.dispatch ?? null,
+            crewDispatchNote: crews?.note ?? null,
           };
           setState({
             phase: "ready",
@@ -150,6 +160,7 @@ export function useStudioRun(): StudioRunController {
         landscape: landscape.grid,
         input: toSolverInput(snapshot),
         firefighting: snapshot.firefighting ?? null,
+        crewArrivals: crews?.dispatch ? arrivalsOf(crews.dispatch) : null,
       };
       workerRef.current.postMessage(request);
     },
@@ -157,7 +168,8 @@ export function useStudioRun(): StudioRunController {
   );
 
   const run = useCallback(
-    (scenario: StudioScenario, board?: RunBoard) => {
+    (scenario: StudioScenario, board?: RunBoard, crews?: RunDispatch) => {
+      const crewPlan = crews ?? null;
       const requestId = ++requestIdRef.current;
       stopInFlight();
       const snapshot = deepFreeze(structuredClone(scenario));
@@ -176,6 +188,7 @@ export function useStudioRun(): StudioRunController {
           snapshot,
           { key: `region:${board.id}`, box: gridBox(grid), grid },
           boardId,
+          crewPlan,
         );
         return;
       }
@@ -185,7 +198,7 @@ export function useStudioRun(): StudioRunController {
       if (cached) {
         // Most recently used first.
         cacheRef.current = [cached, ...cacheRef.current.filter((entry) => entry !== cached)];
-        solve(requestId, snapshot, cached, boardId);
+        solve(requestId, snapshot, cached, boardId, crewPlan);
         return;
       }
 
@@ -204,7 +217,7 @@ export function useStudioRun(): StudioRunController {
           if (controller.signal.aborted || requestId !== requestIdRef.current) return;
           const entry: CachedLandscape = { key: requirement.key, box: requirement.box, grid };
           cacheRef.current = [entry, ...cacheRef.current].slice(0, LANDSCAPE_CACHE_SIZE);
-          solve(requestId, snapshot, entry, boardId);
+          solve(requestId, snapshot, entry, boardId, crewPlan);
         })
         .catch((cause: unknown) => {
           if (controller.signal.aborted || requestId !== requestIdRef.current) return;

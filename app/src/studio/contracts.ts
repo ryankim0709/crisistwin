@@ -17,7 +17,8 @@ import type {
   ScheduledFireInput,
   ScheduledFireRun,
 } from "../fire/scheduledTypes";
-import type { FirefightingResult, FirefightingSettings } from "./firefighting";
+import type { CrewArrival, FirefightingResult, FirefightingSettings } from "./firefighting";
+import type { CrewDispatch } from "./crewDispatch";
 
 // ---------------------------------------------------------------------------------------
 // Scenario (user assumptions). Persisted as JSON with `schemaVersion`.
@@ -128,6 +129,10 @@ export interface StudioRunResult {
    * fire with no firefighting, so the two can be compared.
    */
   firefighting: FirefightingResult | null;
+  /** Trips of the resources sent from fire stations for this run, or null. */
+  crewDispatch: CrewDispatch | null;
+  /** Why resources were not sent from stations when that was asked for, or null. */
+  crewDispatchNote: string | null;
 }
 
 export interface StudioRunState {
@@ -154,6 +159,8 @@ export type SolverRequest = {
   input: ScheduledFireInput;
   /** When enabled, the worker also plans and solves firefighting after the free run. */
   firefighting: FirefightingSettings | null;
+  /** When each resource starts work, from station dispatch; null uses the response time. */
+  crewArrivals: CrewArrival[] | null;
 };
 
 export type SolverResponse =

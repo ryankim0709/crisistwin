@@ -31,7 +31,9 @@ import { Button, Legend, Panel, type LegendItem } from "../ui";
 import { EvacuationPlayer, type EvacuationInputs } from "./evacuation";
 import { CompositeOverlay } from "../fire/diorama/compositeOverlay";
 import { FirelineOverlay, type FirelineView } from "./FirelineOverlay";
-import { FIRELINE_COLORS, firelineCss } from "./firelinePalette";
+import { CrewOverlay } from "./CrewOverlay";
+import type { CrewDispatch } from "./crewDispatch";
+import { CREW_COLORS, FIRELINE_COLORS, firelineCss } from "./firelinePalette";
 
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
 const ROADS_ATTRIBUTION = "Roads © OpenStreetMap contributors";
@@ -82,6 +84,21 @@ export interface StudioEvacuationView {
   inputs: EvacuationInputs | null;
 }
 
+function VehicleGlyph({ color, width, height }: { color: number; width: number; height: number }) {
+  return (
+    <svg width="24" height="16" viewBox="0 0 24 16" aria-hidden="true">
+      <rect
+        x={12 - width / 2}
+        y={13 - height}
+        width={width}
+        height={height}
+        rx="1"
+        fill={firelineCss(color)}
+      />
+    </svg>
+  );
+}
+
 function FirelineGlyph({ kind }: { kind: "held" | "breached" | "outrun" }) {
   return kind === "held" ? (
     <svg width="24" height="16" viewBox="0 0 24 16" aria-hidden="true">
@@ -130,6 +147,8 @@ export interface StudioDioramaProps {
   evacuation: StudioEvacuationView | null;
   /** Firefighters' control line for the run shown, or null. */
   fireline: FirelineView | null;
+  /** Firefighters driving in from fire stations, or null. */
+  crews: CrewDispatch | null;
   /** Shown under the board control. */
   evacuationPanel?: ReactNode;
   /** The live scene once created, and null once disposed (for a page overlay such as dispatch). */
@@ -165,6 +184,7 @@ export default function StudioDiorama(props: StudioDioramaProps) {
     evacuationPanel,
     onSceneChange,
     fireline,
+    crews,
   } = props;
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [scene, setScene] = useState<FireDioramaSceneApi | null>(null);
@@ -180,6 +200,7 @@ export default function StudioDiorama(props: StudioDioramaProps) {
   );
   const [overlay] = useState(() => new DispatchOverlay());
   const [lineOverlay] = useState(() => new FirelineOverlay());
+  const [crewOverlay] = useState(() => new CrewOverlay());
   const [composite] = useState(() => new CompositeOverlay());
   const inputs = evacuation?.inputs ?? null;
   const player = useMemo(() => (inputs ? new EvacuationPlayer(inputs) : null), [inputs]);
@@ -226,6 +247,7 @@ export default function StudioDiorama(props: StudioDioramaProps) {
       const time = timeRef.current;
       scene.setTime(time);
       lineOverlay.setMinute(time);
+      crewOverlay.setMinute(time);
       if (player) {
         if (player.syncTo(time)) overlay.setEngine(player.engine);
       } else overlay.setPreviewMinute(time);
@@ -233,10 +255,11 @@ export default function StudioDiorama(props: StudioDioramaProps) {
     };
     handle = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(handle);
-  }, [scene, timeRef, player, overlay, lineOverlay]);
+  }, [scene, timeRef, player, overlay, lineOverlay, crewOverlay]);
 
   const evacuationShown = evacuation !== null;
   const firelineShown = fireline !== null;
+  const crewsShown = crews !== null;
   // Clears the scene overlay only if this view set it, so a page overlay set through
   // `onSceneChange` (the /dispatch dispatcher) is left alone.
   const ownsOverlayRef = useRef(false);
@@ -244,6 +267,7 @@ export default function StudioDiorama(props: StudioDioramaProps) {
     const children = [
       ...(evacuationShown ? [overlay] : []),
       ...(firelineShown ? [lineOverlay] : []),
+      ...(crewsShown ? [crewOverlay] : []),
     ];
     composite.setChildren(children);
     if (!scene) return;
@@ -254,7 +278,19 @@ export default function StudioDiorama(props: StudioDioramaProps) {
       scene.setOverlay(null);
       ownsOverlayRef.current = false;
     }
-  }, [scene, composite, overlay, lineOverlay, evacuationShown, firelineShown]);
+  }, [
+    scene,
+    composite,
+    overlay,
+    lineOverlay,
+    crewOverlay,
+    evacuationShown,
+    firelineShown,
+    crewsShown,
+  ]);
+  useEffect(() => {
+    crewOverlay.setDispatch(crews);
+  }, [crewOverlay, crews]);
   useEffect(() => {
     lineOverlay.setView(fireline);
   }, [lineOverlay, fireline]);
@@ -406,6 +442,29 @@ export default function StudioDiorama(props: StudioDioramaProps) {
                             label: "Closed road or bridge (labelled), your assumption",
                             color: "var(--ct-ink)",
                             glyph: <ClosedRoadGlyph />,
+                          },
+                        ]
+                      : []),
+                    ...(crews
+                      ? [
+                          {
+                            label: "Engine (long red block), driving in or on scene",
+                            color: firelineCss(CREW_COLORS.engine),
+                            glyph: (
+                              <VehicleGlyph color={CREW_COLORS.engine} width={16} height={6} />
+                            ),
+                          },
+                          {
+                            label: "Hand-crew buggy (tall green block)",
+                            color: firelineCss(CREW_COLORS.hand_crew),
+                            glyph: (
+                              <VehicleGlyph color={CREW_COLORS.hand_crew} width={12} height={9} />
+                            ),
+                          },
+                          {
+                            label: "Dozer (low wide yellow block)",
+                            color: firelineCss(CREW_COLORS.dozer),
+                            glyph: <VehicleGlyph color={CREW_COLORS.dozer} width={13} height={5} />,
                           },
                         ]
                       : []),

@@ -63,8 +63,16 @@ export interface FirefightingSettings {
   handCrews: number;
   engines: number;
   dozers: number;
-  /** Minutes after the first ignition before any resource starts building line. */
+  /**
+   * Minutes after the first ignition before any resource starts building line. With
+   * `fromStations` this is only the fallback when no station can reach the fire.
+   */
   responseMinutes: number;
+  /**
+   * Drive each resource from the nearest fire stations on the board's roads, the fire reported
+   * when it ignites (studio/crewDispatch.ts). Absent in scenarios saved before this existed.
+   */
+  fromStations?: boolean;
 }
 
 export const DEFAULT_FIREFIGHTING: FirefightingSettings = {
@@ -73,6 +81,7 @@ export const DEFAULT_FIREFIGHTING: FirefightingSettings = {
   engines: 4,
   dozers: 1,
   responseMinutes: 30,
+  fromStations: true,
 };
 export const MAX_RESOURCES_PER_KIND = 20;
 export const RESPONSE_MINUTE_CHOICES = [15, 30, 60, 90] as const;
@@ -163,8 +172,28 @@ export interface FirefightingResult {
 const KIND_CODE: Record<ResourceKind, number> = { hand_crew: 0, engine: 1, dozer: 2 };
 export const KIND_BY_CODE: readonly ResourceKind[] = ["hand_crew", "engine", "dozer"];
 
+/** One resource and the minute it is on site and starts building line. */
+export interface CrewArrival {
+  kind: ResourceKind;
+  minute: number;
+}
+
+/**
+ * When each resource starts work: the dispatched arrival minutes when crews drive in from fire
+ * stations (studio/crewDispatch.ts), else everyone at the first ignition plus the response time.
+ */
+export function crewArrivals(
+  settings: FirefightingSettings,
+  input: ScheduledFireInput,
+  dispatched: readonly CrewArrival[] | null,
+): CrewArrival[] {
+  if (dispatched && dispatched.length > 0) return [...dispatched];
+  const minute = Math.min(...input.sources.map((s) => s.startMinute)) + settings.responseMinutes;
+  return resourceList(settings).map((kind) => ({ kind, minute }));
+}
+
 /** Resources, strongest line first so the anchor chunks get the best holding line. */
-function resourceList(settings: FirefightingSettings): ResourceKind[] {
+export function resourceList(settings: FirefightingSettings): ResourceKind[] {
   const list: ResourceKind[] = [];
   const counts: [ResourceKind, number][] = [
     ["dozer", settings.dozers],
@@ -363,8 +392,7 @@ export function planLine(
   baselineArrival: Float32Array,
   isochroneMinute: number,
   anchorDegrees: number,
-  resources: readonly ResourceKind[],
-  startMinute: number,
+  resources: readonly CrewArrival[],
 ): LinePlan | null {
   if (resources.length === 0) return null;
   const ring = outerRing(grid, baselineArrival, isochroneMinute);
@@ -398,7 +426,7 @@ export function planLine(
     for (const d of [cw, ccw]) for (const s of d.steps) plannedMeters += s;
     if (mine.length === 0) return;
     // Each resource keeps its own clock; a lone resource does one flank, then the other.
-    const crews = mine.map((kind) => ({ kind, clock: startMinute }));
+    const crews = mine.map(({ kind, minute }) => ({ kind, clock: minute }));
     const teams =
       crews.length === 1
         ? [crews, crews]
@@ -490,12 +518,15 @@ export function planFirefighting(
   baseline: ScheduledFireRun,
   settings: FirefightingSettings,
   onProgress?: (done: number, total: number) => void,
+  dispatched: readonly CrewArrival[] | null = null,
 ): FirefightingResult {
   const horizon = input.settings.horizonMinutes;
+  const resources = crewArrivals(settings, input, dispatched);
   const startMinute =
-    Math.min(...input.sources.map((s) => s.startMinute)) + settings.responseMinutes;
+    resources.length > 0
+      ? Math.min(...resources.map((r) => r.minute))
+      : Math.min(...input.sources.map((s) => s.startMinute)) + settings.responseMinutes;
   const baselineAreas = burnedAreas(grid, baseline.arrivalMinutes, horizon);
-  const resources = resourceList(settings);
   const empty = (note: string): FirefightingResult => ({
     settings,
     startMinute,
@@ -521,14 +552,7 @@ export function planFirefighting(
   const tried: Tried[] = [];
   for (const [strategy, bearing] of anchors) {
     for (const isochroneMinute of minutes) {
-      const line = planLine(
-        grid,
-        baseline.arrivalMinutes,
-        isochroneMinute,
-        bearing,
-        resources,
-        startMinute,
-      );
+      const line = planLine(grid, baseline.arrivalMinutes, isochroneMinute, bearing, resources);
       done += 1;
       onProgress?.(done, total);
       if (!line) continue;

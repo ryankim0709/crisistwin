@@ -8,6 +8,7 @@ import { formatElapsed } from "../fire/spread";
 import { Notice, SegmentedControl, Tag, type SegmentedOption } from "../ui";
 import { STRATEGY_LABELS, type FirefightingResult } from "./firefighting";
 import type { FireAttack } from "./initialAttack";
+import type { CrewDispatch } from "./crewDispatch";
 
 /** Which fire the page shows: direct attack, the best line plan, or no crews. */
 export type FireShown = "attack" | "line" | "none";
@@ -35,6 +36,41 @@ function attackLine(fire: FireAttack, name: string, holds: number): string {
     : `${name}: still burning at the horizon; its edge (about ${km(fire.perimeterMeters)} km) grows faster than the crews build line.`;
 }
 
+function DispatchSummary({ dispatch }: { dispatch: CrewDispatch }) {
+  const trips = [...dispatch.trips].sort((a, b) => a.arriveMinute - b.arriveMinute);
+  const first = trips[0];
+  const last = trips[trips.length - 1];
+  const stations = new Set(trips.map((trip) => trip.stationName)).size;
+  return (
+    <section className="studio-ff-attack" aria-label="Crews sent from fire stations">
+      <h4 className="studio-ff-heading">
+        Crews sent <Tag>Road travel</Tag>
+      </h4>
+      <p className="studio-hint">
+        Fire reported at {formatElapsed(dispatch.reportMinute)}; {trips.length} resources from{" "}
+        {stations} station{stations === 1 ? "" : "s"}. First on scene: {first.label} from{" "}
+        {first.stationName} at {formatElapsed(Math.round(first.arriveMinute))}; all on scene by{" "}
+        {formatElapsed(Math.round(last.arriveMinute))}
+        {dispatch.hikeMinutes >= 1
+          ? `, including a ${Math.round(dispatch.hikeMinutes)} min walk (${(dispatch.hikeMeters / 1000).toFixed(1)} km) from the nearest road`
+          : ""}
+        .
+      </p>
+      <details className="studio-advanced">
+        <summary>Arrival times</summary>
+        <ol className="studio-ff-candidates">
+          {trips.map((trip) => (
+            <li key={trip.label}>
+              {trip.label} from {trip.stationName}: {formatElapsed(Math.round(trip.arriveMinute))} (
+              {Math.round(trip.atRoadMinute - trip.departMinute)} min drive)
+            </li>
+          ))}
+        </ol>
+      </details>
+    </section>
+  );
+}
+
 export interface FirefightingResultsProps {
   result: FirefightingResult;
   /** Fire names by source id, for the per-fire lines. */
@@ -42,10 +78,16 @@ export interface FirefightingResultsProps {
   stale: boolean;
   shown: FireShown;
   onShownChange: (shown: FireShown) => void;
+  /** Resources sent from fire stations for this run, or null. */
+  dispatch: CrewDispatch | null;
+  /** Why they were not sent from stations, when that was asked for. */
+  dispatchNote: string | null;
 }
 
 export default function FirefightingResults({
   result,
+  dispatch,
+  dispatchNote,
   names,
   stale,
   shown,
@@ -133,16 +175,26 @@ export default function FirefightingResults({
         </table>
       </div>
 
+      {dispatch && <DispatchSummary dispatch={dispatch} />}
+      {dispatchNote && (
+        <Notice compact className="studio-notice">
+          {dispatchNote}
+        </Notice>
+      )}
+
       {estimate && (
         <section className="studio-ff-attack" aria-label="Direct attack once on site">
           <h4 className="studio-ff-heading">
             Once on site <Tag>Rough estimate</Tag>
           </h4>
           <p className="studio-hint">
-            From {formatElapsed(estimate.onSiteMinute)} the crews build about{" "}
-            {Math.round(estimate.lineMetersPerMinute * 60).toLocaleString()} m of line an hour in
-            grass (less in brush and timber) around each fire&rsquo;s edge. A fire is out when the
-            line built covers its edge, estimated from its size as an ellipse.
+            {dispatch ? "As each crew arrives (first at " : "From "}
+            {formatElapsed(Math.round(estimate.onSiteMinute))}
+            {dispatch ? ") it" : " the crews"} starts building line around each fire&rsquo;s edge;
+            together they build up to about{" "}
+            {Math.round(estimate.lineMetersPerMinute * 60).toLocaleString()} m an hour in grass
+            (less in brush and timber). A fire is out when the line built covers its edge, estimated
+            from its size as an ellipse.
           </p>
           <ul className="studio-ff-fires">
             {estimate.fires.map((fire) => (

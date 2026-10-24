@@ -16,6 +16,7 @@ import {
   type FirefightingSettings,
   type ResourceKind,
 } from "./firefighting";
+import { TURNOUT_MINUTES } from "./crewDispatch";
 
 const FIELD_FOR: Record<ResourceKind, "handCrews" | "engines" | "dozers"> = {
   hand_crew: "handCrews",
@@ -85,12 +86,26 @@ export default function FirefightingFields({
               );
             })}
           </div>
-          <Field label="Crews start work">
+          <Field
+            label="Crews start work"
+            hint={
+              settings.fromStations !== false
+                ? `Reported when the first fire starts; ${(TURNOUT_MINUTES * 60).toFixed(0)} s turnout, then driving the board's roads. Falls back to ${settings.responseMinutes} min if no station can reach it.`
+                : undefined
+            }
+          >
             <select
               className="ui-input"
-              value={settings.responseMinutes}
-              onChange={(event) => set({ responseMinutes: Number(event.target.value) })}
+              value={
+                settings.fromStations !== false ? "stations" : String(settings.responseMinutes)
+              }
+              onChange={(event) =>
+                event.target.value === "stations"
+                  ? set({ fromStations: true })
+                  : set({ fromStations: false, responseMinutes: Number(event.target.value) })
+              }
             >
+              <option value="stations">When they drive in from the nearest fire stations</option>
               {RESPONSE_MINUTE_CHOICES.map((minutes) => (
                 <option key={minutes} value={minutes}>
                   {minutes} min after the first fire ({formatElapsed(minutes)})

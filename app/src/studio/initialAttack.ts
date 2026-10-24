@@ -26,9 +26,10 @@ import { simulateScheduledFireSpread } from "../fire/spread";
 import {
   RESOURCE_TYPES,
   burnedAreas,
+  crewArrivals,
+  type CrewArrival,
   productionFactor,
   type FirefightingSettings,
-  type ResourceKind,
 } from "./firefighting";
 
 export interface FireAttack {
@@ -58,12 +59,6 @@ export interface InitialAttackEstimate {
   outFromMinuteBySource: number[];
 }
 
-const COUNT_FIELD: Record<ResourceKind, "handCrews" | "engines" | "dozers"> = {
-  hand_crew: "handCrews",
-  engine: "engines",
-  dozer: "dozers",
-};
-
 /** Ramanujan's perimeter of the ellipse with this area and length-to-breadth ratio. */
 export function ellipsePerimeter(areaSquareMeters: number, lengthToBreadth: number): number {
   if (areaSquareMeters <= 0) return 0;
@@ -76,21 +71,31 @@ export function ellipsePerimeter(areaSquareMeters: number, lengthToBreadth: numb
 export function estimateInitialAttack(
   run: ScheduledFireRun,
   settings: FirefightingSettings,
+  dispatched: readonly CrewArrival[] | null = null,
 ): InitialAttackEstimate {
   const { sources } = run.input;
   const horizon = run.input.settings.horizonMinutes;
-  const onSiteMinute = Math.min(...sources.map((s) => s.startMinute)) + settings.responseMinutes;
+  const arrivals = crewArrivals(settings, run.input, dispatched);
+  const onSiteMinute =
+    arrivals.length > 0
+      ? Math.min(...arrivals.map((a) => a.minute))
+      : Math.min(...sources.map((s) => s.startMinute)) + settings.responseMinutes;
   let lineMetersPerMinute = 0;
   let holdsFlameLengthFeet = 0;
-  for (const kind of Object.keys(RESOURCE_TYPES) as ResourceKind[]) {
-    const count = Math.max(0, Math.floor(settings[COUNT_FIELD[kind]]));
-    if (count === 0) continue;
-    lineMetersPerMinute += (count * RESOURCE_TYPES[kind].metersPerHourInGrass) / 60;
+  for (const { kind } of arrivals) {
+    lineMetersPerMinute += RESOURCE_TYPES[kind].metersPerHourInGrass / 60;
     holdsFlameLengthFeet = Math.max(
       holdsFlameLengthFeet,
       RESOURCE_TYPES[kind].holdsFlameLengthFeet,
     );
   }
+  /** Grass-equivalent line built by `minute`, each resource working from its own arrival. */
+  const builtBy = (minute: number) =>
+    arrivals.reduce(
+      (sum, { kind, minute: start }) =>
+        sum + (RESOURCE_TYPES[kind].metersPerHourInGrass / 60) * Math.max(0, minute - start),
+      0,
+    );
 
   const fires = run.ignitions.map(
     (ignition, index): FireAttack & { work: number; ratio: number } => {
@@ -146,7 +151,7 @@ export function estimateInitialAttack(
       previous = null;
       continue;
     }
-    const built = lineMetersPerMinute * (minute - onSiteMinute);
+    const built = builtBy(minute);
     const gap = built - needAt(frame, committed);
     if (gap >= 0) {
       const outMinute =
@@ -207,8 +212,9 @@ export function runInitialAttack(
   input: ScheduledFireInput,
   baseline: ScheduledFireRun,
   settings: FirefightingSettings,
+  dispatched: readonly CrewArrival[] | null = null,
 ): InitialAttackResult {
-  const estimate = estimateInitialAttack(baseline, settings);
+  const estimate = estimateInitialAttack(baseline, settings, dispatched);
   const anyOut = estimate.outFromMinuteBySource.some(Number.isFinite);
   const run = anyOut
     ? simulateScheduledFireSpread(grid, input, null, estimate.outFromMinuteBySource)
