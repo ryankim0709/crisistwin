@@ -1,0 +1,7 @@
+// The empty expansion preserves //, which otherwise starts an xcconfig comment.
+API_BASE_URL = http:/$()/localhost:8000
+PRODUCT_BUNDLE_IDENTIFIER = org.crisistwin.mobile
+SWIFT_ACTIVE_COMPILATION_CONDITIONS = $(inherited) DEBUG
+SWIFT_OPTIMIZATION_LEVEL = -Onone
+ENABLE_TESTABILITY = YES
+#include? "Local.xcconfig"
