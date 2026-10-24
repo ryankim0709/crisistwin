@@ -71,7 +71,7 @@ export default function AppShell({ path, children }: AppShellProps) {
           className={`sidebar-nav${menuOpen ? " is-open" : ""}`}
           aria-label="Primary navigation"
         >
-          {(["Workspace", "Analysis"] as const).map((group) => (
+          {(["Workspace"] as const).map((group) => (
             <div className="nav-group" key={group}>
               <p className="nav-group-label" id={`nav-${group.toLowerCase()}`}>
                 {group}
