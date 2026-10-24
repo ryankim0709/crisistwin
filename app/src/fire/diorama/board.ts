@@ -385,6 +385,8 @@ export type FireUniforms = {
   uCell: { value: number };
   /** Block/street layer strength (0 = none) and world units per ground metre. */
   uBlock: { value: number };
+  /** Strength of the procedural street grid (0 when real streets are drawn). */
+  uStreets: { value: number };
   uUnitsPerMeter: { value: number };
   /** Slope shading strength (0..1) and board max height (world units). */
   uRelief: { value: number };
@@ -443,6 +445,7 @@ export function createFireUniforms(frame: BoardFrame, overlay: THREE.Texture): F
     uOverlay: { value: 0 },
     uCell: { value: frame.cellWorld },
     uBlock: { value: frame.grid ? frame.blockMix : 0 },
+    uStreets: { value: 1 },
     uUnitsPerMeter: { value: frame.unitsPerMeter },
     uRelief: { value: frame.grid ? 0.35 + 0.65 * frame.regionalMix : 0 },
     uMaxH: { value: Math.max(1, frame.maxHeight) },
@@ -478,6 +481,7 @@ uniform sampler2D uOverlayTex;
 uniform float uOverlay;
 uniform float uCell;
 uniform float uBlock;
+uniform float uStreets;
 uniform float uUnitsPerMeter;
 uniform float uRelief;
 uniform float uMaxH;
@@ -496,6 +500,8 @@ float fNoise(vec2 p) {
 // so it fades out (instead of aliasing) once a block is only a few pixels wide.
 const vec3 URBAN_IVORY = vec3(0.80, 0.72, 0.55);
 const vec3 URBAN_STREET = vec3(0.49, 0.39, 0.27);
+// Lawn-and-garden tone for town ground when real streets (not the procedural grid) are drawn.
+const vec3 URBAN_GARDEN = vec3(0.64, 0.66, 0.43);
 vec3 applyUrban(vec3 base, float mask, vec2 pxU2) {
   float m = mask * uBlock;
   if (m < 0.01) return base;
@@ -515,9 +521,9 @@ vec3 applyUrban(vec3 base, float mask, vec2 pxU2) {
   float d = min(dl.x, dl.y);
   float fade = 1.0 - smoothstep(0.1, 0.22, pxU / blockU);
   float w = max(20.0 * uUnitsPerMeter, pxU * 0.9);
-  float line = (1.0 - smoothstep(w * 0.5, w * 1.5, d)) * fade;
-  float tone = (fHash(floor(cell) + district * 7.0) - 0.5) * 0.07 * fade;
-  vec3 c = mix(base, URBAN_IVORY + tone, m * 0.8);
+  float line = (1.0 - smoothstep(w * 0.5, w * 1.5, d)) * fade * uStreets;
+  float tone = (fHash(floor(cell) + district * 7.0) - 0.5) * 0.07 * fade * uStreets;
+  vec3 c = mix(base, mix(URBAN_GARDEN, URBAN_IVORY, uStreets) + tone, m * 0.8);
   return mix(c, URBAN_STREET, line * 0.55 * m);
 }
 

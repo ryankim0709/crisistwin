@@ -1,8 +1,9 @@
 /**
  * 3D diorama view for Simulation Studio: the fire page's three.js miniature (ADR 0011,
  * `fire/diorama/`) drawing the selected prebuilt region board (or the last run's landscape)
- * and the run's combined arrival field, with one labelled pin per enabled ignition. Presentation only; frames, areas and outcomes stay the
- * solver's. See docs/adr/0016-studio-diorama-view.md.
+ * and the run's combined arrival field, with one labelled pin per enabled ignition, plus the
+ * board's OSM roads with synthetic homes along residential streets. Presentation only; frames,
+ * areas and outcomes stay the solver's. See docs/adr/0016-studio-diorama-view.md.
  */
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -17,9 +18,29 @@ import type {
 } from "../fire/diorama/types";
 import type { LandscapeGrid } from "../fire/landscape";
 import type { GeoPoint } from "../fire/spread";
+import { useBoardStreets } from "../fire/useBoardStreets";
 import { Button, Legend, Panel } from "../ui";
 
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
+const ROADS_ATTRIBUTION = "Roads © OpenStreetMap contributors";
+
+function RoadGlyph() {
+  return (
+    <svg width="24" height="16" viewBox="0 0 24 16" aria-hidden="true">
+      <path d="M2 12C8 12 10 4 22 4" stroke="#cdbfa6" strokeWidth="5" fill="none" />
+      <path d="M2 12C8 12 10 4 22 4" stroke="#6b7480" strokeWidth="3" fill="none" />
+    </svg>
+  );
+}
+
+function HomeGlyph() {
+  return (
+    <svg width="24" height="16" viewBox="0 0 24 16" aria-hidden="true">
+      <path d="M7 14V8h10v6z" fill="#f2e9d9" stroke="#8a8172" strokeWidth="1" />
+      <path d="M5 8.5 12 3l7 5.5z" fill="#c27a5a" />
+    </svg>
+  );
+}
 
 export interface StudioDioramaProps {
   /** Landscape of the latest result; null before the first run. */
@@ -74,6 +95,8 @@ export default function StudioDiorama(props: StudioDioramaProps) {
   const [error, setError] = useState<string | null>(null);
   const [legendOpen, setLegendOpen] = useState(false);
   const reducedMotion = useMediaQuery(REDUCED_MOTION_QUERY);
+  const streets = useBoardStreets(landscape);
+  const streetArea = streets.status === "ready" ? streets.area : null;
   const reducedMotionRef = useRef(reducedMotion);
   const clickRef = useRef(onGroundClick);
   useEffect(() => {
@@ -116,6 +139,9 @@ export default function StudioDiorama(props: StudioDioramaProps) {
   useEffect(() => {
     scene?.setLandscape(landscape);
   }, [scene, landscape]);
+  useEffect(() => {
+    scene?.setStreets(streetArea);
+  }, [scene, streetArea]);
   useEffect(() => {
     scene?.setRun(run);
   }, [scene, run]);
@@ -188,7 +214,9 @@ export default function StudioDiorama(props: StudioDioramaProps) {
         <>
           {attribution.length > 0 && (
             <p className="studio-diorama__credit">
-              Planning experiment, not an operational forecast · Sources: {attribution.join(" · ")}
+              Planning experiment, not an operational forecast · Sources:{" "}
+              {[...attribution, ...(streetArea ? [ROADS_ATTRIBUTION] : [])].join(" · ")}
+              {streets.status === "loading" && " · Loading roads…"}
             </p>
           )}
           <section className="studio-diorama__legend" aria-label="3D view legend">
@@ -217,6 +245,20 @@ export default function StudioDiorama(props: StudioDioramaProps) {
                       glyph: <FireEdgeGlyph />,
                     },
                     { label: "Burned ground", color: "var(--ct-burned)", glyph: <BurnedGlyph /> },
+                    ...(streetArea
+                      ? [
+                          {
+                            label: "Road (OpenStreetMap), widths exaggerated",
+                            color: "var(--ct-ink)",
+                            glyph: <RoadGlyph />,
+                          },
+                          {
+                            label: "Synthetic home along a residential street",
+                            color: "var(--ct-ink)",
+                            glyph: <HomeGlyph />,
+                          },
+                        ]
+                      : []),
                     {
                       label: "Enabled ignition, with its name",
                       color: "var(--ct-fire)",
@@ -237,7 +279,11 @@ export default function StudioDiorama(props: StudioDioramaProps) {
                   </ul>
                 )}
                 <p className="studio-diorama__legend-note">
-                  Trees and houses symbolise LANDFIRE fuel classes; relief is exaggerated.
+                  {streetArea
+                    ? "Trees symbolise LANDFIRE fuel classes. Homes are placeholders every ~40 m along OSM residential streets, not real buildings. Relief is exaggerated."
+                    : streets.status === "error"
+                      ? "Roads could not be loaded, so houses symbolise the LANDFIRE urban fuel class. Trees symbolise fuel classes; relief is exaggerated."
+                      : "Trees and houses symbolise LANDFIRE fuel classes; relief is exaggerated."}
                 </p>
               </Panel>
             )}

@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { gableRoof, hash2, mergeAll, paint, place } from "../../diorama/scene/geometry";
 import { PALETTE } from "../../diorama/scene/palette";
 import type { BoardFrame } from "./board";
+import type { BoardHome, ProjectedStreets } from "./streets";
 import { BUSH_DENSITY, FALLBACK_CANOPY, FuelFamily, PINE_SHARE } from "./fuelStyle";
 
 /** Instance caps (totals across kinds); dense or large grids are thinned uniformly. */
@@ -19,6 +20,10 @@ const STREET_EVERY = 4;
 /** Side of the square neighbourhoods that share one street-grid heading (world units). */
 const NEIGHBOURHOOD = 56;
 const NEIGHBOURHOOD_ANGLES = [0, 0, 0.14, -0.2, 0.35, -0.42, 0.62, 0.08] as const;
+/** Houses on real streets: footprint width (ground metres) kept within a world-unit range. */
+const STREET_HOUSE_METERS = 26;
+const STREET_HOUSE_UNITS = { min: 0.5, max: 2.2 } as const;
+const HOUSE_ROOFS = [0xc27a5a, 0x6f7b86, 0x8fa182] as const;
 
 /**
  * Regional-scale tuning (see `BoardFrame.blockMix`): at tens of km per board a house or tree
@@ -256,7 +261,8 @@ export class CoverLayer {
   /** Whether instances cast shadows (off on regional boards where they are sub-pixel). */
   private shadows = true;
 
-  constructor(frame: BoardFrame) {
+  /** With `streets`, trees keep off the roads and houses stand along residential streets. */
+  constructor(frame: BoardFrame, streets: ProjectedStreets | null = null) {
     const grid = frame.grid;
     if (!grid) return;
     const { cols, rows, families, cellWorld } = frame;
@@ -318,6 +324,7 @@ export class CoverLayer {
             const at = frame.cellAt(x, z);
             if (at < 0 || families[at] === FuelFamily.Water) break tree;
           }
+          if (streets?.onRoad(x, z)) break tree;
           // Stands: conifer share varies smoothly by block so pines cluster.
           const stand =
             blend < 0.01
@@ -350,6 +357,7 @@ export class CoverLayer {
           frame.cellCentre(c, r, centre);
           const x = centre.x + (hash2(c * 1.1, r * 2.9) - 0.5) * cellWorld * 0.9;
           const z = centre.z + (hash2(r * 3.3, c * 0.6) - 0.5) * cellWorld * 0.9;
+          if (streets?.onRoad(x, z)) continue;
           const j = hash2(x * 1.3, z * 0.7);
           const s = BUSH_RADIUS * (1 + (REGIONAL.bushScale - 1) * blend) * (0.7 + 0.6 * j);
           pushInstance(bushes, i, x, frame.heightAt(x, z) - 0.08, z, j * 6.28, s, s * 0.7, s);
@@ -417,7 +425,48 @@ export class CoverLayer {
       );
     }
 
-    this.buildHouses(frame);
+    if (streets && streets.homes.length > 0) this.buildStreetHouses(frame, streets.homes);
+    else this.buildHouses(frame);
+  }
+
+  /** One house per synthetic home, set back from its street and facing it. */
+  private buildStreetHouses(frame: BoardFrame, homes: readonly BoardHome[]) {
+    const size = THREE.MathUtils.clamp(
+      STREET_HOUSE_METERS * frame.unitsPerMeter,
+      STREET_HOUSE_UNITS.min,
+      STREET_HOUSE_UNITS.max,
+    );
+    const p = newPlacement();
+    const roofTops: number[] = [];
+    for (const home of homes) {
+      const { x, z, yaw, cell } = home;
+      const j = hash2(x * 0.53, z * 0.91);
+      const w = size * (0.85 + 0.3 * hash2(z, x));
+      const d = size * 0.75 * (0.85 + 0.25 * j);
+      const ht = size * 0.5 * (0.9 + 0.35 * hash2(x * 2.1, z));
+      const hw = Math.max(w, d) / 2;
+      const corners = [
+        frame.heightAt(x - hw, z - hw),
+        frame.heightAt(x + hw, z - hw),
+        frame.heightAt(x - hw, z + hw),
+        frame.heightAt(x + hw, z + hw),
+      ];
+      const ground = Math.min(...corners);
+      const top = Math.max(...corners);
+      pushInstance(p, cell, x, ground - 0.15, z, yaw, w, ht + (top - ground) + 0.15, d);
+      pushColor(
+        p.colorsA,
+        PALETTE.walls[Math.floor(j * PALETTE.walls.length) % PALETTE.walls.length],
+        1,
+      );
+      pushColor(
+        p.colorsB,
+        HOUSE_ROOFS[Math.floor(hash2(x, z * 3.1) * HOUSE_ROOFS.length)],
+        0.95 + 0.1 * j,
+      );
+      roofTops.push(top + ht, size * 0.38);
+    }
+    this.addHouses(p, roofTops);
   }
 
   /**
@@ -523,12 +572,17 @@ export class CoverLayer {
               PALETTE.walls[Math.floor(j * PALETTE.walls.length) % PALETTE.walls.length],
               1,
             );
-            pushColor(p.colorsB, [0xc27a5a, 0x6f7b86, 0x8fa182][roofIdx], 0.95 + 0.1 * j);
+            pushColor(p.colorsB, HOUSE_ROOFS[roofIdx], 0.95 + 0.1 * j);
             roofTops.push(top + ht, HOUSE.rise * size);
           }
         }
       }
     }
+    this.addHouses(p, roofTops);
+  }
+
+  /** House bodies and roofs (eave height and rise per house in `roofTops`) that burn. */
+  private addHouses(p: Placement, roofTops: number[]) {
     if (p.cells.length === 0) return;
     this.counts.houses = p.cells.length;
     const shapes = houseShapes();

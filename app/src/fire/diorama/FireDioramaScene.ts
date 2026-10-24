@@ -23,9 +23,11 @@ import { FireSampler, FxLayer, burnWindowMinutes } from "./fx";
 import { FuelFamily } from "./fuelStyle";
 import { LabelLayer, type ClipOptions } from "./labels";
 import { REFERENCE_PLACES } from "./places";
+import { ProjectedStreets, buildStreetMesh } from "./streets";
 import { FireCameraRig, type Framing } from "./rig";
 import type {
   BoardOverlay,
+  BoardStreets,
   DioramaIgnition,
   DioramaRun,
   FireDioramaOptions,
@@ -99,6 +101,8 @@ type Board = {
   fire: FireUniforms;
   textures: THREE.Texture[];
   cover: CoverLayer;
+  /** Road ribbons, when streets are loaded for this board. */
+  streets: THREE.Mesh | null;
   framing: Framing;
   labels: CSS2DObject[];
 };
@@ -143,6 +147,7 @@ export class FireDioramaScene implements FireDioramaSceneApi {
   private clickMode: GroundClickMode = "origin";
   private overlayContent: BoardOverlay | null = null;
   private coverHouses = true;
+  private streets: BoardStreets | null = null;
   private reducedMotion: boolean;
   private clickCallback: ((point: GeoPoint) => void) | null = null;
   private pointerDown: { x: number; y: number; id: number } | null = null;
@@ -344,6 +349,28 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     if (this.board) overlay?.attach(this.board.frame, this.board.group, this.labels);
   }
 
+  setStreets(streets: BoardStreets | null): void {
+    if (this.disposed || streets === this.streets) return;
+    this.streets = streets;
+    const board = this.board;
+    if (!board || !board.frame.grid) return;
+    // Rebuild only the cover and road layers; terrain, labels and camera stay.
+    board.cover.group.removeFromParent();
+    disposeTree(board.cover.group);
+    if (board.streets) {
+      board.streets.removeFromParent();
+      disposeTree(board.streets);
+    }
+    const { cover, streets: mesh } = this.buildStreetLayers(board.frame, board.fire);
+    board.cover = cover;
+    board.streets = mesh;
+    board.group.add(cover.group);
+    if (mesh) board.group.add(mesh);
+    this.applyCoverHouses();
+    this.appliedRun = null;
+    this.applyRun();
+  }
+
   setCoverHouses(visible: boolean): void {
     if (this.disposed || visible === this.coverHouses) return;
     this.coverHouses = visible;
@@ -423,8 +450,9 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     const textures: THREE.Texture[] = [ground, overlay];
     if (water.mask) textures.push(water.mask);
     this.setShadowQuality(frame.blockMix);
-    const cover = new CoverLayer(frame);
+    const { cover, streets } = this.buildStreetLayers(frame, fire);
     group.add(cover.group);
+    if (streets) group.add(streets);
     const labels: CSS2DObject[] = [];
     if (grid) {
       this.buildMapFurniture(frame, group, labels);
@@ -452,9 +480,18 @@ export class FireDioramaScene implements FireDioramaSceneApi {
       fire,
       textures,
       cover,
+      streets,
       framing,
       labels,
     };
+  }
+
+  /** Cover (trees, bushes, houses) and, when streets are loaded, the road ribbons. */
+  private buildStreetLayers(frame: BoardFrame, fire: FireUniforms) {
+    const projected = frame.grid && this.streets ? new ProjectedStreets(frame, this.streets) : null;
+    const streets = projected ? buildStreetMesh(frame, projected) : null;
+    fire.uStreets.value = streets ? 0 : 1;
+    return { cover: new CoverLayer(frame, projected), streets };
   }
 
   /** North arrow and scale bar on the base board rim, each with a small label. */

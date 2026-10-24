@@ -38,3 +38,20 @@ picks a new area centre. On the `/fire` page it is the only remaining imagery ma
 
 Limits: houses and trees are symbols for fuel classes; vertical exaggeration distorts
 slope visually (never the model's slope); the board covers the modelled square only.
+
+## Addendum (2026-10-24): real streets on the board
+
+`/fire` and the Studio 3D view (`/simulation`, and `/dispatch`, which renders the Studio page) now draw the board's OpenStreetMap roads and
+place houses along residential streets, instead of the stylized house lattice and the
+procedural street grid in the ground shader. Data comes from the dispatch area endpoint
+(`GET /api/dispatch/area`, ADR 0017) for the board's extent (`fire/useBoardStreets.ts`; boxes
+larger than the endpoint allows get the centre 0.2° × 0.26°). Homes are that endpoint's
+synthetic homes (~40 m apart along residential streets, thinned uniformly past 20,000),
+turned to face the nearest road; they burn with the arrival field like the lattice houses.
+Trees and bushes are kept off the roads. Road widths are exaggerated (minimum 0.45–1.35 world
+units by class). Renderer: `fire/diorama/streets.ts`, `FireDioramaSceneApi.setStreets`.
+
+If the roads cannot be loaded (backend down, Overpass busy, no roads on a wilderness board)
+the board keeps the stylized lattice. The first visit to a new board waits on Overpass
+(typically 5–30 s); afterwards the box is cached in process and in MongoDB. A page that draws its
+own homes (the `DispatchOverlay`) still hides the board's houses with `setCoverHouses(false)`.
