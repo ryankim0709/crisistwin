@@ -4,6 +4,7 @@ Asset: crisistwin-logo.png
 Use: transparent PNG for light backgrounds, slides, and demo materials.
 Web asset URL: /brand/crisistwin-logo.png
 Suggested alt text: CrisisTwin
+Favicon: crisistwin-mark.png (512 px) and crisistwin-mark-64.png are the emblem cropped square from this logo, linked from app/index.html.
 Preserve the aspect ratio. This is a raster asset, not an SVG.
 Created with the built-in image generation tool.
 
