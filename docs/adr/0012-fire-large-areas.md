@@ -39,6 +39,18 @@ coarse cells and long horizons. Fire physics, fuel tables and every model consta
 - `SPREAD_MODEL.version` 4.1.0. Arrival times and frames are bit-identical to 4.0.0 on the
   same landscape. The version moves because the run carries a new field and the
   propagation description no longer says "30 m".
+- Merged with Simulation Studio (ADR 0011) without a further bump: the scheduled
+  multi-ignition solver and `simulateFireSpread` share one core, single-ignition runs are
+  unchanged by that refactor, and both report 4.1.0. `loadLandscapeForBox(box, signal,
+  { endpoints? })` is the native-lattice loader for an arbitrary Mercator box (Studio);
+  coarse lattices are planned from a centre and radius, so they go through
+  `loadLandscape`. `FireRun.resolution` is on single-ignition runs only; `ScheduledFireRun`
+  is unchanged.
+- Native loads overlap their interior sub-request edges by two cells (from main, "overlap
+  LANDFIRE sub-requests so chunk seams carry fuel"), because unaligned requests can come
+  back a cell apart and leave a no-data seam. Coarse sample blocks do not overlap: their
+  edges are on the lattice and their size, origin and spacing are checked exactly, so a
+  seam fails the load instead. The stored SoCal packages (ADR 0013) are all coarse.
 
 ## Resampling
 
@@ -200,7 +212,9 @@ Solver times (Node, same V8 as Chrome):
 | Synthetic 833² GR2, 40 mph, 24 h (reaches edge) | — | 500 ms |
 
 The speed-up comes from the frames, not the solver. Per-frame statistics now take one
-binned pass over the grid instead of a full scan per frame. Contouring is limited to the
+pass instead of a full scan per frame (measured with a binned pass over the grid; after
+the Studio merge, the shared core's single walk over cells in settle order, which gives
+the same counts, reach and boxes). Contouring is limited to the
 burned bounding box. Ring containment gets a bounding-box pre-test. All three return
 exactly what the full scans did.
 

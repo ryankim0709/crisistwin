@@ -60,6 +60,9 @@ python3 -m tools.mongo_data pull         # restores data/incidents/*/*/{raw,norm
 ```
 
 After building a new package locally, run `python3 -m tools.mongo_data push` and commit its manifest.
+`python3 -m tools.mongo_data status` reports local app data (replay bundles, variants, simulations)
+that differs from the committed `app/data-manifest.json`, and with `MONGODB_URI` set, any listed
+artifact missing from Atlas. If it reports drift after you pulled, the author has not yet run `record`, `push` and committed the manifest.
 
 Prebuilt Southern California fire landscapes (ADR 0013) are built and uploaded with
 [`tools/build_landscape_regions`](tools/build_landscape_regions/README.md):
@@ -564,6 +567,21 @@ in Docker. To change the host target, use
 Optional host backend checks run from `app/backend/` using `.venv/bin/ruff check .`,
 `.venv/bin/ruff format --check .`, `.venv/bin/python manage.py check`, and
 `.venv/bin/python manage.py test --noinput`.
+
+### Simulation Studio (`/simulation`)
+
+Place up to five fires on the map, give each a start time in elapsed simulation minutes,
+set constant wind and fuel moisture, press **Run simulation**, and play the combined spread
+on one timeline. All fires run through one solver pass on one shared landscape, so overlap
+and "fire F1 reached F3 before its scheduled start" are modelled, not overlaid. The solve runs
+in a Web Worker; the draft is kept in `localStorage` ("Saved on this device") and can be
+exported or imported as JSON. Model and contracts: `docs/adr/0011-simulation-studio.md`.
+
+Limits: wind and moisture are constant for the whole run; horizons are 1, 2, 3 or 6 hours;
+fires must be close enough to share one landscape (at most about 24 km across, including
+spread room); edits mark the result stale and nothing re-runs automatically; a run that
+reaches the grid edge is incomplete from that minute. It is a planning experiment, not an
+operational forecast.
 
 ### Build runtime images
 

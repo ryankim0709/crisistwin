@@ -415,6 +415,13 @@ const MAX_REQUEST_CELLS = 320;
 const FUEL_CELL_METERS = 30;
 /** Concurrent sub-requests; enough to be quick without hammering the service. */
 const MAX_PARALLEL_REQUESTS = 4;
+/**
+ * Overlap between neighbouring sub-requests, Mercator metres. Measured: the LF2025 WCS
+ * rounds each request's edges onto its 30 m lattice independently, so abutting requests can
+ * come back one cell apart (a full row or column of no-data, which the solver treats as a
+ * firebreak). Two cells of overlap covers that one-cell rounding with margin.
+ */
+const CHUNK_OVERLAP_METERS = 2 * FUEL_CELL_METERS;
 
 /**
  * GetCoverage URL for one box. With `scaleSize` the service resamples to exactly that many
@@ -475,11 +482,15 @@ function chunkBoxes(box: MercatorBox): MercatorBox[] {
   const boxes: MercatorBox[] = [];
   for (let row = 0; row < rows; row++) {
     for (let column = 0; column < columns; column++) {
+      // Interior edges overlap so the server's per-request edge rounding cannot leave a
+      // one-cell seam of no-data between neighbours; outer edges stay where requested.
       boxes.push({
-        minX: box.minX + column * chunkWidth,
-        maxX: box.minX + (column + 1) * chunkWidth,
-        minY: box.minY + row * chunkHeight,
-        maxY: box.minY + (row + 1) * chunkHeight,
+        minX: box.minX + column * chunkWidth - (column > 0 ? CHUNK_OVERLAP_METERS : 0),
+        maxX:
+          box.minX + (column + 1) * chunkWidth + (column < columns - 1 ? CHUNK_OVERLAP_METERS : 0),
+        minY: box.minY + row * chunkHeight - (row > 0 ? CHUNK_OVERLAP_METERS : 0),
+        maxY:
+          box.minY + (row + 1) * chunkHeight + (row < rows - 1 ? CHUNK_OVERLAP_METERS : 0),
       });
     }
   }
@@ -1380,6 +1391,10 @@ function planResample(
   const southY = lattice.northY - side * mercatorCell;
   const piecesAcross = Math.ceil((eastX - sampleWestX) / pieceSpan);
   const piecesDown = Math.ceil((sampleNorthY - southY) / pieceSpan);
+  // Pieces abut exactly and need no `CHUNK_OVERLAP_METERS`: every edge is on the native
+  // lattice, so the service has nothing to round, and `fetchSampledCoverage` refuses any
+  // response whose size, origin or spacing is not the requested one, so a seam cannot pass
+  // silently. Overlapping them would also break the fixed piece-to-sample-grid offsets.
   const pieces: ResamplePlan["pieces"] = [];
   for (let row = 0; row < piecesDown; row++) {
     for (let column = 0; column < piecesAcross; column++) {
@@ -1593,7 +1608,12 @@ export async function loadLandscape(
   }
   const source = resolveSource(options.endpoints);
   if (requested === undefined || requested <= FUEL_CELL_METERS) {
-    return loadNativeLandscape(longitude, latitude, groundRadiusMeters, signal, source);
+    return loadNativeLandscape(
+      boxAround(longitude, latitude, groundRadiusMeters),
+      latitude,
+      signal,
+      source,
+    );
   }
 
   const plan = planResample(longitude, latitude, groundRadiusMeters, requested);
@@ -1655,14 +1675,17 @@ export async function loadLandscape(
   };
 }
 
+/**
+ * LANDFIRE's native 30 m lattice over `box` (Mercator metres). `latitude` sets the
+ * cos(latitude) ground correction: the requested point for `loadLandscape`, the box centre
+ * for `loadLandscapeForBox`.
+ */
 async function loadNativeLandscape(
-  longitude: number,
+  box: MercatorBox,
   latitude: number,
-  groundRadiusMeters: number,
   signal: AbortSignal,
   source: DataSource,
 ): Promise<LandscapeGrid> {
-  const box = boxAround(longitude, latitude, groundRadiusMeters);
   const raster = await fetchFuelRaster(box, signal, source);
   // Different hosts, so the terrain tiles and the canopy coverages overlap in time.
   const [{ elevation: elevationMeters, complete: tilesComplete }, canopy] = await Promise.all([
@@ -1702,4 +1725,23 @@ async function loadNativeLandscape(
     resampling: "native",
     attribution: attribution(),
   };
+}
+
+/**
+ * Loads fuel, canopy and terrain for an arbitrary box on LANDFIRE's native 30 m lattice
+ * (used by Simulation Studio). The box is in Mercator metres (EPSG:3857, the grid's own
+ * coordinates); the returned grid has Mercator cell addressing and `groundCellSizeMeters`
+ * corrected with cos(latitude) at the box centre. Only `endpoints` applies: a coarse
+ * lattice is planned from a centre and radius, so use `loadLandscape` with `cellMeters`.
+ */
+export async function loadLandscapeForBox(
+  box: MercatorBox,
+  signal: AbortSignal,
+  options: Pick<LandscapeLoadOptions, "endpoints"> = {},
+): Promise<LandscapeGrid> {
+  if (!(box.maxX > box.minX && box.maxY > box.minY)) {
+    throw new Error("The landscape box must have a positive extent.");
+  }
+  const [, latitude] = mercatorToLonLat((box.minX + box.maxX) / 2, (box.minY + box.maxY) / 2);
+  return loadNativeLandscape(box, latitude, signal, resolveSource(options.endpoints));
 }

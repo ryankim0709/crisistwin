@@ -53,6 +53,8 @@ export interface Zone {
   name: string;
   households: number | null;
   vehicles: number | null;
+  /** Residents, when the demand report gives them (Census population). */
+  population: number | null;
   geometry: AreaGeometry;
 }
 
@@ -114,6 +116,11 @@ export interface Traffic {
   totalVeh: number | null;
   clearanceTimeS: number | null;
   maxExposedVeh: number | null;
+  /**
+   * Cumulative modelled departures per zone id: ascending times with the running vehicle
+   * total, from traffic.diagnostics.zone_stats[id].departures. Empty when absent.
+   */
+  zoneDepartures: Record<string, { atMs: number[]; cumVeh: number[] }>;
 }
 
 export interface DamagePoint {
@@ -149,6 +156,8 @@ export interface SimulatedFire {
   modelVersion: string | null;
   ignition: { coord: LngLat; atMs: number; provenance: string | null } | null;
   calibrationIou: number | null;
+  /** fire_simulated.hazard_until: the model front is in effect (and drawn) until then. */
+  hazardUntilMs: number | null;
   /** One-line calibration summary (rothermel-mtt), e.g. held-out median arrival error. */
   calibrationHeadline: string | null;
   /** How the model front was constrained (e.g. clipped to the first satellite perimeter). */

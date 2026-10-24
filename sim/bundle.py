@@ -25,12 +25,15 @@ INCIDENT_TIMEZONE = "America/Los_Angeles"
 INCIDENT_NAMES = {"camp-2018-paradise-slice": "Camp Fire (2018)"}
 
 
-def _fire_area_lookup(history: IncidentHistory, simulated_at=None):
+def _fire_area_lookup(history: IncidentHistory, simulated_at=None, simulated_until: datetime | None = None):
     """fire_area_at(t): latest observed perimeter at or before t; before the first, the
-    simulated front if given, else None."""
+    simulated front if given, else None. With `simulated_until`, the simulated front is used
+    until then even after earlier perimeter snapshots (their labels postdate the extents)."""
     times = [p.snapshot_at for p in history.perimeters]
 
     def fire_area_at(at: datetime) -> dict | None:
+        if simulated_at and simulated_until and at < simulated_until:
+            return simulated_at(at)
         index = bisect_right(times, at) - 1
         if index >= 0:
             return history.perimeters[index].geometry
@@ -124,9 +127,14 @@ def build_bundle(history: IncidentHistory, scenario: dict, params: TrafficParams
         fire_block, fire_model = fire
     else:
         fire_block, fire_model = _simulated_fire(history, end) if simulate_fire else (None, None)
+    # Optional `hazard_until` on the fire block (sim.incidents.timed_package_fire): the simulated front is
+    # the traffic hazard until then.
+    hazard_until = fire_block.get("hazard_until") if fire_block else None
     traffic = simulate_traffic(
         scenario["network"], scenario["zones"], scenario["destinations"], scenario["events"], params,
-        start=start, end=end, fire_area_at=_fire_area_lookup(history, fire_model[3] if fire_model else None),
+        start=start, end=end, fire_area_at=_fire_area_lookup(
+            history, fire_model[3] if fire_model else None,
+            datetime.fromisoformat(hazard_until.replace("Z", "+00:00")) if hazard_until else None),
         # Agent simulation only: controllers_for(fire_model) -> responder controllers. Replay passes None.
         controllers=controllers_for(fire_model) if controllers_for else (),
     )

@@ -4,13 +4,18 @@ import CompareTab, { CaveatChip } from "./CompareTab";
 import { BundleMissingError, REPLAY_VIEW, fetchReplayBundle, type ViewConfig } from "./loadBundle";
 import RespondersTab from "./RespondersTab";
 import StressTab from "./StressTab";
-import StoryMode from "./StoryMode";
+import StoryMode, { StoryLanding, storySeconds, storyTitle } from "./StoryMode";
 import { buildChapters, revealRows } from "./story";
 import Tour from "./Tour";
 import ValidationTab from "./ValidationTab";
 import { homeCoords, referencePlace } from "./places";
 import { markTourSeen, replayTour, simulationTour, tourSeen } from "./tourSteps";
 import { useVariants } from "./useVariants";
+import type { Map as MapLibreMap } from "maplibre-gl";
+import MobilityOverlay from "./MobilityOverlay";
+import MobilityTab from "./MobilityTab";
+import { mobilityUrlFor } from "./mobility";
+import { useMobility } from "./useMobility";
 import { IMAGERY_DATE_NOTE, LAYER_GROUPS, type Basemap, type LayerGroup } from "./mapLayers";
 import ReplayMap, { type MapFocus } from "./ReplayMap";
 import SidePanel, { type PanelTab } from "./SidePanel";
@@ -22,6 +27,7 @@ import {
   frameIndexAt,
   hasFixtureData,
   ignitionBasis,
+  perimeterWindowEnd,
   incidentYear,
   observationSource,
   lastAtOrBefore,
@@ -57,11 +63,14 @@ export default function ReplayView({
   config = REPLAY_VIEW,
   picker,
   switcher,
+  nextFire,
 }: {
   config?: ViewConfig;
   picker?: ReactNode;
   /** Fire switcher shown on the map, visible whether or not the panel is collapsed. */
   switcher?: ReactNode;
+  /** The next fire's name and a callback that opens it straight into its story. */
+  nextFire?: { label: string; open: () => void } | null;
 }) {
   const [load, setLoad] = useState<Load>({ status: "loading" });
   const [attempt, setAttempt] = useState(0);
@@ -104,7 +113,9 @@ export default function ReplayView({
   }
 
   if (load.status === "ready")
-    return <ReplayScreen model={load.model} config={config} picker={picker} switcher={switcher} />;
+    return (
+      <ReplayScreen model={load.model} config={config} picker={picker} switcher={switcher} nextFire={nextFire ?? null} />
+    );
 
   const sim = config.kind === "simulation";
   return (
@@ -164,6 +175,28 @@ function initialVisibility(model: ReplayModel): Record<LayerGroup, boolean> {
   return out;
 }
 
+const LINKABLE_TABS: readonly PanelTab[] = [
+  "overview",
+  "responder",
+  "evacuee",
+  "explain",
+  "whatif",
+  "validation",
+  "stress",
+  "responders",
+  "movement",
+];
+
+/** Deep link ?tab=<id>; null for absent or unknown values. */
+function tabFromUrl(): PanelTab | null {
+  try {
+    const tab = new URLSearchParams(window.location.search).get("tab");
+    return LINKABLE_TABS.find((t) => t === tab) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 function isTextEntry(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   if (target.isContentEditable) return true;
@@ -178,11 +211,13 @@ function ReplayScreen({
   config,
   picker,
   switcher,
+  nextFire,
 }: {
   model: ReplayModel;
   config: ViewConfig;
   picker?: ReactNode;
   switcher?: ReactNode;
+  nextFire: { label: string; open: () => void } | null;
 }) {
   const variants = useVariants(baseline, config.variantsUrl);
   const model = variants.shown?.model ?? baseline;
@@ -199,13 +234,33 @@ function ReplayScreen({
   const [simTimeMs, setSimTimeMs] = useState(startMs);
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState<number>(DEFAULT_SPEED);
-  const [panelOpen, setPanelOpen] = useState(true);
+  // The story landing keeps the map clear; deep links and the simulation open the panel.
+  const [panelOpen, setPanelOpen] = useState(() => {
+    const q = new URLSearchParams(window.location.search);
+    return config.kind !== "replay" || q.has("tab") || q.has("variant");
+  });
   const [visibility, setVisibility] = useState(() => initialVisibility(baseline));
   const [perParticle, setPerParticle] = useState<number | null>(null);
-  const [tab, setTab] = useState<PanelTab>("overview");
+  const [tab, setTab] = useState<PanelTab>(() => tabFromUrl() ?? "overview");
+  // Deep link ?variant=<id>: select it once the what-if index has loaded; unknown ids are ignored.
+  const linkedVariant = useRef(new URLSearchParams(window.location.search).get("variant"));
+  const selectLinked = variants.select;
+  useEffect(() => {
+    const id = linkedVariant.current;
+    if (!id || !variants.index) return;
+    linkedVariant.current = null;
+    if (variants.index.variants.some((v) => v.id === id)) selectLinked(id);
+  }, [variants.index, selectLinked]);
   const [statusOpen, setStatusOpen] = useState(false);
   const [legendOpen, setLegendOpen] = useState(false);
-  const [tourOpen, setTourOpen] = useState(() => !tourSeen(config.kind));
+  // Replay opens on the story title card; the tour is optional (Tour button). Deep links
+  // (?tab=, ?variant=) skip the card; ?story=1 starts the story at once.
+  const [tourOpen, setTourOpen] = useState(() => config.kind === "simulation" && !tourSeen(config.kind));
+  const [landing, setLanding] = useState(() => {
+    const q = new URLSearchParams(window.location.search);
+    return config.kind === "replay" && !q.has("tab") && !q.has("variant") && q.get("story") !== "1";
+  });
+  const autoStory = useRef(config.kind === "replay" && new URLSearchParams(window.location.search).get("story") === "1");
   const closeTour = useCallback(() => {
     markTourSeen(config.kind);
     setTourOpen(false);
@@ -214,6 +269,16 @@ function ReplayScreen({
   const [pin, setPin] = useState<LngLat | null>(null);
   const [focus, setFocus] = useState<MapFocus | null>(null);
   const [storyOpen, setStoryOpen] = useState(false);
+  // Optional phone-panel mobility sidecar (replay route only); hidden when the file is absent.
+  const mobility = useMobility(config.kind === "replay" ? mobilityUrlFor(config.bundleUrl) : null);
+  const [mapInstance, setMapInstance] = useState<MapLibreMap | null>(null);
+  // Off by default: device data is an extra layer, not part of the core story.
+  const [mobilityVisible, setMobilityVisible] = useState(false);
+  const [mobilityFlows, setMobilityFlows] = useState(false);
+  const mobilityOrigin = useMemo<LngLat>(() => {
+    const [w, s, e, n] = baseline.bbox;
+    return place?.coord ?? [(w + e) / 2, (s + n) / 2];
+  }, [baseline, place]);
   const timeRef = useRef(startMs);
   /** Story mode: playback stops at this sim time and then calls arriveRef. */
   const stopAtRef = useRef<number | null>(null);
@@ -306,8 +371,8 @@ function ReplayScreen({
     variantDemand !== null && baselineDemand !== null && variantDemand !== baselineDemand;
   const usableIndex = variantsStale ? null : variants.index;
   const chapters = useMemo(
-    () => buildChapters(baseline, usableIndex, place),
-    [baseline, usableIndex, place],
+    () => buildChapters(baseline, usableIndex, place, mobility.data),
+    [baseline, usableIndex, place, mobility.data],
   );
   const reveal = useMemo(() => (usableIndex ? revealRows(usableIndex) : []), [usableIndex]);
   const startStory = useCallback(() => {
@@ -315,10 +380,32 @@ function ReplayScreen({
     setTourOpen(false);
     selectVariant(null);
     setTab("overview");
+    setLanding(false);
+    // The map is the hero: panel collapsed, people layer on for the prologue.
+    setPanelOpen(false);
+    setVisibility((v) => ({ ...v, people: true }));
     setStoryPaused(false);
     setStoryOpen(true);
   }, [config.kind, selectVariant]);
+  // ?story=1 (from "Watch another fire"): start the story once chapters exist, then drop the flag.
+  useEffect(() => {
+    if (!autoStory.current || chapters.length === 0) return;
+    // Flip the flag only when the start actually runs (StrictMode re-runs effects).
+    const timer = window.setTimeout(() => {
+      autoStory.current = false;
+      const url = new URL(window.location.href);
+      url.searchParams.delete("story");
+      window.history.replaceState(null, "", url);
+      startStory();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [chapters.length, startStory]);
+  const exploreFire = useCallback(() => {
+    setLanding(false);
+    setPanelOpen(true);
+  }, []);
   const closeStory = useCallback(() => {
+    setPanelOpen(true);
     setStoryOpen(false);
     setStoryPaused(false);
     stopAtRef.current = null;
@@ -486,7 +573,31 @@ function ReplayScreen({
           },
         ]
       : []),
+    ...(mobility.status !== "missing"
+      ? [
+          {
+            id: "movement" as const,
+            label: "Movement",
+            content: (
+              <MobilityTab
+                state={mobility}
+                simTimeMs={simTimeMs}
+                clockStartMs={startMs}
+                clockEndMs={endMs}
+                visible={mobilityVisible}
+                onVisible={setMobilityVisible}
+                showFlows={mobilityFlows}
+                onShowFlows={setMobilityFlows}
+                onSeek={seekAndPause}
+                onFocus={focusTarget}
+              />
+            ),
+          },
+        ]
+      : []),
   ];
+  // The Movement tab disappears if its file turns out to be absent; fall back to Overview.
+  const panelTab: PanelTab = tab === "movement" && mobility.status === "missing" ? "overview" : tab;
   const caption = buildCaption(model, simTimeMs, frameIndex, place);
   // While a what-if is on the map, set it against the baseline at the same clock time.
   const baselineFrame = variants.shown ? frameIndexAt(baseline, simTimeMs) : -1;
@@ -505,12 +616,13 @@ function ReplayScreen({
   );
   const perimeter = perimeterIndex >= 0 ? model.perimeters[perimeterIndex] : null;
   const nextPerimeter = model.perimeters[perimeterIndex + 1] ?? null;
+  const perimeterEnd = perimeterIndex >= 0 ? perimeterWindowEnd(model, perimeterIndex) : null;
 
   return (
     <main
       className={`rp-root${panelOpen ? "" : " rp-root--collapsed"}${sim ? " rp-root--sim" : ""}${
         variants.shown ? " rp-root--variant" : ""
-      }`}
+      }${storyOpen || landing ? " rp-root--story" : ""}`}
     >
       <div className="rp-stage">
         <ReplayMap
@@ -530,6 +642,16 @@ function ReplayScreen({
           focus={focus}
           basemapChoice={basemap}
           home={home}
+          onMapReady={setMapInstance}
+        />
+
+        <MobilityOverlay
+          map={mapInstance}
+          mobility={mobility.data}
+          simTimeMs={simTimeMs}
+          visible={mobilityVisible && !storyOpen && !landing}
+          showFlows={mobilityFlows && !storyOpen && !landing}
+          origin={mobilityOrigin}
         />
 
         <p className="rp-caption" aria-live="off">
@@ -568,7 +690,12 @@ function ReplayScreen({
               {fixture && <span className="rp-fixture-tag">FIXTURE DEMAND</span>}
               {derivedDemand && <span className="rp-status-text">Census demand (derived)</span>}
               <span className="rp-status-text">
-                {perimeter ? (
+                {perimeter && perimeterEnd !== null && simTimeMs < perimeterEnd ? (
+                  <>
+                    Half-day satellite composite: extent reached sometime by{" "}
+                    <strong>{localTime(perimeterEnd, model.incident.timezone)}</strong>
+                  </>
+                ) : perimeter ? (
                   <>
                     Satellite perimeter from{" "}
                     <strong>{formatAge(simTimeMs - perimeter.atMs)}</strong> ago
@@ -609,8 +736,13 @@ function ReplayScreen({
                   <>
                     satellite perimeter in effect ({PERIMETER_PROVENANCE[perimeter.evidenceClass]}
                     {perimeter.areaKm2 != null && <>, {perimeter.areaKm2.toFixed(0)} km²</>}
-                    {perimeter.timePrecision && (
-                      <>, ± {perimeter.timePrecision.replace(/_/g, " ")}</>
+                    {perimeter.timePrecision === "half_day" ? (
+                      <>
+                        ; half-day satellite composite: extent reached sometime in the 12 h window from{" "}
+                        {localTime(perimeter.atMs, model.incident.timezone)}
+                      </>
+                    ) : (
+                      perimeter.timePrecision && <>, ± {perimeter.timePrecision.replace(/_/g, " ")}</>
                     )}
                     )
                     {nextPerimeter && (
@@ -711,6 +843,8 @@ function ReplayScreen({
             fireObsSource={model.fireObservations ? observationSource(model) : null}
             showFireObs={visibility.fireObs}
             showDestinations={visibility.destinations}
+            mobilityEvidence={mobilityVisible && mobility.data ? mobility.data.evidenceClass : null}
+            peopleSource={visibility.people ? `Census ${incidentYear(model)} ACS; departures modelled` : null}
             open={legendOpen || tourOpen}
             onToggle={() => setLegendOpen((o) => !o)}
           />
@@ -734,6 +868,16 @@ function ReplayScreen({
           </p>
         )}
 
+        {landing && !storyOpen && chapters.length > 0 && (
+          <StoryLanding
+            title={storyTitle(model)}
+            chapters={chapters.length}
+            seconds={storySeconds(chapters.length)}
+            onPlay={startStory}
+            onExplore={exploreFire}
+          />
+        )}
+
         {storyOpen && (
           <StoryMode
             chapters={chapters}
@@ -752,6 +896,7 @@ function ReplayScreen({
             focus={focusTarget}
             onShowVariant={showVariantFromStory}
             onClose={closeStory}
+            nextFire={nextFire}
             paused={storyPaused}
             onTogglePause={togglePlay}
             resumeKey={storyResume}
@@ -811,7 +956,7 @@ function ReplayScreen({
             perParticle={perParticle}
             onToggleLayer={toggleLayer}
             onSeek={seekAndPause}
-            tab={tab}
+            tab={panelTab}
             onTab={setTab}
             pin={pin}
             onPin={setPin}

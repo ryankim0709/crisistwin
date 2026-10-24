@@ -5,12 +5,14 @@ import { VARIANT_CAVEATS, featurable, type VariantIndex } from "./compare";
 import { distanceM, inArea } from "./insights";
 import { buildCaption, splitSnappedNote } from "./narrative";
 import type { ReferencePlace } from "./places";
+import { EVACUATION_AREA, baselineAt, hourIndexAt, type Mobility } from "./mobility";
 import {
   frameIndexAt,
+  localTime,
   ignitionBasis,
   incidentYear,
-  observationSource,
   perimeterIndexAt,
+  perimeterWindowEnd,
   simulatedFrontIndexAt,
 } from "./timeline";
 import type { AreaGeometry, EvidenceClass, LngLat, ReplayEvent, ReplayModel } from "./types";
@@ -40,6 +42,8 @@ export interface RevealRow {
 
 const HISTORICAL = new Set<EvidenceClass>(["observed", "reported", "reconstructed", "derived"]);
 const MAX_FOCUS_EDGES = 150;
+/** Modelled-vehicle chapters are skipped when their headline number is this small. */
+const MIN_HEADLINE_VEH = 100;
 
 function ringCoords(g: AreaGeometry): LngLat[] {
   return g.type === "Polygon" ? g.coordinates[0] : g.coordinates.flatMap((poly) => poly[0]);
@@ -100,6 +104,47 @@ function busyEdgeCoords(
   return out;
 }
 
+/** Hours after ignition compared with a normal week, for the device-data chapter. */
+const MOBILITY_WINDOW_START_H = 2;
+const MOBILITY_WINDOW_H = 8;
+/** Only a strong drop makes a chapter: visits at most this share of normal. */
+const MOBILITY_MAX_RATIO = 0.5;
+
+/**
+ * Device-data beat: visits to places in the evacuation area in the hours after ignition,
+ * against the same hours of the baseline week. Null when the sidecar, the series or a clear
+ * drop is missing.
+ */
+function mobilityChapter(model: ReplayModel, m: Mobility | null): Chapter | null {
+  const ignitionMs = model.fireSimulated?.ignition?.atMs;
+  if (!m || ignitionMs == null) return null;
+  const series = m.series.find((s) => s.region === EVACUATION_AREA && s.category === "all");
+  const i0 = hourIndexAt(m, ignitionMs + MOBILITY_WINDOW_START_H * 3_600_000);
+  if (!series || i0 < 0 || i0 + MOBILITY_WINDOW_H > m.hourStartsMs.length) return null;
+  let visits = 0;
+  let normal = 0;
+  for (let i = i0; i < i0 + MOBILITY_WINDOW_H; i += 1) {
+    visits += series.visits[i];
+    normal += baselineAt(series.baseline, i);
+  }
+  if (normal <= 0 || visits / normal > MOBILITY_MAX_RATIO) return null;
+  const tz = model.incident.timezone;
+  const from = localTime(m.hourStartsMs[i0], tz);
+  const to = localTime(m.hourStartsMs[i0 + MOBILITY_WINDOW_H - 1] + 3_600_000, tz);
+  return {
+    id: "mobility",
+    atMs: m.hourStartsMs[i0 + Math.floor(MOBILITY_WINDOW_H / 2)],
+    title: visits / normal <= 0.25 ? "The town empties" : "Fewer people out and about",
+    body:
+      `Visits to ${fmt(series.poiCount)} places in the evacuation area from ${from} to ${to} were ` +
+      `${Math.round((visits / normal) * 100)}% of the same hours in a normal week` +
+      (m.baselineWeeks[0] ? ` (week of ${m.baselineWeeks[0]})` : "") +
+      ". Derived from phone-panel data (Advan via Dewey): visits to places, not a count of people.",
+    evidence: m.evidenceClass,
+    focus: [],
+  };
+}
+
 /** Ensure a closing full stop, unless `close` is false (then strip one). */
 function sentence(text: string, close = true): string {
   const trimmed = text.trim().replace(/[.]+$/, "");
@@ -140,9 +185,9 @@ export function buildChapters(
   model: ReplayModel,
   variants: VariantIndex | null,
   place: ReferencePlace | null,
+  mobility: Mobility | null = null,
 ): Chapter[] {
   const chapters: Chapter[] = [];
-  const obs = observationSource(model);
   const roads = edgeCoordLookup(model);
 
   const fireLine = (t: number) => {
@@ -155,6 +200,26 @@ export function buildChapters(
       .replace(/^satellite perimeter /, "the satellite perimeter is ");
     return ` At this moment ${text}.`;
   };
+
+  // Prologue: where people were before anyone left (Census households; the people layer).
+  const zones = model.zones?.items ?? [];
+  const households = zones.reduce((sum, z) => sum + (z.households ?? 0), 0);
+  const people = model.demand?.population ?? null;
+  const startAt = model.fireSimulated?.ignition?.atMs ?? model.clock.startMs;
+  if (households > 0) {
+    const zoneEvidence = model.zones?.evidenceClass;
+    chapters.push({
+      id: "people",
+      atMs: Math.max(model.clock.startMs, startAt - 60_000),
+      title: "Where people were at ignition",
+      body:
+        (people != null ? `${fmt(people)} people in ` : "") +
+        `${fmt(households)} households across ${fmt(zones.length)} Census areas. ` +
+        "Lighter grey means more households per km². Watch it drain as people leave.",
+      evidence: zoneEvidence && zoneEvidence !== "mixed" ? zoneEvidence : "derived",
+      focus: zones.flatMap((z) => ringCoords(z.geometry)),
+    });
+  }
 
   // Opening: the first 911 report when the bundle has it, else the ignition record.
   const ignition = firstEvent(model, (e) => e.type === "fire_ignition");
@@ -170,7 +235,7 @@ export function buildChapters(
       id: "ignition",
       atMs: opening.atMs,
       title: reported
-        ? "The first 911 call"
+        ? "The fire is reported"
         : sentence(splitSnappedNote(opening.label).text, false),
       body:
         (reported && ignition
@@ -183,7 +248,11 @@ export function buildChapters(
   }
 
   const order = firstEvent(model, isOrder);
-  if (order) {
+  const placeOrderFirst = place
+    ? firstEvent(model, (e) => isOrder(e) && e.label.includes(place.name))
+    : null;
+  // When the reference place has its own order, that chapter carries the story instead.
+  if (order && (!placeOrderFirst || placeOrderFirst.id === order.id)) {
     chapters.push({
       id: "first-order",
       atMs: order.atMs,
@@ -296,7 +365,7 @@ export function buildChapters(
   if (traffic && traffic.metrics.length > 0) {
     const k = argmax(traffic.metrics.map((m) => m.exposedVeh));
     const m = traffic.metrics[k];
-    if (m.exposedVeh > 0) {
+    if (m.exposedVeh >= MIN_HEADLINE_VEH) {
       chapters.push({
         id: "peak-exposure",
         atMs: m.atMs,
@@ -315,20 +384,75 @@ export function buildChapters(
 
   const perimeter = model.perimeters[0];
   if (perimeter) {
-    const iou = model.fireSimulated?.calibrationIou;
-    const check = model.fireSimulated?.calibrationHeadline;
+    const windowEnd = perimeterWindowEnd(model, 0);
     chapters.push({
       id: "satellite",
       atMs: perimeter.atMs,
       title: `First satellite perimeter${perimeter.areaKm2 != null ? `: ${perimeter.areaKm2.toFixed(0)} km²` : ""}`,
       body:
-        "The dashed line is the satellite estimate; from here it replaces the model fire." +
-        (check ? ` Model check against ${obs} observations: ${check}.` : "") +
-        (iou != null ? ` Perimeter overlap (IoU) ${iou.toFixed(2)}, evaluation only.` : ""),
+        (windowEnd !== null
+          ? "The dotted line is a half-day satellite composite: the fire reached this extent sometime by " +
+            `${localTime(windowEnd, model.incident.timezone)}. From here it replaces the model fire.`
+          : "The dashed line is the satellite estimate; from here it replaces the model fire."),
       evidence: perimeter.evidenceClass,
       focus: ringCoords(perimeter.geometry),
     });
   }
+
+  // Generic beats for bundles without the place-specific ones (e.g. multi-town fires).
+  const core = () => chapters.length;
+  if (!chapters.some((c) => c.id === "place-fire")) {
+    const arrival = firstEvent(
+      model,
+      (e) => e.type === "fire_arrival" && HISTORICAL.has(e.evidenceClass),
+    );
+    if (arrival) {
+      chapters.push({
+        id: "fire-arrival",
+        atMs: arrival.atMs,
+        title: "Fire reaches homes",
+        body: sentence(splitSnappedNote(arrival.label).text),
+        evidence: arrival.evidenceClass,
+        focus: fireCoords(model, arrival.atMs),
+      });
+    }
+  }
+  if (traffic && traffic.metrics.length > 0 && core() < 8) {
+    const k = argmax(traffic.metrics.map((m) => m.enRouteVeh));
+    const m = traffic.metrics[k];
+    if (m.enRouteVeh >= MIN_HEADLINE_VEH) {
+      const lastOrder = [...model.events].reverse().find((e) => e.atMs <= m.atMs && isOrder(e));
+      chapters.push({
+        id: "peak-traffic",
+        atMs: m.atMs,
+        title: "Everyone on the road",
+        body:
+          `Modelled peak: ${fmt(m.enRouteVeh)} vehicles on the road at once, ${fmt(m.blockedVeh)} unable to move.` +
+          (lastOrder
+            ? ` Latest order before this: ${sentence(splitSnappedNote(lastOrder.label).text, false)}.`
+            : ""),
+        evidence: traffic.evidenceClass,
+        focus: busyEdgeCoords(model, k, null),
+      });
+    }
+  }
+  const shelter = firstEvent(
+    model,
+    (e) => e.type === "shelter_opened" && HISTORICAL.has(e.evidenceClass),
+  );
+  if (shelter && core() < 8 && !/^Temporary refuge|^TRA-/i.test(shelter.label)) {
+    chapters.push({
+      id: "shelter",
+      atMs: shelter.atMs,
+      title: "A place to go",
+      body: sentence(splitSnappedNote(shelter.label).text),
+      evidence: shelter.evidenceClass,
+      focus: [],
+    });
+  }
+
+  const emptied = mobilityChapter(model, mobility);
+  if (emptied) chapters.push(emptied);
 
   chapters.sort((a, b) => a.atMs - b.atMs);
 
