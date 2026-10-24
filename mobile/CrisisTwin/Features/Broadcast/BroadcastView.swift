@@ -113,6 +113,7 @@ struct BroadcastView: View {
             TimelineView(.periodic(from: .now, by: 5)) { context in
                 LabeledContent("Status", value: statusText(snapshot, receivedAt: receivedAt, now: context.date))
             }
+            LabeledContent("Updates", value: live.transport == .push ? "Pushed live" : "Checked every few seconds")
         } header: {
             Text("About this simulation")
         }

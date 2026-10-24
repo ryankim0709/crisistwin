@@ -41,12 +41,7 @@ struct PlanTab: View {
                 case .meeting: PlanView()
                 case .broadcast:
                     BroadcastView(openTab: open)
-                        .task {
-                            while !Task.isCancelled {
-                                await broadcast.refresh()
-                                try? await Task.sleep(for: BroadcastStore.pollInterval)
-                            }
-                        }
+                        .task { await broadcast.follow() }
                 case .responder: JoinResponderView()
                 case .about: AboutView()
                 }

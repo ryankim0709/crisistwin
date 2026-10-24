@@ -26,6 +26,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
 
+from . import dispatch_situations
 from .dispatch_runs import recall, record_decision, valid_session_id
 
 DEFAULT_MODEL = "claude-opus-5-5"
@@ -147,6 +148,12 @@ Memory: a <past_runs> block, when present, lists earlier simulated runs on the s
 summaries and the simulator's outcome. Use it as lessons (for example an exit that congested or a \
 zone ordered too late), never as facts about this run: this observation is the only source of \
 current figures. Mention a lesson in your assessment when it changes an order.
+A <similar_situations> block, when present, lists the closest situations from other finished \
+simulated runs, on any road network, found by vector search over simulator figures (similarity \
+1 = identical shape of situation): what it looked like, the orders given then and how that run \
+ended (run_outcome.totals.exposed against no_action_exposed). Use them the same way, as lessons \
+about what worked or failed in a comparable spot; zone, exit and unit ids in them belong to \
+other runs and must never appear in your orders.
 
 Scope: evacuate only the people the fire actually threatens. A small fire in one \
 neighbourhood does not justify ordering out the whole area: every unthreatened household put \
@@ -357,8 +364,12 @@ def canonical_json(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
-def build_user_message(obs: dict, past_runs: list[dict] | None = None) -> str:
+def build_user_message(
+    obs: dict, past_runs: list[dict] | None = None, similar_situations: list[dict] | None = None
+) -> str:
     memory = f"<past_runs>\n{canonical_json(past_runs)}\n</past_runs>\n\n" if past_runs else ""
+    if similar_situations:
+        memory += f"<similar_situations>\n{canonical_json(similar_situations)}\n</similar_situations>\n\n"
     return (
         f"{memory}<observation>\n{canonical_json(obs)}\n</observation>\n\n"
         f"Decide the orders for minute {obs['clock'].get('minute')}."
@@ -488,12 +499,13 @@ def stream_decision(
     user_message: str,
     index: dict,
     recalled_runs: int = 0,
+    similar_situations: int = 0,
     on_orders: Callable[[list[dict], int, str, str], None] | None = None,
 ) -> Iterator[str]:
     """Yield NDJSON lines; any failure becomes a final error line, never a crashed stream.
 
     `on_orders(orders, rejected_count, summary, model)` runs after the final line (the run
-    journal); `recalled_runs` is how many past runs the user message carries.
+    journal); `recalled_runs` and `similar_situations` count the memory the user message carries.
     """
     try:
         # Server-side fallback reroutes a safety-classifier refusal to another model.
@@ -569,6 +581,7 @@ def stream_decision(
             "summary": summary,
             "model": final.model,
             "recalled_runs": recalled_runs,
+            "similar_situations": similar_situations,
             "evidence_class": "ai_decision",
         }
     )
@@ -615,6 +628,7 @@ def decide(request):
     )
     session_id = data.get("session_id")
     past_runs = recall(session_id, obs) if session_id else []
+    similar = dispatch_situations.similar(session_id, obs) if session_id else []
 
     def journal(orders: list[dict], rejected: int, summary: str, used_model: str) -> None:
         record_decision(session_id, obs, orders, rejected, summary, used_model)
@@ -624,9 +638,10 @@ def decide(request):
             client,
             model,
             effort,
-            build_user_message(obs, past_runs),
+            build_user_message(obs, past_runs, similar),
             index,
             recalled_runs=len(past_runs),
+            similar_situations=len(similar),
             on_orders=journal if session_id else None,
         ),
         content_type="application/x-ndjson",

@@ -130,8 +130,10 @@ enum Geo {
     }
 }
 
-/// Polls the latest broadcast. Older responses never replace newer ones (request ids), and
-/// a zone whose exit changes within the same run is remembered so the app can say "route changed".
+/// Follows the latest broadcast: pushed over `GET /api/live/stream` (Server-Sent Events from a
+/// MongoDB Atlas change stream) when the server offers it, otherwise polled from `GET /api/live`.
+/// Older responses never replace newer ones (request ids), and a zone whose exit changes within
+/// the same run is remembered so the app can say "route changed".
 @MainActor
 @Observable
 final class BroadcastStore {
@@ -146,6 +148,18 @@ final class BroadcastStore {
     /// The pages post about every 2 s while playing; older than this, say the feed went quiet.
     static let staleAfter: TimeInterval = 20
     static let pollInterval: Duration = .seconds(3)
+    /// After the push stream fails, poll this long before trying it again.
+    static let streamRetryAfter: Duration = .seconds(30)
+
+    enum Transport: Equatable {
+        case push
+        case polling
+    }
+
+    /// How updates arrive now; shown so a drill can tell pushed updates from polled ones.
+    private(set) var transport: Transport = .polling
+    /// Resume token of the last pushed event, so a reconnect gets exactly what it missed.
+    private var lastEventId: String?
 
     private(set) var state: State = .loading
     /// Zone ids whose assigned exit changed during the current run.
@@ -170,12 +184,7 @@ final class BroadcastStore {
             let data = try await client.send("GET", "live")
             let envelope = try client.decode(LiveEnvelope.self, from: data)
             guard id == requestId else { return }
-            guard envelope.snapshot.version == 1, envelope.snapshot.evidenceClass == "simulated" else {
-                state = .failed("The simulation feed uses a newer format. Update the app.")
-                return
-            }
-            track(envelope.snapshot)
-            state = .live(envelope.snapshot, receivedAt: ServerDate.parse(envelope.receivedAt) ?? .now)
+            apply(envelope)
         } catch is CancellationError {
             return
         } catch let error as BackendError where error.status == 404 {
@@ -186,6 +195,63 @@ final class BroadcastStore {
             // Keep showing the last snapshot through a brief network blip; the age label shows it is old.
             if snapshot == nil { state = .failed(error.localizedDescription) }
         }
+    }
+
+    /// Keeps the feed current until the task is cancelled: the push stream while it works, polling
+    /// while it does not (an older server, no change streams, or a network drop).
+    func follow() async {
+        var streamAfter = ContinuousClock.now
+        while !Task.isCancelled {
+            if ContinuousClock.now >= streamAfter {
+                let opened = ContinuousClock.now
+                do {
+                    try await stream()
+                    // The server ends a stream after a few minutes: reconnect at once, unless it
+                    // ended straight away (then something in between is not passing it through).
+                    if ContinuousClock.now - opened > .seconds(5) { continue }
+                    streamAfter = .now + Self.streamRetryAfter
+                } catch is CancellationError {
+                    return
+                } catch {
+                    streamAfter = .now + Self.streamRetryAfter
+                }
+            }
+            transport = .polling
+            await refresh()
+            try? await Task.sleep(for: Self.pollInterval)
+        }
+    }
+
+    private func stream() async throws {
+        // Unconfigured: polling reports it.
+        guard let client = try? BackendClient.configured() else { throw BackendError.unexpectedResponse }
+        for try await event in client.events("live/stream", lastEventId: lastEventId) {
+            if let id = event.id { lastEventId = id }
+            switch event.event {
+            case "snapshot":
+                let envelope = try client.decode(LiveEnvelope.self, from: event.data)
+                requestId += 1  // An older poll still in flight must not replace this.
+                transport = .push
+                apply(envelope)
+            case "cleared":
+                requestId += 1
+                transport = .push
+                state = .noBroadcast
+            case "error":
+                throw BackendError.unexpectedResponse
+            default:
+                break
+            }
+        }
+    }
+
+    private func apply(_ envelope: LiveEnvelope) {
+        guard envelope.snapshot.version == 1, envelope.snapshot.evidenceClass == "simulated" else {
+            state = .failed("The simulation feed uses a newer format. Update the app.")
+            return
+        }
+        track(envelope.snapshot)
+        state = .live(envelope.snapshot, receivedAt: ServerDate.parse(envelope.receivedAt) ?? .now)
     }
 
     private func track(_ snapshot: LiveSnapshot) {

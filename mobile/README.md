@@ -124,8 +124,10 @@ it locally, start the backend and drill as described in
 
 Shows, natively in MapKit, the simulation a planner is playing on the web `/fire` or
 `/dispatch` page with **Share with resident app** on (see
-[ADR 0016](../docs/adr/0016-resident-live-and-family.md)). The app polls `GET /api/live`
-every 3 seconds while the screen is open and draws the simulated fire, the household's home and
+[ADR 0016](../docs/adr/0016-resident-live-and-family.md)). While the screen is open the app
+follows `GET /api/live/stream`, which pushes each broadcast from a MongoDB Atlas change stream
+([ADR 0033](../docs/adr/0033-live-change-stream.md)), and falls back to polling `GET /api/live`
+every 3 seconds when the stream is unavailable and draws the simulated fire, the household's home and
 meeting points, and, while the dispatch agent runs, the household's zone, its assigned exit
 and route. The guidance card says what the simulation tells that zone: no order yet, leave
 now, wait about N minutes (the route is backed up and the fire is far), route blocked, zone
@@ -183,7 +185,7 @@ mobile/
       Home/              Home tab, the guidance Slab and bottom accessory, About with API readiness states
       Plan/              Plan tab, meeting plan model and on-device store, point editor
       Live/              Field-report models, store, outbox, location, map, report and responder views
-      Broadcast/         Web simulation feed: broadcast model, poller, map and household guidance
+      Broadcast/         Web simulation feed: broadcast model, push stream and poller, map and household guidance
       Family/            Family model, Keychain membership, server store, family view
     Resources/           Info.plist and adaptive color assets
 ```

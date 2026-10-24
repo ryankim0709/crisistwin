@@ -787,6 +787,13 @@ function LogEntry({ entry, area }: { entry: DecisionLogEntry; area: DispatchArea
           on these roads from the run journal (MongoDB Atlas), as lessons.
         </p>
       )}
+      {entry.similarSituations > 0 && (
+        <p className="dsp-note">
+          Matched {entry.similarSituations} similar situation
+          {entry.similarSituations === 1 ? "" : "s"} from other runs by Atlas Vector Search, as
+          lessons.
+        </p>
+      )}
       {entry.thinking && (
         <details className="dsp-thinking" open={entry.status === "streaming" && !entry.text}>
           <summary>Reasoning summary</summary>
