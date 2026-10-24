@@ -1,5 +1,85 @@
 # Historical replay work in progress — 2026-10-23
 
+## Current acquisition task (2026-10-23)
+
+The user clarified that this phase is **data acquisition**, not app integration or
+replay UI work. The current detailed contract is
+`/private/tmp/claude-501/-Users-kangheecho-PycharmProjects-crisistwin/51554362-cbb5-4106-bf05-8c335b902d4a/scratchpad/data-acquisition-prompt.md`.
+It calls for a new `camp-2018-evacuation` package with historical roads,
+timestamped fire/evacuation/road events, zones, population, traffic, shelters,
+and documented missing layers. Do not edit `sim/` or `app/`; another session owns
+them. Existing immutable package `camp-2018-paradise-slice/a6d2cc03f525ed65`
+must not be modified in place.
+
+Source discovery so far: NIST's public [fire-observation spreadsheet](https://data.nist.gov/od/id/mds2-2954)
+was downloaded to `/private/tmp/nist-camp-fire-observations.xlsx` (438,645 bytes,
+SHA-256 `14fac49ca633d4c944fcb2ba2b22e95ea8751b8d0dd58216a836d2b6e89268a3`).
+It has 2,839 populated geolocated rows across 15 corridor sheets but only 2,282
+unique complete rows; corridor sheets repeat observations. Fields include source,
+date, time, observation window minutes, latitude, longitude, source/method, fire
+description and fire type. The stored Excel date serials are `44508` and `44509`
+(2021-11-08/09), despite the NIST publication clearly documenting the 2018 Camp
+Fire. Preserve raw values; a normalized date correction must cite the report and
+be marked derived. Some text may contain specific residential locations, so do
+not commit raw text without privacy review.
+
+NIST [TN 2252 supplement](https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252sup.pdf)
+contains a geolocated, timestamped NETTRA table with road-block, traffic,
+notification and evacuation flags, plus a CodeRED message table. Its download
+was in progress at this update. NIST [TN 2252](https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf)
+has per-zone request/notification times (Table 11), roadway traffic progressions
+(e.g. Table 19), and closure maps. The [NIST incident page](https://www.nist.gov/programs-projects/wildland-urban-interface-wui-fire-data-collection-parcel-vulnerabilities/nist-1-0)
+links the historic Paradise/Upper Ridge zone PDF and redacted radio chronology.
+The [NIST ESCAPE page](https://escape.nist.gov/evacuation3AddressingFailuresEgresslearnmore1)
+says all five egress arteries closed at least once, with Pentz Road first closed
+at about 09:00 local; this is a retrospective summary, not an edge-level closure
+log. [Caltrans PeMS](https://dot.ca.gov/programs/traffic-operations/mpr/pems-source)
+requires a free account for historical detector data. [NASA FIRMS archive](https://firms.modaps.eosdis.nasa.gov/download/)
+requires Earthdata/email access for 2018 active-fire detections. Neither should
+be represented as acquired until access succeeds.
+
+Acquisition attempts: the shell sandbox had no DNS, but approved network access
+allowed the NIST spreadsheet download. An Overpass attic query for roads as of
+2018-11-08 00:00Z to `overpass-api.de` returned HTTP 406; a second mirror query
+at `overpass.kumi.systems` succeeded. The exact 9,702,322-byte OSM response is
+in the new road-only package. Keep failed layers explicit instead of substituting
+current OSM.
+
+The road-only package is
+`data/incidents/camp-2018-evacuation/05575afa537d22c9/`. It contains 9,435
+routable OSM junction/end nodes, 21,768 directed edges from 5,291 selected
+ways, and 76 geometric boundary exits. Its largest strongly connected component
+has 9,061 nodes. It excludes 901 service ways and tagged private/inaccessible
+ways, does not infer missing directional lane counts or speeds, and records the
+actual geometry extent `[-121.9894704,39.5071452,-121.29823,40.029785]`.
+`python3.12 -m tools.build_camp_evacuation --verify-package
+data/incidents/camp-2018-evacuation/05575afa537d22c9` passed offline.
+
+| New package layer | Status | Records / time | Spatial coverage | Gap / source terms |
+| --- | --- | --- | --- | --- |
+| Historical roads | Present | 9,435 nodes; 21,768 directed edges; OSM snapshot 2018-11-08 00:00Z | Requested bbox plus full intersecting ways; actual bbox above | ODbL 1.0; unknown lane/speed tags remain null; no service roads or turn restrictions |
+| Timestamped events | Missing | 0 packaged | Camp evacuation area | NIST sources acquired for review; not yet normalized; no license inferred from PDF access |
+| Evacuation zones | Missing | 0 packaged | Paradise/Upper Ridge historical map available | 2017 PDF has zone labels, machine-readable polygons unverified; NIST open license check pending |
+| Population units | Missing | 0 packaged | Butte County target | ACS 2018 aggregate API identified; extraction pending; public federal data |
+| Traffic observations | Missing | 0 packaged | Egress corridors target | PeMS historical detector access needs free account; no zero traffic inference |
+| Calibration targets | Missing | 0 packaged | Camp Fire target | NIST quantitative tables under review |
+| Shelters / refuge areas | Missing | 0 packaged | Camp Fire target | NIST Appendix I lists TRAs; actual operating times/capacities need review |
+| Morning fire progression | Missing | 0 packaged | Camp Fire target | NIST 2,282 unique fire observations downloaded for review; FIRMS archive requires access; FEDS half-day perimeters exist in separate package |
+| Post-event displacement | Missing | 0 packaged | Butte County target | Lower priority; no sourced records yet |
+
+NIST NETTRA supplement completed download to
+`/private/tmp/nist-camp-nettra-supplement.pdf` (24,237,169 bytes, 306 pages).
+It contains Table A-2 with geolocated NETTRA observations and Table D-1 with 28
+CodeRED message rows. The latter gives initial send times, message type, zone
+labels, and some re-call times. This is **alert-sent** evidence, not proof of
+delivery to or departure by all residents and not necessarily the original
+evacuation-order issuance time. The 2017 Paradise/Upper Ridge zone map is at
+https://www.nist.gov/document/paradise-ur-map and is useful for zone name
+matching, but polygons have not yet been acquired. The PDF contains individual
+911 observations and addresses, so do not copy it into the public incident
+package wholesale. Use curated, non-identifying event extracts with source
+page/table references and keep the complete PDF outside the repo.
+
 This file preserves the active task state. The user asked to continue turning the
 historical replay format into working acquisition and replay tooling and to keep
 this context file updated. Read and update it at major milestones.
@@ -16,12 +96,13 @@ this context file updated. Read and update it at major milestones.
   package, `docs/historical-replay.md`, `docs/adr/0002-historical-incident-packages.md`,
   and the historical-data section of `README.md`.
 - `docs/adr/0002-historical-incident-packages.md` is proposed; ADR 0001 belongs to
-  the app scaffold. No commit or PR has been made for this data work.
+  the app scaffold. The work was committed as `0af70fe` on
+  `feat/historical-replay-sim`; no PR or merge was observed at this update.
 - During final review, the shared checkout had switched to
   `feat/historical-replay-sim` and the data-work files were staged by another
-  process/teammate; this agent did not switch branches or stage them. The later
-  handoff updates and one README wording fix remained unstaged. Check both
-  `git diff --cached` and `git diff` before committing, and coordinate ownership.
+  process/teammate; this agent did not switch branches or stage them. The staged
+  and final unstaged updates were subsequently committed in `0af70fe`. Coordinate
+  ownership before further shared-checkout edits.
 
 ## Completed and checked
 
@@ -94,7 +175,7 @@ this context file updated. Read and update it at major milestones.
    Review whether this footprint is appropriate for the demo repository.
 3. README commands, Python 3.12 tests (8 pass), offline package verification,
    frame CLI, `git diff --check`, and Markdown local-link/whitespace checks passed
-   with the current package. Review the final tree/diff before any commit or PR.
+   with the current package. Review the branch diff against `main` before any PR.
    The shared README says pre-commit is the default hackathon check, while
    `AGENTS.md` also calls for focused tests and exact verification results.
 4. Future work: acquire historical road geometry, evacuation/closure events, and

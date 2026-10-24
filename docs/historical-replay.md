@@ -76,6 +76,54 @@ The FEDS time field is local California time corrected to half-day intervals; th
 normalized layer records both local and derived UTC time. GeoParquet and the
 broader replay contract remain proposed.
 
+### Camp evacuation acquisition package
+
+The separate [Camp evacuation package](../data/incidents/camp-2018-evacuation/05575afa537d22c9/manifest.json)
+starts with a 2018-11-08 00:00Z OpenStreetMap snapshot for the requested
+`[-121.90, 39.55, -121.40, 39.95]` bounding box. The source query uses Overpass
+attic mode and is frozen in `sources.json` along with the original response.
+The graph has 9,435 junction/end nodes and 21,768 directed edges after excluding
+901 service ways and inaccessible ways. The largest strongly connected component
+has 9,061 nodes. Source ways can extend beyond the query box; the actual node
+extent is recorded in `quality.json`. Each missing acquisition layer is declared
+`missing` in the manifest rather than represented by an empty file.
+
+For this stdlib-only acquisition phase, normalized vectors are GeoJSON
+(OGC:CRS84) and event streams will be JSONL. This is an implemented package
+format for the hackathon; the GeoParquet layout above remains a possible later
+archive format. The new package is immutable: adding events creates another
+version and retains this road-only version.
+
+Road fields are in each feature's `properties`:
+
+| File | Fields and meaning |
+| --- | --- |
+| `normalized/road_nodes.geojson` | `node_id` (`osm-node:<id>`), `osm_node_id`, point geometry, source and evidence class |
+| `normalized/road_edges.geojson` | `edge_id`, `from_node`, `to_node`, `osm_way_id`, `name`, `ref`, `highway`, `oneway`, `lanes`, `lanes_status`, `maxspeed_kph`, `maxspeed_status`, `length_m`, `bridge`, `tunnel`, source and evidence class; LineString follows travel direction |
+| `normalized/exit_nodes.json` | Geometric query-boundary exits, with node ID, cardinal boundary, source road name/ref and null destination name |
+
+`lanes` is directional. It is populated only from a directional lane tag, or
+from the total lane tag of a one-way road. An undirected `lanes=2` on a two-way
+road is **not** copied to both edges. `maxspeed_kph` is converted from an
+explicit `mph` tag or read as km/h from an unqualified numeric OSM tag. Unknown
+values are null. Way segments split at shared OSM nodes and way endpoints; OSM
+turn restrictions, conditional access and lane-level controls are not modeled.
+
+Representative node and edge shapes (IDs and coordinates are illustrative; see
+the package for actual values):
+
+```json
+{"type":"Feature","id":"osm-node:123","geometry":{"type":"Point","coordinates":[-121.6,39.75]},"properties":{"node_id":"osm-node:123","osm_node_id":123,"source_id":"osm-overpass-2018","evidence_class":"observed"}}
+{"type":"Feature","id":"osm-way:456:0:f","geometry":{"type":"LineString","coordinates":[[-121.6,39.75],[-121.59,39.75]]},"properties":{"edge_id":"osm-way:456:0:f","from_node":"osm-node:123","to_node":"osm-node:124","osm_way_id":456,"name":"Example Road","ref":null,"highway":"residential","oneway":false,"lanes":null,"lanes_status":"unknown","maxspeed_kph":null,"maxspeed_status":"unknown","length_m":856.4,"bridge":false,"tunnel":false,"source_id":"osm-overpass-2018","evidence_class":"observed"}}
+```
+
+Build from the fixed Overpass query with `python3.12 -m
+tools.build_camp_evacuation --output-root data/incidents`, or normalize a saved
+response using `--osm-response <file>`. Verify offline with `--verify-package
+data/incidents/camp-2018-evacuation/05575afa537d22c9`. The OSM snapshot is a
+record of mapped road geometry before the incident, not proof that each road
+was physically passable during the evacuation.
+
 ## Manifest and provenance contract
 
 The manifest records `schema_version`, `incident_id`, `package_version`, incident
