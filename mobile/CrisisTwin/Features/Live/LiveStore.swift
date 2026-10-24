@@ -93,6 +93,9 @@ final class LiveStore {
     @ObservationIgnored private var refreshGeneration = 0
     /// Cursor for `GET incidents/{id}/reports?since=`; only advanced by a response that is applied.
     @ObservationIgnored private var reportsCursor: String?
+    /// Set by a situation 404; makes the poll loop re-read `GET /api/live/active` at once.
+    @ObservationIgnored private var activeCheckWanted = false
+    @ObservationIgnored private var lastActiveCheck = Date()
 
     @ObservationIgnored private var zonesCache: (version: String, zones: [LiveZone])?
     @ObservationIgnored private var lastLocationSend: Date?
@@ -108,6 +111,8 @@ final class LiveStore {
     private static let locationInterval: TimeInterval = 30
     /// A task's route is refetched with the poll, at most this often.
     private static let routeInterval: TimeInterval = 15
+    /// How often the poll loop re-reads which incident the server runs.
+    private static let activeInterval: TimeInterval = 60
 
     var role: LiveRole { credential?.role ?? .civilian }
 
@@ -185,6 +190,7 @@ final class LiveStore {
             case nil: break
             }
         }
+        if case .failure(LiveAPIError.notFound) = sitResult { activeCheckWanted = true }
         take(sitResult) { applySituation($0) }
         take(mineResult) { myReports = $0.sorted { $0.observedAt > $1.observedAt } }
         take(pageResult) { page in
@@ -206,9 +212,28 @@ final class LiveStore {
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.refresh()
+                await self?.followActiveIncidentIfDue()
                 try? await Task.sleep(for: Self.pollInterval)
             }
         }
+    }
+
+    /// Re-reads `GET /api/live/active` after a situation 404 and every minute. A failed read
+    /// changes nothing; a different incident id switches this phone to it.
+    private func followActiveIncidentIfDue() async {
+        guard activeCheckWanted || Date().timeIntervalSince(lastActiveCheck) >= Self.activeInterval else { return }
+        activeCheckWanted = false
+        lastActiveCheck = Date()
+        guard let active = try? await LiveAPIClient.configured().activeIncident(), !Task.isCancelled,
+              active.incidentId != incidentId else { return }
+        ServerSettings.setFollowedIncident(active.incidentId)
+        // Device tokens are server-scoped and stay; a responder token is for the old incident only.
+        CredentialStore.delete(.responder)
+        credential = CredentialStore.load(.device)
+        outbox.discard(notFor: active.incidentId)
+        withdrawnChoices = [:]
+        answeredStillThere = []
+        useIncident(active.incidentId, dropCredentials: false)
     }
 
     func stopPolling() {
