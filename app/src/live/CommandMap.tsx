@@ -14,7 +14,9 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { useEffect, useRef, useState } from "react";
 import { restyleBasemap } from "../replay/basemapStyle";
 import { BASEMAP_STYLE_URL, FALLBACK_STYLE, type BasemapStyle } from "../replay/mapLayers";
-import { VERDICT, labelPoint, nf, plural, shortKey, shortZoneName, wallClock } from "./format";
+import { VERDICT, labelPoint, nf, plural, responderName, shortZoneName, wallClock } from "./format";
+import { installInjectLayers } from "./injectMap";
+import { buildInjectSources } from "./injects";
 import type { QueueItem } from "./queue";
 import type { CommandResponse, GuidanceLevel, ImpactResponse, LonLat, TwinMonitor } from "./types";
 
@@ -45,6 +47,8 @@ export const MAP_COLOR = {
   help: "#F5A623",
   /** 2018 911 / radio / rescue activity per zone (historical record). */
   ground: "#BE185D",
+  /** Responder route to a task: teal, unused by fire, zones, routes or traffic. */
+  responderRoute: "#0A8EA6",
   queue: "#8A6D00",
   shelter: "#2E7D5B",
   ink: "#0F1720",
@@ -146,7 +150,7 @@ function buildSources(data: CommandResponse, items: QueueItem[]): Record<string,
     .filter((h) => h.coord)
     .map((h) => point(h.coord!, { label: `Needs help, ${wallClock(h.at)}` }));
   const responders = data.responders.map((r) =>
-    point(r.coord, { label: `Responder ${shortKey(r.party_key)}, ${wallClock(r.at)}` }),
+    point(r.coord, { label: `Responder ${responderName(r)}, ${wallClock(r.at)}` }),
   );
   const dests = data.destinations
     .filter((d) => d.kind !== "exit")
@@ -264,7 +268,7 @@ function fireHatch(): ImageData {
 
 const SOURCES = [
   "lc-zones", "lc-zone-labels", "lc-fire", "lc-fire-label", "lc-fire-obs", "lc-routes", "lc-hazard-lines", "lc-points", "lc-help",
-  "lc-responders", "lc-dest", "lc-queues", "lc-traffic", "lc-ground", "lc-focus", "lc-imp-zones", "lc-imp-now", "lc-imp-alt", "lc-imp-road",
+  "lc-responders", "lc-dest", "lc-queues", "lc-traffic", "lc-ground", "lc-focus", "lc-imp-zones", "lc-imp-now", "lc-imp-alt", "lc-imp-road", "lc-resp-route",
 ];
 
 function installLayers(map: MapLibreMap): void {
@@ -380,6 +384,20 @@ function installLayers(map: MapLibreMap): void {
       "line-width": 5,
       "line-dasharray": ["case", ["get", "confirmed"], ["literal", [1, 0]], ["literal", [1.5, 1]]] as never,
     },
+  });
+  map.addLayer({
+    id: "lc-resp-route-casing",
+    type: "line",
+    source: "lc-resp-route",
+    layout: { "line-join": "round", "line-cap": "round" },
+    paint: { "line-color": MAP_COLOR.casing, "line-width": 7, "line-opacity": 0.95 },
+  });
+  map.addLayer({
+    id: "lc-resp-route",
+    type: "line",
+    source: "lc-resp-route",
+    layout: { "line-join": "round", "line-cap": "round" },
+    paint: { "line-color": MAP_COLOR.responderRoute, "line-width": 3.5, "line-dasharray": [0.1, 1.6] },
   });
   map.addLayer({
     id: "lc-imp-road",
@@ -515,6 +533,7 @@ function installLayers(map: MapLibreMap): void {
     layout: { "text-field": ["get", "text"], "text-font": ["Noto Sans Regular"], "text-size": 12, "text-letter-spacing": 0.04 },
     paint: { "text-color": MAP_COLOR.fireEdge, "text-halo-color": "#FFFFFF", "text-halo-width": 1.8 },
   });
+  installInjectLayers(map);
 }
 
 function escapeHtml(text: string): string {
@@ -539,10 +558,11 @@ interface Props {
   focus: MapFocus | null;
   layers: Record<LayerKey, boolean>;
   impact: ImpactResponse | null;
+  taskRoute: LonLat[] | null;
   onSelect: (itemId: string | null) => void;
 }
 
-export default function CommandMap({ data, twin, items, selected, focus, layers, impact, onSelect }: Props) {
+export default function CommandMap({ data, twin, items, selected, focus, layers, impact, taskRoute, onSelect }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const dataRef = useRef<CommandResponse | null>(data);
@@ -581,7 +601,7 @@ export default function CommandMap({ data, twin, items, selected, focus, layers,
         const id = e.features?.[0]?.properties.item;
         if (typeof id === "string") onSelectRef.current(id);
       });
-      for (const layer of ["lc-ground", "lc-help", "lc-responders", "lc-queues", "lc-dest"]) {
+      for (const layer of ["lc-ground", "lc-help", "lc-responders", "lc-queues", "lc-dest", "lc-inject-marks"]) {
         map.on("click", layer, (e: MapLayerMouseEvent) => {
           const f = e.features?.[0];
           if (!f || !map) return;
@@ -625,7 +645,7 @@ export default function CommandMap({ data, twin, items, selected, focus, layers,
   useEffect(() => {
     const map = mapRef.current;
     if (!ready || !map || !data) return;
-    for (const [id, fc] of Object.entries(buildSources(data, items))) {
+    for (const [id, fc] of Object.entries({ ...buildSources(data, items), ...buildInjectSources(data) })) {
       (map.getSource(id) as GeoJSONSource | undefined)?.setData(fc);
     }
     if (!fitted.current && data.zones.length) {
@@ -687,6 +707,14 @@ export default function CommandMap({ data, twin, items, selected, focus, layers,
     if (target) map.flyTo({ center: target.coord, zoom: Math.max(map.getZoom(), FOCUS_ZOOM) });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fly on a new selection or focus, not on each poll
   }, [ready, selectedId, focus]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map) return;
+    (map.getSource("lc-resp-route") as GeoJSONSource | undefined)?.setData(
+      collection(taskRoute && taskRoute.length > 1 ? [lineFeature(taskRoute)] : []),
+    );
+  }, [ready, taskRoute]);
 
   useEffect(() => {
     const map = mapRef.current;

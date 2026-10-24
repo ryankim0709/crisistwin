@@ -64,7 +64,9 @@ accept becomes the assignee). `accepted` is new in v2.
 submitting a report with its `task_id`; `POST tasks/{id}` with
 `{ "status": "cancelled", "note": "Could not reach it" }` closes it unanswered.
 
-`live_decisions`: an append-only audit log of triage, task, approval, drill and help actions: `{ at, actor, action, report_ids, proposal_id, checkin_id, note }`.
+`live_injects`: drill injects, see [Injects](#injects).
+
+`live_decisions`: an append-only audit log of triage, task, approval, drill and help actions: `{ at, actor, action, report_ids, proposal_id, checkin_id, note }` `actor` is `controller`, `auto_policy`, a responder `party_key`, or `agent:<name>` (see [Actor attribution](#actor-attribution)).
 
 Road status and public items are computed when read from current reports in P0;
 store them in their own collection only if reads get slow.
@@ -88,6 +90,11 @@ store them in their own collection only if reads get slow.
 
 `POST devices` and `POST incidents/{id}/join` (body `{ "invite_code": "..." }`) return
 `{ "token": "...", "role": "civilian|responder", "party_key": "dev_9f2...", "incident_id": "..."|null }`.
+`join` also takes an optional `"simulated": true` (a boolean, else `400`) for simulated responders
+([ADR 0038](adr/0038-simulated-responders.md)): the device stores it, the join response echoes
+`"simulated": true`, and each `command.responders[]` item carries `simulated` (`false` for real
+phones). The console tags those units "sim".
+
 A submitted report needs every field of the stored document except `id`,
 `reporter`, `road_ref`, `received_at`, `status` and `evidence_class`, which the server fills.
 
@@ -327,8 +334,10 @@ Planner rules (`livecore.planner.plan`, constants named in code):
   back to `temporary_refuge` when neither is reachable), snapped to their nearest
   road node, excluding destinations inside the fire estimate and shelters with a
   public `shelter_full` item. Multi-source Dijkstra on free-flow travel time
-  (`length_m / speed_kph`). Never uses an edge whose `segment_id` is blocked or
-  whose midpoint lies inside the fire estimate. Unreachable -> `no_route: true`.
+  (`length_m / speed_kph`), times the simulated congestion factor of each directed
+  edge when the twin is ready (see "Congestion-aware planning" below). Never uses an
+  edge whose `segment_id` is blocked or whose midpoint lies inside the fire estimate.
+  Unreachable -> `no_route: true`. `eta_min` stays free-flow.
 - Blocked segments for guidance are road-state items with `status: "blocked"` and
   `public: true` (this includes controller confirmations). The impact analysis
   (`POST incidents/{id}/impact`) starts from the same blocks and toggles one segment.
@@ -358,7 +367,12 @@ An ETA change alone is not a change. `live_proposals` document (`Proposal`):
   "cause_segment_ids": ["osm-way:10287575:0"],  // newly blocked backed segments; on pending, plus crowd-only segments driving its changes
   "inputs": { "fire_as_of": "2018-11-08T16:00:00Z", "fire_method": "model_nowcast",
               "blocked_segment_ids": ["osm-way:10287575:0"], "full_destination_ids": [],
-              "planner_version": "planner-v1", "controller": "twin" },
+              "planner_version": "planner-v4", "controller": "twin",
+              "congestion": "twin@2018-11-08T16:10:00Z",   // or "unavailable" (free-flow); simulated input
+              "congestion_evidence_class": "simulated",     // null when unavailable
+              "congested_edges": 214,                       // edges with a factor > 1 in that twin read
+              "incumbents": 31, "incumbents_with_edges": 31, // published routes held by hysteresis
+              "hysteresis": { "min_gain_s": 120.0, "min_gain_fraction": 0.15, "min_dwell_s": 900.0 } },
   "controller": { "id": "twin", "version": "twin-controller-v1", "fallback": null },  // see Controllers
   "twin": TwinEvidence | null,            // TwinController only; see Controllers
   "changes": [
@@ -420,6 +434,57 @@ pending proposal is kept and `replan` returns its id again.
 
 An automatic replan triggered by a `situation` or `command` read runs in a background
 thread, so the read never waits for it; its proposals appear in the next `command` poll.
+
+### Congestion-aware planning (planner-v4, ADR 0031-congestion-aware-planner)
+
+Every replan reads the traffic twin's current per-edge state once (simulated; `inputs.congestion
+= "twin@<twin clock>"`) and multiplies each directed edge's search cost by the same factor as
+responder routes: `factor = clamp(free_flow_kph / speed_kph, 1, 10)` on edges with at least
+`CONGESTION_MIN_VEH` (3) simulated vehicles (speed 0 gives 10), 1 elsewhere. So the edge cost is
+
+    cost_s = length_m / (speed_kph / 3.6) x fire_weight x factor
+
+with `fire_weight` 1, `EXPOSED_COST_BUFFER` (5) or `EXPOSED_COST_INSIDE` (20) by pass, as before.
+Route selection, destination choice and alternatives use it; `eta_min` and `distance_m` do not
+(they stay free-flow). While the twin is warming, busy or failed, or with `LIVE_CONTROLLER=rule`
+before the twin was built, the plan is free-flow and `inputs.congestion` is `"unavailable"`.
+Congestion is read only when a replan happens for another reason (fire, block, shelter, manual);
+it never triggers a replan by itself. The impact analysis stays free-flow.
+
+Hysteresis, so zones do not swap exits as queues move. Each zone's published route is its
+incumbent: its edges come from `live_plan_routes` (the edges of every proposed route, keyed by
+zone, destination and `via`; never served), or, when unknown, the cheapest route to the same
+destination now. Within each routing pass, the zone keeps the incumbent unless
+
+    new_cost_s <= incumbent_cost_s - max(SWITCH_MIN_GAIN_S, SWITCH_MIN_GAIN_FRACTION x incumbent_cost_s)
+
+(120 s, 0.15), both costs measured now with the same edge costs, and in any case keeps it for
+`SWITCH_MIN_DWELL_S` (900 drill seconds) after the zone's guidance was published. Safety rules
+come first: an incumbent over a blocked segment, into a fire class the pass does not allow, or to
+a destination that is no longer usable (full, inside the fire, a refuge near it) is never kept.
+`crowd_influence` plans with and without crowd-only blocks under the same congestion and
+incumbents, so only the blocks differ. The planner is deterministic for given inputs.
+
+### Record comparison harness (`live_compare_record`)
+
+A headless, simulated planning experiment (not a claim about 2018):
+
+    python manage.py live_compare_record --confirm-delay-min 5 --out /tmp/record-compare
+
+runs the live twin inputs (seed `--seed`, default 7) and the planner on one simulation clock over
+a drill window (default 14:30Z-18:00Z = 06:30-10:00 PST, 2018-11-08), three ways, each a fresh twin:
+`A` the bundle's historical actions only; `B` a controller who confirms each 2018 record entry
+that enters the queue as `road_blocked` or `fire_seen` (`groundrecord.REPORT_KIND`, entries with
+a point) at its time + N minutes (entries queued before the start are confirmed at the start),
+approves every resulting change, and between confirms lets the auto policy publish pure
+unexposed reroutes on a new fire estimate; `B_free` as B with the previous planner (free-flow,
+no hysteresis). Guidance reaches the twin as `twin_service` syncs it (`close_road` hard,
+`order_zone`, `reroute_zone`). It writes `<out>.json` (`kind: crisistwin_record_comparison`,
+`evidence_class: simulated`) and `<out>.md`: per zone and in total, the twin order time and the
+drill's first `evacuate_now`, arrivals by checkpoint (default 15:30, 16:30, 17:30, 18:00Z),
+exposure (vehicles on fire-exposed edges or waiting at an origin in the fire area, sampled every
+`--sample-s` 60 s, in veh-min), trapped-by-fire (twin total), destination and route changes, and
+each zone's published history. No database writes; about 1-2 min.
 
 ## Controllers
 
@@ -771,6 +836,63 @@ is not on a road, or both are given and disagree. Two parts, computed separately
 then by ETA delta and vehicles. The /live workspace runs it from a selected road item and
 draws the current routes solid, the other state's routes dashed, and the affected zones.
 
+## Event stream
+
+`GET incidents/{id}/events?since=<cursor>&limit=<n>` (controller; `api/live/events.py`) lists what
+changed since a cursor, in time order, so an agent driving the controller API (ADR 0030 "Controller
+surface for the orchestrator") need not diff `command` polls. Read only; no new collection.
+
+- `since`: omitted = from the beginning of the incident's data; `now` = no events, just a cursor at
+  the server clock (minus the settle window); otherwise a `next_cursor` from an earlier response
+  (`<ms>:<type>:<id>`, opaque). Anything else is `400 invalid_request`.
+- `limit`: 1..500, default 200. `more: true` means the page was full: call again at once.
+
+```jsonc
+{ "incident_id": "camp-2018-drill", "generated_at": "...Z",
+  "events": [
+    { "key": "1792860312307:report:rpt_01J...",   // stable: dedupe on it
+      "at": "2026-10-24T16:45:12Z",               // wall UTC of this change (sort key)
+      "replay_at": "2018-11-08T16:20:01Z",        // drill UTC (see below); null outside a drill
+      "type": "report", "id": "rpt_01J...",
+      /* summary fields by type, below */ } ],
+  "next_cursor": "1792860312307:report:rpt_01J...", "more": false }
+```
+
+| `type` | `at` | `id` | Summary fields |
+| --- | --- | --- | --- |
+| `report` | `updated_at` | report id | `change` (`new` when `updated_at` = `received_at`, else `updated`), `kind`, `status`, `severity`, `evidence_class`, `reporter_role`, `segment_id`, `road_name`, `destination_id`, `coord`, `task_id`, `note` (first 160 chars) |
+| `decision` | `at` | `dec_<object id>` | `actor`, `action`, `report_ids`, `proposal_id`, `checkin_id`, `note` |
+| `proposal` | `created_at` (`change: created`) or `decided_at` (`change: decided`) | proposal id | `status`, `policy`, `parent_id`; created: `causes`, `controller`, `controller_fallback`, `n_changes`, `changes` (first 12: `zone_id`, `kind`, `from_level`, `to_level`, `to_destination_id`, `to_via`, `to_eta_min`, `no_route`), `n_tasks`; decided: `decided_by`, `note`. An auto-approved part is one `created` event |
+| `guidance` | `published_at` | `<zone_id>@v<version>` | `zone_id`, `version`, `level`, `destination_id`, `via`, `eta_min`, `no_route`, `reason_code`, `approved_by`, `proposal_id` |
+| `checkin` | `at` | check-in id | `status`, `zone_id`, `role`, `coord` (need_help only), `help_status` |
+| `help` | `help.updated_at` (when it differs from the check-in's `at`) | check-in id | `status`, `assignee`, `task_id`, `zone_id` |
+| `task` | `created_at`, `accepted_at`, `closed_at` (`change`: `created`, `accepted`, `closed`) | task id | `kind`, `status`, `assignee`, `segment_id`, `coord`, `report_ids`, `checkin_id`, `note` |
+
+Rules:
+
+- Reports, check-ins and tasks are updated in place, so an event carries the document's state
+  **now** and the `change` that happened at `at`; two changes to one report between polls show as
+  one event at the later time.
+- `replay_at` is the document's stored drill time where it has one (reports, guidance, check-ins,
+  proposal `replay_at` / `decided_replay_at`); for decisions, help changes and task transitions it is
+  estimated from the current drill clock (wrong if the speed changed or the drill was reset since).
+- Delivery is at least once. A write can carry a timestamp taken seconds before it lands (a
+  twin-scored replan takes ~5-7 s), so `next_cursor` never moves past `now - EVENT_SETTLE_MS`
+  (10 s) unless the page is full; events in that window come again on the next poll with the same
+  `key`. Order is (`at`, `type:id`).
+- A drill `reset` deletes guidance, proposals and check-ins, so their events disappear; reports,
+  tasks and decisions stay.
+
+## Actor attribution
+
+A controller request may carry `X-CrisisTwin-Actor: agent:<name>` (`<name>` matches
+`[A-Za-z0-9][A-Za-z0-9._-]{0,63}`). The server then records `agent:<name>` instead of
+`controller` as the `actor` of every `live_decisions` entry the request writes (triage, tasks,
+help, replan, approve, reject, drill). The header is ignored on non-controller requests and when
+malformed. Background work (automatic replans, `auto_policy`) is unaffected, and proposals keep
+`decided_by: "controller"`. The controller MCP server (`orchestrator_mcp/`, ADR 0033) sends it on
+every write.
+
 ## Controller auth (v2)
 
 Dev and drill only. With `LIVE_CONTROLLER_TOKEN` unset (the default), a request without an
@@ -782,6 +904,104 @@ it on anything reachable by others. Responders join with
 (unset -> join returns `403`). Both are placeholders in `app/.env.example`; real
 values stay in the shell or an ignored `.env`. A real deployment needs per-person
 controller accounts (not in scope).
+
+## After-action report
+
+`GET incidents/{id}/aar` (controller; `api/live/aar.py`) reads the drill's audit data and the
+twin and returns a report and a drill score. It never writes and uses no LLM. The web page is
+`/live/report` (Export JSON saves this response). Evidence classes: `observed` = what drill
+participants did, `simulated` = from the twin at its current clock, `historical` = the 2018
+evacuation orders in the bundle (`command.response_record`, type `evacuation_order`; the
+earliest order that lists the zone).
+
+```jsonc
+{
+  "kind": "crisistwin_live_aar", "incident_id": "camp-2018-drill", "generated_at": "...Z",
+  "drill": { "replay_start": "...Z", "replay_now": "...Z", "started_at": "...Z", "speed": 1, "running": true },
+  "score": { "value": 61.2, "max": 100, "coverage": 1.0, "formula": "...", "evidence_class": "simulated",
+    "components": [ { "id": "arrived_share", "label": "...", "evidence_class": "simulated",
+      "raw": 0.75, "unit": "share of vehicles", "score": 0.75,   // component score in [0, 1], null = no data
+      "weight": 0.35, "effective_weight": 0.35, "points": 26.3, "rule": "..." } ] },
+  "twin": { "status": "ok",   // or warming | failed | finished | busy, then totals is null
+    "evidence_class": "simulated", "clock": "...Z",
+    "totals": { "total_veh": 0, "arrived_veh": 0, "exposed_veh": 0, "trapped_by_fire_veh": 0,
+                "trapped_by_closure_veh": 0, "exposed_veh_min_so_far": 0.0 } },
+  "zones": [ { "zone_id": "bg:...", "name": "...", "vehicles": 610,
+    "first_leave_now_at": "...Z",          // drill time of the first evacuate_now guidance, null if none
+    "historical_order_at": "...Z",         // 2018, null if the bundle has none for the zone
+    "leave_now_vs_2018_min": -15.0,        // drill minus 2018; negative = earlier
+    "leave_now_status": "earlier",         // none | earlier | later | same | missed
+    "guidance_changes": 2,                 // published guidance versions
+    "reports": 2, "triage_median_min": 3.0,          // received -> triage decision, wall minutes
+    "help_requests": 1, "help_to_assign_median_min": 4.0,
+    "arrived_veh": 120, "exposed_veh": 4 } ],         // simulated, per zone
+  "triage": { "reports": 2, "triaged": 2, "median_min": 3.0 },
+  "help": { "requests": 1, "to_assign_median_min": 4.0, "to_resolve_median_min": 20.0,
+            "task_to_accept_median_min": 3.0, "task_accept_to_close_median_min": 12.0,
+            "items": [ { "checkin_id": "chk_...", "to_assign_min": 4.0, "to_resolve_min": 20.0 } ] },
+  "timeline": [ { "at": "...Z", "drill_at": "...Z", "actor": "controller", "action": "confirm",
+                  "report_ids": [], "proposal_id": null, "checkin_id": null, "note": null } ],
+  "limitations": [ "..." ]
+}
+```
+
+Timeline `at` is wall time; `drill_at` is the proposal's decided drill time for approve and
+reject, else estimated from the current drill clock (wrong if the speed changed since).
+`historical_record` reports (the 2018 queue entries) are not field reports and are not counted in
+triage times. Help minutes are wall minutes from the check-in time; a request the resident later
+closed by checking in again has no start time and no minutes.
+
+**Drill score** (0 to 100): `100 x sum(effective_weight x component score)`. Constants are at the
+top of `aar.py`.
+
+| Component | Evidence | Raw value | Component score (clamped to 0..1) | Weight |
+| --- | --- | --- | --- | --- |
+| Vehicles arrived | simulated | arrived / total vehicles | the share | 0.35 |
+| Exposed or trapped vehicle-minutes | simulated | (`exposed_veh_min_so_far` + 60 x trapped-by-fire vehicles) / total vehicles | `1 - raw / 5` | 0.30 |
+| Median help to responder assigned | observed | median wall minutes over assigned requests | `1 - minutes / 30`; 0 if requests exist and none was assigned | 0.15 |
+| Leave-now vs 2018 | historical | median minutes vs 2018 over zones with both | mean over zones of `0.5 - minutes / 60` (30 min earlier = 1, on time = 0.5, 30 min later = 0); a zone whose 2018 order time has passed on the drill clock with no leave-now scores 0 | 0.20 |
+
+A component with no data (no help requests, twin warming, no zone ordered yet) has
+`score: null` and is left out; the remaining weights are renormalised (`effective_weight`) and
+`coverage` is the weight share that counted. The score is a planning-experiment number from an
+uncalibrated model, not an evaluation of the controllers.
+
+## Injects
+
+Scripted or instructor-triggered events that stress a plan ([ADR 0039](adr/0039-drill-injects.md)). Every
+inject is **simulated** and labeled (`evidence_class: "simulated"`, label `Injected (simulated): ...`); nothing is
+sent to real people, and no report is created for it. `live_injects` document (controller only):
+
+```jsonc
+{ "id": "inj_...", "type": "comms_outage", "params": { "zone_ids": ["bg:060070016002"], "until": "2018-11-08T16:30:00Z" },
+  "at": "2018-11-08T15:40:00Z",         // drill time (UTC); omit on POST for "now" (the drill clock)
+  "status": "scheduled|active|ended",   // follows the drill clock
+  "actor": "controller",                // POST may set "script:<name>" (at most 40 characters)
+  "label": "Injected (simulated): no phone signal in ...", "evidence_class": "simulated",
+  "coord": null, "zone_ids": ["bg:060070016002"] }   // coord: map mark of point injects
+```
+
+| type | `params` | Effect (from `at`) |
+| --- | --- | --- |
+| `psap_reroute` | `zone_ids`, optional `until`, optional `to` (label) | The zones' 911 stream is dropped (as Paradise to Chico at 08:20 PST, 2018): their 2018 `911` record items no longer enter the review queue (`groundrecord.materialize_due`) or the `ground_record` panel from `at` (to `until`). Radio and rescue entries stay. Generated comms (`sim/gen_comms.py`) read the same windows: `zone_ids` x `[at, until or end)` |
+| `comms_outage` | `zone_ids`, `until` | Civilian reports whose location lies in a zone, and check-ins declaring one, get `503 { "error": "no_signal" }` with `Retry-After: 60` between `at` and `until` (the phone's offline outbox keeps and retries them). Responders are exempt (radio). The command poll lists `no_signal_zone_ids`; the console hatches those zones grey |
+| `silent_closure` | `segment_id` | The segment closes in the twin (`close_road`, `mode: hard`, operator actor `inject:<id>`, rationale `Injected (simulated): ...`). No report exists, so guidance and the public map do not know until a report or a responder check says so. Deleting it reopens the road |
+| `shelter_full` | `destination_id` (a shelter or refuge) | The destination is full in the twin (`fill_destination`, [twin-api.md](twin-api.md#catalog)); guidance still offers it until a `shelter_full` report arrives. Not undoable until the drill restarts |
+| `fire_jump` | `coord` `[lon, lat]`, optional `radius_m` (10..1000, default 150) | A small circle is added to the snapshot's fire estimate (`livecore.fire.estimate_fire(spots=...)`): `fire.label` ends `+ injected spot fire (simulated)`, `evidence_class` is `simulated`. Planner route safety sees it. The twin's own fire timeline is not changed |
+
+Endpoints (controller token):
+
+- `GET incidents/{id}/injects` -> `{ "injects": [DrillInject], "replay_now", "choices": { "segments": [{ "id", "name", "length_m" }] } }`
+  (`choices` feeds the console's road picker). Reading moves each inject's status to the drill clock's.
+- `POST incidents/{id}/injects` `{ "type", "params", "at"?, "actor"? }` -> `201 { "inject": DrillInject }`.
+  `400 invalid_inject` for a bad type, params or an `at` outside the drill clock; `409` past 60 injects.
+- `DELETE incidents/{id}/injects/{inject_id}` (or `DELETE incidents/{id}/injects?id=...`) -> `{ "deleted": id }`; `404` if unknown.
+
+Applied by the drill clock, idempotently, where the snapshot is loaded (`state.load_snapshot` -> `injects.apply_due`):
+the stored `status` moves with the clock (a drill reset puts every inject back to `scheduled`), and each change is
+logged once in `live_decisions` as `inject_created`, `inject_started`, `inject_ended` or `inject_deleted` (note:
+the label). `command` adds `injects` and `no_signal_zone_ids`. Index `{incident_id, at}`; `live_init_db
+--drop-drill-data` drops the collection.
 
 ## Endpoint summary (v2 additions)
 
@@ -798,9 +1018,12 @@ controller accounts (not in scope).
 | `POST incidents/{id}/replan` | controller |
 | `POST proposals/{id}/approve`, `POST proposals/{id}/reject` | controller |
 | `POST incidents/{id}/drill` | controller |
+| `GET incidents/{id}/events?since=` | controller ([Event stream](#event-stream)) |
+| `GET`, `POST`, `DELETE incidents/{id}/injects[/{inject_id}]` | controller ([Injects](#injects)) |
 | `GET incidents/{id}/twin` | controller ([twin-api.md](twin-api.md#http-adapter-live-drill-appbackendapilivetwin_servicepy)) |
 | `POST incidents/{id}/twin/whatif` | controller |
 | `POST incidents/{id}/impact` | controller ([Impact analysis](#impact-analysis)) |
+| `GET incidents/{id}/aar` | controller ([After-action report](#after-action-report)) |
 
 ## Location (v2)
 
@@ -821,6 +1044,7 @@ ISO 8601 `Z`. Ids are prefixed strings (`rpt_`, `tsk_`, `prp_`, `chk_`, `dev_`,
 | `live_devices` | issued token (civilian or responder) | `token_hash` (SHA-256), `role`, `party_key`, `incident_id`, `created_at`, `last_seen_at`, `expires_at` | `token_hash` unique; `party_key`; TTL on `expires_at` (`expireAfterSeconds: 0`; civilian 30 days after last seen, responder 24 h) |
 | `live_reports` | report | v1 document + `replay_at`, server-maintained `updated_at` (cursor) | `{incident_id, client_id}` unique (client_id stored lowercased); `{incident_id, received_at}`; `{incident_id, updated_at}` (the `since` cursor); `{reporter.party_key, received_at}`; `id` unique; 2dsphere on `location.coord` (optional; P0 filters in Python) |
 | `live_tasks` | task | v1 + `assignee`, `accepted_at` | `id` unique; `{incident_id, status}`; `{assignee, status}` |
+| `live_injects` | drill inject ([Injects](#injects)) | `id`, `incident_id`, `type`, `params`, `at`, `status`, `actor`, `created_at` | `id` unique; `{incident_id, at}` |
 | `live_decisions` | audit entry (append only) | `incident_id`, `at`, `actor`, `action`, `report_ids`, `proposal_id`, `note` | `{incident_id, at}` |
 | `live_drills` | incident | see [Drill clock](#drill-clock) | `incident_id` unique |
 | `live_guidance` | zone guidance version (append only; only the derived `route.safety`, `caveat`, `alternatives` of the current version are rewritten by a replan) | `ZoneGuidance` + `incident_id` | `{incident_id, zone_id, version}` unique; `{incident_id, published_at}` |

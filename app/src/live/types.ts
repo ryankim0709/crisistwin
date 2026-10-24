@@ -3,6 +3,8 @@
 // Times are UTC ISO 8601 strings with `Z`. Coordinates are WGS84 [lon, lat]. Distances are meters.
 // "Drill time" fields (replay_*) are 2018 Camp Fire replay times; everything else is wall time.
 
+import type { DrillInject } from './injects'
+
 export type LonLat = [lon: number, lat: number]
 export type IsoTime = string
 
@@ -426,6 +428,8 @@ export interface HelpRequest {
 }
 export interface ResponderPosition {
   party_key: string
+  /** Simulated responder (ADR 0038): shown with a "sim" tag. */
+  simulated?: boolean
   coord: LonLat
   accuracy_m: number | null
   at: IsoTime
@@ -455,6 +459,10 @@ export interface CommandResponse {
   decisions?: Decision[]
   response_record?: ResponseRecordItem[]
   ground_record?: GroundRecord
+  /** Drill injects (instructor panel), any status; absent from older servers. */
+  injects?: DrillInject[]
+  /** Zones with no phone signal now (a comms_outage inject is active). */
+  no_signal_zone_ids?: string[]
   /** All pending plus the latest 20 decided, newest first. */
   proposals: Proposal[]
   /** Newest 500. */
@@ -554,6 +562,26 @@ export interface TwinMonitor {
 export interface LiveApiError {
   error: string
   detail?: string
+  /** Task route errors (409 no_origin) carry `reason` instead of `error`. */
+  reason?: string
+}
+
+/** GET tasks/{id}/route (docs/live-reports.md "Responder route to a task"); planner route, twin congestion simulated. */
+export interface TaskRoute {
+  task_id: string
+  route: {
+    line: LonLat[]
+    via: string[]
+    distance_m: number
+    eta_min: number
+    exposure: 'clear' | 'near_fire'
+    congestion: 'twin' | 'unavailable'
+    congested_edges: number
+  } | null
+  reason: 'unreachable' | 'no_origin' | null
+  detail: string | null
+  evidence_class: string
+  as_of: IsoTime
 }
 
 // ---- Impact analysis (docs/live-reports.md "Impact analysis"); planner routes computed, twin values simulated ----

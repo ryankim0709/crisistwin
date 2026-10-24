@@ -19,8 +19,10 @@ packaged raw bytes offline and compares them.
 | Kincade Fire (2019) | `kincade_build.py` (entry point), `kincade_common.py`, `kincade_events.py`, `kincade_fire.py`, `kincade_population.py`, `kincade_roads.py`, `kincade_traffic.py`, `kincade_zones.py` | Evacuation package: `fetch`, `build`, or `--verify-package`. |
 | Marshall Fire (2021) | `marshall_build.py` (entry point), `marshall_extract.py`, `marshall_geopdf.py` | Evacuation package from OSM, FEDS, CDOT counts, Census/FIRMS subsets and the county GeoPDF launch areas. |
 | Woolsey Fire (2018) | `woolsey_build.py` | Evacuation package: `fetch-osm`, `fetch-feds`, `extract-firms`, `extract-acs`, `build`, or `--verify-package`. |
+| People and facilities | `people_data.py`, `people_behavior.json`, `people_acs_butte_fixture.json`, `people_facilities_butte_fixture.json` | ACS block-group no-vehicle, 65+, disability and limited-English counts; licensed care facilities, hospitals and schools; sourced evacuation-behaviour parameters. See [docs/people-data.md](../docs/people-data.md). The two fixtures are generated output; `people_behavior.json` is hand-curated. |
 | Mongo sync | `mongo_data.py` | `push`, `pull`, `record`, `status` for incident-package artifacts and generated app data (`app/data-manifest.json`). Needs `MONGODB_URI`. |
 | Mobility sidecars | `dewey_mobility.py` | Aggregates licensed Advan parquet subsets into `app/public/replays/<id>.mobility.json` (needs `pyarrow`; licensed data is never committed). Format: [docs/mobility-sidecar.md](../docs/mobility-sidecar.md). |
+| Suppression resources | `suppression_data.py`, `suppression_resources.json`, `ca_fire_bases.json` | Sourced firefighting resource types, production rates, road and aviation constraints, and California stations and bases. Validate with `python3 -m tools.suppression_data`; see [docs/suppression-data.md](../docs/suppression-data.md). Both JSON files are curated data (the bases file is rebuilt with `--refresh-bases`). |
 | Landscape regions | `build_landscape_regions/` | Node builder + Python uploader for prebuilt California fire landscapes. See its [README](build_landscape_regions/README.md). |
 
 ## Data tables (`*.json` at this level)
@@ -50,12 +52,26 @@ python3.12 -m tools.replay_camp_history --package data/incidents/camp-2018-parad
 # tools/camp_ground_record.json. Tests: python3.12 -m unittest tests.test_camp_ground_record
 python3.12 -m tools.camp_ground_record --cache-dir ~/crisistwin-sources/nist
 
+# Marshall/Woolsey/Kincade 911, dispatch and alert aggregates (network; needs pdftotext). Pins source
+# SHA-256, checks anchors, rewrites tools/ground_stats_other_fires.json. Tests: tests.test_ground_stats_other_fires
+python3.12 -m tools.ground_stats_other_fires --cache-dir ~/crisistwin-sources/ground [--check]
+# People and facilities data (network; stdlib only; tests never use the network).
+# Census: --source api is keyless (CENSUS_API_KEY optional); --source bulk streams the ACS summary files.
+python3.12 -m tools.people_data census --counties 007 --source bulk --out ~/crisistwin-sources/people
+python3.12 -m tools.people_data facilities --counties Butte --out ~/crisistwin-sources/people
+python3.12 -m tools.people_data validate tools/people_acs_butte_fixture.json tools/people_facilities_butte_fixture.json
+python3.12 -m unittest tests.test_people_data
+
 # Other incidents (inputs directory lives outside the repository)
 python3.12 -m tools.kincade_build fetch --sources DIR
 python3.12 -m tools.kincade_build build --sources DIR
 python3.12 -m tools.kincade_build --verify-package PATH
 python3.12 -m tools.woolsey_build fetch-osm --inputs DIR      # then fetch-feds, extract-*, build
 python3.12 -m tools.marshall_build --stage DIR                # or --verify-package PATH
+
+# Suppression resource data: validate, or re-download the CAL FIRE facilities layer (network)
+python3.12 -m tools.suppression_data
+python3.12 -m tools.suppression_data --refresh-bases
 
 # Landscapes
 node tools/build_landscape_regions/run.mjs && python3 -m tools.build_landscape_regions upload

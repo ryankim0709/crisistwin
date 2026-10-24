@@ -18,22 +18,24 @@ export function useTriageKeys({
   busy,
   run,
   onSelect,
+  onError,
 }: {
   shown: QueueItem[];
   selected: QueueItem | null;
   busy: string | null;
   run: RunAction;
   onSelect: (id: string | null) => void;
+  onError: (message: string) => void;
 }) {
-  const state = useRef({ shown, selected, busy, run, onSelect });
+  const state = useRef({ shown, selected, busy, run, onSelect, onError });
   useEffect(() => {
-    state.current = { shown, selected, busy, run, onSelect };
+    state.current = { shown, selected, busy, run, onSelect, onError };
   });
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented || typing(e.target)) return;
-      const { shown, selected, busy, run, onSelect } = state.current;
+      const { shown, selected, busy, run, onSelect, onError } = state.current;
       const k = e.key;
       const inQueue = !!(e.target as HTMLElement | null)?.closest?.(".lc-queue");
       // The queue handles its own arrows when focused.
@@ -51,7 +53,12 @@ export function useTriageKeys({
         if (selected) onSelect(null);
       } else if (TRIAGE[k] && selected && busy === null) {
         const p = triageItem(run, selected, TRIAGE[k]);
-        if (p) e.preventDefault();
+        if (p) {
+          e.preventDefault();
+          void p.then((message) => {
+            if (message) onError(message);
+          });
+        }
       }
     };
     window.addEventListener("keydown", onKey);

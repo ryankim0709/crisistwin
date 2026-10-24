@@ -22,6 +22,7 @@ Routes of the web app (`app/src/main.tsx`, `app/src/navigation.ts`); `/` redirec
 | `/simulation` | Simulation Studio | Up to five scheduled ignitions in one solver pass on a shared landscape, Web Worker solve, JSON export/import, plus a 3D diorama view of the last run. In 3D, **Evacuation & closures** evacuates the board's synthetic households against the run and lets you close roads or bridges, comparing results with and without them (closures change traffic, not the fire). An **optimizer** re-runs on every closure change, searching other exits and staged waves per zone, and shows its best plan against the fastest-exit policy; the 3D view can play either. **Firefighters** in the config panel send hand crews, engines and dozers, driving in from the nearest fire stations over the board's roads, to build control line; the run estimates whether they put each fire out by direct attack once on site, searches anchor points and line distances for the best control line, and compares both with no crews. Crews the fire overwhelms leave it after a size-up and help the evacuation in the most threatened zones. [ADR 0011](docs/adr/0011-simulation-studio.md), [ADR 0016](docs/adr/0016-studio-diorama-view.md), [ADR 0018](docs/adr/0018-road-closures.md), [ADR 0020](docs/adr/0020-studio-firefighting.md), [ADR 0023](docs/adr/0023-studio-crew-dispatch.md), [ADR 0024](docs/adr/0024-studio-crews-assist-evacuation.md), [ADR 0029](docs/adr/0027-evacuation-optimizer.md). |
 | `/dispatch` | Dispatch agent | The Simulation Studio UI (scheduled fires, map and 3D diorama) with its own saved draft, plus a live Claude dispatcher beside it (needs `ANTHROPIC_API_KEY`). After a run it builds OSM roads, stations and synthetic homes. A monitor checks the simulation every few simulated minutes and calls Claude only when something changes. Claude orders zones out or stages them in waves, and sends engines either to fight a fire or to support an evacuation. For each fire Claude picks a tactic (direct attack, flanking from the heel, or indirect line ahead) from options the simulator has solved (homes reached, area burned, time to contain); the fire model decides where a line holds; the console shows each zone's simulated resident notice (nothing is sent). [ADR 0014](docs/adr/0014-dispatch-agent.md), [ADR 0017](docs/adr/0017-dispatch-anywhere.md), [ADR 0019](docs/adr/0019-live-dispatch-monitor.md), [ADR 0022](docs/adr/0022-dispatch-fire-attack.md), [ADR 0025](docs/adr/0025-dispatch-fire-tactics.md). |
 | `/live` | Live command | Controller workspace for the Camp Fire live drill: field-report triage, per-zone guidance approval, the drill clock and the real-time twin. Full-height map inside the workspace sidebar, with a legend for every map mark. [Contract](docs/live-reports.md), [ADR 0012](docs/adr/0012-controller-guidance.md). |
+| `/live/report` | After-action report | Drill score with its component breakdown, per-zone leave-now vs 2018, triage and help times, and the decision timeline; Export JSON. Opened from the `/live` header menu. [Contract](docs/live-reports.md#after-action-report). |
 | `/replay` | Historical replay | Replay of past fires (Camp 2018, plus Marshall and Kincade packages) with perimeters, evacuation traffic and responder/evacuee views, driven by generated replay bundles. [Bundle contract](docs/replay-bundle.md). |
 | `/simulate` | Agent simulation | Replay-style view of simulated agent runs (same map tooling as `/replay`). |
 | `/diorama` | Evacuation diorama | Fictional, scripted ~90 s three.js evacuation of the made-up town Larkspur Hollow; synthetic data. [ADR 0010](docs/adr/0010-evacuation-diorama.md). |
@@ -34,6 +35,7 @@ Also in the repository:
 
 - **Backend** (`app/backend/`): Django REST API with `GET /api/health`, `/api/landscapes` (prebuilt landscapes from MongoDB), `/api/dispatch/area` (OpenStreetMap roads and stations for a box), `/api/dispatch/decide`, `/api/replay/explain`, `/api/live` (resident-app simulation feed), `/api/live/…` (live drill: field reports, controller guidance, twin; [contract](docs/live-reports.md)) `/api/families` and `/api/mobile/…` (schema-free iOS app data in Atlas, [ADR 0029](docs/adr/0029-mobile-data-store.md)). See [API contract](app/backend/README.md).
 - **Fire watch agent** (`agent/`): a standalone Python package that drafts evacuation advisories from satellite detections for a human to approve; never notifies residents. [README](agent/README.md), [ADR 0008](docs/adr/0008-fire-watch-agent.md).
+- **Controller MCP server** (`orchestrator_mcp/`): a stdio MCP server that lets an external orchestrator agent act as the controller of the live drill through the controller API, with every write attributed to the agent. [README](orchestrator_mcp/README.md), [ADR 0033](docs/adr/0033-controller-mcp-server.md).
 - **Historical replay simulator** (`sim/`): stdlib Python fire hindcast and evacuation traffic model that produces replay bundles. [README](sim/README.md).
 - **iOS app** (`mobile/`): SwiftUI resident app for the **live drill** on the 2018 Camp road network: a map
   with the fire estimate and the zone guidance a controller approves on `/live`, field reports and **I'm out** /
@@ -72,6 +74,7 @@ app/                  Web app
   data-manifest.json  Hashes of generated app data stored in MongoDB Atlas
   docker-compose.yml  Development stack (frontend + backend, external MongoDB)
 agent/                Fire watch agent (Anthropic SDK, standalone)
+orchestrator_mcp/     Controller MCP server for an external orchestrator agent (standalone)
 sim/                  Historical replay simulator (stdlib Python)
 tools/                Data acquisition and sync scripts (see tools/README.md)
 tests/                Unit tests for the tools incident builders
@@ -144,6 +147,37 @@ Select the **CrisisTwin** scheme and an iOS 26 simulator (Xcode 26), then Produc
 [mobile/README.md](mobile/README.md). Mobile builds and tests have not been run in this repository's
 checks.
 
+### Multi-phone drill
+
+One backend and console, several real phones, one iOS build. Phones get the server from a join
+link `crisistwin://join?server=<origin>&code=<invite>` (open it, or scan its QR code in Plan >
+About > Server). The console's /live "..." menu > **Invite phones** shows the link and QR code
+([ADR 0034](docs/adr/0034-multi-phone-hosting.md)). Always set `LIVE_CONTROLLER_TOKEN` (without
+it every client is the controller) and `LIVE_INVITE_CODE`, in your shell or `app/.env`.
+
+**(a) Same Wi-Fi, the Mac serves.** Find the name with `scutil --get LocalHostName` (`<mac>.local`).
+```sh
+cd app
+export LIVE_CONTROLLER_TOKEN=<token> LIVE_INVITE_CODE=<code>
+CT_BIND_ADDR=0.0.0.0 DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,backend,<mac>.local docker compose up --build
+```
+Open `http://localhost:5173/live` on the Mac (no token form), Invite phones, server
+`http://<mac>.local:5173`. Phones use the Vite proxy on 5173 (plain HTTP works only for `.local`;
+allow local network access when iOS asks). macOS may ask to allow incoming connections.
+
+**(b) HTTPS tunnel you start yourself.** Start the stack as above (it can stay on `127.0.0.1`),
+then in another terminal `cloudflared tunnel --url http://localhost:5173`. With the printed
+`https://<name>.trycloudflare.com`, restart Compose with
+`DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,backend,<name>.trycloudflare.com VITE_ALLOWED_HOSTS=<name>.trycloudflare.com`
+(add `DJANGO_CSRF_TRUSTED_ORIGINS=https://<name>.trycloudflare.com` only if a browser POST is
+refused). Invite phones with that origin. Visitors on the tunnel, including a console opened
+there, see the token form. The hostname changes every run; regenerate the QR code.
+
+**(c) Cloud host later.** Run the backend (`app/backend/Dockerfile`, `runtime` stage) behind HTTPS with
+`DJANGO_DEBUG=false`, `DJANGO_SECRET_KEY`, `DJANGO_ALLOWED_HOSTS=<host>`, `MONGODB_URI`,
+`LIVE_CONTROLLER_TOKEN`, `LIVE_INVITE_CODE`, and serve the built web app and `/api` from one
+origin. Invite phones with that origin. Nothing in the app changes.
+
 ### Checks
 
 The only default check is pre-commit (merge-conflict markers, trailing whitespace, final newlines):
@@ -163,7 +197,8 @@ There are no CI workflows.
 - [app/src/ui/README.md](app/src/ui/README.md): the UI standard (tokens and shared components every page uses).
 - [app/AGENTS.md](app/AGENTS.md) and [AGENTS.md](AGENTS.md): rules for coding agents. Change shared guidance in `AGENTS.md`;
   Claude's [subagent model rule](AGENTS.md#choosing-a-model-for-subagents) is there too.
-- Component READMEs: [app/backend](app/backend/README.md), [agent](agent/README.md), [sim](sim/README.md),
+- Component READMEs: [app/backend](app/backend/README.md), [agent](agent/README.md),
+  [orchestrator_mcp](orchestrator_mcp/README.md), [sim](sim/README.md),
   [tools](tools/README.md), [mobile](mobile/README.md).
 
 The project grew out of [this planning conversation](https://chatgpt.com/share/6adc0b53-b864-83e8-84f7-8560e24d2a15).

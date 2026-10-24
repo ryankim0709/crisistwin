@@ -9,6 +9,7 @@ services:
       DJANGO_DEBUG: ${DJANGO_DEBUG:-true}
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-insecure-local-development-only-crisistwin}
       DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1,backend}
+      DJANGO_CSRF_TRUSTED_ORIGINS: ${DJANGO_CSRF_TRUSTED_ORIGINS:-}
       MONGODB_URI: ${MONGODB_URI:?Set MONGODB_URI in the shell or app/.env}
       MONGODB_DATABASE: ${MONGODB_DATABASE:-crisistwin}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
@@ -16,11 +17,12 @@ services:
       APIFY_ACTOR_ID: ${APIFY_ACTOR_ID:-}
       LIVE_CONTROLLER_TOKEN: ${LIVE_CONTROLLER_TOKEN:-}
       LIVE_INVITE_CODE: ${LIVE_INVITE_CODE:-}
+      LIVE_ACTIVE_INCIDENT_ID: ${LIVE_ACTIVE_INCIDENT_ID:-}
       # /live's twin and drill read the repo outside app/backend; mounted read-only below.
       CRISISTWIN_REPO_ROOT: /repo
       LIVE_DRILL_BUNDLE: /repo/app/public/replays/camp-2018.json
     ports:
-      - "127.0.0.1:8000:8000"
+      - "${CT_BIND_ADDR:-127.0.0.1}:8000:8000"
     volumes:
       - ./backend:/app
       - ../sim:/repo/sim:ro
@@ -51,9 +53,13 @@ services:
       VITE_API_PROXY_TARGET: http://backend:8000
       # Lets the dev proxy sign /live's controller calls (vite.config.ts); never in the bundle.
       LIVE_CONTROLLER_TOKEN: ${LIVE_CONTROLLER_TOKEN:-}
-      LIVE_CONTROLLER_PROXY: any
+      # `host`: sign only when the browser addressed the proxy as localhost (see vite.config.ts).
+      # A phone or a tunnel visitor gets the token form instead of controller rights.
+      LIVE_CONTROLLER_PROXY: host
+      # Extra Host headers Vite accepts besides `.local`, e.g. a tunnel host.
+      VITE_ALLOWED_HOSTS: ${VITE_ALLOWED_HOSTS:-}
     ports:
-      - "127.0.0.1:5173:5173"
+      - "${CT_BIND_ADDR:-127.0.0.1}:5173:5173"
     volumes:
       - .:/app
       - node_modules:/app/node_modules

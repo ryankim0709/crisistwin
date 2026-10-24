@@ -3,6 +3,7 @@ import type { GeoPoint } from "../fire/spread";
 import type { ScheduledFireRun } from "../fire/scheduledTypes";
 import { formatElapsed } from "../fire/spread";
 import ConfigPanel from "./ConfigPanel";
+import LiveDrillAction from "./LiveDrillAction";
 import PlaybackBar from "./PlaybackBar";
 import StudioDiorama, { type StudioEvacuationView } from "./StudioDiorama";
 import EvacuationPanel, { type PlayPlan } from "./EvacuationPanel";
@@ -1106,6 +1107,7 @@ export default function SimulationStudioPage({
               onExport={handleExport}
               onImport={handleImport}
               onLoadDemo={handleLoadDemo}
+              liveDrill={<LiveDrillAction result={result} stale={stale} />}
               firefighting={
                 <FirefightingFields
                   scenario={scenario}

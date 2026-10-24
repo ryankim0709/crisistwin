@@ -1,0 +1,42 @@
+.lc-invite {
+  width: min(92vw, 380px);
+  padding: var(--ct-space-4);
+  border: 1px solid var(--ct-border-strong);
+  border-radius: var(--ct-radius-lg);
+  background: var(--ct-surface-raised);
+  color: var(--ct-ink);
+}
+.lc-invite::backdrop {
+  background: rgb(0 0 0 / 0.5);
+}
+.lc-invite h2 {
+  margin: 0 0 var(--ct-space-3);
+  font-size: var(--ct-text-lg);
+}
+.lc-invite .ui-field {
+  margin-bottom: var(--ct-space-3);
+}
+.lc-invite-qr {
+  width: 220px;
+  margin: var(--ct-space-3) auto;
+  padding: var(--ct-space-2);
+  border-radius: var(--ct-radius-md);
+  background: #fff; /* a QR code needs a light quiet zone in either theme */
+  line-height: 0;
+}
+.lc-invite-qr svg {
+  width: 100%;
+  height: auto;
+}
+.lc-invite-link {
+  display: block;
+  overflow-wrap: anywhere;
+  font-size: var(--ct-text-sm);
+  color: var(--ct-ink-muted);
+}
+.lc-invite-actions {
+  display: flex;
+  gap: var(--ct-space-2);
+  justify-content: flex-end;
+  margin-top: var(--ct-space-3);
+}

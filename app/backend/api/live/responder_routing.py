@@ -17,7 +17,7 @@ from datetime import datetime
 from typing import Any
 
 from livecore.geo import simplify_line
-from livecore.inbound import InboundResult, congestion_factor, inbound_route
+from livecore.inbound import InboundResult, congestion_factors, inbound_route
 
 from . import twin_service
 from .auth import Principal, live_view
@@ -27,9 +27,6 @@ from .state import Snapshot, load_snapshot
 log = logging.getLogger(__name__)
 
 ROUTE_STATUSES = ("open", "accepted")
-CONGESTION_MIN_VEH = 3
-"""An edge is congested only with at least this many simulated vehicles on it (one car waiting
-at a junction is not a jam)."""
 CONGESTION_CACHE_S = 10.0
 """Wall seconds the twin's edge speeds are reused for an incident (tasks poll every ~15 s)."""
 LINE_TOLERANCE_M = 5.0
@@ -53,7 +50,7 @@ _congestion: dict[str, tuple[float, datetime, dict[str, float]]] = {}
 def edge_congestion(snapshot: Snapshot) -> dict[str, float] | None:
     """Directed edge id -> travel-time factor from the simulated twin, or None when the twin is
     warming, busy or failed. Factor: ``congestion_factor(speed_kph, free_flow_kph)`` on edges
-    with at least CONGESTION_MIN_VEH vehicles; other edges are free-flow (absent)."""
+    with at least CONGESTION_MIN_VEH (``livecore.inbound``) vehicles; other edges are free-flow."""
     key = snapshot.incident_id
     with _congestion_lock:
         hit = _congestion.get(key)
@@ -68,12 +65,7 @@ def edge_congestion(snapshot: Snapshot) -> dict[str, float] | None:
     except Exception:  # noqa: BLE001 - a twin failure means free-flow routing, never a failed route
         log.exception("responder routing: reading the twin's edge speeds failed")
         return None
-    edges = snapshot.index.drill.roads.edges
-    factors = {
-        eid: f
-        for eid, (veh, speed, free_flow) in speeds.items()
-        if veh >= CONGESTION_MIN_VEH and eid in edges and (f := congestion_factor(speed, free_flow)) > 1.0
-    }
+    factors = congestion_factors(speeds, snapshot.index.drill.roads.edges)
     with _congestion_lock:
         _congestion[key] = (time.monotonic(), snapshot.clock.replay_now, factors)
     return factors

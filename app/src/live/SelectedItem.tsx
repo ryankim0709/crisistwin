@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { Button, EvidenceTag, IconButton, LoadingState, Notice, Tag } from "../ui";
 import { createTask, helpAction, triageReport } from "./api";
-import { drillClock, elapsed, nf, plural, shortKey, shortZoneName, wallClock } from "./format";
+import { drillClock, elapsed, nf, plural, responderName, shortKey, shortZoneName, wallClock } from "./format";
 import { distanceM } from "./geo";
 import KindGlyph from "./Glyph";
 import { impactLine } from "./ReviewQueue";
 import { isFixtureNote, type QueueItem } from "./queue";
+import type { TaskRouteState } from "./useTaskRoute";
 import type {
   CommandResponse,
   FieldReport,
@@ -64,6 +65,25 @@ function nearestResponder(coord: [number, number], responders: ResponderPosition
 function signed(n: number): string {
   const r = Math.round(n);
   return r === 0 ? "0" : `${r > 0 ? "+" : "−"}${nf(Math.abs(r))}`;
+}
+
+/** The responder's route to the open task: ETA, roads, and whether the twin's congestion is in it. */
+function RouteLine({ state }: { state: TaskRouteState | null }) {
+  if (!state) return null;
+  if (state.error === "no_origin") return <p className="lc-sel-route lc-dim">Responder location unknown</p>;
+  if (state.error) return <p className="lc-sel-route lc-dim">No route: {state.error}</p>;
+  const route = state.route?.route;
+  if (!route) return <p className="lc-sel-route lc-dim">No route: {state.route?.detail ?? state.route?.reason ?? "unavailable"}</p>;
+  return (
+    <p className="lc-sel-route">
+      <strong className="lc-num">{route.eta_min} min</strong>
+      {route.via.length ? <span>via {route.via.join(", ")}</span> : null}
+      <Tag tone={route.congestion === "twin" ? "info" : "neutral"}>
+        {route.congestion === "twin" ? "Congestion, simulated" : "Free-flow, no congestion"}
+      </Tag>
+      {route.exposure === "near_fire" ? <Tag tone="warning">Near fire</Tag> : null}
+    </p>
+  );
 }
 
 function ImpactResult({ impact }: { impact: ImpactResponse }) {
@@ -166,6 +186,7 @@ function HelpDetail({
   serverNow,
   run,
   busy,
+  route,
   onClose,
 }: {
   item: QueueItem;
@@ -173,6 +194,7 @@ function HelpDetail({
   serverNow: number;
   run: RunAction;
   busy: string | null;
+  route: TaskRouteState | null;
   onClose: () => void;
 }) {
   const [error, setError] = useState<string | null>(null);
@@ -206,6 +228,7 @@ function HelpDetail({
           </span>
         ) : null}
       </p>
+      <RouteLine state={route} />
       <div className="lc-sel-actions">
         {status === "open" ? (
           <Button size="sm" disabled={disabled} onClick={() => void act((t) => helpAction(t, help.id, "acknowledge"))}>
@@ -219,7 +242,7 @@ function HelpDetail({
             disabled={disabled}
             onClick={() => void act((t) => helpAction(t, help.id, "assign", nearest?.party_key ?? null))}
           >
-            {task ? "Reassign" : "Send"} {nearest ? `${shortKey(nearest.party_key)}, ${nf(distanceM(help.coord!, nearest.coord))} m` : "any responder"}
+            {task ? "Reassign" : "Send"} {nearest ? `${responderName(nearest)}, ${nf(distanceM(help.coord!, nearest.coord))} m` : "any responder"}
           </Button>
         ) : null}
         <Button variant="ghost" size="sm" disabled={disabled} onClick={() => void act((t) => helpAction(t, help.id, "resolve"))}>
@@ -245,6 +268,7 @@ function ReportDetail({
   serverNow,
   run,
   busy,
+  route,
   impact,
   proposalId,
   onRunImpact,
@@ -256,6 +280,7 @@ function ReportDetail({
   serverNow: number;
   run: RunAction;
   busy: string | null;
+  route: TaskRouteState | null;
   impact: ImpactState | null;
   proposalId: string | null;
   onRunImpact: () => void;
@@ -271,7 +296,11 @@ function ReportDetail({
   const inDrill = data.drill.started_at !== null;
   const lead = item.reports.find((r) => r.kind === item.kind && r.status !== "confirmed") ?? item.reports[0];
   const act = async (fn: (t: string) => Promise<unknown>) => setError(await run(key, fn));
-  const confirm = () => act((t) => triageReport(t, lead.id, "confirm"));
+  const confirm = () =>
+    act(async (t) => {
+      if (!item.grouped) return triageReport(t, lead.id, "confirm");
+      for (const r of item.reports.filter((r) => r.status !== "confirmed")) await triageReport(t, r.id, "confirm");
+    });
   const resolve = () =>
     act(async (t) => {
       for (const r of item.reports.filter((r) => r.status === "confirmed")) await triageReport(t, r.id, "resolve");
@@ -348,6 +377,7 @@ function ReportDetail({
           <span className="lc-dim">{item.task.assignee ? shortKey(item.task.assignee) : "Any responder"}</span>
         </p>
       ) : null}
+      <RouteLine state={route} />
       <div className="lc-sel-actions">
         {item.confirmed ? (
           <Button variant="secondary" size="sm" disabled={disabled} onClick={() => void resolve()}>
@@ -366,7 +396,7 @@ function ReportDetail({
         {item.task ? null : (
           <Button variant="secondary" size="sm" disabled={disabled} onClick={() => void fieldCheck()}>
             {helpReport
-              ? `Send ${nearest ? `${shortKey(nearest.party_key)}, ${nf(distanceM(item.coord, nearest.coord))} m` : "any responder"}`
+              ? `Send ${nearest ? `${responderName(nearest)}, ${nf(distanceM(item.coord, nearest.coord))} m` : "any responder"}`
               : "Request field check"}
           </Button>
         )}

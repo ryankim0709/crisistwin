@@ -12,7 +12,7 @@ from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 from rest_framework.response import Response
 
-from . import controller, twin_service
+from . import aar, controller, twin_service
 from . import impact as impact_mod
 from .auth import Principal, client_ip, issue_token, live_view, rate_limited, secret_matches
 from .common import (
@@ -30,6 +30,7 @@ from .common import (
 )
 from .drillcache import get_index, response_record_until, snap_to_segment
 from . import groundrecord
+from . import injects as injects_mod
 from .groundrecord import ground_record_json
 from .state import (
     checkin_json,
@@ -46,8 +47,10 @@ from .state import (
     load_public,
     load_snapshot,
     offered_destination_ids,
+    invalidate_guidance,
     proposal_json,
     public_item_json,
+    rendered_guidance,
     report_json,
     report_replay_at,
     responder_tasks,
@@ -123,7 +126,10 @@ def join(request, incident_id: str, principal: None):
     code = body.get("invite_code")
     if not isinstance(code, str) or not secret_matches(code.strip(), "LIVE_INVITE_CODE"):
         return error(403, "forbidden", "Invalid invite code.")
-    return ok(issue_token("responder", "rsp_", incident_id), status=201)
+    simulated = body.get("simulated", False)
+    if not isinstance(simulated, bool):
+        return error(400, "invalid_request", "`simulated` must be a boolean.")
+    return ok(issue_token("responder", "rsp_", incident_id, simulated), status=201)
 
 
 # ---- v1: reports ----
@@ -229,6 +235,9 @@ def _submit_report(request, incident_id: str, principal: Principal) -> Response:
     ):
         return error(429, "rate_limited", "Too many reports. Try again in a minute.")
     index = get_index()
+    refused = injects_mod.refuse_if_no_signal(incident_id, principal, wall_now(), coord=fields["location"]["coord"])
+    if refused is not None:
+        return refused
     road_ref = None
     if fields["kind"] in ROAD_KINDS:
         snapped = snap_to_segment(index, tuple(fields["location"]["coord"]))
@@ -558,7 +567,7 @@ def situation(request, incident_id: str, principal: Principal):
             "drill": drill_short_json(index, snapshot.clock),
             "zones_version": index.drill.zones_version,
             "zones": index.zones_json if include_zones else None,
-            "guidance": [guidance_json(g) for g in current_guidance(incident_id, index)],
+            "guidance": rendered_guidance(incident_id, index),
             "fire": fire_json(snapshot.fire),
             "hazards": [public_item_json(i) for i in snapshot.items],
             "tasks": [task_json(t) for t in tasks],
@@ -585,6 +594,9 @@ def checkins(request, incident_id: str, principal: Principal):
     if rate_limited(f"checkin:{principal.party_key}", CHECKINS_PER_MIN, 60):
         return error(429, "rate_limited", "Too many check-ins. Try again in a minute.")
     now = wall_now()
+    refused = injects_mod.refuse_if_no_signal(incident_id, principal, now, zone_id=zone_id, coord=coord)
+    if refused is not None:
+        return refused
     checkins_col = col("live_checkins")
     key = {"incident_id": incident_id, "party_key": principal.party_key}
     previous = checkins_col.find_one(key)
@@ -781,9 +793,17 @@ def command(request, incident_id: str, principal: Principal):
     snapshot = load_snapshot(incident_id, wall_now())
     controller.maybe_auto_replan(snapshot)
     index, now = snapshot.index, snapshot.now
+    locations = list(col("live_responder_locations").find({"incident_id": incident_id, "expires_at": {"$gt": now}}))
+    simulated = {
+        d["party_key"]
+        for d in col("live_devices").find(
+            {"party_key": {"$in": [d["party_key"] for d in locations]}, "simulated": True}, {"party_key": 1}
+        )
+    }
     responders = [
-        {"party_key": d["party_key"], "coord": d["coord"], "accuracy_m": d.get("accuracy_m"), "at": iso(d["at"])}
-        for d in col("live_responder_locations").find({"incident_id": incident_id, "expires_at": {"$gt": now}})
+        {"party_key": d["party_key"], "coord": d["coord"], "accuracy_m": d.get("accuracy_m"), "at": iso(d["at"]),
+         "simulated": d["party_key"] in simulated}
+        for d in locations
     ]
     tasks = (
         col("live_tasks")
@@ -801,7 +821,7 @@ def command(request, incident_id: str, principal: Principal):
             "zones_version": index.drill.zones_version,
             "zones": index.command_zones_json,
             "destinations": index.destinations_json,
-            "guidance": [guidance_json(g) for g in current_guidance(incident_id, index)],
+            "guidance": rendered_guidance(incident_id, index),
             "proposals": [proposal_json(p) for p in _proposals_for_command(incident_id)],
             "reports": [report_json(d) for d in snapshot.report_docs[:COMMAND_REPORTS_LIMIT]],
             "road_state": [road_status_json(s) for s in snapshot.road_state],
@@ -812,7 +832,8 @@ def command(request, incident_id: str, principal: Principal):
             "tasks": [task_json(t) for t in tasks],
             "decisions": _recent_decisions(incident_id),
             "response_record": response_record_until(index, snapshot.clock.replay_now, COMMAND_RESPONSE_RECORD_LIMIT),
-            "ground_record": ground_record_json(index, snapshot.clock.replay_now),
+            "ground_record": ground_record_json(index, snapshot.clock.replay_now, snapshot.injects),
+            **injects_mod.command_json(index, snapshot.injects, snapshot.clock.replay_now),
         }
     )
 
@@ -908,8 +929,9 @@ def set_drill(incident_id: str, action: str, replay_start_raw: Any = None, speed
         update = {"replay_start": clock.replay_now, "started_at": now, "speed": speed}
     elif action == "reset":
         update = {"replay_start": DEFAULT_REPLAY_START, "started_at": None, "speed": 1.0}
-        for name in ("live_guidance", "live_proposals", "live_checkins", "live_destination_choices"):
+        for name in ("live_guidance", "live_proposals", "live_checkins", "live_destination_choices", "live_plan_routes"):
             col(name).delete_many({"incident_id": incident_id})
+        invalidate_guidance(incident_id)
         # 2018 record reports re-enter as the clock passes them again.
         col("live_reports").delete_many({"incident_id": incident_id, "evidence_class": "historical_record"})
         groundrecord.forget(incident_id)
@@ -980,3 +1002,10 @@ def twin_whatif(request, incident_id: str, principal: Principal):
             return Response(exc.to_dict(), status=400, headers={"Cache-Control": "no-store"})
         raise
     return ok(report)
+
+
+@live_view(["GET"], roles=["controller"])
+def incident_aar(request, incident_id: str, principal: Principal):
+    """After-action report and drill score (docs/live-reports.md "After-action report")."""
+    twin_service.warm()
+    return ok(aar.build_aar(load_snapshot(incident_id, wall_now())))

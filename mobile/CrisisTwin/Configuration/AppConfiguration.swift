@@ -1,9 +1,11 @@
 import Foundation
 
 enum AppConfiguration {
-    /// An origin, without an API path. Debug supports local HTTP development only.
+    /// An origin, without an API path. Debug supports local HTTP development only. A server
+    /// chosen at run time by a join link (`ServerSettings`) replaces the build's default.
     static func apiBaseURL(bundle: Bundle = .main) throws -> URL {
-        try origin(forInfoKey: "APIBaseURL", bundle: bundle)
+        if let override = ServerSettings.overrideURL { return override }
+        return try origin(forInfoKey: "APIBaseURL", bundle: bundle)
     }
 
     /// The web workspace origin; the app appends `/fire`. Same rules as the API origin.
@@ -12,8 +14,15 @@ enum AppConfiguration {
     }
 
     private static func origin(forInfoKey key: String, bundle: Bundle) throws -> URL {
-        guard let rawValue = bundle.object(forInfoDictionaryKey: key) as? String,
-              let components = URLComponents(string: rawValue),
+        guard let rawValue = bundle.object(forInfoDictionaryKey: key) as? String else {
+            throw APIError.configuration
+        }
+        return try validatedOrigin(rawValue)
+    }
+
+    /// The origin rules shared by the build default and run-time join links.
+    static func validatedOrigin(_ rawValue: String) throws -> URL {
+        guard let components = URLComponents(string: rawValue),
               let scheme = components.scheme,
               let host = components.host, !host.isEmpty,
               components.user == nil, components.password == nil,
