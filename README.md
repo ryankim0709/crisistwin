@@ -24,8 +24,9 @@ documented below and in the [scaffold decision](docs/adr/0001-app-scaffold.md).
 
 The full stack development scaffold is in [`app/`](app/): React/TypeScript with
 Vite and Tailwind CSS, a Django REST Framework API, PostgreSQL, Vitest, and Docker.
-The workspace checks the API and database connection. The imagery map at `/maps`
-starts over San Francisco and supports an illustrative fire-spread experiment:
+The workspace has shared sidebar navigation and checks the API and database
+connection. The imagery map at `/maps` starts over San Francisco and supports an
+illustrative fire-spread experiment:
 choose an origin, set wind, and inspect the simulated footprint in 15-minute
 steps. Calibrated fire/traffic models, persistent scenarios, and live incident
 integrations are not implemented yet.
@@ -90,6 +91,9 @@ docker compose up --wait
 ```text
 app/
   src/                  React UI and API client (lib/), Vitest setup (test/)
+    AppShell.tsx        Shared sidebar and responsive navigation
+    navigation.ts       Route labels and planned-page definitions
+    pages/              Planned feature empty states and not-found page
   backend/
     config/             Django settings, routes, WSGI
     api/                HTTP endpoints and backend contract tests
@@ -130,6 +134,34 @@ local configuration, directory details, and current limitations, and the
 The default check remains `pre-commit run --all-files` from the repository root.
 Mobile builds, tests, and simulator verification have not been run and require
 an explicit request under the repository policy.
+
+### Workspace navigation
+
+The web app shares a sidebar across all pages. On narrow screens, **Menu**
+expands the navigation. The current page is marked with an arrow and
+`aria-current`; a keyboard-accessible **Skip to content** link reaches the main
+content. Each page has its own URL and document title:
+
+- `/`: overview and existing API/database connection status.
+- `/maps`: working imagery map and illustrative fire simulation.
+- `/scenarios`: planned scenario library and reproducible run inputs.
+- `/evacuation`: planned population demand, road capacity, and shelter planning.
+- `/comparison`: planned baseline versus alternative strategy comparison.
+- `/incidents`: planned public-source incident review.
+- `/stress-tests`: planned scenario vulnerability investigation.
+
+The five planned pages are explicitly labeled empty states, based on
+[the project scope](docs/project-scope.md); their workflows and data integrations
+are not implemented. Unknown paths show a not-found page. Trailing slashes are
+accepted. Navigation uses normal links and the existing Vite/Nginx HTML fallback,
+so direct links, refresh, and browser history use document navigation. Temporary
+map state resets when leaving or reloading the page; no scenario is saved.
+
+To integrate a planned feature, replace its `PlannedPage` rendering in
+`app/src/main.tsx`, retain its URL and the shared `AppShell`, and remove the
+corresponding placeholder definition from `plannedPages` while keeping a navigation
+entry in `navigationItems`. Pages own their main landmark with `id="main-content"`
+and `tabIndex={-1}`. See the [navigation decision](docs/adr/0005-workspace-navigation.md).
 
 ### Map component
 

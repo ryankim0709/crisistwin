@@ -74,15 +74,10 @@ export default function MapsPage() {
   }
 
   return (
-    <main className="map-page">
+    <main className="map-page" id="main-content" tabIndex={-1}>
       <header className="map-page-header">
-        <a className="wordmark" href="/" aria-label="CrisisTwin home">
-          <span className="mark" aria-hidden="true">
-            CT
-          </span>
-          CrisisTwin
-        </a>
-        <span>Fire simulation</span>
+        <h1>Map &amp; simulation</h1>
+        <span>Illustrative fire model</span>
       </header>
       <MapCanvas
         center={view.center}
@@ -216,7 +211,7 @@ export default function MapsPage() {
           <span className="fire-swatch" aria-hidden="true" />
           {run ? "Shaded area: simulated footprint. " : "Illustrative fire-spread model. "}
           Uniform fuel; terrain, water, buildings, and suppression are not modeled. Not an
-          operational forecast.
+          operational forecast. Leaving this page clears the experiment.
         </p>
       </section>
     </main>

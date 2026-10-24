@@ -37,15 +37,9 @@ export default function App() {
   }
 
   return (
-    <main className="shell">
+    <main className="shell" id="main-content" tabIndex={-1}>
       <header className="masthead">
-        <a className="wordmark" href="/" aria-label="CrisisTwin home">
-          <span className="mark" aria-hidden="true">
-            CT
-          </span>
-          CrisisTwin
-        </a>
-        <span className="badge">Cal Hacks / Prototype</span>
+        <p className="eyebrow">Workspace overview</p>
       </header>
 
       <section className="intro" aria-labelledby="title">
@@ -67,7 +61,8 @@ export default function App() {
           <h2 id="workspace-title">No scenarios yet</h2>
           <p>Choose a fire origin, set the wind, and explore spread in 15-minute steps.</p>
           <p>
-            <a href="/maps">Open map →</a>
+            <a href="/maps">Open map →</a>{" · "}
+            <a href="/scenarios">View scenarios →</a>
           </p>
         </div>
         <div className="connection" aria-live="polite" aria-atomic="true">
