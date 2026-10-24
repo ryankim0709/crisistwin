@@ -547,6 +547,12 @@ export interface FireRun {
   reachedEdge: boolean;
   cellSizeMeters: number;
   computeMilliseconds: number;
+  /**
+   * Fire arrival time per landscape cell, minutes since ignition, in the same row-major
+   * order as `LandscapeGrid.fuelCodes`; `Infinity` where fire never arrives. Arrivals past
+   * the horizon are kept so renderers can clamp them consistently with the frames.
+   */
+  arrivalMinutes: Float32Array;
 }
 
 export class NonBurnableIgnitionError extends Error {
@@ -1206,6 +1212,7 @@ export function simulateFireSpread(landscape: LandscapeGrid, scenario: FireScena
     reachedEdge,
     cellSizeMeters: groundCellSizeMeters,
     computeMilliseconds: performance.now() - startedAt,
+    arrivalMinutes: Float32Array.from(arrival),
   };
 }
 
