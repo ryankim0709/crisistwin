@@ -24,9 +24,10 @@ documented below and in the [scaffold decision](docs/adr/0001-app-scaffold.md).
 
 The full stack development scaffold is in [`app/`](app/): React/TypeScript with
 Vite and Tailwind CSS, a Django REST Framework API, PostgreSQL, Vitest, and Docker.
-The starter page checks the API and database connection. Scenario creation,
-simulation, maps, and data integrations are not implemented yet; the items above
-describe the intended prototype.
+The starter page checks the API and database connection. An interactive fire spread
+simulator runs in the browser at `/fire`. Scenario persistence, evacuation demand,
+road closures, strategy comparison, and data integrations are not implemented yet;
+the items above describe the intended prototype.
 
 This is an experimental planning simulator. Its outputs are not operational evacuation instructions; any future resident guidance should require approval by the responsible authority.
 
@@ -74,13 +75,14 @@ docker compose up --wait
 
 - Node.js **22.12+** (Node 22 in Docker and `.nvmrc`), **npm**, and `package-lock.json`.
 - Python **3.12**, **pip**, and fully pinned runtime/development `requirements*.txt`.
-- React **19**, TypeScript **5.8**, Vite **7**, Tailwind CSS **4**.
+- React **19**, TypeScript **5.8**, Vite **7**, Tailwind CSS **4**, MapLibre GL JS **6**.
 - Django **5.2 LTS**, Django REST Framework **3**, PostgreSQL **17**.
 - Vitest **3**, Testing Library, jsdom, ESLint, Prettier, and Ruff for local checks.
 
 ```text
 app/
   src/                  React UI and API client (lib/), Vitest setup (test/)
+    fire/               Fire spread model, map, and simulator page
   backend/
     config/             Django settings, routes, WSGI
     api/                HTTP endpoints and backend contract tests
@@ -96,6 +98,50 @@ docs/adr/               Shared architecture decisions
 See the [scaffold decision](docs/adr/0001-app-scaffold.md) and
 [API contract](app/backend/README.md). There are no CI workflows for this
 hackathon; checks run locally when needed.
+
+### Fire spread simulator
+
+Open **http://localhost:5173/fire**. Click the map to place an ignition point, set
+wind speed and direction, then play or step the perimeter forward in **15-minute**
+intervals over a 2, 3, or 6 hour horizon. Switching the click target to _Wind
+direction_ lets you click downwind of the ignition point to aim the wind; the
+numeric field and the arrow drawn at the ignition point stay in sync with it. _Fit
+view to run_ frames the whole horizon. Each ring is one 15-minute step, shaded by
+the time the fire reached it, with the current perimeter outlined in bright amber.
+
+Keyboard: focus the map, then use arrow keys to pan, `+`/`-` to zoom, and `Enter`
+to act on the map centre. The map needs WebGL2 and internet access for imagery; no
+API key or backend call is involved, and nothing is persisted.
+
+| File                                 | Role                                                                   |
+| ------------------------------------ | ---------------------------------------------------------------------- |
+| `app/src/fire/model.ts`              | Spread model and unit helpers. No React, DOM, network, or map imports. |
+| `app/src/fire/FireMap.tsx`           | MapLibre GL JS map, USGS aerial imagery, perimeter layers, markers.    |
+| `app/src/fire/FireSimulatorPage.tsx` | Scenario controls, 15-minute playback, metrics, legend.                |
+
+```ts
+const run = simulateFire({
+  origin: { latitude: 37.88, longitude: -122.24 }, // WGS84 decimal degrees
+  wind: { speedMph: 15, fromDegrees: 45 }, // bearing the wind blows FROM
+  stepMinutes: FIRE_STEP_MINUTES, // 15
+  horizonMinutes: FIRE_HORIZON_MINUTES, // 180
+});
+run.frames[4].elapsedMinutes; // 60, simulation-clock minutes since ignition
+run.frames[4].perimeter; // GeoJSON Polygon feature, or null at T+0:00
+run.frames[4].burnedAreaSquareMeters;
+run.frames[4].headDistanceMeters;
+```
+
+`simulateFire` is deterministic and throws a `RangeError` for an out-of-range
+origin, wind, step, or horizon. Distances are metres and rates metres per minute;
+miles, kilometres, hectares, and acres are display conversions only.
+
+The model is a **deterministic wind-driven ellipse on flat, uniform fuel**, not a
+calibrated wildfire prediction. It ignores fuel type and moisture, terrain and
+slope, spotting, suppression, and barriers such as rivers, ridgelines, and roads.
+USGS imagery is historical aerial coverage, not live fire observation, and its
+highest native zoom is 16. See the
+[fire spread decision](docs/adr/0003-fire-spread-model.md).
 
 ### Default hackathon check
 

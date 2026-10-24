@@ -65,7 +65,11 @@ export default function App() {
         <div>
           <p className="eyebrow">Your workspace</p>
           <h2 id="workspace-title">No scenarios yet</h2>
-          <p>Scenario creation, maps, and strategy comparisons have not been implemented.</p>
+          <p>
+            <a href="/fire">Open the fire spread simulator</a> to place an ignition point, set the
+            wind, and step a simulated perimeter forward in 15-minute intervals. Evacuation demand,
+            road closures, and strategy comparisons are not implemented yet.
+          </p>
         </div>
         <div className="connection" aria-live="polite" aria-atomic="true">
           <span className="connection-label">System connection</span>
