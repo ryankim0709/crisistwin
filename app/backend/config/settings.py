@@ -73,6 +73,10 @@ LIVE_ACTIVE_INCIDENT_ID = os.environ.get("LIVE_ACTIVE_INCIDENT_ID", "").strip()
 LIVE_ACTIVE_NAME = os.environ.get("LIVE_ACTIVE_NAME", "").strip()
 LIVE_ACTIVE_LABEL = os.environ.get("LIVE_ACTIVE_LABEL", "").strip()
 LIVE_ACTIVE_MODE = os.environ.get("LIVE_ACTIVE_MODE", "drill").strip()
+# Load testing only (docs/live-loadtest.md): "1" turns the live API's rate limits off. Default off.
+LIVE_LOADTEST_RELAX_LIMITS = os.environ.get("LIVE_LOADTEST_RELAX_LIMITS", "").strip() == "1"
+# Seconds the rendered guidance JSON is cached per process (api/live/state.py); 0 turns it off.
+LIVE_GUIDANCE_CACHE_TTL_S = float(os.environ.get("LIVE_GUIDANCE_CACHE_TTL_S", "1") or "1")
 LIVE_RATIONALE_MODEL = os.environ.get("LIVE_RATIONALE_MODEL", "claude-opus-5-5").strip()
 # Controller plug-in: rule | twin; empty = twin while the traffic twin builds, else rule.
 LIVE_CONTROLLER = os.environ.get("LIVE_CONTROLLER", "").strip()

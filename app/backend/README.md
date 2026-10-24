@@ -205,6 +205,12 @@ record's `road_blocked`/`fire_seen` entries N minutes late, and with the previou
 planner. It writes `.json` and `.md`; see [live-reports.md](../../docs/live-reports.md)
 ("Record comparison harness") and ADR `0031-congestion-aware-planner.md`.
 
+`python manage.py live_loadtest --base http://127.0.0.1:8020 --ramp 10,50,100,200 --duration 30
+--out results.json` ramps simulated phones and consoles against a server started with
+`LIVE_LOADTEST_RELAX_LIMITS=1` and prints p50/p95/p99 per endpoint; `--cleanup` removes its
+data. Use a separate server and database, never the shared one. Method and results:
+[docs/live-loadtest.md](../../docs/live-loadtest.md).
+
 ### Incident intelligence (`/api/intel/…`)
 
 Public agency pages, fetched by the Apify Actor in `actors/incident-intel/`, become source

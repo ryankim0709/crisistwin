@@ -53,6 +53,7 @@ from .state import (
     Snapshot,
     current_guidance,
     destination_preferences,
+    invalidate_guidance,
     proposed_json,
     report_replay_at,
 )
@@ -284,6 +285,7 @@ def publish(proposal: dict[str, Any], approved_by: str, now: datetime) -> list[d
             doc.pop("_id", None)
             published.append(doc)
             break
+    invalidate_guidance(proposal["incident_id"])
     return published
 
 
@@ -349,6 +351,8 @@ def refresh_published(index: DrillIndex, docs: list[dict[str, Any]], guidance: l
             {"$set": {"route.safety": safety, "caveat": caveat, "alternatives": alts}},
         )
         changed += 1
+    if changed:
+        invalidate_guidance()
     return changed
 
 

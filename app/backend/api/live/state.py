@@ -6,11 +6,14 @@ livecore values and renders livecore results in the wire shapes of docs/live-rep
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from threading import Lock
 from datetime import UTC, datetime
 from typing import Any
 
+from django.conf import settings
 from livecore import drill as drillmod
 from livecore import public
 from livecore.fire import FireEstimate, estimate_fire
@@ -35,16 +38,34 @@ COORD_DECIMALS = 5
 # ---- rendering helpers ----
 
 
-def render(value: Any, drop: Iterable[str] = ("_id",)) -> Any:
-    """Documents to JSON: datetimes to ISO ``Z``, tuples to lists, ``drop`` keys removed at the top."""
-    drop = set(drop)
+_PLAIN = (float, int, str, bool, type(None))
+
+
+def _render(value: Any) -> Any:
+    kind = type(value)
+    if kind in _PLAIN:  # most nodes are coordinates: exact-type checks avoid the slow ABC isinstance calls
+        return value
+    if kind is dict:
+        return {k: _render(v) for k, v in value.items()}
+    if kind is list or kind is tuple:
+        return [_render(v) for v in value]
+    if kind is datetime:
+        return iso(value)
     if isinstance(value, Mapping):
-        return {k: render(v, ()) for k, v in value.items() if k not in drop}
+        return {k: _render(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
-        return [render(v, ()) for v in value]
+        return [_render(v) for v in value]
     if isinstance(value, datetime):
         return iso(value)
     return value
+
+
+def render(value: Any, drop: Iterable[str] = ("_id",)) -> Any:
+    """Documents to JSON: datetimes to ISO ``Z``, tuples to lists, ``drop`` keys removed at the top."""
+    if isinstance(value, Mapping):
+        drop = set(drop)
+        return {k: _render(v) for k, v in value.items() if k not in drop}
+    return _render(value)
 
 
 def report_json(doc: Mapping[str, Any]) -> dict[str, Any]:
@@ -387,6 +408,41 @@ def current_guidance(incident_id: str, index: DrillIndex | None = None) -> list[
         order = {z.id: i for i, z in enumerate(index.drill.zones)}
         docs.sort(key=lambda d: order.get(d["zone_id"], len(order)))
     return docs
+
+
+_guidance_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+_guidance_lock = Lock()
+
+
+def rendered_guidance(incident_id: str, index: DrillIndex) -> list[dict[str, Any]]:
+    """``[guidance_json(g) ...]`` for the current guidance, cached per process for a short TTL.
+
+    Every phone polls the same guidance (about 100 KB of routes) every 3 s, and rebuilding it per
+    request was the largest single cost of ``situation`` (docs/live-loadtest.md). Writers in this
+    process call ``invalidate_guidance``; other processes see a change within
+    ``LIVE_GUIDANCE_CACHE_TTL_S`` (default 1 s; 0 turns the cache off). Callers must not mutate it.
+    """
+    ttl = float(getattr(settings, "LIVE_GUIDANCE_CACHE_TTL_S", 1.0))
+    if ttl <= 0:
+        return [guidance_json(g) for g in current_guidance(incident_id, index)]
+    now = time.monotonic()
+    with _guidance_lock:
+        hit = _guidance_cache.get(incident_id)
+    if hit is not None and hit[0] > now:
+        return hit[1]
+    rendered = [guidance_json(g) for g in current_guidance(incident_id, index)]
+    with _guidance_lock:
+        _guidance_cache[incident_id] = (now + ttl, rendered)
+    return rendered
+
+
+def invalidate_guidance(incident_id: str | None = None) -> None:
+    """Drop the cached guidance after a write to ``live_guidance`` (publish, annotate, reset)."""
+    with _guidance_lock:
+        if incident_id is None:
+            _guidance_cache.clear()
+        else:
+            _guidance_cache.pop(incident_id, None)
 
 
 def destination_preferences(incident_id: str, now: datetime) -> list[dict[str, Any]]:

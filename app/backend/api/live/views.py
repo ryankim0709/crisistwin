@@ -47,8 +47,10 @@ from .state import (
     load_public,
     load_snapshot,
     offered_destination_ids,
+    invalidate_guidance,
     proposal_json,
     public_item_json,
+    rendered_guidance,
     report_json,
     report_replay_at,
     responder_tasks,
@@ -565,7 +567,7 @@ def situation(request, incident_id: str, principal: Principal):
             "drill": drill_short_json(index, snapshot.clock),
             "zones_version": index.drill.zones_version,
             "zones": index.zones_json if include_zones else None,
-            "guidance": [guidance_json(g) for g in current_guidance(incident_id, index)],
+            "guidance": rendered_guidance(incident_id, index),
             "fire": fire_json(snapshot.fire),
             "hazards": [public_item_json(i) for i in snapshot.items],
             "tasks": [task_json(t) for t in tasks],
@@ -819,7 +821,7 @@ def command(request, incident_id: str, principal: Principal):
             "zones_version": index.drill.zones_version,
             "zones": index.command_zones_json,
             "destinations": index.destinations_json,
-            "guidance": [guidance_json(g) for g in current_guidance(incident_id, index)],
+            "guidance": rendered_guidance(incident_id, index),
             "proposals": [proposal_json(p) for p in _proposals_for_command(incident_id)],
             "reports": [report_json(d) for d in snapshot.report_docs[:COMMAND_REPORTS_LIMIT]],
             "road_state": [road_status_json(s) for s in snapshot.road_state],
@@ -929,6 +931,7 @@ def set_drill(incident_id: str, action: str, replay_start_raw: Any = None, speed
         update = {"replay_start": DEFAULT_REPLAY_START, "started_at": None, "speed": 1.0}
         for name in ("live_guidance", "live_proposals", "live_checkins", "live_destination_choices", "live_plan_routes"):
             col(name).delete_many({"incident_id": incident_id})
+        invalidate_guidance(incident_id)
         # 2018 record reports re-enter as the clock passes them again.
         col("live_reports").delete_many({"incident_id": incident_id, "evidence_class": "historical_record"})
         groundrecord.forget(incident_id)
