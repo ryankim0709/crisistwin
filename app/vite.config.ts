@@ -16,6 +16,13 @@ export default defineConfig({
         target: process.env.VITE_API_PROXY_TARGET ?? "http://127.0.0.1:8000",
         changeOrigin: true,
       },
+      // LANDFIRE's GeoServer advertises permissive CORS but a browser request to it
+      // still fails, so fuel rasters are fetched same-origin through this proxy.
+      "/landfire": {
+        target: "https://edcintl.cr.usgs.gov",
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/landfire/, "/geoserver/landfire"),
+      },
     },
   },
   preview: { host: "0.0.0.0", port: 4173, strictPort: true },

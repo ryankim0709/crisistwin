@@ -25,7 +25,9 @@ documented below and in the [scaffold decision](docs/adr/0001-app-scaffold.md).
 The full stack development scaffold is in [`app/`](app/): React/TypeScript with
 Vite and Tailwind CSS, a Django REST Framework API, PostgreSQL, Vitest, and Docker.
 The starter page checks the API and database connection. An interactive fire spread
-simulator runs in the browser at `/fire`. Scenario persistence, evacuation demand,
+simulator runs in the browser at `/fire`: Rothermel surface spread over the real
+LANDFIRE fuel and terrain around the ignition point, so it needs internet access and
+works only in the contiguous United States. Scenario persistence, evacuation demand,
 road closures, strategy comparison, and data integrations are not implemented yet;
 the items above describe the intended prototype.
 
@@ -76,13 +78,16 @@ docker compose up --wait
 - Node.js **22.12+** (Node 22 in Docker and `.nvmrc`), **npm**, and `package-lock.json`.
 - Python **3.12**, **pip**, and fully pinned runtime/development `requirements*.txt`.
 - React **19**, TypeScript **5.8**, Vite **7**, Tailwind CSS **4**, MapLibre GL JS **6**.
+- Fire landscape data fetched in the browser per scenario: LANDFIRE LF2025 FBFM40 fuel
+  over WCS and AWS Open Data terrarium elevation tiles. No API key and no added
+  dependency; the GeoTIFF reader lives in `app/src/fire/landscape.ts`.
 - Django **5.2 LTS**, Django REST Framework **3**, PostgreSQL **17**.
 - Vitest **3**, Testing Library, jsdom, ESLint, Prettier, and Ruff for local checks.
 
 ```text
 app/
   src/                  React UI and API client (lib/), Vitest setup (test/)
-    fire/               Fire spread model, map, and simulator page
+    fire/               Rothermel spread model, fuel/terrain loader, map, simulator page
   backend/
     config/             Django settings, routes, WSGI
     api/                HTTP endpoints and backend contract tests
@@ -101,47 +106,97 @@ hackathon; checks run locally when needed.
 
 ### Fire spread simulator
 
-Open **http://localhost:5173/fire**. Click the map to place an ignition point, set
-wind speed and direction, then play or step the perimeter forward in **15-minute**
-intervals over a 2, 3, or 6 hour horizon. Switching the click target to _Wind
-direction_ lets you click downwind of the ignition point to aim the wind; the
-numeric field and the arrow drawn at the ignition point stay in sync with it. _Fit
-view to run_ frames the whole horizon. Each ring is one 15-minute step, shaded by
-the time the fire reached it, with the current perimeter outlined in bright amber.
+Open **http://localhost:5173/fire**. Click the map to place an ignition point, set the
+20-foot wind speed and the direction it blows from, pick a fuel-moisture preset, then
+play or step the perimeter forward in **15-minute** intervals over a 2, 3, or 6 hour
+horizon. The presets are the standard dead and live moisture scenarios that go with the
+Scott & Burgan fuel models; _Advanced: individual moisture classes_ opens the 1-hour,
+10-hour, 100-hour, live herbaceous, and live woody values, plus the midflame wind factor
+(the share of the open wind that reaches flame height, 0.5 by default). Switching the
+click target to _Wind direction_ lets you click downwind of the ignition point to aim the
+wind; the numeric field and the arrow at the ignition point stay in sync with it. _Show
+the fuel layer the model is using_ draws the mapped fuel models under the perimeters, and
+_Fit view to run_ frames the whole horizon. Each band is one 15-minute step, shaded by the
+time the fire reached it, with the current perimeter outlined in bright amber.
+
+Placing an ignition point fetches the real landscape around it: a LANDFIRE FBFM40 fuel
+raster and terrain elevation tiles, over a radius scaled to the horizon — roughly 5 km at
+two hours and 12 km at six.
+The page therefore needs internet access and works only in the contiguous United States,
+where LANDFIRE publishes this layer; elsewhere the run fails with an explicit error rather
+than inventing fuel. Igniting on ground that carries no fire — water, pavement, bare rock,
+developed land — is refused for the same reason. Wind and moisture edits re-solve without
+refetching. Alongside the perimeters the panel reports the fuel model at the ignition
+point, head rate of spread, flame length, slope, elevation, what share of the modelled
+grid is burnable at all, and the grid and solve time; it warns when the effective wind is
+past Rothermel's validated range, when the fire is boxed in by non-burnable ground before
+the horizon, and when it has run off the edge of the modelled area.
 
 Keyboard: focus the map, then use arrow keys to pan, `+`/`-` to zoom, and `Enter`
-to act on the map centre. The map needs WebGL2 and internet access for imagery; no
-API key or backend call is involved, and nothing is persisted.
+to act on the map centre. The map needs WebGL2. No API key, backend call, or
+persistence is involved; the two data services are called directly from the browser.
 
-| File                                 | Role                                                                   |
-| ------------------------------------ | ---------------------------------------------------------------------- |
-| `app/src/fire/model.ts`              | Spread model and unit helpers. No React, DOM, network, or map imports. |
-| `app/src/fire/FireMap.tsx`           | MapLibre GL JS map, USGS aerial imagery, perimeter layers, markers.    |
-| `app/src/fire/FireSimulatorPage.tsx` | Scenario controls, 15-minute playback, metrics, legend.                |
+| File                                 | Role                                                                       |
+| ------------------------------------ | -------------------------------------------------------------------------- |
+| `app/src/fire/fuelModels.ts`         | Scott & Burgan (2005) 40 fuel models, keyed by LANDFIRE FBFM40 code.       |
+| `app/src/fire/rothermel.ts`          | Rothermel (1972) surface spread, wind/slope vectors, ellipse geometry.     |
+| `app/src/fire/landscape.ts`          | LANDFIRE WCS fetch, GeoTIFF decode, terrain tiles, slope and aspect.       |
+| `app/src/fire/spread.ts`             | Minimum-travel-time propagation, perimeter contouring, scenario types.     |
+| `app/src/fire/FireMap.tsx`           | MapLibre GL JS map, USGS aerial imagery, fuel overlay, perimeter layers.   |
+| `app/src/fire/FireSimulatorPage.tsx` | Scenario controls, landscape loading, 15-minute playback, metrics, legend. |
 
 ```ts
-const run = simulateFire({
+// Fuel and terrain around the ignition point. Network call; contiguous US only.
+const landscape = await loadLandscape(-122.24, 37.88, 6000, signal); // ground metres
+
+const run = simulateFireSpread(landscape, {
   origin: { latitude: 37.88, longitude: -122.24 }, // WGS84 decimal degrees
-  wind: { speedMph: 15, fromDegrees: 45 }, // bearing the wind blows FROM
+  windSpeedMph: 25, // open 20-foot wind
+  windFromDegrees: 45, // bearing the wind blows FROM
+  moisture: MOISTURE_PRESETS[0].moisture, // critical / Red Flag
+  midflameAdjustment: DEFAULT_MIDFLAME_ADJUSTMENT, // 0.5 of the open wind
   stepMinutes: FIRE_STEP_MINUTES, // 15
   horizonMinutes: FIRE_HORIZON_MINUTES, // 180
 });
-run.frames[4].elapsedMinutes; // 60, simulation-clock minutes since ignition
-run.frames[4].perimeter; // GeoJSON Polygon feature, or null at T+0:00
-run.frames[4].burnedAreaSquareMeters;
-run.frames[4].headDistanceMeters;
+
+run.ignition.fuelLabel; // "TU2 — Moderate load, humid climate timber-shrub"
+run.ignition.spread.headRateFeetPerMinute; // Rothermel output stays Imperial
+run.frames[12].perimeters; // GeoJSON Polygon features at T+3:00
+run.frames[12].burnedAreaSquareMeters;
+run.frames[12].maxReachMeters;
+run.burnableFraction; // share of the modelled grid that carries fire at all
 ```
 
-`simulateFire` is deterministic and throws a `RangeError` for an out-of-range
-origin, wind, step, or horizon. Distances are metres and rates metres per minute;
-miles, kilometres, hectares, and acres are display conversions only.
+`simulateFireSpread` is deterministic: the same scenario over the same landscape gives the
+same run, so nothing records a seed. It throws `NonBurnableIgnitionError` when the
+ignition cell carries no fuel. Units are explicit at the boundaries. The Rothermel
+equations keep the Imperial units they were published in and return feet per minute;
+everything the solver does is in metres and metres per minute, and miles per hour,
+kilometres, hectares, and acres are display conversions only. Wind direction is
+meteorological, the bearing the wind blows **from**. Times are elapsed simulation-clock
+minutes from ignition; playback advances the frame index on a timer and never reads
+wall-clock time into the model.
 
-The model is a **deterministic wind-driven ellipse on flat, uniform fuel**, not a
-calibrated wildfire prediction. It ignores fuel type and moisture, terrain and
-slope, spotting, suppression, and barriers such as rivers, ridgelines, and roads.
-USGS imagery is historical aerial coverage, not live fire observation, and its
-highest native zoom is 16. See the
-[fire spread decision](docs/adr/0003-fire-spread-model.md).
+One unit trap is worth stating outright: the grid is EPSG:3857, and **a Mercator metre is
+not a ground metre**. One Mercator metre is cos(latitude) ground metres, about 0.79 at
+Berkeley, so a 30 Mercator metre LANDFIRE cell is about 23.7 m across on the ground. Cell
+addressing uses Mercator metres; slope, spread distance, burned area, and reach all use
+ground metres, converted once where the landscape is built.
+
+The model is **surface fire only**. There is no crown fire, no spotting or ember
+transport, no suppression, and no structure-to-structure urban spread, so a fire that
+reaches the edge of the vegetation simply stops — which understates real risk at the
+wildland-urban interface. Wind is uniform over the grid and constant in time, fuel
+moisture is uniform, and there is no diurnal weather change. LANDFIRE fuel is a 2025
+mapped product, not an observation of today's vegetation. USGS imagery is historical
+aerial coverage, not live fire observation, and its highest native zoom is 16. In the
+Berkeley hills a wind-driven run often stalls within a few hundred metres because the
+vegetated patch is small and bounded by streets; with the ellipse capped at 8:1 the
+flanking rate is under 1 percent of the head rate, so a barrier directly downwind can halt
+a run. That is the model reporting the landscape, not a defect. Outputs are planning
+experiments, not operational evacuation instructions. See the
+[fire model decision](docs/adr/0004-physics-fire-model.md), which supersedes the
+[original ellipse](docs/adr/0003-fire-spread-model.md).
 
 ### Default hackathon check
 

@@ -1,26 +1,44 @@
-import { useEffect, useMemo, useState } from "react";
-import FireMap, { ARRIVAL_COLORS, type ClickMode } from "./FireMap";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import FireMap, { ARRIVAL_COLORS, FUEL_COLORS, type ClickMode } from "./FireMap";
 import {
+  LANDFIRE_ATTRIBUTION,
+  TERRAIN_ATTRIBUTION,
+  loadLandscape,
+  type LandscapeGrid,
+} from "./landscape";
+import type { FuelMoisture } from "./rothermel";
+import {
+  DEFAULT_MIDFLAME_ADJUSTMENT,
   FIRE_HORIZON_MINUTES,
   FIRE_STEP_MINUTES,
-  MAX_WIND_SPEED_MPH,
+  HORIZON_CHOICES,
   METERS_PER_MILE,
+  MOISTURE_PRESETS,
+  NonBurnableIgnitionError,
   SQUARE_METERS_PER_ACRE,
   SQUARE_METERS_PER_HECTARE,
   bearingBetween,
   compassPoint,
   formatElapsed,
-  simulateFire,
+  simulateFireSpread,
   type FireRun,
   type GeoPoint,
-} from "./model";
+} from "./spread";
 import "./fire.css";
 
 const PLAYBACK_INTERVAL_MS = 850;
-const HORIZON_CHOICES = [120, 180, 360] as const;
-const DEFAULT_WIND_SPEED_MPH = 15;
-/** Offshore north-easterly, the direction that drives the worst East Bay fire weather. */
-const DEFAULT_WIND_FROM_DEGREES = 45;
+const MAX_WIND_SPEED_MPH = 60;
+/** Grid half-width: generous enough for a fast run, bounded so downloads stay small. */
+const ASSUMED_FAST_SPREAD_METERS_PER_MINUTE = 40;
+const MIN_RADIUS_METERS = 3000;
+const MAX_RADIUS_METERS = 12000;
+
+function radiusFor(horizonMinutes: number): number {
+  return Math.min(
+    Math.max(horizonMinutes * ASSUMED_FAST_SPREAD_METERS_PER_MINUTE, MIN_RADIUS_METERS),
+    MAX_RADIUS_METERS,
+  );
+}
 
 function formatArea(squareMeters: number): string {
   const hectares = squareMeters / SQUARE_METERS_PER_HECTARE;
@@ -32,37 +50,101 @@ function formatDistance(meters: number): string {
   return `${(meters / 1000).toFixed(2)} km · ${(meters / METERS_PER_MILE).toFixed(2)} mi`;
 }
 
+// Short labels: the advanced grid gives each field about 90px.
+const MOISTURE_FIELDS: { key: keyof FuelMoisture; label: string; title: string }[] = [
+  { key: "dead1h", label: "1-h", title: "1-hour timelag dead fuel moisture" },
+  { key: "dead10h", label: "10-h", title: "10-hour timelag dead fuel moisture" },
+  { key: "dead100h", label: "100-h", title: "100-hour timelag dead fuel moisture" },
+  { key: "liveHerb", label: "Herb", title: "Live herbaceous fuel moisture" },
+  { key: "liveWoody", label: "Woody", title: "Live woody fuel moisture" },
+];
+
+type LandscapeState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ready"; grid: LandscapeGrid }
+  | { status: "error"; message: string };
+
 export default function FireSimulatorPage() {
   const [origin, setOrigin] = useState<GeoPoint | null>(null);
-  const [windSpeedMph, setWindSpeedMph] = useState(DEFAULT_WIND_SPEED_MPH);
-  const [windFromDegrees, setWindFromDegrees] = useState(DEFAULT_WIND_FROM_DEGREES);
+  const [windSpeedMph, setWindSpeedMph] = useState(25);
+  const [windFromDegrees, setWindFromDegrees] = useState(45);
+  const [presetId, setPresetId] = useState(MOISTURE_PRESETS[1].id);
+  const [moisture, setMoisture] = useState<FuelMoisture>(MOISTURE_PRESETS[1].moisture);
+  const [midflameAdjustment, setMidflameAdjustment] = useState(DEFAULT_MIDFLAME_ADJUSTMENT);
   const [horizonMinutes, setHorizonMinutes] = useState<number>(FIRE_HORIZON_MINUTES);
   const [clickMode, setClickMode] = useState<ClickMode>("origin");
+  const [showFuel, setShowFuel] = useState(false);
   const [frameIndex, setFrameIndex] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [fitSignal, setFitSignal] = useState(0);
+  const [landscape, setLandscape] = useState<LandscapeState>({ status: "idle" });
+
+  const radiusMeters = radiusFor(horizonMinutes);
+
+  // Fuel and terrain depend only on where and how far, so wind and moisture edits never
+  // refetch. An older request can never overwrite a newer one.
+  const requestRef = useRef(0);
+  useEffect(() => {
+    if (!origin) {
+      setLandscape({ status: "idle" });
+      return;
+    }
+    const request = ++requestRef.current;
+    const controller = new AbortController();
+    setLandscape({ status: "loading" });
+    loadLandscape(origin.longitude, origin.latitude, radiusMeters, controller.signal)
+      .then((grid) => {
+        if (request === requestRef.current) setLandscape({ status: "ready", grid });
+      })
+      .catch((cause: unknown) => {
+        if (controller.signal.aborted || request !== requestRef.current) return;
+        setLandscape({
+          status: "error",
+          message: cause instanceof Error ? cause.message : "Could not load fuel and terrain data.",
+        });
+      });
+    return () => controller.abort();
+  }, [origin, radiusMeters]);
+
+  const scenario = useMemo(
+    () =>
+      origin
+        ? {
+            origin,
+            windSpeedMph,
+            windFromDegrees,
+            moisture,
+            midflameAdjustment,
+            stepMinutes: FIRE_STEP_MINUTES,
+            horizonMinutes,
+          }
+        : null,
+    [origin, windSpeedMph, windFromDegrees, moisture, midflameAdjustment, horizonMinutes],
+  );
+  // Solving takes ~100 ms, so let the controls stay responsive while dragging.
+  const deferredScenario = useDeferredValue(scenario);
+  const grid = landscape.status === "ready" ? landscape.grid : null;
 
   const result = useMemo<{ run: FireRun | null; error: string | null }>(() => {
-    if (!origin) return { run: null, error: null };
+    if (!grid || !deferredScenario) return { run: null, error: null };
     try {
-      return {
-        run: simulateFire({
-          origin,
-          wind: { speedMph: windSpeedMph, fromDegrees: windFromDegrees },
-          stepMinutes: FIRE_STEP_MINUTES,
-          horizonMinutes,
-        }),
-        error: null,
-      };
+      return { run: simulateFireSpread(grid, deferredScenario), error: null };
     } catch (cause) {
       return {
         run: null,
-        error: cause instanceof Error ? cause.message : "This scenario could not be simulated.",
+        error:
+          cause instanceof NonBurnableIgnitionError
+            ? cause.message
+            : cause instanceof Error
+              ? cause.message
+              : "This scenario could not be simulated.",
       };
     }
-  }, [origin, windSpeedMph, windFromDegrees, horizonMinutes]);
+  }, [grid, deferredScenario]);
 
-  const frames = useMemo(() => result.run?.frames ?? [], [result.run]);
+  const run = result.run;
+  const frames = useMemo(() => run?.frames ?? [], [run]);
   const lastIndex = Math.max(frames.length - 1, 0);
   const safeIndex = Math.min(frameIndex, lastIndex);
   const frame = frames[safeIndex];
@@ -71,7 +153,6 @@ export default function FireSimulatorPage() {
     if (frameIndex > lastIndex) setFrameIndex(lastIndex);
   }, [frameIndex, lastIndex]);
 
-  // Playback advances the simulation clock one step at a time; it never reads wall-clock time.
   useEffect(() => {
     if (!playing || frames.length === 0) return;
     const timer = window.setInterval(() => {
@@ -86,16 +167,41 @@ export default function FireSimulatorPage() {
     return () => window.clearInterval(timer);
   }, [playing, frames.length, lastIndex]);
 
-  function handleMapClick(point: GeoPoint) {
-    if (clickMode === "wind" && origin) {
-      // Clicking downwind of the ignition point sets the direction the fire is pushed.
-      setWindFromDegrees(Math.round((bearingBetween(origin, point) + 180) % 360));
-      return;
-    }
-    setOrigin(point);
+  // Fit and start playback once a freshly placed ignition has a solved run.
+  const runKey = run ? `${run.scenario.origin.latitude},${run.scenario.origin.longitude}` : null;
+  const lastFitKey = useRef<string | null>(null);
+  useEffect(() => {
+    if (!runKey || runKey === lastFitKey.current) return;
+    lastFitKey.current = runKey;
     setFrameIndex(0);
     setPlaying(true);
     setFitSignal((value) => value + 1);
+  }, [runKey]);
+
+  const handleMapClick = useCallback(
+    (point: GeoPoint) => {
+      if (clickMode === "wind") {
+        setWindFromDegrees((current) =>
+          origin ? Math.round((bearingBetween(origin, point) + 180) % 360) : current,
+        );
+        return;
+      }
+      setOrigin(point);
+    },
+    [clickMode, origin],
+  );
+
+  function applyPreset(id: string) {
+    const preset = MOISTURE_PRESETS.find((candidate) => candidate.id === id);
+    if (!preset) return;
+    setPresetId(id);
+    setMoisture(preset.moisture);
+  }
+
+  function editMoisture(key: keyof FuelMoisture, percent: number) {
+    if (!Number.isFinite(percent)) return;
+    setPresetId("custom");
+    setMoisture((current) => ({ ...current, [key]: Math.min(Math.max(percent, 0), 400) / 100 }));
   }
 
   function clearScenario() {
@@ -104,9 +210,20 @@ export default function FireSimulatorPage() {
     setPlaying(false);
     setClickMode("origin");
     setFitSignal(0);
+    lastFitKey.current = null;
   }
 
   const windTowardDegrees = (windFromDegrees + 180) % 360;
+  // A run that stops growing before the horizon is fuel-limited, not finished.
+  const stalledAt = useMemo(() => {
+    if (!frames.length) return null;
+    const final = frames[frames.length - 1].burnedAreaSquareMeters;
+    if (final <= 0) return null;
+    const stalled = frames.find((candidate) => candidate.burnedAreaSquareMeters >= final);
+    return stalled && stalled.elapsedMinutes < frames[frames.length - 1].elapsedMinutes
+      ? stalled.elapsedMinutes
+      : null;
+  }, [frames]);
 
   return (
     <main className="fire-page">
@@ -124,7 +241,7 @@ export default function FireSimulatorPage() {
         <section className="fire-panel" aria-labelledby="fire-controls-title">
           <h1 id="fire-controls-title">Fire spread simulator</h1>
           <p className="fire-lede">
-            Place an ignition point, set the wind, and step the perimeter forward in{" "}
+            Rothermel surface spread over real LANDFIRE fuels and terrain, stepped forward in{" "}
             {FIRE_STEP_MINUTES}-minute intervals.
           </p>
 
@@ -135,7 +252,6 @@ export default function FireSimulatorPage() {
                 <input
                   type="radio"
                   name="click-mode"
-                  value="origin"
                   checked={clickMode === "origin"}
                   onChange={() => setClickMode("origin")}
                 />
@@ -145,7 +261,6 @@ export default function FireSimulatorPage() {
                 <input
                   type="radio"
                   name="click-mode"
-                  value="wind"
                   checked={clickMode === "wind"}
                   disabled={!origin}
                   onChange={() => setClickMode("wind")}
@@ -164,7 +279,7 @@ export default function FireSimulatorPage() {
 
           <div className="fire-field">
             <label htmlFor="wind-speed">
-              Wind speed <strong>{windSpeedMph} mph</strong>
+              Wind speed (20-foot) <strong>{windSpeedMph} mph</strong>
             </label>
             <input
               id="wind-speed"
@@ -192,9 +307,67 @@ export default function FireSimulatorPage() {
               }}
             />
             <span className="fire-readout">
-              {compassPoint(windFromDegrees)} → blowing toward {Math.round(windTowardDegrees)}°{" "}
+              {compassPoint(windFromDegrees)} → toward {Math.round(windTowardDegrees)}°{" "}
               {compassPoint(windTowardDegrees)}
             </span>
+          </div>
+
+          <div className="fire-field">
+            <span className="fire-legend-title">Fuel moisture</span>
+            <div className="fire-preset-row">
+              {MOISTURE_PRESETS.map((preset) => (
+                <button
+                  key={preset.id}
+                  type="button"
+                  aria-pressed={presetId === preset.id}
+                  title={preset.description}
+                  onClick={() => applyPreset(preset.id)}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+            <details className="fire-advanced">
+              <summary>Advanced: individual moisture classes</summary>
+              <div className="fire-moisture-grid">
+                {MOISTURE_FIELDS.map(({ key, label, title }) => (
+                  <div className="fire-moisture-field" key={key}>
+                    <label htmlFor={`moisture-${key}`} title={title}>
+                      {label} (%)
+                    </label>
+                    <input
+                      id={`moisture-${key}`}
+                      type="number"
+                      min={0}
+                      max={400}
+                      step={1}
+                      value={Math.round(moisture[key] * 100)}
+                      onChange={(event) => editMoisture(key, Number(event.target.value))}
+                    />
+                  </div>
+                ))}
+              </div>
+              <div className="fire-field fire-field-inline">
+                <label htmlFor="midflame">Midflame wind factor</label>
+                <input
+                  id="midflame"
+                  type="number"
+                  min={0.1}
+                  max={1}
+                  step={0.05}
+                  value={midflameAdjustment}
+                  onChange={(event) => {
+                    const value = Number(event.target.value);
+                    if (Number.isFinite(value)) {
+                      setMidflameAdjustment(Math.min(Math.max(value, 0.1), 1));
+                    }
+                  }}
+                />
+                <span className="fire-readout">
+                  Midflame wind {(windSpeedMph * midflameAdjustment).toFixed(1)} mph
+                </span>
+              </div>
+            </details>
           </div>
 
           <div className="fire-field fire-field-inline">
@@ -210,23 +383,106 @@ export default function FireSimulatorPage() {
                 </option>
               ))}
             </select>
-            <span className="fire-readout">{lastIndex} steps</span>
+            <span className="fire-readout">{(radiusMeters / 1000).toFixed(0)} km grid radius</span>
           </div>
 
+          <div className="fire-toggle-row">
+            <input
+              id="show-fuel"
+              type="checkbox"
+              checked={showFuel}
+              onChange={(event) => setShowFuel(event.target.checked)}
+              disabled={!grid}
+            />
+            <label htmlFor="show-fuel">Show the fuel layer the model is using</label>
+          </div>
+          {showFuel && grid && (
+            <ul className="fire-fuel-legend">
+              {FUEL_COLORS.map((entry) => (
+                <li className="fire-fuel-legend-item" key={entry.label}>
+                  <span
+                    className="fire-fuel-swatch"
+                    style={{ background: entry.color }}
+                    aria-hidden="true"
+                  />
+                  {entry.label}
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {landscape.status === "loading" && (
+            <div className="fire-loading" role="status">
+              <span className="fire-spinner" aria-hidden="true" />
+              Loading LANDFIRE fuels and terrain for a {(radiusMeters / 1000).toFixed(0)} km radius…
+            </div>
+          )}
+          {landscape.status === "error" && (
+            <p className="fire-alert" role="alert">
+              {landscape.message}
+            </p>
+          )}
           {result.error && (
             <p className="fire-alert" role="alert">
               {result.error}
             </p>
           )}
-
-          {!origin && !result.error && (
+          {!origin && landscape.status === "idle" && (
             <p className="fire-empty" role="status">
-              No scenario yet. Place an ignition point on the map to run the model.
+              No scenario yet. Place an ignition point on vegetated ground to run the model.
             </p>
           )}
 
-          {origin && frame && (
+          {run && frame && (
             <>
+              <div className="fire-ignition-card">
+                <div className="fire-ignition-row">
+                  <span>Fuel at ignition</span>
+                  <strong>{run.ignition.fuelLabel}</strong>
+                </div>
+                <div className="fire-ignition-row">
+                  <span>Head rate of spread</span>
+                  <strong>
+                    {(run.ignition.spread.headRateFeetPerMinute * 0.3048).toFixed(1)} m/min
+                  </strong>
+                </div>
+                <div className="fire-ignition-row">
+                  <span>Flame length</span>
+                  <strong>{(run.ignition.spread.flameLengthFeet * 0.3048).toFixed(1)} m</strong>
+                </div>
+                <div className="fire-ignition-row">
+                  <span>Slope · elevation</span>
+                  <strong>
+                    {run.ignition.slopePercent.toFixed(0)}% ·{" "}
+                    {run.ignition.elevationMeters.toFixed(0)} m
+                  </strong>
+                </div>
+                <div className="fire-ignition-row">
+                  <span>Burnable in modelled area</span>
+                  <strong>{(run.burnableFraction * 100).toFixed(0)}%</strong>
+                </div>
+              </div>
+
+              {run.ignition.spread.beyondValidatedWind && (
+                <p className="fire-warning" role="status">
+                  Effective wind is past the range Rothermel (1972) was validated against. Spread
+                  rates here are extrapolation.
+                </p>
+              )}
+              {stalledAt !== null && (
+                <p className="fire-warning" role="status">
+                  The fire stops growing at {formatElapsed(stalledAt)}: it is fuel-limited, boxed in
+                  by non-burnable ground. The model has no structure-to-structure spread, so this
+                  understates risk at the wildland-urban edge.
+                </p>
+              )}
+              {run.reachedEdge && (
+                <p className="fire-warning" role="status">
+                  The fire reached the edge of the modelled area. Results past that point are
+                  truncated; try a longer horizon for a wider grid.
+                </p>
+              )}
+
               <div className="fire-field">
                 <label htmlFor="timeline">
                   Elapsed <strong>{formatElapsed(frame.elapsedMinutes)}</strong>
@@ -282,17 +538,20 @@ export default function FireSimulatorPage() {
                   <dd>{formatArea(frame.burnedAreaSquareMeters)}</dd>
                 </div>
                 <div>
-                  <dt>Head reach from ignition</dt>
-                  <dd>{formatDistance(frame.headDistanceMeters)}</dd>
-                </div>
-                <div>
-                  <dt>Head rate of spread</dt>
-                  <dd>{result.run?.headRateMetersPerMinute.toFixed(1)} m/min</dd>
+                  <dt>Furthest reach</dt>
+                  <dd>{formatDistance(frame.maxReachMeters)}</dd>
                 </div>
                 <div>
                   <dt>Ignition point (WGS84)</dt>
                   <dd>
-                    {origin.latitude.toFixed(5)}, {origin.longitude.toFixed(5)}
+                    {run.scenario.origin.latitude.toFixed(5)},{" "}
+                    {run.scenario.origin.longitude.toFixed(5)}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Grid · solve time</dt>
+                  <dd>
+                    {run.cellSizeMeters.toFixed(0)} m · {run.computeMilliseconds.toFixed(0)} ms
                   </dd>
                 </div>
               </dl>
@@ -310,8 +569,8 @@ export default function FireSimulatorPage() {
                   <span>{formatElapsed(horizonMinutes)}</span>
                 </div>
                 <p>
-                  Each ring is one {FIRE_STEP_MINUTES}-minute step. The bright outline is the
-                  perimeter at the elapsed time shown above.
+                  Each band is one {FIRE_STEP_MINUTES}-minute step, shaded by when the fire reached
+                  it. The bright outline is the perimeter at the elapsed time above.
                 </p>
               </div>
 
@@ -330,19 +589,23 @@ export default function FireSimulatorPage() {
             </>
           )}
 
+          <div className="fire-sources">
+            <p>Fuel: {LANDFIRE_ATTRIBUTION}</p>
+            <p>Terrain: {TERRAIN_ATTRIBUTION}</p>
+            <p>
+              Spread: Rothermel (1972) per Andrews RMRS-GTR-371; Scott &amp; Burgan (2005) fuel
+              models; minimum travel time after Finney (2002).
+            </p>
+          </div>
+
           <footer className="fire-disclaimer">
             <p>
-              Simulated result from the{" "}
-              <code>{result.run?.model.id ?? "uniform-fuel-ellipse"}</code> v
-              {result.run?.model.version ?? "1.0.0"} demo model: a deterministic wind-driven ellipse
-              on flat, uniform fuel. It ignores fuel type and moisture, terrain, spotting,
-              suppression, and barriers such as rivers and roads, and it is not calibrated against
-              observed fires.
+              Simulated result, not an observation. Surface fire only: no crown fire, spotting,
+              suppression, or structure-to-structure spread. Wind and fuel moisture are uniform
+              across the grid and constant in time. LANDFIRE fuel is a mapped 2025 product, not
+              today&rsquo;s vegetation.
             </p>
-            <p>
-              Aerial imagery is historical USGS coverage, not live fire observation. This is a
-              planning experiment, not an operational evacuation instruction.
-            </p>
+            <p>A planning experiment, not an operational evacuation instruction.</p>
           </footer>
         </section>
 
@@ -351,6 +614,8 @@ export default function FireSimulatorPage() {
           windFromDegrees={windFromDegrees}
           frames={frames}
           frameIndex={safeIndex}
+          landscape={grid}
+          showFuel={showFuel}
           fitSignal={fitSignal}
           clickMode={clickMode}
           onMapClick={handleMapClick}
