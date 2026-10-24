@@ -27,6 +27,7 @@ export default function MapsPage() {
   const [run, setRun] = useState<FireRun | null>(null);
   const [frameIndex, setFrameIndex] = useState(0);
   const [playing, setPlaying] = useState(false);
+  const [showFire, setShowFire] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState({ center: SAN_FRANCISCO, zoom: 11.5 });
   const frame = run?.frames[frameIndex];
@@ -83,10 +84,56 @@ export default function MapsPage() {
         center={view.center}
         zoom={view.zoom}
         selectedLocation={origin}
-        firePerimeter={frame?.perimeter ?? EMPTY_PERIMETER}
+        firePerimeter={showFire ? (frame?.perimeter ?? EMPTY_PERIMETER) : EMPTY_PERIMETER}
         onLocationSelect={chooseOrigin}
       />
       <section className="fire-controls" aria-label="Fire simulation controls">
+        <details className="map-planning-tools">
+          <summary>Map layers &amp; planning tools</summary>
+          <div className="map-tool-grid">
+            <fieldset>
+              <legend>Visible layers</legend>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={showFire}
+                  onChange={(event) => setShowFire(event.target.checked)}
+                />
+                Simulated fire footprint
+              </label>
+              <label>
+                <input type="checkbox" disabled />
+                Road network &amp; closures · not connected
+              </label>
+              <label>
+                <input type="checkbox" disabled />
+                Population &amp; shelters · not connected
+              </label>
+              <label>
+                <input type="checkbox" disabled />
+                Traffic &amp; queues · not connected
+              </label>
+            </fieldset>
+            <div>
+              <strong>Planning assumptions</strong>
+              <p>
+                Configure departure timing, road availability, and shelter capacity in the planning
+                workspace. These drafts do not affect this fire experiment.
+              </p>
+              <a href="/evacuation">Open evacuation planning →</a>
+            </div>
+            <div>
+              <strong>Scenario assistant</strong>
+              <p>
+                Natural-language scenario controls are not connected. Use the wind and ignition
+                controls below to run the current model.
+              </p>
+              <button type="button" disabled>
+                Ask about this scenario
+              </button>
+            </div>
+          </div>
+        </details>
         <form className="fire-inputs" onSubmit={startSimulation}>
           <div className="fire-origin" aria-live="polite">
             <strong>
@@ -209,7 +256,11 @@ export default function MapsPage() {
         )}
         <p className="simulation-note">
           <span className="fire-swatch" aria-hidden="true" />
-          {run ? "Shaded area: simulated footprint. " : "Illustrative fire-spread model. "}
+          {run
+            ? showFire
+              ? "Shaded area: simulated footprint. "
+              : "Simulated footprint hidden. "
+            : "Illustrative fire-spread model. "}
           Uniform fuel; terrain, water, buildings, and suppression are not modeled. Not an
           operational forecast. Leaving this page clears the experiment.
         </p>
