@@ -21,7 +21,7 @@ import {
 import { CoverLayer } from "./cover";
 import { FireSampler, FxLayer, burnWindowMinutes } from "./fx";
 import { FuelFamily } from "./fuelStyle";
-import { LabelLayer } from "./labels";
+import { LabelLayer, type ClipOptions } from "./labels";
 import { REFERENCE_PLACES } from "./places";
 import { FireCameraRig, type Framing } from "./rig";
 import type { FireDioramaOptions, FireDioramaSceneApi, FireRun, GeoPoint, GroundClickMode, LandscapeGrid, ViewInsets } from "./types";
@@ -38,6 +38,11 @@ const MIN_BURN_WINDOW_MINUTES = 20;
 const MIN_FOCUS_SIZE = 70;
 /** Candidate ground lengths for the scale bar (metres). */
 const SCALE_STEPS = [100, 200, 250, 500, 1000, 2000, 2500, 5000, 10000, 20000, 25000, 50000];
+/** Screen-space footprint of the ignition pin (CSS px) that place labels keep clear of. */
+const PIN_RECT_HALF_W_PX = 14;
+const PIN_RECT_H_PX = 40;
+const PIN_RECT_FOOT_PX = 8;
+
 /** Reference place labels need a board at least this wide (ground metres). */
 const PLACE_LABEL_MIN_WIDTH_M = 4000;
 /** Shadow map side (px): large on local boards, smaller where shadows cannot be resolved. */
@@ -115,6 +120,9 @@ export class FireDioramaScene implements FireDioramaSceneApi {
   private appliedRun: FireRun | null = null;
   private t = 0;
   private renderedT = Number.NaN;
+  private burnWindow = 0;
+  /** Bumped when the run, ignition or wind change, so the label declutter pass reruns. */
+  private labelStamp = 0;
   private ignition: GeoPoint | null = null;
   private wind = { from: 0, speed: 0 };
   private overlay = false;
@@ -402,7 +410,7 @@ export class FireDioramaScene implements FireDioramaSceneApi {
       const margin = frame.cellWorld * 2;
       if (Math.abs(p.x) > frame.halfW - margin || Math.abs(p.z) > frame.halfD - margin) continue;
       if (frame.families[frame.cellAt(p.x, p.z)] === FuelFamily.Water) continue; // never on open water
-      labels.push(this.labels.addPlace(group, place.name, place.kind, new THREE.Vector3(p.x, frame.surfaceAt(p.x, p.z) + 1.5, p.z)));
+      labels.push(this.labels.addPlace(group, place.name, place.kind, new THREE.Vector3(p.x, frame.surfaceAt(p.x, p.z) + 1.5, p.z), frame.cellAt(p.x, p.z)));
     }
   }
 
@@ -421,6 +429,7 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     const run = this.run && frame.grid && this.run.arrivalMinutes.length === frame.cols * frame.rows ? this.run : null;
     if (run === this.appliedRun && run !== null) return;
     this.appliedRun = run;
+    this.labelStamp++;
     board.fire.uArrival.value.dispose();
     if (run) {
       const horizon = run.scenario.horizonMinutes;
@@ -428,6 +437,7 @@ export class FireDioramaScene implements FireDioramaSceneApi {
       const { tex, factor } = buildArrivalTexture(frame, run.arrivalMinutes, horizon);
       board.fire.uArrival.value = tex;
       board.fire.uWindow.value = window;
+      this.burnWindow = window;
       setFireXform(board.fire, frame, factor);
       board.cover.setArrival(run.arrivalMinutes, horizon, window);
       this.sampler.setRun(frame, run.arrivalMinutes, horizon, window);
@@ -474,6 +484,7 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     this.fx.windObject.visible = show;
     this.windLabel.obj.visible = show;
     this.windLabel.obj.position.copy(this.fx.windAnchor);
+    this.labelStamp++;
     this.renderedT = Number.NaN;
     this.applyTime();
   }
@@ -545,8 +556,45 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     this.windLabel.obj.position.copy(this.fx.windAnchor);
     this.renderer.render(this.scene, this.rig.camera);
     this.labels.render(this.scene, this.rig.camera);
-    this.labels.clip(this.rig.camera, this.width, this.height, this.rig.viewInsets);
+    this.labels.clip(this.rig.camera, this.width, this.height, this.rig.viewInsets, this.labelOptions());
   };
+
+  private readonly pinTmp = new THREE.Vector3();
+
+  /** Higher-priority rects and the burning test that place labels must yield to. */
+  private labelOptions(): ClipOptions {
+    const board = this.board;
+    const opts: ClipOptions = { stamp: this.labelStamp, time: this.t };
+    if (!board) return opts;
+    const p = this.ignitionWorld();
+    if (p && board.frame.inside(p.x, p.z)) {
+      this.pinTmp.set(p.x, board.frame.surfaceAt(p.x, p.z), p.z).project(this.rig.camera);
+      const x = ((this.pinTmp.x + 1) / 2) * this.width;
+      const y = ((1 - this.pinTmp.y) / 2) * this.height;
+      opts.fixed = [{ left: x - PIN_RECT_HALF_W_PX, right: x + PIN_RECT_HALF_W_PX, top: y - PIN_RECT_H_PX, bottom: y + PIN_RECT_FOOT_PX }];
+    }
+    const run = this.appliedRun;
+    if (run) {
+      const arrival = run.arrivalMinutes;
+      const { cols, rows } = board.frame;
+      const window = this.burnWindow;
+      const t = this.t;
+      // A cell counts as burning from its arrival until it has burned for `window` minutes; a
+      // 3x3 neighbourhood keeps a label clear of the front's edge.
+      opts.isBurning = (cell) => {
+        const c0 = cell % cols;
+        const r0 = Math.floor(cell / cols);
+        for (let r = Math.max(0, r0 - 1); r <= Math.min(rows - 1, r0 + 1); r++) {
+          for (let c = Math.max(0, c0 - 1); c <= Math.min(cols - 1, c0 + 1); c++) {
+            const a = arrival[r * cols + c];
+            if (a <= t && t - a < window) return true;
+          }
+        }
+        return false;
+      };
+    }
+    return opts;
+  }
 
   // ----------------------------------------------------------------------------- input
 
