@@ -20,15 +20,16 @@ export const MOBILITY_BUILD_HINT =
 
 /**
  * Cell colors, shared by the map layer and the legend so they cannot drift apart. Neutral
- * only (warm = fire, cyan = traffic): brightness encodes visits vs baseline, darker = fewer.
+ * only (warm = fire, blue-green = traffic): weight against the light basemap encodes visits vs
+ * baseline, so a paler cell means fewer visits than usual and an inky one means more.
  */
 export const MOBILITY_COLORS = {
-  below: "#4b5560",
-  near: "#9aa4ae",
-  above: "#ffffff",
+  below: "#cdd3c4",
+  near: "#8f9c91",
+  above: "#142b27",
   /** No baseline visits but visits now: drawn as a hollow ring. */
-  fresh: "#ffffff",
-  flow: "#c3cdd6",
+  fresh: "#142b27",
+  flow: "#5b7268",
 } as const;
 /** log2(visits / baseline) at which the color scale saturates (4x either way). */
 export const RATIO_SATURATION_LOG2 = 2;

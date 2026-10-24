@@ -121,9 +121,6 @@ export default function ReplayView({
   return (
     <main className={`rp-root rp-root--state${sim ? " rp-root--sim" : ""}`}>
       <div className="rp-state-card">
-        <a className="rp-back" href="/">
-          ← Workspace
-        </a>
         <p className="rp-eyebrow">{config.eyebrow}</p>
         {picker}
         {load.status === "loading" && (
@@ -265,7 +262,7 @@ function ReplayScreen({
     markTourSeen(config.kind);
     setTourOpen(false);
   }, [config.kind]);
-  const [basemap, setBasemap] = useState<Basemap>("dark");
+  const [basemap, setBasemap] = useState<Basemap>("map");
   const [pin, setPin] = useState<LngLat | null>(null);
   const [focus, setFocus] = useState<MapFocus | null>(null);
   const [storyOpen, setStoryOpen] = useState(false);
@@ -822,7 +819,7 @@ function ReplayScreen({
               <span aria-hidden="true">?</span> Tour
             </button>
             <div className="rp-speed" role="group" aria-label="Basemap">
-              {(["dark", "satellite"] as const).map((option) => (
+              {(["map", "satellite"] as const).map((option) => (
                 <button
                   key={option}
                   type="button"
@@ -830,7 +827,7 @@ function ReplayScreen({
                   aria-pressed={basemap === option}
                   onClick={() => setBasemap(option)}
                 >
-                  {option === "dark" ? "Dark" : "Satellite"}
+                  {option === "map" ? "Map" : "Satellite"}
                 </button>
               ))}
             </div>
@@ -925,9 +922,6 @@ function ReplayScreen({
       <aside className="rp-panel" aria-label="Replay details" id="rp-panel">
         <div className="rp-panel-top">
           <span className="rp-route-links">
-            <a className="rp-back" href="/">
-              ← Workspace
-            </a>
             <a className="rp-back" href={config.otherRoute.href}>
               {config.otherRoute.label}
             </a>

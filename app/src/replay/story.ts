@@ -215,7 +215,7 @@ export function buildChapters(
       body:
         (people != null ? `${fmt(people)} people in ` : "") +
         `${fmt(households)} households across ${fmt(zones.length)} Census areas. ` +
-        "Lighter grey means more households per km². Watch it drain as people leave.",
+        "Darker green means more households per km². Watch it drain as people leave.",
       evidence: zoneEvidence && zoneEvidence !== "mixed" ? zoneEvidence : "derived",
       focus: zones.flatMap((z) => ringCoords(z.geometry)),
     });

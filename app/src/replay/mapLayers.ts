@@ -16,7 +16,8 @@ import type {
   Zone,
 } from "./types";
 
-/** Free OpenFreeMap dark basemap; no API key. */
+/** Free OpenFreeMap basemap; no API key. restyleBasemap() recolours it to the light
+ *  workspace palette, so only its layer structure is taken from upstream. */
 export const BASEMAP_STYLE_URL = "https://tiles.openfreemap.org/styles/dark";
 const FALLBACK_GLYPHS_URL = "https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf";
 const LABEL_FONT = ["Noto Sans Regular"];
@@ -33,7 +34,7 @@ export const FALLBACK_STYLE: BasemapStyle = {
   layers: [{ id: "background", type: "background", paint: { "background-color": BASEMAP_BACKGROUND } }],
 };
 
-export type Basemap = "dark" | "satellite";
+export type Basemap = "map" | "satellite";
 export const IMAGERY_LAYER = "rp-imagery";
 export const IMAGERY_DATE_NOTE =
   "Imagery: USGS NAIP/National Map, acquisition dates vary — not imagery from Nov 2018";
@@ -89,34 +90,43 @@ const MAJOR_HIGHWAYS = ["motorway", "trunk", "primary", "secondary", "tertiary"]
 const ZONE_HATCH_IMAGE = "rp-zone-hatch";
 const ZONE_HATCH_OPACITY = 0.22;
 
+/**
+ * Overlay palette for the light basemap. Strict palette: warm = fire only; one blue-green for
+ * traffic (darker when slow, thicker when busy); everything else is the workspace ink/sage so
+ * the fire and the traffic read first. Markers that were white-cored on the old dark basemap
+ * are ink-cored with a paper ring here, which keeps the same figure/ground relationship.
+ */
 export const COLORS = {
   ember: "#ff6a1a",
   emberCore: "#ffd29a",
   emberDeep: "#ff3d00",
   char: "#140604",
-  satellite: "#eaf4ff",
-  history: "#ff9a5c",
-  // Strict palette: warm = fire only; one cyan for traffic (dimmer when slow, thicker when
-  // busy); everything else neutral grey/white so the fire and the traffic read first.
-  simFront: "#ffd166",
+  satellite: "#2f4f63",
+  history: "#e05a1c",
+  simFront: "#c98a00",
   fireBand: "#ff9a1f",
-  free: "#3df2ff",
-  slow: "#2bb3c6",
-  jam: "#16707f",
-  closed: "#8a96a3",
-  threat: "#ffb547",
+  free: "#2aa8c4",
+  slow: "#17788c",
+  jam: "#0b4654",
+  closed: "#6b7a71",
+  threat: "#d98a00",
   threatImminent: "#ff7a1a",
-  network: "#26394a",
-  networkMajor: "#3d566c",
-  bridge: "#d8e3ee",
-  particle: "#e9fbff",
-  particleStopped: "#ffffff",
-  zone: "#8a96a3",
-  zoneOrdered: "#c3cdd6",
-  destination: "#aab4be",
-  refuge: "#ffffff",
-  fireObs: "#ffffff",
-  damage: "#c3cdd6",
+  network: "#a3ada1",
+  networkMajor: "#7f8c80",
+  bridge: "#35504a",
+  particle: "#0e7f96",
+  particleGlow: "rgba(14, 127, 150, 0.55)",
+  particleStopped: "#142b27",
+  zone: "#6b7a71",
+  zoneOrdered: "#35504a",
+  destination: "#35504a",
+  refuge: "#142b27",
+  refugeRing: "#f5f4ee",
+  fireObs: "#35504a",
+  damage: "#35504a",
+  /** Paper core/ring behind a marker, and the halo colour under map labels. */
+  markerCore: "#f5f4ee",
+  labelHalo: "#f5f4ee",
 } as const;
 
 export type LayerGroup =
@@ -351,13 +361,13 @@ export function applyTrafficFrame(
   return next;
 }
 
-/** Households at home per km² -> fill colour (grey to white). Shared with the map key. */
+/** Households at home per km² -> fill colour (paper to ink). Shared with the map key. */
 export const PEOPLE_RAMP: [number, string][] = [
-  [0, "#1f262e"],
-  [25, "#3a434d"],
-  [100, "#6b7682"],
-  [300, "#aab4be"],
-  [800, "#f2f5f8"],
+  [0, "#e8eadd"],
+  [25, "#c4cdbd"],
+  [100, "#94a394"],
+  [300, "#5b7268"],
+  [800, "#142b27"],
 ];
 
 /** Static zone polygons for the people layer; numeric feature ids match zone order. */
@@ -686,7 +696,7 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     type: "line",
     source: "sim-area",
     filter: ["==", ["geometry-type"], "LineString"],
-    paint: { "line-color": "#c3cdd6", "line-opacity": 0.55, "line-width": 1.2, "line-dasharray": [4, 3] },
+    paint: { "line-color": "#7f8c80", "line-opacity": 0.8, "line-width": 1.2, "line-dasharray": [4, 3] },
   });
   // Zoomed in, the corner label is off-screen: repeat a short tag along the outline.
   map.addLayer({
@@ -703,7 +713,7 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
       "text-size": 10.5,
       "text-offset": [0, -0.8],
     },
-    paint: { "text-color": "#c3cdd6", "text-halo-color": "#0a0e13", "text-halo-width": 1.6, "text-opacity": 0.8 },
+    paint: { "text-color": "#52635c", "text-halo-color": COLORS.labelHalo, "text-halo-width": 1.6, "text-opacity": 0.8 },
   });
   map.addLayer({
     id: "sim-area-label",
@@ -720,9 +730,9 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
       "text-allow-overlap": true,
       "text-ignore-placement": true,
     },
-    paint: { "text-color": "#c3cdd6", "text-halo-color": "#0a0e13", "text-halo-width": 1.6, "text-opacity": 0.85 },
+    paint: { "text-color": "#52635c", "text-halo-color": COLORS.labelHalo, "text-halo-width": 1.6, "text-opacity": 0.85 },
   });
-  if (!map.hasImage(ZONE_HATCH_IMAGE)) map.addImage(ZONE_HATCH_IMAGE, hatchImage([195, 205, 214], 60, 14));
+  if (!map.hasImage(ZONE_HATCH_IMAGE)) map.addImage(ZONE_HATCH_IMAGE, hatchImage([53, 80, 74], 70, 14));
 
   // People at home: households still home per km², a neutral grey-to-white ramp (never warm,
   // never cyan) under everything else. Density arrives as feature-state from ReplayMap.
@@ -744,7 +754,7 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     id: "people-line",
     type: "line",
     source: "people",
-    paint: { "line-color": "#c3cdd6", "line-opacity": 0.18, "line-width": 0.6 },
+    paint: { "line-color": "#7f8c80", "line-opacity": 0.3, "line-width": 0.6 },
   });
 
   // Zones: nearly invisible until ordered; ordered zones get a faint (pulsed) hatch.
@@ -962,7 +972,7 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
       "text-size": 10.5,
       "text-letter-spacing": 0.1,
     },
-    paint: { "text-color": "#d6dde4", "text-halo-color": "#0a0e13", "text-halo-width": 2 },
+    paint: { "text-color": "#35504a", "text-halo-color": COLORS.labelHalo, "text-halo-width": 2 },
   });
   map.addLayer({
     id: "roads-bridge-label",
@@ -977,7 +987,7 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
       "text-size": 10,
       "text-offset": [0, -1.1],
     },
-    paint: { "text-color": COLORS.bridge, "text-halo-color": "#0a0e13", "text-halo-width": 1.5 },
+    paint: { "text-color": COLORS.bridge, "text-halo-color": COLORS.labelHalo, "text-halo-width": 1.5 },
   });
 
   // Illustrative particles (modelled counts, not tracked vehicles).
@@ -987,10 +997,10 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     source: "particles",
     paint: {
       "circle-radius": ["interpolate", ["linear"], ["zoom"], 10, 5, 13, 8, 16, 12],
-      "circle-color": "#7ff9ff",
+      "circle-color": COLORS.particle,
       "circle-blur": 1,
-      // Glow only on moving dots; stopped ones are plain white with a dark ring.
-      "circle-opacity": ["case", ["get", "stopped"], 0, 0.5],
+      // Glow only on moving dots; stopped ones are a plain ink dot with a paper ring.
+      "circle-opacity": ["case", ["get", "stopped"], 0, 0.45],
     },
   });
   map.addLayer({
@@ -1000,7 +1010,7 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     paint: {
       "circle-radius": ["interpolate", ["linear"], ["zoom"], 10, 2.5, 13, 3, 16, 4],
       "circle-color": ["case", ["get", "stopped"], COLORS.particleStopped, COLORS.particle],
-      "circle-stroke-color": ["case", ["get", "stopped"], "#0a0e13", "#7ff9ff"],
+      "circle-stroke-color": ["case", ["get", "stopped"], COLORS.markerCore, COLORS.particleGlow],
       "circle-stroke-width": ["case", ["get", "stopped"], 1.2, 0.6],
     },
   });
@@ -1028,7 +1038,7 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
       "text-anchor": "left",
       "text-offset": [1, 0],
     },
-    paint: { "text-color": COLORS.simFront, "text-halo-color": "#0a0e13", "text-halo-width": 2 },
+    paint: { "text-color": COLORS.simFront, "text-halo-color": COLORS.labelHalo, "text-halo-width": 2 },
   });
 
   // Text tags on the fire edges, so model and satellite never read alike.
@@ -1060,7 +1070,7 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
       "text-letter-spacing": 0.15,
       "text-offset": [0, -1.2],
     },
-    paint: { "text-color": COLORS.satellite, "text-halo-color": "#0a0e13", "text-halo-width": 2 },
+    paint: { "text-color": COLORS.satellite, "text-halo-color": COLORS.labelHalo, "text-halo-width": 2 },
   });
 
   // Destinations: ring marker plus a text label naming the kind.
@@ -1083,12 +1093,12 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     filter: ["!=", ["get", "dest_kind"], REFUGE_KIND],
     paint: {
       "circle-radius": 4.5,
-      "circle-color": "#0a0e13",
+      "circle-color": COLORS.markerCore,
       "circle-stroke-color": COLORS.destination,
       "circle-stroke-width": 2.5,
     },
   });
-  // Temporary refuge areas (NIST): solid marker with a white ring and a "TRA-x" tag, so they
+  // Temporary refuge areas (NIST): solid marker with a paper ring and a "TRA-x" tag, so they
   // never read as exits (hollow rings). Faded while not open; open/closed is also in the tooltip.
   map.addLayer({
     id: "refuges",
@@ -1099,7 +1109,7 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
       "circle-radius": ["match", ["get", "refuge_state"], "open", 6.5, 4.5],
       "circle-color": COLORS.refuge,
       "circle-opacity": ["match", ["get", "refuge_state"], "closed", 0.25, 0.95],
-      "circle-stroke-color": "#4b5157",
+      "circle-stroke-color": COLORS.refugeRing,
       "circle-stroke-width": ["match", ["get", "refuge_state"], "open", 2, 1],
       "circle-stroke-opacity": ["match", ["get", "refuge_state"], "closed", 0.35, 1],
     },
@@ -1117,7 +1127,7 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
       "text-offset": [0, 1.1],
       "text-anchor": "top",
     },
-    paint: { "text-color": COLORS.refuge, "text-halo-color": "#0a0e13", "text-halo-width": 1.6 },
+    paint: { "text-color": COLORS.refuge, "text-halo-color": COLORS.labelHalo, "text-halo-width": 1.6 },
   });
 
   // NIST fire observations: small warm dots with a dark ring, shown from their observed time.
@@ -1129,7 +1139,7 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     filter: ["<=", ["get", "at_ms"], model.clock.startMs],
     paint: {
       "circle-radius": 2.6,
-      // Hollow white rings: evidence points, never a second warm colour next to the fire.
+      // Hollow ink rings: evidence points, never a second warm colour next to the fire.
       "circle-color": "rgba(0, 0, 0, 0)",
       "circle-stroke-color": COLORS.fireObs,
       "circle-stroke-width": 1.1,
@@ -1156,7 +1166,7 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     id: "pin-halo",
     type: "circle",
     source: "pin",
-    paint: { "circle-radius": 16, "circle-color": "#ffffff", "circle-opacity": 0.15, "circle-blur": 0.5 },
+    paint: { "circle-radius": 16, "circle-color": COLORS.particleStopped, "circle-opacity": 0.18, "circle-blur": 0.5 },
   });
   map.addLayer({
     id: "pin",
@@ -1164,8 +1174,8 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     source: "pin",
     paint: {
       "circle-radius": 6,
-      "circle-color": "#ffffff",
-      "circle-stroke-color": "#0a0e13",
+      "circle-color": COLORS.particleStopped,
+      "circle-stroke-color": COLORS.markerCore,
       "circle-stroke-width": 3,
     },
   });

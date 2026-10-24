@@ -221,7 +221,7 @@ function install3d(map: MapLibreMap, state: State, ctx: PerspectiveContext): boo
           id: HILLSHADE_LAYER,
           type: "hillshade",
           source: TERRAIN_SOURCE,
-          paint: { "hillshade-exaggeration": 0.35, "hillshade-shadow-color": "#1a0f08" },
+          paint: { "hillshade-exaggeration": 0.35, "hillshade-shadow-color": "rgba(74, 96, 88, 0.5)" },
         },
         before,
       );

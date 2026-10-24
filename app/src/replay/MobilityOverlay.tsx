@@ -14,7 +14,7 @@ import { clockParts, localTime } from "./timeline";
 import type { LngLat } from "./types";
 
 const CELLS = "mobility-cells";
-/** Soft neutral halo under each cell so the dots read on the dark map. */
+/** Soft neutral halo under each cell so the dots read on the light basemap. */
 const HALO = "mobility-halo";
 const FLOWS = "mobility-flows";
 /** Added below the first of these that exists, so phone-panel cells sit under the fire. */
@@ -180,7 +180,7 @@ export default function MobilityOverlay({ map, mobility, simTimeMs, visible, sho
         source: CELLS,
         paint: {
           "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, ["*", ["get", "rad"], 1.0], 12, ["*", ["get", "rad"], 2.0]],
-          "circle-color": "#ffffff",
+          "circle-color": "#142b27",
           "circle-blur": 1,
           "circle-opacity": ["case", ["==", ["get", "fresh"], 1], 0.12, ["interpolate", ["linear"], ["get", "lr"], -2, 0.04, 0, 0.1, 2, 0.28]],
         },
@@ -212,7 +212,7 @@ export default function MobilityOverlay({ map, mobility, simTimeMs, visible, sho
             ],
           ],
           "circle-opacity": 0.85,
-          "circle-stroke-color": ["case", ["==", ["get", "fresh"], 1], MOBILITY_COLORS.fresh, "rgba(8,12,17,0.7)"],
+          "circle-stroke-color": ["case", ["==", ["get", "fresh"], 1], MOBILITY_COLORS.fresh, "rgba(245,244,238,0.75)"],
           "circle-stroke-width": ["case", ["==", ["get", "fresh"], 1], 1.4, ["==", ["get", "evac"], 1], 1.8, 0.6],
         },
       },

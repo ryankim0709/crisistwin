@@ -11,8 +11,8 @@
   max-width: 180px;
   padding: 6px;
   border-radius: 10px;
-  background: var(--rp-glass, rgba(10, 15, 21, 0.78));
-  border: 1px solid var(--rp-line, rgba(160, 190, 220, 0.14));
+  background: var(--rp-glass, rgba(252, 252, 248, 0.88));
+  border: 1px solid var(--rp-line, #dfe3d5);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
 }
@@ -21,23 +21,23 @@
   border-radius: 6px;
   border: 1px solid transparent;
   background: transparent;
-  color: var(--rp-text, #e6edf3);
+  color: var(--rp-text, var(--rp-text));
   font: inherit;
   font-size: 12px;
   text-align: left;
   cursor: pointer;
 }
 .pv-btn:hover {
-  background: rgba(160, 190, 220, 0.1);
+  background: rgba(20, 43, 39, 0.07);
 }
 .pv-btn[aria-pressed="true"] {
-  border-color: var(--rp-amber, #ffb547);
-  color: var(--rp-amber, #ffb547);
+  border-color: var(--rp-amber, var(--rp-amber-fill));
+  color: var(--rp-amber, var(--rp-amber-fill));
   font-weight: 600;
 }
 .pv-btn:focus-visible,
 .pv-orbit input:focus-visible {
-  outline: 2px solid var(--rp-amber, #ffb547);
+  outline: 2px solid var(--rp-amber, var(--rp-amber-fill));
   outline-offset: 1px;
 }
 .pv-orbit {
@@ -46,13 +46,13 @@
   gap: 6px;
   padding: 4px 10px;
   font-size: 11px;
-  color: var(--rp-dim, #8b9aa8);
+  color: var(--rp-dim, #52635c);
 }
 .pv-hint {
   margin: 2px 4px 0;
   font-size: 10px;
   line-height: 1.35;
-  color: var(--rp-dim, #8b9aa8);
+  color: var(--rp-dim, #52635c);
 }
 .pv-imagery-note,
 .pv-modelled {
@@ -72,18 +72,18 @@
 .pv-imagery-note {
   bottom: 150px;
   font-size: 11px;
-  color: var(--rp-dim, #8b9aa8);
-  background: var(--rp-glass, rgba(10, 15, 21, 0.78));
-  border: 1px dashed var(--rp-line-strong, rgba(160, 190, 220, 0.28));
+  color: var(--rp-dim, #52635c);
+  background: var(--rp-glass, rgba(252, 252, 248, 0.88));
+  border: 1px dashed var(--rp-line-strong, #c3cabb);
 }
 .pv-modelled {
   top: 45%;
   font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.02em;
-  color: #ffe5cf;
-  background: rgba(30, 10, 2, 0.6);
-  border: 1px solid rgba(255, 106, 26, 0.55);
+  color: #8a3a10;
+  background: rgba(255, 241, 232, 0.92);
+  border: 1px solid rgba(194, 65, 12, 0.6);
 }
 .pv-hud {
   position: absolute;
@@ -93,9 +93,9 @@
   width: 220px;
   padding: 10px 12px;
   border-radius: 10px;
-  background: var(--rp-glass, rgba(10, 15, 21, 0.78));
-  border: 1px solid var(--rp-line-strong, rgba(160, 190, 220, 0.28));
-  color: var(--rp-text, #e6edf3);
+  background: var(--rp-glass, rgba(252, 252, 248, 0.88));
+  border: 1px solid var(--rp-line-strong, #c3cabb);
+  color: var(--rp-text, var(--rp-text));
   font-size: 12px;
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
@@ -109,12 +109,12 @@
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: var(--rp-dim, #8b9aa8);
+  color: var(--rp-dim, #52635c);
 }
 .pv-hud dd {
   margin: 0 0 6px;
   font-family: var(--rp-mono, ui-monospace, monospace);
-  color: var(--rp-ember-core, #ffd29a);
+  color: var(--rp-ember-core, var(--rp-ember-core));
 }
 .pv-hud p {
   margin: 0;
@@ -122,5 +122,5 @@
 .pv-hud .pv-hud-note {
   margin-top: 4px;
   font-size: 10px;
-  color: var(--rp-dim, #8b9aa8);
+  color: var(--rp-dim, #52635c);
 }
