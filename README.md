@@ -241,7 +241,12 @@ horizon. The presets are the standard dead and live moisture scenarios that go w
 Scott & Burgan fuel models; _Advanced: moisture classes and spread parameters_ opens the
 1-hour, 10-hour, 100-hour, live herbaceous, and live woody values, the midflame wind
 factor (the share of the open wind that reaches flame height, 0.5 by default), the
-maximum spotting distance, and the structure-to-structure spread rate. Switching the
+maximum spotting distance, and the structure-to-structure spread rate. The midflame
+factor is a user override, not the model's preferred input: while it is left at its
+default and canopy data loaded for the area, each cell instead gets its own factor from
+canopy cover, canopy height, and fuel bed depth, lower under a closed stand than in the
+open; moving the control off its default applies that one flat value everywhere instead.
+Switching the
 click target to _Wind direction_ lets you click downwind of the ignition point to aim the
 wind; the numeric field and the arrow at the ignition point stay in sync with it. _Show
 the fuel layer the model is using_ draws the mapped fuel models under the perimeters, and
@@ -262,6 +267,17 @@ panel attributes every burned cell to the mechanism that reached it first — su
 spread, spotting, or structure-to-structure — so you can see how much of a run is the
 Rothermel model and how much is an assumption you switched on.
 
+Above the surface model, **crown fire** decides per cell whether a forest fire stays on
+the ground, torches individual trees, or runs through the crowns, where forest fires get
+most of their speed. The panel reports whether crown fire was modelled for the run (it
+needs canopy data; a run without it says so rather than reading as treeless ground), the
+burned area split by surface, passive (torching), and active crown fire, and the
+length-to-breadth applied to actively crowning cells at the run's wind. Crown fire can
+also carry from an already-crowning cell into a neighbour whose own canopy can sustain it,
+not only where a cell's own surface fire is intense enough to start crowning on its own.
+See [the crown fire decision](docs/adr/0008-crown-fire.md) for the sources, the
+constants, and where it is least trustworthy.
+
 **Use current NWS wind** replaces the wind speed and direction with the US National
 Weather Service hourly forecast for the ignition point, labelled as **observed** data with
 the location, forecast hour, and the source's own wording, including when the reported
@@ -271,13 +287,17 @@ moisture preset (critical / Red Flag) and the default 40 mph wind are demo setti
 to show peak fire weather; they are **explicitly unvalidated**, and the page says so.
 
 Placing an ignition point fetches the real landscape around it: a LANDFIRE FBFM40 fuel
-raster and terrain elevation tiles, over a radius scaled to the horizon — roughly 5 km at
-two hours and 12 km at six.
+raster, four more LANDFIRE layers for canopy base height, bulk density, cover, and height
+that the crown fire model needs, and terrain elevation tiles, over a radius scaled to the
+horizon — roughly 5 km at two hours and 12 km at six. The canopy layers cost a real extra
+download — five coverages' worth of sub-requests instead of one — and a run still proceeds
+as surface fire only, clearly labelled as such, if any of them fails to load or fails a
+plausibility check.
 The page therefore needs internet access and works only in the contiguous United States,
 where LANDFIRE publishes this layer; elsewhere the run fails with an explicit error rather
-than inventing fuel. The fuel raster is fetched as a mosaic of bounded sub-requests
-through a same-origin proxy, with bounded retry; the browser never calls LANDFIRE
-directly. Igniting on water, snow, agricultural land, or bare ground is refused, and so is
+than inventing fuel. The fuel and canopy rasters are each fetched as a mosaic of bounded
+sub-requests through a same-origin proxy, with bounded retry; the browser never calls
+LANDFIRE directly. Igniting on water, snow, agricultural land, or bare ground is refused, and so is
 developed land while structure-to-structure spread is switched off. Wind and moisture
 edits re-solve without refetching. Alongside the perimeters the panel reports the fuel
 model at the ignition point, head rate of spread, flame length, slope, elevation, what
@@ -297,8 +317,9 @@ called straight from the browser, and LANDFIRE through the same-origin proxy.
 | ------------------------------------ | -------------------------------------------------------------------------- |
 | `app/src/fire/fuelModels.ts`         | Scott & Burgan (2005) 40 fuel models, keyed by LANDFIRE FBFM40 code.       |
 | `app/src/fire/rothermel.ts`          | Rothermel (1972) surface spread, wind/slope vectors, ellipse geometry.     |
-| `app/src/fire/landscape.ts`          | LANDFIRE WCS mosaic fetch, GeoTIFF decode, terrain, slope and aspect.      |
-| `app/src/fire/spread.ts`             | Propagation, spotting, structure spread, contouring, scenario types.       |
+| `app/src/fire/landscape.ts`          | LANDFIRE WCS mosaic fetch, GeoTIFF decode, canopy rasters, terrain.       |
+| `app/src/fire/crownFire.ts`          | Van Wagner initiation, Cruz active rate, Scott & Reinhardt blending.      |
+| `app/src/fire/spread.ts`             | Propagation, crown fire, spotting, structure spread, contouring.          |
 | `app/src/fire/weather.ts`            | National Weather Service wind lookup with provenance; no UI state.         |
 | `app/src/fire/FireMap.tsx`           | MapLibre GL JS map, USGS aerial imagery, fuel overlay, perimeter layers.   |
 | `app/src/fire/FireSimulatorPage.tsx` | Scenario controls, mechanism toggles, playback, attribution, metrics.      |
@@ -350,8 +371,11 @@ Berkeley, so a 30 Mercator metre LANDFIRE cell is about 23.7 m across on the gro
 addressing uses Mercator metres; slope, spread distance, burned area, and reach all use
 ground metres, converted once where the landscape is built.
 
-The **physics is surface fire only**. There is no crown fire and no suppression, and
-nothing in the model represents plume-dominated behaviour. The two interface mechanisms
+The surface physics models crown fire as well as surface spread, but there is still **no
+suppression**, and nothing in the model represents plume-dominated behaviour — including
+in cells that are now predicted to crown, which is why ember spotting stays on the surface
+fireline intensity with its 500 m ceiling even there, well short of the Camp Fire's
+measured 6.3 km maximum spot. The two interface mechanisms
 are assumptions layered on that surface model, not validated models: spotting is
 deterministic, so every ember landing in receptive fuel ignites with no ignition
 probability, and structure spread ignores building materials, spacing, defensible space,
@@ -368,9 +392,11 @@ where the vegetated patch is bounded by water or bare rock, the fire stops where
 does, and the page says so rather than hiding it. Outputs are planning experiments, not
 operational evacuation instructions. See the
 [fire model decision](docs/adr/0004-physics-fire-model.md), which supersedes the
-[original ellipse](docs/adr/0003-fire-spread-model.md), and the
-[interface mechanisms](docs/adr/0007-wui-spread-mechanisms.md) for the constants, their
-sources, and where they are least trustworthy.
+[original ellipse](docs/adr/0003-fire-spread-model.md), the
+[interface mechanisms](docs/adr/0007-wui-spread-mechanisms.md), the
+[crown fire decision](docs/adr/0008-crown-fire.md), and the
+[solver direction set decision](docs/adr/0009-solver-direction-set.md) for the constants,
+their sources, and where they are least trustworthy.
 
 ### Default hackathon check
 

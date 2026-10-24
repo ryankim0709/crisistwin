@@ -53,7 +53,8 @@ Fuels are the Scott & Burgan (2005) 40 standard fire behavior fuel models, RMRS-
 keyed by the code LANDFIRE's FBFM40 layer encodes so a raster value indexes the table
 directly. Loads are pounds per square foot, surface-area-to-volume ratios square feet per
 cubic foot, and fuel bed depth feet. The dead 10-hour and 100-hour classes take fixed
-ratios of 109 and 30, and low heat content is 8000 Btu/lb across the set.
+ratios of 109 and 30. Low heat content is 8000 Btu/lb for every model except GR6, which
+Scott & Burgan's own Table 7 gives a higher heat content of 9000 Btu/lb.
 
 Dynamic fuel models transfer live herbaceous load into a dead herbaceous class as the
 herb layer cures, fully cured at 30 percent herbaceous moisture and fully green at 120.
@@ -185,8 +186,10 @@ they do to this run.
 
 ## Limits
 
-The surface physics is surface fire only: there is no crown fire and no suppression, and
-the Rothermel part of the model stops at the edge of the vegetation.
+At this decision the surface physics was surface fire only, with no crown fire and no
+suppression, and the Rothermel part of the model stopped at the edge of the vegetation.
+[0008](0008-crown-fire.md) adds crown fire above this surface model without changing it;
+suppression is still absent.
 
 Spotting and structure-to-structure spread were absent at this decision, and the second
 omission mattered most: a fire that reached the edge of the vegetation simply stopped,
@@ -195,8 +198,9 @@ carried fire through exactly the developed ground this model treated as inert. B
 exist, as deterministic and optional assumptions layered on top of the surface model
 rather than as physics, and the burned area each delivers is reported separately. Their
 constants, sources, and the places they are most likely to run hot are in
-[0005](0007-wui-spread-mechanisms.md). Crown fire and suppression are still absent, and
-no part of the model represents plume-dominated behaviour.
+[0005](0007-wui-spread-mechanisms.md). Crown fire no longer is: see
+[0008](0008-crown-fire.md). Suppression is still absent, and no part of the model
+represents plume-dominated behaviour, including the crown fire 0008 adds.
 
 Weather is static. Wind is uniform over the grid and constant in time, fuel moisture is
 uniform across the landscape, and there is no diurnal change in either. LANDFIRE fuel is a

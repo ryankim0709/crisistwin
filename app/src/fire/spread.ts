@@ -24,10 +24,28 @@
  * forest fires far slower than observed ones. Real forest fires get their speed by moving
  * into the canopy. `crownFire.ts` decides per cell whether the surface fire torches
  * (passive) or runs through the crowns (active) and returns the rate that results; this
- * module propagates that rate. Crown fire is evaluated once per cell in the precompute,
- * never inside the relaxation loop, and only when `LandscapeGrid.canopyComplete` says the
- * canopy rasters actually loaded — missing canopy runs surface-only and says so on the
- * run rather than reading as treeless ground.
+ * module propagates that rate. Crown fire is evaluated only when
+ * `LandscapeGrid.canopyComplete` says the canopy rasters actually loaded — missing canopy
+ * runs surface-only and says so on the run rather than reading as treeless ground.
+ *
+ * A cell burns as crown fire for either of two reasons, and the distinction is the whole
+ * reason crown state has to reach the relaxation loop:
+ *
+ *   - Its own surface fire initiates crowning. That is Van Wagner's (1977) intensity test
+ *     against the cell's own surface fireline intensity, it depends on nothing outside the
+ *     cell, and it is evaluated once per cell in the precompute.
+ *   - An active crown fire is burning INTO it from the cell the fire arrives from, and its
+ *     own canopy can carry an active crown fire (Van Wagner's critical mass flow criterion
+ *     alone, `canSustainActiveCrown`). An established crown fire sustains itself through
+ *     continuous canopy; requiring every cell to re-initiate from its own sheltered surface
+ *     fire is exactly the under-prediction Cruz & Alexander (2010) identify in linked
+ *     Rothermel/Van Wagner models, and with the midflame factor under a closed stand near
+ *     0.10 it stopped every crown run dead at the edge of the timber. This half depends on
+ *     which neighbour the fire arrives from, so it is decided during propagation.
+ *
+ * The precompute still evaluates no crown fire inside the loop: it stores both answers per
+ * cell, and the loop only selects between them. A cell whose canopy cannot sustain crown
+ * fire falls back to its surface rate, and a cell with no canopy is never touched.
  *
  * Nothing here uses randomness, so a scenario plus a landscape reproduces a run exactly
  * and no seed has to be recorded.
@@ -42,6 +60,9 @@ import { prepareFuelBed, spreadFromBed, type FuelMoisture, type SpreadResult } f
 import { mercatorToLonLat, type LandscapeGrid } from "./landscape";
 import {
   DEFAULT_FOLIAR_MOISTURE_FRACTION,
+  TEN_METER_WIND_PER_TWENTY_FOOT_WIND,
+  activeCrownRateMetersPerMinute,
+  canSustainActiveCrown,
   crownFireBehaviour,
   windAdjustmentFactor,
   type CanopyCell,
@@ -293,7 +314,16 @@ export const KW_PER_METER_PER_BTU_PER_FOOT_PER_SECOND = 3.4613;
 export const KILOMETERS_PER_MILE = 1.609344;
 
 /**
- * Length-to-breadth of a fully developed (active) crown fire, from the 10 m open wind.
+ * Length-to-breadth of a fully developed (active) crown fire, from the 20-foot open wind.
+ *
+ * UNITS. The relation below is published on the 10 m open wind in km/h, and
+ * `FireScenario.windSpeedMph` is the 20-foot wind in mph, so this function converts twice:
+ * 20-foot to 10 m by `TEN_METER_WIND_PER_TWENTY_FOOT_WIND` (Turner & Lawson 1978,
+ * U_20ft = 0.87 * U_10m — the same constant `crownFire.ts` applies before its own Cruz
+ * call, imported rather than restated so the two cannot drift), then mph to km/h. Skipping
+ * the first conversion left this function 13 percent low on wind and disagreeing with the
+ * rate of spread it was shaping; at a 40 mph 20-foot wind it returned 7.23 where the
+ * relation gives 7.82.
  *
  * Shape has to be handled explicitly, not inherited. The surface ellipse uses the
  * Anderson (1983) relation driven by the *midflame* wind, and under a closed canopy that
@@ -323,8 +353,9 @@ export const CROWN_LENGTH_TO_BREADTH_ASYMPTOTE = 8.729;
 export const CROWN_LENGTH_TO_BREADTH_WIND_COEFFICIENT_PER_KM_PER_HOUR = 0.03;
 export const CROWN_LENGTH_TO_BREADTH_EXPONENT = 2.155;
 
-export function crownLengthToBreadth(openWindSpeedMph: number): number {
-  const kilometersPerHour = Math.max(openWindSpeedMph, 0) * KILOMETERS_PER_MILE;
+export function crownLengthToBreadth(twentyFootWindSpeedMph: number): number {
+  const kilometersPerHour =
+    Math.max(twentyFootWindSpeedMph, 0) * TEN_METER_WIND_PER_TWENTY_FOOT_WIND * KILOMETERS_PER_MILE;
   return (
     1 +
     CROWN_LENGTH_TO_BREADTH_ASYMPTOTE *
@@ -750,6 +781,20 @@ export function simulateFireSpread(landscape: LandscapeGrid, scenario: FireScena
   const vegetated = new Uint8Array(cellCount);
   /** Fire type per cell, one of `CROWN_SURFACE`, `CROWN_PASSIVE`, `CROWN_ACTIVE`. */
   const crownType = new Uint8Array(cellCount).fill(CROWN_SURFACE);
+  /**
+   * Whether this cell's own canopy can sustain an active crown fire arriving from
+   * outside (Van Wagner's critical mass flow criterion alone, independent of this cell's
+   * own surface intensity). Set once per cell in this precompute, same as `crownType`;
+   * the relaxation loop only reads it, it never calls `canSustainActiveCrown` itself.
+   */
+  const canSustainCrown = new Uint8Array(cellCount);
+  /**
+   * The rate this cell would run at if reason (b) applies — fire arrives already
+   * actively crowning and this canopy can carry it onward. Floored at the surface rate,
+   * same construction as the self-initiated active rate, so the two are directly
+   * comparable. 0 where `canSustainCrown` is 0.
+   */
+  const sustainedCrownRateMetersPerMinute = new Float32Array(cellCount);
   const structureEccentricity = eccentricityOf(STRUCTURE_LENGTH_TO_BREADTH);
   const structureSpotReach = spotReachFor(STRUCTURE_FIRELINE_INTENSITY_BTU_PER_FOOT_PER_SECOND);
 
@@ -837,6 +882,22 @@ export function simulateFireSpread(landscape: LandscapeGrid, scenario: FireScena
           : surfaceRateMetersPerMinute;
         if (crown.type === "active") cellEccentricity = activeCrownEccentricity;
       }
+
+      // Reason (b), stored but not selected here. This is a property of the canopy and
+      // the weather alone (Van Wagner's critical mass flow criterion), independent of
+      // whether THIS cell's own surface fire is intense enough to initiate crowning, so
+      // it is computed unconditionally rather than only when `crown.type !== "surface"`.
+      if (canSustainActiveCrown(canopy, scenario.windSpeedMph, scenario.moisture.dead1h)) {
+        canSustainCrown[i] = 1;
+        sustainedCrownRateMetersPerMinute[i] = Math.max(
+          surfaceRateMetersPerMinute,
+          activeCrownRateMetersPerMinute(
+            scenario.windSpeedMph,
+            canopy.bulkDensityKgPerM3,
+            scenario.moisture.dead1h,
+          ),
+        );
+      }
     }
 
     if (i === originCell) {
@@ -876,6 +937,18 @@ export function simulateFireSpread(landscape: LandscapeGrid, scenario: FireScena
   const arrival = new Float64Array(cellCount).fill(Number.POSITIVE_INFINITY);
   arrival[originCell] = 0;
   const arrivalMechanism = new Uint8Array(cellCount);
+  /**
+   * Whether the edge that currently holds each cell's best-known (possibly still
+   * provisional) arrival time came from a source that was itself spreading as an active
+   * crown fire. Updated in lockstep with `arrival` and `arrivalMechanism` every time a
+   * candidate improves on the stored arrival time, so it always describes the same edge
+   * `arrival` does. Because Dijkstra over nonnegative edge weights pops each cell for the
+   * first time at its final minimal arrival time, the value read back when a cell is
+   * popped is the value belonging to the path that actually won — never a later, losing
+   * update — which is what lets the relaxation loop select this cell's outgoing crown
+   * state once, at settle time, and never revisit it.
+   */
+  const arrivedFromActiveCrown = new Uint8Array(cellCount);
   const settled = new Uint8Array(cellCount);
   const heap = new TimeHeap(Math.min(cellCount, 1 << 16));
   heap.push(0, originCell);
@@ -920,6 +993,19 @@ export function simulateFireSpread(landscape: LandscapeGrid, scenario: FireScena
     if (time > scenario.horizonMinutes) break;
     settled[cell] = 1;
 
+    // Select this cell's outgoing crown state exactly once, right here at settle time:
+    // self-initiated (already in `headRate`/`eccentricity`/`crownType` from the
+    // precompute) unless an active crown fire arrived from outside AND this cell's own
+    // canopy can sustain it, in which case it continues as active. `arrival[cell]` itself
+    // is never touched by this; only the rate it goes on to spread OUT at is decided
+    // here, and because this code runs once per cell (guarded by `settled`), nothing
+    // after this point can change that cell's outgoing rate again.
+    if (cell !== originCell && canSustainCrown[cell] === 1 && arrivedFromActiveCrown[cell] === 1) {
+      headRate[cell] = Math.max(headRate[cell], sustainedCrownRateMetersPerMinute[cell]);
+      eccentricity[cell] = activeCrownEccentricity;
+      crownType[cell] = CROWN_ACTIVE;
+    }
+
     const rate = headRate[cell];
     if (rate <= 0) continue;
     const x = cell % width;
@@ -927,6 +1013,7 @@ export function simulateFireSpread(landscape: LandscapeGrid, scenario: FireScena
     if (x === 0 || y === 0 || x === width - 1 || y === height - 1) reachedEdge = true;
     const sourceMechanism =
       fuelCodes[cell] === DEVELOPED_FUEL_CODE ? ARRIVAL_STRUCTURE : ARRIVAL_SURFACE;
+    const sourceIsActiveCrown = crownType[cell] === CROWN_ACTIVE;
     const floor = minDirectionalRate[cell];
 
     for (let n = 0; n < NEIGHBOURS.length; n++) {
@@ -958,6 +1045,7 @@ export function simulateFireSpread(landscape: LandscapeGrid, scenario: FireScena
       if (candidate < arrival[neighbour]) {
         arrival[neighbour] = candidate;
         arrivalMechanism[neighbour] = sourceMechanism;
+        arrivedFromActiveCrown[neighbour] = sourceIsActiveCrown ? 1 : 0;
         heap.push(candidate, neighbour);
       }
     }
@@ -999,6 +1087,10 @@ export function simulateFireSpread(landscape: LandscapeGrid, scenario: FireScena
         if (candidate < arrival[target]) {
           arrival[target] = candidate;
           arrivalMechanism[target] = ARRIVAL_SPOTTING;
+          // An ember crossing a gap breaks canopy continuity by construction (the gap is
+          // unvegetated ground), so a spot ignition is never a continuation of an active
+          // crown fire, regardless of what a losing surface-neighbour relaxation set.
+          arrivedFromActiveCrown[target] = 0;
           heap.push(candidate, target);
         }
         break;
