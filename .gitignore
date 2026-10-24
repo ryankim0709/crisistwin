@@ -1,0 +1,20 @@
+# Local credentials and configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Local caches and build outputs
+node_modules/
+.next/
+dist/
+coverage/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local operating system files
+.DS_Store
