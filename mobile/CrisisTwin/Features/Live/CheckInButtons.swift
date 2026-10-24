@@ -84,10 +84,13 @@ struct CheckInButtons: View {
                         .foregroundStyle(.primary)
                 }
                 Text(title)
-                    .lineLimit(1)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
                     .minimumScaleFactor(0.8)
             }
             .font(.headline)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 6)
             .frame(maxWidth: .infinity, minHeight: 56)
             .contentShape(.capsule)
         }
