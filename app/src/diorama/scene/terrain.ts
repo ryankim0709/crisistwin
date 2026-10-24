@@ -37,7 +37,9 @@ export function createFireUniforms(fire: FireField, wind: { x: number; z: number
   tex.needsUpdate = true;
   return {
     uFire: { value: tex },
-    uFireGrid: { value: new THREE.Vector4(fire.originX, fire.originZ, fire.cellSize, fire.burnDuration) },
+    uFireGrid: {
+      value: new THREE.Vector4(fire.originX, fire.originZ, fire.cellSize, fire.burnDuration),
+    },
     uFireSize: { value: new THREE.Vector2(fire.cols, fire.rows) },
     uSimT: { value: 0 },
     uTime: { value: 0 },
@@ -135,23 +137,46 @@ function attachFireShader(material: THREE.MeshStandardMaterial, uniforms: FireUn
     Object.assign(shader.uniforms, uniforms);
     shader.vertexShader = shader.vertexShader
       .replace("#include <common>", "#include <common>\nvarying vec2 vFireXZ;")
-      .replace("#include <begin_vertex>", "#include <begin_vertex>\nvFireXZ = (modelMatrix * vec4(transformed, 1.0)).xz;");
+      .replace(
+        "#include <begin_vertex>",
+        "#include <begin_vertex>\nvFireXZ = (modelMatrix * vec4(transformed, 1.0)).xz;",
+      );
     shader.fragmentShader = shader.fragmentShader
       .replace("#include <common>", `#include <common>\n${FIRE_GLSL}`)
-      .replace("#include <color_fragment>", "#include <color_fragment>\nvec3 fireEmissive = applyFire(diffuseColor.rgb);")
-      .replace("#include <emissivemap_fragment>", "#include <emissivemap_fragment>\ntotalEmissiveRadiance += fireEmissive;");
+      .replace(
+        "#include <color_fragment>",
+        "#include <color_fragment>\nvec3 fireEmissive = applyFire(diffuseColor.rgb);",
+      )
+      .replace(
+        "#include <emissivemap_fragment>",
+        "#include <emissivemap_fragment>\ntotalEmissiveRadiance += fireEmissive;",
+      );
   };
   material.customProgramCacheKey = () => "diorama-terrain-fire";
 }
 
 const tmp = new THREE.Color();
 
-function terrainColor(world: World, x: number, z: number, h: number, jitter: number, out: THREE.Color) {
+function terrainColor(
+  world: World,
+  x: number,
+  z: number,
+  h: number,
+  jitter: number,
+  out: THREE.Color,
+) {
   const c = out.set(PALETTE.meadow);
-  c.lerp(tmp.set(PALETTE.meadowLight), smoothstep(0.35, 0.9, hash2(Math.floor(x / 37), Math.floor(z / 31))) * 0.5);
+  c.lerp(
+    tmp.set(PALETTE.meadowLight),
+    smoothstep(0.35, 0.9, hash2(Math.floor(x / 37), Math.floor(z / 31))) * 0.5,
+  );
   const north = smoothstep(-50, -120, z);
   const hill = smoothstep(8, 35, h);
-  const fringe = Math.max(smoothstep(150, 200, z) * 0.7, smoothstep(-230, -300, x) * 0.6, x > 150 && (z < -20 || z > 120) ? 0.4 : 0);
+  const fringe = Math.max(
+    smoothstep(150, 200, z) * 0.7,
+    smoothstep(-230, -300, x) * 0.6,
+    x > 150 && (z < -20 || z > 120) ? 0.4 : 0,
+  );
   c.lerp(tmp.set(PALETTE.forest), Math.max(north * 0.85, hill * 0.6, fringe));
   c.lerp(tmp.set(PALETTE.deepForest), hill * north * 0.75);
   const rd = distanceToPolyline({ x, z }, world.river.points);
@@ -171,13 +196,24 @@ export function buildTerrain(world: World, fireUniforms: FireUniforms): THREE.Me
   const sx = world.width / nx;
   const sz = world.depth / nz;
   const heights = new Float32Array((nx + 1) * (nz + 1));
-  for (let j = 0; j <= nz; j++) for (let i = 0; i <= nx; i++) heights[j * (nx + 1) + i] = heightAt(x0 + i * sx, z0 + j * sz);
+  for (let j = 0; j <= nz; j++)
+    for (let i = 0; i <= nx; i++) heights[j * (nx + 1) + i] = heightAt(x0 + i * sx, z0 + j * sz);
 
   const positions = new Float32Array(nx * nz * 6 * 3);
   const colors = new Float32Array(nx * nz * 6 * 3);
   const color = new THREE.Color();
   let v = 0;
-  const pushTri = (ax: number, az: number, bx: number, bz: number, cx: number, cz: number, ai: number, bi: number, ci: number) => {
+  const pushTri = (
+    ax: number,
+    az: number,
+    bx: number,
+    bz: number,
+    cx: number,
+    cz: number,
+    ai: number,
+    bi: number,
+    ci: number,
+  ) => {
     const ha = heights[ai];
     const hb = heights[bi];
     const hc = heights[ci];
@@ -223,7 +259,12 @@ export function buildTerrain(world: World, fireUniforms: FireUniforms): THREE.Me
   g.setAttribute("position", new THREE.BufferAttribute(positions, 3));
   g.setAttribute("color", new THREE.BufferAttribute(colors, 3));
   g.computeVertexNormals();
-  const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.96, metalness: 0, flatShading: true });
+  const material = new THREE.MeshStandardMaterial({
+    vertexColors: true,
+    roughness: 0.96,
+    metalness: 0,
+    flatShading: true,
+  });
   attachFireShader(material, fireUniforms);
   const mesh = new THREE.Mesh(g, material);
   mesh.receiveShadow = true;
@@ -240,7 +281,17 @@ export function buildPlinth(world: World): THREE.Group {
   const positions: number[] = [];
   const colors: number[] = [];
   const c = new THREE.Color();
-  const quad = (ax: number, az: number, bx: number, bz: number, ya0: number, ya1: number, yb0: number, yb1: number, col: number) => {
+  const quad = (
+    ax: number,
+    az: number,
+    bx: number,
+    bz: number,
+    ya0: number,
+    ya1: number,
+    yb0: number,
+    yb1: number,
+    col: number,
+  ) => {
     c.set(col);
     positions.push(ax, ya0, az, bx, yb0, bz, bx, yb1, bz, ax, ya0, az, bx, yb1, bz, ax, ya1, az);
     for (let k = 0; k < 6; k++) colors.push(c.r, c.g, c.b);
@@ -270,10 +321,21 @@ export function buildPlinth(world: World): THREE.Group {
       const hb = heightAt(pbx, pbz);
       const la = levels(ha);
       const lb = levels(hb);
-      for (let k = 0; k < 4; k++) quad(pax, paz, pbx, pbz, la[k + 1], la[k], lb[k + 1], lb[k], bandColors[k]);
+      for (let k = 0; k < 4; k++)
+        quad(pax, paz, pbx, pbz, la[k + 1], la[k], lb[k + 1], lb[k], bandColors[k]);
       // Resin "water" where the river meets the cut edge.
       if (ha < WATER_LEVEL || hb < WATER_LEVEL) {
-        quad(pax, paz, pbx, pbz, Math.min(ha, WATER_LEVEL), WATER_LEVEL, Math.min(hb, WATER_LEVEL), WATER_LEVEL, PALETTE.waterSide);
+        quad(
+          pax,
+          paz,
+          pbx,
+          pbz,
+          Math.min(ha, WATER_LEVEL),
+          WATER_LEVEL,
+          Math.min(hb, WATER_LEVEL),
+          WATER_LEVEL,
+          PALETTE.waterSide,
+        );
       }
     }
   }
@@ -281,7 +343,15 @@ export function buildPlinth(world: World): THREE.Group {
   g.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
   g.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
   g.computeVertexNormals();
-  const sidesMesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, side: THREE.DoubleSide, flatShading: true }));
+  const sidesMesh = new THREE.Mesh(
+    g,
+    new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      roughness: 1,
+      side: THREE.DoubleSide,
+      flatShading: true,
+    }),
+  );
   sidesMesh.receiveShadow = true;
   group.add(sidesMesh);
 
@@ -337,8 +407,13 @@ void main() {
 `;
 
 /** Water ribbon at WATER_LEVEL; the terrain clips its banks into a natural shoreline. */
-export function buildWater(world: World): { mesh: THREE.Mesh; uniforms: { uTime: { value: number } } } {
-  const curve = new THREE.CatmullRomCurve3(world.river.points.map((p) => new THREE.Vector3(p.x, 0, p.z)));
+export function buildWater(world: World): {
+  mesh: THREE.Mesh;
+  uniforms: { uTime: { value: number } };
+} {
+  const curve = new THREE.CatmullRomCurve3(
+    world.river.points.map((p) => new THREE.Vector3(p.x, 0, p.z)),
+  );
   const length = curve.getLength();
   const n = Math.ceil(length / 3);
   const half = world.river.halfWidth + 16;

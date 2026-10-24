@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { IconButton, LoadingState, Notice, Panel, Tag } from "../ui";
 import { createScenario } from "./scenario";
 import { DioramaScene } from "./scene/DioramaScene";
 import type { PickTarget } from "./types";
@@ -9,7 +10,8 @@ import { formatCount, phaseAt, useMediaQuery } from "./ui/format";
 import Legend from "./ui/Legend";
 import PickLabel from "./ui/PickLabel";
 import PlaybackDock from "./ui/PlaybackDock";
-import RecapCard, { useCountdown } from "./ui/RecapCard";
+import RecapCard from "./ui/RecapCard";
+import { useCountdown } from "./ui/useCountdown";
 import { usePlayback } from "./ui/usePlayback";
 import "./diorama.css";
 
@@ -22,7 +24,8 @@ const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
 type SceneStatus = { kind: "loading" } | { kind: "ready" } | { kind: "error"; message: string };
 
 /** Elements whose own Space handling must win over the global play/pause shortcut. */
-const SPACE_OWNERS = "button, a[href], select, textarea, summary, [contenteditable], input:not([type='range'])";
+const SPACE_OWNERS =
+  "button, a[href], select, textarea, summary, [contenteditable], input:not([type='range'])";
 
 export default function DioramaPage() {
   // Scenario data is deterministic and built once; scene rendering and playback stay separate.
@@ -39,7 +42,10 @@ export default function DioramaPage() {
   const [noteOpen, setNoteOpen] = useState(false);
 
   // Imperative per-frame path: clock → scenario.sample → scene.update, with no React render.
-  const onTime = useCallback((t: number) => sceneRef.current?.update(scenario.sample(t)), [scenario]);
+  const onTime = useCallback(
+    (t: number) => sceneRef.current?.update(scenario.sample(t)),
+    [scenario],
+  );
   const playback = usePlayback({ duration: scenario.duration, autoPlay: true, onTime });
   const { getTime } = playback;
 
@@ -51,9 +57,13 @@ export default function DioramaPage() {
     if (!host) return;
     let scene: DioramaScene;
     try {
-      scene = new DioramaScene(host, WORLD, scenario.fire, { reducedMotion: reducedMotionRef.current });
+      scene = new DioramaScene(host, WORLD, scenario.fire, {
+        reducedMotion: reducedMotionRef.current,
+      });
     } catch (error) {
       console.error("Diorama scene could not start", error);
+      // Scene construction is an external system that can fail (no WebGL); report it once.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setStatus({
         kind: "error",
         message: error instanceof Error ? error.message : "WebGL could not be initialised.",
@@ -102,7 +112,10 @@ export default function DioramaPage() {
     return () => observer.disconnect();
   }, [status.kind]);
 
-  const project = useCallback((target: PickTarget) => sceneRef.current?.project(target) ?? null, []);
+  const project = useCallback(
+    (target: PickTarget) => sceneRef.current?.project(target) ?? null,
+    [],
+  );
   const resetView = useCallback(() => sceneRef.current?.resetView(), []);
 
   // Recap and loop: at the end, show the recap and restart after a pause unless the viewer
@@ -156,47 +169,51 @@ export default function DioramaPage() {
         <div className="dio-scene" ref={sceneHostRef} aria-hidden={status.kind === "error"} />
 
         {status.kind === "loading" && (
-          <div className="dio-veil" role="status">
-            <span className="dio-veil-dot" aria-hidden="true" />
-            Building the miniature…
+          <div className="dio-veil">
+            <LoadingState>Building the miniature…</LoadingState>
           </div>
         )}
 
         {status.kind === "error" && (
-          <div className="dio-error dio-panel" role="alert">
-            <p className="dio-error-title">3D view unavailable in this browser</p>
-            <p>
-              The diorama needs WebGL, which appears to be disabled or unsupported here. The scripted captions,
-              counters and timeline below still play.
-            </p>
+          <Panel glass className="dio-error">
+            <Notice tone="danger" title="3D view unavailable in this browser">
+              The diorama needs WebGL, which appears to be disabled or unsupported here. The
+              scripted captions, counters and timeline below still play.
+            </Notice>
             <p className="dio-error-detail">{status.message}</p>
-          </div>
+          </Panel>
         )}
 
         <div className="dio-overlay">
-          <header className="dio-title dio-panel">
+          <Panel glass compact className="dio-title">
             <h1>Larkspur Hollow · Wildfire evacuation</h1>
             <div className="dio-disclaimer">
-              <span className="dio-chip">Fictional scenario · Synthetic data · Visual demonstration</span>
-              <button
-                type="button"
-                className="dio-disclaimer-more"
+              <Tag tone="warning">Fictional scenario · Synthetic data · Visual demonstration</Tag>
+              <IconButton
+                size="sm"
+                variant="secondary"
+                label="About this visualization"
                 aria-expanded={noteOpen}
                 aria-controls="dio-disclaimer-note"
-                aria-label="About this visualization"
                 onClick={() => setNoteOpen((open) => !open)}
               >
                 i
-              </button>
+              </IconButton>
             </div>
-            <p id="dio-disclaimer-note" className="dio-disclaimer-note" data-open={noteOpen}>
-              Scripted visualization, not a validated fire model or operational guidance.
-            </p>
-          </header>
+            <div id="dio-disclaimer-note" className="dio-disclaimer-note" data-open={noteOpen}>
+              <Notice tone="warning" title="Scripted visualization.">
+                Not a validated fire model or operational guidance.
+              </Notice>
+            </div>
+          </Panel>
 
           <Counters counters={snapshot.counters} />
 
-          <Caption phaseLabel={phase?.label ?? ""} caption={snapshot.caption} reducedMotion={reducedMotion} />
+          <Caption
+            phaseLabel={phase?.label ?? ""}
+            caption={snapshot.caption}
+            reducedMotion={reducedMotion}
+          />
 
           <Legend world={WORLD} defaultOpen={wide} />
 

@@ -13,6 +13,7 @@ import type { Feature, FeatureCollection, Polygon, Position } from "geojson";
 import { ARRIVAL_COLORS, CURRENT_PERIMETER_COLOR } from "../fire/FireMap";
 import { mercatorToLonLat, type MercatorBox } from "../fire/landscape";
 import { formatElapsed, type GeoPoint } from "../fire/spread";
+import { Button, Legend, Notice, Panel, Tag } from "../ui";
 import type { IgnitionDisplayState, ScheduledIgnition, StudioMapProps } from "./contracts";
 import "./studioMap.css";
 
@@ -722,29 +723,30 @@ export default function StudioMap({
     <div className="studio-map">
       <div ref={container} className="studio-map__canvas" />
 
-      <button type="button" className="studio-map__zoom-fire" onClick={zoomToFire}>
+      <Button variant="secondary" size="sm" className="studio-map__zoom-fire" onClick={zoomToFire}>
         Zoom to fire
-      </button>
+      </Button>
 
       <div className="studio-map__banners">
         {footprintIsStale && (
-          <p className="studio-map__stale" role="status">
-            Previous run, out of date
-          </p>
+          <div role="status">
+            <Tag tone="warning">Previous run, out of date</Tag>
+          </div>
         )}
         {warnings.length > 0 && (
           <ul className="studio-map__warnings" aria-label="Model warnings">
             {warnings.map((warning) => (
               <li key={warning}>
-                <span aria-hidden="true">⚠ </span>
-                {warning}
+                <Notice className="studio-map__warning">
+                  <span aria-hidden="true">⚠</span> {warning}
+                </Notice>
               </li>
             ))}
           </ul>
         )}
       </div>
 
-      <div className="studio-map__wind studio-map__assumption" role="img" aria-label={windCaption}>
+      <div className="studio-map__wind ui-theme-dark" role="img" aria-label={windCaption}>
         <svg viewBox="0 0 40 40" width="40" height="40" aria-hidden="true">
           <g
             fill="none"
@@ -765,20 +767,23 @@ export default function StudioMap({
       </div>
 
       {compactLegend && (
-        <button
-          type="button"
+        <Button
+          variant="secondary"
+          size="sm"
           className="studio-map__legend-toggle"
           aria-expanded={legendOpen}
           aria-controls="studio-map-legend"
           onClick={() => setLegendOpen((open) => !open)}
         >
           {legendOpen ? "Hide legend" : "Legend"}
-        </button>
+        </Button>
       )}
       {legendOpen && (
-        <section
+        <Panel
+          glass
+          compact
           id="studio-map-legend"
-          className={`studio-map__legend${compactLegend ? " studio-map__legend--compact" : ""}`}
+          className={`ui-theme-dark studio-map__legend${compactLegend ? " studio-map__legend--compact" : ""}`}
           aria-label="Map legend"
         >
           {!compactLegend && (
@@ -805,13 +810,14 @@ export default function StudioMap({
           <div className="studio-map__legend-group studio-map__legend-group--output">
             <h3>Modelled output</h3>
             <p className="studio-map__legend-sub">Arrival time, minutes from T+0</p>
-            <ul className="studio-map__bands">
-              {bands.map((band) => (
-                <li key={band.from}>
-                  <span className="studio-map__swatch" style={{ background: band.color }} />
-                  {band.from}–{band.to} min
-                </li>
-              ))}
+            <Legend
+              label="Arrival time bands"
+              items={bands.map((band) => ({
+                label: `${band.from}–${band.to} min`,
+                color: band.color,
+              }))}
+            />
+            <ul className="ui-legend studio-map__extras">
               <li>
                 <span className="studio-map__swatch studio-map__swatch--current" />
                 Current extent, {formatElapsed(currentMinute)}
@@ -834,13 +840,13 @@ export default function StudioMap({
               ))}
             </ul>
           </div>
-        </section>
+        </Panel>
       )}
 
       {error && (
-        <p className="studio-map__error" role="status">
+        <Notice tone="danger" className="studio-map__error">
           {error}
-        </p>
+        </Notice>
       )}
     </div>
   );

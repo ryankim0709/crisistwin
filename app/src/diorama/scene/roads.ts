@@ -4,9 +4,19 @@ import { WATER_LEVEL, heightAt, polylineLength, pointAtDistance } from "../world
 import { box, mergeAll, paint, ribbon } from "./geometry";
 import { PALETTE } from "./palette";
 
-export const ROAD_WIDTH: Record<RoadKind, number> = { main: 7, residential: 5.5, "fire-road": 4, bridge: 6.2 };
+export const ROAD_WIDTH: Record<RoadKind, number> = {
+  main: 7,
+  residential: 5.5,
+  "fire-road": 4,
+  bridge: 6.2,
+};
 /** Vertical lift above the terrain per road kind (distinct values avoid z-fighting at junctions). */
-const ROAD_LIFT: Record<RoadKind, number> = { main: 0.34, residential: 0.3, "fire-road": 0.26, bridge: 0.34 };
+const ROAD_LIFT: Record<RoadKind, number> = {
+  main: 0.34,
+  residential: 0.3,
+  "fire-road": 0.26,
+  bridge: 0.34,
+};
 const ROAD_COLOR: Record<RoadKind, number> = {
   main: PALETTE.roadMain,
   residential: PALETTE.roadResidential,
@@ -42,9 +52,16 @@ export function createBridgeProfile(world: World): BridgeProfile {
   const yb = heightAt(b.x, b.z) + ROAD_LIFT.main;
   // Constant clearance above the water at mid-span, with a gentle arch.
   const rise = Math.max(1.2, WATER_LEVEL + 3.8 - (ya + yb) / 2);
-  const deckY = (s: number) => ya + (yb - ya) * s + rise * Math.sin(Math.PI * Math.min(1, Math.max(0, s)));
+  const deckY = (s: number) =>
+    ya + (yb - ya) * s + rise * Math.sin(Math.PI * Math.min(1, Math.max(0, s)));
   const length = Math.hypot(b.x - a.x, b.z - a.z);
-  return { a, b, length, deckY, midpoint: new THREE.Vector3((a.x + b.x) / 2, deckY(0.5), (a.z + b.z) / 2) };
+  return {
+    a,
+    b,
+    length,
+    deckY,
+    midpoint: new THREE.Vector3((a.x + b.x) / 2, deckY(0.5), (a.z + b.z) / 2),
+  };
 }
 
 export function createSurfaceHeight(bridge: BridgeProfile): SurfaceHeight {
@@ -56,7 +73,8 @@ export function createSurfaceHeight(bridge: BridgeProfile): SurfaceHeight {
     const rz = z - bridge.a.z;
     const along = rx * dx + rz * dz;
     const lateral = Math.abs(rx * dz - rz * dx);
-    if (along >= 0 && along <= bridge.length && lateral <= halfWidth) return bridge.deckY(along / bridge.length);
+    if (along >= 0 && along <= bridge.length && lateral <= halfWidth)
+      return bridge.deckY(along / bridge.length);
     return heightAt(x, z) + ROAD_LIFT.main;
   };
 }
@@ -94,11 +112,21 @@ function buildBridge(bridge: BridgeProfile): THREE.BufferGeometry {
   const nz = -dx;
   const hw = ROAD_WIDTH.bridge / 2;
   const at = (s: number, off: number, dy = 0) =>
-    new THREE.Vector3(bridge.a.x + dx * bridge.length * s + nx * off, bridge.deckY(s) + dy, bridge.a.z + dz * bridge.length * s + nz * off);
+    new THREE.Vector3(
+      bridge.a.x + dx * bridge.length * s + nx * off,
+      bridge.deckY(s) + dy,
+      bridge.a.z + dz * bridge.length * s + nz * off,
+    );
   const positions: number[] = [];
   const colors: number[] = [];
   const c = new THREE.Color();
-  const quad = (p0: THREE.Vector3, p1: THREE.Vector3, p2: THREE.Vector3, p3: THREE.Vector3, col: number) => {
+  const quad = (
+    p0: THREE.Vector3,
+    p1: THREE.Vector3,
+    p2: THREE.Vector3,
+    p3: THREE.Vector3,
+    col: number,
+  ) => {
     c.set(col);
     for (const p of [p0, p1, p2, p0, p2, p3]) {
       positions.push(p.x, p.y, p.z);
@@ -110,17 +138,59 @@ function buildBridge(bridge: BridgeProfile): THREE.BufferGeometry {
     const s1 = (i + 1) / n;
     // Deck top, stone fascia on both sides, underside.
     quad(at(s0, hw), at(s0, -hw), at(s1, -hw), at(s1, hw), PALETTE.roadMain);
-    quad(at(s0, hw + 0.4, -DECK_THICKNESS), at(s0, hw + 0.4, 0.15), at(s1, hw + 0.4, 0.15), at(s1, hw + 0.4, -DECK_THICKNESS), PALETTE.stone);
-    quad(at(s0, -hw - 0.4, 0.15), at(s0, -hw - 0.4, -DECK_THICKNESS), at(s1, -hw - 0.4, -DECK_THICKNESS), at(s1, -hw - 0.4, 0.15), PALETTE.stone);
-    quad(at(s0, -hw - 0.4, -DECK_THICKNESS), at(s0, hw + 0.4, -DECK_THICKNESS), at(s1, hw + 0.4, -DECK_THICKNESS), at(s1, -hw - 0.4, -DECK_THICKNESS), PALETTE.stone);
+    quad(
+      at(s0, hw + 0.4, -DECK_THICKNESS),
+      at(s0, hw + 0.4, 0.15),
+      at(s1, hw + 0.4, 0.15),
+      at(s1, hw + 0.4, -DECK_THICKNESS),
+      PALETTE.stone,
+    );
+    quad(
+      at(s0, -hw - 0.4, 0.15),
+      at(s0, -hw - 0.4, -DECK_THICKNESS),
+      at(s1, -hw - 0.4, -DECK_THICKNESS),
+      at(s1, -hw - 0.4, 0.15),
+      PALETTE.stone,
+    );
+    quad(
+      at(s0, -hw - 0.4, -DECK_THICKNESS),
+      at(s0, hw + 0.4, -DECK_THICKNESS),
+      at(s1, hw + 0.4, -DECK_THICKNESS),
+      at(s1, -hw - 0.4, -DECK_THICKNESS),
+      PALETTE.stone,
+    );
     // Kerb tops so the deck edge reads as a stone parapet base.
-    quad(at(s0, hw + 0.4, 0.15), at(s0, hw, 0.15), at(s1, hw, 0.15), at(s1, hw + 0.4, 0.15), PALETTE.stone);
-    quad(at(s0, -hw, 0.15), at(s0, -hw - 0.4, 0.15), at(s1, -hw - 0.4, 0.15), at(s1, -hw, 0.15), PALETTE.stone);
+    quad(
+      at(s0, hw + 0.4, 0.15),
+      at(s0, hw, 0.15),
+      at(s1, hw, 0.15),
+      at(s1, hw + 0.4, 0.15),
+      PALETTE.stone,
+    );
+    quad(
+      at(s0, -hw, 0.15),
+      at(s0, -hw - 0.4, 0.15),
+      at(s1, -hw - 0.4, 0.15),
+      at(s1, -hw, 0.15),
+      PALETTE.stone,
+    );
     // Top rails as thin flat strips.
     for (const side of [1, -1]) {
       const off = side * (hw + 0.2);
-      quad(at(s0, off + 0.15, 1.35), at(s0, off - 0.15, 1.35), at(s1, off - 0.15, 1.35), at(s1, off + 0.15, 1.35), PALETTE.railing);
-      quad(at(s0, off + 0.15 * side, 1.1), at(s0, off + 0.15 * side, 1.35), at(s1, off + 0.15 * side, 1.35), at(s1, off + 0.15 * side, 1.1), PALETTE.railing);
+      quad(
+        at(s0, off + 0.15, 1.35),
+        at(s0, off - 0.15, 1.35),
+        at(s1, off - 0.15, 1.35),
+        at(s1, off + 0.15, 1.35),
+        PALETTE.railing,
+      );
+      quad(
+        at(s0, off + 0.15 * side, 1.1),
+        at(s0, off + 0.15 * side, 1.35),
+        at(s1, off + 0.15 * side, 1.35),
+        at(s1, off + 0.15 * side, 1.1),
+        PALETTE.railing,
+      );
     }
   }
   const deck = new THREE.BufferGeometry();
@@ -142,7 +212,18 @@ function buildBridge(bridge: BridgeProfile): THREE.BufferGeometry {
     const top = bridge.deckY(s) - DECK_THICKNESS;
     const bottom = WATER_LEVEL - 1.6;
     const p = at(s, 0);
-    parts.push(box(ROAD_WIDTH.bridge + 1.6, top - bottom, 1.8, p.x, (top + bottom) / 2, p.z, PALETTE.stone, yaw));
+    parts.push(
+      box(
+        ROAD_WIDTH.bridge + 1.6,
+        top - bottom,
+        1.8,
+        p.x,
+        (top + bottom) / 2,
+        p.z,
+        PALETTE.stone,
+        yaw,
+      ),
+    );
   }
   for (const s of [0, 1]) {
     const p = at(s, 0);
@@ -251,14 +332,29 @@ export class RoadLayer {
     const dashParts: THREE.BufferGeometry[] = [];
     for (const e of world.edges) {
       if (e.id === world.bridgeEdgeId) continue;
-      roadParts.push(paint(ribbon(e.points, ROAD_WIDTH[e.kind], terrainLift(ROAD_LIFT[e.kind]), 2.5, 2), ROAD_COLOR[e.kind], true));
+      roadParts.push(
+        paint(
+          ribbon(e.points, ROAD_WIDTH[e.kind], terrainLift(ROAD_LIFT[e.kind]), 2.5, 2),
+          ROAD_COLOR[e.kind],
+          true,
+        ),
+      );
       if (e.kind === "main") dashParts.push(...this.centreDashes(e));
     }
     for (const node of world.nodes) {
-      const incident = world.edges.filter((e) => (e.from === node.id || e.to === node.id) && e.kind !== "bridge");
+      const incident = world.edges.filter(
+        (e) => (e.from === node.id || e.to === node.id) && e.kind !== "bridge",
+      );
       if (incident.length === 0) continue;
       const widest = incident.reduce((w, e) => (ROAD_WIDTH[e.kind] > ROAD_WIDTH[w.kind] ? e : w));
-      roadParts.push(junctionDisc(node.p, ROAD_WIDTH[widest.kind] / 2, ROAD_LIFT[widest.kind] + 0.015, ROAD_COLOR[widest.kind]));
+      roadParts.push(
+        junctionDisc(
+          node.p,
+          ROAD_WIDTH[widest.kind] / 2,
+          ROAD_LIFT[widest.kind] + 0.015,
+          ROAD_COLOR[widest.kind],
+        ),
+      );
     }
     const roads = new THREE.Mesh(mergeAll(roadParts), roadMaterial());
     roads.receiveShadow = true;
@@ -273,7 +369,11 @@ export class RoadLayer {
       this.group.add(dashes);
     }
 
-    const bridgeMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, side: THREE.DoubleSide });
+    const bridgeMat = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      roughness: 0.85,
+      side: THREE.DoubleSide,
+    });
     this.bridgeMesh = new THREE.Mesh(buildBridge(this.bridge), bridgeMat);
     this.bridgeMesh.castShadow = true;
     this.bridgeMesh.receiveShadow = true;
@@ -301,7 +401,9 @@ export class RoadLayer {
       this.group.add(route);
     }
 
-    this.closureMaterial = decalMaterial(CLOSURE_FRAG, { uColor: { value: new THREE.Color(PALETTE.closure) } });
+    this.closureMaterial = decalMaterial(CLOSURE_FRAG, {
+      uColor: { value: new THREE.Color(PALETTE.closure) },
+    });
     this.buildBottleneck();
     this.group.add(this.bottleneck);
   }
@@ -311,20 +413,36 @@ export class RoadLayer {
     const len = polylineLength(e.points);
     for (let d = 6; d + 3.2 < len - 6; d += 9) {
       const pts = [0, 1.6, 3.2].map((k) => pointAtDistance(e.points, d + k).p);
-      out.push(paint(ribbon(pts, 0.35, terrainLift(ROAD_LIFT.main + 0.05), 1.6, 1), PALETTE.roadDash, true));
+      out.push(
+        paint(
+          ribbon(pts, 0.35, terrainLift(ROAD_LIFT.main + 0.05), 1.6, 1),
+          PALETTE.roadDash,
+          true,
+        ),
+      );
     }
     return out;
   }
 
   private buildBottleneck() {
-    const approach = this.world.edges.find((e) => e.to === this.bridgeNodeWest() && e.kind !== "bridge");
+    const approach = this.world.edges.find(
+      (e) => e.to === this.bridgeNodeWest() && e.kind !== "bridge",
+    );
     const ringGeo = new THREE.RingGeometry(8.2, 9.4, 48);
     ringGeo.rotateX(-Math.PI / 2);
-    const anchor = approach ? pointAtDistance(approach.points, polylineLength(approach.points) - 10).p : this.bridge.a;
+    const anchor = approach
+      ? pointAtDistance(approach.points, polylineLength(approach.points) - 10).p
+      : this.bridge.a;
     for (let i = 0; i < 2; i++) {
       const ring = new THREE.Mesh(
         ringGeo,
-        new THREE.MeshBasicMaterial({ color: PALETTE.coral, transparent: true, depthWrite: false, opacity: 0, toneMapped: false }),
+        new THREE.MeshBasicMaterial({
+          color: PALETTE.coral,
+          transparent: true,
+          depthWrite: false,
+          opacity: 0,
+          toneMapped: false,
+        }),
       );
       ring.position.set(anchor.x, this.surfaceHeight(anchor.x, anchor.z) + 0.5, anchor.z);
       ring.renderOrder = 3;
@@ -338,7 +456,13 @@ export class RoadLayer {
         const { p, heading } = pointAtDistance(approach.points, len - 8 - i * 8);
         const m = new THREE.Mesh(
           geo,
-          new THREE.MeshBasicMaterial({ color: PALETTE.coral, transparent: true, depthWrite: false, opacity: 0, toneMapped: false }),
+          new THREE.MeshBasicMaterial({
+            color: PALETTE.coral,
+            transparent: true,
+            depthWrite: false,
+            opacity: 0,
+            toneMapped: false,
+          }),
         );
         m.position.set(p.x, this.surfaceHeight(p.x, p.z) + 0.45, p.z);
         m.rotation.y = heading;
@@ -377,7 +501,10 @@ export class RoadLayer {
     const group = new THREE.Group();
     group.name = `closure-${id}`;
     const width = ROAD_WIDTH[e.kind] + 0.6;
-    const overlay = new THREE.Mesh(ribbon(e.points, width, (x, z) => this.surfaceHeight(x, z) + 0.1, 2.5, 1), this.closureMaterial);
+    const overlay = new THREE.Mesh(
+      ribbon(e.points, width, (x, z) => this.surfaceHeight(x, z) + 0.1, 2.5, 1),
+      this.closureMaterial,
+    );
     overlay.renderOrder = 2;
     group.add(overlay);
     const len = polylineLength(e.points);
@@ -391,15 +518,38 @@ export class RoadLayer {
       for (let k = 0; k < 5; k++) {
         const off = -span / 2 + seg * (k + 0.5);
         parts.push(
-          box(seg, 0.9, 0.35, p.x + Math.cos(heading) * off, y + 1.5, p.z - Math.sin(heading) * off, k % 2 ? PALETTE.ivory : PALETTE.closure, heading),
+          box(
+            seg,
+            0.9,
+            0.35,
+            p.x + Math.cos(heading) * off,
+            y + 1.5,
+            p.z - Math.sin(heading) * off,
+            k % 2 ? PALETTE.ivory : PALETTE.closure,
+            heading,
+          ),
         );
       }
       for (const side of [-1, 1]) {
         const off = side * span * 0.4;
-        parts.push(box(0.25, 1.2, 0.25, p.x + Math.cos(heading) * off, y + 0.6, p.z - Math.sin(heading) * off, PALETTE.ivory, heading));
+        parts.push(
+          box(
+            0.25,
+            1.2,
+            0.25,
+            p.x + Math.cos(heading) * off,
+            y + 0.6,
+            p.z - Math.sin(heading) * off,
+            PALETTE.ivory,
+            heading,
+          ),
+        );
       }
     }
-    const barriers = new THREE.Mesh(mergeAll(parts), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6 }));
+    const barriers = new THREE.Mesh(
+      mergeAll(parts),
+      new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6 }),
+    );
     barriers.castShadow = true;
     group.add(barriers);
     this.group.add(group);

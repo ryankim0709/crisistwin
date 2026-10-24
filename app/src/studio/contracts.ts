@@ -98,12 +98,7 @@ export interface LandscapeRequirement {
 // ---------------------------------------------------------------------------------------
 
 export type RunPhase =
-  | "editing"
-  | "loading-landscape"
-  | "computing"
-  | "ready"
-  | "failed"
-  | "canceled";
+  "editing" | "loading-landscape" | "computing" | "ready" | "failed" | "canceled";
 
 export interface StudioRunResult {
   requestId: number;

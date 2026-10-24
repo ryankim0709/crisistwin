@@ -14,7 +14,16 @@ export function phaseAt(phases: readonly Phase[], id: PhaseId): Phase | undefine
   return phases.find((phase) => phase.id === id);
 }
 
-const COMPASS = ["north", "north-east", "east", "south-east", "south", "south-west", "west", "north-west"];
+const COMPASS = [
+  "north",
+  "north-east",
+  "east",
+  "south-east",
+  "south",
+  "south-west",
+  "west",
+  "north-west",
+];
 
 /**
  * Bearing in degrees clockwise from map north for a world direction. World `x` grows east and
@@ -29,7 +38,9 @@ export const compassName = (bearing: number) => COMPASS[Math.round(bearing / 45)
 
 export function useMediaQuery(query: string): boolean {
   const [matches, setMatches] = useState(() =>
-    typeof window !== "undefined" && "matchMedia" in window ? window.matchMedia(query).matches : false,
+    typeof window !== "undefined" && "matchMedia" in window
+      ? window.matchMedia(query).matches
+      : false,
   );
   useEffect(() => {
     if (!("matchMedia" in window)) return;

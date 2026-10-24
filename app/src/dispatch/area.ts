@@ -341,7 +341,8 @@ export function dispatchBoxFor(
   }
   if (!Number.isFinite(minC)) return null;
   const mercatorPerGround = Math.abs(grid.cellSizeX) / grid.groundCellSizeMeters;
-  const halfGround = (cells: number) => (cells / 2) * grid.groundCellSizeMeters + AREA_BUFFER_METERS;
+  const halfGround = (cells: number) =>
+    (cells / 2) * grid.groundCellSizeMeters + AREA_BUFFER_METERS;
   const clampHalf = (meters: number) =>
     Math.min(MAX_AREA_HALF_METERS, Math.max(MIN_AREA_HALF_METERS, meters));
   const halfX = clampHalf(halfGround(maxC - minC + 1)) * mercatorPerGround;
@@ -353,8 +354,14 @@ export function dispatchBoxFor(
   const boardEast = grid.originX + (grid.width - 0.5) * grid.cellSizeX;
   const boardNorth = grid.originY - grid.cellSizeY / 2;
   const boardSouth = grid.originY + (grid.height - 0.5) * grid.cellSizeY;
-  const [w, s] = mercatorToLonLat(Math.max(boardWest, cx - halfX), Math.max(boardSouth, cy - halfY));
-  const [e, n] = mercatorToLonLat(Math.min(boardEast, cx + halfX), Math.min(boardNorth, cy + halfY));
+  const [w, s] = mercatorToLonLat(
+    Math.max(boardWest, cx - halfX),
+    Math.max(boardSouth, cy - halfY),
+  );
+  const [e, n] = mercatorToLonLat(
+    Math.min(boardEast, cx + halfX),
+    Math.min(boardNorth, cy + halfY),
+  );
   return [w, s, e, n];
 }
 

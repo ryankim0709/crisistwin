@@ -13,13 +13,7 @@ import {
   type StudioScenario,
 } from "./contracts";
 import { demoScenario } from "./demo";
-import {
-  clearDraft,
-  draftStatusText,
-  exportScenarioJson,
-  loadDraft,
-  saveDraft,
-} from "./draft";
+import { clearDraft, draftStatusText, exportScenarioJson, loadDraft, saveDraft } from "./draft";
 import {
   createIgnition,
   emptyScenario,
@@ -27,6 +21,8 @@ import {
   solverInputChanged,
   validateScenario,
 } from "./scenario";
+import { LoadingState, Notice } from "../ui";
+import { downloadJson, frameIndexAt } from "./playbackUtils";
 import { useStudioRun } from "./useStudioRun";
 import "./studio.css";
 
@@ -48,27 +44,6 @@ const FAST_HEAD_RATE_METERS_PER_MINUTE = 10;
 const SMALL_SPREAD_HECTARES = 5;
 const SQUARE_METERS_PER_HECTARE = 10_000;
 const OPERATIONAL_DISCLAIMER = "Planning experiment; not an operational forecast.";
-
-/** Index of the last frame at or before `minute`. */
-function frameIndexAt(frameMinutes: readonly number[], minute: number): number {
-  let index = 0;
-  for (let i = 0; i < frameMinutes.length; i += 1) {
-    if (frameMinutes[i] <= minute) index = i;
-    else break;
-  }
-  return index;
-}
-
-function downloadJson(filename: string, text: string): void {
-  const url = URL.createObjectURL(new Blob([text], { type: "application/json" }));
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-}
 
 export default function SimulationStudioPage() {
   const [initialDraft] = useState(loadDraft);
@@ -235,13 +210,10 @@ export default function SimulationStudioPage() {
     setMode("select");
   }, [applyScenario]);
 
-  const handleSelect = useCallback(
-    (id: string | null) => {
-      setSelectedId(id);
-      if (id === null) setMode((current) => (current === "move" ? "select" : current));
-    },
-    [],
-  );
+  const handleSelect = useCallback((id: string | null) => {
+    setSelectedId(id);
+    if (id === null) setMode((current) => (current === "move" ? "select" : current));
+  }, []);
 
   const handleExport = useCallback(() => {
     try {
@@ -279,7 +251,8 @@ export default function SimulationStudioPage() {
     const states: Record<string, IgnitionDisplayState> = {};
     for (const entry of result?.run.ignitions ?? []) {
       if (entry.outcome.status === "ignited") {
-        states[entry.sourceId] = entry.outcome.ignitedMinute <= currentMinute ? "triggered" : "scheduled";
+        states[entry.sourceId] =
+          entry.outcome.ignitedMinute <= currentMinute ? "triggered" : "scheduled";
       } else {
         states[entry.sourceId] =
           entry.outcome.reachedMinute <= currentMinute ? "reached-before-start" : "scheduled";
@@ -292,7 +265,8 @@ export default function SimulationStudioPage() {
     const states: Record<string, IgnitionDisplayState> = {};
     for (const ignition of scenario.ignitions) {
       if (!ignition.enabled) states[ignition.id] = "disabled";
-      else if (issueIds.has(ignition.id) || problemIds.has(ignition.id)) states[ignition.id] = "invalid";
+      else if (issueIds.has(ignition.id) || problemIds.has(ignition.id))
+        states[ignition.id] = "invalid";
       else if (!result || stale) states[ignition.id] = "draft";
       else states[ignition.id] = resultStates[ignition.id] ?? "draft";
     }
@@ -315,7 +289,9 @@ export default function SimulationStudioPage() {
       }
       if (!solved.crownFire.modelled) list.push(solved.crownFire.unavailableReason);
       if (!result.elevationComplete) {
-        list.push("Elevation data was incomplete for part of the area, so slope is understated there.");
+        list.push(
+          "Elevation data was incomplete for part of the area, so slope is understated there.",
+        );
       }
       const horizonFrame = solved.frames[solved.frames.length - 1];
       if (
@@ -364,12 +340,10 @@ export default function SimulationStudioPage() {
     return details;
   }, [result, stale]);
 
-  const attribution = useMemo(
-    () => (result ? Object.values(result.attribution) : []),
-    [result],
-  );
+  const attribution = useMemo(() => (result ? Object.values(result.attribution) : []), [result]);
 
-  const playbackHorizon = result?.scenario.settings.horizonMinutes ?? scenario.settings.horizonMinutes;
+  const playbackHorizon =
+    result?.scenario.settings.horizonMinutes ?? scenario.settings.horizonMinutes;
 
   const events = useMemo(
     () =>
@@ -438,21 +412,35 @@ export default function SimulationStudioPage() {
 
         <div className="studio-page-status" aria-live="polite">
           {state.phase === "loading-landscape" && (
-            <p className="studio-chip">Loading fuel and terrain data…</p>
+            <div className="studio-chip">
+              <LoadingState>Loading fuel and terrain data…</LoadingState>
+            </div>
           )}
-          {state.phase === "computing" && <p className="studio-chip">Computing fire spread…</p>}
-          {state.phase === "canceled" && <p className="studio-chip">Run canceled.</p>}
+          {state.phase === "computing" && (
+            <div className="studio-chip">
+              <LoadingState>Computing fire spread…</LoadingState>
+            </div>
+          )}
+          {state.phase === "canceled" && (
+            <Notice tone="info" className="studio-chip-notice">
+              Run canceled.
+            </Notice>
+          )}
           {state.phase === "failed" && state.error && (
-            <p className="studio-chip studio-chip-error" role="alert">
+            <Notice tone="danger" className="studio-chip-notice">
               {state.error.message}
-            </p>
+            </Notice>
           )}
           {!running && scenario.ignitions.length === 0 && (
-            <p className="studio-chip">
+            <Notice tone="info" className="studio-chip-notice">
               Choose “Add ignition” and click the map to place a fire, or load the demo scenario.
-            </p>
+            </Notice>
           )}
-          {notice && <p className="studio-chip">{notice}</p>}
+          {notice && (
+            <Notice tone="info" className="studio-chip-notice">
+              {notice}
+            </Notice>
+          )}
         </div>
 
         <div className={`studio-page-panel${panelCollapsed ? " is-collapsed" : ""}`}>
@@ -485,7 +473,9 @@ export default function SimulationStudioPage() {
 
       <div className="studio-dock">
         {result && stale && (
-          <p className="studio-previous">Playing the previous run; run again to include your edits.</p>
+          <Notice className="studio-previous">
+            Playing the previous run; run again to include your edits.
+          </Notice>
         )}
         <PlaybackBar
           enabled={result !== null && frameMinutes.length > 0}

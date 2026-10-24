@@ -38,7 +38,8 @@ export const CALIFORNIA_REGIONS: readonly LandscapeRegion[] = [
     name: "Montclair & Redwood Regional",
     area: "San Francisco Bay Area",
     counties: ["Alameda"],
-    summary: "Montclair and Piedmont Ave hills above Shepherd Canyon, Joaquin Miller and Redwood parks.",
+    summary:
+      "Montclair and Piedmont Ave hills above Shepherd Canyon, Joaquin Miller and Redwood parks.",
     station: {
       name: "Oakland Fire Station 24",
       agency: "Oakland Fire Department",
@@ -55,7 +56,8 @@ export const CALIFORNIA_REGIONS: readonly LandscapeRegion[] = [
     name: "Berkeley Hills & Tilden",
     area: "San Francisco Bay Area",
     counties: ["Alameda", "Contra Costa"],
-    summary: "Claremont Canyon, Berkeley hills and Kensington beside Tilden and Wildcat Canyon parks.",
+    summary:
+      "Claremont Canyon, Berkeley hills and Kensington beside Tilden and Wildcat Canyon parks.",
     station: {
       name: "Berkeley Fire Station 7",
       agency: "Berkeley Fire Department",
@@ -89,7 +91,8 @@ export const CALIFORNIA_REGIONS: readonly LandscapeRegion[] = [
     name: "Clayton & Mt Diablo North",
     area: "San Francisco Bay Area",
     counties: ["Contra Costa"],
-    summary: "Clayton and Concord's edge, Mitchell Canyon and the north slopes of Mt Diablo State Park.",
+    summary:
+      "Clayton and Concord's edge, Mitchell Canyon and the north slopes of Mt Diablo State Park.",
     station: {
       name: "Contra Costa County Fire Station 8",
       agency: "Contra Costa County Fire Protection District",
@@ -106,7 +109,8 @@ export const CALIFORNIA_REGIONS: readonly LandscapeRegion[] = [
     name: "Mill Valley & Mt Tamalpais",
     area: "San Francisco Bay Area",
     counties: ["Marin"],
-    summary: "Mill Valley, Kentfield and Muir Woods canyons below Mt Tamalpais's chaparral and redwood slopes.",
+    summary:
+      "Mill Valley, Kentfield and Muir Woods canyons below Mt Tamalpais's chaparral and redwood slopes.",
     station: {
       name: "Mill Valley Fire Department",
       agency: "Mill Valley Fire Department",
@@ -157,7 +161,8 @@ export const CALIFORNIA_REGIONS: readonly LandscapeRegion[] = [
     name: "Fountaingrove & Hood Mountain",
     area: "San Francisco Bay Area",
     counties: ["Sonoma"],
-    summary: "Fountaingrove and Santa Rosa's eastern edge below Hood Mountain and Annadel oak woodland.",
+    summary:
+      "Fountaingrove and Santa Rosa's eastern edge below Hood Mountain and Annadel oak woodland.",
     station: {
       name: "Santa Rosa Fire Station 5",
       agency: "Santa Rosa Fire Department",
@@ -174,7 +179,8 @@ export const CALIFORNIA_REGIONS: readonly LandscapeRegion[] = [
     name: "Boulder Creek & Big Basin",
     area: "San Francisco Bay Area",
     counties: ["Santa Cruz"],
-    summary: "Boulder Creek and Brookdale in San Lorenzo Valley redwoods up to Big Basin Redwoods State Park.",
+    summary:
+      "Boulder Creek and Brookdale in San Lorenzo Valley redwoods up to Big Basin Redwoods State Park.",
     station: {
       name: "Boulder Creek Fire Protection District",
       agency: "Boulder Creek Fire Protection District",
@@ -191,7 +197,8 @@ export const CALIFORNIA_REGIONS: readonly LandscapeRegion[] = [
     name: "Los Gatos & Sierra Azul",
     area: "San Francisco Bay Area",
     counties: ["Santa Clara"],
-    summary: "Los Gatos hills, Lexington and Redwood Estates beside Sierra Azul and Almaden Quicksilver preserves.",
+    summary:
+      "Los Gatos hills, Lexington and Redwood Estates beside Sierra Azul and Almaden Quicksilver preserves.",
     station: {
       name: "Shannon Fire Station",
       agency: "Santa Clara County Fire Department",
@@ -208,7 +215,8 @@ export const CALIFORNIA_REGIONS: readonly LandscapeRegion[] = [
     name: "Alum Rock & Diablo Range",
     area: "San Francisco Bay Area",
     counties: ["Santa Clara"],
-    summary: "East San José foothills, Alum Rock Park and Sierra Vista grass and oak ridges of the Diablo Range.",
+    summary:
+      "East San José foothills, Alum Rock Park and Sierra Vista grass and oak ridges of the Diablo Range.",
     station: {
       name: "San Jose Fire Station 2",
       agency: "San Jose Fire Department",
@@ -225,7 +233,8 @@ export const CALIFORNIA_REGIONS: readonly LandscapeRegion[] = [
     name: "Carmel Valley Village",
     area: "Central Coast",
     counties: ["Monterey"],
-    summary: "Carmel Valley Village and Robles del Rio below the Santa Lucia foothills and Garland Ranch.",
+    summary:
+      "Carmel Valley Village and Robles del Rio below the Santa Lucia foothills and Garland Ranch.",
     station: {
       name: "Monterey County Regional Fire Station 4",
       agency: "Monterey County Regional Fire District",
@@ -242,7 +251,8 @@ export const CALIFORNIA_REGIONS: readonly LandscapeRegion[] = [
     name: "Big Sur & Pfeiffer Ridge",
     area: "Central Coast",
     counties: ["Monterey"],
-    summary: "Big Sur Valley lodges and homes under the steep, chaparral and redwood Santa Lucia slopes.",
+    summary:
+      "Big Sur Valley lodges and homes under the steep, chaparral and redwood Santa Lucia slopes.",
     station: {
       name: "Big Sur Fire Station",
       agency: "U.S. Forest Service (Los Padres National Forest)",
@@ -276,7 +286,8 @@ export const CALIFORNIA_REGIONS: readonly LandscapeRegion[] = [
     name: "Atascadero & Pine Mountain",
     area: "Central Coast",
     counties: ["San Luis Obispo"],
-    summary: "Atascadero neighbourhoods against Pine Mountain and the oak-chaparral Santa Lucia foothills.",
+    summary:
+      "Atascadero neighbourhoods against Pine Mountain and the oak-chaparral Santa Lucia foothills.",
     station: {
       name: "Atascadero Fire Station 1",
       agency: "Atascadero Fire Department",
@@ -293,7 +304,8 @@ export const CALIFORNIA_REGIONS: readonly LandscapeRegion[] = [
     name: "Mission Canyon & Rattlesnake Canyon",
     area: "Central Coast",
     counties: ["Santa Barbara"],
-    summary: "Mission Canyon and Foothill Road homes beneath the Santa Ynez Mountains front country.",
+    summary:
+      "Mission Canyon and Foothill Road homes beneath the Santa Ynez Mountains front country.",
     station: {
       name: "Santa Barbara County Fire Station 15",
       agency: "Santa Barbara County Fire Department",
@@ -310,7 +322,8 @@ export const CALIFORNIA_REGIONS: readonly LandscapeRegion[] = [
     name: "Montecito & San Ysidro Canyon",
     area: "Central Coast",
     counties: ["Santa Barbara"],
-    summary: "Montecito and Summerland foothill neighbourhoods below San Ysidro and Romero Canyons.",
+    summary:
+      "Montecito and Summerland foothill neighbourhoods below San Ysidro and Romero Canyons.",
     station: {
       name: "Montecito Fire Station 1",
       agency: "Montecito Fire Protection District",
@@ -344,7 +357,8 @@ export const CALIFORNIA_REGIONS: readonly LandscapeRegion[] = [
     name: "Mariposa & Sierra Foothills",
     area: "Central Sierra & Kern",
     counties: ["Mariposa"],
-    summary: "Mariposa and Midpines oak, grass and pine foothills along Highway 140 toward Yosemite.",
+    summary:
+      "Mariposa and Midpines oak, grass and pine foothills along Highway 140 toward Yosemite.",
     station: {
       name: "Mariposa County Fire Department Mariposa Company 22",
       agency: "Mariposa County Fire Department",
@@ -361,7 +375,8 @@ export const CALIFORNIA_REGIONS: readonly LandscapeRegion[] = [
     name: "Oakhurst & Southern Yosemite Foothills",
     area: "Central Sierra & Kern",
     counties: ["Madera"],
-    summary: "Oakhurst neighbourhoods with oak woodland, chaparral and pine slopes toward Bass Lake.",
+    summary:
+      "Oakhurst neighbourhoods with oak woodland, chaparral and pine slopes toward Bass Lake.",
     station: {
       name: "Madera County Fire Department (Oakhurst)",
       agency: "Madera County Fire Department",
@@ -378,7 +393,8 @@ export const CALIFORNIA_REGIONS: readonly LandscapeRegion[] = [
     name: "Kernville & Kern River Canyon",
     area: "Central Sierra & Kern",
     counties: ["Kern"],
-    summary: "Kernville and Wofford Heights below Sequoia National Forest slopes along the Kern River.",
+    summary:
+      "Kernville and Wofford Heights below Sequoia National Forest slopes along the Kern River.",
     station: {
       name: "Kern County Fire Department Station 76",
       agency: "Kern County Fire Department",
@@ -395,7 +411,8 @@ export const CALIFORNIA_REGIONS: readonly LandscapeRegion[] = [
     name: "Lake Isabella & Bodfish",
     area: "Central Sierra & Kern",
     counties: ["Kern"],
-    summary: "Lake Isabella, Bodfish and Havilah in oak, grass and chaparral hills above the reservoir.",
+    summary:
+      "Lake Isabella, Bodfish and Havilah in oak, grass and chaparral hills above the reservoir.",
     station: {
       name: "Kern County Fire Department Lake Isabella Substation",
       agency: "Kern County Fire Department",
@@ -412,7 +429,8 @@ export const CALIFORNIA_REGIONS: readonly LandscapeRegion[] = [
     name: "Tehachapi & Tehachapi Mountain Park",
     area: "Central Sierra & Kern",
     counties: ["Kern"],
-    summary: "Tehachapi neighbourhoods against oak and pine slopes and Tehachapi Mountain Park to the south.",
+    summary:
+      "Tehachapi neighbourhoods against oak and pine slopes and Tehachapi Mountain Park to the south.",
     station: {
       name: "Kern County Fire Station 12",
       agency: "Kern County Fire Department",
@@ -429,7 +447,8 @@ export const CALIFORNIA_REGIONS: readonly LandscapeRegion[] = [
     name: "Frazier Park, Lebec & Tejon Pass",
     area: "Central Sierra & Kern",
     counties: ["Kern"],
-    summary: "Frazier Park and Lebec in grass, oak and pine hills at the Tejon Pass and Los Padres edge.",
+    summary:
+      "Frazier Park and Lebec in grass, oak and pine hills at the Tejon Pass and Los Padres edge.",
     station: {
       name: "Frazier Park Sub-Station",
       agency: "Kern County Fire Department",
@@ -463,7 +482,8 @@ export const CALIFORNIA_REGIONS: readonly LandscapeRegion[] = [
     name: "Sierra Madre & Monrovia Canyon",
     area: "Southern California",
     counties: ["Los Angeles"],
-    summary: "Sierra Madre and Monrovia foothill streets below Mount Wilson Trail and Bailey Canyon chaparral.",
+    summary:
+      "Sierra Madre and Monrovia foothill streets below Mount Wilson Trail and Bailey Canyon chaparral.",
     station: {
       name: "Sierra Madre Fire Department",
       agency: "Sierra Madre Fire Department",
@@ -480,7 +500,8 @@ export const CALIFORNIA_REGIONS: readonly LandscapeRegion[] = [
     name: "La Cañada Flintridge & Angeles Crest",
     area: "Southern California",
     counties: ["Los Angeles"],
-    summary: "La Cañada Flintridge homes along the San Gabriel front, Hahamongna and Angeles Crest slopes.",
+    summary:
+      "La Cañada Flintridge homes along the San Gabriel front, Hahamongna and Angeles Crest slopes.",
     station: {
       name: "LACoFD Station 19",
       agency: "Los Angeles County Fire Department",
@@ -497,7 +518,8 @@ export const CALIFORNIA_REGIONS: readonly LandscapeRegion[] = [
     name: "Sunland-Tujunga & Verdugo Hills",
     area: "Southern California",
     counties: ["Los Angeles"],
-    summary: "Sunland and Tujunga hillside streets beside Angeles National Forest and Big Tujunga canyon.",
+    summary:
+      "Sunland and Tujunga hillside streets beside Angeles National Forest and Big Tujunga canyon.",
     station: {
       name: "LAFD Station 74",
       agency: "Los Angeles Fire Department",
@@ -514,7 +536,8 @@ export const CALIFORNIA_REGIONS: readonly LandscapeRegion[] = [
     name: "Topanga & Fernwood",
     area: "Southern California",
     counties: ["Los Angeles"],
-    summary: "Topanga canyon community, Fernwood and Calabasas hills in the central Santa Monica Mountains.",
+    summary:
+      "Topanga canyon community, Fernwood and Calabasas hills in the central Santa Monica Mountains.",
     station: {
       name: "LACoFD Station 69",
       agency: "Los Angeles County Fire Department",
@@ -531,7 +554,8 @@ export const CALIFORNIA_REGIONS: readonly LandscapeRegion[] = [
     name: "Malibu Canyon & Saddle Peak",
     area: "Southern California",
     counties: ["Los Angeles"],
-    summary: "Carbon Canyon and Malibu Canyon neighbourhoods under Saddle Peak and Tuna Canyon chaparral.",
+    summary:
+      "Carbon Canyon and Malibu Canyon neighbourhoods under Saddle Peak and Tuna Canyon chaparral.",
     station: {
       name: "LACoFD Station 70",
       agency: "Los Angeles County Fire Department",
@@ -548,7 +572,8 @@ export const CALIFORNIA_REGIONS: readonly LandscapeRegion[] = [
     name: "Western Malibu & Zuma Canyon",
     area: "Southern California",
     counties: ["Los Angeles"],
-    summary: "Zuma, Point Dume and the canyon roads climbing into Santa Monica Mountains coastal scrub.",
+    summary:
+      "Zuma, Point Dume and the canyon roads climbing into Santa Monica Mountains coastal scrub.",
     station: {
       name: "LACoFD Station 71",
       agency: "Los Angeles County Fire Department",
@@ -565,7 +590,8 @@ export const CALIFORNIA_REGIONS: readonly LandscapeRegion[] = [
     name: "Pacific Palisades & Santa Monica Mountains",
     area: "Southern California",
     counties: ["Los Angeles"],
-    summary: "Palisades streets beside Temescal Canyon, Topanga State Park and Santa Ynez canyon scrub.",
+    summary:
+      "Palisades streets beside Temescal Canyon, Topanga State Park and Santa Ynez canyon scrub.",
     station: {
       name: "LAFD Station 69",
       agency: "Los Angeles Fire Department",
@@ -582,7 +608,8 @@ export const CALIFORNIA_REGIONS: readonly LandscapeRegion[] = [
     name: "Castaic & Hasley Canyon",
     area: "Southern California",
     counties: ["Los Angeles"],
-    summary: "Castaic and Hasley Canyon homes with surrounding oak woodland, grass and chaparral hills.",
+    summary:
+      "Castaic and Hasley Canyon homes with surrounding oak woodland, grass and chaparral hills.",
     station: {
       name: "LACoFD Station 149",
       agency: "Los Angeles County Fire Department",
@@ -650,7 +677,8 @@ export const CALIFORNIA_REGIONS: readonly LandscapeRegion[] = [
     name: "Idyllwild & Pine Cove",
     area: "Southern California",
     counties: ["Riverside"],
-    summary: "Idyllwild, Pine Cove and Mountain Center in San Jacinto forest below Marion Mountain.",
+    summary:
+      "Idyllwild, Pine Cove and Mountain Center in San Jacinto forest below Marion Mountain.",
     station: {
       name: "Idyllwild Fire Department",
       agency: "Idyllwild Fire Protection District",
@@ -684,7 +712,8 @@ export const CALIFORNIA_REGIONS: readonly LandscapeRegion[] = [
     name: "Corona & Bedford Canyon",
     area: "Southern California",
     counties: ["Riverside"],
-    summary: "South Corona streets against Bedford Canyon and the inland face of the Santa Ana Mountains.",
+    summary:
+      "South Corona streets against Bedford Canyon and the inland face of the Santa Ana Mountains.",
     station: {
       name: "Corona Fire Station 7",
       agency: "Corona Fire Department",
@@ -718,7 +747,8 @@ export const CALIFORNIA_REGIONS: readonly LandscapeRegion[] = [
     name: "Fallbrook & Red Mountain",
     area: "Southern California",
     counties: ["San Diego"],
-    summary: "Fallbrook avocado groves and rural homes beside Red Mountain and Santa Margarita hills.",
+    summary:
+      "Fallbrook avocado groves and rural homes beside Red Mountain and Santa Margarita hills.",
     station: {
       name: "Fallbrook Fire Station",
       agency: "Fallbrook Fire Protection District",

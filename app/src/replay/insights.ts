@@ -13,14 +13,13 @@ export function distanceM(a: LngLat, b: LngLat): number {
   const dLat = (b[1] - a[1]) * toRad;
   const dLon = (b[0] - a[0]) * toRad;
   const h =
-    Math.sin(dLat / 2) ** 2 + Math.cos(a[1] * toRad) * Math.cos(b[1] * toRad) * Math.sin(dLon / 2) ** 2;
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(a[1] * toRad) * Math.cos(b[1] * toRad) * Math.sin(dLon / 2) ** 2;
   return 2 * EARTH_RADIUS_M * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
 export type ArrivalLookup =
-  | { status: "outside" }
-  | { status: "not_reached" }
-  | { status: "reached"; atMs: number };
+  { status: "outside" } | { status: "not_reached" } | { status: "reached"; atMs: number };
 
 /** Modelled fire arrival at a point, using the contract's grid formula. */
 export function arrivalAt(grid: ArrivalGrid, [lon, lat]: LngLat): ArrivalLookup {
@@ -47,7 +46,9 @@ function inPolygon(rings: LngLat[][], p: LngLat): boolean {
 }
 
 export function inArea(g: AreaGeometry, p: LngLat): boolean {
-  return g.type === "Polygon" ? inPolygon(g.coordinates, p) : g.coordinates.some((poly) => inPolygon(poly, p));
+  return g.type === "Polygon"
+    ? inPolygon(g.coordinates, p)
+    : g.coordinates.some((poly) => inPolygon(poly, p));
 }
 
 /** Mean of the outer ring's vertices; good enough to place a pin inside a convex zone. */
@@ -115,7 +116,11 @@ export interface ThreatenedRoad {
  * Roads (grouped by name) whose modelled fire arrival falls in (now, now + windowS], soonest
  * first. Unnamed edges are grouped under their highway class.
  */
-export function roadsCutWithin(model: ReplayModel, nowMs: number, windowS: number): ThreatenedRoad[] {
+export function roadsCutWithin(
+  model: ReplayModel,
+  nowMs: number,
+  windowS: number,
+): ThreatenedRoad[] {
   const arrivals = model.insights?.edgeFireArrivalS ?? [];
   const traffic = model.traffic;
   if (!traffic || arrivals.length === 0) return [];

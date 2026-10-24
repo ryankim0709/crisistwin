@@ -140,7 +140,8 @@ export class DispatchOverlay implements BoardOverlay {
 
   detach(): void {
     if (!this.group) return;
-    for (const label of [...this.zoneLabels.values(), ...this.unitLabels.values()]) this.labels?.remove(label.obj);
+    for (const label of [...this.zoneLabels.values(), ...this.unitLabels.values()])
+      this.labels?.remove(label.obj);
     for (const marker of this.exitMarkers) this.labels?.remove(marker.label);
     this.zoneLabels.clear();
     this.unitLabels.clear();
@@ -236,7 +237,10 @@ export class DispatchOverlay implements BoardOverlay {
         continue;
       }
       if (previous) {
-        const steps = Math.max(1, Math.ceil(Math.hypot(p.x - previous.x, p.z - previous.z) / DRAPE_STEP_UNITS));
+        const steps = Math.max(
+          1,
+          Math.ceil(Math.hypot(p.x - previous.x, p.z - previous.z) / DRAPE_STEP_UNITS),
+        );
         for (let s = 1; s <= steps; s += 1) {
           const x = previous.x + ((p.x - previous.x) * s) / steps;
           const z = previous.z + ((p.z - previous.z) * s) / steps;
@@ -280,7 +284,11 @@ export class DispatchOverlay implements BoardOverlay {
   private buildStatic() {
     const { frame, group, area } = this;
     if (!frame || !group || !area) return;
-    const size = THREE.MathUtils.clamp(HOUSE_METERS * frame.unitsPerMeter, HOUSE_UNITS.min, HOUSE_UNITS.max);
+    const size = THREE.MathUtils.clamp(
+      HOUSE_METERS * frame.unitsPerMeter,
+      HOUSE_UNITS.min,
+      HOUSE_UNITS.max,
+    );
 
     // Homes: walls (neutral) and hip roofs (household state).
     const placed: { home: number; x: number; z: number; y: number; yaw: number }[] = [];
@@ -290,14 +298,30 @@ export class DispatchOverlay implements BoardOverlay {
       if (!p) return;
       const yaw = (hash(home.position[0], home.position[1]) * 4) | 0;
       this.homeInstance[i] = placed.length;
-      placed.push({ home: i, x: p.x, z: p.z, y: frame.heightAt(p.x, p.z), yaw: (yaw * Math.PI) / 2 + 0.3 });
+      placed.push({
+        home: i,
+        x: p.x,
+        z: p.z,
+        y: frame.heightAt(p.x, p.z),
+        yaw: (yaw * Math.PI) / 2 + 0.3,
+      });
     });
     this.homeOfInstance = Int32Array.from(placed, (p) => p.home);
     if (placed.length > 0) {
       const wallGeo = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
-      const roofGeo = new THREE.ConeGeometry(Math.SQRT1_2, 1, 4, 1).rotateY(Math.PI / 4).translate(0, 0.5, 0);
-      const walls = new THREE.InstancedMesh(wallGeo, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.85, flatShading: true }), placed.length);
-      const roofs = new THREE.InstancedMesh(roofGeo, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.7, flatShading: true }), placed.length);
+      const roofGeo = new THREE.ConeGeometry(Math.SQRT1_2, 1, 4, 1)
+        .rotateY(Math.PI / 4)
+        .translate(0, 0.5, 0);
+      const walls = new THREE.InstancedMesh(
+        wallGeo,
+        new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.85, flatShading: true }),
+        placed.length,
+      );
+      const roofs = new THREE.InstancedMesh(
+        roofGeo,
+        new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.7, flatShading: true }),
+        placed.length,
+      );
       walls.name = "dispatch-home-walls";
       roofs.name = "dispatch-home-roofs";
       const wallH = size * 0.55;
@@ -335,7 +359,12 @@ export class DispatchOverlay implements BoardOverlay {
       marker.add(post, sign);
       marker.position.set(p.x, y, p.z);
       group.add(marker);
-      const label = this.labels.add(group, "fdx-dsp-exit", new THREE.Vector3(p.x, y + 4, p.z), new THREE.Vector2(0.5, 1));
+      const label = this.labels.add(
+        group,
+        "fdx-dsp-exit",
+        new THREE.Vector3(p.x, y + 4, p.z),
+        new THREE.Vector2(0.5, 1),
+      );
       label.el.textContent = `⇥ ${exit.id}`;
       label.obj.visible = false;
       this.exitMarkers.push({ group: marker, label: label.obj, el: label.el });
@@ -357,13 +386,29 @@ export class DispatchOverlay implements BoardOverlay {
     }
 
     // Vehicles and engines (instanced, filled each frame).
-    const carGeo = new THREE.BoxGeometry(CAR_UNITS.length, CAR_UNITS.height, CAR_UNITS.width).translate(0, CAR_UNITS.height / 2, 0);
-    this.cars = new THREE.InstancedMesh(carGeo, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5 }), MAX_CARS);
+    const carGeo = new THREE.BoxGeometry(
+      CAR_UNITS.length,
+      CAR_UNITS.height,
+      CAR_UNITS.width,
+    ).translate(0, CAR_UNITS.height / 2, 0);
+    this.cars = new THREE.InstancedMesh(
+      carGeo,
+      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5 }),
+      MAX_CARS,
+    );
     this.cars.count = 0;
     this.cars.name = "dispatch-cars";
-    const truckGeo = new THREE.BoxGeometry(ENGINE_UNITS.length, ENGINE_UNITS.height, ENGINE_UNITS.width).translate(0, ENGINE_UNITS.height / 2, 0);
+    const truckGeo = new THREE.BoxGeometry(
+      ENGINE_UNITS.length,
+      ENGINE_UNITS.height,
+      ENGINE_UNITS.width,
+    ).translate(0, ENGINE_UNITS.height / 2, 0);
     const units = area.stations.reduce((sum, station) => sum + station.units.length, 0);
-    this.trucks = new THREE.InstancedMesh(truckGeo, new THREE.MeshStandardMaterial({ color: 0xc8352a, roughness: 0.45, emissive: 0x3a0804 }), Math.max(1, units));
+    this.trucks = new THREE.InstancedMesh(
+      truckGeo,
+      new THREE.MeshStandardMaterial({ color: 0xc8352a, roughness: 0.45, emissive: 0x3a0804 }),
+      Math.max(1, units),
+    );
     this.trucks.count = 0;
     this.trucks.name = "dispatch-engines";
     this.cars.castShadow = this.trucks.castShadow = true;
@@ -436,8 +481,18 @@ export class DispatchOverlay implements BoardOverlay {
         continue;
       }
       const color = exitColor(area, exitId);
-      const base = this.line(positions, color, selected ? ROUTE_SELECTED_WIDTH_PX : ROUTE_WIDTH_PX, false);
-      const flow = this.line(positions.map((v, i) => (i % 3 === 1 ? v + 0.05 : v)), 0xffffff, selected ? 3 : 2, true);
+      const base = this.line(
+        positions,
+        color,
+        selected ? ROUTE_SELECTED_WIDTH_PX : ROUTE_WIDTH_PX,
+        false,
+      );
+      const flow = this.line(
+        positions.map((v, i) => (i % 3 === 1 ? v + 0.05 : v)),
+        0xffffff,
+        selected ? 3 : 2,
+        true,
+      );
       group.add(base, flow);
       this.routes.set(zone, { key, base, flow, color });
     }
@@ -459,17 +514,28 @@ export class DispatchOverlay implements BoardOverlay {
       const selected = index === this.selectedZone;
       const sel = selected ? " fdx-dsp-zone--selected" : "";
       if (state?.status === "cleared") {
-        wanted.set(index, { cls: `fdx-dsp-zone fdx-dsp-zone--cleared${sel}`, html: `✓ <b>${zone.id}</b> clear · ${state.safe}/${zone.homes}` });
+        wanted.set(index, {
+          cls: `fdx-dsp-zone fdx-dsp-zone--cleared${sel}`,
+          html: `✓ <b>${zone.id}</b> clear · ${state.safe}/${zone.homes}`,
+        });
       } else if (state?.status === "overrun") {
-        wanted.set(index, { cls: `fdx-dsp-zone fdx-dsp-zone--overrun${sel}`, html: `✕ <b>${zone.id}</b> fire · ${state.safe}/${zone.homes} out` });
+        wanted.set(index, {
+          cls: `fdx-dsp-zone fdx-dsp-zone--overrun${sel}`,
+          html: `✕ <b>${zone.id}</b> fire · ${state.safe}/${zone.homes} out`,
+        });
       } else if (state?.status === "ordered") {
-        const swatch = state.exitId ? `<span class="fdx-dsp-swatch" style="background:${cssColor(exitColor(area, state.exitId))}"></span>` : "";
+        const swatch = state.exitId
+          ? `<span class="fdx-dsp-swatch" style="background:${cssColor(exitColor(area, state.exitId))}"></span>`
+          : "";
         wanted.set(index, {
           cls: `fdx-dsp-zone fdx-dsp-zone--ordered${sel}`,
           html: `#${state.orderRank} <b>${zone.id}</b> ${swatch}→ ${state.exitId}${state.routeBlocked ? " ⚠" : ""} · ${state.safe}/${zone.homes}`,
         });
       } else if (selected) {
-        wanted.set(index, { cls: `fdx-dsp-zone${sel}`, html: `<b>${zone.id}</b> · no order · ${zone.homes} homes` });
+        wanted.set(index, {
+          cls: `fdx-dsp-zone${sel}`,
+          html: `<b>${zone.id}</b> · no order · ${zone.homes} homes`,
+        });
       }
     });
     for (const [index, label] of this.zoneLabels) {
@@ -483,7 +549,12 @@ export class DispatchOverlay implements BoardOverlay {
       if (!label) {
         const p = this.toWorld(area.zones[index].centroid);
         if (!p) continue;
-        const made = labels.add(group, "", new THREE.Vector3(p.x, frame.surfaceAt(p.x, p.z) + 3, p.z), new THREE.Vector2(0.5, 1));
+        const made = labels.add(
+          group,
+          "",
+          new THREE.Vector3(p.x, frame.surfaceAt(p.x, p.z) + 3, p.z),
+          new THREE.Vector2(0.5, 1),
+        );
         label = { ...made, key: "" };
         this.zoneLabels.set(index, label);
       }
@@ -512,7 +583,8 @@ export class DispatchOverlay implements BoardOverlay {
       const p = this.toWorld(group.position);
       if (!p) continue;
       const a = this.toWorld(group.ahead);
-      const heading = a && (a.x !== p.x || a.z !== p.z) ? Math.atan2(-(a.z - p.z), a.x - p.x) : undefined;
+      const heading =
+        a && (a.x !== p.x || a.z !== p.z) ? Math.atan2(-(a.z - p.z), a.x - p.x) : undefined;
       const glide = this.carGlide.get(group.id);
       if (glide) {
         glide.tx = p.x;
@@ -549,9 +621,14 @@ export class DispatchOverlay implements BoardOverlay {
     for (const glide of this.carGlide.values()) {
       glide.x += (glide.tx - glide.x) * k;
       glide.z += (glide.tz - glide.z) * k;
-      const count = Math.min(CARS_PER_GROUP, Math.max(1, Math.round(glide.vehicles / VEHICLES_PER_CAR)));
+      const count = Math.min(
+        CARS_PER_GROUP,
+        Math.max(1, Math.round(glide.vehicles / VEHICLES_PER_CAR)),
+      );
       const exitId = engine.zones[glide.zone].exitId;
-      this.tmpColor.set(glide.stuck ? 0xf2a33a : exitId ? exitColor(area, exitId) : 0x2f8fd8).lerp(white, 0.15);
+      this.tmpColor
+        .set(glide.stuck ? 0xf2a33a : exitId ? exitColor(area, exitId) : 0x2f8fd8)
+        .lerp(white, 0.15);
       this.tmpQuat.setFromAxisAngle(this.up, glide.heading);
       const dx = Math.cos(glide.heading);
       const dz = -Math.sin(glide.heading);
@@ -591,7 +668,8 @@ export class DispatchOverlay implements BoardOverlay {
         glide.tx = p.x;
         glide.tz = p.z;
         if (heading !== undefined) glide.heading = heading;
-      } else this.unitGlide.set(unit.id, { x: p.x, z: p.z, tx: p.x, tz: p.z, heading: heading ?? 0 });
+      } else
+        this.unitGlide.set(unit.id, { x: p.x, z: p.z, tx: p.x, tz: p.z, heading: heading ?? 0 });
 
       // Remaining path while driving (dashed red), rebuilt only when it changes length.
       const existing = this.unitPaths.get(unit.id);

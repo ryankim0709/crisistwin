@@ -1,3 +1,4 @@
+import { Notice } from "../ui";
 import { EvidenceChip } from "./parts";
 import type { SimulatedFire, Validation, ValidationRow } from "./types";
 
@@ -144,13 +145,13 @@ export default function ValidationTab({
           </p>
         </section>
       )}
-      <p className="rp-disclaimer rp-disclaimer--top" role="note">
+      <Notice tone="info">
         Published {year} figures (reconstructions such as NIST&apos;s) beside the model&apos;s
         closest output. Each row says how comparable the two are; none of this is operational
         guidance. A <strong>tuned</strong> row was used to set a model parameter, so agreement there
         is not validation. Time differences are in minutes; negative means the model is earlier than
         the published time.
-      </p>
+      </Notice>
       {grades.length > 0 && (
         <ul className="rp-grade-key">
           {grades.map(([grade, meaning]) => (

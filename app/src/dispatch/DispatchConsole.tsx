@@ -6,6 +6,7 @@
  */
 
 import { useState } from "react";
+import { Button } from "../ui";
 import type { DispatchArea } from "./area";
 import type { DispatchEngine, Order, Totals, UnitState, ZoneState } from "./engine";
 import { DECISION_INTERVAL_MINUTES } from "./engine";
@@ -30,7 +31,11 @@ export function hhmm(minutes: number): string {
   return `T+${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
-export type SetupStep = { label: string; detail: string; state: "done" | "active" | "waiting" | "error" };
+export type SetupStep = {
+  label: string;
+  detail: string;
+  state: "done" | "active" | "waiting" | "error";
+};
 
 type Tab = "board" | "crews" | "log";
 
@@ -83,14 +88,22 @@ function Tiles({ totals, baseline }: { totals: Totals; baseline: Totals | null }
         {tiles.map(([label, value, color]) => (
           <div key={label} className="dsp-tile">
             <dt>
-              <span className="dsp-dot" style={{ background: cssColor(color) }} aria-hidden="true" />
+              <span
+                className="dsp-dot"
+                style={{ background: cssColor(color) }}
+                aria-hidden="true"
+              />
               {label}
             </dt>
             <dd>{NUMBER.format(value)}</dd>
           </div>
         ))}
       </dl>
-      <div className="dsp-bar" role="img" aria-label={`${totals.safe} of ${totals.homes} homes safe`}>
+      <div
+        className="dsp-bar"
+        role="img"
+        aria-label={`${totals.safe} of ${totals.homes} homes safe`}
+      >
         {segments.map(([value, color], i) =>
           value > 0 ? (
             <span key={i} style={{ flexGrow: value, background: cssColor(color) }} />
@@ -98,10 +111,15 @@ function Tiles({ totals, baseline }: { totals: Totals; baseline: Totals | null }
         )}
       </div>
       <p className="dsp-note">
-        {NUMBER.format(totals.homes)} synthetic homes · {NUMBER.format(totals.notOrdered)} without an order yet.
+        {NUMBER.format(totals.homes)} synthetic homes · {NUMBER.format(totals.notOrdered)} without
+        an order yet.
         {baseline && (
           <>
-            {" "}With no orders the fire model catches <strong>{NUMBER.format(baseline.caught)}</strong> by the horizon.
+            {" "}
+            With no orders the fire model catches <strong>
+              {NUMBER.format(baseline.caught)}
+            </strong>{" "}
+            by the horizon.
           </>
         )}
       </p>
@@ -109,36 +127,68 @@ function Tiles({ totals, baseline }: { totals: Totals; baseline: Totals | null }
   );
 }
 
-function orderLine(order: Order, area: DispatchArea): { icon: string; text: string; color?: number } {
+function orderLine(
+  order: Order,
+  area: DispatchArea,
+): { icon: string; text: string; color?: number } {
   if (order.type === "order_evacuation") {
     const exit = area.exits.find((candidate) => candidate.id === order.exit_id);
-    return { icon: "📣", text: `Evacuate ${order.zone_id} via ${order.exit_id}${exit ? ` · ${exit.name}` : ""}`, color: exitColor(area, order.exit_id) };
+    return {
+      icon: "📣",
+      text: `Evacuate ${order.zone_id} via ${order.exit_id}${exit ? ` · ${exit.name}` : ""}`,
+      color: exitColor(area, order.exit_id),
+    };
   }
   if (order.type === "dispatch_unit") {
-    return { icon: "🚒", text: `${order.unit_id} → ${order.zone_id}, ${order.task === "evacuation_support" ? "evacuation support" : "structure defense"}` };
+    return {
+      icon: "🚒",
+      text: `${order.unit_id} → ${order.zone_id}, ${order.task === "evacuation_support" ? "evacuation support" : "structure defense"}`,
+    };
   }
   return { icon: "↩", text: `Recall ${order.unit_id} to station` };
 }
 
 function LatestOrders({ entry, area }: { entry: DecisionLogEntry; area: DispatchArea }) {
   return (
-    <section className={`dsp-radio dsp-radio--${entry.status}`} aria-label="Latest decision" aria-live="polite">
+    <section
+      className={`dsp-radio dsp-radio--${entry.status}`}
+      aria-label="Latest decision"
+      aria-live="polite"
+    >
       <header>
         <span className="dsp-radio__time">{hhmm(entry.minute)}</span>
-        <span>{entry.status === "streaming" ? "Dispatcher is deciding…" : entry.status === "failed" ? "Decision failed" : "Dispatcher orders"}</span>
+        <span>
+          {entry.status === "streaming"
+            ? "Dispatcher is deciding…"
+            : entry.status === "failed"
+              ? "Decision failed"
+              : "Dispatcher orders"}
+        </span>
         <span className="dsp-tag">AI decision</span>
       </header>
-      {entry.status === "streaming" && <p className="dsp-radio__text">{entry.text || entry.thinking.slice(-220) || "Reading the situation…"}</p>}
+      {entry.status === "streaming" && (
+        <p className="dsp-radio__text">
+          {entry.text || entry.thinking.slice(-220) || "Reading the situation…"}
+        </p>
+      )}
       {entry.status === "failed" && entry.error && <p className="dsp-error">{entry.error}</p>}
       {entry.status === "done" && (
         <ul>
-          {entry.outcomes.length === 0 && <li className="dsp-radio__none">No new orders: everything in effect stands.</li>}
+          {entry.outcomes.length === 0 && (
+            <li className="dsp-radio__none">No new orders: everything in effect stands.</li>
+          )}
           {entry.outcomes.map((outcome, i) => {
             const line = orderLine(outcome.order, area);
             return (
               <li key={i} className={outcome.accepted ? "" : "is-rejected"}>
                 <span aria-hidden="true">{outcome.accepted ? line.icon : "✕"}</span>
-                {line.color !== undefined && <span className="dsp-swatch" style={{ background: cssColor(line.color) }} aria-hidden="true" />}
+                {line.color !== undefined && (
+                  <span
+                    className="dsp-swatch"
+                    style={{ background: cssColor(line.color) }}
+                    aria-hidden="true"
+                  />
+                )}
                 <span>
                   {line.text}
                   {!outcome.accepted && <em> — rejected: {outcome.note}</em>}
@@ -161,13 +211,31 @@ function ZoneProgress({ zone, homes }: { zone: ZoneState; homes: number }) {
     [zone.caught, HOME_COLORS[5]],
   ];
   return (
-    <div className="dsp-bar dsp-bar--small" role="img" aria-label={`${zone.safe} of ${homes} homes safe`}>
-      {parts.map(([value, color], i) => (value > 0 ? <span key={i} style={{ flexGrow: value, background: cssColor(color) }} /> : null))}
+    <div
+      className="dsp-bar dsp-bar--small"
+      role="img"
+      aria-label={`${zone.safe} of ${homes} homes safe`}
+    >
+      {parts.map(([value, color], i) =>
+        value > 0 ? (
+          <span key={i} style={{ flexGrow: value, background: cssColor(color) }} />
+        ) : null,
+      )}
     </div>
   );
 }
 
-function ZoneRow({ engine, zone, selected, onSelect }: { engine: DispatchEngine; zone: ZoneState; selected: boolean; onSelect: () => void }) {
+function ZoneRow({
+  engine,
+  zone,
+  selected,
+  onSelect,
+}: {
+  engine: DispatchEngine;
+  zone: ZoneState;
+  selected: boolean;
+  onSelect: () => void;
+}) {
   const area = engine.area;
   const info = area.zones[zone.index];
   const exit = zone.exitId ? area.exits.find((candidate) => candidate.id === zone.exitId) : null;
@@ -175,30 +243,47 @@ function ZoneRow({ engine, zone, selected, onSelect }: { engine: DispatchEngine;
   const contact = engine.exposure.zoneContact[zone.index];
   const badge =
     zone.status === "cleared" ? (
-      <span className="dsp-badge dsp-badge--done" aria-label="Cleared">✓</span>
+      <span className="dsp-badge dsp-badge--done" aria-label="Cleared">
+        ✓
+      </span>
     ) : zone.status === "overrun" ? (
-      <span className="dsp-badge dsp-badge--bad" aria-label="Overrun">✕</span>
+      <span className="dsp-badge dsp-badge--bad" aria-label="Overrun">
+        ✕
+      </span>
     ) : zone.orderRank !== null ? (
       <span className="dsp-badge dsp-badge--rank">{zone.orderRank}</span>
     ) : (
-      <span className="dsp-badge" aria-hidden="true">·</span>
+      <span className="dsp-badge" aria-hidden="true">
+        ·
+      </span>
     );
   return (
     <li>
-      <button type="button" className={`dsp-zone${selected ? " is-selected" : ""}`} aria-pressed={selected} onClick={onSelect}>
+      <button
+        type="button"
+        className={`dsp-zone${selected ? " is-selected" : ""}`}
+        aria-pressed={selected}
+        onClick={onSelect}
+      >
         {badge}
         <span className="dsp-zone__body">
           <span className="dsp-zone__head">
             <strong>{info.name}</strong>
             {zone.status !== "cleared" && zone.status !== "overrun" && (
-              <span className={`dsp-chip${Number.isFinite(contact) && contact - engine.minute <= 30 ? " dsp-chip--hot" : ""}`}>
+              <span
+                className={`dsp-chip${Number.isFinite(contact) && contact - engine.minute <= 30 ? " dsp-chip--hot" : ""}`}
+              >
                 {etaText(contact, engine.minute)}
               </span>
             )}
           </span>
           {exit ? (
             <span className="dsp-zone__route">
-              <span className="dsp-swatch" style={{ background: cssColor(exitColor(area, exit.id)) }} aria-hidden="true" />
+              <span
+                className="dsp-swatch"
+                style={{ background: cssColor(exitColor(area, exit.id)) }}
+                aria-hidden="true"
+              />
               via {exit.id} · {exit.name}
               {minutes !== null && !zone.routeBlocked && ` · ${minutes} min drive`}
               {zone.routeBlocked && <span className="dsp-warn"> · route blocked, holding</span>}
@@ -210,9 +295,13 @@ function ZoneRow({ engine, zone, selected, onSelect }: { engine: DispatchEngine;
           <span className="dsp-zone__counts">
             {zone.safe}/{info.homes} homes safe
             {zone.onRoad > 0 && ` · ${zone.onRoad} driving`}
-            {zone.status === "ordered" && zone.atHome + zone.queued > 0 && ` · ${zone.atHome + zone.queued} still leaving`}
+            {zone.status === "ordered" &&
+              zone.atHome + zone.queued > 0 &&
+              ` · ${zone.atHome + zone.queued} still leaving`}
             {zone.caught > 0 && <span className="dsp-bad"> · {zone.caught} caught</span>}
-            {zone.status === "cleared" && zone.clearedMinute !== null && ` · clear at ${hhmm(zone.clearedMinute)}`}
+            {zone.status === "cleared" &&
+              zone.clearedMinute !== null &&
+              ` · clear at ${hhmm(zone.clearedMinute)}`}
           </span>
         </span>
       </button>
@@ -220,8 +309,18 @@ function ZoneRow({ engine, zone, selected, onSelect }: { engine: DispatchEngine;
   );
 }
 
-function EvacuationBoard({ engine, selectedZone, onSelectZone }: { engine: DispatchEngine; selectedZone: number | null; onSelectZone: (zone: number | null) => void }) {
-  const ordered = engine.zones.filter((zone) => zone.orderRank !== null).sort((a, b) => a.orderRank! - b.orderRank!);
+function EvacuationBoard({
+  engine,
+  selectedZone,
+  onSelectZone,
+}: {
+  engine: DispatchEngine;
+  selectedZone: number | null;
+  onSelectZone: (zone: number | null) => void;
+}) {
+  const ordered = engine.zones
+    .filter((zone) => zone.orderRank !== null)
+    .sort((a, b) => a.orderRank! - b.orderRank!);
   const contact = engine.exposure.zoneContact;
   const waiting = engine.zones
     .filter((zone) => zone.orderRank === null)
@@ -229,13 +328,26 @@ function EvacuationBoard({ engine, selectedZone, onSelectZone }: { engine: Dispa
   const select = (index: number) => onSelectZone(selectedZone === index ? null : index);
   return (
     <div className="dsp-board">
-      <h3>Evacuation order {ordered.length > 0 && <span className="dsp-muted">· {ordered.filter((z) => z.status === "cleared").length}/{ordered.length} clear</span>}</h3>
+      <h3>
+        Evacuation order{" "}
+        {ordered.length > 0 && (
+          <span className="dsp-muted">
+            · {ordered.filter((z) => z.status === "cleared").length}/{ordered.length} clear
+          </span>
+        )}
+      </h3>
       {ordered.length === 0 ? (
         <p className="dsp-note">No zone has been told to leave yet.</p>
       ) : (
         <ol className="dsp-zones">
           {ordered.map((zone) => (
-            <ZoneRow key={zone.index} engine={engine} zone={zone} selected={selectedZone === zone.index} onSelect={() => select(zone.index)} />
+            <ZoneRow
+              key={zone.index}
+              engine={engine}
+              zone={zone}
+              selected={selectedZone === zone.index}
+              onSelect={() => select(zone.index)}
+            />
           ))}
         </ol>
       )}
@@ -244,7 +356,13 @@ function EvacuationBoard({ engine, selectedZone, onSelectZone }: { engine: Dispa
           <h3>Not yet ordered · nearest fire first</h3>
           <ul className="dsp-zones">
             {waiting.map((zone) => (
-              <ZoneRow key={zone.index} engine={engine} zone={zone} selected={selectedZone === zone.index} onSelect={() => select(zone.index)} />
+              <ZoneRow
+                key={zone.index}
+                engine={engine}
+                zone={zone}
+                selected={selectedZone === zone.index}
+                onSelect={() => select(zone.index)}
+              />
             ))}
           </ul>
         </>
@@ -255,7 +373,12 @@ function EvacuationBoard({ engine, selectedZone, onSelectZone }: { engine: Dispa
 
 function unitStatusText(engine: DispatchEngine, unit: UnitState): string {
   const zone = unit.zone === null ? null : engine.area.zones[unit.zone].id;
-  const task = unit.task === "evacuation_support" ? "evacuation support" : unit.task === "structure_defense" ? "structure defense" : "";
+  const task =
+    unit.task === "evacuation_support"
+      ? "evacuation support"
+      : unit.task === "structure_defense"
+        ? "structure defense"
+        : "";
   const eta = engine.unitEtaMinutes(unit);
   switch (unit.status) {
     case "available":
@@ -273,7 +396,12 @@ function unitStatusText(engine: DispatchEngine, unit: UnitState): string {
 
 function Crews({ engine }: { engine: DispatchEngine }) {
   if (engine.units.length === 0) {
-    return <p className="dsp-note">OpenStreetMap lists no fire station within reach of this area, so there are no engines to dispatch.</p>;
+    return (
+      <p className="dsp-note">
+        OpenStreetMap lists no fire station within reach of this area, so there are no engines to
+        dispatch.
+      </p>
+    );
   }
   const stations = new Map(engine.area.stations.map((station) => [station.id, station]));
   return (
@@ -287,7 +415,9 @@ function Crews({ engine }: { engine: DispatchEngine }) {
               <strong>{unitStatusText(engine, unit)}</strong>
               <span className="dsp-muted">
                 {station?.name ?? unit.stationId}
-                {station && station.approachMeters > 200 && ` · ${(station.approachMeters / 1000).toFixed(1)} km outside the area`}
+                {station &&
+                  station.approachMeters > 200 &&
+                  ` · ${(station.approachMeters / 1000).toFixed(1)} km outside the area`}
               </span>
             </span>
           </li>
@@ -302,7 +432,13 @@ function LogEntry({ entry, area }: { entry: DecisionLogEntry; area: DispatchArea
     <li className={`dsp-entry dsp-entry--${entry.status}`}>
       <header>
         <span className="dsp-radio__time">{hhmm(entry.minute)}</span>
-        <span>{entry.status === "streaming" ? "Reasoning…" : entry.status === "failed" ? "Decision failed" : "Decision"}</span>
+        <span>
+          {entry.status === "streaming"
+            ? "Reasoning…"
+            : entry.status === "failed"
+              ? "Decision failed"
+              : "Decision"}
+        </span>
         {entry.model && <span className="dsp-muted">{entry.model}</span>}
       </header>
       {entry.alerts.length > 0 && (
@@ -322,13 +458,22 @@ function LogEntry({ entry, area }: { entry: DecisionLogEntry; area: DispatchArea
         </details>
       )}
       {entry.text && <p className="dsp-assessment">{entry.text}</p>}
-      {entry.error && <p className="dsp-error" role="alert">{entry.error}</p>}
+      {entry.error && (
+        <p className="dsp-error" role="alert">
+          {entry.error}
+        </p>
+      )}
       {entry.status === "done" && (
         <ul className="dsp-orders">
           {entry.outcomes.map((outcome, i) => (
             <li key={i} className={outcome.accepted ? "" : "is-rejected"}>
-              <strong>{outcome.accepted ? "✓ " : "✕ "}{orderLine(outcome.order, area).text}</strong>
-              <span>{outcome.accepted ? outcome.note : `Rejected by the simulator: ${outcome.note}`}</span>
+              <strong>
+                {outcome.accepted ? "✓ " : "✕ "}
+                {orderLine(outcome.order, area).text}
+              </strong>
+              <span>
+                {outcome.accepted ? outcome.note : `Rejected by the simulator: ${outcome.note}`}
+              </span>
               {outcome.order.reason && <em>“{outcome.order.reason}”</em>}
             </li>
           ))}
@@ -365,27 +510,39 @@ export default function DispatchConsole(props: DispatchConsoleProps) {
 
       <div className="dsp-controls">
         {!active || status === "finished" ? (
-          <button type="button" className="fr-btn fr-btn--primary dsp-start" disabled={startBlocker !== null} onClick={props.onStart}>
+          <Button className="dsp-start" disabled={startBlocker !== null} onClick={props.onStart}>
             {status === "finished" ? "Run the dispatcher again" : "Start the AI dispatcher"}
-          </button>
+          </Button>
         ) : status === "paused" ? (
-          <button type="button" className="fr-btn fr-btn--primary" onClick={props.onResume}>Resume</button>
+          <Button onClick={props.onResume}>Resume</Button>
         ) : status === "failed" ? (
           <>
-            <button type="button" className="fr-btn fr-btn--primary" onClick={props.onRetry}>Retry decision</button>
-            <button type="button" className="fr-btn" onClick={props.onSkip}>Continue without orders</button>
+            <Button onClick={props.onRetry}>Retry decision</Button>
+            <Button variant="secondary" onClick={props.onSkip}>
+              Continue without orders
+            </Button>
           </>
         ) : (
-          <button type="button" className="fr-btn" onClick={props.onPause} disabled={status === "thinking"}>Pause</button>
+          <Button variant="secondary" onClick={props.onPause} disabled={status === "thinking"}>
+            Pause
+          </Button>
         )}
         {active && (
-          <button type="button" className="fr-btn" onClick={props.onStop}>Stop</button>
+          <Button variant="secondary" onClick={props.onStop}>
+            Stop
+          </Button>
         )}
         <label className="dsp-speed">
           Speed
-          <select value={speed} onChange={(event) => props.onSpeedChange(Number(event.target.value))}>
+          <select
+            className="ui-input"
+            value={speed}
+            onChange={(event) => props.onSpeedChange(Number(event.target.value))}
+          >
             {DISPATCH_SPEED_CHOICES.map((choice) => (
-              <option key={choice} value={choice}>{choice} min/s</option>
+              <option key={choice} value={choice}>
+                {choice} min/s
+              </option>
             ))}
           </select>
         </label>
@@ -409,15 +566,17 @@ export default function DispatchConsole(props: DispatchConsoleProps) {
       {!engine && startBlocker && <p className="dsp-note">{startBlocker}</p>}
       {!engine && !startBlocker && baseline && (
         <p className="dsp-callout">
-          With nobody told to leave, the fire model reaches <strong>{NUMBER.format(baseline.caught)}</strong> of{" "}
-          {NUMBER.format(baseline.homes)} homes before their households get out. Start the dispatcher to see what orders change.
+          With nobody told to leave, the fire model reaches{" "}
+          <strong>{NUMBER.format(baseline.caught)}</strong> of {NUMBER.format(baseline.homes)} homes
+          before their households get out. Start the dispatcher to see what orders change.
         </p>
       )}
 
       {engine && <Tiles totals={engine.totals()} baseline={baseline} />}
       {engine && (status === "running" || status === "thinking") && (
         <p className="dsp-note">
-          {hhmm(engine.minute)} · the clock stops at every decision (each {DECISION_INTERVAL_MINUTES} min, sooner on urgent alerts) until the orders arrive.
+          {hhmm(engine.minute)} · the clock stops at every decision (each{" "}
+          {DECISION_INTERVAL_MINUTES} min, sooner on urgent alerts) until the orders arrive.
         </p>
       )}
       {engine && latest && area && <LatestOrders entry={latest} area={area} />}
@@ -432,17 +591,32 @@ export default function DispatchConsole(props: DispatchConsoleProps) {
                 ["log", `Agent log (${log.length})`],
               ] as [Tab, string][]
             ).map(([id, label]) => (
-              <button key={id} type="button" role="tab" aria-selected={tab === id} className={tab === id ? "is-active" : ""} onClick={() => setTab(id)}>
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                aria-selected={tab === id}
+                className={tab === id ? "is-active" : ""}
+                onClick={() => setTab(id)}
+              >
                 {label}
               </button>
             ))}
           </div>
           <div className="dsp-tabpanel" role="tabpanel">
-            {tab === "board" && <EvacuationBoard engine={engine} selectedZone={selectedZone} onSelectZone={props.onSelectZone} />}
+            {tab === "board" && (
+              <EvacuationBoard
+                engine={engine}
+                selectedZone={selectedZone}
+                onSelectZone={props.onSelectZone}
+              />
+            )}
             {tab === "crews" && <Crews engine={engine} />}
             {tab === "log" && (
               <ol className="dsp-log" aria-label="Agent decisions, newest first">
-                {log.map((entry) => <LogEntry key={entry.id} entry={entry} area={area} />)}
+                {log.map((entry) => (
+                  <LogEntry key={entry.id} entry={entry} area={area} />
+                ))}
               </ol>
             )}
           </div>
@@ -450,8 +624,8 @@ export default function DispatchConsole(props: DispatchConsoleProps) {
       )}
 
       <p className="dsp-disclaimer">
-        Planning experiment. The AI picks among options the simulator computes; it does not change the fire. Homes and
-        zones are synthetic; roads and stations © OpenStreetMap contributors.
+        Planning experiment. The AI picks among options the simulator computes; it does not change
+        the fire. Homes and zones are synthetic; roads and stations © OpenStreetMap contributors.
       </p>
     </section>
   );

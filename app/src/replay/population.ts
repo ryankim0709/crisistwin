@@ -10,7 +10,9 @@ function ringAreaM2(ring: readonly [number, number][]): number {
   for (let i = 0; i < ring.length; i += 1) {
     const [lon1, lat1] = ring[i];
     const [lon2, lat2] = ring[(i + 1) % ring.length];
-    sum += ((lon2 - lon1) * Math.PI) / 180 * (2 + Math.sin((lat1 * Math.PI) / 180) + Math.sin((lat2 * Math.PI) / 180));
+    sum +=
+      (((lon2 - lon1) * Math.PI) / 180) *
+      (2 + Math.sin((lat1 * Math.PI) / 180) + Math.sin((lat2 * Math.PI) / 180));
   }
   return Math.abs((sum * EARTH_R_M * EARTH_R_M) / 2);
 }
@@ -48,12 +50,17 @@ function departedBy(dep: { atMs: number[]; cumVeh: number[] } | undefined, t: nu
 }
 
 /** One entry per zone (same order as model.zones.items); null where households are unknown. */
-export function peopleAtHome(model: ReplayModel, areas: readonly number[], t: number): (ZoneHome | null)[] {
+export function peopleAtHome(
+  model: ReplayModel,
+  areas: readonly number[],
+  t: number,
+): (ZoneHome | null)[] {
   const zones: readonly Zone[] = model.zones?.items ?? [];
   const departures = model.traffic?.zoneDepartures ?? {};
   return zones.map((z, i) => {
     if (z.households == null || !(areas[i] > 0)) return null;
-    const share = z.vehicles && z.vehicles > 0 ? Math.min(1, departedBy(departures[z.id], t) / z.vehicles) : 0;
+    const share =
+      z.vehicles && z.vehicles > 0 ? Math.min(1, departedBy(departures[z.id], t) / z.vehicles) : 0;
     const home = z.households * (1 - share);
     return { home, left: z.households - home, density: home / areas[i] };
   });

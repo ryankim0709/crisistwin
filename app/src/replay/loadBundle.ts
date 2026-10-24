@@ -12,7 +12,10 @@ export class BundleMissingError extends Error {
   }
 }
 
-export async function fetchReplayBundle(signal: AbortSignal, url = REPLAY_BUNDLE_URL): Promise<ReplayModel> {
+export async function fetchReplayBundle(
+  signal: AbortSignal,
+  url = REPLAY_BUNDLE_URL,
+): Promise<ReplayModel> {
   const response = await fetch(url, { signal, headers: { Accept: "application/json" } });
   if (response.status === 404) throw new BundleMissingError(url, "HTTP 404");
   if (!response.ok) throw new Error(`Replay bundle request returned HTTP ${response.status}.`);
@@ -83,7 +86,8 @@ export const REPLAY_INCIDENTS: ReplayIncident[] = [
     place: "Sonoma County, CA",
     bundleUrl: "/replays/kincade-2019.json",
     variantsUrl: null,
-    generateHint: "app/public/replays/kincade-2019.json (the sim bundle command supports only Camp so far)",
+    generateHint:
+      "app/public/replays/kincade-2019.json (the sim bundle command supports only Camp so far)",
   },
   {
     id: "marshall-2021",
@@ -91,7 +95,8 @@ export const REPLAY_INCIDENTS: ReplayIncident[] = [
     place: "Boulder County, CO",
     bundleUrl: "/replays/marshall-2021.json",
     variantsUrl: null,
-    generateHint: "app/public/replays/marshall-2021.json (the sim bundle command supports only Camp so far)",
+    generateHint:
+      "app/public/replays/marshall-2021.json (the sim bundle command supports only Camp so far)",
   },
 ];
 
@@ -115,17 +120,24 @@ export const INCIDENTS_INDEX_URL = "/replays/index.json";
  * so callers fall back to REPLAY_INCIDENTS.
  */
 export async function fetchIncidents(signal: AbortSignal): Promise<ReplayIncident[] | null> {
-  const response = await fetch(INCIDENTS_INDEX_URL, { signal, headers: { Accept: "application/json" } });
-  if (!response.ok || (response.headers.get("content-type") ?? "").includes("text/html")) return null;
+  const response = await fetch(INCIDENTS_INDEX_URL, {
+    signal,
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok || (response.headers.get("content-type") ?? "").includes("text/html"))
+    return null;
   const data: unknown = await response.json();
   const list = Array.isArray(data)
     ? data
-    : typeof data === "object" && data !== null && Array.isArray((data as { incidents?: unknown }).incidents)
+    : typeof data === "object" &&
+        data !== null &&
+        Array.isArray((data as { incidents?: unknown }).incidents)
       ? (data as { incidents: unknown[] }).incidents
       : [];
   const text = (v: unknown) => (typeof v === "string" && v.length > 0 ? v : null);
   const base = INCIDENTS_INDEX_URL.slice(0, INCIDENTS_INDEX_URL.lastIndexOf("/") + 1);
-  const resolve = (file: string) => (file.startsWith("/") || /^https?:/.test(file) ? file : base + file);
+  const resolve = (file: string) =>
+    file.startsWith("/") || /^https?:/.test(file) ? file : base + file;
   const out: ReplayIncident[] = [];
   for (const raw of list) {
     if (typeof raw !== "object" || raw === null) continue;
@@ -142,7 +154,9 @@ export async function fetchIncidents(signal: AbortSignal): Promise<ReplayInciden
       label: [name, place, date].filter(Boolean).join(" · "),
       place,
       bundleUrl: resolve(file),
-      variantsUrl: variants ? resolve(variants) : (REPLAY_INCIDENTS.find((i) => i.id === id)?.variantsUrl ?? null),
+      variantsUrl: variants
+        ? resolve(variants)
+        : (REPLAY_INCIDENTS.find((i) => i.id === id)?.variantsUrl ?? null),
       generateHint: `app/public/replays/${file}`,
     });
   }

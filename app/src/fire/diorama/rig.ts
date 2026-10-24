@@ -33,7 +33,10 @@ export type Framing = { points: THREE.Vector3[]; target: THREE.Vector3 };
 export class FireCameraRig {
   readonly camera: THREE.PerspectiveCamera;
   readonly controls: OrbitControls;
-  private board: Framing = { points: [new THREE.Vector3(-300, 0, -300), new THREE.Vector3(300, 0, 300)], target: new THREE.Vector3() };
+  private board: Framing = {
+    points: [new THREE.Vector3(-300, 0, -300), new THREE.Vector3(300, 0, 300)],
+    target: new THREE.Vector3(),
+  };
   private half = { x: 300, z: 300 };
   private focus: Framing | null = null;
   private boardDistance = 1500;
@@ -46,7 +49,13 @@ export class FireCameraRig {
   private lastInteraction = 0;
   private driftAngle = 0;
   private driftRamp = 0;
-  private reset: { from: THREE.Spherical; fromTarget: THREE.Vector3; to: THREE.Spherical; toTarget: THREE.Vector3; t: number } | null = null;
+  private reset: {
+    from: THREE.Spherical;
+    fromTarget: THREE.Vector3;
+    to: THREE.Spherical;
+    toTarget: THREE.Vector3;
+    t: number;
+  } | null = null;
   private readonly onStart = () => {
     this.interacting = true;
     this.atComposed = false;
@@ -72,14 +81,23 @@ export class FireCameraRig {
     this.controls.zoomToCursor = true;
     // Map-style: drag pans over the ground (Ctrl/Cmd+drag swaps to orbit); right-drag orbits;
     // one finger pans, two fingers pinch-zoom and twist.
-    this.controls.mouseButtons = { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
+    this.controls.mouseButtons = {
+      LEFT: THREE.MOUSE.PAN,
+      MIDDLE: THREE.MOUSE.DOLLY,
+      RIGHT: THREE.MOUSE.ROTATE,
+    };
     this.controls.touches = { ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_ROTATE };
     this.controls.screenSpacePanning = false;
     this.controls.minPolarAngle = POLAR_RANGE[0];
     this.controls.maxPolarAngle = POLAR_RANGE[1];
     this.controls.minAzimuthAngle = DEFAULT_AZIMUTH - AZIMUTH_SWING;
     this.controls.maxAzimuthAngle = DEFAULT_AZIMUTH + AZIMUTH_SWING;
-    this.controls.keys = { LEFT: "ArrowLeft", UP: "ArrowUp", RIGHT: "ArrowRight", BOTTOM: "ArrowDown" };
+    this.controls.keys = {
+      LEFT: "ArrowLeft",
+      UP: "ArrowUp",
+      RIGHT: "ArrowRight",
+      BOTTOM: "ArrowDown",
+    };
     this.controls.keyPanSpeed = 28;
     this.controls.listenToKeyEvents(domElement);
     this.controls.addEventListener("start", this.onStart);
@@ -116,7 +134,10 @@ export class FireCameraRig {
   freeCentre(): { x: number; y: number } {
     const { w, h } = this.viewport;
     const ins = this.insets;
-    return { x: ins.left + (w - ins.left - ins.right) / 2, y: ins.top + (h - ins.top - ins.bottom) / 2 };
+    return {
+      x: ins.left + (w - ins.left - ins.right) / 2,
+      y: ins.top + (h - ins.top - ins.bottom) / 2,
+    };
   }
 
   /**
@@ -146,7 +167,13 @@ export class FireCameraRig {
         if (v.z > 1) return false;
         const px = ((v.x + 1) / 2) * w;
         const py = ((1 - v.y) / 2) * h;
-        if (px < ins.left + mx || px > w - ins.right - mx || py < ins.top + my || py > h - ins.bottom - my) return false;
+        if (
+          px < ins.left + mx ||
+          px > w - ins.right - mx ||
+          py < ins.top + my ||
+          py > h - ins.bottom - my
+        )
+          return false;
       }
       return true;
     };
@@ -190,8 +217,15 @@ export class FireCameraRig {
   }
 
   private spherical(framing: Framing) {
-    const d = framing === this.board ? this.boardDistance : Math.max(this.controls.minDistance, this.computeFit(framing, 5));
-    return new THREE.Spherical(Math.min(d, this.controls.maxDistance), DEFAULT_POLAR, DEFAULT_AZIMUTH);
+    const d =
+      framing === this.board
+        ? this.boardDistance
+        : Math.max(this.controls.minDistance, this.computeFit(framing, 5));
+    return new THREE.Spherical(
+      Math.min(d, this.controls.maxDistance),
+      DEFAULT_POLAR,
+      DEFAULT_AZIMUTH,
+    );
   }
 
   private snapTo(framing: Framing) {
@@ -214,11 +248,19 @@ export class FireCameraRig {
       this.snapTo(framing);
       return;
     }
-    const from = new THREE.Spherical().setFromVector3(this.camera.position.clone().sub(this.controls.target));
+    const from = new THREE.Spherical().setFromVector3(
+      this.camera.position.clone().sub(this.controls.target),
+    );
     const to = this.spherical(framing);
     while (to.theta - from.theta > Math.PI) to.theta -= Math.PI * 2;
     while (from.theta - to.theta > Math.PI) to.theta += Math.PI * 2;
-    this.reset = { from, fromTarget: this.controls.target.clone(), to, toTarget: framing.target.clone(), t: 0 };
+    this.reset = {
+      from,
+      fromTarget: this.controls.target.clone(),
+      to,
+      toTarget: framing.target.clone(),
+      t: 0,
+    };
     this.controls.enabled = false;
   }
 
@@ -226,7 +268,11 @@ export class FireCameraRig {
   zoomBy(factor: number) {
     if (this.reset) return;
     const offset = this.camera.position.clone().sub(this.controls.target);
-    const d = THREE.MathUtils.clamp(offset.length() * factor, this.controls.minDistance, this.controls.maxDistance);
+    const d = THREE.MathUtils.clamp(
+      offset.length() * factor,
+      this.controls.minDistance,
+      this.controls.maxDistance,
+    );
     offset.setLength(d);
     this.camera.position.copy(this.controls.target).add(offset);
     this.atComposed = false;
@@ -265,7 +311,8 @@ export class FireCameraRig {
     } else {
       this.controls.update();
       this.clampTarget();
-      const idle = !reducedMotion && !this.interacting && now - this.lastInteraction > IDLE_DELAY_MS;
+      const idle =
+        !reducedMotion && !this.interacting && now - this.lastInteraction > IDLE_DELAY_MS;
       if (idle) {
         this.driftRamp = Math.min(1, this.driftRamp + dt / 4);
         const angle = this.driftRamp * DRIFT_AMPLITUDE * Math.sin(now * 0.00012);

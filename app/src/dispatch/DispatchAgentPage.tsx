@@ -25,10 +25,12 @@ import {
   type FireRun,
   type GeoPoint,
 } from "../fire/spread";
-import AreaPicker, { DEFAULT_AREA } from "../fire/ui/AreaPicker";
+import AreaPicker from "../fire/ui/AreaPicker";
+import { DEFAULT_AREA } from "../fire/ui/areaPresets";
 import FireDock from "../fire/ui/FireDock";
 import { effectiveRadiusMeters } from "../fire/ui/areaSize";
 import { useFirePlayback } from "../fire/useFirePlayback";
+import { Button, IconButton, LoadingState, Notice, SegmentedControl, Spinner } from "../ui";
 import DispatchConsole, { hhmm, type SetupStep } from "./DispatchConsole";
 import { HOME_COLORS, cssColor } from "./scene/DispatchOverlay";
 import { DispatchOverlay } from "./scene/DispatchOverlay";
@@ -115,7 +117,9 @@ export default function DispatchAgentPage() {
   const pendingIgnitionRef = useRef<GeoPoint | null>(null);
 
   const region = CALIFORNIA_REGIONS.find((candidate) => candidate.id === selection) ?? null;
-  const radiusMeters = region ? region.radiusMeters : effectiveRadiusMeters(horizonMinutes, "local");
+  const radiusMeters = region
+    ? region.radiusMeters
+    : effectiveRadiusMeters(horizonMinutes, "local");
   const cellMeters = region ? region.cellMeters : landscapeCellMetersFor(radiusMeters);
   const centerLatitude = region ? region.center.latitude : areaCenter.latitude;
   const centerLongitude = region ? region.center.longitude : areaCenter.longitude;
@@ -128,7 +132,9 @@ export default function DispatchAgentPage() {
     const stale = () => controller.signal.aborted || request !== requestRef.current;
     setLandscape({ status: "loading" });
     const live = () =>
-      loadLandscape(centerLongitude, centerLatitude, radiusMeters, controller.signal, { cellMeters }).then((grid) => {
+      loadLandscape(centerLongitude, centerLatitude, radiusMeters, controller.signal, {
+        cellMeters,
+      }).then((grid) => {
         if (!stale()) setLandscape({ status: "ready", grid });
       });
     const work = region
@@ -138,14 +144,18 @@ export default function DispatchAgentPage() {
           },
           (cause: unknown) => {
             if (stale()) return;
-            if (!(cause instanceof RegionUnavailableError) && !(cause instanceof TypeError)) throw cause;
+            if (!(cause instanceof RegionUnavailableError) && !(cause instanceof TypeError))
+              throw cause;
             return live();
           },
         )
       : live();
     work.catch((cause: unknown) => {
       if (stale()) return;
-      setLandscape({ status: "error", message: cause instanceof Error ? cause.message : "Could not load fuel and terrain data." });
+      setLandscape({
+        status: "error",
+        message: cause instanceof Error ? cause.message : "Could not load fuel and terrain data.",
+      });
     });
     return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -161,7 +171,9 @@ export default function DispatchAgentPage() {
   }, [grid]);
 
   // ---- Fire run (Rothermel, same solver and options as /fire) ---------------------------
-  const moisture = (MOISTURE_PRESETS.find((preset) => preset.id === presetId) ?? MOISTURE_PRESETS[0]).moisture;
+  const moisture = (
+    MOISTURE_PRESETS.find((preset) => preset.id === presetId) ?? MOISTURE_PRESETS[0]
+  ).moisture;
   const scenario = useMemo(
     () =>
       origin
@@ -174,25 +186,35 @@ export default function DispatchAgentPage() {
             stepMinutes: FIRE_STEP_MINUTES,
             horizonMinutes,
             spotting: { enabled: true, maxDistanceMeters: DEFAULT_SPOTTING.maxDistanceMeters },
-            structureSpread: { enabled: true, rateMetersPerMinute: DEFAULT_STRUCTURE_SPREAD.rateMetersPerMinute },
+            structureSpread: {
+              enabled: true,
+              rateMetersPerMinute: DEFAULT_STRUCTURE_SPREAD.rateMetersPerMinute,
+            },
           }
         : null,
     [origin, windSpeedMph, windFromDegrees, moisture, horizonMinutes],
   );
   const deferredScenario = useDeferredValue(scenario);
   const fire = useMemo<{ run: FireRun | null; error: string | null }>(() => {
-    if (!grid || !deferredScenario || cellAt(grid, deferredScenario.origin) < 0) return { run: null, error: null };
+    if (!grid || !deferredScenario || cellAt(grid, deferredScenario.origin) < 0)
+      return { run: null, error: null };
     try {
       return { run: simulateFireSpread(grid, deferredScenario), error: null };
     } catch (cause) {
-      return { run: null, error: cause instanceof Error ? cause.message : "This fire could not be simulated." };
+      return {
+        run: null,
+        error: cause instanceof Error ? cause.message : "This fire could not be simulated.",
+      };
     }
   }, [grid, deferredScenario]);
   // Clearing the fire must not leave the previous run on screen while the deferred value catches up.
   const run = scenario ? fire.run : null;
 
   // ---- Road network, homes and stations for the box the fire threatens -------------------
-  const box = useMemo(() => (grid && run ? dispatchBoxFor(grid, run.arrivalMinutes, horizonMinutes) : null), [grid, run, horizonMinutes]);
+  const box = useMemo(
+    () => (grid && run ? dispatchBoxFor(grid, run.arrivalMinutes, horizonMinutes) : null),
+    [grid, run, horizonMinutes],
+  );
   const snapped = useMemo(() => (box ? snapBox(box) : null), [box]);
   const boxKey = snapped ? snapped.join(",") : null;
   useEffect(() => {
@@ -201,7 +223,11 @@ export default function DispatchAgentPage() {
       return;
     }
     const controller = new AbortController();
-    setAreaState((current) => (current.status === "ready" && current.key === boxKey ? current : { status: "loading", key: boxKey }));
+    setAreaState((current) =>
+      current.status === "ready" && current.key === boxKey
+        ? current
+        : { status: "loading", key: boxKey },
+    );
     const timer = window.setTimeout(() => {
       loadArea(snapped, controller.signal)
         .then((area) => {
@@ -224,8 +250,14 @@ export default function DispatchAgentPage() {
   }, [boxKey, areaAttempt]);
   const area = areaState.status === "ready" && areaState.key === boxKey ? areaState.area : null;
 
-  const exposure = useMemo(() => (area && grid && run ? computeExposure(area, grid, run.arrivalMinutes) : null), [area, grid, run]);
-  const baseline = useMemo(() => (area && exposure ? noActionBaseline(area, exposure, horizonMinutes) : null), [area, exposure, horizonMinutes]);
+  const exposure = useMemo(
+    () => (area && grid && run ? computeExposure(area, grid, run.arrivalMinutes) : null),
+    [area, grid, run],
+  );
+  const baseline = useMemo(
+    () => (area && exposure ? noActionBaseline(area, exposure, horizonMinutes) : null),
+    [area, exposure, horizonMinutes],
+  );
 
   // ---- Clocks: fire preview before a run, the session clock during one -------------------
   const pushTime = useCallback(
@@ -323,7 +355,12 @@ export default function DispatchAgentPage() {
       const dock = stage.querySelector<HTMLElement>(".dsp-dock");
       const left = panel && panel.offsetParent ? panel.getBoundingClientRect().right - box.left : 0;
       const bottom = dock ? box.bottom - dock.getBoundingClientRect().top : 0;
-      scene.setViewInsets({ top: 0, right: 0, bottom: Math.max(0, bottom), left: Math.max(0, left) });
+      scene.setViewInsets({
+        top: 0,
+        right: 0,
+        bottom: Math.max(0, bottom),
+        left: Math.max(0, left),
+      });
     };
     const observer = new ResizeObserver(measure);
     observer.observe(stage);
@@ -416,10 +453,22 @@ export default function DispatchAgentPage() {
       windFromDegrees,
       windSpeedMph,
     });
-  }, [area, exposure, run, baseline, horizonMinutes, windFromDegrees, windSpeedMph, session, pausePreview]);
+  }, [
+    area,
+    exposure,
+    run,
+    baseline,
+    horizonMinutes,
+    windFromDegrees,
+    windSpeedMph,
+    session,
+    pausePreview,
+  ]);
 
   // ---- Setup checklist --------------------------------------------------------------------
-  const areaLabel = region ? region.name : `Custom area (${areaCenter.latitude.toFixed(2)}, ${areaCenter.longitude.toFixed(2)})`;
+  const areaLabel = region
+    ? region.name
+    : `Custom area (${areaCenter.latitude.toFixed(2)}, ${areaCenter.longitude.toFixed(2)})`;
   const steps: SetupStep[] = [
     {
       label: "Landscape",
@@ -429,25 +478,25 @@ export default function DispatchAgentPage() {
           : landscape.status === "error"
             ? landscape.message
             : "Loading fuels and terrain…",
-      state: landscape.status === "ready" ? "done" : landscape.status === "error" ? "error" : "active",
+      state:
+        landscape.status === "ready" ? "done" : landscape.status === "error" ? "error" : "active",
     },
     {
       label: "Start a fire",
       detail: run
         ? `Simulated ${horizonMinutes / 60} h of spread, wind ${windSpeedMph} mph from ${compassPoint(windFromDegrees)}`
-        : fire.error ?? "Click the landscape where the fire starts, or use the demo fire.",
+        : (fire.error ?? "Click the landscape where the fire starts, or use the demo fire."),
       state: run ? "done" : fire.error ? "error" : grid ? "active" : "waiting",
     },
     {
       label: "Roads, homes and stations",
-      detail:
-        area
-          ? `${area.name}: ${area.homes.length.toLocaleString()} homes in ${area.zones.length} zones, ${area.exits.length} exits, ${area.stations.length} fire stations`
-          : areaState.status === "error"
-            ? areaState.message
-            : run
-              ? "Building the evacuation network from OpenStreetMap…"
-              : "Built from OpenStreetMap around the fire.",
+      detail: area
+        ? `${area.name}: ${area.homes.length.toLocaleString()} homes in ${area.zones.length} zones, ${area.exits.length} exits, ${area.stations.length} fire stations`
+        : areaState.status === "error"
+          ? areaState.message
+          : run
+            ? "Building the evacuation network from OpenStreetMap…"
+            : "Built from OpenStreetMap around the fire.",
       state: area ? "done" : areaState.status === "error" ? "error" : run ? "active" : "waiting",
     },
   ];
@@ -465,14 +514,23 @@ export default function DispatchAgentPage() {
   const editable = !sessionActive;
 
   return (
-    <main className="fr-page dsp-page" id="main-content" aria-label="Dispatch agent" data-reduced-motion={reducedMotion ? "true" : undefined}>
+    <main
+      className="fr-page dsp-page"
+      id="main-content"
+      aria-label="Dispatch agent"
+      data-reduced-motion={reducedMotion ? "true" : undefined}
+    >
       <div className="dsp-layout">
         <div className="fr-stage dsp-stage" ref={stageRef}>
           <div
             className="fr-scene"
             ref={sceneHostRef}
             role="group"
-            aria-label={sessionActive ? "3D landscape. Click a home to select its zone." : "3D landscape. Click to start the fire."}
+            aria-label={
+              sessionActive
+                ? "3D landscape. Click a home to select its zone."
+                : "3D landscape. Click to start the fire."
+            }
           />
           {sceneError && (
             <div className="fr-error fr-panel dsp-center" role="alert">
@@ -482,7 +540,7 @@ export default function DispatchAgentPage() {
           )}
           {landscape.status === "loading" && (
             <div className="fr-veil" role="status">
-              <span className="fr-veil-dot" aria-hidden="true" />
+              <Spinner size="lg" />
               <div>
                 <p>Sculpting terrain from LANDFIRE fuels and elevation…</p>
               </div>
@@ -493,8 +551,10 @@ export default function DispatchAgentPage() {
               <p className="fr-error-title">The landscape could not be loaded</p>
               <p>{landscape.message}</p>
               <div className="fr-error-actions">
-                <button type="button" className="fr-btn fr-btn--primary" onClick={() => setLoadAttempt((v) => v + 1)}>Retry</button>
-                <button type="button" className="fr-btn" onClick={() => setAreaPickerOpen(true)}>Change area</button>
+                <Button onClick={() => setLoadAttempt((v) => v + 1)}>Retry</Button>
+                <Button variant="secondary" onClick={() => setAreaPickerOpen(true)}>
+                  Change area
+                </Button>
               </div>
             </div>
           )}
@@ -505,32 +565,62 @@ export default function DispatchAgentPage() {
                 <header className="fr-scenario-head">
                   <div>
                     <h1 id="dsp-scenario-title">Fire scenario</h1>
-                    <p className="dsp-muted dsp-small">{editable ? "Pick a place, start a fire, then hand it to the dispatcher." : "Locked while the dispatcher runs. Stop it to edit."}</p>
+                    <p className="dsp-muted dsp-small">
+                      {editable
+                        ? "Pick a place, start a fire, then hand it to the dispatcher."
+                        : "Locked while the dispatcher runs. Stop it to edit."}
+                    </p>
                   </div>
-                  <button type="button" className="fr-icon-btn" aria-label="Hide scenario panel" onClick={() => setScenarioOpen(false)}>
-                    <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><path d="M7.5 2.5 4 6l3.5 3.5" fill="none" stroke="currentColor" strokeWidth="1.5" /></svg>
-                  </button>
+                  <IconButton label="Hide scenario panel" onClick={() => setScenarioOpen(false)}>
+                    <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
+                      <path
+                        d="M7.5 2.5 4 6l3.5 3.5"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.5"
+                      />
+                    </svg>
+                  </IconButton>
                 </header>
                 <fieldset className="dsp-scenario-body" disabled={!editable}>
-                  <button type="button" className="fr-btn fr-btn--primary fr-btn--block" onClick={loadDemo}>
+                  <Button block onClick={loadDemo}>
                     ▶ Load demo fire (Berkeley Hills)
-                  </button>
+                  </Button>
                   <div className="fr-field">
                     <label htmlFor="dsp-region">Where</label>
                     <div className="dsp-row">
-                      <select id="dsp-region" value={region ? region.id : ""} onChange={(event) => event.target.value && chooseRegion(event.target.value)}>
-                        {!region && <option value="">Custom: {areaCenter.latitude.toFixed(2)}, {areaCenter.longitude.toFixed(2)}</option>}
+                      <select
+                        id="dsp-region"
+                        className="ui-input"
+                        value={region ? region.id : ""}
+                        onChange={(event) => event.target.value && chooseRegion(event.target.value)}
+                      >
+                        {!region && (
+                          <option value="">
+                            Custom: {areaCenter.latitude.toFixed(2)},{" "}
+                            {areaCenter.longitude.toFixed(2)}
+                          </option>
+                        )}
                         {REGION_AREAS.map((group) => (
                           <optgroup key={group} label={group}>
-                            {CALIFORNIA_REGIONS.filter((entry) => entry.area === group).map((entry) => (
-                              <option key={entry.id} value={entry.id}>{entry.name}</option>
-                            ))}
+                            {CALIFORNIA_REGIONS.filter((entry) => entry.area === group).map(
+                              (entry) => (
+                                <option key={entry.id} value={entry.id}>
+                                  {entry.name}
+                                </option>
+                              ),
+                            )}
                           </optgroup>
                         ))}
                       </select>
-                      <button type="button" className="fr-btn fr-btn--small" onClick={() => setAreaPickerOpen(true)} aria-haspopup="dialog">
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => setAreaPickerOpen(true)}
+                        aria-haspopup="dialog"
+                      >
                         Anywhere…
-                      </button>
+                      </Button>
                     </div>
                   </div>
                   <p className="dsp-hint">
@@ -539,59 +629,121 @@ export default function DispatchAgentPage() {
                       : "👆 Click the landscape to start the fire."}
                   </p>
                   <div className="fr-field">
-                    <label htmlFor="dsp-wind">Wind speed <strong>{windSpeedMph} mph</strong></label>
-                    <input id="dsp-wind" type="range" min={0} max={MAX_WIND_SPEED_MPH} value={windSpeedMph} onChange={(event) => setWindSpeedMph(Number(event.target.value))} />
+                    <label htmlFor="dsp-wind">
+                      Wind speed <strong>{windSpeedMph} mph</strong>
+                    </label>
+                    <input
+                      id="dsp-wind"
+                      type="range"
+                      min={0}
+                      max={MAX_WIND_SPEED_MPH}
+                      value={windSpeedMph}
+                      onChange={(event) => setWindSpeedMph(Number(event.target.value))}
+                    />
                   </div>
                   <div className="fr-field">
-                    <span className="fr-field-title">Wind from <span className="dsp-muted">→ toward {compassPoint(windToward)}</span></span>
-                    <div className="dsp-compass" role="radiogroup" aria-label="Wind from">
-                      {COMPASS.map((deg) => (
-                        <button key={deg} type="button" role="radio" aria-checked={windFromDegrees === deg} className={windFromDegrees === deg ? "is-on" : ""} onClick={() => setWindFromDegrees(deg)}>
-                          {compassPoint(deg)}
-                        </button>
-                      ))}
-                    </div>
+                    <span className="fr-field-title">
+                      Wind from{" "}
+                      <span className="dsp-muted">→ toward {compassPoint(windToward)}</span>
+                    </span>
+                    <SegmentedControl
+                      className="dsp-compass"
+                      label="Wind from"
+                      options={COMPASS.map((deg) => ({
+                        value: String(deg),
+                        label: compassPoint(deg),
+                      }))}
+                      value={String(windFromDegrees)}
+                      onChange={(value) => setWindFromDegrees(Number(value))}
+                    />
                   </div>
                   <div className="fr-field">
                     <span className="fr-field-title">Fuel moisture</span>
                     <div className="fr-preset-row">
                       {MOISTURE_PRESETS.map((preset) => (
-                        <button key={preset.id} type="button" aria-pressed={presetId === preset.id} title={preset.description} onClick={() => setPresetId(preset.id)}>
+                        <Button
+                          key={preset.id}
+                          variant="secondary"
+                          size="sm"
+                          aria-pressed={presetId === preset.id}
+                          title={preset.description}
+                          onClick={() => setPresetId(preset.id)}
+                        >
                           {preset.label}
-                        </button>
+                        </Button>
                       ))}
                     </div>
                   </div>
                   <div className="fr-field fr-field-inline">
                     <label htmlFor="dsp-horizon">Run length</label>
-                    <select id="dsp-horizon" value={horizonMinutes} onChange={(event) => setHorizonMinutes(Number(event.target.value))}>
-                      {HORIZON_CHOICES.map((minutes) => <option key={minutes} value={minutes}>{minutes / 60} hours</option>)}
+                    <select
+                      id="dsp-horizon"
+                      className="ui-input"
+                      value={horizonMinutes}
+                      onChange={(event) => setHorizonMinutes(Number(event.target.value))}
+                    >
+                      {HORIZON_CHOICES.map((minutes) => (
+                        <option key={minutes} value={minutes}>
+                          {minutes / 60} hours
+                        </option>
+                      ))}
                     </select>
                   </div>
                   {areaState.status === "error" && (
-                    <div className="fr-alert" role="alert">
+                    <Notice tone="danger" className="fr-compact-notice">
                       {areaState.message}{" "}
-                      <button type="button" className="fr-btn fr-btn--small" onClick={() => setAreaAttempt((v) => v + 1)}>Retry</button>
-                    </div>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => setAreaAttempt((v) => v + 1)}
+                      >
+                        Retry
+                      </Button>
+                    </Notice>
                   )}
                 </fieldset>
               </section>
             ) : (
-              <button type="button" className="fr-btn dsp-scenario-open" onClick={() => setScenarioOpen(true)}>
+              <Button
+                variant="secondary"
+                className="dsp-scenario-open"
+                onClick={() => setScenarioOpen(true)}
+              >
                 ☰ Scenario
-              </button>
+              </Button>
             )}
 
             <div className="dsp-top">
-              {sessionActive && session.status === "thinking" && <p className="fr-hint-chip fr-panel">⏸ Clock held: the dispatcher is deciding…</p>}
-              {!sessionActive && areaState.status === "loading" && run && <p className="fr-hint-chip fr-panel">Building roads and homes from OpenStreetMap…</p>}
-              {notice && <p className="fr-hint-chip fr-panel">{notice}</p>}
+              {sessionActive && session.status === "thinking" && (
+                <div className="fr-hint-chip fr-panel">
+                  <LoadingState>Clock held: the dispatcher is deciding…</LoadingState>
+                </div>
+              )}
+              {!sessionActive && areaState.status === "loading" && run && (
+                <div className="fr-hint-chip fr-panel">
+                  <LoadingState>Building roads and homes from OpenStreetMap…</LoadingState>
+                </div>
+              )}
+              {notice && (
+                <Notice tone="info" className="fr-compact-notice">
+                  {notice}
+                </Notice>
+              )}
             </div>
 
-            <aside className={`dsp-legend fr-panel${legendOpen ? "" : " is-closed"}`} aria-label="Legend">
-              <button type="button" className="dsp-legend__toggle" aria-expanded={legendOpen} onClick={() => setLegendOpen((v) => !v)}>
+            <aside
+              className={`dsp-legend fr-panel${legendOpen ? "" : " is-closed"}`}
+              aria-label="Legend"
+            >
+              <Button
+                variant="ghost"
+                size="sm"
+                className="dsp-legend__toggle"
+                aria-expanded={legendOpen}
+                onClick={() => setLegendOpen((v) => !v)}
+              >
                 Legend {legendOpen ? "▾" : "▸"}
-              </button>
+              </Button>
               {legendOpen && (
                 <ul>
                   {(
@@ -604,12 +756,30 @@ export default function DispatchAgentPage() {
                       [HOME_COLORS[5], "Caught by fire"],
                     ] as [number, string][]
                   ).map(([color, text]) => (
-                    <li key={text}><span className="dsp-roof" style={{ background: cssColor(color) }} aria-hidden="true" />{text}</li>
+                    <li key={text}>
+                      <span
+                        className="dsp-roof"
+                        style={{ background: cssColor(color) }}
+                        aria-hidden="true"
+                      />
+                      {text}
+                    </li>
                   ))}
-                  <li><span className="dsp-key dsp-key--route" aria-hidden="true" />Evacuation route (colour = exit)</li>
-                  <li><span className="dsp-key dsp-key--engine" aria-hidden="true" />Fire engine &amp; its path</li>
-                  <li><span className="dsp-key dsp-key--exit" aria-hidden="true" />⇥ Exit in use</li>
-                  <li><span className="dsp-key dsp-key--station" aria-hidden="true" />Fire station</li>
+                  <li>
+                    <span className="dsp-key dsp-key--route" aria-hidden="true" />
+                    Evacuation route (colour = exit)
+                  </li>
+                  <li>
+                    <span className="dsp-key dsp-key--engine" aria-hidden="true" />
+                    Fire engine &amp; its path
+                  </li>
+                  <li>
+                    <span className="dsp-key dsp-key--exit" aria-hidden="true" />⇥ Exit in use
+                  </li>
+                  <li>
+                    <span className="dsp-key dsp-key--station" aria-hidden="true" />
+                    Fire station
+                  </li>
                 </ul>
               )}
             </aside>
@@ -620,13 +790,33 @@ export default function DispatchAgentPage() {
                   <strong className="dsp-clock">{hhmm(session.engine.minute)}</strong>
                   <span className="dsp-muted">/ {hhmm(horizonMinutes)}</span>
                   <div className="dsp-track" aria-hidden="true">
-                    <span className="dsp-track__fill" style={{ width: `${(session.engine.minute / horizonMinutes) * 100}%` }} />
+                    <span
+                      className="dsp-track__fill"
+                      style={{ width: `${(session.engine.minute / horizonMinutes) * 100}%` }}
+                    />
                     {session.log.map((entry) => (
-                      <span key={entry.id} className="dsp-track__tick" style={{ left: `${(entry.minute / horizonMinutes) * 100}%` }} title={`Decision at ${hhmm(entry.minute)}`} />
+                      <span
+                        key={entry.id}
+                        className="dsp-track__tick"
+                        style={{ left: `${(entry.minute / horizonMinutes) * 100}%` }}
+                        title={`Decision at ${hhmm(entry.minute)}`}
+                      />
                     ))}
                   </div>
-                  <button type="button" className="fr-btn fr-btn--small" onClick={() => sceneRef.current?.resetView(true)}>Focus fire</button>
-                  <button type="button" className="fr-btn fr-btn--small" onClick={() => sceneRef.current?.resetView(false)}>Whole board</button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => sceneRef.current?.resetView(true)}
+                  >
+                    Focus fire
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => sceneRef.current?.resetView(false)}
+                  >
+                    Whole board
+                  </Button>
                 </section>
               ) : (
                 <FireDock
@@ -643,7 +833,8 @@ export default function DispatchAgentPage() {
           </div>
 
           <p className="fr-attribution">
-            Fuel: LANDFIRE · Terrain: AWS terrain tiles · Roads, stations: © OpenStreetMap contributors (ODbL) · Homes &amp; zones: synthetic
+            Fuel: LANDFIRE · Terrain: AWS terrain tiles · Roads, stations: © OpenStreetMap
+            contributors (ODbL) · Homes &amp; zones: synthetic
           </p>
           {areaPickerOpen && (
             <AreaPicker

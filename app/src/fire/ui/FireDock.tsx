@@ -1,6 +1,12 @@
 import type { KeyboardEvent } from "react";
 import { FIRE_STEP_MINUTES } from "../spread";
-import { PLAYBACK_SPEEDS, modelMinutesPerSecond, type FirePlayback } from "../useFirePlayback";
+import {
+  PLAYBACK_SPEEDS,
+  modelMinutesPerSecond,
+  type FirePlayback,
+  type PlaybackSpeed,
+} from "../useFirePlayback";
+import { Button, IconButton, SegmentedControl, type SegmentedOption } from "../../ui";
 import { formatDuration } from "./format";
 
 const HOUR_MINUTES = 60;
@@ -8,6 +14,11 @@ const SEEK_STEP_MINUTES = FIRE_STEP_MINUTES;
 const SEEK_BIG_STEP_MINUTES = HOUR_MINUTES;
 /** Per-frame minor ticks crowd the rail beyond this many frames. */
 const MAX_MINOR_TICK_FRAMES = 30;
+
+const SPEED_OPTIONS: readonly SegmentedOption<string>[] = PLAYBACK_SPEEDS.map((value) => ({
+  value: String(value),
+  label: `${value}×`,
+}));
 
 /** Spacing of labelled hour marks: every 1 h up to 6 h, every 3 h for 12 h, every 6 h beyond. */
 function labelIntervalMinutes(horizonMinutes: number): number {
@@ -69,13 +80,12 @@ export default function FireDock({
   return (
     <section className="fr-dock fr-panel" aria-label="Fire playback">
       <div className="fr-dock-buttons">
-        <button
-          type="button"
-          className="fr-btn fr-btn--round fr-btn--play"
+        <IconButton
+          variant="primary"
+          label={playing ? "Pause" : ended ? "Replay from start" : "Play"}
+          title="Play / pause (Space)"
           onClick={playback.toggle}
           disabled={!hasRun}
-          aria-label={playing ? "Pause" : ended ? "Replay from start" : "Play"}
-          title="Play / pause (Space)"
         >
           {playing ? (
             <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -86,14 +96,12 @@ export default function FireDock({
               <path d="M4.5 2.5 13.5 8l-9 5.5z" />
             </svg>
           )}
-        </button>
-        <button
-          type="button"
-          className="fr-btn fr-btn--round"
+        </IconButton>
+        <IconButton
+          variant="secondary"
+          label="Restart"
           onClick={playback.restart}
           disabled={!hasRun}
-          aria-label="Restart"
-          title="Restart"
         >
           <svg viewBox="0 0 16 16" aria-hidden="true">
             <path
@@ -112,35 +120,33 @@ export default function FireDock({
               strokeLinejoin="round"
             />
           </svg>
-        </button>
-        <button
-          type="button"
-          className="fr-btn fr-btn--round fr-dock-step"
+        </IconButton>
+        <IconButton
+          variant="secondary"
+          className="fr-dock-step"
+          label={`Back ${FIRE_STEP_MINUTES} minutes`}
           onClick={() => {
             if (!hasRun || t <= 0) return;
             playback.pause();
             playback.seek(Math.max(0, playback.getTime() - FIRE_STEP_MINUTES));
           }}
           aria-disabled={!hasRun || t <= 0}
-          aria-label={`Back ${FIRE_STEP_MINUTES} minutes`}
-          title={`Back ${FIRE_STEP_MINUTES} minutes`}
         >
           ‹
-        </button>
-        <button
-          type="button"
-          className="fr-btn fr-btn--round fr-dock-step"
+        </IconButton>
+        <IconButton
+          variant="secondary"
+          className="fr-dock-step"
+          label={`Forward ${FIRE_STEP_MINUTES} minutes`}
           onClick={() => {
             if (!hasRun || ended) return;
             playback.pause();
             playback.seek(Math.min(horizonMinutes, playback.getTime() + FIRE_STEP_MINUTES));
           }}
           aria-disabled={!hasRun || ended}
-          aria-label={`Forward ${FIRE_STEP_MINUTES} minutes`}
-          title={`Forward ${FIRE_STEP_MINUTES} minutes`}
         >
           ›
-        </button>
+        </IconButton>
       </div>
 
       <div className="fr-scrub">
@@ -175,6 +181,7 @@ export default function FireDock({
             <li key={minutes} style={{ left: `${(minutes / horizonMinutes) * 100}%` }}>
               <button
                 type="button"
+                className="fr-scrub-label"
                 disabled={!hasRun}
                 onClick={() => {
                   playback.pause();
@@ -198,56 +205,54 @@ export default function FireDock({
       </p>
 
       <div className="fr-dock-end">
-        <div className="fr-speed" role="group" aria-label="Playback speed">
-          {PLAYBACK_SPEEDS.map((value) => (
-            <button
-              key={value}
-              type="button"
-              aria-pressed={speed === value}
-              onClick={() => playback.setSpeed(value)}
-              title={`${Math.round(value * minutesPerSecond)} model minutes per second`}
-            >
-              {value}×
-            </button>
-          ))}
-        </div>
-        <button
-          type="button"
-          className="fr-btn fr-btn--text"
+        <SegmentedControl
+          className="fr-speed"
+          label="Playback speed"
+          options={SPEED_OPTIONS}
+          value={String(speed)}
+          onChange={(value) => playback.setSpeed(Number(value) as PlaybackSpeed)}
+        />
+        <Button
+          variant="secondary"
+          className="fr-dock-action"
           onClick={onResetView}
           disabled={!sceneReady}
           title="Return the camera to the view of the whole board"
+
+          icon={
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path
+                d="M2.5 6V2.5H6M13.5 6V2.5H10M2.5 10v3.5H6M13.5 10v3.5H10"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+              />
+              <circle cx="8" cy="8" r="1.6" fill="currentColor" />
+            </svg>
+          }
         >
-          <svg viewBox="0 0 16 16" aria-hidden="true">
-            <path
-              d="M2.5 6V2.5H6M13.5 6V2.5H10M2.5 10v3.5H6M13.5 10v3.5H10"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.5"
-            />
-            <circle cx="8" cy="8" r="1.6" fill="currentColor" />
-          </svg>
           <span>Reset view</span>
-        </button>
-        <button
-          type="button"
-          className="fr-btn fr-btn--text"
+        </Button>
+        <Button
+          variant="secondary"
+          className="fr-dock-action"
           onClick={onFocusFire}
           disabled={!sceneReady || !canFocusFire}
           title="Frame the burned area"
+
+          icon={
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path
+                d="M8 14c-2.8 0-4.2-1.9-3.6-4.1.4-1.2 1.4-2 1.7-3.6 1.3.8 1.7 1.7 1.9 2.7.5-.5.7-1.2.6-2.1 1.7 1.4 2.6 2.8 2.5 4.1C11 12.7 9.7 14 8 14z"
+                fill="currentColor"
+              />
+            </svg>
+          }
         >
-          <svg viewBox="0 0 16 16" aria-hidden="true">
-            <path
-              d="M8 14c-2.8 0-4.2-1.9-3.6-4.1.4-1.2 1.4-2 1.7-3.6 1.3.8 1.7 1.7 1.9 2.7.5-.5.7-1.2.6-2.1 1.7 1.4 2.6 2.8 2.5 4.1C11 12.7 9.7 14 8 14z"
-              fill="currentColor"
-            />
-          </svg>
           <span>Focus fire</span>
-        </button>
+        </Button>
       </div>
-      <p className="fr-speed-note">
-        1× = {Math.round(minutesPerSecond)} model minutes per second
-      </p>
+      <p className="fr-speed-note">1× = {Math.round(minutesPerSecond)} model minutes per second</p>
     </section>
   );
 }

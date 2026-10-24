@@ -26,7 +26,16 @@ const NEIGHBOURHOOD_ANGLES = [0, 0, 0.14, -0.2, 0.35, -0.42, 0.62, 0.08] as cons
  * `CLUMP_UNITS` world units) and houses fewer, larger and jittered off their lattice rows.
  */
 const CLUMP_UNITS = 16;
-const REGIONAL = { treeScale: 1.5, treeCapCut: 0.4, bushScale: 1.2, bushCapCut: 0.6, houseSize: 1.0, houseJitter: 0.5, houseDrop: 0.2, treeSpread: 2.0 } as const;
+const REGIONAL = {
+  treeScale: 1.5,
+  treeCapCut: 0.4,
+  bushScale: 1.2,
+  bushCapCut: 0.6,
+  houseSize: 1.0,
+  houseJitter: 0.5,
+  houseDrop: 0.2,
+  treeSpread: 2.0,
+} as const;
 
 /** Smooth value noise (0..1) on a lattice of `size` world units. */
 function valueNoise(x: number, z: number, size: number) {
@@ -132,7 +141,11 @@ class FireInstances {
       }
       for (const p of this.parts) {
         if (state === State.Burned) p.mesh.setColorAt(i, p.burned);
-        else if (state === State.Unburned || !p.glows) p.mesh.setColorAt(i, this.c.fromArray(p.base, i * 3).lerp(CHAR, state === State.Burning ? 0.55 : 0));
+        else if (state === State.Unburned || !p.glows)
+          p.mesh.setColorAt(
+            i,
+            this.c.fromArray(p.base, i * 3).lerp(CHAR, state === State.Burning ? 0.55 : 0),
+          );
       }
       colorDirty = true;
     }
@@ -151,7 +164,9 @@ class FireInstances {
       if (!p.glows) continue;
       for (const i of this.burning) {
         const f = Math.min(1, Math.max(0, (this.t - this.arrival[i]) / this.window));
-        const wobble = reducedMotion ? 0.5 : 0.5 + 0.5 * Math.sin(time * 9 + i * 1.7) * Math.sin(time * 5.3 + i * 0.6);
+        const wobble = reducedMotion
+          ? 0.5
+          : 0.5 + 0.5 * Math.sin(time * 9 + i * 1.7) * Math.sin(time * 5.3 + i * 0.6);
         c.copy(CORAL).lerp(HOT, wobble);
         c.multiplyScalar((1 - f) * (1.15 + wobble * 0.55)).lerp(CHAR, f * f);
         p.mesh.setColorAt(i, c);
@@ -177,7 +192,12 @@ function roundCanopy() {
 }
 
 function trunk(height: number) {
-  return place(paint(new THREE.CylinderGeometry(0.35, 0.55, height, 5), 0xffffff), 0, height / 2, 0);
+  return place(
+    paint(new THREE.CylinderGeometry(0.35, 0.55, height, 5), 0xffffff),
+    0,
+    height / 2,
+    0,
+  );
 }
 
 function bushShape() {
@@ -204,7 +224,17 @@ const tmpMat = new THREE.Matrix4();
 const UP = new THREE.Vector3(0, 1, 0);
 const tmpColor = new THREE.Color();
 
-function pushInstance(p: Placement, cell: number, x: number, y: number, z: number, yaw: number, sx: number, sy: number, sz: number) {
+function pushInstance(
+  p: Placement,
+  cell: number,
+  x: number,
+  y: number,
+  z: number,
+  yaw: number,
+  sx: number,
+  sy: number,
+  sz: number,
+) {
   tmpPos.set(x, y, z);
   tmpQuat.setFromAxisAngle(UP, yaw);
   tmpScale.set(sx, sy, sz);
@@ -254,7 +284,8 @@ export class CoverLayer {
         const c = i % cols;
         const x = (c + 0.5 - cols / 2) * cellWorld;
         const z = ((i - c) / cols + 0.5 - rows / 2) * cellWorld;
-        const clump = 0.1 + 1.9 * THREE.MathUtils.smoothstep(valueNoise(x, z, CLUMP_UNITS), 0.3, 0.7);
+        const clump =
+          0.1 + 1.9 * THREE.MathUtils.smoothstep(valueNoise(x, z, CLUMP_UNITS), 0.3, 0.7);
         t = Math.min(1, t * THREE.MathUtils.lerp(1, clump, blend));
       }
       treeP[i] = t;
@@ -272,7 +303,11 @@ export class CoverLayer {
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
         const i = r * cols + c;
-        tree: if (treeP[i] > 0 && pines.cells.length + rounds.cells.length < treeCap && hash2(c * 0.913, r * 1.171) < treeP[i] * treeThin) {
+        tree: if (
+          treeP[i] > 0 &&
+          pines.cells.length + rounds.cells.length < treeCap &&
+          hash2(c * 0.913, r * 1.171) < treeP[i] * treeThin
+        ) {
           const fam = families[i] as FuelFamily;
           frame.cellCentre(c, r, centre);
           const spread = cellWorld * 0.8 + blend * REGIONAL.treeSpread;
@@ -284,18 +319,34 @@ export class CoverLayer {
             if (at < 0 || families[at] === FuelFamily.Water) break tree;
           }
           // Stands: conifer share varies smoothly by block so pines cluster.
-          const stand = blend < 0.01 ? hash2(Math.floor(c / 11) * 3.1, Math.floor(r / 11) * 1.7) : hash2(Math.floor(x / 24) * 3.1, Math.floor(z / 24) * 1.7);
+          const stand =
+            blend < 0.01
+              ? hash2(Math.floor(c / 11) * 3.1, Math.floor(r / 11) * 1.7)
+              : hash2(Math.floor(x / 24) * 3.1, Math.floor(z / 24) * 1.7);
           const tall = useCanopy ? THREE.MathUtils.clamp((heightM[i] || 0) / 30, 0, 1.2) : 0.5;
-          const pine = hash2(c * 2.3, r * 0.37) < PINE_SHARE[fam] * (0.5 + stand) + (tall > 0.8 ? 0.15 : 0);
+          const pine =
+            hash2(c * 2.3, r * 0.37) < PINE_SHARE[fam] * (0.5 + stand) + (tall > 0.8 ? 0.15 : 0);
           const jitter = hash2(x, z);
-          const s = TREE_SCALE * (1 + (REGIONAL.treeScale - 1) * blend) * (0.7 + 0.5 * Math.min(1, tall)) * (0.85 + 0.3 * jitter);
+          const s =
+            TREE_SCALE *
+            (1 + (REGIONAL.treeScale - 1) * blend) *
+            (0.7 + 0.5 * Math.min(1, tall)) *
+            (0.85 + 0.3 * jitter);
           const p = pine ? pines : rounds;
           pushInstance(p, i, x, frame.heightAt(x, z) - 0.1, z, jitter * Math.PI * 2, s, s, s);
           const greens = pine ? PALETTE.pineGreens : PALETTE.roundGreens;
-          pushColor(p.colorsA, greens[Math.floor(jitter * greens.length) % greens.length], 0.92 + hash2(z, x) * 0.16);
+          pushColor(
+            p.colorsA,
+            greens[Math.floor(jitter * greens.length) % greens.length],
+            0.92 + hash2(z, x) * 0.16,
+          );
           pushColor(p.colorsB, PALETTE.trunk, 1);
         }
-        if (bushP[i] > 0 && bushes.cells.length < bushCap && hash2(c * 1.37 + 5.1, r * 0.79) < bushP[i] * bushThin) {
+        if (
+          bushP[i] > 0 &&
+          bushes.cells.length < bushCap &&
+          hash2(c * 1.37 + 5.1, r * 0.79) < bushP[i] * bushThin
+        ) {
           frame.cellCentre(c, r, centre);
           const x = centre.x + (hash2(c * 1.1, r * 2.9) - 0.5) * cellWorld * 0.9;
           const z = centre.z + (hash2(r * 3.3, c * 0.6) - 0.5) * cellWorld * 0.9;
@@ -309,8 +360,16 @@ export class CoverLayer {
     this.counts.trees = pines.cells.length + rounds.cells.length;
     this.counts.bushes = bushes.cells.length;
 
-    const canopyMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.85, flatShading: true });
-    const trunkMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95, flatShading: true });
+    const canopyMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.85,
+      flatShading: true,
+    });
+    const trunkMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.95,
+      flatShading: true,
+    });
     const trunkChar = new THREE.Color(0x221d1a);
     const kinds: [Placement, THREE.BufferGeometry, THREE.BufferGeometry, string][] = [
       [pines, pineCanopy(), trunk(2.6), "pine"],
@@ -330,17 +389,31 @@ export class CoverLayer {
           Float32Array.from(p.m),
           [
             { mesh: canopy, base: Float32Array.from(p.colorsA), burned: CHAR, glows: true },
-            { mesh: trunkMesh, base: Float32Array.from(p.colorsB), burned: trunkChar, glows: false },
+            {
+              mesh: trunkMesh,
+              base: Float32Array.from(p.colorsB),
+              burned: trunkChar,
+              glows: false,
+            },
           ],
           new THREE.Vector3(0.72, 0.78, 0.72),
         ),
       );
     }
     if (bushes.cells.length) {
-      const bushMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, flatShading: true });
+      const bushMat = new THREE.MeshStandardMaterial({
+        color: 0xffffff,
+        roughness: 0.9,
+        flatShading: true,
+      });
       const mesh = this.instanced(bushShape(), bushMat, bushes.cells.length, "bushes");
       this.sets.push(
-        new FireInstances(Int32Array.from(bushes.cells), Float32Array.from(bushes.m), [{ mesh, base: Float32Array.from(bushes.colorsA), burned: CHAR, glows: true }], new THREE.Vector3(0.7, 0.45, 0.7)),
+        new FireInstances(
+          Int32Array.from(bushes.cells),
+          Float32Array.from(bushes.m),
+          [{ mesh, base: Float32Array.from(bushes.colorsA), burned: CHAR, glows: true }],
+          new THREE.Vector3(0.7, 0.45, 0.7),
+        ),
       );
     }
 
@@ -381,11 +454,15 @@ export class CoverLayer {
         let any = false;
         const step = Math.max(1, Math.floor(span / 12));
         for (let r = rA; r < Math.min(rows, rA + span) && !any; r += step) {
-          for (let c = cA; c < Math.min(cols, cA + span); c += step) if (families[r * cols + c] === FuelFamily.Urban) any = true;
+          for (let c = cA; c < Math.min(cols, cA + span); c += step)
+            if (families[r * cols + c] === FuelFamily.Urban) any = true;
         }
         if (!any) continue;
         const h = hash2(bx * 1.31 + 0.2, bz * 0.77 + 9.1);
-        const angle = NEIGHBOURHOOD_ANGLES[Math.floor(h * NEIGHBOURHOOD_ANGLES.length) % NEIGHBOURHOOD_ANGLES.length];
+        const angle =
+          NEIGHBOURHOOD_ANGLES[
+            Math.floor(h * NEIGHBOURHOOD_ANGLES.length) % NEIGHBOURHOOD_ANGLES.length
+          ];
         const ca = Math.cos(angle);
         const sa = Math.sin(angle);
         const cx = x0 + NEIGHBOURHOOD / 2;
@@ -393,12 +470,25 @@ export class CoverLayer {
         const reach = Math.ceil((NEIGHBOURHOOD * 0.75) / Math.min(sx, sz));
         // Lattice anchored on a board-wide phase so neighbouring blocks with the same heading line up.
         for (let v = -reach; v <= reach; v++) {
-          if ((((v + Math.round(cz / sz)) % STREET_EVERY) + STREET_EVERY) % STREET_EVERY === 0) continue;
+          if ((((v + Math.round(cz / sz)) % STREET_EVERY) + STREET_EVERY) % STREET_EVERY === 0)
+            continue;
           for (let u = -reach; u <= reach; u++) {
             const lx = u * sx + (v % 2 ? sx * 0.12 : 0);
             const lz = v * sz;
-            const jx = blend > 0 ? (hash2(u * 1.7 + bx * 13.1, v * 2.3 + bz * 7.7) - 0.5) * sx * REGIONAL.houseJitter * blend : 0;
-            const jz = blend > 0 ? (hash2(u * 2.9 + bz * 5.3, v * 1.1 + bx * 3.9) - 0.5) * sz * REGIONAL.houseJitter * blend : 0;
+            const jx =
+              blend > 0
+                ? (hash2(u * 1.7 + bx * 13.1, v * 2.3 + bz * 7.7) - 0.5) *
+                  sx *
+                  REGIONAL.houseJitter *
+                  blend
+                : 0;
+            const jz =
+              blend > 0
+                ? (hash2(u * 2.9 + bz * 5.3, v * 1.1 + bx * 3.9) - 0.5) *
+                  sz *
+                  REGIONAL.houseJitter *
+                  blend
+                : 0;
             const x = cx + (lx + jx) * ca + (lz + jz) * sa;
             const z = cz - (lx + jx) * sa + (lz + jz) * ca;
             if (x < x0 || x >= x0 + NEIGHBOURHOOD || z < z0 || z >= z0 + NEIGHBOURHOOD) continue;
@@ -412,13 +502,27 @@ export class CoverLayer {
             const d = HOUSE.d * size * (0.85 + 0.25 * j);
             const ht = HOUSE.h * size * (0.9 + 0.35 * hash2(x * 2.1, z));
             const hw = Math.max(w, d) / 2;
-            const ground = Math.min(frame.heightAt(x - hw, z - hw), frame.heightAt(x + hw, z - hw), frame.heightAt(x - hw, z + hw), frame.heightAt(x + hw, z + hw));
-            const top = Math.max(frame.heightAt(x - hw, z - hw), frame.heightAt(x + hw, z - hw), frame.heightAt(x - hw, z + hw), frame.heightAt(x + hw, z + hw));
+            const ground = Math.min(
+              frame.heightAt(x - hw, z - hw),
+              frame.heightAt(x + hw, z - hw),
+              frame.heightAt(x - hw, z + hw),
+              frame.heightAt(x + hw, z + hw),
+            );
+            const top = Math.max(
+              frame.heightAt(x - hw, z - hw),
+              frame.heightAt(x + hw, z - hw),
+              frame.heightAt(x - hw, z + hw),
+              frame.heightAt(x + hw, z + hw),
+            );
             const yaw = angle + (j > 0.5 ? 0 : Math.PI / 2) * (hash2(u, v + bx) > 0.8 ? 1 : 0);
             // Body tall enough to meet the uphill ground; roof above it.
             pushInstance(p, cell, x, ground - 0.15, z, yaw, w, ht + (top - ground) + 0.15, d);
             const roofIdx = Math.floor(hash2(x, z * 3.1) * 3);
-            pushColor(p.colorsA, PALETTE.walls[Math.floor(j * PALETTE.walls.length) % PALETTE.walls.length], 1);
+            pushColor(
+              p.colorsA,
+              PALETTE.walls[Math.floor(j * PALETTE.walls.length) % PALETTE.walls.length],
+              1,
+            );
             pushColor(p.colorsB, [0xc27a5a, 0x6f7b86, 0x8fa182][roofIdx], 0.95 + 0.1 * j);
             roofTops.push(top + ht, HOUSE.rise * size);
           }
@@ -428,8 +532,17 @@ export class CoverLayer {
     if (p.cells.length === 0) return;
     this.counts.houses = p.cells.length;
     const shapes = houseShapes();
-    const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.82, flatShading: true });
-    const roofMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.8, flatShading: true, side: THREE.DoubleSide });
+    const mat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.82,
+      flatShading: true,
+    });
+    const roofMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.8,
+      flatShading: true,
+      side: THREE.DoubleSide,
+    });
     const bodies = this.instanced(shapes.body, mat, p.cells.length, "houses");
     const roofs = this.instanced(shapes.roof, roofMat, p.cells.length, "roofs");
     // Roofs need their own matrices (offset up, unit rise scaled), so they get a second set.
@@ -446,8 +559,18 @@ export class CoverLayer {
     const cells = Int32Array.from(p.cells);
     const burnedWall = new THREE.Color(0x4f4842);
     this.sets.push(
-      new FireInstances(cells, Float32Array.from(p.m), [{ mesh: bodies, base: Float32Array.from(p.colorsA), burned: burnedWall, glows: false }], new THREE.Vector3(1, 1, 1)),
-      new FireInstances(cells, roofM, [{ mesh: roofs, base: Float32Array.from(p.colorsB), burned: CHAR, glows: true }], new THREE.Vector3(1, 0.5, 1)),
+      new FireInstances(
+        cells,
+        Float32Array.from(p.m),
+        [{ mesh: bodies, base: Float32Array.from(p.colorsA), burned: burnedWall, glows: false }],
+        new THREE.Vector3(1, 1, 1),
+      ),
+      new FireInstances(
+        cells,
+        roofM,
+        [{ mesh: roofs, base: Float32Array.from(p.colorsB), burned: CHAR, glows: true }],
+        new THREE.Vector3(1, 0.5, 1),
+      ),
     );
   }
 

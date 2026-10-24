@@ -339,7 +339,8 @@ export class DispatchEngine {
       if (zone.status === "cleared") return reject(`${order.zone_id} has already cleared.`);
       const tree = shortestPathTree(this.area, this.area.zones[index].node, blocked);
       const route = routeTo(this.area, tree, this.exitNode(order.exit_id));
-      if (!route) return reject(`${order.exit_id} is not reachable from ${order.zone_id} avoiding fire.`);
+      if (!route)
+        return reject(`${order.exit_id} is not reachable from ${order.zone_id} avoiding fire.`);
       const redirect = zone.status !== "no_order" && zone.exitId !== order.exit_id;
       if (zone.status === "no_order") {
         zone.status = "ordered";
@@ -381,7 +382,8 @@ export class DispatchEngine {
 
     const index = this.zoneIndex.get(order.zone_id);
     if (index === undefined) return reject(`Unknown zone ${order.zone_id}.`);
-    if (this.zones[index].status === "overrun") return reject(`${order.zone_id} is overrun by fire.`);
+    if (this.zones[index].status === "overrun")
+      return reject(`${order.zone_id} is overrun by fire.`);
     if (order.task !== "evacuation_support" && order.task !== "structure_defense") {
       return reject(`Unknown task ${String(order.task)}.`);
     }
@@ -395,7 +397,11 @@ export class DispatchEngine {
     this.sendUnit(unit, from, route, "en_route", order.task, index);
     if (fromStation) unit.holdSeconds = this.approachSeconds(unit);
     const minutes = Math.round((route.seconds + unit.holdSeconds) / SECONDS_PER_MINUTE);
-    return { order, accepted: true, note: `${unit.id} en route to ${order.zone_id}, ${minutes} min.` };
+    return {
+      order,
+      accepted: true,
+      note: `${unit.id} en route to ${order.zone_id}, ${minutes} min.`,
+    };
   }
 
   private approachSeconds(unit: UnitState): number {
@@ -479,7 +485,10 @@ export class DispatchEngine {
       }
       // Households still at home when the fire reaches their house.
       let caughtAtHome = 0;
-      while (work.fireNext < work.fireOrder.length && homeArrival[work.fireOrder[work.fireNext]] <= now) {
+      while (
+        work.fireNext < work.fireOrder.length &&
+        homeArrival[work.fireOrder[work.fireNext]] <= now
+      ) {
         const home = work.fireOrder[work.fireNext++];
         const status = this.homeStatus[home];
         if (status === HomeStatus.idle || status === HomeStatus.ordered) {
@@ -519,7 +528,12 @@ export class DispatchEngine {
       if (route) {
         zone.route = route;
         if (zone.routeBlocked) zone.routeBlocked = false;
-        else this.alert("route_changed", `Route from ${id} to ${zone.exitId} re-planned around fire.`, false);
+        else
+          this.alert(
+            "route_changed",
+            `Route from ${id} to ${zone.exitId} re-planned around fire.`,
+            false,
+          );
       } else if (!zone.routeBlocked) {
         zone.route = null;
         zone.routeBlocked = true;
@@ -535,14 +549,19 @@ export class DispatchEngine {
   private departures(): void {
     const supported = new Set(
       this.units
-        .filter((unit) => unit.status === "on_scene" && unit.task === "evacuation_support" && unit.zone !== null)
+        .filter(
+          (unit) =>
+            unit.status === "on_scene" && unit.task === "evacuation_support" && unit.zone !== null,
+        )
         .map((unit) => unit.zone as number),
     );
     for (const zone of this.zones) {
       if (zone.status !== "ordered" || zone.atHome <= 0) continue;
       const { firstHome, homes } = this.area.zones[zone.index];
       const work = this.work[zone.index];
-      const spread = supported.has(zone.index) ? SUPPORTED_DEPARTURE_SPREAD_MINUTES : DEPARTURE_SPREAD_MINUTES;
+      const spread = supported.has(zone.index)
+        ? SUPPORTED_DEPARTURE_SPREAD_MINUTES
+        : DEPARTURE_SPREAD_MINUTES;
       work.departBudget += homes / spread;
       while (work.departBudget >= 1 && work.nextDeparture < homes) {
         const home = firstHome + work.nextDeparture++;
@@ -563,8 +582,12 @@ export class DispatchEngine {
     const load = new Map<number, number>();
     for (const zone of this.zones) {
       const work = this.work[zone.index];
-      if (zone.status !== "ordered" || !zone.route || zone.routeBlocked || work.queue.length === 0) continue;
-      const want = Math.min(work.queue.length * work.vehiclesPerHome, zone.route.bottleneckVph / SECONDS_PER_MINUTE);
+      if (zone.status !== "ordered" || !zone.route || zone.routeBlocked || work.queue.length === 0)
+        continue;
+      const want = Math.min(
+        work.queue.length * work.vehiclesPerHome,
+        zone.route.bottleneckVph / SECONDS_PER_MINUTE,
+      );
       desired.set(zone.index, want);
       for (const step of zone.route.steps) load.set(step.edge, (load.get(step.edge) ?? 0) + want);
     }
@@ -618,7 +641,8 @@ export class DispatchEngine {
       let best: { route: Route; id: string } | null = null;
       for (const exit of this.area.exits) {
         const candidate = routeTo(this.area, tree, exit.node);
-        if (candidate && (!best || candidate.seconds < best.route.seconds)) best = { route: candidate, id: exit.id };
+        if (candidate && (!best || candidate.seconds < best.route.seconds))
+          best = { route: candidate, id: exit.id };
       }
       if (best) {
         route = best.route;
@@ -656,7 +680,8 @@ export class DispatchEngine {
       if (!packet.stuck) {
         let budget = SECONDS_PER_MINUTE;
         while (budget > 0 && packet.stepIndex < packet.steps.length) {
-          const left = edgeSeconds(this.area, packet.steps[packet.stepIndex].edge) - packet.stepElapsedSeconds;
+          const left =
+            edgeSeconds(this.area, packet.steps[packet.stepIndex].edge) - packet.stepElapsedSeconds;
           if (left > budget) {
             packet.stepElapsedSeconds += budget;
             budget = 0;
@@ -686,12 +711,24 @@ export class DispatchEngine {
   private advanceUnits(now: number, blocked: (edge: number) => boolean): void {
     const core = this.exposure.zoneCore;
     for (const unit of this.units) {
-      if (unit.status === "on_scene" && unit.zone !== null && core[unit.zone] <= now + UNIT_WITHDRAW_MARGIN_MINUTES) {
+      if (
+        unit.status === "on_scene" &&
+        unit.zone !== null &&
+        core[unit.zone] <= now + UNIT_WITHDRAW_MARGIN_MINUTES
+      ) {
         const zoneId = this.area.zones[unit.zone].id;
-        const route = routeTo(this.area, shortestPathTree(this.area, unit.node, blocked), unit.homeNode);
+        const route = routeTo(
+          this.area,
+          shortestPathTree(this.area, unit.node, blocked),
+          unit.homeNode,
+        );
         if (route) {
           this.sendUnit(unit, unit.node, route, "returning", null, null);
-          this.alert("unit_withdrawn", `${unit.id} withdraws from ${zoneId}: fire is about to reach it.`, true);
+          this.alert(
+            "unit_withdrawn",
+            `${unit.id} withdraws from ${zoneId}: fire is about to reach it.`,
+            true,
+          );
         } else {
           unit.status = "stranded";
           this.alert("unit_stranded", `${unit.id} is cut off in ${zoneId}.`, true);
@@ -702,16 +739,27 @@ export class DispatchEngine {
       const ahead = unit.steps.slice(unit.stepIndex + (unit.stepElapsedSeconds > 0 ? 1 : 0));
       if (ahead.some((step) => blocked(step.edge))) {
         const from = this.unitNextNode(unit);
-        const target = unit.status === "returning" || unit.zone === null ? unit.homeNode : this.area.zones[unit.zone].node;
+        const target =
+          unit.status === "returning" || unit.zone === null
+            ? unit.homeNode
+            : this.area.zones[unit.zone].node;
         const route = routeTo(this.area, shortestPathTree(this.area, from, blocked), target);
         if (route) {
           const current = unit.stepElapsedSeconds > 0 ? [unit.steps[unit.stepIndex]] : [];
           unit.steps = [...current, ...route.steps];
           unit.stepIndex = 0;
         } else {
-          const home = routeTo(this.area, shortestPathTree(this.area, from, blocked), unit.homeNode);
+          const home = routeTo(
+            this.area,
+            shortestPathTree(this.area, from, blocked),
+            unit.homeNode,
+          );
           if (home && unit.status !== "returning") {
-            this.alert("unit_stranded", `${unit.id} cannot reach its assignment avoiding fire; returning.`, true);
+            this.alert(
+              "unit_stranded",
+              `${unit.id} cannot reach its assignment avoiding fire; returning.`,
+              true,
+            );
             this.sendUnit(unit, from, home, "returning", null, null);
           } else {
             unit.status = "stranded";
@@ -777,7 +825,15 @@ export class DispatchEngine {
   // ---- Read models ---------------------------------------------------------------------
 
   totals(): Totals {
-    const totals: Totals = { homes: 0, vehicles: 0, notOrdered: 0, waiting: 0, onRoad: 0, safe: 0, caught: 0 };
+    const totals: Totals = {
+      homes: 0,
+      vehicles: 0,
+      notOrdered: 0,
+      waiting: 0,
+      onRoad: 0,
+      safe: 0,
+      caught: 0,
+    };
     for (const zone of this.zones) {
       const area = this.area.zones[zone.index];
       totals.homes += area.homes;
@@ -802,7 +858,14 @@ export class DispatchEngine {
       const step = packet.steps[packet.stepIndex];
       if (!step) {
         const node = this.area.nodes[this.area.zones[packet.zone].node];
-        return { id: packet.id, zone: packet.zone, position: node, ahead: node, vehicles: packet.vehicles, stuck: packet.stuck };
+        return {
+          id: packet.id,
+          zone: packet.zone,
+          position: node,
+          ahead: node,
+          vehicles: packet.vehicles,
+          stuck: packet.stuck,
+        };
       }
       const seconds = edgeSeconds(this.area, step.edge);
       const fraction = packet.stepElapsedSeconds / seconds;
@@ -820,7 +883,11 @@ export class DispatchEngine {
   unitPosition(unit: UnitState): LonLat {
     const step = unit.steps[unit.stepIndex];
     if (!step) return this.area.nodes[unit.node];
-    return pointAlongStep(this.area, step, unit.stepElapsedSeconds / edgeSeconds(this.area, step.edge));
+    return pointAlongStep(
+      this.area,
+      step,
+      unit.stepElapsedSeconds / edgeSeconds(this.area, step.edge),
+    );
   }
 
   /** Remaining path of a moving unit. */
@@ -833,14 +900,17 @@ export class DispatchEngine {
   unitEtaMinutes(unit: UnitState): number | null {
     if (unit.status !== "en_route" && unit.status !== "returning") return null;
     let seconds = unit.holdSeconds - unit.stepElapsedSeconds;
-    for (let i = unit.stepIndex; i < unit.steps.length; i += 1) seconds += edgeSeconds(this.area, unit.steps[i].edge);
+    for (let i = unit.stepIndex; i < unit.steps.length; i += 1)
+      seconds += edgeSeconds(this.area, unit.steps[i].edge);
     return Math.max(0, seconds / SECONDS_PER_MINUTE);
   }
 
   /** Active evacuation routes, for the map. */
   activeRoutes(): { zone: number; exitId: string; route: Route }[] {
     return this.zones
-      .filter((zone) => zone.status === "ordered" && zone.route && !zone.routeBlocked && zone.exitId)
+      .filter(
+        (zone) => zone.status === "ordered" && zone.route && !zone.routeBlocked && zone.exitId,
+      )
       .map((zone) => ({ zone: zone.index, exitId: zone.exitId!, route: zone.route! }));
   }
 }

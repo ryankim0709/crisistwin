@@ -103,9 +103,12 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
   }, []);
   const bump = useCallback(() => setVersion((v) => v + 1), []);
 
-  const updateEntry = useCallback((id: number, patch: (entry: DecisionLogEntry) => DecisionLogEntry) => {
-    setLog((entries) => entries.map((entry) => (entry.id === id ? patch(entry) : entry)));
-  }, []);
+  const updateEntry = useCallback(
+    (id: number, patch: (entry: DecisionLogEntry) => DecisionLogEntry) => {
+      setLog((entries) => entries.map((entry) => (entry.id === id ? patch(entry) : entry)));
+    },
+    [],
+  );
 
   const decide = useCallback(() => {
     const engine = engineRef.current;
@@ -208,7 +211,10 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
       if (!engine) return;
       const elapsedSeconds = (now - last) / 1000;
       last = now;
-      clockRef.current = Math.min(engine.horizonMinutes, clockRef.current + Math.min(0.1, elapsedSeconds) * speed);
+      clockRef.current = Math.min(
+        engine.horizonMinutes,
+        clockRef.current + Math.min(0.1, elapsedSeconds) * speed,
+      );
       let stepped = false;
       while (engine.minute < Math.floor(clockRef.current) && !engine.finished) {
         if (decisionDue(engine)) break;
@@ -247,7 +253,12 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
   const start = useCallback(
     (inputs: SessionInputs) => {
       abortRef.current?.abort();
-      const engine = new DispatchEngine(inputs.area, inputs.exposure, inputs.horizonMinutes, inputs.ignitions);
+      const engine = new DispatchEngine(
+        inputs.area,
+        inputs.exposure,
+        inputs.horizonMinutes,
+        inputs.ignitions,
+      );
       engineRef.current = engine;
       inputsRef.current = inputs;
       clockRef.current = 0;

@@ -218,7 +218,10 @@ function parseFlows(raw: unknown, path: string): Mobility["originFlows"] {
 export function parseMobility(data: unknown): Mobility {
   const root = obj(data, "$");
   if (root.kind !== MOBILITY_KIND) {
-    throw new MobilityError("$.kind", `expected "${MOBILITY_KIND}", found ${JSON.stringify(root.kind)}`);
+    throw new MobilityError(
+      "$.kind",
+      `expected "${MOBILITY_KIND}", found ${JSON.stringify(root.kind)}`,
+    );
   }
   const version = str(root.schema_version, "$.schema_version");
   if (!version.startsWith(SUPPORTED_MOBILITY_MAJOR)) {
@@ -290,7 +293,9 @@ export function parseMobility(data: unknown): Mobility {
     cells: {
       sizeDeg: num(cells.size_deg, "$.cells.size_deg"),
       minPois: nonNeg(cells.min_pois, "$.cells.min_pois"),
-      items: arr(cells.items, "$.cells.items").map((c, i) => parseCell(c, `$.cells.items[${i}]`, hours)),
+      items: arr(cells.items, "$.cells.items").map((c, i) =>
+        parseCell(c, `$.cells.items[${i}]`, hours),
+      ),
     },
     originFlows: parseFlows(root.origin_flows, "$.origin_flows"),
     notes,
@@ -373,7 +378,11 @@ export function dayTicks(m: Mobility): DayTick[] {
     if (!p.time.startsWith("00:")) return;
     const day = new Date(`${p.date}T00:00:00Z`);
     const weekday = day.toLocaleDateString("en-US", { weekday: "short", timeZone: "UTC" });
-    const monthDay = day.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+    const monthDay = day.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      timeZone: "UTC",
+    });
     out.push({ index, label: `${weekday} ${monthDay}`, major: weekday === "Mon" });
   });
   return out;

@@ -1,5 +1,6 @@
 import { useId, useState, type ReactNode } from "react";
-import { BurnedGlyph, DIORAMA_COLORS, FireEdgeGlyph, WindGlyph } from "../../diorama/ui/glyphs";
+import { BurnedGlyph, FireEdgeGlyph, WindGlyph } from "../../diorama/ui/glyphs";
+import { Button } from "../../ui";
 import { ARRIVAL_COLORS, CURRENT_PERIMETER_COLOR, FUEL_COLORS } from "../fuelPalette";
 
 const SIZE = { width: 24, height: 16, viewBox: "0 0 24 16" } as const;
@@ -9,8 +10,8 @@ function FlameGlyph() {
     <svg {...SIZE} aria-hidden="true">
       <path
         d="M12 14.5c-3.6 0-5.4-2.4-4.6-5.2.5-1.6 1.8-2.6 2.2-4.6 1.6 1 2.2 2.2 2.4 3.4.6-.6.9-1.5.8-2.6 2.2 1.8 3.4 3.6 3.2 5.2-.2 2.2-1.8 3.8-4 3.8z"
-        fill={DIORAMA_COLORS.fireAmber}
-        stroke={DIORAMA_COLORS.fireCoral}
+        fill={"var(--ct-ember)"}
+        stroke={"var(--ct-fire)"}
         strokeWidth="1"
         strokeLinejoin="round"
       />
@@ -21,8 +22,15 @@ function FlameGlyph() {
 function IgnitionGlyph() {
   return (
     <svg {...SIZE} aria-hidden="true">
-      <circle cx="12" cy="8" r="5.5" fill="#fff" stroke={DIORAMA_COLORS.ink} strokeWidth="1.4" />
-      <circle cx="12" cy="8" r="2.4" fill={DIORAMA_COLORS.fireCoral} />
+      <circle
+        cx="12"
+        cy="8"
+        r="5.5"
+        fill="var(--ct-surface-raised)"
+        stroke={"var(--ct-ink)"}
+        strokeWidth="1.4"
+      />
+      <circle cx="12" cy="8" r="2.4" fill={"var(--ct-fire)"} />
     </svg>
   );
 }
@@ -46,7 +54,12 @@ function CurrentPerimeterGlyph() {
   return (
     <svg {...SIZE} aria-hidden="true">
       <rect x="1" y="3" width="22" height="10" rx="2" fill="#2b3a37" />
-      <path d="M3 8c3-4 6 4 9 0s6 4 9 0" fill="none" stroke={CURRENT_PERIMETER_COLOR} strokeWidth="2.4" />
+      <path
+        d="M3 8c3-4 6 4 9 0s6 4 9 0"
+        fill="none"
+        stroke={CURRENT_PERIMETER_COLOR}
+        strokeWidth="2.4"
+      />
     </svg>
   );
 }
@@ -72,7 +85,12 @@ type FireLegendProps = {
 };
 
 /** Compact collapsible legend. Every entry pairs a colour with a shape or a letter code. */
-export default function FireLegend({ view, windTowardDegrees, showFuel, defaultOpen }: FireLegendProps) {
+export default function FireLegend({
+  view,
+  windTowardDegrees,
+  showFuel,
+  defaultOpen,
+}: FireLegendProps) {
   const [open, setOpen] = useState(defaultOpen);
   const listId = useId();
 
@@ -108,8 +126,9 @@ export default function FireLegend({ view, windTowardDegrees, showFuel, defaultO
 
   return (
     <section className="fr-legend fr-panel" aria-label="Map legend" data-open={open}>
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        block
         className="fr-legend-toggle"
         aria-expanded={open}
         aria-controls={listId}
@@ -124,7 +143,7 @@ export default function FireLegend({ view, windTowardDegrees, showFuel, defaultO
             strokeWidth="1.5"
           />
         </svg>
-      </button>
+      </Button>
       <ul id={listId} className="fr-legend-list" hidden={!open}>
         {items.map((item) => (
           <li key={item.label}>
