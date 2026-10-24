@@ -20,6 +20,8 @@
     <string>$(CURRENT_PROJECT_VERSION)</string>
     <key>APIBaseURL</key>
     <string>$(API_BASE_URL)</string>
+    <key>WebBaseURL</key>
+    <string>$(WEB_BASE_URL)</string>
     <key>LSRequiresIPhoneOS</key>
     <true/>
     <key>UIApplicationSceneManifest</key>
@@ -48,6 +50,6 @@
         <true/>
     </dict>
     <key>NSLocalNetworkUsageDescription</key>
-    <string>Connect to your development CrisisTwin API on the local network.</string>
+    <string>Connect to your development CrisisTwin API and web app on the local network.</string>
 </dict>
 </plist>
