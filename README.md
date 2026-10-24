@@ -20,7 +20,7 @@ Routes of the web app (`app/src/main.tsx`, `app/src/navigation.ts`); `/` redirec
 | ----- | ---- | ------------ |
 | `/fire` | Fire spread model | Rothermel surface spread with crown fire, ember spotting and structure-to-structure spread on LANDFIRE fuels, canopy and terrain; 3D diorama or USGS imagery view; 41 prebuilt California regions or a live custom area; optional NWS wind. [Reference](docs/fire-simulator.md). |
 | `/simulation` | Simulation Studio | Up to five scheduled ignitions in one solver pass on a shared landscape, Web Worker solve, JSON export/import, plus a 3D diorama view of the last run. [ADR 0011](docs/adr/0011-simulation-studio.md), [ADR 0016](docs/adr/0016-studio-diorama-view.md). |
-| `/dispatch` | Dispatch agent | A Claude agent pauses playback every few simulated minutes and orders zone evacuations and fire engines; browser computes routes and counts, agent chooses among listed options. Needs `ANTHROPIC_API_KEY` on the backend. [ADR 0014](docs/adr/0014-dispatch-agent.md). |
+| `/dispatch` | Dispatch agent | The fire model's 3D diorama for any stored region or custom US area, with roads, fire stations and synthetic homes built from OpenStreetMap. A Claude agent pauses playback every few simulated minutes and orders zone evacuations and fire engines; the browser computes routes, per-household evacuation and counts, and the agent chooses among listed options. Needs `ANTHROPIC_API_KEY` on the backend. [ADR 0014](docs/adr/0014-dispatch-agent.md), [ADR 0017](docs/adr/0017-dispatch-anywhere.md). |
 | `/replay` | Historical replay | Replay of past fires (Camp 2018, plus Marshall and Kincade packages) with perimeters, evacuation traffic and responder/evacuee views, driven by generated replay bundles. [Bundle contract](docs/replay-bundle.md). |
 | `/simulate` | Agent simulation | Replay-style view of simulated agent runs (same map tooling as `/replay`). |
 | `/diorama` | Evacuation diorama | Fictional, scripted ~90 s three.js evacuation of the made-up town Larkspur Hollow; synthetic data. [ADR 0010](docs/adr/0010-evacuation-diorama.md). |
@@ -31,7 +31,7 @@ The workspace overview (`/overview`) and `/maps` pages were removed
 
 Also in the repository:
 
-- **Backend** (`app/backend/`): Django REST API with `GET /api/health`, `/api/landscapes` (prebuilt landscapes from MongoDB), `/api/dispatch/decide`, `/api/replay/explain`, `/api/live` (resident-app drill feed) and `/api/families`. See [API contract](app/backend/README.md).
+- **Backend** (`app/backend/`): Django REST API with `GET /api/health`, `/api/landscapes` (prebuilt landscapes from MongoDB), `/api/dispatch/area` (OpenStreetMap roads and stations for a box), `/api/dispatch/decide`, `/api/replay/explain`, `/api/live` (resident-app drill feed) and `/api/families`. See [API contract](app/backend/README.md).
 - **Fire watch agent** (`agent/`): a standalone Python package that drafts evacuation advisories from satellite detections for a human to approve; never notifies residents. [README](agent/README.md), [ADR 0008](docs/adr/0008-fire-watch-agent.md).
 - **Historical replay simulator** (`sim/`): stdlib Python fire hindcast and evacuation traffic model that produces replay bundles. [README](sim/README.md).
 - **iOS app** (`mobile/`): SwiftUI resident app. Its **Live drill** tab shows, on a native map, the fire a planner is
@@ -52,7 +52,7 @@ app/                  Web app
     ui/               Design tokens and shared component kit: the UI standard, see app/src/ui/README.md
     fire/ studio/ dispatch/ replay/ diorama/ pages/ maps/ lib/
   backend/            Django 5.2 REST API + PyMongo (config/, api/)
-  public/             Static assets (brand logo, map imagery, dispatch fixture; replay bundles are generated)
+  public/             Static assets (brand logo, map imagery; replay bundles are generated)
   data-manifest.json  Hashes of generated app data stored in MongoDB Atlas
   docker-compose.yml  Development stack (frontend + backend, external MongoDB)
 agent/                Fire watch agent (Anthropic SDK, standalone)
@@ -93,6 +93,7 @@ docker compose down         # stop the stack
 
 For the dispatch agent, set `ANTHROPIC_API_KEY` (optionally `DISPATCH_AGENT_MODEL`,
 `DISPATCH_AGENT_EFFORT`) in the backend environment; without it the endpoint returns 503.
+The dispatch area endpoint needs internet the first time a box is used (results are cached).
 The `/fire` page needs internet access (LANDFIRE, terrain tiles, NWS) and works in the contiguous US only.
 
 Stack: Node 22.12+ with npm, Python 3.12, React 19, TypeScript 5.8, Vite 7, Tailwind CSS 4, Django 5.2,

@@ -66,14 +66,9 @@ operational forecast.
 Set `ANTHROPIC_API_KEY` in the environment of the Django backend and restart it; without it
 the endpoint returns 503. Optionally set `DISPATCH_AGENT_MODEL` and
 `DISPATCH_AGENT_EFFORT` (`low`, `medium` or `high`; the default is `low`). Open
-**http://localhost:5173/dispatch** (the Studio demo fires are preloaded), press **Run simulation**, then **Start
-agent**. Playback is limited to 1 or 2 simulated minutes per second so the agent has time to
-decide; each decision is a paid model call. Model, assumptions and the request/response
-contract: [ADR 0014](adr/0014-dispatch-agent.md).
-
-To rebuild the road and station fixture from OpenStreetMap (needs internet; standard
-library only), run from the repository root:
-
-```bash
-python3 -m tools.build_dispatch_area --output app/public/dispatch/east-bay-hills.json
-```
+**http://localhost:5173/dispatch**, press **Load demo fire** (or pick an area and click the
+landscape), wait for the roads and homes to load from OpenStreetMap (the backend needs
+internet the first time a box is used; results are cached), then press **Start the AI
+dispatcher**. Playback runs at 1, 2 or 4 simulated minutes per second so the agent has time to
+decide; each decision is a paid model call. Model, assumptions and contracts:
+[ADR 0014](adr/0014-dispatch-agent.md) and [ADR 0017](adr/0017-dispatch-anywhere.md).

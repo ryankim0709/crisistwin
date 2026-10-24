@@ -25,6 +25,7 @@ import { LabelLayer, type ClipOptions } from "./labels";
 import { REFERENCE_PLACES } from "./places";
 import { FireCameraRig, type Framing } from "./rig";
 import type {
+  BoardOverlay,
   DioramaIgnition,
   DioramaRun,
   FireDioramaOptions,
@@ -140,6 +141,8 @@ export class FireDioramaScene implements FireDioramaSceneApi {
   private wind = { from: 0, speed: 0 };
   private overlay = false;
   private clickMode: GroundClickMode = "origin";
+  private overlayContent: BoardOverlay | null = null;
+  private coverHouses = true;
   private reducedMotion: boolean;
   private clickCallback: ((point: GeoPoint) => void) | null = null;
   private pointerDown: { x: number; y: number; id: number } | null = null;
@@ -253,6 +256,8 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     this.applyRun();
     this.placeMarkers();
     this.setFuelOverlay(this.overlay, true);
+    this.applyCoverHouses();
+    this.overlayContent?.attach(this.board.frame, this.board.group, this.labels);
     this.lastBuildMs = performance.now() - start;
   }
 
@@ -330,6 +335,52 @@ export class FireDioramaScene implements FireDioramaSceneApi {
 
   setReducedMotion(value: boolean): void {
     this.reducedMotion = value;
+  }
+
+  setOverlay(overlay: BoardOverlay | null): void {
+    if (this.disposed || overlay === this.overlayContent) return;
+    if (this.board) this.overlayContent?.detach();
+    this.overlayContent = overlay;
+    if (this.board) overlay?.attach(this.board.frame, this.board.group, this.labels);
+  }
+
+  setCoverHouses(visible: boolean): void {
+    if (this.disposed || visible === this.coverHouses) return;
+    this.coverHouses = visible;
+    this.applyCoverHouses();
+  }
+
+  focusOn(point: GeoPoint, radiusMeters: number): void {
+    const board = this.board;
+    if (this.disposed || !board || !board.frame.grid) return;
+    const f = board.frame;
+    const [mx, my] = lonLatToMercator(point.longitude, point.latitude);
+    const c = f.fromMercator(mx, my);
+    if (!c) return;
+    const half = Math.max(MIN_FOCUS_SIZE / 2, radiusMeters * f.unitsPerMeter);
+    const points: THREE.Vector3[] = [];
+    let ySum = 0;
+    const N = 3;
+    for (let a = 0; a < N; a++) {
+      for (let b = 0; b < N; b++) {
+        const x = THREE.MathUtils.clamp(c.x - half + (a / (N - 1)) * 2 * half, -f.halfW, f.halfW);
+        const z = THREE.MathUtils.clamp(c.z - half + (b / (N - 1)) * 2 * half, -f.halfD, f.halfD);
+        const y = f.surfaceAt(x, z);
+        ySum += y;
+        points.push(new THREE.Vector3(x, y, z), new THREE.Vector3(x, y + 6, z));
+      }
+    }
+    this.rig.resetView(
+      { points, target: new THREE.Vector3(c.x, ySum / (N * N), c.z) },
+      this.reducedMotion,
+    );
+  }
+
+  /** The cover layer names its house bodies and roofs; a page drawing its own homes hides them. */
+  private applyCoverHouses() {
+    for (const child of this.board?.cover.group.children ?? []) {
+      if (child.name === "houses" || child.name === "roofs") child.visible = this.coverHouses;
+    }
   }
 
   dispose(): void {
@@ -498,6 +549,7 @@ export class FireDioramaScene implements FireDioramaSceneApi {
   }
 
   private disposeBoard(board: Board) {
+    this.overlayContent?.detach();
     for (const l of board.labels) this.labels.remove(l);
     board.group.removeFromParent();
     disposeTree(board.group);
@@ -683,6 +735,7 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     const worldPerPixel =
       (2 * d * Math.tan(THREE.MathUtils.degToRad(this.rig.camera.fov / 2))) / this.height;
     this.fx.tick(time, reduced, worldPerPixel);
+    this.overlayContent?.tick(time, dt, reduced, this.width, this.height);
     this.windLabel.obj.position.copy(this.fx.windAnchor);
     this.renderer.render(this.scene, this.rig.camera);
     this.labels.render(this.scene, this.rig.camera);

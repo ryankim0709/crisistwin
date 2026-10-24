@@ -1,6 +1,7 @@
 # 0014: Dispatch agent
 
-Date: 2026-10-24. Status: accepted for the demo.
+Date: 2026-10-24. Status: accepted for the demo; amended by [0017](0017-dispatch-anywhere.md)
+(runtime OSM areas anywhere, households, 3D diorama; the fixture and its build tool are gone).
 
 Builds on [0011](0011-simulation-studio.md). The `/simulation` page and the fire solver keep
 their behaviour; `/dispatch` reuses the scheduled fire run unchanged.

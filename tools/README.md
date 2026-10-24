@@ -21,7 +21,6 @@ packaged raw bytes offline and compares them.
 | Woolsey Fire (2018) | `woolsey_build.py` | Evacuation package: `fetch-osm`, `fetch-feds`, `extract-firms`, `extract-acs`, `build`, or `--verify-package`. |
 | Mongo sync | `mongo_data.py` | `push`, `pull`, `record`, `status` for incident-package artifacts and generated app data (`app/data-manifest.json`). Needs `MONGODB_URI`. |
 | Mobility sidecars | `dewey_mobility.py` | Aggregates licensed Advan parquet subsets into `app/public/replays/<id>.mobility.json` (needs `pyarrow`; licensed data is never committed). Format: [docs/mobility-sidecar.md](../docs/mobility-sidecar.md). |
-| Dispatch area | `build_dispatch_area.py` | Queries OpenStreetMap Overpass once and writes the `/dispatch` road/station fixture `app/public/dispatch/east-bay-hills.json`. |
 | Landscape regions | `build_landscape_regions/` | Node builder + Python uploader for prebuilt California fire landscapes. See its [README](build_landscape_regions/README.md). |
 
 ## Data tables (`*.json` at this level)
@@ -51,8 +50,7 @@ python3.12 -m tools.kincade_build --verify-package PATH
 python3.12 -m tools.woolsey_build fetch-osm --inputs DIR      # then fetch-feds, extract-*, build
 python3.12 -m tools.marshall_build --stage DIR                # or --verify-package PATH
 
-# Dispatch fixture and landscapes
-python3 -m tools.build_dispatch_area --output app/public/dispatch/east-bay-hills.json
+# Landscapes
 node tools/build_landscape_regions/run.mjs && python3 -m tools.build_landscape_regions upload
 ```
 

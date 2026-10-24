@@ -6,8 +6,7 @@
  * it is played. Stopping aborts any in-flight decision so a late response cannot apply.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { ScheduledFireFrame } from "../fire/scheduledTypes";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { DispatchArea } from "./area";
 import { DecisionError, requestDecision } from "./agentClient";
 import type { WireOrder } from "./contracts";
@@ -20,9 +19,10 @@ import {
   type OrderOutcome,
 } from "./engine";
 import type { FireExposure } from "./fireExposure";
-import { buildObservation, toEngineOrders } from "./observation";
+import { buildObservation, toEngineOrders, type FrameSummary } from "./observation";
 
-export const DISPATCH_SPEED_CHOICES = [1, 2] as const;
+/** Simulated minutes per real second; slow enough to read the streamed reasoning. */
+export const DISPATCH_SPEED_CHOICES = [1, 2, 4] as const;
 const MAX_LOG_ENTRIES = 60;
 
 export type SessionStatus = "idle" | "running" | "thinking" | "paused" | "failed" | "finished";
@@ -44,7 +44,8 @@ export interface DecisionLogEntry {
 export interface SessionInputs {
   area: DispatchArea;
   exposure: FireExposure;
-  frames: readonly ScheduledFireFrame[];
+  frames: readonly FrameSummary[];
+  baselineHomesExposed: number | null;
   horizonMinutes: number;
   ignitions: IgnitionEvent[];
   windFromDegrees: number;
@@ -67,9 +68,15 @@ export interface DispatchSession {
   retry: () => void;
   /** After a failed decision: keep the clock going with no new orders until the next one. */
   skip: () => void;
+  /** Exact (fractional) session clock, minutes. */
+  getClock: () => number;
 }
 
-export function useDispatchSession(): DispatchSession {
+/**
+ * `onTime` receives the continuous session clock every animation frame while it runs (for the
+ * fire animation), without a React render.
+ */
+export function useDispatchSession(onTime?: (minutes: number) => void): DispatchSession {
   const [status, setStatus] = useState<SessionStatus>("idle");
   const [version, setVersion] = useState(0);
   const [log, setLog] = useState<DecisionLogEntry[]>([]);
@@ -85,6 +92,10 @@ export function useDispatchSession(): DispatchSession {
   const abortRef = useRef<AbortController | null>(null);
   const entryIdRef = useRef(0);
   const statusRef = useRef<SessionStatus>("idle");
+  const onTimeRef = useRef(onTime);
+  useLayoutEffect(() => {
+    onTimeRef.current = onTime;
+  });
 
   const setSessionStatus = useCallback((next: SessionStatus) => {
     statusRef.current = next;
@@ -109,6 +120,7 @@ export function useDispatchSession(): DispatchSession {
     const observation = buildObservation({
       engine,
       frames: inputs.frames,
+      baselineHomesExposed: inputs.baselineHomesExposed,
       windFromDegrees: inputs.windFromDegrees,
       windSpeedMph: inputs.windSpeedMph,
       ignitions: inputs.ignitions,
@@ -199,7 +211,10 @@ export function useDispatchSession(): DispatchSession {
       if (!engine) return;
       const elapsedSeconds = (now - last) / 1000;
       last = now;
-      clockRef.current = Math.min(engine.horizonMinutes, clockRef.current + elapsedSeconds * speed);
+      clockRef.current = Math.min(
+        engine.horizonMinutes,
+        clockRef.current + Math.min(0.1, elapsedSeconds) * speed,
+      );
       let stepped = false;
       while (engine.minute < Math.floor(clockRef.current) && !engine.finished) {
         if (decisionDue(engine)) break;
@@ -207,6 +222,8 @@ export function useDispatchSession(): DispatchSession {
         stepped = true;
       }
       if (stepped) bump();
+      // The fire is drawn at the clock, but never ahead of the engine's held minute.
+      onTimeRef.current?.(Math.min(clockRef.current, engine.minute + 1));
       if (engine.finished) {
         setSessionStatus("finished");
         return;
@@ -245,6 +262,7 @@ export function useDispatchSession(): DispatchSession {
       engineRef.current = engine;
       inputsRef.current = inputs;
       clockRef.current = 0;
+      onTimeRef.current?.(0);
       nextRegularRef.current = 0;
       lastDecisionRef.current = -1;
       previousOutcomesRef.current = [];
@@ -287,5 +305,6 @@ export function useDispatchSession(): DispatchSession {
     stop,
     retry,
     skip,
+    getClock: useCallback(() => clockRef.current, []),
   };
 }

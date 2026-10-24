@@ -15,12 +15,12 @@
   opacity: 1;
 }
 
-/* Top of the dispatch agent panel; right padding clears the panel's collapse button. */
+/* Above the dispatch page's playback dock. */
 .dispatch-live-share {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 14px 52px 10px 16px;
-  border-bottom: 1px solid #d4d8ca;
+  margin-bottom: 8px;
+  padding: 10px 14px;
   font-size: 13px;
 }

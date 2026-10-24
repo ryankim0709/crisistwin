@@ -1,6 +1,7 @@
 /**
  * Wire contract between the /dispatch page and POST /api/dispatch/decide
- * (app/backend/api/dispatch.py). Change both sides and docs/adr/0014-dispatch-agent.md together.
+ * (app/backend/api/dispatch.py). Change both sides and docs/adr/0014-dispatch-agent.md (amended
+ * by docs/adr/0017-dispatch-anywhere.md) together.
  *
  * Request body: `{ "observation": Observation }`, JSON, at most 200 kB.
  * Response: `application/x-ndjson`, one `DecisionEvent` per line, ending with exactly one
@@ -11,8 +12,9 @@
  * supplies a route, time or count. The server validates every order against the observation
  * and the page validates again against the live engine before applying it.
  *
- * Units: minutes are elapsed simulation minutes from scenario T+0; vehicles are counts
- * (synthetic demand); capacities are vehicles per hour.
+ * Units: minutes are elapsed simulation minutes from scenario T+0; homes are synthetic
+ * households (each with the zone's average vehicles per home); vehicles are counts; capacities
+ * are vehicles per hour.
  */
 
 import type { UnitStatus, UnitTask, ZoneStatus } from "./engine";
@@ -32,12 +34,17 @@ export interface ZoneObservation {
   id: string;
   name: string;
   status: ZoneStatus;
-  vehicles_total: number;
-  /** Not yet driving: not ready plus queued at the zone. */
+  /** Order in which the zone was told to leave (1 = first); null with no order. */
+  order_rank: number | null;
+  homes_total: number;
+  /** Ordered households still at home or queued at the loading point. */
+  homes_waiting: number;
+  homes_en_route: number;
+  homes_out: number;
+  /** Households the modelled fire reached before they got out. */
+  homes_exposed: number;
+  /** Vehicles not yet driving (at home or queued), for capacity reasoning. */
   vehicles_waiting: number;
-  vehicles_en_route: number;
-  vehicles_out: number;
-  vehicles_exposed: number;
   /**
    * Minutes until the fire model reaches the zone edge, when within the forecast lookahead;
    * 0 when fire is already in the zone; null when not forecast within the lookahead.
@@ -63,6 +70,8 @@ export interface UnitObservation {
   status: UnitStatus;
   task: UnitTask | null;
   zone_id: string | null;
+  /** Minutes until a moving unit arrives where it is heading; null when not moving. */
+  eta_min: number | null;
   /** Drive minutes from the unit's position to threatened zones (fire_eta_min not null). */
   drive_min_to: Record<string, number>;
 }
@@ -76,13 +85,16 @@ export interface Observation {
   };
   fire: {
     burned_area_ha: number;
+    /** Households the fire model reaches by the horizon if nobody is ordered out. */
+    no_action_homes_exposed: number | null;
     wind_from_degrees: number;
     wind_speed_mph: number;
     upcoming_ignitions: { name: string; minute: number }[];
     evidence_class: "simulated";
   };
+  /** Household counts. */
   totals: {
-    vehicles: number;
+    homes: number;
     not_ordered: number;
     waiting: number;
     en_route: number;
