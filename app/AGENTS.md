@@ -37,5 +37,5 @@ app/src/
 ## Commands
 
 From `app/`: `npm run dev` (Vite on :5173), `npx tsc -b --noEmit` (typecheck),
-`npx vite build`, `npm test` (Vitest), `npm run lint`. Docker setup is in the root
-README.
+`npx vite build`, `npm run lint`. Do not write or run tests (see the root
+`AGENTS.md`). Docker setup is in the root README.

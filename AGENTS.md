@@ -26,10 +26,9 @@ marked **Firm** and are about honesty of data, safety, and secrets.
 - Keep changes focused and pragmatic. Avoid speculative features, new dependencies
   without a concrete need, and refactors unrelated to the task.
 - Keep simulation/domain logic separate from UI, transport and provider adapters, so the
-  maths is testable without a browser, network or LLM.
-- Record consequential decisions (new dependency, shared contract, persistence,
-  simulation design) as a short ADR in `docs/adr/`. There is no index to update; some
-  numbers repeat, so cite an ADR by its full file name.
+  maths runs without a browser, network or LLM.
+- Do not write, update or renumber ADRs in `docs/adr/`. Existing ADRs are read-only
+  reference; cite one by its full file name.
 - Document shared request/response shapes, units and examples in the same change.
 - When adding the first instance of something (a stack, a service, a command), document
   setup and the exact commands in `README.md`.
@@ -89,8 +88,9 @@ for lack of reasoning, not for a transient tool error.
 
 - Run `pre-commit run --all-files` before committing (whitespace and merge-conflict
   hooks only; keep it that way, and don't add CI).
-- Other checks are optional and at your discretion. For a broad TypeScript change,
-  `cd app && npx tsc -b --noEmit` and `npx vite build` are cheap and worth running;
-  run tests, lint, Docker or browser checks when they help you trust the change.
+- Do not write, update or run tests of any kind (Vitest, pytest, Django tests, XCTest,
+  browser tests). This is a hackathon: just write the code.
+- A typecheck or build is fine for a broad TypeScript change:
+  `cd app && npx tsc -b --noEmit` and `npx vite build`.
 - Report what you ran and its outcome. Never claim a check you did not run.
 - Review your final diff for accidental files, secrets and unrelated changes.
