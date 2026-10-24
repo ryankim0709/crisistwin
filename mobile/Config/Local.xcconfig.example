@@ -1,0 +1,5 @@
+// Optional Debug-only overrides. Copy to Local.xcconfig, which is ignored by Git.
+// Use your Mac's .local hostname for a physical device, or an HTTPS API origin.
+API_BASE_URL = http:/$()/your-mac.local:8000
+// DEVELOPMENT_TEAM = YOUR_TEAM_ID
+// PRODUCT_BUNDLE_IDENTIFIER = com.yourteam.crisistwin
