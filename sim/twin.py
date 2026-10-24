@@ -13,6 +13,7 @@ Outputs are planning experiments from an uncalibrated model, not operational ins
 from __future__ import annotations
 
 import bisect
+import dataclasses
 import functools
 import hashlib
 import json
@@ -243,6 +244,29 @@ def package_inputs(path, seed: int = TrafficParams.seed) -> TwinInputs:
     """Twin inputs from a Studio drill package (a replay bundle with `drill_package`): its roads, synthetic
     zones, exits and simulated fire fronts; assumptions in `PACKAGE_ASSUMPTIONS`. Cached per process."""
     return _package_inputs(str(Path(path).resolve()), int(seed))
+
+
+def with_people_behavior(inputs: TwinInputs, people) -> TwinInputs:
+    """Inputs with sourced people behaviour (sim.behavior.PeopleBehavior) on the fixed-delay engine: demand
+    vehicles x order compliance (sim.demand.with_participation), shadow evacuation on the fire cue
+    (TrafficParams.shadow_evacuation_share) and the departure delay. Default behaviour returns `inputs` itself,
+    so historical replays (and their fingerprints) are unchanged. The fire timeline is rebuilt: fewer vehicles
+    can leave some origin nodes empty, and the timeline is keyed on the occupied origins."""
+    from sim.demand import with_participation
+
+    if people.is_default:
+        return inputs
+    scenario = dict(inputs.scenario)
+    scenario["zones"] = with_participation(scenario["zones"], people.order_compliance)
+    scenario["people_behavior"] = dataclasses.asdict(people)
+    changes = {"shadow_evacuation_share": people.shadow_evacuation_share}
+    if people.departure_delay_median_min is not None:
+        changes["response_delay_median_min"] = people.departure_delay_median_min
+    if people.departure_delay_sigma is not None:
+        changes["response_delay_sigma"] = people.departure_delay_sigma
+    params = dataclasses.replace(inputs.params, **changes)
+    fingerprint = inputs_fingerprint(scenario, params, inputs.start, inputs.end, inputs.fire_model_meta)
+    return dataclasses.replace(inputs, scenario=scenario, params=params, fingerprint=fingerprint, cache={})
 
 
 def _template(inputs: TwinInputs) -> TrafficEngine:
@@ -936,7 +960,9 @@ class Twin:
             else:
                 for zi, z in enumerate(s.zone_list):
                     if z.id not in e.released_zones:
-                        at_origin[zi] += sum(c for _, n, c in s.zone_packets[z.id] if n in burned)
+                        gone = s.shadow_packets.get(z.id, ()) if z.id in e.shadow_released else ()
+                        at_origin[zi] += sum(c for k, (_, n, c) in enumerate(s.zone_packets[z.id])
+                                             if n in burned and k not in gone)
                 for _, _, node, count, zi in e.pending:
                     if node in burned:
                         at_origin[zi] += count

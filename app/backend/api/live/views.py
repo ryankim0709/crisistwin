@@ -360,7 +360,7 @@ def _submit_report(request, incident_id: str, principal: Principal) -> Response:
         "received_at": now,
         "note": fields["note"],
         "status": "unverified",
-        "evidence_class": "field_report",
+        "evidence_class": "simulated" if principal.simulated else "field_report",
         "method": fields["method"],
         "speed_class": fields["speed_class"],
         "replay_at": report_replay_at(incident_id, now),
@@ -389,8 +389,8 @@ def _list_reports(request, incident_id: str, controller_view: bool) -> Response:
     since = request.query_params.get("since")
     query: dict[str, Any] = {"incident_id": incident_id}
     if not controller_view:
-        # 2018 record reports carry ~100 m points of callers' locations: controller console only.
-        query["evidence_class"] = {"$ne": "historical_record"}
+        # 2018 record reports and generated comms items carry ~100 m caller points: controller console only.
+        query.update(groundrecord.NOT_QUEUE_ONLY)
     if since:
         millis, _, last_id = since.partition(":")
         if not millis.isdigit():
@@ -716,6 +716,8 @@ def checkins(request, incident_id: str, principal: Principal):
         "at": now,
         "replay_at": report_replay_at(incident_id, now),
     }
+    if principal.simulated:
+        fields["simulated"] = True  # a simulated resident (live_run_scenario); never shown as observed
     if status == "need_help" and not help_active:
         # A new request; a repeated tap keeps the controller's acknowledgement or assignment.
         fields["help"] = {"status": "open", "assignee": None, "task_id": None, "updated_at": now}
@@ -840,7 +842,7 @@ def my_destination(request, principal: Principal):
     col("live_destination_choices").update_one(
         {"incident_id": incident_id, "party_key": principal.party_key, "zone_id": zone_id},
         {"$set": {"destination_id": destination_id, "guidance_version": current["version"], "at": now,
-                  "expires_at": expires_at}},
+                  "expires_at": expires_at, **({"simulated": True} if principal.simulated else {})}},
         upsert=True,
     )
     return ok({"zone_id": zone_id, "destination_id": destination_id, "expires_at": iso(expires_at)})
@@ -1046,6 +1048,8 @@ def set_drill(incident_id: str, action: str, replay_start_raw: Any = None, speed
         invalidate_guidance(incident_id)
         # 2018 record reports re-enter as the clock passes them again.
         col("live_reports").delete_many({"incident_id": incident_id, "evidence_class": "historical_record"})
+        # Generated comms items too: live_run_scenario re-enters them (same client_ids) as the clock passes them.
+        col("live_reports").delete_many({"incident_id": incident_id, "comms": {"$exists": True}})
         groundrecord.forget(incident_id)
         # Board questions belong to the drill moment that ranked them.
         col("live_tasks").update_many(

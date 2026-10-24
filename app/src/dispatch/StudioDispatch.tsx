@@ -28,7 +28,9 @@ import { roadsObservation, type FrameSummary } from "./observation";
 import RoadClosures from "./RoadClosures";
 import { nearestEdge } from "../studio/evacuation";
 import { DispatchOverlay } from "./scene/DispatchOverlay";
+import { dispatchApparatus } from "./stationApparatus";
 import { useDispatchSession } from "./useDispatchSession";
+import { useSuppressionBases } from "../studio/suppressionBases";
 import { Button } from "../ui";
 import "./dispatch.css";
 
@@ -155,6 +157,12 @@ export default function StudioDispatch({
       area && grid && current ? computeExposure(area, grid, current.run.arrivalMinutes) : null,
     [area, grid, current],
   );
+  // CAL FIRE-layer stations near the box (local-only file; null while loading or absent).
+  const areaCentre = useMemo<[number, number] | null>(
+    () => (area ? [(area.bbox[0] + area.bbox[2]) / 2, (area.bbox[1] + area.bbox[3]) / 2] : null),
+    [area],
+  );
+  const suppressionBases = useSuppressionBases(areaCentre);
   const baseline = useMemo(
     () => (area && exposure ? noActionBaseline(area, exposure, horizonMinutes) : null),
     [area, exposure, horizonMinutes],
@@ -387,8 +395,10 @@ export default function StudioDispatch({
       windFromDegrees: current.scenario.settings.windFromDegrees,
       windSpeedMph: current.scenario.settings.windSpeedMph,
       closedEdges: new Set(plannedClosures.map((closure) => closure.edge)),
+      apparatus: dispatchApparatus(area, current.landscape, suppressionBases),
     });
   }, [
+    suppressionBases,
     plannedClosures,
     area,
     exposure,

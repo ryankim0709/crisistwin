@@ -11,6 +11,7 @@ import type { AirBase } from "./aircraft";
 import type { ReactNode } from "react";
 import type { Map as MapLibreMap } from "maplibre-gl";
 import type { LandscapeGrid, MercatorBox } from "../fire/landscape";
+import type { ScenarioWindRecord } from "../fire/scenarioWeather";
 import type { GeoPoint } from "../fire/spread";
 import type {
   FireSettings,
@@ -48,6 +49,11 @@ export interface StudioScenario {
   settings: FireSettings;
   /** Crews building control line (studio/firefighting.ts). Absent means none. */
   firefighting?: FirefightingSettings;
+  /**
+   * Weather the wind in `settings` came from (observed, forecast or derived), with station and
+   * distance. Absent means the wind is the user's assumption. Dropped when the wind is edited.
+   */
+  weather?: ScenarioWindRecord;
 }
 
 /** Configurable cap on enabled ignitions, bounding solve cost and map clutter. */

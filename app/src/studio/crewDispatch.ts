@@ -24,7 +24,7 @@
  */
 
 import { groundMeters, type DispatchArea, type LonLat } from "../dispatch/area";
-import { APPROACH_SPEED_KPH } from "../dispatch/engine";
+import { APPROACH_SPEED_KPH, MAX_ROAD_GAP_METERS as ENGINE_MAX_ROAD_GAP_METERS } from "../dispatch/engine";
 import { routeTo, shortestPathTree, type ShortestPathTree } from "../dispatch/routing";
 import type { LandscapeGrid } from "../fire/landscape";
 import {
@@ -46,7 +46,7 @@ const MAX_ENTRY_EXITS = 4;
 /** ASSUMPTION (data: hand_crews.walking_pace_m_per_min): walking pace with tools, 50 m/min. */
 export const HIKE_METERS_PER_MINUTE = dataValue<number>("hand_crews.walking_pace_m_per_min");
 /** A fire farther than this from any road a class can use is out of that class's reach. */
-export const MAX_ROAD_GAP_METERS = 1500;
+export const MAX_ROAD_GAP_METERS = ENGINE_MAX_ROAD_GAP_METERS;
 /**
  * ASSUMPTION: road distance over straight-line distance for off-board travel. Of the order of
  * published road circuity factors (about 1.2 for the US in Ballou et al. 2002; not re-checked);

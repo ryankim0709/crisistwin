@@ -11,7 +11,11 @@ task target. Same network, same rules:
   of it costs ``routing.EXPOSED_COST_BUFFER`` times its travel time (the planner's near-fire
   pass), so a responder route is ``clear`` or ``near_fire``, never ``through_fire``;
 - the search cost of an edge is also multiplied by its congestion factor (>= 1, from the
-  simulated traffic twin), so the route prefers roads not jammed with outbound traffic.
+  simulated traffic twin), so the route prefers roads not jammed with outbound traffic;
+- with an apparatus ``access`` profile (``livecore.apparatus``, rules R01-R12 of
+  docs/suppression-data.md) only edges open to that vehicle class are used, each at the class's
+  speed; when only the class rules stand between the ends the reason is ``no_access`` with the
+  blocking rule of the first closed edge on the route an unrestricted vehicle would take.
 
 Times are seconds, distances meters, coordinates WGS84 ``(lon, lat)``.
 """
@@ -20,10 +24,11 @@ from __future__ import annotations
 
 import heapq
 import math
-from collections.abc import Collection, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from typing import Literal
 
+from .apparatus import AccessProfile
 from .drill import Drill
 from .geo import LonLat, MultiPolygon, haversine_m
 from .routing import (
@@ -45,7 +50,9 @@ CONGESTION_MIN_VEH = 3
 """An edge is congested only with at least this many simulated vehicles on it (one car waiting
 at a junction is not a jam). Shared by responder routes and the evacuation planner."""
 
-InboundReason = Literal["origin_off_network", "target_off_network", "origin_in_fire", "target_in_fire", "no_open_road"]
+InboundReason = Literal[
+    "origin_off_network", "target_off_network", "origin_in_fire", "target_in_fire", "no_open_road", "no_access",
+]
 
 
 @dataclass(frozen=True)
@@ -62,6 +69,10 @@ class InboundResult:
     Equals ``route.travel_time_s`` when no congestion applies."""
     congested_edges: int = 0
     """Edges of the route with a congestion factor above 1."""
+    access_rule: str | None = None
+    """``no_access`` only: the rule (R01-R10) that closes the first blocking edge to the class."""
+    access_note: str | None = None
+    """``no_access`` only: why, e.g. ``"grade 18% above 16% limit for engine_t1_t2"``, and the road."""
 
 
 _ends_cache: dict[int, tuple[Drill, frozenset[str], frozenset[str]]] = {}
@@ -110,6 +121,7 @@ def inbound_route(
     blocked: frozenset[str],
     fire: MultiPolygon | None,
     congestion: Mapping[str, float] | None = None,
+    access: AccessProfile | None = None,
 ) -> InboundResult:
     """Cheapest drive from ``origin`` to ``target`` (forward Dijkstra, stops at the target node).
 
@@ -117,8 +129,12 @@ def inbound_route(
     ``congestion``: directed edge id -> travel-time factor in [1, CONGESTION_MAX_FACTOR];
     missing edges count as 1. Raises ``ValueError`` on a factor outside that range.
 
-    Edge search cost = free-flow seconds x (EXPOSED_COST_BUFFER if within FIRE_BUFFER_M of the
-    fire else 1) x congestion factor; edges inside the fire and blocked edges are unusable.
+    ``access``: an apparatus class's road access (``livecore.apparatus.access_profile``); None
+    drives every edge at its own speed (the pre-apparatus behaviour).
+
+    Edge search cost = drive seconds (free-flow, or at the class's speed) x (EXPOSED_COST_BUFFER
+    if within FIRE_BUFFER_M of the fire else 1) x congestion factor; edges inside the fire,
+    blocked edges and edges closed to the class are unusable.
     Returns a result whose ``reason`` says why there is no route: an end off the network,
     an end inside the fire estimate, or no open road between them. Origin and target on the
     same node give a zero-length route.
@@ -147,6 +163,45 @@ def inbound_route(
         if all(fire_class(e) == _INSIDE for e in roads.in_edges[dst]):
             return fail("target_in_fire")
 
+    def time_factor(eid: str) -> float:
+        """Class drive time over free-flow time on an open edge (1 without a profile)."""
+        if access is None:
+            return 1.0
+        edge = roads.edges[eid]
+        return edge.speed_kph / access.speed_kph(eid, edge.speed_kph)
+
+    def class_cost(eid: str) -> float | None:
+        if access is not None and not access.passable(eid):
+            return None
+        c = near_cost(eid)
+        return None if c is None else c * time_factor(eid)
+
+    path = _search(drill, src, dst, class_cost, factors)
+    if path is None:
+        if access is None:
+            return fail("no_open_road")
+        # Would an unrestricted vehicle get through? Then the class rules are the block.
+        open_path = _search(drill, src, dst, near_cost, factors)
+        if open_path is None:
+            return fail("no_open_road")
+        for eid in open_path:
+            acc = access.edges.get(eid)
+            if acc is not None and not acc.passable:
+                road = roads.edges[eid].name or roads.edges[eid].highway
+                return InboundResult(None, "no_access", src_m, dst_m, None, 0, acc.rule, f"{acc.note} ({road})")
+        return fail("no_open_road")
+    next_edge = {roads.edges[eid].from_node: eid for eid in path}
+    # Route.zone_id is empty and destination_id is the target road node for an inbound route.
+    route = _with_exposure(index, fire_class, _build_route(drill, index, "", src, next_edge, dst))
+    drive_s = sum(index.edge_time_s[e] * time_factor(e) * factors.get(e, 1.0) for e in route.edge_ids)
+    slow = sum(1 for e in route.edge_ids if factors.get(e, 1.0) > 1.0)
+    return InboundResult(route, None, src_m, dst_m, drive_s, slow)
+
+
+def _search(drill: Drill, src: str, dst: str, cost: Callable[[str], float | None],
+            factors: Mapping[str, float]) -> list[str] | None:
+    """Forward Dijkstra from ``src`` to ``dst``; the edge ids in travel order, or None."""
+    roads = drill.roads
     dist: dict[str, float] = {src: 0.0}
     prev: dict[str, str] = {}
     heap: list[tuple[float, str]] = [(0.0, src)]
@@ -159,7 +214,7 @@ def inbound_route(
             break
         done.add(node)
         for eid in roads.out_edges.get(node, ()):
-            c = near_cost(eid)
+            c = cost(eid)
             if c is None:
                 continue
             nxt = roads.edges[eid].to_node
@@ -169,16 +224,12 @@ def inbound_route(
                 prev[nxt] = eid
                 heapq.heappush(heap, (nd, nxt))
     if dst not in dist:
-        return fail("no_open_road")
+        return None
     path: list[str] = []
     at = dst
     while at != src:
         eid = prev[at]
         path.append(eid)
         at = roads.edges[eid].from_node
-    next_edge = {roads.edges[eid].from_node: eid for eid in path}
-    # Route.zone_id is empty and destination_id is the target road node for an inbound route.
-    route = _with_exposure(index, fire_class, _build_route(drill, index, "", src, next_edge, dst))
-    drive_s = sum(index.edge_time_s[e] * factors.get(e, 1.0) for e in route.edge_ids)
-    slow = sum(1 for e in route.edge_ids if factors.get(e, 1.0) > 1.0)
-    return InboundResult(route, None, src_m, dst_m, drive_s, slow)
+    path.reverse()
+    return path

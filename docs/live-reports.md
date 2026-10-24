@@ -95,6 +95,25 @@ store them in their own collection only if reads get slow.
 `"simulated": true`, and each `command.responders[]` item carries `simulated` (`false` for real
 phones). The console tags those units "sim".
 
+The driver, `manage.py live_sim_responders --units N` (`livecore.responders_sim`), starts its
+units at the real CAL FIRE-layer stations nearest the fire estimate at the drill's current time
+that sit within `INBOUND_SNAP_MAX_M` of the drill roads (`tools/ca_fire_bases.json`, local-only,
+read by `api.suppression_bases.load_bases`). Each unit is an engine: a CAL FIRE Type 3 at a
+state-owned station (the data's default state engine), 1.6 engines per CAL FIRE-owned station
+on average (`deployment.engines_per_station_estimate`, ASSUMPTION; the k-th such station holds
+floor(1.6k) - floor(1.6(k-1))), and one Type 1 structure engine at any other station
+(ASSUMPTION: no apparatus data for local stations). Turnout is 80 s at paid stations
+(`response_times.turnout_s`, NFPA 1710, unverified) and 120 s otherwise
+(`wildland_turnout_s`, ASSUMPTION), waited when a unit leaves its station. Units route with
+`inbound_route(access=...)` for their class (see [Responder route to a task](#responder-route-to-a-task))
+and drive at the class's speed. A task only the class rules keep a unit from is cancelled at
+once with the rule in the note (`Simulated responder sim-2 (Type 1 structure engine, Concow
+Vol.): no road open to a Type 1/2 structure engine: R05 ...`); a task cut off by fire or
+closures waits `UNREACHABLE_GIVEUP_S` (600 s) as before. The command prints the stations,
+types, turnout and their basis. Without the bases file (or with `--no-bases`) units fall back to
+the assumed Chico points with the engine/patrol/ambulance table, labelled `FALLBACK` in its
+output.
+
 A submitted report needs every field of the stored document except `id`,
 `reporter`, `road_ref`, `received_at`, `status` and `evidence_class`, which the server fills. ADR 0041 adds optional `method` (`explicit` default |
 `passive`) and, for passive reports only, `segment_id` and `speed_class`; see
@@ -654,12 +673,16 @@ and returns `201 { "task": CheckTask }`.
 
 ### Responder route to a task
 
-`GET tasks/{id}/route[?from=lon,lat]` (responder: own or unassigned tasks, else `404`;
+`GET tasks/{id}/route[?from=lon,lat][&class=engine_t3]` (responder: own or unassigned tasks, else `404`;
 controller: any task). The task must be `open` or `accepted` (`409 task_closed`). The
 origin is the caller's latest unexpired `me/location`; for a controller, `?from=lon,lat`
 (WGS84 degrees) or else the assignee's. No origin returns `409` with
 `reason: "no_origin"` and the same body shape. The phone refetches it with its poll,
 at most every 15 s per task.
+
+`class` is the apparatus road-access class of [suppression-data.md](suppression-data.md)
+(`engine_t1_t2`, `engine_t3`, `engine_t4_t7`, `tender_support`, `tender_tactical`; default
+`engine_t3`, a CAL FIRE Type 3 engine). Any other value is `400 invalid_request`.
 
 ```jsonc
 { "task_id": "tsk_01J...",
@@ -671,8 +694,13 @@ at most every 15 s per task.
     "exposure": "clear",                      // clear | near_fire (never through_fire)
     "congestion": "twin",                     // twin | unavailable (free-flow)
     "congested_edges": 0 },                   // edges on the route slowed by the twin
-  "reason": null,                             // null | "unreachable" | "no_origin"
-  "detail": null,                             // why, for unreachable / no_origin
+  "reason": null,                             // null | "unreachable" | "no_access" | "no_origin"
+  "detail": null,                             // why, for unreachable / no_access / no_origin
+  "rule": null,                               // no_access only: blocking rule, "R01".."R10"
+  "apparatus": {                              // the class the route was computed for
+    "class": "engine_t3",
+    "label": "Type 3 engine (CAL FIRE Model 14/24/34 class, 4x4)",   // null without the data
+    "basis": "road access: highway class only (...), grade 0% assumed, dead-end rule R10 not applied" },
   "evidence_class": "simulated",
   "as_of": "2018-11-08T16:21:10Z" }           // drill time of the fire estimate and twin state
 ```
@@ -694,9 +722,23 @@ Computed by `livecore.inbound.inbound_route` (forward Dijkstra on the drill road
   evacuation traffic does not slow the inbound lane. Twin speeds are cached for 10 s.
   If the twin is warming, busy or failed, the route is free-flow and `congestion` is
   `unavailable`.
-- `eta_min` = ceil(sum over edges of `length_m / (speed_kph / 3.6)` x congestion factor
-  / 60). The fire weighting changes the choice of route, not the ETA.
+- Apparatus class (`livecore.apparatus`): only edges open to the class under rules
+  R01-R12 (`tools/suppression_data.road_access`) are used, each at the class's speed
+  (heavy-apparatus cap by highway class, capped by the edge's own speed as `maxspeed`).
+  The drill bundle's edges carry only `highway`, `bridge` and speed, no surface, track
+  grade, width, weight or height tags, so the rules see the highway class with the
+  documented defaults (paved, default width by class); grade is 0% (ASSUMPTION: no
+  elevation per edge) and R10 is not applied (no turning-circle data). In camp-2018 every
+  public road is then open to every class (rule R11) and the class changes the speed, not
+  the route's reach. A bundle whose edges carry `tags` gets the full rules. Without
+  `tools/` (the backend image alone) every edge keeps its own speed and
+  `apparatus.label` is null.
+- `eta_min` = ceil(sum over edges of `length_m / (class speed_kph / 3.6)` x congestion
+  factor / 60). The fire weighting changes the choice of route, not the ETA.
 - No path gives `reason: "unreachable"` with a `detail`, never a route over a closed edge.
+  When an unrestricted vehicle would get through and only the class rules stop this one,
+  the reason is `no_access`, `rule` is the rule of the first closed edge on that vehicle's
+  route and `detail` says why and on which road.
 
 ## Situation (the phone's one poll)
 

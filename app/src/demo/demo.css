@@ -57,6 +57,12 @@
 .dm-footnote {
   padding: var(--ct-space-4);
 }
+.dm-inputs {
+  margin: 0;
+  padding-left: var(--ct-space-4);
+  display: grid;
+  gap: var(--ct-space-1);
+}
 .dm-empty {
   padding: var(--ct-space-3) var(--ct-space-4);
   color: var(--ct-ink-muted);

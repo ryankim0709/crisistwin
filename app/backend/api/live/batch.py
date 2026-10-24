@@ -199,6 +199,11 @@ def spec_from_dict(d: Mapping[str, Any]) -> ScenarioSpec:
     seeds = {"panel": "dev", "n": 8, "root": 0, **(d.get("seeds") or {})}
     if seeds.get("panel") not in ("dev", "test") and "list" not in seeds:
         raise ValueError("seeds.panel must be dev or test (or give seeds.list)")
+    if (d.get("twin") or {}).get("people") is not None:
+        _sim()
+        from sim.behavior import people_from_spec
+
+        people_from_spec(d["twin"]["people"])  # ValueError on an unknown preset or field
     responders = {"enabled": True, "units": DEFAULT_RESPONDER_UNITS, **(d.get("responders") or {})}
     if responders["enabled"] and int(responders["units"]) < 1:
         raise ValueError("responders.units must be >= 1")
@@ -265,12 +270,35 @@ class ScenarioWorld:
                 scale_911=self.spec.comms.get("scale_911"),
                 nist_sample_like=bool(self.spec.comms.get("nist_sample_like", False)),
                 psap_reroute_at=_t(self.spec.comms["psap_reroute_at"]) if self.spec.comms.get("psap_reroute_at") else None,
+                bursts=bool(self.spec.comms.get("bursts", True)),
             )
             items = gen_comms.generate_comms(
                 gen_comms.zones_from_bundle(self.bundle), gen_comms.roads_from_bundle(self.bundle),
                 (self.spec.start, self.spec.end), self.comms_params, evaluation.derive_seed(seed, "comms"), opts)
             self._comms = {seed: items}
         return self._comms[seed]
+
+
+def people_behavior(spec: ScenarioSpec):
+    """``spec.twin["people"]`` as a ``sim.behavior.PeopleBehavior`` (preset name or fields; absent = historical)."""
+    _sim()
+    from sim.behavior import people_from_spec
+
+    return people_from_spec(spec.twin.get("people"))
+
+
+def people_inputs(inputs: Any, spec: ScenarioSpec) -> Any:
+    """Twin inputs with the spec's people behaviour (``sim.twin.with_people_behavior``); unchanged by default."""
+    return _sim()[0].with_people_behavior(inputs, people_behavior(spec))
+
+
+def resident_params(spec: ScenarioSpec, seed: int) -> Any:
+    """``ResidentParams`` from the spec: its ``residents`` fields, the named seed, and the households that do
+    not comply when the twin's people behaviour sets an order compliance (one population for twin and phones)."""
+    gen_residents = _sim()[3]
+    overrides = {k: v for k, v in spec.residents.items() if k != "enabled"}
+    overrides.setdefault("noncompliant_share", round(1.0 - people_behavior(spec).order_compliance, 6))
+    return gen_residents.ResidentParams(seed=seed, **overrides)
 
 
 def build_world(spec: ScenarioSpec, progress: Callable[[str], None] = lambda s: None) -> ScenarioWorld:
@@ -294,7 +322,7 @@ def build_world(spec: ScenarioSpec, progress: Callable[[str], None] = lambda s: 
         bundle = None
     base_inputs = None
     if spec.twin.get("enabled") and spec.package["kind"] == "camp_bundle":
-        base_inputs = twin_service.build_camp_inputs()
+        base_inputs = people_inputs(twin_service.build_camp_inputs(), spec)
     record = None
     if spec.record_2018 and spec.package["kind"] == "camp_bundle":
         record = get_record(index)
@@ -1131,8 +1159,7 @@ class Run:
                               actor=strategy.strategy_id if strategy.drill_system else "none")
         self.residents = None
         if twin is not None and self.spec.residents.get("enabled"):
-            overrides = {k: v for k, v in self.spec.residents.items() if k != "enabled"}
-            params = gen_residents.ResidentParams(seed=evaluation.derive_seed(seed, "residents"), **overrides)
+            params = resident_params(self.spec, evaluation.derive_seed(seed, "residents"))
             self.residents = gen_residents.ResidentGenerator(twin, params, incident_id=self.state.incident_id)
             default = self.residents._default_offered
             self.residents.offered = lambda zone_id, at: self._offered(zone_id) or default(zone_id, at)

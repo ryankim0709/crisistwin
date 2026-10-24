@@ -108,6 +108,10 @@ export interface ZoneObservation {
 
 export interface UnitObservation {
   id: string;
+  /** Apparatus label, e.g. "Type 3 engine (4x4)" (studio/apparatus.ts). */
+  apparatus: string;
+  /** Road-access class it routes by (docs/suppression-data.md, R01-R12). */
+  access_class: string;
   station_id: string;
   status: UnitStatus;
   task: UnitTask | null;
@@ -118,6 +122,12 @@ export interface UnitObservation {
   eta_min: number | null;
   /** Drive minutes from the unit's position to threatened zones (fire_eta_min not null). */
   drive_min_to: Record<string, number>;
+  /**
+   * Threatened zones and burning fires (by id) the unit cannot reach because of its road-access
+   * class, with the blocking rule, e.g. "R05 paved grade too steep: grade 19% above 16% limit
+   * for engine_t1_t2 (Foo Road)". Empty when nothing is blocked by class.
+   */
+  no_access: Record<string, string>;
 }
 
 /** How engines fight a fire (fireTactics.ts). */

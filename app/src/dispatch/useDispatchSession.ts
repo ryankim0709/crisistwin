@@ -30,6 +30,7 @@ import {
 } from "./engine";
 import type { FireAreaFrame, FireTarget } from "./fireAttack";
 import type { FireExposure } from "./fireExposure";
+import type { DispatchApparatus } from "./stationApparatus";
 import { detectChanges, takeBaseline, type MonitorBaseline } from "./monitor";
 import { buildObservation, toEngineOrders, type FrameSummary } from "./observation";
 import {
@@ -114,6 +115,11 @@ export interface SessionInputs {
    * `setRoadClosed` changes them during the run.
    */
   closedEdges?: ReadonlySet<number>;
+  /**
+   * Apparatus kinds and per-class road access (stationApparatus.ts); without it every unit is
+   * a Type 3 engine on public roads at free-flow speed.
+   */
+  apparatus?: DispatchApparatus | null;
 }
 
 export interface DispatchSession {
@@ -485,6 +491,9 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
         inputs.closedEdges,
       );
       engine.restrictToFirePath = true;
+      if (inputs.apparatus) {
+        engine.setApparatusAccess(inputs.apparatus.access, inputs.apparatus.kinds, inputs.apparatus.notes);
+      }
       engine.setFires(inputs.fireTargets, inputs.fireFrames);
       engineRef.current = engine;
       inputsRef.current = inputs;

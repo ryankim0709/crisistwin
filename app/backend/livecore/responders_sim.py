@@ -7,9 +7,16 @@ returns the API calls a real responder phone would make (``join``, ``location``,
 in-process. Times are drill seconds (the drill clock, never wall time), distances meters,
 coordinates WGS84 ``(lon, lat)``.
 
-Everything here is ``simulated``: the units, their speeds and on-scene times are the
-ASSUMPTION tables below, and a verify answer is the simulation's ground truth (``World``), not
-an observation.
+Everything here is ``simulated``: the units, their on-scene times are the ASSUMPTION tables
+below, and a verify answer is the simulation's ground truth (``World``), not an observation.
+
+Apparatus (``Fleet(apparatus=...)``, ``livecore.apparatus.station_apparatus``): units start at
+the real CAL FIRE-layer stations nearest the incident as engines of a road-access class (Type 3
+at CAL FIRE stations, Type 1 at local ones; counts from the documented estimate, labelled).
+Each waits out its turnout (response-time data) before leaving its station, routes only on
+roads its class may use (rules R01-R12 via ``inbound_route(access=...)``) and drives at the
+class's speed on each edge. Without stations (no bases file) the units start at
+``DEFAULT_STATIONS`` (or shelters) with the ``TYPE_ORDER`` table, labelled as a fallback.
 
 Rules:
 
@@ -17,7 +24,9 @@ Rules:
   the ground-truth blocks, or an edge inside the fire estimate). A block it did not know about
   is discovered on arrival at the edge: the unit stops, remembers it and re-routes.
 - A route that becomes blocked or unreachable is replanned from the end of the current edge;
-  after ``UNREACHABLE_GIVEUP_S`` without a route the unit cancels the task with a note.
+  after ``UNREACHABLE_GIVEUP_S`` without a route the unit cancels the task with a note. A task
+  only the unit's class rules keep it from (``no_access``) is cancelled at once, the blocking
+  rule in the note: road tags do not change during a drill.
 - An idle unit takes the nearest suitable open task by straight-line distance, the same
   rule as the console's "Send nearest".
 """
@@ -32,10 +41,11 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal
 
+from .apparatus import AccessProfile, Apparatus, access_profile, station_apparatus
 from .drill import Drill
 from .geo import LonLat, MultiPolygon, haversine_m
-from .inbound import _end_nodes, inbound_route
-from .routing import _INSIDE, _fire_classes
+from .inbound import INBOUND_SNAP_MAX_M, _end_nodes, inbound_route
+from .routing import _INSIDE, _fire_classes, _index, _nearest_node
 
 TaskKind = Literal["verify", "assist"]
 Call = dict[str, Any]
@@ -124,6 +134,12 @@ class Unit:
     refused: set[str] = field(default_factory=set)
     last_loc_at: datetime | None = None
     last_loc_pos: LonLat | None = None
+    apparatus: Apparatus | None = None
+    """The station engine this unit is (None for the fallback table)."""
+    access: AccessProfile | None = None
+    """Its class's road access; None drives every edge at the type's speed factor."""
+    turnout_left: float = 0.0
+    """Drill seconds of turnout still to wait before leaving the station."""
 
     @property
     def ident(self) -> str:
@@ -137,6 +153,18 @@ def home_points(drill: Drill, configured: Sequence[LonLat] = DEFAULT_STATIONS) -
     The bundle has no station list yet; a temporary refuge or an exit is not a station."""
     shelters = sorted((d for d in drill.destinations if d.kind == "shelter"), key=lambda d: d.id)
     return tuple(d.coord for d in shelters) or tuple(configured)
+
+
+def on_network(drill: Drill, point: LonLat) -> bool:
+    """A routable road node within INBOUND_SNAP_MAX_M of ``point``."""
+    origins, _ = _end_nodes(drill)
+    node = _nearest_node(_index(drill).grid, drill.roads.node_coords, point, origins)
+    return node is not None and haversine_m(point, drill.roads.node_coords[node]) <= INBOUND_SNAP_MAX_M
+
+
+def fleet_apparatus(drill: Drill, bases: Sequence[Mapping[str, Any]], incident: LonLat, n_units: int) -> list[Apparatus]:
+    """Engines of the CAL FIRE-layer stations nearest ``incident`` that sit on the drill roads."""
+    return station_apparatus(bases, incident, n_units, lambda p: on_network(drill, p))
 
 
 def _snap_home(drill: Drill, point: LonLat) -> LonLat:
@@ -157,6 +185,7 @@ class Fleet:
         stations: Sequence[LonLat] | None = None,
         incident_id: str | None = None,
         tempo: float = 1.0,
+        apparatus: Sequence[Apparatus] | None = None,
     ) -> None:
         if n_units < 1 or tempo <= 0:
             raise ValueError("a fleet needs at least one unit and a positive tempo")
@@ -165,14 +194,29 @@ class Fleet:
         self.tempo = tempo
         """Demo knob: units drive and work ``tempo`` times faster than the table says."""
         self.incident_id = incident_id or drill.incident_id
-        points = tuple(stations) if stations else home_points(drill)
-        if not points:
-            raise ValueError("no station points")
-        homes = [_snap_home(drill, p) for p in points]
         self.units: list[Unit] = []
-        for i in range(n_units):
-            home = homes[i % len(homes)]
-            self.units.append(Unit(f"sim-{i + 1}", UNIT_TYPES[TYPE_ORDER[i % len(TYPE_ORDER)]], home, home))
+        self.notes: list[str] = []
+        """How the fleet was built (sources, assumptions, fallbacks), for the driver to print."""
+        if apparatus:
+            for i, app in enumerate(list(apparatus)[:n_units]):
+                home = _snap_home(drill, app.coord)
+                self.units.append(Unit(f"sim-{i + 1}", UNIT_TYPES["engine"], home, home, apparatus=app,
+                                       access=access_profile(drill, app.vehicle)))
+            self.notes.extend(sorted({u.access.basis for u in self.units if u.access is not None}))
+            if any(u.access is None for u in self.units):
+                self.notes.append("FALLBACK: suppression data unavailable; units drive at the engine "
+                                  "speed factor with no class access rules (ASSUMPTION)")
+        else:
+            points = tuple(stations) if stations else home_points(drill)
+            if not points:
+                raise ValueError("no station points")
+            homes = [_snap_home(drill, p) for p in points]
+            for i in range(n_units):
+                home = homes[i % len(homes)]
+                self.units.append(Unit(f"sim-{i + 1}", UNIT_TYPES[TYPE_ORDER[i % len(TYPE_ORDER)]], home, home))
+            self.notes.append("FALLBACK: no CAL FIRE station data; units start at "
+                              + ("the given points" if stations else "the drill's shelters or approximate Chico points")
+                              + " with the assumed engine/patrol/ambulance table, no turnout and no class access rules")
         self._clock: datetime | None = None
 
     # -- driver hooks -------------------------------------------------------------------
@@ -257,13 +301,18 @@ class Fleet:
         }
         u.phase, u.needs_route, u.wait_s = "enroute", True, 0.0
         u.route, u.edge_i, u.edge_t, u.goal_segment, u.found_blocked = (), 0, 0.0, u.task["segment_id"], False
+        if u.apparatus is not None and u.pos == u.home:
+            u.turnout_left = u.apparatus.turnout_s / self.tempo  # leaving the station: crew turns out first
         calls.append(self._call(at, u, "accept", "POST", f"tasks/{best[1]}", {"status": "accepted"}))
 
     def _closed(self, u: Unit, world: World) -> frozenset[str]:
         return world.known_blocked | u.discovered
 
-    def _plan(self, u: Unit, world: World, fire_class) -> bool:
-        """Route from the end of the current edge (or the unit's position) to the task target."""
+    def _plan(self, u: Unit, world: World, fire_class) -> bool | str:
+        """Route from the end of the current edge (or the unit's position) to the task target.
+
+        True when routed, False when no route now, or the cancel note when only the unit's
+        class rules keep it from the target (``no_access``)."""
         assert u.task is not None
         prefix: tuple[str, ...] = ()
         edges = self.drill.roads.edges
@@ -274,8 +323,11 @@ class Fleet:
             origin = self.drill.roads.node_coords[edges[u.route[u.edge_i]].from_node]
         else:
             origin = u.pos
-        result = inbound_route(self.drill, origin, u.task["coord"], self._closed(u, world), world.fire, world.congestion)
+        result = inbound_route(self.drill, origin, u.task["coord"], self._closed(u, world), world.fire, world.congestion,
+                               access=u.access)
         if result.route is None:
+            if result.reason == "no_access" and u.access is not None:
+                return f"no road open to a {u.access.label}: {result.access_rule} {result.access_note}"
             return False
         u.route = prefix + result.route.edge_ids
         u.edge_i = 0
@@ -306,11 +358,22 @@ class Fleet:
                 break
             if u.phase != "enroute":
                 break
-            if u.needs_route and not self._plan(u, world, fire_class):
-                u.wait_s += remaining
-                if u.wait_s >= UNREACHABLE_GIVEUP_S:
-                    self._cancel(u, at, calls)
-                break
+            if u.needs_route:
+                planned = self._plan(u, world, fire_class)
+                if isinstance(planned, str):
+                    self._cancel(u, at, calls, planned)
+                    break
+                if not planned:
+                    u.wait_s += remaining
+                    if u.wait_s >= UNREACHABLE_GIVEUP_S:
+                        self._cancel(u, at, calls)
+                    break
+            if u.turnout_left > 0:
+                use = min(remaining, u.turnout_left)
+                u.turnout_left -= use
+                remaining -= use
+                if u.turnout_left > 1e-9:
+                    break
             if u.edge_i >= len(u.route):
                 u.phase, u.scene_left = "onscene", self._scene_time(u)
                 continue
@@ -327,7 +390,10 @@ class Fleet:
                     u.replans += 1
                     u.route, u.edge_i = (), 0
                     continue
-            speed_ms = edge.speed_kph * u.type.speed_factor * self.tempo / 3.6
+            if u.access is not None:
+                speed_ms = u.access.speed_kph(edge.id, edge.speed_kph) * self.tempo / 3.6
+            else:
+                speed_ms = edge.speed_kph * u.type.speed_factor * self.tempo / 3.6
             need = edge.length_m / speed_ms * world.congestion.get(edge.id, 1.0) - u.edge_t
             if remaining >= need:
                 remaining -= need
@@ -376,10 +442,16 @@ class Fleet:
             }))
         self._release(u)
 
-    def _cancel(self, u: Unit, at: datetime, calls: list[Call]) -> None:
+    def describe(self, u: Unit) -> str:
+        """``sim-1 (CAL FIRE Type 3 engine, Jarbo Gap FS)``, or the fallback type."""
+        if u.apparatus is None:
+            return f"{u.id} ({u.type.name})"
+        return f"{u.id} ({u.apparatus.label}, {u.apparatus.station})"
+
+    def _cancel(self, u: Unit, at: datetime, calls: list[Call], why: str = "no open road to the target") -> None:
         assert u.task is not None
         calls.append(self._call(at, u, "cancel", "POST", f"tasks/{u.task['id']}", {
-            "status": "cancelled", "note": f"Simulated responder {u.id}: no open road to the target"}))
+            "status": "cancelled", "note": f"Simulated responder {self.describe(u)}: {why}"}))
         u.refused.add(u.task["id"])
         self._release(u)
 

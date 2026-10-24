@@ -1,6 +1,7 @@
 from django.urls import include, path, re_path
 
 from .demo import demo_decide, demo_routes
+from .demo_realism import demo_crew_routes, demo_environment, demo_wind
 from .dispatch import decide
 from .dispatch_area import dispatch_area
 from .dispatch_runs import run_list, run_outcome
@@ -19,6 +20,7 @@ from .landscapes import landscape_list, landscape_package
 from .live_active import live_active
 from .live_broadcast import live_broadcast, live_snapshot
 from .mobile_data import mobile_collection, mobile_document, register_device
+from .scenario_weather import scenario_weather
 from .suppression_bases import suppression_bases
 from .views import health
 
@@ -31,9 +33,13 @@ urlpatterns = [
     path("replay/explain", explain, name="replay-explain"),
     path("dispatch/decide", decide, name="dispatch-decide"),
     path("dispatch/area", dispatch_area, name="dispatch-area"),
+    path("weather/scenario", scenario_weather, name="weather-scenario"),
     path("suppression/bases", suppression_bases, name="suppression-bases"),
     path("demo/routes", demo_routes, name="demo-routes"),
     path("demo/decide", demo_decide, name="demo-decide"),
+    path("demo/crew_routes", demo_crew_routes, name="demo-crew-routes"),
+    path("demo/environment", demo_environment, name="demo-environment"),
+    path("demo/wind", demo_wind, name="demo-wind"),
     path("dispatch/runs", run_list, name="dispatch-runs"),
     re_path(
         r"^dispatch/runs/(?P<session_id>[0-9a-f-]{36})/outcome$",

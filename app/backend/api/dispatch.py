@@ -85,8 +85,10 @@ vehicles_waiting, fire_eta_min and fire_core_eta_min, queue_clear_min, route_blo
 exit_options with drive_min and bottleneck_vph, order_slack_min, wave, staged_after, \
 staged_exit, units_on_scene), fires (status, area_ha, head_flame_ft, crowning, structure_fire, \
 tactics_blocked, tactic, attacking, out_eta_min, held_in_min, control_line_km, tactic_options), \
-exits, units (status, \
-task, zone_id, fire_id, eta_min, drive_min_to threatened zones), totals (households), fire \
+exits, units (apparatus, \
+access_class, status, task, zone_id, fire_id, eta_min, drive_min_to threatened zones, no_access: \
+zones and fires the unit's road-access class cannot reach, with the blocking rule; send a unit \
+that can), totals (households), fire \
 (no_action_homes_exposed is the simulator's count if nobody is ordered out; fire_path counts \
 the zones and households in and outside the fire path), alerts, \
 previous_outcomes, previous_summary, model_notes, roads (planner_closed: roads the planner has \

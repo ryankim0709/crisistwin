@@ -10,6 +10,7 @@ import {
   type FuelMoisture,
   type GeoPoint,
 } from "../fire/spread";
+import { recordMatchesWind, type ScenarioWindRecord } from "../fire/scenarioWeather";
 import { spanProblem } from "./bounds";
 import {
   MAX_RESOURCES_PER_KIND,
@@ -386,6 +387,8 @@ export function parseScenario(json: unknown): {
       };
     }
   }
+  // Weather provenance is kept only while the wind in settings still equals what it applied.
+  const weather = settings ? parseWeather(json.weather, settings) : undefined;
   if (issues.length > 0 || !settings) {
     return { scenario: null, issues };
   }
@@ -397,9 +400,21 @@ export function parseScenario(json: unknown): {
       ignitions,
       settings,
       ...(firefighting ? { firefighting } : {}),
+      ...(weather ? { weather } : {}),
     },
     issues,
   };
+}
+
+function parseWeather(raw: unknown, settings: FireSettings): ScenarioWindRecord | undefined {
+  if (!isRecord(raw) || !isRecord(raw.applied) || !Array.isArray(raw.series)) return undefined;
+  const { applied } = raw;
+  if (!isFiniteNumber(applied.speed20ftMph) || !isFiniteNumber(applied.fromDeg)) return undefined;
+  if (typeof raw.mode !== "string" || typeof raw.evidenceClass !== "string") return undefined;
+  const record = raw as unknown as ScenarioWindRecord;
+  return recordMatchesWind(record, settings.windSpeedMph, settings.windFromDegrees)
+    ? record
+    : undefined;
 }
 
 function parseSettings(

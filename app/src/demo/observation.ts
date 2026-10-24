@@ -13,19 +13,19 @@
 
 import type { CrewObservation, DemoObservation, FireObservation, ZoneObservation } from "./contracts";
 import {
+  ACTIVITY,
   DEPARTURE_SPREAD_MINUTES,
   FORECAST_MINUTES,
-  LENGTH_TO_BREADTH,
-  TEAM_LINE_M_PER_MIN,
-  WIND_FROM_DEG,
   activeFires,
-  arrivalTau,
   containOptions,
   currentContainment,
   fireAreaHa,
   firePerimeterM,
   perimeterGrowth,
   pointInRing,
+  unitLineOn,
+  waitMinutes,
+  totals,
   zoneCounts,
   zoneForecasts,
   type Board,
@@ -34,6 +34,12 @@ import {
   type ZoneForecast,
   type ZoneState,
 } from "./model";
+import { ORDER_COMPLIANCE, SHADOW_SHARE, holdsFlameFeet, kindLabel, windAt } from "./realism";
+
+/** Shown to the agent as inputs.travel and inputs.congestion. */
+export const TRAVEL_LABEL =
+  "Road network per apparatus class (POST /api/demo/crew_routes); straight line x 1.3 at 60 km/h until a road time is known (assumption)";
+export const CONGESTION_LABEL = "Not modelled: evacuation and unit travel times are free-flow";
 
 /** How often (simulated minutes) the page runs the monitor. */
 export const MONITOR_EVERY_MINUTES = 2;
@@ -63,7 +69,7 @@ function spreadLimit(board: Board, fire: Fire): number {
 
 /** Whether `fire` reaches the zone (an edge vertex or its core) within `limit` minutes. */
 function fireReaches(fire: Fire, zone: ZoneState, limit: number): boolean {
-  const reaches = (p: (typeof zone.ring)[number]): boolean => arrivalTau(fire, p) - fire.tau <= limit;
+  const reaches = (p: (typeof zone.ring)[number]): boolean => waitMinutes(fire, p, limit) !== null;
   return pointInRing(fire.origin, zone.ring) || reaches(zone.core) || zone.ring.some(reaches);
 }
 
@@ -111,6 +117,9 @@ export function buildObservation(
       households_en_route: counts.enRoute,
       households_out: counts.out,
       households_caught: counts.caught,
+      households_no_vehicle: zone.noVehicle,
+      households_no_vehicle_home: counts.noVehicleHome,
+      shadow_evacuating: zone.shadowAt !== null && zone.orderedAt === null,
       fire_eta_min: f?.edgeEta ?? null,
       fire_core_eta_min: f?.coreEta ?? null,
       order_slack_min: orderSlack(f),
@@ -129,7 +138,7 @@ export function buildObservation(
   });
 
   const fireObs: FireObservation[] = fires.map((fire) => {
-    const perimeter = firePerimeterM(fire.headRate, fire.tau);
+    const perimeter = firePerimeterM(fire);
     const teams = board.teams.filter((t) => t.fireId === fire.id);
     const limit = spreadLimit(board, fire);
     const contained = currentContainment(board, fire);
@@ -140,7 +149,7 @@ export function buildObservation(
       age_min: Math.round(minute - fire.ignitedAt),
       area_ha: round1(fireAreaHa(fire)),
       perimeter_m: Math.round(perimeter),
-      perimeter_growth_m_per_min: fire.status === "burning" ? round1(perimeterGrowth(fire.headRate)) : 0,
+      perimeter_growth_m_per_min: round1(perimeterGrowth(fire)),
       line_m: Math.round(fire.lineM),
       containment_pct:
         fire.status !== "burning" ? 100 : perimeter > 0 ? Math.min(100, Math.round((fire.lineM / perimeter) * 100)) : 0,
@@ -152,26 +161,56 @@ export function buildObservation(
         contained_in_min: o.contained_in_min === null ? null : Math.round(o.contained_in_min),
       })),
       threatens_zone_ids: listed.filter((zone) => fireReaches(fire, zone, limit)).map((zone) => zone.id),
+      head_m_per_min: round1(fire.rates.headMetersPerMinute),
+      head_flame_ft: round1(fire.rates.headFlameFeet),
+      heading_deg: Math.round(fire.rates.headingDegrees),
+      length_to_breadth: round1(fire.rates.lengthToBreadth),
+      slope_pct: Math.round(fire.rates.slopePercent),
     };
   });
 
-  const crews: CrewObservation[] = board.teams.map((team) => ({
-    id: team.id,
-    status: team.status,
-    fire_id: team.fireId,
-    eta_min:
-      team.status === "en_route" && team.arriveAt !== null ? Math.max(0, Math.ceil(team.arriveAt - minute)) : null,
-    line_m_per_min: round1(TEAM_LINE_M_PER_MIN),
-  }));
+  const crews: CrewObservation[] = board.teams.map((team) => {
+    const fire = team.fireId ? (board.fires.find((f) => f.id === team.fireId) ?? null) : null;
+    return {
+      id: team.id,
+      kind: team.kind,
+      label: kindLabel(team.kind),
+      base: board.stations.find((s) => s.id === team.station)?.name ?? team.station,
+      status: team.status,
+      fire_id: team.fireId,
+      eta_min:
+        team.status === "en_route" && team.arriveAt !== null ? Math.max(0, Math.ceil(team.arriveAt - minute)) : null,
+      line_m_per_min: round1(unitLineOn(board, team, fire)),
+      holds_flame_ft: holdsFlameFeet(team.kind),
+      travel: team.status === "en_route" ? team.travel : null,
+    };
+  });
 
+  const spread = board.env.spread;
+  const wind = windAt(spread.wind, minute);
   return {
     clock: {
       minute: Math.round(minute),
-      departure_spread_min: DEPARTURE_SPREAD_MINUTES,
+      departure_mean_min: DEPARTURE_SPREAD_MINUTES,
+      order_compliance: ORDER_COMPLIANCE,
+      shadow_share: SHADOW_SHARE,
       forecast_min: FORECAST_MINUTES,
     },
     activity: board.activity,
-    wind: { from_deg: WIND_FROM_DEG, length_to_breadth: LENGTH_TO_BREADTH },
+    wind: {
+      from_deg: Math.round(wind.fromDegrees),
+      speed_m_s: round1(wind.speedMetersPerSecond),
+      evidence: spread.wind.evidence,
+      source: spread.wind.label,
+    },
+    inputs: {
+      fuel: spread.ground.fuelLabel,
+      moisture: `${ACTIVITY[board.activity].moisture} (Scott & Burgan 2005 scenario, chosen by the activity level)`,
+      terrain: spread.ground.terrainLabel,
+      stations: board.env.basesLabel,
+      travel: TRAVEL_LABEL,
+      congestion: CONGESTION_LABEL,
+    },
     fires: fireObs,
     crews,
     zones,
@@ -180,6 +219,7 @@ export function buildObservation(
       households: board.zones.reduce((sum, z) => sum + z.households, 0),
       households_home_in_threatened_zones: zones.reduce((sum, z) => sum + z.households_home, 0),
       households_caught_total: board.caughtTotal,
+      households_no_vehicle_at_risk: totals(board, forecasts).noVehicleAtRisk,
       fires_burning: fires.filter((f) => f.status === "burning").length,
       fires_out_total: board.firesOutTotal,
       crews_available: board.teams.filter((t) => t.status === "available").length,
