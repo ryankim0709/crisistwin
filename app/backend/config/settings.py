@@ -79,6 +79,8 @@ LIVE_CONTROLLER = os.environ.get("LIVE_CONTROLLER", "").strip()
 # Twin input packages (repo-relative or absolute); empty = the packages the Camp bundle was built from.
 LIVE_TWIN_PACKAGE = os.environ.get("LIVE_TWIN_PACKAGE", "").strip()
 LIVE_TWIN_ROADS_PACKAGE = os.environ.get("LIVE_TWIN_ROADS_PACKAGE", "").strip()
+# Drill packages built from Studio runs (ADR 0037); empty = app/backend/var/packages.
+LIVE_PACKAGES_DIR = os.environ.get("LIVE_PACKAGES_DIR", "").strip()
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [],
     "UNAUTHENTICATED_USER": None,
