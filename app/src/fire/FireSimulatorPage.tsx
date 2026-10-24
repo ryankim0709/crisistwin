@@ -14,6 +14,12 @@ import FireLegend from "./ui/FireLegend";
 import { formatDuration } from "./ui/format";
 import { useFirePlayback } from "./useFirePlayback";
 import {
+  RegionUnavailableError,
+  fetchRegionCatalog,
+  fetchRegionLandscape,
+} from "./landscapePackage";
+import { DEFAULT_REGION_ID, SOCAL_REGIONS } from "./regions";
+import {
   LANDFIRE_ATTRIBUTION,
   TERRAIN_ATTRIBUTION,
   landscapeCellMetersFor,
@@ -162,10 +168,23 @@ const MOISTURE_FIELDS: { key: keyof FuelMoisture; label: string; title: string }
   { key: "liveWoody", label: "Woody", title: "Live woody fuel moisture" },
 ];
 
+/** Where the board's data came from, shown next to the area. */
+type Provenance =
+  | { kind: "stored"; builtAt: string; cellMeters: number }
+  | { kind: "live"; storedUnavailable: boolean };
+
+/** A stored SoCal region, or a custom area loaded live. */
+const CUSTOM_SELECTION = "custom";
+
+type CatalogState =
+  | { status: "loading" }
+  | { status: "ready"; ids: ReadonlySet<string> }
+  | { status: "error" };
+
 type LandscapeState =
   | { status: "idle" }
-  | { status: "loading" }
-  | { status: "ready"; grid: LandscapeGrid }
+  | { status: "loading"; storedUnavailable: boolean }
+  | { status: "ready"; grid: LandscapeGrid; provenance: Provenance }
   | { status: "error"; message: string };
 
 /** Provenance for the wind inputs: either the user's own assumption, or an NWS reading. */
@@ -198,11 +217,18 @@ function areaLabel(center: GeoPoint): string {
     : `${center.latitude.toFixed(2)}, ${center.longitude.toFixed(2)}`;
 }
 
+function formatBuilt(iso: string): string {
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? iso : date.toISOString().slice(0, 10);
+}
+
 export default function FireSimulatorPage() {
   const reducedMotion = useMediaQuery(REDUCED_MOTION_QUERY);
   const wide = useMediaQuery(WIDE_QUERY);
 
   const [areaCenter, setAreaCenter] = useState<GeoPoint>(DEFAULT_AREA.point);
+  const [selection, setSelection] = useState<string>(DEFAULT_REGION_ID);
+  const [catalog, setCatalog] = useState<CatalogState>({ status: "loading" });
   const [areaSize, setAreaSize] = useState<AreaSizeId>(DEFAULT_AREA_SIZE);
   const [areaPickerOpen, setAreaPickerOpen] = useState(false);
   const [origin, setOrigin] = useState<GeoPoint | null>(null);
@@ -250,36 +276,84 @@ export default function FireSimulatorPage() {
   // The scenario panel starts open on wide stages and closed on phones until the user decides.
   const scenarioOpen = scenarioOpenChoice ?? !phone;
 
-  const radiusMeters = effectiveRadiusMeters(horizonMinutes, areaSize);
-  const requestedCellMeters = landscapeCellMetersFor(radiusMeters);
+  const region = SOCAL_REGIONS.find((candidate) => candidate.id === selection) ?? null;
+  // Stored regions are fixed boards; only a custom area is sized by the horizon and area size.
+  const radiusMeters = region
+    ? region.radiusMeters
+    : effectiveRadiusMeters(horizonMinutes, areaSize);
+  const requestedCellMeters = region
+    ? region.cellMeters
+    : landscapeCellMetersFor(radiusMeters);
+  const centerLatitude = region ? region.center.latitude : areaCenter.latitude;
+  const centerLongitude = region ? region.center.longitude : areaCenter.longitude;
+
+  // Which regions are stored is advisory: a load still tries the store directly.
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchRegionCatalog(controller.signal)
+      .then((regions) => setCatalog({ status: "ready", ids: new Set(regions.map((r) => r.id)) }))
+      .catch(() => {
+        if (!controller.signal.aborted) setCatalog({ status: "error" });
+      });
+    return () => controller.abort();
+  }, [loadAttempt]);
 
   // Fuel and terrain depend only on where and how far, so wind, moisture and ignition edits
   // never refetch. An older request can never overwrite a newer one.
   const resetScenarioRef = useRef<() => void>(() => undefined);
   const requestRef = useRef(0);
   useEffect(() => {
+    // One request id covers the stored and the live path, so neither can overwrite a newer load.
     const request = ++requestRef.current;
     const controller = new AbortController();
-    setLandscape({ status: "loading" });
-    loadLandscape(areaCenter.longitude, areaCenter.latitude, radiusMeters, controller.signal, {
-      cellMeters: requestedCellMeters,
-    })
-      .then((grid) => {
-        if (request !== requestRef.current) return;
-        // A longer or shorter horizon changes the box; keep the ignition only if it is inside.
-        const kept = originRef.current;
-        if (kept && cellAt(grid, kept) < 0) resetScenarioRef.current();
-        setLandscape({ status: "ready", grid });
-      })
-      .catch((cause: unknown) => {
-        if (controller.signal.aborted || request !== requestRef.current) return;
-        setLandscape({
-          status: "error",
-          message: cause instanceof Error ? cause.message : "Could not load fuel and terrain data.",
-        });
+    const stale = () => controller.signal.aborted || request !== requestRef.current;
+    setLandscape({ status: "loading", storedUnavailable: false });
+
+    const finish = (grid: LandscapeGrid, provenance: Provenance) => {
+      // A longer or shorter horizon changes a custom box; keep the ignition only if inside.
+      const kept = originRef.current;
+      if (kept && cellAt(grid, kept) < 0) resetScenarioRef.current();
+      setLandscape({ status: "ready", grid, provenance });
+    };
+    const live = (storedUnavailable: boolean) =>
+      loadLandscape(centerLongitude, centerLatitude, radiusMeters, controller.signal, {
+        cellMeters: requestedCellMeters,
+      }).then((grid) => {
+        if (!stale()) finish(grid, { kind: "live", storedUnavailable });
       });
+
+    const work = region
+      ? fetchRegionLandscape(region.id, controller.signal).then(
+          ({ grid, header }) => {
+            if (!stale()) {
+              finish(grid, {
+                kind: "stored",
+                builtAt: header.builtAt,
+                cellMeters: header.cellMeters,
+              });
+            }
+          },
+          (cause: unknown) => {
+            if (stale()) return;
+            // A missing store or a dead API is expected; a corrupt package is not.
+            if (!(cause instanceof RegionUnavailableError) && !(cause instanceof TypeError)) {
+              throw cause;
+            }
+            setLandscape({ status: "loading", storedUnavailable: true });
+            return live(true);
+          },
+        )
+      : live(false);
+    work.catch((cause: unknown) => {
+      if (stale()) return;
+      setLandscape({
+        status: "error",
+        message: cause instanceof Error ? cause.message : "Could not load fuel and terrain data.",
+      });
+    });
     return () => controller.abort();
-  }, [areaCenter, radiusMeters, requestedCellMeters, loadAttempt]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selection, centerLatitude, centerLongitude, radiusMeters, requestedCellMeters, loadAttempt]);
 
   const scenario = useMemo(
     () =>
@@ -531,7 +605,14 @@ export default function FireSimulatorPage() {
     setAreaPickerOpen(false);
     clearScenario();
     if (size) setAreaSize(size);
+    setSelection(CUSTOM_SELECTION);
     setAreaCenter(center);
+  }
+
+  function selectRegion(id: string) {
+    if (id === selection) return;
+    clearScenario();
+    setSelection(id);
   }
 
   // Track the stage width for the phone layout, independent of whether WebGL started.
@@ -704,6 +785,16 @@ export default function FireSimulatorPage() {
   const sceneReady = sceneStatus.kind === "ready";
   // Report the resolution the loaded grid really has; the request is only a stand-in while loading.
   const displayedCellMeters = grid ? grid.groundCellSizeMeters : requestedCellMeters;
+  const provenance = landscape.status === "ready" ? landscape.provenance : null;
+  const provenanceText = provenance
+    ? provenance.kind === "stored"
+      ? `Stored landscape · built ${formatBuilt(provenance.builtAt)} · LANDFIRE 2025 · ${provenance.cellMeters} m cells`
+      : "Live from LANDFIRE"
+    : null;
+  const storedUnavailable =
+    landscape.status === "loading"
+      ? landscape.storedUnavailable
+      : provenance?.kind === "live" && provenance.storedUnavailable;
 
   return (
     <main
@@ -747,6 +838,11 @@ export default function FireSimulatorPage() {
                 {formatKm(radiusMeters)} km radius · {requestedCellMeters} m cells. Large areas
                 take longer.
               </p>
+              {storedUnavailable && (
+                <p className="fr-veil-note">
+                  Stored region unavailable — loading live from LANDFIRE; this takes longer.
+                </p>
+              )}
             </div>
           </div>
         )}
@@ -808,10 +904,43 @@ export default function FireSimulatorPage() {
                 switch on as assumptions.
               </p>
 
-              <div className="fr-field">
-                <span className="fr-field-title">Area</span>
+              <fieldset className="fr-field fr-regions">
+                <legend>Region (Southern California)</legend>
+                <ul className="fr-region-list">
+                  {SOCAL_REGIONS.map((entry) => {
+                    const status =
+                      catalog.status === "loading"
+                        ? "checking…"
+                        : catalog.status === "error"
+                          ? "catalog unavailable"
+                          : catalog.ids.has(entry.id)
+                            ? "stored"
+                            : "not built yet";
+                    return (
+                      <li key={entry.id}>
+                        <label>
+                          <input
+                            type="radio"
+                            name="region"
+                            checked={selection === entry.id}
+                            onChange={() => selectRegion(entry.id)}
+                          />
+                          <span className="fr-region-text">
+                            <strong>{entry.name}</strong>
+                            <span className="fr-readout">
+                              {entry.counties.join(", ")} · {status}
+                            </span>
+                            <span className="fr-readout">{entry.summary}</span>
+                          </span>
+                        </label>
+                      </li>
+                    );
+                  })}
+                </ul>
                 <div className="fr-area-row">
-                  <span className="fr-area-name">{areaLabel(areaCenter)}</span>
+                  <span className="fr-area-name">
+                    {region ? region.name : `Custom: ${areaLabel(areaCenter)}`}
+                  </span>
                   <button
                     type="button"
                     id="fr-change-area"
@@ -819,33 +948,41 @@ export default function FireSimulatorPage() {
                     onClick={() => setAreaPickerOpen(true)}
                     aria-haspopup="dialog"
                   >
-                    Change area
+                    Custom area…
                   </button>
                 </div>
-                <div className="fr-field-inline fr-area-size">
-                  <label htmlFor="area-size">Area size</label>
-                  <select
-                    id="area-size"
-                    value={areaSize}
-                    onChange={(event) => setAreaSize(event.target.value as AreaSizeId)}
-                  >
-                    {AREA_SIZES.map((size) => (
-                      <option key={size.id} value={size.id}>
-                        {size.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                {!region && (
+                  <div className="fr-field-inline fr-area-size">
+                    <label htmlFor="area-size">Area size</label>
+                    <select
+                      id="area-size"
+                      value={areaSize}
+                      onChange={(event) => setAreaSize(event.target.value as AreaSizeId)}
+                    >
+                      {AREA_SIZES.map((size) => (
+                        <option key={size.id} value={size.id}>
+                          {size.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 <p className="fr-readout">
-                  {areaCenter.latitude.toFixed(3)}, {areaCenter.longitude.toFixed(3)} ·{" "}
+                  {centerLatitude.toFixed(3)}, {centerLongitude.toFixed(3)} ·{" "}
                   {formatKm(radiusMeters)} km radius · {displayedCellMeters} m cells
                 </p>
+                {provenanceText && <p className="fr-readout">{provenanceText}</p>}
+                {storedUnavailable && (
+                  <p className="fr-alert" role="status">
+                    Stored region unavailable — loading live from LANDFIRE; this takes longer.
+                  </p>
+                )}
                 {displayedCellMeters > NATIVE_CELL_METERS && (
                   <p className="fr-hint">
                     Coarser cells smooth narrow fuel breaks and small neighbourhoods.
                   </p>
                 )}
-              </div>
+              </fieldset>
 
               <fieldset className="fr-field">
                 <legend>Clicking the landscape sets</legend>
@@ -1063,6 +1200,11 @@ export default function FireSimulatorPage() {
                     </option>
                   ))}
                 </select>
+                {region && (
+                  <span className="fr-readout">
+                    The board is fixed for a stored region; a long run may reach its edge.
+                  </span>
+                )}
               </div>
 
               <div className="fr-field">
@@ -1429,7 +1571,7 @@ export default function FireSimulatorPage() {
 
         {areaPickerOpen && (
           <AreaPicker
-            current={areaCenter}
+            current={region ? region.center : areaCenter}
             onSelect={changeArea}
             onClose={() => setAreaPickerOpen(false)}
           />

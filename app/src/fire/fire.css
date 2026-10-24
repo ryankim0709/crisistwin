@@ -1491,3 +1491,43 @@
     transition: none !important;
   }
 }
+
+/* ---------- Region picker ---------- */
+
+.fr-region-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  margin: 0 0 8px;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.fr-region-list label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--fr-sage);
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.fr-region-list label:has(input:checked) {
+  border-color: var(--fr-green);
+}
+
+.fr-region-list input {
+  margin-top: 3px;
+}
+
+.fr-region-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  font-size: 12.5px;
+}
