@@ -32,7 +32,7 @@ export const URGENT_SLACK_MINUTES = 10;
 export const GROWTH_WAKE_FRACTION = 0.25;
 export const GROWTH_WAKE_MIN_HECTARES = 5;
 /** Alert types that always wake the agent, urgent or not. */
-const WAKE_ALERT_TYPES = new Set<Alert["type"]>(["wave_released", "zone_cleared"]);
+const WAKE_ALERT_TYPES = new Set<Alert["type"]>(["wave_released", "zone_cleared", "fire_out"]);
 const MAX_ALERT_REASONS = 6;
 
 export function threatTier(slack: number | null): ThreatTier {

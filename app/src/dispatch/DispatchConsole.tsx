@@ -54,12 +54,14 @@ const NOTICE_ICON: Record<NoticeKind, string> = {
   prepare: "⏳",
   redirect: "↪",
   hold: "⛔",
+  all_clear: "✅",
 };
 const NOTICE_LABEL: Record<NoticeKind, string> = {
   leave_now: "Leave now",
   prepare: "Get ready, stay home",
   redirect: "New route",
   hold: "Hold",
+  all_clear: "All clear",
 };
 const MAX_NOTICES_SHOWN = 80;
 
@@ -181,6 +183,9 @@ function orderLine(
       icon: "🚒",
       text: `${order.unit_id} → ${order.zone_id}, ${order.task === "evacuation_support" ? "evacuation support" : "structure defense"}`,
     };
+  }
+  if (order.type === "attack_fire") {
+    return { icon: "🔥", text: `${order.unit_id} → attack fire ${order.fire_id}` };
   }
   return { icon: "↩", text: `Recall ${order.unit_id} to station` };
 }
@@ -500,13 +505,20 @@ function EvacuationBoard({
 }
 
 function unitStatusText(engine: DispatchEngine, unit: UnitState): string {
-  const zone = unit.zone === null ? null : engine.area.zones[unit.zone].id;
+  const zone =
+    unit.fire !== null
+      ? engine.fires[unit.fire].target.name
+      : unit.zone === null
+        ? null
+        : engine.area.zones[unit.zone].id;
   const task =
     unit.task === "evacuation_support"
       ? "evacuation support"
       : unit.task === "structure_defense"
         ? "structure defense"
-        : "";
+        : unit.task === "fire_attack"
+          ? "fire attack"
+          : "";
   const eta = engine.unitEtaMinutes(unit);
   switch (unit.status) {
     case "available":

@@ -7,6 +7,8 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import type { ScheduledFireRun } from "../fire/scheduledTypes";
+import { simulateScheduledFireSpread } from "../fire/spread";
 import { LIVE_SNAPSHOT_VERSION, type LiveSnapshot } from "../live/contracts";
 import { LiveShareToggle } from "../live/LiveShareToggle";
 import { fireRings, hectares, liveZones } from "../live/snapshot";
@@ -15,10 +17,11 @@ import type { StudioAsideContext } from "../studio/SimulationStudioPage";
 import DispatchConsole, { type SetupStep } from "./DispatchConsole";
 import { AreaRequestError, dispatchBoxFor, loadArea, type Bbox, type DispatchArea } from "./area";
 import { noActionBaseline, type IgnitionEvent } from "./engine";
+import { fireAreaFrames, fireTargets } from "./fireAttack";
 import { computeExposure } from "./fireExposure";
 import type { FrameSummary } from "./observation";
 import { DispatchOverlay } from "./scene/DispatchOverlay";
-import { useDispatchSession } from "./useDispatchSession";
+import { useDispatchSession, type ResolvedFire } from "./useDispatchSession";
 import { Button } from "../ui";
 import "./dispatch.css";
 
@@ -34,6 +37,13 @@ type AreaState =
   | { status: "ready"; key: string; area: DispatchArea }
   | { status: "error"; key: string; message: string };
 
+function frameSummaries(run: ScheduledFireRun): FrameSummary[] {
+  return run.frames.map((frame) => ({
+    elapsedMinutes: frame.elapsedMinutes,
+    burnedAreaSquareMeters: frame.reachedAreaSquareMeters,
+  }));
+}
+
 function snapBox([w, s, e, n]: Bbox): Bbox {
   const snap = (value: number, round: (v: number) => number) =>
     Number((round(value / AREA_SNAP_DEGREES) * AREA_SNAP_DEGREES).toFixed(2));
@@ -47,6 +57,7 @@ export default function StudioDispatch({
   clockRef,
   setLocked,
   showDiorama,
+  setRunOverride,
 }: StudioAsideContext) {
   const [areaState, setAreaState] = useState<AreaState>({ status: "idle" });
   const [areaAttempt, setAreaAttempt] = useState(0);
@@ -58,13 +69,12 @@ export default function StudioDispatch({
   const grid = current?.landscape ?? null;
   const horizonMinutes = current?.scenario.settings.horizonMinutes ?? 0;
   const frames = useMemo<FrameSummary[]>(
-    () =>
-      (current?.run.frames ?? []).map((frame) => ({
-        elapsedMinutes: frame.elapsedMinutes,
-        burnedAreaSquareMeters: frame.reachedAreaSquareMeters,
-      })),
+    () => (current ? frameSummaries(current.run) : []),
     [current],
   );
+  // The fire as the dispatcher sees it: the run without the Studio's own firefighters, re-solved
+  // whenever dispatched engines put a fire out during a session.
+  const [liveRun, setLiveRun] = useState<ScheduledFireRun | null>(null);
   const ignitions = useMemo<IgnitionEvent[]>(() => {
     if (!current) return [];
     return current.run.ignitions.flatMap((entry) => {
@@ -145,6 +155,15 @@ export default function StudioDispatch({
     stopSession();
     setSelectedZone(null);
   }, [current, area, stopSession]);
+  // A re-solved fire is shown only during the session that produced it.
+  const dispatchRun =
+    sessionActive && liveRun && liveRun.input === current?.run.input
+      ? liveRun
+      : (current?.run ?? null);
+  useEffect(() => {
+    setRunOverride(dispatchRun);
+  }, [dispatchRun, setRunOverride]);
+  useEffect(() => () => setRunOverride(null), [setRunOverride]);
 
   // ---- 3D overlay ------------------------------------------------------------------------
   useEffect(() => {
@@ -190,21 +209,58 @@ export default function StudioDispatch({
     [area, scene],
   );
 
+  const resolveFire = useCallback(
+    (outFromMinuteBySource: number[]): ResolvedFire => {
+      if (!current || !area) throw new Error("No run to re-solve.");
+      const run = simulateScheduledFireSpread(
+        current.landscape,
+        current.run.input,
+        null,
+        outFromMinuteBySource,
+      );
+      setLiveRun(run);
+      return {
+        exposure: computeExposure(area, current.landscape, run.arrivalMinutes),
+        frames: frameSummaries(run),
+        fireFrames: fireAreaFrames(run),
+      };
+    },
+    [current, area],
+  );
+
   const handleStart = useCallback(() => {
     if (!area || !exposure || !current) return;
     showDiorama();
     setSelectedZone(null);
+    setLiveRun(null);
+    const names = Object.fromEntries(
+      current.scenario.ignitions.map((ignition) => [ignition.id, ignition.name || ignition.id]),
+    );
     session.start({
       area,
       exposure,
       frames,
+      fireTargets: fireTargets(current.run, names),
+      fireFrames: fireAreaFrames(current.run),
+      resolveFire,
       baselineHomesExposed: baseline?.caught ?? null,
       horizonMinutes,
       ignitions,
       windFromDegrees: current.scenario.settings.windFromDegrees,
       windSpeedMph: current.scenario.settings.windSpeedMph,
     });
-  }, [area, exposure, current, frames, baseline, horizonMinutes, ignitions, session, showDiorama]);
+  }, [
+    area,
+    exposure,
+    current,
+    frames,
+    baseline,
+    horizonMinutes,
+    ignitions,
+    session,
+    showDiorama,
+    resolveFire,
+  ]);
 
   // ---- Resident app broadcast (simulated guidance per zone) -------------------------------
   const areaLabel = current?.scenario.name || area?.name || "Dispatch scenario";
@@ -214,7 +270,9 @@ export default function StudioDispatch({
   const getLiveSnapshot = useCallback((): LiveSnapshot | null => {
     if (!current || !liveSessionId) return null;
     const minute = Math.min(liveEngine ? liveEngine.minute : clockRef.current, horizonMinutes);
-    const frame = [...current.run.frames].reverse().find((f) => f.elapsedMinutes <= minute);
+    const frame = [...(dispatchRun ?? current.run).frames]
+      .reverse()
+      .find((f) => f.elapsedMinutes <= minute);
     const latest = session.log.find((entry) => entry.status === "done");
     return {
       version: LIVE_SNAPSHOT_VERSION,
@@ -248,6 +306,7 @@ export default function StudioDispatch({
     };
   }, [
     current,
+    dispatchRun,
     liveSessionId,
     liveEngine,
     clockRef,

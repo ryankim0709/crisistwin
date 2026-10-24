@@ -27,6 +27,16 @@ OBSERVATION = {
     ],
     "exits": [{"id": "E1"}, {"id": "E2"}],
     "units": [{"id": "U1"}],
+    "fires": [
+        {"id": "F1", "status": "burning", "attackable": True},
+        {
+            "id": "F2",
+            "status": "burning",
+            "attackable": False,
+            "not_attackable_reason": "it is crowning",
+        },
+        {"id": "F3", "status": "out", "attackable": True},
+    ],
 }
 
 
@@ -38,6 +48,7 @@ def order(**fields):
         "after_zone_id": None,
         "unit_id": None,
         "task": None,
+        "fire_id": None,
         "reason": "test",
     }
     return {**base, **fields}
@@ -126,3 +137,49 @@ class FirePathScopeTests(SimpleTestCase):
 
     def test_prompt_scopes_evacuation_to_fire_path(self):
         self.assertIn('impact is "outside"', SYSTEM_PROMPT)
+
+
+class FireAttackValidationTests(SimpleTestCase):
+    def setUp(self):
+        self.index = build_index(OBSERVATION)
+
+    def test_tool_schema_offers_fire_attack(self):
+        item = ISSUE_ORDERS_TOOL["input_schema"]["properties"]["orders"]["items"]
+        self.assertIn("attack_fire", ORDER_TYPES)
+        self.assertIn("fire_id", item["required"])
+
+    def test_valid_attack_is_normalized(self):
+        orders, rejected, _ = validate_orders(
+            {"summary": "", "orders": [order(type="attack_fire", unit_id="U1", fire_id="F1")]},
+            self.index,
+        )
+        self.assertEqual(rejected, [])
+        self.assertEqual(
+            orders, [{"type": "attack_fire", "unit_id": "U1", "fire_id": "F1", "reason": "test"}]
+        )
+
+    def test_attack_rejects_unknown_unattackable_and_out_fires(self):
+        for fire_id, why in (("F9", "Unknown"), ("F2", "crowning"), ("F3", "out")):
+            orders, rejected, _ = validate_orders(
+                {
+                    "summary": "",
+                    "orders": [order(type="attack_fire", unit_id="U1", fire_id=fire_id)],
+                },
+                self.index,
+            )
+            self.assertEqual(orders, [], fire_id)
+            self.assertIn(why, rejected[0]["reason"])
+
+    def test_one_order_per_unit(self):
+        orders, rejected, _ = validate_orders(
+            {
+                "summary": "",
+                "orders": [
+                    order(type="attack_fire", unit_id="U1", fire_id="F1"),
+                    order(type="recall_unit", unit_id="U1"),
+                ],
+            },
+            self.index,
+        )
+        self.assertEqual(len(orders), 1)
+        self.assertIn("Duplicate", rejected[0]["reason"])

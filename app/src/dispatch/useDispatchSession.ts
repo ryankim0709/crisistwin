@@ -21,6 +21,7 @@ import {
   type IgnitionEvent,
   type OrderOutcome,
 } from "./engine";
+import type { FireAreaFrame, FireTarget } from "./fireAttack";
 import type { FireExposure } from "./fireExposure";
 import { detectChanges, takeBaseline, type MonitorBaseline } from "./monitor";
 import { buildObservation, toEngineOrders, type FrameSummary } from "./observation";
@@ -57,10 +58,25 @@ export interface MonitorCheck {
   reasons: string[];
 }
 
+/** The fire re-solved with some fires stopped at the minute engines put them out. */
+export interface ResolvedFire {
+  exposure: FireExposure;
+  frames: readonly FrameSummary[];
+  fireFrames: readonly FireAreaFrame[];
+}
+
 export interface SessionInputs {
   area: DispatchArea;
   exposure: FireExposure;
   frames: readonly FrameSummary[];
+  /** Fires engines can attack, and their burned area per frame. */
+  fireTargets: readonly FireTarget[];
+  fireFrames: readonly FireAreaFrame[];
+  /**
+   * Re-solve the fire with each fire stopped from its minute in `outFromMinuteBySource`
+   * (Infinity = keeps burning). Called when engines put a fire out.
+   */
+  resolveFire: (outFromMinuteBySource: number[]) => ResolvedFire;
   baselineHomesExposed: number | null;
   horizonMinutes: number;
   ignitions: IgnitionEvent[];
@@ -242,6 +258,17 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
     [bump, burnedHectaresAt, setSessionStatus, updateEntry],
   );
 
+  /** After engines put a fire out: re-solve the fire without it and swap it into the engine. */
+  const refreshFire = useCallback((engine: DispatchEngine) => {
+    const inputs = inputsRef.current;
+    if (!inputs) return;
+    const resolved = inputs.resolveFire(
+      engine.fires.map((fire) => fire.outMinute ?? Number.POSITIVE_INFINITY),
+    );
+    engine.setExposure(resolved.exposure, resolved.fireFrames);
+    inputsRef.current = { ...inputs, exposure: resolved.exposure, frames: resolved.frames };
+  }, []);
+
   /** True when the monitor should look at the engine now. */
   const checkDue = useCallback((engine: DispatchEngine): boolean => {
     if (engine.minute - lastCheckRef.current >= checkIntervalRef.current) return true;
@@ -285,8 +312,12 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
       let stepped = false;
       let wake: string[] = [];
       while (engine.minute < Math.floor(clockRef.current) && !engine.finished) {
+        const out = engine.fires.filter((fire) => fire.outMinute !== null).length;
         engine.step();
         stepped = true;
+        if (engine.fires.filter((fire) => fire.outMinute !== null).length > out) {
+          refreshFire(engine);
+        }
         if (checkDue(engine)) {
           wake = check(engine);
           if (wake.length > 0) break;
@@ -309,7 +340,7 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
     };
     handle = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(handle);
-  }, [status, speed, decide, check, checkDue, bump, setSessionStatus]);
+  }, [status, speed, decide, check, checkDue, refreshFire, bump, setSessionStatus]);
 
   const stop = useCallback(() => {
     abortRef.current?.abort();
@@ -332,6 +363,7 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
         inputs.ignitions,
       );
       engine.restrictToFirePath = true;
+      engine.setFires(inputs.fireTargets, inputs.fireFrames);
       engineRef.current = engine;
       inputsRef.current = inputs;
       clockRef.current = 0;
