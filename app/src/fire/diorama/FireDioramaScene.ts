@@ -24,7 +24,7 @@ import { FuelFamily } from "./fuelStyle";
 import { LabelLayer, type ClipOptions } from "./labels";
 import { REFERENCE_PLACES } from "./places";
 import { FireCameraRig, type Framing } from "./rig";
-import type { FireDioramaOptions, FireDioramaSceneApi, FireRun, GeoPoint, GroundClickMode, LandscapeGrid, ViewInsets } from "./types";
+import type { DioramaIgnition, DioramaRun, FireDioramaOptions, FireDioramaSceneApi, GeoPoint, GroundClickMode, LandscapeGrid, ViewInsets } from "./types";
 
 /** Pointer travel (CSS px) above which a press is a drag, not a click. */
 const CLICK_TOLERANCE_PX = 5;
@@ -42,6 +42,8 @@ const SCALE_STEPS = [100, 200, 250, 500, 1000, 2000, 2500, 5000, 10000, 20000, 2
 const PIN_RECT_HALF_W_PX = 14;
 const PIN_RECT_H_PX = 40;
 const PIN_RECT_FOOT_PX = 8;
+/** Height of an ignition's name pill above its pin's foot, in pin model units (head top is ~13.3). */
+const PIN_LABEL_Y = 14.5;
 
 /** Reference place labels need a board at least this wide (ground metres). */
 const PLACE_LABEL_MIN_WIDTH_M = 4000;
@@ -116,14 +118,16 @@ export class FireDioramaScene implements FireDioramaSceneApi {
   private readonly windLabel: { obj: THREE.Object3D; el: HTMLDivElement };
   private board: Board | null = null;
   private grid: LandscapeGrid | null | undefined = undefined;
-  private run: FireRun | null = null;
-  private appliedRun: FireRun | null = null;
+  private run: DioramaRun | null = null;
+  private appliedRun: DioramaRun | null = null;
   private t = 0;
   private renderedT = Number.NaN;
   private burnWindow = 0;
   /** Bumped when the run, ignition or wind change, so the label declutter pass reruns. */
   private labelStamp = 0;
-  private ignition: GeoPoint | null = null;
+  private ignitions: readonly DioramaIgnition[] = [];
+  /** Name pills, one per labelled ignition, parented to that ignition's pin. */
+  private readonly ignitionLabels: { obj: CSS2DObject; el: HTMLDivElement }[] = [];
   private wind = { from: 0, speed: 0 };
   private overlay = false;
   private clickMode: GroundClickMode = "origin";
@@ -231,7 +235,7 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     this.lastBuildMs = performance.now() - start;
   }
 
-  setRun(run: FireRun | null): void {
+  setRun(run: DioramaRun | null): void {
     if (this.disposed || run === this.run) return;
     this.run = run;
     this.applyRun();
@@ -244,9 +248,19 @@ export class FireDioramaScene implements FireDioramaSceneApi {
   }
 
   setIgnition(point: GeoPoint | null): void {
+    this.setIgnitions(point ? [{ id: "origin", point, label: "" }] : []);
+  }
+
+  setIgnitions(ignitions: readonly DioramaIgnition[]): void {
     if (this.disposed) return;
-    if (point === this.ignition || (point && this.ignition && point.latitude === this.ignition.latitude && point.longitude === this.ignition.longitude)) return;
-    this.ignition = point;
+    const same =
+      ignitions.length === this.ignitions.length &&
+      ignitions.every((a, i) => {
+        const b = this.ignitions[i];
+        return a.id === b.id && a.label === b.label && a.point.latitude === b.point.latitude && a.point.longitude === b.point.longitude;
+      });
+    if (same) return;
+    this.ignitions = ignitions;
     this.placeMarkers();
   }
 
@@ -461,19 +475,24 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     if (this.sampler.update(t)) board.fire.uHeadRange.value.set(this.sampler.headRange.min, this.sampler.headRange.max);
   }
 
-  private ignitionWorld(): { x: number; z: number } | null {
+  /** Board positions of the ignitions, in order (null when off the board). */
+  private ignitionWorlds(): ({ x: number; z: number } | null)[] {
     const board = this.board;
-    if (!board || !this.ignition) return null;
-    const [mx, my] = lonLatToMercator(this.ignition.longitude, this.ignition.latitude);
-    return board.frame.fromMercator(mx, my);
+    if (!board) return [];
+    return this.ignitions.map(({ point }) => {
+      const [mx, my] = lonLatToMercator(point.longitude, point.latitude);
+      return board.frame.fromMercator(mx, my);
+    });
   }
 
   private placeMarkers() {
     const board = this.board;
     if (!board) return;
     const frame = board.frame;
-    const p = this.ignitionWorld();
-    this.fx.setIgnition(frame, p);
+    const worlds = this.ignitionWorlds();
+    const p = worlds[0] ?? null;
+    const pins = this.fx.setIgnitions(frame, worlds);
+    this.placeIgnitionLabels(pins);
     const b = THREE.MathUtils.degToRad((this.wind.from + 180) % 360);
     const tx = Math.sin(b);
     const tz = -Math.cos(b);
@@ -487,6 +506,27 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     this.labelStamp++;
     this.renderedT = Number.NaN;
     this.applyTime();
+  }
+
+  /** Name pills above each labelled pin; they scale with the pin, so they track it on zoom. */
+  private placeIgnitionLabels(pins: (THREE.Object3D | null)[]) {
+    let used = 0;
+    this.ignitions.forEach((ignition, i) => {
+      const pin = pins[i];
+      if (!pin || !ignition.label) return;
+      let label = this.ignitionLabels[used];
+      if (!label) {
+        label = this.labels.add(pin, "fdx-ignition", new THREE.Vector3(0, PIN_LABEL_Y, 0), new THREE.Vector2(0.5, 1));
+        this.ignitionLabels.push(label);
+      } else if (label.obj.parent !== pin) {
+        pin.add(label.obj);
+      }
+      label.el.textContent = ignition.label;
+      label.obj.visible = true;
+      used++;
+    });
+    for (const label of this.ignitionLabels.slice(used)) label.obj.visible = false;
+    this.labels.invalidate();
   }
 
   /** Framing of the run's burned area by its horizon (null without a run). */
@@ -566,12 +606,13 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     const board = this.board;
     const opts: ClipOptions = { stamp: this.labelStamp, time: this.t };
     if (!board) return opts;
-    const p = this.ignitionWorld();
-    if (p && board.frame.inside(p.x, p.z)) {
+    opts.fixed = [];
+    for (const p of this.ignitionWorlds()) {
+      if (!p || !board.frame.inside(p.x, p.z)) continue;
       this.pinTmp.set(p.x, board.frame.surfaceAt(p.x, p.z), p.z).project(this.rig.camera);
       const x = ((this.pinTmp.x + 1) / 2) * this.width;
       const y = ((1 - this.pinTmp.y) / 2) * this.height;
-      opts.fixed = [{ left: x - PIN_RECT_HALF_W_PX, right: x + PIN_RECT_HALF_W_PX, top: y - PIN_RECT_H_PX, bottom: y + PIN_RECT_FOOT_PX }];
+      opts.fixed.push({ left: x - PIN_RECT_HALF_W_PX, right: x + PIN_RECT_HALF_W_PX, top: y - PIN_RECT_H_PX, bottom: y + PIN_RECT_FOOT_PX });
     }
     const run = this.appliedRun;
     if (run) {

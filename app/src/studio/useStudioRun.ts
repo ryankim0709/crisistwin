@@ -105,6 +105,7 @@ export function useStudioRun(): StudioRunController {
             frameMinutes: response.run.frames.map((frame) => frame.elapsedMinutes),
             landscapeKey: landscape.key,
             landscapeBox: landscape.box,
+            landscape: landscape.grid,
             attribution: landscape.grid.attribution,
             elevationComplete: landscape.grid.elevationComplete,
           };

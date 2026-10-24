@@ -114,6 +114,8 @@ export interface StudioRunResult {
   frameMinutes: number[];
   landscapeKey: string;
   landscapeBox: MercatorBox;
+  /** The grid the run was solved on (shared with the landscape cache, not a copy). */
+  landscape: LandscapeGrid;
   /** Sources for display: LANDFIRE fuel/canopy and terrain attribution strings. */
   attribution: LandscapeGrid["attribution"];
   elevationComplete: boolean;

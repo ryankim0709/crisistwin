@@ -41,9 +41,9 @@ const PHASE_TEXT: Record<RunPhase, string> = {
 };
 
 const MODE_HINT: Record<MapMode, string> = {
-  select: "Map click: select a marker, or pan the map. Nothing is added.",
-  add: "Map click: add a new ignition at that point.",
-  move: "Map click: move the selected ignition to that point.",
+  select: "Select a fire to edit it; drag a marker to move it.",
+  add: "Click the map to add a fire there.",
+  move: "Click the map to move the selected fire there.",
 };
 
 function clamp(value: number, min: number, max: number): number {
@@ -147,14 +147,18 @@ export default function ConfigPanel(props: ConfigPanelProps) {
   const runButton = (
     <button
       type="button"
-      className="studio-btn studio-btn-primary"
+      className="studio-btn studio-btn-primary studio-btn-run"
       onClick={onRun}
       disabled={runDisabled}
       aria-describedby={issues.length > 0 ? `${uid}-run-note` : undefined}
     >
-      {runLabel}
+      {busy ? PHASE_TEXT[phase] : runLabel}
     </button>
   );
+
+  const statusLine = [PHASE_TEXT[phase], stale ? "out of date" : null, draftStatus]
+    .filter(Boolean)
+    .join(" · ");
 
   if (collapsed) {
     return (
@@ -165,7 +169,7 @@ export default function ConfigPanel(props: ConfigPanelProps) {
           onClick={onToggleCollapsed}
           aria-expanded={false}
         >
-          Show scenario panel
+          Scenario ›
         </button>
         {runButton}
         <p className="studio-status" role="status">
@@ -178,440 +182,442 @@ export default function ConfigPanel(props: ConfigPanelProps) {
 
   return (
     <aside className="studio-panel" aria-label="Scenario settings">
-      <div className="studio-panel-head">
-        <div>
+      <div className="studio-panel-body">
+        <div className="studio-panel-head">
           <h2 className="studio-title">Scenario</h2>
-          <p className="studio-note">
-            Everything below is a user assumption, not observed data or a forecast.
-          </p>
-        </div>
-        <button
-          type="button"
-          className="studio-btn studio-btn-secondary"
-          onClick={onToggleCollapsed}
-          aria-expanded={true}
-        >
-          Hide
-        </button>
-      </div>
-
-      <section className="studio-section" aria-labelledby={`${uid}-ign`}>
-        <h3 id={`${uid}-ign`} className="studio-subtitle">
-          Ignitions ({enabledCount}/{MAX_ENABLED_IGNITIONS} enabled)
-        </h3>
-        <div className="studio-row">
           <button
             type="button"
-            className="studio-btn studio-btn-toggle"
-            aria-pressed={mode === "add"}
-            disabled={atIgnitionLimit && mode !== "add"}
-            onClick={() => onModeChange(mode === "add" ? "select" : "add")}
+            className="studio-btn studio-btn-ghost studio-btn-small"
+            onClick={onToggleCollapsed}
+            aria-expanded={true}
+            aria-label="Hide scenario panel"
           >
-            Add ignition
-          </button>
-          <button
-            type="button"
-            className="studio-btn studio-btn-toggle"
-            aria-pressed={mode === "move"}
-            disabled={!selected}
-            onClick={() => onModeChange(mode === "move" ? "select" : "move")}
-          >
-            Move point
+            ‹ Hide
           </button>
         </div>
-        <p className="studio-hint" aria-live="polite">
-          {MODE_HINT[mode]}
-        </p>
-        {atIgnitionLimit && (
-          <p className="studio-hint">
-            Maximum of {MAX_ENABLED_IGNITIONS} enabled ignitions reached. Disable or delete one to
-            add another.
-          </p>
-        )}
-        {!selected && (
-          <p className="studio-hint">Select an ignition in the list to enable Move point.</p>
-        )}
+        <p className="studio-note">User assumptions, not observed data or a forecast.</p>
 
-        {ignitions.length === 0 ? (
-          <p className="studio-empty">Select Add ignition, then click the map.</p>
-        ) : (
-          <ul className="studio-ignitions">
-            {sorted.map((ignition) => {
-              const rowIssues = issues.filter((issue) => issue.ignitionId === ignition.id);
-              const rowProblems: IgnitionProblem[] = problems.filter(
-                (problem) => problem.sourceId === ignition.id,
-              );
-              const hasField = (field: ScenarioIssue["field"]) =>
-                rowIssues.some((issue) => issue.field === field);
-              const isSelected = ignition.id === selectedId;
-              const base = `${uid}-${ignition.id}`;
-              const messageId = `${base}-msg`;
-              const hasMessages = rowIssues.length + rowProblems.length > 0;
-              return (
-                <li
-                  key={ignition.id}
-                  className={`studio-ignition${isSelected ? " is-selected" : ""}${
-                    ignition.enabled ? "" : " is-disabled"
-                  }`}
-                  aria-current={isSelected ? "true" : undefined}
-                  onClick={() => {
-                    if (!isSelected) onSelectIgnition(ignition.id);
-                  }}
-                  onFocusCapture={() => {
-                    if (!isSelected) onSelectIgnition(ignition.id);
-                  }}
-                >
-                  <div className="studio-ignition-top">
-                    <label className="studio-visually-hidden" htmlFor={`${base}-name`}>
-                      Ignition name
-                    </label>
-                    <input
-                      id={`${base}-name`}
-                      type="text"
-                      className="studio-input studio-input-name"
-                      value={ignition.name}
-                      maxLength={MAX_NAME_LENGTH}
-                      aria-invalid={hasField("name") || undefined}
-                      aria-describedby={hasMessages ? messageId : undefined}
-                      onChange={(event) => updateIgnition(ignition.id, { name: event.target.value })}
-                    />
-                    {isSelected && <span className="studio-badge">Selected</span>}
-                    <button
-                      type="button"
-                      className="studio-btn studio-btn-secondary studio-btn-small"
-                      aria-label={`Delete ${ignition.name || "ignition"}`}
-                      onClick={() => deleteIgnition(ignition.id)}
-                    >
-                      Delete
-                    </button>
-                  </div>
-                  <div className="studio-ignition-fields">
-                    <label className="studio-inline-field" htmlFor={`${base}-start`}>
-                      Start (T+ min)
-                      <input
-                        id={`${base}-start`}
-                        type="number"
-                        className="studio-input studio-input-number"
-                        min={0}
-                        max={Math.max(horizon - 1, 0)}
-                        step={1}
-                        value={ignition.startMinute}
-                        aria-invalid={hasField("startMinute") || undefined}
-                        aria-describedby={hasMessages ? messageId : undefined}
-                        onChange={(event) => {
-                          const value = numberFrom(event);
-                          if (value === null) return;
-                          updateIgnition(ignition.id, {
-                            startMinute: clamp(Math.round(value), 0, Math.max(horizon - 1, 0)),
-                          });
-                        }}
-                      />
-                    </label>
-                    <label className="studio-check">
+        <section className="studio-section" aria-labelledby={`${uid}-ign`}>
+          <div className="studio-section-head">
+            <h3 id={`${uid}-ign`} className="studio-subtitle">
+              Fires{" "}
+              <span className="studio-count">
+                {enabledCount}/{MAX_ENABLED_IGNITIONS}
+              </span>
+            </h3>
+            <div className="studio-segmented" role="group" aria-label="Map click mode">
+              <button
+                type="button"
+                className="studio-btn studio-btn-toggle studio-btn-small"
+                aria-pressed={mode === "add"}
+                disabled={atIgnitionLimit && mode !== "add"}
+                onClick={() => onModeChange(mode === "add" ? "select" : "add")}
+              >
+                + Add
+              </button>
+              <button
+                type="button"
+                className="studio-btn studio-btn-toggle studio-btn-small"
+                aria-pressed={mode === "move"}
+                disabled={!selected}
+                title={selected ? undefined : "Select a fire in the list first"}
+                onClick={() => onModeChange(mode === "move" ? "select" : "move")}
+              >
+                Move
+              </button>
+            </div>
+          </div>
+          <p className={`studio-hint${mode !== "select" ? " is-active" : ""}`} aria-live="polite">
+            {atIgnitionLimit && mode !== "move"
+              ? `Limit of ${MAX_ENABLED_IGNITIONS} enabled fires reached. Disable or delete one to add another.`
+              : MODE_HINT[mode]}
+          </p>
+
+          {ignitions.length === 0 ? (
+            <div className="studio-empty">
+              <span>Choose + Add, then click the map.</span>
+              <button
+                type="button"
+                className="studio-btn studio-btn-secondary studio-btn-small"
+                onClick={onLoadDemo}
+              >
+                Load demo
+              </button>
+            </div>
+          ) : (
+            <ul className="studio-ignitions">
+              {sorted.map((ignition) => {
+                const rowIssues = issues.filter((issue) => issue.ignitionId === ignition.id);
+                const rowProblems: IgnitionProblem[] = problems.filter(
+                  (problem) => problem.sourceId === ignition.id,
+                );
+                const hasField = (field: ScenarioIssue["field"]) =>
+                  rowIssues.some((issue) => issue.field === field);
+                const isSelected = ignition.id === selectedId;
+                const base = `${uid}-${ignition.id}`;
+                const messageId = `${base}-msg`;
+                const hasMessages = rowIssues.length + rowProblems.length > 0;
+                const displayName = ignition.name || "ignition";
+                return (
+                  <li
+                    key={ignition.id}
+                    className={`studio-ignition${isSelected ? " is-selected" : ""}${
+                      ignition.enabled ? "" : " is-disabled"
+                    }`}
+                    aria-current={isSelected ? "true" : undefined}
+                    onClick={() => {
+                      if (!isSelected) onSelectIgnition(ignition.id);
+                    }}
+                    onFocusCapture={() => {
+                      if (!isSelected) onSelectIgnition(ignition.id);
+                    }}
+                  >
+                    <div className="studio-ignition-top">
                       <input
                         type="checkbox"
+                        className="studio-ignition-enabled"
                         checked={ignition.enabled}
+                        aria-label={`Enable ${displayName}`}
+                        title={ignition.enabled ? "Enabled" : "Disabled"}
                         onChange={(event) =>
                           updateIgnition(ignition.id, { enabled: event.target.checked })
                         }
                       />
-                      Enabled
-                    </label>
-                  </div>
-                  <p
-                    className={`studio-coords${hasField("location") ? " has-issue" : ""}`}
-                    aria-label="Location, read only"
-                  >
-                    Lat {ignition.location.latitude.toFixed(5)}, Lon{" "}
-                    {ignition.location.longitude.toFixed(5)}
-                  </p>
-                  {hasMessages && (
-                    <ul id={messageId} className="studio-field-errors">
-                      {rowIssues.map((issue, index) => (
-                        <li key={`issue-${index}`}>Problem: {issue.message}</li>
-                      ))}
-                      {rowProblems.map((problem, index) => (
-                        <li key={`problem-${index}`}>Problem: {problem.message}</li>
-                      ))}
-                    </ul>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        )}
-        {scenarioIssues.length > 0 && (
-          <ul className="studio-alert" role="alert">
-            {scenarioIssues.map((issue, index) => (
-              <li key={index}>{issue.message}</li>
-            ))}
-          </ul>
-        )}
-      </section>
+                      <label className="studio-visually-hidden" htmlFor={`${base}-name`}>
+                        Ignition name
+                      </label>
+                      <input
+                        id={`${base}-name`}
+                        type="text"
+                        className="studio-input studio-input-name"
+                        value={ignition.name}
+                        maxLength={MAX_NAME_LENGTH}
+                        aria-invalid={hasField("name") || undefined}
+                        aria-describedby={hasMessages ? messageId : undefined}
+                        onChange={(event) =>
+                          updateIgnition(ignition.id, { name: event.target.value })
+                        }
+                      />
+                      <label className="studio-start" htmlFor={`${base}-start`}>
+                        <span aria-hidden="true">T+</span>
+                        <span className="studio-visually-hidden">Start, minutes after T+0</span>
+                        <input
+                          id={`${base}-start`}
+                          type="number"
+                          className="studio-input studio-input-minute"
+                          min={0}
+                          max={Math.max(horizon - 1, 0)}
+                          step={1}
+                          value={ignition.startMinute}
+                          aria-invalid={hasField("startMinute") || undefined}
+                          aria-describedby={hasMessages ? messageId : undefined}
+                          onChange={(event) => {
+                            const value = numberFrom(event);
+                            if (value === null) return;
+                            updateIgnition(ignition.id, {
+                              startMinute: clamp(Math.round(value), 0, Math.max(horizon - 1, 0)),
+                            });
+                          }}
+                        />
+                        <span aria-hidden="true">m</span>
+                      </label>
+                      <button
+                        type="button"
+                        className="studio-btn studio-btn-ghost studio-btn-icon"
+                        aria-label={`Delete ${displayName}`}
+                        title="Delete"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          deleteIgnition(ignition.id);
+                        }}
+                      >
+                        ×
+                      </button>
+                    </div>
+                    {(isSelected || hasField("location")) && (
+                      <p
+                        className={`studio-coords${hasField("location") ? " has-issue" : ""}`}
+                        aria-label="Location, read only"
+                      >
+                        {ignition.location.latitude.toFixed(5)},{" "}
+                        {ignition.location.longitude.toFixed(5)}
+                      </p>
+                    )}
+                    {hasMessages && (
+                      <ul id={messageId} className="studio-field-errors">
+                        {rowIssues.map((issue, index) => (
+                          <li key={`issue-${index}`}>Problem: {issue.message}</li>
+                        ))}
+                        {rowProblems.map((problem, index) => (
+                          <li key={`problem-${index}`}>Problem: {problem.message}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          {scenarioIssues.length > 0 && (
+            <ul className="studio-alert" role="alert">
+              {scenarioIssues.map((issue, index) => (
+                <li key={index}>{issue.message}</li>
+              ))}
+            </ul>
+          )}
+        </section>
 
-      <section className="studio-section" aria-labelledby={`${uid}-wx`}>
-        <h3 id={`${uid}-wx`} className="studio-subtitle">
-          Conditions (constant for the whole run)
-        </h3>
+        <section className="studio-section" aria-labelledby={`${uid}-wx`}>
+          <h3 id={`${uid}-wx`} className="studio-subtitle">
+            Conditions <span className="studio-subtitle-note">constant for the run</span>
+          </h3>
 
-        <div className="studio-field">
-          <label htmlFor={`${uid}-wind`}>Wind speed (20-ft, mph)</label>
-          <div className="studio-row">
-            <input
-              id={`${uid}-wind`}
-              type="range"
-              className="studio-range"
-              min={MIN_WIND_SPEED_MPH}
-              max={MAX_WIND_SPEED_MPH}
-              step={1}
-              value={settings.windSpeedMph}
-              onChange={(event) => {
-                const value = numberFrom(event);
-                if (value !== null) setSettings({ windSpeedMph: value });
-              }}
-            />
-            <input
-              type="number"
-              className="studio-input studio-input-number"
-              aria-label="Wind speed in miles per hour"
-              min={MIN_WIND_SPEED_MPH}
-              max={MAX_WIND_SPEED_MPH}
-              step={1}
-              value={settings.windSpeedMph}
-              onChange={(event) => {
-                const value = numberFrom(event);
-                if (value !== null) {
-                  setSettings({ windSpeedMph: clamp(value, MIN_WIND_SPEED_MPH, MAX_WIND_SPEED_MPH) });
-                }
-              }}
-            />
-          </div>
-        </div>
-
-        <div className="studio-field">
-          <label htmlFor={`${uid}-dir`}>Wind direction (degrees, from)</label>
-          <div className="studio-row">
-            <input
-              id={`${uid}-dir`}
-              type="number"
-              className="studio-input studio-input-number"
-              min={0}
-              max={359}
-              step={1}
-              value={settings.windFromDegrees}
-              onChange={(event) => {
-                const value = numberFrom(event);
-                if (value === null) return;
-                setSettings({ windFromDegrees: ((Math.round(value) % 360) + 360) % 360 });
-              }}
-            />
-            <span className="studio-hint">
-              From {compassPoint(settings.windFromDegrees)} → toward{" "}
-              {compassPoint(settings.windFromDegrees + 180)}
-            </span>
-          </div>
-        </div>
-
-        <div className="studio-field">
-          <label htmlFor={`${uid}-moisture`}>Fuel moisture</label>
-          <select
-            id={`${uid}-moisture`}
-            className="studio-input"
-            value={matchedPreset?.id ?? CUSTOM_MOISTURE_VALUE}
-            onChange={(event) => {
-              const preset = MOISTURE_PRESETS.find((item) => item.id === event.target.value);
-              if (preset) setSettings({ moisture: { ...preset.moisture } });
-            }}
-          >
-            {!matchedPreset && <option value={CUSTOM_MOISTURE_VALUE}>Custom</option>}
-            {MOISTURE_PRESETS.map((preset) => (
-              <option key={preset.id} value={preset.id}>
-                {preset.label}
-              </option>
-            ))}
-          </select>
-          <p className="studio-hint">
-            {matchedPreset ? matchedPreset.description : "Moisture values differ from every preset."}
-          </p>
-        </div>
-
-        <div className="studio-field">
-          <label htmlFor={`${uid}-horizon`}>Horizon</label>
-          <select
-            id={`${uid}-horizon`}
-            className="studio-input"
-            value={horizon}
-            onChange={(event) => setSettings({ horizonMinutes: Number(event.target.value) })}
-          >
-            {!(STUDIO_HORIZON_CHOICES as readonly number[]).includes(horizon) && (
-              <option value={horizon}>{horizon} min</option>
-            )}
-            {STUDIO_HORIZON_CHOICES.map((minutes) => (
-              <option key={minutes} value={minutes}>
-                {minutes / 60} h
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <details className="studio-advanced">
-          <summary>Advanced model settings</summary>
           <div className="studio-field">
-            <label htmlFor={`${uid}-midflame`}>Midflame wind factor</label>
+            <label htmlFor={`${uid}-wind`}>Wind speed, mph (20-ft)</label>
             <div className="studio-row">
               <input
-                id={`${uid}-midflame`}
+                id={`${uid}-wind`}
+                type="range"
+                className="studio-range"
+                min={MIN_WIND_SPEED_MPH}
+                max={MAX_WIND_SPEED_MPH}
+                step={1}
+                value={settings.windSpeedMph}
+                onChange={(event) => {
+                  const value = numberFrom(event);
+                  if (value !== null) setSettings({ windSpeedMph: value });
+                }}
+              />
+              <input
                 type="number"
                 className="studio-input studio-input-number"
-                min={MIDFLAME_MIN}
-                max={MIDFLAME_MAX}
-                step={0.05}
-                value={settings.midflameAdjustment}
+                aria-label="Wind speed in miles per hour"
+                min={MIN_WIND_SPEED_MPH}
+                max={MAX_WIND_SPEED_MPH}
+                step={1}
+                value={settings.windSpeedMph}
                 onChange={(event) => {
                   const value = numberFrom(event);
                   if (value !== null) {
-                    setSettings({ midflameAdjustment: clamp(value, MIDFLAME_MIN, MIDFLAME_MAX) });
+                    setSettings({
+                      windSpeedMph: clamp(value, MIN_WIND_SPEED_MPH, MAX_WIND_SPEED_MPH),
+                    });
                   }
                 }}
               />
-              {!midflameIsDefault && (
-                <button
-                  type="button"
-                  className="studio-btn studio-btn-secondary studio-btn-small"
-                  onClick={() => setSettings({ midflameAdjustment: DEFAULT_MIDFLAME_ADJUSTMENT })}
-                >
-                  Reset to default
-                </button>
-              )}
             </div>
-            <p className="studio-hint">
-              {midflameIsDefault
-                ? `Left at ${DEFAULT_MIDFLAME_ADJUSTMENT}: the model derives a factor per cell from canopy cover, canopy height and fuel bed depth.`
-                : `Overridden: ${settings.midflameAdjustment} is applied to every cell (midflame wind ${(
-                    settings.windSpeedMph * settings.midflameAdjustment
-                  ).toFixed(1)} mph).`}
-            </p>
           </div>
 
           <div className="studio-field">
-            <label className="studio-check">
+            <label htmlFor={`${uid}-dir`}>Wind from, degrees</label>
+            <div className="studio-row">
               <input
-                type="checkbox"
-                checked={spotting.enabled}
-                onChange={(event) =>
-                  setSettings({ spotting: { ...spotting, enabled: event.target.checked } })
-                }
-              />
-              Ember spotting
-            </label>
-            <label className="studio-inline-field" htmlFor={`${uid}-spot`}>
-              Max distance (m)
-              <input
-                id={`${uid}-spot`}
+                id={`${uid}-dir`}
                 type="number"
                 className="studio-input studio-input-number"
                 min={0}
-                max={MAX_SPOTTING_DISTANCE_METERS}
-                step={50}
-                value={spotting.maxDistanceMeters}
-                disabled={!spotting.enabled}
+                max={359}
+                step={1}
+                value={settings.windFromDegrees}
                 onChange={(event) => {
                   const value = numberFrom(event);
-                  if (value !== null) {
-                    setSettings({
-                      spotting: {
-                        ...spotting,
-                        maxDistanceMeters: clamp(value, 0, MAX_SPOTTING_DISTANCE_METERS),
-                      },
-                    });
-                  }
+                  if (value === null) return;
+                  setSettings({ windFromDegrees: ((Math.round(value) % 360) + 360) % 360 });
                 }}
               />
-            </label>
+              <span className="studio-hint">
+                From {compassPoint(settings.windFromDegrees)}, blowing toward{" "}
+                {compassPoint(settings.windFromDegrees + 180)}
+              </span>
+            </div>
           </div>
 
-          <div className="studio-field">
-            <label className="studio-check">
-              <input
-                type="checkbox"
-                checked={structure.enabled}
-                onChange={(event) =>
-                  setSettings({ structureSpread: { ...structure, enabled: event.target.checked } })
-                }
-              />
-              Structure-to-structure spread
-            </label>
-            <label className="studio-inline-field" htmlFor={`${uid}-struct`}>
-              Rate at {STRUCTURE_SPREAD_REFERENCE_WIND_MPH} mph (m/min)
-              <input
-                id={`${uid}-struct`}
-                type="number"
-                className="studio-input studio-input-number"
-                min={0}
-                max={MAX_STRUCTURE_SPREAD_METERS_PER_MINUTE}
-                step={0.5}
-                value={structure.rateMetersPerMinute}
-                disabled={!structure.enabled}
+          <div className="studio-grid-2">
+            <div className="studio-field">
+              <label htmlFor={`${uid}-moisture`}>Fuel moisture</label>
+              <select
+                id={`${uid}-moisture`}
+                className="studio-input"
+                value={matchedPreset?.id ?? CUSTOM_MOISTURE_VALUE}
+                aria-describedby={`${uid}-moisture-note`}
                 onChange={(event) => {
-                  const value = numberFrom(event);
-                  if (value !== null) {
-                    setSettings({
-                      structureSpread: {
-                        ...structure,
-                        rateMetersPerMinute: clamp(value, 0, MAX_STRUCTURE_SPREAD_METERS_PER_MINUTE),
-                      },
-                    });
-                  }
+                  const preset = MOISTURE_PRESETS.find((item) => item.id === event.target.value);
+                  if (preset) setSettings({ moisture: { ...preset.moisture } });
                 }}
-              />
-            </label>
+              >
+                {!matchedPreset && <option value={CUSTOM_MOISTURE_VALUE}>Custom</option>}
+                {MOISTURE_PRESETS.map((preset) => (
+                  <option key={preset.id} value={preset.id}>
+                    {preset.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="studio-field">
+              <label htmlFor={`${uid}-horizon`}>Horizon</label>
+              <select
+                id={`${uid}-horizon`}
+                className="studio-input"
+                value={horizon}
+                onChange={(event) => setSettings({ horizonMinutes: Number(event.target.value) })}
+              >
+                {!(STUDIO_HORIZON_CHOICES as readonly number[]).includes(horizon) && (
+                  <option value={horizon}>{horizon} min</option>
+                )}
+                {STUDIO_HORIZON_CHOICES.map((minutes) => (
+                  <option key={minutes} value={minutes}>
+                    {minutes / 60} h
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
-        </details>
-      </section>
-
-      <section className="studio-section" aria-labelledby={`${uid}-run`}>
-        <h3 id={`${uid}-run`} className="studio-subtitle">
-          Run
-        </h3>
-        <div className="studio-row">
-          {runButton}
-          {busy && (
-            <button type="button" className="studio-btn studio-btn-secondary" onClick={onCancel}>
-              Cancel
-            </button>
-          )}
-        </div>
-        {issues.length > 0 && (
-          <p id={`${uid}-run-note`} className="studio-hint">
-            Fix the {issues.length === 1 ? "problem" : `${issues.length} problems`} listed above to
-            run.
+          <p id={`${uid}-moisture-note`} className="studio-hint">
+            {matchedPreset ? matchedPreset.description : "Moisture values differ from every preset."}
           </p>
-        )}
-        <p className="studio-status" role="status">
-          Status: {PHASE_TEXT[phase]}
-        </p>
-        {stale && (
-          <p className="studio-warning">
-            Scenario changed. Results shown are from the previous run. Run again to update.
-          </p>
-        )}
 
-        <div className="studio-row studio-row-wrap">
-          <button type="button" className="studio-btn studio-btn-secondary" onClick={onClear}>
-            Clear scenario
-          </button>
-          <button type="button" className="studio-btn studio-btn-secondary" onClick={onLoadDemo}>
-            Load demo scenario
-          </button>
-          <button type="button" className="studio-btn studio-btn-secondary" onClick={onExport}>
-            Export JSON
-          </button>
-        </div>
+          <details className="studio-advanced">
+            <summary>Advanced model settings</summary>
+            <div className="studio-field">
+              <label htmlFor={`${uid}-midflame`}>Midflame wind factor</label>
+              <div className="studio-row">
+                <input
+                  id={`${uid}-midflame`}
+                  type="number"
+                  className="studio-input studio-input-number"
+                  min={MIDFLAME_MIN}
+                  max={MIDFLAME_MAX}
+                  step={0.05}
+                  value={settings.midflameAdjustment}
+                  onChange={(event) => {
+                    const value = numberFrom(event);
+                    if (value !== null) {
+                      setSettings({ midflameAdjustment: clamp(value, MIDFLAME_MIN, MIDFLAME_MAX) });
+                    }
+                  }}
+                />
+                {!midflameIsDefault && (
+                  <button
+                    type="button"
+                    className="studio-btn studio-btn-secondary studio-btn-small"
+                    onClick={() => setSettings({ midflameAdjustment: DEFAULT_MIDFLAME_ADJUSTMENT })}
+                  >
+                    Reset to default
+                  </button>
+                )}
+              </div>
+              <p className="studio-hint">
+                {midflameIsDefault
+                  ? `Left at ${DEFAULT_MIDFLAME_ADJUSTMENT}: the model derives a factor per cell from canopy cover, canopy height and fuel bed depth.`
+                  : `Overridden: ${settings.midflameAdjustment} is applied to every cell (midflame wind ${(
+                      settings.windSpeedMph * settings.midflameAdjustment
+                    ).toFixed(1)} mph).`}
+              </p>
+            </div>
+
+            <div className="studio-field">
+              <label className="studio-check">
+                <input
+                  type="checkbox"
+                  checked={spotting.enabled}
+                  onChange={(event) =>
+                    setSettings({ spotting: { ...spotting, enabled: event.target.checked } })
+                  }
+                />
+                Ember spotting
+              </label>
+              <label className="studio-inline-field" htmlFor={`${uid}-spot`}>
+                Max distance (m)
+                <input
+                  id={`${uid}-spot`}
+                  type="number"
+                  className="studio-input studio-input-number"
+                  min={0}
+                  max={MAX_SPOTTING_DISTANCE_METERS}
+                  step={50}
+                  value={spotting.maxDistanceMeters}
+                  disabled={!spotting.enabled}
+                  onChange={(event) => {
+                    const value = numberFrom(event);
+                    if (value !== null) {
+                      setSettings({
+                        spotting: {
+                          ...spotting,
+                          maxDistanceMeters: clamp(value, 0, MAX_SPOTTING_DISTANCE_METERS),
+                        },
+                      });
+                    }
+                  }}
+                />
+              </label>
+            </div>
+
+            <div className="studio-field">
+              <label className="studio-check">
+                <input
+                  type="checkbox"
+                  checked={structure.enabled}
+                  onChange={(event) =>
+                    setSettings({ structureSpread: { ...structure, enabled: event.target.checked } })
+                  }
+                />
+                Structure-to-structure spread
+              </label>
+              <label className="studio-inline-field" htmlFor={`${uid}-struct`}>
+                Rate at {STRUCTURE_SPREAD_REFERENCE_WIND_MPH} mph (m/min)
+                <input
+                  id={`${uid}-struct`}
+                  type="number"
+                  className="studio-input studio-input-number"
+                  min={0}
+                  max={MAX_STRUCTURE_SPREAD_METERS_PER_MINUTE}
+                  step={0.5}
+                  value={structure.rateMetersPerMinute}
+                  disabled={!structure.enabled}
+                  onChange={(event) => {
+                    const value = numberFrom(event);
+                    if (value !== null) {
+                      setSettings({
+                        structureSpread: {
+                          ...structure,
+                          rateMetersPerMinute: clamp(value, 0, MAX_STRUCTURE_SPREAD_METERS_PER_MINUTE),
+                        },
+                      });
+                    }
+                  }}
+                />
+              </label>
+            </div>
+          </details>
+        </section>
 
         <details className="studio-advanced">
-          <summary>Import JSON</summary>
+          <summary>Scenario file</summary>
+          <div className="studio-row studio-row-wrap">
+            <button
+              type="button"
+              className="studio-btn studio-btn-secondary studio-btn-small"
+              onClick={onLoadDemo}
+            >
+              Load demo
+            </button>
+            <button
+              type="button"
+              className="studio-btn studio-btn-secondary studio-btn-small"
+              onClick={onExport}
+            >
+              Export JSON
+            </button>
+            <button
+              type="button"
+              className="studio-btn studio-btn-secondary studio-btn-small"
+              onClick={onClear}
+            >
+              Clear all
+            </button>
+          </div>
           <div className="studio-field">
-            <label htmlFor={`${uid}-file`}>Scenario file</label>
+            <label htmlFor={`${uid}-file`}>Import a scenario file</label>
             <input
               id={`${uid}-file`}
               type="file"
@@ -625,13 +631,13 @@ export default function ConfigPanel(props: ConfigPanelProps) {
             <textarea
               id={`${uid}-paste`}
               className="studio-input studio-textarea"
-              rows={4}
+              rows={3}
               value={importText}
               onChange={(event) => setImportText(event.target.value)}
             />
             <button
               type="button"
-              className="studio-btn studio-btn-secondary"
+              className="studio-btn studio-btn-secondary studio-btn-small"
               disabled={importText.trim() === ""}
               onClick={() => runImport(importText)}
             >
@@ -645,11 +651,31 @@ export default function ConfigPanel(props: ConfigPanelProps) {
               ))}
             </ul>
           )}
+          <p className="studio-status">
+            A scenario file does not guarantee identical results later; source data can change.
+          </p>
         </details>
+      </div>
 
-        {draftStatus && <p className="studio-status">{draftStatus}</p>}
-        <p className="studio-status">
-          A scenario file does not guarantee identical results later; source data can change.
+      <section className="studio-panel-foot" aria-label="Run">
+        {stale && (
+          <p className="studio-warning">Edited since the last run. Run again to update.</p>
+        )}
+        {issues.length > 0 && (
+          <p id={`${uid}-run-note`} className="studio-hint">
+            Fix the {issues.length === 1 ? "problem" : `${issues.length} problems`} above to run.
+          </p>
+        )}
+        <div className="studio-row">
+          {runButton}
+          {busy && (
+            <button type="button" className="studio-btn studio-btn-secondary" onClick={onCancel}>
+              Cancel
+            </button>
+          )}
+        </div>
+        <p className="studio-status" role="status">
+          {statusLine}
         </p>
       </section>
     </aside>
