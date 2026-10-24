@@ -61,6 +61,8 @@ const PHONE_STAGE_MAX_WIDTH_PX = 720;
 const SPACE_OWNERS =
   "button, a[href], select, textarea, summary, [contenteditable], input:not([type='range'])";
 const MAX_WIND_SPEED_MPH = 60;
+/** From this horizon on, constant weather is a material caveat. */
+const LONG_HORIZON_MINUTES = 720;
 /** LANDFIRE's native cell size; anything coarser is disclosed next to the area. */
 const NATIVE_CELL_METERS = 30;
 
@@ -824,6 +826,12 @@ export default function FireSimulatorPage() {
               "wildland-urban edge."),
       });
     }
+    if (run.scenario.horizonMinutes >= LONG_HORIZON_MINUTES) {
+      warnings.push({
+        key: "constant-weather",
+        text: "Wind and fuel moisture are held constant for the whole run; no day–night change is modelled.",
+      });
+    }
     if (run.reachedEdge) {
       warnings.push({
         key: "edge",
@@ -841,7 +849,13 @@ export default function FireSimulatorPage() {
     : "Click the landscape to place an ignition point on vegetated ground.";
   const sceneReady = sceneStatus.kind === "ready";
   // Report the resolution the loaded grid really has; the request is only a stand-in while loading.
-  const displayedCellMeters = grid ? grid.groundCellSizeMeters : requestedCellMeters;
+  const displayedCellMeters = grid ? grid.cellMeters : requestedCellMeters;
+  const resamplingNote =
+    grid?.resampling === "mode"
+      ? " · fuels resampled by majority"
+      : grid?.resampling === "nearest"
+        ? " · fuels resampled by nearest cell"
+        : "";
   const provenance = landscape.status === "ready" ? landscape.provenance : null;
   const provenanceText = provenance
     ? provenance.kind === "stored"
@@ -1044,6 +1058,7 @@ export default function FireSimulatorPage() {
                 <p className="fr-readout">
                   {centerLatitude.toFixed(3)}, {centerLongitude.toFixed(3)} ·{" "}
                   {formatKm(radiusMeters)} km radius · {displayedCellMeters} m cells
+                  {resamplingNote}
                 </p>
                 {provenanceText && <p className="fr-readout">{provenanceText}</p>}
                 {storedUnavailable && (
@@ -1544,6 +1559,24 @@ export default function FireSimulatorPage() {
                           ms
                         </strong>
                       </div>
+                    </div>
+
+                    <div className="fr-card">
+                      <h2>Resolution</h2>
+                      <p>
+                        {run.resolution.cellMeters} m cells (
+                        {run.resolution.groundCellSizeMeters.toFixed(0)} m on the ground), fuels{" "}
+                        {run.resolution.resampling === "native"
+                          ? "at LANDFIRE's native resolution"
+                          : run.resolution.resampling === "mode"
+                            ? "resampled by majority"
+                            : "resampled by nearest cell"}
+                        .
+                        {run.resolution.cellMeters > NATIVE_CELL_METERS &&
+                          " Coarse cells lose narrow firebreaks and roads, small urban patches and parks, and smooth slope, so spread across them can be over- or understated."}
+                        {run.resolution.spottingReachCeilingMeters > 0 &&
+                          ` Spotting is capped at ${(run.resolution.spottingReachCeilingMeters / 1000).toFixed(1)} km by the cell size and path-length limit.`}
+                      </p>
                     </div>
 
                     <div className="fr-card">

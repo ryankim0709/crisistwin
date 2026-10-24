@@ -318,7 +318,7 @@ there, _Area size_ sets how much ground the board covers (Local fits the horizon
 radius, or 10 km, 25 km, 50 km). A stored region's board is fixed, so the horizon does not
 resize it and a long run may reach its edge. Cells coarsen from LANDFIRE's native 30 m on
 large boards to keep the grid at most 900 cells a side; the page states radius and cell size
-because coarser cells smooth narrow fuel breaks and small neighbourhoods. Click the landscape to place an ignition
+(fuels resampled by majority; Details has a resolution card) because coarser cells smooth narrow fuel breaks and small neighbourhoods. Click the landscape to place an ignition
 point, set the 20-foot wind speed and the direction it blows from, pick a fuel-moisture
 preset, then play the fire forward over a 2, 3, 6, 12, or 24 hour horizon. Playback is
 continuous (1× is 10 model minutes per second, rising to horizon ÷ 18 for horizons past
