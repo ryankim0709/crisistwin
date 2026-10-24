@@ -25,5 +25,8 @@ class LiveActiveTests(SimpleTestCase):
         body = self.client.get("/api/live/active").json()
         self.assertEqual((body["incident_id"], body["name"], body["mode"]), ("other-drill", "Other", "drill"))
 
-    def test_read_only(self):
-        self.assertEqual(self.client.post("/api/live/active", {}).status_code, 405)
+    @override_settings(LIVE_CONTROLLER_TOKEN="secret")
+    def test_switching_needs_the_controller(self):
+        # Switching is tested in api/live/tests/test_active_incident.py.
+        self.assertEqual(self.client.post("/api/live/active", {}).status_code, 401)
+        self.assertEqual(self.client.put("/api/live/active", {}).status_code, 405)

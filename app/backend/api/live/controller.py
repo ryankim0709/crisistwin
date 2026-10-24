@@ -67,8 +67,8 @@ DECIDED_PROPOSALS_IN_COMMAND = 20
 
 RATIONALE_SYSTEM_PROMPT = """\
 You write the short rationale a human controller reads before approving or rejecting \
-evacuation guidance in a labeled training drill that replays the 2018 Camp Fire. It is not \
-a real incident. The user message holds, inside <facts>, what a deterministic planner \
+evacuation guidance in a labeled training drill (a replay of a past fire or a simulated \
+scenario). It is not a real incident. The user message holds, inside <facts>, what a deterministic planner \
 computed: proposed changes per zone, their causes, the current fire estimate (method and \
 drill time), blocked roads and suggested verify tasks.
 
@@ -369,7 +369,7 @@ def replan(snapshot: Snapshot, causes: list[str]) -> tuple[dict[str, Any] | None
     replay_at = snapshot.clock.replay_now
     published_docs = current_guidance(incident_id)
     published = published_summaries(published_docs)
-    result = controllers.active().propose(snapshot, published)
+    result = controllers.active(snapshot.incident_id).propose(snapshot, published)
     ctx = result.context or controllers.plan_context(snapshot, published)
     guidance = with_alternatives(index.drill, result.guidance, snapshot.blocked, snapshot.fire.geometry,
                                  snapshot.full_destinations, preference_counts(incident_id, now),

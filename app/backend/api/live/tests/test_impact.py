@@ -28,7 +28,7 @@ def report(baseline_arrived, alt_arrived, valid=True):
 
 class ImpactTwinPartTest(SimpleTestCase):
     def setUp(self):
-        self.snapshot = SimpleNamespace(index=SimpleNamespace(drill=SimpleNamespace(
+        self.snapshot = SimpleNamespace(incident_id="camp-2018-drill", index=SimpleNamespace(drill=SimpleNamespace(
             roads=SimpleNamespace(segment_edges={SEG: ("e1", "e2")}))))
         self.calls = []
 
@@ -37,7 +37,7 @@ class ImpactTwinPartTest(SimpleTestCase):
             self.calls.append((sets, labels))
             return rep, {"z1": 40}
 
-        with mock.patch.object(twin_service, "ensure_ready", lambda: True), \
+        with mock.patch.object(twin_service, "ensure_ready", lambda *_: True), \
                 mock.patch.object(twin_service, "whatif_with_zones", whatif):
             return impact._twin_part(self.snapshot, SEG, closed_now, 60)
 
@@ -66,5 +66,5 @@ class ImpactTwinPartTest(SimpleTestCase):
         self.assertEqual(remaining, {"z1": 40})
 
     def test_warming_twin(self):
-        with mock.patch.object(twin_service, "ensure_ready", lambda: False):
+        with mock.patch.object(twin_service, "ensure_ready", lambda *_: False):
             self.assertEqual(impact._twin_part(self.snapshot, SEG, False, 60), (None, None, "twin_warming"))

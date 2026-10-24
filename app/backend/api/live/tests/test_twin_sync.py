@@ -109,7 +109,7 @@ class TwinSyncTest(SimpleTestCase):
     def setUp(self):
         self.guidance: list[dict] = []
         patches = [
-            mock.patch.object(twin_service, "_ready_inputs", lambda: self.inputs),
+            mock.patch.object(twin_service, "_ready_inputs", lambda *_: self.inputs),
             mock.patch.object(twin_service, "current_guidance", lambda *a, **k: list(self.guidance)),
             mock.patch.dict(twin_service._sessions, {}, clear=True),
         ]

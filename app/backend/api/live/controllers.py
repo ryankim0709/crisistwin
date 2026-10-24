@@ -81,7 +81,7 @@ def plan_congestion(snapshot: Snapshot) -> tuple[dict[str, float] | None, str]:
         hit = _congestion.get(key)
         if hit is not None and time.monotonic() - hit[0] < PLAN_CONGESTION_CACHE_S and hit[1] == snapshot.clock.replay_now:
             return hit[2], hit[3]
-    if twin_service.status()["status"] != "ready":
+    if twin_service.status(snapshot.incident_id)["status"] != "ready":
         return None, CONGESTION_UNAVAILABLE
     try:
         twin_now, speeds = twin_service.edge_speeds_at(snapshot)
@@ -199,7 +199,7 @@ class TwinController:
         info = {"id": self.id, "version": twinplan.TWIN_CONTROLLER_VERSION, "fallback": None}
         if not moving:
             return ControllerPlan(base.guidance, info, None, base.context)
-        if not twin_service.ensure_ready():
+        if not twin_service.ensure_ready(snapshot.incident_id):
             return self._fallback(base, "twin_warming")
         try:
             return self._score(snapshot, base, moving, info, published)
@@ -291,7 +291,7 @@ def _announce(choice: str, level: int = logging.INFO) -> None:
         _announced = choice
 
 
-def active() -> Controller:
+def active(incident_id: str | None = None) -> Controller:
     """The controller for this replan (``LIVE_CONTROLLER``; default twin when it builds, else rule)."""
     requested = live_setting("LIVE_CONTROLLER").lower()
     if requested and requested not in CONTROLLER_IDS:
@@ -300,9 +300,9 @@ def active() -> Controller:
     if requested == "rule":
         _announce("rule (LIVE_CONTROLLER=rule)")
         return RuleController()
-    state = twin_service.warm()
+    state = twin_service.warm(incident_id)
     if state == "failed":
-        _announce(f"rule (twin unavailable: {twin_service.status()['error']})", logging.WARNING)
+        _announce(f"rule (twin unavailable: {twin_service.status(incident_id)['error']})", logging.WARNING)
         return RuleController(fallback="twin_failed")
     _announce(f"twin ({'LIVE_CONTROLLER=twin' if requested else 'default'}; inputs {state})")
     return TwinController()

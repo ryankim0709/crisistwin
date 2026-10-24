@@ -56,7 +56,7 @@ def edge_congestion(snapshot: Snapshot) -> dict[str, float] | None:
         hit = _congestion.get(key)
         if hit is not None and time.monotonic() - hit[0] < CONGESTION_CACHE_S and hit[1] == snapshot.clock.replay_now:
             return hit[2]
-    if not twin_service.ensure_ready():
+    if not twin_service.ensure_ready(snapshot.incident_id):
         return None
     try:
         speeds = twin_service.edge_speeds(snapshot)

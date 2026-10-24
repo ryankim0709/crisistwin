@@ -67,7 +67,7 @@ class Command(BaseCommand):
             raise CommandError("Give --invite or set LIVE_INVITE_CODE.")
         self.base = opts["base"].rstrip("/") + "/api/live/"
         inc = opts["incident"]
-        drill = get_index().drill
+        drill = get_index(inc).drill
         fleet = Fleet(drill, opts["units"], seed=opts["seed"], incident_id=inc, tempo=opts["speed_up"])
         tokens: dict[str, str] = {}
         self.locations = 0
