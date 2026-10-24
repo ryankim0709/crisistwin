@@ -2,7 +2,7 @@
 
 Date: 2026-10-23. Status: accepted.
 
-Amended by [0005](0007-wui-spread-mechanisms.md), which adds ember spotting and
+Amended by [0007](0007-wui-spread-mechanisms.md), which adds ember spotting and
 structure-to-structure spread on top of this model and floors the directional rate. The
 paragraphs below that it changed have been corrected in place and say where to read the
 detail; everything else here still holds.
