@@ -9,6 +9,7 @@ import {
   effectiveRadiusMeters,
   type AreaSizeId,
 } from "./ui/areaSize";
+import SatelliteFireMap from "./SatelliteFireMap";
 import FireDock from "./ui/FireDock";
 import FireLegend from "./ui/FireLegend";
 import { formatDuration } from "./ui/format";
@@ -176,6 +177,19 @@ type Provenance =
 /** A stored SoCal region, or a custom area loaded live. */
 const CUSTOM_SELECTION = "custom";
 
+type ViewMode = "diorama" | "satellite";
+const VIEW_STORAGE_KEY = "crisistwin.fire.view";
+/** How long the "outside the loaded region" hint stays up. */
+const OUTSIDE_HINT_MS = 3500;
+
+function readStoredView(): ViewMode {
+  try {
+    return window.localStorage.getItem(VIEW_STORAGE_KEY) === "satellite" ? "satellite" : "diorama";
+  } catch {
+    return "diorama";
+  }
+}
+
 type CatalogState =
   | { status: "loading" }
   | { status: "ready"; ids: ReadonlySet<string> }
@@ -227,6 +241,9 @@ export default function FireSimulatorPage() {
   const wide = useMediaQuery(WIDE_QUERY);
 
   const [areaCenter, setAreaCenter] = useState<GeoPoint>(DEFAULT_AREA.point);
+  const [view, setView] = useState<ViewMode>(readStoredView);
+  const [fitSignal, setFitSignal] = useState(0);
+  const [outsideHint, setOutsideHint] = useState(false);
   const [selection, setSelection] = useState<string>(DEFAULT_REGION_ID);
   const [catalog, setCatalog] = useState<CatalogState>({ status: "loading" });
   const [areaSize, setAreaSize] = useState<AreaSizeId>(DEFAULT_AREA_SIZE);
@@ -417,8 +434,10 @@ export default function FireSimulatorPage() {
 
   // Scene creation: StrictMode-safe (the cleanup disposes, the re-run builds a fresh scene).
   useEffect(() => {
+    // The diorama host only exists in the diorama view; the scene is rebuilt on return and the
+    // effects below re-push every piece of state because `scene` changes.
     const host = sceneHostRef.current;
-    if (!host) return;
+    if (view !== "diorama" || !host) return;
     let created: FireDioramaSceneApi;
     try {
       created = new FireDioramaScene(host, { reducedMotion: reducedMotionRef.current });
@@ -438,7 +457,7 @@ export default function FireSimulatorPage() {
       setScene(null);
       created.dispose();
     };
-  }, []);
+  }, [view]);
 
   // Continuous model time, pushed to the scene every animation frame without a React render.
   const onTime = useCallback((minutes: number) => sceneRef.current?.setTime(minutes), []);
@@ -480,6 +499,7 @@ export default function FireSimulatorPage() {
     if (runKey === lastStartKey.current) return;
     lastStartKey.current = runKey;
     restartPlayback();
+    setFitSignal((value) => value + 1);
   }, [runKey, restartPlayback]);
 
   // An NWS reading belongs to one ignition point and to wind values nobody has overridden.
@@ -561,12 +581,34 @@ export default function FireSimulatorPage() {
         if (origin) editWindDirection(Math.round((bearingBetween(origin, point) + 180) % 360));
         return;
       }
+      // The satellite map can be clicked anywhere; the model only covers the loaded board.
+      if (grid && cellAt(grid, point) < 0) {
+        setOutsideHint(true);
+        return;
+      }
       // A reading belongs to one ignition point, so moving the point drops it.
       setOrigin(point);
       dropWindProvenance();
     },
-    [clickMode, origin, editWindDirection, dropWindProvenance],
+    [clickMode, origin, editWindDirection, dropWindProvenance, grid],
   );
+  useEffect(() => {
+    if (!outsideHint) return;
+    const timer = window.setTimeout(() => setOutsideHint(false), OUTSIDE_HINT_MS);
+    return () => window.clearTimeout(timer);
+  }, [outsideHint]);
+
+  function chooseView(next: ViewMode) {
+    if (next === view) return;
+    setView(next);
+    setOutsideHint(false);
+    if (next === "satellite" && hasRun) setFitSignal((value) => value + 1);
+    try {
+      window.localStorage.setItem(VIEW_STORAGE_KEY, next);
+    } catch {
+      // Private mode or blocked storage: the choice just is not remembered.
+    }
+  }
   const groundClickRef = useRef(handleGroundClick);
   useEffect(() => {
     groundClickRef.current = handleGroundClick;
@@ -633,7 +675,7 @@ export default function FireSimulatorPage() {
   useEffect(() => {
     const stage = stageRef.current;
     const overlay = stage?.querySelector<HTMLElement>(".fr-overlay");
-    if (!stage || !overlay || !scene) return;
+    if (!stage || !overlay) return;
     const measure = () => {
       const box = stage.getBoundingClientRect();
       const middle = box.top + box.height / 2;
@@ -649,7 +691,11 @@ export default function FireSimulatorPage() {
         } else if (r.top + r.height / 2 < middle) top = Math.max(top, r.bottom - box.top);
         else bottom = Math.max(bottom, box.bottom - r.top);
       }
-      scene.setViewInsets({ top, right: 0, bottom, left });
+      scene?.setViewInsets({ top, right: 0, bottom, left });
+      // The satellite map's own controls are kept clear of the floating panels with these.
+      stage.style.setProperty("--fr-inset-top", `${top}px`);
+      stage.style.setProperty("--fr-inset-bottom", `${bottom}px`);
+      stage.style.setProperty("--fr-inset-left", `${left}px`);
     };
     const observer = new ResizeObserver(measure);
     const observeChildren = () => {
@@ -684,11 +730,22 @@ export default function FireSimulatorPage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [togglePlayback, hasRun]);
 
-  const resetView = useCallback(() => sceneRef.current?.resetView(false), []);
-  const focusFire = useCallback(() => sceneRef.current?.resetView(true), []);
+  const resetView = useCallback(() => {
+    if (view === "satellite") setFitSignal((value) => value + 1);
+    else sceneRef.current?.resetView(false);
+  }, [view]);
+  const focusFire = useCallback(() => {
+    if (view === "satellite") setFitSignal((value) => value + 1);
+    else sceneRef.current?.resetView(true);
+  }, [view]);
 
   const windTowardDegrees = (windFromDegrees + 180) % 360;
   const frame = frameAtOrBefore(frames, playback.t);
+  let satelliteFrameIndex = 0;
+  for (let index = 0; index < frames.length; index++) {
+    if (frames[index].elapsedMinutes > playback.t) break;
+    satelliteFrameIndex = index;
+  }
   // Attribution covers the whole run, so the three mechanisms sum to the final burned area.
   const breakdownTotal = run
     ? run.arrivalBreakdown.surfaceSquareMeters +
@@ -805,19 +862,36 @@ export default function FireSimulatorPage() {
       aria-label="Fire spread model diorama"
     >
       <div className="fr-stage" ref={stageRef}>
-        <div
-          className="fr-scene"
-          ref={sceneHostRef}
-          aria-hidden={sceneStatus.kind === "error"}
-          role="group"
-          aria-label={
-            clickMode === "origin"
-              ? "3D landscape. Click to place the ignition point."
-              : "3D landscape. Click to aim the wind from the ignition point toward that location."
-          }
-        />
+        {view === "diorama" ? (
+          <div
+            className="fr-scene"
+            ref={sceneHostRef}
+            aria-hidden={sceneStatus.kind === "error"}
+            role="group"
+            aria-label={
+              clickMode === "origin"
+                ? "3D landscape. Click to place the ignition point."
+                : "3D landscape. Click to aim the wind from the ignition point toward that location."
+            }
+          />
 
-        {sceneStatus.kind === "error" && (
+        ) : (
+          <div className="fr-satellite">
+            <SatelliteFireMap
+              origin={origin}
+              windFromDegrees={windFromDegrees}
+              frames={frames as FireFrame[]}
+              frameIndex={satelliteFrameIndex}
+              landscape={grid}
+              showFuel={showFuel}
+              fitSignal={fitSignal}
+              clickMode={clickMode}
+              onMapClick={handleGroundClick}
+            />
+          </div>
+        )}
+
+        {view === "diorama" && sceneStatus.kind === "error" && (
           <div className="fr-error fr-panel" role="alert">
             <p className="fr-error-title">3D view unavailable in this browser</p>
             <p>
@@ -1299,6 +1373,40 @@ export default function FireSimulatorPage() {
                 i
               </button>
             </div>
+            <div className="fr-view fr-panel" role="radiogroup" aria-label="View">
+              <span className="fr-view-label" aria-hidden="true">
+                View
+              </span>
+              <label>
+                <input
+                  type="radio"
+                  name="fire-view"
+                  checked={view === "diorama"}
+                  onChange={() => chooseView("diorama")}
+                />
+                <span title="Diorama">
+                  <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+                    <path d="M1.5 12.5 8 9l6.5 3.5L8 15.5zM3 8.5 8 6l5 2.5M5 4.5 8 3l3 1.5" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+                  </svg>
+                  <span className="fr-view-text">Diorama</span>
+                </span>
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="fire-view"
+                  checked={view === "satellite"}
+                  onChange={() => chooseView("satellite")}
+                />
+                <span title="Satellite (USGS aerial imagery, needs a network connection)">
+                  <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+                    <circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" strokeWidth="1.3" />
+                    <path d="M2.5 8h11M8 2.5c-2 2-2 9 0 11M8 2.5c2 2 2 9 0 11" fill="none" stroke="currentColor" strokeWidth="1.1" />
+                  </svg>
+                  <span className="fr-view-text">Satellite</span>
+                </span>
+              </label>
+            </div>
             <div id="fr-notice-note" className="fr-notice-note fr-panel" hidden={!noticeOpen}>
               <div className="fr-sources">
                 <p>Fuel: {LANDFIRE_ATTRIBUTION}</p>
@@ -1545,20 +1653,26 @@ export default function FireSimulatorPage() {
             </ul>
           )}
 
-          {showHint && (
+          {outsideHint && (
+            <p className="fr-hint-chip fr-panel" role="status">
+              That spot is outside the loaded region. Click inside the shaded board.
+            </p>
+          )}
+
+          {showHint && !outsideHint && (
             <p className="fr-hint-chip fr-panel" role="status">
               Click the landscape to place an ignition point
             </p>
           )}
 
-          <FireLegend windTowardDegrees={windTowardDegrees} showFuel={showFuel} defaultOpen={wide} />
+          <FireLegend view={view} windTowardDegrees={windTowardDegrees} showFuel={showFuel} defaultOpen={wide} />
 
           <FireDock
             playback={playback}
             horizonMinutes={horizonMinutes}
             hasRun={hasRun}
             canFocusFire={hasRun}
-            sceneReady={sceneReady}
+            sceneReady={sceneReady || view === "satellite"}
             onResetView={resetView}
             onFocusFire={focusFire}
           />
@@ -1566,6 +1680,7 @@ export default function FireSimulatorPage() {
 
         <p className="fr-attribution">
           Fuel: LANDFIRE · Terrain: AWS terrain tiles (USGS 3DEP and others)
+          {view === "satellite" ? " · Imagery: USGS The National Map" : ""}
           {windSource.status === "ready" ? " · Wind: NWS" : ""} · Simulated, not operational
         </p>
 

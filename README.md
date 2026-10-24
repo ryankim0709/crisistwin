@@ -334,7 +334,7 @@ canopy cover, canopy height, and fuel bed depth, lower under a closed stand than
 open; moving the control off its default applies that one flat value everywhere instead.
 Switching the click target to _Wind direction_ lets you click downwind of the ignition point
 to aim the wind; the numeric field and the arrow at the ignition point stay in sync with it.
-_Show the fuel layer the model is using_ tints the ground by fuel family, _Focus fire_
+The _View_ switch flips between the diorama and the original USGS aerial-imagery map (needs a network connection) with the same run, time, and clicks; the choice is remembered in the browser. _Show the fuel layer the model is using_ tints the ground by fuel family, _Focus fire_
 frames the burn, and _Reset view_ frames the whole board. Controls and results float over
 the stage; the scenario panel collapses (a bottom sheet on phones) and the results strip
 expands to the full breakdowns. Trees and houses are symbols for fuel classes, not observed
