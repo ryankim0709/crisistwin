@@ -42,6 +42,14 @@ Also in the repository:
   not an alert. [README](mobile/README.md), [ADR 0010](docs/adr/0010-civilian-ios-app.md),
   [ADR 0016](docs/adr/0016-resident-live-and-family.md).
 
+- **Incident intelligence** (`/api/intel/…`): an Apify Actor fetches public agency
+  pages (live, or Wayback Machine captures for past fires), Claude extracts candidate road closures,
+  evacuation orders and shelter updates with a verbatim quote, and a planner confirms and maps each one.
+  Every extracted record is `reported` and `unconfirmed` until a planner confirms it; Claude never
+  outputs coordinates. `APIFY_TOKEN`, `APIFY_ACTOR_ID` and `ANTHROPIC_API_KEY` are read by Django only
+  (never `VITE_*`); without them runs and extraction answer 503 and uploading Actor output still works.
+  [Contract](docs/incident-intel.md), [ADR 0018](docs/adr/0018-apify-incident-intelligence.md).
+
 Not implemented: persistent scenarios, live incident integrations, a validated evacuation model.
 The fire model has no suppression and is unvalidated at demo settings.
 

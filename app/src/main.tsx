@@ -12,6 +12,7 @@ import ScenariosPage from "./pages/ScenariosPage";
 import EvacuationPage from "./pages/EvacuationPage";
 import ComparisonPage from "./pages/ComparisonPage";
 import IncidentsPage from "./pages/IncidentsPage";
+import IntelPage from "./pages/IntelPage";
 import StressTestsPage from "./pages/StressTestsPage";
 import NotFoundPage from "./pages/NotFoundPage";
 import DioramaPage from "./diorama/DioramaPage";
@@ -38,6 +39,8 @@ const page =
     <ComparisonPage />
   ) : path === "/incidents" ? (
     <IncidentsPage />
+  ) : path === "/intel" ? (
+    <IntelPage />
   ) : path === "/stress-tests" ? (
     <StressTestsPage />
   ) : path === "/replay" ? (

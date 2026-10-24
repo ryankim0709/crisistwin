@@ -8,8 +8,12 @@ anyio==4.15.1
     # via
     #   anthropic
     #   httpx2
+apify-client==3.3.0
+    # via -r requirements.in
 asgiref==3.13.0
     # via django
+colorama==0.4.6
+    # via apify-client
 django==5.2.18
     # via
     #   -r requirements.in
@@ -17,9 +21,13 @@ django==5.2.18
 djangorestframework==3.18.3
     # via -r requirements.in
 dnspython==2.9.0
-    # via pymongo
+    # via
+    #   email-validator
+    #   pymongo
 docstring-parser==0.18.0
     # via anthropic
+email-validator==2.3.0
+    # via pydantic
 gunicorn==26.2.0
     # via -r requirements.in
 h11==0.16.0
@@ -31,13 +39,20 @@ httpx2==2.16.0
 idna==3.20
     # via
     #   anyio
+    #   email-validator
     #   httpx2
+impit==0.14.1
+    # via apify-client
 jiter==0.18.0
     # via anthropic
+more-itertools==11.2.1
+    # via apify-client
 opentelemetry-api==1.45.1
     # via anthropic
 pydantic==2.14.1
-    # via anthropic
+    # via
+    #   anthropic
+    #   apify-client
 pydantic-core==2.50.1
     # via pydantic
 pymongo==4.19.0
@@ -54,6 +69,7 @@ typing-extensions==4.16.0
     # via
     #   anthropic
     #   anyio
+    #   apify-client
     #   httpx2
     #   opentelemetry-api
     #   pydantic

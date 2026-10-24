@@ -41,6 +41,11 @@ export const navigationItems: readonly NavigationItem[] = [
     group: "Analysis",
   },
   {
+    path: "/intel",
+    label: "Intel review",
+    group: "Analysis",
+  },
+  {
     path: "/replay",
     label: "Historical replay",
     group: "Analysis",

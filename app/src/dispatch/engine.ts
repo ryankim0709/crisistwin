@@ -13,9 +13,11 @@
  * - Households that have left queue at the zone's loading node and enter their route at most
  *   at the route's bottleneck capacity; zones whose routes share an edge split its capacity.
  *   Downstream queues are not modelled: once released, a group drives at free-flow speed.
- * - Routing avoids every edge the fire model reaches within ROUTE_LOOKAHEAD_MINUTES.
- *   Drivers already on the road re-route around such edges by themselves; a zone whose
- *   ordered exit becomes unreachable holds departures until it is given another exit.
+ * - Routing avoids every edge the fire model reaches within ROUTE_LOOKAHEAD_MINUTES, and every
+ *   edge of a planner-confirmed reported road closure passed in at start (`closedEdges`,
+ *   src/intel/closures.ts; fixed for the run). Drivers already on the road re-route around
+ *   such edges by themselves; a zone whose ordered exit becomes unreachable holds departures
+ *   until it is given another exit, and a zone that can reach no exit at start is alerted.
  * - A household is "caught" when the modelled fire reaches its home before it leaves, when
  *   fire reaches its zone's core (loading node or centroid) while it is still in the zone, or
  *   when fire reaches the road it is on. This is a model count, not a casualty estimate.
@@ -217,13 +219,17 @@ export class DispatchEngine {
   private zoneIndex: Map<string, number>;
   private stationIndex: Map<string, number>;
   private ignitions: IgnitionEvent[];
+  /** Planner-confirmed reported closures; block routing only, never the fire model. */
+  private readonly closedEdges: ReadonlySet<number> | null;
 
   constructor(
     area: DispatchArea,
     exposure: FireExposure,
     horizonMinutes: number,
     ignitions: IgnitionEvent[],
+    closedEdges?: ReadonlySet<number>,
   ) {
+    this.closedEdges = closedEdges && closedEdges.size > 0 ? closedEdges : null;
     this.area = area;
     this.exposure = exposure;
     this.horizonMinutes = horizonMinutes;
@@ -282,17 +288,42 @@ export class DispatchEngine {
     );
     this.emitIgnitions(-1, 0);
     this.checkFire(0);
+    this.alertUnreachableZones();
+  }
+
+  /** "fire" or "fire or a reported closure", for route messages. */
+  private get obstacle(): string {
+    return this.closedEdges ? "fire or a reported closure" : "fire";
+  }
+
+  /** Reported closures can cut a zone off before any fire does; say so instead of hiding it. */
+  private alertUnreachableZones(): void {
+    if (!this.closedEdges) return;
+    const blocked = this.blockedAt(0);
+    for (const zone of this.area.zones) {
+      const tree = shortestPathTree(this.area, zone.node, blocked);
+      if (this.area.exits.some((exit) => routeTo(this.area, tree, exit.node))) continue;
+      this.alert(
+        "route_blocked",
+        `${zone.name} can reach no exit without crossing ${this.obstacle}.`,
+        true,
+      );
+    }
   }
 
   get finished(): boolean {
     return this.minute >= this.horizonMinutes;
   }
 
-  /** Blocked for routing at `minute`: the fire model reaches the edge within the lookahead. */
+  /**
+   * Blocked for routing at `minute`: the fire model reaches the edge within the lookahead, or
+   * the edge is closed by a planner-confirmed reported closure.
+   */
   blockedAt(minute: number): (edge: number) => boolean {
     const arrival = this.exposure.edgeArrival;
     const limit = minute + ROUTE_LOOKAHEAD_MINUTES;
-    return (edge) => arrival[edge] <= limit;
+    const closed = this.closedEdges;
+    return (edge) => arrival[edge] <= limit || (closed !== null && closed.has(edge));
   }
 
   vehiclesPerHome(zone: number): number {
@@ -340,7 +371,9 @@ export class DispatchEngine {
       const tree = shortestPathTree(this.area, this.area.zones[index].node, blocked);
       const route = routeTo(this.area, tree, this.exitNode(order.exit_id));
       if (!route)
-        return reject(`${order.exit_id} is not reachable from ${order.zone_id} avoiding fire.`);
+        return reject(
+          `${order.exit_id} is not reachable from ${order.zone_id} avoiding ${this.obstacle}.`,
+        );
       const redirect = zone.status !== "no_order" && zone.exitId !== order.exit_id;
       if (zone.status === "no_order") {
         zone.status = "ordered";
@@ -375,7 +408,7 @@ export class DispatchEngine {
     if (order.type === "recall_unit") {
       if (unit.status === "available") return reject(`${unit.id} is already at its station.`);
       const route = routeTo(this.area, shortestPathTree(this.area, from, blocked), unit.homeNode);
-      if (!route) return reject(`${unit.id} has no fire-free route home.`);
+      if (!route) return reject(`${unit.id} has no route home avoiding ${this.obstacle}.`);
       this.sendUnit(unit, from, route, "returning", null, null);
       return { order, accepted: true, note: `Returning to ${unit.stationId}.` };
     }
@@ -392,7 +425,8 @@ export class DispatchEngine {
       shortestPathTree(this.area, from, blocked),
       this.area.zones[index].node,
     );
-    if (!route) return reject(`${unit.id} cannot reach ${order.zone_id} avoiding fire.`);
+    if (!route)
+      return reject(`${unit.id} cannot reach ${order.zone_id} avoiding ${this.obstacle}.`);
     const fromStation = unit.status === "available";
     this.sendUnit(unit, from, route, "en_route", order.task, index);
     if (fromStation) unit.holdSeconds = this.approachSeconds(unit);
@@ -531,7 +565,7 @@ export class DispatchEngine {
         else
           this.alert(
             "route_changed",
-            `Route from ${id} to ${zone.exitId} re-planned around fire.`,
+            `Route from ${id} to ${zone.exitId} re-planned around ${this.obstacle}.`,
             false,
           );
       } else if (!zone.routeBlocked) {
@@ -539,7 +573,7 @@ export class DispatchEngine {
         zone.routeBlocked = true;
         this.alert(
           "route_blocked",
-          `${this.zoneName(zone.index)} cannot reach ${zone.exitId} without crossing fire; departures are held until it gets another exit.`,
+          `${this.zoneName(zone.index)} cannot reach ${zone.exitId} without crossing ${this.obstacle}; departures are held until it gets another exit.`,
           true,
         );
       }
@@ -757,13 +791,13 @@ export class DispatchEngine {
           if (home && unit.status !== "returning") {
             this.alert(
               "unit_stranded",
-              `${unit.id} cannot reach its assignment avoiding fire; returning.`,
+              `${unit.id} cannot reach its assignment avoiding ${this.obstacle}; returning.`,
               true,
             );
             this.sendUnit(unit, from, home, "returning", null, null);
           } else {
             unit.status = "stranded";
-            this.alert("unit_stranded", `${unit.id} has no fire-free route.`, true);
+            this.alert("unit_stranded", `${unit.id} has no route avoiding ${this.obstacle}.`, true);
             continue;
           }
         }

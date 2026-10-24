@@ -145,6 +145,38 @@ returns 304. Errors are JSON: 404 `{"error": "not_found"}` for unknown/unbuilt r
 [ADR 0016](../../docs/adr/0016-resident-live-and-family.md) and
 `app/src/live/contracts.ts`.
 
+### Incident intelligence (`/api/intel/…`)
+
+Public agency pages, fetched by the Apify Actor in `actors/incident-intel/`, become source
+documents; Claude extracts candidate events from one document at a time; a planner confirms,
+maps or rejects each candidate. Full request/response shapes, field rules and examples:
+[docs/incident-intel.md](../../docs/incident-intel.md) (decision:
+[ADR 0018](../../docs/adr/0018-apify-incident-intelligence.md)). Views in `api/intel.py`,
+prompt/schema/candidate rules in `api/intel_extract.py` (pure), Apify wrapper in
+`api/intel_apify.py`. MongoDB collections `intel_runs`, `intel_documents`,
+`intel_candidates`.
+
+| Endpoint | Purpose |
+| -------- | ------- |
+| `POST /api/intel/runs` | Start the Actor on Apify (paid; 5/min). 202 `{run_id, dataset_id, status, incident, started_at}` |
+| `POST /api/intel/ingest` | Store Actor output by `run_id`, `dataset_id`, or uploaded `items` (<= 2 MB, <= 200). `sha256` is recomputed; no extraction |
+| `GET /api/intel/documents?incident=` | Stored documents (excerpt, no full text) |
+| `POST /api/intel/documents/<document_id>/extract` | Claude extraction of one document (paid; 10/min) |
+| `GET /api/intel/candidates?incident=&status=&types=&as_of=&bbox=` | Candidates, sorted by `available_at`, at most 500 |
+| `POST /api/intel/candidates/<event_id>/review` | Planner confirm/reject/reset; confirming a road event requires `mapping.point` |
+
+Every candidate is `evidence_class: "reported"` and starts `review_status: "unconfirmed"`;
+only the review endpoint changes it. Claude copies text and categorises; it never outputs
+coordinates or edge ids, and an event whose quote is not in the page is dropped. Page text is
+sent inside `<scraped_page>` tags as untrusted data. Endpoints are anonymous for the local demo,
+throttled, and answer `Cache-Control: no-store`; errors are `{"error", "detail"}`.
+
+Environment (server-side only, never `VITE_*`): `APIFY_TOKEN` and `APIFY_ACTOR_ID` enable
+runs and ingest by run/dataset id; without them (or without the `apify-client` package) those
+answer 503 `apify_unavailable`, while uploading `items`, listing, review and export still
+work. `ANTHROPIC_API_KEY` enables extraction; without it, 503 `ai_unavailable`. MongoDB
+outages answer 503 `database_unavailable`.
+
 ## Updating dependencies
 
 Edit the `.in` files, then resolve with [uv](https://docs.astral.sh/uv/pip/compile/):
@@ -156,6 +188,7 @@ uv pip compile requirements-dev.in --constraint requirements.txt --python-versio
 
 Review and keep both generated lockfiles. Installation uses pip; uv is only
 needed when changing the Python dependency set. Atlas credentials stay local, and only
-the optional explain endpoint needs a provider key (`ANTHROPIC_API_KEY`).
+the optional explain, dispatch and intel extraction endpoints need a provider key
+(`ANTHROPIC_API_KEY`); intel runs need `APIFY_TOKEN`/`APIFY_ACTOR_ID`.
 Optional existing contract tests mock the MongoDB boundary; they still require a
 syntactically valid `MONGODB_URI` environment variable to load Django settings.

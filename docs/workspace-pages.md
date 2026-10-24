@@ -20,8 +20,13 @@ content. Each page has its own URL and document title:
   timings, shelter capacity, a sample road-closure toggle, and pending results.
 - `/comparison`: baseline/candidate strategy controls, a metric comparison
   layout, compatibility requirements, and an explanation empty state.
-- `/incidents`: disconnected source status, inbox search/type controls, and an
-  optional clearly labeled synthetic evidence-review example.
+- `/incidents`: replay library, disconnected source status, inbox search/type
+  controls (a link to `/intel` for fetched reports), and an optional clearly
+  labeled synthetic evidence-review example.
+- `/intel`: review of publicly reported road, evacuation and shelter records
+  extracted from fetched pages (ADR 0018). Documents, extraction, Actor dataset
+  upload, review with road mapping, and an as-of control filtering by
+  `available_at`. Reported and unconfirmed until a planner confirms.
 - `/stress-tests`: selectable disruptions, a bounded candidate-run budget,
   investigation progress, and findings/unknowns empty states.
 

@@ -23,6 +23,7 @@ import heapq
 import json
 import math
 import re
+from collections.abc import Iterable
 from pathlib import Path
 
 from sim.geo import EARTH_RADIUS_M
@@ -167,6 +168,19 @@ def resolve_road_events(
     path = package / "normalized/events.jsonl"
     if not path.exists():
         return (), []
+    rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    return resolve_road_rows(rows, network, destinations)
+
+
+def resolve_road_rows(
+    rows: Iterable[dict],
+    network: RoadNetwork,
+    destinations: tuple[Destination, ...] = (),
+) -> tuple[tuple[TrafficEvent, ...], list[dict]]:
+    """`resolve_road_events` for events.jsonl rows already in memory (e.g. `sim.intel.load_intel_rows`).
+
+    Same matching rules, TrafficEvents and report rows; alert rows are skipped.
+    """
     geo = _Geo(network)
     nodes = network.nodes
     by_name: dict[str, list[RoadEdge]] = {}
@@ -204,10 +218,7 @@ def resolve_road_events(
 
     events: list[TrafficEvent] = []
     report: list[dict] = []
-    for line in path.read_text().splitlines():
-        if not line.strip():
-            continue
-        src = json.loads(line)
+    for src in rows:
         if src["type"] in ALERT_TYPES:
             continue
         if src["type"] not in ROAD_EVENT_TYPES:

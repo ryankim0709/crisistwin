@@ -124,7 +124,7 @@ function IncidentLibrary() {
         <Metric
           label="Live sources"
           value="0"
-          detail="Ingestion not configured; replays are historical"
+          detail={<a className="ui-text-link" href="/intel">Review fetched reports</a>}
         />
       </MetricGrid>
       <section className="ws-incident-grid" aria-label="Historical incidents">

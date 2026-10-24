@@ -345,3 +345,12 @@ the baseline `traffic.edge_ids`.
   perimeter, both runs use the same observed perimeters.
 - **Skipped variants** are listed in `index.skipped` with a reason. They are never
   silently absent.
+- **Reported closures:** `reported-closures` needs `--intel-events <events.jsonl>`, the output
+  of `python3 -m sim.intel export` (planner-confirmed `reported` candidates only; see
+  [incident-intel.md](incident-intel.md), section (d)). It snaps `road_closed`, `road_blocked`,
+  `road_access_restricted` and `road_reopened` rows with the baseline's road-event rules
+  (`sim.events.resolve_road_rows`) and applies them at `occurred_at`. Rows that do not snap,
+  or whose edges a baseline closure already closes within 30 min, are listed in
+  `details.intel_events` with `status` `unresolved` or `duplicate` and are not applied. The
+  added events keep `evidence_class: "reported"`; the variant itself is `simulated`. It is
+  skipped when the file is absent or nothing snaps.
