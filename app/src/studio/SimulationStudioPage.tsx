@@ -361,7 +361,7 @@ export default function SimulationStudioPage() {
   return (
     <main className="studio-page" id="main-content" aria-label="Simulation Studio">
       <div className="studio-stage">
-        <div className="studio-map">
+        <div className="studio-page-map">
           <StudioMap
             ignitions={scenario.ignitions}
             ignitionStates={ignitionStates}
@@ -382,7 +382,7 @@ export default function SimulationStudioPage() {
           />
         </div>
 
-        <div className="studio-status" aria-live="polite">
+        <div className="studio-page-status" aria-live="polite">
           {state.phase === "loading-landscape" && (
             <p className="studio-chip">Loading fuel and terrain data…</p>
           )}
@@ -401,7 +401,7 @@ export default function SimulationStudioPage() {
           {notice && <p className="studio-chip">{notice}</p>}
         </div>
 
-        <div className={`studio-panel${panelCollapsed ? " is-collapsed" : ""}`}>
+        <div className={`studio-page-panel${panelCollapsed ? " is-collapsed" : ""}`}>
           <ConfigPanel
             scenario={scenario}
             issues={issues}

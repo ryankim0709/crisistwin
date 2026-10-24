@@ -1,4 +1,8 @@
-/* Simulation Studio: map fills the page, the panel floats on the left, playback docks below. */
+/*
+ * Simulation Studio: map fills the page, the panel floats on the left, playback docks below.
+ * The page's wrappers are `studio-page-*` so they never collide with the `studio-map` and
+ * `studio-panel` roots that StudioMap and ConfigPanel style themselves.
+ */
 .studio-page {
   display: flex;
   flex-direction: column;
@@ -11,31 +15,34 @@
   flex: 1;
   min-height: 0;
 }
-.studio-map {
+.studio-page-map {
   position: absolute;
   inset: 0;
 }
-.studio-panel {
+.studio-page-panel {
   position: absolute;
-  top: 12px;
-  right: 12px;
+  /* Below the map's wind indicator (top left), above its scale bar (bottom left); the
+     legend and zoom controls stay uncovered on the right. A definite height lets the
+     panel scroll inside it instead of overflowing. */
+  top: 64px;
+  bottom: 44px;
+  left: 12px;
   z-index: 5;
   display: flex;
+  align-items: flex-start;
   width: min(340px, calc(100% - 24px));
-  /* Leaves the map legend (bottom right) uncovered. */
-  max-height: calc(100% - 190px);
   min-height: 0;
   pointer-events: none;
 }
-.studio-panel.is-collapsed {
+.studio-page-panel.is-collapsed {
   width: auto;
 }
-.studio-panel > * {
+.studio-page-panel > * {
   width: 100%;
   max-height: 100%;
   pointer-events: auto;
 }
-.studio-status {
+.studio-page-status {
   position: absolute;
   top: 12px;
   left: 50%;
@@ -81,7 +88,7 @@
 }
 
 @media (max-width: 900px) {
-  .studio-status {
+  .studio-page-status {
     top: auto;
     bottom: 12px;
     max-width: calc(100% - 24px);
