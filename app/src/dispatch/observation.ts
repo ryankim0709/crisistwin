@@ -106,7 +106,9 @@ export function buildObservation(inputs: ObservationInputs): Observation {
     };
   });
 
-  const threatened = zones.filter((zone) => zone.fire_eta_min !== null && zone.status !== "cleared" && zone.status !== "overrun");
+  const threatened = zones.filter(
+    (zone) => zone.fire_eta_min !== null && zone.status !== "cleared" && zone.status !== "overrun",
+  );
   const units = engine.units.map((unit) => {
     const drive: Record<string, number> = {};
     if (unit.status !== "stranded" && threatened.length > 0) {

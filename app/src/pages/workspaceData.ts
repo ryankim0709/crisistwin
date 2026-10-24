@@ -20,6 +20,8 @@ export function useJson<T>(url: string, parse: (raw: unknown) => T): Load<T> {
   const [state, setState] = useState<Load<T>>({ status: "loading" });
   useEffect(() => {
     const controller = new AbortController();
+    // Reset when the url changes; the initial state is already "loading".
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setState({ status: "loading" });
     fetch(url, { signal: controller.signal, headers: { Accept: "application/json" } })
       .then(async (response) => {

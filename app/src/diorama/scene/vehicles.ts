@@ -18,8 +18,18 @@ function wheel(x: number, z: number, r = 0.5) {
 
 function civilianGeometry() {
   return mergeAll([
-    place(paint(new RoundedBoxGeometry(2.95, 1.4, 4.5, 2, 0.45), PALETTE.civilianBody, true), 0, 1.2, 0),
-    place(paint(new RoundedBoxGeometry(2.55, 1.15, 2.45, 2, 0.42), PALETTE.civilianRoof, true), 0, 2.32, -0.3),
+    place(
+      paint(new RoundedBoxGeometry(2.95, 1.4, 4.5, 2, 0.45), PALETTE.civilianBody, true),
+      0,
+      1.2,
+      0,
+    ),
+    place(
+      paint(new RoundedBoxGeometry(2.55, 1.15, 2.45, 2, 0.42), PALETTE.civilianRoof, true),
+      0,
+      2.32,
+      -0.3,
+    ),
     box(2.15, 0.62, 0.12, 0, 2.32, 0.97, PALETTE.glass),
     ...[-1.45, 1.45].flatMap((z) => [wheel(-1.36, z, 0.6), wheel(1.36, z, 0.6)]),
   ]);
@@ -28,23 +38,35 @@ function civilianGeometry() {
 function engineGeometry() {
   const parts = [
     box(3.7, 2.9, 7.0, 0, 2.45, -1.6, PALETTE.engineRed),
-    place(paint(new RoundedBoxGeometry(3.7, 3.35, 3.2, 2, 0.42), PALETTE.engineRed, true), 0, 2.55, 3.55),
+    place(
+      paint(new RoundedBoxGeometry(3.7, 3.35, 3.2, 2, 0.42), PALETTE.engineRed, true),
+      0,
+      2.55,
+      3.55,
+    ),
     box(3.2, 1.1, 0.12, 0, 3.3, 5.17, PALETTE.glass),
     box(3.78, 0.42, 10.2, 0, 1.95, -0.05, PALETTE.engineStripe),
     box(0.2, 0.2, 6.8, -0.85, 4.05, -1.5, PALETTE.engineLadder),
     box(0.2, 0.2, 6.8, 0.85, 4.05, -1.5, PALETTE.engineLadder),
   ];
-  for (let z = -4.6; z <= 1.6; z += 1.25) parts.push(box(1.7, 0.12, 0.14, 0, 4.05, z, PALETTE.engineLadder));
+  for (let z = -4.6; z <= 1.6; z += 1.25)
+    parts.push(box(1.7, 0.12, 0.14, 0, 4.05, z, PALETTE.engineLadder));
   for (const z of [-4.0, -2.4, 3.5]) parts.push(wheel(-1.68, z, 0.75), wheel(1.68, z, 0.75));
   return mergeAll(parts);
 }
 
 function brakeGeometry() {
-  return mergeAll([box(0.62, 0.36, 0.14, -0.95, 1.35, -2.27, 0xffffff), box(0.62, 0.36, 0.14, 0.95, 1.35, -2.27, 0xffffff)]);
+  return mergeAll([
+    box(0.62, 0.36, 0.14, -0.95, 1.35, -2.27, 0xffffff),
+    box(0.62, 0.36, 0.14, 0.95, 1.35, -2.27, 0xffffff),
+  ]);
 }
 
 function lightBarGeometry() {
-  return mergeAll([box(1.15, 0.45, 0.65, -0.68, 4.45, 3.5, 0xffffff), box(1.15, 0.45, 0.65, 0.68, 4.45, 3.5, 0xffffff)]);
+  return mergeAll([
+    box(1.15, 0.45, 0.65, -0.68, 4.45, 3.5, 0xffffff),
+    box(1.15, 0.45, 0.65, 0.68, 4.45, 3.5, 0xffffff),
+  ]);
 }
 
 const BRAKE = new THREE.Color(PALETTE.brake).multiplyScalar(1.6);
@@ -62,9 +84,19 @@ type Fleet = {
 export class VehicleLayer {
   readonly group = new THREE.Group();
   private readonly surfaceHeight: SurfaceHeight;
-  private readonly bodyMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.5, metalness: 0.05 });
-  private readonly accentMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false });
-  private readonly geos: Record<VehicleKind, { body: THREE.BufferGeometry; accent: THREE.BufferGeometry }>;
+  private readonly bodyMaterial = new THREE.MeshStandardMaterial({
+    vertexColors: true,
+    roughness: 0.5,
+    metalness: 0.05,
+  });
+  private readonly accentMaterial = new THREE.MeshBasicMaterial({
+    color: 0xffffff,
+    toneMapped: false,
+  });
+  private readonly geos: Record<
+    VehicleKind,
+    { body: THREE.BufferGeometry; accent: THREE.BufferGeometry }
+  >;
   private readonly fleets: Record<VehicleKind, Fleet>;
   private pedestrians: THREE.InstancedMesh;
   private pedestrianCapacity: number;
@@ -114,7 +146,12 @@ export class VehicleLayer {
 
   private createPedestrians(capacity: number) {
     const geo = mergeAll([
-      place(paint(new THREE.CapsuleGeometry(0.55, 1.2, 3, 8), PALETTE.pedestrian, true), 0, 1.15, 0),
+      place(
+        paint(new THREE.CapsuleGeometry(0.55, 1.2, 3, 8), PALETTE.pedestrian, true),
+        0,
+        1.15,
+        0,
+      ),
       place(paint(new THREE.SphereGeometry(0.42, 8, 6), PALETTE.civilianBody, true), 0, 2.45, 0),
     ]);
     const mesh = new THREE.InstancedMesh(geo, this.bodyMaterial, capacity);
@@ -153,7 +190,11 @@ export class VehicleLayer {
   positionOf(id: string, out: THREE.Vector3): THREE.Vector3 | null {
     const v = this.snapshot?.vehicles.find((x) => x.id === id);
     if (!v || this.visibility(id) < 0.2) return null;
-    return out.set(v.p.x, this.surfaceHeight(v.p.x, v.p.z) + (v.kind === "engine" ? 4 : 2.6), v.p.z);
+    return out.set(
+      v.p.x,
+      this.surfaceHeight(v.p.x, v.p.z) + (v.kind === "engine" ? 4 : 2.6),
+      v.p.z,
+    );
   }
 
   /** Visible vehicles for screen-space picking. */
@@ -193,7 +234,11 @@ export class VehicleLayer {
       } else {
         const active = v.status === "responding" || v.status === "staged";
         // Gentle alternating pulse, not a strobe.
-        const pulse = !active ? 0.15 : reducedMotion ? 1 : 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(time * 4.2 + index * Math.PI));
+        const pulse = !active
+          ? 0.15
+          : reducedMotion
+            ? 1
+            : 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(time * 4.2 + index * Math.PI));
         this.tmpColor.copy(BLUE).multiplyScalar(pulse * 1.6);
         fleet.accent.setColorAt(index, this.tmpColor);
       }

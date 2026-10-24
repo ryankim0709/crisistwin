@@ -1,3 +1,4 @@
+import { Button, EvidenceTag, IconButton } from "../ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CaveatChip } from "./CompareTab";
 import { VARIANT_CAVEATS } from "./compare";
@@ -157,14 +158,9 @@ export default function StoryMode({
         <span className="rp-story-count">
           Story · {index + 1} / {chapters.length}
         </span>
-        <button
-          type="button"
-          className="rp-story-close"
-          onClick={onClose}
-          aria-label="Close story mode"
-        >
+        <IconButton size="sm" label="Close story mode" onClick={onClose}>
           ×
-        </button>
+        </IconButton>
       </header>
       <ol className="rp-story-dots" aria-label="Chapters">
         {chapters.map((c, i) => (
@@ -269,17 +265,12 @@ export default function StoryMode({
             </div>
             <p>
               {trafficEvidence && <EvidenceChip value={trafficEvidence} />}
-              {demandLabel && (
-                <span
-                  className={
-                    demandLabel.startsWith("FIXTURE")
-                      ? "rp-fixture-tag"
-                      : "rp-chip rp-chip--derived"
-                  }
-                >
-                  {demandLabel}
-                </span>
-              )}{" "}
+              {demandLabel &&
+                (demandLabel.startsWith("FIXTURE") ? (
+                  <EvidenceTag kind="fixture" />
+                ) : (
+                  <EvidenceTag kind="derived" />
+                ))}{" "}
               modelled vehicles, live with the clock
             </p>
           </div>
@@ -287,39 +278,34 @@ export default function StoryMode({
       )}
 
       <footer className="rp-story-actions">
-        <button
-          type="button"
-          className="rp-tour-btn"
+        <Button
+          variant="secondary"
+          size="sm"
           onClick={() => goTo(index - 1)}
           disabled={index === 0}
         >
           Back
-        </button>
+        </Button>
         {!last && (
-          <button
-            type="button"
-            className="rp-tour-btn"
-            aria-pressed={paused}
-            onClick={onTogglePause}
-          >
+          <Button variant="secondary" size="sm" aria-pressed={paused} onClick={onTogglePause}>
             {paused ? "Resume" : "Pause"}
-          </button>
+          </Button>
         )}
         {last ? (
           <>
-            <button type="button" className="rp-tour-btn" onClick={onClose}>
+            <Button variant="secondary" size="sm" onClick={onClose}>
               Explore this fire
-            </button>
+            </Button>
             {nextFire && (
-              <button type="button" className="rp-tour-btn rp-tour-btn--primary" onClick={nextFire.open}>
+              <Button size="sm" onClick={nextFire.open}>
                 Watch {nextFire.label} ▶
-              </button>
+              </Button>
             )}
           </>
         ) : (
-          <button type="button" className="rp-tour-btn rp-tour-btn--primary" onClick={() => goTo(index + 1)}>
+          <Button size="sm" onClick={() => goTo(index + 1)}>
             Next
-          </button>
+          </Button>
         )}
       </footer>
     </section>

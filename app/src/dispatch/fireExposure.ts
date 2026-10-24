@@ -60,9 +60,13 @@ export interface FireExposure {
 }
 
 /** Arrival minute of each point, by binary search over the growing footprint. */
-export function arrivalMinutes(points: readonly LonLat[], frames: readonly ScheduledFireFrame[]): Float64Array {
+export function arrivalMinutes(
+  points: readonly LonLat[],
+  frames: readonly ScheduledFireFrame[],
+): Float64Array {
   const indexed = frames.map((frame) => frame.perimeters.map((p) => indexPolygon(p.geometry)));
-  const burnedAt = (k: number, [x, y]: LonLat) => indexed[k].some((polygon) => inPolygon(polygon, x, y));
+  const burnedAt = (k: number, [x, y]: LonLat) =>
+    indexed[k].some((polygon) => inPolygon(polygon, x, y));
   const result = new Float64Array(points.length).fill(Infinity);
   const last = frames.length - 1;
   if (last < 0) return result;
@@ -80,7 +84,10 @@ export function arrivalMinutes(points: readonly LonLat[], frames: readonly Sched
   return result;
 }
 
-export function computeExposure(area: DispatchArea, frames: readonly ScheduledFireFrame[]): FireExposure {
+export function computeExposure(
+  area: DispatchArea,
+  frames: readonly ScheduledFireFrame[],
+): FireExposure {
   const midpoints = area.edges.map((edge) => edge.coords[Math.floor(edge.coords.length / 2)]);
   const zonePoints = area.zones.map((zone) => [...zone.polygon, zone.centroid]);
   const flatZonePoints = zonePoints.flat();

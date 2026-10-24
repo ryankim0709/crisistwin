@@ -39,7 +39,12 @@ export class CameraRig {
   private lastInteraction = 0;
   private driftAngle = 0;
   private driftRamp = 0;
-  private reset: { from: THREE.Spherical; fromTarget: THREE.Vector3; to: THREE.Spherical; t: number } | null = null;
+  private reset: {
+    from: THREE.Spherical;
+    fromTarget: THREE.Vector3;
+    to: THREE.Spherical;
+    t: number;
+  } | null = null;
   private readonly onStart = () => {
     this.interacting = true;
     this.atDefault = false;
@@ -61,7 +66,10 @@ export class CameraRig {
     const hd = world.depth / 2;
     for (const x of [-hw, 0, hw]) {
       for (const z of [-hd, hd]) {
-        this.fitPoints.push(new THREE.Vector3(x, BASE_Y - 3, z), new THREE.Vector3(x, heightAt(x, z) + 12, z));
+        this.fitPoints.push(
+          new THREE.Vector3(x, BASE_Y - 3, z),
+          new THREE.Vector3(x, heightAt(x, z) + 12, z),
+        );
       }
     }
     this.controls = new OrbitControls(this.camera, domElement);
@@ -103,7 +111,9 @@ export class CameraRig {
     probe.updateProjectionMatrix();
     const v = new THREE.Vector3();
     const fits = (d: number) => {
-      probe.position.setFromSpherical(new THREE.Spherical(d, DEFAULT_POLAR, DEFAULT_AZIMUTH)).add(this.defaultTarget);
+      probe.position
+        .setFromSpherical(new THREE.Spherical(d, DEFAULT_POLAR, DEFAULT_AZIMUTH))
+        .add(this.defaultTarget);
       probe.lookAt(this.defaultTarget);
       probe.updateMatrixWorld();
       for (const p of this.fitPoints) {
@@ -111,7 +121,13 @@ export class CameraRig {
         if (v.z > 1) return false;
         const px = ((v.x + 1) / 2) * w;
         const py = ((1 - v.y) / 2) * h;
-        if (px < ins.left + mx || px > w - ins.right - mx || py < ins.top + my || py > h - ins.bottom - my) return false;
+        if (
+          px < ins.left + mx ||
+          px > w - ins.right - mx ||
+          py < ins.top + my ||
+          py > h - ins.bottom - my
+        )
+          return false;
       }
       return true;
     };
@@ -189,7 +205,9 @@ export class CameraRig {
       this.snapToDefault();
       return;
     }
-    const from = new THREE.Spherical().setFromVector3(this.camera.position.clone().sub(this.controls.target));
+    const from = new THREE.Spherical().setFromVector3(
+      this.camera.position.clone().sub(this.controls.target),
+    );
     const to = this.defaultSpherical();
     // Take the short way round in azimuth.
     while (to.theta - from.theta > Math.PI) to.theta -= Math.PI * 2;

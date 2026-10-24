@@ -1,3 +1,4 @@
+import { Button } from "../../ui";
 import type { Map as MapLibreMap, MapMouseEvent } from "maplibre-gl";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReplayModel } from "../types";
@@ -25,7 +26,11 @@ export interface PerspectiveSwitcherProps {
 const MODES: { mode: PerspectiveMode; label: string; title: string }[] = [
   { mode: "observer", label: "Top-down", title: "Top-down observer view" },
   { mode: "oblique", label: "3D oblique", title: "Tilted 3D view over terrain and aerial imagery" },
-  { mode: "ground", label: "Ground POV", title: "Modelled drive along the busiest road (or click a road in 3D)" },
+  {
+    mode: "ground",
+    label: "Ground POV",
+    title: "Modelled drive along the busiest road (or click a road in 3D)",
+  },
 ];
 
 function formatDistance(m: number | null): string {
@@ -34,7 +39,13 @@ function formatDistance(m: number | null): string {
   return m < 1000 ? `≈ ${Math.round(m / 50) * 50} m` : `≈ ${(m / 1000).toFixed(1)} km`;
 }
 
-export default function PerspectiveSwitcher({ map, model, frameIndex, perimeterIndex, simTimeMs }: PerspectiveSwitcherProps) {
+export default function PerspectiveSwitcher({
+  map,
+  model,
+  frameIndex,
+  perimeterIndex,
+  simTimeMs,
+}: PerspectiveSwitcherProps) {
   const [mode, setMode] = useState<PerspectiveMode>("observer");
   const [orbit, setOrbit] = useState(() => !prefersReducedMotion());
   const [edgeId, setEdgeId] = useState<string | null>(null);
@@ -90,8 +101,9 @@ export default function PerspectiveSwitcher({ map, model, frameIndex, perimeterI
     const onClick = (event: MapMouseEvent) => {
       const layers = ROAD_PICK_LAYERS.filter((id) => map.getLayer(id));
       if (layers.length === 0) return;
-      const id = map.queryRenderedFeatures(event.point, { layers }).find((f) => typeof f.properties?.id === "string")
-        ?.properties.id as string | undefined;
+      const id = map
+        .queryRenderedFeatures(event.point, { layers })
+        .find((f) => typeof f.properties?.id === "string")?.properties.id as string | undefined;
       if (!id || !graph.byId.has(id)) return;
       setEdgeId(id);
       setMode("ground");
@@ -108,23 +120,27 @@ export default function PerspectiveSwitcher({ map, model, frameIndex, perimeterI
     <>
       <div className="pv-switcher" role="group" aria-label="Camera perspective">
         {MODES.map(({ mode: m, label, title }) => (
-          <button
+          <Button
             key={m}
-            type="button"
+            variant="ghost"
+            size="sm"
             className="pv-btn"
             aria-pressed={mode === m}
             title={title}
             onClick={() => choose(m)}
           >
             {label}
-          </button>
+          </Button>
         ))}
         {mode === "oblique" && !prefersReducedMotion() && (
           <label className="pv-orbit">
-            <input type="checkbox" checked={orbit} onChange={(e) => setOrbit(e.target.checked)} /> Slow orbit
+            <input type="checkbox" checked={orbit} onChange={(e) => setOrbit(e.target.checked)} />{" "}
+            Slow orbit
           </label>
         )}
-        {mode !== "observer" && <p className="pv-hint">Esc returns to top-down · click a road to drive it</p>}
+        {mode !== "observer" && (
+          <p className="pv-hint">Esc returns to top-down · click a road to drive it</p>
+        )}
       </div>
 
       {mode !== "observer" && (
@@ -145,7 +161,9 @@ export default function PerspectiveSwitcher({ map, model, frameIndex, perimeterI
                 <dd>{hud.roadName}</dd>
                 <dt>{hud.speedSource === "modelled" ? "Modelled speed" : "Free-flow speed"}</dt>
                 <dd>
-                  {hud.closed && hud.speedKph === 0 ? "closed (modelled)" : `${hud.speedKph.toFixed(0)} km/h`}
+                  {hud.closed && hud.speedKph === 0
+                    ? "closed (modelled)"
+                    : `${hud.speedKph.toFixed(0)} km/h`}
                 </dd>
                 <dt>Modelled vehicles on edge</dt>
                 <dd>{hud.vehicles.toLocaleString("en-US")}</dd>
@@ -153,9 +171,15 @@ export default function PerspectiveSwitcher({ map, model, frameIndex, perimeterI
                 <dd>{formatDistance(hud.fireDistanceM)}</dd>
               </dl>
             ) : (
-              <p>{graph.edges.length === 0 ? "No road network in this bundle." : "Positioning camera…"}</p>
+              <p>
+                {graph.edges.length === 0
+                  ? "No road network in this bundle."
+                  : "Positioning camera…"}
+              </p>
             )}
-            <p className="pv-hud-note">Simulated traffic; camera follows the road network, not a tracked vehicle.</p>
+            <p className="pv-hud-note">
+              Simulated traffic; camera follows the road network, not a tracked vehicle.
+            </p>
           </section>
         </>
       )}

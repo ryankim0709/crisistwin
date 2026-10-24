@@ -1,4 +1,5 @@
 import { memo } from "react";
+import { Metric, Panel } from "../../ui";
 import type { Counters as CounterValues } from "../types";
 import { formatCount } from "./format";
 
@@ -24,17 +25,23 @@ function Counters({ counters }: CountersProps) {
   ];
 
   return (
-    <dl className="dio-counters dio-panel" aria-label="Simulated counters">
+    <Panel glass compact className="dio-counters" aria-label="Simulated counters">
       {items.map((item) => (
-        <div key={item.key} className={`dio-counter dio-counter--${item.key}`}>
-          <dt>{item.label}</dt>
-          <dd>
-            <span className="dio-counter-value">{item.value}</span>
-            {item.total !== undefined && <span className="dio-counter-total"> / {item.total}</span>}
-          </dd>
-        </div>
+        <Metric
+          key={item.key}
+          className={`dio-counter dio-counter--${item.key}`}
+          label={item.label}
+          value={
+            <>
+              {item.value}
+              {item.total !== undefined && (
+                <span className="dio-counter-total"> / {item.total}</span>
+              )}
+            </>
+          }
+        />
       ))}
-    </dl>
+    </Panel>
   );
 }
 

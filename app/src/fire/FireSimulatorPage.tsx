@@ -2,7 +2,8 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } f
 import { useMediaQuery } from "../diorama/ui/format";
 import type { FireDioramaSceneApi, GroundClickMode } from "./diorama/types";
 import { FireDioramaScene } from "./diorama/FireDioramaScene";
-import AreaPicker, { AREA_PRESETS, DEFAULT_AREA } from "./ui/AreaPicker";
+import AreaPicker from "./ui/AreaPicker";
+import { AREA_PRESETS, DEFAULT_AREA } from "./ui/areaPresets";
 import {
   AREA_SIZES,
   DEFAULT_AREA_SIZE,
@@ -24,11 +25,7 @@ import {
   fetchRegionLandscape,
 } from "./landscapePackage";
 import { DEFAULT_REGION_ID, CALIFORNIA_REGIONS, REGION_AREAS } from "./regions";
-import {
-  landscapeCellMetersFor,
-  loadLandscape,
-  type LandscapeGrid,
-} from "./landscape";
+import { landscapeCellMetersFor, loadLandscape, type LandscapeGrid } from "./landscape";
 import type { FuelMoisture } from "./rothermel";
 import {
   DEFAULT_MIDFLAME_ADJUSTMENT,
@@ -50,6 +47,18 @@ import {
   type GeoPoint,
 } from "./spread";
 import { fetchNwsWind, type NwsWindReading } from "./weather";
+import {
+  Button,
+  EvidenceTag,
+  Facts,
+  IconButton,
+  LoadingState,
+  Notice,
+  Panel,
+  SegmentedControl,
+  Spinner,
+  type SegmentedOption,
+} from "../ui";
 import "./fire.css";
 
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
@@ -138,6 +147,18 @@ type Provenance =
 const CUSTOM_SELECTION = "custom";
 
 type ViewMode = "diorama" | "satellite";
+const VIEW_OPTIONS: readonly SegmentedOption<ViewMode>[] = [
+  { value: "diorama", label: "Diorama", title: "Diorama" },
+  {
+    value: "satellite",
+    label: "Satellite",
+    title: "Satellite (USGS aerial imagery, needs a network connection)",
+  },
+];
+const CLICK_MODE_OPTIONS: readonly SegmentedOption<GroundClickMode>[] = [
+  { value: "origin", label: "Ignition point" },
+  { value: "wind", label: "Wind direction", title: "Needs an ignition point first" },
+];
 const VIEW_STORAGE_KEY = "crisistwin.fire.view";
 /** How long the "outside the loaded region" hint stays up. */
 const OUTSIDE_HINT_MS = 3500;
@@ -151,9 +172,7 @@ function readStoredView(): ViewMode {
 }
 
 type CatalogState =
-  | { status: "loading" }
-  | { status: "ready"; ids: ReadonlySet<string> }
-  | { status: "error" };
+  { status: "loading" } | { status: "ready"; ids: ReadonlySet<string> } | { status: "error" };
 
 type LandscapeState =
   | { status: "idle" }
@@ -186,9 +205,7 @@ function areaLabel(center: GeoPoint): string {
       candidate.point.latitude === center.latitude &&
       candidate.point.longitude === center.longitude,
   );
-  return preset
-    ? preset.label
-    : `${center.latitude.toFixed(2)}, ${center.longitude.toFixed(2)}`;
+  return preset ? preset.label : `${center.latitude.toFixed(2)}, ${center.longitude.toFixed(2)}`;
 }
 
 export default function FireSimulatorPage() {
@@ -248,9 +265,7 @@ export default function FireSimulatorPage() {
   const radiusMeters = region
     ? region.radiusMeters
     : effectiveRadiusMeters(horizonMinutes, areaSize);
-  const requestedCellMeters = region
-    ? region.cellMeters
-    : landscapeCellMetersFor(radiusMeters);
+  const requestedCellMeters = region ? region.cellMeters : landscapeCellMetersFor(radiusMeters);
   const centerLatitude = region ? region.center.latitude : areaCenter.latitude;
   const centerLongitude = region ? region.center.longitude : areaCenter.longitude;
 
@@ -840,7 +855,6 @@ export default function FireSimulatorPage() {
                 : "3D landscape. Click to aim the wind from the ignition point toward that location."
             }
           />
-
         ) : (
           <div className="fr-satellite">
             <SatelliteFireMap
@@ -861,9 +875,8 @@ export default function FireSimulatorPage() {
           <div className="fr-error fr-panel" role="alert">
             <p className="fr-error-title">3D view unavailable in this browser</p>
             <p>
-              The fire diorama needs WebGL, which appears to be disabled or unsupported here, so
-              the landscape cannot be drawn. The scenario controls and the numeric results still
-              work.
+              The fire diorama needs WebGL, which appears to be disabled or unsupported here, so the
+              landscape cannot be drawn. The scenario controls and the numeric results still work.
             </p>
             <p className="fr-error-detail">{sceneStatus.message}</p>
           </div>
@@ -871,12 +884,12 @@ export default function FireSimulatorPage() {
 
         {landscape.status === "loading" && (
           <div className="fr-veil" role="status">
-            <span className="fr-veil-dot" aria-hidden="true" />
+            <Spinner size="lg" />
             <div>
               <p>Sculpting terrain from LANDFIRE fuels and elevation…</p>
               <p className="fr-veil-note">
-                {formatKm(radiusMeters)} km radius · {requestedCellMeters} m cells. Large areas
-                take longer.
+                {formatKm(radiusMeters)} km radius · {requestedCellMeters} m cells. Large areas take
+                longer.
               </p>
               {storedUnavailable && (
                 <p className="fr-veil-note">
@@ -892,16 +905,10 @@ export default function FireSimulatorPage() {
             <p className="fr-error-title">The landscape could not be loaded</p>
             <p>{landscape.message}</p>
             <div className="fr-error-actions">
-              <button
-                type="button"
-                className="fr-btn fr-btn--primary"
-                onClick={() => setLoadAttempt((value) => value + 1)}
-              >
-                Retry
-              </button>
-              <button type="button" className="fr-btn" onClick={() => setAreaPickerOpen(true)}>
+              <Button onClick={() => setLoadAttempt((value) => value + 1)}>Retry</Button>
+              <Button variant="secondary" onClick={() => setAreaPickerOpen(true)}>
                 Change area
-              </button>
+              </Button>
             </div>
           </div>
         )}
@@ -917,12 +924,10 @@ export default function FireSimulatorPage() {
               <div>
                 <h1 id="fire-controls-title">Fire spread simulator</h1>
               </div>
-              <button
-                type="button"
-                className="fr-icon-btn"
+              <IconButton
+                label={scenarioOpen ? "Collapse scenario panel" : "Expand scenario panel"}
                 aria-expanded={scenarioOpen}
                 aria-controls="fr-scenario-body"
-                aria-label={scenarioOpen ? "Collapse scenario panel" : "Expand scenario panel"}
                 onClick={() => setScenarioOpenChoice(!scenarioOpen)}
               >
                 <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
@@ -933,7 +938,7 @@ export default function FireSimulatorPage() {
                     strokeWidth="1.5"
                   />
                 </svg>
-              </button>
+              </IconButton>
             </header>
 
             <div className="fr-scenario-body" id="fr-scenario-body" hidden={!scenarioOpen}>
@@ -942,6 +947,7 @@ export default function FireSimulatorPage() {
                   <label htmlFor="region">Region</label>
                   <select
                     id="region"
+                    className="ui-input"
                     value={region ? region.id : ""}
                     onChange={(event) => {
                       const id = event.target.value;
@@ -962,21 +968,22 @@ export default function FireSimulatorPage() {
                       </optgroup>
                     ))}
                   </select>
-                  <button
-                    type="button"
+                  <Button
                     id="fr-change-area"
-                    className="fr-btn fr-btn--small"
+                    variant="secondary"
+                    size="sm"
                     onClick={() => setAreaPickerOpen(true)}
                     aria-haspopup="dialog"
                   >
                     Custom…
-                  </button>
+                  </Button>
                 </div>
                 {!region && (
                   <div className="fr-field-inline fr-area-size">
                     <label htmlFor="area-size">Area size</label>
                     <select
                       id="area-size"
+                      className="ui-input"
                       value={areaSize}
                       onChange={(event) => setAreaSize(event.target.value as AreaSizeId)}
                     >
@@ -989,36 +996,29 @@ export default function FireSimulatorPage() {
                   </div>
                 )}
                 {storedUnavailable && (
-                  <p className="fr-alert" role="status">
+                  <Notice className="fr-compact-notice">
                     Stored region unavailable — loading live from LANDFIRE instead.
-                  </p>
+                  </Notice>
                 )}
               </div>
 
-              <fieldset className="fr-field">
-                <legend>Clicking the landscape sets</legend>
-                <div className="fr-segmented">
-                  <label>
-                    <input
-                      type="radio"
-                      name="click-mode"
-                      checked={clickMode === "origin"}
-                      onChange={() => setClickMode("origin")}
-                    />
-                    <span>Ignition point</span>
-                  </label>
-                  <label>
-                    <input
-                      type="radio"
-                      name="click-mode"
-                      checked={clickMode === "wind"}
-                      disabled={!origin}
-                      onChange={() => setClickMode("wind")}
-                    />
-                    <span>Wind direction</span>
-                  </label>
-                </div>
-              </fieldset>
+              <div className="fr-field">
+                <span className="fr-field-title">Clicking the landscape sets</span>
+                <SegmentedControl
+                  className="fr-click-mode"
+                  label="Clicking the landscape sets"
+                  options={CLICK_MODE_OPTIONS.map((option) =>
+                    option.value === "wind" && !origin ? { ...option, disabled: true } : option,
+                  )}
+                  value={clickMode}
+                  onChange={setClickMode}
+                />
+                {!origin && (
+                  <p className="fr-hint">
+                    Place an ignition point before aiming the wind by click.
+                  </p>
+                )}
+              </div>
 
               <div className="fr-field">
                 <label htmlFor="wind-speed">
@@ -1039,6 +1039,7 @@ export default function FireSimulatorPage() {
                 <label htmlFor="wind-direction">Wind from (°)</label>
                 <input
                   id="wind-direction"
+                  className="ui-input"
                   type="number"
                   min={0}
                   max={359}
@@ -1053,24 +1054,22 @@ export default function FireSimulatorPage() {
               </div>
 
               <div className="fr-field">
-                <button
-                  type="button"
-                  className="fr-btn fr-btn--small fr-btn--block"
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  block
                   onClick={lookUpNwsWind}
                   disabled={!origin || windSource.status === "loading"}
                 >
                   Use current NWS wind
-                </button>
+                </Button>
                 {windSource.status === "loading" && (
-                  <div className="fr-loading" role="status">
-                    <span className="fr-spinner" aria-hidden="true" />
-                    Reading the National Weather Service hourly forecast…
-                  </div>
+                  <LoadingState>Reading the National Weather Service hourly forecast…</LoadingState>
                 )}
                 {windSource.status === "error" && (
-                  <p className="fr-alert" role="alert">
+                  <Notice tone="danger" className="fr-compact-notice">
                     {windSource.message}
-                  </p>
+                  </Notice>
                 )}
                 {windSource.status === "ready" && (
                   <p className="fr-status">
@@ -1083,15 +1082,16 @@ export default function FireSimulatorPage() {
                 <span className="fr-field-title">Fuel moisture</span>
                 <div className="fr-preset-row">
                   {MOISTURE_PRESETS.map((preset) => (
-                    <button
+                    <Button
                       key={preset.id}
-                      type="button"
+                      variant="secondary"
+                      size="sm"
                       aria-pressed={presetId === preset.id}
                       title={preset.description}
                       onClick={() => applyPreset(preset.id)}
                     >
                       {preset.label}
-                    </button>
+                    </Button>
                   ))}
                 </div>
               </div>
@@ -1138,79 +1138,63 @@ export default function FireSimulatorPage() {
                 idleText="Shares the fire with the resident app once you place an ignition."
               />
 
-              <button
-                type="button"
-                className="fr-btn fr-btn--small fr-btn--block"
+              <Button
+                variant="secondary"
+                size="sm"
+                block
                 onClick={clearScenario}
                 disabled={!origin}
               >
                 Clear scenario
-              </button>
-
+              </Button>
             </div>
           </section>
 
           {!scenarioOpen && (
-            <button
-              type="button"
-              className="fr-btn fr-scenario-open"
+            <Button
+              variant="secondary"
+              className="fr-scenario-open"
               aria-expanded={false}
               aria-controls="fr-scenario"
               onClick={() => setScenarioOpenChoice(true)}
+              icon={
+                <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+                  <path d="M2 4.5h12M2 8h12M2 11.5h12" stroke="currentColor" strokeWidth="1.6" />
+                </svg>
+              }
             >
-              <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-                <path d="M2 4.5h12M2 8h12M2 11.5h12" stroke="currentColor" strokeWidth="1.6" />
-              </svg>
               Scenario
-            </button>
+            </Button>
           )}
 
           <div className="fr-notice">
-            <div className="fr-view fr-panel" role="radiogroup" aria-label="View">
-              <span className="fr-view-label" aria-hidden="true">
-                View
-              </span>
-              <label>
-                <input
-                  type="radio"
-                  name="fire-view"
-                  checked={view === "diorama"}
-                  onChange={() => chooseView("diorama")}
-                />
-                <span title="Diorama">
-                  <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-                    <path d="M1.5 12.5 8 9l6.5 3.5L8 15.5zM3 8.5 8 6l5 2.5M5 4.5 8 3l3 1.5" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
-                  </svg>
-                  <span className="fr-view-text">Diorama</span>
-                </span>
-              </label>
-              <label>
-                <input
-                  type="radio"
-                  name="fire-view"
-                  checked={view === "satellite"}
-                  onChange={() => chooseView("satellite")}
-                />
-                <span title="Satellite (USGS aerial imagery, needs a network connection)">
-                  <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-                    <circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" strokeWidth="1.3" />
-                    <path d="M2.5 8h11M8 2.5c-2 2-2 9 0 11M8 2.5c2 2 2 9 0 11" fill="none" stroke="currentColor" strokeWidth="1.1" />
-                  </svg>
-                  <span className="fr-view-text">Satellite</span>
-                </span>
-              </label>
-            </div>
+            <Panel glass className="fr-view" aria-label="Map view">
+              <SegmentedControl
+                label="View"
+                options={VIEW_OPTIONS}
+                value={view}
+                onChange={chooseView}
+              />
+            </Panel>
           </div>
 
           {(run || result.error) && (
-            <section className="fr-results fr-panel" aria-label="Fire results" data-open={detailsOpen}>
+            <section
+              className="fr-results fr-panel"
+              aria-label="Fire results"
+              data-open={detailsOpen}
+            >
               {result.error && (
-                <p className="fr-alert" role="alert">
+                <Notice tone="danger" className="fr-compact-notice">
                   {result.error}
-                </p>
+                </Notice>
               )}
               {run && (
                 <>
+                  <div className="fr-results-tag">
+                    <EvidenceTag kind="simulated" />
+                    <span>Model output, not an observed fire</span>
+                  </div>
                   <dl className="fr-metrics">
                     <div>
                       <dt>Burned area (simulated)</dt>
@@ -1242,14 +1226,17 @@ export default function FireSimulatorPage() {
                       </dd>
                     </div>
                   </dl>
-                  <button
-                    type="button"
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     className="fr-details-toggle"
                     aria-expanded={detailsOpen}
                     aria-controls="fr-details"
                     onClick={() => setDetailsOpen((open) => !open)}
                   >
-                    <span className="fr-details-label">{detailsOpen ? "Hide details" : "Details"}</span>
+                    <span className="fr-details-label">
+                      {detailsOpen ? "Hide details" : "Details"}
+                    </span>
                     <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
                       <path
                         d={detailsOpen ? "M2.5 7.5 6 4l3.5 3.5" : "M2.5 4.5 6 8l3.5-3.5"}
@@ -1258,67 +1245,94 @@ export default function FireSimulatorPage() {
                         strokeWidth="1.5"
                       />
                     </svg>
-                  </button>
+                  </Button>
                   <div id="fr-details" className="fr-details" hidden={!detailsOpen}>
                     <div className="fr-card">
-                      <div className="fr-card-row fr-mix-row">
-                        <span>Whole-run mix</span>
-                        <strong>
-                          Spotting{" "}
-                          {run.appliedOptions.spotting.enabled
-                            ? formatShare(run.arrivalBreakdown.spottingSquareMeters, breakdownTotal)
-                            : "off"}{" "}
-                          · Structures{" "}
-                          {run.appliedOptions.structureSpread.enabled
-                            ? formatShare(run.arrivalBreakdown.structureSquareMeters, breakdownTotal)
-                            : "off"}{" "}
-                          · Crown{" "}
-                          {run.crownFire.modelled
-                            ? formatShare(crownShareSquareMeters, crownTotal)
-                            : "n/a"}
-                        </strong>
+                      <div className="fr-mix-row">
+                        <Facts
+                          items={[
+                            {
+                              label: "Whole-run mix",
+                              value: (
+                                <>
+                                  Spotting{" "}
+                                  {run.appliedOptions.spotting.enabled
+                                    ? formatShare(
+                                        run.arrivalBreakdown.spottingSquareMeters,
+                                        breakdownTotal,
+                                      )
+                                    : "off"}{" "}
+                                  · Structures{" "}
+                                  {run.appliedOptions.structureSpread.enabled
+                                    ? formatShare(
+                                        run.arrivalBreakdown.structureSquareMeters,
+                                        breakdownTotal,
+                                      )
+                                    : "off"}{" "}
+                                  · Crown{" "}
+                                  {run.crownFire.modelled
+                                    ? formatShare(crownShareSquareMeters, crownTotal)
+                                    : "n/a"}
+                                </>
+                              ),
+                            },
+                          ]}
+                        />
                       </div>
-                      <div className="fr-card-row">
-                        <span>Fuel at ignition</span>
-                        <strong>{run.ignition.fuelLabel}</strong>
-                      </div>
-                      <div className="fr-card-row">
-                        <span>Head rate of spread</span>
-                        <strong>
-                          {(run.ignition.spread.headRateFeetPerMinute * 0.3048).toFixed(1)} m/min
-                        </strong>
-                      </div>
-                      <div className="fr-card-row">
-                        <span>Flame length</span>
-                        <strong>
-                          {(run.ignition.spread.flameLengthFeet * 0.3048).toFixed(1)} m
-                        </strong>
-                      </div>
-                      <div className="fr-card-row">
-                        <span>Slope · elevation</span>
-                        <strong>
-                          {run.ignition.slopePercent.toFixed(0)}% ·{" "}
-                          {run.ignition.elevationMeters.toFixed(0)} m
-                        </strong>
-                      </div>
-                      <div className="fr-card-row">
-                        <span>Burnable in modelled area</span>
-                        <strong>{(run.burnableFraction * 100).toFixed(0)}%</strong>
-                      </div>
-                      <div className="fr-card-row">
-                        <span>Ignition point (WGS84)</span>
-                        <strong>
-                          {run.scenario.origin.latitude.toFixed(5)},{" "}
-                          {run.scenario.origin.longitude.toFixed(5)}
-                        </strong>
-                      </div>
-                      <div className="fr-card-row">
-                        <span>Grid · solve time</span>
-                        <strong>
-                          {run.cellSizeMeters.toFixed(0)} m · {run.computeMilliseconds.toFixed(0)}{" "}
-                          ms
-                        </strong>
-                      </div>
+                      <Facts
+                        items={[
+                          {
+                            label: "Fuel at ignition",
+                            value: run.ignition.fuelLabel,
+                          },
+                          {
+                            label: "Head rate of spread",
+                            value: (
+                              <>
+                                {(run.ignition.spread.headRateFeetPerMinute * 0.3048).toFixed(1)}{" "}
+                                m/min
+                              </>
+                            ),
+                          },
+                          {
+                            label: "Flame length",
+                            value: (
+                              <>{(run.ignition.spread.flameLengthFeet * 0.3048).toFixed(1)} m</>
+                            ),
+                          },
+                          {
+                            label: "Slope · elevation",
+                            value: (
+                              <>
+                                {run.ignition.slopePercent.toFixed(0)}% ·{" "}
+                                {run.ignition.elevationMeters.toFixed(0)} m
+                              </>
+                            ),
+                          },
+                          {
+                            label: "Burnable in modelled area",
+                            value: <>{(run.burnableFraction * 100).toFixed(0)}%</>,
+                          },
+                          {
+                            label: "Ignition point (WGS84)",
+                            value: (
+                              <>
+                                {run.scenario.origin.latitude.toFixed(5)},{" "}
+                                {run.scenario.origin.longitude.toFixed(5)}
+                              </>
+                            ),
+                          },
+                          {
+                            label: "Grid · solve time",
+                            value: (
+                              <>
+                                {run.cellSizeMeters.toFixed(0)} m ·{" "}
+                                {run.computeMilliseconds.toFixed(0)} ms
+                              </>
+                            ),
+                          },
+                        ]}
+                      />
                     </div>
 
                     <div className="fr-card">
@@ -1343,34 +1357,37 @@ export default function FireSimulatorPage() {
                       <h2>How the fire spread (simulated)</h2>
                       <p>
                         Every burned cell is credited to whichever mechanism reached it first,
-                        measured over the whole run to{" "}
-                        {formatDuration(run.scenario.horizonMinutes)} rather than at the elapsed
-                        time shown.
+                        measured over the whole run to {formatDuration(run.scenario.horizonMinutes)}{" "}
+                        rather than at the elapsed time shown.
                       </p>
                       {spreadShares && breakdownTotal > 0 ? (
                         <>
-                          <div className="fr-card-row">
-                            <span>Surface spread through fuels (modelled)</span>
-                            <strong>{spreadShares.surface}</strong>
-                          </div>
-                          <div className="fr-card-row">
-                            <span>Ember spotting (assumption)</span>
-                            <strong>{spreadShares.spotting}</strong>
-                          </div>
-                          <div className="fr-card-row">
-                            <span>Structure-to-structure (assumption)</span>
-                            <strong>{spreadShares.structure}</strong>
-                          </div>
-                          <div className="fr-card-row">
-                            <span>Developed ground in modelled area</span>
-                            <strong>{(run.developedFraction * 100).toFixed(0)}%</strong>
-                          </div>
+                          <Facts
+                            items={[
+                              {
+                                label: "Surface spread through fuels (modelled)",
+                                value: spreadShares.surface,
+                              },
+                              {
+                                label: "Ember spotting (assumption)",
+                                value: spreadShares.spotting,
+                              },
+                              {
+                                label: "Structure-to-structure (assumption)",
+                                value: spreadShares.structure,
+                              },
+                              {
+                                label: "Developed ground in modelled area",
+                                value: <>{(run.developedFraction * 100).toFixed(0)}%</>,
+                              },
+                            ]}
+                          />
                           <p>
-                            Only the surface line comes from the Rothermel physics. The spotting
-                            and structure-to-structure lines are the assumptions you switched on:
-                            the more of the burn they account for, the less of this run is a
-                            validated fire model. Developed ground is read from the LANDFIRE fuel
-                            map, not simulated.
+                            Only the surface line comes from the Rothermel physics. The spotting and
+                            structure-to-structure lines are the assumptions you switched on: the
+                            more of the burn they account for, the less of this run is a validated
+                            fire model. Developed ground is read from the LANDFIRE fuel map, not
+                            simulated.
                           </p>
                         </>
                       ) : (
@@ -1385,37 +1402,35 @@ export default function FireSimulatorPage() {
                       <h2>Kind of fire (simulated)</h2>
                       {run.crownFire.modelled ? (
                         <>
-                          <div className="fr-card-row">
-                            <span>Surface fire</span>
-                            <strong>
-                              {formatShareAndArea(
-                                run.crownFireBreakdown.surfaceSquareMeters,
-                                crownTotal,
-                              )}
-                            </strong>
-                          </div>
-                          <div className="fr-card-row">
-                            <span>Passive crown (torching)</span>
-                            <strong>
-                              {formatShareAndArea(
-                                run.crownFireBreakdown.passiveCrownSquareMeters,
-                                crownTotal,
-                              )}
-                            </strong>
-                          </div>
-                          <div className="fr-card-row">
-                            <span>Active crown</span>
-                            <strong>
-                              {formatShareAndArea(
-                                run.crownFireBreakdown.activeCrownSquareMeters,
-                                crownTotal,
-                              )}
-                            </strong>
-                          </div>
-                          <div className="fr-card-row">
-                            <span>Length-to-breadth of active crown cells</span>
-                            <strong>{run.crownFire.activeCrownLengthToBreadth.toFixed(2)}</strong>
-                          </div>
+                          <Facts
+                            items={[
+                              {
+                                label: "Surface fire",
+                                value: formatShareAndArea(
+                                  run.crownFireBreakdown.surfaceSquareMeters,
+                                  crownTotal,
+                                ),
+                              },
+                              {
+                                label: "Passive crown (torching)",
+                                value: formatShareAndArea(
+                                  run.crownFireBreakdown.passiveCrownSquareMeters,
+                                  crownTotal,
+                                ),
+                              },
+                              {
+                                label: "Active crown",
+                                value: formatShareAndArea(
+                                  run.crownFireBreakdown.activeCrownSquareMeters,
+                                  crownTotal,
+                                ),
+                              },
+                              {
+                                label: "Length-to-breadth of active crown cells",
+                                value: run.crownFire.activeCrownLengthToBreadth.toFixed(2),
+                              },
+                            ]}
+                          />
                           <p>
                             Foliar moisture assumed at{" "}
                             {(run.crownFire.foliarMoistureFraction * 100).toFixed(0)}%. Crown
@@ -1429,7 +1444,6 @@ export default function FireSimulatorPage() {
                         </p>
                       )}
                     </div>
-
                   </div>
                 </>
               )}
@@ -1439,8 +1453,8 @@ export default function FireSimulatorPage() {
           {warnings.length > 0 && (
             <ul className="fr-warnings" aria-label="Run warnings">
               {warnings.map((warning) => (
-                <li className="fr-warning" key={warning.key} role="status">
-                  {warning.text}
+                <li key={warning.key} role="status">
+                  <Notice className="fr-compact-notice">{warning.text}</Notice>
                 </li>
               ))}
             </ul>
@@ -1452,7 +1466,12 @@ export default function FireSimulatorPage() {
             </p>
           )}
 
-          <FireLegend view={view} windTowardDegrees={windTowardDegrees} showFuel={showFuel} defaultOpen={wide} />
+          <FireLegend
+            view={view}
+            windTowardDegrees={windTowardDegrees}
+            showFuel={showFuel}
+            defaultOpen={wide}
+          />
 
           <FireDock
             playback={playback}

@@ -66,26 +66,19 @@ export function useStudioRun(): StudioRunController {
 
   useEffect(() => stopInFlight, [stopInFlight]);
 
-  const fail = useCallback(
-    (requestId: number, message: string, problems: IgnitionProblem[]) => {
-      if (requestId !== requestIdRef.current) return;
-      setState((previous) => ({
-        phase: "failed",
-        requestId,
-        result: previous.result,
-        stale: previous.result !== null,
-        error: { message, problems },
-      }));
-    },
-    [],
-  );
+  const fail = useCallback((requestId: number, message: string, problems: IgnitionProblem[]) => {
+    if (requestId !== requestIdRef.current) return;
+    setState((previous) => ({
+      phase: "failed",
+      requestId,
+      result: previous.result,
+      stale: previous.result !== null,
+      error: { message, problems },
+    }));
+  }, []);
 
   const solve = useCallback(
-    (
-      requestId: number,
-      snapshot: StudioScenario,
-      landscape: CachedLandscape,
-    ) => {
+    (requestId: number, snapshot: StudioScenario, landscape: CachedLandscape) => {
       setState((previous) => ({ ...previous, phase: "computing", requestId, error: null }));
       if (workerRef.current === null) {
         const worker = new Worker(new URL("./solver.worker.ts", import.meta.url), {

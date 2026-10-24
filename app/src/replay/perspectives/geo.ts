@@ -36,7 +36,8 @@ export interface Polyline {
 
 export function polyline(coords: LngLat[]): Polyline {
   const cum = [0];
-  for (let i = 1; i < coords.length; i += 1) cum.push(cum[i - 1] + distanceM(coords[i - 1], coords[i]));
+  for (let i = 1; i < coords.length; i += 1)
+    cum.push(cum[i - 1] + distanceM(coords[i - 1], coords[i]));
   return { coords, cum };
 }
 
@@ -68,7 +69,8 @@ function inRing(p: LngLat, ring: LngLat[]): boolean {
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
     const [xi, yi] = ring[i];
     const [xj, yj] = ring[j];
-    if (yi > p[1] !== yj > p[1] && p[0] < ((xj - xi) * (p[1] - yi)) / (yj - yi) + xi) inside = !inside;
+    if (yi > p[1] !== yj > p[1] && p[0] < ((xj - xi) * (p[1] - yi)) / (yj - yi) + xi)
+      inside = !inside;
   }
   return inside;
 }
@@ -148,14 +150,25 @@ export function buildRoadGraph(model: ReplayModel): RoadGraph {
   trafficToRoad.forEach((ri, ti) => {
     if (ri >= 0) roadToTraffic.set(ri, ti);
   });
-  return { edges, byId, outgoing, lines: edges.map((e) => polyline(e.coords)), trafficToRoad, roadToTraffic };
+  return {
+    edges,
+    byId,
+    outgoing,
+    lines: edges.map((e) => polyline(e.coords)),
+    trafficToRoad,
+    roadToTraffic,
+  };
 }
 
 /**
  * The connected edge to continue onto at the end of `road`: the straightest outgoing edge that
  * is not the reverse direction of the same segment, preferring open edges. Null at a dead end.
  */
-export function nextEdge(graph: RoadGraph, road: number, closedRoads: ReadonlySet<number>): number | null {
+export function nextEdge(
+  graph: RoadGraph,
+  road: number,
+  closedRoads: ReadonlySet<number>,
+): number | null {
   const edge = graph.edges[road];
   const n = edge.coords.length;
   if (n < 2) return null;
