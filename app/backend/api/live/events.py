@@ -67,7 +67,7 @@ class _Clock:
 
     def __init__(self, incident_id: str) -> None:
         self.doc = drill_doc(incident_id) or {}
-        self.end = get_index().drill.clock_end
+        self.end = get_index(incident_id).drill.clock_end
 
     def at(self, wall: datetime) -> datetime | None:
         started = self.doc.get("started_at")

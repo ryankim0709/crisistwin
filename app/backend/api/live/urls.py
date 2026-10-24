@@ -11,6 +11,7 @@ urlpatterns = [
     path("incidents/<str:incident_id>/public-map", views.public_map, name="live-public-map"),
     path("incidents/<str:incident_id>/prompts", views.prompts, name="live-prompts"),
     path("incidents/<str:incident_id>/tasks", views.create_task, name="live-create-task"),
+    path("incidents/<str:incident_id>/board", views.task_board, name="live-board"),
     path("incidents/<str:incident_id>/impact", views.impact, name="live-impact"),
     path("incidents/<str:incident_id>/route", views.route, name="live-route"),
     path("incidents/<str:incident_id>/situation", views.situation, name="live-situation"),

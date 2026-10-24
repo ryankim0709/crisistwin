@@ -1,4 +1,4 @@
-"""The drill: Camp replay bundle data and the drill clock.
+"""The drill: replay bundle data (Camp, or a Studio drill package) and the drill clock.
 
 Bundle format: docs/replay-bundle.md. Clock contract: docs/live-reports.md "Drill clock".
 """
@@ -322,6 +322,14 @@ def load_drill(bundle_path: str | Path, incident_id: str = INCIDENT_ID) -> Drill
         observations=tuple(observations),
         fire_model=fire_model,
     )
+
+
+def default_replay_start(drill: Drill) -> datetime:
+    """Where the drill clock starts unless the controller picks a time: ``DEFAULT_REPLAY_START``
+    for the Camp replay, else the drill's ``clock_start`` (a Studio package starts at T+0)."""
+    if drill.clock_start <= DEFAULT_REPLAY_START < drill.clock_end:
+        return DEFAULT_REPLAY_START
+    return drill.clock_start
 
 
 def replay_now(

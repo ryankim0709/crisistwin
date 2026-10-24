@@ -71,6 +71,8 @@ def render(value: Any, drop: Iterable[str] = ("_id",)) -> Any:
 def report_json(doc: Mapping[str, Any]) -> dict[str, Any]:
     body = render(doc, drop=("_id", "updated_at", "merged_into"))
     body.setdefault("replay_at", None)
+    body.setdefault("method", "explicit")
+    body.setdefault("speed_class", None)
     body.setdefault("edited_at", None)
     body.setdefault("withdrawn_at", None)
     body.setdefault("revisions", [])
@@ -78,7 +80,7 @@ def report_json(doc: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def task_json(doc: Mapping[str, Any]) -> dict[str, Any]:
-    body = render(doc, drop=("_id", "accepted_at", "answer", "closed_at"))
+    body = render(doc, drop=("_id", "accepted_at", "answer", "closed_at", "place_id"))
     body.setdefault("assignee", None)
     body.setdefault("note", None)
     return body
@@ -218,6 +220,7 @@ def public_item_json(item: public.PublicItem, controller: bool = False) -> dict[
         "confidence": round(item.confidence, 2),
         "first_reported_at": iso(item.first_reported_at),
         "last_observed_at": iso(item.last_observed_at),
+        "passive_parties": item.passive_parties,
     }
     if controller:
         body["report_ids"] = list(item.report_ids)
@@ -237,6 +240,7 @@ def road_status_json(s: public.RoadStatus) -> dict[str, Any]:
         "report_ids": list(s.report_ids),
         "decided_by": s.decided_by,
         "public": s.public,
+        "passive_parties": s.passive_parties,
     }
 
 
@@ -258,7 +262,7 @@ def drill_doc(incident_id: str) -> dict[str, Any] | None:
 
 def clock_from(doc: Mapping[str, Any] | None, index: DrillIndex, now: datetime) -> Clock:
     drill = index.drill
-    replay_start = (doc or {}).get("replay_start") or drillmod.DEFAULT_REPLAY_START
+    replay_start = (doc or {}).get("replay_start") or drillmod.default_replay_start(drill)
     started_at = (doc or {}).get("started_at")
     speed = float((doc or {}).get("speed", 1))
     replay_now = drillmod.replay_now(replay_start, started_at, now, speed, drill.clock_end)
@@ -299,7 +303,7 @@ def report_replay_at(incident_id: str, now: datetime) -> datetime | None:
     doc = drill_doc(incident_id)
     if doc is None or doc.get("started_at") is None:
         return None
-    return clock_from(doc, get_index(), now).replay_now
+    return clock_from(doc, get_index(incident_id), now).replay_now
 
 
 # ---- snapshot ----
@@ -328,6 +332,7 @@ def report_fact(doc: Mapping[str, Any]) -> public.ReportFact:
         segment_name=road_ref.get("name"),
         destination_id=doc.get("destination_id"),
         replay_at=_aware(doc.get("replay_at")),
+        method="passive" if doc.get("method") == "passive" else "explicit",
     )
 
 
@@ -353,6 +358,8 @@ def load_public(
     incident_id: str, now: datetime, index: DrillIndex
 ) -> tuple[list[dict[str, Any]], list[public.ReportFact], list[public.PublicItem], list[public.RoadStatus]]:
     """Reports (newest first), their facts, public items and road state at wall time ``now``."""
+    # Source-diversity check (ADR 0042), off unless LIVE_SOURCE_DIVERSITY is true.
+    public.SOURCE_DIVERSITY_ENABLED = bool(getattr(settings, "LIVE_SOURCE_DIVERSITY", False))
     report_docs = list(
         col("live_reports").find({"incident_id": incident_id}).sort("received_at", -1).limit(REPORTS_SNAPSHOT_LIMIT)
     )
@@ -367,7 +374,7 @@ def load_public(
 
 
 def load_snapshot(incident_id: str, now: datetime) -> Snapshot:
-    index = get_index()
+    index = get_index(incident_id)
     doc = drill_doc(incident_id)
     clock = clock_from(doc, index, now)
     from . import injects as injects_mod  # local: injects reads clock_from and drill_doc from this module
@@ -475,6 +482,7 @@ def responder_tasks(incident_id: str, party_key: str) -> list[dict[str, Any]]:
                 {"assignee": party_key, "status": {"$in": ["open", "accepted"]}},
                 {"assignee": None, "status": "open"},
             ],
+            "created_by": {"$ne": "priority"},  # board questions are not dispatched tasks (ADR 0041)
         }
     ).sort("created_at", -1).limit(200)
     return list(cursor)

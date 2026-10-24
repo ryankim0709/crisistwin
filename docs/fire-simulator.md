@@ -183,8 +183,8 @@ addressing uses Mercator metres; slope, spread distance, burned area, and reach 
 ground metres, converted once where the landscape is built.
 
 The surface physics models crown fire as well as surface spread. The only suppression is
-control line built by Simulation Studio firefighters ([ADR 0020](adr/0020-studio-firefighting.md));
-the `/fire` page runs without it. Nothing in the model represents plume-dominated behaviour — including
+control line built by Simulation Studio ground crews and aircraft ([ADR 0020](adr/0020-studio-firefighting.md),
+[ADR 0048](adr/0048-suppression-engine.md)); the `/fire` page runs without it. Nothing in the model represents plume-dominated behaviour — including
 in cells that are now predicted to crown, which is why ember spotting stays on the surface
 fireline intensity with its 500 m ceiling even there, well short of the Camp Fire's
 measured 6.3 km maximum spot. The two interface mechanisms

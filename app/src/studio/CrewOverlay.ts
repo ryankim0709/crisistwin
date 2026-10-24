@@ -18,7 +18,9 @@ import type { BoardOverlay } from "../fire/diorama/types";
 import { lonLatToMercator } from "../fire/landscape";
 import { tripPosition, type CrewDispatch } from "./crewDispatch";
 import { CREW_COLORS } from "./firelinePalette";
-import type { ResourceKind } from "./firefighting";
+import { vehicleFamily, type VehicleFamily } from "./apparatus";
+
+type ResourceKind = VehicleFamily;
 
 /** Vehicle sizes, world units (exaggerated about 20x so they read on a 600-unit board). */
 const SIZES: Record<ResourceKind, { length: number; height: number; width: number }> = {
@@ -168,8 +170,9 @@ export class CrewOverlay implements BoardOverlay {
     // Vehicles: one instanced mesh per kind.
     const counts = new Map<ResourceKind, number>();
     this.slot = dispatch.trips.map((trip) => {
-      const index = counts.get(trip.kind) ?? 0;
-      counts.set(trip.kind, index + 1);
+      const family = vehicleFamily(trip.kind);
+      const index = counts.get(family) ?? 0;
+      counts.set(family, index + 1);
       return index;
     });
     for (const kind of KINDS) {
@@ -250,7 +253,7 @@ export class CrewOverlay implements BoardOverlay {
     let onScene = 0;
     let left = 0;
     dispatch.trips.forEach((trip, index) => {
-      const mesh = this.meshes.get(trip.kind);
+      const mesh = this.meshes.get(vehicleFamily(trip.kind));
       if (!mesh) return;
       let at: { x: number; y: number; z: number } | null;
       let yaw = 0;

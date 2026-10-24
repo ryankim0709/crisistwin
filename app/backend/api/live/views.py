@@ -7,13 +7,14 @@ from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from livecore.drill import DEFAULT_REPLAY_START, MAX_DRILL_SPEED
+from livecore.drill import MAX_DRILL_SPEED, default_replay_start
 from livecore.geo import haversine_m
+from django.conf import settings
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 from rest_framework.response import Response
 
-from . import aar, controller, twin_service
+from . import aar, board, controller, incidents, twin_service
 from . import impact as impact_mod
 from .auth import Principal, client_ip, issue_token, live_view, rate_limited, secret_matches
 from .common import (
@@ -74,6 +75,12 @@ REPORT_KINDS = frozenset(
 ROAD_KINDS = frozenset({"road_blocked", "road_passable", "heavy_traffic"})
 """Kinds that snap to a road segment."""
 SEVERITIES = frozenset({"full", "partial", "slow"})
+REPORT_METHODS = frozenset({"explicit", "passive"})
+PASSIVE_KINDS = frozenset({"road_passable", "heavy_traffic"})
+"""ADR 0041: a passive observation only says a phone drove through (passable) or crawled (slow)."""
+SPEED_CLASSES = frozenset({"free", "slow"})
+PASSIVE_FORBIDDEN_FIELDS = ("location", "heading_deg", "note", "destination_id")
+"""A passive report carries no position, heading, text or destination: the server places it on the segment."""
 SEVERITY_KINDS = frozenset({"road_blocked", "heavy_traffic"})
 """Kinds a severity applies to; an edit that sets another kind (or severity on one) stores severity null."""
 SHELTER_FULL_DESTINATION_KINDS = frozenset({"shelter", "temporary_refuge"})
@@ -147,6 +154,47 @@ def join(request, incident_id: str, principal: None):
 # ---- v1: reports ----
 
 
+def _validate_passive(body: dict[str, Any], client_id: str, kind: str) -> dict[str, Any]:
+    """``method: "passive"`` (ADR 0041): kind, segment, time and speed class only."""
+    code = "invalid_report"
+    if kind not in PASSIVE_KINDS:
+        raise ApiError(400, code, "A passive report must be road_passable or heavy_traffic.")
+    for name in PASSIVE_FORBIDDEN_FIELDS:
+        if body.get(name) is not None:
+            raise ApiError(400, code, f"A passive report must not carry `{name}`.")
+    segment_id = optional_str(body, "segment_id", code, 200)
+    index = get_index()
+    if segment_id is None or segment_id not in index.segment_lines:
+        raise ApiError(400, code, "A passive report needs a known `segment_id`.")
+    speed_class = body.get("speed_class")
+    if speed_class not in SPEED_CLASSES:
+        raise ApiError(400, code, "`speed_class` must be free or slow.")
+    if kind == "heavy_traffic" and speed_class != "slow":
+        raise ApiError(400, code, "A passive heavy_traffic report needs `speed_class: slow`.")
+    severity = body.get("severity")
+    if severity not in (None, "slow") or (severity == "slow" and kind != "heavy_traffic"):
+        raise ApiError(400, code, "A passive report's `severity` is null (or slow for heavy_traffic).")
+    observed_at = parse_iso(body.get("observed_at"), "observed_at", code)
+    if observed_at > wall_now() + timedelta(seconds=MAX_OBSERVED_FUTURE_S):
+        raise ApiError(400, code, "`observed_at` is in the future.")
+    line = index.segment_lines[segment_id]
+    mid = line[len(line) // 2]
+    return {
+        "client_id": client_id,
+        "kind": kind,
+        "severity": severity,
+        "location": {"coord": [mid[0], mid[1]], "accuracy_m": None},
+        "heading_deg": None,
+        "destination_id": None,
+        "task_id": optional_str(body, "task_id", code, 100),
+        "observed_at": observed_at,
+        "note": None,
+        "method": "passive",
+        "speed_class": speed_class,
+        "segment_id": segment_id,
+    }
+
+
 def _validate_report(body: dict[str, Any], incident_id: str) -> dict[str, Any]:
     code = "invalid_report"
     try:
@@ -158,6 +206,13 @@ def _validate_report(body: dict[str, Any], incident_id: str) -> dict[str, Any]:
     kind = body.get("kind")
     if kind not in REPORT_KINDS:
         raise ApiError(400, code, f"`kind` must be one of {', '.join(sorted(REPORT_KINDS))}.")
+    method = body.get("method") or "explicit"
+    if method not in REPORT_METHODS:
+        raise ApiError(400, code, "`method` must be explicit or passive.")
+    if method == "passive":
+        return _validate_passive(body, client_id, kind)
+    if body.get("speed_class") is not None or body.get("segment_id") is not None:
+        raise ApiError(400, code, "`speed_class` and `segment_id` are for passive reports only.")
     severity = body.get("severity")
     if severity is not None and severity not in SEVERITIES:
         raise ApiError(400, code, "`severity` must be full, partial, slow or null.")
@@ -174,7 +229,7 @@ def _validate_report(body: dict[str, Any], incident_id: str) -> dict[str, Any]:
     destination_id = optional_str(body, "destination_id", code, 200)
     if kind == "shelter_full" and destination_id is None:
         raise ApiError(400, code, "`shelter_full` needs `destination_id`.")
-    destinations = get_index().destinations
+    destinations = get_index(incident_id).destinations
     if destination_id is not None and destination_id not in destinations:
         raise ApiError(400, code, "Unknown `destination_id`.")
     if kind == "shelter_full" and destinations[destination_id].kind not in SHELTER_FULL_DESTINATION_KINDS:
@@ -193,6 +248,9 @@ def _validate_report(body: dict[str, Any], incident_id: str) -> dict[str, Any]:
         "task_id": task_id,
         "observed_at": observed_at,
         "note": optional_str(body, "note", code, NOTE_MAX_CHARS),
+        "method": "explicit",
+        "speed_class": None,
+        "segment_id": None,
     }
 
 
@@ -204,7 +262,7 @@ def _refresh_corroboration(incident_id: str, recheck: Iterable[str] = ()) -> Non
     ``unverified``.
     """
     now = wall_now()
-    _, _, items, _ = load_public(incident_id, now, get_index())
+    _, _, items, _ = load_public(incident_id, now, get_index(incident_id))
     reports = col("live_reports")
     for item in items:
         if item.controller_confirmed:
@@ -226,7 +284,7 @@ def _refresh_corroboration(incident_id: str, recheck: Iterable[str] = ()) -> Non
 
 def _public_peers(incident_id: str, report_id: str) -> set[str]:
     """Ids of the reports sharing a public item with ``report_id`` (itself included), before a change."""
-    _, _, items, _ = load_public(incident_id, wall_now(), get_index())
+    _, _, items, _ = load_public(incident_id, wall_now(), get_index(incident_id))
     return {rid for item in items if report_id in item.report_ids for rid in item.report_ids}
 
 
@@ -243,6 +301,30 @@ def _road_ref(index, kind: str, coord) -> dict[str, Any] | None:
         "name": index.segment_names.get(segment_id) or "Unnamed road",
         "snap_m": round(snap_m, 1),
     }
+
+
+def _board_task(incident_id: str, task_id: str | None) -> dict[str, Any] | None:
+    """The board question ``task_id`` refers to, or None for any other (or no) task."""
+    if not task_id:
+        return None
+    return col("live_tasks").find_one({"id": task_id, "incident_id": incident_id, "created_by": "priority"})
+
+
+def _check_board_answer(task: dict[str, Any], fields: dict[str, Any], now) -> None:
+    """An answer to a board question must fit it: the question's kinds, on its place, before expiry."""
+    code = "invalid_report"
+    expires_at = task.get("expires_at")
+    if expires_at is not None and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    if task["status"] != "open" or (expires_at is not None and expires_at <= now):
+        raise ApiError(409, "conflict", "This question has closed.")
+    if fields["kind"] not in board.ANSWER_KINDS.get(task.get("question"), frozenset()):
+        raise ApiError(400, code, "That report kind does not answer this question.")
+    target = task.get("target") or {}
+    if task.get("question") == "shelter_full" and fields["destination_id"] != target.get("destination_id"):
+        raise ApiError(400, code, "`destination_id` does not match the question's destination.")
+    if fields["segment_id"] is not None and fields["segment_id"] != target.get("segment_id"):
+        raise ApiError(400, code, "`segment_id` does not match the question's road.")
 
 
 def _answer_task(principal: Principal, incident_id: str, task_id: str, report_id: str, now) -> None:
@@ -280,11 +362,26 @@ def _submit_report(request, incident_id: str, principal: Principal) -> Response:
         or rate_limited(f"rpt-ip:{client_ip(request)}", REPORTS_PER_IP_PER_MIN, 60)
     ):
         return error(429, "rate_limited", "Too many reports. Try again in a minute.")
-    index = get_index()
+    index = get_index(incident_id)
+    board_task = _board_task(incident_id, fields["task_id"])
+    if board_task is not None:
+        _check_board_answer(board_task, fields, wall_now())
+    elif fields["method"] == "passive" and fields["task_id"]:
+        return error(400, "invalid_report", "A passive report answers only a board question.")
     refused = injects_mod.refuse_if_no_signal(incident_id, principal, wall_now(), coord=fields["location"]["coord"])
     if refused is not None:
         return refused
-    road_ref = _road_ref(index, fields["kind"], fields["location"]["coord"])
+    road_ref = None
+    # A passive report, or an answer to a board road question, is placed on that segment, not snapped.
+    fixed_segment = fields["segment_id"] or (
+        (board_task.get("target") or {}).get("segment_id") if board_task and fields["kind"] in ROAD_KINDS else None)
+    if fixed_segment:
+        line = index.segment_lines[fixed_segment]
+        snap_m = min(haversine_m(tuple(fields["location"]["coord"]), p) for p in line)
+        road_ref = {"segment_id": fixed_segment, "name": index.segment_names.get(fixed_segment) or "Unnamed road",
+                    "snap_m": 0.0 if fields["method"] == "passive" else round(snap_m, 1)}
+    else:
+        road_ref = _road_ref(index, fields["kind"], fields["location"]["coord"])
     now = wall_now()
     doc = {
         "id": new_id("rpt_"),
@@ -303,10 +400,12 @@ def _submit_report(request, incident_id: str, principal: Principal) -> Response:
         "note": fields["note"],
         "status": "unverified",
         "evidence_class": "field_report",
+        "method": fields["method"],
+        "speed_class": fields["speed_class"],
         "replay_at": report_replay_at(incident_id, now),
         "updated_at": now,
     }
-    if fields["task_id"]:
+    if fields["task_id"] and board_task is None:
         _answer_task(principal, incident_id, fields["task_id"], doc["id"], now)
     try:
         reports.insert_one(doc)
@@ -410,6 +509,8 @@ def _edit_report(request, report_id: str, principal: Principal) -> Response:
     doc = _own_report(principal, report_id)
     if doc["status"] not in EDITABLE_STATUSES:
         return _report_locked()
+    if doc.get("method") == "passive":
+        return error(400, "invalid_report", "A passive report has nothing to edit. Withdraw it instead.")
     fields = _edited_fields(doc, patch)
     if _edit_rate_limited(principal):
         return error(429, "rate_limited", "Too many edits. Try again in a minute.")
@@ -421,7 +522,7 @@ def _edit_report(request, report_id: str, principal: Principal) -> Response:
     now = wall_now()
     changes: dict[str, Any] = {**fields, "status": "unverified", "edited_at": now, "updated_at": now}
     if fields["kind"] != doc["kind"] or fields["location"]["coord"] != doc["location"]["coord"]:
-        changes["road_ref"] = _road_ref(get_index(), fields["kind"], fields["location"]["coord"])
+        changes["road_ref"] = _road_ref(get_index(incident_id), fields["kind"], fields["location"]["coord"])
     stored = col("live_reports").find_one_and_update(
         {"id": report_id, "status": {"$in": list(EDITABLE_STATUSES)}},
         {
@@ -509,13 +610,13 @@ def triage(request, report_id: str, principal: Principal):
 
 @live_view(["GET"], roles=["responder", "controller"])
 def road_state(request, incident_id: str, principal: Principal):
-    _, _, _, state = load_public(incident_id, wall_now(), get_index())
+    _, _, _, state = load_public(incident_id, wall_now(), get_index(incident_id))
     return ok({"items": [road_status_json(s) for s in state]})
 
 
 @live_view(["GET"])
 def public_map(request, incident_id: str, principal: Principal):
-    _, _, items, _ = load_public(incident_id, wall_now(), get_index())
+    _, _, items, _ = load_public(incident_id, wall_now(), get_index(incident_id))
     return ok({"items": [public_item_json(i, principal.role == "controller") for i in items]})
 
 
@@ -526,10 +627,18 @@ def prompts(request, incident_id: str, principal: Principal):
         near = parse_coord([float(v) for v in near_raw.split(",")], "near", "invalid_request")
     except ValueError:
         return error(400, "invalid_request", "`near` must be lon,lat.")
-    _, _, items, _ = load_public(incident_id, wall_now(), get_index())
+    _, _, items, _ = load_public(incident_id, wall_now(), get_index(incident_id))
     nearby = [i for i in items if i.kind in PROMPT_KINDS and haversine_m(near, i.coord) <= PROMPT_RADIUS_M]
     nearby.sort(key=lambda i: haversine_m(near, i.coord))
     return ok({"items": [public_item_json(i) for i in nearby]})
+
+
+@live_view(["GET"])
+def task_board(request, incident_id: str, principal: Principal):
+    """ADR 0041 public board: open questions about places; the phone picks its own on the device."""
+    snapshot = load_snapshot(incident_id, wall_now())
+    board.maybe_refresh(snapshot)
+    return ok(board.board_json(snapshot))
 
 
 # ---- v1/v2: tasks ----
@@ -547,7 +656,7 @@ def create_task(request, incident_id: str, principal: Principal):
         return error(400, code, "`target` must be an object with `segment_id` and/or `coord`.")
     segment_id = target.get("segment_id")
     coord = parse_coord(target["coord"], "target.coord", code) if target.get("coord") is not None else None
-    index = get_index()
+    index = get_index(incident_id)
     if segment_id is not None:
         if not isinstance(segment_id, str) or segment_id not in index.segment_lines:
             return error(400, code, "Unknown `target.segment_id`.")
@@ -587,7 +696,8 @@ def my_tasks(request, principal: Principal):
 
 
 def controller_incident() -> str:
-    return get_index().drill.incident_id
+    """The active incident (routes without an incident in the path)."""
+    return incidents.active_incident_id()
 
 
 @live_view(["POST"], roles=["responder", "controller"])
@@ -734,7 +844,7 @@ def checkins(request, incident_id: str, principal: Principal):
     if status not in CHECKIN_STATUSES:
         return error(400, code, "`status` must be out, need_help or staying.")
     zone_id = optional_str(body, "zone_id", code, 200)
-    if zone_id is not None and zone_id not in get_index().zones:
+    if zone_id is not None and zone_id not in get_index(incident_id).zones:
         return error(400, code, "Unknown `zone_id`.")
     coord = None
     if body.get("coord") is not None:
@@ -870,10 +980,10 @@ def my_destination(request, principal: Principal):
     destination_id = optional_str(body, "destination_id", code, 200)
     if zone_id is None or destination_id is None:
         return error(400, code, "`zone_id` and `destination_id` are required.")
-    index = get_index()
+    incident_id = principal.incident_id or controller_incident()
+    index = get_index(incident_id)
     if zone_id not in index.zones:
         return error(400, code, "Unknown `zone_id`.")
-    incident_id = principal.incident_id or controller_incident()
     current = next((d for d in current_guidance(incident_id) if d["zone_id"] == zone_id), None)
     if current is None or destination_id not in offered_destination_ids(current):
         return error(400, code, "That destination is not currently offered for this zone.")
@@ -939,7 +1049,7 @@ def _checkin_summary(incident_id: str) -> dict[str, Any]:
 
 @live_view(["GET"], roles=["controller"])
 def command(request, incident_id: str, principal: Principal):
-    twin_service.warm()
+    twin_service.warm(incident_id)
     snapshot = load_snapshot(incident_id, wall_now())
     controller.maybe_auto_replan(snapshot)
     index, now = snapshot.index, snapshot.now
@@ -955,12 +1065,15 @@ def command(request, incident_id: str, principal: Principal):
          "simulated": d["party_key"] in simulated}
         for d in locations
     ]
-    tasks = (
+    board.maybe_refresh(snapshot)
+    tasks = list(
         col("live_tasks")
         .find({"incident_id": incident_id, "status": {"$ne": "cancelled"}})
         .sort("created_at", -1)
         .limit(COMMAND_TASKS_LIMIT)
     )
+    answers = board.task_answers(incident_id, [t["id"] for t in tasks])
+    stale_critical, board_computed_at = board.stale_critical_json(incident_id)
     return ok(
         {
             "incident_id": incident_id,
@@ -979,7 +1092,9 @@ def command(request, incident_id: str, principal: Principal):
             "checkins": _checkin_summary(incident_id),
             "destination_preferences": destination_preferences(incident_id, now),
             "responders": responders,
-            "tasks": [task_json(t) for t in tasks],
+            "tasks": [{**task_json(t), "answers": answers.get(t["id"]) or board.empty_answers()} for t in tasks],
+            "stale_critical": stale_critical,
+            "board_computed_at": board_computed_at,
             "decisions": _recent_decisions(incident_id),
             "response_record": response_record_until(index, snapshot.clock.replay_now, COMMAND_RESPONSE_RECORD_LIMIT),
             "ground_record": ground_record_json(index, snapshot.clock.replay_now, snapshot.injects),
@@ -1056,13 +1171,13 @@ def _parse_speed(value: Any) -> float:
 
 def set_drill(incident_id: str, action: str, replay_start_raw: Any = None, speed_raw: Any = None) -> dict[str, Any]:
     """Apply a drill action (also used by the ``live_drill`` command); returns the DrillState JSON."""
-    index = get_index()
+    index = get_index(incident_id)
     drill = index.drill
     now = wall_now()
     drills = col("live_drills")
     doc = drill_doc(incident_id)
     if action == "start":
-        replay_start = DEFAULT_REPLAY_START
+        replay_start = default_replay_start(drill)
         if replay_start_raw is not None:
             replay_start = parse_iso(replay_start_raw, "replay_start", "invalid_drill")
             if not drill.clock_start <= replay_start < drill.clock_end:
@@ -1078,17 +1193,23 @@ def set_drill(incident_id: str, action: str, replay_start_raw: Any = None, speed
         clock = clock_from(doc, index, now)
         update = {"replay_start": clock.replay_now, "started_at": now, "speed": speed}
     elif action == "reset":
-        update = {"replay_start": DEFAULT_REPLAY_START, "started_at": None, "speed": 1.0}
-        for name in ("live_guidance", "live_proposals", "live_checkins", "live_destination_choices", "live_plan_routes"):
+        update = {"replay_start": default_replay_start(drill), "started_at": None, "speed": 1.0}
+        for name in ("live_guidance", "live_proposals", "live_checkins", "live_destination_choices", "live_plan_routes",
+                     "live_board"):
             col(name).delete_many({"incident_id": incident_id})
         invalidate_guidance(incident_id)
         # 2018 record reports re-enter as the clock passes them again.
         col("live_reports").delete_many({"incident_id": incident_id, "evidence_class": "historical_record"})
         groundrecord.forget(incident_id)
+        # Board questions belong to the drill moment that ranked them.
+        col("live_tasks").update_many(
+            {"incident_id": incident_id, "created_by": "priority", "status": "open"},
+            {"$set": {"status": "cancelled", "closed_at": now, "note": "Drill reset"}},
+        )
     else:
         raise ApiError(400, "invalid_drill", "`action` must be start, reset or set_speed.")
     update.update({"updated_at": now, "updated_by": "controller"})
-    unset = {"plan_state": "", "last_auto_replan_at": ""} if action == "reset" else {}
+    unset = {"plan_state": "", "last_auto_replan_at": "", "board_refreshed_at": ""} if action == "reset" else {}
     ops: dict[str, Any] = {"$set": update}
     if unset:
         ops["$unset"] = unset
@@ -1156,6 +1277,16 @@ def twin_whatif(request, incident_id: str, principal: Principal):
 
 @live_view(["GET"], roles=["controller"])
 def incident_aar(request, incident_id: str, principal: Principal):
-    """After-action report and drill score (docs/live-reports.md "After-action report")."""
-    twin_service.warm()
-    return ok(aar.build_aar(load_snapshot(incident_id, wall_now())))
+    """After-action report and drill score (docs/live-reports.md "After-action report").
+
+    ``?truth=1`` adds ``triage_quality``, scored against the hidden ``sim_truth`` log (ADR 0042). It is
+    refused unless ``LIVE_TRUTH_SCORING`` is on (403) and the drill is stopped (409), so nobody can
+    read truth-derived numbers while a drill runs."""
+    want_truth = request.query_params.get("truth") in ("1", "true")
+    if want_truth and not getattr(settings, "LIVE_TRUTH_SCORING", False):
+        return error(403, "truth_scoring_disabled", "Truth scoring is off (LIVE_TRUTH_SCORING).")
+    twin_service.warm(incident_id)
+    snapshot = load_snapshot(incident_id, wall_now())
+    if want_truth and snapshot.clock.running:
+        return error(409, "drill_running", "Stop the drill before scoring triage against the truth log.")
+    return ok(aar.build_aar(snapshot, truth_scoring=want_truth))

@@ -1,6 +1,8 @@
-"""The drill bundle, loaded once per process, plus lookups the API needs (road snapping).
+"""Drill indexes, one per incident, loaded once per process, plus lookups the API needs (road snapping).
 
-The bundle path is ``LIVE_DRILL_BUNDLE`` (default: ``app/public/replays/camp-2018.json``).
+Camp is the replay bundle at ``LIVE_DRILL_BUNDLE`` (default: ``app/public/replays/camp-2018.json``);
+a Studio incident is its stored drill package (``incidents.source_for``). Camp stays cached; at
+most ``MAX_PACKAGE_INDEXES`` package indexes are kept (the oldest loaded is dropped).
 """
 
 from __future__ import annotations
@@ -8,18 +10,20 @@ from __future__ import annotations
 import json
 import logging
 import math
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
 from typing import Any
 
-from django.conf import settings
-from livecore.drill import Destination, Drill, Zone, load_drill, parse_time
+from livecore.drill import INCIDENT_ID, Destination, Drill, Zone, load_drill, parse_time
 from livecore.geo import LonLat, to_geojson
+from livecore.package import load_package
 
+from . import incidents
 from .common import ApiError
+from .incidents import bundle_path  # noqa: F401 - re-exported (packages, commands)
 
 log = logging.getLogger(__name__)
 
@@ -45,15 +49,9 @@ class DrillIndex:
     """Historical (non-simulated) bundle events as ``(at, item)``, sorted by ``at`` ascending."""
 
 
-_index: DrillIndex | None = None
+MAX_PACKAGE_INDEXES = 3
+_indexes: OrderedDict[str, DrillIndex] = OrderedDict()
 _lock = Lock()
-
-
-def bundle_path() -> Path:
-    configured = (getattr(settings, "LIVE_DRILL_BUNDLE", "") or "").strip()
-    if configured:
-        return Path(configured)
-    return Path(settings.BASE_DIR).parent / "public" / "replays" / "camp-2018.json"
 
 
 def _cell(lon: float, lat: float) -> tuple[int, int]:
@@ -126,23 +124,42 @@ def _build(drill: Drill) -> DrillIndex:
     )
 
 
-def get_index() -> DrillIndex:
-    """The cached drill; ``ApiError(503, drill_unavailable)`` when it cannot be loaded."""
-    global _index
-    if _index is not None:
-        return _index
+def _load(source: incidents.Source) -> DrillIndex:
+    try:
+        drill = load_drill(source.path) if source.kind == "bundle" else load_package(source.path)
+        if drill.incident_id != source.incident_id:
+            raise ValueError(f"drill {drill.incident_id} is not incident {source.incident_id}")
+        built = _build(drill)
+        return replace(built, response_record=_response_record(built.drill, source.path))
+    except NotImplementedError as exc:
+        raise ApiError(503, "drill_unavailable", "The drill engine is not implemented yet.") from exc
+    except (OSError, ValueError, KeyError, AttributeError, TypeError) as exc:
+        log.exception("live drill: cannot load %s %s", source.kind, source.path)
+        raise ApiError(503, "drill_unavailable", "The drill bundle could not be loaded.") from exc
+
+
+def get_index(incident_id: str | None = None) -> DrillIndex:
+    """The cached drill of ``incident_id`` (default: the request's incident, else the active one).
+
+    ``ApiError(404, not_found)`` for an incident with no drill source, ``ApiError(503,
+    drill_unavailable)`` when its source cannot be loaded."""
+    incident_id = incident_id or incidents.request_incident()
+    hit = _indexes.get(incident_id)
+    if hit is not None:
+        return hit
     with _lock:
-        if _index is None:
-            path = bundle_path()
-            try:
-                built = _build(load_drill(path))
-                _index = replace(built, response_record=_response_record(built.drill, path))
-            except NotImplementedError as exc:
-                raise ApiError(503, "drill_unavailable", "The drill engine is not implemented yet.") from exc
-            except (OSError, ValueError, KeyError, AttributeError) as exc:
-                log.exception("live drill: cannot load bundle %s", path)
-                raise ApiError(503, "drill_unavailable", "The drill bundle could not be loaded.") from exc
-    return _index
+        hit = _indexes.get(incident_id)
+        if hit is not None:
+            return hit
+        source = incidents.source_for(incident_id)
+        if source is None:
+            raise ApiError(404, "not_found", "Unknown incident.")
+        index = _load(source)
+        _indexes[incident_id] = index
+        packages = [k for k in _indexes if k != INCIDENT_ID]
+        for stale in packages[: max(0, len(packages) - MAX_PACKAGE_INDEXES)]:
+            del _indexes[stale]
+    return index
 
 
 def _point_segment_m(p: LonLat, a: LonLat, b: LonLat) -> float:

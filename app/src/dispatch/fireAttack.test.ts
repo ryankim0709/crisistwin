@@ -115,8 +115,9 @@ describe("direct attack estimate", () => {
   it("puts a slow fire out sooner with more engines, and never without any", () => {
     const one = projectOutMinute(target(), FRAMES, 0, 0, 0, [0], HORIZON);
     const two = projectOutMinute(target(), FRAMES, 0, 0, 0, [0, 0], HORIZON);
-    // A circle growing 10,000/60 m²/min is ringed by one engine's line at about T+21.
-    expect(one).toBe(21);
+    // A circle growing 10,000/60 m²/min is ringed by one Type 3 engine's line (PMS 465:
+    // 24 chains/h = 8.05 m/min in grass): 8.05 t = 2 sqrt(pi 166.7 t) at t = 32.3, so T+33.
+    expect(one).toBe(33);
     expect(two).not.toBeNull();
     expect(two!).toBeLessThan(one!);
     expect(projectOutMinute(target(), FRAMES, 0, 0, 0, [], HORIZON)).toBeNull();
@@ -143,9 +144,9 @@ describe("engines attacking a fire", () => {
     ]);
     expect(outcome.accepted).toBe(true);
     const projected = engine.projectedOutMinute(0);
-    // T+21 for an engine working from T+0; it first waits out the 80 s turnout, arrives at
+    // T+33 for an engine working from T+0; it first waits out the 80 s turnout, arrives at
     // T+2 and works from the next minute, and the fire keeps growing meanwhile.
-    expect(projected).toBe(25);
+    expect(projected).toBe(37);
     expect(engine.units[0].status).toBe("en_route"); // not on scene before turnout
     expect(engine.attackOptions(0, 4)).toEqual([]); // the only engine is already on it
     let onScene: number | null = null;
@@ -156,13 +157,13 @@ describe("engines attacking a fire", () => {
     expect(onScene).toBe(2);
     expect(engine.fires[0].outMinute).toBe(projected);
     // Building from the minute after it arrives at T+2.
-    expect(engine.fires[0].lineMeters).toBeCloseTo((25 - 2) * ENGINE_LINE_METERS_PER_MINUTE);
+    expect(engine.fires[0].lineMeters).toBeCloseTo((37 - 2) * ENGINE_LINE_METERS_PER_MINUTE);
     expect(engine.alerts.some((alert) => alert.type === "fire_out")).toBe(true);
     expect(engine.units[0].task).toBeNull();
   });
 
   it("offers what-if options and rejects fires that cannot be attacked", () => {
-    expect(engineWith(target()).attackOptions(0, 4)).toEqual([{ unitIds: ["E1"], outMinute: 25 }]);
+    expect(engineWith(target()).attackOptions(0, 4)).toEqual([{ unitIds: ["E1"], outMinute: 37 }]);
     const crowning = engineWith(target({ directBlocked: "it is crowning" }));
     expect(crowning.attackOptions(0, 4)).toEqual([]);
     const [rejected] = crowning.applyOrders([

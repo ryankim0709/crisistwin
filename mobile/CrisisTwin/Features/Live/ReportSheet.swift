@@ -304,9 +304,9 @@ struct ReportSheet: View {
             select(editing.kind)
             severity = editing.severity
             note = editing.note ?? ""
-            pin = editing.location.coord
+            pin = editing.location?.coord
             pinFromGPS = false
-            accuracyM = editing.location.accuracyM
+            accuracyM = editing.location?.accuracyM
             capturedAt = editing.observedAt
             return
         }
@@ -372,7 +372,7 @@ struct ReportSheet: View {
         if newSeverity != target.severity { patch.severity = .some(newSeverity) }
         let newNote = Self.cleanNote(note)
         if newNote != Self.cleanNote(target.note ?? "") { patch.note = .some(newNote) }
-        if pin != target.location.coord {
+        if pin != target.location?.coord {
             patch.location = ReportLocation(coord: pin, accuracyM: pinFromGPS ? accuracyM : nil)
         }
         return patch

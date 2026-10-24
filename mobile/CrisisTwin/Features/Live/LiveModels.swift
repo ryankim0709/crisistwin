@@ -7,7 +7,7 @@ import Foundation
 enum LiveIncident {
     static let defaultId = "camp-2018-drill"
     /// The incident of the server this phone joined by link, else the default.
-    static var currentId: String { ServerSettings.overrideIncidentId ?? defaultId }
+    static var currentId: String { ServerSettings.overrideIncidentId ?? ServerSettings.followedIncidentId ?? defaultId }
 }
 
 enum LiveRole: String, Codable {
@@ -154,7 +154,8 @@ struct ReportDraft: Codable, Equatable, Identifiable {
     var incidentId: String
     var kind: ReportKind
     var severity: ReportSeverity?
-    var location: ReportLocation
+    /// Nil only for a passive report, which carries no position at all.
+    var location: ReportLocation?
     var headingDeg: Double?
     var destinationId: String?
     /// Set when a responder answers a check task with this report; the server closes the task.
@@ -162,8 +163,23 @@ struct ReportDraft: Codable, Equatable, Identifiable {
     var note: String?
     /// Device clock at capture, not at send.
     var observedAt: Date
+    /// "passive" for an automatic road observation (ADR 0041); omitted for an explicit report.
+    var method: String?
+    /// Passive only: the board segment driven through.
+    var segmentId: String?
+    /// Passive only: "free" or "slow".
+    var speedClass: String?
 
     var id: UUID { clientId }
+
+    /// A passive observation: only the segment, time and coarse speed class. It has no location,
+    /// heading, note or destination, so the keys are absent from the JSON.
+    static func passive(incidentId: String, kind: ReportKind, segmentId: String, taskId: String,
+                        observedAt: Date, slow: Bool) -> ReportDraft {
+        ReportDraft(incidentId: incidentId, kind: kind, severity: nil, location: nil, taskId: taskId,
+                    observedAt: observedAt, method: "passive", segmentId: segmentId,
+                    speedClass: slow ? "slow" : "free")
+    }
 }
 
 struct Reporter: Codable, Equatable {
@@ -189,6 +205,8 @@ struct FieldReport: Codable, Equatable, Identifiable {
     var note: String?
     var status: ReportStatus
     var evidenceClass: String
+    /// "passive" for an automatic road observation (ADR 0041); nil or "explicit" otherwise.
+    var method: String?
     /// Set when the reporter edited it; nil from older servers too.
     var editedAt: Date?
     var withdrawnAt: Date?
@@ -254,10 +272,19 @@ enum ReportEditTarget: Equatable, Identifiable {
         }
     }
 
-    var location: ReportLocation {
+    /// Nil only for an unsent passive draft, which has no position.
+    var location: ReportLocation? {
         switch self {
         case .draft(let draft): return draft.location
         case .report(let report): return report.location
+        }
+    }
+
+    /// An automatic road observation: nothing a person typed, so it can be withdrawn but not edited.
+    var isPassive: Bool {
+        switch self {
+        case .draft(let draft): return draft.method == "passive"
+        case .report(let report): return report.method == "passive"
         }
     }
 
@@ -282,6 +309,9 @@ enum ReportEditTarget: Equatable, Identifiable {
         case .report(let report): return report.status.isEditableByReporter
         }
     }
+
+    /// Edit is offered only for a report a person made; a passive one can only be deleted.
+    var canEdit: Bool { isEditable && !isPassive }
 }
 
 /// One item on the public map (or a nearby "still there?" prompt). Only items that pass the

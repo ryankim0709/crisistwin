@@ -15,6 +15,7 @@ from django.core.management.base import BaseCommand, CommandError
 
 from api.live import record_compare, twin_service
 from api.live.drillcache import get_index
+from livecore.drill import INCIDENT_ID
 
 
 class Command(BaseCommand):
@@ -43,7 +44,7 @@ class Command(BaseCommand):
         variants = [v.strip() for v in options["variants"].split(",") if v.strip()]
         try:
             report = record_compare.compare(
-                get_index(),
+                get_index(INCIDENT_ID),
                 start_iso=options["start"], end_iso=options["end"], confirm_delay_min=options["confirm_delay_min"],
                 seed=options["seed"], variants=variants,
                 checkpoints_iso=[c.strip() for c in options["checkpoints"].split(",") if c.strip()],

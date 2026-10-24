@@ -4,6 +4,7 @@
  * smooth playback clock. Draws the dispatch plan only (studio/crewDispatch.ts).
  */
 
+import { vehicleFamily } from "./apparatus";
 import { useEffect } from "react";
 import type { GeoJSONSource, Map as MapLibreMap } from "maplibre-gl";
 import { tripPosition, type CrewDispatch } from "./crewDispatch";
@@ -40,7 +41,7 @@ function vehiclesData(dispatch: CrewDispatch | null, minute: number): GeoJSON.Fe
     features: (dispatch?.trips ?? []).map((trip) => ({
       type: "Feature",
       geometry: { type: "Point", coordinates: [...tripPosition(trip, minute).at] },
-      properties: { kind: trip.kind },
+      properties: { kind: vehicleFamily(trip.kind) },
     })),
   };
 }

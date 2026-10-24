@@ -489,23 +489,29 @@ def stream_decision(
     index: dict,
     recalled_runs: int = 0,
     on_orders: Callable[[list[dict], int, str, str], None] | None = None,
+    *,
+    system: str = SYSTEM_PROMPT,
+    tool: dict = ISSUE_ORDERS_TOOL,
+    validate: Callable[[object, dict], tuple[list[dict], list[dict], str]] = validate_orders,
 ) -> Iterator[str]:
     """Yield NDJSON lines; any failure becomes a final error line, never a crashed stream.
 
     `on_orders(orders, rejected_count, summary, model)` runs after the final line (the run
-    journal); `recalled_runs` is how many past runs the user message carries.
+    journal); `recalled_runs` is how many past runs the user message carries. `system`, `tool`
+    and `validate` default to this dispatcher; the /demo agent (api/demo.py) passes its own.
+    The tool must be named `issue_orders`.
     """
     try:
         # Server-side fallback reroutes a safety-classifier refusal to another model.
         with client.beta.messages.stream(
             model=model,
             max_tokens=MAX_OUTPUT_TOKENS,
-            system=SYSTEM_PROMPT,
+            system=system,
             thinking={"type": "adaptive", "display": "summarized"},
             output_config={"effort": effort},
             betas=["server-side-fallback-2026-07-01"],
             fallbacks="default",
-            tools=[ISSUE_ORDERS_TOOL],
+            tools=[tool],
             tool_choice={"type": "auto"},
             messages=[{"role": "user", "content": user_message}],
         ) as stream:
@@ -548,7 +554,7 @@ def stream_decision(
     if final.stop_reason == "max_tokens":
         yield _err_line("upstream_truncated", "The agent's output was cut off before it issued orders.")
         return
-    tool = next(
+    call = next(
         (
             b
             for b in final.content
@@ -556,11 +562,11 @@ def stream_decision(
         ),
         None,
     )
-    if tool is None:
+    if call is None:
         yield _err_line("no_orders", "The agent did not issue orders.")
         return
 
-    orders, rejected, summary = validate_orders(tool.input, index)
+    orders, rejected, summary = validate(call.input, index)
     yield _line(
         {
             "type": "orders",

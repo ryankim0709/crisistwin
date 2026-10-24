@@ -37,7 +37,7 @@ export default function InjectsPanel({ data, run, busy }: { data: CommandRespons
 
   useEffect(() => {
     if (type !== "silent_closure" || segments.length) return;
-    void run("injects:choices", async (token) => setSegments((await listInjects(token)).choices.segments));
+    void run("injects:choices", async (token, id) => setSegments((await listInjects(token, id)).choices.segments));
   }, [type, segments.length, run]);
 
   const time = (value: string) => `${day}T${value}:00Z`;
@@ -55,8 +55,8 @@ export default function InjectsPanel({ data, run, busy }: { data: CommandRespons
       const [lon, lat] = coord.split(",").map((v) => Number(v.trim()));
       params.coord = [lon, lat];
     }
-    const message = await run("injects:add", (token) =>
-      createInject(token, { type, params, ...(TIME_RE.test(at) ? { at: time(at) } : {}) }),
+    const message = await run("injects:add", (token, id) =>
+      createInject(token, id, { type, params, ...(TIME_RE.test(at) ? { at: time(at) } : {}) }),
     );
     setError(message);
   };
@@ -161,7 +161,7 @@ export default function InjectsPanel({ data, run, busy }: { data: CommandRespons
               label={`Delete ${INJECT_LABEL[i.type]}`}
               size="sm"
               disabled={busy !== null}
-              onClick={() => void run("injects:delete", (token) => deleteInject(token, i.id)).then(setError)}
+              onClick={() => void run("injects:delete", (token, id) => deleteInject(token, id, i.id)).then(setError)}
             >
               ×
             </IconButton>

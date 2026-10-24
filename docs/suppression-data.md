@@ -3,7 +3,8 @@
 Sourced firefighting resource data for the suppression model (engines, water tenders,
 dozers, hand crews, helicopters, airtankers, air attack): types, performance, operating
 constraints, California bases and response times. Decision record:
-[0040-realistic-suppression-data](adr/0040-realistic-suppression-data.md). Data gathered
+[0040-realistic-suppression-data](adr/0040-realistic-suppression-data.md). The Studio simulator
+now reads this data ([0048-suppression-engine](adr/0048-suppression-engine.md)). Data gathered
 2026-10-24.
 
 | File | What |
@@ -81,7 +82,13 @@ dropped. `--refresh-bases` rebuilds it from the live layer.
 Note that "sourced" for the table leaves means a whole table is one leaf (for example the
 dozer table); the 250 leaves hold well over a thousand numbers.
 
-## How the simulator should use it
+## How the simulator uses it
+
+Status: wired into Simulation Studio by
+[0048-suppression-engine](adr/0048-suppression-engine.md) through
+`app/src/studio/suppressionData.generated.ts` (`tools/gen_suppression_ts.py`). Items 1-5 are
+implemented there; the gaps (water supply, availability, curve radius, dispatch-agent routing)
+are listed in that ADR.
 
 1. **Resource types.** Map a dispatched resource to an NWCG type, then take tank, pump and
    crew from `engines.typing`. Use the CAL FIRE Type 3 (500 gal, 500 gpm, 4x4, 33,000-35,000

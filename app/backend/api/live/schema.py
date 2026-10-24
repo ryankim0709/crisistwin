@@ -9,7 +9,7 @@ from typing import Any
 
 from pymongo import ASCENDING, DESCENDING, IndexModel
 from pymongo.database import Database
-from pymongo.errors import CollectionInvalid
+from pymongo.errors import CollectionInvalid, OperationFailure
 
 DATE = {"bsonType": "date"}
 STR = {"bsonType": "string"}
@@ -69,7 +69,9 @@ VALIDATORS: dict[str, dict[str, Any]] = {
             "replay_at": NULLABLE_DATE,
             "status": _enum("unverified", "corroborated", "responder_confirmed", "confirmed", "dismissed", "resolved",
                             "withdrawn"),
-            "evidence_class": _enum("field_report", "drill_fixture", "historical_record"),
+            "evidence_class": _enum("field_report", "drill_fixture", "historical_record", "simulated"),
+            "method": _enum("explicit", "passive"),
+            "speed_class": _enum("free", "slow", None),
             "edited_at": NULLABLE_DATE,
             "withdrawn_at": NULLABLE_DATE,
             "revisions": {"bsonType": "array"},
@@ -86,6 +88,9 @@ VALIDATORS: dict[str, dict[str, Any]] = {
             "status": _enum("open", "accepted", "done", "cancelled"),
             "created_at": DATE,
             "accepted_at": NULLABLE_DATE,
+            "created_by": _enum("controller", "proposal", "priority"),
+            "question": _enum("road_status", "shelter_full", None),
+            "expires_at": NULLABLE_DATE,
         },
     ),
     "live_decisions": _schema(
@@ -189,6 +194,10 @@ VALIDATORS: dict[str, dict[str, Any]] = {
             "replay_at": NULLABLE_DATE,
         },
     ),
+    "live_board": _schema(
+        ["incident_id", "computed_at", "items"],
+        {"incident_id": STR, "computed_at": DATE, "replay_at": NULLABLE_DATE, "items": {"bsonType": "array"}},
+    ),
     "live_responder_locations": _schema(
         ["incident_id", "party_key", "coord", "at", "expires_at"],
         {
@@ -198,6 +207,20 @@ VALIDATORS: dict[str, dict[str, Any]] = {
             "accuracy_m": {"bsonType": ["double", "int", "long", "null"], "minimum": 0},
             "at": DATE,
             "expires_at": DATE,
+        },
+    ),
+    # Hidden ground truth of generated reports (ADR 0042). Never served: see api/live/simtruth.py.
+    "sim_truth": _schema(
+        ["incident_id", "event_id", "true", "entry", "written_at"],
+        {
+            "incident_id": STR,
+            "event_id": STR,
+            "true": {"bsonType": "bool"},
+            "kind_of_noise": NULLABLE_STR,
+            "source_event_id": NULLABLE_STR,
+            "notes": NULLABLE_STR,
+            "entry": {"bsonType": "object"},
+            "written_at": DATE,
         },
     ),
 }
@@ -219,6 +242,7 @@ INDEXES: dict[str, list[IndexModel]] = {
         IndexModel([("id", ASCENDING)], unique=True),
         IndexModel([("incident_id", ASCENDING), ("status", ASCENDING)]),
         IndexModel([("assignee", ASCENDING), ("status", ASCENDING)]),
+        IndexModel([("incident_id", ASCENDING), ("created_by", ASCENDING), ("status", ASCENDING)]),
     ],
     "live_decisions": [IndexModel([("incident_id", ASCENDING), ("at", DESCENDING)])],
     "live_drills": [IndexModel([("incident_id", ASCENDING)], unique=True)],
@@ -247,10 +271,12 @@ INDEXES: dict[str, list[IndexModel]] = {
         IndexModel([("incident_id", ASCENDING), ("zone_id", ASCENDING), ("destination_id", ASCENDING),
                     ("via_key", ASCENDING)], unique=True),
     ],
+    "live_board": [IndexModel([("incident_id", ASCENDING)], unique=True)],
     "live_responder_locations": [
         IndexModel([("incident_id", ASCENDING), ("party_key", ASCENDING)], unique=True),
         IndexModel([("expires_at", ASCENDING)], expireAfterSeconds=0),
     ],
+    "sim_truth": [IndexModel([("incident_id", ASCENDING), ("event_id", ASCENDING)], unique=True)],
 }
 
 DRILL_DATA_COLLECTIONS = (
@@ -264,7 +290,9 @@ DRILL_DATA_COLLECTIONS = (
     "live_checkins",
     "live_destination_choices",
     "live_plan_routes",
+    "live_board",
     "live_responder_locations",
+    "sim_truth",
 )
 """Dropped by ``live_init_db --drop-drill-data`` (devices are kept so tokens stay valid)."""
 
@@ -285,7 +313,9 @@ def apply(db: Database, drop_drill_data: bool = False) -> list[str]:
             try:
                 db.create_collection(name, validator=validator, validationLevel="strict", validationAction="error")
                 lines.append(f"created {name}")
-            except CollectionInvalid:
+            except (CollectionInvalid, OperationFailure) as exc:
+                if isinstance(exc, OperationFailure) and exc.code != 48:  # 48: NamespaceExists
+                    raise
                 # A background thread (auto-replan, twin warm-up) wrote to it since the listing,
                 # which creates it implicitly; apply the validator instead.
                 db.command("collMod", name, validator=validator, validationLevel="strict", validationAction="error")

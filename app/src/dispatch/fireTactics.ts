@@ -20,7 +20,9 @@
 import type { ScheduledFireRun } from "../fire/scheduledTypes";
 import type { ControlLines } from "../fire/spread";
 import type { LandscapeGrid } from "../fire/landscape";
-import { planLine, RESOURCE_TYPES, type LinePlan } from "../studio/firefighting";
+import { GROUND_APPARATUS } from "../studio/apparatus";
+import { planLine, type LinePlan } from "../studio/firefighting";
+import { DISPATCH_ENGINE_KIND } from "./fireAttack";
 import type { FireTarget } from "./fireAttack";
 
 export type FireTactic = "direct" | "flank" | "indirect";
@@ -71,7 +73,7 @@ export function planTacticLine(
     unchecked,
     isochrone,
     anchor,
-    crewMinutes.map((minute) => ({ kind: "engine" as const, minute })),
+    crewMinutes.map((minute) => ({ kind: DISPATCH_ENGINE_KIND, minute })),
   );
 }
 
@@ -110,7 +112,7 @@ export function combineLines(
   const count = grid.width * grid.height;
   const holdFromMinute = new Float32Array(count).fill(Number.POSITIVE_INFINITY);
   const holdsFlameLengthFeet = new Float32Array(count);
-  const holds = RESOURCE_TYPES.engine.holdsFlameLengthFeet;
+  const holds = GROUND_APPARATUS[DISPATCH_ENGINE_KIND].holdsFlameLengthFeet;
   for (const plan of plans) {
     if (!plan) continue;
     plan.cells.forEach((cell, k) => {

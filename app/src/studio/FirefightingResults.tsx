@@ -14,7 +14,7 @@ function firstLeave(handoff: CrewHandoff): number | null {
   const minutes = handoff.leaveMinutes.filter((m): m is number => m !== null);
   return minutes.length > 0 ? Math.min(...minutes) : null;
 }
-import type { CrewDispatch } from "./crewDispatch";
+import type { CrewDispatch, CrewTrip } from "./crewDispatch";
 
 /** Which fire the page shows: direct attack, the best line plan, or no crews. */
 export type FireShown = "attack" | "line" | "none";
@@ -42,12 +42,91 @@ function attackLine(fire: FireAttack, name: string, holds: number): string {
     : `${name}: still burning at the horizon; its edge (about ${km(fire.perimeterMeters)} km) grows faster than the crews build line.`;
 }
 
+const ORIGIN_NOTE: Record<CrewTrip["origin"], string> = {
+  station: "",
+  mutual_aid: " (mutual aid)",
+  crew_camp: " (crew camp)",
+  dozer_base: " (dozer base)",
+  fallback: " (assumed from a board station)",
+};
+
+function NoAccessList({ dispatch }: { dispatch: CrewDispatch }) {
+  const short = dispatch.trips.filter((trip) => trip.stoppedShortBy);
+  if (dispatch.noAccess.length === 0 && short.length === 0) return null;
+  return (
+    <section className="studio-ff-attack" aria-label="Road access">
+      <h4 className="studio-ff-heading">
+        Road access <Tag>Rules R01–R12</Tag>
+      </h4>
+      <ul className="studio-ff-fires">
+        {dispatch.noAccess.map((item, index) => (
+          <li key={`${item.label}-${index}`}>
+            <Tag tone="danger">No access</Tag> {item.label}: {item.rule ? `${item.rule} ` : ""}
+            {item.why}
+            {item.road ? ` on ${item.road}` : ""}.
+          </li>
+        ))}
+        {short.map((trip) => (
+          <li key={trip.label}>
+            <Tag tone="warning">Stops short</Tag> {trip.label} walks{" "}
+            {(trip.hikeMeters / 1000).toFixed(1)} km: {trip.stoppedShortBy!.rule}{" "}
+            {trip.stoppedShortBy!.why}
+            {trip.stoppedShortBy!.road ? ` on ${trip.stoppedShortBy!.road}` : ""}.
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function AircraftSummary({ result }: { result: FirefightingResult }) {
+  const plan = result.aircraft;
+  if (!plan || plan.aircraft.length === 0) return null;
+  const drops = plan.drops.length;
+  const status = result.dropStatusMeters;
+  return (
+    <section className="studio-ff-attack" aria-label="Aircraft">
+      <h4 className="studio-ff-heading">
+        Aircraft <Tag>Simulated</Tag>
+      </h4>
+      <p className="studio-hint">
+        {drops} drop{drops === 1 ? "" : "s"}, {km(plan.drops.reduce((s, d) => s + d.lineMeters, 0))} km of
+        line
+        {status ? `; ${km(status[0])} km held, ${km(status[1] + status[2])} km lost` : ""}. Wind{" "}
+        {plan.windKnots.toFixed(0)} kt ({Math.round(plan.windEffect * 100)}% effect). Dip{" "}
+        {plan.dipKm.toFixed(1)} km{plan.dipMeasured ? "" : " (assumed)"}.
+      </p>
+      <ol className="studio-ff-candidates">
+        {plan.aircraft.map((row) => (
+          <li key={row.label}>
+            {row.label}
+            {row.baseName ? ` from ${row.baseName} (${row.baseKm} km)` : ""}:{" "}
+            {row.overFireMinute !== null
+              ? `over the fire ${formatElapsed(Math.round(row.overFireMinute))}`
+              : "does not reach the fire"}
+            {row.cycleMinutes !== null ? `, ${row.cycleMinutes} min cycle` : ""}
+            {row.drops > 0 ? `, ${row.drops} drops (${row.gallons.toLocaleString()} gal)` : ""}
+            {row.limitedBy ? ` — ${row.limitedBy}` : ""}
+          </li>
+        ))}
+      </ol>
+      {plan.notes.map((note) => (
+        <p key={note} className="studio-hint">
+          {note}
+        </p>
+      ))}
+    </section>
+  );
+}
+
 function DispatchSummary({ dispatch }: { dispatch: CrewDispatch }) {
   const trips = [...dispatch.trips].sort((a, b) => a.arriveMinute - b.arriveMinute);
+  if (trips.length === 0) return <NoAccessList dispatch={dispatch} />;
   const first = trips[0];
   const last = trips[trips.length - 1];
   const stations = new Set(trips.map((trip) => trip.stationName)).size;
   return (
+    <>
     <section className="studio-ff-attack" aria-label="Crews sent from fire stations">
       <h4 className="studio-ff-heading">
         Crews sent <Tag>Road travel</Tag>
@@ -62,18 +141,27 @@ function DispatchSummary({ dispatch }: { dispatch: CrewDispatch }) {
           : ""}
         .
       </p>
+      {dispatch.notes.map((note) => (
+        <p key={note} className="studio-hint">
+          {note}
+        </p>
+      ))}
       <details className="studio-advanced">
         <summary>Arrival times</summary>
         <ol className="studio-ff-candidates">
           {trips.map((trip) => (
             <li key={trip.label}>
-              {trip.label} from {trip.stationName}: {formatElapsed(Math.round(trip.arriveMinute))} (
-              {Math.round(trip.atRoadMinute - trip.departMinute)} min drive)
+              {trip.label} from {trip.stationName}
+              {ORIGIN_NOTE[trip.origin]}: {formatElapsed(Math.round(trip.arriveMinute))} (
+              {Math.round(trip.atRoadMinute - trip.departMinute)} min drive
+              {trip.hikeMeters >= 50 ? `, ${(trip.hikeMeters / 1000).toFixed(1)} km walk` : ""})
             </li>
           ))}
         </ol>
       </details>
     </section>
+    <NoAccessList dispatch={dispatch} />
+    </>
   );
 }
 
@@ -185,6 +273,7 @@ export default function FirefightingResults({
       </div>
 
       {dispatch && <DispatchSummary dispatch={dispatch} />}
+      <AircraftSummary result={result} />
       {dispatchNote && (
         <Notice compact className="studio-notice">
           {dispatchNote}

@@ -5,12 +5,25 @@ exits and fire stations. This endpoint builds them at runtime from the OpenStree
 Overpass API and caches the result (docs/adr/0017-dispatch-anywhere.md). It ports the
 logic of tools/build_dispatch_area.py, which produced one static fixture offline.
 
-Observed (OSM): road geometry, class, name, lanes, maxspeed, oneway, bridge; place names; fire
-station locations. Assumed (named constants below): lane capacity and default speed by
-class, homes per km of residential street, vehicles per home, one engine per station.
-Synthetic: homes are placed along residential streets, not real buildings; zones are grid
-cells over residential streets, not official evacuation zones. Wire schema: version 2; edge rows
-carry a trailing bridge flag since builder dispatch-area/3 (older cached rows lack it).
+Observed (OSM): road geometry, class, name, lanes, maxspeed, oneway, bridge; a subset of each
+way's tags (TAG_KEYS: surface, tracktype, width, maxweight, ... kept in a deduplicated
+`tagSets` table); highway=turning_circle/turning_loop nodes; where ways leave the box; place
+names; fire station locations. Assumed (named constants below): lane capacity and default speed
+by class (including service 25 and track 15 km/h), homes per km of residential street, vehicles
+per home, one engine per station. Synthetic: homes are placed along residential streets, not
+real buildings; zones are grid cells over residential streets, not official evacuation zones.
+
+Wire schema: version 2, additive. Edge rows carry a trailing bridge flag since builder
+dispatch-area/3 and, since dispatch-area/4, index 10 = tagSets index and index 11 = accessOnly
+flag. "service" and "track" are appended to `classes`; their edges are access-only: they serve
+fire-apparatus routing (the frontend applies per-class access rules, docs/suppression-data.md)
+and never evacuation. The evacuation graph is the largest component of the public ROAD_CLASSES
+edges; access-only edges are kept only when reachable from it, are listed after all public
+edges, and their nodes are indexed after all public nodes. Zones, homes, exits and station
+snapping use public nodes only. One side effect: a public way is split at a node where an
+access-only way joins it (needed to attach the access edge), so a public edge can be two rows.
+`turningNodes` and `boundaryNodes` are node indices (boundaryNodes: a way continues outside the
+box, so the node is not a dead end).
 
 Caching: in-process LRU, then MongoDB `dispatch_areas`, then a fresh build. The cache key
 is the builder version plus the bbox snapped outward to a 0.01 degree grid. MongoDB being
@@ -47,7 +60,7 @@ from .mongodb import get_database
 
 logger = logging.getLogger(__name__)
 
-BUILDER_VERSION = "dispatch-area/3"
+BUILDER_VERSION = "dispatch-area/4"
 COLLECTION = "dispatch_areas"
 MAX_STORED_BYTES = 15 * 1024 * 1024
 LRU_ENTRIES = 8
@@ -76,6 +89,15 @@ ROAD_CLASSES = (
 )
 EXIT_CLASSES = {"motorway", "trunk", "primary", "secondary"}
 RESIDENTIAL_CLASSES = {"residential", "living_street", "unclassified"}
+# Access-only classes: drivable by apparatus but not part of the evacuation network.
+ACCESS_CLASSES = ("service", "track")
+EXCLUDED_SERVICE = ("driveway", "parking_aisle", "drive-through")
+TURNING_CLASSES = ("turning_circle", "turning_loop")
+TAG_KEYS = (
+    "highway", "surface", "tracktype", "smoothness", "width", "maxweight", "maxheight", "bridge",
+    "access", "emergency", "motor_vehicle", "lanes", "oneway", "maxspeed", "service", "junction",
+    "noexit",
+)
 PLACE_KINDS = ("neighbourhood", "suburb", "quarter", "hamlet", "village", "town")
 
 # Assumed traffic parameters (not observed). Saturation flow per lane by class, vehicles/hour,
@@ -87,6 +109,7 @@ DEFAULT_CAPACITY_PER_LANE_VPH = 600
 SPEED_DEFAULT_KPH = {
     "motorway": 100, "trunk": 80, "primary": 56, "secondary": 48, "tertiary": 40,
     "unclassified": 40, "residential": 32, "living_street": 16,
+    "service": 25, "track": 15,  # assumed: no observed speed for these classes
 }
 KPH_PER_MPH = 1.609344
 
@@ -113,6 +136,8 @@ NOTES = [
     "Homes are synthetic: placed every ~40 m along both sides of residential streets, "
     "not real buildings or Census counts.",
     "Each OSM fire station is given one engine; real staffing is not modelled.",
+    "Service roads and tracks are access-only edges for apparatus routing; they are not "
+    "evacuation roads, and their speed (service 25, track 15 km/h) is assumed.",
 ]
 
 Box = tuple[float, float, float, float]  # west, south, east, north
@@ -295,36 +320,47 @@ def build_area(box: Box) -> dict:
         return s <= lat <= n and w <= lon <= e
 
     classes = "|".join(ROAD_CLASSES)
+    excluded = "|".join(EXCLUDED_SERVICE)
+    bbox = f"({s},{w},{n},{e})"
     buf_lat = STATION_SEARCH_BUFFER_M / M_PER_DEG_LAT
     buf_lon = STATION_SEARCH_BUFFER_M / m_lon
     # One request: roads with their nodes, then place nodes and fire stations (the latter in
     # a box expanded by STATION_SEARCH_BUFFER_M so stations just outside can still serve it).
     roads = overpass(
         f"[out:json][timeout:{OVERPASS_QUERY_TIMEOUT_S}];"
-        f'way[highway~"^({classes})$"]({s},{w},{n},{e});out body;>;out skel qt;'
-        f'(node[place~"^({"|".join(PLACE_KINDS)})$"]({s},{w},{n},{e});'
+        f'(way[highway~"^({classes})$"]{bbox};way[highway=track]{bbox};'
+        f'way[highway=service][service!~"^({excluded})$"]{bbox};);out body;>;out skel qt;'
+        f'(node[place~"^({"|".join(PLACE_KINDS)})$"]{bbox};'
+        f'node[highway~"^({"|".join(TURNING_CLASSES)})$"]{bbox};'
         f"nwr[amenity=fire_station]({s - buf_lat:.6f},{w - buf_lon:.6f},{n + buf_lat:.6f},{e + buf_lon:.6f}););"
         "out center;"
     )
     osm_timestamp = roads.get("osm3s", {}).get("timestamp_osm_base")
 
     coords: dict[int, tuple[float, float]] = {}
+    turning_refs: set[int] = set()
     ways = []
     for element in roads["elements"]:
         if element.get("type") == "node":
             coords[element["id"]] = (element["lon"], element["lat"])
+            if element.get("tags", {}).get("highway") in TURNING_CLASSES:
+                turning_refs.add(element["id"])
         elif element.get("type") == "way" and "highway" in element.get("tags", {}):
             ways.append(element)
 
     # Split each way into runs of consecutive inside nodes; remember boundary-crossing nodes
     # as exit candidates, with the direction a vehicle would leave.
     runs = []
-    exit_candidates = []  # (ref, class, label)
+    exit_candidates = []  # (ref, class, label); public roads only
+    boundary_refs: set[int] = set()  # inside nodes where any kept way continues outside the box
     for way in ways:
         tags = way.get("tags", {})
         cls = tags["highway"]
-        if cls not in ROAD_CLASSES:
+        if cls not in ROAD_CLASSES and cls not in ACCESS_CLASSES:
             continue
+        if cls == "service" and tags.get("service") in EXCLUDED_SERVICE:
+            continue
+        public = cls in ROAD_CLASSES
         oneway = tags.get("oneway") in ("yes", "true", "1") or cls in ("motorway", "motorway_link")
         reverse = tags.get("oneway") == "-1"
         refs = list(reversed(way["nodes"])) if reverse else way["nodes"]
@@ -340,7 +376,9 @@ def build_area(box: Box) -> dict:
                 leaves_forward = nxt in coords and not inside(*coords[nxt])
                 leaves_backward = (not oneway) and prv in coords and not inside(*coords[prv])
                 if leaves_forward or leaves_backward:
-                    exit_candidates.append((ref, cls, tags.get("ref") or tags.get("name") or cls))
+                    boundary_refs.add(ref)
+                    if public:
+                        exit_candidates.append((ref, cls, tags.get("ref") or tags.get("name") or cls))
             else:
                 if len(run) >= 2:
                     runs.append((run, tags, cls, oneway))
@@ -366,7 +404,7 @@ def build_area(box: Box) -> dict:
             nodes.append([round(lon, 6), round(lat, 6)])
         return node_index[ref]
 
-    class_list = list(ROAD_CLASSES)
+    class_list = [*ROAD_CLASSES, *ACCESS_CLASSES]
     names: list[str] = []
     name_index: dict[str, int] = {}
     edges: list[list] = []
@@ -379,6 +417,8 @@ def build_area(box: Box) -> dict:
         base = cls.removesuffix("_link")
         capacity = lanes_one_direction(tags, oneway) * CAPACITY_PER_LANE_VPH.get(base, DEFAULT_CAPACITY_PER_LANE_VPH)
         bridge = 1 if tags.get("bridge", "no") not in ("no", "") else 0
+        tag_key = tuple(sorted((k, str(tags[k])) for k in TAG_KEYS if k in tags))
+        access_only = 0 if cls in ROAD_CLASSES else 1
         start = 0
         for i in range(1, len(run)):
             ref = run[i]
@@ -390,13 +430,19 @@ def build_area(box: Box) -> dict:
                     edges.append([
                         node_id(segment[0]), node_id(segment[-1]), round(length, 1), class_list.index(cls),
                         kph, capacity, 1 if oneway else 0, name_index.get(name, -1), geometry, bridge,
+                        tag_key, access_only,
                     ])
                 start = i
 
     if not edges:
         raise NoRoads
 
-    # Keep the largest weakly connected component.
+    # Keep the largest weakly connected component of the public road edges, exactly as before
+    # access-only edges existed. Public nodes keep their relative order and edges stay first.
+    public_edges = [ed for ed in edges if not ed[11]]
+    access_edges = [ed for ed in edges if ed[11]]
+    if not public_edges:
+        raise NoRoads
     parent = list(range(len(nodes)))
 
     def find(x: int) -> int:
@@ -405,21 +451,65 @@ def build_area(box: Box) -> dict:
             x = parent[x]
         return x
 
-    for edge in edges:
+    public_nodes = {i for ed in public_edges for i in (ed[0], ed[1])}
+    for edge in public_edges:
         ra, rb = find(edge[0]), find(edge[1])
         if ra != rb:
             parent[ra] = rb
     sizes: dict[int, int] = defaultdict(int)
-    for i in range(len(nodes)):
+    for i in sorted(public_nodes):
         sizes[find(i)] += 1
     main = max(sizes, key=sizes.get)
-    keep = [i for i in range(len(nodes)) if find(i) == main]
+    keep = [i for i in sorted(public_nodes) if find(i) == main]
     remap = {old: new for new, old in enumerate(keep)}
-    nodes = [nodes[i] for i in keep]
-    edges = [[remap[ed[0]], remap[ed[1]], *ed[2:]] for ed in edges if ed[0] in remap and ed[1] in remap]
+    n_public = len(keep)
+
+    # Access-only edges: keep those reachable from the kept public nodes through access-only
+    # edges (breadth-first over the union graph), then index their new nodes after the public ones.
+    adjacency: dict[int, list[int]] = defaultdict(list)
+    for k, ed in enumerate(access_edges):
+        adjacency[ed[0]].append(k)
+        adjacency[ed[1]].append(k)
+    dropped = public_nodes - set(keep)  # public roads outside the evacuation component
+    reached = set(keep)
+    kept_access: set[int] = set()
+    queue = list(keep)
+    while queue:
+        node = queue.pop()
+        for k in adjacency.get(node, ()):
+            if k in kept_access or access_edges[k][0] in dropped or access_edges[k][1] in dropped:
+                continue
+            kept_access.add(k)
+            for other in (access_edges[k][0], access_edges[k][1]):
+                if other not in reached:
+                    reached.add(other)
+                    queue.append(other)
+    access_edges = [ed for k, ed in enumerate(access_edges) if k in kept_access]
+    for ed in access_edges:
+        for i in (ed[0], ed[1]):
+            if i not in remap:
+                remap[i] = len(remap)
+    new_order = sorted(remap, key=remap.get)
+    nodes = [nodes[i] for i in new_order]
+    edges = [
+        [remap[ed[0]], remap[ed[1]], *ed[2:]]
+        for ed in public_edges
+        if ed[0] in remap and ed[1] in remap and find(ed[0]) == main
+    ] + [[remap[ed[0]], remap[ed[1]], *ed[2:]] for ed in access_edges]
     ref_to_node = {ref: remap[idx] for ref, idx in node_index.items() if idx in remap}
-    if not edges:
+    n_public_edges = sum(1 for ed in edges if not ed[11])
+    if not n_public_edges:
         raise NoRoads
+    tag_sets: list[dict[str, str]] = []
+    tag_index: dict[tuple, int] = {}
+    for ed in edges:
+        key = ed[10]
+        if key not in tag_index:
+            tag_index[key] = len(tag_sets)
+            tag_sets.append(dict(key))
+        ed[10] = tag_index[key]
+    turning_nodes = sorted({ref_to_node[r] for r in turning_refs if r in ref_to_node})
+    boundary_nodes = sorted({ref_to_node[r] for r in boundary_refs if r in ref_to_node})
 
     # Exits: deduplicated boundary crossings of major roads (any road class as a fallback).
     def pick_exits(candidates: list[tuple[int, str, str]], rank: dict[str, int]) -> list[dict]:
@@ -467,7 +557,7 @@ def build_area(box: Box) -> dict:
     # Homes: synthetic, on both sides of residential edges.
     res_edges = []
     for ei, edge in enumerate(edges):
-        if class_list[edge[3]] not in RESIDENTIAL_CLASSES:
+        if edge[11] or class_list[edge[3]] not in RESIDENTIAL_CLASSES:
             continue
         a, b = nodes[edge[0]], nodes[edge[1]]
         geom = edge[8]
@@ -531,7 +621,7 @@ def build_area(box: Box) -> dict:
     out_stations = []
     for i, station in enumerate(sorted(nearest, key=lambda st: st["name"]), start=1):
         loc = tuple(station["location"])
-        node = min(range(len(nodes)), key=lambda j: haversine_m(loc, tuple(nodes[j])))
+        node = min(range(n_public), key=lambda j: haversine_m(loc, tuple(nodes[j])))
         out_stations.append({
             "id": f"S{i:02d}", "name": station["name"], "node": node, "location": station["location"],
             "approachMeters": round(haversine_m(loc, tuple(nodes[node]))),
@@ -566,6 +656,9 @@ def build_area(box: Box) -> dict:
         "names": names,
         "nodes": nodes,
         "edges": edges,
+        "tagSets": tag_sets,
+        "turningNodes": turning_nodes,
+        "boundaryNodes": boundary_nodes,
         "zones": zones,
         "homes": homes_out,
         "exits": exits,

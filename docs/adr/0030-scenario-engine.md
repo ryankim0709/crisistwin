@@ -1,6 +1,6 @@
 # 0030: Scenario engine: any California fire as a live drill that generates all live data
 
-Date: 2026-10-24. Status: proposed (design for the next build phase).
+Date: 2026-10-24. Status: proposed (design for the next build phase). Item 5 (one active wildfire) is built: see [0047-active-incident](0047-active-incident.md).
 
 ## Context
 

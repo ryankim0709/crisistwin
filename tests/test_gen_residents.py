@@ -298,11 +298,88 @@ class LiveApiValidatorTest(unittest.TestCase):
 
         reports = [ev for ev in self.events if ev["type"] == "report"]
         self.assertTrue(reports)
-        with mock.patch.object(self.views, "get_index", lambda: _Index()):
+        with mock.patch.object(self.views, "get_index", lambda *a, **k: _Index()):
             for ev in reports:
                 fields = self.views._validate_report(ev["body"], "synthetic-drill")
                 self.assertEqual(fields["kind"], ev["body"]["kind"])
                 self.assertEqual(fields["location"]["coord"], ev["body"]["location"]["coord"])
+
+    def test_board_reports_pass_server_validator(self):
+        from unittest import mock
+
+        class _Index:
+            destinations: dict = {}
+            segment_lines = {f"s{k}": ((_lon(k), LAT), (_lon(k + 1), LAT)) for k in range(N_NODES - 1)}
+
+        events = run_board(seed=1, board_answer_share=0.5, passive_setting_share=1.0)["events"]
+        passive = [ev for ev in events if ev["body"].get("method") == "passive"]
+        self.assertTrue(passive)
+        with mock.patch.object(self.views, "get_index", lambda *a, **k: _Index()):
+            for ev in passive:
+                fields = self.views._validate_passive(ev["body"], ev["body"]["client_id"], ev["body"]["kind"])
+                self.assertEqual(fields["segment_id"], ev["body"]["segment_id"])
+
+
+def board_items(at: str) -> list[dict]:
+    """Open board questions for every corridor segment (the GET board `items` shape), all day."""
+    return [{"task_id": f"tsk_s{k}", "rank": k + 1, "question": "road_status",
+             "place": {"kind": "segment", "segment_id": f"s{k}", "destination_id": None, "name": "Main Road",
+                       "coord": [_lon(k) + STEP_DEG / 2, LAT], "line": [[_lon(k), LAT], [_lon(k + 1), LAT]],
+                       "free_flow_kph": 50},
+             "expires_at": "2018-11-09T00:00:00Z"} for k in range(N_NODES - 1)]
+
+
+def run_board(seed=1, until="2018-11-08T19:00:00Z", **kw) -> dict:
+    return run_residents(synthetic_twin(), until, ResidentParams(seed=seed, **kw), incident_id="synthetic-drill",
+                         board=board_items)
+
+
+class BoardTest(unittest.TestCase):
+    """ADR 0041: simulated residents answer board questions on the road they drive, and send passive
+    observations only when their (seeded) setting is on."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.result = run_board(seed=1)
+        cls.events = cls.result["events"]
+
+    def test_answers_and_passive_observations(self):
+        answers = [ev for ev in self.events if ev["type"] == "report" and ev["body"].get("task_id")]
+        explicit = [ev for ev in answers if ev["body"].get("method") != "passive"]
+        passive = [ev for ev in answers if ev["body"].get("method") == "passive"]
+        self.assertTrue(explicit)
+        self.assertTrue(passive)
+        for ev in explicit:
+            self.assertIn(ev["body"]["kind"], ("road_passable", "heavy_traffic", "road_blocked"))
+            self.assertEqual(ev["cause"]["state"], "board_question")
+        for ev in passive:
+            body = ev["body"]
+            self.assertNotIn("location", body)
+            self.assertIn(body["kind"], ("road_passable", "heavy_traffic"))
+            self.assertIn(body["speed_class"], ("free", "slow"))
+            validate_body(ev)
+        gen = ResidentGenerator(synthetic_twin(), ResidentParams(seed=1))
+        sharing = {ev["party_key"] for ev in passive}
+        self.assertTrue(all(gen.shares_road_observations(pk) for pk in sharing))
+
+    def test_once_per_question_and_household(self):
+        seen = set()
+        for ev in self.events:
+            tid = ev["body"].get("task_id")
+            if not tid or ev["body"]["kind"] == "heavy_traffic" and ev["body"].get("method") == "passive":
+                continue
+            key = (ev["party_key"], tid)
+            self.assertNotIn(key, seen)
+            seen.add(key)
+
+    def test_setting_off_and_no_answers_leaves_the_stream_unchanged(self):
+        quiet = run_board(seed=1, board_answer_share=0.0, passive_setting_share=0.0)["events"]
+        self.assertEqual(json.dumps(quiet), json.dumps(run(seed=1, board_answer_share=0.0,
+                                                               passive_setting_share=0.0)["events"]))
+        self.assertFalse([ev for ev in quiet if ev["body"].get("task_id")])
+
+    def test_deterministic(self):
+        self.assertEqual(json.dumps(run_board(seed=1)["events"]), json.dumps(self.events))
 
 
 class CampTest(unittest.TestCase):

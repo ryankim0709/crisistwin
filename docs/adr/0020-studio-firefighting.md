@@ -4,6 +4,9 @@ Date: 2026-10-24. Status: accepted for the demo. Amends
 [0004-physics-fire-model](0004-physics-fire-model.md) (which had no suppression) and builds on
 [0011-simulation-studio](0011-simulation-studio.md).
 
+> **Superseded in part by [0048-suppression-engine](0048-suppression-engine.md):** production
+> rates, resource kinds and the assumed-rate paragraph below are replaced by sourced tables.
+>
 > **Update (2026-10-24):** the control-line results below predate a solver fix in
 > [0025](0025-dispatch-fire-tactics.md) (line judged at fire arrival); lines now hold more.
 

@@ -24,6 +24,8 @@ All outputs are planning experiments, not operational fire or evacuation guidanc
 | `ground_rates.py` | Empirical 911, radio and rescue rates from the Camp 2018 ground record, relative to zone fire arrival and orders; `fit_camp_2018()` ([calibration](../docs/ground-data-calibration.md)) |
 | `evaluation.py` | Strategy comparison statistics: run manifests, paired bootstrap CIs, sign-flip test, Holm, effect sizes, power from pilot variance, result tables ([protocol](../docs/strategy-evaluation.md)) |
 | `gen_comms.py` | Seeded synthetic 911, radio and rescue items (`simulated`) for any scenario, in the ground-record item schema, calibrated by `GroundRateParams`; `generate_comms()` ([generator](../docs/ground-data-calibration.md#generator), [ADR](../docs/adr/0035-comms-generator.md)) |
+| `gen_noise.py` | Seeded noisy and adversarial ground data on top of the honest generators (honest error, duplicates, late uploads, stale truth, rumours, out of area, malicious), profiles `clean`/`typical`/`hostile`, and the hidden truth map; `apply_noise()`. Inject with `python manage.py live_inject_noise` ([ADR](../docs/adr/0042-adversarial-ground-data.md)) |
+| `triage_quality.py` | Scores triage against the truth log (confirm and dismiss precision and recall, time to detect truth changes, decisions on false reports, rumour containment); the AAR's `triage_quality` and `evaluation.TRIAGE_METRICS` |
 | `bundle.py` | Assemble the web-app replay bundle ([contract](../docs/replay-bundle.md)) |
 | `__main__.py` | CLI |
 

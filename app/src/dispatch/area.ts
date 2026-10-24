@@ -38,6 +38,16 @@ export interface RoadEdge {
   bridge: boolean;
   /** Full polyline from `from` to `to`. */
   coords: LonLat[];
+  /**
+   * OSM tags kept for road-access rules (surface, tracktype, smoothness, width, maxweight,
+   * maxheight, bridge, access, emergency, ...); empty for areas built before dispatch-area/4.
+   */
+  tags?: Readonly<Record<string, string>>;
+  /**
+   * A service road or track kept only for apparatus access (dispatch-area/4). It is not in
+   * `outgoing`, so evacuation and the dispatch agent never route over it.
+   */
+  accessOnly?: boolean;
 }
 
 /** A road's display name: its OSM name or class, marked when it is a bridge. */
@@ -100,8 +110,14 @@ export interface DispatchArea {
   notes: string[];
   nodes: LonLat[];
   edges: RoadEdge[];
-  /** Outgoing arcs per node, respecting one-way edges. */
+  /** Outgoing arcs per node over public roads, respecting one-way edges. */
   outgoing: Arc[][];
+  /** Outgoing arcs per node over every edge, access-only service roads and tracks included. */
+  allOutgoing?: Arc[][];
+  /** Nodes tagged highway=turning_circle or turning_loop (empty before dispatch-area/4). */
+  turningNodes?: number[];
+  /** Nodes where a way leaves the area's box (empty before dispatch-area/4). */
+  boundaryNodes?: number[];
   zones: Zone[];
   /** Grouped by zone; within a zone in departure order. */
   homes: Home[];
@@ -150,12 +166,14 @@ export function parseArea(json: unknown): DispatchArea {
   }
   const classes = asArray(raw.classes, "classes") as string[];
   const names = asArray(raw.names, "names") as string[];
+  const tagSets = (Array.isArray(raw.tagSets) ? raw.tagSets : []) as Record<string, string>[];
   const nodes = asArray(raw.nodes, "nodes").map((node, i) => asLonLat(node, `nodes[${i}]`));
   const count = nodes.length;
 
   const edges: RoadEdge[] = asArray(raw.edges, "edges").map((value, index) => {
     const row = asArray(value, `edges[${index}]`);
-    const [from, to, length, cls, kph, capacity, oneway, name, flat, bridge] = row;
+    const [from, to, length, cls, kph, capacity, oneway, name, flat, bridge, tagSet, accessOnly] =
+      row;
     if (
       typeof length !== "number" ||
       length <= 0 ||
@@ -187,14 +205,24 @@ export function parseArea(json: unknown): DispatchArea {
       name: name >= 0 ? (names[name] ?? null) : null,
       bridge: bridge === 1,
       coords,
+      tags: (typeof tagSet === "number" && tagSets[tagSet]) || {},
+      accessOnly: accessOnly === 1,
     };
   });
 
   const outgoing: Arc[][] = nodes.map(() => []);
+  const allOutgoing: Arc[][] = nodes.map(() => []);
   for (const edge of edges) {
-    outgoing[edge.from].push({ edge: edge.index, forward: true, head: edge.to });
-    if (!edge.oneway) outgoing[edge.to].push({ edge: edge.index, forward: false, head: edge.from });
+    const arcs = edge.accessOnly ? [allOutgoing] : [outgoing, allOutgoing];
+    for (const list of arcs) {
+      list[edge.from].push({ edge: edge.index, forward: true, head: edge.to });
+      if (!edge.oneway) list[edge.to].push({ edge: edge.index, forward: false, head: edge.from });
+    }
   }
+  const nodeList = (value: unknown) =>
+    (Array.isArray(value) ? value : []).filter(
+      (n): n is number => Number.isInteger(n) && (n as number) >= 0 && (n as number) < count,
+    );
 
   const rawZones = asArray(raw.zones, "zones");
   const homes: Home[] = asArray(raw.homes ?? [], "homes").map((value, i) => {
@@ -285,6 +313,9 @@ export function parseArea(json: unknown): DispatchArea {
     nodes,
     edges,
     outgoing,
+    allOutgoing,
+    turningNodes: nodeList(raw.turningNodes),
+    boundaryNodes: nodeList(raw.boundaryNodes),
     zones,
     homes,
     exits,

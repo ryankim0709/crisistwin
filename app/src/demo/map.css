@@ -1,0 +1,14 @@
+/* Command demo map. The legend reuses the lc-legend classes from live.css. */
+.dm-map {
+  position: absolute;
+  inset: 0;
+}
+.dm-map--ignite .maplibregl-canvas,
+.dm-map--ignite .maplibregl-canvas-container.maplibregl-interactive {
+  cursor: crosshair !important;
+}
+.dm-legend-note {
+  margin: var(--ct-space-2) 0 0;
+  font-size: var(--ct-text-xs);
+  opacity: 0.75;
+}

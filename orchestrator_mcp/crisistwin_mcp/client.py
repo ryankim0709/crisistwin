@@ -15,7 +15,7 @@ import urllib.request
 from collections.abc import Callable
 from typing import Any
 
-from .config import Config
+from .config import ACTIVE_CACHE_S, DEFAULT_INCIDENT_ID, Config
 
 ACTOR_HEADER = "X-CrisisTwin-Actor"
 API_PREFIX = "/api/live/"
@@ -63,6 +63,7 @@ class CrisisTwinClient:
         self.config = config
         self.transport = transport or urllib_transport
         self._command_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        self._active: tuple[float, str] | None = None
 
     def __repr__(self) -> str:  # never show the token
         return f"CrisisTwinClient(api_base={self.config.api_base!r}, actor={self.config.actor!r})"
@@ -107,6 +108,20 @@ class CrisisTwinClient:
     def post(self, path: str, body: dict[str, Any] | None = None, *, write: bool = True) -> Any:
         """``write=False`` for POSTs that change nothing (impact, twin what-if): no actor header."""
         return self.request("POST", path, body=body, write=write)
+
+    def active_incident(self) -> str:
+        """The backend's active incident (``GET /api/live/active``), cached ``ACTIVE_CACHE_S``;
+        ``DEFAULT_INCIDENT_ID`` when it cannot be read (an older backend has no such endpoint)."""
+        if self._active and time.monotonic() - self._active[0] < ACTIVE_CACHE_S:
+            return self._active[1]
+        try:
+            body = self.get("active")
+            incident_id = str(body["incident_id"]).strip() if isinstance(body, dict) else ""
+        except (BackendError, KeyError):
+            incident_id = ""
+        incident_id = incident_id or DEFAULT_INCIDENT_ID
+        self._active = (time.monotonic(), incident_id)
+        return incident_id
 
     def command(self, incident_id: str) -> dict[str, Any]:
         cached = self._command_cache.get(incident_id)

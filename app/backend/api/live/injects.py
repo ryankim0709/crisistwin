@@ -154,7 +154,7 @@ def refuse_if_no_signal(
         return None
     from .state import clock_from, drill_doc  # local: state imports this module
 
-    index = get_index()
+    index = get_index(incident_id)
     replay_now = clock_from(drill_doc(incident_id), index, wall).replay_now
     dead = no_signal_zones(docs, replay_now)
     if not dead:
@@ -195,7 +195,7 @@ def segment_choices(index: DrillIndex) -> list[dict[str, Any]]:
 def _create(incident_id: str, principal: Principal, body: dict[str, Any]) -> dict[str, Any]:
     from .state import clock_from, drill_doc
 
-    index = get_index()
+    index = get_index(incident_id)
     now = wall_now()
     clock = clock_from(drill_doc(incident_id), index, now)
     try:
@@ -240,14 +240,14 @@ def _delete(incident_id: str, inject_id: str | None) -> Response:
     doc = col("live_injects").find_one_and_delete({"incident_id": incident_id, "id": inject_id}) if inject_id else None
     if doc is None:
         return error(404, "not_found", "Unknown inject.")
-    _log(incident_id, "inject_deleted", rules.label(doc["type"], doc["params"], _names(get_index())), wall_now(),
+    _log(incident_id, "inject_deleted", rules.label(doc["type"], doc["params"], _names(get_index(incident_id))), wall_now(),
          "controller")
     return ok({"deleted": inject_id})
 
 
 @live_view(["GET", "POST", "DELETE"], roles=["controller"])
 def incident_injects(request, incident_id: str, principal: Principal):
-    index = get_index()
+    index = get_index(incident_id)
     if request.method == "DELETE":
         return _delete(incident_id, request.query_params.get("id"))
     if request.method == "GET":

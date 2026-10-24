@@ -114,6 +114,15 @@ class ToolTest(unittest.TestCase):
             self.assertEqual(r["headers"]["Authorization"], f"Bearer {TOKEN}")
             self.assertNotIn(ACTOR_HEADER, r["headers"])
 
+    def test_default_incident_is_the_active_one(self):
+        self.call("get_situation")
+        paths = [r["path"] for r in self.backend.requests]
+        self.assertEqual(paths[0], "active")
+        self.assertIn("incidents/camp-2018-drill/command", paths)
+        self.backend.requests.clear()
+        self.call("get_situation", server=self.server(incident_id="camp-2018-drill"))
+        self.assertNotIn("active", [r["path"] for r in self.backend.requests])
+
     def test_get_situation_while_twin_warms(self):
         self.backend.twin = None
         out = self.call("get_situation")
@@ -228,7 +237,8 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.api_base, "http://localhost:8000")
         self.assertEqual(config.actor, "agent:planner-1")
         self.assertTrue(config.allow_clock)
-        self.assertEqual(config.incident_id, "camp-2018-drill")
+        self.assertIsNone(config.incident_id)  # follows the backend's active incident
+        self.assertEqual(Config.from_env({"ORCH_INCIDENT_ID": "studio-abc"}).incident_id, "studio-abc")
         self.assertNotIn(TOKEN, repr(config))
         self.assertNotIn(TOKEN, repr(CrisisTwinClient(config)))
         self.assertFalse(Config.from_env({}).allow_clock)
