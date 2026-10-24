@@ -12,6 +12,9 @@ routed over. Pure computation: no file I/O, network, or wall-clock time.
 from __future__ import annotations
 
 import heapq
+import io
+import pickle
+import types
 from bisect import bisect_left, bisect_right
 import math
 import random
@@ -429,302 +432,598 @@ def simulate_traffic(
     ids; they are applied immediately like scheduled events and appended to
     `generated_events` with their own evidence_class and label.
     """
-    _validate(network, zones, destinations, events, start, end)
-    if controllers and (not isinstance(controller_every_s, int) or controller_every_s <= 0
-                        or controller_every_s % params.step_s):
-        raise ValueError("controller_every_s must be a positive multiple of step_s")
-    bp = params.behavior
-    agents_on = bp.enabled
-    step = params.step_s
-    horizon_s = int((end - start).total_seconds())
-    n_steps = horizon_s // step
+    engine = TrafficEngine(network, zones, destinations, events, params, start=start, end=end,
+                           fire_area_at=fire_area_at, controllers=controllers, controller_every_s=controller_every_s)
+    engine.run_to_end()
+    return engine.result()
 
-    # --- network arrays (index-based for speed)
-    node_ids = sorted(network.nodes)
-    node_ix = {n: i for i, n in enumerate(node_ids)}
-    edges = network.edges
-    n_edges = len(edges)
-    e_from = [node_ix[e.from_node] for e in edges]
-    e_to = [node_ix[e.to_node] for e in edges]
-    e_fft = [e.length_m / (e.speed_kph / 3.6) for e in edges]
-    e_cap_step = [e.capacity_veh_per_hour * step / 3600 for e in edges]
-    # Credit is capped so an idle edge can release at most one full packet (or one step's capacity) at once.
-    e_credit_max = [max(c, params.packet_size_veh) for c in e_cap_step]
-    # An edge always stores at least one packet, so very short edges cannot deadlock.
-    e_storage = [
-        max(params.packet_size_veh, e.length_m / 1000 * e.lanes * params.jam_density_veh_per_km_lane) for e in edges
-    ]
-    e_base_vph = [e.capacity_veh_per_hour for e in edges]
-    e_base_storage = list(e_storage)
-    cap_factor: dict[int, float] = {}  # edge -> capacity_changed factor
-    seg_dir = {(e.segment_id, e.from_node, e.to_node): i for i, e in enumerate(edges)}
-    twin = [seg_dir.get((e.segment_id, e.to_node, e.from_node)) for e in edges]
-    contraflow_out: dict[int, int] = {}  # outbound edge -> reverse twin it borrows lanes from
-    contraflow_in: set[int] = set()  # reverse twins closed to new entry by contraflow
-    e_mid = [_midpoint(e.coords) if e.coords else network.nodes[e.from_node] for e in edges]
-    mid_order = sorted(range(n_edges), key=lambda i: e_mid[i][0])  # edges by midpoint longitude
-    mid_lons = [e_mid[i][0] for i in mid_order]
-    in_edges: list[list[int]] = [[] for _ in node_ids]
-    for i in range(n_edges):
-        in_edges[e_to[i]].append(i)
 
-    queue: list[deque] = [deque() for _ in range(n_edges)]  # packets: [count, ready_at_s, zone index, agent]
-    occ = [0] * n_edges
-    credit = [0.0] * n_edges
-    active: set[int] = set()
+# --- resumable engine (docs/adr/0013-realtime-twin.md)
 
-    # --- destinations
-    dest_list = list(destinations)
-    dest_arrived = [0] * len(dest_list)
-    dest_full = [d.capacity_veh is not None and d.capacity_veh <= 0 for d in dest_list]
-    dest_full_s: list[float | None] = [0.0 if f else None for f in dest_full]
-    dest_ix = {d.id: i for i, d in enumerate(dest_list)}
-    dest_refuge = [d.kind == REFUGE_KIND for d in dest_list]
-    dest_series: list[list[list]] = [[] for _ in dest_list]  # per destination: [[t_s, veh], ...] by step
-    first_toggle: dict[str, str] = {}
-    for ev in sorted(events, key=lambda ev: (ev.at, ev.id)):
-        if ev.destination_id is not None and ev.type in DESTINATION_OPEN_EVENT_TYPES + DESTINATION_CLOSE_EVENT_TYPES:
-            first_toggle.setdefault(ev.destination_id, ev.type)
-    dest_open = [first_toggle.get(d.id) not in DESTINATION_OPEN_EVENT_TYPES for d in dest_list]
-    dests_at_node: dict[int, list[int]] = {}
-    for i, d in enumerate(dest_list):
-        dests_at_node.setdefault(node_ix[d.node_id], []).append(i)
+ZONE_ROUTE_EVENT_TYPES = ("zone_rerouted",)  # with zone_ids and destination_id (None clears the assignment)
 
-    # --- demand
-    zone_list = list(zones)
-    n_zones = len(zone_list)
-    zone_ix = {z.id: i for i, z in enumerate(zone_list)}
-    zone_departures: list[list[list]] = [[] for _ in zone_list]  # per zone: [[t_s, veh], ...] by step
-    zone_arrivals: list[list[list]] = [[] for _ in zone_list]
-    z_waiting = [z.vehicles for z in zone_list]  # vehicle counts by state, per zone
-    z_preparing = [0] * n_zones
-    z_departed = [0] * n_zones
-    z_arrived = [0] * n_zones
-    z_ordered_s: list[float | None] = [None] * n_zones
-    z_warned_s: list[float | None] = [None] * n_zones
-    zone_packets: dict[str, list[tuple[float, int, int]]] = {}  # fixed-delay engine: zone -> [(delay_s, node, count)]
-    # Agent arrays (behaviour on): one agent per packet.
-    ag_zone: list[int] = []
-    ag_node: list[int] = []
-    ag_count: list[int] = []
-    ag_wait_fire: list[bool] = []
-    ag_herd: list[bool] = []
-    ag_trigger: list[str | None] = []
-    ag_turn_edge: list[int] = []  # edge on which the agent last made its turn-back decision
-    zone_waiting_agents: list[list[int]] = [[] for _ in zone_list]
-    z_trigger_veh = [dict.fromkeys(bh.TRIGGERS, 0) for _ in zone_list]
-    if not agents_on:
-        # Draw every packet's delay up front so draws do not depend on event handling.
-        rng = random.Random(params.seed)
-        mu = math.log(params.response_delay_median_min * 60)
-        delay_cap_s = params.response_delay_max_min * 60
-        for z in zones:
-            packets = []
-            full, rest = divmod(z.vehicles, params.packet_size_veh)
-            counts = [params.packet_size_veh] * full + ([rest] if rest else [])
-            for k, count in enumerate(counts):
-                delay = min(delay_cap_s, rng.lognormvariate(mu, params.response_delay_sigma))
-                packets.append((delay, node_ix[z.origin_nodes[k % len(z.origin_nodes)]], count))
-            zone_packets[z.id] = packets
-    else:
-        brng = random.Random(f"{params.seed}:behavior")  # own stream; str seeds are stable across processes
-        for zi, z in enumerate(zone_list):
-            full, rest = divmod(z.vehicles, params.packet_size_veh)
-            counts = [params.packet_size_veh] * full + ([rest] if rest else [])
-            for k, count in enumerate(counts):
-                zone_waiting_agents[zi].append(len(ag_zone))
-                ag_zone.append(zi)
-                ag_node.append(node_ix[z.origin_nodes[k % len(z.origin_nodes)]])
-                ag_count.append(count)
-                ag_wait_fire.append(brng.random() < bp.wait_for_fire_share)
-                ag_herd.append(brng.random() < bp.herding_prob)
-                ag_trigger.append(None)
-                ag_turn_edge.append(-1)
-        response_scale = params.response_delay_median_min / REFERENCE_RESPONSE_DELAY_MEDIAN_MIN
-        prep_mu = math.log(bp.prep_median_min * 60 * response_scale)
-        prep_cap_s = bp.prep_max_min * 60 * response_scale
-    total_veh = sum(z.vehicles for z in zones)
-    nd_at_node: dict[int, int] = {}  # origin node -> vehicles not yet departed from it
-    if agents_on:
-        for a, n in enumerate(ag_node):
-            nd_at_node[n] = nd_at_node.get(n, 0) + ag_count[a]
-    else:
-        for packets in zone_packets.values():
-            for _, n, count in packets:
-                nd_at_node[n] = nd_at_node.get(n, 0) + count
-    origin_order = sorted(nd_at_node, key=lambda n: network.nodes[node_ids[n]][0])
-    origin_lons = [network.nodes[node_ids[n]][0] for n in origin_order]
-    origin_pts = {n: network.nodes[node_ids[n]] for n in nd_at_node}
-    origin_burned: set[int] = set()  # origin nodes inside the fire area in effect (cumulative per fire_area_cumulative)
-    pending: list[tuple[float, int, int, int, int]] = []  # fixed delay: (depart_s, seq, node, count, zone index)
-    preparing: list[tuple[float, int]] = []  # agents: (depart_s, agent)
-    returning: list[tuple[float, int, int, int, int, int]] = []  # turned back: (at_s, seq, node, count, zone, agent)
-    seq = 0
-    released_zones: set[str] = set()
-    first_order_s: float | None = None
-    waiting: dict[int, deque] = {}  # node -> departed packets [count, zone index, agent] not yet on an edge
-    departed_by = dict.fromkeys(bh.TRIGGERS, 0)
-    turned_back = 0
-    zone_memory: list[dict[int, int]] = [{} for _ in zone_list]  # herding: node -> edge zone-mates last took
 
-    not_departed = total_veh
-    arrived = 0
-    last_arrival_s: float | None = None
+class _EngineStatic:
+    """Inputs and indexes fixed after setup; shared by reference between an engine and its forks."""
 
-    # --- fire cues: origin nodes bucketed so burned points can mark origins within fire_cue_distance_m
-    fire_cued = bytearray(len(node_ids))
-    zone_cued = [False] * n_zones
-    node_zones: dict[int, set[int]] = {}
-    cue_buckets: dict[tuple[int, int], list[int]] = {}
-    if agents_on and fire_area_at is not None:
-        lats = [lat for _, lat in network.nodes.values()]
-        m_lat = math.radians(1) * EARTH_RADIUS_M
-        m_lon = m_lat * math.cos(math.radians((min(lats) + max(lats)) / 2))
-        cue_d = max(bp.fire_cue_distance_m, 1.0)
-        cell_lon, cell_lat = cue_d / m_lon, cue_d / m_lat
-        for a, n in enumerate(ag_node):
-            node_zones.setdefault(n, set()).add(ag_zone[a])
-        for n in sorted(node_zones):
-            lon, lat = network.nodes[node_ids[n]]
-            cue_buckets.setdefault((math.floor(lon / cell_lon), math.floor(lat / cell_lat)), []).append(n)
-        node_pts = [network.nodes[n] for n in node_ids]
-        node_order = sorted(range(len(node_ids)), key=lambda i: node_pts[i][0])
-        node_lons = [node_pts[i][0] for i in node_order]
-    burned_nodes: set[int] = set()
+
+class FireTimeline:
+    """Per-fire-check effect of a cumulative fire area, computed once and shared by engines and forks.
+
+    With fire_area_cumulative, what the fire covers at each check (edges whose midpoint is inside,
+    origin nodes inside, agent fire cues) depends only on the sequence of geometries, never on traffic
+    or commands. Entry j (check time j * fire_check_every_s) is (geometry, same_as_previous,
+    added_edges, added_origins, added_cued_nodes, added_cued_zones), computed in order from a running
+    frontier with exactly the per-engine code it replaces.
+    """
+
+    def __init__(self, static: _EngineStatic):
+        if not static.params.fire_area_cumulative or static.fire_area_at is None:
+            raise ValueError("FireTimeline needs fire_area_at and fire_area_cumulative")
+        self.s = static
+        self.key = _timeline_key(static)
+        self.entries: list[tuple] = []
+        self._prev = None  # geometry of the last check (an engine starts with no fire geometry)
+        self._exposed: set[int] = set()
+        self._origin_burned: set[int] = set()
+        self._burned_nodes: set[int] = set()
+        self._fire_cued = bytearray(len(static.node_ids))
+        self._zone_cued = [False] * len(static.zone_list)
+
+    def entry(self, j: int) -> tuple:
+        while len(self.entries) <= j:
+            self._advance()
+        return self.entries[j]
+
+    def _advance(self) -> None:
+        s = self.s
+        t = len(self.entries) * s.params.fire_check_every_s
+        geom = s.fire_area_at(s.start + timedelta(seconds=t))
+        if geom is self._prev:
+            self.entries.append((geom, True, (), (), (), ()))
+            return
+        self._prev = geom
+        if geom is None:
+            self.entries.append((geom, False, (), (), (), ()))
+            return
+        x0, y0, x1, y1 = _geometry_bbox(geom)
+        exposed = self._exposed
+        candidates = (
+            i for i in s.mid_order[bisect_left(s.mid_lons, x0):bisect_right(s.mid_lons, x1)]
+            if i not in exposed and y0 <= s.e_mid[i][1] <= y1
+        )
+        added_edges = _points_inside(geom, s.e_mid, candidates)
+        exposed.update(added_edges)
+        burned = self._origin_burned
+        candidates = [
+            n for n in s.origin_order[bisect_left(s.origin_lons, x0):bisect_right(s.origin_lons, x1)]
+            if n not in burned and y0 <= s.origin_pts[n][1] <= y1
+        ]
+        added_origins = _points_inside(geom, s.origin_pts, candidates)
+        burned.update(added_origins)
+        cued_nodes: list[int] = []
+        cued_zones: list[int] = []
+        if s.agents_on:
+            _update_fire_cues(s, geom, self._burned_nodes, self._fire_cued, self._zone_cued, cued_nodes, cued_zones)
+        self.entries.append((geom, False, tuple(sorted(added_edges)), tuple(sorted(added_origins)),
+                             tuple(cued_nodes), tuple(cued_zones)))
+
+
+def _timeline_key(s: _EngineStatic) -> tuple:
+    return (len(s.node_ids), len(s.edges), s.start, s.params.fire_check_every_s, s.agents_on,
+            tuple(s.origin_order), id(s.fire_area_at), s.cue_d)
+
+
+def _update_fire_cues(s: _EngineStatic, geom: dict, burned_nodes: set[int], fire_cued: bytearray,
+                      zone_cued: list[bool], cued_nodes: list[int] | None = None,
+                      cued_zones: list[int] | None = None) -> None:
+    """Mark origins near newly burned road nodes or near the fire boundary (cues are cumulative)."""
+    x0, y0, x1, y1 = _geometry_bbox(geom)
+    candidates = (
+        i for i in s.node_order[bisect_left(s.node_lons, x0):bisect_right(s.node_lons, x1)]
+        if i not in burned_nodes and y0 <= s.node_pts[i][1] <= y1
+    )
+    newly = _points_inside(geom, s.node_pts, candidates)
+    burned_nodes.update(newly)
+    polygons = [geom["coordinates"]] if geom["type"] == "Polygon" else geom["coordinates"]
 
     def cue_from_points(points) -> None:
         for lon, lat in points:
-            bx, by = math.floor(lon / cell_lon), math.floor(lat / cell_lat)
+            bx, by = math.floor(lon / s.cell_lon), math.floor(lat / s.cell_lat)
             for dx in (-1, 0, 1):
                 for dy in (-1, 0, 1):
-                    for n in cue_buckets.get((bx + dx, by + dy), ()):
+                    for n in s.cue_buckets.get((bx + dx, by + dy), ()):
                         if fire_cued[n]:
                             continue
-                        nlon, nlat = network.nodes[node_ids[n]]
-                        if math.hypot((nlon - lon) * m_lon, (nlat - lat) * m_lat) <= cue_d:
+                        nlon, nlat = s.node_pts[n]
+                        if math.hypot((nlon - lon) * s.m_lon, (nlat - lat) * s.m_lat) <= s.cue_d:
                             fire_cued[n] = 1
-                            for zi in node_zones[n]:
+                            if cued_nodes is not None:
+                                cued_nodes.append(n)
+                            for zi in s.node_zones[n]:
+                                if cued_zones is not None and not zone_cued[zi]:
+                                    cued_zones.append(zi)
                                 zone_cued[zi] = True
 
-    def update_fire_cues(geom: dict) -> None:
-        """Mark origins near newly burned road nodes or near the fire boundary (cues are cumulative)."""
-        x0, y0, x1, y1 = _geometry_bbox(geom)
-        candidates = (
-            i for i in node_order[bisect_left(node_lons, x0):bisect_right(node_lons, x1)]
-            if i not in burned_nodes and y0 <= node_pts[i][1] <= y1
-        )
-        newly = _points_inside(geom, node_pts, candidates)
-        burned_nodes.update(newly)
-        polygons = [geom["coordinates"]] if geom["type"] == "Polygon" else geom["coordinates"]
-        cue_from_points([node_pts[i] for i in sorted(newly)])
-        cue_from_points((q[0], q[1]) for poly in polygons if poly for q in poly[0])
+    cue_from_points([s.node_pts[i] for i in sorted(newly)])
+    cue_from_points((q[0], q[1]) for poly in polygons if poly for q in poly[0])
 
-    # --- events
-    ev_sorted = sorted(events, key=lambda ev: (ev.at, ev.id))
-    ev_s = [(ev.at - start).total_seconds() for ev in ev_sorted]
-    ev_next = 0
-    event_closed: set[int] = set()  # hard: vehicles on the edge stop
-    event_closed_drain: set[int] = set()  # closure_drains: closed to entry only
-    edge_index = {e.id: i for i, e in enumerate(edges)}
-    used_event_ids = {ev.id for ev in events}
 
-    # --- fire
-    fire_closed: set[int] = set()
-    exposed_edges: frozenset[int] | set[int] = frozenset()
-    fire_geom: dict | None = None
-    # id(geometry) -> (geometry, edges inside); insertion-ordered for eviction. Holding the geometry
-    # keeps its id from being reused while cached, so identity is a safe, cheap key.
-    fire_cache: dict[int, tuple[dict, frozenset[int]]] = {}
-    generated: list[dict] = []
+# Engine attributes a fork shares by reference or starts empty instead of copying.
+_FORK_SHARED = ("s", "timeline", "fire_geom", "fire_cache", "frames", "metrics", "edge_peak", "metrics_hook",
+                "controllers")
 
-    closed = [False] * n_edges
-    closed_set: set[int] = set()
-    closed_hard: set[int] = set()  # closed to entry and exit; fire- and contraflow-closed edges still drain
-    fire_trapped_edges: set[int] = set()  # edges that have held fire-trapped vehicles (entrapment reported once)
-    closed_list: list[int] = []  # sorted; rebuilt only when closures change
-    next_edge = [-1] * len(node_ids)
-    route_dist = [math.inf] * len(node_ids)  # current route cost to the nearest open destination
-    routes_dirty = True
-    closures_changed = False
-    next_reroute_s = 0
 
-    def refresh_capacity(i: int) -> None:
-        vph = e_base_vph[i] * cap_factor.get(i, 1.0)
-        storage = e_base_storage[i]
-        if i in contraflow_out:
-            vph += e_base_vph[contraflow_out[i]]
-            storage += e_base_storage[contraflow_out[i]]
-        e_cap_step[i] = vph * step / 3600
-        e_credit_max[i] = max(e_cap_step[i], params.packet_size_veh)
-        e_storage[i] = storage
+class _SharingPickler(pickle.Pickler):
+    """Pickler that passes callables and frozen input records by reference (for stateful controllers)."""
 
-    def usable(d: int) -> bool:
-        return dest_open[d] and not dest_full[d]
+    _SHARED_TYPES = (types.FunctionType, types.MethodType, types.BuiltinFunctionType, RoadEdge, RoadNetwork,
+                     DemandZone, Destination, TrafficEvent)
 
-    def rebuild_routes() -> None:
+    def __init__(self, file, shared: list):
+        super().__init__(file, pickle.HIGHEST_PROTOCOL)
+        self.shared = shared
+
+    def persistent_id(self, obj):
+        if isinstance(obj, self._SHARED_TYPES):
+            self.shared.append(obj)
+            return len(self.shared) - 1
+        return None
+
+
+class _SharingUnpickler(pickle.Unpickler):
+    def __init__(self, file, shared: list):
+        super().__init__(file)
+        self.shared = shared
+
+    def persistent_load(self, pid):
+        return self.shared[pid]
+
+
+def _copy_sharing(obj):
+    shared: list = []
+    buf = io.BytesIO()
+    _SharingPickler(buf, shared).dump(obj)
+    buf.seek(0)
+    return _SharingUnpickler(buf, shared).load()
+
+
+class TrafficEngine:
+    """The link-queue model as a resumable state machine: one `step()` per model step.
+
+    `simulate_traffic` is `TrafficEngine(...).run_to_end(); result()`. On top of that the engine
+    accepts injected events between steps (`inject`), forks cheaply (`fork`), can hold the fire
+    where it is (`freeze_fire`) and can record metrics only (`record_frames=False`). With no
+    injected events its results equal simulate_traffic's exactly.
+    """
+
+    def __init__(
+        self,
+        network: RoadNetwork,
+        zones: tuple[DemandZone, ...] | list[DemandZone],
+        destinations: tuple[Destination, ...] | list[Destination],
+        events: tuple[TrafficEvent, ...] | list[TrafficEvent],
+        params: TrafficParams,
+        *,
+        start: datetime,
+        end: datetime,
+        fire_area_at: Callable[[datetime], dict | None] | None = None,
+        controllers: Sequence[Controller] = (),
+        controller_every_s: int = 60,
+        fire_timeline: FireTimeline | None = None,
+        record_frames: bool = True,
+        metrics_hook: Callable[[int, dict], None] | None = None,
+    ):
+        _validate(network, zones, destinations, events, start, end)
+        if controllers and (not isinstance(controller_every_s, int) or controller_every_s <= 0
+                            or controller_every_s % params.step_s):
+            raise ValueError("controller_every_s must be a positive multiple of step_s")
+        s = self.s = _EngineStatic()
+        s.network, s.params, s.start, s.end = network, params, start, end
+        s.fire_area_at, s.controller_every_s = fire_area_at, controller_every_s
+        bp = s.bp = params.behavior
+        agents_on = s.agents_on = bp.enabled
+        step = s.step = params.step_s
+        horizon_s = int((end - start).total_seconds())
+        s.n_steps = horizon_s // step
+
+        # --- network arrays (index-based for speed)
+        node_ids = s.node_ids = sorted(network.nodes)
+        node_ix = s.node_ix = {n: i for i, n in enumerate(node_ids)}
+        edges = s.edges = network.edges
+        n_edges = s.n_edges = len(edges)
+        s.e_from = [node_ix[e.from_node] for e in edges]
+        e_to = s.e_to = [node_ix[e.to_node] for e in edges]
+        s.e_fft = [e.length_m / (e.speed_kph / 3.6) for e in edges]
+        self.e_cap_step = [e.capacity_veh_per_hour * step / 3600 for e in edges]
+        # Credit is capped so an idle edge can release at most one full packet (or one step's capacity) at once.
+        self.e_credit_max = [max(c, params.packet_size_veh) for c in self.e_cap_step]
+        # An edge always stores at least one packet, so very short edges cannot deadlock.
+        self.e_storage = [
+            max(params.packet_size_veh, e.length_m / 1000 * e.lanes * params.jam_density_veh_per_km_lane)
+            for e in edges
+        ]
+        s.e_base_vph = [e.capacity_veh_per_hour for e in edges]
+        s.e_base_storage = list(self.e_storage)
+        self.cap_factor: dict[int, float] = {}  # edge -> capacity_changed factor
+        seg_dir = {(e.segment_id, e.from_node, e.to_node): i for i, e in enumerate(edges)}
+        s.twin = [seg_dir.get((e.segment_id, e.to_node, e.from_node)) for e in edges]
+        self.contraflow_out: dict[int, int] = {}  # outbound edge -> reverse twin it borrows lanes from
+        self.contraflow_in: set[int] = set()  # reverse twins closed to new entry by contraflow
+        e_mid = s.e_mid = [_midpoint(e.coords) if e.coords else network.nodes[e.from_node] for e in edges]
+        s.mid_order = sorted(range(n_edges), key=lambda i: e_mid[i][0])  # edges by midpoint longitude
+        s.mid_lons = [e_mid[i][0] for i in s.mid_order]
+        s.in_edges = [[] for _ in node_ids]
+        for i in range(n_edges):
+            s.in_edges[e_to[i]].append(i)
+
+        self.queue: list[deque] = [deque() for _ in range(n_edges)]  # packets: [count, ready_at_s, zone, agent]
+        self.occ = [0] * n_edges
+        self.credit = [0.0] * n_edges
+        self.active: set[int] = set()
+
+        # --- destinations
+        dest_list = s.dest_list = list(destinations)
+        self.dest_arrived = [0] * len(dest_list)
+        self.dest_full = [d.capacity_veh is not None and d.capacity_veh <= 0 for d in dest_list]
+        self.dest_full_s: list[float | None] = [0.0 if f else None for f in self.dest_full]
+        s.dest_ix = {d.id: i for i, d in enumerate(dest_list)}
+        s.dest_refuge = [d.kind == REFUGE_KIND for d in dest_list]
+        self.dest_series: list[list[list]] = [[] for _ in dest_list]  # per destination: [[t_s, veh], ...] by step
+        first_toggle: dict[str, str] = {}
+        for ev in sorted(events, key=lambda ev: (ev.at, ev.id)):
+            if ev.destination_id is not None and ev.type in DESTINATION_OPEN_EVENT_TYPES + DESTINATION_CLOSE_EVENT_TYPES:
+                first_toggle.setdefault(ev.destination_id, ev.type)
+        self.dest_open = [first_toggle.get(d.id) not in DESTINATION_OPEN_EVENT_TYPES for d in dest_list]
+        s.dests_at_node = {}
+        for i, d in enumerate(dest_list):
+            s.dests_at_node.setdefault(node_ix[d.node_id], []).append(i)
+
+        # --- demand
+        zone_list = s.zone_list = list(zones)
+        n_zones = s.n_zones = len(zone_list)
+        s.zone_ix = {z.id: i for i, z in enumerate(zone_list)}
+        self.zone_departures: list[list[list]] = [[] for _ in zone_list]  # per zone: [[t_s, veh], ...] by step
+        self.zone_arrivals: list[list[list]] = [[] for _ in zone_list]
+        self.z_waiting = [z.vehicles for z in zone_list]  # vehicle counts by state, per zone
+        self.z_preparing = [0] * n_zones
+        self.z_departed = [0] * n_zones
+        self.z_arrived = [0] * n_zones
+        self.z_ordered_s: list[float | None] = [None] * n_zones
+        self.z_warned_s: list[float | None] = [None] * n_zones
+        s.zone_packets = {}  # fixed-delay engine: zone -> [(delay_s, node, count)]
+        # Agent arrays (behaviour on): one agent per packet.
+        s.ag_zone, s.ag_node, s.ag_count, s.ag_wait_fire, s.ag_herd = [], [], [], [], []
+        self.ag_trigger: list[str | None] = []
+        self.ag_turn_edge: list[int] = []  # edge on which the agent last made its turn-back decision
+        self.zone_waiting_agents: list[list[int]] = [[] for _ in zone_list]
+        self.z_trigger_veh = [dict.fromkeys(bh.TRIGGERS, 0) for _ in zone_list]
+        self.brng = None
+        s.response_scale = s.prep_mu = s.prep_cap_s = None
+        if not agents_on:
+            # Draw every packet's delay up front so draws do not depend on event handling.
+            rng = random.Random(params.seed)
+            mu = math.log(params.response_delay_median_min * 60)
+            delay_cap_s = params.response_delay_max_min * 60
+            for z in zones:
+                packets = []
+                full, rest = divmod(z.vehicles, params.packet_size_veh)
+                counts = [params.packet_size_veh] * full + ([rest] if rest else [])
+                for k, count in enumerate(counts):
+                    delay = min(delay_cap_s, rng.lognormvariate(mu, params.response_delay_sigma))
+                    packets.append((delay, node_ix[z.origin_nodes[k % len(z.origin_nodes)]], count))
+                s.zone_packets[z.id] = packets
+        else:
+            brng = self.brng = random.Random(f"{params.seed}:behavior")  # own stream; str seeds are stable
+            for zi, z in enumerate(zone_list):
+                full, rest = divmod(z.vehicles, params.packet_size_veh)
+                counts = [params.packet_size_veh] * full + ([rest] if rest else [])
+                for k, count in enumerate(counts):
+                    self.zone_waiting_agents[zi].append(len(s.ag_zone))
+                    s.ag_zone.append(zi)
+                    s.ag_node.append(node_ix[z.origin_nodes[k % len(z.origin_nodes)]])
+                    s.ag_count.append(count)
+                    s.ag_wait_fire.append(brng.random() < bp.wait_for_fire_share)
+                    s.ag_herd.append(brng.random() < bp.herding_prob)
+                    self.ag_trigger.append(None)
+                    self.ag_turn_edge.append(-1)
+            s.response_scale = params.response_delay_median_min / REFERENCE_RESPONSE_DELAY_MEDIAN_MIN
+            s.prep_mu = math.log(bp.prep_median_min * 60 * s.response_scale)
+            s.prep_cap_s = bp.prep_max_min * 60 * s.response_scale
+        s.total_veh = sum(z.vehicles for z in zones)
+        nd_at_node = self.nd_at_node = {}  # origin node -> vehicles not yet departed from it
+        if agents_on:
+            for a, n in enumerate(s.ag_node):
+                nd_at_node[n] = nd_at_node.get(n, 0) + s.ag_count[a]
+        else:
+            for packets in s.zone_packets.values():
+                for _, n, count in packets:
+                    nd_at_node[n] = nd_at_node.get(n, 0) + count
+        s.origin_order = sorted(nd_at_node, key=lambda n: network.nodes[node_ids[n]][0])
+        s.origin_lons = [network.nodes[node_ids[n]][0] for n in s.origin_order]
+        s.origin_pts = {n: network.nodes[node_ids[n]] for n in nd_at_node}
+        self.origin_burned: set[int] = set()  # origin nodes inside the fire area in effect
+        self.pending: list[tuple[float, int, int, int, int]] = []  # fixed delay: (depart_s, seq, node, count, zone)
+        self.preparing: list[tuple[float, int]] = []  # agents: (depart_s, agent)
+        self.returning: list[tuple[float, int, int, int, int, int]] = []  # turned back: (at_s, seq, node, count, zone, agent)
+        self.seq = 0
+        self.released_zones: set[str] = set()
+        self.first_order_s: float | None = None
+        self.waiting: dict[int, deque] = {}  # node -> departed packets [count, zone index, agent] not yet on an edge
+        self.departed_by = dict.fromkeys(bh.TRIGGERS, 0)
+        self.turned_back = 0
+        self.zone_memory: list[dict[int, int]] = [{} for _ in zone_list]  # herding: node -> edge zone-mates last took
+
+        self.not_departed = s.total_veh
+        self.arrived = 0
+        self.last_arrival_s: float | None = None
+
+        # --- fire cues: origin nodes bucketed so burned points can mark origins within fire_cue_distance_m
+        self.fire_cued = bytearray(len(node_ids))
+        self.zone_cued = [False] * n_zones
+        s.node_zones = {}
+        s.cue_buckets = {}
+        s.cue_d = s.cell_lon = s.cell_lat = s.m_lon = s.m_lat = None
+        s.node_pts = s.node_order = s.node_lons = None
+        if agents_on and fire_area_at is not None:
+            lats = [lat for _, lat in network.nodes.values()]
+            s.m_lat = math.radians(1) * EARTH_RADIUS_M
+            s.m_lon = s.m_lat * math.cos(math.radians((min(lats) + max(lats)) / 2))
+            s.cue_d = max(bp.fire_cue_distance_m, 1.0)
+            s.cell_lon, s.cell_lat = s.cue_d / s.m_lon, s.cue_d / s.m_lat
+            for a, n in enumerate(s.ag_node):
+                s.node_zones.setdefault(n, set()).add(s.ag_zone[a])
+            for n in sorted(s.node_zones):
+                lon, lat = network.nodes[node_ids[n]]
+                s.cue_buckets.setdefault((math.floor(lon / s.cell_lon), math.floor(lat / s.cell_lat)), []).append(n)
+            s.node_pts = [network.nodes[n] for n in node_ids]
+            s.node_order = sorted(range(len(node_ids)), key=lambda i: s.node_pts[i][0])
+            s.node_lons = [s.node_pts[i][0] for i in s.node_order]
+        self.burned_nodes: set[int] = set()
+
+        # --- events
+        s.ev_sorted = sorted(events, key=lambda ev: (ev.at, ev.id))
+        s.ev_s = [(ev.at - start).total_seconds() for ev in s.ev_sorted]
+        self.ev_next = 0
+        self.event_closed: set[int] = set()  # hard: vehicles on the edge stop
+        self.event_closed_drain: set[int] = set()  # closure_drains: closed to entry only
+        s.edge_index = {e.id: i for i, e in enumerate(edges)}
+        self.used_event_ids = {ev.id for ev in events}
+
+        # --- fire
+        self.fire_closed: set[int] = set()
+        self.exposed_edges: frozenset[int] | set[int] = frozenset()
+        self.fire_geom: dict | None = None
+        # id(geometry) -> (geometry, edges inside); insertion-ordered for eviction. Holding the geometry
+        # keeps its id from being reused while cached, so identity is a safe, cheap key.
+        self.fire_cache: dict[int, tuple[dict, frozenset[int]]] = {}
+        self.fire_frozen = False
+        self.timeline: FireTimeline | None = None
+        if fire_area_at is not None and params.fire_area_cumulative:
+            if fire_timeline is not None and fire_timeline.key != _timeline_key(s):
+                raise ValueError("fire_timeline was built for different inputs")
+            self.timeline = fire_timeline or FireTimeline(s)
+            self.exposed_edges = set()  # updated in place from the timeline's deltas
+        self.generated: list[dict] = []
+
+        self.closed = [False] * n_edges
+        self.closed_set: set[int] = set()
+        self.closed_hard: set[int] = set()  # closed to entry and exit; fire- and contraflow-closed edges still drain
+        self.fire_trapped_edges: set[int] = set()  # edges that have held fire-trapped vehicles (reported once)
+        self.closed_list: list[int] = []  # sorted; rebuilt only when closures change
+        self.next_edge = [-1] * len(node_ids)
+        self.route_dist = [math.inf] * len(node_ids)  # current route cost to the nearest open destination
+        self.routes_dirty = True
+        self.closures_changed = False
+        self.next_reroute_s = 0
+
+        # --- commands (twin): injected events and per-zone destination assignments
+        self.injected: list[tuple[float, int, TrafficEvent]] = []  # heap (at_s, seq, event)
+        self.inject_seq = 0
+        self.zone_dest: dict[int, int] = {}  # zone index -> assigned destination index
+        self.dest_next: dict[int, list[int]] = {}  # assigned destination -> per-node next edge toward it
+        self.dest_dist: dict[int, list[float]] = {}
+
+        # --- outputs
+        s.edge_ids_out = [e.id for e in edges]
+        s.refuge_ix = [d for d in range(len(dest_list)) if s.dest_refuge[d]]
+        self.frames: list[dict] = []
+        self.metrics: list[dict] = []
+        self.peaks = {"en_route_veh": 0, "blocked_veh": 0, "exposed_veh": 0, "exposed_at_origin_veh": 0,
+                      "trapped_by_fire_veh": 0, "trapped_by_closure_veh": 0, "active_refuges": 0}
+        self.edge_peak: dict[int, list] = {}  # edge index -> [peak_veh, peak_t_s, min_speed_kph, congested_frames]
+        self.first_release_s: dict[str, float] = {}  # fixed-delay engine: zone -> order time, for views
+        self.exposed_veh_min = 0.0  # integrals over recorded frames since start
+        self.exposed_at_origin_veh_min = 0.0
+        self.last_counts: dict | None = None
+        self.record_frames = record_frames
+        self.metrics_hook = metrics_hook
+        self.controllers = tuple(controllers)
+        self.k = 0  # index of the next step to run
+
+    # --- clock
+
+    @property
+    def n_steps(self) -> int:
+        return self.s.n_steps
+
+    @property
+    def finished(self) -> bool:
+        return self.k > self.s.n_steps
+
+    @property
+    def now_s(self) -> int | None:
+        """Model seconds of the last completed step (None before the first step)."""
+        return None if self.k == 0 else (self.k - 1) * self.s.step
+
+    @property
+    def next_step_s(self) -> int:
+        return self.k * self.s.step
+
+    def run_to(self, t_s: float) -> None:
+        """Run every remaining step with time <= t_s."""
+        step, n_steps = self.s.step, self.s.n_steps
+        while self.k <= n_steps and self.k * step <= t_s:
+            self.step()
+
+    def run_to_end(self) -> None:
+        while self.k <= self.s.n_steps:
+            self.step()
+
+    # --- commands
+
+    def inject(self, events: Sequence[TrafficEvent]) -> None:
+        """Schedule events (simulated commands) for the first step at or after their time.
+
+        They go on their own queue, never into the historical event list, and are applied after the
+        controllers of their step with the same checks and generated-event entry as controller events.
+        """
+        s = self.s
+        batch_ids = set()
+        for ev in events:
+            if ev.at.tzinfo is None or ev.at.utcoffset() is None:
+                raise ValueError(f"event {ev.id} time must include a timezone")
+            at_s = (ev.at - s.start).total_seconds()
+            if at_s < self.next_step_s or ev.at > s.end:
+                raise ValueError(f"event {ev.id} must be at or after the next step and not after end")
+            if ev.id in self.used_event_ids or ev.id in batch_ids:
+                raise ValueError(f"event id {ev.id} is not unique")
+            if ev.type in ZONE_ROUTE_EVENT_TYPES and not ev.zone_ids:
+                raise ValueError(f"event {ev.id} needs zone_ids")
+            _check_event_targets(ev, s.edge_index, s.zone_ix, s.dest_ix)
+            batch_ids.add(ev.id)
+        for ev in events:
+            self.used_event_ids.add(ev.id)
+            heapq.heappush(self.injected, ((ev.at - s.start).total_seconds(), self.inject_seq, ev))
+            self.inject_seq += 1
+
+    def freeze_fire(self) -> None:
+        """Hold the fire area where it is now: no fire checks after this."""
+        self.fire_frozen = True
+
+    def fork(self, *, keep_outputs: bool = False, metrics_hook=None) -> "TrafficEngine":
+        """Independent engine at the same state. Static inputs, the fire timeline, callables and fire
+        geometries are shared; everything else is copied (pickle round trip). Recorded outputs start
+        empty unless keep_outputs (then frames record too)."""
+        state = {k: v for k, v in self.__dict__.items() if k not in _FORK_SHARED}
+        new = TrafficEngine.__new__(TrafficEngine)
+        new.__dict__.update(pickle.loads(pickle.dumps(state, pickle.HIGHEST_PROTOCOL)))
+        new.s, new.timeline, new.fire_geom = self.s, self.timeline, self.fire_geom
+        new.fire_cache = dict(self.fire_cache)
+        if keep_outputs:
+            new.frames, new.metrics = list(self.frames), list(self.metrics)
+            new.edge_peak = {i: list(v) for i, v in self.edge_peak.items()}
+            new.record_frames = self.record_frames
+        else:
+            new.frames, new.metrics, new.edge_peak = [], [], {}
+            new.record_frames = False
+        new.metrics_hook = metrics_hook
+        new.controllers = _copy_sharing(self.controllers) if self.controllers else ()
+        return new
+
+    # --- helpers (one per former nested function)
+
+    def refresh_capacity(self, i: int) -> None:
+        s = self.s
+        vph = s.e_base_vph[i] * self.cap_factor.get(i, 1.0)
+        storage = s.e_base_storage[i]
+        if i in self.contraflow_out:
+            vph += s.e_base_vph[self.contraflow_out[i]]
+            storage += s.e_base_storage[self.contraflow_out[i]]
+        self.e_cap_step[i] = vph * s.step / 3600
+        self.e_credit_max[i] = max(self.e_cap_step[i], s.params.packet_size_veh)
+        self.e_storage[i] = storage
+
+    def usable(self, d: int) -> bool:
+        return self.dest_open[d] and not self.dest_full[d]
+
+    def _search(self, dist: list[float], nxt: list[int], sources: list[int], base: float, allowed,
+                penalize: bool) -> None:
+        s = self.s
+        in_edges, e_from, e_fft = s.in_edges, s.e_from, s.e_fft
+        closed, occ, e_cap_step = self.closed, self.occ, self.e_cap_step
+        step = s.step
+        queue_aware = s.params.queue_aware_routing
+        exposed_edges = self.exposed_edges
+        penalty = s.bp.fire_edge_penalty_s
+        heappop, heappush = heapq.heappop, heapq.heappush
+        heap = []
+        for node in sources:
+            dist[node] = base
+            heap.append((base, node))
+        heapq.heapify(heap)
+        while heap:
+            d, v = heappop(heap)
+            if d > dist[v]:
+                continue
+            for e in in_edges[v]:
+                if closed[e]:
+                    continue
+                u = e_from[e]
+                if allowed is not None and u not in allowed:
+                    continue
+                cost = e_fft[e]
+                if queue_aware and occ[e]:
+                    cost += occ[e] / e_cap_step[e] * step
+                if penalize and e in exposed_edges:
+                    cost += penalty
+                nd = d + cost
+                if nd < dist[u]:
+                    dist[u] = nd
+                    nxt[u] = e
+                    heappush(heap, (nd, u))
+
+    def rebuild_routes(self) -> None:
         """Two-tier reversed multi-source Dijkstra over open edges.
 
         Tier 1 runs from open exits and shelters; one pass equals the per-node minimum over
         per-destination trees. Tier 2 runs from open refuges over nodes tier 1 left unreachable
         only, so the refuge tree never routes a node that can reach an exit (every node reachable
         from an unreachable node is itself unreachable). Tier-2 costs carry _REFUGE_TIER_OFFSET_S.
-        With agents, open fire-exposed edges carry bp.fire_edge_penalty_s.
+        With agents, open fire-exposed edges carry bp.fire_edge_penalty_s. Destinations assigned to
+        zones (zone_rerouted) get their own single-destination tree over the same open edges.
         """
-        dist = [math.inf] * len(node_ids)
-        nxt = [-1] * len(node_ids)
-        penalize = agents_on and bp.fire_edge_penalty_s > 0 and bool(exposed_edges)
-
-        def search(sources: list[int], base: float, allowed) -> None:
-            heap = []
-            for node in sources:
-                dist[node] = base
-                heap.append((base, node))
-            heapq.heapify(heap)
-            while heap:
-                d, v = heapq.heappop(heap)
-                if d > dist[v]:
-                    continue
-                for e in in_edges[v]:
-                    if closed[e]:
-                        continue
-                    u = e_from[e]
-                    if allowed is not None and u not in allowed:
-                        continue
-                    cost = e_fft[e]
-                    if params.queue_aware_routing and occ[e]:
-                        cost += occ[e] / e_cap_step[e] * step
-                    if penalize and e in exposed_edges:
-                        cost += bp.fire_edge_penalty_s
-                    nd = d + cost
-                    if nd < dist[u]:
-                        dist[u] = nd
-                        nxt[u] = e
-                        heapq.heappush(heap, (nd, u))
-
-        search(sorted(n for n, ds in dests_at_node.items() if any(usable(d) and not dest_refuge[d] for d in ds)),
-               0.0, None)
-        refuges = sorted(n for n, ds in dests_at_node.items()
+        s = self.s
+        n_nodes = len(s.node_ids)
+        dist = [math.inf] * n_nodes
+        nxt = [-1] * n_nodes
+        penalize = s.agents_on and s.bp.fire_edge_penalty_s > 0 and bool(self.exposed_edges)
+        usable, dest_refuge = self.usable, s.dest_refuge
+        self._search(dist, nxt,
+                     sorted(n for n, ds in s.dests_at_node.items() if any(usable(d) and not dest_refuge[d] for d in ds)),
+                     0.0, None, penalize)
+        refuges = sorted(n for n, ds in s.dests_at_node.items()
                          if math.isinf(dist[n]) and any(usable(d) and dest_refuge[d] for d in ds))
         if refuges:
-            search(refuges, _REFUGE_TIER_OFFSET_S, {v for v, x in enumerate(dist) if math.isinf(x)})
-        if fire_closed or event_closed_drain:
-            escape(dist, nxt)
-        next_edge[:] = nxt
-        route_dist[:] = dist
+            self._search(dist, nxt, refuges, _REFUGE_TIER_OFFSET_S, {v for v, x in enumerate(dist) if math.isinf(x)},
+                         penalize)
+        if self.fire_closed or self.event_closed_drain:
+            self.escape(dist, nxt)
+        self.next_edge[:] = nxt
+        self.route_dist[:] = dist
+        self.dest_next, self.dest_dist = {}, {}
+        for d in sorted(set(self.zone_dest.values())):
+            ddist = [math.inf] * n_nodes
+            dnxt = [-1] * n_nodes
+            self._search(ddist, dnxt, [s.node_ix[s.dest_list[d].node_id]], 0.0, None, penalize)
+            self.dest_next[d], self.dest_dist[d] = dnxt, ddist
 
-    def escape(dist: list[float], nxt: list[int]) -> None:
+    def escape(self, dist: list[float], nxt: list[int]) -> None:
         """Escape tier, in place: route nodes with no open route out over fire-closed edges.
 
         Reversed Dijkstra over the unrouted nodes from the routed nodes they border through a
         fire-only closure, by time (fire edges at FIRE_DRAIN_SPEED_FACTOR), keeping only paths
         with at most params.fire_escape_max_m of fire-closed road.
         """
+        s = self.s
+        params, edges, in_edges, e_from, e_to, e_fft = s.params, s.edges, s.in_edges, s.e_from, s.e_to, s.e_fft
+        closed, occ, e_cap_step, step = self.closed, self.occ, self.e_cap_step, s.step
         stuck = {v for v, x in enumerate(dist) if math.isinf(x)}
         if not stuck:
             return
         # Entry-only closures (fire, closure_drains events) may be escaped from inside; hard ones never.
-        hard = event_closed | contraflow_in
-        escapable = fire_closed | event_closed_drain
+        hard = self.event_closed | self.contraflow_in
+        escapable = self.fire_closed | self.event_closed_drain
         edist: dict[int, float] = {}
         fire_m: dict[int, float] = {}
         heap = []
@@ -762,140 +1061,210 @@ def simulate_traffic(
             if u in stuck:
                 dist[u] = _ESCAPE_TIER_OFFSET_S + d
 
-    def open_dest_at(node: int) -> int | None:
+    def open_dest_at(self, node: int) -> int | None:
         """Open destination that takes vehicles at node; a refuge only where no exit or shelter is reachable."""
-        for d in dests_at_node.get(node, ()):
-            if usable(d) and (not dest_refuge[d] or route_dist[node] >= _REFUGE_TIER_OFFSET_S):
+        for d in self.s.dests_at_node.get(node, ()):
+            if self.usable(d) and (not self.s.dest_refuge[d] or self.route_dist[node] >= _REFUGE_TIER_OFFSET_S):
                 return d
         return None
 
-    def choose(node: int, zone: int, agent: int) -> int:
+    def assignment_following(self, zone: int, node: int) -> int | None:
+        """Assigned destination of the zone if a packet at node can follow it (usable and reachable), else None."""
+        d = self.zone_dest.get(zone)
+        if d is None or not self.usable(d):
+            return None
+        dd = self.dest_dist.get(d)
+        return d if dd is not None and not math.isinf(dd[node]) else None
+
+    def admit_at(self, node: int, zone: int) -> int | None:
+        """open_dest_at for a packet of `zone`: a following assigned zone is admitted only at its destination."""
+        d = self.assignment_following(zone, node)
+        if d is None:
+            return self.open_dest_at(node)
+        return d if self.s.node_ix[self.s.dest_list[d].node_id] == node else None
+
+    def route(self, node: int, zone: int, agent: int) -> int:
+        """Next edge for a packet of `zone`: its assigned destination's tree, else the shared tree."""
+        d = self.assignment_following(zone, node)
+        if d is not None and self.dest_next[d][node] != -1:
+            return self.dest_next[d][node]
+        return self.choose(node, zone, agent) if self.s.agents_on else self.next_edge[node]
+
+    def choose(self, node: int, zone: int, agent: int) -> int:
         """Next edge from node: the route tree, or for a herding agent its zone-mates' last choice."""
-        ne = next_edge[node]
-        if ag_herd[agent]:
-            m = zone_memory[zone].get(node)
-            if (m is not None and m != ne and not closed[m] and m not in exposed_edges
-                    and route_dist[e_to[m]] < route_dist[node]):
+        ne = self.next_edge[node]
+        if self.s.ag_herd[agent]:
+            m = self.zone_memory[zone].get(node)
+            if (m is not None and m != ne and not self.closed[m] and m not in self.exposed_edges
+                    and self.route_dist[self.s.e_to[m]] < self.route_dist[node]):
                 return m
         return ne
 
+    @staticmethod
     def add_series(series: list[list], t: int, n: int) -> None:
         if series and series[-1][0] == t:
             series[-1][1] += n
         else:
             series.append([t, n])
 
-    def mark_full(d: int, t: float) -> None:
-        nonlocal routes_dirty
-        if not dest_full[d]:
-            dest_full[d] = True
-            dest_full_s[d] = t
-            routes_dirty = True
+    def mark_full(self, d: int, t: float) -> None:
+        if not self.dest_full[d]:
+            self.dest_full[d] = True
+            self.dest_full_s[d] = t
+            self.routes_dirty = True
 
-    def accept(d: int, count: int, zone: int, t: int) -> int:
+    def accept(self, d: int, count: int, zone: int, t: int) -> int:
         """Admit up to `count` vehicles at destination d; return how many were admitted."""
-        nonlocal arrived, last_arrival_s
-        cap = dest_list[d].capacity_veh
-        n = count if cap is None else min(count, cap - dest_arrived[d])
+        cap = self.s.dest_list[d].capacity_veh
+        n = count if cap is None else min(count, cap - self.dest_arrived[d])
         if n > 0:
-            dest_arrived[d] += n
-            arrived += n
-            z_arrived[zone] += n
-            last_arrival_s = t
-            add_series(zone_arrivals[zone], t, n)
-            add_series(dest_series[d], t, n)
-        if cap is not None and dest_arrived[d] >= cap:
-            mark_full(d, t)
+            self.dest_arrived[d] += n
+            self.arrived += n
+            self.z_arrived[zone] += n
+            self.last_arrival_s = t
+            self.add_series(self.zone_arrivals[zone], t, n)
+            self.add_series(self.dest_series[d], t, n)
+        if cap is not None and self.dest_arrived[d] >= cap:
+            self.mark_full(d, t)
         return n
 
-    def enter(i: int, count: int, zone: int, agent: int, t: int) -> None:
-        if not occ[i]:
-            credit[i] = e_credit_max[i]  # an idle edge starts with full discharge credit
-        queue[i].append([count, t + e_fft[i] / (FIRE_DRAIN_SPEED_FACTOR if i in fire_closed else 1.0), zone, agent])
-        occ[i] += count
-        active.add(i)
+    def enter(self, i: int, count: int, zone: int, agent: int, t: int) -> None:
+        if not self.occ[i]:
+            self.credit[i] = self.e_credit_max[i]  # an idle edge starts with full discharge credit
+        self.queue[i].append([count, t + self.s.e_fft[i] / (FIRE_DRAIN_SPEED_FACTOR if i in self.fire_closed else 1.0),
+                              zone, agent])
+        self.occ[i] += count
+        self.active.add(i)
 
-    def release_zone(zone_id: str, at_s: float) -> None:
-        nonlocal seq, first_order_s
-        if zone_id in released_zones:
+    def release_zone(self, zone_id: str, at_s: float) -> None:
+        if zone_id in self.released_zones:
             return
-        released_zones.add(zone_id)
-        first_order_s = at_s if first_order_s is None else min(first_order_s, at_s)
-        zi = zone_ix[zone_id]
-        z_preparing[zi], z_waiting[zi] = z_waiting[zi], 0
-        for delay, node, count in zone_packets[zone_id]:
-            heapq.heappush(pending, (at_s + delay, seq, node, count, zi))
-            seq += 1
+        self.released_zones.add(zone_id)
+        self.first_order_s = at_s if self.first_order_s is None else min(self.first_order_s, at_s)
+        zi = self.s.zone_ix[zone_id]
+        self.z_preparing[zi], self.z_waiting[zi] = self.z_waiting[zi], 0
+        for delay, node, count in self.s.zone_packets[zone_id]:
+            heapq.heappush(self.pending, (at_s + delay, self.seq, node, count, zi))
+            self.seq += 1
 
-    def apply_event(ev: TrafficEvent, at_s: float) -> None:
-        nonlocal closures_changed, routes_dirty, first_order_s
+    def apply_event(self, ev: TrafficEvent, at_s: float) -> None:
+        s = self.s
+        params, agents_on, edge_index = s.params, s.agents_on, s.edge_index
         if not agents_on and (
                 ev.type == "evacuation_order" or (ev.type == "evacuation_warning" and params.warning_releases_demand)):
             for z in ev.zone_ids:
-                release_zone(z, at_s)
+                self.release_zone(z, at_s)
         elif agents_on and ev.type in DEMAND_EVENT_TYPES:
-            notice = z_ordered_s if ev.type == "evacuation_order" else z_warned_s
+            notice = self.z_ordered_s if ev.type == "evacuation_order" else self.z_warned_s
             for z in ev.zone_ids:
-                zi = zone_ix[z]
+                zi = s.zone_ix[z]
                 if notice[zi] is None:
                     notice[zi] = at_s
             if ev.type == "evacuation_order" and ev.zone_ids:
-                first_order_s = at_s if first_order_s is None else min(first_order_s, at_s)
+                self.first_order_s = at_s if self.first_order_s is None else min(self.first_order_s, at_s)
         elif ev.type in CLOSE_EVENT_TYPES:
-            (event_closed_drain if ev.closure_drains else event_closed).update(edge_index[x] for x in ev.edge_ids)
-            closures_changed = True
+            (self.event_closed_drain if ev.closure_drains else self.event_closed).update(
+                edge_index[x] for x in ev.edge_ids)
+            self.closures_changed = True
         elif ev.type in REOPEN_EVENT_TYPES:
-            event_closed.difference_update(edge_index[x] for x in ev.edge_ids)
-            event_closed_drain.difference_update(edge_index[x] for x in ev.edge_ids)
-            closures_changed = True
+            self.event_closed.difference_update(edge_index[x] for x in ev.edge_ids)
+            self.event_closed_drain.difference_update(edge_index[x] for x in ev.edge_ids)
+            self.closures_changed = True
         elif ev.type in SHELTER_FULL_EVENT_TYPES and ev.destination_id is not None:
-            mark_full(dest_ix[ev.destination_id], at_s)
+            self.mark_full(s.dest_ix[ev.destination_id], at_s)
         elif (ev.type in DESTINATION_OPEN_EVENT_TYPES + DESTINATION_CLOSE_EVENT_TYPES
               and ev.destination_id is not None):
-            d = dest_ix[ev.destination_id]
+            d = s.dest_ix[ev.destination_id]
             is_open = ev.type in DESTINATION_OPEN_EVENT_TYPES
-            if dest_open[d] != is_open:
-                dest_open[d] = is_open
-                routes_dirty = True
+            if self.dest_open[d] != is_open:
+                self.dest_open[d] = is_open
+                self.routes_dirty = True
         elif ev.type in CAPACITY_EVENT_TYPES and ev.edge_ids:
             for x in ev.edge_ids:
-                cap_factor[edge_index[x]] = ev.capacity_factor
-                refresh_capacity(edge_index[x])
-            routes_dirty = True
+                self.cap_factor[edge_index[x]] = ev.capacity_factor
+                self.refresh_capacity(edge_index[x])
+            self.routes_dirty = True
         elif ev.type in CONTRAFLOW_START_EVENT_TYPES:
             inbound = []
             for x in ev.edge_ids:
                 i = edge_index[x]
-                j = twin[i]
+                j = s.twin[i]
                 # One-way roads have no twin; an edge already lending or borrowing lanes is left as is.
-                if j is None or i in contraflow_out or i in contraflow_in or j in contraflow_out:
+                if j is None or i in self.contraflow_out or i in self.contraflow_in or j in self.contraflow_out:
                     continue
-                contraflow_out[i] = j
-                contraflow_in.add(j)
-                refresh_capacity(i)
+                self.contraflow_out[i] = j
+                self.contraflow_in.add(j)
+                self.refresh_capacity(i)
                 inbound.append(j)
             if inbound:
-                names = ", ".join(sorted({edges[j].name for j in inbound}))
-                generated.append(_bundle_event(
+                names = ", ".join(sorted({s.edges[j].name for j in inbound}))
+                self.generated.append(_bundle_event(
                     f"{ev.id}-inbound-closed", ev.at, "road_closed",
                     f"Contraflow inbound lanes closed (derived from {ev.id}): {names}",
-                    [edges[j].id for j in inbound], evidence_class="derived",
+                    [s.edges[j].id for j in inbound], evidence_class="derived",
                     time_precision=ev.time_precision, source_id=ev.source_id, source_locator=ev.source_locator,
                 ))
-                closures_changed = True
+                self.closures_changed = True
         elif ev.type in CONTRAFLOW_END_EVENT_TYPES:
             for x in ev.edge_ids:
                 i = edge_index[x]
-                if i in contraflow_out:
-                    contraflow_in.discard(contraflow_out.pop(i))
-                    refresh_capacity(i)
-                    closures_changed = True
+                if i in self.contraflow_out:
+                    self.contraflow_in.discard(self.contraflow_out.pop(i))
+                    self.refresh_capacity(i)
+                    self.closures_changed = True
+        elif ev.type in ZONE_ROUTE_EVENT_TYPES:
+            for z in ev.zone_ids:
+                zi = s.zone_ix[z]
+                if ev.destination_id is None:
+                    self.zone_dest.pop(zi, None)
+                else:
+                    self.zone_dest[zi] = s.dest_ix[ev.destination_id]
+            self.routes_dirty = True
 
-    def set_fire(geom: dict | None, at: datetime) -> None:
-        nonlocal fire_geom, exposed_edges, fire_closed, routes_dirty
-        if geom is fire_geom:
+    def _apply_fire_entry(self, j: int, at: datetime) -> None:
+        """set_fire for cumulative fire from the shared FireTimeline (same effect as the direct path)."""
+        geom, same, added_edges, added_origins, cued_nodes, cued_zones = self.timeline.entry(j)
+        if same:
             return
-        fire_geom = geom
+        s = self.s
+        self.fire_geom = geom
+        self.origin_burned.update(added_origins)
+        if s.agents_on:
+            for n in cued_nodes:
+                self.fire_cued[n] = 1
+            for zi in cued_zones:
+                self.zone_cued[zi] = True
+            if added_edges:
+                self.routes_dirty = True  # exposed edges carry a route penalty
+        self.exposed_edges.update(added_edges)
+        if not s.params.close_edges_in_fire or not added_edges:
+            return
+        # Cumulative: fire_closed equals the exposed set before this check, so every added edge is newly
+        # closed and nothing reopens.
+        edges, generated = s.edges, self.generated
+        by_name: dict[str, list[str]] = {}
+        for i in added_edges:  # ascending edge index
+            by_name.setdefault(edges[i].name, []).append(edges[i].id)
+        for name in sorted(by_name):
+            ev_id = f"sim-fire-closure-{len(generated) + 1}"
+            generated.append(_bundle_event(ev_id, at, "road_closed", f"Modelled fire closure: {name}", by_name[name]))
+        t = (at - s.start).total_seconds()
+        queue = self.queue
+        for i in added_edges:
+            for pkt in queue[i]:
+                if pkt[1] > t:  # still driving: the rest of the edge at reduced speed
+                    pkt[1] = t + (pkt[1] - t) / FIRE_DRAIN_SPEED_FACTOR
+        self.fire_closed.update(added_edges)
+        self.routes_dirty = True
+
+    def set_fire(self, geom: dict | None, at: datetime) -> None:
+        """Direct (per-engine) fire update; used when fire_area_cumulative is off."""
+        s = self.s
+        params, mid_order, mid_lons, e_mid = s.params, s.mid_order, s.mid_lons, s.e_mid
+        if geom is self.fire_geom:
+            return
+        self.fire_geom = geom
+        exposed_edges = self.exposed_edges
         if geom is None:
             inside = set(exposed_edges) if params.fire_area_cumulative else frozenset()
         elif params.fire_area_cumulative:
@@ -907,7 +1276,7 @@ def simulate_traffic(
             )
             inside = set(exposed_edges) | _points_inside(geom, e_mid, candidates)
         else:
-            cached = fire_cache.get(id(geom))
+            cached = self.fire_cache.get(id(geom))
             if cached is None or cached[0] is not geom:
                 x0, y0, x1, y1 = _geometry_bbox(geom)
                 candidates = (
@@ -915,11 +1284,12 @@ def simulate_traffic(
                     if y0 <= e_mid[i][1] <= y1
                 )
                 inside = frozenset(_points_inside(geom, e_mid, candidates))
-                fire_cache[id(geom)] = (geom, inside)
-                while len(fire_cache) > FIRE_CACHE_MAX_GEOMETRIES:
-                    del fire_cache[next(iter(fire_cache))]
+                self.fire_cache[id(geom)] = (geom, inside)
+                while len(self.fire_cache) > FIRE_CACHE_MAX_GEOMETRIES:
+                    del self.fire_cache[next(iter(self.fire_cache))]
             else:
                 inside = cached[1]
+        origin_burned = self.origin_burned
         if geom is None:
             if not params.fire_area_cumulative:
                 origin_burned.clear()
@@ -928,19 +1298,20 @@ def simulate_traffic(
             if not params.fire_area_cumulative:
                 origin_burned.clear()
             candidates = [
-                n for n in origin_order[bisect_left(origin_lons, x0):bisect_right(origin_lons, x1)]
-                if n not in origin_burned and y0 <= origin_pts[n][1] <= y1
+                n for n in s.origin_order[bisect_left(s.origin_lons, x0):bisect_right(s.origin_lons, x1)]
+                if n not in origin_burned and y0 <= s.origin_pts[n][1] <= y1
             ]
-            origin_burned.update(_points_inside(geom, origin_pts, candidates))
-        if agents_on:
+            origin_burned.update(_points_inside(geom, s.origin_pts, candidates))
+        if s.agents_on:
             if geom is not None:
-                update_fire_cues(geom)
+                _update_fire_cues(s, geom, self.burned_nodes, self.fire_cued, self.zone_cued)
             if inside != exposed_edges:
-                routes_dirty = True  # exposed edges carry a route penalty
-        exposed_edges = inside
+                self.routes_dirty = True  # exposed edges carry a route penalty
+        self.exposed_edges = inside
         if not params.close_edges_in_fire:
             return
-        newly_closed, reopened = inside - fire_closed, fire_closed - inside
+        newly_closed, reopened = inside - self.fire_closed, self.fire_closed - inside
+        edges, generated = s.edges, self.generated
         for ev_type, group, verb in (("road_closed", newly_closed, "closure"), ("road_reopened", reopened, "reopening")):
             by_name: dict[str, list[str]] = {}
             for i in sorted(group):
@@ -948,157 +1319,167 @@ def simulate_traffic(
             for name in sorted(by_name):
                 ev_id = f"sim-fire-{verb}-{len(generated) + 1}"
                 generated.append(_bundle_event(ev_id, at, ev_type, f"Modelled fire {verb}: {name}", by_name[name]))
-        t = (at - start).total_seconds()
+        t = (at - s.start).total_seconds()
         for i in newly_closed:
-            for pkt in queue[i]:
+            for pkt in self.queue[i]:
                 if pkt[1] > t:  # still driving: the rest of the edge at reduced speed
                     pkt[1] = t + (pkt[1] - t) / FIRE_DRAIN_SPEED_FACTOR
         if newly_closed or reopened:
-            fire_closed = set(inside)
-            routes_dirty = True
+            self.fire_closed = set(inside)
+            self.routes_dirty = True
 
-    def decide_departures(t: int) -> None:
+    def decide_departures(self, t: int) -> None:
         """Waiting agents decide to leave with a hazard from notice, fire and social cues."""
+        s = self.s
+        bp, step, brng = s.bp, s.step, self.brng
+        response_scale = s.response_scale
         dt = bp.decision_every_s
-        for zi in range(n_zones):
-            agents = zone_waiting_agents[zi]
+        for zi in range(s.n_zones):
+            agents = self.zone_waiting_agents[zi]
             if not agents:
                 continue
-            if z_ordered_s[zi] is not None:
+            if self.z_ordered_s[zi] is not None:
                 notice_h = bp.order_hazard_per_h / response_scale
-            elif z_warned_s[zi] is not None:
+            elif self.z_warned_s[zi] is not None:
                 notice_h = bp.warning_hazard_per_h / response_scale
             else:
                 notice_h = 0.0
-            vehicles = zone_list[zi].vehicles
-            social_h = bp.social_hazard_per_h / response_scale * z_departed[zi] / vehicles if vehicles else 0.0
-            if notice_h == 0 and social_h == 0 and not zone_cued[zi]:
+            vehicles = s.zone_list[zi].vehicles
+            social_h = bp.social_hazard_per_h / response_scale * self.z_departed[zi] / vehicles if vehicles else 0.0
+            if notice_h == 0 and social_h == 0 and not self.zone_cued[zi]:
                 continue
             still = []
             for a in agents:
-                fire_h = bp.fire_cue_hazard_per_h / response_scale if fire_cued[ag_node[a]] else 0.0
-                n_h, s_h = (0.0, 0.0) if ag_wait_fire[a] else (notice_h, social_h)
+                fire_h = bp.fire_cue_hazard_per_h / response_scale if self.fire_cued[s.ag_node[a]] else 0.0
+                n_h, s_h = (0.0, 0.0) if s.ag_wait_fire[a] else (notice_h, social_h)
                 h = n_h + fire_h + s_h
                 if h <= 0 or brng.random() >= bh.decision_probability(h, dt):
                     still.append(a)
                     continue
                 u = brng.random() * h
-                ag_trigger[a] = bh.TRIGGER_ORDER if u < n_h else bh.TRIGGER_FIRE if u < n_h + fire_h else bh.TRIGGER_SOCIAL
-                prep_s = min(prep_cap_s, brng.lognormvariate(prep_mu, bp.prep_sigma))
-                heapq.heappush(preparing, (t + max(prep_s, step), a))
-                z_waiting[zi] -= ag_count[a]
-                z_preparing[zi] += ag_count[a]
-            zone_waiting_agents[zi] = still
+                self.ag_trigger[a] = (bh.TRIGGER_ORDER if u < n_h else bh.TRIGGER_FIRE if u < n_h + fire_h
+                                      else bh.TRIGGER_SOCIAL)
+                prep_s = min(s.prep_cap_s, brng.lognormvariate(s.prep_mu, bp.prep_sigma))
+                heapq.heappush(self.preparing, (t + max(prep_s, step), a))
+                self.z_waiting[zi] -= s.ag_count[a]
+                self.z_preparing[zi] += s.ag_count[a]
+            self.zone_waiting_agents[zi] = still
 
-    def turn_back(t: int) -> None:
+    def turn_back(self, t: int) -> None:
         """Agents on a stopped or dead-end edge decide once per edge whether to turn back to its start."""
-        nonlocal seq, turned_back
-        for i in sorted(active):
-            stopped = closed[i] and i in closed_hard
-            if not (stopped or (next_edge[e_to[i]] == -1 and open_dest_at(e_to[i]) is None)):
+        s = self.s
+        e_to, e_from, e_fft, step = s.e_to, s.e_from, s.e_fft, s.step
+        for i in sorted(self.active):
+            stopped = self.closed[i] and i in self.closed_hard
+            if not (stopped or (self.next_edge[e_to[i]] == -1 and self.open_dest_at(e_to[i]) is None)):
                 continue
             keep = deque()
-            for pkt in queue[i]:
+            for pkt in self.queue[i]:
                 count, ready, zone, a = pkt
-                if ag_turn_edge[a] == i:
+                if self.ag_turn_edge[a] == i:
                     keep.append(pkt)
                     continue
-                ag_turn_edge[a] = i
-                if brng.random() < bp.turn_back_prob:
+                self.ag_turn_edge[a] = i
+                if self.brng.random() < s.bp.turn_back_prob:
                     back_s = min(e_fft[i], max(step, t - (ready - e_fft[i])))  # retrace the distance covered
-                    heapq.heappush(returning, (t + back_s, seq, e_from[i], count, zone, a))
-                    seq += 1
-                    occ[i] -= count
-                    turned_back += count
+                    heapq.heappush(self.returning, (t + back_s, self.seq, e_from[i], count, zone, a))
+                    self.seq += 1
+                    self.occ[i] -= count
+                    self.turned_back += count
                 else:
                     keep.append(pkt)
-            queue[i] = keep
+            self.queue[i] = keep
             if not keep:
-                active.discard(i)
+                self.active.discard(i)
 
-    frames: list[dict] = []
-    metrics: list[dict] = []
-    edge_ids_out = [e.id for e in edges]
-    peaks = {"en_route_veh": 0, "blocked_veh": 0, "exposed_veh": 0, "exposed_at_origin_veh": 0,
-             "trapped_by_fire_veh": 0, "trapped_by_closure_veh": 0, "active_refuges": 0}
-    refuge_ix = [d for d in range(len(dest_list)) if dest_refuge[d]]
-    edge_peak: dict[int, list] = {}  # edge index -> [peak_veh, peak_t_s, min_speed_kph, congested_frames]
-
-    def edge_rows(t: int) -> list[tuple[int, int, float, bool]]:
+    def edge_rows(self, t: int) -> list[tuple[int, int, float, bool]]:
         """(edge, vehicles, mean speed kph, stopped) for occupied edges, in index order."""
+        edges, queue, occ, closed = self.s.edges, self.queue, self.occ, self.closed
+        closed_hard, fire_closed = self.closed_hard, self.fire_closed
         rows = []
-        for i in sorted(active):
+        for i in sorted(self.active):
             moving = sum(p[0] for p in queue[i] if p[1] > t)
             stopped = closed[i] and i in closed_hard
             kph = edges[i].speed_kph * (FIRE_DRAIN_SPEED_FACTOR if i in fire_closed else 1.0)
             rows.append((i, occ[i], 0.0 if stopped else kph * moving / occ[i], stopped))
         return rows
 
-    def fire_trapped_rows(rows) -> list[tuple[int, int]]:
+    def fire_trapped_rows(self, rows) -> list[tuple[int, int]]:
         """(edge, vehicles) on fire-exposed edges (not event-stopped) whose downstream node has no route or escape."""
+        e_to, next_edge, exposed_edges = self.s.e_to, self.next_edge, self.exposed_edges
         return [(i, n) for i, n, _, stopped in rows
-                if not stopped and i in exposed_edges and next_edge[e_to[i]] == -1 and open_dest_at(e_to[i]) is None]
+                if not stopped and i in exposed_edges and next_edge[e_to[i]] == -1
+                and self.open_dest_at(e_to[i]) is None]
 
-    def state_counts(rows) -> dict[str, int]:
+    def state_counts(self, rows) -> dict[str, int]:
+        s = self.s
+        e_to, next_edge, open_dest_at = s.e_to, self.next_edge, self.open_dest_at
         blocked = by_closure = 0
         for i, n, _, stopped in rows:
             if stopped:
                 by_closure += n
             if stopped or (next_edge[e_to[i]] == -1 and open_dest_at(e_to[i]) is None):
                 blocked += n
-        for node, q in waiting.items():
+        for node, q in self.waiting.items():
             if q and next_edge[node] == -1 and open_dest_at(node) is None:
                 blocked += sum(p[0] for p in q)
+        exposed_edges, nd_at_node, usable = self.exposed_edges, self.nd_at_node, self.usable
         counts = {
-            "not_departed_veh": not_departed,
-            "en_route_veh": total_veh - not_departed - arrived,
-            "arrived_veh": arrived,
+            "not_departed_veh": self.not_departed,
+            "en_route_veh": s.total_veh - self.not_departed - self.arrived,
+            "arrived_veh": self.arrived,
             "blocked_veh": blocked,
             "exposed_veh": sum(n for i, n, _, _ in rows if i in exposed_edges),
-            "exposed_at_origin_veh": sum(nd_at_node[n] for n in origin_burned),
-            "trapped_by_fire_veh": sum(n for _, n in fire_trapped_rows(rows)),
+            "exposed_at_origin_veh": sum(nd_at_node[n] for n in self.origin_burned),
+            "trapped_by_fire_veh": sum(n for _, n in self.fire_trapped_rows(rows)),
             "trapped_by_closure_veh": by_closure,
-            "open_refuges": sum(1 for d in refuge_ix if usable(d)),
-            "active_refuges": sum(1 for d in refuge_ix if usable(d) and dest_arrived[d] > 0),
+            "open_refuges": sum(1 for d in s.refuge_ix if usable(d)),
+            "active_refuges": sum(1 for d in s.refuge_ix if usable(d) and self.dest_arrived[d] > 0),
         }
-        if agents_on:
+        if s.agents_on:
             counts.update({
-                "waiting_veh": sum(z_waiting),
-                "preparing_veh": sum(z_preparing),
-                "turned_back_veh": turned_back,
-                **{f"departed_by_{trig}_veh": departed_by[trig] for trig in bh.TRIGGERS},
+                "waiting_veh": sum(self.z_waiting),
+                "preparing_veh": sum(self.z_preparing),
+                "turned_back_veh": self.turned_back,
+                **{f"departed_by_{trig}_veh": self.departed_by[trig] for trig in bh.TRIGGERS},
             })
         return counts
 
-    def record(t: int, at: datetime) -> None:
-        rows = edge_rows(t)
+    def record(self, t: int, at: datetime) -> None:
+        s = self.s
+        edges = s.edges
+        rows = self.edge_rows(t)
         frame_edges = []
-        for i, n, speed, _ in rows:
-            frame_edges.append([i, n, round(speed, 1)])
-            stat = edge_peak.setdefault(i, [0, t, math.inf, 0])
-            if n > stat[0]:
-                stat[0], stat[1] = n, t
-            stat[2] = min(stat[2], speed)
-            if speed < CONGESTED_SPEED_FRACTION * edges[i].speed_kph:
-                stat[3] += 1
-        counts = state_counts(rows)
+        if self.record_frames:
+            edge_peak = self.edge_peak
+            for i, n, speed, _ in rows:
+                frame_edges.append([i, n, round(speed, 1)])
+                stat = edge_peak.setdefault(i, [0, t, math.inf, 0])
+                if n > stat[0]:
+                    stat[0], stat[1] = n, t
+                stat[2] = min(stat[2], speed)
+                if speed < CONGESTED_SPEED_FRACTION * edges[i].speed_kph:
+                    stat[3] += 1
+        counts = self.state_counts(rows)
+        not_departed, arrived, total_veh = self.not_departed, self.arrived, s.total_veh
         en_route = counts["en_route_veh"]
         if not (min(not_departed, en_route, arrived) >= 0 and not_departed + en_route + arrived == total_veh):
             raise AssertionError(f"population not conserved at {format_utc(at)}")
-        on_edges = sum(occ[i] for i in active)
-        in_wait = sum(p[0] for q in waiting.values() for p in q)
-        in_return = sum(r[3] for r in returning)
+        on_edges = sum(self.occ[i] for i in self.active)
+        in_wait = sum(p[0] for q in self.waiting.values() for p in q)
+        in_return = sum(r[3] for r in self.returning)
         if (on_edges + in_wait + in_return != en_route or counts["blocked_veh"] > en_route
                 or counts["exposed_veh"] > en_route):
             raise AssertionError(f"inconsistent vehicle states at {format_utc(at)}")
-        if agents_on and (counts["waiting_veh"] + counts["preparing_veh"] != not_departed
-                          or sum(departed_by.values()) != total_veh - not_departed):
+        if s.agents_on and (counts["waiting_veh"] + counts["preparing_veh"] != not_departed
+                            or sum(self.departed_by.values()) != total_veh - not_departed):
             raise AssertionError(f"inconsistent resident states at {format_utc(at)}")
         if (counts["trapped_by_fire_veh"] + counts["trapped_by_closure_veh"] > counts["blocked_veh"]):
             raise AssertionError(f"inconsistent trapped counts at {format_utc(at)}")
-        new_traps = [i for i, _ in fire_trapped_rows(rows) if i not in fire_trapped_edges]
+        new_traps = [i for i, _ in self.fire_trapped_rows(rows) if i not in self.fire_trapped_edges]
+        generated = self.generated
         if new_traps:
-            fire_trapped_edges.update(new_traps)
+            self.fire_trapped_edges.update(new_traps)
             by_name: dict[str, list[int]] = {}
             for i in new_traps:
                 by_name.setdefault(edges[i].name, []).append(i)
@@ -1106,137 +1487,182 @@ def simulate_traffic(
                 ids = by_name[name]
                 generated.append(_bundle_event(
                     f"sim-fire-entrapment-{len(generated) + 1}", at, "vehicles_trapped",
-                    f"{ENTRAPMENT_LABEL_PREFIX}: {name} ({sum(occ[i] for i in ids)} veh)",
+                    f"{ENTRAPMENT_LABEL_PREFIX}: {name} ({sum(self.occ[i] for i in ids)} veh)",
                     [edges[i].id for i in ids], time_precision=FIRE_CLOSURE_TIME_PRECISION))
-        frames.append({
-            "at": format_utc(at),
-            "edges": frame_edges,
-            "closed": closed_list,
-        })
-        metrics.append({"at": format_utc(at), **counts})
+        if self.record_frames:
+            self.frames.append({
+                "at": format_utc(at),
+                "edges": frame_edges,
+                "closed": self.closed_list,
+            })
+            self.metrics.append({"at": format_utc(at), **counts})
         if counts["exposed_at_origin_veh"] > not_departed:
             raise AssertionError(f"inconsistent origin exposure at {format_utc(at)}")
+        peaks = self.peaks
         for key in peaks:
             peaks[key] = max(peaks[key], counts[key])
+        minutes = s.params.record_every_s / 60
+        self.exposed_veh_min += counts["exposed_veh"] * minutes
+        self.exposed_at_origin_veh_min += counts["exposed_at_origin_veh"] * minutes
+        self.last_counts = counts
+        if self.metrics_hook is not None:
+            self.metrics_hook(t, counts)
 
-    def view(t: int, at: datetime) -> TrafficView:
-        rows = edge_rows(t)
+    def view(self, t: int, at: datetime) -> TrafficView:
+        s = self.s
+        edges, start = s.edges, s.start
+        rows = self.edge_rows(t)
 
-        def when(s: float | None) -> datetime | None:
-            return None if s is None else start + timedelta(seconds=s)
+        def when(sec: float | None) -> datetime | None:
+            return None if sec is None else start + timedelta(seconds=sec)
 
         return TrafficView(
             at=at,
-            network=network,
+            network=s.network,
             edge_veh=MappingProxyType({edges[i].id: n for i, n, _, _ in rows}),
             edge_speed_ratio=MappingProxyType({edges[i].id: speed / edges[i].speed_kph for i, _, speed, _ in rows}),
-            closed_edge_ids=frozenset(edges[i].id for i in closed_list),
-            exposed_edge_ids=frozenset(edges[i].id for i in exposed_edges),
+            closed_edge_ids=frozenset(edges[i].id for i in self.closed_list),
+            exposed_edge_ids=frozenset(edges[i].id for i in self.exposed_edges),
             zones=MappingProxyType({
                 z.id: ZoneView(
                     id=z.id, name=z.name, vehicles=z.vehicles,
-                    ordered_at=when(z_ordered_s[zi]) if agents_on else (
-                        when(first_release_s.get(z.id))),
-                    warned_at=when(z_warned_s[zi]),
-                    waiting_veh=z_waiting[zi], preparing_veh=z_preparing[zi],
-                    departed_veh=z_departed[zi], arrived_veh=z_arrived[zi],
+                    ordered_at=when(self.z_ordered_s[zi]) if s.agents_on else (
+                        when(self.first_release_s.get(z.id))),
+                    warned_at=when(self.z_warned_s[zi]),
+                    waiting_veh=self.z_waiting[zi], preparing_veh=self.z_preparing[zi],
+                    departed_veh=self.z_departed[zi], arrived_veh=self.z_arrived[zi],
                 )
-                for zi, z in enumerate(zone_list)
+                for zi, z in enumerate(s.zone_list)
             }),
-            full_destination_ids=frozenset(d.id for k, d in enumerate(dest_list) if dest_full[k]),
-            closed_destination_ids=frozenset(d.id for k, d in enumerate(dest_list) if not dest_open[k]),
-            metrics=MappingProxyType(state_counts(rows)),
-            fire_area=fire_geom,
+            full_destination_ids=frozenset(d.id for k, d in enumerate(s.dest_list) if self.dest_full[k]),
+            closed_destination_ids=frozenset(d.id for k, d in enumerate(s.dest_list) if not self.dest_open[k]),
+            metrics=MappingProxyType(self.state_counts(rows)),
+            fire_area=self.fire_geom,
             elapsed_s=t,
-            contraflow_outbound_edge_ids=frozenset(edges[i].id for i in contraflow_out),
+            contraflow_outbound_edge_ids=frozenset(edges[i].id for i in self.contraflow_out),
         )
 
-    first_release_s: dict[str, float] = {}  # fixed-delay engine: zone -> order time, for views
+    def _apply_external(self, ev: TrafficEvent, at_s: float) -> None:
+        """Record and apply a controller or injected event (same handling for both)."""
+        if not self.s.agents_on and ev.type == "evacuation_order":
+            for z in ev.zone_ids:
+                self.first_release_s.setdefault(z, at_s)
+        self.generated.append(_bundle_event(
+            ev.id, ev.at, ev.type, ev.label, list(ev.edge_ids), evidence_class=ev.evidence_class,
+            time_precision=ev.time_precision, source_id=ev.source_id, source_locator=ev.source_locator,
+            zone_ids=list(ev.zone_ids), destination_id=ev.destination_id,
+        ))
+        self.apply_event(ev, at_s)
 
-    def run_controllers(t: int, at: datetime) -> None:
-        snapshot = view(t, at)
-        for controller in controllers:
+    def run_controllers(self, t: int, at: datetime) -> None:
+        s = self.s
+        start = s.start
+        snapshot = self.view(t, at)
+        for controller in self.controllers:
             for ev in controller(at, snapshot) or ():
                 if ev.at.tzinfo is None or ev.at.utcoffset() is None or not (start <= ev.at <= at):
                     raise ValueError(f"controller event {ev.id} must be timezone-aware with start <= at <= {at}")
-                if ev.id in used_event_ids:
+                if ev.id in self.used_event_ids:
                     raise ValueError(f"controller event id {ev.id} is not unique")
-                _check_event_targets(ev, edge_index, zone_ix, dest_ix)
-                used_event_ids.add(ev.id)
-                at_s = (ev.at - start).total_seconds()
-                if not agents_on and ev.type == "evacuation_order":
-                    for z in ev.zone_ids:
-                        first_release_s.setdefault(z, at_s)
-                generated.append(_bundle_event(
-                    ev.id, ev.at, ev.type, ev.label, list(ev.edge_ids), evidence_class=ev.evidence_class,
-                    time_precision=ev.time_precision, source_id=ev.source_id, source_locator=ev.source_locator,
-                    zone_ids=list(ev.zone_ids), destination_id=ev.destination_id,
-                ))
-                apply_event(ev, at_s)
+                _check_event_targets(ev, s.edge_index, s.zone_ix, s.dest_ix)
+                self.used_event_ids.add(ev.id)
+                self._apply_external(ev, (ev.at - start).total_seconds())
 
-    for k in range(n_steps + 1):
+    # --- one model step
+
+    def step(self) -> None:
+        """Run model step k (time k * step_s): events, fire, controllers, commands, routes, moves, record."""
+        s = self.s
+        k = self.k
+        if k > s.n_steps:
+            raise RuntimeError("engine already finished")
+        params, agents_on, bp = s.params, s.agents_on, s.bp
+        step = s.step
         t = k * step
-        at = start + timedelta(seconds=t)
+        at = s.start + timedelta(seconds=t)
 
         # 1. events due by now
-        closures_changed = False
-        while ev_next < len(ev_sorted) and ev_s[ev_next] <= t:
-            ev = ev_sorted[ev_next]
+        self.closures_changed = False
+        ev_sorted, ev_s = s.ev_sorted, s.ev_s
+        while self.ev_next < len(ev_sorted) and ev_s[self.ev_next] <= t:
+            ev = ev_sorted[self.ev_next]
             if not agents_on and ev.type == "evacuation_order":
                 for z in ev.zone_ids:
-                    first_release_s.setdefault(z, ev_s[ev_next])
-            apply_event(ev, ev_s[ev_next])
-            ev_next += 1
+                    self.first_release_s.setdefault(z, ev_s[self.ev_next])
+            self.apply_event(ev, ev_s[self.ev_next])
+            self.ev_next += 1
         # 2. fire area in effect
-        if fire_area_at is not None and t % params.fire_check_every_s == 0:
-            set_fire(fire_area_at(at), at)
+        if s.fire_area_at is not None and not self.fire_frozen and t % params.fire_check_every_s == 0:
+            if self.timeline is not None:
+                self._apply_fire_entry(t // params.fire_check_every_s, at)
+            else:
+                self.set_fire(s.fire_area_at(at), at)
         # 3. controllers
-        if controllers and t % controller_every_s == 0:
-            run_controllers(t, at)
-        if closures_changed or routes_dirty:
-            closed_hard = set(event_closed)
-            union = closed_hard | event_closed_drain | fire_closed | contraflow_in
-            if union != closed_set:
-                for i in union ^ closed_set:
+        if self.controllers and t % s.controller_every_s == 0:
+            self.run_controllers(t, at)
+        # 3b. injected commands due by now (never merged into the historical events)
+        injected = self.injected
+        while injected and injected[0][0] <= t:
+            at_s, _, ev = heapq.heappop(injected)
+            self._apply_external(ev, at_s)
+        if self.closures_changed or self.routes_dirty:
+            closed_hard = self.closed_hard = set(self.event_closed)
+            union = closed_hard | self.event_closed_drain | self.fire_closed | self.contraflow_in
+            if union != self.closed_set:
+                closed = self.closed
+                for i in union ^ self.closed_set:
                     closed[i] = i in union
-                closed_set = union
-                closed_list = sorted(union)
-                closures_changed = True
+                self.closed_set = union
+                self.closed_list = sorted(union)
+                self.closures_changed = True
         # 4. routes
-        if routes_dirty or closures_changed or t >= next_reroute_s:
-            rebuild_routes()
-            routes_dirty = False
-            next_reroute_s = t + params.reroute_interval_s
+        if self.routes_dirty or self.closures_changed or t >= self.next_reroute_s:
+            self.rebuild_routes()
+            self.routes_dirty = False
+            self.next_reroute_s = t + params.reroute_interval_s
 
         # 5. resident decisions, then departures and returns due by now join their node
         if agents_on and t % bp.decision_every_s == 0:
-            decide_departures(t)
+            self.decide_departures(t)
             if bp.turn_back_prob > 0:
-                turn_back(t)
+                self.turn_back(t)
+        waiting, add_series = self.waiting, self.add_series
+        pending, nd_at_node = self.pending, self.nd_at_node
+        z_preparing, z_departed, zone_departures = self.z_preparing, self.z_departed, self.zone_departures
         while pending and pending[0][0] <= t:
             _, _, node, count, zone = heapq.heappop(pending)
-            not_departed -= count
+            self.not_departed -= count
             nd_at_node[node] -= count
             z_preparing[zone] -= count
             z_departed[zone] += count
             add_series(zone_departures[zone], t, count)
             waiting.setdefault(node, deque()).append([count, zone, -1])
+        preparing = self.preparing
         while preparing and preparing[0][0] <= t:
             _, a = heapq.heappop(preparing)
-            zone, count = ag_zone[a], ag_count[a]
-            not_departed -= count
-            nd_at_node[ag_node[a]] -= count
+            zone, count = s.ag_zone[a], s.ag_count[a]
+            self.not_departed -= count
+            nd_at_node[s.ag_node[a]] -= count
             z_preparing[zone] -= count
             z_departed[zone] += count
-            departed_by[ag_trigger[a]] += count
-            z_trigger_veh[zone][ag_trigger[a]] += count
+            self.departed_by[self.ag_trigger[a]] += count
+            self.z_trigger_veh[zone][self.ag_trigger[a]] += count
             add_series(zone_departures[zone], t, count)
-            waiting.setdefault(ag_node[a], deque()).append([count, zone, a])
+            waiting.setdefault(s.ag_node[a], deque()).append([count, zone, a])
+        returning = self.returning
         while returning and returning[0][0] <= t:
             _, _, node, count, zone, a = heapq.heappop(returning)
             waiting.setdefault(node, deque()).append([count, zone, a])
 
         # 6. move packets off edges, in edge-index order
+        queue, credit, occ, closed = self.queue, self.credit, self.occ, self.closed
+        e_cap_step, e_credit_max, e_storage = self.e_cap_step, self.e_credit_max, self.e_storage
+        closed_hard, active, next_edge = self.closed_hard, self.active, self.next_edge
+        e_to = s.e_to
+        open_dest_at, accept, enter, choose = self.open_dest_at, self.accept, self.enter, self.choose
+        zone_memory = self.zone_memory
+        assigned = bool(self.zone_dest)
+        admit_at, route = self.admit_at, self.route
         for i in sorted(active):
             q = queue[i]
             credit[i] = min(credit[i] + e_cap_step[i], e_credit_max[i])
@@ -1247,7 +1673,7 @@ def simulate_traffic(
                 count, ready, zone, a = q[0]
                 if ready > t or credit[i] < count:
                     break
-                d = open_dest_at(node)
+                d = admit_at(node, zone) if assigned else open_dest_at(node)
                 if d is not None:
                     n = accept(d, count, zone, t)
                     credit[i] -= n
@@ -1257,7 +1683,10 @@ def simulate_traffic(
                         break  # remainder waits for the route rebuild at the next step
                     q.popleft()
                     continue
-                ne = choose(node, zone, a) if agents_on else next_edge[node]
+                if assigned:
+                    ne = route(node, zone, a)
+                else:
+                    ne = choose(node, zone, a) if agents_on else next_edge[node]
                 if ne == -1 or (occ[ne] and occ[ne] + count > e_storage[ne]):
                     break
                 q.popleft()
@@ -1274,7 +1703,7 @@ def simulate_traffic(
             wq = waiting[node]
             while wq:
                 count, zone, a = wq[0]
-                d = open_dest_at(node)
+                d = admit_at(node, zone) if assigned else open_dest_at(node)
                 if d is not None:
                     n = accept(d, count, zone, t)
                     if n < count:
@@ -1282,7 +1711,10 @@ def simulate_traffic(
                         break
                     wq.popleft()
                     continue
-                ne = choose(node, zone, a) if agents_on else next_edge[node]
+                if assigned:
+                    ne = route(node, zone, a)
+                else:
+                    ne = choose(node, zone, a) if agents_on else next_edge[node]
                 if ne == -1 or (occ[ne] and occ[ne] + count > e_storage[ne]):
                     break
                 wq.popleft()
@@ -1293,86 +1725,98 @@ def simulate_traffic(
                 del waiting[node]
 
         if t % params.record_every_s == 0:
-            record(t, at)
+            self.record(t, at)
+        self.k = k + 1
 
-    def iso(t_s: float) -> str:
-        return format_utc(start + timedelta(seconds=t_s))
+    # --- output
 
-    all_arrived = arrived == total_veh and total_veh > 0
-    clearance = None
-    if all_arrived and first_order_s is not None and last_arrival_s is not None:
-        clearance = int(last_arrival_s - first_order_s)
+    def result(self) -> dict:
+        """The bundle `traffic` block plus generated_events, assumptions and limitations (simulate_traffic)."""
+        s = self.s
+        params, start, edges, dest_list, zone_list = s.params, s.start, s.edges, s.dest_list, s.zone_list
+        peaks, dest_arrived = self.peaks, self.dest_arrived
+        arrived, total_veh = self.arrived, s.total_veh
+        first_order_s, last_arrival_s = self.first_order_s, self.last_arrival_s
 
-    summary = {
-        "total_veh": total_veh,
-        "clearance_time_s": clearance,
-        "max_exposed_veh": peaks["exposed_veh"],
-        "max_exposed_at_origin_veh": peaks["exposed_at_origin_veh"],
-        "max_en_route_veh": peaks["en_route_veh"],
-        "max_blocked_veh": peaks["blocked_veh"],
-        "arrived_veh": arrived,
-        "not_departed_veh": not_departed,
-        "first_order_at": None if first_order_s is None else format_utc(start + timedelta(seconds=first_order_s)),
-        "last_arrival_at": None if last_arrival_s is None else format_utc(start + timedelta(seconds=last_arrival_s)),
-        "arrived_by_destination_veh": {d.id: dest_arrived[i] for i, d in enumerate(dest_list)},
-        "max_trapped_by_fire_veh": peaks["trapped_by_fire_veh"],
-        "max_trapped_by_closure_veh": peaks["trapped_by_closure_veh"],
-        "fire_entrapment_edges": len(fire_trapped_edges),
-        "max_active_refuges": peaks["active_refuges"],
-        "refuges_used": sum(1 for d in refuge_ix if dest_arrived[d] > 0),
-    }
-    zone_stats = {
-        z.id: {
-            "departures": [[iso(t), n] for t, n in zone_departures[k]],
-            "arrivals": [[iso(t), n] for t, n in zone_arrivals[k]],
+        def iso(t_s: float) -> str:
+            return format_utc(start + timedelta(seconds=t_s))
+
+        all_arrived = arrived == total_veh and total_veh > 0
+        clearance = None
+        if all_arrived and first_order_s is not None and last_arrival_s is not None:
+            clearance = int(last_arrival_s - first_order_s)
+
+        summary = {
+            "total_veh": total_veh,
+            "clearance_time_s": clearance,
+            "max_exposed_veh": peaks["exposed_veh"],
+            "max_exposed_at_origin_veh": peaks["exposed_at_origin_veh"],
+            "max_en_route_veh": peaks["en_route_veh"],
+            "max_blocked_veh": peaks["blocked_veh"],
+            "arrived_veh": arrived,
+            "not_departed_veh": self.not_departed,
+            "first_order_at": None if first_order_s is None else format_utc(start + timedelta(seconds=first_order_s)),
+            "last_arrival_at": None if last_arrival_s is None else format_utc(
+                start + timedelta(seconds=last_arrival_s)),
+            "arrived_by_destination_veh": {d.id: dest_arrived[i] for i, d in enumerate(dest_list)},
+            "max_trapped_by_fire_veh": peaks["trapped_by_fire_veh"],
+            "max_trapped_by_closure_veh": peaks["trapped_by_closure_veh"],
+            "fire_entrapment_edges": len(self.fire_trapped_edges),
+            "max_active_refuges": peaks["active_refuges"],
+            "refuges_used": sum(1 for d in s.refuge_ix if dest_arrived[d] > 0),
         }
-        for k, z in enumerate(zone_list)
-    }
-    assumptions, limitations = list(ASSUMPTIONS), list(LIMITATIONS)
-    if agents_on:
-        summary.update({
-            "departed_by_trigger_veh": dict(departed_by),
-            "turned_back_veh": turned_back,
-            "waiting_at_end_veh": sum(z_waiting),
-            "preparing_at_end_veh": sum(z_preparing),
-        })
-        for k, z in enumerate(zone_list):
-            zone_stats[z.id]["departed_by_trigger_veh"] = dict(z_trigger_veh[k])
-        assumptions = [a for a in assumptions if a != _FIXED_DELAY_ASSUMPTION] + bh.ASSUMPTIONS
-        limitations = [x for x in limitations if x not in _FIXED_DELAY_LIMITATIONS] + bh.LIMITATIONS
+        zone_stats = {
+            z.id: {
+                "departures": [[iso(t), n] for t, n in self.zone_departures[k]],
+                "arrivals": [[iso(t), n] for t, n in self.zone_arrivals[k]],
+            }
+            for k, z in enumerate(zone_list)
+        }
+        assumptions, limitations = list(ASSUMPTIONS), list(LIMITATIONS)
+        if s.agents_on:
+            summary.update({
+                "departed_by_trigger_veh": dict(self.departed_by),
+                "turned_back_veh": self.turned_back,
+                "waiting_at_end_veh": sum(self.z_waiting),
+                "preparing_at_end_veh": sum(self.z_preparing),
+            })
+            for k, z in enumerate(zone_list):
+                zone_stats[z.id]["departed_by_trigger_veh"] = dict(self.z_trigger_veh[k])
+            assumptions = [a for a in assumptions if a != _FIXED_DELAY_ASSUMPTION] + bh.ASSUMPTIONS
+            limitations = [x for x in limitations if x not in _FIXED_DELAY_LIMITATIONS] + bh.LIMITATIONS
 
-    return {
-        "evidence_class": "simulated",
-        "model": {"id": MODEL_ID, "version": MODEL_VERSION, "params": params.to_dict(), "seed": params.seed},
-        "edge_ids": edge_ids_out,
-        "frames": frames,
-        "metrics": metrics,
-        "summary": summary,
-        "diagnostics": {
-            "congested_speed_fraction": CONGESTED_SPEED_FRACTION,
-            "edge_stats_sampled_every_s": params.record_every_s,  # edge stats come from recorded frames
-            "zone_stats": zone_stats,
-            "edge_stats": [
-                {
-                    "edge_index": i,
-                    "edge_id": edges[i].id,
-                    "peak_veh": stat[0],
-                    "peak_at": iso(stat[1]),
-                    "min_speed_kph": round(stat[2], 1),
-                    "minutes_congested": stat[3] * params.record_every_s / 60,
-                }
-                for i, stat in sorted(edge_peak.items())
-            ],
-            "destination_stats": {
-                d.id: {
-                    "arrived_veh": dest_arrived[k],
-                    "full_at": None if dest_full_s[k] is None else iso(dest_full_s[k]),
-                    "arrivals": [[iso(t), n] for t, n in dest_series[k]],
-                }
-                for k, d in enumerate(dest_list)
+        return {
+            "evidence_class": "simulated",
+            "model": {"id": MODEL_ID, "version": MODEL_VERSION, "params": params.to_dict(), "seed": params.seed},
+            "edge_ids": s.edge_ids_out,
+            "frames": self.frames,
+            "metrics": self.metrics,
+            "summary": summary,
+            "diagnostics": {
+                "congested_speed_fraction": CONGESTED_SPEED_FRACTION,
+                "edge_stats_sampled_every_s": params.record_every_s,  # edge stats come from recorded frames
+                "zone_stats": zone_stats,
+                "edge_stats": [
+                    {
+                        "edge_index": i,
+                        "edge_id": edges[i].id,
+                        "peak_veh": stat[0],
+                        "peak_at": iso(stat[1]),
+                        "min_speed_kph": round(stat[2], 1),
+                        "minutes_congested": stat[3] * params.record_every_s / 60,
+                    }
+                    for i, stat in sorted(self.edge_peak.items())
+                ],
+                "destination_stats": {
+                    d.id: {
+                        "arrived_veh": dest_arrived[k],
+                        "full_at": None if self.dest_full_s[k] is None else iso(self.dest_full_s[k]),
+                        "arrivals": [[iso(t), n] for t, n in self.dest_series[k]],
+                    }
+                    for k, d in enumerate(dest_list)
+                },
             },
-        },
-        "generated_events": generated,
-        "assumptions": assumptions,
-        "limitations": limitations,
-    }
+            "generated_events": self.generated,
+            "assumptions": assumptions,
+            "limitations": limitations,
+        }

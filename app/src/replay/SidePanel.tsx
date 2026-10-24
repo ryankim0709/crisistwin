@@ -723,11 +723,8 @@ export default function SidePanel({
                 </span>
               </summary>
               <section aria-labelledby="rp-events-title" className="rp-events">
-                <h2 id="rp-events-title" className="rp-section-title">
-                  Event feed{" "}
-                  <span className="rp-count">
-                    {Math.max(0, eventIndex + 1)}/{model.events.length}
-                  </span>
+                <h2 id="rp-events-title" className="rp-sr">
+                  Event feed
                 </h2>
                 <EventFeed model={model} eventIndex={eventIndex} onSeek={onSeek} />
               </section>

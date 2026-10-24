@@ -12,6 +12,8 @@ services:
       MONGODB_URI: ${MONGODB_URI:?Set MONGODB_URI in the shell or app/.env}
       MONGODB_DATABASE: ${MONGODB_DATABASE:-crisistwin}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      APIFY_TOKEN: ${APIFY_TOKEN:-}
+      APIFY_ACTOR_ID: ${APIFY_ACTOR_ID:-}
     ports:
       - "127.0.0.1:8000:8000"
     volumes:

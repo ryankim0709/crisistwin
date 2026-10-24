@@ -12,6 +12,7 @@ Run from the repository root:
   python3 -m sim.variants --package data/incidents/camp-2018-paradise-slice/a6d2cc03f525ed65 \
     --roads-package data/incidents/camp-2018-evacuation/b1b318c16bbd3270 \
     --baseline app/public/replays/camp-2018.json --output-dir app/public/replays/camp-2018.variants
+Add `--intel-events <events.jsonl from python3 -m sim.intel export>` for `reported-closures`.
 """
 
 from __future__ import annotations
@@ -24,18 +25,20 @@ import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from tools.build_camp_history import SourceError
 
 from sim import SIM_VERSION
 from sim.bundle import _fire_area_lookup, _simulated_fire, build_bundle
+from sim.events import CLOSURE_TYPES, resolve_road_rows
 from sim.fire import ROTHERMEL_MODEL_ID, FireParams
 from sim.firefront import (FIREFRONT_ASSUMPTIONS, ROTHERMEL_CHOSEN_PARAMS, arrival_lookup, calibrate_from_ignition,
                            isochrones, rothermel_fire)
 from sim.geo import EARTH_RADIUS_M
 from sim.history import IncidentHistory, format_utc, load_history, parse_utc
+from sim.intel import load_intel_rows
 from sim.scenario import camp_replay_inputs
 from sim.traffic import (
     CONTRAFLOW_END_EVENT_TYPES, CONTRAFLOW_START_EVENT_TYPES, MODEL_ID as TRAFFIC_MODEL_ID,
@@ -58,6 +61,9 @@ SKYWAY_CLOSED_AT = "2018-11-08T16:00:00Z"  # 08:00 PST
 RESPONSE_DELAY_FACTOR = 2.0
 WIND_SHIFT_DEG = -30.0  # toward north: wind_from 67.5 -> 37.5 deg (both fire models' calibrated wind is 67.5)
 OPTIMIZER_BUDGET_EVALS = 42
+REPORTED_CLOSURE_TYPES = ("road_closed", "road_blocked", "road_access_restricted")
+REPORTED_PASS_TYPES = ("road_reopened",)
+REPORTED_DUPLICATE_WINDOW = timedelta(minutes=30)  # a baseline closure this close in time on the same edges wins
 
 COMMON_LIMITATIONS = [
     "Counterfactual planning experiment on the baseline's demand and order schedule (see basis.demand and the "
@@ -86,6 +92,7 @@ class Context:
     start: datetime
     end: datetime
     roads_package: Path | None = None  # needed to rebuild a rothermel-mtt front (observations, terrain)
+    intel_events: Path | None = None  # `python3 -m sim.intel export` output, for reported-closures
 
 
 @dataclass(frozen=True)
@@ -327,6 +334,58 @@ def _optimized(base: RunInputs, ctx: Context) -> tuple[RunInputs, list[str], dic
     return _with_events(base, events), changes, extra
 
 
+def _reported_closures(base: RunInputs, ctx: Context) -> tuple[RunInputs, list[str], dict]:
+    if ctx.intel_events is None or not ctx.intel_events.exists():
+        raise VariantUnavailable("no --intel-events file (export confirmed candidates with `python3 -m sim.intel export`)")
+    rows = load_intel_rows(ctx.intel_events)
+    road_rows = [r for r in rows if r["type"] in REPORTED_CLOSURE_TYPES + REPORTED_PASS_TYPES]
+    if not road_rows:
+        raise VariantUnavailable(f"{ctx.intel_events} has no confirmed closure or reopening rows")
+    s = base.scenario
+    events, report = resolve_road_rows(road_rows, s["network"], s["destinations"])
+    snap = {r["event_id"]: r for r in report}
+    src = {r["event_id"]: r for r in road_rows}
+    baseline_closures = [ev for ev in s["events"] if ev.type in CLOSURE_TYPES and ev.edge_ids]
+    added, details = [], []
+    for ev in events:
+        row = src[ev.id]
+        dup_of = [b.id for b in baseline_closures
+                  if abs(b.at - ev.at) <= REPORTED_DUPLICATE_WINDOW and set(b.edge_ids) & set(ev.edge_ids)]
+        covered = {e for b in baseline_closures if b.id in dup_of for e in b.edge_ids}
+        if not ev.edge_ids:
+            status, dup_of = "unresolved", []
+        elif row["type"] in REPORTED_CLOSURE_TYPES and set(ev.edge_ids) <= covered:
+            status = "duplicate"
+        else:
+            status, dup_of = "added", []
+            added.append(ev)
+        details.append({"event_id": ev.id, "type": row["type"], "at": format_utc(ev.at),
+                        "available_at": row["available_at"], "status": status, "edge_ids": list(ev.edge_ids),
+                        "snap": snap[ev.id]["status"], "method": snap[ev.id]["method"],
+                        "road_name": snap[ev.id]["road_name"], "source_id": row["source_id"],
+                        "duplicate_of": dup_of})
+    count = {k: sum(d["status"] == k for d in details) for k in ("added", "unresolved", "duplicate")}
+    if not any(ev.edge_ids for ev in events):
+        raise VariantUnavailable(f"none of the {len(road_rows)} confirmed road rows snapped to a network edge")
+    if not added:
+        raise VariantUnavailable(f"all {count['duplicate']} snapped rows duplicate baseline closures")
+    sources = sorted({r["source_id"] for r in road_rows})
+    changes = [
+        f"Added {count['added']} planner-confirmed, publicly reported road events "
+        f"({', '.join(sorted({src[ev.id]['type'] for ev in added}))}) at their occurred_at, snapped with the "
+        f"baseline's road-event rules; they keep evidence_class reported. Sources: {', '.join(sources)}.",
+        f"{count['unresolved']} rows did not snap to a network edge and {count['duplicate']} duplicate a baseline "
+        f"closure of the same edges within {REPORTED_DUPLICATE_WINDOW.seconds // 60} min; both are listed in details "
+        "and not applied.",
+        "available_at (archive capture or fetch time) is an upper bound on when each report was public; events apply "
+        "at the stated occurred_at, which may be earlier.",
+    ]
+    if len(rows) > len(road_rows):
+        changes.append(f"{len(rows) - len(road_rows)} confirmed rows of other types (orders, alerts, shelters, "
+                       "contraflow) are not part of this variant.")
+    return _with_events(base, [*s["events"], *added]), changes, {"intel_events": details, "counts": count}
+
+
 VARIANTS = (
     Variant("skyway-closed-0800", "Skyway closed at 08:00",
             "What if the Skyway between Paradise and Chico had been closed in both directions from 08:00 PST?",
@@ -345,6 +404,9 @@ VARIANTS = (
             "What if the reported contraflow had not been set up?", _no_contraflow),
     Variant("optimized", "Optimized order schedule",
             "How much could a simulation-optimized order schedule reduce exposure (a hindsight bound)?", _optimized),
+    Variant("reported-closures", "Publicly reported closures added",
+            "What if the publicly posted road closures a planner confirmed had also taken effect at their reported "
+            "times?", _reported_closures),
 )
 
 
@@ -488,6 +550,8 @@ def main() -> None:
                         help="baseline bundle written by `python3 -m sim ... bundle`; must match the in-process baseline")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--only", nargs="+", choices=[v.id for v in VARIANTS], help="run only these variants")
+    parser.add_argument("--intel-events", type=Path,
+                        help="events.jsonl from `python3 -m sim.intel export` (confirmed reported closures)")
     args = parser.parse_args()
     command = " ".join(["python3 -m sim.variants", *sys.argv[1:]])
 
@@ -495,7 +559,7 @@ def main() -> None:
         clock = time.perf_counter()
         history = load_history(args.package)
         scenario, start, end = baseline_inputs(args.roads_package)
-        ctx = Context(history, start, end, args.roads_package)
+        ctx = Context(history, start, end, args.roads_package, args.intel_events)
         base = RunInputs(scenario, TrafficParams(), _simulated_fire(history, end, args.roads_package))
         base_basis = basis(base, ctx)
         baseline = run(base, ctx, command)

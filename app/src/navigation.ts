@@ -21,6 +21,11 @@ export const navigationItems: readonly NavigationItem[] = [
     group: "Workspace",
   },
   {
+    path: "/live",
+    label: "Live command",
+    group: "Workspace",
+  },
+  {
     path: "/scenarios",
     label: "Scenarios",
     group: "Workspace",
@@ -36,7 +41,7 @@ export const navigationItems: readonly NavigationItem[] = [
     group: "Analysis",
   },
   {
-    path: "/incidents",
+    path: "/intel",
     label: "Incident intelligence",
     group: "Analysis",
   },

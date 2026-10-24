@@ -139,11 +139,86 @@ returns 304. Errors are JSON: 404 `{"error": "not_found"}` for unknown/unbuilt r
 
 ### Live broadcast and families
 
-`GET /api/live`, `POST /api/live/broadcast` (`api/live.py`) and `/api/families…`
+`GET /api/live`, `POST /api/live/broadcast` (`api/live_broadcast.py`) and `/api/families…`
 (`api/families.py`) serve the resident iOS app. They use MongoDB collections
 `live_broadcast` and `families`. Request and response shapes are in
 [ADR 0016](../../docs/adr/0016-resident-live-and-family.md) and
 `app/src/live/contracts.ts`.
+
+### Live drill API (`/api/live/…`)
+
+Implements v1 and v2 of [docs/live-reports.md](../../docs/live-reports.md) (ADR 0011, 0012):
+field reports, road state, public map, check tasks, the drill clock, the fire estimate,
+per-zone guidance with controller proposals, check-ins and responder location. Code:
+`api/live/` (HTTP + MongoDB) over the pure `livecore/` package (rules, planner, routing).
+Everything is a labeled drill of the 2018 Camp Fire; nothing is a real incident. It shares
+the `/api/live` prefix with the broadcast above but no code or collections (`live_*`).
+
+- Auth: `Authorization: Bearer <token>`. `POST /api/live/devices` issues civilian tokens;
+  `POST /api/live/incidents/camp-2018-drill/join {"invite_code"}` issues responder tokens
+  (`LIVE_INVITE_CODE`); the controller uses `LIVE_CONTROLLER_TOKEN`. Unset secrets fail
+  closed (403). Device tokens are stored as SHA-256 hashes.
+- The planner fixes every level, route and number. The rationale LLM
+  (`LIVE_RATIONALE_MODEL`, `ANTHROPIC_API_KEY`) only rewrites the template text in a
+  background thread (10 s timeout); without a key the template stays.
+- `LIVE_DRILL_BUNDLE` points at the replay bundle (default
+  `app/public/replays/camp-2018.json`); it is parsed once per process on first use.
+- `POST incidents/{id}/impact` (controller) compares one road segment blocked and unblocked:
+  two planner runs give the affected zones and their ETA delta, and one twin what-if
+  (simulated, about 1-3 s) gives the vehicles at risk and window metrics (`api/live/impact.py`).
+- Not implemented yet: `POST incidents/{id}/route` returns 501.
+
+Local run (Docker MongoDB on 127.0.0.1:27017):
+
+```sh
+export MONGODB_URI=mongodb://127.0.0.1:27017 MONGODB_DATABASE=crisistwin_live_dev
+export LIVE_CONTROLLER_TOKEN=dev-controller LIVE_INVITE_CODE=DRILL
+python manage.py live_init_db            # indexes + validators, once per database
+python manage.py live_drill --reset --seed   # start the clock; add labeled drill-fixture reports
+python manage.py runserver 127.0.0.1:8000
+```
+
+`live_drill` also takes `--speed` (0..60 drill seconds per wall second) and
+`--replay-start`. `--seed` inserts three synthetic civilian reports of a full block on
+Skyway in Paradise (`evidence_class: "drill_fixture"`, note says synthetic).
+`live_init_db --drop-drill-data` drops all live drill data but keeps device tokens.
+
+`python manage.py live_smoke` (same env, server running) checks the whole phone ↔ `/live` loop
+over HTTP in about 5 s, with no simulator or browser: report, triage, replan and approve,
+guidance on the phone, destination choice, check-ins, responder position and a check task. It
+writes synthetic drill data; run `live_drill --reset` afterwards.
+
+### Incident intelligence (`/api/intel/…`)
+
+Public agency pages, fetched by the Apify Actor in `actors/incident-intel/`, become source
+documents; Claude extracts candidate events from one document at a time; a planner confirms,
+maps or rejects each candidate. Full request/response shapes, field rules and examples:
+[docs/incident-intel.md](../../docs/incident-intel.md) (decision:
+[ADR 0018](../../docs/adr/0018-apify-incident-intelligence.md)). Views in `api/intel.py`,
+prompt/schema/candidate rules in `api/intel_extract.py` (pure), Apify wrapper in
+`api/intel_apify.py`. MongoDB collections `intel_runs`, `intel_documents`,
+`intel_candidates`.
+
+| Endpoint | Purpose |
+| -------- | ------- |
+| `POST /api/intel/runs` | Start the Actor on Apify (paid; 5/min). 202 `{run_id, dataset_id, status, incident, started_at}` |
+| `POST /api/intel/ingest` | Store Actor output by `run_id`, `dataset_id`, or uploaded `items` (<= 2 MB, <= 200). `sha256` is recomputed; no extraction |
+| `GET /api/intel/documents?incident=` | Stored documents (excerpt, no full text) |
+| `POST /api/intel/documents/<document_id>/extract` | Claude extraction of one document (paid; 10/min) |
+| `GET /api/intel/candidates?incident=&status=&types=&as_of=&bbox=` | Candidates, sorted by `available_at`, at most 500 |
+| `POST /api/intel/candidates/<event_id>/review` | Planner confirm/reject/reset; confirming a road event requires `mapping.point` |
+
+Every candidate is `evidence_class: "reported"` and starts `review_status: "unconfirmed"`;
+only the review endpoint changes it. Claude copies text and categorises; it never outputs
+coordinates or edge ids, and an event whose quote is not in the page is dropped. Page text is
+sent inside `<scraped_page>` tags as untrusted data. Endpoints are anonymous for the local demo,
+throttled, and answer `Cache-Control: no-store`; errors are `{"error", "detail"}`.
+
+Environment (server-side only, never `VITE_*`): `APIFY_TOKEN` and `APIFY_ACTOR_ID` enable
+runs and ingest by run/dataset id; without them (or without the `apify-client` package) those
+answer 503 `apify_unavailable`, while uploading `items`, listing, review and export still
+work. `ANTHROPIC_API_KEY` enables extraction; without it, 503 `ai_unavailable`. MongoDB
+outages answer 503 `database_unavailable`.
 
 ## Updating dependencies
 
@@ -156,6 +231,7 @@ uv pip compile requirements-dev.in --constraint requirements.txt --python-versio
 
 Review and keep both generated lockfiles. Installation uses pip; uv is only
 needed when changing the Python dependency set. Atlas credentials stay local, and only
-the optional explain endpoint needs a provider key (`ANTHROPIC_API_KEY`).
+the optional explain, dispatch and intel extraction endpoints need a provider key
+(`ANTHROPIC_API_KEY`); intel runs need `APIFY_TOKEN`/`APIFY_ACTOR_ID`.
 Optional existing contract tests mock the MongoDB boundary; they still require a
 syntactically valid `MONGODB_URI` environment variable to load Django settings.

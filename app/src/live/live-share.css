@@ -1,0 +1,26 @@
+.live-share {
+  flex-wrap: wrap;
+}
+
+.live-share__status {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: inherit;
+  opacity: 0.75;
+}
+
+.live-share__status[data-state="error"] {
+  opacity: 1;
+}
+
+/* Above the dispatch page's playback dock. */
+.dispatch-live-share {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+}

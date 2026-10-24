@@ -112,12 +112,11 @@ function Results({ doc }: { doc: StressDoc }) {
       </MetricGrid>
       <Panel
         title="Disruption runs against the baseline"
-        eyebrow="Computed results"
         aside={<Tag tone="warning">Counterfactual, not history</Tag>}
       >
         {doc.runs.length === 0 ? (
           <EmptyResult title="No stress runs recorded">
-            The file lists no completed runs.
+            No completed runs.
           </EmptyResult>
         ) : (
           <div className="ui-table-scroll">
@@ -166,7 +165,7 @@ function Results({ doc }: { doc: StressDoc }) {
         </Panel>
       )}
       <div className="ui-columns">
-        <Panel title="Where this comes from" eyebrow="Reproducibility">
+        <Panel title="Where this comes from">
           <Facts
             items={[
               {
@@ -201,7 +200,7 @@ function Results({ doc }: { doc: StressDoc }) {
             </ul>
           ) : (
             <EmptyResult title="No limitations recorded">
-              The file lists none. Results are still a single-seed experiment.
+              Treat results as a single-seed planning experiment.
             </EmptyResult>
           )}
         </Panel>
@@ -215,12 +214,11 @@ export default function StressTestsPage() {
   return (
     <WorkspacePage
       title="Stress testing"
-      description="Where does the 2018 Camp Fire evacuation plan break? Each run disrupts the baseline once."
     >
       {load.status === "ready" ? (
         <Results doc={load.data} />
       ) : (
-        <Panel title="Stress-test runs" eyebrow="Computed results">
+        <Panel title="Stress-test runs">
           <DataState load={load} what="stress-test results" path={STRESS_URL} />
         </Panel>
       )}

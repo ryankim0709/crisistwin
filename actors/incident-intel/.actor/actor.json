@@ -1,0 +1,22 @@
+{
+  "actorSpecification": 1,
+  "name": "crisistwin-incident-intel",
+  "title": "CrisisTwin incident intelligence",
+  "description": "Fetches public agency pages (live or Wayback captures) and returns cleaned text documents. No LLM.",
+  "version": "0.1",
+  "dockerfile": "./Dockerfile",
+  "input": "./input_schema.json",
+  "storages": {
+    "dataset": {
+      "actorSpecification": 1,
+      "title": "Source documents",
+      "views": {
+        "documents": {
+          "title": "Documents",
+          "transformation": {"fields": ["source_id", "mode", "archived_at", "fetched_at", "title", "url", "sha256"]},
+          "display": {"component": "table"}
+        }
+      }
+    }
+  }
+}

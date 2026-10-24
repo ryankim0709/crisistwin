@@ -1,6 +1,6 @@
 # 0004: Native SwiftUI mobile scaffold
 
-Date: 2026-10-23. Status: accepted for the initial mobile scaffold.
+Date: 2026-10-23. Status: accepted for the initial mobile scaffold; the iOS 17+ / Xcode 16.2+ version line is superseded by [0018-ios-26-baseline](0018-ios-26-baseline.md).
 
 Add an independent iOS app under `mobile/`, using SwiftUI and Foundation on
 iOS 17+, Xcode 16.2+, and Swift 5 language mode. Check in the Xcode project and a

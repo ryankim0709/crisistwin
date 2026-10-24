@@ -178,7 +178,7 @@ export default function Tour({ steps, onSeek, onClose, onStory }: TourProps) {
         <p id="rp-tour-body">{step.body}</p>
         {index === 0 && onStory && (
           <Button variant="soft" size="sm" className="rp-story-open--tour" onClick={onStory}>
-            <span aria-hidden="true">▶</span> Play the story instead (about 2 min, hands-free)
+            <span aria-hidden="true">▶</span> Play the story instead (about 2 min)
           </Button>
         )}
         <div className="rp-tour-actions">

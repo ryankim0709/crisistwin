@@ -1880,6 +1880,38 @@
 .rp-story-body .rp-chip {
   margin-right: var(--ct-space-1);
 }
+/* "What followed": consequences, each with its own evidence chip, set off from the record. */
+.rp-story-then {
+  margin: 10px 0 0;
+  padding: 0 0 0 10px;
+  list-style: none;
+  border-left: 2px solid var(--rp-line);
+  font-size: 13px;
+  line-height: 1.5;
+  color: #b9c4cf;
+}
+.rp-story-then li + li {
+  margin-top: 6px;
+}
+.rp-story-then .rp-chip {
+  margin-right: 4px;
+}
+/* "Before this": what happened in a skipped stretch, shown above the chapter it leads into. */
+.rp-story-lead {
+  margin: 8px 0 0;
+  padding: 0 0 0 10px;
+  list-style: none;
+  border-left: 2px dashed var(--rp-line);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: #9fabb7;
+}
+.rp-story-lead li + li {
+  margin-top: 4px;
+}
+.rp-story-lead .rp-chip {
+  margin-right: 4px;
+}
 .rp-story-stakes {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

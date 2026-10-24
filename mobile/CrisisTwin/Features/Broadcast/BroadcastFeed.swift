@@ -38,14 +38,14 @@ struct LiveSnapshot: Decodable, Equatable {
     let wind: Wind
     let bbox: [Double]?
     let fire: Fire
-    let zones: [LiveZone]
+    let zones: [BroadcastZone]
     let agent: Agent?
 
     var isDispatch: Bool { source == "dispatch_agent" }
 
     var fireRings: [[CLLocationCoordinate2D]] { fire.perimeters.map(Geo.coordinates) }
 
-    func zone(containing point: CLLocationCoordinate2D) -> LiveZone? {
+    func zone(containing point: CLLocationCoordinate2D) -> BroadcastZone? {
         zones.first { Geo.contains(Geo.coordinates($0.polygon), point) }
     }
 
@@ -62,7 +62,7 @@ struct LiveSnapshot: Decodable, Equatable {
     }
 }
 
-struct LiveZone: Decodable, Equatable, Identifiable {
+struct BroadcastZone: Decodable, Equatable, Identifiable {
     enum Guidance: String {
         case noOrder = "no_order", leaveNow = "leave_now", wait, routeBlocked = "route_blocked", cleared, overrun
     }
@@ -134,7 +134,7 @@ enum Geo {
 /// a zone whose exit changes within the same run is remembered so the app can say "route changed".
 @MainActor
 @Observable
-final class LiveStore {
+final class BroadcastStore {
     enum State: Equatable {
         case loading
         case notConfigured

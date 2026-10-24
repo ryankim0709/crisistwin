@@ -1,85 +1,251 @@
 import SwiftUI
 
-enum AppTab: Hashable {
-    case home, live, family, plan, practice
+/// Debug builds accept launch arguments so every tab and state can be screenshotted:
+/// - `-screen <name>`: a tab (`home`, `map`, `reports`, `plan`, `tasks`), or a screen opened on
+///   top of one: `report` (the report sheet over Map), `newreport` (over Reports), and `family`,
+///   `meeting`, `gobag`, `broadcast`, `responder`, `about` (pushed in Plan). Anything else opens Home.
+/// - `-join <code>`: joins as a responder on launch, so the Tasks tab appears.
+/// - `-start 1`: taps Start shortly after launch (Map, following).
+/// - `detail` opens the guidance detail over Home (`detailexit` with the exits listed),
+///   `detailmap` over Map; `exercise` opens Home's Exercise explanation.
+/// - `-scroll bottom`: scrolls Home or the guidance detail to its end.
+enum DebugLaunch {
+    static var screen: String? { value("screen") }
+    static var joinCode: String? { value("join") }
+    static var start: Bool { value("start") == "1" }
+    static var scrollToBottom: Bool { value("scroll") == "bottom" }
+
+    private static func value(_ key: String) -> String? {
+        #if DEBUG
+        return UserDefaults.standard.string(forKey: key)
+        #else
+        return nil
+        #endif
+    }
+
+    static var initialTab: AppTab {
+        switch screen {
+        case "map", "report", "detailmap": return .map
+        case "reports", "newreport": return .reports
+        case "plan", "family", "meeting", "gobag", "broadcast", "responder", "about": return .plan
+        case "tasks": return .tasks
+        default: return .home
+        }
+    }
 }
 
+/// The tabs, plus `family`, which the resident-app views (Family, the web simulation feed) ask
+/// to open; it and `plan` open inside the Plan tab.
+enum AppTab: Hashable {
+    case home, map, reports, plan, tasks
+    case family
+}
+
+/// A request to open the report sheet, zooming from `sourceID`.
+struct ReportRequest: Identifiable {
+    let id = UUID()
+    var prefill: ReportPrefill?
+    var sourceID: String
+}
+
+/// Cross-tab navigation: the selected tab, the report sheet, and what Map does when it shows.
+@MainActor
+@Observable
+final class AppRouter {
+    var tab: AppTab = DebugLaunch.initialTab
+    var report: ReportRequest? = DebugLaunch.screen == "report"
+        ? ReportRequest(sourceID: "map-report")
+        : DebugLaunch.screen == "newreport" ? ReportRequest(sourceID: "reports-new") : nil
+    /// Map follows the device along the route, pitched (Start).
+    var following = false
+    /// A place Map flies to (a responder task); Map clears it once framed.
+    var focus: LonLat?
+    /// The guidance detail sheet (the Slab and the bottom accessory open it).
+    var detail = false
+
+    /// Home's Start: Map, pitched, following the device.
+    func start() {
+        tab = .map
+        following = true
+    }
+
+    func openDetail() {
+        detail = true
+    }
+
+    func openReport(_ prefill: ReportPrefill? = nil, from sourceID: String) {
+        report = ReportRequest(prefill: prefill, sourceID: sourceID)
+    }
+
+    func showOnMap(_ coord: LonLat?) {
+        following = false
+        focus = coord
+        tab = .map
+    }
+}
+
+private struct ReportZoomKey: EnvironmentKey {
+    static let defaultValue: Namespace.ID? = nil
+}
+
+extension EnvironmentValues {
+    /// The namespace the report sheet zooms out of (`matchedTransitionSource`).
+    var reportZoom: Namespace.ID? {
+        get { self[ReportZoomKey.self] }
+        set { self[ReportZoomKey.self] = newValue }
+    }
+}
+
+extension View {
+    /// Marks a control the report sheet zooms out of.
+    @ViewBuilder func reportZoomSource(_ id: String, in namespace: Namespace.ID?) -> some View {
+        if let namespace { matchedTransitionSource(id: id, in: namespace) } else { self }
+    }
+}
+
+/// The phone: Home (my area), Map, Reports, Plan, and Tasks for responders, with the live
+/// guidance line in the bottom accessory on every tab (design spec, "Tabs").
 struct RootView: View {
-    @State private var selection: AppTab = .home
-    /// One plan shared by Home, Live and My Plan, so all show the same saved plan.
     @State private var planStore = MeetingPlanStore()
+    /// Live situation, guidance, reports and check-ins (ADR 0011, 0012).
     @State private var liveStore = LiveStore()
+    @State private var location = LocationProvider()
+    /// The web pages' simulation broadcast (ADR 0016); polled only while its screen is open.
+    @State private var broadcastStore = BroadcastStore()
     @State private var familyStore = FamilyStore()
+    @State private var goBag = GoBagStore()
+    @State private var router = AppRouter()
+    @Namespace private var reportZoom
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
-        TabView(selection: $selection) {
-            NavigationStack {
-                HomeView { selection = $0 }
+        tabs
+            .environment(planStore)
+            .environment(liveStore)
+            .environment(location)
+            .environment(broadcastStore)
+            .environment(familyStore)
+            .environment(goBag)
+            .environment(router)
+            .environment(\.reportZoom, reportZoom)
+            .tint(.primary)
+            .sheet(item: $router.report) { request in
+                NavigationStack { ReportSheet(prefill: request.prefill) }
+                    .presentationDetents([.large])
+                    .navigationTransition(.zoom(sourceID: request.sourceID, in: reportZoom))
+                    .environment(liveStore)
+                    .environment(location)
             }
-            .tabItem {
-                Label("Home", systemImage: "house")
+            .sheet(isPresented: $router.detail) {
+                GuidanceDetailView()
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
+                    .environment(liveStore)
+                    .environment(location)
+                    .environment(router)
+                    .environment(familyStore)
+                    .tint(.primary)
             }
-            .tag(AppTab.home)
+            .task(id: scenePhase) {
+                guard scenePhase == .active else {
+                    liveStore.stopPolling()
+                    location.stopUpdating()
+                    return
+                }
+                liveStore.startPolling()
+                location.startUpdating()
+                while !Task.isCancelled {
+                    if familyStore.isJoined { await familyStore.refresh() }
+                    try? await Task.sleep(for: FamilyStore.pollInterval)
+                }
+            }
+            .onChange(of: location.lastLocation) { _, fix in
+                liveStore.updateLocation(
+                    fix.map { LonLat(lon: $0.coordinate.longitude, lat: $0.coordinate.latitude) },
+                    accuracyM: fix?.horizontalAccuracy)
+            }
+            // A family member changed the shared meeting points: use them on this phone too.
+            // A new family whose points nobody has set yet leaves this phone's points alone.
+            .onChange(of: familyStore.family?.meetingPointsUpdatedAt) {
+                guard let family = familyStore.family, family.meetingPointsUpdatedBy != nil else { return }
+                planStore.update { plan in
+                    plan.primary = family.primary
+                    plan.backup = family.backup
+                }
+            }
+            // The one orchestrated moment, a new guidance version: warning on escalation, a
+            // medium impact on a reroute (spec, "Motion and haptics").
+            .sensoryFeedback(trigger: liveStore.guidanceChange?.id) { _, _ in
+                guard let change = liveStore.guidanceChange else { return nil }
+                return change.isEscalation ? .warning : .impact(weight: .medium)
+            }
+            .task(id: liveStore.guidanceChange?.id) {
+                guard let change = liveStore.guidanceChange else { return }
+                AccessibilityNotification.Announcement(
+                    [change.message, change.detail].compactMap { $0 }.joined(separator: ". ")).post()
+                try? await Task.sleep(for: .seconds(2))
+                if !Task.isCancelled { liveStore.acknowledgeGuidanceChange() }
+            }
+            .onChange(of: liveStore.role) { _, role in
+                if role == .civilian, router.tab == .tasks { router.tab = .home }
+            }
+            .task { await debugLaunch() }
+    }
 
-            NavigationStack {
-                LiveView { selection = $0 }
+    @ViewBuilder private var tabs: some View {
+        let view = TabView(selection: $router.tab) {
+            Tab("Home", systemImage: "house", value: AppTab.home) {
+                HomeView()
             }
-            .tabItem {
-                Label("Live drill", systemImage: "dot.radiowaves.left.and.right")
+            Tab("Map", systemImage: "map", value: AppTab.map) {
+                IncidentView()
             }
-            .tag(AppTab.live)
+            Tab("Reports", systemImage: "exclamationmark.bubble", value: AppTab.reports) {
+                ReportsView()
+            }
+            .badge(liveStore.stillThereItems.count)
+            Tab("Plan", systemImage: "list.bullet.clipboard", value: AppTab.plan) {
+                PlanTab()
+            }
+            if liveStore.role != .civilian {
+                Tab("Tasks", systemImage: "checklist", value: AppTab.tasks) {
+                    TasksView()
+                }
+                .badge(liveStore.tasks.filter { $0.status == .open }.count)
+            }
+        }
+        .tabBarMinimizeBehavior(.onScrollDown)
 
-            NavigationStack {
-                FamilyView { selection = $0 }
+        // Attached only while there is guidance to carry; the selection is bound, so the
+        // selected tab survives the accessory appearing or going.
+        if let guidance = liveStore.activeGuidance {
+            view.tabViewBottomAccessory {
+                GuidanceAccessory(guidance: guidance, offline: liveStore.offlineSince != nil) {
+                    router.openDetail()
+                }
             }
-            .tabItem {
-                Label("Family", systemImage: "person.3")
-            }
-            .tag(AppTab.family)
+        } else {
+            view
+        }
+    }
 
-            NavigationStack {
-                PlanView()
-            }
-            .tabItem {
-                Label("My Plan", systemImage: "figure.2")
-            }
-            .tag(AppTab.plan)
-
-            NavigationStack {
-                ScenariosView()
-            }
-            .tabItem {
-                Label("Practice", systemImage: "flame")
-            }
-            .tag(AppTab.practice)
+    private func debugLaunch() async {
+        #if DEBUG
+        if let code = DebugLaunch.joinCode, liveStore.role == .civilian {
+            try? await liveStore.joinAsResponder(inviteCode: code)
+            if DebugLaunch.screen == "tasks" { router.tab = .tasks }
         }
-        .environment(planStore)
-        .environment(liveStore)
-        .environment(familyStore)
-        // Poll only while the app is in the foreground; .task(id:) cancels on phase change.
-        .task(id: scenePhase) {
-            guard scenePhase == .active else { return }
-            while !Task.isCancelled {
-                await liveStore.refresh()
-                try? await Task.sleep(for: LiveStore.pollInterval)
+        if ["detail", "detailexit", "detailmap"].contains(DebugLaunch.screen) {
+            // Once guidance has loaded, so the sheet opens on real content.
+            for _ in 0..<20 where liveStore.activeGuidance == nil {
+                try? await Task.sleep(for: .milliseconds(250))
             }
+            router.openDetail()
         }
-        .task(id: scenePhase) {
-            guard scenePhase == .active else { return }
-            while !Task.isCancelled {
-                if familyStore.isJoined { await familyStore.refresh() }
-                try? await Task.sleep(for: FamilyStore.pollInterval)
-            }
+        if DebugLaunch.start {
+            try? await Task.sleep(for: .seconds(3))
+            router.start()
         }
-        // A family member changed the shared meeting points: use them on this phone too.
-        // A new family whose points nobody has set yet leaves this phone's points alone.
-        .onChange(of: familyStore.family?.meetingPointsUpdatedAt) {
-            guard let family = familyStore.family, family.meetingPointsUpdatedBy != nil else { return }
-            planStore.update { plan in
-                plan.primary = family.primary
-                plan.backup = family.backup
-            }
-        }
+        #endif
     }
 }
