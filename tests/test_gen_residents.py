@@ -298,7 +298,7 @@ class LiveApiValidatorTest(unittest.TestCase):
 
         reports = [ev for ev in self.events if ev["type"] == "report"]
         self.assertTrue(reports)
-        with mock.patch.object(self.views, "get_index", lambda: _Index()):
+        with mock.patch.object(self.views, "get_index", lambda *a, **k: _Index()):
             for ev in reports:
                 fields = self.views._validate_report(ev["body"], "synthetic-drill")
                 self.assertEqual(fields["kind"], ev["body"]["kind"])
@@ -314,7 +314,7 @@ class LiveApiValidatorTest(unittest.TestCase):
         events = run_board(seed=1, board_answer_share=0.5, passive_setting_share=1.0)["events"]
         passive = [ev for ev in events if ev["body"].get("method") == "passive"]
         self.assertTrue(passive)
-        with mock.patch.object(self.views, "get_index", lambda: _Index()):
+        with mock.patch.object(self.views, "get_index", lambda *a, **k: _Index()):
             for ev in passive:
                 fields = self.views._validate_passive(ev["body"], ev["body"]["client_id"], ev["body"]["kind"])
                 self.assertEqual(fields["segment_id"], ev["body"]["segment_id"])
