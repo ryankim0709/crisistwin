@@ -4,6 +4,14 @@ A Cal Hacks project exploring disaster response and evacuation planning through 
 
 CrisisTwin will let emergency planners test how fire spread, road closures, evacuation demand, and resource decisions interact before comparing possible responses.
 
+## Full project scope
+
+See the [Cal Hacks 13.0 project scope](docs/project-scope.md) for the full feature
+plan, priorities, sponsor integrations, three-person team responsibilities, and
+target demo. It describes proposed work, not implemented functionality. Its
+suggested technology choices are proposals; the current stack and setup are
+documented below and in the [scaffold decision](docs/adr/0001-app-scaffold.md).
+
 ## Initial demo scope
 
 - Visualize a wildfire scenario and a surrounding road network.
