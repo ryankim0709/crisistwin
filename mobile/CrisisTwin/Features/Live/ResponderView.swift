@@ -1,163 +1,224 @@
+import CoreLocation
 import SwiftUI
 
-/// Join with an invite code, or (as a responder) see check tasks and answer them.
-struct ResponderView: View {
-    var onReport: (ReportPrefill?) -> Void = { _ in }
-
+/// Plan > Join as responder: exchange an invite code for a responder credential; once joined,
+/// location sharing and leaving.
+struct JoinResponderView: View {
     @Environment(LiveStore.self) private var store
     @State private var inviteCode = ""
     @State private var joining = false
     @State private var errorMessage: String?
-    @State private var cancelling: CheckTask?
-    @State private var cancelNote = ""
+    @State private var joinedTick = 0
+
+    private var trimmedCode: String { inviteCode.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     var body: some View {
+        @Bindable var store = store
         List {
-            if store.role == .civilian { joinSections } else { responderSections }
-        }
-        .scrollContentBackground(.hidden)
-        .background(Color.ctBackground)
-        .navigationTitle(store.role == .civilian ? "Responder" : "Tasks")
-        .navigationBarTitleDisplayMode(.inline)
-        .refreshable { await store.refresh() }
-        .alert("Can't reach it", isPresented: Binding(
-            get: { cancelling != nil }, set: { if !$0 { cancelling = nil } })
-        ) {
-            TextField("Why not? (optional)", text: $cancelNote)
-            Button("Send") { submitCancel() }
-            Button("Back", role: .cancel) {}
-        } message: {
-            Text("The controller will see that this check was not done.")
-        }
-    }
-
-    @ViewBuilder private var joinSections: some View {
-        Section {
-            VStack(alignment: .leading, spacing: 10) {
-                Image(systemName: "person.badge.shield.checkmark.fill")
-                    .font(.title2)
-                    .foregroundStyle(Color.ctBrand)
-                    .frame(width: 48, height: 48)
-                    .background(Color.ctBrand.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .accessibilityHidden(true)
-                Text("For people the incident controller asked to check roads and places. Enter your invite code.")
-                    .font(.subheadline)
-                    .foregroundStyle(Color.ctInk)
-            }
-            .padding(.vertical, 6)
-            .listRowBackground(Color.ctSurface)
-        }
-        Section {
-            TextField("Invite code", text: $inviteCode)
-                .textInputAutocapitalization(.characters)
-                .autocorrectionDisabled()
-                .font(.body.monospaced())
-                .frame(minHeight: 44)
-                .listRowBackground(Color.ctSurface)
-            if let errorMessage {
-                Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
-                    .foregroundStyle(HazardTone.danger.color)
-                    .listRowBackground(Color.ctSurface)
-            }
-        }
-        Section {
-            Button {
-                join()
-            } label: {
-                HStack {
-                    Text("Join as responder")
-                    if joining { ProgressView() }
-                }
-            }
-            .buttonStyle(PrimaryButtonStyle(tint: inviteCode.trimmingCharacters(in: .whitespaces).isEmpty
-                                            ? Color.ctMuted.opacity(0.45) : .ctBrand))
-            .disabled(joining || inviteCode.trimmingCharacters(in: .whitespaces).isEmpty)
-            .listRowInsets(EdgeInsets())
-            .listRowBackground(Color.clear)
-        }
-    }
-
-    @ViewBuilder private var responderSections: some View {
-        Section("Places to check") {
-            if store.tasks.isEmpty {
-                Text("No check requests right now.").foregroundStyle(Color.ctMuted)
-                    .listRowBackground(Color.ctSurface)
-            }
-            ForEach(store.tasks) { task in taskRow(task) }
-        }
-        if let errorMessage {
-            Section {
-                Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
-                    .foregroundStyle(HazardTone.danger.color)
-                    .listRowBackground(Color.ctSurface)
-            }
-        }
-        Section {
-            Button("Leave responder mode", role: .destructive) { store.leaveResponderRole() }
-                .frame(minHeight: 44)
-                .listRowBackground(Color.ctSurface)
-        }
-    }
-
-    private func targetText(_ task: CheckTask) -> String {
-        if let id = task.target.segmentId {
-            let name = store.allReports.first { $0.roadRef?.segmentId == id }?.roadRef?.name
-                ?? store.publicItems.first { $0.roadRef?.segmentId == id }?.roadRef?.name
-            if let name { return name }
-        }
-        if let c = task.target.coord { return String(format: "Near %.4f, %.4f", c.lat, c.lon) }
-        return "Place not given"
-    }
-
-    private func taskRow(_ task: CheckTask) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "magnifyingglass")
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(HazardTone.info.color)
-                    .frame(width: 40, height: 40)
-                    .background(HazardTone.info.color.opacity(0.12), in: Circle())
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Check: \(targetText(task))").font(.headline).foregroundStyle(Color.ctInk)
-                    if let note = task.note, !note.isEmpty {
-                        Text(note).font(.subheadline).foregroundStyle(Color.ctInk)
+            if store.role == .civilian {
+                Section {
+                    TextField("Invite code", text: $inviteCode)
+                        .textInputAutocapitalization(.characters)
+                        .autocorrectionDisabled()
+                        .submitLabel(.join)
+                        .onSubmit(join)
+                        .frame(minHeight: 44)
+                    if let errorMessage {
+                        Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.secondary)
                     }
-                    Text("Asked \(Text(task.createdAt, style: .relative)) ago")
-                        .font(.footnote).foregroundStyle(Color.ctMuted)
                 }
-            }
-            HStack(spacing: 10) {
-                Button {
-                    onReport(ReportPrefill(kind: nil, coord: task.target.coord, taskId: task.id))
-                } label: {
-                    Text("Answer")
+                Section {
+                    Button(action: join) {
+                        HStack {
+                            Text("Join as responder")
+                            Spacer()
+                            if joining { ProgressView() }
+                        }
+                        .frame(minHeight: 44)
+                    }
+                    .disabled(joining || trimmedCode.isEmpty)
                 }
-                .buttonStyle(LiveCompactButtonStyle(filled: true))
-                Button {
-                    cancelNote = ""
-                    cancelling = task
-                } label: {
-                    Text("Can't reach it")
+            } else {
+                Section {
+                    Toggle(isOn: $store.shareResponderLocation) {
+                        Label("Share my location", systemImage: "location")
+                    }
+                    .frame(minHeight: 44)
                 }
-                .buttonStyle(LiveCompactButtonStyle(filled: false))
+                Section {
+                    Button("Leave responder mode", role: .destructive) { store.leaveResponderRole() }
+                        .frame(minHeight: 44)
+                }
             }
         }
-        .padding(.vertical, 6)
-        .listRowBackground(Color.ctSurface)
+        .listStyle(.insetGrouped)
+        .navigationTitle("Responder")
+        .sensoryFeedback(.success, trigger: joinedTick)
     }
 
     private func join() {
+        guard !trimmedCode.isEmpty, !joining else { return }
         joining = true
         errorMessage = nil
         Task {
             do {
-                try await store.joinAsResponder(inviteCode: inviteCode.trimmingCharacters(in: .whitespacesAndNewlines))
+                try await store.joinAsResponder(inviteCode: trimmedCode)
                 inviteCode = ""
+                joinedTick += 1
             } catch {
                 errorMessage = error.localizedDescription
             }
             joining = false
+        }
+    }
+}
+
+/// The Tasks tab (responders): places the controller asked to check. Swipe to accept, answer
+/// or say it can't be reached; tap to see the place on Map.
+struct TasksView: View {
+    @Environment(LiveStore.self) private var store
+    @Environment(AppRouter.self) private var router
+    @Environment(\.reportZoom) private var reportZoom
+    @State private var cancelling: CheckTask?
+    @State private var cancelNote = ""
+    @State private var errorMessage: String?
+    @State private var successTick = 0
+    @State private var errorTick = 0
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if let errorMessage {
+                    Section {
+                        Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                if store.tasks.isEmpty {
+                    ContentUnavailableView("No checks right now", systemImage: "checklist")
+                        .listRowBackground(Color.clear)
+                } else {
+                    Section {
+                        ForEach(store.tasks) { task in
+                            Button {
+                                router.showOnMap(store.taskTarget(task))
+                            } label: {
+                                row(task)
+                            }
+                            .buttonStyle(.plain)
+                            .reportZoomSource("task-\(task.id)", in: reportZoom)
+                            .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                                if task.status == .accepted {
+                                    Button("Answer", systemImage: "square.and.pencil") {
+                                        router.openReport(
+                                            ReportPrefill(kind: nil, coord: store.taskTarget(task), taskId: task.id),
+                                            from: "task-\(task.id)")
+                                    }
+                                    .tint(.ctRoute)
+                                } else {
+                                    Button("Accept", systemImage: "checkmark") { accept(task) }
+                                        .tint(.ctRoute)
+                                }
+                            }
+                            .swipeActions(edge: .trailing) {
+                                Button("Can't reach", systemImage: "xmark") {
+                                    cancelNote = ""
+                                    cancelling = task
+                                }
+                                .tint(.gray)
+                            }
+                        }
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle("Tasks")
+            .toolbar {
+                if store.isExercise {
+                    ToolbarItem(placement: .topBarTrailing) { ExerciseTag() }
+                }
+            }
+            .refreshable { await store.refresh() }
+            .sensoryFeedback(.success, trigger: successTick)
+            .sensoryFeedback(.error, trigger: errorTick)
+            .alert("Can't reach it", isPresented: Binding(
+                get: { cancelling != nil }, set: { if !$0 { cancelling = nil } })
+            ) {
+                TextField("Why not? (optional)", text: $cancelNote)
+                Button("Send") { submitCancel() }
+                Button("Back", role: .cancel) {}
+            }
+        }
+    }
+
+    private func row(_ task: CheckTask) -> some View {
+        let kind = targetKind(task)
+        return HStack(spacing: 12) {
+            Image(systemName: kind?.systemImage ?? "magnifyingglass")
+                .foregroundStyle(kind?.symbolColor ?? Color.secondary)
+                .frame(width: 28)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Check \(store.targetName(task))")
+                    .fixedSize(horizontal: false, vertical: true)
+                if task.status == .accepted {
+                    Label("Accepted", systemImage: "checkmark.circle.fill")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                } else if let note = task.note, !note.isEmpty {
+                    Text(note)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+            Spacer(minLength: 8)
+            VStack(alignment: .trailing, spacing: 2) {
+                if let distance = distanceText(task) {
+                    Text(distance).monospacedDigit()
+                }
+                Text(task.createdAt, format: .relative(presentation: .named))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(minHeight: 44)
+        .contentShape(.rect)
+        .accessibilityElement(children: .combine)
+        .accessibilityHint("Shows it on the map")
+    }
+
+    /// The kind of hazard on the task's road segment, when known.
+    private func targetKind(_ task: CheckTask) -> ReportKind? {
+        guard let id = task.target.segmentId else { return nil }
+        return store.situation?.hazards.first { $0.roadRef?.segmentId == id }?.kind
+            ?? store.allReports.first { $0.roadRef?.segmentId == id }?.kind
+    }
+
+    /// On-device distance from the last fix to the task target.
+    private func distanceText(_ task: CheckTask) -> String? {
+        guard let here = store.lastCoord, let target = store.taskTarget(task) else { return nil }
+        let meters = CLLocation(latitude: here.lat, longitude: here.lon)
+            .distance(from: CLLocation(latitude: target.lat, longitude: target.lon))
+        return Measurement(value: meters, unit: UnitLength.meters)
+            .formatted(.measurement(width: .abbreviated, usage: .road))
+    }
+
+    private func accept(_ task: CheckTask) {
+        errorMessage = nil
+        Task {
+            do {
+                try await store.acceptTask(task)
+                successTick += 1
+            } catch LiveAPIError.conflict {
+                errorMessage = "Another responder took this task."
+                errorTick += 1
+                await store.refresh()
+            } catch {
+                errorMessage = error.localizedDescription
+                errorTick += 1
+            }
         }
     }
 
@@ -168,15 +229,12 @@ struct ResponderView: View {
         Task {
             do {
                 try await store.cancelTask(task, note: note.isEmpty ? "Could not reach it" : note)
+                successTick += 1
                 await store.refresh()
             } catch {
                 errorMessage = error.localizedDescription
+                errorTick += 1
             }
         }
     }
-}
-
-#Preview {
-    NavigationStack { ResponderView() }
-        .environment(LiveStore())
 }

@@ -402,6 +402,26 @@ def whatif(snapshot: Snapshot, action_sets: list, horizon_min: float, fire_ahead
     return _with_twin(snapshot, run)
 
 
+def whatif_with_zones(snapshot: Snapshot, action_sets: list, horizon_min: float, fire_ahead: str,
+                      labels: list | None = None) -> tuple[dict[str, Any], dict[str, int]]:
+    """``whatif`` plus each zone's vehicles not yet arrived at the fork (one locked call, same state)."""
+
+    def run(sess, twin, twinmod):
+        if twin.finished:
+            raise TwinUnavailable("finished", "The drill clock has reached the end of the replay.")
+        zones = {z["id"]: int(z["not_departed_veh"]) + int(z["en_route_veh"])
+                 for z in twin.snapshot(detail="full")["zones"]}
+        report = twin.whatif(action_sets, horizon_min=horizon_min, fire_ahead=fire_ahead, labels=labels)
+        return report, zones
+
+    return _with_twin(snapshot, run)
+
+
+def twin_closed_segments(snapshot: Snapshot) -> frozenset[str]:
+    """Segments the synced twin closes: every block guidance avoids plus controller-confirmed ones."""
+    return _closed_segments(snapshot)[0]
+
+
 def validate_each(snapshot: Snapshot, actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """The actions the synced twin would accept now (each checked alone)."""
 

@@ -78,6 +78,9 @@ final class LocationProvider {
         }
         guard isAuthorized else { throw LocationError.denied }
         guard CLLocationManager.locationServicesEnabled() else { throw LocationError.unavailable }
+        // While continuous updates run, the latest fix is current; a one-shot request issued
+        // alongside them may never be answered.
+        if updating, let last = lastLocation { return last }
 
         let id = UUID()
         let timeout = Task { [weak self] in

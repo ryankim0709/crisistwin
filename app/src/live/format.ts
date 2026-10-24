@@ -6,6 +6,13 @@ export const LEVEL_LABEL: Record<GuidanceLevel, string> = {
   none: "No order",
 };
 
+/** The verdict phones show (design spec "Exact copy"); the web plates use the same words. */
+export const VERDICT: Record<GuidanceLevel, string> = {
+  evacuate_now: "Leave now",
+  be_ready: "Be ready to leave",
+  none: "No order",
+};
+
 export const KIND_LABEL: Record<ReportKind, string> = {
   road_blocked: "Road blocked",
   road_passable: "Road passable",
@@ -99,4 +106,24 @@ export function drillNowAt(drill: DrillState, receivedAt: number | null, nowMs: 
   const base = new Date(drill.replay_now).getTime();
   const end = new Date(drill.clock.end).getTime();
   return new Date(Math.min(end, base + Math.max(0, nowMs - receivedAt) * drill.speed)).toISOString();
+}
+
+/** Integer with thousands separators. */
+export const nf = (n: number) => Math.round(n).toLocaleString("en-US");
+
+export const plural = (n: number, one: string, many = `${one}s`) => `${nf(n)} ${n === 1 ? one : many}`;
+
+/** "Block Group 1, Census Tract 9.01" -> "Tract 9.01, BG 1"; other names unchanged. */
+export function shortZoneName(name: string): string {
+  const m = /^Block Group (\S+), Census Tract (\S+)$/.exec(name);
+  return m ? `Tract ${m[2]}, BG ${m[1]}` : name;
+}
+
+/** "Via Fairview Dr to Walgreens, 2 min" from a route's road names, destination and ETA. */
+export function viaLine(via: string[] | undefined, destination: string | null | undefined, etaMin?: number | null): string {
+  const parts: string[] = [];
+  if (via && via.length) parts.push(`Via ${via.slice(0, 2).join(", ")}`);
+  if (destination) parts.push(parts.length ? `to ${destination}` : destination);
+  const head = parts.join(" ");
+  return etaMin != null ? `${head}, ${etaMin} min` : head;
 }

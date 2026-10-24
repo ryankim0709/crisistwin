@@ -7,6 +7,8 @@ import type {
   CreateTaskRequest,
   DrillRequest,
   DrillResponse,
+  ImpactRequest,
+  ImpactResponse,
   LiveApiError,
   RejectProposalResponse,
   ReplanResponse,
@@ -170,3 +172,6 @@ export const rejectProposal = (token: string, id: string) =>
 
 export const drillAction = (token: string, body: DrillRequest) =>
   request<DrillResponse>(token, "POST", `incidents/${INCIDENT_ID}/drill`, body);
+
+export const runImpact = (token: string, body: ImpactRequest) =>
+  request<ImpactResponse>(token, "POST", `incidents/${INCIDENT_ID}/impact`, body);

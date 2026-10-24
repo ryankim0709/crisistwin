@@ -1,3 +1,4 @@
+import CoreLocation
 import Foundation
 import Network
 import Observation
@@ -52,8 +53,13 @@ final class LiveStore {
     /// guidance) after the first load; the UI shows a banner and plays a haptic, then calls
     /// `acknowledgeGuidanceChange()`.
     private(set) var guidanceChange: GuidanceChange?
+    /// Earlier versions of this device's zone guidance seen on this phone, newest first (Home's
+    /// Changes). Kept in memory only.
+    private(set) var guidanceHistory: [GuidanceHistoryEntry] = []
     /// This device's latest check-in, from the server (`situation.myCheckin`) or the last `checkIn`.
     private(set) var lastCheckIn: CheckIn?
+    /// "Still there?" items answered or set aside on this phone.
+    private(set) var answeredStillThere: Set<String> = []
     /// Responder opt-in to share live location (latest position only, foreground only). Persisted
     /// on the device. Turning it off calls `DELETE me/location`. Ignored for civilians.
     var shareResponderLocation: Bool = UserDefaults.standard.bool(forKey: "live.shareResponderLocation") {
@@ -239,7 +245,34 @@ final class LiveStore {
         }
     }
 
-    /// Clears `guidanceChange` once the banner has been shown.
+    /// Public hazards within 500 m of the device that this phone has not answered, nearest first;
+    /// computed on the phone from the situation, so nothing is sent to ask.
+    var stillThereItems: [PublicMapItem] {
+        guard let here = lastCoord, let hazards = situation?.hazards else { return [] }
+        let origin = CLLocation(latitude: here.lat, longitude: here.lon)
+        return hazards
+            .filter { !answeredStillThere.contains($0.id) && $0.coord.isValid }
+            .map { ($0, origin.distance(from: CLLocation(latitude: $0.coord.lat, longitude: $0.coord.lon))) }
+            .filter { $0.1 <= 500 }
+            .sorted { $0.1 < $1.1 }
+            .map(\.0)
+    }
+
+    /// Answers a "still there?" item: yes re-reports its kind; no reports the opposite road kind
+    /// when there is one, else only sets the item aside on this phone.
+    func answerStillThere(_ item: PublicMapItem, stillThere: Bool) {
+        answeredStillThere.insert(item.id)
+        let kind = stillThere ? item.kind : item.kind.goneKind
+        guard let kind else { return }
+        submit(ReportDraft(
+            incidentId: incidentId,
+            kind: kind,
+            severity: kind.hasSeverity ? item.severity : nil,
+            location: ReportLocation(coord: item.coord, accuracyM: nil),
+            observedAt: Date()))
+    }
+
+    /// Clears `guidanceChange` once it has been announced.
     func acknowledgeGuidanceChange() {
         guidanceChange = nil
     }
@@ -313,6 +346,11 @@ final class LiveStore {
         let isReroute = before?.zoneId == current.zoneId && before?.level == current.level
         let message = Self.changeMessage(current, before: before, isReroute: isReroute)
         let reason = current.reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let before, before.zoneId == current.zoneId {
+            guidanceHistory.insert(GuidanceHistoryEntry(previous: before), at: 0)
+        } else {
+            guidanceHistory = []
+        }
         guidanceChange = GuidanceChange(
             id: "\(current.zoneId)#\(current.version)", message: message,
             detail: reason.isEmpty || reason == message ? nil : reason, level: current.level,

@@ -3,7 +3,9 @@
 Contract: docs/live-reports.md "Planner rules". Free-flow travel time; congestion is ignored
 (a stated simplification). Never routes over a blocked segment. Normal routes keep every edge
 outside the fire estimate and FIRE_BUFFER_M beyond it; a zone with no such route gets a
-least-exposure route (``Route.exposed``) that a controller must approve.
+least-exposure route (``Route.exposed``) that a controller must approve. A temporary refuge
+is a destination only when it lies farther than REFUGE_FIRE_BUFFER_M from the fire estimate,
+and a least-exposure route prefers an exit or shelter (out of the fire area) over a refuge.
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ import logging
 import math
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
+from typing import Literal
 
 from .drill import Destination, DestinationKind, Drill, Edge, Zone
 from .geo import LonLat, MultiPolygon, centroid, haversine_m, point_in_multipolygon, polyline_distance_m
@@ -23,6 +26,13 @@ log = logging.getLogger(__name__)
 DESTINATION_KINDS: tuple[DestinationKind, ...] = ("exit", "shelter")
 FALLBACK_KINDS: tuple[DestinationKind, ...] = ("temporary_refuge",)
 """Used only for zones that reach no exit or shelter."""
+REFUGE_FIRE_BUFFER_M = 1000.0
+"""A temporary refuge (and its road node) must be farther than this from the fire estimate to
+be a destination at all: a refuge inside or beside the fire is not a place to go."""
+REFUGE_MIN_EXPOSURE_CUT_S = 30.0
+"""Least-exposure passes: a refuge replaces the zone's exit or shelter route only when its route
+spends at least this many fewer seconds inside the fire estimate, or about the same time inside
+(within this) and this many fewer within FIRE_BUFFER_M of it."""
 VIA_MAX_NAMES = 3
 """``via`` lists at most this many road names: the longest named stretches, in route order."""
 ROUTE_MAX_POINTS = 500
@@ -30,9 +40,9 @@ ROUTE_MAX_POINTS = 500
 FIRE_BUFFER_M = 300.0
 """Normal routes keep every edge at least this far outside the fire estimate."""
 EXPOSED_COST_INSIDE = 20.0
-"""Least-exposure pass: travel-time multiplier for an edge with any part inside the fire estimate."""
+"""Least-exposure (through-fire) pass: travel-time multiplier for an edge with any part inside the fire estimate."""
 EXPOSED_COST_BUFFER = 5.0
-"""Least-exposure pass: travel-time multiplier for an edge within FIRE_BUFFER_M of it."""
+"""Least-exposure passes: travel-time multiplier for an edge within FIRE_BUFFER_M of it."""
 DEST_SNAP_MAX_M = 300.0
 """A destination off the routable network snaps to a routable node within this distance, else it is dropped."""
 MIN_ROUTE_M = 50.0
@@ -41,6 +51,8 @@ MAX_SKIPPED_DESTINATIONS = 5
 """Per zone and pass, how many too-short destinations are skipped before giving up."""
 
 _CLEAR, _BUFFER, _INSIDE = 0, 1, 2
+
+Exposure = Literal["clear", "near_fire", "through_fire"]
 
 
 @dataclass(frozen=True)
@@ -60,11 +72,20 @@ class Route:
     """True for a least-exposure route: it passes the fire estimate or its FIRE_BUFFER_M buffer."""
     passes_fire: bool = False
     """True when an exposed route has an edge inside or crossing the fire estimate itself."""
+    fire_time_s: float = 0.0
+    """Free-flow seconds on edges inside or crossing the fire estimate."""
+    near_fire_time_s: float = 0.0
+    """Free-flow seconds on edges outside the fire estimate but within FIRE_BUFFER_M of it."""
 
     @property
     def eta_min(self) -> int:
         """Free-flow travel time in whole minutes, rounded up."""
         return math.ceil(self.travel_time_s / 60)
+
+    @property
+    def exposure(self) -> Exposure:
+        """``through_fire`` (passes the fire), ``near_fire`` (only its buffer) or ``clear``."""
+        return "through_fire" if self.passes_fire else "near_fire" if self.exposed else "clear"
 
 
 def edge_travel_time_s(edge: Edge) -> float:
@@ -315,13 +336,20 @@ def best_routes(
 
     Multi-source Dijkstra over the reversed graph from all usable destination nodes. Never
     uses edges whose ``segment_id`` is in ``blocked_segment_ids``; never routes to
-    destinations inside ``avoid_polygon`` or in ``full_destination_ids``. Passes, for the
-    zones still unrouted:
+    destinations inside ``avoid_polygon`` or in ``full_destination_ids``, nor to a
+    ``temporary_refuge`` within REFUGE_FIRE_BUFFER_M of it. Passes, for the zones still
+    unrouted:
 
     1. ``kinds``, then ``FALLBACK_KINDS``, over edges entirely outside ``avoid_polygon`` and
        farther than FIRE_BUFFER_M from it;
-    2. least exposure: both kind sets, edges inside the fire or buffer allowed at
-       EXPOSED_COST_INSIDE / EXPOSED_COST_BUFFER times their travel time; ``exposed=True``.
+    2. near fire: edges within FIRE_BUFFER_M allowed at EXPOSED_COST_BUFFER times their travel
+       time, edges inside the fire never;
+    3. through fire: edges inside the fire allowed too, at EXPOSED_COST_INSIDE times.
+
+    Passes 2 and 3 are least-exposure passes (``exposed=True``; ``passes_fire`` on pass 3, so
+    it means no route to any usable destination avoids the fire). Each routes the zone to
+    ``kinds`` and to ``FALLBACK_KINDS`` separately and keeps the ``kinds`` route, which leaves
+    the fire area, unless the refuge route is clearly less exposed (``_less_exposed``).
 
     A route shorter than MIN_ROUTE_M is skipped for the next-nearest destination.
     ``travel_time_s`` is always free-flow time. Returns zone id -> Route, or None.
@@ -331,53 +359,88 @@ def best_routes(
     blocked = frozenset(blocked_segment_ids)
     full = frozenset(full_destination_ids)
     fire_class = _fire_classes(drill, avoid_polygon)
-    multiplier = {_CLEAR: 1.0, _BUFFER: EXPOSED_COST_BUFFER, _INSIDE: EXPOSED_COST_INSIDE}
 
     def open_cost(eid: str) -> float | None:
         if roads.edges[eid].segment_id in blocked or fire_class(eid) != _CLEAR:
             return None
         return index.edge_time_s[eid]
 
-    def exposed_cost(eid: str) -> float | None:
+    def near_cost(eid: str) -> float | None:
         if roads.edges[eid].segment_id in blocked:
             return None
-        return index.edge_time_s[eid] * multiplier[fire_class(eid)]
+        c = fire_class(eid)
+        if c == _INSIDE:
+            return None
+        return index.edge_time_s[eid] * (EXPOSED_COST_BUFFER if c == _BUFFER else 1.0)
+
+    def through_cost(eid: str) -> float | None:
+        if roads.edges[eid].segment_id in blocked:
+            return None
+        c = fire_class(eid)
+        return index.edge_time_s[eid] * (
+            EXPOSED_COST_INSIDE if c == _INSIDE else EXPOSED_COST_BUFFER if c == _BUFFER else 1.0)
 
     def usable_destinations(wanted: tuple[DestinationKind, ...]) -> list[str]:
         out = []
         for dest in drill.destinations:
             if dest.kind not in wanted or dest.id in full or dest.id not in index.destination_nodes:
                 continue
-            if avoid_polygon is not None and (
-                point_in_multipolygon(dest.coord, avoid_polygon)
-                or point_in_multipolygon(roads.node_coords[index.destination_nodes[dest.id]], avoid_polygon)
-            ):
-                continue
+            node_coord = roads.node_coords[index.destination_nodes[dest.id]]
+            if avoid_polygon is not None:
+                if dest.kind == "temporary_refuge":
+                    if (polyline_distance_m((dest.coord,), avoid_polygon, REFUGE_FIRE_BUFFER_M) <= REFUGE_FIRE_BUFFER_M
+                            or polyline_distance_m((node_coord,), avoid_polygon,
+                                                   REFUGE_FIRE_BUFFER_M) <= REFUGE_FIRE_BUFFER_M):
+                        continue
+                elif point_in_multipolygon(dest.coord, avoid_polygon) or point_in_multipolygon(node_coord, avoid_polygon):
+                    continue
             out.append(dest.id)
         return out
 
-    passes: list[tuple[tuple[DestinationKind, ...], Callable[[str], float | None]]] = [
-        (kinds, open_cost), (FALLBACK_KINDS, open_cost),
-    ]
-    if avoid_polygon is not None:
-        passes.append((tuple(dict.fromkeys((*kinds, *FALLBACK_KINDS))), exposed_cost))
+    def with_exposure(route: Route) -> Route:
+        fire_s = near_s = 0.0
+        for eid in route.edge_ids:
+            c = fire_class(eid)
+            if c == _INSIDE:
+                fire_s += index.edge_time_s[eid]
+            elif c == _BUFFER:
+                near_s += index.edge_time_s[eid]
+        if fire_s == 0.0 and near_s == 0.0:
+            return route
+        return dataclasses.replace(route, exposed=True, passes_fire=fire_s > 0.0,
+                                   fire_time_s=fire_s, near_fire_time_s=near_s)
+
     result: dict[str, Route | None] = {z.id: None for z in drill.zones}
     pending = list(drill.zones)
-    for wanted, edge_cost in passes:
-        if not pending:
-            break
-        dest_ids = usable_destinations(wanted)
-        if not dest_ids:
-            continue
-        routed = _route_zones(drill, index, pending, dest_ids, edge_cost)
-        for zone_id, route in routed.items():
-            if edge_cost is exposed_cost:
-                classes = {fire_class(eid) for eid in route.edge_ids}
-                if classes - {_CLEAR}:
-                    route = dataclasses.replace(route, exposed=True, passes_fire=_INSIDE in classes)
-            result[zone_id] = route
-        pending = [z for z in pending if z.id not in routed]
+    primary, fallback = usable_destinations(kinds), usable_destinations(FALLBACK_KINDS)
+
+    def route(dest_ids: list[str], edge_cost: Callable[[str], float | None]) -> dict[str, Route]:
+        if not pending or not dest_ids:
+            return {}
+        return {z: with_exposure(r) for z, r in _route_zones(drill, index, pending, dest_ids, edge_cost).items()}
+
+    for dest_ids in (primary, fallback):
+        for zone_id, r in route(dest_ids, open_cost).items():
+            result[zone_id] = r
+        pending = [z for z in pending if result[z.id] is None]
+    if avoid_polygon is not None:
+        for edge_cost in (near_cost, through_cost):
+            leave, refuge = route(primary, edge_cost), route(fallback, edge_cost)
+            for zone in pending:
+                a, b = leave.get(zone.id), refuge.get(zone.id)
+                result[zone.id] = b if a is None or (b is not None and _less_exposed(b, a)) else a
+            pending = [z for z in pending if result[z.id] is None]
     return result
+
+
+def _less_exposed(refuge: Route, leave: Route) -> bool:
+    """True when ``refuge`` beats ``leave`` by REFUGE_MIN_EXPOSURE_CUT_S: less time inside the
+    fire estimate, or about the same inside and less within its buffer."""
+    cut = REFUGE_MIN_EXPOSURE_CUT_S
+    if refuge.fire_time_s <= leave.fire_time_s - cut:
+        return True
+    return (abs(refuge.fire_time_s - leave.fire_time_s) < cut
+            and refuge.near_fire_time_s <= leave.near_fire_time_s - cut)
 
 
 def _route_zones(drill: Drill, index: _Index, zones: list[Zone], dest_ids: list[str],

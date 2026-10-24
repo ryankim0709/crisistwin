@@ -48,9 +48,7 @@ struct BroadcastView: View {
                 liveSections(snapshot, receivedAt: receivedAt)
             }
         }
-        .background(Color("WorkspaceBackground"))
-        .scrollContentBackground(.hidden)
-        .navigationTitle("Live drill")
+        .navigationTitle("Web simulation")
         .refreshable { await live.refresh() }
         .sheet(isPresented: $editingHome) {
             MeetingPointEditor(title: "Your home", point: plan.home) { point in

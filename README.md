@@ -125,7 +125,7 @@ See [docs/historical-data.md](docs/historical-data.md) and [tools/README.md](too
 open mobile/CrisisTwin.xcodeproj
 ```
 
-Select the **CrisisTwin** scheme and an iOS 17+ simulator (Xcode 16.2+), then Product > Run. Debug uses
+Select the **CrisisTwin** scheme and an iOS 26 simulator (Xcode 26), then Product > Run. Debug uses
 `http://localhost:8000/api/health`, so start the Docker stack for the readiness card. Details:
 [mobile/README.md](mobile/README.md). Mobile builds and tests have not been run in this repository's
 checks.

@@ -9,51 +9,25 @@ struct AboutView: View {
         case failed(message: String)
     }
 
-    @Environment(\.dismiss) private var dismiss
     @State private var connection: ConnectionState = .loading
     @State private var attempt = 0
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+        List {
+            Section {
                 Text("CrisisTwin shows the one instruction for your zone during a wildfire and lets you report what you see.")
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(Color.ctInk)
+                    .font(.headline)
                     .fixedSize(horizontal: false, vertical: true)
-
-                Label {
-                    Text("The fire estimate is the latest observation or model fit, never a forecast. Meeting points are your own choices, not official shelters. Always follow evacuation orders from your local authorities.")
-                        .foregroundStyle(Color.ctInk)
-                        .fixedSize(horizontal: false, vertical: true)
-                } icon: {
-                    Image(systemName: "exclamationmark.shield")
-                        .foregroundStyle(HazardTone.caution.color)
-                }
-                .font(.subheadline)
-                .padding(16)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(HazardTone.caution.color.opacity(0.1), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-
-                VStack(alignment: .leading, spacing: 14) {
-                    Label("System connection", systemImage: "network")
-                        .font(.headline)
-                        .foregroundStyle(Color.ctInk)
-                    connectionContent
-                }
-                .ctCard()
+                Text("The fire estimate is the latest observation or model fit, never a forecast. Meeting points are your own choices, not official shelters. Always follow evacuation orders from your local authorities.")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(20)
-            .frame(maxWidth: 640, alignment: .leading)
-            .frame(maxWidth: .infinity)
+            Section("Service") {
+                connectionContent
+            }
         }
-        .background(Color.ctBackground)
+        .listStyle(.insetGrouped)
         .navigationTitle("About")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .confirmationAction) {
-                Button("Done") { dismiss() }
-            }
-        }
         .task(id: attempt) {
             await loadHealth(requestID: attempt)
         }
@@ -63,23 +37,23 @@ struct AboutView: View {
     private var connectionContent: some View {
         switch connection {
         case .loading:
-            ProgressView("Connecting to the API…")
-                .tint(Color.ctBrand)
-                .foregroundStyle(Color.ctMuted)
+            HStack(spacing: 12) {
+                ProgressView()
+                Text("Connecting")
+            }
         case .connected(let version):
-            StatusPill(text: "API and database connected", systemImage: "checkmark.circle", tone: .clear)
-            Text("Version \(version)")
-                .font(.caption)
-                .foregroundStyle(Color.ctMuted)
+            LabeledContent {
+                Text(version).monospacedDigit()
+            } label: {
+                Label("Connected", systemImage: "checkmark.circle")
+            }
             Button("Check again") { retry() }
-                .buttonStyle(SecondaryButtonStyle())
         case .failed(let message):
-            StatusPill(text: "Connection unavailable", systemImage: "exclamationmark.triangle", tone: .caution)
+            Label("Connection unavailable", systemImage: "exclamationmark.triangle")
             Text(message)
                 .font(.subheadline)
-                .foregroundStyle(Color.ctInk)
+                .foregroundStyle(.secondary)
             Button("Try again") { retry() }
-                .buttonStyle(PrimaryButtonStyle())
         }
     }
 

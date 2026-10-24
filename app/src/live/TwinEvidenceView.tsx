@@ -1,3 +1,4 @@
+import { EvidenceTag } from "../ui";
 import type { ControllerInfo, TwinEvidence, TwinMetrics } from "./types";
 
 const nf = (n: number) => Math.round(n).toLocaleString("en-US");
@@ -57,9 +58,9 @@ export default function TwinEvidenceView({ twin }: { twin: Evidence }) {
       <figure className="lc-ev" title={`Simulated ${twin.horizon_min} min what-if`}>
         {worse ?? (
           <figcaption>
-            <span className="lc-chip lc-chip--simulated">Simulated</span>{" "}
+            <EvidenceTag kind="simulated" />{" "}
             {tieOnly
-              ? `Twin: no measurable difference between sets in ${twin.horizon_min} min · ${chosen.cost < twin.baseline.cost ? "−" : "+"}${nf(Math.abs(chosen.cost - twin.baseline.cost))} veh-min vs no action`
+              ? `Twin: no measurable difference between sets in ${twin.horizon_min} min, ${chosen.cost < twin.baseline.cost ? "−" : "+"}${nf(Math.abs(chosen.cost - twin.baseline.cost))} veh-min vs no action`
               : `Twin: no measurable difference in ${twin.horizon_min} min`}
           </figcaption>
         )}
@@ -69,7 +70,7 @@ export default function TwinEvidenceView({ twin }: { twin: Evidence }) {
   return (
     <figure className="lc-ev">
       <figcaption>
-        <span className="lc-chip lc-chip--simulated">Simulated</span> {twin.horizon_min} min what-if
+        <EvidenceTag kind="simulated" /> {twin.horizon_min} min what-if
         {twin.fire_ahead === "frozen" ? ", fire held" : ""}
       </figcaption>
       {worse}
@@ -102,15 +103,15 @@ export default function TwinEvidenceView({ twin }: { twin: Evidence }) {
         </tbody>
       </table>
       {twin.candidates.length > 1 ? (
-        <details className="lc-details">
+        <details className="lc-more">
           <summary>{twin.candidates.length} sets scored</summary>
           <ol className="lc-ev-sets">
             {twin.candidates.map((c, i) => (
               <li key={i} className={i === twin.chosen ? "lc-ev-chosen" : undefined}>
                 <span>{c.label}</span>
-                <span className="lc-mono">
+                <span className="lc-num">
                   {c.valid && c.cost !== null ? nf(c.cost) : "invalid"}
-                  {i === twin.chosen ? " · chosen" : ""}
+                  {i === twin.chosen ? ", chosen" : ""}
                 </span>
               </li>
             ))}

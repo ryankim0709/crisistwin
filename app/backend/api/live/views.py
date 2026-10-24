@@ -13,6 +13,7 @@ from pymongo.errors import DuplicateKeyError
 from rest_framework.response import Response
 
 from . import controller, twin_service
+from . import impact as impact_mod
 from .auth import Principal, client_ip, issue_token, live_view, rate_limited, secret_matches
 from .common import (
     ApiError,
@@ -454,7 +455,35 @@ def update_task(request, task_id: str, principal: Principal):
 
 @live_view(["POST"], roles=["controller"])
 def impact(request, incident_id: str, principal: Principal):
-    return error(501, "not_implemented", "Impact simulation runs are not wired to the live API yet.")
+    code = "invalid_impact"
+    body = json_body(request, code)
+    segment_id = optional_str(body, "segment_id", code, 200)
+    report_id = optional_str(body, "report_id", code, 100)
+    horizon = body.get("horizon_min", impact_mod.IMPACT_HORIZON_MIN)
+    if not _bool_number(horizon) or not 0 < horizon <= twin_service.API_MAX_HORIZON_MIN:
+        return error(400, code, f"`horizon_min` must be in (0, {twin_service.API_MAX_HORIZON_MIN}].")
+    report_ids: list[str] = []
+    if report_id is not None:
+        report = col("live_reports").find_one({"id": report_id, "incident_id": incident_id})
+        if report is None:
+            return error(400, code, "Unknown `report_id`.")
+        report_segment = (report.get("road_ref") or {}).get("segment_id")
+        if report_segment is None:
+            return error(400, code, "The report is not on a road; give `segment_id`.")
+        if segment_id is not None and segment_id != report_segment:
+            return error(400, code, "`segment_id` does not match the report's road.")
+        segment_id = report_segment
+        report_ids = [report_id]
+    if segment_id is None:
+        return error(400, code, "Give `segment_id` or `report_id`.")
+    snapshot = load_snapshot(incident_id, wall_now())
+    if not report_ids:
+        report_ids = sorted(
+            d["id"] for d in snapshot.report_docs
+            if (d.get("road_ref") or {}).get("segment_id") == segment_id
+            and d.get("status") not in ("dismissed", "resolved")
+        )
+    return ok(impact_mod.analyze(snapshot, segment_id, report_ids, float(horizon)))
 
 
 @live_view(["POST"])

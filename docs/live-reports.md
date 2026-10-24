@@ -81,7 +81,7 @@ store them in their own collection only if reads get slow.
 | `GET incidents/{id}/public-map` | any | Public items only (rules below) |
 | `GET incidents/{id}/prompts?near=lon,lat` | any | Nearby items to answer "still there?" with `road_blocked` / `road_passable` |
 | `POST incidents/{id}/tasks`, `GET me/tasks`, `POST tasks/{id}` | controller; responder | Create, list and answer check tasks |
-| `POST incidents/{id}/impact` | controller | Run the simulation with confirmed blocks as `close_road` commands; returns `202 { job_id }` and follows the [Plan API](plan-api.md) job and result shape |
+| `POST incidents/{id}/impact` | controller | Impact of one road segment, blocked vs unblocked: affected zones, ETA delta, vehicles at risk (v2, [Impact analysis](#impact-analysis)) |
 | `POST incidents/{id}/route` | any | `{ origin, destination }` -> a route avoiding publicly confirmed blocks; not stored (P1) |
 
 `POST devices` and `POST incidents/{id}/join` (body `{ "invite_code": "..." }`) return
@@ -261,8 +261,8 @@ Planner rules (`livecore.planner.plan`, constants named in code):
   (`length_m / speed_kph`). Never uses an edge whose `segment_id` is blocked or
   whose midpoint lies inside the fire estimate. Unreachable -> `no_route: true`.
 - Blocked segments for guidance are road-state items with `status: "blocked"` and
-  `public: true` (this includes controller confirmations). The impact simulation
-  (`POST incidents/{id}/impact`) still uses controller-confirmed blocks only.
+  `public: true` (this includes controller confirmations). The impact analysis
+  (`POST incidents/{id}/impact`) starts from the same blocks and toggles one segment.
 
 ## Proposals and the approval policy
 
@@ -526,6 +526,72 @@ A manual `replan` returns the auto-approved part too only when there is one (man
 causes never auto-approve, so it is normally `null`). Errors use the v1 shape;
 `409 { "error": "conflict", "detail": "..." }` is new.
 
+## Impact analysis
+
+`POST incidents/{id}/impact` (controller) answers "what does this road being blocked cost?"
+for one segment, at the current drill time. Nothing is stored or published.
+
+```jsonc
+{ "segment_id": "osm-way:10288574:0" }      // or { "report_id": "rpt_..." }: the report's road
+{ "report_id": "rpt_...", "horizon_min": 60 } // horizon_min: twin what-if minutes, (0, 120], default 60
+```
+
+`400 invalid_impact` when neither is given, the segment or report is unknown, the report
+is not on a road, or both are given and disagree. Two parts, computed separately:
+
+- **Planner (computed, free-flow):** `livecore.planner.plan` runs twice with the blocks
+  guidance already avoids (`Snapshot.blocked`), once with the segment added and once with
+  it removed. The side that holds now is the route people follow: for an open segment the
+  published route is the `unblocked` side; for a closed one it is the `blocked` side, unless
+  it still crosses the segment (a reroute waiting for approval), when it is what reopening
+  restores and so the `unblocked` side. The other side is the planner's route for that
+  state. A zone is affected when its level is not `none` and its `unblocked` route uses the
+  segment (planner routes by segment id; published routes when two of the segment's
+  quarter points lie within 30 m of the route line), or the two sides differ.
+  `eta_delta_min` = blocked minus unblocked route ETA (free-flow minutes), `null` when
+  either side has no route. It can be negative: a published route chosen by the twin
+  controller for traffic is not always the free-flow fastest, so the planner's detour can be
+  quicker on paper. `change` is `slower` only when the ETA rises on the same destination
+  and via; another path is `rerouted`.
+- **Twin (simulated):** one what-if on the synced traffic twin (`fire_ahead: "frozen"`,
+  seed 7). The twin closes the same blocks guidance avoids, so an open segment gets a
+  `close_road` (`mode: hard`) and a closed one a `reopen_road`; the other side is the
+  no-new-actions baseline. `vehicles_remaining` per zone is the twin's not-yet-arrived
+  vehicles at the fork.
+
+`200`:
+
+```jsonc
+{ "incident_id": "camp-2018-drill", "generated_at": "...Z", "replay_at": "2018-11-08T16:34:00Z",
+  "target": { "segment_id": "osm-way:10288574:0", "name": "Doe Mill Road",
+              "line": [[-121.59, 39.86], ...], "coord": [-121.59, 39.86],
+              "state": "blocked",            // closed now (in guidance and the twin) | "open"
+              "report_ids": ["rpt_..."] },    // the request's report, else open reports on the segment
+  "planner_version": "planner-v2",
+  "summary": { "affected_zones": 23, "eta_delta_min": 2,   // max over affected zones; null if none
+               "zones_losing_route": 0, "zones_exposed": 0,
+               "vehicles_at_risk": 17202,
+               "vehicles_at_risk_source": "twin" },        // twin: sum of vehicles_remaining (simulated);
+                                                           // bundle: sum of zone vehicles (no twin)
+  "zones": [ { "zone_id": "bg:060070019002", "name": "Block Group 2, Census Tract 19",
+               "level": "evacuate_now", "households": 410, "vehicles": 702,
+               "vehicles_remaining": 687,                  // null without the twin
+               "change": "rerouted",                       // slower | rerouted | route_lost | exposed | unchanged
+               "eta_delta_min": 2,
+               "unblocked": { "destination": GuidanceDestination, "route": GuidanceRoute, "exposed": false } | null,
+               "blocked":   { ... } | null } ],            // null: no route on that side
+  "twin": { "evidence_class": "simulated", "from": "...Z", "until": "...Z", "horizon_min": 60,
+            "fire_ahead": "frozen", "seed": 7,
+            "blocked": Metrics, "unblocked": Metrics, "delta": Metrics,   // delta = blocked - unblocked
+            "limitations": ["Single seed; small differences are not significant.", "..."] } | null,
+  "twin_fallback": null,   // when twin is null: twin_warming | twin_busy | twin_finished | twin_no_edges | twin_failed | twin_error:<code>
+  "runtime_ms": 3100 }
+```
+
+`Metrics` is the [Controllers](#controllers) summary. Zones are ordered: lost routes first,
+then by ETA delta and vehicles. The /live workspace runs it from a selected road item and
+draws the current routes solid, the other state's routes dashed, and the affected zones.
+
 ## Controller auth (v2)
 
 Dev and drill only: a controller sends `Authorization: Bearer <LIVE_CONTROLLER_TOKEN>`;
@@ -550,6 +616,7 @@ controller accounts (not in scope).
 | `POST incidents/{id}/drill` | controller |
 | `GET incidents/{id}/twin` | controller ([twin-api.md](twin-api.md#http-adapter-live-drill-appbackendapilivetwin_servicepy)) |
 | `POST incidents/{id}/twin/whatif` | controller |
+| `POST incidents/{id}/impact` | controller ([Impact analysis](#impact-analysis)) |
 
 ## Location (v2)
 

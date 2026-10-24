@@ -10,11 +10,12 @@ import json
 import os
 import uuid
 from datetime import UTC, datetime, timedelta
+from unittest import mock
 
 from django.core.cache import cache
 from django.test import SimpleTestCase, override_settings
 
-from api.live import schema
+from api.live import schema, twin_service
 from api.live.common import col
 from api.mongodb import get_database
 
@@ -241,3 +242,51 @@ class LiveApiTest(SimpleTestCase):
         self.assertIsNone(out.json()["checkin"]["coord"])
         self.assertEqual(self.call("GET", f"{BASE}/command", token=CONTROLLER).json()["checkins"]["need_help"], [])
         self.assertEqual(self.situation(civ)["my_checkin"]["status"], "out")
+
+    def test_impact_of_a_block_on_a_route(self):
+        civ = self.civilian()
+        path = f"{BASE}/impact"
+        self.assertEqual(self.call("POST", path, {}, civ).status_code, 403)
+        self.assertEqual(self.call("POST", path, {}, CONTROLLER).status_code, 400)
+        self.assertEqual(self.call("POST", path, {"segment_id": "nope"}, CONTROLLER).status_code, 400)
+        self.assertEqual(self.call("POST", path, {"report_id": "rpt_nope"}, CONTROLLER).status_code, 400)
+        smoke = self.report(civ, (-121.62, 39.76), kind="heavy_smoke", severity=None).json()["report"]["id"]
+        self.assertEqual(self.call("POST", path, {"report_id": smoke}, CONTROLLER).status_code, 400)
+        self.publish_initial_guidance()
+        zone_id, point = self.road_point_on_a_route(civ)
+        rid = self.report(civ, point, minutes_ago=2).json()["report"]["id"]
+        # The planner part stands alone; the twin part is covered in test_impact.py.
+        with mock.patch.object(twin_service, "ensure_ready", lambda: False):
+            r = self.call("POST", path, {"report_id": rid}, CONTROLLER)
+            self.assertEqual(r.status_code, 200, r.content)
+            body = r.json()
+            self.assertEqual(body["target"]["state"], "open")
+            self.assertEqual(body["target"]["report_ids"], [rid])
+            self.assertIsNone(body["twin"])
+            self.assertEqual(body["twin_fallback"], "twin_warming")
+            s = body["summary"]
+            self.assertGreaterEqual(s["affected_zones"], 1)
+            self.assertEqual(s["affected_zones"], len(body["zones"]))
+            self.assertEqual(s["vehicles_at_risk_source"], "bundle")
+            self.assertEqual(s["vehicles_at_risk"], sum(z["vehicles"] for z in body["zones"]))
+            zones = {z["zone_id"]: z for z in body["zones"]}
+            self.assertIn(zone_id, zones)
+            z = zones[zone_id]
+            self.assertIsNotNone(z["unblocked"])
+            if z["blocked"] is not None:
+                # Free-flow minutes; the published side may be a traffic-aware (twin controller)
+                # choice, so a planner detour can be faster and the delta negative.
+                self.assertEqual(z["eta_delta_min"], z["blocked"]["route"]["eta_min"] - z["unblocked"]["route"]["eta_min"])
+                if z["change"] == "slower":
+                    self.assertGreater(z["eta_delta_min"], 0)
+            else:
+                self.assertEqual(z["change"], "route_lost")
+            # Confirmed: the segment is blocked in guidance now. Which zones stay affected depends on
+            # whether their published route was already rerouted, so only the shape is fixed here.
+            t = self.call("POST", f"/api/live/reports/{rid}/triage", {"action": "confirm"}, CONTROLLER)
+            self.assertEqual(t.status_code, 200, t.content)
+            after = self.call("POST", path, {"segment_id": body["target"]["segment_id"]}, CONTROLLER).json()
+            self.assertEqual(after["target"]["state"], "blocked")
+            self.assertEqual(after["summary"]["affected_zones"], len(after["zones"]))
+            for z in after["zones"]:
+                self.assertTrue(z["unblocked"] is not None or z["blocked"] is not None)

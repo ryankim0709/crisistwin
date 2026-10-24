@@ -13,7 +13,9 @@ sys.path.insert(0, str(ROOT / "app" / "backend"))
 
 from livecore import estimate_fire, plan, load_drill  # noqa: E402
 from livecore.drill import parse_time  # noqa: E402
-from livecore.planner import BE_READY_KM, EVACUATE_NOW_KM  # noqa: E402
+from livecore.geo import point_in_multipolygon, polyline_distance_m  # noqa: E402
+from livecore.planner import BE_READY_KM, EVACUATE_NOW_KM, NEAR_FIRE_CAVEAT, THROUGH_FIRE_CAVEAT  # noqa: E402
+from livecore.routing import REFUGE_FIRE_BUFFER_M, Route, _less_exposed  # noqa: E402
 from livecore.policy import AUTO_APPROVE_CAUSES, diff, is_auto_approvable, summarize  # noqa: E402
 from livecore.public import (  # noqa: E402
     PUBLIC_MIN_CIVILIAN_PARTIES,
@@ -95,6 +97,64 @@ class DrillPlanTest(unittest.TestCase):
         for g in stuck:  # a zone already at its destination may keep a zero-length route; never a road
             if not g.no_route:
                 self.assertEqual(g.route.edge_ids, ())
+
+
+class LeastExposureFallbackTest(unittest.TestCase):
+    """D2: a person between two fire lobes (zone bg:060070021001, 16:20 drill time) was sent
+    "via Fairview Drive -> TRA-P: Walgreens, 2 min", a refuge 364 m from the fire, through it."""
+
+    ZONE = "bg:060070021001"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.drill = load_drill(BUNDLE)
+        cls.dests = {d.id: d for d in cls.drill.destinations}
+        cls.runs = {}
+        for hhmm in ("16:20", "16:50"):
+            now = parse_time(f"2018-11-08T{hhmm}:00Z")
+            fire = estimate_fire(cls.drill, now)
+            cls.runs[hhmm] = (fire, plan(cls.drill, now, fire, []))
+
+    def test_two_lobes_case_leaves_the_fire_area_and_says_so(self):
+        fire, guidance = self.runs["16:20"]
+        g = next(g for g in guidance if g.zone_id == self.ZONE)
+        self.assertEqual(g.level, "evacuate_now")
+        self.assertIsNotNone(g.route)
+        self.assertNotEqual(g.destination_id, "tra:TRA-P")
+        dest = self.dests[g.destination_id]
+        self.assertFalse(point_in_multipolygon(dest.coord, fire.geometry))
+        if dest.kind == "temporary_refuge":
+            self.assertGreater(polyline_distance_m((dest.coord,), fire.geometry, REFUGE_FIRE_BUFFER_M),
+                               REFUGE_FIRE_BUFFER_M)
+        self.assertTrue(g.exposed)
+        self.assertEqual(g.caveat, THROUGH_FIRE_CAVEAT if g.route.passes_fire else NEAR_FIRE_CAVEAT)
+
+    def test_refuges_are_never_inside_or_beside_the_fire(self):
+        for hhmm, (fire, guidance) in self.runs.items():
+            for g in guidance:
+                if g.route is None:
+                    continue
+                dest = self.dests[g.destination_id]
+                if dest.kind == "temporary_refuge":
+                    d = polyline_distance_m((dest.coord,), fire.geometry, REFUGE_FIRE_BUFFER_M)
+                    self.assertGreater(d, REFUGE_FIRE_BUFFER_M, f"{hhmm} {g.zone_id} {dest.name}")
+
+    def test_caveat_only_and_always_on_exposed_routes(self):
+        for hhmm, (_, guidance) in self.runs.items():
+            for g in guidance:
+                if g.route is not None and g.route.exposed:
+                    want = THROUGH_FIRE_CAVEAT if g.route.passes_fire else NEAR_FIRE_CAVEAT
+                    self.assertEqual(g.caveat, want, f"{hhmm} {g.zone_id}")
+                    self.assertEqual(g.route.exposure, "through_fire" if g.route.passes_fire else "near_fire")
+                else:
+                    self.assertIsNone(g.caveat, f"{hhmm} {g.zone_id}")
+
+    def test_refuge_replaces_exit_only_when_clearly_less_exposed(self):
+        def r(fire_s, near_s):
+            return Route("z", "d", "n", (), (), (), (), 0.0, 0.0, True, fire_s > 0, fire_s, near_s)
+        self.assertFalse(_less_exposed(r(50, 40), r(52, 40)))
+        self.assertTrue(_less_exposed(r(10, 40), r(52, 40)))
+        self.assertTrue(_less_exposed(r(50, 0), r(52, 40)))
 
 
 class PublicRulesTest(unittest.TestCase):

@@ -71,6 +71,9 @@ export interface PublicMapItem {
   confidence: number
   first_reported_at: IsoTime
   last_observed_at: IsoTime
+  /** Controller views only (command): the reports behind the item and its destination (shelter_full). */
+  report_ids?: string[]
+  destination_id?: string | null
 }
 
 export type RoadStatus = 'open' | 'slow' | 'blocked' | 'unknown'
@@ -487,4 +490,81 @@ export interface TwinMonitor {
 export interface LiveApiError {
   error: string
   detail?: string
+}
+
+// ---- Impact analysis (docs/live-reports.md "Impact analysis"); planner routes computed, twin values simulated ----
+
+export interface ImpactRequest {
+  segment_id?: string
+  report_id?: string
+  /** Twin what-if horizon, simulated minutes, (0, 120]; default 60. */
+  horizon_min?: number
+}
+
+export type ImpactChange = 'slower' | 'rerouted' | 'route_lost' | 'exposed' | 'unchanged'
+
+export interface ImpactOption {
+  destination: GuidanceDestination
+  route: GuidanceRoute
+  /** Least-exposure route through or near the fire estimate. */
+  exposed: boolean
+}
+
+export interface ImpactZone {
+  zone_id: string
+  name: string
+  level: GuidanceLevel
+  households: number
+  vehicles: number
+  /** Twin: vehicles not yet arrived at the fork; null without the twin. Simulated. */
+  vehicles_remaining: number | null
+  change: ImpactChange
+  /** Blocked minus unblocked free-flow ETA, minutes; null when either has no route. */
+  eta_delta_min: number | null
+  unblocked: ImpactOption | null
+  blocked: ImpactOption | null
+}
+
+export interface ImpactTwin {
+  evidence_class: 'simulated'
+  from: IsoTime
+  until: IsoTime
+  horizon_min: number
+  fire_ahead: 'frozen' | 'replay'
+  seed: number
+  blocked: TwinMetrics
+  unblocked: TwinMetrics
+  /** blocked minus unblocked. */
+  delta: TwinMetrics
+  limitations: string[]
+}
+
+export interface ImpactResponse {
+  incident_id: string
+  generated_at: IsoTime
+  replay_at: IsoTime
+  target: {
+    segment_id: string
+    name: string
+    line: LonLat[]
+    coord: LonLat
+    /** Whether the segment is closed now (in guidance and the twin). */
+    state: 'blocked' | 'open'
+    report_ids: string[]
+  }
+  planner_version: string
+  summary: {
+    affected_zones: number
+    eta_delta_min: number | null
+    zones_losing_route: number
+    zones_exposed: number
+    vehicles_at_risk: number
+    /** twin: not-yet-arrived vehicles of the affected zones (simulated); bundle: their total vehicles. */
+    vehicles_at_risk_source: 'twin' | 'bundle'
+  }
+  zones: ImpactZone[]
+  twin: ImpactTwin | null
+  /** Why there is no twin part: twin_warming, twin_busy, twin_finished, twin_error:<code>, ... */
+  twin_fallback: string | null
+  runtime_ms: number
 }

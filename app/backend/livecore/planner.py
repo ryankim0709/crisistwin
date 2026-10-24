@@ -20,12 +20,16 @@ EVACUATE_NOW_KM = 3.0
 """Zone within this distance of the fire estimate -> ``evacuate_now``."""
 BE_READY_KM = 8.0
 """Zone within this distance (and beyond EVACUATE_NOW_KM) -> ``be_ready``."""
-PLANNER_VERSION = "planner-v2"
+PLANNER_VERSION = "planner-v3"
 """Recorded in proposal ``inputs.planner_version``; bump when the rules change."""
-EXPOSED_REASON = "Least-exposure route; passes the fire estimate"
-"""Reason for a zone whose only route has a road inside or crossing the fire estimate."""
-EXPOSED_NEAR_REASON = "Least-exposure route; passes near the fire estimate"
-"""Reason for a zone whose only route stays outside the fire estimate but within its buffer."""
+THROUGH_FIRE_CAVEAT = "Every route out passes through the fire"
+"""``caveat`` when no route to any usable destination avoids the fire estimate itself."""
+NEAR_FIRE_CAVEAT = "Every route out passes near the fire"
+"""``caveat`` when every route enters the fire estimate's buffer but one stays outside it."""
+EXPOSED_REASON = "Least-exposure route; every route out passes through the fire"
+"""Reason for a zone whose least-exposure route passes through the fire estimate."""
+EXPOSED_NEAR_REASON = "Least-exposure route; every route out passes near the fire"
+"""Reason for a zone whose least-exposure route stays outside the fire estimate but within its buffer."""
 RESPONDER_FRESH_S = 900
 """Responder positions older than this (wall seconds) are not used to suggest an assignee."""
 
@@ -52,10 +56,15 @@ class ZoneGuidance:
     exposed: bool = False
     """The route is a least-exposure route through the fire estimate or its buffer; a
     controller must approve it. Never cleared by swapping in another route."""
+    caveat: str | None = None
+    """Headline warning for clients: THROUGH_FIRE_CAVEAT or NEAR_FIRE_CAVEAT on an exposed
+    route, else None. Follows ``route`` (set from it when a route is swapped in)."""
 
     def __post_init__(self) -> None:
         if self.route is not None and self.route.exposed and not self.exposed:
             object.__setattr__(self, "exposed", True)
+        if self.route is not None:
+            object.__setattr__(self, "caveat", caveat_for(self.route))
 
     @property
     def via(self) -> tuple[str, ...]:
@@ -93,6 +102,13 @@ def level_for_distance(distance_km: float | None) -> GuidanceLevel:
     return "none"
 
 
+def caveat_for(route: Route | None) -> str | None:
+    """THROUGH_FIRE_CAVEAT, NEAR_FIRE_CAVEAT or None for a clear (or no) route."""
+    if route is None or not route.exposed:
+        return None
+    return THROUGH_FIRE_CAVEAT if route.passes_fire else NEAR_FIRE_CAVEAT
+
+
 def _km(value: float) -> str:
     return f"{value:g}"
 
@@ -108,10 +124,10 @@ def plan(
 
     Level from ``level_for_distance(distance_km(zone, fire.geometry))``; routes from
     ``best_routes(drill, blocked_segment_ids, fire.geometry, full_destination_ids)`` for
-    zones whose level is not ``none``. A least-exposure route sets ``exposed`` and the reason
-    EXPOSED_REASON (EXPOSED_NEAR_REASON when it only enters the buffer); ``no_route`` only
-    when even that pass finds nothing. ``replay_now`` is recorded by callers; the plan uses
-    only ``fire`` for time-dependent input.
+    zones whose level is not ``none``. A least-exposure route sets ``exposed``, the reason
+    EXPOSED_REASON and the caveat THROUGH_FIRE_CAVEAT (EXPOSED_NEAR_REASON and NEAR_FIRE_CAVEAT
+    when it only enters the buffer); ``no_route`` only when even that pass finds nothing.
+    ``replay_now`` is recorded by callers; the plan uses only ``fire`` for time-dependent input.
     """
     geometry = fire.geometry
     distances: dict[str, float | None] = {

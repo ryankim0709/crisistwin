@@ -74,7 +74,7 @@ struct MeetingPointEditor: View {
                         coordinate == nil ? "Search for a place, or tap the map to drop a pin." : "Tap the map to move the pin.",
                         systemImage: coordinate == nil ? "hand.tap" : "mappin.and.ellipse"
                     )
-                    .foregroundStyle(Color.ctMuted)
+                    .foregroundStyle(.secondary)
                 }
 
                 if !results.isEmpty || searchMessage != nil {
@@ -87,7 +87,7 @@ struct MeetingPointEditor: View {
                                 choose(item)
                             } label: {
                                 VStack(alignment: .leading) {
-                                    Text(item.name ?? "Unnamed place").foregroundStyle(Color.ctInk)
+                                    Text(item.name ?? "Unnamed place").foregroundStyle(.primary)
                                     if let address = item.placemark.title {
                                         Text(address).font(.caption).foregroundStyle(.secondary)
                                     }
@@ -102,9 +102,6 @@ struct MeetingPointEditor: View {
                     TextField("Note, e.g. by the north entrance", text: $note, axis: .vertical)
                 }
             }
-            .scrollContentBackground(.hidden)
-            .background(Color.ctBackground)
-            .tint(Color.ctBrand)
             .task(id: query) { await search(query) }
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)

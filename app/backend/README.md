@@ -163,7 +163,10 @@ the `/api/live` prefix with the broadcast above but no code or collections (`liv
   background thread (10 s timeout); without a key the template stays.
 - `LIVE_DRILL_BUNDLE` points at the replay bundle (default
   `app/public/replays/camp-2018.json`); it is parsed once per process on first use.
-- Not implemented yet: `POST incidents/{id}/impact` and `POST incidents/{id}/route` return 501.
+- `POST incidents/{id}/impact` (controller) compares one road segment blocked and unblocked:
+  two planner runs give the affected zones and their ETA delta, and one twin what-if
+  (simulated, about 1-3 s) gives the vehicles at risk and window metrics (`api/live/impact.py`).
+- Not implemented yet: `POST incidents/{id}/route` returns 501.
 
 Local run (Docker MongoDB on 127.0.0.1:27017):
 

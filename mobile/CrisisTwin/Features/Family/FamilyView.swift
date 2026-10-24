@@ -33,8 +33,6 @@ struct FamilyView: View {
                 enrollment
             }
         }
-        .background(Color("WorkspaceBackground"))
-        .scrollContentBackground(.hidden)
         .navigationTitle("Family")
         .refreshable { await store.refresh() }
         .disabled(store.isWorking)
@@ -50,8 +48,6 @@ struct FamilyView: View {
     private var enrollment: some View {
         Group {
             Section {
-                Text("Make a family so everyone shares the same meeting points and can tell each other they are safe. Only names, meeting points and status are shared, never your location.")
-                    .foregroundStyle(.secondary)
                 Picker("Create or join", selection: $mode) {
                     ForEach(Mode.allCases) { Text($0.rawValue).tag($0) }
                 }

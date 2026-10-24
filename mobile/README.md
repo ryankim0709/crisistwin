@@ -2,11 +2,11 @@
 
 The civilian CrisisTwin app, for households planning ahead and during an
 emergency; the web workspace serves planners (see
-[ADR 0010](../docs/adr/0010-civilian-ios-app.md)). It is one screen about the
-live incident (see **Live** below), with no tab bar; **My Plan**, **Family**, My reports,
-responder join, the **Web simulation** feed and About sit behind one menu button. Native SwiftUI, targeting iPhone and iPad on
-**iOS 17.0+**. Use **Xcode 16.2+** with its bundled Swift compiler in **Swift 5
-language mode**. Only Apple frameworks are used. There is no package install or
+[ADR 0010](../docs/adr/0010-civilian-ios-app.md)). It is a tab app (see **Tabs** below):
+**Home**, **Map**, **Reports**, **Plan**, and **Tasks** for responders, with the live guidance
+line in the bottom accessory under every tab. Native SwiftUI with Liquid Glass, targeting
+iPhone and iPad on **iOS 26.0+**. Use **Xcode 26** with its bundled Swift compiler in **Swift 5
+language mode** ([ADR 0018](../docs/adr/0018-ios-26-baseline.md)). Only Apple frameworks are used. There is no package install or
 project generation step; Swift Package Manager is the choice for future Swift
 dependencies. No `Package.resolved` exists because there are no package dependencies.
 
@@ -19,7 +19,7 @@ open mobile/CrisisTwin.xcodeproj
 ```
 
 Select the shared **CrisisTwin** scheme, choose an iPhone or iPad simulator running
-iOS 17 or newer, and choose **Product > Run** (`Cmd-R`). Install an iOS simulator
+iOS 26 or newer, and choose **Product > Run** (`Cmd-R`). Install an iOS simulator
 runtime through Xcode settings if none is available. Simulator development does
 not need a signing team. The app opens without a backend; the connection card
 shows an error and a retry button when the API is unavailable.
@@ -72,9 +72,9 @@ The Practice view was removed from the phone. It showed the web app's `/fire` pa
 `WKWebView` with the sidebar hidden (see [ADR 0007](../docs/adr/0007-mobile-web-map.md)).
 `WEB_BASE_URL` is still validated like `API_BASE_URL`; Debug uses `http://localhost:5173`.
 
-### My Plan
+### Meeting point
 
-My Plan, in the menu, holds a household meeting plan: a primary meeting point, an
+Plan > Meeting point holds a household meeting plan: a primary meeting point, an
 optional backup, and trusted contacts (see
 [ADR 0009](../docs/adr/0009-mobile-meeting-plan.md)). Points are chosen with
 Apple Maps search or by tapping the map; contacts come from the system picker,
@@ -82,7 +82,19 @@ which needs no Contacts permission. The plan is saved only on the device as
 versioned JSON and needs no backend. **Open in Maps** gives directions, and
 sharing opens Messages for the contacts' numbers, or the share sheet where
 Messages is unavailable, such as the simulator. The app never sends anything on
-its own, and My Plan never reads the user's location.
+its own, and the meeting point screen never reads the user's location.
+
+### Tabs
+
+**Home** says what to do now: a solid block in the guidance color with the verdict ("Leave
+now", "Be ready to leave"), the way out, its destination and ETA, and **Start**; then **I'm
+out** and **Need help**, "Still there?" questions about nearby hazards, what is near you, and
+changes to your zone's guidance. **Map** is the full-screen map with one glass drawer.
+**Reports** sends a new report and lists yours with their progress (Received, Being checked,
+Confirmed, Resolved). **Plan** holds Family, the meeting point, a go-bag checklist, permission
+status, the web simulation feed, responder join and About. **Tasks** appears for responders.
+While a zone has an order, the bottom accessory under every tab repeats the verdict and ETA and
+opens Map.
 
 ### Live
 
@@ -91,24 +103,23 @@ real Camp road network (see [ADR 0011](../docs/adr/0011-live-field-reports.md),
 [ADR 0012](../docs/adr/0012-controller-guidance.md) and the
 [API contract](../docs/live-reports.md)). A full-screen map shows your position,
 the current fire estimate (labeled with its method and drill time, never a
-forecast), confirmed hazards and your route. The top strip shows your zone and
-its guidance level. One bottom sheet holds the single instruction for your zone,
+forecast), confirmed hazards and your route. One glass drawer holds the single instruction for your zone,
 such as "Be ready to leave, Via Skyway → Exit south, 26 min", with **I'm out**
-and **Need help** check-ins. Responders see their assigned task there. Guidance
+and **Need help** check-ins. Responders see their assigned checks in **Tasks**. Guidance
 is per zone and is approved by a controller on the web (`/live`), or published
 automatically for a pure reroute around a confirmed block or fire.
 
 The phone polls `GET /api/live/incidents/camp-2018-drill/situation` and finds
 its zone on the device, so a civilian's location leaves the phone only inside a
 report or a **Need help** check-in. Responders can opt in to sharing their latest
-position. **Report what you see** (the floating button) saves reports on the
+position. **Report** (on Map, and **New report** in Reports) saves reports on the
 device first and sends them when the network allows. Credentials are kept in the
 Keychain and the unsent queue in `Application Support/live-outbox.json`. To run
 it locally, start the backend and drill as described in
 [`app/backend/README.md`](../app/backend/README.md); Debug points at
 `http://localhost:8000`.
 
-### Web simulation (menu)
+### Web simulation (Plan tab)
 
 Shows, natively in MapKit, the simulation a planner is playing on the web `/fire` or
 `/dispatch` page with **Share with resident app** on (see
@@ -148,17 +159,17 @@ mobile/
     Configuration/       Validated API and web origins from the app bundle
     Networking/          Health, live-report and JSON backend HTTP clients, Keychain credentials
     Features/
-      Home/              The About sheet with API readiness states
-      Plan/              Meeting plan model and on-device store, plan tab, point editor
+      Home/              Home tab, the guidance Slab and bottom accessory, About with API readiness states
+      Plan/              Plan tab, go-bag, meeting plan model and on-device store, point editor
       Live/              Field-report models, store, outbox, location, map, report and responder views
       Broadcast/         Web simulation feed: broadcast model, poller, map and household guidance
       Family/            Family model, Keychain membership, server store, family view
     Resources/           Info.plist and adaptive color assets
 ```
 
-The workspace follows the web app's cream/green palette with dark-mode variants,
-system text styles, labeled controls, and status icons accompanied by text.
-The Practice tab embeds the web map. My Plan and Live drill use native MapKit maps.
+The app uses system backgrounds and Liquid Glass controls with dark-mode variants, one color
+per guidance level, system text styles, labeled controls, and status icons accompanied by text.
+Map, the meeting point editor and the web simulation feed use native MapKit maps.
 Live drill checks meeting points against the broadcast fire; there is no Swift fire model.
 Push notifications, user accounts beyond family tokens, and per-incident broadcasts are not
 implemented. No fixtures or invented simulation metrics are displayed.
