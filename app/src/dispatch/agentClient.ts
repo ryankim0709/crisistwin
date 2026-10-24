@@ -3,7 +3,13 @@
  * AbortSignal cancels both the request and the read.
  */
 
-import { DECIDE_URL, type DecisionEvent, type Observation } from "./contracts";
+import {
+  DECIDE_URL,
+  runOutcomeUrl,
+  type DecisionEvent,
+  type Observation,
+  type RunOutcome,
+} from "./contracts";
 
 export type FinalDecision = Extract<DecisionEvent, { type: "orders" }>;
 
@@ -35,6 +41,7 @@ export async function requestDecision(
   observation: Observation,
   onEvent: (event: Extract<DecisionEvent, { type: "thinking" | "text" }>) => void,
   signal: AbortSignal,
+  sessionId?: string,
 ): Promise<FinalDecision> {
   const response = await fetch(DECIDE_URL, {
     method: "POST",
@@ -44,7 +51,7 @@ export async function requestDecision(
       "Content-Type": "application/json",
       Accept: "application/x-ndjson, application/json",
     },
-    body: JSON.stringify({ observation }),
+    body: JSON.stringify(sessionId ? { observation, session_id: sessionId } : { observation }),
     signal,
   });
   if (!response.ok) {
@@ -82,4 +89,17 @@ export async function requestDecision(
     if (done) break;
   }
   throw new DecisionError("bad_stream", "The agent stream ended without a decision.");
+}
+
+/**
+ * Journal the run's outcome (best effort: the journal is optional and a failure only means the
+ * next run on these roads has less to learn from).
+ */
+export function reportOutcome(sessionId: string, outcome: RunOutcome): void {
+  void fetch(runOutcomeUrl(sessionId), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(outcome),
+    keepalive: true,
+  }).catch(() => undefined);
 }

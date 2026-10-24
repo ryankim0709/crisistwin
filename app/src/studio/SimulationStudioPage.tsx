@@ -105,6 +105,11 @@ export interface StudioAsideContext {
    * fire, re-solved when its engines put a fire out); null gives the choice back.
    */
   setRunOverride: (run: ScheduledFireRun | null) => void;
+  /**
+   * A click on the 3D board goes here first; return true to consume it (the dispatcher's road
+   * tool). Write it from an effect and set it back to null on cleanup.
+   */
+  groundClickRef: { current: ((point: GeoPoint) => boolean) | null };
 }
 /** Gap kept between the floating panel and the framed 3D board, CSS px. */
 const DIORAMA_PANEL_GAP_PX = 12;
@@ -513,8 +518,10 @@ export default function SimulationStudioPage({
     [area, closures],
   );
 
+  const asideClickRef = useRef<((point: GeoPoint) => boolean) | null>(null);
   const handleGroundClick = useCallback(
     (point: GeoPoint) => {
+      if (asideClickRef.current?.(point)) return;
       if (!roadTool || !area) {
         handleMapClick(point);
         return;
@@ -1167,6 +1174,7 @@ export default function SimulationStudioPage({
           setLocked={setLocked}
           showDiorama={showDiorama}
           setRunOverride={setRunOverride}
+          groundClickRef={asideClickRef}
         />
       )}
     </main>

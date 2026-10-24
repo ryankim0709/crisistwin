@@ -6,6 +6,7 @@
  * docs/adr/0019-live-dispatch-monitor.md.
  */
 
+import { roadLabel } from "./area";
 import {
   FORECAST_LOOKAHEAD_MINUTES,
   MAX_QUIET_MINUTES,
@@ -38,6 +39,8 @@ const WAKE_ALERT_TYPES = new Set<Alert["type"]>([
   "fire_out",
   "fire_held",
 ]);
+/** Reported from the closure diff instead (`closureChanges`), so none is missed or doubled. */
+const ROAD_ALERT_TYPES = new Set<Alert["type"]>(["road_closed", "road_reopened"]);
 const MAX_ALERT_REASONS = 6;
 
 export function threatTier(slack: number | null): ThreatTier {
@@ -60,6 +63,8 @@ export interface MonitorBaseline {
   tiers: ThreatTier[];
   /** Per zone: fire contact forecast within the agent's lookahead. */
   forecast: boolean[];
+  /** The planner's road closures the agent saw (the engine replaces the set on change). */
+  closedEdges: ReadonlySet<number>;
 }
 
 function unaddressed(engine: DispatchEngine, index: number): boolean {
@@ -87,7 +92,28 @@ export function takeBaseline(engine: DispatchEngine, burnedHectares: number): Mo
     burnedHectares,
     tiers: tiersOf(engine),
     forecast: forecastOf(engine),
+    closedEdges: engine.closedEdges,
   };
+}
+
+/** Roads the planner closed or reopened since the baseline, one reason each. */
+function closureChanges(engine: DispatchEngine, baseline: MonitorBaseline): string[] {
+  const now = engine.closedEdges;
+  const before = baseline.closedEdges;
+  if (now === before) return [];
+  const { edges } = engine.area;
+  const reasons: string[] = [];
+  for (const { edge, minute } of engine.roadClosures) {
+    if (!before.has(edge)) {
+      reasons.push(
+        `Planner closed ${roadLabel(edges[edge])} at T+${minute}; routes avoid it from now on.`,
+      );
+    }
+  }
+  for (const edge of before) {
+    if (!now.has(edge)) reasons.push(`Planner reopened ${roadLabel(edges[edge])}.`);
+  }
+  return reasons;
 }
 
 /**
@@ -101,10 +127,13 @@ export function detectChanges(
   alerts: readonly Alert[],
   quietLimitMinutes: number = MAX_QUIET_MINUTES,
 ): string[] {
-  const reasons: string[] = [];
+  const reasons: string[] = closureChanges(engine, baseline);
   const { area } = engine;
 
-  const waking = alerts.filter((alert) => alert.urgent || WAKE_ALERT_TYPES.has(alert.type));
+  const waking = alerts.filter(
+    (alert) =>
+      !ROAD_ALERT_TYPES.has(alert.type) && (alert.urgent || WAKE_ALERT_TYPES.has(alert.type)),
+  );
   for (const alert of waking.slice(-MAX_ALERT_REASONS)) reasons.push(alert.text);
   if (waking.length > MAX_ALERT_REASONS)
     reasons.unshift(`${waking.length - MAX_ALERT_REASONS} earlier alerts not listed.`);
