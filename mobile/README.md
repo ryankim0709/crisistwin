@@ -76,7 +76,7 @@ reachable or returns a non-200 status. Nothing is stored between launches.
 
 The My Plan tab holds a household meeting plan: a primary meeting point, an
 optional backup, and trusted contacts (see
-[ADR 0008](../docs/adr/0008-mobile-meeting-plan.md)). Points are chosen with
+[ADR 0009](../docs/adr/0009-mobile-meeting-plan.md)). Points are chosen with
 Apple Maps search or by tapping the map; contacts come from the system picker,
 which needs no Contacts permission. The plan is saved only on the device as
 versioned JSON and needs no backend. **Open in Maps** gives directions, and

@@ -1,4 +1,4 @@
-# 0008: Household meeting plan on iOS
+# 0009: Household meeting plan on iOS
 
 Date: 2026-10-24. Status: Phase 1 implemented; later phases proposed.
 
