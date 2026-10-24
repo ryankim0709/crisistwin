@@ -33,7 +33,8 @@ holds the fuel table, `rothermel.ts` the spread equations, and `spread.ts` the p
 and contouring; all three keep the rule from 0003 that the model imports no React, DOM,
 MapLibre, or network code, and they take the landscape as an argument. The network lives
 in `landscape.ts` alone, which fetches the fuel and elevation rasters and derives terrain
-from them. `FireMap.tsx` renders the output and `FireSimulatorPage.tsx` owns scenario
+from them. `FireMap.tsx` renders the output (superseded by ADR 0011: the diorama renderer in
+`app/src/fire/diorama/` now draws the output) and `FireSimulatorPage.tsx` owns scenario
 state; neither recomputes geometry.
 
 ## Surface rate of spread
