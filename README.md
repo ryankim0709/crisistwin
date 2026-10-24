@@ -170,7 +170,7 @@ then in another terminal `cloudflared tunnel --url http://localhost:5173`. With 
 refused). Invite phones with that origin. Visitors on the tunnel, including a console opened
 there, see the token form. The hostname changes every run; regenerate the QR code.
 
-**(c) Cloud host later.** Run the backend (Dockerfile `production` target) behind HTTPS with
+**(c) Cloud host later.** Run the backend (`app/backend/Dockerfile`, `runtime` stage) behind HTTPS with
 `DJANGO_DEBUG=false`, `DJANGO_SECRET_KEY`, `DJANGO_ALLOWED_HOSTS=<host>`, `MONGODB_URI`,
 `LIVE_CONTROLLER_TOKEN`, `LIVE_INVITE_CODE`, and serve the built web app and `/api` from one
 origin. Invite phones with that origin. Nothing in the app changes.
