@@ -23,3 +23,6 @@ __pycache__/
 
 # Generated replay bundles (python3 -m sim ... bundle); rebuild locally
 app/public/replays/**/*.json
+
+# Editor swap files
+*.swp
