@@ -43,6 +43,10 @@ ROAD_KINDS = frozenset({"road_blocked", "road_passable", "heavy_traffic"})
 DEFAULT_HALF_LIFE_S = 3600
 """Half-life for a kind missing from HALF_LIFE_S."""
 CONTRADICTS: Mapping[str, str] = {"road_blocked": "road_passable", "road_passable": "road_blocked"}
+PASSIVE_PARTY_WEIGHT = 0.5
+"""ADR 0041: a civilian party whose reports in a group are all ``method: "passive"`` (a phone that
+drove through a segment, opt-in) counts this fraction of an explicit party. ASSUMPTION to calibrate
+in drills. Passive-only evidence never overrides a block or another contradicting state."""
 
 Role = Literal["civilian", "responder", "controller"]
 ReportStatusValue = Literal["unverified", "corroborated", "responder_confirmed", "confirmed", "dismissed", "resolved"]
@@ -68,6 +72,8 @@ class ReportFact:
     destination_id: str | None
     replay_at: datetime | None
     """Drill time at receipt; None when no drill ran."""
+    method: Literal["explicit", "passive"] = "explicit"
+    """``passive``: an automatic traversal observation (ADR 0041); weaker evidence."""
 
 
 @dataclass(frozen=True)
@@ -90,6 +96,8 @@ class PublicItem:
     last_observed_at: datetime
     report_ids: tuple[str, ...]
     destination_id: str | None
+    passive_parties: int = 0
+    """Civilian parties (in ``independent_parties``) whose reports here are all passive."""
 
 
 @dataclass(frozen=True)
@@ -107,6 +115,8 @@ class RoadStatus:
     decided_by: str | None
     """``controller`` when a triage decision set it, else None."""
     public: bool
+    passive_parties: int = 0
+    """Civilian parties (in ``independent_parties``) whose reports here are all passive."""
 
 
 def effective_at(r: ReportFact) -> datetime:
@@ -161,6 +171,25 @@ def independent_counts(reports: Sequence[ReportFact]) -> tuple[int, int]:
     return len(anchors), len(responders)
 
 
+def is_passive(r: ReportFact) -> bool:
+    return r.method == "passive"
+
+
+def party_counts(reports: Sequence[ReportFact]) -> tuple[float, int, int, int]:
+    """``(weighted civilian parties, explicit responder reports, civilian parties, passive-only parties)``.
+
+    Explicit parties count 1 and parties seen only through passive reports count
+    PASSIVE_PARTY_WEIGHT; ``civilian parties`` is the unweighted ``independent_counts`` over all
+    reports and ``passive-only`` the parties it adds over the explicit reports alone. A responder's
+    passive report is not a responder report (it counts for nothing toward publicity).
+    """
+    explicit = [r for r in reports if not is_passive(r)]
+    civ_all, _ = independent_counts(reports)
+    civ_explicit, resp = independent_counts(explicit)
+    passive_only = max(0, civ_all - civ_explicit)
+    return civ_explicit + PASSIVE_PARTY_WEIGHT * passive_only, resp, civ_all, passive_only
+
+
 def confidence(kind: str, last_corroborated_at: datetime, wall_now: datetime, base: float = 1.0) -> float:
     """``base * 0.5 ** (age_s / HALF_LIFE_S[kind])``; 0..1."""
     age_s = max((wall_now - last_corroborated_at).total_seconds(), 0.0)
@@ -168,10 +197,11 @@ def confidence(kind: str, last_corroborated_at: datetime, wall_now: datetime, ba
     return min(max(base * 0.5 ** (age_s / half), 0.0), 1.0)
 
 
-def is_public(kind: str, civilian_parties: int, responder_reports: int, controller_confirmed: bool,
+def is_public(kind: str, civilian_parties: float, responder_reports: int, controller_confirmed: bool,
               confidence_value: float, contradicted: bool) -> bool:
     """v1 rule: not stale, not contradicted, kind can be public, and one of: >= 3 civilian
-    parties; >= 1 responder and >= 1 independent civilian party; controller confirmation."""
+    parties; >= 1 responder and >= 1 independent civilian party; controller confirmation.
+    ``civilian_parties`` is weighted (``party_counts``): passive-only parties count less."""
     if kind in NEVER_PUBLIC_KINDS or contradicted or confidence_value < STALE_CONFIDENCE:
         return False
     return (civilian_parties >= PUBLIC_MIN_CIVILIAN_PARTIES
@@ -217,9 +247,9 @@ def _overrides(newer: Sequence[ReportFact], older: Sequence[ReportFact]) -> bool
     """Whether contradicting reports ``newer`` override ``older`` on one segment.
 
     Yes when ``newer`` is controller confirmed. Otherwise only if ``older`` is not confirmed,
-    ``newer`` is more recent (effective time), no report pair is directly ``same_party``, and
-    ``newer`` is at least as strong: as many independent civilian parties, or a responder
-    report where ``older`` has none.
+    ``newer`` is more recent (effective time), has at least one explicit (not passive) report, no
+    report pair is directly ``same_party``, and ``newer`` is at least as strong: as many weighted
+    independent civilian parties (``party_counts``), or a responder report where ``older`` has none.
     """
     if not newer:
         return False
@@ -227,10 +257,12 @@ def _overrides(newer: Sequence[ReportFact], older: Sequence[ReportFact]) -> bool
         return True
     if _confirmed(older) or _newest(newer) <= _newest(older):
         return False
+    if all(is_passive(n) for n in newer):
+        return False
     if any(same_party(n, o) for n in newer for o in older):
         return False
-    n_civ, n_resp = independent_counts(newer)
-    o_civ, o_resp = independent_counts(older)
+    n_civ, n_resp, _, _ = party_counts(newer)
+    o_civ, o_resp, _, _ = party_counts(older)
     return n_civ >= o_civ or (n_resp > 0 and o_resp == 0)
 
 
@@ -258,11 +290,11 @@ def public_items(
     for group in cluster(reports):
         head = group[0]
         kind = head.kind
-        civ, resp = independent_counts(group)
+        weighted, resp, civ, passive = party_counts(group)
         confirmed = _confirmed(group)
         last = _newest(group)
         conf = confidence(kind, last, wall_now)
-        if not is_public(kind, civ, resp, confirmed, conf, _contradicted(group, live)):
+        if not is_public(kind, weighted, resp, confirmed, conf, _contradicted(group, live)):
             continue
         latest = max(group, key=_order)
         if kind in ROAD_KINDS and head.segment_id:
@@ -288,6 +320,7 @@ def public_items(
             last_observed_at=last,
             report_ids=tuple(r.id for r in group),
             destination_id=head.destination_id if kind == "shelter_full" else None,
+            passive_parties=passive,
         ))
     return out
 
@@ -323,7 +356,7 @@ def road_state(reports: Sequence[ReportFact], wall_now: datetime) -> list[RoadSt
             status, chosen, kind = "slow", slow, "heavy_traffic"
         else:
             status, chosen, kind = "unknown", group, group[0].kind
-        civ, resp = independent_counts(chosen)
+        weighted, resp, civ, passive = party_counts(chosen)
         is_confirmed = _confirmed(chosen)
         last = _newest(chosen)
         conf = confidence(kind, last, wall_now)
@@ -337,7 +370,8 @@ def road_state(reports: Sequence[ReportFact], wall_now: datetime) -> list[RoadSt
             last_observed_at=last,
             report_ids=tuple(r.id for r in sorted(chosen, key=_order)),
             decided_by="controller" if is_confirmed else None,
-            public=is_public(kind, civ, resp, is_confirmed, conf, False),
+            public=is_public(kind, weighted, resp, is_confirmed, conf, False),
+            passive_parties=passive,
         ))
     return out
 

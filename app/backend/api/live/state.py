@@ -50,11 +50,13 @@ def render(value: Any, drop: Iterable[str] = ("_id",)) -> Any:
 def report_json(doc: Mapping[str, Any]) -> dict[str, Any]:
     body = render(doc, drop=("_id", "updated_at", "merged_into"))
     body.setdefault("replay_at", None)
+    body.setdefault("method", "explicit")
+    body.setdefault("speed_class", None)
     return body
 
 
 def task_json(doc: Mapping[str, Any]) -> dict[str, Any]:
-    body = render(doc, drop=("_id", "accepted_at", "answer", "closed_at"))
+    body = render(doc, drop=("_id", "accepted_at", "answer", "closed_at", "place_id"))
     body.setdefault("assignee", None)
     body.setdefault("note", None)
     return body
@@ -194,6 +196,7 @@ def public_item_json(item: public.PublicItem, controller: bool = False) -> dict[
         "confidence": round(item.confidence, 2),
         "first_reported_at": iso(item.first_reported_at),
         "last_observed_at": iso(item.last_observed_at),
+        "passive_parties": item.passive_parties,
     }
     if controller:
         body["report_ids"] = list(item.report_ids)
@@ -213,6 +216,7 @@ def road_status_json(s: public.RoadStatus) -> dict[str, Any]:
         "report_ids": list(s.report_ids),
         "decided_by": s.decided_by,
         "public": s.public,
+        "passive_parties": s.passive_parties,
     }
 
 
@@ -304,6 +308,7 @@ def report_fact(doc: Mapping[str, Any]) -> public.ReportFact:
         segment_name=road_ref.get("name"),
         destination_id=doc.get("destination_id"),
         replay_at=_aware(doc.get("replay_at")),
+        method="passive" if doc.get("method") == "passive" else "explicit",
     )
 
 
@@ -416,6 +421,7 @@ def responder_tasks(incident_id: str, party_key: str) -> list[dict[str, Any]]:
                 {"assignee": party_key, "status": {"$in": ["open", "accepted"]}},
                 {"assignee": None, "status": "open"},
             ],
+            "created_by": {"$ne": "priority"},  # board questions are not dispatched tasks (ADR 0041)
         }
     ).sort("created_at", -1).limit(200)
     return list(cursor)

@@ -1003,6 +1003,149 @@ logged once in `live_decisions` as `inject_created`, `inject_started`, `inject_e
 the label). `command` adds `injects` and `no_signal_zone_ids`. Index `{incident_id, at}`; `live_init_db
 --drop-drill-data` drops the collection.
 
+## Task board, passive observations and information priority (ADR 0041)
+
+See [ADR 0041](adr/0041-crowdsourced-task-board.md). The model ranks which places most need a fresh
+observation; the top ones become open questions on a public board; phones pick, on the device,
+the questions on their own route or near them, and (opt-in) answer road questions passively while
+navigating. Pure maths: `livecore/priority.py`; storage and endpoints: `api/live/board.py`.
+
+### Information priority
+
+For every candidate place, `priority = impact × p_change × staleness`, each in 0..1:
+
+- **impact** = `1 - exp(-v / IMPACT_SCALE_VEH)` (`IMPACT_SCALE_VEH` = 1000), where `v` is
+  vehicle-equivalents at stake (computed from the models, never an LLM):
+  - **segment** (road segments on published routes): the vehicles of every zone (level not `none`)
+    whose published route crosses the segment, a zone counting `LOSE_ROUTE_WEIGHT` (2) times when
+    none of its published alternatives avoids the segment (closing it would lose or force a long
+    detour), else once (it would lengthen). This is the cheap approximation from published route
+    edges, not the two planner runs of `POST impact`: the route's segments come from the planner's
+    remembered edge ids (`live_plan_routes`) for the published (zone, destination, via), and an
+    alternative avoids the segment when fewer than two of the segment's quarter points lie within
+    `ON_ROUTE_M` (30 m) of its line (the impact analysis test).
+  - **destination**: `heading × load`, with `heading` = vehicles arriving per capacity window and
+    `load = min(1, heading / capacity)`. Capacity as in the planner's `load` (`capacity_veh`, or for
+    an exit the hourly capacity of its entering edges). Arrivals come from the traffic twin when it
+    is ready (`arrived_veh` for a destination with `capacity_veh`, else `arrived_last_10_min_veh × 6`
+    per hour; simulated), else from the vehicles of the `evacuate_now` zones the published plan
+    sends there. Destinations with unknown capacity are not candidates.
+  - **gateway** (fire-growth gateways): zones with households that the drill's simulated fire
+    model (`fire_simulated.fronts`, never future observed perimeters) reaches within
+    `GATEWAY_HORIZON_MIN` (30) drill minutes but the current estimate does not yet touch.
+    `v` = the zone's vehicles × `spread_ratio`, where `spread_ratio` = clamp(modelled area growth in
+    the next 30 min / growth in the last 30 min, 1, `GATEWAY_MAX_SPREAD_RATIO` (3)): accelerating
+    spread raises the priority. The place is the zone's boundary vertex nearest the current fire.
+    Gateways are console-only suggestions (responder tasks are never auto-dispatched).
+- **p_change** = `1 - (1 - p_base) × (1 - p_fire)`: `p_base = 1 - 0.5 ** (PRIORITY_HORIZON_S / half_life)`
+  (`PRIORITY_HORIZON_S` = 1800) with `half_life` = `HALF_LIFE_S["road_blocked"]` (7200 s) for a
+  segment, `["shelter_full"]` (3600 s) for a destination, `["fire_seen"]` (900 s) for a gateway; and
+  `p_fire = exp(-d / FIRE_DECAY_M)` with `d` the distance in meters from the place to the fire
+  estimate (`FIRE_DECAY_M` = 2000; 0 when there is no estimate).
+- **staleness** = `1 - 0.5 ** (age_s / half_life)`, `age_s` = wall seconds since the newest
+  independent observation of the place (any non-dismissed report: road kinds on the segment,
+  `shelter_full` for the destination, `fire_seen`/`heavy_smoke` within `GATEWAY_OBSERVATION_M`
+  (1000 m) for a gateway; passive reports count). Never observed: 1.
+
+### Board refresh (auto-created questions)
+
+On a `command` or `board` read, at most once per `BOARD_REFRESH_S` (60 s wall) per incident (an
+atomic claim on the drill document, in a background thread like the auto replan): priorities are
+recomputed and stored (`live_board`, one document per incident); expired board tasks close (`done`
+with answers, else `cancelled` with note `"Expired"`); then the top-ranked **segment and destination**
+places become open `verify` tasks with `created_by: "priority"`, until `BOARD_MAX_OPEN` (8) board
+tasks are open: one open task per place (deduplicated), at most `BOARD_CREATE_PER_REFRESH` (3) new
+per refresh, not within `BOARD_PLACE_COOLDOWN_S` (600 s) of the last board task on that place, only
+with `priority >= BOARD_MIN_PRIORITY` (0.05), and never for a place within
+`BOARD_FIRE_EXCLUSION_M` (1000 m) of the fire estimate. Only while a drill has been started.
+
+Board task (`CheckTask` additions; older tasks have no `created_by`, which means `controller`):
+
+```jsonc
+{ "id": "tsk_01J...", "kind": "verify", "assignee": null, "status": "open",
+  "created_by": "priority",                       // controller | proposal | priority
+  "question": "road_status",                      // road_status | shelter_full
+  "target": { "segment_id": "osm-way:10288574:0", "coord": [-121.6012, 39.7593], "destination_id": null },
+  "place": { "kind": "segment", "name": "Pentz Road" },  // segment | destination
+  "expires_at": "2026-10-24T18:35:00Z",           // created_at + PASSIVE_TTL_S (1800)
+  "priority": { "priority": 0.42, "impact": 0.81, "p_change": 0.55, "staleness": 0.94 },  // at creation
+  "report_ids": [], "note": null, "created_at": "...Z" }
+```
+
+Board tasks never appear in a responder's `me/tasks` or `situation.tasks`. Anyone (civilian,
+responder, controller) answers one with a report carrying its `task_id`: `road_status` takes
+`road_blocked`, `road_passable` or `heavy_traffic` on that segment (the report's `road_ref` must be
+the task's segment, else `400`); `shelter_full` takes `shelter_full` for that destination. Answers
+do not close a board task; it closes at `expires_at`. A civilian may answer a non-board task: `403`.
+
+### `GET incidents/{id}/board` (any role)
+
+Questions only: no reports, no help requests, no responder assignments, no locations of people,
+no priority numbers. Open board tasks that have not expired and are not within
+`BOARD_FIRE_EXCLUSION_M` of the current fire estimate, best first.
+
+```jsonc
+{ "incident_id": "camp-2018-drill", "generated_at": "...Z",
+  "limits": { "radius_m": 1500, "max_questions": 3, "stall_s": 120, "slow_ratio": 0.5 },  // PASSIVE_RADIUS_M, MAX_PASSIVE_QUESTIONS, STALL_S, SLOW_RATIO
+  "items": [
+    { "task_id": "tsk_01J...", "rank": 1, "question": "road_status",
+      "place": { "kind": "segment", "segment_id": "osm-way:10288574:0", "destination_id": null,
+                 "name": "Pentz Road", "coord": [-121.6012, 39.7593],
+                 "line": [[-121.6015, 39.7590], [-121.6009, 39.7596]],   // null for a destination
+                 "free_flow_kph": 56 },                                  // null for a destination
+      "expires_at": "2026-10-24T18:35:00Z" } ] }
+```
+
+The phone selects, on the device, items whose segment lies on its own published route (two of the
+segment's quarter points within 30 m of the route line) or whose `coord` is within `radius_m` of
+the device; drops any item within 1000 m of the fire estimate it already has (and any route
+segment the planner marks near the fire); and shows at most `max_questions`. The device position
+never leaves the phone for this.
+
+### Passive observations (`method: "passive"`)
+
+Reports gain `method`: `explicit` (default; stored on every new report) or `passive`, and
+`speed_class`: `free` | `slow` | `null`. A passive report is a phone's automatic note that it drove
+through a board segment (opt-in "Share road observations" setting, off by default):
+
+```jsonc
+{ "client_id": "uuid", "kind": "road_passable",   // or heavy_traffic (requires speed_class slow)
+  "method": "passive", "segment_id": "osm-way:10288574:0", "task_id": "tsk_01J..." /* optional */,
+  "observed_at": "2026-10-24T18:07:00Z", "speed_class": "free" }
+```
+
+It must not carry `location`, `heading_deg`, `note` or `destination_id` (`400`): the server sets
+`location` to the segment's midpoint (`accuracy_m: null`) and `road_ref` from `segment_id` (`snap_m: 0`),
+so no device position is stored. Kinds other than `road_passable` and `heavy_traffic` are `400`.
+
+Evidence weighting (`livecore.public`): a party whose reports on an item are all passive counts
+`PASSIVE_PARTY_WEIGHT` (0.5) of an explicit party toward `PUBLIC_MIN_CIVILIAN_PARTIES` and the
+responder + civilian rule; a passive-only group never overrides (opens) a block or another
+contradicting state; passive reports never confirm a block (they cannot be `road_blocked`). They do
+corroborate `road_passable` and `slow` states. Public items and road state add `passive_parties`
+(parties whose reports there are all passive; included in `independent_parties`).
+
+### Command additions
+
+`command` adds `stale_critical` (the top `STALE_CRITICAL_LIMIT` (10) priority items, any kind) and
+`board_computed_at`; each task gains `answers`:
+
+```jsonc
+"stale_critical": [
+  { "id": "seg:osm-way:10288574:0", "kind": "segment",   // segment | destination | gateway
+    "name": "Pentz Road", "coord": [-121.6012, 39.7593], "line": [[...]],   // line null unless segment
+    "segment_id": "osm-way:10288574:0", "destination_id": null, "zone_id": null,
+    "priority": 0.42, "impact": 0.81, "p_change": 0.55, "staleness": 0.94,
+    "vehicles": 1240, "zones": 3, "zones_losing_route": 1,   // segment; else null
+    "load": null,                                             // destination: 0..1
+    "households": null, "spread_ratio": null,                 // gateway
+    "fire_distance_m": 2400, "half_life_s": 7200, "last_observed_at": null,
+    "reason": "1240 vehicles on 3 routes", "task_id": "tsk_01J..." } ],
+"tasks": [ { "...": "CheckTask",
+  "answers": { "road_passable": 3, "road_blocked": 1, "heavy_traffic": 0, "shelter_full": 0,
+               "passive": 2, "total": 4, "last_at": "2026-10-24T18:07:00Z" } } ]
+```
+
 ## Endpoint summary (v2 additions)
 
 | Method and path | Role |
@@ -1024,6 +1167,7 @@ the label). `command` adds `injects` and `no_signal_zone_ids`. Index `{incident_
 | `POST incidents/{id}/twin/whatif` | controller |
 | `POST incidents/{id}/impact` | controller ([Impact analysis](#impact-analysis)) |
 | `GET incidents/{id}/aar` | controller ([After-action report](#after-action-report)) |
+| `GET incidents/{id}/board` | any ([Task board](#task-board-passive-observations-and-information-priority-adr-0041)) |
 
 ## Location (v2)
 

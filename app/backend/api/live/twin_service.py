@@ -543,6 +543,17 @@ def edge_speeds_at(snapshot: Snapshot, lock_timeout_s: float = 2.0) -> tuple[str
     return _with_twin(snapshot, lambda sess, twin, twinmod: (twin.now, edge_speed_rows(twin)), lock_timeout_s)
 
 
+def destination_arrivals(snapshot: Snapshot, lock_timeout_s: float = 2.0) -> dict[str, tuple[int, int]]:
+    """Destination id -> (arrived vehicles, arrived in the last 10 simulated minutes) from the synced
+    twin's summary snapshot. Simulated. Same errors as ``edge_speeds``."""
+
+    def run(sess, twin, twinmod):
+        return {d["id"]: (int(d["arrived_veh"]), int(d["arrived_last_10_min_veh"]))
+                for d in twin.snapshot(detail="summary")["destinations"]}
+
+    return _with_twin(snapshot, run, lock_timeout_s)
+
+
 def edge_speed_rows(twin) -> dict[str, tuple[int, float, float]]:
     """Directed edge id -> (vehicles, mean speed kph, free-flow kph) for the occupied edges of
     ``twin`` (a ``sim.twin.Twin``) at its ``now``. Simulated."""
