@@ -64,7 +64,7 @@ accept becomes the assignee). `accepted` is new in v2.
 submitting a report with its `task_id`; `POST tasks/{id}` with
 `{ "status": "cancelled", "note": "Could not reach it" }` closes it unanswered.
 
-`live_decisions`: an append-only audit log of triage, task, approval, drill and help actions: `{ at, actor, action, report_ids, proposal_id, checkin_id, note }`.
+`live_decisions`: an append-only audit log of triage, task, approval, drill and help actions: `{ at, actor, action, report_ids, proposal_id, checkin_id, note }` `actor` is `controller`, `auto_policy`, a responder `party_key`, or `agent:<name>` (see [Actor attribution](#actor-attribution)).
 
 Road status and public items are computed when read from current reports in P0;
 store them in their own collection only if reads get slow.
@@ -771,6 +771,63 @@ is not on a road, or both are given and disagree. Two parts, computed separately
 then by ETA delta and vehicles. The /live workspace runs it from a selected road item and
 draws the current routes solid, the other state's routes dashed, and the affected zones.
 
+## Event stream
+
+`GET incidents/{id}/events?since=<cursor>&limit=<n>` (controller; `api/live/events.py`) lists what
+changed since a cursor, in time order, so an agent driving the controller API (ADR 0030 "Controller
+surface for the orchestrator") need not diff `command` polls. Read only; no new collection.
+
+- `since`: omitted = from the beginning of the incident's data; `now` = no events, just a cursor at
+  the server clock (minus the settle window); otherwise a `next_cursor` from an earlier response
+  (`<ms>:<type>:<id>`, opaque). Anything else is `400 invalid_request`.
+- `limit`: 1..500, default 200. `more: true` means the page was full: call again at once.
+
+```jsonc
+{ "incident_id": "camp-2018-drill", "generated_at": "...Z",
+  "events": [
+    { "key": "1792860312307:report:rpt_01J...",   // stable: dedupe on it
+      "at": "2026-10-24T16:45:12Z",               // wall UTC of this change (sort key)
+      "replay_at": "2018-11-08T16:20:01Z",        // drill UTC (see below); null outside a drill
+      "type": "report", "id": "rpt_01J...",
+      /* summary fields by type, below */ } ],
+  "next_cursor": "1792860312307:report:rpt_01J...", "more": false }
+```
+
+| `type` | `at` | `id` | Summary fields |
+| --- | --- | --- | --- |
+| `report` | `updated_at` | report id | `change` (`new` when `updated_at` = `received_at`, else `updated`), `kind`, `status`, `severity`, `evidence_class`, `reporter_role`, `segment_id`, `road_name`, `destination_id`, `coord`, `task_id`, `note` (first 160 chars) |
+| `decision` | `at` | `dec_<object id>` | `actor`, `action`, `report_ids`, `proposal_id`, `checkin_id`, `note` |
+| `proposal` | `created_at` (`change: created`) or `decided_at` (`change: decided`) | proposal id | `status`, `policy`, `parent_id`; created: `causes`, `controller`, `controller_fallback`, `n_changes`, `changes` (first 12: `zone_id`, `kind`, `from_level`, `to_level`, `to_destination_id`, `to_via`, `to_eta_min`, `no_route`), `n_tasks`; decided: `decided_by`, `note`. An auto-approved part is one `created` event |
+| `guidance` | `published_at` | `<zone_id>@v<version>` | `zone_id`, `version`, `level`, `destination_id`, `via`, `eta_min`, `no_route`, `reason_code`, `approved_by`, `proposal_id` |
+| `checkin` | `at` | check-in id | `status`, `zone_id`, `role`, `coord` (need_help only), `help_status` |
+| `help` | `help.updated_at` (when it differs from the check-in's `at`) | check-in id | `status`, `assignee`, `task_id`, `zone_id` |
+| `task` | `created_at`, `accepted_at`, `closed_at` (`change`: `created`, `accepted`, `closed`) | task id | `kind`, `status`, `assignee`, `segment_id`, `coord`, `report_ids`, `checkin_id`, `note` |
+
+Rules:
+
+- Reports, check-ins and tasks are updated in place, so an event carries the document's state
+  **now** and the `change` that happened at `at`; two changes to one report between polls show as
+  one event at the later time.
+- `replay_at` is the document's stored drill time where it has one (reports, guidance, check-ins,
+  proposal `replay_at` / `decided_replay_at`); for decisions, help changes and task transitions it is
+  estimated from the current drill clock (wrong if the speed changed or the drill was reset since).
+- Delivery is at least once. A write can carry a timestamp taken seconds before it lands (a
+  twin-scored replan takes ~5-7 s), so `next_cursor` never moves past `now - EVENT_SETTLE_MS`
+  (10 s) unless the page is full; events in that window come again on the next poll with the same
+  `key`. Order is (`at`, `type:id`).
+- A drill `reset` deletes guidance, proposals and check-ins, so their events disappear; reports,
+  tasks and decisions stay.
+
+## Actor attribution
+
+A controller request may carry `X-CrisisTwin-Actor: agent:<name>` (`<name>` matches
+`[A-Za-z0-9][A-Za-z0-9._-]{0,63}`). The server then records `agent:<name>` instead of
+`controller` as the `actor` of every `live_decisions` entry the request writes (triage, tasks,
+help, replan, approve, reject, drill). The header is ignored on non-controller requests and when
+malformed. Background work (automatic replans, `auto_policy`) is unaffected, and proposals keep
+`decided_by: "controller"`. The controller MCP server (`orchestrator_mcp/`, ADR 0033) sends it on
+every write.
+
 ## Controller auth (v2)
 
 Dev and drill only. With `LIVE_CONTROLLER_TOKEN` unset (the default), a request without an
@@ -798,6 +855,7 @@ controller accounts (not in scope).
 | `POST incidents/{id}/replan` | controller |
 | `POST proposals/{id}/approve`, `POST proposals/{id}/reject` | controller |
 | `POST incidents/{id}/drill` | controller |
+| `GET incidents/{id}/events?since=` | controller ([Event stream](#event-stream)) |
 | `GET incidents/{id}/twin` | controller ([twin-api.md](twin-api.md#http-adapter-live-drill-appbackendapilivetwin_servicepy)) |
 | `POST incidents/{id}/twin/whatif` | controller |
 | `POST incidents/{id}/impact` | controller ([Impact analysis](#impact-analysis)) |

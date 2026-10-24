@@ -25,7 +25,16 @@ from pymongo.errors import PyMongoError
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.permissions import AllowAny
 
-from .common import ApiError, col, error, live_setting, wall_now
+from .common import (
+    ApiError,
+    actor_from_request,
+    col,
+    error,
+    live_setting,
+    reset_request_actor,
+    set_request_actor,
+    wall_now,
+)
 
 log = logging.getLogger(__name__)
 
@@ -145,7 +154,14 @@ def live_view(methods: list[str], roles: Collection[str] | None = None, auth: bo
                         and principal.incident_id not in (None, incident_id)
                     ):
                         return error(403, "forbidden", "This token belongs to another incident.")
-                return func(request, *args, principal=principal, **kwargs)
+                # A controller request may name the agent acting through it (recorded in live_decisions).
+                actor = set_request_actor(
+                    actor_from_request(request) if principal is not None and principal.role == "controller" else None
+                )
+                try:
+                    return func(request, *args, principal=principal, **kwargs)
+                finally:
+                    reset_request_actor(actor)
             except ApiError as exc:
                 return error(exc.status, exc.code, exc.detail)
             except PyMongoError:
