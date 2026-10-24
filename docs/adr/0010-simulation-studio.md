@@ -45,7 +45,54 @@ Example scenario:
 
 ## Solver semantics
 
-_Owned by the model change; filled in with it._
+One solver core (`solveSpread` in `spread.ts`) serves both entry points. It runs the
+precompute and the minimum-travel-time relaxation of [0004](0004-physics-fire-model.md)
+and [0007](0007-wui-spread-mechanisms.md) unchanged; only the seeding and the bookkeeping
+are new. `/fire` output is unchanged, so `SPREAD_MODEL.version` stays 4.0.0.
+
+- **Why earliest arrival is exact.** Everything the relaxation reads about a burning cell
+  is fixed in the precompute from that cell's fuel, slope, canopy and the scenario: head
+  rate (crown fire included), heading, eccentricity (crown ellipse included), the backing
+  floor, ember reach, and the spotting launch and landing rules. None depends on when or
+  how fire arrived. `crownType` is read only for the horizon breakdown and
+  `arrivalMechanism` is only written. So the travel time along every step and every ember
+  jump is a fixed positive cost, and the arrival field is a shortest-path problem with no
+  propagation state. Keeping only the earliest arrival per cell discards nothing.
+- **Seeding.** Each source's cell is seeded at its `startMinute`, in input order, before
+  relaxation. Fire cannot leave a source earlier than that. The combined field is then
+  exactly the cell-by-cell minimum of what each source would produce alone, offset by its
+  start time (up to the horizon cut-off).
+- **Reached before start.** If another fire reaches a source cell strictly before its
+  start, that arrival stands and the source's seed is discarded when it comes off the
+  heap: no reset, no reburn. The outcome is `reached-before-start`, with that arrival
+  time and the source whose fire set it. An arrival exactly at the start minute leaves
+  the cell with the scheduled source (`ignited`), because relaxation only replaces an
+  arrival that is strictly earlier.
+- **Overlap and attribution.** There is one arrival field, so each cell is counted once.
+  The index of the source that set a cell's arrival is copied along every step and every
+  ember jump. A cell's attribution is final once it settles. Per-source cell counts
+  therefore sum exactly to the footprint, and the areas sum to it up to floating-point
+  rounding.
+- **Where fires meet.** Fronts stop where they meet: each cell keeps the earlier arrival,
+  and no cell burns sooner than one of the fires would have burned it alone. No
+  fire-atmosphere coupling, indraft, merging acceleration or junction-zone effect is
+  modelled.
+- **Ties and determinism.** Equal arrivals keep whichever was set first, so the order
+  depends on the input source order and the heap's insertion order. There is no
+  randomness, so identical input on the identical landscape gives an identical run.
+- **Frames and totals.** Frames are exactly `frameMinutes`. Each one counts and contours
+  cells with arrival <= its minute. They are built in a single arrival-ordered pass over
+  the settled cells, and only the bounding box of reached cells is contoured, which gives
+  the same rings as a full-grid scan. `reachedEdgeMinute` is the arrival time of the
+  first settled edge cell. Run-level breakdowns are horizon totals over the combined
+  footprint. Unlike `/fire`, the T+0 frame is contoured too, so a source starting at
+  minute 0 shows its single cell.
+- **What would break this.** Anything that makes a cell's spread depend on its arrival
+  time or arrival path. Examples are time-varying wind or moisture, crown fire that needs
+  a run-up distance, spotting from a burning cell over a period of time, or
+  fire-atmosphere coupling. Each needs a time-dependent solver, for example one that
+  re-evaluates spread at the moment a cell settles. Earliest arrival on a static field
+  would then no longer be exact.
 
 ## Shared landscape
 
