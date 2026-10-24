@@ -1,0 +1,21 @@
+CrisisTwin logo
+
+Asset: crisistwin-logo.png
+Use: transparent PNG for light backgrounds, slides, and demo materials.
+Web asset URL: /brand/crisistwin-logo.png
+Suggested alt text: CrisisTwin
+Preserve the aspect ratio. This is a raster asset, not an SVG.
+Created with the built-in image generation tool.
+
+Generation prompt
+
+Use case: logo-brand
+Asset type: production logo for CrisisTwin, an experimental disaster-response and evacuation-planning digital twin, used in a web app and hackathon presentation.
+Primary request: Design one distinctive, beautifully resolved horizontal logo lockup: compact symbol at left and the exact word "CrisisTwin" at right.
+Subject: A confident, minimal geometric emblem made of two related nested open contour shapes, suggesting paired digital twins, terrain contours and a clear path through complexity. Strong simple silhouette, generous negative space, broad even strokes, memorable at small sizes. The mark should feel calm and capable.
+Style/medium: Crisp flat vector-style graphic, exceptionally clean edges and carefully balanced optical spacing. Modern slightly humanist sans-serif wordmark, medium-semibold weight, refined tight kerning, highly legible. Both parts of the name are one word with uppercase C and T.
+Color palette: Existing project brand deep forest green #142b27 with optional restrained secondary green #236d5e in the emblem. Wordmark all deep forest green.
+Composition/framing: One horizontal symbol-and-wordmark lockup centered on a wide canvas, about 3:1 aspect ratio, with modest clear padding. Symbol approximately 1.5 times the cap height of text.
+Text (verbatim): "CrisisTwin"
+Scene/backdrop: genuinely transparent background with alpha.
+Constraints: One finished logo only. No slogan, no additional labels, no presentation board, no mockup, no shadows, no gradients, no textures, no 3D, no hairline details, no medical cross, no official emergency-service badge.

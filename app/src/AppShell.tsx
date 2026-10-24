@@ -19,11 +19,8 @@ export default function AppShell({ path, children }: AppShellProps) {
       </a>
       <aside className="sidebar" aria-label="Workspace sidebar">
         <div className="sidebar-brand">
-          <a className="wordmark" href="/" aria-label="CrisisTwin home">
-            <span className="mark" aria-hidden="true">
-              CT
-            </span>
-            CrisisTwin
+          <a className="sidebar-logo" href="/" aria-label="CrisisTwin home">
+            <img src="/brand/crisistwin-logo.png" alt="" width={2172} height={724} />
           </a>
           <button
             className="menu-toggle"

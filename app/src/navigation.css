@@ -39,8 +39,19 @@
   gap: 16px;
 }
 
-.sidebar .wordmark {
-  font-size: 21px;
+.sidebar-logo {
+  display: block;
+  flex: 0 1 204px;
+  min-width: 0;
+  height: 44px;
+}
+
+.sidebar-logo img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* Crop transparent vertical padding while preserving the logo's proportions. */
+  object-fit: cover;
 }
 
 .sidebar-nav {
