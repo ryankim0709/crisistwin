@@ -626,3 +626,132 @@
     padding: 24px;
   }
 }
+
+/* Replay-backed pages: incident cards, what-if and stress tables */
+.incident-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 18px;
+  margin-bottom: 24px;
+}
+.incident-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  padding: 22px;
+  border: 1px solid #d4d8ca;
+  border-radius: 10px;
+  background: #fcfcf8;
+}
+.incident-card h3 {
+  margin: 0;
+  font-size: 20px;
+  letter-spacing: -0.5px;
+}
+.incident-card p {
+  margin: 4px 0 0;
+  color: #52635c;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.incident-card dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 14px;
+  margin: 0;
+  font-size: 12px;
+}
+.incident-card dt {
+  color: #52635c;
+}
+.incident-card dd {
+  margin: 0;
+}
+.chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: auto;
+}
+.delta-cell {
+  display: block;
+  white-space: nowrap;
+}
+.delta-cell small {
+  display: block;
+  color: #52635c;
+  font-size: 11px;
+}
+.delta-cell strong {
+  font-weight: 600;
+}
+.ui-table td.num,
+.ui-table th.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.comparison-table td.num {
+  color: inherit;
+}
+.variant-notes {
+  margin: 10px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.variant-notes summary {
+  cursor: pointer;
+  color: #245c4f;
+  font-weight: 600;
+}
+.variant-notes ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: #52635c;
+}
+.ai-findings {
+  white-space: pre-wrap;
+  margin: 0;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.7;
+}
+.entry-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  margin-top: 16px;
+}
+.headline-claim {
+  margin: 0 0 8px;
+  font-size: 22px;
+  line-height: 1.35;
+  letter-spacing: -0.5px;
+}
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.comparison-table tbody th {
+  min-width: 240px;
+  max-width: 340px;
+}
+.ui-table td a.ui-text-link {
+  white-space: nowrap;
+}
+.comparison-table thead th {
+  white-space: normal;
+  vertical-align: bottom;
+}
+.ui-help + .ui-list {
+  margin-top: 14px;
+}

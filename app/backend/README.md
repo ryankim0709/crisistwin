@@ -114,6 +114,29 @@ Set `ANTHROPIC_API_KEY` in the backend's environment to enable it (see
 endpoint does not query MongoDB. Run the backend with a gunicorn timeout longer than a
 model call, e.g. `gunicorn config.wsgi -b 127.0.0.1:8000 --timeout 120`.
 
+### `GET /api/landscapes` and `GET /api/landscapes/<region_id>`
+
+Public (`AllowAny`), read-only GET/HEAD endpoints in `api/landscapes.py` over the GridFS
+bucket `landscape_packages` written by the offline builder (ADR 0013). The server never
+writes and never creates indexes. Recommended index (the builder/uploader may create it):
+
+```js
+db.getCollection("landscape_packages.files").createIndex({ "metadata.regionId": 1, "metadata.builtAt": -1 })
+```
+
+List: `{"regions": [{id, name?, counties?, summary?, center?, radiusMeters?, cellMeters, width,
+height, builtAt, bytes, sha256}]}`, newest package per `metadata.regionId`, at most 100,
+`Cache-Control: public, max-age=60`. Catalogue fields (`name`, `counties`, `summary`,
+`center`, `radiusMeters`) and lattice fields (`width`, `height`, `cellMeters`, from
+`metadata.lattice`) are passed through when the builder stored them and omitted otherwise,
+so the client should join missing ones with `src/fire/regions.ts`.
+
+Package: `region_id` must match `^[a-z0-9-]{1,64}$`. Streams the newest package in GridFS
+chunks with `Content-Type: application/gzip` (no `Content-Encoding`), `Content-Length`,
+`ETag: "<sha256>"` and `Cache-Control: public, max-age=3600`; a matching `If-None-Match`
+returns 304. Errors are JSON: 404 `{"error": "not_found"}` for unknown/unbuilt regions,
+503 `{"error": "unavailable"}` on MongoDB/GridFS errors (no driver text).
+
 ## Updating dependencies
 
 Edit the `.in` files, then resolve with [uv](https://docs.astral.sh/uv/pip/compile/):

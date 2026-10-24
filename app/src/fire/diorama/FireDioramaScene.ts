@@ -19,8 +19,10 @@ import {
   type FireUniforms,
 } from "./board";
 import { CoverLayer } from "./cover";
-import { FireSampler, FxLayer } from "./fx";
+import { FireSampler, FxLayer, burnWindowMinutes } from "./fx";
+import { FuelFamily } from "./fuelStyle";
 import { LabelLayer } from "./labels";
+import { REFERENCE_PLACES } from "./places";
 import { FireCameraRig, type Framing } from "./rig";
 import type { FireDioramaOptions, FireDioramaSceneApi, FireRun, GeoPoint, GroundClickMode, LandscapeGrid, ViewInsets } from "./types";
 
@@ -35,7 +37,13 @@ const MIN_BURN_WINDOW_MINUTES = 20;
 /** Smallest burn focus box side (world units) so a young fire is not over-zoomed. */
 const MIN_FOCUS_SIZE = 70;
 /** Candidate ground lengths for the scale bar (metres). */
-const SCALE_STEPS = [100, 200, 250, 500, 1000, 2000, 2500, 5000, 10000];
+const SCALE_STEPS = [100, 200, 250, 500, 1000, 2000, 2500, 5000, 10000, 20000, 25000, 50000];
+/** Reference place labels need a board at least this wide (ground metres). */
+const PLACE_LABEL_MIN_WIDTH_M = 4000;
+/** Shadow map side (px): large on local boards, smaller where shadows cannot be resolved. */
+const SHADOW_MAP = { local: 2048, regional: 1024 } as const;
+/** A burn spanning more than this fraction of the board is framed as the whole board. */
+const FOCUS_WHOLE_BOARD_FRACTION = 0.85;
 
 function backgroundTexture(): THREE.CanvasTexture {
   const canvas = document.createElement("canvas");
@@ -306,10 +314,16 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     group.add(terrain, buildPlinth(frame));
     const water = buildWater(frame);
     if (water.mesh) group.add(water.mesh);
+    const textures: THREE.Texture[] = [ground, overlay];
+    if (water.mask) textures.push(water.mask);
+    this.setShadowQuality(frame.blockMix);
     const cover = new CoverLayer(frame);
     group.add(cover.group);
     const labels: CSS2DObject[] = [];
-    if (grid) this.buildMapFurniture(frame, group, labels);
+    if (grid) {
+      this.buildMapFurniture(frame, group, labels);
+      this.buildPlaceLabels(frame, group, labels);
+    }
 
     const points: THREE.Vector3[] = [];
     for (const x of [-frame.halfW, 0, frame.halfW]) {
@@ -319,7 +333,7 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     }
     for (const z of [-frame.halfD, frame.halfD]) points.push(new THREE.Vector3(0, BASE_Y - 3, z + Math.sign(z) * BOARD_MARGIN));
     const framing: Framing = { points, target: new THREE.Vector3(0, frame.maxHeight * 0.3, 0) };
-    return { frame, group, terrain, water: water.mesh, waterUniforms: water.uniforms, fire, textures: [ground, overlay], cover, framing, labels };
+    return { frame, group, terrain, water: water.mesh, waterUniforms: water.uniforms, fire, textures, cover, framing, labels };
   }
 
   /** North arrow and scale bar on the base board rim, each with a small label. */
@@ -362,6 +376,34 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     labels.push(s.obj);
   }
 
+  /** Smaller shadow map on regional boards (their casters are sub-pixel and switched off). */
+  private setShadowQuality(blockMix: number) {
+    const size = blockMix > 0.6 ? SHADOW_MAP.regional : SHADOW_MAP.local;
+    if (this.sun.shadow.mapSize.x === size) return;
+    this.sun.shadow.mapSize.set(size, size);
+    this.sun.shadow.map?.dispose();
+    this.sun.shadow.map = null;
+  }
+
+  /**
+   * Small reference labels (cities, peaks) for places inside the board. They come from a
+   * hand-entered table (`places.ts`), not from the model or the loaded rasters.
+   */
+  private buildPlaceLabels(frame: BoardFrame, group: THREE.Group, labels: CSS2DObject[]) {
+    const grid = frame.grid;
+    if (!grid || grid.width * grid.groundCellSizeMeters < PLACE_LABEL_MIN_WIDTH_M) return;
+    const ranked = [...REFERENCE_PLACES].sort((a, b) => a.rank - b.rank);
+    for (const place of ranked) {
+      const [mx, my] = lonLatToMercator(place.longitude, place.latitude);
+      const p = frame.fromMercator(mx, my);
+      if (!p) continue;
+      const margin = frame.cellWorld * 2;
+      if (Math.abs(p.x) > frame.halfW - margin || Math.abs(p.z) > frame.halfD - margin) continue;
+      if (frame.families[frame.cellAt(p.x, p.z)] === FuelFamily.Water) continue; // never on open water
+      labels.push(this.labels.addPlace(group, place.name, place.kind, new THREE.Vector3(p.x, frame.surfaceAt(p.x, p.z) + 1.5, p.z)));
+    }
+  }
+
   private disposeBoard(board: Board) {
     for (const l of board.labels) this.labels.remove(l);
     board.group.removeFromParent();
@@ -380,7 +422,7 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     board.fire.uArrival.value.dispose();
     if (run) {
       const horizon = run.scenario.horizonMinutes;
-      const window = Math.max(MIN_BURN_WINDOW_MINUTES, 2 * run.scenario.stepMinutes);
+      const window = burnWindowMinutes(frame.cols, frame.rows, run.arrivalMinutes, horizon, run.scenario.stepMinutes, MIN_BURN_WINDOW_MINUTES);
       const { tex, factor } = buildArrivalTexture(frame, run.arrivalMinutes, horizon);
       board.fire.uArrival.value = tex;
       board.fire.uWindow.value = window;
@@ -440,22 +482,26 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     const box = this.appliedRun ? this.sampler.burnBox : null;
     if (!board || !box) return null;
     const f = board.frame;
+    if ((box.maxX - box.minX) / (2 * f.halfW) > FOCUS_WHOLE_BOARD_FRACTION && (box.maxZ - box.minZ) / (2 * f.halfD) > FOCUS_WHOLE_BOARD_FRACTION) return null;
     const cx = (box.minX + box.maxX) / 2;
     const cz = (box.minZ + box.maxZ) / 2;
-    const hx = Math.max(MIN_FOCUS_SIZE, box.maxX - box.minX) / 2 + 10;
-    const hz = Math.max(MIN_FOCUS_SIZE, box.maxZ - box.minZ) / 2 + 10;
+    const pad = Math.max(10, 0.06 * Math.max(box.maxX - box.minX, box.maxZ - box.minZ));
+    const hx = Math.max(MIN_FOCUS_SIZE, box.maxX - box.minX) / 2 + pad;
+    const hz = Math.max(MIN_FOCUS_SIZE, box.maxZ - box.minZ) / 2 + pad;
     const points: THREE.Vector3[] = [];
     let ySum = 0;
-    for (const x of [cx - hx, cx, cx + hx]) {
-      for (const z of [cz - hz, cz, cz + hz]) {
-        const cxl = THREE.MathUtils.clamp(x, -f.halfW, f.halfW);
-        const czl = THREE.MathUtils.clamp(z, -f.halfD, f.halfD);
+    // 5×5 samples so a big burn's relief (ridges inside the box) stays in frame.
+    const N = 5;
+    for (let a = 0; a < N; a++) {
+      for (let b = 0; b < N; b++) {
+        const cxl = THREE.MathUtils.clamp(cx - hx + (a / (N - 1)) * 2 * hx, -f.halfW, f.halfW);
+        const czl = THREE.MathUtils.clamp(cz - hz + (b / (N - 1)) * 2 * hz, -f.halfD, f.halfD);
         const y = f.surfaceAt(cxl, czl);
         ySum += y;
         points.push(new THREE.Vector3(cxl, y, czl), new THREE.Vector3(cxl, y + 8, czl));
       }
     }
-    return { points, target: new THREE.Vector3(cx, ySum / 9, cz) };
+    return { points, target: new THREE.Vector3(cx, ySum / (N * N), cz) };
   }
 
   // ----------------------------------------------------------------------------- loop

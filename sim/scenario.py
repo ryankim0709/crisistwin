@@ -1,9 +1,11 @@
-"""Hybrid scenario: observed 2018 roads and exits with fixture demand and orders.
+"""Camp Fire scenarios on the observed 2018 roads and exits.
 
-Evacuation zones, population, and order events are still being acquired. Until they
-are, demand zones are a regular grid over the populated area, vehicles are allocated
-by mapped residential road length, and orders are staggered by distance from the
-assumed ignition. All of these are `fixture` and must be replaced, not tuned.
+`camp_grounded_inputs` (packages with the population, zone, and shelter layers): Census block-group
+demand and orders mapped to block groups through a derived crosswalk (see sim.demand).
+
+`hybrid_scenario` / `camp_bundle_inputs` (road packages without those layers): demand zones are a
+regular grid over the populated area, vehicles are allocated by mapped residential road length, and
+orders are staggered by distance from the assumed ignition. All of these are `fixture`.
 """
 
 from __future__ import annotations
@@ -13,11 +15,16 @@ from datetime import datetime, timedelta
 
 from pathlib import Path
 
+from sim import traffic as traffic_engine
+from sim.demand import ASSUMPTIONS as DEMAND_ASSUMPTIONS
+from sim.demand import grounded_demand, tra_destinations
 from sim.events import ASSUMPTIONS as ROAD_EVENT_ASSUMPTIONS
 from sim.events import resolve_road_events
 from sim.firefront import CAMP_IGNITION_AT, CAMP_IGNITION_LONLAT
 from sim.network import load_alert_events, load_road_network
 from sim.traffic import DemandZone, Destination, RoadNetwork, TrafficEvent
+
+GROUNDED_LAYERS = ("population_units.geojson", "evacuation_zones.geojson", "shelters.geojson")
 
 # Populated ridge: Paradise, Magalia, and Concow (approximate, lon/lat).
 FIXTURE_DEMAND_BBOX = (-121.66, 39.72, -121.50, 39.85)
@@ -131,3 +138,84 @@ def camp_bundle_inputs(roads_package: Path) -> tuple[dict, datetime, datetime]:
     if road_events:
         scenario["notes"] = [*scenario["notes"], *ROAD_EVENT_ASSUMPTIONS]
     return scenario, CAMP_REPLAY_START, CAMP_REPLAY_END
+
+
+def has_grounded_layers(package: Path) -> bool:
+    return all((package / "normalized" / name).exists() for name in GROUNDED_LAYERS)
+
+
+def camp_grounded_inputs(package: Path) -> tuple[dict, datetime, datetime]:
+    """Camp replay scenario with no fixture inputs: ACS block-group demand, NIST/CodeRED orders and
+    warnings mapped to block groups by a derived crosswalk, historical alerts and road events, and
+    NIST TRAs. Requires a layered package (`has_grounded_layers`); use camp_bundle_inputs otherwise.
+
+    TRAs become `temporary_refuge` destinations only when the engine opens and closes destinations
+    (sim.traffic.DESTINATION_OPEN_EVENT_TYPES); until then they are reported, not routed to.
+    """
+    network, exits, provenance = load_road_network(package)  # verifies every artifact hash
+    if not has_grounded_layers(package):
+        raise ValueError(f"{package} lacks {', '.join(GROUNDED_LAYERS)}; use camp_bundle_inputs")
+    demand = grounded_demand(package, network)
+    road_events, road_report = resolve_road_events(package, network, exits)
+    tras, tra_events, tra_report = tra_destinations(package, network)
+    tra_routing = "shelter_opened" in getattr(traffic_engine, "DESTINATION_OPEN_EVENT_TYPES", ())
+    report = demand["report"]
+    totals = report["totals"]
+    xs = [b for z in demand["zones"] for b in _bbox_of(z.geometry)[0::2]]
+    ys = [b for z in demand["zones"] for b in _bbox_of(z.geometry)[1::2]]
+    clip = report["parameters"]["extract_bbox"]
+    scenario = {
+        "network": network,
+        "zones": demand["zones"],
+        "destinations": (*exits, *tras) if tra_routing else exits,
+        "events": (*load_alert_events(package), *road_events, *demand["events"], *(tra_events if tra_routing else ())),
+        "evidence_class": "derived",  # ACS counts are observed; vehicles and zone-to-BG links are derived
+        "roads_evidence_class": "observed",
+        "destinations_evidence_class": "mixed" if tra_routing else "derived",
+        "bbox": [round(max(min(xs), clip[0]), 3), round(max(min(ys), clip[1]), 3),
+                 round(min(max(xs), clip[2]), 3), round(min(max(ys), clip[3]), 3)],
+        "notes": [
+            *provenance["assumptions"],
+            *DEMAND_ASSUMPTIONS,
+            f"Demand: {totals['block_groups']} block groups, {totals['population']} residents and "
+            f"{totals['households']} households (ACS 2014-2018, observed, clipped to the road extract); "
+            f"{totals['evacuating_vehicles']} evacuating vehicles (derived, MOE about {totals['evacuating_vehicles_moe']}); "
+            f"{totals['households_no_vehicle']} households have no vehicle and need assistance (not modelled).",
+            f"Zones without a crosswalk key: {', '.join(report['unmapped_zones']) or 'none'}. "
+            f"Block groups never ordered in the source events: {len(report['never_ordered'])}.",
+            "Evacuation order and warning events labelled 'derived crosswalk' target block groups; the original "
+            "zone-level NIST events stay on the timeline without zone targets.",
+            *ROAD_EVENT_ASSUMPTIONS,
+            ("NIST TRAs are temporary_refuge destinations, open only during their NIST active periods; capacity "
+             "is unknown (unlimited in the model)." if tra_routing else
+             "NIST TRAs are not destinations: the traffic engine cannot yet open and close destinations, so their "
+             "formation and end appear on the timeline only."),
+        ],
+        "demand_report": report,
+        "tra_report": tra_report,
+        "road_event_report": road_report,
+    }
+    return scenario, CAMP_REPLAY_START, CAMP_REPLAY_END
+
+
+def _bbox_of(geometry: dict) -> tuple[float, float, float, float]:
+    polygons = [geometry["coordinates"]] if geometry["type"] == "Polygon" else geometry["coordinates"]
+    xs = [q[0] for poly in polygons for q in poly[0]]
+    ys = [q[1] for poly in polygons for q in poly[0]]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+DEMAND_MODES = ("auto", "census", "fixture")
+
+
+def camp_replay_inputs(roads_package: Path, demand: str = "auto") -> tuple[dict, datetime, datetime, bool]:
+    """(scenario, start, end, grounded): the single replay baseline used by the CLI, variants and agents.
+
+    census = ACS demand and NIST orders (camp_grounded_inputs); fixture = synthetic grid
+    (camp_bundle_inputs); auto = census when the package has the grounded layers.
+    """
+    if demand not in DEMAND_MODES:
+        raise ValueError(f"demand must be one of {DEMAND_MODES}")
+    grounded = demand == "census" or (demand == "auto" and has_grounded_layers(roads_package))
+    scenario, start, end = (camp_grounded_inputs if grounded else camp_bundle_inputs)(roads_package)
+    return scenario, start, end, grounded
