@@ -58,7 +58,7 @@ data/incidents/camp-2018-evacuation/05575afa537d22c9` passed offline.
 | New package layer | Status | Records / time | Spatial coverage | Gap / source terms |
 | --- | --- | --- | --- | --- |
 | Historical roads | Present | 9,435 nodes; 21,768 directed edges; OSM snapshot 2018-11-08 00:00Z | Requested bbox plus full intersecting ways; actual bbox above | ODbL 1.0; unknown lane/speed tags remain null; no service roads or turn restrictions |
-| Timestamped events | Partial in version `b2624d1cda93d9e5` | 44 CodeRED initial/re-call events from 29 rows; 2018-11-08 15:13Z to 2018-11-09 13:49Z | Alert zone labels; numeric Paradise zone IDs; geometry unresolved | NIST open license; no order-request, road, fire-arrival or shelter events yet |
+| Timestamped events | Partial in version `b1b318c16bbd3270` | 44 CodeRED initial/re-call events from 29 rows plus 12 reviewed road observations; 2018-11-08 15:13Z to 2018-11-09 13:49Z | Alert zone labels and source road observation points; OSM edge matches unresolved | NIST open license; no verified order-request, reopening, fire-arrival or shelter events yet |
 | Evacuation zones | Missing | 0 packaged | Paradise/Upper Ridge historical map available | 2017 PDF has zone labels, machine-readable polygons unverified; NIST open license check pending |
 | Population units | Missing | 0 packaged | Butte County target | ACS 2018 aggregate API identified; extraction pending; public federal data |
 | Traffic observations | Missing | 0 packaged | Egress corridors target | PeMS historical detector access needs free account; no zero traffic inference |
@@ -93,6 +93,30 @@ NIST-transcribed message initiation times, not the underlying evacuation-order
 request times or resident departures. `python3.12 -m tools.add_camp_codedred
 --verify-package data/incidents/camp-2018-evacuation/b2624d1cda93d9e5`
 passed offline with 44 events from 29 rows.
+
+Road and CodeRED layer commits on `feat/historical-replay-sim` are `7f2c8b6`
+and `76dc503` respectively. The shared checkout's app team staged files while
+the road commit was being prepared; those files were not included in either
+data commit. Check the index immediately before each future commit.
+
+Twelve reviewed Table A-2 road/contraflow observations were curated by a
+separate research agent into `tools/camp_road_events_table.json`. They are now
+in `data/incidents/camp-2018-evacuation/b1b318c16bbd3270/`, which inherits
+both prior layers; offline verification passed with 56 total events. The
+observations include source points, NIST time methods and observation windows,
+printed and PDF page locators, and original road descriptions. They do not
+assert exact closure onset or exact OSM edge matches. `road_access_restricted`,
+`road_closed`, `road_blocked`, `contraflow_reported` and
+`contraflow_observed` distinguish the source claims. The 09:20 contraflow
+announcement is not treated as proof that all routes had active contraflow.
+The 09:39 Clark contraflow observations have 20-minute windows. No reopening
+times have been verified.
+
+The user asked to expand beyond Camp Fire. Research agents are now checking
+2019 Kincade, 2018 Woolsey and 2021 Marshall as separate incident candidates.
+Kincade has a public [Zenodo PeMS dataset](https://doi.org/10.5281/zenodo.7410114)
+with two detector workbooks and a [DesignSafe highway-routing dataset](https://doi.org/10.17603/ds2-9v8w-y830)
+reported as 21,160 proxy highway records; these are not yet in a package.
 
 This file preserves the active task state. The user asked to continue turning the
 historical replay format into working acquisition and replay tooling and to keep

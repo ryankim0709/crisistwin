@@ -157,6 +157,40 @@ and normalized events are rebuildable and verified offline with
 `python3.12 -m tools.add_camp_codedred --verify-package
 data/incidents/camp-2018-evacuation/b2624d1cda93d9e5`.
 
+The next [Camp road-event package](../data/incidents/camp-2018-evacuation/b1b318c16bbd3270/manifest.json)
+adds 12 reviewed NIST Table A-2 observations to the same event stream (56 total).
+The source table is preserved in `curated/nist-road-events-table.json`, with
+printed page, PDF page, source number, time method, observation window and
+original road description. It includes reported closures and blockages on
+Skyway, Pearson, Bille and Clark Roads and reports about contraflow. The
+09:20 radio message says contraflow was being initiated; it is
+`contraflow_reported`, not an active-state assertion. Road-state onset could
+precede an observation, and the source points are not yet linked to OSM edges.
+In particular, NIST's positive observation windows may describe a duration or
+uncertain time; they are retained and labeled approximate, rather than treated
+as exact transition times. No reopening event has been verified.
+
+The additional event types are `road_access_restricted`, `road_closed`,
+`road_blocked`, `contraflow_reported`, and `contraflow_observed`. They retain
+`time_role`, `observation_window_min`, `action_status`, `source_time_method`,
+and `source_number` in addition to the event fields above. `target.osm_way_ids`
+is null with status `unresolved` until a road segment match is reviewed. The
+geometry is a source observation point, not a closure line. One representative
+record is:
+
+```json
+{"event_id":"nist-a2-0918-vtd32","type":"road_closed","occurred_at":"2018-11-08T17:18:00Z","time_precision":"minute","target":{"osm_way_ids":null,"osm_way_ids_status":"unresolved","road_name":"Skyway NB at Bruce [Rd]","from_desc":null,"to_desc":null},"geometry":null,"geocode_method":"unresolved","description":"Chico has a hard closure to Skyway NB at Bruce [Rd].","evidence_class":"reported","source_id":"nist-nettra-supplement","source_locator":"https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252sup.pdf#page=40; Table A-2; p. A-28; source VTD-32"}
+```
+
+Build from the prior frozen package with `python3.12 -m
+tools.add_camp_road_events --base-package
+data/incidents/camp-2018-evacuation/b2624d1cda93d9e5`, and verify with
+`python3.12 -m tools.add_camp_road_events --verify-package
+data/incidents/camp-2018-evacuation/b1b318c16bbd3270`. These are evidence
+records for later interpretation. The package does not declare the mapped OSM
+edges closed from those times without an explicit reviewed match and temporal
+policy.
+
 ## Manifest and provenance contract
 
 The manifest records `schema_version`, `incident_id`, `package_version`, incident
