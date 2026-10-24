@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Button, EmptyState, EvidenceTag, LoadingState, Notice } from "../../ui";
 import { localTime } from "../timeline";
 import type { ReplayModel } from "../types";
 import { ExplainError, fetchExplanation, type ExplainResponse } from "./api";
@@ -106,15 +107,15 @@ export default function ExplainPanel({ model, frameIndex, simTimeMs }: ExplainPa
         </p>
         <div className="ai-presets" role="group" aria-label="Preset questions">
           {PRESETS.map((preset) => (
-            <button
+            <Button
               key={preset}
-              type="button"
-              className="ai-chip"
+              variant="secondary"
+              size="sm"
               disabled={loading}
               onClick={() => ask(preset)}
             >
               {preset}
-            </button>
+            </Button>
           ))}
         </div>
         <form
@@ -145,13 +146,13 @@ export default function ExplainPanel({ model, frameIndex, simTimeMs }: ExplainPa
           />
           <div className="ai-actions">
             {loading ? (
-              <button type="button" className="ai-btn" onClick={cancel}>
+              <Button variant="secondary" size="sm" onClick={cancel}>
                 Cancel
-              </button>
+              </Button>
             ) : (
-              <button type="submit" className="ai-btn ai-btn--primary" disabled={!draft.trim()}>
+              <Button type="submit" size="sm" disabled={!draft.trim()}>
                 Ask
-              </button>
+              </Button>
             )}
           </div>
         </form>
@@ -162,13 +163,10 @@ export default function ExplainPanel({ model, frameIndex, simTimeMs }: ExplainPa
           Explanation
         </h2>
         {state.status === "idle" && (
-          <div className="rp-empty">
-            <strong>No question asked yet.</strong>
-            <span>
-              Pick a preset or type a question. Answers explain the simulation; they are not
-              instructions.
-            </span>
-          </div>
+          <EmptyState title="No question asked yet" symbol="?">
+            Pick a preset or type a question. Answers explain the simulation; they are not
+            instructions.
+          </EmptyState>
         )}
         {state.status !== "idle" && (
           <p className="ai-asked">
@@ -176,32 +174,30 @@ export default function ExplainPanel({ model, frameIndex, simTimeMs }: ExplainPa
             <span className="ai-asked-t">at replay clock {localTime(state.asked.clockMs, tz)}</span>
           </p>
         )}
-        {state.status === "loading" && (
-          <p className="ai-status" role="status">
-            <span className="ai-spinner" aria-hidden="true" /> Asking the model…
-          </p>
-        )}
+        {state.status === "loading" && <LoadingState>Asking the model…</LoadingState>}
         {state.status === "cancelled" && <p className="ai-status">Request cancelled.</p>}
         {state.status === "error" && (
-          <div className="ai-error" role="alert">
-            <strong>
-              {state.code === "ai_unavailable"
-                ? "AI explanation is not available"
-                : "Explanation failed"}
-            </strong>
-            <span>{state.message}</span>
-          </div>
+          <Notice
+            tone="danger"
+            title={
+              state.code === "ai_unavailable"
+                ? "AI explanation is not available."
+                : "Explanation failed."
+            }
+          >
+            {state.message}
+          </Notice>
         )}
         {state.status === "done" && (
           <article className="ai-answer">
             <p className="ai-badge">
-              <span className="ai-badge-tag">AI</span>
-              AI explanation — may be wrong; grounded in the simulation numbers shown
+              <EvidenceTag kind="ai_explanation" />
+              May be wrong; grounded in the simulation numbers shown
             </p>
             {state.asked.clockMs !== simTimeMs && (
-              <p className="ai-stale">
+              <Notice tone="info">
                 The replay clock has moved since this answer. Ask again to refresh it.
-              </p>
+              </Notice>
             )}
             <div className="ai-markdown">
               <Markdown source={state.answer.answer_markdown} />

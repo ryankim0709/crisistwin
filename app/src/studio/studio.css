@@ -1,14 +1,15 @@
 /*
  * Simulation Studio: map fills the page, the panel floats on the left, playback docks below.
  * The page's wrappers are `studio-page-*` so they never collide with the `studio-map` and
- * `studio-panel` roots that StudioMap and ConfigPanel style themselves.
+ * `studio-panel` roots that StudioMap and ConfigPanel style themselves. Dispatch reuses
+ * these wrappers.
  */
 .studio-page {
   display: flex;
   flex-direction: column;
   height: 100dvh;
   min-height: 0;
-  background: #fcfcf8;
+  background: var(--ct-surface);
 }
 .studio-stage {
   position: relative;
@@ -26,8 +27,8 @@
      panel scroll inside it instead of overflowing. */
   top: 64px;
   bottom: 44px;
-  left: 12px;
-  z-index: 5;
+  left: var(--ct-space-3);
+  z-index: var(--ct-z-overlay);
   display: flex;
   align-items: flex-start;
   width: min(300px, calc(100% - 24px));
@@ -44,89 +45,56 @@
 }
 .studio-page-status {
   position: absolute;
-  top: 12px;
+  top: var(--ct-space-3);
   left: 50%;
-  z-index: 4;
+  z-index: var(--ct-z-overlay);
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
+  gap: var(--ct-space-2);
   max-width: min(560px, calc(100% - 400px));
   /* Wind indicator sits top-left on the map; the panel is top-right. */
   transform: translateX(-50%);
   pointer-events: none;
 }
+/* Floating status pills over the map: a loading line, or a Notice with the pill treatment. */
 .studio-chip {
-  margin: 0;
-  padding: 8px 14px;
-  border: 1px solid #d4d8ca;
-  border-radius: 999px;
-  background: #fcfcf8;
-  box-shadow: 0 1px 4px rgb(0 0 0 / 15%);
-  font-size: 14px;
-  line-height: 1.4;
-  text-align: center;
+  padding: var(--ct-space-2) var(--ct-space-4);
+  border: 1px solid var(--ct-border);
+  border-radius: var(--ct-radius-pill);
+  background: var(--ct-surface);
+  box-shadow: var(--ct-shadow-md);
 }
-.studio-chip-error {
-  border-color: #b3261e;
-  border-radius: 12px;
-  color: #8c1d18;
+.studio-chip-notice.ui-notice {
+  justify-content: center;
+  margin: 0;
+  padding: var(--ct-space-2) var(--ct-space-4);
+  box-shadow: var(--ct-shadow-md);
+  text-align: center;
   pointer-events: auto;
 }
 /* Map / 3D toggle, bottom centre of the stage (the map's scale bar is bottom left and its
    legend bottom right). */
 .studio-view {
   position: absolute;
-  bottom: 12px;
+  bottom: var(--ct-space-3);
   left: 50%;
-  z-index: 5;
-  display: inline-flex;
-  gap: 2px;
-  padding: 3px;
-  border: 1px solid #d4d8ca;
-  border-radius: 999px;
-  background: rgb(252 252 248 / 94%);
-  box-shadow: 0 2px 10px rgb(20 43 39 / 14%);
+  z-index: var(--ct-z-overlay);
   transform: translateX(-50%);
 }
-.studio-view label {
-  position: relative;
-  display: inline-flex;
-}
-.studio-view input {
-  position: absolute;
-  inset: 0;
-  margin: 0;
-  opacity: 0;
-  cursor: pointer;
-}
-.studio-view span {
-  display: inline-flex;
-  align-items: center;
-  min-height: 30px;
-  padding: 0 14px;
-  border-radius: 999px;
-  color: #52635c;
-  font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-.studio-view input:checked + span {
-  background: #245c4f;
-  color: #fff;
-}
-.studio-view input:focus-visible + span {
-  outline: 3px solid #236d5e;
-  outline-offset: 1px;
+.studio-view .ui-segmented {
+  background: var(--ct-surface-glass-strong);
+  box-shadow: var(--ct-shadow-md);
 }
 
-/* 3D diorama view. Scene labels use the scene's own `fdx-` classes. */
+/* 3D diorama view. Scene labels use the scene's own `fdx-` classes; the card, buttons,
+   warnings and legend are kit components placed here. */
 .studio-diorama {
   position: relative;
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background: #e8dfcf;
+  background: var(--ct-surface-muted);
 }
 .studio-diorama__scene {
   position: absolute;
@@ -134,178 +102,118 @@
   z-index: 0;
   isolation: isolate;
 }
-.studio-diorama__card {
+.studio-diorama__card.ui-panel {
   position: absolute;
   top: 50%;
   left: 50%;
-  z-index: 2;
+  z-index: var(--ct-z-overlay);
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--ct-space-3);
   width: min(380px, calc(100% - 32px));
-  padding: 18px 20px;
-  border: 1px solid #d4d8ca;
-  border-radius: 12px;
-  background: #fcfcf8;
-  box-shadow: 0 10px 30px rgb(20 43 39 / 12%);
+  font-size: var(--ct-text-md);
+  line-height: var(--ct-leading-normal);
   transform: translate(-50%, -50%);
-  font-size: 13px;
-  line-height: 1.5;
-  color: #2b3c36;
 }
 .studio-diorama__card p {
   margin: 0;
 }
 .studio-diorama__card-title {
-  font-size: 15px;
-  font-weight: 700;
-  color: #142b27;
+  font-size: var(--ct-text-lg);
+  font-weight: var(--ct-weight-bold);
 }
 .studio-diorama__detail {
-  font-size: 11px;
-  color: #626b60;
+  font-size: var(--ct-text-xs);
+  color: var(--ct-ink-muted);
 }
 .studio-diorama__top {
   position: absolute;
-  top: 12px;
+  top: var(--ct-space-3);
   left: 50%;
-  z-index: 2;
+  z-index: var(--ct-z-overlay);
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
+  gap: var(--ct-space-2);
   width: min(440px, calc(100% - 680px));
   transform: translateX(-50%);
   pointer-events: none;
 }
-.studio-diorama__pill {
-  margin: 0;
-  padding: 6px 14px;
-  border-radius: 999px;
-  background: #245c4f;
-  color: #fff;
-  font-size: 12px;
-  font-weight: 600;
-  box-shadow: 0 2px 8px rgb(20 43 39 / 18%);
+.studio-diorama__pill.ui-tag {
+  padding: var(--ct-space-2) var(--ct-space-4);
+  box-shadow: var(--ct-shadow-md);
 }
 .studio-diorama__warnings {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
+  gap: var(--ct-space-1);
   width: 100%;
   margin: 0;
   padding: 0;
   list-style: none;
 }
-.studio-diorama__warnings li {
-  padding: 4px 10px;
-  border: 1px solid rgb(60 55 50 / 12%);
-  border-radius: 8px;
-  background: rgb(251 248 241 / 90%);
-  color: #6f4405;
-  font-size: 11.5px;
-  font-weight: 600;
+.studio-diorama__warning.ui-notice {
+  margin: 0;
+  font-weight: var(--ct-weight-semibold);
   text-align: center;
 }
 .studio-diorama__tools {
   position: absolute;
-  top: 12px;
-  right: 12px;
-  z-index: 2;
+  top: var(--ct-space-3);
+  right: var(--ct-space-3);
+  z-index: var(--ct-z-overlay);
   display: flex;
-  gap: 4px;
-}
-.studio-diorama__btn,
-.studio-diorama__legend-toggle {
-  min-height: 30px;
-  padding: 4px 12px;
-  border: 1px solid #d4d8ca;
-  border-radius: 999px;
-  background: rgb(252 252 248 / 94%);
-  color: #245c4f;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  box-shadow: 0 1px 4px rgb(20 43 39 / 12%);
-}
-.studio-diorama__btn:hover,
-.studio-diorama__legend-toggle:hover {
-  background: #eceade;
-}
-.studio-diorama__btn:disabled {
-  color: #8a948c;
-  cursor: not-allowed;
-}
-.studio-diorama__btn:focus-visible,
-.studio-diorama__legend-toggle:focus-visible {
-  outline: 3px solid #236d5e;
-  outline-offset: 2px;
+  gap: var(--ct-space-1);
 }
 .studio-diorama__legend {
   position: absolute;
-  right: 12px;
-  bottom: 12px;
-  z-index: 2;
+  right: var(--ct-space-3);
+  bottom: var(--ct-space-3);
+  z-index: var(--ct-z-overlay);
   display: flex;
   flex-direction: column-reverse;
   align-items: flex-end;
-  gap: 6px;
+  gap: var(--ct-space-2);
 }
-.studio-diorama__legend ul {
+.studio-diorama__legend-list.ui-panel {
   display: grid;
-  gap: 6px;
+  gap: var(--ct-space-2);
   width: 230px;
-  margin: 0;
-  padding: 10px 12px;
-  border: 1px solid #d4d8ca;
-  border-radius: 10px;
-  background: rgb(252 252 248 / 96%);
-  box-shadow: 0 4px 14px rgb(20 43 39 / 12%);
-  list-style: none;
-  font-size: 11.5px;
-  color: #2b3c36;
+  font-size: var(--ct-text-sm);
 }
-.studio-diorama__legend li {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.studio-diorama__legend svg {
+.studio-diorama__legend-list svg {
   flex: none;
 }
-.studio-diorama__legend .studio-diorama__legend-note {
-  display: block;
-  color: #626b60;
-  font-size: 10.5px;
+.studio-diorama__legend-note {
+  margin: 0;
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-xs);
 }
 .studio-diorama__credit {
   position: absolute;
-  bottom: 4px;
-  left: 12px;
+  bottom: var(--ct-space-1);
+  left: var(--ct-space-3);
   z-index: 1;
   max-width: calc(50% - 120px);
   margin: 0;
   overflow: hidden;
-  color: #6b6255;
-  font-size: 10px;
+  color: var(--ct-ink-subtle);
+  font-size: var(--ct-text-2xs);
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 
 .studio-dock {
   flex: none;
-  border-top: 1px solid #d4d8ca;
-  background: #fcfcf8;
+  border-top: 1px solid var(--ct-border);
+  background: var(--ct-surface);
 }
-.studio-previous {
+.studio-previous.ui-notice {
   margin: 0;
-  padding: 6px 16px;
-  border-bottom: 1px solid #d4d8ca;
-  background: #f4ecd2;
-  font-size: 13px;
-  font-weight: 600;
+  padding: var(--ct-space-2) var(--ct-space-4);
+  border-width: 0 0 1px;
+  border-radius: 0;
 }
 
 @media (max-width: 900px) {

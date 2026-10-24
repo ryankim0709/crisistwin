@@ -24,7 +24,16 @@ import { FuelFamily } from "./fuelStyle";
 import { LabelLayer, type ClipOptions } from "./labels";
 import { REFERENCE_PLACES } from "./places";
 import { FireCameraRig, type Framing } from "./rig";
-import type { DioramaIgnition, DioramaRun, FireDioramaOptions, FireDioramaSceneApi, GeoPoint, GroundClickMode, LandscapeGrid, ViewInsets } from "./types";
+import type {
+  DioramaIgnition,
+  DioramaRun,
+  FireDioramaOptions,
+  FireDioramaSceneApi,
+  GeoPoint,
+  GroundClickMode,
+  LandscapeGrid,
+  ViewInsets,
+} from "./types";
 
 /** Pointer travel (CSS px) above which a press is a drag, not a click. */
 const CLICK_TOLERANCE_PX = 5;
@@ -141,12 +150,18 @@ export class FireDioramaScene implements FireDioramaSceneApi {
   private height = 1;
 
   constructor(container: HTMLElement, options: FireDioramaOptions) {
-    if (!webglAvailable()) throw new Error("WebGL 2 is not available in this browser, so the 3D fire diorama cannot be shown.");
+    if (!webglAvailable())
+      throw new Error(
+        "WebGL 2 is not available in this browser, so the 3D fire diorama cannot be shown.",
+      );
     this.container = container;
     this.reducedMotion = options.reducedMotion;
     if (getComputedStyle(container).position === "static") container.style.position = "relative";
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+    this.renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      powerPreference: "high-performance",
+    });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -173,7 +188,8 @@ export class FireDioramaScene implements FireDioramaSceneApi {
       position: "absolute",
       inset: "0",
       pointerEvents: "none",
-      background: "radial-gradient(ellipse at 50% 45%, rgba(0,0,0,0) 58%, rgba(60,48,36,0.16) 100%)",
+      background:
+        "radial-gradient(ellipse at 50% 45%, rgba(0,0,0,0) 58%, rgba(60,48,36,0.16) 100%)",
     } satisfies Partial<CSSStyleDeclaration>);
     container.appendChild(this.vignette);
 
@@ -201,7 +217,12 @@ export class FireDioramaScene implements FireDioramaSceneApi {
 
     this.fx = new FxLayer(this.sampler);
     this.scene.add(this.fx.group);
-    this.windLabel = this.labels.add(this.scene, "fdx-wind", new THREE.Vector3(), new THREE.Vector2(0.5, 1));
+    this.windLabel = this.labels.add(
+      this.scene,
+      "fdx-wind",
+      new THREE.Vector3(),
+      new THREE.Vector2(0.5, 1),
+    );
 
     this.rig = new FireCameraRig(canvas);
 
@@ -257,7 +278,12 @@ export class FireDioramaScene implements FireDioramaSceneApi {
       ignitions.length === this.ignitions.length &&
       ignitions.every((a, i) => {
         const b = this.ignitions[i];
-        return a.id === b.id && a.label === b.label && a.point.latitude === b.point.latitude && a.point.longitude === b.point.longitude;
+        return (
+          a.id === b.id &&
+          a.label === b.label &&
+          a.point.latitude === b.point.latitude &&
+          a.point.longitude === b.point.longitude
+        );
       });
     if (same) return;
     this.ignitions = ignitions;
@@ -266,7 +292,12 @@ export class FireDioramaScene implements FireDioramaSceneApi {
 
   setWind(fromDegrees: number, speedMph: number): void {
     if (this.disposed) return;
-    if (this.windLabel.el.textContent && fromDegrees === this.wind.from && speedMph === this.wind.speed) return;
+    if (
+      this.windLabel.el.textContent &&
+      fromDegrees === this.wind.from &&
+      speedMph === this.wind.speed
+    )
+      return;
     this.wind = { from: fromDegrees, speed: speedMph };
     this.windLabel.el.textContent = `Wind ${Math.round(speedMph)} mph from ${compassPoint(fromDegrees)}`;
     this.placeMarkers();
@@ -352,17 +383,37 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     const points: THREE.Vector3[] = [];
     for (const x of [-frame.halfW, 0, frame.halfW]) {
       for (const z of [-frame.halfD, frame.halfD]) {
-        points.push(new THREE.Vector3(x, BASE_Y - 3, z), new THREE.Vector3(x, frame.heightAt(x, z) + 6, z));
+        points.push(
+          new THREE.Vector3(x, BASE_Y - 3, z),
+          new THREE.Vector3(x, frame.heightAt(x, z) + 6, z),
+        );
       }
     }
-    for (const z of [-frame.halfD, frame.halfD]) points.push(new THREE.Vector3(0, BASE_Y - 3, z + Math.sign(z) * BOARD_MARGIN));
+    for (const z of [-frame.halfD, frame.halfD])
+      points.push(new THREE.Vector3(0, BASE_Y - 3, z + Math.sign(z) * BOARD_MARGIN));
     const framing: Framing = { points, target: new THREE.Vector3(0, frame.maxHeight * 0.3, 0) };
-    return { frame, group, terrain, water: water.mesh, waterUniforms: water.uniforms, fire, textures, cover, framing, labels };
+    return {
+      frame,
+      group,
+      terrain,
+      water: water.mesh,
+      waterUniforms: water.uniforms,
+      fire,
+      textures,
+      cover,
+      framing,
+      labels,
+    };
   }
 
   /** North arrow and scale bar on the base board rim, each with a small label. */
   private buildMapFurniture(frame: BoardFrame, group: THREE.Group, labels: CSS2DObject[]) {
-    const ivory = new THREE.MeshStandardMaterial({ color: PALETTE.ivory, roughness: 0.6, emissive: PALETTE.ivory, emissiveIntensity: 0.15 });
+    const ivory = new THREE.MeshStandardMaterial({
+      color: PALETTE.ivory,
+      roughness: 0.6,
+      emissive: PALETTE.ivory,
+      emissiveIntensity: 0.15,
+    });
     const rimY = BASE_Y + 0.05;
     const rimZ = frame.halfD + BOARD_MARGIN / 2;
 
@@ -375,7 +426,12 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     const north = new THREE.Mesh(new THREE.ShapeGeometry(arrow).rotateX(-Math.PI / 2), ivory);
     north.position.set(0, rimY + 0.02, -frame.halfD - BOARD_MARGIN / 2);
     group.add(north);
-    const n = this.labels.add(group, "fdx-north", new THREE.Vector3(0, rimY + 1, -frame.halfD - BOARD_MARGIN / 2 - 3.5), new THREE.Vector2(0.5, 1));
+    const n = this.labels.add(
+      group,
+      "fdx-north",
+      new THREE.Vector3(0, rimY + 1, -frame.halfD - BOARD_MARGIN / 2 - 3.5),
+      new THREE.Vector2(0.5, 1),
+    );
     n.el.textContent = "N";
     labels.push(n.obj);
 
@@ -395,7 +451,12 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     const outline = new THREE.Mesh(new THREE.BoxGeometry(len + 0.6, 0.3, 2.2), ivory);
     outline.position.set(x0 + len / 2, rimY + 0.1, rimZ);
     group.add(outline);
-    const s = this.labels.add(group, "fdx-scale", new THREE.Vector3(x0 + len / 2, rimY, rimZ + 1.6), new THREE.Vector2(0.5, 0));
+    const s = this.labels.add(
+      group,
+      "fdx-scale",
+      new THREE.Vector3(x0 + len / 2, rimY, rimZ + 1.6),
+      new THREE.Vector2(0.5, 0),
+    );
     s.el.textContent = meters >= 1000 ? `${meters / 1000} km` : `${meters} m`;
     labels.push(s.obj);
   }
@@ -424,7 +485,15 @@ export class FireDioramaScene implements FireDioramaSceneApi {
       const margin = frame.cellWorld * 2;
       if (Math.abs(p.x) > frame.halfW - margin || Math.abs(p.z) > frame.halfD - margin) continue;
       if (frame.families[frame.cellAt(p.x, p.z)] === FuelFamily.Water) continue; // never on open water
-      labels.push(this.labels.addPlace(group, place.name, place.kind, new THREE.Vector3(p.x, frame.surfaceAt(p.x, p.z) + 1.5, p.z), frame.cellAt(p.x, p.z)));
+      labels.push(
+        this.labels.addPlace(
+          group,
+          place.name,
+          place.kind,
+          new THREE.Vector3(p.x, frame.surfaceAt(p.x, p.z) + 1.5, p.z),
+          frame.cellAt(p.x, p.z),
+        ),
+      );
     }
   }
 
@@ -440,14 +509,24 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     const board = this.board;
     if (!board) return;
     const frame = board.frame;
-    const run = this.run && frame.grid && this.run.arrivalMinutes.length === frame.cols * frame.rows ? this.run : null;
+    const run =
+      this.run && frame.grid && this.run.arrivalMinutes.length === frame.cols * frame.rows
+        ? this.run
+        : null;
     if (run === this.appliedRun && run !== null) return;
     this.appliedRun = run;
     this.labelStamp++;
     board.fire.uArrival.value.dispose();
     if (run) {
       const horizon = run.scenario.horizonMinutes;
-      const window = burnWindowMinutes(frame.cols, frame.rows, run.arrivalMinutes, horizon, run.scenario.stepMinutes, MIN_BURN_WINDOW_MINUTES);
+      const window = burnWindowMinutes(
+        frame.cols,
+        frame.rows,
+        run.arrivalMinutes,
+        horizon,
+        run.scenario.stepMinutes,
+        MIN_BURN_WINDOW_MINUTES,
+      );
       const { tex, factor } = buildArrivalTexture(frame, run.arrivalMinutes, horizon);
       board.fire.uArrival.value = tex;
       board.fire.uWindow.value = window;
@@ -472,7 +551,8 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     const t = this.appliedRun ? this.t : -1;
     board.fire.uSimT.value = t;
     board.cover.update(t);
-    if (this.sampler.update(t)) board.fire.uHeadRange.value.set(this.sampler.headRange.min, this.sampler.headRange.max);
+    if (this.sampler.update(t))
+      board.fire.uHeadRange.value.set(this.sampler.headRange.min, this.sampler.headRange.max);
   }
 
   /** Board positions of the ignitions, in order (null when off the board). */
@@ -516,7 +596,12 @@ export class FireDioramaScene implements FireDioramaSceneApi {
       if (!pin || !ignition.label) return;
       let label = this.ignitionLabels[used];
       if (!label) {
-        label = this.labels.add(pin, "fdx-ignition", new THREE.Vector3(0, PIN_LABEL_Y, 0), new THREE.Vector2(0.5, 1));
+        label = this.labels.add(
+          pin,
+          "fdx-ignition",
+          new THREE.Vector3(0, PIN_LABEL_Y, 0),
+          new THREE.Vector2(0.5, 1),
+        );
         this.ignitionLabels.push(label);
       } else if (label.obj.parent !== pin) {
         pin.add(label.obj);
@@ -535,7 +620,11 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     const box = this.appliedRun ? this.sampler.burnBox : null;
     if (!board || !box) return null;
     const f = board.frame;
-    if ((box.maxX - box.minX) / (2 * f.halfW) > FOCUS_WHOLE_BOARD_FRACTION && (box.maxZ - box.minZ) / (2 * f.halfD) > FOCUS_WHOLE_BOARD_FRACTION) return null;
+    if (
+      (box.maxX - box.minX) / (2 * f.halfW) > FOCUS_WHOLE_BOARD_FRACTION &&
+      (box.maxZ - box.minZ) / (2 * f.halfD) > FOCUS_WHOLE_BOARD_FRACTION
+    )
+      return null;
     const cx = (box.minX + box.maxX) / 2;
     const cz = (box.minZ + box.maxZ) / 2;
     const pad = Math.max(10, 0.06 * Math.max(box.maxX - box.minX, box.maxZ - box.minZ));
@@ -591,12 +680,19 @@ export class FireDioramaScene implements FireDioramaSceneApi {
       board.waterUniforms.uTime.value = time;
       board.cover.flicker(time, reduced);
     }
-    const worldPerPixel = (2 * d * Math.tan(THREE.MathUtils.degToRad(this.rig.camera.fov / 2))) / this.height;
+    const worldPerPixel =
+      (2 * d * Math.tan(THREE.MathUtils.degToRad(this.rig.camera.fov / 2))) / this.height;
     this.fx.tick(time, reduced, worldPerPixel);
     this.windLabel.obj.position.copy(this.fx.windAnchor);
     this.renderer.render(this.scene, this.rig.camera);
     this.labels.render(this.scene, this.rig.camera);
-    this.labels.clip(this.rig.camera, this.width, this.height, this.rig.viewInsets, this.labelOptions());
+    this.labels.clip(
+      this.rig.camera,
+      this.width,
+      this.height,
+      this.rig.viewInsets,
+      this.labelOptions(),
+    );
   };
 
   private readonly pinTmp = new THREE.Vector3();
@@ -612,7 +708,12 @@ export class FireDioramaScene implements FireDioramaSceneApi {
       this.pinTmp.set(p.x, board.frame.surfaceAt(p.x, p.z), p.z).project(this.rig.camera);
       const x = ((this.pinTmp.x + 1) / 2) * this.width;
       const y = ((1 - this.pinTmp.y) / 2) * this.height;
-      opts.fixed.push({ left: x - PIN_RECT_HALF_W_PX, right: x + PIN_RECT_HALF_W_PX, top: y - PIN_RECT_H_PX, bottom: y + PIN_RECT_FOOT_PX });
+      opts.fixed.push({
+        left: x - PIN_RECT_HALF_W_PX,
+        right: x + PIN_RECT_HALF_W_PX,
+        top: y - PIN_RECT_H_PX,
+        bottom: y + PIN_RECT_FOOT_PX,
+      });
     }
     const run = this.appliedRun;
     if (run) {
@@ -640,7 +741,10 @@ export class FireDioramaScene implements FireDioramaSceneApi {
   // ----------------------------------------------------------------------------- input
 
   private updateAria() {
-    const action = this.clickMode === "wind" ? "set the direction the wind blows from toward the view centre" : "place the ignition at the view centre";
+    const action =
+      this.clickMode === "wind"
+        ? "set the direction the wind blows from toward the view centre"
+        : "place the ignition at the view centre";
     this.renderer.domElement.setAttribute(
       "aria-label",
       `3D miniature of the loaded fuel and terrain landscape with the simulated fire. Press Enter to ${action}; arrow keys pan, plus and minus zoom; with a pointer, click the ground, drag to pan, right-drag or Ctrl-drag to rotate, scroll to zoom. Trees and houses are symbols for fuel classes, not observed objects.`,
@@ -656,7 +760,8 @@ export class FireDioramaScene implements FireDioramaSceneApi {
   private readonly onPointerMove = (e: PointerEvent) => {
     const down = this.pointerDown;
     if (!down || down.id !== e.pointerId) return;
-    if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > CLICK_TOLERANCE_PX) this.renderer.domElement.style.cursor = "grabbing";
+    if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > CLICK_TOLERANCE_PX)
+      this.renderer.domElement.style.cursor = "grabbing";
   };
 
   private readonly onPointerCancel = () => {
@@ -713,7 +818,11 @@ function disposeTree(root: THREE.Object3D) {
     const mesh = obj as THREE.Mesh;
     if (mesh.geometry) mesh.geometry.dispose();
     if ((obj as THREE.InstancedMesh).isInstancedMesh) (obj as THREE.InstancedMesh).dispose();
-    const mats = mesh.material ? (Array.isArray(mesh.material) ? mesh.material : [mesh.material]) : [];
+    const mats = mesh.material
+      ? Array.isArray(mesh.material)
+        ? mesh.material
+        : [mesh.material]
+      : [];
     for (const m of mats) {
       for (const value of Object.values(m)) if (value instanceof THREE.Texture) textures.add(value);
       m.dispose();

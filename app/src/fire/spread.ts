@@ -946,10 +946,7 @@ export function simulateScheduledFireSpread(
       reachedAreaSquareMeters: tally.reachedCells * cellArea,
       // fromEntries, not assignment into `{}`, so an id such as "__proto__" stays a key.
       reachedAreaBySourceSquareMeters: Object.fromEntries(
-        sources.map((source, index) => [
-          source.id,
-          tally.reachedCellsBySource[index] * cellArea,
-        ]),
+        sources.map((source, index) => [source.id, tally.reachedCellsBySource[index] * cellArea]),
       ),
       ignitedSourceIds: ignitions
         .filter(
@@ -1783,18 +1780,13 @@ function assemblePolygons(
     point[1] <= boxes[j][3] &&
     containsPoint(geographic[j], point);
   const depth = geographic.map((ring, i) =>
-    geographic.reduce(
-      (count, _other, j) => (i !== j && inside(j, ring[0]) ? count + 1 : count),
-      0,
-    ),
+    geographic.reduce((count, _other, j) => (i !== j && inside(j, ring[0]) ? count + 1 : count), 0),
   );
 
   const polygons: FirePerimeter[] = [];
   geographic.forEach((ring, i) => {
     if (depth[i] % 2 !== 0) return;
-    const holes = geographic.filter(
-      (other, j) => depth[j] === depth[i] + 1 && inside(i, other[0]),
-    );
+    const holes = geographic.filter((other, j) => depth[j] === depth[i] + 1 && inside(i, other[0]));
     polygons.push({
       type: "Feature",
       properties: { elapsedMinutes: threshold },

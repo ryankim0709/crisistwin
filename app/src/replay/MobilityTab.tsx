@@ -1,3 +1,4 @@
+import { Button, LoadingState, Notice } from "../ui";
 import { useMemo, useState, type KeyboardEvent, type MouseEvent } from "react";
 import {
   EVACUATION_AREA,
@@ -37,7 +38,9 @@ const H = 104;
 const PAD = { left: 4, right: 4, top: 8, bottom: 18 };
 
 const fmt = (n: number) =>
-  Number.isInteger(n) ? n.toLocaleString("en-US") : n.toLocaleString("en-US", { maximumFractionDigits: 1 });
+  Number.isInteger(n)
+    ? n.toLocaleString("en-US")
+    : n.toLocaleString("en-US", { maximumFractionDigits: 1 });
 
 const stamp = (ms: number, tz: string) => `${clockParts(ms, tz).date} ${localTime(ms, tz)}`;
 
@@ -57,7 +60,16 @@ interface ChartProps {
 }
 
 /** Visits (solid) against the hour-of-week baseline (dashed) over every event week. */
-function SeriesChart({ m, series, title, ticks, simTimeMs, clockStartMs, clockEndMs, onSeek }: ChartProps) {
+function SeriesChart({
+  m,
+  series,
+  title,
+  ticks,
+  simTimeMs,
+  clockStartMs,
+  clockEndMs,
+  onSeek,
+}: ChartProps) {
   const [t0, t1] = mobilityRangeMs(m);
   const innerW = W - PAD.left - PAD.right;
   const innerH = H - PAD.top - PAD.bottom;
@@ -91,7 +103,16 @@ function SeriesChart({ m, series, title, ticks, simTimeMs, clockStartMs, clockEn
     onSeek(t0 + frac * (t1 - t0 - 1));
   };
   const onKey = (event: KeyboardEvent<SVGSVGElement>) => {
-    const step = event.key === "ArrowLeft" ? -HOUR_MS : event.key === "ArrowRight" ? HOUR_MS : event.key === "PageUp" ? DAY_MS : event.key === "PageDown" ? -DAY_MS : 0;
+    const step =
+      event.key === "ArrowLeft"
+        ? -HOUR_MS
+        : event.key === "ArrowRight"
+          ? HOUR_MS
+          : event.key === "PageUp"
+            ? DAY_MS
+            : event.key === "PageDown"
+              ? -DAY_MS
+              : 0;
     if (step === 0) return;
     // The replay's global arrow-key shortcut steps the clock by minutes; this control owns them.
     event.preventDefault();
@@ -117,7 +138,9 @@ function SeriesChart({ m, series, title, ticks, simTimeMs, clockStartMs, clockEn
         aria-valuemax={t1 - 1}
         aria-valuenow={clamped}
         aria-valuetext={stamp(clamped, m.timezone)}
-        onClick={(event: MouseEvent<SVGSVGElement>) => seekFromX(event.clientX, event.currentTarget)}
+        onClick={(event: MouseEvent<SVGSVGElement>) =>
+          seekFromX(event.clientX, event.currentTarget)
+        }
         onKeyDown={onKey}
       >
         <rect x={PAD.left} y={PAD.top} width={innerW} height={innerH} className="rp-mob-plot" />
@@ -151,7 +174,15 @@ function SeriesChart({ m, series, title, ticks, simTimeMs, clockStartMs, clockEn
         <text x={PAD.left + 3} y={PAD.top + 8} className="rp-mob-axis">
           max {fmt(yMax)}
         </text>
-        {cursorX !== null && <line x1={cursorX} x2={cursorX} y1={PAD.top} y2={H - PAD.bottom} className="rp-mob-cursor" />}
+        {cursorX !== null && (
+          <line
+            x1={cursorX}
+            x2={cursorX}
+            y1={PAD.top}
+            y2={H - PAD.bottom}
+            className="rp-mob-cursor"
+          />
+        )}
       </svg>
       <p className="rp-mob-readout" aria-live="off">
         {now === null || base === null
@@ -166,15 +197,14 @@ function SeriesChart({ m, series, title, ticks, simTimeMs, clockStartMs, clockEn
 
 function MissingNote() {
   return (
-    <div className="rp-empty" role="note">
-      <strong>No phone-panel mobility file for this fire</strong>
+    <Notice tone="info" title="No phone-panel mobility file for this fire.">
       <span>
         This optional layer is built from licensed Advan data (Dewey). Fetch the team copy with{" "}
-        <code className="rp-mob-code">python3 -m tools.mongo_data pull</code>, or rebuild it with Dewey access, then
-        reload:
+        <code className="rp-mob-code">python3 -m tools.mongo_data pull</code>, or rebuild it with
+        Dewey access, then reload:
       </span>
       <code className="rp-mob-code">{MOBILITY_BUILD_HINT}</code>
-    </div>
+    </Notice>
   );
 }
 
@@ -199,9 +229,7 @@ export default function MobilityTab(props: MobilityTabProps) {
   if (state.status === "loading") {
     return (
       <div className="rp-tab">
-        <p role="status" className="rp-state-msg">
-          <span className="rp-spinner" aria-hidden="true" /> Loading phone-panel mobility…
-        </p>
+        <LoadingState>Loading phone-panel mobility…</LoadingState>
       </div>
     );
   }
@@ -215,13 +243,12 @@ export default function MobilityTab(props: MobilityTabProps) {
   if (state.status === "error") {
     return (
       <div className="rp-tab">
-        <div className="rp-empty" role="alert">
-          <strong>Mobility file could not be used</strong>
-          <span>{state.error}</span>
+        <Notice tone="danger" title="Mobility file could not be used.">
+          {state.error}{" "}
           <span>
             Rebuild it with <code className="rp-mob-code">{MOBILITY_BUILD_HINT}</code>
           </span>
-        </div>
+        </Notice>
       </div>
     );
   }
@@ -244,13 +271,23 @@ function ReadyTab({
   const ticks = useMemo(() => dayTicks(m), [m]);
   const categories = useMemo(() => {
     const present = new Map<string, string>();
-    for (const s of m.series) if (s.region === EVACUATION_AREA && !present.has(s.category)) present.set(s.category, s.label);
-    return CATEGORY_ORDER.filter((id) => present.has(id)).map((id) => ({ id, label: present.get(id) ?? id }));
+    for (const s of m.series)
+      if (s.region === EVACUATION_AREA && !present.has(s.category))
+        present.set(s.category, s.label);
+    return CATEGORY_ORDER.filter((id) => present.has(id)).map((id) => ({
+      id,
+      label: present.get(id) ?? id,
+    }));
   }, [m]);
-  const selected = categories.some((c) => c.id === category) ? category : (categories[0]?.id ?? "all");
+  const selected = categories.some((c) => c.id === category)
+    ? category
+    : (categories[0]?.id ?? "all");
   const regionLabel = (id: string) => m.regions[id]?.label ?? id.replace(/_/g, " ");
   const charts = [EVACUATION_AREA, SURROUNDING]
-    .map((region) => ({ region, series: m.series.find((s) => s.region === region && s.category === selected) }))
+    .map((region) => ({
+      region,
+      series: m.series.find((s) => s.region === region && s.category === selected),
+    }))
     .flatMap((c) => (c.series ? [{ region: c.region, series: c.series }] : []));
 
   const hour = hourIndexAt(m, simTimeMs);
@@ -279,19 +316,27 @@ function ReadyTab({
         <ul className="rp-mob-caveats">
           <li>Phone-panel estimates of visits to places, not counts of people.</li>
           <li>
-            Baseline: mean of {m.baselineWeeks.length} week{m.baselineWeeks.length === 1 ? "" : "s"} (
-            {m.baselineWeeks.join(", ")}), same local hour of week. One baseline week per fire
-            {christmas ? "; this one is Christmas week" : ""}, so ordinary week-to-week variation is not captured.
+            Baseline: mean of {m.baselineWeeks.length} week{m.baselineWeeks.length === 1 ? "" : "s"}{" "}
+            ({m.baselineWeeks.join(", ")}), same local hour of week. One baseline week per fire
+            {christmas ? "; this one is Christmas week" : ""}, so ordinary week-to-week variation is
+            not captured.
           </li>
-          <li>Advan&apos;s handling of daylight-saving hours is unverified: hours after a clock change may be off by one hour.</li>
-          <li>Licensed data: shared within the team through Atlas only; never commit it or share it outside the team.</li>
+          <li>
+            Advan&apos;s handling of daylight-saving hours is unverified: hours after a clock change
+            may be off by one hour.
+          </li>
+          <li>
+            Licensed data: shared within the team through Atlas only; never commit it or share it
+            outside the team.
+          </li>
         </ul>
       </section>
 
       <fieldset className="rp-mob-toggles">
         <legend className="rp-sr">Map display</legend>
         <label>
-          <input type="checkbox" checked={visible} onChange={(e) => onVisible(e.target.checked)} /> Movement (device data) on the map
+          <input type="checkbox" checked={visible} onChange={(e) => onVisible(e.target.checked)} />{" "}
+          Movement (device data) on the map
         </label>
         <label className={m.originFlows ? undefined : "rp-mob-off"}>
           <input
@@ -315,15 +360,27 @@ function ReadyTab({
         </p>
         <ul className="rp-mob-legend">
           <li>
-            <span className="rp-mob-sw" style={{ background: MOBILITY_COLORS.below }} aria-hidden="true" />
+            <span
+              className="rp-mob-sw"
+              style={{ background: MOBILITY_COLORS.below }}
+              aria-hidden="true"
+            />
             Dark grey: below baseline (down to {2 ** RATIO_SATURATION_LOG2}× lower)
           </li>
           <li>
-            <span className="rp-mob-sw" style={{ background: MOBILITY_COLORS.near }} aria-hidden="true" />
+            <span
+              className="rp-mob-sw"
+              style={{ background: MOBILITY_COLORS.near }}
+              aria-hidden="true"
+            />
             Mid grey: near baseline
           </li>
           <li>
-            <span className="rp-mob-sw" style={{ background: MOBILITY_COLORS.above }} aria-hidden="true" />
+            <span
+              className="rp-mob-sw"
+              style={{ background: MOBILITY_COLORS.above }}
+              aria-hidden="true"
+            />
             White: above baseline (up to {2 ** RATIO_SATURATION_LOG2}× higher)
           </li>
           <li>
@@ -339,11 +396,18 @@ function ReadyTab({
             Thick outline: cell mostly inside the evacuation-area block groups
           </li>
           <li>
-            <span className="rp-mob-line" style={{ background: MOBILITY_COLORS.flow }} aria-hidden="true" />
+            <span
+              className="rp-mob-line"
+              style={{ background: MOBILITY_COLORS.flow }}
+              aria-hidden="true"
+            />
             Dashed grey line: residents’ trips from the reference place (straight lines, not routes)
           </li>
         </ul>
-        <p className="rp-rule">Hover a circle for its visits and baseline. Cells with no baseline and no visits are hidden.</p>
+        <p className="rp-rule">
+          Hover a circle for its visits and baseline. Cells with no baseline and no visits are
+          hidden.
+        </p>
       </section>
 
       <section aria-labelledby="rp-mob-charts">
@@ -352,22 +416,25 @@ function ReadyTab({
         </h3>
         <div className="rp-mob-cats" role="group" aria-label="Place category">
           {categories.map((c) => (
-            <button
+            <Button
               key={c.id}
-              type="button"
-              className="rp-mob-cat"
+              variant="secondary"
+              size="sm"
               aria-pressed={selected === c.id}
               onClick={() => setCategory(c.id)}
             >
               {c.id === "all" ? "All places" : c.label}
-            </button>
+            </Button>
           ))}
         </div>
         <p className="rp-rule">
-          Solid line: visits. Dashed line: baseline for that hour of the week. Vertical line: the replay clock. Shaded
-          band: the replay&apos;s own time window. Click a chart to move the clock.
+          Solid line: visits. Dashed line: baseline for that hour of the week. Vertical line: the
+          replay clock. Shaded band: the replay&apos;s own time window. Click a chart to move the
+          clock.
         </p>
-        {charts.length === 0 && <p className="rp-empty">No series for this category in the file.</p>}
+        {charts.length === 0 && (
+          <p className="rp-empty">No series for this category in the file.</p>
+        )}
         {charts.map(({ region, series }) => (
           <SeriesChart
             key={series.id}
@@ -390,8 +457,9 @@ function ReadyTab({
           </h3>
           <p className="rp-rule">
             {m.originFlows.originLabel}, week of {weekLabel}
-            {hour < 0 ? " (replay clock is outside the range)" : ""}, seen at places outside the evacuation area, by
-            grid cell. Baseline week: {m.originFlows.baselineWeek}. Lower bounds: Advan omits small home-area counts.
+            {hour < 0 ? " (replay clock is outside the range)" : ""}, seen at places outside the
+            evacuation area, by grid cell. Baseline week: {m.originFlows.baselineWeek}. Lower
+            bounds: Advan omits small home-area counts.
           </p>
           {top.length === 0 ? (
             <p className="rp-empty">No destination cell gained visitors over the baseline week.</p>
@@ -408,7 +476,9 @@ function ReadyTab({
                     <strong>{coordText(f.center)}</strong>
                     <span className="rp-dim">
                       {fmt(f.visitors)} visitors vs {fmt(f.baselineVisitors)} in the baseline week
-                      {f.baselineVisitors > 0 ? ` (${(f.visitors / f.baselineVisitors).toFixed(1)}×)` : ""}
+                      {f.baselineVisitors > 0
+                        ? ` (${(f.visitors / f.baselineVisitors).toFixed(1)}×)`
+                        : ""}
                     </span>
                   </button>
                 </li>

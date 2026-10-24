@@ -545,7 +545,7 @@ export function createScenario(world: World): Scenario {
       text: `The bridge queue peaks at ${peakQueue} cars, crossing one at a time.`,
     });
   }
-  engineIdx.forEach((i, k) => {
+  engineIdx.forEach((_, k) => {
     if (sprayStart[k] <= duration) {
       events.push({
         t: sprayStart[k],

@@ -227,7 +227,11 @@ function zone(value: unknown, path: string): Zone {
   };
 }
 
-function destination(value: unknown, path: string, layerClass: EvidenceClass | "mixed"): Destination {
+function destination(
+  value: unknown,
+  path: string,
+  layerClass: EvidenceClass | "mixed",
+): Destination {
   const d = obj(value, path);
   return {
     id: str(d.id, `${path}.id`),
@@ -259,7 +263,8 @@ export function replayEvent(value: unknown, path: string): ReplayEvent {
 
 function boundedIndex(value: unknown, path: string, count: number, what: string): number {
   const i = num(value, path);
-  if (!Number.isInteger(i) || i < 0 || i >= count) throw new BundleError(path, `${what} out of range`);
+  if (!Number.isInteger(i) || i < 0 || i >= count)
+    throw new BundleError(path, `${what} out of range`);
   return i;
 }
 
@@ -277,7 +282,12 @@ function frame(value: unknown, path: string, edgeCount: number): TrafficFrame {
   return { atMs: utcMs(f.at, `${path}.at`), edges };
 }
 
-function closure(value: unknown, path: string, edgeCount: number, frameCount: number): ClosureInterval {
+function closure(
+  value: unknown,
+  path: string,
+  edgeCount: number,
+  frameCount: number,
+): ClosureInterval {
   const tuple = arr(value, path);
   const first = boundedIndex(tuple[1], `${path}[1]`, frameCount, "frame index");
   const reopened = tuple[2] == null ? null : num(tuple[2], `${path}[2]`);
@@ -316,7 +326,8 @@ function zoneDepartures(stats: Obj): Traffic["zoneDepartures"] {
     if (!Array.isArray(list)) continue;
     const rows: [number, number][] = [];
     for (const item of list) {
-      if (!Array.isArray(item) || typeof item[0] !== "string" || typeof item[1] !== "number") continue;
+      if (!Array.isArray(item) || typeof item[0] !== "string" || typeof item[1] !== "number")
+        continue;
       const t = Date.parse(item[0]);
       if (Number.isFinite(t) && Number.isFinite(item[1])) rows.push([t, item[1]]);
     }
@@ -330,7 +341,9 @@ function zoneDepartures(stats: Obj): Traffic["zoneDepartures"] {
 export function traffic(body: Obj): Traffic {
   const edgeIds = strList(body.edge_ids, "traffic.edge_ids");
   const frames = ascending(
-    arr(body.frames, "traffic.frames").map((f, i) => frame(f, `traffic.frames[${i}]`, edgeIds.length)),
+    arr(body.frames, "traffic.frames").map((f, i) =>
+      frame(f, `traffic.frames[${i}]`, edgeIds.length),
+    ),
     "traffic.frames",
   );
   const closures = arr(body.closures ?? [], "traffic.closures").map((c, i) =>
@@ -393,15 +406,19 @@ export function simulatedFire(body: Obj): SimulatedFire {
       "fire_simulated.calibration.iou",
     ),
     calibrationHeadline: typeof calibration.headline === "string" ? calibration.headline : null,
-    hazardUntilMs: body.hazard_until == null ? null : utcMs(body.hazard_until, "fire_simulated.hazard_until"),
+    hazardUntilMs:
+      body.hazard_until == null ? null : utcMs(body.hazard_until, "fire_simulated.hazard_until"),
     constraintNote:
-      typeof objOrEmpty(body.constraint).note === "string" ? (objOrEmpty(body.constraint).note as string) : null,
+      typeof objOrEmpty(body.constraint).note === "string"
+        ? (objOrEmpty(body.constraint).note as string)
+        : null,
     heldOut: isObj(objOrEmpty(calibration.observations).held_out)
       ? (() => {
           const h = objOrEmpty(objOrEmpty(calibration.observations).held_out);
           return {
             n: typeof h.n === "number" ? h.n : null,
-            medianAbsErrorMin: typeof h.median_abs_error_min === "number" ? h.median_abs_error_min : null,
+            medianAbsErrorMin:
+              typeof h.median_abs_error_min === "number" ? h.median_abs_error_min : null,
           };
         })()
       : null,
@@ -417,8 +434,14 @@ export function simulatedFire(body: Obj): SimulatedFire {
       }),
       "fire_simulated.fronts",
     ),
-    arrivalGrid: body.arrival_grid == null ? null : arrivalGrid(obj(body.arrival_grid, "fire_simulated.arrival_grid")),
-    windFromDeg: optNum(objOrEmpty(model.params).wind_from_deg, "fire_simulated.model.params.wind_from_deg"),
+    arrivalGrid:
+      body.arrival_grid == null
+        ? null
+        : arrivalGrid(obj(body.arrival_grid, "fire_simulated.arrival_grid")),
+    windFromDeg: optNum(
+      objOrEmpty(model.params).wind_from_deg,
+      "fire_simulated.model.params.wind_from_deg",
+    ),
     assumptions: strList(body.assumptions, "fire_simulated.assumptions"),
   };
 }
@@ -428,7 +451,8 @@ function arrivalGrid(g: Obj): ArrivalGrid {
   const ncols = num(g.ncols, `${p}.ncols`);
   const nrows = num(g.nrows, `${p}.nrows`);
   const minutes = arr(g.minutes, `${p}.minutes`);
-  if (minutes.length !== ncols * nrows) throw new BundleError(`${p}.minutes`, "expected ncols * nrows cells");
+  if (minutes.length !== ncols * nrows)
+    throw new BundleError(`${p}.minutes`, "expected ncols * nrows cells");
   return {
     originLon: num(g.origin_lon, `${p}.origin_lon`),
     originLat: num(g.origin_lat, `${p}.origin_lat`),
@@ -476,8 +500,8 @@ export function insights(body: Obj): Insights {
         riskRule: optStr(item.risk_rule, `${path}.risk_rule`),
       };
     }),
-    edgeFireArrivalS: arr(body.edge_fire_arrival_s ?? [], "insights.edge_fire_arrival_s").map((v, i) =>
-      optNum(v, `insights.edge_fire_arrival_s[${i}]`),
+    edgeFireArrivalS: arr(body.edge_fire_arrival_s ?? [], "insights.edge_fire_arrival_s").map(
+      (v, i) => optNum(v, `insights.edge_fire_arrival_s[${i}]`),
     ),
     bottlenecks: arr(body.bottlenecks ?? [], "insights.bottlenecks").map((b, i) => {
       const path = `insights.bottlenecks[${i}]`;
@@ -512,7 +536,8 @@ function damagePoint(value: unknown, path: string): DamagePoint {
   return {
     coord: lngLat(geometry.coordinates, `${path}.geometry.coordinates`),
     damage: typeof props.damage === "string" ? props.damage : null,
-    structureCategory: typeof props.structure_category === "string" ? props.structure_category : null,
+    structureCategory:
+      typeof props.structure_category === "string" ? props.structure_category : null,
   };
 }
 
@@ -538,11 +563,15 @@ function layer<T>(
 ): Layer<T> | null {
   if (body === null) return null;
   const evidenceClass =
-    body.evidence_class === "mixed" ? "mixed" : evidence(body.evidence_class, `${name}.evidence_class`);
+    body.evidence_class === "mixed"
+      ? "mixed"
+      : evidence(body.evidence_class, `${name}.evidence_class`);
   const items = arr(body[listKey], `${name}.${listKey}`);
   if (evidenceClass === "mixed") {
     // Mixed is allowed only when every feature says what it is.
-    items.forEach((item, i) => featureClass(obj(item, `${name}.${listKey}[${i}]`), `${name}.${listKey}[${i}]`, "mixed"));
+    items.forEach((item, i) =>
+      featureClass(obj(item, `${name}.${listKey}[${i}]`), `${name}.${listKey}[${i}]`, "mixed"),
+    );
   }
   return {
     evidenceClass,
@@ -559,7 +588,12 @@ function withPopulation(zones: Layer<Zone> | null, demand: unknown): Layer<Zone>
       byId.set(`bg:${z.geoid}`, z.population);
     }
   }
-  return { ...zones, items: zones.items.map((z) => (z.population != null ? z : { ...z, population: byId.get(z.id) ?? null })) };
+  return {
+    ...zones,
+    items: zones.items.map((z) =>
+      z.population != null ? z : { ...z, population: byId.get(z.id) ?? null },
+    ),
+  };
 }
 
 function fireObservations(body: Obj): FireObservations {
@@ -610,11 +644,13 @@ function demandSummary(body: Obj): DemandSummary {
 /** Lenient parse of the optional "model vs published" rows; malformed rows are skipped. */
 function validationBlock(body: Obj): Validation {
   const grades: Record<string, string> = {};
-  for (const [k, v] of Object.entries(objOrEmpty(body.grades))) if (typeof v === "string") grades[k] = v;
+  for (const [k, v] of Object.entries(objOrEmpty(body.grades)))
+    if (typeof v === "string") grades[k] = v;
   const text = (v: unknown) => (typeof v === "string" && v.length > 0 ? v : null);
   const rows: ValidationRow[] = [];
   for (const raw of Array.isArray(body.rows) ? body.rows : []) {
-    if (!isObj(raw) || typeof raw.target_id !== "string" || typeof raw.metric !== "string") continue;
+    if (!isObj(raw) || typeof raw.target_id !== "string" || typeof raw.metric !== "string")
+      continue;
     const model: ValidationRow["model"] = [];
     for (const [key, value] of Object.entries(objOrEmpty(raw.model))) {
       if (typeof value === "string" || (typeof value === "number" && Number.isFinite(value))) {
@@ -637,7 +673,11 @@ function validationBlock(body: Obj): Validation {
       sourceLocator: text(raw.source_locator),
     });
   }
-  return { evidenceClass: evidence(body.evidence_class, "validation.evidence_class"), grades, rows };
+  return {
+    evidenceClass: evidence(body.evidence_class, "validation.evidence_class"),
+    grades,
+    rows,
+  };
 }
 
 function responderAction(value: unknown): ResponderAction & { reason: string | null } {
@@ -669,7 +709,9 @@ function responders(body: Obj): RespondersComparison {
         simulated: responderAction(item.simulated),
         historical: {
           ...responderAction(historical),
-          evidenceClass: (EVIDENCE_CLASSES as readonly unknown[]).includes(historical.evidence_class)
+          evidenceClass: (EVIDENCE_CLASSES as readonly unknown[]).includes(
+            historical.evidence_class,
+          )
             ? (historical.evidence_class as EvidenceClass)
             : null,
           locator: typeof source.locator === "string" ? source.locator : null,
@@ -686,7 +728,10 @@ export function parseBundle(data: unknown): ReplayModel {
   if (b.kind !== BUNDLE_KIND) throw new BundleError("kind", `expected "${BUNDLE_KIND}"`);
   const schemaVersion = str(b.schema_version, "schema_version");
   if (!schemaVersion.startsWith(SUPPORTED_SCHEMA_MAJOR)) {
-    throw new BundleError("schema_version", `unsupported version ${schemaVersion}; this view reads 1.x`);
+    throw new BundleError(
+      "schema_version",
+      `unsupported version ${schemaVersion}; this view reads 1.x`,
+    );
   }
 
   const incident = obj(b.incident, "incident");
@@ -717,7 +762,9 @@ export function parseBundle(data: unknown): ReplayModel {
   const fire = layerBody(b, "fire", layerStatusMap);
   const perimeters = fire
     ? ascending(
-        arr(fire.perimeters, "fire.perimeters").map((p, i) => perimeter(p, `fire.perimeters[${i}]`)),
+        arr(fire.perimeters, "fire.perimeters").map((p, i) =>
+          perimeter(p, `fire.perimeters[${i}]`),
+        ),
         "fire.perimeters",
       )
     : [];
@@ -739,7 +786,9 @@ export function parseBundle(data: unknown): ReplayModel {
         const r = incident.reference_point;
         if (!isObj(r) || typeof r.name !== "string" || !Array.isArray(r.coord)) return null;
         const [lon, lat] = r.coord;
-        return typeof lon === "number" && typeof lat === "number" ? { name: r.name, coord: [lon, lat] as LngLat } : null;
+        return typeof lon === "number" && typeof lat === "number"
+          ? { name: r.name, coord: [lon, lat] as LngLat }
+          : null;
       })(),
     },
     mode: str(b.mode, "mode"),
@@ -753,7 +802,10 @@ export function parseBundle(data: unknown): ReplayModel {
     insights: insightsBody ? insights(insightsBody) : null,
     responders: isObj(b.responders) ? responders(objOrEmpty(b.responders)) : null,
     roads: layer(layerBody(b, "roads", layerStatusMap), "roads", "edges", roadEdge),
-    zones: withPopulation(layer(layerBody(b, "zones", layerStatusMap), "zones", "features", zone), b.demand),
+    zones: withPopulation(
+      layer(layerBody(b, "zones", layerStatusMap), "zones", "features", zone),
+      b.demand,
+    ),
     destinations: layer(
       layerBody(b, "destinations", layerStatusMap),
       "destinations",

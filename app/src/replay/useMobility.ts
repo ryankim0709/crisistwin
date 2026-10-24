@@ -36,7 +36,8 @@ export function useMobility(url: string | null): MobilityState {
           state: {
             status: "error",
             data: null,
-            error: error instanceof Error ? error.message : "The mobility sidecar could not be loaded.",
+            error:
+              error instanceof Error ? error.message : "The mobility sidecar could not be loaded.",
           },
         });
       });

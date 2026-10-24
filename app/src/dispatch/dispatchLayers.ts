@@ -1,7 +1,17 @@
-import { Marker, type GeoJSONSource, type Map as MapLibreMap, type MapLayerMouseEvent } from "maplibre-gl";
+import {
+  Marker,
+  type GeoJSONSource,
+  type Map as MapLibreMap,
+  type MapLayerMouseEvent,
+} from "maplibre-gl";
 import type { Feature, FeatureCollection, LineString, Point, Polygon } from "geojson";
 import type { DispatchArea, LonLat } from "./area";
-import { ROUTE_LOOKAHEAD_MINUTES, type DispatchEngine, type UnitState, type ZoneState } from "./engine";
+import {
+  ROUTE_LOOKAHEAD_MINUTES,
+  type DispatchEngine,
+  type UnitState,
+  type ZoneState,
+} from "./engine";
 import "./dispatchMap.css";
 
 const PREFIX = "dispatch-";
@@ -41,21 +51,23 @@ const LAYERS = [
   LAYER_VEHICLES,
 ];
 
+/** Map paint colours. MapLibre cannot read CSS variables, so these mirror the hazard tokens in
+ * ui/tokens.css (`--ct-route`, `--ct-closure`, `--ct-shelter`, ...); the legend reads them too. */
 export const COLORS = {
   neutral: "#ffffff",
-  ordered: "#f59e0b",
-  cleared: "#22c55e",
+  ordered: "#f2a33a", // --ct-ember
+  cleared: "#22c55e", // --ct-shelter
   overrun: "#7f1d1d",
-  overrunLine: "#ef4444",
-  blocked: "#ff2d2d",
-  fire: "#fb923c",
+  overrunLine: "#dc2626", // --ct-closure
+  blocked: "#dc2626", // --ct-closure
+  fire: "#ee6b4d", // --ct-fire
   selected: "#38bdf8",
-  burned: "#dc2626",
-  closed: "#fb923c",
+  burned: "#dc2626", // --ct-closure
+  closed: "#ff6a1a", // --ct-fire-hot
   routeCasing: "#ffffff",
-  route: "#06b6d4",
-  unitPath: "#3b82f6",
-  vehicle: "#facc15",
+  route: "#3b82c4", // --ct-route
+  unitPath: "#c7a6ff", // --ct-responder
+  vehicle: "#5eead4", // --ct-evacuee
   vehicleStuck: "#d946ef",
   vehicleStroke: "#1f2937",
 } as const;
@@ -77,7 +89,13 @@ function line(coords: LonLat[], properties: Props = {}): Feature<LineString, Pro
   return { type: "Feature", properties, geometry: { type: "LineString", coordinates: coords } };
 }
 
-function marker(className: string, text: string, position: LonLat, map: MapLibreMap, title?: string) {
+function marker(
+  className: string,
+  text: string,
+  position: LonLat,
+  map: MapLibreMap,
+  title?: string,
+) {
   const element = document.createElement("div");
   element.className = className;
   element.textContent = text;
@@ -85,7 +103,10 @@ function marker(className: string, text: string, position: LonLat, map: MapLibre
   return new Marker({ element, anchor: "center" }).setLngLat(position).addTo(map);
 }
 
-function zoneLabel(zone: ZoneState | undefined, id: string): { text: string; show: boolean; status: string } {
+function zoneLabel(
+  zone: ZoneState | undefined,
+  id: string,
+): { text: string; show: boolean; status: string } {
   if (!zone) return { text: id, show: false, status: "no_order" };
   let word = "";
   if (zone.routeBlocked) word = "BLOCKED";
@@ -127,7 +148,7 @@ export class DispatchLayers {
     map.on("mouseleave", LAYER_ZONE_FILL, this.onLeave);
     this.addStaticMarkers();
     for (const zone of area.zones) {
-      const m = marker("dispatch-zone-label", zone.id, zone.centroid, map);
+      const m = marker("dsp-zone-label", zone.id, zone.centroid, map);
       m.getElement().addEventListener("click", (event) => {
         event.stopPropagation();
         options.onSelectZone?.(zone.id);
@@ -146,7 +167,10 @@ export class DispatchLayers {
     this.setData(
       ROUTES,
       engine
-        ? { type: "FeatureCollection", features: engine.activeRoutes().map((r) => line(r.coords, { zone: r.zone })) }
+        ? {
+            type: "FeatureCollection",
+            features: engine.activeRoutes().map((r) => line(r.coords, { zone: r.zone })),
+          }
         : EMPTY_LINES,
     );
     this.setData(
@@ -175,7 +199,7 @@ export class DispatchLayers {
     }
     for (const [id, m] of this.zoneMarkers) {
       const element = m.getElement();
-      element.classList.toggle("dispatch-zone-label--selected", id === zoneId);
+      element.classList.toggle("dsp-zone-label--selected", id === zoneId);
       element.style.zIndex = id === zoneId ? SELECTED_Z_INDEX : "";
       if (id === zoneId) element.style.display = "";
     }
@@ -184,7 +208,12 @@ export class DispatchLayers {
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
-    for (const m of [...this.zoneMarkers.values(), ...this.unitMarkers.values(), ...this.staticMarkers]) m.remove();
+    for (const m of [
+      ...this.zoneMarkers.values(),
+      ...this.unitMarkers.values(),
+      ...this.staticMarkers,
+    ])
+      m.remove();
     this.zoneMarkers.clear();
     this.unitMarkers.clear();
     this.staticMarkers = [];
@@ -204,21 +233,37 @@ export class DispatchLayers {
 
   private addSources() {
     this.map.addSource(ZONES, { type: "geojson", data: this.zoneCollection(null) });
-    for (const id of [BURNED, CLOSED, ROUTES, UNIT_PATHS]) this.map.addSource(id, { type: "geojson", data: EMPTY_LINES });
+    for (const id of [BURNED, CLOSED, ROUTES, UNIT_PATHS])
+      this.map.addSource(id, { type: "geojson", data: EMPTY_LINES });
     this.map.addSource(VEHICLES, { type: "geojson", data: EMPTY_POINTS });
   }
 
   private addLayers() {
     const map = this.map;
     const byStatus = (none: unknown, ordered: unknown, cleared: unknown, overrun: unknown) =>
-      ["match", ["get", "status"], "ordered", ordered, "cleared", cleared, "overrun", overrun, none] as never;
+      [
+        "match",
+        ["get", "status"],
+        "ordered",
+        ordered,
+        "cleared",
+        cleared,
+        "overrun",
+        overrun,
+        none,
+      ] as never;
     map.addLayer({
       id: LAYER_ZONE_FILL,
       type: "fill",
       source: ZONES,
       paint: {
         "fill-color": byStatus(COLORS.neutral, COLORS.ordered, COLORS.cleared, COLORS.overrun),
-        "fill-opacity": byStatus(FILL_OPACITY.no_order, FILL_OPACITY.ordered, FILL_OPACITY.cleared, FILL_OPACITY.overrun),
+        "fill-opacity": byStatus(
+          FILL_OPACITY.no_order,
+          FILL_OPACITY.ordered,
+          FILL_OPACITY.cleared,
+          FILL_OPACITY.overrun,
+        ),
       },
     });
     // Fire contact: a wide soft orange halo under the outline.
@@ -236,7 +281,12 @@ export class DispatchLayers {
       filter: ["!=", ["get", "status"], "ordered"],
       paint: {
         "line-color": byStatus(COLORS.neutral, COLORS.ordered, COLORS.cleared, COLORS.overrunLine),
-        "line-width": byStatus(OUTLINE_WIDTH.thin, OUTLINE_WIDTH.normal, OUTLINE_WIDTH.normal, OUTLINE_WIDTH.thick),
+        "line-width": byStatus(
+          OUTLINE_WIDTH.thin,
+          OUTLINE_WIDTH.normal,
+          OUTLINE_WIDTH.normal,
+          OUTLINE_WIDTH.thick,
+        ),
         "line-opacity": byStatus(0.55, 1, 1, 1),
       },
     });
@@ -245,14 +295,22 @@ export class DispatchLayers {
       type: "line",
       source: ZONES,
       filter: ["==", ["get", "status"], "ordered"],
-      paint: { "line-color": COLORS.ordered, "line-width": OUTLINE_WIDTH.normal, "line-dasharray": [3, 2] },
+      paint: {
+        "line-color": COLORS.ordered,
+        "line-width": OUTLINE_WIDTH.normal,
+        "line-dasharray": [3, 2],
+      },
     });
     map.addLayer({
       id: LAYER_ZONE_BLOCKED,
       type: "line",
       source: ZONES,
       filter: ["==", ["get", "blocked"], true],
-      paint: { "line-color": COLORS.blocked, "line-width": OUTLINE_WIDTH.thick, "line-dasharray": [1.5, 1.5] },
+      paint: {
+        "line-color": COLORS.blocked,
+        "line-width": OUTLINE_WIDTH.thick,
+        "line-dasharray": [1.5, 1.5],
+      },
     });
     map.addLayer({
       id: LAYER_ZONE_SELECTED,
@@ -280,7 +338,11 @@ export class DispatchLayers {
       type: "line",
       source: ROUTES,
       layout: { "line-cap": "round", "line-join": "round" },
-      paint: { "line-color": COLORS.routeCasing, "line-width": ROUTE_CASING_WIDTH, "line-opacity": 0.9 },
+      paint: {
+        "line-color": COLORS.routeCasing,
+        "line-width": ROUTE_CASING_WIDTH,
+        "line-opacity": 0.9,
+      },
     });
     map.addLayer({
       id: LAYER_ROUTE,
@@ -315,10 +377,14 @@ export class DispatchLayers {
   private addStaticMarkers() {
     for (const exit of this.area.exits) {
       const position = this.area.nodes[exit.node];
-      this.staticMarkers.push(marker("dispatch-exit", `⇥ ${exit.id}`, position, this.map, `${exit.name} (${exit.road})`));
+      this.staticMarkers.push(
+        marker("dsp-exit", `⇥ ${exit.id}`, position, this.map, `${exit.name} (${exit.road})`),
+      );
     }
     for (const station of this.area.stations) {
-      this.staticMarkers.push(marker("dispatch-station", `▲ ${station.id}`, station.location, this.map, station.name));
+      this.staticMarkers.push(
+        marker("dsp-station", `▲ ${station.id}`, station.location, this.map, station.name),
+      );
     }
   }
 
@@ -408,7 +474,7 @@ export class DispatchLayers {
     let m = this.unitMarkers.get(unit.id);
     if (m) m.setLngLat(position);
     else {
-      m = marker("dispatch-unit", unit.id, position, this.map);
+      m = marker("dsp-unit", unit.id, position, this.map);
       this.unitMarkers.set(unit.id, m);
     }
     const element = m.getElement();

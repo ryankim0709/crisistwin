@@ -18,6 +18,7 @@ import type {
 import type { LandscapeGrid } from "../fire/landscape";
 import type { GeoPoint } from "../fire/spread";
 import type { MapMode } from "./contracts";
+import { Button, Legend, Notice, Panel, Tag } from "../ui";
 
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
 
@@ -154,24 +155,36 @@ export default function StudioDiorama(props: StudioDioramaProps) {
       />
 
       {error && (
-        <div className="studio-diorama__card" role="alert">
+        <Panel glass className="studio-diorama__card" role="alert">
           <p className="studio-diorama__card-title">3D view unavailable in this browser</p>
           <p>
             The diorama needs WebGL, which appears to be disabled or unsupported here. Switch to
             the map view; the scenario and results still work.
           </p>
           <p className="studio-diorama__detail">{error}</p>
-        </div>
+        </Panel>
       )}
-      {!error && !landscape && <div className="studio-diorama__card">{emptyState}</div>}
+      {!error && !landscape && (
+        <Panel glass className="studio-diorama__card">
+          {emptyState}
+        </Panel>
+      )}
 
       {!error && landscape && (
         <>
           <div className="studio-diorama__top">
-            {prompt && <p className="studio-diorama__pill is-prompt">{prompt}</p>}
-            <ul className="studio-diorama__warnings">
+            {prompt && (
+              <Tag tone="brand" className="studio-diorama__pill">
+                {prompt}
+              </Tag>
+            )}
+            <ul className="studio-diorama__warnings" aria-label="Model warnings">
               {warnings.map((warning) => (
-                <li key={warning}>{warning}</li>
+                <li key={warning}>
+                  <Notice compact className="studio-diorama__warning">
+                    <span aria-hidden="true">⚠</span> {warning}
+                  </Notice>
+                </li>
               ))}
             </ul>
           </div>
@@ -179,53 +192,60 @@ export default function StudioDiorama(props: StudioDioramaProps) {
             <p className="studio-diorama__credit">Sources: {attribution.join(" · ")}</p>
           )}
           <div className="studio-diorama__tools">
-            <button
-              type="button"
-              className="studio-diorama__btn"
-              onClick={() => scene?.resetView(false)}
-            >
+            <Button variant="secondary" size="sm" onClick={() => scene?.resetView(false)}>
               Whole board
-            </button>
-            <button
-              type="button"
-              className="studio-diorama__btn"
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
               onClick={() => scene?.resetView(true)}
               disabled={!run}
             >
               Frame fire
-            </button>
+            </Button>
           </div>
           <section className="studio-diorama__legend" aria-label="3D view legend">
-            <button
-              type="button"
-              className="studio-diorama__legend-toggle"
+            <Button
+              variant="secondary"
+              size="sm"
               aria-expanded={legendOpen}
+              aria-controls="studio-diorama-legend"
               onClick={() => setLegendOpen((open) => !open)}
             >
-              Legend
-            </button>
+              {legendOpen ? "Hide legend" : "Legend"}
+            </Button>
             {legendOpen && (
-              <ul>
-                <li>
-                  <FireEdgeGlyph />
-                  Burning front (glows)
-                </li>
-                <li>
-                  <BurnedGlyph />
-                  Burned ground
-                </li>
-                <li>
-                  <IgnitionGlyph />
-                  Enabled ignition, with its name
-                </li>
-                <li>
-                  <WindGlyph bearing={(windFromDegrees + 180) % 360} />
-                  Wind, pointing downwind
-                </li>
-                <li className="studio-diorama__legend-note">
+              <Panel
+                glass
+                compact
+                id="studio-diorama-legend"
+                className="studio-diorama__legend-list"
+              >
+                <Legend
+                  label="3D view legend items"
+                  items={[
+                    {
+                      label: "Burning front (glows)",
+                      color: "var(--ct-fire)",
+                      glyph: <FireEdgeGlyph />,
+                    },
+                    { label: "Burned ground", color: "var(--ct-burned)", glyph: <BurnedGlyph /> },
+                    {
+                      label: "Enabled ignition, with its name",
+                      color: "var(--ct-fire)",
+                      glyph: <IgnitionGlyph />,
+                    },
+                    {
+                      label: "Wind, pointing downwind",
+                      color: "var(--ct-ink)",
+                      glyph: <WindGlyph bearing={(windFromDegrees + 180) % 360} />,
+                    },
+                  ]}
+                />
+                <p className="studio-diorama__legend-note">
                   Trees and houses symbolise LANDFIRE fuel classes; relief is exaggerated.
-                </li>
-              </ul>
+                </p>
+              </Panel>
             )}
           </section>
         </>

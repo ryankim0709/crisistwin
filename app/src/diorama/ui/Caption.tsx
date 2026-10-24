@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Eyebrow, Panel } from "../../ui";
 
 type CaptionProps = { phaseLabel: string; caption: string; reducedMotion: boolean };
 
@@ -20,21 +21,28 @@ export default function Caption({ phaseLabel, caption, reducedMotion }: CaptionP
   }
 
   return (
-    <div className="dio-caption dio-panel">
-      <p className="dio-caption-phase">{phaseLabel}</p>
+    <Panel glass compact className="dio-caption">
+      <Eyebrow>{phaseLabel}</Eyebrow>
       <div className="dio-caption-lines" aria-hidden="true">
         {previous && !reducedMotion && (
-          <p key={previous.key} className="dio-caption-text is-leaving" onAnimationEnd={() => setPrevious(null)}>
+          <p
+            key={previous.key}
+            className="dio-caption-text is-leaving"
+            onAnimationEnd={() => setPrevious(null)}
+          >
             {previous.text}
           </p>
         )}
-        <p key={current.key} className={`dio-caption-text${current.key > 0 && !reducedMotion ? " is-entering" : ""}`}>
+        <p
+          key={current.key}
+          className={`dio-caption-text${current.key > 0 && !reducedMotion ? " is-entering" : ""}`}
+        >
           {current.text}
         </p>
       </div>
       <p className="dio-visually-hidden" aria-live="polite" aria-atomic="true">
         {caption}
       </p>
-    </div>
+    </Panel>
   );
 }

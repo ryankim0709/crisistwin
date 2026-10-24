@@ -15,13 +15,7 @@ import {
   type StudioScenario,
 } from "./contracts";
 import { demoScenario } from "./demo";
-import {
-  clearDraft,
-  draftStatusText,
-  exportScenarioJson,
-  loadDraft,
-  saveDraft,
-} from "./draft";
+import { clearDraft, draftStatusText, exportScenarioJson, loadDraft, saveDraft } from "./draft";
 import {
   createIgnition,
   emptyScenario,
@@ -29,11 +23,17 @@ import {
   solverInputChanged,
   validateScenario,
 } from "./scenario";
+import { Button, LoadingState, Notice, SegmentedControl, type SegmentedOption } from "../ui";
+import { downloadJson, frameIndexAt } from "./playbackUtils";
 import { useStudioRun } from "./useStudioRun";
 import type { DioramaIgnition, DioramaRun } from "../fire/diorama/types";
 import "./studio.css";
 
 type StudioView = "map" | "diorama";
+const VIEW_OPTIONS: readonly SegmentedOption<StudioView>[] = [
+  { value: "map", label: "Map" },
+  { value: "diorama", label: "3D diorama" },
+];
 const VIEW_STORAGE_KEY = "crisistwin.studio.view";
 /** Gap kept between the floating panel and the framed 3D board, CSS px. */
 const DIORAMA_PANEL_GAP_PX = 12;
@@ -66,27 +66,6 @@ const FAST_HEAD_RATE_METERS_PER_MINUTE = 10;
 const SMALL_SPREAD_HECTARES = 5;
 const SQUARE_METERS_PER_HECTARE = 10_000;
 const OPERATIONAL_DISCLAIMER = "Planning experiment; not an operational forecast.";
-
-/** Index of the last frame at or before `minute`. */
-function frameIndexAt(frameMinutes: readonly number[], minute: number): number {
-  let index = 0;
-  for (let i = 0; i < frameMinutes.length; i += 1) {
-    if (frameMinutes[i] <= minute) index = i;
-    else break;
-  }
-  return index;
-}
-
-function downloadJson(filename: string, text: string): void {
-  const url = URL.createObjectURL(new Blob([text], { type: "application/json" }));
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-}
 
 export default function SimulationStudioPage() {
   const [initialDraft] = useState(loadDraft);
@@ -285,13 +264,10 @@ export default function SimulationStudioPage() {
     setMode("select");
   }, [applyScenario]);
 
-  const handleSelect = useCallback(
-    (id: string | null) => {
-      setSelectedId(id);
-      if (id === null) setMode((current) => (current === "move" ? "select" : current));
-    },
-    [],
-  );
+  const handleSelect = useCallback((id: string | null) => {
+    setSelectedId(id);
+    if (id === null) setMode((current) => (current === "move" ? "select" : current));
+  }, []);
 
   const handleExport = useCallback(() => {
     try {
@@ -344,7 +320,8 @@ export default function SimulationStudioPage() {
     const states: Record<string, IgnitionDisplayState> = {};
     for (const entry of result?.run.ignitions ?? []) {
       if (entry.outcome.status === "ignited") {
-        states[entry.sourceId] = entry.outcome.ignitedMinute <= currentMinute ? "triggered" : "scheduled";
+        states[entry.sourceId] =
+          entry.outcome.ignitedMinute <= currentMinute ? "triggered" : "scheduled";
       } else {
         states[entry.sourceId] =
           entry.outcome.reachedMinute <= currentMinute ? "reached-before-start" : "scheduled";
@@ -357,7 +334,8 @@ export default function SimulationStudioPage() {
     const states: Record<string, IgnitionDisplayState> = {};
     for (const ignition of scenario.ignitions) {
       if (!ignition.enabled) states[ignition.id] = "disabled";
-      else if (issueIds.has(ignition.id) || problemIds.has(ignition.id)) states[ignition.id] = "invalid";
+      else if (issueIds.has(ignition.id) || problemIds.has(ignition.id))
+        states[ignition.id] = "invalid";
       else if (!result || stale) states[ignition.id] = "draft";
       else states[ignition.id] = resultStates[ignition.id] ?? "draft";
     }
@@ -380,7 +358,9 @@ export default function SimulationStudioPage() {
       }
       if (!solved.crownFire.modelled) list.push(solved.crownFire.unavailableReason);
       if (!result.elevationComplete) {
-        list.push("Elevation data was incomplete for part of the area, so slope is understated there.");
+        list.push(
+          "Elevation data was incomplete for part of the area, so slope is understated there.",
+        );
       }
       const horizonFrame = solved.frames[solved.frames.length - 1];
       if (
@@ -429,12 +409,10 @@ export default function SimulationStudioPage() {
     return details;
   }, [result, stale]);
 
-  const attribution = useMemo(
-    () => (result ? Object.values(result.attribution) : []),
-    [result],
-  );
+  const attribution = useMemo(() => (result ? Object.values(result.attribution) : []), [result]);
 
-  const playbackHorizon = result?.scenario.settings.horizonMinutes ?? scenario.settings.horizonMinutes;
+  const playbackHorizon =
+    result?.scenario.settings.horizonMinutes ?? scenario.settings.horizonMinutes;
 
   const dioramaRun = useMemo<DioramaRun | null>(
     () =>
@@ -531,38 +509,21 @@ export default function SimulationStudioPage() {
                   <div className="studio-row">
                     {scenario.ignitions.length === 0 ? (
                       <>
-                        <button
-                          type="button"
-                          className="studio-btn studio-btn-primary"
-                          onClick={handleLoadDemo}
-                        >
+                        <Button size="sm" onClick={handleLoadDemo}>
                           Load demo
-                        </button>
-                        <button
-                          type="button"
-                          className="studio-btn studio-btn-secondary"
-                          onClick={() => handleModeChange("add")}
-                        >
+                        </Button>
+                        <Button variant="secondary" size="sm" onClick={() => handleModeChange("add")}>
                           Place fires on map
-                        </button>
+                        </Button>
                       </>
                     ) : (
                       <>
-                        <button
-                          type="button"
-                          className="studio-btn studio-btn-primary"
-                          onClick={handleRun}
-                          disabled={issues.length > 0 || running}
-                        >
+                        <Button size="sm" onClick={handleRun} disabled={issues.length > 0 || running}>
                           {running ? "Running…" : "Run simulation"}
-                        </button>
-                        <button
-                          type="button"
-                          className="studio-btn studio-btn-secondary"
-                          onClick={() => chooseView("map")}
-                        >
+                        </Button>
+                        <Button variant="secondary" size="sm" onClick={() => chooseView("map")}>
                           Back to map
-                        </button>
+                        </Button>
                       </>
                     )}
                   </div>
@@ -592,43 +553,47 @@ export default function SimulationStudioPage() {
           )}
         </div>
 
-        <div className="studio-view" role="radiogroup" aria-label="View">
-          {(
-            [
-              ["map", "Map"],
-              ["diorama", "3D diorama"],
-            ] as const
-          ).map(([value, label]) => (
-            <label key={value}>
-              <input
-                type="radio"
-                name="studio-view"
-                checked={view === value}
-                onChange={() => chooseView(value)}
-              />
-              <span>{label}</span>
-            </label>
-          ))}
+        <div className="studio-view">
+          <SegmentedControl
+            label="View"
+            options={VIEW_OPTIONS}
+            value={view}
+            onChange={chooseView}
+          />
         </div>
 
         <div className="studio-page-status" aria-live="polite">
           {state.phase === "loading-landscape" && (
-            <p className="studio-chip">Loading fuel and terrain data…</p>
+            <div className="studio-chip">
+              <LoadingState>Loading fuel and terrain data…</LoadingState>
+            </div>
           )}
-          {state.phase === "computing" && <p className="studio-chip">Computing fire spread…</p>}
-          {state.phase === "canceled" && <p className="studio-chip">Run canceled.</p>}
+          {state.phase === "computing" && (
+            <div className="studio-chip">
+              <LoadingState>Computing fire spread…</LoadingState>
+            </div>
+          )}
+          {state.phase === "canceled" && (
+            <Notice tone="info" className="studio-chip-notice">
+              Run canceled.
+            </Notice>
+          )}
           {state.phase === "failed" && state.error && (
-            <p className="studio-chip studio-chip-error" role="alert">
+            <Notice tone="danger" className="studio-chip-notice">
               {state.error.message}
-            </p>
+            </Notice>
           )}
           {/* In 3D the empty-state card carries this instead. */}
           {!running && scenario.ignitions.length === 0 && view === "map" && (
-            <p className="studio-chip">
-              Choose “+ Add” and click the map to place a fire, or load the demo scenario.
-            </p>
+            <Notice tone="info" className="studio-chip-notice">
+              Choose “Add ignition” and click the map to place a fire, or load the demo scenario.
+            </Notice>
           )}
-          {notice && <p className="studio-chip">{notice}</p>}
+          {notice && (
+            <Notice tone="info" className="studio-chip-notice">
+              {notice}
+            </Notice>
+          )}
         </div>
 
         <div
@@ -661,7 +626,9 @@ export default function SimulationStudioPage() {
 
       <div className="studio-dock">
         {result && stale && (
-          <p className="studio-previous">Playing the previous run; run again to include your edits.</p>
+          <Notice className="studio-previous">
+            Playing the previous run; run again to include your edits.
+          </Notice>
         )}
         <PlaybackBar
           enabled={result !== null && frameMinutes.length > 0}

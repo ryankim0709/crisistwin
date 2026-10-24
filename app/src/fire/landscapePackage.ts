@@ -111,9 +111,7 @@ async function pipeThrough(
 
 export async function sha256Hex(bytes: Uint8Array): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", bytes as BufferSource);
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join(
-    "",
-  );
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function sectionBytes(array: Int16Array | Float32Array): Uint8Array {
@@ -246,7 +244,9 @@ function readSection(
   const bytes = block.slice(section.byteOffset, section.byteOffset + section.byteLength);
   const count = section.byteLength / BYTES_PER_ELEMENT[section.dtype];
   if (LITTLE_ENDIAN_HOST) {
-    return section.dtype === "int16" ? new Int16Array(bytes.buffer) : new Float32Array(bytes.buffer);
+    return section.dtype === "int16"
+      ? new Int16Array(bytes.buffer)
+      : new Float32Array(bytes.buffer);
   }
   const view = new DataView(bytes.buffer);
   if (section.dtype === "int16") {
@@ -400,7 +400,10 @@ async function getOrUnavailable(url: string, signal: AbortSignal): Promise<Respo
     throw new RegionUnavailableError(`Could not reach ${url}.`, 0);
   }
   if (isUnavailableStatus(response.status)) {
-    throw new RegionUnavailableError(`${url} is unavailable (${response.status}).`, response.status);
+    throw new RegionUnavailableError(
+      `${url} is unavailable (${response.status}).`,
+      response.status,
+    );
   }
   if (!response.ok) throw new Error(`${url} failed (${response.status}).`);
   return response;

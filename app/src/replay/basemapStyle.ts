@@ -81,17 +81,23 @@ interface StyleLayer {
 
 /** A restyled copy of the dark style; the input is not modified. */
 export function restyleDarkBasemap(style: BasemapStyle): BasemapStyle {
-  const layers: StyleLayer[] = (style.layers as unknown as StyleLayer[]).map((layer): StyleLayer => {
-    const override = {
-      ...(PAINT[layer.id] ?? {}),
-      ...(PLACE_LABELS.includes(layer.id) ? { "text-color": LABEL, "text-halo-color": LABEL_HALO } : {}),
-      ...(PLACE_LABELS_MAJOR.includes(layer.id) ? { "text-color": LABEL_MAJOR, "text-halo-color": LABEL_HALO } : {}),
-    };
-    const paint: Paint = { ...(layer.paint ?? {}), ...override };
-    // The style's wood pattern is not in its sprite (console warning, nothing drawn).
-    delete paint["fill-pattern"];
-    return { ...layer, paint };
-  });
+  const layers: StyleLayer[] = (style.layers as unknown as StyleLayer[]).map(
+    (layer): StyleLayer => {
+      const override = {
+        ...(PAINT[layer.id] ?? {}),
+        ...(PLACE_LABELS.includes(layer.id)
+          ? { "text-color": LABEL, "text-halo-color": LABEL_HALO }
+          : {}),
+        ...(PLACE_LABELS_MAJOR.includes(layer.id)
+          ? { "text-color": LABEL_MAJOR, "text-halo-color": LABEL_HALO }
+          : {}),
+      };
+      const paint: Paint = { ...(layer.paint ?? {}), ...override };
+      // The style's wood pattern is not in its sprite (console warning, nothing drawn).
+      delete paint["fill-pattern"];
+      return { ...layer, paint };
+    },
+  );
 
   // County lines (OpenMapTiles boundary admin_level 6), under the state line.
   const stateIndex = layers.findIndex((l) => l.id === "boundary_state");
@@ -104,7 +110,12 @@ export function restyleDarkBasemap(style: BasemapStyle): BasemapStyle {
       "source-layer": "boundary",
       minzoom: 7,
       filter: ["all", ["==", ["get", "admin_level"], 6], ["!=", ["get", "maritime"], 1]],
-      paint: { "line-color": BOUNDARY, "line-opacity": 0.55, "line-width": 0.8, "line-dasharray": [3, 2] },
+      paint: {
+        "line-color": BOUNDARY,
+        "line-opacity": 0.55,
+        "line-width": 0.8,
+        "line-dasharray": [3, 2],
+      },
     });
   }
 

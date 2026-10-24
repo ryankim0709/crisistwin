@@ -1,3 +1,4 @@
+import { Button } from "../ui";
 import { COLORS, PEOPLE_RAMP } from "./mapLayers";
 import { MOBILITY_COLORS } from "./mobility";
 import type { EvidenceClass } from "./types";
@@ -29,16 +30,28 @@ export default function MapLegend({
 }) {
   if (!open) {
     return (
-      <button type="button" className="rp-key-btn" aria-expanded={false} onClick={onToggle}>
+      <Button
+        variant="secondary"
+        size="sm"
+        className="rp-key-btn"
+        aria-expanded={false}
+        onClick={onToggle}
+      >
         Key
-      </button>
+      </Button>
     );
   }
   return (
     <div className="rp-maplegend" aria-label="Map key">
-      <button type="button" className="rp-key-close" aria-expanded={true} onClick={onToggle}>
+      <Button
+        variant="ghost"
+        size="sm"
+        className="rp-key-close"
+        aria-expanded={true}
+        onClick={onToggle}
+      >
         Hide key
-      </button>
+      </Button>
       <ul>
         <li>
           <svg viewBox="0 0 28 14" aria-hidden="true">
@@ -123,7 +136,8 @@ export default function MapLegend({
               <circle cx="14" cy="7" r="3.5" fill={MOBILITY_COLORS.near} />
               <circle cx="23" cy="7" r="4" fill={MOBILITY_COLORS.above} />
             </svg>
-            Movement (device data, {EVIDENCE_LABEL[mobilityEvidence]}): brighter = more visits than usual
+            Movement (device data, {EVIDENCE_LABEL[mobilityEvidence]}): brighter = more visits than
+            usual
           </li>
         )}
         {showFireObs && fireObsSource && (

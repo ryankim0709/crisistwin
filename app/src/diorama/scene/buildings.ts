@@ -41,13 +41,19 @@ function homeParts(b: Building): { parts: THREE.BufferGeometry[]; top: number } 
   parts.push(box(1.5, 2.5, 0.25, -b.w * 0.2, fy + 1.25, b.d / 2 + 0.1, PALETTE.door));
   parts.push(box(1.7, 1.3, 0.2, b.w * 0.22, fy + b.h * 0.55, b.d / 2 + 0.08, PALETTE.glass));
   parts.push(box(1.7, 1.3, 0.2, 0, fy + b.h * 0.55, -b.d / 2 - 0.08, PALETTE.glass));
-  for (const side of [-1, 1]) parts.push(box(0.2, 1.3, 1.6, side * (b.w / 2 + 0.08), fy + b.h * 0.55, 0, PALETTE.glass));
-  if (hash2(b.p.z, b.p.x) > 0.45) parts.push(box(1, 2.6, 1, b.w * 0.27, H + rise * 0.55, -b.d * 0.18, PALETTE.chimney));
+  for (const side of [-1, 1])
+    parts.push(box(0.2, 1.3, 1.6, side * (b.w / 2 + 0.08), fy + b.h * 0.55, 0, PALETTE.glass));
+  if (hash2(b.p.z, b.p.x) > 0.45)
+    parts.push(box(1, 2.6, 1, b.w * 0.27, H + rise * 0.55, -b.d * 0.18, PALETTE.chimney));
   toWorld(parts, b, base);
   return { parts, top: base + H + rise };
 }
 
-function shelterParts(b: Building): { parts: THREE.BufferGeometry[]; top: number; flagPole: THREE.Vector3 } {
+function shelterParts(b: Building): {
+  parts: THREE.BufferGeometry[];
+  top: number;
+  flagPole: THREE.Vector3;
+} {
   const apron = 16;
   const { base, floor } = footing(b, apron, 3);
   const plinth = floor - base;
@@ -55,19 +61,40 @@ function shelterParts(b: Building): { parts: THREE.BufferGeometry[]; top: number
   const rise = b.d * 0.3;
   const wall = PALETTE.walls[2];
   const parts: THREE.BufferGeometry[] = [box(b.w, H, b.d, 0, H / 2, 0, wall)];
-  for (const g of gableRoof(b.w, b.d, rise, 1, PALETTE.shelterRoof, wall)) parts.push(place(g, 0, H, 0));
+  for (const g of gableRoof(b.w, b.d, rise, 1, PALETTE.shelterRoof, wall))
+    parts.push(place(g, 0, H, 0));
   // Cyan identity band, entrance portico, tall windows and a paved forecourt.
   parts.push(box(b.w + 0.35, 1, b.d + 0.35, 0, H - 1.7, 0, PALETTE.cyan));
-  parts.push(box(b.w + 6, plinth + 0.2, apron, 0, (plinth + 0.2) / 2, b.d / 2 + apron / 2, PALETTE.concrete));
+  parts.push(
+    box(b.w + 6, plinth + 0.2, apron, 0, (plinth + 0.2) / 2, b.d / 2 + apron / 2, PALETTE.concrete),
+  );
   parts.push(box(13, 0.8, 6, 0, plinth + 6, b.d / 2 + 3, PALETTE.ivory));
   for (const x of [-5.6, -1.9, 1.9, 5.6]) {
-    parts.push(place(paint(new THREE.CylinderGeometry(0.4, 0.4, 5.8, 8), PALETTE.ivory), x, plinth + 2.9, b.d / 2 + 5.4));
+    parts.push(
+      place(
+        paint(new THREE.CylinderGeometry(0.4, 0.4, 5.8, 8), PALETTE.ivory),
+        x,
+        plinth + 2.9,
+        b.d / 2 + 5.4,
+      ),
+    );
   }
   parts.push(box(5.4, 3.8, 0.3, 0, plinth + 1.9, b.d / 2 + 0.12, PALETTE.glass));
-  for (const x of [-15, -11, -7, 7, 11, 15]) parts.push(box(1.8, 3.6, 0.2, x, plinth + 3.6, b.d / 2 + 0.08, PALETTE.glass));
-  parts.push(place(paint(new THREE.CylinderGeometry(0.22, 0.28, 17, 6), PALETTE.ivory), b.w / 2 + 2.5, plinth + 8.5, b.d / 2 + 6));
+  for (const x of [-15, -11, -7, 7, 11, 15])
+    parts.push(box(1.8, 3.6, 0.2, x, plinth + 3.6, b.d / 2 + 0.08, PALETTE.glass));
+  parts.push(
+    place(
+      paint(new THREE.CylinderGeometry(0.22, 0.28, 17, 6), PALETTE.ivory),
+      b.w / 2 + 2.5,
+      plinth + 8.5,
+      b.d / 2 + 6,
+    ),
+  );
   toWorld(parts, b, base);
-  const pole = new THREE.Vector3(b.w / 2 + 2.5, plinth + 16.6, b.d / 2 + 6).applyAxisAngle(new THREE.Vector3(0, 1, 0), b.rotation);
+  const pole = new THREE.Vector3(b.w / 2 + 2.5, plinth + 16.6, b.d / 2 + 6).applyAxisAngle(
+    new THREE.Vector3(0, 1, 0),
+    b.rotation,
+  );
   pole.add(new THREE.Vector3(b.p.x, base, b.p.z));
   return { parts, top: base + H + rise, flagPole: pole };
 }
@@ -82,11 +109,14 @@ function stationParts(b: Building): { parts: THREE.BufferGeometry[]; top: number
   parts.push(box(b.w + 0.35, 1.1, b.d + 0.35, 0, H - 0.3, 0, PALETTE.stationRed));
   parts.push(box(b.w - 1, 0.4, b.d - 1, 0, H + 0.05, 0, PALETTE.stationRoof));
   parts.push(box(b.w + 0.25, 0.6, b.d + 0.25, 0, plinth + 0.3, 0, PALETTE.stationRed));
-  parts.push(box(b.w + 4, plinth + 0.2, apron, 0, (plinth + 0.2) / 2, b.d / 2 + apron / 2, PALETTE.concrete));
+  parts.push(
+    box(b.w + 4, plinth + 0.2, apron, 0, (plinth + 0.2) / 2, b.d / 2 + apron / 2, PALETTE.concrete),
+  );
   for (const x of [-7.2, 0, 7.2]) {
     parts.push(box(5.9, 5.6, 0.2, x, plinth + 2.8, b.d / 2 + 0.06, PALETTE.stationRed));
     parts.push(box(5.1, 5.0, 0.2, x, plinth + 2.5, b.d / 2 + 0.16, PALETTE.stationDoor));
-    for (const y of [1.4, 2.6, 3.8]) parts.push(box(5.1, 0.12, 0.08, x, plinth + y, b.d / 2 + 0.3, PALETTE.stationRoof));
+    for (const y of [1.4, 2.6, 3.8])
+      parts.push(box(5.1, 0.12, 0.08, x, plinth + y, b.d / 2 + 0.3, PALETTE.stationRoof));
   }
   // Hose-drying tower at the back corner.
   parts.push(box(5, 14, 5, b.w / 2 - 2.5, plinth + 7, -b.d / 2 + 2.5, wall));
@@ -97,7 +127,9 @@ function stationParts(b: Building): { parts: THREE.BufferGeometry[]; top: number
 }
 
 const MARKER_ORDERED = new THREE.Color(PALETTE.cyanBright).multiplyScalar(1.15);
-const MARKER_LEFT = new THREE.Color(PALETTE.cyan).lerp(new THREE.Color(PALETTE.ivory), 0.55).multiplyScalar(0.7);
+const MARKER_LEFT = new THREE.Color(PALETTE.cyan)
+  .lerp(new THREE.Color(PALETTE.ivory), 0.55)
+  .multiplyScalar(0.7);
 
 /** Homes, shelter, fire station and the "ordered to leave" home markers. */
 export class BuildingLayer {
@@ -118,7 +150,11 @@ export class BuildingLayer {
   private readonly dummy = new THREE.Object3D();
 
   constructor(world: World) {
-    const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.82, side: THREE.DoubleSide });
+    const material = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      roughness: 0.82,
+      side: THREE.DoubleSide,
+    });
     const homeTop = new Map<string, number>();
     const homeParts_: THREE.BufferGeometry[] = [];
     let shelter: ReturnType<typeof shelterParts> | null = null;
@@ -134,7 +170,8 @@ export class BuildingLayer {
         homeTop.set(b.id, h.top);
       }
     }
-    if (!shelter || !stationB || !shelterB || !station) throw new Error("Diorama scene: shelter or station building missing");
+    if (!shelter || !stationB || !shelterB || !station)
+      throw new Error("Diorama scene: shelter or station building missing");
 
     this.homesMesh = new THREE.Mesh(mergeAll(homeParts_), material);
     this.shelterMesh = new THREE.Mesh(mergeAll(shelter.parts), material);
@@ -155,7 +192,13 @@ export class BuildingLayer {
     this.flagBase = Float32Array.from(flagGeo.getAttribute("position").array as ArrayLike<number>);
     this.flag = new THREE.Mesh(
       flagGeo,
-      new THREE.MeshStandardMaterial({ color: PALETTE.cyan, roughness: 0.6, side: THREE.DoubleSide, emissive: PALETTE.cyan, emissiveIntensity: 0.25 }),
+      new THREE.MeshStandardMaterial({
+        color: PALETTE.cyan,
+        roughness: 0.6,
+        side: THREE.DoubleSide,
+        emissive: PALETTE.cyan,
+        emissiveIntensity: 0.25,
+      }),
     );
     this.flag.position.copy(shelter.flagPole);
     this.flag.rotation.y = shelterB.rotation + Math.PI / 2;
@@ -173,7 +216,13 @@ export class BuildingLayer {
       this.householdIndex.set(hh.id, i);
       const home = homes.get(hh.homeId);
       const top = homeTop.get(hh.homeId) ?? heightAt(hh.parking.x, hh.parking.z) + 10;
-      this.markerPos.push(new THREE.Vector3(home ? home.p.x : hh.parking.x, top + 2.6, home ? home.p.z : hh.parking.z));
+      this.markerPos.push(
+        new THREE.Vector3(
+          home ? home.p.x : hh.parking.x,
+          top + 2.6,
+          home ? home.p.z : hh.parking.z,
+        ),
+      );
       this.markers.setColorAt(i, MARKER_ORDERED);
     });
     this.markers.name = "ordered-markers";
@@ -186,7 +235,8 @@ export class BuildingLayer {
     const ordered = new Set(snapshot.orderedHouseholdIds);
     const departed = new Set<string>();
     for (const v of snapshot.vehicles) {
-      if (v.householdId && v.status !== "parked" && v.status !== "boarding") departed.add(v.householdId);
+      if (v.householdId && v.status !== "parked" && v.status !== "boarding")
+        departed.add(v.householdId);
     }
     const walking = new Set(snapshot.pedestrians.map((p) => p.householdId));
     for (const [id, i] of this.householdIndex) {

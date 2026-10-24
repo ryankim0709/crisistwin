@@ -84,7 +84,12 @@ export class LabelLayer {
   }
 
   /** A pill whose `center` (0..1 of its box) sits on `position`. */
-  add(parent: THREE.Object3D, className: string, position: THREE.Vector3, center = new THREE.Vector2(0.5, 1)): { obj: CSS2DObject; el: HTMLDivElement } {
+  add(
+    parent: THREE.Object3D,
+    className: string,
+    position: THREE.Vector3,
+    center = new THREE.Vector2(0.5, 1),
+  ): { obj: CSS2DObject; el: HTMLDivElement } {
     const el = document.createElement("div");
     el.className = `fdx-label ${className}`;
     const obj = new CSS2DObject(el);
@@ -99,8 +104,19 @@ export class LabelLayer {
   private readonly places = new Set<CSS2DObject>();
 
   /** A small reference-place label (decluttered in `clip`); earlier adds win overlaps. */
-  addPlace(parent: THREE.Object3D, text: string, kind: "city" | "peak", position: THREE.Vector3, cell = -1): CSS2DObject {
-    const { obj, el } = this.add(parent, kind === "peak" ? "fdx-place fdx-place-peak" : "fdx-place", position, new THREE.Vector2(0.5, 1.15));
+  addPlace(
+    parent: THREE.Object3D,
+    text: string,
+    kind: "city" | "peak",
+    position: THREE.Vector3,
+    cell = -1,
+  ): CSS2DObject {
+    const { obj, el } = this.add(
+      parent,
+      kind === "peak" ? "fdx-place fdx-place-peak" : "fdx-place",
+      position,
+      new THREE.Vector2(0.5, 1.15),
+    );
     el.textContent = text;
     this.places.add(obj);
     this.cells.set(obj, cell);
@@ -143,7 +159,18 @@ export class LabelLayer {
    * are hidden too. The pass reruns only when the camera, time bucket or inputs change.
    */
   clip(camera: THREE.Camera, w: number, h: number, free: ScreenRect, opts: ClipOptions = {}) {
-    const key = [...camera.matrixWorldInverse.elements, ...camera.projectionMatrix.elements.slice(0, 1), w, h, free.left, free.top, free.right, free.bottom, opts.stamp ?? 0, opts.time ?? 0];
+    const key = [
+      ...camera.matrixWorldInverse.elements,
+      ...camera.projectionMatrix.elements.slice(0, 1),
+      w,
+      h,
+      free.left,
+      free.top,
+      free.right,
+      free.bottom,
+      opts.stamp ?? 0,
+      opts.time ?? 0,
+    ];
     const last = this.lastKey;
     let same = last.length === key.length;
     for (let i = 0; same && i < key.length; i++) {
@@ -162,9 +189,19 @@ export class LabelLayer {
       this.tmp.setFromMatrixPosition(o.matrixWorld).project(camera);
       const x = ((this.tmp.x + 1) / 2) * w;
       const y = ((1 - this.tmp.y) / 2) * h;
-      const inside = this.tmp.z < 1 && x >= free.left && x <= w - free.right && y >= free.top && y <= h - free.bottom;
+      const inside =
+        this.tmp.z < 1 &&
+        x >= free.left &&
+        x <= w - free.right &&
+        y >= free.top &&
+        y <= h - free.bottom;
       const m = this.measure(o);
-      const rect = { left: x - m.w * o.center.x, top: y - m.h * (1 - o.center.y), right: 0, bottom: 0 };
+      const rect = {
+        left: x - m.w * o.center.x,
+        top: y - m.h * (1 - o.center.y),
+        right: 0,
+        bottom: 0,
+      };
       rect.right = rect.left + m.w;
       rect.bottom = rect.top + m.h;
       return { inside, rect };
@@ -189,7 +226,8 @@ export class LabelLayer {
       else candidates.push({ o, rect });
     }
     const m = LABEL_MARGIN_PX;
-    const hits = (a: ScreenRect, b: ScreenRect) => a.left < b.right + m && a.right + m > b.left && a.top < b.bottom + m && a.bottom + m > b.top;
+    const hits = (a: ScreenRect, b: ScreenRect) =>
+      a.left < b.right + m && a.right + m > b.left && a.top < b.bottom + m && a.bottom + m > b.top;
     const shown: CSS2DObject[] = [];
     for (const { o, rect } of candidates) {
       if (taken.some((t) => hits(rect, t))) hidden.push(o);

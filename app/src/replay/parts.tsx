@@ -1,11 +1,16 @@
+import { EvidenceTag, Tag } from "../ui";
 import { EVIDENCE_LABEL, type EventCategory } from "./timeline";
 import type { EvidenceClass } from "./types";
 
-/** Evidence class as text plus a per-class border pattern (never color alone). */
+/** Evidence class as a kit tag: the text names the class; tone is secondary. */
 export function EvidenceChip({ value }: { value: EvidenceClass }) {
   return (
-    <span className={`rp-chip rp-chip--${value}`} title={`Evidence class: ${value}`}>
-      {EVIDENCE_LABEL[value]}
+    <span className="rp-chip" title={`Evidence class: ${value}`}>
+      {value === "reported" ? (
+        <Tag tone="info">{EVIDENCE_LABEL[value]}</Tag>
+      ) : (
+        <EvidenceTag kind={value} />
+      )}
     </span>
   );
 }
@@ -72,7 +77,12 @@ export function Sparkline({
   const firstX = ((points[0].atMs - startMs) / span) * width;
   const lastX = ((points[points.length - 1].atMs - startMs) / span) * width;
   return (
-    <svg className="rp-spark" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" aria-hidden="true">
+    <svg
+      className="rp-spark"
+      viewBox={`0 0 ${width} ${height}`}
+      preserveAspectRatio="none"
+      aria-hidden="true"
+    >
       <polygon
         className="rp-spark-area"
         points={`${firstX},${height} ${xy.join(" ")} ${lastX},${height}`}

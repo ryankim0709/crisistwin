@@ -8,6 +8,7 @@ import {
   compassPoint,
 } from "../fire/spread";
 import type { FireSettings, IgnitionProblem } from "../fire/scheduledTypes";
+import { Button, EmptyState, Field, IconButton, Notice, Panel } from "../ui";
 import {
   MAX_ENABLED_IGNITIONS,
   MAX_WIND_SPEED_MPH,
@@ -153,15 +154,15 @@ export default function ConfigPanel(props: ConfigPanelProps) {
   }
 
   const runButton = (
-    <button
-      type="button"
-      className="studio-btn studio-btn-primary studio-btn-run"
+    <Button
+      size="sm"
+      className="studio-btn-run"
       onClick={onRun}
       disabled={runDisabled}
       aria-describedby={issues.length > 0 ? `${uid}-run-note` : undefined}
     >
       {busy ? PHASE_TEXT[phase] : runLabel}
-    </button>
+    </Button>
   );
 
   const statusLine = [PHASE_TEXT[phase], stale ? "out of date" : null, draftStatus]
@@ -170,40 +171,45 @@ export default function ConfigPanel(props: ConfigPanelProps) {
 
   if (collapsed) {
     return (
-      <aside className="studio-panel studio-panel-collapsed" aria-label="Scenario settings">
-        <button
-          type="button"
-          className="studio-btn studio-btn-secondary"
-          onClick={onToggleCollapsed}
-          aria-expanded={false}
-        >
+      <Panel
+        glass
+        compact
+        className="studio-panel studio-panel-collapsed"
+        aria-label="Scenario settings"
+      >
+        <Button variant="secondary" size="sm" onClick={onToggleCollapsed} aria-expanded={false}>
           Scenario ›
-        </button>
+        </Button>
         {runButton}
         <p className="studio-status" role="status">
           {PHASE_TEXT[phase]}
           {stale ? " · Out of date" : ""}
         </p>
-      </aside>
+      </Panel>
     );
   }
 
   return (
-    <aside className="studio-panel" aria-label="Scenario settings">
+    <Panel
+      glass
+      compact
+      className="studio-panel"
+      aria-label="Scenario settings"
+      title="Scenario"
+      aside={
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onToggleCollapsed}
+          aria-expanded={true}
+          aria-label="Hide scenario panel"
+        >
+          ‹ Hide
+        </Button>
+      }
+    >
       <div className="studio-panel-body">
-        <div className="studio-panel-head">
-          <h2 className="studio-title">Scenario</h2>
-          <button
-            type="button"
-            className="studio-btn studio-btn-ghost studio-btn-small"
-            onClick={onToggleCollapsed}
-            aria-expanded={true}
-            aria-label="Hide scenario panel"
-          >
-            ‹ Hide
-          </button>
-        </div>
-        <p className="studio-note">User assumptions, not observed data or a forecast.</p>
+        <p className="studio-hint">User assumptions, not observed data or a forecast.</p>
 
         <section className="studio-section" aria-labelledby={`${uid}-ign`}>
           <div className="studio-section-head">
@@ -214,25 +220,25 @@ export default function ConfigPanel(props: ConfigPanelProps) {
               </span>
             </h3>
             <div className="studio-segmented" role="group" aria-label="Map click mode">
-              <button
-                type="button"
-                className="studio-btn studio-btn-toggle studio-btn-small"
+              <Button
+                variant="secondary"
+                size="sm"
                 aria-pressed={mode === "add"}
                 disabled={atIgnitionLimit && mode !== "add"}
                 onClick={() => onModeChange(mode === "add" ? "select" : "add")}
               >
                 + Add
-              </button>
-              <button
-                type="button"
-                className="studio-btn studio-btn-toggle studio-btn-small"
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
                 aria-pressed={mode === "move"}
                 disabled={!selected}
                 title={selected ? undefined : "Select a fire in the list first"}
                 onClick={() => onModeChange(mode === "move" ? "select" : "move")}
               >
                 Move
-              </button>
+              </Button>
             </div>
           </div>
           <p className={`studio-hint${mode !== "select" ? " is-active" : ""}`} aria-live="polite">
@@ -242,16 +248,17 @@ export default function ConfigPanel(props: ConfigPanelProps) {
           </p>
 
           {ignitions.length === 0 ? (
-            <div className="studio-empty">
-              <span>Choose + Add, then click the map.</span>
-              <button
-                type="button"
-                className="studio-btn studio-btn-secondary studio-btn-small"
-                onClick={onLoadDemo}
-              >
-                Load demo
-              </button>
-            </div>
+            <EmptyState
+              title="No fires yet"
+              symbol="+"
+              action={
+                <Button variant="secondary" size="sm" onClick={onLoadDemo}>
+                  Load demo
+                </Button>
+              }
+            >
+              Choose + Add, then click the map.
+            </EmptyState>
           ) : (
             <ul className="studio-ignitions">
               {sorted.map((ignition) => {
@@ -291,13 +298,11 @@ export default function ConfigPanel(props: ConfigPanelProps) {
                           updateIgnition(ignition.id, { enabled: event.target.checked })
                         }
                       />
-                      <label className="studio-visually-hidden" htmlFor={`${base}-name`}>
-                        Ignition name
-                      </label>
                       <input
                         id={`${base}-name`}
                         type="text"
-                        className="studio-input studio-input-name"
+                        aria-label="Ignition name"
+                        className="ui-input studio-input-name"
                         value={ignition.name}
                         maxLength={MAX_NAME_LENGTH}
                         aria-invalid={hasField("name") || undefined}
@@ -312,7 +317,7 @@ export default function ConfigPanel(props: ConfigPanelProps) {
                         <input
                           id={`${base}-start`}
                           type="number"
-                          className="studio-input studio-input-minute"
+                          className="ui-input studio-input-minute"
                           min={0}
                           max={Math.max(horizon - 1, 0)}
                           step={1}
@@ -329,18 +334,16 @@ export default function ConfigPanel(props: ConfigPanelProps) {
                         />
                         <span aria-hidden="true">m</span>
                       </label>
-                      <button
-                        type="button"
-                        className="studio-btn studio-btn-ghost studio-btn-icon"
-                        aria-label={`Delete ${displayName}`}
-                        title="Delete"
+                      <IconButton
+                        label={`Delete ${displayName}`}
+                        size="sm"
                         onClick={(event) => {
                           event.stopPropagation();
                           deleteIgnition(ignition.id);
                         }}
                       >
                         ×
-                      </button>
+                      </IconButton>
                     </div>
                     {(isSelected || hasField("location")) && (
                       <p
@@ -367,11 +370,13 @@ export default function ConfigPanel(props: ConfigPanelProps) {
             </ul>
           )}
           {scenarioIssues.length > 0 && (
-            <ul className="studio-alert" role="alert">
+            <>
               {scenarioIssues.map((issue, index) => (
-                <li key={index}>{issue.message}</li>
+                <Notice key={index} tone="danger" className="studio-notice">
+                  {issue.message}
+                </Notice>
               ))}
-            </ul>
+            </>
           )}
         </section>
 
@@ -380,8 +385,7 @@ export default function ConfigPanel(props: ConfigPanelProps) {
             Conditions <span className="studio-subtitle-note">constant for the run</span>
           </h3>
 
-          <div className="studio-field">
-            <label htmlFor={`${uid}-wind`}>Wind speed, mph (20-ft)</label>
+          <Field label="Wind speed, mph (20-ft)">
             <div className="studio-row">
               <input
                 id={`${uid}-wind`}
@@ -398,7 +402,7 @@ export default function ConfigPanel(props: ConfigPanelProps) {
               />
               <input
                 type="number"
-                className="studio-input studio-input-number"
+                className="studio-input-number"
                 aria-label="Wind speed in miles per hour"
                 min={MIN_WIND_SPEED_MPH}
                 max={MAX_WIND_SPEED_MPH}
@@ -414,15 +418,14 @@ export default function ConfigPanel(props: ConfigPanelProps) {
                 }}
               />
             </div>
-          </div>
+          </Field>
 
           <div className="studio-field">
-            <label htmlFor={`${uid}-dir`}>Wind from, degrees</label>
-            <div className="studio-row">
+            <Field label="Wind from, degrees">
               <input
                 id={`${uid}-dir`}
                 type="number"
-                className="studio-input studio-input-number"
+                className="studio-input-number"
                 min={0}
                 max={359}
                 step={1}
@@ -433,19 +436,17 @@ export default function ConfigPanel(props: ConfigPanelProps) {
                   setSettings({ windFromDegrees: ((Math.round(value) % 360) + 360) % 360 });
                 }}
               />
-              <span className="studio-hint">
-                From {compassPoint(settings.windFromDegrees)}, blowing toward{" "}
-                {compassPoint(settings.windFromDegrees + 180)}
-              </span>
-            </div>
+            </Field>
+            <p className="studio-hint">
+              From {compassPoint(settings.windFromDegrees)}, blowing toward{" "}
+              {compassPoint(settings.windFromDegrees + 180)}
+            </p>
           </div>
 
           <div className="studio-grid-2">
-            <div className="studio-field">
-              <label htmlFor={`${uid}-moisture`}>Fuel moisture</label>
+            <Field label="Fuel moisture">
               <select
                 id={`${uid}-moisture`}
-                className="studio-input"
                 value={matchedPreset?.id ?? CUSTOM_MOISTURE_VALUE}
                 aria-describedby={`${uid}-moisture-note`}
                 onChange={(event) => {
@@ -460,12 +461,10 @@ export default function ConfigPanel(props: ConfigPanelProps) {
                   </option>
                 ))}
               </select>
-            </div>
-            <div className="studio-field">
-              <label htmlFor={`${uid}-horizon`}>Horizon</label>
+            </Field>
+            <Field label="Horizon">
               <select
                 id={`${uid}-horizon`}
-                className="studio-input"
                 value={horizon}
                 onChange={(event) => setSettings({ horizonMinutes: Number(event.target.value) })}
               >
@@ -478,7 +477,7 @@ export default function ConfigPanel(props: ConfigPanelProps) {
                   </option>
                 ))}
               </select>
-            </div>
+            </Field>
           </div>
           <p id={`${uid}-moisture-note`} className="studio-hint">
             {matchedPreset ? matchedPreset.description : "Moisture values differ from every preset."}
@@ -487,33 +486,34 @@ export default function ConfigPanel(props: ConfigPanelProps) {
           <details className="studio-advanced">
             <summary>Advanced model settings</summary>
             <div className="studio-field">
-              <label htmlFor={`${uid}-midflame`}>Midflame wind factor</label>
-              <div className="studio-row">
-                <input
-                  id={`${uid}-midflame`}
-                  type="number"
-                  className="studio-input studio-input-number"
-                  min={MIDFLAME_MIN}
-                  max={MIDFLAME_MAX}
-                  step={0.05}
-                  value={settings.midflameAdjustment}
-                  onChange={(event) => {
-                    const value = numberFrom(event);
-                    if (value !== null) {
-                      setSettings({ midflameAdjustment: clamp(value, MIDFLAME_MIN, MIDFLAME_MAX) });
-                    }
-                  }}
-                />
-                {!midflameIsDefault && (
-                  <button
-                    type="button"
-                    className="studio-btn studio-btn-secondary studio-btn-small"
-                    onClick={() => setSettings({ midflameAdjustment: DEFAULT_MIDFLAME_ADJUSTMENT })}
-                  >
-                    Reset to default
-                  </button>
-                )}
-              </div>
+              <Field label="Midflame wind factor">
+                <div className="studio-row">
+                  <input
+                    id={`${uid}-midflame`}
+                    type="number"
+                    className="studio-input-number"
+                    min={MIDFLAME_MIN}
+                    max={MIDFLAME_MAX}
+                    step={0.05}
+                    value={settings.midflameAdjustment}
+                    onChange={(event) => {
+                      const value = numberFrom(event);
+                      if (value !== null) {
+                        setSettings({ midflameAdjustment: clamp(value, MIDFLAME_MIN, MIDFLAME_MAX) });
+                      }
+                    }}
+                  />
+                  {!midflameIsDefault && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => setSettings({ midflameAdjustment: DEFAULT_MIDFLAME_ADJUSTMENT })}
+                    >
+                      Reset to default
+                    </Button>
+                  )}
+                </div>
+              </Field>
               <p className="studio-hint">
                 {midflameIsDefault
                   ? `Left at ${DEFAULT_MIDFLAME_ADJUSTMENT}: the model derives a factor per cell from canopy cover, canopy height and fuel bed depth.`
@@ -524,7 +524,7 @@ export default function ConfigPanel(props: ConfigPanelProps) {
             </div>
 
             <div className="studio-field">
-              <label className="studio-check">
+              <label className="ui-check">
                 <input
                   type="checkbox"
                   checked={spotting.enabled}
@@ -534,12 +534,11 @@ export default function ConfigPanel(props: ConfigPanelProps) {
                 />
                 Ember spotting
               </label>
-              <label className="studio-inline-field" htmlFor={`${uid}-spot`}>
-                Max distance (m)
+              <Field label="Max distance (m)">
                 <input
                   id={`${uid}-spot`}
                   type="number"
-                  className="studio-input studio-input-number"
+                  className="studio-input-number"
                   min={0}
                   max={MAX_SPOTTING_DISTANCE_METERS}
                   step={50}
@@ -557,11 +556,11 @@ export default function ConfigPanel(props: ConfigPanelProps) {
                     }
                   }}
                 />
-              </label>
+              </Field>
             </div>
 
             <div className="studio-field">
-              <label className="studio-check">
+              <label className="ui-check">
                 <input
                   type="checkbox"
                   checked={structure.enabled}
@@ -571,12 +570,11 @@ export default function ConfigPanel(props: ConfigPanelProps) {
                 />
                 Structure-to-structure spread
               </label>
-              <label className="studio-inline-field" htmlFor={`${uid}-struct`}>
-                Rate at {STRUCTURE_SPREAD_REFERENCE_WIND_MPH} mph (m/min)
+              <Field label={`Rate at ${STRUCTURE_SPREAD_REFERENCE_WIND_MPH} mph (m/min)`}>
                 <input
                   id={`${uid}-struct`}
                   type="number"
-                  className="studio-input studio-input-number"
+                  className="studio-input-number"
                   min={0}
                   max={MAX_STRUCTURE_SPREAD_METERS_PER_MINUTE}
                   step={0.5}
@@ -588,13 +586,17 @@ export default function ConfigPanel(props: ConfigPanelProps) {
                       setSettings({
                         structureSpread: {
                           ...structure,
-                          rateMetersPerMinute: clamp(value, 0, MAX_STRUCTURE_SPREAD_METERS_PER_MINUTE),
+                          rateMetersPerMinute: clamp(
+                            value,
+                            0,
+                            MAX_STRUCTURE_SPREAD_METERS_PER_MINUTE,
+                          ),
                         },
                       });
                     }
                   }}
                 />
-              </label>
+              </Field>
             </div>
           </details>
         </section>
@@ -602,62 +604,53 @@ export default function ConfigPanel(props: ConfigPanelProps) {
         <details className="studio-advanced">
           <summary>Scenario file</summary>
           <div className="studio-row studio-row-wrap">
-            <button
-              type="button"
-              className="studio-btn studio-btn-secondary studio-btn-small"
-              onClick={onLoadDemo}
-            >
+            <Button variant="secondary" size="sm" onClick={onLoadDemo}>
               Load demo
-            </button>
-            <button
-              type="button"
-              className="studio-btn studio-btn-secondary studio-btn-small"
-              onClick={onExport}
-            >
+            </Button>
+            <Button variant="secondary" size="sm" onClick={onExport}>
               Export JSON
-            </button>
-            <button
-              type="button"
-              className="studio-btn studio-btn-secondary studio-btn-small"
-              onClick={onClear}
-            >
+            </Button>
+            <Button variant="secondary" size="sm" onClick={onClear}>
               Clear all
-            </button>
+            </Button>
           </div>
           <div className="studio-field">
-            <label htmlFor={`${uid}-file`}>Import a scenario file</label>
-            <input
-              id={`${uid}-file`}
-              type="file"
-              accept="application/json,.json"
-              className="studio-file"
-              onChange={(event) => void importFile(event)}
-            />
+            <Field label="Import a scenario file">
+              <input
+                id={`${uid}-file`}
+                type="file"
+                accept="application/json,.json"
+                onChange={(event) => void importFile(event)}
+              />
+            </Field>
           </div>
           <div className="studio-field">
-            <label htmlFor={`${uid}-paste`}>Or paste scenario JSON</label>
-            <textarea
-              id={`${uid}-paste`}
-              className="studio-input studio-textarea"
-              rows={3}
-              value={importText}
-              onChange={(event) => setImportText(event.target.value)}
-            />
-            <button
-              type="button"
-              className="studio-btn studio-btn-secondary studio-btn-small"
+            <Field label="Or paste scenario JSON">
+              <textarea
+                id={`${uid}-paste`}
+                className="studio-textarea"
+                rows={3}
+                value={importText}
+                onChange={(event) => setImportText(event.target.value)}
+              />
+            </Field>
+            <Button
+              variant="secondary"
+              size="sm"
               disabled={importText.trim() === ""}
               onClick={() => runImport(importText)}
             >
               Import pasted JSON
-            </button>
+            </Button>
           </div>
           {importIssues.length > 0 && (
-            <ul className="studio-alert" role="alert">
+            <div>
               {importIssues.map((issue, index) => (
-                <li key={index}>{issue.message}</li>
+                <Notice key={index} tone="danger" className="studio-notice">
+                  {issue.message}
+                </Notice>
               ))}
-            </ul>
+            </div>
           )}
           <p className="studio-status">
             A scenario file does not guarantee identical results later; source data can change.
@@ -667,7 +660,9 @@ export default function ConfigPanel(props: ConfigPanelProps) {
 
       <section className="studio-panel-foot" aria-label="Run">
         {stale && (
-          <p className="studio-warning">Edited since the last run. Run again to update.</p>
+          <Notice compact className="studio-notice">
+            Edited since the last run. Run again to update.
+          </Notice>
         )}
         {issues.length > 0 && (
           <p id={`${uid}-run-note`} className="studio-hint">
@@ -679,15 +674,15 @@ export default function ConfigPanel(props: ConfigPanelProps) {
         <div className="studio-row">
           {runButton}
           {busy && (
-            <button type="button" className="studio-btn studio-btn-secondary" onClick={onCancel}>
+            <Button variant="secondary" size="sm" onClick={onCancel}>
               Cancel
-            </button>
+            </Button>
           )}
         </div>
         <p className="studio-status" role="status">
           {statusLine}
         </p>
       </section>
-    </aside>
+    </Panel>
   );
 }

@@ -39,10 +39,7 @@ export type FirePlayback = {
  * requestAnimationFrame loop advances it by real seconds × speed × the horizon rate and calls `onTime`
  * synchronously each frame, so the renderer is driven without a React render.
  */
-export function useFirePlayback(
-  duration: number,
-  onTime: (minutes: number) => void,
-): FirePlayback {
+export function useFirePlayback(duration: number, onTime: (minutes: number) => void): FirePlayback {
   const tRef = useRef(0);
   const speedRef = useRef<PlaybackSpeed>(1);
   const onTimeRef = useRef(onTime);

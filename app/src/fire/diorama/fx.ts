@@ -25,7 +25,14 @@ const RESAMPLE_MINUTES = 0.5;
  * neighbouring burned cells), so coarse cells and long steps still show a readable active
  * band. Capped at a quarter of the horizon.
  */
-export function burnWindowMinutes(cols: number, rows: number, arrival: Float32Array, horizon: number, stepMinutes: number, minWindow: number): number {
+export function burnWindowMinutes(
+  cols: number,
+  rows: number,
+  arrival: Float32Array,
+  horizon: number,
+  stepMinutes: number,
+  minWindow: number,
+): number {
   const base = Math.max(minWindow, 2 * stepMinutes);
   const stride = Math.max(1, Math.floor(Math.sqrt((cols * rows) / 20000)));
   const diffs: number[] = [];
@@ -101,7 +108,8 @@ export class FireSampler {
     const buckets = 4096;
     const scale = (buckets - 1) / Math.max(1e-6, horizon);
     const start = new Int32Array(buckets + 1);
-    for (const i of ids) start[Math.min(buckets - 1, Math.max(0, Math.floor(arrival[i] * scale))) + 1]++;
+    for (const i of ids)
+      start[Math.min(buckets - 1, Math.max(0, Math.floor(arrival[i] * scale))) + 1]++;
     for (let b = 0; b < buckets; b++) start[b + 1] += start[b];
     this.order = new Int32Array(ids.length);
     this.sorted = new Float32Array(ids.length);
@@ -172,7 +180,9 @@ export class FireSampler {
     for (const c of cells) {
       const head = (c.p - minP) / span;
       const fresh = 1 - c.age / this.window;
-      const weight = Math.pow(Math.max(0, fresh), 0.7) * (0.15 + 0.85 * THREE.MathUtils.smoothstep(head, 0.3, 1));
+      const weight =
+        Math.pow(Math.max(0, fresh), 0.7) *
+        (0.15 + 0.85 * THREE.MathUtils.smoothstep(head, 0.3, 1));
       const score = weight * (0.3 + 0.7 * hash2(c.i * 0.61, 4.7));
       if (score > 0.03) scored.push({ c, weight, score });
     }
@@ -214,7 +224,13 @@ function smokeTexture(): THREE.CanvasTexture {
   return tex;
 }
 
-type SmokeParticle = { sprite: THREE.Sprite; cycle: number; origin: THREE.Vector3; offset: number; shade: number };
+type SmokeParticle = {
+  sprite: THREE.Sprite;
+  cycle: number;
+  origin: THREE.Vector3;
+  offset: number;
+  shade: number;
+};
 
 /**
  * Flame glow and smoke over hot spots, the ignition pin and the floating wind arrow.
@@ -257,7 +273,13 @@ export class FxLayer {
       );
       sprite.visible = false;
       sprite.renderOrder = 5;
-      this.smoke.push({ sprite, cycle: -1, origin: new THREE.Vector3(), offset: (i / SMOKE_COUNT) * SMOKE_LIFE, shade });
+      this.smoke.push({
+        sprite,
+        cycle: -1,
+        origin: new THREE.Vector3(),
+        offset: (i / SMOKE_COUNT) * SMOKE_LIFE,
+        shade,
+      });
       this.group.add(sprite);
     }
     for (let i = 0; i < GLOW_COUNT; i++) {
@@ -280,7 +302,12 @@ export class FxLayer {
 
     // Ignition pin: ivory stem, coral head, pulsing ring on the ground.
     const ivory = new THREE.MeshStandardMaterial({ color: PALETTE.ivory, roughness: 0.5 });
-    const coral = new THREE.MeshStandardMaterial({ color: PALETTE.coral, roughness: 0.45, emissive: PALETTE.coral, emissiveIntensity: 0.35 });
+    const coral = new THREE.MeshStandardMaterial({
+      color: PALETTE.coral,
+      roughness: 0.45,
+      emissive: PALETTE.coral,
+      emissiveIntensity: 0.35,
+    });
     const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 10, 8), ivory);
     stem.position.y = 5;
     const head = new THREE.Mesh(new THREE.SphereGeometry(1.9, 16, 12), coral);
@@ -290,18 +317,33 @@ export class FxLayer {
     collar.position.y = 11.4;
     const ringGeo = new THREE.RingGeometry(2.6, 3.3, 40);
     ringGeo.rotateX(-Math.PI / 2);
-    this.ringMaterial = new THREE.MeshBasicMaterial({ color: PALETTE.ivory, transparent: true, depthWrite: false, toneMapped: false });
+    this.ringMaterial = new THREE.MeshBasicMaterial({
+      color: PALETTE.ivory,
+      transparent: true,
+      depthWrite: false,
+      toneMapped: false,
+    });
     const ring = new THREE.Mesh(ringGeo, this.ringMaterial);
     ring.name = "ring";
     ring.position.y = 0.4;
-    const foot = new THREE.Mesh(new THREE.CircleGeometry(1.1, 20).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: PALETTE.coral, toneMapped: false }));
+    const foot = new THREE.Mesh(
+      new THREE.CircleGeometry(1.1, 20).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: PALETTE.coral, toneMapped: false }),
+    );
     foot.position.y = 0.3;
     for (const m of [stem, head, collar]) m.castShadow = true;
     this.pinTemplate.add(stem, head, collar, ring, foot);
     this.pinTemplate.renderOrder = 6;
 
     // Wind glyph: shaft + head along local +z, with two drifting streaks.
-    const mat = new THREE.MeshStandardMaterial({ color: PALETTE.ivory, emissive: PALETTE.ivory, emissiveIntensity: 0.35, roughness: 0.5, transparent: true, opacity: 0.94 });
+    const mat = new THREE.MeshStandardMaterial({
+      color: PALETTE.ivory,
+      emissive: PALETTE.ivory,
+      emissiveIntensity: 0.35,
+      roughness: 0.5,
+      transparent: true,
+      opacity: 0.94,
+    });
     const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 26, 8), mat);
     shaft.rotation.x = Math.PI / 2;
     const arrowHead = new THREE.Mesh(new THREE.ConeGeometry(2.3, 6, 12), mat);
@@ -314,7 +356,13 @@ export class FxLayer {
     ] as const) {
       const streak = new THREE.Mesh(
         new THREE.CylinderGeometry(0.3, 0.3, len, 6),
-        new THREE.MeshStandardMaterial({ color: PALETTE.ivory, emissive: PALETTE.ivory, emissiveIntensity: 0.35, transparent: true, opacity: 0.7 }),
+        new THREE.MeshStandardMaterial({
+          color: PALETTE.ivory,
+          emissive: PALETTE.ivory,
+          emissiveIntensity: 0.35,
+          transparent: true,
+          opacity: 0.7,
+        }),
       );
       streak.rotation.x = Math.PI / 2;
       streak.position.set(x, -0.8, -2);
@@ -336,7 +384,10 @@ export class FxLayer {
    * One pin per point, in order; points that are null or off the board get no pin. Returns
    * each point's pin group (null when hidden) so callers can attach labels to it.
    */
-  setIgnitions(frame: BoardFrame, points: readonly ({ x: number; z: number } | null)[]): (THREE.Group | null)[] {
+  setIgnitions(
+    frame: BoardFrame,
+    points: readonly ({ x: number; z: number } | null)[],
+  ): (THREE.Group | null)[] {
     while (this.pins.length < points.length) {
       const pin = this.pinTemplate.clone();
       pin.scale.setScalar(this.markerScale);
@@ -355,7 +406,12 @@ export class FxLayer {
    * Wind glyph floats upwind of the ignition (or of the board centre) pointing where the
    * wind blows TOWARD. `towardX/Z` is a unit vector in scene axes (north = −z).
    */
-  placeWind(frame: BoardFrame, towardX: number, towardZ: number, around: { x: number; z: number } | null) {
+  placeWind(
+    frame: BoardFrame,
+    towardX: number,
+    towardZ: number,
+    around: { x: number; z: number } | null,
+  ) {
     this.toward.set(towardX, towardZ);
     this.windFrame = frame;
     this.windAround = around ? { ...around } : { x: 0, z: 0 };
@@ -372,13 +428,28 @@ export class FxLayer {
     const tz = this.toward.y;
     const c = this.windAround;
     const margin = Math.min(frame.halfW, frame.halfD) * 0.1;
-    const px = THREE.MathUtils.clamp(c.x - tx * 26 * k + tz * 14 * k, -frame.halfW + margin, frame.halfW - margin);
-    const pz = THREE.MathUtils.clamp(c.z - tz * 26 * k - tx * 14 * k, -frame.halfD + margin, frame.halfD - margin);
+    const px = THREE.MathUtils.clamp(
+      c.x - tx * 26 * k + tz * 14 * k,
+      -frame.halfW + margin,
+      frame.halfW - margin,
+    );
+    const pz = THREE.MathUtils.clamp(
+      c.z - tz * 26 * k - tx * 14 * k,
+      -frame.halfD + margin,
+      frame.halfD - margin,
+    );
     // Re-sample the ground only when the glyph moved noticeably (it follows zoom).
     if (Math.hypot(px - this.windBase.x, pz - this.windBase.z) > 0.5 * k || this.windBase.y === 0) {
       let ground = 0;
       const r = 8 * k;
-      for (const [dx, dz] of [[0, 0], [r, 0], [-r, 0], [0, r], [0, -r]] as const) ground = Math.max(ground, frame.surfaceAt(px + dx, pz + dz));
+      for (const [dx, dz] of [
+        [0, 0],
+        [r, 0],
+        [-r, 0],
+        [0, r],
+        [0, -r],
+      ] as const)
+        ground = Math.max(ground, frame.surfaceAt(px + dx, pz + dz));
       this.windBase.set(px, ground, pz);
     }
     this.wind.position.x = this.windBase.x;
@@ -420,7 +491,11 @@ export class FxLayer {
     const tz = this.toward.y;
     // Bigger fires make taller, broader plumes, within limits.
     // Cell-size aware: the band's ground footprint (not its cell count) sets the plume.
-    const size = THREE.MathUtils.clamp(Math.sqrt((this.sampler.burningCount * this.sampler.cellWorld) / 1.5) * 0.35, 6, 22);
+    const size = THREE.MathUtils.clamp(
+      Math.sqrt((this.sampler.burningCount * this.sampler.cellWorld) / 1.5) * 0.35,
+      6,
+      22,
+    );
     for (let i = 0; i < this.smoke.length; i++) {
       const p = this.smoke[i];
       if (i >= active || spots.length === 0) {
@@ -440,7 +515,11 @@ export class FxLayer {
       const u = age / SMOKE_LIFE;
       const drift = (age * 4.5 + age * age * 0.35) * (size / 14);
       const sway = Math.sin(i * 2.3 + age * 0.5) * (2 + u * 7);
-      p.sprite.position.set(p.origin.x + tx * drift - tz * sway, p.origin.y + 4 + age * 3.2 - u * u * 6, p.origin.z + tz * drift + tx * sway);
+      p.sprite.position.set(
+        p.origin.x + tx * drift - tz * sway,
+        p.origin.y + 4 + age * 3.2 - u * u * 6,
+        p.origin.z + tz * drift + tx * sway,
+      );
       p.sprite.scale.setScalar(size * (0.8 + u * 3));
       const env = Math.pow(Math.sin(Math.PI * Math.min(1, u * 1.15)), 0.8);
       (p.sprite.material as THREE.SpriteMaterial).opacity = 0.28 * env * (0.75 + p.shade * 0.5);
@@ -461,11 +540,14 @@ export class FxLayer {
       const h2 = hash2(spot.i * 0.73, 8.1);
       const h3 = hash2(spot.i * 1.19, 3.7);
       const rate = 4 + h2 * 6;
-      const flick = reducedMotion ? 0.8 : 0.6 + 0.4 * Math.sin(time * rate + h1 * 6.28) * Math.sin(time * rate * 0.43 + h3 * 6.28);
+      const flick = reducedMotion
+        ? 0.8
+        : 0.6 + 0.4 * Math.sin(time * rate + h1 * 6.28) * Math.sin(time * rate * 0.43 + h3 * 6.28);
       s.position.set(spot.x, spot.y + 1.5 + h3 * 1.5, spot.z);
       s.scale.setScalar((5 + h3 * 7) * (0.6 + 0.4 * spot.weight));
       s.scale.setScalar(Math.max(s.scale.x, this.worldPerPixel * 8, this.sampler.cellWorld * 1.5));
-      (s.material as THREE.SpriteMaterial).opacity = 0.45 * flick * spot.weight * (0.55 + 0.45 * h2);
+      (s.material as THREE.SpriteMaterial).opacity =
+        0.45 * flick * spot.weight * (0.55 + 0.45 * h2);
       s.visible = true;
     }
   }
