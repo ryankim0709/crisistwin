@@ -1,9 +1,9 @@
-# 0010: Simulation Studio and scheduled ignitions
+# 0011: Simulation Studio and scheduled ignitions
 
 Date: 2026-10-23. Status: accepted.
 
 Builds on [0004](0004-physics-fire-model.md), [0007](0007-wui-spread-mechanisms.md) and
-[0008](0008-crown-fire.md). The `/fire` page and `simulateFireSpread` keep their behaviour.
+the crown fire model in `app/src/fire/crownFire.ts`. The `/fire` page and `simulateFireSpread` keep their behaviour.
 
 ## Decision
 

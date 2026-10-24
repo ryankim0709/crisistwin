@@ -178,8 +178,11 @@ export default function SimulationStudioPage() {
   const handleMapClick = useCallback(
     (point: GeoPoint) => {
       if (mode === "add") {
-        if (scenario.ignitions.length >= MAX_ENABLED_IGNITIONS) {
-          showNotice(`A scenario holds at most ${MAX_ENABLED_IGNITIONS} fires. Delete one to add another.`);
+        const enabledCount = scenario.ignitions.filter((ignition) => ignition.enabled).length;
+        if (enabledCount >= MAX_ENABLED_IGNITIONS) {
+          showNotice(
+            `At most ${MAX_ENABLED_IGNITIONS} fires can be enabled. Disable or delete one to add another.`,
+          );
           return;
         }
         const ignition = createIgnition(scenario.ignitions, point);
@@ -392,7 +395,7 @@ export default function SimulationStudioPage() {
           )}
           {!running && scenario.ignitions.length === 0 && (
             <p className="studio-chip">
-              Choose “Add fire” and click the map to place a fire, or load the demo scenario.
+              Choose “Add ignition” and click the map to place a fire, or load the demo scenario.
             </p>
           )}
           {notice && <p className="studio-chip">{notice}</p>}

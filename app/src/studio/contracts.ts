@@ -1,7 +1,7 @@
 /**
  * Shared contracts for Simulation Studio (/simulation). Every studio module imports its
  * shared shapes from here; change this file only together with all of its callers and
- * docs/adr/0010-simulation-studio.md.
+ * docs/adr/0011-simulation-studio.md.
  *
  * Units: WGS84 decimal degrees; elapsed simulation minutes from scenario T+0; open
  * 20-foot wind in mph; meteorological wind bearing (the direction wind blows FROM).

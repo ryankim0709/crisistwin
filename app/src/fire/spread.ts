@@ -798,7 +798,7 @@ export function simulateFireSpread(landscape: LandscapeGrid, scenario: FireScena
 
 /**
  * Several point fires, each with its own start minute, on one landscape grid and one
- * arrival field. Semantics are in docs/adr/0010-simulation-studio.md, "Solver semantics".
+ * arrival field. Semantics are in docs/adr/0011-simulation-studio.md, "Solver semantics".
  *
  * Throws `InvalidIgnitionsError` listing every source that is off the grid or on ground
  * that carries no fire, and a plain `Error` for input that breaks the contract in

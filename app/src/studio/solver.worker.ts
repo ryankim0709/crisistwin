@@ -1,11 +1,15 @@
-/// <reference lib="webworker" />
 /** Runs one scheduled-fire solve per message off the main thread. See contracts.ts. */
 
 import { simulateScheduledFireSpread } from "../fire/spread";
 import { InvalidIgnitionsError } from "../fire/scheduledTypes";
 import type { SolverRequest, SolverResponse } from "./contracts";
 
-self.onmessage = (event: MessageEvent<SolverRequest>) => {
+// The app compiles against the DOM lib, where `self` is a Window. Inside a dedicated worker
+// it exposes the same onmessage/postMessage surface as a `Worker`, so type it as one rather
+// than pulling the webworker lib into the whole program.
+const scope = self as unknown as Worker;
+
+scope.onmessage = (event: MessageEvent<SolverRequest>) => {
   const request = event.data;
   if (request.type !== "solve") return;
   let response: SolverResponse;
@@ -20,5 +24,5 @@ self.onmessage = (event: MessageEvent<SolverRequest>) => {
       problems: cause instanceof InvalidIgnitionsError ? cause.problems : [],
     };
   }
-  self.postMessage(response);
+  scope.postMessage(response);
 };

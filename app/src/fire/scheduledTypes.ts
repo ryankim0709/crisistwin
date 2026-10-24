@@ -1,7 +1,7 @@
 /**
  * Contract for the scheduled multi-ignition solver. `simulateScheduledFireSpread` in
  * `spread.ts` implements it; `simulateFireSpread` stays the single-origin entry point and
- * wraps it. See docs/adr/0010-simulation-studio.md.
+ * wraps it. See docs/adr/0011-simulation-studio.md.
  *
  * Times are elapsed simulation-clock minutes from T+0 of the scenario, not from any one
  * ignition. Coordinates are WGS84 decimal degrees. Areas are ground square metres.
