@@ -2,20 +2,20 @@ import { Button, Facts, IconButton, Notice, Tag } from "../ui";
 import { FIRE_STATUS, SOURCE_LABEL, TEAM_STATUS, nf, simClock } from "./format";
 import {
   DEPARTURE_SPREAD_MINUTES,
-  TEAM_LINE_M_PER_MIN,
   containOptions,
   currentContainment,
   fireAreaHa,
   firePerimeterM,
   perimeterGrowth,
   travelMinutes,
-  teamPosition,
+  unitLineOn,
   zoneCounts,
   type Board,
   type RouteOption,
   type ZoneForecast,
 } from "./model";
 import type { Selection } from "./DemoMap";
+import { ORDER_COMPLIANCE, SHADOW_SHARE, holdsFlameFeet, kindLabel } from "./realism";
 
 const SAFETY: Record<RouteOption["safety"], string> = {
   clear: "clear of fire",
@@ -35,8 +35,9 @@ const eta = (m: number | null) => (m === null ? "Not forecast" : m === 0 ? "Ther
 function FireDetail({ board, id, actions }: { board: Board; id: string; actions: PanelActions }) {
   const fire = board.fires.find((f) => f.id === id);
   if (!fire) return <p className="lc-dim">This fire has left the board.</p>;
-  const perimeter = firePerimeterM(fire.headRate, fire.tau);
+  const perimeter = firePerimeterM(fire);
   const teams = board.teams.filter((t) => t.fireId === fire.id);
+  const holds = Math.max(0, ...teams.filter((t) => t.status === "on_scene").map((t) => holdsFlameFeet(t.kind)));
   const containIn = currentContainment(board, fire);
   const next = containOptions(board, fire, 1)[0];
   const nextTeam = next ? board.teams.find((t) => t.id === next.teams[0]) : undefined;
@@ -50,10 +51,13 @@ function FireDetail({ board, id, actions }: { board: Board; id: string; actions:
         items={[
           { label: "Started", value: simClock(fire.ignitedAt) },
           { label: "Area", value: `${fireAreaHa(fire).toFixed(1)} ha` },
-          { label: "Head spread", value: `${fire.headRate} m/min` },
+          { label: "Head spread", value: `${fire.headRate} m/min toward ${Math.round(fire.rates.headingDegrees)}°` },
+          { label: "Head flame", value: `${fire.rates.headFlameFeet.toFixed(1)} ft` },
+          { label: "Length to breadth", value: fire.rates.lengthToBreadth.toFixed(1) },
+          { label: "Slope at head", value: `${Math.round(fire.rates.slopePercent)}%` },
           {
             label: "Perimeter",
-            value: `${nf(perimeter)} m${fire.status === "burning" ? `, +${nf(perimeterGrowth(fire.headRate))} m/min` : ""}`,
+            value: `${nf(perimeter)} m${fire.status === "burning" ? `, +${nf(perimeterGrowth(fire))} m/min` : ""}`,
           },
           {
             label: "Line built",
@@ -65,9 +69,9 @@ function FireDetail({ board, id, actions }: { board: Board; id: string; actions:
               fire.status !== "burning"
                 ? "Done"
                 : teams.length === 0
-                  ? "No teams assigned"
+                  ? "No units assigned"
                   : containIn === null
-                    ? "Fire is outrunning its teams"
+                    ? "Fire is outrunning its units"
                     : `about ${containIn} min`,
           },
         ]}
@@ -77,7 +81,7 @@ function FireDetail({ board, id, actions }: { board: Board; id: string; actions:
           {teams.map((t) => (
             <li key={t.id}>
               <span>
-                <strong>{t.id}</strong> {TEAM_STATUS[t.status].toLowerCase()}
+                <strong>{t.id}</strong> {kindLabel(t.kind)}, {TEAM_STATUS[t.status].toLowerCase()}
                 {t.status === "en_route" && t.arriveAt !== null ? `, ${Math.ceil(t.arriveAt - board.minute)} min` : ""}
               </span>
               <Button size="sm" variant="ghost" onClick={() => actions.releaseTeam(t.id)}>
@@ -96,8 +100,8 @@ function FireDetail({ board, id, actions }: { board: Board; id: string; actions:
             onClick={() => nextTeam && actions.sendTeam(nextTeam.id, fire.id)}
           >
             {nextTeam
-              ? `Send ${nextTeam.id} (${Math.ceil(travelMinutes(teamPosition(board, nextTeam), fire.origin))} min away)`
-              : "No free team"}
+              ? `Send ${nextTeam.id} (${Math.ceil(travelMinutes(board, nextTeam, fire))} min away)`
+              : "No free unit"}
           </Button>
         ) : null}
         {fire.status !== "out" ? (
@@ -113,8 +117,9 @@ function FireDetail({ board, id, actions }: { board: Board; id: string; actions:
         </p>
       ) : null}
       <p className="dm-note">
-        Each strike team builds {TEAM_LINE_M_PER_MIN} m of line a minute; the fire is contained when the line reaches its
-        perimeter.
+        Rothermel spread from the fuel, slope and wind at the head. Units build line at their sourced rate for this fuel;
+        the fire is contained when the line reaches its perimeter and the head flame is within what their line holds
+        {holds > 0 ? ` (${holds} ft now)` : ""}.
       </p>
     </>
   );
@@ -151,6 +156,7 @@ function ZoneDetail({
           { label: "On the road", value: nf(c.enRoute) },
           { label: "Out", value: nf(c.out) },
           { label: "Caught by fire", value: nf(c.caught) },
+          { label: "No vehicle", value: `${nf(zone.noVehicle)} households, need transport` },
           { label: "Fire at edge", value: eta(forecast?.edgeEta ?? null) },
           { label: "Fire at core", value: eta(forecast?.coreEta ?? null) },
           ...(slack !== null && zone.orderedAt === null
@@ -179,8 +185,9 @@ function ZoneDetail({
         )
       ) : null}
       <p className="dm-note">
-        Households leave over {DEPARTURE_SPREAD_MINUTES} min after an order; those still home when fire reaches the
-        zone core are caught.
+        After an order {Math.round(ORDER_COMPLIANCE * 100)}% of households with a vehicle leave, after{" "}
+        {DEPARTURE_SPREAD_MINUTES} min on average; with no order, {Math.round(SHADOW_SHARE * 100)}% leave once fire
+        reaches the zone. Households without a vehicle stay. Those still home when fire reaches the zone core are caught.
       </p>
     </>
   );
@@ -190,14 +197,20 @@ function TeamDetail({ board, id, actions }: { board: Board; id: string; actions:
   const team = board.teams.find((t) => t.id === id);
   if (!team) return null;
   const station = board.stations.find((s) => s.id === team.station);
+  const fire = team.fireId ? (board.fires.find((f) => f.id === team.fireId) ?? null) : null;
   return (
     <>
       <Facts
         items={[
           { label: "Status", value: TEAM_STATUS[team.status] },
           { label: "Fire", value: team.fireId ?? "None" },
-          { label: "Home station", value: station?.name ?? "None" },
-          { label: "Line", value: `${TEAM_LINE_M_PER_MIN} m/min (5 engines)` },
+          { label: "Type", value: kindLabel(team.kind) },
+          { label: "Home base", value: station ? `${station.name}${station.type === "synthetic" ? " (synthetic)" : ""}` : "None" },
+          { label: "Line", value: `${unitLineOn(board, team, fire).toFixed(1)} m/min here` },
+          { label: "Holds flames up to", value: `${holdsFlameFeet(team.kind)} ft` },
+          ...(team.status === "en_route"
+            ? [{ label: "Travel time", value: team.travel === "straight_line" ? "Straight-line estimate" : "Road network" }]
+            : []),
         ]}
       />
       {team.status !== "available" ? (
@@ -230,7 +243,7 @@ export default function SelectedPanel({
     selection.kind === "zone"
       ? (board.zones.find((z) => z.id === selection.id)?.name ?? selection.id)
       : selection.kind === "team"
-        ? `Strike team ${selection.id}`
+        ? `Unit ${selection.id}`
         : `Fire ${selection.id}`;
   return (
     <section className="dm-section dm-selected" aria-label="Selected item">
