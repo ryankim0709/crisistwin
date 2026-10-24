@@ -11,7 +11,12 @@ from __future__ import annotations
 import math
 from datetime import datetime, timedelta
 
+from pathlib import Path
+
+from sim.events import ASSUMPTIONS as ROAD_EVENT_ASSUMPTIONS
+from sim.events import resolve_road_events
 from sim.firefront import CAMP_IGNITION_AT, CAMP_IGNITION_LONLAT
+from sim.network import load_alert_events, load_road_network
 from sim.traffic import DemandZone, Destination, RoadNetwork, TrafficEvent
 
 # Populated ridge: Paradise, Magalia, and Concow (approximate, lon/lat).
@@ -25,6 +30,8 @@ FIXTURE_MIN_RESIDENTIAL_M = 1500  # skip grid cells with little mapped housing
 FIXTURE_FIRST_ORDER_AT = datetime.fromisoformat("2018-11-08T15:13:00+00:00")
 FIXTURE_ORDER_SPACING = timedelta(minutes=8)
 M_PER_DEG_LAT = 111_195.0
+CAMP_REPLAY_START = datetime.fromisoformat("2018-11-08T14:00:00+00:00")
+CAMP_REPLAY_END = datetime.fromisoformat("2018-11-09T08:00:00+00:00")
 
 
 def hybrid_scenario(network: RoadNetwork, exits: tuple[Destination, ...], road_assumptions: list[str]) -> dict:
@@ -109,3 +116,18 @@ def hybrid_scenario(network: RoadNetwork, exits: tuple[Destination, ...], road_a
             "CodeRED alerts appear as reconstructed timeline events but do not drive demand yet.",
         ],
     }
+
+
+def camp_bundle_inputs(roads_package: Path) -> tuple[dict, datetime, datetime]:
+    """The single baseline scenario and clock for the Camp replay; variants derive from it.
+
+    Observed roads and exits, fixture demand and orders, historical alerts (timeline
+    only), and NIST road events snapped onto edges (closures and contraflow).
+    """
+    network, exits, provenance = load_road_network(roads_package)
+    scenario = hybrid_scenario(network, exits, provenance["assumptions"])
+    road_events, _ = resolve_road_events(roads_package, network, exits)
+    scenario["events"] = (*scenario["events"], *load_alert_events(roads_package), *road_events)
+    if road_events:
+        scenario["notes"] = [*scenario["notes"], *ROAD_EVENT_ASSUMPTIONS]
+    return scenario, CAMP_REPLAY_START, CAMP_REPLAY_END

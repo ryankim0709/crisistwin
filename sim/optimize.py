@@ -437,7 +437,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="python3 -m sim.optimize", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--package", type=Path, default=Path("data/incidents/camp-2018-paradise-slice/a6d2cc03f525ed65"))
-    parser.add_argument("--roads-package", type=Path, default=Path("data/incidents/camp-2018-evacuation/b2624d1cda93d9e5"))
+    parser.add_argument("--roads-package", type=Path, default=Path("data/incidents/camp-2018-evacuation/b1b318c16bbd3270"))
     parser.add_argument("--start", default="2018-11-08T14:00:00Z")
     parser.add_argument("--end", default="2018-11-09T08:00:00Z")
     parser.add_argument("--budget-evals", type=int, default=DEFAULT_BUDGET_EVALS)

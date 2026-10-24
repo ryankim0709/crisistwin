@@ -10,7 +10,7 @@ docs/replay-bundle.md, section "Variants". Everything here is `simulated`.
 
 Run from the repository root:
   python3 -m sim.variants --package data/incidents/camp-2018-paradise-slice/a6d2cc03f525ed65 \
-    --roads-package data/incidents/camp-2018-evacuation/b2624d1cda93d9e5 \
+    --roads-package data/incidents/camp-2018-evacuation/b1b318c16bbd3270 \
     --baseline app/public/replays/camp-2018.json --output-dir app/public/replays/camp-2018.variants
 """
 
@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import inspect
 import json
 import math
 import sys
@@ -36,8 +35,7 @@ from sim.fire import FireParams
 from sim.firefront import FIREFRONT_ASSUMPTIONS, arrival_lookup, calibrate_from_ignition, isochrones
 from sim.geo import EARTH_RADIUS_M
 from sim.history import IncidentHistory, format_utc, load_history, parse_utc
-from sim.network import load_alert_events, load_road_network
-from sim.scenario import hybrid_scenario
+from sim.scenario import camp_bundle_inputs
 from sim.traffic import (
     CONTRAFLOW_END_EVENT_TYPES, CONTRAFLOW_START_EVENT_TYPES, MODEL_ID as TRAFFIC_MODEL_ID,
     MODEL_VERSION as TRAFFIC_MODEL_VERSION, TrafficEvent, TrafficParams,
@@ -47,8 +45,6 @@ KIND = "crisistwin_variant"
 INDEX_KIND = "crisistwin_variant_index"
 SCHEMA_VERSION = "1.0.0"
 BASELINE_FILE = "camp-2018.json"
-CLOCK_START = "2018-11-08T14:00:00Z"  # same defaults as `python3 -m sim ... bundle`
-CLOCK_END = "2018-11-09T08:00:00Z"
 COMPARE_ARRIVED_AT = ("2018-11-08T17:00:00Z", "2018-11-08T18:00:00Z", "2018-11-08T20:00:00Z")
 
 # Skyway corridor between Paradise's west edge and the Chico city limit (lon/lat bbox).
@@ -101,14 +97,8 @@ class Variant:
 
 
 def baseline_inputs(roads_package: Path) -> tuple[dict, datetime, datetime]:
-    """Scenario and clock exactly as `python3 -m sim ... bundle --roads-package` builds them.
-
-    Mirrors sim/__main__.py; keep in step with it (the baseline-file check below fails if not).
-    """
-    network, exits, provenance = load_road_network(roads_package)
-    scenario = hybrid_scenario(network, exits, provenance["assumptions"])
-    scenario["events"] = (*scenario["events"], *load_alert_events(roads_package))
-    return scenario, parse_utc(CLOCK_START), parse_utc(CLOCK_END)
+    """Scenario and clock exactly as `python3 -m sim ... bundle --roads-package` builds them."""
+    return camp_bundle_inputs(roads_package)
 
 
 def _with_events(inputs: RunInputs, events) -> RunInputs:
@@ -144,6 +134,11 @@ def _skyway_closed(base: RunInputs, ctx: Context) -> tuple[RunInputs, list[str],
         "(lon/lat, Paradise west edge to Chico city limit).",
         "Vehicles already on a closed edge at 16:00Z stop there until the end (engine limitation: no turning back).",
     ]
+    contraflow = [ev.id for ev in base.scenario["events"]
+                  if ev.type in CONTRAFLOW_START_EVENT_TYPES and set(ev.edge_ids) & set(closure.edge_ids)]
+    if contraflow:
+        changes.append(f"Overrides baseline contraflow on the closed edges ({', '.join(contraflow)}): a hard closure "
+                       "wins over contraflow, so both directions stay closed.")
     extra = {"selection": {"names": list(SKYWAY_NAMES), "bbox": list(SKYWAY_CORRIDOR_BBOX),
                            "edge_ids": [x.id for x in chosen], "highways": sorted({x.highway for x in chosen})}}
     return _with_events(base, [*base.scenario["events"], closure]), changes, extra
@@ -169,6 +164,8 @@ def _slower_response(base: RunInputs, ctx: Context) -> tuple[RunInputs, list[str
         f"(x{RESPONSE_DELAY_FACTOR:g}); sigma {base.params.response_delay_sigma:g} and cap "
         f"{base.params.response_delay_max_min:g} min unchanged.",
         "Same seed, so each packet's delay is its baseline delay x2, except draws capped at the maximum.",
+        "Read exposure with care: vehicles still waiting at an origin node are not counted as exposed (engine "
+        "limitation), so later departures can lower exposed_veh while raising blocked_veh.",
     ]
     return replace(base, params=params), changes, {}
 
@@ -229,7 +226,7 @@ def _no_contraflow(base: RunInputs, ctx: Context) -> tuple[RunInputs, list[str],
     if not removed:
         raise VariantUnavailable(
             "the baseline scenario has no contraflow events: NIST road events (sim.events.resolve_road_events) "
-            "are not yet part of the baseline bundle")
+            "are not part of the baseline scenario")
     events = [ev for ev in base.scenario["events"] if ev.type not in types]
     changes = [f"Removed {len(removed)} contraflow events: " + ", ".join(ev.id for ev in removed) + "; their derived "
                "inbound-lane closures disappear with them."]
@@ -246,13 +243,24 @@ def _optimized(base: RunInputs, ctx: Context) -> tuple[RunInputs, list[str], dic
         s["network"], s["zones"], s["destinations"], s["events"], base.params, start=ctx.start, end=ctx.end,
         fire_area_at=_fire_area_lookup(ctx.history, base.fire[1][3]), budget_evals=OPTIMIZER_BUDGET_EVALS,
     )
+    # Only order times may change: non-order events pass through, and every zone keeps one order.
+    def non_orders(evs):
+        return sorted((ev for ev in evs if ev.type != "evacuation_order"), key=lambda ev: (ev.at, ev.id))
+
+    if non_orders(events) != non_orders(s["events"]):
+        raise AssertionError("optimized: non-order events changed")
+    ordered = sorted(z for ev in events if ev.type == "evacuation_order" for z in ev.zone_ids)
+    if ordered != sorted(z.id for z in s["zones"]):
+        raise AssertionError("optimized: every zone must be ordered exactly once")
     best = report["best"]
     changes = [
-        f"Fixture evacuation order times replaced by the best schedule of {report['optimizer']['runs']} simulated "
-        f"candidates ({best['id']}); every zone is still ordered once, between {report['constraints']['earliest_order_at']} "
-        f"and {report['constraints']['latest_order_at']}.",
+        f"Fixture evacuation orders replaced by the best schedule of {report['optimizer']['runs']} simulated "
+        f"candidates ({best['id']}: {report.get('method', '')}); every zone is still ordered once, between "
+        f"{report['constraints']['earliest_order_at']} and {report['constraints']['latest_order_at']}. "
+        "Replacement orders are labelled evidence_class simulated (a plan, not a record).",
         report["limitations"][0],
         report["verdict"],
+        *report.get("changes", []),
     ]
     extra = {"optimizer": {k: report[k] for k in ("optimizer", "objective", "constraints", "beats_baseline",
                                                     "improvement", "verdict", "limitations")},
@@ -313,11 +321,8 @@ def _params_diff(a: TrafficParams, b: TrafficParams) -> list[str]:
 
 
 def run(inputs: RunInputs, ctx: Context, command: str) -> dict:
-    kwargs = {"fire": inputs.fire} if "fire" in inspect.signature(build_bundle).parameters else {}
-    if not kwargs and inputs.fire[0]["calibration"].get("fixed_params"):
-        raise VariantUnavailable("sim.bundle.build_bundle does not accept a precomputed fire yet")
     return build_bundle(ctx.history, inputs.scenario, inputs.params, start=ctx.start, end=ctx.end,
-                        command=command, **kwargs)
+                        command=command, fire=inputs.fire)
 
 
 def check_population(bundle: dict) -> dict:
@@ -470,6 +475,17 @@ def main() -> None:
                 "fire_changed": "fire_simulated" in doc,
             })
             print(f"{variant.id}: {runtime} s, {size} bytes")
+        # With --only, keep earlier entries for the other variants if they share this basis.
+        index_path = args.output_dir / "index.json"
+        if args.only and index_path.exists():
+            previous = json.loads(index_path.read_text())
+            if previous.get("basis") == base_basis:
+                ran = {v["id"] for v in entries} | {v["id"] for v in skipped}
+                order = [v.id for v in VARIANTS]
+                entries = sorted([*entries, *(v for v in previous["variants"] if v["id"] not in ran)],
+                                 key=lambda v: order.index(v["id"]))
+                skipped = sorted([*skipped, *(v for v in previous["skipped"] if v["id"] not in ran)],
+                                 key=lambda v: order.index(v["id"]))
         index = {
             "kind": INDEX_KIND,
             "schema_version": SCHEMA_VERSION,
@@ -481,7 +497,7 @@ def main() -> None:
             "skipped": skipped,
             "limitations": COMMON_LIMITATIONS,
         }
-        _write(args.output_dir / "index.json", index)
+        _write(index_path, index)
     except (OSError, SourceError, ValueError, json.JSONDecodeError) as exc:
         parser.exit(1, f"error: {exc}\n")
     print(f"{args.output_dir}: {len(entries)} variants, {len(skipped)} skipped")
