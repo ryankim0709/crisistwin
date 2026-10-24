@@ -431,7 +431,10 @@
   font-size: var(--ct-text-xs);
 }
 .studio-ff-table thead th:first-child {
-  width: 42%;
+  width: 28%;
+}
+.studio-ff-table :is(td, th) {
+  padding-inline: var(--ct-space-1);
 }
 .studio-ff-delta {
   display: block;
@@ -492,4 +495,20 @@
   width: 10px;
   height: 10px;
   margin-inline: 1px;
+}
+.studio-ff-attack {
+  display: grid;
+  gap: var(--ct-space-1);
+}
+.studio-ff-heading {
+  margin: 0;
+  font-size: var(--ct-text-sm);
+  font-weight: var(--ct-weight-semibold);
+}
+.studio-ff-fires {
+  display: grid;
+  gap: var(--ct-space-1);
+  margin: 0;
+  padding-left: var(--ct-space-4);
+  font-size: var(--ct-text-xs);
 }

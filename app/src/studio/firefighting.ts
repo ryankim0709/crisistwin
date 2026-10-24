@@ -32,6 +32,7 @@ import {
   type ControlLines,
 } from "../fire/spread";
 import type { ScheduledFireInput, ScheduledFireRun } from "../fire/scheduledTypes";
+import type { InitialAttackResult } from "./initialAttack";
 
 export type ResourceKind = "hand_crew" | "engine" | "dozer";
 
@@ -155,6 +156,8 @@ export interface FirefightingResult {
   } | null;
   /** Why nothing could be planned, when `best` is null. */
   note: string | null;
+  /** Direct attack once on site (studio/initialAttack.ts); filled in by the worker. */
+  initialAttack: InitialAttackResult | null;
 }
 
 const KIND_CODE: Record<ResourceKind, number> = { hand_crew: 0, engine: 1, dozer: 2 };
@@ -454,7 +457,7 @@ export function lineStatus(plan: LinePlan, arrival: Float32Array, horizon: numbe
   });
 }
 
-function burnedAreas(grid: LandscapeGrid, arrival: Float32Array, horizon: number) {
+export function burnedAreas(grid: LandscapeGrid, arrival: Float32Array, horizon: number) {
   const cellArea = grid.groundCellSizeMeters * grid.groundCellSizeMeters;
   let burned = 0;
   let developed = 0;
@@ -500,6 +503,7 @@ export function planFirefighting(
     candidates: [],
     best: null,
     note,
+    initialAttack: null,
   });
   if (resources.length === 0) return empty("No resources assigned.");
   if (startMinute >= horizon) return empty("Resources arrive after the horizon.");
@@ -570,5 +574,6 @@ export function planFirefighting(
       statusMeters: metersByStatus(winner.line, status),
     },
     note: null,
+    initialAttack: null,
   };
 }

@@ -54,6 +54,25 @@ toggle switches the map, 3D view, playback and the evacuation between the fire w
 without firefighters. The line is drawn at the playback minute: in 3D as dark strips (built,
 holding) and posts (red burned over, orange outrun); on the map as small and large dots.
 
+**Direct attack once on site** (`app/src/studio/initialAttack.ts`). Alongside the line
+search, a rough containment race in the spirit of Fried & Fried (1996) answers "can the crews
+put the fire out": from the response time the pooled resources build line at their combined
+rate (grass-equivalent, so heavier fuel needs more work), each fire's edge is estimated from
+its modelled area as an ellipse with its ignition-point length-to-breadth ratio, and a fire is
+out when the line built covers its edge (interpolated between 5-minute frames). A fire whose
+ignition-point head flame is longer than the strongest crew can hold, or that is crowning
+there, is not attacked. The solver then re-runs with each fire stopped at its put-out minute
+(`simulateScheduledFireSpread(..., outFromMinuteBySource)`: cells a put-out fire would reach
+later are dropped and stay free for another fire), so map, 3D view, playback and evacuation
+show the contained fire. The result panel lists each fire's outcome and compares no crews,
+direct attack and the best line plan; the fire toggle picks which one is shown (direct
+attack by default).
+
+On the demo board with four hand crews, four engines and a dozer at T+30: at 12 mph and dry
+fuel all three fires are out by T+0:57 (3.8 ha against 329 ha unchecked); at 20 mph and dry
+fuel two are out and the third's 11 ft head is too long to attack (338 ha against 578 ha;
+the line plan does better at 37 ha); under critical moisture nothing is put out.
+
 ## Consequences
 
 - On the demo fires at 20 mph and dry fuel, four hand crews, four engines and a dozer
@@ -66,6 +85,9 @@ holding) and posts (red burned over, orange outrun); on the map as small and lar
   picks them and the result panel says why.
 - A line can be two cells thick where the ring turns, so "burned over" metres can be
   non-zero while the fire is still held.
+- The direct-attack estimate is deliberately rough: ellipse perimeters understate ragged
+  edges, the flame test uses only the ignition point, and the pooled crews ring every burning
+  fire at once.
 - Not modelled: travel on the road network, staggered arrivals, shifts and fatigue, water
   supply, aircraft and retardant, burnout or backfire, mop-up, a held line failing later, and
   retreat for crew safety. The search is a small grid, not an optimum.

@@ -99,10 +99,12 @@ export default function FirefightingFields({
             </select>
           </Field>
           <p className="studio-hint">
-            The run tries anchoring at the heel or the head of the fire and building around its
-            outline at several distances, and keeps the plan that leaves the least burned area.
-            Production rates are assumed; lines hold flames up to the Hauling-chart limit of the
-            crew that built them, and crown fire breaks any line.
+            The run estimates whether the crews put each fire out by direct attack once on site
+            (line built against the fire&rsquo;s growing edge), and separately searches for the best
+            control line, anchored at the heel or head and built around the fire&rsquo;s outline at
+            several distances. Production rates are assumed; crews hold flames up to the
+            Hauling-chart limit (hand crews 4 ft, engines and dozers 8 ft), and crown fire breaks
+            any line.
           </p>
         </>
       )}

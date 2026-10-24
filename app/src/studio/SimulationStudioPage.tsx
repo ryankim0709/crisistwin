@@ -193,13 +193,16 @@ export default function SimulationStudioPage({
 
   const { state, run, cancel, markStale } = useStudioRun();
   const { result } = state;
-  // Which fire to show when the run includes firefighting: the best plan's or the free run.
-  const [fireShown, setFireShown] = useState<FireShown>("with");
+  // Which fire to show when the run includes firefighting: direct attack once on site, the
+  // best control-line plan, or the free run. Falls back to the free run when unavailable.
+  const [fireShown, setFireShown] = useState<FireShown>("attack");
   const firefighting = result?.firefighting ?? null;
   const shownRun = result
-    ? fireShown === "with" && firefighting?.best
-      ? firefighting.best.run
-      : result.run
+    ? fireShown === "attack" && firefighting?.initialAttack
+      ? firefighting.initialAttack.run
+      : fireShown === "line" && firefighting?.best
+        ? firefighting.best.run
+        : result.run
     : null;
 
   // Prebuilt region board (MongoDB), drawn in 3D before any run and used to solve fires on it.
@@ -668,7 +671,7 @@ export default function SimulationStudioPage({
   // aside (/dispatch) the dispatcher owns the 3D overlay, so the line is drawn on the map only.
   const firelineView = useMemo<FirelineView | null>(
     () =>
-      result && fireShown === "with" && firefighting?.best
+      result && fireShown === "line" && firefighting?.best
         ? {
             grid: result.landscape,
             line: firefighting.best.line,
@@ -987,6 +990,12 @@ export default function SimulationStudioPage({
                     firefighting ? (
                       <FirefightingResults
                         result={firefighting}
+                        names={Object.fromEntries(
+                          (result?.scenario.ignitions ?? []).map((ignition) => [
+                            ignition.id,
+                            ignition.name || ignition.id,
+                          ]),
+                        )}
                         stale={stale}
                         shown={fireShown}
                         onShownChange={setFireShown}

@@ -879,6 +879,7 @@ export function simulateFireSpread(landscape: LandscapeGrid, scenario: FireScena
     scenario,
     [{ location: scenario.origin, startMinute: 0 }],
     null,
+    null,
     (problems) => {
       const problem = problems[0];
       if (problem.reason === "non-burnable") throw new NonBurnableIgnitionError(problem.fuelCode);
@@ -929,28 +930,36 @@ export function simulateScheduledFireSpread(
   landscape: LandscapeGrid,
   input: ScheduledFireInput,
   controlLines: ControlLines | null = null,
+  outFromMinuteBySource: readonly number[] | null = null,
 ): ScheduledFireRun {
   const startedAt = performance.now();
   assertScheduledInput(input);
   const { settings, sources, frameMinutes } = input;
-  const solution = solveSpread(landscape, settings, sources, controlLines, (problems) => {
-    throw new InvalidIgnitionsError(
-      problems.map((problem) =>
-        problem.reason === "non-burnable"
-          ? {
-              sourceId: sources[problem.sourceIndex].id,
-              reason: problem.reason,
-              message: new NonBurnableIgnitionError(problem.fuelCode).message,
-              fuelCode: problem.fuelCode,
-            }
-          : {
-              sourceId: sources[problem.sourceIndex].id,
-              reason: problem.reason,
-              message: OUTSIDE_LANDSCAPE_MESSAGE,
-            },
-      ),
-    );
-  });
+  const solution = solveSpread(
+    landscape,
+    settings,
+    sources,
+    controlLines,
+    outFromMinuteBySource,
+    (problems) => {
+      throw new InvalidIgnitionsError(
+        problems.map((problem) =>
+          problem.reason === "non-burnable"
+            ? {
+                sourceId: sources[problem.sourceIndex].id,
+                reason: problem.reason,
+                message: new NonBurnableIgnitionError(problem.fuelCode).message,
+                fuelCode: problem.fuelCode,
+              }
+            : {
+                sourceId: sources[problem.sourceIndex].id,
+                reason: problem.reason,
+                message: OUTSIDE_LANDSCAPE_MESSAGE,
+              },
+        ),
+      );
+    },
+  );
 
   // Every source cell was seeded at its start minute, so its final arrival is either that
   // minute (the source ignited, including an exact tie with another fire) or strictly
@@ -1101,6 +1110,7 @@ function solveSpread(
   scenario: FireSettings,
   sources: readonly SolverSource[],
   controlLines: ControlLines | null,
+  outFromMinuteBySource: readonly number[] | null,
   rejectSources: (problems: readonly SolverSourceProblem[]) => never,
 ): SpreadSolution {
   const { width, height, fuelCodes, slopeTangent, upslopeDegrees, groundCellSizeMeters } =
@@ -1458,6 +1468,18 @@ function solveSpread(
   while (heap.length > 0) {
     const { time, cell } = heap.pop();
     if (settled[cell]) continue;
+    // A fire put out at minute m spreads no further: a cell it would reach after m is
+    // dropped, and stays free for another, still burning fire to reach later. Stale heap
+    // entries for a dropped cell are skipped by the exact-time check.
+    if (outFromMinuteBySource) {
+      if (time !== arrival[cell]) continue;
+      const out = outFromMinuteBySource[firstSource[cell]] ?? Number.POSITIVE_INFINITY;
+      if (time > out) {
+        arrival[cell] = Number.POSITIVE_INFINITY;
+        firstSource[cell] = -1;
+        continue;
+      }
+    }
     if (time > scenario.horizonMinutes) break;
     settled[cell] = 1;
     settledOrder[settledCount++] = cell;
