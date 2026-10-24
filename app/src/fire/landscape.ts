@@ -1054,7 +1054,8 @@ async function sampleElevation(
     const pixelX = Math.min(Math.floor((globalX - tx) * TILE_SIZE), TILE_SIZE - 1);
     const pixelY = Math.min(Math.floor((globalY - ty) * TILE_SIZE), TILE_SIZE - 1);
     const tile = tiles.get(`${tx}/${ty}`);
-    return tile ? tile[pixelY * TILE_SIZE + pixelX] : 0;
+    const value = tile ? tile[pixelY * TILE_SIZE + pixelX] : Number.NaN;
+    return isPlausibleTerrainSample(value) ? value : Number.NaN;
   };
 
   const elevation = new Float32Array(width * height);
@@ -1072,7 +1073,9 @@ async function sampleElevation(
           const mercatorX = (tx * TILE_SIZE + px + 0.5) * pixelSpan - MERCATOR_ORIGIN_SHIFT;
           const column = Math.floor((mercatorX - westX) / cellX);
           if (column < 0 || column >= width) continue;
-          sums[row * width + column] += tile[py * TILE_SIZE + px];
+          const value = tile[py * TILE_SIZE + px];
+          if (!isPlausibleTerrainSample(value)) continue;
+          sums[row * width + column] += value;
           counts[row * width + column]++;
         }
       }
@@ -1094,9 +1097,128 @@ async function sampleElevation(
       }
     }
   }
-  // A missing tile would otherwise read as sea level, which silently flattens the slope.
+  // Cells left NaN (missing tile, or only implausible samples) are filled by
+  // `repairElevation` once the fuel codes are known. A missing tile still marks the
+  // elevation incomplete, because the fill only interpolates over it.
   const complete = [...tiles.values()].every((tile) => tile !== null);
   return { elevation, complete, tileCount };
+}
+
+/**
+ * Terrarium tiles carry artefacts at some coastlines: values down to -13,500 m near Point
+ * Mugu and -12,700 m near Carpinteria, deeper than any ocean, which turned neighbouring
+ * land cells into slope tangents near 70. Samples outside this range are treated as
+ * missing before any averaging. The floor sits below any real bathymetry the board could
+ * show near the coast, the ceiling above every summit.
+ */
+const MIN_PLAUSIBLE_TERRAIN_METERS = -500;
+const MAX_PLAUSIBLE_TERRAIN_METERS = 9000;
+/**
+ * Lowest elevation accepted on land. Death Valley (-86 m) and the Salton Sea basin
+ * (-70 m) are the lowest ground in the coverage; anything lower on a land cell is a
+ * coastal artefact or bathymetry bleeding inland, and is refilled from its neighbours.
+ */
+const MIN_LAND_ELEVATION_METERS = -100;
+/** FBFM40 open water; mirrors `NON_BURNABLE_CODES` in fuelModels.ts. */
+const WATER_FUEL_CODE = 98;
+/**
+ * Share of land cells that may be filled from neighbours before the elevation is reported
+ * incomplete. Up to 1 percent is a thin coastal fringe or a few artefact cells; more than
+ * that means slope is interpolated over a meaningful part of the board.
+ */
+const MAX_FILLED_LAND_FRACTION = 0.01;
+/** Neighbour-fill passes; each grows the filled area by one cell. */
+const MAX_ELEVATION_FILL_PASSES = 64;
+
+/** Repair in place; false when more than `MAX_FILLED_LAND_FRACTION` of land was filled. */
+function repairedElevationComplete(
+  elevation: Float32Array,
+  fuelCodes: Int16Array,
+  width: number,
+  height: number,
+): boolean {
+  const { filledLandCells, landCells } = repairElevation(elevation, fuelCodes, width, height);
+  if (filledLandCells > 0) {
+    console.warn(
+      `Terrain: filled ${filledLandCells} of ${landCells} land cells from neighbours ` +
+        "(missing or implausible terrarium samples).",
+    );
+  }
+  return filledLandCells <= landCells * MAX_FILLED_LAND_FRACTION;
+}
+
+function isPlausibleTerrainSample(value: number): boolean {
+  return value >= MIN_PLAUSIBLE_TERRAIN_METERS && value <= MAX_PLAUSIBLE_TERRAIN_METERS;
+}
+
+/**
+ * Make the elevation usable for slope, in place, given the fuel codes on the same cells.
+ *
+ * - Open water (98) is set to sea level when it is missing or below 0 m: the board and
+ *   the slope model want the water surface, not bathymetry. Inland lakes above sea level
+ *   keep their surface elevation.
+ * - Unmapped cells (offshore, outside CONUS) are set to sea level when below 0 m.
+ * - Land below `MIN_LAND_ELEVATION_METERS`, and any other missing cell, is filled with the
+ *   mean of its valid 8-neighbours, repeated outward until every cell has a value
+ *   (anything still missing after `MAX_ELEVATION_FILL_PASSES` becomes 0 m).
+ *
+ * Returns how many land cells (mapped, not water) had to be filled, out of how many.
+ */
+export function repairElevation(
+  elevation: Float32Array,
+  fuelCodes: Int16Array,
+  width: number,
+  height: number,
+): { filledLandCells: number; landCells: number } {
+  let landCells = 0;
+  let filledLandCells = 0;
+  for (let i = 0; i < elevation.length; i++) {
+    const value = elevation[i];
+    if (fuelCodes[i] === WATER_FUEL_CODE) {
+      if (!(value >= 0)) elevation[i] = 0;
+    } else if (fuelCodes[i] === FUEL_NO_DATA) {
+      if (value < 0) elevation[i] = 0;
+    } else {
+      landCells++;
+      // NaN (no plausible sample) fails this test too, so it is counted as filled.
+      if (!(value >= MIN_LAND_ELEVATION_METERS)) {
+        elevation[i] = Number.NaN;
+        filledLandCells++;
+      }
+    }
+  }
+
+  let missing: number[] = [];
+  for (let i = 0; i < elevation.length; i++) if (Number.isNaN(elevation[i])) missing.push(i);
+  for (let pass = 0; pass < MAX_ELEVATION_FILL_PASSES && missing.length > 0; pass++) {
+    // Values are computed from the state at the start of the pass, then written, so the
+    // fill does not depend on scan order.
+    const updates: [number, number][] = [];
+    const still: number[] = [];
+    for (const i of missing) {
+      const x = i % width;
+      const y = (i - x) / width;
+      let sum = 0;
+      let count = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if ((dx === 0 && dy === 0) || nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+          const neighbour = elevation[ny * width + nx];
+          if (Number.isNaN(neighbour)) continue;
+          sum += neighbour;
+          count++;
+        }
+      }
+      if (count > 0) updates.push([i, sum / count]);
+      else still.push(i);
+    }
+    for (const [i, value] of updates) elevation[i] = value;
+    missing = still;
+  }
+  for (const i of missing) elevation[i] = 0;
+  return { filledLandCells, landCells };
 }
 
 /** Horn's method: slope and aspect from the 8 neighbours of each cell. */
@@ -1495,10 +1617,13 @@ export async function loadLandscape(
     source,
   );
   const fuelCodes = modeFuel(sampleFuel, plan);
-  const [{ elevation: elevationMeters, complete: elevationComplete }, canopy] = await Promise.all([
+  const [{ elevation: elevationMeters, complete: tilesComplete }, canopy] = await Promise.all([
     terrain,
     sampleCanopyResampled(sampleFuel, fuelCodes, plan, signal, source),
   ]);
+  const elevationComplete =
+    repairedElevationComplete(elevationMeters, fuelCodes, lattice.width, lattice.height) &&
+    tilesComplete;
   const groundCellSizeMeters = lattice.cellX * Math.cos(latitude * RADIANS_PER_DEGREE);
   const { slopeTangent, upslopeDegrees } = slopeAndAspect(
     elevationMeters,
@@ -1540,10 +1665,13 @@ async function loadNativeLandscape(
   const box = boxAround(longitude, latitude, groundRadiusMeters);
   const raster = await fetchFuelRaster(box, signal, source);
   // Different hosts, so the terrain tiles and the canopy coverages overlap in time.
-  const [{ elevation: elevationMeters, complete: elevationComplete }, canopy] = await Promise.all([
+  const [{ elevation: elevationMeters, complete: tilesComplete }, canopy] = await Promise.all([
     sampleElevation(latticeOfRaster(raster), TERRAIN_ZOOM, false, signal, source),
     sampleCanopy(raster, box, signal, source),
   ]);
+  const elevationComplete =
+    repairedElevationComplete(elevationMeters, raster.values, raster.width, raster.height) &&
+    tilesComplete;
   const mercatorCell = Math.abs(raster.transform.scaleX);
   const groundCellSizeMeters = mercatorCell * Math.cos(latitude * RADIANS_PER_DEGREE);
   const { slopeTangent, upslopeDegrees } = slopeAndAspect(
