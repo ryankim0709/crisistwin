@@ -25,6 +25,12 @@ export const navigationItems: readonly NavigationItem[] = [
     description: "Rothermel surface spread over LANDFIRE fuels and terrain.",
   },
   {
+    path: "/simulation",
+    label: "Simulation Studio",
+    group: "Workspace",
+    description: "Schedule several fires and play their combined spread on one timeline.",
+  },
+  {
     path: "/scenarios",
     label: "Scenarios",
     group: "Workspace",

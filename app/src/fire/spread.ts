@@ -50,8 +50,9 @@
  * Nothing here uses randomness, so a scenario plus a landscape reproduces a run exactly
  * and no seed has to be recorded.
  *
- * Times are elapsed simulation-clock minutes from ignition. Distances inside the solver
- * are ground metres.
+ * Times are elapsed simulation-clock minutes from T+0: the single ignition on /fire, the
+ * scenario start for `simulateScheduledFireSpread`. Distances inside the solver are
+ * ground metres.
  */
 
 import type { Feature, Polygon, Position } from "geojson";
@@ -68,6 +69,15 @@ import {
   type CanopyCell,
   type CrownFireResult,
 } from "./crownFire";
+// Type-only imports flow back from scheduledTypes.ts, so this is not a runtime cycle.
+import {
+  InvalidIgnitionsError,
+  type FireSettings,
+  type IgnitionOutcome,
+  type ScheduledFireFrame,
+  type ScheduledFireInput,
+  type ScheduledFireRun,
+} from "./scheduledTypes";
 
 export interface GeoPoint {
   latitude: number;
@@ -700,8 +710,309 @@ function eccentricityOf(lengthToBreadth: number): number {
     : 0;
 }
 
+/** Said verbatim when an ignition point falls off the landscape grid. */
+const OUTSIDE_LANDSCAPE_MESSAGE = "The ignition point is outside the modelled area.";
+
+/** A point fire source as the solver core sees it: where, and from which T+0 minute. */
+interface SolverSource {
+  location: GeoPoint;
+  startMinute: number;
+}
+
+/** A source that cannot ignite, by its position in the source list. */
+type SolverSourceProblem =
+  | { sourceIndex: number; reason: "outside-landscape" }
+  | { sourceIndex: number; reason: "non-burnable"; fuelCode: number };
+
+/** Run-level fields `FireRun` and `ScheduledFireRun` share, as totals at the horizon. */
+type SpreadRunTotals = Pick<
+  FireRun,
+  | "burnableFraction"
+  | "developedFraction"
+  | "fireCarryingFraction"
+  | "appliedOptions"
+  | "arrivalBreakdown"
+  | "crownFire"
+  | "crownFireBreakdown"
+  | "midflameWind"
+  | "cellSizeMeters"
+>;
+
+/** What the solver core hands both public entry points. */
+interface SpreadSolution {
+  /** Arrival per cell, minutes from T+0; +Infinity where fire never arrived. */
+  arrival: Float64Array;
+  /**
+   * Index into the source list of the source whose fire set each cell's arrival, -1 where
+   * none did. Final for every settled cell, since a settled cell is never relaxed again.
+   */
+  firstSource: Int32Array;
+  /** Cells in the order they settled, which is nondecreasing arrival; first `settledCount`. */
+  settledOrder: Int32Array;
+  settledCount: number;
+  /** Grid cell of each source, same order as the sources. */
+  sourceCells: number[];
+  /** Fuel, slope and spread at each source's cell, same order as the sources. */
+  ignitions: IgnitionConditions[];
+  reachedEdge: boolean;
+  /** Arrival time of the first edge cell settled, minutes from T+0, or null. */
+  reachedEdgeMinute: number | null;
+  totals: SpreadRunTotals;
+}
+
+/** Inclusive bounding box of reached cells, grid columns and rows. */
+interface CellBox {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+}
+
+interface FrameTally {
+  elapsedMinutes: number;
+  /** Cells with arrival <= elapsedMinutes. */
+  reachedCells: number;
+  /** The same cells split by `SpreadSolution.firstSource`. Live: read it inside `visit`. */
+  reachedCellsBySource: Int32Array;
+  /** Greatest ground distance of a reached cell from `reachFromCell`, metres. */
+  maxReachMeters: number;
+  /** Null when no cell has been reached. */
+  box: CellBox | null;
+}
+
+/**
+ * Single-origin run for /fire: one source at minute 0, a frame every `stepMinutes` to the
+ * horizon. A thin wrapper over the same core as `simulateScheduledFireSpread`, with the
+ * refusals /fire has always thrown.
+ */
 export function simulateFireSpread(landscape: LandscapeGrid, scenario: FireScenario): FireRun {
   const startedAt = performance.now();
+  const solution = solveSpread(
+    landscape,
+    scenario,
+    [{ location: scenario.origin, startMinute: 0 }],
+    (problems) => {
+      const problem = problems[0];
+      if (problem.reason === "non-burnable") throw new NonBurnableIgnitionError(problem.fuelCode);
+      throw new Error(OUTSIDE_LANDSCAPE_MESSAGE);
+    },
+  );
+
+  const cellArea = landscape.groundCellSizeMeters * landscape.groundCellSizeMeters;
+  const frameMinutes: number[] = [];
+  for (let minutes = 0; minutes <= scenario.horizonMinutes; minutes += scenario.stepMinutes) {
+    frameMinutes.push(minutes);
+  }
+  const frames: FireFrame[] = [];
+  tallyFrames(landscape, solution, frameMinutes, 1, solution.sourceCells[0], (tally) => {
+    frames.push({
+      elapsedMinutes: tally.elapsedMinutes,
+      perimeters:
+        tally.elapsedMinutes === 0
+          ? []
+          : contour(landscape, solution.arrival, tally.elapsedMinutes, tally.box),
+      burnedAreaSquareMeters: tally.reachedCells * cellArea,
+      maxReachMeters: tally.maxReachMeters,
+    });
+  });
+
+  return {
+    model: SPREAD_MODEL,
+    scenario,
+    frames,
+    ignition: solution.ignitions[0],
+    ...solution.totals,
+    reachedEdge: solution.reachedEdge,
+    computeMilliseconds: performance.now() - startedAt,
+  };
+}
+
+/**
+ * Several point fires, each with its own start minute, on one landscape grid and one
+ * arrival field. Semantics are in docs/adr/0011-simulation-studio.md, "Solver semantics".
+ *
+ * Throws `InvalidIgnitionsError` listing every source that is off the grid or on ground
+ * that carries no fire, and a plain `Error` for input that breaks the contract in
+ * `scheduledTypes.ts` (no sources, duplicate ids, bad start or frame minutes).
+ */
+export function simulateScheduledFireSpread(
+  landscape: LandscapeGrid,
+  input: ScheduledFireInput,
+): ScheduledFireRun {
+  const startedAt = performance.now();
+  assertScheduledInput(input);
+  const { settings, sources, frameMinutes } = input;
+  const solution = solveSpread(landscape, settings, sources, (problems) => {
+    throw new InvalidIgnitionsError(
+      problems.map((problem) =>
+        problem.reason === "non-burnable"
+          ? {
+              sourceId: sources[problem.sourceIndex].id,
+              reason: problem.reason,
+              message: new NonBurnableIgnitionError(problem.fuelCode).message,
+              fuelCode: problem.fuelCode,
+            }
+          : {
+              sourceId: sources[problem.sourceIndex].id,
+              reason: problem.reason,
+              message: OUTSIDE_LANDSCAPE_MESSAGE,
+            },
+      ),
+    );
+  });
+
+  // Every source cell was seeded at its start minute, so its final arrival is either that
+  // minute (the source ignited, including an exact tie with another fire) or strictly
+  // earlier, set by whichever fire got there first.
+  const ignitions = sources.map((source, index) => {
+    const cell = solution.sourceCells[index];
+    const arrivalMinutes = solution.arrival[cell];
+    const outcome: IgnitionOutcome =
+      arrivalMinutes < source.startMinute
+        ? {
+            status: "reached-before-start",
+            reachedMinute: arrivalMinutes,
+            reachedBySourceId: sources[solution.firstSource[cell]].id,
+          }
+        : { status: "ignited", ignitedMinute: source.startMinute };
+    return { sourceId: source.id, outcome, conditions: solution.ignitions[index] };
+  });
+
+  const cellArea = landscape.groundCellSizeMeters * landscape.groundCellSizeMeters;
+  const frames: ScheduledFireFrame[] = [];
+  tallyFrames(landscape, solution, frameMinutes, sources.length, null, (tally) => {
+    frames.push({
+      elapsedMinutes: tally.elapsedMinutes,
+      perimeters: contour(landscape, solution.arrival, tally.elapsedMinutes, tally.box),
+      reachedAreaSquareMeters: tally.reachedCells * cellArea,
+      // fromEntries, not assignment into `{}`, so an id such as "__proto__" stays a key.
+      reachedAreaBySourceSquareMeters: Object.fromEntries(
+        sources.map((source, index) => [
+          source.id,
+          tally.reachedCellsBySource[index] * cellArea,
+        ]),
+      ),
+      ignitedSourceIds: ignitions
+        .filter(
+          ({ outcome }) =>
+            outcome.status === "ignited" && outcome.ignitedMinute <= tally.elapsedMinutes,
+        )
+        .map(({ sourceId }) => sourceId),
+    });
+  });
+
+  return {
+    model: SPREAD_MODEL,
+    input,
+    frames,
+    ignitions,
+    ...solution.totals,
+    reachedEdge: solution.reachedEdge,
+    reachedEdgeMinute: solution.reachedEdgeMinute,
+    computeMilliseconds: performance.now() - startedAt,
+  };
+}
+
+/** Contract checks from `scheduledTypes.ts` that do not need the landscape. */
+function assertScheduledInput({ settings, sources, frameMinutes }: ScheduledFireInput): void {
+  const horizon = settings.horizonMinutes;
+  if (!Number.isFinite(horizon) || horizon <= 0) {
+    throw new Error(`The horizon must be a positive number of minutes, not ${horizon}.`);
+  }
+  if (sources.length === 0) throw new Error("A scheduled run needs at least one ignition.");
+  const ids = new Set<string>();
+  for (const source of sources) {
+    if (ids.has(source.id)) throw new Error(`Ignition id "${source.id}" is used twice.`);
+    ids.add(source.id);
+    const { latitude, longitude } = source.location;
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+      throw new Error(`Ignition "${source.id}" has no valid location.`);
+    }
+    const start = source.startMinute;
+    if (!Number.isInteger(start) || start < 0 || start >= horizon) {
+      throw new Error(
+        `Ignition "${source.id}" starts at minute ${start}; it must be a whole minute from 0 to before the ${horizon}-minute horizon.`,
+      );
+    }
+  }
+  frameMinutes.forEach((minutes, index) => {
+    if (!Number.isFinite(minutes) || minutes < 0 || minutes > horizon) {
+      throw new Error(`Frame minute ${minutes} is outside 0 to ${horizon}.`);
+    }
+    if (index > 0 && minutes <= frameMinutes[index - 1]) {
+      throw new Error("Frame minutes must be strictly ascending.");
+    }
+  });
+}
+
+/**
+ * Walks the settled cells once, in arrival order, emitting one tally per frame minute.
+ *
+ * For any m within the horizon, a cell has arrival <= m exactly when it settled at a time
+ * <= m: the heap settles in nondecreasing arrival order, a cell's settle time is its final
+ * arrival, and the loop stops only once every remaining arrival is past the horizon. So
+ * this produces the same cell sets, counts and maxima as a full-grid scan per frame, in
+ * one pass instead of one pass per frame. `frameMinutes` must be ascending.
+ */
+function tallyFrames(
+  landscape: LandscapeGrid,
+  solution: SpreadSolution,
+  frameMinutes: readonly number[],
+  sourceCount: number,
+  reachFromCell: number | null,
+  visit: (tally: FrameTally) => void,
+): void {
+  const { width, groundCellSizeMeters } = landscape;
+  const { arrival, firstSource, settledOrder, settledCount } = solution;
+  const fromX = reachFromCell === null ? 0 : reachFromCell % width;
+  const fromY = reachFromCell === null ? 0 : (reachFromCell - fromX) / width;
+  const reachedCellsBySource = new Int32Array(sourceCount);
+  let next = 0;
+  let reachedCells = 0;
+  let maxReachMeters = 0;
+  let minX = width;
+  let maxX = -1;
+  let minY = landscape.height;
+  let maxY = -1;
+  for (const minutes of frameMinutes) {
+    while (next < settledCount) {
+      const cell = settledOrder[next];
+      if (arrival[cell] > minutes) break;
+      next++;
+      reachedCells++;
+      reachedCellsBySource[firstSource[cell]]++;
+      const x = cell % width;
+      const y = (cell - x) / width;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+      if (reachFromCell !== null) {
+        const reach = Math.hypot(x - fromX, y - fromY) * groundCellSizeMeters;
+        if (reach > maxReachMeters) maxReachMeters = reach;
+      }
+    }
+    visit({
+      elapsedMinutes: minutes,
+      reachedCells,
+      reachedCellsBySource,
+      maxReachMeters,
+      box: reachedCells > 0 ? { minX, maxX, minY, maxY } : null,
+    });
+  }
+}
+
+/**
+ * The shared solver: precompute per-cell spread, seed every source at its start minute,
+ * and relax one minimum-travel-time arrival field to the horizon. Calls `rejectSources`
+ * with every source that cannot ignite before doing any work.
+ */
+function solveSpread(
+  landscape: LandscapeGrid,
+  scenario: FireSettings,
+  sources: readonly SolverSource[],
+  rejectSources: (problems: readonly SolverSourceProblem[]) => never,
+): SpreadSolution {
   const { width, height, fuelCodes, slopeTangent, upslopeDegrees, groundCellSizeMeters } =
     landscape;
   const cellCount = width * height;
@@ -721,14 +1032,26 @@ export function simulateFireSpread(landscape: LandscapeGrid, scenario: FireScena
     ? Math.max(structureSpread.rateMetersPerMinute, 0) * structureWindFactor
     : 0;
 
-  const originCell = cellAt(landscape, scenario.origin);
-  if (originCell < 0) throw new Error("The ignition point is outside the modelled area.");
-  const originFuel = fuelCodes[originCell];
-  // Developed ground carries fire in this model whenever structure spread is on, so
-  // refusing to ignite there would contradict the rest of the run. Every other
-  // non-burnable code still refuses, and so does developed ground at a zero rate.
-  const originIsStructure = originFuel === DEVELOPED_FUEL_CODE && structureHeadRate > 0;
-  if (!isBurnable(originFuel) && !originIsStructure) throw new NonBurnableIgnitionError(originFuel);
+  // Every source is checked and every problem collected before any work is done.
+  const sourceCells = sources.map((source) => cellAt(landscape, source.location));
+  const isSourceCell = new Uint8Array(cellCount);
+  const sourceProblems: SolverSourceProblem[] = [];
+  sourceCells.forEach((originCell, sourceIndex) => {
+    if (originCell < 0) {
+      sourceProblems.push({ sourceIndex, reason: "outside-landscape" });
+      return;
+    }
+    isSourceCell[originCell] = 1;
+    const originFuel = fuelCodes[originCell];
+    // Developed ground carries fire in this model whenever structure spread is on, so
+    // refusing to ignite there would contradict the rest of the run. Every other
+    // non-burnable code still refuses, and so does developed ground at a zero rate.
+    const originIsStructure = originFuel === DEVELOPED_FUEL_CODE && structureHeadRate > 0;
+    if (!isBurnable(originFuel) && !originIsStructure) {
+      sourceProblems.push({ sourceIndex, reason: "non-burnable", fuelCode: originFuel });
+    }
+  });
+  if (sourceProblems.length > 0) rejectSources(sourceProblems);
 
   // Midflame wind: per cell from the canopy, or flat from the scenario. The precedence is
   // deliberate and is reported on the run. The scenario field wins whenever the user has
@@ -813,9 +1136,10 @@ export function simulateFireSpread(landscape: LandscapeGrid, scenario: FireScena
   let midflameMin = Number.POSITIVE_INFINITY;
   let midflameMax = 0;
   let midflameCells = 0;
-  let originSpread: SpreadResult | null = null;
-  let originCrown: CrownFireResult | null = null;
-  let originMidflameAdjustment = scenario.midflameAdjustment;
+  // Conditions the precompute produced at each source cell, keyed by cell.
+  const sourceSpread = new Map<number, SpreadResult>();
+  const sourceCrown = new Map<number, CrownFireResult>();
+  const sourceMidflameAdjustment = new Map<number, number>();
 
   let burnableCells = 0;
   let developedCells = 0;
@@ -870,7 +1194,7 @@ export function simulateFireSpread(landscape: LandscapeGrid, scenario: FireScena
         scenario.windSpeedMph,
         scenario.moisture.dead1h,
       );
-      if (i === originCell) originCrown = crown;
+      if (isSourceCell[i]) sourceCrown.set(i, crown);
       if (crown.type !== "surface") {
         crownType[i] = crown.type === "active" ? CROWN_ACTIVE : CROWN_PASSIVE;
         // A crown fire is driven by the surface fire beneath it, so it cannot be slower
@@ -900,9 +1224,9 @@ export function simulateFireSpread(landscape: LandscapeGrid, scenario: FireScena
       }
     }
 
-    if (i === originCell) {
-      originSpread = spread;
-      originMidflameAdjustment = midflameAdjustment;
+    if (isSourceCell[i]) {
+      sourceSpread.set(i, spread);
+      sourceMidflameAdjustment.set(i, midflameAdjustment);
     }
 
     headRate[i] = rateMetersPerMinute;
@@ -935,8 +1259,8 @@ export function simulateFireSpread(landscape: LandscapeGrid, scenario: FireScena
   }
 
   const arrival = new Float64Array(cellCount).fill(Number.POSITIVE_INFINITY);
-  arrival[originCell] = 0;
   const arrivalMechanism = new Uint8Array(cellCount);
+  const firstSource = new Int32Array(cellCount).fill(-1);
   /**
    * Whether the edge that currently holds each cell's best-known (possibly still
    * provisional) arrival time came from a source that was itself spreading as an active
@@ -950,8 +1274,24 @@ export function simulateFireSpread(landscape: LandscapeGrid, scenario: FireScena
    */
   const arrivedFromActiveCrown = new Uint8Array(cellCount);
   const settled = new Uint8Array(cellCount);
+  const settledOrder = new Int32Array(cellCount);
+  let settledCount = 0;
   const heap = new TimeHeap(Math.min(cellCount, 1 << 16));
-  heap.push(0, originCell);
+  // Each source enters the field at its own start minute, in input order. Strict `<` keeps
+  // the earlier-listed of two sources on one cell at one minute, and the relaxation below
+  // also uses strict `<`, so a fire arriving exactly at a source's start leaves the cell
+  // with that source: the "ignited" tie rule in scheduledTypes.ts.
+  sourceCells.forEach((originCell, sourceIndex) => {
+    const startMinute = sources[sourceIndex].startMinute;
+    if (startMinute < arrival[originCell]) {
+      arrival[originCell] = startMinute;
+      firstSource[originCell] = sourceIndex;
+      // An ignition starts as a surface fire; only an arrival from an already actively
+      // crowning neighbour may carry crown state into the cell (see the settle step).
+      arrivedFromActiveCrown[originCell] = 0;
+      heap.push(startMinute, originCell);
+    }
+  });
 
   const bearings = NEIGHBOURS.map(([dx, dy]) => Math.atan2(dx, -dy));
   const distances = NEIGHBOURS.map(([dx, dy]) => Math.hypot(dx, dy) * groundCellSizeMeters);
@@ -986,12 +1326,14 @@ export function simulateFireSpread(landscape: LandscapeGrid, scenario: FireScena
   );
 
   let reachedEdge = false;
+  let reachedEdgeMinute: number | null = null;
 
   while (heap.length > 0) {
     const { time, cell } = heap.pop();
     if (settled[cell]) continue;
     if (time > scenario.horizonMinutes) break;
     settled[cell] = 1;
+    settledOrder[settledCount++] = cell;
 
     // Select this cell's outgoing crown state exactly once, right here at settle time:
     // self-initiated (already in `headRate`/`eccentricity`/`crownType` from the
@@ -1000,7 +1342,7 @@ export function simulateFireSpread(landscape: LandscapeGrid, scenario: FireScena
     // is never touched by this; only the rate it goes on to spread OUT at is decided
     // here, and because this code runs once per cell (guarded by `settled`), nothing
     // after this point can change that cell's outgoing rate again.
-    if (cell !== originCell && canSustainCrown[cell] === 1 && arrivedFromActiveCrown[cell] === 1) {
+    if (canSustainCrown[cell] === 1 && arrivedFromActiveCrown[cell] === 1) {
       headRate[cell] = Math.max(headRate[cell], sustainedCrownRateMetersPerMinute[cell]);
       eccentricity[cell] = activeCrownEccentricity;
       crownType[cell] = CROWN_ACTIVE;
@@ -1010,7 +1352,11 @@ export function simulateFireSpread(landscape: LandscapeGrid, scenario: FireScena
     if (rate <= 0) continue;
     const x = cell % width;
     const y = (cell - x) / width;
-    if (x === 0 || y === 0 || x === width - 1 || y === height - 1) reachedEdge = true;
+    if (x === 0 || y === 0 || x === width - 1 || y === height - 1) {
+      // Cells settle in arrival order, so the first edge cell is the earliest.
+      if (!reachedEdge) reachedEdgeMinute = time;
+      reachedEdge = true;
+    }
     const sourceMechanism =
       fuelCodes[cell] === DEVELOPED_FUEL_CODE ? ARRIVAL_STRUCTURE : ARRIVAL_SURFACE;
     const sourceIsActiveCrown = crownType[cell] === CROWN_ACTIVE;
@@ -1045,6 +1391,7 @@ export function simulateFireSpread(landscape: LandscapeGrid, scenario: FireScena
       if (candidate < arrival[neighbour]) {
         arrival[neighbour] = candidate;
         arrivalMechanism[neighbour] = sourceMechanism;
+        firstSource[neighbour] = firstSource[cell];
         arrivedFromActiveCrown[neighbour] = sourceIsActiveCrown ? 1 : 0;
         heap.push(candidate, neighbour);
       }
@@ -1087,6 +1434,7 @@ export function simulateFireSpread(landscape: LandscapeGrid, scenario: FireScena
         if (candidate < arrival[target]) {
           arrival[target] = candidate;
           arrivalMechanism[target] = ARRIVAL_SPOTTING;
+          firstSource[target] = firstSource[cell];
           // An ember crossing a gap breaks canopy continuity by construction (the gap is
           // unvegetated ground), so a spot ignition is never a continuation of an active
           // crown fire, regardless of what a losing surface-neighbour relaxation set.
@@ -1099,27 +1447,6 @@ export function simulateFireSpread(landscape: LandscapeGrid, scenario: FireScena
   }
 
   const cellArea = groundCellSizeMeters * groundCellSizeMeters;
-  const originX = originCell % width;
-  const originY = (originCell - originX) / width;
-  const frames: FireFrame[] = [];
-  for (let minutes = 0; minutes <= scenario.horizonMinutes; minutes += scenario.stepMinutes) {
-    let burned = 0;
-    let maxReach = 0;
-    for (let i = 0; i < cellCount; i++) {
-      if (arrival[i] > minutes) continue;
-      burned++;
-      const x = i % width;
-      const y = (i - x) / width;
-      const reach = Math.hypot(x - originX, y - originY) * groundCellSizeMeters;
-      if (reach > maxReach) maxReach = reach;
-    }
-    frames.push({
-      elapsedMinutes: minutes,
-      perimeters: minutes === 0 ? [] : contour(landscape, arrival, minutes),
-      burnedAreaSquareMeters: burned * cellArea,
-      maxReachMeters: maxReach,
-    });
-  }
 
   // One pass over the burned set, credited two ways: by the mechanism that delivered fire
   // to the cell, and by the kind of fire that burned it. Both cover the same cells, so
@@ -1142,12 +1469,10 @@ export function simulateFireSpread(landscape: LandscapeGrid, scenario: FireScena
     else surfaceFireCells++;
   }
 
-  const originBed = beds.get(originFuel);
-  return {
-    model: SPREAD_MODEL,
-    scenario,
-    frames,
-    ignition: {
+  const ignitions = sourceCells.map((originCell): IgnitionConditions => {
+    const originFuel = fuelCodes[originCell];
+    const originBed = beds.get(originFuel);
+    return {
       fuelCode: originFuel,
       fuelLabel: fuelLabel(originFuel),
       slopePercent: slopeTangent[originCell] * 100,
@@ -1156,7 +1481,7 @@ export function simulateFireSpread(landscape: LandscapeGrid, scenario: FireScena
       // ignition conditions are the ones the solver actually propagated, midflame wind
       // and all, rather than a second evaluation that could drift from them.
       spread:
-        originSpread ??
+        sourceSpread.get(originCell) ??
         (originBed
           ? spreadFromBed(
               originBed,
@@ -1166,9 +1491,12 @@ export function simulateFireSpread(landscape: LandscapeGrid, scenario: FireScena
               upslopeDegrees[originCell],
             )
           : structureIgnitionSpread(structureHeadRate, windToward)),
-      crown: originCrown,
-      midflameAdjustment: originMidflameAdjustment,
-    },
+      crown: sourceCrown.get(originCell) ?? null,
+      midflameAdjustment: sourceMidflameAdjustment.get(originCell) ?? scenario.midflameAdjustment,
+    };
+  });
+
+  const totals: SpreadRunTotals = {
     burnableFraction: burnableCells / cellCount,
     developedFraction: developedCells / cellCount,
     fireCarryingFraction:
@@ -1203,9 +1531,19 @@ export function simulateFireSpread(landscape: LandscapeGrid, scenario: FireScena
       appliedMinAdjustment: midflameCells > 0 ? midflameMin : 0,
       appliedMaxAdjustment: midflameCells > 0 ? midflameMax : 0,
     },
-    reachedEdge,
     cellSizeMeters: groundCellSizeMeters,
-    computeMilliseconds: performance.now() - startedAt,
+  };
+
+  return {
+    arrival,
+    firstSource,
+    settledOrder,
+    settledCount,
+    sourceCells,
+    ignitions,
+    reachedEdge,
+    reachedEdgeMinute,
+    totals,
   };
 }
 
@@ -1278,12 +1616,20 @@ const EDGE_TABLE: readonly (readonly (readonly [number, number])[])[] = [
   [],
 ];
 
+/**
+ * `box` bounds the cells with arrival <= threshold. Only squares that touch it are
+ * scanned; every other square is all unburned and emits nothing, and the squares that are
+ * scanned are visited in the same row-major order as a full scan, so the rings and their
+ * order are identical to scanning the whole grid.
+ */
 function contour(
   landscape: LandscapeGrid,
   arrival: Float64Array,
   threshold: number,
+  box: CellBox | null,
 ): FirePerimeter[] {
   const { width, height } = landscape;
+  if (!box) return [];
   // Edge midpoints of the square whose top-left cell is (x, y): top, right, bottom, left.
   const edgePoint = (x: number, y: number, edge: number): [number, number] =>
     edge === 0
@@ -1296,8 +1642,12 @@ function contour(
   const key = (p: [number, number]) => `${Math.round(p[0] * 2)},${Math.round(p[1] * 2)}`;
 
   const starts = new Map<string, [number, number][]>();
-  for (let y = 0; y < height - 1; y++) {
-    for (let x = 0; x < width - 1; x++) {
+  // Square (x, y) covers cells x..x+1 and y..y+1, so it touches the box from one before
+  // its first column/row through its last, clipped to the squares that exist.
+  const lastY = Math.min(box.maxY, height - 2);
+  const lastX = Math.min(box.maxX, width - 2);
+  for (let y = Math.max(box.minY - 1, 0); y <= lastY; y++) {
+    for (let x = Math.max(box.minX - 1, 0); x <= lastX; x++) {
       const burnedAt = (cx: number, cy: number) => (arrival[cy * width + cx] <= threshold ? 1 : 0);
       const index =
         burnedAt(x, y) * 8 +
