@@ -17,6 +17,24 @@ extension Color {
     /// The workspace background (same as the WorkspaceBackground asset).
     static let ctBackground = Color("WorkspaceBackground")
 
+    // MARK: Incident screen
+
+    /// Status band for Evacuate now; text on it is white in both modes.
+    static let ctBandEvacuate = Color(light: 0xC01B12, dark: 0xD92D20)
+    /// Status band for Be ready; text on it is `ctBandReadyText` in both modes.
+    static let ctBandReady = Color(light: 0xF5A524, dark: 0xF2A20F)
+    static let ctBandReadyText = Color(light: 0x1A1206, dark: 0x1A1206)
+    /// The route line, destination marker and Start button.
+    static let ctRoute = Color(light: 0x1F6FEB, dark: 0x5AA9FF)
+    /// Casing under map lines so they read over any tile.
+    static let ctCasing = Color(light: 0xFFFFFF, dark: 0x0B1220)
+    /// The fire estimate. Orange, so fire never reads as a red danger hazard.
+    static let ctFire = Color(light: 0xC2410C, dark: 0xFF7A45)
+    /// Text and icons on any filled tone.
+    static let ctOnTone = Color(light: 0xFFFFFF, dark: 0x0E1A16)
+    /// Fill for quiet buttons.
+    static let ctQuiet = Color.ctInk.opacity(0.06)
+
     init(light: UInt32, dark: UInt32) {
         self.init(uiColor: UIColor { traits in
             let hex = traits.userInterfaceStyle == .dark ? dark : light
@@ -55,6 +73,12 @@ extension ReportKind {
 }
 
 extension View {
+    /// The one shadow for elements floating over the map: the status band, the banner, the fire
+    /// chip and the Report button.
+    func ctFloatShadow() -> some View {
+        shadow(color: Color.black.opacity(0.18), radius: 8, y: 3)
+    }
+
     /// A raised card on the workspace background.
     func ctCard(padding: CGFloat = 16) -> some View {
         self
@@ -104,7 +128,7 @@ struct PrimaryButtonStyle: ButtonStyle {
         configuration.label
             .font(.headline)
             // Dark mode's brand green is light, so the label turns dark to keep contrast.
-            .foregroundStyle(Color(light: 0xFFFFFF, dark: 0x0E1A16))
+            .foregroundStyle(Color.ctOnTone)
             .frame(maxWidth: .infinity, minHeight: 54)
             .background(tint.opacity(configuration.isPressed ? 0.85 : 1), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             .scaleEffect(configuration.isPressed ? 0.98 : 1)

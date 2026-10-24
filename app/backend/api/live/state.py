@@ -201,6 +201,11 @@ def drill_state_json(index: DrillIndex, clock: Clock) -> dict[str, Any]:
     }
 
 
+def incident_json(index: DrillIndex) -> dict[str, Any]:
+    drill = index.drill
+    return {"id": drill.incident_id, "name": drill.name, "mode": drill.mode}
+
+
 def drill_short_json(index: DrillIndex, clock: Clock) -> dict[str, Any]:
     return {
         "label": index.drill.label,

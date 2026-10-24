@@ -359,3 +359,55 @@ def distance_km(a: MultiPolygon, b: MultiPolygon) -> float:
     best = _directed_min(ga, gb, best)
     best = _directed_min(gb, ga, best)
     return best
+
+
+def _seg_seg_dist(a: _Seg, b: _Seg) -> float:
+    if _segments_intersect(a, b):
+        return 0.0
+    return min(
+        _point_seg_dist(a[0], a[1], b), _point_seg_dist(a[2], a[3], b),
+        _point_seg_dist(b[0], b[1], a), _point_seg_dist(b[2], b[3], a),
+    )
+
+
+def polyline_distance_m(line: Sequence[LonLat], geometry: MultiPolygon, max_m: float) -> float:
+    """Planar distance in meters from a polyline to an area; 0.0 when any part of the line
+    lies inside the area or crosses its boundary, ``math.inf`` when farther than ``max_m``.
+
+    Uses the area's cached segment grid (equirectangular at the area's latitude) with a bbox
+    prefilter on the whole line, then per line segment on nearby boundary segments only.
+    """
+    if not line or not geometry:
+        return math.inf
+    lat0 = round(geometry[0][0][0][1] * 2) / 2
+    g = _grid(geometry, lat0)
+    kx, ky = _kx(lat0), _KM_PER_DEG_LAT
+    r = max_m / 1000.0
+    pts = [(p[0] * kx, p[1] * ky) for p in line]
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    bx0, by0, bx1, by1 = g.bbox
+    if min(xs) > bx1 + r or max(xs) < bx0 - r or min(ys) > by1 + r or max(ys) < by0 - r:
+        return math.inf
+    if any(point_in_multipolygon(p, geometry) for p in line):
+        return 0.0
+    near = [g.segs[j] for j in g.candidates(min(xs) - r, min(ys) - r, max(xs) + r, max(ys) + r)]
+    if not near:
+        return math.inf
+    best = math.inf
+    if len(pts) == 1:
+        pts = pts * 2
+    for i in range(len(pts) - 1):
+        s = (pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1])
+        sx0, sx1 = min(s[0], s[2]) - r, max(s[0], s[2]) + r
+        sy0, sy1 = min(s[1], s[3]) - r, max(s[1], s[3]) + r
+        for b in near:
+            if max(b[0], b[2]) < sx0 or min(b[0], b[2]) > sx1 or max(b[1], b[3]) < sy0 or min(b[1], b[3]) > sy1:
+                continue
+            d = _seg_seg_dist(s, b)
+            if d < best:
+                best = d
+                if best == 0.0:
+                    return 0.0
+    best_m = best * 1000.0
+    return best_m if best_m <= max_m else math.inf

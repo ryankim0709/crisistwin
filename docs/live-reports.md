@@ -22,7 +22,8 @@ Every endpoint needs `Authorization: Bearer <token>`. Tokens are stored hashed.
 
 `road_blocked`, `road_passable`, `heavy_traffic`, `fire_seen`, `heavy_smoke`,
 `hazard_down` (power line or tree), `shelter_full`, `help_needed`. Road kinds
-snap to a road segment; `shelter_full` refers to a destination; the rest cluster
+snap to a road segment; `shelter_full` refers to a destination of kind `shelter`
+or `temporary_refuge` (`400` for an exit); the rest cluster
 by distance. `help_needed` is never public.
 
 `severity`: `full` | `partial` (lane or one direction) | `slow` | `null`.
@@ -273,7 +274,8 @@ with the published guidance and yields changes:
 | `new` | no published entry (or published `none`) and proposed level is not `none` |
 | `cleared` | published level is not `none` and proposed level is `none` |
 | `level_change` | both not `none` and the levels differ |
-| `reroute` | same level (not `none`) and `destination_id`, `via` or `no_route` differs |
+| `route_lost` | same level (not `none`), proposed `no_route` and published not |
+| `reroute` | same level (not `none`) and `destination_id`, `via` or `no_route` differs (not `route_lost`) |
 
 An ETA change alone is not a change. `live_proposals` document (`Proposal`):
 
@@ -283,9 +285,13 @@ An ETA change alone is not a change. `live_proposals` document (`Proposal`):
   "replay_at": "2018-11-08T16:10:00Z",    // drill time planned for
   "status": "pending",                    // pending|approved|rejected|auto_approved|superseded
   "policy": "needs_controller",           // auto_reroute|needs_controller
-  "causes": ["road_block"],               // road_block|fire|manual
+  "causes": ["road_block"],               // road_block|road_report|fire|shelter_full|manual
+  "cause_segment_ids": ["osm-way:10287575:0"],  // newly blocked backed segments; on pending, plus crowd-only segments driving its changes
   "inputs": { "fire_as_of": "2018-11-08T16:00:00Z", "fire_method": "model_nowcast",
-              "blocked_segment_ids": ["osm-way:10287575:0"], "planner_version": "planner-v1" },
+              "blocked_segment_ids": ["osm-way:10287575:0"], "full_destination_ids": [],
+              "planner_version": "planner-v1", "controller": "twin" },
+  "controller": { "id": "twin", "version": "twin-controller-v1", "fallback": null },  // see Controllers
+  "twin": TwinEvidence | null,            // TwinController only; see Controllers
   "changes": [
     { "zone_id": "bg:060070009011", "kind": "level_change",
       "from": { "level": "be_ready", "destination_id": "shelter:chico-1", "via": ["Skyway"] },
@@ -298,7 +304,10 @@ An ETA change alone is not a change. `live_proposals` document (`Proposal`):
       "assignee": "rsp_7c1..." } ],       // nearest responder with a fresh location, or null (any responder)
   "rationale": { "text": "Pentz Road is confirmed blocked ...", "generated_by": "llm:claude-opus-5-5",
                  "evidence_class": "ai_generated" },   // or generated_by "template", evidence_class "template"
-  "decided_at": null, "decided_by": null, "note": null }
+  "decided_at": null,                     // wall
+  "decided_replay_at": null,              // drill time of the decision (null outside a drill)
+  "decided_by": null, "note": null,
+  "parent_id": null }                     // set on the approved part of a partial approval
 ```
 
 `from` is `null` for `new`; `to.level` is `"none"` with null destination and route
@@ -306,7 +315,16 @@ for `cleared`. Proposed `tasks` are verify tasks for unverified road reports tha
 would change a route if confirmed.
 
 Policy (`livecore.policy`): a change is auto-approvable when its `kind` is
-`reroute` and every cause is `road_block` or `fire`. When the server plans, it
+`reroute`, its proposed route is not marked `exposed` by the planner, and every cause
+is `road_block` or `fire`. `route_lost`, exposed routes, level changes, new and
+cleared zones always wait for the controller, as does every change of a plan whose
+causes include `road_report`, `shelter_full` or `manual`. Whatever triggered the
+plan, a change driven by a block backed only by civilian reports waits too: the
+server plans with and without those crowd-only blocked segments, and every zone
+whose planned guidance differs is held for the controller, with `road_report` added
+to the pending part's causes (it replaces a `road_block` trigger that drives none of
+the held changes). So confirming one block, or a fire update, never publishes a
+reroute around another, unconfirmed one. When the server plans, it
 splits the changes: the auto-approvable ones become an `auto_approved` proposal
 (`policy: "auto_reroute"`, `decided_by: "auto_policy"`) and are published at once;
 the rest, plus all tasks, become one `pending` proposal (`policy:
@@ -316,9 +334,79 @@ new pending proposal marks older pending ones `superseded`. Manual replans
 
 The server plans when the controller calls `replan`, after a controller `confirm`
 of a `road_blocked` or `fire_seen` report (cause `road_block` / `fire`), and lazily
-on a `situation` or `command` read when the fire estimate's `as_of` or the set of
-blocked segments differs from the latest proposal's `inputs` (cause `fire` /
-`road_block`), at most once per `AUTO_REPLAN_MIN_INTERVAL_S` (30) wall seconds per incident.
+on a `situation` or `command` read when the fire estimate, the set of blocked
+segments or the set of full destinations differs from the latest plan's `inputs`, at
+most once per `AUTO_REPLAN_MIN_INTERVAL_S` (30) wall seconds per incident. Causes of
+that lazy replan: `fire` for a new fire estimate; `road_block` when every segment
+that entered or left the blocked set is controller confirmed (`decided_by:
+"controller"`) or has at least one responder report, otherwise `road_report` (a
+crowd-only block, never auto-approved); `shelter_full` when `full_destination_ids`
+changed.
+
+A new pending proposal replaces (supersedes) the current one unless it has the same
+changes (zone, kind, level, destination, `via`, `no_route`), the same tasks and the
+same `controller.id` and `controller.fallback`; so a twin-scored plan supersedes a
+`twin_warming` rule fallback even when the changes match. Otherwise the current
+pending proposal is kept and `replan` returns its id again.
+
+An automatic replan triggered by a `situation` or `command` read runs in a background
+thread, so the read never waits for it; its proposals appear in the next `command` poll.
+
+## Controllers
+
+The controller is a plug-in (`app/backend/api/live/controllers.py`): it observes the
+situation snapshot and returns guidance for every zone; the proposal flow above diffs,
+splits and publishes it. `LIVE_CONTROLLER` selects it:
+
+| Value | Controller |
+| --- | --- |
+| `rule` | `RuleController`: the livecore planner (levels by fire distance, nearest usable destination by free-flow time) |
+| `twin` | `TwinController`: below |
+| unset (default) | `twin` while the traffic twin can be built, else `rule` (logged) |
+
+`TwinController` keeps every level from the planner. For zones whose guidance changes and
+that must move, it builds candidate destination sets: the planner's routes; "Keep current
+destinations" where a zone's published destination is still usable; the second-nearest
+usable destination for each of the 4 zones with the most vehicles; and all of them at
+their second choice. Each set becomes twin actions (`order_zone` for `evacuate_now` zones
+the twin has not ordered yet, `reroute_zone` per destination), and one twin what-if
+(60 min, `fire_ahead: "frozen"`) scores them. The cost and the margin a set must beat
+are in [twin-api.md](twin-api.md#controller-objective-twincontroller). The reference set
+("Keep current destinations" when present, else the planner's) wins unless another set
+is cheaper by the margin. Routes shown to people are the free-flow routes to the chosen
+destination; the twin routes its simulated vehicles with its own queue-aware routing.
+
+When the twin is still loading, fails, or rejects the planner's set, the proposal uses the
+planner and says why in `controller`: `{ "id": "rule", "fallback": "twin_warming" }`
+(also `twin_failed`, `twin_busy`, `twin_finished`, `twin_error:<code>`,
+`twin_planner_set_invalid`). A twin-scored replan takes about 5–7 s at 16:00Z (6 sets plus
+the baseline); a controller `confirm` waits for it.
+
+`TwinEvidence` (all values simulated):
+
+```jsonc
+{ "evidence_class": "simulated",
+  "from": "2018-11-08T16:01:50Z", "until": "2018-11-08T17:01:50Z", "horizon_min": 60,
+  "fire_ahead": "frozen", "seed": 7, "inputs_fingerprint": "dbe294975d1426a3", "action_log_hash": "826d386c86a663a3",
+  "objective": { "name": "controller_cost_veh_min", "sense": "minimize",
+                 "formula": "1*total_exposed_veh_min + 15*blocked_at_horizon_veh + 60*trapped_by_fire_at_horizon_veh + 1*remaining_at_horizon_veh",
+                 "weights": { "total_exposed_veh_min": 1.0, "blocked_at_horizon_veh": 15.0,
+                              "trapped_by_fire_at_horizon_veh": 60.0, "remaining_at_horizon_veh": 1.0 },
+                 "min_gain_veh_min": 250.0 },
+  "baseline": { "label": "No new actions", "cost": 84949.0, "metrics": Metrics },
+  "candidates": [ { "label": "Planner routes", "destinations": { "bg:060070018001": "exit:osm-node:86546172" },
+                    "valid": true, "cost": 82444.0, "metrics": Metrics, "errors": [] } ],
+  "chosen": 0,          // index into candidates
+  "reference": 0,       // the set that wins ties
+  "orders": ["bg:060070017021"],          // zones the sets order (not yet ordered in the twin)
+  "runtime_ms": 5713,
+  "limitations": ["Single seed; small differences are not significant.", "..."] }
+```
+
+`Metrics` is `{ arrived_in_window_veh, total_exposed_veh_min, blocked_at_horizon_veh,
+trapped_by_fire_at_horizon_veh, remaining_at_horizon_veh }` from the what-if. The template
+rationale adds one sentence with the chosen set's cost and the no-new-actions cost; the
+LLM rationale receives the same numbers as `facts.twin` and may only explain them.
 
 The rationale is written after the numbers are fixed: the LLM receives the changes
 and inputs and returns text only; on a missing key, timeout (10 s) or refusal the
@@ -373,8 +461,10 @@ fetches again without `zones=0`.
 ```jsonc
 { "incident_id": "camp-2018-drill",
   "generated_at": "2026-10-24T18:06:05Z",
-  "drill": { "label": "Drill: 2018 Camp Fire replay. Not a real incident.",
-             "replay_now": "2018-11-08T16:16:05Z", "speed": 1, "running": true },
+  "incident": { "id": "camp-2018-drill", "name": "Camp Fire 2018 exercise", "mode": "exercise" },
+  "drill": { "replay_now": "2018-11-08T16:16:05Z", "speed": 1, "running": true },  // web only; the phone ignores it
+  // The phone shows an "Exercise" tag only when incident.mode != "live". A replay drill is
+  // always "exercise" (livecore.drill.REPLAY_INCIDENT_MODE); "live" is reserved for a real feed.
   "zones_version": "zones-3f2a9c1d",
   "zones": [ { "id": "bg:060070009011", "name": "Block Group 1, Census Tract 9.01",
                "geometry": { "type": "MultiPolygon", "coordinates": [[[[-121.61, 39.86], ...]]] } } ],
@@ -392,6 +482,7 @@ fetches again without `zones=0`.
 ```jsonc
 { "incident_id": "camp-2018-drill",
   "generated_at": "...Z",
+  "incident": { "id": "camp-2018-drill", "name": "Camp Fire 2018 exercise", "mode": "exercise" },
   "drill": DrillState,
   "fire": FireEstimate,
   "zones_version": "zones-3f2a9c1d",
@@ -415,9 +506,21 @@ fetches again without `zones=0`.
 | Method and path | Body | Returns |
 | --- | --- | --- |
 | `POST incidents/{id}/replan` | `{}` | `201 { "proposal": Proposal, "auto_approved": Proposal \| null }` or `200 { "proposal": null, "auto_approved": null, "detail": "no_changes" }` |
-| `POST proposals/{id}/approve` | `{ "note"?: "" }` | `200 { "proposal": Proposal, "guidance": [ZoneGuidance], "tasks": [CheckTask] }`: publishes each change as a new guidance version (`approved_by: "controller"`) and creates the tasks; `409` unless pending |
+| `POST proposals/{id}/approve` | `{ "note"?: "", "zone_ids"?: ["bg:..."] }` | `200 { "proposal": Proposal, "guidance": [ZoneGuidance], "tasks": [CheckTask] }`: publishes each change as a new guidance version (`approved_by: "controller"`) and creates the tasks; `409` unless pending. With `zone_ids`, see [Partial approval](#partial-approval) |
 | `POST proposals/{id}/reject` | `{ "note"?: "" }` | `200 { "proposal": Proposal }`; `409` unless pending |
 | `POST incidents/{id}/drill` | see [Drill clock](#drill-clock) | `200 { "drill": DrillState }` |
+
+### Partial approval
+
+`zone_ids` approves only those changes. It must be a non-empty subset of the
+pending proposal's change zone ids (`400 invalid_request` otherwise, also for a zone
+already approved). The server moves those changes atomically (guarded by `status:
+"pending"`) into a new proposal with `status: "approved"`, `parent_id` = the
+original and `tasks: []`, publishes it and returns it as `proposal`. The original
+stays `pending` with the remaining changes and keeps its `created_at`. When no
+change remains (or `zone_ids` covers all of them) the original becomes `approved`
+and its tasks are created then. A later replan may supersede the remainder as
+usual. Reject is always whole.
 
 A manual `replan` returns the auto-approved part too only when there is one (manual
 causes never auto-approve, so it is normally `null`). Errors use the v1 shape;
@@ -445,6 +548,8 @@ controller accounts (not in scope).
 | `POST incidents/{id}/replan` | controller |
 | `POST proposals/{id}/approve`, `POST proposals/{id}/reject` | controller |
 | `POST incidents/{id}/drill` | controller |
+| `GET incidents/{id}/twin` | controller ([twin-api.md](twin-api.md#http-adapter-live-drill-appbackendapilivetwin_servicepy)) |
+| `POST incidents/{id}/twin/whatif` | controller |
 
 ## Location (v2)
 

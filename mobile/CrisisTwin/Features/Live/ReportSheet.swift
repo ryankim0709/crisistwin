@@ -25,10 +25,8 @@ struct ReportSheet: View {
     @State private var severity: ReportSeverity?
     @State private var note = ""
     @State private var spot: Spot?
-    @State private var locating = false
-    @State private var locationMessage: String?
+    @State private var detailsMode = false
     @State private var camera: MapCameraPosition = .region(LiveMapView.campRegion)
-    @State private var visibleRegion: MKCoordinateRegion?
     @State private var sentKind: ReportKind?
     @State private var started = false
 
@@ -49,6 +47,7 @@ struct ReportSheet: View {
                 if sentKind == nil { Button("Cancel") { dismiss() } }
             }
         }
+        .sensoryFeedback(.success, trigger: sentKind) { _, new in new != nil }
         .task { await start() }
     }
 
@@ -56,40 +55,36 @@ struct ReportSheet: View {
 
     private var form: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                Label {
-                    Text("Only what you see now. Follow official orders first.")
-                        .foregroundStyle(Color.ctInk)
-                } icon: {
-                    Image(systemName: "eye")
-                        .foregroundStyle(Color.ctBrand)
-                }
-                .font(.subheadline)
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.ctBrand.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-
+            VStack(alignment: .leading, spacing: 20) {
                 kindGrid
-                if let kind { details(for: kind) }
-                locationSection
+                if detailsMode {
+                    if let kind { details(for: kind) }
+                    locationSection
+                } else {
+                    HStack {
+                        Text("Only what you see now.")
+                            .font(.footnote)
+                            .foregroundStyle(Color.ctMuted)
+                        Spacer()
+                        Button {
+                            withAnimation(.snappy(duration: 0.2)) { detailsMode = true }
+                        } label: {
+                            Text("Adjust").font(.subheadline.weight(.semibold))
+                                .frame(minWidth: 44, minHeight: 44)
+                        }
+                        .accessibilityLabel("Adjust details and location")
+                    }
+                }
             }
             .padding(16)
         }
         .scrollDismissesKeyboard(.interactively)
         .background(Color.ctBackground)
-        .safeAreaInset(edge: .bottom, spacing: 0) { sendBar }
-    }
-
-    private func sectionHeader(_ title: String) -> some View {
-        Text(title)
-            .font(.title3.weight(.semibold))
-            .foregroundStyle(Color.ctInk)
-            .accessibilityAddTraits(.isHeader)
+        .safeAreaInset(edge: .bottom, spacing: 0) { if detailsMode { sendBar } }
     }
 
     private var kindGrid: some View {
         VStack(alignment: .leading, spacing: 12) {
-            sectionHeader("What do you see?")
             LazyVGrid(columns: columns, spacing: 10) {
                 ForEach(ReportKind.allCases) { option in
                     Button {
@@ -98,6 +93,7 @@ struct ReportSheet: View {
                         kindLabel(option)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Report \(option.title.lowercased())")
                     .accessibilityAddTraits(kind == option ? .isSelected : [])
                 }
             }
@@ -200,20 +196,7 @@ struct ReportSheet: View {
     }
 
     private var locationSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            sectionHeader("Where is it?")
-
-            Button {
-                Task { await useCurrentLocation() }
-            } label: {
-                HStack(spacing: 8) {
-                    if locating { ProgressView() } else { Image(systemName: "location.fill") }
-                    Text(locating ? "Finding your location" : "Use my current location")
-                }
-            }
-            .buttonStyle(SecondaryButtonStyle())
-            .disabled(locating)
-
+        VStack(alignment: .leading, spacing: 8) {
             MapReader { proxy in
                 Map(position: $camera) {
                     if let spot {
@@ -226,7 +209,6 @@ struct ReportSheet: View {
                     }
                 }
                 .mapStyle(.standard(pointsOfInterest: .excludingAll))
-                .onMapCameraChange { visibleRegion = $0.region }
                 .onTapGesture { point in
                     if let tapped = proxy.convert(point, from: .local) { drop(tapped) }
                 }
@@ -234,37 +216,20 @@ struct ReportSheet: View {
             .frame(height: 240)
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.ctBorder, lineWidth: 1))
-            .accessibilityLabel("Map. Tap to place the pin, or use the button below.")
+            .accessibilityLabel("Map. Tap to place the pin.")
 
-            Button {
-                drop((visibleRegion ?? LiveMapView.campRegion).center)
-            } label: {
-                Label(spot?.fromGPS == false ? "Move pin to map center" : "Drop pin at map center",
-                      systemImage: "mappin.and.ellipse")
-            }
-            .buttonStyle(SecondaryButtonStyle())
-
-            Label(locationStatus, systemImage: spot == nil ? "mappin.slash" : "mappin.circle.fill")
+            Label(spot == nil ? "Tap the map to place the pin." : "Tap the map to move the pin.",
+                  systemImage: spot == nil ? "mappin.slash" : "mappin.circle.fill")
                 .font(.footnote)
                 .foregroundStyle(spot == nil ? Color.ctMuted : Color.ctBrand)
         }
-    }
-
-    private var locationStatus: String {
-        if let spot {
-            if spot.fromGPS, let accuracy = spot.accuracyM {
-                return "Your location, within about \(Int(accuracy.rounded())) m. Tap the map to move it."
-            }
-            return spot.fromGPS ? "Your location. Tap the map to move it." : "Pin placed. Tap the map to move it."
-        }
-        return locationMessage ?? "Use your location or tap the map."
     }
 
     private var sendBar: some View {
         let ready = kind != nil && spot != nil
         return VStack(spacing: 0) {
             Button(action: send) {
-                Label("Send report", systemImage: "paperplane.fill")
+                Label("Send", systemImage: "paperplane.fill")
             }
             .buttonStyle(PrimaryButtonStyle(tint: ready ? .ctBrand : Color.ctMuted.opacity(0.45)))
             .disabled(!ready)
@@ -279,84 +244,80 @@ struct ReportSheet: View {
     // MARK: Confirmation
 
     private func confirmation(for kind: ReportKind) -> some View {
-        VStack(spacing: 16) {
+        let queued = !store.pending.isEmpty
+        return VStack(spacing: 14) {
             Spacer()
             Image(systemName: "checkmark")
                 .font(.system(size: 36, weight: .bold))
                 .foregroundStyle(.white)
                 .frame(width: 88, height: 88)
                 .background(Color.ctBrand, in: Circle())
-                .background(Color.ctBrand.opacity(0.15), in: Circle().inset(by: -14))
-                .padding(.bottom, 8)
                 .accessibilityHidden(true)
-            Text("Saved.").font(.title2.bold()).foregroundStyle(Color.ctInk)
-            Text("Others must confirm it before it goes on the public map.")
-                .foregroundStyle(Color.ctMuted)
-                .multilineTextAlignment(.center)
+            Text(queued ? "Saved, sends when online" : "Sent")
+                .font(.title2.bold())
+                .foregroundStyle(Color.ctInk)
             if kind == .helpNeeded {
-                Text("Responders only, never public. If you are in danger, call 911.")
+                Text("If you are in danger, call 911.")
                     .font(.headline)
                     .foregroundStyle(Color.ctInk)
-                    .multilineTextAlignment(.center)
-                    .padding(14)
-                    .frame(maxWidth: .infinity)
-                    .background(HazardTone.danger.color.opacity(0.08), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             }
             Spacer()
-            Button {
-                dismiss()
-            } label: {
-                Text("Done")
-            }
-            .buttonStyle(PrimaryButtonStyle())
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.ctBackground)
-        .accessibilityElement(children: .contain)
+        .accessibilityElement(children: .combine)
         .onAppear {
-            AccessibilityNotification.Announcement("Saved. Others must confirm it before it goes on the public map.").post()
+            AccessibilityNotification.Announcement(queued ? "Saved. Sends when online." : "Sent.").post()
+        }
+        .task {
+            try? await Task.sleep(for: .milliseconds(1500))
+            dismiss()
         }
     }
 
     // MARK: Actions
 
+    /// With a fix and no details requested, a tap sends at once. Otherwise it selects the kind and
+    /// shows the map.
     private func select(_ option: ReportKind) {
         kind = option
         if !option.hasSeverity { severity = nil }
+        if spot == nil { detailsMode = true } else if !detailsMode { send() }
     }
 
-    /// Applies the prefill once, then tries a location fix if access is already granted. It never
-    /// shows the permission prompt on its own; the button does.
+    /// Applies the prefill once, then takes a fix if access is already granted. It never shows the
+    /// permission prompt on its own.
     private func start() async {
         guard !started else { return }
         started = true
         if let prefill {
-            if let kind = prefill.kind { select(kind) }
+            detailsMode = true
             if let coord = prefill.coord, coord.isValid {
                 drop(CLLocationCoordinate2D(latitude: coord.lat, longitude: coord.lon))
+                camera = .region(MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: coord.lat, longitude: coord.lon),
+                                                    latitudinalMeters: 600, longitudinalMeters: 600))
             }
+            if let kind = prefill.kind { select(kind) }
         }
         if spot == nil, location.isAuthorized { await useCurrentLocation() }
+        #if DEBUG
+        if let raw = UserDefaults.standard.string(forKey: "reporttap"), let option = ReportKind(rawValue: raw) {
+            select(option)
+        }
+        #endif
     }
 
     private func drop(_ coordinate: CLLocationCoordinate2D) {
         spot = Spot(coordinate: coordinate, accuracyM: nil, capturedAt: Date(), fromGPS: false)
-        locationMessage = nil
     }
 
     private func useCurrentLocation() async {
-        locating = true
-        locationMessage = nil
-        defer { locating = false }
         do {
             let fix = try await location.currentLocation()
             spot = Spot(coordinate: fix.coordinate, accuracyM: fix.horizontalAccuracy, capturedAt: fix.timestamp, fromGPS: true)
             camera = .region(MKCoordinateRegion(center: fix.coordinate, latitudinalMeters: 600, longitudinalMeters: 600))
-        } catch is CancellationError {
-        } catch {
-            locationMessage = error.localizedDescription
-        }
+        } catch {}
     }
 
     private func send() {

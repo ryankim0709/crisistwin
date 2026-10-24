@@ -22,7 +22,7 @@ struct AboutView: View {
                     .fixedSize(horizontal: false, vertical: true)
 
                 Label {
-                    Text("This is a drill on the 2018 Camp Fire road network, not a real incident. The fire estimate is the latest observation or model fit, never a forecast. Meeting points are your own choices, not official shelters. Always follow evacuation orders from your local authorities.")
+                    Text("The fire estimate is the latest observation or model fit, never a forecast. Meeting points are your own choices, not official shelters. Always follow evacuation orders from your local authorities.")
                         .foregroundStyle(Color.ctInk)
                         .fixedSize(horizontal: false, vertical: true)
                 } icon: {

@@ -1,18 +1,24 @@
 """Zone-to-destination routes on the drill road network.
 
 Contract: docs/live-reports.md "Planner rules". Free-flow travel time; congestion is ignored
-(a stated simplification). Never routes over a blocked segment or through the fire estimate.
+(a stated simplification). Never routes over a blocked segment. Normal routes keep every edge
+outside the fire estimate and FIRE_BUFFER_M beyond it; a zone with no such route gets a
+least-exposure route (``Route.exposed``) that a controller must approve.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import heapq
+import logging
 import math
-from collections.abc import Collection, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 
 from .drill import Destination, DestinationKind, Drill, Edge, Zone
-from .geo import LonLat, MultiPolygon, centroid, haversine_m, point_in_multipolygon
+from .geo import LonLat, MultiPolygon, centroid, haversine_m, point_in_multipolygon, polyline_distance_m
+
+log = logging.getLogger(__name__)
 
 DESTINATION_KINDS: tuple[DestinationKind, ...] = ("exit", "shelter")
 FALLBACK_KINDS: tuple[DestinationKind, ...] = ("temporary_refuge",)
@@ -21,6 +27,20 @@ VIA_MAX_NAMES = 3
 """``via`` lists at most this many road names: the longest named stretches, in route order."""
 ROUTE_MAX_POINTS = 500
 """``line`` is simplified to at most this many points."""
+FIRE_BUFFER_M = 300.0
+"""Normal routes keep every edge at least this far outside the fire estimate."""
+EXPOSED_COST_INSIDE = 20.0
+"""Least-exposure pass: travel-time multiplier for an edge with any part inside the fire estimate."""
+EXPOSED_COST_BUFFER = 5.0
+"""Least-exposure pass: travel-time multiplier for an edge within FIRE_BUFFER_M of it."""
+DEST_SNAP_MAX_M = 300.0
+"""A destination off the routable network snaps to a routable node within this distance, else it is dropped."""
+MIN_ROUTE_M = 50.0
+"""A shorter route is not a route; the zone takes its next-nearest destination."""
+MAX_SKIPPED_DESTINATIONS = 5
+"""Per zone and pass, how many too-short destinations are skipped before giving up."""
+
+_CLEAR, _BUFFER, _INSIDE = 0, 1, 2
 
 
 @dataclass(frozen=True)
@@ -36,6 +56,10 @@ class Route:
     via: tuple[str, ...]
     distance_m: float
     travel_time_s: float
+    exposed: bool = False
+    """True for a least-exposure route: it passes the fire estimate or its FIRE_BUFFER_M buffer."""
+    passes_fire: bool = False
+    """True when an exposed route has an edge inside or crossing the fire estimate itself."""
 
     @property
     def eta_min(self) -> int:
@@ -55,18 +79,19 @@ _SNAP_CELL_DEG = 0.01
 
 @dataclass(frozen=True)
 class _Index:
-    """Derived lookups for one ``Drill``: snapping grid, edge midpoints, origin/destination nodes.
+    """Derived lookups for one ``Drill``: snapping grid, edge travel times, origin/destination nodes.
 
     Snapping only considers nodes of the largest weakly connected road component, so a zone
-    centroid next to a disconnected stub still gets an origin that can reach an exit.
+    centroid next to a disconnected stub still gets an origin that can reach an exit. A zone
+    origin is never a destination node.
     """
 
     main_nodes: frozenset[str]
     grid: Mapping[tuple[int, int], tuple[str, ...]]
-    edge_midpoints: Mapping[str, LonLat]
     edge_time_s: Mapping[str, float]
     zone_origins: Mapping[str, str]
     destination_nodes: Mapping[str, str]
+    """Destination id -> road node; destinations with no routable node within DEST_SNAP_MAX_M are absent."""
 
 
 _index_cache: dict[int, tuple[Drill, _Index]] = {}
@@ -96,20 +121,6 @@ def _largest_component(drill: Drill) -> frozenset[str]:
         sizes[r] = sizes.get(r, 0) + 1
     root = max(sizes, key=lambda r: (sizes[r], r))
     return frozenset(n for n in parent if find(n) == root)
-
-
-def _midpoint(edge: Edge) -> LonLat:
-    """Point halfway along the polyline (planar interpolation between vertices)."""
-    coords = edge.coords
-    lengths = [haversine_m(coords[i], coords[i + 1]) for i in range(len(coords) - 1)]
-    half = sum(lengths) / 2
-    for i, seg in enumerate(lengths):
-        if half <= seg and seg > 0:
-            t = half / seg
-            (x1, y1), (x2, y2) = coords[i], coords[i + 1]
-            return (x1 + (x2 - x1) * t, y1 + (y2 - y1) * t)
-        half -= seg
-    return coords[-1]
 
 
 def _nearest_node(index_grid: Mapping[tuple[int, int], tuple[str, ...]], node_coords: Mapping[str, LonLat],
@@ -144,25 +155,35 @@ def _index(drill: Drill) -> _Index:
     for node in sorted(main):
         grid.setdefault(_cell(roads.node_coords[node]), []).append(node)
     frozen_grid = {k: tuple(v) for k, v in grid.items()}
-    origin_ok = {n for n in main if roads.out_edges.get(n)}
     dest_ok = {n for n in main if roads.in_edges.get(n)}
+    destination_nodes: dict[str, str] = {}
+    own_nodes: set[str] = set()
+    dropped: list[str] = []
+    for dest in drill.destinations:
+        node = _destination_node_id(dest)
+        if node is not None:
+            own_nodes.add(node)
+        if node not in dest_ok:
+            node = _nearest_node(frozen_grid, roads.node_coords, dest.coord, dest_ok)
+            if node is not None and haversine_m(dest.coord, roads.node_coords[node]) > DEST_SNAP_MAX_M:
+                node = None
+        if node is None:
+            dropped.append(dest.id)
+            continue
+        destination_nodes[dest.id] = node
+    if dropped:
+        log.warning("routing: %d destinations have no routable road node within %g m and are dropped: %s",
+                    len(dropped), DEST_SNAP_MAX_M, ", ".join(dropped))
+    origin_ok = {n for n in main if roads.out_edges.get(n)} - own_nodes - set(destination_nodes.values())
     zone_origins: dict[str, str] = {}
     for zone in drill.zones:
         node = _nearest_node(frozen_grid, roads.node_coords, centroid(zone.geometry), origin_ok)
         if node is None:
             raise ValueError(f"no road node near zone {zone.id}")
         zone_origins[zone.id] = node
-    destination_nodes: dict[str, str] = {}
-    for dest in drill.destinations:
-        node = _destination_node_id(dest)
-        if node not in dest_ok:
-            node = _nearest_node(frozen_grid, roads.node_coords, dest.coord, dest_ok)
-        if node is not None:
-            destination_nodes[dest.id] = node
     index = _Index(
         main_nodes=main,
         grid=frozen_grid,
-        edge_midpoints={eid: _midpoint(e) for eid, e in roads.edges.items()},
         edge_time_s={eid: edge_travel_time_s(e) for eid, e in roads.edges.items()},
         zone_origins=zone_origins,
         destination_nodes=destination_nodes,
@@ -212,8 +233,12 @@ def _via(edges: list[Edge]) -> tuple[str, ...]:
     return tuple(sorted(top, key=lambda n: first[n]))
 
 
-def _search(drill: Drill, index: _Index, usable_edge, dest_ids: list[str]) -> tuple[dict[str, float], dict[str, str], dict[str, str]]:
-    """Reverse multi-source Dijkstra. Returns node -> (time to dest, next edge, destination id)."""
+def _search(drill: Drill, index: _Index, edge_cost: Callable[[str], float | None],
+            dest_ids: list[str]) -> tuple[dict[str, float], dict[str, str], dict[str, str]]:
+    """Reverse multi-source Dijkstra over edges with a cost (None = unusable).
+
+    Returns node -> cost to the destination, node -> next edge, node -> destination id.
+    """
     roads = drill.roads
     dist: dict[str, float] = {}
     next_edge: dict[str, str] = {}
@@ -234,10 +259,11 @@ def _search(drill: Drill, index: _Index, usable_edge, dest_ids: list[str]) -> tu
             continue
         done.add(node)
         for eid in roads.in_edges.get(node, ()):
-            if not usable_edge(eid):
+            c = edge_cost(eid)
+            if c is None:
                 continue
             prev = roads.edges[eid].from_node
-            nd = d + index.edge_time_s[eid]
+            nd = d + c
             old = dist.get(prev)
             if old is None or nd < old:
                 dist[prev] = nd
@@ -245,6 +271,37 @@ def _search(drill: Drill, index: _Index, usable_edge, dest_ids: list[str]) -> tu
                 reached[prev] = did
                 heapq.heappush(heap, (nd, prev, did))
     return dist, next_edge, reached
+
+
+_fire_cache: dict[str, tuple[Drill, MultiPolygon, dict[str, int]]] = {}
+
+
+def _fire_classes(drill: Drill, avoid_polygon: MultiPolygon | None) -> Callable[[str], int]:
+    """Edge id -> _CLEAR, _BUFFER (within FIRE_BUFFER_M) or _INSIDE (any part inside or crossing the fire).
+
+    Computed lazily and kept for the most recent (drill, polygon) pair, so the alternative
+    rounds of one replan share the work.
+    """
+    if avoid_polygon is None:
+        return lambda eid: _CLEAR
+    hit = _fire_cache.get("last")
+    if hit is not None and hit[0] is drill and hit[1] is avoid_polygon:
+        classes = hit[2]
+    else:
+        classes = {}
+        _fire_cache["last"] = (drill, avoid_polygon, classes)
+    edges = drill.roads.edges
+
+    def fire_class(eid: str) -> int:
+        edge = edges[eid]
+        c = classes.get(edge.segment_id)  # both directions of a segment share one polyline
+        if c is None:
+            d = polyline_distance_m(edge.coords, avoid_polygon, FIRE_BUFFER_M)
+            c = _INSIDE if d == 0.0 else _BUFFER if d <= FIRE_BUFFER_M else _CLEAR
+            classes[edge.segment_id] = c
+        return c
+
+    return fire_class
 
 
 def best_routes(
@@ -256,27 +313,35 @@ def best_routes(
 ) -> dict[str, Route | None]:
     """Fastest route from every zone to its nearest usable destination by travel time.
 
-    Multi-source Dijkstra over the reversed graph from all usable destination nodes (each
-    destination snapped to its nearest road node). Excludes edges whose ``segment_id`` is in
-    ``blocked_segment_ids`` or whose midpoint lies inside ``avoid_polygon``, destinations
-    inside ``avoid_polygon`` and ids in ``full_destination_ids``. Zones that reach none of
-    ``kinds`` retry with ``FALLBACK_KINDS``. Returns zone id -> Route, or None when unreachable.
+    Multi-source Dijkstra over the reversed graph from all usable destination nodes. Never
+    uses edges whose ``segment_id`` is in ``blocked_segment_ids``; never routes to
+    destinations inside ``avoid_polygon`` or in ``full_destination_ids``. Passes, for the
+    zones still unrouted:
+
+    1. ``kinds``, then ``FALLBACK_KINDS``, over edges entirely outside ``avoid_polygon`` and
+       farther than FIRE_BUFFER_M from it;
+    2. least exposure: both kind sets, edges inside the fire or buffer allowed at
+       EXPOSED_COST_INSIDE / EXPOSED_COST_BUFFER times their travel time; ``exposed=True``.
+
+    A route shorter than MIN_ROUTE_M is skipped for the next-nearest destination.
+    ``travel_time_s`` is always free-flow time. Returns zone id -> Route, or None.
     """
     index = _index(drill)
     roads = drill.roads
     blocked = frozenset(blocked_segment_ids)
     full = frozenset(full_destination_ids)
-    excluded: dict[str, bool] = {}
+    fire_class = _fire_classes(drill, avoid_polygon)
+    multiplier = {_CLEAR: 1.0, _BUFFER: EXPOSED_COST_BUFFER, _INSIDE: EXPOSED_COST_INSIDE}
 
-    def usable_edge(eid: str) -> bool:
-        hit = excluded.get(eid)
-        if hit is None:
-            edge = roads.edges[eid]
-            hit = edge.segment_id in blocked or (
-                avoid_polygon is not None and point_in_multipolygon(index.edge_midpoints[eid], avoid_polygon)
-            )
-            excluded[eid] = hit
-        return not hit
+    def open_cost(eid: str) -> float | None:
+        if roads.edges[eid].segment_id in blocked or fire_class(eid) != _CLEAR:
+            return None
+        return index.edge_time_s[eid]
+
+    def exposed_cost(eid: str) -> float | None:
+        if roads.edges[eid].segment_id in blocked:
+            return None
+        return index.edge_time_s[eid] * multiplier[fire_class(eid)]
 
     def usable_destinations(wanted: tuple[DestinationKind, ...]) -> list[str]:
         out = []
@@ -291,28 +356,65 @@ def best_routes(
             out.append(dest.id)
         return out
 
+    passes: list[tuple[tuple[DestinationKind, ...], Callable[[str], float | None]]] = [
+        (kinds, open_cost), (FALLBACK_KINDS, open_cost),
+    ]
+    if avoid_polygon is not None:
+        passes.append((tuple(dict.fromkeys((*kinds, *FALLBACK_KINDS))), exposed_cost))
     result: dict[str, Route | None] = {z.id: None for z in drill.zones}
-    pending = [z for z in drill.zones]
-    for wanted in (kinds, FALLBACK_KINDS):
+    pending = list(drill.zones)
+    for wanted, edge_cost in passes:
         if not pending:
             break
         dest_ids = usable_destinations(wanted)
         if not dest_ids:
             continue
-        dist, next_edge, reached = _search(drill, index, usable_edge, dest_ids)
-        still: list[Zone] = []
-        for zone in pending:
-            origin = zone_origin_node(drill, zone)
-            if origin not in dist:
-                still.append(zone)
-                continue
-            result[zone.id] = _build_route(drill, zone.id, origin, next_edge, reached[origin], dist[origin])
-        pending = still
+        routed = _route_zones(drill, index, pending, dest_ids, edge_cost)
+        for zone_id, route in routed.items():
+            if edge_cost is exposed_cost:
+                classes = {fire_class(eid) for eid in route.edge_ids}
+                if classes - {_CLEAR}:
+                    route = dataclasses.replace(route, exposed=True, passes_fire=_INSIDE in classes)
+            result[zone_id] = route
+        pending = [z for z in pending if z.id not in routed]
     return result
 
 
-def _build_route(drill: Drill, zone_id: str, origin: str, next_edge: Mapping[str, str],
-                 destination_id: str, travel_time_s: float) -> Route:
+def _route_zones(drill: Drill, index: _Index, zones: list[Zone], dest_ids: list[str],
+                 edge_cost: Callable[[str], float | None]) -> dict[str, Route]:
+    """Cheapest route per zone; a route under MIN_ROUTE_M skips that destination node and
+    retries with the rest (up to MAX_SKIPPED_DESTINATIONS times)."""
+    out: dict[str, Route] = {}
+    skipped: dict[str, frozenset[str]] = {z.id: frozenset() for z in zones}
+    todo = list(zones)
+    for _ in range(MAX_SKIPPED_DESTINATIONS + 1):
+        if not todo:
+            break
+        groups: dict[frozenset[str], list[Zone]] = {}
+        for zone in todo:
+            groups.setdefault(skipped[zone.id], []).append(zone)
+        todo = []
+        for skip_nodes, group in groups.items():
+            ids = [d for d in dest_ids if index.destination_nodes[d] not in skip_nodes]
+            if not ids:
+                continue
+            dist, next_edge, reached = _search(drill, index, edge_cost, ids)
+            for zone in group:
+                origin = zone_origin_node(drill, zone)
+                if origin not in dist:
+                    continue
+                route = _build_route(drill, index, zone.id, origin, next_edge, reached[origin])
+                dest_node = index.destination_nodes[route.destination_id]
+                if route.distance_m < MIN_ROUTE_M or origin == dest_node:
+                    skipped[zone.id] = skip_nodes | {dest_node}
+                    todo.append(zone)
+                    continue
+                out[zone.id] = route
+    return out
+
+
+def _build_route(drill: Drill, index: _Index, zone_id: str, origin: str, next_edge: Mapping[str, str],
+                 destination_id: str) -> Route:
     roads = drill.roads
     edges: list[Edge] = []
     node = origin
@@ -339,5 +441,5 @@ def _build_route(drill: Drill, zone_id: str, origin: str, next_edge: Mapping[str
         line=_simplify(line),
         via=_via(edges),
         distance_m=sum(e.length_m for e in edges),
-        travel_time_s=travel_time_s,
+        travel_time_s=sum(index.edge_time_s[e.id] for e in edges),
     )

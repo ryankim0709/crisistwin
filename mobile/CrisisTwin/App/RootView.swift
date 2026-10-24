@@ -1,17 +1,21 @@
 import SwiftUI
 
-/// Former tab names. The phone has no tab bar any more (ADR 0012); kept because the unused
-/// `HomeView` still takes an `openTab` callback.
-enum AppTab: String, Hashable {
-    case home, live, plan, practice
-}
-
 /// Debug builds accept `-screen <name>` to open a screen directly for screenshots: `menu`,
 /// `report`, `myreports`, `responder`, `plan` or `about`. Anything else opens the incident screen.
+/// See also `joinCode`.
 enum DebugLaunch {
     static var screen: String? {
         #if DEBUG
         return UserDefaults.standard.string(forKey: "screen")
+        #else
+        return nil
+        #endif
+    }
+
+    /// `-join <code>` joins as a responder on launch, so the task card can be captured.
+    static var joinCode: String? {
+        #if DEBUG
+        return UserDefaults.standard.string(forKey: "join")
         #else
         return nil
         #endif

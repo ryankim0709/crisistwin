@@ -1,9 +1,11 @@
-import { useCallback, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { LiveError, readToken, writeToken } from "./api";
 import CommandMap, { LEVEL_COLOR, MAP_COLOR, type MapFocus } from "./CommandMap";
 import CommandPanel, { type RunAction } from "./CommandPanel";
-import { LEVEL_LABEL, wallClock } from "./format";
+import { LEVEL_LABEL, drillClock, drillDate, drillNowAt, elapsed } from "./format";
+import TwinPanel from "./TwinPanel";
 import { useCommand } from "./useCommand";
+import { useTwin } from "./useTwin";
 import type { CommandResponse } from "./types";
 import "./live.css";
 
@@ -87,6 +89,10 @@ function MapOverlays({ data }: { data: CommandResponse }) {
           Responder
         </li>
         <li>
+          <span className="lc-dot lc-dot--queue" style={{ borderColor: MAP_COLOR.queue }} aria-hidden="true" />
+          Twin queue
+        </li>
+        <li>
           <span className="lc-dot lc-dot--hollow lc-dot--help" style={{ borderColor: MAP_COLOR.help }} aria-hidden="true" />
           Needs help
         </li>
@@ -95,11 +101,34 @@ function MapOverlays({ data }: { data: CommandResponse }) {
   );
 }
 
+/** Re-renders every `ms` so clocks and ages advance between polls. */
+function useNow(ms: number): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), ms);
+    return () => window.clearInterval(id);
+  }, [ms]);
+  return now;
+}
+
+/** The incident clock (drill time during a drill), shown once, in the header. */
+function IncidentClock({ data, receivedAt, now }: { data: CommandResponse; receivedAt: number | null; now: number }) {
+  const t = drillNowAt(data.drill, receivedAt, now);
+  return (
+    <p className="lc-incident-clock" aria-label={`Drill time ${drillClock(t, true)} UTC, ${drillDate(t)}`}>
+      <span className="lc-incident-time">{drillClock(t, true)}</span>
+      <span className="lc-dim"> UTC · {drillDate(t)}</span>
+    </p>
+  );
+}
+
 export default function LiveCommandPage() {
   const [token, setToken] = useState<string | null>(() => readToken());
   const command = useCommand(token);
+  const twin = useTwin(token);
   const [busy, setBusy] = useState<string | null>(null);
   const [focus, setFocus] = useState<MapFocus | null>(null);
+  const now = useNow(1000);
   const busyRef = useRef(false);
   const { refresh } = command;
 
@@ -134,6 +163,7 @@ export default function LiveCommandPage() {
 
   const unauthorized = command.error?.unauthorized ?? false;
   const data = unauthorized ? null : command.data;
+  const twinData = data ? twin.data : null;
 
   let body;
   if (!token || unauthorized) {
@@ -154,13 +184,18 @@ export default function LiveCommandPage() {
       </p>
     );
   } else {
-    body = <CommandPanel data={data} receivedAt={command.receivedAt} run={run} busy={busy} onFocus={setFocus} />;
+    const serverNow =
+      command.receivedAt === null ? now : new Date(data.generated_at).getTime() + (now - command.receivedAt);
+    body = <CommandPanel data={data} serverNow={serverNow} run={run} busy={busy} onFocus={setFocus} />;
   }
 
   return (
-    <div className="lc-root">
+    <div className={`lc-root${data ? " lc-root--twin" : ""}`}>
+      {data ? (
+        <TwinPanel twin={twinData} error={twin.error} series={twin.series} zones={data.zones} onFocus={setFocus} />
+      ) : null}
       <main className="lc-stage">
-        <CommandMap data={data} focus={focus} />
+        <CommandMap data={data} twin={twinData} focus={focus} />
         {data ? <MapOverlays data={data} /> : null}
       </main>
       <aside className="lc-panel" aria-label="Live command">
@@ -169,15 +204,20 @@ export default function LiveCommandPage() {
             ← Workspace
           </a>
           <h1>Live command</h1>
-          {data ? (
-            <span className={`lc-conn${command.error ? " lc-conn--lost" : ""}`} role="status">
-              {command.error ? `Connection lost · ${wallClock(data.generated_at)}` : wallClock(data.generated_at)}
-            </span>
-          ) : null}
           {token ? (
             <button type="button" className="lc-link" onClick={signOut}>
               Sign out
             </button>
+          ) : null}
+          {data ? (
+            <div className="lc-clock-row">
+              <IncidentClock data={data} receivedAt={command.receivedAt} now={now} />
+              {command.receivedAt !== null ? (
+                <span className={`lc-conn${command.error ? " lc-conn--lost" : ""}`}>
+                  {command.error ? "Connection lost · " : ""}updated {elapsed(now - command.receivedAt)} ago
+                </span>
+              ) : null}
+            </div>
           ) : null}
         </header>
         <div className="lc-panel-body">{body}</div>

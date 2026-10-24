@@ -37,7 +37,8 @@ final class LiveStore {
     // MARK: v2 incident screen (ADR 0012). Stubs; implemented by the iosdata owner.
 
     /// Latest `GET incidents/{id}/situation`, with zones filled from the cache when the response
-    /// omitted them (`?zones=0`). Nil until the first successful poll.
+    /// omitted them (`?zones=0`). At launch, the last saved situation (`SituationCache`); nil
+    /// until the first successful poll when none was saved.
     private(set) var situation: Situation?
     /// The zone containing the device's last known position, computed on the device with
     /// `ZoneLocator`. Nil without a position or outside every zone.
@@ -73,7 +74,7 @@ final class LiveStore {
 
     @ObservationIgnored private var zonesCache: (version: String, zones: [LiveZone])?
     @ObservationIgnored private var lastLocationSend: Date?
-    @ObservationIgnored private var lastCoord: LonLat?
+    @ObservationIgnored private(set) var lastCoord: LonLat?
     @ObservationIgnored private var locationWasShared = false
     @ObservationIgnored private var seenGuidance = false
     @ObservationIgnored private var lastSeenGuidance: ZoneGuidance?
@@ -87,6 +88,8 @@ final class LiveStore {
         self.incidentId = incidentId
         credential = CredentialStore.load(.responder) ?? CredentialStore.load(.device)
         pending = outbox.drafts
+        // The last situation, so a relaunch without signal still shows the last instruction.
+        if let cached = SituationCache.load(incidentId: incidentId) { applySituation(cached, save: false) }
         outbox.onChange = { [weak self] in
             guard let self else { return }
             self.pending = self.outbox.drafts
@@ -276,7 +279,7 @@ final class LiveStore {
         var errorDescription: String? { "That invite code wasn't accepted." }
     }
 
-    private func applySituation(_ new: Situation) {
+    private func applySituation(_ new: Situation, save: Bool = true) {
         var sit = new
         if let zones = new.zones {
             zonesCache = (new.zonesVersion, zones)
@@ -286,6 +289,7 @@ final class LiveStore {
             zonesCache = nil  // version moved without zones; refetch them next poll
         }
         situation = sit
+        if save { SituationCache.save(sit) }
         publicItems = sit.hazards
         if let mine = sit.myCheckin { lastCheckIn = mine }
         if role == .responder { tasks = sit.tasks.filter { $0.status == .open || $0.status == .accepted } }
@@ -297,21 +301,39 @@ final class LiveStore {
     private func setZone(_ zone: LiveZone?, force: Bool = false) {
         if zone != myZone { myZone = zone } else if !force { return }
         let current = myGuidance
-        defer { lastSeenGuidance = current; seenGuidance = true }
+        // The baseline is the first guidance resolved from a real position, so a relaunch that
+        // shows the cached instruction does not announce it as a change.
+        let resolvable = lastCoord != nil && situation?.zones != nil
+        defer { if resolvable { lastSeenGuidance = current; seenGuidance = true } }
         guard seenGuidance, let current, current != lastSeenGuidance else { return }
         let before = lastSeenGuidance
         guard before?.zoneId != current.zoneId || before?.version != current.version else { return }
         if before?.level == current.level, before?.destination?.id == current.destination?.id,
            before?.route?.via == current.route?.via, before?.zoneId == current.zoneId { return }
-        let message = current.reason.isEmpty ? Self.fallbackMessage(current) : current.reason
-        guidanceChange = GuidanceChange(id: "\(current.zoneId)#\(current.version)", message: message)
+        let isReroute = before?.zoneId == current.zoneId && before?.level == current.level
+        let message = Self.changeMessage(current, before: before, isReroute: isReroute)
+        let reason = current.reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        guidanceChange = GuidanceChange(
+            id: "\(current.zoneId)#\(current.version)", message: message,
+            detail: reason.isEmpty || reason == message ? nil : reason, level: current.level,
+            isReroute: isReroute,
+            isEscalation: current.level == .evacuateNow && before?.level != .evacuateNow)
     }
 
-    private static func fallbackMessage(_ g: ZoneGuidance) -> String {
+    /// What changed, instruction first: "Evacuate now · Leave via Skyway Road", "Be ready",
+    /// "New route: Exit west", "Order lifted".
+    private static func changeMessage(_ g: ZoneGuidance, before: ZoneGuidance?, isReroute: Bool) -> String {
+        let leave = g.noRoute || g.route == nil ? "No open route" : g.route?.via.first.map { "Leave via \($0)" }
+        if isReroute {
+            if g.level == .evacuateNow, g.noRoute || g.route == nil { return "Evacuate now · No open route" }
+            if let name = g.destination?.shortName, name != before?.destination?.shortName { return "New route: \(name)" }
+            if let road = g.route?.via.first { return "New route: Leave via \(road)" }
+            return "New route"
+        }
         switch g.level {
-        case .evacuateNow: return g.noRoute ? "Leave now; no open route" : "Leave via \(g.route?.via.first ?? "your route")"
-        case .beReady: return "Be ready to leave"
-        case .none: return "No action needed"
+        case .evacuateNow: return ["Evacuate now", leave].compactMap { $0 }.joined(separator: " · ")
+        case .beReady: return "Be ready"
+        case .none: return before?.zoneId == g.zoneId ? "Order lifted" : "No order"
         }
     }
 

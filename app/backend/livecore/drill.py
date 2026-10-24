@@ -17,6 +17,11 @@ from .geo import LonLat, MultiPolygon, to_geojson, to_multipolygon
 
 INCIDENT_ID = "camp-2018-drill"
 DRILL_LABEL = "Drill: 2018 Camp Fire replay. Not a real incident."
+INCIDENT_NAME = "Camp Fire 2018 exercise"
+IncidentMode = Literal["exercise", "live"]
+REPLAY_INCIDENT_MODE: IncidentMode = "exercise"
+"""A replay bundle is never a real incident, so a drill's mode is always ``exercise``;
+``live`` is reserved for a real incident feed (none exists)."""
 DEFAULT_REPLAY_START = datetime(2018, 11, 8, 15, 0, 0, tzinfo=UTC)
 """Drill time the clock starts from unless the controller picks another (bundle start is 14:00Z)."""
 MAX_DRILL_SPEED = 60.0
@@ -123,6 +128,9 @@ class Drill:
     """Bundle ``fire_observations`` (source ``nist_reconstructed``), sorted by ``at``."""
     fire_model: str
     """``fire_simulated.model`` identifier, e.g. ``rothermel-mtt``, for labels and proposal inputs."""
+    name: str = INCIDENT_NAME
+    mode: IncidentMode = REPLAY_INCIDENT_MODE
+    """Served to clients as ``incident.mode``; the phone shows an Exercise tag unless ``live``."""
 
 
 def parse_time(value: Any) -> datetime:

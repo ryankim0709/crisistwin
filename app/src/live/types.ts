@@ -215,8 +215,9 @@ export interface ZoneGuidance extends ProposedGuidance {
 // ---- v2: proposals ----
 
 export type ProposalStatus = 'pending' | 'approved' | 'rejected' | 'auto_approved' | 'superseded'
-export type ChangeKind = 'reroute' | 'level_change' | 'new' | 'cleared'
-export type PlanCause = 'road_block' | 'fire' | 'manual'
+export type ChangeKind = 'reroute' | 'route_lost' | 'level_change' | 'new' | 'cleared'
+/** road_block: controller- or responder-backed; road_report: crowd-only (never auto-approved). */
+export type PlanCause = 'road_block' | 'road_report' | 'fire' | 'shelter_full' | 'manual'
 
 export interface GuidanceSummary {
   level: GuidanceLevel
@@ -245,6 +246,49 @@ export interface Rationale {
   evidence_class: 'ai_generated' | 'template'
 }
 
+// ---- Controllers (docs/live-reports.md "Controllers"); all twin values are simulated ----
+
+export interface ControllerInfo {
+  id: 'rule' | 'twin' | string
+  version: string
+  /** Why the twin was not used: twin_warming, twin_failed, twin_busy, ...; null when it was. */
+  fallback: string | null
+}
+
+export interface TwinMetrics {
+  arrived_in_window_veh: number
+  total_exposed_veh_min: number
+  blocked_at_horizon_veh: number
+  trapped_by_fire_at_horizon_veh: number
+  remaining_at_horizon_veh: number
+}
+
+export interface TwinCandidate {
+  label: string
+  destinations: Record<string, string>
+  valid: boolean
+  cost: number | null
+  metrics: TwinMetrics | null
+  errors: unknown[]
+}
+
+export interface TwinEvidence {
+  evidence_class: 'simulated'
+  from: IsoTime
+  until: IsoTime
+  horizon_min: number
+  fire_ahead: 'frozen' | 'replay'
+  seed: number
+  objective: { name: string; formula: string; weights: Record<string, number>; min_gain_veh_min: number }
+  baseline: { label: string; cost: number; metrics: TwinMetrics }
+  candidates: TwinCandidate[]
+  chosen: number
+  reference: number
+  orders: string[]
+  runtime_ms: number
+  limitations: string[]
+}
+
 export interface Proposal {
   id: string
   incident_id: string
@@ -253,18 +297,27 @@ export interface Proposal {
   status: ProposalStatus
   policy: 'auto_reroute' | 'needs_controller'
   causes: PlanCause[]
+  /** Segments newly blocked since the previous plan. */
+  cause_segment_ids?: string[]
   inputs: {
     fire_as_of: IsoTime | null
     fire_method: FireMethod
     blocked_segment_ids: string[]
+    full_destination_ids?: string[]
     planner_version: string
   }
   changes: ProposalChange[]
   tasks: ProposalTask[]
   rationale: Rationale
+  controller?: ControllerInfo
+  twin?: TwinEvidence | null
   decided_at: IsoTime | null
+  /** Drill time of the decision; null outside a drill. */
+  decided_replay_at?: IsoTime | null
   decided_by: 'auto_policy' | 'controller' | null
   note: string | null
+  /** The pending proposal this approved part was split from (partial approval). */
+  parent_id?: string | null
 }
 
 export interface ReplanResponse {
@@ -274,6 +327,10 @@ export interface ReplanResponse {
 }
 export interface DecideProposalRequest {
   note?: string
+}
+export interface ApproveProposalRequest extends DecideProposalRequest {
+  /** Approve only these zones' changes; a non-empty subset of the proposal's. */
+  zone_ids?: string[]
 }
 export interface ApproveProposalResponse {
   proposal: Proposal
@@ -317,9 +374,16 @@ export interface ResponderPosition {
 
 // ---- v2: command (web controller poll) ----
 
+export interface IncidentInfo {
+  id: string
+  name: string
+  mode: 'live' | 'exercise' | string
+}
+
 export interface CommandResponse {
   incident_id: string
   generated_at: IsoTime
+  incident?: IncidentInfo
   drill: DrillState
   fire: FireEstimate
   zones_version: string
@@ -335,6 +399,89 @@ export interface CommandResponse {
   checkins: { by_zone: ZoneCheckInCounts[]; need_help: HelpRequest[] }
   responders: ResponderPosition[]
   tasks: CheckTask[]
+}
+
+// ---- Traffic twin monitor (docs/twin-api.md "HTTP adapter"); all values simulated ----
+
+export interface TwinTotals {
+  total_veh: number
+  not_departed_veh: number
+  en_route_veh: number
+  arrived_veh: number
+  blocked_veh: number
+  exposed_veh: number
+  exposed_at_origin_veh: number
+  trapped_by_fire_veh: number
+  trapped_by_closure_veh: number
+  exposed_veh_min_so_far: number
+}
+
+export interface TwinZone {
+  id: string
+  vehicles: number
+  ordered_at: IsoTime | null
+  not_departed_veh: number
+  en_route_veh: number
+  arrived_veh: number
+  blocked_veh: number
+  exposed_veh: number
+  exposed_at_origin_veh: number
+  assignment: { destination_id: string } | null
+}
+
+export interface TwinEdge {
+  edge_index: number
+  edge_id: string
+  segment_id: string
+  name: string | null
+  veh: number
+  queued_veh: number
+  speed_kph: number
+  free_flow_kph: number
+  coord: LonLat
+}
+
+export interface TwinDestination {
+  id: string
+  name: string
+  kind: DestinationKind | string
+  status: string
+  arrived_veh: number
+  capacity_veh: number | null
+  remaining_capacity_veh: number | null
+  arrived_last_10_min_veh: number
+  full_at: IsoTime | null
+  assigned_zones: number
+}
+
+export interface TwinCommand {
+  id: string
+  type: string
+  label: string | null
+  effective_at: IsoTime | null
+  status: string
+  actor: unknown
+  rationale: string | null
+}
+
+export interface TwinMonitor {
+  kind: 'crisistwin_live_twin'
+  incident_id: string
+  evidence_class: 'simulated'
+  label: string
+  drill_replay_now: IsoTime
+  clock: { now: IsoTime; start: IsoTime; end: IsoTime; step_s: number; finished: boolean }
+  model: { id: string; version: string; seed: number; inputs_fingerprint: string }
+  built_from: IsoTime
+  totals: TwinTotals
+  conserved: boolean
+  zones: TwinZone[]
+  congested_edges: TwinEdge[]
+  destinations: TwinDestination[]
+  closed_edges: number
+  commands: TwinCommand[]
+  command_errors: { key: string; error: string; code: string | null; detail: string | null }[]
+  limitations: string[]
 }
 
 export interface LiveApiError {

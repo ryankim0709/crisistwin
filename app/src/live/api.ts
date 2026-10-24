@@ -1,6 +1,7 @@
 // Controller client for the live API v2 (docs/live-reports.md). The controller token is typed
 // in by the person at the console and kept in sessionStorage only; it is never bundled.
 import type {
+  ApproveProposalRequest,
   ApproveProposalResponse,
   CommandResponse,
   CreateTaskRequest,
@@ -10,6 +11,7 @@ import type {
   RejectProposalResponse,
   ReplanResponse,
   TriageAction,
+  TwinMonitor,
 } from "./types";
 
 export const INCIDENT_ID = "camp-2018-drill";
@@ -17,6 +19,11 @@ const BASE = "/api/live/";
 const TOKEN_KEY = "crisistwin.live.controllerToken";
 
 export function readToken(): string | null {
+  if (import.meta.env.DEV) {
+    // Dev only (stripped from production builds): ?devToken=... seeds the token for headless screenshots.
+    const dev = new URLSearchParams(window.location.search).get("devToken");
+    if (dev) writeToken(dev);
+  }
   try {
     return window.sessionStorage.getItem(TOKEN_KEY);
   } catch {
@@ -123,6 +130,28 @@ export async function fetchCommand(token: string, signal: AbortSignal): Promise<
   return data;
 }
 
+function isTwin(data: unknown): data is TwinMonitor {
+  if (typeof data !== "object" || data === null) return false;
+  const d = data as Record<string, unknown>;
+  return (
+    d.kind === "crisistwin_live_twin" &&
+    typeof d.clock === "object" &&
+    d.clock !== null &&
+    typeof d.totals === "object" &&
+    d.totals !== null &&
+    Array.isArray(d.zones) &&
+    Array.isArray(d.congested_edges) &&
+    Array.isArray(d.destinations) &&
+    Array.isArray(d.commands)
+  );
+}
+
+export async function fetchTwin(token: string, signal: AbortSignal): Promise<TwinMonitor> {
+  const data = await request<unknown>(token, "GET", `incidents/${INCIDENT_ID}/twin`, undefined, signal);
+  if (!isTwin(data)) throw new LiveError(200, "bad_response", "The twin returned an unexpected response.");
+  return data;
+}
+
 export const triageReport = (token: string, reportId: string, action: TriageAction) =>
   request<unknown>(token, "POST", `reports/${encodeURIComponent(reportId)}/triage`, { action });
 
@@ -131,8 +160,10 @@ export const createTask = (token: string, body: CreateTaskRequest) =>
 
 export const replan = (token: string) => request<ReplanResponse>(token, "POST", `incidents/${INCIDENT_ID}/replan`, {});
 
-export const approveProposal = (token: string, id: string) =>
-  request<ApproveProposalResponse>(token, "POST", `proposals/${encodeURIComponent(id)}/approve`, {});
+export const approveProposal = (token: string, id: string, zoneIds?: string[]) => {
+  const body: ApproveProposalRequest = zoneIds ? { zone_ids: zoneIds } : {};
+  return request<ApproveProposalResponse>(token, "POST", `proposals/${encodeURIComponent(id)}/approve`, body);
+};
 
 export const rejectProposal = (token: string, id: string) =>
   request<RejectProposalResponse>(token, "POST", `proposals/${encodeURIComponent(id)}/reject`, {});

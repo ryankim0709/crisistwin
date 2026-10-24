@@ -14,7 +14,7 @@ import { useEffect, useRef, useState } from "react";
 import { restyleDarkBasemap } from "../replay/basemapStyle";
 import { BASEMAP_STYLE_URL, FALLBACK_STYLE, type BasemapStyle } from "../replay/mapLayers";
 import { KIND_LABEL, LEVEL_LABEL, STATUS_LABEL, labelPoint, shortKey, wallClock } from "./format";
-import type { CommandResponse, GuidanceLevel, LonLat } from "./types";
+import type { CommandResponse, GuidanceLevel, LonLat, TwinMonitor } from "./types";
 
 setWorkerUrl(workerUrl);
 
@@ -36,6 +36,7 @@ export const MAP_COLOR = {
   report: "#c5d3e0",
   responder: "#c7a6ff",
   help: "#ffd29a",
+  queue: "#ffe14d",
 };
 
 type Feature = GeoJSON.Feature<GeoJSON.Geometry, Record<string, string | number | boolean | null>>;
@@ -138,12 +139,25 @@ function buildSources(data: CommandResponse): Record<string, GeoJSON.FeatureColl
   };
 }
 
+/** Twin queues: one circle per congested edge midpoint, area by queued vehicles. Simulated. */
+function buildQueues(twin: TwinMonitor | null): GeoJSON.FeatureCollection {
+  if (!twin) return collection([]);
+  return collection(
+    twin.congested_edges.map((e) =>
+      point(e.coord, {
+        queued: e.queued_veh,
+        label: `Twin (simulated) · ${e.name ?? "Unnamed road"} · ${e.queued_veh} queued · ${Math.round(e.speed_kph)} of ${Math.round(e.free_flow_kph)} km/h`,
+      }),
+    ),
+  );
+}
+
 const LEVEL_MATCH = (prop: string, values: Record<GuidanceLevel, string | number>) =>
   ["match", ["get", prop], "evacuate_now", values.evacuate_now, "be_ready", values.be_ready, values.none];
 
 function installLayers(map: MapLibreMap): void {
   const empty = collection([]);
-  for (const id of ["lc-zones", "lc-zone-labels", "lc-fire", "lc-fire-obs", "lc-routes", "lc-hazard-lines", "lc-points", "lc-focus"]) {
+  for (const id of ["lc-zones", "lc-zone-labels", "lc-fire", "lc-fire-obs", "lc-routes", "lc-hazard-lines", "lc-points", "lc-queues", "lc-focus"]) {
     map.addSource(id, { type: "geojson", data: empty });
   }
   map.addLayer({
@@ -204,6 +218,18 @@ function installLayers(map: MapLibreMap): void {
       "circle-color": MAP_COLOR.fire,
       "circle-stroke-color": "#1a0a00",
       "circle-stroke-width": 0.5,
+    },
+  });
+  map.addLayer({
+    id: "lc-queues",
+    type: "circle",
+    source: "lc-queues",
+    paint: {
+      "circle-radius": ["interpolate", ["linear"], ["sqrt", ["get", "queued"]], 0, 4, 3, 7, 8, 13] as never,
+      "circle-color": MAP_COLOR.queue,
+      "circle-opacity": 0.55,
+      "circle-stroke-color": MAP_COLOR.queue,
+      "circle-stroke-width": 1.5,
     },
   });
   map.addLayer({
@@ -268,10 +294,11 @@ export interface MapFocus {
 
 interface Props {
   data: CommandResponse | null;
+  twin: TwinMonitor | null;
   focus: MapFocus | null;
 }
 
-export default function CommandMap({ data, focus }: Props) {
+export default function CommandMap({ data, twin, focus }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const dataRef = useRef<CommandResponse | null>(data);
@@ -303,13 +330,15 @@ export default function CommandMap({ data, focus }: Props) {
         setReady(true);
       });
       const popup = new Popup({ closeButton: false, maxWidth: "260px", className: "lc-popup" });
-      map.on("click", "lc-points", (e: MapLayerMouseEvent) => {
-        const f = e.features?.[0];
-        if (!f || !map) return;
-        popup.setLngLat(e.lngLat).setHTML(escapeHtml(String(f.properties.label ?? ""))).addTo(map);
-      });
+      for (const layer of ["lc-points", "lc-queues"]) {
+        map.on("click", layer, (e: MapLayerMouseEvent) => {
+          const f = e.features?.[0];
+          if (!f || !map) return;
+          popup.setLngLat(e.lngLat).setHTML(escapeHtml(String(f.properties.label ?? ""))).addTo(map);
+        });
+      }
       map.on("click", "lc-zones-fill", (e: MapLayerMouseEvent) => {
-        if (!map || map.queryRenderedFeatures(e.point, { layers: ["lc-points"] }).length) return;
+        if (!map || map.queryRenderedFeatures(e.point, { layers: ["lc-points", "lc-queues"] }).length) return;
         const id = e.features?.[0]?.properties.id;
         const d = dataRef.current;
         const zone = d?.zones.find((z) => z.id === id);
@@ -328,7 +357,7 @@ export default function CommandMap({ data, focus }: Props) {
         if (c) lines.push(escapeHtml(`${c.out} out · ${c.need_help} need help · ${c.staying} staying`));
         popup.setLngLat(e.lngLat).setHTML(lines.join("<br>")).addTo(map);
       });
-      for (const layer of ["lc-points", "lc-zones-fill"]) {
+      for (const layer of ["lc-points", "lc-queues", "lc-zones-fill"]) {
         map.on("mouseenter", layer, () => map && (map.getCanvas().style.cursor = "pointer"));
         map.on("mouseleave", layer, () => map && (map.getCanvas().style.cursor = ""));
       }
@@ -357,6 +386,12 @@ export default function CommandMap({ data, focus }: Props) {
       fitted.current = true;
     }
   }, [ready, data]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map) return;
+    (map.getSource("lc-queues") as GeoJSONSource | undefined)?.setData(buildQueues(twin));
+  }, [ready, twin]);
 
   useEffect(() => {
     const map = mapRef.current;

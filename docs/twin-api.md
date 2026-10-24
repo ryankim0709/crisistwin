@@ -10,7 +10,7 @@ step by step on a simulation clock. The design and invariants are in
   outcomes.
 
 Everything at the boundary is JSON-serializable: dicts, lists, strings, numbers and
-null. The future HTTP adapter (see "HTTP adapter (later)" below) passes these bodies
+null. The HTTP adapter (see "HTTP adapter (live drill)" below) passes these bodies
 through unchanged.
 
 Conventions follow [replay-bundle.md](replay-bundle.md):
@@ -464,27 +464,116 @@ An LLM may propose candidate actions and explain the results. Every number it us
 come from `whatif` or `snapshot` (AGENTS.md). The controller logs which report and
 weights justified each action.
 
-## HTTP adapter (later, `app/backend`)
+## HTTP adapter (live drill, `app/backend/api/live/twin_service.py`)
 
-The Django adapter wraps this API without changing the bodies. Each session gets its own
-twin worker process (`multiprocessing`, spawn), so the CPU-bound stepping runs outside
-the web threads and never shares the MongoDB client pool. Django talks to the worker
-over a `multiprocessing.connection` pipe. Sessions expire after a TTL.
+The live API runs one `Twin` per incident per process, in the Django process, behind a
+per-incident lock (calls wait at most 20 s, then `429 twin_busy`). This replaces the
+earlier plan of one worker process per session: the drill has one shared twin, and
+in-process calls keep the controller's what-ifs simple. Multiple server processes each
+hold their own twin and can diverge in command timing.
 
-| Method and path | Python | Notes |
+Inputs and clock:
+
+- The inputs are the packages the drill bundle was built from (`generated_by` of
+  `app/public/replays/camp-2018.json`): `camp-2018-paradise-slice/a6d2cc03f525ed65` and
+  `camp-2018-evacuation/17e67cfe5669fe50`, `demand: "auto"`, seed 7. `LIVE_TWIN_PACKAGE`
+  and `LIVE_TWIN_ROADS_PACKAGE` override them. Artifacts are read locally only
+  (`CRISISTWIN_DATA_SOURCE=local`), never from the live database.
+- The first controller poll starts building them in a background thread (about 10 s on
+  this laptop, including the `FireTimeline`). Until then twin calls return
+  `503 twin_warming` with `Retry-After: 5`. A build failure gives `503 twin_failed`, and the
+  controller falls back to the rule planner.
+- Destinations sit on the planner's road nodes: `livecore.routing._index(drill).destination_nodes`
+  replaces each scenario destination's `node_id` (an exit node without in-edges, for example
+  Exit south `exit:osm-node:86546172`, is snapped to the nearest reachable node), and the
+  `inputs_fingerprint` is recomputed. The twin routes to the same nodes the published
+  guidance does.
+- The session starts at the drill's `replay_start` and is stepped to `replay_now` on every
+  read. It is rebuilt when the drill doc's `started_at` or `replay_start` changes in a way
+  that does not continue the drill time (reset, restart; `set_speed` rewrites both but
+  continues, so it keeps the session), when a zone's latest published version goes down
+  (guidance deleted by a reset), or when the drill clock moves back. Published guidance is
+  tracked by `(zone, version, published_at)`, because versions restart at 1 after a reset.
+
+Before each read the session is synced with the drill's decisions. These become labeled
+simulated commands, appended to the action log. Historical events are never changed.
+
+| Drill decision | Twin action | Actor |
 | --- | --- | --- |
-| `POST /api/twin/sessions` `{incident, start_at, seed?, demand?}` | `Twin.for_camp` | `201 {session_id, clock, provenance}` |
-| `GET /api/twin/sessions/{id}/catalog` | `catalog()` | Same shape as `GET /api/sim/catalog` |
-| `POST /api/twin/sessions/{id}/clock` `{to}` | `step_to` | Driven by the drill clock. `409 clock_backwards` |
-| `GET /api/twin/sessions/{id}/snapshot?detail=summary\|full` | `snapshot` | `Cache-Control: no-store` |
-| `GET /api/twin/sessions/{id}/events?since=` | `events` | |
-| `POST /api/twin/sessions/{id}/actions` | `apply` | `201` action record. `400 {"error":"invalid_action","code",...}` |
-| `GET /api/twin/sessions/{id}/actions` | `action_log` | |
-| `POST /api/twin/sessions/{id}/whatif` | `whatif` | `202 {job_id}`, then poll as in plan-api. `429` when a what-if is already running for the session |
+| Road block confirmed by the controller (`decided_by: "controller"`), rationale `Controller confirmed <road> blocked` | `close_road` on the segment's edges, `mode: "hard"` (a `road_blocked` event) | `field_report` / `controller-confirmed` |
+| Public road block guidance avoids (`guidance_blocked_segments`), rationale `Public road block: <road>` | same | `field_report` / `public-block` |
+| The segment leaves both sets | `reopen_road` | `field_report` / `controller-confirmed` |
+| Published guidance at `evacuate_now` | `order_zone` (`already_ordered` counts as done) | `controller` / `live-guidance:<approved_by>` |
+| Published destination changes (or is cleared) | `reroute_zone` | same |
 
-- Clients poll with an `AbortController` and drop stale responses by `clock.step_index`.
-- Server-sent events for snapshots can come later.
-- DRF's default `IsAuthenticated` stays for these routes. A demo exception needs its
-  own decision and throttling.
-- `POST /api/sim/plans` from plan-api becomes `Twin.replay(inputs, commands)` run to
-  the end with `keep_frames=True`.
+Each command takes effect at the drill time it was published or confirmed, or at the
+twin's next step when that time has already passed. A rejected command (for example
+`limit_exceeded`) is retried on the next read and listed in `command_errors`. What-ifs
+fork the synced session, so they see the same closures as published guidance. A zone whose
+published destination has assignment status `fallback_unreachable` is also listed in
+`command_errors` (`key: "unreachable:<zone>"`, `code: "fallback_unreachable"`).
+
+| Method and path (base `/api/live/`, controller token) | Python | Notes |
+| --- | --- | --- |
+| `GET incidents/{id}/twin` | `snapshot("full")`, condensed | Monitoring body below |
+| `POST incidents/{id}/twin/whatif` | `whatif` | Body as in [What-if](#what-if). `horizon_min` at most 120 (`API_MAX_HORIZON_MIN`), `fire_ahead` defaults to `frozen`. `400` with the twin's error body for a bad request (`invalid_whatif` and the codes above). Runs synchronously, about 1 s per set |
+
+`GET incidents/{id}/twin`:
+
+```jsonc
+{ "kind": "crisistwin_live_twin", "incident_id": "camp-2018-drill", "evidence_class": "simulated",
+  "label": "Simulated traffic twin of the exercise. Planning experiment, not observations.",
+  "drill_replay_now": "2018-11-08T16:05:47Z",
+  "clock": { /* snapshot clock */ }, "model": { /* snapshot model */ },
+  "built_from": "2018-11-08T16:00:00Z",
+  "totals": { /* snapshot totals */ },
+  "conserved": true,                         // not_departed + en_route + arrived == total_veh
+  "zones": [ { "id", "vehicles", "ordered_at", "not_departed_veh", "en_route_veh", "arrived_veh",
+               "blocked_veh", "exposed_veh", "exposed_at_origin_veh", "assignment" } ],
+  "congested_edges": [ { "edge_index": 5120, "edge_id": "osm-way:...:f", "segment_id": "osm-way:...",
+                         "name": "Clark Road", "veh": 15, "queued_veh": 10, "speed_kph": 18.8,
+                         "free_flow_kph": 56.0, "coord": [-121.61, 39.71] } ],   // queued_veh > 0 only; top 15 by queued_veh, then veh
+  "destinations": [ { "id", "name", "kind", "status", "arrived_veh", "capacity_veh", "remaining_capacity_veh",
+                      "arrived_last_10_min_veh", "full_at", "assigned_zones" } ],  // with arrivals or assigned zones, or open refuges
+  "closed_edges": 112,
+  "commands": [ { "id", "type", "label", "effective_at", "status", "actor", "rationale" } ],
+  "command_errors": [ { "key", "error", "code", "detail", "action_id", "at" } ],
+  "limitations": [ "..." ] }
+```
+
+### Controller objective (TwinController)
+
+The `TwinController` (docs/live-reports.md "Controllers") ranks its candidate sets with its
+own weights, not the twin's `window_cost_veh_min`. They are named constants in
+`app/backend/livecore/twinplan.py`:
+
+```
+controller_cost_veh_min = 1*total_exposed_veh_min + 15*blocked_at_horizon_veh
+                        + 60*trapped_by_fire_at_horizon_veh + 1*remaining_at_horizon_veh
+```
+
+Why not the twin's 60 for blocked vehicles: `blocked_at_horizon_veh` is a count at one
+frame, and vehicles move in 5-vehicle packets. In a Camp what-if from 17:30Z, a reroute
+gave 578 veh-min less exposure and 110 more arrivals, but 30 more blocked vehicles at the
+horizon (6 packets); at weight 60 it ranked worse than doing nothing. At 15 (three reroute intervals
+of 300 s, the expected wait before a blocked vehicle is rerouted), exposure and throughput
+decide unless blocking differs a lot. Vehicles trapped by fire keep the full-horizon
+weight of 60, because that is the outcome the controller must avoid. The controller uses
+`fire_ahead: "frozen"`: a real controller does not know the replay's future fire. A set
+replaces the reference set only when it is cheaper by
+`max(250, 0.25% of the reference cost)` veh-min (one seed). These weights are planning
+heuristics, not calibrated.
+
+### Controller evidence (`proposal.twin`)
+
+Besides the scored `candidates`, `chosen`, `reference`, `baseline` (no new actions) and
+`objective` (`min_gain_veh_min` is the margin above), the evidence says how the choice
+compares with doing nothing:
+
+| Field | Meaning |
+| --- | --- |
+| `worse_than_baseline` | The chosen set costs more than no new actions, or leaves more vehicles trapped by fire. The controller only keeps such a set when every valid set is worse; otherwise it picks the cheapest set that is not. The rationale sentence then states the regression. |
+| `no_signal` | Every valid set has the same cost (two or more sets), or the chosen cost is within `min_gain_veh_min` of no new actions. The web shows one line ("Twin: no measurable difference in 60 min") instead of the table. |
+
+Destination-swap sets are built only for ordered (`evacuate_now`) zones: nobody departs
+from a `be_ready` zone in the what-if, so its destination cannot change the result.

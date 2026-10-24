@@ -1,4 +1,4 @@
-import type { AreaGeometry, ChangeKind, GuidanceLevel, LonLat, ReportKind, ReportStatus } from "./types";
+import type { AreaGeometry, ChangeKind, DrillState, GuidanceLevel, LonLat, ReportKind, ReportStatus } from "./types";
 
 export const LEVEL_LABEL: Record<GuidanceLevel, string> = {
   evacuate_now: "Evacuate now",
@@ -28,6 +28,7 @@ export const STATUS_LABEL: Record<ReportStatus, string> = {
 
 export const CHANGE_LABEL: Record<ChangeKind, string> = {
   reroute: "Reroute",
+  route_lost: "Route lost",
   level_change: "Level change",
   new: "New",
   cleared: "Cleared",
@@ -81,4 +82,21 @@ export function labelPoint(geometry: AreaGeometry): LonLat | null {
     y += lat;
   }
   return [x / best.length, y / best.length];
+}
+
+/** A short elapsed duration: "42 s", "3 min", "1 h 05 min". */
+export function elapsed(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s} s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} min`;
+  return `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")} min`;
+}
+
+/** replay_now advanced locally between polls, with the server's formula and clamp. */
+export function drillNowAt(drill: DrillState, receivedAt: number | null, nowMs: number): string {
+  if (!drill.running || receivedAt === null) return drill.replay_now;
+  const base = new Date(drill.replay_now).getTime();
+  const end = new Date(drill.clock.end).getTime();
+  return new Date(Math.min(end, base + Math.max(0, nowMs - receivedAt) * drill.speed)).toISOString();
 }

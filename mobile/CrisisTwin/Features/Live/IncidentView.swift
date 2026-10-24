@@ -1,5 +1,4 @@
 import SwiftUI
-import UIKit
 
 /// Actions the incident screen hands to its sheet and map, so each control has one owner.
 struct IncidentActions {
@@ -21,7 +20,7 @@ extension EnvironmentValues {
     }
 }
 
-/// Shared presentation helpers for guidance levels and drill time.
+/// Shared presentation helpers for guidance levels.
 extension GuidanceLevel {
     var pillText: String {
         switch self {
@@ -46,37 +45,51 @@ extension GuidanceLevel {
         case .none: return .info
         }
     }
-}
 
-enum DrillTime {
-    /// Drill times are shown in UTC, matching the server's fire labels ("16:30 drill time").
-    static func hhmm(_ date: Date) -> String {
-        formatter.string(from: date)
+    /// Status band fill; `nil` is the neutral band (surface with a hairline border).
+    var bandColor: Color? {
+        switch self {
+        case .evacuateNow: return .ctBandEvacuate
+        case .beReady: return .ctBandReady
+        case .none: return nil
+        }
     }
 
-    private static let formatter: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = TimeZone(identifier: "UTC")
-        f.dateFormat = "HH:mm"
-        return f
-    }()
-
-    /// The drill clock advanced since the last poll at its speed. Not clamped to the clock's end;
-    /// the next poll corrects it.
-    static func now(_ drill: DrillClock, generatedAt: Date, wallNow: Date = Date()) -> Date {
-        guard drill.running, drill.speed > 0 else { return drill.replayNow }
-        return drill.replayNow.addingTimeInterval(max(0, wallNow.timeIntervalSince(generatedAt)) * drill.speed)
+    /// Text on the status band: white on red and dark on amber in both modes.
+    var bandText: Color {
+        switch self {
+        case .evacuateNow: return .white
+        case .beReady: return .ctBandReadyText
+        case .none: return .ctInk
+        }
     }
 }
 
-/// The phone's one screen about the live incident (ADR 0012): full-bleed `IncidentMap`, a status
-/// strip (zone and level), the drill chip, one persistent `GuidanceSheet`, the report button and
-/// the `AppMenu` button. Reads `LiveStore` and `LocationProvider` from the environment.
+extension FireEstimate {
+    /// Method and age on the incident clock, e.g. "Model estimate · 12 min ago".
+    func displayLabel(now: Date) -> String {
+        let method: String
+        switch self.method {
+        case .modelNowcast: method = "Model estimate"
+        case .satellitePerimeter: method = "Satellite perimeter"
+        case .none: return label
+        }
+        guard let asOf else { return method }
+        return "\(method) · \(RelativeAge.text(from: asOf, to: now))"
+    }
+}
+
+/// The phone's one screen about the live incident (ADR 0012): full-bleed `IncidentMap` under a
+/// status band (menu, level, zone, Exercise tag when not real), the fire chip, one persistent
+/// `GuidanceSheet` sized to its content, and the Report button. Reads `LiveStore` and
+/// `LocationProvider` from the environment.
 struct IncidentView: View {
-    /// Height of the sheet's small detent, above the bottom safe area; the map keeps its content
-    /// clear of it.
-    static let sheetHeight: CGFloat = 214
+    /// Sheet height before the content is measured, and the most it grows to (it scrolls beyond).
+    static let initialSheetHeight: CGFloat = 248
+    static let maxSheetHeight: CGFloat = 560
+    /// Status band height and its inset from the screen edges.
+    static let bandHeight: CGFloat = 56
+    static let inset: CGFloat = 12
 
     private enum Modal: Identifiable {
         case menu
@@ -93,10 +106,13 @@ struct IncidentView: View {
     @Environment(LiveStore.self) private var store
     @Environment(LocationProvider.self) private var location
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var sheetShown = true
-    @State private var detent: PresentationDetent = .height(IncidentView.sheetHeight)
+    /// Measured content height of the sheet; its only detent.
+    @State private var sheetHeight: CGFloat = IncidentView.initialSheetHeight
     @State private var modal: Modal? = IncidentView.initialModal
     @State private var following = false
+    @State private var fireExpanded = false
 
     init() {}
 
@@ -119,32 +135,32 @@ struct IncidentView: View {
             following: following)
     }
 
+
     var body: some View {
-        IncidentMap(situation: store.situation, myLocation: myLocation, guidance: store.myGuidance)
-            .safeAreaPadding(.top, 56)
-            .safeAreaPadding(.bottom, Self.sheetHeight)
-            .overlay(alignment: .top) {
-                VStack(spacing: 8) {
-                    topBar
-                    if let change = store.guidanceChange { banner(change) }
-                }
-                .padding(.horizontal, 12)
-                .padding(.top, 4)
-                .animation(.snappy(duration: 0.3), value: store.guidanceChange)
-            }
+        IncidentMap(
+            situation: store.situation, myLocation: myLocation, guidance: store.myGuidance?.withShortDestinationName,
+            zone: store.myZone, task: store.currentTask, taskTarget: store.currentTask.flatMap(store.taskTarget))
+            .safeAreaPadding(.top, Self.bandHeight + 52)
+            .safeAreaPadding(.bottom, sheetHeight)
+            .overlay(alignment: .top) { topStack }
             .overlay(alignment: .bottomTrailing) {
                 reportButton
-                    .padding(.trailing, 16)
-                    .padding(.bottom, Self.sheetHeight + 12)
+                    .padding(.trailing, Self.inset)
+                    .padding(.bottom, sheetHeight + 12)
+                    .animation(reduceMotion ? nil : .smooth, value: sheetHeight)
             }
             .environment(\.incidentActions, actions)
             .sheet(isPresented: $sheetShown) {
-                GuidanceSheet()
+                GuidanceSheet { height in
+                    let fitted = min(Self.maxSheetHeight, height.rounded(.up))
+                    guard abs(fitted - sheetHeight) > 1 else { return }
+                    withAnimation(reduceMotion ? nil : .smooth) { sheetHeight = fitted }
+                }
                     .environment(\.incidentActions, actions)
-                    .presentationDetents([.height(Self.sheetHeight), .medium], selection: $detent)
-                    .presentationBackgroundInteraction(.enabled(upThrough: .medium))
+                    .presentationDetents([.height(sheetHeight)])
+                    .presentationBackgroundInteraction(.enabled(upThrough: .height(sheetHeight)))
                     .presentationBackground(Color.ctSurface)
-                    .presentationCornerRadius(24)
+                    .presentationCornerRadius(28)
                     .presentationDragIndicator(.visible)
                     .interactiveDismissDisabled()
                     // Other screens open from inside the persistent sheet: the screen behind it
@@ -169,12 +185,18 @@ struct IncidentView: View {
                     fix.map { LonLat(lon: $0.coordinate.longitude, lat: $0.coordinate.latitude) },
                     accuracyM: fix?.horizontalAccuracy)
             }
-            .task(id: store.guidanceChange?.id) {
-                guard store.guidanceChange != nil else { return }
-                UINotificationFeedbackGenerator().notificationOccurred(.warning)
-                try? await Task.sleep(for: .seconds(8))
-                if !Task.isCancelled { withAnimation { store.acknowledgeGuidanceChange() } }
+            .sensoryFeedback(trigger: store.guidanceChange?.id) { _, _ in
+                guard let change = store.guidanceChange else { return nil }
+                return change.isEscalation ? .error : .warning
             }
+            .task(id: store.guidanceChange?.id) {
+                guard let change = store.guidanceChange else { return }
+                AccessibilityNotification.Announcement(
+                    [change.message, change.detail].compactMap { $0 }.joined(separator: ". ")).post()
+                try? await Task.sleep(for: .seconds(8))
+                if !Task.isCancelled { dismissBanner() }
+            }
+            .task { await debugJoin() }
     }
 
     private func start() {
@@ -187,117 +209,300 @@ struct IncidentView: View {
         location.stopUpdating()
     }
 
-    // MARK: Top bar
+    private func debugJoin() async {
+        #if DEBUG
+        if let code = DebugLaunch.joinCode, store.role == .civilian {
+            try? await store.joinAsResponder(inviteCode: code)
+        }
+        #endif
+    }
 
-    private var topBar: some View {
-        HStack(spacing: 8) {
-            Button {
-                modal = .menu
-            } label: {
-                Image(systemName: "line.3.horizontal")
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(Color.ctInk)
-                    .frame(width: 44, height: 44)
-                    .background(Color.ctSurface, in: Circle())
-                    .overlay(Circle().strokeBorder(Color.ctBorder.opacity(0.7), lineWidth: 1))
-                    .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Menu")
-
-            zoneStrip
-            drillChip
+    private func dismissBanner() {
+        withAnimation(reduceMotion ? .easeInOut(duration: 0.2) : .spring(duration: 0.35, bounce: 0.15)) {
+            store.acknowledgeGuidanceChange()
         }
     }
 
-    private var zoneTitle: String {
-        if let zone = store.myZone { return zone.name }
-        if !location.isAuthorized { return "Location off" }
-        if location.lastLocation == nil { return "Locating" }
+    // MARK: Top: band, then the banner or the fire chip
+
+    private var topStack: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            StatusBand(
+                level: bandLevel, state: bandState, zoneName: store.myZone?.name,
+                offlineSince: offlineSince, isExercise: store.situation?.incident?.isExercise == true,
+                openMenu: { modal = .menu })
+            if let change = store.guidanceChange {
+                banner(change)
+            } else if let fire = store.situation?.fire, fire.method != .none {
+                fireChip(fire)
+                    .transition(.opacity)
+            }
+        }
+        .padding(.horizontal, Self.inset)
+        .padding(.top, 4)
+        .animation(reduceMotion ? .easeInOut(duration: 0.2) : .spring(duration: 0.35, bounce: 0.15),
+                   value: store.guidanceChange)
+    }
+
+    /// The published level for the device's zone; nil before a zone is known or while it has no
+    /// guidance yet.
+    private var bandLevel: GuidanceLevel? {
+        guard store.myZone != nil else { return nil }
+        return store.myGuidance?.level
+    }
+
+    /// What the band says in place of the level.
+    private var bandState: StatusBand.State {
+        if !location.isAuthorized { return .locationOff }
         if store.situation == nil {
-            if case .unavailable = store.connection { return "Offline" }
-            return "Connecting"
+            if case .unavailable = store.connection { return .offline }
+            return .connecting
         }
-        return "Outside drill zones"
+        if location.lastLocation == nil { return .locating }
+        return store.myZone != nil ? .noInstruction : .outsideZones
     }
 
-    private var zoneStrip: some View {
-        HStack(spacing: 8) {
-            Text(zoneTitle)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(Color.ctInk)
-                .lineLimit(1)
-                .truncationMode(.tail)
-            Spacer(minLength: 4)
-            if store.myZone != nil {
-                let level = store.myGuidance?.level ?? .none
-                StatusPill(text: level.pillText, systemImage: level.pillImage, tone: level.tone)
-                    .fixedSize()
-            }
-        }
-        .padding(.leading, 14)
-        .padding(.trailing, 6)
-        .frame(maxWidth: .infinity, minHeight: 44)
-        .background(Color.ctSurface, in: Capsule())
-        .overlay(Capsule().strokeBorder(Color.ctBorder.opacity(0.7), lineWidth: 1))
-        .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
-        .accessibilityElement(children: .combine)
-    }
-
-    private var drillChip: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
-            let time = store.situation.map { DrillTime.now($0.drill, generatedAt: $0.generatedAt, wallNow: context.date) }
-            HStack(spacing: 4) {
-                Text("Drill")
-                if let time {
-                    Text(DrillTime.hhmm(time)).monospacedDigit()
-                }
-            }
-            .font(.caption.weight(.bold))
-            .foregroundStyle(HazardTone.caution.color)
-            .padding(.horizontal, 10)
-            .frame(minHeight: 44)
-            .background(Color.ctSurface, in: Capsule())
-            .overlay(Capsule().strokeBorder(HazardTone.caution.color.opacity(0.6), lineWidth: 1))
-            .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(time.map { "Drill, not a real incident. Drill time \(DrillTime.hhmm($0)) UTC" }
-                                ?? "Drill, not a real incident")
-        }
+    /// The last successful update while the service is unreachable; nil when online.
+    private var offlineSince: Date? {
+        guard case .unavailable = store.connection else { return nil }
+        return store.situation?.generatedAt
     }
 
     private func banner(_ change: GuidanceChange) -> some View {
-        Button {
-            withAnimation { store.acknowledgeGuidanceChange() }
-        } label: {
-            Label(change.message, systemImage: "arrow.triangle.turn.up.right.diamond.fill")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(Color(light: 0xFFFFFF, dark: 0x0E1A16))
-                .multilineTextAlignment(.leading)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.ctInk, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .shadow(color: .black.opacity(0.2), radius: 10, y: 4)
+        let tone: Color = change.isReroute ? .ctRoute : (change.level.bandColor ?? .ctInk)
+        let icon = change.isReroute ? "arrow.triangle.turn.up.right.diamond.fill"
+            : change.level == .none ? "checkmark.circle.fill" : change.level.pillImage
+        return Button(action: dismissBanner) {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.title3)
+                    .foregroundStyle(tone)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(change.message)
+                        .font(.headline)
+                        .foregroundStyle(Color.ctInk)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                    if let detail = change.detail {
+                        // The reason only when it fits on one line.
+                        ViewThatFits(in: .horizontal) {
+                            Text(detail).fixedSize()
+                            Color.clear.frame(width: 0, height: 0)
+                        }
+                        .font(.subheadline)
+                        .foregroundStyle(Color.ctMuted)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.leading, 16)
+            .padding(.trailing, 14)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
+            .background(alignment: .leading) {
+                Rectangle().fill(tone).frame(width: 4)
+            }
+            .background(Color.ctSurface)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .ctFloatShadow()
         }
         .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel([change.message, change.detail].compactMap { $0 }.joined(separator: ". "))
+        .accessibilityAddTraits(.isButton)
         .accessibilityHint("Dismisses")
-        .transition(.move(edge: .top).combined(with: .opacity))
+        .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
+    }
+
+    /// One fixed chip naming how the fire estimate was made and its age on the incident clock;
+    /// tap for "Not a forecast."
+    private func fireChip(_ fire: FireEstimate) -> some View {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            fireChipButton(fire, label: fire.displayLabel(now: store.situation?.incidentNow(at: context.date) ?? context.date))
+        }
+    }
+
+    private func fireChipButton(_ fire: FireEstimate, label: String) -> some View {
+        Button {
+            withAnimation(reduceMotion ? nil : .snappy(duration: 0.2)) { fireExpanded.toggle() }
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Image(systemName: "flame.fill").foregroundStyle(Color.ctFire)
+                    Text(label)
+                        .foregroundStyle(Color.ctInk)
+                        .monospacedDigit()
+                }
+                .font(.footnote.weight(.semibold))
+                if fireExpanded {
+                    Text("Not a forecast.")
+                        .font(.footnote)
+                        .foregroundStyle(Color.ctMuted)
+                        .padding(.leading, 22)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, fireExpanded ? 8 : 0)
+            .frame(minHeight: 36)
+            .background(Color.ctSurface, in: RoundedRectangle(cornerRadius: fireExpanded ? 14 : 18, style: .continuous))
+            .ctFloatShadow()
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(fireExpanded ? "\(label). Not a forecast." : label)
+        .accessibilityHint(fireExpanded ? "" : "Shows what the estimate is")
     }
 
     private var reportButton: some View {
         Button {
             modal = .report(nil)
         } label: {
-            Image(systemName: "exclamationmark.bubble.fill")
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(Color(light: 0xFFFFFF, dark: 0x0E1A16))
-                .frame(width: 56, height: 56)
-                .background(Color.ctBrand, in: Circle())
-                .shadow(color: .black.opacity(0.22), radius: 8, y: 3)
+            Label("Report", systemImage: "exclamationmark.bubble.fill")
+                .font(.headline)
+                .foregroundStyle(Color.ctSurface)
+                .padding(.horizontal, 20)
+                .frame(height: 52)
+                .background(Color.ctInk, in: Capsule())
+                .ctFloatShadow()
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Report what you see")
+    }
+}
+
+/// The top band: menu, the level as colour, icon and word, the zone, and the Exercise tag. The
+/// only place the level and offline status show.
+struct StatusBand: View {
+    enum State {
+        case locating, locationOff, connecting, offline, outsideZones
+        /// In a zone that has no published guidance yet (not the same as an order of none).
+        case noInstruction
+
+        var text: String {
+            switch self {
+            case .locating: return "Locating"
+            case .locationOff: return "Location off"
+            case .connecting: return "Connecting"
+            case .offline: return "Offline"
+            case .outsideZones: return "Outside zones"
+            case .noInstruction: return "No instruction yet"
+            }
+        }
+
+        var systemImage: String {
+            switch self {
+            case .locating: return "location"
+            case .locationOff: return "location.slash"
+            case .connecting: return "antenna.radiowaves.left.and.right"
+            case .offline: return "wifi.slash"
+            case .outsideZones: return "mappin.slash"
+            case .noInstruction: return "circle.dashed"
+            }
+        }
+    }
+
+    /// Nil before a zone is known; `state` is shown instead.
+    let level: GuidanceLevel?
+    let state: State
+    let zoneName: String?
+    /// Last update while offline; nil when online.
+    let offlineSince: Date?
+    let isExercise: Bool
+    let openMenu: () -> Void
+
+    private var ink: Color { (level ?? .none).bandText }
+    private var word: String { level?.pillText ?? state.text }
+    private var icon: String { level?.pillImage ?? state.systemImage }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Button(action: openMenu) {
+                Image(systemName: "line.3.horizontal")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(ink)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Menu")
+
+            summary
+        }
+        .padding(.leading, 4)
+        .padding(.trailing, 12)
+        .frame(maxWidth: .infinity, minHeight: IncidentView.bandHeight)
+        .background {
+            let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
+            if let fill = level?.bandColor {
+                shape.fill(fill)
+            } else {
+                shape.fill(Color.ctSurface).overlay(shape.strokeBorder(Color.ctBorder, lineWidth: 1))
+            }
+        }
+        .ctFloatShadow()
+        .dynamicTypeSize(...DynamicTypeSize.accessibility2)
+        .animation(.easeInOut(duration: 0.25), value: level)
+    }
+
+    private var summary: some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .font(.headline)
+                .contentTransition(.symbolEffect(.replace))
+            Text(word.uppercased())
+                .font(.title3.weight(.heavy))
+                .tracking(0.5)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .layoutPriority(1)
+            Spacer(minLength: 4)
+            if let offlineSince {
+                TimelineView(.periodic(from: .now, by: 30)) { context in
+                    HStack(spacing: 4) {
+                        Image(systemName: "wifi.slash")
+                        Text(RelativeAge.text(from: offlineSince, to: context.date))
+                            .monospacedDigit()
+                            .lineLimit(1)
+                    }
+                    .font(.footnote.weight(.semibold))
+                    .fixedSize()
+                }
+            } else if let zoneName {
+                // A lone "…" says nothing: show the name when at least a readable part fits.
+                ViewThatFits(in: .horizontal) {
+                    Text(zoneName).fixedSize()
+                    Text(zoneName).truncationMode(.tail).frame(maxWidth: 120, alignment: .trailing)
+                    Color.clear.frame(width: 0, height: 0)
+                }
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+            }
+            if isExercise {
+                Text("EXERCISE")
+                    .font(.caption2.weight(.heavy))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .overlay(Capsule().strokeBorder(ink, lineWidth: 1.5))
+                    .fixedSize()
+            }
+        }
+        .foregroundStyle(ink)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityText)
+        .accessibilityAddTraits(.isHeader)
+    }
+
+    private var accessibilityText: String {
+        var parts = [level?.pillText ?? state.text]
+        if let offlineSince {
+            parts.append("offline, last update \(RelativeAge.text(from: offlineSince, to: Date()))")
+        } else if let zoneName {
+            parts.append(zoneName)
+        }
+        if isExercise { parts.append("exercise") }
+        return parts.joined(separator: ", ")
     }
 }
 

@@ -208,6 +208,22 @@
 .lc-back:hover {
   color: var(--lc-text);
 }
+.lc-clock-row {
+  flex-basis: 100%;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.lc-incident-clock {
+  margin: 0;
+}
+.lc-incident-time {
+  font-family: var(--lc-mono);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.5px;
+}
 .lc-conn {
   font-family: var(--lc-mono);
   font-size: 11px;
@@ -426,6 +442,88 @@ p.lc-state {
 .lc-level--be_ready {
   color: var(--lc-amber);
 }
+.lc-kind--route_lost {
+  color: var(--lc-red);
+}
+.lc-age {
+  margin-left: auto;
+  font-family: var(--lc-mono);
+  font-size: 11px;
+  color: var(--lc-amber);
+}
+.lc-alert {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 77, 109, 0.5);
+  border-radius: 6px;
+  background: rgba(255, 77, 109, 0.1);
+  color: var(--lc-red);
+  font-weight: 600;
+}
+.lc-alert-icon {
+  flex: none;
+}
+.lc-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.lc-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-top: 1px solid var(--lc-line);
+}
+.lc-group-toggle {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.lc-group-caret {
+  width: 10px;
+  color: var(--lc-dim);
+}
+/* Compact look, 44px hit area. */
+.lc-btn--group,
+.lc-auto summary {
+  position: relative;
+}
+.lc-btn--group::before {
+  content: "";
+  position: absolute;
+  inset: -9px -6px;
+}
+.lc-replan-status:empty {
+  display: none;
+}
+.lc-auto summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 10px;
+  border: 1px solid rgba(61, 219, 180, 0.3);
+  border-radius: 8px;
+  color: var(--lc-text);
+}
+.lc-auto[open] summary {
+  margin-bottom: 4px;
+}
+.lc-auto-mark {
+  color: var(--lc-teal);
+  font-weight: 700;
+}
 .lc-details summary {
   cursor: pointer;
   color: var(--lc-dim);
@@ -515,15 +613,6 @@ p.lc-state {
 }
 
 /* Drill */
-.lc-clock {
-  margin: 0;
-}
-.lc-clock-time {
-  font-family: var(--lc-mono);
-  font-size: 26px;
-  font-weight: 600;
-  letter-spacing: -0.5px;
-}
 .lc-speeds {
   display: flex;
   gap: 4px;
@@ -539,6 +628,404 @@ p.lc-state {
   background: rgba(255, 181, 71, 0.1);
 }
 
+/* Traffic twin column (left): simulated monitoring, same metric accents as the replay */
+.lc-root--twin {
+  grid-template-columns: 330px minmax(0, 1fr) 400px;
+}
+.lc-twin {
+  position: relative;
+  z-index: 2;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--lc-panel);
+  border-right: 1px solid var(--lc-line);
+  scrollbar-width: thin;
+  scrollbar-color: #2a3540 transparent;
+}
+.lc-twin .lc-panel-top {
+  align-items: center;
+}
+.lc-twin .lc-panel-top h1 {
+  flex: 0 1 auto;
+}
+/* One incident clock per page, in the Live command header; twin errors show in the panel body. */
+.lc-twin .lc-panel-top .lc-conn {
+  display: none;
+}
+.lc-twin-body {
+  gap: 0;
+  padding-top: 12px;
+}
+.lc-mono {
+  font-family: var(--lc-mono);
+  font-variant-numeric: tabular-nums;
+}
+.lc-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding-bottom: 14px;
+}
+.lc-metric {
+  --accent: var(--lc-teal);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 7px 10px 6px 12px;
+  border-radius: 10px;
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.01));
+  border: 1px solid var(--lc-line);
+}
+.lc-metric::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 10px;
+  bottom: 10px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+.lc-metric:first-child {
+  grid-column: span 2;
+}
+.lc-metric--not_departed_veh,
+.lc-stack-seg--not_departed_veh {
+  --accent: #8fb3ff;
+}
+.lc-metric--en_route_veh,
+.lc-stack-seg--en_route_veh {
+  --accent: var(--lc-amber);
+}
+.lc-metric--arrived_veh,
+.lc-stack-seg--arrived_veh {
+  --accent: var(--lc-teal);
+}
+.lc-metric--blocked_veh {
+  --accent: var(--lc-red);
+}
+.lc-metric--exposed_veh {
+  --accent: var(--lc-ember);
+}
+.lc-metric-label {
+  font-size: 11px;
+  color: var(--lc-dim);
+  white-space: nowrap;
+}
+.lc-metric-value {
+  font-family: var(--lc-mono);
+  font-size: 19px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.5px;
+}
+.lc-spark {
+  display: block;
+  width: 100%;
+  height: 20px;
+  margin-top: 2px;
+  overflow: visible;
+  cursor: crosshair;
+}
+.lc-spark--empty {
+  border-bottom: 1px dashed var(--lc-line-strong);
+  height: 10px;
+  margin-bottom: 10px;
+  cursor: default;
+}
+.lc-spark-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+.lc-spark-area {
+  fill: var(--accent);
+  opacity: 0.07;
+}
+.lc-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 0;
+  border-top: 1px solid var(--lc-line);
+}
+.lc-block-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.lc-block-head h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 650;
+}
+.lc-key {
+  display: flex;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 10.5px;
+  color: var(--lc-dim);
+}
+.lc-key li {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.lc-key-sw {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+.lc-zone-list,
+.lc-dest-list,
+.lc-road-list,
+.lc-cmd-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.lc-zone-row,
+.lc-road {
+  display: grid;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 28px;
+  padding: 3px 4px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.lc-zone-row:hover,
+.lc-road:hover {
+  background: rgba(160, 190, 220, 0.07);
+}
+.lc-zone-row {
+  grid-template-columns: 112px minmax(0, 1fr) auto;
+}
+.lc-zone-name,
+.lc-road-name,
+.lc-dest-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lc-stack {
+  display: flex;
+  gap: 2px;
+  height: 8px;
+}
+.lc-stack-seg {
+  flex-basis: 0;
+  min-width: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+.lc-zone-num,
+.lc-road-num,
+.lc-dest-num {
+  font-family: var(--lc-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 11.5px;
+  text-align: right;
+  white-space: nowrap;
+}
+.lc-zone-alert {
+  color: var(--lc-ember);
+}
+.lc-dest {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 8px;
+  padding: 6px 0;
+  border-top: 1px solid var(--lc-line);
+  font-size: 12px;
+}
+.lc-dest:first-child {
+  border-top: 0;
+}
+.lc-dest-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.lc-bar {
+  grid-column: span 2;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(160, 190, 220, 0.1);
+  overflow: hidden;
+}
+.lc-bar span {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--lc-teal);
+}
+.lc-dest-meta {
+  grid-column: span 2;
+  font-size: 11px;
+}
+.lc-road {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+.lc-road-name::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 7px;
+  border-radius: 50%;
+  border: 1.5px solid #ffe14d;
+  background: rgba(255, 225, 77, 0.55);
+  vertical-align: middle;
+}
+.lc-road-speed {
+  font-family: var(--lc-mono);
+  font-size: 11px;
+}
+.lc-cmd-list {
+  gap: 4px;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: #c4cfda;
+}
+.lc-dot--queue {
+  background: rgba(255, 225, 77, 0.55);
+  border-width: 1.5px;
+}
+
+/* Field (ground truth) counts */
+.lc-field {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0;
+}
+.lc-field-item {
+  padding: 5px 8px;
+  border: 1px solid var(--lc-line);
+  border-radius: 8px;
+}
+.lc-field-item dt {
+  font-size: 10.5px;
+  color: var(--lc-dim);
+  white-space: nowrap;
+}
+.lc-field-item dd {
+  margin: 0;
+  font-family: var(--lc-mono);
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.lc-field-item--need_help dd {
+  color: var(--lc-amber);
+}
+
+/* Proposal twin evidence */
+.lc-ev {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(199, 166, 255, 0.05);
+  border: 1px solid rgba(199, 166, 255, 0.2);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.lc-ev figcaption {
+  font-size: 11.5px;
+  color: var(--lc-dim);
+}
+.lc-ev-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.lc-ev-table th,
+.lc-ev-table td {
+  padding: 2px 0;
+  text-align: right;
+  font-family: var(--lc-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+}
+.lc-ev-table thead th {
+  font-family: inherit;
+  font-size: 10.5px;
+  color: var(--lc-dim);
+}
+.lc-ev-table tbody th {
+  text-align: left;
+  font-family: inherit;
+  color: #c4cfda;
+}
+.lc-ev-table td:last-child {
+  font-weight: 600;
+  width: 64px;
+}
+.lc-delta--better {
+  color: var(--lc-teal);
+}
+.lc-delta--worse {
+  color: var(--lc-red);
+}
+.lc-ev-sets {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 11.5px;
+}
+.lc-ev-sets li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 0;
+  color: var(--lc-dim);
+}
+.lc-ev-sets .lc-ev-chosen {
+  color: var(--lc-text);
+  font-weight: 600;
+}
+
+@media (max-width: 1180px) {
+  .lc-root--twin {
+    grid-template-columns: minmax(0, 1fr) 380px;
+    grid-template-rows: minmax(0, 1fr) 42vh;
+  }
+  .lc-root--twin .lc-stage {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .lc-root--twin .lc-twin {
+    grid-column: 1;
+    grid-row: 2;
+    border-right: 0;
+    border-top: 1px solid var(--lc-line);
+  }
+  .lc-root--twin .lc-panel {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+}
+
 @media (max-width: 860px) {
   .lc-root {
     grid-template-columns: 1fr;
@@ -551,5 +1038,20 @@ p.lc-state {
   .lc-legend {
     font-size: 11px;
     gap: 2px;
+  }
+  .lc-root--twin {
+    overflow-y: auto;
+    grid-template-columns: 1fr;
+    grid-template-rows: 55vh auto auto;
+  }
+  .lc-root--twin .lc-stage {
+    order: -1;
+  }
+  .lc-root--twin .lc-stage,
+  .lc-root--twin .lc-twin,
+  .lc-root--twin .lc-panel {
+    grid-column: 1;
+    grid-row: auto;
+    overflow: visible;
   }
 }

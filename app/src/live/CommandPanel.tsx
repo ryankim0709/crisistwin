@@ -6,15 +6,15 @@ import {
   LEVEL_LABEL,
   STATUS_LABEL,
   drillClock,
-  drillDate,
+  elapsed,
   shortKey,
   wallClock,
 } from "./format";
 import type { MapFocus } from "./CommandMap";
+import TwinEvidenceView, { controllerLabel } from "./TwinEvidenceView";
 import type {
   CheckTask,
   CommandResponse,
-  DrillState,
   FieldReport,
   LonLat,
   PlanCause,
@@ -28,7 +28,13 @@ export type RunAction = (key: string, action: (token: string) => Promise<unknown
 
 const SPEEDS = [0, 1, 5, 15, 30, 60] as const;
 const CLOSED_REPORT = new Set(["dismissed", "resolved"]);
-const CAUSE_LABEL: Record<PlanCause, string> = { road_block: "Road block", fire: "Fire", manual: "Manual" };
+const CAUSE_LABEL: Record<PlanCause, string> = {
+  road_block: "Road block",
+  road_report: "Reported block",
+  fire: "Fire",
+  shelter_full: "Shelter full",
+  manual: "Manual",
+};
 const PROPOSAL_STATUS: Record<Proposal["status"], string> = {
   pending: "Pending",
   approved: "Approved",
@@ -47,6 +53,27 @@ function SectionError({ message }: { message: string | null }) {
 
 // ---- Proposals ----
 
+/** Evacuate-now changes older than this make the pending card raise an alert. */
+const EVACUATE_WAIT_ALERT_MS = 60_000;
+const UNCHANGED_STATUS_MS = 4_000;
+
+type ChangeGroupKey = "evacuate_now" | "be_ready" | "none";
+const GROUPS: { key: ChangeGroupKey; noun: string }[] = [
+  { key: "evacuate_now", noun: "evacuate-now" },
+  { key: "be_ready", noun: "be-ready" },
+  { key: "none", noun: "cleared" },
+];
+
+function groupChanges(changes: ProposalChange[]) {
+  return GROUPS.map((g) => ({
+    ...g,
+    // No-route zones first: they need the controller's attention most.
+    changes: changes
+      .filter((c) => c.to.level === g.key)
+      .sort((a, b) => Number(b.to.no_route) - Number(a.to.no_route)),
+  })).filter((g) => g.changes.length > 0);
+}
+
 function ChangeRow({ change, zoneName }: { change: ProposalChange; zoneName: string }) {
   const to = change.to;
   const from = change.from;
@@ -59,7 +86,10 @@ function ChangeRow({ change, zoneName }: { change: ProposalChange; zoneName: str
     : to.destination
       ? `${to.destination.name}${to.route?.via.length ? ` via ${to.route.via.join(", ")}` : ""}${to.route ? `, ${to.route.eta_min} min` : ""}`
       : null;
-  const fromVia = change.kind === "reroute" && from?.via.length ? `was via ${from.via.join(", ")}` : null;
+  const fromVia =
+    (change.kind === "reroute" || change.kind === "route_lost") && from?.via.length
+      ? `was via ${from.via.join(", ")}`
+      : null;
   return (
     <li className="lc-change">
       <div className="lc-change-head">
@@ -75,34 +105,115 @@ function ChangeRow({ change, zoneName }: { change: ProposalChange; zoneName: str
   );
 }
 
+function AlertIcon() {
+  return (
+    <svg className="lc-alert-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+      <path d="M8 1.5 15 14H1L8 1.5Z" fill="currentColor" />
+      <path d="M8 6v4M8 11.6v.4" stroke="#0c1117" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** Long groups start collapsed so the card stays scannable. */
+const GROUP_OPEN_MAX = 5;
+
+function ChangeGroup({
+  level,
+  changes,
+  zoneName,
+  approve,
+}: {
+  level: ChangeGroupKey;
+  changes: ProposalChange[];
+  zoneName: (id: string) => string;
+  approve: { label: string; disabled: boolean; onClick: () => void } | null;
+}) {
+  const [open, setOpen] = useState(changes.length <= GROUP_OPEN_MAX);
+  return (
+    <div className="lc-group">
+      <div className="lc-group-head">
+        <button type="button" className="lc-group-toggle" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+          <span className="lc-group-caret" aria-hidden="true">
+            {open ? "▾" : "▸"}
+          </span>
+          <span className={`lc-level lc-level--${level}`}>{LEVEL_LABEL[level]}</span>
+          <span className="lc-dim">{changes.length}</span>
+        </button>
+        {approve ? (
+          <button
+            type="button"
+            className="lc-btn lc-btn--group"
+            aria-label={approve.label}
+            disabled={approve.disabled}
+            onClick={approve.onClick}
+          >
+            Approve
+          </button>
+        ) : null}
+      </div>
+      {open ? (
+        <ul className="lc-changes">
+          {changes.map((c) => (
+            <ChangeRow key={c.zone_id} change={c} zoneName={zoneName(c.zone_id)} />
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
+function decisionTime(p: Proposal): string {
+  return drillClock(p.decided_replay_at ?? p.replay_at);
+}
+
 function ProposalCard({
   proposal,
   zoneNames,
   run,
   busy,
+  serverNow,
 }: {
   proposal: Proposal;
   zoneNames: Map<string, string>;
   run: RunAction;
   busy: string | null;
+  serverNow: number;
 }) {
   const [error, setError] = useState<string | null>(null);
   const pending = proposal.status === "pending";
   const ai = proposal.rationale.evidence_class === "ai_generated";
-  const decide = async (approve: boolean) =>
+  const controller = controllerLabel(proposal.controller);
+  const groups = useMemo(() => groupChanges(proposal.changes), [proposal.changes]);
+  const ageMs = serverNow - new Date(proposal.created_at).getTime();
+  const evacWaiting =
+    pending && ageMs > EVACUATE_WAIT_ALERT_MS && proposal.changes.some((c) => c.to.level === "evacuate_now");
+  const decide = async (approve: boolean, zoneIds?: string[]) =>
     setError(
       await run(`proposal:${proposal.id}`, (t) =>
-        approve ? approveProposal(t, proposal.id) : rejectProposal(t, proposal.id),
+        approve ? approveProposal(t, proposal.id, zoneIds) : rejectProposal(t, proposal.id),
       ),
     );
+  const zoneName = (id: string) => zoneNames.get(id) ?? id;
   return (
     <article className={`lc-card${pending ? " lc-card--pending" : ""}`} aria-label={`Proposal ${proposal.id}`}>
       <header className="lc-card-head">
         <span className={`lc-status lc-status--${proposal.status}`}>{PROPOSAL_STATUS[proposal.status]}</span>
         <span className="lc-dim">
-          {proposal.causes.map((c) => CAUSE_LABEL[c]).join(", ")} · {drillClock(proposal.replay_at)} drill
+          {proposal.causes.map((c) => CAUSE_LABEL[c] ?? c).join(", ")} · {drillClock(proposal.replay_at)}
+          {controller ? ` · ${controller}` : ""}
         </span>
+        {pending ? (
+          <span className="lc-age" title="Waiting for approval">
+            {elapsed(ageMs)}
+          </span>
+        ) : null}
       </header>
+      {evacWaiting ? (
+        <p className="lc-alert" role="alert">
+          <AlertIcon />
+          Evacuate-now zones waiting over 1 min
+        </p>
+      ) : null}
       <p className="lc-rationale">
         <span
           className={`lc-chip ${ai ? "lc-chip--ai" : "lc-chip--template"}`}
@@ -112,13 +223,24 @@ function ProposalCard({
         </span>{" "}
         {proposal.rationale.text}
       </p>
-      {proposal.changes.length ? (
-        <ul className="lc-changes">
-          {proposal.changes.map((c) => (
-            <ChangeRow key={c.zone_id} change={c} zoneName={zoneNames.get(c.zone_id) ?? c.zone_id} />
-          ))}
-        </ul>
-      ) : null}
+      {proposal.twin ? <TwinEvidenceView twin={proposal.twin} /> : null}
+      {groups.map((g) => (
+        <ChangeGroup
+          key={g.key}
+          level={g.key}
+          changes={g.changes}
+          zoneName={zoneName}
+          approve={
+            pending && groups.length > 1
+              ? {
+                  label: `Approve ${g.changes.length} ${g.noun} zone${g.changes.length === 1 ? "" : "s"}`,
+                  disabled: busy !== null,
+                  onClick: () => void decide(true, g.changes.map((c) => c.zone_id)),
+                }
+              : null
+          }
+        />
+      ))}
       {proposal.tasks.length ? (
         <ul className="lc-changes">
           {proposal.tasks.map((t, i) => (
@@ -140,7 +262,7 @@ function ProposalCard({
             disabled={busy !== null}
             onClick={() => void decide(true)}
           >
-            Approve
+            Approve all
           </button>
           <button type="button" className="lc-btn" disabled={busy !== null} onClick={() => void decide(false)}>
             Reject
@@ -148,7 +270,7 @@ function ProposalCard({
         </div>
       ) : proposal.decided_by ? (
         <p className="lc-dim">
-          {proposal.decided_by === "auto_policy" ? "Auto policy" : "Controller"} · {wallClock(proposal.decided_at)}
+          {proposal.decided_by === "auto_policy" ? "Auto policy" : "Controller"} · {decisionTime(proposal)}
           {proposal.note ? ` · ${proposal.note}` : ""}
         </p>
       ) : null}
@@ -157,19 +279,74 @@ function ProposalCard({
   );
 }
 
-function ProposalsSection({ data, run, busy }: { data: CommandResponse; run: RunAction; busy: string | null }) {
+const DECISIONS = new Set<Proposal["status"]>(["approved", "rejected", "auto_approved"]);
+
+/** The newest decision when it is an auto-approval: one line, expandable to its changes. */
+function AutoRerouteLine({ data, zoneNames }: { data: CommandResponse; zoneNames: Map<string, string> }) {
+  let latest: Proposal | null = null;
+  for (const p of data.proposals) {
+    if (!DECISIONS.has(p.status) || !p.decided_at) continue;
+    if (!latest || p.decided_at > latest.decided_at!) latest = p;
+  }
+  if (!latest || latest.status !== "auto_approved" || latest.changes.length === 0) return null;
+  const roadNames = new Map(data.road_state.map((r) => [r.segment_id, r.name]));
+  const roads = [
+    ...new Set((latest.cause_segment_ids ?? []).map((id) => roadNames.get(id)).filter((n): n is string => !!n)),
+  ];
+  const cause = roads.length
+    ? `${roads.join(", ")} block`
+    : latest.causes.map((c) => CAUSE_LABEL[c] ?? c).join(", ");
+  const n = latest.changes.length;
+  return (
+    <details key={latest.id} className="lc-details lc-auto">
+      <summary>
+        <span className="lc-auto-mark" aria-hidden="true">
+          ↻
+        </span>
+        Auto-rerouted {n} zone{n === 1 ? "" : "s"} · {cause} · {decisionTime(latest)}
+      </summary>
+      <ul className="lc-changes">
+        {latest.changes.map((c) => (
+          <ChangeRow key={c.zone_id} change={c} zoneName={zoneNames.get(c.zone_id) ?? c.zone_id} />
+        ))}
+      </ul>
+    </details>
+  );
+}
+
+function ProposalsSection({
+  data,
+  run,
+  busy,
+  serverNow,
+}: {
+  data: CommandResponse;
+  run: RunAction;
+  busy: string | null;
+  serverNow: number;
+}) {
   const [message, setMessage] = useState<string | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
   const zoneNames = useMemo(() => new Map(data.zones.map((z) => [z.id, z.name])), [data.zones]);
   const pending = data.proposals.filter((p) => p.status === "pending");
   const decided = data.proposals.filter((p) => p.status !== "pending");
+  useEffect(() => {
+    if (!status) return;
+    const id = window.setTimeout(() => setStatus(null), UNCHANGED_STATUS_MS);
+    return () => window.clearTimeout(id);
+  }, [status]);
   const onReplan = async () => {
     setMessage(null);
-    let noChanges = false;
+    setStatus(null);
+    const before = new Set(pending.map((p) => p.id));
+    let outcome: string | null = null;
     const error = await run("replan", async (t) => {
       const result = await replan(t);
-      noChanges = result.proposal === null;
+      if (result.proposal === null && result.auto_approved === null) outcome = "No changes";
+      else if (result.proposal && before.has(result.proposal.id) && !result.auto_approved) outcome = "Unchanged";
     });
-    setMessage(error ?? (noChanges ? "No changes." : null));
+    setMessage(error);
+    setStatus(error ? null : outcome);
   };
   return (
     <section className="lc-section" aria-labelledby="lc-proposals">
@@ -177,20 +354,26 @@ function ProposalsSection({ data, run, busy }: { data: CommandResponse; run: Run
         <h2 id="lc-proposals">
           Proposals {pending.length ? <span className="lc-count">{pending.length}</span> : null}
         </h2>
-        <button type="button" className="lc-btn" disabled={busy !== null} onClick={() => void onReplan()}>
-          {busy === "replan" ? "Planning…" : "Replan"}
-        </button>
+        <div className="lc-actions">
+          <span className="lc-dim lc-replan-status" role="status">
+            {status}
+          </span>
+          <button type="button" className="lc-btn" disabled={busy !== null} onClick={() => void onReplan()}>
+            {busy === "replan" ? "Planning…" : "Replan"}
+          </button>
+        </div>
       </div>
-      {message ? <p className="lc-dim" role="status">{message}</p> : null}
+      <SectionError message={message} />
       {pending.length === 0 ? <p className="lc-empty">No pending proposals.</p> : null}
       {pending.map((p) => (
-        <ProposalCard key={p.id} proposal={p} zoneNames={zoneNames} run={run} busy={busy} />
+        <ProposalCard key={p.id} proposal={p} zoneNames={zoneNames} run={run} busy={busy} serverNow={serverNow} />
       ))}
+      <AutoRerouteLine data={data} zoneNames={zoneNames} />
       {decided.length ? (
         <details className="lc-details">
           <summary>Decided ({decided.length})</summary>
           {decided.map((p) => (
-            <ProposalCard key={p.id} proposal={p} zoneNames={zoneNames} run={run} busy={busy} />
+            <ProposalCard key={p.id} proposal={p} zoneNames={zoneNames} run={run} busy={busy} serverNow={serverNow} />
           ))}
         </details>
       ) : null}
@@ -223,6 +406,7 @@ function nearestResponder(coord: LonLat, responders: ResponderPosition[]): Respo
 
 function ReportRow({
   report,
+  inDrill,
   task,
   responders,
   run,
@@ -230,6 +414,7 @@ function ReportRow({
   onFocus,
 }: {
   report: FieldReport;
+  inDrill: boolean;
   task: CheckTask | undefined;
   responders: ResponderPosition[];
   run: RunAction;
@@ -268,8 +453,8 @@ function ReportRow({
           <span className={`lc-status lc-status--${report.status}`}>{STATUS_LABEL[report.status]}</span>
         </span>
         <span className="lc-dim">
-          {where} · {report.reporter.role} · {wallClock(report.observed_at)}
-          {report.replay_at ? ` · ${drillClock(report.replay_at)} drill` : ""}
+          {where} · {report.reporter.role}
+          {inDrill ? (report.replay_at ? ` · ${drillClock(report.replay_at)}` : "") : ` · ${wallClock(report.observed_at)}`}
         </span>
         {report.note ? <span className="lc-note">{report.note}</span> : null}
       </button>
@@ -334,19 +519,42 @@ function ReportsSection({
     }
     return map;
   }, [data.tasks]);
+  const field = useMemo(() => {
+    const sum = { out: 0, need_help: 0, staying: 0 };
+    for (const c of data.checkins.by_zone) {
+      sum.out += c.out;
+      sum.need_help += c.need_help;
+      sum.staying += c.staying;
+    }
+    return [
+      { key: "out", label: "Out", value: sum.out },
+      { key: "need_help", label: "Need help", value: sum.need_help },
+      { key: "staying", label: "Staying", value: sum.staying },
+      { key: "responders", label: "Responders", value: data.responders.length },
+    ];
+  }, [data.checkins.by_zone, data.responders.length]);
   return (
     <section className="lc-section" aria-labelledby="lc-reports">
       <div className="lc-section-head">
         <h2 id="lc-reports">
-          Reports {open.length ? <span className="lc-count">{open.length}</span> : null}
+          Field {open.length ? <span className="lc-count" title="Open reports">{open.length}</span> : null}
         </h2>
       </div>
+      <dl className="lc-field">
+        {field.map((f) => (
+          <div key={f.key} className={`lc-field-item lc-field-item--${f.key}`}>
+            <dt>{f.label}</dt>
+            <dd>{f.value.toLocaleString("en-US")}</dd>
+          </div>
+        ))}
+      </dl>
       {open.length === 0 ? <p className="lc-empty">No open reports.</p> : null}
       <ul className="lc-reports">
         {open.map((r) => (
           <ReportRow
             key={r.id}
             report={r}
+            inDrill={data.drill.started_at !== null}
             task={taskByReport.get(r.id)}
             responders={data.responders}
             run={run}
@@ -361,34 +569,8 @@ function ReportsSection({
 
 // ---- Drill ----
 
-/** replay_now advanced locally between polls, with the server's formula and clamp. */
-function useDrillNow(drill: DrillState, receivedAt: number | null): string {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!drill.running) return;
-    const id = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(id);
-  }, [drill.running]);
-  if (!drill.running || receivedAt === null) return drill.replay_now;
-  const base = new Date(drill.replay_now).getTime();
-  const end = new Date(drill.clock.end).getTime();
-  const advanced = Math.min(end, base + Math.max(0, now - receivedAt) * drill.speed);
-  return new Date(advanced).toISOString();
-}
-
-function DrillSection({
-  drill,
-  receivedAt,
-  run,
-  busy,
-}: {
-  drill: DrillState;
-  receivedAt: number | null;
-  run: RunAction;
-  busy: string | null;
-}) {
+function DrillSection({ drill, run, busy }: { drill: CommandResponse["drill"]; run: RunAction; busy: string | null }) {
   const [error, setError] = useState<string | null>(null);
-  const now = useDrillNow(drill, receivedAt);
   const stopped = drill.started_at === null;
   const ended = !stopped && drill.speed > 0 && !drill.running;
   const state = stopped ? "Stopped" : ended ? "Ended" : drill.speed === 0 ? "Paused" : `Running ×${drill.speed}`;
@@ -410,10 +592,6 @@ function DrillSection({
           {state}
         </span>
       </div>
-      <p className="lc-clock" aria-live="off">
-        <span className="lc-clock-time">{drillClock(now, true)}</span>
-        <span className="lc-dim"> UTC · {drillDate(now)}</span>
-      </p>
       <div className="lc-speeds" role="group" aria-label="Drill speed">
         {SPEEDS.map((s) => (
           <button
@@ -450,22 +628,23 @@ function DrillSection({
 
 export default function CommandPanel({
   data,
-  receivedAt,
+  serverNow,
   run,
   busy,
   onFocus,
 }: {
   data: CommandResponse;
-  receivedAt: number | null;
+  /** Server wall time (ms), advanced locally between polls. */
+  serverNow: number;
   run: RunAction;
   busy: string | null;
   onFocus: (focus: MapFocus) => void;
 }) {
   return (
     <>
-      <ProposalsSection data={data} run={run} busy={busy} />
+      <ProposalsSection data={data} run={run} busy={busy} serverNow={serverNow} />
       <ReportsSection data={data} run={run} busy={busy} onFocus={onFocus} />
-      <DrillSection drill={data.drill} receivedAt={receivedAt} run={run} busy={busy} />
+      <DrillSection drill={data.drill} run={run} busy={busy} />
     </>
   );
 }

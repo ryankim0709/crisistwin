@@ -12,7 +12,7 @@ from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 from rest_framework.response import Response
 
-from . import controller
+from . import controller, twin_service
 from .auth import Principal, client_ip, issue_token, live_view, rate_limited, secret_matches
 from .common import (
     ApiError,
@@ -37,6 +37,7 @@ from .state import (
     drill_state_json,
     fire_json,
     guidance_json,
+    incident_json,
     load_public,
     load_snapshot,
     proposal_json,
@@ -63,6 +64,8 @@ REPORT_KINDS = frozenset(
 ROAD_KINDS = frozenset({"road_blocked", "road_passable", "heavy_traffic"})
 """Kinds that snap to a road segment."""
 SEVERITIES = frozenset({"full", "partial", "slow"})
+SHELTER_FULL_DESTINATION_KINDS = frozenset({"shelter", "temporary_refuge"})
+"""Destination kinds that can fill up; an exit cannot."""
 TRIAGE_ACTIONS = {"confirm": "confirmed", "dismiss": "dismissed", "resolve": "resolved", "merge": "dismissed"}
 REPLAN_CAUSE_ON_CONFIRM = {"road_blocked": "road_block", "fire_seen": "fire"}
 CHECKIN_STATUSES = frozenset({"out", "need_help", "staying"})
@@ -140,8 +143,11 @@ def _validate_report(body: dict[str, Any], incident_id: str) -> dict[str, Any]:
     destination_id = optional_str(body, "destination_id", code, 200)
     if kind == "shelter_full" and destination_id is None:
         raise ApiError(400, code, "`shelter_full` needs `destination_id`.")
-    if destination_id is not None and destination_id not in get_index().destinations:
+    destinations = get_index().destinations
+    if destination_id is not None and destination_id not in destinations:
         raise ApiError(400, code, "Unknown `destination_id`.")
+    if kind == "shelter_full" and destinations[destination_id].kind not in SHELTER_FULL_DESTINATION_KINDS:
+        raise ApiError(400, code, "`shelter_full` applies only to a shelter or temporary refuge.")
     task_id = optional_str(body, "task_id", code, 100)
     observed_at = parse_iso(body.get("observed_at"), "observed_at", code)
     if observed_at > wall_now() + timedelta(seconds=MAX_OBSERVED_FUTURE_S):
@@ -481,6 +487,7 @@ def situation(request, incident_id: str, principal: Principal):
         {
             "incident_id": incident_id,
             "generated_at": iso(snapshot.now),
+            "incident": incident_json(index),
             "drill": drill_short_json(index, snapshot.clock),
             "zones_version": index.drill.zones_version,
             "zones": index.zones_json if include_zones else None,
@@ -609,6 +616,7 @@ def _checkin_summary(incident_id: str) -> dict[str, Any]:
 
 @live_view(["GET"], roles=["controller"])
 def command(request, incident_id: str, principal: Principal):
+    twin_service.warm()
     snapshot = load_snapshot(incident_id, wall_now())
     controller.maybe_auto_replan(snapshot)
     index, now = snapshot.index, snapshot.now
@@ -626,6 +634,7 @@ def command(request, incident_id: str, principal: Principal):
         {
             "incident_id": incident_id,
             "generated_at": iso(now),
+            "incident": incident_json(index),
             "drill": drill_state_json(index, snapshot.clock),
             "fire": fire_json(snapshot.fire),
             "zones_version": index.drill.zones_version,
@@ -661,8 +670,15 @@ def replan(request, incident_id: str, principal: Principal):
 
 @live_view(["POST"], roles=["controller"])
 def approve_proposal(request, proposal_id: str, principal: Principal):
-    note = optional_str(json_body(request), "note", "invalid_request", NOTE_MAX_CHARS)
-    result = controller.decide(proposal_id, True, note, wall_now())
+    body = json_body(request)
+    note = optional_str(body, "note", "invalid_request", NOTE_MAX_CHARS)
+    zone_ids = body.get("zone_ids")
+    if zone_ids is None:
+        result = controller.decide(proposal_id, True, note, wall_now())
+    else:
+        if not isinstance(zone_ids, list) or not zone_ids or not all(isinstance(z, str) for z in zone_ids):
+            return error(400, "invalid_request", "`zone_ids` must be a non-empty list of zone ids.")
+        result = controller.approve_zones(proposal_id, zone_ids, note, wall_now())
     return ok(
         {
             "proposal": proposal_json(result["proposal"]),
@@ -731,3 +747,51 @@ def drill_action(request, incident_id: str, principal: Principal):
     body = json_body(request, "invalid_drill")
     state = set_drill(incident_id, body.get("action"), body.get("replay_start"), body.get("speed"))
     return ok({"drill": state})
+
+
+# ---- twin (controller): monitoring snapshot and what-if (docs/twin-api.md "HTTP adapter") ----
+
+TWIN_FIRE_AHEAD = frozenset({"replay", "frozen"})
+TWIN_RETRY_AFTER_S = "5"
+
+
+def _twin_unavailable(exc: twin_service.TwinUnavailable) -> Response:
+    status = 503 if exc.code in ("warming", "failed") else 409 if exc.code == "finished" else 429
+    response = error(status, f"twin_{exc.code}", exc.detail)
+    if exc.code in ("warming", "busy"):
+        response["Retry-After"] = TWIN_RETRY_AFTER_S
+    return response
+
+
+@live_view(["GET"], roles=["controller"])
+def twin(request, incident_id: str, principal: Principal):
+    try:
+        return ok(twin_service.monitor(load_snapshot(incident_id, wall_now())))
+    except twin_service.TwinUnavailable as exc:
+        return _twin_unavailable(exc)
+
+
+@live_view(["POST"], roles=["controller"])
+def twin_whatif(request, incident_id: str, principal: Principal):
+    body = json_body(request, "invalid_whatif")
+    action_sets = body.get("action_sets")
+    horizon = body.get("horizon_min", 60)
+    fire_ahead = body.get("fire_ahead", "frozen")
+    labels = body.get("labels")
+    if not isinstance(action_sets, list) or not action_sets or not all(isinstance(a, list) for a in action_sets):
+        return error(400, "invalid_whatif", "`action_sets` must be a non-empty list of action lists.")
+    if not _bool_number(horizon) or not 0 < horizon <= twin_service.API_MAX_HORIZON_MIN:
+        return error(400, "invalid_whatif", f"`horizon_min` must be in (0, {twin_service.API_MAX_HORIZON_MIN}].")
+    if fire_ahead not in TWIN_FIRE_AHEAD:
+        return error(400, "invalid_whatif", "`fire_ahead` must be frozen or replay.")
+    if labels is not None and (not isinstance(labels, list) or not all(isinstance(x, str) for x in labels)):
+        return error(400, "invalid_whatif", "`labels` must be a list of strings.")
+    try:
+        report = twin_service.whatif(load_snapshot(incident_id, wall_now()), action_sets, horizon, fire_ahead, labels)
+    except twin_service.TwinUnavailable as exc:
+        return _twin_unavailable(exc)
+    except Exception as exc:
+        if twin_service.is_twin_error(exc):
+            return Response(exc.to_dict(), status=400, headers={"Cache-Control": "no-store"})
+        raise
+    return ok(report)

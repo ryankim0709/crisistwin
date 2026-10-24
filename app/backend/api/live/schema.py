@@ -117,7 +117,7 @@ VALIDATORS: dict[str, dict[str, Any]] = {
             "replay_at": DATE,
             "status": _enum("pending", "approved", "rejected", "auto_approved", "superseded"),
             "policy": _enum("auto_reroute", "needs_controller"),
-            "causes": {"bsonType": "array", "items": _enum("road_block", "fire", "manual")},
+            "causes": {"bsonType": "array", "items": _enum("road_block", "road_report", "fire", "shelter_full", "manual")},
             "changes": {"bsonType": "array"},
             "tasks": {"bsonType": "array"},
             "decided_at": NULLABLE_DATE,

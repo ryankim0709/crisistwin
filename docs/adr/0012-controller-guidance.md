@@ -14,7 +14,7 @@ phone shows the one instruction for its zone. The contract is v2 of
 AGENTS.md forbids turning simulated recommendations into instructions "without an
 explicitly authorized workflow". This ADR is that workflow, and it is scoped to the
 **labeled drill** that replays the 2018 Camp Fire on the real Camp road network
-with a drill clock. Every phone screen and web page says it is a drill. Nothing in
+with a drill clock. The web shows the drill clock and controls; the phone has no drill framing and shows only a small "Exercise" tag when the situation's `incident.mode` is not `live`. Nothing in
 it is presented as a real incident, an official order, or authority approval. Using
 it for a real incident needs a new decision and an integration with the responsible
 authority.
@@ -38,6 +38,20 @@ authority.
   as `auto_approved`. Level changes, new or cleared zones, and new check tasks wait
   for a controller. Every approval, rejection and auto-approval is logged in
   `live_decisions`.
+- Only evidence a person in authority has checked can skip the controller: a road
+  block counts as confirmed (cause `road_block`) when a controller confirmed it or a
+  responder reported it. A block backed only by civilian reports (`road_report`), a
+  full shelter (`shelter_full`), a zone that loses its last open route
+  (`route_lost`) and a route the planner marks as exposed to the fire always wait
+  for the controller, so the crowd can never publish guidance on its own. This holds
+  whatever triggered the plan: a zone whose guidance differs between plans with and
+  without the crowd-only blocks waits for the controller, even when the replan was
+  caused by a confirmed block elsewhere or a fire update.
+- **Partial approval:** the controller can approve some zones of a pending proposal
+  (for example every evacuate-now zone first) without waiting to review the rest.
+  The approved part becomes its own approved proposal with `parent_id` set; the
+  original stays pending with the remaining changes, and its tasks are created when
+  the last part is approved. Rejection is whole.
 
 ## Per-zone guidance and location
 

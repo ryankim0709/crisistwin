@@ -5,9 +5,7 @@ import Foundation
 /// `LiveJSON`'s key strategies.
 
 enum LiveIncident {
-    /// The P0 live drill on the Camp road network (ADR 0011). Not a real incident.
     static let defaultId = "camp-2018-drill"
-    static let drillLabel = "Drill on the 2018 Camp Fire road network. Not a real incident."
 }
 
 enum LiveRole: String, Codable {
@@ -239,7 +237,7 @@ struct ReportPrefill: Equatable {
     var taskId: String?
 }
 
-// MARK: - v2: drill, situation, guidance, check-ins (ADR 0012)
+// MARK: - v2: situation, guidance, check-ins (ADR 0012)
 
 /// Polygon or MultiPolygon area, normalized to polygons -> rings -> points. Encodes as GeoJSON
 /// `MultiPolygon`. The first ring of each polygon is the exterior; the rest are holes.
@@ -272,13 +270,13 @@ struct LiveGeometry: Codable, Equatable {
     }
 }
 
-/// The drill clock as the phone sees it. `replayNow` is 2018 drill time, not wall time.
-struct DrillClock: Codable, Equatable {
-    var label: String
-    var replayNow: Date
-    /// Drill seconds per wall second; 0 means paused.
-    var speed: Double
-    var running: Bool
+/// The served incident. `mode` is "live" for a real incident; anything else is an exercise and
+/// shows a small tag (data-integrity floor).
+struct IncidentInfo: Codable, Equatable {
+    var mode: String
+    var name: String?
+
+    var isExercise: Bool { mode != "live" }
 }
 
 /// An evacuation zone. The phone finds its own zone on the device (`ZoneLocator`).
@@ -304,6 +302,24 @@ struct GuidanceDestination: Codable, Equatable, Identifiable {
     var name: String
     var kind: DestinationKind
     var coord: LonLat
+
+    /// The name up to " via ", e.g. "Exit west" for "Exit west via Honey Run Road": the road to
+    /// leave by is already in the headline, so the destination never names a second one.
+    var shortName: String {
+        guard let range = name.range(of: " via ") else { return name }
+        let head = name[..<range.lowerBound].trimmingCharacters(in: .whitespaces)
+        return head.isEmpty ? name : head
+    }
+}
+
+extension ZoneGuidance {
+    /// The same guidance with the destination named by `shortName`, for views that label it
+    /// beside a headline that already names the road out.
+    var withShortDestinationName: ZoneGuidance {
+        var copy = self
+        if let short = destination?.shortName { copy.destination?.name = short }
+        return copy
+    }
 }
 
 struct GuidanceRoute: Codable, Equatable {
@@ -338,6 +354,9 @@ struct ZoneGuidance: Codable, Equatable, Identifiable {
     var proposalId: String?
 
     var id: String { zoneId }
+
+    /// When the guidance was computed, on the incident clock (`Situation.incidentNow`).
+    var asOf: Date { replayAt ?? publishedAt }
 }
 
 enum FireMethod: String, Codable {
@@ -410,7 +429,8 @@ struct TaskResponse: Codable, Equatable {
 struct Situation: Codable, Equatable {
     var incidentId: String
     var generatedAt: Date
-    var drill: DrillClock
+    /// Nil from an older server; treated as a real incident.
+    var incident: IncidentInfo?
     var zonesVersion: String
     /// Nil when requested with `?zones=0`; keep the cached zones while `zonesVersion` matches.
     var zones: [LiveZone]?
@@ -421,14 +441,50 @@ struct Situation: Codable, Equatable {
     /// Responders: open and accepted tasks for this device. Civilians: empty.
     var tasks: [CheckTask]
     var myCheckin: CheckIn?
+    /// The exercise clock, when one runs. Used only to measure ages; never displayed.
+    var drill: DrillClock?
+
+    /// The incident clock at wall time `now`: the exercise clock when one runs, else wall time.
+    /// Ages ("12 min ago") are measured against it so drill and wall times never mix.
+    func incidentNow(at now: Date = Date()) -> Date {
+        guard let drill, let replayNow = drill.replayNow else { return now }
+        let rate = drill.running == false ? 0 : (drill.speed ?? 1)
+        return replayNow.addingTimeInterval(max(0, now.timeIntervalSince(generatedAt)) * rate)
+    }
+}
+
+/// `situation.drill`: decoded only to measure ages against the exercise clock.
+struct DrillClock: Codable, Equatable {
+    var replayNow: Date?
+    var speed: Double?
+    var running: Bool?
+}
+
+/// "just now", "12 min ago", "1 h 5 min ago" from `from` to `to`.
+enum RelativeAge {
+    static func text(from date: Date, to now: Date) -> String {
+        let minutes = Int(max(0, now.timeIntervalSince(date)) / 60)
+        if minutes < 1 { return "just now" }
+        if minutes < 60 { return "\(minutes) min ago" }
+        let hours = minutes / 60, rest = minutes % 60
+        return rest == 0 ? "\(hours) h ago" : "\(hours) h \(rest) min ago"
+    }
 }
 
 /// A change to this device's zone guidance, for a one-time banner and haptic.
 struct GuidanceChange: Equatable, Identifiable {
     /// Unique per change, e.g. "<zone_id>#<version>".
     var id: String
-    /// Short user-facing text, e.g. "New route: leave via Pentz Road".
+    /// The instruction first, e.g. "Evacuate now · Leave via Skyway Road" or "New route: Exit west".
     var message: String
+    /// The published reason, shown second when it fits.
+    var detail: String?
+    /// The new level.
+    var level: GuidanceLevel = .none
+    /// Same level as before, with a new destination or route.
+    var isReroute = false
+    /// The level became Evacuate now.
+    var isEscalation = false
 }
 
 enum LiveJSON {

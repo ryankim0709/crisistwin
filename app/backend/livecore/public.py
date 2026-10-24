@@ -3,6 +3,10 @@
 Contract: docs/live-reports.md "Rules". Fading and staleness use wall time, since reports
 are real-time observations even during a drill. All counting is deterministic; an LLM never
 sets status or confidence.
+
+Client clocks are not trusted: party independence compares server ``received_at``, and every
+ordering or age uses ``effective_at(r) = min(observed_at, received_at)``, so a backdated report
+cannot pose as a separate party and a future-dated one can never sort as newest.
 """
 
 from __future__ import annotations
@@ -16,7 +20,7 @@ from .drill import FireObservation
 from .geo import LonLat, haversine_m
 
 SAME_PARTY_WINDOW_S = 120
-"""Reports within this many seconds and SAME_PARTY_RADIUS_M of each other are one party."""
+"""Reports received (server time) within this many seconds and SAME_PARTY_RADIUS_M of each other are one party."""
 SAME_PARTY_RADIUS_M = 100
 PUBLIC_MIN_CIVILIAN_PARTIES = 3
 CLUSTER_RADIUS_M = 200
@@ -105,11 +109,20 @@ class RoadStatus:
     public: bool
 
 
+def effective_at(r: ReportFact) -> datetime:
+    """``min(observed_at, received_at)``: the time used for ordering and age."""
+    return min(r.observed_at, r.received_at)
+
+
+def _order(r: ReportFact) -> tuple[datetime, str]:
+    return (effective_at(r), r.id)
+
+
 def same_party(a: ReportFact, b: ReportFact) -> bool:
-    """Same ``party_key``, or within SAME_PARTY_WINDOW_S and SAME_PARTY_RADIUS_M (observed_at)."""
+    """Same ``party_key``, or received within SAME_PARTY_WINDOW_S and SAME_PARTY_RADIUS_M."""
     if a.party_key == b.party_key:
         return True
-    return (abs((a.observed_at - b.observed_at).total_seconds()) <= SAME_PARTY_WINDOW_S
+    return (abs((a.received_at - b.received_at).total_seconds()) <= SAME_PARTY_WINDOW_S
             and haversine_m(a.coord, b.coord) <= SAME_PARTY_RADIUS_M)
 
 
@@ -124,27 +137,28 @@ def _is_responder(r: ReportFact) -> bool:
 def independent_counts(reports: Sequence[ReportFact]) -> tuple[int, int]:
     """``(independent civilian parties, responder reports)`` among the non-dismissed reports.
 
-    Civilian reports are grouped into parties with ``same_party`` (transitively). A civilian
-    party that is the same party as a responder report is not independent and is not counted.
+    Each civilian ``party_key`` is one candidate, represented by its first report (server
+    ``received_at``). Keys are taken in that order; a key is tainted (not counted) when its
+    first report is ``same_party`` with any responder report; otherwise it folds into the first
+    counted anchor whose first report is directly ``same_party`` with its own, or becomes a new
+    counted anchor. Not transitive: a steady crowd arriving over time is not chained into one.
     """
     live = [r for r in reports if r.status != "dismissed"]
     responders = [r for r in live if _is_responder(r)]
-    civilians = sorted((r for r in live if not _is_responder(r)), key=lambda r: (r.observed_at, r.id))
-    parent = list(range(len(civilians)))
-
-    def find(i: int) -> int:
-        while parent[i] != i:
-            parent[i] = parent[parent[i]]
-            i = parent[i]
-        return i
-
-    for i in range(len(civilians)):
-        for j in range(i + 1, len(civilians)):
-            if same_party(civilians[i], civilians[j]):
-                parent[find(i)] = find(j)
-    tainted = {find(i) for i, c in enumerate(civilians) if any(same_party(c, r) for r in responders)}
-    parties = {find(i) for i in range(len(civilians))} - tainted
-    return len(parties), len(responders)
+    firsts: dict[str, ReportFact] = {}
+    for r in live:
+        if _is_responder(r):
+            continue
+        have = firsts.get(r.party_key)
+        if have is None or (r.received_at, r.id) < (have.received_at, have.id):
+            firsts[r.party_key] = r
+    anchors: list[ReportFact] = []
+    for first in sorted(firsts.values(), key=lambda r: (r.received_at, r.id)):
+        if any(same_party(first, r) for r in responders):
+            continue
+        if not any(same_party(a, first) for a in anchors):
+            anchors.append(first)
+    return len(anchors), len(responders)
 
 
 def confidence(kind: str, last_corroborated_at: datetime, wall_now: datetime, base: float = 1.0) -> float:
@@ -170,7 +184,7 @@ def cluster(reports: Sequence[ReportFact]) -> list[list[ReportFact]]:
     CLUSTER_RADIUS_M for the rest. Dismissed and resolved reports are dropped."""
     keyed: dict[tuple[str, str, str], list[ReportFact]] = {}
     loose: list[ReportFact] = []
-    for r in sorted(_live(reports), key=lambda r: (r.observed_at, r.id)):
+    for r in sorted(_live(reports), key=_order):
         if r.kind in ROAD_KINDS and r.segment_id:
             keyed.setdefault(("seg", r.segment_id, r.kind), []).append(r)
         elif r.kind == "shelter_full" and r.destination_id:
@@ -187,23 +201,46 @@ def cluster(reports: Sequence[ReportFact]) -> list[list[ReportFact]]:
         else:
             seeds.append([r])
     groups.extend(seeds)
-    groups.sort(key=lambda g: (g[0].observed_at, g[0].id))
+    groups.sort(key=lambda g: _order(g[0]))
     return groups
 
 
+def _newest(rs: Sequence[ReportFact]) -> datetime:
+    return max(effective_at(r) for r in rs)
+
+
+def _confirmed(rs: Sequence[ReportFact]) -> bool:
+    return any(r.status == "confirmed" for r in rs)
+
+
+def _overrides(newer: Sequence[ReportFact], older: Sequence[ReportFact]) -> bool:
+    """Whether contradicting reports ``newer`` override ``older`` on one segment.
+
+    Yes when ``newer`` is controller confirmed. Otherwise only if ``older`` is not confirmed,
+    ``newer`` is more recent (effective time), no report pair is directly ``same_party``, and
+    ``newer`` is at least as strong: as many independent civilian parties, or a responder
+    report where ``older`` has none.
+    """
+    if not newer:
+        return False
+    if not older or _confirmed(newer):
+        return True
+    if _confirmed(older) or _newest(newer) <= _newest(older):
+        return False
+    if any(same_party(n, o) for n in newer for o in older):
+        return False
+    n_civ, n_resp = independent_counts(newer)
+    o_civ, o_resp = independent_counts(older)
+    return n_civ >= o_civ or (n_resp > 0 and o_resp == 0)
+
+
 def _contradicted(group: Sequence[ReportFact], live: Sequence[ReportFact]) -> bool:
-    """A newer contradicting report on the same segment from a party independent of the group."""
-    kind = group[0].kind
-    other = CONTRADICTS.get(kind)
+    """Contradicting reports on the same segment that override the group (``_overrides``)."""
+    other = CONTRADICTS.get(group[0].kind)
     seg = group[0].segment_id
     if other is None or seg is None:
         return False
-    last = max(r.observed_at for r in group)
-    return any(
-        c.kind == other and c.segment_id == seg and c.observed_at > last
-        and not any(same_party(c, r) for r in group)
-        for c in live
-    )
+    return _overrides([c for c in live if c.kind == other and c.segment_id == seg], group)
 
 
 def _mean_coord(group: Sequence[ReportFact]) -> LonLat:
@@ -222,12 +259,12 @@ def public_items(
         head = group[0]
         kind = head.kind
         civ, resp = independent_counts(group)
-        confirmed = any(r.status == "confirmed" for r in group)
-        last = max(r.observed_at for r in group)
+        confirmed = _confirmed(group)
+        last = _newest(group)
         conf = confidence(kind, last, wall_now)
         if not is_public(kind, civ, resp, confirmed, conf, _contradicted(group, live)):
             continue
-        latest = max(group, key=lambda r: (r.observed_at, r.id))
+        latest = max(group, key=_order)
         if kind in ROAD_KINDS and head.segment_id:
             key = head.segment_id
         elif kind == "shelter_full" and head.destination_id:
@@ -247,7 +284,7 @@ def public_items(
             responder_reports=resp,
             controller_confirmed=confirmed,
             confidence=round(conf, 4),
-            first_reported_at=min(r.observed_at for r in group),
+            first_reported_at=min(effective_at(r) for r in group),
             last_observed_at=last,
             report_ids=tuple(r.id for r in group),
             destination_id=head.destination_id if kind == "shelter_full" else None,
@@ -257,10 +294,11 @@ def public_items(
 
 def road_state(reports: Sequence[ReportFact], wall_now: datetime) -> list[RoadStatus]:
     """Per-segment status from road kinds (blocked/partial -> blocked, slow/heavy_traffic -> slow,
-    newer independent road_passable -> open); ``public`` mirrors ``is_public``.
+    road_passable that overrides the block -> open); ``public`` mirrors ``is_public``.
 
-    A controller-confirmed block stays blocked until a ``road_passable`` report is itself
-    controller confirmed; otherwise a newer independent ``road_passable`` opens the road.
+    ``road_passable`` opens a blocked segment only per ``_overrides``: it is controller
+    confirmed, or the block is unconfirmed and the passable reports are newer (effective time),
+    from parties distinct from the blockers, and at least as strong as the block.
     """
     by_segment: dict[str, list[ReportFact]] = {}
     for r in _live(reports):
@@ -273,32 +311,21 @@ def road_state(reports: Sequence[ReportFact], wall_now: datetime) -> list[RoadSt
         slow = [r for r in group if r.kind == "heavy_traffic" or (r.kind == "road_blocked" and r.severity == "slow")]
         passable = [r for r in group if r.kind == "road_passable"]
 
-        def newest(rs: list[ReportFact]) -> datetime:
-            return max(r.observed_at for r in rs)
-
-        def confirmed(rs: list[ReportFact]) -> bool:
-            return any(r.status == "confirmed" for r in rs)
-
         status: RoadStatusValue
         chosen: list[ReportFact]
         kind: str
-        opens = bool(passable) and (
-            not blocked
-            or confirmed(passable)
-            or (not confirmed(blocked) and newest(passable) > newest(blocked)
-                and not any(same_party(p, b) for p in passable for b in blocked))
-        )
+        opens = _overrides(passable, blocked)
         if blocked and not opens:
             status, chosen, kind = "blocked", blocked, "road_blocked"
-        elif opens and not (slow and newest(slow) > newest(passable)):
+        elif opens and not (slow and _newest(slow) > _newest(passable)):
             status, chosen, kind = "open", passable, "road_passable"
         elif slow:
             status, chosen, kind = "slow", slow, "heavy_traffic"
         else:
             status, chosen, kind = "unknown", group, group[0].kind
         civ, resp = independent_counts(chosen)
-        is_confirmed = confirmed(chosen)
-        last = newest(chosen)
+        is_confirmed = _confirmed(chosen)
+        last = _newest(chosen)
         conf = confidence(kind, last, wall_now)
         out.append(RoadStatus(
             segment_id=seg,
@@ -308,7 +335,7 @@ def road_state(reports: Sequence[ReportFact], wall_now: datetime) -> list[RoadSt
             independent_parties=civ,
             responder_reports=resp,
             last_observed_at=last,
-            report_ids=tuple(r.id for r in sorted(chosen, key=lambda r: (r.observed_at, r.id))),
+            report_ids=tuple(r.id for r in sorted(chosen, key=_order)),
             decided_by="controller" if is_confirmed else None,
             public=is_public(kind, civ, resp, is_confirmed, conf, False),
         ))

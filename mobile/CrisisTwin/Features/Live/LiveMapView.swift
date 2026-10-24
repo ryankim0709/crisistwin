@@ -30,7 +30,7 @@ struct LiveMapView: View {
     /// Names sit beside markers once zoomed in enough that they no longer crowd each other.
     @State private var showsLabels = false
 
-    /// The P0 drill area around Paradise, CA; also the report sheet's starting region.
+    /// The Paradise-area map region, CA; also the report sheet's starting region.
     static let campRegion = MKCoordinateRegion(
         center: CLLocationCoordinate2D(latitude: 39.76, longitude: -121.60),
         latitudinalMeters: 6_000, longitudinalMeters: 6_000)
@@ -302,7 +302,7 @@ struct LiveCompactButtonStyle: ButtonStyle {
         configuration.label
             .font(.subheadline.weight(.semibold))
             .multilineTextAlignment(.center)
-            .foregroundStyle(filled ? Color(light: 0xFFFFFF, dark: 0x0E1A16) : Color.ctBrand)
+            .foregroundStyle(filled ? Color.ctOnTone : Color.ctBrand)
             .padding(.horizontal, 10)
             .frame(maxWidth: .infinity, minHeight: 44)
             .background(filled ? Color.ctBrand : Color.ctSurface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))

@@ -13,15 +13,19 @@ from typing import Literal
 from .drill import Drill
 from .fire import FireEstimate
 from .geo import LonLat, distance_km, haversine_m
-from .public import ReportFact, RoadStatus
+from .public import ReportFact, RoadStatus, effective_at
 from .routing import Route, best_routes
 
 EVACUATE_NOW_KM = 3.0
 """Zone within this distance of the fire estimate -> ``evacuate_now``."""
 BE_READY_KM = 8.0
 """Zone within this distance (and beyond EVACUATE_NOW_KM) -> ``be_ready``."""
-PLANNER_VERSION = "planner-v1"
+PLANNER_VERSION = "planner-v2"
 """Recorded in proposal ``inputs.planner_version``; bump when the rules change."""
+EXPOSED_REASON = "Least-exposure route; passes the fire estimate"
+"""Reason for a zone whose only route has a road inside or crossing the fire estimate."""
+EXPOSED_NEAR_REASON = "Least-exposure route; passes near the fire estimate"
+"""Reason for a zone whose only route stays outside the fire estimate but within its buffer."""
 RESPONDER_FRESH_S = 900
 """Responder positions older than this (wall seconds) are not used to suggest an assignee."""
 
@@ -45,6 +49,13 @@ class ZoneGuidance:
     reason_code: ReasonCode
     fire_distance_km: float | None
     """Zone-to-fire distance used for the level; None without a fire estimate."""
+    exposed: bool = False
+    """The route is a least-exposure route through the fire estimate or its buffer; a
+    controller must approve it. Never cleared by swapping in another route."""
+
+    def __post_init__(self) -> None:
+        if self.route is not None and self.route.exposed and not self.exposed:
+            object.__setattr__(self, "exposed", True)
 
     @property
     def via(self) -> tuple[str, ...]:
@@ -97,8 +108,10 @@ def plan(
 
     Level from ``level_for_distance(distance_km(zone, fire.geometry))``; routes from
     ``best_routes(drill, blocked_segment_ids, fire.geometry, full_destination_ids)`` for
-    zones whose level is not ``none``. ``replay_now`` is recorded by callers; the plan
-    uses only ``fire`` for time-dependent input.
+    zones whose level is not ``none``. A least-exposure route sets ``exposed`` and the reason
+    EXPOSED_REASON (EXPOSED_NEAR_REASON when it only enters the buffer); ``no_route`` only
+    when even that pass finds nothing. ``replay_now`` is recorded by callers; the plan uses
+    only ``fire`` for time-dependent input.
     """
     geometry = fire.geometry
     distances: dict[str, float | None] = {
@@ -125,7 +138,10 @@ def plan(
             reason, code = f"Fire estimate within {_km(EVACUATE_NOW_KM)} km", "fire_within_evacuate_km"
         else:
             reason, code = f"Fire estimate within {_km(BE_READY_KM)} km", "fire_within_ready_km"
-        out.append(ZoneGuidance(zone.id, level, route.destination_id, route, False, reason, code, dist))
+        if route.exposed:
+            reason = EXPOSED_REASON if route.passes_fire else EXPOSED_NEAR_REASON
+        out.append(ZoneGuidance(zone.id, level, route.destination_id, route, False, reason, code, dist,
+                                exposed=route.exposed))
     return out
 
 
@@ -161,7 +177,7 @@ def suggest_tasks(
         group = by_segment.get(seg)
         if not group:
             continue
-        group.sort(key=lambda r: (r.observed_at, r.id))
+        group.sort(key=lambda r: (effective_at(r), r.id))
         coord = group[-1].coord
         name = next((r.segment_name for r in group if r.segment_name), None) or "an unnamed road"
         n = len(group)
