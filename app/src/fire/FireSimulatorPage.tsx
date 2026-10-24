@@ -15,6 +15,10 @@ import FireDock from "./ui/FireDock";
 import FireLegend from "./ui/FireLegend";
 import { formatDuration } from "./ui/format";
 import { useFirePlayback } from "./useFirePlayback";
+import { LIVE_SNAPSHOT_VERSION, type LiveSnapshot } from "../live/contracts";
+import { LiveShareToggle } from "../live/LiveShareToggle";
+import { fireRings, hectares } from "../live/snapshot";
+import { newSessionId, useLiveBroadcast } from "../live/useLiveBroadcast";
 import {
   RegionUnavailableError,
   fetchRegionCatalog,
@@ -626,6 +630,35 @@ export default function FireSimulatorPage() {
 
   // Frame the board inside the part of the stage the floating overlay leaves uncovered.
   const hasRun = run !== null;
+
+  // Resident app broadcast: the footprint of the latest 15-minute frame at the playback time.
+  const liveSessionId = useMemo(() => (run ? newSessionId() : null), [run]);
+  const liveMinute = Math.floor(playback.t);
+  const playing = playback.playing;
+  const getLiveSnapshot = useCallback((): LiveSnapshot | null => {
+    if (!run || !liveSessionId) return null;
+    const minute = Math.min(getTime(), horizonMinutes);
+    const frame = [...run.frames].reverse().find((f) => f.elapsedMinutes <= minute);
+    return {
+      version: LIVE_SNAPSHOT_VERSION,
+      source: "fire_model",
+      session_id: liveSessionId,
+      evidence_class: "simulated",
+      playback: playing ? "playing" : minute >= horizonMinutes ? "finished" : "paused",
+      area_name: region?.name ?? "Custom area",
+      minute: Math.round(minute),
+      horizon_minutes: horizonMinutes,
+      wind: { from_degrees: run.scenario.windFromDegrees, speed_mph: run.scenario.windSpeedMph },
+      bbox: null,
+      fire: {
+        perimeters: frame ? fireRings(frame.perimeters) : [],
+        burned_area_ha: hectares(frame?.burnedAreaSquareMeters ?? 0),
+      },
+      zones: [],
+      agent: null,
+    };
+  }, [run, liveSessionId, getTime, playing, horizonMinutes, region]);
+  const liveBroadcast = useLiveBroadcast(getLiveSnapshot, `${liveSessionId}:${liveMinute}:${playing}`);
   useEffect(() => {
     const stage = stageRef.current;
     const overlay = stage?.querySelector<HTMLElement>(".fr-overlay");
@@ -1095,6 +1128,15 @@ export default function FireSimulatorPage() {
                 />
                 <label htmlFor="show-fuel">Show fuel layer</label>
               </div>
+
+              <LiveShareToggle
+                id="fire-live-share"
+                className="fr-toggle-row live-share"
+                enabled={liveBroadcast.enabled}
+                onChange={liveBroadcast.setEnabled}
+                status={liveBroadcast.status}
+                idleText="Shares the fire with the resident app once you place an ignition."
+              />
 
               <Button
                 variant="secondary"

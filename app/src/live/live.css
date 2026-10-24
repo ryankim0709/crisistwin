@@ -1,0 +1,26 @@
+.live-share {
+  flex-wrap: wrap;
+}
+
+.live-share__status {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: inherit;
+  opacity: 0.75;
+}
+
+.live-share__status[data-state="error"] {
+  opacity: 1;
+}
+
+/* Top of the dispatch agent panel; right padding clears the panel's collapse button. */
+.dispatch-live-share {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 52px 10px 16px;
+  border-bottom: 1px solid #d4d8ca;
+  font-size: 13px;
+}

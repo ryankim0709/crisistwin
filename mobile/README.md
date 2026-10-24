@@ -3,8 +3,8 @@
 The civilian CrisisTwin app, for households planning ahead and during an
 emergency; the web workspace serves planners (see
 [ADR 0010](../docs/adr/0010-civilian-ios-app.md)). Its tabs are **Home**
-(official-alerts status, one-tap actions, plan summary, and an About sheet with
-the API readiness check), **My Plan**, and **Practice**. Native SwiftUI, targeting iPhone and iPad on
+(official-alerts status, one-tap actions, plan and family summaries, and an About sheet with
+the API readiness check), **Live drill**, **Family**, **My Plan**, and **Practice**. Native SwiftUI, targeting iPhone and iPad on
 **iOS 17.0+**. Use **Xcode 16.2+** with its bundled Swift compiler in **Swift 5
 language mode**. Only Apple frameworks are used. There is no package install or
 project generation step; Swift Package Manager is the choice for future Swift
@@ -90,6 +90,30 @@ sharing opens Messages for the contacts' numbers, or the share sheet where
 Messages is unavailable, such as the simulator. The app never sends anything on
 its own or reads the user's location.
 
+### Live drill
+
+Shows, natively in MapKit, the simulation a planner is playing on the web `/fire` or
+`/dispatch` page with **Share with resident app** on (see
+[ADR 0016](../docs/adr/0016-resident-live-and-family.md)). The app polls `GET /api/live`
+every 3 seconds in the foreground and draws the simulated fire, the household's home and
+meeting points, and, while the dispatch agent runs, the household's zone, its assigned exit
+and route. The guidance card says what the simulation tells that zone: no order yet, leave
+now, wait about N minutes (the route is backed up and the fire is far), route blocked, zone
+evacuated, or fire in the zone, and "route changed" when the agent redirects it. Meeting
+points the simulated fire reaches are marked and the first clear one is offered. Set a home
+location on the tab; it stays on the phone, and the zone is worked out locally. A banner
+says it is a simulation drill, not an emergency service. Needs the Docker stack and a web
+page broadcasting.
+
+### Family
+
+Create a family or join one with its 8-character code. Members share one primary and
+backup meeting point and post a status (safe, on the way, at meeting point, need help);
+no location is shared. Meeting points are edited in My Plan and synced to the family; a
+change by another member replaces the points on this phone. The membership token is kept in
+the Keychain; the family refreshes every 10 seconds in the foreground. Contract:
+[ADR 0016](../docs/adr/0016-resident-live-and-family.md).
+
 Release does not include `Local.xcconfig` and has empty `API_BASE_URL` and `WEB_BASE_URL`. Set an
 HTTPS origin in the Release configuration before distribution. Until then the
 app shows a configuration error instead of claiming connectivity. App Store
@@ -104,20 +128,22 @@ mobile/
   CrisisTwin/
     App/                 SwiftUI app entry point and tab navigation
     Configuration/       Validated API and web origins from the app bundle
-    Networking/          Health DTO, HTTP client, and useful error messages
+    Networking/          Health DTO, HTTP clients (health, JSON backend calls), error messages
     Features/
       Home/              Civilian home and the About sheet with API readiness states
       Scenarios/         Practice tab: embedded web map with loading and error states
       Plan/              Meeting plan model and on-device store, plan tab, point editor
+      Live/              Live drill: broadcast model, poller, map and household guidance
+      Family/            Family model, Keychain membership, server store, family tab
     Resources/           Info.plist and adaptive color assets
 ```
 
 The workspace follows the web app's cream/green palette with dark-mode variants,
 system text styles, labeled controls, and status icons accompanied by text.
-The Practice tab embeds the web map. My Plan uses a native MapKit map for the
-user's own meeting points. A Swift fire model, checking meeting points against
-the simulation, traffic simulation, scenario storage/sync, authentication, and
-notifications are not implemented. No fixtures or invented simulation metrics are displayed.
+The Practice tab embeds the web map. My Plan and Live drill use native MapKit maps.
+Live drill checks meeting points against the broadcast fire; there is no Swift fire model.
+Push notifications, user accounts beyond family tokens, and per-incident broadcasts are not
+implemented. No fixtures or invented simulation metrics are displayed.
 
 ### Health boundary
 
@@ -157,6 +183,9 @@ loading, error and retry states were checked, and the then-current `/maps` page 
 `docker compose up` rendered with its fire controls. The tab now loads `/fire`
 instead; that has not been run on a simulator. It has not been checked on a
 physical device.
+
+Live drill and Family have not been built or run; the new backend endpoints have not been
+exercised.
 
 My Plan was run on the same simulator: Apple Maps search, tap-to-place, save,
 reload after relaunch, the contact picker, and the share-sheet fallback were

@@ -31,10 +31,15 @@ The workspace overview (`/overview`) and `/maps` pages were removed
 
 Also in the repository:
 
-- **Backend** (`app/backend/`): Django REST API with `GET /api/health`, `/api/landscapes` (prebuilt landscapes from MongoDB), `/api/dispatch/decide` and `/api/replay/explain`. See [API contract](app/backend/README.md).
+- **Backend** (`app/backend/`): Django REST API with `GET /api/health`, `/api/landscapes` (prebuilt landscapes from MongoDB), `/api/dispatch/decide`, `/api/replay/explain`, `/api/live` (resident-app drill feed) and `/api/families`. See [API contract](app/backend/README.md).
 - **Fire watch agent** (`agent/`): a standalone Python package that drafts evacuation advisories from satellite detections for a human to approve; never notifies residents. [README](agent/README.md), [ADR 0008](docs/adr/0008-fire-watch-agent.md).
 - **Historical replay simulator** (`sim/`): stdlib Python fire hindcast and evacuation traffic model that produces replay bundles. [README](sim/README.md).
-- **iOS app** (`mobile/`): SwiftUI civilian app scaffold. [README](mobile/README.md), [ADR 0010](docs/adr/0010-civilian-ios-app.md).
+- **iOS app** (`mobile/`): SwiftUI resident app. Its **Live drill** tab shows, on a native map, the fire a planner is
+  playing on `/fire` or `/dispatch` (the pages post it to `POST /api/live/broadcast` while **Share with resident app** is
+  on) and, while the dispatch agent runs, what the simulation tells the household's zone. **Family** lets a household
+  create or join a family by code to share meeting points and status. Everything shown is a labelled simulation drill,
+  not an alert. [README](mobile/README.md), [ADR 0010](docs/adr/0010-civilian-ios-app.md),
+  [ADR 0016](docs/adr/0016-resident-live-and-family.md).
 
 Not implemented: persistent scenarios, live incident integrations, a validated evacuation model.
 The fire model has no suppression and is unvalidated at demo settings.
