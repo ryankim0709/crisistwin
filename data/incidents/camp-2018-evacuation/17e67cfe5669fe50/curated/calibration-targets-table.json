@@ -1,0 +1,705 @@
+{
+ "targets": [
+  {
+   "target_id": "nist-t4:paradise:population",
+   "metric": "population",
+   "value": 26543,
+   "unit": "persons",
+   "location": "Paradise",
+   "time_window_local": null,
+   "temporal_role": "pre_event",
+   "evidence_class": "observed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=66; Table 4; p. 28",
+   "note": "NIST cites ACS 2014-2018 5-year data for OHU"
+  },
+  {
+   "target_id": "nist-t4:paradise:occupied_housing_units",
+   "metric": "occupied_housing_units",
+   "value": 11118,
+   "unit": "count_ohu",
+   "location": "Paradise",
+   "time_window_local": null,
+   "temporal_role": "pre_event",
+   "evidence_class": "observed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=66; Table 4; p. 28; ref [34] ACS 2014-2018",
+   "note": null
+  },
+  {
+   "target_id": "nist-t4:paradise:max_egress_routes",
+   "metric": "max_egress_routes",
+   "value": 5,
+   "unit": "count_routes",
+   "location": "Paradise",
+   "time_window_local": null,
+   "temporal_role": "pre_event",
+   "evidence_class": "reconstructed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=66; Table 4; p. 28",
+   "note": null
+  },
+  {
+   "target_id": "nist-t4:paradise:max_egress_lanes",
+   "metric": "max_egress_lanes_including_contraflow",
+   "value": 12,
+   "unit": "count_lanes",
+   "location": "Paradise",
+   "time_window_local": null,
+   "temporal_role": "pre_event",
+   "evidence_class": "reconstructed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=66; Table 4; p. 28",
+   "note": null
+  },
+  {
+   "target_id": "nist-t4:magalia:population",
+   "metric": "population",
+   "value": 12671,
+   "unit": "persons",
+   "location": "Magalia",
+   "time_window_local": null,
+   "temporal_role": "pre_event",
+   "evidence_class": "observed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=66; Table 4; p. 28",
+   "note": "NIST cites ACS 2014-2018 5-year data for OHU"
+  },
+  {
+   "target_id": "nist-t4:magalia:occupied_housing_units",
+   "metric": "occupied_housing_units",
+   "value": 5054,
+   "unit": "count_ohu",
+   "location": "Magalia",
+   "time_window_local": null,
+   "temporal_role": "pre_event",
+   "evidence_class": "observed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=66; Table 4; p. 28; ref [34] ACS 2014-2018",
+   "note": null
+  },
+  {
+   "target_id": "nist-t4:magalia:max_egress_routes",
+   "metric": "max_egress_routes",
+   "value": 2,
+   "unit": "count_routes",
+   "location": "Magalia",
+   "time_window_local": null,
+   "temporal_role": "pre_event",
+   "evidence_class": "reconstructed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=66; Table 4; p. 28",
+   "note": null
+  },
+  {
+   "target_id": "nist-t4:magalia:max_egress_lanes",
+   "metric": "max_egress_lanes_including_contraflow",
+   "value": 4,
+   "unit": "count_lanes",
+   "location": "Magalia",
+   "time_window_local": null,
+   "temporal_role": "pre_event",
+   "evidence_class": "reconstructed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=66; Table 4; p. 28",
+   "note": null
+  },
+  {
+   "target_id": "nist-t4:concow:population",
+   "metric": "population",
+   "value": 743,
+   "unit": "persons",
+   "location": "Concow",
+   "time_window_local": null,
+   "temporal_role": "pre_event",
+   "evidence_class": "observed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=66; Table 4; p. 28",
+   "note": "NIST cites ACS 2014-2018 5-year data for OHU"
+  },
+  {
+   "target_id": "nist-t4:concow:occupied_housing_units",
+   "metric": "occupied_housing_units",
+   "value": 327,
+   "unit": "count_ohu",
+   "location": "Concow",
+   "time_window_local": null,
+   "temporal_role": "pre_event",
+   "evidence_class": "observed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=66; Table 4; p. 28; ref [34] ACS 2014-2018",
+   "note": null
+  },
+  {
+   "target_id": "nist-t4:concow:max_egress_routes",
+   "metric": "max_egress_routes",
+   "value": 1,
+   "unit": "count_routes",
+   "location": "Concow",
+   "time_window_local": null,
+   "temporal_role": "pre_event",
+   "evidence_class": "reconstructed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=66; Table 4; p. 28",
+   "note": null
+  },
+  {
+   "target_id": "nist-t4:concow:max_egress_lanes",
+   "metric": "max_egress_lanes_including_contraflow",
+   "value": 2,
+   "unit": "count_lanes",
+   "location": "Concow",
+   "time_window_local": null,
+   "temporal_role": "pre_event",
+   "evidence_class": "reconstructed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=66; Table 4; p. 28",
+   "note": null
+  },
+  {
+   "target_id": "nist-t6:concow:lanes_used",
+   "metric": "max_egress_lanes_used_during_evacuation",
+   "value": 1,
+   "unit": "count_lanes",
+   "location": "Concow",
+   "time_window_local": [
+    "2018-11-08",
+    null
+   ],
+   "temporal_role": "during_event",
+   "evidence_class": "reconstructed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=71; Table 6; p. 33",
+   "note": null
+  },
+  {
+   "target_id": "nist-t6:concow:routes_used",
+   "metric": "max_egress_routes_used_during_evacuation",
+   "value": 1,
+   "unit": "count_routes",
+   "location": "Concow",
+   "time_window_local": [
+    "2018-11-08",
+    null
+   ],
+   "temporal_role": "during_event",
+   "evidence_class": "reconstructed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=71; Table 6; p. 33",
+   "note": null
+  },
+  {
+   "target_id": "nist-t6:magalia:lanes_used",
+   "metric": "max_egress_lanes_used_during_evacuation",
+   "value": 2,
+   "unit": "count_lanes",
+   "location": "Magalia",
+   "time_window_local": [
+    "2018-11-08",
+    null
+   ],
+   "temporal_role": "during_event",
+   "evidence_class": "reconstructed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=71; Table 6; p. 33",
+   "note": null
+  },
+  {
+   "target_id": "nist-t6:magalia:routes_used",
+   "metric": "max_egress_routes_used_during_evacuation",
+   "value": 2,
+   "unit": "count_routes",
+   "location": "Magalia",
+   "time_window_local": [
+    "2018-11-08",
+    null
+   ],
+   "temporal_role": "during_event",
+   "evidence_class": "reconstructed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=71; Table 6; p. 33",
+   "note": null
+  },
+  {
+   "target_id": "nist-t6:paradise:lanes_used",
+   "metric": "max_egress_lanes_used_during_evacuation",
+   "value": 7,
+   "unit": "count_lanes",
+   "location": "Paradise",
+   "time_window_local": [
+    "2018-11-08",
+    null
+   ],
+   "temporal_role": "during_event",
+   "evidence_class": "reconstructed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=71; Table 6; p. 33",
+   "note": null
+  },
+  {
+   "target_id": "nist-t6:paradise:routes_used",
+   "metric": "max_egress_routes_used_during_evacuation",
+   "value": 4,
+   "unit": "count_routes",
+   "location": "Paradise",
+   "time_window_local": [
+    "2018-11-08",
+    null
+   ],
+   "temporal_role": "during_event",
+   "evidence_class": "reconstructed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=71; Table 6; p. 33",
+   "note": null
+  },
+  {
+   "target_id": "nist-t6:paradise-and-magalia:lanes_used",
+   "metric": "max_egress_lanes_used_during_evacuation",
+   "value": 8,
+   "unit": "count_lanes",
+   "location": "Paradise and Magalia",
+   "time_window_local": [
+    "2018-11-08",
+    null
+   ],
+   "temporal_role": "during_event",
+   "evidence_class": "reconstructed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=71; Table 6; p. 33",
+   "note": null
+  },
+  {
+   "target_id": "nist-t6:paradise-and-magalia:routes_used",
+   "metric": "max_egress_routes_used_during_evacuation",
+   "value": 5,
+   "unit": "count_routes",
+   "location": "Paradise and Magalia",
+   "time_window_local": [
+    "2018-11-08",
+    null
+   ],
+   "temporal_role": "during_event",
+   "evidence_class": "reconstructed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=71; Table 6; p. 33",
+   "note": null
+  },
+  {
+   "target_id": "nist-t8:bcso:attempted_calls",
+   "metric": "codered_attempted_calls",
+   "value": 28162,
+   "unit": "count_calls",
+   "location": "Paradise and Magalia",
+   "time_window_local": [
+    "2018-11-08T07:57",
+    "2018-11-08T09:30"
+   ],
+   "temporal_role": "during_event",
+   "evidence_class": "observed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=81; Table 8; p. 43",
+   "note": "delivered and voicemail counts estimated by NIST from rounded percentages"
+  },
+  {
+   "target_id": "nist-t8:bcso:phone_numbers",
+   "metric": "codered_phone_numbers",
+   "value": 14737,
+   "unit": "count_numbers",
+   "location": "Paradise and Magalia",
+   "time_window_local": [
+    "2018-11-08T07:57",
+    "2018-11-08T09:30"
+   ],
+   "temporal_role": "during_event",
+   "evidence_class": "observed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=81; Table 8; p. 43",
+   "note": "delivered and voicemail counts estimated by NIST from rounded percentages"
+  },
+  {
+   "target_id": "nist-t8:bcso:delivered_calls",
+   "metric": "codered_delivered_calls",
+   "value": 4916,
+   "unit": "count_calls",
+   "location": "Paradise and Magalia",
+   "time_window_local": [
+    "2018-11-08T07:57",
+    "2018-11-08T09:30"
+   ],
+   "temporal_role": "during_event",
+   "evidence_class": "reconstructed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=81; Table 8; p. 43",
+   "note": "delivered and voicemail counts estimated by NIST from rounded percentages"
+  },
+  {
+   "target_id": "nist-t8:bcso:voicemail",
+   "metric": "codered_voicemail",
+   "value": 4543,
+   "unit": "count_calls",
+   "location": "Paradise and Magalia",
+   "time_window_local": [
+    "2018-11-08T07:57",
+    "2018-11-08T09:30"
+   ],
+   "temporal_role": "during_event",
+   "evidence_class": "reconstructed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=81; Table 8; p. 43",
+   "note": "delivered and voicemail counts estimated by NIST from rounded percentages"
+  },
+  {
+   "target_id": "nist-t8:bcso:not_reached",
+   "metric": "codered_not_reached",
+   "value": 7720,
+   "unit": "count_numbers",
+   "location": "Paradise and Magalia",
+   "time_window_local": [
+    "2018-11-08T07:57",
+    "2018-11-08T09:30"
+   ],
+   "temporal_role": "during_event",
+   "evidence_class": "observed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=81; Table 8; p. 43",
+   "note": "delivered and voicemail counts estimated by NIST from rounded percentages"
+  },
+  {
+   "target_id": "nist-t8:town-of-paradise:attempted_calls",
+   "metric": "codered_attempted_calls",
+   "value": 10359,
+   "unit": "count_calls",
+   "location": "Paradise and Magalia",
+   "time_window_local": [
+    "2018-11-08T07:57",
+    "2018-11-08T09:30"
+   ],
+   "temporal_role": "during_event",
+   "evidence_class": "observed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=81; Table 8; p. 43",
+   "note": "Town of Paradise second batch not included; delivered and voicemail counts estimated by NIST from rounded percentages"
+  },
+  {
+   "target_id": "nist-t8:town-of-paradise:phone_numbers",
+   "metric": "codered_phone_numbers",
+   "value": 6189,
+   "unit": "count_numbers",
+   "location": "Paradise and Magalia",
+   "time_window_local": [
+    "2018-11-08T07:57",
+    "2018-11-08T09:30"
+   ],
+   "temporal_role": "during_event",
+   "evidence_class": "observed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=81; Table 8; p. 43",
+   "note": "Town of Paradise second batch not included; delivered and voicemail counts estimated by NIST from rounded percentages"
+  },
+  {
+   "target_id": "nist-t8:town-of-paradise:delivered_calls",
+   "metric": "codered_delivered_calls",
+   "value": 1657,
+   "unit": "count_calls",
+   "location": "Paradise and Magalia",
+   "time_window_local": [
+    "2018-11-08T07:57",
+    "2018-11-08T09:30"
+   ],
+   "temporal_role": "during_event",
+   "evidence_class": "reconstructed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=81; Table 8; p. 43",
+   "note": "Town of Paradise second batch not included; delivered and voicemail counts estimated by NIST from rounded percentages"
+  },
+  {
+   "target_id": "nist-t8:town-of-paradise:voicemail",
+   "metric": "codered_voicemail",
+   "value": 1657,
+   "unit": "count_calls",
+   "location": "Paradise and Magalia",
+   "time_window_local": [
+    "2018-11-08T07:57",
+    "2018-11-08T09:30"
+   ],
+   "temporal_role": "during_event",
+   "evidence_class": "reconstructed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=81; Table 8; p. 43",
+   "note": "Town of Paradise second batch not included; delivered and voicemail counts estimated by NIST from rounded percentages"
+  },
+  {
+   "target_id": "nist-t8:town-of-paradise:not_reached",
+   "metric": "codered_not_reached",
+   "value": 2927,
+   "unit": "count_numbers",
+   "location": "Paradise and Magalia",
+   "time_window_local": [
+    "2018-11-08T07:57",
+    "2018-11-08T09:30"
+   ],
+   "temporal_role": "during_event",
+   "evidence_class": "observed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=81; Table 8; p. 43",
+   "note": "Town of Paradise second batch not included; delivered and voicemail counts estimated by NIST from rounded percentages"
+  },
+  {
+   "target_id": "nist-t8:total:attempted_calls",
+   "metric": "codered_attempted_calls",
+   "value": 38521,
+   "unit": "count_calls",
+   "location": "Paradise and Magalia",
+   "time_window_local": [
+    "2018-11-08T07:57",
+    "2018-11-08T09:30"
+   ],
+   "temporal_role": "during_event",
+   "evidence_class": "observed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=81; Table 8; p. 43",
+   "note": "Town of Paradise second batch not included; delivered and voicemail counts estimated by NIST from rounded percentages"
+  },
+  {
+   "target_id": "nist-t8:total:phone_numbers",
+   "metric": "codered_phone_numbers",
+   "value": 20926,
+   "unit": "count_numbers",
+   "location": "Paradise and Magalia",
+   "time_window_local": [
+    "2018-11-08T07:57",
+    "2018-11-08T09:30"
+   ],
+   "temporal_role": "during_event",
+   "evidence_class": "observed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=81; Table 8; p. 43",
+   "note": "Town of Paradise second batch not included; delivered and voicemail counts estimated by NIST from rounded percentages"
+  },
+  {
+   "target_id": "nist-t8:total:delivered_calls",
+   "metric": "codered_delivered_calls",
+   "value": 6573,
+   "unit": "count_calls",
+   "location": "Paradise and Magalia",
+   "time_window_local": [
+    "2018-11-08T07:57",
+    "2018-11-08T09:30"
+   ],
+   "temporal_role": "during_event",
+   "evidence_class": "reconstructed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=81; Table 8; p. 43",
+   "note": "Town of Paradise second batch not included; delivered and voicemail counts estimated by NIST from rounded percentages"
+  },
+  {
+   "target_id": "nist-t8:total:voicemail",
+   "metric": "codered_voicemail",
+   "value": 6200,
+   "unit": "count_calls",
+   "location": "Paradise and Magalia",
+   "time_window_local": [
+    "2018-11-08T07:57",
+    "2018-11-08T09:30"
+   ],
+   "temporal_role": "during_event",
+   "evidence_class": "reconstructed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=81; Table 8; p. 43",
+   "note": "Town of Paradise second batch not included; delivered and voicemail counts estimated by NIST from rounded percentages"
+  },
+  {
+   "target_id": "nist-t8:total:not_reached",
+   "metric": "codered_not_reached",
+   "value": 10647,
+   "unit": "count_numbers",
+   "location": "Paradise and Magalia",
+   "time_window_local": [
+    "2018-11-08T07:57",
+    "2018-11-08T09:30"
+   ],
+   "temporal_role": "during_event",
+   "evidence_class": "observed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=81; Table 8; p. 43",
+   "note": "Town of Paradise second batch not included; delivered and voicemail counts estimated by NIST from rounded percentages"
+  },
+  {
+   "target_id": "nist-s7:paradise:most_civilians_evacuated_by",
+   "metric": "time_most_civilians_evacuated",
+   "value": "13:45",
+   "unit": "local_time_hh_mm",
+   "location": "Paradise",
+   "time_window_local": [
+    "2018-11-08",
+    "2018-11-08T13:45"
+   ],
+   "temporal_role": "during_event",
+   "evidence_class": "reconstructed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=115; Sec. 7.2.2 text; p. 77",
+   "note": "'Traffic observations indicate that most civilians were evacuated by 13:45.' 'Most' is not quantified."
+  },
+  {
+   "target_id": "nist-t13:neal-rd:clear_of_traffic",
+   "metric": "time_road_clear_of_traffic",
+   "value": "13:15",
+   "unit": "local_time_hh_mm",
+   "location": "Neal Rd, Paradise",
+   "time_window_local": [
+    "2018-11-08T13:15",
+    "2018-11-08T13:15"
+   ],
+   "temporal_role": "during_event",
+   "evidence_class": "reconstructed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=116; Table 13; p. 78",
+   "note": null
+  },
+  {
+   "target_id": "nist-t13:clark-rd:largely_free_of_traffic",
+   "metric": "time_road_largely_free_of_traffic",
+   "value": "11:30",
+   "unit": "local_time_hh_mm",
+   "location": "Clark Rd in Paradise",
+   "time_window_local": [
+    "2018-11-08T11:30",
+    "2018-11-08T11:30"
+   ],
+   "temporal_role": "during_event",
+   "evidence_class": "reconstructed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=116; Table 13; p. 78",
+   "note": "Clark Rd recloses after opening for a short time"
+  },
+  {
+   "target_id": "nist-t13:skyway-clark:traffic_held",
+   "metric": "time_all_traffic_held",
+   "value": "10:45",
+   "unit": "local_time_hh_mm",
+   "location": "Clark Rd and Skyway",
+   "time_window_local": [
+    "2018-11-08T10:45",
+    "2018-11-08T10:45"
+   ],
+   "temporal_role": "during_event",
+   "evidence_class": "reconstructed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=116; Table 13; p. 78",
+   "note": null
+  },
+  {
+   "target_id": "nist-s9:max_simultaneous_tras",
+   "metric": "max_simultaneously_active_tras",
+   "value": 12,
+   "unit": "count_tras",
+   "location": "Camp Fire area",
+   "time_window_local": [
+    "2018-11-08",
+    "2018-11-08"
+   ],
+   "temporal_role": "during_event",
+   "evidence_class": "reconstructed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=169; Sec. 9.1; p. 131",
+   "note": null
+  },
+  {
+   "target_id": "nist-s9:tra_count",
+   "metric": "identified_tras",
+   "value": 31,
+   "unit": "count_tras",
+   "location": "Camp Fire area",
+   "time_window_local": [
+    "2018-11-08",
+    "2018-11-09"
+   ],
+   "temporal_role": "during_event",
+   "evidence_class": "reconstructed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=169; Sec. 9 / Appendix I",
+   "note": null
+  },
+  {
+   "target_id": "nist-t30:burnover_count",
+   "metric": "identified_burnovers",
+   "value": 23,
+   "unit": "count_events",
+   "location": "Camp Fire area",
+   "time_window_local": [
+    "2018-11-08",
+    "2018-11-09"
+   ],
+   "temporal_role": "during_event",
+   "evidence_class": "reconstructed",
+   "source_id": "nist-tn2252",
+   "source_locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf#page=163; Table 30; pp. 125-126",
+   "note": null
+  },
+  {
+   "target_id": "caloes-aar:acres_burned",
+   "metric": "acres_burned",
+   "value": 153336,
+   "unit": "acres",
+   "location": "Camp Fire",
+   "time_window_local": null,
+   "temporal_role": "post_event",
+   "evidence_class": "reported",
+   "source_id": "caloes-camp-aar-2025",
+   "source_locator": "https://www.caloes.ca.gov/wp-content/uploads/Preparedness/Documents/FINAL-AAR-2018-Camp-Fire-508-Clean-Copy-11.17.25.pdf#page=9; Statistical Summary; p. 9",
+   "note": null
+  },
+  {
+   "target_id": "caloes-aar:fatalities",
+   "metric": "fatalities",
+   "value": 85,
+   "unit": "persons",
+   "location": "Camp Fire",
+   "time_window_local": null,
+   "temporal_role": "post_event",
+   "evidence_class": "reported",
+   "source_id": "caloes-camp-aar-2025",
+   "source_locator": "https://www.caloes.ca.gov/wp-content/uploads/Preparedness/Documents/FINAL-AAR-2018-Camp-Fire-508-Clean-Copy-11.17.25.pdf#page=9; Statistical Summary; p. 9",
+   "note": null
+  },
+  {
+   "target_id": "caloes-aar:structures_destroyed",
+   "metric": "structures_destroyed",
+   "value": 18804,
+   "unit": "count_structures",
+   "location": "Camp Fire",
+   "time_window_local": null,
+   "temporal_role": "post_event",
+   "evidence_class": "reported",
+   "source_id": "caloes-camp-aar-2025",
+   "source_locator": "https://www.caloes.ca.gov/wp-content/uploads/Preparedness/Documents/FINAL-AAR-2018-Camp-Fire-508-Clean-Copy-11.17.25.pdf#page=9; Statistical Summary; p. 9",
+   "note": null
+  },
+  {
+   "target_id": "caloes-aar:structures_damaged",
+   "metric": "structures_damaged",
+   "value": 754,
+   "unit": "count_structures",
+   "location": "Camp Fire",
+   "time_window_local": null,
+   "temporal_role": "post_event",
+   "evidence_class": "reported",
+   "source_id": "caloes-camp-aar-2025",
+   "source_locator": "https://www.caloes.ca.gov/wp-content/uploads/Preparedness/Documents/FINAL-AAR-2018-Camp-Fire-508-Clean-Copy-11.17.25.pdf#page=9; Statistical Summary; p. 9",
+   "note": null
+  },
+  {
+   "target_id": "caloes-aar:sheltered_population",
+   "metric": "total_estimated_shelter_population",
+   "value": 32000,
+   "unit": "persons",
+   "location": "four counties",
+   "time_window_local": null,
+   "temporal_role": "post_event",
+   "evidence_class": "reported",
+   "source_id": "caloes-camp-aar-2025",
+   "source_locator": "https://www.caloes.ca.gov/wp-content/uploads/Preparedness/Documents/FINAL-AAR-2018-Camp-Fire-508-Clean-Copy-11.17.25.pdf#page=9; Statistical Summary; p. 9",
+   "note": "approximate as published ('estimated')"
+  }
+ ]
+}
