@@ -54,6 +54,58 @@ export const REPLAY_VIEW: ViewConfig = {
   otherRoute: { href: "/simulate", label: "Agent simulation →" },
 };
 
+/** A fire the replay picker offers. Its bundle may not be generated yet; the picker checks. */
+export interface ReplayIncident {
+  id: string;
+  label: string;
+  bundleUrl: string;
+  variantsUrl: string | null;
+  generateHint: string;
+}
+
+/** Fires with an incident package. `python3 -m sim bundle` builds only Camp so far. */
+export const REPLAY_INCIDENTS: ReplayIncident[] = [
+  {
+    id: "camp-2018",
+    label: "Camp Fire · Paradise, CA · Nov 2018",
+    bundleUrl: REPLAY_BUNDLE_URL,
+    variantsUrl: "/replays/camp-2018.variants/index.json",
+    generateHint: BUNDLE_GENERATE_HINT,
+  },
+  {
+    id: "kincade-2019",
+    label: "Kincade Fire · Sonoma County, CA · Oct 2019",
+    bundleUrl: "/replays/kincade-2019.json",
+    variantsUrl: null,
+    generateHint: "app/public/replays/kincade-2019.json (the sim bundle command supports only Camp so far)",
+  },
+  {
+    id: "marshall-2021",
+    label: "Marshall Fire · Boulder County, CO · Dec 2021",
+    bundleUrl: "/replays/marshall-2021.json",
+    variantsUrl: null,
+    generateHint: "app/public/replays/marshall-2021.json (the sim bundle command supports only Camp so far)",
+  },
+];
+
+export const DEFAULT_INCIDENT_ID = REPLAY_INCIDENTS[0].id;
+
+export function replayViewFor(incident: ReplayIncident): ViewConfig {
+  return {
+    ...REPLAY_VIEW,
+    bundleUrl: incident.bundleUrl,
+    variantsUrl: incident.variantsUrl,
+    generateHint: incident.generateHint,
+  };
+}
+
+/** Whether a bundle file is served, without downloading it (the Camp bundle is ~15 MB). */
+export async function bundleExists(url: string, signal: AbortSignal): Promise<boolean> {
+  const response = await fetch(url, { method: "HEAD", signal });
+  // The Vite dev server answers unknown paths with index.html.
+  return response.ok && !(response.headers.get("content-type") ?? "").includes("text/html");
+}
+
 export const SIMULATION_VIEW: ViewConfig = {
   kind: "simulation",
   bundleUrl: "/simulations/camp-2018.agents.json",

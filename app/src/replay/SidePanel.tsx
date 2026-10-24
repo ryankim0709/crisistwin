@@ -519,6 +519,8 @@ export interface SidePanelProps {
   onFocus: (coords: LngLat[]) => void;
   /** Header eyebrow, e.g. "Historical replay" or "Agent simulation". */
   eyebrow: string;
+  /** Optional control under the incident title, e.g. the replay's fire picker. */
+  picker?: ReactNode;
   /** Optional tabs supplied by the view (what-if, stress test), appended after the built-ins. */
   extraTabs?: { id: PanelTab; label: string; content: ReactNode }[];
   /** Agent simulations show resident-state metrics; the historical replay does not. */
@@ -549,6 +551,7 @@ export default function SidePanel({
   onPin,
   onFocus,
   eyebrow,
+  picker,
   extraTabs = [],
   showResidents = false,
 }: SidePanelProps) {
@@ -566,6 +569,7 @@ export default function SidePanel({
           {model.incident.packageVersion && <> · package {model.incident.packageVersion.slice(0, 8)}</>} · schema{" "}
           {model.schemaVersion}
         </p>
+        {picker}
       </header>
 
       <div className="rp-tabs" role="tablist" aria-label="Replay panels">

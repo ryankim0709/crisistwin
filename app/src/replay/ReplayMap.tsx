@@ -4,6 +4,7 @@ import {
   Popup,
   ScaleControl,
   setWorkerUrl,
+  type ErrorEvent,
   type MapGeoJSONFeature,
 } from "maplibre-gl";
 import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
@@ -12,6 +13,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   BASEMAP_STYLE_URL,
   FALLBACK_STYLE,
+  IMAGERY_LAYER,
   INTERACTIVE_LAYERS,
   ROAD_CLASS_BY_CODE,
   ROAD_CLASS_LABEL,
@@ -39,6 +41,7 @@ import {
   type BasemapStyle,
   type LayerGroup,
 } from "./mapLayers";
+import { HILLSHADE_LAYER, restyleDarkBasemap } from "./basemapStyle";
 import { buildEdgePath, buildTravelIndex, particlePositions, type EdgePath } from "./particles";
 import PerspectiveSwitcher from "./perspectives/PerspectiveSwitcher";
 import { edgeThreats } from "./insights";
@@ -64,6 +67,11 @@ const INITIAL_VIEW: Record<string, { center: LngLat; zoom: number }> = {
   "camp-2018-paradise-slice": { center: [-121.52, 39.79], zoom: 11.0 },
 };
 const FRESHNESS_BUCKET_MS = 10 * 60_000;
+const MIN_ZOOM = 7;
+const MAX_BOUNDS_PAD_DEG = 2.5;
+/** Satellite falls back to the map if no imagery tile at all has loaded by then. */
+const IMAGERY_TIMEOUT_MS = 15_000;
+const IMAGERY_MAX_ERRORS = 12;
 const THREAT_BUCKET_MS = 60_000;
 const PULSE_PERIOD_MS = 1400;
 const PULSE_INTERVAL_MS = 80;
@@ -102,7 +110,7 @@ async function loadBasemapStyle(signal: AbortSignal): Promise<BasemapStyle | nul
     ) {
       return null;
     }
-    return style as BasemapStyle;
+    return restyleDarkBasemap(style as BasemapStyle);
   } catch {
     return null;
   } finally {
@@ -283,6 +291,14 @@ export default function ReplayMap({
           style: style ?? FALLBACK_STYLE,
           ...(INITIAL_VIEW[model.incident.id] ?? { bounds: model.bbox, fitBoundsOptions: { padding: 48 } }),
           attributionControl: { compact: true },
+          // Zoomed out far enough to see Northern California, but never lose the incident.
+          minZoom: MIN_ZOOM,
+          maxBounds: [
+            model.bbox[0] - MAX_BOUNDS_PAD_DEG,
+            model.bbox[1] - MAX_BOUNDS_PAD_DEG,
+            model.bbox[2] + MAX_BOUNDS_PAD_DEG,
+            model.bbox[3] + MAX_BOUNDS_PAD_DEG,
+          ],
           dragRotate: false,
           pitchWithRotate: false,
         });
@@ -296,9 +312,17 @@ export default function ReplayMap({
       if (import.meta.env.DEV) (window as unknown as { __replayMap?: MapLibreMap }).__replayMap = m;
       m.addControl(new NavigationControl({ showCompass: false }), "top-right");
       m.addControl(new ScaleControl({ unit: "metric" }), "bottom-right");
+      // The top-down hillshade steps aside while a 3D perspective drapes its own terrain.
+      m.on("terrain", () => {
+        if (m.getLayer(HILLSHADE_LAYER)) {
+          m.setLayoutProperty(HILLSHADE_LAYER, "visibility", m.getTerrain() ? "none" : "visible");
+        }
+      });
       m.on("load", () => {
         if (cancelled) return;
         installLayers(m, model);
+        // The simulated-area label sits at the bbox corner, among exit markers: keep it on top.
+        if (m.getLayer("sim-area-label")) m.moveLayer("sim-area-label");
         setReady(true);
         setMapInstance(m);
         onMapReadyRef.current?.(m);
@@ -440,9 +464,52 @@ export default function ReplayMap({
     return () => window.clearInterval(timer);
   }, [ready, hasThreats, visibility.roads]);
 
+  // Satellite: show a loading hint while USGS tiles stream; on repeated errors or a timeout with
+  // no tile loaded, fall back to the (restyled) dark map with a notice. Status is set from callbacks only.
+  const [imagery, setImagery] = useState<"idle" | "loading" | "ok" | "failed">("idle");
   useEffect(() => {
     const map = mapRef.current;
-    if (ready && map) setBasemap(map, basemapChoice);
+    if (!ready || !map) return;
+    const reset = window.setTimeout(() => setImagery(basemapChoice === "satellite" ? "loading" : "idle"), 0);
+    setBasemap(map, basemapChoice);
+    if (basemapChoice !== "satellite") return () => window.clearTimeout(reset);
+    let loaded = false;
+    let anyTile = false;
+    let errors = 0;
+    let failed = false;
+    const fail = () => {
+      if (failed || loaded || anyTile) return;
+      failed = true;
+      setBasemap(map, "dark");
+      setImagery("failed");
+    };
+    const onData = (event: { sourceId?: string; tile?: { state?: string } }) => {
+      if (failed || event.sourceId !== IMAGERY_LAYER) return;
+      if (event.tile?.state === "loaded") anyTile = true;
+      // Errored tiles also count as "loaded" for the source, so require a real tile first.
+      if (anyTile && map.isSourceLoaded(IMAGERY_LAYER)) {
+        loaded = true;
+        setImagery("ok");
+      } else {
+        setImagery("loading");
+      }
+    };
+    const onError = (event: ErrorEvent) => {
+      if ((event as unknown as { sourceId?: string }).sourceId !== IMAGERY_LAYER) return;
+      errors += 1;
+      if (errors >= IMAGERY_MAX_ERRORS) fail();
+    };
+    map.on("sourcedata", onData);
+    map.on("error", onError);
+    const timeout = window.setTimeout(() => {
+      if (!loaded && !anyTile) fail();
+    }, IMAGERY_TIMEOUT_MS);
+    return () => {
+      window.clearTimeout(reset);
+      window.clearTimeout(timeout);
+      map.off("sourcedata", onData);
+      map.off("error", onError);
+    };
   }, [ready, basemapChoice]);
 
   useEffect(() => {
@@ -598,6 +665,16 @@ export default function ReplayMap({
         <div className="rp-map-state rp-map-state--error" role="alert">
           Map could not start: {mapError}
         </div>
+      )}
+      {basemapChoice === "satellite" && imagery === "loading" && (
+        <p className="rp-imagery-status" role="status">
+          <span className="rp-spinner" aria-hidden="true" /> Loading satellite imagery…
+        </p>
+      )}
+      {basemapChoice === "satellite" && imagery === "failed" && (
+        <p className="rp-imagery-status rp-imagery-status--failed" role="alert">
+          Satellite imagery (USGS) did not load — showing the map instead.
+        </p>
       )}
       {styleStatus === "fallback" && (
         <p className="rp-basemap-note" role="status">

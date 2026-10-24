@@ -4,6 +4,7 @@
 import type { FeatureCollection } from "geojson";
 import type { GeoJSONSource, Map as MapLibreMap, MapOptions } from "maplibre-gl";
 import { SATELLITE_STYLE } from "../maps/basemap";
+import { BASEMAP_BACKGROUND, SATELLITE_BACKGROUND } from "./basemapStyle";
 import type {
   LngLat,
   Perimeter,
@@ -27,7 +28,7 @@ export const FALLBACK_STYLE: BasemapStyle = {
   version: 8,
   glyphs: FALLBACK_GLYPHS_URL,
   sources: {},
-  layers: [{ id: "background", type: "background", paint: { "background-color": "#0a0e13" } }],
+  layers: [{ id: "background", type: "background", paint: { "background-color": BASEMAP_BACKGROUND } }],
 };
 
 export type Basemap = "dark" | "satellite";
@@ -47,6 +48,35 @@ export function setBasemap(map: MapLibreMap, basemap: Basemap): void {
   if (map.getLayer(IMAGERY_LAYER)) {
     map.setLayoutProperty(IMAGERY_LAYER, "visibility", basemap === "satellite" ? "visible" : "none");
   }
+  // Mid-grey rather than black where imagery tiles have not arrived yet.
+  if (map.getLayer("background")) {
+    map.setPaintProperty(
+      "background",
+      "background-color",
+      basemap === "satellite" ? SATELLITE_BACKGROUND : BASEMAP_BACKGROUND,
+    );
+  }
+}
+
+/** The bundle bbox as a closed outline: where roads, traffic and fire are modelled. */
+export function simAreaCollection(model: ReplayModel): FeatureCollection {
+  const [w, s, e, n] = model.bbox;
+  return {
+    type: "FeatureCollection",
+    features: [
+      {
+        type: "Feature",
+        properties: {},
+        geometry: { type: "LineString", coordinates: [[w, s], [e, s], [e, n], [w, n], [w, s]] },
+      },
+      // Label anchored at the north-west corner, just outside the outline.
+      {
+        type: "Feature",
+        properties: { label: "Simulated area: roads, traffic and fire modelled inside" },
+        geometry: { type: "Point", coordinates: [w, n] },
+      },
+    ],
+  };
 }
 
 // Congestion bands: mean speed as a fraction of the edge's free-flow speed_kph.
@@ -521,18 +551,66 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
   geojson("destinations", destinationsCollection(model));
   geojson("damage", damageCollection(model));
   geojson("pin");
+  geojson("sim-area", simAreaCollection(model));
   const imagery = imagerySource();
   if (imagery) {
     map.addSource(IMAGERY_LAYER, imagery);
-    // Dimmed so the overlays stay readable; hidden until the Satellite basemap is chosen.
-    map.addLayer({
-      id: IMAGERY_LAYER,
-      type: "raster",
-      source: IMAGERY_LAYER,
-      layout: { visibility: "none" },
-      paint: { "raster-brightness-max": 0.75, "raster-saturation": -0.25, "raster-fade-duration": 0 },
-    });
+    // Dimmed so the overlays stay readable; hidden until the Satellite basemap is chosen. Placed
+    // under the basemap's place labels so towns stay named over imagery.
+    const labels = map.getStyle().layers.find((l) => l.id.startsWith("place_"))?.id;
+    map.addLayer(
+      {
+        id: IMAGERY_LAYER,
+        type: "raster",
+        source: IMAGERY_LAYER,
+        layout: { visibility: "none" },
+        paint: { "raster-brightness-max": 0.75, "raster-saturation": -0.25, "raster-fade-duration": 0 },
+      },
+      labels,
+    );
   }
+  // Extent of the modelled area, so it is clear why the traffic network ends there.
+  map.addLayer({
+    id: "sim-area-line",
+    type: "line",
+    source: "sim-area",
+    filter: ["==", ["geometry-type"], "LineString"],
+    paint: { "line-color": "#c3cdd6", "line-opacity": 0.55, "line-width": 1.2, "line-dasharray": [4, 3] },
+  });
+  // Zoomed in, the corner label is off-screen: repeat a short tag along the outline.
+  map.addLayer({
+    id: "sim-area-edge-label",
+    type: "symbol",
+    source: "sim-area",
+    minzoom: 10,
+    filter: ["==", ["geometry-type"], "LineString"],
+    layout: {
+      "symbol-placement": "line",
+      "symbol-spacing": 500,
+      "text-field": "Simulated area edge",
+      "text-font": LABEL_FONT,
+      "text-size": 10.5,
+      "text-offset": [0, -0.8],
+    },
+    paint: { "text-color": "#c3cdd6", "text-halo-color": "#0a0e13", "text-halo-width": 1.6, "text-opacity": 0.8 },
+  });
+  map.addLayer({
+    id: "sim-area-label",
+    type: "symbol",
+    source: "sim-area",
+    filter: ["==", ["geometry-type"], "Point"],
+    layout: {
+      "text-field": ["get", "label"],
+      "text-font": LABEL_FONT,
+      "text-size": 11.5,
+      "text-anchor": "bottom-left",
+      "text-offset": [0.2, -0.4],
+      "text-max-width": 40,
+      "text-allow-overlap": true,
+      "text-ignore-placement": true,
+    },
+    paint: { "text-color": "#c3cdd6", "text-halo-color": "#0a0e13", "text-halo-width": 1.6, "text-opacity": 0.85 },
+  });
   if (!map.hasImage(ZONE_HATCH_IMAGE)) map.addImage(ZONE_HATCH_IMAGE, hatchImage([255, 181, 71], 60, 14));
 
   // Zones: nearly invisible until ordered; ordered zones get a faint (pulsed) hatch.

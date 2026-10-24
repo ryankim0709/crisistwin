@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { groupAvailability } from "./layerGroups";
 import CompareTab, { CaveatChip } from "./CompareTab";
 import { BundleMissingError, REPLAY_VIEW, fetchReplayBundle, type ViewConfig } from "./loadBundle";
@@ -46,7 +46,7 @@ type Load =
   | { status: "missing"; message: string }
   | { status: "error"; message: string };
 
-export default function ReplayView({ config = REPLAY_VIEW }: { config?: ViewConfig }) {
+export default function ReplayView({ config = REPLAY_VIEW, picker }: { config?: ViewConfig; picker?: ReactNode }) {
   const [load, setLoad] = useState<Load>({ status: "loading" });
   const [attempt, setAttempt] = useState(0);
 
@@ -86,7 +86,7 @@ export default function ReplayView({ config = REPLAY_VIEW }: { config?: ViewConf
     setAttempt((value) => value + 1);
   }
 
-  if (load.status === "ready") return <ReplayScreen model={load.model} config={config} />;
+  if (load.status === "ready") return <ReplayScreen model={load.model} config={config} picker={picker} />;
 
   const sim = config.kind === "simulation";
   return (
@@ -96,6 +96,7 @@ export default function ReplayView({ config = REPLAY_VIEW }: { config?: ViewConf
           ← Workspace
         </a>
         <p className="rp-eyebrow">{config.eyebrow}</p>
+        {picker}
         {load.status === "loading" && (
           <p role="status" className="rp-state-msg">
             <span className="rp-spinner" aria-hidden="true" /> Loading replay bundle…
@@ -150,7 +151,7 @@ function isTextEntry(target: EventTarget | null): boolean {
   return ["INPUT", "SELECT", "TEXTAREA"].includes(target.tagName);
 }
 
-function ReplayScreen({ model: baseline, config }: { model: ReplayModel; config: ViewConfig }) {
+function ReplayScreen({ model: baseline, config, picker }: { model: ReplayModel; config: ViewConfig; picker?: ReactNode }) {
   const variants = useVariants(baseline, config.variantsUrl);
   const model = variants.shown?.model ?? baseline;
   const selectVariant = variants.select;
@@ -614,6 +615,7 @@ function ReplayScreen({ model: baseline, config }: { model: ReplayModel; config:
             onPin={setPin}
             onFocus={focusTarget}
             eyebrow={config.eyebrow}
+            picker={picker}
             extraTabs={extraTabs}
             showResidents={sim}
           />

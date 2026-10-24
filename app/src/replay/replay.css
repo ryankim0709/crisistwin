@@ -694,6 +694,15 @@ p.rp-state-msg[role="status"] {
   letter-spacing: -0.6px;
   line-height: 1.15;
 }
+.rp-incident-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 12px;
+}
+.rp-state-card .rp-incident-picker {
+  margin: 4px 0 12px;
+}
 .rp-incident-meta {
   margin: 6px 0 0;
   font-family: var(--rp-mono);
@@ -2367,4 +2376,27 @@ p.rp-state-msg[role="status"] {
 .rp-headline-delta-nums .rp-caveat {
   align-self: center;
   font-size: 11px;
+}
+
+/* Satellite imagery loading / fallback notice, bottom-left above the dock */
+.rp-imagery-status {
+  position: absolute;
+  left: 16px;
+  bottom: 176px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  background: var(--rp-glass);
+  border: 1px solid var(--rp-line-strong);
+  color: var(--rp-text);
+  pointer-events: none;
+}
+.rp-imagery-status--failed {
+  border-style: dashed;
+  border-color: var(--rp-amber);
 }
