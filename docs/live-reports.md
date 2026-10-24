@@ -96,7 +96,10 @@ store them in their own collection only if reads get slow.
 phones). The console tags those units "sim".
 
 A submitted report needs every field of the stored document except `id`,
-`reporter`, `road_ref`, `received_at`, `status` and `evidence_class`, which the server fills.
+`reporter`, `road_ref`, `received_at`, `status` and `evidence_class`, which the server fills. ADR 0041 adds optional `method` (`explicit` default |
+`passive`) and, for passive reports only, `segment_id` and `speed_class`; see
+[Passive observations](#passive-observations-method-passive). Stored reports carry `method` and
+`speed_class` (null for explicit).
 
 `public-map` and `prompts` item:
 
@@ -1014,7 +1017,7 @@ navigating. Pure maths: `livecore/priority.py`; storage and endpoints: `api/live
 
 For every candidate place, `priority = impact × p_change × staleness`, each in 0..1:
 
-- **impact** = `1 - exp(-v / IMPACT_SCALE_VEH)` (`IMPACT_SCALE_VEH` = 1000), where `v` is
+- **impact** = `1 - exp(-v / IMPACT_SCALE_VEH)` (`IMPACT_SCALE_VEH` = 5000; a Camp zone has about 1700 vehicles), where `v` is
   vehicle-equivalents at stake (computed from the models, never an LLM):
   - **segment** (road segments on published routes): the vehicles of every zone (level not `none`)
     whose published route crosses the segment, a zone counting `LOSE_ROUTE_WEIGHT` (2) times when
@@ -1023,7 +1026,9 @@ For every candidate place, `priority = impact × p_change × staleness`, each in
     edges, not the two planner runs of `POST impact`: the route's segments come from the planner's
     remembered edge ids (`live_plan_routes`) for the published (zone, destination, via), and an
     alternative avoids the segment when fewer than two of the segment's quarter points lie within
-    `ON_ROUTE_M` (30 m) of its line (the impact analysis test).
+    `ON_ROUTE_M` (30 m) of its line (the impact analysis test). Segments shorter than
+    `MIN_SEGMENT_LENGTH_M` (150 m) are not candidates, and only the `SEGMENT_REFINE_MAX` (150)
+    segments with the most vehicles are scored (cost bound; about 1 s per refresh on Camp).
   - **destination**: `heading × load`, with `heading` = vehicles arriving per capacity window and
     `load = min(1, heading / capacity)`. Capacity as in the planner's `load` (`capacity_veh`, or for
     an exit the hourly capacity of its entering edges). Arrivals come from the traffic twin when it
@@ -1041,7 +1046,10 @@ For every candidate place, `priority = impact × p_change × staleness`, each in
   (`PRIORITY_HORIZON_S` = 1800) with `half_life` = `HALF_LIFE_S["road_blocked"]` (7200 s) for a
   segment, `["shelter_full"]` (3600 s) for a destination, `["fire_seen"]` (900 s) for a gateway; and
   `p_fire = exp(-d / FIRE_DECAY_M)` with `d` the distance in meters from the place to the fire
-  estimate (`FIRE_DECAY_M` = 2000; 0 when there is no estimate).
+  estimate (`FIRE_DECAY_M` = 2000; 0 when there is no estimate or beyond `FIRE_DISTANCE_MAX_M`,
+  10 km). For ranking, `d` is measured from the place's ends and quarter points to the nearest fire
+  boundary vertex (an overestimate by at most half the vertex spacing); the board's fire exclusion
+  below uses the exact line-to-area distance.
 - **staleness** = `1 - 0.5 ** (age_s / half_life)`, `age_s` = wall seconds since the newest
   independent observation of the place (any non-dismissed report: road kinds on the segment,
   `shelter_full` for the destination, `fire_seen`/`heavy_smoke` within `GATEWAY_OBSERVATION_M`
@@ -1050,14 +1058,18 @@ For every candidate place, `priority = impact × p_change × staleness`, each in
 ### Board refresh (auto-created questions)
 
 On a `command` or `board` read, at most once per `BOARD_REFRESH_S` (60 s wall) per incident (an
-atomic claim on the drill document, in a background thread like the auto replan): priorities are
+atomic claim on the drill document; computed in the request, with the twin's arrivals read in a
+background thread and cached for `TWIN_ARRIVALS_MAX_AGE_S`, 120 s): priorities are
 recomputed and stored (`live_board`, one document per incident); expired board tasks close (`done`
 with answers, else `cancelled` with note `"Expired"`); then the top-ranked **segment and destination**
 places become open `verify` tasks with `created_by: "priority"`, until `BOARD_MAX_OPEN` (8) board
 tasks are open: one open task per place (deduplicated), at most `BOARD_CREATE_PER_REFRESH` (3) new
 per refresh, not within `BOARD_PLACE_COOLDOWN_S` (600 s) of the last board task on that place, only
-with `priority >= BOARD_MIN_PRIORITY` (0.05), and never for a place within
-`BOARD_FIRE_EXCLUSION_M` (1000 m) of the fire estimate. Only while a drill has been started.
+with `priority >= BOARD_MIN_PRIORITY` (0.05), at least `BOARD_MIN_SPACING_M` (1500 m) from every
+other open question (so one long road does not fill the board; the stored console list is spaced the
+same way), and never for a place within `BOARD_FIRE_EXCLUSION_M` (1000 m) of the fire estimate. Only
+while a drill has been started. Each refresh that creates questions logs one `board_tasks` decision
+(actor `auto_policy`). A drill `reset` cancels open board questions and clears `live_board`.
 
 Board task (`CheckTask` additions; older tasks have no `created_by`, which means `controller`):
 
@@ -1074,9 +1086,11 @@ Board task (`CheckTask` additions; older tasks have no `created_by`, which means
 
 Board tasks never appear in a responder's `me/tasks` or `situation.tasks`. Anyone (civilian,
 responder, controller) answers one with a report carrying its `task_id`: `road_status` takes
-`road_blocked`, `road_passable` or `heavy_traffic` on that segment (the report's `road_ref` must be
-the task's segment, else `400`); `shelter_full` takes `shelter_full` for that destination. Answers
-do not close a board task; it closes at `expires_at`. A civilian may answer a non-board task: `403`.
+`road_blocked`, `road_passable` or `heavy_traffic`, and the report's `road_ref` is set to the
+question's segment (not snapped; phones send the question's `place.coord`, never their own
+position); `shelter_full` takes `shelter_full` with the question's `destination_id`. Other kinds are
+`400`; an expired or closed question is `409`. Answers do not close a board task; it closes at
+`expires_at`. A civilian answering a non-board task still gets `403`.
 
 ### `GET incidents/{id}/board` (any role)
 
@@ -1173,7 +1187,8 @@ corroborate `road_passable` and `slow` states. Public items and road state add `
 
 Unchanged for civilians: the zone is found on the device; position leaves the
 phone only inside a report, a prompts query, a route request, or a `need_help`
-check-in. Responders who turn on sharing send their latest position while the app
+check-in. Board questions (ADR 0041) are picked on the device; a board answer carries the
+question's place, and a passive report carries no position at all. Responders who turn on sharing send their latest position while the app
 is in the foreground; the server keeps only that one position, for 15 minutes.
 
 ## MongoDB plan
@@ -1187,7 +1202,7 @@ ISO 8601 `Z`. Ids are prefixed strings (`rpt_`, `tsk_`, `prp_`, `chk_`, `dev_`,
 | --- | --- | --- | --- |
 | `live_devices` | issued token (civilian or responder) | `token_hash` (SHA-256), `role`, `party_key`, `incident_id`, `created_at`, `last_seen_at`, `expires_at` | `token_hash` unique; `party_key`; TTL on `expires_at` (`expireAfterSeconds: 0`; civilian 30 days after last seen, responder 24 h) |
 | `live_reports` | report | v1 document + `replay_at`, server-maintained `updated_at` (cursor) | `{incident_id, client_id}` unique (client_id stored lowercased); `{incident_id, received_at}`; `{incident_id, updated_at}` (the `since` cursor); `{reporter.party_key, received_at}`; `id` unique; 2dsphere on `location.coord` (optional; P0 filters in Python) |
-| `live_tasks` | task | v1 + `assignee`, `accepted_at` | `id` unique; `{incident_id, status}`; `{assignee, status}` |
+| `live_tasks` | task | v1 + `assignee`, `accepted_at`; board questions add `created_by`, `question`, `place`, `place_id`, `expires_at`, `priority` (ADR 0041) | `id` unique; `{incident_id, status}`; `{assignee, status}`; `{incident_id, created_by, status}` |
 | `live_injects` | drill inject ([Injects](#injects)) | `id`, `incident_id`, `type`, `params`, `at`, `status`, `actor`, `created_at` | `id` unique; `{incident_id, at}` |
 | `live_decisions` | audit entry (append only) | `incident_id`, `at`, `actor`, `action`, `report_ids`, `proposal_id`, `note` | `{incident_id, at}` |
 | `live_drills` | incident | see [Drill clock](#drill-clock) | `incident_id` unique |
@@ -1195,6 +1210,7 @@ ISO 8601 `Z`. Ids are prefixed strings (`rpt_`, `tsk_`, `prp_`, `chk_`, `dev_`,
 | `live_proposals` | proposal | `Proposal` | `id` unique; `{incident_id, status, created_at}` |
 | `live_checkins` | party per incident (latest only) | `CheckIn` + `incident_id`, `party_key` | `{incident_id, party_key}` unique; `{incident_id, zone_id, status}` |
 | `live_destination_choices` | device per incident and zone (latest only) | `incident_id`, `party_key`, `zone_id`, `destination_id`, `guidance_version`, `at`, `expires_at`; no location | `{incident_id, party_key, zone_id}` unique; `{incident_id, zone_id, destination_id}`; TTL on `expires_at` (`at + 2 h`) |
+| `live_board` | incident (latest only) | `incident_id`, `computed_at`, `replay_at`, `arrivals_source`, `items` (ranked priority places; no people data) | `incident_id` unique |
 | `live_responder_locations` | responder (latest only) | `incident_id`, `party_key`, `coord`, `accuracy_m`, `at`, `expires_at` | `{incident_id, party_key}` unique; TTL on `expires_at` (`at + 900 s`) |
 
 Current guidance per zone is the max `version` for `{incident_id, zone_id}` (an
