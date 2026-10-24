@@ -33,6 +33,11 @@ illustrative fire-spread experiment:
 choose an origin, set wind, and inspect the simulated footprint in 15-minute
 steps. A historical replay simulator for the 2018 Camp Fire is in progress in [`sim/`](sim/README.md);
 persistent scenarios and live incident integrations are not implemented yet.
+The `/diorama` page is a fictional, ~90-second looping wildfire evacuation of the
+made-up town Larkspur Hollow, rendered in 3D with three.js. Its data are synthetic and
+its fire, traffic and crew behaviour are scripted for visual demonstration, not a
+validated model or operational guidance (see
+[ADR 0010](docs/adr/0010-evacuation-diorama.md)).
 
 The native iOS scaffold is in [`mobile/`](mobile/README.md): a SwiftUI workspace,
 API/database readiness card, and a scenario empty state. Native maps, simulation,
