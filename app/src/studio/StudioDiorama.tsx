@@ -114,6 +114,8 @@ export interface StudioDioramaProps {
   evacuation: StudioEvacuationView | null;
   /** Shown under the board control. */
   evacuationPanel?: ReactNode;
+  /** The live scene once created, and null once disposed (for a page overlay such as dispatch). */
+  onSceneChange?: (scene: FireDioramaSceneApi | null) => void;
 }
 
 function IgnitionGlyph() {
@@ -143,6 +145,7 @@ export default function StudioDiorama(props: StudioDioramaProps) {
     streets,
     evacuation,
     evacuationPanel,
+    onSceneChange,
   } = props;
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [scene, setScene] = useState<FireDioramaSceneApi | null>(null);
@@ -164,6 +167,14 @@ export default function StudioDiorama(props: StudioDioramaProps) {
   useEffect(() => {
     clickRef.current = onGroundClick;
   }, [onGroundClick]);
+  const sceneChangeRef = useRef(onSceneChange);
+  useEffect(() => {
+    sceneChangeRef.current = onSceneChange;
+  }, [onSceneChange]);
+  useEffect(() => {
+    sceneChangeRef.current?.(scene);
+  }, [scene]);
+  useEffect(() => () => sceneChangeRef.current?.(null), []);
 
   // StrictMode-safe: the cleanup disposes, the re-run builds a fresh scene.
   useEffect(() => {

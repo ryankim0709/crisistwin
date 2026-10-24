@@ -1,7 +1,10 @@
 /**
  * Wire contract between the /dispatch page and POST /api/dispatch/decide
  * (app/backend/api/dispatch.py). Change both sides and docs/adr/0014-dispatch-agent.md (amended
- * by docs/adr/0017-dispatch-anywhere.md) together.
+ * by docs/adr/0017-dispatch-anywhere.md and docs/adr/0019-live-dispatch-monitor.md) together.
+ *
+ * The page calls the agent only when its live monitor (monitor.ts) finds a material change;
+ * `monitor.woke_because` lists those reasons.
  *
  * Request body: `{ "observation": Observation }`, JSON, at most 200 kB.
  * Response: `application/x-ndjson`, one `DecisionEvent` per line, ending with exactly one
@@ -11,6 +14,8 @@
  * chooses among the options listed (zone exits from `exit_options`, units, tasks); it never
  * supplies a route, time or count. The server validates every order against the observation
  * and the page validates again against the live engine before applying it.
+ *
+ * Order slack (`order_slack_min`) is the simulator's estimate, never the agent's.
  *
  * Units: minutes are elapsed simulation minutes from scenario T+0; homes are synthetic
  * households (each with the zone's average vehicles per home); vehicles are counts; capacities
@@ -54,6 +59,17 @@ export interface ZoneObservation {
   fire_core_eta_min: number | null;
   assigned_exit: string | null;
   /**
+   * Minutes left to order the zone so every remaining household can be on the road before the
+   * fire first reaches it (simulator estimate; negative = already late). Null when no fire
+   * contact is modelled, or once the zone is cleared or overrun.
+   */
+  order_slack_min: number | null;
+  /** Wave the zone left in (1 = ordered directly), or will leave in while staged. */
+  wave: number | null;
+  /** While staged: the zone it waits for, and the exit it will be sent to. */
+  staged_after: string | null;
+  staged_exit: string | null;
+  /**
    * Minutes for `vehicles_waiting` to enter the assigned route at its bottleneck capacity,
    * ignoring departure spread and other zones sharing the road; null with no usable route.
    */
@@ -81,7 +97,15 @@ export interface Observation {
   clock: {
     minute: number;
     horizon_minutes: number;
-    next_regular_decision_minute: number;
+    /** Next live-monitor check (the agent is called only when a check finds a change). */
+    next_check_minute: number;
+  };
+  monitor: {
+    check_interval_minutes: number;
+    /** Minute of the previous agent decision; null at the first one. */
+    previous_decision_minute: number | null;
+    /** What changed since the previous decision, found by the deterministic monitor. */
+    woke_because: string[];
   };
   fire: {
     burned_area_ha: number;
@@ -115,6 +139,13 @@ export interface Observation {
 
 export type WireOrder =
   | { type: "order_evacuation"; zone_id: string; exit_id: string; reason: string }
+  | {
+      type: "stage_evacuation";
+      zone_id: string;
+      exit_id: string;
+      after_zone_id: string;
+      reason: string;
+    }
   | {
       type: "dispatch_unit";
       unit_id: string;

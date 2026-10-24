@@ -6,6 +6,10 @@ Date: 2026-10-24. Status: accepted for the demo. Amends [0014](0014-dispatch-age
 > (`SimulationStudioPage` with its own draft namespace) instead of the single-fire `/fire`-style
 > page described below. The agent modules in `app/src/dispatch/` are kept but not wired into
 > the page while the dispatcher is reattached on top of the studio run.
+>
+> **Update (2026-10-24, later):** the dispatcher is reattached on top of the studio run, with a
+> live monitor, staged evacuation waves and simulated resident notices. See
+> [0019](0019-live-dispatch-monitor.md).
 
 ## Context
 

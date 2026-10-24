@@ -24,6 +24,12 @@
  *   road box first covers its straight-line approach at APPROACH_SPEED_KPH. "Evacuation
  *   support" shortens a zone's departure spread; "structure defense" has no modelled effect on
  *   the fire, whose spread is fixed by the precomputed run.
+ * - Staged waves: a zone can be staged behind another ordered or staged zone. It gets its
+ *   order automatically once every household of that zone has left home and the loading
+ *   queue (the road is free for the next wave), or earlier when its own order slack falls to
+ *   STAGE_RELEASE_SLACK_MINUTES. Order slack is this module's estimate, not the agent's.
+ * - Every order, staging, release and blocked route records a resident notice: what the
+ *   households of that zone would be told. Notices are simulated; nothing is sent anywhere.
  */
 
 import type { DispatchArea, LonLat } from "./area";
@@ -39,9 +45,15 @@ import {
   type Route,
 } from "./routing";
 
-export const DECISION_INTERVAL_MINUTES = 10;
-/** An alert can bring the next decision forward, but never closer than this to the last. */
+/** The live monitor checks the simulation this often by default (simulated minutes). */
+export const DEFAULT_CHECK_INTERVAL_MINUTES = 5;
+export const CHECK_INTERVAL_CHOICES = [1, 2, 5, 10] as const;
+/** Without any change, the agent still reviews the situation this often. */
+export const MAX_QUIET_MINUTES = 30;
+/** An urgent alert can bring a check forward, but never closer than this to the last decision. */
 export const MIN_DECISION_GAP_MINUTES = 3;
+/** A staged zone is released on its own when its order slack falls to this many minutes. */
+export const STAGE_RELEASE_SLACK_MINUTES = 5;
 /** Routing avoids edges the fire model reaches within this many minutes. */
 export const ROUTE_LOOKAHEAD_MINUTES = 10;
 /** The agent sees modelled fire arrival this far ahead. */
@@ -57,6 +69,9 @@ export const EXIT_OPTIONS_PER_ZONE = 3;
 const SECONDS_PER_MINUTE = 60;
 const VEHICLE_EPSILON = 0.01;
 const MAX_ALERTS = 200;
+const MAX_NOTICES = 300;
+/** Bound on staging chains walked for waves and cycle checks; zones are capped at 60. */
+const MAX_CHAIN = 64;
 
 /** Household states, in the order a household moves through them. */
 export const HomeStatus = {
@@ -93,6 +108,31 @@ export interface ZoneState {
   safe: number;
   caught: number;
   fireContact: boolean;
+  /** Set while the zone waits for its wave: no order yet, released by the engine. */
+  stage: ZoneStage | null;
+  /** Wave the zone left in: 1 when ordered directly, predecessor's wave + 1 when released. */
+  wave: number | null;
+}
+
+export interface ZoneStage {
+  exitId: string;
+  /** Zone index whose households must be on the road before this one is told to leave. */
+  after: number;
+  stagedMinute: number;
+}
+
+/** What a zone's households would be told. Simulated: never delivered to anyone. */
+export type NoticeKind = "leave_now" | "prepare" | "redirect" | "hold";
+
+export interface ResidentNotice {
+  id: number;
+  minute: number;
+  zone: number;
+  kind: NoticeKind;
+  /** Households addressed: those of the zone not yet out (not the whole area). */
+  homes: number;
+  exitId: string | null;
+  text: string;
 }
 
 interface ZoneWork {
@@ -150,7 +190,8 @@ export type AlertType =
   | "unit_arrived"
   | "unit_withdrawn"
   | "unit_stranded"
-  | "vehicles_exposed";
+  | "vehicles_exposed"
+  | "wave_released";
 
 export interface Alert {
   minute: number;
@@ -162,6 +203,13 @@ export interface Alert {
 
 export type Order =
   | { type: "order_evacuation"; zone_id: string; exit_id: string; reason: string }
+  | {
+      type: "stage_evacuation";
+      zone_id: string;
+      exit_id: string;
+      after_zone_id: string;
+      reason: string;
+    }
   | { type: "dispatch_unit"; unit_id: string; zone_id: string; task: UnitTask; reason: string }
   | { type: "recall_unit"; unit_id: string; reason: string };
 
@@ -210,6 +258,8 @@ export class DispatchEngine {
   /** Per home (index into `area.homes`). */
   readonly homeStatus: Uint8Array;
   alerts: Alert[] = [];
+  notices: ResidentNotice[] = [];
+  private nextNoticeId = 1;
   private work: ZoneWork[];
   private packets: Packet[] = [];
   private nextPacketId = 1;
@@ -252,6 +302,8 @@ export class DispatchEngine {
       safe: 0,
       caught: 0,
       fireContact: false,
+      stage: null,
+      wave: null,
     }));
     this.work = area.zones.map((zone) => {
       const fireOrder: number[] = [];
@@ -339,7 +391,7 @@ export class DispatchEngine {
     const reject = (note: string): OrderOutcome => ({ order, accepted: false, note });
     const blocked = this.blockedAt(this.minute);
 
-    if (order.type === "order_evacuation") {
+    if (order.type === "order_evacuation" || order.type === "stage_evacuation") {
       const index = this.zoneIndex.get(order.zone_id);
       if (index === undefined) return reject(`Unknown zone ${order.zone_id}.`);
       if (!this.exitIndex.has(order.exit_id)) return reject(`Unknown exit ${order.exit_id}.`);
@@ -352,30 +404,9 @@ export class DispatchEngine {
         return reject(
           `${order.exit_id} is not reachable from ${order.zone_id} avoiding fire and closed roads.`,
         );
-      const redirect = zone.status !== "no_order" && zone.exitId !== order.exit_id;
-      if (zone.status === "no_order") {
-        zone.status = "ordered";
-        zone.orderedMinute = this.minute;
-        zone.orderRank = this.nextOrderRank++;
-        const { firstHome, homes } = this.area.zones[index];
-        for (let h = firstHome; h < firstHome + homes; h += 1) {
-          if (this.homeStatus[h] === HomeStatus.idle) this.homeStatus[h] = HomeStatus.ordered;
-        }
-      }
-      zone.exitId = order.exit_id;
-      zone.route = route;
-      zone.routeBlocked = false;
-      if (redirect) {
-        for (const packet of this.packets) {
-          if (packet.zone === index) this.reroutePacket(packet, order.exit_id, blocked);
-        }
-      }
-      const minutes = Math.round(route.seconds / SECONDS_PER_MINUTE);
-      return {
-        order,
-        accepted: true,
-        note: `${redirect ? "Redirected" : "Ordered"} via ${order.exit_id}, ${minutes} min free-flow.`,
-      };
+      if (order.type === "stage_evacuation") return this.stageZone(order, index, route);
+      const outcome = this.orderZone(index, order.exit_id, route, 1);
+      return { order, accepted: true, note: outcome };
     }
 
     const unit = this.units.find((candidate) => candidate.id === order.unit_id);
@@ -414,6 +445,224 @@ export class DispatchEngine {
       accepted: true,
       note: `${unit.id} en route to ${order.zone_id}, ${minutes} min.`,
     };
+  }
+
+  /** Order a zone out now (or redirect it); returns the outcome note. */
+  private orderZone(
+    index: number,
+    exitId: string,
+    route: Route,
+    wave: number,
+    released = false,
+  ): string {
+    const zone = this.zones[index];
+    const redirect = zone.status !== "no_order" && zone.exitId !== exitId;
+    const fresh = zone.status === "no_order";
+    if (fresh) {
+      zone.status = "ordered";
+      zone.orderedMinute = this.minute;
+      zone.orderRank = this.nextOrderRank++;
+      zone.wave = wave;
+      zone.stage = null;
+      const { firstHome, homes } = this.area.zones[index];
+      for (let h = firstHome; h < firstHome + homes; h += 1) {
+        if (this.homeStatus[h] === HomeStatus.idle) this.homeStatus[h] = HomeStatus.ordered;
+      }
+    }
+    zone.exitId = exitId;
+    zone.route = route;
+    zone.routeBlocked = false;
+    if (redirect) {
+      const blocked = this.blockedAt(this.minute);
+      for (const packet of this.packets) {
+        if (packet.zone === index) this.reroutePacket(packet, exitId, blocked);
+      }
+    }
+    const minutes = Math.max(1, Math.round(route.seconds / SECONDS_PER_MINUTE));
+    if (fresh || redirect) {
+      const exit = this.exitLabel(exitId);
+      this.notice(
+        index,
+        redirect ? "redirect" : "leave_now",
+        exitId,
+        redirect
+          ? `Change of route: leave via ${exit} instead, about ${minutes} min drive.`
+          : `${released ? `Your turn (wave ${wave}): leave` : "Leave"} now via ${exit}, about ${minutes} min drive.`,
+      );
+    }
+    return `${redirect ? "Redirected" : "Ordered"} via ${exitId}, ${minutes} min free-flow.`;
+  }
+
+  private stageZone(
+    order: Extract<Order, { type: "stage_evacuation" }>,
+    index: number,
+    route: Route,
+  ): OrderOutcome {
+    const reject = (note: string): OrderOutcome => ({ order, accepted: false, note });
+    const zone = this.zones[index];
+    if (zone.status !== "no_order")
+      return reject(`${order.zone_id} is already ordered; use order_evacuation to redirect it.`);
+    const after = this.zoneIndex.get(order.after_zone_id);
+    if (after === undefined) return reject(`Unknown zone ${order.after_zone_id}.`);
+    if (after === index) return reject("A zone cannot be staged after itself.");
+    const predecessor = this.zones[after];
+    if (predecessor.status === "cleared" || predecessor.status === "overrun")
+      return reject(`${order.after_zone_id} has no households left to wait for; order directly.`);
+    if (predecessor.status === "no_order" && !predecessor.stage)
+      return reject(
+        `${order.after_zone_id} has no order and is not staged; order or stage it first.`,
+      );
+    // Walk the predecessor's chain: staging must not close a loop.
+    let cursor: number | null = after;
+    for (let i = 0; cursor !== null && i < MAX_CHAIN; i += 1) {
+      if (cursor === index) return reject("That staging would make a loop of waiting zones.");
+      cursor = this.zones[cursor].stage?.after ?? null;
+    }
+    const restage = zone.stage !== null;
+    zone.stage = { exitId: order.exit_id, after, stagedMinute: this.minute };
+    const wave = this.waveOf(index) ?? 2;
+    const slack = this.orderSlackMinutes(index);
+    const exit = this.exitLabel(order.exit_id);
+    this.notice(
+      index,
+      "prepare",
+      order.exit_id,
+      `Get ready, but stay home for now: you leave in wave ${wave}, after ${this.zoneName(after)}, so the road stays clear. You will be told when it is your turn; your route will be ${exit}.`,
+    );
+    const minutes = Math.max(1, Math.round(route.seconds / SECONDS_PER_MINUTE));
+    return {
+      order,
+      accepted: true,
+      note: `${restage ? "Re-staged" : "Staged"} as wave ${wave} after ${order.after_zone_id} via ${order.exit_id} (${minutes} min free-flow)${slack !== null ? `; released by T+${Math.max(0, Math.round(this.minute + slack - STAGE_RELEASE_SLACK_MINUTES))} at the latest` : ""}.`,
+    };
+  }
+
+  /** 1 for a zone ordered directly; for a staged zone, its predecessor's wave + 1. */
+  waveOf(index: number): number | null {
+    let depth = 0;
+    let cursor: number | null = index;
+    for (let i = 0; cursor !== null && i < MAX_CHAIN; i += 1) {
+      const zone: ZoneState = this.zones[cursor];
+      if (zone.stage) {
+        depth += 1;
+        cursor = zone.stage.after;
+        continue;
+      }
+      return zone.wave === null ? null : zone.wave + depth;
+    }
+    return null;
+  }
+
+  /**
+   * Minutes left to give this zone its order so every household can be out of its home and
+   * onto the road before the modelled fire first reaches the zone: time to fire contact minus
+   * the larger of the departure spread and the time for its vehicles to enter the route at the
+   * bottleneck. Null when no fire contact is modelled. Negative means already late. An estimate
+   * from simulator figures (ignores shared roads), never the agent's.
+   */
+  orderSlackMinutes(index: number): number | null {
+    const contact = this.exposure.zoneContact[index];
+    if (!Number.isFinite(contact)) return null;
+    const zone = this.zones[index];
+    const work = this.work[index];
+    const supported = this.units.some(
+      (unit) =>
+        unit.status === "on_scene" && unit.task === "evacuation_support" && unit.zone === index,
+    );
+    const spread = supported ? SUPPORTED_DEPARTURE_SPREAD_MINUTES : DEPARTURE_SPREAD_MINUTES;
+    let bottleneck = zone.route?.bottleneckVph ?? 0;
+    const exitId = zone.stage?.exitId ?? zone.exitId;
+    if (bottleneck <= 0 && exitId) {
+      const blocked = this.blockedAt(this.minute);
+      const tree = shortestPathTree(this.area, this.area.zones[index].node, blocked);
+      bottleneck = routeTo(this.area, tree, this.exitNode(exitId))?.bottleneckVph ?? 0;
+    }
+    const vehicles = (zone.atHome + zone.queued) * work.vehiclesPerHome;
+    const queueMinutes = bottleneck > 0 ? (vehicles / bottleneck) * SECONDS_PER_MINUTE : 0;
+    return contact - this.minute - Math.max(spread, queueMinutes);
+  }
+
+  private exitLabel(exitId: string): string {
+    const exit = this.area.exits[this.exitIndex.get(exitId) ?? -1];
+    if (!exit) return exitId;
+    return exit.road && !exit.name.includes(exit.road) ? `${exit.name} (${exit.road})` : exit.name;
+  }
+
+  private notice(zone: number, kind: NoticeKind, exitId: string | null, text: string): void {
+    const state = this.zones[zone];
+    this.notices.push({
+      id: this.nextNoticeId++,
+      minute: this.minute,
+      zone,
+      kind,
+      homes: state.atHome + state.queued,
+      exitId,
+      text,
+    });
+    if (this.notices.length > MAX_NOTICES)
+      this.notices.splice(0, this.notices.length - MAX_NOTICES);
+  }
+
+  /** Release staged zones whose predecessor has left, or whose own slack has run out. */
+  private releaseStaged(blocked: (edge: number) => boolean): void {
+    // Several passes so a chain whose predecessor is released this minute is evaluated in order.
+    for (let pass = 0; pass < MAX_CHAIN; pass += 1) {
+      let released = false;
+      for (const zone of this.zones) {
+        const stage = zone.stage;
+        if (!stage || zone.status !== "no_order") continue;
+        const before = this.zones[stage.after];
+        const predecessorGone =
+          before.status === "cleared" ||
+          before.status === "overrun" ||
+          (before.status === "ordered" && before.atHome + before.queued === 0) ||
+          (before.status === "no_order" && !before.stage);
+        const slack = this.orderSlackMinutes(zone.index);
+        const deadline = slack !== null && slack <= STAGE_RELEASE_SLACK_MINUTES;
+        if (!predecessorGone && !deadline) continue;
+        const wave = (this.waveOf(stage.after) ?? 1) + 1;
+        const tree = shortestPathTree(this.area, this.area.zones[zone.index].node, blocked);
+        let exitId = stage.exitId;
+        let route = routeTo(this.area, tree, this.exitNode(exitId));
+        if (!route) {
+          for (const exit of this.area.exits) {
+            const candidate = routeTo(this.area, tree, exit.node);
+            if (candidate && (!route || candidate.seconds < route.seconds)) {
+              route = candidate;
+              exitId = exit.id;
+            }
+          }
+        }
+        const id = this.area.zones[zone.index].id;
+        if (!route) {
+          zone.stage = null;
+          this.alert(
+            "route_blocked",
+            `${this.zoneName(zone.index)} is due to leave but no exit is reachable avoiding fire.`,
+            true,
+          );
+          this.notice(
+            zone.index,
+            "hold",
+            null,
+            "Every route out is cut off by fire in the simulation. Shelter in place until dispatch gives a route.",
+          );
+          continue;
+        }
+        zone.stage = null;
+        this.orderZone(zone.index, exitId, route, wave, true);
+        released = true;
+        const why = predecessorGone
+          ? `${this.area.zones[stage.after].id} is on the road`
+          : "its time to leave ran out before the previous wave finished";
+        this.alert(
+          "wave_released",
+          `Wave ${wave}: ${id} told to leave via ${exitId} (${why}).`,
+          !predecessorGone,
+        );
+      }
+      if (!released) break;
+    }
   }
 
   private approachSeconds(unit: UnitState): number {
@@ -464,6 +713,7 @@ export class DispatchEngine {
     this.emitIgnitions(previous, now);
     const blocked = this.blockedAt(now);
     this.checkFire(now);
+    this.releaseStaged(blocked);
     this.updateZoneRoutes(blocked);
     this.departures();
     this.release();
@@ -521,6 +771,7 @@ export class DispatchEngine {
         for (let h = firstHome; h < firstHome + homes; h += 1) this.catchHome(zone, h);
         work.queue = [];
         zone.status = "overrun";
+        zone.stage = null;
         this.alert(
           "zone_overrun",
           `Fire reaches the core of ${name}: ${zone.caught - before} homes still there are caught.`,
@@ -549,6 +800,12 @@ export class DispatchEngine {
       } else if (!zone.routeBlocked) {
         zone.route = null;
         zone.routeBlocked = true;
+        this.notice(
+          zone.index,
+          "hold",
+          zone.exitId,
+          `Your route to ${this.exitLabel(zone.exitId)} is cut off by fire. If you have not left, wait for a new route.`,
+        );
         this.alert(
           "route_blocked",
           `${this.zoneName(zone.index)} cannot reach ${zone.exitId} without crossing fire or a closed road; departures are held until it gets another exit.`,

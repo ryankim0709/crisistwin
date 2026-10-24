@@ -2,7 +2,8 @@
    console docked on the right. Page-specific classes use the `dsp-` prefix. Buttons, notices,
    segmented controls and inputs come from the UI kit (src/ui); colours are --ct-* tokens. */
 
-.dsp-page {
+.dsp-page,
+.dsp-console {
   --dsp-safe: var(--ct-success);
   --dsp-bad: var(--ct-danger);
   --dsp-amber: var(--ct-warning);
@@ -805,6 +806,142 @@
   color: var(--ct-ink-muted);
   font-size: 11px;
   line-height: 1.4;
+}
+
+/* Beside the Simulation Studio stage (/dispatch): a fixed-width column on the right. */
+.studio-page--aside > .dsp-console {
+  flex: 0 0 clamp(340px, 30vw, 420px);
+}
+
+@media (max-width: 980px) {
+  .studio-page--aside > .dsp-console {
+    flex: none;
+    border-top: 1px solid var(--dsp-line);
+    border-left: 0;
+  }
+}
+
+/* ---------- Live monitor: waves, order slack, notices, quiet checks ---------- */
+
+.dsp-speed + .dsp-speed {
+  margin-left: 0;
+}
+
+.dsp-zone__head {
+  flex-wrap: wrap;
+}
+
+.dsp-zone__head strong {
+  flex: 1;
+}
+
+.dsp-badge--staged {
+  background: var(--ct-info-soft);
+  color: var(--ct-info);
+}
+
+.dsp-chip--wave {
+  background: var(--ct-info-soft);
+  color: var(--ct-info);
+}
+
+.dsp-chip--soon {
+  background: var(--ct-warning-soft);
+  color: var(--dsp-amber);
+}
+
+.dsp-chip--urgent,
+.dsp-chip--late {
+  background: var(--ct-danger-soft);
+  color: var(--dsp-bad);
+}
+
+.dsp-woke {
+  padding: 7px 10px;
+  border: 1px solid var(--ct-info-border);
+  border-radius: 8px;
+  background: var(--ct-info-soft);
+  font-size: 12px;
+}
+
+.dsp-woke__title {
+  color: var(--ct-info);
+  font-size: 10.5px;
+  font-weight: 750;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+
+.dsp-woke ul {
+  margin: 4px 0 0;
+  padding-left: 16px;
+}
+
+.dsp-quiet {
+  padding: 2px 4px;
+  color: var(--ct-ink-muted);
+  font-size: 11.5px;
+  list-style: none;
+}
+
+.dsp-notices {
+  display: grid;
+  gap: 8px;
+}
+
+.dsp-notice-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dsp-notice {
+  display: flex;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--dsp-line);
+  border-left-width: 3px;
+  border-radius: 8px;
+  font-size: 12.5px;
+}
+
+.dsp-notice--leave_now {
+  border-left-color: var(--dsp-safe);
+}
+
+.dsp-notice--prepare {
+  border-left-color: var(--ct-info);
+}
+
+.dsp-notice--redirect {
+  border-left-color: var(--dsp-amber);
+}
+
+.dsp-notice--hold {
+  border-left-color: var(--dsp-bad);
+}
+
+.dsp-notice__icon {
+  flex: none;
+}
+
+.dsp-notice__body {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.dsp-notice__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.dsp-notice__head .dsp-tag {
+  margin-left: 0;
 }
 
 /* ---------- Narrow screens: console below the stage ---------- */

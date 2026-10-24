@@ -75,6 +75,7 @@ const LABEL_CSS = `
 .fdx-dsp-zone b { font-weight: 750; }
 .fdx-dsp-zone--ordered { background: rgba(255, 246, 228, 0.95); border-color: rgba(242, 163, 58, 0.55); color: #6b4300; }
 .fdx-dsp-zone--cleared { background: rgba(232, 247, 238, 0.95); border-color: rgba(46, 159, 98, 0.55); color: #1d5e3c; }
+.fdx-dsp-zone--staged { background: rgba(232, 240, 252, 0.95); border-color: rgba(47, 111, 222, 0.5); color: #1d3f7a; }
 .fdx-dsp-zone--overrun { background: rgba(253, 236, 233, 0.95); border-color: rgba(216, 67, 47, 0.55); color: #8f2414; }
 .fdx-dsp-zone--selected { outline: 2px solid #142b27; outline-offset: 1px; }
 .fdx-dsp-swatch { width: 9px; height: 9px; border-radius: 2px; flex: none; }
@@ -574,6 +575,11 @@ export class DispatchOverlay implements BoardOverlay {
         wanted.set(index, {
           cls: `fdx-dsp-zone fdx-dsp-zone--ordered${sel}`,
           html: `#${state.orderRank} <b>${zone.id}</b> ${swatch}→ ${state.exitId}${state.routeBlocked ? " ⚠" : ""} · ${state.safe}/${zone.homes}`,
+        });
+      } else if (state?.stage && engine) {
+        wanted.set(index, {
+          cls: `fdx-dsp-zone fdx-dsp-zone--staged${sel}`,
+          html: `⏳ wave ${engine.waveOf(index) ?? "?"} <b>${zone.id}</b> after ${area.zones[state.stage.after].id}`,
         });
       } else if (selected) {
         wanted.set(index, {

@@ -9,6 +9,7 @@ import {
   FORECAST_LOOKAHEAD_MINUTES,
   ROUTE_LOOKAHEAD_MINUTES,
   DEPARTURE_SPREAD_MINUTES,
+  STAGE_RELEASE_SLACK_MINUTES,
   SUPPORTED_DEPARTURE_SPREAD_MINUTES,
   type Alert,
   type DispatchEngine,
@@ -29,6 +30,8 @@ function etaWithin(arrival: number, now: number): number | null {
 
 function describeOrder(order: Order): string {
   if (order.type === "order_evacuation") return `evacuate ${order.zone_id} via ${order.exit_id}`;
+  if (order.type === "stage_evacuation")
+    return `stage ${order.zone_id} after ${order.after_zone_id} via ${order.exit_id}`;
   if (order.type === "dispatch_unit") return `${order.unit_id} → ${order.zone_id} (${order.task})`;
   return `recall ${order.unit_id}`;
 }
@@ -47,7 +50,10 @@ export interface ObservationInputs {
   windFromDegrees: number;
   windSpeedMph: number;
   ignitions: IgnitionEvent[];
-  nextRegularDecisionMinute: number;
+  nextCheckMinute: number;
+  checkIntervalMinutes: number;
+  previousDecisionMinute: number | null;
+  wokeBecause: string[];
   alerts: Alert[];
   previousOutcomes: OrderOutcome[];
   previousSummary: string;
@@ -92,6 +98,8 @@ export function buildObservation(inputs: ObservationInputs): Observation {
       }
     }
     const perHome = engine.vehiclesPerHome(state.index);
+    const done = state.status === "cleared" || state.status === "overrun";
+    const slack = done ? null : engine.orderSlackMinutes(state.index);
     const waitingVehicles = (state.atHome + state.queued) * perHome;
     return {
       id: zone.id,
@@ -107,6 +115,10 @@ export function buildObservation(inputs: ObservationInputs): Observation {
       fire_eta_min: etaWithin(exposure.zoneContact[state.index], minute),
       fire_core_eta_min: etaWithin(exposure.zoneCore[state.index], minute),
       assigned_exit: state.exitId,
+      order_slack_min: slack === null ? null : Math.round(slack),
+      wave: engine.waveOf(state.index),
+      staged_after: state.stage ? area.zones[state.stage.after].id : null,
+      staged_exit: state.stage?.exitId ?? null,
       queue_clear_min:
         state.route && !state.routeBlocked
           ? Math.round((waitingVehicles / state.route.bottleneckVph) * 60)
@@ -149,7 +161,12 @@ export function buildObservation(inputs: ObservationInputs): Observation {
     clock: {
       minute,
       horizon_minutes: engine.horizonMinutes,
-      next_regular_decision_minute: inputs.nextRegularDecisionMinute,
+      next_check_minute: inputs.nextCheckMinute,
+    },
+    monitor: {
+      check_interval_minutes: inputs.checkIntervalMinutes,
+      previous_decision_minute: inputs.previousDecisionMinute,
+      woke_because: inputs.wokeBecause,
     },
     fire: {
       burned_area_ha: Math.round((frame?.burnedAreaSquareMeters ?? 0) / SQUARE_METERS_PER_HECTARE),
@@ -181,6 +198,8 @@ export function buildObservation(inputs: ObservationInputs): Observation {
       `Fire ETAs are the fire model's forecast, shown up to ${FORECAST_LOOKAHEAD_MINUTES} min ahead; the fire spread is precomputed and is not changed by any order.`,
       `After an evacuation order households leave over ${DEPARTURE_SPREAD_MINUTES} min (${SUPPORTED_DEPARTURE_SPREAD_MINUTES} min while an engine is on scene on evacuation_support), then queue at the zone's loading point for road capacity.`,
       `Routes avoid roads the fire reaches within ${ROUTE_LOOKAHEAD_MINUTES} min. Zones whose exit becomes unreachable hold departures until given another exit.`,
+      `A staged zone (stage_evacuation) gets no order yet; the simulator orders it out automatically once every household of its after_zone has left home and the loading queue, or as soon as its own order_slack_min falls to ${STAGE_RELEASE_SLACK_MINUTES}.`,
+      "order_slack_min is the simulator's estimate: minutes until fire first reaches the zone minus the larger of the departure spread and the time its vehicles need to enter the route at the bottleneck. It ignores other zones sharing the road.",
       "structure_defense has no modelled effect on fire spread. Engines on scene withdraw automatically when fire is about to reach the zone core.",
       "A household counts as exposed when fire reaches its home before it leaves, reaches the zone core while it is still in the zone, or reaches the road it is on.",
       ...area.notes,
