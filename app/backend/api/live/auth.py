@@ -19,6 +19,7 @@ from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from datetime import timedelta
 
+from django.conf import settings
 from django.core.cache import cache
 from livecore.drill import INCIDENT_ID
 from pymongo.errors import PyMongoError
@@ -106,6 +107,8 @@ def client_ip(request) -> str:
 
 def rate_limited(key: str, limit: int, window_s: int) -> bool:
     """Fixed-window counter in the Django cache (per process with the default LocMemCache)."""
+    if getattr(settings, "LIVE_LOADTEST_RELAX_LIMITS", False):
+        return False  # load tests only; defaults off (docs/live-loadtest.md)
     cache_key = f"live-rl:{key}"
     if cache.add(cache_key, 1, timeout=window_s):
         return False
