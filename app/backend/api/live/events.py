@@ -253,4 +253,3 @@ def incident_events(request, incident_id: str, principal: Principal):
     else:
         body = collect(incident_id, position, now, int(raw_limit))
     return ok({"incident_id": incident_id, "generated_at": iso(now), **body})
-
