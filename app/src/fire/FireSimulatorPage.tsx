@@ -1038,7 +1038,7 @@ export default function FireSimulatorPage() {
                   </div>
                 )}
                 <p className="fr-readout">
-                  {region && `${region.summary} · `}
+                  {region && `${region.summary} Anchor: ${region.station.name}. · `}
                   {centerLatitude.toFixed(3)}, {centerLongitude.toFixed(3)} ·{" "}
                   {formatKm(radiusMeters)} km · {displayedCellMeters} m cells
                   {resamplingNote}
