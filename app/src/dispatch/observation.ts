@@ -22,14 +22,48 @@ import {
 } from "./engine";
 import { ENGINE_HOLDS_FLAME_FEET, ENGINE_LINE_METERS_PER_MINUTE } from "./fireAttack";
 import { routeTo, shortestPathTree } from "./routing";
+import { roadLabel } from "./area";
 
 const SQUARE_METERS_PER_HECTARE = 10_000;
+/** Named roads listed in `roads.fire_cut_roads`, nearest-in-time first. */
+const MAX_FIRE_CUT_ROADS = 12;
 
 function etaWithin(arrival: number, now: number): number | null {
   if (!Number.isFinite(arrival)) return null;
   const minutes = arrival - now;
   if (minutes <= 0) return 0;
   return minutes <= FORECAST_LOOKAHEAD_MINUTES ? Math.round(minutes) : null;
+}
+
+/**
+ * Roads routing cannot use now: the planner's closures, and the road segments the fire model
+ * reaches within the routing lookahead (named roads earliest first).
+ */
+export function roadsObservation(engine: DispatchEngine): Observation["roads"] {
+  const { area, minute } = engine;
+  const arrival = engine.exposure.edgeArrival;
+  const limit = minute + ROUTE_LOOKAHEAD_MINUTES;
+  let segments = 0;
+  const firstCut = new Map<string, number>();
+  area.edges.forEach((edge, index) => {
+    if (engine.closedEdges.has(index) || !(arrival[index] <= limit)) return;
+    segments += 1;
+    if (!edge.name) return;
+    const label = roadLabel(edge);
+    firstCut.set(label, Math.min(firstCut.get(label) ?? Infinity, arrival[index]));
+  });
+  return {
+    planner_closed: engine.roadClosures.map(({ edge, minute: since }) => ({
+      road: roadLabel(area.edges[edge]),
+      bridge: area.edges[edge].bridge,
+      since_minute: since,
+    })),
+    fire_cut_segments: segments,
+    fire_cut_roads: [...firstCut.entries()]
+      .sort((a, b) => a[1] - b[1])
+      .slice(0, MAX_FIRE_CUT_ROADS)
+      .map(([road]) => road),
+  };
 }
 
 function describeOrder(order: Order): string {
@@ -273,6 +307,7 @@ export function buildObservation(inputs: ObservationInputs): Observation {
       exposed: totals.caught,
     },
     zones,
+    roads: roadsObservation(engine),
     fires,
     exits: area.exits.map((exit) => ({ id: exit.id, name: exit.name })),
     units,
@@ -288,7 +323,7 @@ export function buildObservation(inputs: ObservationInputs): Observation {
       `Fire ETAs are the fire model's forecast, shown up to ${FORECAST_LOOKAHEAD_MINUTES} min ahead; the fire spread changes only when engines put a fire out or hold it with line (it is then re-run).`,
       `Live clock: the simulation keeps running while you decide. Your orders take effect when your answer arrives, about clock.decision_delay_min simulated minutes after this observation, from wherever fire, traffic and engines are by then. Engines leaving a station need ${Math.round(TURNOUT_SECONDS)} s turnout before driving. tactic_options already account for both delays.`,
       `After an evacuation order households leave over ${DEPARTURE_SPREAD_MINUTES} min (${SUPPORTED_DEPARTURE_SPREAD_MINUTES} min while an engine is on scene on evacuation_support), then queue at the zone's loading point for road capacity.`,
-      `Routes avoid roads the fire reaches within ${ROUTE_LOOKAHEAD_MINUTES} min. Zones whose exit becomes unreachable hold departures until given another exit.`,
+      `Routes avoid roads the fire reaches within ${ROUTE_LOOKAHEAD_MINUTES} min (roads.fire_cut_*) and roads the planner closed (roads.planner_closed, the planner's assumption; they can close or reopen a road at any minute). exit_options already avoid both. Zones whose exit becomes unreachable hold departures until given another exit.`,
       `A staged zone (stage_evacuation) gets no order yet; the simulator orders it out automatically once every household of its after_zone has left home and the loading queue, or as soon as its own order_slack_min falls to ${STAGE_RELEASE_SLACK_MINUTES}.`,
       "order_slack_min is the simulator's estimate: minutes until fire first reaches the zone minus the larger of the departure spread and the time its vehicles need to enter the route at the bottleneck. It ignores other zones sharing the road.",
       "structure_defense has no modelled effect on fire spread. Engines on scene in a zone withdraw automatically when fire is about to reach the zone core.",

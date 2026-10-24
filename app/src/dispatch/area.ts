@@ -40,6 +40,12 @@ export interface RoadEdge {
   coords: LonLat[];
 }
 
+/** A road's display name: its OSM name or class, marked when it is a bridge. */
+export function roadLabel(edge: RoadEdge): string {
+  const name = edge.name ?? `Unnamed ${edge.roadClass.replace("_", " ")} road`;
+  return edge.bridge ? `${name} (bridge)` : name;
+}
+
 export interface Zone {
   id: string;
   name: string;

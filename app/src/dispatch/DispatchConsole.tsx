@@ -91,6 +91,8 @@ export interface DispatchConsoleProps {
   onSpeedChange: (speed: number) => void;
   onCheckIntervalChange: (minutes: number) => void;
   onSelectZone: (zone: number | null) => void;
+  /** The road-closure tool (RoadClosures), shown above the console tabs. */
+  roads?: ReactNode;
   /** Extra controls under the console (the resident app share toggle). */
   footer?: ReactNode;
 }
@@ -779,6 +781,12 @@ function LogEntry({ entry, area }: { entry: DecisionLogEntry; area: DispatchArea
           ))}
         </ul>
       )}
+      {entry.recalledRuns > 0 && (
+        <p className="dsp-note">
+          Recalled {entry.recalledRuns} earlier simulated run{entry.recalledRuns === 1 ? "" : "s"}{" "}
+          on these roads from the run journal (MongoDB Atlas), as lessons.
+        </p>
+      )}
       {entry.thinking && (
         <details className="dsp-thinking" open={entry.status === "streaming" && !entry.text}>
           <summary>Reasoning summary</summary>
@@ -942,6 +950,7 @@ export default function DispatchConsole(props: DispatchConsoleProps) {
         </p>
       )}
       {engine && latest && area && <LatestOrders entry={latest} area={area} />}
+      {area && props.roads}
 
       {engine && area && (
         <>
