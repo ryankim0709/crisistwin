@@ -8,6 +8,8 @@
  * only cell addressing uses Mercator metres.
  */
 
+import { FUEL_NO_DATA } from "./fuelModels";
+
 export interface MercatorBox {
   minX: number;
   minY: number;
@@ -26,6 +28,8 @@ export interface LandscapeGrid {
   cellSizeY: number;
   /** Ground metres per cell, after the Mercator scale correction. */
   groundCellSizeMeters: number;
+  /** False when a terrain tile was unavailable, so slope is understated in places. */
+  elevationComplete: boolean;
   /** LANDFIRE FBFM40 code per cell. */
   fuelCodes: Int16Array;
   /** Metres above sea level per cell. */
@@ -210,26 +214,208 @@ export function decodeGeoTiff(buffer: ArrayBuffer): DecodedRaster {
   return { width, height, values, transform: { originX, originY, scaleX, scaleY } };
 }
 
-export async function fetchFuelRaster(
-  box: MercatorBox,
-  signal: AbortSignal,
-): Promise<DecodedRaster> {
-  const url =
+/** Smallest plausible coverage response; anything shorter is a truncated or empty reply. */
+const MIN_COVERAGE_BYTES = 1024;
+const MAX_FUEL_ATTEMPTS = 3;
+const RETRY_BASE_DELAY_MS = 500;
+const MAX_RETRY_DELAY_MS = 4000;
+
+function abortError(signal: AbortSignal): unknown {
+  return signal.reason ?? new DOMException("The operation was aborted.", "AbortError");
+}
+
+/** Reject as soon as `signal` aborts, without cancelling the shared work behind `promise`. */
+function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(abortError(signal));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(abortError(signal));
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+  });
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+class UpstreamError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = "UpstreamError";
+  }
+}
+
+/**
+ * The LANDFIRE service returns an occasional empty 500 for a request that succeeds on
+ * the next attempt, so retry transient failures a bounded number of times.
+ */
+async function fetchCoverageWithRetry(url: string): Promise<ArrayBuffer> {
+  let lastStatus = 0;
+  for (let attempt = 1; attempt <= MAX_FUEL_ATTEMPTS; attempt++) {
+    let retryAfterMs: number | null = null;
+    try {
+      const response = await fetch(url);
+      lastStatus = response.status;
+      if (response.ok) {
+        const buffer = await response.arrayBuffer();
+        if (buffer.byteLength >= MIN_COVERAGE_BYTES) return buffer;
+        // A short 200 is an empty or truncated coverage; worth one more attempt.
+      } else if (response.status === 404) {
+        throw new UpstreamError(
+          "LANDFIRE has no fuel data for this area. Coverage is limited to the contiguous United States.",
+          404,
+        );
+      } else if (response.status < 500 && response.status !== 429) {
+        throw new UpstreamError(
+          `LANDFIRE rejected the fuel data request (${response.status}).`,
+          response.status,
+        );
+      } else if (response.status === 429) {
+        const header = Number(response.headers.get("Retry-After"));
+        if (Number.isFinite(header) && header > 0) {
+          retryAfterMs = Math.min(header * 1000, MAX_RETRY_DELAY_MS);
+        }
+      }
+    } catch (cause) {
+      if (cause instanceof UpstreamError) throw cause;
+      // Anything else is a network-level failure; fall through and retry.
+      lastStatus = 0;
+    }
+    if (attempt < MAX_FUEL_ATTEMPTS) {
+      const backoff = Math.min(RETRY_BASE_DELAY_MS * 2 ** (attempt - 1), MAX_RETRY_DELAY_MS);
+      await delay(retryAfterMs ?? backoff * (0.7 + Math.random() * 0.6));
+    }
+  }
+  throw new UpstreamError(
+    lastStatus === 0
+      ? "Could not reach the LANDFIRE fuel service. Check the network connection and try again."
+      : `The LANDFIRE fuel service is failing (${lastStatus}) after ${MAX_FUEL_ATTEMPTS} attempts. Try again in a moment.`,
+    lastStatus,
+  );
+}
+
+/**
+ * One upstream request per distinct URL. React runs effects twice in development, and a
+ * shared entry keeps that from issuing two large duplicate downloads. The underlying
+ * request is deliberately not cancellable: callers drop out through `abortable`, and
+ * letting the download finish means a re-mount is served from the settled promise.
+ */
+const inFlightCoverage = new Map<string, Promise<ArrayBuffer>>();
+
+function sharedCoverage(url: string): Promise<ArrayBuffer> {
+  const existing = inFlightCoverage.get(url);
+  if (existing) return existing;
+  const request = fetchCoverageWithRetry(url).finally(() => inFlightCoverage.delete(url));
+  inFlightCoverage.set(url, request);
+  return request;
+}
+
+/**
+ * Largest sub-request side, in cells. The service snaps a large GetCoverage up to its own
+ * 1024-cell tile and truncates the body at 2 MiB; the proxy then sees the connection die
+ * and reports a 500. Staying well under that returns whole, correct responses.
+ */
+const MAX_REQUEST_CELLS = 320;
+const FUEL_CELL_METERS = 30;
+/** Concurrent sub-requests; enough to be quick without hammering the service. */
+const MAX_PARALLEL_REQUESTS = 4;
+
+function coverageUrl(box: MercatorBox): string {
+  return (
     `${LANDFIRE_WCS_URL}?service=WCS&version=2.0.1&request=GetCoverage` +
     `&coverageId=${LANDFIRE_COVERAGE}` +
     `&subset=X(${box.minX.toFixed(2)},${box.maxX.toFixed(2)})` +
     `&subset=Y(${box.minY.toFixed(2)},${box.maxY.toFixed(2)})` +
-    `&format=image/tiff`;
-  const response = await fetch(url, { signal });
-  if (!response.ok) {
-    throw new Error(
-      `LANDFIRE fuel data request failed (${response.status}). The area may be outside the ` +
-        `contiguous United States, where this layer has no coverage.`,
-    );
+    `&format=image/tiff`
+  );
+}
+
+async function mapWithLimit<T, R>(
+  items: T[],
+  limit: number,
+  run: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      for (let index = next++; index < items.length; index = next++) {
+        results[index] = await run(items[index]);
+      }
+    }),
+  );
+  return results;
+}
+
+/**
+ * Fetch the fuel grid as a mosaic of bounded sub-requests and stitch them into one
+ * raster. All pieces sit on the same 30 m Mercator lattice, so offsets are whole cells.
+ */
+export async function fetchFuelRaster(
+  box: MercatorBox,
+  signal: AbortSignal,
+): Promise<DecodedRaster> {
+  const span = MAX_REQUEST_CELLS * FUEL_CELL_METERS;
+  const columns = Math.max(1, Math.ceil((box.maxX - box.minX) / span));
+  const rows = Math.max(1, Math.ceil((box.maxY - box.minY) / span));
+  const chunkWidth = (box.maxX - box.minX) / columns;
+  const chunkHeight = (box.maxY - box.minY) / rows;
+
+  const boxes: MercatorBox[] = [];
+  for (let row = 0; row < rows; row++) {
+    for (let column = 0; column < columns; column++) {
+      boxes.push({
+        minX: box.minX + column * chunkWidth,
+        maxX: box.minX + (column + 1) * chunkWidth,
+        minY: box.minY + row * chunkHeight,
+        maxY: box.minY + (row + 1) * chunkHeight,
+      });
+    }
   }
-  const buffer = await response.arrayBuffer();
-  if (buffer.byteLength < 1024) throw new Error("LANDFIRE returned no fuel data for this area.");
-  return decodeGeoTiff(buffer);
+
+  const pieces = await mapWithLimit(boxes, MAX_PARALLEL_REQUESTS, async (piece) =>
+    decodeGeoTiff(await abortable(sharedCoverage(coverageUrl(piece)), signal)),
+  );
+  if (pieces.length === 1) return pieces[0];
+
+  // Union extent on the shared lattice. scaleY is negative, so originY is the north edge.
+  const scaleX = pieces[0].transform.scaleX;
+  const scaleY = pieces[0].transform.scaleY;
+  const westEdge = Math.min(...pieces.map((piece) => piece.transform.originX));
+  const northEdge = Math.max(...pieces.map((piece) => piece.transform.originY));
+  const eastEdge = Math.max(
+    ...pieces.map((piece) => piece.transform.originX + piece.width * scaleX),
+  );
+  const southEdge = Math.min(
+    ...pieces.map((piece) => piece.transform.originY + piece.height * scaleY),
+  );
+  const width = Math.round((eastEdge - westEdge) / scaleX);
+  const height = Math.round((southEdge - northEdge) / scaleY);
+  if (width <= 0 || height <= 0) throw new Error("Fuel data pieces did not form a grid.");
+
+  const values = new Int16Array(width * height).fill(FUEL_NO_DATA);
+  for (const piece of pieces) {
+    const offsetX = Math.round((piece.transform.originX - westEdge) / scaleX);
+    const offsetY = Math.round((piece.transform.originY - northEdge) / scaleY);
+    for (let row = 0; row < piece.height; row++) {
+      const targetRow = offsetY + row;
+      if (targetRow < 0 || targetRow >= height) continue;
+      for (let column = 0; column < piece.width; column++) {
+        const targetColumn = offsetX + column;
+        if (targetColumn < 0 || targetColumn >= width) continue;
+        values[targetRow * width + targetColumn] = piece.values[row * piece.width + column];
+      }
+    }
+  }
+  return {
+    width,
+    height,
+    values,
+    transform: { originX: westEdge, originY: northEdge, scaleX, scaleY },
+  };
 }
 
 /** Decode one terrarium tile to metres: elevation = R * 256 + G + B / 256 - 32768. */
@@ -254,7 +440,10 @@ async function fetchTerrainTile(
   return elevations;
 }
 
-async function sampleElevation(raster: DecodedRaster, signal: AbortSignal): Promise<Float32Array> {
+async function sampleElevation(
+  raster: DecodedRaster,
+  signal: AbortSignal,
+): Promise<{ elevation: Float32Array; complete: boolean }> {
   const { width, height, transform } = raster;
   const tileSpan = EARTH_CIRCUMFERENCE_METERS / 2 ** TERRAIN_ZOOM;
   const tileIndex = (mercator: number, flip: boolean) =>
@@ -297,7 +486,9 @@ async function sampleElevation(raster: DecodedRaster, signal: AbortSignal): Prom
       elevation[row * width + column] = tile ? tile[pixelY * TILE_SIZE + pixelX] : 0;
     }
   }
-  return elevation;
+  // A missing tile would otherwise read as sea level, which silently flattens the slope.
+  const complete = [...tiles.values()].every((tile) => tile !== null);
+  return { elevation, complete };
 }
 
 /** Horn's method: slope and aspect from the 8 neighbours of each cell. */
@@ -341,7 +532,10 @@ export async function loadLandscape(
 ): Promise<LandscapeGrid> {
   const box = boxAround(longitude, latitude, groundRadiusMeters);
   const raster = await fetchFuelRaster(box, signal);
-  const elevationMeters = await sampleElevation(raster, signal);
+  const { elevation: elevationMeters, complete: elevationComplete } = await sampleElevation(
+    raster,
+    signal,
+  );
   const mercatorCell = Math.abs(raster.transform.scaleX);
   const groundCellSizeMeters = mercatorCell * Math.cos(latitude * RADIANS_PER_DEGREE);
   const { slopeTangent, upslopeDegrees } = slopeAndAspect(
@@ -358,6 +552,7 @@ export async function loadLandscape(
     cellSizeX: raster.transform.scaleX,
     cellSizeY: raster.transform.scaleY,
     groundCellSizeMeters,
+    elevationComplete,
     fuelCodes: raster.values,
     elevationMeters,
     slopeTangent,

@@ -3,8 +3,23 @@
  * minimum-travel-time arrival field (after Finney 2002), then contoured into perimeters.
  *
  * A cell's fire spreads to its neighbours at the elliptical rate for the direction of
- * travel, so heading, flanking, and backing spread all fall out of one field. Cells with
- * no fuel are never reached, which is what keeps fire out of water and streets.
+ * travel, so heading, flanking, and backing spread all fall out of one field.
+ *
+ * Two wildland-urban-interface mechanisms sit on top of that surface model. Both are
+ * coarse assumptions rather than physics, both can be switched off, and both are
+ * accounted for separately in the run output so a caller can say how much of a burn
+ * came from where:
+ *
+ *   - Ember spotting carries fire downwind over unvegetated ground into the first fuel
+ *     beyond it, so a road, a block of houses or a river is a delay rather than a wall.
+ *   - Structure-to-structure spread gives developed ground (FBFM40 91) its own spread
+ *     rate, so a subdivision burns instead of acting as a firebreak.
+ *
+ * Open water (98), snow or ice (92), agricultural land (93) and bare ground (99) still
+ * carry no fire and are never assigned an arrival time by either mechanism.
+ *
+ * Nothing here uses randomness, so a scenario plus a landscape reproduces a run exactly
+ * and no seed has to be recorded.
  *
  * Times are elapsed simulation-clock minutes from ignition. Distances inside the solver
  * are ground metres.
@@ -31,6 +46,13 @@ export interface FireScenario {
   midflameAdjustment: number;
   stepMinutes: number;
   horizonMinutes: number;
+  /** Ember transport across non-burnable gaps. `DEFAULT_SPOTTING` applies when omitted. */
+  spotting?: SpottingOptions;
+  /**
+   * Urban conflagration through developed ground. `DEFAULT_STRUCTURE_SPREAD` applies
+   * when omitted.
+   */
+  structureSpread?: StructureSpreadOptions;
 }
 
 export interface MoisturePreset {
@@ -77,13 +99,157 @@ export const HORIZON_CHOICES = [120, 180, 360] as const;
 /** Unsheltered midflame wind is roughly half the 20-foot wind (Albini & Baughman 1979). */
 export const DEFAULT_MIDFLAME_ADJUSTMENT = 0.5;
 
+/**
+ * LANDFIRE FBFM40 code for urban or developed ground: roads, parking lots, and
+ * residential subdivisions all carry it. In a wildland-urban interface box it is the
+ * overwhelming majority of the non-burnable area, which is why it gets its own mechanism
+ * while the other non-burnable codes do not.
+ */
+export const DEVELOPED_FUEL_CODE = 91;
+
+export interface SpottingOptions {
+  enabled: boolean;
+  /** Ceiling on how far downwind a firebrand may start a new fire, ground metres. */
+  maxDistanceMeters: number;
+}
+
+export interface StructureSpreadOptions {
+  enabled: boolean;
+  /**
+   * Downwind structure-to-structure head rate at `STRUCTURE_SPREAD_REFERENCE_WIND_MPH`,
+   * metres per minute.
+   */
+  rateMetersPerMinute: number;
+}
+
+/**
+ * Spotting is on by default. In the fires this tool is aimed at — Tubbs (2017), Camp
+ * (2018), Marshall (2021) — embers crossing roads into receptive fuel were a primary
+ * spread mechanism rather than an edge case, and without it a wildland-urban interface
+ * run stops at the first street.
+ *
+ * 500 m is a ceiling, not a typical distance. Surface fires and intermittent torching
+ * produce maximum spot distances of a few hundred metres (Albini, "Spot fire distance
+ * from burning trees", USDA Forest Service INT-56, 1979). The kilometre-plus spots
+ * reported on Camp and Tubbs came from plume-dominated crown fire, which this surface
+ * model does not represent, so claiming that reach here would not be supported.
+ */
+export const DEFAULT_SPOTTING: SpottingOptions = { enabled: true, maxDistanceMeters: 500 };
+
+/**
+ * Structure-to-structure spread is on by default for the same reason: with it off, the
+ * model asserts that a subdivision is a firebreak, which the historical record
+ * contradicts.
+ *
+ * 4 m/min is the downwind head rate at the reference wind. Anchor: the Tubbs Fire crossed
+ * US-101 into Coffey Park around 01:30 on 9 October 2017 and had consumed most of a tract
+ * roughly 1.2 km across by dawn, which is of order 5 m/min of front progression. Part of
+ * that progression was ember transport, which this model counts separately through
+ * spotting, so the structure-to-structure rate on its own is set below the observed
+ * figure rather than at it.
+ */
+export const DEFAULT_STRUCTURE_SPREAD: StructureSpreadOptions = {
+  enabled: true,
+  rateMetersPerMinute: 4,
+};
+
+/** Open 20-foot wind that `StructureSpreadOptions.rateMetersPerMinute` is quoted at, mph. */
+export const STRUCTURE_SPREAD_REFERENCE_WIND_MPH = 20;
+/**
+ * Bounds on the linear wind scaling of the structure rate. A structure is exposed at roof
+ * height rather than inside a fuel bed, so the open wind drives it and no midflame
+ * reduction is applied. The bounds stop a calm night from freezing the conflagration
+ * outright and stop a 60 mph gust from extrapolating a single anchor point into nonsense.
+ */
+export const STRUCTURE_WIND_FACTOR_MIN = 0.25;
+export const STRUCTURE_WIND_FACTOR_MAX = 3;
+/**
+ * Urban conflagration is much less elongated than a wind-driven wildland fire: it moves
+ * building to building by radiation and short-range firebrands rather than through a
+ * continuous fuel bed, and the spacing between structures, not the wind, sets much of the
+ * rate. Hamada's urban spread model (Hamada 1951, still the basis of Japanese and
+ * post-earthquake conflagration models) gives downwind spread of order three times the
+ * upwind rate; that ratio sets both the ellipse and the floor below.
+ */
+export const STRUCTURE_LENGTH_TO_BREADTH = 3;
+export const STRUCTURE_BACKING_RATE_FRACTION = 1 / 3;
+/**
+ * Assumed fireline intensity of burning developed ground, Btu/ft/s. Rothermel does not
+ * apply to structures, so no intensity is computed for them. This value exists only to
+ * size their ember reach and to report a flame length at a structure ignition, and is
+ * deliberately kept in the same order as a high-intensity brush fire instead of modelling
+ * a structure plume.
+ */
+export const STRUCTURE_FIRELINE_INTENSITY_BTU_PER_FOOT_PER_SECOND = 1000;
+
+/**
+ * Maximum spot distance grows with wind speed and with the square root of fireline
+ * intensity, the form the Albini (1979, 1983) firebrand models and the Alexander & Cruz
+ * (2006) fits take: a more intense fire lofts larger brands higher, and a stronger wind
+ * carries them further. Units are metres per (mile per hour × sqrt(Btu/ft/s)).
+ *
+ * The coefficient is calibrated so that a strong 45 mph wind over a high-intensity
+ * (≈2000 Btu/ft/s) shrubland fire reaches the 500 m ceiling, which is the reported order
+ * of maximum short-range spotting for wind-driven fires that are not crowning. It then
+ * gives about 140 m at 25 mph over a 500 Btu/ft/s brush fire — across a four-lane road,
+ * not across a subdivision — and about 80 m from a timber-litter fire in the same wind.
+ */
+export const SPOTTING_DISTANCE_COEFFICIENT = 0.25;
+/**
+ * Below this fireline intensity the fire is not lofting firebrands worth modelling.
+ * 100 Btu/ft/s is the long-standing 4-foot flame length threshold at which direct attack
+ * by hand crews stops being possible (Andrews & Rothermel, USDA Forest Service INT-131,
+ * 1982), which is a reasonable floor for a fire that can throw a spot across a road.
+ */
+export const SPOTTING_MIN_FIRELINE_INTENSITY_BTU_PER_FOOT_PER_SECOND = 100;
+/**
+ * Horizontal firebrand speed as a share of the open wind. Brands lag the air that carries
+ * them while they fall; half is a conservative round figure. Travel time is minor next to
+ * incubation at these distances: 200 m at 25 mph works out near 20 seconds.
+ */
+export const SPOTTING_EMBER_SPEED_FRACTION = 0.5;
+/**
+ * Added delay between the fire reaching a launch cell and a spot fire spreading at the
+ * receptor, minutes. It is the dominant term in a spot arrival time at these distances,
+ * and it bundles three things: lofting and flight lag beyond plain advection, the
+ * smouldering-to-flaming incubation of a landed brand, and — the largest of the three —
+ * the wait for a brand that actually establishes. This model is deterministic, so every
+ * receptive landing ignites, whereas the real per-brand ignition probability is far below
+ * one; the delay is what keeps that simplification from turning into free spread.
+ *
+ * It is therefore set at the long end of observed incubation rather than the middle, so
+ * that bridging a one-cell gap works out slower than burning through the same width of
+ * fuel at the spread rates these fuels produce. Spotting then removes barriers without
+ * accelerating the head, which is the behaviour the surface model can support.
+ */
+export const SPOTTING_IGNITION_DELAY_MINUTES = 10;
+/**
+ * Firebrand landings concentrate in a narrow cone about the wind vector. Five rays at
+ * these offsets from the wind bearing sample that cone; more rays cost solver time
+ * without changing which side of a road the fire lands on.
+ */
+export const SPOTTING_BEARING_OFFSETS_DEGREES = [-30, -15, 0, 15, 30] as const;
+/**
+ * Hard bound on how many cells one spotting ray may walk, so that a caller raising
+ * `maxDistanceMeters` cannot turn the solver quadratic. Effective reach is the smaller of
+ * this and the distance limit; at the 23.7 m Berkeley ground cell this is about 1.1 km,
+ * so the 500 m default ceiling binds first.
+ */
+export const SPOTTING_MAX_PATH_CELLS = 48;
+
 export const SPREAD_MODEL = {
   id: "rothermel-1972-mtt",
-  version: "2.0.0",
+  version: "3.0.0",
   surfaceSpread: "Rothermel (1972), per Andrews RMRS-GTR-371 (2018)",
   fuelModels: "Scott & Burgan (2005) 40 standard fire behavior fuel models",
   ellipse: "Anderson (1983) length-to-breadth; Alexander (1985) elliptical spread",
   propagation: "Minimum travel time over a 30 m grid (after Finney 2002)",
+  backingRate:
+    "Directional rate floored at the no-wind, no-slope rate, as BehavePlus computes backing spread (Andrews RMRS-GTR-371, 2018)",
+  spotting:
+    "Assumption: deterministic ember transport across non-burnable gaps downwind, reach scaled by wind and fireline intensity after Albini (1979)",
+  structureSpread:
+    "Assumption: fixed-rate urban conflagration through FBFM40 91, wind-scaled, Hamada (1951) directionality — not a structure fire model",
 } as const;
 
 const FEET_PER_MINUTE_PER_MPH = 88;
@@ -114,13 +280,38 @@ export interface IgnitionConditions {
   spread: SpreadResult;
 }
 
+/**
+ * How fire actually got to the ground that burned, so a caller can separate what the
+ * surface physics produced from what the two interface assumptions produced. Each burned
+ * cell is attributed once, to the mechanism that set its final (earliest) arrival time.
+ */
+export interface ArrivalBreakdown {
+  /** Reached by an ordinary Rothermel neighbour step from vegetated ground. */
+  surfaceCells: number;
+  /** Reached by an ember jump across a non-burnable gap. */
+  spottingCells: number;
+  /** Reached by a neighbour step out of a burning developed cell. */
+  structureCells: number;
+  surfaceSquareMeters: number;
+  spottingSquareMeters: number;
+  structureSquareMeters: number;
+}
+
 export interface FireRun {
   model: typeof SPREAD_MODEL;
   scenario: FireScenario;
   frames: FireFrame[];
   ignition: IgnitionConditions;
-  /** Share of the modelled area that carries fire at all. */
+  /** Share of the modelled area holding a vegetated fuel model, with or without spotting. */
   burnableFraction: number;
+  /** Share of the modelled area mapped as urban or developed, FBFM40 91. */
+  developedFraction: number;
+  /** Share of the modelled area that can carry fire under the options actually applied. */
+  fireCarryingFraction: number;
+  /** The two interface options after defaults were filled in, for reproducibility. */
+  appliedOptions: { spotting: SpottingOptions; structureSpread: StructureSpreadOptions };
+  /** Burned ground at the horizon, split by the mechanism that delivered fire to it. */
+  arrivalBreakdown: ArrivalBreakdown;
   /** True when fire reached the edge of the modelled area, so the run is truncated. */
   reachedEdge: boolean;
   cellSizeMeters: number;
@@ -226,48 +417,143 @@ class TimeHeap {
   }
 }
 
+/** Mechanism that set a cell's final arrival time; indexes the `ArrivalBreakdown`. */
+const ARRIVAL_SURFACE = 0;
+const ARRIVAL_SPOTTING = 1;
+const ARRIVAL_STRUCTURE = 2;
+
+function eccentricityOf(lengthToBreadth: number): number {
+  return lengthToBreadth > 1
+    ? Math.sqrt(lengthToBreadth * lengthToBreadth - 1) / lengthToBreadth
+    : 0;
+}
+
 export function simulateFireSpread(landscape: LandscapeGrid, scenario: FireScenario): FireRun {
   const startedAt = performance.now();
   const { width, height, fuelCodes, slopeTangent, upslopeDegrees, groundCellSizeMeters } =
     landscape;
   const cellCount = width * height;
+  const spotting = scenario.spotting ?? DEFAULT_SPOTTING;
+  const structureSpread = scenario.structureSpread ?? DEFAULT_STRUCTURE_SPREAD;
+
+  // Structures are exposed at roof height, so the open wind drives them directly and no
+  // midflame reduction is applied. The scaling is linear in wind and bounded.
+  const structureWindFactor = Math.min(
+    Math.max(
+      scenario.windSpeedMph / STRUCTURE_SPREAD_REFERENCE_WIND_MPH,
+      STRUCTURE_WIND_FACTOR_MIN,
+    ),
+    STRUCTURE_WIND_FACTOR_MAX,
+  );
+  const structureHeadRate = structureSpread.enabled
+    ? Math.max(structureSpread.rateMetersPerMinute, 0) * structureWindFactor
+    : 0;
 
   const originCell = cellAt(landscape, scenario.origin);
   if (originCell < 0) throw new Error("The ignition point is outside the modelled area.");
   const originFuel = fuelCodes[originCell];
-  if (!isBurnable(originFuel)) throw new NonBurnableIgnitionError(originFuel);
+  // Developed ground carries fire in this model whenever structure spread is on, so
+  // refusing to ignite there would contradict the rest of the run. Every other
+  // non-burnable code still refuses, and so does developed ground at a zero rate.
+  const originIsStructure = originFuel === DEVELOPED_FUEL_CODE && structureHeadRate > 0;
+  if (!isBurnable(originFuel) && !originIsStructure) throw new NonBurnableIgnitionError(originFuel);
 
   // One fuel bed per distinct fuel model present, reused by every cell that uses it.
   const midflameWind =
     scenario.windSpeedMph * FEET_PER_MINUTE_PER_MPH * scenario.midflameAdjustment;
   const windToward = (scenario.windFromDegrees + 180) % 360;
+  const windTowardRadians = windToward * RADIANS_PER_DEGREE;
   const beds = new Map<number, ReturnType<typeof prepareFuelBed>>();
   for (const [code, fuel] of FUEL_MODELS) beds.set(code, prepareFuelBed(fuel, scenario.moisture));
 
-  // Per-cell spread: metres per minute at the head, heading, and ellipse eccentricity.
+  /** Maximum ember reach for a cell of this fireline intensity, ground metres. */
+  const spotReachFor = (firelineIntensity: number): number => {
+    if (!spotting.enabled || spotting.maxDistanceMeters <= 0) return 0;
+    if (firelineIntensity < SPOTTING_MIN_FIRELINE_INTENSITY_BTU_PER_FOOT_PER_SECOND) return 0;
+    const reach =
+      SPOTTING_DISTANCE_COEFFICIENT * scenario.windSpeedMph * Math.sqrt(firelineIntensity);
+    return Math.min(reach, spotting.maxDistanceMeters);
+  };
+
+  // Per-cell spread: metres per minute at the head, heading, ellipse eccentricity, a
+  // floor on the directional rate, and how far this cell can throw a firebrand.
   const headRate = new Float32Array(cellCount);
   const headingRadians = new Float32Array(cellCount);
   const eccentricity = new Float32Array(cellCount);
+  const minDirectionalRate = new Float32Array(cellCount);
+  const spotReach = new Float32Array(cellCount);
+  /**
+   * 1 where a cell holds a vegetated fuel model. Firebrands fly over everything else —
+   * roads, parking lots, roofs, water, bare ground — and land in vegetation, so this is
+   * both the ember-transparency mask and the set of cells a spot may ignite.
+   */
+  const vegetated = new Uint8Array(cellCount);
+  const structureEccentricity = eccentricityOf(STRUCTURE_LENGTH_TO_BREADTH);
+  const structureSpotReach = spotReachFor(STRUCTURE_FIRELINE_INTENSITY_BTU_PER_FOOT_PER_SECOND);
   let burnableCells = 0;
+  let developedCells = 0;
   for (let i = 0; i < cellCount; i++) {
-    const bed = beds.get(fuelCodes[i]);
+    const code = fuelCodes[i];
+    if (code === DEVELOPED_FUEL_CODE) {
+      developedCells++;
+      if (structureHeadRate <= 0) continue;
+      headRate[i] = structureHeadRate;
+      headingRadians[i] = windTowardRadians;
+      eccentricity[i] = structureEccentricity;
+      minDirectionalRate[i] = structureHeadRate * STRUCTURE_BACKING_RATE_FRACTION;
+      spotReach[i] = structureSpotReach;
+      continue;
+    }
+    const bed = beds.get(code);
     if (!bed) continue;
     burnableCells++;
+    vegetated[i] = 1;
     const spread = spreadFromBed(bed, midflameWind, windToward, slopeTangent[i], upslopeDegrees[i]);
     headRate[i] = spread.headRateFeetPerMinute * METERS_PER_FOOT;
     headingRadians[i] = spread.headingDegrees * RADIANS_PER_DEGREE;
-    const lb = spread.lengthToBreadth;
-    eccentricity[i] = lb > 1 ? Math.sqrt(lb * lb - 1) / lb : 0;
+    eccentricity[i] = eccentricityOf(spread.lengthToBreadth);
+    // The rear-focus ellipse (Alexander 1985) drives the rate away from the head to
+    // almost nothing once the fire is elongated: at the Anderson (1983) length-to-breadth
+    // cap of 8 the flank rate is 0.8 percent of the head rate and the backing rate 0.4
+    // percent, so one barrier cell directly downwind could stall an entire run. Observed
+    // backing spread is not that slow, and Rothermel-based systems do not compute it that
+    // way: BehavePlus takes the backing rate of spread to be the no-wind, no-slope rate
+    // (Andrews, RMRS-GTR-371, 2018, section on directional spread). Flooring every
+    // directional rate at that no-wind rate puts flanking and backing at roughly 2 to 5
+    // percent of the head rate in these fuels. The cap of 8 itself is left alone: FARSITE
+    // uses the same value and observed wind-driven ratios reach it, so lowering it would
+    // be less supported than fixing the floor.
+    minDirectionalRate[i] = spread.noWindRateFeetPerMinute * METERS_PER_FOOT;
+    spotReach[i] = spotReachFor(spread.firelineIntensityBtuPerFootPerSecond);
   }
 
   const arrival = new Float64Array(cellCount).fill(Number.POSITIVE_INFINITY);
   arrival[originCell] = 0;
+  const arrivalMechanism = new Uint8Array(cellCount);
   const settled = new Uint8Array(cellCount);
   const heap = new TimeHeap(Math.min(cellCount, 1 << 16));
   heap.push(0, originCell);
 
   const bearings = NEIGHBOURS.map(([dx, dy]) => Math.atan2(dx, -dy));
   const distances = NEIGHBOURS.map(([dx, dy]) => Math.hypot(dx, dy) * groundCellSizeMeters);
+
+  // Downwind unit vector in grid space: +x is east, +y is south, so north is -y.
+  const windStepX = Math.round(Math.sin(windTowardRadians));
+  const windStepY = Math.round(-Math.cos(windTowardRadians));
+  const spotRayX = SPOTTING_BEARING_OFFSETS_DEGREES.map((offset) =>
+    Math.sin(windTowardRadians + offset * RADIANS_PER_DEGREE),
+  );
+  const spotRayY = SPOTTING_BEARING_OFFSETS_DEGREES.map(
+    (offset) => -Math.cos(windTowardRadians + offset * RADIANS_PER_DEGREE),
+  );
+  const emberSpeedMetersPerMinute =
+    ((scenario.windSpeedMph * METERS_PER_MILE) / 60) * SPOTTING_EMBER_SPEED_FRACTION;
+  const spottingActive = spotting.enabled && emberSpeedMetersPerMinute > 0;
+  const maxSpotCells = Math.min(
+    SPOTTING_MAX_PATH_CELLS,
+    Math.floor(Math.max(spotting.maxDistanceMeters, 0) / groundCellSizeMeters),
+  );
+
   let reachedEdge = false;
 
   while (heap.length > 0) {
@@ -281,6 +567,9 @@ export function simulateFireSpread(landscape: LandscapeGrid, scenario: FireScena
     const x = cell % width;
     const y = (cell - x) / width;
     if (x === 0 || y === 0 || x === width - 1 || y === height - 1) reachedEdge = true;
+    const sourceMechanism =
+      fuelCodes[cell] === DEVELOPED_FUEL_CODE ? ARRIVAL_STRUCTURE : ARRIVAL_SURFACE;
+    const floor = minDirectionalRate[cell];
 
     for (let n = 0; n < NEIGHBOURS.length; n++) {
       const [dx, dy] = NEIGHBOURS[n];
@@ -298,13 +587,58 @@ export function simulateFireSpread(landscape: LandscapeGrid, scenario: FireScena
       }
       // Elliptical spread from the cell's heading, inlined: this is the hot loop.
       const e = eccentricity[cell];
-      const rateToward =
+      let rateToward =
         e > 0 ? (rate * (1 - e)) / (1 - e * Math.cos(bearings[n] - headingRadians[cell])) : rate;
+      if (rateToward < floor) rateToward = floor;
       if (rateToward <= 0) continue;
       const candidate = time + distances[n] / rateToward;
       if (candidate < arrival[neighbour]) {
         arrival[neighbour] = candidate;
+        arrivalMechanism[neighbour] = sourceMechanism;
         heap.push(candidate, neighbour);
+      }
+    }
+
+    // Ember spotting, deliberately scoped to crossing unvegetated ground. A cell launches
+    // only when the ground one step directly downwind holds no fuel model — a street, a
+    // subdivision, a parking lot, a field, a river — and a ray ignites only the first
+    // vegetated cell it finds after passing over at least one such cell. So firebrands
+    // turn a gap into a delay instead of a wall, and can outrun a slow burn-through by
+    // flying over a whole block, but they never leapfrog continuous wildland fuel, which
+    // would inflate the head rate past anything the surface model supports.
+    const reach = spotReach[cell];
+    if (!spottingActive || reach <= 0 || maxSpotCells < 2) continue;
+    const gapX = x + windStepX;
+    const gapY = y + windStepY;
+    if (gapX < 0 || gapY < 0 || gapX >= width || gapY >= height) continue;
+    if (vegetated[gapY * width + gapX] === 1) continue;
+
+    const rayCells = Math.min(maxSpotCells, Math.floor(reach / groundCellSizeMeters));
+    for (let r = 0; r < spotRayX.length; r++) {
+      const ux = spotRayX[r];
+      const uy = spotRayY[r];
+      let crossedGap = false;
+      for (let step = 1; step <= rayCells; step++) {
+        const sx = x + Math.round(ux * step);
+        const sy = y + Math.round(uy * step);
+        if (sx < 0 || sy < 0 || sx >= width || sy >= height) break;
+        const target = sy * width + sx;
+        if (vegetated[target] === 0) {
+          crossedGap = true;
+          continue;
+        }
+        // The first vegetated cell on this ray is where the brands land; past it the
+        // ordinary surface solver takes over.
+        if (!crossedGap || settled[target] || headRate[target] <= 0) break;
+        const flightMeters = step * groundCellSizeMeters;
+        const candidate =
+          time + flightMeters / emberSpeedMetersPerMinute + SPOTTING_IGNITION_DELAY_MINUTES;
+        if (candidate < arrival[target]) {
+          arrival[target] = candidate;
+          arrivalMechanism[target] = ARRIVAL_SPOTTING;
+          heap.push(candidate, target);
+        }
+        break;
       }
     }
   }
@@ -332,7 +666,18 @@ export function simulateFireSpread(landscape: LandscapeGrid, scenario: FireScena
     });
   }
 
-  const originBed = beds.get(originFuel)!;
+  let surfaceCells = 0;
+  let spottingCells = 0;
+  let structureCells = 0;
+  for (let i = 0; i < cellCount; i++) {
+    if (arrival[i] > scenario.horizonMinutes) continue;
+    const mechanism = arrivalMechanism[i];
+    if (mechanism === ARRIVAL_SPOTTING) spottingCells++;
+    else if (mechanism === ARRIVAL_STRUCTURE) structureCells++;
+    else surfaceCells++;
+  }
+
+  const originBed = beds.get(originFuel);
   return {
     model: SPREAD_MODEL,
     scenario,
@@ -342,18 +687,58 @@ export function simulateFireSpread(landscape: LandscapeGrid, scenario: FireScena
       fuelLabel: fuelLabel(originFuel),
       slopePercent: slopeTangent[originCell] * 100,
       elevationMeters: landscape.elevationMeters[originCell],
-      spread: spreadFromBed(
-        originBed,
-        midflameWind,
-        windToward,
-        slopeTangent[originCell],
-        upslopeDegrees[originCell],
-      ),
+      spread: originBed
+        ? spreadFromBed(
+            originBed,
+            midflameWind,
+            windToward,
+            slopeTangent[originCell],
+            upslopeDegrees[originCell],
+          )
+        : structureIgnitionSpread(structureHeadRate, windToward),
     },
     burnableFraction: burnableCells / cellCount,
+    developedFraction: developedCells / cellCount,
+    fireCarryingFraction:
+      (burnableCells + (structureHeadRate > 0 ? developedCells : 0)) / cellCount,
+    appliedOptions: { spotting, structureSpread },
+    arrivalBreakdown: {
+      surfaceCells,
+      spottingCells,
+      structureCells,
+      surfaceSquareMeters: surfaceCells * cellArea,
+      spottingSquareMeters: spottingCells * cellArea,
+      structureSquareMeters: structureCells * cellArea,
+    },
     reachedEdge,
     cellSizeMeters: groundCellSizeMeters,
     computeMilliseconds: performance.now() - startedAt,
+  };
+}
+
+/**
+ * Ignition conditions for a fire started on developed ground. Rothermel does not describe
+ * a burning subdivision, so every quantity the surface model would compute is reported as
+ * zero rather than invented; only the assumed head rate, heading, ellipse, and the flame
+ * length implied by `STRUCTURE_FIRELINE_INTENSITY_BTU_PER_FOOT_PER_SECOND` are filled in.
+ */
+function structureIgnitionSpread(
+  structureHeadRateMetersPerMinute: number,
+  windTowardDegrees: number,
+): SpreadResult {
+  const intensity = STRUCTURE_FIRELINE_INTENSITY_BTU_PER_FOOT_PER_SECOND;
+  return {
+    headRateFeetPerMinute: structureHeadRateMetersPerMinute / METERS_PER_FOOT,
+    noWindRateFeetPerMinute: 0,
+    reactionIntensityBtuPerFt2PerMinute: 0,
+    windCoefficient: 0,
+    slopeCoefficient: 0,
+    effectiveWindFeetPerMinute: 0,
+    beyondValidatedWind: false,
+    headingDegrees: windTowardDegrees,
+    lengthToBreadth: STRUCTURE_LENGTH_TO_BREADTH,
+    flameLengthFeet: 0.45 * Math.pow(intensity, 0.46),
+    firelineIntensityBtuPerFootPerSecond: intensity,
   };
 }
 
