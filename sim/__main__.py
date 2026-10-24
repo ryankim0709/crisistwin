@@ -32,6 +32,22 @@ from sim.responders import compare_with_history, default_responders, fire_arriva
 from sim.traffic import TrafficParams
 
 HISTORICAL_ROAD_EVENT_TYPES = ("road_closed", "road_blocked", "capacity_changed", "contraflow_started")
+MAX_MATCH_DELTA_MIN = 120  # responder/history pairs further apart than this are reported as unmatched
+
+
+def _drop_distant_matches(comparison: dict) -> dict:
+    """Move matches more than MAX_MATCH_DELTA_MIN apart to the unmatched lists (likely different actions)."""
+    kept = []
+    for m in comparison["matches"]:
+        if abs(m["delta_min"]) <= MAX_MATCH_DELTA_MIN:
+            kept.append(m)
+            continue
+        reason = f"nearest same-kind action was {abs(m['delta_min'])} min away (> {MAX_MATCH_DELTA_MIN} min)"
+        comparison["simulated_without_counterpart"].append({**m["simulated"], "reason": reason})
+        comparison["historical_without_counterpart"].append({**m["historical"], "reason": reason})
+    comparison["matches"] = kept
+    comparison["rule"] += f" Pairs more than {MAX_MATCH_DELTA_MIN} min apart are treated as unmatched."
+    return comparison
 
 
 def _write(path: Path, payload: dict) -> None:
@@ -153,8 +169,8 @@ def main() -> None:
             result["responders"] = {
                 "evidence_class": "simulated",
                 "agents": [a.describe() for a in agents],
-                "comparison_with_history": compare_with_history(responder_events, historical,
-                                                                network=scenario["network"]),
+                "comparison_with_history": _drop_distant_matches(
+                    compare_with_history(responder_events, historical, network=scenario["network"])),
             }
             if agents:
                 result["assumptions"] = [*result["assumptions"], *RESPONDER_ASSUMPTIONS]

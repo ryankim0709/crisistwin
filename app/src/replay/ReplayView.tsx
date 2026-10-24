@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { groupAvailability } from "./layerGroups";
 import CompareTab from "./CompareTab";
 import { BundleMissingError, REPLAY_VIEW, fetchReplayBundle, type ViewConfig } from "./loadBundle";
+import RespondersTab from "./RespondersTab";
 import StressTab from "./StressTab";
 import { useVariants } from "./useVariants";
 import { IMAGERY_DATE_NOTE, LAYER_GROUPS, type Basemap, type LayerGroup } from "./mapLayers";
@@ -278,6 +279,15 @@ function ReplayScreen({ model: baseline, config }: { model: ReplayModel; config:
           },
         ]
       : []),
+    ...(sim && model.responders
+      ? [
+          {
+            id: "responders" as const,
+            label: "Responders vs 2018",
+            content: <RespondersTab responders={model.responders} />,
+          },
+        ]
+      : []),
     ...(config.stressUrl ? [{ id: "stress" as const, label: "Stress test", content: <StressTab url={config.stressUrl} /> }] : []),
   ];
   const caption = buildCaption(model, simTimeMs, frameIndex);
@@ -458,6 +468,7 @@ function ReplayScreen({ model: baseline, config }: { model: ReplayModel; config:
             onFocus={focusTarget}
             eyebrow={config.eyebrow}
             extraTabs={extraTabs}
+            showResidents={sim}
           />
         </div>
       </aside>

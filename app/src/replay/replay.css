@@ -1759,3 +1759,17 @@ p.rp-state-msg[role="status"] {
   font-size: 12px;
   line-height: 1.55;
 }
+
+/* Responders vs 2018 */
+.rp-resp-match {
+  gap: 4px;
+}
+.rp-resp-line {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: #c4cfda;
+}
+.rp-source-link {
+  color: #7cf2c9;
+  font-size: 11px;
+}

@@ -33,6 +33,14 @@ function Metrics({ model, frameIndex, simTimeMs }: { model: ReplayModel; frameIn
     if (traffic) for (const m of METRICS) out[m.key] = metricSeries(traffic.metrics, m.key, SPARK_POINTS);
     return out;
   }, [traffic]);
+  const atOriginSeries = useMemo(() => {
+    const values = traffic?.extraMetrics[EXPOSED_AT_ORIGIN_KEY];
+    if (!traffic || !values) return [];
+    const stride = Math.max(1, Math.ceil(values.length / SPARK_POINTS));
+    const out: { atMs: number; value: number }[] = [];
+    for (let i = 0; i < values.length; i += stride) out.push({ atMs: traffic.metrics[i].atMs, value: values[i] ?? 0 });
+    return out;
+  }, [traffic]);
   if (!traffic) {
     const reason = model.layerStatus.traffic?.reason;
     return (
@@ -43,6 +51,7 @@ function Metrics({ model, frameIndex, simTimeMs }: { model: ReplayModel; frameIn
     );
   }
   const row = frameIndex >= 0 ? traffic.metrics[frameIndex] : null;
+  const atOrigin = traffic.extraMetrics[EXPOSED_AT_ORIGIN_KEY] ?? null;
   return (
     <>
       <div className="rp-metrics">
@@ -58,6 +67,20 @@ function Metrics({ model, frameIndex, simTimeMs }: { model: ReplayModel; frameIn
             />
           </div>
         ))}
+        {atOrigin && (
+          <div className="rp-metric rp-metric--exposedVeh" title="Vehicles still at their origin inside the fire area">
+            <span className="rp-metric-label">Still at home in fire area</span>
+            <span className="rp-metric-value">
+              {frameIndex >= 0 && atOrigin[frameIndex] != null ? atOrigin[frameIndex]!.toLocaleString("en-US") : "—"}
+            </span>
+            <Sparkline
+              points={atOriginSeries}
+              startMs={model.clock.startMs}
+              endMs={model.clock.endMs}
+              cursorMs={simTimeMs}
+            />
+          </div>
+        )}
       </div>
       <p className="rp-metric-foot">
         <EvidenceChip value={traffic.evidenceClass} /> {traffic.totalVeh?.toLocaleString("en-US") ?? "—"} vehicles ·
@@ -79,9 +102,31 @@ function Metrics({ model, frameIndex, simTimeMs }: { model: ReplayModel; frameIn
  * Resident-state metrics from agent simulations. Field names are not fixed by the contract,
  * so every extra numeric metric is shown, labelled from its field name.
  */
+const RESIDENT_ORDER = [
+  "waiting_veh",
+  "preparing_veh",
+  "departed_by_order_veh",
+  "departed_by_fire_cue_veh",
+  "departed_by_social_cue_veh",
+  "turned_back_veh",
+];
+const RESIDENT_LABEL: Record<string, string> = {
+  waiting_veh: "Waiting (no cue yet)",
+  preparing_veh: "Preparing to leave",
+  departed_by_order_veh: "Left after an order",
+  departed_by_fire_cue_veh: "Left after seeing fire",
+  departed_by_social_cue_veh: "Left after neighbours left",
+  turned_back_veh: "Turned back",
+};
+/** Shown as a metric card in both views rather than as a resident state. */
+const EXPOSED_AT_ORIGIN_KEY = "exposed_at_origin_veh";
+
 function Residents({ model, frameIndex }: { model: ReplayModel; frameIndex: number }) {
   const extra = model.traffic?.extraMetrics ?? {};
-  const keys = Object.keys(extra);
+  const keys = [
+    ...RESIDENT_ORDER.filter((k) => k in extra),
+    ...Object.keys(extra).filter((k) => !RESIDENT_ORDER.includes(k) && k !== EXPOSED_AT_ORIGIN_KEY),
+  ];
   if (keys.length === 0) return null;
   return (
     <section aria-labelledby="rp-residents-title">
@@ -93,7 +138,7 @@ function Residents({ model, frameIndex }: { model: ReplayModel; frameIndex: numb
           const value = frameIndex >= 0 ? extra[key][frameIndex] : null;
           return (
             <div key={key}>
-              <dt>{humanizeMetric(key)}</dt>
+              <dt>{RESIDENT_LABEL[key] ?? humanizeMetric(key)}</dt>
               <dd>{value == null ? "—" : value.toLocaleString("en-US", { maximumFractionDigits: 1 })}</dd>
             </div>
           );
@@ -143,7 +188,9 @@ function buildFeedRows(model: ReplayModel): FeedRow[] {
     const local = clockParts(event.atMs, tz);
     const minute = Math.floor(event.atMs / 60_000);
     const last = rows[rows.length - 1];
-    const groupable = category === "closure" && event.evidenceClass === "simulated";
+    // Only modelled fire closures are grouped; responder-agent and reported closures stay individual.
+    const groupable =
+      category === "closure" && event.evidenceClass === "simulated" && CLOSURE_LABEL_PREFIX.test(event.label);
     const name = event.label.replace(CLOSURE_LABEL_PREFIX, "");
     if (groupable && last?.members && Math.floor(last.atMs / 60_000) === minute) {
       last.index = index;
@@ -379,9 +426,11 @@ export interface SidePanelProps {
   eyebrow: string;
   /** Optional tabs supplied by the view (what-if, stress test), appended after the built-ins. */
   extraTabs?: { id: PanelTab; label: string; content: ReactNode }[];
+  /** Agent simulations show resident-state metrics; the historical replay does not. */
+  showResidents?: boolean;
 }
 
-export type PanelTab = "overview" | "responder" | "evacuee" | "explain" | "whatif" | "stress";
+export type PanelTab = "overview" | "responder" | "evacuee" | "explain" | "whatif" | "stress" | "responders";
 
 const TABS: { id: PanelTab; label: string }[] = [
   { id: "overview", label: "Overview" },
@@ -406,6 +455,7 @@ export default function SidePanel({
   onFocus,
   eyebrow,
   extraTabs = [],
+  showResidents = false,
 }: SidePanelProps) {
   const tabs = [...TABS, ...extraTabs.map(({ id, label }) => ({ id, label }))];
   const extra = extraTabs.find((t) => t.id === tab);
@@ -459,7 +509,7 @@ export default function SidePanel({
           </h2>
           <Metrics model={model} frameIndex={frameIndex} simTimeMs={simTimeMs} />
         </section>
-        <Residents model={model} frameIndex={frameIndex} />
+        {showResidents && <Residents model={model} frameIndex={frameIndex} />}
 
         <section aria-labelledby="rp-events-title" className="rp-events">
           <h2 id="rp-events-title" className="rp-section-title">
