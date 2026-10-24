@@ -1,5 +1,6 @@
 from django.urls import include, path, re_path
 
+from .demo import demo_decide, demo_routes
 from .dispatch import decide
 from .dispatch_area import dispatch_area
 from .explain import explain
@@ -26,6 +27,8 @@ urlpatterns = [
     path("replay/explain", explain, name="replay-explain"),
     path("dispatch/decide", decide, name="dispatch-decide"),
     path("dispatch/area", dispatch_area, name="dispatch-area"),
+    path("demo/routes", demo_routes, name="demo-routes"),
+    path("demo/decide", demo_decide, name="demo-decide"),
     path("live", live_snapshot, name="live-snapshot"),
     path("live/broadcast", live_broadcast, name="live-broadcast"),
     path("live/", include("api.live.urls")),

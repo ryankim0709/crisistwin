@@ -26,6 +26,11 @@ export const navigationItems: readonly NavigationItem[] = [
     group: "Workspace",
   },
   {
+    path: "/demo",
+    label: "Command demo",
+    group: "Workspace",
+  },
+  {
     path: "/evacuation",
     label: "Evacuation planning",
     group: "Workspace",

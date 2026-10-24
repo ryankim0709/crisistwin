@@ -1,0 +1,179 @@
+/* /demo command demo: reuses the /live workspace grid (live.css, lc-*); this sheet adds the
+   demo's own panels. Tokens only; map colours live in DemoMap.tsx. */
+
+.dm-head {
+  gap: var(--ct-space-3);
+  overflow-x: auto;
+}
+.dm-root .lc-col-scroll {
+  padding-bottom: var(--ct-space-6);
+}
+.dm-section {
+  display: grid;
+  gap: var(--ct-space-3);
+  padding: var(--ct-space-4);
+  border-bottom: 1px solid var(--ct-border-subtle);
+}
+.dm-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ct-space-2);
+}
+.dm-section-head h2 {
+  font-size: var(--ct-text-base);
+  font-weight: var(--ct-weight-semibold);
+}
+.dm-selected {
+  background: var(--ct-surface-raised);
+}
+.dm-tags {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ct-space-1);
+}
+.dm-actions,
+.dm-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ct-space-2);
+}
+.dm-options {
+  flex-direction: column;
+  align-items: stretch;
+}
+.dm-options .ui-button {
+  justify-content: flex-start;
+  text-align: left;
+  height: auto;
+  min-height: var(--ct-control-height-sm);
+  white-space: normal;
+}
+.dm-note {
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-sm);
+}
+.dm-footnote {
+  padding: var(--ct-space-4);
+}
+.dm-empty {
+  padding: var(--ct-space-3) var(--ct-space-4);
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-sm);
+}
+.dm-check {
+  font-size: var(--ct-text-sm);
+}
+.dm-mini-list,
+.dm-teams,
+.dm-decisions,
+.dm-orders,
+.dm-log {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dm-mini-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ct-space-2);
+  font-size: var(--ct-text-sm);
+}
+
+/* Fire list glyph: a filled flame dot for burning, a ring for contained (shape, not only colour). */
+.dm-fire-glyph {
+  width: 12px;
+  height: 12px;
+  margin: 6px;
+  border-radius: 50%;
+}
+.dm-fire-glyph--burning {
+  background: var(--ct-fire);
+}
+.dm-fire-glyph--contained {
+  border: 2px dashed var(--ct-fire);
+}
+
+.dm-teams {
+  border-top: 1px solid var(--ct-border-subtle);
+}
+.dm-team {
+  display: grid;
+  grid-template-columns: 32px 72px minmax(0, 1fr);
+  align-items: center;
+  gap: var(--ct-space-2);
+  width: 100%;
+  padding: var(--ct-space-2) var(--ct-space-4);
+  border-bottom: 1px solid var(--ct-border-subtle);
+  font-size: var(--ct-text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.dm-team:hover {
+  background: var(--ct-surface-muted);
+}
+.dm-team-status {
+  font-weight: var(--ct-weight-semibold);
+}
+.dm-team-status--available {
+  color: var(--ct-success);
+}
+.dm-team-status--en_route {
+  color: var(--ct-warning);
+}
+.dm-team-status--on_scene {
+  color: var(--ct-fire);
+}
+
+.dm-stream {
+  display: grid;
+  gap: var(--ct-space-2);
+  padding: var(--ct-space-3);
+  border-radius: var(--ct-radius-md);
+  background: var(--ct-surface-sunken);
+  font-size: var(--ct-text-sm);
+}
+.dm-woke {
+  color: var(--ct-ink-muted);
+}
+.dm-thinking {
+  color: var(--ct-ink-subtle);
+  font-style: italic;
+  white-space: pre-wrap;
+}
+.dm-decisions {
+  display: grid;
+  gap: var(--ct-space-3);
+}
+.dm-decisions > li {
+  display: grid;
+  gap: var(--ct-space-1);
+  padding-left: var(--ct-space-3);
+  border-left: 2px solid var(--ct-border);
+  font-size: var(--ct-text-sm);
+}
+.dm-decisions > li.is-latest {
+  border-left-color: var(--ct-info);
+}
+.dm-decision-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ct-space-2);
+  font-size: var(--ct-text-xs);
+}
+.dm-orders {
+  display: grid;
+  gap: 2px;
+}
+.dm-log {
+  display: grid;
+  gap: var(--ct-space-1);
+  font-size: var(--ct-text-sm);
+}
+.dm-log li {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: var(--ct-space-2);
+}

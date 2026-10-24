@@ -12,7 +12,7 @@ Response is NDJSON: thinking/text deltas, then exactly one `orders` or `error` l
 import json
 import logging
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 import anthropic
 from django.http import StreamingHttpResponse
@@ -460,19 +460,33 @@ def _err_line(code: str, detail: str) -> str:
     return _line({"type": "error", "error": code, "detail": detail})
 
 
-def stream_decision(client, model: str, effort: str, user_message: str, index: dict) -> Iterator[str]:
-    """Yield NDJSON lines; any failure becomes a final error line, never a crashed stream."""
+def stream_decision(
+    client,
+    model: str,
+    effort: str,
+    user_message: str,
+    index: dict,
+    *,
+    system: str = SYSTEM_PROMPT,
+    tool: dict = ISSUE_ORDERS_TOOL,
+    validate: Callable[[object, dict], tuple[list[dict], list[dict], str]] = validate_orders,
+) -> Iterator[str]:
+    """Yield NDJSON lines; any failure becomes a final error line, never a crashed stream.
+
+    ``system``, ``tool`` and ``validate`` default to this dispatcher; the /demo agent
+    (api/demo.py) passes its own. The tool must be named ``issue_orders``.
+    """
     try:
         # Server-side fallback reroutes a safety-classifier refusal to another model.
         with client.beta.messages.stream(
             model=model,
             max_tokens=MAX_OUTPUT_TOKENS,
-            system=SYSTEM_PROMPT,
+            system=system,
             thinking={"type": "adaptive", "display": "summarized"},
             output_config={"effort": effort},
             betas=["server-side-fallback-2026-07-01"],
             fallbacks="default",
-            tools=[ISSUE_ORDERS_TOOL],
+            tools=[tool],
             tool_choice={"type": "auto"},
             messages=[{"role": "user", "content": user_message}],
         ) as stream:
@@ -515,7 +529,7 @@ def stream_decision(client, model: str, effort: str, user_message: str, index: d
     if final.stop_reason == "max_tokens":
         yield _err_line("upstream_truncated", "The agent's output was cut off before it issued orders.")
         return
-    tool = next(
+    call = next(
         (
             b
             for b in final.content
@@ -523,11 +537,11 @@ def stream_decision(client, model: str, effort: str, user_message: str, index: d
         ),
         None,
     )
-    if tool is None:
+    if call is None:
         yield _err_line("no_orders", "The agent did not issue orders.")
         return
 
-    orders, rejected, summary = validate_orders(tool.input, index)
+    orders, rejected, summary = validate(call.input, index)
     yield _line(
         {
             "type": "orders",
