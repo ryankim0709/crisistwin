@@ -16,6 +16,13 @@ struct RootView: View {
             .tabItem {
                 Label("Scenarios", systemImage: "map")
             }
+
+            NavigationStack {
+                PlanView()
+            }
+            .tabItem {
+                Label("My Plan", systemImage: "figure.2")
+            }
         }
     }
 }
