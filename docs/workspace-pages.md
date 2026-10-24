@@ -102,6 +102,8 @@ the endpoint returns 503. Optionally set `DISPATCH_AGENT_MODEL` and
 **http://localhost:5173/dispatch**, press **Load demo fire** (or pick an area and click the
 landscape), wait for the roads and homes to load from OpenStreetMap (the backend needs
 internet the first time a box is used; results are cached), then press **Start the AI
-dispatcher**. Playback runs at 1, 2 or 4 simulated minutes per second so the agent has time to
-decide; each decision is a paid model call. Model, assumptions and contracts:
-[ADR 0014](adr/0014-dispatch-agent.md) and [ADR 0017](adr/0017-dispatch-anywhere.md).
+dispatcher**. The clock is live: it keeps running while the agent decides (at real time, 10×,
+30× or 60×; 30× by default), so its thinking time costs simulated time, its orders take effect
+when its answer arrives, and engines need an 80 s turnout before they drive. Each decision is a
+paid model call. Model, assumptions and contracts: [ADR 0014](adr/0014-dispatch-agent.md),
+[ADR 0017](adr/0017-dispatch-anywhere.md) and [ADR 0026](adr/0026-live-dispatch-clock.md).

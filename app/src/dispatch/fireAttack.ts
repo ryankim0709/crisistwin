@@ -133,7 +133,9 @@ export function projectOutMinute(
   for (let minute = Math.max(now, target.ignitedMinute); minute <= horizonMinutes; minute += 1) {
     let built = builtMeters;
     for (const arrival of arrivals) {
-      built += ENGINE_LINE_METERS_PER_MINUTE * Math.max(0, minute - Math.max(arrival, now));
+      // Work starts the whole minute after arrival, as the engine steps it.
+      built +=
+        ENGINE_LINE_METERS_PER_MINUTE * Math.max(0, minute - Math.ceil(Math.max(arrival, now)));
     }
     if (built > 0 && built >= lineNeededMeters(target, frames, fire, minute)) return minute;
   }

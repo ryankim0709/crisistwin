@@ -4,6 +4,7 @@
  */
 
 import { FIRE_TACTICS, builtMeters, tacticBlocked } from "./fireTactics";
+import { TURNOUT_SECONDS } from "./engine";
 import type { TacticOption } from "./tacticOptions";
 import type { FireObservation, Observation, WireOrder, ZoneObservation } from "./contracts";
 import {
@@ -65,6 +66,8 @@ export interface ObservationInputs {
   tacticOptions?: ReadonlyMap<number, readonly TacticOption[]>;
   /** By the horizon with the fire fighting in effect now. */
   currentOutcome?: { burnedHectares: number; homesReached: number };
+  /** Simulated minutes the agent's orders are expected to take to land. */
+  decisionDelayMinutes?: number;
 }
 
 export function buildObservation(inputs: ObservationInputs): Observation {
@@ -236,6 +239,7 @@ export function buildObservation(inputs: ObservationInputs): Observation {
       minute,
       horizon_minutes: engine.horizonMinutes,
       next_check_minute: inputs.nextCheckMinute,
+      decision_delay_min: Math.round((inputs.decisionDelayMinutes ?? 0) * 10) / 10,
     },
     monitor: {
       check_interval_minutes: inputs.checkIntervalMinutes,
@@ -281,7 +285,8 @@ export function buildObservation(inputs: ObservationInputs): Observation {
     previous_summary: inputs.previousSummary,
     model_notes: [
       `impact classifies each zone from the fire model's first contact: burning (fire is there), threatened (within ${FORECAST_LOOKAHEAD_MINUTES} min), later (after that, by T+${engine.horizonMinutes}), outside (not reached by T+${engine.horizonMinutes}). Outside zones cannot be ordered or staged; the fire forecast is fixed, so a zone outside stays outside.`,
-      `Fire ETAs are the fire model's forecast, shown up to ${FORECAST_LOOKAHEAD_MINUTES} min ahead; the fire spread is precomputed and is not changed by any order.`,
+      `Fire ETAs are the fire model's forecast, shown up to ${FORECAST_LOOKAHEAD_MINUTES} min ahead; the fire spread changes only when engines put a fire out or hold it with line (it is then re-run).`,
+      `Live clock: the simulation keeps running while you decide. Your orders take effect when your answer arrives, about clock.decision_delay_min simulated minutes after this observation, from wherever fire, traffic and engines are by then. Engines leaving a station need ${Math.round(TURNOUT_SECONDS)} s turnout before driving. tactic_options already account for both delays.`,
       `After an evacuation order households leave over ${DEPARTURE_SPREAD_MINUTES} min (${SUPPORTED_DEPARTURE_SPREAD_MINUTES} min while an engine is on scene on evacuation_support), then queue at the zone's loading point for road capacity.`,
       `Routes avoid roads the fire reaches within ${ROUTE_LOOKAHEAD_MINUTES} min. Zones whose exit becomes unreachable hold departures until given another exit.`,
       `A staged zone (stage_evacuation) gets no order yet; the simulator orders it out automatically once every household of its after_zone has left home and the loading queue, or as soon as its own order_slack_min falls to ${STAGE_RELEASE_SLACK_MINUTES}.`,

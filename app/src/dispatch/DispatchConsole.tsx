@@ -23,14 +23,14 @@ import { CHECK_INTERVAL_CHOICES } from "./engine";
 import { threatTier, tierLabel } from "./monitor";
 import { HOME_COLORS, cssColor, exitColor } from "./scene/DispatchOverlay";
 import type { DecisionLogEntry, MonitorCheck, SessionStatus } from "./useDispatchSession";
-import { DISPATCH_SPEED_CHOICES } from "./useDispatchSession";
+import { DISPATCH_SPEED_CHOICES, speedLabel } from "./useDispatchSession";
 
 const NUMBER = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 
 const STATUS_LABEL: Record<SessionStatus, string> = {
   idle: "Standing by",
   running: "On shift · monitoring",
-  thinking: "Deciding…",
+  thinking: "Deciding · clock running",
   paused: "Paused",
   failed: "Needs attention",
   finished: "Run finished",
@@ -205,10 +205,17 @@ function LatestOrders({ entry, area }: { entry: DecisionLogEntry; area: Dispatch
         <span className="dsp-radio__time">{hhmm(entry.minute)}</span>
         <span>
           {entry.status === "streaming"
-            ? "Dispatcher is deciding…"
+            ? "Dispatcher is deciding… (the fire keeps moving)"
             : entry.status === "failed"
               ? "Decision failed"
               : "Dispatcher orders"}
+          {entry.appliedMinute !== null && entry.appliedMinute > entry.minute && (
+            <span className="dsp-muted">
+              {" "}
+              · seen at {hhmm(entry.minute)}, in effect {hhmm(entry.appliedMinute)} (
+              {entry.appliedMinute - entry.minute} min thinking)
+            </span>
+          )}
         </span>
         <span className="dsp-tag">AI decision</span>
       </header>
@@ -875,7 +882,7 @@ export default function DispatchConsole(props: DispatchConsoleProps) {
           >
             {DISPATCH_SPEED_CHOICES.map((choice) => (
               <option key={choice} value={choice}>
-                {choice} min/s
+                {speedLabel(choice)}
               </option>
             ))}
           </select>
@@ -928,7 +935,8 @@ export default function DispatchConsole(props: DispatchConsoleProps) {
             status === "running" &&
             ` (next ${hhmm(nextCheckMinute)})`}{" "}
           and calls the AI only when something changed: fire growth, a zone running out of time, a
-          wave finishing, an urgent alert, or 30 min without a review.{" "}
+          wave finishing, an urgent alert, or 30 min without a review. The clock keeps running while
+          it decides: its orders take effect when its answer arrives.{" "}
           {checks.length > 0 &&
             `${checks.filter((c) => c.reasons.length === 0).length} of ${checks.length} checks so far were quiet.`}
         </p>
