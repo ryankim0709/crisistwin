@@ -56,6 +56,9 @@ struct HomeView: View {
     /// The incident name with the Exercise tag inline; tapping either explains the tag.
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
+            HomeBrandLogo()
+                .frame(height: 30)
+                .padding(.bottom, 10)
             if store.isExercise {
                 Button { explainExercise = true } label: { title }
                     .buttonStyle(.plain)
@@ -107,6 +110,7 @@ struct HomeView: View {
     @ViewBuilder private var content: some View {
         if !location.isAuthorized {
             locationOff
+            PlanSummaryPanel()
         } else if store.situation == nil {
             HStack(spacing: 12) {
                 if case .unavailable = store.connection {
@@ -120,12 +124,14 @@ struct HomeView: View {
                 }
             }
             .ctPanel()
+            PlanSummaryPanel()
         } else if location.lastLocation == nil {
             HStack(spacing: 12) {
                 ProgressView()
                 Text("Finding your location")
             }
             .ctPanel()
+            PlanSummaryPanel()
         } else if let zone = store.myZone {
             if let guidance = store.activeGuidance {
                 Slab(
@@ -211,6 +217,24 @@ struct HomeView: View {
                 GuidanceChangesList(current: current, history: store.guidanceHistory)
             }
         }
+    }
+}
+
+/// The CrisisTwin lockup (`Logo` asset, from `app/public/brand`). It is drawn in deep green for
+/// light backgrounds, so dark mode renders it as a light single-color mark.
+private struct HomeBrandLogo: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Group {
+            if colorScheme == .dark {
+                Image("Logo").resizable().renderingMode(.template).foregroundStyle(Color.ctInk)
+            } else {
+                Image("Logo").resizable()
+            }
+        }
+        .aspectRatio(contentMode: .fit)
+        .accessibilityLabel("CrisisTwin")
     }
 }
 
@@ -833,27 +857,19 @@ private struct HomeFamilyPanel: View {
     }
 }
 
-/// The household plan at a glance, for Home's empty state: meeting point, family and go-bag.
+/// The household plan at a glance, for Home's quiet states: meeting point, family and contacts.
 struct PlanSummaryPanel: View {
     @Environment(MeetingPlanStore.self) private var plan
     @Environment(FamilyStore.self) private var family
-    @Environment(GoBagStore.self) private var goBag
     @Environment(AppRouter.self) private var router
 
     var body: some View {
-        let packed = GoBagStore.items.filter { goBag.packed.contains($0.id) }.count
         Button { router.tab = .plan } label: {
             HomePanel(title: "Your plan") {
                 VStack(alignment: .leading, spacing: 14) {
                     row("mappin.and.ellipse", "Meeting point", plan.plan.primary?.name ?? "Not set")
                     row("person.3", "Family", family.family?.name ?? "Not set up")
-                    VStack(alignment: .leading, spacing: 8) {
-                        row("bag", "Go-bag", goBag.summary)
-                        ProgressView(value: Double(packed), total: Double(GoBagStore.items.count))
-                            .tint(Color.ctBrand)
-                            .padding(.leading, 40)
-                            .accessibilityHidden(true)
-                    }
+                    row("phone", "Emergency contacts", plan.plan.contacts.isEmpty ? "None yet" : "\(plan.plan.contacts.count)")
                 }
             } accessory: {
                 Image(systemName: "chevron.right")
@@ -883,20 +899,19 @@ struct PlanSummaryPanel: View {
     }
 }
 
-/// No-order Home: whether the meeting point is set and how far the go-bag is; rows open Plan.
+/// No-order Home: whether the meeting point and family are set up; rows open Plan.
 private struct HomeReadinessCard: View {
     @Environment(MeetingPlanStore.self) private var plan
-    @Environment(GoBagStore.self) private var goBag
+    @Environment(FamilyStore.self) private var family
     @Environment(AppRouter.self) private var router
 
     var body: some View {
-        let total = GoBagStore.items.count
-        let packed = GoBagStore.items.filter { goBag.packed.contains($0.id) }.count
         let point = plan.plan.primary?.name
+        let familyName = family.family?.name
         HomePanel(title: "Ready") {
             VStack(alignment: .leading, spacing: 14) {
                 row(point == nil ? "mappin.slash" : "mappin.and.ellipse", point ?? "No meeting point")
-                row(packed == total ? "checkmark.circle.fill" : "bag", "Go-bag \(packed) of \(total)")
+                row(familyName == nil ? "person.3" : "checkmark.circle.fill", familyName ?? "No family yet")
             }
         }
     }
