@@ -12,6 +12,11 @@ import {
 } from "../fire/spread";
 import { spanProblem } from "./bounds";
 import {
+  MAX_RESOURCES_PER_KIND,
+  RESPONSE_MINUTE_CHOICES,
+  type FirefightingSettings,
+} from "./firefighting";
+import {
   DISPLAY_STEP_MINUTES,
   MAX_ENABLED_IGNITIONS,
   MAX_WIND_SPEED_MPH,
@@ -128,6 +133,31 @@ function validateSettings(settings: FireSettings): ScenarioIssue[] {
   return issues;
 }
 
+const RESOURCE_KEYS = ["handCrews", "engines", "dozers"] as const;
+
+function validateFirefighting(firefighting: FirefightingSettings): ScenarioIssue[] {
+  const issues: ScenarioIssue[] = [];
+  const add = (message: string) => issues.push({ field: "settings", message });
+  if (typeof firefighting.enabled !== "boolean") add("Firefighting needs an enabled flag.");
+  for (const key of RESOURCE_KEYS) {
+    const value = firefighting[key];
+    if (!Number.isInteger(value) || !inRange(value, 0, MAX_RESOURCES_PER_KIND)) {
+      add(`Resource counts must be whole numbers from 0 to ${MAX_RESOURCES_PER_KIND}.`);
+      break;
+    }
+  }
+  if (!(RESPONSE_MINUTE_CHOICES as readonly number[]).includes(firefighting.responseMinutes)) {
+    add(`Response time must be one of ${RESPONSE_MINUTE_CHOICES.join(", ")} minutes.`);
+  }
+  if (
+    firefighting.enabled &&
+    RESOURCE_KEYS.every((key) => Number.isInteger(firefighting[key]) && firefighting[key] === 0)
+  ) {
+    add("Firefighting is on but no resources are assigned.");
+  }
+  return issues;
+}
+
 /** True when the ignition's coordinates are finite and on Earth. */
 function locationIsValid(location: GeoPoint | undefined): boolean {
   return (
@@ -145,6 +175,7 @@ export const validateScenario: ValidateScenario = (scenario) => {
     issues.push({ message: `Unsupported scenario version ${String(scenario.schemaVersion)}.` });
   }
   issues.push(...validateSettings(scenario.settings));
+  if (scenario.firefighting) issues.push(...validateFirefighting(scenario.firefighting));
 
   const horizon = scenario.settings.horizonMinutes;
   const seenIds = new Set<string>();
@@ -230,6 +261,7 @@ export function solverInputChanged(a: StudioScenario, b: StudioScenario): boolea
 function solverFingerprint(scenario: StudioScenario) {
   return {
     settings: scenario.settings,
+    firefighting: scenario.firefighting?.enabled ? scenario.firefighting : null,
     ignitions: scenario.ignitions
       .filter((ignition) => ignition.enabled)
       .map((i) => [i.id, i.location.latitude, i.location.longitude, i.startMinute]),
@@ -302,6 +334,28 @@ export function parseScenario(json: unknown): {
   }
 
   const settings = parseSettings(json.settings, fail);
+  let firefighting: FirefightingSettings | undefined;
+  if (json.firefighting !== undefined) {
+    const raw = json.firefighting;
+    if (
+      !isRecord(raw) ||
+      typeof raw.enabled !== "boolean" ||
+      ![...RESOURCE_KEYS, "responseMinutes"].every((key) => isFiniteNumber(raw[key]))
+    ) {
+      fail(
+        "Firefighting needs an enabled flag and numeric resource counts and response time.",
+        "settings",
+      );
+    } else {
+      firefighting = {
+        enabled: raw.enabled,
+        handCrews: raw.handCrews as number,
+        engines: raw.engines as number,
+        dozers: raw.dozers as number,
+        responseMinutes: raw.responseMinutes as number,
+      };
+    }
+  }
   if (issues.length > 0 || !settings) {
     return { scenario: null, issues };
   }
@@ -312,6 +366,7 @@ export function parseScenario(json: unknown): {
       name: (json.name as string).slice(0, MAX_NAME_LENGTH),
       ignitions,
       settings,
+      ...(firefighting ? { firefighting } : {}),
     },
     issues,
   };

@@ -182,8 +182,9 @@ Berkeley, so a 30 Mercator metre LANDFIRE cell is about 23.7 m across on the gro
 addressing uses Mercator metres; slope, spread distance, burned area, and reach all use
 ground metres, converted once where the landscape is built.
 
-The surface physics models crown fire as well as surface spread, but there is still **no
-suppression**, and nothing in the model represents plume-dominated behaviour — including
+The surface physics models crown fire as well as surface spread. The only suppression is
+control line built by Simulation Studio firefighters ([ADR 0020](adr/0020-studio-firefighting.md));
+the `/fire` page runs without it. Nothing in the model represents plume-dominated behaviour — including
 in cells that are now predicted to crown, which is why ember spotting stays on the surface
 fireline intensity with its 500 m ceiling even there, well short of the Camp Fire's
 measured 6.3 km maximum spot. The two interface mechanisms

@@ -409,3 +409,87 @@
     width: 100%;
   }
 }
+
+/* Firefighters (FirefightingFields, FirefightingResults) */
+.studio-ff-toggle {
+  gap: var(--ct-space-2);
+  font-size: var(--ct-text-sm);
+}
+.studio-ff-grid {
+  display: grid;
+  gap: var(--ct-space-2);
+  margin-block: var(--ct-space-2);
+}
+.studio-ff-result {
+  display: grid;
+  gap: var(--ct-space-2);
+  margin-top: var(--ct-space-3);
+}
+.studio-ff-table {
+  width: 100%;
+  table-layout: fixed;
+  font-size: var(--ct-text-xs);
+}
+.studio-ff-table thead th:first-child {
+  width: 42%;
+}
+.studio-ff-delta {
+  display: block;
+  color: var(--ct-ink-muted);
+  white-space: nowrap;
+}
+.studio-ff-line {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--ct-text-xs);
+}
+.studio-ff-line li {
+  display: flex;
+  align-items: center;
+  gap: var(--ct-space-2);
+}
+.studio-ff-swatch {
+  flex: none;
+  width: 18px;
+  height: 4px;
+  border-radius: 1px;
+}
+.studio-ff-swatch.is-held {
+  background: var(--ct-ink);
+}
+.studio-ff-swatch.is-breached {
+  height: 10px;
+  width: 4px;
+  background: var(--ct-danger);
+}
+.studio-ff-swatch.is-outrun {
+  height: 10px;
+  width: 4px;
+  background: var(--ct-warning);
+}
+.studio-ff-swatch.is-unbuilt {
+  border: 1px dashed var(--ct-ink-muted);
+  background: transparent;
+}
+.studio-ff-candidates {
+  margin: var(--ct-space-1) 0 0;
+  padding-left: var(--ct-space-4);
+  font-size: var(--ct-text-xs);
+}
+.studio-ff-dot {
+  display: inline-block;
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin-inline: 3px;
+  border: 1px solid var(--ct-surface);
+  border-radius: 50%;
+}
+.studio-ff-dot.is-lost {
+  width: 10px;
+  height: 10px;
+  margin-inline: 1px;
+}

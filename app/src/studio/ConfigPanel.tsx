@@ -81,6 +81,7 @@ export default function ConfigPanel(props: ConfigPanelProps) {
     onExport,
     onImport,
     onLoadDemo,
+    firefighting,
   } = props;
 
   const uid = useId();
@@ -600,6 +601,8 @@ export default function ConfigPanel(props: ConfigPanelProps) {
             </div>
           </details>
         </section>
+
+        {firefighting}
 
         <details className="studio-advanced">
           <summary>Scenario file</summary>
