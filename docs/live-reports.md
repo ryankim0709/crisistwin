@@ -995,7 +995,10 @@ Timeline `at` is wall time; `drill_at` is the proposal's decided drill time for 
 reject, else estimated from the current drill clock (wrong if the speed changed since).
 `historical_record` reports (the 2018 queue entries) are not field reports and are not counted in
 triage times. Help minutes are wall minutes from the check-in time; a request the resident later
-closed by checking in again has no start time and no minutes.
+closed by checking in again has no start time and no minutes. The response carries
+`time_basis: "wall"`. The same computation is `aar.compute_aar(context, data, time_basis)`, pure
+over explicit documents; the headless batch runner calls it with `time_basis: "drill"` (minutes
+between the documents' drill times, help unit `drill minutes`; [batch-runner.md](batch-runner.md)).
 
 **Drill score** (0 to 100): `100 x sum(effective_weight x component score)`. Constants are at the
 top of `aar.py`.

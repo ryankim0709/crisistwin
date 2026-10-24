@@ -180,6 +180,12 @@ def _km(value: float) -> str:
     return f"{value:g}"
 
 
+def zone_fire_distances(drill: Drill, fire: FireEstimate) -> dict[str, float | None]:
+    """Zone id -> km from the zone to the fire estimate's geometry (None without a geometry)."""
+    geometry = fire.geometry
+    return {z.id: (distance_km(z.geometry, geometry) if geometry is not None else None) for z in drill.zones}
+
+
 def plan(
     drill: Drill,
     replay_now: datetime,
@@ -188,6 +194,7 @@ def plan(
     full_destination_ids: Collection[str] = (),
     congestion: Mapping[str, float] | None = None,
     incumbents: Mapping[str, Incumbent] | None = None,
+    zone_distances_km: Mapping[str, float | None] | None = None,
 ) -> list[ZoneGuidance]:
     """Guidance for every zone, in ``drill.zones`` order.
 
@@ -201,12 +208,11 @@ def plan(
     ``congestion`` (directed edge id -> simulated travel-time factor) and ``incumbents`` (zone
     id -> the route it follows now) go to ``best_routes``: route search costs include simulated
     queues, and a zone keeps its incumbent unless the new route saves ``routing.switch_margin_s``.
-    Deterministic for given arguments.
+    ``zone_distances_km``: the caller's cached ``zone_fire_distances(drill, fire)`` for this fire
+    geometry (the slow part of a plan); computed here when None. Deterministic for given arguments.
     """
     geometry = fire.geometry
-    distances: dict[str, float | None] = {
-        z.id: (distance_km(z.geometry, geometry) if geometry is not None else None) for z in drill.zones
-    }
+    distances = dict(zone_distances_km) if zone_distances_km is not None else zone_fire_distances(drill, fire)
     levels = {zid: level_for_distance(d) for zid, d in distances.items()}
     routes = (
         best_routes(drill, blocked_segment_ids, geometry, full_destination_ids,
