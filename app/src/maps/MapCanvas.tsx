@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import L from "leaflet";
-import "leaflet/dist/leaflet.css";
+import { Map, Marker, NavigationControl, ScaleControl, type MapOptions } from "maplibre-gl";
+import "maplibre-gl/dist/maplibre-gl.css";
 import "./maps.css";
 
 export interface MapLocation {
@@ -11,20 +11,37 @@ export interface MapLocation {
 interface MapCanvasProps {
   center?: MapLocation;
   zoom?: number;
+  mapStyle?: MapOptions["style"];
   onLocationSelect?: (location: MapLocation) => void;
 }
 
-const DEFAULT_CENTER: MapLocation = { latitude: 37.5, longitude: -119.5 };
+const DEFAULT_CENTER: MapLocation = { latitude: 37.75, longitude: -119.6 };
+const SATELLITE_STYLE: MapOptions["style"] = {
+  version: 8,
+  sources: {
+    imagery: {
+      type: "raster",
+      tiles: [
+        "https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}",
+      ],
+      tileSize: 256,
+      maxzoom: 16,
+      attribution:
+        '<a href="https://www.usgs.gov/programs/national-geospatial-program/national-map">USDA / USGS The National Map</a> · Aerial imagery',
+    },
+  },
+  layers: [{ id: "imagery", type: "raster", source: "imagery" }],
+};
 
-/** A plain geographic map. The parent controls its starting view and receives selected locations. */
 export default function MapCanvas({
   center = DEFAULT_CENTER,
-  zoom = 6,
+  zoom = 11,
+  mapStyle = SATELLITE_STYLE,
   onLocationSelect,
 }: MapCanvasProps) {
   const container = useRef<HTMLDivElement>(null);
   const selectRef = useRef(onLocationSelect);
-  const [tileError, setTileError] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const { latitude, longitude } = center;
 
   useEffect(() => {
@@ -33,71 +50,87 @@ export default function MapCanvas({
 
   useEffect(() => {
     if (!container.current) return;
-    const map = L.map(container.current, { minZoom: 2, maxZoom: 19 }).setView(
-      [latitude, longitude],
-      zoom,
-    );
-    const tiles = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      maxZoom: 19,
-      keepBuffer: 0,
-      attribution:
-        '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-    });
+    let map: Map;
+    try {
+      map = new Map({
+        container: container.current,
+        style: mapStyle,
+        center: [longitude, latitude],
+        zoom,
+        minZoom: 2,
+        maxZoom: 19,
+        attributionControl: { compact: true },
+      });
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? `Unable to initialize the map: ${cause.message}`
+          : "Unable to initialize the map. This map requires WebGL2 support.",
+      );
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      setError("Imagery is taking longer to load. Check your internet connection.");
+    }, 15_000);
     let failed = false;
-    let timeout: number | undefined;
-    tiles.on("loading", () => {
-      failed = false;
-      window.clearTimeout(timeout);
-      timeout = window.setTimeout(() => setTileError(true), 15_000);
-    });
-    tiles.on("tileerror", () => {
+    map.on("error", () => {
       failed = true;
-      setTileError(true);
-    });
-    tiles.on("load", () => {
       window.clearTimeout(timeout);
-      setTileError(failed);
+      setError("Some imagery could not load. Check your connection or try another area.");
     });
-    tiles.addTo(map);
-    L.control.scale({ imperial: false }).addTo(map);
-
-    let marker: L.CircleMarker | undefined;
-    map.on("click", (event: L.LeafletMouseEvent) => {
-      const position = event.latlng.wrap();
-      if (marker) marker.setLatLng(event.latlng);
-      else
-        marker = L.circleMarker(event.latlng, {
-          radius: 6,
-          color: "#fff",
-          weight: 2,
-          fillColor: "#245c4f",
-          fillOpacity: 1,
-          interactive: false,
-        }).addTo(map);
-      selectRef.current?.({ latitude: position.lat, longitude: position.lng });
+    map.on("movestart", () => {
+      failed = false;
     });
+    map.on("idle", () => {
+      window.clearTimeout(timeout);
+      if (!failed) setError(null);
+    });
+    map.addControl(new NavigationControl(), "top-right");
+    map.addControl(new ScaleControl({ unit: "metric" }), "bottom-left");
+    map
+      .getCanvas()
+      .setAttribute(
+        "aria-label",
+        "Satellite map. Use arrow keys to pan and plus or minus to zoom. Press Enter to select the map center.",
+      );
 
-    const resize = new ResizeObserver(() => map.invalidateSize({ pan: false }));
+    let marker: Marker | undefined;
+    function selectLocation(longitude: number, latitude: number) {
+      if (marker) marker.setLngLat([longitude, latitude]);
+      else {
+        const element = document.createElement("div");
+        element.className = "map-selection";
+        element.setAttribute("aria-label", "Selected location");
+        marker = new Marker({ element }).setLngLat([longitude, latitude]).addTo(map);
+      }
+      const wrappedLongitude = ((((longitude + 180) % 360) + 360) % 360) - 180;
+      selectRef.current?.({ latitude, longitude: wrappedLongitude });
+    }
+    map.on("click", (event) => selectLocation(event.lngLat.lng, event.lngLat.lat));
+    function selectCenter(event: KeyboardEvent) {
+      if (event.key !== "Enter") return;
+      const center = map.getCenter();
+      selectLocation(center.lng, center.lat);
+    }
+    map.getCanvas().addEventListener("keydown", selectCenter);
+    const resize = new ResizeObserver(() => map.resize());
     resize.observe(container.current);
     return () => {
       window.clearTimeout(timeout);
       resize.disconnect();
+      map.getCanvas().removeEventListener("keydown", selectCenter);
+      marker?.remove();
       map.remove();
     };
-  }, [latitude, longitude, zoom]);
+  }, [latitude, longitude, zoom, mapStyle]);
 
   return (
     <div className="geographic-map-container">
-      <div
-        ref={container}
-        className="geographic-map"
-        tabIndex={0}
-        role="region"
-        aria-label="Geographic map. Use arrow keys to pan and plus or minus to zoom."
-      />
-      {tileError && (
+      <div ref={container} className="geographic-map" />
+      {error && (
         <p className="map-error" role="status">
-          Some map tiles are unavailable. Check your connection and zoom or pan to try another view.
+          {error}
         </p>
       )}
     </div>

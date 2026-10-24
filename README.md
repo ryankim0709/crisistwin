@@ -24,7 +24,7 @@ documented below and in the [scaffold decision](docs/adr/0001-app-scaffold.md).
 
 The full stack development scaffold is in [`app/`](app/): React/TypeScript with
 Vite and Tailwind CSS, a Django REST Framework API, PostgreSQL, Vitest, and Docker.
-The workspace checks the API and database connection. A plain geographic map at
+The workspace checks the API and database connection. An imagery-based geographic map at
 `/maps` supports zooming, panning, and selecting a location. Scenario creation,
 simulation, and data integrations are not implemented yet; the items above
 describe the intended prototype.
@@ -101,29 +101,35 @@ hackathon; checks run locally when needed.
 ### Map component
 
 Open **http://localhost:5173/maps** for the map. `app/src/maps/MapCanvas.tsx`
-provides a reusable Leaflet component with standard OpenStreetMap tiles, zoom/pan
-controls, and a single marker for the selected location. It defaults to a
-California overview, with no region restrictions or demo overlays. Background
-tiles require internet access; no API key or backend is needed.
+provides a reusable **MapLibre GL JS** component with USGS aerial imagery,
+smooth zoom/pan, compass controls, and location selection. It defaults to a
+Sierra Nevada view, with no region restrictions or demo overlays. The map needs
+WebGL2 and internet access; no API key or backend is needed.
 
 ```tsx
 <MapCanvas
-  center={{ latitude: 37.5, longitude: -119.5 }}
-  zoom={6}
+  center={{ latitude: 37.75, longitude: -119.6 }}
+  zoom={11}
   onLocationSelect={({ latitude, longitude }) => {
     // Decimal degrees in WGS84; connect to scenario inputs here.
   }}
 />
 ```
 
-The parent supplies a container height. `center` and `zoom` reset the view when
-changed; `onLocationSelect` receives a WGS84 coordinate on click. Selection is
-local UI state and does not run a simulation. The map supports keyboard panning
-with arrow keys and zooming with `+`/`-` when focused. See the
+The parent supplies a container height. `center`, `zoom`, and optional `mapStyle`
+(a MapLibre style object or URL) reset the map when changed. Keep object props
+stable when the view should be preserved. `onLocationSelect` receives a WGS84
+coordinate on click, or when Enter selects the map center. Arrow keys pan;
+`+`/`-` zoom. Selection is local UI state and does not run a simulation.
+
+USGS imagery is historical, not live fire data. Detailed aerial coverage is
+primarily in the US; other regions may have only coarse imagery. The default
+source's highest native zoom is 16; closer views enlarge those tiles. Supply an
+appropriately licensed `mapStyle` for another provider or coverage area. See the
 [map decision](docs/adr/0002-geographic-map.md).
 
-After pulling the new dependency into an existing Docker setup, refresh its
-separate npm volume if Vite cannot resolve `leaflet`:
+After pulling changed dependencies into an existing Docker setup, refresh its
+separate npm volume:
 
 ```sh
 cd app

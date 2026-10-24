@@ -24,7 +24,7 @@
 .geographic-map {
   width: 100%;
   height: 100%;
-  background: #e7eadf;
+  background: #17201d;
   font-family: inherit;
 }
 
@@ -42,4 +42,14 @@
   color: #142b27;
   font-size: 12px;
   box-shadow: 0 2px 8px #142b2720;
+}
+
+.map-selection {
+  width: 14px;
+  height: 14px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: #e97938;
+  box-shadow: 0 1px 6px #0009;
+  pointer-events: none;
 }
