@@ -36,6 +36,10 @@ import { DispatchLayers } from "./dispatchLayers";
 import { noActionBaseline, type IgnitionEvent } from "./engine";
 import { computeExposure } from "./fireExposure";
 import { useDispatchSession } from "./useDispatchSession";
+import { LIVE_SNAPSHOT_VERSION, type LiveSnapshot } from "../live/contracts";
+import { LiveShareToggle } from "../live/LiveShareToggle";
+import { fireRings, hectares, liveZones } from "../live/snapshot";
+import { newSessionId, useLiveBroadcast } from "../live/useLiveBroadcast";
 import "../studio/studio.css";
 import "./dispatch.css";
 
@@ -347,6 +351,55 @@ export default function DispatchAgentPage() {
     [result, displayFrameIndex],
   );
 
+  // ---- Resident app broadcast ---------------------------------------------------------------
+  // Fire footprint at the shown minute; while the agent runs, every zone's guidance as well.
+  const liveEngine = sessionActive ? session.engine : null;
+  const liveSessionId = useMemo(() => (result ? newSessionId() : null), [result, liveEngine]);
+  const getLiveSnapshot = useCallback((): LiveSnapshot | null => {
+    if (!result || stale || !liveSessionId) return null;
+    const frame = result.run.frames[displayFrameIndex];
+    const latest = session.log.find((entry) => entry.status === "done");
+    const playback: LiveSnapshot["playback"] = liveEngine
+      ? session.status === "finished"
+        ? "finished"
+        : session.status === "running" || session.status === "thinking"
+          ? "playing"
+          : "paused"
+      : playing
+        ? "playing"
+        : displayMinute >= horizonMinutes
+          ? "finished"
+          : "paused";
+    return {
+      version: LIVE_SNAPSHOT_VERSION,
+      source: liveEngine ? "dispatch_agent" : "fire_model",
+      session_id: liveSessionId,
+      evidence_class: "simulated",
+      playback,
+      area_name: area?.name ?? "Dispatch area",
+      minute: Math.round(displayMinute),
+      horizon_minutes: horizonMinutes,
+      wind: {
+        from_degrees: result.scenario.settings.windFromDegrees,
+        speed_mph: result.scenario.settings.windSpeedMph,
+      },
+      bbox: area ? area.bbox : null,
+      fire: {
+        perimeters: frame ? fireRings(frame.perimeters) : [],
+        burned_area_ha: hectares(frame?.reachedAreaSquareMeters ?? 0),
+      },
+      zones: liveEngine ? liveZones(liveEngine) : [],
+      agent:
+        liveEngine && latest && latest.model
+          ? { summary: latest.summary, model: latest.model, minute: latest.minute }
+          : null,
+    };
+  }, [result, stale, liveSessionId, displayFrameIndex, session.log, session.status, liveEngine, playing, displayMinute, horizonMinutes, area]);
+  const liveBroadcast = useLiveBroadcast(
+    getLiveSnapshot,
+    `${liveSessionId}:${displayMinute}:${playing}:${session.status}:${session.version}`,
+  );
+
   const problemIds = useMemo(
     () => new Set((state.error?.problems ?? []).map((p) => p.sourceId)),
     [state.error],
@@ -531,6 +584,16 @@ export default function DispatchAgentPage() {
               <span className="dispatch-side__rail-label">Agent · {session.status}</span>
             )}
           </button>
+          {!agentCollapsed && (
+            <LiveShareToggle
+              id="dispatch-live-share"
+              className="live-share dispatch-live-share"
+              enabled={liveBroadcast.enabled}
+              onChange={liveBroadcast.setEnabled}
+              status={liveBroadcast.status}
+              idleText="Shares the fire, and each zone's orders while the agent runs, with the resident app."
+            />
+          )}
           {!agentCollapsed && (
             <AgentPanel
               area={area}

@@ -1,3 +1,4 @@
+import CoreLocation
 import Foundation
 import Observation
 
@@ -14,6 +15,8 @@ struct MeetingPoint: Codable, Equatable {
             && latitude.isFinite && (-90...90).contains(latitude)
             && longitude.isFinite && (-180...180).contains(longitude)
     }
+
+    var coordinate: CLLocationCoordinate2D { CLLocationCoordinate2D(latitude: latitude, longitude: longitude) }
 
     /// Apple Maps link that opens directions from the viewer's location. Works without the app.
     var directionsURL: URL {
@@ -40,6 +43,9 @@ struct MeetingPlan: Codable, Equatable {
     var primary: MeetingPoint?
     var backup: MeetingPoint?
     var contacts: [TrustedContact] = []
+    /// Where the household lives, used only on this phone to find its zone in the live
+    /// simulation. Never shared or sent to the server. Optional, so older files still load.
+    var home: MeetingPoint?
 
     var shareText: String {
         var lines = ["Our CrisisTwin meeting plan. If we get separated, meet here:"]
@@ -91,7 +97,8 @@ final class MeetingPlanStore {
             let decoded = try JSONDecoder().decode(MeetingPlan.self, from: Data(contentsOf: fileURL))
             guard decoded.version == 1,
                   decoded.primary?.isValid ?? true,
-                  decoded.backup?.isValid ?? true else {
+                  decoded.backup?.isValid ?? true,
+                  decoded.home?.isValid ?? true else {
                 throw CocoaError(.fileReadCorruptFile)
             }
             plan = decoded

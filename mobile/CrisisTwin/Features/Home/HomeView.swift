@@ -5,6 +5,8 @@ struct HomeView: View {
     let openTab: (AppTab) -> Void
 
     @Environment(MeetingPlanStore.self) private var store
+    @Environment(LiveStore.self) private var live
+    @Environment(FamilyStore.self) private var family
     @State private var showingAbout = false
 
     private var plan: MeetingPlan { store.plan }
@@ -38,8 +40,10 @@ struct HomeView: View {
                 }
 
                 alertsCard
+                liveCard
                 quickActions
                 planCard
+                familyCard
                 practiceCard
 
                 Text("CrisisTwin is a planning aid, not an emergency service. In an emergency, follow official instructions and call 911 if you are in danger.")
@@ -112,6 +116,46 @@ struct HomeView: View {
             LabeledContent("Trusted contacts", value: "\(plan.contacts.count)")
             Button(plan.primary == nil ? "Set up my plan" : "Edit my plan") { openTab(.plan) }
                 .buttonStyle(.bordered)
+        }
+    }
+
+    /// A simulation drill from the web app, when one is being broadcast. Never styled as an alert.
+    @ViewBuilder
+    private var liveCard: some View {
+        if let snapshot = live.snapshot, snapshot.playback != "stopped" {
+            let zone = plan.home.flatMap { snapshot.zone(containing: $0.coordinate) }
+            Button {
+                openTab(.live)
+            } label: {
+                ActionRow(
+                    title: "Simulation drill running",
+                    detail: zone.map { "Your zone (simulated): \($0.message)" }
+                        ?? "\(snapshot.areaName) · T+\(Int(snapshot.minute)) min. Not a real emergency.",
+                    systemImage: "dot.radiowaves.left.and.right",
+                    prominent: false
+                )
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private var familyCard: some View {
+        Card {
+            Label("Family", systemImage: "person.3")
+                .font(.headline)
+            if let current = family.family {
+                LabeledContent("Family", value: current.name)
+                ForEach(current.members) { member in
+                    LabeledContent(member.isMe ? "\(member.name) (you)" : member.name, value: member.memberStatus.label)
+                }
+                Button("Open Family") { openTab(.family) }
+                    .buttonStyle(.bordered)
+            } else {
+                Text("Make a family so everyone shares the same meeting points and can say they're safe.")
+                    .foregroundStyle(.secondary)
+                Button("Create or join a family") { openTab(.family) }
+                    .buttonStyle(.bordered)
+            }
         }
     }
 

@@ -47,9 +47,13 @@ no-action baseline is shown for comparison. Roads and fire stations come from
 OpenStreetMap; zones and vehicle counts are synthetic. It is a planning experiment, not
 operational guidance (see [ADR 0014](docs/adr/0014-dispatch-agent.md)).
 
-The native iOS scaffold is in [`mobile/`](mobile/README.md): a SwiftUI workspace,
-API/database readiness card, and a scenario empty state. Native maps, simulation,
-and scenario synchronization are not implemented in the mobile app yet.
+The native iOS resident app is in [`mobile/`](mobile/README.md). Its **Live drill** tab
+shows, on a native map, the fire a planner is playing on `/fire` or `/dispatch` (the pages
+post it to `POST /api/live/broadcast` while **Share with resident app** is on) and, while the
+dispatch agent runs, what the simulation tells the household's zone: leave now via an exit,
+wait a while, route blocked or changed. **Family** lets a household create or join a family
+by code to share meeting points and status. Everything shown is a labelled simulation drill,
+not an alert (see [ADR 0016](docs/adr/0016-resident-live-and-family.md)).
 
 This is an experimental planning simulator. Its outputs are not operational evacuation instructions; any future resident guidance should require approval by the responsible authority.
 
