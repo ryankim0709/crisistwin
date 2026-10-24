@@ -34,6 +34,9 @@ resetView(): void                      // animate back to the composed view
 onPick(cb: (target: PickTarget | null) => void): void
 project(target: PickTarget): { x: number; y: number } | null  // CSS px within container
 setReducedMotion(value: boolean): void
+setViewInsets(insets: { top: number; right: number; bottom: number; left: number }): void
+  // CSS px of the container covered by overlay UI; the default view and resetView frame the
+  // whole board in the remaining rectangle (projection shifted via setViewOffset), refit on change
 dispose(): void
 ```
 

@@ -5,42 +5,46 @@ import { box, hash2, mergeAll, paint, place } from "./geometry";
 import { PALETTE } from "./palette";
 import type { SurfaceHeight } from "./roads";
 
-/** Models are slightly over-scaled versus real cars so they read at diorama distance. */
+/**
+ * Models are over-scaled in width/height so they read at diorama distance, but civilian
+ * cars stay 4.5 long (scenario car length 4.4, 5-unit standstill gap) so queues keep
+ * visible gaps. Engines are 10.4 long (scenario length 7.5; they rarely queue).
+ */
 function wheel(x: number, z: number, r = 0.5) {
-  const g = paint(new THREE.CylinderGeometry(r, r, 0.45, 10), PALETTE.tyre);
+  const g = paint(new THREE.CylinderGeometry(r, r, 0.5, 10), PALETTE.tyre);
   g.rotateZ(Math.PI / 2);
   return place(g, x, r, z);
 }
 
 function civilianGeometry() {
   return mergeAll([
-    place(paint(new RoundedBoxGeometry(2.6, 1.15, 5.6, 2, 0.4), PALETTE.civilianBody, true), 0, 1.05, 0),
-    place(paint(new RoundedBoxGeometry(2.2, 0.95, 3.0, 2, 0.35), PALETTE.civilianRoof, true), 0, 1.95, -0.35),
-    box(1.9, 0.5, 0.12, 0, 1.95, 1.2, PALETTE.glass),
-    ...[-1.8, 1.8].flatMap((z) => [wheel(-1.2, z), wheel(1.2, z)]),
+    place(paint(new RoundedBoxGeometry(2.95, 1.4, 4.5, 2, 0.45), PALETTE.civilianBody, true), 0, 1.2, 0),
+    place(paint(new RoundedBoxGeometry(2.55, 1.15, 2.45, 2, 0.42), PALETTE.civilianRoof, true), 0, 2.32, -0.3),
+    box(2.15, 0.62, 0.12, 0, 2.32, 0.97, PALETTE.glass),
+    ...[-1.45, 1.45].flatMap((z) => [wheel(-1.36, z, 0.6), wheel(1.36, z, 0.6)]),
   ]);
 }
 
 function engineGeometry() {
   const parts = [
-    box(3.0, 2.3, 6.8, 0, 1.95, -1.3, PALETTE.engineRed),
-    place(paint(new RoundedBoxGeometry(3.0, 2.7, 2.9, 2, 0.35), PALETTE.engineRed, true), 0, 2.05, 3.45),
-    box(2.6, 0.9, 0.12, 0, 2.65, 4.92, PALETTE.glass),
-    box(3.08, 0.34, 9.6, 0, 1.55, 0.1, PALETTE.engineStripe),
-    box(0.16, 0.16, 6.6, -0.7, 3.25, -1.2, PALETTE.engineLadder),
-    box(0.16, 0.16, 6.6, 0.7, 3.25, -1.2, PALETTE.engineLadder),
+    box(3.7, 2.9, 7.0, 0, 2.45, -1.6, PALETTE.engineRed),
+    place(paint(new RoundedBoxGeometry(3.7, 3.35, 3.2, 2, 0.42), PALETTE.engineRed, true), 0, 2.55, 3.55),
+    box(3.2, 1.1, 0.12, 0, 3.3, 5.17, PALETTE.glass),
+    box(3.78, 0.42, 10.2, 0, 1.95, -0.05, PALETTE.engineStripe),
+    box(0.2, 0.2, 6.8, -0.85, 4.05, -1.5, PALETTE.engineLadder),
+    box(0.2, 0.2, 6.8, 0.85, 4.05, -1.5, PALETTE.engineLadder),
   ];
-  for (let z = -4.2; z <= 1.8; z += 1.2) parts.push(box(1.4, 0.1, 0.12, 0, 3.25, z, PALETTE.engineLadder));
-  for (const z of [-3.6, -2.2, 3.3]) parts.push(wheel(-1.35, z, 0.62), wheel(1.35, z, 0.62));
+  for (let z = -4.6; z <= 1.6; z += 1.25) parts.push(box(1.7, 0.12, 0.14, 0, 4.05, z, PALETTE.engineLadder));
+  for (const z of [-4.0, -2.4, 3.5]) parts.push(wheel(-1.68, z, 0.75), wheel(1.68, z, 0.75));
   return mergeAll(parts);
 }
 
 function brakeGeometry() {
-  return mergeAll([box(0.55, 0.32, 0.14, -0.85, 1.15, -2.83, 0xffffff), box(0.55, 0.32, 0.14, 0.85, 1.15, -2.83, 0xffffff)]);
+  return mergeAll([box(0.62, 0.36, 0.14, -0.95, 1.35, -2.27, 0xffffff), box(0.62, 0.36, 0.14, 0.95, 1.35, -2.27, 0xffffff)]);
 }
 
 function lightBarGeometry() {
-  return mergeAll([box(0.9, 0.38, 0.55, -0.55, 3.55, 3.3, 0xffffff), box(0.9, 0.38, 0.55, 0.55, 3.55, 3.3, 0xffffff)]);
+  return mergeAll([box(1.15, 0.45, 0.65, -0.68, 4.45, 3.5, 0xffffff), box(1.15, 0.45, 0.65, 0.68, 4.45, 3.5, 0xffffff)]);
 }
 
 const BRAKE = new THREE.Color(PALETTE.brake).multiplyScalar(1.6);
@@ -149,7 +153,7 @@ export class VehicleLayer {
   positionOf(id: string, out: THREE.Vector3): THREE.Vector3 | null {
     const v = this.snapshot?.vehicles.find((x) => x.id === id);
     if (!v || this.visibility(id) < 0.2) return null;
-    return out.set(v.p.x, this.surfaceHeight(v.p.x, v.p.z) + (v.kind === "engine" ? 3 : 2), v.p.z);
+    return out.set(v.p.x, this.surfaceHeight(v.p.x, v.p.z) + (v.kind === "engine" ? 4 : 2.6), v.p.z);
   }
 
   /** Visible vehicles for screen-space picking. */

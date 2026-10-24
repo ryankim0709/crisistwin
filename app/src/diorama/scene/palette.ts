@@ -57,7 +57,7 @@ export const PALETTE = {
   civilianRoof: 0x4fc0d3,
   tyre: 0x2e3135,
   brake: 0xff6a4d,
-  engineRed: 0xc8352b,
+  engineRed: 0xe5392b,
   engineStripe: 0xf7f3ea,
   engineLadder: 0xa9adb2,
   emergencyBlue: 0x4f8dff,
@@ -65,7 +65,7 @@ export const PALETTE = {
 
   coral: 0xe2674c,
   amber: 0xffa23c,
-  smoke: 0xc4bbb1,
+  smoke: 0xa89f95,
   waterSpray: 0xe3f7ff,
   closure: 0xd9483b,
   ivory: 0xfbf6ec,

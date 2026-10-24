@@ -147,8 +147,8 @@ export class BuildingLayer {
     this.homesMesh.name = "homes";
     this.shelterMesh.name = "shelter";
     this.stationMesh.name = "station";
-    this.shelterAnchor.set(shelterB.p.x, shelter.top + 7, shelterB.p.z);
-    this.stationAnchor.set(stationB.p.x, station.top + 6, stationB.p.z);
+    this.shelterAnchor.set(shelterB.p.x, shelter.top + 1, shelterB.p.z);
+    this.stationAnchor.set(stationB.p.x, station.top + 1, stationB.p.z);
 
     const flagGeo = new THREE.PlaneGeometry(6, 3.4, 10, 2);
     flagGeo.translate(3, -1.7, 0);
