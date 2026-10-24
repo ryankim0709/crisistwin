@@ -1,0 +1,353 @@
+/**
+ * The live AI dispatcher on top of a Simulation Studio run (/dispatch): builds the road
+ * network, synthetic homes and fire stations from OpenStreetMap for the box the run's fires
+ * threaten, draws them on the studio's 3D diorama, and runs the dispatch session (engine, live
+ * monitor, agent) with its console beside the stage. Any new or stale run ends a session. See
+ * docs/adr/0017-dispatch-anywhere.md and docs/adr/0018-live-dispatch-monitor.md.
+ */
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { LIVE_SNAPSHOT_VERSION, type LiveSnapshot } from "../live/contracts";
+import { LiveShareToggle } from "../live/LiveShareToggle";
+import { fireRings, hectares, liveZones } from "../live/snapshot";
+import { newSessionId, useLiveBroadcast } from "../live/useLiveBroadcast";
+import type { StudioAsideContext } from "../studio/SimulationStudioPage";
+import DispatchConsole, { type SetupStep } from "./DispatchConsole";
+import { AreaRequestError, dispatchBoxFor, loadArea, type Bbox, type DispatchArea } from "./area";
+import { noActionBaseline, type IgnitionEvent } from "./engine";
+import { computeExposure } from "./fireExposure";
+import type { FrameSummary } from "./observation";
+import { DispatchOverlay } from "./scene/DispatchOverlay";
+import { useDispatchSession } from "./useDispatchSession";
+import { Button } from "../ui";
+import "./dispatch.css";
+
+/** Wait this long after the run changes before asking for the road network. */
+const AREA_DEBOUNCE_MS = 500;
+/** Road boxes are snapped to this grid (degrees), like the backend cache. */
+const AREA_SNAP_DEGREES = 0.01;
+const ZONE_FOCUS_METERS = 900;
+
+type AreaState =
+  | { status: "idle" }
+  | { status: "loading"; key: string }
+  | { status: "ready"; key: string; area: DispatchArea }
+  | { status: "error"; key: string; message: string };
+
+function snapBox([w, s, e, n]: Bbox): Bbox {
+  const snap = (value: number, round: (v: number) => number) =>
+    Number((round(value / AREA_SNAP_DEGREES) * AREA_SNAP_DEGREES).toFixed(2));
+  return [snap(w, Math.floor), snap(s, Math.floor), snap(e, Math.ceil), snap(n, Math.ceil)];
+}
+
+export default function StudioDispatch({
+  result,
+  stale,
+  scene,
+  clockRef,
+  setLocked,
+  showDiorama,
+}: StudioAsideContext) {
+  const [areaState, setAreaState] = useState<AreaState>({ status: "idle" });
+  const [areaAttempt, setAreaAttempt] = useState(0);
+  const [selectedZone, setSelectedZone] = useState<number | null>(null);
+  const overlay = useMemo(() => new DispatchOverlay(), []);
+
+  // Only a current run is dispatched; an edited (stale) scenario must be run again first.
+  const current = result && !stale ? result : null;
+  const grid = current?.landscape ?? null;
+  const horizonMinutes = current?.scenario.settings.horizonMinutes ?? 0;
+  const frames = useMemo<FrameSummary[]>(
+    () =>
+      (current?.run.frames ?? []).map((frame) => ({
+        elapsedMinutes: frame.elapsedMinutes,
+        burnedAreaSquareMeters: frame.reachedAreaSquareMeters,
+      })),
+    [current],
+  );
+  const ignitions = useMemo<IgnitionEvent[]>(() => {
+    if (!current) return [];
+    return current.run.ignitions.flatMap((entry) => {
+      if (entry.outcome.status !== "ignited") return [];
+      const source = current.scenario.ignitions.find((i) => i.id === entry.sourceId);
+      return [{ minute: entry.outcome.ignitedMinute, name: source?.name || entry.sourceId }];
+    });
+  }, [current]);
+
+  // ---- Road network, homes and stations for the box the fires threaten ------------------
+  const box = useMemo(
+    () =>
+      grid && current ? dispatchBoxFor(grid, current.run.arrivalMinutes, horizonMinutes) : null,
+    [grid, current, horizonMinutes],
+  );
+  const snapped = useMemo(() => (box ? snapBox(box) : null), [box]);
+  const boxKey = snapped ? snapped.join(",") : null;
+  useEffect(() => {
+    if (!boxKey || !snapped) {
+      setAreaState({ status: "idle" });
+      return;
+    }
+    const controller = new AbortController();
+    setAreaState((state) =>
+      state.status === "ready" && state.key === boxKey ? state : { status: "loading", key: boxKey },
+    );
+    const timer = window.setTimeout(() => {
+      loadArea(snapped, controller.signal)
+        .then((area) => {
+          if (!controller.signal.aborted) setAreaState({ status: "ready", key: boxKey, area });
+        })
+        .catch((cause: unknown) => {
+          if (controller.signal.aborted) return;
+          const message =
+            cause instanceof AreaRequestError || cause instanceof Error
+              ? cause.message
+              : "Could not load the road network.";
+          setAreaState({ status: "error", key: boxKey, message });
+        });
+    }, AREA_DEBOUNCE_MS);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [boxKey, areaAttempt]);
+  const area = areaState.status === "ready" && areaState.key === boxKey ? areaState.area : null;
+
+  const exposure = useMemo(
+    () =>
+      area && grid && current ? computeExposure(area, grid, current.run.arrivalMinutes) : null,
+    [area, grid, current],
+  );
+  const baseline = useMemo(
+    () => (area && exposure ? noActionBaseline(area, exposure, horizonMinutes) : null),
+    [area, exposure, horizonMinutes],
+  );
+
+  // ---- Session: drives the studio's clock while it runs ----------------------------------
+  const pushTime = useCallback(
+    (minutes: number) => {
+      clockRef.current = minutes;
+      overlay.setPreviewMinute(minutes);
+    },
+    [clockRef, overlay],
+  );
+  const session = useDispatchSession(pushTime);
+  const sessionActive = session.status !== "idle" && session.engine !== null;
+  const { stop: stopSession } = session;
+
+  useEffect(() => {
+    setLocked(sessionActive);
+  }, [sessionActive, setLocked]);
+  useEffect(() => () => setLocked(false), [setLocked]);
+
+  // Any change to the run or its roads ends a dispatcher run.
+  useEffect(() => {
+    stopSession();
+    setSelectedZone(null);
+  }, [current, area, stopSession]);
+
+  // ---- 3D overlay ------------------------------------------------------------------------
+  useEffect(() => {
+    if (!scene) return;
+    scene.setOverlay(overlay);
+    return () => scene.setOverlay(null);
+  }, [scene, overlay]);
+  // Modelled homes replace the board's placeholder houses once the area is loaded.
+  useEffect(() => {
+    if (!scene) return;
+    scene.setCoverHouses(!area);
+    return () => scene.setCoverHouses(true);
+  }, [scene, area]);
+  useEffect(() => {
+    overlay.setArea(area, exposure);
+  }, [overlay, area, exposure]);
+  useEffect(() => {
+    overlay.setEngine(sessionActive ? session.engine : null);
+  }, [overlay, sessionActive, session.engine, session.version]);
+  useEffect(() => {
+    overlay.setSelectedZone(selectedZone);
+  }, [overlay, selectedZone]);
+  // Before a session, homes darken as the studio's playback clock reaches them.
+  useEffect(() => {
+    if (sessionActive || !area) return;
+    let handle = 0;
+    const tick = () => {
+      overlay.setPreviewMinute(clockRef.current);
+      handle = requestAnimationFrame(tick);
+    };
+    handle = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(handle);
+  }, [sessionActive, area, overlay, clockRef]);
+
+  const selectZone = useCallback(
+    (zone: number | null) => {
+      setSelectedZone(zone);
+      if (zone !== null && area) {
+        const [longitude, latitude] = area.zones[zone].centroid;
+        scene?.focusOn({ latitude, longitude }, ZONE_FOCUS_METERS);
+      }
+    },
+    [area, scene],
+  );
+
+  const handleStart = useCallback(() => {
+    if (!area || !exposure || !current) return;
+    showDiorama();
+    setSelectedZone(null);
+    session.start({
+      area,
+      exposure,
+      frames,
+      baselineHomesExposed: baseline?.caught ?? null,
+      horizonMinutes,
+      ignitions,
+      windFromDegrees: current.scenario.settings.windFromDegrees,
+      windSpeedMph: current.scenario.settings.windSpeedMph,
+    });
+  }, [area, exposure, current, frames, baseline, horizonMinutes, ignitions, session, showDiorama]);
+
+  // ---- Resident app broadcast (simulated guidance per zone) -------------------------------
+  const areaLabel = current?.scenario.name || area?.name || "Dispatch scenario";
+  const liveEngine = sessionActive ? session.engine : null;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const liveSessionId = useMemo(() => (current ? newSessionId() : null), [current, liveEngine]);
+  const getLiveSnapshot = useCallback((): LiveSnapshot | null => {
+    if (!current || !liveSessionId) return null;
+    const minute = Math.min(liveEngine ? liveEngine.minute : clockRef.current, horizonMinutes);
+    const frame = [...current.run.frames].reverse().find((f) => f.elapsedMinutes <= minute);
+    const latest = session.log.find((entry) => entry.status === "done");
+    return {
+      version: LIVE_SNAPSHOT_VERSION,
+      source: liveEngine ? "dispatch_agent" : "fire_model",
+      session_id: liveSessionId,
+      evidence_class: "simulated",
+      playback: liveEngine
+        ? session.status === "finished"
+          ? "finished"
+          : session.status === "running" || session.status === "thinking"
+            ? "playing"
+            : "paused"
+        : "paused",
+      area_name: areaLabel,
+      minute: Math.round(minute),
+      horizon_minutes: horizonMinutes,
+      wind: {
+        from_degrees: current.scenario.settings.windFromDegrees,
+        speed_mph: current.scenario.settings.windSpeedMph,
+      },
+      bbox: area ? area.bbox : null,
+      fire: {
+        perimeters: frame ? fireRings(frame.perimeters) : [],
+        burned_area_ha: hectares(frame?.reachedAreaSquareMeters ?? 0),
+      },
+      zones: liveEngine ? liveZones(liveEngine) : [],
+      agent:
+        liveEngine && latest && latest.model
+          ? { summary: latest.summary, model: latest.model, minute: latest.minute }
+          : null,
+    };
+  }, [
+    current,
+    liveSessionId,
+    liveEngine,
+    clockRef,
+    horizonMinutes,
+    session.log,
+    session.status,
+    areaLabel,
+    area,
+  ]);
+  const liveBroadcast = useLiveBroadcast(
+    getLiveSnapshot,
+    `${liveSessionId}:${session.status}:${session.version}`,
+  );
+
+  // ---- Setup checklist --------------------------------------------------------------------
+  const steps: SetupStep[] = [
+    {
+      label: "Run the fire scenario",
+      detail: current
+        ? `${horizonMinutes / 60} h of simulated spread from ${ignitions.length} fire${ignitions.length === 1 ? "" : "s"}`
+        : result && stale
+          ? "The scenario changed since the last run. Run it again to dispatch it."
+          : "Place fires (or load the demo) in the panel, then run the simulation.",
+      state: current ? "done" : "active",
+    },
+    {
+      label: "Roads, homes and stations",
+      detail: area
+        ? `${area.name}: ${area.homes.length.toLocaleString()} homes in ${area.zones.length} zones, ${area.exits.length} exits, ${area.stations.length} fire stations`
+        : areaState.status === "error"
+          ? areaState.message
+          : current
+            ? "Building the evacuation network from OpenStreetMap…"
+            : "Built from OpenStreetMap around the fire.",
+      state: area
+        ? "done"
+        : areaState.status === "error"
+          ? "error"
+          : current
+            ? "active"
+            : "waiting",
+    },
+  ];
+  const startBlocker = !current
+    ? result && stale
+      ? "Run the edited scenario first."
+      : "Run a fire scenario first."
+    : !area
+      ? areaState.status === "error"
+        ? "The road network could not be loaded."
+        : "Waiting for the road network…"
+      : area.zones.length === 0
+        ? "No residential streets lie near these fires, so there is nobody to evacuate. Try fires closer to homes."
+        : null;
+
+  return (
+    <DispatchConsole
+      area={area}
+      steps={steps}
+      startBlocker={startBlocker}
+      status={session.status}
+      engine={sessionActive ? session.engine : null}
+      version={session.version}
+      log={session.log}
+      checks={session.checks}
+      checkInterval={session.checkInterval}
+      nextCheckMinute={session.nextCheckMinute}
+      baseline={baseline}
+      speed={session.speed}
+      selectedZone={selectedZone}
+      onStart={handleStart}
+      onPause={session.pause}
+      onResume={session.resume}
+      onStop={session.stop}
+      onRetry={session.retry}
+      onSkip={session.skip}
+      onSpeedChange={session.setSpeed}
+      onCheckIntervalChange={session.setCheckInterval}
+      onSelectZone={selectZone}
+      footer={
+        <>
+          {areaState.status === "error" && (
+            <p className="dsp-note">
+              <Button variant="secondary" size="sm" onClick={() => setAreaAttempt((v) => v + 1)}>
+                Retry the road network
+              </Button>
+            </p>
+          )}
+          {current && (
+            <LiveShareToggle
+              id="dispatch-live-share"
+              className="live-share dispatch-live-share"
+              enabled={liveBroadcast.enabled}
+              onChange={liveBroadcast.setEnabled}
+              status={liveBroadcast.status}
+              idleText="Shares the fire, and each zone's simulated guidance while the agent runs, with the resident app."
+            />
+          )}
+        </>
+      }
+    />
+  );
+}

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import type { GeoPoint } from "../fire/spread";
 import { formatElapsed } from "../fire/spread";
 import ConfigPanel from "./ConfigPanel";
@@ -12,6 +12,7 @@ import {
   type MapMode,
   type ScenarioIssue,
   type ScheduledIgnition,
+  type StudioRunResult,
   type StudioScenario,
 } from "./contracts";
 import { demoScenario } from "./demo";
@@ -41,7 +42,7 @@ import {
   useRegionBoard,
 } from "./useRegionBoard";
 import { CALIFORNIA_REGIONS, REGION_AREAS } from "../fire/regions";
-import type { DioramaIgnition, DioramaRun } from "../fire/diorama/types";
+import type { DioramaIgnition, DioramaRun, FireDioramaSceneApi } from "../fire/diorama/types";
 import "./studio.css";
 
 type StudioView = "map" | "diorama";
@@ -59,6 +60,23 @@ export interface SimulationStudioPageProps {
    * (/dispatch) keeps its own scenario instead of sharing the /simulation draft.
    */
   storageNamespace?: string;
+  /**
+   * A side panel driven by the run (the /dispatch console). It may take over the playback
+   * clock: while it holds the lock, studio playback is paused and disabled.
+   */
+  aside?: ComponentType<StudioAsideContext>;
+}
+
+/** What a side panel gets from the studio. */
+export interface StudioAsideContext {
+  result: StudioRunResult | null;
+  stale: boolean;
+  /** The 3D scene while the diorama view is shown. */
+  scene: FireDioramaSceneApi | null;
+  /** The smooth playback clock (minutes) the diorama draws; write it only while locked. */
+  clockRef: { current: number };
+  setLocked: (locked: boolean) => void;
+  showDiorama: () => void;
 }
 /** Gap kept between the floating panel and the framed 3D board, CSS px. */
 const DIORAMA_PANEL_GAP_PX = 12;
@@ -95,8 +113,11 @@ const OPERATIONAL_DISCLAIMER = "Planning experiment; not an operational forecast
 export default function SimulationStudioPage({
   label = "Simulation Studio",
   storageNamespace,
+  aside: Aside,
 }: SimulationStudioPageProps = {}) {
-  const draftKey = storageNamespace ? `${DRAFT_STORAGE_KEY}.${storageNamespace}` : DRAFT_STORAGE_KEY;
+  const draftKey = storageNamespace
+    ? `${DRAFT_STORAGE_KEY}.${storageNamespace}`
+    : DRAFT_STORAGE_KEY;
   const viewKey = storageNamespace ? `${VIEW_STORAGE_KEY}.${storageNamespace}` : VIEW_STORAGE_KEY;
   const [initialDraft] = useState(() => loadDraft(draftKey));
   const [scenario, setScenario] = useState<StudioScenario>(
@@ -109,14 +130,17 @@ export default function SimulationStudioPage({
   const [panelCollapsed, setPanelCollapsed] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [view, setView] = useState<StudioView>(() => loadView(viewKey));
-  const chooseView = useCallback((next: StudioView) => {
-    setView(next);
-    try {
-      window.localStorage.setItem(viewKey, next);
-    } catch {
-      // Storage can be unavailable (private mode); the choice then lasts for this visit only.
-    }
-  }, [viewKey]);
+  const chooseView = useCallback(
+    (next: StudioView) => {
+      setView(next);
+      try {
+        window.localStorage.setItem(viewKey, next);
+      } catch {
+        // Storage can be unavailable (private mode); the choice then lasts for this visit only.
+      }
+    },
+    [viewKey],
+  );
 
   // The 3D camera frames the board in the area the floating panel leaves uncovered.
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -158,6 +182,13 @@ export default function SimulationStudioPage({
   const [frameIndex, setFrameIndex] = useState(0);
   const clockRef = useRef(0);
   const frameMinutes = useMemo(() => result?.frameMinutes ?? [], [result]);
+  const [scene, setScene] = useState<FireDioramaSceneApi | null>(null);
+  const [locked, setLockedState] = useState(false);
+  const showDiorama = useCallback(() => chooseView("diorama"), [chooseView]);
+  const setLocked = useCallback((next: boolean) => {
+    setLockedState(next);
+    if (next) setPlaying(false);
+  }, []);
 
   // A new result starts at T+0, paused. Adjusted during render rather than in an effect.
   const [playbackKey, setPlaybackKey] = useState<number | null>(null);
@@ -520,10 +551,10 @@ export default function SimulationStudioPage({
   }, [result, safeFrameIndex, events, currentMinute, scenario.ignitions]);
 
   const handlePlayPause = useCallback(() => {
-    if (frameMinutes.length === 0) return;
+    if (frameMinutes.length === 0 || locked) return;
     if (!playing && safeFrameIndex >= frameMinutes.length - 1) seek(0);
     setPlaying(!playing);
-  }, [frameMinutes, playing, safeFrameIndex, seek]);
+  }, [frameMinutes, playing, safeFrameIndex, seek, locked]);
 
   const handleStep = useCallback(
     (delta: -1 | 1) => {
@@ -534,243 +565,263 @@ export default function SimulationStudioPage({
   );
 
   return (
-    <main className="studio-page" id="main-content" aria-label={label}>
-      <div className="studio-stage">
-        <div className="studio-page-map">
-          {view === "diorama" ? (
-            <StudioDiorama
-              landscape={dioramaLandscape}
-              run={dioramaShowsRun ? dioramaRun : null}
-              ignitions={dioramaIgnitions}
-              windFromDegrees={scenario.settings.windFromDegrees}
-              windSpeedMph={scenario.settings.windSpeedMph}
-              timeRef={clockRef}
-              insets={{ top: 12, right: 12, bottom: DIORAMA_BOTTOM_INSET_PX, left: panelInset }}
-              fitKey={dioramaShowsRun ? resultKey : null}
-              warnings={warnings}
-              attribution={
-                dioramaShowsRun ? attribution : Object.values(regionGrid?.attribution ?? {})
-              }
-              onGroundClick={handleMapClick}
-              boardControl={
-                <Panel glass compact className="studio-region">
-                  <div className="studio-region__row">
-                    <label htmlFor="studio-region">Region</label>
-                    <select
-                      id="studio-region"
-                      className="ui-input"
-                      value={regionId}
-                      onChange={(event) => selectRegion(event.target.value)}
-                    >
-                      {REGION_AREAS.map((area) => (
-                        <optgroup key={area} label={area}>
-                          {CALIFORNIA_REGIONS.filter((entry) => entry.area === area).map(
-                            (entry) => (
-                              <option key={entry.id} value={entry.id}>
-                                {entry.name}
-                                {catalog.status === "ready" && !catalog.ids.has(entry.id)
-                                  ? " (not built)"
-                                  : ""}
-                              </option>
-                            ),
-                          )}
-                        </optgroup>
-                      ))}
-                    </select>
-                  </div>
-                  <p className="studio-region__note">
-                    {board.status === "ready"
-                      ? board.source === "stored"
-                        ? "Stored board: LANDFIRE fuels and terrain, prebuilt."
-                        : "Stored board unavailable; loaded live from LANDFIRE."
-                      : board.status === "loading"
-                        ? board.storedUnavailable
-                          ? "Stored board unavailable; loading live from LANDFIRE…"
-                          : "Loading stored board…"
-                        : "Board could not be loaded."}{" "}
-                    Fires on the board run on it; others download their own area.
-                  </p>
-                </Panel>
-              }
-              emptyState={
-                board.status === "loading" ? (
-                  <LoadingState>
-                    {board.storedUnavailable
-                      ? `Stored board unavailable; loading ${region?.name ?? "the region"} live from LANDFIRE. This takes longer…`
-                      : `Loading the ${region?.name ?? "region"} board…`}
-                  </LoadingState>
-                ) : board.status === "error" ? (
-                  <>
-                    <p className="studio-diorama__card-title">The board could not be loaded</p>
-                    <p>{board.message}</p>
-                    <div className="studio-row">
-                      <Button size="sm" onClick={() => setBoardAttempt((value) => value + 1)}>
-                        Retry
-                      </Button>
-                      <Button variant="secondary" size="sm" onClick={() => chooseView("map")}>
-                        Use the map
-                      </Button>
+    <main
+      className={`studio-page${Aside ? " studio-page--aside" : ""}`}
+      id="main-content"
+      aria-label={label}
+    >
+      <div className="studio-page-main">
+        <div className="studio-stage">
+          <div className="studio-page-map">
+            {view === "diorama" ? (
+              <StudioDiorama
+                landscape={dioramaLandscape}
+                run={dioramaShowsRun ? dioramaRun : null}
+                ignitions={dioramaIgnitions}
+                windFromDegrees={scenario.settings.windFromDegrees}
+                windSpeedMph={scenario.settings.windSpeedMph}
+                timeRef={clockRef}
+                insets={{ top: 12, right: 12, bottom: DIORAMA_BOTTOM_INSET_PX, left: panelInset }}
+                fitKey={dioramaShowsRun ? resultKey : null}
+                warnings={warnings}
+                attribution={
+                  dioramaShowsRun ? attribution : Object.values(regionGrid?.attribution ?? {})
+                }
+                onGroundClick={handleMapClick}
+                onSceneChange={setScene}
+                boardControl={
+                  <Panel glass compact className="studio-region">
+                    <div className="studio-region__row">
+                      <label htmlFor="studio-region">Region</label>
+                      <select
+                        id="studio-region"
+                        className="ui-input"
+                        value={regionId}
+                        onChange={(event) => selectRegion(event.target.value)}
+                      >
+                        {REGION_AREAS.map((area) => (
+                          <optgroup key={area} label={area}>
+                            {CALIFORNIA_REGIONS.filter((entry) => entry.area === area).map(
+                              (entry) => (
+                                <option key={entry.id} value={entry.id}>
+                                  {entry.name}
+                                  {catalog.status === "ready" && !catalog.ids.has(entry.id)
+                                    ? " (not built)"
+                                    : ""}
+                                </option>
+                              ),
+                            )}
+                          </optgroup>
+                        ))}
+                      </select>
                     </div>
-                  </>
-                ) : (
-                  <>
-                    <p className="studio-diorama__card-title">No landscape yet</p>
-                    <p>
-                      The 3D view is built from the fuel and terrain a run downloads.{" "}
-                      {scenario.ignitions.length === 0
-                        ? "Load the demo scenario, or place fires on the map, then run it."
-                        : "Run the scenario to build it."}
+                    <p className="studio-region__note">
+                      {board.status === "ready"
+                        ? board.source === "stored"
+                          ? "Stored board: LANDFIRE fuels and terrain, prebuilt."
+                          : "Stored board unavailable; loaded live from LANDFIRE."
+                        : board.status === "loading"
+                          ? board.storedUnavailable
+                            ? "Stored board unavailable; loading live from LANDFIRE…"
+                            : "Loading stored board…"
+                          : "Board could not be loaded."}{" "}
+                      Fires on the board run on it; others download their own area.
                     </p>
-                    <div className="studio-row">
-                      {scenario.ignitions.length === 0 ? (
-                        <>
-                          <Button size="sm" onClick={handleLoadDemo}>
-                            Load demo
-                          </Button>
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            onClick={() => handleModeChange("add")}
-                          >
-                            Place fires on map
-                          </Button>
-                        </>
-                      ) : (
-                        <>
-                          <Button
-                            size="sm"
-                            onClick={handleRun}
-                            disabled={issues.length > 0 || running}
-                          >
-                            {running ? "Running…" : "Run simulation"}
-                          </Button>
-                          <Button variant="secondary" size="sm" onClick={() => chooseView("map")}>
-                            Back to map
-                          </Button>
-                        </>
-                      )}
-                    </div>
-                  </>
-                )
-              }
+                  </Panel>
+                }
+                emptyState={
+                  board.status === "loading" ? (
+                    <LoadingState>
+                      {board.storedUnavailable
+                        ? `Stored board unavailable; loading ${region?.name ?? "the region"} live from LANDFIRE. This takes longer…`
+                        : `Loading the ${region?.name ?? "region"} board…`}
+                    </LoadingState>
+                  ) : board.status === "error" ? (
+                    <>
+                      <p className="studio-diorama__card-title">The board could not be loaded</p>
+                      <p>{board.message}</p>
+                      <div className="studio-row">
+                        <Button size="sm" onClick={() => setBoardAttempt((value) => value + 1)}>
+                          Retry
+                        </Button>
+                        <Button variant="secondary" size="sm" onClick={() => chooseView("map")}>
+                          Use the map
+                        </Button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <p className="studio-diorama__card-title">No landscape yet</p>
+                      <p>
+                        The 3D view is built from the fuel and terrain a run downloads.{" "}
+                        {scenario.ignitions.length === 0
+                          ? "Load the demo scenario, or place fires on the map, then run it."
+                          : "Run the scenario to build it."}
+                      </p>
+                      <div className="studio-row">
+                        {scenario.ignitions.length === 0 ? (
+                          <>
+                            <Button size="sm" onClick={handleLoadDemo}>
+                              Load demo
+                            </Button>
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              onClick={() => handleModeChange("add")}
+                            >
+                              Place fires on map
+                            </Button>
+                          </>
+                        ) : (
+                          <>
+                            <Button
+                              size="sm"
+                              onClick={handleRun}
+                              disabled={issues.length > 0 || running}
+                            >
+                              {running ? "Running…" : "Run simulation"}
+                            </Button>
+                            <Button variant="secondary" size="sm" onClick={() => chooseView("map")}>
+                              Back to map
+                            </Button>
+                          </>
+                        )}
+                      </div>
+                    </>
+                  )
+                }
+              />
+            ) : (
+              <StudioMap
+                ignitions={scenario.ignitions}
+                ignitionStates={ignitionStates}
+                selectedId={selectedId}
+                mode={mode}
+                visibleFrames={visibleFrames}
+                currentMinute={currentMinute}
+                horizonMinutes={playbackHorizon}
+                windSpeedMph={scenario.settings.windSpeedMph}
+                windFromDegrees={scenario.settings.windFromDegrees}
+                landscapeBox={result?.landscapeBox ?? null}
+                footprintIsStale={stale}
+                ignitionDetails={ignitionDetails}
+                warnings={warnings}
+                attribution={attribution}
+                onMapClick={handleMapClick}
+                onSelectIgnition={handleSelect}
+                onMoveIgnition={(id, point) => updateIgnition(id, { location: point })}
+              />
+            )}
+          </div>
+
+          <div className="studio-view">
+            <SegmentedControl
+              label="View"
+              options={VIEW_OPTIONS}
+              value={view}
+              onChange={chooseView}
             />
-          ) : (
-            <StudioMap
-              ignitions={scenario.ignitions}
-              ignitionStates={ignitionStates}
+          </div>
+
+          <div className="studio-page-status" aria-live="polite">
+            {state.phase === "loading-landscape" && (
+              <div className="studio-chip">
+                <LoadingState>Loading fuel and terrain data…</LoadingState>
+              </div>
+            )}
+            {state.phase === "computing" && (
+              <div className="studio-chip">
+                <LoadingState>Computing fire spread…</LoadingState>
+              </div>
+            )}
+            {state.phase === "canceled" && (
+              <Notice tone="info" className="studio-chip-notice">
+                Run canceled.
+              </Notice>
+            )}
+            {state.phase === "failed" && state.error && (
+              <Notice tone="danger" className="studio-chip-notice">
+                {state.error.message}
+              </Notice>
+            )}
+            {/* In 3D the empty-state card carries this instead. */}
+            {!running && scenario.ignitions.length === 0 && view === "map" && (
+              <Notice tone="info" className="studio-chip-notice">
+                Choose “Add ignition” and click the map to place a fire, or load the demo scenario.
+              </Notice>
+            )}
+            {notice && (
+              <Notice tone="info" className="studio-chip-notice">
+                {notice}
+              </Notice>
+            )}
+          </div>
+
+          <div
+            ref={panelRef}
+            className={`studio-page-panel${panelCollapsed ? " is-collapsed" : ""}`}
+          >
+            <ConfigPanel
+              scenario={scenario}
+              issues={issues}
+              problems={state.error?.problems ?? []}
               selectedId={selectedId}
               mode={mode}
-              visibleFrames={visibleFrames}
-              currentMinute={currentMinute}
-              horizonMinutes={playbackHorizon}
-              windSpeedMph={scenario.settings.windSpeedMph}
-              windFromDegrees={scenario.settings.windFromDegrees}
-              landscapeBox={result?.landscapeBox ?? null}
-              footprintIsStale={stale}
-              ignitionDetails={ignitionDetails}
-              warnings={warnings}
-              attribution={attribution}
-              onMapClick={handleMapClick}
+              phase={state.phase}
+              stale={stale}
+              draftStatus={draftStatusText(savedAt, saveFailed)}
+              collapsed={panelCollapsed}
+              onToggleCollapsed={() => setPanelCollapsed((value) => !value)}
+              onModeChange={handleModeChange}
               onSelectIgnition={handleSelect}
-              onMoveIgnition={(id, point) => updateIgnition(id, { location: point })}
+              onScenarioChange={applyScenario}
+              onRun={handleRun}
+              onCancel={cancel}
+              onClear={handleClear}
+              onExport={handleExport}
+              onImport={handleImport}
+              onLoadDemo={handleLoadDemo}
             />
-          )}
+          </div>
         </div>
 
-        <div className="studio-view">
-          <SegmentedControl
-            label="View"
-            options={VIEW_OPTIONS}
-            value={view}
-            onChange={chooseView}
-          />
-        </div>
-
-        <div className="studio-page-status" aria-live="polite">
-          {state.phase === "loading-landscape" && (
-            <div className="studio-chip">
-              <LoadingState>Loading fuel and terrain data…</LoadingState>
-            </div>
-          )}
-          {state.phase === "computing" && (
-            <div className="studio-chip">
-              <LoadingState>Computing fire spread…</LoadingState>
-            </div>
-          )}
-          {state.phase === "canceled" && (
-            <Notice tone="info" className="studio-chip-notice">
-              Run canceled.
+        <div className="studio-dock">
+          {result && stale && (
+            <Notice className="studio-previous">
+              Playing the previous run; run again to include your edits.
             </Notice>
           )}
-          {state.phase === "failed" && state.error && (
-            <Notice tone="danger" className="studio-chip-notice">
-              {state.error.message}
-            </Notice>
-          )}
-          {/* In 3D the empty-state card carries this instead. */}
-          {!running && scenario.ignitions.length === 0 && view === "map" && (
-            <Notice tone="info" className="studio-chip-notice">
-              Choose “Add ignition” and click the map to place a fire, or load the demo scenario.
-            </Notice>
-          )}
-          {notice && (
-            <Notice tone="info" className="studio-chip-notice">
-              {notice}
-            </Notice>
-          )}
-        </div>
-
-        <div ref={panelRef} className={`studio-page-panel${panelCollapsed ? " is-collapsed" : ""}`}>
-          <ConfigPanel
-            scenario={scenario}
-            issues={issues}
-            problems={state.error?.problems ?? []}
-            selectedId={selectedId}
-            mode={mode}
-            phase={state.phase}
-            stale={stale}
-            draftStatus={draftStatusText(savedAt, saveFailed)}
-            collapsed={panelCollapsed}
-            onToggleCollapsed={() => setPanelCollapsed((value) => !value)}
-            onModeChange={handleModeChange}
-            onSelectIgnition={handleSelect}
-            onScenarioChange={applyScenario}
-            onRun={handleRun}
-            onCancel={cancel}
-            onClear={handleClear}
-            onExport={handleExport}
-            onImport={handleImport}
-            onLoadDemo={handleLoadDemo}
+          <PlaybackBar
+            enabled={!locked && result !== null && frameMinutes.length > 0}
+            frameMinutes={frameMinutes}
+            frameIndex={safeFrameIndex}
+            horizonMinutes={playbackHorizon}
+            playing={playing}
+            speed={speed}
+            speedChoices={SPEED_CHOICES}
+            events={events}
+            metrics={metrics}
+            onPlayPause={handlePlayPause}
+            onStep={handleStep}
+            onRestart={() => seek(0)}
+            onSpeedChange={setSpeed}
+            onSeek={(index) => {
+              setPlaying(false);
+              seek(index);
+            }}
           />
         </div>
       </div>
-
-      <div className="studio-dock">
-        {result && stale && (
-          <Notice className="studio-previous">
-            Playing the previous run; run again to include your edits.
-          </Notice>
-        )}
-        <PlaybackBar
-          enabled={result !== null && frameMinutes.length > 0}
-          frameMinutes={frameMinutes}
-          frameIndex={safeFrameIndex}
-          horizonMinutes={playbackHorizon}
-          playing={playing}
-          speed={speed}
-          speedChoices={SPEED_CHOICES}
-          events={events}
-          metrics={metrics}
-          onPlayPause={handlePlayPause}
-          onStep={handleStep}
-          onRestart={() => seek(0)}
-          onSpeedChange={setSpeed}
-          onSeek={(index) => {
-            setPlaying(false);
-            seek(index);
-          }}
+      {Aside && (
+        <Aside
+          result={result}
+          stale={stale}
+          scene={view === "diorama" ? scene : null}
+          clockRef={clockRef}
+          setLocked={setLocked}
+          showDiorama={showDiorama}
         />
-      </div>
+      )}
     </main>
   );
 }

@@ -85,6 +85,13 @@ function guidanceFor(
   if (state.status === "cleared") {
     return { guidance: "cleared", message: "In the simulation, everyone in this zone has left.", waitMin: null };
   }
+  if (state.status === "no_order" && state.stage) {
+    return {
+      guidance: "no_order",
+      message: `Get ready, but stay home for now: your zone leaves in a later wave so the roads stay clear.${edgeEta !== null ? ` The simulated fire is about ${edgeEta} min away.` : ""} You will be told when it is your turn.`,
+      waitMin: null,
+    };
+  }
   if (state.status === "no_order") {
     const near = edgeEta !== null ? ` The simulated fire is about ${edgeEta} min from the zone.` : "";
     return {

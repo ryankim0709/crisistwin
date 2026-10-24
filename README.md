@@ -20,7 +20,7 @@ Routes of the web app (`app/src/main.tsx`, `app/src/navigation.ts`); `/` redirec
 | ----- | ---- | ------------ |
 | `/fire` | Fire spread model | Rothermel surface spread with crown fire, ember spotting and structure-to-structure spread on LANDFIRE fuels, canopy and terrain; 3D diorama or USGS imagery view; 41 prebuilt California regions or a live custom area; optional NWS wind. [Reference](docs/fire-simulator.md). |
 | `/simulation` | Simulation Studio | Up to five scheduled ignitions in one solver pass on a shared landscape, Web Worker solve, JSON export/import, plus a 3D diorama view of the last run. [ADR 0011](docs/adr/0011-simulation-studio.md), [ADR 0016](docs/adr/0016-studio-diorama-view.md). |
-| `/dispatch` | Dispatch agent | Currently the Simulation Studio UI (scheduled fires, map and 3D diorama, playback) with its own saved draft; the Claude dispatcher (OSM roads, stations and synthetic homes, zone evacuations and fire engines, needs `ANTHROPIC_API_KEY`) is being reattached on top of it and is not wired into the page yet. [ADR 0014](docs/adr/0014-dispatch-agent.md), [ADR 0017](docs/adr/0017-dispatch-anywhere.md). |
+| `/dispatch` | Dispatch agent | The Simulation Studio UI (scheduled fires, map and 3D diorama) with its own saved draft, plus a live Claude dispatcher beside it (needs `ANTHROPIC_API_KEY`). After a run it builds OSM roads, stations and synthetic homes. A monitor checks the simulation every few simulated minutes and calls Claude only when something changes. Claude orders zones out or stages them in waves, sends engines, and the console shows each zone's simulated resident notice (nothing is sent). [ADR 0014](docs/adr/0014-dispatch-agent.md), [ADR 0017](docs/adr/0017-dispatch-anywhere.md), [ADR 0018](docs/adr/0018-live-dispatch-monitor.md). |
 | `/replay` | Historical replay | Replay of past fires (Camp 2018, plus Marshall and Kincade packages) with perimeters, evacuation traffic and responder/evacuee views, driven by generated replay bundles. [Bundle contract](docs/replay-bundle.md). |
 | `/simulate` | Agent simulation | Replay-style view of simulated agent runs (same map tooling as `/replay`). |
 | `/diorama` | Evacuation diorama | Fictional, scripted ~90 s three.js evacuation of the made-up town Larkspur Hollow; synthetic data. [ADR 0010](docs/adr/0010-evacuation-diorama.md). |
@@ -36,8 +36,8 @@ Also in the repository:
 - **Historical replay simulator** (`sim/`): stdlib Python fire hindcast and evacuation traffic model that produces replay bundles. [README](sim/README.md).
 - **iOS app** (`mobile/`): SwiftUI resident app. Its **Live drill** tab shows, on a native map, the fire a planner is
   playing on `/fire` (the page posts it to `POST /api/live/broadcast` while **Share with resident app** is
-  on) and, while the dispatch agent runs, what the simulation tells the household's zone (the agent is
-  detached from `/dispatch` for now). **Family** lets a household
+  on) and, while the dispatch agent runs, what the simulation tells the household's zone (including
+  "stay home, your zone leaves in a later wave" for staged zones on `/dispatch`). **Family** lets a household
   create or join a family by code to share meeting points and status. Everything shown is a labelled simulation drill,
   not an alert. [README](mobile/README.md), [ADR 0010](docs/adr/0010-civilian-ios-app.md),
   [ADR 0016](docs/adr/0016-resident-live-and-family.md).

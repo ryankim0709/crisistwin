@@ -1,24 +1,34 @@
 /**
  * The dispatcher's console beside the diorama: setup checklist, household totals against the
- * no-action baseline, the latest orders, and three tabs — the evacuation board (zones in the
- * order they were told to leave, with route, progress and a check when clear), fire crews and
- * the agent's decision log. Every number is engine output; the agent's text is labelled.
+ * no-action baseline, the live monitor's cadence, the latest orders, and four tabs — the
+ * evacuation board (zones in the order they were told to leave, staged waves, and the rest by
+ * order slack), resident notices (simulated, never sent), fire crews and the agent log with the
+ * monitor's quiet checks. Every number is engine output; the agent's text is labelled.
  */
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Button } from "../ui";
 import type { DispatchArea } from "./area";
-import type { DispatchEngine, Order, Totals, UnitState, ZoneState } from "./engine";
-import { DECISION_INTERVAL_MINUTES } from "./engine";
+import type {
+  DispatchEngine,
+  NoticeKind,
+  Order,
+  ResidentNotice,
+  Totals,
+  UnitState,
+  ZoneState,
+} from "./engine";
+import { CHECK_INTERVAL_CHOICES } from "./engine";
+import { threatTier, tierLabel } from "./monitor";
 import { HOME_COLORS, cssColor, exitColor } from "./scene/DispatchOverlay";
-import type { DecisionLogEntry, SessionStatus } from "./useDispatchSession";
+import type { DecisionLogEntry, MonitorCheck, SessionStatus } from "./useDispatchSession";
 import { DISPATCH_SPEED_CHOICES } from "./useDispatchSession";
 
 const NUMBER = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 
 const STATUS_LABEL: Record<SessionStatus, string> = {
   idle: "Standing by",
-  running: "On shift",
+  running: "On shift · monitoring",
   thinking: "Deciding…",
   paused: "Paused",
   failed: "Needs attention",
@@ -37,7 +47,21 @@ export type SetupStep = {
   state: "done" | "active" | "waiting" | "error";
 };
 
-type Tab = "board" | "crews" | "log";
+type Tab = "board" | "residents" | "crews" | "log";
+
+const NOTICE_ICON: Record<NoticeKind, string> = {
+  leave_now: "📲",
+  prepare: "⏳",
+  redirect: "↪",
+  hold: "⛔",
+};
+const NOTICE_LABEL: Record<NoticeKind, string> = {
+  leave_now: "Leave now",
+  prepare: "Get ready, stay home",
+  redirect: "New route",
+  hold: "Hold",
+};
+const MAX_NOTICES_SHOWN = 80;
 
 export interface DispatchConsoleProps {
   area: DispatchArea | null;
@@ -49,6 +73,9 @@ export interface DispatchConsoleProps {
   /** Bumped on every engine step so the console re-reads it. */
   version: number;
   log: DecisionLogEntry[];
+  checks: MonitorCheck[];
+  checkInterval: number;
+  nextCheckMinute: number | null;
   baseline: Totals | null;
   speed: number;
   selectedZone: number | null;
@@ -59,7 +86,10 @@ export interface DispatchConsoleProps {
   onRetry: () => void;
   onSkip: () => void;
   onSpeedChange: (speed: number) => void;
+  onCheckIntervalChange: (minutes: number) => void;
   onSelectZone: (zone: number | null) => void;
+  /** Extra controls under the console (the resident app share toggle). */
+  footer?: ReactNode;
 }
 
 function etaText(arrival: number, now: number): string {
@@ -136,6 +166,13 @@ function orderLine(
     return {
       icon: "📣",
       text: `Evacuate ${order.zone_id} via ${order.exit_id}${exit ? ` · ${exit.name}` : ""}`,
+      color: exitColor(area, order.exit_id),
+    };
+  }
+  if (order.type === "stage_evacuation") {
+    return {
+      icon: "⏳",
+      text: `Stage ${order.zone_id} after ${order.after_zone_id}, then via ${order.exit_id}`,
       color: exitColor(area, order.exit_id),
     };
   }
@@ -241,6 +278,15 @@ function ZoneRow({
   const exit = zone.exitId ? area.exits.find((candidate) => candidate.id === zone.exitId) : null;
   const minutes = zone.route ? Math.max(1, Math.round(zone.route.seconds / 60)) : null;
   const contact = engine.exposure.zoneContact[zone.index];
+  const wave = engine.waveOf(zone.index);
+  const stagedExit = zone.stage
+    ? area.exits.find((candidate) => candidate.id === zone.stage!.exitId)
+    : null;
+  const tier =
+    zone.status === "no_order" && !zone.stage
+      ? threatTier(engine.orderSlackMinutes(zone.index))
+      : "none";
+  const slack = tier === "none" ? null : engine.orderSlackMinutes(zone.index);
   const badge =
     zone.status === "cleared" ? (
       <span className="dsp-badge dsp-badge--done" aria-label="Cleared">
@@ -252,6 +298,10 @@ function ZoneRow({
       </span>
     ) : zone.orderRank !== null ? (
       <span className="dsp-badge dsp-badge--rank">{zone.orderRank}</span>
+    ) : zone.stage ? (
+      <span className="dsp-badge dsp-badge--staged" aria-label={`Staged, wave ${wave ?? "?"}`}>
+        ⏳
+      </span>
     ) : (
       <span className="dsp-badge" aria-hidden="true">
         ·
@@ -276,6 +326,16 @@ function ZoneRow({
                 {etaText(contact, engine.minute)}
               </span>
             )}
+            {wave !== null && zone.status !== "overrun" && (
+              <span className="dsp-chip dsp-chip--wave">Wave {wave}</span>
+            )}
+            {slack !== null && (tier === "soon" || tier === "urgent" || tier === "late") && (
+              <span className={`dsp-chip dsp-chip--${tier}`}>
+                {tier === "late"
+                  ? `Late by ${Math.max(1, Math.round(-slack))} min`
+                  : `Order within ${Math.round(slack)} min`}
+              </span>
+            )}
           </span>
           {exit ? (
             <span className="dsp-zone__route">
@@ -288,8 +348,22 @@ function ZoneRow({
               {minutes !== null && !zone.routeBlocked && ` · ${minutes} min drive`}
               {zone.routeBlocked && <span className="dsp-warn"> · route blocked, holding</span>}
             </span>
+          ) : zone.stage ? (
+            <span className="dsp-zone__route">
+              {stagedExit && (
+                <span
+                  className="dsp-swatch"
+                  style={{ background: cssColor(exitColor(area, stagedExit.id)) }}
+                  aria-hidden="true"
+                />
+              )}
+              Waits for {area.zones[zone.stage.after].name}, then via {zone.stage.exitId}
+              {stagedExit ? ` · ${stagedExit.name}` : ""}
+            </span>
           ) : (
-            <span className="dsp-zone__route dsp-muted">No evacuation order</span>
+            <span className="dsp-zone__route dsp-muted">
+              No evacuation order{tier !== "none" ? ` · ${tierLabel(tier)}` : ""}
+            </span>
           )}
           <ZoneProgress zone={zone} homes={info.homes} />
           <span className="dsp-zone__counts">
@@ -322,9 +396,17 @@ function EvacuationBoard({
     .filter((zone) => zone.orderRank !== null)
     .sort((a, b) => a.orderRank! - b.orderRank!);
   const contact = engine.exposure.zoneContact;
+  const staged = engine.zones
+    .filter((zone) => zone.orderRank === null && zone.stage !== null)
+    .sort(
+      (a, b) => (engine.waveOf(a.index) ?? 0) - (engine.waveOf(b.index) ?? 0) || a.index - b.index,
+    );
+  const slackOf = (zone: ZoneState) => engine.orderSlackMinutes(zone.index) ?? Infinity;
   const waiting = engine.zones
-    .filter((zone) => zone.orderRank === null)
-    .sort((a, b) => contact[a.index] - contact[b.index] || a.index - b.index);
+    .filter((zone) => zone.orderRank === null && zone.stage === null)
+    .sort(
+      (a, b) => slackOf(a) - slackOf(b) || contact[a.index] - contact[b.index] || a.index - b.index,
+    );
   const select = (index: number) => onSelectZone(selectedZone === index ? null : index);
   return (
     <div className="dsp-board">
@@ -351,9 +433,28 @@ function EvacuationBoard({
           ))}
         </ol>
       )}
+      {staged.length > 0 && (
+        <>
+          <h3>
+            Staged waves{" "}
+            <span className="dsp-muted">· released when the zone ahead is on the road</span>
+          </h3>
+          <ul className="dsp-zones">
+            {staged.map((zone) => (
+              <ZoneRow
+                key={zone.index}
+                engine={engine}
+                zone={zone}
+                selected={selectedZone === zone.index}
+                onSelect={() => select(zone.index)}
+              />
+            ))}
+          </ul>
+        </>
+      )}
       {waiting.length > 0 && (
         <>
-          <h3>Not yet ordered · nearest fire first</h3>
+          <h3>Not yet ordered · least time to order first</h3>
           <ul className="dsp-zones">
             {waiting.map((zone) => (
               <ZoneRow
@@ -427,6 +528,89 @@ function Crews({ engine }: { engine: DispatchEngine }) {
   );
 }
 
+function Residents({ engine }: { engine: DispatchEngine }) {
+  const notices: ResidentNotice[] = engine.notices.slice(-MAX_NOTICES_SHOWN).reverse();
+  const reached = new Set(engine.notices.map((notice) => notice.zone));
+  const homes = engine.area.zones.reduce(
+    (sum, zone, i) => sum + (reached.has(i) ? zone.homes : 0),
+    0,
+  );
+  return (
+    <div className="dsp-notices">
+      <p className="dsp-note">
+        What each zone's households would be told, and when: one targeted notice per zone and wave
+        instead of one area-wide alert. <strong>Simulated: nothing is sent to anyone.</strong>
+        {engine.notices.length > 0 &&
+          ` ${engine.notices.length} notices so far, to ${NUMBER.format(homes)} homes in ${reached.size} zones.`}
+      </p>
+      {notices.length === 0 ? (
+        <p className="dsp-note">No zone has been notified yet.</p>
+      ) : (
+        <ol className="dsp-notice-list" aria-label="Resident notices, newest first">
+          {notices.map((notice) => {
+            const zone = engine.area.zones[notice.zone];
+            return (
+              <li key={notice.id} className={`dsp-notice dsp-notice--${notice.kind}`}>
+                <span className="dsp-notice__icon" aria-hidden="true">
+                  {NOTICE_ICON[notice.kind]}
+                </span>
+                <span className="dsp-notice__body">
+                  <span className="dsp-notice__head">
+                    <span className="dsp-radio__time">{hhmm(notice.minute)}</span>
+                    <strong>{zone.name}</strong>
+                    <span className="dsp-tag">{NOTICE_LABEL[notice.kind]}</span>
+                    <span className="dsp-muted">{NUMBER.format(notice.homes)} homes</span>
+                  </span>
+                  <span>{notice.text}</span>
+                </span>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+    </div>
+  );
+}
+
+function QuietChecks({ checks }: { checks: MonitorCheck[] }) {
+  if (checks.length === 0) return null;
+  const first = checks[checks.length - 1].minute;
+  const last = checks[0].minute;
+  return (
+    <li className="dsp-quiet">
+      <span aria-hidden="true">◦ </span>
+      {checks.length} monitor check{checks.length === 1 ? "" : "s"}
+      {first === last ? ` at ${hhmm(first)}` : ` ${hhmm(first)}–${hhmm(last)}`}: no material change,
+      agent not called.
+    </li>
+  );
+}
+
+/** Decisions newest first, with the quiet checks that followed each one above it. */
+function AgentLog({
+  log,
+  checks,
+  area,
+}: {
+  log: DecisionLogEntry[];
+  checks: MonitorCheck[];
+  area: DispatchArea;
+}) {
+  const quiet = checks.filter((check) => check.reasons.length === 0);
+  return (
+    <ol className="dsp-log" aria-label="Agent decisions and monitor checks, newest first">
+      {log.map((entry, i) => {
+        const newer = i > 0 ? log[i - 1].minute : Infinity;
+        const after = quiet.filter((check) => check.minute > entry.minute && check.minute < newer);
+        return [
+          <QuietChecks key={`q${entry.id}`} checks={after} />,
+          <LogEntry key={entry.id} entry={entry} area={area} />,
+        ];
+      })}
+    </ol>
+  );
+}
+
 function LogEntry({ entry, area }: { entry: DecisionLogEntry; area: DispatchArea }) {
   return (
     <li className={`dsp-entry dsp-entry--${entry.status}`}>
@@ -441,6 +625,16 @@ function LogEntry({ entry, area }: { entry: DecisionLogEntry; area: DispatchArea
         </span>
         {entry.model && <span className="dsp-muted">{entry.model}</span>}
       </header>
+      {entry.reasons.length > 0 && (
+        <div className="dsp-woke">
+          <span className="dsp-woke__title">Monitor woke the agent because</span>
+          <ul>
+            {entry.reasons.map((reason, i) => (
+              <li key={i}>{reason}</li>
+            ))}
+          </ul>
+        </div>
+      )}
       {entry.alerts.length > 0 && (
         <ul className="dsp-alerts" aria-label="Alerts since the previous decision">
           {entry.alerts.slice(-6).map((alert, i) => (
@@ -490,7 +684,20 @@ function LogEntry({ entry, area }: { entry: DecisionLogEntry; area: DispatchArea
 }
 
 export default function DispatchConsole(props: DispatchConsoleProps) {
-  const { area, steps, startBlocker, status, engine, log, baseline, speed, selectedZone } = props;
+  const {
+    area,
+    steps,
+    startBlocker,
+    status,
+    engine,
+    log,
+    checks,
+    checkInterval,
+    nextCheckMinute,
+    baseline,
+    speed,
+    selectedZone,
+  } = props;
   const [tab, setTab] = useState<Tab>("board");
   const active = status !== "idle";
   const latest = log[0];
@@ -546,6 +753,20 @@ export default function DispatchConsole(props: DispatchConsoleProps) {
             ))}
           </select>
         </label>
+        <label className="dsp-speed">
+          Check every
+          <select
+            className="ui-input"
+            value={checkInterval}
+            onChange={(event) => props.onCheckIntervalChange(Number(event.target.value))}
+          >
+            {CHECK_INTERVAL_CHOICES.map((choice) => (
+              <option key={choice} value={choice}>
+                {choice} min
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
 
       {!engine && (
@@ -575,8 +796,14 @@ export default function DispatchConsole(props: DispatchConsoleProps) {
       {engine && <Tiles totals={engine.totals()} baseline={baseline} />}
       {engine && (status === "running" || status === "thinking") && (
         <p className="dsp-note">
-          {hhmm(engine.minute)} · the clock stops at every decision (each{" "}
-          {DECISION_INTERVAL_MINUTES} min, sooner on urgent alerts) until the orders arrive.
+          {hhmm(engine.minute)} · the monitor checks the simulation every {checkInterval} min
+          {nextCheckMinute !== null &&
+            status === "running" &&
+            ` (next ${hhmm(nextCheckMinute)})`}{" "}
+          and calls the AI only when something changed: fire growth, a zone running out of time, a
+          wave finishing, an urgent alert, or 30 min without a review.{" "}
+          {checks.length > 0 &&
+            `${checks.filter((c) => c.reasons.length === 0).length} of ${checks.length} checks so far were quiet.`}
         </p>
       )}
       {engine && latest && area && <LatestOrders entry={latest} area={area} />}
@@ -587,6 +814,7 @@ export default function DispatchConsole(props: DispatchConsoleProps) {
             {(
               [
                 ["board", "Evacuations"],
+                ["residents", `Residents (${engine.notices.length})`],
                 ["crews", `Fire crews (${engine.units.length})`],
                 ["log", `Agent log (${log.length})`],
               ] as [Tab, string][]
@@ -611,17 +839,14 @@ export default function DispatchConsole(props: DispatchConsoleProps) {
                 onSelectZone={props.onSelectZone}
               />
             )}
+            {tab === "residents" && <Residents engine={engine} />}
             {tab === "crews" && <Crews engine={engine} />}
-            {tab === "log" && (
-              <ol className="dsp-log" aria-label="Agent decisions, newest first">
-                {log.map((entry) => (
-                  <LogEntry key={entry.id} entry={entry} area={area} />
-                ))}
-              </ol>
-            )}
+            {tab === "log" && <AgentLog log={log} checks={checks} area={area} />}
           </div>
         </>
       )}
+
+      {props.footer}
 
       <p className="dsp-disclaimer">
         Planning experiment. The AI picks among options the simulator computes; it does not change

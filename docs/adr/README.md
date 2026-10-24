@@ -36,3 +36,4 @@ Status legend: **Accepted** is current. **Superseded** is kept for history; read
 | [0015-remove-overview-and-maps](0015-remove-overview-and-maps.md) | Remove the overview and `/maps` pages | Accepted | `/` redirects to `/fire`; `/maps` is not-found. |
 | [0016-resident-live-and-family](0016-resident-live-and-family.md) | Live simulation drill and families in the resident app | Accepted | iOS shows the planner's fire via `POST /api/live/broadcast`; families share meeting points. |
 | [0017-dispatch-anywhere](0017-dispatch-anywhere.md) | Dispatch agent anywhere | Accepted | `/dispatch` on the 3D diorama for any area, with roads, stations and homes built at runtime. |
+| [0018-live-dispatch-monitor](0018-live-dispatch-monitor.md) | Live dispatch monitor and staged waves | Accepted | `/dispatch` reattached on the Studio; a monitor wakes Claude only on change; zones evacuate in waves with simulated resident notices. |
