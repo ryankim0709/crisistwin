@@ -61,7 +61,7 @@ export function buildCaption(
     if (perimeterIndex >= 0) {
       const g = model.perimeters[perimeterIndex].geometry;
       fire = inArea(g, place.coord)
-        ? `${place.name} inside satellite perimeter`
+        ? `${place.name} is inside the satellite perimeter`
         : `satellite perimeter ${(nearestVertexM(g, place.coord) / 1000).toFixed(1)} km from ${place.name}`;
     } else if (simIndex >= 0 && model.fireSimulated) {
       const g = model.fireSimulated.fronts[simIndex].geometry;

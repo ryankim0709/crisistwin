@@ -5,7 +5,14 @@ import { VARIANT_CAVEATS, featurable, type VariantIndex } from "./compare";
 import { distanceM, inArea } from "./insights";
 import { buildCaption, splitSnappedNote } from "./narrative";
 import type { ReferencePlace } from "./places";
-import { frameIndexAt, ignitionBasis, incidentYear, observationSource, perimeterIndexAt, simulatedFrontIndexAt } from "./timeline";
+import {
+  frameIndexAt,
+  ignitionBasis,
+  incidentYear,
+  observationSource,
+  perimeterIndexAt,
+  simulatedFrontIndexAt,
+} from "./timeline";
 import type { AreaGeometry, EvidenceClass, LngLat, ReplayEvent, ReplayModel } from "./types";
 
 export interface Chapter {
@@ -121,7 +128,11 @@ function firstEvent(model: ReplayModel, test: (e: ReplayEvent) => boolean): Repl
 }
 
 function isOrder(e: ReplayEvent): boolean {
-  return HISTORICAL.has(e.evidenceClass) && (e.type === "evacuation_order" || e.type === "alert_sent") && /\border\b/i.test(e.label);
+  return (
+    HISTORICAL.has(e.evidenceClass) &&
+    (e.type === "evacuation_order" || e.type === "alert_sent") &&
+    /\border\b/i.test(e.label)
+  );
 }
 
 /** Chapters in clock order. Chapters whose source data is absent are simply left out. */
@@ -141,14 +152,16 @@ export function buildChapters(
     const text = fire
       .replace(/^model fire has/, "the modelled fire has")
       .replace(/^model fire /, "the modelled fire is ")
-      .replace(/^satellite perimeter /, "the satellite perimeter is ")
-      .replace(/ inside satellite perimeter$/, " is inside the satellite perimeter");
+      .replace(/^satellite perimeter /, "the satellite perimeter is ");
     return ` At this moment ${text}.`;
   };
 
   // Opening: the first 911 report when the bundle has it, else the ignition record.
   const ignition = firstEvent(model, (e) => e.type === "fire_ignition");
-  const reported = firstEvent(model, (e) => e.type === "fire_reported" && HISTORICAL.has(e.evidenceClass));
+  const reported = firstEvent(
+    model,
+    (e) => e.type === "fire_reported" && HISTORICAL.has(e.evidenceClass),
+  );
   const opening = reported ?? ignition;
   const ignitionCoord = model.fireSimulated?.ignition?.coord ?? null;
   const basis = ignitionBasis(model);
@@ -156,12 +169,14 @@ export function buildChapters(
     chapters.push({
       id: "ignition",
       atMs: opening.atMs,
-      title: reported ? "The first 911 call" : sentence(splitSnappedNote(opening.label).text, false),
+      title: reported
+        ? "The first 911 call"
+        : sentence(splitSnappedNote(opening.label).text, false),
       body:
-        (reported && ignition ? `${sentence(splitSnappedNote(reported.label).text)} ${sentence(ignition.label)} ` : "") +
-        `Until the first satellite image, the orange area is a fire-spread model started from the ${basis} ` +
-        "ignition, not an observation." +
-        (model.fireObservations ? ` Yellow dots are places where ${obs} observations record fire being seen.` : ""),
+        (reported && ignition
+          ? `${sentence(splitSnappedNote(reported.label).text)} ${sentence(ignition.label)} `
+          : "") +
+        `Until the first satellite image, the orange area is a model fire from the ${basis} ignition.`,
       evidence: opening.evidenceClass,
       focus: [...(ignitionCoord ? [ignitionCoord] : []), ...(place ? [place.coord] : [])],
     });
@@ -195,7 +210,10 @@ export function buildChapters(
     // The first documented fire in the place, from the record, and how soon after its first order.
     const arrival = firstEvent(
       model,
-      (e) => e.type === "fire_arrival" && HISTORICAL.has(e.evidenceClass) && e.label.includes(place.name),
+      (e) =>
+        e.type === "fire_arrival" &&
+        HISTORICAL.has(e.evidenceClass) &&
+        e.label.includes(place.name),
     );
     if (arrival) {
       const gapMin = placeOrder ? Math.round((arrival.atMs - placeOrder.atMs) / 60_000) : null;
@@ -208,7 +226,7 @@ export function buildChapters(
           (gapMin !== null && gapMin >= 0
             ? ` That is ${gapMin} minute${gapMin === 1 ? "" : "s"} after the first order for ${place.name}.`
             : "") +
-          (model.fireObservations ? ` Bright yellow dots are ${obs} observations from the last 30 minutes.` : ""),
+          "",
         evidence: arrival.evidenceClass,
         focus: [...observationCoords(model, arrival.atMs), place.coord],
       });
@@ -218,7 +236,9 @@ export function buildChapters(
   // A modelled entrapment, set against the recorded burnovers it is compared with.
   const trapped = firstEvent(model, (e) => e.type === "vehicles_trapped");
   if (trapped) {
-    const burnovers = model.events.filter((e) => e.type === "burnover" && HISTORICAL.has(e.evidenceClass));
+    const burnovers = model.events.filter(
+      (e) => e.type === "burnover" && HISTORICAL.has(e.evidenceClass),
+    );
     const row = model.validation?.rows.find((r) => r.metric === "identified_burnovers");
     const coords = eventCoords(trapped, roads);
     chapters.push({
@@ -231,7 +251,9 @@ export function buildChapters(
           ? ` In ${incidentYear(model)}, ${row?.published ?? burnovers.length} burnovers were recorded; the first in this replay: ` +
             `${sentence(splitSnappedNote(burnovers[0].label).text, false)} (reconstructed).`
           : "") +
-        (row?.comparability === "tuned" ? " The model was tuned to that count, so the match is not validation." : ""),
+        (row?.comparability === "tuned"
+          ? " The model was tuned to that count, so the match is not validation."
+          : ""),
       evidence: trapped.evidenceClass,
       focus: [...coords, ...fireCoords(model, trapped.atMs)],
     });
@@ -239,7 +261,10 @@ export function buildChapters(
 
   const traffic = model.traffic;
 
-  const contraflow = firstEvent(model, (e) => e.type === "contraflow_started" && HISTORICAL.has(e.evidenceClass));
+  const contraflow = firstEvent(
+    model,
+    (e) => e.type === "contraflow_started" && HISTORICAL.has(e.evidenceClass),
+  );
   if (contraflow) {
     chapters.push({
       id: "contraflow",
@@ -253,7 +278,8 @@ export function buildChapters(
 
   const blocked = firstEvent(
     model,
-    (e) => e.type === "road_blocked" && HISTORICAL.has(e.evidenceClass) && /fire|burning/i.test(e.label),
+    (e) =>
+      e.type === "road_blocked" && HISTORICAL.has(e.evidenceClass) && /fire|burning/i.test(e.label),
   );
   if (blocked) {
     const coords = eventCoords(blocked, roads);
@@ -279,7 +305,10 @@ export function buildChapters(
           `Modelled peak: ${fmt(m.exposedVeh)} vehicles on roads inside the fire area, ` +
           `${fmt(m.notDepartedVeh + m.enRouteVeh)} of ${fmt(m.notDepartedVeh + m.enRouteVeh + m.arrivedVeh)} not yet out.`,
         evidence: traffic.evidenceClass,
-        focus: [...busyEdgeCoords(model, k, fireAt(model, m.atMs)), ...(place ? [place.coord] : [])],
+        focus: [
+          ...busyEdgeCoords(model, k, fireAt(model, m.atMs)),
+          ...(place ? [place.coord] : []),
+        ],
       });
     }
   }
@@ -307,7 +336,10 @@ export function buildChapters(
     chapters.push({
       id: "what-if",
       // The map sits at the modelled worst moment while the alternatives are compared.
-      atMs: chapters.find((c) => c.id === "peak-exposure")?.atMs ?? chapters[chapters.length - 1]?.atMs ?? model.clock.startMs,
+      atMs:
+        chapters.find((c) => c.id === "peak-exposure")?.atMs ??
+        chapters[chapters.length - 1]?.atMs ??
+        model.clock.startMs,
       title: "Could it have gone differently?",
       body:
         "The same modelled morning, re-run with one change each. Bars: exposure to fire on roads and at home, " +

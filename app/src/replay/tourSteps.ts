@@ -58,7 +58,7 @@ function tourFacts(model: ReplayModel, place: ReferencePlace | null): TourFacts 
   );
   const fireBody = model.fireSimulated
     ? firstPerimeterMs !== null
-      ? `Orange is the fire. The glowing edge is where it is spreading. Until the first satellite perimeter at ${localTime(firstPerimeterMs, tz)} this is a model; after that the dashed white line is the satellite estimate.`
+      ? `Orange is the fire: a model until the satellite perimeter at ${localTime(firstPerimeterMs, tz)}, then the white dashed line.`
       : "Orange is the fire, from a fire-spread model; this bundle has no satellite perimeter to compare it with."
     : "The dashed white line is the satellite fire perimeter in effect at this time.";
   return {
@@ -77,12 +77,12 @@ function tourFacts(model: ReplayModel, place: ReferencePlace | null): TourFacts 
 function shared(f: TourFacts) {
   const timeline: TourStep = {
     title: "Move through time",
-    body: `Press play, or drag to any time. Diamonds on the timeline are real ${f.year} alerts and road reports; Space plays and pauses, arrow keys step.`,
+    body: `Play, or drag to any time. Ticks mark ${f.year} alerts and road reports. Space plays and pauses.`,
     target: ".rp-dock",
   };
   const traffic: TourStep = {
     title: "People leaving",
-    body: "Cyan dots are evacuating cars. Roads turn violet when jammed and grey dashed when closed.",
+    body: "Cyan is traffic, thicker and darker where jammed. White dots are stopped cars; grey dashes are closed roads.",
     target: ".rp-map",
     seekTo: f.trafficAt,
   };
@@ -96,13 +96,13 @@ export function replayTour(model: ReplayModel, place: ReferencePlace | null): To
   return [
     {
       title: `${f.name}, ${f.dateLabel}`,
-      body: `This is the ${f.name} replayed over the real roads of ${f.area}. Fire and evacuation traffic are modelled; alerts and road reports are from ${f.year} records.`,
+      body: `The ${f.name}, replayed on the real roads of ${f.area}. Traffic and the early fire are modelled; alerts and road reports are ${f.year} records.`,
       target: null,
       seekTo: f.introAt,
     },
     {
       title: "What's happening now",
-      body: `This line tells you what is happening at the current time: the latest alert, cars on the road and how far the fire is from ${f.place}.`,
+      body: `The time, the latest alert, and how far the fire is from ${f.place}.`,
       target: ".rp-caption",
     },
     fire,
@@ -110,17 +110,17 @@ export function replayTour(model: ReplayModel, place: ReferencePlace | null): To
     timeline,
     {
       title: "The numbers",
-      body: "How many people are on the road, how many are out safely, and how many are stuck or near the fire. Open “More details” for everything else.",
+      body: "On the road, out safely, and stuck or in the fire area.",
       target: ".rp-calm",
     },
     {
       title: "What is real and what is modelled",
-      body: "Labels tell you where each item comes from: REPORTED or RECONSTRUCTED are historical, SIMULATED is model output, FIXTURE is a placeholder. The status line above the map says the same for the whole view.",
+      body: "Labels say where each item comes from: REPORTED or RECONSTRUCTED is history, SIMULATED is the model. Details ▾ explains the whole view.",
       target: ".rp-statusline",
     },
     {
       title: "Go further",
-      body: "Play the story for a guided walk through the key moments. The What if… tab compares alternative plans, and the 3D buttons on the map show the same moment from a helicopter or a driver's seat. Reopen this tour any time with the Tour button.",
+      body: "Play the story for the key moments. Switch fires at the top left; What if… compares alternative plans.",
       target: ".rp-tabs",
     },
   ];

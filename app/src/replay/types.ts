@@ -151,6 +151,8 @@ export interface SimulatedFire {
   calibrationIou: number | null;
   /** One-line calibration summary (rothermel-mtt), e.g. held-out median arrival error. */
   calibrationHeadline: string | null;
+  /** How the model front was constrained (e.g. clipped to the first satellite perimeter). */
+  constraintNote: string | null;
   /** Held-out arrival error at NIST observations, when the bundle has it. */
   heldOut: { n: number | null; medianAbsErrorMin: number | null } | null;
   fronts: SimulatedFront[];

@@ -31,6 +31,11 @@ export interface StoryModeProps {
   focus: (coords: LngLat[], padding: typeof FOCUS_PADDING) => void;
   onShowVariant: (id: string) => void;
   onClose: () => void;
+  /** Paused by the user (dock button, Space or the card's Pause): no auto-advance, no run-in. */
+  paused: boolean;
+  onTogglePause: () => void;
+  /** Bumped when the user resumes, to re-enter the current chapter (finish its run-in, then hold). */
+  resumeKey: number;
 }
 
 function fmt(n: number): string {
@@ -51,10 +56,12 @@ export default function StoryMode({
   focus,
   onShowVariant,
   onClose,
+  paused,
+  onTogglePause,
+  resumeKey,
 }: StoryModeProps) {
   const [index, setIndex] = useState(0);
   const [arrived, setArrived] = useState(false);
-  const [autoplay, setAutoplay] = useState(true);
   const cardRef = useRef<HTMLDivElement>(null);
   const timeRef = useRef(simTimeMs);
   useEffect(() => {
@@ -103,10 +110,21 @@ export default function StoryMode({
   }, []);
 
   useEffect(() => {
-    if (!autoplay || !arrived || last) return;
+    if (paused || !arrived || last) return;
     const timer = window.setTimeout(() => goTo(index + 1), HOLD_MS);
     return () => window.clearTimeout(timer);
-  }, [autoplay, arrived, last, index, goTo]);
+  }, [paused, arrived, last, index, goTo]);
+
+  // Resume: re-enter the current chapter, which finishes an interrupted run-in or holds.
+  const indexRef = useRef(index);
+  useEffect(() => {
+    indexRef.current = index;
+  }, [index]);
+  useEffect(() => {
+    if (resumeKey === 0) return;
+    const timer = window.setTimeout(() => goToRef.current(indexRef.current), 0);
+    return () => window.clearTimeout(timer);
+  }, [resumeKey]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -136,7 +154,12 @@ export default function StoryMode({
         <span className="rp-story-count">
           Story · {index + 1} / {chapters.length}
         </span>
-        <button type="button" className="rp-story-close" onClick={onClose} aria-label="Close story mode">
+        <button
+          type="button"
+          className="rp-story-close"
+          onClick={onClose}
+          aria-label="Close story mode"
+        >
           ×
         </button>
       </header>
@@ -158,7 +181,11 @@ export default function StoryMode({
         {!chapter.reveal && (
           <p className="rp-story-when">
             {localTime(chapter.atMs, timezone)}
-            {!arrived && <span className="rp-dim"> · clock running…</span>}
+            {paused ? (
+              <span className="rp-dim"> · paused</span>
+            ) : (
+              !arrived && <span className="rp-dim"> · clock running…</span>
+            )}
           </p>
         )}
         <h2 className="rp-story-title">{chapter.title}</h2>
@@ -191,7 +218,9 @@ export default function StoryMode({
                 onClick={() => onShowVariant(r.id)}
                 title={VARIANT_CAVEATS[r.id]?.text ?? r.question}
                 aria-label={`${r.title}: exposure ${Math.round(r.exposurePct)}% of the baseline${
-                  VARIANT_CAVEATS[r.id] ? ` (${VARIANT_CAVEATS[r.id].label}: ${VARIANT_CAVEATS[r.id].text})` : ""
+                  VARIANT_CAVEATS[r.id]
+                    ? ` (${VARIANT_CAVEATS[r.id].label}: ${VARIANT_CAVEATS[r.id].text})`
+                    : ""
                 }. Show on map.`}
               >
                 <span className="rp-reveal-name">
@@ -213,8 +242,9 @@ export default function StoryMode({
             );
           })}
           <p className="rp-reveal-note">
-            Exposure = vehicle-minutes inside the fire area, on roads plus at home before leaving, as a share of the
-            baseline (model, one seed). A relative comparison, not a count of people. Pick a row to watch it on the map.
+            Exposure = vehicle-minutes inside the fire area, on roads plus at home before leaving,
+            as a share of the baseline (model, one seed). A relative comparison, not a count of
+            people. Pick a row to watch it on the map.
           </p>
         </div>
       ) : (
@@ -237,24 +267,39 @@ export default function StoryMode({
             <p>
               {trafficEvidence && <EvidenceChip value={trafficEvidence} />}
               {demandLabel && (
-                <span className={demandLabel.startsWith("FIXTURE") ? "rp-fixture-tag" : "rp-chip rp-chip--derived"}>
+                <span
+                  className={
+                    demandLabel.startsWith("FIXTURE")
+                      ? "rp-fixture-tag"
+                      : "rp-chip rp-chip--derived"
+                  }
+                >
                   {demandLabel}
                 </span>
               )}{" "}
-              modelled vehicles, live with
-              the clock
+              modelled vehicles, live with the clock
             </p>
           </div>
         )
       )}
 
       <footer className="rp-story-actions">
-        <button type="button" className="rp-tour-btn" onClick={() => goTo(index - 1)} disabled={index === 0}>
+        <button
+          type="button"
+          className="rp-tour-btn"
+          onClick={() => goTo(index - 1)}
+          disabled={index === 0}
+        >
           Back
         </button>
         {!last && (
-          <button type="button" className="rp-tour-btn" aria-pressed={!autoplay} onClick={() => setAutoplay((a) => !a)}>
-            {autoplay ? "Pause" : "Auto"}
+          <button
+            type="button"
+            className="rp-tour-btn"
+            aria-pressed={paused}
+            onClick={onTogglePause}
+          >
+            {paused ? "Resume" : "Pause"}
           </button>
         )}
         <button

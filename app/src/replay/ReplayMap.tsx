@@ -74,8 +74,6 @@ const MAX_BOUNDS_PAD_DEG = 2.5;
 const IMAGERY_TIMEOUT_MS = 15_000;
 const IMAGERY_MAX_ERRORS = 12;
 const THREAT_BUCKET_MS = 60_000;
-const PULSE_PERIOD_MS = 1400;
-const PULSE_INTERVAL_MS = 80;
 
 function prefersReducedMotion(): boolean {
   return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
@@ -255,6 +253,8 @@ export interface ReplayMapProps {
   onPick: ((p: LngLat) => void) | null;
   focus: MapFocus | null;
   basemapChoice: BasemapChoice;
+  /** Cosmetic motion (fire flicker) only while the clock plays, so a paused map is still. */
+  animate: boolean;
   /** Coordinates the opening camera frames (e.g. ignition and reference place). */
   home: LngLat[];
   /** Receives the map once replay layers are installed, and null when it is removed. */
@@ -277,6 +277,7 @@ export default function ReplayMap({
   focus,
   basemapChoice,
   home,
+  animate,
 }: ReplayMapProps) {
   const homeRef = useRef(home);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -447,10 +448,10 @@ export default function ReplayMap({
   const hasOrderedZones = Array.from(zoneStates.values()).includes("ordered");
   useEffect(() => {
     const map = mapRef.current;
-    if (!ready || !map || (!fireVisible && !hasOrderedZones) || prefersReducedMotion()) return;
+    if (!ready || !map || !animate || (!fireVisible && !hasOrderedZones) || prefersReducedMotion()) return;
     const timer = window.setInterval(() => setFireFlicker(map, performance.now()), FLICKER_INTERVAL_MS);
     return () => window.clearInterval(timer);
-  }, [ready, fireVisible, hasOrderedZones]);
+  }, [ready, animate, fireVisible, hasOrderedZones]);
 
   const frame = model.traffic && frameIndex >= 0 ? model.traffic.frames[frameIndex] : null;
   const closed = useMemo(
@@ -496,17 +497,11 @@ export default function ReplayMap({
     threatRoadsRef.current = applyThreatState(map, trafficToRoad, threats, threatRoadsRef.current);
   }, [ready, trafficToRoad, threats]);
 
-  // Cosmetic pulse on wall-clock time; it carries no data. Off for reduced motion.
-  const hasThreats = threats.size > 0;
+  // Threatened roads are drawn static (no wall-clock pulse): one less moving, warm mark.
   useEffect(() => {
     const map = mapRef.current;
-    if (!ready || !map || !hasThreats || !visibility.roads || prefersReducedMotion()) return;
-    const timer = window.setInterval(() => {
-      const phase = 0.5 + 0.5 * Math.sin((performance.now() / PULSE_PERIOD_MS) * 2 * Math.PI);
-      setThreatPulse(map, phase);
-    }, PULSE_INTERVAL_MS);
-    return () => window.clearInterval(timer);
-  }, [ready, hasThreats, visibility.roads]);
+    if (ready && map) setThreatPulse(map, 0.5);
+  }, [ready]);
 
   // Satellite: show a loading hint while USGS tiles stream; on repeated errors or a timeout with
   // no tile loaded, fall back to the (restyled) dark map with a notice. Status is set from callbacks only.

@@ -372,6 +372,8 @@ export function simulatedFire(body: Obj): SimulatedFire {
       "fire_simulated.calibration.iou",
     ),
     calibrationHeadline: typeof calibration.headline === "string" ? calibration.headline : null,
+    constraintNote:
+      typeof objOrEmpty(body.constraint).note === "string" ? (objOrEmpty(body.constraint).note as string) : null,
     heldOut: isObj(objOrEmpty(calibration.observations).held_out)
       ? (() => {
           const h = objOrEmpty(objOrEmpty(calibration.observations).held_out);

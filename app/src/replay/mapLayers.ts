@@ -96,12 +96,13 @@ export const COLORS = {
   char: "#140604",
   satellite: "#eaf4ff",
   history: "#ff9a5c",
-  // Warm colours mean fire only; cool colours mean people and traffic only.
+  // Strict palette: warm = fire only; one cyan for traffic (dimmer when slow, thicker when
+  // busy); everything else neutral grey/white so the fire and the traffic read first.
   simFront: "#ffd166",
   fireBand: "#ff9a1f",
   free: "#3df2ff",
-  slow: "#4aa8ff",
-  jam: "#b14dff",
+  slow: "#2bb3c6",
+  jam: "#16707f",
   closed: "#8a96a3",
   threat: "#ffb547",
   threatImminent: "#ff7a1a",
@@ -109,13 +110,13 @@ export const COLORS = {
   networkMajor: "#3d566c",
   bridge: "#d8e3ee",
   particle: "#e9fbff",
-  particleStopped: "#b14dff",
-  zone: "#8fb3ff",
-  zoneOrdered: "#ffb547",
-  destination: "#7cf2c9",
-  refuge: "#9fe8ff",
-  fireObs: "#ffe08a",
-  damage: "#c7a6ff",
+  particleStopped: "#ffffff",
+  zone: "#8a96a3",
+  zoneOrdered: "#c3cdd6",
+  destination: "#aab4be",
+  refuge: "#ffffff",
+  fireObs: "#ffffff",
+  damage: "#c3cdd6",
 } as const;
 
 export type LayerGroup =
@@ -149,7 +150,6 @@ export const LAYER_GROUPS: Record<LayerGroup, string[]> = {
     "roads-flow-glow",
     "roads-flow",
     "roads-closed",
-    "roads-threat",
     "roads-closed-label",
     "roads-bridge-label",
   ],
@@ -426,7 +426,7 @@ export function setFireObservationTime(map: MapLibreMap, t: number): void {
       4.5,
       2.6,
     ]);
-    map.setPaintProperty("fire-obs", "circle-opacity", [
+    map.setPaintProperty("fire-obs", "circle-stroke-opacity", [
       "case",
       [">", ["get", "at_ms"], t - FIRE_OBS_RECENT_MS],
       1,
@@ -670,7 +670,7 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     },
     paint: { "text-color": "#c3cdd6", "text-halo-color": "#0a0e13", "text-halo-width": 1.6, "text-opacity": 0.85 },
   });
-  if (!map.hasImage(ZONE_HATCH_IMAGE)) map.addImage(ZONE_HATCH_IMAGE, hatchImage([255, 181, 71], 60, 14));
+  if (!map.hasImage(ZONE_HATCH_IMAGE)) map.addImage(ZONE_HATCH_IMAGE, hatchImage([195, 205, 214], 60, 14));
 
   // Zones: nearly invisible until ordered; ordered zones get a faint (pulsed) hatch.
   map.addLayer({
@@ -830,7 +830,7 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     source: "roads",
     layout: { "line-cap": "round", "line-join": "round" },
     paint: {
-      "line-color": ["case", ["==", ["coalesce", ["feature-state", "cls"], 0], 4], COLORS.closed, ["interpolate", ["linear"], ["coalesce", ["feature-state", "ratio"], 1], 0, COLORS.jam, CONGESTION_SLOW_RATIO, "#7a6bff", CONGESTION_FREE_RATIO, COLORS.slow, 0.9, COLORS.free]],
+      "line-color": ["case", ["==", ["coalesce", ["feature-state", "cls"], 0], 4], COLORS.closed, ["interpolate", ["linear"], ["coalesce", ["feature-state", "ratio"], 1], 0, COLORS.jam, CONGESTION_SLOW_RATIO, COLORS.jam, CONGESTION_FREE_RATIO, COLORS.slow, 0.9, COLORS.free]],
       "line-width": ["interpolate", ["linear"], ["coalesce", ["feature-state", "veh"], 0], 0, 0, 1, 6, 20, 10, 80, 16, 250, 24],
       "line-blur": 8,
       "line-opacity": ["case", [">", ["coalesce", ["feature-state", "veh"], 0], 0], 0.32, 0],
@@ -843,7 +843,7 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     source: "roads",
     layout: { "line-cap": "round", "line-join": "round" },
     paint: {
-      "line-color": ["case", ["==", ["coalesce", ["feature-state", "cls"], 0], 4], COLORS.closed, ["interpolate", ["linear"], ["coalesce", ["feature-state", "ratio"], 1], 0, COLORS.jam, CONGESTION_SLOW_RATIO, "#7a6bff", CONGESTION_FREE_RATIO, COLORS.slow, 0.9, COLORS.free]],
+      "line-color": ["case", ["==", ["coalesce", ["feature-state", "cls"], 0], 4], COLORS.closed, ["interpolate", ["linear"], ["coalesce", ["feature-state", "ratio"], 1], 0, COLORS.jam, CONGESTION_SLOW_RATIO, COLORS.jam, CONGESTION_FREE_RATIO, COLORS.slow, 0.9, COLORS.free]],
       "line-width": ["interpolate", ["linear"], ["coalesce", ["feature-state", "veh"], 0], 0, 0, 1, 2.2, 20, 4, 80, 7, 250, 11],
       "line-opacity": ["case", [">", ["coalesce", ["feature-state", "veh"], 0], 0], 0.95, 0],
       // Directed edges: offset so both directions of a two-way road stay visible.
@@ -861,11 +861,13 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
       "line-opacity": ["case", ["boolean", ["feature-state", "closed"], false], 0.55, 0],
     },
   });
-  // Roads the model expects fire to reach soon: wide dashed band, pulsed from ReplayMap.
+  // Roads the model expects fire to reach soon. Hidden: it added a second warm, moving mark;
+  // the same lookahead stays in the tooltips and the Evacuee view.
   map.addLayer({
     id: "roads-threat",
     type: "line",
     source: "roads",
+    layout: { visibility: "none" },
     paint: {
       "line-color": ["match", ["coalesce", ["feature-state", "threat"], 0], 2, COLORS.threatImminent, COLORS.threat],
       "line-width": ["interpolate", ["linear"], ["zoom"], 10, 1.2, 15, 2.5],
@@ -877,14 +879,15 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     id: "roads-closed-label",
     type: "symbol",
     source: "roads-closed-labels",
-    minzoom: 12.5,
+    // Only close in, so a burned-over town is not covered in repeated tags.
+    minzoom: 14,
     layout: {
       "text-field": "× CLOSED",
       "text-font": LABEL_FONT_BOLD,
       "text-size": 10.5,
       "text-letter-spacing": 0.1,
     },
-    paint: { "text-color": "#ffd6dc", "text-halo-color": "#3a0610", "text-halo-width": 2 },
+    paint: { "text-color": "#d6dde4", "text-halo-color": "#0a0e13", "text-halo-width": 2 },
   });
   map.addLayer({
     id: "roads-bridge-label",
@@ -909,9 +912,10 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     source: "particles",
     paint: {
       "circle-radius": ["interpolate", ["linear"], ["zoom"], 10, 5, 13, 8, 16, 12],
-      "circle-color": ["case", ["get", "stopped"], COLORS.particleStopped, "#7ff9ff"],
+      "circle-color": "#7ff9ff",
       "circle-blur": 1,
-      "circle-opacity": 0.55,
+      // Glow only on moving dots; stopped ones are plain white with a dark ring.
+      "circle-opacity": ["case", ["get", "stopped"], 0, 0.5],
     },
   });
   map.addLayer({
@@ -921,8 +925,8 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     paint: {
       "circle-radius": ["interpolate", ["linear"], ["zoom"], 10, 2.5, 13, 3, 16, 4],
       "circle-color": ["case", ["get", "stopped"], COLORS.particleStopped, COLORS.particle],
-      "circle-stroke-color": ["case", ["get", "stopped"], COLORS.jam, "#7ff9ff"],
-      "circle-stroke-width": 0.6,
+      "circle-stroke-color": ["case", ["get", "stopped"], "#0a0e13", "#7ff9ff"],
+      "circle-stroke-width": ["case", ["get", "stopped"], 1.2, 0.6],
     },
   });
 
@@ -1020,7 +1024,7 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
       "circle-radius": ["match", ["get", "refuge_state"], "open", 6.5, 4.5],
       "circle-color": COLORS.refuge,
       "circle-opacity": ["match", ["get", "refuge_state"], "closed", 0.25, 0.95],
-      "circle-stroke-color": "#ffffff",
+      "circle-stroke-color": "#4b5157",
       "circle-stroke-width": ["match", ["get", "refuge_state"], "open", 2, 1],
       "circle-stroke-opacity": ["match", ["get", "refuge_state"], "closed", 0.35, 1],
     },
@@ -1050,10 +1054,11 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     filter: ["<=", ["get", "at_ms"], model.clock.startMs],
     paint: {
       "circle-radius": 2.6,
-      "circle-color": COLORS.fireObs,
-      "circle-opacity": 0.55,
-      "circle-stroke-color": "#1a0b02",
-      "circle-stroke-width": 0.8,
+      // Hollow white rings: evidence points, never a second warm colour next to the fire.
+      "circle-color": "rgba(0, 0, 0, 0)",
+      "circle-stroke-color": COLORS.fireObs,
+      "circle-stroke-width": 1.1,
+      "circle-stroke-opacity": 0.55,
     },
   });
 

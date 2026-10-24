@@ -5,12 +5,17 @@ import { compassPoint } from "./timeline";
 export default function MapLegend({
   windFromDeg,
   fireObsSource = null,
+  showFireObs = false,
+  showDestinations = false,
   open,
   onToggle,
 }: {
   windFromDeg: number | null;
   /** e.g. "NIST" when the bundle has fire observation points; null hides that row. */
   fireObsSource?: string | null;
+  /** Extra rows only while those optional layers are switched on. */
+  showFireObs?: boolean;
+  showDestinations?: boolean;
   open: boolean;
   onToggle: () => void;
 }) {
@@ -39,7 +44,6 @@ export default function MapLegend({
               stroke={COLORS.fireBand}
               strokeWidth="2.5"
             />
-            <rect x="18" y="1" width="9" height="12" fill={COLORS.fireBand} />
           </svg>
           Fire (model)
         </li>
@@ -59,59 +63,26 @@ export default function MapLegend({
           </svg>
           Satellite fire perimeter
         </li>
-        {fireObsSource && (
-          <li>
-            <svg viewBox="0 0 28 14" aria-hidden="true">
-              <circle
-                cx="7"
-                cy="7"
-                r="2.4"
-                fill={COLORS.fireObs}
-                stroke="#1a0b02"
-                strokeWidth="0.8"
-              />
-              <circle
-                cx="15"
-                cy="5"
-                r="2.4"
-                fill={COLORS.fireObs}
-                stroke="#1a0b02"
-                strokeWidth="0.8"
-              />
-              <circle
-                cx="22"
-                cy="9"
-                r="3.6"
-                fill={COLORS.fireObs}
-                stroke="#1a0b02"
-                strokeWidth="0.8"
-              />
-            </svg>
-            Fire observed ({fireObsSource} points)
-          </li>
-        )}
         <li>
           <svg viewBox="0 0 28 14" aria-hidden="true">
-            <line x1="1" y1="7" x2="27" y2="7" stroke={COLORS.free} strokeWidth="2" opacity="0.5" />
-            <circle cx="7" cy="7" r="2.6" fill={COLORS.particle} />
-            <circle cx="15" cy="7" r="2.6" fill={COLORS.particle} />
-            <circle cx="23" cy="7" r="2.6" fill={COLORS.particle} />
+            <line x1="1" y1="5" x2="27" y2="5" stroke={COLORS.free} strokeWidth="2" />
+            <line x1="1" y1="11" x2="27" y2="11" stroke={COLORS.jam} strokeWidth="4.5" />
           </svg>
-          Vehicles evacuating
+          Traffic (thick, darker = jammed)
         </li>
         <li>
           <svg viewBox="0 0 28 14" aria-hidden="true">
-            <line
-              x1="1"
-              y1="7"
-              x2="27"
-              y2="7"
-              stroke={COLORS.jam}
-              strokeWidth="5"
-              strokeLinecap="round"
+            <circle cx="9" cy="7" r="3" fill={COLORS.particle} stroke="#7ff9ff" strokeWidth="0.8" />
+            <circle
+              cx="19"
+              cy="7"
+              r="3"
+              fill={COLORS.particleStopped}
+              stroke="#0a0e13"
+              strokeWidth="1.4"
             />
           </svg>
-          Jammed road (thick)
+          Moving · stopped vehicles
         </li>
         <li>
           <svg viewBox="0 0 28 14" aria-hidden="true">
@@ -125,22 +96,40 @@ export default function MapLegend({
               strokeDasharray="3 3"
             />
           </svg>
-          Closed road (dashed)
+          Closed road
         </li>
-        <li>
-          <svg viewBox="0 0 28 14" aria-hidden="true">
-            <circle
-              cx="8"
-              cy="7"
-              r="4"
-              fill="#0a0e13"
-              stroke={COLORS.destination}
-              strokeWidth="2.2"
-            />
-            <circle cx="20" cy="7" r="4.6" fill={COLORS.refuge} stroke="#fff" strokeWidth="1.6" />
-          </svg>
-          Exit (ring) · refuge area (solid)
-        </li>
+        {showFireObs && fireObsSource && (
+          <li>
+            <svg viewBox="0 0 28 14" aria-hidden="true">
+              <circle cx="9" cy="7" r="3" fill="none" stroke={COLORS.fireObs} strokeWidth="1.2" />
+              <circle cx="19" cy="7" r="4" fill="none" stroke={COLORS.fireObs} strokeWidth="1.2" />
+            </svg>
+            Fire observed ({fireObsSource})
+          </li>
+        )}
+        {showDestinations && (
+          <li>
+            <svg viewBox="0 0 28 14" aria-hidden="true">
+              <circle
+                cx="8"
+                cy="7"
+                r="4"
+                fill="#0a0e13"
+                stroke={COLORS.destination}
+                strokeWidth="2.2"
+              />
+              <circle
+                cx="20"
+                cy="7"
+                r="4.6"
+                fill={COLORS.refuge}
+                stroke="#4b5157"
+                strokeWidth="1.6"
+              />
+            </svg>
+            Exit (ring) · refuge (solid)
+          </li>
+        )}
       </ul>
       {windFromDeg !== null && (
         <p className="rp-wind">

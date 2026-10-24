@@ -1,5 +1,5 @@
 import { EvidenceChip } from "./parts";
-import type { Validation, ValidationRow } from "./types";
+import type { SimulatedFire, Validation, ValidationRow } from "./types";
 
 /** How far each comparability grade lets a row be read; "tuned" is never validation. */
 const GRADE_LABEL: Record<string, string> = {
@@ -30,7 +30,8 @@ function formatPublished(row: ValidationRow): string {
   if (row.published === null) return "—";
   const unit = row.unit ?? "";
   if (unit.startsWith("local_time")) return `${row.published} local`;
-  if (unit.startsWith("count_")) return `${row.published} ${unit.slice("count_".length).replace(/_/g, " ")}`;
+  if (unit.startsWith("count_"))
+    return `${row.published} ${unit.slice("count_".length).replace(/_/g, " ")}`;
   return `${row.published}${unit ? ` ${unit.replace(/_/g, " ")}` : ""}`;
 }
 
@@ -66,7 +67,12 @@ function ScoreRow({ row, year }: { row: ValidationRow; year: string }) {
           </small>
           <span className="rp-score-value">{formatPublished(row)}</span>
           {row.sourceLocator?.startsWith("http") && (
-            <a className="rp-score-src" href={row.sourceLocator.split(";")[0]} target="_blank" rel="noreferrer">
+            <a
+              className="rp-score-src"
+              href={row.sourceLocator.split(";")[0]}
+              target="_blank"
+              rel="noreferrer"
+            >
               Source
             </a>
           )}
@@ -104,27 +110,59 @@ function ScoreRow({ row, year }: { row: ValidationRow; year: string }) {
 }
 
 /** "Model vs <year>": published figures beside the model's closest output, with how comparable each is. */
-export default function ValidationTab({ validation, year }: { validation: Validation; year: string }) {
+export default function ValidationTab({
+  validation,
+  year,
+  fire,
+  observationSource,
+}: {
+  validation: Validation;
+  year: string;
+  /** The model fire, for its calibration summary (moved here from the map). */
+  fire: SimulatedFire | null;
+  observationSource: string;
+}) {
   const grades = Object.entries(validation.grades);
   return (
     <div className="rp-tab">
+      {fire && (fire.calibrationHeadline || fire.calibrationIou != null || fire.constraintNote) && (
+        <section className="rp-score" aria-labelledby="rp-fire-check-title">
+          <div className="rp-score-head">
+            <strong id="rp-fire-check-title">Fire model check</strong>{" "}
+            <EvidenceChip value="simulated" />
+          </div>
+          <p className="rp-rule">
+            {fire.calibrationHeadline && (
+              <>
+                Against {observationSource} fire observations: {fire.calibrationHeadline}.{" "}
+              </>
+            )}
+            {fire.calibrationIou != null && (
+              <>Overlap with a satellite perimeter (IoU): {fire.calibrationIou.toFixed(2)}. </>
+            )}
+            {fire.constraintNote}
+          </p>
+        </section>
+      )}
       <p className="rp-disclaimer rp-disclaimer--top" role="note">
-        Published {year} figures (reconstructions such as NIST&apos;s) beside the model&apos;s closest output. Each row says how
-        comparable the two are; none of this is operational guidance. A <strong>tuned</strong> row was used to set a
-        model parameter, so agreement there is not validation. Time differences are in minutes; negative means the model
-        is earlier than the published time.
+        Published {year} figures (reconstructions such as NIST&apos;s) beside the model&apos;s
+        closest output. Each row says how comparable the two are; none of this is operational
+        guidance. A <strong>tuned</strong> row was used to set a model parameter, so agreement there
+        is not validation. Time differences are in minutes; negative means the model is earlier than
+        the published time.
       </p>
       {grades.length > 0 && (
         <ul className="rp-grade-key">
           {grades.map(([grade, meaning]) => (
             <li key={grade}>
-              <span className={`rp-grade rp-grade--${grade}`}>{GRADE_LABEL[grade] ?? grade}</span> {meaning}
+              <span className={`rp-grade rp-grade--${grade}`}>{GRADE_LABEL[grade] ?? grade}</span>{" "}
+              {meaning}
             </li>
           ))}
           {!validation.grades.tuned && validation.rows.some((r) => r.comparability === "tuned") && (
             <li>
-              <span className="rp-grade rp-grade--tuned">{GRADE_LABEL.tuned}</span> the model was fitted to this
-              figure
+              <span className="rp-grade rp-grade--tuned">{GRADE_LABEL.tuned}</span> the model was
+              fitted to this figure
             </li>
           )}
         </ul>

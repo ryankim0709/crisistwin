@@ -32,7 +32,6 @@ import {
 } from "./timeline";
 import { buildCaption } from "./narrative";
 import MapLegend from "./MapLegend";
-import { EvidenceChip } from "./parts";
 import type { LngLat, ReplayModel } from "./types";
 import "./replay.css";
 
@@ -54,7 +53,16 @@ type Load =
   | { status: "missing"; message: string }
   | { status: "error"; message: string };
 
-export default function ReplayView({ config = REPLAY_VIEW, picker }: { config?: ViewConfig; picker?: ReactNode }) {
+export default function ReplayView({
+  config = REPLAY_VIEW,
+  picker,
+  switcher,
+}: {
+  config?: ViewConfig;
+  picker?: ReactNode;
+  /** Fire switcher shown on the map, visible whether or not the panel is collapsed. */
+  switcher?: ReactNode;
+}) {
   const [load, setLoad] = useState<Load>({ status: "loading" });
   const [attempt, setAttempt] = useState(0);
 
@@ -76,7 +84,8 @@ export default function ReplayView({ config = REPLAY_VIEW, picker }: { config?: 
         } else {
           setLoad({
             status: "error",
-            message: error instanceof Error ? error.message : "The replay bundle could not be loaded.",
+            message:
+              error instanceof Error ? error.message : "The replay bundle could not be loaded.",
           });
         }
       })
@@ -94,7 +103,8 @@ export default function ReplayView({ config = REPLAY_VIEW, picker }: { config?: 
     setAttempt((value) => value + 1);
   }
 
-  if (load.status === "ready") return <ReplayScreen model={load.model} config={config} picker={picker} />;
+  if (load.status === "ready")
+    return <ReplayScreen model={load.model} config={config} picker={picker} switcher={switcher} />;
 
   const sim = config.kind === "simulation";
   return (
@@ -141,7 +151,8 @@ export default function ReplayView({ config = REPLAY_VIEW, picker }: { config?: 
   );
 }
 
-const DEFAULT_OFF: LayerGroup[] = ["damage", "zones"];
+// Default view: four layers (perimeter, model fire, roads/traffic, vehicle dots); the rest are toggles.
+const DEFAULT_OFF: LayerGroup[] = ["damage", "zones", "history", "destinations", "fireObs"];
 
 function initialVisibility(model: ReplayModel): Record<LayerGroup, boolean> {
   const out = {} as Record<LayerGroup, boolean>;
@@ -156,10 +167,23 @@ function initialVisibility(model: ReplayModel): Record<LayerGroup, boolean> {
 function isTextEntry(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   if (target.isContentEditable) return true;
-  return ["INPUT", "SELECT", "TEXTAREA"].includes(target.tagName);
+  // The timeline slider, checkboxes and radios are not text entry: Space still plays/pauses.
+  if (target instanceof HTMLInputElement)
+    return !["range", "checkbox", "radio", "button"].includes(target.type);
+  return ["SELECT", "TEXTAREA"].includes(target.tagName);
 }
 
-function ReplayScreen({ model: baseline, config, picker }: { model: ReplayModel; config: ViewConfig; picker?: ReactNode }) {
+function ReplayScreen({
+  model: baseline,
+  config,
+  picker,
+  switcher,
+}: {
+  model: ReplayModel;
+  config: ViewConfig;
+  picker?: ReactNode;
+  switcher?: ReactNode;
+}) {
   const variants = useVariants(baseline, config.variantsUrl);
   const model = variants.shown?.model ?? baseline;
   const selectVariant = variants.select;
@@ -167,7 +191,8 @@ function ReplayScreen({ model: baseline, config, picker }: { model: ReplayModel;
   const place = useMemo(() => referencePlace(baseline, config.place), [baseline, config.place]);
   const home = useMemo(() => homeCoords(baseline, place), [baseline, place]);
   const tourSteps = useMemo(
-    () => (config.kind === "simulation" ? simulationTour(baseline, place) : replayTour(baseline, place)),
+    () =>
+      config.kind === "simulation" ? simulationTour(baseline, place) : replayTour(baseline, place),
     [baseline, place, config.kind],
   );
   const { startMs, endMs } = model.clock;
@@ -236,12 +261,32 @@ function ReplayScreen({ model: baseline, config, picker }: { model: ReplayModel;
     return () => cancelAnimationFrame(frame);
   }, [playing, speed, endMs]);
 
+  // Story mode owns the clock while open: Pause stops the clock, any run-in and the story's
+  // auto-advance together; Play resumes the story from its current chapter.
+  const [storyPaused, setStoryPaused] = useState(false);
+  const [storyResume, setStoryResume] = useState(0);
+  const toggleStoryPause = useCallback(() => {
+    if (storyPaused) {
+      setStoryPaused(false);
+      setStoryResume((k) => k + 1);
+      return;
+    }
+    setStoryPaused(true);
+    stopAtRef.current = null;
+    arriveRef.current = null;
+    setPlaying(false);
+  }, [storyPaused]);
+
   const togglePlay = useCallback(() => {
+    if (storyOpen) {
+      toggleStoryPause();
+      return;
+    }
     if (!playing && timeRef.current >= endMs) seek(startMs);
     stopAtRef.current = null;
     arriveRef.current = null;
     setPlaying((p) => !p);
-  }, [playing, endMs, startMs, seek]);
+  }, [storyOpen, toggleStoryPause, playing, endMs, startMs, seek]);
 
   const playTo = useCallback(
     (ms: number, rate: number, onArrive: () => void) => {
@@ -257,25 +302,34 @@ function ReplayScreen({ model: baseline, config, picker }: { model: ReplayModel;
   // What-ifs are only comparable with this replay when they were run on the same demand.
   const variantDemand = variants.index?.demandTotalVeh ?? null;
   const baselineDemand = baseline.traffic?.totalVeh ?? null;
-  const variantsStale = variantDemand !== null && baselineDemand !== null && variantDemand !== baselineDemand;
+  const variantsStale =
+    variantDemand !== null && baselineDemand !== null && variantDemand !== baselineDemand;
   const usableIndex = variantsStale ? null : variants.index;
-  const chapters = useMemo(() => buildChapters(baseline, usableIndex, place), [baseline, usableIndex, place]);
+  const chapters = useMemo(
+    () => buildChapters(baseline, usableIndex, place),
+    [baseline, usableIndex, place],
+  );
   const reveal = useMemo(() => (usableIndex ? revealRows(usableIndex) : []), [usableIndex]);
   const startStory = useCallback(() => {
     markTourSeen(config.kind);
     setTourOpen(false);
     selectVariant(null);
     setTab("overview");
+    setStoryPaused(false);
     setStoryOpen(true);
   }, [config.kind, selectVariant]);
   const closeStory = useCallback(() => {
     setStoryOpen(false);
+    setStoryPaused(false);
     stopAtRef.current = null;
     arriveRef.current = null;
     setPlaying(false);
     setSpeed(DEFAULT_SPEED);
   }, []);
-  const peakExposureMs = useMemo(() => chapters.find((c) => c.id === "peak-exposure")?.atMs ?? null, [chapters]);
+  const peakExposureMs = useMemo(
+    () => chapters.find((c) => c.id === "peak-exposure")?.atMs ?? null,
+    [chapters],
+  );
   const showVariantFromStory = useCallback(
     (id: string) => {
       closeStory();
@@ -311,14 +365,18 @@ function ReplayScreen({ model: baseline, config, picker }: { model: ReplayModel;
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.altKey || event.ctrlKey || event.metaKey || isTextEntry(event.target)) return;
-      const onButton = event.target instanceof HTMLButtonElement;
-      if (event.key === " " && !onButton) {
+      // Space always toggles play/pause, also while a button has focus (a clicked speed or story
+      // button keeps focus, and Space used to re-press it instead of pausing). Dialog buttons
+      // (tour) keep native Space; Enter still activates any focused button.
+      const inDialog = event.target instanceof Element && event.target.closest(".rp-tour");
+      if (event.key === " " && !inDialog && !(event.target instanceof HTMLSelectElement)) {
         event.preventDefault();
-        togglePlay();
+        if (!event.repeat) togglePlay();
       } else if (
         (event.key === "ArrowLeft" || event.key === "ArrowRight") &&
-        // Arrow keys pan the map when it has focus.
-        !(event.target instanceof Element && event.target.closest(".maplibregl-map"))
+        // Arrow keys pan the map when it has focus, and move between radio options.
+        !(event.target instanceof Element && event.target.closest(".maplibregl-map")) &&
+        !(event.target instanceof HTMLInputElement && event.target.type !== "range")
       ) {
         event.preventDefault();
         step(event.key === "ArrowLeft" ? -1 : 1, event.shiftKey ? BIG_STEP_SECONDS : STEP_SECONDS);
@@ -327,8 +385,18 @@ function ReplayScreen({ model: baseline, config, picker }: { model: ReplayModel;
         reset();
       }
     };
+    // Button activation by Space happens on keyup; suppress it where keydown already toggled.
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.key !== " " || isTextEntry(event.target)) return;
+      if (event.target instanceof Element && event.target.closest(".rp-tour")) return;
+      if (event.target instanceof HTMLButtonElement) event.preventDefault();
+    };
+    window.addEventListener("keyup", onKeyUp);
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keyup", onKeyUp);
+    };
   }, [togglePlay, step, reset]);
 
   const toggleLayer = useCallback((group: LayerGroup) => {
@@ -341,8 +409,8 @@ function ReplayScreen({ model: baseline, config, picker }: { model: ReplayModel;
   const eventIndex = lastAtOrBefore(model.events, simTimeMs);
   const zoneStates = useMemo(() => zoneStatesAt(model.events, eventIndex), [model, eventIndex]);
   const fixture = hasFixtureData(model);
-  const derivedDemand = !fixture && model.demand !== null && model.layerStatus.zones?.evidenceClass === "derived";
-  const observedSoFar = model.fireObservations ? lastAtOrBefore(model.fireObservations.items, simTimeMs) + 1 : 0;
+  const derivedDemand =
+    !fixture && model.demand !== null && model.layerStatus.zones?.evidenceClass === "derived";
   const fixtureLayers = Object.entries(model.layerStatus)
     .filter(([, s]) => s.status === "fixture")
     .map(([name]) => FIXTURE_LAYER_LABEL[name] ?? name.replace(/_/g, " "));
@@ -359,37 +427,44 @@ function ReplayScreen({ model: baseline, config, picker }: { model: ReplayModel;
                 <p className="rp-empty" role="note">
                   The what-if runs on disk were made with a different demand (
                   {variantDemand?.toLocaleString("en-US")} vehicles) than this replay (
-                  {baselineDemand?.toLocaleString("en-US")} vehicles), so they are not comparable and are hidden until
-                  they are regenerated.
+                  {baselineDemand?.toLocaleString("en-US")} vehicles), so they are not comparable
+                  and are hidden until they are regenerated.
                 </p>
               </div>
             ),
           },
         ]
       : variants.index
-      ? [
-          {
-            id: "whatif" as const,
-            label: "What if…",
-            content: (
-              <CompareTab
-                baseline={baseline}
-                index={variants.index}
-                load={variants.load}
-                showVariant={variants.showVariant}
-                onSelect={variants.select}
-                onShowVariant={variants.setShowVariant}
-              />
-            ),
-          },
-        ]
-      : []),
+        ? [
+            {
+              id: "whatif" as const,
+              label: "What if…",
+              content: (
+                <CompareTab
+                  baseline={baseline}
+                  index={variants.index}
+                  load={variants.load}
+                  showVariant={variants.showVariant}
+                  onSelect={variants.select}
+                  onShowVariant={variants.setShowVariant}
+                />
+              ),
+            },
+          ]
+        : []),
     ...(baseline.validation
       ? [
           {
             id: "validation" as const,
             label: `Model vs ${incidentYear(baseline)}`,
-            content: <ValidationTab validation={baseline.validation} year={incidentYear(baseline)} />,
+            content: (
+              <ValidationTab
+                validation={baseline.validation}
+                year={incidentYear(baseline)}
+                fire={baseline.fireSimulated}
+                observationSource={observationSource(baseline)}
+              />
+            ),
           },
         ]
       : []),
@@ -402,7 +477,15 @@ function ReplayScreen({ model: baseline, config, picker }: { model: ReplayModel;
           },
         ]
       : []),
-    ...(config.stressUrl ? [{ id: "stress" as const, label: "Stress test", content: <StressTab url={config.stressUrl} /> }] : []),
+    ...(config.stressUrl
+      ? [
+          {
+            id: "stress" as const,
+            label: "Stress test",
+            content: <StressTab url={config.stressUrl} />,
+          },
+        ]
+      : []),
   ];
   const caption = buildCaption(model, simTimeMs, frameIndex, place);
   // While a what-if is on the map, set it against the baseline at the same clock time.
@@ -441,6 +524,7 @@ function ReplayScreen({ model: baseline, config, picker }: { model: ReplayModel;
           zoneStates={zoneStates}
           visibility={mapVisibility}
           onParticleScale={setPerParticle}
+          animate={playing}
           pin={tab === "evacuee" ? pin : null}
           onPick={tab === "evacuee" ? setPin : null}
           focus={focus}
@@ -465,7 +549,9 @@ function ReplayScreen({ model: baseline, config, picker }: { model: ReplayModel;
         </p>
 
         <div className="rp-hud">
+          {switcher}
           <div className="rp-status">
+            {/* One muted status line; details (evidence, demand, fire model) open below it. */}
             <button
               type="button"
               className="rp-statusline"
@@ -473,37 +559,77 @@ function ReplayScreen({ model: baseline, config, picker }: { model: ReplayModel;
               aria-controls="rp-status-details"
               onClick={() => setStatusOpen((o) => !o)}
             >
-              <span className={`rp-status-chip${sim ? " rp-status-chip--sim" : ""}`}>
-                {sim ? "AGENT SIMULATION" : "RETROSPECTIVE · MODELLED TRAFFIC"}
+              <span className="rp-status-chip">
+                {sim ? "Agent simulation" : "Retrospective · modelled traffic"}
               </span>
-              {variants.shown && <span className="rp-status-chip rp-status-chip--variant">WHAT-IF: {variants.shown.title}</span>}
-              {fixture && <span className="rp-fixture-tag">FIXTURE DEMAND</span>}
-              {derivedDemand && (
-                <span className="rp-status-chip rp-status-chip--derived">
-                  DERIVED: Census demand, orders via crosswalk
-                </span>
+              {variants.shown && (
+                <span className="rp-status-chip">What-if: {variants.shown.title}</span>
               )}
-              <span className="rp-status-more">{statusOpen ? "Hide ▴" : "What does this mean? ▾"}</span>
+              {fixture && <span className="rp-fixture-tag">FIXTURE DEMAND</span>}
+              {derivedDemand && <span className="rp-status-text">Census demand (derived)</span>}
+              <span className="rp-status-text">
+                {perimeter ? (
+                  <>
+                    Satellite perimeter from{" "}
+                    <strong>{formatAge(simTimeMs - perimeter.atMs)}</strong> ago
+                  </>
+                ) : model.perimeters.length > 0 ? (
+                  <>
+                    {simFrontIndex >= 0 && visibility.simFire ? "Model fire" : "No perimeter"} until
+                    satellite perimeter in{" "}
+                    <strong>{formatAge(model.perimeters[0].atMs - simTimeMs)}</strong>
+                  </>
+                ) : (
+                  "No satellite perimeter in this bundle"
+                )}
+              </span>
+              <span className="rp-status-more">{statusOpen ? "Hide ▴" : "Details ▾"}</span>
             </button>
             <div id="rp-status-details" className="rp-banners" hidden={!statusOpen}>
               {sim ? (
-                <p className="rp-banner rp-banner--sim" role="note">
-                  <strong>AGENT SIMULATION</strong> — modelled residents and responders; not a historical replay.
+                <p className="rp-banner" role="note">
+                  <strong>Agent simulation</strong> — modelled residents and responders; not a
+                  historical replay.
                 </p>
               ) : (
                 <p className="rp-banner" role="note">
-                  <strong>Retrospective reconstruction</strong> — simulated traffic, not recorded vehicle movement.
-                  Planning experiment only.
+                  <strong>Retrospective reconstruction</strong> — simulated traffic, not recorded
+                  vehicle movement. Planning experiment only.
                 </p>
               )}
               {variants.shown && (
-                <p className="rp-banner rp-banner--variant" role="note">
-                  <strong>WHAT-IF: {variants.shown.title}</strong> — simulated counterfactual traffic; fire perimeters
-                  and other evidence unchanged.
+                <p className="rp-banner" role="note">
+                  <strong>What-if: {variants.shown.title}</strong> — simulated counterfactual
+                  traffic; fire perimeters and other evidence unchanged.
                 </p>
               )}
+              <p className="rp-banner" role="note">
+                <strong>Fire</strong> —{" "}
+                {perimeter ? (
+                  <>
+                    satellite perimeter in effect ({PERIMETER_PROVENANCE[perimeter.evidenceClass]}
+                    {perimeter.areaKm2 != null && <>, {perimeter.areaKm2.toFixed(0)} km²</>}
+                    {perimeter.timePrecision && (
+                      <>, ± {perimeter.timePrecision.replace(/_/g, " ")}</>
+                    )}
+                    )
+                    {nextPerimeter && (
+                      <>; next snapshot in {formatAge(nextPerimeter.atMs - simTimeMs)}</>
+                    )}
+                    .
+                  </>
+                ) : (
+                  <>
+                    before the first satellite perimeter the orange area is a fire-spread model from
+                    the {ignitionBasis(model)} ignition, not an observation.
+                  </>
+                )}{" "}
+                {model.fireSimulated?.constraintNote}
+                {model.fireSimulated &&
+                  " How well the model matches the record: see the Model vs tab."}
+              </p>
               {derivedDemand && model.demand && (
-                <p className="rp-banner rp-banner--derived" role="note">
+                <p className="rp-banner" role="note">
                   <strong>Demand (derived)</strong> —{" "}
                   {[
                     model.demand.population != null && `${fmtN(model.demand.population)} people`,
@@ -512,7 +638,8 @@ function ReplayScreen({ model: baseline, config, picker }: { model: ReplayModel;
                         (model.demand.householdsNoVehicle != null
                           ? ` (${fmtN(model.demand.householdsNoVehicle)} without a vehicle)`
                           : ""),
-                    model.demand.blockGroups != null && `${fmtN(model.demand.blockGroups)} Census block groups`,
+                    model.demand.blockGroups != null &&
+                      `${fmtN(model.demand.blockGroups)} Census block groups`,
                   ]
                     .filter(Boolean)
                     .join(" · ")}
@@ -520,58 +647,24 @@ function ReplayScreen({ model: baseline, config, picker }: { model: ReplayModel;
                     <>
                       {" "}
                       → {fmtN(model.demand.evacuatingVehicles)} evacuating vehicles
-                      {model.demand.evacuatingVehiclesMoe != null && <> (± {fmtN(model.demand.evacuatingVehiclesMoe)})</>}
+                      {model.demand.evacuatingVehiclesMoe != null && (
+                        <> (± {fmtN(model.demand.evacuatingVehiclesMoe)})</>
+                      )}
                     </>
                   )}
-                  . Evacuation orders and warnings are historical records, mapped to block groups through a crosswalk with
-                  stated confidence.
+                  . Evacuation orders and warnings are historical records, mapped to block groups
+                  through a crosswalk with stated confidence.
                 </p>
               )}
               {fixture && (
                 <p className="rp-fixture" role="note">
                   <span className="rp-fixture-tag">FIXTURE DATA</span> synthetic, not historical
-                  {fixtureLayers.length > 0 && <span className="rp-fixture-layers">: {fixtureLayers.join(", ")}</span>}
+                  {fixtureLayers.length > 0 && (
+                    <span className="rp-fixture-layers">: {fixtureLayers.join(", ")}</span>
+                  )}
                 </p>
               )}
             </div>
-          </div>
-          <div className="rp-perimeter-badge">
-            {perimeter ? (
-              <>
-                <span className="rp-perimeter-dot" aria-hidden="true" />
-                <span>
-                  Perimeter observed <strong>{formatAge(simTimeMs - perimeter.atMs)} ago</strong> ·{" "}
-                  {PERIMETER_PROVENANCE[perimeter.evidenceClass]}
-                  {perimeter.areaKm2 != null && <> · {perimeter.areaKm2.toFixed(0)} km²</>}
-                  {perimeter.timePrecision && <> · ± {perimeter.timePrecision.replace(/_/g, " ")}</>}
-                  {nextPerimeter && (
-                    <span className="rp-dim"> · next snapshot in {formatAge(nextPerimeter.atMs - simTimeMs)}</span>
-                  )}
-                </span>
-              </>
-            ) : model.perimeters.length > 0 ? (
-              <span>
-                No perimeter observed yet · first satellite snapshot in{" "}
-                <strong>{formatAge(model.perimeters[0].atMs - simTimeMs)}</strong>
-                {simFrontIndex >= 0 && visibility.simFire && (
-                  <span className="rp-sim-note"> · glowing area is the model fire ({ignitionBasis(model)} ignition)</span>
-                )}
-                {simFrontIndex >= 0 && visibility.simFire && model.fireSimulated && (
-                  <span className="rp-calibration">
-                    <EvidenceChip value="simulated" /> Model check vs {observationSource(model)} observations:{" "}
-                    {model.fireSimulated.calibrationHeadline ?? "no calibration summary"}
-                    {model.fireSimulated.calibrationIou != null && (
-                      <> · perimeter IoU {model.fireSimulated.calibrationIou.toFixed(2)}</>
-                    )}
-                    {model.fireObservations && visibility.fireObs && (
-                      <> · yellow dots: {fmtN(observedSoFar)} {observationSource(model)} fire observations so far</>
-                    )}
-                  </span>
-                )}
-              </span>
-            ) : (
-              <span>No fire perimeters in this bundle</span>
-            )}
           </div>
           <div className="rp-basemap">
             {chapters.length > 0 && (
@@ -581,7 +674,8 @@ function ReplayScreen({ model: baseline, config, picker }: { model: ReplayModel;
                 aria-pressed={storyOpen}
                 onClick={storyOpen ? closeStory : startStory}
               >
-                <span aria-hidden="true">{storyOpen ? "■" : "▶"}</span> {storyOpen ? "Stop story" : "Play the story"}
+                <span aria-hidden="true">{storyOpen ? "■" : "▶"}</span>{" "}
+                {storyOpen ? "Stop story" : "Play the story"}
               </button>
             )}
             <button
@@ -608,11 +702,15 @@ function ReplayScreen({ model: baseline, config, picker }: { model: ReplayModel;
                 </button>
               ))}
             </div>
-            {basemap === "satellite" && <span className="rp-imagery-note">{IMAGERY_DATE_NOTE}</span>}
+            {basemap === "satellite" && (
+              <span className="rp-imagery-note">{IMAGERY_DATE_NOTE}</span>
+            )}
           </div>
           <MapLegend
             windFromDeg={model.fireSimulated?.windFromDeg ?? null}
             fireObsSource={model.fireObservations ? observationSource(model) : null}
+            showFireObs={visibility.fireObs}
+            showDestinations={visibility.destinations}
             open={legendOpen || tourOpen}
             onToggle={() => setLegendOpen((o) => !o)}
           />
@@ -623,10 +721,14 @@ function ReplayScreen({ model: baseline, config, picker }: { model: ReplayModel;
             <span className="rp-status-chip rp-status-chip--variant">WHAT-IF · SIMULATED</span>
             <span>
               <strong>{variants.shown.title}:</strong>{" "}
-              <strong className="rp-delta-pill-num">{variantDelta.variant.toLocaleString("en-US")}</strong> vehicles on
-              roads inside the fire now, vs{" "}
-              <strong className="rp-delta-pill-base">{variantDelta.baseline.toLocaleString("en-US")}</strong> in the
-              baseline run
+              <strong className="rp-delta-pill-num">
+                {variantDelta.variant.toLocaleString("en-US")}
+              </strong>{" "}
+              vehicles on roads inside the fire now, vs{" "}
+              <strong className="rp-delta-pill-base">
+                {variantDelta.baseline.toLocaleString("en-US")}
+              </strong>{" "}
+              in the baseline run
             </span>
             <CaveatChip id={variants.shown.id} />
           </p>
@@ -638,14 +740,21 @@ function ReplayScreen({ model: baseline, config, picker }: { model: ReplayModel;
             revealRows={reveal}
             simTimeMs={simTimeMs}
             timezone={model.incident.timezone}
-            metrics={model.traffic && frameIndex >= 0 ? (model.traffic.metrics[frameIndex] ?? null) : null}
+            metrics={
+              model.traffic && frameIndex >= 0 ? (model.traffic.metrics[frameIndex] ?? null) : null
+            }
             trafficEvidence={model.traffic?.evidenceClass ?? null}
-            demandLabel={fixture ? "FIXTURE DEMAND" : derivedDemand ? "CENSUS DEMAND (DERIVED)" : null}
+            demandLabel={
+              fixture ? "FIXTURE DEMAND" : derivedDemand ? "CENSUS DEMAND (DERIVED)" : null
+            }
             playTo={playTo}
             seek={seek}
             focus={focusTarget}
             onShowVariant={showVariantFromStory}
             onClose={closeStory}
+            paused={storyPaused}
+            onTogglePause={togglePlay}
+            resumeKey={storyResume}
           />
         )}
 
@@ -656,7 +765,8 @@ function ReplayScreen({ model: baseline, config, picker }: { model: ReplayModel;
           stepSeconds={model.clock.stepSeconds}
           timezone={model.incident.timezone}
           events={model.events}
-          playing={playing}
+          // In story mode the story is "playing" while it auto-advances, even during a chapter hold.
+          playing={playing || (storyOpen && !storyPaused)}
           speed={speed}
           onTogglePlay={togglePlay}
           onSeek={seekAndPause}

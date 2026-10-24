@@ -88,6 +88,51 @@ export function IncidentPicker({
   );
 }
 
+/** "Camp Fire (2018) · Paradise, …" -> "Camp 2018". */
+function shortLabel(incident: ReplayIncident): string {
+  const name = incident.label.split(" · ")[0];
+  const year = name.match(/\((\d{4})\)/)?.[1] ?? incident.id.match(/(\d{4})/)?.[1] ?? "";
+  const base = name
+    .replace(/\(\d{4}\)/, "")
+    .replace(/\s*\bFire\b/i, "")
+    .trim();
+  return year && !base.includes(year) ? `${base} ${year}` : base;
+}
+
+/** Always-visible fire switcher on the map (segmented control); mirrors the panel dropdown. */
+export function FireSwitcher({
+  incidents,
+  value,
+  availability,
+  onChange,
+}: {
+  incidents: ReplayIncident[];
+  value: string;
+  availability: Availability;
+  onChange: (id: string) => void;
+}) {
+  if (incidents.length < 2) return null;
+  return (
+    <div className="rp-fire-switch" role="group" aria-label="Choose a fire">
+      {incidents.map((incident) => {
+        const missing = availability[incident.id] === false;
+        return (
+          <button
+            key={incident.id}
+            type="button"
+            aria-pressed={incident.id === value}
+            disabled={missing && incident.id !== value}
+            title={incident.label + (missing ? " (not built yet)" : "")}
+            onClick={() => onChange(incident.id)}
+          >
+            {shortLabel(incident)}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function ReplayRoute() {
   const incidents = useIncidents();
   if (incidents === null) return null;
@@ -121,7 +166,20 @@ function ReplayRouteWith({ incidents }: { incidents: ReplayIncident[] }) {
       key={incident.id}
       config={replayViewFor(incident)}
       picker={
-        <IncidentPicker incidents={incidents} value={incident.id} availability={availability} onChange={select} />
+        <IncidentPicker
+          incidents={incidents}
+          value={incident.id}
+          availability={availability}
+          onChange={select}
+        />
+      }
+      switcher={
+        <FireSwitcher
+          incidents={incidents}
+          value={incident.id}
+          availability={availability}
+          onChange={select}
+        />
       }
     />
   );

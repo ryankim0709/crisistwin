@@ -512,7 +512,7 @@ function Legend({ perParticle }: { perParticle: number | null }) {
       </li>
       <li>
         <span className="rp-key rp-key--fireobs" aria-hidden="true" />
-        Fire observed (NIST) — small yellow dots at points where fire was reported, shown from their
+        Fire observed — small hollow white rings where fire was recorded (off by default), shown from their
         time
       </li>
       <li>
@@ -533,7 +533,7 @@ function Legend({ perParticle }: { perParticle: number | null }) {
           style={{ background: COLORS.slow }}
           aria-hidden="true"
         />
-        Slow (blue) — 35–70% of limit
+        Slow (mid cyan) — 35–70% of limit
       </li>
       <li>
         <span
@@ -541,7 +541,7 @@ function Legend({ perParticle }: { perParticle: number | null }) {
           style={{ background: COLORS.jam }}
           aria-hidden="true"
         />
-        Jammed (violet, thick) — under 35%; hover a road for numbers
+        Jammed (dark cyan, thick) — under 35%; hover a road for numbers
       </li>
       <li>
         <span className="rp-key rp-key--width" aria-hidden="true" />
@@ -550,10 +550,6 @@ function Legend({ perParticle }: { perParticle: number | null }) {
       <li>
         <span className="rp-key rp-key--closed" aria-hidden="true" />
         Closed (event or modelled fire hazard) — grey dashes, “× CLOSED” label when zoomed in
-      </li>
-      <li>
-        <span className="rp-key rp-key--threat" aria-hidden="true" />
-        Fire expected (model) — thin pulsing dashes: amber within 30 min, orange within 10 min
       </li>
       <li>
         <span className="rp-key rp-key--bridge" aria-hidden="true" />
@@ -565,7 +561,7 @@ function Legend({ perParticle }: { perParticle: number | null }) {
         {perParticle
           ? `1 dot ≈ ${perParticle} modelled vehicle${perParticle === 1 ? "" : "s"}`
           : "modelled counts"}
-        ; violet, motionless dots are stopped. Illustrative, not tracked vehicles; above 1 min/s
+        ; white dots with a dark ring are stopped. Illustrative, not tracked vehicles; above 1 min/s
         playback their motion is slowed for legibility
       </li>
       <li>

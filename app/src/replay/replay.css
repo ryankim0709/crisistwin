@@ -2404,8 +2404,7 @@ p.rp-state-msg[role="status"] {
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  background: #ffe08a;
-  border: 1px solid #1a0b02;
+  border: 1.2px solid #ffffff;
 }
 .rp-status-chip--derived {
   color: #a8e6c9;
@@ -2546,4 +2545,127 @@ p.rp-state-msg[role="status"] {
 }
 .rp-hud .rp-banners {
   max-width: min(760px, calc(100% - 200px));
+}
+
+/* ---- Strict palette: colour is for the map. Evidence chips, status and badges are one muted
+   style; classes stay distinct by text and border pattern (solid / dashed / double / dotted /
+   hatched), never by colour. Fixture keeps its prominent stripes by rule. ---- */
+.rp-root .rp-chip--observed,
+.rp-root .rp-chip--reported,
+.rp-root .rp-chip--reconstructed,
+.rp-root .rp-chip--derived,
+.rp-root .rp-chip--simulated {
+  color: #c4cfda;
+  border-color: rgba(196, 207, 218, 0.55);
+}
+.rp-root .rp-chip--simulated {
+  background: repeating-linear-gradient(45deg, rgba(196, 207, 218, 0.14) 0 3px, transparent 3px 6px);
+}
+.rp-root .rp-status-chip,
+.rp-root .rp-status-chip--sim,
+.rp-root .rp-status-chip--variant,
+.rp-root .rp-status-chip--derived {
+  color: #c4cfda;
+  border-color: rgba(196, 207, 218, 0.4);
+  letter-spacing: 0.2px;
+  font-weight: 600;
+}
+.rp-root .rp-grade,
+.rp-root .rp-caveat,
+.rp-root .rp-reveal-name .rp-caveat {
+  color: #c4cfda;
+}
+.rp-root .rp-banner,
+.rp-root .rp-banner--derived {
+  border-left-color: var(--rp-line-strong);
+}
+.rp-root .rp-story-count,
+.rp-root .rp-eyebrow {
+  color: var(--rp-dim);
+}
+.rp-root .rp-story {
+  border-color: var(--rp-line-strong);
+}
+.rp-statusline .rp-status-text {
+  color: #c4cfda;
+  white-space: nowrap;
+}
+.rp-statusline .rp-status-text + .rp-status-text::before,
+.rp-statusline .rp-status-chip + .rp-status-text::before {
+  content: "·";
+  margin-right: 8px;
+  color: var(--rp-dim);
+}
+.rp-statusline .rp-status-text strong {
+  font-family: var(--rp-mono);
+  color: #e6edf3;
+}
+/* The event-tick key under the timeline is gone; ticks keep their tooltips. */
+.rp-root .rp-tick-legend {
+  display: none;
+}
+
+/* Fire switcher: always on the map, top-left */
+.rp-fire-switch {
+  display: inline-flex;
+  align-self: flex-start;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 10px;
+  background: rgba(6, 9, 13, 0.88);
+  border: 1px solid var(--rp-line-strong);
+  pointer-events: auto;
+}
+.rp-root .rp-fire-switch button {
+  padding: 6px 12px;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--rp-dim);
+}
+.rp-root .rp-fire-switch button[aria-pressed="true"] {
+  color: #0a0e13;
+  background: #e6edf3;
+}
+.rp-root .rp-fire-switch button:not([aria-pressed="true"]):hover {
+  color: var(--rp-text);
+  background: rgba(230, 237, 243, 0.08);
+}
+.rp-root .rp-fire-switch button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+/* Timeline and feed glyphs: one neutral tone; categories differ by shape only. */
+.rp-root .rp-glyph,
+.rp-root .rp-glyph--fire,
+.rp-root .rp-glyph--order,
+.rp-root .rp-glyph--warning,
+.rp-root .rp-glyph--closure,
+.rp-root .rp-glyph--other,
+.rp-root .rp-tick--fire,
+.rp-root .rp-tick--order,
+.rp-root .rp-tick--warning,
+.rp-root .rp-tick--closure,
+.rp-root .rp-tick--other {
+  color: #aab4be;
+  fill: #aab4be;
+}
+.rp-root .rp-glyph-stroke {
+  stroke: #aab4be;
+}
+/* Keep the caption to two lines so it never covers the fire switcher. */
+.rp-caption > span:nth-child(2) {
+  max-width: 560px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.rp-root .rp-caption {
+  max-width: min(600px, calc(100% - 720px));
+}
+@media (max-width: 1100px) {
+  .rp-root .rp-caption {
+    max-width: calc(100% - 32px);
+    top: 120px;
+  }
 }
