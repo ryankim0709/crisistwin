@@ -6,6 +6,7 @@ Subcommands write JSON/GeoJSON for viewing or app integration:
   hindcast   simulate fire spread from an observed perimeter and score it against later ones
   calibrate  pick fire parameters on a training window, report held-out skill
   bundle     run fire + traffic and write a replay bundle for the web app (docs/replay-bundle.md)
+  simulate   agent simulation (resident agents + responder agents); separate from the historical replay
 """
 
 from __future__ import annotations
@@ -25,7 +26,12 @@ from sim.hindcast import calibrate, default_candidates, run_hindcast
 from sim.history import load_history, parse_utc
 from sim.replay import observed_frame, timeline
 from sim.scenario import camp_bundle_inputs
+from sim.behavior import BehaviorParams
+from sim.responders import ASSUMPTIONS as RESPONDER_ASSUMPTIONS
+from sim.responders import compare_with_history, default_responders, fire_arrival_lookup
 from sim.traffic import TrafficParams
+
+HISTORICAL_ROAD_EVENT_TYPES = ("road_closed", "road_blocked", "capacity_changed", "contraflow_started")
 
 
 def _write(path: Path, payload: dict) -> None:
@@ -85,6 +91,12 @@ def main() -> None:
     bun.add_argument("--no-simulated-fire", action="store_true", help="omit the simulated morning fire front")
     bun.add_argument("--output", type=Path, required=True)
 
+    sim_ = sub.add_parser("simulate", help="agent simulation: resident + responder agents (not a replay)")
+    sim_.add_argument("--roads-package", type=Path, required=True)
+    sim_.add_argument("--seed", type=int, default=TrafficParams.seed)
+    sim_.add_argument("--no-responders", action="store_true", help="resident agents only")
+    sim_.add_argument("--output", type=Path, required=True, help="e.g. app/public/simulations/camp-2018.agents.json")
+
     args = parser.parse_args()
     try:
         history = load_history(args.package)
@@ -118,6 +130,34 @@ def main() -> None:
                                   command=" ".join(["python3 -m sim", *sys.argv[1:]]),
                                   simulate_fire=not args.no_simulated_fire)
             summary = json.dumps(result["traffic"]["summary"])
+        elif args.command == "simulate":
+            scenario, start, end = camp_bundle_inputs(args.roads_package)
+            params = TrafficParams(seed=args.seed, behavior=BehaviorParams(enabled=True))
+            agents: list = []
+
+            def controllers_for(fire_model):
+                if args.no_responders or not fire_model:
+                    return ()
+                grid, arrival, t0 = fire_model[:3]
+                agents.extend(default_responders(scenario["network"], scenario["zones"], scenario["destinations"],
+                                                 fire_arrival_lookup(grid, arrival, t0)))
+                return tuple(agents)
+
+            result = build_bundle(history, scenario, params, start=start, end=end, mode="simulation",
+                                  command=" ".join(["python3 -m sim", *sys.argv[1:]]), controllers_for=controllers_for)
+            historical = [e for e in scenario["events"]
+                          if e.type in HISTORICAL_ROAD_EVENT_TYPES and e.evidence_class != "simulated"]
+            responder_events = [e for e in result["events"] if e["source"]["id"] == "responder-agent"]
+            result["responders"] = {
+                "evidence_class": "simulated",
+                "agents": [a.describe() for a in agents],
+                "comparison_with_history": compare_with_history(responder_events, historical,
+                                                                network=scenario["network"]),
+            }
+            if agents:
+                result["assumptions"] = [*result["assumptions"], *RESPONDER_ASSUMPTIONS]
+            summary = f"{len(responder_events)} responder actions; " + json.dumps(
+                {k: v for k, v in result["traffic"]["summary"].items() if "veh" in k and isinstance(v, int)})
         else:
             result = calibrate(history, default_candidates(), start_index=args.start_index,
                                train_hours=args.train_hours, test_hours=args.test_hours, cell_m=args.cell_m)

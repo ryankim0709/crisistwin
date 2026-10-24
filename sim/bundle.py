@@ -82,7 +82,8 @@ def _simulated_fire(history: IncidentHistory, end: datetime) -> tuple[dict, obje
 
 def build_bundle(history: IncidentHistory, scenario: dict, params: TrafficParams, *,
                  start: datetime, end: datetime, command: str, simulate_fire: bool = True,
-                 fire: tuple[dict, tuple] | None = None) -> dict:
+                 fire: tuple[dict, tuple] | None = None, controllers_for=None,
+                 mode: str = "retrospective") -> dict:
     """Run traffic for the scenario and merge it with the package's observed layers.
 
     `scenario` holds `network`, `zones`, `destinations`, `events` (sim.traffic types),
@@ -103,6 +104,8 @@ def build_bundle(history: IncidentHistory, scenario: dict, params: TrafficParams
     traffic = simulate_traffic(
         scenario["network"], scenario["zones"], scenario["destinations"], scenario["events"], params,
         start=start, end=end, fire_area_at=_fire_area_lookup(history, fire_model[3] if fire_model else None),
+        # Agent simulation only: controllers_for(fire_model) -> responder controllers. Replay passes None.
+        controllers=controllers_for(fire_model) if controllers_for else (),
     )
 
     perimeters = [
@@ -181,7 +184,7 @@ def build_bundle(history: IncidentHistory, scenario: dict, params: TrafficParams
             "package_version": history.package_version,
             "timezone": INCIDENT_TIMEZONE,
         },
-        "mode": "retrospective",
+        "mode": mode,
         "clock": {"start": format_utc(start), "end": format_utc(end), "step_seconds": params.record_every_s},
         "bbox": scenario["bbox"],
         "layer_status": {
