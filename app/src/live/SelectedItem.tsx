@@ -1,12 +1,20 @@
 import { useEffect, useRef, useState } from "react";
 import { Button, EvidenceTag, IconButton, LoadingState, Notice, Tag } from "../ui";
-import { createTask, triageReport } from "./api";
+import { createTask, helpAction, triageReport } from "./api";
 import { drillClock, elapsed, nf, plural, shortKey, shortZoneName, wallClock } from "./format";
 import { distanceM } from "./geo";
 import KindGlyph from "./Glyph";
 import { impactLine } from "./ReviewQueue";
 import { isFixtureNote, type QueueItem } from "./queue";
-import type { CommandResponse, FieldReport, ImpactChange, ImpactResponse, ResponderPosition, TwinMetrics } from "./types";
+import type {
+  CommandResponse,
+  FieldReport,
+  HelpStatus,
+  ImpactChange,
+  ImpactResponse,
+  ResponderPosition,
+  TwinMetrics,
+} from "./types";
 
 /** Runs one controller action at a time per key; resolves to an error message or null. */
 export type RunAction = (key: string, action: (token: string) => Promise<unknown>) => Promise<string | null>;
@@ -40,6 +48,12 @@ const TWIN_ROWS: { key: keyof TwinMetrics; label: string }[] = [
   { key: "trapped_by_fire_at_horizon_veh", label: "Trapped by fire" },
 ];
 const ZONE_ROWS = 5;
+const HELP_WORD: Record<HelpStatus, string> = {
+  open: "Not acknowledged",
+  acknowledged: "Acknowledged",
+  assigned: "Responder assigned",
+  resolved: "Resolved",
+};
 
 function nearestResponder(coord: [number, number], responders: ResponderPosition[]): ResponderPosition | null {
   let best: ResponderPosition | null = null;
@@ -144,7 +158,88 @@ function ImpactResult({ impact }: { impact: ImpactResponse }) {
   );
 }
 
-export default function SelectedItem({
+/** A need-help check-in: acknowledge it (the phone shows "Request seen"), send the nearest
+ * responder (an assist task; the phone shows "Responder assigned"), or resolve it. */
+function HelpDetail({
+  item,
+  data,
+  serverNow,
+  run,
+  busy,
+  onClose,
+}: {
+  item: QueueItem;
+  data: CommandResponse;
+  serverNow: number;
+  run: RunAction;
+  busy: string | null;
+  onClose: () => void;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const help = item.help!;
+  const status = help.help?.status ?? "open";
+  const key = `item:${item.id}`;
+  const shared = help.coord !== null;
+  const nearest = shared ? nearestResponder(help.coord!, data.responders) : null;
+  const act = async (fn: (t: string) => Promise<unknown>) => setError(await run(key, fn));
+  const disabled = busy !== null;
+  const task = item.task;
+  return (
+    <section className="lc-sel" aria-labelledby="lc-sel-title">
+      <header className="lc-sel-head">
+        <span className="lc-q-glyph lc-q-glyph--help_needed">
+          <KindGlyph kind="help_needed" />
+        </span>
+        <h2 id="lc-sel-title">{item.title}</h2>
+        <IconButton label="Clear selection" size="sm" onClick={onClose}>
+          ×
+        </IconButton>
+      </header>
+      <p className="lc-sel-meta">
+        Check-in {elapsed(serverNow - new Date(help.at).getTime())} ago, {shared ? "location shared" : "no location shared"}
+      </p>
+      <p className="lc-sel-task">
+        <Tag tone={status === "open" ? "danger" : "info"}>{HELP_WORD[status]}</Tag>
+        {task ? (
+          <span className="lc-dim">
+            {task.assignee ? shortKey(task.assignee) : "Any responder"}, {task.status === "accepted" ? "on the way" : "not accepted yet"}
+          </span>
+        ) : null}
+      </p>
+      <div className="lc-sel-actions">
+        {status === "open" ? (
+          <Button size="sm" disabled={disabled} onClick={() => void act((t) => helpAction(t, help.id, "acknowledge"))}>
+            Acknowledge
+          </Button>
+        ) : null}
+        {shared ? (
+          <Button
+            variant={status === "open" ? "secondary" : "primary"}
+            size="sm"
+            disabled={disabled}
+            onClick={() => void act((t) => helpAction(t, help.id, "assign", nearest?.party_key ?? null))}
+          >
+            {task ? "Reassign" : "Send"} {nearest ? `${shortKey(nearest.party_key)}, ${nf(distanceM(help.coord!, nearest.coord))} m` : "any responder"}
+          </Button>
+        ) : null}
+        <Button variant="ghost" size="sm" disabled={disabled} onClick={() => void act((t) => helpAction(t, help.id, "resolve"))}>
+          Resolve
+        </Button>
+      </div>
+      {error ? (
+        <Notice tone="danger" compact>
+          {error}
+        </Notice>
+      ) : null}
+    </section>
+  );
+}
+
+export default function SelectedItem(props: Parameters<typeof ReportDetail>[0]) {
+  return props.item.help ? <HelpDetail {...props} /> : <ReportDetail {...props} />;
+}
+
+function ReportDetail({
   item,
   data,
   serverNow,

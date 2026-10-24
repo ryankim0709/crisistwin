@@ -97,7 +97,8 @@ final class LiveStore {
     @ObservationIgnored private var seenGuidance = false
     @ObservationIgnored private var lastSeenGuidance: ZoneGuidance?
 
-    private static let pollInterval: Duration = .seconds(10)
+    // Matches the /live console's 3 s poll so an approval reaches the phone within seconds.
+    private static let pollInterval: Duration = .seconds(3)
     private static let locationInterval: TimeInterval = 30
 
     var role: LiveRole { credential?.role ?? .civilian }
@@ -408,6 +409,12 @@ final class LiveStore {
     func acceptTask(_ task: CheckTask) async throws {
         let accepted = try await authorized { try await $0.acceptTask(id: task.id, token: $1) }
         if let i = tasks.firstIndex(where: { $0.id == task.id }) { tasks[i] = accepted } else { tasks.append(accepted) }
+    }
+
+    /// Closes an accepted assist task: the responder reached the resident who asked for help.
+    func completeTask(_ task: CheckTask) async throws {
+        try await authorized { try await $0.updateTask(id: task.id, status: .done, note: nil, token: $1) }
+        tasks.removeAll { $0.id == task.id }
     }
 
     /// Marks a task as not completed (for example, the place could not be reached).

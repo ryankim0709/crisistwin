@@ -62,7 +62,7 @@ accept becomes the assignee). `accepted` is new in v2.
 submitting a report with its `task_id`; `POST tasks/{id}` with
 `{ "status": "cancelled", "note": "Could not reach it" }` closes it unanswered.
 
-`live_decisions`: an append-only audit log of triage and task actions: `{ at, actor, action, report_ids, note }`.
+`live_decisions`: an append-only audit log of triage, task, approval, drill and help actions: `{ at, actor, action, report_ids, proposal_id, checkin_id, note }`.
 
 Road status and public items are computed when read from current reports in P0;
 store them in their own collection only if reads get slow.
@@ -496,8 +496,25 @@ status changes away from `need_help`. Returns `200 { "checkin": CheckIn }`:
 
 ```jsonc
 { "id": "chk_01J...", "status": "need_help", "zone_id": "bg:060070009011",
-  "coord": [-121.6012, 39.7593], "at": "2026-10-24T18:06:00Z", "replay_at": "2018-11-08T16:16:00Z" }
+  "coord": [-121.6012, 39.7593], "at": "2026-10-24T18:06:00Z", "replay_at": "2018-11-08T16:16:00Z",
+  "help": { "status": "open", "assignee": null, "task_id": null, "updated_at": "2026-10-24T18:06:00Z" } }
 ```
+
+### Help requests
+
+`help` is `null` unless `status` is `need_help`. Its `status` is `open` (new) |
+`acknowledged` | `assigned` (an `assist` task exists) | `resolved`. A repeated
+`need_help` keeps an active `help`; one after `resolved` opens a new request. Checking in
+`out` or `staying` resolves an active request and cancels its open `assist` task. The
+phone reads its own `help` from `situation.my_checkin` and shows "Request seen" /
+"Responder assigned".
+
+`POST checkins/{id}/help` (controller): `{ "action": "acknowledge" | "assign" | "resolve",
+"assignee"?: "rsp_..." | null, "note"?: "" }` -> `200 { "checkin": CheckIn }`. `assign`
+needs a shared `coord` (else `400`) and creates a task `{ "kind": "assist", "checkin_id",
+"target": { "coord" } }`, cancelling a previous one. `resolve` marks an open assist task
+`done`. `409` when the request is resolved or the check-in is no longer `need_help`. Each
+action is logged in `live_decisions` as `help_<action>` with `checkin_id`.
 
 ## Responder location (opt-in)
 
@@ -517,6 +534,10 @@ open unassigned ones. `CheckTask` gains `assignee` (`party_key` or `null`).
 `POST incidents/{id}/tasks` (controller) takes
 `{ "assignee": "rsp_..."|null, "target": { "segment_id"?: "...", "coord"?: [lon, lat] }, "report_ids": [], "note"?: "" }`
 and returns `201 { "task": CheckTask }`.
+
+`CheckTask.kind` is `verify` or `assist` (go to a resident who asked for help; it carries
+`checkin_id`). An assist task has no report to answer it: the responder closes it with
+`POST tasks/{id}` `{ "status": "done" }`, which resolves the help request.
 
 ## Situation (the phone's one poll)
 
@@ -563,10 +584,14 @@ fetches again without `zones=0`.
   "public_items": [ PublicMapItem ],        // what civilians see
   "checkins": {
     "by_zone": [ { "zone_id": "bg:060070009011", "out": 12, "need_help": 1, "staying": 3 } ],
-    "need_help": [ { "id": "chk_01J...", "zone_id": "bg:060070009011", "coord": [-121.6012, 39.7593], "at": "...Z" } ] },
+    "need_help": [ { "id": "chk_01J...", "zone_id": "bg:060070009011", "coord": [-121.6012, 39.7593], "at": "...Z",
+                     "help": { "status": "open", "assignee": null, "task_id": null, "updated_at": "...Z" } } ] },
+                                            // need_help counts and list exclude resolved requests
   "destination_preferences": [ { "zone_id": "bg:060070009011", "destination_id": "exit:osm-node:86546172", "count": 4 } ],
   "responders": [ { "party_key": "rsp_7c1...", "coord": [-121.6, 39.76], "accuracy_m": 15, "at": "...Z" } ],
-  "tasks": [ CheckTask ] }                  // all not cancelled
+  "tasks": [ CheckTask ],                   // all not cancelled
+  "decisions": [ { "at": "...Z", "actor": "controller", "action": "confirm", "report_ids": ["rpt_..."],
+                   "proposal_id": null, "checkin_id": null, "note": null } ] }  // newest 50, for the activity log
 ```
 
 ## Controller actions
@@ -679,6 +704,8 @@ controller accounts (not in scope).
 | `POST me/location`, `DELETE me/location` | responder |
 | `POST me/destination` | civilian, responder |
 | `POST tasks/{id}` with `accepted` | responder |
+| `POST tasks/{id}` with `done` (assist tasks) | responder, controller |
+| `POST checkins/{id}/help` | controller |
 | `GET incidents/{id}/command` | controller |
 | `POST incidents/{id}/replan` | controller |
 | `POST proposals/{id}/approve`, `POST proposals/{id}/reject` | controller |

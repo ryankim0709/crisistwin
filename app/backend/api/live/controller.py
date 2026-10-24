@@ -97,6 +97,7 @@ def log_decision(
     report_ids: list[str] | None = None,
     proposal_id: str | None = None,
     note: str | None = None,
+    checkin_id: str | None = None,
 ) -> None:
     col("live_decisions").insert_one(
         {
@@ -106,6 +107,7 @@ def log_decision(
             "action": action,
             "report_ids": report_ids or [],
             "proposal_id": proposal_id,
+            "checkin_id": checkin_id,
             "note": note,
         }
     )
@@ -118,12 +120,15 @@ def create_task(
     report_ids: list[str],
     note: str | None,
     now: datetime,
+    kind: str = "verify",
+    checkin_id: str | None = None,
 ) -> dict[str, Any]:
     doc = {
         "id": new_id("tsk_"),
         "incident_id": incident_id,
         "assignee": assignee,
-        "kind": "verify",
+        "kind": kind,
+        "checkin_id": checkin_id,
         "target": {"segment_id": target.get("segment_id"), "coord": target.get("coord")},
         "report_ids": list(report_ids),
         "note": note,

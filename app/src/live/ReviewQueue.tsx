@@ -140,7 +140,7 @@ export default function ReviewQueue({
         {shown.length === 0 ? (
           <EmptyState title={current.empty} symbol="✓" />
         ) : (
-          <ul role="listbox" aria-label={`${current.label === "High" ? "High impact" : current.label} reports`} className="lc-q-list">
+          <ul role="listbox" aria-keyshortcuts="J K C D R Escape" aria-label={`${current.label === "High" ? "High impact" : current.label} reports`} className="lc-q-list">
             {shown.map((item, i) => (
               <Row
                 key={item.id}

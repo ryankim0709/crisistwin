@@ -68,6 +68,20 @@ def checkin_json(doc: Mapping[str, Any]) -> dict[str, Any]:
         "coord": doc.get("coord"),
         "at": iso(doc["at"]),
         "replay_at": iso(doc.get("replay_at")),
+        "help": help_json(doc),
+    }
+
+
+def help_json(doc: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Where a need_help check-in stands with the controller; null for other statuses."""
+    if doc["status"] != "need_help":
+        return None
+    help_ = doc.get("help") or {}
+    return {
+        "status": help_.get("status", "open"),
+        "assignee": help_.get("assignee"),
+        "task_id": help_.get("task_id"),
+        "updated_at": iso(help_.get("updated_at")),
     }
 
 

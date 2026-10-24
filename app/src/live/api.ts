@@ -6,6 +6,7 @@ import type {
   CommandResponse,
   CreateTaskRequest,
   DrillRequest,
+  HelpAction,
   DrillResponse,
   ImpactRequest,
   ImpactResponse,
@@ -156,6 +157,12 @@ export async function fetchTwin(token: string, signal: AbortSignal): Promise<Twi
 
 export const triageReport = (token: string, reportId: string, action: TriageAction) =>
   request<unknown>(token, "POST", `reports/${encodeURIComponent(reportId)}/triage`, { action });
+
+export const helpAction = (token: string, checkinId: string, action: HelpAction, assignee?: string | null) =>
+  request<unknown>(token, "POST", `checkins/${encodeURIComponent(checkinId)}/help`, {
+    action,
+    ...(action === "assign" ? { assignee: assignee ?? null } : {}),
+  });
 
 export const createTask = (token: string, body: CreateTaskRequest) =>
   request<unknown>(token, "POST", `incidents/${INCIDENT_ID}/tasks`, body);

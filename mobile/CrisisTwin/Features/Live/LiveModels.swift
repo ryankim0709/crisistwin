@@ -220,6 +220,11 @@ struct CheckTask: Codable, Equatable, Identifiable {
     var status: TaskStatus
     /// v2: responder `party_key`, or nil when any responder may accept it.
     var assignee: String?
+    /// The need-help check-in an `assist` task answers.
+    var checkinId: String?
+
+    /// Go to a resident who asked for help; closed with `done` instead of a report.
+    var isAssist: Bool { kind == "assist" }
 }
 
 /// Returned by `POST devices` and `POST incidents/{id}/join`.
@@ -444,6 +449,20 @@ struct CheckIn: Codable, Equatable, Identifiable {
     var coord: LonLat?
     var at: Date
     var replayAt: Date?
+    /// Where a need-help request stands with the controller; nil for other statuses.
+    var help: HelpState?
+}
+
+/// `checkin.help`: the controller's handling of a need-help check-in.
+struct HelpState: Codable, Equatable {
+    enum Status: String, Codable {
+        case open, acknowledged, assigned, resolved
+    }
+
+    var status: Status
+    var assignee: String?
+    var taskId: String?
+    var updatedAt: Date?
 }
 
 /// Response of `POST incidents/{id}/checkins`.

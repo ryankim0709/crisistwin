@@ -183,6 +183,11 @@ python manage.py runserver 127.0.0.1:8000
 Skyway in Paradise (`evidence_class: "drill_fixture"`, note says synthetic).
 `live_init_db --drop-drill-data` drops all live drill data but keeps device tokens.
 
+`python manage.py live_smoke` (same env, server running) checks the whole phone ↔ `/live` loop
+over HTTP in about 5 s, with no simulator or browser: report, triage, replan and approve,
+guidance on the phone, destination choice, check-ins, responder position and a check task. It
+writes synthetic drill data; run `live_drill --reset` afterwards.
+
 ### Incident intelligence (`/api/intel/…`)
 
 Public agency pages, fetched by the Apify Actor in `actors/incident-intel/`, become source

@@ -142,6 +142,7 @@ struct HomeView: View {
             HomeNearbyPanel()
             changes
             HomeFamilyPanel()
+            if store.activeGuidance == nil { HomeReadinessCard() }
         } else {
             VStack(spacing: 10) {
                 Image(systemName: "checkmark.shield")
@@ -657,6 +658,7 @@ struct HomeFactRow: View {
 /// Home's "Near you".
 private struct HomeNearbyPanel: View {
     @Environment(LiveStore.self) private var store
+    @State private var history: [FireTrend.Sample] = []
 
     var body: some View {
         let route = store.activeGuidance?.route?.line ?? []
@@ -669,7 +671,9 @@ private struct HomeNearbyPanel: View {
                             HomeFactRow(
                                 symbol: "flame.fill", color: .ctFire, title: fire.title, trailing: fire.distance,
                                 detail: fire.asOf.map {
-                                    RelativeAge.text(from: $0, to: store.situation?.incidentNow(at: context.date) ?? context.date)
+                                    let age = RelativeAge.text(from: $0, to: store.situation?.incidentNow(at: context.date) ?? context.date)
+                                    guard let trend = FireTrend.text(history) else { return age }
+                                    return "\(age) · \(trend)"
                                 })
                         }
                     }
@@ -681,7 +685,50 @@ private struct HomeNearbyPanel: View {
                     }
                 }
             }
+            .onChange(of: store.situation?.fire, initial: true) { _, _ in record() }
+            .onChange(of: store.lastCoord) { _, _ in record() }
         }
+    }
+
+    /// Adds the current estimate's distance to the in-memory history, keyed by its drill time.
+    private func record() {
+        guard let fire = store.situation?.fire, fire.method != .none, let asOf = fire.asOf,
+              let geometry = fire.geometry, let here = store.lastCoord,
+              let nearest = ZoneLocator.nearest(on: geometry, to: here) else { return }
+        FireTrend.add(&history, FireTrend.Sample(asOf: asOf, meters: nearest.meters))
+    }
+}
+
+/// Whether the fire estimate has moved closer, from successive estimates on this device. A
+/// derived observation of the model's estimates (in drill time), never a forecast.
+enum FireTrend {
+    struct Sample: Equatable {
+        var asOf: Date
+        var meters: Double
+    }
+
+    private static let window: TimeInterval = 20 * 60
+    private static let minSpan: TimeInterval = 5 * 60
+    private static let minChangeM = 80.0
+
+    static func add(_ history: inout [Sample], _ sample: Sample) {
+        if let i = history.firstIndex(where: { $0.asOf == sample.asOf }) {
+            history[i] = sample
+        } else {
+            history.append(sample)
+            history.sort { $0.asOf < $1.asOf }
+        }
+        if history.count > 40 { history.removeFirst(history.count - 40) }
+    }
+
+    static func text(_ history: [Sample]) -> String? {
+        guard let latest = history.last,
+              let base = history.first(where: { latest.asOf.timeIntervalSince($0.asOf) <= window }),
+              latest.asOf.timeIntervalSince(base.asOf) >= minSpan else { return nil }
+        let delta = base.meters - latest.meters
+        guard abs(delta) >= minChangeM else { return nil }
+        let minutes = Int((latest.asOf.timeIntervalSince(base.asOf) / 60).rounded())
+        return "\(HomeFacts.distance(abs(delta))) \(delta > 0 ? "closer" : "farther") in the last \(minutes) min"
     }
 }
 
@@ -833,5 +880,44 @@ struct PlanSummaryPanel: View {
                 .multilineTextAlignment(.trailing)
         }
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// No-order Home: whether the meeting point is set and how far the go-bag is; rows open Plan.
+private struct HomeReadinessCard: View {
+    @Environment(MeetingPlanStore.self) private var plan
+    @Environment(GoBagStore.self) private var goBag
+    @Environment(AppRouter.self) private var router
+
+    var body: some View {
+        let total = GoBagStore.items.count
+        let packed = GoBagStore.items.filter { goBag.packed.contains($0.id) }.count
+        let point = plan.plan.primary?.name
+        HomePanel(title: "Ready") {
+            VStack(alignment: .leading, spacing: 14) {
+                row(point == nil ? "mappin.slash" : "mappin.and.ellipse", point ?? "No meeting point")
+                row(packed == total ? "checkmark.circle.fill" : "bag", "Go-bag \(packed) of \(total)")
+            }
+        }
+    }
+
+    private func row(_ symbol: String, _ text: String) -> some View {
+        Button { router.tab = .plan } label: {
+            HStack(spacing: 12) {
+                Image(systemName: symbol)
+                    .foregroundStyle(Color.ctBrand)
+                    .frame(width: 28)
+                    .accessibilityHidden(true)
+                Text(text)
+                    .foregroundStyle(Color.ctInk)
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.bold))
+                    .foregroundStyle(Color.ctInkSubtle)
+                    .accessibilityHidden(true)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }

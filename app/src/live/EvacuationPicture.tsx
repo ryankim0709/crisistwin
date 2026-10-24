@@ -1,10 +1,11 @@
 import { useMemo } from "react";
-import { EvidenceTag, LoadingState, Notice } from "../ui";
+import { EvidenceTag, LoadingState, Notice, Tag } from "../ui";
 import type { LiveError } from "./api";
 import type { MapFocus } from "./CommandMap";
 import { labelPoint, nf, plural, shortZoneName } from "./format";
 import { routeUsesSegment } from "./geo";
 import Plate from "./Plate";
+import { destinationLoad, NEAR_FULL, type DestLoad } from "./load";
 import { wayOut } from "./ProposalPanel";
 import type {
   CommandResponse,
@@ -16,7 +17,7 @@ import type {
 
 const ZONE_ROWS = 6;
 const ROAD_ROWS = 5;
-const CHOICE_ROWS = 6;
+const LOAD_ROWS = 8;
 const EXPOSED_PREFIX = "Least-exposure route";
 const LEVEL_RANK = { evacuate_now: 0, be_ready: 1, none: 2 } as const;
 
@@ -234,20 +235,10 @@ export default function EvacuationPicture({
     const reportedFull = data.reports.filter(
       (r) => r.kind === "shelter_full" && r.status !== "dismissed" && r.status !== "resolved",
     );
-    // Additive (docs/live-reports.md "Additive fields"); older servers omit it.
-    const prefs = data.destination_preferences ?? [];
-    const byDest = new Map<string, { count: number; zones: Set<string> }>();
-    for (const p of prefs) {
-      const d = byDest.get(p.destination_id) ?? { count: 0, zones: new Set<string>() };
-      d.count += p.count;
-      const zone = data.zones.find((z) => z.id === p.zone_id);
-      d.zones.add(zone ? shortZoneName(zone.name) : p.zone_id);
-      byDest.set(p.destination_id, d);
-    }
-    const choices = [...byDest.entries()]
-      .map(([id, d]) => ({ id, count: d.count, zones: [...d.zones] }))
-      .sort((a, b) => b.count - a.count || a.id.localeCompare(b.id));
-    return { rows, problems, remaining, out, shelters, refuges, withCapacity, full, reportedFull, choices };
+    const load = destinationLoad(data, twin).filter(
+      (r) => r.zones > 0 || r.phones > 0 || r.reportedFull || (r.simArrivedVeh ?? 0) > 0,
+    );
+    return { rows, problems, remaining, out, shelters, refuges, withCapacity, full, reportedFull, load };
   }, [data, twin]);
 
   const help = data.checkins.need_help.length;
@@ -279,6 +270,22 @@ export default function EvacuationPicture({
         </span>
       </button>
     </li>
+  );
+
+  const loadRow = (r: DestLoad) => (
+    <tr key={r.id}>
+      <th scope="row">
+        {r.name}
+        {r.reportedFull ? <Tag tone="danger">Reported full</Tag> : null}
+        {r.simShare !== null && r.simShare >= NEAR_FULL ? <Tag tone="warning">Twin: {Math.round(r.simShare * 100)}%</Tag> : null}
+      </th>
+      <td className="lc-num">{nf(r.zones)}</td>
+      <td className="lc-num">{nf(r.phones)}</td>
+      <td className="lc-num">
+        {r.simArrivedVeh === null ? "—" : nf(r.simArrivedVeh)}
+        {r.capacityVeh !== null ? ` / ${nf(r.capacityVeh)}` : ""}
+      </td>
+    </tr>
   );
 
   return (
@@ -339,18 +346,37 @@ export default function EvacuationPicture({
         </ul>
       )}
 
-      <h3 className="lc-sub">Chosen destinations</h3>
-      {model.choices.length === 0 ? (
+      <h3 className="lc-sub">Destination load</h3>
+      {model.load.length === 0 ? (
         <p className="lc-dim">None</p>
       ) : (
-        <ul className="lc-plain" aria-label="Destinations people chose">
-          {model.choices.slice(0, CHOICE_ROWS).map((c) => (
-            <li key={c.id} className="lc-split" title={c.zones.join("; ")}>
-              <span>{destName(c.id)}</span>
-              <span className="lc-num">{plural(c.count, "person", "people")}</span>
-            </li>
-          ))}
-        </ul>
+        <>
+          <table className="lc-load">
+            <thead>
+              <tr>
+                <th scope="col">Destination</th>
+                <th scope="col" className="lc-num" title="Zones whose current guidance routes here">
+                  Zones
+                </th>
+                <th scope="col" className="lc-num" title="Phones (people) that chose it; not vehicles">
+                  Phones
+                </th>
+                <th scope="col" className="lc-num" title="Simulated vehicles arrived in the traffic twin, of capacity in vehicles">
+                  Twin (sim.) veh
+                </th>
+              </tr>
+            </thead>
+            <tbody>{model.load.slice(0, LOAD_ROWS).map(loadRow)}</tbody>
+          </table>
+          {model.load.length > LOAD_ROWS ? (
+            <details className="lc-more">
+              <summary>{plural(model.load.length - LOAD_ROWS, "more destination")}</summary>
+              <table className="lc-load">
+                <tbody>{model.load.slice(LOAD_ROWS).map(loadRow)}</tbody>
+              </table>
+            </details>
+          ) : null}
+        </>
       )}
 
       <h3 className="lc-sub">Shelters</h3>

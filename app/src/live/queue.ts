@@ -1,8 +1,8 @@
 // The review queue (D7): open field reports grouped into items the controller decides on,
 // with the new / conflicting / stale / high-impact flags and an impact score. Pure: no React.
-import { KIND_LABEL, nf } from "./format";
+import { KIND_LABEL, labelPoint, nf, shortZoneName } from "./format";
 import { distanceM, distanceToAreaM, distanceToLineM, pointInArea, routeUsesSegment } from "./geo";
-import type { CheckTask, CommandResponse, FieldReport, LonLat, ReportKind, ZoneGuidance } from "./types";
+import type { CheckTask, CommandResponse, FieldReport, HelpRequest, LonLat, ReportKind, ZoneGuidance } from "./types";
 
 export type QueueFilter = "new" | "conflicting" | "stale" | "high";
 
@@ -60,6 +60,8 @@ export interface QueueItem {
   vehicles: number;
   high: boolean;
   task: CheckTask | null;
+  /** A need-help check-in instead of reports (`reports` is empty). */
+  help: HelpRequest | null;
 }
 
 function titleFor(kind: ReportKind, road: string | null, destination: string | null): string {
@@ -201,15 +203,57 @@ export function buildQueue(data: CommandResponse, serverNowMs: number): QueueIte
       vehicles: veh,
       high: routeZones.length > 0 || veh >= HIGH_IMPACT_VEH,
       task: rs.map((r) => taskByReport.get(r.id)).find((t) => !!t) ?? null,
+      help: null,
     });
   }
+  items.push(...helpItems(data));
   items.sort(
     (a, b) =>
+      Number(!!b.help) - Number(!!a.help) ||
       b.vehicles - a.vehicles ||
       b.routeZones.length - a.routeZones.length ||
       b.newestObservedAt.localeCompare(a.newestObservedAt),
   );
   return items;
+}
+
+/** Open need-help check-ins: people, so they sort above every report. Placed at the shared
+ * location, else at the zone's label point; one with neither is left to the map's count. */
+function helpItems(data: CommandResponse): QueueItem[] {
+  const zones = new Map(data.zones.map((z) => [z.id, z]));
+  const tasks = new Map(data.tasks.map((t) => [t.id, t]));
+  const out: QueueItem[] = [];
+  for (const h of data.checkins.need_help) {
+    const status = h.help?.status ?? "open";
+    if (status === "resolved") continue;
+    const zone = h.zone_id ? zones.get(h.zone_id) : undefined;
+    const coord = h.coord ?? (zone ? labelPoint(zone.geometry) : null);
+    if (!coord) continue;
+    out.push({
+      id: `help:${h.id}`,
+      kind: "help_needed",
+      title: zone ? `Help needed, ${shortZoneName(zone.name)}` : "Help needed",
+      coord,
+      line: null,
+      segmentId: null,
+      roadName: null,
+      reports: [],
+      civilians: 1,
+      responders: 0,
+      newestObservedAt: h.at,
+      confirmed: status !== "open",
+      fixture: false,
+      isNew: status === "open",
+      conflict: null,
+      stale: false,
+      routeZones: [],
+      vehicles: 0,
+      high: true,
+      task: h.help?.task_id ? (tasks.get(h.help.task_id) ?? null) : null,
+      help: h,
+    });
+  }
+  return out;
 }
 
 export function matches(item: QueueItem, filter: QueueFilter): boolean {
