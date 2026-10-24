@@ -19,7 +19,9 @@ function loadCollapsed(): boolean {
 export default function AppShell({ path, children }: AppShellProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(loadCollapsed);
-  const title = navigationItems.find((item) => item.path === path)?.label ?? "Page not found";
+  const title =
+    navigationItems.find((item) => item.path === path)?.label ??
+    (path === "/live/report" ? "After-action report" : "Page not found");
 
   useEffect(() => {
     document.title = `${title} · CrisisTwin`;

@@ -17,6 +17,7 @@ urlpatterns = [
     path("incidents/<str:incident_id>/command", views.command, name="live-command"),
     path("incidents/<str:incident_id>/replan", views.replan, name="live-replan"),
     path("incidents/<str:incident_id>/drill", views.drill_action, name="live-drill"),
+    path("incidents/<str:incident_id>/aar", views.incident_aar, name="live-aar"),
     path("incidents/<str:incident_id>/twin", views.twin, name="live-twin"),
     path("incidents/<str:incident_id>/twin/whatif", views.twin_whatif, name="live-twin-whatif"),
     path("me/reports", views.my_reports, name="live-my-reports"),

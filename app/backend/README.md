@@ -174,6 +174,8 @@ the `/api/live` prefix with the broadcast above but no code or collections (`liv
 - `POST incidents/{id}/impact` (controller) compares one road segment blocked and unblocked:
   two planner runs give the affected zones and their ETA delta, and one twin what-if
   (simulated, about 1-3 s) gives the vehicles at risk and window metrics (`api/live/impact.py`).
+- `GET incidents/{id}/aar` (controller) returns the after-action report and drill score
+  (`api/live/aar.py`; [contract](../../docs/live-reports.md#after-action-report)).
 - Not implemented yet: `POST incidents/{id}/route` returns 501.
 
 Local run (Docker MongoDB on 127.0.0.1:27017):

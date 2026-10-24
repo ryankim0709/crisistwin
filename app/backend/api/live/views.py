@@ -12,7 +12,7 @@ from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 from rest_framework.response import Response
 
-from . import controller, twin_service
+from . import aar, controller, twin_service
 from . import impact as impact_mod
 from .auth import Principal, client_ip, issue_token, live_view, rate_limited, secret_matches
 from .common import (
@@ -980,3 +980,10 @@ def twin_whatif(request, incident_id: str, principal: Principal):
             return Response(exc.to_dict(), status=400, headers={"Cache-Control": "no-store"})
         raise
     return ok(report)
+
+
+@live_view(["GET"], roles=["controller"])
+def incident_aar(request, incident_id: str, principal: Principal):
+    """After-action report and drill score (docs/live-reports.md "After-action report")."""
+    twin_service.warm()
+    return ok(aar.build_aar(load_snapshot(incident_id, wall_now())))

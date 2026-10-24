@@ -841,6 +841,67 @@ it on anything reachable by others. Responders join with
 values stay in the shell or an ignored `.env`. A real deployment needs per-person
 controller accounts (not in scope).
 
+## After-action report
+
+`GET incidents/{id}/aar` (controller; `api/live/aar.py`) reads the drill's audit data and the
+twin and returns a report and a drill score. It never writes and uses no LLM. The web page is
+`/live/report` (Export JSON saves this response). Evidence classes: `observed` = what drill
+participants did, `simulated` = from the twin at its current clock, `historical` = the 2018
+evacuation orders in the bundle (`command.response_record`, type `evacuation_order`; the
+earliest order that lists the zone).
+
+```jsonc
+{
+  "kind": "crisistwin_live_aar", "incident_id": "camp-2018-drill", "generated_at": "...Z",
+  "drill": { "replay_start": "...Z", "replay_now": "...Z", "started_at": "...Z", "speed": 1, "running": true },
+  "score": { "value": 61.2, "max": 100, "coverage": 1.0, "formula": "...", "evidence_class": "simulated",
+    "components": [ { "id": "arrived_share", "label": "...", "evidence_class": "simulated",
+      "raw": 0.75, "unit": "share of vehicles", "score": 0.75,   // component score in [0, 1], null = no data
+      "weight": 0.35, "effective_weight": 0.35, "points": 26.3, "rule": "..." } ] },
+  "twin": { "status": "ok",   // or warming | failed | finished | busy, then totals is null
+    "evidence_class": "simulated", "clock": "...Z",
+    "totals": { "total_veh": 0, "arrived_veh": 0, "exposed_veh": 0, "trapped_by_fire_veh": 0,
+                "trapped_by_closure_veh": 0, "exposed_veh_min_so_far": 0.0 } },
+  "zones": [ { "zone_id": "bg:...", "name": "...", "vehicles": 610,
+    "first_leave_now_at": "...Z",          // drill time of the first evacuate_now guidance, null if none
+    "historical_order_at": "...Z",         // 2018, null if the bundle has none for the zone
+    "leave_now_vs_2018_min": -15.0,        // drill minus 2018; negative = earlier
+    "leave_now_status": "earlier",         // none | earlier | later | same | missed
+    "guidance_changes": 2,                 // published guidance versions
+    "reports": 2, "triage_median_min": 3.0,          // received -> triage decision, wall minutes
+    "help_requests": 1, "help_to_assign_median_min": 4.0,
+    "arrived_veh": 120, "exposed_veh": 4 } ],         // simulated, per zone
+  "triage": { "reports": 2, "triaged": 2, "median_min": 3.0 },
+  "help": { "requests": 1, "to_assign_median_min": 4.0, "to_resolve_median_min": 20.0,
+            "task_to_accept_median_min": 3.0, "task_accept_to_close_median_min": 12.0,
+            "items": [ { "checkin_id": "chk_...", "to_assign_min": 4.0, "to_resolve_min": 20.0 } ] },
+  "timeline": [ { "at": "...Z", "drill_at": "...Z", "actor": "controller", "action": "confirm",
+                  "report_ids": [], "proposal_id": null, "checkin_id": null, "note": null } ],
+  "limitations": [ "..." ]
+}
+```
+
+Timeline `at` is wall time; `drill_at` is the proposal's decided drill time for approve and
+reject, else estimated from the current drill clock (wrong if the speed changed since).
+`historical_record` reports (the 2018 queue entries) are not field reports and are not counted in
+triage times. Help minutes are wall minutes from the check-in time; a request the resident later
+closed by checking in again has no start time and no minutes.
+
+**Drill score** (0 to 100): `100 x sum(effective_weight x component score)`. Constants are at the
+top of `aar.py`.
+
+| Component | Evidence | Raw value | Component score (clamped to 0..1) | Weight |
+| --- | --- | --- | --- | --- |
+| Vehicles arrived | simulated | arrived / total vehicles | the share | 0.35 |
+| Exposed or trapped vehicle-minutes | simulated | (`exposed_veh_min_so_far` + 60 x trapped-by-fire vehicles) / total vehicles | `1 - raw / 5` | 0.30 |
+| Median help to responder assigned | observed | median wall minutes over assigned requests | `1 - minutes / 30`; 0 if requests exist and none was assigned | 0.15 |
+| Leave-now vs 2018 | historical | median minutes vs 2018 over zones with both | mean over zones of `0.5 - minutes / 60` (30 min earlier = 1, on time = 0.5, 30 min later = 0); a zone whose 2018 order time has passed on the drill clock with no leave-now scores 0 | 0.20 |
+
+A component with no data (no help requests, twin warming, no zone ordered yet) has
+`score: null` and is left out; the remaining weights are renormalised (`effective_weight`) and
+`coverage` is the weight share that counted. The score is a planning-experiment number from an
+uncalibrated model, not an evaluation of the controllers.
+
 ## Endpoint summary (v2 additions)
 
 | Method and path | Role |
@@ -859,6 +920,7 @@ controller accounts (not in scope).
 | `GET incidents/{id}/twin` | controller ([twin-api.md](twin-api.md#http-adapter-live-drill-appbackendapilivetwin_servicepy)) |
 | `POST incidents/{id}/twin/whatif` | controller |
 | `POST incidents/{id}/impact` | controller ([Impact analysis](#impact-analysis)) |
+| `GET incidents/{id}/aar` | controller ([After-action report](#after-action-report)) |
 
 ## Location (v2)
 
