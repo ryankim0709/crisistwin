@@ -89,9 +89,23 @@ See the [scaffold decision](docs/adr/0001-app-scaffold.md) and
 [API contract](app/backend/README.md). There are no CI workflows for this
 hackathon; checks run locally when needed.
 
-### Local checks in Docker
+### Default hackathon check
 
-With the stack running, execute these from `app/`:
+Run only pre-commit before committing, from the repository root:
+
+```sh
+python3 -m pip install pre-commit
+pre-commit run --all-files
+```
+
+The hooks check merge-conflict markers, trailing whitespace, and final newlines.
+Agents should not add or run tests, coverage, lint, type checks, builds, Docker
+verification, or browser verification unless explicitly requested.
+
+### Optional local checks in Docker
+
+These commands are available on request; they are not required for the hackathon.
+With the stack running, execute them from `app/`:
 
 ```sh
 docker compose exec frontend npm run check
@@ -138,7 +152,7 @@ Vite proxies `/api` to `http://127.0.0.1:8000` on the host and `http://backend:8
 in Docker. To change the host target, use
 `VITE_API_PROXY_TARGET=http://127.0.0.1:8000 npm run dev`.
 
-Host backend checks run from `app/backend/` using `.venv/bin/ruff check .`,
+Optional host backend checks run from `app/backend/` using `.venv/bin/ruff check .`,
 `.venv/bin/ruff format --check .`, `.venv/bin/python manage.py check`,
 `.venv/bin/python manage.py makemigrations --check --dry-run`, and
 `.venv/bin/python manage.py test --noinput`.

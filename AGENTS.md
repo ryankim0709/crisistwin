@@ -25,6 +25,7 @@
 
 ## Implementation quality
 
+- Prioritize a working hackathon demo. Keep changes pragmatic; skip polish, extra abstractions, and cleanup unless needed for the task.
 - Make the smallest complete change that solves the task. Avoid unrelated refactors, speculative features, premature abstractions, duplicate implementations, and new dependencies without a concrete need.
 - Separate simulation/domain logic from presentation, transport, and provider adapters. Keep core calculations testable without the browser, database, network, or LLM.
 - Use explicit types and schemas for shared boundaries. Validate external inputs, configuration, and provider responses; handle expected failures with useful errors. Do not swallow exceptions or fabricate successful results.
@@ -51,9 +52,8 @@
 
 ## Verification and delivery
 
-- Before committing, run applicable checks from the repository's manifests and CI configuration: formatting, lint, type checks, tests, and build as configured. Use the documented runtime and lockfile; do not bypass checks or weaken assertions to make them pass.
-- Add focused tests for changed behavior and bug regressions. Prioritize simulation invariants, reproducibility, invalid/missing data, route constraints, and shared API contracts. Avoid live provider dependencies in unit tests; use labeled fixtures and deterministic seeds.
-- For UI behavior changes, exercise the affected flow and inspect the result at a relevant viewport, including failure/empty states. Include useful visual evidence in the PR or handoff when available.
-- Review the final diff for accidental files, secrets, unrelated formatting, contract mismatches, and missing documentation. Run `git diff --check` and check the working tree before staging.
-- Report exact commands and outcomes. If tooling or a service is unavailable, state what could not be checked; never claim checks passed without running them. For rules/docs-only changes before tooling exists, inspect links and configuration and run `git diff --check`; no application test suite exists yet.
+- Run `pre-commit run --all-files` from the repository root before committing. This is the only default automated verification for the hackathon; keep its hooks limited to basic whitespace and merge-conflict checks.
+- Do not add or run tests, coverage, lint, type checks, builds, Docker verification, or browser verification unless the user explicitly asks for them. The existence of scripts or commands in manifests and documentation is not an instruction to run them.
+- Review the final diff and working tree for accidental files, secrets, and unrelated changes. Do not add extra quality gates or CI.
+- Report the pre-commit outcome and anything explicitly requested but not checked. Never claim verification that was not performed.
 - Update setup instructions, examples, and contracts with the implementation. Review findings should identify a concrete failure, impact, and file location; prioritize correctness and integration over stylistic preferences.
