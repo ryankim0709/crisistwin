@@ -13,6 +13,7 @@ from .intel import (
     intel_runs,
 )
 from .landscapes import landscape_list, landscape_package
+from .live_active import live_active
 from .live_broadcast import live_broadcast, live_snapshot
 from .mobile_data import mobile_collection, mobile_document, register_device
 from .views import health
@@ -27,6 +28,7 @@ urlpatterns = [
     path("dispatch/decide", decide, name="dispatch-decide"),
     path("dispatch/area", dispatch_area, name="dispatch-area"),
     path("live", live_snapshot, name="live-snapshot"),
+    path("live/active", live_active, name="live-active"),
     path("live/broadcast", live_broadcast, name="live-broadcast"),
     path("live/", include("api.live.urls")),
     path("families", create_family, name="family-create"),

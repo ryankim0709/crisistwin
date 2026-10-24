@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button, IconButton, Notice, SegmentedControl, Tag } from "../ui";
 import { drillAction } from "./api";
 import { drillClock, drillDate, drillNowAt, elapsed } from "./format";
+import InvitePhones from "./InvitePhones";
 import type { RunAction } from "./SelectedItem";
 import type { CommandResponse, TwinMonitor } from "./types";
 
@@ -15,8 +16,9 @@ const SPEED_OPTIONS = SPEEDS.map((s) => ({
 /** "Updated" shows only when the last poll is older than this. */
 const STALE_AFTER_MS = 10_000;
 
-function Menu({ twin, onSignOut }: { twin: TwinMonitor | null; onSignOut: () => void }) {
+function Menu({ twin, onSignOut }: { twin: TwinMonitor | null; onSignOut: (() => void) | null }) {
   const ref = useRef<HTMLDetailsElement>(null);
+  const [inviting, setInviting] = useState(false);
   useEffect(() => {
     const close = (e: MouseEvent) => {
       if (ref.current?.open && !ref.current.contains(e.target as Node)) ref.current.open = false;
@@ -26,38 +28,59 @@ function Menu({ twin, onSignOut }: { twin: TwinMonitor | null; onSignOut: () => 
   }, []);
   const commands = twin ? [...twin.commands].reverse() : [];
   return (
-    <details ref={ref} className="lc-menu">
-      <summary aria-label="More" title="More">
-        ⋯
-      </summary>
-      <div className="lc-menu-pop" role="menu">
-        <a role="menuitem" className="lc-menu-item" href="/">
-          Workspace
-        </a>
-        <details className="lc-menu-sub">
-          <summary className="lc-menu-item">
-            Commands applied <span className="lc-num lc-dim">{commands.length}</span>
-            {twin?.command_errors.length ? <Tag tone="danger">{twin.command_errors.length} rejected</Tag> : null}
-          </summary>
-          <ul className="lc-menu-list">
-            {twin?.command_errors.map((e) => (
-              <li key={`err:${e.key}`} className="lc-error">
-                {e.detail ?? e.code ?? e.error}
-              </li>
-            ))}
-            {commands.map((c) => (
-              <li key={c.id}>
-                <span className="lc-num lc-dim">{drillClock(c.effective_at)}</span> {c.label ?? c.type}
-              </li>
-            ))}
-            {commands.length === 0 && !twin?.command_errors.length ? <li className="lc-dim">None yet</li> : null}
-          </ul>
-        </details>
-        <button type="button" role="menuitem" className="lc-menu-item" onClick={onSignOut}>
-          Sign out
-        </button>
-      </div>
-    </details>
+    <>
+      <details ref={ref} className="lc-menu">
+        <summary aria-label="More" title="More">
+          ⋯
+        </summary>
+        <div className="lc-menu-pop" role="menu">
+          <a role="menuitem" className="lc-menu-item" href="/">
+            Workspace
+          </a>
+          <details className="lc-menu-sub">
+            <summary className="lc-menu-item">
+              Commands applied <span className="lc-num lc-dim">{commands.length}</span>
+              {twin?.command_errors.length ? (
+                <Tag tone="danger">{twin.command_errors.length} rejected</Tag>
+              ) : null}
+            </summary>
+            <ul className="lc-menu-list">
+              {twin?.command_errors.map((e) => (
+                <li key={`err:${e.key}`} className="lc-error">
+                  {e.detail ?? e.code ?? e.error}
+                </li>
+              ))}
+              {commands.map((c) => (
+                <li key={c.id}>
+                  <span className="lc-num lc-dim">{drillClock(c.effective_at)}</span>{" "}
+                  {c.label ?? c.type}
+                </li>
+              ))}
+              {commands.length === 0 && !twin?.command_errors.length ? (
+                <li className="lc-dim">None yet</li>
+              ) : null}
+            </ul>
+          </details>
+          <button
+            type="button"
+            role="menuitem"
+            className="lc-menu-item"
+            onClick={() => {
+              if (ref.current) ref.current.open = false;
+              setInviting(true);
+            }}
+          >
+            Invite phones
+          </button>
+          {onSignOut ? (
+            <button type="button" role="menuitem" className="lc-menu-item" onClick={onSignOut}>
+              Sign out
+            </button>
+          ) : null}
+        </div>
+      </details>
+      {inviting ? <InvitePhones onClose={() => setInviting(false)} /> : null}
+    </>
   );
 }
 
@@ -90,8 +113,11 @@ export default function WorkspaceHeader({
   const ended = drill && !stopped && drill.speed > 0 && !drill.running;
   const age = receivedAt === null ? 0 : now - receivedAt;
   const setSpeed = async (speed: Speed) =>
-    setError(await run("drill", (tok) => drillAction(tok, { action: "set_speed", speed: Number(speed) })));
-  const start = async () => setError(await run("drill", (tok) => drillAction(tok, { action: "start" })));
+    setError(
+      await run("drill", (tok) => drillAction(tok, { action: "set_speed", speed: Number(speed) })),
+    );
+  const start = async () =>
+    setError(await run("drill", (tok) => drillAction(tok, { action: "start" })));
   const reset = async () => {
     if (!window.confirm("Reset the drill? Guidance, proposals and check-ins are deleted.")) return;
     setError(await run("drill", (tok) => drillAction(tok, { action: "reset" })));
@@ -104,14 +130,22 @@ export default function WorkspaceHeader({
       </h1>
       {drill && t ? (
         <>
-          <p className="lc-clock" aria-label={`Drill time ${drillClock(t, true)} UTC, ${drillDate(t)}`}>
+          <p
+            className="lc-clock"
+            aria-label={`Drill time ${drillClock(t, true)} UTC, ${drillDate(t)}`}
+          >
             <span className="lc-num">{drillClock(t, true)}</span>
             <span className="lc-dim"> UTC {drillDate(t)}</span>
             {ended ? <Tag>Ended</Tag> : null}
           </p>
           <div className="lc-drill">
             {stopped ? (
-              <Button size="sm" variant="secondary" disabled={busy !== null} onClick={() => void start()}>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={busy !== null}
+                onClick={() => void start()}
+              >
                 Start drill
               </Button>
             ) : (
@@ -122,7 +156,12 @@ export default function WorkspaceHeader({
                 onChange={(v) => void setSpeed(v)}
               />
             )}
-            <IconButton label="Reset drill" size="sm" disabled={busy !== null} onClick={() => void reset()}>
+            <IconButton
+              label="Reset drill"
+              size="sm"
+              disabled={busy !== null}
+              onClick={() => void reset()}
+            >
               ↺
             </IconButton>
           </div>
@@ -139,7 +178,7 @@ export default function WorkspaceHeader({
             {error}
           </Notice>
         ) : null}
-        {onSignOut ? <Menu twin={twin} onSignOut={onSignOut} /> : null}
+        <Menu twin={twin} onSignOut={onSignOut} />
       </span>
     </header>
   );
