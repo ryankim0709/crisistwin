@@ -83,12 +83,19 @@ class Heap {
   }
 }
 
-/** Dijkstra from `source`, skipping edges for which `blocked(edge)` is true. */
+/**
+ * Dijkstra from `source`, skipping edges for which `blocked(edge)` is true. `options.arcs`
+ * replaces the public-road adjacency (e.g. `area.allOutgoing` for apparatus that may use
+ * service roads and tracks) and `options.seconds` the free-flow edge time.
+ */
 export function shortestPathTree(
   area: DispatchArea,
   source: number,
   blocked: (edge: number) => boolean,
+  options: { arcs?: Arc[][]; seconds?: (edge: number) => number } = {},
 ): ShortestPathTree {
+  const arcsOf = options.arcs ?? area.outgoing;
+  const cost = options.seconds ?? ((edge: number) => edgeSeconds(area, edge));
   const count = area.nodes.length;
   const seconds = new Float64Array(count).fill(Infinity);
   const via: (Arc | null)[] = new Array(count).fill(null);
@@ -97,11 +104,11 @@ export function shortestPathTree(
   const heap = new Heap();
   heap.push(0, source);
   while (heap.size > 0) {
-    const [cost, node] = heap.pop();
-    if (cost > seconds[node]) continue;
-    for (const arc of area.outgoing[node]) {
+    const [at, node] = heap.pop();
+    if (at > seconds[node]) continue;
+    for (const arc of arcsOf[node]) {
       if (blocked(arc.edge)) continue;
-      const next = cost + edgeSeconds(area, arc.edge);
+      const next = at + cost(arc.edge);
       if (next < seconds[arc.head]) {
         seconds[arc.head] = next;
         via[arc.head] = arc;

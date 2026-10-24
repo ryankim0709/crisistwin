@@ -7,6 +7,7 @@
  * 20-foot wind in mph; meteorological wind bearing (the direction wind blows FROM).
  */
 
+import type { AirBase } from "./aircraft";
 import type { ReactNode } from "react";
 import type { Map as MapLibreMap } from "maplibre-gl";
 import type { LandscapeGrid, MercatorBox } from "../fire/landscape";
@@ -163,6 +164,8 @@ export type SolverRequest = {
   firefighting: FirefightingSettings | null;
   /** When each resource starts work, from station dispatch; null uses the response time. */
   crewArrivals: CrewArrival[] | null;
+  /** Helitack and air attack bases near the fire (null without the local bases file). */
+  airBases: AirBase[] | null;
 };
 
 export type SolverResponse =

@@ -14,8 +14,10 @@ import { spanProblem } from "./bounds";
 import {
   MAX_RESOURCES_PER_KIND,
   RESPONSE_MINUTE_CHOICES,
+  apparatusCounts,
   type FirefightingSettings,
 } from "./firefighting";
+import { APPARATUS_KINDS, type ApparatusCounts } from "./apparatus";
 import {
   DISPLAY_STEP_MINUTES,
   MAX_ENABLED_IGNITIONS,
@@ -149,12 +151,31 @@ function validateFirefighting(firefighting: FirefightingSettings): ScenarioIssue
   if (firefighting.fromStations !== undefined && typeof firefighting.fromStations !== "boolean") {
     add("Firefighting fromStations must be true or false.");
   }
+  if (firefighting.resources !== undefined) {
+    const entries = Object.entries(firefighting.resources);
+    if (
+      entries.some(
+        ([kind, count]) =>
+          !(APPARATUS_KINDS as readonly string[]).includes(kind) ||
+          !Number.isInteger(count) ||
+          !inRange(count as number, 0, MAX_RESOURCES_PER_KIND),
+      )
+    ) {
+      add(`Resource counts must be whole numbers from 0 to ${MAX_RESOURCES_PER_KIND}.`);
+    }
+  }
+  if (
+    firefighting.startLocalIso !== undefined &&
+    !Number.isFinite(Date.parse(firefighting.startLocalIso))
+  ) {
+    add("The scenario clock must be an ISO 8601 date and time with a UTC offset.");
+  }
   if (!(RESPONSE_MINUTE_CHOICES as readonly number[]).includes(firefighting.responseMinutes)) {
     add(`Response time must be one of ${RESPONSE_MINUTE_CHOICES.join(", ")} minutes.`);
   }
   if (
     firefighting.enabled &&
-    RESOURCE_KEYS.every((key) => Number.isInteger(firefighting[key]) && firefighting[key] === 0)
+    Object.values(apparatusCounts(firefighting)).every((count) => !count)
   ) {
     add("Firefighting is on but no resources are assigned.");
   }
@@ -357,6 +378,11 @@ export function parseScenario(json: unknown): {
         dozers: raw.dozers as number,
         responseMinutes: raw.responseMinutes as number,
         ...(typeof raw.fromStations === "boolean" ? { fromStations: raw.fromStations } : {}),
+        ...(isRecord(raw.resources) ? { resources: raw.resources as ApparatusCounts } : {}),
+        ...(typeof raw.startLocalIso === "string" ? { startLocalIso: raw.startLocalIso } : {}),
+        ...(typeof raw.nightHelicopters === "boolean"
+          ? { nightHelicopters: raw.nightHelicopters }
+          : {}),
       };
     }
   }
