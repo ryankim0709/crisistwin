@@ -71,6 +71,22 @@ but not wired, unmarked = not started. Items are in dependency order within each
 
 ## 4. Firefighting
 
+- [ ] **Rothermel implementations disagree** for live-fuel models: at Camp inputs for SH5,
+      `app/src/fire/rothermel.ts` gives 85 m/min (reaction intensity 3,030) and `sim/fire.py` 173 m/min
+      (6,144). The TS code weights each category's reaction term by its area share, the Python does
+      not; they agree for dead-only fuels. Check both against Andrews (2018), RMRS-GTR-371, and fix
+      the wrong one.
+- [ ] Drill roads carry no surface, track, width, weight or grade tags, so access rules R01-R12
+      never block on Camp (every class can use every edge). Enrich the drill road graph with OSM
+      tags (as `dispatch_area.py` does) and grade from terrain.
+- [ ] Time-varying wind in the Studio/`/fire` solver: it takes one wind per run, so "Historical"
+      uses the peak hour (a worst-hour run, not a replay). Weather humidity and temperature are not
+      yet fed into fuel moisture.
+- [ ] No LANDFIRE landscape covers Camp, so `/demo` uses SH5 everywhere; add a Camp region.
+- [ ] `/demo`: an "escaped fire handed off" rule for long 24/7 runs (under real winds most fires
+      escape and the board fills its 25-fire cap); `app/src/demo/model.test.ts` and
+      `observation.test.ts` are stale after the realism change.
+
 - [ ] **[wip]** Suppression engine: sourced rates, road access R01-R12 per apparatus class,
       helicopters and airtankers with daylight, wind and turnaround limits, first-alarm preset.
 - [ ] Use the CAL FIRE bases in the live drill: simulated responders start at real stations
