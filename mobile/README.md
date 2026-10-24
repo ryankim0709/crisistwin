@@ -66,7 +66,7 @@ accepted by the mobile configuration.
 
 The Scenarios tab shows the web app's `/maps` page in a `WKWebView`, so the map
 and the illustrative TypeScript fire model run unchanged (see
-[ADR 0006](../docs/adr/0006-mobile-web-map.md)). `WEB_BASE_URL` is an origin like
+[ADR 0007](../docs/adr/0007-mobile-web-map.md)). `WEB_BASE_URL` is an origin like
 `API_BASE_URL`, with the same validation; Debug uses `http://localhost:5173`, the
 Vite server started by `docker compose up` in `app/`. The tab shows a loading
 state, then the map, or an error with a retry button when the web app is not

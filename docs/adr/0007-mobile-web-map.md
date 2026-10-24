@@ -1,4 +1,4 @@
-# 0006: Mobile scenarios reuse the web map
+# 0007: Mobile scenarios reuse the web map
 
 Date: 2026-10-23. Status: accepted for the MVP demonstration.
 

@@ -8,7 +8,7 @@ private enum MapLoadState: Equatable {
 }
 
 /// Shows the web workspace's map page, so iOS reuses the web map and its
-/// TypeScript fire model instead of running a second numerical model (ADR 0006).
+/// TypeScript fire model instead of running a second numerical model (ADR 0007).
 struct ScenariosView: View {
     @State private var state: MapLoadState = .loading
     @State private var attempt = 0
