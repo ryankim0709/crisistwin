@@ -5,6 +5,11 @@
 *.pem
 *.key
 
+# Local agent run output: drafted and delivered advisories from a watch run.
+# These are experimental planning artefacts, not records to keep in Git.
+agent/review_queue.jsonl
+agent/*.jsonl
+
 # Local caches and build outputs
 node_modules/
 .next/
