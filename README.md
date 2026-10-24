@@ -139,6 +139,10 @@ an explicit request under the repository policy.
 
 ### Workspace navigation
 
+The sidebar home link uses the transparent logo at
+`app/public/brand/crisistwin-logo.png`, served at `/brand/crisistwin-logo.png`.
+Asset usage and the generation prompt are in `app/public/brand/logo-notes.txt`.
+
 The web app shares a sidebar across all pages. On narrow screens, **Menu**
 expands the navigation. The current page is marked with an arrow and
 `aria-current`; a keyboard-accessible **Skip to content** link reaches the main
