@@ -52,6 +52,9 @@ class Principal:
     role: str  # civilian | responder | controller
     party_key: str
     incident_id: str | None
+    simulated: bool = False
+    """A simulated participant's device (``live_sim_responders``, ``live_run_scenario``): what it stores is
+    labelled ``evidence_class: simulated``, never ``field_report``."""
 
 
 def token_hash(token: str) -> str:
@@ -111,7 +114,7 @@ def authenticate(request) -> Principal | None:
         if doc["role"] == "civilian":
             update["expires_at"] = now + CIVILIAN_TOKEN_TTL
         devices.update_one({"_id": doc["_id"]}, {"$set": update})
-    return Principal(doc["role"], doc["party_key"], doc.get("incident_id"))
+    return Principal(doc["role"], doc["party_key"], doc.get("incident_id"), bool(doc.get("simulated")))
 
 
 def client_ip(request) -> str:

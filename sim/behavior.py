@@ -17,7 +17,7 @@ the Camp Fire.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 TRIGGER_ORDER = "order"  # official evacuation order or warning
 TRIGGER_FIRE = "fire_cue"
@@ -89,3 +89,81 @@ LIMITATIONS = [
 def decision_probability(hazard_per_h: float, dt_s: float) -> float:
     """Chance of deciding within dt_s at a constant hazard."""
     return 1.0 - math.exp(-hazard_per_h * dt_s / 3600.0)
+
+
+# ---- People behaviour from sourced data (tools/people_behavior.json, docs/people-data.md), for the fixed-delay
+# twin that the live drill and the batch runner use. Off by default, so historical Camp replays are unchanged; a
+# scenario spec turns it on (`twin.people`, docs/live-scenario-runner.md).
+
+ORDER_COMPLIANCE_RANGE = (0.870, 0.968)
+"""SOURCED: share of mandatory-order recipients who evacuated, Wong, Broader and Shaheen (2020), Table 11 p. 39
+(Dec 2017 S. California 0.870, Oct 2017 N. California 0.875, Carr 2018 0.968); people_behavior.json
+`order_compliance`."""
+ORDER_COMPLIANCE_OCT2017_NORCAL = 0.875
+"""SOURCED (same table): the Oct 2017 Northern California fires (Tubbs, Nuns, Atlas), the fast, low-notice,
+wind-driven fires of that sample, taken as the closest analogue of Camp (the choice of analogue is ours)."""
+SHADOW_EVACUATION_RANGE = (0.291, 0.750)
+"""SOURCED: share of households with no mandatory order that evacuated anyway, Wong et al. (2020) Table 11 p. 39
+(Oct 2017 N. California 0.291, Dec 2017 S. California 0.625, Carr 2018 0.750); people_behavior.json
+`shadow_evacuation_share`."""
+SHADOW_EVACUATION_OCT2017_NORCAL = 0.291
+"""SOURCED (same table, same analogue). people_behavior.json suggests 0.30 (an assumption at the same low end)."""
+CAMP_AWARENESS_TO_DEPARTURE_MEAN_MIN = 93.0
+"""DERIVED (people_behavior.json `camp_awareness_departure_timing`): Grajdura (2022) pp. 51-52, mean departure
+09:33 minus mean awareness 08:00 local, Camp Fire survey n=397 (a difference of two sample means)."""
+DEPARTURE_DELAY_SIGMA = 0.8
+"""ASSUMPTION reused from sim.traffic.TrafficParams.response_delay_sigma (the source gives a mean, not a shape)."""
+CAMP_DEPARTURE_DELAY_MEDIAN_MIN = round(CAMP_AWARENESS_TO_DEPARTURE_MEAN_MIN / math.exp(DEPARTURE_DELAY_SIGMA ** 2 / 2), 1)
+"""DERIVED: median of a lognormal with that mean and shape, 93 / exp(0.8^2 / 2) = 67.5 min. Applied from the order
+(or, for shadow evacuees, from the fire cue): Camp residents mostly learned of the fire from cues, not notices
+(people_behavior.json `camp_order_receipt`), so this puts the awareness-to-departure gap on the twin's clock."""
+
+
+@dataclass(frozen=True)
+class PeopleBehavior:
+    """Behaviour realism for the twin's demand (fixed-delay engine). Defaults reproduce the historical replay."""
+
+    order_compliance: float = 1.0
+    """Share of households that leave when ordered; the rest stay (sim.demand participation)."""
+    shadow_evacuation_share: float = 0.0
+    """Share of a zone's vehicles that leave without an order once fire reaches the zone."""
+    departure_delay_median_min: float | None = None
+    """Order (or fire cue) to departure, lognormal median; None keeps TrafficParams.response_delay_median_min."""
+    departure_delay_sigma: float | None = None
+
+    def __post_init__(self) -> None:
+        for name in ("order_compliance", "shadow_evacuation_share"):
+            if not 0 <= getattr(self, name) <= 1:
+                raise ValueError(f"{name} must be in [0, 1], got {getattr(self, name)!r}")
+        if self.departure_delay_median_min is not None and not self.departure_delay_median_min > 0:
+            raise ValueError("departure_delay_median_min must be positive")
+        if self.departure_delay_sigma is not None and not self.departure_delay_sigma >= 0:
+            raise ValueError("departure_delay_sigma must be nonnegative")
+
+    @property
+    def is_default(self) -> bool:
+        return self == PeopleBehavior()
+
+
+PEOPLE_PRESETS = {
+    "historical": PeopleBehavior(),
+    "camp_2018_sourced": PeopleBehavior(
+        order_compliance=ORDER_COMPLIANCE_OCT2017_NORCAL, shadow_evacuation_share=SHADOW_EVACUATION_OCT2017_NORCAL,
+        departure_delay_median_min=CAMP_DEPARTURE_DELAY_MEDIAN_MIN, departure_delay_sigma=DEPARTURE_DELAY_SIGMA),
+}
+"""`historical`: the replay as built (every household leaves when ordered, nobody without one, 30 min median).
+`camp_2018_sourced`: compliance and shadow evacuation from Wong et al. 2020 (Oct 2017 N. California), departure
+delay from the Camp survey (Grajdura 2022)."""
+
+
+def people_from_spec(value) -> PeopleBehavior:
+    """A preset name, or ``{"preset": name, ...overrides}``, or plain fields; None -> historical."""
+    if value is None:
+        return PeopleBehavior()
+    if isinstance(value, str):
+        if value not in PEOPLE_PRESETS:
+            raise ValueError(f"unknown people preset {value!r}; one of {sorted(PEOPLE_PRESETS)}")
+        return PEOPLE_PRESETS[value]
+    d = dict(value)
+    base = PEOPLE_PRESETS[d.pop("preset")] if "preset" in d else PeopleBehavior()
+    return replace(base, **d)

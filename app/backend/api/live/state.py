@@ -360,10 +360,12 @@ def load_public(
     report_docs = list(
         col("live_reports").find({"incident_id": incident_id}).sort("received_at", -1).limit(REPORTS_SNAPSHOT_LIMIT)
     )
-    # 2018 record entries wait in the controller's queue: they count for nothing until confirmed.
+    # 2018 record entries and generated comms items wait in the controller's queue: they count for nothing
+    # until confirmed (groundrecord.queue_only).
     facts = [
         report_fact(d) for d in report_docs
-        if d.get("evidence_class") != "historical_record" or d["status"] in ("confirmed", "resolved")
+        if not (d.get("evidence_class") == "historical_record" or d.get("comms"))
+        or d["status"] in ("confirmed", "resolved")
     ]
     items = public.public_items(facts, now, index.segment_lines)
     state = public.road_state(facts, now)

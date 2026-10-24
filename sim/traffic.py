@@ -201,6 +201,9 @@ class TrafficParams:
     fire_area_cumulative: bool = True  # an edge midpoint once inside the fire area stays inside (burned area only grows)
     fire_check_every_s: int = 60  # cadence of fire_area_at calls; a multiple of step_s
     warning_releases_demand: bool = False  # fixed-delay engine only; agents respond to warnings via a hazard
+    # Fixed-delay engine only: share of a zone's packets that leave without an order once modelled fire reaches
+    # one of the zone's origin nodes (shadow evacuation; sim.behavior.PeopleBehavior). 0 = off (replays).
+    shadow_evacuation_share: float = 0.0
     behavior: BehaviorParams = field(default_factory=BehaviorParams)
 
     def __post_init__(self) -> None:
@@ -222,11 +225,15 @@ class TrafficParams:
                 raise ValueError(f"{name} must be positive and finite, got {value}")
         if not (math.isfinite(self.response_delay_sigma) and self.response_delay_sigma >= 0):
             raise ValueError(f"response_delay_sigma must be nonnegative, got {self.response_delay_sigma}")
+        if not 0 <= self.shadow_evacuation_share <= 1:
+            raise ValueError(f"shadow_evacuation_share must be in [0, 1], got {self.shadow_evacuation_share}")
 
     def to_dict(self) -> dict:
         d = asdict(self)
         if not self.behavior.enabled:
             d.pop("behavior")  # replay outputs carry no agent parameters
+        if not self.shadow_evacuation_share:
+            d.pop("shadow_evacuation_share")  # off: fingerprints of existing runs are unchanged
         return d
 
 
@@ -692,6 +699,7 @@ class TrafficEngine:
         self.z_ordered_s: list[float | None] = [None] * n_zones
         self.z_warned_s: list[float | None] = [None] * n_zones
         s.zone_packets = {}  # fixed-delay engine: zone -> [(delay_s, node, count)]
+        s.shadow_packets = {}  # fixed-delay engine: zone -> packet indexes that leave on the fire cue
         # Agent arrays (behaviour on): one agent per packet.
         s.ag_zone, s.ag_node, s.ag_count, s.ag_wait_fire, s.ag_herd = [], [], [], [], []
         self.ag_trigger: list[str | None] = []
@@ -713,6 +721,15 @@ class TrafficEngine:
                     delay = min(delay_cap_s, rng.lognormvariate(mu, params.response_delay_sigma))
                     packets.append((delay, node_ix[z.origin_nodes[k % len(z.origin_nodes)]], count))
                 s.zone_packets[z.id] = packets
+            # Shadow evacuation: which packets of each zone leave on the fire cue without an order. Own stream,
+            # so the delay draws above (and every run with the share at 0) are unchanged.
+            s.shadow_packets = {}
+            if params.shadow_evacuation_share > 0:
+                srng = random.Random(f"{params.seed}:shadow")
+                for z in zones:
+                    s.shadow_packets[z.id] = frozenset(
+                        k for k in range(len(s.zone_packets[z.id])) if srng.random() < params.shadow_evacuation_share)
+            s.zone_origin_ix = [frozenset(node_ix[n] for n in z.origin_nodes) for z in zone_list]
         else:
             brng = self.brng = random.Random(f"{params.seed}:behavior")  # own stream; str seeds are stable
             for zi, z in enumerate(zone_list):
@@ -748,6 +765,7 @@ class TrafficEngine:
         self.returning: list[tuple[float, int, int, int, int, int]] = []  # turned back: (at_s, seq, node, count, zone, agent)
         self.seq = 0
         self.released_zones: set[str] = set()
+        self.shadow_released: set[str] = set()  # fixed delay: zones whose shadow packets left on the fire cue
         self.first_order_s: float | None = None
         self.waiting: dict[int, deque] = {}  # node -> departed packets [count, zone index, agent] not yet on an edge
         self.departed_by = dict.fromkeys(bh.TRIGGERS, 0)
@@ -1142,10 +1160,33 @@ class TrafficEngine:
         self.released_zones.add(zone_id)
         self.first_order_s = at_s if self.first_order_s is None else min(self.first_order_s, at_s)
         zi = self.s.zone_ix[zone_id]
-        self.z_preparing[zi], self.z_waiting[zi] = self.z_waiting[zi], 0
-        for delay, node, count in self.s.zone_packets[zone_id]:
+        skip = self.s.shadow_packets.get(zone_id, ()) if zone_id in self.shadow_released else ()
+        moved = 0
+        for k, (delay, node, count) in enumerate(self.s.zone_packets[zone_id]):
+            if k in skip:
+                continue  # already left on the fire cue
             heapq.heappush(self.pending, (at_s + delay, self.seq, node, count, zi))
             self.seq += 1
+            moved += count
+        self.z_preparing[zi] += moved
+        self.z_waiting[zi] -= moved
+
+    def shadow_release(self, at_s: float) -> None:
+        """Fixed delay: zones not yet released whose origin nodes the fire reached send their shadow packets
+        (TrafficParams.shadow_evacuation_share), each after its own drawn delay from now."""
+        s = self.s
+        burned = self.origin_burned
+        for zi, z in enumerate(s.zone_list):
+            if z.id in self.released_zones or z.id in self.shadow_released or not (s.zone_origin_ix[zi] & burned):
+                continue
+            self.shadow_released.add(z.id)
+            packets = s.zone_packets[z.id]
+            for k in sorted(s.shadow_packets.get(z.id, ())):
+                delay, node, count = packets[k]
+                heapq.heappush(self.pending, (at_s + delay, self.seq, node, count, zi))
+                self.seq += 1
+                self.z_preparing[zi] += count
+                self.z_waiting[zi] -= count
 
     def apply_event(self, ev: TrafficEvent, at_s: float) -> None:
         s = self.s
@@ -1597,6 +1638,8 @@ class TrafficEngine:
                 self._apply_fire_entry(t // params.fire_check_every_s, at)
             else:
                 self.set_fire(s.fire_area_at(at), at)
+            if s.shadow_packets and self.origin_burned:
+                self.shadow_release(t)
         # 3. controllers
         if self.controllers and t % s.controller_every_s == 0:
             self.run_controllers(t, at)
