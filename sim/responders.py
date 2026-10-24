@@ -114,6 +114,30 @@ class _Corridor:
     slow_since: datetime | None = None
 
 
+def egress_corridors(network: RoadNetwork, exits: Sequence[Destination],
+                     corridors=CAMP_EGRESS_CORRIDORS) -> list[_Corridor]:
+    """Corridors as CHP staffs them: (display name, canonical key) -> outbound edges and the hold edges.
+
+    Edges are the named road within CONTRAFLOW_EXTENT_M of TOWN_REFERENCE_LONLAT; outbound means toward
+    the nearest exit by free-flow time. Corridors with no outbound edge are left out.
+    """
+    geo = _Geo(network)
+    exit_time = _exit_time_s(network, tuple(exits))
+    out_corridors: list[_Corridor] = []
+    for display, key in corridors:
+        named = [e for e in network.edges if canonical_road_name(e.name) == key
+                 and geo.dist_to_line(TOWN_REFERENCE_LONLAT, e.coords) <= CONTRAFLOW_EXTENT_M]
+        out = [e for e in named if exit_time.get(e.to_node, math.inf) < exit_time.get(e.from_node, math.inf)]
+        inbound = [e for e in named if e not in out]
+        if not out:
+            continue
+        # Hold point: the inbound edge farthest from town, i.e. where inbound traffic enters the corridor.
+        far = max(geo.dist(_edge_point(e), TOWN_REFERENCE_LONLAT) for e in inbound) if inbound else None
+        entry = [e.id for e in inbound if geo.dist(_edge_point(e), TOWN_REFERENCE_LONLAT) == far]
+        out_corridors.append(_Corridor(display, sorted(e.id for e in out), entry))
+    return out_corridors
+
+
 class ChpTrafficControl:
     """CHP: holds inbound traffic on staffed corridors and starts contraflow on sustained congestion."""
 
@@ -123,20 +147,8 @@ class ChpTrafficControl:
                  corridors=CAMP_EGRESS_CORRIDORS, units: int = CHP_UNITS, active_from: datetime | None = None):
         self.active_from = active_from
         geo = _Geo(network)
-        exit_time = _exit_time_s(network, tuple(exits))
         self.units = units
-        self.corridors: list[_Corridor] = []
-        for display, key in corridors:
-            named = [e for e in network.edges if canonical_road_name(e.name) == key
-                     and geo.dist_to_line(TOWN_REFERENCE_LONLAT, e.coords) <= CONTRAFLOW_EXTENT_M]
-            out = [e for e in named if exit_time.get(e.to_node, math.inf) < exit_time.get(e.from_node, math.inf)]
-            inbound = [e for e in named if e not in out]
-            if not out:
-                continue
-            # Hold point: the inbound edge farthest from town, i.e. where inbound traffic enters the corridor.
-            far = max(geo.dist(_edge_point(e), TOWN_REFERENCE_LONLAT) for e in inbound) if inbound else None
-            entry = [e.id for e in inbound if geo.dist(_edge_point(e), TOWN_REFERENCE_LONLAT) == far]
-            self.corridors.append(_Corridor(display, sorted(e.id for e in out), entry))
+        self.corridors: list[_Corridor] = egress_corridors(network, exits, corridors)
         # Town proximity: earliest modelled arrival at network nodes within each probe distance.
         self._town_fire_at: dict[float, datetime | None] = {}
         for km in (CHP_HOLD_FIRE_KM, CHP_CONTRAFLOW_FIRE_KM):
