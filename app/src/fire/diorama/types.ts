@@ -32,6 +32,16 @@ export type DioramaRun = {
 /** A labelled ignition pin (Simulation Studio draws several). */
 export type DioramaIgnition = { id: string; point: GeoPoint; label: string };
 
+/**
+ * Streets to draw on the board: OSM road polylines and synthetic homes along residential
+ * streets, as `GET /api/dispatch/area` returns them (a `DispatchArea` satisfies this).
+ * Coordinates are WGS84 [longitude, latitude].
+ */
+export type BoardStreets = {
+  edges: readonly { roadClass: string; coords: readonly (readonly [number, number])[] }[];
+  homes: readonly { position: readonly [number, number] }[];
+};
+
 export type GroundClickMode = "origin" | "wind";
 
 /** CSS px of the scene container covered by floating page UI. */
@@ -78,6 +88,11 @@ export interface FireDioramaSceneApi {
   setReducedMotion(value: boolean): void;
   /** Draw (or clear) another page's content on the board; survives board rebuilds. */
   setOverlay(overlay: BoardOverlay | null): void;
+  /**
+   * Real roads, with houses along residential streets in place of the fuel-class lattice;
+   * `null` goes back to the stylized lattice. Points off the board are dropped.
+   */
+  setStreets(streets: BoardStreets | null): void;
   /** Show or hide the stylized fuel-class houses (a page drawing its own homes hides them). */
   setCoverHouses(visible: boolean): void;
   /** Animate to a view of the ground within `radiusMeters` of `point`. */

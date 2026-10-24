@@ -59,6 +59,7 @@ import {
   Spinner,
   type SegmentedOption,
 } from "../ui";
+import { useBoardStreets } from "./useBoardStreets";
 import "./fire.css";
 
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
@@ -374,6 +375,9 @@ export default function FireSimulatorPage() {
   // Solving takes ~100 ms, so let the controls stay responsive while dragging.
   const deferredScenario = useDeferredValue(scenario);
   const grid = landscape.status === "ready" ? landscape.grid : null;
+  // OSM roads and synthetic homes along residential streets for the diorama board.
+  const streets = useBoardStreets(grid);
+  const streetArea = streets.status === "ready" ? streets.area : null;
 
   const result = useMemo<{ run: FireRun | null; error: string | null }>(() => {
     if (!grid || !deferredScenario) return { run: null, error: null };
@@ -432,6 +436,9 @@ export default function FireSimulatorPage() {
   useEffect(() => {
     scene?.setLandscape(grid);
   }, [scene, grid]);
+  useEffect(() => {
+    scene?.setStreets(streetArea);
+  }, [scene, streetArea]);
   useEffect(() => {
     scene?.setRun(run);
     scene?.setTime(getTime());
@@ -658,7 +665,10 @@ export default function FireSimulatorPage() {
       agent: null,
     };
   }, [run, liveSessionId, getTime, playing, horizonMinutes, region]);
-  const liveBroadcast = useLiveBroadcast(getLiveSnapshot, `${liveSessionId}:${liveMinute}:${playing}`);
+  const liveBroadcast = useLiveBroadcast(
+    getLiveSnapshot,
+    `${liveSessionId}:${liveMinute}:${playing}`,
+  );
   useEffect(() => {
     const stage = stageRef.current;
     const overlay = stage?.querySelector<HTMLElement>(".fr-overlay");
@@ -1488,6 +1498,10 @@ export default function FireSimulatorPage() {
           Fuel: LANDFIRE · Terrain: AWS terrain tiles (USGS 3DEP and others)
           {view === "satellite" ? " · Imagery: USGS The National Map" : ""}
           {windSource.status === "ready" ? " · Wind: NWS" : ""}
+          {view === "diorama" && streetArea
+            ? " · Roads: © OpenStreetMap contributors · Homes along streets: synthetic"
+            : ""}
+          {view === "diorama" && streets.status === "loading" ? " · Loading roads…" : ""}
         </p>
 
         {areaPickerOpen && (
