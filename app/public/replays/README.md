@@ -5,7 +5,7 @@ Build it from the repository root (Python 3.12, about 10 s):
 
 ```sh
 python3 -m sim --package data/incidents/camp-2018-paradise-slice/a6d2cc03f525ed65 bundle \
-  --roads-package data/incidents/camp-2018-evacuation/b2624d1cda93d9e5 \
+  --roads-package data/incidents/camp-2018-evacuation/b1b318c16bbd3270 \
   --output app/public/replays/camp-2018.json
 ```
 

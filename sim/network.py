@@ -6,7 +6,8 @@ import json
 from collections import Counter
 from pathlib import Path
 
-from tools.add_camp_codedred import verify as verify_with_events
+from tools.add_camp_codedred import verify as verify_with_alerts
+from tools.add_camp_road_events import verify as verify_with_road_events
 from tools.build_camp_evacuation import verify as verify_roads
 
 from sim.history import parse_utc
@@ -27,8 +28,13 @@ def load_road_network(package: Path) -> tuple[RoadNetwork, tuple[Destination, ..
     label them as assumptions.
     """
     manifest = json.loads((package / "manifest.json").read_text())
-    # Hashes and offline re-normalization; packages extended with events have their own verifier.
-    (verify_with_events if "event_normalizer_version" in manifest else verify_roads)(package)
+    # Hashes and offline re-normalization; each package extension has its own verifier.
+    if "road_event_normalizer_version" in manifest:
+        verify_with_road_events(package)
+    elif "event_normalizer_version" in manifest:
+        verify_with_alerts(package)
+    else:
+        verify_roads(package)
     quality = json.loads((package / "quality.json").read_text())
     edge_features = json.loads((package / "normalized/road_edges.geojson").read_text())["features"]
     node_features = json.loads((package / "normalized/road_nodes.geojson").read_text())["features"]
@@ -105,6 +111,8 @@ def load_alert_events(package: Path) -> tuple[TrafficEvent, ...]:
         if not line.strip():
             continue
         e = json.loads(line)
+        if e["type"] != "alert_sent":
+            continue  # road events are resolved onto edges by sim.events
         target = e.get("target") or {}
         where = target.get("place_name") or ", ".join(
             z.rsplit("-", 1)[-1] for z in target.get("zone_ids", [])

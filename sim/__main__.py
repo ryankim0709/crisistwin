@@ -19,6 +19,8 @@ from pathlib import Path
 from tools.build_camp_history import SourceError
 
 from sim.bundle import build_bundle
+from sim.events import ASSUMPTIONS as ROAD_EVENT_ASSUMPTIONS
+from sim.events import resolve_road_events
 from sim.fire import FireParams
 from sim.fixtures import camp_fixture_scenario
 from sim.hindcast import calibrate, default_candidates, run_hindcast
@@ -109,7 +111,10 @@ def main() -> None:
             if args.roads_package:
                 network, exits, provenance = load_road_network(args.roads_package)
                 scenario = hybrid_scenario(network, exits, provenance["assumptions"])
-                scenario["events"] = (*scenario["events"], *load_alert_events(args.roads_package))
+                road_events, _ = resolve_road_events(args.roads_package, network, exits)
+                scenario["events"] = (*scenario["events"], *load_alert_events(args.roads_package), *road_events)
+                if road_events:
+                    scenario["notes"] = [*scenario["notes"], *ROAD_EVENT_ASSUMPTIONS]
                 start = parse_utc(args.start or "2018-11-08T14:00:00Z")
                 end = parse_utc(args.end or "2018-11-09T08:00:00Z")
             else:

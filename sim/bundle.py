@@ -81,7 +81,8 @@ def _simulated_fire(history: IncidentHistory, end: datetime) -> tuple[dict, obje
 
 
 def build_bundle(history: IncidentHistory, scenario: dict, params: TrafficParams, *,
-                 start: datetime, end: datetime, command: str, simulate_fire: bool = True) -> dict:
+                 start: datetime, end: datetime, command: str, simulate_fire: bool = True,
+                 fire: tuple[dict, tuple] | None = None) -> dict:
     """Run traffic for the scenario and merge it with the package's observed layers.
 
     `scenario` holds `network`, `zones`, `destinations`, `events` (sim.traffic types),
@@ -93,7 +94,12 @@ def build_bundle(history: IncidentHistory, scenario: dict, params: TrafficParams
     scenario_class = scenario["evidence_class"]
     roads_class = scenario.get("roads_evidence_class", scenario_class)
     destinations_class = scenario.get("destinations_evidence_class", scenario_class)
-    fire_block, fire_model = _simulated_fire(history, end) if simulate_fire else (None, None)
+    # `fire` lets callers (e.g. sim.variants) reuse one calibrated front across runs;
+    # it is the (block, (grid, arrival, t0, lookup)) pair that _simulated_fire returns.
+    if fire is not None:
+        fire_block, fire_model = fire
+    else:
+        fire_block, fire_model = _simulated_fire(history, end) if simulate_fire else (None, None)
     traffic = simulate_traffic(
         scenario["network"], scenario["zones"], scenario["destinations"], scenario["events"], params,
         start=start, end=end, fire_area_at=_fire_area_lookup(history, fire_model[3] if fire_model else None),
