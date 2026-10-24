@@ -88,10 +88,6 @@ export default function AppShell({ path, children }: AppShellProps) {
             </div>
           ))}
         </nav>
-        <div className="sidebar-note">
-          <span className="badge">Cal Hacks / Prototype</span>
-          <p>Experimental planning only. Outputs are not operational evacuation instructions.</p>
-        </div>
       </aside>
       <div className="app-content">{children}</div>
     </div>

@@ -154,8 +154,7 @@ function Comparison({ index }: { index: VariantsIndex }) {
           <table className="ui-table comparison-table">
             <caption>
               Each cell is the what-if value, then its change from the baseline. Higher is better
-              for vehicles out; lower is better for exposure and blocked vehicles. Clearance time is
-              not shown: it is undefined when some vehicles never arrive.
+              for vehicles out; lower is better for exposure and blocked vehicles.
             </caption>
             <thead>
               <tr>
@@ -199,12 +198,8 @@ function Comparison({ index }: { index: VariantsIndex }) {
               </div>
             ))}
           </dl>
-          <p className="ui-help">
-            The baseline and every what-if share these inputs; the only differences are the changes
-            listed for each row.
-          </p>
         </Panel>
-        <Panel title="Limitations" eyebrow="Read before comparing">
+        <Panel title="Limitations">
           {index.limitations.length > 0 ? (
             <ul className="ui-checklist">
               {index.limitations.map((line) => (
@@ -213,7 +208,7 @@ function Comparison({ index }: { index: VariantsIndex }) {
             </ul>
           ) : (
             <EmptyResult title="No limitations recorded">
-              The index lists none. Treat results as a single-seed planning experiment anyway.
+              The index lists none. Results are still a single-seed experiment.
             </EmptyResult>
           )}
         </Panel>
@@ -228,7 +223,6 @@ export default function ComparisonPage() {
     <WorkspacePage
       title="Strategy comparison"
       description="Change one thing about the 2018 Camp Fire evacuation, then compare outcomes against the same starting conditions."
-      section="Analysis"
       action={
         <a className="ui-button" href={replayHref(CAMP_ID, "&tab=whatif")}>
           Open What if&hellip; on the map →

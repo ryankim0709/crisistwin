@@ -33,7 +33,7 @@ struct ScenariosView: View {
     private var mapContent: some View {
         if let baseURL = try? AppConfiguration.webBaseURL() {
             ZStack {
-                WebMapView(url: baseURL.appendingPathComponent("maps"), attempt: attempt, state: $state)
+                WebMapView(url: baseURL.appendingPathComponent("fire"), attempt: attempt, state: $state)
                     .opacity(state == .loaded ? 1 : 0)
                 switch state {
                 case .loading:
@@ -65,13 +65,12 @@ struct ScenariosView: View {
 }
 
 /// Civilians only need the map and fire controls, so hide the web workspace's planner chrome:
-/// the sidebar (logo, menu, planner links) and the planning-tools panel. This targets class names in
-/// `app/src/AppShell.tsx` and `MapsPage.tsx`; if they change, that chrome simply shows again.
-// ponytail: CSS injection from the app; switch to a web-side embed mode (e.g. `/maps?embed=1`) if this drifts.
+/// the sidebar (logo, menu, planner links). This targets class names in `app/src/AppShell.tsx`;
+/// if they change, that chrome simply shows again.
+// ponytail: CSS injection from the app; switch to a web-side embed mode (e.g. `/fire?embed=1`) if this drifts.
 private let practiceOnlyCSS = """
-.skip-link, .sidebar, .map-planning-tools { display: none !important; }
+.skip-link, .sidebar { display: none !important; }
 .app-layout { display: block !important; }
-.app-content .map-page { height: 100dvh !important; }
 """
 
 private struct WebMapView: UIViewRepresentable {
@@ -113,7 +112,7 @@ private struct WebMapView: UIViewRepresentable {
             decidePolicyFor navigationAction: WKNavigationAction,
             decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void
         ) {
-            let isPracticeMap = navigationAction.request.url?.path == "/maps"
+            let isPracticeMap = navigationAction.request.url?.path == "/fire"
             decisionHandler(navigationAction.targetFrame?.isMainFrame == false || isPracticeMap ? .allow : .cancel)
         }
 

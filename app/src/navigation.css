@@ -101,24 +101,6 @@
   font-weight: 600;
 }
 
-.sidebar-note {
-  margin-top: auto;
-  padding-top: 24px;
-  border-top: 1px solid #d4d8ca;
-}
-
-.sidebar-note .badge {
-  display: inline-block;
-  font-size: 10px;
-}
-
-.sidebar-note p {
-  margin: 14px 0 0;
-  color: #52635c;
-  font-size: 11px;
-  line-height: 1.7;
-}
-
 .menu-toggle {
   display: none;
 }
@@ -213,8 +195,7 @@
     display: block;
     min-height: 44px;
   }
-  .sidebar-nav:not(.is-open),
-  .sidebar-note {
+  .sidebar-nav:not(.is-open) {
     display: none;
   }
   .sidebar-nav {
@@ -225,10 +206,6 @@
   }
   .planning-empty {
     padding: 24px;
-  }
-  .app-content .map-page {
-    height: calc(100dvh - 77px);
-    min-height: 640px;
   }
 }
 
@@ -265,8 +242,7 @@
   margin: -16px 0 0;
 }
 .is-sidebar-collapsed .sidebar-brand,
-.is-sidebar-collapsed .sidebar-nav,
-.is-sidebar-collapsed .sidebar-note {
+.is-sidebar-collapsed .sidebar-nav {
   display: none;
 }
 @media (max-width: 760px) {

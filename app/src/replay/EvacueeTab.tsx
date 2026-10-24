@@ -40,8 +40,7 @@ export default function EvacueeTab({ model, simTimeMs, frameIndex, pin, onPin }:
   return (
     <div className="rp-tab">
       <p className="rp-disclaimer rp-disclaimer--top" role="note">
-        {model.insights?.disclaimer ?? "Planning insight from a simulation; not operational instructions."} This
-        view describes a historical model run. It is not guidance for any real event.
+        {model.insights?.disclaimer ?? "Planning insight from a simulated historical run."}
       </p>
 
       <div className="rp-pin-controls">

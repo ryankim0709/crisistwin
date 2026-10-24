@@ -54,7 +54,7 @@ import { openRefugeKey, refugeTimeline } from "./refuges";
 import { EVIDENCE_LABEL, closedEdgesAt, localTime, perimeterWindowEnd, sameNumbers } from "./timeline";
 import type { EvidenceClass, LngLat, ReplayModel } from "./types";
 
-// Same explicit worker bundling as maps/MapCanvas.tsx; Vite relocates the main module.
+// Bundle the MapLibre worker explicitly; Vite relocates the main module.
 setWorkerUrl(workerUrl);
 
 const STYLE_TIMEOUT_MS = 10_000;

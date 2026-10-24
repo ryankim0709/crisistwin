@@ -28,7 +28,7 @@ export default function EvacuationPage() {
         title="Real demand, orders and refuges in the replays"
         eyebrow="Historical evacuations"
         layers={["zones", "events", "destinations", "roads", "traffic"]}
-        intro="Historical replays include evacuation zones with fixture demand, recorded orders and closures, exits and refuges, and a simulated traffic run. The sample tables below are separate synthetic inputs."
+        intro="Replays include evacuation zones, recorded orders and closures, exits and refuges, and a simulated traffic run. The tables below are synthetic inputs instead."
       />
       <DraftNotice />
       <div className="ui-split">

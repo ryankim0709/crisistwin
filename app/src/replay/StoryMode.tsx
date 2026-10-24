@@ -376,9 +376,7 @@ export function StoryLanding({
       <button type="button" className="rp-landing-explore" onClick={onExplore}>
         Explore freely
       </button>
-      <p className="rp-landing-note">
-        Historical records and modelled traffic, each labelled. A planning experiment, not instructions.
-      </p>
+      <p className="rp-landing-note">Historical records and modelled traffic, each labelled.</p>
     </section>
   );
 }

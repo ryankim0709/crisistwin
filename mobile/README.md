@@ -69,9 +69,9 @@ accepted by the mobile configuration.
 ### Practice map
 
 The Practice tab, under a "practice only, not a forecast" banner, shows only the
-map and simulation: an injected stylesheet hides the web sidebar and planning
-tools, and navigation away from `/maps` is blocked. It shows the web app's `/maps` page in a `WKWebView`, so the map
-and the illustrative TypeScript fire model run unchanged (see
+map and simulation: an injected stylesheet hides the web sidebar, and navigation
+away from `/fire` is blocked. It shows the web app's `/fire` page (the Rothermel fire
+spread model) in a `WKWebView`, so the map and the TypeScript fire model run unchanged (see
 [ADR 0007](../docs/adr/0007-mobile-web-map.md)). `WEB_BASE_URL` is an origin like
 `API_BASE_URL`, with the same validation; Debug uses `http://localhost:5173`, the
 Vite server started by `docker compose up` in `app/`. The tab shows a loading
@@ -153,8 +153,9 @@ pre-commit run --all-files
 No tests, lint, type checks, builds, simulator/device runs, or browser verification
 are part of the default agent workflow. They require an explicit user request.
 The embedded map was built with Xcode 26.6 and run on an iOS 26.5 simulator. Its
-loading, error and retry states were checked, and the real `/maps` page from
-`docker compose up` rendered with its fire controls. It has not been checked on a
+loading, error and retry states were checked, and the then-current `/maps` page from
+`docker compose up` rendered with its fire controls. The tab now loads `/fire`
+instead; that has not been run on a simulator. It has not been checked on a
 physical device.
 
 My Plan was run on the same simulator: Apple Maps search, tap-to-place, save,

@@ -256,8 +256,7 @@ export default function AgentPanel(props: AgentPanelProps) {
       )}
 
       <p className="dispatch-disclaimer">
-        Planning experiment. The agent chooses among options the simulator computes; it does not change the fire, and
-        its orders are not operational instructions.
+        Planning experiment. The agent picks among options the simulator computes; it does not change the fire.
       </p>
     </section>
   );

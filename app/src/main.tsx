@@ -1,11 +1,9 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import App from "./App";
 import AppShell from "./AppShell";
 import FireSimulatorPage from "./fire/FireSimulatorPage";
 import SimulationStudioPage from "./studio/SimulationStudioPage";
 import DispatchAgentPage from "./dispatch/DispatchAgentPage";
-import MapsPage from "./maps/MapsPage";
 import ScenariosPage from "./pages/ScenariosPage";
 import EvacuationPage from "./pages/EvacuationPage";
 import ComparisonPage from "./pages/ComparisonPage";
@@ -19,13 +17,12 @@ import ReplayRoute from "./replay/IncidentPicker";
 import "./index.css";
 import "./pages/workspace.css";
 
+// The workspace has no landing page; the root opens the fire spread model.
+if (window.location.pathname === "/")
+  window.history.replaceState(null, "", "/fire" + window.location.search + window.location.hash);
 const path = window.location.pathname.replace(/\/+$/, "") || "/";
 const page =
-  path === "/" ? (
-    <App />
-  ) : path === "/maps" ? (
-    <MapsPage />
-  ) : path === "/fire" ? (
+  path === "/fire" ? (
     <FireSimulatorPage />
   ) : path === "/simulation" ? (
     <SimulationStudioPage />

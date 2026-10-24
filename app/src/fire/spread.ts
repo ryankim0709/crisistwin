@@ -162,14 +162,13 @@ export const MOISTURE_PRESETS: readonly MoisturePreset[] = [
  * (a 24-hour run has 97 frames), so frame k is always at k x 15 minutes.
  */
 export const FIRE_STEP_MINUTES = 15;
-export const FIRE_HORIZON_MINUTES = 180;
 /**
- * Horizons the page offers, minutes. The 12- and 24-hour choices hold wind, wind
- * direction and fuel moisture constant for the whole horizon — no diurnal cycle, no
- * overnight humidity recovery, no wind shift — so they are a constant-weather stress
- * test rather than a forecast of a day's growth (docs/adr/0012-fire-large-areas.md).
+ * Fixed horizon of every page run, minutes (24 hours). Wind, wind direction and fuel
+ * moisture stay constant for the whole horizon — no diurnal cycle, no overnight humidity
+ * recovery, no wind shift — so a run is a constant-weather stress test rather than a
+ * forecast of a day's growth (docs/adr/0012-fire-large-areas.md).
  */
-export const HORIZON_CHOICES = [120, 180, 360, 720, 1440] as const;
+export const FIRE_HORIZON_MINUTES = 1440;
 /**
  * Flat midflame fraction, kept as the scenario default, as the value the page's control
  * starts from, and as the fallback when no canopy data is available.

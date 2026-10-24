@@ -25,13 +25,10 @@ documented below and in the [scaffold decision](docs/adr/0001-app-scaffold.md).
 The full stack development scaffold is in [`app/`](app/): React/TypeScript with
 Vite and Tailwind CSS, a Django REST Framework API, MongoDB via PyMongo, Vitest,
 and Docker.
-The workspace has shared sidebar navigation, page-specific UI scaffolds, and an
-overview that checks the API and database connection. Planning pages support
+The workspace has shared sidebar navigation and page-specific UI scaffolds; `/`
+opens the fire spread model at `/fire`. Planning pages support
 temporary local input editing; they do not save scenarios or execute evacuation
-models. The imagery map at `/maps` starts over San Francisco and supports an
-illustrative fire-spread experiment:
-choose an origin, set wind, and inspect the simulated footprint in 15-minute
-steps. A historical replay simulator for the 2018 Camp Fire is in progress in [`sim/`](sim/README.md);
+models. A historical replay simulator for the 2018 Camp Fire is in progress in [`sim/`](sim/README.md);
 persistent scenarios and live incident integrations are not implemented yet.
 The `/diorama` page is a fictional, ~90-second looping wildfire evacuation of the
 made-up town Larkspur Hollow, rendered in 3D with three.js. Its data are synthetic and
@@ -234,9 +231,7 @@ expands the navigation. The current page is marked with an arrow and
 `aria-current`; a keyboard-accessible **Skip to content** link reaches the main
 content. Each page has its own URL and document title:
 
-- `/`: workflow shortcuts, recent-work empty state, and API/database readiness.
-- `/maps`: working imagery map and illustrative fire simulation, a footprint
-  visibility toggle, and a collapsible preview of future map layers and tools.
+- `/`: redirects to `/fire`.
 - `/scenarios`: editable name/weather/notes, sample templates, a local draft
   review, reproducibility fields, and the future scenario library.
 - `/evacuation`: synthetic population/vehicle inputs, departure strategy and
@@ -267,51 +262,13 @@ and `tabIndex={-1}`. No backend contract changed. See the
 [navigation decision](docs/adr/0005-workspace-navigation.md) and
 [UI scaffold boundaries](docs/adr/0006-planning-ui-scaffolds.md).
 
-### Map component
+### Map imagery
 
-Open **http://localhost:5173/maps** for the map and fire-spread demo:
-
-1. Click to choose the fire origin (or focus the map and press Enter).
-2. Set wind speed in **mph** and the compass direction it comes **from**.
-3. Select **Simulate fire**. The map focuses on the origin and shows +15 minutes.
-4. Step, scrub, or play through **0–120 minutes in 15-minute intervals**.
-
-Changing wind or origin clears the previous run. Playback advances through
-precomputed frames; it does not change the model's simulation clock. The model
-is an illustrative uniform-fuel approximation: terrain, water, buildings,
-moisture, and suppression are not modeled. The map's imagery is not a model
-input. See the [fire model and frame contract](docs/adr/0003-illustrative-fire-spread.md).
-
-`app/src/maps/MapCanvas.tsx` is the reusable **MapLibre GL JS** component. It uses
-USGS historical imagery and a bundled SF overview so the first view has geography
-while detailed tiles stream. Cached-image sources, retrieval times, and bounds
-are in `app/public/map-preview/provenance.json`. Outside that preview coverage,
-imagery requires the remote service. WebGL2 is required; no API key is needed.
-MapLibre's worker is explicitly bundled using Vite's `?worker&url` import so
-GeoJSON simulation overlays can render in development and production.
-
-```tsx
-<MapCanvas
-  center={{ latitude: 37.7749, longitude: -122.4194 }}
-  zoom={11.5}
-  selectedLocation={origin}
-  firePerimeter={frame?.perimeter}
-  onLocationSelect={setOrigin}
-/>
-```
-
-The parent supplies a container height. `center` and `zoom` move the existing map;
-`selectedLocation` controls the marker (`null` clears it); `firePerimeter` updates
-only the GeoJSON overlay. Optional `mapStyle` accepts a MapLibre style object or
-URL and recreates the map when changed. Keep style objects stable. Selection
-callbacks return WGS84 decimal degrees, with longitude normalized to [-180, 180).
-Arrow keys pan and `+`/`-` zoom when the map canvas is focused.
-
-USGS imagery is historical, not live fire data. Detailed coverage is primarily
-in the US. We cap remote requests at native zoom 16 and overscale at closer
-views. A local SF overview, bounded image concurrency, tile caching, and
-canceling obsolete zoom requests reduce loading stalls. **Retry imagery** retries
-remote tiles on demand. See the [map decision](docs/adr/0002-geographic-map.md).
+`app/src/maps/basemap.ts` holds the shared **MapLibre GL JS** USGS historical
+imagery style used by the fire and replay maps. Cached-image sources, retrieval
+times, and bounds are in `app/public/map-preview/provenance.json`. USGS imagery
+is historical, not live fire data. See the
+[map decision](docs/adr/0002-geographic-map.md).
 
 After pulling changed dependencies into an existing Docker setup, refresh its
 separate npm volume:
@@ -340,18 +297,15 @@ resize it and a long run may reach its edge. Cells coarsen from LANDFIRE's nativ
 large boards to keep the grid at most 900 cells a side; the page states radius and cell size
 (fuels resampled by majority; Details has a resolution card) because coarser cells smooth narrow fuel breaks and small neighbourhoods. Click the landscape to place an ignition (in the 3D view, drag to pan, right-drag or Ctrl-drag to rotate, scroll to zoom; arrow keys pan)
 point, set the 20-foot wind speed and the direction it blows from, pick a fuel-moisture
-preset, then play the fire forward over a 2, 3, 6, 12, or 24 hour horizon. Playback is
+preset, then play the fire forward over a fixed 24 hour horizon. Playback is
 continuous (1× is 10 model minutes per second, rising to horizon ÷ 18 for horizons past
 3 h, so 80 model minutes per second at 24 h; 0.5×, 2×, and 4× are available) while the results use
 the model's **15-minute** frames. The presets are the standard dead and live moisture
-scenarios that go with the Scott & Burgan fuel models; _Advanced: moisture classes and
-spread parameters_ opens the 1-hour, 10-hour, 100-hour, live herbaceous, and live woody
-values, the midflame wind factor (the share of the open wind that reaches flame height, 0.5
-by default), the maximum spotting distance, and the structure-to-structure spread rate. The
-midflame factor is a user override, not the model's preferred input: while it is left at its
-default and canopy data loaded for the area, each cell instead gets its own factor from
-canopy cover, canopy height, and fuel bed depth, lower under a closed stand than in the
-open; moving the control off its default applies that one flat value everywhere instead.
+scenarios that go with the Scott & Burgan fuel models. The midflame wind factor, maximum
+spotting distance, and structure-to-structure spread rate stay at their defaults (midflame
+0.5, the share of the open wind that reaches flame height). When canopy data loaded for
+the area, each cell instead gets its own factor from canopy cover, canopy height, and fuel
+bed depth, lower under a closed stand than in the open.
 Switching the click target to _Wind direction_ lets you click downwind of the ignition point
 to aim the wind; the numeric field and the arrow at the ignition point stay in sync with it.
 The _View_ switch flips between the diorama and the original USGS aerial-imagery map (needs a network connection) with the same run, time, and clicks; the choice is remembered in the browser. _Show the fuel layer the model is using_ tints the ground by fuel family, _Focus fire_
@@ -396,10 +350,8 @@ to show peak fire weather; they are **explicitly unvalidated**, and the page say
 The page loads the real landscape around an area centre when it opens (default Berkeley
 Hills, 37.88, -122.24): a LANDFIRE FBFM40 fuel raster, four more LANDFIRE layers for canopy
 base height, bulk density, cover, and height that the crown fire model needs, and terrain
-elevation tiles, over a radius scaled to the horizon — roughly 5 km at two hours and 12 km
-at six. Clicking the landscape places the ignition point without refetching. Changing the
-horizon refetches around the same centre and drops the ignition point if it falls outside
-the new box. **Change area** picks a new centre from the presets (Berkeley Hills, Paradise,
+elevation tiles, over a radius scaled to the 24 hour horizon. Clicking the landscape places
+the ignition point without refetching. **Change area** picks a new centre from the presets (Berkeley Hills, Paradise,
 Malibu / Woolsey) or a small locator map, and clears the ignition point and run. The canopy
 layers cost a real extra download — five coverages' worth of sub-requests instead of one —
 and a run still proceeds as surface fire only, clearly labelled as such, if any of them fails
@@ -454,7 +406,7 @@ const run = simulateFireSpread(landscape, {
   moisture: MOISTURE_PRESETS[0].moisture, // critical / Red Flag
   midflameAdjustment: DEFAULT_MIDFLAME_ADJUSTMENT, // 0.5 of the open wind
   stepMinutes: FIRE_STEP_MINUTES, // 15
-  horizonMinutes: FIRE_HORIZON_MINUTES, // 180
+  horizonMinutes: FIRE_HORIZON_MINUTES, // 1440
   spotting: DEFAULT_SPOTTING, // { enabled: true, maxDistanceMeters: 500 }
   structureSpread: DEFAULT_STRUCTURE_SPREAD, // { enabled: true, rateMetersPerMinute: 4 }
 });

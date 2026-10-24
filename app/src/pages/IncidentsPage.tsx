@@ -131,12 +131,10 @@ export default function IncidentsPage() {
     <WorkspacePage
       title="Incident intelligence"
       description="Inspect the evidence before it becomes a scenario assumption."
-      section="Analysis"
     >
       <p className="ui-notice">
-        <strong>Historical data only</strong> Replays use archived fire, road and order records.
-        This workspace is not monitoring live incidents; the review example further down is
-        synthetic.
+        <strong>Historical data only</strong> Archived records, not live monitoring. The review
+        example below is synthetic.
       </p>
       <IncidentLibrary />
       <div className="ui-split">

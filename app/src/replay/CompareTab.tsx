@@ -38,11 +38,9 @@ export default function CompareTab({ baseline, index, load, showVariant, onSelec
   return (
     <div className="rp-tab">
       <p className="rp-disclaimer rp-disclaimer--top" role="note">
-        <EvidenceChip value="simulated" /> What-if variants are simulated counterfactuals on the same seed, network and
-        demand
+        <EvidenceChip value="simulated" /> Simulated counterfactuals on the same seed, network and demand
         {index.demandTotalVeh != null && <> ({index.demandTotalVeh.toLocaleString("en-US")} vehicles)</>} as the
-        baseline run. They are planning experiments, not history. Fire perimeters, roads and damage shown on the map
-        are unchanged.
+        baseline. Fire perimeters, roads and damage on the map are unchanged.
       </p>
 
       {load.status === "ready" && (

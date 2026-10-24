@@ -40,7 +40,7 @@ export default function ScenariosPage() {
       title="Scenarios"
       description="Define the starting point. Keep every assumption in view."
       action={
-        <a className="ui-button" href="/maps">
+        <a className="ui-button" href="/fire">
           Open fire experiment ↗
         </a>
       }
@@ -49,7 +49,7 @@ export default function ScenariosPage() {
         title="Real fire inputs in the replays"
         eyebrow="Historical starting conditions"
         layers={["fire_perimeters", "fire_observations", "fire_simulated"]}
-        intro="Historical replays start from recorded fire perimeters and observations, plus a simulated front fitted to them. The draft builder below is separate and still uses illustrative assumptions."
+        intro="Replays start from recorded perimeters and observations, plus a simulated front fitted to them. The draft builder below uses illustrative assumptions instead."
       />
       <DraftNotice />
       <div className="ui-split">
@@ -109,7 +109,7 @@ export default function ScenariosPage() {
                 Choose a location on the map in WGS84 latitude / longitude. This draft is not
                 transferred to the map yet.
               </p>
-              <a href="/maps">Choose on map →</a>
+              <a href="/fire">Choose on map →</a>
             </div>
             <Field label="Assumptions & notes">
               <textarea

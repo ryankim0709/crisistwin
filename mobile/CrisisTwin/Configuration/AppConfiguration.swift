@@ -6,7 +6,7 @@ enum AppConfiguration {
         try origin(forInfoKey: "APIBaseURL", bundle: bundle)
     }
 
-    /// The web workspace origin; the app appends `/maps`. Same rules as the API origin.
+    /// The web workspace origin; the app appends `/fire`. Same rules as the API origin.
     static func webBaseURL(bundle: Bundle = .main) throws -> URL {
         try origin(forInfoKey: "WebBaseURL", bundle: bundle)
     }

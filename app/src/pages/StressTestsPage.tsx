@@ -122,8 +122,6 @@ function Results({ doc }: { doc: StressDoc }) {
               <caption>
                 Each cell is the disrupted value, then its change from the baseline. Higher is
                 better for vehicles out ({when}); lower is better for exposure and blocked vehicles.
-                All values are simulator output for a single seed; small changes are not
-                significant.
               </caption>
               <thead>
                 <tr>
@@ -157,14 +155,10 @@ function Results({ doc }: { doc: StressDoc }) {
         )}
       </Panel>
       {doc.findings && (
-        <Panel
-          title="AI findings"
-          eyebrow="Explanation of the results above"
-          aside={<EvidenceTag kind="ai_explanation" />}
-        >
+        <Panel title="AI findings" aside={<EvidenceTag kind="ai_explanation" />}>
           <p className="ui-notice">
             <strong>AI explanation</strong> Written by {doc.findings.model ?? "an AI model"} from
-            the simulator&rsquo;s numbers. It is not a computed result; check it against the table.
+            the numbers above, not computed.
           </p>
           <pre className="ai-findings">{doc.findings.markdown}</pre>
         </Panel>
@@ -201,7 +195,7 @@ function Results({ doc }: { doc: StressDoc }) {
             </a>
           </div>
         </Panel>
-        <Panel title="Limitations" eyebrow="Read before comparing">
+        <Panel title="Limitations">
           {doc.limitations.length > 0 ? (
             <ul className="ui-checklist">
               {doc.limitations.map((line) => (
@@ -210,7 +204,7 @@ function Results({ doc }: { doc: StressDoc }) {
             </ul>
           ) : (
             <EmptyResult title="No limitations recorded">
-              The file lists none. Treat results as a single-seed planning experiment anyway.
+              The file lists none. Results are still a single-seed experiment.
             </EmptyResult>
           )}
         </Panel>
@@ -225,7 +219,6 @@ export default function StressTestsPage() {
     <WorkspacePage
       title="Stress testing"
       description="Where does the 2018 Camp Fire evacuation plan break? Each run disrupts the baseline once."
-      section="Analysis"
     >
       {load.status === "ready" ? (
         <Results doc={load.data} />

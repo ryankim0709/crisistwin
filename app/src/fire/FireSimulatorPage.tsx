@@ -21,8 +21,6 @@ import {
 } from "./landscapePackage";
 import { DEFAULT_REGION_ID, CALIFORNIA_REGIONS, REGION_AREAS } from "./regions";
 import {
-  LANDFIRE_ATTRIBUTION,
-  TERRAIN_ATTRIBUTION,
   landscapeCellMetersFor,
   loadLandscape,
   type LandscapeGrid,
@@ -34,13 +32,11 @@ import {
   DEFAULT_STRUCTURE_SPREAD,
   FIRE_HORIZON_MINUTES,
   FIRE_STEP_MINUTES,
-  HORIZON_CHOICES,
   METERS_PER_MILE,
   MOISTURE_PRESETS,
   NonBurnableIgnitionError,
   SQUARE_METERS_PER_ACRE,
   SQUARE_METERS_PER_HECTARE,
-  STRUCTURE_SPREAD_REFERENCE_WIND_MPH,
   bearingBetween,
   cellAt,
   compassPoint,
@@ -49,7 +45,7 @@ import {
   type FireRun,
   type GeoPoint,
 } from "./spread";
-import { NWS_ATTRIBUTION, fetchNwsWind, type NwsWindReading } from "./weather";
+import { fetchNwsWind, type NwsWindReading } from "./weather";
 import "./fire.css";
 
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
@@ -77,41 +73,8 @@ const DEFAULT_PRESET = MOISTURE_PRESETS[0];
 /** Dry downslope wind event, in the range of the Diablo/Santa Ana winds. Unvalidated. */
 const DEFAULT_WIND_SPEED_MPH = 40;
 
-// Bounds for the two new mechanism parameters. Wide enough to explore, narrow enough that a
-// stray keystroke cannot hand the model an absurd value.
-const MAX_SPOTTING_DISTANCE_METERS = 2000;
-const MAX_STRUCTURE_SPREAD_METERS_PER_MINUTE = 20;
-/**
- * Past the model's own default, a spot distance implies plume-dominated crown fire, which
- * this surface model does not represent. Still allowed, but labelled rather than silent.
- */
-const SUPPORTED_SPOTTING_DISTANCE_METERS = DEFAULT_SPOTTING.maxDistanceMeters;
-
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(Math.max(value, minimum), maximum);
-}
-
-/** Which optional mechanisms are in play, spelled out so the disclaimer stays truthful. */
-function mechanismsSentence(spotting: boolean, structures: boolean): string {
-  if (spotting && structures) {
-    return (
-      "Ember spotting and structure-to-structure spread are switched on; both are simplified " +
-      "add-ons, not validated models."
-    );
-  }
-  if (spotting) {
-    return (
-      "Ember spotting is switched on as a simplified add-on, not a validated model; " +
-      "structure-to-structure spread is off."
-    );
-  }
-  if (structures) {
-    return (
-      "Structure-to-structure spread is switched on as a simplified add-on, not a validated " +
-      "model; ember spotting is off."
-    );
-  }
-  return "Ember spotting and structure-to-structure spread are both switched off.";
 }
 
 /**
@@ -161,15 +124,6 @@ function formatShareAndArea(squareMeters: number, total: number): string {
 function formatDistance(meters: number): string {
   return `${(meters / 1000).toFixed(2)} km · ${(meters / METERS_PER_MILE).toFixed(2)} mi`;
 }
-
-// Short labels: the advanced grid gives each field about 90px.
-const MOISTURE_FIELDS: { key: keyof FuelMoisture; label: string; title: string }[] = [
-  { key: "dead1h", label: "1-h", title: "1-hour timelag dead fuel moisture" },
-  { key: "dead10h", label: "10-h", title: "10-hour timelag dead fuel moisture" },
-  { key: "dead100h", label: "100-h", title: "100-hour timelag dead fuel moisture" },
-  { key: "liveHerb", label: "Herb", title: "Live herbaceous fuel moisture" },
-  { key: "liveWoody", label: "Woody", title: "Live woody fuel moisture" },
-];
 
 /** Where the board's data came from, shown next to the area. */
 type Provenance =
@@ -233,11 +187,6 @@ function areaLabel(center: GeoPoint): string {
     : `${center.latitude.toFixed(2)}, ${center.longitude.toFixed(2)}`;
 }
 
-function formatBuilt(iso: string): string {
-  const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? iso : date.toISOString().slice(0, 10);
-}
-
 export default function FireSimulatorPage() {
   const reducedMotion = useMediaQuery(REDUCED_MOTION_QUERY);
   const wide = useMediaQuery(WIDE_QUERY);
@@ -255,16 +204,12 @@ export default function FireSimulatorPage() {
   const [windFromDegrees, setWindFromDegrees] = useState(45);
   const [presetId, setPresetId] = useState(DEFAULT_PRESET.id);
   const [moisture, setMoisture] = useState<FuelMoisture>(DEFAULT_PRESET.moisture);
-  const [midflameAdjustment, setMidflameAdjustment] = useState(DEFAULT_MIDFLAME_ADJUSTMENT);
+  const midflameAdjustment = DEFAULT_MIDFLAME_ADJUSTMENT;
   const [spottingEnabled, setSpottingEnabled] = useState(true);
-  const [spottingDistanceMeters, setSpottingDistanceMeters] = useState(
-    DEFAULT_SPOTTING.maxDistanceMeters,
-  );
+  const spottingDistanceMeters = DEFAULT_SPOTTING.maxDistanceMeters;
   const [structureSpreadEnabled, setStructureSpreadEnabled] = useState(true);
-  const [structureSpreadRate, setStructureSpreadRate] = useState(
-    DEFAULT_STRUCTURE_SPREAD.rateMetersPerMinute,
-  );
-  const [horizonMinutes, setHorizonMinutes] = useState<number>(FIRE_HORIZON_MINUTES);
+  const structureSpreadRate = DEFAULT_STRUCTURE_SPREAD.rateMetersPerMinute;
+  const horizonMinutes = FIRE_HORIZON_MINUTES;
   const [clickMode, setClickMode] = useState<GroundClickMode>("origin");
   const [showFuel, setShowFuel] = useState(false);
   const [landscape, setLandscape] = useState<LandscapeState>({ status: "idle" });
@@ -281,7 +226,6 @@ export default function FireSimulatorPage() {
   );
   const [scenarioOpenChoice, setScenarioOpenChoice] = useState<boolean | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const [noticeOpen, setNoticeOpen] = useState(false);
 
   const stageRef = useRef<HTMLDivElement>(null);
   const sceneHostRef = useRef<HTMLDivElement>(null);
@@ -626,12 +570,6 @@ export default function FireSimulatorPage() {
     setMoisture(preset.moisture);
   }
 
-  function editMoisture(key: keyof FuelMoisture, percent: number) {
-    if (!Number.isFinite(percent)) return;
-    setPresetId("custom");
-    setMoisture((current) => ({ ...current, [key]: Math.min(Math.max(percent, 0), 400) / 100 }));
-  }
-
   function clearScenario() {
     setOrigin(null);
     pause();
@@ -673,7 +611,6 @@ export default function FireSimulatorPage() {
 
   // Frame the board inside the part of the stage the floating overlay leaves uncovered.
   const hasRun = run !== null;
-  const showHint = origin === null && landscape.status === "ready";
   useEffect(() => {
     const stage = stageRef.current;
     const overlay = stage?.querySelector<HTMLElement>(".fr-overlay");
@@ -842,26 +779,8 @@ export default function FireSimulatorPage() {
     }
   }
 
-  const hintText = origin
-    ? clickMode === "origin"
-      ? "Click anywhere to move the ignition point."
-      : "Click downwind of the ignition point to aim the wind that way."
-    : "Click the landscape to place an ignition point on vegetated ground.";
   const sceneReady = sceneStatus.kind === "ready";
-  // Report the resolution the loaded grid really has; the request is only a stand-in while loading.
-  const displayedCellMeters = grid ? grid.cellMeters : requestedCellMeters;
-  const resamplingNote =
-    grid?.resampling === "mode"
-      ? " · fuels resampled by majority"
-      : grid?.resampling === "nearest"
-        ? " · fuels resampled by nearest cell"
-        : "";
   const provenance = landscape.status === "ready" ? landscape.provenance : null;
-  const provenanceText = provenance
-    ? provenance.kind === "stored"
-      ? `Stored landscape · built ${formatBuilt(provenance.builtAt)} · LANDFIRE 2025 · ${provenance.cellMeters} m cells`
-      : "Live from LANDFIRE"
-    : null;
   const storedUnavailable =
     landscape.status === "loading"
       ? landscape.storedUnavailable
@@ -964,7 +883,6 @@ export default function FireSimulatorPage() {
             <header className="fr-scenario-head">
               <div>
                 <h1 id="fire-controls-title">Fire spread simulator</h1>
-                <p className="fr-kicker">Simulated · illustrative, not operational</p>
               </div>
               <button
                 type="button"
@@ -1037,15 +955,6 @@ export default function FireSimulatorPage() {
                     </select>
                   </div>
                 )}
-                <p className="fr-readout">
-                  {region && `${region.summary} Anchor: ${region.station.name}. · `}
-                  {centerLatitude.toFixed(3)}, {centerLongitude.toFixed(3)} ·{" "}
-                  {formatKm(radiusMeters)} km · {displayedCellMeters} m cells
-                  {resamplingNote}
-                  {displayedCellMeters > NATIVE_CELL_METERS &&
-                    " · coarse cells smooth narrow fuel breaks"}
-                </p>
-                {provenanceText && <p className="fr-readout">{provenanceText}</p>}
                 {storedUnavailable && (
                   <p className="fr-alert" role="status">
                     Stored region unavailable — loading live from LANDFIRE instead.
@@ -1076,7 +985,6 @@ export default function FireSimulatorPage() {
                     <span>Wind direction</span>
                   </label>
                 </div>
-                <p className="fr-hint">{hintText}</p>
               </fieldset>
 
               <div className="fr-field">
@@ -1120,7 +1028,6 @@ export default function FireSimulatorPage() {
                 >
                   Use current NWS wind
                 </button>
-                {!origin && <p className="fr-hint">Place an ignition point first.</p>}
                 {windSource.status === "loading" && (
                   <div className="fr-loading" role="status">
                     <span className="fr-spinner" aria-hidden="true" />
@@ -1132,13 +1039,9 @@ export default function FireSimulatorPage() {
                     {windSource.message}
                   </p>
                 )}
-                {windSource.status === "ready" ? (
+                {windSource.status === "ready" && (
                   <p className="fr-status">
                     {nwsProvenance(windSource.reading, windSource.clampedFromMph)}
-                  </p>
-                ) : (
-                  <p className="fr-status">
-                    Assumption, not an observation — nothing fetched for this scenario yet.
                   </p>
                 )}
               </div>
@@ -1158,119 +1061,10 @@ export default function FireSimulatorPage() {
                     </button>
                   ))}
                 </div>
-                <details className="fr-advanced">
-                  <summary>Advanced: moisture classes and spread parameters</summary>
-                  <div className="fr-moisture-grid">
-                    {MOISTURE_FIELDS.map(({ key, label, title }) => (
-                      <div className="fr-moisture-field" key={key}>
-                        <label htmlFor={`moisture-${key}`} title={title}>
-                          {label} (%)
-                        </label>
-                        <input
-                          id={`moisture-${key}`}
-                          type="number"
-                          min={0}
-                          max={400}
-                          step={1}
-                          value={Math.round(moisture[key] * 100)}
-                          onChange={(event) => editMoisture(key, Number(event.target.value))}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                  <div className="fr-field fr-field-inline">
-                    <label htmlFor="midflame">Midflame wind factor</label>
-                    <input
-                      id="midflame"
-                      type="number"
-                      min={0.1}
-                      max={1}
-                      step={0.05}
-                      value={midflameAdjustment}
-                      onChange={(event) => {
-                        const value = Number(event.target.value);
-                        if (Number.isFinite(value)) {
-                          setMidflameAdjustment(Math.min(Math.max(value, 0.1), 1));
-                        }
-                      }}
-                    />
-                    <span className="fr-readout">
-                      Midflame wind {(windSpeedMph * midflameAdjustment).toFixed(1)} mph
-                    </span>
-                  </div>
-                  <div className="fr-field fr-field-inline">
-                    <label htmlFor="spotting-distance">Max spotting distance (m)</label>
-                    <input
-                      id="spotting-distance"
-                      type="number"
-                      min={0}
-                      max={MAX_SPOTTING_DISTANCE_METERS}
-                      step={50}
-                      value={spottingDistanceMeters}
-                      onChange={(event) => {
-                        const value = Number(event.target.value);
-                        if (Number.isFinite(value)) {
-                          setSpottingDistanceMeters(clamp(value, 0, MAX_SPOTTING_DISTANCE_METERS));
-                        }
-                      }}
-                    />
-                    <span className="fr-readout">
-                      {!spottingEnabled
-                        ? "Ember spotting is switched off, so this has no effect"
-                        : spottingDistanceMeters > SUPPORTED_SPOTTING_DISTANCE_METERS
-                          ? `${spottingDistanceMeters} m is past what surface-fire spotting supports`
-                          : `Embers land up to ${spottingDistanceMeters} m downwind`}
-                    </span>
-                  </div>
-                  <div className="fr-field fr-field-inline">
-                    <label htmlFor="structure-spread-rate">
-                      Structure spread rate at {STRUCTURE_SPREAD_REFERENCE_WIND_MPH} mph (m/min)
-                    </label>
-                    <input
-                      id="structure-spread-rate"
-                      type="number"
-                      min={0}
-                      max={MAX_STRUCTURE_SPREAD_METERS_PER_MINUTE}
-                      step={0.5}
-                      value={structureSpreadRate}
-                      onChange={(event) => {
-                        const value = Number(event.target.value);
-                        if (Number.isFinite(value)) {
-                          setStructureSpreadRate(
-                            clamp(value, 0, MAX_STRUCTURE_SPREAD_METERS_PER_MINUTE),
-                          );
-                        }
-                      }}
-                    />
-                    <span className="fr-readout">
-                      {structureSpreadEnabled
-                        ? "Assumed, not measured; the model scales it with wind speed"
-                        : "Structure-to-structure spread is switched off, so this has no effect"}
-                    </span>
-                  </div>
-                </details>
-              </div>
-
-              <div className="fr-field fr-field-inline">
-                <label htmlFor="horizon">Horizon</label>
-                <select
-                  id="horizon"
-                  value={horizonMinutes}
-                  onChange={(event) => setHorizonMinutes(Number(event.target.value))}
-                >
-                  {HORIZON_CHOICES.map((minutes) => (
-                    <option key={minutes} value={minutes}>
-                      {minutes / 60} h
-                    </option>
-                  ))}
-                </select>
-                {region && (
-                  <span className="fr-readout">A long run may reach the stored board's edge.</span>
-                )}
               </div>
 
               <div className="fr-field">
-                <span className="fr-field-title">Extra spread mechanisms (your assumptions)</span>
+                <span className="fr-field-title">Spread mechanisms</span>
                 <div className="fr-toggle-row">
                   <input
                     id="spotting-enabled"
@@ -1280,10 +1074,6 @@ export default function FireSimulatorPage() {
                   />
                   <label htmlFor="spotting-enabled">Ember spotting</label>
                 </div>
-                <p className="fr-hint">
-                  Embers carried downwind start new fires ahead of the front, letting it cross
-                  roads and firebreaks instead of stopping at them.
-                </p>
                 <div className="fr-toggle-row">
                   <input
                     id="structure-spread-enabled"
@@ -1293,20 +1083,7 @@ export default function FireSimulatorPage() {
                   />
                   <label htmlFor="structure-spread-enabled">Structure-to-structure spread</label>
                 </div>
-                <p className="fr-hint">
-                  Burning buildings ignite their neighbours, carrying fire through streets and
-                  yards with no vegetation.
-                </p>
               </div>
-
-              {structureSpreadEnabled && (
-                <p className="fr-warning" role="status">
-                  A coarse stand-in for urban conflagration, not a validated structure-fire model
-                  — it ignores building materials, spacing, defensible space, and suppression.
-                  Any burned area it contributes is an assumption you switched on, not a
-                  prediction of which homes are lost.
-                </p>
-              )}
 
               <div className="fr-toggle-row">
                 <input
@@ -1316,7 +1093,7 @@ export default function FireSimulatorPage() {
                   onChange={(event) => setShowFuel(event.target.checked)}
                   disabled={!grid}
                 />
-                <label htmlFor="show-fuel">Show the fuel layer the model is using</label>
+                <label htmlFor="show-fuel">Show fuel layer</label>
               </div>
 
               <button
@@ -1327,6 +1104,7 @@ export default function FireSimulatorPage() {
               >
                 Clear scenario
               </button>
+
             </div>
           </section>
 
@@ -1346,19 +1124,6 @@ export default function FireSimulatorPage() {
           )}
 
           <div className="fr-notice">
-            <div className="fr-notice-bar fr-panel">
-              <span className="fr-chip">Simulated · illustrative · not operational</span>
-              <button
-                type="button"
-                className="fr-info-btn"
-                aria-expanded={noticeOpen}
-                aria-controls="fr-notice-note"
-                aria-label="Sources and limits of this simulation"
-                onClick={() => setNoticeOpen((open) => !open)}
-              >
-                i
-              </button>
-            </div>
             <div className="fr-view fr-panel" role="radiogroup" aria-label="View">
               <span className="fr-view-label" aria-hidden="true">
                 View
@@ -1392,41 +1157,6 @@ export default function FireSimulatorPage() {
                   <span className="fr-view-text">Satellite</span>
                 </span>
               </label>
-            </div>
-            <div id="fr-notice-note" className="fr-notice-note fr-panel" hidden={!noticeOpen}>
-              <div className="fr-sources">
-                <p>Fuel: {LANDFIRE_ATTRIBUTION}</p>
-                <p>Terrain: {TERRAIN_ATTRIBUTION}</p>
-                <p>
-                  Spread: Rothermel (1972) per Andrews RMRS-GTR-371; Scott &amp; Burgan (2005)
-                  fuel models; minimum travel time after Finney (2002).
-                </p>
-                <p>Wind (only when fetched): {NWS_ATTRIBUTION}</p>
-              </div>
-              <div className="fr-disclaimer">
-                <p>
-                  Simulated result, not an observation. Rothermel surface fire with no
-                  suppression;{" "}
-                  {run
-                    ? run.crownFire.modelled
-                      ? "crown fire is estimated per cell from LANDFIRE canopy data."
-                      : "crown fire was not modelled for this run (surface fire only)."
-                    : "crown fire is estimated only where canopy data loads."}{" "}
-                  {mechanismsSentence(spottingEnabled, structureSpreadEnabled)} Wind and fuel
-                  moisture are uniform across the grid and constant in time. LANDFIRE fuel is a
-                  mapped 2025 product, not today&rsquo;s vegetation.
-                </p>
-                <p>
-                  The diorama is a stylized miniature of the loaded landscape: trees, houses and
-                  vertical exaggeration are symbols for fuel classes and relief, not observed
-                  detail.
-                </p>
-                <p>
-                  The default moisture preset and wind speed on this page are demo settings chosen
-                  to show peak fire weather, not values calibrated against a recorded fire.
-                </p>
-                <p>A planning experiment, not an operational evacuation instruction.</p>
-              </div>
             </div>
           </div>
 
@@ -1680,12 +1410,6 @@ export default function FireSimulatorPage() {
             </p>
           )}
 
-          {showHint && !outsideHint && (
-            <p className="fr-hint-chip fr-panel" role="status">
-              Click the landscape to place an ignition point
-            </p>
-          )}
-
           <FireLegend view={view} windTowardDegrees={windTowardDegrees} showFuel={showFuel} defaultOpen={wide} />
 
           <FireDock
@@ -1702,7 +1426,7 @@ export default function FireSimulatorPage() {
         <p className="fr-attribution">
           Fuel: LANDFIRE · Terrain: AWS terrain tiles (USGS 3DEP and others)
           {view === "satellite" ? " · Imagery: USGS The National Map" : ""}
-          {windSource.status === "ready" ? " · Wind: NWS" : ""} · Simulated, not operational
+          {windSource.status === "ready" ? " · Wind: NWS" : ""}
         </p>
 
         {areaPickerOpen && (
