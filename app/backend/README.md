@@ -151,7 +151,7 @@ returns 304. Errors are JSON: 404 `{"error": "not_found"}` for unknown/unbuilt r
 let the iOS app push any JSON object to Atlas and pull it back while its schema is designed.
 A device registers once for a bearer token (stored as a hash) and sees only its own documents,
 kept in the `mobile_documents` collection (devices in `mobile_devices`). Limits, errors and
-examples are in [ADR 0027](../../docs/adr/0027-mobile-data-store.md).
+examples are in [ADR 0029](../../docs/adr/0029-mobile-data-store.md).
 
 ### Live drill API (`/api/live/…`)
 
@@ -164,8 +164,8 @@ the `/api/live` prefix with the broadcast above but no code or collections (`liv
 
 - Auth: `Authorization: Bearer <token>`. `POST /api/live/devices` issues civilian tokens;
   `POST /api/live/incidents/camp-2018-drill/join {"invite_code"}` issues responder tokens
-  (`LIVE_INVITE_CODE`); the controller uses `LIVE_CONTROLLER_TOKEN`. Unset secrets fail
-  closed (403). Device tokens are stored as SHA-256 hashes.
+  (`LIVE_INVITE_CODE`, unset -> 403). The controller needs no token while
+  `LIVE_CONTROLLER_TOKEN` is unset; setting it requires that bearer token. Device tokens are stored as SHA-256 hashes.
 - The planner fixes every level, route and number. The rationale LLM
   (`LIVE_RATIONALE_MODEL`, `ANTHROPIC_API_KEY`) only rewrites the template text in a
   background thread (10 s timeout); without a key the template stays.

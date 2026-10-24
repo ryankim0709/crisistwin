@@ -1,4 +1,4 @@
-# 0027: Mobile data store in MongoDB Atlas
+# 0029: Mobile data store in MongoDB Atlas
 
 Date: 2026-10-24. Status: accepted as an interim store, until the app's schema is designed.
 

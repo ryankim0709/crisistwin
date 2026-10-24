@@ -4,7 +4,7 @@ The phone never holds an Atlas credential; it talks to this API, which owns the 
 (`api/mongodb.py`). Until the app's schema is designed, any JSON object can be pushed under
 a named collection and pulled back. Each phone registers once for a random device token,
 returned once and stored here only as a SHA-256 hash; a device sees only its own documents.
-Wire contract and limits: docs/adr/0027-mobile-data-store.md.
+Wire contract and limits: docs/adr/0029-mobile-data-store.md.
 
 POST   /api/mobile/devices                     {}                    -> 201 {device_id, device_token}
 GET    /api/mobile/data/<collection>           Bearer, ?limit&updated_after -> {documents: [Document]}

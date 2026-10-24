@@ -1,5 +1,6 @@
-// Controller client for the live API v2 (docs/live-reports.md). The controller token is typed
-// in by the person at the console and kept in sessionStorage only; it is never bundled.
+// Controller client for the live API v2 (docs/live-reports.md). The server needs no controller
+// token unless LIVE_CONTROLLER_TOKEN is set; then it is typed in at the console and kept in
+// sessionStorage only, never bundled.
 import type {
   ApproveProposalRequest,
   ApproveProposalResponse,

@@ -148,7 +148,7 @@ the Keychain; the family refreshes every 10 seconds in the foreground. Contract:
 
 `MobileDataStore.shared` pushes any `Codable` value to MongoDB Atlas and pulls it back,
 through the API's `/api/mobile/…` endpoints (see
-[ADR 0027](../docs/adr/0027-mobile-data-store.md)). The app holds no Atlas credential. On its
+[ADR 0029](../docs/adr/0029-mobile-data-store.md)). The app holds no Atlas credential. On its
 first call, the store registers this phone for a device token and keeps it in the Keychain. A
 phone sees only its own documents. Until the schema is designed, nothing in the UI uses it yet:
 

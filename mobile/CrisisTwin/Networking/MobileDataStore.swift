@@ -27,7 +27,7 @@ enum MobileDataError: LocalizedError {
 }
 
 /// Pushes and pulls app data to MongoDB Atlas through the CrisisTwin API (`/api/mobile/…`,
-/// docs/adr/0027-mobile-data-store.md). The phone never holds an Atlas credential: it registers
+/// docs/adr/0029-mobile-data-store.md). The phone never holds an Atlas credential: it registers
 /// once for a device token, kept in the Keychain, and sees only its own documents. Values are any
 /// `Codable` type; keys go over the wire in snake_case, like every other `BackendClient` call.
 actor MobileDataStore {

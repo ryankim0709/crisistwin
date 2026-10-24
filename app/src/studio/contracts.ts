@@ -19,6 +19,8 @@ import type {
 } from "../fire/scheduledTypes";
 import type { CrewArrival, FirefightingResult, FirefightingSettings } from "./firefighting";
 import type { CrewDispatch } from "./crewDispatch";
+import type { EvacuationInputs } from "./evacuation";
+import type { EvacuationOptimization } from "./evacuationOptimizer";
 
 // ---------------------------------------------------------------------------------------
 // Scenario (user assumptions). Persisted as JSON with `schemaVersion`.
@@ -172,6 +174,24 @@ export type SolverResponse =
     }
   | { type: "progress"; requestId: number; done: number; total: number }
   | { type: "error"; requestId: number; message: string; problems: IgnitionProblem[] };
+
+// ---------------------------------------------------------------------------------------
+// Worker protocol (`evacuationOptimizer.worker.ts`). One optimisation per message. The
+// optimiser is synchronous, so the client terminates and respawns the worker to cancel.
+// ---------------------------------------------------------------------------------------
+
+export type OptimizerRequest = {
+  type: "optimize";
+  requestId: number;
+  /** Structured-cloned: Set, Float64Array and plain objects survive. */
+  inputs: EvacuationInputs;
+  maxEvaluations?: number;
+};
+
+export type OptimizerResponse =
+  | { type: "result"; requestId: number; result: EvacuationOptimization }
+  | { type: "progress"; requestId: number; done: number; total: number }
+  | { type: "error"; requestId: number; message: string };
 
 // ---------------------------------------------------------------------------------------
 // Component props. Page composition (SimulationStudioPage) owns all state.
