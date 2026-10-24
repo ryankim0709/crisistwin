@@ -23,6 +23,7 @@ All outputs are planning experiments, not operational fire or evacuation guidanc
 | `incidents.py` | Incident registry (`camp-2018`, `marshall-2021`, `kincade-2019`, `woolsey-2018`) and the generic package path: verification, perimeters, ignition, clock, crosswalk demand, fitted front, `index.json` |
 | `ground_rates.py` | Empirical 911, radio and rescue rates from the Camp 2018 ground record, relative to zone fire arrival and orders; `fit_camp_2018()` ([calibration](../docs/ground-data-calibration.md)) |
 | `evaluation.py` | Strategy comparison statistics: run manifests, paired bootstrap CIs, sign-flip test, Holm, effect sizes, power from pilot variance, result tables ([protocol](../docs/strategy-evaluation.md)) |
+| `gen_comms.py` | Seeded synthetic 911, radio and rescue items (`simulated`) for any scenario, in the ground-record item schema, calibrated by `GroundRateParams`; `generate_comms()` ([generator](../docs/ground-data-calibration.md#generator), [ADR](../docs/adr/0035-comms-generator.md)) |
 | `bundle.py` | Assemble the web-app replay bundle ([contract](../docs/replay-bundle.md)) |
 | `__main__.py` | CLI |
 

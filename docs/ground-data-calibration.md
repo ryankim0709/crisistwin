@@ -207,7 +207,9 @@ continues at 0 to 18 rows per hour until 01Z 11/09.
   blocks). The whole-record ratio of 263 : 93 = 2.8 is misleading, because radio continues for
   15 hours after the 911 sample ends.
 - **Rescue (K-1) vs 911.** 39 of the 190 K-1 rows with a coordinate fall within 1 minute and
-  300 m of a 911 row. In 18 zones that have both, the first K-1 row is a median **0 min** after
+  300 m of a 911 row. Counting only the 90 K-1 rows inside the 911 coverage window, where a
+  partner call can exist, 39 of 90 (43%) coincide (`rescue_rows_coinciding_with_911_in_window`).
+  In 18 zones that have both, the first K-1 row is a median **0 min** after
   the first 911 help_needed/trapped row (IQR 0 to 0; range -54 to +67). K-1 times are each
   event's *first datapoint*, which is often the 911 call itself. **K-1 is not an independent
   later "rescue request" stream:** a generator that emits a 911 call and a K-1 rescue for the
@@ -258,3 +260,119 @@ May not:
 python3.12 -m unittest tests.test_ground_rates          # 14 tests, about 6 s
 python3.12 -c "from sim.ground_rates import fit_camp_2018; import json; print(json.dumps(fit_camp_2018().to_dict(), indent=1, default=str))"
 ```
+
+## Generator
+
+[`sim/gen_comms.py`](../sim/gen_comms.py) turns these parameters into seeded synthetic 911,
+radio and rescue items for any scenario ([ADR 0035](adr/0035-comms-generator.md)). It is stdlib
+only and pure. Tests: `python3.12 -m unittest tests.test_gen_comms`.
+
+```python
+generate_comms(zones: Sequence[CommsZone], roads: Sequence[RoadEdge],
+               window_utc: tuple[datetime, datetime], params: GroundRateParams, seed: int,
+               options: CommsOptions = CommsOptions()) -> list[dict]
+```
+
+- `CommsZone(id, households, centroid_lonlat, geometry, fire_arrival_at=None, order_at=None,
+  fire_distance_m=None)`: times are aware UTC. `fire_distance_m(at)` returns metres to the
+  nearest burning point, `None` while nothing burns, and 0 once fire is in the zone.
+- `RoadEdge(id, name, coords)`, in the bundle's `roads.edges` shape (`roads_from_bundle`).
+- `CommsOptions(scale_911=None, nist_sample_like=False, psap_reroute_at=None,
+  overdispersion=True, channels=("911", "radio", "rescue"))`. `scale_911=None` means
+  `params.scale_911_at_least` (3.67, a lower bound). `nist_sample_like=True` uses 1.0.
+- Params without the bundle: `params_from_dict(json.load(open("tests/fixtures/ground_rates_camp_2018.json")))`.
+  The fixture is a snapshot of `fit_camp_2018()`, and a test compares it with a fresh fit when
+  the bundle is present.
+
+**Output.** Each item has the record's keys (`id`, `at`, `time_precision`, `channel`,
+`category`, `road_name`, `coord`, `summary`, `evidence_class`, `source_locator`,
+`text_sha12`) plus `generator`, `params_hash` and `seed`, sorted by `at`:
+
+- `evidence_class` is `"simulated"` and `time_precision` is `"minute"`. `at` is floored to the
+  minute.
+- `summary` comes from the record template (`tools.camp_ground_record.summary_for`).
+- `text_sha12` is `null`, because a generated item has no source text.
+- `coord` is rounded to 3 decimals. For road_blocked and heavy_traffic it is snapped to the
+  nearest named road and `road_name` is set. Otherwise it is a uniform point inside the zone,
+  kept only if the rounded point stays inside, so the zone can be recovered from the point.
+- `source_locator` names the generator, seed, params hash and zone.
+- `write_items_json(path, items, seed=, params_hash_hex=)` writes the record's file layout.
+
+**Process** (each step and its source):
+
+| Step | Model | Basis |
+| --- | --- | --- |
+| Rate | `exp(intercept + band + phase)` /kHH/h from each channel's GLM (section 2), × households/1000, × `scale_911` for 911 | Calibrated |
+| Bands | `fire_in_zone` from the arrival; `lt_5km` from `fire_distance_m` < 5 km, or else the 33 min before arrival | Bands calibrated; lead time assumed (Camp median) |
+| Time | Non-homogeneous Poisson by thinning (Lewis & Shedler 1979) | Exact for any rate path |
+| Zone factor | Mean-1 gamma, shape `k = mean(mu)/(dispersion - 1)`: 911 0.207, radio 0.112, rescue 0.173. One factor is shared, and radio and rescue add an independent gamma (shapes 1.43 and 6.18) so that each channel's variance is `1/k` | Dispersion calibrated; sharing assumed |
+| Category | Before- or after-arrival mix (section 3), with "other" kept pooled | Calibrated |
+| Rescue | 39/90 of entries (the in-window share) take the time and point of a 911 call of the same category (help_needed or trapped) in the zone, within 60 min, one call per entry | Share calibrated; window and matching assumed |
+| Reroute | 911 calls at or after `psap_reroute_at` are dropped. Rescue may still bind to them | Event from the calibration source; rescue rule assumed |
+
+**Assumptions** (constants in the module, all `ASSUMED_*`):
+
+- `ASSUMED_LT5KM_LEAD_MIN = 33`: the `lt_5km` band without a distance function. This is
+  Camp's modelled median (IQR 23-66, n 28).
+- `ASSUMED_RATES_TIME_HOMOGENEOUS`: no time-of-day effect. The 911 GLM saw only 15-19Z.
+- `ASSUMED_SCALE_911_ALL_TIMES`: the 3.67 lower bound is applied after 16:20Z too.
+- `ASSUMED_ZONE_FACTOR_SHARED`: one zone factor drives all channels.
+- `ASSUMED_ZONE_FACTOR_TRANSFERS`: the shape fitted on block groups (median 414 HH) is used for
+  zones of any size.
+- `ASSUMED_OTHER_CATEGORY_POOLED`: "other" stays pooled.
+- `ASSUMED_RESCUE_BIND_MAX_MIN = 60` and `ASSUMED_RESCUE_BIND_ONE_TO_ONE`.
+- `ASSUMED_REROUTE_KEEPS_RESCUE`: a rerouted call still happened.
+- `ASSUMED_ROAD_SNAP_MAX_M = 2000` and `ASSUMED_POINT_TRIES = 1000`.
+
+**Validation** (measured 2026-10-24):
+
+- **Camp reproduction.** On the 43 Camp zones (modelled arrival and front distance), at scale 1,
+  the expected count in each channel's coverage window is 911 **91.4** (record 90), radio
+  **245.3** (244) and rescue **185.9** (185). This is a test.
+- **Camp round trip** (scratch script, not a test; 200 seeds at scale 1, refitting the GLM with
+  `ground_rates.fit_channel` on 30 of them):
+
+  | Channel | Record | Generated mean (SE) [median] | Dispersion: record vs refit median (range) |
+  | --- | --- | --- | --- |
+  | 911 | 90 | 98.3 (2.9) [92] | 3.53 vs 2.95 (1.70-15.1) |
+  | radio | 244 | 254.8 (9.9) [218] | 3.53 vs **1.93** (1.18-5.21) |
+  | rescue | 185 | 198.5 (6.6) [177] | 1.92 vs 1.83 (0.94-4.61) |
+
+  The means sit 1 to 2.4 SE above the analytic expectation. The three channels share one zone
+  factor, so these are not three independent deviations, and the synthetic check below found no
+  bias over 4,000 seeds. The refitted coefficients scatter around the input values by about
+  one qSE. For example, the 911 `fire_in_zone` refit median is 2.29 against an input of 2.67
+  (qSE 0.96).
+
+  **Disagreement:** the radio refit dispersion has a median of 1.9, against 3.5 in the record.
+  The zone factor is constant over time, so it cannot produce the within-zone bursts in time
+  (one burnover, many radio rows in a few minutes) that the record shows. With radio's very
+  heavy gamma (k = 0.11), the Pearson statistic is also strongly right-skewed over 43 zones, and
+  the record's 3.53 falls inside the generated range. I trust the record. The generator
+  under-represents radio clustering in time, and the shape was not tuned to close the gap.
+
+  Radio : 911 in 15:08-18:06Z: generated median 1.27 (IQR 1.01-1.62), record 1.44 (CI 0.97-2.38).
+  Rescue entries coinciding with a 911 row in that window (1 min, 300 m): generated median
+  0.28, record 0.43. The cause is the same one-call-per-entry cap as in the synthetic check.
+- **Synthetic 10-zone scenario, 600 seeds** (tests). Mean counts against the integrated target:
+
+  | Channel | Default (scale 3.67, gamma) | `nist_sample_like`, Poisson |
+  | --- | --- | --- |
+  | 911 | 93.25 vs 95.05 (-1.9%, 0.6 SE) | 26.11 vs 25.92 (+0.7%) |
+  | radio | 37.56 vs 37.95 (-1.0%) | 37.16 vs 37.95 (-2.1%, 3.4 SE) |
+  | rescue | 24.91 vs 26.02 (-4.3%, 1.3 SE) | 25.76 vs 26.02 (-1.0%) |
+
+  Over seeds 1000-4999, radio is 37.96 (+0.07 SE) and 911 is 25.90 (-0.3 SE), so the 3.4 SE gap
+  for radio in seeds 0-599 is sampling noise, not bias.
+- **Overdispersion.** In one zone (z31, 911), variance/mean is 60.8, against an NB2 prediction of
+  73.9. Without the zone factor it is 1.03.
+- **Category shift (911 trapped).** It moves from 0.037 before arrival to 0.190 after
+  (calibration: 0.038 and 0.190). Rescue help_needed is 0.94, then 0.55 (calibration: 0.94,
+  then 0.54).
+- **Rescue binding.** At scale 1, 24.3% of rescue entries share a 911 call's time and point,
+  against a bind probability of 43.3%. The shortfall comes from entries with no unused 911 call
+  of their category in their zone within 60 min. This is a cap of the one-call-per-entry rule
+  when 911 volume is at sample level. It is not corrected by raising the probability.
+
+**May and may not** are as above. Every item is `simulated`, calibrated to one sampled record of
+one fire, and is not an observed or live call.
