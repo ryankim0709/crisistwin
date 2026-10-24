@@ -24,8 +24,11 @@ documented below and in the [scaffold decision](docs/adr/0001-app-scaffold.md).
 
 The full stack development scaffold is in [`app/`](app/): React/TypeScript with
 Vite and Tailwind CSS, a Django REST Framework API, PostgreSQL, Vitest, and Docker.
-The workspace checks the API and database connection. The imagery map at `/maps`
-starts over San Francisco and supports an illustrative fire-spread experiment:
+The workspace has shared sidebar navigation, page-specific UI scaffolds, and an
+overview that checks the API and database connection. Planning pages support
+temporary local input editing; they do not save scenarios or execute evacuation
+models. The imagery map at `/maps` starts over San Francisco and supports an
+illustrative fire-spread experiment:
 choose an origin, set wind, and inspect the simulated footprint in 15-minute
 steps. Calibrated fire/traffic models, persistent scenarios, and live incident
 integrations are not implemented yet.
@@ -90,6 +93,9 @@ docker compose up --wait
 ```text
 app/
   src/                  React UI and API client (lib/), Vitest setup (test/)
+    AppShell.tsx        Shared sidebar and responsive navigation
+    navigation.ts       Route labels and descriptions
+    pages/              Planning page scaffolds, shared UI, and not-found page
   backend/
     config/             Django settings, routes, WSGI
     api/                HTTP endpoints and backend contract tests
@@ -130,6 +136,46 @@ local configuration, directory details, and current limitations, and the
 The default check remains `pre-commit run --all-files` from the repository root.
 Mobile builds, tests, and simulator verification have not been run and require
 an explicit request under the repository policy.
+
+### Workspace navigation
+
+The web app shares a sidebar across all pages. On narrow screens, **Menu**
+expands the navigation. The current page is marked with an arrow and
+`aria-current`; a keyboard-accessible **Skip to content** link reaches the main
+content. Each page has its own URL and document title:
+
+- `/`: workflow shortcuts, recent-work empty state, and API/database readiness.
+- `/maps`: working imagery map and illustrative fire simulation, a footprint
+  visibility toggle, and a collapsible preview of future map layers and tools.
+- `/scenarios`: editable name/weather/notes, sample templates, a local draft
+  review, reproducibility fields, and the future scenario library.
+- `/evacuation`: synthetic population/vehicle inputs, departure strategy and
+  timings, shelter capacity, a sample road-closure toggle, and pending results.
+- `/comparison`: baseline/candidate strategy controls, a metric comparison
+  layout, compatibility requirements, and an explanation empty state.
+- `/incidents`: disconnected source status, inbox search/type controls, and an
+  optional clearly labeled synthetic evidence-review example.
+- `/stress-tests`: selectable disruptions, a bounded candidate-run budget,
+  investigation progress, and findings/unknowns empty states.
+
+These are UI scaffolds based on [the project scope](docs/project-scope.md).
+Editable inputs are temporary component state and reset on navigation/reload;
+they do not transfer between pages or modify map inputs. No scenario saving,
+traffic execution, comparison results, incident ingestion, or stress-test jobs
+are connected. Unsupported execution buttons are disabled with explanations.
+Sample inputs are synthetic user assumptions, and unavailable results use empty
+states or dashes rather than fabricated metrics. Unknown paths show a not-found page. Trailing slashes are
+accepted. Navigation uses normal links and the existing Vite/Nginx HTML fallback,
+so direct links, refresh, and browser history use document navigation. Temporary
+map state resets when leaving or reloading the page; no scenario is saved.
+
+To integrate a feature, extend its component in `app/src/pages/`, retaining its
+URL and shared `AppShell`. `WorkspaceUI.tsx` and `workspace.css` provide common
+page headers, panels, fields, status tags, and empty states. `navigationItems`
+holds route metadata only. Pages own their main landmark with `id="main-content"`
+and `tabIndex={-1}`. No backend contract changed. See the
+[navigation decision](docs/adr/0005-workspace-navigation.md) and
+[UI scaffold boundaries](docs/adr/0006-planning-ui-scaffolds.md).
 
 ### Map component
 

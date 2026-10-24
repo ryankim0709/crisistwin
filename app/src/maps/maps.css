@@ -2,15 +2,76 @@
   display: flex;
   flex-direction: column;
   height: 100dvh;
+  overflow-y: auto;
+}
+
+.map-planning-tools {
+  margin-bottom: 16px;
+  border-bottom: 1px solid #d4d8ca;
+  padding-bottom: 12px;
+}
+.map-planning-tools summary {
+  width: fit-content;
+  cursor: pointer;
+  color: #245c4f;
+  font-size: 12px;
+  font-weight: 600;
+}
+.map-tool-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 24px;
+  padding: 18px 0 6px;
+  font-size: 12px;
+}
+.map-tool-grid fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+.map-tool-grid legend {
+  margin-bottom: 10px;
+  font-weight: 600;
+}
+.map-tool-grid label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 10px 0;
+  font-size: 11px;
+}
+.map-tool-grid input {
+  accent-color: #245c4f;
+}
+.map-tool-grid p {
+  color: #52635c;
+  line-height: 1.7;
+}
+.map-tool-grid a {
+  font-weight: 600;
+  text-underline-offset: 3px;
+}
+@media (max-width: 1000px) {
+  .map-tool-grid {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
 }
 
 .map-page-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 16px;
   padding: 16px 24px;
   border-bottom: 1px solid #d4d8ca;
   font-size: 14px;
+}
+
+.map-page-header h1 {
+  font-size: 18px;
+  letter-spacing: -0.5px;
 }
 
 .geographic-map-container {
