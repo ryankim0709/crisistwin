@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import collections
 import csv
+import gzip
 import io
 import json
 import math
@@ -68,6 +69,8 @@ TILES = (  # south, west, north, east (Overpass order); northern half split agai
     (34.22, -118.675, 34.30, -118.55),
 )
 OVERPASS_URL = "https://overpass.kumi.systems/api/interpreter"
+OVERPASS_MIRRORS = (OVERPASS_URL, "https://overpass-api.de/api/interpreter")
+USER_AGENT = "crisistwin-data-acquisition/0.1"
 HIGHWAY_REGEX = ("^(motorway|motorway_link|trunk|trunk_link|primary|primary_link|secondary|"
                  "secondary_link|tertiary|tertiary_link|unclassified|residential|living_street)$")
 SHELTER_QUERY_BBOX = (33.90, -119.20, 34.35, -118.30)
@@ -166,11 +169,13 @@ def shelter_query(table: dict) -> str:
             f'nwr["name"~"^({"|".join(patterns)})$"]({bbox_text(SHELTER_QUERY_BBOX)});out center tags;')
 
 
-def overpass(query: str, attempts: int = 5) -> bytes:
+def overpass(query: str, url: str = OVERPASS_URL, attempts: int = 5) -> bytes:
+    if url not in OVERPASS_MIRRORS:
+        raise SourceError(f"unsupported Overpass mirror {url}")
     last = None
     for attempt in range(attempts):
         try:
-            raw = curl(["--data-urlencode", f"data={query}", OVERPASS_URL], 400)
+            raw = curl(["-A", USER_AGENT, "--data-urlencode", f"data={query}", url], 400)
             source = load_json(raw, "Overpass response")
             if not isinstance(source, dict) or source.get("remark") or "elements" not in source:
                 raise SourceError(f"Overpass failure remark: {source.get('remark') if isinstance(source, dict) else source}")
@@ -735,7 +740,10 @@ def input_files(inputs: Path) -> dict[str, bytes]:
     for path in sorted(inputs.rglob("*")):
         if path.is_file():
             rel = path.relative_to(inputs).as_posix()
-            if rel.startswith("raw/"):
+            if rel.startswith("raw/osm-roads-tile") and rel.endswith(".json"):
+                # Raw Overpass bytes are kept exactly, gzip-wrapped (mtime 0) to fit the package budget.
+                files[rel + ".gz"] = gzip.compress(path.read_bytes(), compresslevel=9, mtime=0)
+            elif rel.startswith("raw/"):
                 files[rel] = path.read_bytes()
     for rel, path in CURATED.items():
         files[rel] = path.read_bytes()
@@ -743,7 +751,7 @@ def input_files(inputs: Path) -> dict[str, bytes]:
 
 
 def package_files(inputs: dict[str, bytes]) -> dict[str, bytes]:
-    tile_paths = [f"raw/osm-roads-tile{i}.json" for i in range(1, len(TILES) + 1)]
+    tile_paths = [f"raw/osm-roads-tile{i}.json.gz" for i in range(1, len(TILES) + 1)]
     required = tile_paths + ["raw/osm-shelter-features.json", "raw/feds-F17192.json", "raw/acquisition.json",
                              "raw/dins-woolsey-damage-stats.json",
                              "raw/acs2017-5yr-bg-subset.json", "raw/tiger2017-bg-subset.geojson",
@@ -756,7 +764,14 @@ def package_files(inputs: dict[str, bytes]) -> dict[str, bytes]:
         raise SourceError(f"unexpected package inputs: {sorted(extra)}")
     citygate, bulletins, shelters_table, facts = (load_json(inputs[p], p) for p in CURATED)
     acquisition = load_json(inputs["raw/acquisition.json"], "acquisition log")
-    nodes, edges, exits, road_quality = normalize_roads([inputs[p] for p in tile_paths])
+    tiles = []
+    for path in tile_paths:
+        data = gzip.decompress(inputs[path])
+        logged = acquisition.get(Path(path).name[:-3], {})
+        if sha256(data) != logged.get("sha256") or len(data) != logged.get("bytes"):
+            raise SourceError(f"{path}: decompressed bytes differ from the acquisition log")
+        tiles.append(data)
+    nodes, edges, exits, road_quality = normalize_roads(tiles)
     shelters = normalize_shelters(shelters_table, inputs["raw/osm-shelter-features.json"])
     events = normalize_events(citygate, bulletins, facts, shelters)
     perimeters = normalize_feds(inputs["raw/feds-F17192.json"])
@@ -933,6 +948,7 @@ def main() -> None:
     parser.add_argument("--viirs", type=Path)
     parser.add_argument("--acs-dir", type=Path)
     parser.add_argument("--tiger", type=Path)
+    parser.add_argument("--overpass-url", default=OVERPASS_URL, choices=OVERPASS_MIRRORS)
     parser.add_argument("--verify-package", type=Path)
     args = parser.parse_args()
     if args.verify_package:
@@ -948,17 +964,16 @@ def main() -> None:
             if path.exists():
                 continue
             query = road_tile_query(tile)
-            data = overpass(query)
+            data = overpass(query, args.overpass_url)
             path.write_bytes(data)
-            log_acquisition(args.inputs, path.name, {"url": OVERPASS_URL, "query": query, "acquired_at": now_text(),
+            log_acquisition(args.inputs, path.name, {"url": args.overpass_url, "query": query, "acquired_at": now_text(),
                                                      "bytes": len(data), "sha256": sha256(data), "license": "ODbL 1.0",
                                                      "attribution": "© OpenStreetMap contributors"})
-            time.sleep(20)
     elif args.command == "fetch-shelters":
         query = shelter_query(json.loads(CURATED["curated/shelters.json"].read_bytes()))
-        data = overpass(query)
+        data = overpass(query, args.overpass_url)
         (raw_dir / "osm-shelter-features.json").write_bytes(data)
-        log_acquisition(args.inputs, "osm-shelter-features.json", {"url": OVERPASS_URL, "query": query,
+        log_acquisition(args.inputs, "osm-shelter-features.json", {"url": args.overpass_url, "user_agent": USER_AGENT, "query": query,
                         "acquired_at": now_text(), "bytes": len(data), "sha256": sha256(data), "license": "ODbL 1.0"})
     elif args.command == "fetch-feds":
         data = curl(["--get", "--data-urlencode", f"filter=fireid = '{FEDS_FIRE_ID}'", "--data-urlencode",
