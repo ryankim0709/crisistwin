@@ -245,8 +245,10 @@ export class FxLayer {
   private readonly puff = smokeTexture();
   private readonly smoke: SmokeParticle[] = [];
   private readonly glows: THREE.Sprite[] = [];
-  private readonly pin = new THREE.Group();
-  private readonly ring: THREE.Mesh;
+  /** Pristine pin, never in the scene; every shown pin is a clone sharing its geometry and materials. */
+  private readonly pinTemplate = new THREE.Group();
+  private readonly pins: THREE.Group[] = [];
+  private readonly ringMaterial: THREE.MeshBasicMaterial;
   private readonly wind = new THREE.Group();
   private readonly streaks: THREE.Mesh[] = [];
   private toward = new THREE.Vector2(0, 1);
@@ -315,26 +317,23 @@ export class FxLayer {
     collar.position.y = 11.4;
     const ringGeo = new THREE.RingGeometry(2.6, 3.3, 40);
     ringGeo.rotateX(-Math.PI / 2);
-    this.ring = new THREE.Mesh(
-      ringGeo,
-      new THREE.MeshBasicMaterial({
-        color: PALETTE.ivory,
-        transparent: true,
-        depthWrite: false,
-        toneMapped: false,
-      }),
-    );
-    this.ring.position.y = 0.4;
+    this.ringMaterial = new THREE.MeshBasicMaterial({
+      color: PALETTE.ivory,
+      transparent: true,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    const ring = new THREE.Mesh(ringGeo, this.ringMaterial);
+    ring.name = "ring";
+    ring.position.y = 0.4;
     const foot = new THREE.Mesh(
       new THREE.CircleGeometry(1.1, 20).rotateX(-Math.PI / 2),
       new THREE.MeshBasicMaterial({ color: PALETTE.coral, toneMapped: false }),
     );
     foot.position.y = 0.3;
     for (const m of [stem, head, collar]) m.castShadow = true;
-    this.pin.add(stem, head, collar, this.ring, foot);
-    this.pin.visible = false;
-    this.pin.renderOrder = 6;
-    this.group.add(this.pin);
+    this.pinTemplate.add(stem, head, collar, ring, foot);
+    this.pinTemplate.renderOrder = 6;
 
     // Wind glyph: shaft + head along local +z, with two drifting streaks.
     const mat = new THREE.MeshStandardMaterial({
@@ -378,8 +377,29 @@ export class FxLayer {
 
   /** Places the pin (or hides it with `null`). */
   setIgnition(frame: BoardFrame, p: { x: number; z: number } | null) {
-    this.pin.visible = !!p && frame.inside(p.x, p.z);
-    if (p && this.pin.visible) this.pin.position.set(p.x, frame.surfaceAt(p.x, p.z), p.z);
+    this.setIgnitions(frame, [p]);
+  }
+
+  /**
+   * One pin per point, in order; points that are null or off the board get no pin. Returns
+   * each point's pin group (null when hidden) so callers can attach labels to it.
+   */
+  setIgnitions(
+    frame: BoardFrame,
+    points: readonly ({ x: number; z: number } | null)[],
+  ): (THREE.Group | null)[] {
+    while (this.pins.length < points.length) {
+      const pin = this.pinTemplate.clone();
+      pin.scale.setScalar(this.markerScale);
+      this.pins.push(pin);
+      this.group.add(pin);
+    }
+    this.pins.forEach((pin, i) => {
+      const p = points[i];
+      pin.visible = !!p && frame.inside(p.x, p.z);
+      if (p && pin.visible) pin.position.set(p.x, frame.surfaceAt(p.x, p.z), p.z);
+    });
+    return points.map((_, i) => (this.pins[i].visible ? this.pins[i] : null));
   }
 
   /**
@@ -445,14 +465,14 @@ export class FxLayer {
   tick(time: number, reducedMotion: boolean, worldPerPixel: number) {
     this.worldPerPixel = worldPerPixel;
     this.markerScale = (worldPerPixel * PIN_SCREEN_PX) / PIN_UNITS;
-    this.pin.scale.setScalar(this.markerScale);
+    for (const pin of this.pins) pin.scale.setScalar(this.markerScale);
     this.wind.scale.setScalar(this.markerScale);
     this.layoutWind();
     this.tickSmoke(time, reducedMotion);
     this.tickGlow(time, reducedMotion);
     const phase = reducedMotion ? 0.35 : (time * 0.6) % 1;
-    this.ring.scale.setScalar(1 + phase * 1.4);
-    (this.ring.material as THREE.MeshBasicMaterial).opacity = 0.85 * (1 - phase);
+    for (const pin of this.pins) pin.getObjectByName("ring")?.scale.setScalar(1 + phase * 1.4);
+    this.ringMaterial.opacity = 0.85 * (1 - phase);
     const bob = reducedMotion ? 0 : Math.sin(time * 0.9) * 0.8;
     this.wind.position.y = this.windBase.y + (WIND_LIFT + bob) * this.markerScale;
     this.windAnchor.y = this.windBase.y + (WIND_LIFT + 5) * this.markerScale;
@@ -535,5 +555,12 @@ export class FxLayer {
   dispose() {
     this.dot.dispose();
     this.puff.dispose();
+    // The template is outside the scene graph, so the scene's own disposal never reaches it.
+    this.pinTemplate.traverse((obj) => {
+      if (obj instanceof THREE.Mesh) {
+        obj.geometry.dispose();
+        (obj.material as THREE.Material).dispose();
+      }
+    });
   }
 }

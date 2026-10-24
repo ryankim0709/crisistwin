@@ -19,7 +19,7 @@ Routes of the web app (`app/src/main.tsx`, `app/src/navigation.ts`); `/` redirec
 | Route | Page | What it does |
 | ----- | ---- | ------------ |
 | `/fire` | Fire spread model | Rothermel surface spread with crown fire, ember spotting and structure-to-structure spread on LANDFIRE fuels, canopy and terrain; 3D diorama or USGS imagery view; 41 prebuilt California regions or a live custom area; optional NWS wind. [Reference](docs/fire-simulator.md). |
-| `/simulation` | Simulation Studio | Up to five scheduled ignitions in one solver pass on a shared landscape, Web Worker solve, JSON export/import. [ADR 0011](docs/adr/0011-simulation-studio.md). |
+| `/simulation` | Simulation Studio | Up to five scheduled ignitions in one solver pass on a shared landscape, Web Worker solve, JSON export/import, plus a 3D diorama view of the last run. [ADR 0011](docs/adr/0011-simulation-studio.md), [ADR 0016](docs/adr/0016-studio-diorama-view.md). |
 | `/dispatch` | Dispatch agent | A Claude agent pauses playback every few simulated minutes and orders zone evacuations and fire engines; browser computes routes and counts, agent chooses among listed options. Needs `ANTHROPIC_API_KEY` on the backend. [ADR 0014](docs/adr/0014-dispatch-agent.md). |
 | `/replay` | Historical replay | Replay of past fires (Camp 2018, plus Marshall and Kincade packages) with perimeters, evacuation traffic and responder/evacuee views, driven by generated replay bundles. [Bundle contract](docs/replay-bundle.md). |
 | `/simulate` | Agent simulation | Replay-style view of simulated agent runs (same map tooling as `/replay`). |

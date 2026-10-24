@@ -966,6 +966,7 @@ export function simulateScheduledFireSpread(
     reachedEdge: solution.reachedEdge,
     reachedEdgeMinute: solution.reachedEdgeMinute,
     computeMilliseconds: performance.now() - startedAt,
+    arrivalMinutes: Float32Array.from(solution.arrival),
   };
 }
 

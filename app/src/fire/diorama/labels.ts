@@ -17,6 +17,7 @@ const LABEL_CSS = `
   border: 1px solid rgba(60, 55, 50, 0.1);
   box-shadow: 0 1px 2px rgba(40, 35, 30, 0.16), 0 4px 14px rgba(40, 35, 30, 0.1);
 }
+.fdx-ignition { font-weight: 700; color: #7a2a18; padding: 2px 8px; }
 .fdx-wind { font-weight: 500; color: #3a3f45; background: rgba(251, 248, 241, 0.84); }
 .fdx-wind-glyph { font-size: 12px; line-height: 1; display: inline-block; color: #8a5a3c; }
 .fdx-north {

@@ -31,7 +31,7 @@
   z-index: var(--ct-z-overlay);
   display: flex;
   align-items: flex-start;
-  width: min(340px, calc(100% - 24px));
+  width: min(300px, calc(100% - 24px));
   min-height: 0;
   pointer-events: none;
 }
@@ -52,7 +52,7 @@
   flex-direction: column;
   align-items: center;
   gap: var(--ct-space-2);
-  max-width: min(560px, calc(100% - 440px));
+  max-width: min(560px, calc(100% - 400px));
   /* Wind indicator sits top-left on the map; the panel is top-right. */
   transform: translateX(-50%);
   pointer-events: none;
@@ -73,6 +73,137 @@
   text-align: center;
   pointer-events: auto;
 }
+/* Map / 3D toggle, bottom centre of the stage (the map's scale bar is bottom left and its
+   legend bottom right). */
+.studio-view {
+  position: absolute;
+  bottom: var(--ct-space-3);
+  left: 50%;
+  z-index: var(--ct-z-overlay);
+  transform: translateX(-50%);
+}
+.studio-view .ui-segmented {
+  background: var(--ct-surface-glass-strong);
+  box-shadow: var(--ct-shadow-md);
+}
+
+/* 3D diorama view. Scene labels use the scene's own `fdx-` classes; the card, buttons,
+   warnings and legend are kit components placed here. */
+.studio-diorama {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--ct-surface-muted);
+}
+.studio-diorama__scene {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  isolation: isolate;
+}
+.studio-diorama__card.ui-panel {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: var(--ct-z-overlay);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ct-space-3);
+  width: min(380px, calc(100% - 32px));
+  font-size: var(--ct-text-md);
+  line-height: var(--ct-leading-normal);
+  transform: translate(-50%, -50%);
+}
+.studio-diorama__card p {
+  margin: 0;
+}
+.studio-diorama__card-title {
+  font-size: var(--ct-text-lg);
+  font-weight: var(--ct-weight-bold);
+}
+.studio-diorama__detail {
+  font-size: var(--ct-text-xs);
+  color: var(--ct-ink-muted);
+}
+.studio-diorama__top {
+  position: absolute;
+  top: var(--ct-space-3);
+  left: 50%;
+  z-index: var(--ct-z-overlay);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--ct-space-2);
+  width: min(440px, calc(100% - 680px));
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+.studio-diorama__pill.ui-tag {
+  padding: var(--ct-space-2) var(--ct-space-4);
+  box-shadow: var(--ct-shadow-md);
+}
+.studio-diorama__warnings {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--ct-space-1);
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.studio-diorama__warning.ui-notice {
+  margin: 0;
+  font-weight: var(--ct-weight-semibold);
+  text-align: center;
+}
+.studio-diorama__tools {
+  position: absolute;
+  top: var(--ct-space-3);
+  right: var(--ct-space-3);
+  z-index: var(--ct-z-overlay);
+  display: flex;
+  gap: var(--ct-space-1);
+}
+.studio-diorama__legend {
+  position: absolute;
+  right: var(--ct-space-3);
+  bottom: var(--ct-space-3);
+  z-index: var(--ct-z-overlay);
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: flex-end;
+  gap: var(--ct-space-2);
+}
+.studio-diorama__legend-list.ui-panel {
+  display: grid;
+  gap: var(--ct-space-2);
+  width: 230px;
+  font-size: var(--ct-text-sm);
+}
+.studio-diorama__legend-list svg {
+  flex: none;
+}
+.studio-diorama__legend-note {
+  margin: 0;
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-xs);
+}
+.studio-diorama__credit {
+  position: absolute;
+  bottom: var(--ct-space-1);
+  left: var(--ct-space-3);
+  z-index: 1;
+  max-width: calc(50% - 120px);
+  margin: 0;
+  overflow: hidden;
+  color: var(--ct-ink-subtle);
+  font-size: var(--ct-text-2xs);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .studio-dock {
   flex: none;
   border-top: 1px solid var(--ct-border);
@@ -88,8 +219,15 @@
 @media (max-width: 900px) {
   .studio-page-status {
     top: auto;
-    bottom: var(--ct-space-3);
+    bottom: 56px;
     max-width: calc(100% - 24px);
+  }
+  .studio-diorama__top {
+    width: calc(100% - 24px);
+    top: 52px;
+  }
+  .studio-diorama__credit {
+    display: none;
   }
 }
 @media (max-width: 760px) {
