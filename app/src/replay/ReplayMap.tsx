@@ -46,7 +46,7 @@ import {
   type BasemapStyle,
   type LayerGroup,
 } from "./mapLayers";
-import { HILLSHADE_LAYER, restyleDarkBasemap } from "./basemapStyle";
+import { HILLSHADE_LAYER, restyleBasemap } from "./basemapStyle";
 import { buildEdgePath, buildTravelIndex, particlePositions, type EdgePath } from "./particles";
 import PerspectiveSwitcher from "./perspectives/PerspectiveSwitcher";
 import { edgeThreats } from "./insights";
@@ -119,7 +119,7 @@ async function loadBasemapStyle(signal: AbortSignal): Promise<BasemapStyle | nul
     ) {
       return null;
     }
-    return restyleDarkBasemap(style as BasemapStyle);
+    return restyleBasemap(style as BasemapStyle);
   } catch {
     return null;
   } finally {
@@ -608,7 +608,7 @@ export default function ReplayMap({
   }, [ready]);
 
   // Satellite: show a loading hint while USGS tiles stream; on repeated errors or a timeout with
-  // no tile loaded, fall back to the (restyled) dark map with a notice. Status is set from callbacks only.
+  // no tile loaded, fall back to the (restyled) vector map with a notice. Status is set from callbacks only.
   const [imagery, setImagery] = useState<"idle" | "loading" | "ok" | "failed">("idle");
   useEffect(() => {
     const map = mapRef.current;
@@ -626,7 +626,7 @@ export default function ReplayMap({
     const fail = () => {
       if (failed || loaded || anyTile) return;
       failed = true;
-      setBasemap(map, "dark");
+      setBasemap(map, "map");
       setImagery("failed");
     };
     const onData = (event: { sourceId?: string; tile?: { state?: string } }) => {

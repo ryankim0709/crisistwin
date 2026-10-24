@@ -14,7 +14,7 @@ import { clockParts, localTime } from "./timeline";
 import type { LngLat } from "./types";
 
 const CELLS = "mobility-cells";
-/** Soft neutral halo under each cell so the dots read on the dark map. */
+/** Soft neutral halo under each cell so the dots read on the light basemap. */
 const HALO = "mobility-halo";
 const FLOWS = "mobility-flows";
 /** Added below the first of these that exists, so phone-panel cells sit under the fire. */
@@ -211,7 +211,7 @@ export default function MobilityOverlay({
             12,
             ["*", ["get", "rad"], 2.0],
           ],
-          "circle-color": "#ffffff",
+          "circle-color": "#142b27",
           "circle-blur": 1,
           "circle-opacity": [
             "case",
@@ -260,7 +260,7 @@ export default function MobilityOverlay({
             "case",
             ["==", ["get", "fresh"], 1],
             MOBILITY_COLORS.fresh,
-            "rgba(8,12,17,0.7)",
+            "rgba(245,244,238,0.75)",
           ],
           "circle-stroke-width": [
             "case",

@@ -93,13 +93,13 @@ export default function MapLegend({
         </li>
         <li>
           <svg viewBox="0 0 28 14" aria-hidden="true">
-            <circle cx="9" cy="7" r="3" fill={COLORS.particle} stroke="#7ff9ff" strokeWidth="0.8" />
+            <circle cx="9" cy="7" r="3" fill={COLORS.particle} stroke={COLORS.particleGlow} strokeWidth="0.8" />
             <circle
               cx="19"
               cy="7"
               r="3"
               fill={COLORS.particleStopped}
-              stroke="#0a0e13"
+              stroke={COLORS.markerCore}
               strokeWidth="1.4"
             />
           </svg>
@@ -136,7 +136,7 @@ export default function MapLegend({
               <circle cx="14" cy="7" r="3.5" fill={MOBILITY_COLORS.near} />
               <circle cx="23" cy="7" r="4" fill={MOBILITY_COLORS.above} />
             </svg>
-            Movement (device data, {EVIDENCE_LABEL[mobilityEvidence]}): brighter = more visits than
+            Movement (device data, {EVIDENCE_LABEL[mobilityEvidence]}): darker = more visits than
             usual
           </li>
         )}
@@ -156,7 +156,7 @@ export default function MapLegend({
                 cx="8"
                 cy="7"
                 r="4"
-                fill="#0a0e13"
+                fill={COLORS.markerCore}
                 stroke={COLORS.destination}
                 strokeWidth="2.2"
               />
@@ -165,7 +165,7 @@ export default function MapLegend({
                 cy="7"
                 r="4.6"
                 fill={COLORS.refuge}
-                stroke="#4b5157"
+                stroke={COLORS.refugeRing}
                 strokeWidth="1.6"
               />
             </svg>

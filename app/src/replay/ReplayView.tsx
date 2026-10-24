@@ -134,11 +134,8 @@ export default function ReplayView({
 
   const sim = config.kind === "simulation";
   return (
-    <main className={`rp-root ui-theme-dark rp-root--state${sim ? " rp-root--sim" : ""}`}>
+    <main className={`rp-root rp-root--state${sim ? " rp-root--sim" : ""}`}>
       <div className="rp-state-card">
-        <a className="rp-back" href="/">
-          ← Workspace
-        </a>
         <p className="rp-eyebrow">{config.eyebrow}</p>
         {picker}
         {load.status === "loading" && <LoadingState>Loading replay bundle…</LoadingState>}
@@ -174,7 +171,7 @@ export default function ReplayView({
 }
 
 const BASEMAP_OPTIONS = [
-  { value: "dark", label: "Dark" },
+  { value: "map", label: "Map" },
   { value: "satellite", label: "Satellite" },
 ] as const;
 
@@ -285,7 +282,7 @@ function ReplayScreen({
     markTourSeen(config.kind);
     setTourOpen(false);
   }, [config.kind]);
-  const [basemap, setBasemap] = useState<Basemap>("dark");
+  const [basemap, setBasemap] = useState<Basemap>("map");
   const [pin, setPin] = useState<LngLat | null>(null);
   const [focus, setFocus] = useState<MapFocus | null>(null);
   const [storyOpen, setStoryOpen] = useState(false);
@@ -640,7 +637,7 @@ function ReplayScreen({
 
   return (
     <main
-      className={`rp-root ui-theme-dark${panelOpen ? "" : " rp-root--collapsed"}${sim ? " rp-root--sim" : ""}${
+      className={`rp-root${panelOpen ? "" : " rp-root--collapsed"}${sim ? " rp-root--sim" : ""}${
         variants.shown ? " rp-root--variant" : ""
       }${storyOpen || landing ? " rp-root--story" : ""}`}
     >
@@ -946,9 +943,6 @@ function ReplayScreen({
       <aside className="rp-panel" aria-label="Replay details" id="rp-panel">
         <div className="rp-panel-top">
           <span className="rp-route-links">
-            <a className="rp-back" href="/">
-              ← Workspace
-            </a>
             <a className="rp-back" href={config.otherRoute.href}>
               {config.otherRoute.label}
             </a>

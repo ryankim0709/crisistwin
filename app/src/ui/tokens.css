@@ -132,8 +132,8 @@
   --ct-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
-/* Dark "operations console" theme, used by full-viewport map tools (historical
-   replay, agent simulation). Apply `ui-theme-dark` to the tool's root element; the
+/* Dark "operations console" theme, used for overlays drawn over imagery (studio map
+   wind badge and legend). Apply `ui-theme-dark` to an element; the
    same token names resolve to dark values, so shared components restyle themselves. */
 .ui-theme-dark {
   --ct-ink: #e6edf3;
