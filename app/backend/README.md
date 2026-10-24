@@ -153,6 +153,23 @@ A device registers once for a bearer token (stored as a hash) and sees only its 
 kept in the `mobile_documents` collection (devices in `mobile_devices`). Limits, errors and
 examples are in [ADR 0029](../../docs/adr/0029-mobile-data-store.md).
 
+### Command demo (`/api/demo/…`)
+
+`api/demo.py` serves the `/demo` page ([ADR 0047](../../docs/adr/0047-command-demo.md); wire
+shapes in `app/src/demo/contracts.ts`). Both endpoints are anonymous for the local demo, answer
+`Cache-Control: no-store` and return errors as `{"error", "detail"}`. The game itself runs in the
+browser; nothing here is stored.
+
+- `POST /api/demo/routes` `{fires: [ring, ...]}` (at most 60 closed `[lon, lat]` rings of 4-200
+  points; body at most 300 kB; 120/min) returns `{zones: [{zone_id, options}], evidence_class:
+  "simulated"}`: each drill zone's best route and up to 3 alternatives around the fires, from
+  `livecore.routing` over the drill road graph. Distances are metres, `eta_min` minutes.
+- `POST /api/demo/decide` `{observation}` (at most 200 kB; 40/min) streams `application/x-ndjson`
+  like `/api/dispatch/decide`: `thinking`/`text` lines, then one `orders` or `error` line. Claude
+  can `send_crew`, `release_crew` or `order_evacuation`; each order is validated against the ids
+  in the observation (at most 20 per decision). Needs `ANTHROPIC_API_KEY` (else 503
+  `ai_unavailable`) and reuses `DISPATCH_AGENT_MODEL` and `DISPATCH_AGENT_EFFORT`.
+
 ### Live drill API (`/api/live/…`)
 
 Implements v1 and v2 of [docs/live-reports.md](../../docs/live-reports.md) (ADR 0011, 0012):

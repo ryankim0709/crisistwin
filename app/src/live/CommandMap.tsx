@@ -12,8 +12,7 @@ import {
 import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useEffect, useRef, useState } from "react";
-import { restyleBasemap } from "../replay/basemapStyle";
-import { BASEMAP_STYLE_URL, FALLBACK_STYLE, type BasemapStyle } from "../replay/mapLayers";
+import { fireHatch, loadStyle } from "./mapStyle";
 import { VERDICT, labelPoint, nf, plural, responderName, shortZoneName, wallClock } from "./format";
 import { installInjectLayers } from "./injectMap";
 import { buildInjectSources } from "./injects";
@@ -22,7 +21,6 @@ import type { CommandResponse, GuidanceLevel, ImpactResponse, LonLat, TwinMonito
 
 setWorkerUrl(workerUrl);
 
-const STYLE_TIMEOUT_MS = 10_000;
 const FOCUS_ZOOM = 13.5;
 const FIT_PADDING = 56;
 
@@ -85,27 +83,6 @@ const lineFeature = (coords: LonLat[], properties: Feature["properties"] = {}): 
   geometry: { type: "LineString", coordinates: coords },
   properties,
 });
-
-async function loadStyle(signal: AbortSignal): Promise<BasemapStyle> {
-  const timeout = new AbortController();
-  const timer = window.setTimeout(() => timeout.abort(), STYLE_TIMEOUT_MS);
-  const abort = () => timeout.abort();
-  signal.addEventListener("abort", abort);
-  try {
-    const response = await fetch(BASEMAP_STYLE_URL, { signal: timeout.signal });
-    if (!response.ok) return FALLBACK_STYLE;
-    const style: unknown = await response.json();
-    if (typeof style !== "object" || style === null || !("layers" in style) || !Array.isArray(style.layers)) {
-      return FALLBACK_STYLE;
-    }
-    return restyleBasemap(style as BasemapStyle);
-  } catch {
-    return FALLBACK_STYLE;
-  } finally {
-    window.clearTimeout(timer);
-    signal.removeEventListener("abort", abort);
-  }
-}
 
 /** On-map zone tags, so a red zone never reads as fire. */
 const ZONE_TAG: Record<Exclude<GuidanceLevel, "none">, string> = { evacuate_now: "LEAVE NOW", be_ready: "BE READY" };
@@ -251,23 +228,6 @@ const FLOW_DASHES: number[][] = [
 ];
 const FLOW_STEP_MS = 70;
 
-/** Diagonal hatch for the fire estimate, so it never reads as a tinted evacuation zone. */
-function fireHatch(): ImageData {
-  const size = 10;
-  const canvas = document.createElement("canvas");
-  canvas.width = canvas.height = size;
-  const ctx = canvas.getContext("2d")!;
-  ctx.strokeStyle = MAP_COLOR.fireEdge;
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  for (const o of [-size, 0, size]) {
-    ctx.moveTo(o, size);
-    ctx.lineTo(o + size, 0);
-  }
-  ctx.stroke();
-  return ctx.getImageData(0, 0, size, size);
-}
-
 const SOURCES = [
   "lc-zones", "lc-zone-labels", "lc-fire", "lc-fire-label", "lc-fire-obs", "lc-routes", "lc-hazard-lines", "lc-points", "lc-help",
   "lc-responders", "lc-dest", "lc-queues", "lc-traffic", "lc-ground", "lc-focus", "lc-imp-zones", "lc-imp-now", "lc-imp-alt", "lc-imp-road", "lc-resp-route",
@@ -296,7 +256,7 @@ function installLayers(map: MapLibreMap): void {
     },
   });
   map.addLayer({ id: "lc-imp-zones", type: "fill", source: "lc-imp-zones", paint: { "fill-color": MAP_COLOR.selection, "fill-opacity": 0.15 } });
-  map.addImage("lc-fire-hatch", fireHatch());
+  map.addImage("lc-fire-hatch", fireHatch(MAP_COLOR.fireEdge));
   map.addLayer({ id: "lc-fire-fill", type: "fill", source: "lc-fire", paint: { "fill-color": MAP_COLOR.fire, "fill-opacity": 0.35 } });
   map.addLayer({ id: "lc-fire-hatch", type: "fill", source: "lc-fire", paint: { "fill-pattern": "lc-fire-hatch", "fill-opacity": 0.6 } });
   map.addLayer({

@@ -14,6 +14,7 @@ app/src/
   fire/             /fire        fire spread model (landing page, 3D diorama + maps)
   studio/           /simulation  Simulation Studio (fire + evacuation run)
   dispatch/         /dispatch    Claude dispatch agent on top of the studio
+  demo/             /demo        command demo (24/7 fire board + Claude commander)
   replay/           /replay, /simulate  historical replay and agent simulation
   diorama/          /diorama     scripted 3D evacuation diorama (synthetic)
   pages/            planning pages (evacuation, comparison, incidents, stress tests)
@@ -26,7 +27,7 @@ app/src/
   catalogue, tokens and rules are in [`src/ui/README.md`](src/ui/README.md).
 - Use `var(--ct-*)` tokens in CSS; no new hex literals outside `ui/tokens.css`, except
   colours baked into WebGL/MapLibre code (keep those in the feature's palette module).
-- One class prefix per feature (`fr-`, `studio-`, `dsp-`, `rp-`, `dio-`, `ws-`); `ui-` is
+- One class prefix per feature (`fr-`, `studio-`, `dsp-`, `dm-`, `rp-`, `dio-`, `ws-`); `ui-` is
   reserved for the kit.
 - `<button>` is unstyled by default. Use `Button`/`IconButton`, never a bare styled
   button.
@@ -36,5 +37,5 @@ app/src/
 ## Commands
 
 From `app/`: `npm run dev` (Vite on :5173), `npx tsc -b --noEmit` (typecheck),
-`npx vite build`, `npm test` (Vitest), `npm run lint`. Docker setup is in the root
-README.
+`npx vite build`, `npm run lint`. Do not write or run tests (see the root
+`AGENTS.md`). Docker setup is in the root README.

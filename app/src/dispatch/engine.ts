@@ -15,8 +15,9 @@
  *   Downstream queues are not modelled: once released, a group drives at free-flow speed.
  * - Routing avoids every edge the fire model reaches within ROUTE_LOOKAHEAD_MINUTES, and every
  *   edge the planner has closed (a road closure, a failed bridge, or a planner-confirmed
- *   reported closure from src/intel/closures.ts; closed for the whole run). Drivers already
- *   on the road re-route around such edges by themselves; a zone whose ordered exit becomes
+ *   reported closure from src/intel/closures.ts). Closures passed at start hold for the whole
+ *   run; `setRoadClosed` closes or reopens a road mid-run
+ *   (docs/adr/0030-live-road-closures.md). Drivers already on the road re-route around such edges by themselves; a zone whose ordered exit becomes
  *   unreachable holds departures until it is given another exit, and a zone that can reach
  *   no exit at start is alerted.
  * - A household is "caught" when the modelled fire reaches its home before it leaves, when
@@ -39,7 +40,7 @@
  *   households of that zone would be told. Notices are simulated; nothing is sent anywhere.
  */
 
-import { groundMeters, type DispatchArea, type LonLat } from "./area";
+import { groundMeters, roadLabel, type DispatchArea, type LonLat } from "./area";
 import type { FireExposure } from "./fireExposure";
 import { tacticBlocked, type FireTactic } from "./fireTactics";
 import type { LinePlan } from "../studio/firefighting";
@@ -222,7 +223,15 @@ export type AlertType =
   | "vehicles_exposed"
   | "wave_released"
   | "fire_out"
-  | "fire_held";
+  | "fire_held"
+  | "road_closed"
+  | "road_reopened";
+
+/** A road closed by the planner: at start (minute 0) or mid-run. */
+export interface RoadClosure {
+  edge: number;
+  minute: number;
+}
 
 export interface Alert {
   minute: number;
@@ -328,8 +337,10 @@ export class DispatchEngine {
   private zoneIndex: Map<string, number>;
   private stationIndex: Map<string, number>;
   private ignitions: IgnitionEvent[];
-  /** Edges closed to traffic for the whole run (indices into `area.edges`). */
-  readonly closedEdges: ReadonlySet<number>;
+  /** Edges closed to traffic (indices into `area.edges`); replaced, never mutated, on change. */
+  private closed: ReadonlySet<number>;
+  /** The planner's closures in effect, oldest first. */
+  roadClosures: RoadClosure[];
   /**
    * When set (the agent's session), zones outside the modelled fire path cannot be ordered or
    * staged: evacuating them would only add traffic to the roads threatened zones need. The
@@ -345,7 +356,8 @@ export class DispatchEngine {
     closedEdges: ReadonlySet<number> = new Set(),
   ) {
     this.area = area;
-    this.closedEdges = closedEdges;
+    this.closed = closedEdges;
+    this.roadClosures = [...closedEdges].map((edge) => ({ edge, minute: 0 }));
     this.exposure = exposure;
     this.horizonMinutes = horizonMinutes;
     this.ignitions = [...ignitions].sort((a, b) => a.minute - b.minute);
@@ -405,7 +417,7 @@ export class DispatchEngine {
 
   /** Closures can cut a zone off before any fire does; say so instead of hiding it. */
   private alertUnreachableZones(): void {
-    if (this.closedEdges.size === 0) return;
+    if (this.closed.size === 0) return;
     const blocked = this.blockedAt(0);
     for (const zone of this.area.zones) {
       const tree = shortestPathTree(this.area, zone.node, blocked);
@@ -659,6 +671,42 @@ export class DispatchEngine {
     return unit;
   }
 
+  get closedEdges(): ReadonlySet<number> {
+    return this.closed;
+  }
+
+  /**
+   * Close or reopen a road now (the planner's live disruption). Ordered zones re-plan at once;
+   * vehicles already on the road and engines re-route on the next step, exactly as around fire.
+   * Raises an urgent alert so the monitor wakes the agent. False when nothing changed.
+   */
+  setRoadClosed(edge: number, closed: boolean): boolean {
+    const road = this.area.edges[edge];
+    if (!road || this.closed.has(edge) === closed) return false;
+    const using = this.zones.filter((zone) => zone.route?.steps.some((step) => step.edge === edge));
+    const next = new Set(this.closed);
+    if (closed) {
+      next.add(edge);
+      this.roadClosures.push({ edge, minute: this.minute });
+    } else {
+      next.delete(edge);
+      this.roadClosures = this.roadClosures.filter((closure) => closure.edge !== edge);
+    }
+    this.closed = next;
+    const label = roadLabel(road);
+    if (closed) {
+      const routed =
+        using.length > 0
+          ? ` ${using.map((zone) => this.area.zones[zone.index].id).join(", ")} ${using.length === 1 ? "was" : "were"} routed over it and re-plan.`
+          : "";
+      this.alert("road_closed", `Planner closed ${label} at T+${this.minute}.${routed}`, true);
+    } else {
+      this.alert("road_reopened", `Planner reopened ${label} at T+${this.minute}.`, true);
+    }
+    this.updateZoneRoutes(this.blockedAt(this.minute));
+    return true;
+  }
+
   get finished(): boolean {
     return this.minute >= this.horizonMinutes;
   }
@@ -669,7 +717,7 @@ export class DispatchEngine {
    */
   blockedAt(minute: number): (edge: number) => boolean {
     const arrival = this.exposure.edgeArrival;
-    const closed = this.closedEdges;
+    const closed = this.closed;
     const limit = minute + ROUTE_LOOKAHEAD_MINUTES;
     return (edge) => closed.has(edge) || arrival[edge] <= limit;
   }
@@ -1265,7 +1313,7 @@ export class DispatchEngine {
           zone.index,
           "hold",
           zone.exitId,
-          `Your route to ${this.exitLabel(zone.exitId)} is cut off by fire. If you have not left, wait for a new route.`,
+          `Your route to ${this.exitLabel(zone.exitId)} is cut off by fire or a road closure. If you have not left, wait for a new route.`,
         );
         this.alert(
           "route_blocked",
@@ -1491,7 +1539,11 @@ export class DispatchEngine {
             this.sendUnit(unit, from, home, "returning", null, null);
           } else {
             unit.status = "stranded";
-            this.alert("unit_stranded", `${unit.id} has no route avoiding fire and closed roads.`, true);
+            this.alert(
+              "unit_stranded",
+              `${unit.id} has no route avoiding fire and closed roads.`,
+              true,
+            );
             continue;
           }
         }
