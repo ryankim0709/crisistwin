@@ -43,6 +43,8 @@ export class CrewOverlay implements BoardOverlay {
   private group: THREE.Group | null = null;
   private style: HTMLStyleElement | null = null;
   private dispatch: CrewDispatch | null = null;
+  /** Minute each trip leaves the fire to help the evacuation (studio/crewHandoff.ts). */
+  private leaveMinutes: readonly (number | null)[] = [];
   private meshes = new Map<ResourceKind, THREE.InstancedMesh>();
   /** Instance index of each trip within its kind's mesh. */
   private slot: number[] = [];
@@ -98,6 +100,12 @@ export class CrewOverlay implements BoardOverlay {
     if (dispatch === this.dispatch) return;
     this.dispatch = dispatch;
     this.build();
+  }
+
+  /** When each crew leaves the fire; it is no longer drawn here after that. */
+  setLeaveMinutes(leaveMinutes: readonly (number | null)[]): void {
+    this.leaveMinutes = leaveMinutes;
+    this.place();
   }
 
   /** Playback minute (continuous); vehicles move smoothly with it. */
@@ -240,11 +248,18 @@ export class CrewOverlay implements BoardOverlay {
     const minute = this.minute;
     const road = this.toWorld(dispatch.roadPoint);
     let onScene = 0;
+    let left = 0;
     dispatch.trips.forEach((trip, index) => {
       const mesh = this.meshes.get(trip.kind);
       if (!mesh) return;
       let at: { x: number; y: number; z: number } | null;
       let yaw = 0;
+      const leave = this.leaveMinutes[index] ?? null;
+      if (leave !== null && minute >= leave) {
+        left += 1;
+        mesh.setMatrixAt(this.slot[index], this.matrix.makeScale(0, 0, 0));
+        return;
+      }
       if (minute >= trip.arriveMinute) onScene += 1;
       if (minute >= trip.atRoadMinute && road) {
         const angle = (index / dispatch.trips.length) * Math.PI * 2;
@@ -285,7 +300,7 @@ export class CrewOverlay implements BoardOverlay {
       this.label.el.textContent =
         minute < dispatch.reportMinute
           ? "Not yet reported"
-          : `🚒 ${onScene}/${total} at the fire${hiking > 0 ? ` · ${hiking} walking in` : ""}`;
+          : `🚒 ${onScene}/${total} at the fire${hiking > 0 ? ` · ${hiking} walking in` : ""}${left > 0 ? ` · ${left} overwhelmed, helping evacuate` : ""}`;
     }
   }
 }
