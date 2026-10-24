@@ -248,7 +248,11 @@ function applyMarker(
   selected: boolean,
   detail: string | undefined,
 ) {
-  element.className = `${MARKER_CLASS} ${MARKER_CLASS}--${state}`;
+  // Keep the classes MapLibre put on the element: `maplibregl-marker` makes it
+  // position:absolute at the container's top-left, which its translate() is relative to.
+  // Dropping it left markers in normal flow, each one 28px below the one before.
+  const libraryClasses = [...element.classList].filter((name) => name.startsWith("maplibregl-"));
+  element.className = [...libraryClasses, MARKER_CLASS, `${MARKER_CLASS}--${state}`].join(" ");
   element.dataset.selected = String(selected);
   element.setAttribute("aria-pressed", String(selected));
   element.setAttribute(

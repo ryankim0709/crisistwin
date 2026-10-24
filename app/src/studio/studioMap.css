@@ -167,7 +167,7 @@
 
 /* Ignition markers. The anchor is the icon; the label hangs below it. */
 .studio-marker {
-  position: relative;
+  /* No `position` here: MapLibre's absolute positioning must win (see applyMarker). */
   display: block;
   width: 28px;
   height: 28px;

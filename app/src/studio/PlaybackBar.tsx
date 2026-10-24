@@ -22,6 +22,13 @@ function hhmm(minutes: number): string {
 }
 
 const NUMBER_FORMAT = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
+/** Under 10 of a unit, whole numbers would read a small but real footprint as 0. */
+const SMALL_NUMBER_FORMAT = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
+const SMALL_AREA_THRESHOLD = 10;
+
+function formatArea(value: number): string {
+  return (value < SMALL_AREA_THRESHOLD ? SMALL_NUMBER_FORMAT : NUMBER_FORMAT).format(value);
+}
 
 export default function PlaybackBar(props: PlaybackBarProps) {
   const {
@@ -185,7 +192,7 @@ export default function PlaybackBar(props: PlaybackBarProps) {
           Ignitions triggered {metrics.ignitionsTriggered}/{metrics.ignitionsTotal}
         </span>
         <span>
-          Modelled area reached {NUMBER_FORMAT.format(hectares)} ha · {NUMBER_FORMAT.format(acres)}{" "}
+          Modelled area reached {formatArea(hectares)} ha · {formatArea(acres)}{" "}
           ac
         </span>
         <span>
