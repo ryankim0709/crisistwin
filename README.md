@@ -305,24 +305,29 @@ docker compose restart frontend
 
 ### Fire spread simulator
 
-Open **http://localhost:5173/fire**. Click the map to place an ignition point, set the
-20-foot wind speed and the direction it blows from, pick a fuel-moisture preset, then
-play or step the perimeter forward in **15-minute** intervals over a 2, 3, or 6 hour
-horizon. The presets are the standard dead and live moisture scenarios that go with the
-Scott & Burgan fuel models; _Advanced: moisture classes and spread parameters_ opens the
-1-hour, 10-hour, 100-hour, live herbaceous, and live woody values, the midflame wind
-factor (the share of the open wind that reaches flame height, 0.5 by default), the
-maximum spotting distance, and the structure-to-structure spread rate. The midflame
-factor is a user override, not the model's preferred input: while it is left at its
+Open **http://localhost:5173/fire**. The page opens on a three.js miniature of the loaded
+landscape (see [ADR 0011](docs/adr/0011-fire-diorama-view.md)), built from LANDFIRE fuels,
+terrain elevation, and canopy around an *area centre* (Berkeley Hills by default; _Change
+area_ offers presets and a small locator map). Click the landscape to place an ignition
+point, set the 20-foot wind speed and the direction it blows from, pick a fuel-moisture
+preset, then play the fire forward over a 2, 3, or 6 hour horizon. Playback is continuous
+(1× is 10 model minutes per second; 0.5×, 2×, and 4× are available) while the results use
+the model's **15-minute** frames. The presets are the standard dead and live moisture
+scenarios that go with the Scott & Burgan fuel models; _Advanced: moisture classes and
+spread parameters_ opens the 1-hour, 10-hour, 100-hour, live herbaceous, and live woody
+values, the midflame wind factor (the share of the open wind that reaches flame height, 0.5
+by default), the maximum spotting distance, and the structure-to-structure spread rate. The
+midflame factor is a user override, not the model's preferred input: while it is left at its
 default and canopy data loaded for the area, each cell instead gets its own factor from
 canopy cover, canopy height, and fuel bed depth, lower under a closed stand than in the
 open; moving the control off its default applies that one flat value everywhere instead.
-Switching the
-click target to _Wind direction_ lets you click downwind of the ignition point to aim the
-wind; the numeric field and the arrow at the ignition point stay in sync with it. _Show
-the fuel layer the model is using_ draws the mapped fuel models under the perimeters, and
-_Fit view to run_ frames the whole horizon. Each band is one 15-minute step, shaded by the
-time the fire reached it, with the current perimeter outlined in bright amber.
+Switching the click target to _Wind direction_ lets you click downwind of the ignition point
+to aim the wind; the numeric field and the arrow at the ignition point stay in sync with it.
+_Show the fuel layer the model is using_ tints the ground by fuel family, _Focus fire_
+frames the burn, and _Reset view_ frames the whole board. Controls and results float over
+the stage; the scenario panel collapses (a bottom sheet on phones) and the results strip
+expands to the full breakdowns. Trees and houses are symbols for fuel classes, not observed
+detail.
 
 Two wildland-urban interface mechanisms sit on top of the Rothermel surface model, under
 _Extra spread mechanisms (your assumptions)_, both on by default and both switchable off.
@@ -392,8 +397,9 @@ called straight from the browser, and LANDFIRE through the same-origin proxy.
 | `app/src/fire/crownFire.ts`          | Van Wagner initiation, Cruz active rate, Scott & Reinhardt blending.      |
 | `app/src/fire/spread.ts`             | Propagation, crown fire, spotting, structure spread, contouring.          |
 | `app/src/fire/weather.ts`            | National Weather Service wind lookup with provenance; no UI state.         |
-| `app/src/fire/FireMap.tsx`           | MapLibre GL JS map, USGS aerial imagery, fuel overlay, perimeter layers.   |
-| `app/src/fire/FireSimulatorPage.tsx` | Scenario controls, mechanism toggles, playback, attribution, metrics.      |
+| `app/src/fire/diorama/`              | three.js fire diorama renderer and its contract (`types.ts`).              |
+| `app/src/fire/fuelPalette.ts`        | Fuel-family and arrival colours shared by the legend and the renderer.     |
+| `app/src/fire/FireSimulatorPage.tsx` | Scenario panel, area picker, playback dock, results, attribution.          |
 
 ```ts
 // Fuel and terrain around the ignition point. Network call; contiguous US only.
@@ -457,8 +463,7 @@ fires did, and is also the most likely place this model runs hot. LANDFIRE gives
 houses the same code 91, so a freeway burns like a street of houses. Wind is uniform over
 the grid and constant in time, fuel moisture is uniform, and there is no diurnal weather
 change. LANDFIRE fuel is a 2025 mapped product, not an observation of today's vegetation.
-USGS imagery is historical aerial coverage, not live fire observation, and its highest
-native zoom is 16. A run that still stalls is fuel-limited: with both mechanisms off, or
+The locator map uses historical USGS aerial imagery, not live fire observation. A run that still stalls is fuel-limited: with both mechanisms off, or
 where the vegetated patch is bounded by water or bare rock, the fire stops where its fuel
 does, and the page says so rather than hiding it. Outputs are planning experiments, not
 operational evacuation instructions. See the
