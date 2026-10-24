@@ -15,6 +15,7 @@ All outputs are planning experiments, not operational fire or evacuation guidanc
 | `firefront.py` | Simulated fire front from an assumed ignition, fitted to the first satellite perimeter; 10-minute isochrones |
 | `traffic.py` | Evacuation traffic `meso-link-queue`: link queues with capacity, storage and spillback, nearest-exit routing, event-driven closures. `TrafficEngine` runs it one step at a time (inject, fork); `simulate_traffic` runs it to the end |
 | `twin.py` | Real-time twin on `TrafficEngine`: simulation clock, commands with validation and an action log, monitoring snapshot, what-if forks ([API](../docs/twin-api.md)) |
+| `gen_residents.py` | Simulated residents tied to the twin's vehicles: check-ins (`out`, `need_help`, `staying`), field reports, destination choices as live-API POST bodies labelled `simulated` ([ADR 0036](../docs/adr/0036-simulated-residents.md)) |
 | `network.py` | Load the verified 2018 OSM road package into traffic types; unknown lanes and speeds take named class defaults |
 | `scenario.py` | Hybrid scenario: observed roads and exits with fixture demand and orders until zones and events are acquired |
 | `fixtures.py` | Fully synthetic network and scenario for development |
