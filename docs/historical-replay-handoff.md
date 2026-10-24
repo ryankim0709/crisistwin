@@ -58,7 +58,7 @@ data/incidents/camp-2018-evacuation/05575afa537d22c9` passed offline.
 | New package layer | Status | Records / time | Spatial coverage | Gap / source terms |
 | --- | --- | --- | --- | --- |
 | Historical roads | Present | 9,435 nodes; 21,768 directed edges; OSM snapshot 2018-11-08 00:00Z | Requested bbox plus full intersecting ways; actual bbox above | ODbL 1.0; unknown lane/speed tags remain null; no service roads or turn restrictions |
-| Timestamped events | Missing | 0 packaged | Camp evacuation area | NIST sources acquired for review; not yet normalized; no license inferred from PDF access |
+| Timestamped events | Partial in version `b2624d1cda93d9e5` | 44 CodeRED initial/re-call events from 29 rows; 2018-11-08 15:13Z to 2018-11-09 13:49Z | Alert zone labels; numeric Paradise zone IDs; geometry unresolved | NIST open license; no order-request, road, fire-arrival or shelter events yet |
 | Evacuation zones | Missing | 0 packaged | Paradise/Upper Ridge historical map available | 2017 PDF has zone labels, machine-readable polygons unverified; NIST open license check pending |
 | Population units | Missing | 0 packaged | Butte County target | ACS 2018 aggregate API identified; extraction pending; public federal data |
 | Traffic observations | Missing | 0 packaged | Egress corridors target | PeMS historical detector access needs free account; no zero traffic inference |
@@ -69,7 +69,7 @@ data/incidents/camp-2018-evacuation/05575afa537d22c9` passed offline.
 
 NIST NETTRA supplement completed download to
 `/private/tmp/nist-camp-nettra-supplement.pdf` (24,237,169 bytes, 306 pages).
-It contains Table A-2 with geolocated NETTRA observations and Table D-1 with 28
+It contains Table A-2 with geolocated NETTRA observations and Table D-1 with 29
 CodeRED message rows. The latter gives initial send times, message type, zone
 labels, and some re-call times. This is **alert-sent** evidence, not proof of
 delivery to or departure by all residents and not necessarily the original
@@ -79,6 +79,20 @@ matching, but polygons have not yet been acquired. The PDF contains individual
 911 observations and addresses, so do not copy it into the public incident
 package wholesale. Use curated, non-identifying event extracts with source
 page/table references and keep the complete PDF outside the repo.
+
+The Table D-1 extraction is now frozen in `tools/camp_codedred_table.json` and
+packaged as `curated/nist-codedred-table.json` in
+`data/incidents/camp-2018-evacuation/b2624d1cda93d9e5/`, which inherits the
+road layer. Fifteen rows have a re-call time, yielding 44 `alert_sent` events.
+The PDF SHA-256 is
+`1846b31b924f510628b550b292c160c1f87e729dcdc4242d1cad1aee88d7d401`.
+The event normalizer converts PST (including `25:18` and `29:44` on the next
+calendar day) to UTC, preserves local notation, source page and one-minute time
+precision, and leaves receipt availability and geocoding unresolved. These are
+NIST-transcribed message initiation times, not the underlying evacuation-order
+request times or resident departures. `python3.12 -m tools.add_camp_codedred
+--verify-package data/incidents/camp-2018-evacuation/b2624d1cda93d9e5`
+passed offline with 44 events from 29 rows.
 
 This file preserves the active task state. The user asked to continue turning the
 historical replay format into working acquisition and replay tooling and to keep

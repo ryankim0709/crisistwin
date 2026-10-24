@@ -124,6 +124,39 @@ data/incidents/camp-2018-evacuation/05575afa537d22c9`. The OSM snapshot is a
 record of mapped road geometry before the incident, not proof that each road
 was physically passable during the evacuation.
 
+The next immutable [event package](../data/incidents/camp-2018-evacuation/b2624d1cda93d9e5/manifest.json)
+inherits those roads and adds 44 CodeRED alert events from 29 hand-reviewed rows
+in [NIST TN 2252 Supplement, Table D-1](https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252sup.pdf),
+pp. D-3–D-4. Fifteen rows report a re-call attempt, represented as a second
+`alert_sent` event. These are message initiation times, **not** evidence of
+order-request time, individual delivery, vehicle departure or compliance. The
+source's `25:18` and `29:44` notation extends into November 9 and is converted
+using America/Los_Angeles. Named areas remain unresolved until historical zone
+polygons are acquired. The event layer is explicitly `partial`.
+
+`normalized/events.jsonl` uses one object per line sorted by UTC `occurred_at`.
+Each record includes `event_id`, `type`, `occurred_at`, `occurred_from`,
+`occurred_to`, `time_precision`, `available_at` and its unknown reason,
+`local_time_as_written`, `target`, nullable geometry, geocoding method,
+description, nullable quote, evidence class, and exact source locator. A
+numeric Paradise zone list maps to IDs such as `paradise-2017-zone-2`; named
+areas retain the source text in `target.place_name`. The half-open one-minute
+time window expresses source precision, not an independently observed duration.
+For example, the first real event has:
+
+```json
+{"event_id":"nist-codedred:01:initial","type":"alert_sent","occurred_at":"2018-11-08T15:13:00Z","occurred_from":"2018-11-08T15:13:00Z","occurred_to":"2018-11-08T15:14:00Z","time_precision":"minute","available_at":null,"available_at_status":"unknown","local_time_as_written":"11/8 07:13","target":{"place_name":"Pulga"},"geometry":null,"geocode_method":"unresolved","evidence_class":"reconstructed","source_id":"nist-nettra-supplement","source_locator":"https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252sup.pdf#page=135; Table D-1; p. D-3; row 1"}
+```
+
+The package keeps the reviewed non-identifying Table D-1 transcription in
+`curated/nist-codedred-table.json`, with the source PDF's SHA-256 and exact page
+locators. The full 306-page supplement contains individual 911 details and
+addresses, so it is not bundled in this public incident package. This is an
+explicit privacy exception to retaining complete raw source bytes. The table
+and normalized events are rebuildable and verified offline with
+`python3.12 -m tools.add_camp_codedred --verify-package
+data/incidents/camp-2018-evacuation/b2624d1cda93d9e5`.
+
 ## Manifest and provenance contract
 
 The manifest records `schema_version`, `incident_id`, `package_version`, incident
