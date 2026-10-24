@@ -7,6 +7,8 @@
  * 20-foot wind in mph; meteorological wind bearing (the direction wind blows FROM).
  */
 
+import type { ReactNode } from "react";
+import type { Map as MapLibreMap } from "maplibre-gl";
 import type { LandscapeGrid, MercatorBox } from "../fire/landscape";
 import type { GeoPoint } from "../fire/spread";
 import type {
@@ -189,6 +191,15 @@ export interface StudioMapProps {
   onSelectIgnition: (id: string | null) => void;
   /** Fired when a marker drag ends. */
   onMoveIgnition: (id: string, point: GeoPoint) => void;
+  /** Called with the map once its studio layers exist, and with null just before it is removed. */
+  onMapReady?: (map: MapLibreMap | null) => void;
+  /** Extra legend group rendered after "Modelled output" and before "Source data". */
+  legendExtra?: ReactNode;
+  /**
+   * "compact" drops the ignition-state key and locator note and starts the legend collapsed
+   * behind a toggle, for pages that layer more on the map. Defaults to "full".
+   */
+  legendMode?: "full" | "compact";
 }
 
 export interface ConfigPanelProps {

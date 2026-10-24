@@ -31,6 +31,12 @@ export const navigationItems: readonly NavigationItem[] = [
     description: "Schedule several fires and play their combined spread on one timeline.",
   },
   {
+    path: "/dispatch",
+    label: "Dispatch agent",
+    group: "Workspace",
+    description: "An AI dispatcher orders evacuations, redirects traffic and sends engines as the fire plays.",
+  },
+  {
     path: "/scenarios",
     label: "Scenarios",
     group: "Workspace",

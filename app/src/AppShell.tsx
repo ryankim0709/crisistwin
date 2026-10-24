@@ -4,20 +4,51 @@ import "./navigation.css";
 
 type AppShellProps = { path: string; children: ReactNode };
 
+const COLLAPSED_STORAGE_KEY = "crisistwin.sidebar.collapsed";
+
+/** Remembered per browser; storage can be unavailable (private windows), so failures are ignored. */
+function loadCollapsed(): boolean {
+  try {
+    return window.localStorage.getItem(COLLAPSED_STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
 export default function AppShell({ path, children }: AppShellProps) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(loadCollapsed);
   const title = navigationItems.find((item) => item.path === path)?.label ?? "Page not found";
 
   useEffect(() => {
     document.title = `${title} · CrisisTwin`;
   }, [title]);
 
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(COLLAPSED_STORAGE_KEY, String(collapsed));
+    } catch {
+      // Preference only; the sidebar still works without storage.
+    }
+  }, [collapsed]);
+
   return (
-    <div className="app-layout">
+    <div className={`app-layout${collapsed ? " is-sidebar-collapsed" : ""}`}>
       <a className="skip-link" href="#main-content">
         Skip to content
       </a>
       <aside className="sidebar" aria-label="Workspace sidebar">
+        <button
+          className="sidebar-collapse"
+          type="button"
+          aria-expanded={!collapsed}
+          aria-controls="workspace-navigation"
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          onClick={() => setCollapsed((value) => !value)}
+        >
+          <span aria-hidden="true">{collapsed ? "»" : "«"}</span>
+        </button>
         <div className="sidebar-brand">
           <a className="sidebar-logo" href="/" aria-label="CrisisTwin home">
             <img src="/brand/crisistwin-logo.png" alt="" width={2172} height={724} />
