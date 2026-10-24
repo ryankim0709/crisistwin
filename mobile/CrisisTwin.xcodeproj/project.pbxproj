@@ -10,9 +10,13 @@
 		A10000000000000000000002 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000002; };
 		A10000000000000000000003 /* AppConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000003; };
 		A10000000000000000000004 /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000004; };
-		A10000000000000000000005 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005; };
+		A10000000000000000000005 /* AboutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005; };
 		A10000000000000000000006 /* ScenariosView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006; };
 		A10000000000000000000007 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000007; };
+		A10000000000000000000008 /* MeetingPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000C; };
+		A10000000000000000000009 /* PlanView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000D; };
+		A1000000000000000000000A /* MeetingPointEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000E; };
+		A1000000000000000000000B /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000F; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -20,13 +24,17 @@
 		A20000000000000000000002 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		A20000000000000000000003 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfiguration.swift; sourceTree = "<group>"; };
 		A20000000000000000000004 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
-		A20000000000000000000005 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
+		A20000000000000000000005 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AboutView.swift; sourceTree = "<group>"; };
 		A20000000000000000000006 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScenariosView.swift; sourceTree = "<group>"; };
 		A20000000000000000000007 = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A20000000000000000000008 = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A20000000000000000000009 = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Debug.xcconfig; sourceTree = "<group>"; };
 		A2000000000000000000000A = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release.xcconfig; sourceTree = "<group>"; };
 		A2000000000000000000000B = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CrisisTwin.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A2000000000000000000000C = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingPlan.swift; sourceTree = "<group>"; };
+		A2000000000000000000000D = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlanView.swift; sourceTree = "<group>"; };
+		A2000000000000000000000E = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingPointEditor.swift; sourceTree = "<group>"; };
+		A2000000000000000000000F = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -39,12 +47,13 @@
 		A40000000000000000000003 = {isa = PBXGroup; children = (A20000000000000000000001, A20000000000000000000002); path = App; sourceTree = "<group>"; };
 		A40000000000000000000004 = {isa = PBXGroup; children = (A20000000000000000000003); path = Configuration; sourceTree = "<group>"; };
 		A40000000000000000000005 = {isa = PBXGroup; children = (A20000000000000000000004); path = Networking; sourceTree = "<group>"; };
-		A40000000000000000000006 = {isa = PBXGroup; children = (A40000000000000000000007, A40000000000000000000008); path = Features; sourceTree = "<group>"; };
-		A40000000000000000000007 = {isa = PBXGroup; children = (A20000000000000000000005); path = Home; sourceTree = "<group>"; };
+		A40000000000000000000006 = {isa = PBXGroup; children = (A40000000000000000000007, A40000000000000000000008, A4000000000000000000000C); path = Features; sourceTree = "<group>"; };
+		A40000000000000000000007 = {isa = PBXGroup; children = (A20000000000000000000005, A2000000000000000000000F); path = Home; sourceTree = "<group>"; };
 		A40000000000000000000008 = {isa = PBXGroup; children = (A20000000000000000000006); path = Scenarios; sourceTree = "<group>"; };
 		A40000000000000000000009 = {isa = PBXGroup; children = (A20000000000000000000007, A20000000000000000000008); path = Resources; sourceTree = "<group>"; };
 		A4000000000000000000000A = {isa = PBXGroup; children = (A20000000000000000000009, A2000000000000000000000A); path = Config; sourceTree = "<group>"; };
 		A4000000000000000000000B = {isa = PBXGroup; children = (A2000000000000000000000B); name = Products; sourceTree = "<group>"; };
+		A4000000000000000000000C = {isa = PBXGroup; children = (A2000000000000000000000C, A2000000000000000000000D, A2000000000000000000000E); path = Plan; sourceTree = "<group>"; };
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -87,7 +96,7 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		A70000000000000000000001 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000001, A10000000000000000000002, A10000000000000000000003, A10000000000000000000004, A10000000000000000000005, A10000000000000000000006); runOnlyForDeploymentPostprocessing = 0; };
+		A70000000000000000000001 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000001, A10000000000000000000002, A10000000000000000000003, A10000000000000000000004, A10000000000000000000005, A10000000000000000000006, A10000000000000000000008, A10000000000000000000009, A1000000000000000000000A, A1000000000000000000000B); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
