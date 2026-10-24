@@ -12,6 +12,7 @@ from .intel import (
     intel_ingest,
     intel_runs,
 )
+from .intel_feeds_api import intel_feed_poll, intel_feeds
 from .landscapes import landscape_list, landscape_package
 from .live_broadcast import live_broadcast, live_snapshot
 from .mobile_data import mobile_collection, mobile_document, register_device
@@ -50,6 +51,8 @@ urlpatterns = [
         name="intel-document-extract",
     ),
     path("intel/candidates", intel_candidates, name="intel-candidates"),
+    path("intel/feeds", intel_feeds, name="intel-feeds"),
+    re_path(r"^intel/feeds/(?P<feed>[a-z]{2,16})/poll$", intel_feed_poll, name="intel-feed-poll"),
     re_path(
         r"^intel/candidates/(?P<event_id>intel-[0-9a-f]{16})/review$",
         intel_candidate_review,

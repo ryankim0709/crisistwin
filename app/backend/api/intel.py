@@ -38,6 +38,7 @@ from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
 
 from . import intel_apify
+from .intel_feeds import FEED_TYPES
 from .explain import MODEL, SET_KEY_HELP, UPSTREAM_MAX_RETRIES, UPSTREAM_TIMEOUT_S, answer_text
 from .intel_extract import (
     INTEL_TYPES,
@@ -774,7 +775,7 @@ def intel_candidates(request):
             return _error(400, "invalid_request", f"`status` must be a comma list of {sorted(REVIEW_STATUSES)}.")
         query["review_status"] = {"$in": statuses}
     if "types" in params:
-        types = _comma_list(params["types"], INTEL_TYPES)
+        types = _comma_list(params["types"], INTEL_TYPES + FEED_TYPES)
         if types is None:
             return _error(400, "invalid_request", "`types` must be a comma list of intel event types.")
         query["type"] = {"$in": types}
@@ -868,7 +869,7 @@ def intel_candidate_review(request, event_id: str):
         return _error(400, "invalid_request", problem)
     try:
         collection = get_database()[CANDIDATES]
-        candidate = collection.find_one({"_id": event_id}, {"type": 1, "target": 1})
+        candidate = collection.find_one({"_id": event_id}, {"type": 1, "target": 1, "feed": 1})
     except (PyMongoError, ValueError):
         return _db_error()
     if candidate is None:
@@ -890,20 +891,23 @@ def intel_candidate_review(request, event_id: str):
             "radius_m": raw_mapping.get("radius_m", 75),
             "edge_ids": raw_mapping.get("edge_ids"),
         }
+    changes = {
+        "review_status": status,
+        "reviewer": _stripped(data.get("reviewer")),
+        "reviewer_note": _stripped(data.get("reviewer_note")),
+        "reviewed_at": _now(),
+    }
+    # A feed candidate's geometry comes from its source; review without a mapping must not erase it.
+    if mapping or not candidate.get("feed"):
+        changes.update(
+            mapping=mapping,
+            geometry={"type": "Point", "coordinates": mapping["point"]} if mapping else None,
+            geocode_method="planner_mapped" if mapping else "unresolved",
+        )
     try:
         updated = collection.find_one_and_update(
             {"_id": event_id},
-            {
-                "$set": {
-                    "review_status": status,
-                    "reviewer": _stripped(data.get("reviewer")),
-                    "reviewer_note": _stripped(data.get("reviewer_note")),
-                    "reviewed_at": _now(),
-                    "mapping": mapping,
-                    "geometry": {"type": "Point", "coordinates": mapping["point"]} if mapping else None,
-                    "geocode_method": "planner_mapped" if mapping else "unresolved",
-                }
-            },
+            {"$set": changes},
             projection={"_id": 0},
             return_document=ReturnDocument.AFTER,
         )
