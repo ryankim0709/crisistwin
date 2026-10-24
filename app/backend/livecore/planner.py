@@ -5,16 +5,26 @@ Contract: docs/live-reports.md "Zones and guidance" and "Planner rules".
 
 from __future__ import annotations
 
-from collections.abc import Collection, Sequence
+import dataclasses
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
 
 from .drill import Drill
 from .fire import FireEstimate
-from .geo import LonLat, distance_km, haversine_m
+from .geo import LonLat, MultiPolygon, distance_km, haversine_m, polyline_distance_m
 from .public import ReportFact, RoadStatus, effective_at
-from .routing import Route, best_routes
+from .routing import (
+    DESTINATION_KINDS,
+    FIRE_BUFFER_M,
+    Exposure,
+    Route,
+    alternative_routes,
+    best_routes,
+    destination_node,
+    weighted_time_s,
+)
 
 EVACUATE_NOW_KM = 3.0
 """Zone within this distance of the fire estimate -> ``evacuate_now``."""
@@ -33,8 +43,59 @@ EXPOSED_NEAR_REASON = "Least-exposure route; every route out passes near the fir
 RESPONDER_FRESH_S = 900
 """Responder positions older than this (wall seconds) are not used to suggest an assignee."""
 
+ALTERNATIVES_MAX = 3
+"""Destinations offered per zone besides the recommended one (D1)."""
+ALTERNATIVE_MIN_SEPARATION_M = 1500.0
+"""An alternative's destination must be at least this far from the recommended one and from every
+alternative already offered, so the list is not four exits at the same junction."""
+ALTERNATIVE_MAX_EXTRA_FIRE_S = 60.0
+"""An alternative may spend at most this many free-flow seconds more inside the fire estimate
+than the recommended route (relevant only when every option passes the fire)."""
+LOAD_EXIT_WINDOW_H = 1.0
+"""An exit's capacity for ``load``: the hourly capacity of the road edges entering its node times
+this window. A shelter or refuge uses its bundle ``capacity_veh``; null when unknown."""
+PREFERENCE_VEH_PER_CHOICE = 1.0
+"""Soft load input: each live civilian destination choice adds this many vehicles to that
+destination's load (on top of the ``evacuate_now`` zones the plan sends there)."""
+LOAD_RANK_WEIGHT = 1.0
+"""Alternatives are ranked by search cost x (1 + LOAD_RANK_WEIGHT x load); unknown load counts as 0.
+Load never changes the recommended destination."""
+
 GuidanceLevel = Literal["evacuate_now", "be_ready", "none"]
 ReasonCode = Literal["fire_within_evacuate_km", "fire_within_ready_km", "no_open_route", "clear"]
+RouteSafety = Literal["clear", "passes_near_fire", "passes_fire"]
+SAFETY_BY_EXPOSURE: dict[Exposure, RouteSafety] = {
+    "clear": "clear", "near_fire": "passes_near_fire", "through_fire": "passes_fire"}
+_SAFETY_RANK: dict[Exposure, int] = {"clear": 0, "near_fire": 1, "through_fire": 2}
+
+
+def route_safety(route: Route) -> RouteSafety:
+    """``clear``, ``passes_near_fire`` (FIRE_BUFFER_M buffer only) or ``passes_fire``."""
+    return SAFETY_BY_EXPOSURE[route.exposure]
+
+
+def line_safety(line: Sequence[LonLat], fire_geometry: MultiPolygon | None) -> RouteSafety:
+    """The same classes for a stored route line (published guidance has no edge ids): any point
+    inside or a segment crossing the fire -> ``passes_fire``; within FIRE_BUFFER_M -> ``passes_near_fire``."""
+    if fire_geometry is None or not line:
+        return "clear"
+    d = polyline_distance_m(line, fire_geometry, FIRE_BUFFER_M)
+    return "passes_fire" if d == 0.0 else "passes_near_fire" if d <= FIRE_BUFFER_M else "clear"
+
+
+@dataclass(frozen=True)
+class Alternative:
+    """One destination a person in the zone may choose (D1). The first is the planner's pick."""
+
+    destination_id: str
+    route: Route
+    load: float | None
+    """0..1 share of the destination's capacity already heading there; None when unknown."""
+    recommended: bool
+
+    @property
+    def safety(self) -> RouteSafety:
+        return route_safety(self.route)
 
 
 @dataclass(frozen=True)
@@ -59,12 +120,17 @@ class ZoneGuidance:
     caveat: str | None = None
     """Headline warning for clients: THROUGH_FIRE_CAVEAT or NEAR_FIRE_CAVEAT on an exposed
     route, else None. Follows ``route`` (set from it when a route is swapped in)."""
+    alternatives: tuple[Alternative, ...] = ()
+    """Recommended (this route) first, then up to ALTERNATIVES_MAX others; () when there is no
+    choice. Set by ``with_alternatives``; cleared when a different route is swapped in."""
 
     def __post_init__(self) -> None:
         if self.route is not None and self.route.exposed and not self.exposed:
             object.__setattr__(self, "exposed", True)
         if self.route is not None:
             object.__setattr__(self, "caveat", caveat_for(self.route))
+        if self.alternatives and (self.route is None or self.alternatives[0].route != self.route):
+            object.__setattr__(self, "alternatives", ())
 
     @property
     def via(self) -> tuple[str, ...]:
@@ -158,6 +224,95 @@ def plan(
             reason = EXPOSED_REASON if route.passes_fire else EXPOSED_NEAR_REASON
         out.append(ZoneGuidance(zone.id, level, route.destination_id, route, False, reason, code, dist,
                                 exposed=route.exposed))
+    return out
+
+
+def destination_loads(
+    drill: Drill,
+    guidance: Sequence[ZoneGuidance],
+    preferences: Mapping[str, int] = {},
+) -> dict[str, float | None]:
+    """Destination id -> 0..1 load, None when its capacity is unknown.
+
+    Heading there: the vehicles of every ``evacuate_now`` zone the plan sends there, plus
+    PREFERENCE_VEH_PER_CHOICE per live civilian choice (``preferences``: destination id -> count).
+    Capacity: ``capacity_veh`` when the bundle has it; for an exit without it, the hourly capacity
+    of the road edges entering its node times LOAD_EXIT_WINDOW_H. Clamped to 1.
+    """
+    vehicles = {z.id: z.vehicles for z in drill.zones}
+    heading: dict[str, float] = {}
+    for g in guidance:
+        if g.level == "evacuate_now" and not g.no_route and g.destination_id is not None:
+            heading[g.destination_id] = heading.get(g.destination_id, 0.0) + vehicles.get(g.zone_id, 0)
+    for did, n in preferences.items():
+        heading[did] = heading.get(did, 0.0) + PREFERENCE_VEH_PER_CHOICE * max(0, n)
+    roads = drill.roads
+    out: dict[str, float | None] = {}
+    for dest in drill.destinations:
+        capacity: float | None = float(dest.capacity_veh) if dest.capacity_veh else None
+        if capacity is None and dest.kind == "exit":
+            node = destination_node(drill, dest.id)
+            if node is not None:
+                hourly = sum(roads.edges[e].capacity_veh_per_hour for e in roads.in_edges.get(node, ()))
+                capacity = hourly * LOAD_EXIT_WINDOW_H if hourly > 0 else None
+        out[dest.id] = None if capacity is None else round(min(1.0, heading.get(dest.id, 0.0) / capacity), 2)
+    return out
+
+
+def with_alternatives(
+    drill: Drill,
+    guidance: Sequence[ZoneGuidance],
+    blocked_segment_ids: Collection[str],
+    fire_geometry: MultiPolygon | None,
+    full_destination_ids: Collection[str] = (),
+    preferences: Mapping[tuple[str, str], int] = {},
+) -> list[ZoneGuidance]:
+    """``guidance`` with ``alternatives`` set on every zone that moves along a route.
+
+    The recommended entry is the zone's route as chosen (by the planner or a controller). The
+    others come from ``routing.alternative_routes`` (same router, blocked edges and usable
+    destinations; never inside the fire estimate, refuges outside it plus REFUGE_FIRE_BUFFER_M;
+    never a worse exposure class than the recommended route), ranked by exposure class, then
+    exits and shelters before refuges, then search cost x (1 + LOAD_RANK_WEIGHT x load); each at
+    least ALTERNATIVE_MIN_SEPARATION_M from those already offered and at most
+    ALTERNATIVE_MAX_EXTRA_FIRE_S more inside the fire than the recommended route. An alternative
+    whose named roads (``via``) match one already offered is skipped: to the person it is the
+    same way out.
+    ``preferences`` ((zone id, destination id) -> live choices) only feeds ``load``.
+    """
+    picks = {g.zone_id: g.route for g in guidance if g.level != "none" and not g.no_route and g.route is not None}
+    if not picks:
+        return list(guidance)
+    per_destination: dict[str, int] = {}
+    for (_, did), n in preferences.items():
+        per_destination[did] = per_destination.get(did, 0) + n
+    loads = destination_loads(drill, guidance, per_destination)
+    candidates = alternative_routes(drill, picks, blocked_segment_ids, fire_geometry, full_destination_ids)
+    dests = {d.id: d for d in drill.destinations}
+
+    def rank(r: Route) -> tuple[int, int, float, str]:
+        kind_rank = 0 if dests[r.destination_id].kind in DESTINATION_KINDS else 1
+        return (_SAFETY_RANK[r.exposure], kind_rank,
+                weighted_time_s(r) * (1.0 + LOAD_RANK_WEIGHT * (loads.get(r.destination_id) or 0.0)), r.destination_id)
+
+    out: list[ZoneGuidance] = []
+    for g in guidance:
+        pick = picks.get(g.zone_id)
+        if pick is None:
+            out.append(g)
+            continue
+        chosen = [Alternative(pick.destination_id, pick, loads.get(pick.destination_id), True)]
+        for r in sorted(candidates.get(g.zone_id, ()), key=rank):
+            if len(chosen) > ALTERNATIVES_MAX:
+                break
+            if (_SAFETY_RANK[r.exposure] > _SAFETY_RANK[pick.exposure]
+                    or r.fire_time_s > pick.fire_time_s + ALTERNATIVE_MAX_EXTRA_FIRE_S
+                    or any(haversine_m(dests[r.destination_id].coord, dests[c.destination_id].coord)
+                           < ALTERNATIVE_MIN_SEPARATION_M for c in chosen)
+                    or any(r.via == c.route.via for c in chosen)):
+                continue
+            chosen.append(Alternative(r.destination_id, r, loads.get(r.destination_id), False))
+        out.append(dataclasses.replace(g, alternatives=tuple(chosen) if len(chosen) > 1 else ()))
     return out
 
 

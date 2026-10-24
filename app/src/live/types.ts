@@ -189,6 +189,27 @@ export interface GuidanceRoute {
   distance_m: number
   /** Free-flow minutes, integer, rounded up. */
   eta_min: number
+  /** How the route relates to the fire estimate; absent from older servers. */
+  safety?: RouteSafety
+}
+
+export type RouteSafety = 'clear' | 'passes_near_fire' | 'passes_fire'
+
+/** One destination a person may choose (D1). The controller's pick has `recommended: true`. */
+export interface GuidanceAlternative {
+  destination: GuidanceDestination
+  route: GuidanceRoute
+  safety: RouteSafety
+  /** Share of capacity already heading there, 0..1; null when unknown. */
+  load: number | null
+  recommended: boolean
+}
+
+/** Civilian destination preferences per zone, for the controller (D1). */
+export interface DestinationPreferenceCount {
+  zone_id: string
+  destination_id: string
+  count: number
 }
 
 export type GuidanceLevel = 'evacuate_now' | 'be_ready' | 'none'
@@ -202,6 +223,10 @@ export interface ProposedGuidance {
   no_route: boolean
   reason: string
   reason_code: ReasonCode
+  /** Plain-language warning when every option passes the fire. */
+  caveat?: string | null
+  /** Recommended destination plus up to 3 alternatives; absent or empty when there is no choice. */
+  alternatives?: GuidanceAlternative[]
 }
 
 export interface ZoneGuidance extends ProposedGuidance {
@@ -393,6 +418,8 @@ export interface CommandResponse {
   zones: CommandZone[]
   destinations: Destination[]
   guidance: ZoneGuidance[]
+  /** Live civilian destination choices per zone (D1); absent from older servers. */
+  destination_preferences?: DestinationPreferenceCount[]
   /** All pending plus the latest 20 decided, newest first. */
   proposals: Proposal[]
   /** Newest 500. */

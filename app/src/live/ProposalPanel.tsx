@@ -53,6 +53,7 @@ function ChangeRow({ change, data }: { change: ProposalChange; data: CommandResp
         </span>
         <Plate level={to.level} line={toLine} />
       </span>
+      {to.caveat && !to.no_route ? <span className="lc-zone-caveat">{to.caveat}</span> : null}
     </li>
   );
 }

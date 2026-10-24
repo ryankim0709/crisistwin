@@ -6,10 +6,14 @@ import SwiftUI
 ///   `meeting`, `gobag`, `broadcast`, `responder`, `about` (pushed in Plan). Anything else opens Home.
 /// - `-join <code>`: joins as a responder on launch, so the Tasks tab appears.
 /// - `-start 1`: taps Start shortly after launch (Map, following).
+/// - `detail` opens the guidance detail over Home (`detailexit` with the exits listed),
+///   `detailmap` over Map; `exercise` opens Home's Exercise explanation.
+/// - `-scroll bottom`: scrolls Home or the guidance detail to its end.
 enum DebugLaunch {
     static var screen: String? { value("screen") }
     static var joinCode: String? { value("join") }
     static var start: Bool { value("start") == "1" }
+    static var scrollToBottom: Bool { value("scroll") == "bottom" }
 
     private static func value(_ key: String) -> String? {
         #if DEBUG
@@ -21,7 +25,7 @@ enum DebugLaunch {
 
     static var initialTab: AppTab {
         switch screen {
-        case "map", "report": return .map
+        case "map", "report", "detailmap": return .map
         case "reports", "newreport": return .reports
         case "plan", "family", "meeting", "gobag", "broadcast", "responder", "about": return .plan
         case "tasks": return .tasks
@@ -56,11 +60,17 @@ final class AppRouter {
     var following = false
     /// A place Map flies to (a responder task); Map clears it once framed.
     var focus: LonLat?
+    /// The guidance detail sheet (the Slab and the bottom accessory open it).
+    var detail = false
 
     /// Home's Start: Map, pitched, following the device.
     func start() {
         tab = .map
         following = true
+    }
+
+    func openDetail() {
+        detail = true
     }
 
     func openReport(_ prefill: ReportPrefill? = nil, from sourceID: String) {
@@ -121,10 +131,20 @@ struct RootView: View {
             .tint(.primary)
             .sheet(item: $router.report) { request in
                 NavigationStack { ReportSheet(prefill: request.prefill) }
-                    .presentationDetents([.medium, .large])
+                    .presentationDetents([.large])
                     .navigationTransition(.zoom(sourceID: request.sourceID, in: reportZoom))
                     .environment(liveStore)
                     .environment(location)
+            }
+            .sheet(isPresented: $router.detail) {
+                GuidanceDetailView()
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
+                    .environment(liveStore)
+                    .environment(location)
+                    .environment(router)
+                    .environment(familyStore)
+                    .tint(.primary)
             }
             .task(id: scenePhase) {
                 guard scenePhase == .active else {
@@ -201,7 +221,7 @@ struct RootView: View {
         if let guidance = liveStore.activeGuidance {
             view.tabViewBottomAccessory {
                 GuidanceAccessory(guidance: guidance, offline: liveStore.offlineSince != nil) {
-                    router.tab = .map
+                    router.openDetail()
                 }
             }
         } else {
@@ -214,6 +234,13 @@ struct RootView: View {
         if let code = DebugLaunch.joinCode, liveStore.role == .civilian {
             try? await liveStore.joinAsResponder(inviteCode: code)
             if DebugLaunch.screen == "tasks" { router.tab = .tasks }
+        }
+        if ["detail", "detailexit", "detailmap"].contains(DebugLaunch.screen) {
+            // Once guidance has loaded, so the sheet opens on real content.
+            for _ in 0..<20 where liveStore.activeGuidance == nil {
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+            router.openDetail()
         }
         if DebugLaunch.start {
             try? await Task.sleep(for: .seconds(3))

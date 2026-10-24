@@ -44,11 +44,23 @@ final class LiveStore {
     /// The zone containing the device's last known position, computed on the device with
     /// `ZoneLocator`. Nil without a position or outside every zone.
     private(set) var myZone: LiveZone?
-    /// Published guidance for `myZone`; nil when the zone has none.
+    /// Guidance for `myZone` as this phone follows it: the published guidance with the person's
+    /// destination choice (D1) applied, so the route line and "Via ..." headline follow the pick
+    /// everywhere. Nil when the zone has none. `publishedGuidance` is the controller's version.
     var myGuidance: ZoneGuidance? {
-        guard let zoneId = myZone?.id else { return nil }
-        return situation?.guidance.first { $0.zoneId == zoneId }
+        guard let zoneId = myZone?.id, let published = publishedGuidance else { return nil }
+        return published.choosing(chosenDestinationId(for: zoneId))
     }
+    /// The guidance published for `myZone`, without the person's choice; nil when there is none.
+    var publishedGuidance: ZoneGuidance? {
+        myZone.flatMap { publishedGuidance(for: $0.id) }
+    }
+    /// D1: destinations this phone chose, by zone id. Persisted; dropped when the pick expires or
+    /// a new guidance version no longer offers it. No entry means the recommended destination.
+    private(set) var destinationChoices: [String: StoredDestinationChoice] = [:]
+    /// Zones whose pick a guidance version withdrew, with that version: the phone says so in
+    /// one line until the person picks again or the next version arrives.
+    private(set) var withdrawnChoices: [String: Int] = [:]
     /// Set when `myGuidance` gets a new version (or `myZone` changes to a zone with different
     /// guidance) after the first load; the UI shows a banner and plays a haptic, then calls
     /// `acknowledgeGuidanceChange()`.
@@ -93,6 +105,7 @@ final class LiveStore {
     init(incidentId: String = LiveIncident.defaultId) {
         self.incidentId = incidentId
         credential = CredentialStore.load(.responder) ?? CredentialStore.load(.device)
+        destinationChoices = Self.loadChoices(incidentId: incidentId)
         pending = outbox.drafts
         // The last situation, so a relaunch without signal still shows the last instruction.
         if let cached = SituationCache.load(incidentId: incidentId) { applySituation(cached, save: false) }
@@ -245,17 +258,36 @@ final class LiveStore {
         }
     }
 
-    /// Public hazards within 500 m of the device that this phone has not answered, nearest first;
-    /// computed on the phone from the situation, so nothing is sent to ask.
+    /// Public hazards within 500 m of the device that this phone has not answered and did not
+    /// report itself, nearest first; computed on the phone from the situation, so nothing is sent
+    /// to ask. The one source for the Reports badge and list.
     var stillThereItems: [PublicMapItem] {
         guard let here = lastCoord, let hazards = situation?.hazards else { return [] }
         let origin = CLLocation(latitude: here.lat, longitude: here.lon)
         return hazards
-            .filter { !answeredStillThere.contains($0.id) && $0.coord.isValid }
+            .filter { !answeredStillThere.contains($0.id) && $0.coord.isValid && !reportedByMe($0) }
             .map { ($0, origin.distance(from: CLLocation(latitude: $0.coord.lat, longitude: $0.coord.lon))) }
             .filter { $0.1 <= 500 }
             .sorted { $0.1 < $1.1 }
             .map(\.0)
+    }
+
+    /// Whether this phone's own report (sent or waiting) is behind `item`: same kind, sent during
+    /// the item's life (from 15 min before it was first reported), on the same road segment or
+    /// within 60 m. Public items carry no report ids, so the match is by kind, place and time.
+    private func reportedByMe(_ item: PublicMapItem) -> Bool {
+        let since = item.firstReportedAt.addingTimeInterval(-15 * 60)
+        let place = CLLocation(latitude: item.coord.lat, longitude: item.coord.lon)
+        func matches(kind: ReportKind, coord: LonLat, segment: String?, at: Date) -> Bool {
+            guard kind == item.kind, at >= since else { return false }
+            if let segment, segment == item.roadRef?.segmentId { return true }
+            return coord.isValid && place.distance(from: CLLocation(latitude: coord.lat, longitude: coord.lon)) <= 60
+        }
+        return myReports.contains {
+            matches(kind: $0.kind, coord: $0.location.coord, segment: $0.roadRef?.segmentId, at: $0.observedAt)
+        } || pending.contains {
+            matches(kind: $0.kind, coord: $0.location.coord, segment: nil, at: $0.observedAt)
+        }
     }
 
     /// Answers a "still there?" item: yes re-reports its kind; no reports the opposite road kind
@@ -270,6 +302,87 @@ final class LiveStore {
             severity: kind.hasSeverity ? item.severity : nil,
             location: ReportLocation(coord: item.coord, accuracyM: nil),
             observedAt: Date()))
+    }
+
+    // MARK: D1 destination choice
+
+    /// The guidance published for `zoneId`, without any choice applied.
+    func publishedGuidance(for zoneId: String) -> ZoneGuidance? {
+        situation?.guidance.first { $0.zoneId == zoneId }
+    }
+
+    /// The destination this phone chose for `zoneId` while it is offered and unexpired; nil means
+    /// the recommended destination.
+    func chosenDestinationId(for zoneId: String) -> String? {
+        guard let choice = destinationChoices[zoneId] else { return nil }
+        if let expires = choice.expiresAt, expires < Date() { return nil }
+        return choice.destinationId
+    }
+
+    /// True while the guidance version that withdrew this zone's pick is current: show "Your pick
+    /// is no longer offered. Showing the recommended route."
+    func choiceWithdrawn(for zoneId: String) -> Bool {
+        guard let version = withdrawnChoices[zoneId] else { return false }
+        return publishedGuidance(for: zoneId)?.version == version
+    }
+
+    /// Chooses where to go for `zoneId` (one of `ZoneGuidance.exitOptions`). The phone switches
+    /// at once (the recommended destination clears the choice), then posts `me/destination` so
+    /// the controller sees the preference. A 400 (no longer offered) restores the previous choice
+    /// and rethrows; other failures keep the choice on the phone and rethrow.
+    func chooseDestination(zoneId: String, destinationId: String) async throws {
+        let options = publishedGuidance(for: zoneId)?.exitOptions ?? []
+        let isRecommended = options.first(where: \.recommended)?.id == destinationId
+        let previous = destinationChoices[zoneId]
+        withdrawnChoices[zoneId] = nil
+        setChoice(isRecommended ? nil : StoredDestinationChoice(destinationId: destinationId, expiresAt: nil), zoneId: zoneId)
+        do {
+            let request = DestinationChoiceRequest(zoneId: zoneId, destinationId: destinationId)
+            let stored = try await authorized { try await $0.chooseDestination(request, token: $1) }
+            if !isRecommended, destinationChoices[zoneId]?.destinationId == destinationId {
+                setChoice(StoredDestinationChoice(destinationId: destinationId, expiresAt: stored.expiresAt), zoneId: zoneId)
+            }
+        } catch LiveAPIError.rejected(let detail) {
+            if destinationChoices[zoneId]?.destinationId == (isRecommended ? nil : destinationId) {
+                setChoice(previous, zoneId: zoneId)
+            }
+            throw LiveAPIError.rejected(detail)
+        }
+    }
+
+    private func setChoice(_ choice: StoredDestinationChoice?, zoneId: String) {
+        destinationChoices[zoneId] = choice
+        if let data = try? JSONEncoder().encode(destinationChoices) {
+            UserDefaults.standard.set(data, forKey: Self.choicesKey(incidentId))
+        }
+    }
+
+    private static func choicesKey(_ incidentId: String) -> String { "live.destinationChoices.\(incidentId)" }
+
+    private static func loadChoices(incidentId: String) -> [String: StoredDestinationChoice] {
+        guard let data = UserDefaults.standard.data(forKey: choicesKey(incidentId)),
+              let choices = try? JSONDecoder().decode([String: StoredDestinationChoice].self, from: data) else { return [:] }
+        return choices
+    }
+
+    /// Drops picks that expired or that the current guidance no longer offers; a withdrawn pick
+    /// is remembered with the version that withdrew it.
+    private func reconcileChoices() {
+        guard let guidance = situation?.guidance else { return }
+        for (zoneId, choice) in destinationChoices {
+            if let expires = choice.expiresAt, expires < Date() {
+                setChoice(nil, zoneId: zoneId)
+                continue
+            }
+            guard let g = guidance.first(where: { $0.zoneId == zoneId }), g.level != .none else {
+                setChoice(nil, zoneId: zoneId)
+                continue
+            }
+            if !g.exitOptions.contains(where: { $0.id == choice.destinationId && !$0.recommended }) {
+                setChoice(nil, zoneId: zoneId)
+                withdrawnChoices[zoneId] = g.version
+            }
+        }
     }
 
     /// Clears `guidanceChange` once it has been announced.
@@ -323,6 +436,7 @@ final class LiveStore {
         }
         situation = sit
         if save { SituationCache.save(sit) }
+        reconcileChoices()
         publicItems = sit.hazards
         if let mine = sit.myCheckin { lastCheckIn = mine }
         if role == .responder { tasks = sit.tasks.filter { $0.status == .open || $0.status == .accepted } }
@@ -333,7 +447,8 @@ final class LiveStore {
     /// Sets `myZone` and raises `guidanceChange` when the guidance for it changed after the first load.
     private func setZone(_ zone: LiveZone?, force: Bool = false) {
         if zone != myZone { myZone = zone } else if !force { return }
-        let current = myGuidance
+        // Changes are what the controller published; the person's own pick is not a change.
+        let current = publishedGuidance
         // The baseline is the first guidance resolved from a real position, so a relaunch that
         // shows the cached instruction does not announce it as a change.
         let resolvable = lastCoord != nil && situation?.zones != nil
@@ -473,5 +588,45 @@ final class LiveStore {
         }
         registration = task
         return try await task.value
+    }
+}
+
+/// A destination this phone chose for a zone (D1). `expiresAt` comes from the server once the
+/// choice was accepted; nil until then.
+struct StoredDestinationChoice: Codable, Equatable {
+    var destinationId: String
+    var expiresAt: Date?
+}
+
+extension ZoneGuidance {
+    /// Where the person may go, recommended first: `alternatives` as served. Empty when the
+    /// server offers no choice (nil, empty, or a single option).
+    var exitOptions: [GuidanceAlternative] {
+        var options = alternatives ?? []
+        if !options.contains(where: \.recommended), let destination, let route, let safety = route.safety {
+            options.insert(GuidanceAlternative(destination: destination, route: route, safety: safety,
+                                               load: nil, recommended: true), at: 0)
+        }
+        options.sort { $0.recommended && !$1.recommended }
+        return options.count > 1 ? options : []
+    }
+
+    /// The same guidance with the destination and route of the offered alternative
+    /// `destinationId`; unchanged when it is nil, the recommended one, or not offered.
+    func choosing(_ destinationId: String?) -> ZoneGuidance {
+        guard let destinationId, destinationId != destination?.id,
+              let option = exitOptions.first(where: { $0.id == destinationId && !$0.recommended }) else { return self }
+        var copy = self
+        copy.destination = option.destination
+        var route = option.route
+        if route.safety == nil { route.safety = option.safety }
+        copy.route = route
+        copy.noRoute = false
+        return copy
+    }
+
+    /// The recommended option's destination id (the controller's pick).
+    var recommendedDestinationId: String? {
+        exitOptions.first(where: \.recommended)?.id ?? destination?.id
     }
 }

@@ -14,7 +14,17 @@ sys.path.insert(0, str(ROOT / "app" / "backend"))
 from livecore import estimate_fire, plan, load_drill  # noqa: E402
 from livecore.drill import parse_time  # noqa: E402
 from livecore.geo import point_in_multipolygon, polyline_distance_m  # noqa: E402
-from livecore.planner import BE_READY_KM, EVACUATE_NOW_KM, NEAR_FIRE_CAVEAT, THROUGH_FIRE_CAVEAT  # noqa: E402
+from livecore.planner import (  # noqa: E402
+    ALTERNATIVE_MAX_EXTRA_FIRE_S,
+    ALTERNATIVE_MIN_SEPARATION_M,
+    ALTERNATIVES_MAX,
+    BE_READY_KM,
+    EVACUATE_NOW_KM,
+    NEAR_FIRE_CAVEAT,
+    THROUGH_FIRE_CAVEAT,
+    with_alternatives,
+)
+from livecore.geo import haversine_m  # noqa: E402
 from livecore.routing import REFUGE_FIRE_BUFFER_M, Route, _less_exposed  # noqa: E402
 from livecore.policy import AUTO_APPROVE_CAUSES, diff, is_auto_approvable, summarize  # noqa: E402
 from livecore.public import (  # noqa: E402
@@ -155,6 +165,80 @@ class LeastExposureFallbackTest(unittest.TestCase):
         self.assertFalse(_less_exposed(r(50, 40), r(52, 40)))
         self.assertTrue(_less_exposed(r(10, 40), r(52, 40)))
         self.assertTrue(_less_exposed(r(50, 0), r(52, 40)))
+
+
+class AlternativesTest(unittest.TestCase):
+    """D1: the recommended destination plus up to ALTERNATIVES_MAX others, never unsafe."""
+
+    RANK = {"clear": 0, "passes_near_fire": 1, "passes_fire": 2}
+
+    @classmethod
+    def setUpClass(cls):
+        cls.drill = load_drill(BUNDLE)
+        cls.dests = {d.id: d for d in cls.drill.destinations}
+        cls.runs = {}
+        for hhmm in ("16:20", "18:00"):
+            now = parse_time(f"2018-11-08T{hhmm}:00Z")
+            fire = estimate_fire(cls.drill, now)
+            base = plan(cls.drill, now, fire, [])
+            cls.runs[hhmm] = (fire, base, with_alternatives(cls.drill, base, [], fire.geometry))
+
+    def test_recommended_first_then_safe_distinct_alternatives(self):
+        for hhmm, (fire, base, guidance) in self.runs.items():
+            offered = 0
+            for before, g in zip(base, guidance):
+                self.assertEqual((g.zone_id, g.level, g.destination_id, g.route), (before.zone_id, before.level,
+                                                                                  before.destination_id, before.route))
+                if g.route is None:
+                    self.assertEqual(g.alternatives, ())
+                    continue
+                if not g.alternatives:
+                    continue
+                offered += 1
+                rec, *others = g.alternatives
+                self.assertTrue(rec.recommended)
+                self.assertEqual((rec.destination_id, rec.route), (g.destination_id, g.route))
+                self.assertTrue(1 <= len(others) <= ALTERNATIVES_MAX)
+                self.assertEqual(len({a.destination_id for a in g.alternatives}), len(g.alternatives))
+                for a in others:
+                    where = f"{hhmm} {g.zone_id} {a.destination_id}"
+                    self.assertFalse(a.recommended)
+                    self.assertLessEqual(self.RANK[a.safety], self.RANK[rec.safety], where)
+                    self.assertLessEqual(a.route.fire_time_s, rec.route.fire_time_s + ALTERNATIVE_MAX_EXTRA_FIRE_S)
+                    self.assertEqual(a.route.origin_node, rec.route.origin_node)
+                    self.assertGreaterEqual(a.route.distance_m, 50)
+                    dest = self.dests[a.destination_id]
+                    self.assertFalse(point_in_multipolygon(dest.coord, fire.geometry), where)
+                    if dest.kind == "temporary_refuge":
+                        self.assertGreater(polyline_distance_m((dest.coord,), fire.geometry, REFUGE_FIRE_BUFFER_M),
+                                           REFUGE_FIRE_BUFFER_M, where)
+                    for b in g.alternatives:
+                        if b is not a and g.alternatives.index(b) < g.alternatives.index(a):
+                            self.assertGreaterEqual(haversine_m(dest.coord, self.dests[b.destination_id].coord),
+                                                    ALTERNATIVE_MIN_SEPARATION_M, where)
+                    self.assertTrue(a.load is None or 0.0 <= a.load <= 1.0)
+                vias = [a.route.via for a in g.alternatives]
+                self.assertEqual(len(set(vias)), len(vias), f"{hhmm} {g.zone_id} two choices take the same roads")
+            self.assertGreater(offered, 10, hhmm)
+
+    def test_alternatives_avoid_blocked_segments(self):
+        fire, base, guidance = self.runs["16:20"]
+        g = next(g for g in guidance if len(g.alternatives) >= 2)
+        blocked = set(g.alternatives[1].route.segment_ids)
+        rerun = with_alternatives(self.drill, plan(self.drill, parse_time("2018-11-08T16:20:00Z"), fire, blocked),
+                                  blocked, fire.geometry)
+        for z in rerun:
+            for a in z.alternatives:
+                self.assertFalse(set(a.route.segment_ids) & blocked, z.zone_id)
+
+    def test_exposed_pick_offers_only_exposed_and_says_so(self):
+        _, _, guidance = self.runs["18:00"]
+        exposed = [g for g in guidance if g.route is not None and g.route.passes_fire]
+        self.assertTrue(exposed)
+        for g in exposed:
+            self.assertEqual(g.caveat, THROUGH_FIRE_CAVEAT)
+            for a in g.alternatives:
+                self.assertEqual(a.safety, "passes_fire", g.zone_id)
 
 
 class PublicRulesTest(unittest.TestCase):

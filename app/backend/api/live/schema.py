@@ -136,6 +136,18 @@ VALIDATORS: dict[str, dict[str, Any]] = {
             "replay_at": NULLABLE_DATE,
         },
     ),
+    "live_destination_choices": _schema(
+        ["incident_id", "party_key", "zone_id", "destination_id", "at", "expires_at"],
+        {
+            "incident_id": STR,
+            "party_key": STR,
+            "zone_id": STR,
+            "destination_id": STR,
+            "guidance_version": {"bsonType": ["int", "long"], "minimum": 1},
+            "at": DATE,
+            "expires_at": DATE,
+        },
+    ),
     "live_responder_locations": _schema(
         ["incident_id", "party_key", "coord", "at", "expires_at"],
         {
@@ -181,6 +193,11 @@ INDEXES: dict[str, list[IndexModel]] = {
         IndexModel([("incident_id", ASCENDING), ("party_key", ASCENDING)], unique=True),
         IndexModel([("incident_id", ASCENDING), ("zone_id", ASCENDING), ("status", ASCENDING)]),
     ],
+    "live_destination_choices": [
+        IndexModel([("incident_id", ASCENDING), ("party_key", ASCENDING), ("zone_id", ASCENDING)], unique=True),
+        IndexModel([("incident_id", ASCENDING), ("zone_id", ASCENDING), ("destination_id", ASCENDING)]),
+        IndexModel([("expires_at", ASCENDING)], expireAfterSeconds=0),
+    ],
     "live_responder_locations": [
         IndexModel([("incident_id", ASCENDING), ("party_key", ASCENDING)], unique=True),
         IndexModel([("expires_at", ASCENDING)], expireAfterSeconds=0),
@@ -195,6 +212,7 @@ DRILL_DATA_COLLECTIONS = (
     "live_guidance",
     "live_proposals",
     "live_checkins",
+    "live_destination_choices",
     "live_responder_locations",
 )
 """Dropped by ``live_init_db --drop-drill-data`` (devices are kept so tokens stay valid)."""

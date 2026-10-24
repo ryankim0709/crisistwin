@@ -42,7 +42,7 @@ struct CheckInButtons: View {
                     } else {
                         button(.out, title: "I'm out", systemImage: "checkmark.circle") { checkIn(.out) }
                     }
-                    button(.needHelp, title: helpRequested ? "Help requested" : "Need help", systemImage: "sos") {
+                    button(.needHelp, title: helpRequested ? "Help requested" : "Need help", systemImage: "hand.raised") {
                         confirmingHelp = true
                     }
                 }

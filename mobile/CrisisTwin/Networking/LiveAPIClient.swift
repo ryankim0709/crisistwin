@@ -128,6 +128,12 @@ struct LiveAPIClient {
         _ = try await send(["me", "location"], method: "DELETE", token: token)
     }
 
+    /// D1: the destination this device chose for its zone (`POST me/destination`). No location.
+    /// 400 (`rejected`) when the destination is not currently offered for that zone.
+    func chooseDestination(_ request: DestinationChoiceRequest, token: String) async throws -> DestinationChoice {
+        try await get(DestinationChoice.self, ["me", "destination"], method: "POST", token: token, body: request)
+    }
+
     func acceptTask(id: String, token: String) async throws -> CheckTask {
         try await get(TaskResponse.self, ["tasks", id], method: "POST", token: token,
                       body: TaskUpdate(status: .accepted, note: nil)).task

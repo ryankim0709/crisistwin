@@ -6,10 +6,17 @@ import { labelPoint, nf, plural, shortZoneName } from "./format";
 import { routeUsesSegment } from "./geo";
 import Plate from "./Plate";
 import { wayOut } from "./ProposalPanel";
-import type { CommandResponse, CommandZone, TwinEdge, TwinMonitor, ZoneGuidance } from "./types";
+import type {
+  CommandResponse,
+  CommandZone,
+  TwinEdge,
+  TwinMonitor,
+  ZoneGuidance,
+} from "./types";
 
 const ZONE_ROWS = 6;
 const ROAD_ROWS = 5;
+const CHOICE_ROWS = 6;
 const EXPOSED_PREFIX = "Least-exposure route";
 const LEVEL_RANK = { evacuate_now: 0, be_ready: 1, none: 2 } as const;
 
@@ -34,7 +41,10 @@ function problemOf(g: ZoneGuidance, blocks: { name: string; line: [number, numbe
   if (g.no_route) return "No open route";
   const crossed = g.route ? blocks.find((b) => routeUsesSegment(b.line, g.route!.line)) : undefined;
   if (crossed) return `Crosses the ${crossed.name} block`;
-  if (g.reason.startsWith(EXPOSED_PREFIX)) return /near/.test(g.reason) ? "Passes near the fire" : "Passes the fire";
+  const safety = g.route?.safety;
+  if (safety === "passes_fire") return "Passes the fire";
+  if (safety === "passes_near_fire") return "Passes near the fire";
+  if (!safety && g.reason.startsWith(EXPOSED_PREFIX)) return /near/.test(g.reason) ? "Passes near the fire" : "Passes the fire";
   return null;
 }
 
@@ -224,7 +234,20 @@ export default function EvacuationPicture({
     const reportedFull = data.reports.filter(
       (r) => r.kind === "shelter_full" && r.status !== "dismissed" && r.status !== "resolved",
     );
-    return { rows, problems, remaining, out, shelters, refuges, withCapacity, full, reportedFull };
+    // Additive (docs/live-reports.md "Additive fields"); older servers omit it.
+    const prefs = data.destination_preferences ?? [];
+    const byDest = new Map<string, { count: number; zones: Set<string> }>();
+    for (const p of prefs) {
+      const d = byDest.get(p.destination_id) ?? { count: 0, zones: new Set<string>() };
+      d.count += p.count;
+      const zone = data.zones.find((z) => z.id === p.zone_id);
+      d.zones.add(zone ? shortZoneName(zone.name) : p.zone_id);
+      byDest.set(p.destination_id, d);
+    }
+    const choices = [...byDest.entries()]
+      .map(([id, d]) => ({ id, count: d.count, zones: [...d.zones] }))
+      .sort((a, b) => b.count - a.count || a.id.localeCompare(b.id));
+    return { rows, problems, remaining, out, shelters, refuges, withCapacity, full, reportedFull, choices };
   }, [data, twin]);
 
   const help = data.checkins.need_help.length;
@@ -252,6 +275,7 @@ export default function EvacuationPicture({
           <strong>{shortZoneName(r.zone.name)}</strong>
           <span className="lc-num">{nf(r.remaining)} households remain</span>
           {r.help ? <span className="lc-zone-help">{plural(r.help, "help request")}</span> : null}
+          {r.g.caveat ? <span className="lc-zone-caveat">{r.g.caveat}</span> : null}
         </span>
       </button>
     </li>
@@ -310,6 +334,20 @@ export default function EvacuationPicture({
                 </summary>
                 <p className="lc-dim">{p.zones.join("; ")}</p>
               </details>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <h3 className="lc-sub">Chosen destinations</h3>
+      {model.choices.length === 0 ? (
+        <p className="lc-dim">None</p>
+      ) : (
+        <ul className="lc-plain" aria-label="Destinations people chose">
+          {model.choices.slice(0, CHOICE_ROWS).map((c) => (
+            <li key={c.id} className="lc-split" title={c.zones.join("; ")}>
+              <span>{destName(c.id)}</span>
+              <span className="lc-num">{plural(c.count, "person", "people")}</span>
             </li>
           ))}
         </ul>

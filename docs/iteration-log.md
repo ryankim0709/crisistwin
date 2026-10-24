@@ -40,3 +40,30 @@ Open:
 - D1, D3, D4: destination choice, a real draggable sheet, free-form reports (round 3).
 - D9: Live Activity, App Intents and Control, TipKit (round 3).
 - D8: polish pass and end-to-end walkthrough (round 4).
+
+## Round 3
+
+One pass with five parallel agents (Map, Home and guidance detail, Plan, Reports, backend) against the round-2 review (D10). The phone now uses the web UI kit's tokens: sage paper in light mode and the operations console in dark mode.
+
+Fixed:
+- Map: zones with an order are tinted by level, with a worded legend. Every floating control has one place, so nothing overlaps at any drawer height on iPhone 17e, 17 Pro and 17 Pro Max. The Exercise tag is inline in the drawer header. The drawer really drags (D3), and expanded it shows the exit choice, route steps, nearby confirmed facts and the person's reports. "SOS" is gone.
+- Destination choice (D1): the server offers up to three alternatives per zone, each with route safety and load. Alternatives that take the same roads as one already offered are skipped. Choices go through `POST /api/live/me/destination` (2 h TTL, no location). The phone's exit picker switches the route, the headline, the ETA and the accessory, and falls back to Recommended when a pick is withdrawn. /live shows chosen destinations.
+- Caveat (D2): `caveat` and `route.safety` are serialized, and the phone shows the caveat as the headline.
+- Home: the incident name with an inline Exercise tag that explains itself, a tappable status block, a minimap card with Start, check-ins, Still there?, Near you, Changes and Family. When there is no incident, a calm empty state shows the plan summary.
+- Guidance detail: opens from the Home status block and the bottom accessory. It shows the level and what it means, the source and age, the way out with roads and safety, the exit change, check-ins, fire distance and changes.
+- Plan: a household page with a meeting-point map hero, a go-bag ring, family, trusted contacts and a compact final panel.
+- Reports: the report sheet opens full height, with a minimap pin above the type grid and the nearest known road named from local data only. The Reports tab shows step meters. Tasks have inline Accept, show-on-map and Can't reach buttons. People are no longer asked "Still there?" about their own reports.
+
+Reverted: none.
+
+Not verified:
+- The caveat line and the "no longer offered" line on Map were checked in code only.
+- Unsigned simulator builds cannot keep Keychain credentials, so each relaunch registers a new device and family membership cannot be stored. This is a test-setup limit.
+- The situation response grew to about 717 KB and is not gzipped. Destination load ignores twin vehicles and is unknown for Camp refuges (no capacities).
+- A civilian's report never shows "Being checked", because civilians receive no tasks.
+
+Directives done: D1, D2, D3, D10.
+
+Gate: PASS (livecore, twin, Django, tsc, iOS build).
+
+Open: D4 free-form reports, D9 system integrations (Live Activity, App Intents, Control, TipKit), D8 polish and end-to-end walkthrough.

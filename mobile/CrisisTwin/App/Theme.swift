@@ -1,18 +1,53 @@
 import SwiftUI
 import UIKit
 
-/// The phone's palette (design spec, "Tokens"). Everything else is system UI: grouped
-/// backgrounds, `.primary` / `.secondary` text and Liquid Glass controls. Status color appears
-/// only as the Slab, an SF Symbol or a map line, and always pairs with words.
+/// The phone's palette, mirrored from the web UI kit (`app/src/ui/tokens.css`): "sage paper" in
+/// light mode and the "operations console" theme in dark mode, so the app and the web workspace
+/// read as one product. Hazard colors keep the same meaning as on the web maps. Status color
+/// always pairs with words or a symbol.
 extension Color {
-    /// Fire edge and fill.
-    static let ctFire = Color(light: 0xE4570F, dark: 0xFF7A33)
-    /// The way out: route core and destination disc.
-    static let ctRoute = Color(light: 0x0A64F0, dark: 0x3D9BFF)
+    // Ink (`--ct-ink*`).
+    static let ctInk = Color(light: 0x142B27, dark: 0xE6EDF3)
+    static let ctInkMuted = Color(light: 0x52635C, dark: 0x8B9AA8)
+    static let ctInkSubtle = Color(light: 0x6A7166, dark: 0x6B7A88)
+
+    // Surfaces (`--ct-bg`, `--ct-surface*`).
+    static let ctBackground = Color(light: 0xF5F4EE, dark: 0x070A0E)
+    static let ctSurface = Color(light: 0xFCFCF8, dark: 0x0C1117)
+    static let ctSurfaceRaised = Color(light: 0xFFFFFF, dark: 0x121922)
+    static let ctSurfaceSunken = Color(light: 0xF4F5EF, dark: 0x080C11)
+    static let ctSurfaceMuted = Color(light: 0xEEEFE6, dark: 0x10161D)
+
+    // Borders (`--ct-border*`).
+    static let ctBorder = Color(light: 0xD4D8CA, dark: 0xA0BEDC, darkAlpha: 0.14)
+    static let ctBorderSubtle = Color(light: 0xE2E5DB, dark: 0xA0BEDC, darkAlpha: 0.08)
+
+    // Brand (`--ct-brand*`): primary actions and selection.
+    static let ctBrand = Color(light: 0x245C4F, dark: 0x3DDBB4)
+    static let ctBrandStrong = Color(light: 0x142B27, dark: 0x7CF2C9)
+    static let ctBrandSoft = Color(light: 0xE8EDE5, dark: 0x3DDBB4, darkAlpha: 0.12)
+
+    // Status (`--ct-success|warning|danger|info` and `-soft`).
+    static let ctSuccess = Color(light: 0x215B45, dark: 0x7CF2C9)
+    static let ctSuccessSoft = Color(light: 0xE5EDDF, dark: 0x7CF2C9, darkAlpha: 0.10)
+    static let ctWarning = Color(light: 0x795A20, dark: 0xFFB547)
+    static let ctWarningSoft = Color(light: 0xF5ECD8, dark: 0xFFB547, darkAlpha: 0.10)
+    static let ctDanger = Color(light: 0xB3261E, dark: 0xFF4D6D)
+    static let ctDangerSoft = Color(light: 0xFCEBEA, dark: 0xFF4D6D, darkAlpha: 0.10)
+    static let ctInfo = Color(light: 0x1D5F8A, dark: 0x9FC6EC)
+    static let ctInfoSoft = Color(light: 0xE6F0F6, dark: 0x9FC6EC, darkAlpha: 0.10)
+
+    // Hazard data (`--ct-fire`, `--ct-route`, `--ct-closure`, `--ct-shelter`, `--ct-smoke`).
+    /// Fire estimate edge and fill.
+    static let ctFire = Color(light: 0xEE6B4D, dark: 0xFF6A1A)
+    /// The way out: route core and destination marker.
+    static let ctRoute = Color(light: 0x3B82C4, dark: 0x5AA2E0)
     /// Casing under the route and block lines so they read over any tile.
     static let ctCasing = Color(light: 0xFFFFFF, dark: 0x000000, darkAlpha: 0.6)
-    /// Confirmed blocks only: the Leave now red.
-    static let ctHazard = Color(light: 0xD7261E, dark: 0xFF5147)
+    /// Confirmed road closures only.
+    static let ctHazard = Color(light: 0xDC2626, dark: 0xFF4D6D)
+    static let ctShelter = Color(light: 0x22C55E, dark: 0x22C55E)
+    static let ctSmoke = Color(light: 0x8B9AA8, dark: 0x8B9AA8)
 
     init(light: UInt32, dark: UInt32, lightAlpha: CGFloat = 1, darkAlpha: CGFloat = 1) {
         self.init(uiColor: UIColor { traits in
@@ -27,13 +62,13 @@ extension Color {
     }
 }
 
-/// Level tokens and words. The contract has no all-clear level.
+/// Level tokens and words, from the web status tones. The contract has no all-clear level.
 extension GuidanceLevel {
     /// The Slab fill; `none` has no Slab.
     var fill: Color? {
         switch self {
-        case .evacuateNow: return Color(light: 0xD7261E, dark: 0xFF5147)
-        case .beReady: return Color(light: 0xF5A623, dark: 0xFFB938)
+        case .evacuateNow: return .ctDanger
+        case .beReady: return Color(light: 0xF2A33A, dark: 0xFFB547)
         case .none: return nil
         }
     }
@@ -41,17 +76,26 @@ extension GuidanceLevel {
     /// Text on the Slab.
     var onFill: Color {
         switch self {
-        case .evacuateNow: return Color(light: 0xFFFFFF, dark: 0x1A0503)
-        case .beReady, .none: return Color(light: 0x1F1300, dark: 0x1F1300)
+        case .evacuateNow: return Color(light: 0xFFFFFF, dark: 0x070A0E)
+        case .beReady, .none: return Color(light: 0x142B27, dark: 0x070A0E)
         }
     }
 
-    /// The level glyph on a system background or glass.
+    /// The level glyph or text on a surface or glass.
     var glyph: Color {
         switch self {
-        case .evacuateNow: return Color(light: 0xD7261E, dark: 0xFF5147)
-        case .beReady: return Color(light: 0x8F5300, dark: 0xFFB938)
-        case .none: return Color(light: 0x6E7370, dark: 0x9DA29F)
+        case .evacuateNow: return .ctDanger
+        case .beReady: return .ctWarning
+        case .none: return .ctInkMuted
+        }
+    }
+
+    /// A soft background for the level (zone fills on the map, tinted rows).
+    var soft: Color {
+        switch self {
+        case .evacuateNow: return .ctDangerSoft
+        case .beReady: return .ctWarningSoft
+        case .none: return .ctSurfaceMuted
         }
     }
 
@@ -73,14 +117,42 @@ extension GuidanceLevel {
     }
 }
 
-/// Type roles (design spec, "Type").
+/// Type roles, following the web scale (`--ct-text-*`, Inter on the web, SF Pro here) at
+/// standard width: no expanded or condensed faces.
 extension Font {
     /// The Slab verdict.
-    static let ctVerdict = Font.largeTitle.weight(.black).width(.expanded)
-    /// The accessory verdict.
-    static let ctVerdictCompact = Font.headline.weight(.bold).width(.expanded)
+    static let ctVerdict = Font.system(.title, weight: .bold)
+    /// The accessory and compact verdicts.
+    static let ctVerdictCompact = Font.system(.subheadline, weight: .semibold)
+    /// Section and card titles.
+    static let ctTitle = Font.system(.headline, weight: .semibold)
+    /// Big numbers: ETA, distance, counts (`--ct-text-metric`).
+    static let ctMetric = Font.system(size: 29, weight: .semibold).monospacedDigit()
     /// Labels on the map.
-    static let ctMapLabel = Font.caption.weight(.semibold).width(.condensed)
+    static let ctMapLabel = Font.system(.caption, weight: .semibold)
+}
+
+/// The web kit's Panel: surface, 12 pt radius, 1 pt border. Use for content cards on the
+/// Home, Reports and Plan screens; floating controls over the map use Liquid Glass instead.
+struct CTPanel: ViewModifier {
+    var padding: CGFloat = 16
+
+    func body(content: Content) -> some View {
+        content
+            .padding(padding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.ctSurface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.ctBorder, lineWidth: 1))
+    }
+}
+
+extension View {
+    func ctPanel(padding: CGFloat = 16) -> some View { modifier(CTPanel(padding: padding)) }
+
+    /// The screen background behind panels (`--ct-bg`).
+    func ctScreenBackground() -> some View {
+        background(Color.ctBackground.ignoresSafeArea())
+    }
 }
 
 extension ReportKind {
@@ -89,7 +161,7 @@ extension ReportKind {
         switch self {
         case .fireSeen: return .ctFire
         case .roadBlocked: return .ctHazard
-        default: return .secondary
+        default: return .ctInkMuted
         }
     }
 }

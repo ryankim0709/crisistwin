@@ -33,6 +33,7 @@ from .state import (
     checkin_json,
     clock_from,
     current_guidance,
+    destination_preferences,
     drill_doc,
     drill_short_json,
     drill_state_json,
@@ -41,6 +42,7 @@ from .state import (
     incident_json,
     load_public,
     load_snapshot,
+    offered_destination_ids,
     proposal_json,
     public_item_json,
     report_json,
@@ -87,6 +89,9 @@ CIVILIAN_REPORTS_PER_MIN = 6
 CIVILIAN_REPORTS_PER_HOUR = 60
 REPORTS_PER_IP_PER_MIN = 30
 CHECKINS_PER_MIN = 10
+DESTINATION_CHOICE_TTL_S = 2 * 3600
+"""A civilian destination choice counts for this long after its last POST (TTL on ``expires_at``)."""
+DESTINATION_CHOICES_PER_MIN = 10
 
 
 def _bool_number(value: Any) -> bool:
@@ -600,6 +605,35 @@ def my_location(request, principal: Principal):
     return Response(status=204, headers={"Cache-Control": "no-store"})
 
 
+@live_view(["POST"], roles=["civilian", "responder"])
+def my_destination(request, principal: Principal):
+    """D1: the destination this device chose for a zone, among the ones its guidance offers."""
+    code = "invalid_destination"
+    body = json_body(request, code)
+    zone_id = optional_str(body, "zone_id", code, 200)
+    destination_id = optional_str(body, "destination_id", code, 200)
+    if zone_id is None or destination_id is None:
+        return error(400, code, "`zone_id` and `destination_id` are required.")
+    index = get_index()
+    if zone_id not in index.zones:
+        return error(400, code, "Unknown `zone_id`.")
+    incident_id = principal.incident_id or controller_incident()
+    current = next((d for d in current_guidance(incident_id) if d["zone_id"] == zone_id), None)
+    if current is None or destination_id not in offered_destination_ids(current):
+        return error(400, code, "That destination is not currently offered for this zone.")
+    if rate_limited(f"destination:{principal.party_key}", DESTINATION_CHOICES_PER_MIN, 60):
+        return error(429, "rate_limited", "Too many destination changes. Try again in a minute.")
+    now = wall_now()
+    expires_at = now + timedelta(seconds=DESTINATION_CHOICE_TTL_S)
+    col("live_destination_choices").update_one(
+        {"incident_id": incident_id, "party_key": principal.party_key, "zone_id": zone_id},
+        {"$set": {"destination_id": destination_id, "guidance_version": current["version"], "at": now,
+                  "expires_at": expires_at}},
+        upsert=True,
+    )
+    return ok({"zone_id": zone_id, "destination_id": destination_id, "expires_at": iso(expires_at)})
+
+
 # ---- v2: controller ----
 
 
@@ -675,6 +709,7 @@ def command(request, incident_id: str, principal: Principal):
             "road_state": [road_status_json(s) for s in snapshot.road_state],
             "public_items": [public_item_json(i, controller=True) for i in snapshot.items],
             "checkins": _checkin_summary(incident_id),
+            "destination_preferences": destination_preferences(incident_id, now),
             "responders": responders,
             "tasks": [task_json(t) for t in tasks],
         }
@@ -755,7 +790,7 @@ def set_drill(incident_id: str, action: str, replay_start_raw: Any = None, speed
         update = {"replay_start": clock.replay_now, "started_at": now, "speed": speed}
     elif action == "reset":
         update = {"replay_start": DEFAULT_REPLAY_START, "started_at": None, "speed": 1.0}
-        for name in ("live_guidance", "live_proposals", "live_checkins"):
+        for name in ("live_guidance", "live_proposals", "live_checkins", "live_destination_choices"):
             col(name).delete_many({"incident_id": incident_id})
     else:
         raise ApiError(400, "invalid_drill", "`action` must be start, reset or set_speed.")

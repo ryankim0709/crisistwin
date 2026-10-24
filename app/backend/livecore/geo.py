@@ -411,3 +411,39 @@ def polyline_distance_m(line: Sequence[LonLat], geometry: MultiPolygon, max_m: f
                     return 0.0
     best_m = best * 1000.0
     return best_m if best_m <= max_m else math.inf
+
+
+def simplify_line(line: Sequence[LonLat], tolerance_m: float, max_points: int) -> tuple[LonLat, ...]:
+    """Douglas-Peucker simplification (equirectangular at the line's first latitude), keeping
+    both ends; then evenly thinned to at most ``max_points`` (>= 2) if still longer."""
+    pts = list(line)
+    if len(pts) <= 2:
+        return tuple(pts)
+    kx, ky = _kx(pts[0][1]) * 1000.0, _KM_PER_DEG_LAT * 1000.0
+    xy = [(p[0] * kx, p[1] * ky) for p in pts]
+    keep = [False] * len(pts)
+    keep[0] = keep[-1] = True
+    stack = [(0, len(pts) - 1)]
+    while stack:
+        i, j = stack.pop()
+        if j <= i + 1:
+            continue
+        (ax, ay), (bx, by) = xy[i], xy[j]
+        dx, dy = bx - ax, by - ay
+        norm = math.hypot(dx, dy)
+        best, best_k = -1.0, -1
+        for k in range(i + 1, j):
+            px, py = xy[k]
+            d = (abs(dy * (px - ax) - dx * (py - ay)) / norm) if norm > 0 else math.hypot(px - ax, py - ay)
+            if d > best:
+                best, best_k = d, k
+        if best > tolerance_m:
+            keep[best_k] = True
+            stack.append((i, best_k))
+            stack.append((best_k, j))
+    out = [p for p, k in zip(pts, keep) if k]
+    if len(out) > max(2, max_points):
+        n = max(2, max_points)
+        step = (len(out) - 1) / (n - 1)
+        out = [out[round(i * step)] for i in range(n)]
+    return tuple(out)

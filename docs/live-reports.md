@@ -243,6 +243,73 @@ Published guidance (`ZoneGuidance`), one current entry per zone that has ever ha
   "proposal_id": "prp_01J..." }
 ```
 
+Additive fields (D1 destination choice, D2 fire caveat); clients must accept their absence:
+
+```jsonc
+{ "route": { "...": "as above", "safety": "clear" },          // clear|passes_near_fire|passes_fire
+  "caveat": "Every route out passes through the fire",          // string|null; see below
+  "alternatives": [                                              // recommended first, then up to 3; [] when no choice
+    { "destination": { "id": "exit:south", "name": "Exit south", "kind": "exit", "coord": [-121.59, 39.70] },
+      "route": { "line": [[-121.60, 39.76], [-121.59, 39.70]], "via": ["Clark Road"], "distance_m": 9800, "eta_min": 14, "safety": "clear" },
+      "safety": "clear",
+      "load": 0.42,                                              // 0..1 share of capacity already heading there; null when unknown
+      "recommended": true } ] }
+```
+
+- `route.safety`: `passes_fire` when any road edge of the route is inside or crosses the
+  fire estimate, `passes_near_fire` when it stays outside but within `FIRE_BUFFER_M` (300 m),
+  else `clear` (`livecore.planner.route_safety`).
+- `caveat` is set only when every option passes the fire, which is exactly when the
+  recommended route is not `clear` (a clear route anywhere would have been chosen):
+  `"Every route out passes through the fire"` (`THROUGH_FIRE_CAVEAT`) with `passes_fire`,
+  `"Every route out passes near the fire"` (`NEAR_FIRE_CAVEAT`) with `passes_near_fire`,
+  else `null`. Show it as the headline caveat.
+- `alternatives` is `[]` for `level: "none"`, `no_route`, and when the zone has no
+  destination besides the recommended one. When non-empty, the first entry is the
+  published `destination` (`recommended: true`) and the others are `recommended: false`.
+  Alternative `route.line`s are simplified (Douglas-Peucker 30 m, at most 80 points,
+  5 decimals); the recommended entry's line is that simplified copy of `route.line`.
+- `load`: vehicles heading there / capacity, clamped to 1, 2 decimals. Heading there: the
+  vehicles of every `evacuate_now` zone the current plan sends there, plus
+  `PREFERENCE_VEH_PER_CHOICE` (1) per live civilian choice (`POST me/destination`).
+  Capacity: the destination's `capacity_veh`; for an exit without one, the hourly capacity
+  of the road edges entering its node times `LOAD_EXIT_WINDOW_H` (1 h). `null` when unknown
+  (every Camp refuge). The twin's simulated vehicles are not used.
+- `route.safety`, `caveat` and `alternatives` are derived fields: every replan rewrites them
+  in place on the zone's current version **without a version bump**. Clients re-check, on
+  every poll, that a chosen destination is still in `alternatives`.
+
+Alternatives (`livecore.planner.with_alternatives`, `livecore.routing.alternative_routes`)
+are reachable exits and open refuges for that zone, computed by the same router with the
+same closed-edge rules: one forward Dijkstra from the zone's origin, with the edge cost of
+the pass that produced the recommended route (open edges only for a clear route, the
+near-fire or through-fire cost otherwise), so an alternative is never in a worse safety
+class than the recommended route. The destinations are the planner's usable set: never
+inside the fire estimate, never full, and a temporary refuge only when it is farther than
+`REFUGE_FIRE_BUFFER_M` (1000 m) from the fire estimate. Ranked by safety class, then exits
+and shelters before refuges, then search cost x (1 + `LOAD_RANK_WEIGHT` (1) x load). Each
+must be at least `ALTERNATIVE_MIN_SEPARATION_M` (1500 m) from the recommended destination and
+from those already listed, and spend at most `ALTERNATIVE_MAX_EXTRA_FIRE_S` (60 s) more
+inside the fire than the recommended route. Load (and so civilian choices) only reorders
+alternatives; it never changes the recommended destination, which the controller approves.
+When a change for the zone is pending, the published destination stays first (its safety
+re-measured on its line) and the others are the current plan's offers, so a destination
+that became unsafe or unreachable drops out at the next replan.
+
+`POST me/destination` (civilian or responder token; no incident in the path, as
+`me/location`): `{ "zone_id": "bg:…", "destination_id": "exit:south" }`
+-> `200 { "zone_id", "destination_id", "expires_at" }`. Stored in `live_destination_choices`
+(one per device and zone, upserted; `expires_at` = now + 2 h, `DESTINATION_CHOICE_TTL_S`;
+TTL index); no location. `400 invalid_destination` when a field is missing, the zone is
+unknown, or the destination is not currently offered for that zone (in its `alternatives`,
+or its `destination` when `alternatives` is empty); `403` for the controller token; `429`
+after `DESTINATION_CHOICES_PER_MIN` (10) per device per minute. The controller's command
+response adds `destination_preferences: [{ "zone_id", "destination_id", "count" }]`
+(unexpired choices, sorted by zone, then count descending); the planner uses the counts as
+a soft load input (`PREFERENCE_VEH_PER_CHOICE`, above), read at each replan. A phone whose
+chosen destination is no longer offered falls back to the recommended one and says so in
+one short line.
+
 A zone with no entry, or with `level: "none"`, has no instruction. Phones compose
 the instruction from `level`, `route.via[0]`, `destination.name` and
 `route.eta_min` ("Leave via Pentz Road -> Chico shelter, 24 min").
@@ -497,6 +564,7 @@ fetches again without `zones=0`.
   "checkins": {
     "by_zone": [ { "zone_id": "bg:060070009011", "out": 12, "need_help": 1, "staying": 3 } ],
     "need_help": [ { "id": "chk_01J...", "zone_id": "bg:060070009011", "coord": [-121.6012, 39.7593], "at": "...Z" } ] },
+  "destination_preferences": [ { "zone_id": "bg:060070009011", "destination_id": "exit:osm-node:86546172", "count": 4 } ],
   "responders": [ { "party_key": "rsp_7c1...", "coord": [-121.6, 39.76], "accuracy_m": 15, "at": "...Z" } ],
   "tasks": [ CheckTask ] }                  // all not cancelled
 ```
@@ -609,6 +677,7 @@ controller accounts (not in scope).
 | `GET incidents/{id}/situation[?zones=0]` | any |
 | `POST incidents/{id}/checkins` | any |
 | `POST me/location`, `DELETE me/location` | responder |
+| `POST me/destination` | civilian, responder |
 | `POST tasks/{id}` with `accepted` | responder |
 | `GET incidents/{id}/command` | controller |
 | `POST incidents/{id}/replan` | controller |
@@ -639,9 +708,10 @@ ISO 8601 `Z`. Ids are prefixed strings (`rpt_`, `tsk_`, `prp_`, `chk_`, `dev_`,
 | `live_tasks` | task | v1 + `assignee`, `accepted_at` | `id` unique; `{incident_id, status}`; `{assignee, status}` |
 | `live_decisions` | audit entry (append only) | `incident_id`, `at`, `actor`, `action`, `report_ids`, `proposal_id`, `note` | `{incident_id, at}` |
 | `live_drills` | incident | see [Drill clock](#drill-clock) | `incident_id` unique |
-| `live_guidance` | zone guidance version (append only; never updated) | `ZoneGuidance` + `incident_id` | `{incident_id, zone_id, version}` unique; `{incident_id, published_at}` |
+| `live_guidance` | zone guidance version (append only; only the derived `route.safety`, `caveat`, `alternatives` of the current version are rewritten by a replan) | `ZoneGuidance` + `incident_id` | `{incident_id, zone_id, version}` unique; `{incident_id, published_at}` |
 | `live_proposals` | proposal | `Proposal` | `id` unique; `{incident_id, status, created_at}` |
 | `live_checkins` | party per incident (latest only) | `CheckIn` + `incident_id`, `party_key` | `{incident_id, party_key}` unique; `{incident_id, zone_id, status}` |
+| `live_destination_choices` | device per incident and zone (latest only) | `incident_id`, `party_key`, `zone_id`, `destination_id`, `guidance_version`, `at`, `expires_at`; no location | `{incident_id, party_key, zone_id}` unique; `{incident_id, zone_id, destination_id}`; TTL on `expires_at` (`at + 2 h`) |
 | `live_responder_locations` | responder (latest only) | `incident_id`, `party_key`, `coord`, `accuracy_m`, `at`, `expires_at` | `{incident_id, party_key}` unique; TTL on `expires_at` (`at + 900 s`) |
 
 Current guidance per zone is the max `version` for `{incident_id, zone_id}` (an
@@ -659,8 +729,9 @@ returns `400`, so a validator failure is a server bug (`500`, logged).
 **Retention and privacy.** Civilian location is stored only inside reports and
 `need_help` check-ins; never in devices, guidance, proposals or logs. Responder
 location is latest-only and expires in 15 minutes (TTL), and is deleted at once on
-`DELETE me/location`. Tokens are stored as hashes only. Drill data (`reset`)
-removes guidance, proposals and check-ins; reports and decisions are kept until
+`DELETE me/location`. Destination choices hold no location and expire in 2 hours (TTL).
+Tokens are stored as hashes only. Drill data (`reset`)
+removes guidance, proposals, check-ins and destination choices; reports and decisions are kept until
 the drill database is dropped. No real resident data is collected in the drill.
 
 **Index and validator creation.** A management command

@@ -17,11 +17,12 @@ struct BroadcastView: View {
 
     var body: some View {
         List {
+            Group {
             Section {
                 Label {
                     Text("Simulation drill. The fire and any orders here come from CrisisTwin's models, not from emergency services. In a real emergency, follow official orders.")
                 } icon: {
-                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Color.ctWarning)
                 }
                 .font(.subheadline)
             }
@@ -47,7 +48,13 @@ struct BroadcastView: View {
             case .live(let snapshot, let receivedAt):
                 liveSections(snapshot, receivedAt: receivedAt)
             }
+            }
+            .listRowBackground(Color.ctSurface)
         }
+        .scrollContentBackground(.hidden)
+        .listRowSeparatorTint(Color.ctBorderSubtle)
+        .ctScreenBackground()
+        .tint(Color.ctBrand)
         .navigationTitle("Web simulation")
         .refreshable { await live.refresh() }
         .sheet(isPresented: $editingHome) {
@@ -67,7 +74,7 @@ struct BroadcastView: View {
                 .listRowInsets(EdgeInsets())
             Text(legend(snapshot))
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.ctInkMuted)
         }
 
         Section("Your household") {
@@ -118,33 +125,33 @@ struct BroadcastView: View {
         return Map(position: $camera) {
             ForEach(snapshot.zones) { zone in
                 MapPolygon(coordinates: zone.outline)
-                    .foregroundStyle(zone.id == myZone?.id ? Color.blue.opacity(0.12) : Color.clear)
-                    .stroke(zone.id == myZone?.id ? Color.blue : Color.gray.opacity(0.5), lineWidth: zone.id == myZone?.id ? 3 : 1)
+                    .foregroundStyle(zone.id == myZone?.id ? Color.ctRoute.opacity(0.12) : Color.clear)
+                    .stroke(zone.id == myZone?.id ? Color.ctRoute : Color.ctSmoke.opacity(0.6), lineWidth: zone.id == myZone?.id ? 3 : 1)
             }
             ForEach(Array(snapshot.fireRings.enumerated()), id: \.offset) { entry in
                 MapPolygon(coordinates: entry.element)
-                    .foregroundStyle(Color.red.opacity(0.35))
-                    .stroke(Color.red, lineWidth: 2)
+                    .foregroundStyle(Color.ctFire.opacity(0.35))
+                    .stroke(Color.ctFire, lineWidth: 2)
             }
             if let zone = myZone, !zone.routeLine.isEmpty {
                 MapPolyline(coordinates: zone.routeLine)
-                    .stroke(Color.blue, style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
+                    .stroke(Color.ctRoute, style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
             }
             if let exit = myZone?.exit {
                 Marker("Exit: \(exit.name)", systemImage: "arrow.up.right.square.fill", coordinate: exit.coordinate)
-                    .tint(.blue)
+                    .tint(Color.ctRoute)
             }
             if let home = plan.home {
                 Marker("Home", systemImage: "house.fill", coordinate: home.coordinate)
-                    .tint(.indigo)
+                    .tint(Color.ctInfo)
             }
             if let primary = plan.primary {
                 Marker("1 · \(primary.name)", systemImage: "figure.2", coordinate: primary.coordinate)
-                    .tint(Color.accentColor)
+                    .tint(Color.ctBrand)
             }
             if let backup = plan.backup {
                 Marker("2 · \(backup.name)", systemImage: "figure.2", coordinate: backup.coordinate)
-                    .tint(.orange)
+                    .tint(Color.ctInkMuted)
             }
         }
         .accessibilityLabel(mapSummary(snapshot, myZone: myZone))
@@ -197,7 +204,7 @@ struct BroadcastView: View {
             }
             if reached {
                 Label("In the simulation, fire has reached your home location.", systemImage: "flame.fill")
-                    .foregroundStyle(.red)
+                    .foregroundStyle(Color.ctDanger)
             } else if let meters = snapshot.distanceToFire(from: home.coordinate) {
                 Label("Simulated fire edge is about \(distanceText(meters)) from home.", systemImage: "ruler")
             } else {
@@ -206,7 +213,7 @@ struct BroadcastView: View {
             Button("Change home location") { editingHome = true }
         } else {
             Text("Set your home to see your zone's simulated orders and how far the fire is. Your home stays on this phone; the app works out your zone itself.")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.ctInkMuted)
             Button {
                 editingHome = true
             } label: {
@@ -229,11 +236,11 @@ struct BroadcastView: View {
             }
             Text("Zone \(zone.name)")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.ctInkMuted)
             if let core = zone.fireCoreEtaMin, zone.kind != .overrun, zone.kind != .cleared {
                 Text(core == 0 ? "Simulated fire is in the zone." : "Simulated fire reaches the zone centre in about \(Int(core)) min.")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.ctInkMuted)
             }
         }
         .padding(.vertical, 4)
@@ -256,7 +263,7 @@ struct BroadcastView: View {
                     let isReached = reached[entry.offset]
                     LabeledContent("\(entry.element.0): \(entry.element.1.name)") {
                         Label(isReached ? "Fire reached" : "Clear", systemImage: isReached ? "flame.fill" : "checkmark.circle")
-                            .foregroundStyle(isReached ? Color.red : Color.secondary)
+                            .foregroundStyle(isReached ? Color.ctDanger : Color.ctInkMuted)
                     }
                 }
                 if let firstClear = points.indices.first(where: { !reached[$0] }) {
@@ -306,13 +313,13 @@ private struct GuidanceStyle {
     init(_ kind: BroadcastZone.Guidance?) {
         let style: (String, String, Color)
         switch kind {
-        case .leaveNow: style = ("Leave now", "car.fill", .red)
-        case .wait: style = ("Ordered out — wait a little", "hourglass", .orange)
-        case .routeBlocked: style = ("Route blocked — hold", "xmark.octagon.fill", .red)
-        case .noOrder: style = ("No order yet — be ready", "bell", .primary)
-        case .cleared: style = ("Zone evacuated", "checkmark.seal.fill", .green)
-        case .overrun: style = ("Fire in your zone", "flame.fill", .red)
-        case nil: style = ("Update the app", "questionmark.circle", .secondary)
+        case .leaveNow: style = ("Leave now", "car.fill", .ctDanger)
+        case .wait: style = ("Ordered out — wait a little", "hourglass", .ctWarning)
+        case .routeBlocked: style = ("Route blocked — hold", "xmark.octagon.fill", .ctDanger)
+        case .noOrder: style = ("No order yet — be ready", "bell", .ctInk)
+        case .cleared: style = ("Zone evacuated", "checkmark.seal.fill", .ctSuccess)
+        case .overrun: style = ("Fire in your zone", "flame.fill", .ctDanger)
+        case nil: style = ("Update the app", "questionmark.circle", .ctInkMuted)
         }
         title = style.0
         systemImage = style.1

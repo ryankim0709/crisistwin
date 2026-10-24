@@ -5,6 +5,8 @@ import SwiftUI
 struct MeetingPointEditor: View {
     let title: String
     let onSave: (MeetingPoint) -> Void
+    /// Removes the point; nil hides Remove (a new point, or the home location).
+    let onRemove: (() -> Void)?
 
     @Environment(\.dismiss) private var dismiss
     @State private var name: String
@@ -16,9 +18,10 @@ struct MeetingPointEditor: View {
     @State private var results: [MKMapItem] = []
     @State private var searchMessage: String?
 
-    init(title: String, point: MeetingPoint?, onSave: @escaping (MeetingPoint) -> Void) {
+    init(title: String, point: MeetingPoint?, onSave: @escaping (MeetingPoint) -> Void, onRemove: (() -> Void)? = nil) {
         self.title = title
         self.onSave = onSave
+        self.onRemove = onRemove
         _name = State(initialValue: point?.name ?? "")
         _note = State(initialValue: point?.note ?? "")
         let coordinate = point.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
@@ -44,19 +47,21 @@ struct MeetingPointEditor: View {
             Form {
                 Section {
                     Label {
-                        TextField("Search places, e.g. a park or school", text: $query)
+                        TextField("Search places", text: $query)
                             .textInputAutocapitalization(.words)
                             .submitLabel(.search)
                     } icon: {
-                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                        Image(systemName: "magnifyingglass").foregroundStyle(Color.ctInkMuted)
                     }
                 }
+                .listRowBackground(Color.ctSurface)
 
                 Section {
                     MapReader { proxy in
                         Map(position: $camera) {
                             if let coordinate {
                                 Marker(name.isEmpty ? "Meeting point" : name, systemImage: "figure.2", coordinate: coordinate)
+                            .tint(Color.ctBrand)
                             }
                         }
                         .onMapCameraChange { visibleRegion = $0.region }
@@ -65,43 +70,58 @@ struct MeetingPointEditor: View {
                         }
                     }
                     .frame(height: 260)
-                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .mapStyle(.standard(elevation: .flat, emphasis: .muted))
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.ctBorder, lineWidth: 1))
                     .listRowInsets(EdgeInsets())
                     .listRowBackground(Color.clear)
                     .accessibilityLabel("Map. Tap to place the meeting point.")
-                } footer: {
-                    Label(
-                        coordinate == nil ? "Search for a place, or tap the map to drop a pin." : "Tap the map to move the pin.",
-                        systemImage: coordinate == nil ? "hand.tap" : "mappin.and.ellipse"
-                    )
-                    .foregroundStyle(.secondary)
                 }
 
                 if !results.isEmpty || searchMessage != nil {
                     Section("Search results") {
                         if let searchMessage {
-                            Text(searchMessage).foregroundStyle(.secondary)
+                            Text(searchMessage).foregroundStyle(Color.ctInkMuted)
                         }
                         ForEach(results, id: \.self) { item in
                             Button {
                                 choose(item)
                             } label: {
                                 VStack(alignment: .leading) {
-                                    Text(item.name ?? "Unnamed place").foregroundStyle(.primary)
+                                    Text(item.name ?? "Unnamed place").foregroundStyle(Color.ctInk)
                                     if let address = item.placemark.title {
-                                        Text(address).font(.caption).foregroundStyle(.secondary)
+                                        Text(address).font(.caption).foregroundStyle(Color.ctInkMuted)
                                     }
                                 }
+                                .frame(minHeight: 44, alignment: .leading)
                             }
                         }
                     }
+                    .listRowBackground(Color.ctSurface)
                 }
 
                 Section("Details") {
-                    TextField("Name, e.g. Live Oak Park", text: $name)
-                    TextField("Note, e.g. by the north entrance", text: $note, axis: .vertical)
+                    TextField("Name", text: $name)
+                        .frame(minHeight: 36)
+                    TextField("Note, e.g. north entrance", text: $note, axis: .vertical)
+                        .frame(minHeight: 36)
+                }
+                .listRowBackground(Color.ctSurface)
+
+                if let onRemove {
+                    Section {
+                        Button("Remove", role: .destructive) {
+                            onRemove()
+                            dismiss()
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 36)
+                    }
+                    .listRowBackground(Color.ctSurface)
                 }
             }
+            .scrollContentBackground(.hidden)
+            .ctScreenBackground()
+            .tint(Color.ctBrand)
             .task(id: query) { await search(query) }
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)

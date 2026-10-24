@@ -14,8 +14,8 @@ from typing import Any
 from livecore import drill as drillmod
 from livecore import public
 from livecore.fire import FireEstimate, estimate_fire
-from livecore.geo import to_geojson
-from livecore.planner import ZoneGuidance
+from livecore.geo import simplify_line, to_geojson
+from livecore.planner import Alternative, ZoneGuidance, route_safety
 from livecore.routing import Route
 
 from .common import col, iso
@@ -24,6 +24,12 @@ from .drillcache import DrillIndex, get_index
 REPORTS_SNAPSHOT_LIMIT = 5000
 """Newest reports read per snapshot (a drill has far fewer)."""
 ROUTE_DISTANCE_ROUND_M = 10
+ALTERNATIVE_LINE_TOLERANCE_M = 30.0
+ALTERNATIVE_LINE_MAX_POINTS = 80
+"""Alternative route lines are Douglas-Peucker simplified (30 m) and capped at 80 points, so
+four alternatives per zone keep the situation payload small; the main ``route.line`` is not."""
+COORD_DECIMALS = 5
+"""Alternative line coordinates are rounded to 5 decimals (about 1 m)."""
 
 
 # ---- rendering helpers ----
@@ -66,7 +72,10 @@ def checkin_json(doc: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def guidance_json(doc: Mapping[str, Any]) -> dict[str, Any]:
-    return render(doc, drop=("_id", "incident_id"))
+    body = render(doc, drop=("_id", "incident_id"))
+    body.setdefault("caveat", None)
+    body.setdefault("alternatives", [])
+    return body
 
 
 def proposal_json(doc: Mapping[str, Any]) -> dict[str, Any]:
@@ -82,19 +91,38 @@ def destination_json(index: DrillIndex, destination_id: str | None) -> dict[str,
     return {"id": dest.id, "name": dest.name, "kind": dest.kind, "coord": [dest.coord[0], dest.coord[1]]}
 
 
-def route_json(route: Route | None) -> dict[str, Any] | None:
+def route_json(route: Route | None, simplified: bool = False) -> dict[str, Any] | None:
+    """``GuidanceRoute``; ``simplified`` for an alternative's line (see ALTERNATIVE_LINE_*)."""
     if route is None:
         return None
+    if simplified:
+        line = [[round(p[0], COORD_DECIMALS), round(p[1], COORD_DECIMALS)]
+                for p in simplify_line(route.line, ALTERNATIVE_LINE_TOLERANCE_M, ALTERNATIVE_LINE_MAX_POINTS)]
+    else:
+        line = [[p[0], p[1]] for p in route.line]
     return {
-        "line": [[p[0], p[1]] for p in route.line],
+        "line": line,
         "via": list(route.via),
         "distance_m": int(round(route.distance_m / ROUTE_DISTANCE_ROUND_M) * ROUTE_DISTANCE_ROUND_M),
         "eta_min": int(route.eta_min),
+        "safety": route_safety(route),
+    }
+
+
+def alternative_json(index: DrillIndex, a: Alternative) -> dict[str, Any]:
+    """``GuidanceAlternative``."""
+    return {
+        "destination": destination_json(index, a.destination_id),
+        "route": route_json(a.route, simplified=True),
+        "safety": a.safety,
+        "load": a.load,
+        "recommended": a.recommended,
     }
 
 
 def proposed_json(index: DrillIndex, g: ZoneGuidance) -> dict[str, Any]:
-    """``ProposedGuidance``: destination and route are null for level none and no_route."""
+    """``ProposedGuidance``: destination, route and caveat are null (alternatives empty) for
+    level none and no_route."""
     moving = g.level != "none" and not g.no_route
     return {
         "level": g.level,
@@ -103,7 +131,20 @@ def proposed_json(index: DrillIndex, g: ZoneGuidance) -> dict[str, Any]:
         "no_route": bool(g.no_route),
         "reason": g.reason,
         "reason_code": g.reason_code,
+        "caveat": g.caveat if moving else None,
+        "alternatives": [alternative_json(index, a) for a in g.alternatives] if moving else [],
     }
+
+
+def offered_destination_ids(doc: Mapping[str, Any]) -> list[str]:
+    """Destinations a person in the zone may choose under published guidance ``doc``: its
+    alternatives, or just its destination when there are none; [] when it says not to move."""
+    if doc.get("level") == "none" or doc.get("no_route") or not doc.get("destination"):
+        return []
+    alts = doc.get("alternatives") or []
+    if alts:
+        return [a["destination"]["id"] for a in alts if a.get("destination")]
+    return [doc["destination"]["id"]]
 
 
 def fire_json(fire: FireEstimate) -> dict[str, Any]:
@@ -317,6 +358,24 @@ def current_guidance(incident_id: str, index: DrillIndex | None = None) -> list[
         order = {z.id: i for i, z in enumerate(index.drill.zones)}
         docs.sort(key=lambda d: order.get(d["zone_id"], len(order)))
     return docs
+
+
+def destination_preferences(incident_id: str, now: datetime) -> list[dict[str, Any]]:
+    """Live civilian destination choices per zone: ``[{zone_id, destination_id, count}]``, sorted.
+
+    Counts only unexpired choices (the TTL monitor deletes expired ones up to a minute late)."""
+    rows = col("live_destination_choices").aggregate(
+        [
+            {"$match": {"incident_id": incident_id, "expires_at": {"$gt": now}}},
+            {"$group": {"_id": {"zone_id": "$zone_id", "destination_id": "$destination_id"}, "count": {"$sum": 1}}},
+        ]
+    )
+    out = [
+        {"zone_id": r["_id"]["zone_id"], "destination_id": r["_id"]["destination_id"], "count": int(r["count"])}
+        for r in rows
+    ]
+    out.sort(key=lambda r: (r["zone_id"], -r["count"], r["destination_id"]))
+    return out
 
 
 def responder_tasks(incident_id: str, party_key: str) -> list[dict[str, Any]]:

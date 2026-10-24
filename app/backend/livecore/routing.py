@@ -49,6 +49,9 @@ MIN_ROUTE_M = 50.0
 """A shorter route is not a route; the zone takes its next-nearest destination."""
 MAX_SKIPPED_DESTINATIONS = 5
 """Per zone and pass, how many too-short destinations are skipped before giving up."""
+ALTERNATIVE_CANDIDATES = 12
+"""``alternative_routes``: a zone's search stops once it has reached this many usable exits or
+shelters (refuges met on the way are kept too)."""
 
 _CLEAR, _BUFFER, _INSIDE = 0, 1, 2
 
@@ -325,6 +328,71 @@ def _fire_classes(drill: Drill, avoid_polygon: MultiPolygon | None) -> Callable[
     return fire_class
 
 
+
+def _edge_costs(drill: Drill, index: _Index, blocked: frozenset[str], fire_class: Callable[[str], int]
+                ) -> tuple[Callable[[str], float | None], Callable[[str], float | None], Callable[[str], float | None]]:
+    """Edge cost functions of the three passes (open, near fire, through fire); None = unusable."""
+    edges = drill.roads.edges
+
+    def open_cost(eid: str) -> float | None:
+        if edges[eid].segment_id in blocked or fire_class(eid) != _CLEAR:
+            return None
+        return index.edge_time_s[eid]
+
+    def near_cost(eid: str) -> float | None:
+        if edges[eid].segment_id in blocked:
+            return None
+        c = fire_class(eid)
+        if c == _INSIDE:
+            return None
+        return index.edge_time_s[eid] * (EXPOSED_COST_BUFFER if c == _BUFFER else 1.0)
+
+    def through_cost(eid: str) -> float | None:
+        if edges[eid].segment_id in blocked:
+            return None
+        c = fire_class(eid)
+        return index.edge_time_s[eid] * (
+            EXPOSED_COST_INSIDE if c == _INSIDE else EXPOSED_COST_BUFFER if c == _BUFFER else 1.0)
+
+    return open_cost, near_cost, through_cost
+
+
+def _usable_destinations(drill: Drill, index: _Index, avoid_polygon: MultiPolygon | None,
+                         full: Collection[str], wanted: tuple[DestinationKind, ...]) -> list[str]:
+    """Destinations of ``wanted`` kinds that are routable, not full, not inside the fire estimate,
+    and (temporary refuges) farther than REFUGE_FIRE_BUFFER_M from it."""
+    roads = drill.roads
+    out = []
+    for dest in drill.destinations:
+        if dest.kind not in wanted or dest.id in full or dest.id not in index.destination_nodes:
+            continue
+        node_coord = roads.node_coords[index.destination_nodes[dest.id]]
+        if avoid_polygon is not None:
+            if dest.kind == "temporary_refuge":
+                if (polyline_distance_m((dest.coord,), avoid_polygon, REFUGE_FIRE_BUFFER_M) <= REFUGE_FIRE_BUFFER_M
+                        or polyline_distance_m((node_coord,), avoid_polygon,
+                                               REFUGE_FIRE_BUFFER_M) <= REFUGE_FIRE_BUFFER_M):
+                    continue
+            elif point_in_multipolygon(dest.coord, avoid_polygon) or point_in_multipolygon(node_coord, avoid_polygon):
+                continue
+        out.append(dest.id)
+    return out
+
+
+def _with_exposure(index: _Index, fire_class: Callable[[str], int], route: Route) -> Route:
+    fire_s = near_s = 0.0
+    for eid in route.edge_ids:
+        c = fire_class(eid)
+        if c == _INSIDE:
+            fire_s += index.edge_time_s[eid]
+        elif c == _BUFFER:
+            near_s += index.edge_time_s[eid]
+    if fire_s == 0.0 and near_s == 0.0:
+        return route
+    return dataclasses.replace(route, exposed=True, passes_fire=fire_s > 0.0,
+                               fire_time_s=fire_s, near_fire_time_s=near_s)
+
+
 def best_routes(
     drill: Drill,
     blocked_segment_ids: Collection[str],
@@ -355,60 +423,15 @@ def best_routes(
     ``travel_time_s`` is always free-flow time. Returns zone id -> Route, or None.
     """
     index = _index(drill)
-    roads = drill.roads
-    blocked = frozenset(blocked_segment_ids)
-    full = frozenset(full_destination_ids)
     fire_class = _fire_classes(drill, avoid_polygon)
-
-    def open_cost(eid: str) -> float | None:
-        if roads.edges[eid].segment_id in blocked or fire_class(eid) != _CLEAR:
-            return None
-        return index.edge_time_s[eid]
-
-    def near_cost(eid: str) -> float | None:
-        if roads.edges[eid].segment_id in blocked:
-            return None
-        c = fire_class(eid)
-        if c == _INSIDE:
-            return None
-        return index.edge_time_s[eid] * (EXPOSED_COST_BUFFER if c == _BUFFER else 1.0)
-
-    def through_cost(eid: str) -> float | None:
-        if roads.edges[eid].segment_id in blocked:
-            return None
-        c = fire_class(eid)
-        return index.edge_time_s[eid] * (
-            EXPOSED_COST_INSIDE if c == _INSIDE else EXPOSED_COST_BUFFER if c == _BUFFER else 1.0)
+    open_cost, near_cost, through_cost = _edge_costs(drill, index, frozenset(blocked_segment_ids), fire_class)
+    full = frozenset(full_destination_ids)
 
     def usable_destinations(wanted: tuple[DestinationKind, ...]) -> list[str]:
-        out = []
-        for dest in drill.destinations:
-            if dest.kind not in wanted or dest.id in full or dest.id not in index.destination_nodes:
-                continue
-            node_coord = roads.node_coords[index.destination_nodes[dest.id]]
-            if avoid_polygon is not None:
-                if dest.kind == "temporary_refuge":
-                    if (polyline_distance_m((dest.coord,), avoid_polygon, REFUGE_FIRE_BUFFER_M) <= REFUGE_FIRE_BUFFER_M
-                            or polyline_distance_m((node_coord,), avoid_polygon,
-                                                   REFUGE_FIRE_BUFFER_M) <= REFUGE_FIRE_BUFFER_M):
-                        continue
-                elif point_in_multipolygon(dest.coord, avoid_polygon) or point_in_multipolygon(node_coord, avoid_polygon):
-                    continue
-            out.append(dest.id)
-        return out
+        return _usable_destinations(drill, index, avoid_polygon, full, wanted)
 
     def with_exposure(route: Route) -> Route:
-        fire_s = near_s = 0.0
-        for eid in route.edge_ids:
-            c = fire_class(eid)
-            if c == _INSIDE:
-                fire_s += index.edge_time_s[eid]
-            elif c == _BUFFER:
-                near_s += index.edge_time_s[eid]
-        if fire_s == 0.0 and near_s == 0.0:
-            return route
-        return dataclasses.replace(route, exposed=True, passes_fire=fire_s > 0.0,
-                                   fire_time_s=fire_s, near_fire_time_s=near_s)
+        return _with_exposure(index, fire_class, route)
 
     result: dict[str, Route | None] = {z.id: None for z in drill.zones}
     pending = list(drill.zones)
@@ -431,6 +454,96 @@ def best_routes(
                 result[zone.id] = b if a is None or (b is not None and _less_exposed(b, a)) else a
             pending = [z for z in pending if result[z.id] is None]
     return result
+
+
+def weighted_time_s(route: Route) -> float:
+    """The least-exposure search cost of ``route``: free-flow seconds with buffer time weighted by
+    EXPOSED_COST_BUFFER and time inside the fire by EXPOSED_COST_INSIDE (= travel time when clear)."""
+    return (route.travel_time_s + (EXPOSED_COST_BUFFER - 1.0) * route.near_fire_time_s
+            + (EXPOSED_COST_INSIDE - 1.0) * route.fire_time_s)
+
+
+def destination_node(drill: Drill, destination_id: str) -> str | None:
+    """The road node a destination is routed to; None when it was dropped (unroutable)."""
+    return _index(drill).destination_nodes.get(destination_id)
+
+
+def alternative_routes(
+    drill: Drill,
+    picks: Mapping[str, Route],
+    blocked_segment_ids: Collection[str],
+    avoid_polygon: MultiPolygon | None,
+    full_destination_ids: Collection[str] = (),
+    kinds: tuple[DestinationKind, ...] = DESTINATION_KINDS,
+) -> dict[str, list[Route]]:
+    """Zone id -> routes from the zone's origin to other usable destinations, cheapest first.
+
+    ``picks`` is zone id -> the zone's chosen route (from ``best_routes``). Each zone gets a
+    forward Dijkstra from the pick's origin with the edge cost of the pass that produced the
+    pick: open edges only for a clear pick, the near-fire cost for a ``near_fire`` pick, the
+    through-fire cost for a ``through_fire`` pick. So the same blocked-edge rule applies, and
+    an alternative is never in a worse exposure class than the pick (a clear route would have
+    been found by an earlier pass). Destinations are the ``best_routes`` usable set of ``kinds``
+    and FALLBACK_KINDS (never inside the fire estimate, never full, refuges farther than
+    REFUGE_FIRE_BUFFER_M from it). The pick's destination, destinations at the origin node and
+    routes shorter than MIN_ROUTE_M are skipped. The search stops after ALTERNATIVE_CANDIDATES
+    exits or shelters. Routes carry their exposure like ``best_routes``.
+    """
+    index = _index(drill)
+    roads = drill.roads
+    fire_class = _fire_classes(drill, avoid_polygon)
+    open_cost, near_cost, through_cost = _edge_costs(drill, index, frozenset(blocked_segment_ids), fire_class)
+    full = frozenset(full_destination_ids)
+    primary = set(_usable_destinations(drill, index, avoid_polygon, full, kinds))
+    usable = sorted(primary | set(_usable_destinations(drill, index, avoid_polygon, full, FALLBACK_KINDS)))
+    by_node: dict[str, list[str]] = {}
+    for did in usable:
+        by_node.setdefault(index.destination_nodes[did], []).append(did)
+    costs = {"clear": open_cost, "near_fire": near_cost, "through_fire": through_cost}
+    out: dict[str, list[Route]] = {}
+    for zone_id in sorted(picks):
+        pick = picks[zone_id]
+        edge_cost = costs[pick.exposure] if avoid_polygon is not None else open_cost
+        origin = pick.origin_node
+        dist: dict[str, float] = {origin: 0.0}
+        prev: dict[str, str] = {}
+        heap: list[tuple[float, str]] = [(0.0, origin)]
+        done: set[str] = set()
+        reached: list[tuple[str, str]] = []
+        n_primary = 0
+        while heap and n_primary < ALTERNATIVE_CANDIDATES:
+            d, node = heapq.heappop(heap)
+            if node in done:
+                continue
+            done.add(node)
+            for did in by_node.get(node, ()):
+                if did != pick.destination_id and node != origin:
+                    reached.append((did, node))
+                    n_primary += did in primary
+            for eid in roads.out_edges.get(node, ()):
+                c = edge_cost(eid)
+                if c is None:
+                    continue
+                nxt = roads.edges[eid].to_node
+                nd = d + c
+                if nd < dist.get(nxt, math.inf):
+                    dist[nxt] = nd
+                    prev[nxt] = eid
+                    heapq.heappush(heap, (nd, nxt))
+        routes: list[Route] = []
+        for did, node in reached:
+            path: list[str] = []
+            at = node
+            while at != origin:
+                eid = prev[at]
+                path.append(eid)
+                at = roads.edges[eid].from_node
+            next_edge = {roads.edges[eid].from_node: eid for eid in path}
+            route = _build_route(drill, index, zone_id, origin, next_edge, did)
+            if route.distance_m >= MIN_ROUTE_M:
+                routes.append(_with_exposure(index, fire_class, route))
+        out[zone_id] = routes
+    return out
 
 
 def _less_exposed(refuge: Route, leave: Route) -> bool:

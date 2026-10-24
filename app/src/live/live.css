@@ -792,6 +792,15 @@
 .lc-zone-help {
   color: var(--lc-ready);
 }
+/* The planner's "every route out passes the fire" caveat: shape plus colour, as .lc-problems. */
+.lc-zone-caveat {
+  font-size: var(--ct-text-sm);
+  color: var(--ct-ink);
+}
+.lc-zone-caveat::before {
+  content: "▲ ";
+  color: var(--ct-danger);
+}
 .lc-sub {
   margin-top: var(--ct-space-2) !important;
   font-size: var(--ct-text-sm);

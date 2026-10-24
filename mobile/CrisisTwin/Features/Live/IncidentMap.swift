@@ -1,10 +1,36 @@
 import MapKit
 import SwiftUI
 
-/// Full-bleed map in three colors: orange for the fire estimate (labeled on its edge with method
-/// and age), blue for the way out, red for confirmed blocks. Observed and confirmed facts only;
-/// never a forecast, and unverified reports are never drawn. A new guidance version ghosts the
-/// old route and draws the new one from the person to the destination (spec, "Motion").
+/// How a zone with an order is drawn: a soft fill in the level's hue with an edge in that hue;
+/// Leave now is clearly stronger than Be ready. Shared with the Map tab's legend.
+struct ZoneStyle {
+    let fill: Color
+    let edge: Color
+    let width: CGFloat
+
+    init(level: GuidanceLevel) {
+        switch level {
+        case .evacuateNow:
+            fill = Color.ctDanger.opacity(0.22)
+            edge = .ctDanger
+            width = 2.5
+        case .beReady:
+            fill = (GuidanceLevel.beReady.fill ?? .ctWarning).opacity(0.16)
+            edge = .ctWarning
+            width = 1.25
+        case .none:
+            fill = .clear
+            edge = .clear
+            width = 0
+        }
+    }
+}
+
+/// Full-bleed map: the zones being evacuated now (tinted by level), the fire estimate in orange
+/// (labeled on the edge facing the person, never over the fire), the way out in blue, and
+/// confirmed blocks in red. Observed and confirmed facts only; never a forecast, and unverified
+/// reports are never drawn. A new guidance version ghosts the old route and draws the new one
+/// from the person to the destination (spec, "Motion").
 struct IncidentMap: View {
     let situation: Situation?
     let myLocation: LonLat?
@@ -41,6 +67,13 @@ struct IncidentMap: View {
     @State private var shownRoute: ShownRoute?
     @State private var ghost: [LonLat] = []
     @State private var drawStart: Date?
+    /// The map rect inside the safe area (clear of the drawer and legend) and its size in points,
+    /// so the fire label can be placed where it is seen and never over the fire.
+    @State private var visibleRect: MKMapRect?
+    @State private var mapSize: CGSize = .zero
+    /// The fire label's average character width and height, following Dynamic Type.
+    @ScaledMetric(relativeTo: .caption) private var labelCharWidth: CGFloat = 7.4
+    @ScaledMetric(relativeTo: .caption) private var labelHeight: CGFloat = 32
 
     private struct ShownRoute: Equatable {
         var key: String
@@ -56,7 +89,8 @@ struct IncidentMap: View {
     }
 
     private var routeKey: String? {
-        guidance.map { "\($0.zoneId)#\($0.version)" }
+        // The destination too: picking another exit (D1) redraws the route and reframes.
+        guidance.map { "\($0.zoneId)#\($0.version)#\($0.destination?.id ?? "")" }
     }
 
     private static func roundStroke(_ width: CGFloat, dash: [CGFloat] = []) -> StrokeStyle {
@@ -90,12 +124,23 @@ struct IncidentMap: View {
         let edgeDash: [CGFloat] = fire?.method == .satellitePerimeter ? [] : [6, 4]
         let label = fire.flatMap { fireLabel($0, now: now) }
 
+        let ordered = orderedZones
+        let otherOptions = alternativeDestinations
+
         return Map(position: $camera, interactionModes: [.pan, .zoom, .rotate]) {
+            // Be ready under Leave now, so the stronger edge is never hidden.
+            ForEach(ordered, id: \.key) { entry in
+                let style = ZoneStyle(level: entry.level)
+                MapPolygon(entry.polygon)
+                    .foregroundStyle(style.fill)
+                    .stroke(style.edge, style: StrokeStyle(lineWidth: style.width, lineJoin: .round))
+            }
+
             if let zone {
                 ForEach(Array(Self.mkPolygons(zone.geometry).enumerated()), id: \.offset) { _, polygon in
                     MapPolygon(polygon)
                         .foregroundStyle(Color.clear)
-                        .stroke(Color.primary.opacity(0.35), style: StrokeStyle(lineWidth: 1.5, dash: [2, 4]))
+                        .stroke(Color.ctInk.opacity(0.7), style: StrokeStyle(lineWidth: 1.5, dash: [2, 4]))
                 }
             }
 
@@ -142,7 +187,8 @@ struct IncidentMap: View {
             }
 
             if let label {
-                Annotation(label.text, coordinate: label.coord.clCoordinate, anchor: .bottom) {
+                // Anchored on the edge, extending away from the fire toward the person.
+                Annotation(label.text, coordinate: label.coord.clCoordinate, anchor: label.anchor) {
                     Text(label.text)
                         .font(.ctMapLabel)
                         .monospacedDigit()
@@ -151,7 +197,18 @@ struct IncidentMap: View {
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
                         .glassEffect(.regular, in: .capsule)
-                        .padding(.bottom, 6)
+                        .padding(label.pad, 4)
+                }
+                .annotationTitles(.hidden)
+            }
+
+            ForEach(otherOptions) { option in
+                Annotation(option.destination.shortName, coordinate: option.destination.coord.clCoordinate, anchor: .center) {
+                    Circle()
+                        .strokeBorder(Color.ctInkMuted, lineWidth: 2.5)
+                        .background(Circle().fill(Color.ctSurface.opacity(0.9)))
+                        .frame(width: 14, height: 14)
+                        .accessibilityLabel("Other place to go: \(option.destination.shortName)")
                 }
                 .annotationTitles(.hidden)
             }
@@ -172,24 +229,129 @@ struct IncidentMap: View {
 
             if location.isAuthorized { UserAnnotation() }
         }
+        .onMapCameraChange(frequency: .onEnd) { context in visibleRect = context.rect }
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { mapSize = $0 }
         .mapStyle(.standard(elevation: .realistic, emphasis: .muted, pointsOfInterest: .excludingAll))
         .mapControls { MapCompass() }
         .tint(Color.ctRoute)
         .animation(reduceMotion ? nil : .smooth(duration: 0.6), value: fire?.geometry)
     }
 
-    /// "Fire estimate, 12 min" on the fire edge nearest the person (else its first vertex).
-    private func fireLabel(_ fire: FireEstimate, now: Date) -> (text: String, coord: LonLat)? {
-        guard fire.method != .none, let geometry = fire.geometry,
-              let first = geometry.polygons.first?.first?.first(where: \.isValid) else { return nil }
+    private struct FireLabel {
+        var text: String
+        var coord: LonLat
+        var anchor: UnitPoint
+        /// The side of the label touching the edge, padded so the capsule clears the stroke.
+        var pad: Edge.Set
+    }
+
+    /// "Fire estimate, 12 min" on the fire's edge, never over the fire. Candidates are the edge
+    /// point nearest the person (on their side first), then the fire's northern, southern,
+    /// eastern and western extremes; the first whose on-screen rectangle holds no fire, hides no
+    /// marker (the person, blocks, the destination) and sits in the unobstructed part of the map
+    /// wins. Before the map has a size, or when
+    /// nothing fits, the label goes above the northernmost point.
+    private func fireLabel(_ fire: FireEstimate, now: Date) -> FireLabel? {
+        guard fire.method != .none, let geometry = fire.geometry else { return nil }
+        let exterior = geometry.polygons.compactMap { $0.first }.flatMap { $0 }.filter(\.isValid)
+        guard let north = exterior.max(by: { $0.lat < $1.lat }), let south = exterior.min(by: { $0.lat < $1.lat }),
+              let east = exterior.max(by: { $0.lon < $1.lon }), let west = exterior.min(by: { $0.lon < $1.lon })
+        else { return nil }
         let method = fire.method == .satellitePerimeter ? "Satellite perimeter" : "Fire estimate"
         let incidentNow = situation?.incidentNow(at: now) ?? now
         let text = fire.asOf.map { "\(method), \(RelativeAge.short(from: $0, to: incidentNow))" } ?? method
-        var coord = first
+        let fallback = FireLabel(text: text, coord: north, anchor: .bottom, pad: .bottom)
+
+        var candidates: [(LonLat, UnitPoint)] = []
         if let me = myLocation, let nearest = ZoneLocator.nearest(on: geometry, to: me), nearest.meters > 0 {
-            coord = nearest.coord
+            let x: CGFloat = me.lon >= nearest.coord.lon ? 0 : 1, y: CGFloat = me.lat >= nearest.coord.lat ? 1 : 0
+            for anchor in [UnitPoint(x: 0.5, y: y), UnitPoint(x: x, y: y), UnitPoint(x: 1 - x, y: y),
+                           UnitPoint(x: x, y: 0.5), UnitPoint(x: 0.5, y: 1 - y)] {
+                candidates.append((nearest.coord, anchor))
+            }
         }
-        return (text, coord)
+        candidates += [(north, .bottom), (north, .bottomLeading), (north, .bottomTrailing),
+                       (south, .top), (south, .topLeading), (south, .topTrailing),
+                       (east, .leading), (west, .trailing)]
+
+        guard let visible = visibleRect, mapSize.width > 0, visible.size.width > 0 else { return fallback }
+        let perPoint = visible.size.width / mapSize.width  // map points per screen point
+        // Estimated capsule: caption semibold, 10 pt side padding, plus the 4 pt gap.
+        let size = CGSize(width: (CGFloat(text.count) * labelCharWidth + 28) * perPoint, height: labelHeight * perPoint)
+        // `visibleRect` already excludes the safe area (the drawer, legend and bars).
+        let usable = visible.insetBy(dx: 8 * perPoint, dy: 8 * perPoint)
+        // Markers the label must not hide: the person, confirmed blocks, the destination.
+        var markers: [LonLat] = (situation?.hazards ?? []).filter { $0.kind == .roadBlocked }.map(\.coord)
+        if let me = myLocation { markers.append(me) }
+        if let destination = guidance?.destination?.coord { markers.append(destination) }
+        let clearance = 22 * perPoint
+        func label(_ coord: LonLat, _ anchor: UnitPoint) -> FireLabel {
+            var pad: Edge.Set = []
+            if anchor.x == 0 { pad.insert(.leading) } else if anchor.x == 1 { pad.insert(.trailing) }
+            if anchor.y == 0 { pad.insert(.top) } else if anchor.y == 1 { pad.insert(.bottom) }
+            return FireLabel(text: text, coord: coord, anchor: anchor, pad: pad)
+        }
+        // Best: in view, off the fire, hiding no marker. Then in view and off the fire. Then in view.
+        var offFire: FireLabel?, inView: FireLabel?
+        for (coord, anchor) in candidates {
+            let p = MKMapPoint(coord.clCoordinate)
+            let rect = MKMapRect(x: p.x - anchor.x * size.width, y: p.y - anchor.y * size.height,
+                                 width: size.width, height: size.height)
+            guard usable.contains(rect) else { continue }
+            inView = inView ?? label(coord, anchor)
+            // A few points of slack so the edge the label rests on does not count as overlap.
+            guard !Self.overlaps(rect.insetBy(dx: 6 * perPoint, dy: 6 * perPoint), geometry, exterior) else { continue }
+            offFire = offFire ?? label(coord, anchor)
+            let padded = rect.insetBy(dx: -clearance, dy: -clearance)
+            if !markers.contains(where: { $0.isValid && padded.contains(MKMapPoint($0.clCoordinate)) }) {
+                return label(coord, anchor)
+            }
+        }
+        return offFire ?? inView ?? fallback
+    }
+
+    /// Whether the fire reaches into `rect`: a vertex inside it, or a sampled point of it inside the fire.
+    private static func overlaps(_ rect: MKMapRect, _ geometry: LiveGeometry, _ exterior: [LonLat]) -> Bool {
+        let inner = rect
+        if exterior.contains(where: { inner.contains(MKMapPoint($0.clCoordinate)) }) { return true }
+        for i in 0...6 {
+            for j in 0...2 {
+                let point = MKMapPoint(x: inner.minX + inner.size.width * Double(i) / 6,
+                                       y: inner.minY + inner.size.height * Double(j) / 2)
+                let c = point.coordinate
+                if ZoneLocator.contains(geometry, LonLat(lon: c.longitude, lat: c.latitude)) { return true }
+            }
+        }
+        return false
+    }
+
+    // MARK: Zones
+
+    private struct ZoneEntry {
+        var key: String
+        var level: GuidanceLevel
+        var polygon: MKPolygon
+    }
+
+    /// Zones with an order, Be ready first so Leave now draws on top.
+    private var orderedZones: [ZoneEntry] {
+        guard let situation, let zones = situation.zones else { return [] }
+        let levels = Dictionary(situation.guidance.map { ($0.zoneId, $0.level) }, uniquingKeysWith: { $1 })
+        var entries: [ZoneEntry] = []
+        for level in [GuidanceLevel.beReady, .evacuateNow] {
+            for zone in zones where levels[zone.id] == level {
+                for (i, polygon) in Self.mkPolygons(zone.geometry).enumerated() {
+                    entries.append(ZoneEntry(key: "\(zone.id)#\(i)", level: level, polygon: polygon))
+                }
+            }
+        }
+        return entries
+    }
+
+    /// The other places on offer (D1), drawn as small hollow rings.
+    private var alternativeDestinations: [GuidanceAlternative] {
+        guard let guidance, guidance.hasRoute else { return [] }
+        return guidance.exitOptions.filter { $0.id != guidance.destination?.id && $0.destination.coord.isValid }
     }
 
     // MARK: Route draw-on
@@ -255,8 +417,20 @@ struct IncidentMap: View {
         var points = routeLine
         if points.isEmpty, let zone { points = zone.geometry.polygons.flatMap { $0.first ?? [] } }
         if let myLocation, !points.isEmpty { points.append(myLocation) }
-        if points.isEmpty, let rings = situation?.fire.geometry?.polygons {
-            points = rings.flatMap { $0.first ?? [] }
+        // Keep the fire's near side and its label in view.
+        // Keep the fire near the person in view (within 10 km of its nearest point), with room
+        // for its label.
+        if !points.isEmpty, let me = myLocation, let geometry = situation?.fire.geometry,
+           let nearest = ZoneLocator.nearest(on: geometry, to: me) {
+            let origin = CLLocation(latitude: nearest.coord.lat, longitude: nearest.coord.lon)
+            let near = geometry.polygons.compactMap(\.first).flatMap { $0 }.filter {
+                $0.isValid && origin.distance(from: CLLocation(latitude: $0.lat, longitude: $0.lon)) <= 10_000
+            }
+            points.append(nearest.coord)
+            if let minLat = near.map(\.lat).min(), let maxLat = near.map(\.lat).max(),
+               let minLon = near.map(\.lon).min(), let maxLon = near.map(\.lon).max() {
+                points += [LonLat(lon: minLon, lat: minLat), LonLat(lon: maxLon, lat: maxLat)]
+            }
         }
         guard let rect = Self.boundingRect(points) else { return }
         framedFor = frameKey

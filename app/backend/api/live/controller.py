@@ -15,7 +15,20 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import anthropic
-from livecore.planner import PLANNER_VERSION, ResponderPosition, TaskSuggestion, plan, suggest_tasks
+from livecore.geo import simplify_line
+from livecore.planner import (
+    ALTERNATIVES_MAX,
+    NEAR_FIRE_CAVEAT,
+    PLANNER_VERSION,
+    THROUGH_FIRE_CAVEAT,
+    ResponderPosition,
+    TaskSuggestion,
+    ZoneGuidance,
+    line_safety,
+    plan,
+    suggest_tasks,
+    with_alternatives,
+)
 from livecore.policy import (
     AUTO_REPLAN_MIN_INTERVAL_S,
     Change,
@@ -33,7 +46,16 @@ from pymongo.errors import DuplicateKeyError, PyMongoError
 from . import controllers
 from .common import ApiError, col, live_setting, new_id
 from .drillcache import DrillIndex
-from .state import Snapshot, current_guidance, proposed_json, report_replay_at
+from .state import (
+    ALTERNATIVE_LINE_MAX_POINTS,
+    ALTERNATIVE_LINE_TOLERANCE_M,
+    COORD_DECIMALS,
+    Snapshot,
+    current_guidance,
+    destination_preferences,
+    proposed_json,
+    report_replay_at,
+)
 
 log = logging.getLogger(__name__)
 
@@ -260,6 +282,74 @@ def publish(proposal: dict[str, Any], approved_by: str, now: datetime) -> list[d
 
 # ---- replanning ----
 
+CAVEAT_BY_SAFETY = {"passes_fire": THROUGH_FIRE_CAVEAT, "passes_near_fire": NEAR_FIRE_CAVEAT}
+
+
+def _annotations(index: DrillIndex, doc: dict[str, Any], g: ZoneGuidance | None,
+                 fire_geometry: Any) -> tuple[str, str | None, list[dict[str, Any]]] | None:
+    """Fresh ``(route.safety, caveat, alternatives)`` for published guidance ``doc`` from this
+    replan's result ``g`` for the zone; None when ``doc`` does not tell people to move.
+
+    Same destination and via as the plan: the plan's values. Otherwise (a change is pending or
+    held): the published route's safety from its line, the caveat only while the plan also has no
+    clear option, and the published destination first, then the plan's current offers. So a
+    destination the plan no longer offers (inside the fire, full, unreachable) drops out at once.
+    """
+    dest = (doc.get("destination") or {}).get("id")
+    route = doc.get("route") or {}
+    if doc.get("level") == "none" or doc.get("no_route") or dest is None or not route or g is None:
+        return None
+    fresh = proposed_json(index, g)
+    moving = g.level != "none" and not g.no_route and g.route is not None
+    if moving and g.destination_id == dest and tuple(g.via) == tuple(route.get("via") or ()):
+        return fresh["route"]["safety"], fresh["caveat"], fresh["alternatives"]
+    safety = line_safety([tuple(p) for p in route.get("line") or ()], fire_geometry)
+    caveat = CAVEAT_BY_SAFETY.get(safety) if (g.caveat is not None or g.no_route) else None
+    old = next((a for a in doc.get("alternatives") or [] if (a.get("destination") or {}).get("id") == dest), None)
+    if old is None:
+        line = simplify_line([tuple(p) for p in route.get("line") or ()], ALTERNATIVE_LINE_TOLERANCE_M,
+                             ALTERNATIVE_LINE_MAX_POINTS)
+        old = {"route": {**route, "line": [[round(p[0], COORD_DECIMALS), round(p[1], COORD_DECIMALS)] for p in line]}}
+    recommended = {
+        "destination": doc["destination"],
+        "route": {**old["route"], "safety": safety},
+        "safety": safety,
+        "load": old.get("load"),
+        "recommended": True,
+    }
+    others = [{**a, "recommended": False} for a in fresh["alternatives"] if a["destination"]["id"] != dest]
+    others = others[:ALTERNATIVES_MAX]
+    return safety, caveat, [recommended, *others] if others else []
+
+
+def refresh_published(index: DrillIndex, docs: list[dict[str, Any]], guidance: list[ZoneGuidance],
+                      fire_geometry: Any) -> int:
+    """Rewrite the derived fields (``route.safety``, ``caveat``, ``alternatives``) of the current
+    published versions in place, from this replan. Level, destination, route line, via and ETA,
+    version and approval never change here. Returns how many documents changed."""
+    by_zone = {g.zone_id: g for g in guidance}
+    changed = 0
+    for doc in docs:
+        fresh = _annotations(index, doc, by_zone.get(doc["zone_id"]), fire_geometry)
+        if fresh is None:
+            continue
+        safety, caveat, alts = fresh
+        if (doc.get("route") or {}).get("safety") == safety and doc.get("caveat") == caveat \
+                and (doc.get("alternatives") or []) == alts:
+            continue
+        col("live_guidance").update_one(
+            {"incident_id": doc["incident_id"], "zone_id": doc["zone_id"], "version": doc["version"]},
+            {"$set": {"route.safety": safety, "caveat": caveat, "alternatives": alts}},
+        )
+        changed += 1
+    return changed
+
+
+def preference_counts(incident_id: str, now: datetime) -> dict[tuple[str, str], int]:
+    """(zone id, destination id) -> live civilian choices: the planner's soft load input."""
+    return {(r["zone_id"], r["destination_id"]): r["count"] for r in destination_preferences(incident_id, now)}
+
+
 
 def replan(snapshot: Snapshot, causes: list[str]) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     """Plan, diff against published guidance, auto-publish pure reroutes, file the rest as pending.
@@ -270,10 +360,13 @@ def replan(snapshot: Snapshot, causes: list[str]) -> tuple[dict[str, Any] | None
     """
     index, now, incident_id = snapshot.index, snapshot.now, snapshot.incident_id
     replay_at = snapshot.clock.replay_now
-    published = published_summaries(current_guidance(incident_id))
+    published_docs = current_guidance(incident_id)
+    published = published_summaries(published_docs)
     result = controllers.active().propose(snapshot, published)
-    guidance = result.guidance
+    guidance = with_alternatives(index.drill, result.guidance, snapshot.blocked, snapshot.fire.geometry,
+                                 snapshot.full_destinations, preference_counts(incident_id, now))
     changes = diff(published, guidance)
+    refresh_published(index, published_docs, guidance, snapshot.fire.geometry)
     crowd = crowd_influence(snapshot)
     if "manual" in causes:
         auto, rest = [], list(changes)

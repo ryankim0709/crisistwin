@@ -329,6 +329,40 @@ struct GuidanceRoute: Codable, Equatable {
     var distanceM: Double
     /// Free-flow minutes, rounded up.
     var etaMin: Int
+    /// How the route relates to the fire estimate; nil from older servers.
+    var safety: RouteSafety?
+}
+
+/// Route exposure to the fire estimate (contract: "D1 destination choice").
+enum RouteSafety: String, Codable, Equatable {
+    case clear
+    case passesNearFire = "passes_near_fire"
+    case passesFire = "passes_fire"
+}
+
+/// One destination a person may choose for their zone. The controller's pick has
+/// `recommended: true`; the server never offers a destination inside the fire estimate.
+struct GuidanceAlternative: Codable, Equatable, Identifiable {
+    var destination: GuidanceDestination
+    var route: GuidanceRoute
+    var safety: RouteSafety
+    /// Share of the destination's capacity already heading there, 0...1; nil when unknown.
+    var load: Double?
+    var recommended: Bool
+
+    var id: String { destination.id }
+}
+
+/// `POST me/destination` body and response.
+struct DestinationChoiceRequest: Codable, Equatable {
+    var zoneId: String
+    var destinationId: String
+}
+
+struct DestinationChoice: Codable, Equatable {
+    var zoneId: String
+    var destinationId: String
+    var expiresAt: Date
 }
 
 enum GuidanceApprover: String, Codable {
@@ -346,6 +380,10 @@ struct ZoneGuidance: Codable, Equatable, Identifiable {
     var noRoute: Bool
     var reason: String
     var reasonCode: String?
+    /// Plain-language warning when every option passes the fire; shown as the headline caveat.
+    var caveat: String?
+    /// The recommended destination plus up to 3 alternatives; nil or empty when there is no choice.
+    var alternatives: [GuidanceAlternative]?
     /// Per zone, starts at 1 and increases on every publish.
     var version: Int
     var publishedAt: Date

@@ -13,21 +13,32 @@ struct AboutView: View {
     @State private var attempt = 0
 
     var body: some View {
-        List {
-            Section {
-                Text("CrisisTwin shows the one instruction for your zone during a wildfire and lets you report what you see.")
-                    .font(.headline)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text("The fire estimate is the latest observation or model fit, never a forecast. Meeting points are your own choices, not official shelters. Always follow evacuation orders from your local authorities.")
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+        ScrollView {
+            VStack(spacing: 16) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("CrisisTwin shows the one instruction for your zone during a wildfire and lets you report what you see.")
+                        .font(.ctTitle)
+                        .foregroundStyle(Color.ctInk)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("The fire estimate is the latest observation or model fit, never a forecast. Meeting points are your own choices, not official shelters. Always follow evacuation orders from your local authorities.")
+                        .font(.subheadline)
+                        .foregroundStyle(Color.ctInkMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .ctPanel()
+
+                VStack(alignment: .leading, spacing: 12) {
+                    PlanCardHeader("Service")
+                    connectionContent
+                }
+                .ctPanel()
             }
-            Section("Service") {
-                connectionContent
-            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
         }
-        .listStyle(.insetGrouped)
+        .ctScreenBackground()
         .navigationTitle("About")
+        .navigationBarTitleDisplayMode(.inline)
         .task(id: attempt) {
             await loadHealth(requestID: attempt)
         }
@@ -40,20 +51,32 @@ struct AboutView: View {
             HStack(spacing: 12) {
                 ProgressView()
                 Text("Connecting")
+                    .foregroundStyle(Color.ctInkMuted)
             }
+            .frame(minHeight: 44)
         case .connected(let version):
-            LabeledContent {
-                Text(version).monospacedDigit()
-            } label: {
-                Label("Connected", systemImage: "checkmark.circle")
+            HStack(spacing: 12) {
+                Label("Connected", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(Color.ctSuccess)
+                Spacer(minLength: 8)
+                Text(version)
+                    .font(.subheadline)
+                    .foregroundStyle(Color.ctInkMuted)
+                    .monospacedDigit()
             }
+            .frame(minHeight: 44)
+            .accessibilityElement(children: .combine)
             Button("Check again") { retry() }
+                .buttonStyle(PlanPillStyle(kind: .secondary, fullWidth: true))
         case .failed(let message):
-            Label("Connection unavailable", systemImage: "exclamationmark.triangle")
+            Label("Connection unavailable", systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(Color.ctWarning)
             Text(message)
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.ctInkMuted)
+                .fixedSize(horizontal: false, vertical: true)
             Button("Try again") { retry() }
+                .buttonStyle(PlanPillStyle(kind: .secondary, fullWidth: true))
         }
     }
 
