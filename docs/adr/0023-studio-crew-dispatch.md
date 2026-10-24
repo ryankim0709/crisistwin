@@ -1,7 +1,8 @@
 # 0023: Firefighters drive in from fire stations
 
 Date: 2026-10-24. Status: accepted for the demo. Amends
-[0020-studio-firefighting](0020-studio-firefighting.md).
+[0020-studio-firefighting](0020-studio-firefighting.md). Superseded in part by
+[0048-suppression-engine](0048-suppression-engine.md) (bases, road access, speeds).
 
 ## Context
 

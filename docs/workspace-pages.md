@@ -64,10 +64,16 @@ reaches the grid edge is incomplete from that minute. It is a planning experimen
 operational forecast.
 
 **Firefighters** ([ADR 0020](adr/0020-studio-firefighting.md)). In the config panel, turn on
-**Send crews to build control line**, set how many hand crews, engines and dozers respond and
+**Send crews to build control line**, set how many of each ground and air resource respond (the default is a first-alarm package) and
 when they start: by default the fire is reported when it ignites and each resource drives in
 from the nearest OpenStreetMap fire stations over the board's roads, then walks to the fire
-([ADR 0023](adr/0023-studio-crew-dispatch.md)); in 3D and on the map you can watch them arrive.
+([ADR 0023](adr/0023-studio-crew-dispatch.md)); in 3D and on the map you can watch them arrive. Each vehicle is routed on the roads its class can use
+(service roads and tracks included), and one that cannot reach the fire is listed as "no access" with
+the rule that stopped it; engines beyond the board's stations come from mutual-aid stations off the
+board, crews from conservation camps and dozers from CAL FIRE stations, which needs the local-only
+bases file ([ADR 0048](adr/0048-suppression-engine.md)). Helicopters and airtankers fly from the nearest
+helitack and air attack bases inside daylight windows set by the scenario clock, and each drop becomes
+control line.
 If the direct-attack estimate says they cannot put the fire out, they are overwhelmed: each
 crew leaves the fire after a 10-minute size-up and, with **Evacuation & closures** on, drives to
 the most threatened zones to speed up departures ([ADR 0024](adr/0024-studio-crews-assist-evacuation.md)).
@@ -77,9 +83,10 @@ where the unchecked fire would be at several later minutes, solves each plan and
 with the least burned area at the horizon. The panel compares burned and developed area with no
 crews and with that plan, says how much line held, burned over, was outrun or was unfinished,
 and lists every plan tried; **Direct attack / Line plan / No crews** switches which fire the map, 3D view, playback and
-evacuation use. Production rates are assumptions; lines hold flames up to
-the Hauling-chart limit of their builder (hand crews 4 ft, engines and dozers 8 ft), and crown
-fire breaks any line.
+evacuation use. Ground production rates come from published tables (Broyles 2011, PMS 465) through
+an assumed fuel-model crosswalk; aircraft cruise speeds, turnaround and wind effect are assumptions
+([ADR 0048](adr/0048-suppression-engine.md)). Lines hold flames up to the Hauling-chart limit of
+their builder (hand crews 4 ft, engines and dozers 8 ft), and crown fire breaks any line.
 
 **Evacuation and road closures** (3D view, [ADR 0018](adr/0018-road-closures.md)). Once the
 board's roads load, **Evacuation & closures → Show** evacuates the board's synthetic households

@@ -31,6 +31,7 @@ scope.onmessage = (event: MessageEvent<SolverRequest>) => {
               total,
             } satisfies SolverResponse),
           request.crewArrivals,
+          { bases: request.airBases },
         )
       : null;
     if (firefighting && request.firefighting) {

@@ -24,6 +24,7 @@ import { useMapCrews } from "./useMapCrews";
 import { planCrewDispatch } from "./crewDispatch";
 import { crewHandoff, evacuationCrews } from "./crewHandoff";
 import { resourceList } from "./firefighting";
+import { airBasesOf, useSuppressionBases } from "./suppressionBases";
 import type { RunDispatch } from "./useStudioRun";
 import { CREW_COLORS, FIRELINE_COLORS, firelineCss } from "./firelinePalette";
 import type { Map as MapLibreMap } from "maplibre-gl";
@@ -467,13 +468,26 @@ export default function SimulationStudioPage({
     [area, closures],
   );
 
+  // CAL FIRE stations, camps and air bases near the first fire (local-only data; may be absent).
+  const firstFire = useMemo(() => {
+    if (!scenario.firefighting?.enabled) return null;
+    const first = scenario.ignitions
+      .filter((ignition) => ignition.enabled)
+      .sort((a, b) => a.startMinute - b.startMinute)[0];
+    return first ? ([first.location.longitude, first.location.latitude] as [number, number]) : null;
+  }, [scenario]);
+  const suppressionBases = useSuppressionBases(firstFire);
+
   /**
-   * With firefighting from stations, each resource is sent from the nearest OSM fire stations on
-   * the board's roads to the first fire, reported when it ignites (studio/crewDispatch.ts).
+   * With firefighting from stations, each ground resource is sent from its base over the
+   * board's roads on its own access class's graph to the first fire, reported when it ignites
+   * (studio/crewDispatch.ts); aircraft fly from the nearest helitack and air attack bases.
    */
   const planCrews = useCallback((): RunDispatch | undefined => {
     const settings = scenario.firefighting;
-    if (!settings?.enabled || settings.fromStations === false) return undefined;
+    if (!settings?.enabled) return undefined;
+    const airBases = airBasesOf(suppressionBases);
+    if (settings.fromStations === false) return { dispatch: null, note: null, airBases };
     const first = scenario.ignitions
       .filter((ignition) => ignition.enabled)
       .sort((a, b) => a.startMinute - b.startMinute)[0];
@@ -482,6 +496,7 @@ export default function SimulationStudioPage({
       return {
         dispatch: null,
         note: `The board's roads and fire stations were not loaded, so crews were assumed on site after ${settings.responseMinutes} min.`,
+        airBases,
       };
     }
     const { dispatch, note } = planCrewDispatch(
@@ -490,14 +505,17 @@ export default function SimulationStudioPage({
       first.startMinute,
       resourceList(settings),
       (edge) => closedEdges.has(edge),
+      dioramaLandscape,
+      suppressionBases,
     );
     return {
       dispatch,
       note: note
         ? `${note} Crews were assumed on site after ${settings.responseMinutes} min.`
         : null,
+      airBases,
     };
-  }, [scenario, area, closedEdges]);
+  }, [scenario, area, closedEdges, dioramaLandscape, suppressionBases]);
 
   const handleRun = useCallback(() => {
     setPlaying(false);
