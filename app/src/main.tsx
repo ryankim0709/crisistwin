@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import AppShell from "./AppShell";
+import FireSimulatorPage from "./fire/FireSimulatorPage";
 import MapsPage from "./maps/MapsPage";
 import ScenariosPage from "./pages/ScenariosPage";
 import EvacuationPage from "./pages/EvacuationPage";
@@ -20,6 +21,8 @@ const page =
     <App />
   ) : path === "/maps" ? (
     <MapsPage />
+  ) : path === "/fire" ? (
+    <FireSimulatorPage />
   ) : path === "/scenarios" ? (
     <ScenariosPage />
   ) : path === "/evacuation" ? (
