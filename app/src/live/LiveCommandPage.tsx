@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { Button, Field, LoadingState, Notice } from "../ui";
+import { Button, Field, IconButton, Kbd, LoadingState, Notice } from "../ui";
+import ActivityLog from "./ActivityLog";
+import { useTriageKeys } from "./useTriageKeys";
+import "./activity.css";
 import { LiveError, readToken, runImpact, writeToken } from "./api";
 import CommandMap, { LAYER_KEYS, type LayerKey, type MapFocus } from "./CommandMap";
 import EvacuationPicture from "./EvacuationPicture";
 import ProposalPanel from "./ProposalPanel";
-import { buildQueue, proposalFor, type QueueFilter } from "./queue";
+import { buildQueue, matches, proposalFor, type QueueFilter } from "./queue";
 import ReviewQueue from "./ReviewQueue";
 import SelectedItem, { type ImpactState, type RunAction } from "./SelectedItem";
 import { useCommand } from "./useCommand";
@@ -60,6 +63,50 @@ function LayerToggles({
           {LAYER_LABEL[key]}
         </button>
       ))}
+    </div>
+  );
+}
+
+const KEY_HINTS: [string, string][] = [
+  ["j / k", "Next, previous"],
+  ["c", "Confirm"],
+  ["d", "Dismiss"],
+  ["r", "Resolve"],
+  ["Esc", "Clear selection"],
+];
+
+function ShortcutHint() {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: Event) => {
+      if (e instanceof KeyboardEvent ? e.key === "Escape" : !ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", close);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", close);
+    };
+  }, [open]);
+  return (
+    <div className="lc-keys" ref={ref}>
+      <IconButton label="Keyboard shortcuts" size="sm" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+        ?
+      </IconButton>
+      {open ? (
+        <div className="lc-keys-pop" role="dialog" aria-label="Keyboard shortcuts">
+          {KEY_HINTS.map(([k, v]) => (
+            <div key={k} style={{ display: "contents" }}>
+              <span>
+                <Kbd>{k}</Kbd>
+              </span>
+              <span>{v}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -141,6 +188,18 @@ export default function LiveCommandPage() {
       const message = error instanceof LiveError ? error.message : "Impact analysis failed.";
       setImpact((cur) => (cur?.itemId === itemId ? { itemId, loading: false, result: null, error: message } : cur));
     }
+  };
+
+  const shown = useMemo(
+    () => items.filter((i) => matches(i, filter) || i.id === selectedId),
+    [items, filter, selectedId],
+  );
+  useTriageKeys({ shown, selected, busy, run, onSelect: select });
+
+  const selectFromLog = (reportIds: string[]) => {
+    const hit = items.find((i) => i.reports.some((r) => reportIds.includes(r.id)));
+    if (hit) select(hit.id);
+    return !!hit;
   };
 
   const reviewProposal = (id: string) => {
@@ -226,7 +285,10 @@ export default function LiveCommandPage() {
       {data ? (
         <aside className="lc-col lc-right" aria-label="Decisions and evacuation picture">
           <div className="lc-col-scroll">
-            <ProposalPanel data={data} run={run} busy={busy} serverNow={serverNow} highlightId={highlight} />
+            <div style={{ display: "flex", justifyContent: "flex-end", padding: "4px 8px 0" }}>
+              <ShortcutHint />
+            </div>
+            <ProposalPanel data={data} twin={twinData} run={run} busy={busy} serverNow={serverNow} highlightId={highlight} />
             {selected ? (
               <SelectedItem
                 key={selected.id}
@@ -243,6 +305,7 @@ export default function LiveCommandPage() {
               />
             ) : null}
             <EvacuationPicture data={data} twin={twinData} twinError={twin.error} onFocus={setFocus} />
+            <ActivityLog decisions={data.decisions ?? []} serverNow={serverNow} onSelect={selectFromLog} />
           </div>
         </aside>
       ) : null}

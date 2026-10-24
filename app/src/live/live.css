@@ -1026,3 +1026,33 @@
 .lc-problems details p {
   padding: 2px 0 4px 14px;
 }
+
+.lc-load {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--ct-text-sm);
+}
+.lc-load th,
+.lc-load td {
+  padding: 2px var(--ct-space-2) 2px 0;
+  text-align: left;
+  vertical-align: top;
+  font-weight: var(--ct-weight-regular);
+}
+.lc-load thead th {
+  color: var(--ct-ink-muted, var(--ct-ink));
+  font-size: var(--ct-text-xs, var(--ct-text-sm));
+}
+.lc-load th[scope="row"] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ct-space-1) var(--ct-space-2);
+  align-items: center;
+}
+.lc-load .lc-num {
+  text-align: right;
+  white-space: nowrap;
+}
+.lc-chg-warn {
+  display: flex;
+}

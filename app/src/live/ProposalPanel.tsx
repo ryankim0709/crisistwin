@@ -2,10 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 import { Button, EvidenceTag, Notice, Tag } from "../ui";
 import { approveProposal, rejectProposal, replan } from "./api";
 import { CHANGE_LABEL, LEVEL_LABEL, drillClock, elapsed, plural, shortZoneName } from "./format";
+import { NEAR_FULL, reportedFullIds, simShare } from "./load";
 import Plate from "./Plate";
 import type { RunAction } from "./SelectedItem";
 import TwinEvidenceView, { controllerLabel } from "./TwinEvidenceView";
-import type { CommandResponse, GuidanceLevel, PlanCause, Proposal, ProposalChange } from "./types";
+import type { CommandResponse, GuidanceLevel, PlanCause, Proposal, ProposalChange, TwinMonitor } from "./types";
 
 const CAUSE_LABEL: Record<PlanCause, string> = {
   road_block: "Road block",
@@ -33,7 +34,26 @@ export function wayOut(destination: string | null | undefined, via: string[] | u
   return eta != null ? `${head}, ${eta} min` : head;
 }
 
-function ChangeRow({ change, data }: { change: ProposalChange; data: CommandResponse }) {
+function loadWarning(data: CommandResponse, twin: TwinMonitor | null | undefined, destId: string): string | null {
+  const kind = data.destinations.find((d) => d.id === destId)?.kind;
+  if (reportedFullIds(data).has(destId)) return `${kind === "temporary_refuge" ? "Refuge" : kind === "exit" ? "Exit" : "Shelter"} reported full`;
+  const share = simShare(twin, destId);
+  return share !== null && share >= NEAR_FULL ? `Twin: ${Math.round(share * 100)}% of capacity` : null;
+}
+
+function ChangeRow({
+  change,
+  data,
+  twin,
+  warn = false,
+}: {
+  change: ProposalChange;
+  data: CommandResponse;
+  twin?: TwinMonitor | null;
+  warn?: boolean;
+}) {
+  const destId = change.to.destination?.id;
+  const warning = !warn || !destId || change.to.level === "none" ? null : loadWarning(data, twin, destId);
   const zone = data.zones.find((z) => z.id === change.zone_id);
   const destName = (id: string | null) => (id ? (data.destinations.find((d) => d.id === id)?.name ?? id) : null);
   const to = change.to;
@@ -53,6 +73,11 @@ function ChangeRow({ change, data }: { change: ProposalChange; data: CommandResp
         </span>
         <Plate level={to.level} line={toLine} />
       </span>
+      {warning ? (
+        <span className="lc-chg-warn">
+          <Tag tone="warning">{warning}</Tag>
+        </span>
+      ) : null}
       {to.caveat && !to.no_route ? <span className="lc-zone-caveat">{to.caveat}</span> : null}
     </li>
   );
@@ -64,12 +89,14 @@ function ChangeGroup({
   changes,
   data,
   approve,
+  twin,
 }: {
   level: GuidanceLevel;
   noun: string;
   changes: ProposalChange[];
   data: CommandResponse;
   approve: (() => void) | null;
+  twin?: TwinMonitor | null;
 }) {
   const [all, setAll] = useState(false);
   const shown = all ? changes : changes.slice(0, GROUP_PREVIEW);
@@ -92,7 +119,7 @@ function ChangeGroup({
       </div>
       <ul className="lc-chg-list">
         {shown.map((c) => (
-          <ChangeRow key={c.zone_id} change={c} data={data} />
+          <ChangeRow key={c.zone_id} change={c} data={data} twin={twin} warn />
         ))}
       </ul>
       {changes.length > GROUP_PREVIEW ? (
@@ -111,6 +138,7 @@ function PendingProposal({
   busy,
   serverNow,
   highlighted,
+  twin,
 }: {
   proposal: Proposal;
   data: CommandResponse;
@@ -118,6 +146,7 @@ function PendingProposal({
   busy: string | null;
   serverNow: number;
   highlighted: boolean;
+  twin?: TwinMonitor | null;
 }) {
   const [error, setError] = useState<string | null>(null);
   const groups = useMemo(
@@ -179,6 +208,7 @@ function PendingProposal({
           noun={g.noun}
           changes={g.changes}
           data={data}
+          twin={twin}
           approve={
             groups.length > 1 && !disabled ? () => void decide(true, g.changes.map((c) => c.zone_id)) : null
           }
@@ -247,12 +277,15 @@ export default function ProposalPanel({
   busy,
   serverNow,
   highlightId,
+  twin,
 }: {
   data: CommandResponse;
   run: RunAction;
   busy: string | null;
   serverNow: number;
   highlightId: string | null;
+  /** Pass the twin snapshot so change rows can flag near-full destinations. */
+  twin?: TwinMonitor | null;
 }) {
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -283,6 +316,7 @@ export default function ProposalPanel({
           busy={busy}
           serverNow={serverNow}
           highlighted={p.id === highlightId}
+          twin={twin}
         />
       ))}
       {pending.length === 0 ? (

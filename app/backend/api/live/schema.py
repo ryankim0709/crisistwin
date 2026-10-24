@@ -75,7 +75,8 @@ VALIDATORS: dict[str, dict[str, Any]] = {
             "id": STR,
             "incident_id": STR,
             "assignee": NULLABLE_STR,
-            "kind": _enum("verify"),
+            "kind": _enum("verify", "assist"),
+            "checkin_id": NULLABLE_STR,
             "status": _enum("open", "accepted", "done", "cancelled"),
             "created_at": DATE,
             "accepted_at": NULLABLE_DATE,
@@ -134,6 +135,14 @@ VALIDATORS: dict[str, dict[str, Any]] = {
             "coord": NULLABLE_COORD,
             "at": DATE,
             "replay_at": NULLABLE_DATE,
+            "help": {
+                "bsonType": ["object", "null"],
+                "properties": {
+                    "status": _enum("open", "acknowledged", "assigned", "resolved"),
+                    "assignee": NULLABLE_STR,
+                    "task_id": NULLABLE_STR,
+                },
+            },
         },
     ),
     "live_destination_choices": _schema(

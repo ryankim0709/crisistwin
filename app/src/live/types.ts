@@ -96,7 +96,9 @@ export interface CheckTask {
   incident_id: string
   /** Responder party_key, or null for any responder (v2). */
   assignee: string | null
-  kind: 'verify'
+  /** `assist`: go to a resident who asked for help (`checkin_id`); closed with `done`. */
+  kind: 'verify' | 'assist'
+  checkin_id?: string | null
   target: { segment_id?: string | null; coord?: LonLat | null }
   report_ids: string[]
   note: string | null
@@ -206,6 +208,18 @@ export interface GuidanceAlternative {
 }
 
 /** Civilian destination preferences per zone, for the controller (D1). */
+/** One `live_decisions` audit entry. `actor` is "controller" or "auto_policy". */
+export interface Decision {
+  at: string
+  actor: string
+  /** confirm|dismiss|merge|resolve|task_create|task_cancel|approve|reject|auto_approve|drill_*|help_acknowledge|help_assign|help_resolve */
+  action: string
+  report_ids: string[]
+  proposal_id: string | null
+  checkin_id: string | null
+  note: string | null
+}
+
 export interface DestinationPreferenceCount {
   zone_id: string
   destination_id: string
@@ -387,11 +401,23 @@ export interface ZoneCheckInCounts {
   need_help: number
   staying: number
 }
+/** Controller handling of a need_help check-in (`POST checkins/{id}/help`). */
+export type HelpStatus = 'open' | 'acknowledged' | 'assigned' | 'resolved'
+export type HelpAction = 'acknowledge' | 'assign' | 'resolve'
+export interface HelpState {
+  status: HelpStatus
+  /** Responder party_key of the assist task, or null for any responder. */
+  assignee: string | null
+  task_id: string | null
+  updated_at: IsoTime | null
+}
+
 export interface HelpRequest {
   id: string
   zone_id: string | null
   coord: LonLat | null
   at: IsoTime
+  help: HelpState | null
 }
 export interface ResponderPosition {
   party_key: string
@@ -420,6 +446,8 @@ export interface CommandResponse {
   guidance: ZoneGuidance[]
   /** Live civilian destination choices per zone (D1); absent from older servers. */
   destination_preferences?: DestinationPreferenceCount[]
+  /** Newest 50 entries of the controller audit log, newest first. */
+  decisions?: Decision[]
   /** All pending plus the latest 20 decided, newest first. */
   proposals: Proposal[]
   /** Newest 500. */

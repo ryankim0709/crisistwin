@@ -20,6 +20,17 @@ struct CheckInButtons: View {
     private var markedOut: Bool { store.lastCheckIn?.status == .out }
     private var helpRequested: Bool { store.lastCheckIn?.status == .needHelp }
 
+    /// The help button's label follows the controller's handling of the request.
+    private var helpTitle: String {
+        guard helpRequested else { return "Need help" }
+        switch store.lastCheckIn?.help?.status {
+        case .acknowledged: return "Request seen"
+        case .assigned: return "Responder assigned"
+        case .resolved: return "Need help"
+        case .open, nil: return "Help requested"
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             GlassEffectContainer(spacing: 4) {
@@ -42,7 +53,7 @@ struct CheckInButtons: View {
                     } else {
                         button(.out, title: "I'm out", systemImage: "checkmark.circle") { checkIn(.out) }
                     }
-                    button(.needHelp, title: helpRequested ? "Help requested" : "Need help", systemImage: "hand.raised") {
+                    button(.needHelp, title: helpTitle, systemImage: store.lastCheckIn?.help?.status == .assigned ? "figure.walk.motion" : "hand.raised") {
                         confirmingHelp = true
                     }
                 }

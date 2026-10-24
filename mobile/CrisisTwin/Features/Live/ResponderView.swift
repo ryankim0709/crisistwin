@@ -150,10 +150,10 @@ struct TasksView: View {
         let accepted = task.status == .accepted
         return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 12) {
-                if let kind {
+                if let kind, !task.isAssist {
                     KindBadge(kind: kind)
                 } else {
-                    Image(systemName: "magnifyingglass")
+                    Image(systemName: task.isAssist ? "hand.raised.fill" : "magnifyingglass")
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(Color.ctInkMuted)
                         .frame(width: 30, height: 30)
@@ -162,7 +162,7 @@ struct TasksView: View {
                 }
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(alignment: .firstTextBaseline) {
-                        Text("Check \(placeName(task))")
+                        Text(task.isAssist ? "Help a resident" : "Check \(placeName(task))")
                             .font(.body.weight(.semibold))
                             .foregroundStyle(Color.ctInk)
                             .fixedSize(horizontal: false, vertical: true)
@@ -191,7 +191,16 @@ struct TasksView: View {
             .accessibilityElement(children: .combine)
 
             HStack(spacing: 8) {
-                if accepted {
+                if accepted && task.isAssist {
+                    Button { complete(task) } label: {
+                        HStack(spacing: 6) {
+                            if busy == task.id { ProgressView().controlSize(.small).tint(Color.ctBackground) }
+                            Label("Done", systemImage: "checkmark")
+                        }
+                    }
+                    .buttonStyle(FieldPill(primary: true))
+                    .disabled(busy != nil)
+                } else if accepted {
                     Button {
                         router.openReport(
                             ReportPrefill(kind: nil, coord: store.taskTarget(task), taskId: task.id),
@@ -272,6 +281,22 @@ struct TasksView: View {
             } catch {
                 errorMessage = error.localizedDescription
                 errorTick += 1
+            }
+        }
+    }
+
+    private func complete(_ task: CheckTask) {
+        errorMessage = nil
+        busy = task.id
+        Task {
+            defer { busy = nil }
+            do {
+                try await store.completeTask(task)
+                successTick += 1
+            } catch {
+                errorMessage = error.localizedDescription
+                errorTick += 1
+                await store.refresh()
             }
         }
     }

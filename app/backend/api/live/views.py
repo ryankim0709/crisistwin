@@ -31,6 +31,7 @@ from .common import (
 from .drillcache import get_index, snap_to_segment
 from .state import (
     checkin_json,
+    help_json,
     clock_from,
     current_guidance,
     destination_preferences,
@@ -72,6 +73,8 @@ SHELTER_FULL_DESTINATION_KINDS = frozenset({"shelter", "temporary_refuge"})
 TRIAGE_ACTIONS = {"confirm": "confirmed", "dismiss": "dismissed", "resolve": "resolved", "merge": "dismissed"}
 REPLAN_CAUSE_ON_CONFIRM = {"road_blocked": "road_block", "fire_seen": "fire"}
 CHECKIN_STATUSES = frozenset({"out", "need_help", "staying"})
+HELP_ACTIONS = {"acknowledge": "acknowledged", "assign": "assigned", "resolve": "resolved"}
+HELP_ACTIVE = ("open", "acknowledged", "assigned")
 PROMPT_KINDS = frozenset({"road_blocked", "road_passable", "hazard_down"})
 PROMPT_RADIUS_M = 1000.0
 """``prompts`` returns public items within this distance of ``near``."""
@@ -80,6 +83,7 @@ MAX_OBSERVED_FUTURE_S = 600
 REPORTS_PAGE_LIMIT = 500
 COMMAND_REPORTS_LIMIT = 500
 COMMAND_TASKS_LIMIT = 500
+COMMAND_DECISIONS_LIMIT = 50
 MAX_REPORT_IDS = 50
 NOTE_MAX_CHARS = 500
 RESPONDER_LOCATION_TTL_S = 900
@@ -450,8 +454,22 @@ def update_task(request, task_id: str, principal: Principal):
         updated = tasks.find_one_and_update(query, {"$set": changes}, return_document=ReturnDocument.AFTER)
         if updated is None:
             return error(409, "conflict", "The task is closed or assigned to someone else.")
+    elif status == "done" and task.get("kind") == "assist":
+        # An assist task has no report to answer it; the responder closes it, which resolves the help request.
+        query = {"id": task_id, "status": {"$in": ["open", "accepted"]}}
+        if principal.role == "responder":
+            query["assignee"] = {"$in": [None, principal.party_key]}
+        updated = tasks.find_one_and_update(
+            query, {"$set": {"status": "done", "closed_at": now}}, return_document=ReturnDocument.AFTER
+        )
+        if updated is None:
+            return error(409, "conflict", "The task is closed or assigned to someone else.")
+        col("live_checkins").update_one(
+            {"id": task.get("checkin_id"), "help.task_id": task_id},
+            {"$set": {"help.status": "resolved", "help.updated_at": now}},
+        )
     else:
-        return error(400, "invalid_request", "`status` must be accepted or cancelled.")
+        return error(400, "invalid_request", "`status` must be accepted or cancelled (or done for an assist task).")
     controller.log_decision(
         task["incident_id"], principal.party_key, f"task_{status}", now, report_ids=task.get("report_ids"), note=note
     )
@@ -552,23 +570,84 @@ def checkins(request, incident_id: str, principal: Principal):
     if rate_limited(f"checkin:{principal.party_key}", CHECKINS_PER_MIN, 60):
         return error(429, "rate_limited", "Too many check-ins. Try again in a minute.")
     now = wall_now()
-    doc = col("live_checkins").find_one_and_update(
-        {"incident_id": incident_id, "party_key": principal.party_key},
-        {
-            "$set": {
-                "status": status,
-                "zone_id": zone_id,
-                "coord": [coord[0], coord[1]] if coord else None,
-                "role": principal.role,
-                "at": now,
-                "replay_at": report_replay_at(incident_id, now),
-            },
-            "$setOnInsert": {"id": new_id("chk_")},
-        },
+    checkins_col = col("live_checkins")
+    key = {"incident_id": incident_id, "party_key": principal.party_key}
+    previous = checkins_col.find_one(key)
+    prev_help = (previous or {}).get("help") or {}
+    help_active = previous is not None and previous["status"] == "need_help" and prev_help.get("status", "open") in HELP_ACTIVE
+    fields: dict[str, Any] = {
+        "status": status,
+        "zone_id": zone_id,
+        "coord": [coord[0], coord[1]] if coord else None,
+        "role": principal.role,
+        "at": now,
+        "replay_at": report_replay_at(incident_id, now),
+    }
+    if status == "need_help" and not help_active:
+        # A new request; a repeated tap keeps the controller's acknowledgement or assignment.
+        fields["help"] = {"status": "open", "assignee": None, "task_id": None, "updated_at": now}
+    elif status != "need_help" and help_active:
+        # Out or staying ends the request; a responder sent to it is stood down.
+        fields["help"] = {**prev_help, "status": "resolved", "updated_at": now}
+        if prev_help.get("task_id"):
+            col("live_tasks").update_one(
+                {"id": prev_help["task_id"], "status": {"$in": ["open", "accepted"]}},
+                {"$set": {"status": "cancelled", "closed_at": now, "note": "Resident checked in as " + status}},
+            )
+    doc = checkins_col.find_one_and_update(
+        key,
+        {"$set": fields, "$setOnInsert": {"id": new_id("chk_")}},
         upsert=True,
         return_document=ReturnDocument.AFTER,
     )
     return ok({"checkin": checkin_json(doc)})
+
+
+@live_view(["POST"], roles=["controller"])
+def checkin_help(request, checkin_id: str, principal: Principal):
+    """Controller handling of a need_help check-in: acknowledge, assign a responder (an assist task), resolve."""
+    code = "invalid_request"
+    body = json_body(request)
+    action = body.get("action")
+    if action not in HELP_ACTIONS:
+        return error(400, code, "`action` must be acknowledge, assign or resolve.")
+    note = optional_str(body, "note", code, NOTE_MAX_CHARS)
+    checkins_col = col("live_checkins")
+    doc = checkins_col.find_one({"id": checkin_id})
+    if doc is None:
+        return error(404, "not_found", "Unknown check-in.")
+    help_ = {"status": "open", "assignee": None, "task_id": None, **(doc.get("help") or {})}
+    if doc["status"] != "need_help" or help_["status"] == "resolved":
+        return error(409, "conflict", "This help request is closed.")
+    now = wall_now()
+    incident_id = doc["incident_id"]
+    if action == "assign":
+        assignee = body.get("assignee")
+        if assignee is not None and (not isinstance(assignee, str) or not assignee.startswith("rsp_")):
+            return error(400, code, "`assignee` must be a responder party_key or null.")
+        if doc.get("coord") is None:
+            return error(400, code, "The resident did not share a location; call or acknowledge instead.")
+        if help_.get("task_id"):
+            col("live_tasks").update_one(
+                {"id": help_["task_id"], "status": {"$in": ["open", "accepted"]}},
+                {"$set": {"status": "cancelled", "closed_at": now, "note": "Reassigned"}},
+            )
+        task = controller.create_task(
+            incident_id, assignee, {"segment_id": None, "coord": doc["coord"]}, [], note, now,
+            kind="assist", checkin_id=checkin_id,
+        )
+        help_.update(assignee=assignee, task_id=task["id"])
+    elif action == "resolve" and help_.get("task_id"):
+        col("live_tasks").update_one(
+            {"id": help_["task_id"], "status": {"$in": ["open", "accepted"]}},
+            {"$set": {"status": "done", "closed_at": now}},
+        )
+    help_.update(status=HELP_ACTIONS[action], updated_at=now)
+    stored = checkins_col.find_one_and_update(
+        {"id": checkin_id}, {"$set": {"help": help_}}, return_document=ReturnDocument.AFTER
+    )
+    controller.log_decision(incident_id, "controller", f"help_{action}", now, checkin_id=checkin_id, note=note)
+    return ok({"checkin": checkin_json(stored)})
 
 
 @live_view(["POST", "DELETE"], roles=["responder"])
@@ -658,7 +737,9 @@ def _checkin_summary(incident_id: str) -> dict[str, Any]:
                 "$group": {
                     "_id": "$zone_id",
                     "out": {"$sum": {"$cond": [{"$eq": ["$status", "out"]}, 1, 0]}},
-                    "need_help": {"$sum": {"$cond": [{"$eq": ["$status", "need_help"]}, 1, 0]}},
+                    "need_help": {"$sum": {"$cond": [
+                        {"$and": [{"$eq": ["$status", "need_help"]}, {"$ne": ["$help.status", "resolved"]}]}, 1, 0
+                    ]}},
                     "staying": {"$sum": {"$cond": [{"$eq": ["$status", "staying"]}, 1, 0]}},
                 }
             },
@@ -671,8 +752,10 @@ def _checkin_summary(incident_id: str) -> dict[str, Any]:
     ]
     by_zone.sort(key=lambda r: r["zone_id"])
     need_help = [
-        {"id": d["id"], "zone_id": d.get("zone_id"), "coord": d.get("coord"), "at": iso(d["at"])}
-        for d in col("live_checkins").find({"incident_id": incident_id, "status": "need_help"}).sort("at", -1)
+        {"id": d["id"], "zone_id": d.get("zone_id"), "coord": d.get("coord"), "at": iso(d["at"]), "help": help_json(d)}
+        for d in col("live_checkins")
+        .find({"incident_id": incident_id, "status": "need_help", "help.status": {"$ne": "resolved"}})
+        .sort("at", -1)
     ]
     return {"by_zone": by_zone, "need_help": need_help}
 
@@ -712,8 +795,26 @@ def command(request, incident_id: str, principal: Principal):
             "destination_preferences": destination_preferences(incident_id, now),
             "responders": responders,
             "tasks": [task_json(t) for t in tasks],
+            "decisions": _recent_decisions(incident_id),
         }
     )
+
+
+def _recent_decisions(incident_id: str) -> list[dict[str, Any]]:
+    """Newest entries of the append-only audit log (triage, tasks, approvals, drill), for the activity log."""
+    docs = col("live_decisions").find({"incident_id": incident_id}).sort("at", -1).limit(COMMAND_DECISIONS_LIMIT)
+    return [
+        {
+            "at": iso(d["at"]),
+            "actor": d["actor"],
+            "action": d["action"],
+            "report_ids": d.get("report_ids") or [],
+            "proposal_id": d.get("proposal_id"),
+            "checkin_id": d.get("checkin_id"),
+            "note": d.get("note"),
+        }
+        for d in docs
+    ]
 
 
 @live_view(["POST"], roles=["controller"])
