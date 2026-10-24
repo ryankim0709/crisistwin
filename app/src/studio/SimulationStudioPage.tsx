@@ -308,6 +308,21 @@ export default function SimulationStudioPage() {
     run(scenario);
   }, [run, scenario]);
 
+  const handleLoadDemo = useCallback(() => {
+    applyScenario(demoScenario());
+    setMode("select");
+  }, [applyScenario]);
+
+  // Before the first run the 3D view has no board to click, so placing a fire goes to the map.
+  const dioramaHasBoard = Boolean(result?.landscape);
+  const handleModeChange = useCallback(
+    (next: MapMode) => {
+      if (next !== "select" && view === "diorama" && !dioramaHasBoard) chooseView("map");
+      setMode(next);
+    },
+    [view, dioramaHasBoard, chooseView],
+  );
+
   // ---- Derived display state -------------------------------------------------------------
 
   const stale = state.stale;
@@ -510,27 +525,46 @@ export default function SimulationStudioPage() {
                   <p>
                     The 3D view is built from the fuel and terrain a run downloads.{" "}
                     {scenario.ignitions.length === 0
-                      ? "Place ignitions on the map or load the demo scenario, then run it."
+                      ? "Load the demo scenario, or place fires on the map, then run it."
                       : "Run the scenario to build it."}
                   </p>
                   <div className="studio-row">
-                    {scenario.ignitions.length > 0 && (
-                      <button
-                        type="button"
-                        className="studio-btn studio-btn-primary"
-                        onClick={handleRun}
-                        disabled={issues.length > 0 || running}
-                      >
-                        {running ? "Running…" : "Run simulation"}
-                      </button>
+                    {scenario.ignitions.length === 0 ? (
+                      <>
+                        <button
+                          type="button"
+                          className="studio-btn studio-btn-primary"
+                          onClick={handleLoadDemo}
+                        >
+                          Load demo
+                        </button>
+                        <button
+                          type="button"
+                          className="studio-btn studio-btn-secondary"
+                          onClick={() => handleModeChange("add")}
+                        >
+                          Place fires on map
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          className="studio-btn studio-btn-primary"
+                          onClick={handleRun}
+                          disabled={issues.length > 0 || running}
+                        >
+                          {running ? "Running…" : "Run simulation"}
+                        </button>
+                        <button
+                          type="button"
+                          className="studio-btn studio-btn-secondary"
+                          onClick={() => chooseView("map")}
+                        >
+                          Back to map
+                        </button>
+                      </>
                     )}
-                    <button
-                      type="button"
-                      className="studio-btn studio-btn-secondary"
-                      onClick={() => chooseView("map")}
-                    >
-                      Back to map
-                    </button>
                   </div>
                 </>
               }
@@ -588,9 +622,10 @@ export default function SimulationStudioPage() {
               {state.error.message}
             </p>
           )}
-          {!running && scenario.ignitions.length === 0 && (
+          {/* In 3D the empty-state card carries this instead. */}
+          {!running && scenario.ignitions.length === 0 && view === "map" && (
             <p className="studio-chip">
-              Choose “Add ignition” and click the map to place a fire, or load the demo scenario.
+              Choose “+ Add” and click the map to place a fire, or load the demo scenario.
             </p>
           )}
           {notice && <p className="studio-chip">{notice}</p>}
@@ -611,7 +646,7 @@ export default function SimulationStudioPage() {
             draftStatus={draftStatusText(savedAt, saveFailed)}
             collapsed={panelCollapsed}
             onToggleCollapsed={() => setPanelCollapsed((value) => !value)}
-            onModeChange={setMode}
+            onModeChange={handleModeChange}
             onSelectIgnition={handleSelect}
             onScenarioChange={applyScenario}
             onRun={handleRun}
@@ -619,10 +654,7 @@ export default function SimulationStudioPage() {
             onClear={handleClear}
             onExport={handleExport}
             onImport={handleImport}
-            onLoadDemo={() => {
-              applyScenario(demoScenario());
-              setMode("select");
-            }}
+            onLoadDemo={handleLoadDemo}
           />
         </div>
       </div>

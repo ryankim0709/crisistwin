@@ -94,7 +94,15 @@ export default function ConfigPanel(props: ConfigPanelProps) {
   const runDisabled = issues.length > 0 || busy;
   const runLabel = stale ? "Rerun simulation" : "Run simulation";
   const selected = ignitions.find((ignition) => ignition.id === selectedId) ?? null;
-  const scenarioIssues = issues.filter((issue) => !issue.ignitionId);
+  // With no fires yet the empty state already says what to do, so "Enable at least one fire" is
+  // not shown as an error until there is a fire to enable.
+  const nothingPlaced = ignitions.length === 0;
+  const scenarioIssues = issues.filter(
+    (issue) => !issue.ignitionId && !(nothingPlaced && issue.field === "ignitions"),
+  );
+  const shownIssueCount = nothingPlaced
+    ? issues.filter((issue) => issue.field !== "ignitions").length
+    : issues.length;
   const sorted = [...ignitions].sort((a, b) => a.startMinute - b.startMinute);
 
   const spotting = settings.spotting ?? DEFAULT_SPOTTING;
@@ -663,7 +671,9 @@ export default function ConfigPanel(props: ConfigPanelProps) {
         )}
         {issues.length > 0 && (
           <p id={`${uid}-run-note`} className="studio-hint">
-            Fix the {issues.length === 1 ? "problem" : `${issues.length} problems`} above to run.
+            {shownIssueCount === 0
+              ? "Add a fire or load the demo to run."
+              : `Fix the ${shownIssueCount === 1 ? "problem" : `${shownIssueCount} problems`} above to run.`}
           </p>
         )}
         <div className="studio-row">

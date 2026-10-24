@@ -11,7 +11,9 @@ is remembered per browser (`localStorage`, `crisistwin.studio.view`).
 
 - Board: the `LandscapeGrid` of the latest result. `StudioRunResult.landscape` (new,
   additive) holds the same grid object as the landscape cache, not a copy. Before the
-  first run there is no board: the view says so and offers **Run simulation**.
+  first run there is no board: the view says so and offers **Load demo** and **Place
+  fires on map** (no fires yet) or **Run simulation**. Choosing **+ Add** or **Move**
+  without a board switches to the map, since there is nothing in 3D to click.
 - Fire: `ScheduledFireRun.arrivalMinutes` (new, additive), the combined arrival field in
   elapsed minutes from scenario T+0, with the same layout and `Infinity` convention as
   `FireRun.arrivalMinutes`. The page passes it to the scene as a `DioramaRun` (horizon
