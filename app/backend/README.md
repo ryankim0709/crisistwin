@@ -196,6 +196,12 @@ over HTTP in about 5 s, with no simulator or browser: report, triage, replan and
 guidance on the phone, destination choice, check-ins, responder position and a check task. It
 writes synthetic drill data; run `live_drill --reset` afterwards.
 
+`python manage.py live_loadtest --base http://127.0.0.1:8020 --ramp 10,50,100,200 --duration 30
+--out results.json` ramps simulated phones and consoles against a server started with
+`LIVE_LOADTEST_RELAX_LIMITS=1` and prints p50/p95/p99 per endpoint; `--cleanup` removes its
+data. Use a separate server and database, never the shared one. Method and results:
+[docs/live-loadtest.md](../../docs/live-loadtest.md).
+
 ### Incident intelligence (`/api/intel/…`)
 
 Public agency pages, fetched by the Apify Actor in `actors/incident-intel/`, become source
