@@ -3,12 +3,12 @@ import SwiftUI
 import UIKit
 import UserNotifications
 
-/// The Plan tab: the household's preparedness page. The meeting points lead, then the go-bag,
-/// family and trusted contacts; permissions, responder join, the web simulation feed and About
+/// The Plan tab: the household's preparedness page. The meeting points lead, then the family
+/// and emergency contacts; permissions, responder join, the web simulation feed and About
 /// share one compact panel at the end.
 struct PlanTab: View {
     enum Destination: String, Hashable {
-        case family, familyJoin, meeting, gobag, broadcast, responder, about
+        case family, familyJoin, meeting, broadcast, responder, about
     }
 
     @Environment(LiveStore.self) private var live
@@ -24,7 +24,6 @@ struct PlanTab: View {
             ScrollView {
                 VStack(spacing: 16) {
                     MeetingPointCard()
-                    GoBagCard()
                     FamilyCard { mode in path.append(mode == .join ? .familyJoin : .family) }
                     TrustedContactsCard()
                     morePanel
@@ -40,7 +39,6 @@ struct PlanTab: View {
                 case .family: FamilyView(openTab: open)
                 case .familyJoin: FamilyView(openTab: open, initialMode: .join)
                 case .meeting: PlanView()
-                case .gobag: GoBagView()
                 case .broadcast:
                     BroadcastView(openTab: open)
                         .task {

@@ -379,7 +379,7 @@ struct MeetingPointCard: View {
             Button {
                 composingMessage = true
             } label: {
-                Label("Text plan to contacts", systemImage: "message.fill")
+                Label("Text my plan to emergency contacts", systemImage: "message.fill")
             }
             .buttonStyle(PlanPillStyle(kind: .primary, fullWidth: true))
         } else {
@@ -527,9 +527,11 @@ struct FamilyCard: View {
     }
 }
 
-// MARK: - Trusted contacts
+// MARK: - Emergency contacts
 
-/// People to tell the plan to. Picked from Contacts without the Contacts permission.
+/// People to tell the plan to, ideally outside the area: in a local disaster, calls and texts to a
+/// distant contact often get through when local ones don't. The people you meet with are the family.
+/// Picked from Contacts without the Contacts permission. Stored as `TrustedContact` (unchanged data).
 struct TrustedContactsCard: View {
     @Environment(MeetingPlanStore.self) private var store
     @State private var pickingContact = false
@@ -538,18 +540,22 @@ struct TrustedContactsCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            PlanCardHeader(title: "Trusted contacts") {
+            PlanCardHeader(title: "Emergency contacts") {
                 if !contacts.isEmpty {
                     Button { pickingContact = true } label: {
                         PlanIconButtonLabel(systemImage: "plus")
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("Add a trusted contact")
+                    .accessibilityLabel("Add an emergency contact")
                 }
             }
+            Text("Pick someone outside your area. Local phone lines can get busy in a disaster.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             if contacts.isEmpty {
                 Button { pickingContact = true } label: {
-                    Label("Add contact", systemImage: "person.crop.circle.badge.plus")
+                    Label("Add emergency contact", systemImage: "person.crop.circle.badge.plus")
                 }
                 .buttonStyle(PlanPillStyle(kind: .secondary, fullWidth: true))
                 .padding(.top, 4)

@@ -75,10 +75,11 @@ The Practice view was removed from the phone. It showed the web app's `/fire` pa
 ### Meeting point
 
 Plan > Meeting point holds a household meeting plan: a primary meeting point, an
-optional backup, and trusted contacts (see
+optional backup, and emergency contacts (see
 [ADR 0009](../docs/adr/0009-mobile-meeting-plan.md)). Points are chosen with
 Apple Maps search or by tapping the map; contacts come from the system picker,
-which needs no Contacts permission. The plan is saved only on the device as
+which needs no Contacts permission. Emergency contacts are the people to tell,
+ideally outside the area; the people you meet with are the Family. The plan is saved only on the device as
 versioned JSON and needs no backend. **Open in Maps** gives directions, and
 sharing opens Messages for the contacts' numbers, or the share sheet where
 Messages is unavailable, such as the simulator. The app never sends anything on
@@ -91,7 +92,7 @@ now", "Be ready to leave"), the way out, its destination and ETA, and **Start**;
 out** and **Need help**, "Still there?" questions about nearby hazards, what is near you, and
 changes to your zone's guidance. **Map** is the full-screen map with one glass drawer.
 **Reports** sends a new report and lists yours with their progress (Received, Being checked,
-Confirmed, Resolved). **Plan** holds Family, the meeting point, a go-bag checklist, permission
+Confirmed, Resolved). **Plan** holds Family, the meeting point, emergency contacts, permission
 status, the web simulation feed, responder join and About. **Tasks** appears for responders.
 While a zone has an order, the bottom accessory under every tab repeats the verdict and ETA and
 opens Map.
@@ -160,7 +161,7 @@ mobile/
     Networking/          Health, live-report and JSON backend HTTP clients, Keychain credentials
     Features/
       Home/              Home tab, the guidance Slab and bottom accessory, About with API readiness states
-      Plan/              Plan tab, go-bag, meeting plan model and on-device store, point editor
+      Plan/              Plan tab, meeting plan model and on-device store, point editor
       Live/              Field-report models, store, outbox, location, map, report and responder views
       Broadcast/         Web simulation feed: broadcast model, poller, map and household guidance
       Family/            Family model, Keychain membership, server store, family view

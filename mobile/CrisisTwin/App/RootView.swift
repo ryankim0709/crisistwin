@@ -3,7 +3,7 @@ import SwiftUI
 /// Debug builds accept launch arguments so every tab and state can be screenshotted:
 /// - `-screen <name>`: a tab (`home`, `map`, `reports`, `plan`, `tasks`), or a screen opened on
 ///   top of one: `report` (the report sheet over Map), `newreport` (over Reports), and `family`,
-///   `meeting`, `gobag`, `broadcast`, `responder`, `about` (pushed in Plan). Anything else opens Home.
+///   `meeting`, `broadcast`, `responder`, `about` (pushed in Plan). Anything else opens Home.
 /// - `-join <code>`: joins as a responder on launch, so the Tasks tab appears.
 /// - `-start 1`: taps Start shortly after launch (Map, following).
 /// - `detail` opens the guidance detail over Home (`detailexit` with the exits listed),
@@ -27,7 +27,7 @@ enum DebugLaunch {
         switch screen {
         case "map", "report", "detailmap": return .map
         case "reports", "newreport": return .reports
-        case "plan", "family", "meeting", "gobag", "broadcast", "responder", "about": return .plan
+        case "plan", "family", "meeting", "broadcast", "responder", "about": return .plan
         case "tasks": return .tasks
         default: return .home
         }
@@ -113,7 +113,6 @@ struct RootView: View {
     /// The web pages' simulation broadcast (ADR 0016); polled only while its screen is open.
     @State private var broadcastStore = BroadcastStore()
     @State private var familyStore = FamilyStore()
-    @State private var goBag = GoBagStore()
     @State private var router = AppRouter()
     @Namespace private var reportZoom
     @Environment(\.scenePhase) private var scenePhase
@@ -125,7 +124,6 @@ struct RootView: View {
             .environment(location)
             .environment(broadcastStore)
             .environment(familyStore)
-            .environment(goBag)
             .environment(router)
             .environment(\.reportZoom, reportZoom)
             .tint(.primary)
