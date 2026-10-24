@@ -1,7 +1,7 @@
 /**
  * The dispatch area fixture (`public/dispatch/<id>.json`, built by
  * `python3 -m tools.build_dispatch_area`): an OSM road graph, synthetic evacuation zones,
- * exits and fire stations. See docs/adr/0012-dispatch-agent.md.
+ * exits and fire stations. See docs/adr/0014-dispatch-agent.md.
  *
  * Units: WGS84 [longitude, latitude]; metres; km/h; vehicles per hour per direction.
  */

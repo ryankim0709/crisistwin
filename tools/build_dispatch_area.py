@@ -1,6 +1,6 @@
 """Build the dispatch-agent area fixture: OSM roads, fire stations and synthetic demand zones.
 
-The /dispatch page (docs/adr/0012-dispatch-agent.md) needs a drivable road graph, evacuation
+The /dispatch page (docs/adr/0014-dispatch-agent.md) needs a drivable road graph, evacuation
 zones with vehicle counts, exits and fire stations around the Simulation Studio demo fires
 (Oakland/Berkeley hills, downwind of a NE wind). This tool queries the OpenStreetMap Overpass
 API once and writes a compact JSON the browser loads; nothing is fetched at runtime.

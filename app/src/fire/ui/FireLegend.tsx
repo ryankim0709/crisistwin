@@ -1,6 +1,6 @@
 import { useId, useState, type ReactNode } from "react";
 import { BurnedGlyph, DIORAMA_COLORS, FireEdgeGlyph, WindGlyph } from "../../diorama/ui/glyphs";
-import { FUEL_COLORS } from "../fuelPalette";
+import { ARRIVAL_COLORS, CURRENT_PERIMETER_COLOR, FUEL_COLORS } from "../fuelPalette";
 
 const SIZE = { width: 24, height: 16, viewBox: "0 0 24 16" } as const;
 
@@ -27,6 +27,30 @@ function IgnitionGlyph() {
   );
 }
 
+function ArrivalGradientGlyph() {
+  return (
+    <svg {...SIZE} aria-hidden="true">
+      <defs>
+        <linearGradient id="fr-arrival-gradient" x1="0" x2="1" y1="0" y2="0">
+          <stop offset="0" stopColor={ARRIVAL_COLORS.earliest} />
+          <stop offset="0.5" stopColor={ARRIVAL_COLORS.middle} />
+          <stop offset="1" stopColor={ARRIVAL_COLORS.latest} />
+        </linearGradient>
+      </defs>
+      <rect x="1" y="3" width="22" height="10" rx="2" fill="url(#fr-arrival-gradient)" />
+    </svg>
+  );
+}
+
+function CurrentPerimeterGlyph() {
+  return (
+    <svg {...SIZE} aria-hidden="true">
+      <rect x="1" y="3" width="22" height="10" rx="2" fill="#2b3a37" />
+      <path d="M3 8c3-4 6 4 9 0s6 4 9 0" fill="none" stroke={CURRENT_PERIMETER_COLOR} strokeWidth="2.4" />
+    </svg>
+  );
+}
+
 function FuelSwatch({ color, code }: { color: string; code: string }) {
   return (
     <span className="fr-fuel-swatch" style={{ background: color }} aria-hidden="true">
@@ -41,26 +65,38 @@ function familyCode(label: string): string {
 }
 
 type FireLegendProps = {
+  view: "diorama" | "satellite";
   windTowardDegrees: number;
   showFuel: boolean;
   defaultOpen: boolean;
 };
 
 /** Compact collapsible legend. Every entry pairs a colour with a shape or a letter code. */
-export default function FireLegend({ windTowardDegrees, showFuel, defaultOpen }: FireLegendProps) {
+export default function FireLegend({ view, windTowardDegrees, showFuel, defaultOpen }: FireLegendProps) {
   const [open, setOpen] = useState(defaultOpen);
   const listId = useId();
 
-  const items: { glyph: ReactNode; label: string }[] = [
-    { glyph: <FlameGlyph />, label: "Burning (active front glows)" },
-    { glyph: <FireEdgeGlyph />, label: "Fire front (current perimeter)" },
-    { glyph: <BurnedGlyph />, label: "Burned (charred ground)" },
+  const items: { glyph: ReactNode; label: string }[] =
+    view === "satellite"
+      ? [
+          {
+            glyph: <ArrivalGradientGlyph />,
+            label: "Burned area by arrival: dark red (earliest) to yellow (latest)",
+          },
+          { glyph: <CurrentPerimeterGlyph />, label: "Current fire perimeter (pale line)" },
+        ]
+      : [
+          { glyph: <FlameGlyph />, label: "Burning (active front glows)" },
+          { glyph: <FireEdgeGlyph />, label: "Fire front (current perimeter)" },
+          { glyph: <BurnedGlyph />, label: "Burned (charred ground)" },
+        ];
+  items.push(
     { glyph: <IgnitionGlyph />, label: "Ignition point" },
     {
       glyph: <WindGlyph bearing={windTowardDegrees} />,
       label: `Wind arrow, pointing toward ${Math.round(windTowardDegrees)}°`,
     },
-  ];
+  );
   if (showFuel) {
     for (const entry of FUEL_COLORS) {
       items.push({

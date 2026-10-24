@@ -17,8 +17,8 @@ const MAX_INSET_FRACTION = 0.78;
 /** Closest zoom as a fraction of the whole-board fit distance (areas are km wide). */
 const MIN_DISTANCE_FRACTION = 0.05;
 const MAX_DISTANCE_FRACTION = 1.45;
-/** Orbit target may pan this far toward the board edge (fraction of the half-size). */
-const PAN_LIMIT = 0.95;
+/** Orbit target may pan up to the board edge (fraction of the half-size). */
+const PAN_LIMIT = 1;
 
 const easeInOutCubic = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 
@@ -68,7 +68,12 @@ export class FireCameraRig {
     this.controls.dampingFactor = 0.08;
     this.controls.rotateSpeed = 0.5;
     this.controls.zoomSpeed = 0.9;
-    this.controls.panSpeed = 0.8;
+    this.controls.panSpeed = 1;
+    this.controls.zoomToCursor = true;
+    // Map-style: drag pans over the ground (Ctrl/Cmd+drag swaps to orbit); right-drag orbits;
+    // one finger pans, two fingers pinch-zoom and twist.
+    this.controls.mouseButtons = { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
+    this.controls.touches = { ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_ROTATE };
     this.controls.screenSpacePanning = false;
     this.controls.minPolarAngle = POLAR_RANGE[0];
     this.controls.maxPolarAngle = POLAR_RANGE[1];

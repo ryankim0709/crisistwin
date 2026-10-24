@@ -48,8 +48,26 @@ export interface LandscapeGrid {
   canopyHeightMeters: Float32Array;
   /** False when any canopy raster could not be loaded, so crown fire is not modelled. */
   canopyComplete: boolean;
+  /**
+   * Nominal cell size the grid was built at, metres. 30 means LANDFIRE's own lattice (30
+   * Mercator metres, so `groundCellSizeMeters` is 30 x cos(latitude), 23.7 m at Berkeley).
+   * Anything larger is a coarser lattice whose ground cell is exactly this many metres
+   * (`groundCellSizeMeters` equals it up to rounding) and whose inputs were resampled.
+   */
+  cellMeters: number;
+  /**
+   * How fuel codes reached the grid. "native": LANDFIRE cells as published. "mode": each
+   * coarse cell takes the most frequent fuel code among a regular grid of native-raster
+   * samples inside it (about 3 x 3, never sparser than one per 57 Mercator metres); canopy
+   * is the mean over the samples carrying that fuel code, terrain the mean of the terrain
+   * pixels inside the cell. "nearest" (one sample per cell) is reserved for other
+   * producers; `loadLandscape` does not emit it. See docs/adr/0012-fire-large-areas.md.
+   */
+  resampling: LandscapeResampling;
   attribution: { fuel: string; terrain: string; canopy: string };
 }
+
+export type LandscapeResampling = "native" | "mode" | "nearest";
 
 export const EARTH_CIRCUMFERENCE_METERS = 40075016.68557849;
 const MERCATOR_ORIGIN_SHIFT = EARTH_CIRCUMFERENCE_METERS / 2;
@@ -61,6 +79,15 @@ const RADIANS_PER_DEGREE = Math.PI / 180;
  * browser requests to it still fail, so the proxy is required, not a convenience.
  */
 export const LANDFIRE_WCS_URL = "/landfire/wcs";
+/** The service the proxy forwards to, for callers outside the browser (Node build tools). */
+export const LANDFIRE_UPSTREAM_WCS_URL = "https://edcintl.cr.usgs.gov/geoserver/landfire/wcs";
+/**
+ * Identifies this application to the data services. The USGS web application firewall
+ * blocks requests that look like cross-site browser traffic, so a Node caller going to
+ * `LANDFIRE_UPSTREAM_WCS_URL` directly should send this and no browser headers; the Vite
+ * proxy sets the same value (app/vite.config.ts).
+ */
+export const LANDFIRE_USER_AGENT = "CrisisTwin/0.1 (hackathon planning prototype)";
 export const LANDFIRE_COVERAGE = "landfire__LF2025_FBFM40_CONUS";
 export const LANDFIRE_ATTRIBUTION =
   "LANDFIRE 2025 (LF2025) 40 Scott and Burgan fire behavior fuel models, USGS/USDA";
@@ -82,6 +109,44 @@ export const TERRAIN_ATTRIBUTION =
 /** Terrarium zoom level whose pixels are near the 30 m LANDFIRE cell size. */
 const TERRAIN_ZOOM = 13;
 const TILE_SIZE = 256;
+
+/**
+ * Where the loader fetches from. Every field is optional and the defaults are the browser
+ * path: the same-origin LANDFIRE proxy, the public terrain bucket, `globalThis.fetch`, and
+ * no extra headers. A Node caller (no Vite proxy) passes `LANDFIRE_UPSTREAM_WCS_URL` and
+ * `LANDFIRE_USER_AGENT`.
+ */
+export interface LandscapeEndpoints {
+  /** LANDFIRE GeoServer WCS endpoint. Default `LANDFIRE_WCS_URL` ("/landfire/wcs"). */
+  landfireWcsUrl?: string;
+  /** Terrarium tile root, `{root}/{z}/{x}/{y}.png`. Default `TERRAIN_TILE_URL`. */
+  terrainTileUrl?: string;
+  /** Fetch implementation. Default `globalThis.fetch`. */
+  fetch?: typeof fetch;
+  /** Sent as the User-Agent header on every request when set. Browsers may ignore it. */
+  userAgent?: string;
+}
+
+interface DataSource {
+  wcsUrl: string;
+  terrainUrl: string;
+  fetch: typeof fetch;
+  headers: Record<string, string>;
+}
+
+function resolveSource(endpoints: LandscapeEndpoints = {}): DataSource {
+  const custom = endpoints.fetch;
+  return {
+    wcsUrl: endpoints.landfireWcsUrl ?? LANDFIRE_WCS_URL,
+    terrainUrl: endpoints.terrainTileUrl ?? TERRAIN_TILE_URL,
+    // Called unbound, so wrap the global rather than storing it (browsers throw "Illegal
+    // invocation" for a detached `fetch`).
+    fetch: custom ?? ((input, init) => globalThis.fetch(input, init)),
+    headers: endpoints.userAgent ? { "User-Agent": endpoints.userAgent } : {},
+  };
+}
+
+const DEFAULT_SOURCE = resolveSource();
 
 export function lonLatToMercator(longitude: number, latitude: number): [number, number] {
   const x = (longitude / 180) * MERCATOR_ORIGIN_SHIFT;
@@ -274,12 +339,16 @@ class UpstreamError extends Error {
  * The LANDFIRE service returns an occasional empty 500 for a request that succeeds on
  * the next attempt, so retry transient failures a bounded number of times.
  */
-async function fetchCoverageWithRetry(url: string, subject: string): Promise<ArrayBuffer> {
+async function fetchCoverageWithRetry(
+  url: string,
+  subject: string,
+  source: DataSource,
+): Promise<ArrayBuffer> {
   let lastStatus = 0;
   for (let attempt = 1; attempt <= MAX_FUEL_ATTEMPTS; attempt++) {
     let retryAfterMs: number | null = null;
     try {
-      const response = await fetch(url);
+      const response = await source.fetch(url, { headers: source.headers });
       lastStatus = response.status;
       if (response.ok) {
         const buffer = await response.arrayBuffer();
@@ -327,10 +396,12 @@ async function fetchCoverageWithRetry(url: string, subject: string): Promise<Arr
  */
 const inFlightCoverage = new Map<string, Promise<ArrayBuffer>>();
 
-function sharedCoverage(url: string, subject: string): Promise<ArrayBuffer> {
+function sharedCoverage(url: string, subject: string, source: DataSource): Promise<ArrayBuffer> {
   const existing = inFlightCoverage.get(url);
   if (existing) return existing;
-  const request = fetchCoverageWithRetry(url, subject).finally(() => inFlightCoverage.delete(url));
+  const request = fetchCoverageWithRetry(url, subject, source).finally(() =>
+    inFlightCoverage.delete(url),
+  );
   inFlightCoverage.set(url, request);
   return request;
 }
@@ -352,26 +423,47 @@ const MAX_PARALLEL_REQUESTS = 4;
  */
 const CHUNK_OVERLAP_METERS = 2 * FUEL_CELL_METERS;
 
-function coverageUrl(coverageId: string, box: MercatorBox): string {
+/**
+ * GetCoverage URL for one box. With `scaleSize` the service resamples to exactly that many
+ * columns and rows itself (WCS 2.0 scaling extension), nearest neighbour, which is the only
+ * interpolation that keeps a categorical fuel code a real fuel code.
+ */
+function coverageUrl(
+  coverageId: string,
+  box: MercatorBox,
+  source: DataSource,
+  scaleSize?: { columns: number; rows: number },
+): string {
+  const scaling = scaleSize
+    ? `&scalesize=i(${scaleSize.columns}),j(${scaleSize.rows})` +
+      `&interpolation=http://www.opengis.net/def/interpolation/OGC/1/nearest-neighbor`
+    : "";
   return (
-    `${LANDFIRE_WCS_URL}?service=WCS&version=2.0.1&request=GetCoverage` +
+    `${source.wcsUrl}?service=WCS&version=2.0.1&request=GetCoverage` +
     `&coverageId=${coverageId}` +
     `&subset=X(${box.minX.toFixed(2)},${box.maxX.toFixed(2)})` +
     `&subset=Y(${box.minY.toFixed(2)},${box.maxY.toFixed(2)})` +
+    scaling +
     `&format=image/tiff`
   );
 }
 
+/**
+ * Run `run` over `items` with at most `limit` in flight. Stops launching new work once
+ * `signal` aborts, so a withdrawn load does not keep issuing requests from its queue.
+ */
 async function mapWithLimit<T, R>(
   items: T[],
   limit: number,
   run: (item: T) => Promise<R>,
+  signal?: AbortSignal,
 ): Promise<R[]> {
   const results = new Array<R>(items.length);
   let next = 0;
   await Promise.all(
     Array.from({ length: Math.min(limit, items.length) }, async () => {
       for (let index = next++; index < items.length; index = next++) {
+        if (signal?.aborted) throw abortError(signal);
         results[index] = await run(items[index]);
       }
     }),
@@ -457,12 +549,20 @@ function stitchPieces(pieces: DecodedRaster[], fillValue: number, label: string)
 export async function fetchFuelRaster(
   box: MercatorBox,
   signal: AbortSignal,
+  source: DataSource = DEFAULT_SOURCE,
 ): Promise<DecodedRaster> {
   const boxes = chunkBoxes(box);
-  const pieces = await mapWithLimit(boxes, MAX_PARALLEL_REQUESTS, async (piece) =>
-    decodeGeoTiff(
-      await abortable(sharedCoverage(coverageUrl(LANDFIRE_COVERAGE, piece), "fuel"), signal),
-    ),
+  const pieces = await mapWithLimit(
+    boxes,
+    MAX_PARALLEL_REQUESTS,
+    async (piece) =>
+      decodeGeoTiff(
+        await abortable(
+          sharedCoverage(coverageUrl(LANDFIRE_COVERAGE, piece, source), "fuel", source),
+          signal,
+        ),
+      ),
+    signal,
   );
   return stitchPieces(pieces, FUEL_NO_DATA, "Fuel data");
 }
@@ -497,7 +597,8 @@ const CANOPY_NO_DATA = -9999;
 const CANOPY_ALTERNATE_NO_DATA = 32767;
 
 function isCanopyNoData(raw: number): boolean {
-  return raw < 0 || raw === CANOPY_ALTERNATE_NO_DATA;
+  // NaN is how a resampled layer marks a coarse cell with no usable canopy sample.
+  return raw < 0 || raw === CANOPY_ALTERNATE_NO_DATA || Number.isNaN(raw);
 }
 
 /**
@@ -589,7 +690,7 @@ function alignToFuelGrid(source: DecodedRaster, fuel: DecodedRaster, label: stri
  * whether enough of them are missing to disqualify the whole canopy set.
  */
 function scaleCanopyLayer(
-  raw: Int16Array,
+  raw: ArrayLike<number>,
   fuelCodes: Int16Array,
   layer: CanopyLayer,
 ): { values: Float32Array; missing: number; mapped: number; implausible: number } {
@@ -626,18 +727,27 @@ function scaleCanopyLayer(
 async function fetchCanopyRasters(
   box: MercatorBox,
   signal: AbortSignal,
+  source: DataSource,
 ): Promise<Record<CanopyLayer, DecodedRaster>> {
   const boxes = chunkBoxes(box);
   const jobs = CANOPY_LAYERS.flatMap((layer) =>
     boxes.map((piece) => ({ layer, piece }) as const),
   );
-  const decoded = await mapWithLimit(jobs, MAX_PARALLEL_REQUESTS, async ({ layer, piece }) =>
-    decodeGeoTiff(
-      await abortable(
-        sharedCoverage(coverageUrl(LANDFIRE_CANOPY_COVERAGES[layer], piece), "canopy"),
-        signal,
+  const decoded = await mapWithLimit(
+    jobs,
+    MAX_PARALLEL_REQUESTS,
+    async ({ layer, piece }) =>
+      decodeGeoTiff(
+        await abortable(
+          sharedCoverage(
+            coverageUrl(LANDFIRE_CANOPY_COVERAGES[layer], piece, source),
+            "canopy",
+            source,
+          ),
+          signal,
+        ),
       ),
-    ),
+    signal,
   );
 
   const rasters = {} as Record<CanopyLayer, DecodedRaster>;
@@ -658,23 +768,39 @@ async function sampleCanopy(
   fuel: DecodedRaster,
   box: MercatorBox,
   signal: AbortSignal,
+  source: DataSource,
 ): Promise<CanopyGrids> {
   const cellCount = fuel.width * fuel.height;
   let rasters: Record<CanopyLayer, DecodedRaster>;
   try {
-    rasters = await fetchCanopyRasters(box, signal);
+    rasters = await fetchCanopyRasters(box, signal, source);
   } catch (cause) {
     // An abort is the caller withdrawing, not a data problem, so it still propagates.
     if (signal.aborted) throw cause;
     console.warn("LANDFIRE canopy layers are unavailable; crown fire is not modelled.", cause);
     return emptyCanopy(cellCount);
   }
+  const aligned = {} as Record<CanopyLayer, ArrayLike<number>>;
+  for (const layer of CANOPY_LAYERS) {
+    aligned[layer] = alignToFuelGrid(rasters[layer], fuel, LANDFIRE_CANOPY_COVERAGES[layer]);
+  }
+  return finishCanopy(aligned, fuel.values);
+}
 
+/**
+ * Scale aligned raw canopy layers to SI and decide whether the set is usable. Shared by
+ * the native and the resampled paths so both apply the same plausibility and coverage
+ * tests.
+ */
+function finishCanopy(
+  aligned: Record<CanopyLayer, ArrayLike<number>>,
+  fuelCodes: Int16Array,
+): CanopyGrids {
+  const cellCount = fuelCodes.length;
   const scaled = {} as Record<CanopyLayer, ReturnType<typeof scaleCanopyLayer>>;
   let complete = true;
   for (const layer of CANOPY_LAYERS) {
-    const aligned = alignToFuelGrid(rasters[layer], fuel, LANDFIRE_CANOPY_COVERAGES[layer]);
-    const result = scaleCanopyLayer(aligned, fuel.values, layer);
+    const result = scaleCanopyLayer(aligned[layer], fuelCodes, layer);
     scaled[layer] = result;
     if (result.implausible > result.values.length * MAX_IMPLAUSIBLE_FRACTION) {
       console.warn(
@@ -703,77 +829,407 @@ async function sampleCanopy(
   };
 }
 
+/**
+ * Inflate a zlib stream with the platform's `DecompressionStream` ("deflate" is the zlib
+ * wrapper), available in every current browser and in Node 18+, so terrain decoding needs
+ * neither a canvas nor a dependency.
+ */
+async function inflateZlib(data: Uint8Array): Promise<Uint8Array> {
+  const stream = new Blob([data as BlobPart])
+    .stream()
+    .pipeThrough(new DecompressionStream("deflate"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10];
+
+/**
+ * Minimal PNG reader for terrarium tiles: 8-bit greyscale-free colour types 2 (RGB),
+ * 6 (RGBA) and 3 (palette), non-interlaced. Returns RGB triplets per pixel. Anything
+ * else is rejected rather than misread, because a misread tile is a wrong elevation, not
+ * a missing one.
+ */
+export async function decodePngRgb(
+  buffer: ArrayBuffer,
+): Promise<{ width: number; height: number; rgb: Uint8Array }> {
+  const bytes = new Uint8Array(buffer);
+  const view = new DataView(buffer);
+  if (bytes.length < 8 || PNG_SIGNATURE.some((value, i) => bytes[i] !== value)) {
+    throw new Error("Terrain tile is not a PNG.");
+  }
+  let width = 0;
+  let height = 0;
+  let colourType = -1;
+  let palette: Uint8Array | null = null;
+  const idat: Uint8Array[] = [];
+  for (let offset = 8; offset + 8 <= bytes.length; ) {
+    const length = view.getUint32(offset);
+    const type = String.fromCharCode(...bytes.subarray(offset + 4, offset + 8));
+    const body = bytes.subarray(offset + 8, offset + 8 + length);
+    if (type === "IHDR") {
+      width = view.getUint32(offset + 8);
+      height = view.getUint32(offset + 12);
+      const bitDepth = body[8];
+      colourType = body[9];
+      const interlace = body[12];
+      if (bitDepth !== 8 || interlace !== 0 || ![2, 3, 6].includes(colourType)) {
+        throw new Error(
+          `Unsupported terrain PNG (bit depth ${bitDepth}, colour type ${colourType}, interlace ${interlace}).`,
+        );
+      }
+    } else if (type === "PLTE") {
+      palette = body.slice();
+    } else if (type === "IDAT") {
+      idat.push(body);
+    } else if (type === "IEND") {
+      break;
+    }
+    offset += 12 + length;
+  }
+  if (width === 0 || height === 0 || idat.length === 0) throw new Error("Terrain PNG is empty.");
+  if (colourType === 3 && !palette) throw new Error("Terrain PNG has no palette.");
+
+  const compressed = new Uint8Array(idat.reduce((total, chunk) => total + chunk.length, 0));
+  let cursor = 0;
+  for (const chunk of idat) {
+    compressed.set(chunk, cursor);
+    cursor += chunk.length;
+  }
+  const raw = await inflateZlib(compressed);
+  const channels = colourType === 2 ? 3 : colourType === 6 ? 4 : 1;
+  const stride = width * channels;
+  if (raw.length < (stride + 1) * height) throw new Error("Terrain PNG is truncated.");
+
+  // Undo the per-row filters (PNG spec section 9) in place into `pixels`.
+  const pixels = new Uint8Array(stride * height);
+  for (let y = 0; y < height; y++) {
+    const filter = raw[y * (stride + 1)];
+    const source = y * (stride + 1) + 1;
+    const row = y * stride;
+    const previous = row - stride;
+    for (let x = 0; x < stride; x++) {
+      const value = raw[source + x];
+      const left = x >= channels ? pixels[row + x - channels] : 0;
+      const up = y > 0 ? pixels[previous + x] : 0;
+      const upLeft = y > 0 && x >= channels ? pixels[previous + x - channels] : 0;
+      let predictor: number;
+      switch (filter) {
+        case 0:
+          predictor = 0;
+          break;
+        case 1:
+          predictor = left;
+          break;
+        case 2:
+          predictor = up;
+          break;
+        case 3:
+          predictor = (left + up) >> 1;
+          break;
+        case 4: {
+          const estimate = left + up - upLeft;
+          const toLeft = Math.abs(estimate - left);
+          const toUp = Math.abs(estimate - up);
+          const toUpLeft = Math.abs(estimate - upLeft);
+          predictor =
+            toLeft <= toUp && toLeft <= toUpLeft ? left : toUp <= toUpLeft ? up : upLeft;
+          break;
+        }
+        default:
+          throw new Error(`Terrain PNG uses unknown row filter ${filter}.`);
+      }
+      pixels[row + x] = (value + predictor) & 0xff;
+    }
+  }
+
+  const rgb = new Uint8Array(width * height * 3);
+  for (let i = 0; i < width * height; i++) {
+    if (colourType === 3) {
+      const entry = pixels[i] * 3;
+      rgb[i * 3] = palette![entry];
+      rgb[i * 3 + 1] = palette![entry + 1];
+      rgb[i * 3 + 2] = palette![entry + 2];
+    } else {
+      rgb[i * 3] = pixels[i * channels];
+      rgb[i * 3 + 1] = pixels[i * channels + 1];
+      rgb[i * 3 + 2] = pixels[i * channels + 2];
+    }
+  }
+  return { width, height, rgb };
+}
+
 /** Decode one terrarium tile to metres: elevation = R * 256 + G + B / 256 - 32768. */
 async function fetchTerrainTile(
+  zoom: number,
   x: number,
   y: number,
   signal: AbortSignal,
+  source: DataSource,
 ): Promise<Float32Array | null> {
-  const response = await fetch(`${TERRAIN_TILE_URL}/${TERRAIN_ZOOM}/${x}/${y}.png`, { signal });
+  const response = await source.fetch(`${source.terrainUrl}/${zoom}/${x}/${y}.png`, {
+    signal,
+    headers: source.headers,
+  });
   if (!response.ok) return null;
-  const bitmap = await createImageBitmap(await response.blob());
-  const canvas = new OffscreenCanvas(TILE_SIZE, TILE_SIZE);
-  const context = canvas.getContext("2d", { willReadFrequently: true });
-  if (!context) throw new Error("Cannot read terrain tiles without a 2D canvas context.");
-  context.drawImage(bitmap, 0, 0);
-  bitmap.close();
-  const { data } = context.getImageData(0, 0, TILE_SIZE, TILE_SIZE);
+  const { width, height, rgb } = await decodePngRgb(await response.arrayBuffer());
+  if (width !== TILE_SIZE || height !== TILE_SIZE) {
+    throw new Error(`Terrain tile ${zoom}/${x}/${y} is ${width}x${height}, expected ${TILE_SIZE}.`);
+  }
   const elevations = new Float32Array(TILE_SIZE * TILE_SIZE);
   for (let i = 0; i < elevations.length; i++) {
-    elevations[i] = data[i * 4] * 256 + data[i * 4 + 1] + data[i * 4 + 2] / 256 - 32768;
+    elevations[i] = rgb[i * 3] * 256 + rgb[i * 3 + 1] + rgb[i * 3 + 2] / 256 - 32768;
   }
   return elevations;
 }
 
-async function sampleElevation(
-  raster: DecodedRaster,
-  signal: AbortSignal,
-): Promise<{ elevation: Float32Array; complete: boolean }> {
-  const { width, height, transform } = raster;
-  const tileSpan = EARTH_CIRCUMFERENCE_METERS / 2 ** TERRAIN_ZOOM;
-  const tileIndex = (mercator: number, flip: boolean) =>
-    Math.floor(
-      (flip ? MERCATOR_ORIGIN_SHIFT - mercator : mercator + MERCATOR_ORIGIN_SHIFT) / tileSpan,
-    );
+/** Concurrent terrain tile downloads; a different host from LANDFIRE. */
+const MAX_PARALLEL_TILE_REQUESTS = 6;
+/** Refuse a lattice that would need more terrain tiles than this, rather than download them. */
+const MAX_TERRAIN_TILES = 256;
 
-  const needed = new Map<string, Promise<Float32Array | null>>();
-  const tileKey = (tx: number, ty: number) => `${tx}/${ty}`;
-  const corners: [number, number][] = [
-    [transform.originX, transform.originY],
-    [transform.originX + width * transform.scaleX, transform.originY + height * transform.scaleY],
-  ];
-  const txs = corners.map(([x]) => tileIndex(x, false));
-  const tys = corners.map(([, y]) => tileIndex(y, true));
-  for (let tx = Math.min(...txs); tx <= Math.max(...txs); tx++) {
-    for (let ty = Math.min(...tys); ty <= Math.max(...tys); ty++) {
-      needed.set(tileKey(tx, ty), fetchTerrainTile(tx, ty, signal));
-    }
+/** A grid's cells as Mercator edges and signed cell sizes; y decreases down the grid. */
+interface Lattice {
+  width: number;
+  height: number;
+  /** West edge of column 0 and north edge of row 0, Mercator metres. */
+  westX: number;
+  northY: number;
+  cellX: number;
+  /** Negative. */
+  cellY: number;
+}
+
+function latticeOfRaster(raster: DecodedRaster): Lattice {
+  return {
+    width: raster.width,
+    height: raster.height,
+    westX: raster.transform.originX,
+    northY: raster.transform.originY,
+    cellX: raster.transform.scaleX,
+    cellY: raster.transform.scaleY,
+  };
+}
+
+/** Terrarium zoom whose pixels are no larger than the lattice cell, capped at the native 13. */
+function terrainZoomFor(mercatorCellMeters: number): number {
+  const zoom = Math.ceil(Math.log2(EARTH_CIRCUMFERENCE_METERS / (TILE_SIZE * mercatorCellMeters)));
+  return Math.min(Math.max(zoom, 0), TERRAIN_ZOOM);
+}
+
+/**
+ * Elevation per lattice cell. `average` false samples the pixel under each cell centre
+ * (the native path, where a z13 pixel is smaller than a cell anyway). `average` true takes
+ * the mean of every terrain pixel whose centre falls inside the cell, so a coarse cell's
+ * elevation represents the cell rather than one point in it; a cell no pixel centre lands
+ * in falls back to the pixel under its centre.
+ */
+async function sampleElevation(
+  lattice: Lattice,
+  zoom: number,
+  average: boolean,
+  signal: AbortSignal,
+  source: DataSource,
+): Promise<{ elevation: Float32Array; complete: boolean; tileCount: number }> {
+  const { width, height, westX, northY, cellX, cellY } = lattice;
+  const tileSpan = EARTH_CIRCUMFERENCE_METERS / 2 ** zoom;
+  const pixelSpan = tileSpan / TILE_SIZE;
+  const eastX = westX + width * cellX;
+  const southY = northY + height * cellY;
+  const minTx = Math.floor((westX + MERCATOR_ORIGIN_SHIFT) / tileSpan);
+  const maxTx = Math.floor((eastX + MERCATOR_ORIGIN_SHIFT) / tileSpan);
+  const minTy = Math.floor((MERCATOR_ORIGIN_SHIFT - northY) / tileSpan);
+  const maxTy = Math.floor((MERCATOR_ORIGIN_SHIFT - southY) / tileSpan);
+  const tileCount = (maxTx - minTx + 1) * (maxTy - minTy + 1);
+  if (tileCount > MAX_TERRAIN_TILES) {
+    throw new Error(`The area needs ${tileCount} terrain tiles at zoom ${zoom}; refusing.`);
   }
-  const tiles = new Map<string, Float32Array | null>();
-  await Promise.all(
-    [...needed].map(async ([key, promise]) => {
-      tiles.set(key, await promise);
-    }),
+
+  const keys: [number, number][] = [];
+  for (let tx = minTx; tx <= maxTx; tx++) {
+    for (let ty = minTy; ty <= maxTy; ty++) keys.push([tx, ty]);
+  }
+  const loaded = await mapWithLimit(
+    keys,
+    MAX_PARALLEL_TILE_REQUESTS,
+    ([tx, ty]) => fetchTerrainTile(zoom, tx, ty, signal, source),
+    signal,
   );
+  const tiles = new Map<string, Float32Array | null>();
+  keys.forEach(([tx, ty], i) => tiles.set(`${tx}/${ty}`, loaded[i]));
+
+  const pointSample = (mercatorX: number, mercatorY: number): number => {
+    const globalX = (mercatorX + MERCATOR_ORIGIN_SHIFT) / tileSpan;
+    const globalY = (MERCATOR_ORIGIN_SHIFT - mercatorY) / tileSpan;
+    const tx = Math.floor(globalX);
+    const ty = Math.floor(globalY);
+    const pixelX = Math.min(Math.floor((globalX - tx) * TILE_SIZE), TILE_SIZE - 1);
+    const pixelY = Math.min(Math.floor((globalY - ty) * TILE_SIZE), TILE_SIZE - 1);
+    const tile = tiles.get(`${tx}/${ty}`);
+    const value = tile ? tile[pixelY * TILE_SIZE + pixelX] : Number.NaN;
+    return isPlausibleTerrainSample(value) ? value : Number.NaN;
+  };
 
   const elevation = new Float32Array(width * height);
-  for (let row = 0; row < height; row++) {
-    const mercatorY = transform.originY + (row + 0.5) * transform.scaleY;
-    const globalY = (MERCATOR_ORIGIN_SHIFT - mercatorY) / tileSpan;
-    const ty = Math.floor(globalY);
-    const pixelY = Math.min(Math.floor((globalY - ty) * TILE_SIZE), TILE_SIZE - 1);
-    for (let column = 0; column < width; column++) {
-      const mercatorX = transform.originX + (column + 0.5) * transform.scaleX;
-      const globalX = (mercatorX + MERCATOR_ORIGIN_SHIFT) / tileSpan;
-      const tx = Math.floor(globalX);
-      const pixelX = Math.min(Math.floor((globalX - tx) * TILE_SIZE), TILE_SIZE - 1);
-      const tile = tiles.get(tileKey(tx, ty));
-      elevation[row * width + column] = tile ? tile[pixelY * TILE_SIZE + pixelX] : 0;
+  if (average) {
+    const sums = new Float64Array(width * height);
+    const counts = new Uint32Array(width * height);
+    for (const [tx, ty] of keys) {
+      const tile = tiles.get(`${tx}/${ty}`);
+      if (!tile) continue;
+      for (let py = 0; py < TILE_SIZE; py++) {
+        const mercatorY = MERCATOR_ORIGIN_SHIFT - (ty * TILE_SIZE + py + 0.5) * pixelSpan;
+        const row = Math.floor((mercatorY - northY) / cellY);
+        if (row < 0 || row >= height) continue;
+        for (let px = 0; px < TILE_SIZE; px++) {
+          const mercatorX = (tx * TILE_SIZE + px + 0.5) * pixelSpan - MERCATOR_ORIGIN_SHIFT;
+          const column = Math.floor((mercatorX - westX) / cellX);
+          if (column < 0 || column >= width) continue;
+          const value = tile[py * TILE_SIZE + px];
+          if (!isPlausibleTerrainSample(value)) continue;
+          sums[row * width + column] += value;
+          counts[row * width + column]++;
+        }
+      }
+    }
+    for (let row = 0; row < height; row++) {
+      for (let column = 0; column < width; column++) {
+        const index = row * width + column;
+        elevation[index] =
+          counts[index] > 0
+            ? sums[index] / counts[index]
+            : pointSample(westX + (column + 0.5) * cellX, northY + (row + 0.5) * cellY);
+      }
+    }
+  } else {
+    for (let row = 0; row < height; row++) {
+      const mercatorY = northY + (row + 0.5) * cellY;
+      for (let column = 0; column < width; column++) {
+        elevation[row * width + column] = pointSample(westX + (column + 0.5) * cellX, mercatorY);
+      }
     }
   }
-  // A missing tile would otherwise read as sea level, which silently flattens the slope.
+  // Cells left NaN (missing tile, or only implausible samples) are filled by
+  // `repairElevation` once the fuel codes are known. A missing tile still marks the
+  // elevation incomplete, because the fill only interpolates over it.
   const complete = [...tiles.values()].every((tile) => tile !== null);
-  return { elevation, complete };
+  return { elevation, complete, tileCount };
+}
+
+/**
+ * Terrarium tiles carry artefacts at some coastlines: values down to -13,500 m near Point
+ * Mugu and -12,700 m near Carpinteria, deeper than any ocean, which turned neighbouring
+ * land cells into slope tangents near 70. Samples outside this range are treated as
+ * missing before any averaging. The floor sits below any real bathymetry the board could
+ * show near the coast, the ceiling above every summit.
+ */
+const MIN_PLAUSIBLE_TERRAIN_METERS = -500;
+const MAX_PLAUSIBLE_TERRAIN_METERS = 9000;
+/**
+ * Lowest elevation accepted on land. Death Valley (-86 m) and the Salton Sea basin
+ * (-70 m) are the lowest ground in the coverage; anything lower on a land cell is a
+ * coastal artefact or bathymetry bleeding inland, and is refilled from its neighbours.
+ */
+const MIN_LAND_ELEVATION_METERS = -100;
+/** FBFM40 open water; mirrors `NON_BURNABLE_CODES` in fuelModels.ts. */
+const WATER_FUEL_CODE = 98;
+/**
+ * Share of land cells that may be filled from neighbours before the elevation is reported
+ * incomplete. Up to 1 percent is a thin coastal fringe or a few artefact cells; more than
+ * that means slope is interpolated over a meaningful part of the board.
+ */
+const MAX_FILLED_LAND_FRACTION = 0.01;
+/** Neighbour-fill passes; each grows the filled area by one cell. */
+const MAX_ELEVATION_FILL_PASSES = 64;
+
+/** Repair in place; false when more than `MAX_FILLED_LAND_FRACTION` of land was filled. */
+function repairedElevationComplete(
+  elevation: Float32Array,
+  fuelCodes: Int16Array,
+  width: number,
+  height: number,
+): boolean {
+  const { filledLandCells, landCells } = repairElevation(elevation, fuelCodes, width, height);
+  if (filledLandCells > 0) {
+    console.warn(
+      `Terrain: filled ${filledLandCells} of ${landCells} land cells from neighbours ` +
+        "(missing or implausible terrarium samples).",
+    );
+  }
+  return filledLandCells <= landCells * MAX_FILLED_LAND_FRACTION;
+}
+
+function isPlausibleTerrainSample(value: number): boolean {
+  return value >= MIN_PLAUSIBLE_TERRAIN_METERS && value <= MAX_PLAUSIBLE_TERRAIN_METERS;
+}
+
+/**
+ * Make the elevation usable for slope, in place, given the fuel codes on the same cells.
+ *
+ * - Open water (98) is set to sea level when it is missing or below 0 m: the board and
+ *   the slope model want the water surface, not bathymetry. Inland lakes above sea level
+ *   keep their surface elevation.
+ * - Unmapped cells (offshore, outside CONUS) are set to sea level when below 0 m.
+ * - Land below `MIN_LAND_ELEVATION_METERS`, and any other missing cell, is filled with the
+ *   mean of its valid 8-neighbours, repeated outward until every cell has a value
+ *   (anything still missing after `MAX_ELEVATION_FILL_PASSES` becomes 0 m).
+ *
+ * Returns how many land cells (mapped, not water) had to be filled, out of how many.
+ */
+export function repairElevation(
+  elevation: Float32Array,
+  fuelCodes: Int16Array,
+  width: number,
+  height: number,
+): { filledLandCells: number; landCells: number } {
+  let landCells = 0;
+  let filledLandCells = 0;
+  for (let i = 0; i < elevation.length; i++) {
+    const value = elevation[i];
+    if (fuelCodes[i] === WATER_FUEL_CODE) {
+      if (!(value >= 0)) elevation[i] = 0;
+    } else if (fuelCodes[i] === FUEL_NO_DATA) {
+      if (value < 0) elevation[i] = 0;
+    } else {
+      landCells++;
+      // NaN (no plausible sample) fails this test too, so it is counted as filled.
+      if (!(value >= MIN_LAND_ELEVATION_METERS)) {
+        elevation[i] = Number.NaN;
+        filledLandCells++;
+      }
+    }
+  }
+
+  let missing: number[] = [];
+  for (let i = 0; i < elevation.length; i++) if (Number.isNaN(elevation[i])) missing.push(i);
+  for (let pass = 0; pass < MAX_ELEVATION_FILL_PASSES && missing.length > 0; pass++) {
+    // Values are computed from the state at the start of the pass, then written, so the
+    // fill does not depend on scan order.
+    const updates: [number, number][] = [];
+    const still: number[] = [];
+    for (const i of missing) {
+      const x = i % width;
+      const y = (i - x) / width;
+      let sum = 0;
+      let count = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if ((dx === 0 && dy === 0) || nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+          const neighbour = elevation[ny * width + nx];
+          if (Number.isNaN(neighbour)) continue;
+          sum += neighbour;
+          count++;
+        }
+      }
+      if (count > 0) updates.push([i, sum / count]);
+      else still.push(i);
+    }
+    for (const [i, value] of updates) elevation[i] = value;
+    missing = still;
+  }
+  for (const i of missing) elevation[i] = 0;
+  return { filledLandCells, landCells };
 }
 
 /** Horn's method: slope and aspect from the 8 neighbours of each cell. */
@@ -809,25 +1265,436 @@ export function slopeAndAspect(
   return { slopeTangent, upslopeDegrees };
 }
 
+/** Options for `loadLandscape`. */
+export interface LandscapeLoadOptions {
+  /**
+   * Requested ground cell size in metres. Omitted or at most 30 loads LANDFIRE's native
+   * 30 m Mercator lattice unchanged. Anything larger builds a coarser lattice whose ground
+   * cell is exactly this size (use `landscapeCellMetersFor`), resampling fuel by mode,
+   * canopy by mean and terrain by mean (docs/adr/0012-fire-large-areas.md). The result's
+   * `cellMeters` and `resampling` say which happened; callers must disclose it.
+   */
+  cellMeters?: number;
+  /** Data endpoints; omit in the browser. See `LandscapeEndpoints`. */
+  endpoints?: LandscapeEndpoints;
+}
+
+/** Largest grid side (cells) the page and solver are expected to handle interactively. */
+export const MAX_GRID_CELLS_PER_SIDE = 900;
+
 /**
- * Loads fuel, canopy and terrain for a box. The box is in Mercator metres (EPSG:3857, the
- * grid's own coordinates); the returned grid has Mercator cell addressing and
- * `groundCellSizeMeters` corrected with cos(latitude) at the box centre.
+ * Coarsest-needed cell size for a square of the given ground radius: native 30 m when it
+ * fits within `MAX_GRID_CELLS_PER_SIDE`, otherwise the next multiple of 30 m that does.
+ *
+ * "Fits" is judged at a 30 m ground cell. The native lattice is 30 Mercator metres, which
+ * is 30 x cos(latitude) on the ground, so a native grid near the bound comes out up to
+ * 1/cos(latitude) wider (about 1013 cells for a 12 km radius at 38 degrees north).
  */
-export async function loadLandscapeForBox(
-  box: MercatorBox,
-  signal: AbortSignal,
-): Promise<LandscapeGrid> {
-  const [, latitude] = mercatorToLonLat(
-    (box.minX + box.maxX) / 2,
-    (box.minY + box.maxY) / 2,
+export function landscapeCellMetersFor(groundRadiusMeters: number): number {
+  const needed = (2 * groundRadiusMeters) / MAX_GRID_CELLS_PER_SIDE;
+  return Math.max(30, Math.ceil(needed / 30) * 30);
+}
+
+/**
+ * Target samples per axis inside each coarse cell for the fuel mode: 3 x 3 = 9 votes, a
+ * clear majority between two or three fuel types at 9 times the bytes of one nearest
+ * sample. Finer than this buys little; the bound below can force more for very coarse
+ * cells.
+ */
+const MODE_SAMPLES_PER_AXIS = 3;
+/**
+ * Widest sample spacing requested from the service, Mercator metres. Measured: once a
+ * scaled request asks for more than twice the native 30 m spacing, this GeoServer reads
+ * from its reduced-resolution overview instead of the 30 m raster, and the values it
+ * returns no longer sit where the response's georeferencing says (a 4x request matched
+ * the native raster at its own pixel centres on 45 percent of samples). Below 2x every
+ * sample matched the native cell under its centre. 57 m keeps a margin under that switch.
+ */
+const MAX_SAMPLE_SPAN_METERS = 1.9 * FUEL_CELL_METERS;
+/**
+ * Output side of one scaled sub-request, samples. The service pads its TIFF to internal
+ * tiles and cuts the body at 2 MiB; 512 x 512 came back as a compact 0.5 MB body when
+ * measured, while 600 x 600 reached the 2 MiB cut.
+ */
+const SCALED_REQUEST_SAMPLES = 512;
+/**
+ * A corner of a native LANDFIRE FBFM40 cell in EPSG:3857, read from a GetCoverage
+ * response. Every LF2025 layer used here shares this lattice; requests whose edges sit on
+ * it are not snapped by the service, so the response grid is exactly the requested one.
+ */
+const LANDFIRE_LATTICE_CORNER = { x: -13605009.02476366, y: 4564600.4313384155 } as const;
+/** Allowed drift between a scaled response's georeferencing and the request. */
+const SCALED_TRANSFORM_TOLERANCE_METERS = 1;
+
+/**
+ * The coarse lattice, plus a regular sample grid aligned to the native lattice that
+ * covers it, and which sample rows and columns fall inside each coarse cell (by sample
+ * centre). Every layer is fetched on the same sample grid, so sample `k` of the canopy is
+ * the same ground as sample `k` of the fuel.
+ */
+interface ResamplePlan {
+  lattice: Lattice;
+  sampleWestX: number;
+  sampleNorthY: number;
+  sampleSpan: number;
+  sampleWidth: number;
+  sampleHeight: number;
+  pieces: { column: number; row: number; box: MercatorBox }[];
+  /** Coarse column c owns sample columns [columnStart[c], columnStart[c + 1]). */
+  columnStart: Int32Array;
+  rowStart: Int32Array;
+  /** Sample nearest each coarse cell's centre, the tie-breaker for the mode. */
+  centreColumn: Int32Array;
+  centreRow: Int32Array;
+}
+
+function planResample(
+  longitude: number,
+  latitude: number,
+  groundRadiusMeters: number,
+  cellMeters: number,
+): ResamplePlan {
+  const cosine = Math.cos(latitude * RADIANS_PER_DEGREE);
+  const mercatorCell = cellMeters / cosine;
+  const side = Math.max(1, Math.round((2 * groundRadiusMeters) / cellMeters));
+  if (side > MAX_GRID_CELLS_PER_SIDE) {
+    throw new Error(
+      `A ${groundRadiusMeters} m radius at ${cellMeters} m cells is ${side} cells across, ` +
+        `over the ${MAX_GRID_CELLS_PER_SIDE}-cell limit; use landscapeCellMetersFor.`,
+    );
+  }
+  const [centerX, centerY] = lonLatToMercator(longitude, latitude);
+  const lattice: Lattice = {
+    width: side,
+    height: side,
+    westX: centerX - (side * mercatorCell) / 2,
+    northY: centerY + (side * mercatorCell) / 2,
+    cellX: mercatorCell,
+    cellY: -mercatorCell,
+  };
+
+  // Native cells per piece side, so that the piece's 512 samples are spaced at about the
+  // target span and the piece's edges fall on native cell boundaries.
+  const targetSpan = Math.min(mercatorCell / MODE_SAMPLES_PER_AXIS, MAX_SAMPLE_SPAN_METERS);
+  const nativePerPiece = Math.max(
+    1,
+    Math.floor((SCALED_REQUEST_SAMPLES * targetSpan) / FUEL_CELL_METERS),
   );
-  const raster = await fetchFuelRaster(box, signal);
-  // Different hosts, so the terrain tiles and the canopy coverages overlap in time.
-  const [{ elevation: elevationMeters, complete: elevationComplete }, canopy] = await Promise.all([
-    sampleElevation(raster, signal),
-    sampleCanopy(raster, box, signal),
+  const pieceSpan = nativePerPiece * FUEL_CELL_METERS;
+  const sampleSpan = pieceSpan / SCALED_REQUEST_SAMPLES;
+  const { x: cornerX, y: cornerY } = LANDFIRE_LATTICE_CORNER;
+  const sampleWestX =
+    cornerX + Math.floor((lattice.westX - cornerX) / FUEL_CELL_METERS) * FUEL_CELL_METERS;
+  const sampleNorthY =
+    cornerY + Math.ceil((lattice.northY - cornerY) / FUEL_CELL_METERS) * FUEL_CELL_METERS;
+  const eastX = lattice.westX + side * mercatorCell;
+  const southY = lattice.northY - side * mercatorCell;
+  const piecesAcross = Math.ceil((eastX - sampleWestX) / pieceSpan);
+  const piecesDown = Math.ceil((sampleNorthY - southY) / pieceSpan);
+  // Pieces abut exactly and need no `CHUNK_OVERLAP_METERS`: every edge is on the native
+  // lattice, so the service has nothing to round, and `fetchSampledCoverage` refuses any
+  // response whose size, origin or spacing is not the requested one, so a seam cannot pass
+  // silently. Overlapping them would also break the fixed piece-to-sample-grid offsets.
+  const pieces: ResamplePlan["pieces"] = [];
+  for (let row = 0; row < piecesDown; row++) {
+    for (let column = 0; column < piecesAcross; column++) {
+      const minX = sampleWestX + column * pieceSpan;
+      const maxY = sampleNorthY - row * pieceSpan;
+      pieces.push({
+        column: column * SCALED_REQUEST_SAMPLES,
+        row: row * SCALED_REQUEST_SAMPLES,
+        box: { minX, maxX: minX + pieceSpan, minY: maxY - pieceSpan, maxY },
+      });
+    }
+  }
+
+  // Sample i's centre is at sampleWestX + (i + 0.5) * span; it belongs to the coarse cell
+  // whose west edge it is at or past. Same along rows, measured southward.
+  const start = (edgeOffset: number) => Math.ceil(edgeOffset / sampleSpan - 0.5);
+  const columnStart = new Int32Array(side + 1);
+  const rowStart = new Int32Array(side + 1);
+  const centreColumn = new Int32Array(side);
+  const centreRow = new Int32Array(side);
+  for (let c = 0; c <= side; c++) {
+    columnStart[c] = start(lattice.westX + c * mercatorCell - sampleWestX);
+    rowStart[c] = start(sampleNorthY - (lattice.northY - c * mercatorCell));
+  }
+  for (let c = 0; c < side; c++) {
+    centreColumn[c] = Math.floor((lattice.westX + (c + 0.5) * mercatorCell - sampleWestX) / sampleSpan);
+    centreRow[c] = Math.floor((sampleNorthY - (lattice.northY - (c + 0.5) * mercatorCell)) / sampleSpan);
+  }
+  return {
+    lattice,
+    sampleWestX,
+    sampleNorthY,
+    sampleSpan,
+    sampleWidth: piecesAcross * SCALED_REQUEST_SAMPLES,
+    sampleHeight: piecesDown * SCALED_REQUEST_SAMPLES,
+    pieces,
+    columnStart,
+    rowStart,
+    centreColumn,
+    centreRow,
+  };
+}
+
+/** One coverage on the plan's sample grid, `fillValue` wherever nothing arrived. */
+async function fetchSampledCoverage(
+  coverageId: string,
+  subject: string,
+  plan: ResamplePlan,
+  fillValue: number,
+  signal: AbortSignal,
+  source: DataSource,
+): Promise<Int16Array> {
+  const values = new Int16Array(plan.sampleWidth * plan.sampleHeight).fill(fillValue);
+  const size = SCALED_REQUEST_SAMPLES;
+  await mapWithLimit(
+    plan.pieces,
+    MAX_PARALLEL_REQUESTS,
+    async (piece) => {
+      const url = coverageUrl(coverageId, piece.box, source, { columns: size, rows: size });
+      const raster = decodeGeoTiff(await abortable(sharedCoverage(url, subject, source), signal));
+      const { originX, originY, scaleX, scaleY } = raster.transform;
+      // Refuse anything but the grid we asked for: a shifted or rescaled response would
+      // put every fuel code on the wrong ground without any visible sign of it.
+      if (
+        raster.width !== size ||
+        raster.height !== size ||
+        Math.abs(originX - piece.box.minX) > SCALED_TRANSFORM_TOLERANCE_METERS ||
+        Math.abs(originY - piece.box.maxY) > SCALED_TRANSFORM_TOLERANCE_METERS ||
+        Math.abs(scaleX - plan.sampleSpan) * size > SCALED_TRANSFORM_TOLERANCE_METERS ||
+        Math.abs(-scaleY - plan.sampleSpan) * size > SCALED_TRANSFORM_TOLERANCE_METERS
+      ) {
+        throw new Error(
+          `LANDFIRE returned ${subject} on a different grid than requested ` +
+            `(${raster.width}x${raster.height} at ${scaleX.toFixed(3)} m from ` +
+            `${originX.toFixed(1)}, ${originY.toFixed(1)}).`,
+        );
+      }
+      for (let r = 0; r < size; r++) {
+        const offset = (piece.row + r) * plan.sampleWidth + piece.column;
+        values.set(raster.values.subarray(r * size, (r + 1) * size), offset);
+      }
+    },
+    signal,
+  );
+  return values;
+}
+
+/**
+ * Most frequent fuel code among the samples inside each coarse cell. Ties go to the code
+ * of the sample nearest the cell centre when it is among the tied codes, otherwise to the
+ * tied code seen first in row-major order, so the result is deterministic. No-data samples
+ * vote like any other code: a cell mostly outside LANDFIRE coverage stays unmapped.
+ */
+function modeFuel(samples: Int16Array, plan: ResamplePlan): Int16Array {
+  const { width, height } = plan.lattice;
+  const out = new Int16Array(width * height);
+  const votes: number[] = [];
+  for (let row = 0; row < height; row++) {
+    for (let column = 0; column < width; column++) {
+      votes.length = 0;
+      for (let j = plan.rowStart[row]; j < plan.rowStart[row + 1]; j++) {
+        const base = j * plan.sampleWidth;
+        for (let i = plan.columnStart[column]; i < plan.columnStart[column + 1]; i++) {
+          votes.push(samples[base + i]);
+        }
+      }
+      const centre = samples[plan.centreRow[row] * plan.sampleWidth + plan.centreColumn[column]];
+      let best = centre;
+      let bestCount = 0;
+      for (let k = 0; k < votes.length; k++) {
+        let count = 0;
+        for (let m = 0; m < votes.length; m++) if (votes[m] === votes[k]) count++;
+        if (count > bestCount || (count === bestCount && votes[k] === centre && best !== centre)) {
+          best = votes[k];
+          bestCount = count;
+        }
+      }
+      out[row * width + column] = best;
+    }
+  }
+  return out;
+}
+
+/**
+ * Mean raw canopy value over the samples in each coarse cell that carry the cell's chosen
+ * fuel code. Averaging only over those samples keeps canopy consistent with the fuel bed
+ * it sits over: a cell that came out as grass does not inherit the cover of the timber
+ * samples it out-voted. NaN where no such sample has canopy data.
+ */
+function meanCanopyOverModeFuel(
+  raw: Int16Array,
+  sampleFuel: Int16Array,
+  cellFuel: Int16Array,
+  plan: ResamplePlan,
+): Float32Array {
+  const { width, height } = plan.lattice;
+  const out = new Float32Array(width * height);
+  for (let row = 0; row < height; row++) {
+    for (let column = 0; column < width; column++) {
+      const fuel = cellFuel[row * width + column];
+      let sum = 0;
+      let count = 0;
+      for (let j = plan.rowStart[row]; j < plan.rowStart[row + 1]; j++) {
+        const base = j * plan.sampleWidth;
+        for (let i = plan.columnStart[column]; i < plan.columnStart[column + 1]; i++) {
+          const value = raw[base + i];
+          if (sampleFuel[base + i] !== fuel || isCanopyNoData(value)) continue;
+          sum += value;
+          count++;
+        }
+      }
+      out[row * width + column] = count > 0 ? sum / count : Number.NaN;
+    }
+  }
+  return out;
+}
+
+async function sampleCanopyResampled(
+  sampleFuel: Int16Array,
+  cellFuel: Int16Array,
+  plan: ResamplePlan,
+  signal: AbortSignal,
+  source: DataSource,
+): Promise<CanopyGrids> {
+  const aligned = {} as Record<CanopyLayer, ArrayLike<number>>;
+  try {
+    // Sequential per layer; each layer's pieces already fill the shared request budget.
+    for (const layer of CANOPY_LAYERS) {
+      const raw = await fetchSampledCoverage(
+        LANDFIRE_CANOPY_COVERAGES[layer],
+        "canopy",
+        plan,
+        CANOPY_NO_DATA,
+        signal,
+        source,
+      );
+      aligned[layer] = meanCanopyOverModeFuel(raw, sampleFuel, cellFuel, plan);
+    }
+  } catch (cause) {
+    if (signal.aborted) throw cause;
+    console.warn("LANDFIRE canopy layers are unavailable; crown fire is not modelled.", cause);
+    return emptyCanopy(cellFuel.length);
+  }
+  return finishCanopy(aligned, cellFuel);
+}
+
+function attribution(): LandscapeGrid["attribution"] {
+  return {
+    fuel: LANDFIRE_ATTRIBUTION,
+    terrain: TERRAIN_ATTRIBUTION,
+    canopy: LANDFIRE_CANOPY_ATTRIBUTION,
+  };
+}
+
+/**
+ * Load the fuel, canopy and terrain grid for a square of ground around a point.
+ * `groundRadiusMeters` is the half-width of the square in ground metres. Coordinates are
+ * WGS84 longitude then latitude.
+ */
+export async function loadLandscape(
+  longitude: number,
+  latitude: number,
+  groundRadiusMeters: number,
+  signal: AbortSignal,
+  options: LandscapeLoadOptions = {},
+): Promise<LandscapeGrid> {
+  if (!(groundRadiusMeters > 0)) throw new Error("The landscape radius must be positive.");
+  const requested = options.cellMeters;
+  if (requested !== undefined && !(Number.isFinite(requested) && requested > 0)) {
+    throw new Error(`Invalid landscape cell size ${requested} m.`);
+  }
+  const source = resolveSource(options.endpoints);
+  if (requested === undefined || requested <= FUEL_CELL_METERS) {
+    return loadNativeLandscape(
+      boxAround(longitude, latitude, groundRadiusMeters),
+      latitude,
+      signal,
+      source,
+    );
+  }
+
+  const plan = planResample(longitude, latitude, groundRadiusMeters, requested);
+  const { lattice } = plan;
+  // Terrain is a different host, so it runs alongside the LANDFIRE requests.
+  const terrain = sampleElevation(
+    lattice,
+    terrainZoomFor(lattice.cellX),
+    true,
+    signal,
+    source,
+  );
+  // Keep a rejection from surfacing as unhandled while the fuel request is still running.
+  terrain.catch(() => undefined);
+  const sampleFuel = await fetchSampledCoverage(
+    LANDFIRE_COVERAGE,
+    "fuel",
+    plan,
+    FUEL_NO_DATA,
+    signal,
+    source,
+  );
+  const fuelCodes = modeFuel(sampleFuel, plan);
+  const [{ elevation: elevationMeters, complete: tilesComplete }, canopy] = await Promise.all([
+    terrain,
+    sampleCanopyResampled(sampleFuel, fuelCodes, plan, signal, source),
   ]);
+  const elevationComplete =
+    repairedElevationComplete(elevationMeters, fuelCodes, lattice.width, lattice.height) &&
+    tilesComplete;
+  const groundCellSizeMeters = lattice.cellX * Math.cos(latitude * RADIANS_PER_DEGREE);
+  const { slopeTangent, upslopeDegrees } = slopeAndAspect(
+    elevationMeters,
+    lattice.width,
+    lattice.height,
+    groundCellSizeMeters,
+  );
+  return {
+    width: lattice.width,
+    height: lattice.height,
+    originX: lattice.westX + lattice.cellX / 2,
+    originY: lattice.northY + lattice.cellY / 2,
+    cellSizeX: lattice.cellX,
+    cellSizeY: lattice.cellY,
+    groundCellSizeMeters,
+    elevationComplete,
+    fuelCodes,
+    elevationMeters,
+    slopeTangent,
+    upslopeDegrees,
+    canopyBaseHeightMeters: canopy.canopyBaseHeightMeters,
+    canopyBulkDensityKgPerM3: canopy.canopyBulkDensityKgPerM3,
+    canopyCoverFraction: canopy.canopyCoverFraction,
+    canopyHeightMeters: canopy.canopyHeightMeters,
+    canopyComplete: canopy.canopyComplete,
+    cellMeters: requested,
+    resampling: "mode",
+    attribution: attribution(),
+  };
+}
+
+/**
+ * LANDFIRE's native 30 m lattice over `box` (Mercator metres). `latitude` sets the
+ * cos(latitude) ground correction: the requested point for `loadLandscape`, the box centre
+ * for `loadLandscapeForBox`.
+ */
+async function loadNativeLandscape(
+  box: MercatorBox,
+  latitude: number,
+  signal: AbortSignal,
+  source: DataSource,
+): Promise<LandscapeGrid> {
+  const raster = await fetchFuelRaster(box, signal, source);
+  // Different hosts, so the terrain tiles and the canopy coverages overlap in time.
+  const [{ elevation: elevationMeters, complete: tilesComplete }, canopy] = await Promise.all([
+    sampleElevation(latticeOfRaster(raster), TERRAIN_ZOOM, false, signal, source),
+    sampleCanopy(raster, box, signal, source),
+  ]);
+  const elevationComplete =
+    repairedElevationComplete(elevationMeters, raster.values, raster.width, raster.height) &&
+    tilesComplete;
   const mercatorCell = Math.abs(raster.transform.scaleX);
   const groundCellSizeMeters = mercatorCell * Math.cos(latitude * RADIANS_PER_DEGREE);
   const { slopeTangent, upslopeDegrees } = slopeAndAspect(
@@ -854,20 +1721,27 @@ export async function loadLandscapeForBox(
     canopyCoverFraction: canopy.canopyCoverFraction,
     canopyHeightMeters: canopy.canopyHeightMeters,
     canopyComplete: canopy.canopyComplete,
-    attribution: {
-      fuel: LANDFIRE_ATTRIBUTION,
-      terrain: TERRAIN_ATTRIBUTION,
-      canopy: LANDFIRE_CANOPY_ATTRIBUTION,
-    },
+    cellMeters: FUEL_CELL_METERS,
+    resampling: "native",
+    attribution: attribution(),
   };
 }
 
-/** Loads a landscape in a square box of `groundRadiusMeters` around a point (used by /fire). */
-export async function loadLandscape(
-  longitude: number,
-  latitude: number,
-  groundRadiusMeters: number,
+/**
+ * Loads fuel, canopy and terrain for an arbitrary box on LANDFIRE's native 30 m lattice
+ * (used by Simulation Studio). The box is in Mercator metres (EPSG:3857, the grid's own
+ * coordinates); the returned grid has Mercator cell addressing and `groundCellSizeMeters`
+ * corrected with cos(latitude) at the box centre. Only `endpoints` applies: a coarse
+ * lattice is planned from a centre and radius, so use `loadLandscape` with `cellMeters`.
+ */
+export async function loadLandscapeForBox(
+  box: MercatorBox,
   signal: AbortSignal,
+  options: Pick<LandscapeLoadOptions, "endpoints"> = {},
 ): Promise<LandscapeGrid> {
-  return loadLandscapeForBox(boxAround(longitude, latitude, groundRadiusMeters), signal);
+  if (!(box.maxX > box.minX && box.maxY > box.minY)) {
+    throw new Error("The landscape box must have a positive extent.");
+  }
+  const [, latitude] = mercatorToLonLat((box.minX + box.maxX) / 2, (box.minY + box.maxY) / 2);
+  return loadNativeLandscape(box, latitude, signal, resolveSource(options.endpoints));
 }

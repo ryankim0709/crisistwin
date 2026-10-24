@@ -3,19 +3,22 @@ import { Map, Marker, NavigationControl, type MapOptions } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { GeoPoint } from "../spread";
 
-export const DEFAULT_AREA: AreaPreset = {
-  id: "berkeley",
-  label: "Berkeley Hills, CA",
-  point: { latitude: 37.88, longitude: -122.24 },
-};
-
 export type AreaPreset = { id: string; label: string; point: GeoPoint };
 
-/** LANDFIRE FBFM40 is a CONUS product, so non-CONUS places (Lahaina, HI) are not offered. */
+export const DEFAULT_AREA: AreaPreset = {
+  id: "malibu",
+  label: "Malibu / Woolsey, CA",
+  point: { latitude: 34.08, longitude: -118.79 },
+};
+
+/** California starting points (Bay Area to San Diego) for a custom area; any CONUS click also works. */
 export const AREA_PRESETS: readonly AreaPreset[] = [
   DEFAULT_AREA,
-  { id: "paradise", label: "Paradise, CA", point: { latitude: 39.76, longitude: -121.62 } },
-  { id: "malibu", label: "Malibu / Woolsey, CA", point: { latitude: 34.08, longitude: -118.79 } },
+  { id: "altadena", label: "Altadena / Eaton, CA", point: { latitude: 34.19, longitude: -118.13 } },
+  { id: "arrowhead", label: "Lake Arrowhead, CA", point: { latitude: 34.25, longitude: -117.19 } },
+  { id: "santa-rosa", label: "Santa Rosa / Tubbs, CA", point: { latitude: 38.48, longitude: -122.72 } },
+  { id: "santa-cruz", label: "Santa Cruz Mountains, CA", point: { latitude: 37.1, longitude: -122.15 } },
+  { id: "ramona", label: "Ramona, CA", point: { latitude: 33.04, longitude: -116.87 } },
 ];
 
 /** Rough CONUS box; a click outside it cannot load LANDFIRE fuels. */

@@ -1,7 +1,7 @@
 /**
  * Dispatch agent (/dispatch): the Simulation Studio's fire scenario and run, plus an AI
  * dispatcher that orders evacuations, redirects traffic and sends fire engines while the run
- * plays. See docs/adr/0012-dispatch-agent.md. The scenario starts as the studio demo and is
+ * plays. See docs/adr/0014-dispatch-agent.md. The scenario starts as the studio demo and is
  * not autosaved (the studio's device draft stays the studio's).
  */
 

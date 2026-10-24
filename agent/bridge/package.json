@@ -1,0 +1,16 @@
+{
+  "name": "crisistwin-fire-bridge",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "One-shot stdio sidecar that runs the app's TypeScript Rothermel fire model for the Python fire-watch agent.",
+  "engines": {
+    "node": ">=22.15.0"
+  },
+  "scripts": {
+    "bridge": "node fire-bridge.mjs"
+  },
+  "dependencies": {
+    "typescript": "~5.8.3"
+  }
+}

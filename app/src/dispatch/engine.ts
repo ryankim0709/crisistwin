@@ -2,7 +2,7 @@
  * Dispatch simulation: evacuation traffic and fire engines over the area road graph, stepped
  * one simulation minute at a time against a precomputed fire run. Deterministic, no
  * randomness, no network. The agent only issues orders (`applyOrders`); every route, travel
- * time, flow and count comes from here. See docs/adr/0012-dispatch-agent.md.
+ * time, flow and count comes from here. See docs/adr/0014-dispatch-agent.md.
  *
  * Model, deliberately simple and visible in the UI:
  * - Residents leave only on an evacuation order. After the order, households become ready to

@@ -20,6 +20,31 @@ const STREET_EVERY = 4;
 const NEIGHBOURHOOD = 56;
 const NEIGHBOURHOOD_ANGLES = [0, 0, 0.14, -0.2, 0.35, -0.42, 0.62, 0.08] as const;
 
+/**
+ * Regional-scale tuning (see `BoardFrame.blockMix`): at tens of km per board a house or tree
+ * is a sub-pixel speck, so trees become larger soft clumps (value-noise masses of
+ * `CLUMP_UNITS` world units) and houses fewer, larger and jittered off their lattice rows.
+ */
+const CLUMP_UNITS = 16;
+const REGIONAL = { treeScale: 1.5, treeCapCut: 0.4, bushScale: 1.2, bushCapCut: 0.6, houseSize: 1.0, houseJitter: 0.5, houseDrop: 0.2, treeSpread: 2.0 } as const;
+
+/** Smooth value noise (0..1) on a lattice of `size` world units. */
+function valueNoise(x: number, z: number, size: number) {
+  const fx = x / size;
+  const fz = z / size;
+  const ix = Math.floor(fx);
+  const iz = Math.floor(fz);
+  const u = fx - ix;
+  const v = fz - iz;
+  const su = u * u * (3 - 2 * u);
+  const sv = v * v * (3 - 2 * v);
+  const a = hash2(ix * 1.13, iz * 0.87);
+  const b = hash2((ix + 1) * 1.13, iz * 0.87);
+  const c = hash2(ix * 1.13, (iz + 1) * 0.87);
+  const d = hash2((ix + 1) * 1.13, (iz + 1) * 0.87);
+  return a + (b - a) * su + (c - a) * sv + (a - b - c + d) * su * sv;
+}
+
 const State = { Unburned: 0, Burning: 1, Burned: 2 } as const;
 
 const HOT = new THREE.Color(PALETTE.amber);
@@ -37,14 +62,13 @@ type Part = {
 
 /**
  * Instances standing on grid cells whose look follows the fire arrival field: burning →
- * flickering amber-coral glow, burned → charred and shrunk by `burnScale`.
+ * flickering amber-coral glow, burned → charred and shrunk by the `burnScale` constructor argument.
  */
 class FireInstances {
   readonly count: number;
   private readonly cells: Int32Array;
   private readonly matrices: Float32Array;
   private readonly parts: Part[];
-  private readonly burnScale: THREE.Vector3;
   private arrival: Float32Array;
   private readonly state: Uint8Array;
   private burning: number[] = [];
@@ -59,7 +83,6 @@ class FireInstances {
     this.cells = cells;
     this.matrices = matrices;
     this.parts = parts;
-    this.burnScale = burnScale;
     this.arrival = new Float32Array(this.count).fill(Infinity);
     this.state = new Uint8Array(this.count);
     this.s.makeScale(burnScale.x, burnScale.y, burnScale.z);
@@ -200,6 +223,8 @@ export class CoverLayer {
   readonly group = new THREE.Group();
   private readonly sets: FireInstances[] = [];
   readonly counts = { trees: 0, bushes: 0, houses: 0 };
+  /** Whether instances cast shadows (off on regional boards where they are sub-pixel). */
+  private shadows = true;
 
   constructor(frame: BoardFrame) {
     const grid = frame.grid;
@@ -209,6 +234,10 @@ export class CoverLayer {
     const heightM = grid.canopyHeightMeters;
     const useCanopy = grid.canopyComplete;
     const n = cols * rows;
+    const blend = frame.blockMix;
+    this.shadows = blend < 0.6;
+    const treeCap = Math.round(COVER_CAPS.trees * (1 - REGIONAL.treeCapCut * blend));
+    const bushCap = Math.round(COVER_CAPS.bushes * (1 - REGIONAL.bushCapCut * blend));
 
     // --- Trees and bushes: one candidate slot each per cell, thinned to the caps.
     const treeP = new Float32Array(n);
@@ -219,15 +248,23 @@ export class CoverLayer {
       const fam = families[i] as FuelFamily;
       if (fam === FuelFamily.Water || fam === FuelFamily.None) continue;
       const cc = useCanopy ? cover[i] || 0 : FALLBACK_CANOPY[fam];
-      const t = Math.min(1, cc) * (fam === FuelFamily.Urban ? 0.4 : 1);
+      let t = Math.min(1, cc) * (fam === FuelFamily.Urban ? 0.4 : 1);
+      if (blend > 0 && t > 0) {
+        // Forest masses: modulate density by smooth noise so trees gather into soft clumps.
+        const c = i % cols;
+        const x = (c + 0.5 - cols / 2) * cellWorld;
+        const z = ((i - c) / cols + 0.5 - rows / 2) * cellWorld;
+        const clump = 0.1 + 1.9 * THREE.MathUtils.smoothstep(valueNoise(x, z, CLUMP_UNITS), 0.3, 0.7);
+        t = Math.min(1, t * THREE.MathUtils.lerp(1, clump, blend));
+      }
       treeP[i] = t;
       treeSum += t;
       const b = BUSH_DENSITY[fam] * (1 - Math.min(1, cc) * 0.5);
       bushP[i] = b;
       bushSum += b;
     }
-    const treeThin = Math.min(1, COVER_CAPS.trees / Math.max(1, treeSum));
-    const bushThin = Math.min(1, COVER_CAPS.bushes / Math.max(1, bushSum));
+    const treeThin = Math.min(1, treeCap / Math.max(1, treeSum));
+    const bushThin = Math.min(1, bushCap / Math.max(1, bushSum));
     const pines = newPlacement();
     const rounds = newPlacement();
     const bushes = newPlacement();
@@ -235,29 +272,35 @@ export class CoverLayer {
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
         const i = r * cols + c;
-        if (treeP[i] > 0 && pines.cells.length + rounds.cells.length < COVER_CAPS.trees && hash2(c * 0.913, r * 1.171) < treeP[i] * treeThin) {
+        tree: if (treeP[i] > 0 && pines.cells.length + rounds.cells.length < treeCap && hash2(c * 0.913, r * 1.171) < treeP[i] * treeThin) {
           const fam = families[i] as FuelFamily;
           frame.cellCentre(c, r, centre);
-          const x = centre.x + (hash2(c, r * 1.3) - 0.5) * cellWorld * 0.8;
-          const z = centre.z + (hash2(r * 0.7, c * 1.9) - 0.5) * cellWorld * 0.8;
+          const spread = cellWorld * 0.8 + blend * REGIONAL.treeSpread;
+          const x = centre.x + (hash2(c, r * 1.3) - 0.5) * spread;
+          const z = centre.z + (hash2(r * 0.7, c * 1.9) - 0.5) * spread;
+          if (blend > 0 && !frame.inside(x, z)) break tree;
+          if (blend > 0) {
+            const at = frame.cellAt(x, z);
+            if (at < 0 || families[at] === FuelFamily.Water) break tree;
+          }
           // Stands: conifer share varies smoothly by block so pines cluster.
-          const stand = hash2(Math.floor(c / 11) * 3.1, Math.floor(r / 11) * 1.7);
+          const stand = blend < 0.01 ? hash2(Math.floor(c / 11) * 3.1, Math.floor(r / 11) * 1.7) : hash2(Math.floor(x / 24) * 3.1, Math.floor(z / 24) * 1.7);
           const tall = useCanopy ? THREE.MathUtils.clamp((heightM[i] || 0) / 30, 0, 1.2) : 0.5;
           const pine = hash2(c * 2.3, r * 0.37) < PINE_SHARE[fam] * (0.5 + stand) + (tall > 0.8 ? 0.15 : 0);
           const jitter = hash2(x, z);
-          const s = TREE_SCALE * (0.7 + 0.5 * Math.min(1, tall)) * (0.85 + 0.3 * jitter);
+          const s = TREE_SCALE * (1 + (REGIONAL.treeScale - 1) * blend) * (0.7 + 0.5 * Math.min(1, tall)) * (0.85 + 0.3 * jitter);
           const p = pine ? pines : rounds;
           pushInstance(p, i, x, frame.heightAt(x, z) - 0.1, z, jitter * Math.PI * 2, s, s, s);
           const greens = pine ? PALETTE.pineGreens : PALETTE.roundGreens;
           pushColor(p.colorsA, greens[Math.floor(jitter * greens.length) % greens.length], 0.92 + hash2(z, x) * 0.16);
           pushColor(p.colorsB, PALETTE.trunk, 1);
         }
-        if (bushP[i] > 0 && bushes.cells.length < COVER_CAPS.bushes && hash2(c * 1.37 + 5.1, r * 0.79) < bushP[i] * bushThin) {
+        if (bushP[i] > 0 && bushes.cells.length < bushCap && hash2(c * 1.37 + 5.1, r * 0.79) < bushP[i] * bushThin) {
           frame.cellCentre(c, r, centre);
           const x = centre.x + (hash2(c * 1.1, r * 2.9) - 0.5) * cellWorld * 0.9;
           const z = centre.z + (hash2(r * 3.3, c * 0.6) - 0.5) * cellWorld * 0.9;
           const j = hash2(x * 1.3, z * 0.7);
-          const s = BUSH_RADIUS * (0.7 + 0.6 * j);
+          const s = BUSH_RADIUS * (1 + (REGIONAL.bushScale - 1) * blend) * (0.7 + 0.6 * j);
           pushInstance(bushes, i, x, frame.heightAt(x, z) - 0.08, z, j * 6.28, s, s * 0.7, s);
           pushColor(bushes.colorsA, j < 0.5 ? 0x7d8552 : 0x8b8d58, 0.9 + hash2(z, x * 2) * 0.18);
         }
@@ -317,9 +360,11 @@ export class CoverLayer {
     const area = urban * cellWorld * cellWorld;
     const perHouse = HOUSE.spacingX * HOUSE.spacingZ * (STREET_EVERY / (STREET_EVERY - 1));
     const grow = Math.max(1, Math.sqrt(area / perHouse / (COVER_CAPS.houses * 0.92)));
-    const sx = HOUSE.spacingX * grow;
-    const sz = HOUSE.spacingZ * grow;
-    const size = Math.min(grow, 1.7);
+    const sx = HOUSE.spacingX * Math.max(grow, 1 + REGIONAL.houseSize * frame.blockMix);
+    const sz = HOUSE.spacingZ * Math.max(grow, 1 + REGIONAL.houseSize * frame.blockMix);
+    const blend = frame.blockMix;
+    // Regional boards: houses stay a few pixels wide, so size has a floor; spacing follows size.
+    const size = Math.max(Math.min(grow, 1.7), 1 + REGIONAL.houseSize * blend);
     const p = newPlacement();
     /** Roof eave height and rise per placed house, parallel to `p`. */
     const roofTops: number[] = [];
@@ -352,15 +397,17 @@ export class CoverLayer {
           for (let u = -reach; u <= reach; u++) {
             const lx = u * sx + (v % 2 ? sx * 0.12 : 0);
             const lz = v * sz;
-            const x = cx + lx * ca + lz * sa;
-            const z = cz - lx * sa + lz * ca;
+            const jx = blend > 0 ? (hash2(u * 1.7 + bx * 13.1, v * 2.3 + bz * 7.7) - 0.5) * sx * REGIONAL.houseJitter * blend : 0;
+            const jz = blend > 0 ? (hash2(u * 2.9 + bz * 5.3, v * 1.1 + bx * 3.9) - 0.5) * sz * REGIONAL.houseJitter * blend : 0;
+            const x = cx + (lx + jx) * ca + (lz + jz) * sa;
+            const z = cz - (lx + jx) * sa + (lz + jz) * ca;
             if (x < x0 || x >= x0 + NEIGHBOURHOOD || z < z0 || z >= z0 + NEIGHBOURHOOD) continue;
             if (Math.abs(x) > halfW - 0.8 || Math.abs(z) > halfD - 0.8) continue;
             const cell = frame.cellAt(x, z);
             if (cell < 0 || families[cell] !== FuelFamily.Urban) continue;
             if (p.cells.length >= COVER_CAPS.houses) break;
             const j = hash2(x * 0.53, z * 0.91);
-            if (j < 0.06) continue; // the odd empty lot
+            if (j < 0.06 + REGIONAL.houseDrop * blend) continue; // the odd empty lot
             const w = HOUSE.w * size * (0.85 + 0.3 * hash2(z, x));
             const d = HOUSE.d * size * (0.85 + 0.25 * j);
             const ht = HOUSE.h * size * (0.9 + 0.35 * hash2(x * 2.1, z));
@@ -406,7 +453,7 @@ export class CoverLayer {
 
   private instanced(geo: THREE.BufferGeometry, mat: THREE.Material, count: number, name: string) {
     const mesh = new THREE.InstancedMesh(geo, mat, count);
-    mesh.castShadow = true;
+    mesh.castShadow = this.shadows;
     mesh.receiveShadow = true;
     mesh.name = name;
     this.group.add(mesh);

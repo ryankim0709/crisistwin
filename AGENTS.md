@@ -17,7 +17,8 @@
 ## Two people, coordinated agents
 
 - Start by inspecting the branch, working tree, and relevant code. Preserve unrelated and uncommitted changes; never reset, stash, delete, or overwrite a teammate's work to make your task easier.
-- For concurrent tasks, use a separate branch and checkout/worktree per task. Agree file ownership and integration points before overlapping edits; do not have agents switch branches in a shared checkout.
+- Concurrent tasks may share a checkout or take a worktree each, whichever suits the work; sharing one is fine and needs no separate branch per task. What matters is that overlapping edits are agreed in advance: settle file ownership and integration points before starting, not after a conflict.
+- A shared checkout means everyone sees everyone's uncommitted work. Expect `git diff` and `git status` to mix several tasks: re-read the working tree before you judge what changed, stage only your own files, and do not revert or "clean up" an edit you cannot account for — ask whose it is. Do not switch branches in a checkout another agent is working in, and leave a dev server pointed at it running.
 - Match the subagent model to the task, since every delegated task costs tokens. Use
   `haiku` for mechanical, fully specified work; `sonnet` for implementation, research and
   documentation; `opus` only for orchestration and for work where a wrong answer is silent,
