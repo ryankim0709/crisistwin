@@ -1,0 +1,45 @@
+.map-page {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+}
+
+.map-page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 24px;
+  border-bottom: 1px solid #d4d8ca;
+  font-size: 14px;
+}
+
+.geographic-map-container {
+  position: relative;
+  flex: 1;
+  min-height: 320px;
+  height: 100%;
+  isolation: isolate;
+}
+
+.geographic-map {
+  width: 100%;
+  height: 100%;
+  background: #e7eadf;
+  font-family: inherit;
+}
+
+.map-error {
+  position: absolute;
+  z-index: 800;
+  top: 12px;
+  left: 60px;
+  right: 12px;
+  width: fit-content;
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 6px;
+  background: #fcfcf8;
+  color: #142b27;
+  font-size: 12px;
+  box-shadow: 0 2px 8px #142b2720;
+}

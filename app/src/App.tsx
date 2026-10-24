@@ -57,7 +57,7 @@ export default function App() {
         </h1>
         <p className="description">
           Explore how wildfire, road closures, and evacuation decisions interact. The workspace is
-          ready for development; scenarios and simulations are coming next.
+          ready to explore; scenarios and simulations are coming next.
         </p>
       </section>
 
@@ -65,7 +65,10 @@ export default function App() {
         <div>
           <p className="eyebrow">Your workspace</p>
           <h2 id="workspace-title">No scenarios yet</h2>
-          <p>Scenario creation, maps, and strategy comparisons have not been implemented.</p>
+          <p>Open the geographic map to explore a location.</p>
+          <p>
+            <a href="/maps">Open map →</a>
+          </p>
         </div>
         <div className="connection" aria-live="polite" aria-atomic="true">
           <span className="connection-label">System connection</span>
