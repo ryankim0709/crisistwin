@@ -6,13 +6,13 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from livecore.drill import DEFAULT_REPLAY_START, MAX_DRILL_SPEED
+from livecore.drill import MAX_DRILL_SPEED, default_replay_start
 from livecore.geo import haversine_m
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 from rest_framework.response import Response
 
-from . import aar, controller, twin_service
+from . import aar, controller, incidents, twin_service
 from . import impact as impact_mod
 from .auth import Principal, client_ip, issue_token, live_view, rate_limited, secret_matches
 from .common import (
@@ -162,7 +162,7 @@ def _validate_report(body: dict[str, Any], incident_id: str) -> dict[str, Any]:
     destination_id = optional_str(body, "destination_id", code, 200)
     if kind == "shelter_full" and destination_id is None:
         raise ApiError(400, code, "`shelter_full` needs `destination_id`.")
-    destinations = get_index().destinations
+    destinations = get_index(incident_id).destinations
     if destination_id is not None and destination_id not in destinations:
         raise ApiError(400, code, "Unknown `destination_id`.")
     if kind == "shelter_full" and destinations[destination_id].kind not in SHELTER_FULL_DESTINATION_KINDS:
@@ -187,7 +187,7 @@ def _validate_report(body: dict[str, Any], incident_id: str) -> dict[str, Any]:
 def _refresh_corroboration(incident_id: str) -> None:
     """Mark unverified reports in a public, not controller-confirmed item as corroborated."""
     now = wall_now()
-    _, _, items, _ = load_public(incident_id, now, get_index())
+    _, _, items, _ = load_public(incident_id, now, get_index(incident_id))
     reports = col("live_reports")
     for item in items:
         if item.controller_confirmed:
@@ -234,7 +234,7 @@ def _submit_report(request, incident_id: str, principal: Principal) -> Response:
         or rate_limited(f"rpt-ip:{client_ip(request)}", REPORTS_PER_IP_PER_MIN, 60)
     ):
         return error(429, "rate_limited", "Too many reports. Try again in a minute.")
-    index = get_index()
+    index = get_index(incident_id)
     refused = injects_mod.refuse_if_no_signal(incident_id, principal, wall_now(), coord=fields["location"]["coord"])
     if refused is not None:
         return refused
@@ -359,13 +359,13 @@ def triage(request, report_id: str, principal: Principal):
 
 @live_view(["GET"], roles=["responder", "controller"])
 def road_state(request, incident_id: str, principal: Principal):
-    _, _, _, state = load_public(incident_id, wall_now(), get_index())
+    _, _, _, state = load_public(incident_id, wall_now(), get_index(incident_id))
     return ok({"items": [road_status_json(s) for s in state]})
 
 
 @live_view(["GET"])
 def public_map(request, incident_id: str, principal: Principal):
-    _, _, items, _ = load_public(incident_id, wall_now(), get_index())
+    _, _, items, _ = load_public(incident_id, wall_now(), get_index(incident_id))
     return ok({"items": [public_item_json(i, principal.role == "controller") for i in items]})
 
 
@@ -376,7 +376,7 @@ def prompts(request, incident_id: str, principal: Principal):
         near = parse_coord([float(v) for v in near_raw.split(",")], "near", "invalid_request")
     except ValueError:
         return error(400, "invalid_request", "`near` must be lon,lat.")
-    _, _, items, _ = load_public(incident_id, wall_now(), get_index())
+    _, _, items, _ = load_public(incident_id, wall_now(), get_index(incident_id))
     nearby = [i for i in items if i.kind in PROMPT_KINDS and haversine_m(near, i.coord) <= PROMPT_RADIUS_M]
     nearby.sort(key=lambda i: haversine_m(near, i.coord))
     return ok({"items": [public_item_json(i) for i in nearby]})
@@ -397,7 +397,7 @@ def create_task(request, incident_id: str, principal: Principal):
         return error(400, code, "`target` must be an object with `segment_id` and/or `coord`.")
     segment_id = target.get("segment_id")
     coord = parse_coord(target["coord"], "target.coord", code) if target.get("coord") is not None else None
-    index = get_index()
+    index = get_index(incident_id)
     if segment_id is not None:
         if not isinstance(segment_id, str) or segment_id not in index.segment_lines:
             return error(400, code, "Unknown `target.segment_id`.")
@@ -437,7 +437,8 @@ def my_tasks(request, principal: Principal):
 
 
 def controller_incident() -> str:
-    return get_index().drill.incident_id
+    """The active incident (routes without an incident in the path)."""
+    return incidents.active_incident_id()
 
 
 @live_view(["POST"], roles=["responder", "controller"])
@@ -584,7 +585,7 @@ def checkins(request, incident_id: str, principal: Principal):
     if status not in CHECKIN_STATUSES:
         return error(400, code, "`status` must be out, need_help or staying.")
     zone_id = optional_str(body, "zone_id", code, 200)
-    if zone_id is not None and zone_id not in get_index().zones:
+    if zone_id is not None and zone_id not in get_index(incident_id).zones:
         return error(400, code, "Unknown `zone_id`.")
     coord = None
     if body.get("coord") is not None:
@@ -720,10 +721,10 @@ def my_destination(request, principal: Principal):
     destination_id = optional_str(body, "destination_id", code, 200)
     if zone_id is None or destination_id is None:
         return error(400, code, "`zone_id` and `destination_id` are required.")
-    index = get_index()
+    incident_id = principal.incident_id or controller_incident()
+    index = get_index(incident_id)
     if zone_id not in index.zones:
         return error(400, code, "Unknown `zone_id`.")
-    incident_id = principal.incident_id or controller_incident()
     current = next((d for d in current_guidance(incident_id) if d["zone_id"] == zone_id), None)
     if current is None or destination_id not in offered_destination_ids(current):
         return error(400, code, "That destination is not currently offered for this zone.")
@@ -789,7 +790,7 @@ def _checkin_summary(incident_id: str) -> dict[str, Any]:
 
 @live_view(["GET"], roles=["controller"])
 def command(request, incident_id: str, principal: Principal):
-    twin_service.warm()
+    twin_service.warm(incident_id)
     snapshot = load_snapshot(incident_id, wall_now())
     controller.maybe_auto_replan(snapshot)
     index, now = snapshot.index, snapshot.now
@@ -906,13 +907,13 @@ def _parse_speed(value: Any) -> float:
 
 def set_drill(incident_id: str, action: str, replay_start_raw: Any = None, speed_raw: Any = None) -> dict[str, Any]:
     """Apply a drill action (also used by the ``live_drill`` command); returns the DrillState JSON."""
-    index = get_index()
+    index = get_index(incident_id)
     drill = index.drill
     now = wall_now()
     drills = col("live_drills")
     doc = drill_doc(incident_id)
     if action == "start":
-        replay_start = DEFAULT_REPLAY_START
+        replay_start = default_replay_start(drill)
         if replay_start_raw is not None:
             replay_start = parse_iso(replay_start_raw, "replay_start", "invalid_drill")
             if not drill.clock_start <= replay_start < drill.clock_end:
@@ -928,7 +929,7 @@ def set_drill(incident_id: str, action: str, replay_start_raw: Any = None, speed
         clock = clock_from(doc, index, now)
         update = {"replay_start": clock.replay_now, "started_at": now, "speed": speed}
     elif action == "reset":
-        update = {"replay_start": DEFAULT_REPLAY_START, "started_at": None, "speed": 1.0}
+        update = {"replay_start": default_replay_start(drill), "started_at": None, "speed": 1.0}
         for name in ("live_guidance", "live_proposals", "live_checkins", "live_destination_choices", "live_plan_routes"):
             col(name).delete_many({"incident_id": incident_id})
         invalidate_guidance(incident_id)
@@ -1007,5 +1008,5 @@ def twin_whatif(request, incident_id: str, principal: Principal):
 @live_view(["GET"], roles=["controller"])
 def incident_aar(request, incident_id: str, principal: Principal):
     """After-action report and drill score (docs/live-reports.md "After-action report")."""
-    twin_service.warm()
+    twin_service.warm(incident_id)
     return ok(aar.build_aar(load_snapshot(incident_id, wall_now())))

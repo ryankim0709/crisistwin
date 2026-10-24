@@ -8,6 +8,17 @@ import VisionKit
 enum ServerSettings {
     private static let originKey = "server.override.origin"
     private static let incidentKey = "server.override.incidentId"
+    /// The incident the server's active endpoint last named, used when there is no override.
+    private static let followedKey = "server.followed.incidentId"
+
+    /// The incident this phone last followed from `GET /api/live/active`; nil before the first switch.
+    static var followedIncidentId: String? { UserDefaults.standard.string(forKey: followedKey) }
+
+    /// Remembers the incident the server made active. With a joined server the override's own
+    /// incident id is updated instead, so the override semantics stay as they were.
+    static func setFollowedIncident(_ id: String) {
+        UserDefaults.standard.set(id, forKey: overrideURL == nil ? followedKey : incidentKey)
+    }
 
     /// The validated override origin, or nil when the build default is in use.
     static var overrideURL: URL? {
@@ -28,6 +39,7 @@ enum ServerSettings {
     static func clearOverride() {
         UserDefaults.standard.removeObject(forKey: originKey)
         UserDefaults.standard.removeObject(forKey: incidentKey)
+        UserDefaults.standard.removeObject(forKey: followedKey)
     }
 
     /// `host[:port]` of the server in use, for display.

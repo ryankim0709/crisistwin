@@ -183,6 +183,8 @@ class FakeBackend:
 
     def route(self, method: str, path: str, query: dict[str, str], data: Any) -> tuple[int, Any]:
         inc = f"incidents/{INCIDENT}/"
+        if method == "GET" and path == "active":
+            return 200, {"incident_id": INCIDENT, "name": "Camp Fire 2018 exercise", "mode": "drill"}
         if method == "GET" and path == inc + "command":
             return 200, self.command
         if method == "GET" and path == inc + "twin":

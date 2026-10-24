@@ -9,7 +9,7 @@ from typing import Any
 
 from pymongo import ASCENDING, DESCENDING, IndexModel
 from pymongo.database import Database
-from pymongo.errors import CollectionInvalid
+from pymongo.errors import CollectionInvalid, OperationFailure
 
 DATE = {"bsonType": "date"}
 STR = {"bsonType": "string"}
@@ -281,7 +281,9 @@ def apply(db: Database, drop_drill_data: bool = False) -> list[str]:
             try:
                 db.create_collection(name, validator=validator, validationLevel="strict", validationAction="error")
                 lines.append(f"created {name}")
-            except CollectionInvalid:
+            except (CollectionInvalid, OperationFailure) as exc:
+                if isinstance(exc, OperationFailure) and exc.code != 48:  # 48: NamespaceExists
+                    raise
                 # A background thread (auto-replan, twin warm-up) wrote to it since the listing,
                 # which creates it implicitly; apply the validator instead.
                 db.command("collMod", name, validator=validator, validationLevel="strict", validationAction="error")

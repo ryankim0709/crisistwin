@@ -156,10 +156,49 @@ Everything below is additive. Pure computations live in `app/backend/livecore/`
 documents and serves the endpoints. The web types are `app/src/live/types.ts`; the
 iOS types are `mobile/CrisisTwin/Features/Live/LiveModels.swift`.
 
-The P0 incident is `camp-2018-drill`. Its drill data (roads, zones, destinations,
+The default incident is `camp-2018-drill`. Its drill data (roads, zones, destinations,
 fire perimeters, fitted model fronts, fire observations) is the Camp replay bundle
 (`app/public/replays/camp-2018.json`, format in [replay-bundle.md](replay-bundle.md)),
 read once per process from the path in `LIVE_DRILL_BUNDLE`.
+
+## Active incident (ADR 0047)
+
+The hosted instance runs **one active wildfire** at a time
+([0047-active-incident](adr/0047-active-incident.md)). Every endpoint below is keyed by
+the `incident_id` in its path; routes without one (`me/...`) use the active incident. The
+API serves `camp-2018-drill` (always) and the active incident; any other id is
+`404 not_found`, so a phone that gets 404 re-reads the active incident.
+
+`GET /api/live/active` (no auth, `Cache-Control: no-store`):
+
+```jsonc
+{ "incident_id": "studio-1a2b3c4d5e6f",       // or "camp-2018-drill" (the default)
+  "name": "Ridge fire (Studio scenario)",
+  "mode": "drill",
+  "label": "Drill: simulated Studio fire, Ridge fire. Not a real incident.",
+  "source": "package",                        // "bundle" (Camp) | "package" (Studio drill package)
+  "package_id": "pkg_1a2b3c4d5e6f",           // null for Camp
+  "activated_at": "2026-10-24T20:01:00Z",     // null until a controller switches
+  "join": { "invite_required": true } }
+```
+
+`POST /api/live/active` (controller) with `{"package_id": "pkg_..."}` or
+`{"incident_id": "camp-2018-drill"}` loads the drill (it must load first: `503
+drill_unavailable` otherwise), stores the switch in `live_active` (one document:
+`incident_id, source, package_id, bundle, name, label, activated_at, actor`), logs
+`incident_activated` in `live_decisions`, starts warming its twin and returns
+`200 {"active": <as GET>, "changed": bool}`. Errors: `400 invalid_request` (neither or
+both keys), `401`/`403` (not the controller), `404 not_found` (unknown package or
+incident). Data of the previous incident stays in MongoDB under its id; switching back
+resumes it. Other processes see a switch within 2 s (`ACTIVE_CACHE_S`).
+
+A Studio package incident differs from Camp: the drill clock starts at the package's
+T+0 (`clock.start`) instead of 15:00Z, there is no 2018 response or ground record, and
+its traffic twin is built from the package (`sim.twin.package_inputs`): OSM roads,
+synthetic zones (homes per km of residential street times vehicles per home, all of
+which evacuate once ordered), exits and the simulated fronts. It has no historical orders,
+so zones depart only when guidance orders them. Those assumptions are listed in the
+twin's `limitations`.
 
 ## Drill clock
 
@@ -1007,6 +1046,8 @@ the label). `command` adds `injects` and `no_signal_zone_ids`. Index `{incident_
 
 | Method and path | Role |
 | --- | --- |
+| `GET /api/live/active` | none ([Active incident](#active-incident-adr-0047)) |
+| `POST /api/live/active` | controller |
 | `GET incidents/{id}/situation[?zones=0]` | any |
 | `POST incidents/{id}/checkins` | any |
 | `POST me/location`, `DELETE me/location` | responder |

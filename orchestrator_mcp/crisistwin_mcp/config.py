@@ -20,8 +20,9 @@ ENV_TIMEOUT = "ORCH_HTTP_TIMEOUT_S"
 DEFAULT_API_BASE = "http://localhost:8000"
 DEFAULT_AGENT_NAME = "orchestrator"
 DEFAULT_INCIDENT_ID = "camp-2018-drill"
-# TODO(ADR 0030 "One active wildfire"): once the backend serves `GET /api/live/active`, default to
-# the active incident instead of this constant, and re-read it when the console switches fires.
+"""Used only when ``GET /api/live/active`` cannot be read. Without ``ORCH_INCIDENT_ID`` the tools
+follow the backend's active incident (ADR 0047), re-read every ``ACTIVE_CACHE_S``."""
+ACTIVE_CACHE_S = 10.0
 DEFAULT_TIMEOUT_S = 120.0
 """A twin-scored replan or a multi-set what-if can take tens of seconds."""
 
@@ -39,7 +40,8 @@ class Config:
     token: str | None = field(default=None, repr=False)
     agent_name: str = DEFAULT_AGENT_NAME
     allow_clock: bool = False
-    incident_id: str = DEFAULT_INCIDENT_ID
+    incident_id: str | None = None
+    """Pinned incident (``ORCH_INCIDENT_ID``); None follows the active incident."""
     timeout_s: float = DEFAULT_TIMEOUT_S
 
     @property
@@ -64,6 +66,6 @@ class Config:
             token=(env.get(ENV_TOKEN) or "").strip() or None,
             agent_name=name,
             allow_clock=(env.get(ENV_ALLOW_CLOCK) or "").strip() == "1",
-            incident_id=(env.get(ENV_INCIDENT) or DEFAULT_INCIDENT_ID).strip(),
+            incident_id=(env.get(ENV_INCIDENT) or "").strip() or None,
             timeout_s=timeout,
         )

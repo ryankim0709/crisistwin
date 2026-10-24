@@ -7,7 +7,7 @@ import Foundation
 enum LiveIncident {
     static let defaultId = "camp-2018-drill"
     /// The incident of the server this phone joined by link, else the default.
-    static var currentId: String { ServerSettings.overrideIncidentId ?? defaultId }
+    static var currentId: String { ServerSettings.overrideIncidentId ?? ServerSettings.followedIncidentId ?? defaultId }
 }
 
 enum LiveRole: String, Codable {

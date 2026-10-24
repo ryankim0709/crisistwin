@@ -255,7 +255,7 @@ def drill_doc(incident_id: str) -> dict[str, Any] | None:
 
 def clock_from(doc: Mapping[str, Any] | None, index: DrillIndex, now: datetime) -> Clock:
     drill = index.drill
-    replay_start = (doc or {}).get("replay_start") or drillmod.DEFAULT_REPLAY_START
+    replay_start = (doc or {}).get("replay_start") or drillmod.default_replay_start(drill)
     started_at = (doc or {}).get("started_at")
     speed = float((doc or {}).get("speed", 1))
     replay_now = drillmod.replay_now(replay_start, started_at, now, speed, drill.clock_end)
@@ -296,7 +296,7 @@ def report_replay_at(incident_id: str, now: datetime) -> datetime | None:
     doc = drill_doc(incident_id)
     if doc is None or doc.get("started_at") is None:
         return None
-    return clock_from(doc, get_index(), now).replay_now
+    return clock_from(doc, get_index(incident_id), now).replay_now
 
 
 # ---- snapshot ----
@@ -364,7 +364,7 @@ def load_public(
 
 
 def load_snapshot(incident_id: str, now: datetime) -> Snapshot:
-    index = get_index()
+    index = get_index(incident_id)
     doc = drill_doc(incident_id)
     clock = clock_from(doc, index, now)
     from . import injects as injects_mod  # local: injects reads clock_from and drill_doc from this module

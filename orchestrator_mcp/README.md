@@ -36,7 +36,7 @@ Read from the server's environment only (placeholders in `.env.example`):
 | `CRISISTWIN_CONTROLLER_TOKEN` | unset | The backend's `LIVE_CONTROLLER_TOKEN`; sent as `Authorization: Bearer`, never logged or returned. Unset works only against a backend without a controller token |
 | `ORCH_AGENT_NAME` | `orchestrator` | Writes send `X-CrisisTwin-Actor: agent:<name>`; the backend logs it as the decision `actor`. `[A-Za-z0-9][A-Za-z0-9._-]{0,63}` |
 | `ORCH_ALLOW_CLOCK` | unset | `1` exposes `set_drill`. Off by default: the drill clock is shared by the console and every phone |
-| `ORCH_INCIDENT_ID` | `camp-2018-drill` | Default `incident_id` of every tool |
+| `ORCH_INCIDENT_ID` | unset: the backend's active incident (`GET /api/live/active`, re-read every 10 s; `camp-2018-drill` if unreadable) | Pins the `incident_id` of every tool |
 | `ORCH_HTTP_TIMEOUT_S` | `120` | Per request; replans and what-ifs can take tens of seconds |
 
 ### Claude Code
@@ -76,7 +76,7 @@ placeholder that each person fills in locally.
 
 ## Tools
 
-Every tool takes an optional `incident_id` (default `camp-2018-drill`). Output is compact JSON:
+Every tool takes an optional `incident_id` (default: the active incident). Output is compact JSON:
 no geometry or polylines unless asked, null and empty fields omitted (absent means none), numbers
 copied verbatim from the backend's models.
 

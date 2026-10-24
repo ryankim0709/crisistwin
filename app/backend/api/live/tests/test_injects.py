@@ -280,7 +280,7 @@ class InjectTwinTest(SimpleTestCase):
             raw, twinmod, routing._index(cls.index.drill).destination_nodes)
 
     def setUp(self):
-        for p in (mock.patch.object(twin_service, "_ready_inputs", lambda: self.inputs),
+        for p in (mock.patch.object(twin_service, "_ready_inputs", lambda *_: self.inputs),
                   mock.patch.object(twin_service, "current_guidance", lambda *a, **k: []),
                   mock.patch.dict(twin_service._sessions, {}, clear=True)):
             p.start()

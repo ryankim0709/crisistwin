@@ -20,7 +20,7 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         incident_id = options["incident"]
         try:
-            index = get_index()
+            index = get_index(incident_id)
             if index.drill.incident_id != incident_id:
                 raise CommandError(f"Unknown incident {incident_id}.")
             if options["reset"]:
