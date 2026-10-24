@@ -40,6 +40,8 @@ export interface RevealRow {
 
 const HISTORICAL = new Set<EvidenceClass>(["observed", "reported", "reconstructed", "derived"]);
 const MAX_FOCUS_EDGES = 150;
+/** Modelled-vehicle chapters are skipped when their headline number is this small. */
+const MIN_HEADLINE_VEH = 100;
 
 function ringCoords(g: AreaGeometry): LngLat[] {
   return g.type === "Polygon" ? g.coordinates[0] : g.coordinates.flatMap((poly) => poly[0]);
@@ -318,7 +320,7 @@ export function buildChapters(
   if (traffic && traffic.metrics.length > 0) {
     const k = argmax(traffic.metrics.map((m) => m.exposedVeh));
     const m = traffic.metrics[k];
-    if (m.exposedVeh > 0) {
+    if (m.exposedVeh >= MIN_HEADLINE_VEH) {
       chapters.push({
         id: "peak-exposure",
         atMs: m.atMs,
@@ -370,7 +372,7 @@ export function buildChapters(
   if (traffic && traffic.metrics.length > 0 && core() < 8) {
     const k = argmax(traffic.metrics.map((m) => m.enRouteVeh));
     const m = traffic.metrics[k];
-    if (m.enRouteVeh > 0) {
+    if (m.enRouteVeh >= MIN_HEADLINE_VEH) {
       const lastOrder = [...model.events].reverse().find((e) => e.atMs <= m.atMs && isOrder(e));
       chapters.push({
         id: "peak-traffic",

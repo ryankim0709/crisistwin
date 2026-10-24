@@ -271,7 +271,8 @@ function ReplayScreen({
   // Optional phone-panel mobility sidecar (replay route only); hidden when the file is absent.
   const mobility = useMobility(config.kind === "replay" ? mobilityUrlFor(config.bundleUrl) : null);
   const [mapInstance, setMapInstance] = useState<MapLibreMap | null>(null);
-  const [mobilityVisible, setMobilityVisible] = useState(true);
+  // Off by default: device data is an extra layer, not part of the core story.
+  const [mobilityVisible, setMobilityVisible] = useState(false);
   const [mobilityFlows, setMobilityFlows] = useState(false);
   const mobilityOrigin = useMemo<LngLat>(() => {
     const [w, s, e, n] = baseline.bbox;
@@ -646,8 +647,8 @@ function ReplayScreen({
           map={mapInstance}
           mobility={mobility.data}
           simTimeMs={simTimeMs}
-          visible={mobilityVisible}
-          showFlows={mobilityFlows}
+          visible={mobilityVisible && !storyOpen && !landing}
+          showFlows={mobilityFlows && !storyOpen && !landing}
           origin={mobilityOrigin}
         />
 
@@ -830,6 +831,7 @@ function ReplayScreen({
             fireObsSource={model.fireObservations ? observationSource(model) : null}
             showFireObs={visibility.fireObs}
             showDestinations={visibility.destinations}
+            mobilityEvidence={mobilityVisible && mobility.data ? mobility.data.evidenceClass : null}
             peopleSource={visibility.people ? `Census ${incidentYear(model)} ACS; departures modelled` : null}
             open={legendOpen || tourOpen}
             onToggle={() => setLegendOpen((o) => !o)}

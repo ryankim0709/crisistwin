@@ -162,7 +162,12 @@ export default function MobilityOverlay({ map, mobility, simTimeMs, visible, sho
         type: "line",
         source: FLOWS,
         layout: { "line-cap": "round" },
-        paint: { "line-color": MOBILITY_COLORS.flow, "line-width": ["get", "w"], "line-opacity": 0.6 },
+        paint: {
+          "line-color": MOBILITY_COLORS.flow,
+          "line-width": ["get", "w"],
+          "line-opacity": 0.5,
+          "line-dasharray": [2, 2],
+        },
       },
       below,
     );
@@ -177,7 +182,7 @@ export default function MobilityOverlay({ map, mobility, simTimeMs, visible, sho
           "circle-color": [
             "case",
             ["==", ["get", "fresh"], 1],
-            MOBILITY_COLORS.fresh,
+            "rgba(0, 0, 0, 0)",
             [
               "interpolate",
               ["linear"],
@@ -190,9 +195,9 @@ export default function MobilityOverlay({ map, mobility, simTimeMs, visible, sho
               MOBILITY_COLORS.above,
             ],
           ],
-          "circle-opacity": 0.62,
-          "circle-stroke-color": ["case", ["==", ["get", "fresh"], 1], "#ffffff", "rgba(8,12,17,0.7)"],
-          "circle-stroke-width": ["case", ["==", ["get", "evac"], 1], 1.8, 0.6],
+          "circle-opacity": 0.5,
+          "circle-stroke-color": ["case", ["==", ["get", "fresh"], 1], MOBILITY_COLORS.fresh, "rgba(8,12,17,0.7)"],
+          "circle-stroke-width": ["case", ["==", ["get", "fresh"], 1], 1.4, ["==", ["get", "evac"], 1], 1.8, 0.6],
         },
       },
       below,

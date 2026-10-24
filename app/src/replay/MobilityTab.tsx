@@ -291,7 +291,7 @@ function ReadyTab({
       <fieldset className="rp-mob-toggles">
         <legend className="rp-sr">Map display</legend>
         <label>
-          <input type="checkbox" checked={visible} onChange={(e) => onVisible(e.target.checked)} /> Show on map
+          <input type="checkbox" checked={visible} onChange={(e) => onVisible(e.target.checked)} /> Movement (device data) on the map
         </label>
         <label className={m.originFlows ? undefined : "rp-mob-off"}>
           <input
@@ -310,29 +310,29 @@ function ReadyTab({
         </h3>
         <p className="rp-rule">
           {hour >= 0
-            ? `Circles show the hour starting ${stamp(m.hourStartsMs[hour], m.timezone)} (the replay clock). Size is visits that hour; colour compares them with the baseline for the same hour of the week.`
+            ? `Circles show the hour starting ${stamp(m.hourStartsMs[hour], m.timezone)} (the replay clock). Size is visits that hour; brightness compares them with the baseline for the same hour of the week.`
             : "The replay clock is outside the phone-panel date range, so no circles are drawn."}
         </p>
         <ul className="rp-mob-legend">
           <li>
             <span className="rp-mob-sw" style={{ background: MOBILITY_COLORS.below }} aria-hidden="true" />
-            Blue: below baseline (down to {2 ** RATIO_SATURATION_LOG2}× lower)
+            Dark grey: below baseline (down to {2 ** RATIO_SATURATION_LOG2}× lower)
           </li>
           <li>
             <span className="rp-mob-sw" style={{ background: MOBILITY_COLORS.near }} aria-hidden="true" />
-            Grey: near baseline
+            Mid grey: near baseline
           </li>
           <li>
             <span className="rp-mob-sw" style={{ background: MOBILITY_COLORS.above }} aria-hidden="true" />
-            Orange: above baseline (up to {2 ** RATIO_SATURATION_LOG2}× higher)
+            White: above baseline (up to {2 ** RATIO_SATURATION_LOG2}× higher)
           </li>
           <li>
             <span
               className="rp-mob-sw rp-mob-sw--fresh"
-              style={{ background: MOBILITY_COLORS.fresh }}
+              style={{ background: "transparent", border: `1.5px solid ${MOBILITY_COLORS.fresh}` }}
               aria-hidden="true"
             />
-            Violet, white outline: visits but no baseline visits that hour
+            Hollow white ring: visits but no baseline visits that hour
           </li>
           <li>
             <span className="rp-mob-sw rp-mob-sw--ring" aria-hidden="true" />
@@ -340,7 +340,7 @@ function ReadyTab({
           </li>
           <li>
             <span className="rp-mob-line" style={{ background: MOBILITY_COLORS.flow }} aria-hidden="true" />
-            Teal line: residents’ trips from the reference place (straight lines, not routes)
+            Dashed grey line: residents’ trips from the reference place (straight lines, not routes)
           </li>
         </ul>
         <p className="rp-rule">Hover a circle for its visits and baseline. Cells with no baseline and no visits are hidden.</p>
