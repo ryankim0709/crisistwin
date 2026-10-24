@@ -88,7 +88,8 @@ Status: wired into Simulation Studio by
 [0048-suppression-engine](adr/0048-suppression-engine.md) through
 `app/src/studio/suppressionData.generated.ts` (`tools/gen_suppression_ts.py`). Items 1-5 are
 implemented there; the gaps (water supply, availability, curve radius, dispatch-agent routing)
-are listed in that ADR.
+are listed in that ADR. Dispatch-agent routing and the live drill's simulated responders now use
+it too ("How responders use it" below).
 
 1. **Resource types.** Map a dispatched resource to an NWCG type, then take tank, pump and
    crew from `engines.typing`. Use the CAL FIRE Type 3 (500 gal, 500 gpm, 4x4, 33,000-35,000
@@ -106,6 +107,39 @@ are listed in that ADR.
 5. **Dispatch.** Place resources at `ca_fire_bases.json` stations (engines), conservation
    camps (hand crews), helitack bases and air attack bases (aircraft); use the response-time
    section for turnout and mobilisation.
+
+### How responders use it
+
+- **Live drill, simulated responders** (`livecore/apparatus.py`, `livecore/responders_sim.py`,
+  `manage.py live_sim_responders`): units start at the CAL FIRE-layer stations nearest the
+  fire estimate that sit on the drill road network. A state-owned CAL FIRE station holds Type 3
+  engines (the default state engine), about 1.6 per station (the derived estimate, ASSUMPTION);
+  any other station holds one Type 1 structure engine (ASSUMPTION). Turnout is 80 s at paid
+  stations (`response_times.turnout_s`) and 120 s at volunteer, combination or unknown ones
+  (`wildland_turnout_s`, ASSUMPTION). Each unit routes on the roads `road_access()` opens to its
+  class, at the class's speed; a task only its class rules keep it from is cancelled with the
+  rule in the note. Without the bases file the units fall back to approximate Chico points,
+  labelled.
+- **Drill roads lack the tags.** The camp-2018 bundle keeps only `highway`, `lanes` (per
+  direction), `bridge` and speed per edge, so the rules run on the highway class alone with the
+  documented defaults (paved, width by class), the edge speed as `maxspeed`, grade 0%
+  (ASSUMPTION: no elevation per edge) and no R10 (no turning-circle data). Every camp-2018 road
+  is then open to every class (R11): the class sets the speed only. Bundle edges that carry an
+  OSM `tags` object get the full rules. `lanes` is not passed, because the bundle counts lanes
+  per direction and R11 reads OSM `lanes=1` as a single-lane road.
+- **Responder routes** (`GET /api/live/tasks/{id}/route?class=`, default `engine_t3`): the same
+  per-class routing; `reason: "no_access"` with the rule when only the class rules block
+  ([live-reports.md](live-reports.md#responder-route-to-a-task)).
+- **Dispatch agent** (`/dispatch`, `app/src/dispatch/stationApparatus.ts` and `engine.ts`):
+  each OSM station engine within 500 m of a state-owned CAL FIRE-layer station is a Type 3
+  engine, within 500 m of another layer station a Type 1 structure engine (ASSUMPTION), else a
+  Type 3 (ASSUMPTION). Units route on the Studio crew dispatch's per-class graphs
+  (`accessTableFor`: OSM tags kept by `dispatch_area.py`, grades from the landscape DEM,
+  service roads and tracks included), at the class's speed, with the kind's turnout and line
+  rate (`apparatus.ts`). Orders a class cannot carry out are rejected with the rule, and
+  `units[].no_access` tells the Claude dispatcher which threatened zones and burning fires each
+  unit cannot reach and why. A fire more than 1.5 km from every road a class can use is out of
+  its reach. Planner road closures (`setRoadClosed`) close the edge to every class.
 
 ### Road-access decision table
 
