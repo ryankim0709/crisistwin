@@ -13,6 +13,7 @@ import { buildQueue, matches, proposalFor, type QueueFilter } from "./queue";
 import ResponseRecord from "./ResponseRecord";
 import GroundRecord from "./GroundRecord";
 import { labelPoint } from "./format";
+import StalePanel from "./StalePanel";
 import ReviewQueue from "./ReviewQueue";
 import SelectedItem, { type ImpactState, type RunAction } from "./SelectedItem";
 import { useCommand } from "./useCommand";
@@ -378,6 +379,12 @@ export default function LiveCommandPage() {
                 onClose={() => select(null)}
               />
             ) : null}
+            <StalePanel
+              items={data.stale_critical}
+              tasks={data.tasks}
+              serverNow={serverNow}
+              onFocus={setFocus}
+            />
             <EvacuationPicture
               data={data}
               twin={twinData}

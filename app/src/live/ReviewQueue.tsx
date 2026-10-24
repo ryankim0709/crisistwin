@@ -74,6 +74,7 @@ function Row({
           {item.stale ? <Tag>Stale</Tag> : null}
           {item.fixture ? <Tag>Fixture</Tag> : null}
           {item.record ? <Tag tone="info">2018 record</Tag> : null}
+          {item.reports.length > 0 && item.reports.every((r) => r.method === "passive") ? <Tag>Passive</Tag> : null}
         </span>
         {note ? <span className="lc-q-quote">“{note}”</span> : null}
         <span className="lc-q-meta">

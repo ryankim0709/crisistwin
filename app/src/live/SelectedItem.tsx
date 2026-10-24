@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Button, EvidenceTag, IconButton, LoadingState, Notice, Tag } from "../ui";
 import { createTask, helpAction, triageReport } from "./api";
-import { drillClock, elapsed, nf, plural, responderName, shortKey, shortZoneName, wallClock } from "./format";
+import { answersLine, drillClock, elapsed, nf, plural, responderName, shortKey, shortZoneName, wallClock } from "./format";
 import { distanceM } from "./geo";
 import KindGlyph from "./Glyph";
 import { impactLine } from "./ReviewQueue";
@@ -357,6 +357,9 @@ function ReportDetail({
             </span>
             <span className="lc-dim lc-num">{inDrill && r.replay_at ? drillClock(r.replay_at) : wallClock(r.observed_at)}</span>
             <span className={`lc-sel-status lc-sel-status--${r.status}`}>{STATUS_WORD[r.status]}</span>
+            {r.method === "passive" ? (
+              <Tag>{r.speed_class ? `Passive, ${r.speed_class}` : "Passive"}</Tag>
+            ) : null}
             {isFixtureNote(r.note) ? (
               <span className="lc-sel-fixture">
                 <Tag>Fixture</Tag>
@@ -374,7 +377,11 @@ function ReportDetail({
             {item.task.kind === "assist" ? "Responder sent" : "Field check"}{" "}
             {item.task.status === "accepted" ? "accepted" : "requested"}
           </Tag>
+          {item.task.created_by === "priority" ? <Tag>Board</Tag> : null}
           <span className="lc-dim">{item.task.assignee ? shortKey(item.task.assignee) : "Any responder"}</span>
+          {item.task.answers !== undefined ? (
+            <span className="lc-dim lc-num">{answersLine(item.task.answers, serverNow)}</span>
+          ) : null}
         </p>
       ) : null}
       <RouteLine state={route} />

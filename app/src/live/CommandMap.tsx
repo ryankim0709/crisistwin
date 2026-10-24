@@ -69,6 +69,8 @@ const LAYER_IDS: Record<LayerKey, string[]> = {
 export interface MapFocus {
   id: string;
   coord: LonLat;
+  /** A segment's line: the map fits it instead of flying to the coord. */
+  line?: LonLat[] | null;
 }
 
 type Feature = GeoJSON.Feature<GeoJSON.Geometry, Record<string, string | number | boolean | null>>;
@@ -704,7 +706,18 @@ export default function CommandMap({ data, twin, items, selected, focus, layers,
     (map.getSource("lc-focus") as GeoJSONSource | undefined)?.setData(
       collection(target ? [point(target.coord, { id: target.id })] : []),
     );
-    if (target) map.flyTo({ center: target.coord, zoom: Math.max(map.getZoom(), FOCUS_ZOOM) });
+    const line = !selectedCoord && focus?.line && focus.line.length > 1 ? focus.line : null;
+    if (line) {
+      const lons = line.map((c) => c[0]);
+      const lats = line.map((c) => c[1]);
+      map.fitBounds(
+        [
+          [Math.min(...lons), Math.min(...lats)],
+          [Math.max(...lons), Math.max(...lats)],
+        ],
+        { padding: 80, maxZoom: 15 },
+      );
+    } else if (target) map.flyTo({ center: target.coord, zoom: Math.max(map.getZoom(), FOCUS_ZOOM) });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fly on a new selection or focus, not on each poll
   }, [ready, selectedId, focus]);
 
