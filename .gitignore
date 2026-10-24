@@ -36,6 +36,9 @@ DerivedData/
 app/public/replays/**/*.json
 app/public/simulations/**/*.json
 
+# Drill packages built from Studio runs (POST /api/live/packages)
+app/backend/var/
+
 # Editor swap files
 *.swp
 

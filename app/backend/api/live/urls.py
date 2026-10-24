@@ -1,9 +1,10 @@
 from django.urls import path
 
-from . import responder_routing, views
+from . import packages, responder_routing, views
 
 urlpatterns = [
     path("devices", views.devices, name="live-devices"),
+    path("packages", packages.packages, name="live-packages"),
     path("incidents/<str:incident_id>/join", views.join, name="live-join"),
     path("incidents/<str:incident_id>/reports", views.incident_reports, name="live-reports"),
     path("incidents/<str:incident_id>/road-state", views.road_state, name="live-road-state"),

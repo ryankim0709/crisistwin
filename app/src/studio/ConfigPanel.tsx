@@ -81,6 +81,7 @@ export default function ConfigPanel(props: ConfigPanelProps) {
     onExport,
     onImport,
     onLoadDemo,
+    liveDrill,
     firefighting,
   } = props;
 
@@ -617,6 +618,7 @@ export default function ConfigPanel(props: ConfigPanelProps) {
               Clear all
             </Button>
           </div>
+          {liveDrill}
           <div className="studio-field">
             <Field label="Import a scenario file">
               <input
