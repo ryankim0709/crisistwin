@@ -32,11 +32,15 @@ models. The imagery map at `/maps` starts over San Francisco and supports an
 illustrative fire-spread experiment:
 choose an origin, set wind, and inspect the simulated footprint in 15-minute
 steps. A historical replay simulator for the 2018 Camp Fire is in progress in [`sim/`](sim/README.md);
-persistent scenarios and live incident integrations are not implemented yet.
+persistent scenarios are not implemented yet.
 
-The native iOS scaffold is in [`mobile/`](mobile/README.md): a SwiftUI workspace,
-API/database readiness card, and a scenario empty state. Native maps, simulation,
-and scenario synchronization are not implemented in the mobile app yet.
+A live drill loop on the Camp road network runs locally: the iOS app in
+[`mobile/`](mobile/README.md) is one incident screen that sends field reports and
+check-ins and shows the zone guidance that a controller approves through the
+backend command API, with pure reroutes around confirmed blocks published automatically
+(see [docs/live-reports.md](docs/live-reports.md)). It is a drill on 2018 data,
+not connected to real incidents. The controller's web page at `/live` builds but
+has not been tried in a browser yet.
 
 This is an experimental planning simulator. Its outputs are not operational evacuation instructions; any future resident guidance should require approval by the responsible authority.
 

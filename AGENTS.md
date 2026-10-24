@@ -51,7 +51,7 @@
 - Preserve domain invariants: nonnegative counts/capacities, population conservation across all modeled states, no routing over closed edges, and explicit treatment of unreachable destinations and full shelters. Keep simplifications visible.
 - Use numerical models/optimizers for computed results. An LLM may interpret intent or explain results, but must not invent computed routes, capacities, simulation metrics, or confidence levels. Validate any LLM-produced scenario parameters before execution.
 - Compare strategies against the same inputs and model settings; disclose intentional differences. Report uncertainty and limitations supported by the model, not unsupported precision or claims of real-world safety.
-- Outputs are planning experiments. Do not turn simulated recommendations into operational instructions, send resident alerts, or claim authority approval without an explicitly authorized workflow.
+- Outputs are planning experiments. Do not turn simulated recommendations into operational instructions, send resident alerts, or claim authority approval without an explicitly authorized workflow ([ADR 0012](docs/adr/0012-controller-guidance.md) is one, limited to the labeled live drill).
 
 ## Security and external services
 

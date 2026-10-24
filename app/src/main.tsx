@@ -12,6 +12,7 @@ import NotFoundPage from "./pages/NotFoundPage";
 import { SIMULATION_VIEW } from "./replay/loadBundle";
 import ReplayView from "./replay/ReplayView";
 import ReplayRoute from "./replay/IncidentPicker";
+import LiveCommandPage from "./live/LiveCommandPage";
 import "./index.css";
 import "./pages/workspace.css";
 
@@ -37,12 +38,14 @@ const page =
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    {/* The replay views are full-viewport map tools with their own navigation, so they
+    {/* The replay views and live command are full-viewport map tools with their own navigation, so they
         render outside the shell; every other page uses the shared sidebar shell. */}
     {path === "/replay" ? (
       <ReplayRoute />
     ) : path === "/simulate" ? (
       <ReplayView config={SIMULATION_VIEW} />
+    ) : path === "/live" ? (
+      <LiveCommandPage />
     ) : (
       <AppShell path={path}>{page}</AppShell>
     )}

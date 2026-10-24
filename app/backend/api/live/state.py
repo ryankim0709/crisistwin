@@ -1,0 +1,328 @@
+"""Read side of the live drill: the drill clock, the current situation snapshot, and JSON rendering.
+
+All rules come from ``livecore``; this module only loads documents, converts them to
+livecore values and renders livecore results in the wire shapes of docs/live-reports.md.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Any
+
+from livecore import drill as drillmod
+from livecore import public
+from livecore.fire import FireEstimate, estimate_fire
+from livecore.geo import to_geojson
+from livecore.planner import ZoneGuidance
+from livecore.routing import Route
+
+from .common import col, iso
+from .drillcache import DrillIndex, get_index
+
+REPORTS_SNAPSHOT_LIMIT = 5000
+"""Newest reports read per snapshot (a drill has far fewer)."""
+ROUTE_DISTANCE_ROUND_M = 10
+
+
+# ---- rendering helpers ----
+
+
+def render(value: Any, drop: Iterable[str] = ("_id",)) -> Any:
+    """Documents to JSON: datetimes to ISO ``Z``, tuples to lists, ``drop`` keys removed at the top."""
+    drop = set(drop)
+    if isinstance(value, Mapping):
+        return {k: render(v, ()) for k, v in value.items() if k not in drop}
+    if isinstance(value, (list, tuple)):
+        return [render(v, ()) for v in value]
+    if isinstance(value, datetime):
+        return iso(value)
+    return value
+
+
+def report_json(doc: Mapping[str, Any]) -> dict[str, Any]:
+    body = render(doc, drop=("_id", "updated_at", "merged_into"))
+    body.setdefault("replay_at", None)
+    return body
+
+
+def task_json(doc: Mapping[str, Any]) -> dict[str, Any]:
+    body = render(doc, drop=("_id", "accepted_at", "answer", "closed_at"))
+    body.setdefault("assignee", None)
+    body.setdefault("note", None)
+    return body
+
+
+def checkin_json(doc: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "id": doc["id"],
+        "status": doc["status"],
+        "zone_id": doc.get("zone_id"),
+        "coord": doc.get("coord"),
+        "at": iso(doc["at"]),
+        "replay_at": iso(doc.get("replay_at")),
+    }
+
+
+def guidance_json(doc: Mapping[str, Any]) -> dict[str, Any]:
+    return render(doc, drop=("_id", "incident_id"))
+
+
+def proposal_json(doc: Mapping[str, Any]) -> dict[str, Any]:
+    return render(doc, drop=("_id",))
+
+
+def destination_json(index: DrillIndex, destination_id: str | None) -> dict[str, Any] | None:
+    if destination_id is None:
+        return None
+    dest = index.destinations.get(destination_id)
+    if dest is None:
+        return None
+    return {"id": dest.id, "name": dest.name, "kind": dest.kind, "coord": [dest.coord[0], dest.coord[1]]}
+
+
+def route_json(route: Route | None) -> dict[str, Any] | None:
+    if route is None:
+        return None
+    return {
+        "line": [[p[0], p[1]] for p in route.line],
+        "via": list(route.via),
+        "distance_m": int(round(route.distance_m / ROUTE_DISTANCE_ROUND_M) * ROUTE_DISTANCE_ROUND_M),
+        "eta_min": int(route.eta_min),
+    }
+
+
+def proposed_json(index: DrillIndex, g: ZoneGuidance) -> dict[str, Any]:
+    """``ProposedGuidance``: destination and route are null for level none and no_route."""
+    moving = g.level != "none" and not g.no_route
+    return {
+        "level": g.level,
+        "destination": destination_json(index, g.destination_id) if moving else None,
+        "route": route_json(g.route) if moving else None,
+        "no_route": bool(g.no_route),
+        "reason": g.reason,
+        "reason_code": g.reason_code,
+    }
+
+
+def fire_json(fire: FireEstimate) -> dict[str, Any]:
+    return {
+        "as_of": iso(fire.as_of),
+        "method": fire.method,
+        "label": fire.label,
+        "geometry": to_geojson(fire.geometry) if fire.geometry is not None else None,
+        "observations": [
+            {"coord": [o.coord[0], o.coord[1]], "at": iso(o.at), "source": o.source} for o in fire.observations
+        ],
+        "evidence_class": fire.evidence_class,
+    }
+
+
+def road_ref_json(segment_id: str | None, name: str | None, snap_m: float | None = None) -> dict[str, Any] | None:
+    if segment_id is None:
+        return None
+    return {"segment_id": segment_id, "name": name or "Unnamed road", "snap_m": snap_m}
+
+
+def public_item_json(item: public.PublicItem, controller: bool = False) -> dict[str, Any]:
+    body = {
+        "id": item.id,
+        "kind": item.kind,
+        "severity": item.severity,
+        "coord": [item.coord[0], item.coord[1]],
+        "road_ref": road_ref_json(item.segment_id, item.segment_name),
+        "line": [[p[0], p[1]] for p in item.line] if item.line else None,
+        "independent_parties": item.independent_parties,
+        "responder_reports": item.responder_reports,
+        "controller_confirmed": item.controller_confirmed,
+        "confidence": round(item.confidence, 2),
+        "first_reported_at": iso(item.first_reported_at),
+        "last_observed_at": iso(item.last_observed_at),
+    }
+    if controller:
+        body["report_ids"] = list(item.report_ids)
+        body["destination_id"] = item.destination_id
+    return body
+
+
+def road_status_json(s: public.RoadStatus) -> dict[str, Any]:
+    return {
+        "segment_id": s.segment_id,
+        "name": s.name,
+        "status": s.status,
+        "confidence": round(s.confidence, 2),
+        "independent_parties": s.independent_parties,
+        "responder_reports": s.responder_reports,
+        "last_observed_at": iso(s.last_observed_at),
+        "report_ids": list(s.report_ids),
+        "decided_by": s.decided_by,
+        "public": s.public,
+    }
+
+
+# ---- drill clock ----
+
+
+@dataclass(frozen=True)
+class Clock:
+    replay_start: datetime
+    started_at: datetime | None
+    speed: float
+    replay_now: datetime
+    running: bool
+
+
+def drill_doc(incident_id: str) -> dict[str, Any] | None:
+    return col("live_drills").find_one({"incident_id": incident_id})
+
+
+def clock_from(doc: Mapping[str, Any] | None, index: DrillIndex, now: datetime) -> Clock:
+    drill = index.drill
+    replay_start = (doc or {}).get("replay_start") or drillmod.DEFAULT_REPLAY_START
+    started_at = (doc or {}).get("started_at")
+    speed = float((doc or {}).get("speed", 1))
+    replay_now = drillmod.replay_now(replay_start, started_at, now, speed, drill.clock_end)
+    running = started_at is not None and speed > 0 and replay_now < drill.clock_end
+    return Clock(replay_start, started_at, speed, replay_now, running)
+
+
+def drill_state_json(index: DrillIndex, clock: Clock) -> dict[str, Any]:
+    drill = index.drill
+    return {
+        "incident_id": drill.incident_id,
+        "label": drill.label,
+        "replay_now": iso(clock.replay_now),
+        "replay_start": iso(clock.replay_start),
+        "started_at": iso(clock.started_at),
+        "speed": clock.speed,
+        "running": clock.running,
+        "clock": {"start": iso(drill.clock_start), "end": iso(drill.clock_end)},
+    }
+
+
+def drill_short_json(index: DrillIndex, clock: Clock) -> dict[str, Any]:
+    return {
+        "label": index.drill.label,
+        "replay_now": iso(clock.replay_now),
+        "speed": clock.speed,
+        "running": clock.running,
+    }
+
+
+def report_replay_at(incident_id: str, now: datetime) -> datetime | None:
+    """Drill time at ``now``, or None when no drill has been started."""
+    doc = drill_doc(incident_id)
+    if doc is None or doc.get("started_at") is None:
+        return None
+    return clock_from(doc, get_index(), now).replay_now
+
+
+# ---- snapshot ----
+
+
+def _aware(value: datetime | None) -> datetime | None:
+    if value is not None and value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value
+
+
+def report_fact(doc: Mapping[str, Any]) -> public.ReportFact:
+    road_ref = doc.get("road_ref") or {}
+    coord = doc["location"]["coord"]
+    return public.ReportFact(
+        id=doc["id"],
+        kind=doc["kind"],
+        severity=doc.get("severity"),
+        coord=(float(coord[0]), float(coord[1])),
+        party_key=doc["reporter"]["party_key"],
+        role=doc["reporter"]["role"],
+        observed_at=_aware(doc["observed_at"]),
+        received_at=_aware(doc["received_at"]),
+        status=doc["status"],
+        segment_id=road_ref.get("segment_id"),
+        segment_name=road_ref.get("name"),
+        destination_id=doc.get("destination_id"),
+        replay_at=_aware(doc.get("replay_at")),
+    )
+
+
+@dataclass
+class Snapshot:
+    incident_id: str
+    index: DrillIndex
+    now: datetime
+    drill_doc: dict[str, Any] | None
+    clock: Clock
+    report_docs: list[dict[str, Any]]
+    facts: list[public.ReportFact]
+    items: list[public.PublicItem]
+    road_state: list[public.RoadStatus]
+    blocked: frozenset[str]
+    full_destinations: frozenset[str]
+    fire: FireEstimate
+
+
+def load_public(
+    incident_id: str, now: datetime, index: DrillIndex
+) -> tuple[list[dict[str, Any]], list[public.ReportFact], list[public.PublicItem], list[public.RoadStatus]]:
+    """Reports (newest first), their facts, public items and road state at wall time ``now``."""
+    report_docs = list(
+        col("live_reports").find({"incident_id": incident_id}).sort("received_at", -1).limit(REPORTS_SNAPSHOT_LIMIT)
+    )
+    facts = [report_fact(d) for d in report_docs]
+    items = public.public_items(facts, now, index.segment_lines)
+    state = public.road_state(facts, now)
+    return report_docs, facts, items, state
+
+
+def load_snapshot(incident_id: str, now: datetime) -> Snapshot:
+    index = get_index()
+    doc = drill_doc(incident_id)
+    clock = clock_from(doc, index, now)
+    report_docs, facts, items, state = load_public(incident_id, now, index)
+    fire = estimate_fire(index.drill, clock.replay_now, public.confirmed_fire_points(facts, items))
+    return Snapshot(
+        incident_id=incident_id,
+        index=index,
+        now=now,
+        drill_doc=doc,
+        clock=clock,
+        report_docs=report_docs,
+        facts=facts,
+        items=items,
+        road_state=state,
+        blocked=frozenset(public.guidance_blocked_segments(state)),
+        full_destinations=frozenset(public.full_destination_ids(items)),
+        fire=fire,
+    )
+
+
+def current_guidance(incident_id: str, index: DrillIndex | None = None) -> list[dict[str, Any]]:
+    """Latest published version per zone, in drill zone order when the index is given."""
+    rows = col("live_guidance").aggregate(
+        [
+            {"$match": {"incident_id": incident_id}},
+            {"$sort": {"zone_id": 1, "version": -1}},
+            {"$group": {"_id": "$zone_id", "doc": {"$first": "$$ROOT"}}},
+        ]
+    )
+    docs = [row["doc"] for row in rows]
+    if index is not None:
+        order = {z.id: i for i, z in enumerate(index.drill.zones)}
+        docs.sort(key=lambda d: order.get(d["zone_id"], len(order)))
+    return docs
+
+
+def responder_tasks(incident_id: str, party_key: str) -> list[dict[str, Any]]:
+    """Tasks assigned to the caller (open or accepted) plus open unassigned ones."""
+    cursor = col("live_tasks").find(
+        {
+            "incident_id": incident_id,
+            "$or": [
+                {"assignee": party_key, "status": {"$in": ["open", "accepted"]}},
+                {"assignee": None, "status": "open"},
+            ],
+        }
+    ).sort("created_at", -1).limit(200)
+    return list(cursor)

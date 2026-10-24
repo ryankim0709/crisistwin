@@ -114,6 +114,40 @@ Set `ANTHROPIC_API_KEY` in the backend's environment to enable it (see
 endpoint does not query MongoDB. Run the backend with a gunicorn timeout longer than a
 model call, e.g. `gunicorn config.wsgi -b 127.0.0.1:8000 --timeout 120`.
 
+## Live drill API (`/api/live/`)
+
+Implements v1 and v2 of [docs/live-reports.md](../../docs/live-reports.md) (ADR 0011, 0012):
+field reports, road state, public map, check tasks, the drill clock, the fire estimate,
+per-zone guidance with controller proposals, check-ins and responder location. Code:
+`api/live/` (HTTP + MongoDB) over the pure `livecore/` package (rules, planner, routing).
+Everything is a labeled drill of the 2018 Camp Fire; nothing is a real incident.
+
+- Auth: `Authorization: Bearer <token>`. `POST /api/live/devices` issues civilian tokens;
+  `POST /api/live/incidents/camp-2018-drill/join {"invite_code"}` issues responder tokens
+  (`LIVE_INVITE_CODE`); the controller uses `LIVE_CONTROLLER_TOKEN`. Unset secrets fail
+  closed (403). Device tokens are stored as SHA-256 hashes.
+- The planner fixes every level, route and number. The rationale LLM
+  (`LIVE_RATIONALE_MODEL`, `ANTHROPIC_API_KEY`) only rewrites the template text in a
+  background thread (10 s timeout); without a key the template stays.
+- `LIVE_DRILL_BUNDLE` points at the replay bundle (default
+  `app/public/replays/camp-2018.json`); it is parsed once per process on first use.
+- Not implemented yet: `POST incidents/{id}/impact` and `POST incidents/{id}/route` return 501.
+
+Local run (Docker MongoDB on 127.0.0.1:27017):
+
+```sh
+export MONGODB_URI=mongodb://127.0.0.1:27017 MONGODB_DATABASE=crisistwin_live_dev
+export LIVE_CONTROLLER_TOKEN=dev-controller LIVE_INVITE_CODE=DRILL
+python manage.py live_init_db            # indexes + validators, once per database
+python manage.py live_drill --reset --seed   # start the clock; add labeled drill-fixture reports
+python manage.py runserver 127.0.0.1:8000
+```
+
+`live_drill` also takes `--speed` (0..60 drill seconds per wall second) and
+`--replay-start`. `--seed` inserts three synthetic civilian reports of a full block on
+Skyway in Paradise (`evidence_class: "drill_fixture"`, note says synthetic).
+`live_init_db --drop-drill-data` drops all live drill data but keeps device tokens.
+
 ## Updating dependencies
 
 Edit the `.in` files, then resolve with [uv](https://docs.astral.sh/uv/pip/compile/):

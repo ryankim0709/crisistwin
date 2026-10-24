@@ -11,46 +11,32 @@ struct HomeView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                HStack {
-                    BrandLogo()
-                        .frame(height: 36)
-                    Spacer()
-                    Button {
-                        showingAbout = true
-                    } label: {
-                        Image(systemName: "info.circle")
-                            .font(.title2)
-                            .frame(width: 44, height: 44)
-                    }
-                    .accessibilityLabel("About CrisisTwin")
-                }
-                .padding(.bottom, 4)
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("HOUSEHOLD READINESS")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    Text("Be ready together.")
-                        .font(.largeTitle.bold())
-                    Text("Plan where your household meets, and practice with a simulated wildfire.")
-                        .foregroundStyle(.secondary)
-                }
+            VStack(alignment: .leading, spacing: 24) {
+                header
+                hero
 
                 alertsCard
                 quickActions
                 planCard
                 practiceCard
 
-                Text("CrisisTwin is a planning aid, not an emergency service. In an emergency, follow official instructions and call 911 if you are in danger.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                Label {
+                    Text("CrisisTwin is not an emergency service. If you are in danger, call 911 and follow official instructions.")
+                } icon: {
+                    Image(systemName: "info.circle")
+                }
+                .font(.footnote)
+                .foregroundStyle(Color.ctMuted)
+                .padding(.horizontal, 4)
+                .padding(.top, 4)
             }
-            .padding(20)
+            .padding(.horizontal, 20)
+            .padding(.top, 8)
+            .padding(.bottom, 32)
             .frame(maxWidth: 640, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
-        .background(Color("WorkspaceBackground"))
+        .background(Color.ctBackground)
         // The logo header replaces the navigation bar, matching the web masthead.
         .toolbar(.hidden, for: .navigationBar)
         .sheet(isPresented: $showingAbout) {
@@ -58,18 +44,56 @@ struct HomeView: View {
         }
     }
 
-    /// No official alert source is connected, so say so rather than implying "all clear".
-    private var alertsCard: some View {
-        Card {
-            Label("Official alerts", systemImage: "exclamationmark.bubble")
-                .font(.headline)
-            Text("Not connected in this app yet. Watch for Wireless Emergency Alerts and follow evacuation orders from your local emergency services.")
-                .foregroundStyle(.secondary)
+    private var header: some View {
+        HStack {
+            BrandLogo()
+                .frame(height: 32)
+            Spacer()
+            Button {
+                showingAbout = true
+            } label: {
+                Image(systemName: "info")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(Color.ctBrand)
+                    .frame(width: 44, height: 44)
+                    .background(Color.ctSurface, in: Circle())
+                    .overlay(Circle().strokeBorder(Color.ctBorder, lineWidth: 1))
+            }
+            .accessibilityLabel("About CrisisTwin")
         }
     }
 
+    private var hero: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Be ready together.")
+                .font(.largeTitle.bold())
+                .foregroundStyle(Color.ctInk)
+        }
+    }
+
+    /// No official alert source is connected, so say so rather than implying "all clear".
+    private var alertsCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
+                IconBadge(systemImage: "exclamationmark.bubble", tint: HazardTone.info.color)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Official alerts")
+                        .font(.headline)
+                        .foregroundStyle(Color.ctInk)
+                    StatusPill(text: "Not connected", systemImage: "antenna.radiowaves.left.and.right.slash", tone: .info)
+                }
+            }
+            Text("Watch for Wireless Emergency Alerts and follow local evacuation orders.")
+                .font(.subheadline)
+                .foregroundStyle(Color.ctMuted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .ctCard()
+        .accessibilityElement(children: .combine)
+    }
+
     private var quickActions: some View {
-        VStack(spacing: 12) {
+        VStack(alignment: .leading, spacing: 12) {
             if let primary = plan.primary {
                 Link(destination: primary.directionsURL) {
                     ActionRow(
@@ -79,23 +103,33 @@ struct HomeView: View {
                         prominent: true
                     )
                 }
-                ShareLink(item: plan.shareText) {
-                    ActionRow(
-                        title: "Share my plan",
-                        detail: plan.contacts.isEmpty ? "Send it to the people you trust" : "\(plan.contacts.count) trusted contact\(plan.contacts.count == 1 ? "" : "s")",
-                        systemImage: "square.and.arrow.up",
-                        prominent: false
-                    )
-                }
             } else {
                 Button {
                     openTab(.plan)
                 } label: {
                     ActionRow(
                         title: "Choose a meeting point",
-                        detail: "Then you can get directions and share your plan in one tap",
                         systemImage: "mappin.and.ellipse",
                         prominent: true
+                    )
+                }
+            }
+            Button {
+                openTab(.live)
+            } label: {
+                ActionRow(
+                    title: "Report what you see",
+                    systemImage: "exclamationmark.bubble",
+                    prominent: false
+                )
+            }
+            if plan.primary != nil {
+                ShareLink(item: plan.shareText) {
+                    ActionRow(
+                        title: "Share my plan",
+                        detail: plan.contacts.isEmpty ? nil : "\(plan.contacts.count) trusted contact\(plan.contacts.count == 1 ? "" : "s")",
+                        systemImage: "square.and.arrow.up",
+                        prominent: false
                     )
                 }
             }
@@ -104,26 +138,47 @@ struct HomeView: View {
     }
 
     private var planCard: some View {
-        Card {
-            Label("My plan", systemImage: "figure.2")
-                .font(.headline)
-            LabeledContent("Meet at", value: plan.primary?.name ?? "Not chosen")
-            LabeledContent("Backup", value: plan.backup?.name ?? "Not chosen")
-            LabeledContent("Trusted contacts", value: "\(plan.contacts.count)")
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 12) {
+                IconBadge(systemImage: "figure.2", tint: .ctBrand)
+                Text("My plan")
+                    .font(.headline)
+                    .foregroundStyle(Color.ctInk)
+            }
+            VStack(spacing: 0) {
+                PlanSummaryRow(label: "Meet at", value: plan.primary?.name, systemImage: "1.circle")
+                Divider().overlay(Color.ctBorder)
+                PlanSummaryRow(label: "Backup", value: plan.backup?.name, systemImage: "2.circle")
+                Divider().overlay(Color.ctBorder)
+                PlanSummaryRow(
+                    label: "Trusted contacts",
+                    value: plan.contacts.isEmpty ? nil : "\(plan.contacts.count)",
+                    systemImage: "person.2",
+                    emptyText: "None yet"
+                )
+            }
             Button(plan.primary == nil ? "Set up my plan" : "Edit my plan") { openTab(.plan) }
-                .buttonStyle(.bordered)
+                .buttonStyle(SecondaryButtonStyle())
         }
+        .ctCard()
     }
 
     private var practiceCard: some View {
-        Card {
-            Label("Practice with a simulated fire", systemImage: "flame")
-                .font(.headline)
-            Text("Pick where a fire starts and how the wind blows, then watch how it could spread over two hours. It's a simple illustrative model, not a forecast.")
-                .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                IconBadge(systemImage: "flame", tint: HazardTone.caution.color)
+                Text("Practice with a simulated fire")
+                    .font(.headline)
+                    .foregroundStyle(Color.ctInk)
+            }
+            Text("Watch how a fire could spread. A simple model, not a forecast.")
+                .font(.subheadline)
+                .foregroundStyle(Color.ctMuted)
+                .fixedSize(horizontal: false, vertical: true)
             Button("Open Practice") { openTab(.practice) }
-                .buttonStyle(.bordered)
+                .buttonStyle(SecondaryButtonStyle())
         }
+        .ctCard()
     }
 }
 
@@ -145,40 +200,104 @@ private struct BrandLogo: View {
     }
 }
 
-private struct Card<Content: View>: View {
-    @ViewBuilder let content: Content
+/// A rounded square holding a section icon, tinted to match the section.
+private struct IconBadge: View {
+    let systemImage: String
+    let tint: Color
+
+    @ScaledMetric(relativeTo: .headline) private var size: CGFloat = 36
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) { content }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding()
-            .background(.background, in: RoundedRectangle(cornerRadius: 16))
+        Image(systemName: systemImage)
+            .font(.body.weight(.semibold))
+            .foregroundStyle(tint)
+            .frame(width: size, height: size)
+            .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .accessibilityHidden(true)
     }
+}
+
+/// One line of the plan summary; an empty value reads as text, not just a muted color.
+private struct PlanSummaryRow: View {
+    let label: String
+    let value: String?
+    let systemImage: String
+    var emptyText = "Not chosen"
+
+    @ScaledMetric(relativeTo: .subheadline) private var iconWidth: CGFloat = 24
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: systemImage)
+                .foregroundStyle(Color.ctMuted)
+                .frame(width: iconWidth)
+                .accessibilityHidden(true)
+            Text(label)
+                .foregroundStyle(Color.ctMuted)
+            Spacer(minLength: 12)
+            Text(value ?? emptyText)
+                .fontWeight(value == nil ? .regular : .semibold)
+                .foregroundStyle(value == nil ? Color.ctMuted : Color.ctInk)
+                .italic(value == nil)
+                .multilineTextAlignment(.trailing)
+        }
+        .font(.subheadline)
+        .padding(.vertical, 10)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private extension Color {
+    /// Text on a brand fill: white on deep green, deep green-black on the light dark-mode green.
+    static let onBrand = Color(light: 0xFFFFFF, dark: 0x0F231E)
 }
 
 /// A large, full-width action with a text label, so meaning never depends on the icon or color alone.
 private struct ActionRow: View {
     let title: String
-    let detail: String
+    var detail: String?
     let systemImage: String
     let prominent: Bool
+
+    @ScaledMetric(relativeTo: .title2) private var badge: CGFloat = 44
 
     var body: some View {
         HStack(spacing: 14) {
             Image(systemName: systemImage)
-                .font(.title2)
-                .frame(width: 32)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.headline)
-                Text(detail).font(.subheadline).opacity(0.85)
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(Color.ctBrand)
+                .frame(width: badge, height: badge)
+                .background(prominent ? Color.onBrand : Color.ctBrand.opacity(0.1), in: Circle())
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.headline)
+                    .foregroundStyle(prominent ? Color.onBrand : Color.ctInk)
+                if let detail {
+                    Text(detail)
+                        .font(.subheadline)
+                        .foregroundStyle(prominent ? Color.onBrand.opacity(0.85) : Color.ctMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             Spacer(minLength: 0)
-            Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).opacity(0.6)
+            Image(systemName: "chevron.right")
+                .font(.footnote.weight(.bold))
+                .foregroundStyle(prominent ? Color.onBrand.opacity(0.8) : Color.ctMuted)
+                .accessibilityHidden(true)
         }
-        .foregroundStyle(prominent ? Color.white : Color.primary)
-        .padding()
+        .padding(prominent ? 18 : 14)
         .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
-        .background(prominent ? Color.accentColor : Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
-        .contentShape(RoundedRectangle(cornerRadius: 16))
+        .background {
+            let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
+            if prominent {
+                shape.fill(Color.ctBrand.gradient)
+                    .shadow(color: Color.ctBrand.opacity(0.3), radius: 12, y: 6)
+            } else {
+                shape.fill(Color.ctSurface)
+                    .overlay(shape.strokeBorder(Color.ctBorder.opacity(0.7), lineWidth: 1))
+            }
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 }

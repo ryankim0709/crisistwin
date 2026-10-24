@@ -2,9 +2,9 @@
 
 The civilian CrisisTwin app, for households planning ahead and during an
 emergency; the web workspace serves planners (see
-[ADR 0010](../docs/adr/0010-civilian-ios-app.md)). Its tabs are **Home**
-(official-alerts status, one-tap actions, plan summary, and an About sheet with
-the API readiness check), **My Plan**, and **Practice**. Native SwiftUI, targeting iPhone and iPad on
+[ADR 0010](../docs/adr/0010-civilian-ios-app.md)). It is one screen about the
+live incident (see **Live** below), with no tab bar; **My Plan**, My reports,
+responder join and About sit behind one menu button. Native SwiftUI, targeting iPhone and iPad on
 **iOS 17.0+**. Use **Xcode 16.2+** with its bundled Swift compiler in **Swift 5
 language mode**. Only Apple frameworks are used. There is no package install or
 project generation step; Swift Package Manager is the choice for future Swift
@@ -68,7 +68,7 @@ accepted by the mobile configuration.
 
 ### Practice map
 
-The Practice tab, under a "practice only, not a forecast" banner, shows only the
+The Practice view is no longer reachable on the phone (its code still builds). It showed, under a "practice only, not a forecast" banner, shows only the
 map and simulation: an injected stylesheet hides the web sidebar and planning
 tools, and navigation away from `/maps` is blocked. It shows the web app's `/maps` page in a `WKWebView`, so the map
 and the illustrative TypeScript fire model run unchanged (see
@@ -80,7 +80,7 @@ reachable or returns a non-200 status. Nothing is stored between launches.
 
 ### My Plan
 
-The My Plan tab holds a household meeting plan: a primary meeting point, an
+My Plan, in the menu, holds a household meeting plan: a primary meeting point, an
 optional backup, and trusted contacts (see
 [ADR 0009](../docs/adr/0009-mobile-meeting-plan.md)). Points are chosen with
 Apple Maps search or by tapping the map; contacts come from the system picker,
@@ -88,7 +88,31 @@ which needs no Contacts permission. The plan is saved only on the device as
 versioned JSON and needs no backend. **Open in Maps** gives directions, and
 sharing opens Messages for the contacts' numbers, or the share sheet where
 Messages is unavailable, such as the simulator. The app never sends anything on
-its own or reads the user's location.
+its own, and My Plan never reads the user's location.
+
+### Live
+
+The app opens on the live incident, a drill replaying the 2018 Camp Fire on the
+real Camp road network (see [ADR 0011](../docs/adr/0011-live-field-reports.md),
+[ADR 0012](../docs/adr/0012-controller-guidance.md) and the
+[API contract](../docs/live-reports.md)). A full-screen map shows your position,
+the current fire estimate (labeled with its method and drill time, never a
+forecast), confirmed hazards and your route. The top strip shows your zone and
+its guidance level. One bottom sheet holds the single instruction for your zone,
+such as "Be ready to leave, Via Skyway → Exit south, 26 min", with **I'm out**
+and **Need help** check-ins. Responders see their assigned task there. Guidance
+is per zone and is approved by a controller on the web (`/live`), or published
+automatically for a pure reroute around a confirmed block or fire.
+
+The phone polls `GET /api/live/incidents/camp-2018-drill/situation` and finds
+its zone on the device, so a civilian's location leaves the phone only inside a
+report or a **Need help** check-in. Responders can opt in to sharing their latest
+position. **Report what you see** (the floating button) saves reports on the
+device first and sends them when the network allows. Credentials are kept in the
+Keychain and the unsent queue in `Application Support/live-outbox.json`. To run
+it locally, start the backend and drill as described in
+[`app/backend/README.md`](../app/backend/README.md); Debug points at
+`http://localhost:8000`.
 
 Release does not include `Local.xcconfig` and has empty `API_BASE_URL` and `WEB_BASE_URL`. Set an
 HTTPS origin in the Release configuration before distribution. Until then the
@@ -104,11 +128,12 @@ mobile/
   CrisisTwin/
     App/                 SwiftUI app entry point and tab navigation
     Configuration/       Validated API and web origins from the app bundle
-    Networking/          Health DTO, HTTP client, and useful error messages
+    Networking/          Health and live-report HTTP clients, Keychain credentials
     Features/
       Home/              Civilian home and the About sheet with API readiness states
       Scenarios/         Practice tab: embedded web map with loading and error states
       Plan/              Meeting plan model and on-device store, plan tab, point editor
+      Live/              Field-report models, store, outbox, location, map, report and responder views
     Resources/           Info.plist and adaptive color assets
 ```
 

@@ -15,34 +15,38 @@ struct AboutView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 28) {
-                Text("CAL HACKS / PROTOTYPE")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 24) {
+                Text("CrisisTwin shows the one instruction for your zone during a wildfire and lets you report what you see.")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(Color.ctInk)
+                    .fixedSize(horizontal: false, vertical: true)
 
-                Text("CrisisTwin helps households plan where to meet if they get separated, and practice with a simulated wildfire.")
-                    .font(.title3)
+                Label {
+                    Text("This is a drill on the 2018 Camp Fire road network, not a real incident. The fire estimate is the latest observation or model fit, never a forecast. Meeting points are your own choices, not official shelters. Always follow evacuation orders from your local authorities.")
+                        .foregroundStyle(Color.ctInk)
+                        .fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: "exclamationmark.shield")
+                        .foregroundStyle(HazardTone.caution.color)
+                }
+                .font(.subheadline)
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(HazardTone.caution.color.opacity(0.1), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
 
-                Text("Meeting points are your own choices, not official shelters. The fire simulation is a simple illustrative model, not a forecast. Always follow evacuation orders from your local authorities.")
-                    .foregroundStyle(.secondary)
-
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 14) {
                     Label("System connection", systemImage: "network")
                         .font(.headline)
+                        .foregroundStyle(Color.ctInk)
                     connectionContent
-                    Text("Readiness only. No live incident or simulation data is loaded.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding()
-                .background(.background, in: RoundedRectangle(cornerRadius: 16))
+                .ctCard()
             }
-            .padding(24)
+            .padding(20)
             .frame(maxWidth: 640, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
-        .background(Color("WorkspaceBackground"))
+        .background(Color.ctBackground)
         .navigationTitle("About")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -60,19 +64,22 @@ struct AboutView: View {
         switch connection {
         case .loading:
             ProgressView("Connecting to the API…")
+                .tint(Color.ctBrand)
+                .foregroundStyle(Color.ctMuted)
         case .connected(let version):
-            Label("API and database connected", systemImage: "checkmark.circle")
-            Text("Version \(version) · last check succeeded")
+            StatusPill(text: "API and database connected", systemImage: "checkmark.circle", tone: .clear)
+            Text("Version \(version)")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.ctMuted)
             Button("Check again") { retry() }
-                .buttonStyle(.bordered)
+                .buttonStyle(SecondaryButtonStyle())
         case .failed(let message):
-            Label("Connection unavailable", systemImage: "exclamationmark.triangle")
+            StatusPill(text: "Connection unavailable", systemImage: "exclamationmark.triangle", tone: .caution)
             Text(message)
                 .font(.subheadline)
+                .foregroundStyle(Color.ctInk)
             Button("Try again") { retry() }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(PrimaryButtonStyle())
         }
     }
 

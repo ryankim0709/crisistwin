@@ -34,6 +34,8 @@ struct PlanView: View {
             if let message = store.errorMessage {
                 Section {
                     Label(message, systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(HazardTone.danger.color)
+                        .listRowBackground(HazardTone.danger.color.opacity(0.1))
                 }
             }
 
@@ -49,7 +51,11 @@ struct PlanView: View {
                     }
                 }
                 .frame(height: 240)
+                .overlay(alignment: .bottomLeading) { mapLegend }
+                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(Color.ctBorder.opacity(0.7), lineWidth: 1))
                 .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
                 .accessibilityLabel(mapSummary)
             }
 
@@ -58,12 +64,20 @@ struct PlanView: View {
 
             Section {
                 ForEach(plan.contacts) { contact in
-                    VStack(alignment: .leading) {
-                        Text(contact.name)
-                        Text(contact.phone ?? "No phone number")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                    HStack(spacing: 12) {
+                        Image(systemName: "person.crop.circle.fill")
+                            .font(.title2)
+                            .foregroundStyle(Color.ctBrand.opacity(0.8))
+                            .accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(contact.name).foregroundStyle(Color.ctInk)
+                            Text(contact.phone ?? "No phone number")
+                                .font(.caption)
+                                .foregroundStyle(Color.ctMuted)
+                        }
                     }
+                    .accessibilityElement(children: .combine)
+                    .listRowBackground(Color.ctSurface)
                 }
                 .onDelete { offsets in
                     store.update { $0.contacts.remove(atOffsets: offsets) }
@@ -72,20 +86,27 @@ struct PlanView: View {
                     pickingContact = true
                 } label: {
                     Label("Add a trusted contact", systemImage: "person.crop.circle.badge.plus")
+                        .frame(minHeight: 44)
                 }
+                .listRowBackground(Color.ctSurface)
             } header: {
-                Text("Trusted contacts")
+                Eyebrow("Trusted contacts")
             } footer: {
-                Text("Only the name and phone number you pick are saved, on this phone.")
+                Text("Saved only on this phone.")
+                    .foregroundStyle(Color.ctMuted)
             }
 
             Section {
                 sendButton
+                    .listRowBackground(Color.ctSurface)
             } footer: {
-                Text("Your personal plan, not an official shelter or instruction. Follow evacuation orders from local authorities first.")
+                Label("Your personal plan, not an official shelter. Follow evacuation orders first.", systemImage: "info.circle")
+                    .foregroundStyle(Color.ctMuted)
+                    .padding(.top, 4)
             }
         }
-        .background(Color("WorkspaceBackground"))
+        .listSectionSpacing(20)
+        .background(Color.ctBackground)
         .scrollContentBackground(.hidden)
         .navigationTitle("My Plan")
         .sheet(item: $editing) { slot in
@@ -139,37 +160,79 @@ struct PlanView: View {
         }
     }
 
+    /// Names each pin color in text, so the map never relies on color alone.
+    private var mapLegend: some View {
+        HStack(spacing: 6) {
+            if plan.primary != nil { LegendChip(number: 1, text: "Primary", tint: .ctBrand) }
+            if plan.backup != nil { LegendChip(number: 2, text: "Backup", tint: .orange) }
+        }
+        .padding(10)
+        .accessibilityHidden(true)
+    }
+
     @ViewBuilder
     private func pointSection(_ slot: PointSlot, point: MeetingPoint?) -> some View {
-        Section(slot.title) {
+        Section {
             if let point {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(point.name).font(.headline)
-                    if !point.note.isEmpty {
-                        Text(point.note).foregroundStyle(.secondary)
+                HStack(alignment: .top, spacing: 12) {
+                    SlotBadge(number: slot == .primary ? 1 : 2, tint: slot == .primary ? .ctBrand : .orange)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(point.name)
+                            .font(.headline)
+                            .foregroundStyle(Color.ctInk)
+                        if !point.note.isEmpty {
+                            Text(point.note)
+                                .font(.subheadline)
+                                .foregroundStyle(Color.ctMuted)
+                        }
                     }
                 }
+                .padding(.vertical, 4)
+                .accessibilityElement(children: .combine)
+                .listRowBackground(Color.ctSurface)
                 Link(destination: point.directionsURL) {
                     Label("Open in Maps", systemImage: "arrow.triangle.turn.up.right.diamond")
+                        .frame(minHeight: 44)
                 }
-                Button("Change") { editing = slot }
-                Button("Remove", role: .destructive) {
+                .listRowBackground(Color.ctSurface)
+                Button {
+                    editing = slot
+                } label: {
+                    Label("Change", systemImage: "pencil")
+                        .frame(minHeight: 44)
+                }
+                .listRowBackground(Color.ctSurface)
+                Button(role: .destructive) {
                     store.update { plan in
                         if slot == .primary { plan.primary = nil } else { plan.backup = nil }
                     }
                     fitCamera()
+                } label: {
+                    Label("Remove", systemImage: "trash")
+                        .frame(minHeight: 44)
                 }
+                .listRowBackground(Color.ctSurface)
             } else {
                 Button {
                     editing = slot
                 } label: {
-                    Label(
-                        slot == .primary ? "Choose where to meet" : "Add a backup in case the first is unreachable",
-                        systemImage: "mappin.and.ellipse"
-                    )
+                    HStack(spacing: 12) {
+                        SlotBadge(number: slot == .primary ? 1 : 2, tint: slot == .primary ? .ctBrand : .orange)
+                        Text(slot == .primary ? "Choose where to meet" : "Add a backup")
+                            .font(.body.weight(.medium))
+                            .multilineTextAlignment(.leading)
+                        Spacer(minLength: 0)
+                        Image(systemName: "plus.circle.fill")
+                            .font(.title3)
+                            .accessibilityHidden(true)
+                    }
+                    .frame(minHeight: 44)
                 }
                 .disabled(slot == .backup && plan.primary == nil)
+                .listRowBackground(Color.ctSurface)
             }
+        } header: {
+            Eyebrow(slot.title)
         }
     }
 
@@ -191,6 +254,41 @@ struct PlanView: View {
                 Label("Share plan", systemImage: "square.and.arrow.up")
             }
         }
+    }
+}
+
+/// A numbered circle that matches the map pin of the same slot.
+private struct SlotBadge: View {
+    let number: Int
+    let tint: Color
+
+    @ScaledMetric(relativeTo: .body) private var size: CGFloat = 30
+
+    var body: some View {
+        Text("\(number)")
+            .font(.subheadline.weight(.bold))
+            .foregroundStyle(tint)
+            .frame(width: size, height: size)
+            .background(tint.opacity(0.14), in: Circle())
+            .accessibilityHidden(true)
+    }
+}
+
+private struct LegendChip: View {
+    let number: Int
+    let text: String
+    let tint: Color
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Circle().fill(tint).frame(width: 8, height: 8)
+            Text("\(number) · \(text)")
+        }
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(Color.ctInk)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(.regularMaterial, in: Capsule())
     }
 }
 

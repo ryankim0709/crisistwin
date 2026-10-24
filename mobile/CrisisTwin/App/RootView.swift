@@ -1,40 +1,36 @@
 import SwiftUI
 
-enum AppTab: Hashable {
-    case home, plan, practice
+/// Former tab names. The phone has no tab bar any more (ADR 0012); kept because the unused
+/// `HomeView` still takes an `openTab` callback.
+enum AppTab: String, Hashable {
+    case home, live, plan, practice
 }
 
+/// Debug builds accept `-screen <name>` to open a screen directly for screenshots: `menu`,
+/// `report`, `myreports`, `responder`, `plan` or `about`. Anything else opens the incident screen.
+enum DebugLaunch {
+    static var screen: String? {
+        #if DEBUG
+        return UserDefaults.standard.string(forKey: "screen")
+        #else
+        return nil
+        #endif
+    }
+}
+
+/// The phone is one screen about the live incident; everything else sits behind its menu.
 struct RootView: View {
-    @State private var selection: AppTab = .home
-    /// One plan shared by Home and My Plan, so both always show the same saved plan.
+    /// The household meeting plan, opened from the menu.
     @State private var planStore = MeetingPlanStore()
+    /// Live situation, guidance, reports and check-ins (ADR 0011, 0012).
+    @State private var liveStore = LiveStore()
+    @State private var location = LocationProvider()
 
     var body: some View {
-        TabView(selection: $selection) {
-            NavigationStack {
-                HomeView { selection = $0 }
-            }
-            .tabItem {
-                Label("Home", systemImage: "house")
-            }
-            .tag(AppTab.home)
-
-            NavigationStack {
-                PlanView()
-            }
-            .tabItem {
-                Label("My Plan", systemImage: "figure.2")
-            }
-            .tag(AppTab.plan)
-
-            NavigationStack {
-                ScenariosView()
-            }
-            .tabItem {
-                Label("Practice", systemImage: "flame")
-            }
-            .tag(AppTab.practice)
-        }
-        .environment(planStore)
+        IncidentView()
+            .environment(planStore)
+            .environment(liveStore)
+            .environment(location)
+            .tint(Color.ctBrand)
     }
 }

@@ -19,6 +19,12 @@ export const navigationItems: readonly NavigationItem[] = [
     description: "Choose an ignition point and explore illustrative fire spread.",
   },
   {
+    path: "/live",
+    label: "Live command",
+    group: "Workspace",
+    description: "Camp Fire drill: approve guidance, triage field reports, run the drill clock.",
+  },
+  {
     path: "/scenarios",
     label: "Scenarios",
     group: "Workspace",

@@ -15,18 +15,33 @@ struct ScenariosView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Label("Practice only: a simulated fire from a simple model, not a forecast or an evacuation order.", systemImage: "flame")
-                .font(.footnote)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal)
-                .padding(.vertical, 10)
-                .background(.orange.opacity(0.15))
+            practiceBanner
             mapContent
                 .frame(maxHeight: .infinity)
         }
-        .background(Color("WorkspaceBackground"))
+        .background(Color.ctBackground)
         .navigationTitle("Practice")
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    /// Always visible above the map, so the simulation is never mistaken for a forecast or an order.
+    private var practiceBanner: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: "flame.fill")
+                .foregroundStyle(HazardTone.caution.color)
+                .accessibilityHidden(true)
+            Text("Practice only: a simulated fire from a simple model, not a forecast or an evacuation order.")
+                .foregroundStyle(Color.ctInk)
+        }
+        .font(.footnote.weight(.medium))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(HazardTone.caution.color.opacity(0.12))
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(HazardTone.caution.color.opacity(0.35)).frame(height: 1)
+        }
+        .accessibilityElement(children: .combine)
     }
 
     @ViewBuilder
@@ -38,29 +53,65 @@ struct ScenariosView: View {
                 switch state {
                 case .loading:
                     ProgressView("Loading the practice map…")
+                        .tint(Color.ctBrand)
+                        .foregroundStyle(Color.ctMuted)
                 case .loaded:
                     EmptyView()
                 case .failed(let message):
-                    ContentUnavailableView {
-                        Label("Practice map unavailable", systemImage: "map")
-                    } description: {
-                        Text(message)
-                    } actions: {
-                        Button("Try again") {
+                    UnavailableCard(message: message) {
+                        Button {
                             state = .loading
                             attempt += 1
+                        } label: {
+                            Label("Try again", systemImage: "arrow.clockwise")
                         }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(PrimaryButtonStyle())
                     }
                 }
             }
         } else {
-            ContentUnavailableView(
-                "Practice map unavailable",
-                systemImage: "map",
-                description: Text("Set a valid WEB_BASE_URL in the Xcode configuration. Release requires HTTPS.")
-            )
+            UnavailableCard(message: "Set a valid WEB_BASE_URL in the Xcode configuration. Release requires HTTPS.") {
+                EmptyView()
+            }
         }
+    }
+}
+
+/// Explains why the practice map is missing, with an optional retry, in a centered card.
+private struct UnavailableCard<Actions: View>: View {
+    let message: String
+    @ViewBuilder let actions: Actions
+
+    @ScaledMetric(relativeTo: .title) private var badge: CGFloat = 64
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 16) {
+                Image(systemName: "map")
+                    .font(.title.weight(.semibold))
+                    .foregroundStyle(Color.ctBrand)
+                    .frame(width: badge, height: badge)
+                    .background(Color.ctBrand.opacity(0.1), in: Circle())
+                    .accessibilityHidden(true)
+                VStack(spacing: 6) {
+                    Text("Practice map unavailable")
+                        .font(.title3.bold())
+                        .foregroundStyle(Color.ctInk)
+                    Text(message)
+                        .font(.subheadline)
+                        .foregroundStyle(Color.ctMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .multilineTextAlignment(.center)
+                actions
+                    .padding(.top, 4)
+            }
+            .ctCard(padding: 24)
+            .padding(20)
+            .frame(maxWidth: 480)
+            .frame(maxWidth: .infinity)
+        }
+        .defaultScrollAnchor(.center)
     }
 }
 
