@@ -9,6 +9,7 @@ from typing import Any
 
 from pymongo import ASCENDING, DESCENDING, IndexModel
 from pymongo.database import Database
+from pymongo.errors import CollectionInvalid
 
 DATE = {"bsonType": "date"}
 STR = {"bsonType": "string"}
@@ -258,8 +259,14 @@ def apply(db: Database, drop_drill_data: bool = False) -> list[str]:
             db.command("collMod", name, validator=validator, validationLevel="strict", validationAction="error")
             lines.append(f"updated validator {name}")
         else:
-            db.create_collection(name, validator=validator, validationLevel="strict", validationAction="error")
-            lines.append(f"created {name}")
+            try:
+                db.create_collection(name, validator=validator, validationLevel="strict", validationAction="error")
+                lines.append(f"created {name}")
+            except CollectionInvalid:
+                # A background thread (auto-replan, twin warm-up) wrote to it since the listing,
+                # which creates it implicitly; apply the validator instead.
+                db.command("collMod", name, validator=validator, validationLevel="strict", validationAction="error")
+                lines.append(f"updated validator {name}")
         created = db[name].create_indexes(INDEXES[name])
         lines.append(f"  indexes {name}: {', '.join(created)}")
     return lines
