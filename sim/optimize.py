@@ -49,7 +49,7 @@ EARLIEST_ORDER_AT = datetime.fromisoformat("2018-11-08T15:13:00+00:00")
 LATEST_ORDER_AT = datetime.fromisoformat("2018-11-08T17:30:00+00:00")
 ARRIVALS_REPORTED_BY = datetime.fromisoformat("2018-11-08T18:00:00+00:00")
 
-# Objective, minimised: exposed vehicle-minutes (primary) plus secondary penalties in
+# Objective, minimised: exposed vehicle-minutes on roads and at home (primary) plus secondary penalties in
 # the same unit. A vehicle still blocked at the horizon costs as much as an hour exposed;
 # each minute of clearance costs one vehicle-minute. An uncleared run (not every vehicle
 # arrived) is charged clearance from EARLIEST_ORDER_AT to the horizon end.
@@ -202,7 +202,10 @@ def _score(result: dict, params: TrafficParams, end: datetime) -> dict:
     metrics = result["metrics"]
     summary = result["summary"]
     frame_min = params.record_every_s / 60
-    exposed_veh_min = sum(m["exposed_veh"] for m in metrics) * frame_min
+    road_veh_min = sum(m["exposed_veh"] for m in metrics) * frame_min
+    # Count people still at home inside the fire too; road-only exposure rewards ordering late.
+    home_veh_min = sum(m.get("exposed_at_origin_veh", 0) for m in metrics) * frame_min
+    exposed_veh_min = road_veh_min + home_veh_min
     blocked_end = metrics[-1]["blocked_veh"] if metrics else 0
     by = _iso(ARRIVALS_REPORTED_BY)
     arrived_by = max((m["arrived_veh"] for m in metrics if m["at"] <= by), default=0)
@@ -213,6 +216,8 @@ def _score(result: dict, params: TrafficParams, end: datetime) -> dict:
     return {
         "objective": round(objective, 1),
         "exposed_veh_min": round(exposed_veh_min, 1),
+        "road_exposed_veh_min": round(road_veh_min, 1),
+        "home_exposed_veh_min": round(home_veh_min, 1),
         "peak_exposed_veh": summary["max_exposed_veh"],
         "peak_blocked_veh": summary["max_blocked_veh"],
         "blocked_at_end_veh": blocked_end,
