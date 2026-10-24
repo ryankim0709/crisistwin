@@ -25,7 +25,8 @@ its inputs and its data sources do not change.
 Choosing an area: the page loads the landscape around an *area centre* (default Berkeley
 Hills) when it opens, so there is a board to click before any ignition. Clicking the board
 sets the ignition point inside the loaded area without refetching. A small locator map
-picks a new area centre (the only remaining imagery map).
+picks a new area centre. On the `/fire` page it is the only remaining imagery map;
+`/maps` and the replay views still use MapLibre.
 
 ## Module boundaries
 

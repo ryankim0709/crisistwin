@@ -362,13 +362,17 @@ either wind control by hand — the page says the wind is an assumption you set.
 moisture preset (critical / Red Flag) and the default 40 mph wind are demo settings chosen
 to show peak fire weather; they are **explicitly unvalidated**, and the page says so.
 
-Placing an ignition point fetches the real landscape around it: a LANDFIRE FBFM40 fuel
-raster, four more LANDFIRE layers for canopy base height, bulk density, cover, and height
-that the crown fire model needs, and terrain elevation tiles, over a radius scaled to the
-horizon — roughly 5 km at two hours and 12 km at six. The canopy layers cost a real extra
-download — five coverages' worth of sub-requests instead of one — and a run still proceeds
-as surface fire only, clearly labelled as such, if any of them fails to load or fails a
-plausibility check.
+The page loads the real landscape around an area centre when it opens (default Berkeley
+Hills, 37.88, -122.24): a LANDFIRE FBFM40 fuel raster, four more LANDFIRE layers for canopy
+base height, bulk density, cover, and height that the crown fire model needs, and terrain
+elevation tiles, over a radius scaled to the horizon — roughly 5 km at two hours and 12 km
+at six. Clicking the landscape places the ignition point without refetching. Changing the
+horizon refetches around the same centre and drops the ignition point if it falls outside
+the new box. **Change area** picks a new centre from the presets (Berkeley Hills, Paradise,
+Malibu / Woolsey) or a small locator map, and clears the ignition point and run. The canopy
+layers cost a real extra download — five coverages' worth of sub-requests instead of one —
+and a run still proceeds as surface fire only, clearly labelled as such, if any of them fails
+to load or fails a plausibility check.
 The page therefore needs internet access and works only in the contiguous United States,
 where LANDFIRE publishes this layer; elsewhere the run fails with an explicit error rather
 than inventing fuel. The fuel and canopy rasters are each fetched as a mosaic of bounded
@@ -384,10 +388,13 @@ non-burnable ground before the horizon, and when it has run off the edge of the 
 area. A fire started on developed ground reports its Rothermel quantities as zero, because
 they are undefined for a burning subdivision rather than measured to be nothing.
 
-Keyboard: focus the map, then use arrow keys to pan, `+`/`-` to zoom, and `Enter`
-to act on the map centre. The map needs WebGL2. No API key, backend call, or
-persistence is involved; terrain tiles and the National Weather Service forecast are
-called straight from the browser, and LANDFIRE through the same-origin proxy.
+Keyboard: `Space` plays or pauses the run once one exists, unless a focused control owns the
+key. On the timeline slider, arrow keys step one 15-minute frame, Shift+arrow, `PageUp` and
+`PageDown` step an hour, and `Home` and `End` jump to ignition and the horizon. The fire
+stage and the locator map need WebGL; without it the page shows a notice instead of the
+diorama. No API key, backend call, or persistence is involved; terrain tiles and the
+National Weather Service forecast are called straight from the browser, and LANDFIRE through
+the same-origin proxy.
 
 | File                                 | Role                                                                       |
 | ------------------------------------ | -------------------------------------------------------------------------- |
@@ -400,6 +407,10 @@ called straight from the browser, and LANDFIRE through the same-origin proxy.
 | `app/src/fire/diorama/`              | three.js fire diorama renderer and its contract (`types.ts`).              |
 | `app/src/fire/fuelPalette.ts`        | Fuel-family and arrival colours shared by the legend and the renderer.     |
 | `app/src/fire/FireSimulatorPage.tsx` | Scenario panel, area picker, playback dock, results, attribution.          |
+| `app/src/fire/useFirePlayback.ts`    | Playback clock for the run: play, pause, seek and speed in model minutes.  |
+| `app/src/fire/ui/AreaPicker.tsx`     | Change-area dialog: place presets and a locator map (contiguous US only).  |
+| `app/src/fire/ui/FireDock.tsx`       | Playback dock: play/pause, timeline slider and speed control.              |
+| `app/src/fire/ui/FireLegend.tsx`     | Fuel-family and arrival legend; each colour is paired with a glyph.        |
 
 ```ts
 // Fuel and terrain around the ignition point. Network call; contiguous US only.
