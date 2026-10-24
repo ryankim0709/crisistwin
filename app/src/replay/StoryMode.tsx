@@ -23,7 +23,8 @@ export interface StoryModeProps {
   timezone: string;
   metrics: TrafficMetrics | null;
   trafficEvidence: EvidenceClass | null;
-  fixtureDemand: boolean;
+  /** Demand tag shown with the live counts, e.g. "CENSUS DEMAND (DERIVED)". */
+  demandLabel: string | null;
   /** Run the clock to `ms` at `speed` (sim s per wall s), then call onArrive. */
   playTo: (ms: number, speed: number, onArrive: () => void) => void;
   seek: (ms: number) => void;
@@ -44,7 +45,7 @@ export default function StoryMode({
   timezone,
   metrics,
   trafficEvidence,
-  fixtureDemand,
+  demandLabel,
   playTo,
   seek,
   focus,
@@ -235,7 +236,12 @@ export default function StoryMode({
             </div>
             <p>
               {trafficEvidence && <EvidenceChip value={trafficEvidence} />}
-              {fixtureDemand && <span className="rp-fixture-tag">FIXTURE DEMAND</span>} modelled vehicles, live with
+              {demandLabel && (
+                <span className={demandLabel.startsWith("FIXTURE") ? "rp-fixture-tag" : "rp-chip rp-chip--derived"}>
+                  {demandLabel}
+                </span>
+              )}{" "}
+              modelled vehicles, live with
               the clock
             </p>
           </div>

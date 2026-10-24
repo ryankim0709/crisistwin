@@ -39,8 +39,10 @@ export default function CompareTab({ baseline, index, load, showVariant, onSelec
     <div className="rp-tab">
       <p className="rp-disclaimer rp-disclaimer--top" role="note">
         <EvidenceChip value="simulated" /> What-if variants are simulated counterfactuals on the same seed, network and
-        fixture demand as the baseline run. They are planning experiments, not history. Fire perimeters, roads and
-        damage shown on the map are unchanged.
+        demand
+        {index.demandTotalVeh != null && <> ({index.demandTotalVeh.toLocaleString("en-US")} vehicles)</>} as the
+        baseline run. They are planning experiments, not history. Fire perimeters, roads and damage shown on the map
+        are unchanged.
       </p>
 
       {load.status === "ready" && (
@@ -140,7 +142,7 @@ export default function CompareTab({ baseline, index, load, showVariant, onSelec
                 </tbody>
               </table>
             </div>
-            <p className="rp-rule">One seed and fixture demand: treat small differences as noise, not as significant.</p>
+            <p className="rp-rule">One seed: treat small differences as noise, not as significant.</p>
           </section>
 
           <section aria-labelledby="rp-risk-title">

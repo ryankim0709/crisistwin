@@ -39,6 +39,14 @@ export default function MapLegend({
         </li>
         <li>
           <svg viewBox="0 0 28 14" aria-hidden="true">
+            <circle cx="7" cy="7" r="2.4" fill={COLORS.fireObs} stroke="#1a0b02" strokeWidth="0.8" />
+            <circle cx="15" cy="5" r="2.4" fill={COLORS.fireObs} stroke="#1a0b02" strokeWidth="0.8" />
+            <circle cx="22" cy="9" r="3.6" fill={COLORS.fireObs} stroke="#1a0b02" strokeWidth="0.8" />
+          </svg>
+          Fire observed (NIST points)
+        </li>
+        <li>
+          <svg viewBox="0 0 28 14" aria-hidden="true">
             <line x1="1" y1="7" x2="27" y2="7" stroke={COLORS.free} strokeWidth="2" opacity="0.5" />
             <circle cx="7" cy="7" r="2.6" fill={COLORS.particle} />
             <circle cx="15" cy="7" r="2.6" fill={COLORS.particle} />
@@ -57,6 +65,13 @@ export default function MapLegend({
             <line x1="1" y1="7" x2="27" y2="7" stroke={COLORS.closed} strokeWidth="2.5" strokeDasharray="3 3" />
           </svg>
           Closed road (dashed)
+        </li>
+        <li>
+          <svg viewBox="0 0 28 14" aria-hidden="true">
+            <circle cx="8" cy="7" r="4" fill="#0a0e13" stroke={COLORS.destination} strokeWidth="2.2" />
+            <circle cx="20" cy="7" r="4.6" fill={COLORS.refuge} stroke="#fff" strokeWidth="1.6" />
+          </svg>
+          Exit (ring) · refuge area (solid)
         </li>
       </ul>
       {windFromDeg !== null && (

@@ -5,6 +5,8 @@ import type { FeatureCollection } from "geojson";
 import type { GeoJSONSource, Map as MapLibreMap, MapOptions } from "maplibre-gl";
 import { SATELLITE_STYLE } from "../maps/basemap";
 import { BASEMAP_BACKGROUND, SATELLITE_BACKGROUND } from "./basemapStyle";
+import { ignitionBasis } from "./timeline";
+import { REFUGE_KIND, refugeStateAt, traCode, type RefugeTimeline } from "./refuges";
 import type {
   LngLat,
   Perimeter,
@@ -111,6 +113,8 @@ export const COLORS = {
   zone: "#8fb3ff",
   zoneOrdered: "#ffb547",
   destination: "#7cf2c9",
+  refuge: "#9fe8ff",
+  fireObs: "#ffe08a",
   damage: "#c7a6ff",
 } as const;
 
@@ -118,6 +122,7 @@ export type LayerGroup =
   | "fire"
   | "history"
   | "simFire"
+  | "fireObs"
   | "roads"
   | "particles"
   | "zones"
@@ -136,6 +141,7 @@ export const LAYER_GROUPS: Record<LayerGroup, string[]> = {
     "sim-ignition",
   ],
   fire: ["fire-glow-outer", "fire-fill", "fire-glow", "fire-line", "fire-label"],
+  fireObs: ["fire-obs"],
   zones: ["zones-fill", "zones-hatch", "zones-line", "zones-line-ordered"],
   roads: [
     "roads-base",
@@ -148,13 +154,15 @@ export const LAYER_GROUPS: Record<LayerGroup, string[]> = {
     "roads-bridge-label",
   ],
   particles: ["particles-halo", "particles"],
-  destinations: ["destinations-halo", "destinations"],
+  destinations: ["destinations-halo", "destinations", "refuges", "refuges-label"],
   damage: ["damage"],
 };
 
 /** Layers that show a tooltip on hover, topmost first. */
 export const INTERACTIVE_LAYERS = [
   "particles",
+  "fire-obs",
+  "refuges",
   "destinations",
   "damage",
   "roads-closed",
@@ -365,7 +373,8 @@ export function zonesCollection(
   };
 }
 
-function destinationsCollection(model: ReplayModel): FeatureCollection {
+/** Destinations with their own evidence class; refuges carry their open state at time t. */
+export function destinationsCollection(model: ReplayModel, refuges: RefugeTimeline, t: number): FeatureCollection {
   return {
     type: "FeatureCollection",
     features: (model.destinations?.items ?? []).map((d) => ({
@@ -374,11 +383,56 @@ function destinationsCollection(model: ReplayModel): FeatureCollection {
       properties: {
         name: d.name,
         dest_kind: d.kind,
+        evidence_class: d.evidenceClass,
         label: `${d.name} (${d.kind.replace(/_/g, " ")})`,
+        short: d.kind === REFUGE_KIND ? (traCode(d.name) ? `TRA-${traCode(d.name)}` : d.name) : "",
         capacity_veh: d.capacityVeh,
+        refuge_state: d.kind === REFUGE_KIND ? refugeStateAt(refuges, d.id, t) : "",
+        refuge_opened_ms: refuges.get(d.id)?.find((s) => s.open)?.atMs ?? null,
       },
     })),
   };
+}
+
+/** NIST fire observation points with their observed time, for a time filter on the layer. */
+export function fireObservationsCollection(model: ReplayModel): FeatureCollection {
+  return {
+    type: "FeatureCollection",
+    features: (model.fireObservations?.items ?? []).map((o) => ({
+      type: "Feature",
+      geometry: { type: "Point", coordinates: o.coord },
+      properties: {
+        at_ms: o.atMs,
+        time_precision: o.timePrecision,
+        location_source: o.locationSource,
+        residual: o.residual,
+        source_locator: o.sourceLocator,
+        evidence_class: model.fireObservations?.evidenceClass ?? null,
+      },
+    })),
+  };
+}
+
+/** How long an observation stays highlighted as "recent" after its time. */
+export const FIRE_OBS_RECENT_MS = 30 * 60_000;
+
+/** Show observations seen by t; the last FIRE_OBS_RECENT_MS of them larger and brighter. */
+export function setFireObservationTime(map: MapLibreMap, t: number): void {
+  if (map.getLayer("fire-obs")) {
+    map.setFilter("fire-obs", ["<=", ["get", "at_ms"], t]);
+    map.setPaintProperty("fire-obs", "circle-radius", [
+      "case",
+      [">", ["get", "at_ms"], t - FIRE_OBS_RECENT_MS],
+      4.5,
+      2.6,
+    ]);
+    map.setPaintProperty("fire-obs", "circle-opacity", [
+      "case",
+      [">", ["get", "at_ms"], t - FIRE_OBS_RECENT_MS],
+      1,
+      0.55,
+    ]);
+  }
 }
 
 function damageCollection(model: ReplayModel): FeatureCollection {
@@ -401,7 +455,11 @@ function ignitionCollection(model: ReplayModel): FeatureCollection {
       {
         type: "Feature",
         geometry: { type: "Point", coordinates: ignition.coord },
-        properties: { provenance: ignition.provenance, at_ms: ignition.atMs },
+        properties: {
+          provenance: ignition.provenance,
+          at_ms: ignition.atMs,
+          label: `${ignitionBasis(model) === "reconstructed" ? "Reconstructed" : "Assumed"} ignition (model start)`,
+        },
       },
     ],
   };
@@ -548,7 +606,8 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
   geojson("roads", roadsCollection(model));
   geojson("roads-closed-labels");
   geojson("particles");
-  geojson("destinations", destinationsCollection(model));
+  geojson("destinations", destinationsCollection(model, new Map(), model.clock.startMs));
+  geojson("fire-obs", fireObservationsCollection(model));
   geojson("damage", damageCollection(model));
   geojson("pin");
   geojson("sim-area", simAreaCollection(model));
@@ -884,7 +943,7 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     type: "symbol",
     source: "sim-ignition",
     layout: {
-      "text-field": "Assumed ignition (model)",
+      "text-field": ["get", "label"],
       "text-font": LABEL_FONT,
       "text-size": 11,
       "text-anchor": "left",
@@ -930,6 +989,7 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     id: "destinations-halo",
     type: "circle",
     source: "destinations",
+    filter: ["!=", ["get", "dest_kind"], REFUGE_KIND],
     paint: {
       "circle-radius": 11,
       "circle-color": COLORS.destination,
@@ -941,11 +1001,59 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     id: "destinations",
     type: "circle",
     source: "destinations",
+    filter: ["!=", ["get", "dest_kind"], REFUGE_KIND],
     paint: {
       "circle-radius": 4.5,
       "circle-color": "#0a0e13",
       "circle-stroke-color": COLORS.destination,
       "circle-stroke-width": 2.5,
+    },
+  });
+  // Temporary refuge areas (NIST): solid marker with a white ring and a "TRA-x" tag, so they
+  // never read as exits (hollow rings). Faded while not open; open/closed is also in the tooltip.
+  map.addLayer({
+    id: "refuges",
+    type: "circle",
+    source: "destinations",
+    filter: ["==", ["get", "dest_kind"], REFUGE_KIND],
+    paint: {
+      "circle-radius": ["match", ["get", "refuge_state"], "open", 6.5, 4.5],
+      "circle-color": COLORS.refuge,
+      "circle-opacity": ["match", ["get", "refuge_state"], "closed", 0.25, 0.95],
+      "circle-stroke-color": "#ffffff",
+      "circle-stroke-width": ["match", ["get", "refuge_state"], "open", 2, 1],
+      "circle-stroke-opacity": ["match", ["get", "refuge_state"], "closed", 0.35, 1],
+    },
+  });
+  map.addLayer({
+    id: "refuges-label",
+    type: "symbol",
+    source: "destinations",
+    minzoom: 11,
+    filter: ["all", ["==", ["get", "dest_kind"], REFUGE_KIND], ["==", ["get", "refuge_state"], "open"]],
+    layout: {
+      "text-field": ["concat", ["get", "short"], " refuge"],
+      "text-font": LABEL_FONT_BOLD,
+      "text-size": 10.5,
+      "text-offset": [0, 1.1],
+      "text-anchor": "top",
+    },
+    paint: { "text-color": COLORS.refuge, "text-halo-color": "#0a0e13", "text-halo-width": 1.6 },
+  });
+
+  // NIST fire observations: small warm dots with a dark ring, shown from their observed time.
+  // Reconstructed evidence, so solid points, never an area or a glow like the model fire.
+  map.addLayer({
+    id: "fire-obs",
+    type: "circle",
+    source: "fire-obs",
+    filter: ["<=", ["get", "at_ms"], model.clock.startMs],
+    paint: {
+      "circle-radius": 2.6,
+      "circle-color": COLORS.fireObs,
+      "circle-opacity": 0.55,
+      "circle-stroke-color": "#1a0b02",
+      "circle-stroke-width": 0.8,
     },
   });
 

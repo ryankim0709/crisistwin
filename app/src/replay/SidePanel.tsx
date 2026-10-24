@@ -174,6 +174,9 @@ function CalmSummary({
 }) {
   const row = model.traffic && frameIndex >= 0 ? model.traffic.metrics[frameIndex] : null;
   const fmt = (n: number | undefined) => (n === undefined ? "—" : n.toLocaleString("en-US"));
+  /** A per-frame metric beyond the standard five (e.g. open_refuges), or null when absent. */
+  const extra = (key: string): number | null =>
+    model.traffic && frameIndex >= 0 ? (model.traffic.extraMetrics[key]?.[frameIndex] ?? null) : null;
   // Key events are historical records; fixture placeholders (synthetic zone orders) stay in
   // the full event feed but would otherwise crowd out the real 2018 alerts here.
   const isKey = (e: ReplayModel["events"][number]) =>
@@ -241,6 +244,24 @@ function CalmSummary({
         Vehicles (model, {model.traffic?.totalVeh?.toLocaleString("en-US") ?? "—"} total). Stuck and in-fire-area counts
         can overlap.
       </p>
+      {extra("open_refuges") !== null && (
+        <p className="rp-calm-refuges">
+          <span>
+            <strong>{fmt(extra("open_refuges") ?? undefined)}</strong> temporary refuge area
+            {extra("open_refuges") === 1 ? "" : "s"} open (NIST times)
+            {extra("active_refuges") !== null && <> · {fmt(extra("active_refuges") ?? undefined)} holding modelled arrivals</>}
+          </span>
+          {extra("trapped_by_fire_veh") !== null && (
+            <span>
+              <strong>{fmt(extra("trapped_by_fire_veh") ?? undefined)}</strong> vehicles trapped by fire
+              {extra("trapped_by_closure_veh") !== null && (
+                <> · {fmt(extra("trapped_by_closure_veh") ?? undefined)} by closures</>
+              )}{" "}
+              (model)
+            </span>
+          )}
+        </p>
+      )}
       {(last || next) && (
         <ul className="rp-rows rp-calm-events">
           {last && keyEvent("Latest", last)}
@@ -446,8 +467,12 @@ function Legend({ perParticle }: { perParticle: number | null }) {
       </li>
       <li>
         <span className="rp-key rp-key--sim" aria-hidden="true" />
-        Model fire — burned char inside, orange-yellow newest band (last 30 min), glowing edge; simulated
-        from an assumed ignition
+        Model fire — burned char inside, orange-yellow newest band (last 30 min), glowing edge; a
+        fire-spread model run, not an observation
+      </li>
+      <li>
+        <span className="rp-key rp-key--fireobs" aria-hidden="true" />
+        Fire observed (NIST) — small yellow dots at points where fire was reported, shown from their time
       </li>
       <li>
         <span className="rp-key rp-key--history" aria-hidden="true" />
@@ -527,7 +552,15 @@ export interface SidePanelProps {
   showResidents?: boolean;
 }
 
-export type PanelTab = "overview" | "responder" | "evacuee" | "explain" | "whatif" | "stress" | "responders";
+export type PanelTab =
+  | "overview"
+  | "responder"
+  | "evacuee"
+  | "explain"
+  | "whatif"
+  | "validation"
+  | "stress"
+  | "responders";
 
 const TABS: { id: PanelTab; label: string }[] = [
   { id: "overview", label: "Overview" },

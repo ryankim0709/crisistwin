@@ -37,6 +37,8 @@ export interface VariantSummary {
 }
 
 export interface VariantIndex {
+  /** basis.demand.total_veh: the demand the variants were run on. */
+  demandTotalVeh: number | null;
   variants: VariantSummary[];
   skipped: { id: string; title: string; reason: string }[];
   limitations: string[];
@@ -87,7 +89,7 @@ export const VARIANT_CAVEATS: Record<string, VariantCaveat> = {
   "skyway-closed-0800": {
     kind: "artifact",
     label: "Model artifact",
-    text: "The apparent improvement comes from a routing artifact on fixture demand, not a finding.",
+    text: "The apparent improvement comes from a routing artifact in the traffic model, not a finding.",
   },
   "no-contraflow": {
     kind: "noise",
@@ -135,7 +137,9 @@ function metricDelta(value: unknown): MetricDelta {
 export function parseVariantIndex(data: unknown): VariantIndex {
   const index = obj(data, "index");
   if (index.kind !== "crisistwin_variant_index") throw new BundleError("kind", "expected crisistwin_variant_index");
+  const basisDemand = objOrEmpty(objOrEmpty(index.basis).demand);
   return {
+    demandTotalVeh: typeof basisDemand.total_veh === "number" ? basisDemand.total_veh : null,
     variants: arr(index.variants, "variants").map((v, i) => {
       const item = obj(v, `variants[${i}]`);
       return {

@@ -187,6 +187,15 @@ export function metricSeries(
   return out;
 }
 
+/**
+ * How the model fire's ignition was placed: "reconstructed" when its provenance says so
+ * (e.g. NIST time and origin), otherwise "assumed".
+ */
+export function ignitionBasis(model: ReplayModel): "assumed" | "reconstructed" {
+  const p = model.fireSimulated?.ignition?.provenance ?? "";
+  return /^reconstructed\b/i.test(p) ? "reconstructed" : "assumed";
+}
+
 export function hasFixtureData(model: ReplayModel): boolean {
   return Object.values(model.layerStatus).some((s) => s.status === "fixture");
 }

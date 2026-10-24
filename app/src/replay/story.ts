@@ -4,7 +4,7 @@
 import { VARIANT_CAVEATS, featurable, type VariantIndex } from "./compare";
 import { distanceM, inArea } from "./insights";
 import { CAPTION_PLACES, buildCaption, splitSnappedNote } from "./narrative";
-import { frameIndexAt, perimeterIndexAt, simulatedFrontIndexAt } from "./timeline";
+import { frameIndexAt, ignitionBasis, perimeterIndexAt, simulatedFrontIndexAt } from "./timeline";
 import type { AreaGeometry, EvidenceClass, LngLat, ReplayEvent, ReplayModel } from "./types";
 
 export interface Chapter {
@@ -60,8 +60,6 @@ function fireCoords(model: ReplayModel, t: number): LngLat[] {
 
 /** Below this modelled mean speed an edge counts as jammed for framing the camera. */
 const JAM_KPH = 15;
-/** Frame the gridlock around the reference place, not jams at distant destinations. */
-const GRIDLOCK_RADIUS_M = 8000;
 
 /**
  * Coordinates of the edges carrying the most modelled vehicles at frame k, optionally only
@@ -94,6 +92,19 @@ function busyEdgeCoords(
   return out;
 }
 
+/** Ensure a closing full stop, unless `close` is false (then strip one). */
+function sentence(text: string, close = true): string {
+  const trimmed = text.trim().replace(/[.]+$/, "");
+  return close ? `${trimmed}.` : trimmed;
+}
+
+/** NIST fire observations seen in the half hour before t, for framing the camera. */
+function observationCoords(model: ReplayModel, t: number): LngLat[] {
+  return (model.fireObservations?.items ?? [])
+    .filter((o) => o.atMs <= t && o.atMs > t - 30 * 60_000)
+    .map((o) => o.coord);
+}
+
 function argmax(values: number[]): number {
   let best = -1;
   for (let i = 0; i < values.length; i += 1) if (best < 0 || values[i] > values[best]) best = i;
@@ -119,20 +130,32 @@ export function buildChapters(model: ReplayModel, variants: VariantIndex | null)
   const place = CAPTION_PLACES[model.incident.id] ?? null;
   const fireLine = (t: number) => {
     const fire = buildCaption(model, t, frameIndexAt(model, t)).fire;
-    return fire ? ` At this moment the ${fire.replace(/^model fire/, "modelled fire")}.` : "";
+    if (!fire) return "";
+    // Caption fragments ("model fire 12.0 km from Paradise") as a full sentence.
+    const text = fire
+      .replace(/^model fire has/, "the modelled fire has")
+      .replace(/^model fire /, "the modelled fire is ")
+      .replace(/^satellite perimeter /, "the satellite perimeter is ")
+      .replace(/ inside satellite perimeter$/, " is inside the satellite perimeter");
+    return ` At this moment ${text}.`;
   };
 
+  // Opening: the first 911 report when the bundle has it, else the ignition record.
   const ignition = firstEvent(model, (e) => e.type === "fire_ignition");
+  const reported = firstEvent(model, (e) => e.type === "fire_reported" && HISTORICAL.has(e.evidenceClass));
+  const opening = reported ?? ignition;
   const ignitionCoord = model.fireSimulated?.ignition?.coord ?? null;
-  if (ignition) {
+  const basis = ignitionBasis(model);
+  if (opening) {
     chapters.push({
       id: "ignition",
-      atMs: ignition.atMs,
-      title: splitSnappedNote(ignition.label).text,
+      atMs: opening.atMs,
+      title: reported ? "The first 911 call" : sentence(splitSnappedNote(opening.label).text, false),
       body:
-        "Before the first satellite image, the orange area is a fire-spread model run from this assumed start, " +
-        "not an observation. Alerts and road reports are reconstructed from 2018 records.",
-      evidence: ignition.evidenceClass,
+        (reported && ignition ? `${sentence(splitSnappedNote(reported.label).text)} ${sentence(ignition.label)} ` : "") +
+        `Until the first satellite image, the orange area is a fire-spread model started from the ${basis} ` +
+        "ignition, not an observation. Yellow dots are places where NIST records fire being seen.",
+      evidence: opening.evidenceClass,
       focus: [...(ignitionCoord ? [ignitionCoord] : []), ...(place ? [place.coord] : [])],
     });
   }
@@ -143,7 +166,7 @@ export function buildChapters(model: ReplayModel, variants: VariantIndex | null)
       id: "first-order",
       atMs: order.atMs,
       title: "First evacuation order",
-      body: `${splitSnappedNote(order.label).text}.${fireLine(order.atMs)}`,
+      body: `${sentence(splitSnappedNote(order.label).text)}${fireLine(order.atMs)}`,
       evidence: order.evidenceClass,
       focus: [...fireCoords(model, order.atMs), ...(place ? [place.coord] : [])],
     });
@@ -156,33 +179,58 @@ export function buildChapters(model: ReplayModel, variants: VariantIndex | null)
         id: "place-order",
         atMs: placeOrder.atMs,
         title: `${place.name} is ordered out`,
-        body: `${splitSnappedNote(placeOrder.label).text}.${fireLine(placeOrder.atMs)}`,
+        body: `${sentence(splitSnappedNote(placeOrder.label).text)}${fireLine(placeOrder.atMs)}`,
         evidence: placeOrder.evidenceClass,
         focus: [...fireCoords(model, placeOrder.atMs), place.coord],
       });
     }
-  }
 
-  const traffic = model.traffic;
-  if (traffic && traffic.metrics.length > 0) {
-    const k = argmax(traffic.metrics.map((m) => m.enRouteVeh));
-    const m = traffic.metrics[k];
-    if (m.enRouteVeh > 0) {
+    // The first documented fire in the place, from the record, and how soon after its first order.
+    const arrival = firstEvent(
+      model,
+      (e) => e.type === "fire_arrival" && HISTORICAL.has(e.evidenceClass) && e.label.includes(place.name),
+    );
+    if (arrival) {
+      const gapMin = placeOrder ? Math.round((arrival.atMs - placeOrder.atMs) / 60_000) : null;
       chapters.push({
-        id: "peak-traffic",
-        atMs: m.atMs,
-        title: "Gridlock on the way out",
+        id: "place-fire",
+        atMs: arrival.atMs,
+        title: `Fire reaches ${place.name}`,
         body:
-          `Modelled peak: ${fmt(m.enRouteVeh)} vehicles on the road at once, ` +
-          `${fmt(m.blockedVeh)} of them unable to move. Violet roads are jammed.`,
-        evidence: traffic.evidenceClass,
-        focus: [
-          ...busyEdgeCoords(model, k, null, true, place ? { coord: place.coord, m: GRIDLOCK_RADIUS_M } : null),
-          ...(place ? [place.coord] : []),
-        ],
+          sentence(splitSnappedNote(arrival.label).text) +
+          (gapMin !== null && gapMin >= 0
+            ? ` That is ${gapMin} minute${gapMin === 1 ? "" : "s"} after the first order for ${place.name}.`
+            : "") +
+          " Bright yellow dots are NIST observations from the last 30 minutes.",
+        evidence: arrival.evidenceClass,
+        focus: [...observationCoords(model, arrival.atMs), place.coord],
       });
     }
   }
+
+  // A modelled entrapment, set against the recorded burnovers it is compared with.
+  const trapped = firstEvent(model, (e) => e.type === "vehicles_trapped");
+  if (trapped) {
+    const burnovers = model.events.filter((e) => e.type === "burnover" && HISTORICAL.has(e.evidenceClass));
+    const row = model.validation?.rows.find((r) => r.metric === "identified_burnovers");
+    const coords = eventCoords(trapped, roads);
+    chapters.push({
+      id: "trapped",
+      atMs: trapped.atMs,
+      title: "Trapped by fire (model)",
+      body:
+        sentence(splitSnappedNote(trapped.label).text) +
+        (burnovers.length > 0
+          ? ` In 2018, NIST recorded ${row?.published ?? burnovers.length} burnovers; the first in this replay: ` +
+            `${sentence(splitSnappedNote(burnovers[0].label).text, false)} (reconstructed).`
+          : "") +
+        (row?.comparability === "tuned" ? " The model was tuned to that count, so the match is not validation." : ""),
+      evidence: trapped.evidenceClass,
+      focus: [...coords, ...fireCoords(model, trapped.atMs)],
+    });
+  }
+
+  const traffic = model.traffic;
 
   const contraflow = firstEvent(model, (e) => e.type === "contraflow_started" && HISTORICAL.has(e.evidenceClass));
   if (contraflow) {
@@ -190,7 +238,7 @@ export function buildChapters(model: ReplayModel, variants: VariantIndex | null)
       id: "contraflow",
       atMs: contraflow.atMs,
       title: "Contraflow: every lane outbound",
-      body: `${splitSnappedNote(contraflow.label).text}.`,
+      body: sentence(splitSnappedNote(contraflow.label).text),
       evidence: contraflow.evidenceClass,
       focus: eventCoords(contraflow, roads),
     });
@@ -206,7 +254,7 @@ export function buildChapters(model: ReplayModel, variants: VariantIndex | null)
       id: "road-blocked",
       atMs: blocked.atMs,
       title: "Fire cuts an escape road",
-      body: `${splitSnappedNote(blocked.label).text}.`,
+      body: sentence(splitSnappedNote(blocked.label).text),
       evidence: blocked.evidenceClass,
       focus: [...coords, ...fireCoords(model, blocked.atMs)],
     });
@@ -232,13 +280,15 @@ export function buildChapters(model: ReplayModel, variants: VariantIndex | null)
   const perimeter = model.perimeters[0];
   if (perimeter) {
     const iou = model.fireSimulated?.calibrationIou;
+    const check = model.fireSimulated?.calibrationHeadline;
     chapters.push({
       id: "satellite",
       atMs: perimeter.atMs,
       title: `First satellite perimeter${perimeter.areaKm2 != null ? `: ${perimeter.areaKm2.toFixed(0)} km²` : ""}`,
       body:
         "The dashed line is the satellite estimate; from here it replaces the model fire." +
-        (iou != null ? ` The model run overlapped a satellite perimeter with IoU ${iou.toFixed(2)} (calibration, simulated).` : ""),
+        (check ? ` Model check against NIST observations: ${check}.` : "") +
+        (iou != null ? ` Perimeter overlap (IoU) ${iou.toFixed(2)}, evaluation only.` : ""),
       evidence: perimeter.evidenceClass,
       focus: ringCoords(perimeter.geometry),
     });
@@ -254,7 +304,7 @@ export function buildChapters(model: ReplayModel, variants: VariantIndex | null)
       title: "Could it have gone differently?",
       body:
         "The same modelled morning, re-run with one change each. Bars: exposure to fire on roads and at home, " +
-        "relative to the baseline (shorter is better). Planning experiments on fixture demand, not history.",
+        "relative to the baseline (shorter is better). Planning experiments, not history.",
       evidence: "simulated",
       focus: chapters.find((c) => c.id === "peak-exposure")?.focus ?? [],
       reveal: true,

@@ -33,6 +33,8 @@ import {
   setBasemap,
   setGroupVisibility,
   setPerimeterFreshness,
+  destinationsCollection,
+  setFireObservationTime,
   setSourceData,
   simulatedFrontCollection,
   trafficToRoadIndex,
@@ -45,7 +47,8 @@ import { HILLSHADE_LAYER, restyleDarkBasemap } from "./basemapStyle";
 import { buildEdgePath, buildTravelIndex, particlePositions, type EdgePath } from "./particles";
 import PerspectiveSwitcher from "./perspectives/PerspectiveSwitcher";
 import { edgeThreats } from "./insights";
-import { EVIDENCE_LABEL, closedEdgesAt, sameNumbers } from "./timeline";
+import { openRefugeKey, refugeTimeline } from "./refuges";
+import { EVIDENCE_LABEL, closedEdgesAt, localTime, sameNumbers } from "./timeline";
 import type { EvidenceClass, LngLat, ReplayModel } from "./types";
 
 // Same explicit worker bundling as maps/MapCanvas.tsx; Vite relocates the main module.
@@ -59,7 +62,7 @@ const FLICKER_INTERVAL_MS = 90;
 const ZONE_FLASH_MS = 3000;
 const ZONE_FLASH_RECENT_MS = 20 * 60_000;
 const ZONE_FLASH_TICK_MS = 50;
-/** The "Assumed ignition" text is hidden this long after the assumed ignition time. */
+/** The ignition text is hidden this long after the assumed ignition time. */
 const IGNITION_LABEL_MS = 90 * 60_000;
 /** Opening camera per incident; otherwise the bundle bbox is fitted. */
 const INITIAL_VIEW: Record<string, { center: LngLat; zoom: number }> = {
@@ -123,7 +126,11 @@ function fmt(n: unknown, digits = 0): string {
   return typeof n === "number" ? n.toLocaleString("en-US", { maximumFractionDigits: digits }) : "—";
 }
 
-function tooltipContent(feature: MapGeoJSONFeature, perParticle: number): HTMLElement {
+function evidenceText(value: unknown): string {
+  return EVIDENCE_LABEL[value as EvidenceClass] ?? "Evidence class unknown";
+}
+
+function tooltipContent(feature: MapGeoJSONFeature, perParticle: number, timezone: string): HTMLElement {
   const p = feature.properties as Record<string, unknown>;
   const root = document.createElement("div");
   root.className = "rp-tip";
@@ -168,11 +175,11 @@ function tooltipContent(feature: MapGeoJSONFeature, perParticle: number): HTMLEl
     }
     case "sim-front-fill":
       add("strong", "Simulated fire front (model output)");
-      add("span", `${fmt(p.area_km2, 1)} km² · from an assumed ignition`);
+      add("span", `${fmt(p.area_km2, 1)} km² · fire-spread model run`);
       add("span", "Not an observation; shown only before the first satellite perimeter.", "rp-tip-note");
       break;
     case "sim-ignition":
-      add("strong", "Assumed ignition (model input)");
+      add("strong", String(p.label ?? "Ignition (model input)"));
       if (p.provenance) add("span", String(p.provenance));
       break;
     case "particles":
@@ -189,6 +196,29 @@ function tooltipContent(feature: MapGeoJSONFeature, perParticle: number): HTMLEl
     case "destinations":
       add("strong", String(p.name));
       add("span", `${String(p.dest_kind).replace(/_/g, " ")} · capacity ${p.capacity_veh == null ? "unbounded" : fmt(p.capacity_veh)}`);
+      add("span", evidenceText(p.evidence_class), "rp-tip-note");
+      break;
+    case "refuges":
+      add("strong", String(p.name));
+      add(
+        "span",
+        p.refuge_state === "open"
+          ? "Temporary refuge area · open at this time"
+          : p.refuge_state === "closed"
+            ? "Temporary refuge area · not open at this time"
+            : "Temporary refuge area · open times not recorded",
+      );
+      add("span", `${evidenceText(p.evidence_class)} · NIST-identified refuge; used in the model only when no exit is reachable`, "rp-tip-note");
+      break;
+    case "fire-obs":
+      add("strong", `Fire observed here at ${localTime(Number(p.at_ms), timezone)} (NIST)`);
+      add(
+        "span",
+        [p.location_source && `located by ${String(p.location_source)}`, p.time_precision && `time ${String(p.time_precision)}`]
+          .filter(Boolean)
+          .join(" · "),
+      );
+      add("span", `${evidenceText(p.evidence_class)} · fire present at that time, not its first arrival`, "rp-tip-note");
       break;
     case "damage":
       add("strong", String(p.damage ?? "Damage assessment"));
@@ -353,7 +383,7 @@ export default function ReplayMap({
           return;
         }
         m.getCanvas().style.cursor = "pointer";
-        popup.setLngLat(event.lngLat).setDOMContent(tooltipContent(feature, perParticleRef.current)).addTo(m);
+        popup.setLngLat(event.lngLat).setDOMContent(tooltipContent(feature, perParticleRef.current, model.incident.timezone)).addTo(m);
       });
       m.on("mouseout", () => popup.remove());
       m.on("click", (event) => onPickRef.current?.([event.lngLat.lng, event.lngLat.lat]));
@@ -603,6 +633,28 @@ export default function ReplayMap({
     const map = mapRef.current;
     if (ready && map) setSourceData(map, "zones", zonesCollection(model.zones?.items ?? [], zoneStates));
   }, [ready, model, zoneStates]);
+
+  // Refuges open and close at NIST-recorded times; redraw only when the open set changes.
+  const refuges = useMemo(
+    () => refugeTimeline(model.destinations?.items ?? [], model.events),
+    [model.destinations, model.events],
+  );
+  const openKey = openRefugeKey(refuges, simTimeMs);
+  const refugeTimeRef = useRef(simTimeMs);
+  useEffect(() => {
+    refugeTimeRef.current = simTimeMs;
+  }, [simTimeMs]);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (ready && map) setSourceData(map, "destinations", destinationsCollection(model, refuges, refugeTimeRef.current));
+  }, [ready, model, refuges, openKey]);
+
+  // Fire observations appear at their observed time (minute buckets keep filter updates cheap).
+  const obsBucket = Math.floor(simTimeMs / 60_000) * 60_000;
+  useEffect(() => {
+    const map = mapRef.current;
+    if (ready && map) setFireObservationTime(map, obsBucket);
+  }, [ready, obsBucket]);
 
   // Particles are a pure function of the simulation clock, updated whenever it moves.
   useEffect(() => {

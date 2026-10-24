@@ -7,6 +7,7 @@ import StressTab from "./StressTab";
 import StoryMode from "./StoryMode";
 import { buildChapters, revealRows } from "./story";
 import Tour from "./Tour";
+import ValidationTab from "./ValidationTab";
 import { REPLAY_TOUR, SIMULATION_TOUR, markTourSeen, tourSeen } from "./tourSteps";
 import { useVariants } from "./useVariants";
 import { IMAGERY_DATE_NOTE, LAYER_GROUPS, type Basemap, type LayerGroup } from "./mapLayers";
@@ -19,6 +20,7 @@ import {
   formatAge,
   frameIndexAt,
   hasFixtureData,
+  ignitionBasis,
   lastAtOrBefore,
   localTime,
   perimeterIndexAt,
@@ -27,10 +29,12 @@ import {
 } from "./timeline";
 import { buildCaption } from "./narrative";
 import MapLegend from "./MapLegend";
+import { EvidenceChip } from "./parts";
 import type { LngLat, ReplayModel } from "./types";
 import "./replay.css";
 
 const LOAD_TIMEOUT_MS = 30_000;
+const fmtN = (n: number) => n.toLocaleString("en-US");
 const DEFAULT_SPEED = SPEEDS[1].value;
 const STEP_SECONDS = 10 * 60;
 const BIG_STEP_SECONDS = 60 * 60;
@@ -239,8 +243,13 @@ function ReplayScreen({ model: baseline, config, picker }: { model: ReplayModel;
     [model, seek],
   );
 
-  const chapters = useMemo(() => buildChapters(baseline, variants.index), [baseline, variants.index]);
-  const reveal = useMemo(() => (variants.index ? revealRows(variants.index) : []), [variants.index]);
+  // What-ifs are only comparable with this replay when they were run on the same demand.
+  const variantDemand = variants.index?.demandTotalVeh ?? null;
+  const baselineDemand = baseline.traffic?.totalVeh ?? null;
+  const variantsStale = variantDemand !== null && baselineDemand !== null && variantDemand !== baselineDemand;
+  const usableIndex = variantsStale ? null : variants.index;
+  const chapters = useMemo(() => buildChapters(baseline, usableIndex), [baseline, usableIndex]);
+  const reveal = useMemo(() => (usableIndex ? revealRows(usableIndex) : []), [usableIndex]);
   const startStory = useCallback(() => {
     markTourSeen(config.kind);
     setTourOpen(false);
@@ -321,13 +330,32 @@ function ReplayScreen({ model: baseline, config, picker }: { model: ReplayModel;
   const eventIndex = lastAtOrBefore(model.events, simTimeMs);
   const zoneStates = useMemo(() => zoneStatesAt(model.events, eventIndex), [model, eventIndex]);
   const fixture = hasFixtureData(model);
+  const derivedDemand = !fixture && model.demand !== null && model.layerStatus.zones?.evidenceClass === "derived";
+  const observedSoFar = model.fireObservations ? lastAtOrBefore(model.fireObservations.items, simTimeMs) + 1 : 0;
   const fixtureLayers = Object.entries(model.layerStatus)
     .filter(([, s]) => s.status === "fixture")
     .map(([name]) => FIXTURE_LAYER_LABEL[name] ?? name.replace(/_/g, " "));
 
   const sim = config.kind === "simulation";
   const extraTabs = [
-    ...(variants.index
+    ...(variants.index && variantsStale
+      ? [
+          {
+            id: "whatif" as const,
+            label: "What if…",
+            content: (
+              <div className="rp-tab">
+                <p className="rp-empty" role="note">
+                  The what-if runs on disk were made with a different demand (
+                  {variantDemand?.toLocaleString("en-US")} vehicles) than this replay (
+                  {baselineDemand?.toLocaleString("en-US")} vehicles), so they are not comparable and are hidden until
+                  they are regenerated.
+                </p>
+              </div>
+            ),
+          },
+        ]
+      : variants.index
       ? [
           {
             id: "whatif" as const,
@@ -342,6 +370,15 @@ function ReplayScreen({ model: baseline, config, picker }: { model: ReplayModel;
                 onShowVariant={variants.setShowVariant}
               />
             ),
+          },
+        ]
+      : []),
+    ...(baseline.validation
+      ? [
+          {
+            id: "validation" as const,
+            label: "Model vs 2018",
+            content: <ValidationTab validation={baseline.validation} />,
           },
         ]
       : []),
@@ -429,6 +466,11 @@ function ReplayScreen({ model: baseline, config, picker }: { model: ReplayModel;
               </span>
               {variants.shown && <span className="rp-status-chip rp-status-chip--variant">WHAT-IF: {variants.shown.title}</span>}
               {fixture && <span className="rp-fixture-tag">FIXTURE DEMAND</span>}
+              {derivedDemand && (
+                <span className="rp-status-chip rp-status-chip--derived">
+                  DERIVED: Census demand, NIST orders via crosswalk
+                </span>
+              )}
               <span className="rp-status-more">{statusOpen ? "Hide ▴" : "What does this mean? ▾"}</span>
             </button>
             <div id="rp-status-details" className="rp-banners" hidden={!statusOpen}>
@@ -446,6 +488,31 @@ function ReplayScreen({ model: baseline, config, picker }: { model: ReplayModel;
                 <p className="rp-banner rp-banner--variant" role="note">
                   <strong>WHAT-IF: {variants.shown.title}</strong> — simulated counterfactual traffic; fire perimeters
                   and other evidence unchanged.
+                </p>
+              )}
+              {derivedDemand && model.demand && (
+                <p className="rp-banner rp-banner--derived" role="note">
+                  <strong>Demand (derived)</strong> —{" "}
+                  {[
+                    model.demand.population != null && `${fmtN(model.demand.population)} people`,
+                    model.demand.households != null &&
+                      `${fmtN(model.demand.households)} households` +
+                        (model.demand.householdsNoVehicle != null
+                          ? ` (${fmtN(model.demand.householdsNoVehicle)} without a vehicle)`
+                          : ""),
+                    model.demand.blockGroups != null && `${fmtN(model.demand.blockGroups)} Census block groups`,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                  {model.demand.evacuatingVehicles != null && (
+                    <>
+                      {" "}
+                      → {fmtN(model.demand.evacuatingVehicles)} evacuating vehicles
+                      {model.demand.evacuatingVehiclesMoe != null && <> (± {fmtN(model.demand.evacuatingVehiclesMoe)})</>}
+                    </>
+                  )}
+                  . Evacuation orders and warnings are NIST records, mapped to block groups through a crosswalk with
+                  stated confidence.
                 </p>
               )}
               {fixture && (
@@ -475,7 +542,19 @@ function ReplayScreen({ model: baseline, config, picker }: { model: ReplayModel;
                 No perimeter observed yet · first satellite snapshot in{" "}
                 <strong>{formatAge(model.perimeters[0].atMs - simTimeMs)}</strong>
                 {simFrontIndex >= 0 && visibility.simFire && (
-                  <span className="rp-sim-note"> · glowing area is the model fire (assumed ignition)</span>
+                  <span className="rp-sim-note"> · glowing area is the model fire ({ignitionBasis(model)} ignition)</span>
+                )}
+                {simFrontIndex >= 0 && visibility.simFire && model.fireSimulated && (
+                  <span className="rp-calibration">
+                    <EvidenceChip value="simulated" /> Model check vs NIST:{" "}
+                    {model.fireSimulated.calibrationHeadline ?? "no calibration summary"}
+                    {model.fireSimulated.calibrationIou != null && (
+                      <> · perimeter IoU {model.fireSimulated.calibrationIou.toFixed(2)}</>
+                    )}
+                    {model.fireObservations && visibility.fireObs && (
+                      <> · yellow dots: {fmtN(observedSoFar)} NIST fire observations so far</>
+                    )}
+                  </span>
                 )}
               </span>
             ) : (
@@ -548,7 +627,7 @@ function ReplayScreen({ model: baseline, config, picker }: { model: ReplayModel;
             timezone={model.incident.timezone}
             metrics={model.traffic && frameIndex >= 0 ? (model.traffic.metrics[frameIndex] ?? null) : null}
             trafficEvidence={model.traffic?.evidenceClass ?? null}
-            fixtureDemand={fixture}
+            demandLabel={fixture ? "FIXTURE DEMAND" : derivedDemand ? "CENSUS DEMAND (DERIVED)" : null}
             playTo={playTo}
             seek={seek}
             focus={focusTarget}
