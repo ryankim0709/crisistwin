@@ -1,9 +1,9 @@
 import SwiftUI
 import UIKit
 
-/// The phone's palette, mirrored from the web UI kit (`app/src/ui/tokens.css`): "sage paper" in
-/// light mode and the "operations console" theme in dark mode, so the app and the web workspace
-/// read as one product. Hazard colors keep the same meaning as on the web maps. Status color
+/// The phone's palette. Light mode is the resident app's own "mint and cream": a pastel mint
+/// page with warm cream cards and deep green actions. Dark mode stays the web UI kit's
+/// "operations console" (`app/src/ui/tokens.css`). Hazard colors keep the same meaning as on the web maps. Status color
 /// always pairs with words or a symbol.
 extension Color {
     // Ink (`--ct-ink*`).
@@ -12,24 +12,24 @@ extension Color {
     static let ctInkSubtle = Color(light: 0x6A7166, dark: 0x6B7A88)
 
     // Surfaces (`--ct-bg`, `--ct-surface*`).
-    static let ctBackground = Color(light: 0xF5F4EE, dark: 0x070A0E)
-    static let ctSurface = Color(light: 0xFCFCF8, dark: 0x0C1117)
+    static let ctBackground = Color(light: 0xEAF4EC, dark: 0x070A0E)
+    static let ctSurface = Color(light: 0xFFFDF8, dark: 0x0C1117)
     static let ctSurfaceRaised = Color(light: 0xFFFFFF, dark: 0x121922)
-    static let ctSurfaceSunken = Color(light: 0xF4F5EF, dark: 0x080C11)
-    static let ctSurfaceMuted = Color(light: 0xEEEFE6, dark: 0x10161D)
+    static let ctSurfaceSunken = Color(light: 0xF2F8F3, dark: 0x080C11)
+    static let ctSurfaceMuted = Color(light: 0xDCEFE2, dark: 0x10161D)
 
     // Borders (`--ct-border*`).
-    static let ctBorder = Color(light: 0xD4D8CA, dark: 0xA0BEDC, darkAlpha: 0.14)
-    static let ctBorderSubtle = Color(light: 0xE2E5DB, dark: 0xA0BEDC, darkAlpha: 0.08)
+    static let ctBorder = Color(light: 0xD3E3D7, dark: 0xA0BEDC, darkAlpha: 0.14)
+    static let ctBorderSubtle = Color(light: 0xE3EEE6, dark: 0xA0BEDC, darkAlpha: 0.08)
 
     // Brand (`--ct-brand*`): primary actions and selection.
-    static let ctBrand = Color(light: 0x245C4F, dark: 0x3DDBB4)
+    static let ctBrand = Color(light: 0x2F6B5A, dark: 0x3DDBB4)
     static let ctBrandStrong = Color(light: 0x142B27, dark: 0x7CF2C9)
-    static let ctBrandSoft = Color(light: 0xE8EDE5, dark: 0x3DDBB4, darkAlpha: 0.12)
+    static let ctBrandSoft = Color(light: 0xDCEFE2, dark: 0x3DDBB4, darkAlpha: 0.12)
 
     // Status (`--ct-success|warning|danger|info` and `-soft`).
     static let ctSuccess = Color(light: 0x215B45, dark: 0x7CF2C9)
-    static let ctSuccessSoft = Color(light: 0xE5EDDF, dark: 0x7CF2C9, darkAlpha: 0.10)
+    static let ctSuccessSoft = Color(light: 0xDCEFE2, dark: 0x7CF2C9, darkAlpha: 0.10)
     static let ctWarning = Color(light: 0x795A20, dark: 0xFFB547)
     static let ctWarningSoft = Color(light: 0xF5ECD8, dark: 0xFFB547, darkAlpha: 0.10)
     static let ctDanger = Color(light: 0xB3261E, dark: 0xFF4D6D)
@@ -163,5 +163,67 @@ extension ReportKind {
         case .roadBlocked: return .ctHazard
         default: return .ctInkMuted
         }
+    }
+}
+
+/// The CrisisTwin lockup (`Logo` asset, from `app/public/brand`). It is drawn in deep green for
+/// light backgrounds, so dark mode renders it as a light single-color mark.
+struct CTBrandLogo: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Group {
+            if colorScheme == .dark {
+                Image("Logo").resizable().renderingMode(.template).foregroundStyle(Color.ctInk)
+            } else {
+                Image("Logo").resizable()
+            }
+        }
+        .aspectRatio(contentMode: .fit)
+        .accessibilityLabel("CrisisTwin")
+    }
+}
+
+/// The top of every main screen (Home, Reports, Plan): the logo with the page name right under it,
+/// so no empty navigation bar sits above the title. `accessory` sits beside the name (the
+/// Exercise tag).
+struct CTPageHeader<Accessory: View>: View {
+    let title: String
+    @ViewBuilder var accessory: Accessory
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            CTBrandLogo()
+                .frame(height: 30)
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text(title)
+                    .font(.system(.title, design: .rounded, weight: .bold))
+                    .foregroundStyle(Color.ctInk)
+                    .accessibilityAddTraits(.isHeader)
+                accessory
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, 8)
+    }
+}
+
+extension CTPageHeader where Accessory == EmptyView {
+    init(title: String) {
+        self.init(title: title) { EmptyView() }
+    }
+}
+
+extension View {
+    /// A main screen that draws its own `CTPageHeader`: the navigation bar is hidden, and the
+    /// status bar gets the screen color so scrolled content does not run under it. Screens pushed
+    /// from it keep their own bar and back button.
+    func ctOwnHeader() -> some View {
+        toolbar(.hidden, for: .navigationBar)
+            .overlay(alignment: .top) {
+                Color.ctBackground
+                    .frame(height: 0)
+                    .background(Color.ctBackground.ignoresSafeArea(edges: .top))
+            }
     }
 }

@@ -23,6 +23,7 @@ struct PlanTab: View {
         NavigationStack(path: $path) {
             ScrollView {
                 VStack(spacing: 16) {
+                    CTPageHeader(title: "Plan")
                     MeetingPointCard()
                     FamilyCard { mode in path.append(mode == .join ? .familyJoin : .family) }
                     TrustedContactsCard()
@@ -33,6 +34,8 @@ struct PlanTab: View {
                 .padding(.bottom, 24)
             }
             .ctScreenBackground()
+            .ctOwnHeader()
+            // Still the back-button label on screens pushed from Plan.
             .navigationTitle("Plan")
             .navigationDestination(for: Destination.self) { destination in
                 switch destination {

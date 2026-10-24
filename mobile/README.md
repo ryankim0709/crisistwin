@@ -74,6 +74,11 @@ The Practice view was removed from the phone. It showed the web app's `/fire` pa
 
 ### Home layout
 
+Light mode uses the resident app's own "mint and cream" palette (`App/Theme.swift`): a pastel
+mint page, cream cards and deep green actions; dark mode keeps the web kit's dark theme. Home,
+Reports and Plan share one compact header (`CTPageHeader`): the logo with the page name right
+under it, with no navigation bar above. The tab bar stays full size while scrolling.
+
 Home is titled **Home** under the CrisisTwin logo. A status hero answers "is there an emergency
 near me?" with an icon, a line of words and, where it applies, its next step: **Location is
 off** (turn it on), **Can't check right now** (try again), **Checking your area**, **No

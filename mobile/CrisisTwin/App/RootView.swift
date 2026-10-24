@@ -221,7 +221,8 @@ struct RootView: View {
                 .badge(liveStore.tasks.filter { $0.status == .open }.count)
             }
         }
-        .tabBarMinimizeBehavior(.onScrollDown)
+        // The tab bar stays put while scrolling, so the tabs are always one tap away.
+        .tabBarMinimizeBehavior(.never)
 
         // Attached only while there is guidance to carry; the selection is bound, so the
         // selected tab survives the accessory appearing or going.

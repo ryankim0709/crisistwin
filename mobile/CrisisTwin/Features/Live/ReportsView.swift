@@ -140,6 +140,10 @@ struct ReportsView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
+                    CTPageHeader(title: "Reports") {
+                        if store.isExercise { ExerciseTag() }
+                    }
+                    .padding(.bottom, -8)
                     Button {
                         router.openReport(from: "reports-new")
                     } label: {
@@ -185,14 +189,7 @@ struct ReportsView: View {
                 .padding(.bottom, 24)
             }
             .ctScreenBackground()
-            .navigationTitle("Reports")
-            .toolbar {
-                if store.isExercise {
-                    ToolbarItem(placement: .largeSubtitle) {
-                        ExerciseTag().frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-            }
+            .ctOwnHeader()
             .refreshable { await store.refresh() }
             .animation(.snappy, value: store.stillThereItems.map(\.id))
         }
