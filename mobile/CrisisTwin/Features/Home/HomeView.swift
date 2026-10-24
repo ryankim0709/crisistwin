@@ -39,14 +39,7 @@ struct HomeView: View {
                 }
             }
             .ctScreenBackground()
-            // The navigation bar is hidden (the title row carries the Exercise tag), so the
-            // status bar gets the screen color to keep scrolled content from running under it.
-            .overlay(alignment: .top) {
-                Color.ctBackground
-                    .frame(height: 0)
-                    .background(Color.ctBackground.ignoresSafeArea(edges: .top))
-            }
-            .toolbar(.hidden, for: .navigationBar)
+            .ctOwnHeader()
             .refreshable { await store.refresh() }
             .animation(.snappy, value: store.stillThereItems.map(\.id))
         }
@@ -54,14 +47,11 @@ struct HomeView: View {
 
     // MARK: Header
 
-    /// The incident name with the Exercise tag inline; tapping either explains the tag.
+    /// The shared page header; during an exercise its tag sits beside the name and explains itself.
     private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HomeBrandLogo()
-                .frame(height: 30)
-                .padding(.bottom, 10)
+        CTPageHeader(title: "Home") {
             if store.isExercise {
-                Button { explainExercise = true } label: { title }
+                Button { explainExercise = true } label: { ExerciseTag() }
                     .buttonStyle(.plain)
                     .accessibilityHint("Explains the exercise")
                     .popover(isPresented: $explainExercise, arrowEdge: .top) {
@@ -72,23 +62,6 @@ struct HomeView: View {
                             .padding(16)
                             .presentationCompactAdaptation(.popover)
                     }
-            } else {
-                title
-            }
-        }
-        .padding(.top, 8)
-    }
-
-    private var title: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Text("Home")
-                .font(.largeTitle.weight(.bold))
-                .foregroundStyle(Color.ctInk)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityAddTraits(.isHeader)
-            if store.isExercise {
-                ExerciseTag()
-                    .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 6 }
             }
         }
     }
@@ -145,24 +118,6 @@ struct HomeView: View {
                 GuidanceChangesList(current: current, history: store.guidanceHistory)
             }
         }
-    }
-}
-
-/// The CrisisTwin lockup (`Logo` asset, from `app/public/brand`). It is drawn in deep green for
-/// light backgrounds, so dark mode renders it as a light single-color mark.
-private struct HomeBrandLogo: View {
-    @Environment(\.colorScheme) private var colorScheme
-
-    var body: some View {
-        Group {
-            if colorScheme == .dark {
-                Image("Logo").resizable().renderingMode(.template).foregroundStyle(Color.ctInk)
-            } else {
-                Image("Logo").resizable()
-            }
-        }
-        .aspectRatio(contentMode: .fit)
-        .accessibilityLabel("CrisisTwin")
     }
 }
 
