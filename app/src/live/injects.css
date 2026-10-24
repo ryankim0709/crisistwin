@@ -1,0 +1,48 @@
+/* Instructor injects panel (InjectsPanel.tsx), inside the /live header menu. */
+.lc-inj {
+  display: grid;
+  gap: var(--ct-space-3);
+  padding: var(--ct-space-2) var(--ct-space-3) var(--ct-space-3);
+  font-size: var(--ct-text-sm);
+}
+.lc-inj form {
+  display: grid;
+  gap: var(--ct-space-2);
+}
+.lc-inj label {
+  display: grid;
+  gap: var(--ct-space-1);
+  color: var(--ct-ink-muted);
+  font-weight: var(--ct-weight-semibold);
+}
+.lc-inj :is(select, input) {
+  width: 100%;
+  min-width: 0;
+  padding: var(--ct-space-1) var(--ct-space-2);
+  border: 1px solid var(--ct-border-strong);
+  border-radius: var(--ct-radius-md);
+  background: var(--ct-surface);
+  color: var(--ct-ink);
+  font: inherit;
+}
+.lc-inj-times {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: var(--ct-space-2);
+}
+.lc-inj-list {
+  display: grid;
+  gap: var(--ct-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.lc-inj-list li {
+  display: flex;
+  align-items: center;
+  gap: var(--ct-space-2);
+}
+.lc-inj-label {
+  flex: 1;
+  min-width: 0;
+}

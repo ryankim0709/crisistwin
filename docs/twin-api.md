@@ -120,6 +120,7 @@ The shape follows [plan-api.md](plan-api.md) commands, extended for the drill:
 | `end_contraflow` | `corridor` | | `contraflow_ended` | Frees the unit |
 | `hold_inbound` | `corridor` | | `road_closed` (`closure_drains`) on the corridor's outermost inbound edges | Uses a CHP unit. Release with `reopen_road` on `{ "corridor": ..., "hold": true }` |
 | `open_refuge` | `destination_id` | | `shelter_opened` | Only a `temporary_refuge` or `shelter` that is closed now. A later historical close still applies |
+| `fill_destination` | `destination_id` | | `shelter_full` | Marks the destination full from now (drill injects, [live-reports.md](live-reports.md#injects)). `already_full` if it is. Not undoable |
 | `reroute_zone` | `zone_id` | `destination_id` (null clears) | `zone_rerouted` (new engine event type: `zone_ids` plus `destination_id`) | Falls back to the nearest open destination at nodes where the assigned one is full, closed or unreachable |
 
 `end_contraflow` is an addition to the plan-api list. The engine already supports it,
@@ -196,7 +197,7 @@ Codes:
 | Shape | `unknown_action_type`, `invalid_shape` (missing or extra fields, wrong types), `duplicate_action_id` |
 | Time | `at_in_past`, `after_end`, `session_finished` |
 | Targets | `unknown_zone`, `unknown_destination`, `unknown_corridor`, `unknown_road`, `no_edges_selected`, `not_a_refuge` |
-| State | `already_ordered`, `already_open`, `not_closed`, `fire_closed_not_reopenable`, `contraflow_active`, `contraflow_not_active`, `no_reverse_edge` |
+| State | `already_ordered`, `already_open`, `already_full`, `not_closed`, `fire_closed_not_reopenable`, `contraflow_active`, `contraflow_not_active`, `no_reverse_edge` |
 | Params | `invalid_capacity_factor`, `invalid_mode`, `unknown_destination` |
 | Limits | `limit_exceeded` (detail names the limit) |
 | Clock (`ClockError`, `"error": "invalid_clock"`) | `clock_backwards`, `start_out_of_range`, `invalid_steps` |

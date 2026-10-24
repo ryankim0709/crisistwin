@@ -147,6 +147,15 @@ class InjectApiTest(SimpleTestCase):
             r = self.call("POST", f"{BASE}/injects", body, CONTROLLER)
             self.assertEqual((r.status_code, r.json()["error"]), (400, "invalid_inject"), body)
 
+    def test_list_offers_road_choices(self):
+        body = self.call("GET", f"{BASE}/injects", token=CONTROLLER).json()
+        segments = body["choices"]["segments"]
+        self.assertTrue(segments)
+        self.assertTrue(set(segments[0]) == {"id", "name", "length_m"})
+        r = self.inject("silent_closure", {"segment_id": segments[0]["id"]}, at="2018-11-08T16:40:00Z")
+        self.assertEqual(r.status_code, 201, r.content)
+        self.assertEqual(len(r.json()["inject"]["coord"]), 2)
+
     def test_status_follows_the_drill_clock_and_logs_once(self):
         zone = next(iter(self.index.zones))
         later = self.inject("comms_outage", {"zone_ids": [zone], "until": "2018-11-08T18:00:00Z"},

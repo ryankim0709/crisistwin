@@ -21,7 +21,7 @@ from datetime import datetime
 from typing import Any
 
 from livecore import injects as rules
-from livecore.geo import point_in_multipolygon
+from livecore.geo import haversine_m, point_in_multipolygon
 from rest_framework.response import Response
 
 from .auth import Principal, live_view
@@ -167,6 +167,28 @@ def refuse_if_no_signal(
     return response
 
 
+_segment_choices: dict[int, list[dict[str, Any]]] = {}
+SEGMENT_CHOICES = 150
+SEGMENT_MIN_M = 1500.0
+
+
+def segment_choices(index: DrillIndex) -> list[dict[str, Any]]:
+    """Longest named road segments for the console's silent-closure picker (``{id, name, length_m}``)."""
+    cached = _segment_choices.get(id(index))
+    if cached is None:
+        rows = []
+        for seg, line in index.segment_lines.items():
+            name = index.segment_names.get(seg)
+            if not name or name.startswith("unnamed"):
+                continue
+            length = sum(haversine_m(a, b) for a, b in zip(line, line[1:]))
+            if length >= SEGMENT_MIN_M:
+                rows.append({"id": seg, "name": name, "length_m": int(round(length, -1))})
+        rows.sort(key=lambda r: (-r["length_m"], r["id"]))
+        cached = _segment_choices[id(index)] = sorted(rows[:SEGMENT_CHOICES], key=lambda r: (r["name"], r["id"]))
+    return cached
+
+
 # ---- endpoints ----
 
 
@@ -234,7 +256,8 @@ def incident_injects(request, incident_id: str, principal: Principal):
         now = wall_now()
         clock = clock_from(drill_doc(incident_id), index, now)
         docs = apply_due(index, incident_id, clock.replay_now, now)
-        return ok({"injects": [inject_json(d, index) for d in docs], "replay_now": iso(clock.replay_now)})
+        return ok({"injects": [inject_json(d, index) for d in docs], "replay_now": iso(clock.replay_now),
+                   "choices": {"segments": segment_choices(index)}})
     created = _create(incident_id, principal, json_body(request, "invalid_inject"))
     return ok({"inject": created}, status=201)
 
