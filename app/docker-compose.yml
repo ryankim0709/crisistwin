@@ -16,10 +16,17 @@ services:
       APIFY_ACTOR_ID: ${APIFY_ACTOR_ID:-}
       LIVE_CONTROLLER_TOKEN: ${LIVE_CONTROLLER_TOKEN:-}
       LIVE_INVITE_CODE: ${LIVE_INVITE_CODE:-}
+      # /live's twin and drill read the repo outside app/backend; mounted read-only below.
+      CRISISTWIN_REPO_ROOT: /repo
+      LIVE_DRILL_BUNDLE: /repo/app/public/replays/camp-2018.json
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
       - ./backend:/app
+      - ../sim:/repo/sim:ro
+      - ../tools:/repo/tools:ro
+      - ../data:/repo/data:ro
+      - ./public/replays:/repo/app/public/replays:ro
     healthcheck:
       test:
         [

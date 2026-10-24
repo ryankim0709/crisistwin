@@ -50,7 +50,8 @@ MONGODB_DATABASE = os.environ.get("MONGODB_DATABASE", "crisistwin")
 if not re.fullmatch(r"[A-Za-z0-9_-]{1,63}", MONGODB_DATABASE):
     raise ImproperlyConfigured("MONGODB_DATABASE must be 1–63 ASCII letters, digits, underscores, or hyphens.")
 # Live drill (docs/live-reports.md, ADR 0011/0012). Secrets come from the environment only.
-# Unset LIVE_CONTROLLER_TOKEN / LIVE_INVITE_CODE disable controller endpoints / responder join (403).
+# Unset LIVE_CONTROLLER_TOKEN: requests without a token are the controller (no token needed).
+# Set it to lock controller endpoints behind that bearer token. Unset LIVE_INVITE_CODE disables join (403).
 LIVE_CONTROLLER_TOKEN = os.environ.get("LIVE_CONTROLLER_TOKEN", "").strip()
 LIVE_INVITE_CODE = os.environ.get("LIVE_INVITE_CODE", "").strip()
 # Replay bundle path; empty means app/public/replays/camp-2018.json next to the backend.
