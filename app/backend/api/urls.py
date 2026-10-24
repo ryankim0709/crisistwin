@@ -17,6 +17,7 @@ from .landscapes import landscape_list, landscape_package
 from .live_active import live_active
 from .live_broadcast import live_broadcast, live_snapshot
 from .mobile_data import mobile_collection, mobile_document, register_device
+from .suppression_bases import suppression_bases
 from .views import health
 
 FAMILY_ID = r"(?P<family_id>[0-9a-f]{24})"
@@ -28,6 +29,7 @@ urlpatterns = [
     path("replay/explain", explain, name="replay-explain"),
     path("dispatch/decide", decide, name="dispatch-decide"),
     path("dispatch/area", dispatch_area, name="dispatch-area"),
+    path("suppression/bases", suppression_bases, name="suppression-bases"),
     path("live", live_snapshot, name="live-snapshot"),
     path("live/active", live_active, name="live-active"),
     path("live/broadcast", live_broadcast, name="live-broadcast"),
