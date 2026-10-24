@@ -34,6 +34,20 @@ This is an experimental planning simulator. Its outputs are not operational evac
 
 ## Historical data research
 
+### Incident data in MongoDB Atlas
+
+Large incident-package files (`raw/` and `normalized/`) are not stored in Git.
+Each package's `manifest.json` stays in Git and lists every artifact with its SHA-256;
+the bytes live in MongoDB Atlas (GridFS, deduplicated by hash). After cloning:
+
+```sh
+pip install -r tools/requirements.txt
+export MONGODB_URI='mongodb+srv://...'   # ask a teammate; never commit it
+python3 -m tools.mongo_data pull         # restores data/incidents/*/*/{raw,normalized}
+```
+
+After building a new package locally, run `python3 -m tools.mongo_data push` and commit its manifest.
+
 [Historical incident packages](docs/historical-replay.md) proposes source acquisition,
 data formats, provenance, timing, and offline replay semantics for historical wildfire
 scenarios. [The historical package decision](docs/adr/0005-historical-incident-packages.md)

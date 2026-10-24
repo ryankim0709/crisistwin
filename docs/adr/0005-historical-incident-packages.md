@@ -6,6 +6,10 @@ The initial Camp Fire pilot uses GeoJSON for 290 CAL FIRE points and 45 NASA VED
 perimeters while proving source retention, offline verification, and retrospective
 snapshot selection. The wider GeoParquet contract remains proposed.
 
+Artifact storage is superseded in part by
+[ADR 0006](0006-incident-artifacts-in-mongodb.md): artifact bytes live in MongoDB Atlas,
+not Git; manifests and hashes are unchanged.
+
 ## Context
 
 Historical wildfire sources mix geospatial snapshots, interval traffic measurements,

@@ -20,6 +20,14 @@ conditional on actual coverage and access checks.
 
 ## Package layout and formats
 
+Storage: Git keeps each package's `manifest.json`, `sources.json`, `quality.json` and small
+`curated/` tables. The bytes of every other artifact (`raw/`, `normalized/`) are stored in
+MongoDB Atlas (GridFS) keyed by the SHA-256 in the manifest, so identical files shared by
+several package versions are stored once. `python3 -m tools.mongo_data pull` restores
+them and verifies each hash; `push` uploads new ones after a package is built. See
+[ADR 0006](adr/0006-incident-artifacts-in-mongodb.md). The layout below is the on-disk
+layout after `pull`.
+
 ```text
 <incident-id>/<immutable-package-version>/
   manifest.json
