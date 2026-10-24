@@ -798,13 +798,19 @@ export function slopeAndAspect(
   return { slopeTangent, upslopeDegrees };
 }
 
-export async function loadLandscape(
-  longitude: number,
-  latitude: number,
-  groundRadiusMeters: number,
+/**
+ * Loads fuel, canopy and terrain for a box. The box is in Mercator metres (EPSG:3857, the
+ * grid's own coordinates); the returned grid has Mercator cell addressing and
+ * `groundCellSizeMeters` corrected with cos(latitude) at the box centre.
+ */
+export async function loadLandscapeForBox(
+  box: MercatorBox,
   signal: AbortSignal,
 ): Promise<LandscapeGrid> {
-  const box = boxAround(longitude, latitude, groundRadiusMeters);
+  const [, latitude] = mercatorToLonLat(
+    (box.minX + box.maxX) / 2,
+    (box.minY + box.maxY) / 2,
+  );
   const raster = await fetchFuelRaster(box, signal);
   // Different hosts, so the terrain tiles and the canopy coverages overlap in time.
   const [{ elevation: elevationMeters, complete: elevationComplete }, canopy] = await Promise.all([
@@ -843,4 +849,14 @@ export async function loadLandscape(
       canopy: LANDFIRE_CANOPY_ATTRIBUTION,
     },
   };
+}
+
+/** Loads a landscape in a square box of `groundRadiusMeters` around a point (used by /fire). */
+export async function loadLandscape(
+  longitude: number,
+  latitude: number,
+  groundRadiusMeters: number,
+  signal: AbortSignal,
+): Promise<LandscapeGrid> {
+  return loadLandscapeForBox(boxAround(longitude, latitude, groundRadiusMeters), signal);
 }

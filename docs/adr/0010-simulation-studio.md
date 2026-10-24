@@ -96,16 +96,19 @@ are new. `/fire` output is unchanged, so `SPREAD_MODEL.version` stays 4.0.0.
 
 ## Shared landscape
 
-One landscape per run, covering every enabled ignition plus a horizon-dependent spread
-buffer, capped at `MAX_LANDSCAPE_SPAN_METERS` per side. Points further apart are refused
+One landscape per run (`loadLandscapeForBox`), covering every enabled ignition plus a
+horizon-dependent spread buffer (40 m/min times the horizon, clamped to 3-12 km, shrunk
+toward 3 km when needed), capped at `MAX_LANDSCAPE_SPAN_METERS` per side. Ground distances
+are converted to Mercator metres with cos(latitude) at the box centre. Points further apart are refused
 before any download, with a message asking the user to move them closer. The box is snapped
-outward so small edits reuse the cached grid, and changing wind, moisture or start times
+outward to a 1 km Mercator grid so small edits reuse the cached grid, and changing wind, moisture or start times
 never refetches. A run that reaches the grid edge is reported as clipped from the minute it
 happened; it is never shown as a complete footprint.
 
 ## Computation and playback
 
-The solve runs in a Web Worker. Each run captures a frozen scenario snapshot and a request
+The solve runs in a Web Worker. The page keeps the last two landscapes and reuses one whose box contains the new box. Each
+run captures a frozen scenario snapshot and a request
 id; downloads for an obsolete request are aborted, an obsolete solve is cancelled by
 terminating the worker, and any response whose id is not the latest is dropped.
 
