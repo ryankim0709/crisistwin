@@ -1,0 +1,414 @@
+{
+  "schema": "people-behavior-1",
+  "title": "Evacuation behaviour and vulnerable-population parameters for the California scenario engine",
+  "units": "shares are fractions in [0, 1]; times are minutes unless stated; clock times are local (Pacific) as published",
+  "evidence_rule": "status is one of: sourced (value read from the cited document), derived (arithmetic on sourced values, shown in 'derivation'), assumption (no source; a placeholder for sensitivity runs, not a finding), gap (no usable source found; value is null). A sourced range keeps its published low and high; 'suggested' is our pick inside it and is an assumption unless stated.",
+  "retrieved": "2026-10-24",
+  "caveats": [
+    "Most numbers come from convenience-sample surveys (online, shelters) with sampling bias; Wong et al. and Kuligowski et al. both warn of this. Survey evacuation rates run above GPS-inferred rates (Kincade: about 80% survey vs 46% GPS inside zones).",
+    "Camp Fire (2018) was a no-notice, fast-moving event; Tubbs, Thomas, Carr and Kincade gave more warning. Do not mix their delay distributions without saying which is which.",
+    "Australian figures are stated intentions to a hypothetical scenario or a different policy regime (stay and defend); they bound the 'wait and see' share, they do not measure California behaviour."
+  ],
+  "sources": {
+    "wong2020": {
+      "citation": "Wong, S.D., Broader, J.C., Shaheen, S.A. (2020). Review of California Wildfire Evacuations from 2017 to 2019. UC Institute of Transportation Studies research report. DOI 10.7922/G29G5K2R.",
+      "url": "https://escholarship.org/uc/item/5w85z07g",
+      "pdf": "https://escholarship.org/content/qt5w85z07g/qt5w85z07g.pdf",
+      "kind": "online survey, Oct 2017 N. California fires (Tubbs, Nuns, Atlas; n=79), Dec 2017 S. California fires (Thomas, Creek, Skirball; n=226), 2018 Carr Fire (n=284)",
+      "licence": "UC eScholarship open access report"
+    },
+    "grajdura2022": {
+      "citation": "Grajdura, S. (2022). Mixed Methods Approaches to Wildfire Evacuation: Modeling Behavior, Simulation, and Equity. PhD dissertation, UC Davis. Survey results first published in Grajdura, Qian, Niemeier (2021), Awareness, departure, and preparation time in no-notice wildfire evacuations, Safety Science 139:105258.",
+      "url": "https://escholarship.org/uc/item/3t8025w5",
+      "kind": "Camp Fire survey, 2 to 6 weeks after the fire, Red Cross shelters (133) and online (264), n=397; 26 shelter interviews; Butte County CodeRED logs (FOIA)",
+      "licence": "UC eScholarship open access dissertation"
+    },
+    "zhao2022": {
+      "citation": "Zhao, X., Xu, Y., Lovreglio, R., Kuligowski, E., Nilsson, D., Cova, T., Wu, A., Yan, X. Estimating wildfire evacuation decision and departure timing using large-scale GPS data (2019 Kincade Fire, Sonoma County). arXiv:2109.07745; published in Transportation Research Part D (2022).",
+      "url": "https://arxiv.org/abs/2109.07745",
+      "kind": "GPS panel (5,166 inferred homes) for the 2019 Kincade Fire",
+      "licence": "arXiv preprint"
+    },
+    "kuligowski2022": {
+      "citation": "Kuligowski, E.D., Zhao, X., Lovreglio, R., Xu, N., Yang, K., Westbury, A., Nilsson, D., Brown, N. Modeling evacuation decisions in the 2019 Kincade fire in California. Safety Science (2022). Author manuscript read.",
+      "url": "https://mro.massey.ac.nz/bitstreams/be2703da-d4ac-4ca5-97d8-7a0a04f99e16/download",
+      "kind": "online survey of Sonoma County households, n=270",
+      "licence": "author manuscript (institutional repository)"
+    },
+    "nist2252": {
+      "citation": "Maranghides, A., et al. (2023). A Case Study of the Camp Fire: Notification, Evacuation, Traffic, and Temporary Refuge Areas. NIST Technical Note 2252, July 2023. DOI 10.6028/NIST.TN.2252.",
+      "url": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf",
+      "sha256": "7d5385adfc6c86f74f43f81fd193e476ac2b3e333e17bd7f468fb98a40f200b4",
+      "kind": "reconstruction from 911, radio and interview data; no resident survey",
+      "licence": "NIST technical note, US government work (public domain in the US)"
+    },
+    "mclennan2014": {
+      "citation": "McLennan, J., Elliott, G., Wright, L. (2014). Bushfire survival preparations by householders in at-risk areas of south-eastern Australia. Australian Journal of Emergency Management 29(2).",
+      "url": "https://knowledge.aidr.org.au/resources/ajem-apr-2014-bushfire-survival-preparations-by-householders-in-at-risk-areas-of-south-eastern-australia/",
+      "kind": "survey of n=584 householders in at-risk communities asked what they would do if told a fire would reach them in 1 to 2 hours (hypothetical)",
+      "licence": "AJEM open access"
+    },
+    "whittaker2013": {
+      "citation": "Whittaker, J., Haynes, K., Handmer, J., McLennan, J. (2013). Community safety during the 2009 Australian 'Black Saturday' bushfires: an analysis of household preparedness and response. International Journal of Wildland Fire 22(6):841-849.",
+      "url": "https://research-repository.rmit.edu.au/articles/journal_contribution/Community_safety_during_the_2009_Australian_Black_Saturday_bushfires_an_analysis_of_household_preparedness_and_response/27457302",
+      "kind": "mail survey n=1,314 and 600+ interviews, Black Saturday 2009",
+      "note": "Abstract-level only: the full text was not read. Use as a pointer, not as a parameter source.",
+      "licence": "journal article"
+    },
+    "acs2022": {
+      "citation": "U.S. Census Bureau, American Community Survey 2018-2022 5-Year Estimates, tables B25044, B01001, B18101, C16002.",
+      "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2022/table-based-SF/",
+      "licence": "US government work, public domain"
+    },
+    "assumption": {
+      "citation": "No source. Placeholder chosen by the authors of this file for sensitivity runs.",
+      "url": null,
+      "licence": null
+    }
+  },
+  "parameters": [
+    {
+      "id": "order_compliance",
+      "description": "Share of households that received a mandatory evacuation order and evacuated.",
+      "status": "sourced",
+      "range": [0.870, 0.968],
+      "per_event": {"oct2017_norcal": 0.875, "dec2017_socal": 0.870, "carr2018": 0.968},
+      "unit": "fraction of order recipients (survey)",
+      "sources": ["wong2020"],
+      "locator": "Wong et al. 2020, Table 11 (p. 39); text p. 38 gives non-compliance 3.2% to 13.0%",
+      "n": "n=79, 226, 284 (all respondents; order recipients are a subset)",
+      "sim_param": "demand.EVACUATION_PARTICIPATION",
+      "sim_value": 1.0,
+      "comparison": "Differs: demand.py sends 100% of households in noticed block groups by car. The survey range implies 3% to 13% do not leave. The GPS panel for Kincade gives a much lower 46% inside warning/order zones (Zhao et al., Sec. 4.4.3, p. 18) because it counts 'stayed' for everyone not seen leaving; use it as a pessimistic bound.",
+      "suggested": {"value": 0.92, "status": "assumption", "note": "inside the survey range"}
+    },
+    {
+      "id": "camp_order_receipt",
+      "description": "Share of Camp Fire survey respondents who reported receiving an evacuation order at any time on 2018-11-08.",
+      "status": "sourced",
+      "value": 0.19,
+      "unit": "fraction of respondents",
+      "sources": ["grajdura2022"],
+      "locator": "Grajdura 2022, Ch. 3 text p. 37 (19%); Figure 4 caption text p. 38 gives 21% 'official notification'",
+      "n": "n=397 (not every question has a full n)",
+      "sim_param": "order/warning trigger (hazard order_hazard_per_h, warning_hazard_per_h)",
+      "sim_value": null,
+      "comparison": "The Camp record is mostly cue-driven: only 1.3% (5 of 397) first learned of the fire from an official notice, 44.6% saw it themselves, 26.3% were told in person, 17.1% call or text, 6.9% online, 3.8% TV or radio (Table 12, p. 103). The sim's order trigger therefore explains little of Camp; its fire and social cues carry the load, which matches."
+    },
+    {
+      "id": "camp_awareness_departure_timing",
+      "description": "Camp Fire timing: first awareness, official CodeRED, departure. Local time on 2018-11-08.",
+      "status": "sourced",
+      "value": {
+        "mean_awareness_clock": "08:00",
+        "sd_awareness_min": 71,
+        "mean_departure_clock": "09:33",
+        "median_departure_clock": "09:00",
+        "codered_first_cluster_mean_clock": "09:11"
+      },
+      "derivation": "mean awareness-to-departure gap = 09:33 - 08:00 = 93 min (difference of two sample means; the paper shows a 'very short gap' for early risers, p. 39). Among respondents aware before 08:55 the mean departure is 09:13 (regression-tree leaf near Figure 7, p. 70).",
+      "unit": "clock time and minutes",
+      "sources": ["grajdura2022"],
+      "locator": "Grajdura 2022, pp. 51-52 (awareness SD 71 min, mean 8:00, mean departure 9:33, median 9:00, CodeRED cluster 9:11); p. 39 (short gap); p. 70 (regression-tree leaf)",
+      "n": "n=397; 98% gave awareness time, 99% departure time",
+      "sim_param": "response_delay_median_min, order/fire/social hazards, prep_*",
+      "sim_value": "order: decision median 21 min + prep median 15 min (mean about 48 min total); warning only: decision median 83 min + prep (mean about 138 min); fire cue: decision median 7 min + prep (mean about 28 min)",
+      "comparison": "Camp's mean gap of about 93 min sits between the sim's order (about 48 min) and warning-only (about 138 min) cases. That is consistent with a population mostly unordered but seeing fire. It is not a calibration: the sim has not been fit to this."
+    },
+    {
+      "id": "camp_gender_tenure_delay_effects",
+      "description": "Adjustments to the awareness-to-departure delay estimated for Camp Fire respondents (ceteris paribus regression).",
+      "status": "sourced",
+      "value": {"men_longer_min": 23, "homeowner_insurance_longer_min": 34, "tenure_15y_plus_longer_min": 30, "age_65plus_awareness_later_min": 34},
+      "unit": "minutes",
+      "sources": ["grajdura2022"],
+      "locator": "Grajdura 2022, p. 53 (men +23 min, insured homeowners +34 min), p. 52 (15+ years' tenure 'upwards of half an hour'), p. 48 (age 65 and over about 34 minutes later awareness)",
+      "n": "n=397",
+      "sim_param": "none",
+      "sim_value": null,
+      "comparison": "The sim has no covariates. If the residents generator assigns age, tenure or tenure type, these effects can scale prep time per agent. Effects are regression coefficients with wide intervals."
+    },
+    {
+      "id": "kincade_departure_trigger_mix",
+      "description": "Kincade Fire GPS panel: share of all evacuees by trigger.",
+      "status": "sourced",
+      "value": {"self_evacuee_before_any_notice": 0.33, "shadow_evacuee_outside_zones": 0.23, "left_on_warning": 0.07, "left_on_order": 0.38},
+      "unit": "fraction of evacuees (rounding: sums to 1.01 as published)",
+      "sources": ["zhao2022"],
+      "locator": "Zhao et al., Sec. 4.4.1, p. 16 and Figure 10",
+      "n": "5,166 inferred homes in Sonoma County",
+      "sim_param": "social_hazard_per_h and fire_cue_hazard_per_h (no explicit pre-notice share)",
+      "sim_value": null,
+      "comparison": "Over half of evacuees (self plus shadow, 55%) left without an order for them. The sim only creates demand in zones with an order or warning (demand.py), so shadow evacuation is absent. 7% left as soon as a warning arrived; the sim's warning-only hazard (0.5/h, median 83 min) is much slower than that. Kincade residents had lived through Tubbs (2017), so this mix is a high-sensitivity case."
+    },
+    {
+      "id": "shadow_evacuation_share",
+      "description": "Share of households that did NOT receive a mandatory order and evacuated anyway.",
+      "status": "sourced",
+      "range": [0.291, 0.750],
+      "per_event": {"oct2017_norcal": 0.291, "dec2017_socal": 0.625, "carr2018": 0.750},
+      "unit": "fraction of non-recipients (survey)",
+      "sources": ["wong2020"],
+      "locator": "Wong et al. 2020, Table 11 (p. 39), text p. 38-39",
+      "n": "non-recipient cells are small; the paper does not print cell counts",
+      "sim_param": "none (no evacuation without a notice in a zone with no order)",
+      "sim_value": null,
+      "comparison": "Gap in the sim. Wong et al. note one explanation is that officials could not issue orders before residents needed to leave. Suggested use: a share of households in unordered block groups within a buffer of the fire evacuates on the fire or social cue.",
+      "suggested": {"value": 0.30, "status": "assumption", "note": "low end of the range; the 75% (Carr) comes from a fire with a 2-day build-up and likely over-states unordered behaviour for a fast fire"}
+    },
+    {
+      "id": "overall_evacuation_rate_survey",
+      "description": "Share of all survey respondents who evacuated.",
+      "status": "sourced",
+      "range": [0.468, 0.894],
+      "per_event": {"oct2017_norcal": 0.468, "dec2017_socal": 0.774, "carr2018": 0.894, "kincade2019_survey": 0.80},
+      "unit": "fraction of respondents",
+      "sources": ["wong2020", "kuligowski2022"],
+      "locator": "Wong et al. 2020, Table 10 (p. 37); Kuligowski et al. results text (79% decided to evacuate; 80% evacuated)",
+      "n": "n=79, 226, 284, 270",
+      "sim_param": "demand.EVACUATION_PARTICIPATION",
+      "sim_value": 1.0,
+      "comparison": "Differs for the same reason as order_compliance; the Oct 2017 sample is mostly non-evacuees (53.2%)."
+    },
+    {
+      "id": "wait_and_see_stay_and_defend_intent",
+      "description": "Stated intention if told a bushfire would reach the home in 1 to 2 hours: leave at once, stay and defend, wait and see.",
+      "status": "sourced",
+      "value": {"leave_as_soon_as_possible": 0.47, "stay_and_defend": 0.24, "wait_and_see": 0.29},
+      "unit": "fraction of respondents (hypothetical scenario, Australia)",
+      "sources": ["mclennan2014"],
+      "locator": "McLennan, Elliott and Wright 2014, results text: 273 (47%) leave, 139 (24%) stay and defend, 172 (29%) wait and see, of 584",
+      "n": "n=584",
+      "sim_param": "wait_for_fire_share",
+      "sim_value": 0.07,
+      "comparison": "Differs: sim holds out 7% who ignore notices until they see fire, against 29% 'wait and see' plus 24% 'stay and defend' stated in Australia. Intentions overstate staying in a policy that encourages it, and California shows 3% to 13% non-compliance among ordered households (Wong), so 7% is inside the observed non-compliance range. Keep 0.07 as the baseline and run 0.13 as the upper bound.",
+      "pointer": "Whittaker et al. 2013 (Black Saturday, n=1,314) reports about half of respondents stayed to defend; abstract-level only, not used as a parameter."
+    },
+    {
+      "id": "stay_reason_protect_property",
+      "description": "Non-evacuees who gave 'wanted to protect property' as a reason (multiple answers allowed).",
+      "status": "sourced",
+      "range": [0.167, 0.367],
+      "per_event": {"oct2017_norcal": 0.167, "dec2017_socal": 0.294, "carr2018": 0.367},
+      "unit": "fraction of non-evacuees",
+      "sources": ["wong2020"],
+      "locator": "Wong et al. 2020, Table 20 (p. 51)",
+      "n": "non-evacuees n=42, 51, 30",
+      "sim_param": "wait_for_fire_share",
+      "sim_value": 0.07,
+      "comparison": "Supports 'stay and defend' as a minority motive; with non-evacuation of 10.6% to 53.2% of respondents, 17% to 37% of those is about 2% to 20% of all respondents."
+    },
+    {
+      "id": "departure_hour_distribution",
+      "description": "Departure hour of day among evacuees (local time).",
+      "status": "sourced",
+      "value": {
+        "oct2017_norcal": {"00-06": 0.486, "06-12": 0.270, "12-18": 0.108, "18-24": 0.135},
+        "dec2017_socal": {"00-06": 0.234, "06-12": 0.246, "12-18": 0.246, "18-24": 0.274},
+        "carr2018": {"00-06": 0.091, "06-12": 0.079, "12-18": 0.197, "18-24": 0.634}
+      },
+      "unit": "fraction of evacuees",
+      "sources": ["wong2020"],
+      "locator": "Wong et al. 2020, Table 10 (p. 37)",
+      "n": "evacuees n=37, 175, 254",
+      "sim_param": "none (the sim clocks decisions from notices and cues, not the time of day)",
+      "sim_value": null,
+      "comparison": "Context only: these fires started or surged at night, which Camp (06:15 start) did not. Camp's daytime profile is in camp_awareness_departure_timing."
+    },
+    {
+      "id": "vehicles_per_evacuating_household",
+      "description": "Personal vehicles a household used to evacuate.",
+      "status": "sourced",
+      "value": {
+        "oct2017_norcal": {"one": 0.405, "two": 0.432, "more_than_two": 0.135},
+        "dec2017_socal": {"one": 0.451, "two": 0.406, "more_than_two": 0.086},
+        "carr2018": {"one": 0.339, "two": 0.453, "more_than_two": 0.165}
+      },
+      "unit": "fraction of evacuees (shares of all evacuees; the remainder used rental, RV, trailer, walking and similar)",
+      "derivation": "Mean vehicles among personal-vehicle users, counting 'more than two' as 3: 1.72, 1.61, 1.82. Counting it as 2 (the sim's cap): 1.58, 1.52, 1.65.",
+      "sources": ["wong2020"],
+      "locator": "Wong et al. 2020, Table 10 'Mode Choice' (p. 38); executive summary p. 5 gives 34% to 45% one vehicle and 49% to 62% two or more",
+      "n": "evacuees n=37, 175, 254",
+      "sim_param": "demand.VEHICLES_TAKEN_CAP",
+      "sim_value": 2,
+      "comparison": "Close. For Butte, min(vehicles available, 2) averages 1.69 over vehicle-owning households (from tools/people_acs_butte_fixture.json: 24,535 / 31,350 / 22,371 households with 1 / 2 / 3+ vehicles), against 1.52 to 1.65 observed with the same cap. The sim is 2% to 11% high, within survey noise. The cap of 2 truncates the 9% to 17% who took three or more."
+    },
+    {
+      "id": "households_with_pets",
+      "description": "Survey households with pets.",
+      "status": "sourced",
+      "range": [0.637, 0.817],
+      "per_event": {"oct2017_norcal": 0.759, "dec2017_socal": 0.637, "carr2018": 0.817},
+      "unit": "fraction of respondent households (convenience sample, likely above the population share)",
+      "sources": ["wong2020"],
+      "locator": "Wong et al. 2020, Table A1 household characteristics (p. 61)",
+      "n": "n=79, 226, 284",
+      "sim_param": "none",
+      "sim_value": null,
+      "comparison": "Gap in the sim: no pets. Pets are a stated reason for 7.1% to 10.0% of non-evacuees ('not sure where pets could be taken'; Table 20, p. 51). NIST TN 2252 records civilians with pets and livestock at refuge areas until 15:30 (Sec. 9, TRA-W description, p. 144) and the pre-fire evacuation plan had pet provisions (p. 30)."
+    },
+    {
+      "id": "pet_extra_preparation",
+      "description": "Extra preparation time for a household with pets or livestock.",
+      "status": "assumption",
+      "value": 10,
+      "unit": "minutes added to prep_median_min",
+      "sources": ["assumption"],
+      "locator": "none. Kuligowski et al. 2022 find pets or livestock correlate negatively with evacuation (r = -0.137 with risk perception) but give no minutes.",
+      "sim_param": "prep_median_min",
+      "sim_value": 15,
+      "comparison": "No source for the size of the effect. Use only in sensitivity runs and label it."
+    },
+    {
+      "id": "return_during_closure",
+      "description": "Residents trying to return into the zone while it is closed or still burning.",
+      "status": "gap",
+      "value": null,
+      "unit": "fraction of evacuated households",
+      "sources": [],
+      "locator": "none found. Related, sourced: 91.9% to 96.9% of evacuees eventually returned home (Wong Table 10, p. 38); 3% to 32% returned two weeks or more after the outbreak (executive summary p. 5); 0% to 3.3% of non-evacuees 'tried to leave but went back home due to traffic' (Table 20, p. 51).",
+      "sim_param": "turn_back_prob (a different concept: turning around on a blocked edge)",
+      "sim_value": 0.5,
+      "comparison": "turn_back_prob has no published counterpart. Return attempts during an order are not quantified in the documents read; an after-action report or CHP closure-breach count would be needed."
+    },
+    {
+      "id": "returned_home_eventually",
+      "description": "Share of evacuees who later returned to their home.",
+      "status": "sourced",
+      "range": [0.919, 0.969],
+      "per_event": {"oct2017_norcal": 0.919, "dec2017_socal": 0.926, "carr2018": 0.969},
+      "unit": "fraction of evacuees",
+      "sources": ["wong2020"],
+      "locator": "Wong et al. 2020, Table 10 'Returned Home' (p. 38)",
+      "n": "evacuees n=37, 175, 254",
+      "sim_param": "none (the sim ends at evacuation)",
+      "sim_value": null,
+      "comparison": "Not a Camp number: Carr and the 2017 fires burned far fewer homes than Camp (about 18,800 structures destroyed), so Camp's rate will be lower."
+    },
+    {
+      "id": "no_vehicle_households_butte",
+      "description": "Households with no vehicle available, Butte County, ACS 2018-2022.",
+      "status": "derived",
+      "value": 0.0608,
+      "derivation": "5,063 / 83,319 households summed over the 200 block groups in tools/people_acs_butte_fixture.json (B25044 cells 3 and 10 over cell 1). Block-group shares vary and carry a 90% margin; read them per block group.",
+      "unit": "fraction of households",
+      "sources": ["acs2022"],
+      "locator": "ACS 2018-2022 B25044",
+      "sim_param": "demand.py counts households with no vehicle but does not convert them to vehicles",
+      "sim_value": null,
+      "comparison": "Same treatment: the residents generator should hold them as carless, to be picked up (transit, neighbours, responders)."
+    },
+    {
+      "id": "age_65plus_butte",
+      "description": "Population aged 65 and over, Butte County, ACS 2018-2022.",
+      "status": "derived",
+      "value": 0.1819,
+      "derivation": "38,852 / 213,605 over 200 block groups (B01001 cells 20-25 and 44-49 over cell 1).",
+      "unit": "fraction of population",
+      "sources": ["acs2022"],
+      "locator": "ACS 2018-2022 B01001",
+      "sim_param": "none",
+      "sim_value": null,
+      "comparison": "Context. Paradise-area block groups run near 33% in this vintage."
+    },
+    {
+      "id": "disability_butte",
+      "description": "People with a disability, Butte County, ACS 2018-2022 (tract level).",
+      "status": "derived",
+      "value": 0.1640,
+      "derivation": "34,705 / 211,587: sum over the 54 tracts of with-disability over civilian noninstitutionalized population (B18101). B18101 has no block-group rows; the extract repeats each tract's counts on its block groups. Survey households with a member with a disability: 14.2% to 19.0% (Wong Table A1, p. 61).",
+      "unit": "fraction of civilian noninstitutionalized population",
+      "sources": ["acs2022", "wong2020"],
+      "locator": "ACS B18101; Wong et al. 2020 p. 61",
+      "sim_param": "none",
+      "sim_value": null,
+      "comparison": "Not in sim. Disability is a population share, not a household-needs-help share: how many need physical assistance is not in these tables."
+    },
+    {
+      "id": "limited_english_butte",
+      "description": "Limited English speaking households, Butte County, ACS 2018-2022.",
+      "status": "derived",
+      "value": 0.0223,
+      "derivation": "1,859 / 83,319 households (C16002 cells 4, 7, 10, 13 over cell 1) summed over 200 block groups.",
+      "unit": "fraction of households",
+      "sources": ["acs2022"],
+      "locator": "ACS 2018-2022 C16002",
+      "sim_param": "none",
+      "sim_value": null,
+      "comparison": "Could scale a notification-miss or delay factor for English-only alerts; no published effect size was found (gap)."
+    },
+    {
+      "id": "camp_assistance_events_with_preexisting_condition",
+      "description": "Share of Camp Fire entrapment, assistance and rescue (EA/R) events that involved a person with a pre-existing condition (medical, mobility, or no vehicle or unable to drive).",
+      "status": "sourced",
+      "value": 0.30,
+      "unit": "fraction of 198 events, lower bound",
+      "derivation": "59 of 198 events; NIST says the real figure is higher because the information was not recorded for all events. 5 of the 59 were fatal, and 5 of the 6 fatal events involved a pre-existing condition.",
+      "sources": ["nist2252"],
+      "locator": "NIST TN 2252, Sec. 10.5.8, p. 211",
+      "n": "198 EA/R events",
+      "sim_param": "none",
+      "sim_value": null,
+      "comparison": "Use as an outcome check for a vulnerable-resident model: at least 30% of Camp rescues involved such a person."
+    },
+    {
+      "id": "camp_no_smartphone",
+      "description": "Camp Fire survey respondents without a smartphone, and respondents who needed several modes to leave.",
+      "status": "sourced",
+      "value": {"no_smartphone": 0.141, "needed_multiple_modes_lower_bound": 0.07},
+      "unit": "fraction of respondents",
+      "sources": ["grajdura2022"],
+      "locator": "Grajdura 2022, Table 12 (p. 103: 85.9% own, 14.1% do not); p. 74 (at least 7% needed more than one mode: a stranger's vehicle, police vehicle, walking)",
+      "n": "n=397",
+      "sim_param": "none",
+      "sim_value": null,
+      "comparison": "Context for a vulnerable-resident model and for vehicle abandonment on the road."
+    },
+    {
+      "id": "b_line_transit_camp",
+      "description": "B-Line (Butte Regional Transit) buses in the Camp Fire evacuation.",
+      "status": "sourced",
+      "value": {
+        "buses_documented": 13,
+        "normal_service": "two fixed routes from Chico plus seven Paratransit buses stationed in Paradise",
+        "passengers_per_large_bus": 50,
+        "first_dispatch_clock": "09:00 (three large and two Paratransit buses to Butte College)",
+        "arrived_staging_clock": "10:00",
+        "convoy_left_staging_clock": "15:30",
+        "convoy_reached_paradise_plaza_tra_clock": "17:15",
+        "first_departure_with_evacuees_clock": "19:30 (more than 100 evacuees)",
+        "last_departure_clock": "23:00"
+      },
+      "unit": "count and local clock time, 2018-11-08",
+      "sources": ["nist2252"],
+      "locator": "NIST TN 2252, Sec. 9.3.3 (pp. 153-154), Table 36 (p. 154), Appendix J; p. 153 (convoy to carry civilians without vehicles)",
+      "sim_param": "none",
+      "sim_value": null,
+      "comparison": "Transit capacity arrived at about 17:00, 9 hours after the fire reached Paradise, for people already at refuge areas. A scenario can set a bus pickup event with these timings; the B-Line GTFS feed (stops, routes) is a separate gap listed in docs/people-data.md."
+    },
+    {
+      "id": "camp_facility_evacuations",
+      "description": "Camp Fire facility evacuation examples.",
+      "status": "sourced",
+      "value": {
+        "feather_river_hospital": {"patients": 60, "spot_fires_on_property_clock": "08:11", "one_third_evacuated_clock": "08:36", "no_patients_left_clock": "08:45", "vehicles": "staff cars, law enforcement vehicles, ambulances; two ambulances entrapped in a burnover on Pentz Road after 09:00; about 160 civilians later sheltered at the hospital refuge area for over 6 hours"},
+        "cypress_meadows_post_acute": {"patients": 91, "evacuation_began_clock": "07:45", "first_40_moved_clock": "09:30", "immediate_order_clock": "about 10:00", "vehicles": "staff and law enforcement vehicles; some patients stuck in gridlock and sheltered at a refuge area"},
+        "paradise_care_facilities": "at least 20 facilities, from in-home care with under 10 beds to over 130 beds",
+        "schools": "evacuated by an unknown number of school buses and staff cars; students without transport were picked up by Paradise Police"
+      },
+      "unit": "count and local clock time, 2018-11-08",
+      "sources": ["nist2252"],
+      "locator": "NIST TN 2252, Sec. 7.3 (pp. 79-82), Table 14 (p. 81)",
+      "sim_param": "none",
+      "sim_value": null,
+      "comparison": "Facility evacuations are outside the traffic model today. Scenario inputs can use these as examples of lead time (Cypress Meadows needed more than 2 hours for half its patients) and of vehicle sources (staff and police cars, ambulances)."
+    }
+  ],
+  "gaps": [
+    "No quantified departure-delay distribution after an order or warning for Tubbs, Thomas, Kincade or Australian fires was obtainable: the survey papers report timing by clock hour or by day, not minutes after a message. Camp (Grajdura) is the only minutes-scale source and it is mostly cue-driven.",
+    "Return attempts into a closed or burning zone: no published rate found.",
+    "Pet and livestock effect on delay: no published minutes.",
+    "Effect of limited English or disability on notification delay: no published size.",
+    "B-Line GTFS (stops, routes, 2018 schedule) not downloaded: the current Mobility Database feed has no licence text and covers 2026 service, not 2018."
+  ]
+}

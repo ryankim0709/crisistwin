@@ -50,3 +50,4 @@ data/incidents/*/*/derived/
 # Prebuilt landscape packages live in MongoDB GridFS; rebuild with tools/build_landscape_regions
 data/landscapes/
 tools/ca_fire_bases.json
+tools/people_facilities_butte_fixture.json
