@@ -63,14 +63,53 @@ export default function AreaPicker({ current, onSelect, onClose }: AreaPickerPro
   const [picked, setPicked] = useState<GeoPoint | null>(null);
   const [mapError, setMapError] = useState<string | null>(null);
 
+  const dialogRef = useRef<HTMLElement>(null);
+  const onCloseRef = useRef(onClose);
   useEffect(() => {
+    onCloseRef.current = onClose;
+  });
+
+  // Focus moves in once on open and returns to the opener on close.
+  useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     titleRef.current?.focus();
+    return () => {
+      const target =
+        opener && opener.isConnected ? opener : document.getElementById("fr-change-area");
+      target?.focus();
+    };
+  }, []);
+
+  useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") {
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = Array.from(
+        dialogRef.current?.querySelectorAll<HTMLElement>(
+          "button:not(:disabled), [href], input:not(:disabled), select, textarea, [tabindex]:not([tabindex='-1'])",
+        ) ?? [],
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (!dialogRef.current?.contains(active)) {
+        event.preventDefault();
+        first.focus();
+      } else if (event.shiftKey && (active === first || active === titleRef.current)) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, []);
 
   useEffect(() => {
     const host = mapHost.current;
@@ -128,6 +167,7 @@ export default function AreaPicker({ current, onSelect, onClose }: AreaPickerPro
   return (
     <div className="fr-area-scrim" onClick={onClose}>
       <section
+        ref={dialogRef}
         className="fr-area fr-panel"
         role="dialog"
         aria-modal="true"

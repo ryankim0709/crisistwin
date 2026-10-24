@@ -11,7 +11,6 @@ import {
   LANDFIRE_ATTRIBUTION,
   TERRAIN_ATTRIBUTION,
   loadLandscape,
-  lonLatToMercator,
   type LandscapeGrid,
 } from "./landscape";
 import type { FuelMoisture } from "./rothermel";
@@ -29,6 +28,7 @@ import {
   SQUARE_METERS_PER_HECTARE,
   STRUCTURE_SPREAD_REFERENCE_WIND_MPH,
   bearingBetween,
+  cellAt,
   compassPoint,
   simulateFireSpread,
   type FireFrame,
@@ -175,14 +175,6 @@ type WindSourceState =
 
 type SceneStatus = { kind: "loading" } | { kind: "ready" } | { kind: "error"; message: string };
 
-/** True when the ignition lies inside the grid's footprint. */
-function gridContains(grid: LandscapeGrid, point: GeoPoint): boolean {
-  const [x, y] = lonLatToMercator(point.longitude, point.latitude);
-  const column = (x - grid.originX) / grid.cellSizeX;
-  const row = (y - grid.originY) / grid.cellSizeY;
-  return column >= 0 && column < grid.width && row >= 0 && row < grid.height;
-}
-
 /** The last frame at or before `minutes`; null before the first frame. */
 function frameAtOrBefore(frames: readonly FireFrame[], minutes: number): FireFrame | null {
   let found: FireFrame | null = null;
@@ -233,7 +225,12 @@ export default function FireSimulatorPage() {
 
   const [scene, setScene] = useState<FireDioramaSceneApi | null>(null);
   const [sceneStatus, setSceneStatus] = useState<SceneStatus>({ kind: "loading" });
-  const [phone, setPhone] = useState(false);
+  const [phone, setPhone] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      "matchMedia" in window &&
+      window.matchMedia("(max-width: 760px)").matches,
+  );
   const [scenarioOpenChoice, setScenarioOpenChoice] = useState<boolean | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [noticeOpen, setNoticeOpen] = useState(false);
@@ -254,6 +251,7 @@ export default function FireSimulatorPage() {
 
   // Fuel and terrain depend only on where and how far, so wind, moisture and ignition edits
   // never refetch. An older request can never overwrite a newer one.
+  const resetScenarioRef = useRef<() => void>(() => undefined);
   const requestRef = useRef(0);
   useEffect(() => {
     const request = ++requestRef.current;
@@ -264,7 +262,7 @@ export default function FireSimulatorPage() {
         if (request !== requestRef.current) return;
         // A longer or shorter horizon changes the box; keep the ignition only if it is inside.
         const kept = originRef.current;
-        if (kept && !gridContains(grid, kept)) setOrigin(null);
+        if (kept && cellAt(grid, kept) < 0) resetScenarioRef.current();
         setLandscape({ status: "ready", grid });
       })
       .catch((cause: unknown) => {
@@ -317,6 +315,8 @@ export default function FireSimulatorPage() {
 
   const result = useMemo<{ run: FireRun | null; error: string | null }>(() => {
     if (!grid || !deferredScenario) return { run: null, error: null };
+    // The deferred scenario can lag a grid swap; never solve an ignition outside the grid.
+    if (cellAt(grid, deferredScenario.origin) < 0) return { run: null, error: null };
     try {
       return { run: simulateFireSpread(grid, deferredScenario), error: null };
     } catch (cause) {
@@ -516,6 +516,10 @@ export default function FireSimulatorPage() {
     setDetailsOpen(false);
     dropWindProvenance();
   }
+  // The load effect runs outside render, so it reaches the latest reset through a ref.
+  useEffect(() => {
+    resetScenarioRef.current = clearScenario;
+  });
 
   function changeArea(center: GeoPoint) {
     setAreaPickerOpen(false);
@@ -560,11 +564,21 @@ export default function FireSimulatorPage() {
       scene.setViewInsets({ top, right: 0, bottom, left });
     };
     const observer = new ResizeObserver(measure);
-    observer.observe(stage);
-    for (const child of Array.from(overlay.children)) observer.observe(child);
-    measure();
-    return () => observer.disconnect();
-  }, [scene, scenarioOpen, hasRun, showHint, phone]);
+    const observeChildren = () => {
+      observer.disconnect();
+      observer.observe(stage);
+      for (const child of Array.from(overlay.children)) observer.observe(child);
+      measure();
+    };
+    // Panels that mount later (errors, warnings) are picked up as they appear.
+    const mutations = new MutationObserver(observeChildren);
+    mutations.observe(overlay, { childList: true });
+    observeChildren();
+    return () => {
+      mutations.disconnect();
+      observer.disconnect();
+    };
+  }, [scene, phone]);
 
   // Space toggles playback unless the focused control owns the key.
   const { toggle: togglePlayback } = playback;
@@ -573,7 +587,7 @@ export default function FireSimulatorPage() {
       if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
       if (!(event.key === " " || event.code === "Space")) return;
       const target = event.target instanceof Element ? event.target : null;
-      if (target?.closest(SPACE_OWNERS)) return;
+      if (target?.closest(SPACE_OWNERS) || target?.closest("[role='dialog']")) return;
       if (!hasRun) return;
       event.preventDefault();
       togglePlayback();
@@ -624,6 +638,57 @@ export default function FireSimulatorPage() {
       : null;
   }, [frames]);
 
+  const warnings: { key: string; text: string }[] = [];
+  if (grid && !grid.elevationComplete) {
+    warnings.push({
+      key: "elevation",
+      text: "A terrain tile was unavailable, so slope is understated in places.",
+    });
+  }
+  if (grid && !grid.canopyComplete) {
+    warnings.push({
+      key: "canopy",
+      text: "A canopy raster could not be loaded, so crown fire is not modelled.",
+    });
+  }
+  if (run) {
+    if (!run.crownFire.modelled && run.crownFire.unavailableReason) {
+      warnings.push({
+        key: "crown",
+        text: `Crown fire was not modelled: ${run.crownFire.unavailableReason}`,
+      });
+    }
+    if (run.ignition.spread.beyondValidatedWind) {
+      warnings.push({
+        key: "wind",
+        text:
+          "Effective wind is past the range Rothermel (1972) was validated against. Spread " +
+          "rates here are extrapolation.",
+      });
+    }
+    if (stalledAt !== null) {
+      warnings.push({
+        key: "stall",
+        text:
+          `The fire stops growing at ${formatDuration(stalledAt)}: it is fuel-limited, boxed in by ` +
+          "non-burnable ground. " +
+          (structureSpreadEnabled
+            ? "Structure-to-structure spread is on, so this is where the model ran out of " +
+              "built-up ground to carry fire, not where real risk ends."
+            : "Structure-to-structure spread is switched off, so this understates risk at the " +
+              "wildland-urban edge."),
+      });
+    }
+    if (run.reachedEdge) {
+      warnings.push({
+        key: "edge",
+        text:
+          "The fire reached the edge of the modelled area. Results past that point are " +
+          "truncated; try a longer horizon for a wider grid.",
+      });
+    }
+  }
+
   const hintText = origin
     ? clickMode === "origin"
       ? "Click anywhere to move the ignition point."
@@ -656,21 +721,22 @@ export default function FireSimulatorPage() {
           <div className="fr-error fr-panel" role="alert">
             <p className="fr-error-title">3D view unavailable in this browser</p>
             <p>
-              The fire diorama needs WebGL, which appears to be disabled or unsupported here. The
-              controls and results still work, but the landscape cannot be drawn.
+              The fire diorama needs WebGL, which appears to be disabled or unsupported here, so
+              the landscape cannot be drawn. The scenario controls and the numeric results still
+              work.
             </p>
             <p className="fr-error-detail">{sceneStatus.message}</p>
           </div>
         )}
 
-        {sceneStatus.kind === "ready" && landscape.status === "loading" && (
+        {landscape.status === "loading" && (
           <div className="fr-veil" role="status">
             <span className="fr-veil-dot" aria-hidden="true" />
             Sculpting terrain from LANDFIRE fuels and elevation…
           </div>
         )}
 
-        {sceneStatus.kind === "ready" && landscape.status === "error" && (
+        {landscape.status === "error" && (
           <div className="fr-error fr-panel" role="alert">
             <p className="fr-error-title">The landscape could not be loaded</p>
             <p>{landscape.message}</p>
@@ -733,6 +799,7 @@ export default function FireSimulatorPage() {
                   <span className="fr-area-name">{areaLabel(areaCenter)}</span>
                   <button
                     type="button"
+                    id="fr-change-area"
                     className="fr-btn fr-btn--small"
                     onClick={() => setAreaPickerOpen(true)}
                     aria-haspopup="dialog"
@@ -1287,33 +1354,20 @@ export default function FireSimulatorPage() {
                       )}
                     </div>
 
-                    {run.ignition.spread.beyondValidatedWind && (
-                      <p className="fr-warning" role="status">
-                        Effective wind is past the range Rothermel (1972) was validated against.
-                        Spread rates here are extrapolation.
-                      </p>
-                    )}
-                    {stalledAt !== null && (
-                      <p className="fr-warning" role="status">
-                        The fire stops growing at {formatDuration(stalledAt)}: it is fuel-limited,
-                        boxed in by non-burnable ground.{" "}
-                        {structureSpreadEnabled
-                          ? "Structure-to-structure spread is on, so this is where the model ran out " +
-                            "of built-up ground to carry fire, not where real risk ends."
-                          : "Structure-to-structure spread is switched off, so this understates risk " +
-                            "at the wildland-urban edge."}
-                      </p>
-                    )}
-                    {run.reachedEdge && (
-                      <p className="fr-warning" role="status">
-                        The fire reached the edge of the modelled area. Results past that point are
-                        truncated; try a longer horizon for a wider grid.
-                      </p>
-                    )}
                   </div>
                 </>
               )}
             </section>
+          )}
+
+          {warnings.length > 0 && (
+            <ul className="fr-warnings" aria-label="Run warnings">
+              {warnings.map((warning) => (
+                <li className="fr-warning" key={warning.key} role="status">
+                  {warning.text}
+                </li>
+              ))}
+            </ul>
           )}
 
           {showHint && (
@@ -1334,6 +1388,11 @@ export default function FireSimulatorPage() {
             onFocusFire={focusFire}
           />
         </div>
+
+        <p className="fr-attribution">
+          Fuel: LANDFIRE · Terrain: AWS terrain tiles (USGS 3DEP and others)
+          {windSource.status === "ready" ? " · Wind: NWS" : ""} · Simulated, not operational
+        </p>
 
         {areaPickerOpen && (
           <AreaPicker
