@@ -1,0 +1,104 @@
+{
+  "data_kind": "synthetic-fixture",
+  "is_observational": false,
+  "note": "SYNTHETIC DEMO DATA - NOT AN OBSERVATION. Every detection below was invented by hand so the CrisisTwin fire-watch demo runs offline and in CI. This file is not a record of any real fire, past or present, and nothing here came from NASA FIRMS or any other satellite feed. Do not present it as live data, and do not use it to describe conditions in the Berkeley Hills.",
+  "fixture_id": "berkeley-hills-demo",
+  "schema_version": 1,
+  "scenario": "Two hand-placed hot-pixel groups in the Berkeley Hills, roughly 2.3 km apart, shaped to resemble VIIRS 375 m detections across two overpasses. The first group sits on the grass-shrub fuel north-east of Grizzly Ridge, upwind of the synthetic Tilden Gate neighbourhood under a south-westerly, so the full demo loop has real exposure to assess. The second group is deliberately further from any asset.",
+  "area_hint": {
+    "name": "Berkeley Hills",
+    "latitude": 37.88,
+    "longitude": -122.24,
+    "radius_meters": 8000
+  },
+  "detections": [
+    {
+      "external_id": "fixture-berkeley-a1",
+      "detected_at": "2026-10-21T10:06:00Z",
+      "latitude": 37.8922,
+      "longitude": -122.2378,
+      "satellite": "N20",
+      "instrument": "VIIRS",
+      "confidence": "nominal",
+      "brightness_kelvin": 338.2,
+      "frp_megawatts": 7.4
+    },
+    {
+      "external_id": "fixture-berkeley-a2",
+      "detected_at": "2026-10-21T10:06:00Z",
+      "latitude": 37.8933,
+      "longitude": -122.2365,
+      "satellite": "N20",
+      "instrument": "VIIRS",
+      "confidence": "high",
+      "brightness_kelvin": 352.7,
+      "frp_megawatts": 18.9
+    },
+    {
+      "external_id": "fixture-berkeley-a3",
+      "detected_at": "2026-10-21T10:06:00Z",
+      "latitude": 37.8928,
+      "longitude": -122.2391,
+      "satellite": "N20",
+      "instrument": "VIIRS",
+      "confidence": "nominal",
+      "brightness_kelvin": 334.1,
+      "frp_megawatts": 5.2
+    },
+    {
+      "external_id": "fixture-berkeley-a4",
+      "detected_at": "2026-10-21T11:52:00Z",
+      "latitude": 37.8942,
+      "longitude": -122.2369,
+      "satellite": "N",
+      "instrument": "VIIRS",
+      "confidence": "high",
+      "brightness_kelvin": 361.4,
+      "frp_megawatts": 24.6
+    },
+    {
+      "external_id": "fixture-berkeley-b1",
+      "detected_at": "2026-10-21T10:06:00Z",
+      "latitude": 37.9045,
+      "longitude": -122.2187,
+      "satellite": "N20",
+      "instrument": "VIIRS",
+      "confidence": "nominal",
+      "brightness_kelvin": 331.6,
+      "frp_megawatts": 3.8
+    },
+    {
+      "external_id": "fixture-berkeley-b2",
+      "detected_at": "2026-10-21T10:06:00Z",
+      "latitude": 37.9056,
+      "longitude": -122.2174,
+      "satellite": "N20",
+      "instrument": "VIIRS",
+      "confidence": "low",
+      "brightness_kelvin": 327.9,
+      "frp_megawatts": null
+    },
+    {
+      "external_id": "fixture-berkeley-b3",
+      "detected_at": "2026-10-21T11:52:00Z",
+      "latitude": 37.9061,
+      "longitude": -122.2192,
+      "satellite": "N",
+      "instrument": "VIIRS",
+      "confidence": "nominal",
+      "brightness_kelvin": 336.5,
+      "frp_megawatts": 6.1
+    },
+    {
+      "external_id": "fixture-berkeley-b4",
+      "detected_at": "2026-10-21T11:52:00Z",
+      "latitude": 37.9038,
+      "longitude": -122.2169,
+      "satellite": "N",
+      "instrument": "VIIRS",
+      "confidence": "high",
+      "brightness_kelvin": 344.2,
+      "frp_megawatts": 11.3
+    }
+  ]
+}
