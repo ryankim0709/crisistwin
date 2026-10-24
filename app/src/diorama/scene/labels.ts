@@ -76,7 +76,14 @@ export class LabelLayer {
    * (and any vehicles on it) stay visible. `align` (0..1) is where along the pill the
    * stem attaches: 0.5 centred, smaller values push the pill to the right of its anchor.
    */
-  add(parent: THREE.Object3D, kind: LabelKind, text: string, position: THREE.Vector3, stem = 0, align = 0.5): CSS2DObject {
+  add(
+    parent: THREE.Object3D,
+    kind: LabelKind,
+    text: string,
+    position: THREE.Vector3,
+    stem = 0,
+    align = 0.5,
+  ): CSS2DObject {
     const pill = document.createElement("div");
     pill.className = kind === "wind" ? "dsc-label dsc-wind" : "dsc-label";
     if (kind !== "wind") {

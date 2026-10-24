@@ -1,3 +1,16 @@
+import {
+  Button,
+  Eyebrow,
+  EvidenceTag,
+  Facts,
+  LoadingState,
+  Metric,
+  Notice,
+  SegmentedControl,
+  Spinner,
+  Tag,
+  type TagTone,
+} from "../ui";
 import type { DispatchArea } from "./area";
 import type { DispatchEngine, Totals } from "./engine";
 import { DECISION_INTERVAL_MINUTES } from "./engine";
@@ -14,6 +27,20 @@ const STATUS_LABEL: Record<SessionStatus, string> = {
   failed: "Agent needs attention",
   finished: "Run finished",
 };
+
+const STATUS_TONE: Record<SessionStatus, TagTone> = {
+  idle: "neutral",
+  running: "success",
+  thinking: "info",
+  paused: "neutral",
+  failed: "danger",
+  finished: "brand",
+};
+
+const SPEED_OPTIONS = DISPATCH_SPEED_CHOICES.map((choice) => ({
+  value: String(choice),
+  label: `${choice} min/s`,
+}));
 
 function hhmm(minutes: number): string {
   const h = Math.floor(minutes / 60);
@@ -44,57 +71,85 @@ export interface AgentPanelProps {
 
 function Metrics({ totals, baseline }: { totals: Totals; baseline: Totals | null }) {
   const items: [string, number, string][] = [
-    ["Reached an exit", totals.arrived, "dispatch-metric--good"],
+    ["Reached an exit", totals.arrived, "dsp-metric--good"],
     ["On the road", totals.enRoute, ""],
     ["Ordered, not yet out", totals.waiting, ""],
     ["No order yet", totals.notOrdered, ""],
-    ["Exposed to fire", totals.exposed, "dispatch-metric--bad"],
+    ["Exposed to fire", totals.exposed, "dsp-metric--bad"],
   ];
   return (
-    <>
-      <dl className="dispatch-metrics">
+    <section className="dsp-section" aria-label="Simulated outcome">
+      <div className="dsp-section__head">
+        <h3>Outcome so far</h3>
+        <EvidenceTag kind="simulated" />
+      </div>
+      <div className="dsp-metrics">
         {items.map(([label, value, tone]) => (
-          <div key={label} className={`dispatch-metric ${tone}`}>
-            <dt>{label}</dt>
-            <dd>{NUMBER.format(value)}</dd>
-          </div>
+          <Metric
+            key={label}
+            className={`dsp-metric ${tone}`}
+            label={label}
+            value={NUMBER.format(value)}
+          />
         ))}
-      </dl>
+      </div>
       {baseline && (
-        <p className="dispatch-help">
-          With no orders at all the model exposes{" "}
-          <strong>{NUMBER.format(baseline.exposed)}</strong> of {NUMBER.format(baseline.vehicles)} vehicles by the
-          horizon. Vehicles are synthetic estimates; “exposed” means the modelled fire reached them, not a casualty count.
+        <p className="dsp-help">
+          With no orders at all the model exposes <strong>{NUMBER.format(baseline.exposed)}</strong>{" "}
+          of {NUMBER.format(baseline.vehicles)} vehicles by the horizon. Vehicles are synthetic
+          estimates; “exposed” means the modelled fire reached them, not a casualty count.
         </p>
       )}
-    </>
+    </section>
   );
 }
 
-function ZoneDetail({ engine, zoneId, onClose }: { engine: DispatchEngine; zoneId: string; onClose: () => void }) {
+function ZoneDetail({
+  engine,
+  zoneId,
+  onClose,
+}: {
+  engine: DispatchEngine;
+  zoneId: string;
+  onClose: () => void;
+}) {
   const index = engine.area.zones.findIndex((zone) => zone.id === zoneId);
   if (index < 0) return null;
   const zone = engine.area.zones[index];
   const state = engine.zones[index];
   const contact = engine.exposure.zoneContact[index];
   const core = engine.exposure.zoneCore[index];
-  const units = engine.units.filter((unit) => unit.zone === index).map((unit) => `${unit.id} (${unit.status})`);
+  const units = engine.units
+    .filter((unit) => unit.zone === index)
+    .map((unit) => `${unit.id} (${unit.status})`);
   return (
-    <section className="dispatch-zone" aria-label={`Zone ${zone.id}`}>
+    <section className="dsp-zone" aria-label={`Zone ${zone.id}`}>
       <header>
         <strong>{zone.name}</strong>
-        <button type="button" className="studio-btn studio-btn-secondary studio-btn-small" onClick={onClose}>
+        <EvidenceTag kind="simulated" />
+        <Button variant="secondary" size="sm" onClick={onClose}>
           Close
-        </button>
+        </Button>
       </header>
-      <dl className="dispatch-facts">
-        <div><dt>Status</dt><dd>{state.status.replace("_", " ")}{state.routeBlocked ? " · route blocked" : ""}</dd></div>
-        <div><dt>Exit</dt><dd>{state.exitId ?? "—"}</dd></div>
-        <div><dt>Vehicles (synthetic)</dt><dd>{NUMBER.format(zone.vehicles)}</dd></div>
-        <div><dt>Waiting / on road / out / exposed</dt><dd>{NUMBER.format(state.notReady + state.queued)} / {NUMBER.format(engine.enRoute(index))} / {NUMBER.format(state.arrived)} / {NUMBER.format(state.exposed)}</dd></div>
-        <div><dt>Fire reaches edge / core (model)</dt><dd>{Number.isFinite(contact) ? hhmm(contact) : "not in horizon"} / {Number.isFinite(core) ? hhmm(core) : "not in horizon"}</dd></div>
-        <div><dt>Engines</dt><dd>{units.length > 0 ? units.join(", ") : "none"}</dd></div>
-      </dl>
+      <Facts
+        items={[
+          {
+            label: "Status",
+            value: `${state.status.replace("_", " ")}${state.routeBlocked ? " · route blocked" : ""}`,
+          },
+          { label: "Exit", value: state.exitId ?? "—" },
+          { label: "Vehicles (synthetic)", value: NUMBER.format(zone.vehicles) },
+          {
+            label: "Waiting / on road / out / exposed",
+            value: `${NUMBER.format(state.notReady + state.queued)} / ${NUMBER.format(engine.enRoute(index))} / ${NUMBER.format(state.arrived)} / ${NUMBER.format(state.exposed)}`,
+          },
+          {
+            label: "Fire reaches edge / core (model)",
+            value: `${Number.isFinite(contact) ? hhmm(contact) : "not in horizon"} / ${Number.isFinite(core) ? hhmm(core) : "not in horizon"}`,
+          },
+          { label: "Engines", value: units.length > 0 ? units.join(", ") : "none" },
+        ]}
+      />
     </section>
   );
 }
@@ -109,14 +164,22 @@ function orderText(entry: DecisionLogEntry["outcomes"][number]["order"]): string
 
 function LogEntry({ entry }: { entry: DecisionLogEntry }) {
   return (
-    <li className={`dispatch-entry dispatch-entry--${entry.status}`}>
+    <li className={`dsp-entry dsp-entry--${entry.status}`}>
       <header>
-        <span className="dispatch-entry__time">{hhmm(entry.minute)}</span>
-        <span>{entry.status === "streaming" ? "Reasoning…" : entry.status === "failed" ? "Decision failed" : "Decision"}</span>
-        <span className="dispatch-tag">AI decision</span>
+        <span className="dsp-entry__time">{hhmm(entry.minute)}</span>
+        <span>
+          {entry.status === "streaming"
+            ? "Reasoning…"
+            : entry.status === "failed"
+              ? "Decision failed"
+              : "Decision"}
+        </span>
+        <span className="dsp-entry__tag">
+          <EvidenceTag kind="ai_explanation" />
+        </span>
       </header>
       {entry.alerts.length > 0 && (
-        <ul className="dispatch-alerts" aria-label="Alerts since the previous decision">
+        <ul className="dsp-alerts" aria-label="Simulator alerts since the previous decision">
           {entry.alerts.slice(-6).map((alert, i) => (
             <li key={`${alert.minute}-${i}`} className={alert.urgent ? "is-urgent" : ""}>
               <span aria-hidden="true">{alert.urgent ? "⚠ " : "• "}</span>
@@ -126,137 +189,167 @@ function LogEntry({ entry }: { entry: DecisionLogEntry }) {
         </ul>
       )}
       {entry.thinking && (
-        <details className="dispatch-thinking" open={entry.status === "streaming" && !entry.text}>
-          <summary>Reasoning summary</summary>
+        <details className="dsp-thinking" open={entry.status === "streaming" && !entry.text}>
+          <summary>AI reasoning summary</summary>
           <p>{entry.thinking}</p>
         </details>
       )}
-      {entry.text && <p className="dispatch-assessment">{entry.text}</p>}
+      {entry.text && <p className="dsp-assessment">{entry.text}</p>}
       {entry.error && (
-        <p className="dispatch-error" role="alert">
+        <Notice tone="danger" className="dsp-notice">
           {entry.error}
-        </p>
+        </Notice>
       )}
       {entry.status === "done" && (
-        <ul className="dispatch-orders" aria-label="Orders">
-          {entry.outcomes.length === 0 && <li className="dispatch-order">No new orders.</li>}
-          {entry.outcomes.map((outcome, i) => (
-            <li key={i} className={`dispatch-order ${outcome.accepted ? "" : "is-rejected"}`}>
-              <strong>
-                <span aria-hidden="true">{outcome.accepted ? "✓ " : "✕ "}</span>
-                {orderText(outcome.order)}
-              </strong>
-              <span>{outcome.accepted ? outcome.note : `Rejected by the simulator: ${outcome.note}`}</span>
-              {outcome.order.reason && <em>{outcome.order.reason}</em>}
-            </li>
-          ))}
-          {entry.rejected.map((item, i) => (
-            <li key={`r${i}`} className="dispatch-order is-rejected">
-              <strong><span aria-hidden="true">✕ </span>Dropped by the server</strong>
-              <span>{item.reason}</span>
-            </li>
-          ))}
-        </ul>
+        <>
+          <div className="dsp-section__head">
+            <h3>Orders, checked by the simulator</h3>
+            <EvidenceTag kind="simulated" />
+          </div>
+          <ul className="dsp-orders" aria-label="Orders">
+            {entry.outcomes.length === 0 && <li className="dsp-order">No new orders.</li>}
+            {entry.outcomes.map((outcome, i) => (
+              <li key={i} className={`dsp-order ${outcome.accepted ? "" : "is-rejected"}`}>
+                <strong>
+                  <span aria-hidden="true">{outcome.accepted ? "✓ " : "✕ "}</span>
+                  {orderText(outcome.order)}
+                </strong>
+                <span>
+                  {outcome.accepted ? outcome.note : `Rejected by the simulator: ${outcome.note}`}
+                </span>
+                {outcome.order.reason && <em>AI reason: {outcome.order.reason}</em>}
+              </li>
+            ))}
+            {entry.rejected.map((item, i) => (
+              <li key={`r${i}`} className="dsp-order is-rejected">
+                <strong>
+                  <span aria-hidden="true">✕ </span>Dropped by the server
+                </strong>
+                <span>{item.reason}</span>
+              </li>
+            ))}
+          </ul>
+        </>
       )}
-      {entry.model && <p className="dispatch-model">Model: {entry.model}</p>}
+      {entry.model && <p className="dsp-model">Model: {entry.model}</p>}
     </li>
   );
 }
 
 export default function AgentPanel(props: AgentPanelProps) {
-  const { area, areaError, startBlocker, status, engine, log, baseline, speed, selectedZoneId } = props;
+  const { area, areaError, startBlocker, status, engine, log, baseline, speed, selectedZoneId } =
+    props;
   const active = status !== "idle";
   const live = status === "running" || status === "thinking";
 
   return (
-    <section className="dispatch-panel" id="dispatch-agent-panel" aria-label="Dispatch agent">
-      <header className="dispatch-panel__header">
+    <section className="dsp-panel" id="dispatch-agent-panel" aria-label="Dispatch agent">
+      <header className="dsp-panel__header">
         <div>
-          <p className="dispatch-eyebrow">AI dispatcher · simulated</p>
+          <Eyebrow>AI dispatcher</Eyebrow>
           <h2>Dispatch agent</h2>
         </div>
-        <span className={`dispatch-status dispatch-status--${status}`} role="status" aria-live="polite">
-          <span className="dispatch-status__dot" aria-hidden="true" />
-          {STATUS_LABEL[status]}
+        <span role="status" aria-live="polite">
+          <Tag tone={STATUS_TONE[status]}>
+            {status === "thinking" && <Spinner />}
+            {STATUS_LABEL[status]}
+          </Tag>
         </span>
       </header>
+      <p className="dsp-provenance">
+        <EvidenceTag kind="ai_explanation" /> <EvidenceTag kind="simulated" /> Reasoning and orders
+        come from the AI; every number and outcome is computed by the simulator.
+      </p>
 
-      {areaError && <p className="dispatch-error" role="alert">{areaError}</p>}
-      {!area && !areaError && <p className="dispatch-help">Loading roads, zones and fire stations…</p>}
+      {areaError && (
+        <Notice tone="danger" className="dsp-notice">
+          {areaError}
+        </Notice>
+      )}
+      {!area && !areaError && <LoadingState>Loading roads, zones and fire stations…</LoadingState>}
 
-      <div className="dispatch-controls">
+      <div className="dsp-controls">
         {!active || status === "finished" ? (
-          <button type="button" className="studio-btn studio-btn-primary" disabled={startBlocker !== null} onClick={props.onStart}>
+          <Button size="sm" disabled={startBlocker !== null} onClick={props.onStart}>
             {status === "finished" ? "Run agent again" : "Start agent"}
-          </button>
+          </Button>
         ) : status === "paused" ? (
-          <button type="button" className="studio-btn studio-btn-primary" onClick={props.onResume}>
+          <Button size="sm" onClick={props.onResume}>
             Resume
-          </button>
+          </Button>
         ) : status === "failed" ? (
           <>
-            <button type="button" className="studio-btn studio-btn-primary" onClick={props.onRetry}>
+            <Button size="sm" onClick={props.onRetry}>
               Retry decision
-            </button>
-            <button type="button" className="studio-btn studio-btn-secondary" onClick={props.onSkip}>
+            </Button>
+            <Button variant="secondary" size="sm" onClick={props.onSkip}>
               Continue without orders
-            </button>
+            </Button>
           </>
         ) : (
-          <button type="button" className="studio-btn studio-btn-secondary" onClick={props.onPause} disabled={status === "thinking"}>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={props.onPause}
+            disabled={status === "thinking"}
+          >
             Pause
-          </button>
+          </Button>
         )}
         {active && (
-          <button type="button" className="studio-btn studio-btn-secondary" onClick={props.onStop}>
+          <Button variant="secondary" size="sm" onClick={props.onStop}>
             Stop
-          </button>
+          </Button>
         )}
-        <label className="dispatch-speed">
-          Speed
-          <select
-            className="studio-input"
-            value={speed}
-            onChange={(event) => props.onSpeedChange(Number(event.target.value))}
-          >
-            {DISPATCH_SPEED_CHOICES.map((choice) => (
-              <option key={choice} value={choice}>
-                {choice} min/s
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="dsp-speed">
+          <SegmentedControl
+            label="Agent run speed"
+            options={SPEED_OPTIONS}
+            value={String(speed)}
+            onChange={(value) => props.onSpeedChange(Number(value))}
+          />
+        </div>
       </div>
-      {startBlocker && !active && <p className="dispatch-help">{startBlocker}</p>}
+      {startBlocker && !active && (
+        <Notice tone="info" className="dsp-notice">
+          {startBlocker}
+        </Notice>
+      )}
       {live && (
-        <p className="dispatch-help">
-          {hhmm(engine?.minute ?? 0)} · the clock stops at each decision (every {DECISION_INTERVAL_MINUTES} min, sooner on
-          urgent alerts) until the agent's orders arrive.
+        <p className="dsp-help">
+          {hhmm(engine?.minute ?? 0)} · the clock stops at each decision (every{" "}
+          {DECISION_INTERVAL_MINUTES} min, sooner on urgent alerts) until the agent's orders arrive.
         </p>
       )}
 
       {engine && <Metrics totals={engine.totals()} baseline={baseline} />}
       {!engine && baseline && (
-        <p className="dispatch-help">
-          Fire run ready. With no orders the model exposes <strong>{NUMBER.format(baseline.exposed)}</strong> of{" "}
-          {NUMBER.format(baseline.vehicles)} synthetic vehicles. Start the agent to see what dispatch changes.
+        <p className="dsp-help">
+          Fire run ready. With no orders the model exposes{" "}
+          <strong>{NUMBER.format(baseline.exposed)}</strong> of {NUMBER.format(baseline.vehicles)}{" "}
+          synthetic vehicles. Start the agent to see what dispatch changes.
         </p>
       )}
 
       {engine && selectedZoneId && (
-        <ZoneDetail engine={engine} zoneId={selectedZoneId} onClose={() => props.onSelectZone(null)} />
+        <ZoneDetail
+          engine={engine}
+          zoneId={selectedZoneId}
+          onClose={() => props.onSelectZone(null)}
+        />
       )}
 
       {log.length > 0 && (
-        <ol className="dispatch-log" aria-label="Agent decisions, newest first">
+        <ol className="dsp-log" aria-label="Agent decisions, newest first">
           {log.map((entry) => (
             <LogEntry key={entry.id} entry={entry} />
           ))}
         </ol>
       )}
 
-      <p className="dispatch-disclaimer">
-        Planning experiment. The agent picks among options the simulator computes; it does not change the fire.
+      <p className="dsp-disclaimer">
+        Planning experiment. The agent picks among options the simulator computes; it does not
+        change the fire.
       </p>
     </section>
   );

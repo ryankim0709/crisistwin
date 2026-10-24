@@ -489,8 +489,7 @@ function chunkBoxes(box: MercatorBox): MercatorBox[] {
         maxX:
           box.minX + (column + 1) * chunkWidth + (column < columns - 1 ? CHUNK_OVERLAP_METERS : 0),
         minY: box.minY + row * chunkHeight - (row > 0 ? CHUNK_OVERLAP_METERS : 0),
-        maxY:
-          box.minY + (row + 1) * chunkHeight + (row < rows - 1 ? CHUNK_OVERLAP_METERS : 0),
+        maxY: box.minY + (row + 1) * chunkHeight + (row < rows - 1 ? CHUNK_OVERLAP_METERS : 0),
       });
     }
   }
@@ -659,8 +658,7 @@ function alignToFuelGrid(source: DecodedRaster, fuel: DecodedRaster, label: stri
     source.transform.scaleY === fuel.transform.scaleY &&
     Math.abs(source.transform.originX - fuel.transform.originX) <=
       GRID_ALIGNMENT_TOLERANCE_METERS &&
-    Math.abs(source.transform.originY - fuel.transform.originY) <=
-      GRID_ALIGNMENT_TOLERANCE_METERS;
+    Math.abs(source.transform.originY - fuel.transform.originY) <= GRID_ALIGNMENT_TOLERANCE_METERS;
   if (sameLattice) return source.values;
 
   console.warn(
@@ -730,9 +728,7 @@ async function fetchCanopyRasters(
   source: DataSource,
 ): Promise<Record<CanopyLayer, DecodedRaster>> {
   const boxes = chunkBoxes(box);
-  const jobs = CANOPY_LAYERS.flatMap((layer) =>
-    boxes.map((piece) => ({ layer, piece }) as const),
-  );
+  const jobs = CANOPY_LAYERS.flatMap((layer) => boxes.map((piece) => ({ layer, piece }) as const));
   const decoded = await mapWithLimit(
     jobs,
     MAX_PARALLEL_REQUESTS,
@@ -862,7 +858,7 @@ export async function decodePngRgb(
   let colourType = -1;
   let palette: Uint8Array | null = null;
   const idat: Uint8Array[] = [];
-  for (let offset = 8; offset + 8 <= bytes.length; ) {
+  for (let offset = 8; offset + 8 <= bytes.length;) {
     const length = view.getUint32(offset);
     const type = String.fromCharCode(...bytes.subarray(offset + 4, offset + 8));
     const body = bytes.subarray(offset + 8, offset + 8 + length);
@@ -931,8 +927,7 @@ export async function decodePngRgb(
           const toLeft = Math.abs(estimate - left);
           const toUp = Math.abs(estimate - up);
           const toUpLeft = Math.abs(estimate - upLeft);
-          predictor =
-            toLeft <= toUp && toLeft <= toUpLeft ? left : toUp <= toUpLeft ? up : upLeft;
+          predictor = toLeft <= toUp && toLeft <= toUpLeft ? left : toUp <= toUpLeft ? up : upLeft;
           break;
         }
         default:
@@ -1420,8 +1415,12 @@ function planResample(
     rowStart[c] = start(sampleNorthY - (lattice.northY - c * mercatorCell));
   }
   for (let c = 0; c < side; c++) {
-    centreColumn[c] = Math.floor((lattice.westX + (c + 0.5) * mercatorCell - sampleWestX) / sampleSpan);
-    centreRow[c] = Math.floor((sampleNorthY - (lattice.northY - (c + 0.5) * mercatorCell)) / sampleSpan);
+    centreColumn[c] = Math.floor(
+      (lattice.westX + (c + 0.5) * mercatorCell - sampleWestX) / sampleSpan,
+    );
+    centreRow[c] = Math.floor(
+      (sampleNorthY - (lattice.northY - (c + 0.5) * mercatorCell)) / sampleSpan,
+    );
   }
   return {
     lattice,
@@ -1619,13 +1618,7 @@ export async function loadLandscape(
   const plan = planResample(longitude, latitude, groundRadiusMeters, requested);
   const { lattice } = plan;
   // Terrain is a different host, so it runs alongside the LANDFIRE requests.
-  const terrain = sampleElevation(
-    lattice,
-    terrainZoomFor(lattice.cellX),
-    true,
-    signal,
-    source,
-  );
+  const terrain = sampleElevation(lattice, terrainZoomFor(lattice.cellX), true, signal, source);
   // Keep a rejection from surfacing as unhandled while the fuel request is still running.
   terrain.catch(() => undefined);
   const sampleFuel = await fetchSampledCoverage(

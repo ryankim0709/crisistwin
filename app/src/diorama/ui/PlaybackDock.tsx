@@ -1,7 +1,8 @@
 import type { KeyboardEvent } from "react";
+import { Button, IconButton, Panel, SegmentedControl } from "../../ui";
 import type { Phase, PhaseId } from "../types";
 import { formatClock } from "./format";
-import { PLAYBACK_SPEEDS, type Playback } from "./usePlayback";
+import { PLAYBACK_SPEEDS, type Playback, type PlaybackSpeed } from "./usePlayback";
 
 /** Arrow-key seek on the timeline, in scenario seconds (Shift for the larger step). */
 const SEEK_STEP_S = 2;
@@ -17,6 +18,11 @@ const PHASE_SHORT_LABELS: Record<PhaseId, string> = {
   response: "Response",
   resolution: "Resolution",
 };
+
+const SPEED_OPTIONS = PLAYBACK_SPEEDS.map((value) => ({
+  value: String(value),
+  label: `${value}×`,
+}));
 
 type PlaybackDockProps = {
   playback: Playback;
@@ -55,14 +61,13 @@ export default function PlaybackDock({
   };
 
   return (
-    <section className="dio-dock dio-panel" aria-label="Scenario playback">
+    <Panel glass compact className="dio-dock" aria-label="Scenario playback">
       <div className="dio-dock-buttons">
-        <button
-          type="button"
-          className="dio-btn dio-btn--play"
-          onClick={playback.toggle}
-          aria-label={playing ? "Pause" : ended ? "Replay from start" : "Play"}
+        <IconButton
+          variant="primary"
+          label={playing ? "Pause" : ended ? "Replay from start" : "Play"}
           title="Play / pause (Space)"
+          onClick={playback.toggle}
         >
           {playing ? (
             <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -73,13 +78,26 @@ export default function PlaybackDock({
               <path d="M4.5 2.5 13.5 8l-9 5.5z" />
             </svg>
           )}
-        </button>
-        <button type="button" className="dio-btn" onClick={playback.restart} aria-label="Restart" title="Restart">
+        </IconButton>
+        <IconButton variant="secondary" label="Restart" onClick={playback.restart}>
           <svg viewBox="0 0 16 16" aria-hidden="true">
-            <path d="M3.5 8a4.5 4.5 0 1 0 1.4-3.3" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-            <path d="M3 2.5v3.2h3.2" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+            <path
+              d="M3.5 8a4.5 4.5 0 1 0 1.4-3.3"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+            />
+            <path
+              d="M3 2.5v3.2h3.2"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
           </svg>
-        </button>
+        </IconButton>
       </div>
 
       <div className="dio-scrub">
@@ -146,32 +164,35 @@ export default function PlaybackDock({
       </p>
 
       <div className="dio-dock-end">
-        <div className="dio-speed" role="group" aria-label="Playback speed">
-          {PLAYBACK_SPEEDS.map((value) => (
-            <button
-              key={value}
-              type="button"
-              aria-pressed={speed === value}
-              onClick={() => playback.setSpeed(value)}
-            >
-              {value}×
-            </button>
-          ))}
-        </div>
-        <button
-          type="button"
-          className="dio-btn dio-btn--text"
+        <SegmentedControl
+          label="Playback speed"
+          className="dio-speed"
+          options={SPEED_OPTIONS}
+          value={String(speed)}
+          onChange={(value) => playback.setSpeed(Number(value) as PlaybackSpeed)}
+        />
+        <Button
+          variant="secondary"
+          size="sm"
+          className="dio-reset"
           onClick={onResetView}
           disabled={resetViewDisabled}
           title="Return the camera to the starting view"
+          icon={
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path
+                d="M2.5 6V2.5H6M13.5 6V2.5H10M2.5 10v3.5H6M13.5 10v3.5H10"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+              />
+              <circle cx="8" cy="8" r="1.6" fill="currentColor" />
+            </svg>
+          }
         >
-          <svg viewBox="0 0 16 16" aria-hidden="true">
-            <path d="M2.5 6V2.5H6M13.5 6V2.5H10M2.5 10v3.5H6M13.5 10v3.5H10" fill="none" stroke="currentColor" strokeWidth="1.5" />
-            <circle cx="8" cy="8" r="1.6" fill="currentColor" />
-          </svg>
-          <span>Reset view</span>
-        </button>
+          <span className="dio-reset-label">Reset view</span>
+        </Button>
       </div>
-    </section>
+    </Panel>
   );
 }

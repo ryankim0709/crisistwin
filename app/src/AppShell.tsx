@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { Button, IconButton } from "./ui";
 import { navigationItems } from "./navigation";
 import "./navigation.css";
 
@@ -38,30 +39,30 @@ export default function AppShell({ path, children }: AppShellProps) {
         Skip to content
       </a>
       <aside className="sidebar" aria-label="Workspace sidebar">
-        <button
+        <IconButton
           className="sidebar-collapse"
-          type="button"
+          size="sm"
+          variant="secondary"
+          label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           aria-expanded={!collapsed}
           aria-controls="workspace-navigation"
-          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           onClick={() => setCollapsed((value) => !value)}
         >
-          <span aria-hidden="true">{collapsed ? "»" : "«"}</span>
-        </button>
+          {collapsed ? "»" : "«"}
+        </IconButton>
         <div className="sidebar-brand">
           <a className="sidebar-logo" href="/" aria-label="CrisisTwin home">
             <img src="/brand/crisistwin-logo.png" alt="" width={2172} height={724} />
           </a>
-          <button
+          <Button
             className="menu-toggle"
-            type="button"
+            variant="secondary"
             aria-expanded={menuOpen}
             aria-controls="workspace-navigation"
             onClick={() => setMenuOpen((open) => !open)}
           >
             {menuOpen ? "Close menu" : "Menu"}
-          </button>
+          </Button>
         </div>
         <nav
           id="workspace-navigation"

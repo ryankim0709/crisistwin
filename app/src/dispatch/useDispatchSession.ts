@@ -92,9 +92,12 @@ export function useDispatchSession(): DispatchSession {
   }, []);
   const bump = useCallback(() => setVersion((v) => v + 1), []);
 
-  const updateEntry = useCallback((id: number, patch: (entry: DecisionLogEntry) => DecisionLogEntry) => {
-    setLog((entries) => entries.map((entry) => (entry.id === id ? patch(entry) : entry)));
-  }, []);
+  const updateEntry = useCallback(
+    (id: number, patch: (entry: DecisionLogEntry) => DecisionLogEntry) => {
+      setLog((entries) => entries.map((entry) => (entry.id === id ? patch(entry) : entry)));
+    },
+    [],
+  );
 
   const decide = useCallback(() => {
     const engine = engineRef.current;
@@ -233,7 +236,12 @@ export function useDispatchSession(): DispatchSession {
   const start = useCallback(
     (inputs: SessionInputs) => {
       abortRef.current?.abort();
-      const engine = new DispatchEngine(inputs.area, inputs.exposure, inputs.horizonMinutes, inputs.ignitions);
+      const engine = new DispatchEngine(
+        inputs.area,
+        inputs.exposure,
+        inputs.horizonMinutes,
+        inputs.ignitions,
+      );
       engineRef.current = engine;
       inputsRef.current = inputs;
       clockRef.current = 0;

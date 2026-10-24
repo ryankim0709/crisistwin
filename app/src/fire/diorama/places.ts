@@ -5,10 +5,26 @@
  * influence the simulation. Only places inside the loaded board are drawn.
  * `rank` orders declutter priority (1 = shown first).
  */
-export type ReferencePlace = { name: string; latitude: number; longitude: number; kind: "city" | "peak"; rank: 1 | 2 | 3 };
+export type ReferencePlace = {
+  name: string;
+  latitude: number;
+  longitude: number;
+  kind: "city" | "peak";
+  rank: 1 | 2 | 3;
+};
 
-const city = (name: string, latitude: number, longitude: number, rank: 1 | 2 | 3): ReferencePlace => ({ name, latitude, longitude, kind: "city", rank });
-const peak = (name: string, latitude: number, longitude: number, rank: 1 | 2 | 3): ReferencePlace => ({ name, latitude, longitude, kind: "peak", rank });
+const city = (
+  name: string,
+  latitude: number,
+  longitude: number,
+  rank: 1 | 2 | 3,
+): ReferencePlace => ({ name, latitude, longitude, kind: "city", rank });
+const peak = (
+  name: string,
+  latitude: number,
+  longitude: number,
+  rank: 1 | 2 | 3,
+): ReferencePlace => ({ name, latitude, longitude, kind: "peak", rank });
 
 export const REFERENCE_PLACES: readonly ReferencePlace[] = [
   // San Francisco Bay Area

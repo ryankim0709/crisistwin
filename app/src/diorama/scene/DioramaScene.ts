@@ -6,7 +6,13 @@ import { EffectsLayer, FireSampler } from "./effects";
 import { LabelLayer } from "./labels";
 import { PALETTE } from "./palette";
 import { BRIDGE_NAME, ROAD_WIDTH, RoadLayer } from "./roads";
-import { buildPlinth, buildTerrain, buildWater, createFireUniforms, type FireUniforms } from "./terrain";
+import {
+  buildPlinth,
+  buildTerrain,
+  buildWater,
+  createFireUniforms,
+  type FireUniforms,
+} from "./terrain";
 import { TreeLayer } from "./trees";
 import { VehicleLayer } from "./vehicles";
 
@@ -69,7 +75,6 @@ export class DioramaScene {
   private readonly raycaster = new THREE.Raycaster();
   private readonly backgroundTex: THREE.CanvasTexture;
   private reducedMotion: boolean;
-  private snapshot: SimSnapshot | null = null;
   private pickCallback: ((target: PickTarget | null) => void) | null = null;
   private time = 0;
   private lastFrame = performance.now();
@@ -83,7 +88,10 @@ export class DioramaScene {
     this.reducedMotion = opts.reducedMotion;
     if (getComputedStyle(container).position === "static") container.style.position = "relative";
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+    this.renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      powerPreference: "high-performance",
+    });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -110,7 +118,8 @@ export class DioramaScene {
       position: "absolute",
       inset: "0",
       pointerEvents: "none",
-      background: "radial-gradient(ellipse at 50% 45%, rgba(0,0,0,0) 58%, rgba(60,48,36,0.16) 100%)",
+      background:
+        "radial-gradient(ellipse at 50% 45%, rgba(0,0,0,0) 58%, rgba(60,48,36,0.16) 100%)",
     } satisfies Partial<CSSStyleDeclaration>);
     container.appendChild(this.vignette);
 
@@ -159,12 +168,27 @@ export class DioramaScene {
 
     // Labels float above what they name on a thin stem; the bridge label hangs off the
     // north (upstream) railing so the deck and the queue on its approach stay visible.
-    this.labels.add(this.scene, "shelter", world.shelter.label, this.buildings.shelterAnchor, LABEL_STEM_PX);
-    this.labels.add(this.scene, "station", world.station.label, this.buildings.stationAnchor, LABEL_STEM_PX);
+    this.labels.add(
+      this.scene,
+      "shelter",
+      world.shelter.label,
+      this.buildings.shelterAnchor,
+      LABEL_STEM_PX,
+    );
+    this.labels.add(
+      this.scene,
+      "station",
+      world.station.label,
+      this.buildings.stationAnchor,
+      LABEL_STEM_PX,
+    );
     const br = this.roads.bridge;
     const north = new THREE.Vector3(br.b.z - br.a.z, 0, -(br.b.x - br.a.x)).normalize();
     if (north.z > 0) north.negate();
-    const bridgeAnchor = br.midpoint.clone().addScaledVector(north, ROAD_WIDTH.bridge / 2 + 0.8).add(new THREE.Vector3(0, 1.6, 0));
+    const bridgeAnchor = br.midpoint
+      .clone()
+      .addScaledVector(north, ROAD_WIDTH.bridge / 2 + 0.8)
+      .add(new THREE.Vector3(0, 1.6, 0));
     this.labels.add(this.scene, "bridge", BRIDGE_NAME, bridgeAnchor, BRIDGE_STEM_PX, 0.14);
     this.labels.add(this.scene, "wind", `Wind · ${world.wind.label}`, this.effects.windAnchor);
 
@@ -182,11 +206,14 @@ export class DioramaScene {
   /** Applies a simulation snapshot (call whenever simulation time changes). */
   update(snapshot: SimSnapshot): void {
     if (this.disposed) return;
-    this.snapshot = snapshot;
     const t = snapshot.t;
     this.fireUniforms.uSimT.value = t;
     this.trees.update(t);
-    if (this.sampler.update(t)) this.fireUniforms.uHeadRange.value.set(this.sampler.headRange.min, this.sampler.headRange.max);
+    if (this.sampler.update(t))
+      this.fireUniforms.uHeadRange.value.set(
+        this.sampler.headRange.min,
+        this.sampler.headRange.max,
+      );
     this.effects.setSimTime(t);
     this.effects.setCrews(snapshot.crews);
     this.roads.setClosed(snapshot.closedEdgeIds);
@@ -262,11 +289,17 @@ export class DioramaScene {
       const mesh = obj as THREE.Mesh;
       if (mesh.geometry) mesh.geometry.dispose();
       if ((obj as THREE.InstancedMesh).isInstancedMesh) (obj as THREE.InstancedMesh).dispose();
-      const mats = mesh.material ? (Array.isArray(mesh.material) ? mesh.material : [mesh.material]) : [];
+      const mats = mesh.material
+        ? Array.isArray(mesh.material)
+          ? mesh.material
+          : [mesh.material]
+        : [];
       for (const m of mats) {
-        for (const value of Object.values(m)) if (value instanceof THREE.Texture) textures.add(value);
+        for (const value of Object.values(m))
+          if (value instanceof THREE.Texture) textures.add(value);
         if (m instanceof THREE.ShaderMaterial) {
-          for (const u of Object.values(m.uniforms)) if (u.value instanceof THREE.Texture) textures.add(u.value);
+          for (const u of Object.values(m.uniforms))
+            if (u.value instanceof THREE.Texture) textures.add(u.value);
         }
         m.dispose();
       }

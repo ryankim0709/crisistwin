@@ -28,7 +28,9 @@ import {
   solverInputChanged,
   validateScenario,
 } from "../studio/scenario";
+import { downloadJson, frameIndexAt } from "../studio/playbackUtils";
 import { useStudioRun } from "../studio/useStudioRun";
+import { Button, LoadingState, Notice } from "../ui";
 import AgentPanel from "./AgentPanel";
 import DispatchLegend from "./DispatchLegend";
 import { insideBbox, loadArea, type DispatchArea } from "./area";
@@ -46,26 +48,6 @@ const NOTICE_MS = 4000;
 const AREA_FIT_PADDING = 40;
 const AREA_FIT_DURATION_MS = 800;
 const MAX_IMPORT_CHARACTERS = 1_000_000;
-
-function frameIndexAt(frameMinutes: readonly number[], minute: number): number {
-  let index = 0;
-  for (let i = 0; i < frameMinutes.length; i += 1) {
-    if (frameMinutes[i] <= minute) index = i;
-    else break;
-  }
-  return index;
-}
-
-function downloadJson(filename: string, text: string): void {
-  const url = URL.createObjectURL(new Blob([text], { type: "application/json" }));
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-}
 
 type AreaState =
   | { status: "loading" }
@@ -435,8 +417,8 @@ export default function DispatchAgentPage() {
   );
 
   return (
-    <main className="studio-page dispatch-page" id="main-content" aria-label="Dispatch agent">
-      <div className={`dispatch-body${agentCollapsed ? " is-agent-collapsed" : ""}`}>
+    <main className="studio-page" id="main-content" aria-label="Dispatch agent">
+      <div className={`dsp-body${agentCollapsed ? " is-agent-collapsed" : ""}`}>
         <div className="studio-stage">
           <div className="studio-page-map">
             <StudioMap
@@ -467,18 +449,30 @@ export default function DispatchAgentPage() {
 
           <div className="studio-page-status" aria-live="polite">
             {state.phase === "loading-landscape" && (
-              <p className="studio-chip">Loading fuel and terrain data…</p>
+              <div className="studio-chip">
+                <LoadingState>Loading fuel and terrain data…</LoadingState>
+              </div>
             )}
-            {state.phase === "computing" && <p className="studio-chip">Computing fire spread…</p>}
+            {state.phase === "computing" && (
+              <div className="studio-chip">
+                <LoadingState>Computing fire spread…</LoadingState>
+              </div>
+            )}
             {state.phase === "failed" && state.error && (
-              <p className="studio-chip studio-chip-error" role="alert">
+              <Notice tone="danger" className="studio-chip-notice">
                 {state.error.message}
-              </p>
+              </Notice>
             )}
             {session.status === "thinking" && (
-              <p className="studio-chip">Clock held: the agent is deciding…</p>
+              <div className="studio-chip">
+                <LoadingState>Clock held: the agent is deciding…</LoadingState>
+              </div>
             )}
-            {notice && <p className="studio-chip">{notice}</p>}
+            {notice && (
+              <Notice tone="info" className="studio-chip-notice">
+                {notice}
+              </Notice>
+            )}
           </div>
 
           <div className={`studio-page-panel${panelCollapsed ? " is-collapsed" : ""}`}>
@@ -516,10 +510,11 @@ export default function DispatchAgentPage() {
           </div>
         </div>
 
-        <aside className="dispatch-side">
-          <button
-            type="button"
-            className="dispatch-side__toggle"
+        <aside className="dsp-side">
+          <Button
+            variant="secondary"
+            size="sm"
+            className="dsp-side__toggle"
             aria-expanded={!agentCollapsed}
             aria-controls="dispatch-agent-panel"
             aria-label={agentCollapsed ? "Show agent panel" : "Hide agent panel"}
@@ -528,9 +523,9 @@ export default function DispatchAgentPage() {
           >
             <span aria-hidden="true">{agentCollapsed ? "«" : "»"}</span>
             {agentCollapsed && (
-              <span className="dispatch-side__rail-label">Agent · {session.status}</span>
+              <span className="dsp-side__rail-label">Agent · {session.status}</span>
             )}
-          </button>
+          </Button>
           {!agentCollapsed && (
             <AgentPanel
               area={area}

@@ -61,7 +61,13 @@ export type TreeKind = "pine" | "round";
 
 export type Tree = { p: Vec2; kind: TreeKind; scale: number };
 
-export type Staging = { id: string; label: string; p: Vec2; /** Point the hose aims at. */ target: Vec2; nodeId: string };
+export type Staging = {
+  id: string;
+  label: string;
+  p: Vec2;
+  /** Point the hose aims at. */ target: Vec2;
+  nodeId: string;
+};
 
 export type World = {
   /** Playable ground extent, centred on the origin. */
@@ -83,7 +89,8 @@ export type World = {
   wind: { toward: Vec2; label: string };
 };
 
-export type PhaseId = "ignition" | "spread" | "evacuation" | "congestion" | "response" | "resolution";
+export type PhaseId =
+  "ignition" | "spread" | "evacuation" | "congestion" | "response" | "resolution";
 
 export type Phase = { id: PhaseId; label: string; start: number; end: number };
 
@@ -181,10 +188,7 @@ export type SimSnapshot = {
 };
 
 export type PickTarget =
-  | { kind: "vehicle"; id: string }
-  | { kind: "shelter" }
-  | { kind: "station" }
-  | { kind: "bridge" };
+  { kind: "vehicle"; id: string } | { kind: "shelter" } | { kind: "station" } | { kind: "bridge" };
 
 export type RecapItem = { label: string; value: string };
 
