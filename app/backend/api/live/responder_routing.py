@@ -5,6 +5,12 @@ Contract: docs/live-reports.md "Tasks (v2 additions)". The route is computed by
 closes (every public block guidance avoids plus every controller-confirmed block), never
 through the fire estimate, and slowed by the simulated traffic twin's per-edge speeds when
 the twin is ready (``congestion: "twin"``); otherwise free-flow (``"unavailable"``).
+
+``?class=`` picks the apparatus road-access class (``engine_t1_t2``, ``engine_t3``,
+``engine_t4_t7``, ``tender_support``, ``tender_tactical``; default ``engine_t3``, a CAL FIRE
+Type 3 engine): only roads open to that class (rules R01-R12 of docs/suppression-data.md) are
+used, at the class's speed. A target only the class rules keep the vehicle from answers
+``reason: "no_access"`` with the blocking ``rule``.
 """
 
 from __future__ import annotations
@@ -16,6 +22,7 @@ import time
 from datetime import datetime
 from typing import Any
 
+from livecore.apparatus import ACCESS_CLASSES, DEFAULT_CLASS, access_profile
 from livecore.geo import simplify_line
 from livecore.inbound import InboundResult, congestion_factors, inbound_route
 
@@ -40,6 +47,7 @@ DETAIL = {
     "origin_in_fire": "start is inside the fire estimate",
     "target_in_fire": "target is inside the fire estimate",
     "no_open_road": "no open road to the target",
+    "no_access": "no road open to this apparatus class",
 }
 """Short phrases; the phone shows "No route: <detail>"."""
 
@@ -119,6 +127,9 @@ def task_route(request, task_id: str, principal: Principal):
         return error(404, "not_found", "Unknown task.")
     if task.get("status") not in ROUTE_STATUSES:
         return error(409, "task_closed", "The task is closed.")
+    vehicle = request.query_params.get("class") or DEFAULT_CLASS
+    if vehicle not in ACCESS_CLASSES:
+        return error(400, "invalid_request", f"`class` must be one of {', '.join(ACCESS_CLASSES)}.")
     incident_id = task["incident_id"]
     now = wall_now()
     origin = None
@@ -130,11 +141,18 @@ def task_route(request, task_id: str, principal: Principal):
         party = principal.party_key if principal.role == "responder" else task.get("assignee")
         origin = _latest_location(incident_id, party, now)
     snapshot = load_snapshot(incident_id, now)
+    access = access_profile(snapshot.index.drill, vehicle)
     body: dict[str, Any] = {
         "task_id": task_id,
         "route": None,
         "reason": None,
         "detail": None,
+        "rule": None,
+        "apparatus": {
+            "class": vehicle,
+            "label": access.label if access else None,
+            "basis": access.basis if access else "suppression data unavailable: every road at its own speed (fallback)",
+        },
         "evidence_class": "simulated",
         "as_of": iso(snapshot.clock.replay_now),
     }
@@ -154,7 +172,11 @@ def task_route(request, task_id: str, principal: Principal):
         twin_service.twin_closed_segments(snapshot),
         fire,
         factors,
+        access=access,
     )
     if result.route is None:
+        if result.reason == "no_access":
+            return ok({**body, "reason": "no_access", "detail": f"{DETAIL['no_access']}: {result.access_note}",
+                       "rule": result.access_rule})
         return ok({**body, "reason": "unreachable", "detail": DETAIL.get(result.reason or "", result.reason)})
     return ok({**body, "route": route_json(result, "twin" if factors is not None else "unavailable")})
