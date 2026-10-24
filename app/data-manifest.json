@@ -1,0 +1,90 @@
+{
+ "root": "app/public",
+ "artifacts": [
+  {
+   "path": "replays/camp-2018.json",
+   "bytes": 18674366,
+   "sha256": "bd70838d61a7298018371a1e21fea3dc7f279efeb11cd9119e638715d07d47d9"
+  },
+  {
+   "path": "replays/camp-2018.mobility.json",
+   "bytes": 652173,
+   "sha256": "9b60a0e0d64c0a37be8580637b8d110ae2562f5de4ef39bf4e6cfa8e272013fc"
+  },
+  {
+   "path": "replays/camp-2018.variants/all-at-once.json",
+   "bytes": 7296174,
+   "sha256": "e24381889e52404609a7c1b83b69f5e6006895203618534467098e5787483423"
+  },
+  {
+   "path": "replays/camp-2018.variants/index.json",
+   "bytes": 12403,
+   "sha256": "9198e24bcd6a4f90048aa2732c03028a2733d8b47b0d267b85c90c61296206a6"
+  },
+  {
+   "path": "replays/camp-2018.variants/no-contraflow.json",
+   "bytes": 7131849,
+   "sha256": "c27d9998dc6af8eb55976bd171122699800d84d3265b9e1bb0b64a3f601e873b"
+  },
+  {
+   "path": "replays/camp-2018.variants/optimized.json",
+   "bytes": 7141477,
+   "sha256": "c11a7e361728586a55e3adea22584b3bed94029da3c91a20ad3026a1a6c63f2d"
+  },
+  {
+   "path": "replays/camp-2018.variants/skyway-closed-0800.json",
+   "bytes": 6351184,
+   "sha256": "b8856cca84393d1bf1c1d6c096181884f8199634311eb427eb1344aef5057e45"
+  },
+  {
+   "path": "replays/camp-2018.variants/slower-response.json",
+   "bytes": 5790380,
+   "sha256": "4ae3846d6a28733b7b3e19a1a0dc72690f4a4df1b091a8057181fa4aab359e9f"
+  },
+  {
+   "path": "replays/camp-2018.variants/wind-shift.json",
+   "bytes": 8334566,
+   "sha256": "d52486663296ed7a07b86635e60f382b8ef2db4923cefb87c77f6faff14f1e08"
+  },
+  {
+   "path": "replays/index.json",
+   "bytes": 2084,
+   "sha256": "04347df207fae9f5b919c8ac9c9658f825582cbee62d3616e79df56881fd7261"
+  },
+  {
+   "path": "replays/kincade-2019.json",
+   "bytes": 40778354,
+   "sha256": "cd111149563533afc09eda37a197c3af9a497f5c591a93bcd3f7b9b61444d390"
+  },
+  {
+   "path": "replays/kincade-2019.mobility.json",
+   "bytes": 1013196,
+   "sha256": "828e58dee3861d97c79e838aeb81944daca8e0bba3e99ef4180d28722bb5ce52"
+  },
+  {
+   "path": "replays/marshall-2021.json",
+   "bytes": 13692954,
+   "sha256": "3fe57e20d869809e232f4c2f37d9d6c8a8cc33e3e46b264e80675f44cfde1883"
+  },
+  {
+   "path": "replays/marshall-2021.mobility.json",
+   "bytes": 1129898,
+   "sha256": "840509411ae3d6248737fba3dc0a17f087ac0af5ce813f8ee69b3e3c33e0574d"
+  },
+  {
+   "path": "replays/woolsey-2018.mobility.json",
+   "bytes": 2105815,
+   "sha256": "60be7dfcfb79ed29004cb80ec43ca591032b62cb8214eb312608a839f038fb38"
+  },
+  {
+   "path": "simulations/camp-2018.agents.json",
+   "bytes": 19036410,
+   "sha256": "772ac2d34aa620ca019e5e67d50b6d7d2eb1bafb38ae1aace7e81e18ac70ed52"
+  },
+  {
+   "path": "simulations/camp-2018.stress.json",
+   "bytes": 29991,
+   "sha256": "e0d1772e6b59aeff402e9d322cc59674c8b05568e3a87f44691e6b0bd2d93d00"
+  }
+ ]
+}

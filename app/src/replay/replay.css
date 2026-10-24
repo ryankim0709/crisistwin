@@ -2669,3 +2669,235 @@ p.rp-state-msg[role="status"] {
     top: 120px;
   }
 }
+
+/* ===== Movement tab (phone-panel mobility sidecar); prefix rp-mob- ===== */
+.rp-mob {
+  gap: 16px;
+}
+.rp-mob-evidence {
+  margin: 0 0 6px;
+  line-height: 1.5;
+}
+.rp-mob-caveats {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--rp-dim);
+}
+.rp-mob-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--rp-line);
+  border-radius: 8px;
+}
+.rp-mob-toggles label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.rp-mob-toggles input {
+  margin: 0;
+  accent-color: var(--rp-amber);
+}
+.rp-mob-off {
+  color: var(--rp-dim);
+}
+.rp-mob-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 0 0 6px;
+  padding: 0;
+  list-style: none;
+}
+.rp-mob-legend li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.rp-mob-sw {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1px solid rgba(8, 12, 17, 0.7);
+}
+.rp-mob-sw--fresh {
+  border: 2px solid #ffffff;
+}
+.rp-mob-sw--ring {
+  background: transparent;
+  border: 2px solid var(--rp-text);
+}
+.rp-mob-line {
+  flex: none;
+  width: 12px;
+  height: 3px;
+}
+.rp-mob-cats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.rp-root .rp-mob-cat {
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--rp-line);
+  font-size: 11px;
+  color: var(--rp-dim);
+}
+.rp-root .rp-mob-cat[aria-pressed="true"] {
+  color: var(--rp-text);
+  border-color: var(--rp-amber);
+  background: rgba(255, 181, 71, 0.12);
+}
+.rp-mob-chart {
+  margin: 8px 0 0;
+}
+.rp-mob-chart figcaption {
+  margin-bottom: 2px;
+  font-size: 12px;
+}
+.rp-mob-chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  cursor: crosshair;
+}
+.rp-mob-plot {
+  fill: rgba(0, 0, 0, 0.25);
+  stroke: var(--rp-line);
+}
+.rp-mob-window {
+  fill: rgba(255, 181, 71, 0.2);
+}
+.rp-mob-tick {
+  stroke: var(--rp-line);
+  stroke-width: 0.6;
+}
+.rp-mob-tick--major {
+  stroke: var(--rp-line-strong);
+}
+.rp-mob-axis {
+  fill: var(--rp-dim);
+  font-size: 7.5px;
+}
+.rp-mob-visits {
+  fill: none;
+  stroke: var(--rp-amber);
+  stroke-width: 1.3;
+  stroke-linejoin: round;
+}
+.rp-mob-baseline {
+  fill: none;
+  stroke: #c8d1da;
+  stroke-width: 1;
+  stroke-dasharray: 3 2.5;
+}
+.rp-mob-cursor {
+  stroke: var(--rp-text);
+  stroke-width: 1;
+}
+.rp-mob-readout {
+  margin: 2px 0 0;
+  font-family: var(--rp-mono);
+  font-size: 10.5px;
+  color: var(--rp-dim);
+}
+.rp-mob-top {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.rp-mob-top .rp-row-btn {
+  border-radius: 6px;
+}
+.rp-mob-code {
+  display: block;
+  margin-top: 4px;
+  font-family: var(--rp-mono);
+  font-size: 10.5px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--rp-text);
+}
+.rp-mob-notes {
+  font-size: 11px;
+  color: var(--rp-dim);
+}
+/* ===== end Movement tab ===== */
+
+/* ---- Story-first: landing card and story chrome (map is the hero) ---- */
+.rp-root--story .rp-status,
+.rp-root--story .rp-basemap,
+.rp-root--story .rp-maplegend,
+.rp-root--story .rp-key-btn,
+.rp-root--story .pv-switcher,
+.rp-root--story .pv-orbit,
+.rp-root--story .rp-dock .rp-speed,
+.rp-root--story .rp-dock button[aria-label^="Step"],
+.rp-root--story .rp-dock button[aria-label^="Reset"],
+.rp-root--story .rp-delta-pill {
+  display: none !important;
+}
+.rp-landing {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 5;
+  transform: translate(-50%, -55%);
+  width: min(460px, calc(100% - 32px));
+  padding: 26px 28px 20px;
+  border-radius: 16px;
+  background: rgba(12, 17, 23, 0.94);
+  border: 1px solid var(--rp-line-strong);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+  text-align: center;
+}
+.rp-landing-eyebrow {
+  margin: 0;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: var(--rp-dim);
+}
+.rp-landing h1 {
+  margin: 8px 0 4px;
+  font-size: 28px;
+  font-weight: 700;
+}
+.rp-landing-meta {
+  margin: 0 0 18px;
+  color: #c4cfda;
+}
+.rp-root .rp-landing-play {
+  display: block;
+  width: 100%;
+  padding: 14px;
+  border-radius: 12px;
+  color: #1a0b02;
+  background: linear-gradient(140deg, #ffb547, var(--rp-ember));
+  font-size: 17px;
+  font-weight: 700;
+}
+.rp-root .rp-landing-explore {
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--rp-dim);
+  text-decoration: underline;
+}
+.rp-landing-note {
+  margin: 14px 0 0;
+  font-size: 11px;
+  color: var(--rp-dim);
+}

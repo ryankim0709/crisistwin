@@ -149,10 +149,14 @@ function ReplayRouteWith({ incidents }: { incidents: ReplayIncident[] }) {
     return () => window.removeEventListener("popstate", onPop);
   }, [incidents]);
 
-  function select(id: string) {
+  function select(id: string, story = false) {
     const next = incidents.find((i) => i.id === id);
     if (!next || next.id === incident.id) return;
     const url = new URL(window.location.href);
+    url.searchParams.delete("tab");
+    url.searchParams.delete("variant");
+    if (story) url.searchParams.set("story", "1");
+    else url.searchParams.delete("story");
     if (next.id === defaultIncident(incidents).id) url.searchParams.delete("incident");
     else url.searchParams.set("incident", next.id);
     window.history.pushState(null, "", url);
@@ -173,6 +177,16 @@ function ReplayRouteWith({ incidents }: { incidents: ReplayIncident[] }) {
           onChange={select}
         />
       }
+      nextFire={(() => {
+        // The next built fire after this one, wrapping around.
+        const at = incidents.findIndex((i) => i.id === incident.id);
+        for (let k = 1; k < incidents.length; k += 1) {
+          const candidate = incidents[(at + k) % incidents.length];
+          if (availability[candidate.id] === false) continue;
+          return { label: shortLabel(candidate), open: () => select(candidate.id, true) };
+        }
+        return null;
+      })()}
       switcher={
         <FireSwitcher
           incidents={incidents}

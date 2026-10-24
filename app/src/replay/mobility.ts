@@ -18,14 +18,17 @@ export const SURROUNDING = "surrounding";
 export const MOBILITY_BUILD_HINT =
   "uv run -q --no-project --with pyarrow python -m tools.dewey_mobility --subsets <dewey subsets dir> --output-dir app/public/replays";
 
-/** Cell colors, shared by the map layer and the legend so they cannot drift apart. */
+/**
+ * Cell colors, shared by the map layer and the legend so they cannot drift apart. Neutral
+ * only (warm = fire, cyan = traffic): brightness encodes visits vs baseline, darker = fewer.
+ */
 export const MOBILITY_COLORS = {
-  below: "#4f9dff",
-  near: "#c8d1da",
-  above: "#ff5a2a",
-  /** No baseline visits but visits now. */
-  fresh: "#c7a6ff",
-  flow: "#3ddbb4",
+  below: "#4b5560",
+  near: "#9aa4ae",
+  above: "#ffffff",
+  /** No baseline visits but visits now: drawn as a hollow ring. */
+  fresh: "#ffffff",
+  flow: "#c3cdd6",
 } as const;
 /** log2(visits / baseline) at which the color scale saturates (4x either way). */
 export const RATIO_SATURATION_LOG2 = 2;

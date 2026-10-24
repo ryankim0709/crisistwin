@@ -129,8 +129,8 @@ python3 -m sim --incident camp-2018 bundle       # same as the explicit Camp --p
 override it. Camp keeps its own path. For Marshall and Kincade, `sim.incidents` takes everything
 from the evacuation package:
 - perimeters from `fire_perimeters.geojson`;
-- the ignition from the `fire_ignition` event. Marshall's event has no coordinates, so its place
-  is fitted among the cells of the earliest FIRMS pass;
+- the ignition from the `fire_ignition` event. Kincade's place is fitted among the cells of the
+  earliest FIRMS pass; Marshall's ignitions come from its evidence file (below);
 - the clock: the manifest focus window, starting 1 h before the hour of ignition;
 - the timezone from the manifest;
 - demand from `population_units` and `zone_population_crosswalk.json`, with orders and warnings
@@ -138,12 +138,18 @@ from the evacuation package:
 
 If the package crosswalk has no rows for a zone named by an order (Kincade's Geyserville CDP), its
 block-group shares are derived here by 100 m raster overlap; `demand.crosswalk_derived_here` records this.
-Orders without zone IDs stay on the timeline only (`demand.orders_without_zone_ids`). Marshall sets
-`warning_releases_demand`, a labelled registry assumption: the package has no zone-level orders for
-Superior zone 4 or Cherryvale zone 9, which were evacuated that day.
+Orders without zone IDs stay on the timeline only (`demand.orders_without_zone_ids`).
 
-The front is `elliptical-mtt-ca`, fitted only to the first perimeter and clipped to it. The packages
-have no terrain or ground fire observations. The model settings chosen per fire are in the
+A registry entry may name a curated evidence file in `sim/evidence/` (the packages are
+content-addressed, so additions cannot go inside them). `sim/evidence/marshall_2021.json` holds, with
+sources, locators and short quotes: the two documented ignitions; timed fire reports from the AAR,
+the Facilitated Learning Analysis and Colorado Sun dispatch recordings, geocoded from OSM names;
+the town-wide Superior order (12:58 MST) and the Louisville city-wide order (14:24 MST); and a split
+of Everbridge zone 9 at the 2020 Louisville city limit. Warnings release no demand.
+
+Marshall's front is `elliptical-mtt-ca` fitted to those reported arrival times and to the final
+FEDS perimeter's shape, then clipped to that perimeter (`timed_package_fire`). Kincade's is fitted
+only to the first perimeter and clipped to it. Neither package has terrain or fuel layers. The model settings chosen per fire are in the
 registry (Kincade: 30 s step and 5 min frames over a multi-day clock). Validation rows are
 `not_computed` for now. `simulate --incident` supports only Camp, and `sim.variants` still takes
 explicit Camp packages.

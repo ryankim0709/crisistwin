@@ -33,6 +33,8 @@ import {
   setBasemap,
   setGroupVisibility,
   setPerimeterFreshness,
+  setPerimeterLabel,
+  applyPeopleState,
   destinationsCollection,
   setFireObservationTime,
   setSourceData,
@@ -47,8 +49,9 @@ import { HILLSHADE_LAYER, restyleDarkBasemap } from "./basemapStyle";
 import { buildEdgePath, buildTravelIndex, particlePositions, type EdgePath } from "./particles";
 import PerspectiveSwitcher from "./perspectives/PerspectiveSwitcher";
 import { edgeThreats } from "./insights";
+import { areaKm2, peopleAtHome } from "./population";
 import { openRefugeKey, refugeTimeline } from "./refuges";
-import { EVIDENCE_LABEL, closedEdgesAt, localTime, sameNumbers } from "./timeline";
+import { EVIDENCE_LABEL, closedEdgesAt, localTime, perimeterWindowEnd, sameNumbers } from "./timeline";
 import type { EvidenceClass, LngLat, ReplayModel } from "./types";
 
 // Same explicit worker bundling as maps/MapCanvas.tsx; Vite relocates the main module.
@@ -150,6 +153,7 @@ function tooltipContent(feature: MapGeoJSONFeature, perParticle: number, timezon
   switch (feature.layer.id) {
     case "fire-fill":
       add("strong", "Fire perimeter in effect");
+      if (p.half_day) add("span", "Half-day satellite composite: extent reached sometime in this window.");
       add("span", `${fmt(p.area_km2, 1)} km² · ${EVIDENCE_LABEL[p.evidence_class as EvidenceClass] ?? String(p.evidence_class)}`);
       add("span", "Shape held until the next snapshot; no interpolation.", "rp-tip-note");
       break;
@@ -205,6 +209,25 @@ function tooltipContent(feature: MapGeoJSONFeature, perParticle: number, timezon
       add("span", `${String(p.dest_kind).replace(/_/g, " ")} · capacity ${p.capacity_veh == null ? "unbounded" : fmt(p.capacity_veh)}`);
       add("span", evidenceText(p.evidence_class), "rp-tip-note");
       break;
+    case "people-fill": {
+      const state = feature.state as { home?: number | null; left?: number | null; density?: number };
+      add("strong", String(p.name));
+      add(
+        "span",
+        [
+          p.households != null && `${fmt(p.households)} households`,
+          p.population != null && `${fmt(p.population)} people`,
+        ]
+          .filter(Boolean)
+          .join(" · "),
+      );
+      if (state.home != null) {
+        add("span", `Still home now: ${fmt(state.home)} · left: ${fmt(state.left)} households (model)`);
+        add("span", `${fmt(state.density)} households at home per km²`);
+      }
+      add("span", "Census ACS households; departures are modelled.", "rp-tip-note");
+      break;
+    }
     case "refuges":
       add("strong", String(p.name));
       add(
@@ -428,10 +451,20 @@ export default function ReplayMap({
   const freshnessBucket = perimeter
     ? Math.floor((simTimeMs - perimeter.atMs) / FRESHNESS_BUCKET_MS)
     : 0;
+  // Half-day composites: dotted outline until the end of their window, then the normal style.
+  const windowEnd = perimeter ? perimeterWindowEnd(model, perimeterIndex) : null;
+  const provisional = windowEnd !== null && simTimeMs < windowEnd;
   useEffect(() => {
     const map = mapRef.current;
-    if (ready && map) setPerimeterFreshness(map, freshnessBucket * FRESHNESS_BUCKET_MS);
-  }, [ready, freshnessBucket]);
+    if (!ready || !map) return;
+    setPerimeterFreshness(map, freshnessBucket * FRESHNESS_BUCKET_MS, provisional);
+    setPerimeterLabel(
+      map,
+      provisional && windowEnd !== null
+        ? `EXTENT SOMETIME BY ${localTime(windowEnd, model.incident.timezone).replace(/ [A-Z]{3,4}$/, "")}`
+        : "SATELLITE ESTIMATE",
+    );
+  }, [ready, freshnessBucket, provisional, windowEnd, model.incident.timezone]);
 
   const simFront = simFrontIndex >= 0 ? (model.fireSimulated?.fronts[simFrontIndex] ?? null) : null;
   useEffect(() => {
@@ -642,6 +675,14 @@ export default function ReplayMap({
     const map = mapRef.current;
     if (ready && map) setSourceData(map, "zones", zonesCollection(model.zones?.items ?? [], zoneStates));
   }, [ready, model, zoneStates]);
+
+  // People at home: zone areas once, then per-minute feature-state from modelled departures.
+  const zoneAreas = useMemo(() => (model.zones?.items ?? []).map((z) => areaKm2(z.geometry)), [model.zones]);
+  const peopleMinute = Math.floor(simTimeMs / 60_000) * 60_000;
+  useEffect(() => {
+    const map = mapRef.current;
+    if (ready && map && visibility.people) applyPeopleState(map, peopleAtHome(model, zoneAreas, peopleMinute));
+  }, [ready, model, zoneAreas, peopleMinute, visibility.people]);
 
   // Refuges open and close at NIST-recorded times; redraw only when the open set changes.
   const refuges = useMemo(
