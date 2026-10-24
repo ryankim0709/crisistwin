@@ -27,15 +27,21 @@ sections. Header fields: `format: "crisistwin-landscape"`, `version: 1`, `region
 coverage ids, retrieval time), `sections` (`name`, `dtype`, `byteOffset` from the start
 of the section block, `byteLength`) and `payloadSha256` over the section block. Sections:
 `fuelCodes` int16, `elevationMeters`, `canopyBaseHeightMeters`, `canopyBulkDensityKgPerM3`,
-`canopyCoverFraction`, `canopyHeightMeters` float32. Slope and aspect are recomputed on
+`canopyCoverFraction`, `canopyHeightMeters` float32. Each section starts on an 8-byte boundary
+within the block (zero padding between sections is covered by the checksum). Slope and aspect are recomputed on
 decode with the live loader's `slopeAndAspect`, so they cannot drift from it. Decoders
 reject unknown versions, size mismatches and checksum failures.
 
 ## Storage and API
 
 GridFS bucket `landscape_packages`; `filename` is the SHA-256 of the gzip bytes
-(content-addressed, like `incident_artifacts`), `metadata` holds `regionId`, `builtAt`,
-`formatVersion`, the lattice fields and `bytes`. The newest `builtAt` per `regionId` wins.
+(content-addressed, like `incident_artifacts`). `metadata` holds `regionId`, `builtAt`
+(BSON UTC datetime), `formatVersion`, `bytes`, the catalogue fields `name`, `counties`,
+`summary`, `center {latitude, longitude}`, `radiusMeters`, and `lattice { width, height,
+cellMeters, groundCellSizeMeters, originX, originY, cellSizeX, cellSizeY, resampling }`,
+plus `elevationComplete`, `canopyComplete` and `sources`; the API lists regions from
+metadata alone. The newest `builtAt` per `regionId` wins; the uploader creates the index
+`{metadata.regionId: 1, metadata.builtAt: -1}` on `landscape_packages.files`.
 
 - `GET /api/landscapes` → `{ "regions": [{ id, name, counties, summary, center, radiusMeters,
   cellMeters, width, height, builtAt, bytes, sha256 }] }` for stored regions.
@@ -52,4 +58,6 @@ tool with the operator's `MONGODB_URI`; the server never writes.
 
 `tools/build_landscape_regions` builds packages with the same TypeScript loader the page
 uses (bundled for Node), writes them under an ignored local directory with a manifest,
-and uploads missing packages to GridFS. It requires `MONGODB_URI` for upload only.
+and uploads missing packages to GridFS. It requires `MONGODB_URI` for upload only
+(environment, then `~/.mongodb_uri`, then `app/.env`). Usage is in
+`tools/build_landscape_regions/README.md`.

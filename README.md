@@ -61,6 +61,11 @@ python3 -m tools.mongo_data pull         # restores data/incidents/*/*/{raw,norm
 
 After building a new package locally, run `python3 -m tools.mongo_data push` and commit its manifest.
 
+Prebuilt Southern California fire landscapes (ADR 0013) are built and uploaded with
+[`tools/build_landscape_regions`](tools/build_landscape_regions/README.md):
+`node tools/build_landscape_regions/run.mjs` then
+`python3 -m tools.build_landscape_regions upload`.
+
 [Historical incident packages](docs/historical-replay.md) proposes source acquisition,
 data formats, provenance, timing, and offline replay semantics for historical wildfire
 scenarios. [The historical package decision](docs/adr/0005-historical-incident-packages.md)
