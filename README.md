@@ -25,7 +25,7 @@ Routes of the web app (`app/src/main.tsx`, `app/src/navigation.ts`); `/` redirec
 | `/replay` | Historical replay | Replay of past fires (Camp 2018, plus Marshall and Kincade packages) with perimeters, evacuation traffic and responder/evacuee views, driven by generated replay bundles. [Bundle contract](docs/replay-bundle.md). |
 | `/simulate` | Agent simulation | Replay-style view of simulated agent runs (same map tooling as `/replay`). |
 | `/diorama` | Evacuation diorama | Fictional, scripted ~90 s three.js evacuation of the made-up town Larkspur Hollow; synthetic data. [ADR 0010](docs/adr/0010-evacuation-diorama.md). |
-| `/scenarios`, `/evacuation`, `/comparison`, `/incidents`, `/stress-tests` | Planning pages | UI scaffolds with temporary local input; they do not save scenarios or run evacuation models. [Details](docs/workspace-pages.md), [ADR 0006](docs/adr/0006-planning-ui-scaffolds.md). |
+| `/scenarios`, `/evacuation`, `/comparison`, `/stress-tests` | Planning pages | UI scaffolds with temporary local input; they do not save scenarios or run evacuation models. [Details](docs/workspace-pages.md), [ADR 0006](docs/adr/0006-planning-ui-scaffolds.md). |
 
 The workspace overview (`/overview`) and `/maps` pages were removed
 ([ADR 0015](docs/adr/0015-remove-overview-and-maps.md)).
@@ -48,7 +48,8 @@ Also in the repository:
 - **Live twin** (`app/backend/livecore/`, `sim/`): the planner and a steppable traffic engine behind `/live`'s what-if
   ([ADR 0013](docs/adr/0013-realtime-twin.md), [twin API](docs/twin-api.md)).
 
-- **Incident intelligence** (`/api/intel/…`): an Apify Actor fetches public agency
+- **Incident intelligence** (`/intel`, API `/api/intel/…`): the page lists the historical incidents from the
+  replay index (pick one to scope the review; `/incidents` redirects here). An Apify Actor fetches public agency
   pages (live, or Wayback Machine captures for past fires), Claude extracts candidate road closures,
   evacuation orders and shelter updates with a verbatim quote, and a planner confirms and maps each one.
   Every extracted record is `reported` and `unconfirmed` until a planner confirms it; Claude never

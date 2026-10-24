@@ -1,4 +1,4 @@
-/* Intel review page (intel- prefix). Generic primitives live in ../ui. */
+/* Incident intelligence page (/intel) (intel- prefix). Generic primitives live in ../ui. */
 .intel-list {
   display: grid;
   gap: var(--ct-space-3);
