@@ -154,9 +154,20 @@ and route. The guidance card says what the simulation tells that zone: no order 
 now, wait about N minutes (the route is backed up and the fire is far), route blocked, zone
 evacuated, or fire in the zone, and "route changed" when the agent redirects it. Meeting
 points the simulated fire reaches are marked and the first clear one is offered. Set a home
-location on that screen; it stays on the phone, and the zone is worked out locally. A banner
+location on that screen; it is saved on the phone and the zone is worked out locally. A banner
 says it is a simulation drill, not an emergency service. Needs the Docker stack and a web
 page broadcasting.
+
+A **Your home** section at the top of the screen shows the per-home advice from Simulation
+Studio's published evacuation run (`GET /api/sim-state/advice?lon=&lat=`, see
+[`docs/sim-state-api.md`](../docs/sim-state-api.md)): leave now, leave at T+h:mm (in N min),
+already left, no order, no road out, zone cleared or fire reached the zone. It polls every
+10 seconds while the screen is open and always shows the server's notice: a simulated planning
+exercise, synthetic homes and addresses, not an evacuation order. It uses the home set in this
+screen, so **that home's coordinates are sent to the API** for this lookup (the zone lookup for
+the live guidance above still happens on the phone). States: no simulation published, no
+synthetic home within 300 m, and errors. Code: `Networking/SimStateClient.swift` and
+`Features/Broadcast/SimulationAdviceSection.swift`.
 
 ### Family
 

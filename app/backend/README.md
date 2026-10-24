@@ -282,3 +282,17 @@ the optional explain, dispatch and intel extraction endpoints need a provider ke
 (`ANTHROPIC_API_KEY`); intel runs need `APIFY_TOKEN`/`APIFY_ACTOR_ID`.
 Optional existing contract tests mock the MongoDB boundary; they still require a
 syntactically valid `MONGODB_URI` environment variable to load Django settings.
+
+### Simulation state (`/api/sim-state/…`)
+
+`api/sim_state.py` stores the Studio's evacuation run and serves per-home advice to the
+iOS app. Everything is simulated (synthetic homes and addresses). No auth; throttled.
+Collections `sim_runs` (run, zones, current tick state) and `sim_homes` (one document per
+home with a 2dsphere `location`); only the 3 newest runs are kept. Full contract, limits
+and documents: [`docs/sim-state-api.md`](../../docs/sim-state-api.md).
+
+- `POST /api/sim-state/runs`: publish a run (zones and homes), returns `201 {run_id}`.
+- `POST /api/sim-state/runs/<run_id>/tick`: push the state at one simulation minute.
+- `GET /api/sim-state/latest`: latest run, current minute and per-zone state.
+- `GET /api/sim-state/advice?lon=&lat=` or `?home_id=`: advice for one home.
+- `GET /api/sim-state/homes?q=&limit=`: address search.
