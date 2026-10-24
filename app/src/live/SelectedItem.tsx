@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { Button, EvidenceTag, IconButton, LoadingState, Notice, Tag } from "../ui";
 import { createTask, helpAction, triageReport } from "./api";
-import { drillClock, elapsed, nf, plural, responderName, shortKey, shortZoneName, wallClock } from "./format";
+import { KIND_LABEL, drillClock, elapsed, nf, plural, responderName, shortKey, shortZoneName, wallClock } from "./format";
 import { distanceM } from "./geo";
 import KindGlyph from "./Glyph";
 import { impactLine } from "./ReviewQueue";
-import { isFixtureNote, type QueueItem } from "./queue";
+import { isEdited, isFixtureNote, priorVersions, type QueueItem } from "./queue";
 import type { TaskRouteState } from "./useTaskRoute";
 import type {
   CommandResponse,
@@ -34,6 +34,7 @@ const STATUS_WORD: Record<FieldReport["status"], string> = {
   confirmed: "Confirmed",
   dismissed: "Dismissed",
   resolved: "Resolved",
+  withdrawn: "Withdrawn by reporter",
 };
 const CHANGE_WORD: Record<ImpactChange, string> = {
   slower: "Slower",
@@ -174,6 +175,38 @@ function ImpactResult({ impact }: { impact: ImpactResponse }) {
       ) : (
         <p className="lc-dim">Twin unavailable ({(impact.twin_fallback ?? "unknown").replace(/_/g, " ")}); planner routes only.</p>
       )}
+    </div>
+  );
+}
+
+/** "Edited" tag and the reporter's earlier versions, newest first (docs/live-reports.md). */
+function Revisions({ report, serverNow }: { report: FieldReport; serverNow: number }) {
+  const prior = priorVersions(report);
+  const editedAt = report.edited_at ? new Date(report.edited_at).getTime() : NaN;
+  return (
+    <div className="lc-sel-edited">
+      <Tag>Edited</Tag>
+      {Number.isNaN(editedAt) ? null : (
+        <span className="lc-dim" title={wallClock(report.edited_at)}>
+          {elapsed(serverNow - editedAt)} ago
+        </span>
+      )}
+      {prior.length ? (
+        <details className="lc-more">
+          <summary>{prior.length === 1 ? "1 earlier version" : `${prior.length} earlier versions`}</summary>
+          <ol className="lc-sel-revs" aria-label="Earlier versions, newest first">
+            {prior.map((v, i) => (
+              <li key={`${v.at}-${i}`}>
+                <span>{KIND_LABEL[v.kind] ?? v.kind}</span>
+                <time className="lc-dim lc-num" dateTime={v.at} title={`Replaced at ${wallClock(v.at)}`}>
+                  replaced {elapsed(serverNow - new Date(v.at).getTime())} ago
+                </time>
+                {v.note ? <q className="lc-q-quote">{v.note}</q> : null}
+              </li>
+            ))}
+          </ol>
+        </details>
+      ) : null}
     </div>
   );
 }
@@ -364,6 +397,7 @@ function ReportDetail({
             ) : r.note ? (
               <q className="lc-q-quote">{r.note}</q>
             ) : null}
+            {isEdited(r) ? <Revisions report={r} serverNow={serverNow} /> : null}
           </li>
         ))}
         {item.reports.length > 4 ? <li className="lc-dim">{plural(item.reports.length - 4, "older report")}</li> : null}

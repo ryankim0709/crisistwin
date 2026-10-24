@@ -45,7 +45,13 @@ DEFAULT_HALF_LIFE_S = 3600
 CONTRADICTS: Mapping[str, str] = {"road_blocked": "road_passable", "road_passable": "road_blocked"}
 
 Role = Literal["civilian", "responder", "controller"]
-ReportStatusValue = Literal["unverified", "corroborated", "responder_confirmed", "confirmed", "dismissed", "resolved"]
+ReportStatusValue = Literal[
+    "unverified", "corroborated", "responder_confirmed", "confirmed", "dismissed", "resolved", "withdrawn"
+]
+DISCOUNTED_STATUSES = frozenset({"dismissed", "withdrawn"})
+"""Reports that count for nothing: dismissed by a controller or withdrawn by their reporter."""
+CLOSED_STATUSES = DISCOUNTED_STATUSES | {"resolved"}
+"""Reports that leave clustering, the public map, road state and fire points."""
 RoadStatusValue = Literal["open", "slow", "blocked", "unknown"]
 
 
@@ -127,7 +133,7 @@ def same_party(a: ReportFact, b: ReportFact) -> bool:
 
 
 def _live(reports: Sequence[ReportFact]) -> list[ReportFact]:
-    return [r for r in reports if r.status not in ("dismissed", "resolved")]
+    return [r for r in reports if r.status not in CLOSED_STATUSES]
 
 
 def _is_responder(r: ReportFact) -> bool:
@@ -135,7 +141,7 @@ def _is_responder(r: ReportFact) -> bool:
 
 
 def independent_counts(reports: Sequence[ReportFact]) -> tuple[int, int]:
-    """``(independent civilian parties, responder reports)`` among the non-dismissed reports.
+    """``(independent civilian parties, responder reports)`` among the non-dismissed, non-withdrawn reports.
 
     Each civilian ``party_key`` is one candidate, represented by its first report (server
     ``received_at``). Keys are taken in that order; a key is tainted (not counted) when its
@@ -143,7 +149,7 @@ def independent_counts(reports: Sequence[ReportFact]) -> tuple[int, int]:
     counted anchor whose first report is directly ``same_party`` with its own, or becomes a new
     counted anchor. Not transitive: a steady crowd arriving over time is not chained into one.
     """
-    live = [r for r in reports if r.status != "dismissed"]
+    live = [r for r in reports if r.status not in DISCOUNTED_STATUSES]
     responders = [r for r in live if _is_responder(r)]
     firsts: dict[str, ReportFact] = {}
     for r in live:
@@ -181,7 +187,7 @@ def is_public(kind: str, civilian_parties: int, responder_reports: int, controll
 
 def cluster(reports: Sequence[ReportFact]) -> list[list[ReportFact]]:
     """Group by (segment_id, kind) for road kinds, destination for ``shelter_full``, and
-    CLUSTER_RADIUS_M for the rest. Dismissed and resolved reports are dropped."""
+    CLUSTER_RADIUS_M for the rest. Dismissed, resolved and withdrawn reports are dropped."""
     keyed: dict[tuple[str, str, str], list[ReportFact]] = {}
     loose: list[ReportFact] = []
     for r in sorted(_live(reports), key=_order):
@@ -365,7 +371,7 @@ def confirmed_fire_points(reports: Sequence[ReportFact], items: Sequence[PublicI
         FireObservation(id=r.id, at=r.replay_at, coord=r.coord, source="field_report")
         for r in reports
         if r.kind == "fire_seen" and r.replay_at is not None
-        and r.status not in ("dismissed", "resolved")
+        and r.status not in CLOSED_STATUSES
         and (r.status == "confirmed" or r.id in public_ids)
     ]
     out.sort(key=lambda o: (o.at, o.id))

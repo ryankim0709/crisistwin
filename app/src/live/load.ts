@@ -1,3 +1,4 @@
+import { isClosedStatus } from "./format";
 import type { CommandResponse, TwinMonitor } from "./types";
 
 /** Simulated arrivals at or above this share of capacity_veh raise a warning. */
@@ -24,7 +25,7 @@ export function reportedFullIds(data: CommandResponse): Set<string> {
   const ids = new Set<string>();
   for (const i of data.public_items) if (i.kind === "shelter_full" && i.destination_id) ids.add(i.destination_id);
   for (const r of data.reports) {
-    if (r.kind === "shelter_full" && r.destination_id && r.status !== "dismissed" && r.status !== "resolved") {
+    if (r.kind === "shelter_full" && r.destination_id && !isClosedStatus(r.status)) {
       ids.add(r.destination_id);
     }
   }

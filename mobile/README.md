@@ -92,7 +92,10 @@ now", "Be ready to leave"), the way out, its destination and ETA, and **Start**;
 out** and **Need help**, "Still there?" questions about nearby hazards, what is near you, and
 changes to your zone's guidance. **Map** is the full-screen map with one glass drawer.
 **Reports** sends a new report and lists yours with their progress (Received, Being checked,
-Confirmed, Resolved). **Plan** holds Family, the meeting point, emergency contacts, permission
+Confirmed, Resolved). Tap one of yours to open it: while it is unsent, unverified or corroborated
+it can be edited in the report sheet or deleted (unsent ones change on the phone only; sent ones
+use `PATCH`/`DELETE me/reports/{id}`, and a deleted report is kept as `withdrawn` on the server).
+Once a responder or controller has acted on it, it is read-only. Edited reports show "Edited". **Plan** holds Family, the meeting point, emergency contacts, permission
 status, the web simulation feed, responder join and About. **Tasks** appears for responders.
 While a zone has an order, the bottom accessory under every tab repeats the verdict and ETA and
 opens Map.

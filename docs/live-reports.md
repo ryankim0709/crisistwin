@@ -50,11 +50,19 @@ by distance. `help_needed` is never public.
   "observed_at": "2026-10-24T18:02:10Z", // device clock, at capture
   "received_at": "2026-10-24T18:05:41Z", // server clock; later when queued offline
   "note": "Tree across both lanes",
-  "status": "unverified",                // unverified|corroborated|responder_confirmed|confirmed|dismissed|resolved
+  "status": "unverified",                // unverified|corroborated|responder_confirmed|confirmed|dismissed|resolved|withdrawn
   "evidence_class": "field_report",
-  "replay_at": "2018-11-08T16:12:00Z"   // v2, server-filled: drill time at received_at; null when no drill runs
+  "replay_at": "2018-11-08T16:12:00Z",  // v2, server-filled: drill time at received_at; null when no drill runs
+  "edited_at": null,                     // set when the reporter edits; null if never edited
+  "withdrawn_at": null,                  // set when the reporter withdraws; null otherwise
+  "revisions": []                        // prior values after each edit, newest last, at most 10 (below)
 }
 ```
+
+`withdrawn` is set only by the reporter (see [Edit or withdraw your own report](#edit-or-withdraw-your-own-report)).
+Every consumer treats it like `dismissed`: closed, and out of
+corroboration, the public map, road state, prompts, the planner, shelter-full signals and the open queues.
+`edited_at`, `withdrawn_at` and `revisions` are always present in every report the API returns.
 
 `live_tasks`: `{ id, incident_id, assignee, kind: "verify", target: { segment_id | coord }, report_ids, created_at, status: open|accepted|done|cancelled, answer }`.
 `assignee` is a responder `party_key`, or `null` for any responder (v2: the first to
@@ -78,9 +86,11 @@ store them in their own collection only if reads get slow.
 | `POST devices` | none | Issue a civilian token |
 | `POST incidents/{id}/join` | none | Exchange an invite code for a responder token |
 | `POST incidents/{id}/reports` | any | Submit a report; same `client_id` returns the existing report |
-| `GET incidents/{id}/reports?since=<cursor>` | responder, controller | New and changed reports, plus `next_cursor` |
-| `GET me/reports` | any | Own reports with status |
-| `POST reports/{id}/triage` | controller | `{ "action": "confirm|dismiss|merge|resolve", "into": "rpt_..."?, "note": "" }` |
+| `GET incidents/{id}/reports?since=<cursor>` | responder, controller | New and changed reports (withdrawn ones included), plus `next_cursor` |
+| `GET me/reports` | any | Own reports with status; withdrawn reports are left out |
+| `PATCH me/reports/{id}` | any (owner) | Edit your own report while it is `unverified` or `corroborated` ([below](#edit-or-withdraw-your-own-report)) |
+| `DELETE me/reports/{id}` | any (owner) | Withdraw your own report (soft delete) while it is `unverified` or `corroborated` |
+| `POST reports/{id}/triage` | controller | `{ "action": "confirm|dismiss|merge|resolve", "into": "rpt_..."?, "note": "" }`; `409 report_withdrawn` if the reporter withdrew it |
 | `GET incidents/{id}/road-state` | responder, controller | Per-segment status (below) |
 | `GET incidents/{id}/public-map` | any | Public items only (rules below) |
 | `GET incidents/{id}/prompts?near=lon,lat` | any | Nearby items to answer "still there?" with `road_blocked` / `road_passable` |
@@ -121,6 +131,69 @@ A submitted report needs every field of the stored document except `id`,
 
 Errors: `400 { "error": "invalid_report", "detail": "..." }`, `401`, `403`, `404`,
 `429` when rate-limited, `503` when MongoDB is unavailable.
+
+### Edit or withdraw your own report
+
+A reporter can correct or retract a report they sent, with any token (civilian, responder). The
+owner is the caller whose `party_key` equals `reporter.party_key`, the key `GET me/reports` uses.
+A report that is someone else's, an unknown id, and any id sent by the controller all answer
+`404 { "error": "not_found" }`, so ids cannot be probed. Both calls are allowed only while `status`
+is `unverified` or `corroborated`. Once a responder or controller has acted, or after a withdrawal
+(`PATCH` only; `DELETE` of a withdrawn report is idempotent, below), the answer is:
+
+```json
+409 { "error": "report_locked", "detail": "A responder or controller has already acted on this report." }
+```
+
+Both calls share one rate limit of 20 edits plus withdrawals per minute per party
+(`rpt-edit:{party_key}`), answered `429 { "error": "rate_limited" }`. They are not refused with
+`503 no_signal` during a `comms_outage` inject (that applies to submitting only; see
+[Injects](#injects)).
+
+`PATCH me/reports/{id}` takes any non-empty subset of `kind`, `severity`, `location`, `note` and
+`destination_id`. `note: null` or `""` clears the note. Any other key (`client_id`, `observed_at`,
+`task_id`, `incident_id`, `heading_deg`, `status`, ...) or an empty body is
+`400 { "error": "invalid_report", "detail": "..." }`.
+
+```jsonc
+// PATCH me/reports/rpt_01J...
+{ "kind": "hazard_down", "severity": null, "note": "Power line across the road" }
+```
+
+The server merges the patch onto the stored values and runs the same validation as submit, so every
+submit rule still holds (for example, a `shelter_full` report needs a shelter or temporary refuge).
+One rule is edit-only: when a patch touches `kind` or `severity` and the resulting kind is not
+`road_blocked` or `heavy_traffic`, severity is stored as `null` (dropped, not rejected).
+It then re-snaps `road_ref` if the kind or location changed (road kinds only, else `null`),
+appends the previous values to `revisions`, sets `edited_at` and `updated_at`, and recomputes
+corroboration, so `status` can move between `corroborated` and `unverified`. A patch equal to the
+stored values returns the report unchanged and adds no revision. Returns `200 { "report": FieldReport }`:
+
+```jsonc
+{ "report": { "id": "rpt_01J...", "kind": "hazard_down", "severity": null, "note": "Power line across the road",
+              "status": "unverified", "edited_at": "2026-10-24T18:09:02Z", "withdrawn_at": null,
+              "revisions": [ { "at": "2026-10-24T18:09:02Z", "kind": "road_blocked", "severity": "full",
+                               "location": { "coord": [-121.6012, 39.7593], "accuracy_m": 12 },
+                               "note": "Tree across both lanes", "destination_id": null } ],
+              /* ...the other FieldReport fields */ } }
+```
+
+Each revision holds the values the edit replaced, with `at` the time of that edit. `revisions` is
+newest last and keeps the 10 most recent. The web console shows it to controllers; the phone ignores it.
+
+`DELETE me/reports/{id}` takes no body. It withdraws the report: `status` becomes `withdrawn`,
+`withdrawn_at` and `updated_at` are set, and corroboration is recomputed (skipped for
+`help_needed`, as on submit). The document is kept, not deleted, so triage, corroboration counts,
+the events feed and the after-action report still have it. Withdrawing a withdrawn report is
+idempotent and returns the stored report. Returns `200 { "report": FieldReport }` with
+`"status": "withdrawn"`.
+
+Listing. `GET me/reports` leaves withdrawn reports out. `GET incidents/{id}/reports` and
+`GET incidents/{id}/command` (`reports`) include them, so polling clients see the status change
+and close the item; edits and withdrawals move `updated_at`, so the `since` cursor and the
+[event stream](#event-stream) (`change: updated`) report them. Controllers cannot set
+`withdrawn`: `POST reports/{id}/triage` on a withdrawn report is
+`409 { "error": "report_withdrawn" }`.
 
 ## Rules (deterministic; constants named in code)
 
@@ -1020,6 +1093,7 @@ the label). `command` adds `injects` and `no_signal_zone_ids`. Index `{incident_
 | `POST incidents/{id}/drill` | controller |
 | `GET incidents/{id}/events?since=` | controller ([Event stream](#event-stream)) |
 | `GET`, `POST`, `DELETE incidents/{id}/injects[/{inject_id}]` | controller ([Injects](#injects)) |
+| `PATCH`, `DELETE me/reports/{id}` | any, owner ([Edit or withdraw](#edit-or-withdraw-your-own-report)) |
 | `GET incidents/{id}/twin` | controller ([twin-api.md](twin-api.md#http-adapter-live-drill-appbackendapilivetwin_servicepy)) |
 | `POST incidents/{id}/twin/whatif` | controller |
 | `POST incidents/{id}/impact` | controller ([Impact analysis](#impact-analysis)) |
@@ -1042,7 +1116,7 @@ ISO 8601 `Z`. Ids are prefixed strings (`rpt_`, `tsk_`, `prp_`, `chk_`, `dev_`,
 | Collection | One document per | Key fields | Indexes |
 | --- | --- | --- | --- |
 | `live_devices` | issued token (civilian or responder) | `token_hash` (SHA-256), `role`, `party_key`, `incident_id`, `created_at`, `last_seen_at`, `expires_at` | `token_hash` unique; `party_key`; TTL on `expires_at` (`expireAfterSeconds: 0`; civilian 30 days after last seen, responder 24 h) |
-| `live_reports` | report | v1 document + `replay_at`, server-maintained `updated_at` (cursor) | `{incident_id, client_id}` unique (client_id stored lowercased); `{incident_id, received_at}`; `{incident_id, updated_at}` (the `since` cursor); `{reporter.party_key, received_at}`; `id` unique; 2dsphere on `location.coord` (optional; P0 filters in Python) |
+| `live_reports` | report | v1 document + `replay_at`, server-maintained `updated_at` (cursor), `edited_at` (date or null), `withdrawn_at` (date or null), `revisions` (array); `status` includes `withdrawn` | `{incident_id, client_id}` unique (client_id stored lowercased); `{incident_id, received_at}`; `{incident_id, updated_at}` (the `since` cursor); `{reporter.party_key, received_at}`; `id` unique; 2dsphere on `location.coord` (optional; P0 filters in Python) |
 | `live_tasks` | task | v1 + `assignee`, `accepted_at` | `id` unique; `{incident_id, status}`; `{assignee, status}` |
 | `live_injects` | drill inject ([Injects](#injects)) | `id`, `incident_id`, `type`, `params`, `at`, `status`, `actor`, `created_at` | `id` unique; `{incident_id, at}` |
 | `live_decisions` | audit entry (append only) | `incident_id`, `at`, `actor`, `action`, `report_ids`, `proposal_id`, `note` | `{incident_id, at}` |

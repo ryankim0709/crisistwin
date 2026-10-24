@@ -83,6 +83,15 @@ enum ReportSeverity: String, Codable, CaseIterable, Identifiable {
 enum ReportStatus: String, Codable {
     case unverified, corroborated, dismissed, resolved, confirmed
     case responderConfirmed = "responder_confirmed"
+    /// The reporter deleted it (`DELETE me/reports/{id}`); closed like `dismissed`.
+    case withdrawn
+    /// A status this build does not know; decoded instead of failing the whole list.
+    case unknown
+
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = ReportStatus(rawValue: raw) ?? .unknown
+    }
 
     var title: String {
         switch self {
@@ -92,8 +101,13 @@ enum ReportStatus: String, Codable {
         case .confirmed: return "Confirmed by the controller"
         case .dismissed: return "Dismissed"
         case .resolved: return "Resolved"
+        case .withdrawn: return "Withdrawn"
+        case .unknown: return "Received"
         }
     }
+
+    /// The reporter may edit or withdraw it: nobody with authority has acted on it yet.
+    var isEditableByReporter: Bool { self == .unverified || self == .corroborated }
 }
 
 /// WGS84 decimal degrees, encoded as `[lon, lat]` like the sim and replay bundle.
@@ -175,6 +189,99 @@ struct FieldReport: Codable, Equatable, Identifiable {
     var note: String?
     var status: ReportStatus
     var evidenceClass: String
+    /// Set when the reporter edited it; nil from older servers too.
+    var editedAt: Date?
+    var withdrawnAt: Date?
+}
+
+/// Body of `PATCH me/reports/{id}`: only the fields that changed. A `severity` or `note` set to
+/// `.some(nil)` goes out as JSON null, which clears it on the server.
+struct ReportPatch: Encodable, Equatable {
+    var kind: ReportKind?
+    var severity: ReportSeverity??
+    var location: ReportLocation?
+    var note: String??
+
+    var isEmpty: Bool { kind == nil && severity == nil && location == nil && note == nil }
+
+    private enum CodingKeys: String, CodingKey { case kind, severity, location, note }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encodeIfPresent(kind, forKey: .kind)
+        try c.encodeIfPresent(location, forKey: .location)
+        if let severity {
+            if let severity { try c.encode(severity, forKey: .severity) } else { try c.encodeNil(forKey: .severity) }
+        }
+        if let note {
+            if let note { try c.encode(note, forKey: .note) } else { try c.encodeNil(forKey: .note) }
+        }
+    }
+}
+
+/// One of this phone's reports opened for editing: an unsent draft (changed on the phone only)
+/// or a report the server accepted (changed with `PATCH me/reports/{id}`).
+enum ReportEditTarget: Equatable, Identifiable {
+    case draft(ReportDraft)
+    case report(FieldReport)
+
+    var id: UUID { clientId }
+
+    var clientId: UUID {
+        switch self {
+        case .draft(let draft): return draft.clientId
+        case .report(let report): return report.clientId
+        }
+    }
+
+    /// The server's report; nil for an unsent draft.
+    var report: FieldReport? {
+        if case .report(let report) = self { return report }
+        return nil
+    }
+
+    var kind: ReportKind {
+        switch self {
+        case .draft(let draft): return draft.kind
+        case .report(let report): return report.kind
+        }
+    }
+
+    var severity: ReportSeverity? {
+        switch self {
+        case .draft(let draft): return draft.severity
+        case .report(let report): return report.severity
+        }
+    }
+
+    var location: ReportLocation {
+        switch self {
+        case .draft(let draft): return draft.location
+        case .report(let report): return report.location
+        }
+    }
+
+    var note: String? {
+        switch self {
+        case .draft(let draft): return draft.note
+        case .report(let report): return report.note
+        }
+    }
+
+    var observedAt: Date {
+        switch self {
+        case .draft(let draft): return draft.observedAt
+        case .report(let report): return report.observedAt
+        }
+    }
+
+    /// Unsent drafts can always change; sent reports only while unverified or corroborated.
+    var isEditable: Bool {
+        switch self {
+        case .draft: return true
+        case .report(let report): return report.status.isEditableByReporter
+        }
+    }
 }
 
 /// One item on the public map (or a nearby "still there?" prompt). Only items that pass the

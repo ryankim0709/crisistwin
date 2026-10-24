@@ -147,6 +147,60 @@ final class LiveStore {
         if await flush(force: true) > 0 { await refresh() }
     }
 
+    // MARK: Your reports: edit and delete
+
+    /// Replaces an unsent draft on the phone (no network), then tries to send it.
+    func updateDraft(_ draft: ReportDraft) throws {
+        guard outbox.update(draft) else { throw ReportChangeError.sending }
+        Task {
+            if await flush(force: false) > 0 { await refresh() }
+        }
+    }
+
+    /// Removes an unsent draft from the phone; nothing is sent.
+    func deleteDraft(_ draft: ReportDraft) throws {
+        guard outbox.remove(clientId: draft.clientId) else { throw ReportChangeError.sending }
+    }
+
+    /// Edits one of this phone's sent reports (`PATCH me/reports/{id}`), then refreshes. Only
+    /// while it is unverified or corroborated; otherwise throws `LiveAPIError.reportLocked`.
+    func editReport(_ report: FieldReport, patch: ReportPatch) async throws {
+        guard !patch.isEmpty else { return }
+        let updated = try await changeOwnReport { try await $0.editReport(id: report.id, patch: patch, token: $1) }
+        updateMine { mine in
+            if let index = mine.firstIndex(where: { $0.id == updated.id }) { mine[index] = updated }
+        }
+    }
+
+    /// Deletes one of this phone's sent reports. The server keeps it as `withdrawn` for the
+    /// record and drops it from this phone's list; same lock as `editReport`.
+    func withdrawReport(_ report: FieldReport) async throws {
+        _ = try await changeOwnReport { try await $0.withdrawReport(id: report.id, token: $1) }
+        updateMine { $0.removeAll { $0.id == report.id } }
+    }
+
+    /// Runs an edit or withdrawal. A locked or missing report refreshes the list, so the phone
+    /// shows what the server has, and rethrows in words for the person.
+    private func changeOwnReport(_ call: (LiveAPIClient, String) async throws -> FieldReport) async throws -> FieldReport {
+        do {
+            return try await authorized(call)
+        } catch LiveAPIError.reportLocked {
+            Task { await refresh() }
+            throw LiveAPIError.reportLocked
+        } catch LiveAPIError.notFound {
+            Task { await refresh() }
+            throw ReportChangeError.gone
+        }
+    }
+
+    /// Applies a change to `myReports` at once, so a poll already in flight cannot put the old
+    /// list back, then refreshes from the server.
+    private func updateMine(_ change: (inout [FieldReport]) -> Void) {
+        refreshGeneration += 1
+        change(&myReports)
+        Task { await refresh() }
+    }
+
     /// Fetches the public map, own reports, and responder data for the current role.
     func refresh() async {
         refreshGeneration += 1
@@ -698,6 +752,21 @@ final class LiveStore {
         }
         registration = task
         return try await task.value
+    }
+}
+
+/// Why a change to one of this phone's own reports did not happen, worded for the person.
+enum ReportChangeError: LocalizedError {
+    /// The unsent draft is being sent right now, or was just sent.
+    case sending
+    /// The server has no such report for this phone (404).
+    case gone
+
+    var errorDescription: String? {
+        switch self {
+        case .sending: return "This report is being sent right now. Try again in a moment."
+        case .gone: return "This report is no longer on the server."
+        }
     }
 }
 

@@ -71,6 +71,9 @@ def render(value: Any, drop: Iterable[str] = ("_id",)) -> Any:
 def report_json(doc: Mapping[str, Any]) -> dict[str, Any]:
     body = render(doc, drop=("_id", "updated_at", "merged_into"))
     body.setdefault("replay_at", None)
+    body.setdefault("edited_at", None)
+    body.setdefault("withdrawn_at", None)
+    body.setdefault("revisions", [])
     return body
 
 

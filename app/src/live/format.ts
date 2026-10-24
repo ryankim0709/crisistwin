@@ -31,7 +31,12 @@ export const STATUS_LABEL: Record<ReportStatus, string> = {
   confirmed: "Confirmed",
   dismissed: "Dismissed",
   resolved: "Resolved",
+  withdrawn: "Withdrawn by reporter",
 };
+
+/** Report statuses a controller has finished with, or the reporter took back: out of every open view. */
+export const isClosedStatus = (status: ReportStatus): boolean =>
+  status === "dismissed" || status === "resolved" || status === "withdrawn";
 
 export const CHANGE_LABEL: Record<ChangeKind, string> = {
   reroute: "Reroute",

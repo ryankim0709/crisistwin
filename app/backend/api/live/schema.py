@@ -67,8 +67,12 @@ VALIDATORS: dict[str, dict[str, Any]] = {
             "received_at": DATE,
             "updated_at": DATE,
             "replay_at": NULLABLE_DATE,
-            "status": _enum("unverified", "corroborated", "responder_confirmed", "confirmed", "dismissed", "resolved"),
+            "status": _enum("unverified", "corroborated", "responder_confirmed", "confirmed", "dismissed", "resolved",
+                            "withdrawn"),
             "evidence_class": _enum("field_report", "drill_fixture", "historical_record"),
+            "edited_at": NULLABLE_DATE,
+            "withdrawn_at": NULLABLE_DATE,
+            "revisions": {"bsonType": "array"},
         },
     ),
     "live_tasks": _schema(
