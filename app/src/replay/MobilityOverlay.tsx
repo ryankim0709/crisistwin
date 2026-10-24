@@ -14,11 +14,13 @@ import { clockParts, localTime } from "./timeline";
 import type { LngLat } from "./types";
 
 const CELLS = "mobility-cells";
+/** Soft neutral halo under each cell so the dots read on the dark map. */
+const HALO = "mobility-halo";
 const FLOWS = "mobility-flows";
 /** Added below the first of these that exists, so phone-panel cells sit under the fire. */
 const BELOW_CANDIDATES = ["sim-front-fill", "fire-history", "fire-glow-outer", "fire-fill"];
-const MIN_RADIUS_PX = 2.5;
-const MAX_RADIUS_PX = 17;
+const MIN_RADIUS_PX = 5;
+const MAX_RADIUS_PX = 20;
 const MIN_FLOW_PX = 1;
 const MAX_FLOW_PX = 7;
 const EMPTY: FeatureCollection = { type: "FeatureCollection", features: [] };
@@ -173,12 +175,26 @@ export default function MobilityOverlay({ map, mobility, simTimeMs, visible, sho
     );
     map.addLayer(
       {
+        id: HALO,
+        type: "circle",
+        source: CELLS,
+        paint: {
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, ["*", ["get", "rad"], 1.0], 12, ["*", ["get", "rad"], 2.0]],
+          "circle-color": "#ffffff",
+          "circle-blur": 1,
+          "circle-opacity": ["case", ["==", ["get", "fresh"], 1], 0.12, ["interpolate", ["linear"], ["get", "lr"], -2, 0.04, 0, 0.1, 2, 0.28]],
+        },
+      },
+      below,
+    );
+    map.addLayer(
+      {
         id: CELLS,
         type: "circle",
         source: CELLS,
         layout: { "circle-sort-key": ["-", ["get", "rad"]] },
         paint: {
-          "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, ["*", ["get", "rad"], 0.6], 12, ["*", ["get", "rad"], 1.4]],
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, ["*", ["get", "rad"], 0.75], 12, ["*", ["get", "rad"], 1.4]],
           "circle-color": [
             "case",
             ["==", ["get", "fresh"], 1],
@@ -195,7 +211,7 @@ export default function MobilityOverlay({ map, mobility, simTimeMs, visible, sho
               MOBILITY_COLORS.above,
             ],
           ],
-          "circle-opacity": 0.5,
+          "circle-opacity": 0.85,
           "circle-stroke-color": ["case", ["==", ["get", "fresh"], 1], MOBILITY_COLORS.fresh, "rgba(8,12,17,0.7)"],
           "circle-stroke-width": ["case", ["==", ["get", "fresh"], 1], 1.4, ["==", ["get", "evac"], 1], 1.8, 0.6],
         },
@@ -233,7 +249,7 @@ export default function MobilityOverlay({ map, mobility, simTimeMs, visible, sho
       try {
         map.off("mousemove", onMove);
         map.off("mouseout", onOut);
-        for (const id of [CELLS, FLOWS]) if (map.getLayer(id)) map.removeLayer(id);
+        for (const id of [HALO, CELLS, FLOWS]) if (map.getLayer(id)) map.removeLayer(id);
         for (const id of [CELLS, FLOWS]) if (map.getSource(id)) map.removeSource(id);
       } catch {
         /* map already removed */
@@ -263,6 +279,7 @@ export default function MobilityOverlay({ map, mobility, simTimeMs, visible, sho
     const set = (id: string, on: boolean) => {
       if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", on ? "visible" : "none");
     };
+    set(HALO, visible);
     set(CELLS, visible);
     set(FLOWS, visible && showFlows);
   }, [map, visible, showFlows]);
