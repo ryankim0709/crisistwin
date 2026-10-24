@@ -4,6 +4,8 @@ export type NavigationItem = {
   group: "Workspace" | "Analysis";
 };
 
+// "Analysis" pages stay routable and keep their page titles, but are not listed in the
+// sidebar; AppShell renders only the "Workspace" group.
 export const navigationItems: readonly NavigationItem[] = [
   {
     path: "/fire",

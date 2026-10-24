@@ -26,6 +26,8 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
 
+from .dispatch_runs import recall, record_decision, valid_session_id
+
 DEFAULT_MODEL = "claude-opus-5-5"
 EFFORTS = {"low", "medium", "high"}
 DEFAULT_EFFORT = "low"
@@ -87,7 +89,9 @@ exits, units (status, \
 task, zone_id, fire_id, eta_min, drive_min_to threatened zones), totals (households), fire \
 (no_action_homes_exposed is the simulator's count if nobody is ordered out; fire_path counts \
 the zones and households in and outside the fire path), alerts, \
-previous_outcomes, previous_summary, model_notes. fire_*_eta_min is minutes until the \
+previous_outcomes, previous_summary, model_notes, roads (planner_closed: roads the planner has \
+closed, and since when; fire_cut_segments / fire_cut_roads: roads the modelled fire has cut). \
+fire_*_eta_min is minutes until the \
 modelled fire reaches the zone edge / core; 0 means fire is already there; null means not \
 forecast within the lookahead. order_slack_min is the simulator's estimate of minutes left to \
 order the zone so every household is on the road before fire first reaches it (negative = late). \
@@ -129,6 +133,20 @@ loading queue (the road is free), or earlier if the staged zone's own order_slac
 the release threshold in model_notes, so staging cannot strand a zone. after_zone_id must be a \
 zone that is already ordered or staged. Residents of a staged zone are told to get ready and \
 stay home until their turn.
+
+Road closures: the planner can close or reopen a road at any minute (a crash, a downed line, a \
+bridge out), and the fire cuts roads as it spreads. Routing, exit_options and drive times already \
+avoid both, and ordered zones re-route by themselves. When woken by a closure, check every zone \
+whose route_blocked is true or whose assigned_exit is no longer in its exit_options and redirect \
+it with order_evacuation to an exit from its exit_options; re-balance staged waves whose exit \
+changed; move engines whose drive times grew. Treat closures as lasting until the planner reopens \
+them.
+
+Memory: a <past_runs> block, when present, lists earlier simulated runs on the same road network \
+(from the run journal; possibly different fires, wind and closures): the orders tried, the last \
+summaries and the simulator's outcome. Use it as lessons (for example an exit that congested or a \
+zone ordered too late), never as facts about this run: this observation is the only source of \
+current figures. Mention a lesson in your assessment when it changes an order.
 
 Scope: evacuate only the people the fire actually threatens. A small fire in one \
 neighbourhood does not justify ordering out the whole area: every unthreatened household put \
@@ -271,8 +289,10 @@ def _error(status: int, code: str, detail: str) -> Response:
 
 def validate_request(data: object) -> dict | str:
     """Return the observation for a valid body, or a reason it is invalid."""
-    if not isinstance(data, dict) or set(data) != {"observation"}:
-        return "Body must be a JSON object with exactly `observation`."
+    if not isinstance(data, dict) or "observation" not in data or not set(data) <= {"observation", "session_id"}:
+        return "Body must be a JSON object with `observation` and optionally `session_id`."
+    if "session_id" in data and not valid_session_id(data["session_id"]):
+        return "`session_id` must be a lowercase UUID."
     obs = data["observation"]
     if not isinstance(obs, dict):
         return "`observation` must be an object."
@@ -337,9 +357,10 @@ def canonical_json(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
-def build_user_message(obs: dict) -> str:
+def build_user_message(obs: dict, past_runs: list[dict] | None = None) -> str:
+    memory = f"<past_runs>\n{canonical_json(past_runs)}\n</past_runs>\n\n" if past_runs else ""
     return (
-        f"<observation>\n{canonical_json(obs)}\n</observation>\n\n"
+        f"{memory}<observation>\n{canonical_json(obs)}\n</observation>\n\n"
         f"Decide the orders for minute {obs['clock'].get('minute')}."
     )
 
@@ -466,6 +487,8 @@ def stream_decision(
     effort: str,
     user_message: str,
     index: dict,
+    recalled_runs: int = 0,
+    on_orders: Callable[[list[dict], int, str, str], None] | None = None,
     *,
     system: str = SYSTEM_PROMPT,
     tool: dict = ISSUE_ORDERS_TOOL,
@@ -473,8 +496,10 @@ def stream_decision(
 ) -> Iterator[str]:
     """Yield NDJSON lines; any failure becomes a final error line, never a crashed stream.
 
-    ``system``, ``tool`` and ``validate`` default to this dispatcher; the /demo agent
-    (api/demo.py) passes its own. The tool must be named ``issue_orders``.
+    `on_orders(orders, rejected_count, summary, model)` runs after the final line (the run
+    journal); `recalled_runs` is how many past runs the user message carries. `system`, `tool`
+    and `validate` default to this dispatcher; the /demo agent (api/demo.py) passes its own.
+    The tool must be named `issue_orders`.
     """
     try:
         # Server-side fallback reroutes a safety-classifier refusal to another model.
@@ -549,9 +574,13 @@ def stream_decision(
             "rejected": rejected,
             "summary": summary,
             "model": final.model,
+            "recalled_runs": recalled_runs,
             "evidence_class": "ai_decision",
         }
     )
+    # After the final line, so a slow database never delays the orders on the live clock.
+    if on_orders is not None:
+        on_orders(orders, len(rejected), summary, final.model)
 
 
 @api_view(["POST"])
@@ -590,8 +619,22 @@ def decide(request):
     client = anthropic.Anthropic(
         api_key=api_key, timeout=UPSTREAM_TIMEOUT_S, max_retries=UPSTREAM_MAX_RETRIES
     )
+    session_id = data.get("session_id")
+    past_runs = recall(session_id, obs) if session_id else []
+
+    def journal(orders: list[dict], rejected: int, summary: str, used_model: str) -> None:
+        record_decision(session_id, obs, orders, rejected, summary, used_model)
+
     response = StreamingHttpResponse(
-        stream_decision(client, model, effort, build_user_message(obs), index),
+        stream_decision(
+            client,
+            model,
+            effort,
+            build_user_message(obs, past_runs),
+            index,
+            recalled_runs=len(past_runs),
+            on_orders=journal if session_id else None,
+        ),
         content_type="application/x-ndjson",
     )
     response["Cache-Control"] = "no-store"

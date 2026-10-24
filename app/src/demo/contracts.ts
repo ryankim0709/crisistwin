@@ -1,6 +1,6 @@
 /**
  * Wire contract between the /demo page and app/backend/api/demo.py. Change both sides and
- * docs/adr/0030-command-demo.md together.
+ * docs/adr/0047-command-demo.md together.
  *
  * POST /api/demo/routes: `{ fires: LonLat[][] }` (closed rings of the fires that are not out,
  * at most 60, each 4..200 points) -> `RoutesResponse`. Routes come from the live planner's

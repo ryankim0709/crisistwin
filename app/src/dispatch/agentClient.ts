@@ -4,7 +4,13 @@
  * also used by the /demo agent (demo/useDemoAgent.ts).
  */
 
-import { DECIDE_URL, type DecisionEvent, type Observation } from "./contracts";
+import {
+  DECIDE_URL,
+  runOutcomeUrl,
+  type DecisionEvent,
+  type Observation,
+  type RunOutcome,
+} from "./contracts";
 
 export type FinalDecision = Extract<DecisionEvent, { type: "orders" }>;
 
@@ -106,12 +112,26 @@ export function requestDecision(
   observation: Observation,
   onEvent: (event: Extract<DecisionEvent, { type: "thinking" | "text" }>) => void,
   signal: AbortSignal,
+  sessionId?: string,
 ): Promise<FinalDecision> {
   return streamNdjson<FinalDecision>(
     DECIDE_URL,
-    { observation },
+    sessionId ? { observation, session_id: sessionId } : { observation },
     (event) => event.type === "orders",
     onEvent,
     signal,
   );
+}
+
+/**
+ * Journal the run's outcome (best effort: the journal is optional and a failure only means the
+ * next run on these roads has less to learn from).
+ */
+export function reportOutcome(sessionId: string, outcome: RunOutcome): void {
+  void fetch(runOutcomeUrl(sessionId), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(outcome),
+    keepalive: true,
+  }).catch(() => undefined);
 }

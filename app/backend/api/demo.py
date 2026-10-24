@@ -1,6 +1,6 @@
 """Command demo (/demo): road routes around the game's fires and an AI incident commander.
 
-The /demo page plays a fire game on the Camp drill map (docs/adr/0030-command-demo.md). The
+The /demo page plays a fire game on the Camp drill map (docs/adr/0047-command-demo.md). The
 browser owns the game: fire growth, crews, containment and household counts. This module
 adds two endpoints:
 

@@ -155,7 +155,7 @@ examples are in [ADR 0029](../../docs/adr/0029-mobile-data-store.md).
 
 ### Command demo (`/api/demo/…`)
 
-`api/demo.py` serves the `/demo` page ([ADR 0030](../../docs/adr/0030-command-demo.md); wire
+`api/demo.py` serves the `/demo` page ([ADR 0047](../../docs/adr/0047-command-demo.md); wire
 shapes in `app/src/demo/contracts.ts`). Both endpoints are anonymous for the local demo, answer
 `Cache-Control: no-store` and return errors as `{"error", "detail"}`. The game itself runs in the
 browser; nothing here is stored.
@@ -191,6 +191,8 @@ the `/api/live` prefix with the broadcast above but no code or collections (`liv
 - `POST incidents/{id}/impact` (controller) compares one road segment blocked and unblocked:
   two planner runs give the affected zones and their ETA delta, and one twin what-if
   (simulated, about 1-3 s) gives the vehicles at risk and window metrics (`api/live/impact.py`).
+- `GET incidents/{id}/aar` (controller) returns the after-action report and drill score
+  (`api/live/aar.py`; [contract](../../docs/live-reports.md#after-action-report)).
 - Not implemented yet: `POST incidents/{id}/route` returns 501.
 
 Local run (Docker MongoDB on 127.0.0.1:27017):
@@ -212,6 +214,19 @@ Skyway in Paradise (`evidence_class: "drill_fixture"`, note says synthetic).
 over HTTP in about 5 s, with no simulator or browser: report, triage, replan and approve,
 guidance on the phone, destination choice, check-ins, responder position and a check task. It
 writes synthetic drill data; run `live_drill --reset` afterwards.
+
+`python manage.py live_compare_record --confirm-delay-min 5 --out /tmp/record-compare` (same env;
+no server, no database writes, about 1-2 min) is a simulated planning experiment: the live twin
+and planner headless from 14:30Z to 18:00Z, without a controller, with one who confirms the 2018
+record's `road_blocked`/`fire_seen` entries N minutes late, and with the previous free-flow
+planner. It writes `.json` and `.md`; see [live-reports.md](../../docs/live-reports.md)
+("Record comparison harness") and ADR `0031-congestion-aware-planner.md`.
+
+`python manage.py live_loadtest --base http://127.0.0.1:8020 --ramp 10,50,100,200 --duration 30
+--out results.json` ramps simulated phones and consoles against a server started with
+`LIVE_LOADTEST_RELAX_LIMITS=1` and prints p50/p95/p99 per endpoint; `--cleanup` removes its
+data. Use a separate server and database, never the shared one. Method and results:
+[docs/live-loadtest.md](../../docs/live-loadtest.md).
 
 ### Incident intelligence (`/api/intel/…`)
 

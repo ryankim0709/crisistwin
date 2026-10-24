@@ -2,7 +2,7 @@
  * Command demo (/demo): a continuously running fire board on the Camp drill zones. Fires keep
  * starting, engine strike teams fight them and households evacuate, on a simulation clock
  * with no end state (24/7 monitoring). Pure: no React, network or LLM; seeded, so a seed and
- * the same orders replay the same run. See docs/adr/0030-command-demo.md.
+ * the same orders replay the same run. See docs/adr/0047-command-demo.md.
  *
  * Model, deliberately simple and shown in the UI:
  * - A fire is a wind-driven ellipse growing from its ignition point at a constant head rate,

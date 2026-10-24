@@ -4,7 +4,7 @@
  * and without the closures. Every number is the dispatch engine's (studio/evacuation.ts).
  */
 
-import type { DispatchArea, RoadEdge } from "../dispatch/area";
+import { roadLabel, type DispatchArea, type RoadEdge } from "../dispatch/area";
 import type { Totals } from "../dispatch/engine";
 import { formatElapsed } from "../fire/spread";
 import type { BoardStreetsState } from "../fire/useBoardStreets";
@@ -45,11 +45,6 @@ export interface EvacuationPanelProps {
   optimizer: EvacuationOptimizerState;
   playPlan: PlayPlan;
   onPlayPlan: (plan: PlayPlan) => void;
-}
-
-function roadLabel(edge: RoadEdge): string {
-  const name = edge.name ?? `Unnamed ${edge.roadClass.replace("_", " ")} road`;
-  return edge.bridge ? `${name} (bridge)` : name;
 }
 
 function clearText(summary: EvacuationSummary): string {

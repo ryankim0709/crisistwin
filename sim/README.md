@@ -15,11 +15,15 @@ All outputs are planning experiments, not operational fire or evacuation guidanc
 | `firefront.py` | Simulated fire front from an assumed ignition, fitted to the first satellite perimeter; 10-minute isochrones |
 | `traffic.py` | Evacuation traffic `meso-link-queue`: link queues with capacity, storage and spillback, nearest-exit routing, event-driven closures. `TrafficEngine` runs it one step at a time (inject, fork); `simulate_traffic` runs it to the end |
 | `twin.py` | Real-time twin on `TrafficEngine`: simulation clock, commands with validation and an action log, monitoring snapshot, what-if forks ([API](../docs/twin-api.md)) |
+| `gen_residents.py` | Simulated residents tied to the twin's vehicles: check-ins (`out`, `need_help`, `staying`), field reports, destination choices as live-API POST bodies labelled `simulated` ([ADR 0036](../docs/adr/0036-simulated-residents.md)) |
 | `network.py` | Load the verified 2018 OSM road package into traffic types; unknown lanes and speeds take named class defaults |
 | `scenario.py` | Hybrid scenario: observed roads and exits with fixture demand and orders until zones and events are acquired |
 | `fixtures.py` | Fully synthetic network and scenario for development |
 | `insights.py` | Responder and evacuee planning insights: zone lead times, roads' modelled fire arrival, bottlenecks |
 | `incidents.py` | Incident registry (`camp-2018`, `marshall-2021`, `kincade-2019`, `woolsey-2018`) and the generic package path: verification, perimeters, ignition, clock, crosswalk demand, fitted front, `index.json` |
+| `ground_rates.py` | Empirical 911, radio and rescue rates from the Camp 2018 ground record, relative to zone fire arrival and orders; `fit_camp_2018()` ([calibration](../docs/ground-data-calibration.md)) |
+| `evaluation.py` | Strategy comparison statistics: run manifests, paired bootstrap CIs, sign-flip test, Holm, effect sizes, power from pilot variance, result tables ([protocol](../docs/strategy-evaluation.md)) |
+| `gen_comms.py` | Seeded synthetic 911, radio and rescue items (`simulated`) for any scenario, in the ground-record item schema, calibrated by `GroundRateParams`; `generate_comms()` ([generator](../docs/ground-data-calibration.md#generator), [ADR](../docs/adr/0035-comms-generator.md)) |
 | `bundle.py` | Assemble the web-app replay bundle ([contract](../docs/replay-bundle.md)) |
 | `__main__.py` | CLI |
 

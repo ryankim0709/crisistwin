@@ -12,6 +12,8 @@ import SwiftUI
 enum DebugLaunch {
     static var screen: String? { value("screen") }
     static var joinCode: String? { value("join") }
+    /// `-joinlink <crisistwin://join?...>`: opens a join link on launch (simctl openurl asks first).
+    static var joinLink: String? { value("joinlink") }
     static var start: Bool { value("start") == "1" }
     static var scrollToBottom: Bool { value("scroll") == "bottom" }
 
@@ -114,6 +116,7 @@ struct RootView: View {
     @State private var broadcastStore = BroadcastStore()
     @State private var familyStore = FamilyStore()
     @State private var router = AppRouter()
+    @State private var joinAlert: String?
     @Namespace private var reportZoom
     @Environment(\.scenePhase) private var scenePhase
 
@@ -188,6 +191,12 @@ struct RootView: View {
                 if role == .civilian, router.tab == .tasks { router.tab = .home }
             }
             .task { await debugLaunch() }
+            // crisistwin://join?server=<origin>&code=<invite> (ADR 0034).
+            .onOpenURL { url in Task { await liveStore.joinFromURL(url) } }
+            .alert("Server", isPresented: Binding(
+                get: { joinAlert != nil }, set: { if !$0 { joinAlert = nil } })
+            ) { Button("OK") { joinAlert = nil } } message: { Text(joinAlert ?? "") }
+            .onChange(of: liveStore.joinNotice) { _, notice in joinAlert = notice }
     }
 
     @ViewBuilder private var tabs: some View {
@@ -229,6 +238,7 @@ struct RootView: View {
 
     private func debugLaunch() async {
         #if DEBUG
+        if let link = DebugLaunch.joinLink { await liveStore.joinFromText(link) }
         if let code = DebugLaunch.joinCode, liveStore.role == .civilian {
             try? await liveStore.joinAsResponder(inviteCode: code)
             if DebugLaunch.screen == "tasks" { router.tab = .tasks }

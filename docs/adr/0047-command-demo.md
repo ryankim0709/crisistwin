@@ -1,4 +1,4 @@
-# 0030: Command demo
+# 0047: Command demo
 
 Date: 2026-10-24. Status: accepted for the demo.
 

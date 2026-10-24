@@ -1098,3 +1098,10 @@
 .lc-chg-warn {
   display: flex;
 }
+.lc-sel-route {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ct-space-2);
+  margin: 0 var(--ct-space-4) var(--ct-space-3);
+}

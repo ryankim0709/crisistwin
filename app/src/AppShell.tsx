@@ -19,7 +19,9 @@ function loadCollapsed(): boolean {
 export default function AppShell({ path, children }: AppShellProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(loadCollapsed);
-  const title = navigationItems.find((item) => item.path === path)?.label ?? "Page not found";
+  const title =
+    navigationItems.find((item) => item.path === path)?.label ??
+    (path === "/live/report" ? "After-action report" : "Page not found");
 
   useEffect(() => {
     document.title = `${title} · CrisisTwin`;
@@ -69,7 +71,7 @@ export default function AppShell({ path, children }: AppShellProps) {
           className={`sidebar-nav${menuOpen ? " is-open" : ""}`}
           aria-label="Primary navigation"
         >
-          {(["Workspace", "Analysis"] as const).map((group) => (
+          {(["Workspace"] as const).map((group) => (
             <div className="nav-group" key={group}>
               <p className="nav-group-label" id={`nav-${group.toLowerCase()}`}>
                 {group}

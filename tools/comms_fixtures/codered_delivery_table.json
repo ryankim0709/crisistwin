@@ -1,0 +1,1074 @@
+{
+ "source_id": "nist-tn2252-sup",
+ "tables": "D-2, D-3",
+ "time_zone": "America/Los_Angeles (PST, UTC-8)",
+ "incident_local_date": "2018-11-08",
+ "label": "OBSERVED (script-transcribed): BCSO CodeRED output; a connection is not proof of receipt",
+ "summary": {
+  "initial_success_weighted": 0.57,
+  "initial_phone_calls": 32354,
+  "initial_rows": 28,
+  "initial_success_unweighted_mean": 0.548,
+  "recall_success_weighted": 0.082,
+  "recall_phone_calls": 6718,
+  "recall_rows": 15,
+  "recall_success_unweighted_mean": 0.073
+ },
+ "initial": [
+  {
+   "initial_time": "07:13",
+   "initial_minutes": 433,
+   "emails": 29,
+   "phone_calls": 15,
+   "text_messages": 6,
+   "tdd": 0,
+   "attempted": 24,
+   "reached": 10,
+   "not_reached": 5,
+   "outcome_fraction": {
+    "delivered": 0.25,
+    "machine": 0.17,
+    "intercept": 0.25,
+    "busy": 0.08,
+    "timed_out": 0.25
+   },
+   "outcome_calls_estimated": {
+    "delivered": 6,
+    "machine": 4,
+    "intercept": 6,
+    "busy": 2,
+    "timed_out": 6
+   },
+   "call_success": 0.67,
+   "total_connections": 45
+  },
+  {
+   "initial_time": "07:57",
+   "initial_minutes": 477,
+   "emails": 550,
+   "phone_calls": 2664,
+   "text_messages": 513,
+   "tdd": 1,
+   "attempted": 4272,
+   "reached": 1699,
+   "not_reached": 965,
+   "outcome_fraction": {
+    "delivered": 0.21,
+    "machine": 0.19,
+    "intercept": 0.46,
+    "busy": 0.05,
+    "timed_out": 0.1
+   },
+   "outcome_calls_estimated": {
+    "delivered": 897,
+    "machine": 812,
+    "intercept": 1965,
+    "busy": 214,
+    "timed_out": 427
+   },
+   "call_success": 0.64,
+   "total_connections": 2763
+  },
+  {
+   "initial_time": "08:32",
+   "initial_minutes": 512,
+   "emails": 740,
+   "phone_calls": 4459,
+   "text_messages": 823,
+   "tdd": 1,
+   "attempted": 7170,
+   "reached": 2581,
+   "not_reached": 1878,
+   "outcome_fraction": {
+    "delivered": 0.19,
+    "machine": 0.17,
+    "intercept": 0.55,
+    "busy": 0.01,
+    "timed_out": 0.08
+   },
+   "outcome_calls_estimated": {
+    "delivered": 1362,
+    "machine": 1219,
+    "intercept": 3944,
+    "busy": 72,
+    "timed_out": 574
+   },
+   "call_success": 0.58,
+   "total_connections": 4145
+  },
+  {
+   "initial_time": "08:43",
+   "initial_minutes": 523,
+   "emails": 312,
+   "phone_calls": 1449,
+   "text_messages": 328,
+   "tdd": 0,
+   "attempted": 2240,
+   "reached": 908,
+   "not_reached": 541,
+   "outcome_fraction": {
+    "delivered": 0.21,
+    "machine": 0.2,
+    "intercept": 0.5,
+    "busy": 0.01,
+    "timed_out": 0.08
+   },
+   "outcome_calls_estimated": {
+    "delivered": 470,
+    "machine": 448,
+    "intercept": 1120,
+    "busy": 22,
+    "timed_out": 179
+   },
+   "call_success": 0.63,
+   "total_connections": 1548
+  },
+  {
+   "initial_time": "08:44",
+   "initial_minutes": 524,
+   "emails": null,
+   "phone_calls": 6189,
+   "text_messages": null,
+   "tdd": null,
+   "attempted": 10359,
+   "reached": 3262,
+   "not_reached": 2927,
+   "outcome_fraction": {
+    "delivered": 0.16,
+    "machine": 0.16,
+    "intercept": 0.58,
+    "busy": 0.01,
+    "timed_out": 0.09
+   },
+   "outcome_calls_estimated": {
+    "delivered": 1657,
+    "machine": 1657,
+    "intercept": 6008,
+    "busy": 104,
+    "timed_out": 932
+   },
+   "call_success": 0.53,
+   "total_connections": 3262
+  },
+  {
+   "initial_time": "08:46",
+   "initial_minutes": 526,
+   "emails": 176,
+   "phone_calls": 1129,
+   "text_messages": 211,
+   "tdd": 0,
+   "attempted": 1837,
+   "reached": 644,
+   "not_reached": 485,
+   "outcome_fraction": {
+    "delivered": 0.18,
+    "machine": 0.18,
+    "intercept": 0.55,
+    "busy": 0.01,
+    "timed_out": 0.09
+   },
+   "outcome_calls_estimated": {
+    "delivered": 331,
+    "machine": 331,
+    "intercept": 1010,
+    "busy": 18,
+    "timed_out": 165
+   },
+   "call_success": 0.57,
+   "total_connections": 1031
+  },
+  {
+   "initial_time": "09:09",
+   "initial_minutes": 549,
+   "emails": null,
+   "phone_calls": null,
+   "text_messages": null,
+   "tdd": null,
+   "attempted": null,
+   "reached": null,
+   "not_reached": null,
+   "outcome_fraction": {
+    "delivered": 0.15,
+    "machine": 0.2,
+    "intercept": 0.53,
+    "busy": 0.01,
+    "timed_out": 0.11
+   },
+   "outcome_calls_estimated": {
+    "delivered": null,
+    "machine": null,
+    "intercept": null,
+    "busy": null,
+    "timed_out": null
+   },
+   "call_success": null,
+   "total_connections": null
+  },
+  {
+   "initial_time": "09:15",
+   "initial_minutes": 555,
+   "emails": 378,
+   "phone_calls": 1668,
+   "text_messages": 391,
+   "tdd": 0,
+   "attempted": 2609,
+   "reached": 995,
+   "not_reached": 673,
+   "outcome_fraction": {
+    "delivered": 0.2,
+    "machine": 0.18,
+    "intercept": 0.55,
+    "busy": 0.02,
+    "timed_out": 0.05
+   },
+   "outcome_calls_estimated": {
+    "delivered": 522,
+    "machine": 470,
+    "intercept": 1435,
+    "busy": 52,
+    "timed_out": 130
+   },
+   "call_success": 0.6,
+   "total_connections": 1764
+  },
+  {
+   "initial_time": "09:29",
+   "initial_minutes": 569,
+   "emails": 614,
+   "phone_calls": 3368,
+   "text_messages": 622,
+   "tdd": 1,
+   "attempted": 5007,
+   "reached": 2165,
+   "not_reached": 1203,
+   "outcome_fraction": {
+    "delivered": 0.22,
+    "machine": 0.22,
+    "intercept": 0.51,
+    "busy": 0.01,
+    "timed_out": 0.04
+   },
+   "outcome_calls_estimated": {
+    "delivered": 1102,
+    "machine": 1102,
+    "intercept": 2554,
+    "busy": 50,
+    "timed_out": 200
+   },
+   "call_success": 0.64,
+   "total_connections": 3402
+  },
+  {
+   "initial_time": "09:58",
+   "initial_minutes": 598,
+   "emails": 102,
+   "phone_calls": 304,
+   "text_messages": 81,
+   "tdd": 0,
+   "attempted": 437,
+   "reached": 221,
+   "not_reached": 83,
+   "outcome_fraction": {
+    "delivered": 0.26,
+    "machine": 0.25,
+    "intercept": 0.37,
+    "busy": 0.06,
+    "timed_out": 0.06
+   },
+   "outcome_calls_estimated": {
+    "delivered": 114,
+    "machine": 109,
+    "intercept": 162,
+    "busy": 26,
+    "timed_out": 26
+   },
+   "call_success": 0.73,
+   "total_connections": 404
+  },
+  {
+   "initial_time": "10:07",
+   "initial_minutes": 607,
+   "emails": 51,
+   "phone_calls": 107,
+   "text_messages": 39,
+   "tdd": 0,
+   "attempted": 183,
+   "reached": 65,
+   "not_reached": 42,
+   "outcome_fraction": {
+    "delivered": 0.15,
+    "machine": 0.2,
+    "intercept": 0.26,
+    "busy": 0.09,
+    "timed_out": 0.3
+   },
+   "outcome_calls_estimated": {
+    "delivered": 27,
+    "machine": 37,
+    "intercept": 48,
+    "busy": 16,
+    "timed_out": 55
+   },
+   "call_success": 0.61,
+   "total_connections": 155
+  },
+  {
+   "initial_time": "10:11",
+   "initial_minutes": 611,
+   "emails": 58,
+   "phone_calls": 149,
+   "text_messages": 47,
+   "tdd": 0,
+   "attempted": 210,
+   "reached": 114,
+   "not_reached": 35,
+   "outcome_fraction": {
+    "delivered": 0.29,
+    "machine": 0.26,
+    "intercept": 0.26,
+    "busy": 0.07,
+    "timed_out": 0.13
+   },
+   "outcome_calls_estimated": {
+    "delivered": 61,
+    "machine": 55,
+    "intercept": 55,
+    "busy": 15,
+    "timed_out": 27
+   },
+   "call_success": 0.77,
+   "total_connections": 219
+  },
+  {
+   "initial_time": "10:22",
+   "initial_minutes": 622,
+   "emails": 108,
+   "phone_calls": 411,
+   "text_messages": 96,
+   "tdd": 0,
+   "attempted": 768,
+   "reached": 226,
+   "not_reached": 185,
+   "outcome_fraction": {
+    "delivered": 0.16,
+    "machine": 0.14,
+    "intercept": 0.33,
+    "busy": 0.32,
+    "timed_out": 0.05
+   },
+   "outcome_calls_estimated": {
+    "delivered": 123,
+    "machine": 108,
+    "intercept": 253,
+    "busy": 246,
+    "timed_out": 38
+   },
+   "call_success": 0.55,
+   "total_connections": 430
+  },
+  {
+   "initial_time": "11:46",
+   "initial_minutes": 706,
+   "emails": 74,
+   "phone_calls": 292,
+   "text_messages": 84,
+   "tdd": 1,
+   "attempted": 526,
+   "reached": 157,
+   "not_reached": 135,
+   "outcome_fraction": {
+    "delivered": 0.15,
+    "machine": 0.15,
+    "intercept": 0.44,
+    "busy": 0.05,
+    "timed_out": 0.21
+   },
+   "outcome_calls_estimated": {
+    "delivered": 79,
+    "machine": 79,
+    "intercept": 231,
+    "busy": 26,
+    "timed_out": 110
+   },
+   "call_success": 0.54,
+   "total_connections": 316
+  },
+  {
+   "initial_time": "11:52",
+   "initial_minutes": 712,
+   "emails": 90,
+   "phone_calls": 398,
+   "text_messages": 85,
+   "tdd": 0,
+   "attempted": 748,
+   "reached": 191,
+   "not_reached": 207,
+   "outcome_fraction": {
+    "delivered": 0.14,
+    "machine": 0.12,
+    "intercept": 0.46,
+    "busy": 0.05,
+    "timed_out": 0.24
+   },
+   "outcome_calls_estimated": {
+    "delivered": 105,
+    "machine": 90,
+    "intercept": 344,
+    "busy": 37,
+    "timed_out": 180
+   },
+   "call_success": 0.48,
+   "total_connections": 366
+  },
+  {
+   "initial_time": "13:34",
+   "initial_minutes": 814,
+   "emails": 67,
+   "phone_calls": 218,
+   "text_messages": 69,
+   "tdd": 0,
+   "attempted": 424,
+   "reached": 92,
+   "not_reached": 126,
+   "outcome_fraction": {
+    "delivered": 0.09,
+    "machine": 0.13,
+    "intercept": 0.55,
+    "busy": 0.0,
+    "timed_out": 0.23
+   },
+   "outcome_calls_estimated": {
+    "delivered": 38,
+    "machine": 55,
+    "intercept": 233,
+    "busy": 0,
+    "timed_out": 98
+   },
+   "call_success": 0.42,
+   "total_connections": 228
+  },
+  {
+   "initial_time": "13:46",
+   "initial_minutes": 826,
+   "emails": 102,
+   "phone_calls": 304,
+   "text_messages": 81,
+   "tdd": 0,
+   "attempted": 538,
+   "reached": 113,
+   "not_reached": 191,
+   "outcome_fraction": {
+    "delivered": 0.08,
+    "machine": 0.13,
+    "intercept": 0.69,
+    "busy": 0.02,
+    "timed_out": 0.08
+   },
+   "outcome_calls_estimated": {
+    "delivered": 43,
+    "machine": 70,
+    "intercept": 371,
+    "busy": 11,
+    "timed_out": 43
+   },
+   "call_success": 0.37,
+   "total_connections": 296
+  },
+  {
+   "initial_time": "16:12",
+   "initial_minutes": 972,
+   "emails": 147,
+   "phone_calls": 1130,
+   "text_messages": 210,
+   "tdd": 2,
+   "attempted": 2102,
+   "reached": 431,
+   "not_reached": 699,
+   "outcome_fraction": {
+    "delivered": 0.07,
+    "machine": 0.14,
+    "intercept": 0.64,
+    "busy": 0.0,
+    "timed_out": 0.15
+   },
+   "outcome_calls_estimated": {
+    "delivered": 147,
+    "machine": 294,
+    "intercept": 1345,
+    "busy": 0,
+    "timed_out": 315
+   },
+   "call_success": 0.38,
+   "total_connections": 790
+  },
+  {
+   "initial_time": "16:17",
+   "initial_minutes": 977,
+   "emails": 284,
+   "phone_calls": 1452,
+   "text_messages": 329,
+   "tdd": 0,
+   "attempted": 2508,
+   "reached": 687,
+   "not_reached": 765,
+   "outcome_fraction": {
+    "delivered": 0.09,
+    "machine": 0.19,
+    "intercept": 0.59,
+    "busy": 0.0,
+    "timed_out": 0.13
+   },
+   "outcome_calls_estimated": {
+    "delivered": 226,
+    "machine": 477,
+    "intercept": 1480,
+    "busy": 0,
+    "timed_out": 326
+   },
+   "call_success": 0.47,
+   "total_connections": 1300
+  },
+  {
+   "initial_time": "17:04",
+   "initial_minutes": 1024,
+   "emails": 56,
+   "phone_calls": 178,
+   "text_messages": 44,
+   "tdd": 0,
+   "attempted": 365,
+   "reached": 50,
+   "not_reached": 128,
+   "outcome_fraction": {
+    "delivered": 0.05,
+    "machine": 0.08,
+    "intercept": 0.65,
+    "busy": 0.0,
+    "timed_out": 0.21
+   },
+   "outcome_calls_estimated": {
+    "delivered": 18,
+    "machine": 29,
+    "intercept": 237,
+    "busy": 0,
+    "timed_out": 77
+   },
+   "call_success": 0.28,
+   "total_connections": 150
+  },
+  {
+   "initial_time": "18:06",
+   "initial_minutes": 1086,
+   "emails": 374,
+   "phone_calls": 1690,
+   "text_messages": 428,
+   "tdd": 3,
+   "attempted": 2976,
+   "reached": 896,
+   "not_reached": 794,
+   "outcome_fraction": {
+    "delivered": 0.12,
+    "machine": 0.18,
+    "intercept": 0.41,
+    "busy": 0.04,
+    "timed_out": 0.25
+   },
+   "outcome_calls_estimated": {
+    "delivered": 357,
+    "machine": 536,
+    "intercept": 1220,
+    "busy": 119,
+    "timed_out": 744
+   },
+   "call_success": 0.53,
+   "total_connections": 1701
+  },
+  {
+   "initial_time": "18:13",
+   "initial_minutes": 1093,
+   "emails": 229,
+   "phone_calls": 874,
+   "text_messages": 250,
+   "tdd": 0,
+   "attempted": 1405,
+   "reached": 569,
+   "not_reached": 305,
+   "outcome_fraction": {
+    "delivered": 0.21,
+    "machine": 0.19,
+    "intercept": 0.27,
+    "busy": 0.12,
+    "timed_out": 0.2
+   },
+   "outcome_calls_estimated": {
+    "delivered": 295,
+    "machine": 267,
+    "intercept": 379,
+    "busy": 169,
+    "timed_out": 281
+   },
+   "call_success": 0.65,
+   "total_connections": 1048
+  },
+  {
+   "initial_time": "18:42",
+   "initial_minutes": 1122,
+   "emails": 205,
+   "phone_calls": 1011,
+   "text_messages": 249,
+   "tdd": 0,
+   "attempted": 1758,
+   "reached": 601,
+   "not_reached": 410,
+   "outcome_fraction": {
+    "delivered": 0.16,
+    "machine": 0.18,
+    "intercept": 0.36,
+    "busy": 0.17,
+    "timed_out": 0.12
+   },
+   "outcome_calls_estimated": {
+    "delivered": 281,
+    "machine": 316,
+    "intercept": 633,
+    "busy": 299,
+    "timed_out": 211
+   },
+   "call_success": 0.59,
+   "total_connections": 1055
+  },
+  {
+   "initial_time": "18:48",
+   "initial_minutes": 1128,
+   "emails": 162,
+   "phone_calls": 515,
+   "text_messages": 149,
+   "tdd": 0,
+   "attempted": 913,
+   "reached": 297,
+   "not_reached": 218,
+   "outcome_fraction": {
+    "delivered": 0.18,
+    "machine": 0.15,
+    "intercept": 0.29,
+    "busy": 0.11,
+    "timed_out": 0.28
+   },
+   "outcome_calls_estimated": {
+    "delivered": 164,
+    "machine": 137,
+    "intercept": 265,
+    "busy": 100,
+    "timed_out": 256
+   },
+   "call_success": 0.58,
+   "total_connections": 608
+  },
+  {
+   "initial_time": "19:30",
+   "initial_minutes": 1170,
+   "emails": 192,
+   "phone_calls": 1068,
+   "text_messages": 209,
+   "tdd": 0,
+   "attempted": 1499,
+   "reached": 836,
+   "not_reached": 232,
+   "outcome_fraction": {
+    "delivered": 0.28,
+    "machine": 0.28,
+    "intercept": 0.22,
+    "busy": 0.05,
+    "timed_out": 0.17
+   },
+   "outcome_calls_estimated": {
+    "delivered": 420,
+    "machine": 420,
+    "intercept": 330,
+    "busy": 75,
+    "timed_out": 255
+   },
+   "call_success": 0.78,
+   "total_connections": 1237
+  },
+  {
+   "initial_time": "19:43",
+   "initial_minutes": 1183,
+   "emails": 125,
+   "phone_calls": 381,
+   "text_messages": 110,
+   "tdd": 0,
+   "attempted": 568,
+   "reached": 265,
+   "not_reached": 116,
+   "outcome_fraction": {
+    "delivered": 0.22,
+    "machine": 0.25,
+    "intercept": 0.33,
+    "busy": 0.05,
+    "timed_out": 0.15
+   },
+   "outcome_calls_estimated": {
+    "delivered": 125,
+    "machine": 142,
+    "intercept": 187,
+    "busy": 28,
+    "timed_out": 85
+   },
+   "call_success": 0.7,
+   "total_connections": 500
+  },
+  {
+   "initial_time": "19:50",
+   "initial_minutes": 1190,
+   "emails": 71,
+   "phone_calls": 351,
+   "text_messages": 63,
+   "tdd": 0,
+   "attempted": 487,
+   "reached": 269,
+   "not_reached": 82,
+   "outcome_fraction": {
+    "delivered": 0.31,
+    "machine": 0.25,
+    "intercept": 0.3,
+    "busy": 0.06,
+    "timed_out": 0.09
+   },
+   "outcome_calls_estimated": {
+    "delivered": 151,
+    "machine": 122,
+    "intercept": 146,
+    "busy": 29,
+    "timed_out": 44
+   },
+   "call_success": 0.77,
+   "total_connections": 403
+  },
+  {
+   "initial_time": "25:18",
+   "initial_minutes": 1518,
+   "emails": 61,
+   "phone_calls": 318,
+   "text_messages": 53,
+   "tdd": 0,
+   "attempted": 611,
+   "reached": 55,
+   "not_reached": 263,
+   "outcome_fraction": {
+    "delivered": 0.02,
+    "machine": 0.07,
+    "intercept": 0.86,
+    "busy": 0.0,
+    "timed_out": 0.05
+   },
+   "outcome_calls_estimated": {
+    "delivered": 12,
+    "machine": 43,
+    "intercept": 525,
+    "busy": 0,
+    "timed_out": 31
+   },
+   "call_success": 0.17,
+   "total_connections": 169
+  },
+  {
+   "initial_time": "29:44",
+   "initial_minutes": 1784,
+   "emails": 39,
+   "phone_calls": 262,
+   "text_messages": 25,
+   "tdd": 0,
+   "attempted": 502,
+   "reached": 28,
+   "not_reached": 234,
+   "outcome_fraction": {
+    "delivered": 0.03,
+    "machine": 0.03,
+    "intercept": 0.94,
+    "busy": 0.0,
+    "timed_out": 0.0
+   },
+   "outcome_calls_estimated": {
+    "delivered": 15,
+    "machine": 15,
+    "intercept": 472,
+    "busy": 0,
+    "timed_out": 0
+   },
+   "call_success": 0.11,
+   "total_connections": 92
+  }
+ ],
+ "recalls": [
+  {
+   "initial_time": "08:32",
+   "recall_time": "08:40",
+   "recall_delay_min": 8,
+   "phone_calls": 1878,
+   "attempted": 3999,
+   "reached": 274,
+   "not_reached": 1604,
+   "outcome_fraction": {
+    "delivered": 0.04,
+    "machine": 0.03,
+    "intercept": 0.8,
+    "busy": 0.01,
+    "timed_out": 0.12
+   },
+   "call_success": 0.15,
+   "total_connections": 274
+  },
+  {
+   "initial_time": "08:46",
+   "recall_time": "08:52",
+   "recall_delay_min": 6,
+   "phone_calls": 485,
+   "attempted": 1028,
+   "reached": 114,
+   "not_reached": 371,
+   "outcome_fraction": {
+    "delivered": 0.07,
+    "machine": 0.04,
+    "intercept": 0.71,
+    "busy": 0.02,
+    "timed_out": 0.16
+   },
+   "call_success": 0.24,
+   "total_connections": 114
+  },
+  {
+   "initial_time": "10:22",
+   "recall_time": "10:29",
+   "recall_delay_min": 7,
+   "phone_calls": 185,
+   "attempted": 400,
+   "reached": 61,
+   "not_reached": 124,
+   "outcome_fraction": {
+    "delivered": 0.09,
+    "machine": 0.06,
+    "intercept": 0.39,
+    "busy": 0.34,
+    "timed_out": 0.11
+   },
+   "call_success": 0.33,
+   "total_connections": 61
+  },
+  {
+   "initial_time": "11:46",
+   "recall_time": "11:52",
+   "recall_delay_min": 6,
+   "phone_calls": 135,
+   "attempted": 330,
+   "reached": 7,
+   "not_reached": 128,
+   "outcome_fraction": {
+    "delivered": 0.01,
+    "machine": 0.01,
+    "intercept": 0.62,
+    "busy": 0.03,
+    "timed_out": 0.33
+   },
+   "call_success": 0.05,
+   "total_connections": 7
+  },
+  {
+   "initial_time": "11:52",
+   "recall_time": "11:58",
+   "recall_delay_min": 6,
+   "phone_calls": 207,
+   "attempted": 505,
+   "reached": 20,
+   "not_reached": 187,
+   "outcome_fraction": {
+    "delivered": 0.02,
+    "machine": 0.01,
+    "intercept": 0.56,
+    "busy": 0.11,
+    "timed_out": 0.29
+   },
+   "call_success": 0.1,
+   "total_connections": 20
+  },
+  {
+   "initial_time": "13:34",
+   "recall_time": "13:41",
+   "recall_delay_min": 7,
+   "phone_calls": 126,
+   "attempted": 307,
+   "reached": 2,
+   "not_reached": 124,
+   "outcome_fraction": {
+    "delivered": 0.0,
+    "machine": 0.0,
+    "intercept": 0.71,
+    "busy": 0.0,
+    "timed_out": 0.28
+   },
+   "call_success": 0.02,
+   "total_connections": 2
+  },
+  {
+   "initial_time": "13:46",
+   "recall_time": "13:52",
+   "recall_delay_min": 6,
+   "phone_calls": 191,
+   "attempted": 409,
+   "reached": 5,
+   "not_reached": 186,
+   "outcome_fraction": {
+    "delivered": 0.01,
+    "machine": 0.0,
+    "intercept": 0.87,
+    "busy": 0.02,
+    "timed_out": 0.1
+   },
+   "call_success": 0.03,
+   "total_connections": 5
+  },
+  {
+   "initial_time": "16:12",
+   "recall_time": "16:19",
+   "recall_delay_min": 7,
+   "phone_calls": 699,
+   "attempted": 1597,
+   "reached": 7,
+   "not_reached": 692,
+   "outcome_fraction": {
+    "delivered": 0.0,
+    "machine": 0.0,
+    "intercept": 0.82,
+    "busy": 0.0,
+    "timed_out": 0.18
+   },
+   "call_success": 0.01,
+   "total_connections": 7
+  },
+  {
+   "initial_time": "16:17",
+   "recall_time": "16:23",
+   "recall_delay_min": 6,
+   "phone_calls": 765,
+   "attempted": 1788,
+   "reached": 14,
+   "not_reached": 751,
+   "outcome_fraction": {
+    "delivered": 0.01,
+    "machine": 0.0,
+    "intercept": 0.77,
+    "busy": 0.01,
+    "timed_out": 0.21
+   },
+   "call_success": 0.02,
+   "total_connections": 14
+  },
+  {
+   "initial_time": "17:04",
+   "recall_time": "17:11",
+   "recall_delay_min": 7,
+   "phone_calls": 128,
+   "attempted": 312,
+   "reached": 0,
+   "not_reached": 128,
+   "outcome_fraction": {
+    "delivered": 0.0,
+    "machine": 0.0,
+    "intercept": 0.76,
+    "busy": 0.0,
+    "timed_out": 0.24
+   },
+   "call_success": 0.0,
+   "total_connections": 0
+  },
+  {
+   "initial_time": "18:06",
+   "recall_time": "18:13",
+   "recall_delay_min": 7,
+   "phone_calls": 794,
+   "attempted": 2041,
+   "reached": 5,
+   "not_reached": 789,
+   "outcome_fraction": {
+    "delivered": 0.0,
+    "machine": 0.0,
+    "intercept": 0.6,
+    "busy": 0.06,
+    "timed_out": 0.34
+   },
+   "call_success": 0.01,
+   "total_connections": 5
+  },
+  {
+   "initial_time": "18:42",
+   "recall_time": "18:49",
+   "recall_delay_min": 7,
+   "phone_calls": 410,
+   "attempted": 1067,
+   "reached": 28,
+   "not_reached": 382,
+   "outcome_fraction": {
+    "delivered": 0.01,
+    "machine": 0.01,
+    "intercept": 0.45,
+    "busy": 0.33,
+    "timed_out": 0.19
+   },
+   "call_success": 0.07,
+   "total_connections": 28
+  },
+  {
+   "initial_time": "18:48",
+   "recall_time": "18:54",
+   "recall_delay_min": 6,
+   "phone_calls": 218,
+   "attempted": 599,
+   "reached": 7,
+   "not_reached": 211,
+   "outcome_fraction": {
+    "delivered": 0.01,
+    "machine": 0.0,
+    "intercept": 0.37,
+    "busy": 0.14,
+    "timed_out": 0.48
+   },
+   "call_success": 0.03,
+   "total_connections": 7
+  },
+  {
+   "initial_time": "25:18",
+   "recall_time": "25:25",
+   "recall_delay_min": 7,
+   "phone_calls": 263,
+   "attempted": 544,
+   "reached": 7,
+   "not_reached": 256,
+   "outcome_fraction": {
+    "delivered": 0.01,
+    "machine": 0.0,
+    "intercept": 0.94,
+    "busy": 0.0,
+    "timed_out": 0.05
+   },
+   "call_success": 0.03,
+   "total_connections": 7
+  },
+  {
+   "initial_time": "29:44",
+   "recall_time": "29:49",
+   "recall_delay_min": 5,
+   "phone_calls": 234,
+   "attempted": 474,
+   "reached": 0,
+   "not_reached": 234,
+   "outcome_fraction": {
+    "delivered": 0.0,
+    "machine": 0.0,
+    "intercept": 0.99,
+    "busy": 0.0,
+    "timed_out": 0.01
+   },
+   "call_success": 0.0,
+   "total_connections": 0
+  }
+ ]
+}

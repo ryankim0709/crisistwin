@@ -2,7 +2,15 @@
 // with the new / conflicting / stale / high-impact flags and an impact score. Pure: no React.
 import { KIND_LABEL, labelPoint, nf, shortZoneName } from "./format";
 import { distanceM, distanceToAreaM, distanceToLineM, pointInArea, routeUsesSegment } from "./geo";
-import type { CheckTask, CommandResponse, FieldReport, HelpRequest, LonLat, ReportKind, ZoneGuidance } from "./types";
+import type {
+  CheckTask,
+  CommandResponse,
+  FieldReport,
+  HelpRequest,
+  LonLat,
+  ReportKind,
+  ZoneGuidance,
+} from "./types";
 
 export type QueueFilter = "new" | "conflicting" | "stale" | "high";
 
@@ -51,6 +59,8 @@ export interface QueueItem {
   newestObservedAt: string;
   confirmed: boolean;
   fixture: boolean;
+  /** Every report is a 2018 record entry (911 / radio), not a drill report. */
+  record: boolean;
   isNew: boolean;
   conflict: string | null;
   stale: boolean;
@@ -62,6 +72,8 @@ export interface QueueItem {
   task: CheckTask | null;
   /** A need-help check-in instead of reports (`reports` is empty). */
   help: HelpRequest | null;
+  /** 2018 help_needed records of one zone, grouped into this single item. */
+  grouped: boolean;
 }
 
 function titleFor(kind: ReportKind, road: string | null, destination: string | null): string {
@@ -72,7 +84,13 @@ function titleFor(kind: ReportKind, road: string | null, destination: string | n
   return KIND_LABEL[kind] ?? kind;
 }
 
-function group(reports: FieldReport[]): FieldReport[][] {
+/** 2018 help_needed records: one item per zone containing the point. */
+function recordHelp(r: FieldReport): boolean {
+  return r.kind === "help_needed" && r.evidence_class === "historical_record";
+}
+
+function group(reports: FieldReport[], zones: CommandResponse["zones"]): FieldReport[][] {
+  const byZone = new Map<string, FieldReport[]>();
   const bySegment = new Map<string, FieldReport[]>();
   const byDestination = new Map<string, FieldReport[]>();
   const clusters: FieldReport[][] = [];
@@ -82,17 +100,22 @@ function group(reports: FieldReport[]): FieldReport[][] {
       bySegment.set(key, [...(bySegment.get(key) ?? []), r]);
     } else if (r.kind === "shelter_full" && r.destination_id) {
       byDestination.set(r.destination_id, [...(byDestination.get(r.destination_id) ?? []), r]);
+    } else if (recordHelp(r)) {
+      const key = zones.find((z) => pointInArea(r.location.coord, z.geometry))?.id ?? "none";
+      byZone.set(key, [...(byZone.get(key) ?? []), r]);
     } else if (r.kind === "help_needed") {
       clusters.push([r]);
     } else {
       const near = clusters.find(
-        (c) => c[0].kind === r.kind && distanceM(c[0].location.coord, r.location.coord) <= CLUSTER_RADIUS_M,
+        (c) =>
+          c[0].kind === r.kind &&
+          distanceM(c[0].location.coord, r.location.coord) <= CLUSTER_RADIUS_M,
       );
       if (near) near.push(r);
       else clusters.push([r]);
     }
   }
-  return [...bySegment.values(), ...byDestination.values(), ...clusters];
+  return [...bySegment.values(), ...byDestination.values(), ...byZone.values(), ...clusters];
 }
 
 function newest(rs: FieldReport[]): FieldReport {
@@ -156,25 +179,36 @@ export function buildQueue(data: CommandResponse, serverNowMs: number): QueueIte
   }
 
   const items: QueueItem[] = [];
-  for (const rs of group(open)) {
+  for (const rs of group(open, data.zones)) {
     rs.sort((a, b) => b.observed_at.localeCompare(a.observed_at));
     const head = newest(rs);
     const segmentId = ROAD_KINDS.has(head.kind) ? (head.road_ref?.segment_id ?? null) : null;
     const roadName = head.road_ref?.name ?? null;
     const destinationId = head.kind === "shelter_full" ? head.destination_id : null;
     const line = segmentId ? (segmentLines.get(segmentId) ?? null) : null;
+    const grouped = recordHelp(head);
+    const groupZone = grouped
+      ? data.zones.find((z) => pointInArea(head.location.coord, z.geometry))
+      : undefined;
     const coord: LonLat = destinationId
       ? (destinations.get(destinationId)?.coord ?? head.location.coord)
-      : line
-        ? line[Math.floor(line.length / 2)]
-        : head.location.coord;
+      : groupZone
+        ? (labelPoint(groupZone.geometry) ?? head.location.coord)
+        : line
+          ? line[Math.floor(line.length / 2)]
+          : head.location.coord;
     // The title follows the newest road report on a segment, so a reopened road reads "passable".
     const kind = head.kind;
     const confirmed = rs.some((r) => r.status === "confirmed");
-    const parties = new Set(rs.filter((r) => r.reporter.role === "civilian").map((r) => r.reporter.party_key));
+    const parties = new Set(
+      rs.filter((r) => r.reporter.role === "civilian").map((r) => r.reporter.party_key),
+    );
     const halfLife = HALF_LIFE_S[kind] ?? DEFAULT_HALF_LIFE_S;
     const stale = serverNowMs - new Date(head.observed_at).getTime() > halfLife * 1000;
-    const routeZones = kind === "help_needed" ? [] : routeZonesFor(coord, line, routes, destinationId, segmentId !== null);
+    const routeZones =
+      kind === "help_needed"
+        ? []
+        : routeZonesFor(coord, line, routes, destinationId, segmentId !== null);
     const affected = new Set(routeZones);
     for (const z of data.zones) {
       const level = levels.get(z.id);
@@ -183,9 +217,21 @@ export function buildQueue(data: CommandResponse, serverNowMs: number): QueueIte
     const veh = [...affected].reduce((sum, id) => sum + (vehicles.get(id) ?? 0), 0);
     const conflict = conflictOf(rs, data, coord);
     items.push({
-      id: segmentId ? `seg:${segmentId}` : destinationId ? `dest:${destinationId}` : `rpt:${rs[rs.length - 1].id}`,
+      id: segmentId
+        ? `seg:${segmentId}`
+        : destinationId
+          ? `dest:${destinationId}`
+          : grouped
+            ? `rec-help:${groupZone?.id ?? "none"}`
+            : `rpt:${rs[rs.length - 1].id}`,
       kind,
-      title: titleFor(kind, roadName, destinationId ? (destinations.get(destinationId)?.name ?? null) : null),
+      title: grouped
+        ? `${titleFor(kind, null, null)}${rs.length > 1 ? ` ×${nf(rs.length)}` : ""}${groupZone ? `, ${shortZoneName(groupZone.name)}` : ""}`
+        : titleFor(
+            kind,
+            roadName,
+            destinationId ? (destinations.get(destinationId)?.name ?? null) : null,
+          ),
       coord,
       line,
       segmentId,
@@ -196,6 +242,7 @@ export function buildQueue(data: CommandResponse, serverNowMs: number): QueueIte
       newestObservedAt: head.observed_at,
       confirmed,
       fixture: rs.every((r) => isFixtureNote(r.note)),
+      record: rs.every((r) => r.evidence_class === "historical_record"),
       isNew: !confirmed && !stale && rs.some((r) => UNREVIEWED.has(r.status)),
       conflict,
       stale,
@@ -204,6 +251,7 @@ export function buildQueue(data: CommandResponse, serverNowMs: number): QueueIte
       high: routeZones.length > 0 || veh >= HIGH_IMPACT_VEH,
       task: rs.map((r) => taskByReport.get(r.id)).find((t) => !!t) ?? null,
       help: null,
+      grouped,
     });
   }
   items.push(...helpItems(data));
@@ -243,6 +291,7 @@ function helpItems(data: CommandResponse): QueueItem[] {
       newestObservedAt: h.at,
       confirmed: status !== "open",
       fixture: false,
+      record: false,
       isNew: status === "open",
       conflict: null,
       stale: false,
@@ -251,6 +300,7 @@ function helpItems(data: CommandResponse): QueueItem[] {
       high: true,
       task: h.help?.task_id ? (tasks.get(h.help.task_id) ?? null) : null,
       help: h,
+      grouped: false,
     });
   }
   return out;
@@ -269,7 +319,8 @@ export function proposalFor(item: QueueItem, data: CommandResponse): string | nu
   for (const p of data.proposals) {
     if (p.status !== "pending") continue;
     if (item.segmentId && (p.cause_segment_ids ?? []).includes(item.segmentId)) return p.id;
-    if (item.segmentId && p.inputs.blocked_segment_ids.includes(item.segmentId) && item.confirmed) return p.id;
+    if (item.segmentId && p.inputs.blocked_segment_ids.includes(item.segmentId) && item.confirmed)
+      return p.id;
     if (p.tasks.some((t) => t.report_ids.some((id) => ids.has(id)))) return p.id;
   }
   return null;

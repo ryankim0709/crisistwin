@@ -1,0 +1,153 @@
+{
+ "source_id": "fcc-uls-l-cell",
+ "source_sha256": "11f0793eb4448dd34601e67f39193b477f2544c2c49324ca7bfa099f5e83330a",
+ "county": "BUTTE",
+ "label": "FIXTURE: legacy cellular licence locations, not a cell-site census",
+ "count": 16,
+ "rows": [
+  {
+   "call_sign": "KNKA463",
+   "location_number": "10",
+   "address": "Meridian Site 15082 Hamilton-Nord Cana H",
+   "city": "Chico",
+   "lat": 39.852472,
+   "lon": -121.952528,
+   "structure_type": "MAST"
+  },
+  {
+   "call_sign": "KNKA463",
+   "location_number": "2",
+   "address": "(Paradise Relo) 5541 Vista Way",
+   "city": "Paradise",
+   "lat": 39.748222,
+   "lon": -121.636806,
+   "structure_type": "POLE"
+  },
+  {
+   "call_sign": "KNKA463",
+   "location_number": "3",
+   "address": "5646 Lincoln Blvd.",
+   "city": "Oroville",
+   "lat": 39.478222,
+   "lon": -121.399417,
+   "structure_type": "TOWER"
+  },
+  {
+   "call_sign": "KNKA463",
+   "location_number": "4",
+   "address": "Bloomer Hill",
+   "city": "Berry Creek",
+   "lat": 39.650722,
+   "lon": -121.46275,
+   "structure_type": ""
+  },
+  {
+   "call_sign": "KNKA463",
+   "location_number": "5",
+   "address": "Nelson Site 2003 Nelson Road",
+   "city": "Nelson",
+   "lat": 39.551,
+   "lon": -121.78275,
+   "structure_type": "TOWER"
+  },
+  {
+   "call_sign": "KNKA463",
+   "location_number": "6",
+   "address": "0.25 Mile Northwest Of Union High School",
+   "city": "Biggs",
+   "lat": 39.417667,
+   "lon": -121.688583,
+   "structure_type": "POLE"
+  },
+  {
+   "call_sign": "KNKA463",
+   "location_number": "7",
+   "address": "Chico Iron  Works 1300 Nord Ave.",
+   "city": "Chico",
+   "lat": 39.734333,
+   "lon": -121.861361,
+   "structure_type": "TOWER"
+  },
+  {
+   "call_sign": "KNKA463",
+   "location_number": "8",
+   "address": "14147 Lakeridge Court",
+   "city": "Magalia",
+   "lat": 39.819611,
+   "lon": -121.590528,
+   "structure_type": "TOWER"
+  },
+  {
+   "call_sign": "KNKA463",
+   "location_number": "9",
+   "address": "550 Chandon Ave",
+   "city": "Gridley",
+   "lat": 39.312667,
+   "lon": -121.662167,
+   "structure_type": "TOWER"
+  },
+  {
+   "call_sign": "KNKA622",
+   "location_number": "9",
+   "address": "400 Cowee Avenue (9887)",
+   "city": "Gridley",
+   "lat": 39.322306,
+   "lon": -121.669667,
+   "structure_type": "LTOWER"
+  },
+  {
+   "call_sign": "KNKA636",
+   "location_number": "11",
+   "address": "550 Chandon Avenue",
+   "city": "Gridley",
+   "lat": 39.312667,
+   "lon": -121.662194,
+   "structure_type": "TOWER"
+  },
+  {
+   "call_sign": "KNKA692",
+   "location_number": "10",
+   "address": "541 Washington Street",
+   "city": "Gridley",
+   "lat": 39.364472,
+   "lon": -121.694583,
+   "structure_type": "MAST"
+  },
+  {
+   "call_sign": "KNKA692",
+   "location_number": "2",
+   "address": "Bloomer Hill Road",
+   "city": "Berry Creek",
+   "lat": 39.651139,
+   "lon": -121.463111,
+   "structure_type": "MAST"
+  },
+  {
+   "call_sign": "KNKA692",
+   "location_number": "4",
+   "address": "400 Cowee Avenue",
+   "city": "Gridley",
+   "lat": 39.322306,
+   "lon": -121.669667,
+   "structure_type": "MAST"
+  },
+  {
+   "call_sign": "KNKA692",
+   "location_number": "5",
+   "address": "15082 Hamilton Nord Cana Highway",
+   "city": "Chico",
+   "lat": 39.8525,
+   "lon": -121.952611,
+   "structure_type": "MAST"
+  },
+  {
+   "call_sign": "KNKA692",
+   "location_number": "6",
+   "address": "9160 Aguas Frais Road",
+   "city": "Chico",
+   "lat": 39.641694,
+   "lon": -121.856583,
+   "structure_type": "POLE"
+  }
+ ]
+}

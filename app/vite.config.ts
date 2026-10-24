@@ -4,6 +4,7 @@ import type { LookupFunction } from "node:net";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
+import { shouldSignController } from "./controllerProxy";
 
 const LANDFIRE_ORIGIN = "https://edcintl.cr.usgs.gov";
 const LANDFIRE_DNS_TTL_MS = 5 * 60_000;
@@ -85,17 +86,34 @@ function presentAsThisApplication(proxyReq: import("node:http").ClientRequest): 
 /**
  * The /live controller console needs the controller token on every /api/live/ call. In
  * development this proxy attaches it from the server's environment (never the bundle), so the
- * page needs no token form. Only requests from this machine get it, unless
- * LIVE_CONTROLLER_PROXY=any (Docker, where the published port is bound to 127.0.0.1 and the
- * browser's requests arrive from the bridge network). A request that already carries a token
- * is left alone.
+ * page needs no token form. It does so for local requests only, so a phone or a browser on
+ * another machine never gets controller rights from this proxy (ADR 0034). Modes of
+ * LIVE_CONTROLLER_PROXY:
+ * - unset: the TCP peer is this machine (host `npm run dev`).
+ * - `host`: the browser addressed the proxy as localhost, 127.0.0.1 or ::1 and no forwarding
+ *   header is present. Docker's published port hides the real peer (every client arrives from
+ *   the bridge), so the address the browser typed is the signal; a tunnel or reverse proxy adds
+ *   forwarding headers, and a phone uses the Mac's `.local` name or the tunnel host. A hostile
+ *   client on the same LAN could forge a Host header, so on a shared network also set
+ *   LIVE_CONTROLLER_TOKEN and keep Docker's bind address at its default.
+ * - `any`: always sign. Only for a single-user machine bound to loopback.
+ * A request that already carries a token is left alone. A remote console sees the token form.
  */
-function attachControllerToken(proxyReq: import("node:http").ClientRequest, req: import("node:http").IncomingMessage): void {
+function attachControllerToken(
+  proxyReq: import("node:http").ClientRequest,
+  req: import("node:http").IncomingMessage,
+): void {
   const token = process.env.LIVE_CONTROLLER_TOKEN;
   if (!token || !req.url?.startsWith("/api/live/") || req.headers.authorization) return;
-  const remote = req.socket.remoteAddress ?? "";
-  const local = remote === "127.0.0.1" || remote === "::1" || remote === "::ffff:127.0.0.1";
-  if (local || process.env.LIVE_CONTROLLER_PROXY === "any") proxyReq.setHeader("authorization", `Bearer ${token}`);
+  if (
+    shouldSignController(
+      process.env.LIVE_CONTROLLER_PROXY,
+      req.socket.remoteAddress ?? "",
+      req.headers,
+    )
+  ) {
+    proxyReq.setHeader("authorization", `Bearer ${token}`);
+  }
 }
 
 export default defineConfig({
@@ -107,6 +125,15 @@ export default defineConfig({
     host: "0.0.0.0",
     port: 5173,
     strictPort: true,
+    // Vite rejects other Host headers. Allow the Mac's `.local` name and a tunnel host
+    // (VITE_ALLOWED_HOSTS=".local,my-tunnel.trycloudflare.com"; a leading dot matches subdomains).
+    allowedHosts: [
+      ".local",
+      ...(process.env.VITE_ALLOWED_HOSTS ?? "")
+        .split(",")
+        .map((h) => h.trim())
+        .filter(Boolean),
+    ],
     proxy: {
       "/api": {
         target: process.env.VITE_API_PROXY_TARGET ?? "http://127.0.0.1:8000",

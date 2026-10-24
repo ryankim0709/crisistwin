@@ -180,6 +180,9 @@ struct TasksView: View {
                             .foregroundStyle(Color.ctInkMuted)
                             .fixedSize(horizontal: false, vertical: true)
                     }
+                    if accepted, let response = store.taskRoutes[task.id] {
+                        routeRow(response)
+                    }
                     HStack(spacing: 8) {
                         if accepted { AcceptedTag() }
                         Text(task.createdAt, format: .relative(presentation: .named))
@@ -190,54 +193,76 @@ struct TasksView: View {
             }
             .accessibilityElement(children: .combine)
 
-            HStack(spacing: 8) {
-                if accepted && task.isAssist {
-                    Button { complete(task) } label: {
-                        HStack(spacing: 6) {
-                            if busy == task.id { ProgressView().controlSize(.small).tint(Color.ctBackground) }
-                            Label("Done", systemImage: "checkmark")
-                        }
-                    }
-                    .buttonStyle(FieldPill(primary: true))
-                    .disabled(busy != nil)
-                } else if accepted {
-                    Button {
-                        router.openReport(
-                            ReportPrefill(kind: nil, coord: store.taskTarget(task), taskId: task.id),
-                            from: "task-\(task.id)")
-                    } label: {
-                        Label("Answer", systemImage: "square.and.pencil")
-                    }
-                    .buttonStyle(FieldPill(primary: true))
-                    .reportZoomSource("task-\(task.id)", in: reportZoom)
-                } else {
-                    Button { accept(task) } label: {
-                        HStack(spacing: 6) {
-                            if busy == task.id { ProgressView().controlSize(.small).tint(Color.ctBackground) }
-                            Text("Accept")
-                        }
-                    }
-                    .buttonStyle(FieldPill(primary: true))
-                    .disabled(busy != nil)
+            // One row when it fits; at large text sizes Can't reach drops below.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    primaryAction(task, accepted: accepted)
+                    mapAction(task)
+                    Spacer(minLength: 0)
+                    cantReachAction(task)
                 }
-                Button {
-                    router.showOnMap(store.taskTarget(task))
-                } label: {
-                    Image(systemName: "map")
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        primaryAction(task, accepted: accepted)
+                        mapAction(task)
+                    }
+                    cantReachAction(task)
                 }
-                .buttonStyle(FieldPill())
-                .accessibilityLabel("Show on map")
-                .disabled(store.taskTarget(task) == nil)
-                Spacer(minLength: 0)
-                Button("Can't reach") {
-                    cancelNote = ""
-                    cancelling = task
-                }
-                .buttonStyle(FieldPill())
             }
             .padding(.leading, 42)
         }
         .ctPanel(padding: 14)
+    }
+
+    @ViewBuilder private func primaryAction(_ task: CheckTask, accepted: Bool) -> some View {
+        if accepted && task.isAssist {
+            Button { complete(task) } label: {
+                HStack(spacing: 6) {
+                    if busy == task.id { ProgressView().controlSize(.small).tint(Color.ctBackground) }
+                    Label("Done", systemImage: "checkmark")
+                }
+            }
+            .buttonStyle(FieldPill(primary: true))
+            .disabled(busy != nil)
+        } else if accepted {
+            Button {
+                router.openReport(
+                    ReportPrefill(kind: nil, coord: store.taskTarget(task), taskId: task.id),
+                    from: "task-\(task.id)")
+            } label: {
+                Label("Answer", systemImage: "square.and.pencil")
+            }
+            .buttonStyle(FieldPill(primary: true))
+            .reportZoomSource("task-\(task.id)", in: reportZoom)
+        } else {
+            Button { accept(task) } label: {
+                HStack(spacing: 6) {
+                    if busy == task.id { ProgressView().controlSize(.small).tint(Color.ctBackground) }
+                    Text("Accept")
+                }
+            }
+            .buttonStyle(FieldPill(primary: true))
+            .disabled(busy != nil)
+        }
+    }
+
+    private func mapAction(_ task: CheckTask) -> some View {
+        Button {
+            router.showOnMap(store.taskTarget(task))
+        } label: {
+            Image(systemName: "map")
+        }
+        .buttonStyle(FieldPill())
+        .accessibilityLabel("Show on map")
+        .disabled(store.taskTarget(task) == nil)
+    }
+
+    private func cantReachAction(_ task: CheckTask) -> some View {
+        Button("Can't reach") {
+            cancelNote = ""
+            cancelling = task
+        }
+        .buttonStyle(FieldPill())
     }
 
     /// The road the task points at, else a known road near its target.
@@ -257,13 +282,42 @@ struct TasksView: View {
             ?? store.allReports.first { $0.roadRef?.segmentId == id }?.kind
     }
 
-    /// On-device distance from the last fix to the task target.
+    /// Road distance of the task's route, else on-device straight-line distance from the last fix.
     private func distanceText(_ task: CheckTask) -> String? {
-        guard let here = store.lastCoord, let target = store.taskTarget(task) else { return nil }
-        let meters = CLLocation(latitude: here.lat, longitude: here.lon)
-            .distance(from: CLLocation(latitude: target.lat, longitude: target.lon))
+        let meters: Double
+        if task.status == .accepted, let route = store.taskRoutes[task.id]?.route {
+            meters = Double(route.distanceM)
+        } else {
+            guard let here = store.lastCoord, let target = store.taskTarget(task) else { return nil }
+            meters = CLLocation(latitude: here.lat, longitude: here.lon)
+                .distance(from: CLLocation(latitude: target.lat, longitude: target.lon))
+        }
         return Measurement(value: meters, unit: UnitLength.meters)
             .formatted(.measurement(width: .abbreviated, usage: .road))
+    }
+
+    /// ETA and roads of the route to an accepted task, or why there is none.
+    @ViewBuilder
+    private func routeRow(_ response: TaskRouteResponse) -> some View {
+        if let route = response.route {
+            Label(Self.routeText(route), systemImage: "car.fill")
+                .font(.subheadline)
+                .foregroundStyle(Color.ctInk)
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            Label("No route: \(response.detail ?? response.reason ?? "unknown")", systemImage: "exclamationmark.triangle")
+                .font(.subheadline)
+                .foregroundStyle(Color.ctWarning)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private static func routeText(_ route: TaskRoute) -> String {
+        var parts = ["\(route.etaMin) min"]
+        if !route.via.isEmpty { parts.append("via " + route.via.joined(separator: ", ")) }
+        if route.nearFire { parts.append("near fire") }
+        if route.simulatedTraffic { parts.append("sim. traffic") }
+        return parts.joined(separator: " · ")
     }
 
     private func accept(_ task: CheckTask) {

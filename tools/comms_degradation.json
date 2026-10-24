@@ -1,0 +1,131 @@
+{
+  "meta": {
+    "title": "Communications degradation parameters for CrisisTwin",
+    "version": 1,
+    "compiled": "2026-10-24",
+    "units_note": "share = fraction in [0, 1]; hours/minutes are durations; times of day are Pacific (PST in November, PDT in October) as stated in each source. provenance is sourced (read in the cited document), derived (arithmetic on sourced numbers, formula in note) or ASSUMPTION (no source found; rationale given and the value must be shown as an assumption in any UI).",
+    "label": "Parameters for planning experiments. Observed values are historical records; ASSUMPTION values are user-facing assumptions, never observations.",
+    "caveat": "Cell-site counts are not service availability: overlapping coverage, cells-on-wheels and roaming keep service up when sites fail (FCC DIRS reports say this on every page)."
+  },
+  "sources": {
+    "fcc-dirs-2019-10-26": {"kind": "primary", "citation": "FCC, Communications Status Report for Areas Impacted by California Public Safety Power Shutoffs, 26 Oct 2019 (DIRS), https://docs.fcc.gov/public/attachments/DOC-360452A1.pdf"},
+    "fcc-dirs-2019-10-30": {"kind": "primary", "citation": "FCC, same series, 29 and 30 Oct 2019 reports (mirror: https://www.tellusventure.com/downloads/fcc/2019/fcc_communications_status_report_california_30oct2019.pdf); original FCC URL not located"},
+    "cpuc-pge-psps-2019-10-09": {"kind": "primary", "citation": "PG&E, Public Safety Power Shutoff 9-12 Oct 2019 post-event report to the CPUC, https://www.cpuc.ca.gov/-/media/cpuc-website/divisions/safety-and-enforcement-division/reports/psps-post-event-reports/2019-and-earlier/pge-public-safety-power-shutoff-oct-912-report.pdf"},
+    "cpuc-pge-psps-2019-10-26": {"kind": "primary", "citation": "PG&E, PSPS 26-29 Oct 2019 post-event report (amended), https://webproda.cpuc.ca.gov/-/media/cpuc-website/divisions/safety-and-enforcement-division/reports/psps-post-event-reports/2019/pge-psps-postevent-report-oct-2629-2019-amended.pdf"},
+    "house-gossner-2020": {"kind": "primary", "citation": "A. Gossner, Fire Chief, City of Santa Rosa, testimony to US House Energy and Commerce Communications and Technology Subcommittee, 27 Feb 2020 (cites Cal OES counts), https://www.congress.gov/116/meeting/house/110641/witnesses/HHRG-116-IF16-Wstate-GossnerA-20200227.pdf"},
+    "nist-tn2252-sup": {"kind": "primary", "citation": "NIST TN 2252 Supplement (July 2023), Camp Fire NETTRA data; Appendix D Tables D-1..D-3 (CodeRED, BCSO output) and Table A-2 rows TD-078, VTD-19, https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252sup.pdf"},
+    "codered-fixture": {"kind": "fixture", "citation": "tools/comms_fixtures/codered_delivery_table.json, parsed by tools/comms_infra_data.py from NIST TN 2252 sup. Tables D-2 and D-3"},
+    "cdc-nhis-wireless-state-2018": {"kind": "primary", "citation": "CDC/NCHS NHIS Early Release, Table 1 modeled household telephone status of adults 18+ by state, 2018, https://archive.cdc.gov/www_cdc_gov/nchs/data/nhis/earlyrelease/Wireless_state_201912-508.pdf"},
+    "jenner-cpuc-d2007011": {"kind": "secondary", "citation": "Jenner & Block client alert on CPUC D.20-07-011 (adopted 16 Jul 2020), https://www.jenner.com/a/web/jsC8xNXB8TEjYWBUk1aJ9n/4k1WQf/New_Backup_Power_Mandates_for_California_Communications_Companies.pdf; decision text itself not retrieved"},
+    "ems1-911-failures": {"kind": "news", "citation": "EMS1, 911 failures during Calif. wildfires prompt changes, https://www.ems1.com/communications-dispatch/articles/911-failures-during-calif-wildfires-prompt-changes-nIGikhZZdTC3dG2u/ (cites CPUC sources and Cal OES; date not captured)"},
+    "cbs-sacramento-backup-power": {"kind": "news", "citation": "CBS Sacramento, a 66-site Butte County figure from a CPUC Public Advocates Office motion, relayed by search summary of https://www.cbsnews.com/amp/sacramento/news/cell-industry-require-backup-power-cell-tower-fire-zone (the fetched page itself did not contain the 66 figure; treat as unverified)"},
+    "govtech-codered": {"kind": "news", "citation": "GovTech, California's Camp Fire Highlights Major Failings in Phone-Based Alerts (LA Times data review; OnSolve; Paradise Police Chief Reinbold), https://www.govtech.com/gov-experience/californias-camp-fire-highlights-major-failings-in-phone-based-alerts.html"},
+    "frontline-camp": {"kind": "news", "citation": "PBS FRONTLINE, Camp Fire anniversary: new details on the troubled evacuation, https://www.pbs.org/wgbh/frontline/article/camp-fire-anniversary-new-details-troubled-evacuation/ (cites Butte County Grand Jury, BCSO, FEMA, OnSolve)"},
+    "sfchronicle-911": {"kind": "news", "citation": "San Francisco Chronicle, Camp Fire 911 calls: as flames raced in, https://preview-prod.w.sfchronicle.com/california-wildfires/article/Camp-Fire-911-calls-As-flames-raced-in-13541139.php (Paradise PD Lt. Anthony Borgman)"},
+    "nanog-caloes-2017": {"kind": "news", "citation": "Cal OES update of 10 Oct 2017 relayed on the NANOG list, https://mailman.nanog.org/pipermail/nanog/2017-October/092663.html (77 sites damaged or out, 35 repaired); relay, not the Cal OES original"}
+  },
+
+  "cell_sites": {
+    "butte_sites_served_dirs_2019": {"value": 174, "unit": "sites", "provenance": "sourced", "source_ids": ["fcc-dirs-2019-10-26"], "note": "DIRS 'cell sites served' for Butte County, 26 Oct 2019 (all reporting carriers). Same figure on 29 and 30 Oct. Counts for Nov 2018 are not published; assumed similar."},
+    "sonoma_sites_served_dirs_2019": {"value": 424, "unit": "sites", "provenance": "sourced", "source_ids": ["fcc-dirs-2019-10-30"], "note": "29-30 Oct 2019; the 26 Oct report shows 423."},
+    "marin_sites_served_dirs_2019": {"value": 268, "unit": "sites", "provenance": "sourced", "source_ids": ["fcc-dirs-2019-10-30"], "note": "29-30 Oct 2019."},
+    "california_sites_served_dirs_2019": {"value": 26120, "unit": "sites", "provenance": "sourced", "source_ids": ["fcc-dirs-2019-10-30"], "note": "Total across the 32 DIRS counties on 30 Oct 2019."},
+    "butte_asr_structures_fixture_count": {"value": 92, "unit": "structures", "provenance": "derived", "source_ids": ["fcc-dirs-2019-10-26"], "note": "Count of rows in tools/comms_fixtures/butte_asr_structures.json (FCC ASR, all uses, 2026-10-18 dump). Compare with 174 DIRS sites: ASR is not a cell-site census, so a generator must add sites (see docs/comms-infrastructure.md)."}
+  },
+
+  "fire_damage_to_sites": {
+    "camp_2018_butte_towers_lost_first_day": {"value": 17, "unit": "sites", "provenance": "sourced", "source_ids": ["ems1-911-failures"], "note": "News report of the figure from CPUC sources; Butte County's emergency services officer also said 'we lost 17 cell towers'. Day 1 = 8 Nov 2018. Damage or power loss."},
+    "camp_2018_paradise_towers_down": {"low": 7, "high": 9, "unit": "sites", "provenance": "sourced", "source_ids": ["govtech-codered"], "note": "Paradise Police Chief Eric Reinbold. Carriers' CPUC outage reports are confidential per a CPUC spokeswoman."},
+    "camp_2018_butte_sites_damaged_or_out": {"value": 66, "unit": "sites", "provenance": "sourced", "source_ids": ["cbs-sacramento-backup-power"], "note": "CPUC Public Advocates Office motion; unverified, see source note. Cumulative, not a snapshot."},
+    "camp_woolsey_2018_sites_offline_combined": {"value": 489, "unit": "sites", "provenance": "sourced", "source_ids": ["house-gossner-2020"], "note": "Cal OES figure for Camp and Woolsey together (Nov 2018); not separable."},
+    "tubbs_2017_towers_out_first_hours": {"value": 70, "unit": "sites", "provenance": "sourced", "source_ids": ["house-gossner-2020"], "note": "'roughly 70 cell towers knocked out ... within the first several hours' (fire damage, loss of power, loss of terrestrial communications)."},
+    "north_bay_2017_sites_offline_total": {"value": 341, "unit": "sites", "provenance": "sourced", "source_ids": ["house-gossner-2020"], "note": "Cal OES, whole Oct 2017 North Bay fire siege; mixes fire damage with PSPS-free power loss across several counties."},
+    "camp_butte_first_day_share_of_sites": {"value": 0.098, "unit": "share", "provenance": "derived", "source_ids": ["ems1-911-failures", "fcc-dirs-2019-10-26"], "note": "17 / 174. Numerator is Nov 2018, denominator is Oct 2019; calibration target for a county-level first-day loss."},
+    "camp_butte_cumulative_share_of_sites": {"value": 0.379, "unit": "share", "provenance": "derived", "source_ids": ["cbs-sacramento-backup-power", "fcc-dirs-2019-10-26"], "note": "66 / 174, same caveat; upper calibration target."},
+    "hazard_per_hour_inside_fire_perimeter": {"value": 0.25, "low": 0.1, "high": 0.5, "unit": "per_hour", "provenance": "ASSUMPTION", "rationale": "No source gives site survival against hours of fire exposure. Chosen so that most sites inside a fast fire footprint fail within a few hours (Tubbs: about 70 in the first several hours). Calibrate so that a Camp Fire replay loses about 17 of 174 Butte sites on day 1 and about 66 cumulatively once site coordinates and the perimeter are available. Use h = 1 - exp(-rate * hours_exposed)."},
+    "failure_cause_share_damage": {"value": 0.05, "unit": "share", "provenance": "derived", "source_ids": ["fcc-dirs-2019-10-30"], "note": "24 of 476 sites out, 30 Oct 2019 (PSPS period, not fire). Fire-time mix differs; used only as a prior for non-fire days."},
+    "failure_cause_share_transport": {"value": 0.174, "unit": "share", "provenance": "derived", "source_ids": ["fcc-dirs-2019-10-30"], "note": "83 of 476 (backhaul/fiber/microwave). Same caveat."},
+    "failure_cause_share_power": {"value": 0.737, "unit": "share", "provenance": "derived", "source_ids": ["fcc-dirs-2019-10-30"], "note": "351 of 476. Same caveat."}
+  },
+
+  "power": {
+    "psps_2019_10_09_customers": {"value": 729000, "unit": "customers", "provenance": "sourced", "source_ids": ["cpuc-pge-psps-2019-10-09"], "note": "Distribution customers de-energized, 9-12 Oct 2019 (Butte among the counties). Per-circuit footprints are in Appendix C of the report; a circuit-to-county table was not built."},
+    "psps_2019_10_26_unique_customers": {"value": 941000, "unit": "customers", "provenance": "sourced", "source_ids": ["cpuc-pge-psps-2019-10-26"], "note": "Unique customers over the 26 and 29 Oct events (amended report)."},
+    "psps_2019_10_26_mean_outage_duration": {"value": 55, "unit": "hours", "provenance": "sourced", "source_ids": ["cpuc-pge-psps-2019-10-26"], "note": "Average customer outage for the combined events; offshore wind lasted about 36 h in places."},
+    "psps_butte_site_outage_share_2019_10_30": {"value": 0.04, "unit": "share", "provenance": "derived", "source_ids": ["fcc-dirs-2019-10-30"], "note": "7 of 174 Butte sites out, 5 due to power (30 Oct 2019); 0 of 174 on 26 Oct, 6 of 174 (3.4 %) on 29 Oct."},
+    "psps_marin_site_outage_share_peak": {"value": 0.571, "unit": "share", "provenance": "sourced", "source_ids": ["fcc-dirs-2019-10-30"], "note": "Marin County 28 Oct 2019 as quoted in the 29 Oct report ('down from 57.1% yesterday'); worst county in the series."},
+    "psps_sonoma_site_outage_share_2019_10_29": {"value": 0.224, "unit": "share", "provenance": "derived", "source_ids": ["fcc-dirs-2019-10-30"], "note": "95 of 424. Sonoma was 16.5 % (70 of 424) on 30 Oct. A 27 % Sonoma peak on 28 Oct is cited in news but the FCC report was not retrieved."},
+    "power_site_outage_daily_remaining_ratio": {"low": 0.147, "high": 0.737, "unit": "ratio", "provenance": "derived", "source_ids": ["fcc-dirs-2019-10-30"], "note": "Share of sites still out one day later, once power returns: Marin 0.052 / 0.354 = 0.147 (29 to 30 Oct), Sonoma 0.165 / 0.224 = 0.737. Marin 28 to 29 Oct: 0.354 / 0.571 = 0.62. Recovery follows grid restoration, not tower repair."}
+  },
+
+  "backup_power": {
+    "cpuc_required_backup_hours_tier2_tier3_hftd": {"value": 72, "unit": "hours", "provenance": "sourced", "source_ids": ["jenner-cpuc-d2007011"], "note": "CPUC D.20-07-011 (16 Jul 2020): facilities-based wireless carriers must provide 72 h of on-site backup power in Tier 2 and Tier 3 High Fire Threat Districts within 12 months, with exemptions (no need, safety risk, infeasible). Applies only to scenarios dated after about July 2021. Secondary source; verify against the decision."},
+    "pre_2020_battery_hours": {"value": 4, "low": 2, "high": 8, "unit": "hours", "provenance": "ASSUMPTION", "rationale": "No published California fleet distribution found. The FCC's 2007 order for 8 h at cell sites was dropped after an industry challenge (reported by EMS1); Marin lost 57 % of sites by day 3 of the Oct 2019 PSPS, so a large share of sites ran out of reserve within roughly 1 to 2 days. Treat as a per-site draw from low..high, with a minority of generator-backed sites (share unknown)."},
+    "share_sites_exempt_or_noncompliant_after_2021": {"value": 0.15, "low": 0.0, "high": 0.3, "unit": "share", "provenance": "ASSUMPTION", "rationale": "The decision allows exemptions and each carrier's Communications Resiliency Plan lists them, but those filings were not retrieved. Placeholder range only."}
+  },
+
+  "recovery": {
+    "fire_damaged_sites_repaired_share_by_day_2": {"value": 0.45, "unit": "share", "provenance": "derived", "source_ids": ["nanog-caloes-2017"], "note": "35 of 77 damaged or out sites repaired in the Cal OES update of 10 Oct 2017, about 1.5 to 2 days after the Tubbs ignition (8 Oct 2017 evening). Relay of the state update; single data point, 2017."}
+  },
+
+  "alerting": {
+    "codered_initial_call_success_mean": {"value": 0.55, "unit": "share", "provenance": "sourced", "source_ids": ["nist-tn2252-sup"], "note": "NIST narrative: average 55 % of initial CodeRED phone calls connected (delivered or answering machine) on 8 Nov 2018. Our parse: unweighted mean 0.548, phone-weighted 0.57 over 28 messages."},
+    "codered_recall_success_mean": {"value": 0.07, "unit": "share", "provenance": "sourced", "source_ids": ["nist-tn2252-sup"], "note": "NIST: re-calls connected 7 % on average (15 re-calls, delay 5 to 8 min after the first call). Parse: 0.073 unweighted, 0.082 weighted."},
+    "codered_success_0713_1022_weighted": {"value": 0.588, "unit": "share", "provenance": "derived", "source_ids": ["codered-fixture"], "note": "Phone-weighted success, initial calls before 11:00 (12 messages, 21,912 phone contacts)."},
+    "codered_success_1146_1848_weighted": {"value": 0.507, "unit": "share", "provenance": "derived", "source_ids": ["codered-fixture"], "note": "Messages 11:46 to 18:48 (11 messages, 8,062 contacts)."},
+    "codered_success_1930_1950_weighted": {"value": 0.761, "unit": "share", "provenance": "derived", "source_ids": ["codered-fixture"], "note": "Messages 19:30 to 19:50, mostly areas outside the burned core (3 messages, 1,800 contacts)."},
+    "codered_success_after_midnight_weighted": {"value": 0.143, "unit": "share", "provenance": "derived", "source_ids": ["codered-fixture"], "note": "Messages 25:18 and 29:44 (Stirling City, Inskip area; 580 contacts). Intercept outcome 86 to 94 percent."},
+    "codered_08_32_dial_through_duration": {"value": 16, "unit": "minutes", "provenance": "sourced", "source_ids": ["nist-tn2252-sup"], "note": "NIST Table A-2 row from video VTD-19: call logs show 16 minutes to call the phones in Zones 2, 6, 7 and 13 (08:32 to 08:48); 1,604 of 4,459 phone contacts in those four zones were never reached even after the re-call (Tables D-2, D-3; the NIST row says 'failed to reach 1/3')."},
+    "codered_nor_cal_dial_capacity_low": {"value": 2000, "unit": "calls_per_minute", "provenance": "sourced", "source_ids": ["govtech-codered"], "note": "OnSolve's Troy Harper: Northern California is generally limited to 2,000 to 4,000 calls per minute (high end 4000). Single news quote."},
+    "codered_nor_cal_dial_capacity_high": {"value": 4000, "unit": "calls_per_minute", "provenance": "sourced", "source_ids": ["govtech-codered"], "note": "See low value."},
+    "opt_in_share_of_paradise_residents_upper_bound": {"value": 0.5, "unit": "share", "provenance": "sourced", "source_ids": ["frontline-camp"], "note": "'Fewer than half of Paradise's 26,000 residents had registered' by 8 Nov 2018. Exact registrations not published; the GovTech '27,000 signed up' line contradicts itself and is not used."},
+    "opt_in_share_of_paradise_residents": {"value": 0.35, "low": 0.2, "high": 0.5, "unit": "share", "provenance": "ASSUMPTION", "rationale": "Only the upper bound (below 50 %) is published. The Butte County Grand Jury figure that 7,000 of 52,000 evacuees received alerts (13.5 % of evacuees) bounds the delivered share from below. Registrations are per phone number or email, not per person."},
+    "evacuees_receiving_alerts_share": {"value": 0.135, "unit": "share", "provenance": "derived", "source_ids": ["frontline-camp"], "note": "7,000 / 52,000 from the Butte County Grand Jury report as cited by FRONTLINE; the definition of 'received' is the Grand Jury's."},
+    "wea_messages_sent_camp_2018": {"value": 0, "unit": "messages", "provenance": "sourced", "source_ids": ["frontline-camp"], "note": "FEMA has no record of WEA alerts from Butte County 8 to 10 Nov 2018; BCSO says its IPAWS attempts were unsuccessful. Replays of the Camp Fire must not send WEA. FEMA says WEA is not affected by network congestion."},
+    "people_reporting_mass_notification_camp": {"value": 0.125, "unit": "share", "provenance": "sourced", "source_ids": ["nist-tn2252-sup"], "note": "NIST Table A-2 row VTD-19 ('1/8 people say they got mass notification'); source video, small sample, wording is NIST's transcription."},
+    "wea_handset_capable_share": {"value": 0.9, "low": 0.8, "high": 0.97, "unit": "share", "provenance": "ASSUMPTION", "rationale": "Share of phones in a polygon able to display a WEA when a working site covers them. No source retrieved. Use only for what-if WEA scenarios, never for Camp 2018 replay."},
+    "wea_delivery_delay_after_issue": {"value": 2, "low": 0.5, "high": 10, "unit": "minutes", "provenance": "ASSUMPTION", "rationale": "No retrieved measurement of IPAWS to handset latency; typical figures are seconds to a few minutes. Placeholder for what-if scenarios."},
+    "ca_adults_wireless_only": {"value": 0.554, "unit": "share", "provenance": "sourced", "source_ids": ["cdc-nhis-wireless-state-2018"], "note": "California adults 18+, 2018, modeled estimate (SE 1.2 points)."},
+    "ca_adults_wireless_mostly": {"value": 0.201, "unit": "share", "provenance": "sourced", "source_ids": ["cdc-nhis-wireless-state-2018"], "note": "SE 0.9."},
+    "ca_adults_dual_use": {"value": 0.133, "unit": "share", "provenance": "sourced", "source_ids": ["cdc-nhis-wireless-state-2018"], "note": "SE 0.7."},
+    "ca_adults_landline_mostly": {"value": 0.053, "unit": "share", "provenance": "sourced", "source_ids": ["cdc-nhis-wireless-state-2018"], "note": "SE 0.4."},
+    "ca_adults_landline_only": {"value": 0.033, "unit": "share", "provenance": "sourced", "source_ids": ["cdc-nhis-wireless-state-2018"], "note": "SE 0.3."},
+    "ca_adults_no_telephone": {"value": 0.025, "unit": "share", "provenance": "sourced", "source_ids": ["cdc-nhis-wireless-state-2018"], "note": "Statewide; the Paradise or Butte share is not published. Paradise skewed older and landline-reliant per news but no number was found."},
+    "ca_adults_reachable_only_by_landline": {"value": 0.086, "unit": "share", "provenance": "derived", "source_ids": ["cdc-nhis-wireless-state-2018"], "note": "Landline-only 0.033 + landline-mostly 0.053. A cell-site outage cannot cut these (a wireline outage can); they do not receive WEA."}
+  },
+
+  "e911": {
+    "paradise_pd_dispatch_consoles": {"value": 3, "unit": "positions", "provenance": "sourced", "source_ids": ["sfchronicle-911", "nist-tn2252-sup"], "note": "Paradise PD's three 911 consoles; NIST row TD-078 at 09:45 also records 'all 3 consoles already in use; all phone lines (15) being used'."},
+    "paradise_pd_911_phone_lines": {"value": 15, "unit": "lines", "provenance": "sourced", "source_ids": ["nist-tn2252-sup"], "note": "NIST Table A-2 row TD-078, 09:45, 8 Nov 2018."},
+    "paradise_pd_dispatchers_at_ignition": {"value": 1, "unit": "people", "provenance": "sourced", "source_ids": ["sfchronicle-911"], "note": "One on duty; two more joined, filling the three consoles."},
+    "paradise_calls_answered_0630_0820": {"value": 132, "unit": "calls", "provenance": "sourced", "source_ids": ["sfchronicle-911"], "note": "'At least 132' calls answered before the reroute; about 1.2 calls per minute average."},
+    "paradise_reroute_clock_minutes": {"value": 500, "unit": "minutes_after_local_midnight", "provenance": "sourced", "source_ids": ["sfchronicle-911"], "note": "08:20 PST on 8 Nov 2018 (500 min): Paradise dispatch rerouted all calls to Chico because of overwhelming volume. The NIST row at 09:45 shows all three consoles still in use, which suggests Paradise kept taking some calls."},
+    "butte_county_sheriff_psap_positions": {"value": 3, "low": 2, "high": 6, "unit": "positions", "provenance": "ASSUMPTION", "rationale": "Not published in anything retrieved. BCSO also took calls (SF Chronicle). Placeholder to keep a reroute inject runnable; replace with the CalOES 911 Branch PSAP roster or a records request."},
+    "chico_psap_positions": {"value": 4, "low": 3, "high": 8, "unit": "positions", "provenance": "ASSUMPTION", "rationale": "Chico receiving PSAP capacity not found. Placeholder for the PSAP-reroute inject; replace when sourced."}
+  },
+
+  "observed_series": {
+    "note": "Cell sites out as a share of sites served, FCC DIRS, 11:30 EDT snapshots. Used as calibration series for PSPS-style outages.",
+    "rows": [
+      {"date": "2019-10-26", "area": "California", "out": 32, "served": 9498, "source_ids": ["fcc-dirs-2019-10-26"]},
+      {"date": "2019-10-26", "area": "Butte", "out": 0, "served": 174, "source_ids": ["fcc-dirs-2019-10-26"]},
+      {"date": "2019-10-29", "area": "Butte", "out": 6, "served": 174, "source_ids": ["fcc-dirs-2019-10-30"]},
+      {"date": "2019-10-29", "area": "Marin", "out": 95, "served": 268, "source_ids": ["fcc-dirs-2019-10-30"]},
+      {"date": "2019-10-29", "area": "Sonoma", "out": 95, "served": 424, "source_ids": ["fcc-dirs-2019-10-30"]},
+      {"date": "2019-10-29", "area": "California", "out": 463, "served": 26120, "source_ids": ["fcc-dirs-2019-10-30"]},
+      {"date": "2019-10-30", "area": "Butte", "out": 7, "served": 174, "source_ids": ["fcc-dirs-2019-10-30"]},
+      {"date": "2019-10-30", "area": "Marin", "out": 14, "served": 268, "source_ids": ["fcc-dirs-2019-10-30"]},
+      {"date": "2019-10-30", "area": "Sonoma", "out": 70, "served": 424, "source_ids": ["fcc-dirs-2019-10-30"]},
+      {"date": "2019-10-30", "area": "California", "out": 476, "served": 26120, "source_ids": ["fcc-dirs-2019-10-30"]}
+    ]
+  },
+
+  "gaps": [
+    "Camp Fire 2018 DIRS or CPUC per-county cell-site outage time series: carrier outage reports to the CPUC are confidential and no FCC DIRS Camp Fire report was found.",
+    "Tubbs 2017 and Kincade 2019 hour-by-hour site loss in the burned area: only daily county snapshots (Kincade, PSPS-dominated) and one early-hours count (Tubbs) found.",
+    "Real cell-site coordinates: OpenCelliD needs an account token (excluded); HIFLD Open was deactivated in Aug 2025; ASR and ULS cover few cell sites.",
+    "Backup battery duration distribution and generator share in California before 2020; carrier Communications Resiliency Plans (CPUC, filed Jan 2021) not retrieved.",
+    "Butte County Sheriff and Chico PSAP call-taker positions; Butte County 2018 CodeRED registration count.",
+    "Circuit-to-county PSPS footprint table (Appendix C of the PG&E reports) not built."
+  ]
+}

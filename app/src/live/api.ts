@@ -14,6 +14,7 @@ import type {
   LiveApiError,
   RejectProposalResponse,
   ReplanResponse,
+  TaskRoute,
   TriageAction,
   TwinMonitor,
 } from "./types";
@@ -69,9 +70,9 @@ function describe(status: number, body: Partial<LiveApiError> | null): string {
   return `Live API returned HTTP ${status}.`;
 }
 
-async function request<T>(
+export async function request<T>(
   token: string,
-  method: "GET" | "POST",
+  method: "GET" | "POST" | "DELETE",
   path: string,
   body?: unknown,
   signal?: AbortSignal,
@@ -103,7 +104,7 @@ async function request<T>(
   }
   if (!response.ok) {
     const err = (typeof data === "object" && data !== null ? data : null) as Partial<LiveApiError> | null;
-    throw new LiveError(response.status, err?.error ?? null, describe(response.status, err));
+    throw new LiveError(response.status, err?.error ?? err?.reason ?? null, describe(response.status, err));
   }
   if (data === null && response.status !== 204) {
     throw new LiveError(response.status, "bad_response", "The live API returned an unexpected response.");
@@ -187,3 +188,7 @@ export const drillAction = (token: string, body: DrillRequest) =>
 
 export const runImpact = (token: string, body: ImpactRequest) =>
   request<ImpactResponse>(token, "POST", `incidents/${INCIDENT_ID}/impact`, body);
+
+/** The route from the responder (or the assignee's last location) to an open task. */
+export const fetchTaskRoute = (token: string, taskId: string, signal?: AbortSignal) =>
+  request<TaskRoute>(token, "GET", `tasks/${encodeURIComponent(taskId)}/route`, undefined, signal);

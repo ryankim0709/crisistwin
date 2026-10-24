@@ -32,6 +32,8 @@ struct AboutView: View {
                     connectionContent
                 }
                 .ctPanel()
+
+                ServerSettingsCard { retry() }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 8)

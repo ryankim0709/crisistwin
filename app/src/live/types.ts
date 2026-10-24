@@ -3,6 +3,8 @@
 // Times are UTC ISO 8601 strings with `Z`. Coordinates are WGS84 [lon, lat]. Distances are meters.
 // "Drill time" fields (replay_*) are 2018 Camp Fire replay times; everything else is wall time.
 
+import type { DrillInject } from './injects'
+
 export type LonLat = [lon: number, lat: number]
 export type IsoTime = string
 
@@ -53,7 +55,10 @@ export interface FieldReport {
   received_at: IsoTime
   note: string | null
   status: ReportStatus
-  evidence_class: 'field_report'
+  /** `historical_record`: a 2018 911 / radio entry entered at its drill time; counts only once confirmed. */
+  evidence_class: 'field_report' | 'drill_fixture' | 'historical_record'
+  /** Set on `historical_record` reports. */
+  record?: { id: string; channel: string; source_locator: string | null } | null
   /** v2: drill time at received_at; null when no drill ran. */
   replay_at: IsoTime | null
 }
@@ -118,6 +123,8 @@ export interface CreateTaskRequest {
   target: { segment_id?: string; coord?: LonLat }
   report_ids: string[]
   note?: string
+  /** `assist`: send a responder to a person (help reports); default `verify`. */
+  kind?: 'verify' | 'assist'
 }
 
 // ---- v2: drill clock ----
@@ -421,6 +428,8 @@ export interface HelpRequest {
 }
 export interface ResponderPosition {
   party_key: string
+  /** Simulated responder (ADR 0038): shown with a "sim" tag. */
+  simulated?: boolean
   coord: LonLat
   accuracy_m: number | null
   at: IsoTime
@@ -449,6 +458,11 @@ export interface CommandResponse {
   /** Newest 50 entries of the controller audit log, newest first. */
   decisions?: Decision[]
   response_record?: ResponseRecordItem[]
+  ground_record?: GroundRecord
+  /** Drill injects (instructor panel), any status; absent from older servers. */
+  injects?: DrillInject[]
+  /** Zones with no phone signal now (a comms_outage inject is active). */
+  no_signal_zone_ids?: string[]
   /** All pending plus the latest 20 decided, newest first. */
   proposals: Proposal[]
   /** Newest 500. */
@@ -548,6 +562,26 @@ export interface TwinMonitor {
 export interface LiveApiError {
   error: string
   detail?: string
+  /** Task route errors (409 no_origin) carry `reason` instead of `error`. */
+  reason?: string
+}
+
+/** GET tasks/{id}/route (docs/live-reports.md "Responder route to a task"); planner route, twin congestion simulated. */
+export interface TaskRoute {
+  task_id: string
+  route: {
+    line: LonLat[]
+    via: string[]
+    distance_m: number
+    eta_min: number
+    exposure: 'clear' | 'near_fire'
+    congestion: 'twin' | 'unavailable'
+    congested_edges: number
+  } | null
+  reason: 'unreachable' | 'no_origin' | null
+  detail: string | null
+  evidence_class: string
+  as_of: IsoTime
 }
 
 // ---- Impact analysis (docs/live-reports.md "Impact analysis"); planner routes computed, twin values simulated ----
@@ -649,4 +683,30 @@ export interface ResponseRecordItem {
   time_precision: string | null
   zone_ids: string[]
   segment_ids: string[]
+}
+
+/** `command.ground_record`: the 2018 911 / radio / rescue record up to drill time, de-identified
+ * (template summaries, placed by zone only). Historical, `reported`; never drill reports. */
+export type GroundChannel = '911' | 'radio' | 'rescue' | 'notification' | 'evacuation'
+export interface GroundRecordItem {
+  id: string
+  at: IsoTime
+  time_precision: string | null
+  channel: GroundChannel
+  category: string
+  road_name: string | null
+  summary: string
+  evidence_class: string
+  source_locator: string | null
+  zone_id: string | null
+}
+export interface GroundRecord {
+  available: boolean
+  label: string
+  window_min: number
+  until: IsoTime
+  totals: Record<GroundChannel, number>
+  window: Record<GroundChannel, number>
+  zones: { zone_id: string; items: number; help: number; fire: number }[]
+  items: GroundRecordItem[]
 }

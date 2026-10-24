@@ -9,6 +9,7 @@ from typing import Any
 
 from pymongo import ASCENDING, DESCENDING, IndexModel
 from pymongo.database import Database
+from pymongo.errors import CollectionInvalid
 
 DATE = {"bsonType": "date"}
 STR = {"bsonType": "string"}
@@ -38,6 +39,7 @@ VALIDATORS: dict[str, dict[str, Any]] = {
             "created_at": DATE,
             "last_seen_at": DATE,
             "expires_at": DATE,
+            "simulated": {"bsonType": "bool"},
         },
     ),
     "live_reports": _schema(
@@ -66,7 +68,7 @@ VALIDATORS: dict[str, dict[str, Any]] = {
             "updated_at": DATE,
             "replay_at": NULLABLE_DATE,
             "status": _enum("unverified", "corroborated", "responder_confirmed", "confirmed", "dismissed", "resolved"),
-            "evidence_class": _enum("field_report", "drill_fixture"),
+            "evidence_class": _enum("field_report", "drill_fixture", "historical_record"),
         },
     ),
     "live_tasks": _schema(
@@ -124,6 +126,19 @@ VALIDATORS: dict[str, dict[str, Any]] = {
             "decided_at": NULLABLE_DATE,
         },
     ),
+    "live_injects": _schema(
+        ["id", "incident_id", "type", "params", "at", "status", "actor", "created_at"],
+        {
+            "id": STR,
+            "incident_id": STR,
+            "type": _enum("psap_reroute", "comms_outage", "silent_closure", "shelter_full", "fire_jump"),
+            "params": {"bsonType": "object"},
+            "at": DATE,
+            "status": _enum("scheduled", "active", "ended"),
+            "actor": STR,
+            "created_at": DATE,
+        },
+    ),
     "live_checkins": _schema(
         ["id", "incident_id", "party_key", "status", "at"],
         {
@@ -155,6 +170,19 @@ VALIDATORS: dict[str, dict[str, Any]] = {
             "guidance_version": {"bsonType": ["int", "long"], "minimum": 1},
             "at": DATE,
             "expires_at": DATE,
+        },
+    ),
+    "live_plan_routes": _schema(
+        ["incident_id", "zone_id", "destination_id", "via_key", "edge_ids"],
+        {
+            "incident_id": STR,
+            "zone_id": STR,
+            "destination_id": STR,
+            "via_key": STR,
+            "via": {"bsonType": "array", "items": STR},
+            "edge_ids": {"bsonType": "array", "items": STR},
+            "planned_at": DATE,
+            "replay_at": NULLABLE_DATE,
         },
     ),
     "live_responder_locations": _schema(
@@ -198,6 +226,10 @@ INDEXES: dict[str, list[IndexModel]] = {
         IndexModel([("id", ASCENDING)], unique=True),
         IndexModel([("incident_id", ASCENDING), ("status", ASCENDING), ("created_at", DESCENDING)]),
     ],
+    "live_injects": [
+        IndexModel([("id", ASCENDING)], unique=True),
+        IndexModel([("incident_id", ASCENDING), ("at", ASCENDING)]),
+    ],
     "live_checkins": [
         IndexModel([("incident_id", ASCENDING), ("party_key", ASCENDING)], unique=True),
         IndexModel([("incident_id", ASCENDING), ("zone_id", ASCENDING), ("status", ASCENDING)]),
@@ -206,6 +238,10 @@ INDEXES: dict[str, list[IndexModel]] = {
         IndexModel([("incident_id", ASCENDING), ("party_key", ASCENDING), ("zone_id", ASCENDING)], unique=True),
         IndexModel([("incident_id", ASCENDING), ("zone_id", ASCENDING), ("destination_id", ASCENDING)]),
         IndexModel([("expires_at", ASCENDING)], expireAfterSeconds=0),
+    ],
+    "live_plan_routes": [
+        IndexModel([("incident_id", ASCENDING), ("zone_id", ASCENDING), ("destination_id", ASCENDING),
+                    ("via_key", ASCENDING)], unique=True),
     ],
     "live_responder_locations": [
         IndexModel([("incident_id", ASCENDING), ("party_key", ASCENDING)], unique=True),
@@ -220,8 +256,10 @@ DRILL_DATA_COLLECTIONS = (
     "live_drills",
     "live_guidance",
     "live_proposals",
+    "live_injects",
     "live_checkins",
     "live_destination_choices",
+    "live_plan_routes",
     "live_responder_locations",
 )
 """Dropped by ``live_init_db --drop-drill-data`` (devices are kept so tokens stay valid)."""
@@ -240,8 +278,14 @@ def apply(db: Database, drop_drill_data: bool = False) -> list[str]:
             db.command("collMod", name, validator=validator, validationLevel="strict", validationAction="error")
             lines.append(f"updated validator {name}")
         else:
-            db.create_collection(name, validator=validator, validationLevel="strict", validationAction="error")
-            lines.append(f"created {name}")
+            try:
+                db.create_collection(name, validator=validator, validationLevel="strict", validationAction="error")
+                lines.append(f"created {name}")
+            except CollectionInvalid:
+                # A background thread (auto-replan, twin warm-up) wrote to it since the listing,
+                # which creates it implicitly; apply the validator instead.
+                db.command("collMod", name, validator=validator, validationLevel="strict", validationAction="error")
+                lines.append(f"updated validator {name}")
         created = db[name].create_indexes(INDEXES[name])
         lines.append(f"  indexes {name}: {', '.join(created)}")
     return lines

@@ -274,6 +274,8 @@ export interface ConfigPanelProps {
   /** Validated JSON import. Returns issues to show, empty on success. */
   onImport: (json: string) => ScenarioIssue[];
   onLoadDemo: () => void;
+  /** Rendered under the export buttons (the "Use as live drill" action). */
+  liveDrill?: ReactNode;
   /** Firefighting inputs and last result, rendered after the conditions. */
   firefighting?: ReactNode;
 }

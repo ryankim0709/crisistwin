@@ -67,10 +67,12 @@ class Command(BaseCommand):
         status = next((r["status"] for r in mine["reports"] if r["id"] == rid), None)
         self.expect(f"phone: sees its report confirmed ({status})", status == "confirmed")
 
-        self.call("POST", f"incidents/{inc}/replan", controller, {})
+        replanned = self.call("POST", f"incidents/{inc}/replan", controller, {})
         cmd = self.call("GET", f"incidents/{inc}/command", controller)
         pending = [p for p in cmd["proposals"] if p["status"] == "pending"]
-        self.expect("web: a guidance proposal is pending", bool(pending))
+        # On a drill earlier runs already replanned, "no_changes" with guidance published is correct too.
+        up_to_date = replanned.get("detail") == "no_changes" and bool(cmd["guidance"])
+        self.expect("web: a guidance proposal is pending (or guidance is already current)", bool(pending) or up_to_date)
         for proposal in pending:
             self.call("POST", f"proposals/{proposal['id']}/approve", controller, {})
 
@@ -117,9 +119,54 @@ class Command(BaseCommand):
         tasks = self.call("GET", "me/tasks", responder)
         self.expect("phone: responder receives the check task", bool(tasks["tasks"]))
 
+        self.check_sources(inc, controller, responder)
+
         if self.fails:
             raise CommandError(f"{self.fails} check(s) failed.")
         self.stdout.write(self.style.SUCCESS("live loop OK"))
+
+    def check_sources(self, inc, controller, responder):
+        """Each data source reaches /live, never runs ahead of the drill clock, and keeps its labels."""
+        cmd = self.call("GET", f"incidents/{inc}/command", controller)
+        until = cmd["drill"]["replay_now"]
+
+        record = cmd.get("response_record") or []
+        self.expect(f"2018 response record: {len(record)} events, none after {until}",
+                    bool(record) and all(e["at"] <= until for e in record)
+                    and "simulated" not in {e["evidence_class"] for e in record})
+
+        ground = cmd.get("ground_record") or {}
+        items = ground.get("items") or []
+        self.expect(f"2018 calls/radio record: available, {len(items)} items so far",
+                    ground.get("available") is True and bool(items) and all(i["at"] <= until for i in items))
+        self.expect("2018 calls/radio record: no points served",
+                    all("coord" not in i and "text_sha12" not in i for i in items))
+
+        queued = [r for r in cmd["reports"] if r["evidence_class"] == "historical_record"]
+        unconfirmed_ids = {r["id"] for r in queued if r["status"] not in ("confirmed", "resolved")}
+        public_ids = {rid for i in cmd["public_items"] for rid in i["report_ids"]}
+        self.expect(f"2018 record in the review queue: {len(queued)} reports, unconfirmed ones not public",
+                    bool(queued) and unconfirmed_ids.isdisjoint(public_ids))
+        listed = self.call("GET", f"incidents/{inc}/reports", responder)["reports"]
+        self.expect("2018 record hidden from responder phones",
+                    not [r for r in listed if r["evidence_class"] == "historical_record"])
+
+        twin = None
+        for _ in range(30):  # the twin builds in the background after a server start (~10-60 s)
+            try:
+                twin = self.call("GET", f"incidents/{inc}/twin", controller)
+                break
+            except CommandError as exc:
+                if "twin_warming" not in str(exc):
+                    raise
+                time.sleep(3)
+        if twin is None:
+            raise CommandError("The twin is still warming after 90 s.")
+        traffic = twin.get("traffic") or []
+        on_edges = sum(e["veh"] for e in traffic)
+        self.expect(f"twin traffic: {len(traffic)} edges, {on_edges} vehicles, labelled simulated",
+                    twin.get("evidence_class") == "simulated" and twin.get("conserved") is True
+                    and on_edges <= twin["totals"]["en_route_veh"])
 
     def call(self, method, path, token=None, body=None):
         headers = {"Accept": "application/json"}

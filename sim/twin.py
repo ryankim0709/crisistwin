@@ -52,7 +52,7 @@ MAX_RADIUS_M = 5000.0
 RECENT_ARRIVALS_S = 600  # destinations: arrived_last_10_min_veh
 
 ACTION_TYPES = ("order_zone", "warn_zone", "close_road", "reopen_road", "capacity_changed", "contraflow",
-                "end_contraflow", "hold_inbound", "open_refuge", "reroute_zone")
+                "end_contraflow", "hold_inbound", "open_refuge", "fill_destination", "reroute_zone")
 ACTOR_KINDS = ("controller", "operator", "field_report")
 ACTION_KEYS = {"id", "type", "at", "target", "params", "actor", "rationale"}
 DIRECTIONS = ("both", "outbound", "inbound")
@@ -332,6 +332,8 @@ class Twin:
                 "end_contraflow": {"target": ["corridor"], "params": {}},
                 "hold_inbound": {"target": ["corridor"], "params": {}},
                 "open_refuge": {"target": ["destination_id"], "params": {}},
+                "fill_destination": {"target": ["destination_id"], "params": {},
+                                     "note": "marks the destination full from now (drill injects); not undoable"},
                 "reroute_zone": {"target": ["zone_id", "zone_ids"], "params": {"destination_id": "id or null"}},
             },
             "road_selectors": ["edge_indexes", "edge_ids", "road_name (+ near [lon, lat], radius_m, direction)",
@@ -499,6 +501,9 @@ class Twin:
             if s.dest_list[s.dest_ix[dest]].kind not in (REFUGE_KIND, "shelter"):
                 raise ActionError("not_a_refuge", f"{dest} is an exit, not a refuge or shelter", aid)
             return {"destination_id": dest}, warnings
+        if typ == "fill_destination":
+            allow({"destination_id"}, set())
+            return {"destination_id": destination(t.get("destination_id"))}, warnings
         if typ in ("contraflow", "end_contraflow", "hold_inbound"):
             allow({"corridor"}, set())
             c = corridor()
@@ -707,6 +712,9 @@ class Twin:
             pending = {r["resolved"]["destination_id"] for r in self._pending("open_refuge")}
             if e.dest_open[d] or resolved["destination_id"] in pending:
                 raise ActionError("already_open", f"{resolved['destination_id']} is already open", aid)
+        elif typ == "fill_destination":
+            if e.dest_full[s.dest_ix[resolved["destination_id"]]]:
+                raise ActionError("already_full", f"{resolved['destination_id']} is already full", aid)
         elif typ == "reroute_zone" and resolved["destination_id"] is not None:
             d = s.dest_ix[resolved["destination_id"]]
             if e.dest_full[d]:
@@ -755,6 +763,8 @@ class Twin:
             kw["closure_drains"] = True
         elif typ == "open_refuge":
             ev_type, text = "shelter_opened", f"open {s.dest_list[s.dest_ix[dest]].name}"
+        elif typ == "fill_destination":
+            ev_type, text = "shelter_full", f"{s.dest_list[s.dest_ix[dest]].name} full"
         else:  # reroute_zone
             ev_type = "zone_rerouted"
             text = (f"route {zones_txt} to {s.dest_list[s.dest_ix[dest]].name}" if dest
@@ -875,6 +885,8 @@ class Twin:
             return any(i in e.contraflow_out for i in edges)
         if typ == "open_refuge":
             return e.dest_open[s.dest_ix[res["destination_id"]]]
+        if typ == "fill_destination":
+            return e.dest_full[s.dest_ix[res["destination_id"]]]
         if typ == "reroute_zone":
             d = None if res["destination_id"] is None else s.dest_ix[res["destination_id"]]
             return d is not None and all(e.zone_dest.get(s.zone_ix[z]) == d for z in res["zone_ids"])

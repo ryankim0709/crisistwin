@@ -8,24 +8,150 @@ Contract: docs/live-reports.md "Controllers".
 
 from __future__ import annotations
 
+import json
 import logging
+import threading
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import UTC
 from typing import Any, Protocol
 
+from pymongo import UpdateOne
+from pymongo.errors import BulkWriteError
+
 from livecore import twinplan
+from livecore.inbound import congestion_factors
 from livecore.planner import PLANNER_VERSION, ZoneGuidance, plan
 from livecore.policy import GuidanceSummary, diff
+from livecore.routing import SWITCH_MIN_DWELL_S, SWITCH_MIN_GAIN_FRACTION, SWITCH_MIN_GAIN_S, Incumbent
 
 from . import twin_service
-from .common import live_setting
-from .state import Snapshot
+from .common import col, live_setting
+from .state import Snapshot, current_guidance
 
 log = logging.getLogger(__name__)
 
 CONTROLLER_IDS = ("rule", "twin")
 TWIN_ACTOR = {"kind": "controller", "id": "twin-controller"}
+PLAN_CONGESTION_CACHE_S = 10.0
+"""Wall seconds the twin's per-edge congestion is reused for an incident at one drill time
+(a confirm and the lazy replan right after it plan on the same simulated queues)."""
+CONGESTION_UNAVAILABLE = "unavailable"
+"""``inputs.congestion`` when the twin is not ready (warming, busy, failed, or LIVE_CONTROLLER=rule
+before it was built): the plan uses free-flow edge costs."""
+PLAN_ROUTES = "live_plan_routes"
+"""Edges of the routes the planner proposed, so published guidance (destination + via) can be
+matched to its edges for hysteresis. Never served to clients."""
+
+
+@dataclass(frozen=True)
+class PlanContext:
+    """Inputs the planner takes besides the snapshot: simulated congestion and incumbents."""
+
+    congestion: dict[str, float] | None
+    """Directed edge id -> travel-time factor (simulated); None when unavailable."""
+    label: str
+    """``twin@<twin clock ISO>`` or CONGESTION_UNAVAILABLE."""
+    incumbents: dict[str, Incumbent] = field(default_factory=dict)
+
+    def inputs(self) -> dict[str, Any]:
+        """The proposal ``inputs`` fields that record it."""
+        return {
+            "congestion": self.label,
+            "congestion_evidence_class": "simulated" if self.congestion is not None else None,
+            "congested_edges": len(self.congestion or {}),
+            "incumbents": len(self.incumbents),
+            "incumbents_with_edges": sum(1 for i in self.incumbents.values() if i.edge_ids),
+            "hysteresis": {"min_gain_s": SWITCH_MIN_GAIN_S, "min_gain_fraction": SWITCH_MIN_GAIN_FRACTION,
+                           "min_dwell_s": SWITCH_MIN_DWELL_S},
+        }
+
+
+_congestion_lock = threading.Lock()
+_congestion: dict[str, tuple[float, Any, dict[str, float], str]] = {}
+
+
+def plan_congestion(snapshot: Snapshot) -> tuple[dict[str, float] | None, str]:
+    """``(factors, label)`` from the synced twin at the drill's ``replay_now``: the same factors as
+    responder routes (``livecore.inbound.congestion_factors``). ``(None, "unavailable")`` unless
+    the twin inputs are already built: planning never waits for the twin to warm."""
+    key = snapshot.incident_id
+    with _congestion_lock:
+        hit = _congestion.get(key)
+        if hit is not None and time.monotonic() - hit[0] < PLAN_CONGESTION_CACHE_S and hit[1] == snapshot.clock.replay_now:
+            return hit[2], hit[3]
+    if twin_service.status()["status"] != "ready":
+        return None, CONGESTION_UNAVAILABLE
+    try:
+        twin_now, speeds = twin_service.edge_speeds_at(snapshot)
+    except twin_service.TwinUnavailable:
+        return None, CONGESTION_UNAVAILABLE
+    except Exception:  # noqa: BLE001 - a twin failure means free-flow planning, never a failed replan
+        log.exception("live controller: reading the twin's edge speeds failed; planning free-flow")
+        return None, CONGESTION_UNAVAILABLE
+    factors = congestion_factors(speeds, snapshot.index.drill.roads.edges)
+    label = f"twin@{twin_now}"
+    with _congestion_lock:
+        _congestion[key] = (time.monotonic(), snapshot.clock.replay_now, factors, label)
+    return factors, label
+
+
+def _via_key(via: Any) -> str:
+    """A scalar key for a route's ``via`` (a unique index over an array would index each name)."""
+    return json.dumps([str(v) for v in via or ()], ensure_ascii=False)
+
+
+def incumbents(snapshot: Snapshot, published: Mapping[str, GuidanceSummary]) -> dict[str, Incumbent]:
+    """Zone id -> the route it follows now: each moving published zone's destination, with the
+    edges of the planned route that had the same destination and via (``live_plan_routes``) and
+    the drill seconds since its current version was published (``replay_at``; dwell rule)."""
+    moving = {z: s for z, s in published.items() if s.level != "none" and not s.no_route and s.destination_id}
+    if not moving:
+        return {}
+    replay_now = snapshot.clock.replay_now
+    held: dict[str, float] = {}
+    for doc in current_guidance(snapshot.incident_id):
+        at = doc.get("replay_at")
+        if at is not None and replay_now is not None:
+            at = at if at.tzinfo is not None else at.replace(tzinfo=UTC)
+            held[doc["zone_id"]] = max(0.0, (replay_now - at).total_seconds())
+    docs = col(PLAN_ROUTES).find({"incident_id": snapshot.incident_id, "zone_id": {"$in": sorted(moving)}},
+                                 {"_id": 0, "zone_id": 1, "destination_id": 1, "via_key": 1, "edge_ids": 1})
+    edges: dict[tuple[str, str, str], tuple[str, ...]] = {
+        (d["zone_id"], d["destination_id"], d["via_key"]): tuple(d.get("edge_ids") or ()) for d in docs
+    }
+    return {
+        z: Incumbent(s.destination_id, edges.get((z, s.destination_id, _via_key(s.via))) or None, held.get(z))
+        for z, s in sorted(moving.items())
+        if s.destination_id is not None
+    }
+
+
+def plan_context(snapshot: Snapshot, published: Mapping[str, GuidanceSummary]) -> PlanContext:
+    factors, label = plan_congestion(snapshot)
+    return PlanContext(factors, label, incumbents(snapshot, published))
+
+
+def remember_routes(incident_id: str, guidance: list[ZoneGuidance], now: Any, replay_at: Any) -> None:
+    """Store the edges of every proposed route, keyed by (zone, destination, via)."""
+    ops = [
+        UpdateOne(
+            {"incident_id": incident_id, "zone_id": g.zone_id, "destination_id": g.destination_id,
+             "via_key": _via_key(g.route.via)},
+            {"$set": {"via": list(g.route.via), "edge_ids": list(g.route.edge_ids), "planned_at": now,
+                      "replay_at": replay_at}},
+            upsert=True,
+        )
+        for g in guidance
+        if g.route is not None and g.destination_id is not None and not g.no_route and g.level != "none"
+    ]
+    if not ops:
+        return
+    try:
+        col(PLAN_ROUTES).bulk_write(ops, ordered=False)
+    except BulkWriteError:  # a concurrent replan upserted the same key; the memory is best-effort
+        log.warning("live controller: some planned routes were not remembered (concurrent replan)")
 
 
 @dataclass(frozen=True)
@@ -36,6 +162,8 @@ class ControllerPlan:
     """``{id, version, fallback}``: which controller produced the guidance, and why not the twin."""
     twin: dict[str, Any] | None
     """What-if evidence behind the destinations (TwinController only)."""
+    context: PlanContext | None = None
+    """Congestion and incumbents the guidance was planned with."""
 
 
 class Controller(Protocol):
@@ -51,9 +179,11 @@ class RuleController:
         self.fallback = fallback
 
     def propose(self, snapshot: Snapshot, published: Mapping[str, GuidanceSummary]) -> ControllerPlan:
+        ctx = plan_context(snapshot, published)
         guidance = plan(snapshot.index.drill, snapshot.clock.replay_now, snapshot.fire, snapshot.blocked,
-                        snapshot.full_destinations)
-        return ControllerPlan(guidance, {"id": self.id, "version": PLANNER_VERSION, "fallback": self.fallback}, None)
+                        snapshot.full_destinations, congestion=ctx.congestion, incumbents=ctx.incumbents)
+        return ControllerPlan(guidance, {"id": self.id, "version": PLANNER_VERSION, "fallback": self.fallback}, None,
+                              ctx)
 
 
 class TwinController:
@@ -68,7 +198,7 @@ class TwinController:
         moving = twinplan.moving_zones(base.guidance, {c.zone_id for c in changes})
         info = {"id": self.id, "version": twinplan.TWIN_CONTROLLER_VERSION, "fallback": None}
         if not moving:
-            return ControllerPlan(base.guidance, info, None)
+            return ControllerPlan(base.guidance, info, None, base.context)
         if not twin_service.ensure_ready():
             return self._fallback(base, "twin_warming")
         try:
@@ -84,14 +214,15 @@ class TwinController:
 
     @staticmethod
     def _fallback(base: ControllerPlan, reason: str) -> ControllerPlan:
-        return ControllerPlan(base.guidance, {"id": "rule", "version": PLANNER_VERSION, "fallback": reason}, None)
+        return ControllerPlan(base.guidance, {"id": "rule", "version": PLANNER_VERSION, "fallback": reason}, None,
+                              base.context)
 
     def _score(self, snapshot: Snapshot, base: ControllerPlan, moving: list[ZoneGuidance],
                info: dict[str, Any], published: Mapping[str, GuidanceSummary]) -> ControllerPlan:
         t0 = time.perf_counter()
         drill = snapshot.index.drill
         alts = twinplan.alternatives(drill, moving, snapshot.blocked, snapshot.fire.geometry,
-                                     snapshot.full_destinations)
+                                     snapshot.full_destinations, base.context.congestion if base.context else None)
         vehicles = {z.id: z.vehicles for z in drill.zones}
         current = {z: summary.destination_id for z, summary in published.items()}
         names = {z.id: z.name for z in drill.zones}
@@ -145,7 +276,7 @@ class TwinController:
             "runtime_ms": round((time.perf_counter() - t0) * 1000),
             "limitations": report["limitations"],
         }
-        return ControllerPlan(guidance, info, twin)
+        return ControllerPlan(guidance, info, twin, base.context)
 
 
 # ---- selection ----

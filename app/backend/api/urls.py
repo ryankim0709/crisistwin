@@ -3,6 +3,7 @@ from django.urls import include, path, re_path
 from .demo import demo_decide, demo_routes
 from .dispatch import decide
 from .dispatch_area import dispatch_area
+from .dispatch_runs import run_list, run_outcome
 from .explain import explain
 from .families import create_family, family_detail, family_meeting_points, family_member_me, join_family
 from .intel import (
@@ -13,7 +14,9 @@ from .intel import (
     intel_ingest,
     intel_runs,
 )
+from .intel_feeds_api import intel_feed_poll, intel_feeds
 from .landscapes import landscape_list, landscape_package
+from .live_active import live_active
 from .live_broadcast import live_broadcast, live_snapshot
 from .mobile_data import mobile_collection, mobile_document, register_device
 from .views import health
@@ -29,7 +32,14 @@ urlpatterns = [
     path("dispatch/area", dispatch_area, name="dispatch-area"),
     path("demo/routes", demo_routes, name="demo-routes"),
     path("demo/decide", demo_decide, name="demo-decide"),
+    path("dispatch/runs", run_list, name="dispatch-runs"),
+    re_path(
+        r"^dispatch/runs/(?P<session_id>[0-9a-f-]{36})/outcome$",
+        run_outcome,
+        name="dispatch-run-outcome",
+    ),
     path("live", live_snapshot, name="live-snapshot"),
+    path("live/active", live_active, name="live-active"),
     path("live/broadcast", live_broadcast, name="live-broadcast"),
     path("live/", include("api.live.urls")),
     path("families", create_family, name="family-create"),
@@ -53,6 +63,8 @@ urlpatterns = [
         name="intel-document-extract",
     ),
     path("intel/candidates", intel_candidates, name="intel-candidates"),
+    path("intel/feeds", intel_feeds, name="intel-feeds"),
+    re_path(r"^intel/feeds/(?P<feed>[a-z]{2,16})/poll$", intel_feed_poll, name="intel-feed-poll"),
     re_path(
         r"^intel/candidates/(?P<event_id>intel-[0-9a-f]{16})/review$",
         intel_candidate_review,

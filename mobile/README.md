@@ -169,6 +169,22 @@ HTTPS origin in the Release configuration before distribution. Until then the
 app shows a configuration error instead of claiming connectivity. App Store
 icons, signing/provisioning, and distribution are not configured.
 
+## Multi-phone drill
+
+The same build joins any host: Debug accepts `http://<mac>.local[:port]` and any `https://`
+origin (Release: HTTPS only). Open `crisistwin://join?server=<origin>&code=<invite>` (`code`
+optional, signs in as a responder), or scan its QR code with Plan > About > Server > Scan join QR
+code (VisionKit; camera, physical device only). The app checks `GET /api/live/active` on that
+server first, then stores the origin in UserDefaults and follows the incident it names. About
+shows the server and "Reset to default" returns to `API_BASE_URL`. Switching servers drops this
+phone's credentials. In the simulator, `-joinlink '<link>'` (Debug launch argument) does the same
+without the system "Open in CrisisTwin?" prompt.
+
+Hosting steps for (a) same Wi-Fi with `<mac>.local`, (b) a `cloudflared tunnel --url
+http://localhost:5173` tunnel and (c) a cloud host are in the
+[root README](../README.md#multi-phone-drill); the console's /live "..." menu > Invite phones
+makes the link and QR code. Decision: [ADR 0034](../docs/adr/0034-multi-phone-hosting.md).
+
 ## Structure and boundaries
 
 ```text
@@ -219,6 +235,30 @@ from changing the current state. The success label describes the last check,
 not continuously monitored health.
 
 ## Verification
+
+### Live drill UI tests
+
+`CrisisTwinUITests` drives the live features headlessly with XCUITest (no screen or mouse
+control), against the local backend and a running drill (`http://localhost:8000`, controller
+token `dev-controller`, invite `DRILL`; override with `TEST_RUNNER_QA_API` and
+`TEST_RUNNER_QA_CONTROLLER`). It uses the controller token to create tasks and to acknowledge,
+assign and resolve its own help request; it never touches proposals or the drill clock. Set the
+simulator location first, then run one test at a time:
+
+```sh
+SIM=<udid>   # xcrun simctl create "CT QA iPhone" "iPhone 17 Pro"; xcrun simctl boot $SIM
+xcrun simctl location $SIM set 39.7255,-121.8083    # a zone with no order, for testHomeNoOrder
+xcrun simctl location $SIM set 39.7596,-121.6219    # Paradise, for the other tests
+TEST_RUNNER_QA_SHOTS=/tmp/ios-qa xcodebuild test -project mobile/CrisisTwin.xcodeproj \
+  -scheme CrisisTwin -destination "id=$SIM" -derivedDataPath /tmp/dd-qa \
+  -only-testing:CrisisTwinUITests/CrisisTwinUITests/testHelpStates
+```
+
+Tests: `testHomeNoOrder` (Ready card, fire trend), `testHelpStates` ("Help requested", "Request
+seen", "Responder assigned"), `testResponderTasks` (join, share location, assist and verify
+tasks, route card, Done), `testResponderRouteLine` (route on Map; run as a responder outside the
+fire, for example at 39.7255,-121.8083). Screenshots are attached to the result and written to
+`TEST_RUNNER_QA_SHOTS`. Responder tests create tasks in the drill's database.
 
 From the repository root, the only default check is:
 

@@ -1,0 +1,110 @@
+
+127
+FNUS56 KSTO 081356
+FWFSTO
+
+Fire Weather Planning Forecast for Interior Northern California
+National Weather Service Sacramento CA
+556 AM PST Thu Nov 8 2018
+
+...RED FLAG WARNING FOR INTERIOR NORTHERN CALIFORNIA THROUGH 7 AM
+FRIDAY FOR GUSTY NORTH TO EAST WINDS AND LOW HUMIDITY...
+
+.DISCUSSION...
+High pressure building inland has resulted in gusty north to east winds
+and low humidity over much of northern California.  The
+combination of dry fuels, strong wind, and low humidity will lead
+to critical fire weather conditions into early Friday. The winds
+will decrease during the day on Friday but humidity will remain dry
+through the middle of next week.
+
+CAZ216-090130-
+Central Sacramento Valley in Glenn, Colusa, Yuba, Northern
+Sutter, and Butte County Below 1000 Ft-
+556 AM PST Thu Nov 8 2018
+
+...RED FLAG WARNING IN EFFECT UNTIL 7 AM PST FRIDAY...
+
+.TODAY...
+* Sky/Weather............Sunny.
+* Max Temperature........72-77.
+*   24 HR Trend..........Little change.
+* Min Humidity...........10-15 percent.
+*   24 HR Trend..........Little change.
+* 20-Foot Winds..........Breezy. Northwest winds 16 to 28 mph with
+  local gusts up to 50 mph.
+* LAL....................1.
+* CWR....................0 percent.
+
+.TONIGHT...
+* Sky/Weather............Clear.
+* Min Temperature........37-45.
+*   24 HR Trend..........2 to 5 degrees cooler.
+* Max Humidity...........39-54 percent.
+*   24 HR Trend..........5 to 9 percent up.
+* 20-Foot Winds..........Northwest winds 12 to 18 mph. Local gusts
+  up to 30 mph in the evening.
+* LAL....................1.
+* CWR....................0 percent.
+
+.FRIDAY...
+* Sky/Weather............Sunny.
+* Max Temperature........70-75.
+* Min Humidity...........8-18 percent.
+* 20-Foot Winds..........North winds 5 to 11 mph.
+* LAL....................1.
+* CWR....................0 percent.
+
+
+$$
+
+CAZ266-090130-
+Northern Sierra Foothills from 1000 to 3000 Ft. Includes portions
+of Shasta-Trinity and Butte Units-
+556 AM PST Thu Nov 8 2018
+
+...RED FLAG WARNING IN EFFECT UNTIL 7 AM PST FRIDAY...
+
+.TODAY...
+* Sky/Weather............Sunny.
+* Max Temperature........62-71.
+*   24 HR Trend..........2 to 5 degrees cooler.
+* Min Humidity...........6-11 percent.
+*   24 HR Trend..........Little change.
+* 20-Foot Winds..........
+*   Valleys/Lwr Slopes...North winds 15 to 21 mph. Local gusts up to
+    50 mph decreasing to 35 mph in the afternoon.
+*   Ridges/Upr Slopes....Breezy. Northeast winds 15 to 27 mph with
+    local gusts up to 50 mph decreasing to 13 to 19 mph with local
+    gusts up to 35 mph in the afternoon.
+* LAL....................1.
+* CWR....................0 percent.
+
+.TONIGHT...
+* Sky/Weather............Clear.
+* Min Temperature........38-47.
+*   24 HR Trend..........Little change.
+* Max Humidity...........22-35 percent.
+*   24 HR Trend..........Little change.
+* 20-Foot Winds..........
+*   Valleys/Lwr Slopes...Northeast winds 12 to 18 mph. Local gusts up
+    to 40 mph in the evening.
+*   Ridges/Upr Slopes....Northeast winds 13 to 19 mph with local
+    gusts up to 45 mph.
+* LAL....................1.
+* CWR....................0 percent.
+
+.FRIDAY...
+* Sky/Weather............Sunny.
+* Max Temperature........65-73.
+* Min Humidity...........8-18 percent.
+* 20-Foot Winds..........
+*   Valleys/Lwr Slopes...North winds 6 to 12 mph. Local gusts up to
+    25 mph in the morning.
+*   Ridges/Upr Slopes....Northeast winds 6 to 12 mph. Local gusts up
+    to 30 mph in the morning.
+* LAL....................1.
+* CWR....................0 percent.
+
+
+$$
