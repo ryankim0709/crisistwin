@@ -70,6 +70,8 @@ ASSUMPTIONS = [
     "A fixed share of agents (wait_for_fire_share) ignores notices and neighbours and leaves only on a fire cue.",
     "The trigger credited for a departure is drawn in proportion to each cue's share of the hazard at decision time.",
     "Preparation time after deciding is lognormal; departure follows preparation.",
+    "TrafficParams.response_delay_median_min scales agent response time: hazards are divided and preparation "
+    "multiplied by response_delay_median_min / 30 (values here are stated at 30 min).",
     "En route, open fire-exposed edges carry a route-cost penalty; agents on a closed or dead-end edge turn back to "
     "its start node with turn_back_prob (decided once per edge) and re-route to the nearest open exit.",
     "Herding agents take the edge their zone-mates most recently took from a node when it is open and still "

@@ -39,6 +39,7 @@ CONTRAFLOW_END_EVENT_TYPES = ("contraflow_ended",)
 FIRE_CLOSURE_TIME_PRECISION = "model_step"  # closure time is the first model step the perimeter is in effect
 CONGESTED_SPEED_FRACTION = 0.5  # an occupied edge is congested in a frame when mean speed < this x free-flow speed
 FIRE_CACHE_MAX_GEOMETRIES = 4  # non-cumulative mode: distinct fire geometries whose edge-inside sets are kept
+REFERENCE_RESPONSE_DELAY_MEDIAN_MIN = 30.0  # agent hazards and preparation times are stated at this median
 FIRE_INDEX_CELL_DEG = 0.01  # bucket size (about 1 km) of the spatial index over fire polygon parts
 
 # Per-lane capacity (veh/h), free-flow speed (km/h) and lane count per direction, used only
@@ -151,7 +152,10 @@ class TrafficParams:
     record_every_s: int = 60  # frame cadence; a multiple of step_s
     seed: int = 7
     packet_size_veh: int = 5  # vehicles per packet (the last packet of a zone may be smaller)
-    response_delay_median_min: float = 30.0  # order -> departure, lognormal median
+    # Fixed-delay engine: order -> departure, lognormal median. With agents it is a response-time scale instead:
+    # response_delay_median_min / REFERENCE_RESPONSE_DELAY_MEDIAN_MIN divides every departure hazard and
+    # multiplies preparation time (2x slower residents: 60.0). response_delay_sigma/max apply only without agents.
+    response_delay_median_min: float = 30.0
     response_delay_sigma: float = 0.8  # lognormal shape (sigma of ln delay)
     response_delay_max_min: float = 360.0  # draws above this are capped
     jam_density_veh_per_km_lane: float = 125.0  # storage; ~8 m per stopped vehicle
@@ -493,8 +497,9 @@ def simulate_traffic(
                 ag_herd.append(brng.random() < bp.herding_prob)
                 ag_trigger.append(None)
                 ag_turn_edge.append(-1)
-        prep_mu = math.log(bp.prep_median_min * 60)
-        prep_cap_s = bp.prep_max_min * 60
+        response_scale = params.response_delay_median_min / REFERENCE_RESPONSE_DELAY_MEDIAN_MIN
+        prep_mu = math.log(bp.prep_median_min * 60 * response_scale)
+        prep_cap_s = bp.prep_max_min * 60 * response_scale
     total_veh = sum(z.vehicles for z in zones)
     nd_at_node: dict[int, int] = {}  # origin node -> vehicles not yet departed from it
     if agents_on:
@@ -832,18 +837,18 @@ def simulate_traffic(
             if not agents:
                 continue
             if z_ordered_s[zi] is not None:
-                notice_h = bp.order_hazard_per_h
+                notice_h = bp.order_hazard_per_h / response_scale
             elif z_warned_s[zi] is not None:
-                notice_h = bp.warning_hazard_per_h
+                notice_h = bp.warning_hazard_per_h / response_scale
             else:
                 notice_h = 0.0
             vehicles = zone_list[zi].vehicles
-            social_h = bp.social_hazard_per_h * z_departed[zi] / vehicles if vehicles else 0.0
+            social_h = bp.social_hazard_per_h / response_scale * z_departed[zi] / vehicles if vehicles else 0.0
             if notice_h == 0 and social_h == 0 and not zone_cued[zi]:
                 continue
             still = []
             for a in agents:
-                fire_h = bp.fire_cue_hazard_per_h if fire_cued[ag_node[a]] else 0.0
+                fire_h = bp.fire_cue_hazard_per_h / response_scale if fire_cued[ag_node[a]] else 0.0
                 n_h, s_h = (0.0, 0.0) if ag_wait_fire[a] else (notice_h, social_h)
                 h = n_h + fire_h + s_h
                 if h <= 0 or brng.random() >= bh.decision_probability(h, dt):
