@@ -126,37 +126,15 @@
   font-size: var(--ct-text-xs);
   color: var(--ct-ink-muted);
 }
-.studio-diorama__top {
-  position: absolute;
-  top: var(--ct-space-3);
-  left: 50%;
-  z-index: var(--ct-z-overlay);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--ct-space-2);
-  width: min(440px, calc(100% - 680px));
-  transform: translateX(-50%);
-  pointer-events: none;
-}
-.studio-diorama__pill.ui-tag {
-  padding: var(--ct-space-2) var(--ct-space-4);
-  box-shadow: var(--ct-shadow-md);
-}
 .studio-diorama__warnings {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
+  display: grid;
   gap: var(--ct-space-1);
-  width: 100%;
   margin: 0;
   padding: 0;
+  color: var(--ct-ink);
+  font-size: var(--ct-text-xs);
+  line-height: var(--ct-leading-snug);
   list-style: none;
-}
-.studio-diorama__warning.ui-notice {
-  margin: 0;
-  font-weight: var(--ct-weight-semibold);
-  text-align: center;
 }
 .studio-diorama__tools {
   position: absolute;
@@ -164,7 +142,40 @@
   right: var(--ct-space-3);
   z-index: var(--ct-z-overlay);
   display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--ct-space-2);
+  max-width: min(320px, calc(100% - 24px));
+}
+.studio-diorama__buttons {
+  display: flex;
   gap: var(--ct-space-1);
+}
+.studio-region.ui-panel {
+  display: grid;
+  gap: var(--ct-space-1);
+  width: 280px;
+  max-width: 100%;
+}
+.studio-region__row {
+  display: flex;
+  align-items: center;
+  gap: var(--ct-space-2);
+}
+.studio-region__row > label {
+  flex-shrink: 0;
+  font-size: var(--ct-text-sm);
+  font-weight: var(--ct-weight-semibold);
+}
+.studio-region__row select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.studio-region__note {
+  margin: 0;
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-xs);
+  line-height: var(--ct-leading-snug);
 }
 .studio-diorama__legend {
   position: absolute;
@@ -221,10 +232,6 @@
     top: auto;
     bottom: 56px;
     max-width: calc(100% - 24px);
-  }
-  .studio-diorama__top {
-    width: calc(100% - 24px);
-    top: 52px;
   }
   .studio-diorama__credit {
     display: none;

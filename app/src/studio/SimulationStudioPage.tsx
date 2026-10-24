@@ -23,9 +23,17 @@ import {
   solverInputChanged,
   validateScenario,
 } from "./scenario";
-import { Button, LoadingState, Notice, SegmentedControl, type SegmentedOption } from "../ui";
+import { Button, LoadingState, Notice, Panel, SegmentedControl, type SegmentedOption } from "../ui";
 import { downloadJson, frameIndexAt } from "./playbackUtils";
 import { useStudioRun } from "./useStudioRun";
+import {
+  STUDIO_DEFAULT_REGION_ID,
+  findRegion,
+  loadRegionId,
+  saveRegionId,
+  useRegionBoard,
+} from "./useRegionBoard";
+import { CALIFORNIA_REGIONS, REGION_AREAS } from "../fire/regions";
 import type { DioramaIgnition, DioramaRun } from "../fire/diorama/types";
 import "./studio.css";
 
@@ -113,6 +121,13 @@ export default function SimulationStudioPage() {
 
   const { state, run, cancel, markStale } = useStudioRun();
   const { result } = state;
+
+  // Prebuilt region board (MongoDB), drawn in 3D before any run and used to solve fires on it.
+  const [regionId, setRegionId] = useState(loadRegionId);
+  const [boardAttempt, setBoardAttempt] = useState(0);
+  const { catalog, board } = useRegionBoard(regionId, boardAttempt);
+  const region = findRegion(regionId);
+  const regionGrid = board.status === "ready" ? board.grid : null;
 
   // Playback. `clockRef` is the smooth simulation clock; React state only changes when the
   // clock crosses into a new frame, so the map is not re-rendered on every animation tick.
@@ -281,16 +296,33 @@ export default function SimulationStudioPage() {
 
   const handleRun = useCallback(() => {
     setPlaying(false);
-    run(scenario);
-  }, [run, scenario]);
+    run(scenario, { id: regionId, grid: regionGrid });
+  }, [run, scenario, regionId, regionGrid]);
+
+  const selectRegion = useCallback(
+    (id: string) => {
+      if (id === regionId || !findRegion(id)) return;
+      setPlaying(false);
+      cancel();
+      markStale();
+      setRegionId(id);
+      saveRegionId(id);
+    },
+    [regionId, cancel, markStale],
+  );
 
   const handleLoadDemo = useCallback(() => {
     applyScenario(demoScenario());
     setMode("select");
-  }, [applyScenario]);
+    // The demo's fires sit on the default board.
+    selectRegion(STUDIO_DEFAULT_REGION_ID);
+  }, [applyScenario, selectRegion]);
 
-  // Before the first run the 3D view has no board to click, so placing a fire goes to the map.
-  const dioramaHasBoard = Boolean(result?.landscape);
+  // The 3D view shows the run only while the board it was started on is still selected.
+  const dioramaShowsRun = result !== null && result.boardId === regionId;
+  const dioramaLandscape = dioramaShowsRun ? result.landscape : regionGrid;
+  // Without a board to click in 3D, placing a fire goes to the map.
+  const dioramaHasBoard = dioramaLandscape !== null;
   const handleModeChange = useCallback(
     (next: MapMode) => {
       if (next !== "select" && view === "diorama" && !dioramaHasBoard) chooseView("map");
@@ -353,7 +385,7 @@ export default function SimulationStudioPage() {
       const { run: solved } = result;
       if (solved.reachedEdgeMinute !== null && currentMinute >= solved.reachedEdgeMinute) {
         list.push(
-          `Fire reached the edge of the modelled area at ${formatElapsed(solved.reachedEdgeMinute)}; the footprint after that is incomplete.`,
+          `Fire reached the edge of the modelled area at ${formatElapsed(Math.round(solved.reachedEdgeMinute))}; the footprint after that is incomplete.`,
         );
       }
       if (!solved.crownFire.modelled) list.push(solved.crownFire.unavailableReason);
@@ -485,49 +517,119 @@ export default function SimulationStudioPage() {
         <div className="studio-page-map">
           {view === "diorama" ? (
             <StudioDiorama
-              landscape={result?.landscape ?? null}
-              run={dioramaRun}
+              landscape={dioramaLandscape}
+              run={dioramaShowsRun ? dioramaRun : null}
               ignitions={dioramaIgnitions}
               windFromDegrees={scenario.settings.windFromDegrees}
               windSpeedMph={scenario.settings.windSpeedMph}
-              mode={mode}
               timeRef={clockRef}
               insets={{ top: 12, right: 12, bottom: DIORAMA_BOTTOM_INSET_PX, left: panelInset }}
-              fitKey={resultKey}
+              fitKey={dioramaShowsRun ? resultKey : null}
               warnings={warnings}
-              attribution={attribution}
+              attribution={
+                dioramaShowsRun ? attribution : Object.values(regionGrid?.attribution ?? {})
+              }
               onGroundClick={handleMapClick}
-              emptyState={
-                <>
-                  <p className="studio-diorama__card-title">No landscape yet</p>
-                  <p>
-                    The 3D view is built from the fuel and terrain a run downloads.{" "}
-                    {scenario.ignitions.length === 0
-                      ? "Load the demo scenario, or place fires on the map, then run it."
-                      : "Run the scenario to build it."}
-                  </p>
-                  <div className="studio-row">
-                    {scenario.ignitions.length === 0 ? (
-                      <>
-                        <Button size="sm" onClick={handleLoadDemo}>
-                          Load demo
-                        </Button>
-                        <Button variant="secondary" size="sm" onClick={() => handleModeChange("add")}>
-                          Place fires on map
-                        </Button>
-                      </>
-                    ) : (
-                      <>
-                        <Button size="sm" onClick={handleRun} disabled={issues.length > 0 || running}>
-                          {running ? "Running…" : "Run simulation"}
-                        </Button>
-                        <Button variant="secondary" size="sm" onClick={() => chooseView("map")}>
-                          Back to map
-                        </Button>
-                      </>
-                    )}
+              boardControl={
+                <Panel glass compact className="studio-region">
+                  <div className="studio-region__row">
+                    <label htmlFor="studio-region">Region</label>
+                    <select
+                      id="studio-region"
+                      className="ui-input"
+                      value={regionId}
+                      onChange={(event) => selectRegion(event.target.value)}
+                    >
+                      {REGION_AREAS.map((area) => (
+                        <optgroup key={area} label={area}>
+                          {CALIFORNIA_REGIONS.filter((entry) => entry.area === area).map(
+                            (entry) => (
+                              <option key={entry.id} value={entry.id}>
+                                {entry.name}
+                                {catalog.status === "ready" && !catalog.ids.has(entry.id)
+                                  ? " (not built)"
+                                  : ""}
+                              </option>
+                            ),
+                          )}
+                        </optgroup>
+                      ))}
+                    </select>
                   </div>
-                </>
+                  <p className="studio-region__note">
+                    {board.status === "ready"
+                      ? board.source === "stored"
+                        ? "Stored board: LANDFIRE fuels and terrain, prebuilt."
+                        : "Stored board unavailable; loaded live from LANDFIRE."
+                      : board.status === "loading"
+                        ? board.storedUnavailable
+                          ? "Stored board unavailable; loading live from LANDFIRE…"
+                          : "Loading stored board…"
+                        : "Board could not be loaded."}{" "}
+                    Fires on the board run on it; others download their own area.
+                  </p>
+                </Panel>
+              }
+              emptyState={
+                board.status === "loading" ? (
+                  <LoadingState>
+                    {board.storedUnavailable
+                      ? `Stored board unavailable; loading ${region?.name ?? "the region"} live from LANDFIRE. This takes longer…`
+                      : `Loading the ${region?.name ?? "region"} board…`}
+                  </LoadingState>
+                ) : board.status === "error" ? (
+                  <>
+                    <p className="studio-diorama__card-title">The board could not be loaded</p>
+                    <p>{board.message}</p>
+                    <div className="studio-row">
+                      <Button size="sm" onClick={() => setBoardAttempt((value) => value + 1)}>
+                        Retry
+                      </Button>
+                      <Button variant="secondary" size="sm" onClick={() => chooseView("map")}>
+                        Use the map
+                      </Button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <p className="studio-diorama__card-title">No landscape yet</p>
+                    <p>
+                      The 3D view is built from the fuel and terrain a run downloads.{" "}
+                      {scenario.ignitions.length === 0
+                        ? "Load the demo scenario, or place fires on the map, then run it."
+                        : "Run the scenario to build it."}
+                    </p>
+                    <div className="studio-row">
+                      {scenario.ignitions.length === 0 ? (
+                        <>
+                          <Button size="sm" onClick={handleLoadDemo}>
+                            Load demo
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => handleModeChange("add")}
+                          >
+                            Place fires on map
+                          </Button>
+                        </>
+                      ) : (
+                        <>
+                          <Button
+                            size="sm"
+                            onClick={handleRun}
+                            disabled={issues.length > 0 || running}
+                          >
+                            {running ? "Running…" : "Run simulation"}
+                          </Button>
+                          <Button variant="secondary" size="sm" onClick={() => chooseView("map")}>
+                            Back to map
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  </>
+                )
               }
             />
           ) : (
@@ -596,10 +698,7 @@ export default function SimulationStudioPage() {
           )}
         </div>
 
-        <div
-          ref={panelRef}
-          className={`studio-page-panel${panelCollapsed ? " is-collapsed" : ""}`}
-        >
+        <div ref={panelRef} className={`studio-page-panel${panelCollapsed ? " is-collapsed" : ""}`}>
           <ConfigPanel
             scenario={scenario}
             issues={issues}

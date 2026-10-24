@@ -38,3 +38,15 @@ enabled checkbox, name, start minute, delete. Coordinates show only for the sele
 Moisture and horizon share a row. Run, cancel and status sit in a footer that stays
 visible while the body scrolls. Demo, export, clear and import are grouped under
 **Scenario file**. Props and behaviour are unchanged.
+
+## Addendum (2026-10-24): prebuilt region boards
+
+The 3D view now works like `/fire`: a Region picker lists the prebuilt California boards
+(`fire/regions.ts`, served from MongoDB GridFS by `GET /api/landscapes/<id>`, ADR 0013), and
+the selected board is drawn before any run. If the store or API is unavailable, the same box
+is loaded live from LANDFIRE and labelled as such. A run whose enabled fires all lie on the
+board is solved on that board (`useStudioRun`'s optional `RunBoard`); otherwise it downloads
+its own box as before. Boards are fixed (6–8 km radius), so a long run can reach the edge;
+the existing edge warning covers that. `StudioRunResult.boardId` records the board selected
+at run time, and the 3D view shows a run only while that board is still selected. The
+default board is `berkeley-hills-tilden`, which contains the demo fires.

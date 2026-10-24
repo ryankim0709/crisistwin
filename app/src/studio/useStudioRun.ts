@@ -17,6 +17,13 @@ import type {
 } from "./contracts";
 import type { IgnitionProblem } from "../fire/scheduledTypes";
 import { toSolverInput, validateScenario } from "./scenario";
+import { gridBox, gridCoversScenario } from "./useRegionBoard";
+
+/** A prebuilt region board offered for a run; `grid` is null while it is still loading. */
+export interface RunBoard {
+  id: string;
+  grid: LandscapeGrid | null;
+}
 
 /** Landscapes kept for reuse; each is a few MB of typed arrays. */
 const LANDSCAPE_CACHE_SIZE = 2;
@@ -45,7 +52,8 @@ function deepFreeze<T>(value: T): T {
 
 export interface StudioRunController {
   state: StudioRunState;
-  run: (scenario: StudioScenario) => void;
+  /** With a loaded `board` covering every enabled fire, the run is solved on that board. */
+  run: (scenario: StudioScenario, board?: RunBoard) => void;
   cancel: () => void;
   markStale: () => void;
 }
@@ -78,7 +86,12 @@ export function useStudioRun(): StudioRunController {
   }, []);
 
   const solve = useCallback(
-    (requestId: number, snapshot: StudioScenario, landscape: CachedLandscape) => {
+    (
+      requestId: number,
+      snapshot: StudioScenario,
+      landscape: CachedLandscape,
+      boardId: string | null,
+    ) => {
       setState((previous) => ({ ...previous, phase: "computing", requestId, error: null }));
       if (workerRef.current === null) {
         const worker = new Worker(new URL("./solver.worker.ts", import.meta.url), {
@@ -98,6 +111,7 @@ export function useStudioRun(): StudioRunController {
             frameMinutes: response.run.frames.map((frame) => frame.elapsedMinutes),
             landscapeKey: landscape.key,
             landscapeBox: landscape.box,
+            boardId,
             landscape: landscape.grid,
             attribution: landscape.grid.attribution,
             elevationComplete: landscape.grid.elevationComplete,
@@ -127,7 +141,7 @@ export function useStudioRun(): StudioRunController {
   );
 
   const run = useCallback(
-    (scenario: StudioScenario) => {
+    (scenario: StudioScenario, board?: RunBoard) => {
       const requestId = ++requestIdRef.current;
       stopInFlight();
       const snapshot = deepFreeze(structuredClone(scenario));
@@ -138,12 +152,24 @@ export function useStudioRun(): StudioRunController {
         return;
       }
 
+      const boardId = board?.id ?? null;
+      if (board?.grid && gridCoversScenario(board.grid, snapshot)) {
+        const { grid } = board;
+        solve(
+          requestId,
+          snapshot,
+          { key: `region:${board.id}`, box: gridBox(grid), grid },
+          boardId,
+        );
+        return;
+      }
+
       const requirement = landscapeRequirement(snapshot);
       const cached = cacheRef.current.find((entry) => boxContains(entry.box, requirement.box));
       if (cached) {
         // Most recently used first.
         cacheRef.current = [cached, ...cacheRef.current.filter((entry) => entry !== cached)];
-        solve(requestId, snapshot, cached);
+        solve(requestId, snapshot, cached, boardId);
         return;
       }
 
@@ -161,7 +187,7 @@ export function useStudioRun(): StudioRunController {
           if (controller.signal.aborted || requestId !== requestIdRef.current) return;
           const entry: CachedLandscape = { key: requirement.key, box: requirement.box, grid };
           cacheRef.current = [entry, ...cacheRef.current].slice(0, LANDSCAPE_CACHE_SIZE);
-          solve(requestId, snapshot, entry);
+          solve(requestId, snapshot, entry, boardId);
         })
         .catch((cause: unknown) => {
           if (controller.signal.aborted || requestId !== requestIdRef.current) return;
