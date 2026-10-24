@@ -1,9 +1,9 @@
 /**
  * Scripted wind-biased fire spread over a regular grid (see `FireField` in `../types`).
  *
- * Arrival "effort" τ is computed with Dijkstra over 8-connected cells: the cost of moving
+ * Arrival "effort" τ is computed with Dijkstra over 32 neighbour directions: the cost of moving
  * between neighbours is distance / rate, where rate depends on fuel (tree density), wind
- * alignment, slope and smooth deterministic noise. τ is then mapped to scenario seconds by a
+ * alignment, slope and smooth multi-octave deterministic noise with clearings and drainages. τ is then mapped to scenario seconds by a
  * time warp so the fire starts small, runs during the middle of the story and slows during
  * resolution. A crew-held section refuses ignition from `heldFrom` on. This is a visual
  * device, not a fire behaviour model.
@@ -12,24 +12,25 @@ import type { FireField, Vec2, World } from "../types";
 import { createRng, distanceToPolyline, heightAt, WORLD_SEED } from "../world";
 
 export const FIRE_CELL_SIZE = 4;
-const ORIGIN_X = -260;
+const ORIGIN_X = -316;
 const ORIGIN_Z = -220;
-const COLS = 90; // x ∈ [-260, 100)
+const COLS = 104; // x ∈ [-316, 100)
 const ROWS = 45; // z ∈ [-220, -40)
 export const BURN_DURATION_S = 12;
 
 /** Base spread rate on full fuel, no wind, flat ground (units per warped second). */
-const BASE_RATE = 1.8;
+const BASE_RATE = 1.45;
 /**
- * Wind factor = WIND_BACKING + WIND_HEAD · ((1 + cos θ) / 2)^WIND_FOCUS, θ = angle to the wind:
- * a narrow fast head, slow flanks and a weak backing fire. Slope factor = exp(SLOPE_BIAS · slope).
+ * Wind factor = WIND_HEAD · (WIND_BACKING + (1 − WIND_BACKING) · ((1 + cos θ) / 2)^WIND_FOCUS),
+ * θ = angle to the wind. With backing 0.2 and focus 1.4 the flanks spread at about half the
+ * head rate, giving a broad fan. Slope factor = exp(SLOPE_BIAS · slope).
  */
-const WIND_HEAD = 9;
-const WIND_FOCUS = 80;
-const WIND_BACKING = 0.35;
-const SLOPE_BIAS = 0.8;
+const WIND_HEAD = 3;
+const WIND_FOCUS = 1.7;
+const WIND_BACKING = 0.12;
+const SLOPE_BIAS = 0.4;
 /** Cells whose centre lies south of this line are town terrace and never burn. */
-const TERRACE_Z = -50;
+const TERRACE_Z = -58;
 /** Roads, river margin and cleared space around homes act as fuel breaks. */
 const ROAD_BREAK = 4.5;
 const RIVER_BREAK = 6;
@@ -120,31 +121,109 @@ function buildFuel(world: World): Float32Array {
   return fuel;
 }
 
-/** Smooth value noise in roughly [0.5, 1.5] so the front is patchy rather than circular. */
-function buildNoise(): Float32Array {
-  const rng = createRng(WORLD_SEED ^ 0x5f17e);
-  const lattice = 6; // cells per lattice step
-  const lc = Math.ceil(COLS / lattice) + 2;
-  const lr = Math.ceil(ROWS / lattice) + 2;
-  const coarse = new Float32Array(lc * lr);
-  for (let i = 0; i < coarse.length; i++) coarse[i] = rng();
+/** Smooth 2D value noise in [0, 1] on a lattice of `scale` units, from a seeded lattice. */
+function valueNoise(seed: number, scale: number): (x: number, z: number) => number {
+  const rng = createRng(seed);
+  const lc = Math.ceil((COLS * FIRE_CELL_SIZE) / scale) + 3;
+  const lr = Math.ceil((ROWS * FIRE_CELL_SIZE) / scale) + 3;
+  const lattice = new Float32Array(lc * lr);
+  for (let i = 0; i < lattice.length; i++) lattice[i] = rng();
+  return (x, z) => {
+    const fx = (x - ORIGIN_X) / scale;
+    const fz = (z - ORIGIN_Z) / scale;
+    const ix = Math.max(0, Math.min(lc - 2, Math.floor(fx)));
+    const iz = Math.max(0, Math.min(lr - 2, Math.floor(fz)));
+    const sx = Math.min(1, Math.max(0, fx - ix));
+    const sz = Math.min(1, Math.max(0, fz - iz));
+    const ux = sx * sx * (3 - 2 * sx);
+    const uz = sz * sz * (3 - 2 * sz);
+    const a = lattice[iz * lc + ix];
+    const b = lattice[iz * lc + ix + 1];
+    const c = lattice[(iz + 1) * lc + ix];
+    const d = lattice[(iz + 1) * lc + ix + 1];
+    return a + (b - a) * ux + (c - a) * uz + (a - b - c + d) * ux * uz;
+  };
+}
+
+/** Multi-octave noise: (scale in units, weight). Broad lobes plus finer ragged edges. */
+const NOISE_OCTAVES: [number, number][] = [
+  [36, 0.45],
+  [20, 0.3],
+  [8, 0.25],
+];
+/** Rate multiplier range from the noise: low patches spread at 0.35×, fast ones at 1.65×. */
+const NOISE_MIN = 0.15;
+const NOISE_SPAN = 1.9;
+const NOISE_CONTRAST = 2.2;
+/** Meadow gaps / rocky clearings: discs where the rate drops to this fraction. */
+const CLEARINGS = 9;
+const CLEARING_FACTOR = 0.12;
+/** Drainages that channel faster runs ("fingers"), roughly downwind. */
+const FINGERS = 3;
+const FINGER_FACTOR = 1.9;
+const FINGER_HALF_WIDTH = 7;
+/** Bare rocky ridge crest along the north edge (wobbling line); fire barely creeps there. */
+const CREST_Z = -200;
+const CREST_WOBBLE = 18;
+const CREST_FACTOR = 0.08;
+
+/**
+ * Per-cell spread multiplier: smooth multi-octave value noise, a few clearings that leave
+ * indentations, and a few drainages that push lobes ahead of the main front. Deterministic.
+ */
+function buildNoise(world: World): Float32Array {
+  const octaves = NOISE_OCTAVES.map(([scale, weight], k) => ({
+    sample: valueNoise(WORLD_SEED ^ (0x5f17e + k * 7919), scale),
+    weight,
+  }));
+  const totalWeight = NOISE_OCTAVES.reduce((sum, [, w]) => sum + w, 0);
+  const rng = createRng(WORLD_SEED ^ 0x0c1ea5);
+  const ign = world.ignition;
+  const wind = world.wind.toward;
+  const clearings: { p: Vec2; r: number }[] = [];
+  while (clearings.length < CLEARINGS) {
+    const p = { x: -200 + rng() * 260, z: -205 + rng() * 120 };
+    // Keep the ignition area fuelled so the fire always gets going.
+    if (Math.hypot(p.x - ign.x, p.z - ign.z) < 30) continue;
+    clearings.push({ p, r: 9 + rng() * 8 });
+  }
+  const fingers: Vec2[][] = [];
+  for (let k = 0; k < FINGERS; k++) {
+    // Start near the fire's path and run roughly downwind with a sideways wobble.
+    const side = (k - (FINGERS - 1) / 2) * 38 + (rng() - 0.5) * 12;
+    const start = {
+      x: ign.x + wind.z * side + wind.x * (20 + rng() * 25),
+      z: ign.z - wind.x * side + wind.z * (20 + rng() * 25),
+    };
+    const pts: Vec2[] = [start];
+    let dir = Math.atan2(wind.x, wind.z) + (rng() - 0.5) * 0.6;
+    for (let i = 0; i < 5; i++) {
+      const last = pts[pts.length - 1];
+      dir += (rng() - 0.5) * 0.5;
+      pts.push({ x: last.x + Math.sin(dir) * 16, z: last.z + Math.cos(dir) * 16 });
+    }
+    fingers.push(pts);
+  }
+
   const noise = new Float32Array(COLS * ROWS);
   for (let row = 0; row < ROWS; row++) {
     for (let col = 0; col < COLS; col++) {
-      const fx = col / lattice;
-      const fz = row / lattice;
-      const ix = Math.floor(fx);
-      const iz = Math.floor(fz);
-      const sx = fx - ix;
-      const sz = fz - iz;
-      const ux = sx * sx * (3 - 2 * sx);
-      const uz = sz * sz * (3 - 2 * sz);
-      const a = coarse[iz * lc + ix];
-      const b = coarse[iz * lc + ix + 1];
-      const c = coarse[(iz + 1) * lc + ix];
-      const d = coarse[(iz + 1) * lc + ix + 1];
-      const smooth = a + (b - a) * ux + (c - a) * uz + (a - b - c + d) * ux * uz;
-      noise[row * COLS + col] = 0.45 + smooth * 0.8 + rng() * 0.3;
+      const c = cellCenter(col, row);
+      let n = 0;
+      for (const o of octaves) n += o.sample(c.x, c.z) * o.weight;
+      // Summed octaves cluster around 0.5; stretch the contrast so lobes and gaps read clearly.
+      const contrast = Math.min(1, Math.max(0, (n / totalWeight - 0.5) * NOISE_CONTRAST + 0.5));
+      let m = NOISE_MIN + contrast * NOISE_SPAN;
+      if (c.z < CREST_Z + (octaves[0].sample(c.x, -c.z) - 0.5) * CREST_WOBBLE) m *= CREST_FACTOR;
+      for (const cl of clearings) {
+        const d = Math.hypot(c.x - cl.p.x, c.z - cl.p.z);
+        if (d < cl.r) m *= CLEARING_FACTOR + (1 - CLEARING_FACTOR) * (d / cl.r) ** 3;
+      }
+      for (const f of fingers) {
+        const d = distanceToPolyline(c, f);
+        if (d < FINGER_HALF_WIDTH) m *= 1 + (FINGER_FACTOR - 1) * (1 - d / FINGER_HALF_WIDTH);
+      }
+      noise[row * COLS + col] = m;
     }
   }
   return noise;
@@ -190,6 +269,8 @@ export type FireBuild = {
   approachTime(points: Vec2[], radius: number): number;
   /** Sorted finite ignition times, for O(log n) burned-area queries. */
   sortedIgnitions: Float32Array;
+  /** Centre of the burnable cell nearest to `p` that is still unburned at time `t`, or null. */
+  nearestUnburned(p: Vec2, t: number): Vec2 | null;
 };
 
 export type HoldSpec = { heldFrom: number; centers: Vec2[]; radius: number };
@@ -197,7 +278,7 @@ export type HoldSpec = { heldFrom: number; centers: Vec2[]; radius: number };
 /** Build the fire field. With `hold`, cells in the held section never ignite at t ≥ heldFrom. */
 export function buildFire(world: World, duration: number, hold: HoldSpec | null): FireBuild {
   const fuel = buildFuel(world);
-  const noise = buildNoise();
+  const noise = buildNoise(world);
   const warp = buildWarp(duration + 1);
   const n = COLS * ROWS;
   const heights = new Float32Array(n);
@@ -291,7 +372,8 @@ export function buildFire(world: World, duration: number, hold: HoldSpec | null)
       const rate =
         BASE_RATE *
         ((fuel[cell] + fuel[nb]) / 2) *
-        (WIND_BACKING + WIND_HEAD * Math.pow((1 + align) / 2, WIND_FOCUS)) *
+        WIND_HEAD *
+        (WIND_BACKING + (1 - WIND_BACKING) * Math.pow((1 + align) / 2, WIND_FOCUS)) *
         Math.exp(SLOPE_BIAS * slope) *
         ((noise[cell] + noise[nb]) / 2);
       const next = here + len / rate;
@@ -343,7 +425,25 @@ export function buildFire(world: World, duration: number, hold: HoldSpec | null)
     return best;
   };
 
-  return { field, approachTime, sortedIgnitions };
+  const nearestUnburned = (p: Vec2, t: number) => {
+    let best: Vec2 | null = null;
+    let bestD = Infinity;
+    for (let row = 0; row < ROWS; row++) {
+      for (let col = 0; col < COLS; col++) {
+        const i = row * COLS + col;
+        if (fuel[i] <= 0 || ignitionTime[i] <= t) continue;
+        const c = cellCenter(col, row);
+        const d = Math.hypot(c.x - p.x, c.z - p.z);
+        if (d < bestD) {
+          bestD = d;
+          best = c;
+        }
+      }
+    }
+    return best;
+  };
+
+  return { field, approachTime, sortedIgnitions, nearestUnburned };
 }
 
 /** Number of finite ignition times ≤ t in a sorted array. */
