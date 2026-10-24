@@ -207,12 +207,29 @@ additive within 1.x.
   `unmapped_zones` (`zone_id`, `reason`), `crosswalk_derived_here` (zones whose block-group
   shares sim derived by raster overlap), `orders_without_zone_ids` (timeline only), `notices` (`event_id`, `zone_ids`,
   `unmapped_zone_ids`), and per-zone `zones`. Demand zones are the package's evacuation zones,
-  and order and warning events target them by their own zone IDs.
+  and order and warning events target them by their own zone IDs. `totals.block_groups` counts the
+  ACS block groups that contribute; `population_source` names the ACS vintage. With a registry
+  evidence file (`sim/evidence/<id>.json`), `orders_from_evidence` lists cited orders added to the
+  package's (`event_id` prefix `evidence:`, with `evidence_class`, `source_id`, `zone_mapping`), and
+  `zone_splits` lists zones split at a Census place boundary (`zone_id`, `derived_from`, `place`,
+  `inside`). Notices naming a split zone then name all of its parts.
 - `validation` (non-Camp packages): one row per `calibration_targets.json` target, with
   `comparability: "not_computed"` and the reason; `next_work` lists the missing comparisons.
 - `fire_simulated` for non-Camp packages is `elliptical-mtt-ca`. It starts from the package
   ignition (`ignition.provenance` gives the source), is fitted by IoU to the first perimeter
   only, and is clipped to it (`constraint`). `calibration.headline` states its limits.
+- `fire_simulated` with a registry evidence file holding timed fire reports (Marshall) is fitted to
+  them instead: `ignition.provenance_detail` lists the documented ignitions; `calibration.observations`
+  has `fit` (window errors at reported first arrivals, same keys as Camp's `train`), `vs_reported_time`,
+  `leave_one_out`, `bounds` ("fire present by" sightings and FIRMS passes, evaluation only),
+  `as_replayed` (scores of the clipped front) and per-place `points` (`reported_at`, `window_utc`,
+  `model_at`, `model_at_as_replayed`, `error_vs_reported_min`, `source_id`, `source_locator`).
+  `calibration.iou` is the shape IoU with the final perimeter (model burned area when it first equals
+  the perimeter's area); `calibration.perimeter` also gives the unclipped IoU at the reported end of
+  spread. The front is clipped to the final perimeter (`constraint.kind`
+  `clipped_to_final_satellite_perimeter`). `hazard_until` (UTC) is when the observed perimeters take
+  over from the simulated front as the traffic hazard; without it they take over at the first
+  perimeter time.
 
 ### `index.json`
 

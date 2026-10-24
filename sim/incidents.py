@@ -29,8 +29,9 @@ from sim.demand import EVACUATION_PARTICIPATION, VEHICLES_TAKEN_CAP, _Locator
 from sim.events import ASSUMPTIONS as ROAD_EVENT_ASSUMPTIONS
 from sim.events import resolve_road_events
 from sim.fire import MODEL_ID, MODEL_VERSION, FireParams, burned_mask, simulate_arrival
+from sim.fire_obs import WITHIN_MINUTES, score_arrival
 from sim.firefront import arrival_lookup, constrain_to_perimeter, isochrones
-from sim.geo import Grid, rasterize
+from sim.geo import Grid, mask_contour, rasterize
 from sim.hindcast import score
 from sim.history import DamagePoint, IncidentHistory, PerimeterSnapshot, format_utc, parse_utc
 from sim.network import load_alert_events, load_road_network
@@ -61,7 +62,12 @@ class Incident:
     traffic: dict = field(default_factory=dict)  # TrafficParams overrides for this fire
     clock_note: str = ""
     assumptions: tuple[str, ...] = ()  # incident-specific modelling assumptions, written into the bundle
+    # Curated, cited evidence beside the registry (sim/evidence/*.json): timed fire observations, extra
+    # orders and zone splits. The packages are content-addressed, so additions cannot go inside them.
+    evidence: Path | None = None
 
+
+EVIDENCE_DIR = ROOT / "sim/evidence"
 
 INCIDENTS = {
     "camp-2018": Incident(
@@ -73,16 +79,15 @@ INCIDENTS = {
         "marshall-2021", "Marshall Fire (2021)", "Superior and Louisville, Boulder County, Colorado",
         Path("data/incidents/marshall-2021-evacuation/415166c55516b100"),
         Path("data/incidents/marshall-2021-evacuation/415166c55516b100"), "package",
-        # The package has orders with zone IDs only for Everbridge zones 1-3, 5-8. Superior south of Discovery
-        # (zone 4) and Cherryvale/South Boulder Rd (zone 9) have warnings only; the AAR's town-wide Superior
-        # decision (19:50Z) is an `evacuation_requested` command decision, not a public order, and the only
-        # order without zone IDs (aar-1215, "unincorporated Boulder County and Superior to McCaslin") summarizes
-        # the 19:15Z Everbridge orders and precedes zone 4's own 19:49Z warning, so it cannot be zone 4's order.
-        traffic={"warning_releases_demand": True},
-        assumptions=("Warnings are treated as departure triggers (warning_releases_demand): the package lacks "
-                     "zone-level orders for Superior south of Discovery (zone 4) and Cherryvale/South Boulder Rd "
-                     "(zone 9), which were evacuated on Dec 30 (AAR: entire town of Superior evacuated by 15:30 MST). "
-                     "Assumption, not a recorded order.",),
+        # The package has zone orders only for Everbridge zones 1-3, 5-8; zones 4 and 9 have warnings. The
+        # town-wide Superior order (12:58 MST) and the Louisville city-wide order (14:24 MST) come from
+        # sim/evidence/marshall_2021.json, which also splits zone 9 at the Louisville city limit. Warnings
+        # release no demand, so zone 9 outside Louisville (pre-evacuation only) does not depart.
+        evidence=EVIDENCE_DIR / "marshall_2021.json",
+        assumptions=("Orders: the package's Everbridge orders plus two public orders from sim/evidence/"
+                     "marshall_2021.json: Town of Superior, all residents, 12:58 MST (reported; mapped to zone 4, "
+                     "'Southern Superior'), and City of Louisville, 14:24 MST (Boulder ODM post; mapped to zone 8 "
+                     "and the part of zone 9 inside the 2020 city boundary). Warnings release no demand.",),
         clock_note="Wind-driven grass fire that crossed into town within about an hour: 10 s traffic step, "
                    "1 min frames, 10 min simulated fronts, from 1 h before ignition to the manifest focus-window end."),
     "kincade-2019": Incident(
@@ -104,6 +109,16 @@ def get(incident_id: str) -> Incident:
 
 def _read(package: Path, relative: str):
     return json.loads((package / relative).read_text())
+
+
+def load_evidence(incident: Incident) -> dict | None:
+    """The incident's curated evidence file (sim/evidence), or None. Fails loudly if it names another incident."""
+    if incident.evidence is None:
+        return None
+    evidence = json.loads(incident.evidence.read_text())
+    if evidence.get("kind") != "crisistwin_incident_evidence" or evidence.get("incident") != incident.id:
+        raise SourceError(f"{incident.evidence} is not evidence for {incident.id}")
+    return {**evidence, "path": str(incident.evidence.relative_to(ROOT))}
 
 
 def _events(package: Path) -> list[dict]:
@@ -259,7 +274,11 @@ def package_fire(history: IncidentHistory, ignition: dict, end: datetime) -> tup
     """elliptical-mtt-ca front from the package ignition, fitted by IoU to the first perimeter and clipped to it.
 
     Returns the (fire_simulated block, (grid, arrival, t0, lookup)) pair of sim.bundle._simulated_fire.
+    With curated timed observations (`ignition["evidence"]`, see package_replay_inputs) the fit is
+    `timed_package_fire` instead.
     """
+    if (ignition.get("evidence") or {}).get("fire"):
+        return timed_package_fire(history, ignition["evidence"], end)
     target = history.perimeters[0]
     t0 = ignition["at"]
     horizon_s = (target.snapshot_at - t0).total_seconds()
@@ -325,6 +344,302 @@ def package_fire(history: IncidentHistory, ignition: dict, end: datetime) -> tup
     return block, (grid, arrival, t0, arrival_lookup(grid, arrival, t0))
 
 
+# --- fire fitted to timed observations (curated evidence) --------------------------------------------------
+#
+# elliptical-mtt-ca from the documented ignitions, with wind direction, wind speed (ellipse shape) and head
+# spread rate chosen on a grid of evidence priors by
+#     J = mean window error at reported first arrivals (min) + IOU_WEIGHT_MIN * (1 - shape IoU),
+# where shape IoU is the IoU of the model's burned area, at the moment it first equals the final perimeter's
+# area, with that perimeter. Rate is set by arrival times; direction and elongation by both. "Present by"
+# bounds (late sightings, FIRMS passes) are evaluation only. The front is then clipped to the final perimeter.
+
+IOU_WEIGHT_MIN = 60.0  # minutes of mean arrival error traded for one unit of shape IoU (0.1 IoU = 6 min)
+DETECTION_NEIGHBOURHOOD = 1  # cells around a FIRMS pixel centre that may hold the detected fire
+
+
+@dataclass(frozen=True)
+class _Window:  # duck type of sim.fire_obs.Observation for score_arrival
+    observed_from: datetime
+    observed_to: datetime
+
+
+def _location_cells(grid: Grid, location: dict) -> list[int]:
+    """Grid cells of an observation place: the point's cell, the cells a street passes, or a polygon's cells."""
+    def cells_of(points):
+        return sorted({c for c in (grid.cell_of(lon, lat) for lon, lat in points) if c is not None})
+
+    kind = location["type"]
+    if kind == "point":
+        return cells_of([location["coord"]])
+    if kind == "line":
+        coords = location["coords"]
+        points = list(coords[:1])
+        for (x0, y0), (x1, y1) in zip(coords, coords[1:]):
+            dx, dy = grid.to_xy(x1, y1)[0] - grid.to_xy(x0, y0)[0], grid.to_xy(x1, y1)[1] - grid.to_xy(x0, y0)[1]
+            steps = max(1, math.ceil(math.hypot(dx, dy) / (grid.cell_m / 2)))
+            points.extend((x0 + (x1 - x0) * k / steps, y0 + (y1 - y0) * k / steps) for k in range(1, steps + 1))
+        return cells_of(points)
+    if kind == "area":
+        mask = rasterize(grid, location["geometry"])
+        return [i for i, v in enumerate(mask) if v] or cells_of(location["geometry"]["coordinates"][0])
+    raise ValueError(f"unknown location type {kind!r}")
+
+
+def _neighbourhood(grid: Grid, cell: int, radius: int) -> list[int]:
+    row, col = divmod(cell, grid.ncols)
+    return [r * grid.ncols + c for r in range(row - radius, row + radius + 1) for c in range(col - radius, col + radius + 1)
+            if 0 <= r < grid.nrows and 0 <= c < grid.ncols]
+
+
+def _window_error_min(a_s: float, window_s: tuple[float, float], horizon_s: float) -> float:
+    """Minutes outside the window (0 inside), as sim.fire_obs.score_arrival; unreached counts as the horizon."""
+    a = a_s if math.isfinite(a_s) else horizon_s
+    lo, hi = window_s
+    return 0.0 if lo <= a <= hi else abs(a - hi if a > hi else a - lo) / 60
+
+
+def _shape_iou(arrival: list[float], observed: bytearray, cell_area_km2: float) -> dict:
+    """IoU when the modelled burned area first reaches the observed area (all burned cells if it never does)."""
+    k = sum(observed)
+    finite = sorted(a for a in arrival if math.isfinite(a))
+    threshold = finite[k - 1] if len(finite) >= k else (finite[-1] if finite else -1.0)
+    metrics = score(burned_mask(arrival, threshold), observed, cell_area_km2)
+    return {"iou": metrics["iou"], "area_ratio": metrics["area_ratio"],
+            "at_min": round(threshold / 60) if finite else None}
+
+
+def _run_ignitions(grid: Grid, seeds: list[tuple[int, float]], params: FireParams, horizon_s: float) -> list[float]:
+    """Arrival (s after t0) from several ignitions, each starting delay_s after t0: the earliest wins."""
+    arrival = [math.inf] * grid.size
+    for cell, delay_s in seeds:
+        seed = bytearray(grid.size)
+        seed[cell] = 1
+        own = simulate_arrival(grid, seed, params, max(0.0, horizon_s - delay_s))
+        arrival = [min(a, b + delay_s) for a, b in zip(arrival, own)]
+    return arrival
+
+
+def timed_candidates(priors: dict) -> list[FireParams]:
+    """Evidence priors -> FireParams; head rate is set directly and the base rate derived from it."""
+    out = []
+    for wind_from in priors["wind_from_deg"]:
+        for speed in priors["wind_speed_m_s"]:
+            for head in priors["head_rate_m_per_min"]:
+                coef = FireParams(1.0, wind_from, speed).wind_coef_per_m_s
+                out.append(FireParams(head / (1 + coef * speed), float(wind_from), float(speed)))
+    return out
+
+
+def timed_package_fire(history: IncidentHistory, evidence: dict, end: datetime) -> tuple[dict, tuple]:
+    """elliptical-mtt-ca fitted to curated, timed fire-arrival reports and the final perimeter's shape.
+
+    Same return shape as package_fire. Adds `hazard_until`: sim.bundle uses this simulated front as the
+    traffic hazard until then, instead of the half-day FEDS labels whose extents postdate their times.
+    """
+    fire = evidence["fire"]
+    by_id = {p.feature["properties"].get("perimeter_id"): p for p in history.perimeters}
+    if fire["final_perimeter_id"] not in by_id:
+        raise SourceError(f"final perimeter {fire['final_perimeter_id']} not in the package")
+    final = by_id[fire["final_perimeter_id"]]
+    ignitions = sorted(fire["ignitions"], key=lambda i: i["at"])
+    t0 = parse_utc(ignitions[0]["at"])
+    stop = parse_utc(fire["spread_stop"]["at"])
+    horizon_s = (stop - t0).total_seconds()
+    observations = fire["observations"]
+    boxes = [_bbox(final.geometry), *((*i["coord"], *i["coord"]) for i in ignitions)]
+    grid = Grid.covering(_union_bbox(boxes), FIRE_CELL_M, FIRE_MARGIN_M)
+    seeds = []
+    for i in ignitions:
+        cell = grid.cell_of(*i["coord"])
+        if cell is None:
+            raise ValueError(f"ignition {i['id']} lies outside the fire grid")
+        seeds.append((cell, (parse_utc(i["at"]) - t0).total_seconds()))
+    observed = rasterize(grid, final.geometry)
+
+    def window_s(obs):
+        return tuple((parse_utc(t) - t0).total_seconds() for t in obs["window_utc"])
+
+    points = []  # (observation, cells, window_s)
+    for obs in observations:
+        if obs["role"] == "excluded":
+            continue
+        cells = _location_cells(grid, obs["location"])
+        if not cells:
+            raise ValueError(f"observation {obs['id']} lies outside the fire grid")
+        points.append((obs, cells, window_s(obs)))
+    fit_points = [p for p in points if p[0]["role"] == "fit"]
+    bound_points = [p for p in points if p[0]["role"] == "bound"]
+    detections = fire.get("detections")
+    if detections:
+        passes = set(detections["passes_utc"])
+        for f in _read(history.package, "normalized/fire_detections.geojson")["features"]:
+            p = f["properties"]
+            cell = grid.cell_of(*f["geometry"]["coordinates"]) if p["acquired_at"] in passes else None
+            if cell is not None:
+                at_s = (parse_utc(p["acquired_at"]) - t0).total_seconds()
+                bound_points.append(({"id": p["detection_id"], "role": "bound", "evidence_class": "observed"},
+                                     _neighbourhood(grid, cell, DETECTION_NEIGHBOURHOOD), (0.0, at_s)))
+
+    def at_points(arrival, pts):
+        return [min(arrival[c] for c in cells) for _, cells, _ in pts]
+
+    def summary(arrival, pts):
+        values = at_points(arrival, pts)
+        windows = [_Window(t0 + timedelta(seconds=w[0]), t0 + timedelta(seconds=w[1])) for _, _, w in pts]
+        return score_arrival(values, t0, list(enumerate(windows)), horizon_s)
+
+    candidates = timed_candidates(fire["priors"])
+    table = []
+    for params in candidates:
+        arrival = _run_ignitions(grid, seeds, params, horizon_s)
+        errors = [_window_error_min(a, w, horizon_s) for a, (_, _, w) in zip(at_points(arrival, fit_points), fit_points)]
+        shape = _shape_iou(arrival, observed, grid.cell_area_km2)
+        table.append({"params": params, "errors": errors, "shape": shape,
+                      "objective": sum(errors) / len(errors) + IOU_WEIGHT_MIN * (1 - shape["iou"])})
+    best = min(table, key=lambda r: r["objective"])
+    params = best["params"]
+    observed_speeds = set(fire["priors"].get("observed_wind_speed_m_s", []))
+    at_observed_wind = min((r for r in table if r["params"].wind_speed_m_s in observed_speeds),
+                           key=lambda r: r["objective"], default=None)
+
+    # Leave-one-out: refit without each reported arrival and score that arrival with the refit choice.
+    loo = []
+    for k, (obs, _, _) in enumerate(fit_points):
+        def objective_without(r, k=k):
+            rest = r["errors"][:k] + r["errors"][k + 1:]
+            return sum(rest) / len(rest) + IOU_WEIGHT_MIN * (1 - r["shape"]["iou"])
+        refit = min(table, key=objective_without)
+        loo.append({"id": obs["id"], "error_min": round(refit["errors"][k], 1),
+                    "refit_wind_from_deg": refit["params"].wind_from_deg,
+                    "refit_head_m_per_min": round(refit["params"].head_rate_m_per_min, 1)})
+    loo_ranked = sorted(r["error_min"] for r in loo)
+    n = len(loo_ranked)
+    loo_median = (loo_ranked[n // 2] if n % 2 else (loo_ranked[n // 2 - 1] + loo_ranked[n // 2]) / 2) if n else None
+
+    unclipped = _run_ignitions(grid, seeds, params, horizon_s)
+    unclipped_fit, unclipped_bounds = summary(unclipped, fit_points), summary(unclipped, bound_points)
+    at_stop = score(burned_mask(unclipped, horizon_s), observed, grid.cell_area_km2)
+    arrival, constraint = constrain_to_perimeter(grid, unclipped, final)
+    constraint = {**constraint, "kind": "clipped_to_final_satellite_perimeter",
+                  "note": "Model front limited to the final FEDS perimeter (plus buffer): uses later evidence, so this "
+                          "is a replay reconstruction, not a forecast. Calibration scores are for the unclipped model; "
+                          "`observations.as_replayed` scores the clipped front."}
+    clipped_area = score(burned_mask(arrival, horizon_s), observed, grid.cell_area_km2)
+    point_rows = []
+    for (obs, cells, w), a_unclipped, a_clipped in zip(points, at_points(unclipped, points), at_points(arrival, points)):
+        point_rows.append({
+            "id": obs["id"], "place": obs["place"], "role": obs["role"], "kind": obs["kind"],
+            "reported_at": obs["at"], "window_utc": obs["window_utc"], "evidence_class": obs["evidence_class"],
+            "source_id": obs["source_id"], "source_locator": obs["source_locator"],
+            "model_at": format_utc(t0 + timedelta(seconds=a_unclipped)) if math.isfinite(a_unclipped) else None,
+            "model_at_as_replayed": format_utc(t0 + timedelta(seconds=a_clipped)) if math.isfinite(a_clipped) else None,
+            "window_error_min": round(_window_error_min(a_unclipped, w, horizon_s), 1),
+            # model minus the reported time (positive = model late); for "present_by" bounds only lateness matters
+            "error_vs_reported_min": round((a_unclipped - (parse_utc(obs["at"]) - t0).total_seconds()) / 60, 1)
+            if math.isfinite(a_unclipped) else None,
+            "cells": len(cells)})
+    point_errors = sorted(abs(r["error_vs_reported_min"]) for r in point_rows
+                          if r["role"] == "fit" and r["error_vs_reported_min"] is not None)
+    m = len(point_errors)
+    point_median = (point_errors[m // 2] if m % 2 else (point_errors[m // 2 - 1] + point_errors[m // 2]) / 2) if m else None
+    excluded = [{"id": o["id"], "place": o["place"], "reason": o.get("note")} for o in observations
+                if o["role"] == "excluded"]
+
+    final_at = final.snapshot_at
+    finite = [a for a in arrival if math.isfinite(a)]
+    last = t0 + timedelta(seconds=max(finite)) + FRONT_EVERY if finite else t0
+    until = min(end, final_at, last)
+    record_ignitions = [{"id": i["id"], "coord": i["coord"], "at": i["at"], "time_precision": i["time_precision"],
+                         "evidence_class": i["evidence_class"], "location_method": i["location_method"],
+                         "source_id": i["source_id"], "source_locator": i["source_locator"]} for i in ignitions]
+    ignition_record = {
+        "coord": [round(ignitions[0]["coord"][0], 5), round(ignitions[0]["coord"][1], 5)],
+        "at": format_utc(t0),
+        "provenance": f"reported: {ignitions[0]['time_basis']} Place {ignitions[0]['location_method']} A second "
+                      f"ignition ({ignitions[1]['id']}) is seeded at {ignitions[1]['at']}." if len(ignitions) > 1
+                      else f"reported: {ignitions[0]['time_basis']} Place {ignitions[0]['location_method']}",
+        "provenance_detail": record_ignitions,
+    }
+    fit_summary = unclipped_fit
+    headline = (f"median arrival error {point_median:.0f} min from the reported times at {m} places "
+                f"({fit_summary['median_abs_error_min']:.0f} min outside the report windows; leave-one-out "
+                f"{loo_median:.0f} min); shape IoU {best['shape']['iou']:.2f} with the final satellite perimeter. "
+                "Fitted to reported arrival times; no fuel or terrain layer")
+    block = {
+        "evidence_class": "simulated",
+        "model": {"id": MODEL_ID, "version": MODEL_VERSION, "params": params.to_dict()},
+        "ignition": ignition_record,
+        "calibration": {
+            "target_snapshot_at": format_utc(final_at),
+            "iou": best["shape"]["iou"],
+            "area_ratio": clipped_area["area_ratio"],
+            "method": (f"minimum of mean window error at {len(fit_points)} reported first arrivals + "
+                       f"{IOU_WEIGHT_MIN:g} min x (1 - shape IoU with the final perimeter), over {len(candidates)} "
+                       "parameter sets from the evidence priors (westerly sector)"),
+            "headline": headline,
+            "fitted_to": "reported fire-arrival times (AAR, FLA, Colorado Sun dispatch recordings) and the final "
+                         "FEDS perimeter's shape",
+            "evidence_file": evidence["path"],
+            "observations": {
+                "source": "curated reports in " + evidence["path"] + " (reported; geocoded here, derived)",
+                "report_lag_min": fire["report_lag_min"],
+                "fit": fit_summary,
+                "vs_reported_time": {"n": m, "median_abs_error_min": point_median,
+                                     "metric": "|model arrival - reported time|, no window"},
+                "leave_one_out": {"n": n, "median_abs_error_min": loo_median, "rows": loo,
+                                  "metric": "window error of each arrival under the choice refitted without it"},
+                "bounds": {**unclipped_bounds, "role": "evaluation only: 'fire present by' sightings and FIRMS "
+                                                       "daytime detections (window = ignition to sighting)"},
+                "as_replayed": {"fit": summary(arrival, fit_points), "bounds": summary(arrival, bound_points)},
+                "points": point_rows, "excluded": excluded,
+                "within_minutes": WITHIN_MINUTES,
+            },
+            "perimeter": {"snapshot_at": format_utc(final_at), "perimeter_id": fire["final_perimeter_id"],
+                          "shape_iou": best["shape"]["iou"], "shape_iou_at_min_after_t0": best["shape"]["at_min"],
+                          "iou_at_spread_stop_unclipped": at_stop["iou"],
+                          "area_ratio_at_spread_stop_unclipped": at_stop["area_ratio"],
+                          "area_ratio_as_replayed": clipped_area["area_ratio"],
+                          "n_cells": sum(observed), "cell_m": grid.cell_m, "spread_stop": fire["spread_stop"]["at"],
+                          "role": "shape term of the objective (direction and elongation); spread rate comes from "
+                                  "the arrival times"},
+            "objective": {"weight_min_per_iou": IOU_WEIGHT_MIN, "best": round(best["objective"], 2)},
+            "at_observed_wind_speed": at_observed_wind and {
+                "params": at_observed_wind["params"].to_dict(),
+                "mean_window_error_min": round(sum(at_observed_wind["errors"]) / len(at_observed_wind["errors"]), 1),
+                "shape_iou": at_observed_wind["shape"]["iou"], "objective": round(at_observed_wind["objective"], 2),
+                "note": "best candidate with the wind speed held at the observed sustained range: the narrower "
+                        "ellipse fits the perimeter shape worse, so it is not chosen"},
+            "params_source": f"chosen on every build from {len(candidates)} candidates ({evidence['path']} priors)",
+            "wind_evidence": fire["wind_evidence"],
+            "perimeter_time_precision": final.feature["properties"].get("time_precision"),
+        },
+        "constraint": constraint,
+        "hazard_until": format_utc(final_at),
+        "fronts": isochrones(grid, arrival, t0, until=until, every=FRONT_EVERY),
+        "arrival_grid": {
+            "origin_lon": grid.origin_lon, "origin_lat": grid.origin_lat, "cell_m": grid.cell_m,
+            "ncols": grid.ncols, "nrows": grid.nrows,
+            "m_per_deg_lon": grid._m_per_deg_lon, "m_per_deg_lat": grid._m_per_deg_lat,
+            "t0": format_utc(t0),
+            "minutes": [round(a / 60) if math.isfinite(a) else None for a in arrival],
+        },
+        "assumptions": [
+            f"Ignitions: {'; '.join(i['id'] + ' at ' + i['at'] + ' (' + i['location_method'] + ')' for i in ignitions)}.",
+            "Fitted to reported fire-arrival times (minute-level reports from the AAR, the FLA and dispatch "
+            f"recordings; a report at t means arrival in [t - {fire['report_lag_min']} min, t]) and to the final "
+            "satellite perimeter's shape. Report places are geocoded from OSM names (derived).",
+            "Uniform fuel, flat terrain (no fuel or terrain layer), constant wind; no spotting, no urban "
+            "structure-to-structure spread. The fitted wind direction is a fit within the westerly sector; the "
+            "fitted wind speed only sets ellipse elongation and is not the observed 22-27 m/s sustained wind.",
+            "One constant spread rate: the model cannot slow down in town or when the wind eased (about 18:30 MST); "
+            "the clip to the final perimeter stands in for that.",
+            "The simulated front is the traffic hazard until the final perimeter time (hazard_until); the FEDS "
+            "half-day labels (12:00 and 24:00 local) are not the times their extents were reached.",
+        ],
+    }
+    return block, (grid, arrival, t0, arrival_lookup(grid, arrival, t0))
+
+
 # --- demand ------------------------------------------------------------------------------------------------
 
 def _vehicles_by_household(p: dict) -> list[tuple[int, int]]:
@@ -376,18 +691,57 @@ class _Area:  # duck type for sim.demand._Locator
     geometry: dict
 
 
-def package_demand(package: Path, network) -> dict:
+def _split_zones(zones_src: dict, evidence: dict) -> tuple[dict, dict[str, list[str]], list[dict]]:
+    """Split package zones at a place boundary (evidence `zone_splits`): (zones_src with the parts added,
+    base zone -> part ids, report rows). Parts are derived on a raster and outlined without smoothing."""
+    zones_src, parts, rows = dict(zones_src), {}, []
+    for split in evidence.get("zone_splits", []):
+        base = zones_src[split["zone_id"]]
+        place = evidence["places"][split["place_geoid"]]["geometry"]
+        cell_m = float(split["cell_m"])
+        grid = Grid.covering(list(_bbox(base["geometry"])), cell_m, cell_m)
+        zone_mask, place_mask = rasterize(grid, base["geometry"]), rasterize(grid, place)
+        ids = []
+        for part_id, inside in ((split["inside_id"], True), (split["outside_id"], False)):
+            mask = bytearray(z and (p if inside else not p) for z, p in zip(zone_mask, place_mask))
+            if not any(mask):
+                continue
+            label = f"{'inside' if inside else 'outside'} {split['place_name']}"
+            zones_src[part_id] = {"type": "Feature", "geometry": mask_contour(grid, mask, smooth_iterations=0),
+                                  "properties": {**base["properties"], "zone_id": part_id,
+                                                 "name": f"{base['properties'].get('name') or split['zone_id']} ({label})",
+                                                 "geometry_status": "derived", "derived_from": split["zone_id"],
+                                                 "geometry_method": split["method"]}}
+            ids.append(part_id)
+            rows.append({"zone_id": part_id, "derived_from": split["zone_id"], "place": split["place_name"],
+                         "place_geoid": split["place_geoid"], "inside": inside, "cells": sum(mask),
+                         "cell_m": cell_m, "reason": split["reason"]})
+        parts[split["zone_id"]] = ids
+    return zones_src, parts, rows
+
+
+def package_demand(package: Path, network, evidence: dict | None = None) -> dict:
     """One demand zone per evacuation zone that an order or warning names, from ACS block groups.
 
     Vehicles of a zone = sum over block groups of evacuating vehicles x the share of the block group's area
     inside the zone that no earlier-ordered zone already covered (zones overlap; the max of shares is a
-    lower bound on their union). Orders and warnings target zones directly by zone ID.
+    lower bound on their union). Orders and warnings target zones directly by zone ID. `evidence`
+    (load_evidence) adds cited orders and splits zones at a place boundary; notices naming a split zone
+    then name all of its parts.
     """
     zones_src = {f["properties"]["zone_id"]: f for f in _read(package, "normalized/evacuation_zones.geojson")["features"]}
     unit_features = _read(package, "normalized/population_units.geojson")["features"]
     units = {f["properties"]["geoid"]: f["properties"] for f in unit_features}
     crosswalk = _crosswalk(package)
     events = _events(package)
+    split_rows, extra_orders = [], []
+    if evidence:
+        zones_src, parts, split_rows = _split_zones(zones_src, evidence)
+        extra_orders = [{**o, "source_locator": f"{o['source_locator']} (via {evidence['path']})"}
+                        for o in evidence.get("orders", [])]
+        events = [*events, *extra_orders]
+        events = [{**e, "target": {**e["target"], "zone_ids": [p for z in e["target"]["zone_ids"] for p in parts.get(z, [z])]}}
+                  if (e.get("target") or {}).get("zone_ids") else e for e in events]
     notices = [e for e in events if e["type"] in NOTICE_TYPES and (e.get("target") or {}).get("zone_ids")]
     unzoned = [{"event_id": e["event_id"], "at": e["occurred_at"], "type": e["type"],
                 "place_name": (e.get("target") or {}).get("place_name"),
@@ -415,7 +769,13 @@ def package_demand(package: Path, network) -> dict:
     unmapped = [{"zone_id": z, "reason": "no polygon in evacuation_zones" if not (zones_src.get(z) or {}).get("geometry")
                  else "no crosswalk rows"} for z in named if z not in modelled]
 
-    covered: dict[str, float] = {}  # geoid -> share already assigned to earlier zones
+    covered: dict[str, dict[str, float]] = {}  # geoid -> {earlier zone: share assigned to it}
+    # Parts of one split zone are disjoint, so a sibling's share is not treated as overlap.
+    siblings: dict[str, set[str]] = {}
+    for r in split_rows:
+        siblings.setdefault(r["zone_id"], set()).update(
+            x["zone_id"] for x in split_rows if x["derived_from"] == r["derived_from"])
+    used_units: set[str] = set()
     zones, stats = [], []
     for z in modelled:
         f = zones_src[z]
@@ -424,10 +784,13 @@ def package_demand(package: Path, network) -> dict:
         vehicles = households = population = no_vehicle = older = 0.0
         for geoid, share in crosswalk[z].items():
             u = units.get(geoid)
-            add = max(0.0, min(1.0, share) - covered.get(geoid, 0.0))
+            earlier = covered.get(geoid, {})
+            overlapping = sum(v for zz, v in earlier.items() if zz not in siblings.get(z, ()))
+            add = max(0.0, min(min(1.0, share) - overlapping, 1.0 - sum(earlier.values())))
             if u is None or add <= 0:
                 continue
-            covered[geoid] = covered.get(geoid, 0.0) + add
+            covered.setdefault(geoid, {})[z] = add
+            used_units.add(geoid)
             veh = sum(hh * min(k, VEHICLES_TAKEN_CAP) for k, hh in _vehicles_by_household(u)) * EVACUATION_PARTICIPATION
             vehicles += veh * add
             households += (u.get("households") or 0) * add
@@ -461,6 +824,7 @@ def package_demand(package: Path, network) -> dict:
 
     totals = {
         "zones": len(zones),
+        "block_groups": len(used_units),
         "population": sum(s["population"] for s in stats),
         "households": sum(s["households"] for s in stats),
         "households_no_vehicle": sum(s["households_no_vehicle"] for s in stats),
@@ -475,6 +839,15 @@ def package_demand(package: Path, network) -> dict:
         "evidence_class": "derived",
         "crosswalk": "package zone_population_crosswalk.json (zone x block-group area shares; derived by the "
                      "package builder), not the Camp derived crosswalk",
+        "population_source": "package population_units.geojson: "
+                             f"{_read(package, 'manifest.json')['layers']['population_units'].get('acs_vintage', 'ACS 5-year')} "
+                             "block-group estimates (population, households, vehicles available, 65+), not counts "
+                             "of people present on the day",
+        "orders_from_evidence": [{"event_id": o["event_id"], "at": o["occurred_at"], "type": o["type"],
+                                  "place_name": o["target"].get("place_name"), "evidence_class": o["evidence_class"],
+                                  "source_id": o["source_id"], "zone_mapping": o.get("zone_mapping")}
+                                 for o in extra_orders],
+        "zone_splits": split_rows,
         "parameters": {"vehicles_taken_cap": VEHICLES_TAKEN_CAP, "evacuation_participation": EVACUATION_PARTICIPATION},
         "totals": totals, "unmapped_zones": unmapped, "crosswalk_derived_here": derived_here,
         "orders_without_zone_ids": unzoned, "notices": mapped, "zones": stats,
@@ -486,7 +859,8 @@ def package_replay_inputs(incident: Incident, history: IncidentHistory) -> tuple
     """(scenario, start, end, ignition) for a generic evacuation package; call after verify_package."""
     package = incident.roads_package
     network, exits, provenance = load_road_network(package, verify=False)
-    demand = package_demand(package, network)
+    evidence = load_evidence(incident)
+    demand = package_demand(package, network, evidence)
     road_events, road_report = resolve_road_events(package, network, exits)
     kept = []
     for ev in road_events:
@@ -496,6 +870,8 @@ def package_replay_inputs(incident: Incident, history: IncidentHistory) -> tuple
             ev = replace(ev, edge_ids=())  # untimed narrative: timeline only, never a day-long closure
         kept.append(ev)
     ignition = package_ignition(package, history)
+    if evidence and evidence.get("fire"):
+        ignition["evidence"] = evidence  # package_fire then fits to the curated timed observations
     start, end, clock_rule = package_clock(package, ignition["at"])
     manifest = _read(package, "manifest.json")
     clip = manifest["requested_bbox"]
@@ -533,6 +909,9 @@ def package_replay_inputs(incident: Incident, history: IncidentHistory) -> tuple
             *([f"Block-group shares for {', '.join(d['zone_id'] for d in report['crosswalk_derived_here'])} are derived "
                f"here by {CROSSWALK_CELL_M:g} m raster overlap (the package crosswalk has no rows for them)."]
               if report["crosswalk_derived_here"] else []),
+            *([f"Zones split at a 2020 Census place boundary (derived, {report['zone_splits'][0]['cell_m']:g} m raster): "
+               + "; ".join(f"{r['zone_id']} ({'inside' if r['inside'] else 'outside'} {r['place']})"
+                           for r in report["zone_splits"]) + "."] if report["zone_splits"] else []),
             *incident.assumptions,
             f"Clock: {clock_rule}. {incident.clock_note}",
         ],
