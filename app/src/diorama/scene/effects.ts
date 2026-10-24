@@ -5,19 +5,32 @@ import { hash2, softDotTexture } from "./geometry";
 import { PALETTE } from "./palette";
 import type { SurfaceHeight } from "./roads";
 
-export type BurningCell = { x: number; y: number; z: number; age: number };
+export type BurningCell = { i: number; x: number; y: number; z: number; age: number };
 
-/** Lists burning cells (centre, ground height, age) at simulation time `t`. */
+/** A burning cell chosen to carry flame glow / smoke, with a 0..1 weight. */
+export type HotSpot = BurningCell & { weight: number };
+
+const HOTSPOT_COUNT = 32;
+
+/**
+ * Lists burning cells at simulation time `t` and picks "hot spots": actually burning
+ * cells weighted toward the fresh, downwind head of the fire (fading on the flanks and
+ * back), with deterministic per-cell variation so they do not line the perimeter evenly.
+ */
 export class FireSampler {
   private readonly fire: FireField;
   private readonly heights: Float32Array;
+  private readonly toward: { x: number; z: number };
   burning: BurningCell[] = [];
-  /** Burning cells with a fresh front, sorted spatially (row-major). */
-  front: BurningCell[] = [];
+  hotSpots: HotSpot[] = [];
+  /** Downwind extent (projection on the wind direction) of the burning cells. */
+  readonly headRange = { min: 0, max: 1 };
   private t = -1;
 
-  constructor(fire: FireField) {
+  constructor(fire: FireField, wind: World["wind"]) {
     this.fire = fire;
+    const len = Math.hypot(wind.toward.x, wind.toward.z) || 1;
+    this.toward = { x: wind.toward.x / len, z: wind.toward.z / len };
     this.heights = new Float32Array(fire.cols * fire.rows);
     for (let r = 0; r < fire.rows; r++) {
       for (let c = 0; c < fire.cols; c++) {
@@ -33,27 +46,75 @@ export class FireSampler {
     this.t = t;
     const f = this.fire;
     this.burning = [];
-    this.front = [];
+    let minP = Infinity;
+    let maxP = -Infinity;
     for (let r = 0; r < f.rows; r++) {
       for (let c = 0; c < f.cols; c++) {
         const i = r * f.cols + c;
         const age = t - f.ignitionTime[i];
         if (!(age >= 0 && age < f.burnDuration)) continue;
-        const cell = { x: f.originX + (c + 0.5) * f.cellSize, y: this.heights[i], z: f.originZ + (r + 0.5) * f.cellSize, age };
+        const cell = { i, x: f.originX + (c + 0.5) * f.cellSize, y: this.heights[i], z: f.originZ + (r + 0.5) * f.cellSize, age };
         this.burning.push(cell);
-        if (age < f.burnDuration * 0.45) this.front.push(cell);
+        const p = cell.x * this.toward.x + cell.z * this.toward.z;
+        minP = Math.min(minP, p);
+        maxP = Math.max(maxP, p);
       }
     }
+    if (this.burning.length) {
+      this.headRange.min = minP;
+      this.headRange.max = maxP;
+    }
+    const span = Math.max(f.cellSize * 2, maxP - minP);
+    const scored: { cell: BurningCell; weight: number; score: number }[] = [];
+    for (const cell of this.burning) {
+      const head = (cell.x * this.toward.x + cell.z * this.toward.z - minP) / span;
+      const fresh = 1 - cell.age / f.burnDuration;
+      const weight = Math.pow(fresh, 0.7) * (0.12 + 0.88 * smooth(0.3, 1, head));
+      const score = weight * (0.3 + 0.7 * hash2(cell.i * 0.61, 4.7));
+      if (score > 0.03) scored.push({ cell, weight, score });
+    }
+    scored.sort((a, b) => b.score - a.score);
+    this.hotSpots = scored.slice(0, HOTSPOT_COUNT).map(({ cell, weight }) => ({ ...cell, weight }));
     return true;
   }
 }
 
+const smooth = (a: number, b: number, v: number) => {
+  const k = Math.min(1, Math.max(0, (v - a) / (b - a)));
+  return k * k * (3 - 2 * k);
+};
+
+/** Very soft, slightly lumpy puff for smoke sprites. */
+function smokeTexture(): THREE.CanvasTexture {
+  const size = 128;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  if (ctx) {
+    const blob = (cx: number, cy: number, r: number, a: number) => {
+      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+      g.addColorStop(0, `rgba(255,255,255,${a})`);
+      g.addColorStop(0.45, `rgba(255,255,255,${a * 0.45})`);
+      g.addColorStop(1, "rgba(255,255,255,0)");
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, size, size);
+    };
+    blob(64, 64, 62, 0.75);
+    blob(48, 56, 34, 0.35);
+    blob(80, 70, 30, 0.3);
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
 type SmokeParticle = { sprite: THREE.Sprite; cycle: number; origin: THREE.Vector3; offset: number; shade: number };
 
-const SMOKE_LIFE = 9;
-const SMOKE_COUNT = 34;
-const SMOKE_COUNT_REDUCED = 12;
-const GLOW_COUNT = 56;
+const SMOKE_LIFE = 11;
+const SMOKE_COUNT = 30;
+const SMOKE_COUNT_REDUCED = 10;
+const GLOW_COUNT = 32;
 const SPRAY_PARTICLES = 28;
 const MAX_CREWS = 8;
 
@@ -65,6 +126,7 @@ export class EffectsLayer {
   private readonly fire: FireField;
   private readonly surfaceHeight: SurfaceHeight;
   private readonly dot: THREE.CanvasTexture;
+  private readonly puff: THREE.CanvasTexture;
   private readonly smoke: SmokeParticle[] = [];
   private readonly glows: THREE.Sprite[] = [];
   private readonly ignition = new THREE.Group();
@@ -83,12 +145,13 @@ export class EffectsLayer {
     this.surfaceHeight = surfaceHeight;
     this.sampler = sampler;
     this.dot = softDotTexture(64);
+    this.puff = smokeTexture();
 
     for (let i = 0; i < SMOKE_COUNT; i++) {
       const shade = hash2(i, 7.3);
       const material = new THREE.SpriteMaterial({
-        map: this.dot,
-        color: new THREE.Color(PALETTE.smoke).multiplyScalar(0.82 + shade * 0.22),
+        map: this.puff,
+        color: new THREE.Color(PALETTE.smoke).multiplyScalar(0.78 + shade * 0.25),
         transparent: true,
         depthWrite: false,
         opacity: 0,
@@ -228,13 +291,17 @@ export class EffectsLayer {
     this.tickSpray(time, reducedMotion);
   }
 
+  /**
+   * Soft, large, low-opacity puffs rising from hot spots at the head and leaning downwind
+   * into a plume. Reduced motion: fewer, frozen puffs.
+   */
   private tickSmoke(time: number, reducedMotion: boolean) {
-    const burning = this.sampler.burning;
+    const spots = this.sampler.hotSpots.length ? this.sampler.hotSpots : this.sampler.burning;
     const toward = this.world.wind.toward;
     const active = reducedMotion ? SMOKE_COUNT_REDUCED : SMOKE_COUNT;
     for (let i = 0; i < this.smoke.length; i++) {
       const p = this.smoke[i];
-      if (i >= active || burning.length === 0) {
+      if (i >= active || spots.length === 0) {
         p.sprite.visible = false;
         p.cycle = -1;
         continue;
@@ -245,18 +312,23 @@ export class EffectsLayer {
       const age = clock - cycle * SMOKE_LIFE;
       if (cycle !== p.cycle || (reducedMotion && !this.stillBurning(p.origin))) {
         p.cycle = cycle;
-        const src = burning[Math.floor(hash2(i * 3.1, cycle * 1.7) * burning.length) % burning.length];
+        // Favour the strongest spots (list is sorted by score).
+        const pick = Math.pow(hash2(i * 3.1, cycle * 1.7), 1.6);
+        const src = spots[Math.min(spots.length - 1, Math.floor(pick * spots.length))];
         p.origin.set(src.x, src.y, src.z);
       }
       const u = age / SMOKE_LIFE;
-      const drift = age * 4.2;
+      // Accelerating downwind lean as the puff rises.
+      const drift = age * 4 + age * age * 0.32;
+      const sway = Math.sin(i * 2.3 + age * 0.5) * (2 + u * 6);
       p.sprite.position.set(
-        p.origin.x + toward.x * drift + Math.sin(i * 2.3 + age * 0.6) * 2,
-        p.origin.y + 6 + age * 3.4,
-        p.origin.z + toward.z * drift,
+        p.origin.x + toward.x * drift - toward.z * sway,
+        p.origin.y + 5 + age * 3 - u * u * 6,
+        p.origin.z + toward.z * drift + toward.x * sway,
       );
-      p.sprite.scale.setScalar(9 + u * 20);
-      (p.sprite.material as THREE.SpriteMaterial).opacity = 0.3 * Math.sin(Math.PI * u) * (0.8 + p.shade * 0.4);
+      p.sprite.scale.setScalar(14 + u * 46);
+      const env = Math.pow(Math.sin(Math.PI * Math.min(1, u * 1.15)), 0.8);
+      (p.sprite.material as THREE.SpriteMaterial).opacity = 0.3 * env * (0.75 + p.shade * 0.5);
       p.sprite.visible = true;
     }
   }
@@ -270,22 +342,29 @@ export class EffectsLayer {
     return age >= 0 && age < f.burnDuration;
   }
 
+  /**
+   * Additive flame glow on hot spots (burning cells weighted to the head). Size, intensity,
+   * position jitter and flicker phase/rate vary per cell, so the glow pools at the head and
+   * thins out along the flanks instead of outlining the burn.
+   */
   private tickGlow(time: number, reducedMotion: boolean) {
-    const src = this.sampler.front.length >= 8 ? this.sampler.front : this.sampler.burning;
-    const stride = Math.max(1, src.length / GLOW_COUNT);
+    const spots = this.sampler.hotSpots;
+    const cs = this.fire.cellSize;
     for (let i = 0; i < this.glows.length; i++) {
       const s = this.glows[i];
-      const idx = Math.floor(i * stride);
-      if (idx >= src.length) {
+      const spot = spots[i];
+      if (!spot) {
         s.visible = false;
         continue;
       }
-      const cell = src[idx];
-      const fresh = 1 - Math.min(1, cell.age / this.fire.burnDuration);
-      const flick = reducedMotion ? 0.8 : 0.65 + 0.35 * Math.sin(time * 7.3 + i * 2.1) * Math.sin(time * 3.1 + i);
-      s.position.set(cell.x, cell.y + 2.2, cell.z);
-      s.scale.setScalar(this.fire.cellSize * (1.8 + fresh * 1.2));
-      (s.material as THREE.SpriteMaterial).opacity = 0.42 * flick * (0.35 + 0.65 * fresh);
+      const h1 = hash2(spot.i * 0.37, 1.3);
+      const h2 = hash2(spot.i * 0.73, 8.1);
+      const h3 = hash2(spot.i * 1.19, 3.7);
+      const rate = 4 + h2 * 6;
+      const flick = reducedMotion ? 0.8 : 0.6 + 0.4 * Math.sin(time * rate + h1 * 6.28) * Math.sin(time * (rate * 0.43) + h3 * 6.28);
+      s.position.set(spot.x + (h1 - 0.5) * cs * 0.8, spot.y + 1.6 + h3 * 1.6, spot.z + (h2 - 0.5) * cs * 0.8);
+      s.scale.setScalar(cs * (1.1 + h3 * 1.7) * (0.6 + 0.4 * spot.weight));
+      (s.material as THREE.SpriteMaterial).opacity = 0.5 * flick * spot.weight * (0.55 + 0.45 * h2);
       s.visible = true;
     }
   }
@@ -356,5 +435,6 @@ export class EffectsLayer {
 
   dispose() {
     this.dot.dispose();
+    this.puff.dispose();
   }
 }

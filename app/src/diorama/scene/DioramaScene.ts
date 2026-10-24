@@ -1,22 +1,28 @@
 import * as THREE from "three";
 import type { FireField, PickTarget, SimSnapshot, World } from "../types";
 import { BuildingLayer } from "./buildings";
-import { CameraRig } from "./camera";
+import { CameraRig, type ViewInsets } from "./camera";
 import { EffectsLayer, FireSampler } from "./effects";
 import { LabelLayer } from "./labels";
 import { PALETTE } from "./palette";
-import { BRIDGE_NAME, RoadLayer } from "./roads";
+import { BRIDGE_NAME, ROAD_WIDTH, RoadLayer } from "./roads";
 import { buildPlinth, buildTerrain, buildWater, createFireUniforms, type FireUniforms } from "./terrain";
 import { TreeLayer } from "./trees";
 import { VehicleLayer } from "./vehicles";
 
 export type DioramaSceneOptions = { reducedMotion: boolean };
+export type { ViewInsets };
 
 /** Pointer travel (CSS px) above which a press is treated as a drag, not a click. */
 const CLICK_TOLERANCE_PX = 5;
 /** Screen-space radius (CSS px) for picking small vehicles. */
-const VEHICLE_PICK_RADIUS_PX = 16;
+const VEHICLE_PICK_RADIUS_PX = 18;
 const MAX_PIXEL_RATIO = 2;
+/** Containers narrower than this get compact labels. */
+const COMPACT_WIDTH_PX = 600;
+/** Leader-line lengths (CSS px) between a label pill and the point it names. */
+const LABEL_STEM_PX = 34;
+const BRIDGE_STEM_PX = 62;
 
 function backgroundTexture(): THREE.CanvasTexture {
   const canvas = document.createElement("canvas");
@@ -133,7 +139,7 @@ export class DioramaScene {
     this.scene.add(this.sun, this.sun.target);
 
     // Content.
-    this.fireUniforms = createFireUniforms(fire);
+    this.fireUniforms = createFireUniforms(fire, world.wind.toward);
     this.scene.add(buildTerrain(world, this.fireUniforms));
     this.scene.add(buildPlinth(world));
     const water = buildWater(world);
@@ -147,13 +153,19 @@ export class DioramaScene {
     this.scene.add(this.trees.group);
     this.vehicles = new VehicleLayer(this.roads.surfaceHeight, world.households.length);
     this.scene.add(this.vehicles.group);
-    this.sampler = new FireSampler(fire);
+    this.sampler = new FireSampler(fire, world.wind);
     this.effects = new EffectsLayer(world, fire, this.roads.surfaceHeight, this.sampler);
     this.scene.add(this.effects.group);
 
-    this.labels.add(this.scene, "shelter", world.shelter.label, this.buildings.shelterAnchor);
-    this.labels.add(this.scene, "station", world.station.label, this.buildings.stationAnchor);
-    this.labels.add(this.scene, "bridge", BRIDGE_NAME, this.roads.bridge.midpoint.clone().add(new THREE.Vector3(0, 6, 0)));
+    // Labels float above what they name on a thin stem; the bridge label hangs off the
+    // north (upstream) railing so the deck and the queue on its approach stay visible.
+    this.labels.add(this.scene, "shelter", world.shelter.label, this.buildings.shelterAnchor, LABEL_STEM_PX);
+    this.labels.add(this.scene, "station", world.station.label, this.buildings.stationAnchor, LABEL_STEM_PX);
+    const br = this.roads.bridge;
+    const north = new THREE.Vector3(br.b.z - br.a.z, 0, -(br.b.x - br.a.x)).normalize();
+    if (north.z > 0) north.negate();
+    const bridgeAnchor = br.midpoint.clone().addScaledVector(north, ROAD_WIDTH.bridge / 2 + 0.8).add(new THREE.Vector3(0, 1.6, 0));
+    this.labels.add(this.scene, "bridge", BRIDGE_NAME, bridgeAnchor, BRIDGE_STEM_PX, 0.14);
     this.labels.add(this.scene, "wind", `Wind · ${world.wind.label}`, this.effects.windAnchor);
 
     this.rig = new CameraRig(world, canvas);
@@ -174,7 +186,7 @@ export class DioramaScene {
     const t = snapshot.t;
     this.fireUniforms.uSimT.value = t;
     this.trees.update(t);
-    this.sampler.update(t);
+    if (this.sampler.update(t)) this.fireUniforms.uHeadRange.value.set(this.sampler.headRange.min, this.sampler.headRange.max);
     this.effects.setSimTime(t);
     this.effects.setCrews(snapshot.crews);
     this.roads.setClosed(snapshot.closedEdgeIds);
@@ -215,6 +227,16 @@ export class DioramaScene {
     if (view.z >= 0) return null;
     p.project(camera);
     return { x: ((p.x + 1) / 2) * this.width, y: ((1 - p.y) / 2) * this.height };
+  }
+
+  /**
+   * CSS px of the container occluded by overlay UI on each side. The default view (and
+   * resetView) frames the whole board inside the remaining rectangle, shifting the
+   * projection centre with setViewOffset so orbiting still pivots on the board centre.
+   */
+  setViewInsets(insets: ViewInsets): void {
+    if (this.disposed) return;
+    this.rig.setInsets(insets);
   }
 
   setReducedMotion(value: boolean): void {
@@ -268,7 +290,8 @@ export class DioramaScene {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO));
     this.renderer.setSize(w, h);
     this.labels.setSize(w, h);
-    this.rig.setAspect(w / h);
+    this.rig.setViewport(w, h);
+    this.labels.setCompact(w < COMPACT_WIDTH_PX);
   }
 
   private readonly frame = () => {

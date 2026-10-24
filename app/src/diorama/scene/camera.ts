@@ -15,6 +15,11 @@ const TARGET_Y = 4;
 const IDLE_DELAY_MS = 3500;
 const DRIFT_AMPLITUDE = 3.2 * DEG;
 const RESET_DURATION_S = 1.4;
+/** Overlay insets may cover at most this fraction of each viewport dimension. */
+const MAX_INSET_FRACTION = 0.78;
+
+/** CSS px of the viewport covered by page overlays (legend, counters, caption, dock). */
+export type ViewInsets = { top: number; right: number; bottom: number; left: number };
 
 const easeInOutCubic = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 
@@ -26,6 +31,9 @@ export class CameraRig {
   private readonly fitPoints: THREE.Vector3[] = [];
   private readonly defaultTarget = new THREE.Vector3(0, TARGET_Y, 0);
   private fitDistance = 900;
+  private viewport = { w: 16, h: 9 };
+  private insets: ViewInsets = { top: 0, right: 0, bottom: 0, left: 0 };
+  private rawInsets: ViewInsets = { top: 0, right: 0, bottom: 0, left: 0 };
   private atDefault = true;
   private interacting = false;
   private lastInteraction = 0;
@@ -70,21 +78,40 @@ export class CameraRig {
     this.controls.maxAzimuthAngle = DEFAULT_AZIMUTH + AZIMUTH_SWING;
     this.controls.addEventListener("start", this.onStart);
     this.controls.addEventListener("end", this.onEnd);
-    this.setAspect(16 / 9);
+    this.refit();
     this.snapToDefault();
   }
 
-  /** Smallest distance at which the whole board fits the frame at the default angles. */
-  private computeFit(aspect: number): number {
-    const cam = new THREE.PerspectiveCamera(FOV, aspect, 1, 10000);
+  /**
+   * Smallest distance at which the whole board fits the unobscured part of the viewport
+   * (viewport minus overlay insets) at the default angles. The projection is shifted with
+   * `setViewOffset` so the composition centre sits in the middle of that free rectangle.
+   */
+  private computeFit(cam: THREE.PerspectiveCamera): number {
+    const { w, h } = this.viewport;
+    const ins = this.insets;
+    const freeW = w - ins.left - ins.right;
+    const freeH = h - ins.top - ins.bottom;
+    // In portrait free areas, let the far board corners crop slightly at the sides so the
+    // board is not tiny (negative margin = allowed overshoot).
+    const portrait = Math.max(0, 1 - freeW / freeH);
+    const mx = freeW * (0.02 - Math.min(0.16, portrait * 0.22));
+    const my = freeH * 0.03;
+    const probe = cam.clone();
+    probe.near = 1;
+    probe.far = 20000;
+    probe.updateProjectionMatrix();
+    const v = new THREE.Vector3();
     const fits = (d: number) => {
-      cam.position.setFromSpherical(new THREE.Spherical(d, DEFAULT_POLAR, DEFAULT_AZIMUTH)).add(this.defaultTarget);
-      cam.lookAt(this.defaultTarget);
-      cam.updateMatrixWorld();
-      const v = new THREE.Vector3();
+      probe.position.setFromSpherical(new THREE.Spherical(d, DEFAULT_POLAR, DEFAULT_AZIMUTH)).add(this.defaultTarget);
+      probe.lookAt(this.defaultTarget);
+      probe.updateMatrixWorld();
       for (const p of this.fitPoints) {
-        v.copy(p).project(cam);
-        if (Math.abs(v.x) > 0.96 || Math.abs(v.y) > 0.9 || v.z > 1) return false;
+        v.copy(p).project(probe);
+        if (v.z > 1) return false;
+        const px = ((v.x + 1) / 2) * w;
+        const py = ((1 - v.y) / 2) * h;
+        if (px < ins.left + mx || px > w - ins.right - mx || py < ins.top + my || py > h - ins.bottom - my) return false;
       }
       return true;
     };
@@ -98,15 +125,47 @@ export class CameraRig {
     return hi;
   }
 
-  setAspect(aspect: number) {
-    this.camera.aspect = aspect;
-    this.fitDistance = this.computeFit(aspect);
+  /** Viewport size in CSS px (call on resize). */
+  setViewport(w: number, h: number) {
+    this.viewport = { w: Math.max(1, w), h: Math.max(1, h) };
+    this.refit();
+  }
+
+  /**
+   * CSS px of the viewport covered by page overlays. Opposite insets are scaled down
+   * together so at least 22% of the width/height stays free for the board.
+   */
+  setInsets(insets: ViewInsets) {
+    this.rawInsets = { ...insets };
+    this.refit();
+  }
+
+  private refit() {
+    const { w, h } = this.viewport;
+    const raw = this.rawInsets;
+    const clampPair = (a: number, b: number, total: number): [number, number] => {
+      const x = Number.isFinite(a) ? Math.max(0, a) : 0;
+      const y = Number.isFinite(b) ? Math.max(0, b) : 0;
+      const max = total * MAX_INSET_FRACTION;
+      const k = x + y > max ? max / (x + y) : 1;
+      return [x * k, y * k];
+    };
+    const [left, right] = clampPair(raw.left, raw.right, w);
+    const [top, bottom] = clampPair(raw.top, raw.bottom, h);
+    this.insets = { top, right, bottom, left };
+    const ins = this.insets;
+    const cx = ins.left + (w - ins.left - ins.right) / 2;
+    const cy = ins.top + (h - ins.top - ins.bottom) / 2;
+    this.camera.aspect = w / h;
+    this.camera.setViewOffset(w, h, -(cx - w / 2), -(cy - h / 2), w, h);
+    this.fitDistance = this.computeFit(this.camera);
     this.controls.minDistance = this.fitDistance * 0.22;
     this.controls.maxDistance = this.fitDistance * 1.35;
     this.camera.near = Math.max(1, this.fitDistance * 0.01);
     this.camera.far = this.fitDistance * 4;
     this.camera.updateProjectionMatrix();
     if (this.atDefault && !this.reset) this.snapToDefault();
+    else if (this.reset) this.reset.to = this.defaultSpherical();
   }
 
   private defaultSpherical() {

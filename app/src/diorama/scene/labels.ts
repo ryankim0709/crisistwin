@@ -16,6 +16,9 @@ const LABEL_CSS = `
   box-shadow: 0 1px 2px rgba(40, 35, 30, 0.16), 0 4px 14px rgba(40, 35, 30, 0.1);
   transition: border-color 300ms ease, box-shadow 300ms ease;
 }
+.dsc-pin { display: flex; flex-direction: column; align-items: center; pointer-events: none; }
+.dsc-stem { width: 1.5px; background: linear-gradient(rgba(42, 46, 51, 0.55), rgba(42, 46, 51, 0.3)); border-radius: 1px; }
+.dsc-foot { width: 5px; height: 5px; border-radius: 50%; background: rgba(251, 248, 241, 0.95); box-shadow: 0 0 0 1.5px rgba(42, 46, 51, 0.55); }
 .dsc-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
 .dsc-dot--shelter { background: #2fb3c8; box-shadow: 0 0 0 2px rgba(73, 194, 212, 0.25); }
 .dsc-dot--station { background: #c4473b; border-radius: 2px; }
@@ -32,6 +35,14 @@ const LABEL_CSS = `
   0%, 100% { box-shadow: 0 0 0 2px rgba(226, 103, 76, 0.28), 0 4px 14px rgba(40, 35, 30, 0.1); }
   50% { box-shadow: 0 0 0 7px rgba(226, 103, 76, 0.08), 0 4px 14px rgba(40, 35, 30, 0.1); }
 }
+.dsc-compact .dsc-label { font-size: 10px; gap: 4px; padding: 2px 7px 2px 6px; }
+.dsc-compact .dsc-dot { width: 6px; height: 6px; }
+.dsc-compact .dsc-badge { font-size: 8.5px; padding: 1px 4px; }
+.dsc-compact .dsc-wind { display: none; }
+.dsc-compact .dsc-stem { height: 16px !important; margin-left: 0 !important; }
+.dsc-compact .dsc-stem--tall { height: 38px !important; }
+.dsc-compact .dsc-foot { margin-left: 0 !important; }
+.dsc-compact .dsc-pin { align-items: center !important; }
 @media (prefers-reduced-motion: reduce) { .dsc-label--alert { animation: none; } }
 `;
 
@@ -40,6 +51,8 @@ export type LabelKind = "shelter" | "station" | "bridge" | "wind";
 export class LabelLayer {
   readonly renderer: CSS2DRenderer;
   private readonly objects: CSS2DObject[] = [];
+  /** Stemmed labels and their preferred stem attachment (restored when not compact). */
+  private readonly aligned: { obj: CSS2DObject; align: number }[] = [];
   private bridgeEl: HTMLElement | null = null;
 
   constructor(container: HTMLElement) {
@@ -57,30 +70,62 @@ export class LabelLayer {
     container.appendChild(el);
   }
 
-  add(parent: THREE.Object3D, kind: LabelKind, text: string, position: THREE.Vector3): CSS2DObject {
-    const el = document.createElement("div");
-    el.className = kind === "wind" ? "dsc-label dsc-wind" : "dsc-label";
+  /**
+   * Adds a label pill. With `stem` > 0 (CSS px) the pill floats that far above `position`
+   * with a thin leader line down to a small foot dot on the anchor, so the labelled object
+   * (and any vehicles on it) stay visible. `align` (0..1) is where along the pill the
+   * stem attaches: 0.5 centred, smaller values push the pill to the right of its anchor.
+   */
+  add(parent: THREE.Object3D, kind: LabelKind, text: string, position: THREE.Vector3, stem = 0, align = 0.5): CSS2DObject {
+    const pill = document.createElement("div");
+    pill.className = kind === "wind" ? "dsc-label dsc-wind" : "dsc-label";
     if (kind !== "wind") {
       const dot = document.createElement("span");
       dot.className = `dsc-dot dsc-dot--${kind}`;
-      el.appendChild(dot);
+      pill.appendChild(dot);
     }
     const span = document.createElement("span");
     span.textContent = text;
-    el.appendChild(span);
+    pill.appendChild(span);
     if (kind === "bridge") {
       const badge = document.createElement("span");
       badge.className = "dsc-badge";
       badge.textContent = "Bottleneck";
-      el.appendChild(badge);
-      this.bridgeEl = el;
+      pill.appendChild(badge);
+      this.bridgeEl = pill;
+    }
+    let el: HTMLElement = pill;
+    if (stem > 0) {
+      el = document.createElement("div");
+      el.className = "dsc-pin";
+      el.style.alignItems = align === 0.5 ? "center" : "flex-start";
+      const line = document.createElement("div");
+      line.className = kind === "bridge" ? "dsc-stem dsc-stem--tall" : "dsc-stem";
+      line.style.height = `${stem}px`;
+      const foot = document.createElement("div");
+      foot.className = "dsc-foot";
+      if (align !== 0.5) {
+        // Pin the stem at `align` of the pill width (the pill sets the element width).
+        line.style.marginLeft = `calc(${align * 100}% - 0.75px)`;
+        foot.style.marginLeft = `calc(${align * 100}% - 2.5px)`;
+      }
+      el.append(pill, line, foot);
     }
     const obj = new CSS2DObject(el);
     obj.position.copy(position);
-    obj.center.set(0.5, 1);
+    // The foot dot (or the pill's bottom centre) sits on the anchor.
+    obj.center.set(stem > 0 ? align : 0.5, stem > 0 ? 0.98 : 1);
     parent.add(obj);
     this.objects.push(obj);
+    if (stem > 0) this.aligned.push({ obj, align });
     return obj;
+  }
+
+  /** Smaller labels for narrow containers; hides the wind text (the 3D arrow remains). */
+  setCompact(value: boolean) {
+    this.renderer.domElement.classList.toggle("dsc-compact", value);
+    // Compact labels are centred on short stems so offset pills don't run off narrow screens.
+    for (const { obj, align } of this.aligned) obj.center.x = value ? 0.5 : align;
   }
 
   setBottleneck(active: boolean) {

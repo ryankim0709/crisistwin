@@ -17,10 +17,13 @@ export type FireUniforms = {
   uSimT: { value: number };
   uTime: { value: number };
   uHeldFrom: { value: number };
+  /** Unit wind direction (x, z) and the downwind extent [min, max] of burning cells. */
+  uWindDir: { value: THREE.Vector2 };
+  uHeadRange: { value: THREE.Vector2 };
 };
 
 /** Packs the fire field into an RG float texture: R = ignition time, G = crew-held flag. */
-export function createFireUniforms(fire: FireField): FireUniforms {
+export function createFireUniforms(fire: FireField, wind: { x: number; z: number }): FireUniforms {
   const data = new Float32Array(fire.cols * fire.rows * 2);
   for (let i = 0; i < fire.cols * fire.rows; i++) {
     const ign = fire.ignitionTime[i];
@@ -39,13 +42,15 @@ export function createFireUniforms(fire: FireField): FireUniforms {
     uSimT: { value: 0 },
     uTime: { value: 0 },
     uHeldFrom: { value: Number.isFinite(fire.heldFrom) ? fire.heldFrom : NEVER },
+    uWindDir: { value: new THREE.Vector2(wind.x, wind.z).normalize() },
+    uHeadRange: { value: new THREE.Vector2(0, 1) },
   };
 }
 
 /**
  * Ground fire drawn inside the terrain material so it conforms exactly to the relief:
  * burned cells char to dark umber/ash, burning cells glow amber-coral with a brighter
- * fresh front, recently burned ground keeps faint embers, crew-held cells get a cool
+ * fresh front (strongest at the downwind head, calmer on flanks and back), recently burned ground keeps faint embers, crew-held cells get a cool
  * striped "wet line" tint after `heldFrom`. Cells are blended bilinearly with a noise warp
  * so the front reads as an organic edge rather than grid squares.
  */
@@ -56,6 +61,8 @@ uniform vec2 uFireSize;
 uniform float uSimT;
 uniform float uTime;
 uniform float uHeldFrom;
+uniform vec2 uWindDir;
+uniform vec2 uHeadRange;
 varying vec2 vFireXZ;
 
 float fHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
@@ -108,6 +115,11 @@ vec3 applyFire(inout vec3 base) {
   float stripe = step(0.5, fract((vFireXZ.x + vFireXZ.y) * 0.16));
   base = mix(base, vec3(0.24, 0.40, 0.50), held * (1.0 - burning) * (0.26 + 0.14 * stripe));
 
+  // The flaming front is strongest at the downwind head and calmer on the flanks/back.
+  float head = clamp((dot(vFireXZ, uWindDir) - uHeadRange.x) / max(uHeadRange.y - uHeadRange.x, 1.0), 0.0, 1.0);
+  float headGain = 0.3 + 0.7 * smoothstep(0.35, 1.0, head);
+  front *= headGain;
+  burning *= 0.55 + 0.45 * headGain;
   vec3 coral = vec3(1.0, 0.2, 0.07);
   vec3 amber = vec3(1.0, 0.52, 0.1);
   vec3 em = mix(coral, amber, n) * burning * (0.55 + 0.6 * n2) * 1.3;
