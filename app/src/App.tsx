@@ -69,6 +69,9 @@ export default function App() {
           <p>
             <a href="/maps">Open map →</a>
           </p>
+          <p>
+            <a href="/replay">Open Camp Fire (2018) historical replay →</a>
+          </p>
         </div>
         <div className="connection" aria-live="polite" aria-atomic="true">
           <span className="connection-label">System connection</span>

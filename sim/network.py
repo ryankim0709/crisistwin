@@ -57,7 +57,7 @@ def load_road_network(package: Path) -> tuple[RoadNetwork, tuple[Destination, ..
             lanes=lanes,
             speed_kph=speed,
             capacity_veh_per_hour=lanes * default["capacity_veh_per_hour_per_lane"],
-            name=p["name"] or p["ref"] or p["highway"].replace("_", " ").title(),
+            name=p["name"] or p["ref"] or f"unnamed {p['highway'].replace('_', ' ')} road",
             highway=p["highway"],
             bridge=p["bridge"],
             coords=tuple(tuple(c) for c in feature["geometry"]["coordinates"]),

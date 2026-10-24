@@ -1,0 +1,126 @@
+/* Perspective switcher and ground HUD; uses the replay palette variables from replay.css. */
+.pv-switcher {
+  position: absolute;
+  top: 96px;
+  right: 10px;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  max-width: 180px;
+  padding: 6px;
+  border-radius: 10px;
+  background: var(--rp-glass, rgba(10, 15, 21, 0.78));
+  border: 1px solid var(--rp-line, rgba(160, 190, 220, 0.14));
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+.pv-btn {
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--rp-text, #e6edf3);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.pv-btn:hover {
+  background: rgba(160, 190, 220, 0.1);
+}
+.pv-btn[aria-pressed="true"] {
+  border-color: var(--rp-amber, #ffb547);
+  color: var(--rp-amber, #ffb547);
+  font-weight: 600;
+}
+.pv-btn:focus-visible,
+.pv-orbit input:focus-visible {
+  outline: 2px solid var(--rp-amber, #ffb547);
+  outline-offset: 1px;
+}
+.pv-orbit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  color: var(--rp-dim, #8b9aa8);
+}
+.pv-hint {
+  margin: 2px 4px 0;
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--rp-dim, #8b9aa8);
+}
+.pv-imagery-note,
+.pv-modelled {
+  position: absolute;
+  left: 50%;
+  z-index: 2;
+  transform: translateX(-50%);
+  margin: 0;
+  padding: 5px 12px;
+  border-radius: 999px;
+  white-space: nowrap;
+  pointer-events: none;
+  max-width: calc(100% - 32px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pv-imagery-note {
+  bottom: 150px;
+  font-size: 11px;
+  color: var(--rp-dim, #8b9aa8);
+  background: var(--rp-glass, rgba(10, 15, 21, 0.78));
+  border: 1px dashed var(--rp-line-strong, rgba(160, 190, 220, 0.28));
+}
+.pv-modelled {
+  top: 45%;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #ffe5cf;
+  background: rgba(30, 10, 2, 0.6);
+  border: 1px solid rgba(255, 106, 26, 0.55);
+}
+.pv-hud {
+  position: absolute;
+  top: 250px;
+  right: 10px;
+  z-index: 2;
+  width: 220px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--rp-glass, rgba(10, 15, 21, 0.78));
+  border: 1px solid var(--rp-line-strong, rgba(160, 190, 220, 0.28));
+  color: var(--rp-text, #e6edf3);
+  font-size: 12px;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+.pv-hud dl {
+  display: grid;
+  grid-template-columns: 1fr;
+  margin: 0;
+}
+.pv-hud dt {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--rp-dim, #8b9aa8);
+}
+.pv-hud dd {
+  margin: 0 0 6px;
+  font-family: var(--rp-mono, ui-monospace, monospace);
+  color: var(--rp-ember-core, #ffd29a);
+}
+.pv-hud p {
+  margin: 0;
+}
+.pv-hud .pv-hud-note {
+  margin-top: 4px;
+  font-size: 10px;
+  color: var(--rp-dim, #8b9aa8);
+}
