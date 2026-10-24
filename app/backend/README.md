@@ -7,6 +7,15 @@ Django 5.2 / Django REST Framework, Python 3.12, PostgreSQL 17. See the root
 tests. Keep future simulation calculations in a separate pure Python package,
 with explicit inputs/outputs, without importing Django or provider clients.
 
+## Database migrations
+
+The `api` app defines dataset snapshots, owned scenarios, simulation runs with
+immutable input snapshots, and fire timeline frames. See the
+[persistence contract](persistence.md) for fields, payloads, units, migration
+commands, deletion behavior, and integration requirements. These are storage
+models only; scenario save/replay endpoints and frontend persistence are not
+implemented. Existing Docker startup applies the migrations automatically.
+
 ## API contract
 
 `GET /api/health` (no trailing slash) is unauthenticated, read-only readiness.
