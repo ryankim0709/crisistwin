@@ -13,7 +13,7 @@ import "./windPicker.css";
 const OPTIONS = [
   { value: "assumed", label: "Assumed" },
   { value: "historical", label: "Historical" },
-  { value: "worst_case", label: "Worst case" },
+  { value: "worst_case", label: "Worst" },
   { value: "forecast", label: "Forecast" },
 ] as const;
 

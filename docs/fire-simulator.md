@@ -46,6 +46,17 @@ spotting distance, and structure-to-structure spread rate stay at their defaults
 0.5, the share of the open wind that reaches flame height). When canopy data loaded for
 the area, each cell instead gets its own factor from canopy cover, canopy height, and fuel
 bed depth, lower under a closed stand than in the open.
+_Wind source_ chooses where the wind comes from: **Assumed** (the slider and field below, the
+default), **Historical** (a UTC date and time), **Worst** (a month and P90, P95 or P99 offshore peak,
+a real observed episode picked statistically), or **Forecast** (NWS, from now). The last three call
+`GET /api/weather/scenario` ([scenario weather](scenario-weather.md)) for the ignition point and show
+the evidence class (Observed, Derived, Forecast), the station and its distance in km. The solver
+takes a single wind per run, so the series is reduced to its **peak hour in the 24 hour window** and
+that speed and direction drive the whole run; the panel says so. Station winds are converted to the
+open 20 foot wind first (10 m stations x 0.87, RAWS unchanged, citation and limits in the scenario
+weather doc), and the midflame factor below is then applied to that 20 foot wind. Changing the speed
+or direction by hand goes back to Assumed. Simulation Studio has the same selector and records the
+series and its provenance in drill packages.
 Switching the click target to _Wind direction_ lets you click downwind of the ignition point
 to aim the wind; the numeric field and the arrow at the ignition point stay in sync with it.
 The _View_ switch flips between the diorama and the original USGS aerial-imagery map (needs a network connection) with the same run, time, and clicks; the choice is remembered in the browser. _Show the fuel layer the model is using_ tints the ground by fuel family, _Focus fire_

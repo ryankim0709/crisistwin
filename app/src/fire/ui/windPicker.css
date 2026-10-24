@@ -55,3 +55,9 @@
   color: var(--ct-ink-muted);
   font-size: var(--ct-text-sm);
 }
+
+.fr-wp .ui-segmented button {
+  flex: 1;
+  padding-inline: 6px;
+  white-space: nowrap;
+}
