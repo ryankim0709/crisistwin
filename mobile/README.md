@@ -72,9 +72,20 @@ The Practice view was removed from the phone. It showed the web app's `/fire` pa
 `WKWebView` with the sidebar hidden (see [ADR 0007](../docs/adr/0007-mobile-web-map.md)).
 `WEB_BASE_URL` is still validated like `API_BASE_URL`; Debug uses `http://localhost:5173`.
 
+### Home layout
+
+Home is titled **Home** under the CrisisTwin logo. A status hero answers "is there an emergency
+near me?" with an icon, a line of words and, where it applies, its next step: **Location is
+off** (turn it on), **Can't check right now** (try again), **Checking your area**, **No
+emergency near you**, **No order for {zone}**, or the order's verdict ("Leave now", "Be ready to
+leave") with **See what to do**. It never claims all clear without data. Below it, while the
+phone knows its zone, come the guidance, way out, check-ins and nearby facts; four tiles at the
+end show the meeting point, family, emergency contacts and alerts, and open Plan.
+
 ### Evacuate button
 
-Home shows a red **Evacuate** button above everything else. Three taps within 1.5 s arm it
+The **Evacuate** button sits inside the status hero: outlined on a quiet day, solid red while
+the zone has an evacuate-now order. Three taps within 1.5 s arm it
 (a dot fills per tap and the count resets if you pause), then a confirmation asks
 "Start evacuating?". VoiceOver gets a single activation, still confirmed. **Start does nothing
 yet.** The planned flow: post **On the way** to the family, open Messages to the emergency

@@ -3,9 +3,12 @@ import UIKit
 
 /// Home's Evacuate button. Three quick taps (within `window`) arm it so a pocket tap can't, then a
 /// confirmation asks before anything happens. VoiceOver gets one plain activation, still confirmed.
+/// Outlined on a quiet day; solid red while the zone has an evacuate-now order.
 // ponytail: Start does nothing yet; it will post "On the way" to the family, open Messages to the
 // emergency contacts and show the backend's checked destinations (see mobile/README.md).
 struct EvacuateButton: View {
+    var urgent = false
+
     /// How long three taps may take, in seconds.
     static let window: TimeInterval = 1.5
     private static let tapsNeeded = 3
@@ -23,19 +26,19 @@ struct EvacuateButton: View {
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Evacuate")
-                        .font(.title3.weight(.bold))
+                        .font(.headline)
                     Text(taps.isEmpty ? "Tap 3 times quickly" : "Keep tapping")
                         .font(.subheadline)
-                        .opacity(0.9)
                 }
                 Spacer(minLength: 8)
                 dots
             }
-            .foregroundStyle(Color.white)
-            .padding(.horizontal, 18)
-            .frame(maxWidth: .infinity, minHeight: 72, alignment: .leading)
-            .background(Color.ctDanger, in: RoundedRectangle(cornerRadius: 18))
-            .contentShape(RoundedRectangle(cornerRadius: 18))
+            .foregroundStyle(foreground)
+            .padding(.horizontal, 16)
+            .frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
+            .background(urgent ? Color.ctDanger : Color.ctDangerSoft, in: RoundedRectangle(cornerRadius: 16))
+            .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color.ctDanger, lineWidth: urgent ? 0 : 1.5))
+            .contentShape(RoundedRectangle(cornerRadius: 16))
         }
         .buttonStyle(.plain)
         .sensoryFeedback(.impact(weight: .medium), trigger: taps.count) { _, new in new > 0 }
@@ -50,12 +53,15 @@ struct EvacuateButton: View {
         }
     }
 
+    /// Readable on the solid fill in both modes (dark mode's fill is light), red text when outlined.
+    private var foreground: Color { urgent ? GuidanceLevel.evacuateNow.onFill : .ctDanger }
+
     /// One dot per tap so far; all three fill as the button arms.
     private var dots: some View {
         HStack(spacing: 6) {
             ForEach(0..<Self.tapsNeeded, id: \.self) { index in
                 Circle()
-                    .fill(index < taps.count ? Color.white : Color.white.opacity(0.35))
+                    .fill(index < taps.count ? foreground : foreground.opacity(0.3))
                     .frame(width: 10, height: 10)
             }
         }

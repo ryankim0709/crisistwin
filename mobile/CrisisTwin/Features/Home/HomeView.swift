@@ -10,7 +10,6 @@ struct HomeView: View {
     @Environment(LiveStore.self) private var store
     @Environment(LocationProvider.self) private var location
     @Environment(AppRouter.self) private var router
-    @Environment(\.openURL) private var openURL
     @State private var explainExercise = false
 
     var body: some View {
@@ -20,8 +19,9 @@ struct HomeView: View {
                     VStack(alignment: .leading, spacing: 12) {
                         header
                             .padding(.bottom, 4)
-                        EvacuateButton()
+                        HomeStatusHero()
                         content
+                        HomePlanTiles()
                         Color.clear.frame(height: 1).id("home-bottom")
                     }
                     .padding(.horizontal, 16)
@@ -75,19 +75,13 @@ struct HomeView: View {
             } else {
                 title
             }
-            if let zone = store.myZone?.name {
-                Text(zone)
-                    .font(.subheadline)
-                    .foregroundStyle(Color.ctInkMuted)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
         }
         .padding(.top, 8)
     }
 
     private var title: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Text(store.incidentTitle ?? "My area")
+            Text("Home")
                 .font(.largeTitle.weight(.bold))
                 .foregroundStyle(Color.ctInk)
                 .fixedSize(horizontal: false, vertical: true)
@@ -108,32 +102,10 @@ struct HomeView: View {
 
     // MARK: Content
 
+    /// Under the hero, only while the phone knows its zone: the order and its way out, check-ins,
+    /// pending questions, nearby facts, changes and the family. The hero covers every other state.
     @ViewBuilder private var content: some View {
-        if !location.isAuthorized {
-            locationOff
-            PlanSummaryPanel()
-        } else if store.situation == nil {
-            HStack(spacing: 12) {
-                if case .unavailable = store.connection {
-                    Label("Can't reach the service", systemImage: "wifi.slash")
-                    Spacer(minLength: 8)
-                    Button("Try again") { Task { await store.refresh() } }
-                        .buttonStyle(CTPillButtonStyle(prominent: false))
-                } else {
-                    ProgressView()
-                    Text("Connecting")
-                }
-            }
-            .ctPanel()
-            PlanSummaryPanel()
-        } else if location.lastLocation == nil {
-            HStack(spacing: 12) {
-                ProgressView()
-                Text("Finding your location")
-            }
-            .ctPanel()
-            PlanSummaryPanel()
-        } else if let zone = store.myZone {
+        if location.isAuthorized, store.situation != nil, location.lastLocation != nil, store.myZone != nil {
             if let guidance = store.activeGuidance {
                 Slab(
                     guidance: guidance,
@@ -142,62 +114,17 @@ struct HomeView: View {
                     open: router.openDetail)
                 WayOutCard(guidance: guidance)
             } else {
-                noOrder(zone)
+                // No order: the minimap keeps the fire in view; the hero carries the verdict.
+                HomeMiniMap(guidance: nil)
+                    .frame(height: 170)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
             }
             CheckInButtons(inDrawer: true)
             stillThere
             HomeNearbyPanel()
             changes
             HomeFamilyPanel()
-            if store.activeGuidance == nil { HomeReadinessCard() }
-        } else {
-            VStack(spacing: 10) {
-                Image(systemName: "checkmark.shield")
-                    .font(.system(size: 40, weight: .regular))
-                    .foregroundStyle(Color.ctSuccess)
-                Text("No active fire near you")
-                    .font(.ctTitle)
-                    .foregroundStyle(Color.ctInk)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 20)
-            .ctPanel()
-            PlanSummaryPanel()
         }
-    }
-
-    /// The zone has no order: a quiet panel, with the minimap so the fire is still in view.
-    private func noOrder(_ zone: LiveZone) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HomeMiniMap(guidance: nil)
-                .frame(height: 170)
-                .clipShape(UnevenRoundedRectangle(topLeadingRadius: 11, topTrailingRadius: 11))
-            Label(GuidanceLevel.none.verdict(zone: zone.name), systemImage: GuidanceLevel.none.symbol)
-                .font(.ctTitle)
-                .foregroundStyle(Color.ctInk)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(16)
-        }
-        .ctPanel(padding: 0)
-    }
-
-    private var locationOff: some View {
-        let denied = location.authorization == .denied || location.authorization == .restricted
-        return VStack(alignment: .leading, spacing: 14) {
-            Label("Turn on location to see guidance for where you are", systemImage: "location.slash")
-                .foregroundStyle(Color.ctInk)
-                .fixedSize(horizontal: false, vertical: true)
-            Button(denied ? "Open Settings" : "Turn on location") {
-                if denied, let url = URL(string: UIApplication.openSettingsURLString) {
-                    openURL(url)
-                } else {
-                    location.requestPermission()
-                    location.startUpdating()
-                }
-            }
-            .buttonStyle(CTPillButtonStyle(prominent: true))
-        }
-        .ctPanel()
     }
 
     @ViewBuilder private var stillThere: some View {
@@ -855,85 +782,5 @@ private struct HomeFamilyPanel: View {
         }
         .buttonStyle(.plain)
         .accessibilityHint("Opens your plan")
-    }
-}
-
-/// The household plan at a glance, for Home's quiet states: meeting point, family and contacts.
-struct PlanSummaryPanel: View {
-    @Environment(MeetingPlanStore.self) private var plan
-    @Environment(FamilyStore.self) private var family
-    @Environment(AppRouter.self) private var router
-
-    var body: some View {
-        Button { router.tab = .plan } label: {
-            HomePanel(title: "Your plan") {
-                VStack(alignment: .leading, spacing: 14) {
-                    row("mappin.and.ellipse", "Meeting point", plan.plan.primary?.name ?? "Not set")
-                    row("person.3", "Family", family.family?.name ?? "Not set up")
-                    row("phone", "Emergency contacts", plan.plan.contacts.isEmpty ? "None yet" : "\(plan.plan.contacts.count)")
-                }
-            } accessory: {
-                Image(systemName: "chevron.right")
-                    .font(.footnote.weight(.bold))
-                    .foregroundStyle(Color.ctInkSubtle)
-            }
-        }
-        .buttonStyle(.plain)
-        .accessibilityHint("Opens your plan")
-    }
-
-    private func row(_ symbol: String, _ title: String, _ value: String) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: symbol)
-                .foregroundStyle(Color.ctBrand)
-                .frame(width: 28)
-                .accessibilityHidden(true)
-            Text(title)
-                .foregroundStyle(Color.ctInk)
-            Spacer(minLength: 8)
-            Text(value)
-                .foregroundStyle(Color.ctInkMuted)
-                .monospacedDigit()
-                .multilineTextAlignment(.trailing)
-        }
-        .accessibilityElement(children: .combine)
-    }
-}
-
-/// No-order Home: whether the meeting point and family are set up; rows open Plan.
-private struct HomeReadinessCard: View {
-    @Environment(MeetingPlanStore.self) private var plan
-    @Environment(FamilyStore.self) private var family
-    @Environment(AppRouter.self) private var router
-
-    var body: some View {
-        let point = plan.plan.primary?.name
-        let familyName = family.family?.name
-        HomePanel(title: "Ready") {
-            VStack(alignment: .leading, spacing: 14) {
-                row(point == nil ? "mappin.slash" : "mappin.and.ellipse", point ?? "No meeting point")
-                row(familyName == nil ? "person.3" : "checkmark.circle.fill", familyName ?? "No family yet")
-            }
-        }
-    }
-
-    private func row(_ symbol: String, _ text: String) -> some View {
-        Button { router.tab = .plan } label: {
-            HStack(spacing: 12) {
-                Image(systemName: symbol)
-                    .foregroundStyle(Color.ctBrand)
-                    .frame(width: 28)
-                    .accessibilityHidden(true)
-                Text(text)
-                    .foregroundStyle(Color.ctInk)
-                Spacer(minLength: 8)
-                Image(systemName: "chevron.right")
-                    .font(.footnote.weight(.bold))
-                    .foregroundStyle(Color.ctInkSubtle)
-                    .accessibilityHidden(true)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
     }
 }
