@@ -1,10 +1,11 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import MapsPage from "./maps/MapsPage";
 import "./index.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <App />
+    {window.location.pathname.replace(/\/+$/, "") === "/maps" ? <MapsPage /> : <App />}
   </StrictMode>,
 );

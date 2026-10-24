@@ -1,4 +1,4 @@
-# ADR 0002: Versioned historical incident packages
+# ADR 0005: Versioned historical incident packages
 
 Status: Proposed (2026-10-23)
 
