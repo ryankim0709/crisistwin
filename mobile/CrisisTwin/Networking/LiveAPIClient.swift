@@ -120,6 +120,12 @@ struct LiveAPIClient {
         return try await get(Situation.self, ["incidents", incidentId, "situation"], query: query, token: token)
     }
 
+    /// The public task board (ADR 0041): questions only, the same for everyone. The phone picks
+    /// its own on the device, so nothing about the person is sent.
+    func board(incidentId: String, token: String) async throws -> BoardResponse {
+        try await get(BoardResponse.self, ["incidents", incidentId, "board"], token: token)
+    }
+
     func checkIn(incidentId: String, request: CheckInRequest, token: String) async throws -> CheckIn {
         try await get(CheckInResponse.self, ["incidents", incidentId, "checkins"], method: "POST",
                       token: token, body: request).checkin
