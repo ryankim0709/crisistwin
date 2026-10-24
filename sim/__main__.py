@@ -23,7 +23,7 @@ from sim.fire import FireParams
 from sim.fixtures import camp_fixture_scenario
 from sim.hindcast import calibrate, default_candidates, run_hindcast
 from sim.history import load_history, parse_utc
-from sim.network import load_road_network
+from sim.network import load_alert_events, load_road_network
 from sim.replay import observed_frame, timeline
 from sim.scenario import hybrid_scenario
 from sim.traffic import TrafficParams
@@ -109,6 +109,7 @@ def main() -> None:
             if args.roads_package:
                 network, exits, provenance = load_road_network(args.roads_package)
                 scenario = hybrid_scenario(network, exits, provenance["assumptions"])
+                scenario["events"] = (*scenario["events"], *load_alert_events(args.roads_package))
                 start = parse_utc(args.start or "2018-11-08T14:00:00Z")
                 end = parse_utc(args.end or "2018-11-09T08:00:00Z")
             else:

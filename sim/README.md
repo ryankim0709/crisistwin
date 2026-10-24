@@ -31,7 +31,7 @@ python3 -m sim --package $P frame --at 2018-11-09T15:00:00Z --output /tmp/frame.
 python3 -m sim --package $P timeline --step-minutes 60 --output /tmp/timeline.json
 python3 -m sim --package $P hindcast --spread 2 --wind-from 90 --wind-speed 5 --hours 48 --geometry --output /tmp/hindcast.json
 python3 -m sim --package $P calibrate --train-hours 24 --test-hours 48 --output /tmp/calibration.json
-python3 -m sim --package $P bundle --roads-package data/incidents/camp-2018-evacuation/05575afa537d22c9 \
+python3 -m sim --package $P bundle --roads-package data/incidents/camp-2018-evacuation/b2624d1cda93d9e5 \
   --output app/public/replays/camp-2018.json   # web app replay at /replay
 ```
 

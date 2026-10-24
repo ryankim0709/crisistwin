@@ -6,9 +6,11 @@ import json
 from collections import Counter
 from pathlib import Path
 
-from tools.build_camp_evacuation import verify
+from tools.add_camp_codedred import verify as verify_with_events
+from tools.build_camp_evacuation import verify as verify_roads
 
-from sim.traffic import Destination, RoadEdge, RoadNetwork, default_edge_attributes
+from sim.history import parse_utc
+from sim.traffic import Destination, RoadEdge, RoadNetwork, TrafficEvent, default_edge_attributes
 
 
 def _segment_id(edge_id: str) -> str:
@@ -24,8 +26,10 @@ def load_road_network(package: Path) -> tuple[RoadNetwork, tuple[Destination, ..
     returned provenance counts how many edges used each default so the bundle can
     label them as assumptions.
     """
-    quality = verify(package)  # hashes and offline re-normalization; returns quality.json
     manifest = json.loads((package / "manifest.json").read_text())
+    # Hashes and offline re-normalization; packages extended with events have their own verifier.
+    (verify_with_events if "event_normalizer_version" in manifest else verify_roads)(package)
+    quality = json.loads((package / "quality.json").read_text())
     edge_features = json.loads((package / "normalized/road_edges.geojson").read_text())["features"]
     node_features = json.loads((package / "normalized/road_nodes.geojson").read_text())["features"]
     exits = json.loads((package / "normalized/exit_nodes.json").read_text())["exits"]
@@ -85,3 +89,38 @@ def load_road_network(package: Path) -> tuple[RoadNetwork, tuple[Destination, ..
         ],
     }
     return RoadNetwork(nodes=nodes, edges=tuple(edges)), destinations, provenance
+
+
+def load_alert_events(package: Path) -> tuple[TrafficEvent, ...]:
+    """Historical alert events (e.g. NIST CodeRED table) for the replay timeline.
+
+    Their targets are place names or zone IDs without polygons in the package, so they
+    are shown as evidence but do not release traffic demand; zone links are dropped.
+    """
+    path = package / "normalized/events.jsonl"
+    if not path.exists():
+        return ()
+    events = []
+    for line in path.read_text().splitlines():
+        if not line.strip():
+            continue
+        e = json.loads(line)
+        target = e.get("target") or {}
+        where = target.get("place_name") or ", ".join(
+            z.rsplit("-", 1)[-1] for z in target.get("zone_ids", [])
+        )
+        if target.get("zone_ids"):
+            where = f"zones {where}"
+        status = e.get("evacuation_status_in_message") or "alert"
+        attempt = f" ({e['alert_attempt']} attempt)" if e.get("alert_attempt") else ""
+        events.append(TrafficEvent(
+            id=e["event_id"],
+            at=parse_utc(e["occurred_at"]),
+            type=e["type"],
+            label=f"{e.get('alert_system', 'Alert')} {status}{attempt}: {where}",
+            evidence_class=e["evidence_class"],
+            time_precision=e["time_precision"],
+            source_id=e["source_id"],
+            source_locator=e.get("source_locator"),
+        ))
+    return tuple(events)

@@ -20,8 +20,10 @@ FIXTURE_ZONE_SIZE_M = 2000
 FIXTURE_TOTAL_VEHICLES = 15_000  # round synthetic total, not a census figure
 FIXTURE_VEH_PER_HOUSEHOLD = 1.6
 FIXTURE_MIN_RESIDENTIAL_M = 1500  # skip grid cells with little mapped housing
-FIXTURE_FIRST_ORDER_AT = datetime.fromisoformat("2018-11-08T14:50:00+00:00")
-FIXTURE_ORDER_SPACING = timedelta(minutes=12)
+# First wave at the first CodeRED order in NIST TN 2252 sup. Table D-1 (Pulga, 07:13 PST);
+# later waves are synthetic spacing, not the historical per-zone order times.
+FIXTURE_FIRST_ORDER_AT = datetime.fromisoformat("2018-11-08T15:13:00+00:00")
+FIXTURE_ORDER_SPACING = timedelta(minutes=8)
 M_PER_DEG_LAT = 111_195.0
 
 
@@ -102,6 +104,8 @@ def hybrid_scenario(network: RoadNetwork, exits: tuple[Destination, ...], road_a
             *road_assumptions,
             "Demand zones are a 2 km fixture grid; vehicles are a synthetic total of "
             f"{FIXTURE_TOTAL_VEHICLES} allocated by mapped residential road length.",
-            "Evacuation orders are fixture times staggered by distance from the assumed ignition, not the 2018 orders.",
+            "Evacuation orders are fixture times staggered by distance from the assumed ignition, starting at the "
+            "first NIST-documented CodeRED order (15:13Z); per-zone times are not the 2018 orders. The historical "
+            "CodeRED alerts appear as reconstructed timeline events but do not drive demand yet.",
         ],
     }
