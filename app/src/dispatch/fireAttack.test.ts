@@ -143,17 +143,26 @@ describe("engines attacking a fire", () => {
     ]);
     expect(outcome.accepted).toBe(true);
     const projected = engine.projectedOutMinute(0);
-    expect(projected).toBe(21);
+    // T+21 for an engine working from T+0; it first waits out the 80 s turnout, arrives at
+    // T+2 and works from the next minute, and the fire keeps growing meanwhile.
+    expect(projected).toBe(25);
+    expect(engine.units[0].status).toBe("en_route"); // not on scene before turnout
     expect(engine.attackOptions(0, 4)).toEqual([]); // the only engine is already on it
-    while (engine.fires[0].outMinute === null && !engine.finished) engine.step();
+    let onScene: number | null = null;
+    while (engine.fires[0].outMinute === null && !engine.finished) {
+      engine.step();
+      if (onScene === null && engine.units[0].status === "on_scene") onScene = engine.minute;
+    }
+    expect(onScene).toBe(2);
     expect(engine.fires[0].outMinute).toBe(projected);
-    expect(engine.fires[0].lineMeters).toBeCloseTo(21 * ENGINE_LINE_METERS_PER_MINUTE);
+    // Building from the minute after it arrives at T+2.
+    expect(engine.fires[0].lineMeters).toBeCloseTo((25 - 2) * ENGINE_LINE_METERS_PER_MINUTE);
     expect(engine.alerts.some((alert) => alert.type === "fire_out")).toBe(true);
     expect(engine.units[0].task).toBeNull();
   });
 
   it("offers what-if options and rejects fires that cannot be attacked", () => {
-    expect(engineWith(target()).attackOptions(0, 4)).toEqual([{ unitIds: ["E1"], outMinute: 21 }]);
+    expect(engineWith(target()).attackOptions(0, 4)).toEqual([{ unitIds: ["E1"], outMinute: 25 }]);
     const crowning = engineWith(target({ directBlocked: "it is crowning" }));
     expect(crowning.attackOptions(0, 4)).toEqual([]);
     const [rejected] = crowning.applyOrders([

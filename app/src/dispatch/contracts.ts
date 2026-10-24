@@ -177,6 +177,11 @@ export interface Observation {
     horizon_minutes: number;
     /** Next live-monitor check (the agent is called only when a check finds a change). */
     next_check_minute: number;
+    /**
+     * The clock keeps running while the agent decides: simulated minutes its orders are
+     * expected to take to land (its last decision's delay). tactic_options already assume it.
+     */
+    decision_delay_min: number;
   };
   monitor: {
     check_interval_minutes: number;

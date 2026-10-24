@@ -80,6 +80,8 @@ export const SUPPORTED_DEPARTURE_SPREAD_MINUTES = 20;
 export const UNIT_WITHDRAW_MARGIN_MINUTES = 5;
 /** Assumed speed over a station's straight-line approach to the road box. */
 export const APPROACH_SPEED_KPH = 40;
+/** NFPA 1710 turnout for fire calls: an engine leaves its station 80 s after the order. */
+export const TURNOUT_SECONDS = 80;
 export const EXIT_OPTIONS_PER_ZONE = 3;
 const SECONDS_PER_MINUTE = 60;
 const VEHICLE_EPSILON = 0.01;
@@ -751,7 +753,7 @@ export class DispatchEngine {
         const fromStation = unit.status === "available";
         this.sendUnit(unit, from, plan.route, "en_route", "fire_attack", null, plan.node);
         unit.fire = index;
-        if (fromStation) unit.holdSeconds = this.approachSeconds(unit);
+        if (fromStation) this.holdAtStation(unit);
         seconds = plan.seconds;
       }
       // One tactic per fire: every crew on it now fights it this way.
@@ -792,7 +794,7 @@ export class DispatchEngine {
       return reject(`${unit.id} cannot reach ${order.zone_id} avoiding fire and closed roads.`);
     const fromStation = unit.status === "available";
     this.sendUnit(unit, from, route, "en_route", order.task, index);
-    if (fromStation) unit.holdSeconds = this.approachSeconds(unit);
+    if (fromStation) this.holdAtStation(unit);
     const minutes = Math.round((route.seconds + unit.holdSeconds) / SECONDS_PER_MINUTE);
     return {
       order,
@@ -1027,9 +1029,22 @@ export class DispatchEngine {
     }
   }
 
+  /**
+   * An engine sent from its station first waits out turnout and its approach, even when its
+   * assignment is at the station's own node (it is not on scene until then).
+   */
+  private holdAtStation(unit: UnitState): void {
+    unit.holdSeconds = this.approachSeconds(unit);
+    if (unit.holdSeconds > 0 && unit.status === "on_scene") {
+      unit.status = "en_route";
+      unit.arrivedMinute = null;
+    }
+  }
+
+  /** Time from the order to an engine at its station reaching the road graph: turnout, then its approach. */
   private approachSeconds(unit: UnitState): number {
     const station = this.area.stations[this.stationIndex.get(unit.stationId) ?? -1];
-    return station ? station.approachMeters / (APPROACH_SPEED_KPH / 3.6) : 0;
+    return TURNOUT_SECONDS + (station ? station.approachMeters / (APPROACH_SPEED_KPH / 3.6) : 0);
   }
 
   /** Node the unit is at, or the head of the edge it is driving (it finishes that edge). */
@@ -1114,8 +1129,13 @@ export class DispatchEngine {
         this.sendHome(crews, blocked);
         return;
       }
+      // An engine starts building the minute after it arrives (projectOutMinute does the same).
       const working = this.units.filter(
-        (unit) => unit.status === "on_scene" && unit.task === "fire_attack" && unit.fire === index,
+        (unit) =>
+          unit.status === "on_scene" &&
+          unit.task === "fire_attack" &&
+          unit.fire === index &&
+          (unit.arrivedMinute ?? 0) < this.minute,
       );
       if (working.length === 0) return;
       fire.lineMeters += working.length * ENGINE_LINE_METERS_PER_MINUTE;

@@ -2,11 +2,18 @@
  * The live agent loop: a simulation clock that advances the dispatch engine minute by minute
  * while a deterministic monitor (monitor.ts) checks the situation every `checkInterval`
  * simulated minutes, or sooner after an urgent alert (never closer than
- * MIN_DECISION_GAP_MINUTES to the last decision). A quiet check costs nothing and the clock
- * keeps running; a check that finds a material change, or MAX_QUIET_MINUTES without a
- * decision, stops the clock and calls the agent with the reasons. The clock is the simulation
- * clock; wall time only sets how fast it is played. Stopping aborts any in-flight decision so a
- * late response cannot apply.
+ * MIN_DECISION_GAP_MINUTES to the last decision). A quiet check costs nothing; a check that
+ * finds a material change, or MAX_QUIET_MINUTES without a decision, calls the agent with the
+ * reasons.
+ *
+ * Like a real dispatch centre the clock does not stop for the agent: fire, traffic and engines
+ * keep moving while it thinks, at the playback speed, so its thinking time costs simulated
+ * time. It decides on the situation it was shown (minute m0); its orders take effect when the
+ * answer arrives (minute m1), from wherever everything is then. Right after they apply the
+ * monitor checks again against what the agent saw, so a change during its thinking wakes it
+ * again. The what-if options it is shown already assume its orders land after its expected
+ * thinking delay. Stopping aborts any in-flight decision so a late response cannot apply.
+ * See docs/adr/0026-live-dispatch-clock.md.
  */
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -32,8 +39,20 @@ import {
   type TacticSolver,
 } from "./tacticOptions";
 
-/** Simulated minutes per real second; slow enough to read the streamed reasoning. */
-export const DISPATCH_SPEED_CHOICES = [1, 2, 4] as const;
+/**
+ * Simulated minutes per real second: real time (1x), 10x, 30x and 60x. The agent's thinking
+ * time is charged at this rate, so at 30x a 20 s decision costs 10 simulated minutes.
+ */
+export const DISPATCH_SPEED_CHOICES = [1 / 60, 1 / 6, 1 / 2, 1] as const;
+export const DEFAULT_DISPATCH_SPEED = 1 / 2;
+
+export function speedLabel(minutesPerSecond: number): string {
+  const ratio = Math.round(minutesPerSecond * 60);
+  return ratio === 1 ? "Real time" : `${ratio}×`;
+}
+
+/** Before the first answer, assume a decision takes this long in real time. */
+const ASSUMED_DECISION_SECONDS = 15;
 const MAX_LOG_ENTRIES = 60;
 const MAX_CHECKS = 240;
 const SQUARE_METERS_PER_HECTARE = 10_000;
@@ -55,6 +74,8 @@ export interface DecisionLogEntry {
   alerts: Alert[];
   /** What the monitor found that woke the agent. */
   reasons: string[];
+  /** Minute the orders took effect (the clock kept running while the agent thought). */
+  appliedMinute: number | null;
 }
 
 /** One live-monitor check. Quiet checks did not call the agent. */
@@ -123,7 +144,15 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
   const [version, setVersion] = useState(0);
   const [log, setLog] = useState<DecisionLogEntry[]>([]);
   const [checks, setChecks] = useState<MonitorCheck[]>([]);
-  const [speed, setSpeed] = useState<number>(DISPATCH_SPEED_CHOICES[0]);
+  const [speed, setSpeed] = useState<number>(DEFAULT_DISPATCH_SPEED);
+  const speedRef = useRef(speed);
+  useEffect(() => {
+    speedRef.current = speed;
+  }, [speed]);
+  /** Simulated minutes the last decision took to come back (null before the first). */
+  const decisionDelayRef = useRef<number | null>(null);
+  /** Check the monitor as soon as the clock runs again (right after orders apply). */
+  const recheckRef = useRef(false);
   const [checkInterval, setCheckIntervalState] = useState<number>(DEFAULT_CHECK_INTERVAL_MINUTES);
   const checkIntervalRef = useRef(checkInterval);
   const setCheckInterval = useCallback((minutes: number) => {
@@ -195,9 +224,14 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
       pendingReasonsRef.current = reasons;
       const minute = engine.minute;
       const alerts = engine.alerts.filter((alert) => alert.minute > lastDecisionRef.current);
+      // What the agent sees; later checks compare against it, not against the moment its
+      // answer happened to arrive.
+      const seen = takeBaseline(engine, burnedHectaresAt(minute));
+      const expectedDelay = decisionDelayRef.current ?? ASSUMED_DECISION_SECONDS * speedRef.current;
       const observation = buildObservation({
         engine,
-        tacticOptions: evaluateTacticOptions(engine, inputs.solver),
+        decisionDelayMinutes: expectedDelay,
+        tacticOptions: evaluateTacticOptions(engine, inputs.solver, expectedDelay),
         currentOutcome: outcomeRef.current,
         frames: inputs.frames,
         baselineHomesExposed: inputs.baselineHomesExposed,
@@ -228,6 +262,7 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
             model: null,
             alerts,
             reasons,
+            appliedMinute: null,
           },
           ...entries,
         ].slice(0, MAX_LOG_ENTRIES),
@@ -247,16 +282,21 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
       )
         .then((decision) => {
           if (controller.signal.aborted || engineRef.current !== engine) return;
+          // The clock kept running: the orders apply now, at the engine's current minute.
+          const appliedMinute = engine.minute;
           const outcomes = engine.applyOrders(toEngineOrders(decision.orders as WireOrder[]));
           if (engine.linesDirty) refreshFire(engine);
+          decisionDelayRef.current = Math.max(1, appliedMinute - minute);
           previousOutcomesRef.current = outcomes;
           previousSummaryRef.current = decision.summary;
           lastDecisionRef.current = minute;
-          lastCheckRef.current = minute;
-          // Compare later checks against the situation with these orders in effect.
-          baselineRef.current = takeBaseline(engine, burnedHectaresAt(minute));
+          lastCheckRef.current = appliedMinute;
+          baselineRef.current = seen;
+          // Anything that changed while it was thinking can wake it again straight away.
+          recheckRef.current = appliedMinute > minute;
           updateEntry(id, (entry) => ({
             ...entry,
+            appliedMinute,
             status: "done",
             summary: decision.summary,
             outcomes,
@@ -264,7 +304,8 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
             model: decision.model,
           }));
           bump();
-          if (statusRef.current === "thinking") setSessionStatus("running");
+          if (statusRef.current === "thinking")
+            setSessionStatus(engine.finished ? "finished" : "running");
         })
         .catch((cause: unknown) => {
           if (controller.signal.aborted || engineRef.current !== engine) return;
@@ -308,9 +349,10 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
     [burnedHectaresAt],
   );
 
-  // The clock. Runs only while "running"; a check that finds a change switches to "thinking".
+  // The clock. Runs while "running" and while the agent is "thinking" (it does not wait for
+  // the agent); the monitor only checks while running, and a change it finds starts a decision.
   useEffect(() => {
-    if (status !== "running") return;
+    if (status !== "running" && status !== "thinking") return;
     let handle = 0;
     let last = performance.now();
     const tick = (now: number) => {
@@ -324,7 +366,16 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
       );
       let stepped = false;
       let wake: string[] = [];
-      while (engine.minute < Math.floor(clockRef.current) && !engine.finished) {
+      const monitoring = statusRef.current === "running";
+      if (monitoring && recheckRef.current) {
+        recheckRef.current = false;
+        wake = check(engine);
+      }
+      while (
+        wake.length === 0 &&
+        engine.minute < Math.floor(clockRef.current) &&
+        !engine.finished
+      ) {
         const out = engine.fires.filter((fire) => fire.outMinute !== null).length;
         engine.step();
         stepped = true;
@@ -334,7 +385,7 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
         ) {
           refreshFire(engine);
         }
-        if (checkDue(engine)) {
+        if (monitoring && checkDue(engine)) {
           wake = check(engine);
           if (wake.length > 0) break;
         }
@@ -349,7 +400,8 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
         return;
       }
       if (engine.finished) {
-        setSessionStatus("finished");
+        // While thinking, the answer still arrives and is applied; then the session finishes.
+        if (statusRef.current === "running") setSessionStatus("finished");
         return;
       }
       handle = requestAnimationFrame(tick);
@@ -387,6 +439,8 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
       onTimeRef.current?.(0);
       lastCheckRef.current = 0;
       lastDecisionRef.current = -1;
+      decisionDelayRef.current = null;
+      recheckRef.current = false;
       baselineRef.current = null;
       previousOutcomesRef.current = [];
       previousSummaryRef.current = "";

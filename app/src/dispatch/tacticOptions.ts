@@ -118,11 +118,14 @@ export function refreshFire(engine: DispatchEngine, solver: TacticSolver): Solve
 
 /**
  * What-if options per burning fire: each usable tactic with the nearest 2 and 4 engines not on
- * it, each solved. Largest fires first, at most MAX_OPTION_SOLVES solves in all.
+ * it, each solved. Largest fires first, at most MAX_OPTION_SOLVES solves in all. The clock keeps
+ * running while the agent decides, so the engines are taken to leave `decisionDelayMinutes`
+ * from now: the fire grows meanwhile, and the options show it.
  */
 export function evaluateTacticOptions(
   engine: DispatchEngine,
   solver: TacticSolver,
+  decisionDelayMinutes = 0,
 ): Map<number, TacticOption[]> {
   const options = new Map<number, TacticOption[]>();
   let budget = MAX_OPTION_SOLVES;
@@ -144,7 +147,10 @@ export function evaluateTacticOptions(
         if (budget <= 0) break;
         budget -= 1;
         const chosen = candidates.slice(0, k);
-        const crewMinutes = [...engine.crewMinutes(index), ...chosen.map((c) => c.minute)];
+        const crewMinutes = [
+          ...engine.crewMinutes(index),
+          ...chosen.map((c) => c.minute + decisionDelayMinutes),
+        ];
         const out = outFrom(engine);
         const lines = [...currentLines];
         let containedMinute: number | null = null;
