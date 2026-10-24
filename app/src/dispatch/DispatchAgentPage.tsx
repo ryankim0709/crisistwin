@@ -21,7 +21,13 @@ import {
 } from "../studio/contracts";
 import { demoScenario } from "../studio/demo";
 import { exportScenarioJson } from "../studio/draft";
-import { createIgnition, emptyScenario, parseScenario, solverInputChanged, validateScenario } from "../studio/scenario";
+import {
+  createIgnition,
+  emptyScenario,
+  parseScenario,
+  solverInputChanged,
+  validateScenario,
+} from "../studio/scenario";
 import { useStudioRun } from "../studio/useStudioRun";
 import AgentPanel from "./AgentPanel";
 import DispatchLegend from "./DispatchLegend";
@@ -36,8 +42,10 @@ import "./dispatch.css";
 const PREVIEW_SPEED_CHOICES = [1, 5, 10, 30] as const;
 const DEFAULT_PREVIEW_SPEED = 10;
 const NOTICE_MS = 4000;
+/** When the agent starts, frame the whole dispatch area so every zone is in view. */
+const AREA_FIT_PADDING = 40;
+const AREA_FIT_DURATION_MS = 800;
 const MAX_IMPORT_CHARACTERS = 1_000_000;
-const OPERATIONAL_DISCLAIMER = "Planning experiment; not an operational forecast or dispatch.";
 
 function frameIndexAt(frameMinutes: readonly number[], minute: number): number {
   let index = 0;
@@ -59,7 +67,10 @@ function downloadJson(filename: string, text: string): void {
   URL.revokeObjectURL(url);
 }
 
-type AreaState = { status: "loading" } | { status: "ready"; area: DispatchArea } | { status: "error"; message: string };
+type AreaState =
+  | { status: "loading" }
+  | { status: "ready"; area: DispatchArea }
+  | { status: "error"; message: string };
 
 export default function DispatchAgentPage() {
   const [scenario, setScenario] = useState<StudioScenario>(demoScenario);
@@ -70,6 +81,7 @@ export default function DispatchAgentPage() {
   const [areaState, setAreaState] = useState<AreaState>({ status: "loading" });
   const [map, setMap] = useState<MapLibreMap | null>(null);
   const [selectedZoneId, setSelectedZoneId] = useState<string | null>(null);
+  const [agentCollapsed, setAgentCollapsed] = useState(false);
   const layersRef = useRef<DispatchLayers | null>(null);
 
   const { state, run, cancel, markStale } = useStudioRun();
@@ -83,7 +95,10 @@ export default function DispatchAgentPage() {
       .then((loaded) => setAreaState({ status: "ready", area: loaded }))
       .catch((cause: unknown) => {
         if (controller.signal.aborted) return;
-        setAreaState({ status: "error", message: cause instanceof Error ? cause.message : "Could not load the dispatch area." });
+        setAreaState({
+          status: "error",
+          message: cause instanceof Error ? cause.message : "Could not load the dispatch area.",
+        });
       });
     return () => controller.abort();
   }, []);
@@ -164,7 +179,9 @@ export default function DispatchAgentPage() {
     (id: string, patch: Partial<ScheduledIgnition>) =>
       applyScenario({
         ...scenario,
-        ignitions: scenario.ignitions.map((ignition) => (ignition.id === id ? { ...ignition, ...patch } : ignition)),
+        ignitions: scenario.ignitions.map((ignition) =>
+          ignition.id === id ? { ...ignition, ...patch } : ignition,
+        ),
       }),
     [scenario, applyScenario],
   );
@@ -172,8 +189,12 @@ export default function DispatchAgentPage() {
   const handleMapClick = useCallback(
     (point: GeoPoint) => {
       if (mode === "add") {
-        if (scenario.ignitions.filter((ignition) => ignition.enabled).length >= MAX_ENABLED_IGNITIONS) {
-          setNotice(`At most ${MAX_ENABLED_IGNITIONS} fires can be enabled. Disable or delete one to add another.`);
+        if (
+          scenario.ignitions.filter((ignition) => ignition.enabled).length >= MAX_ENABLED_IGNITIONS
+        ) {
+          setNotice(
+            `At most ${MAX_ENABLED_IGNITIONS} fires can be enabled. Disable or delete one to add another.`,
+          );
           return;
         }
         const ignition = createIgnition(scenario.ignitions, point);
@@ -211,7 +232,9 @@ export default function DispatchAgentPage() {
     try {
       downloadJson(`${scenario.name || "scenario"}.json`, exportScenarioJson(scenario));
     } catch (cause) {
-      setNotice(`Could not export the scenario${cause instanceof Error ? `: ${cause.message}` : "."}`);
+      setNotice(
+        `Could not export the scenario${cause instanceof Error ? `: ${cause.message}` : "."}`,
+      );
     }
   }, [scenario]);
 
@@ -221,7 +244,8 @@ export default function DispatchAgentPage() {
     () => (area && result && !stale ? computeExposure(area, result.run.frames) : null),
     [area, result, stale],
   );
-  const horizonMinutes = result?.scenario.settings.horizonMinutes ?? scenario.settings.horizonMinutes;
+  const horizonMinutes =
+    result?.scenario.settings.horizonMinutes ?? scenario.settings.horizonMinutes;
   const baseline = useMemo(
     () => (area && exposure ? noActionBaseline(area, exposure, horizonMinutes) : null),
     [area, exposure, horizonMinutes],
@@ -232,7 +256,9 @@ export default function DispatchAgentPage() {
         .filter((entry) => entry.outcome.status === "ignited")
         .map((entry) => ({
           minute: entry.outcome.status === "ignited" ? entry.outcome.ignitedMinute : 0,
-          name: result?.scenario.ignitions.find((ignition) => ignition.id === entry.sourceId)?.name ?? entry.sourceId,
+          name:
+            result?.scenario.ignitions.find((ignition) => ignition.id === entry.sourceId)?.name ??
+            entry.sourceId,
         })),
     [result],
   );
@@ -241,7 +267,9 @@ export default function DispatchAgentPage() {
     () =>
       area
         ? scenario.ignitions.filter(
-            (ignition) => ignition.enabled && !insideBbox(area, [ignition.location.longitude, ignition.location.latitude]),
+            (ignition) =>
+              ignition.enabled &&
+              !insideBbox(area, [ignition.location.longitude, ignition.location.latitude]),
           )
         : [],
     [area, scenario.ignitions],
@@ -260,6 +288,17 @@ export default function DispatchAgentPage() {
     if (!area || !exposure || !result) return;
     setPlaying(false);
     setSelectedZoneId(null);
+    // The scenario is fixed while the agent runs; give the map the room.
+    setPanelCollapsed(true);
+    setAgentCollapsed(false);
+    const [west, south, east, north] = area.bbox;
+    map?.fitBounds(
+      [
+        [west, south],
+        [east, north],
+      ],
+      { padding: AREA_FIT_PADDING, duration: AREA_FIT_DURATION_MS },
+    );
     session.start({
       area,
       exposure,
@@ -269,12 +308,17 @@ export default function DispatchAgentPage() {
       windFromDegrees: result.scenario.settings.windFromDegrees,
       windSpeedMph: result.scenario.settings.windSpeedMph,
     });
-  }, [area, exposure, result, horizonMinutes, ignitions, session]);
+  }, [area, exposure, result, horizonMinutes, ignitions, session, map]);
 
   // ---- Map overlays -------------------------------------------------------------------------
   useEffect(() => {
     if (!map || !area) return;
-    const layers = new DispatchLayers(map, area, { onSelectZone: (zoneId) => setSelectedZoneId(zoneId) });
+    const layers = new DispatchLayers(map, area, {
+      onSelectZone: (zoneId) => {
+        setSelectedZoneId(zoneId);
+        setAgentCollapsed(false);
+      },
+    });
     layersRef.current = layers;
     return () => {
       layers.destroy();
@@ -295,13 +339,18 @@ export default function DispatchAgentPage() {
   const displayMinute = sessionActive
     ? (session.engine?.minute ?? 0)
     : (frameMinutes[safeFrameIndex] ?? 0);
-  const displayFrameIndex = sessionActive ? frameIndexAt(frameMinutes, displayMinute) : safeFrameIndex;
+  const displayFrameIndex = sessionActive
+    ? frameIndexAt(frameMinutes, displayMinute)
+    : safeFrameIndex;
   const visibleFrames = useMemo(
     () => (result ? result.run.frames.slice(0, displayFrameIndex + 1) : []),
     [result, displayFrameIndex],
   );
 
-  const problemIds = useMemo(() => new Set((state.error?.problems ?? []).map((p) => p.sourceId)), [state.error]);
+  const problemIds = useMemo(
+    () => new Set((state.error?.problems ?? []).map((p) => p.sourceId)),
+    [state.error],
+  );
   const issueIds = useMemo(
     () => new Set(issues.flatMap((issue) => (issue.ignitionId ? [issue.ignitionId] : []))),
     [issues],
@@ -310,9 +359,11 @@ export default function DispatchAgentPage() {
     const states: Record<string, IgnitionDisplayState> = {};
     for (const entry of result?.run.ignitions ?? []) {
       if (entry.outcome.status === "ignited") {
-        states[entry.sourceId] = entry.outcome.ignitedMinute <= displayMinute ? "triggered" : "scheduled";
+        states[entry.sourceId] =
+          entry.outcome.ignitedMinute <= displayMinute ? "triggered" : "scheduled";
       } else {
-        states[entry.sourceId] = entry.outcome.reachedMinute <= displayMinute ? "reached-before-start" : "scheduled";
+        states[entry.sourceId] =
+          entry.outcome.reachedMinute <= displayMinute ? "reached-before-start" : "scheduled";
       }
     }
     return states;
@@ -321,7 +372,8 @@ export default function DispatchAgentPage() {
     const states: Record<string, IgnitionDisplayState> = {};
     for (const ignition of scenario.ignitions) {
       if (!ignition.enabled) states[ignition.id] = "disabled";
-      else if (issueIds.has(ignition.id) || problemIds.has(ignition.id)) states[ignition.id] = "invalid";
+      else if (issueIds.has(ignition.id) || problemIds.has(ignition.id))
+        states[ignition.id] = "invalid";
       else if (!result || stale) states[ignition.id] = "draft";
       else states[ignition.id] = resultStates[ignition.id] ?? "draft";
     }
@@ -333,7 +385,9 @@ export default function DispatchAgentPage() {
     if (result) {
       const solved = result.run;
       if (solved.reachedEdgeMinute !== null && displayMinute >= solved.reachedEdgeMinute) {
-        list.push("Fire reached the edge of the modelled area; the footprint after that is incomplete.");
+        list.push(
+          "Fire reached the edge of the modelled area; the footprint after that is incomplete.",
+        );
       }
       if (!solved.crownFire.modelled) list.push(solved.crownFire.unavailableReason);
       if (stale) list.push("Showing the previous run. Your edits have not been simulated yet.");
@@ -343,7 +397,6 @@ export default function DispatchAgentPage() {
         `${outsideArea.map((i) => i.name).join(", ")} ${outsideArea.length === 1 ? "is" : "are"} outside the ${area?.name ?? "dispatch"} area; roads, zones and stations exist only inside it.`,
       );
     }
-    list.push(OPERATIONAL_DISCLAIMER);
     return list;
   }, [result, displayMinute, stale, outsideArea]);
 
@@ -351,7 +404,9 @@ export default function DispatchAgentPage() {
     () =>
       (result?.run.input.sources ?? []).map((source) => ({
         id: source.id,
-        name: result?.scenario.ignitions.find((ignition) => ignition.id === source.id)?.name ?? source.id,
+        name:
+          result?.scenario.ignitions.find((ignition) => ignition.id === source.id)?.name ??
+          source.id,
         minute: source.startMinute,
         state: resultStates[source.id] ?? ("scheduled" as IgnitionDisplayState),
       })),
@@ -359,7 +414,9 @@ export default function DispatchAgentPage() {
   );
   const metrics = useMemo(() => {
     const frame = result?.run.frames[displayFrameIndex];
-    const upcoming = events.filter((event) => event.minute > displayMinute).sort((a, b) => a.minute - b.minute)[0];
+    const upcoming = events
+      .filter((event) => event.minute > displayMinute)
+      .sort((a, b) => a.minute - b.minute)[0];
     return {
       ignitionsTriggered: frame?.ignitedSourceIds.length ?? 0,
       ignitionsTotal: events.length || scenario.ignitions.filter((i) => i.enabled).length,
@@ -370,13 +427,16 @@ export default function DispatchAgentPage() {
 
   const running = state.phase === "loading-landscape" || state.phase === "computing";
   const attribution = useMemo(
-    () => [...(result ? Object.values(result.attribution) : []), ...(area ? [area.attribution] : [])],
+    () => [
+      ...(result ? Object.values(result.attribution) : []),
+      ...(area ? [area.attribution] : []),
+    ],
     [result, area],
   );
 
   return (
     <main className="studio-page dispatch-page" id="main-content" aria-label="Dispatch agent">
-      <div className="dispatch-body">
+      <div className={`dispatch-body${agentCollapsed ? " is-agent-collapsed" : ""}`}>
         <div className="studio-stage">
           <div className="studio-page-map">
             <StudioMap
@@ -401,18 +461,23 @@ export default function DispatchAgentPage() {
               onMoveIgnition={(id, point) => updateIgnition(id, { location: point })}
               onMapReady={setMap}
               legendExtra={<DispatchLegend />}
+              legendMode="compact"
             />
           </div>
 
           <div className="studio-page-status" aria-live="polite">
-            {state.phase === "loading-landscape" && <p className="studio-chip">Loading fuel and terrain data…</p>}
+            {state.phase === "loading-landscape" && (
+              <p className="studio-chip">Loading fuel and terrain data…</p>
+            )}
             {state.phase === "computing" && <p className="studio-chip">Computing fire spread…</p>}
             {state.phase === "failed" && state.error && (
               <p className="studio-chip studio-chip-error" role="alert">
                 {state.error.message}
               </p>
             )}
-            {session.status === "thinking" && <p className="studio-chip">Clock held: the agent is deciding…</p>}
+            {session.status === "thinking" && (
+              <p className="studio-chip">Clock held: the agent is deciding…</p>
+            )}
             {notice && <p className="studio-chip">{notice}</p>}
           </div>
 
@@ -452,25 +517,41 @@ export default function DispatchAgentPage() {
         </div>
 
         <aside className="dispatch-side">
-          <AgentPanel
-            area={area}
-            areaError={areaState.status === "error" ? areaState.message : null}
-            startBlocker={running ? "The fire model is running…" : startBlocker}
-            status={session.status}
-            engine={sessionActive ? session.engine : null}
-            log={session.log}
-            baseline={runReady ? baseline : null}
-            speed={session.speed}
-            selectedZoneId={selectedZoneId}
-            onStart={handleStart}
-            onPause={session.pause}
-            onResume={session.resume}
-            onStop={session.stop}
-            onRetry={session.retry}
-            onSkip={session.skip}
-            onSpeedChange={session.setSpeed}
-            onSelectZone={setSelectedZoneId}
-          />
+          <button
+            type="button"
+            className="dispatch-side__toggle"
+            aria-expanded={!agentCollapsed}
+            aria-controls="dispatch-agent-panel"
+            aria-label={agentCollapsed ? "Show agent panel" : "Hide agent panel"}
+            title={agentCollapsed ? "Show agent panel" : "Hide agent panel"}
+            onClick={() => setAgentCollapsed((value) => !value)}
+          >
+            <span aria-hidden="true">{agentCollapsed ? "«" : "»"}</span>
+            {agentCollapsed && (
+              <span className="dispatch-side__rail-label">Agent · {session.status}</span>
+            )}
+          </button>
+          {!agentCollapsed && (
+            <AgentPanel
+              area={area}
+              areaError={areaState.status === "error" ? areaState.message : null}
+              startBlocker={running ? "The fire model is running…" : startBlocker}
+              status={session.status}
+              engine={sessionActive ? session.engine : null}
+              log={session.log}
+              baseline={runReady ? baseline : null}
+              speed={session.speed}
+              selectedZoneId={selectedZoneId}
+              onStart={handleStart}
+              onPause={session.pause}
+              onResume={session.resume}
+              onStop={session.stop}
+              onRetry={session.retry}
+              onSkip={session.skip}
+              onSpeedChange={session.setSpeed}
+              onSelectZone={setSelectedZoneId}
+            />
+          )}
         </aside>
       </div>
 

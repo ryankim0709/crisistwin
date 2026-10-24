@@ -195,6 +195,11 @@ export interface StudioMapProps {
   onMapReady?: (map: MapLibreMap | null) => void;
   /** Extra legend group rendered after "Modelled output" and before "Source data". */
   legendExtra?: ReactNode;
+  /**
+   * "compact" drops the ignition-state key and locator note and starts the legend collapsed
+   * behind a toggle, for pages that layer more on the map. Defaults to "full".
+   */
+  legendMode?: "full" | "compact";
 }
 
 export interface ConfigPanelProps {

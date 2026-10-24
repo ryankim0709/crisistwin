@@ -379,3 +379,26 @@
 .studio-marker:focus-visible {
   z-index: 6;
 }
+
+/* Compact legend (legendMode="compact"): a toggle above a shorter legend. */
+.studio-map__legend-toggle {
+  position: absolute;
+  right: 12px;
+  bottom: 36px;
+  z-index: 3;
+  padding: 6px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: rgb(20 43 39 / 90%);
+  color: #f5f4ee;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.studio-map__legend-toggle:focus-visible {
+  outline: 3px solid #5eead4;
+  outline-offset: 2px;
+}
+.studio-map__legend--compact {
+  bottom: 72px;
+}

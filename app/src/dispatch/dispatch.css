@@ -9,11 +9,53 @@
 .dispatch-body > .studio-stage {
   min-width: 0;
 }
+.dispatch-body.is-agent-collapsed {
+  grid-template-columns: minmax(0, 1fr) 44px;
+}
 .dispatch-side {
+  position: relative;
   min-height: 0;
   overflow-y: auto;
   border-left: 1px solid #d4d8ca;
   background: #fcfcf8;
+}
+.dispatch-side__toggle {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid #c3cabb;
+  border-radius: 6px;
+  background: #fcfcf8;
+  color: #245c4f;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.dispatch-side__toggle:hover {
+  background: #eceade;
+}
+.dispatch-side__toggle:focus-visible {
+  outline: 3px solid #236d5e;
+  outline-offset: 2px;
+}
+.is-agent-collapsed .dispatch-side__toggle {
+  right: 7px;
+  flex-direction: column;
+  height: auto;
+  padding: 8px 4px;
+}
+.dispatch-side__rail-label {
+  writing-mode: vertical-rl;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 .dispatch-panel {
   display: flex;
@@ -25,6 +67,7 @@
   line-height: 1.45;
 }
 .dispatch-panel__header {
+  padding-right: 36px;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -289,6 +332,16 @@
   .dispatch-body {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(420px, 1fr) auto;
+  }
+  .dispatch-body.is-agent-collapsed {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(420px, 1fr) 48px;
+  }
+  .is-agent-collapsed .dispatch-side__rail-label {
+    writing-mode: horizontal-tb;
+  }
+  .is-agent-collapsed .dispatch-side__toggle {
+    flex-direction: row;
   }
   .dispatch-side {
     max-height: 50dvh;

@@ -231,3 +231,58 @@
     min-height: 640px;
   }
 }
+
+/* Desktop-only collapse: the sidebar shrinks to a rail holding just the expand button. */
+.sidebar-collapse {
+  align-self: flex-end;
+  width: 32px;
+  height: 32px;
+  margin: -16px -8px 8px 0;
+  border: 1px solid #c3cabb;
+  border-radius: 6px;
+  background: #fcfcf8;
+  color: #245c4f;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+.sidebar-collapse:hover {
+  background: #e3e6d8;
+}
+.sidebar-collapse:focus-visible {
+  outline: 3px solid #236d5e;
+  outline-offset: 2px;
+}
+.app-layout.is-sidebar-collapsed {
+  grid-template-columns: 52px minmax(0, 1fr);
+}
+.is-sidebar-collapsed .sidebar {
+  padding: 28px 10px;
+}
+.is-sidebar-collapsed .sidebar-collapse {
+  align-self: center;
+  margin: -16px 0 0;
+}
+.is-sidebar-collapsed .sidebar-brand,
+.is-sidebar-collapsed .sidebar-nav,
+.is-sidebar-collapsed .sidebar-note {
+  display: none;
+}
+@media (max-width: 760px) {
+  .sidebar-collapse {
+    display: none;
+  }
+  .is-sidebar-collapsed .sidebar-brand,
+  .is-sidebar-collapsed .sidebar-nav.is-open {
+    display: flex;
+  }
+  .is-sidebar-collapsed .sidebar-nav.is-open {
+    display: block;
+  }
+}
+@media (max-width: 760px) {
+  .is-sidebar-collapsed .sidebar {
+    padding: 16px 20px;
+  }
+}

@@ -346,7 +346,10 @@ export default function StudioMap({
   onMoveIgnition,
   onMapReady,
   legendExtra,
+  legendMode = "full",
 }: StudioMapProps) {
+  const compactLegend = legendMode === "compact";
+  const [legendOpen, setLegendOpen] = useState(!compactLegend);
   const container = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const markers = useRef(new Map<string, Marker>());
@@ -672,11 +675,7 @@ export default function StudioMap({
     if (!map || !ready) return;
     const scale = footprintIsStale ? STALE_DIM : 1;
     map.setPaintProperty("studio-footprint-fill", "fill-opacity", FOOTPRINT_FILL_OPACITY * scale);
-    map.setPaintProperty(
-      "studio-footprint-line",
-      "line-opacity",
-      FOOTPRINT_LINE_OPACITY * scale,
-    );
+    map.setPaintProperty("studio-footprint-line", "line-opacity", FOOTPRINT_LINE_OPACITY * scale);
     map.setPaintProperty("studio-footprint-casing", "line-opacity", scale);
     map.setPaintProperty("studio-footprint-current", "line-opacity", scale);
   }, [ready, footprintIsStale]);
@@ -765,57 +764,78 @@ export default function StudioMap({
         <span>{windCaption}</span>
       </div>
 
-      <section className="studio-map__legend" aria-label="Map legend">
-        <div className="studio-map__legend-group studio-map__legend-group--assumption">
-          <h3>Your assumptions</h3>
-          <ul className="studio-map__states">
-            {STATE_KEY_ORDER.map((state) => (
-              <li key={state}>
-                <span
-                  className={`${MARKER_CLASS} ${MARKER_CLASS}--${state} studio-marker--key`}
-                  aria-hidden="true"
-                >
-                  <span
-                    className="studio-marker__icon"
-                    dangerouslySetInnerHTML={{ __html: STATE_GLYPH[state] }}
-                  />
-                </span>
-                {STATE_KEY_NOTE[state]}
+      {compactLegend && (
+        <button
+          type="button"
+          className="studio-map__legend-toggle"
+          aria-expanded={legendOpen}
+          aria-controls="studio-map-legend"
+          onClick={() => setLegendOpen((open) => !open)}
+        >
+          {legendOpen ? "Hide legend" : "Legend"}
+        </button>
+      )}
+      {legendOpen && (
+        <section
+          id="studio-map-legend"
+          className={`studio-map__legend${compactLegend ? " studio-map__legend--compact" : ""}`}
+          aria-label="Map legend"
+        >
+          {!compactLegend && (
+            <div className="studio-map__legend-group studio-map__legend-group--assumption">
+              <h3>Your assumptions</h3>
+              <ul className="studio-map__states">
+                {STATE_KEY_ORDER.map((state) => (
+                  <li key={state}>
+                    <span
+                      className={`${MARKER_CLASS} ${MARKER_CLASS}--${state} studio-marker--key`}
+                      aria-hidden="true"
+                    >
+                      <span
+                        className="studio-marker__icon"
+                        dangerouslySetInnerHTML={{ __html: STATE_GLYPH[state] }}
+                      />
+                    </span>
+                    {STATE_KEY_NOTE[state]}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <div className="studio-map__legend-group studio-map__legend-group--output">
+            <h3>Modelled output</h3>
+            <p className="studio-map__legend-sub">Arrival time, minutes from T+0</p>
+            <ul className="studio-map__bands">
+              {bands.map((band) => (
+                <li key={band.from}>
+                  <span className="studio-map__swatch" style={{ background: band.color }} />
+                  {band.from}–{band.to} min
+                </li>
+              ))}
+              <li>
+                <span className="studio-map__swatch studio-map__swatch--current" />
+                Current extent, {formatElapsed(currentMinute)}
               </li>
-            ))}
-          </ul>
-        </div>
-        <div className="studio-map__legend-group studio-map__legend-group--output">
-          <h3>Modelled output</h3>
-          <p className="studio-map__legend-sub">Arrival time, minutes from T+0</p>
-          <ul className="studio-map__bands">
-            {bands.map((band) => (
-              <li key={band.from}>
-                <span className="studio-map__swatch" style={{ background: band.color }} />
-                {band.from}–{band.to} min
-              </li>
-            ))}
-            <li>
-              <span className="studio-map__swatch studio-map__swatch--current" />
-              Current extent, {formatElapsed(currentMinute)}
-            </li>
-            <li>
-              <span className="studio-map__swatch studio-map__swatch--locator" />
-              Locator ring: footprint too small to see at this zoom (dashed, not burned area)
-            </li>
-          </ul>
-        </div>
-        {legendExtra}
-        <div className="studio-map__legend-group studio-map__legend-group--source">
-          <h3>Source data</h3>
-          <ul className="studio-map__sources">
-            <li>Imagery: USDA / USGS The National Map</li>
-            {attribution.map((line) => (
-              <li key={line}>{line}</li>
-            ))}
-          </ul>
-        </div>
-      </section>
+              {!compactLegend && (
+                <li>
+                  <span className="studio-map__swatch studio-map__swatch--locator" />
+                  Locator ring: footprint too small to see at this zoom (dashed, not burned area)
+                </li>
+              )}
+            </ul>
+          </div>
+          {legendExtra}
+          <div className="studio-map__legend-group studio-map__legend-group--source">
+            <h3>Source data</h3>
+            <ul className="studio-map__sources">
+              <li>Imagery: USDA / USGS The National Map</li>
+              {attribution.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          </div>
+        </section>
+      )}
 
       {error && (
         <p className="studio-map__error" role="status">

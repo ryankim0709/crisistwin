@@ -169,7 +169,7 @@ export default function AgentPanel(props: AgentPanelProps) {
   const live = status === "running" || status === "thinking";
 
   return (
-    <section className="dispatch-panel" aria-label="Dispatch agent">
+    <section className="dispatch-panel" id="dispatch-agent-panel" aria-label="Dispatch agent">
       <header className="dispatch-panel__header">
         <div>
           <p className="dispatch-eyebrow">AI dispatcher · simulated</p>
