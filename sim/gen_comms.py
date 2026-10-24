@@ -40,6 +40,12 @@ Model (each step names its source; choices that are not directly calibrated are 
    road; other categories are a uniform random point inside the zone. Rounded to 3 decimals.
 6. ``psap_reroute_at``: 911 calls at or after that time are routed elsewhere and dropped
    from the local stream (Paradise -> Chico at 08:20 PST, 16:20Z, per the calibration source).
+7. Bursts (``CommsOptions.bursts``, radio and rescue only): within a zone, rows come in clusters
+   in time. Cluster centres follow step 1's process at rate / ``m``; each cluster has a shifted
+   geometric number of rows with mean ``m``, each placed uniformly within +-W/2 minutes of the
+   centre (a Neyman-Scott cluster process; Neyman & Scott 1958, J. R. Stat. Soc. B 20(1):1-43).
+   The expected count is unchanged. Step 2's gamma then takes only the between-zone part of the
+   dispersion. Constants and their derivation: ``CALIBRATED_BURST_*`` below.
 
 Nothing here is a forecast or an observed call; every item is a planning-experiment input.
 """
@@ -134,6 +140,55 @@ ASSUMED_POINT_TRIES = 1_000
 """Rejection-sampling tries for a point inside a zone before falling back to the centroid."""
 
 
+# --- Bursts (within-zone clustering in time) ----------------------------------------------------
+#
+# Derivation on tools/camp_ground_record.json and camp-2018.json (43 zones), each channel in its
+# GLM coverage window, rows assigned to zones as in ground_rates.load_rows (measured 2026-10-24):
+#
+# a) Within-zone dispersion. A Poisson GLM with a dummy per zone (zones with >= 1 row) plus the
+#    band and phase terms of section 2, on the same zone-hour units, has Pearson chi2/(n-p):
+#      911 1.14 (108 units, 31 terms), radio 2.00 (720, 40), rescue 1.46 (918, 38).
+#    Zone dummies absorb any constant zone factor, so this is clustering over hours inside a
+#    zone. The generator without bursts gives, over 30 seeds at scale 1, median (range):
+#      911 0.95 (0.57-2.19), radio 0.98 (0.84-1.34), rescue 1.00 (0.69-1.23).
+#    Radio and rescue lie above that range; 911 lies inside it, so 911 gets no bursts.
+# b) Excess pairs. Same-zone row pairs with |dt| <= tau, minus the pairs a Poisson process at the
+#    zone-dummy GLM's rate (constant in each zone-hour cell) would give. At tau = 0, 10, 20, 30,
+#    45, 59 min: radio 16, 124, 212, 276, 357, 408; rescue 11, 51, 94, 120, 157, 171 (911: 36 at
+#    59 min). Half of the 59-min excess is reached at tau50 = 19.3 min (radio), 18.1 (rescue).
+# c) Cluster model. Rows of one cluster sit at centre + U(-W/2, W/2), so the lag between two of
+#    them is triangular on [0, W] with median W (1 - 1/sqrt 2): W = tau50 / 0.293. A shifted
+#    geometric size S with mean m has E[S(S-1)]/2 = m (m - 1) pairs per cluster and N/m
+#    clusters, so N (m - 1) excess pairs: m = 1 + excess(59) / (N * P(lag <= 59.5 min)).
+#      radio:  W = 19.26 / 0.2929 = 65.8 min; m = 1 + 407.8 / (244 * 0.991) = 2.69
+#      rescue: W = 18.07 / 0.2929 = 61.7 min; m = 1 + 171.2 / (185 * 0.999) = 1.93
+#    Excess (b) is truncated at 59 min (the cell-rate expectation does not reach further), so W
+#    is if anything low. The clustering in the record is on the scale of an hour, plus a
+#    same-minute spike (radio 16 excess pairs at lag 0), not only a few minutes.
+
+CALIBRATED_BURST_MEAN_ROWS = {"radio": 2.69, "rescue": 1.93}
+"""Mean rows per cluster ``m`` (shifted geometric, >= 1), from the record's excess within-zone
+pairs (derivation above, step c). Channels not listed have no bursts (911: no evidence, step a)."""
+
+CALIBRATED_BURST_WINDOW_MIN = {"radio": 65.8, "rescue": 61.7}
+"""Cluster width W in minutes: rows sit uniformly within +-W/2 of the cluster centre. From the
+median lag of the record's excess within-zone pairs (derivation above, step c)."""
+
+CALIBRATED_WITHIN_ZONE_DISPERSION = {"radio": 2.00, "rescue": 1.46}
+"""Pearson dispersion of the zone-dummy GLM on the record (derivation above, step a): the part of
+the channel's dispersion that is within zones over hours. With bursts on, the gamma zone factor
+takes the rest, ``k = mean(mu) / (dispersion - this)``, so the calibrated total is kept."""
+
+ASSUMED_BURST_SIZE_GEOMETRIC = True
+"""Cluster size is 1 + geometric (each row is followed by another with probability 1 - 1/m).
+The record has too few clusters to choose a size distribution; geometric is the simplest
+one-parameter law on {1, 2, ...}."""
+
+ASSUMED_BURST_ROWS_INDEPENDENT = True
+"""Rows of one cluster draw their category and point independently (the mix and the uniform
+point of steps 3 and 5). Whether a cluster's rows share a category or place was not measured."""
+
+
 # --- Inputs ---------------------------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -170,13 +225,16 @@ class CommsOptions:
     (3.67 on Camp, a lower bound on the true-volume-to-NIST-sample ratio). ``nist_sample_like``
     forces 1.0, so 911 volume looks like the NIST sample the rates were fitted on.
     ``psap_reroute_at``: 911 calls at or after it are dropped from the local stream.
-    ``overdispersion=False`` sets every zone factor to 1 (plain Poisson; for tests)."""
+    ``overdispersion=False`` sets every zone factor to 1 (plain Poisson; for tests).
+    ``bursts=True`` clusters radio and rescue rows in time within a zone (model step 7);
+    ``False`` reproduces the earlier generator (gen-comms-1 without bursts) bit for bit."""
 
     scale_911: float | None = None
     nist_sample_like: bool = False
     psap_reroute_at: datetime | None = None
     overdispersion: bool = True
     channels: tuple[str, ...] = RATE_CHANNELS
+    bursts: bool = True
 
     def resolved_scale_911(self, params: GroundRateParams) -> float:
         if self.nist_sample_like:
@@ -218,19 +276,33 @@ def rate_per_khh_h(params: GroundRateParams, channel: str, band: str, phase: str
     return math.exp(eta)
 
 
-def gamma_shape(fit: RateFit) -> float:
-    """Gamma frailty shape k from the Pearson dispersion: E[X^2/(n-p)] ~ 1 + mean(mu)/k for NB2,
-    and mean(mu) = n_events / n_units for a Poisson GLM with an intercept. ``inf`` = Poisson."""
-    if not math.isfinite(fit.dispersion) or fit.dispersion <= 1.0 or fit.n_units == 0:
+def gamma_shape(fit: RateFit, within_dispersion: float = 1.0) -> float:
+    """Gamma frailty shape k from the Pearson dispersion: E[X^2/(n-p)] ~ phi + mean(mu)/k for a
+    gamma-mixed process whose within-zone variance is phi * mu (phi = 1 for Poisson, NB2), and
+    mean(mu) = n_events / n_units for a Poisson GLM with an intercept. ``inf`` = no frailty."""
+    if (not math.isfinite(fit.dispersion) or fit.dispersion <= within_dispersion
+            or fit.n_units == 0):
         return math.inf
-    return (fit.n_events / fit.n_units) / (fit.dispersion - 1.0)
+    return (fit.n_events / fit.n_units) / (fit.dispersion - within_dispersion)
 
 
-def zone_factor_shapes(params: GroundRateParams, channels: Sequence[str]) -> tuple[float, dict[str, float]]:
+def burst_channels(options: CommsOptions) -> dict[str, tuple[float, float]]:
+    """{channel: (mean rows per cluster, window_min)} for the channels that burst, or {}."""
+    if not options.bursts:
+        return {}
+    return {ch: (CALIBRATED_BURST_MEAN_ROWS[ch], CALIBRATED_BURST_WINDOW_MIN[ch])
+            for ch in options.channels if ch in CALIBRATED_BURST_MEAN_ROWS}
+
+
+def zone_factor_shapes(params: GroundRateParams, channels: Sequence[str],
+                       within_dispersion: Mapping[str, float] | None = None) -> tuple[float, dict[str, float]]:
     """(shared shape, extra shape per channel). The shared factor takes the largest shape (least
     variance); a channel with shape k gets an extra gamma of shape h so that the product of two
-    independent mean-1 gammas has variance 1/k: (1 + 1/k_s)(1 + 1/h) - 1 = 1/k."""
-    shapes = {ch: gamma_shape(_fit(params, ch)) for ch in channels}
+    independent mean-1 gammas has variance 1/k: (1 + 1/k_s)(1 + 1/h) - 1 = 1/k.
+    ``within_dispersion``: per channel, the within-zone part of the dispersion carried by bursts
+    (default 1, Poisson)."""
+    within = within_dispersion or {}
+    shapes = {ch: gamma_shape(_fit(params, ch), within.get(ch, 1.0)) for ch in channels}
     shared = max(shapes.values())
     extra = {}
     for ch, k in shapes.items():
@@ -268,6 +340,12 @@ def params_hash(params: GroundRateParams, options: CommsOptions) -> str:
     """12-hex SHA-256 of the canonical JSON of (generator version, params, options)."""
     opts = asdict(options)
     opts["psap_reroute_at"] = _iso(options.psap_reroute_at) if options.psap_reroute_at else None
+    # Without bursts the hash is the earlier generator's (bit-identical output); with bursts it
+    # also covers the burst constants.
+    del opts["bursts"]
+    if options.bursts:
+        opts["bursts"] = {ch: [m, w, CALIBRATED_WITHIN_ZONE_DISPERSION[ch]]
+                          for ch, (m, w) in sorted(burst_channels(options).items())}
     blob = json.dumps({"generator": MODEL_VERSION, "params": params.to_dict(), "options": opts},
                       sort_keys=True, default=str)
     return hashlib.sha256(blob.encode()).hexdigest()[:12]
@@ -426,6 +504,30 @@ def _thinned_times(rng: random.Random, rate_fn: Callable[[datetime], float], rat
             out.append(at)
 
 
+def _burst_times(rng: random.Random, brng: random.Random, rate_fn: Callable[[datetime], float],
+                 rate_max_per_h: float, start: datetime, end: datetime, mean_rows: float,
+                 window_min: float) -> list[datetime]:
+    """Neyman-Scott cluster process on [start, end) with the same expected count as the Poisson
+    process of ``rate_fn``: centres at rate_fn / mean_rows by thinning (``rng``), drawn on the
+    window widened by W/2 each side so clusters straddling an edge are kept in part; each centre
+    has 1 + Geometric(1 - 1/mean_rows) rows at centre + U(-W/2, W/2) (``brng``)."""
+    half = timedelta(minutes=window_min / 2)
+    centres = _thinned_times(rng, lambda t: rate_fn(t) / mean_rows, rate_max_per_h / mean_rows,
+                             start - half, end + half)
+    p_more = 1.0 - 1.0 / mean_rows
+    out = []
+    for c in centres:
+        size = 1
+        while brng.random() < p_more:
+            size += 1
+        for _ in range(size):
+            at = c + timedelta(minutes=brng.uniform(-window_min / 2, window_min / 2))
+            if start <= at < end:
+                out.append(at)
+    out.sort()
+    return out
+
+
 def _draw_category(rng: random.Random, mix: list[tuple[str, float]]) -> str:
     total = sum(s for _, s in mix)
     u = rng.random() * total
@@ -484,7 +586,9 @@ def generate_comms(
     if scale_911 < 0:
         raise ValueError("scale_911 must be non-negative")
     channels = tuple(ch for ch in RATE_CHANNELS if ch in options.channels)
-    shared_k, extra_k = zone_factor_shapes(params, channels)
+    bursts = burst_channels(options)
+    shared_k, extra_k = zone_factor_shapes(
+        params, channels, {ch: CALIBRATED_WITHIN_ZONE_DISPERSION[ch] for ch in bursts})
     bind_share = rescue_bind_share(params)
     road_index = _RoadIndex(roads)
     phash = params_hash(params, options)
@@ -510,9 +614,13 @@ def generate_comms(
             mult = factors[ch]
             peak = max(rate_per_khh_h(params, ch, b, p) for b in GLM_DISTANCE_BANDS for p in ORDER_PHASES)
             rate_max = peak * zone.households / 1000.0 * scale * mult
-            times = _thinned_times(rng, lambda t, ch=ch, scale=scale, mult=mult:
-                                   zone_rate_per_h(params, zone, arrival, ch, t, scale) * mult,
-                                   rate_max, start, end)
+            rate_fn = (lambda t, ch=ch, scale=scale, mult=mult:
+                       zone_rate_per_h(params, zone, arrival, ch, t, scale) * mult)
+            if ch in bursts:
+                times = _burst_times(rng, random.Random(f"{seed}:{zone.id}:{ch}:burst"), rate_fn,
+                                     rate_max, start, end, *bursts[ch])
+            else:
+                times = _thinned_times(rng, rate_fn, rate_max, start, end)
             out = []
             for i, at in enumerate(times):
                 phase = "after_arrival" if arrival is not None and at >= arrival else "before_arrival"

@@ -278,8 +278,9 @@ generate_comms(zones: Sequence[CommsZone], roads: Sequence[RoadEdge],
   nearest burning point, `None` while nothing burns, and 0 once fire is in the zone.
 - `RoadEdge(id, name, coords)`, in the bundle's `roads.edges` shape (`roads_from_bundle`).
 - `CommsOptions(scale_911=None, nist_sample_like=False, psap_reroute_at=None,
-  overdispersion=True, channels=("911", "radio", "rescue"))`. `scale_911=None` means
-  `params.scale_911_at_least` (3.67, a lower bound). `nist_sample_like=True` uses 1.0.
+  overdispersion=True, channels=("911", "radio", "rescue"), bursts=True)`. `scale_911=None`
+  means `params.scale_911_at_least` (3.67, a lower bound). `nist_sample_like=True` uses 1.0.
+  `bursts=False` gives the earlier output bit for bit (see Bursts below).
 - Params without the bundle: `params_from_dict(json.load(open("tests/fixtures/ground_rates_camp_2018.json")))`.
   The fixture is a snapshot of `fit_camp_2018()`, and a test compares it with a fresh fit when
   the bundle is present.
@@ -305,7 +306,8 @@ generate_comms(zones: Sequence[CommsZone], roads: Sequence[RoadEdge],
 | Rate | `exp(intercept + band + phase)` /kHH/h from each channel's GLM (section 2), × households/1000, × `scale_911` for 911 | Calibrated |
 | Bands | `fire_in_zone` from the arrival; `lt_5km` from `fire_distance_m` < 5 km, or else the 33 min before arrival | Bands calibrated; lead time assumed (Camp median) |
 | Time | Non-homogeneous Poisson by thinning (Lewis & Shedler 1979) | Exact for any rate path |
-| Zone factor | Mean-1 gamma, shape `k = mean(mu)/(dispersion - 1)`: 911 0.207, radio 0.112, rescue 0.173. One factor is shared, and radio and rescue add an independent gamma (shapes 1.43 and 6.18) so that each channel's variance is `1/k` | Dispersion calibrated; sharing assumed |
+| Zone factor | Mean-1 gamma, shape `k = mean(mu)/(dispersion - 1)`: 911 0.207, radio 0.112, rescue 0.173. One factor is shared, and radio and rescue add an independent gamma (shapes 1.43 and 6.18) so that each channel's variance is `1/k`. With bursts, `dispersion - 1` becomes `dispersion - within-zone dispersion` for radio and rescue (shapes 0.185 and 0.346) | Dispersion calibrated; sharing assumed |
+| Bursts | Radio and rescue rows come in within-zone clusters in time (Bursts below) | Cluster size and width calibrated; size law assumed |
 | Category | Before- or after-arrival mix (section 3), with "other" kept pooled | Calibrated |
 | Rescue | 39/90 of entries (the in-window share) take the time and point of a 911 call of the same category (help_needed or trapped) in the zone, within 60 min, one call per entry | Share calibrated; window and matching assumed |
 | Reroute | 911 calls at or after `psap_reroute_at` are dropped. Rescue may still bind to them | Event from the calibration source; rescue rule assumed |
@@ -329,8 +331,9 @@ generate_comms(zones: Sequence[CommsZone], roads: Sequence[RoadEdge],
 - **Camp reproduction.** On the 43 Camp zones (modelled arrival and front distance), at scale 1,
   the expected count in each channel's coverage window is 911 **91.4** (record 90), radio
   **245.3** (244) and rescue **185.9** (185). This is a test.
-- **Camp round trip** (scratch script, not a test; 200 seeds at scale 1, refitting the GLM with
-  `ground_rates.fit_channel` on 30 of them):
+- **Camp round trip** without bursts (`bursts=False`; scratch script, not a test; 200 seeds at
+  scale 1, refitting the GLM with `ground_rates.fit_channel` on 30 of them). The same run with
+  bursts is under Bursts below.
 
   | Channel | Record | Generated mean (SE) [median] | Dispersion: record vs refit median (range) |
   | --- | --- | --- | --- |
@@ -350,6 +353,7 @@ generate_comms(zones: Sequence[CommsZone], roads: Sequence[RoadEdge],
   heavy gamma (k = 0.11), the Pearson statistic is also strongly right-skewed over 43 zones, and
   the record's 3.53 falls inside the generated range. I trust the record. The generator
   under-represents radio clustering in time, and the shape was not tuned to close the gap.
+  The burst process below was added for this.
 
   Radio : 911 in 15:08-18:06Z: generated median 1.27 (IQR 1.01-1.62), record 1.44 (CI 0.97-2.38).
   Rescue entries coinciding with a 911 row in that window (1 min, 300 m): generated median
@@ -373,6 +377,78 @@ generate_comms(zones: Sequence[CommsZone], roads: Sequence[RoadEdge],
   against a bind probability of 43.3%. The shortfall comes from entries with no unused 911 call
   of their category in their zone within 60 min. This is a cap of the one-call-per-entry rule
   when 911 volume is at sample level. It is not corrected by raising the probability.
+
+### Bursts
+
+`CommsOptions.bursts` (on by default) clusters radio and rescue rows in time within a zone. The
+zone factor is constant over time, so on its own it cannot put many rows of one zone into the
+same hour. Constants are `CALIBRATED_BURST_*`, `CALIBRATED_WITHIN_ZONE_DISPERSION` and
+`ASSUMED_BURST_*` in the module, whose comment block has the full derivation.
+
+**Process.** A Neyman-Scott cluster process (Neyman & Scott 1958) replaces the Poisson draw for
+radio and rescue. Cluster centres follow the channel's rate divided by `m`, drawn on the window
+widened by W/2 at each end. Each centre has 1 + Geometric rows (mean `m`), each at the centre
+plus a uniform offset in ±W/2 min. Rows outside the window are dropped. The expected count per
+channel is unchanged, and the time-offset distribution is the rate's, smoothed over ±W/2. Each
+row draws its category and point as before. The gamma zone factor then takes only the
+between-zone part of the dispersion, `k = mean(mu) / (dispersion - within-zone dispersion)`,
+so the calibrated total is kept. The 911 stream is drawn exactly as before.
+
+**Basis** (record, each channel in its GLM window, 43 zones):
+
+| Statistic | 911 | radio | rescue |
+| --- | --- | --- | --- |
+| Within-zone dispersion: Pearson of the GLM with a dummy per zone, zone × hour units | 1.14 | **2.00** | **1.46** |
+| Same, generator without bursts, 30 seeds: median (range) | 0.95 (0.57-2.19) | 0.98 (0.84-1.34) | 1.00 (0.69-1.23) |
+| Excess same-zone row pairs within 59 min (over the zone-dummy fit's rate) | 36 | 408 | 171 |
+| Lag by which half of that excess is reached, tau50 (min) | 10.7 | 19.3 | 18.1 |
+| W = tau50 / (1 - 1/√2) (min), the cluster width | none | **65.8** | **61.7** |
+| m = 1 + excess / (rows × P(lag ≤ 59.5 min)), rows per cluster | none | **2.69** (244 rows) | **1.93** (185 rows) |
+
+Radio and rescue lie above the range the generator gives without bursts; 911 lies inside it,
+so 911 gets no bursts. W follows from the median lag of a triangular lag law on [0, W]. m
+follows because a geometric cluster of mean m adds m(m - 1) pairs, and there are rows/m
+clusters. The excess is counted only to 59 min, so W is if anything low. The record's
+clustering is on the scale of an hour, not a few minutes, plus a same-minute spike (radio:
+16 excess pairs at lag 0). The geometric size law and the independent category and point of
+each row are assumptions.
+
+**Measured** (2026-10-24, 43 Camp zones, scale 1, refit as in the round trip):
+
+| Channel | Refit dispersion, no bursts: median (range), 30 seeds | With bursts | Record |
+| --- | --- | --- | --- |
+| 911 | 2.95 (1.70-15.1) | 2.59 (1.47-17.2) | 3.53 |
+| radio | 1.93 (1.18-5.21) | **3.63** (2.86-7.49) | 3.53 |
+| rescue | 1.83 (0.94-4.61) | 2.22 (1.44-3.55) | 1.92 |
+
+| Channel | Mean count, no bursts (SE) [median], 200 seeds | With bursts | Analytic | Record |
+| --- | --- | --- | --- | --- |
+| 911 | 98.3 (2.9) [92] | 98.6 (3.1) [85] | 91.4 | 90 |
+| radio | 254.8 (9.9) [218] | 258.3 (8.7) [227] | 245.3 | 244 |
+| rescue | 198.5 (6.6) [177] | 192.8 (5.0) [180] | 185.9 | 185 |
+
+- Means are unchanged within sampling error (radio +3.5, rescue -5.7, 911 +0.3; at most
+  0.7 SE apart). With bursts they sit 1.4 to 2.3 SE above the analytic value, as without
+  (1.0 to 2.4 SE).
+- The 911 change is sampling noise: its marginal shape is unchanged (0.207), but its zone factor
+  is now built from a different shared draw.
+- Radio:911 in 15:08-18:06Z: median 1.29 (IQR 0.97-1.69) with bursts, 1.27 without; record 1.44.
+- Rescue entries coinciding with a 911 row in that window: median 0.22 with bursts, 0.29
+  without; record 0.43. Clustered rescue entries compete for the same few 911 calls under the
+  one-call-per-entry rule, so the shortfall grows.
+- Within-zone dispersion with bursts, 30 seeds: radio 2.37 (1.77-3.41), record 2.00; rescue
+  1.72 (1.18-2.22), record 1.46. Excess pairs within 59 min per row: radio 1.25 (0.74-3.73),
+  record 1.67; rescue 0.72 (-0.42-2.68), record 0.93. Same-minute excess pairs, radio: 4.5
+  (median), record 16.
+
+**Remaining disagreement.** The radio refit dispersion now has a median of 3.6 against 3.53 in
+the record, and the record lies inside the generated range. Two finer statistics still
+disagree in opposite directions. With bursts, the within-zone dispersion is about 20% above the
+record, and the excess pair count is about 25% below it. In the record the excess pairs fall
+mostly in busy zone-hours, which looks more like a rate that rises and falls within a zone
+(variance growing with mu squared) than like clusters of fixed mean size. The uniform ±W/2
+offsets also miss the record's same-minute spike. I trust the record on all three. The
+constants come from the record as derived above and were not adjusted to close these gaps.
 
 **May and may not** are as above. Every item is `simulated`, calibrated to one sampled record of
 one fire, and is not an observed or live call.

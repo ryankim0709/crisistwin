@@ -182,6 +182,18 @@ def evacuating_vehicles(bg: BlockGroup) -> tuple[float, float]:
     return vehicles * EVACUATION_PARTICIPATION, moe * EVACUATION_PARTICIPATION
 
 
+def with_participation(zones, participation: float) -> tuple[DemandZone, ...]:
+    """Demand zones whose evacuating vehicles are scaled by `participation` (order compliance, e.g.
+    sim.behavior.ORDER_COMPLIANCE_RANGE); households are unchanged, so the rest stay at home. 1.0 returns
+    the zones unchanged (EVACUATION_PARTICIPATION is the replay's value)."""
+    if not 0 <= participation <= 1:
+        raise ValueError(f"participation must be in [0, 1], got {participation!r}")
+    if participation == 1.0:
+        return tuple(zones)
+    return tuple(DemandZone(id=z.id, name=z.name, households=z.households, vehicles=round(z.vehicles * participation),
+                            origin_nodes=z.origin_nodes, geometry=z.geometry) for z in zones)
+
+
 def _area_share_inside(bg: BlockGroup, bbox: list[float]) -> float:
     grid = Grid.covering(list(bg.bbox), CLIP_CELL_M)
     mask = rasterize(grid, bg.geometry)
