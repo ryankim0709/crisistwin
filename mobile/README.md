@@ -62,7 +62,17 @@ publishes port 8000 only on `127.0.0.1`, so changing the mobile hostname alone i
 not enough for a physical device. Plain HTTP IP addresses are intentionally not
 accepted by the mobile configuration.
 
-Release does not include `Local.xcconfig` and has an empty `API_BASE_URL`. Set an
+### Scenarios map
+
+The Scenarios tab shows the web app's `/maps` page in a `WKWebView`, so the map
+and the illustrative TypeScript fire model run unchanged (see
+[ADR 0006](../docs/adr/0006-mobile-web-map.md)). `WEB_BASE_URL` is an origin like
+`API_BASE_URL`, with the same validation; Debug uses `http://localhost:5173`, the
+Vite server started by `docker compose up` in `app/`. The tab shows a loading
+state, then the map, or an error with a retry button when the web app is not
+reachable or returns a non-200 status. Nothing is stored between launches.
+
+Release does not include `Local.xcconfig` and has empty `API_BASE_URL` and `WEB_BASE_URL`. Set an
 HTTPS origin in the Release configuration before distribution. Until then the
 app shows a configuration error instead of claiming connectivity. App Store
 icons, signing/provisioning, and distribution are not configured.
@@ -75,21 +85,19 @@ mobile/
   Config/                Debug, Release, and ignored local overrides
   CrisisTwin/
     App/                 SwiftUI app entry point and tab navigation
-    Configuration/       Validated API origin from the app bundle
+    Configuration/       Validated API and web origins from the app bundle
     Networking/          Health DTO, HTTP client, and useful error messages
     Features/
       Home/              Workspace and API readiness states
-      Scenarios/         Explicit empty state for future scenario integration
+      Scenarios/         Embedded web map with loading and error states
     Resources/           Info.plist and adaptive color assets
 ```
 
 The workspace follows the web app's cream/green palette with dark-mode variants,
 system text styles, labeled controls, and status icons accompanied by text.
-The Scenarios tab is a placeholder. Native maps, fire/traffic simulation,
-scenario storage/sync, authentication, and notifications are not implemented.
-No fixtures or invented simulation metrics are displayed. Keep future numerical
-models separate from SwiftUI and networking; the web's TypeScript model has not
-been ported to Swift.
+The Scenarios tab embeds the web map. Native maps, a Swift fire model, traffic
+simulation, scenario storage/sync, authentication, and notifications are not
+implemented. No fixtures or invented simulation metrics are displayed.
 
 ### Health boundary
 
@@ -124,5 +132,7 @@ pre-commit run --all-files
 
 No tests, lint, type checks, builds, simulator/device runs, or browser verification
 are part of the default agent workflow. They require an explicit user request.
-This scaffold has not been compiled or run in Xcode. The run instructions above
-are for developer setup, not a claim of runtime verification.
+The embedded map was built with Xcode 26.6 and run on an iOS 26.5 simulator. Its
+loading, error and retry states were checked, and the real `/maps` page from
+`docker compose up` rendered with its fire controls. It has not been checked on a
+physical device.
