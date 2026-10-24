@@ -1433,6 +1433,7 @@ def metric_specs(evaluation) -> list[Any]:
         MS("aar.exposed_trapped.raw", False, "primary", "veh-min/veh"),
         MS("aar.help_to_assign.raw", False, "primary", "drill min"),
         MS("aar.leave_now_vs_2018.score", True, "primary", "0-1"),
+        MS("aar.help_to_assign.score", True, "secondary", "0-1"),
         MS("aar.total", True, "secondary", "0-100"),
         MS("help.to_resolve_median_min", False, "secondary", "drill min"),
         MS("run.confirms", True, "secondary", "count"),

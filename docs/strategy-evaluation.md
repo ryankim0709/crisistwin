@@ -11,9 +11,10 @@ twin; the AAR drill score). A result says that **strategy B did better than stra
 simulator, under its stated assumptions**. It is a planning experiment, never a claim about real
 evacuation outcomes, and it must not be reported as one.
 
-Status: the statistics and the run manifest are built. The headless runner (ADR 0030 §4), the
-truth-log scorer (ADR 0042) and the staleness metric (ADR 0041) are not built yet. This document is
-their contract.
+Status: the statistics, the run manifest and the headless runner (ADR 0030 §4;
+[batch-runner.md](batch-runner.md), ADR `0049-batch-runner.md`) are built. The batch AAR scores
+help in drill minutes and stops the clock at the horizon. The truth-log scorer (ADR 0042) and the
+staleness metric (ADR 0041) are not built yet. This document is their contract.
 
 ## 1. Experimental design
 

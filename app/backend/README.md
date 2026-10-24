@@ -205,6 +205,13 @@ record's `road_blocked`/`fire_seen` entries N minutes late, and with the previou
 planner. It writes `.json` and `.md`; see [live-reports.md](../../docs/live-reports.md)
 ("Record comparison harness") and ADR `0031-congestion-aware-planner.md`.
 
+`python manage.py live_batch --spec api/live/specs/camp-2018-pilot.json --strategies
+historical_only,rule_auto,record_delay_5 --workers 8 --out /tmp/batch-pilot` (same env; no
+server, no database writes; about 3 min for 24 runs on 8 cores) is the headless batch runner:
+scenario × strategy × seed in lockstep on the drill clock, scored with the AAR in drill minutes,
+one `RunManifest` per run and a paired comparison table. Simulated planning experiments; see
+[batch-runner.md](../../docs/batch-runner.md) and ADR `0049-batch-runner.md`.
+
 ### Incident intelligence (`/api/intel/…`)
 
 Public agency pages, fetched by the Apify Actor in `actors/incident-intel/`, become source
