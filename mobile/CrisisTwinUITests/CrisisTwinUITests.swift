@@ -16,6 +16,20 @@ final class CrisisTwinUITests: XCTestCase {
 
     // MARK: Checks
 
+    /// Plan shows "Share road observations", off by default (needs no backend).
+    func testShareRoadObservationsOffByDefault() {
+        let app = launch(screen: "plan")
+        let toggle = app.switches["share-road-observations"]
+        for _ in 0..<4 where !toggle.exists || !toggle.isHittable { app.swipeUp() }
+        XCTAssertTrue(toggle.waitForExistence(timeout: 20), "Share road observations toggle")
+        XCTAssertEqual(toggle.value as? String, "0", "off by default")
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'No track'")).firstMatch.exists)
+        toggle.tap()
+        XCTAssertEqual(toggle.value as? String, "1")
+        toggle.tap()
+        XCTAssertEqual(toggle.value as? String, "0")
+    }
+
     /// 1. Home in a zone with no order shows the Ready card (and the fire trend once it exists).
     /// Run with the simulator outside every ordered zone, for example 39.7255,-121.8083.
     func testHomeNoOrder() {

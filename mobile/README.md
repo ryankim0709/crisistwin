@@ -120,6 +120,26 @@ it locally, start the backend and drill as described in
 [`app/backend/README.md`](../app/backend/README.md); Debug points at
 `http://localhost:8000`.
 
+### Task board and road observations (ADR 0041)
+
+The phone reads the public `GET incidents/{id}/board` with each situation poll and picks its
+questions **on the device** (`Features/Live/Board.swift`): items whose road segment lies on its own
+published route (two of the segment's quarter points within 30 m), or whose place is within the
+server's `radius_m` (1500 m) of the phone; never anything within 1000 m of the fire estimate or
+inside it; the server's rank order, at most `max_questions` (3). They appear beside "Still there?"
+on Home and Reports: "Pentz Road: passable?" (Passable, Slow, Blocked) or "Gym: full?" (Full, Has
+space). An answer is an ordinary report with `task_id` at the place's own coordinate, one per task
+per device. Your position is only compared on the phone; it is not sent to fetch the board.
+
+**Plan > Share road observations** (`shareRoadObservations`, per device, **off by default**): while
+Map is following your route, driving through a board road (in at one end, out at the other, at
+driving speed) sends one `road_passable` report, plus `heavy_traffic` when the average speed was
+under `slow_ratio` x free-flow. The report has `method: "passive"`, the segment, the time and a
+`free`/`slow` class, and no location, heading, note or track; the phone keeps only a running distance
+and time per road in memory. With the setting off nothing passive runs. Separately, if you sit
+stopped inside a board road for longer than `stall_s` (120 s) while navigating, the phone asks "Road
+ahead blocked?" (an explicit answer, never inferred).
+
 ### Web simulation (Plan tab)
 
 Shows, natively in MapKit, the simulation a planner is playing on the web `/fire` or
@@ -235,6 +255,17 @@ from changing the current state. The success label describes the last check,
 not continuously monitored health.
 
 ## Verification
+
+### Unit tests
+
+`CrisisTwinTests` (hosted in the app) covers the board logic: tolerant decoding, on-device
+selection and fire exclusion, answers, passive traversal and the stall detector. `testShareRoadObservationsOffByDefault`
+in `CrisisTwinUITests` needs no backend.
+
+```sh
+xcodebuild test -project mobile/CrisisTwin.xcodeproj -scheme CrisisTwin \
+  -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:CrisisTwinTests
+```
 
 ### Live drill UI tests
 

@@ -69,6 +69,8 @@ VALIDATORS: dict[str, dict[str, Any]] = {
             "replay_at": NULLABLE_DATE,
             "status": _enum("unverified", "corroborated", "responder_confirmed", "confirmed", "dismissed", "resolved"),
             "evidence_class": _enum("field_report", "drill_fixture", "historical_record"),
+            "method": _enum("explicit", "passive"),
+            "speed_class": _enum("free", "slow", None),
         },
     ),
     "live_tasks": _schema(
@@ -82,6 +84,9 @@ VALIDATORS: dict[str, dict[str, Any]] = {
             "status": _enum("open", "accepted", "done", "cancelled"),
             "created_at": DATE,
             "accepted_at": NULLABLE_DATE,
+            "created_by": _enum("controller", "proposal", "priority"),
+            "question": _enum("road_status", "shelter_full", None),
+            "expires_at": NULLABLE_DATE,
         },
     ),
     "live_decisions": _schema(
@@ -185,6 +190,10 @@ VALIDATORS: dict[str, dict[str, Any]] = {
             "replay_at": NULLABLE_DATE,
         },
     ),
+    "live_board": _schema(
+        ["incident_id", "computed_at", "items"],
+        {"incident_id": STR, "computed_at": DATE, "replay_at": NULLABLE_DATE, "items": {"bsonType": "array"}},
+    ),
     "live_responder_locations": _schema(
         ["incident_id", "party_key", "coord", "at", "expires_at"],
         {
@@ -215,6 +224,7 @@ INDEXES: dict[str, list[IndexModel]] = {
         IndexModel([("id", ASCENDING)], unique=True),
         IndexModel([("incident_id", ASCENDING), ("status", ASCENDING)]),
         IndexModel([("assignee", ASCENDING), ("status", ASCENDING)]),
+        IndexModel([("incident_id", ASCENDING), ("created_by", ASCENDING), ("status", ASCENDING)]),
     ],
     "live_decisions": [IndexModel([("incident_id", ASCENDING), ("at", DESCENDING)])],
     "live_drills": [IndexModel([("incident_id", ASCENDING)], unique=True)],
@@ -243,6 +253,7 @@ INDEXES: dict[str, list[IndexModel]] = {
         IndexModel([("incident_id", ASCENDING), ("zone_id", ASCENDING), ("destination_id", ASCENDING),
                     ("via_key", ASCENDING)], unique=True),
     ],
+    "live_board": [IndexModel([("incident_id", ASCENDING)], unique=True)],
     "live_responder_locations": [
         IndexModel([("incident_id", ASCENDING), ("party_key", ASCENDING)], unique=True),
         IndexModel([("expires_at", ASCENDING)], expireAfterSeconds=0),
@@ -260,6 +271,7 @@ DRILL_DATA_COLLECTIONS = (
     "live_checkins",
     "live_destination_choices",
     "live_plan_routes",
+    "live_board",
     "live_responder_locations",
 )
 """Dropped by ``live_init_db --drop-drill-data`` (devices are kept so tokens stay valid)."""

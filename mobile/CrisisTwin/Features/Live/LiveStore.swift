@@ -85,6 +85,31 @@ final class LiveStore {
         }
     }
 
+    /// The board's selected questions for this phone (civilians), best first, plus a stall question.
+    /// Chosen on the device from the public board; see `BoardSelector`.
+    private(set) var boardQuestions: [BoardQuestion] = []
+    /// Set by the Map while it follows the device along the route (the person is navigating).
+    var navigating = false {
+        didSet { if navigating != oldValue { navigationChanged() } }
+    }
+    /// Per-device opt-in: send `road_passable` / `heavy_traffic` passively for board roads driven
+    /// through while navigating. Off by default; nothing else leaves the phone.
+    var shareRoadObservations: Bool = UserDefaults.standard.bool(forKey: LiveStore.shareRoadObservationsKey) {
+        didSet {
+            UserDefaults.standard.set(shareRoadObservations, forKey: Self.shareRoadObservationsKey)
+            passive.reset()
+            updateTracking()
+        }
+    }
+    static let shareRoadObservationsKey = "shareRoadObservations"
+
+    @ObservationIgnored private var board = BoardResponse()
+    @ObservationIgnored private var boardAnswered: [String: Date] = LiveStore.loadBoardAnswered()
+    @ObservationIgnored private var stallQuestions: [String: BoardItem] = [:]
+    @ObservationIgnored private var passive = PassiveTraversal()
+    @ObservationIgnored private var stall = StallDetector()
+    @ObservationIgnored private var selectedBoardItems: [BoardItem] = []
+    @ObservationIgnored private var boardComputedAt: LonLat?
     @ObservationIgnored private let outbox = ReportOutbox()
     @ObservationIgnored private let monitor = NWPathMonitor()
     @ObservationIgnored private var networkSatisfied = true
@@ -178,7 +203,9 @@ final class LiveStore {
             ? fetch { try await $0.reports(incidentId: incidentId, since: sinceCursor, token: $1) } : nil
         async let openTasks = wantsResponderData
             ? fetch { try await $0.myTasks(token: $1) } : nil
+        async let boardFetch = fetch { try await $0.board(incidentId: incidentId, token: $1) }
         let (sitResult, mineResult, pageResult, tasksResult) = await (sit, mine, page, openTasks)
+        let boardResult = await boardFetch
 
         // A slower, older refresh must not overwrite a newer one.
         guard generation == refreshGeneration, !Task.isCancelled else { return resetConnecting() }
@@ -192,6 +219,13 @@ final class LiveStore {
         }
         if case .failure(LiveAPIError.notFound) = sitResult { activeCheckWanted = true }
         take(sitResult) { applySituation($0) }
+        // An older server has no board; its failure never marks the connection as down.
+        switch boardResult {
+        case .success(let response): board = response
+        case .failure(let error): if case LiveAPIError.notFound = error { board = BoardResponse() }
+        }
+        recomputeBoard()
+        if navigating { showStall(stall.due(now: Date(), stallS: board.limits.stallS)) }
         take(mineResult) { myReports = $0.sorted { $0.observedAt > $1.observedAt } }
         take(pageResult) { page in
             reportsCursor = page.nextCursor
@@ -344,6 +378,8 @@ final class LiveStore {
     /// Civilian positions are never sent from here.
     func updateLocation(_ coord: LonLat?, accuracyM: Double? = nil) {
         lastCoord = coord
+        if let coord, let last = boardComputedAt, BoardGeo.distance(last, coord) > 50 { recomputeBoard() }
+        if coord != nil, boardComputedAt == nil { recomputeBoard() }
         let zone = coord.flatMap { c in situation?.zones.flatMap { ZoneLocator.zone(containing: c, in: $0) } }
         setZone(zone)
         guard let coord, role == .responder, shareResponderLocation else { return }
@@ -388,8 +424,8 @@ final class LiveStore {
         }
         return myReports.contains {
             matches(kind: $0.kind, coord: $0.location.coord, segment: $0.roadRef?.segmentId, at: $0.observedAt)
-        } || pending.contains {
-            matches(kind: $0.kind, coord: $0.location.coord, segment: nil, at: $0.observedAt)
+        } || pending.contains { draft in
+            draft.location.map { matches(kind: draft.kind, coord: $0.coord, segment: nil, at: draft.observedAt) } ?? false
         }
     }
 
@@ -763,5 +799,116 @@ extension ZoneGuidance {
     /// The recommended option's destination id (the controller's pick).
     var recommendedDestinationId: String? {
         exitOptions.first(where: \.recommended)?.id ?? destination?.id
+    }
+}
+
+
+// MARK: - Task board (ADR 0041)
+
+extension LiveStore {
+    private static let boardAnsweredKey = "live.boardAnswered"
+
+    /// Answered task ids with their expiry; entries drop once expired.
+    fileprivate static func loadBoardAnswered() -> [String: Date] {
+        let raw = UserDefaults.standard.dictionary(forKey: boardAnsweredKey) as? [String: TimeInterval] ?? [:]
+        let now = Date()
+        return raw.mapValues { Date(timeIntervalSince1970: $0) }.filter { $0.value > now }
+    }
+
+    fileprivate func markBoardAnswered(_ item: BoardItem) {
+        let now = Date()
+        boardAnswered[item.taskId] = item.expiresAt
+        boardAnswered = boardAnswered.filter { $0.value > now }
+        UserDefaults.standard.set(boardAnswered.mapValues { $0.timeIntervalSince1970 }, forKey: Self.boardAnsweredKey)
+    }
+
+    /// Picks this phone's questions from the public board on the device. The position is only
+    /// compared locally; nothing is sent.
+    fileprivate func recomputeBoard() {
+        boardComputedAt = lastCoord
+        guard role == .civilian else {
+            selectedBoardItems = []
+            return rebuildBoardQuestions()
+        }
+        let now = Date()
+        boardAnswered = boardAnswered.filter { $0.value > now }
+        selectedBoardItems = BoardSelector.select(
+            items: board.items.filter { boardAnswered[$0.taskId] == nil },
+            route: myGuidance?.route?.line, device: lastCoord, fire: situation?.fire.geometry,
+            limits: board.limits, now: now)
+        rebuildBoardQuestions()
+    }
+
+    fileprivate func rebuildBoardQuestions() {
+        let now = Date()
+        stallQuestions = stallQuestions.filter { $0.value.expiresAt > now && boardAnswered[$0.key] == nil }
+        let stalled = stallQuestions.values.sorted { $0.rank < $1.rank }.map { BoardQuestion(item: $0, isStall: true) }
+        let regular = selectedBoardItems.filter { stallQuestions[$0.taskId] == nil }.map { BoardQuestion(item: $0) }
+        boardQuestions = stalled + regular
+        updateTracking()
+    }
+
+    /// The segments to watch while navigating: the selected road questions.
+    fileprivate func updateTracking() {
+        guard navigating, role == .civilian else {
+            passive.reset()
+            stall.reset()
+            return
+        }
+        let segments = selectedBoardItems.compactMap(BoardTracked.init(item:))
+        stall.track(segments)
+        passive.slowRatio = board.limits.slowRatio
+        if shareRoadObservations { passive.track(segments) } else { passive.reset() }
+    }
+
+    fileprivate func navigationChanged() {
+        if !navigating { stallQuestions = [:] }
+        passive.reset()
+        stall.reset()
+        rebuildBoardQuestions()
+    }
+
+    /// Feeds a location fix to the on-device detectors while navigating. Passive traversal runs
+    /// only with "Share road observations" on; the stall question needs no setting. The fix itself
+    /// is never stored or sent.
+    func observeFix(_ fix: CLLocation) {
+        guard navigating, role == .civilian, fix.horizontalAccuracy >= 0, fix.horizontalAccuracy <= 50 else { return }
+        let sample = BoardFix(
+            coord: LonLat(lon: fix.coordinate.longitude, lat: fix.coordinate.latitude),
+            at: fix.timestamp, speedMps: fix.speed >= 0 ? fix.speed : nil)
+        if shareRoadObservations {
+            for event in passive.feed(sample) { sendPassive(event) }
+        }
+        showStall(stall.feed(sample, stallS: board.limits.stallS))
+    }
+
+    private func sendPassive(_ event: PassiveTraversal.Traversed) {
+        guard let item = selectedBoardItems.first(where: { $0.taskId == event.taskId }) else { return }
+        markBoardAnswered(item)
+        submit(.passive(incidentId: incidentId, kind: .roadPassable, segmentId: event.segmentId,
+                        taskId: event.taskId, observedAt: event.exitedAt, slow: event.slow))
+        if event.slow {
+            submit(.passive(incidentId: incidentId, kind: .heavyTraffic, segmentId: event.segmentId,
+                            taskId: event.taskId, observedAt: event.exitedAt, slow: true))
+        }
+        recomputeBoard()
+    }
+
+    fileprivate func showStall(_ taskIds: [String]) {
+        guard !taskIds.isEmpty else { return }
+        for id in taskIds {
+            if let item = selectedBoardItems.first(where: { $0.taskId == id }), boardAnswered[id] == nil {
+                stallQuestions[id] = item
+            }
+        }
+        rebuildBoardQuestions()
+    }
+
+    /// An explicit answer: one per task per device. "Has space" and "No" send nothing.
+    func answerBoard(_ question: BoardQuestion, _ answer: BoardAnswer) {
+        markBoardAnswered(question.item)
+        stallQuestions[question.id] = nil
+        if let draft = question.draft(for: answer, incidentId: incidentId) { submit(draft) }
+        recomputeBoard()
     }
 }

@@ -151,23 +151,34 @@ struct ReportsView: View {
                     .reportZoomSource("reports-new", in: reportZoom)
 
                     let questions = store.stillThereItems
-                    if !questions.isEmpty {
+                    let board = store.boardQuestions
+                    if !questions.isEmpty || !board.isEmpty {
                         VStack(alignment: .leading, spacing: 10) {
                             FieldSectionTitle("Still there?")
-                            panelRows(questions) { StillThereCard(item: $0) }
+                            VStack(spacing: 0) {
+                                ForEach(questions) { item in
+                                    StillThereCard(item: item)
+                                    if item.id != questions.last?.id || !board.isEmpty { rowDivider }
+                                }
+                                ForEach(board) { question in
+                                    BoardQuestionCard(question: question)
+                                    if question.id != board.last?.id { rowDivider }
+                                }
+                            }
+                            .ctPanel(padding: 0)
                         }
                         .transition(.opacity)
                     }
 
-                    if !store.pending.isEmpty || !store.myReports.isEmpty {
+                    if store.pending.contains(where: { $0.location != nil }) || !store.myReports.isEmpty {
                         VStack(alignment: .leading, spacing: 10) {
                             FieldSectionTitle("Yours")
                             VStack(spacing: 0) {
-                                ForEach(store.pending) { draft in
+                                ForEach(store.pending.filter { $0.location != nil }) { draft in
                                     ReportRow(kind: draft.kind,
-                                              place: store.placeWords(draft.location.coord, road: nil),
+                                              place: draft.location.flatMap { store.placeWords($0.coord, road: nil) },
                                               time: draft.observedAt, progress: nil)
-                                    if draft.id != store.pending.last?.id || !store.myReports.isEmpty { rowDivider }
+                                    if draft.id != store.pending.last(where: { $0.location != nil })?.id || !store.myReports.isEmpty { rowDivider }
                                 }
                                 ForEach(store.myReports) { report in
                                     ReportRow(kind: report.kind,
@@ -194,7 +205,7 @@ struct ReportsView: View {
                 }
             }
             .refreshable { await store.refresh() }
-            .animation(.snappy, value: store.stillThereItems.map(\.id))
+            .animation(.snappy, value: store.stillThereItems.map(\.id) + store.boardQuestions.map(\.id))
         }
     }
 
@@ -305,5 +316,45 @@ private struct StillThereCard: View {
     private func answer(_ stillThere: Bool) {
         tick += 1
         withAnimation(.snappy) { store.answerStillThere(item, stillThere: stillThere) }
+    }
+}
+
+/// A board question about a road or shelter, answered in one tap; same card as `StillThereCard`.
+private struct BoardQuestionCard: View {
+    let question: BoardQuestion
+
+    @Environment(LiveStore.self) private var store
+    @State private var tick = 0
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: question.symbol)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Color.ctInkMuted)
+                    .frame(width: 30, height: 30)
+                    .background(Color.ctSurfaceMuted, in: .circle)
+                    .accessibilityHidden(true)
+                Text(question.title)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(Color.ctInk)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack(spacing: 8) {
+                ForEach(Array(question.answers.enumerated()), id: \.element) { index, answer in
+                    Button(answer.title) {
+                        tick += 1
+                        withAnimation(.snappy) { store.answerBoard(question, answer) }
+                    }
+                    .buttonStyle(FieldPill(primary: index == 0))
+                }
+            }
+            .padding(.leading, 42)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .sensoryFeedback(.selection, trigger: tick)
+        .accessibilityElement(children: .contain)
     }
 }

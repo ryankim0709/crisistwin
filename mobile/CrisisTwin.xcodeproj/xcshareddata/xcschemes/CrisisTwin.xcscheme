@@ -8,12 +8,18 @@
          <BuildActionEntry buildForTesting="YES" buildForRunning="NO" buildForProfiling="NO" buildForArchiving="NO" buildForAnalyzing="NO">
             <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="B50000000000000000000001" BuildableName="CrisisTwinUITests.xctest" BlueprintName="CrisisTwinUITests" ReferencedContainer="container:CrisisTwin.xcodeproj"/>
          </BuildActionEntry>
+         <BuildActionEntry buildForTesting="YES" buildForRunning="NO" buildForProfiling="NO" buildForArchiving="NO" buildForAnalyzing="NO">
+            <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="C50000000000000000000001" BuildableName="CrisisTwinTests.xctest" BlueprintName="CrisisTwinTests" ReferencedContainer="container:CrisisTwin.xcodeproj"/>
+         </BuildActionEntry>
       </BuildActionEntries>
    </BuildAction>
    <TestAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.DebuggerFoundation.Launcher.LLDB" shouldUseLaunchSchemeArgsEnv="YES">
       <Testables>
          <TestableReference skipped="NO">
             <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="B50000000000000000000001" BuildableName="CrisisTwinUITests.xctest" BlueprintName="CrisisTwinUITests" ReferencedContainer="container:CrisisTwin.xcodeproj"/>
+         </TestableReference>
+         <TestableReference skipped="NO">
+            <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="C50000000000000000000001" BuildableName="CrisisTwinTests.xctest" BlueprintName="CrisisTwinTests" ReferencedContainer="container:CrisisTwin.xcodeproj"/>
          </TestableReference>
       </Testables>
    </TestAction>

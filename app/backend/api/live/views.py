@@ -12,7 +12,7 @@ from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 from rest_framework.response import Response
 
-from . import aar, controller, incidents, twin_service
+from . import aar, board, controller, incidents, twin_service
 from . import impact as impact_mod
 from .auth import Principal, client_ip, issue_token, live_view, rate_limited, secret_matches
 from .common import (
@@ -73,6 +73,12 @@ REPORT_KINDS = frozenset(
 ROAD_KINDS = frozenset({"road_blocked", "road_passable", "heavy_traffic"})
 """Kinds that snap to a road segment."""
 SEVERITIES = frozenset({"full", "partial", "slow"})
+REPORT_METHODS = frozenset({"explicit", "passive"})
+PASSIVE_KINDS = frozenset({"road_passable", "heavy_traffic"})
+"""ADR 0041: a passive observation only says a phone drove through (passable) or crawled (slow)."""
+SPEED_CLASSES = frozenset({"free", "slow"})
+PASSIVE_FORBIDDEN_FIELDS = ("location", "heading_deg", "note", "destination_id")
+"""A passive report carries no position, heading, text or destination: the server places it on the segment."""
 SHELTER_FULL_DESTINATION_KINDS = frozenset({"shelter", "temporary_refuge"})
 """Destination kinds that can fill up; an exit cannot."""
 TRIAGE_ACTIONS = {"confirm": "confirmed", "dismiss": "dismissed", "resolve": "resolved", "merge": "dismissed"}
@@ -135,6 +141,47 @@ def join(request, incident_id: str, principal: None):
 # ---- v1: reports ----
 
 
+def _validate_passive(body: dict[str, Any], client_id: str, kind: str) -> dict[str, Any]:
+    """``method: "passive"`` (ADR 0041): kind, segment, time and speed class only."""
+    code = "invalid_report"
+    if kind not in PASSIVE_KINDS:
+        raise ApiError(400, code, "A passive report must be road_passable or heavy_traffic.")
+    for name in PASSIVE_FORBIDDEN_FIELDS:
+        if body.get(name) is not None:
+            raise ApiError(400, code, f"A passive report must not carry `{name}`.")
+    segment_id = optional_str(body, "segment_id", code, 200)
+    index = get_index()
+    if segment_id is None or segment_id not in index.segment_lines:
+        raise ApiError(400, code, "A passive report needs a known `segment_id`.")
+    speed_class = body.get("speed_class")
+    if speed_class not in SPEED_CLASSES:
+        raise ApiError(400, code, "`speed_class` must be free or slow.")
+    if kind == "heavy_traffic" and speed_class != "slow":
+        raise ApiError(400, code, "A passive heavy_traffic report needs `speed_class: slow`.")
+    severity = body.get("severity")
+    if severity not in (None, "slow") or (severity == "slow" and kind != "heavy_traffic"):
+        raise ApiError(400, code, "A passive report's `severity` is null (or slow for heavy_traffic).")
+    observed_at = parse_iso(body.get("observed_at"), "observed_at", code)
+    if observed_at > wall_now() + timedelta(seconds=MAX_OBSERVED_FUTURE_S):
+        raise ApiError(400, code, "`observed_at` is in the future.")
+    line = index.segment_lines[segment_id]
+    mid = line[len(line) // 2]
+    return {
+        "client_id": client_id,
+        "kind": kind,
+        "severity": severity,
+        "location": {"coord": [mid[0], mid[1]], "accuracy_m": None},
+        "heading_deg": None,
+        "destination_id": None,
+        "task_id": optional_str(body, "task_id", code, 100),
+        "observed_at": observed_at,
+        "note": None,
+        "method": "passive",
+        "speed_class": speed_class,
+        "segment_id": segment_id,
+    }
+
+
 def _validate_report(body: dict[str, Any], incident_id: str) -> dict[str, Any]:
     code = "invalid_report"
     try:
@@ -146,6 +193,13 @@ def _validate_report(body: dict[str, Any], incident_id: str) -> dict[str, Any]:
     kind = body.get("kind")
     if kind not in REPORT_KINDS:
         raise ApiError(400, code, f"`kind` must be one of {', '.join(sorted(REPORT_KINDS))}.")
+    method = body.get("method") or "explicit"
+    if method not in REPORT_METHODS:
+        raise ApiError(400, code, "`method` must be explicit or passive.")
+    if method == "passive":
+        return _validate_passive(body, client_id, kind)
+    if body.get("speed_class") is not None or body.get("segment_id") is not None:
+        raise ApiError(400, code, "`speed_class` and `segment_id` are for passive reports only.")
     severity = body.get("severity")
     if severity is not None and severity not in SEVERITIES:
         raise ApiError(400, code, "`severity` must be full, partial, slow or null.")
@@ -181,6 +235,9 @@ def _validate_report(body: dict[str, Any], incident_id: str) -> dict[str, Any]:
         "task_id": task_id,
         "observed_at": observed_at,
         "note": optional_str(body, "note", code, NOTE_MAX_CHARS),
+        "method": "explicit",
+        "speed_class": None,
+        "segment_id": None,
     }
 
 
@@ -197,6 +254,30 @@ def _refresh_corroboration(incident_id: str) -> None:
             {"incident_id": incident_id, "id": {"$in": list(item.report_ids)}, "status": "unverified"},
             {"$set": {"status": status, "updated_at": now}},
         )
+
+
+def _board_task(incident_id: str, task_id: str | None) -> dict[str, Any] | None:
+    """The board question ``task_id`` refers to, or None for any other (or no) task."""
+    if not task_id:
+        return None
+    return col("live_tasks").find_one({"id": task_id, "incident_id": incident_id, "created_by": "priority"})
+
+
+def _check_board_answer(task: dict[str, Any], fields: dict[str, Any], now) -> None:
+    """An answer to a board question must fit it: the question's kinds, on its place, before expiry."""
+    code = "invalid_report"
+    expires_at = task.get("expires_at")
+    if expires_at is not None and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    if task["status"] != "open" or (expires_at is not None and expires_at <= now):
+        raise ApiError(409, "conflict", "This question has closed.")
+    if fields["kind"] not in board.ANSWER_KINDS.get(task.get("question"), frozenset()):
+        raise ApiError(400, code, "That report kind does not answer this question.")
+    target = task.get("target") or {}
+    if task.get("question") == "shelter_full" and fields["destination_id"] != target.get("destination_id"):
+        raise ApiError(400, code, "`destination_id` does not match the question's destination.")
+    if fields["segment_id"] is not None and fields["segment_id"] != target.get("segment_id"):
+        raise ApiError(400, code, "`segment_id` does not match the question's road.")
 
 
 def _answer_task(principal: Principal, incident_id: str, task_id: str, report_id: str, now) -> None:
@@ -235,11 +316,24 @@ def _submit_report(request, incident_id: str, principal: Principal) -> Response:
     ):
         return error(429, "rate_limited", "Too many reports. Try again in a minute.")
     index = get_index(incident_id)
+    board_task = _board_task(incident_id, fields["task_id"])
+    if board_task is not None:
+        _check_board_answer(board_task, fields, wall_now())
+    elif fields["method"] == "passive" and fields["task_id"]:
+        return error(400, "invalid_report", "A passive report answers only a board question.")
     refused = injects_mod.refuse_if_no_signal(incident_id, principal, wall_now(), coord=fields["location"]["coord"])
     if refused is not None:
         return refused
     road_ref = None
-    if fields["kind"] in ROAD_KINDS:
+    # A passive report, or an answer to a board road question, is placed on that segment, not snapped.
+    fixed_segment = fields["segment_id"] or (
+        (board_task.get("target") or {}).get("segment_id") if board_task and fields["kind"] in ROAD_KINDS else None)
+    if fixed_segment:
+        line = index.segment_lines[fixed_segment]
+        snap_m = min(haversine_m(tuple(fields["location"]["coord"]), p) for p in line)
+        road_ref = {"segment_id": fixed_segment, "name": index.segment_names.get(fixed_segment) or "Unnamed road",
+                    "snap_m": 0.0 if fields["method"] == "passive" else round(snap_m, 1)}
+    elif fields["kind"] in ROAD_KINDS:
         snapped = snap_to_segment(index, tuple(fields["location"]["coord"]))
         if snapped is not None:
             segment_id, snap_m = snapped
@@ -266,10 +360,12 @@ def _submit_report(request, incident_id: str, principal: Principal) -> Response:
         "note": fields["note"],
         "status": "unverified",
         "evidence_class": "field_report",
+        "method": fields["method"],
+        "speed_class": fields["speed_class"],
         "replay_at": report_replay_at(incident_id, now),
         "updated_at": now,
     }
-    if fields["task_id"]:
+    if fields["task_id"] and board_task is None:
         _answer_task(principal, incident_id, fields["task_id"], doc["id"], now)
     try:
         reports.insert_one(doc)
@@ -380,6 +476,14 @@ def prompts(request, incident_id: str, principal: Principal):
     nearby = [i for i in items if i.kind in PROMPT_KINDS and haversine_m(near, i.coord) <= PROMPT_RADIUS_M]
     nearby.sort(key=lambda i: haversine_m(near, i.coord))
     return ok({"items": [public_item_json(i) for i in nearby]})
+
+
+@live_view(["GET"])
+def task_board(request, incident_id: str, principal: Principal):
+    """ADR 0041 public board: open questions about places; the phone picks its own on the device."""
+    snapshot = load_snapshot(incident_id, wall_now())
+    board.maybe_refresh(snapshot)
+    return ok(board.board_json(snapshot))
 
 
 # ---- v1/v2: tasks ----
@@ -806,12 +910,15 @@ def command(request, incident_id: str, principal: Principal):
          "simulated": d["party_key"] in simulated}
         for d in locations
     ]
-    tasks = (
+    board.maybe_refresh(snapshot)
+    tasks = list(
         col("live_tasks")
         .find({"incident_id": incident_id, "status": {"$ne": "cancelled"}})
         .sort("created_at", -1)
         .limit(COMMAND_TASKS_LIMIT)
     )
+    answers = board.task_answers(incident_id, [t["id"] for t in tasks])
+    stale_critical, board_computed_at = board.stale_critical_json(incident_id)
     return ok(
         {
             "incident_id": incident_id,
@@ -830,7 +937,9 @@ def command(request, incident_id: str, principal: Principal):
             "checkins": _checkin_summary(incident_id),
             "destination_preferences": destination_preferences(incident_id, now),
             "responders": responders,
-            "tasks": [task_json(t) for t in tasks],
+            "tasks": [{**task_json(t), "answers": answers.get(t["id"]) or board.empty_answers()} for t in tasks],
+            "stale_critical": stale_critical,
+            "board_computed_at": board_computed_at,
             "decisions": _recent_decisions(incident_id),
             "response_record": response_record_until(index, snapshot.clock.replay_now, COMMAND_RESPONSE_RECORD_LIMIT),
             "ground_record": ground_record_json(index, snapshot.clock.replay_now, snapshot.injects),
@@ -930,16 +1039,22 @@ def set_drill(incident_id: str, action: str, replay_start_raw: Any = None, speed
         update = {"replay_start": clock.replay_now, "started_at": now, "speed": speed}
     elif action == "reset":
         update = {"replay_start": default_replay_start(drill), "started_at": None, "speed": 1.0}
-        for name in ("live_guidance", "live_proposals", "live_checkins", "live_destination_choices", "live_plan_routes"):
+        for name in ("live_guidance", "live_proposals", "live_checkins", "live_destination_choices", "live_plan_routes",
+                     "live_board"):
             col(name).delete_many({"incident_id": incident_id})
         invalidate_guidance(incident_id)
         # 2018 record reports re-enter as the clock passes them again.
         col("live_reports").delete_many({"incident_id": incident_id, "evidence_class": "historical_record"})
         groundrecord.forget(incident_id)
+        # Board questions belong to the drill moment that ranked them.
+        col("live_tasks").update_many(
+            {"incident_id": incident_id, "created_by": "priority", "status": "open"},
+            {"$set": {"status": "cancelled", "closed_at": now, "note": "Drill reset"}},
+        )
     else:
         raise ApiError(400, "invalid_drill", "`action` must be start, reset or set_speed.")
     update.update({"updated_at": now, "updated_by": "controller"})
-    unset = {"plan_state": "", "last_auto_replan_at": ""} if action == "reset" else {}
+    unset = {"plan_state": "", "last_auto_replan_at": "", "board_refreshed_at": ""} if action == "reset" else {}
     ops: dict[str, Any] = {"$set": update}
     if unset:
         ops["$unset"] = unset

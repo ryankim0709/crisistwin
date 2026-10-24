@@ -1,4 +1,4 @@
-import type { AreaGeometry, ChangeKind, DrillState, GuidanceLevel, LonLat, ReportKind, ReportStatus } from "./types";
+import type { AreaGeometry, ChangeKind, DrillState, GuidanceLevel, LonLat, PriorityItem, ReportKind, ReportStatus, TaskAnswers } from "./types";
 
 export const LEVEL_LABEL: Record<GuidanceLevel, string> = {
   evacuate_now: "Evacuate now",
@@ -131,4 +131,46 @@ export function viaLine(via: string[] | undefined, destination: string | null | 
   if (destination) parts.push(parts.length ? `to ${destination}` : destination);
   const head = parts.join(" ");
   return etaMin != null ? `${head}, ${etaMin} min` : head;
+}
+
+const ANSWER_WORDS: ("road_passable" | "road_blocked" | "heavy_traffic" | "shelter_full")[] = [
+  "road_passable",
+  "road_blocked",
+  "heavy_traffic",
+  "shelter_full",
+];
+const ANSWER_WORD = { road_passable: "open", road_blocked: "blocked", heavy_traffic: "slow", shelter_full: "full" };
+
+/** "3 open, 1 blocked, 4 min ago" from a task's answers; "no answers" when none. */
+export function answersLine(answers: TaskAnswers | null | undefined, nowMs: number): string {
+  if (!answers || !answers.total) return "no answers";
+  const parts = ANSWER_WORDS.filter((k) => answers[k] > 0).map((k) => `${answers[k]} ${ANSWER_WORD[k]}`);
+  const t = answers.last_at ? new Date(answers.last_at).getTime() : NaN;
+  if (!Number.isNaN(t)) parts.push(`${elapsed(nowMs - t)} ago`);
+  return parts.join(", ");
+}
+
+export const PRIORITY_KIND_LABEL: Record<PriorityItem["kind"], string> = {
+  segment: "Road",
+  destination: "Destination",
+  gateway: "Gateway",
+};
+
+/** "1240 veh · 3 routes", "load 0.92", "820 households"; empty when the basis is unknown. */
+export function impactBasis(p: PriorityItem): string {
+  if (p.kind === "segment") {
+    const parts: string[] = [];
+    if (p.vehicles != null) parts.push(`${nf(p.vehicles)} veh`);
+    if (p.zones != null) parts.push(plural(p.zones, "route"));
+    return parts.join(" · ");
+  }
+  if (p.kind === "destination") return p.load != null ? `load ${p.load.toFixed(2)}` : "";
+  return p.households != null ? plural(p.households, "household") : "";
+}
+
+/** "never" when unobserved, else "12 min ago". */
+export function observedAge(iso: string | null | undefined, nowMs: number): string {
+  if (!iso) return "never";
+  const t = new Date(iso).getTime();
+  return Number.isNaN(t) ? "never" : `${elapsed(nowMs - t)} ago`;
 }
