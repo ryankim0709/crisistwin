@@ -54,7 +54,6 @@ export const CONGESTION_FREE_RATIO = 0.7;
 export const CONGESTION_SLOW_RATIO = 0.35;
 
 const MAJOR_HIGHWAYS = ["motorway", "trunk", "primary", "secondary", "tertiary"];
-const SIM_HATCH_IMAGE = "rp-sim-hatch";
 const ZONE_HATCH_IMAGE = "rp-zone-hatch";
 const ZONE_HATCH_OPACITY = 0.22;
 
@@ -65,16 +64,20 @@ export const COLORS = {
   char: "#140604",
   satellite: "#eaf4ff",
   history: "#ff9a5c",
-  simFront: "#ff7ad9",
-  free: "#3ddbb4",
-  slow: "#f5c04a",
-  jam: "#ff4d6d",
-  closed: "#c4122f",
+  // Warm colours mean fire only; cool colours mean people and traffic only.
+  simFront: "#ffd166",
+  fireBand: "#ff9a1f",
+  free: "#3df2ff",
+  slow: "#4aa8ff",
+  jam: "#b14dff",
+  closed: "#8a96a3",
+  threat: "#ffb547",
+  threatImminent: "#ff7a1a",
   network: "#26394a",
   networkMajor: "#3d566c",
   bridge: "#d8e3ee",
   particle: "#e9fbff",
-  particleStopped: "#ff8fa3",
+  particleStopped: "#b14dff",
   zone: "#8fb3ff",
   zoneOrdered: "#ffb547",
   destination: "#7cf2c9",
@@ -96,16 +99,14 @@ export const LAYER_GROUPS: Record<LayerGroup, string[]> = {
   simFire: [
     "sim-front-fill",
     "sim-char-fill",
-    "sim-front-hatch",
     "sim-edge-glow",
     "sim-edge-mid",
     "sim-front-line",
     "sim-front-label",
     "sim-ignition",
-    "sim-ignition-label",
   ],
   fire: ["fire-glow-outer", "fire-fill", "fire-glow", "fire-line", "fire-label"],
-  zones: ["zones-fill", "zones-hatch", "zones-line", "zones-line-ordered", "zones-label"],
+  zones: ["zones-fill", "zones-hatch", "zones-line", "zones-line-ordered"],
   roads: [
     "roads-base",
     "roads-bridge",
@@ -117,7 +118,7 @@ export const LAYER_GROUPS: Record<LayerGroup, string[]> = {
     "roads-bridge-label",
   ],
   particles: ["particles-halo", "particles"],
-  destinations: ["destinations-halo", "destinations", "destinations-label"],
+  destinations: ["destinations-halo", "destinations"],
   damage: ["damage"],
 };
 
@@ -314,11 +315,12 @@ export function zonesCollection(
 ): FeatureCollection {
   return {
     type: "FeatureCollection",
-    features: zones.map((zone) => {
+    features: zones.map((zone, i) => {
       const state = states.get(zone.id) ?? "none";
       const suffix = state === "ordered" ? " · ORDERED" : state === "warned" ? " · WARNING" : "";
       return {
         type: "Feature",
+        id: i,
         geometry: zone.geometry,
         properties: {
           id: zone.id,
@@ -428,6 +430,17 @@ export function setFireFlicker(map: MapLibreMap, t: number): void {
   }
 }
 
+/** Set zone-order flash strength (0..1) by zone feature index. */
+export function setZoneFlash(map: MapLibreMap, zoneIndex: number, strength: number): void {
+  map.setFeatureState({ source: "zones", id: zoneIndex }, { flash: strength });
+}
+
+export function setIgnitionLabelVisible(map: MapLibreMap, visible: boolean): void {
+  if (map.getLayer("sim-ignition-label")) {
+    map.setLayoutProperty("sim-ignition-label", "visibility", visible ? "visible" : "none");
+  }
+}
+
 /** Push road threat codes (1 = fire within 30 min, 2 = within 10 min) into feature-state. */
 export function applyThreatState(
   map: MapLibreMap,
@@ -520,7 +533,6 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
       paint: { "raster-brightness-max": 0.75, "raster-saturation": -0.25, "raster-fade-duration": 0 },
     });
   }
-  if (!map.hasImage(SIM_HATCH_IMAGE)) map.addImage(SIM_HATCH_IMAGE, hatchImage([255, 122, 217], 150));
   if (!map.hasImage(ZONE_HATCH_IMAGE)) map.addImage(ZONE_HATCH_IMAGE, hatchImage([255, 181, 71], 60, 14));
 
   // Zones: nearly invisible until ordered; ordered zones get a faint (pulsed) hatch.
@@ -559,44 +571,50 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     filter: ["==", ["get", "state"], "ordered"],
     paint: { "line-color": COLORS.zoneOrdered, "line-width": 0.8, "line-opacity": 0.3 },
   });
+  // Brief amber pulse when an order is issued; independent of the (off by default) zones toggle.
+  map.addLayer({
+    id: "zones-flash",
+    type: "line",
+    source: "zones",
+    paint: {
+      "line-color": COLORS.zoneOrdered,
+      "line-width": 3,
+      "line-blur": 1.5,
+      "line-opacity": ["coalesce", ["feature-state", "flash"], 0],
+    },
+  });
 
-  // Simulated fire (model output): warm body, dark burned interior from older fronts,
-  // flickering ember edge, a faint hatch texture and a "SIMULATED" tag along the edge.
+  // Model fire: the newest band (last ~30 min) glows orange-yellow; older area is opaque
+  // burned char; the leading edge is a thick blurred orange line under a thin yellow core.
   map.addLayer({
     id: "sim-front-fill",
     type: "fill",
     source: "sim-front",
-    paint: { "fill-color": COLORS.ember, "fill-opacity": 0.42 },
+    paint: { "fill-color": COLORS.fireBand, "fill-opacity": 0.72 },
   });
   map.addLayer({
     id: "sim-char-fill",
     type: "fill",
     source: "sim-char",
-    paint: { "fill-color": COLORS.char, "fill-opacity": 0.78 },
-  });
-  map.addLayer({
-    id: "sim-front-hatch",
-    type: "fill",
-    source: "sim-front",
-    paint: { "fill-pattern": SIM_HATCH_IMAGE, "fill-opacity": 0.18 },
+    paint: { "fill-color": COLORS.char, "fill-opacity": 0.92 },
   });
   map.addLayer({
     id: "sim-edge-glow",
     type: "line",
     source: "sim-front",
-    paint: { "line-color": COLORS.emberDeep, "line-width": 22, "line-blur": 16, "line-opacity": 0.6 },
+    paint: { "line-color": COLORS.emberDeep, "line-width": 16, "line-blur": 10, "line-opacity": 0.75 },
   });
   map.addLayer({
     id: "sim-edge-mid",
     type: "line",
     source: "sim-front",
-    paint: { "line-color": "#ffa33a", "line-width": 5, "line-blur": 2.5, "line-opacity": 0.9 },
+    paint: { "line-color": COLORS.ember, "line-width": 5, "line-blur": 2, "line-opacity": 0.95 },
   });
   map.addLayer({
     id: "sim-front-line",
     type: "line",
     source: "sim-front",
-    paint: { "line-color": "#fff1c1", "line-width": 1.2 },
+    paint: { "line-color": "#ffe066", "line-width": 1.6 },
   });
 
   // Perimeter progression: faint stacked rings, fading with age rank.
@@ -623,7 +641,7 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     id: "fire-fill",
     type: "fill",
     source: "fire",
-    paint: { "fill-color": COLORS.ember, "fill-opacity": 0.32 },
+    paint: { "fill-color": COLORS.ember, "fill-opacity": 0.16 },
   });
   map.addLayer({
     id: "fire-glow",
@@ -635,7 +653,7 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     id: "fire-line",
     type: "line",
     source: "fire",
-    paint: { "line-color": COLORS.satellite, "line-width": 2, "line-dasharray": [3, 2] },
+    paint: { "line-color": COLORS.satellite, "line-width": 2.2, "line-dasharray": [3, 2] },
   });
 
   // Road network: dim base everywhere, congestion overlay driven by feature-state.
@@ -675,7 +693,7 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     source: "roads",
     layout: { "line-cap": "round", "line-join": "round" },
     paint: {
-      "line-color": ["case", ["==", ["coalesce", ["feature-state", "cls"], 0], 4], COLORS.closed, ["interpolate", ["linear"], ["coalesce", ["feature-state", "ratio"], 1], 0, COLORS.jam, CONGESTION_SLOW_RATIO, "#ff8a1f", CONGESTION_FREE_RATIO, COLORS.slow, 0.9, COLORS.free]],
+      "line-color": ["case", ["==", ["coalesce", ["feature-state", "cls"], 0], 4], COLORS.closed, ["interpolate", ["linear"], ["coalesce", ["feature-state", "ratio"], 1], 0, COLORS.jam, CONGESTION_SLOW_RATIO, "#7a6bff", CONGESTION_FREE_RATIO, COLORS.slow, 0.9, COLORS.free]],
       "line-width": ["interpolate", ["linear"], ["coalesce", ["feature-state", "veh"], 0], 0, 0, 1, 6, 20, 10, 80, 16, 250, 24],
       "line-blur": 8,
       "line-opacity": ["case", [">", ["coalesce", ["feature-state", "veh"], 0], 0], 0.32, 0],
@@ -688,7 +706,7 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     source: "roads",
     layout: { "line-cap": "round", "line-join": "round" },
     paint: {
-      "line-color": ["case", ["==", ["coalesce", ["feature-state", "cls"], 0], 4], COLORS.closed, ["interpolate", ["linear"], ["coalesce", ["feature-state", "ratio"], 1], 0, COLORS.jam, CONGESTION_SLOW_RATIO, "#ff8a1f", CONGESTION_FREE_RATIO, COLORS.slow, 0.9, COLORS.free]],
+      "line-color": ["case", ["==", ["coalesce", ["feature-state", "cls"], 0], 4], COLORS.closed, ["interpolate", ["linear"], ["coalesce", ["feature-state", "ratio"], 1], 0, COLORS.jam, CONGESTION_SLOW_RATIO, "#7a6bff", CONGESTION_FREE_RATIO, COLORS.slow, 0.9, COLORS.free]],
       "line-width": ["interpolate", ["linear"], ["coalesce", ["feature-state", "veh"], 0], 0, 0, 1, 2.2, 20, 4, 80, 7, 250, 11],
       "line-opacity": ["case", [">", ["coalesce", ["feature-state", "veh"], 0], 0], 0.95, 0],
       // Directed edges: offset so both directions of a two-way road stay visible.
@@ -703,7 +721,7 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
       "line-color": COLORS.closed,
       "line-width": ["interpolate", ["linear"], ["zoom"], 10, 1.4, 15, 3.2],
       "line-dasharray": [1.2, 1.2],
-      "line-opacity": ["case", ["boolean", ["feature-state", "closed"], false], 1, 0],
+      "line-opacity": ["case", ["boolean", ["feature-state", "closed"], false], 0.55, 0],
     },
   });
   // Roads the model expects fire to reach soon: wide dashed band, pulsed from ReplayMap.
@@ -712,10 +730,9 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     type: "line",
     source: "roads",
     paint: {
-      "line-color": ["match", ["coalesce", ["feature-state", "threat"], 0], 2, COLORS.jam, COLORS.slow],
-      "line-width": ["interpolate", ["linear"], ["zoom"], 10, 2.5, 15, 6],
-      "line-dasharray": [0.8, 0.8],
-      "line-blur": 1,
+      "line-color": ["match", ["coalesce", ["feature-state", "threat"], 0], 2, COLORS.threatImminent, COLORS.threat],
+      "line-width": ["interpolate", ["linear"], ["zoom"], 10, 1.2, 15, 2.5],
+      "line-dasharray": [2, 2],
       "line-opacity": ["match", ["coalesce", ["feature-state", "threat"], 0], 2, 0.9, 1, 0.6, 0],
     },
   });
@@ -765,30 +782,13 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     type: "circle",
     source: "particles",
     paint: {
-      "circle-radius": ["interpolate", ["linear"], ["zoom"], 10, 1.8, 13, 2.6, 16, 3.6],
+      "circle-radius": ["interpolate", ["linear"], ["zoom"], 10, 2.5, 13, 3, 16, 4],
       "circle-color": ["case", ["get", "stopped"], COLORS.particleStopped, COLORS.particle],
-      "circle-stroke-color": ["case", ["get", "stopped"], "#ff4d6d", "#7ff9ff"],
+      "circle-stroke-color": ["case", ["get", "stopped"], COLORS.jam, "#7ff9ff"],
       "circle-stroke-width": 0.6,
     },
   });
 
-  map.addLayer({
-    id: "zones-label",
-    type: "symbol",
-    source: "zones",
-    minzoom: 13,
-    layout: {
-      "text-field": ["get", "label"],
-      "text-font": LABEL_FONT_BOLD,
-      "text-size": 11,
-      "text-letter-spacing": 0.05,
-    },
-    paint: {
-      "text-color": ["match", ["get", "state"], "ordered", COLORS.zoneOrdered, "#c9d8ff"],
-      "text-halo-color": "#0a0e13",
-      "text-halo-width": 2,
-    },
-  });
 
   map.addLayer({
     id: "sim-ignition",
@@ -823,7 +823,7 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     layout: {
       "symbol-placement": "line",
       "symbol-spacing": 420,
-      "text-field": "SIMULATED FIRE · MODEL",
+      "text-field": "MODEL FIRE (simulated)",
       "text-font": LABEL_FONT_BOLD,
       "text-size": 10.5,
       "text-letter-spacing": 0.15,
@@ -869,21 +869,6 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
       "circle-stroke-color": COLORS.destination,
       "circle-stroke-width": 2.5,
     },
-  });
-  map.addLayer({
-    id: "destinations-label",
-    type: "symbol",
-    source: "destinations",
-    minzoom: 10.5,
-    layout: {
-      "text-field": ["get", "label"],
-      "text-font": LABEL_FONT,
-      "text-size": 11,
-      "text-anchor": "left",
-      "text-offset": [1.1, 0],
-      "text-optional": true,
-    },
-    paint: { "text-color": COLORS.destination, "text-halo-color": "#0a0e13", "text-halo-width": 2 },
   });
 
   // Damage: small hollow markers; post-fire assessments with no damage time.

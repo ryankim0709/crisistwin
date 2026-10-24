@@ -20,6 +20,8 @@ import {
   applyThreatState,
   pinCollection,
   setFireFlicker,
+  setIgnitionLabelVisible,
+  setZoneFlash,
   setThreatPulse,
   closedLabelCollection,
   installLayers,
@@ -50,6 +52,12 @@ const STYLE_TIMEOUT_MS = 10_000;
 /** Older fronts this many steps back render as burned char inside the live front. */
 const CHAR_LAG_FRONTS = 3;
 const FLICKER_INTERVAL_MS = 90;
+/** Zone-order flash: wall-clock length, and how recent (sim time) an order must be to flash. */
+const ZONE_FLASH_MS = 3000;
+const ZONE_FLASH_RECENT_MS = 20 * 60_000;
+const ZONE_FLASH_TICK_MS = 50;
+/** The "Assumed ignition" text is hidden this long after the assumed ignition time. */
+const IGNITION_LABEL_MS = 90 * 60_000;
 /** Opening camera per incident; otherwise the bundle bbox is fitted. */
 const INITIAL_VIEW: Record<string, { center: LngLat; zoom: number }> = {
   "camp-2018-paradise-slice": { center: [-121.6, 39.77], zoom: 11.3 },
@@ -249,8 +257,12 @@ export default function ReplayMap({
     [model, edgePaths],
   );
 
-  // Create the map once per bundle; remove it and its listeners on unmount.
+  // Create the map once per mount (the parent keys this component by incident); remove it and
+  // its listeners on unmount. Static layers come from the model at mount; a what-if variant
+  // only swaps traffic, events and insights, which the effects below push into the map.
+  const initialModelRef = useRef(model);
   useEffect(() => {
+    const model = initialModelRef.current;
     const controller = new AbortController();
     let map: MapLibreMap | null = null;
     let resize: ResizeObserver | null = null;
@@ -330,7 +342,7 @@ export default function ReplayMap({
       map?.remove();
       mapRef.current = null;
     };
-  }, [model]);
+  }, []);
 
   const perimeter = perimeterIndex >= 0 ? model.perimeters[perimeterIndex] : null;
   useEffect(() => {
@@ -454,6 +466,62 @@ export default function ReplayMap({
     const map = mapRef.current;
     if (ready && map) map.getCanvas().style.cursor = onPick ? "crosshair" : "";
   }, [ready, onPick]);
+
+  // Flash zones whose order was issued recently (in sim time) as the clock crosses it.
+  const zoneOrderAt = useMemo(() => {
+    const out = new Map<string, number>();
+    for (const e of model.events) {
+      if (!e.type.includes("order")) continue;
+      for (const id of e.zoneIds) if (!out.has(id)) out.set(id, e.atMs);
+    }
+    return out;
+  }, [model]);
+  const zoneIndex = useMemo(() => new Map((model.zones?.items ?? []).map((z, i) => [z.id, i])), [model]);
+  const orderedRef = useRef<Set<string>>(new Set());
+  const flashesRef = useRef<Map<number, number>>(new Map());
+  const [flashTick, setFlashTick] = useState(0);
+  useEffect(() => {
+    const ordered = new Set<string>();
+    for (const [id, state] of zoneStates) if (state === "ordered") ordered.add(id);
+    const now = performance.now();
+    for (const id of ordered) {
+      const at = zoneOrderAt.get(id);
+      const idx = zoneIndex.get(id);
+      if (orderedRef.current.has(id) || at === undefined || idx === undefined) continue;
+      if (simTimeMs - at <= ZONE_FLASH_RECENT_MS) flashesRef.current.set(idx, now);
+    }
+    orderedRef.current = ordered;
+    if (flashesRef.current.size > 0) setFlashTick((n) => n + 1);
+    // simTimeMs is read only to judge recency when the ordered set changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [zoneStates, zoneOrderAt, zoneIndex]);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map || flashTick === 0) return;
+    const reduced = prefersReducedMotion();
+    const timer = window.setInterval(() => {
+      const now = performance.now();
+      for (const [idx, start] of flashesRef.current) {
+        const t = (now - start) / ZONE_FLASH_MS;
+        if (t >= 1) {
+          setZoneFlash(map, idx, 0);
+          flashesRef.current.delete(idx);
+          continue;
+        }
+        const pulse = reduced ? 1 : 0.6 + 0.4 * Math.cos(t * 6 * Math.PI);
+        setZoneFlash(map, idx, (1 - t) * pulse);
+      }
+      if (flashesRef.current.size === 0) window.clearInterval(timer);
+    }, ZONE_FLASH_TICK_MS);
+    return () => window.clearInterval(timer);
+  }, [ready, flashTick]);
+
+  const ignitionAt = model.fireSimulated?.ignition?.atMs ?? null;
+  const ignitionLabel = ignitionAt !== null && visibility.simFire && simTimeMs < ignitionAt + IGNITION_LABEL_MS;
+  useEffect(() => {
+    const map = mapRef.current;
+    if (ready && map) setIgnitionLabelVisible(map, ignitionLabel);
+  }, [ready, ignitionLabel]);
 
   useEffect(() => {
     const map = mapRef.current;

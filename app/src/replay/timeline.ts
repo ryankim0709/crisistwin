@@ -156,6 +156,13 @@ export function clockParts(ms: number, timeZone: string): ClockParts {
   };
 }
 
+const COMPASS_POINTS = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
+
+/** 16-point compass name for a bearing in degrees (0 = north, clockwise). */
+export function compassPoint(deg: number): string {
+  return COMPASS_POINTS[Math.round((((deg % 360) + 360) % 360) / 22.5) % 16];
+}
+
 /** "HH:MM TZ" in the given zone, or an em dash for null. */
 export function localTime(ms: number | null, timeZone: string): string {
   if (ms === null) return "—";

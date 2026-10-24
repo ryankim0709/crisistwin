@@ -14,6 +14,9 @@ import {
   type Perimeter,
   type ReplayEvent,
   type ReplayModel,
+  type ResponderAction,
+  type ResponderMatch,
+  type RespondersComparison,
   type RoadEdge,
   type SimulatedFire,
   type Traffic,
@@ -32,38 +35,38 @@ export class BundleError extends Error {
   }
 }
 
-type Obj = Record<string, unknown>;
+export type Obj = Record<string, unknown>;
 
-function isObj(value: unknown): value is Obj {
+export function isObj(value: unknown): value is Obj {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function obj(value: unknown, path: string): Obj {
+export function obj(value: unknown, path: string): Obj {
   if (!isObj(value)) throw new BundleError(path, "expected an object");
   return value;
 }
 
-function objOrEmpty(value: unknown): Obj {
+export function objOrEmpty(value: unknown): Obj {
   return isObj(value) ? value : {};
 }
 
-function arr(value: unknown, path: string): unknown[] {
+export function arr(value: unknown, path: string): unknown[] {
   if (!Array.isArray(value)) throw new BundleError(path, "expected an array");
   return value;
 }
 
-function str(value: unknown, path: string): string {
+export function str(value: unknown, path: string): string {
   if (typeof value !== "string" || value.length === 0) {
     throw new BundleError(path, "expected a non-empty string");
   }
   return value;
 }
 
-function optStr(value: unknown, path: string): string | null {
+export function optStr(value: unknown, path: string): string | null {
   return value === null || value === undefined ? null : str(value, path);
 }
 
-function num(value: unknown, path: string): number {
+export function num(value: unknown, path: string): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     throw new BundleError(path, "expected a finite number");
   }
@@ -76,17 +79,17 @@ function nonNeg(value: unknown, path: string): number {
   return n;
 }
 
-function optNum(value: unknown, path: string): number | null {
+export function optNum(value: unknown, path: string): number | null {
   return value === null || value === undefined ? null : num(value, path);
 }
 
-function strList(value: unknown, path: string): string[] {
+export function strList(value: unknown, path: string): string[] {
   if (value === null || value === undefined) return [];
   return arr(value, path).map((item, i) => str(item, `${path}[${i}]`));
 }
 
 // Times must be UTC ISO 8601 with a trailing Z, per the contract.
-function utcMs(value: unknown, path: string): number {
+export function utcMs(value: unknown, path: string): number {
   const text = str(value, path);
   const ms = Date.parse(text);
   if (!text.endsWith("Z") || Number.isNaN(ms)) {
@@ -95,7 +98,7 @@ function utcMs(value: unknown, path: string): number {
   return ms;
 }
 
-function evidence(value: unknown, path: string): EvidenceClass {
+export function evidence(value: unknown, path: string): EvidenceClass {
   if (typeof value !== "string" || !(EVIDENCE_CLASSES as readonly string[]).includes(value)) {
     throw new BundleError(path, `expected one of ${EVIDENCE_CLASSES.join(", ")}`);
   }
@@ -140,7 +143,7 @@ function areaGeometry(value: unknown, path: string): AreaGeometry {
   throw new BundleError(`${path}.type`, "expected Polygon or MultiPolygon");
 }
 
-function ascending<T extends { atMs: number }>(items: T[], path: string): T[] {
+export function ascending<T extends { atMs: number }>(items: T[], path: string): T[] {
   for (let i = 1; i < items.length; i += 1) {
     if (items[i].atMs < items[i - 1].atMs) {
       throw new BundleError(`${path}[${i}].at`, "items must be ascending by time");
@@ -230,7 +233,7 @@ function destination(value: unknown, path: string): Destination {
   };
 }
 
-function replayEvent(value: unknown, path: string): ReplayEvent {
+export function replayEvent(value: unknown, path: string): ReplayEvent {
   const e = obj(value, path);
   const target = objOrEmpty(e.target);
   const source = objOrEmpty(e.source);
@@ -290,7 +293,16 @@ function metrics(value: unknown, path: string): TrafficMetrics {
   };
 }
 
-function traffic(body: Obj): Traffic {
+const KNOWN_METRIC_KEYS = new Set([
+  "at",
+  "not_departed_veh",
+  "en_route_veh",
+  "arrived_veh",
+  "blocked_veh",
+  "exposed_veh",
+]);
+
+export function traffic(body: Obj): Traffic {
   const edgeIds = strList(body.edge_ids, "traffic.edge_ids");
   const frames = ascending(
     arr(body.frames, "traffic.frames").map((f, i) => frame(f, `traffic.frames[${i}]`, edgeIds.length)),
@@ -305,6 +317,17 @@ function traffic(body: Obj): Traffic {
   if (metricRows.length !== frames.length) {
     throw new BundleError("traffic.metrics", "expected one metrics row per frame");
   }
+  // Extra numeric metric fields (e.g. resident states in agent simulations), kept by name.
+  const extraMetrics: Record<string, (number | null)[]> = {};
+  const rawRows = arr(body.metrics, "traffic.metrics");
+  rawRows.forEach((raw, i) => {
+    for (const [key, value] of Object.entries(objOrEmpty(raw))) {
+      if (KNOWN_METRIC_KEYS.has(key)) continue;
+      if (typeof value !== "number" && value !== null) continue;
+      (extraMetrics[key] ??= new Array<number | null>(rawRows.length).fill(null))[i] =
+        typeof value === "number" && Number.isFinite(value) ? value : null;
+    }
+  });
   const model = objOrEmpty(body.model);
   const summary = objOrEmpty(body.summary);
   return {
@@ -316,13 +339,14 @@ function traffic(body: Obj): Traffic {
     frames,
     closures,
     metrics: metricRows,
+    extraMetrics,
     totalVeh: optNum(summary.total_veh, "traffic.summary.total_veh"),
     clearanceTimeS: optNum(summary.clearance_time_s, "traffic.summary.clearance_time_s"),
     maxExposedVeh: optNum(summary.max_exposed_veh, "traffic.summary.max_exposed_veh"),
   };
 }
 
-function simulatedFire(body: Obj): SimulatedFire {
+export function simulatedFire(body: Obj): SimulatedFire {
   const model = objOrEmpty(body.model);
   const calibration = objOrEmpty(body.calibration);
   const raw = body.ignition;
@@ -381,7 +405,7 @@ function optUtcMs(value: unknown, path: string): number | null {
   return value == null ? null : utcMs(value, path);
 }
 
-function insights(body: Obj): Insights {
+export function insights(body: Obj): Insights {
   return {
     evidenceClass: evidence(body.evidence_class, "insights.evidence_class"),
     disclaimer: str(body.disclaimer, "insights.disclaimer"),
@@ -465,6 +489,47 @@ function layer<T>(
   };
 }
 
+function responderAction(value: unknown): ResponderAction & { reason: string | null } {
+  const a = objOrEmpty(value);
+  const text = (v: unknown) => (typeof v === "string" && v.length > 0 ? v : null);
+  return {
+    label: text(a.label) ?? "(unlabelled action)",
+    localTime: text(a.local_time),
+    road: text(a.road),
+    kind: text(a.kind),
+    reason: text(a.reason),
+  };
+}
+
+/** Defensive parse of the optional agent-simulation responder comparison. */
+function responders(body: Obj): RespondersComparison {
+  const c = objOrEmpty(body.comparison_with_history);
+  const list = (v: unknown) => (Array.isArray(v) ? v : []);
+  return {
+    evidenceClass: evidence(body.evidence_class, "responders.evidence_class"),
+    rule: typeof c.rule === "string" ? c.rule : null,
+    matches: list(c.matches).map((m): ResponderMatch => {
+      const item = objOrEmpty(m);
+      const historical = objOrEmpty(item.historical);
+      const source = objOrEmpty(historical.source);
+      return {
+        deltaMin: typeof item.delta_min === "number" ? item.delta_min : null,
+        text: typeof item.text === "string" ? item.text : null,
+        simulated: responderAction(item.simulated),
+        historical: {
+          ...responderAction(historical),
+          evidenceClass: (EVIDENCE_CLASSES as readonly unknown[]).includes(historical.evidence_class)
+            ? (historical.evidence_class as EvidenceClass)
+            : null,
+          locator: typeof source.locator === "string" ? source.locator : null,
+        },
+      };
+    }),
+    simulatedOnly: list(c.simulated_without_counterpart).map(responderAction),
+    historicalOnly: list(c.historical_without_counterpart).map(responderAction),
+  };
+}
+
 export function parseBundle(data: unknown): ReplayModel {
   const b = obj(data, "bundle");
   if (b.kind !== BUNDLE_KIND) throw new BundleError("kind", `expected "${BUNDLE_KIND}"`);
@@ -527,6 +592,7 @@ export function parseBundle(data: unknown): ReplayModel {
     perimeters,
     fireSimulated: fireSimBody ? simulatedFire(fireSimBody) : null,
     insights: insightsBody ? insights(insightsBody) : null,
+    responders: isObj(b.responders) ? responders(objOrEmpty(b.responders)) : null,
     roads: layer(layerBody(b, "roads", layerStatusMap), "roads", "edges", roadEdge),
     zones: layer(layerBody(b, "zones", layerStatusMap), "zones", "features", zone),
     destinations: layer(

@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { GROUP_LAYER, groupAvailability } from "./layerGroups";
 import { COLORS, type LayerGroup } from "./mapLayers";
 import { EVENT_CATEGORY_LABEL, EvidenceChip, EventGlyph, Sparkline } from "./parts";
@@ -10,7 +10,9 @@ import {
   type EventCategory,
   type MetricKey,
 } from "./timeline";
+import ExplainPanel from "./ai/ExplainPanel";
 import EvacueeTab from "./EvacueeTab";
+import { splitSnappedNote } from "./narrative";
 import ResponderTab from "./ResponderTab";
 import type { EvidenceClass, LngLat, ReplayModel } from "./types";
 
@@ -73,6 +75,42 @@ function Metrics({ model, frameIndex, simTimeMs }: { model: ReplayModel; frameIn
   );
 }
 
+/**
+ * Resident-state metrics from agent simulations. Field names are not fixed by the contract,
+ * so every extra numeric metric is shown, labelled from its field name.
+ */
+function Residents({ model, frameIndex }: { model: ReplayModel; frameIndex: number }) {
+  const extra = model.traffic?.extraMetrics ?? {};
+  const keys = Object.keys(extra);
+  if (keys.length === 0) return null;
+  return (
+    <section aria-labelledby="rp-residents-title">
+      <h2 id="rp-residents-title" className="rp-section-title">
+        Residents (modelled agents)
+      </h2>
+      <dl className="rp-residents">
+        {keys.map((key) => {
+          const value = frameIndex >= 0 ? extra[key][frameIndex] : null;
+          return (
+            <div key={key}>
+              <dt>{humanizeMetric(key)}</dt>
+              <dd>{value == null ? "—" : value.toLocaleString("en-US", { maximumFractionDigits: 1 })}</dd>
+            </div>
+          );
+        })}
+      </dl>
+    </section>
+  );
+}
+
+function humanizeMetric(key: string): string {
+  const text = key
+    .replace(/_(veh|n|count)$/, "")
+    .replace(/^residents?_/, "")
+    .replace(/_/g, " ");
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 interface FeedRow {
   index: number;
   id: string;
@@ -86,6 +124,8 @@ interface FeedRow {
   precision: string | null;
   /** Road names when this row groups simulated closures from one minute. */
   members: string[] | null;
+  /** Muted provenance note, e.g. "[snapped: …]" on NIST road events. */
+  note: string | null;
 }
 
 const CLOSURE_LABEL_PREFIX = /^Modelled fire closure:\s*/;
@@ -113,12 +153,14 @@ function buildFeedRows(model: ReplayModel): FeedRow[] {
       last.ariaLabel = `Jump to ${local.time} ${local.zone}: ${last.label}`;
       return;
     }
+    const { text, note } = splitSnappedNote(event.label);
     rows.push({
+      note,
       index,
       id: event.id,
       atMs: event.atMs,
       category,
-      label: event.label,
+      label: text,
       time: local.time.slice(0, 5),
       date: local.date.slice(5),
       ariaLabel: `Jump to ${local.time} ${local.zone}: ${event.label}`,
@@ -150,6 +192,7 @@ const FeedItem = memo(function FeedItem({
         </span>
         <span className="rp-feed-label">
           {row.label}
+          {row.note && <span className="rp-snapped">{row.note}</span>}
           <span className="rp-feed-meta">
             <EvidenceChip value={row.evidence} />
             {row.precision && <span className="rp-precision">precision: {row.precision}</span>}
@@ -256,12 +299,13 @@ function Legend({ perParticle }: { perParticle: number | null }) {
   return (
     <ul className="rp-legend">
       <li>
-        <span className="rp-key rp-key--fire" aria-hidden="true" />
-        Fire perimeter in effect — solid ember fill, glowing edge
+        <span className="rp-key rp-key--satellite" aria-hidden="true" />
+        Satellite fire perimeter — white dashed outline, “SATELLITE ESTIMATE” tag
       </li>
       <li>
         <span className="rp-key rp-key--sim" aria-hidden="true" />
-        Simulated fire front — pink hatching, dashed edge; model output from an assumed ignition
+        Model fire — burned char inside, orange-yellow newest band (last 30 min), glowing edge; simulated
+        from an assumed ignition
       </li>
       <li>
         <span className="rp-key rp-key--history" aria-hidden="true" />
@@ -269,15 +313,15 @@ function Legend({ perParticle }: { perParticle: number | null }) {
       </li>
       <li>
         <span className="rp-key rp-key--line" style={{ background: COLORS.free }} aria-hidden="true" />
-        Flowing — mean speed ≥ 70% of limit
+        Flowing (cyan) — mean speed ≥ 70% of limit
       </li>
       <li>
         <span className="rp-key rp-key--line" style={{ background: COLORS.slow }} aria-hidden="true" />
-        Slow — 35–70% of limit
+        Slow (blue) — 35–70% of limit
       </li>
       <li>
         <span className="rp-key rp-key--line" style={{ background: COLORS.jam }} aria-hidden="true" />
-        Congested — under 35%; hover a road for numbers
+        Jammed (violet, thick) — under 35%; hover a road for numbers
       </li>
       <li>
         <span className="rp-key rp-key--width" aria-hidden="true" />
@@ -285,11 +329,11 @@ function Legend({ perParticle }: { perParticle: number | null }) {
       </li>
       <li>
         <span className="rp-key rp-key--closed" aria-hidden="true" />
-        Closed (event or modelled fire hazard) — red dashes, “× CLOSED” label when zoomed in
+        Closed (event or modelled fire hazard) — grey dashes, “× CLOSED” label when zoomed in
       </li>
       <li>
         <span className="rp-key rp-key--threat" aria-hidden="true" />
-        Fire expected (model) — pulsing dashed band: amber within 30 min, red within 10 min
+        Fire expected (model) — thin pulsing dashes: amber within 30 min, orange within 10 min
       </li>
       <li>
         <span className="rp-key rp-key--bridge" aria-hidden="true" />
@@ -298,16 +342,16 @@ function Legend({ perParticle }: { perParticle: number | null }) {
       <li>
         <span className="rp-key rp-key--dot" aria-hidden="true" />
         Vehicle dots — {perParticle ? `1 dot ≈ ${perParticle} modelled vehicle${perParticle === 1 ? "" : "s"}` : "modelled counts"};
-        pink, motionless dots are stopped. Illustrative, not tracked vehicles; above 1 min/s
+        violet, motionless dots are stopped. Illustrative, not tracked vehicles; above 1 min/s
         playback their motion is slowed for legibility
       </li>
       <li>
         <span className="rp-key rp-key--zone" aria-hidden="true" />
-        Zone — dashed outline; solid amber, hatched, “ORDERED” label once ordered
+        Zone (synthetic, off by default) — outline flashes amber when an order is issued; hover for name
       </li>
       <li>
         <span className="rp-key rp-key--dest" aria-hidden="true" />
-        Destination — ring marker with name and kind
+        Destination — ring marker; hover for name and kind
       </li>
       <li>
         <span className="rp-key rp-key--damage" aria-hidden="true" />
@@ -331,14 +375,19 @@ export interface SidePanelProps {
   pin: LngLat | null;
   onPin: (p: LngLat | null) => void;
   onFocus: (coords: LngLat[]) => void;
+  /** Header eyebrow, e.g. "Historical replay" or "Agent simulation". */
+  eyebrow: string;
+  /** Optional tabs supplied by the view (what-if, stress test), appended after the built-ins. */
+  extraTabs?: { id: PanelTab; label: string; content: ReactNode }[];
 }
 
-export type PanelTab = "overview" | "responder" | "evacuee";
+export type PanelTab = "overview" | "responder" | "evacuee" | "explain" | "whatif" | "stress";
 
 const TABS: { id: PanelTab; label: string }[] = [
   { id: "overview", label: "Overview" },
   { id: "responder", label: "Responder brief" },
   { id: "evacuee", label: "Evacuee view" },
+  { id: "explain", label: "Ask / Explain" },
 ];
 
 export default function SidePanel({
@@ -355,11 +404,17 @@ export default function SidePanel({
   pin,
   onPin,
   onFocus,
+  eyebrow,
+  extraTabs = [],
 }: SidePanelProps) {
+  const tabs = [...TABS, ...extraTabs.map(({ id, label }) => ({ id, label }))];
+  const extra = extraTabs.find((t) => t.id === tab);
   return (
     <div className="rp-panel-body">
       <header className="rp-incident">
-        <p className="rp-eyebrow">Historical replay · {model.mode}</p>
+        <p className="rp-eyebrow">
+          {eyebrow} · {model.mode}
+        </p>
         <h1>{model.incident.name}</h1>
         <p className="rp-incident-meta">
           {model.incident.id}
@@ -369,7 +424,7 @@ export default function SidePanel({
       </header>
 
       <div className="rp-tabs" role="tablist" aria-label="Replay panels">
-        {TABS.map((t) => (
+        {tabs.map((t) => (
           <button
             key={t.id}
             type="button"
@@ -384,8 +439,8 @@ export default function SidePanel({
               if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
               e.preventDefault();
               e.stopPropagation();
-              const i = TABS.findIndex((x) => x.id === tab);
-              const next = TABS[(i + (e.key === "ArrowRight" ? 1 : TABS.length - 1)) % TABS.length];
+              const i = tabs.findIndex((x) => x.id === tab);
+              const next = tabs[(i + (e.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length];
               onTab(next.id);
               document.getElementById(`rp-tab-${next.id}`)?.focus();
             }}
@@ -404,6 +459,7 @@ export default function SidePanel({
           </h2>
           <Metrics model={model} frameIndex={frameIndex} simTimeMs={simTimeMs} />
         </section>
+        <Residents model={model} frameIndex={frameIndex} />
 
         <section aria-labelledby="rp-events-title" className="rp-events">
           <h2 id="rp-events-title" className="rp-section-title">
@@ -482,6 +538,8 @@ export default function SidePanel({
         {tab === "evacuee" && (
           <EvacueeTab model={model} simTimeMs={simTimeMs} frameIndex={frameIndex} pin={pin} onPin={onPin} />
         )}
+        {tab === "explain" && <ExplainPanel model={model} frameIndex={frameIndex} simTimeMs={simTimeMs} />}
+        {extra?.content}
       </div>
     </div>
   );

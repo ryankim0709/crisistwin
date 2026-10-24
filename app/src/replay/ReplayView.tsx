@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { groupAvailability } from "./layerGroups";
-import { BUNDLE_GENERATE_HINT, BundleMissingError, REPLAY_BUNDLE_URL, fetchReplayBundle } from "./loadBundle";
+import CompareTab from "./CompareTab";
+import { BundleMissingError, REPLAY_VIEW, fetchReplayBundle, type ViewConfig } from "./loadBundle";
+import StressTab from "./StressTab";
+import { useVariants } from "./useVariants";
 import { IMAGERY_DATE_NOTE, LAYER_GROUPS, type Basemap, type LayerGroup } from "./mapLayers";
 import ReplayMap, { type MapFocus } from "./ReplayMap";
 import SidePanel, { type PanelTab } from "./SidePanel";
@@ -12,10 +15,13 @@ import {
   frameIndexAt,
   hasFixtureData,
   lastAtOrBefore,
+  localTime,
   perimeterIndexAt,
   simulatedFrontIndexAt,
   zoneStatesAt,
 } from "./timeline";
+import { buildCaption } from "./narrative";
+import MapLegend from "./MapLegend";
 import type { LngLat, ReplayModel } from "./types";
 import "./replay.css";
 
@@ -35,7 +41,7 @@ type Load =
   | { status: "missing"; message: string }
   | { status: "error"; message: string };
 
-export default function ReplayView() {
+export default function ReplayView({ config = REPLAY_VIEW }: { config?: ViewConfig }) {
   const [load, setLoad] = useState<Load>({ status: "loading" });
   const [attempt, setAttempt] = useState(0);
 
@@ -44,7 +50,7 @@ export default function ReplayView() {
     let active = true;
     const timeout = window.setTimeout(() => controller.abort(), LOAD_TIMEOUT_MS);
 
-    fetchReplayBundle(controller.signal)
+    fetchReplayBundle(controller.signal, config.bundleUrl)
       .then((model) => {
         if (active) setLoad({ status: "ready", model });
       })
@@ -68,22 +74,23 @@ export default function ReplayView() {
       window.clearTimeout(timeout);
       controller.abort();
     };
-  }, [attempt]);
+  }, [attempt, config.bundleUrl]);
 
   function retry() {
     setLoad({ status: "loading" });
     setAttempt((value) => value + 1);
   }
 
-  if (load.status === "ready") return <ReplayScreen model={load.model} />;
+  if (load.status === "ready") return <ReplayScreen model={load.model} config={config} />;
 
+  const sim = config.kind === "simulation";
   return (
-    <main className="rp-root rp-root--state">
+    <main className={`rp-root rp-root--state${sim ? " rp-root--sim" : ""}`}>
       <div className="rp-state-card">
         <a className="rp-back" href="/">
           ← Workspace
         </a>
-        <p className="rp-eyebrow">Historical replay</p>
+        <p className="rp-eyebrow">{config.eyebrow}</p>
         {load.status === "loading" && (
           <p role="status" className="rp-state-msg">
             <span className="rp-spinner" aria-hidden="true" /> Loading replay bundle…
@@ -91,11 +98,11 @@ export default function ReplayView() {
         )}
         {load.status === "missing" && (
           <div role="alert">
-            <h1>No replay bundle yet</h1>
+            <h1>{sim ? "No agent simulation yet" : "No replay bundle yet"}</h1>
             <p className="rp-state-msg">{load.message}</p>
             <p className="rp-state-msg">
-              Generate it from the repository root, then reload:
-              <code>{BUNDLE_GENERATE_HINT}</code>
+              Generate it, then reload:
+              <code>{config.generateHint}</code>
             </p>
             <button type="button" className="rp-btn rp-btn--text" onClick={retry}>
               Try again
@@ -104,24 +111,30 @@ export default function ReplayView() {
         )}
         {load.status === "error" && (
           <div role="alert">
-            <h1>Replay unavailable</h1>
+            <h1>{sim ? "Simulation unavailable" : "Replay unavailable"}</h1>
             <p className="rp-state-msg">{load.message}</p>
-            <p className="rp-state-msg rp-dim">Source: {REPLAY_BUNDLE_URL}</p>
+            <p className="rp-state-msg rp-dim">Source: {config.bundleUrl}</p>
             <button type="button" className="rp-btn rp-btn--text" onClick={retry}>
               Try again
             </button>
           </div>
         )}
+        <a className="rp-back rp-other-route" href={config.otherRoute.href}>
+          {config.otherRoute.label}
+        </a>
       </div>
     </main>
   );
 }
 
+const DEFAULT_OFF: LayerGroup[] = ["damage", "zones"];
+
 function initialVisibility(model: ReplayModel): Record<LayerGroup, boolean> {
   const out = {} as Record<LayerGroup, boolean>;
   for (const group of Object.keys(LAYER_GROUPS) as LayerGroup[]) {
-    // Damage is a post-fire assessment; off by default so it never reads as live damage.
-    out[group] = group !== "damage" && groupAvailability(model, group).available;
+    // Off by default: damage (a post-fire assessment, auto-shown at the end) and the
+    // synthetic zone grid (orders flash briefly on the map instead).
+    out[group] = !DEFAULT_OFF.includes(group) && groupAvailability(model, group).available;
   }
   return out;
 }
@@ -132,13 +145,15 @@ function isTextEntry(target: EventTarget | null): boolean {
   return ["INPUT", "SELECT", "TEXTAREA"].includes(target.tagName);
 }
 
-function ReplayScreen({ model }: { model: ReplayModel }) {
+function ReplayScreen({ model: baseline, config }: { model: ReplayModel; config: ViewConfig }) {
+  const variants = useVariants(baseline, config.variantsUrl);
+  const model = variants.shown?.model ?? baseline;
   const { startMs, endMs } = model.clock;
   const [simTimeMs, setSimTimeMs] = useState(startMs);
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState<number>(DEFAULT_SPEED);
   const [panelOpen, setPanelOpen] = useState(true);
-  const [visibility, setVisibility] = useState(() => initialVisibility(model));
+  const [visibility, setVisibility] = useState(() => initialVisibility(baseline));
   const [perParticle, setPerParticle] = useState<number | null>(null);
   const [tab, setTab] = useState<PanelTab>("overview");
   const [basemap, setBasemap] = useState<Basemap>("dark");
@@ -243,11 +258,44 @@ function ReplayScreen({ model }: { model: ReplayModel }) {
     .filter(([, s]) => s.status === "fixture")
     .map(([name]) => FIXTURE_LAYER_LABEL[name] ?? name.replace(/_/g, " "));
 
+  const sim = config.kind === "simulation";
+  const extraTabs = [
+    ...(variants.index
+      ? [
+          {
+            id: "whatif" as const,
+            label: "What if…",
+            content: (
+              <CompareTab
+                baseline={baseline}
+                index={variants.index}
+                load={variants.load}
+                showVariant={variants.showVariant}
+                onSelect={variants.select}
+                onShowVariant={variants.setShowVariant}
+              />
+            ),
+          },
+        ]
+      : []),
+    ...(config.stressUrl ? [{ id: "stress" as const, label: "Stress test", content: <StressTab url={config.stressUrl} /> }] : []),
+  ];
+  const caption = buildCaption(model, simTimeMs, frameIndex);
+  const atEnd = simTimeMs >= endMs;
+  // Damage is auto-shown once the replay reaches its end.
+  const mapVisibility = useMemo(
+    () => (atEnd && !visibility.damage ? { ...visibility, damage: true } : visibility),
+    [atEnd, visibility],
+  );
   const perimeter = perimeterIndex >= 0 ? model.perimeters[perimeterIndex] : null;
   const nextPerimeter = model.perimeters[perimeterIndex + 1] ?? null;
 
   return (
-    <main className={`rp-root${panelOpen ? "" : " rp-root--collapsed"}`}>
+    <main
+      className={`rp-root${panelOpen ? "" : " rp-root--collapsed"}${sim ? " rp-root--sim" : ""}${
+        variants.shown ? " rp-root--variant" : ""
+      }`}
+    >
       <div className="rp-stage">
         <ReplayMap
           key={model.incident.id}
@@ -258,7 +306,7 @@ function ReplayScreen({ model }: { model: ReplayModel }) {
           simFrontIndex={simFrontIndex}
           motionScale={Math.min(1, PARTICLE_PACE / speed)}
           zoneStates={zoneStates}
-          visibility={visibility}
+          visibility={mapVisibility}
           onParticleScale={setPerParticle}
           pin={tab === "evacuee" ? pin : null}
           onPick={tab === "evacuee" ? setPin : null}
@@ -266,12 +314,39 @@ function ReplayScreen({ model }: { model: ReplayModel }) {
           basemapChoice={basemap}
         />
 
+        <p className="rp-caption" aria-live="off">
+          <span className="rp-caption-time">{localTime(simTimeMs, model.incident.timezone)}</span>
+          {caption.event && (
+            <span>
+              {caption.event.label}
+              {caption.event.fixture && !/fixture/i.test(caption.event.label) && " (fixture)"}
+            </span>
+          )}
+          {caption.enRouteVeh !== null && (
+            <span>{caption.enRouteVeh.toLocaleString("en-US")} vehicles on the road (model)</span>
+          )}
+          {caption.fire && <span className="rp-caption-fire">{caption.fire}</span>}
+          {atEnd && model.damage && <span>Post-fire damage assessment shown (no damage time)</span>}
+        </p>
+
         <div className="rp-hud">
           <div className="rp-banners">
-            <p className="rp-banner" role="note">
-              <strong>Retrospective reconstruction</strong> — simulated traffic, not recorded vehicle movement.
-              Planning experiment only.
-            </p>
+            {sim ? (
+              <p className="rp-banner rp-banner--sim" role="note">
+                <strong>AGENT SIMULATION</strong> — modelled residents and responders; not a historical replay.
+              </p>
+            ) : (
+              <p className="rp-banner" role="note">
+                <strong>Retrospective reconstruction</strong> — simulated traffic, not recorded vehicle movement.
+                Planning experiment only.
+              </p>
+            )}
+            {variants.shown && (
+              <p className="rp-banner rp-banner--variant" role="note">
+                <strong>WHAT-IF: {variants.shown.title}</strong> — simulated counterfactual traffic; fire perimeters
+                and other evidence unchanged.
+              </p>
+            )}
             {fixture && (
               <p className="rp-fixture" role="note">
                 <span className="rp-fixture-tag">FIXTURE DATA</span> synthetic, not historical
@@ -298,7 +373,7 @@ function ReplayScreen({ model }: { model: ReplayModel }) {
                 No perimeter observed yet · first satellite snapshot in{" "}
                 <strong>{formatAge(model.perimeters[0].atMs - simTimeMs)}</strong>
                 {simFrontIndex >= 0 && visibility.simFire && (
-                  <span className="rp-sim-note"> · hatched area is a simulated front (model, assumed ignition)</span>
+                  <span className="rp-sim-note"> · glowing area is the model fire (assumed ignition)</span>
                 )}
               </span>
             ) : (
@@ -321,6 +396,7 @@ function ReplayScreen({ model }: { model: ReplayModel }) {
             </div>
             {basemap === "satellite" && <span className="rp-imagery-note">{IMAGERY_DATE_NOTE}</span>}
           </div>
+          <MapLegend windFromDeg={model.fireSimulated?.windFromDeg ?? null} />
         </div>
 
         <TimelineDock
@@ -343,9 +419,14 @@ function ReplayScreen({ model }: { model: ReplayModel }) {
 
       <aside className="rp-panel" aria-label="Replay details" id="rp-panel">
         <div className="rp-panel-top">
-          <a className="rp-back" href="/">
-            ← Workspace
-          </a>
+          <span className="rp-route-links">
+            <a className="rp-back" href="/">
+              ← Workspace
+            </a>
+            <a className="rp-back" href={config.otherRoute.href}>
+              {config.otherRoute.label}
+            </a>
+          </span>
           <button
             type="button"
             className="rp-btn rp-panel-toggle"
@@ -375,6 +456,8 @@ function ReplayScreen({ model }: { model: ReplayModel }) {
             pin={pin}
             onPin={setPin}
             onFocus={focusTarget}
+            eyebrow={config.eyebrow}
+            extraTabs={extraTabs}
           />
         </div>
       </aside>

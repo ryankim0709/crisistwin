@@ -106,6 +106,8 @@ export interface Traffic {
   frames: TrafficFrame[];
   closures: ClosureInterval[];
   metrics: TrafficMetrics[];
+  /** Additional numeric metric fields by name (e.g. resident states), aligned to frames. */
+  extraMetrics: Record<string, (number | null)[]>;
   totalVeh: number | null;
   clearanceTimeS: number | null;
   maxExposedVeh: number | null;
@@ -198,6 +200,30 @@ export interface Insights {
   destinations: DestinationLoad[];
 }
 
+export interface ResponderAction {
+  label: string;
+  localTime: string | null;
+  road: string | null;
+  kind: string | null;
+}
+
+export interface ResponderMatch {
+  /** simulated - historical, minutes; negative = the simulated action came first. */
+  deltaMin: number | null;
+  text: string | null;
+  simulated: ResponderAction;
+  historical: ResponderAction & { evidenceClass: EvidenceClass | null; locator: string | null };
+}
+
+/** Agent simulations only: responder agents compared with recorded 2018 actions. */
+export interface RespondersComparison {
+  evidenceClass: EvidenceClass;
+  rule: string | null;
+  matches: ResponderMatch[];
+  simulatedOnly: (ResponderAction & { reason: string | null })[];
+  historicalOnly: (ResponderAction & { reason: string | null })[];
+}
+
 export interface Layer<T> {
   evidenceClass: EvidenceClass;
   items: T[];
@@ -215,6 +241,7 @@ export interface ReplayModel {
   perimeters: Perimeter[];
   fireSimulated: SimulatedFire | null;
   insights: Insights | null;
+  responders: RespondersComparison | null;
   roads: Layer<RoadEdge> | null;
   zones: Layer<Zone> | null;
   destinations: Layer<Destination> | null;

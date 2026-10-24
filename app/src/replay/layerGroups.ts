@@ -8,7 +8,7 @@ export const GROUP_LAYER: Record<LayerGroup, { layer: string; label: string }> =
   simFire: { layer: "fire_simulated", label: "Simulated fire front (model, before first perimeter)" },
   roads: { layer: "roads", label: "Roads & congestion" },
   particles: { layer: "traffic", label: "Vehicle dots (illustrative)" },
-  zones: { layer: "zones", label: "Evacuation zones" },
+  zones: { layer: "zones", label: "Evacuation zones (synthetic)" },
   destinations: { layer: "destinations", label: "Destinations" },
   damage: { layer: "damage", label: "Damage — post-fire assessment (no damage time)" },
 };

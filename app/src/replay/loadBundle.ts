@@ -29,3 +29,37 @@ export async function fetchReplayBundle(signal: AbortSignal, url = REPLAY_BUNDLE
   }
   return parseBundle(data);
 }
+
+/** What a view route loads and how it labels itself. /replay and /simulate share components. */
+export interface ViewConfig {
+  kind: "replay" | "simulation";
+  bundleUrl: string;
+  /** What-if variants index; null hides the control. */
+  variantsUrl: string | null;
+  /** Stress-test results; null hides the tab. */
+  stressUrl: string | null;
+  eyebrow: string;
+  generateHint: string;
+  /** The other route, for the header link. */
+  otherRoute: { href: string; label: string };
+}
+
+export const REPLAY_VIEW: ViewConfig = {
+  kind: "replay",
+  bundleUrl: REPLAY_BUNDLE_URL,
+  variantsUrl: "/replays/camp-2018.variants/index.json",
+  stressUrl: null,
+  eyebrow: "Historical replay",
+  generateHint: BUNDLE_GENERATE_HINT,
+  otherRoute: { href: "/simulate", label: "Agent simulation →" },
+};
+
+export const SIMULATION_VIEW: ViewConfig = {
+  kind: "simulation",
+  bundleUrl: "/simulations/camp-2018.agents.json",
+  variantsUrl: null,
+  stressUrl: "/simulations/camp-2018.stress.json",
+  eyebrow: "Agent simulation",
+  generateHint: "app/public/simulations/camp-2018.agents.json",
+  otherRoute: { href: "/replay", label: "Historical replay →" },
+};
