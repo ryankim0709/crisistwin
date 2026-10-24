@@ -8,7 +8,6 @@ import AppShell from "./AppShell";
 import FireSimulatorPage from "./fire/FireSimulatorPage";
 import SimulationStudioPage from "./studio/SimulationStudioPage";
 import DispatchAgentPage from "./dispatch/DispatchAgentPage";
-import ScenariosPage from "./pages/ScenariosPage";
 import EvacuationPage from "./pages/EvacuationPage";
 import ComparisonPage from "./pages/ComparisonPage";
 import IntelPage from "./pages/IntelPage";
@@ -26,6 +25,9 @@ if (window.location.pathname === "/")
 // /incidents was merged into /intel; keep old links working.
 if (/^\/incidents\/*$/.test(window.location.pathname))
   window.history.replaceState(null, "", "/intel" + window.location.search + window.location.hash);
+// /scenarios was a planning scaffold; saved scenarios live in Simulation Studio.
+if (/^\/scenarios\/*$/.test(window.location.pathname))
+  window.history.replaceState(null, "", "/simulation" + window.location.search + window.location.hash);
 const path = window.location.pathname.replace(/\/+$/, "") || "/";
 const page =
   path === "/fire" ? (
@@ -34,8 +36,6 @@ const page =
     <SimulationStudioPage />
   ) : path === "/dispatch" ? (
     <DispatchAgentPage />
-  ) : path === "/scenarios" ? (
-    <ScenariosPage />
   ) : path === "/evacuation" ? (
     <EvacuationPage />
   ) : path === "/comparison" ? (
