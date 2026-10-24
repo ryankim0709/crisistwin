@@ -4,8 +4,10 @@ import {
   type ArrivalGrid,
   type ClosureInterval,
   type DamagePoint,
+  type DemandSummary,
   type Destination,
   type EvidenceClass,
+  type FireObservations,
   type FrameEdge,
   type Insights,
   type Layer,
@@ -22,6 +24,8 @@ import {
   type Traffic,
   type TrafficFrame,
   type TrafficMetrics,
+  type Validation,
+  type ValidationRow,
   type Zone,
 } from "./types";
 
@@ -222,12 +226,13 @@ function zone(value: unknown, path: string): Zone {
   };
 }
 
-function destination(value: unknown, path: string): Destination {
+function destination(value: unknown, path: string, layerClass: EvidenceClass | "mixed"): Destination {
   const d = obj(value, path);
   return {
     id: str(d.id, `${path}.id`),
     name: str(d.name, `${path}.name`),
     kind: str(d.kind, `${path}.kind`),
+    evidenceClass: featureClass(d, path, layerClass),
     coord: lngLat(d.coord, `${path}.coord`),
     capacityVeh: optNum(d.capacity_veh, `${path}.capacity_veh`),
   };
@@ -362,7 +367,22 @@ export function simulatedFire(body: Obj): SimulatedFire {
     modelId: optStr(model.id, "fire_simulated.model.id"),
     modelVersion: optStr(model.version, "fire_simulated.model.version"),
     ignition,
-    calibrationIou: optNum(calibration.iou, "fire_simulated.calibration.iou"),
+    calibrationIou: optNum(
+      objOrEmpty(calibration.perimeter).iou ?? calibration.iou,
+      "fire_simulated.calibration.iou",
+    ),
+    calibrationHeadline: typeof calibration.headline === "string" ? calibration.headline : null,
+    constraintNote:
+      typeof objOrEmpty(body.constraint).note === "string" ? (objOrEmpty(body.constraint).note as string) : null,
+    heldOut: isObj(objOrEmpty(calibration.observations).held_out)
+      ? (() => {
+          const h = objOrEmpty(objOrEmpty(calibration.observations).held_out);
+          return {
+            n: typeof h.n === "number" ? h.n : null,
+            medianAbsErrorMin: typeof h.median_abs_error_min === "number" ? h.median_abs_error_min : null,
+          };
+        })()
+      : null,
     fronts: ascending(
       arr(body.fronts ?? [], "fire_simulated.fronts").map((f, i) => {
         const path = `fire_simulated.fronts[${i}]`;
@@ -474,19 +494,116 @@ function damagePoint(value: unknown, path: string): DamagePoint {
   };
 }
 
+/**
+ * A feature's own evidence class. Required (and checked) when the layer is "mixed";
+ * otherwise an optional per-feature class must still be valid, and defaults to the layer's.
+ */
+function featureClass(item: Obj, path: string, layerClass: EvidenceClass | "mixed"): EvidenceClass {
+  if (item.evidence_class == null) {
+    if (layerClass === "mixed") {
+      throw new BundleError(`${path}.evidence_class`, "required on every feature of a mixed layer");
+    }
+    return layerClass;
+  }
+  return evidence(item.evidence_class, `${path}.evidence_class`);
+}
+
 function layer<T>(
   body: Obj | null,
   name: string,
   listKey: string,
-  parse: (value: unknown, path: string) => T,
+  parse: (value: unknown, path: string, layerClass: EvidenceClass | "mixed") => T,
 ): Layer<T> | null {
   if (body === null) return null;
+  const evidenceClass =
+    body.evidence_class === "mixed" ? "mixed" : evidence(body.evidence_class, `${name}.evidence_class`);
+  const items = arr(body[listKey], `${name}.${listKey}`);
+  if (evidenceClass === "mixed") {
+    // Mixed is allowed only when every feature says what it is.
+    items.forEach((item, i) => featureClass(obj(item, `${name}.${listKey}[${i}]`), `${name}.${listKey}[${i}]`, "mixed"));
+  }
   return {
-    evidenceClass: evidence(body.evidence_class, `${name}.evidence_class`),
-    items: arr(body[listKey], `${name}.${listKey}`).map((item, i) =>
-      parse(item, `${name}.${listKey}[${i}]`),
-    ),
+    evidenceClass,
+    items: items.map((item, i) => parse(item, `${name}.${listKey}[${i}]`, evidenceClass)),
   };
+}
+
+function fireObservations(body: Obj): FireObservations {
+  const source = objOrEmpty(body.source);
+  const optTime = (v: unknown, path: string) => (v == null ? null : utcMs(v, path));
+  return {
+    evidenceClass: evidence(body.evidence_class, "fire_observations.evidence_class"),
+    sourceLabel: optStr(source.label, "fire_observations.source.label"),
+    sourceUrl: optStr(source.url, "fire_observations.source.url"),
+    items: ascending(
+      arr(body.features ?? [], "fire_observations.features").map((f, i) => {
+        const path = `fire_observations.features[${i}]`;
+        const o = obj(f, path);
+        return {
+          id: str(o.id, `${path}.id`),
+          coord: lngLat(o.coord, `${path}.coord`),
+          atMs: utcMs(o.at, `${path}.at`),
+          fromMs: optTime(o.from, `${path}.from`),
+          toMs: optTime(o.to, `${path}.to`),
+          timePrecision: optStr(o.time_precision, `${path}.time_precision`),
+          residual: o.residual_fire === true,
+          locationSource: optStr(o.location_source, `${path}.location_source`),
+          sourceLocator: optStr(o.source_locator, `${path}.source_locator`),
+        };
+      }),
+      "fire_observations.features",
+    ),
+    notes: strList(body.notes ?? [], "fire_observations.notes"),
+  };
+}
+
+/** Totals only; the full crosswalk stays in the bundle for auditing. Lenient: optional block. */
+function demandSummary(body: Obj): DemandSummary {
+  const t = objOrEmpty(body.totals);
+  const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+  return {
+    evidenceClass: evidence(body.evidence_class, "demand.evidence_class"),
+    population: n(t.population),
+    households: n(t.households),
+    householdsNoVehicle: n(t.households_no_vehicle),
+    population65Plus: n(t.population_65_plus),
+    evacuatingVehicles: n(t.evacuating_vehicles),
+    evacuatingVehiclesMoe: n(t.evacuating_vehicles_moe),
+    blockGroups: n(t.block_groups),
+  };
+}
+
+/** Lenient parse of the optional "model vs published" rows; malformed rows are skipped. */
+function validationBlock(body: Obj): Validation {
+  const grades: Record<string, string> = {};
+  for (const [k, v] of Object.entries(objOrEmpty(body.grades))) if (typeof v === "string") grades[k] = v;
+  const text = (v: unknown) => (typeof v === "string" && v.length > 0 ? v : null);
+  const rows: ValidationRow[] = [];
+  for (const raw of Array.isArray(body.rows) ? body.rows : []) {
+    if (!isObj(raw) || typeof raw.target_id !== "string" || typeof raw.metric !== "string") continue;
+    const model: ValidationRow["model"] = [];
+    for (const [key, value] of Object.entries(objOrEmpty(raw.model))) {
+      if (typeof value === "string" || (typeof value === "number" && Number.isFinite(value))) {
+        model.push({ key, value });
+      }
+    }
+    const published = raw.published;
+    rows.push({
+      targetId: raw.target_id,
+      metric: raw.metric,
+      location: text(raw.location),
+      published: typeof published === "string" || typeof published === "number" ? published : null,
+      unit: text(raw.unit),
+      model,
+      comparability: text(raw.comparability) ?? "unknown",
+      evidenceClass: (EVIDENCE_CLASSES as readonly unknown[]).includes(raw.evidence_class)
+        ? (raw.evidence_class as EvidenceClass)
+        : null,
+      caveat: text(raw.caveat),
+      sourceLocator: text(raw.source_locator),
+    });
+  }
+  return { evidenceClass: evidence(body.evidence_class, "validation.evidence_class"), grades, rows };
 }
 
 function responderAction(value: unknown): ResponderAction & { reason: string | null } {
@@ -582,6 +699,14 @@ export function parseBundle(data: unknown): ReplayModel {
       name: str(incident.name, "incident.name"),
       packageVersion: optStr(incident.package_version, "incident.package_version"),
       timezone,
+      // Both optional and lenient: a bad value is ignored rather than failing the bundle.
+      place: typeof incident.place === "string" ? incident.place : null,
+      referencePoint: (() => {
+        const r = incident.reference_point;
+        if (!isObj(r) || typeof r.name !== "string" || !Array.isArray(r.coord)) return null;
+        const [lon, lat] = r.coord;
+        return typeof lon === "number" && typeof lat === "number" ? { name: r.name, coord: [lon, lat] as LngLat } : null;
+      })(),
     },
     mode: str(b.mode, "mode"),
     clock: { startMs, endMs, stepSeconds },
@@ -607,5 +732,11 @@ export function parseBundle(data: unknown): ReplayModel {
     ),
     traffic: trafficBody ? traffic(trafficBody) : null,
     damage: layer(layerBody(b, "damage", layerStatusMap), "damage", "features", damagePoint),
+    fireObservations: (() => {
+      const body = layerBody(b, "fire_observations", layerStatusMap);
+      return body ? fireObservations(body) : null;
+    })(),
+    demand: isObj(b.demand) ? demandSummary(b.demand) : null,
+    validation: isObj(b.validation) ? validationBlock(b.validation) : null,
   };
 }

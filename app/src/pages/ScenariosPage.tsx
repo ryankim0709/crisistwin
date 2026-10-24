@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from "react";
+import IncidentSummary from "./IncidentSummary";
 import { DraftNotice, EmptyResult, Field, Panel, Tag, WorkspacePage } from "./WorkspaceUI";
 
 const templates = [
@@ -44,6 +45,12 @@ export default function ScenariosPage() {
         </a>
       }
     >
+      <IncidentSummary
+        title="Real fire inputs in the replays"
+        eyebrow="Historical starting conditions"
+        layers={["fire_perimeters", "fire_observations", "fire_simulated"]}
+        intro="Historical replays start from recorded fire perimeters and observations, plus a simulated front fitted to them. The draft builder below is separate and still uses illustrative assumptions."
+      />
       <DraftNotice />
       <div className="ui-split">
         <Panel

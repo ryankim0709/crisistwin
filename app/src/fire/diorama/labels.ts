@@ -27,11 +27,21 @@ const LABEL_CSS = `
 .fdx-north::before { content: ""; width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent; border-bottom: 6px solid #d65a40; margin-bottom: 1px; }
 .fdx-scale { font-size: 10.5px; padding: 2px 8px; gap: 5px; }
 .fdx-scale-bar { display: inline-block; width: 14px; height: 4px; border: 1.5px solid #3a3f45; border-top: none; }
+.fdx-place {
+  font-size: 10.5px; font-weight: 600; gap: 5px; padding: 2px 8px; color: #3a3f45; letter-spacing: 0.02em;
+  background: rgba(251, 248, 241, 0.74); border-color: rgba(60, 55, 50, 0.08); box-shadow: 0 1px 3px rgba(40, 35, 30, 0.14);
+}
+.fdx-place::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: #8a8f94; flex: none; }
+.fdx-place-peak::before { border-radius: 0; background: none; width: 0; height: 0; border-left: 3.5px solid transparent; border-right: 3.5px solid transparent; border-bottom: 6px solid #8a5a3c; }
+.fdx-compact .fdx-place { font-size: 9.5px; padding: 1px 6px; }
 .fdx-clipped { visibility: hidden; }
 .fdx-compact .fdx-label { font-size: 10px; padding: 2px 7px; }
 .fdx-compact .fdx-north { width: 22px; height: 22px; padding: 0; }
 .fdx-compact .fdx-scale { font-size: 9.5px; padding: 1px 6px; }
 `;
+
+/** Place labels closer than this (CSS px, vertical gap weighted) to a shown label are hidden. */
+const PLACE_MIN_GAP_PX = 60;
 
 export class LabelLayer {
   readonly renderer: CSS2DRenderer;
@@ -64,7 +74,19 @@ export class LabelLayer {
     return { obj, el };
   }
 
+  /** Labels excluded from overlap checks against each other only after the other pills. */
+  private readonly places = new Set<CSS2DObject>();
+
+  /** A small reference-place label (decluttered in `clip`); earlier adds win overlaps. */
+  addPlace(parent: THREE.Object3D, text: string, kind: "city" | "peak", position: THREE.Vector3): CSS2DObject {
+    const { obj, el } = this.add(parent, kind === "peak" ? "fdx-place fdx-place-peak" : "fdx-place", position, new THREE.Vector2(0.5, 1.15));
+    el.textContent = text;
+    this.places.add(obj);
+    return obj;
+  }
+
   remove(obj: CSS2DObject) {
+    this.places.delete(obj);
     const i = this.objects.indexOf(obj);
     if (i >= 0) this.objects.splice(i, 1);
     obj.removeFromParent();
@@ -76,13 +98,27 @@ export class LabelLayer {
    * page's floating panels), so pills never sit on top of page UI.
    */
   clip(camera: THREE.Camera, w: number, h: number, free: { left: number; top: number; right: number; bottom: number }) {
+    const taken: { x: number; y: number }[] = [];
+    const candidates: { o: CSS2DObject; x: number; y: number }[] = [];
     for (const o of this.objects) {
       if (!o.visible) continue;
       this.tmp.setFromMatrixPosition(o.matrixWorld).project(camera);
       const x = ((this.tmp.x + 1) / 2) * w;
       const y = ((1 - this.tmp.y) / 2) * h;
       const inside = this.tmp.z < 1 && x >= free.left && x <= w - free.right && y >= free.top && y <= h - free.bottom;
-      o.element.classList.toggle("fdx-clipped", !inside);
+      if (this.places.has(o)) {
+        if (inside) candidates.push({ o, x, y });
+        else o.element.classList.add("fdx-clipped");
+      } else {
+        o.element.classList.toggle("fdx-clipped", !inside);
+        if (inside) taken.push({ x, y });
+      }
+    }
+    // Declutter place labels in priority (insertion) order against pills and each other.
+    for (const { o, x, y } of candidates) {
+      const clear = taken.every((t) => Math.hypot((t.x - x) * 0.65, (t.y - y) * 1.6) >= PLACE_MIN_GAP_PX);
+      o.element.classList.toggle("fdx-clipped", !clear);
+      if (clear) taken.push({ x, y });
     }
   }
 

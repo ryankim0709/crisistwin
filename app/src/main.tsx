@@ -13,6 +13,7 @@ import NotFoundPage from "./pages/NotFoundPage";
 import DioramaPage from "./diorama/DioramaPage";
 import { SIMULATION_VIEW } from "./replay/loadBundle";
 import ReplayView from "./replay/ReplayView";
+import ReplayRoute from "./replay/IncidentPicker";
 import "./index.css";
 import "./pages/workspace.css";
 
@@ -45,7 +46,7 @@ createRoot(document.getElementById("root")!).render(
     {/* The replay views are full-viewport map tools with their own navigation, so they
         render outside the shell; every other page uses the shared sidebar shell. */}
     {path === "/replay" ? (
-      <ReplayView />
+      <ReplayRoute />
     ) : path === "/simulate" ? (
       <ReplayView config={SIMULATION_VIEW} />
     ) : (

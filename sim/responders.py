@@ -84,7 +84,8 @@ def fire_arrival_lookup(grid, arrival_s: list[float], t0: datetime) -> FireLooku
     return lookup
 
 
-def _event(agent: str, n: int, at: datetime, ev_type: str, text: str, *, edge_ids=(), zone_ids=()) -> TrafficEvent:
+def _event(agent: str, n: int, at: datetime, ev_type: str, text: str, *, edge_ids=(), zone_ids=(),
+           closure_drains: bool = False) -> TrafficEvent:
     return TrafficEvent(
         id=f"responder-{agent}-{n}",
         at=at,
@@ -96,6 +97,7 @@ def _event(agent: str, n: int, at: datetime, ev_type: str, text: str, *, edge_id
         zone_ids=tuple(zone_ids),
         source_id=RESPONDER_SOURCE_ID,
         source_locator=agent,
+        closure_drains=closure_drains,
     )
 
 
@@ -268,7 +270,9 @@ class FireRoadClosure:
             lead = round((first[name] - at).total_seconds() / 60)
             events.append(_event(self.name, self._n, at, "road_closed",
                                  f"Fire closure ahead of the front on {name} (modelled fire in {lead} min)",
-                                 edge_ids=sorted(by_road[name])))
+                                 edge_ids=sorted(by_road[name]),
+                                 # Stops traffic heading in; people already beyond it may still drive out.
+                                 closure_drains=True))
         return events
 
     def describe(self) -> dict:

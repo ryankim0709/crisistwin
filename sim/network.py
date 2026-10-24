@@ -21,17 +21,20 @@ def _segment_id(edge_id: str) -> str:
     return head if direction in ("f", "b", "r") else edge_id
 
 
-def load_road_network(package: Path) -> tuple[RoadNetwork, tuple[Destination, ...], dict]:
+def load_road_network(package: Path, *, verify: bool = True) -> tuple[RoadNetwork, tuple[Destination, ...], dict]:
     """Verified roads plus exit destinations; returns (network, exits, provenance).
 
     Unknown lanes and speeds take `default_edge_attributes` per highway class; the
     returned provenance counts how many edges used each default so the bundle can
-    label them as assumptions.
+    label them as assumptions. `verify=False` is for callers that already ran the package's own
+    verifier (sim.incidents for non-Camp packages, whose manifests these Camp verifiers do not know).
     """
     ensure_package(package)  # fetch missing artifacts from MongoDB (ADR 0006) when needed
     manifest = json.loads((package / "manifest.json").read_text())
     # Hashes and offline re-normalization; each package extension has its own verifier.
-    if "layers_normalizer_version" in manifest:
+    if not verify:
+        pass
+    elif "layers_normalizer_version" in manifest:
         from tools.camp_add_layers import verify as verify_with_layers  # only needed for layered packages
 
         verify_with_layers(package)
@@ -42,6 +45,9 @@ def load_road_network(package: Path) -> tuple[RoadNetwork, tuple[Destination, ..
     else:
         verify_roads(package)
     quality = json.loads((package / "quality.json").read_text())
+    quality = quality.get("roads") or quality  # Marshall/Kincade nest road quality under "roads"
+    limitations = quality["limitations"]
+    limitations = [limitations] if isinstance(limitations, str) else limitations
     edge_features = json.loads((package / "normalized/road_edges.geojson").read_text())["features"]
     node_features = json.loads((package / "normalized/road_nodes.geojson").read_text())["features"]
     exits = json.loads((package / "normalized/exit_nodes.json").read_text())["exits"]
@@ -94,7 +100,7 @@ def load_road_network(package: Path) -> tuple[RoadNetwork, tuple[Destination, ..
         "largest_scc_nodes": quality["largest_strongly_connected_component_nodes"],
         "edge_count": len(edges),
         "defaults_used": dict(defaults_used),
-        "assumptions": [*quality["limitations"],
+        "assumptions": [*limitations,
             f"Road lanes defaulted by highway class on {defaults_used['lanes']} of {len(edges)} edges "
             f"and free-flow speed on {defaults_used['speed_kph']}; capacity always uses per-lane defaults.",
             "Exits are geometric boundary crossings of the road extract, not named destinations.",

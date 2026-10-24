@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { fmt, fmtDelta, verdict, type Direction, type MetricDelta } from "./workspaceData";
 
 export function WorkspacePage({
   title,
@@ -103,5 +104,76 @@ export function Metric({ label, value, detail }: { label: string; value: string;
       <strong>{value}</strong>
       <small>{detail}</small>
     </div>
+  );
+}
+
+/** Loading, missing-file and error states for a panel that reads a static data file. */
+export function DataState({
+  load,
+  what,
+  path,
+}: {
+  load: { status: "loading" | "missing" | "error"; message?: string };
+  what: string;
+  path: string;
+}) {
+  if (load.status === "loading") {
+    return (
+      <p role="status" className="ui-help">
+        Loading {what}…
+      </p>
+    );
+  }
+  if (load.status === "error") {
+    return (
+      <p role="alert" className="ui-notice">
+        <strong>Cannot read {what}</strong> {load.message ?? "Unexpected file contents."}
+      </p>
+    );
+  }
+  return (
+    <EmptyResult title={`No ${what} available`}>
+      <code>{path}</code> is not served, so there is nothing to show. An empty page does not mean
+      the analysis found no differences.
+    </EmptyResult>
+  );
+}
+
+const EVIDENCE_LABELS: Record<string, string> = {
+  simulated: "Simulated",
+  observed: "Observed",
+  reconstructed: "Reconstructed",
+  fixture: "Fixture",
+  derived: "Derived",
+  ai_explanation: "AI explanation",
+};
+
+/** Evidence label (AGENTS.md): kept as text, so meaning never depends on colour. */
+export function EvidenceTag({ kind }: { kind: string }) {
+  const tone = kind === "observed" ? "green" : kind === "neutral" ? "neutral" : "amber";
+  return <Tag tone={tone}>{EVIDENCE_LABELS[kind] ?? kind}</Tag>;
+}
+
+/** A variant value with its signed delta and an outcome word ("better" / "worse"). */
+export function DeltaCell({
+  metric,
+  direction,
+}: {
+  metric: MetricDelta | undefined;
+  direction: Direction;
+}) {
+  if (!metric || metric.variant === null) return <span className="delta-cell">n/a</span>;
+  const word = verdict(metric.delta, direction);
+  return (
+    <span className="delta-cell">
+      <strong>{fmt(metric.variant)}</strong>
+      <small>
+        {fmtDelta(metric.delta)}
+        {word && word !== "unchanged" ? ` (${word})` : ""}
+        {metric.pct !== null && metric.delta !== 0
+          ? ` · ${metric.pct > 0 ? "+" : "−"}${Math.abs(metric.pct)}%`
+          : ""}
+      </small>
+    </span>
   );
 }
