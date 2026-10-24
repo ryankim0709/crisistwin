@@ -4,6 +4,7 @@ import {
   Popup,
   ScaleControl,
   setWorkerUrl,
+  type ErrorEvent,
   type MapGeoJSONFeature,
 } from "maplibre-gl";
 import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
@@ -12,6 +13,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   BASEMAP_STYLE_URL,
   FALLBACK_STYLE,
+  IMAGERY_LAYER,
   INTERACTIVE_LAYERS,
   ROAD_CLASS_BY_CODE,
   ROAD_CLASS_LABEL,
@@ -31,6 +33,8 @@ import {
   setBasemap,
   setGroupVisibility,
   setPerimeterFreshness,
+  destinationsCollection,
+  setFireObservationTime,
   setSourceData,
   simulatedFrontCollection,
   trafficToRoadIndex,
@@ -39,10 +43,12 @@ import {
   type BasemapStyle,
   type LayerGroup,
 } from "./mapLayers";
+import { HILLSHADE_LAYER, restyleDarkBasemap } from "./basemapStyle";
 import { buildEdgePath, buildTravelIndex, particlePositions, type EdgePath } from "./particles";
 import PerspectiveSwitcher from "./perspectives/PerspectiveSwitcher";
 import { edgeThreats } from "./insights";
-import { EVIDENCE_LABEL, closedEdgesAt, sameNumbers } from "./timeline";
+import { openRefugeKey, refugeTimeline } from "./refuges";
+import { EVIDENCE_LABEL, closedEdgesAt, localTime, sameNumbers } from "./timeline";
 import type { EvidenceClass, LngLat, ReplayModel } from "./types";
 
 // Same explicit worker bundling as maps/MapCanvas.tsx; Vite relocates the main module.
@@ -56,16 +62,18 @@ const FLICKER_INTERVAL_MS = 90;
 const ZONE_FLASH_MS = 3000;
 const ZONE_FLASH_RECENT_MS = 20 * 60_000;
 const ZONE_FLASH_TICK_MS = 50;
-/** The "Assumed ignition" text is hidden this long after the assumed ignition time. */
+/** The ignition text is hidden this long after the assumed ignition time. */
 const IGNITION_LABEL_MS = 90 * 60_000;
-/** Opening camera per incident; otherwise the bundle bbox is fitted. */
-const INITIAL_VIEW: Record<string, { center: LngLat; zoom: number }> = {
-  "camp-2018-paradise-slice": { center: [-121.6, 39.77], zoom: 11.3 },
-};
+/** Opening camera: padding around the home coordinates (ignition and reference place). */
+const HOME_PADDING = { top: 160, bottom: 200, left: 120, right: 120 };
+const HOME_MAX_ZOOM = 11.5;
 const FRESHNESS_BUCKET_MS = 10 * 60_000;
+const MIN_ZOOM = 7;
+const MAX_BOUNDS_PAD_DEG = 2.5;
+/** Satellite falls back to the map if no imagery tile at all has loaded by then. */
+const IMAGERY_TIMEOUT_MS = 15_000;
+const IMAGERY_MAX_ERRORS = 12;
 const THREAT_BUCKET_MS = 60_000;
-const PULSE_PERIOD_MS = 1400;
-const PULSE_INTERVAL_MS = 80;
 
 function prefersReducedMotion(): boolean {
   return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
@@ -75,6 +83,9 @@ function prefersReducedMotion(): boolean {
 export interface MapFocus {
   key: number;
   coords: LngLat[];
+  /** Screen padding in px, e.g. to keep the framed area clear of an overlay card. */
+  padding?: { top: number; bottom: number; left: number; right: number };
+  maxZoom?: number;
 }
 
 type StyleStatus = "loading" | "ok" | "fallback";
@@ -98,7 +109,7 @@ async function loadBasemapStyle(signal: AbortSignal): Promise<BasemapStyle | nul
     ) {
       return null;
     }
-    return style as BasemapStyle;
+    return restyleDarkBasemap(style as BasemapStyle);
   } catch {
     return null;
   } finally {
@@ -111,7 +122,22 @@ function fmt(n: unknown, digits = 0): string {
   return typeof n === "number" ? n.toLocaleString("en-US", { maximumFractionDigits: digits }) : "—";
 }
 
-function tooltipContent(feature: MapGeoJSONFeature, perParticle: number): HTMLElement {
+function boundsOf(coords: LngLat[]): [number, number, number, number] {
+  let [w, s, e, n] = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const [x, y] of coords) {
+    w = Math.min(w, x);
+    s = Math.min(s, y);
+    e = Math.max(e, x);
+    n = Math.max(n, y);
+  }
+  return [w, s, e, n];
+}
+
+function evidenceText(value: unknown): string {
+  return EVIDENCE_LABEL[value as EvidenceClass] ?? "Evidence class unknown";
+}
+
+function tooltipContent(feature: MapGeoJSONFeature, perParticle: number, timezone: string): HTMLElement {
   const p = feature.properties as Record<string, unknown>;
   const root = document.createElement("div");
   root.className = "rp-tip";
@@ -156,11 +182,11 @@ function tooltipContent(feature: MapGeoJSONFeature, perParticle: number): HTMLEl
     }
     case "sim-front-fill":
       add("strong", "Simulated fire front (model output)");
-      add("span", `${fmt(p.area_km2, 1)} km² · from an assumed ignition`);
+      add("span", `${fmt(p.area_km2, 1)} km² · fire-spread model run`);
       add("span", "Not an observation; shown only before the first satellite perimeter.", "rp-tip-note");
       break;
     case "sim-ignition":
-      add("strong", "Assumed ignition (model input)");
+      add("strong", String(p.label ?? "Ignition (model input)"));
       if (p.provenance) add("span", String(p.provenance));
       break;
     case "particles":
@@ -177,6 +203,29 @@ function tooltipContent(feature: MapGeoJSONFeature, perParticle: number): HTMLEl
     case "destinations":
       add("strong", String(p.name));
       add("span", `${String(p.dest_kind).replace(/_/g, " ")} · capacity ${p.capacity_veh == null ? "unbounded" : fmt(p.capacity_veh)}`);
+      add("span", evidenceText(p.evidence_class), "rp-tip-note");
+      break;
+    case "refuges":
+      add("strong", String(p.name));
+      add(
+        "span",
+        p.refuge_state === "open"
+          ? "Temporary refuge area · open at this time"
+          : p.refuge_state === "closed"
+            ? "Temporary refuge area · not open at this time"
+            : "Temporary refuge area · open times not recorded",
+      );
+      add("span", `${evidenceText(p.evidence_class)} · NIST-identified refuge; used in the model only when no exit is reachable`, "rp-tip-note");
+      break;
+    case "fire-obs":
+      add("strong", `Fire observed here at ${localTime(Number(p.at_ms), timezone)} (NIST)`);
+      add(
+        "span",
+        [p.location_source && `located by ${String(p.location_source)}`, p.time_precision && `time ${String(p.time_precision)}`]
+          .filter(Boolean)
+          .join(" · "),
+      );
+      add("span", `${evidenceText(p.evidence_class)} · fire present at that time, not its first arrival`, "rp-tip-note");
       break;
     case "damage":
       add("strong", String(p.damage ?? "Damage assessment"));
@@ -204,6 +253,10 @@ export interface ReplayMapProps {
   onPick: ((p: LngLat) => void) | null;
   focus: MapFocus | null;
   basemapChoice: BasemapChoice;
+  /** Cosmetic motion (fire flicker) only while the clock plays, so a paused map is still. */
+  animate: boolean;
+  /** Coordinates the opening camera frames (e.g. ignition and reference place). */
+  home: LngLat[];
   /** Receives the map once replay layers are installed, and null when it is removed. */
   onMapReady?: (map: MapLibreMap | null) => void;
 }
@@ -223,7 +276,10 @@ export default function ReplayMap({
   onPick,
   focus,
   basemapChoice,
+  home,
+  animate,
 }: ReplayMapProps) {
+  const homeRef = useRef(home);
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const perParticleRef = useRef(1);
@@ -277,8 +333,17 @@ export default function ReplayMap({
         m = new MapLibreMap({
           container,
           style: style ?? FALLBACK_STYLE,
-          ...(INITIAL_VIEW[model.incident.id] ?? { bounds: model.bbox, fitBoundsOptions: { padding: 48 } }),
+          bounds: boundsOf(homeRef.current),
+          fitBoundsOptions: { padding: HOME_PADDING, maxZoom: HOME_MAX_ZOOM },
           attributionControl: { compact: true },
+          // Zoomed out far enough to see Northern California, but never lose the incident.
+          minZoom: MIN_ZOOM,
+          maxBounds: [
+            model.bbox[0] - MAX_BOUNDS_PAD_DEG,
+            model.bbox[1] - MAX_BOUNDS_PAD_DEG,
+            model.bbox[2] + MAX_BOUNDS_PAD_DEG,
+            model.bbox[3] + MAX_BOUNDS_PAD_DEG,
+          ],
           dragRotate: false,
           pitchWithRotate: false,
         });
@@ -292,9 +357,17 @@ export default function ReplayMap({
       if (import.meta.env.DEV) (window as unknown as { __replayMap?: MapLibreMap }).__replayMap = m;
       m.addControl(new NavigationControl({ showCompass: false }), "top-right");
       m.addControl(new ScaleControl({ unit: "metric" }), "bottom-right");
+      // The top-down hillshade steps aside while a 3D perspective drapes its own terrain.
+      m.on("terrain", () => {
+        if (m.getLayer(HILLSHADE_LAYER)) {
+          m.setLayoutProperty(HILLSHADE_LAYER, "visibility", m.getTerrain() ? "none" : "visible");
+        }
+      });
       m.on("load", () => {
         if (cancelled) return;
         installLayers(m, model);
+        // The simulated-area label sits at the bbox corner, among exit markers: keep it on top.
+        if (m.getLayer("sim-area-label")) m.moveLayer("sim-area-label");
         setReady(true);
         setMapInstance(m);
         onMapReadyRef.current?.(m);
@@ -325,7 +398,7 @@ export default function ReplayMap({
           return;
         }
         m.getCanvas().style.cursor = "pointer";
-        popup.setLngLat(event.lngLat).setDOMContent(tooltipContent(feature, perParticleRef.current)).addTo(m);
+        popup.setLngLat(event.lngLat).setDOMContent(tooltipContent(feature, perParticleRef.current, model.incident.timezone)).addTo(m);
       });
       m.on("mouseout", () => popup.remove());
       m.on("click", (event) => onPickRef.current?.([event.lngLat.lng, event.lngLat.lat]));
@@ -375,10 +448,10 @@ export default function ReplayMap({
   const hasOrderedZones = Array.from(zoneStates.values()).includes("ordered");
   useEffect(() => {
     const map = mapRef.current;
-    if (!ready || !map || (!fireVisible && !hasOrderedZones) || prefersReducedMotion()) return;
+    if (!ready || !map || !animate || (!fireVisible && !hasOrderedZones) || prefersReducedMotion()) return;
     const timer = window.setInterval(() => setFireFlicker(map, performance.now()), FLICKER_INTERVAL_MS);
     return () => window.clearInterval(timer);
-  }, [ready, fireVisible, hasOrderedZones]);
+  }, [ready, animate, fireVisible, hasOrderedZones]);
 
   const frame = model.traffic && frameIndex >= 0 ? model.traffic.frames[frameIndex] : null;
   const closed = useMemo(
@@ -424,21 +497,58 @@ export default function ReplayMap({
     threatRoadsRef.current = applyThreatState(map, trafficToRoad, threats, threatRoadsRef.current);
   }, [ready, trafficToRoad, threats]);
 
-  // Cosmetic pulse on wall-clock time; it carries no data. Off for reduced motion.
-  const hasThreats = threats.size > 0;
+  // Threatened roads are drawn static (no wall-clock pulse): one less moving, warm mark.
   useEffect(() => {
     const map = mapRef.current;
-    if (!ready || !map || !hasThreats || !visibility.roads || prefersReducedMotion()) return;
-    const timer = window.setInterval(() => {
-      const phase = 0.5 + 0.5 * Math.sin((performance.now() / PULSE_PERIOD_MS) * 2 * Math.PI);
-      setThreatPulse(map, phase);
-    }, PULSE_INTERVAL_MS);
-    return () => window.clearInterval(timer);
-  }, [ready, hasThreats, visibility.roads]);
+    if (ready && map) setThreatPulse(map, 0.5);
+  }, [ready]);
 
+  // Satellite: show a loading hint while USGS tiles stream; on repeated errors or a timeout with
+  // no tile loaded, fall back to the (restyled) dark map with a notice. Status is set from callbacks only.
+  const [imagery, setImagery] = useState<"idle" | "loading" | "ok" | "failed">("idle");
   useEffect(() => {
     const map = mapRef.current;
-    if (ready && map) setBasemap(map, basemapChoice);
+    if (!ready || !map) return;
+    const reset = window.setTimeout(() => setImagery(basemapChoice === "satellite" ? "loading" : "idle"), 0);
+    setBasemap(map, basemapChoice);
+    if (basemapChoice !== "satellite") return () => window.clearTimeout(reset);
+    let loaded = false;
+    let anyTile = false;
+    let errors = 0;
+    let failed = false;
+    const fail = () => {
+      if (failed || loaded || anyTile) return;
+      failed = true;
+      setBasemap(map, "dark");
+      setImagery("failed");
+    };
+    const onData = (event: { sourceId?: string; tile?: { state?: string } }) => {
+      if (failed || event.sourceId !== IMAGERY_LAYER) return;
+      if (event.tile?.state === "loaded") anyTile = true;
+      // Errored tiles also count as "loaded" for the source, so require a real tile first.
+      if (anyTile && map.isSourceLoaded(IMAGERY_LAYER)) {
+        loaded = true;
+        setImagery("ok");
+      } else {
+        setImagery("loading");
+      }
+    };
+    const onError = (event: ErrorEvent) => {
+      if ((event as unknown as { sourceId?: string }).sourceId !== IMAGERY_LAYER) return;
+      errors += 1;
+      if (errors >= IMAGERY_MAX_ERRORS) fail();
+    };
+    map.on("sourcedata", onData);
+    map.on("error", onError);
+    const timeout = window.setTimeout(() => {
+      if (!loaded && !anyTile) fail();
+    }, IMAGERY_TIMEOUT_MS);
+    return () => {
+      window.clearTimeout(reset);
+      window.clearTimeout(timeout);
+      map.off("sourcedata", onData);
+      map.off("error", onError);
+    };
   }, [ready, basemapChoice]);
 
   useEffect(() => {
@@ -458,7 +568,12 @@ export default function ReplayMap({
     }
     map.fitBounds(
       [w, s, e, n],
-      { padding: 120, maxZoom: 15, duration: prefersReducedMotion() ? 0 : 1600, essential: true },
+      {
+        padding: focus.padding ?? 120,
+        maxZoom: focus.maxZoom ?? 15,
+        duration: prefersReducedMotion() ? 0 : 1600,
+        essential: true,
+      },
     );
   }, [ready, focus]);
 
@@ -528,6 +643,28 @@ export default function ReplayMap({
     if (ready && map) setSourceData(map, "zones", zonesCollection(model.zones?.items ?? [], zoneStates));
   }, [ready, model, zoneStates]);
 
+  // Refuges open and close at NIST-recorded times; redraw only when the open set changes.
+  const refuges = useMemo(
+    () => refugeTimeline(model.destinations?.items ?? [], model.events),
+    [model.destinations, model.events],
+  );
+  const openKey = openRefugeKey(refuges, simTimeMs);
+  const refugeTimeRef = useRef(simTimeMs);
+  useEffect(() => {
+    refugeTimeRef.current = simTimeMs;
+  }, [simTimeMs]);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (ready && map) setSourceData(map, "destinations", destinationsCollection(model, refuges, refugeTimeRef.current));
+  }, [ready, model, refuges, openKey]);
+
+  // Fire observations appear at their observed time (minute buckets keep filter updates cheap).
+  const obsBucket = Math.floor(simTimeMs / 60_000) * 60_000;
+  useEffect(() => {
+    const map = mapRef.current;
+    if (ready && map) setFireObservationTime(map, obsBucket);
+  }, [ready, obsBucket]);
+
   // Particles are a pure function of the simulation clock, updated whenever it moves.
   useEffect(() => {
     const map = mapRef.current;
@@ -589,6 +726,16 @@ export default function ReplayMap({
         <div className="rp-map-state rp-map-state--error" role="alert">
           Map could not start: {mapError}
         </div>
+      )}
+      {basemapChoice === "satellite" && imagery === "loading" && (
+        <p className="rp-imagery-status" role="status">
+          <span className="rp-spinner" aria-hidden="true" /> Loading satellite imagery…
+        </p>
+      )}
+      {basemapChoice === "satellite" && imagery === "failed" && (
+        <p className="rp-imagery-status rp-imagery-status--failed" role="alert">
+          Satellite imagery (USGS) did not load — showing the map instead.
+        </p>
       )}
       {styleStatus === "fallback" && (
         <p className="rp-basemap-note" role="status">

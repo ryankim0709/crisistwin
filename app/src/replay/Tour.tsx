@@ -58,10 +58,12 @@ export interface TourProps {
   steps: TourStep[];
   onSeek: (ms: number) => void;
   onClose: () => void;
+  /** When set, the first step offers the guided story instead of the tour. */
+  onStory?: () => void;
 }
 
 /** Coach-mark tour: a dimmed page with one spotlighted region and a dialog card per step. */
-export default function Tour({ steps, onSeek, onClose }: TourProps) {
+export default function Tour({ steps, onSeek, onClose, onStory }: TourProps) {
   const [index, setIndex] = useState(0);
   const [rect, setRect] = useState<Rect | null>(null);
   const [cardHeight, setCardHeight] = useState(180);
@@ -169,6 +171,11 @@ export default function Tour({ steps, onSeek, onClose }: TourProps) {
         </p>
         <h2 id="rp-tour-title">{step.title}</h2>
         <p id="rp-tour-body">{step.body}</p>
+        {index === 0 && onStory && (
+          <button type="button" className="rp-story-open rp-story-open--tour" onClick={onStory}>
+            <span aria-hidden="true">▶</span> Play the story instead (about 2 min, hands-free)
+          </button>
+        )}
         <div className="rp-tour-actions">
           <button type="button" className="rp-tour-skip" onClick={onClose}>
             Skip tour

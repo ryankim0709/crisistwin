@@ -1,129 +1,239 @@
-import { useState } from "react";
-import { DraftNotice, EmptyResult, Field, Panel, Tag, WorkspacePage } from "./WorkspaceUI";
+import {
+  DataState,
+  DeltaCell,
+  EmptyResult,
+  EvidenceTag,
+  Metric,
+  Panel,
+  Tag,
+  WorkspacePage,
+} from "./WorkspaceUI";
+import {
+  ARRIVED_BY_1800,
+  CAMP_ID,
+  INCIDENTS_URL,
+  OUTCOME_METRICS,
+  STRESS_URL,
+  clockLabel,
+  fmt,
+  fmtDelta,
+  parseIncidents,
+  parseStress,
+  replayHref,
+  useJson,
+  type StressDoc,
+  type StressRun,
+} from "./workspaceData";
 
-const disruptions = [
-  { name: "Road failure", detail: "Remove a road segment and inspect network reachability." },
-  { name: "Wind shift", detail: "Vary wind assumptions and recompute modeled hazard." },
-  { name: "Departure delay", detail: "Shift a neighborhood’s departure window later." },
-  { name: "Shelter capacity loss", detail: "Reduce available capacity and inspect unmet demand." },
-];
+const MAX_EXIT_SHIFTS = 3;
+
+const MODE_LABELS: Record<string, string> = {
+  dry_run: "Dry run: fixed disruption list, no AI agent",
+  agent: "AI agent proposed the disruptions",
+};
+
+function RunRow({ run }: { run: StressRun }) {
+  const shifts = run.exitShifts.slice(0, MAX_EXIT_SHIFTS);
+  return (
+    <tr>
+      <th scope="row">
+        <strong>{run.label}</strong>
+        <div className="ui-help">
+          {run.runId}
+          {run.rationale ? ` · ${run.rationale}` : ""}
+        </div>
+        <details className="variant-notes">
+          <summary>What changed and where traffic moved</summary>
+          <ul>
+            {run.changes.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+          {shifts.length > 0 && (
+            <>
+              <p className="ui-help">Largest exit shifts (vehicles, change from baseline)</p>
+              <ul>
+                {shifts.map((s) => (
+                  <li key={s.name}>
+                    {s.name}: {fmt(s.baseline)} to {fmt(s.variant)} ({fmtDelta(s.delta)})
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </details>
+      </th>
+      {OUTCOME_METRICS.map((spec) => (
+        <td className="num" key={spec.key}>
+          <DeltaCell metric={run.metrics[spec.key]} direction={spec.direction} />
+        </td>
+      ))}
+      <td className="num">
+        {run.zoneRiskChangedCount === null ? "n/a" : fmt(run.zoneRiskChangedCount)}
+      </td>
+      <td>
+        <EvidenceTag kind={run.evidenceClass} />
+      </td>
+    </tr>
+  );
+}
+
+function Results({ doc }: { doc: StressDoc }) {
+  const incidents = useJson(INCIDENTS_URL, parseIncidents);
+  const camp =
+    incidents.status === "ready" ? incidents.data.find((i) => i.id === CAMP_ID) : undefined;
+  const when = (camp && clockLabel(ARRIVED_BY_1800.key, camp.date, camp.timezone)) ?? "18:00 UTC";
+  const { budget } = doc;
+  return (
+    <>
+      <div className="ui-metrics">
+        <Metric
+          label="Runs completed"
+          value={fmt(budget.runsUsed ?? doc.runs.length)}
+          detail={
+            budget.maxRuns === null
+              ? "Run budget not recorded"
+              : `Budget: up to ${fmt(budget.maxRuns)} runs`
+          }
+        />
+        <Metric
+          label="Run mode"
+          value={doc.mode === "dry_run" ? "Dry run" : doc.mode === "agent" ? "AI agent" : doc.mode}
+          detail={MODE_LABELS[doc.mode] ?? "Mode as recorded in the file"}
+        />
+        <Metric
+          label={`Baseline: vehicles out by ${when}`}
+          value={fmt(doc.baselineMetrics[ARRIVED_BY_1800.key] ?? null)}
+          detail="Simulated; every run is compared with this"
+        />
+      </div>
+      <Panel
+        title="Disruption runs against the baseline"
+        eyebrow="Computed results"
+        aside={<Tag tone="amber">Counterfactual, not history</Tag>}
+      >
+        {doc.runs.length === 0 ? (
+          <EmptyResult title="No stress runs recorded">
+            The file lists no completed runs.
+          </EmptyResult>
+        ) : (
+          <div className="ui-table-scroll">
+            <table className="ui-table comparison-table">
+              <caption>
+                Each cell is the disrupted value, then its change from the baseline. Higher is
+                better for vehicles out ({when}); lower is better for exposure and blocked vehicles.
+                All values are simulator output for a single seed; small changes are not
+                significant.
+              </caption>
+              <thead>
+                <tr>
+                  <th scope="col">Disruption</th>
+                  {OUTCOME_METRICS.map((spec) => (
+                    <th scope="col" className="num" key={spec.key}>
+                      {spec.key === ARRIVED_BY_1800.key ? `${spec.label} ${when}` : spec.label} (
+                      {spec.unit})
+                    </th>
+                  ))}
+                  <th scope="col" className="num">
+                    Zones with changed risk
+                  </th>
+                  <th scope="col">Evidence</th>
+                </tr>
+              </thead>
+              <tbody>
+                {doc.runs.map((run) => (
+                  <RunRow key={run.runId} run={run} />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {doc.rejected.length > 0 && (
+          <ul className="ui-checklist">
+            {doc.rejected.map((line) => (
+              <li key={line}>Rejected before running: {line}</li>
+            ))}
+          </ul>
+        )}
+      </Panel>
+      {doc.findings && (
+        <Panel
+          title="AI findings"
+          eyebrow="Explanation of the results above"
+          aside={<EvidenceTag kind="ai_explanation" />}
+        >
+          <p className="ui-notice">
+            <strong>AI explanation</strong> Written by {doc.findings.model ?? "an AI model"} from
+            the simulator&rsquo;s numbers. It is not a computed result; check it against the table.
+          </p>
+          <pre className="ai-findings">{doc.findings.markdown}</pre>
+        </Panel>
+      )}
+      <div className="ui-columns">
+        <Panel title="Where this comes from" eyebrow="Reproducibility">
+          <dl className="ui-facts">
+            <div>
+              <dt>Findings</dt>
+              <dd>
+                {doc.findings
+                  ? "AI explanation present"
+                  : doc.mode === "dry_run"
+                    ? "None: a dry run does not call an AI model"
+                    : "None recorded"}
+              </dd>
+            </div>
+            {budget.stopped && (
+              <div>
+                <dt>Stopped because</dt>
+                <dd>{budget.stopped}</dd>
+              </div>
+            )}
+          </dl>
+          <div className="entry-links">
+            <a className="ui-text-link" href="/simulate">
+              Agent simulation →
+            </a>
+            <a className="ui-text-link" href={replayHref(CAMP_ID)}>
+              Camp Fire replay →
+            </a>
+            <a className="ui-text-link" href="/comparison">
+              Strategy comparison →
+            </a>
+          </div>
+        </Panel>
+        <Panel title="Limitations" eyebrow="Read before comparing">
+          {doc.limitations.length > 0 ? (
+            <ul className="ui-checklist">
+              {doc.limitations.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          ) : (
+            <EmptyResult title="No limitations recorded">
+              The file lists none. Treat results as a single-seed planning experiment anyway.
+            </EmptyResult>
+          )}
+        </Panel>
+      </div>
+    </>
+  );
+}
 
 export default function StressTestsPage() {
-  const [selected, setSelected] = useState(["Road failure", "Wind shift"]);
-  const [budget, setBudget] = useState("10");
+  const load = useJson(STRESS_URL, parseStress);
   return (
     <WorkspacePage
       title="Stress testing"
-      description="Ask where a plan breaks, then investigate the evidence."
+      description="Where does the 2018 Camp Fire evacuation plan break? Each run disrupts the baseline once."
       section="Analysis"
     >
-      <DraftNotice />
-      <div className="ui-split">
-        <Panel
-          title="Configure an investigation"
-          eyebrow="01 / Perturbations"
-          aside={<Tag tone="amber">Draft configuration</Tag>}
-        >
-          <Field label="Baseline run">
-            <select disabled defaultValue="">
-              <option value="">No completed evacuation runs available</option>
-            </select>
-          </Field>
-          <fieldset className="ui-fieldset">
-            <legend>Conditions to vary</legend>
-            {disruptions.map((item) => (
-              <label className="disruption-option" key={item.name}>
-                <input
-                  type="checkbox"
-                  checked={selected.includes(item.name)}
-                  onChange={(event) =>
-                    setSelected((current) =>
-                      event.target.checked
-                        ? [...current, item.name]
-                        : current.filter((name) => name !== item.name),
-                    )
-                  }
-                />
-                <span>
-                  <strong>{item.name}</strong>
-                  <small>{item.detail}</small>
-                </span>
-              </label>
-            ))}
-          </fieldset>
-          <div className="ui-fields">
-            <Field label="Maximum candidate runs">
-              <input
-                type="number"
-                min="1"
-                max="20"
-                step="1"
-                value={budget}
-                onChange={(event) => setBudget(event.target.value)}
-              />
-            </Field>
-            <Field label="Primary measure">
-              <select defaultValue="People unable to reach shelter">
-                <option>People unable to reach shelter</option>
-                <option>Clearance time</option>
-                <option>Modeled hazard exposure</option>
-              </select>
-            </Field>
-          </div>
-          <div className="ui-actions">
-            <button type="button" disabled>
-              Start investigation
-            </button>
-            <span>{selected.length} disruption types selected</span>
-          </div>
-          <p className="ui-help">
-            Requires a completed baseline, a simulation runner, and validated perturbation ranges.
-            No background jobs are running.
-          </p>
+      {load.status === "ready" ? (
+        <Results doc={load.data} />
+      ) : (
+        <Panel title="Stress-test runs" eyebrow="Computed results">
+          <DataState load={load} what="stress-test results" path={STRESS_URL} />
         </Panel>
-        <div className="ui-stack">
-          <Panel title="Investigation progress" eyebrow="02 / Execution">
-            <ol className="ui-steps">
-              <li>
-                <strong>Load baseline</strong>
-                <span>Waiting for a completed run</span>
-              </li>
-              <li>
-                <strong>Generate bounded candidates</strong>
-                <span>Not started</span>
-              </li>
-              <li>
-                <strong>Simulate & compare</strong>
-                <span>Not started</span>
-              </li>
-              <li>
-                <strong>Review evidence</strong>
-                <span>No findings available</span>
-              </li>
-            </ol>
-          </Panel>
-          <Panel title="Questions to investigate">
-            <ul className="ui-checklist">
-              <li>Does a closure isolate any modeled population?</li>
-              <li>Where does shelter capacity become insufficient?</li>
-              <li>Which missing observation could change the preferred plan?</li>
-            </ul>
-            <p className="ui-help">
-              Example investigation questions, not discovered vulnerabilities.
-            </p>
-          </Panel>
-        </div>
-      </div>
-      <Panel
-        title="Findings & sensitivity"
-        eyebrow="03 / Results"
-        aside={<Tag>No computed findings</Tag>}
-      >
-        <EmptyResult title="No stress tests run yet">
-          Ranked vulnerabilities will include changed inputs, affected populations, metric
-          differences, run IDs, and model limitations.
-        </EmptyResult>
-      </Panel>
+      )}
     </WorkspacePage>
   );
 }

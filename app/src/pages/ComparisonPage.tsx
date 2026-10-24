@@ -1,115 +1,253 @@
-import { useState } from "react";
-import { DraftNotice, EmptyResult, Field, Panel, Tag, WorkspacePage } from "./WorkspaceUI";
+import {
+  DataState,
+  DeltaCell,
+  EmptyResult,
+  EvidenceTag,
+  Metric,
+  Panel,
+  Tag,
+  WorkspacePage,
+} from "./WorkspaceUI";
+import {
+  ARRIVED_BY_1800,
+  CAMP_ID,
+  INCIDENTS_URL,
+  OUTCOME_METRICS,
+  VARIANTS_URL,
+  clockLabel,
+  fmt,
+  parseIncidents,
+  parseVariants,
+  replayHref,
+  useJson,
+  type Variant,
+  type VariantsIndex,
+} from "./workspaceData";
 
-export default function ComparisonPage() {
-  const [candidate, setCandidate] = useState("Scheduled departures");
+const MAX_CHANGE_LINES = 5;
+
+function metricLabel(spec: (typeof OUTCOME_METRICS)[number], when: string) {
+  return spec.key === ARRIVED_BY_1800.key ? `${spec.label} ${when}` : spec.label;
+}
+
+function VariantRow({ variant }: { variant: Variant }) {
+  const shown = variant.changes.slice(0, MAX_CHANGE_LINES);
+  const hidden = variant.changes.length - shown.length;
   return (
-    <WorkspacePage
-      title="Strategy comparison"
-      description="Change a strategy. Compare outcomes against the same starting conditions."
-      section="Analysis"
-    >
-      <DraftNotice />
-      <div className="ui-columns">
-        <Panel title="Baseline" eyebrow="Strategy A" aside={<Tag>Reference</Tag>}>
-          <Field label="Departure strategy">
-            <select defaultValue="Simultaneous departures">
-              <option>Simultaneous departures</option>
-            </select>
-          </Field>
-          <dl className="ui-facts">
-            <div>
-              <dt>Scenario snapshot</dt>
-              <dd>Not selected</dd>
-            </div>
-            <div>
-              <dt>Completed run</dt>
-              <dd>None available</dd>
-            </div>
-          </dl>
-        </Panel>
-        <Panel
-          title="Alternative"
-          eyebrow="Strategy B"
-          aside={<Tag tone="green">Candidate draft</Tag>}
+    <tr>
+      <th scope="row">
+        <strong>{variant.title}</strong>
+        <div className="ui-help">{variant.question}</div>
+        <details className="variant-notes">
+          <summary>What changed and caveats</summary>
+          <ul>
+            {shown.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+          {hidden > 0 && (
+            <p className="ui-help">
+              {hidden} more lines in the replay&rsquo;s What if&hellip; tab.
+            </p>
+          )}
+          {variant.fireChanged && (
+            <p className="ui-help">This what-if also changes the simulated fire front.</p>
+          )}
+        </details>
+      </th>
+      {OUTCOME_METRICS.map((spec) => (
+        <td className="num" key={spec.key}>
+          <DeltaCell metric={variant.headline[spec.key]} direction={spec.direction} />
+        </td>
+      ))}
+      <td className="num">
+        {variant.zoneRiskChanged === null ? "n/a" : fmt(variant.zoneRiskChanged)}
+      </td>
+      <td>
+        <EvidenceTag kind={variant.evidenceClass} />
+      </td>
+      <td>
+        <a
+          className="ui-text-link"
+          href={replayHref(CAMP_ID, `&tab=whatif&variant=${encodeURIComponent(variant.id)}`)}
         >
-          <Field label="Candidate strategy">
-            <select value={candidate} onChange={(event) => setCandidate(event.target.value)}>
-              <option>Scheduled departures</option>
-              <option>Alternative shelter allocation</option>
-              <option>Alternative route assignment</option>
-            </select>
-          </Field>
-          <dl className="ui-facts">
-            <div>
-              <dt>Intentional change</dt>
-              <dd>{candidate}</dd>
-            </div>
-            <div>
-              <dt>Completed run</dt>
-              <dd>None available</dd>
-            </div>
-          </dl>
-        </Panel>
+          View on map →
+        </a>
+      </td>
+    </tr>
+  );
+}
+
+function basisFacts(basis: VariantsIndex["basis"]): [string, string][] {
+  const o = (v: unknown) =>
+    typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
+  const text = (v: unknown) => (typeof v === "string" || typeof v === "number" ? String(v) : null);
+  const clock = o(basis.clock);
+  const network = o(basis.network);
+  const demand = o(basis.demand);
+  const models = o(basis.models);
+  const facts: [string, string | null][] = [
+    ["Random seed", text(basis.seed)],
+    [
+      "Clock (UTC)",
+      text(clock.start) && text(clock.end)
+        ? `${text(clock.start)} to ${text(clock.end)}, ${text(clock.step_s) ?? "?"} s step`
+        : null,
+    ],
+    [
+      "Road network",
+      text(network.edges)
+        ? `${text(network.edges)} edges, ${text(network.nodes) ?? "?"} nodes`
+        : null,
+    ],
+    [
+      "Demand",
+      text(demand.total_veh)
+        ? `${Number(demand.total_veh).toLocaleString("en-US")} vehicles in ${text(demand.zones) ?? "?"} zones`
+        : null,
+    ],
+    [
+      "Models",
+      Object.keys(models).length
+        ? Object.entries(models)
+            .map(([k, v]) => `${k}: ${text(v)}`)
+            .join(" · ")
+        : null,
+    ],
+  ];
+  return facts.filter((f): f is [string, string] => f[1] !== null);
+}
+
+function Comparison({ index }: { index: VariantsIndex }) {
+  const incidents = useJson(INCIDENTS_URL, parseIncidents);
+  const camp =
+    incidents.status === "ready" ? incidents.data.find((i) => i.id === CAMP_ID) : undefined;
+  const when = (camp && clockLabel(ARRIVED_BY_1800.key, camp.date, camp.timezone)) ?? "18:00 UTC";
+  const base = index.baselineMetrics;
+  const facts = basisFacts(index.basis);
+
+  return (
+    <>
+      <div className="ui-metrics">
+        <Metric
+          label={`Baseline: vehicles out by ${when}`}
+          value={fmt(base[ARRIVED_BY_1800.key] ?? null)}
+          detail="Simulated, the replayed 2018 plan"
+        />
+        <Metric
+          label="Baseline: total exposure"
+          value={fmt(base.total_exposed_veh_min ?? null)}
+          detail="Simulated vehicle-minutes, on roads plus at home"
+        />
+        <Metric
+          label="Baseline: peak blocked"
+          value={fmt(base.peak_blocked_veh ?? null)}
+          detail="Simulated vehicles"
+        />
       </div>
       <Panel
-        title="Outcome comparison"
+        title="What-if outcomes against the baseline"
         eyebrow="Computed results"
-        aside={<Tag>Awaiting compatible runs</Tag>}
+        aside={<Tag tone="amber">Counterfactual, not history</Tag>}
       >
         <div className="ui-table-scroll">
           <table className="ui-table comparison-table">
             <caption>
-              Values remain unavailable until both strategies have computed results.
+              Each cell is the what-if value, then its change from the baseline. Higher is better
+              for vehicles out; lower is better for exposure and blocked vehicles. Clearance time is
+              not shown: it is undefined when some vehicles never arrive.
             </caption>
             <thead>
               <tr>
-                <th scope="col">Measure</th>
-                <th scope="col">Baseline</th>
-                <th scope="col">Alternative</th>
-                <th scope="col">Difference</th>
+                <th scope="col">What if&hellip;</th>
+                {OUTCOME_METRICS.map((spec) => (
+                  <th scope="col" className="num" key={spec.key}>
+                    {metricLabel(spec, when)} ({spec.unit})
+                  </th>
+                ))}
+                <th scope="col" className="num">
+                  Zones with changed risk
+                </th>
+                <th scope="col">Evidence</th>
+                <th scope="col">Map</th>
               </tr>
             </thead>
             <tbody>
-              {[
-                "Clearance time (min)",
-                "Total vehicle delay (vehicle-min)",
-                "People reaching a shelter",
-                "People remaining / unreachable",
-                "People exposed to modeled hazard",
-                "Shelters at capacity",
-              ].map((metric) => (
-                <tr key={metric}>
-                  <th scope="row">{metric}</th>
-                  <td>—</td>
-                  <td>—</td>
-                  <td>Pending</td>
-                </tr>
+              {index.variants.map((variant) => (
+                <VariantRow key={variant.id} variant={variant} />
               ))}
             </tbody>
           </table>
         </div>
+        {index.skipped.length > 0 && (
+          <ul className="ui-checklist">
+            {index.skipped.map((s) => (
+              <li key={s.id}>
+                Not run: {s.title}. {s.reason}
+              </li>
+            ))}
+          </ul>
+        )}
       </Panel>
       <div className="ui-columns">
-        <Panel title="Comparison requirements">
-          <ul className="ui-checklist">
-            <li>Same population and geographic network snapshot</li>
-            <li>Same ignition, weather, and source timestamps</li>
-            <li>Same model versions, time step, horizon, and seed</li>
-            <li>Explicit record of changed strategy assumptions</li>
-          </ul>
-          <p className="ui-help">Compatibility has not been checked; no runs are loaded.</p>
+        <Panel title="Same inputs for every run" eyebrow="Reproducibility">
+          <dl className="ui-facts">
+            {facts.map(([label, value]) => (
+              <div key={label}>
+                <dt>{label}</dt>
+                <dd>{value}</dd>
+              </div>
+            ))}
+          </dl>
+          <p className="ui-help">
+            The baseline and every what-if share these inputs; the only differences are the changes
+            listed for each row.
+          </p>
         </Panel>
-        <Panel title="Trade-offs & explanation">
-          <EmptyResult title="No preferred strategy yet">
-            Model-backed differences and their limitations belong here. No ranking or confidence
-            score is available before simulation.
-          </EmptyResult>
-          <a className="ui-text-link" href="/evacuation">
-            Configure evacuation assumptions →
-          </a>
+        <Panel title="Limitations" eyebrow="Read before comparing">
+          {index.limitations.length > 0 ? (
+            <ul className="ui-checklist">
+              {index.limitations.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          ) : (
+            <EmptyResult title="No limitations recorded">
+              The index lists none. Treat results as a single-seed planning experiment anyway.
+            </EmptyResult>
+          )}
         </Panel>
       </div>
+    </>
+  );
+}
+
+export default function ComparisonPage() {
+  const load = useJson(VARIANTS_URL, parseVariants);
+  return (
+    <WorkspacePage
+      title="Strategy comparison"
+      description="Change one thing about the 2018 Camp Fire evacuation, then compare outcomes against the same starting conditions."
+      section="Analysis"
+      action={
+        <a className="ui-button" href={replayHref(CAMP_ID, "&tab=whatif")}>
+          Open What if&hellip; on the map →
+        </a>
+      }
+    >
+      {load.status !== "ready" ? (
+        <Panel title="What-if variants" eyebrow="Computed results">
+          <DataState load={load} what="what-if variants" path={VARIANTS_URL} />
+        </Panel>
+      ) : load.data.variants.length === 0 ? (
+        <Panel title="What-if variants" eyebrow="Computed results">
+          <EmptyResult title="No what-if variants listed">
+            The index has no variants. Generate them with <code>python3 -m sim.variants</code>.
+          </EmptyResult>
+        </Panel>
+      ) : (
+        <Comparison index={load.data} />
+      )}
     </WorkspacePage>
   );
 }
