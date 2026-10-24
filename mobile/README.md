@@ -68,9 +68,19 @@ accepted by the mobile configuration.
 
 ### Practice map
 
-The Practice tab, under a "practice only, not a forecast" banner, shows only the
-map and simulation: an injected stylesheet hides the web sidebar, and navigation
-away from `/fire` is blocked. It shows the web app's `/fire` page (the Rothermel fire
+The Practice tab, under a one-line "Practice only · not a forecast or evacuation
+order" banner and with no navigation title, shows only the map and simulation:
+an injected stylesheet hides the web sidebar, gives the fire page the full height
+(it otherwise reserves room for the hidden sidebar header), tightens the timeline
+dock and drops its speed caption, and navigation away from `/fire` is blocked. The fire page's run warnings (model limits such as
+constant wind and fuel moisture, or the fire reaching the edge of the modelled
+area) would stack over the map on a phone, so they collapse behind a
+**Model notes (n)** chip beside the legend; tapping it shows or hides them. The
+chip hides while the Scenario sheet is open. The board's "N" marker would sit on
+the wind label, so Practice hides it and shows a compass at the right edge above
+the legend instead. It turns with `data-north-deg`, which the web diorama
+(`app/src/fire/diorama/FireDioramaScene.ts`) publishes on its container: the
+on-screen direction of north, in degrees clockwise from screen-up. It shows the web app's `/fire` page (the Rothermel fire
 spread model) in a `WKWebView`, so the map and the TypeScript fire model run unchanged (see
 [ADR 0007](../docs/adr/0007-mobile-web-map.md)). `WEB_BASE_URL` is an origin like
 `API_BASE_URL`, with the same validation; Debug uses `http://localhost:5173`, the

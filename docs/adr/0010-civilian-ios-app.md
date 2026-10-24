@@ -15,11 +15,22 @@ while planning ahead and during an emergency. Its tabs are:
 - **My Plan:** the household meeting plan from ADR 0009. Home and My Plan share
   one `MeetingPlanStore`, so they always show the same saved plan.
 - **Practice:** the embedded web fire simulation from ADR 0007, unchanged in
-  behavior, retitled and introduced with a persistent banner: "Practice only: a
-  simulated fire from a simple model, not a forecast or an evacuation order."
+  behavior, under a persistent one-line banner: "Practice only · not a forecast
+  or evacuation order". The page's own results card also labels the output
+  "Simulated · Model output, not an observed fire". There is no navigation title,
+  since the tab bar names the screen, and the fire page takes the full height.
   Only the map and simulation show: the app injects a stylesheet that hides the
   web sidebar (logo, menu, planner links) and the planning-tools panel, and the
   web view refuses navigation away from `/maps`.
+
+On a phone, the fire page's run warnings stack over the map. Practice collapses
+them behind a **Model notes (n)** chip (injected outside the page's React tree,
+counting `.fr-warnings` items) instead of removing them, so the model's stated
+limits stay one tap away. The board's own "N" marker is hidden in favour of a
+compass at the side. To keep it true when the board is rotated or panned, the web
+diorama publishes `data-north-deg` (north's on-screen direction, degrees clockwise
+from screen-up, rounded) on its container each time it changes; the web page
+itself looks the same.
 
 ## Rules this follows
 

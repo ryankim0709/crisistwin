@@ -50,6 +50,9 @@ const MIN_BURN_WINDOW_MINUTES = 20;
 const MIN_FOCUS_SIZE = 70;
 /** Candidate ground lengths for the scale bar (metres). */
 const SCALE_STEPS = [100, 200, 250, 500, 1000, 2000, 2500, 5000, 10000, 20000, 25000, 50000];
+/** Scratch points for the published compass heading (board centre and a point due north, -z). */
+const COMPASS_FROM = new THREE.Vector3();
+const COMPASS_TO = new THREE.Vector3();
 /** Screen-space footprint of the ignition pin (CSS px) that place labels keep clear of. */
 const PIN_RECT_HALF_W_PX = 14;
 const PIN_RECT_H_PX = 40;
@@ -776,6 +779,7 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     this.windLabel.obj.position.copy(this.fx.windAnchor);
     this.renderer.render(this.scene, this.rig.camera);
     this.labels.render(this.scene, this.rig.camera);
+    this.publishNorth();
     this.labels.clip(
       this.rig.camera,
       this.width,
@@ -883,6 +887,21 @@ export class FireDioramaScene implements FireDioramaSceneApi {
       this.rig.zoomBy(KEY_ZOOM_STEP);
     }
   };
+
+  /**
+   * Publishes the on-screen direction of north as `data-north-deg` on the container (degrees
+   * clockwise from screen-up), so a compass outside the scene, such as the iOS app's, can follow
+   * the camera. Written only when the rounded value changes.
+   */
+  private publishNorth() {
+    const camera = this.rig.camera;
+    const from = COMPASS_FROM.set(0, 0, 0).project(camera);
+    const to = COMPASS_TO.set(0, 0, -(this.board?.frame.halfD ?? 1)).project(camera);
+    const dx = ((to.x - from.x) * this.width) / 2;
+    const dy = ((to.y - from.y) * this.height) / 2;
+    const deg = String(Math.round(THREE.MathUtils.radToDeg(Math.atan2(dx, dy))));
+    if (this.container.dataset.northDeg !== deg) this.container.dataset.northDeg = deg;
+  }
 
   /** Raycasts the board at CSS px (x, y) and reports the geographic point when on it. */
   private clickAt(x: number, y: number) {
