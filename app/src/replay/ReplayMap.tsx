@@ -64,11 +64,9 @@ const ZONE_FLASH_RECENT_MS = 20 * 60_000;
 const ZONE_FLASH_TICK_MS = 50;
 /** The ignition text is hidden this long after the assumed ignition time. */
 const IGNITION_LABEL_MS = 90 * 60_000;
-/** Opening camera per incident; otherwise the bundle bbox is fitted. */
-const INITIAL_VIEW: Record<string, { center: LngLat; zoom: number }> = {
-  // Frames both the assumed ignition near Pulga and Paradise, so the fire is on screen at open.
-  "camp-2018-paradise-slice": { center: [-121.52, 39.79], zoom: 11.0 },
-};
+/** Opening camera: padding around the home coordinates (ignition and reference place). */
+const HOME_PADDING = { top: 160, bottom: 200, left: 120, right: 120 };
+const HOME_MAX_ZOOM = 11.5;
 const FRESHNESS_BUCKET_MS = 10 * 60_000;
 const MIN_ZOOM = 7;
 const MAX_BOUNDS_PAD_DEG = 2.5;
@@ -124,6 +122,17 @@ async function loadBasemapStyle(signal: AbortSignal): Promise<BasemapStyle | nul
 
 function fmt(n: unknown, digits = 0): string {
   return typeof n === "number" ? n.toLocaleString("en-US", { maximumFractionDigits: digits }) : "—";
+}
+
+function boundsOf(coords: LngLat[]): [number, number, number, number] {
+  let [w, s, e, n] = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const [x, y] of coords) {
+    w = Math.min(w, x);
+    s = Math.min(s, y);
+    e = Math.max(e, x);
+    n = Math.max(n, y);
+  }
+  return [w, s, e, n];
 }
 
 function evidenceText(value: unknown): string {
@@ -246,6 +255,8 @@ export interface ReplayMapProps {
   onPick: ((p: LngLat) => void) | null;
   focus: MapFocus | null;
   basemapChoice: BasemapChoice;
+  /** Coordinates the opening camera frames (e.g. ignition and reference place). */
+  home: LngLat[];
   /** Receives the map once replay layers are installed, and null when it is removed. */
   onMapReady?: (map: MapLibreMap | null) => void;
 }
@@ -265,7 +276,9 @@ export default function ReplayMap({
   onPick,
   focus,
   basemapChoice,
+  home,
 }: ReplayMapProps) {
+  const homeRef = useRef(home);
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const perParticleRef = useRef(1);
@@ -319,7 +332,8 @@ export default function ReplayMap({
         m = new MapLibreMap({
           container,
           style: style ?? FALLBACK_STYLE,
-          ...(INITIAL_VIEW[model.incident.id] ?? { bounds: model.bbox, fitBoundsOptions: { padding: 48 } }),
+          bounds: boundsOf(homeRef.current),
+          fitBoundsOptions: { padding: HOME_PADDING, maxZoom: HOME_MAX_ZOOM },
           attributionControl: { compact: true },
           // Zoomed out far enough to see Northern California, but never lose the incident.
           minZoom: MIN_ZOOM,

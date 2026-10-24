@@ -196,6 +196,19 @@ export function ignitionBasis(model: ReplayModel): "assumed" | "reconstructed" {
   return /^reconstructed\b/i.test(p) ? "reconstructed" : "assumed";
 }
 
+/** Calendar year of the incident (clock start, local time). */
+export function incidentYear(model: ReplayModel): string {
+  return new Intl.DateTimeFormat("en-US", { timeZone: model.incident.timezone, year: "numeric" }).format(
+    model.clock.startMs,
+  );
+}
+
+/** Short name of who recorded the fire observations ("NIST"), or a neutral word. */
+export function observationSource(model: ReplayModel): string {
+  const label = model.fireObservations?.sourceLabel ?? "";
+  return /\bNIST\b/.test(label) ? "NIST" : "recorded";
+}
+
 export function hasFixtureData(model: ReplayModel): boolean {
   return Object.values(model.layerStatus).some((s) => s.status === "fixture");
 }

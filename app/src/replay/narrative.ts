@@ -1,15 +1,12 @@
 // Pure builder for the one-line map caption. Every fact comes from the bundle.
 import { arrivalAt, distanceM, inArea } from "./insights";
 import { eventCategory, lastAtOrBefore, perimeterIndexAt, simulatedFrontIndexAt } from "./timeline";
+import type { ReferencePlace } from "./places";
 import type { AreaGeometry, LngLat, ReplayModel } from "./types";
 
 /** Events older than this (sim time) drop out of the caption. */
 export const CAPTION_EVENT_WINDOW_MS = 20 * 60_000;
 
-/** Reference place per incident for "fire N km from X". */
-export const CAPTION_PLACES: Record<string, { name: string; coord: LngLat }> = {
-  "camp-2018-paradise-slice": { name: "Paradise", coord: [-121.6, 39.76] },
-};
 
 const SNAPPED_NOTE = /\s*\[snapped:[^\]]*\]\s*$/;
 
@@ -33,7 +30,12 @@ export interface Caption {
   fire: string | null;
 }
 
-export function buildCaption(model: ReplayModel, t: number, frameIndex: number): Caption {
+export function buildCaption(
+  model: ReplayModel,
+  t: number,
+  frameIndex: number,
+  place: ReferencePlace | null,
+): Caption {
   // Within the window, a historical record wins over fixture placeholders (e.g. synthetic
   // zone orders), which otherwise crowd out the real 2018 alerts.
   let event: Caption["event"] = null;
@@ -52,7 +54,6 @@ export function buildCaption(model: ReplayModel, t: number, frameIndex: number):
   const enRouteVeh = model.traffic && frameIndex >= 0 ? (model.traffic.metrics[frameIndex]?.enRouteVeh ?? null) : null;
 
   let fire: string | null = null;
-  const place = CAPTION_PLACES[model.incident.id];
   if (place) {
     const perimeterIndex = perimeterIndexAt(model, t);
     const simIndex = simulatedFrontIndexAt(model, t);

@@ -42,7 +42,7 @@ function formatModel(value: string | number): string {
   return value;
 }
 
-function ScoreRow({ row }: { row: ValidationRow }) {
+function ScoreRow({ row, year }: { row: ValidationRow; year: string }) {
   const tuned = row.comparability === "tuned";
   // Time deltas first: they are the comparison itself.
   const fields = [...row.model].sort(
@@ -62,7 +62,7 @@ function ScoreRow({ row }: { row: ValidationRow }) {
       <div className="rp-score-cols">
         <div>
           <small>
-            2018 published {row.evidenceClass && <EvidenceChip value={row.evidenceClass} />}
+            {year} published {row.evidenceClass && <EvidenceChip value={row.evidenceClass} />}
           </small>
           <span className="rp-score-value">{formatPublished(row)}</span>
           {row.sourceLocator?.startsWith("http") && (
@@ -103,13 +103,13 @@ function ScoreRow({ row }: { row: ValidationRow }) {
   );
 }
 
-/** "Model vs 2018": published NIST figures beside the model's closest output, with how comparable each is. */
-export default function ValidationTab({ validation }: { validation: Validation }) {
+/** "Model vs <year>": published figures beside the model's closest output, with how comparable each is. */
+export default function ValidationTab({ validation, year }: { validation: Validation; year: string }) {
   const grades = Object.entries(validation.grades);
   return (
     <div className="rp-tab">
       <p className="rp-disclaimer rp-disclaimer--top" role="note">
-        Published 2018 figures (NIST reconstruction) beside the model&apos;s closest output. Each row says how
+        Published {year} figures (reconstructions such as NIST&apos;s) beside the model&apos;s closest output. Each row says how
         comparable the two are; none of this is operational guidance. A <strong>tuned</strong> row was used to set a
         model parameter, so agreement there is not validation. Time differences are in minutes; negative means the model
         is earlier than the published time.
@@ -134,7 +134,7 @@ export default function ValidationTab({ validation }: { validation: Validation }
       ) : (
         <ul className="rp-scores">
           {validation.rows.map((row) => (
-            <ScoreRow key={row.targetId} row={row} />
+            <ScoreRow key={row.targetId} row={row} year={year} />
           ))}
         </ul>
       )}

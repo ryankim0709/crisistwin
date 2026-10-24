@@ -8,7 +8,8 @@ import StoryMode from "./StoryMode";
 import { buildChapters, revealRows } from "./story";
 import Tour from "./Tour";
 import ValidationTab from "./ValidationTab";
-import { REPLAY_TOUR, SIMULATION_TOUR, markTourSeen, tourSeen } from "./tourSteps";
+import { homeCoords, referencePlace } from "./places";
+import { markTourSeen, replayTour, simulationTour, tourSeen } from "./tourSteps";
 import { useVariants } from "./useVariants";
 import { IMAGERY_DATE_NOTE, LAYER_GROUPS, type Basemap, type LayerGroup } from "./mapLayers";
 import ReplayMap, { type MapFocus } from "./ReplayMap";
@@ -21,6 +22,8 @@ import {
   frameIndexAt,
   hasFixtureData,
   ignitionBasis,
+  incidentYear,
+  observationSource,
   lastAtOrBefore,
   localTime,
   perimeterIndexAt,
@@ -33,7 +36,8 @@ import { EvidenceChip } from "./parts";
 import type { LngLat, ReplayModel } from "./types";
 import "./replay.css";
 
-const LOAD_TIMEOUT_MS = 30_000;
+// Large bundles (Kincade is ~40 MB) need longer than the default fetch window.
+const LOAD_TIMEOUT_MS = 90_000;
 const fmtN = (n: number) => n.toLocaleString("en-US");
 const DEFAULT_SPEED = SPEEDS[1].value;
 const STEP_SECONDS = 10 * 60;
@@ -159,6 +163,13 @@ function ReplayScreen({ model: baseline, config, picker }: { model: ReplayModel;
   const variants = useVariants(baseline, config.variantsUrl);
   const model = variants.shown?.model ?? baseline;
   const selectVariant = variants.select;
+  // Where "fire N km from X" is measured and what the camera opens on; derived per bundle.
+  const place = useMemo(() => referencePlace(baseline, config.place), [baseline, config.place]);
+  const home = useMemo(() => homeCoords(baseline, place), [baseline, place]);
+  const tourSteps = useMemo(
+    () => (config.kind === "simulation" ? simulationTour(baseline, place) : replayTour(baseline, place)),
+    [baseline, place, config.kind],
+  );
   const { startMs, endMs } = model.clock;
   const [simTimeMs, setSimTimeMs] = useState(startMs);
   const [playing, setPlaying] = useState(false);
@@ -248,7 +259,7 @@ function ReplayScreen({ model: baseline, config, picker }: { model: ReplayModel;
   const baselineDemand = baseline.traffic?.totalVeh ?? null;
   const variantsStale = variantDemand !== null && baselineDemand !== null && variantDemand !== baselineDemand;
   const usableIndex = variantsStale ? null : variants.index;
-  const chapters = useMemo(() => buildChapters(baseline, usableIndex), [baseline, usableIndex]);
+  const chapters = useMemo(() => buildChapters(baseline, usableIndex, place), [baseline, usableIndex, place]);
   const reveal = useMemo(() => (usableIndex ? revealRows(usableIndex) : []), [usableIndex]);
   const startStory = useCallback(() => {
     markTourSeen(config.kind);
@@ -377,8 +388,8 @@ function ReplayScreen({ model: baseline, config, picker }: { model: ReplayModel;
       ? [
           {
             id: "validation" as const,
-            label: "Model vs 2018",
-            content: <ValidationTab validation={baseline.validation} />,
+            label: `Model vs ${incidentYear(baseline)}`,
+            content: <ValidationTab validation={baseline.validation} year={incidentYear(baseline)} />,
           },
         ]
       : []),
@@ -386,14 +397,14 @@ function ReplayScreen({ model: baseline, config, picker }: { model: ReplayModel;
       ? [
           {
             id: "responders" as const,
-            label: "Responders vs 2018",
+            label: `Responders vs ${incidentYear(baseline)}`,
             content: <RespondersTab responders={model.responders} />,
           },
         ]
       : []),
     ...(config.stressUrl ? [{ id: "stress" as const, label: "Stress test", content: <StressTab url={config.stressUrl} /> }] : []),
   ];
-  const caption = buildCaption(model, simTimeMs, frameIndex);
+  const caption = buildCaption(model, simTimeMs, frameIndex, place);
   // While a what-if is on the map, set it against the baseline at the same clock time.
   const baselineFrame = variants.shown ? frameIndexAt(baseline, simTimeMs) : -1;
   const variantDelta =
@@ -434,6 +445,7 @@ function ReplayScreen({ model: baseline, config, picker }: { model: ReplayModel;
           onPick={tab === "evacuee" ? setPin : null}
           focus={focus}
           basemapChoice={basemap}
+          home={home}
         />
 
         <p className="rp-caption" aria-live="off">
@@ -468,7 +480,7 @@ function ReplayScreen({ model: baseline, config, picker }: { model: ReplayModel;
               {fixture && <span className="rp-fixture-tag">FIXTURE DEMAND</span>}
               {derivedDemand && (
                 <span className="rp-status-chip rp-status-chip--derived">
-                  DERIVED: Census demand, NIST orders via crosswalk
+                  DERIVED: Census demand, orders via crosswalk
                 </span>
               )}
               <span className="rp-status-more">{statusOpen ? "Hide ▴" : "What does this mean? ▾"}</span>
@@ -511,7 +523,7 @@ function ReplayScreen({ model: baseline, config, picker }: { model: ReplayModel;
                       {model.demand.evacuatingVehiclesMoe != null && <> (± {fmtN(model.demand.evacuatingVehiclesMoe)})</>}
                     </>
                   )}
-                  . Evacuation orders and warnings are NIST records, mapped to block groups through a crosswalk with
+                  . Evacuation orders and warnings are historical records, mapped to block groups through a crosswalk with
                   stated confidence.
                 </p>
               )}
@@ -546,13 +558,13 @@ function ReplayScreen({ model: baseline, config, picker }: { model: ReplayModel;
                 )}
                 {simFrontIndex >= 0 && visibility.simFire && model.fireSimulated && (
                   <span className="rp-calibration">
-                    <EvidenceChip value="simulated" /> Model check vs NIST:{" "}
+                    <EvidenceChip value="simulated" /> Model check vs {observationSource(model)} observations:{" "}
                     {model.fireSimulated.calibrationHeadline ?? "no calibration summary"}
                     {model.fireSimulated.calibrationIou != null && (
                       <> · perimeter IoU {model.fireSimulated.calibrationIou.toFixed(2)}</>
                     )}
                     {model.fireObservations && visibility.fireObs && (
-                      <> · yellow dots: {fmtN(observedSoFar)} NIST fire observations so far</>
+                      <> · yellow dots: {fmtN(observedSoFar)} {observationSource(model)} fire observations so far</>
                     )}
                   </span>
                 )}
@@ -600,6 +612,7 @@ function ReplayScreen({ model: baseline, config, picker }: { model: ReplayModel;
           </div>
           <MapLegend
             windFromDeg={model.fireSimulated?.windFromDeg ?? null}
+            fireObsSource={model.fireObservations ? observationSource(model) : null}
             open={legendOpen || tourOpen}
             onToggle={() => setLegendOpen((o) => !o)}
           />
@@ -702,7 +715,7 @@ function ReplayScreen({ model: baseline, config, picker }: { model: ReplayModel;
       </aside>
       {tourOpen && (
         <Tour
-          steps={sim ? SIMULATION_TOUR : REPLAY_TOUR}
+          steps={tourSteps}
           onSeek={seekAndPause}
           onClose={closeTour}
           onStory={chapters.length > 0 ? startStory : undefined}

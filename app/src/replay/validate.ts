@@ -697,6 +697,14 @@ export function parseBundle(data: unknown): ReplayModel {
       name: str(incident.name, "incident.name"),
       packageVersion: optStr(incident.package_version, "incident.package_version"),
       timezone,
+      // Both optional and lenient: a bad value is ignored rather than failing the bundle.
+      place: typeof incident.place === "string" ? incident.place : null,
+      referencePoint: (() => {
+        const r = incident.reference_point;
+        if (!isObj(r) || typeof r.name !== "string" || !Array.isArray(r.coord)) return null;
+        const [lon, lat] = r.coord;
+        return typeof lon === "number" && typeof lat === "number" ? { name: r.name, coord: [lon, lat] as LngLat } : null;
+      })(),
     },
     mode: str(b.mode, "mode"),
     clock: { startMs, endMs, stepSeconds },

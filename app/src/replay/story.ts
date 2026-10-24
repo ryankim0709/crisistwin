@@ -3,8 +3,9 @@
 // and carries that item's evidence class. Pure: no React, DOM or MapLibre here.
 import { VARIANT_CAVEATS, featurable, type VariantIndex } from "./compare";
 import { distanceM, inArea } from "./insights";
-import { CAPTION_PLACES, buildCaption, splitSnappedNote } from "./narrative";
-import { frameIndexAt, ignitionBasis, perimeterIndexAt, simulatedFrontIndexAt } from "./timeline";
+import { buildCaption, splitSnappedNote } from "./narrative";
+import type { ReferencePlace } from "./places";
+import { frameIndexAt, ignitionBasis, incidentYear, observationSource, perimeterIndexAt, simulatedFrontIndexAt } from "./timeline";
 import type { AreaGeometry, EvidenceClass, LngLat, ReplayEvent, ReplayModel } from "./types";
 
 export interface Chapter {
@@ -124,12 +125,17 @@ function isOrder(e: ReplayEvent): boolean {
 }
 
 /** Chapters in clock order. Chapters whose source data is absent are simply left out. */
-export function buildChapters(model: ReplayModel, variants: VariantIndex | null): Chapter[] {
+export function buildChapters(
+  model: ReplayModel,
+  variants: VariantIndex | null,
+  place: ReferencePlace | null,
+): Chapter[] {
   const chapters: Chapter[] = [];
+  const obs = observationSource(model);
   const roads = edgeCoordLookup(model);
-  const place = CAPTION_PLACES[model.incident.id] ?? null;
+
   const fireLine = (t: number) => {
-    const fire = buildCaption(model, t, frameIndexAt(model, t)).fire;
+    const fire = buildCaption(model, t, frameIndexAt(model, t), place).fire;
     if (!fire) return "";
     // Caption fragments ("model fire 12.0 km from Paradise") as a full sentence.
     const text = fire
@@ -154,7 +160,8 @@ export function buildChapters(model: ReplayModel, variants: VariantIndex | null)
       body:
         (reported && ignition ? `${sentence(splitSnappedNote(reported.label).text)} ${sentence(ignition.label)} ` : "") +
         `Until the first satellite image, the orange area is a fire-spread model started from the ${basis} ` +
-        "ignition, not an observation. Yellow dots are places where NIST records fire being seen.",
+        "ignition, not an observation." +
+        (model.fireObservations ? ` Yellow dots are places where ${obs} observations record fire being seen.` : ""),
       evidence: opening.evidenceClass,
       focus: [...(ignitionCoord ? [ignitionCoord] : []), ...(place ? [place.coord] : [])],
     });
@@ -201,7 +208,7 @@ export function buildChapters(model: ReplayModel, variants: VariantIndex | null)
           (gapMin !== null && gapMin >= 0
             ? ` That is ${gapMin} minute${gapMin === 1 ? "" : "s"} after the first order for ${place.name}.`
             : "") +
-          " Bright yellow dots are NIST observations from the last 30 minutes.",
+          (model.fireObservations ? ` Bright yellow dots are ${obs} observations from the last 30 minutes.` : ""),
         evidence: arrival.evidenceClass,
         focus: [...observationCoords(model, arrival.atMs), place.coord],
       });
@@ -221,7 +228,7 @@ export function buildChapters(model: ReplayModel, variants: VariantIndex | null)
       body:
         sentence(splitSnappedNote(trapped.label).text) +
         (burnovers.length > 0
-          ? ` In 2018, NIST recorded ${row?.published ?? burnovers.length} burnovers; the first in this replay: ` +
+          ? ` In ${incidentYear(model)}, ${row?.published ?? burnovers.length} burnovers were recorded; the first in this replay: ` +
             `${sentence(splitSnappedNote(burnovers[0].label).text, false)} (reconstructed).`
           : "") +
         (row?.comparability === "tuned" ? " The model was tuned to that count, so the match is not validation." : ""),
@@ -287,7 +294,7 @@ export function buildChapters(model: ReplayModel, variants: VariantIndex | null)
       title: `First satellite perimeter${perimeter.areaKm2 != null ? `: ${perimeter.areaKm2.toFixed(0)} km²` : ""}`,
       body:
         "The dashed line is the satellite estimate; from here it replaces the model fire." +
-        (check ? ` Model check against NIST observations: ${check}.` : "") +
+        (check ? ` Model check against ${obs} observations: ${check}.` : "") +
         (iou != null ? ` Perimeter overlap (IoU) ${iou.toFixed(2)}, evaluation only.` : ""),
       evidence: perimeter.evidenceClass,
       focus: ringCoords(perimeter.geometry),

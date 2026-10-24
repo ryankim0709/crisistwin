@@ -295,7 +295,16 @@ export interface Validation {
 
 export interface ReplayModel {
   schemaVersion: string;
-  incident: { id: string; name: string; packageVersion: string | null; timezone: string };
+  incident: {
+    id: string;
+    name: string;
+    packageVersion: string | null;
+    timezone: string;
+    /** Optional "Town, ST" the bundle names; used to label the distance reference. */
+    place: string | null;
+    /** Optional named point the bundle provides for "fire N km from X". */
+    referencePoint: { name: string; coord: LngLat } | null;
+  };
   mode: string;
   clock: { startMs: number; endMs: number; stepSeconds: number };
   bbox: [number, number, number, number];
