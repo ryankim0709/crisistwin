@@ -7,7 +7,7 @@ livecore values and renders livecore results in the wire shapes of docs/live-rep
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
@@ -321,6 +321,8 @@ class Snapshot:
     blocked: frozenset[str]
     full_destinations: frozenset[str]
     fire: FireEstimate
+    injects: list[dict[str, Any]] = field(default_factory=list)
+    """Drill injects (``injects.apply_due``), any status; ``twin_service`` applies the due ones."""
 
 
 def load_public(
@@ -344,12 +346,16 @@ def load_snapshot(incident_id: str, now: datetime) -> Snapshot:
     index = get_index()
     doc = drill_doc(incident_id)
     clock = clock_from(doc, index, now)
+    from . import injects as injects_mod  # local: injects reads clock_from and drill_doc from this module
+
+    injects = injects_mod.apply_due(index, incident_id, clock.replay_now, now)
     if clock.replay_now is not None:
         from .groundrecord import materialize_due  # local: groundrecord imports this module's dependencies
 
-        materialize_due(index, incident_id, clock, now)
+        materialize_due(index, incident_id, clock, now, injects)
     report_docs, facts, items, state = load_public(incident_id, now, index)
-    fire = estimate_fire(index.drill, clock.replay_now, public.confirmed_fire_points(facts, items))
+    fire = estimate_fire(index.drill, clock.replay_now, public.confirmed_fire_points(facts, items),
+                         injects_mod.rules.spots_due(injects, clock.replay_now))
     return Snapshot(
         incident_id=incident_id,
         index=index,
@@ -363,6 +369,7 @@ def load_snapshot(incident_id: str, now: datetime) -> Snapshot:
         blocked=frozenset(public.guidance_blocked_segments(state)),
         full_destinations=frozenset(public.full_destination_ids(items)),
         fire=fire,
+        injects=injects,
     )
 
 

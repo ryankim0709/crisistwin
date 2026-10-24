@@ -192,6 +192,8 @@ class _Session:
     guidance_seen: set[tuple[str, int, str | None]] = field(default_factory=set)
     """(zone id, guidance version, published_at ISO) already turned into commands; versions
     restart at 1 after a drill reset, so the version alone is not unique."""
+    injects: dict[str, dict[str, str]] = field(default_factory=dict)
+    """Inject id -> ``{type, segment_id?}`` of the drill injects already commanded (``inject:`` keys)."""
     errors: list[dict[str, Any]] = field(default_factory=list)
     """Recent rejected commands, newest last (bounded)."""
     seq: int = 0
@@ -267,6 +269,7 @@ def _desired_commands(sess: _Session, snapshot: Snapshot) -> list[tuple[datetime
              "actor": dict(BLOCK_ACTOR), "rationale": "Block no longer in effect"},
             None,
         ))
+    out.extend(_inject_commands(sess, snapshot))
     for doc in current_guidance(snapshot.incident_id, index):
         gkey = _guidance_key(doc)
         if gkey in sess.guidance_seen:
@@ -286,6 +289,45 @@ def _desired_commands(sess: _Session, snapshot: Snapshot) -> list[tuple[datetime
                          "actor": actor, "rationale": why}, None))
         out.append((when, f"seen:{zone_id}:{doc['version']}", {}, gkey))
     out.sort(key=lambda c: (c[0], c[1]))
+    return out
+
+
+def _inject_commands(sess: _Session, snapshot: Snapshot) -> list[tuple[datetime, str, dict[str, Any], Any]]:
+    """Twin commands of drill injects (``api.live.injects``): a silent closure closes the road and a
+    full shelter fills the destination, from the inject's drill time. Operator commands labeled
+    ``Injected``; no report is created, so guidance and the public map do not know. A deleted
+    silent closure reopens its road; a full shelter cannot be undone (until the drill restarts)."""
+    index = snapshot.index
+    out: list[tuple[datetime, str, dict[str, Any], Any]] = []
+    due = {
+        d["id"]: d for d in getattr(snapshot, "injects", ())
+        if d["type"] in ("silent_closure", "shelter_full") and d["at"] <= snapshot.clock.replay_now
+    }
+    names = {d.id: d.name for d in index.drill.destinations}
+    for inj_id, doc in sorted(due.items()):
+        if inj_id in sess.injects:
+            continue
+        actor = {"kind": "operator", "id": f"inject:{inj_id}"}
+        if doc["type"] == "silent_closure":
+            seg = doc["params"]["segment_id"]
+            edge_ids = list(index.drill.roads.segment_edges.get(seg, ()))
+            if not edge_ids:
+                continue
+            name = index.segment_names.get(seg) or "unnamed road"
+            action = {"type": "close_road", "target": {"edge_ids": edge_ids}, "params": {"mode": "hard"},
+                      "actor": actor, "rationale": f"Injected (simulated): {name} closed, no report"}
+        else:
+            dest = doc["params"]["destination_id"]
+            action = {"type": "fill_destination", "target": {"destination_id": dest}, "params": {},
+                      "actor": actor, "rationale": f"Injected (simulated): {names.get(dest, dest)} full"}
+        out.append((doc["at"], f"inject:{inj_id}", action, None))
+    for inj_id, info in sorted(sess.injects.items()):
+        if inj_id not in due and info["type"] == "silent_closure":
+            edge_ids = list(index.drill.roads.segment_edges.get(info["segment_id"], ()))
+            out.append((snapshot.clock.replay_now, f"injectoff:{inj_id}",
+                        {"type": "reopen_road", "target": {"edge_ids": edge_ids}, "params": {},
+                         "actor": {"kind": "operator", "id": f"inject:{inj_id}"},
+                         "rationale": "Injected (simulated): closure removed"}, None))
     return out
 
 
@@ -337,6 +379,7 @@ def _sync(sess: _Session, snapshot: Snapshot, twinmod) -> None:
         sess.twin = twinmod.Twin.from_inputs(inputs, start_at=iso(start), session_id=f"{snapshot.incident_id}:live")
         sess.built_from = iso(start)
         sess.blocks.clear()
+        sess.injects.clear()
         sess.zone_dest.clear()
         sess.guidance_seen.clear()
         sess.zone_version.clear()
@@ -357,7 +400,7 @@ def _sync(sess: _Session, snapshot: Snapshot, twinmod) -> None:
         try:
             record = twin.apply(action)["action"]
         except twinmod.ActionError as exc:
-            if exc.code in ("already_ordered", "not_closed", "fire_closed_not_reopenable"):
+            if exc.code in ("already_ordered", "not_closed", "fire_closed_not_reopenable", "already_full"):
                 record = None  # the state the command asks for already holds
             else:
                 sess.errors = (sess.errors + [{"key": key, **exc.to_dict(), "at": twin.now}])[-MAX_ERRORS_KEPT:]
@@ -368,6 +411,11 @@ def _sync(sess: _Session, snapshot: Snapshot, twinmod) -> None:
             sess.blocks[rest] = record["id"] if record else ""
         elif kind == "reopen":
             sess.blocks.pop(rest, None)
+        elif kind == "inject":
+            doc = next(d for d in getattr(snapshot, "injects", ()) if d["id"] == rest)
+            sess.injects[rest] = {"type": doc["type"], "segment_id": doc["params"].get("segment_id", "")}
+        elif kind == "injectoff":
+            sess.injects.pop(rest, None)
         elif kind == "route":
             sess.zone_dest[rest.rsplit(":", 1)[0]] = action["params"]["destination_id"]
     if not twin.finished:
@@ -554,7 +602,8 @@ def monitor(snapshot: Snapshot) -> dict[str, Any]:
             "destinations": destinations,
             "closed_edges": len(snap["closed"]["rows"]),
             "commands": [
-                {k: a.get(k) for k in ("id", "type", "label", "effective_at", "status", "actor", "rationale")}
+                {**{k: a.get(k) for k in ("id", "type", "label", "effective_at", "status", "actor", "rationale")},
+                 **({"label": a["rationale"]} if str(a["actor"].get("id", "")).startswith("inject:") else {})}
                 for a in twin.action_log()
             ],
             "command_errors": list(sess.errors) + unreachable,

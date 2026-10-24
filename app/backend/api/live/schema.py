@@ -124,6 +124,19 @@ VALIDATORS: dict[str, dict[str, Any]] = {
             "decided_at": NULLABLE_DATE,
         },
     ),
+    "live_injects": _schema(
+        ["id", "incident_id", "type", "params", "at", "status", "actor", "created_at"],
+        {
+            "id": STR,
+            "incident_id": STR,
+            "type": _enum("psap_reroute", "comms_outage", "silent_closure", "shelter_full", "fire_jump"),
+            "params": {"bsonType": "object"},
+            "at": DATE,
+            "status": _enum("scheduled", "active", "ended"),
+            "actor": STR,
+            "created_at": DATE,
+        },
+    ),
     "live_checkins": _schema(
         ["id", "incident_id", "party_key", "status", "at"],
         {
@@ -198,6 +211,10 @@ INDEXES: dict[str, list[IndexModel]] = {
         IndexModel([("id", ASCENDING)], unique=True),
         IndexModel([("incident_id", ASCENDING), ("status", ASCENDING), ("created_at", DESCENDING)]),
     ],
+    "live_injects": [
+        IndexModel([("id", ASCENDING)], unique=True),
+        IndexModel([("incident_id", ASCENDING), ("at", ASCENDING)]),
+    ],
     "live_checkins": [
         IndexModel([("incident_id", ASCENDING), ("party_key", ASCENDING)], unique=True),
         IndexModel([("incident_id", ASCENDING), ("zone_id", ASCENDING), ("status", ASCENDING)]),
@@ -220,6 +237,7 @@ DRILL_DATA_COLLECTIONS = (
     "live_drills",
     "live_guidance",
     "live_proposals",
+    "live_injects",
     "live_checkins",
     "live_destination_choices",
     "live_responder_locations",

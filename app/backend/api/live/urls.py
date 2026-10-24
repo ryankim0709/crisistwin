@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import responder_routing, views
+from . import injects, responder_routing, views
 
 urlpatterns = [
     path("devices", views.devices, name="live-devices"),
@@ -17,6 +17,8 @@ urlpatterns = [
     path("incidents/<str:incident_id>/command", views.command, name="live-command"),
     path("incidents/<str:incident_id>/replan", views.replan, name="live-replan"),
     path("incidents/<str:incident_id>/drill", views.drill_action, name="live-drill"),
+    path("incidents/<str:incident_id>/injects", injects.incident_injects, name="live-injects"),
+    path("incidents/<str:incident_id>/injects/<str:inject_id>", injects.delete_inject, name="live-inject"),
     path("incidents/<str:incident_id>/twin", views.twin, name="live-twin"),
     path("incidents/<str:incident_id>/twin/whatif", views.twin_whatif, name="live-twin-whatif"),
     path("me/reports", views.my_reports, name="live-my-reports"),

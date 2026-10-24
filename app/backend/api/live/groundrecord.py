@@ -16,11 +16,13 @@ from threading import Lock
 from typing import Any
 
 from django.conf import settings
+from livecore import injects as rules
 from livecore.geo import point_in_multipolygon
 
 from pymongo import UpdateOne
 
 from .common import ApiError, col, iso, new_id, parse_iso
+from . import injects as injects_mod
 from .drillcache import DrillIndex, snap_to_segment
 
 log = logging.getLogger(__name__)
@@ -107,10 +109,18 @@ def get_record(index: DrillIndex) -> GroundRecord:
     return _record
 
 
-def ground_record_json(index: DrillIndex, until: datetime) -> dict[str, Any]:
-    """Items up to drill time ``until`` (newest first), totals so far and per-zone activity in the window."""
+def _rerouted(psap: dict[str, Any], at: datetime, item: dict[str, Any]) -> bool:
+    """A 911 entry of a zone whose calls a ``psap_reroute`` inject sends elsewhere at ``at``."""
+    return item["channel"] == "911" and item["zone_id"] in psap and rules.in_window(psap[item["zone_id"]], at)
+
+
+def ground_record_json(index: DrillIndex, until: datetime, injects: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Items up to drill time ``until`` (newest first), totals so far and per-zone activity in the window.
+
+    ``injects``: a ``psap_reroute`` drops the 911 entries of its zones from its time on."""
     record = get_record(index)
-    past = [(at, item) for at, item in record.items if at <= until]
+    psap = injects_mod.psap_windows(injects)
+    past = [(at, item) for at, item in record.items if at <= until and not _rerouted(psap, at, item)]
     since = until - timedelta(minutes=WINDOW_MIN)
     totals = dict.fromkeys(CHANNELS, 0)
     window = dict.fromkeys(CHANNELS, 0)
@@ -157,20 +167,26 @@ def _wall_at(at: datetime, clock: Any, wall: datetime) -> datetime:
     return min(wall, clock.started_at + (at - clock.replay_start) / clock.speed)
 
 
-def materialize_due(index: DrillIndex, incident_id: str, clock: Any, wall: datetime) -> int:
+def materialize_due(index: DrillIndex, incident_id: str, clock: Any, wall: datetime,
+                    injects: list[dict[str, Any]] | None = None) -> int:
     """Upsert record items that the drill clock has passed into ``live_reports`` as unverified
     ``historical_record`` reports, so they join the review queue. Idempotent by ``client_id``.
     They count for nothing (corroboration, public map, road state, fire) until a controller
-    confirms them (see ``state.load_public``). Returns how many were new to this process."""
+    confirms them (see ``state.load_public``). Returns how many were new to this process.
+
+    A ``psap_reroute`` inject drops the 911 entries of its zones from its time on (``injects``)."""
     record = get_record(index)
     if not record.available:
         return 0
     replay_now = clock.replay_now
     done = _materialized.setdefault(incident_id, set())
+    psap = injects_mod.psap_windows(injects)
     ops = []
     for at, item in record.items:
         if at > replay_now:
             break
+        if _rerouted(psap, at, item):
+            continue
         kind = REPORT_KIND.get(item["category"])
         point = record.points.get(item["id"])
         if item["id"] in done or kind is None or point is None:
