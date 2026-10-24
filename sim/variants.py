@@ -60,8 +60,9 @@ WIND_SHIFT_DEG = -30.0  # toward north: wind_from 67.5 -> 37.5 deg (both fire mo
 OPTIMIZER_BUDGET_EVALS = 42
 
 COMMON_LIMITATIONS = [
-    "Counterfactual planning experiment on fixture demand (2 km zone grid, synthetic 15,000 vehicles) and "
-    "fixture order times; not a reconstruction of what would have happened in 2018.",
+    "Counterfactual planning experiment on the baseline's demand and order schedule (see basis.demand and the "
+    "baseline bundle's assumptions: Census-derived vehicles and crosswalked orders, or fixture data when the "
+    "package lacks those layers); not a reconstruction of what would have happened.",
     "One seed: response delays are a single draw shared with the baseline; deltas are not tested across seeds "
     "and small differences should not be read as significant.",
     "Planning experiment from a simulation; not operational instructions.",

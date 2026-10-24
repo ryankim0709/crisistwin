@@ -78,9 +78,10 @@ LIMITATIONS = [
     "perimeters), which real responders did not have; the best schedule is not a feasible real-time plan.",
     "The information-feasible rule (ignition distance) uses no fire forecast, but its wave size and spacing "
     "were still selected by scoring against the modelled fire.",
-    "Demand is fixture: a 2 km zone grid with a synthetic 15,000 vehicles; zone order times are not the 2018 orders.",
+    "Demand and the baseline order schedule are the replay's (Census-derived where the package has the layers, "
+    "fixture otherwise); the optimized schedule replaces zone order times only.",
     "Only order times change. Routing, response delays, road events and fire are identical to the baseline.",
-    "Exposure counts vehicles on edges inside the fire area; vehicles stopped on burned edges stay exposed to the "
+    "Exposure counts vehicles on edges inside the fire area and vehicles still at home inside it; vehicles stopped on burned edges stay exposed to the "
     "horizon, so stranding early dominates the objective.",
     "Selection uses one traffic seed (one response-delay draw shared by all candidates). The objective is very "
     "sensitive to which few vehicles strand on burned edges, so neighbouring schedules can differ tenfold; see "
