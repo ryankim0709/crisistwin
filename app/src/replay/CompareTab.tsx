@@ -1,5 +1,15 @@
 import { useMemo } from "react";
-import { METRIC_INFO, deltaVerdict, formatDelta, formatValue, type Variant, type VariantIndex } from "./compare";
+import {
+  METRIC_INFO,
+  VARIANT_CAVEATS,
+  pctChange,
+  deltaVerdict,
+  formatDelta,
+  formatValue,
+  type MetricDelta,
+  type Variant,
+  type VariantIndex,
+} from "./compare";
 import { EvidenceChip } from "./parts";
 import { RiskChip } from "./ResponderTab";
 import type { ReplayModel } from "./types";
@@ -29,9 +39,15 @@ export default function CompareTab({ baseline, index, load, showVariant, onSelec
     <div className="rp-tab">
       <p className="rp-disclaimer rp-disclaimer--top" role="note">
         <EvidenceChip value="simulated" /> What-if variants are simulated counterfactuals on the same seed, network and
-        fixture demand as the baseline run. They are planning experiments, not history. Fire perimeters, roads and
-        damage shown on the map are unchanged.
+        demand
+        {index.demandTotalVeh != null && <> ({index.demandTotalVeh.toLocaleString("en-US")} vehicles)</>} as the
+        baseline run. They are planning experiments, not history. Fire perimeters, roads and damage shown on the map
+        are unchanged.
       </p>
+
+      {load.status === "ready" && (
+        <HeadlineDelta id={load.variant.id} metrics={load.variant.metrics} title={load.variant.title} />
+      )}
 
       <fieldset className="rp-variants">
         <legend className="rp-section-title">What if…</legend>
@@ -49,6 +65,7 @@ export default function CompareTab({ baseline, index, load, showVariant, onSelec
               <strong>{v.title}</strong>
               <small>{v.question}</small>
             </span>
+            <ExposureBadge id={v.id} delta={v.headline.total_exposed_veh_min} />
           </label>
         ))}
       </fieldset>
@@ -125,7 +142,7 @@ export default function CompareTab({ baseline, index, load, showVariant, onSelec
                 </tbody>
               </table>
             </div>
-            <p className="rp-rule">One seed and fixture demand: treat small differences as noise, not as significant.</p>
+            <p className="rp-rule">One seed: treat small differences as noise, not as significant.</p>
           </section>
 
           <section aria-labelledby="rp-risk-title">
@@ -161,5 +178,84 @@ export default function CompareTab({ baseline, index, load, showVariant, onSelec
         </>
       )}
     </div>
+  );
+}
+
+function signed(pct: number): string {
+  return `${pct > 0 ? "+" : pct < 0 ? "−" : "±"}${Math.abs(pct)}%`;
+}
+
+export function CaveatChip({ id }: { id: string }) {
+  const caveat = VARIANT_CAVEATS[id];
+  if (!caveat) return null;
+  return (
+    <span className={`rp-caveat rp-caveat--${caveat.kind}`} title={caveat.text}>
+      {caveat.label}
+    </span>
+  );
+}
+
+/** Combined exposure change (road + home) from the index, shown on each option before loading. */
+function ExposureBadge({ id, delta }: { id: string; delta: MetricDelta | undefined }) {
+  const pct = pctChange(delta);
+  if (pct === null || !delta) return null;
+  const caveat = VARIANT_CAVEATS[id];
+  // A caveated result is not shown as an improvement.
+  const verdict = caveat ? "n/a" : deltaVerdict(delta.delta, "lower");
+  return (
+    <span className={`rp-peak-badge rp-delta--${verdict}`} title="Change in total exposure, road + home (model)">
+      {signed(pct)}
+      <small>exposure (road + home)</small>
+      <CaveatChip id={id} />
+    </span>
+  );
+}
+
+/** The first thing to read: combined exposure, then road and home separately, baseline vs what-if. */
+function HeadlineDelta({ id, metrics, title }: { id: string; metrics: Record<string, MetricDelta>; title: string }) {
+  const total = metrics.total_exposed_veh_min;
+  const pct = pctChange(total);
+  if (!total || pct === null) return null;
+  const caveat = VARIANT_CAVEATS[id];
+  const parts: [string, MetricDelta | undefined][] = [
+    ["On roads", metrics.exposed_veh_min],
+    ["At home, not yet left", metrics.exposed_at_origin_veh_min],
+  ];
+  const arrived = metrics.arrived_by_1800z_veh;
+  return (
+    <section className="rp-headline-delta" aria-labelledby="rp-headline-delta-title">
+      <h3 id="rp-headline-delta-title" className="rp-section-title">
+        {title}: exposure to fire, road + home <EvidenceChip value="simulated" />
+      </h3>
+      <p className="rp-headline-delta-nums">
+        <span>
+          <small>Change vs baseline</small>
+          <strong className={`rp-delta--${caveat ? "n/a" : deltaVerdict(total.delta, "lower")}`}>{signed(pct)}</strong>
+        </span>
+        {caveat && <CaveatChip id={id} />}
+      </p>
+      <ul className="rp-headline-parts">
+        {parts.map(([label, m]) => {
+          const p = pctChange(m);
+          if (!m || p === null) return null;
+          const ratio = m.baseline && m.variant != null ? m.variant / m.baseline : null;
+          return (
+            <li key={label} className={`rp-delta--${deltaVerdict(m.delta, "lower")}`}>
+              {label}: {signed(p)}
+              {ratio !== null && ratio >= 2 && <> (×{ratio.toFixed(1)})</>}
+            </li>
+          );
+        })}
+        {arrived && arrived.baseline != null && arrived.variant != null && (
+          <li className={`rp-delta--${deltaVerdict(arrived.delta, "higher")}`}>
+            Out by 10:00 PST: {formatValue(arrived.baseline, "veh")} → {formatValue(arrived.variant, "veh")} vehicles
+          </li>
+        )}
+      </ul>
+      {caveat && <p className="rp-rule">{caveat.text}</p>}
+      <p className="rp-rule">
+        Relative comparison only: vehicle-minutes are dominated by stranded vehicles and are not a count of people.
+      </p>
+    </section>
   );
 }

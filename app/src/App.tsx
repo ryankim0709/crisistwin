@@ -1,12 +1,173 @@
 import { useEffect, useState } from "react";
 import { fetchHealth } from "./lib/api";
 import { EmptyResult, Metric, Panel, Tag, WorkspacePage } from "./pages/WorkspaceUI";
+import {
+  ARRIVED_BY_1800,
+  CAMP_ID,
+  INCIDENTS_URL,
+  STRESS_URL,
+  VARIANTS_URL,
+  clockLabel,
+  fmt,
+  fmtDelta,
+  formatDate,
+  parseIncidents,
+  parseStress,
+  parseVariants,
+  replayHref,
+  useJson,
+  type Incident,
+  type Variant,
+  type VariantsIndex,
+} from "./pages/workspaceData";
 import { navigationItems } from "./navigation";
 
 type Connection =
   { status: "loading" } | { status: "connected"; version: string } | { status: "error" };
 
 const CONNECTION_TIMEOUT_MS = 10_000;
+
+/** The what-if with the largest gain in vehicles out by the early checkpoint, or null. */
+function bestGain(index: VariantsIndex): { variant: Variant; delta: number } | null {
+  let best: { variant: Variant; delta: number } | null = null;
+  for (const variant of index.variants) {
+    const delta = variant.headline[ARRIVED_BY_1800.key]?.delta ?? null;
+    if (delta !== null && delta > 0 && (best === null || delta > best.delta))
+      best = { variant, delta };
+  }
+  return best;
+}
+
+function WhatIfHeadline({ index, camp }: { index: VariantsIndex; camp: Incident | undefined }) {
+  const best = bestGain(index);
+  const when = (camp && clockLabel(ARRIVED_BY_1800.key, camp.date, camp.timezone)) ?? "18:00 UTC";
+  if (!best) {
+    return (
+      <EmptyResult title="No what-if improves on the baseline">
+        None of the {index.variants.length} listed what-ifs raises vehicles out by {when}.
+      </EmptyResult>
+    );
+  }
+  const hindsight = best.variant.changes.find((line) => /hindsight/i.test(line));
+  return (
+    <>
+      <p className="headline-claim">
+        <strong>{best.variant.title}</strong>: {fmtDelta(best.delta)} vehicles out by {when}
+      </p>
+      <p className="ui-help">{best.variant.question}</p>
+      <p className="ui-help">
+        Largest gain among {index.variants.length} what-ifs. Simulated and counterfactual, one seed;
+        not a reconstruction of what would have happened.
+        {hindsight ? ` ${hindsight}` : ""}
+      </p>
+      <a
+        className="ui-text-link"
+        href={replayHref(CAMP_ID, `&tab=whatif&variant=${encodeURIComponent(best.variant.id)}`)}
+      >
+        View on map →
+      </a>{" "}
+      <a className="ui-text-link" href="/comparison">
+        Compare all what-ifs →
+      </a>
+    </>
+  );
+}
+
+function ReplayOverview() {
+  const incidents = useJson(INCIDENTS_URL, parseIncidents);
+  const variants = useJson(VARIANTS_URL, parseVariants);
+  const stress = useJson(STRESS_URL, parseStress);
+  const list = incidents.status === "ready" ? incidents.data : null;
+  const camp = list?.find((i) => i.id === CAMP_ID);
+  const count = (state: { status: string }, n: number | null) =>
+    n !== null ? fmt(n) : state.status === "loading" ? "…" : "—";
+  const unavailable = (state: { status: string }, path: string) =>
+    state.status === "loading" ? "Loading…" : `${path} unavailable`;
+
+  return (
+    <>
+      <div className="ui-metrics">
+        <Metric
+          label="Historical fires"
+          value={count(incidents, list?.length ?? null)}
+          detail={
+            list ? "Replayable from the incidents index" : unavailable(incidents, INCIDENTS_URL)
+          }
+        />
+        <Metric
+          label="What-if variants"
+          value={count(
+            variants,
+            variants.status === "ready" ? variants.data.variants.length : null,
+          )}
+          detail={
+            variants.status === "ready"
+              ? "Simulated Camp Fire counterfactuals"
+              : unavailable(variants, VARIANTS_URL)
+          }
+        />
+        <Metric
+          label="Stress-test runs"
+          value={count(stress, stress.status === "ready" ? stress.data.runs.length : null)}
+          detail={
+            stress.status === "ready"
+              ? "Simulated disruptions of the baseline"
+              : unavailable(stress, STRESS_URL)
+          }
+        />
+      </div>
+      <div className="ui-split">
+        <Panel
+          title="Latest what-if headline"
+          eyebrow="Camp Fire (2018)"
+          aside={<Tag tone="amber">Simulated</Tag>}
+        >
+          {variants.status === "ready" ? (
+            <WhatIfHeadline index={variants.data} camp={camp} />
+          ) : (
+            <EmptyResult
+              title={
+                variants.status === "loading" ? "Loading what-ifs…" : "No what-if results available"
+              }
+            >
+              {variants.status === "error"
+                ? variants.message
+                : `Needs ${VARIANTS_URL}. An empty panel does not mean no strategy changes outcomes.`}
+            </EmptyResult>
+          )}
+        </Panel>
+        <Panel title="Fires available" eyebrow="Historical replay">
+          {list && list.length > 0 ? (
+            <div className="ui-list">
+              {list.map((incident) => (
+                <div className="ui-row" key={incident.id}>
+                  <div>
+                    <strong>{incident.name}</strong>
+                    <p>
+                      {incident.place} · {formatDate(incident.date)}
+                    </p>
+                  </div>
+                  <a className="ui-text-link" href={replayHref(incident.id)}>
+                    Open replay →
+                  </a>
+                </div>
+              ))}
+              <a className="ui-text-link" href="/simulate">
+                Agent simulation (Camp Fire) →
+              </a>
+            </div>
+          ) : (
+            <EmptyResult
+              title={incidents.status === "loading" ? "Loading fires…" : "No fires listed"}
+            >
+              {incidents.status === "error" ? incidents.message : `Needs ${INCIDENTS_URL}.`}
+            </EmptyResult>
+          )}
+        </Panel>
+      </div>
+    </>
+  );
+}
 
 export default function App() {
   const [connection, setConnection] = useState<Connection>({ status: "loading" });
@@ -43,8 +204,8 @@ export default function App() {
       title="Workspace overview"
       description="A place to test what happens next."
       action={
-        <a className="ui-button" href="/scenarios">
-          Set up a scenario →
+        <a className="ui-button" href={replayHref(CAMP_ID)}>
+          Open the Camp Fire replay →
         </a>
       }
     >
@@ -60,12 +221,17 @@ export default function App() {
             Explore wildfire spread, prepare evacuation assumptions, and make room for the
             unexpected.
           </p>
-          <a className="ui-button ui-button-light" href="/maps">
-            Explore the map ↗
-          </a>
-          <a className="ui-button ui-button-light" href="/replay">
-            Camp Fire (2018) replay ↗
-          </a>
+          <div className="hero-actions">
+            <a className="ui-button ui-button-light" href="/maps">
+              Explore the map ↗
+            </a>
+            <a className="ui-button ui-button-light" href={replayHref(CAMP_ID)}>
+              Historical replay ↗
+            </a>
+            <a className="ui-button ui-button-light" href="/simulate">
+              Agent simulation ↗
+            </a>
+          </div>
         </div>
         <ol className="hero-workflow">
           <li>
@@ -79,11 +245,7 @@ export default function App() {
           </li>
         </ol>
       </section>
-      <div className="ui-metrics">
-        <Metric label="Fire experiment" value="Ready" detail="Illustrative model · map workspace" />
-        <Metric label="Saved scenarios" value="—" detail="Scenario storage not connected" />
-        <Metric label="Evacuation runs" value="—" detail="Traffic model not connected" />
-      </div>
+      <ReplayOverview />
       <div className="ui-split">
         <Panel title="No scenarios yet" eyebrow="Recent work">
           <EmptyResult title="Start with a shared baseline">
@@ -114,13 +276,19 @@ export default function App() {
           </div>
           <dl className="ui-facts">
             <div>
-              <dt>Fire model</dt>
+              <dt>Map fire model</dt>
               <dd>
                 <Tag tone="green">Illustrative demo</Tag>
               </dd>
             </div>
             <div>
-              <dt>Traffic & optimization</dt>
+              <dt>Replay traffic & what-ifs</dt>
+              <dd>
+                <Tag tone="green">Precomputed files</Tag>
+              </dd>
+            </div>
+            <div>
+              <dt>Live traffic & optimization</dt>
               <dd>
                 <Tag>Not connected</Tag>
               </dd>
@@ -140,7 +308,7 @@ export default function App() {
             .filter((item) => item.path !== "/")
             .map((item, index) => (
               <a key={item.path} href={item.path}>
-                <span className="workflow-number">0{index + 1}</span>
+                <span className="workflow-number">{String(index + 1).padStart(2, "0")}</span>
                 <strong>{item.label}</strong>
                 <p>{item.description}</p>
                 <span className="ui-text-link">Open workspace →</span>

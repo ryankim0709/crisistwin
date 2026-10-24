@@ -296,6 +296,39 @@ export function windAdjustmentFactor(canopy: CanopyCell, fuelBedDepthFeet: numbe
  * 20-foot open wind. `fineFuelMoistureFraction` is the dead 1-hour moisture as a fraction
  * (0.06 is 6 percent).
  */
+/**
+ * Whether this canopy can carry an active crown fire that is already burning into it.
+ *
+ * This is Van Wagner's critical mass flow criterion on its own, with no reference to the
+ * cell's own surface fireline intensity. It answers a different question from
+ * `criticalSurfaceIntensityKwPerM`: that one asks whether a SURFACE fire here is intense
+ * enough to climb into the crowns, while this asks whether the canopy is dense enough to
+ * sustain a crown fire that started somewhere else. An established crown fire carries
+ * itself through continuous canopy, so requiring every cell to re-initiate from its own
+ * sheltered surface fire understates forest spread badly — the under-prediction Cruz &
+ * Alexander (2010) identify in linked Rothermel/Van Wagner models.
+ */
+export function canSustainActiveCrown(
+  canopy: CanopyCell,
+  openWindSpeedMph: number,
+  fineFuelMoistureFraction: number,
+): boolean {
+  if (
+    canopy.heightMeters <= 0 ||
+    canopy.coverFraction < MIN_CROWN_COVER_FRACTION ||
+    canopy.bulkDensityKgPerM3 < MIN_CROWN_BULK_DENSITY_KG_PER_M3
+  ) {
+    return false;
+  }
+  const activeRate = activeCrownRateMetersPerMinute(
+    openWindSpeedMph,
+    canopy.bulkDensityKgPerM3,
+    fineFuelMoistureFraction,
+  );
+  const criticalRate = criticalActiveCrownRateMetersPerMinute(canopy.bulkDensityKgPerM3);
+  return criticalRate > 0 && activeRate / criticalRate >= ACTIVE_CROWN_RATIO_THRESHOLD;
+}
+
 export function crownFireBehaviour(
   surfaceRateMetersPerMinute: number,
   surfaceFirelineIntensityKwPerM: number,

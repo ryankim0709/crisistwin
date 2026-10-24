@@ -28,11 +28,20 @@ const METRICS: { key: MetricKey; label: string; hint: string }[] = [
   { key: "exposedVeh", label: "Exposed", hint: "En route on edges inside the fire area in effect" },
 ];
 
-function Metrics({ model, frameIndex, simTimeMs }: { model: ReplayModel; frameIndex: number; simTimeMs: number }) {
+function Metrics({
+  model,
+  frameIndex,
+  simTimeMs,
+}: {
+  model: ReplayModel;
+  frameIndex: number;
+  simTimeMs: number;
+}) {
   const traffic = model.traffic;
   const series = useMemo(() => {
     const out: Partial<Record<MetricKey, ReturnType<typeof metricSeries>>> = {};
-    if (traffic) for (const m of METRICS) out[m.key] = metricSeries(traffic.metrics, m.key, SPARK_POINTS);
+    if (traffic)
+      for (const m of METRICS) out[m.key] = metricSeries(traffic.metrics, m.key, SPARK_POINTS);
     return out;
   }, [traffic]);
   const atOriginSeries = useMemo(() => {
@@ -40,7 +49,8 @@ function Metrics({ model, frameIndex, simTimeMs }: { model: ReplayModel; frameIn
     if (!traffic || !values) return [];
     const stride = Math.max(1, Math.ceil(values.length / SPARK_POINTS));
     const out: { atMs: number; value: number }[] = [];
-    for (let i = 0; i < values.length; i += stride) out.push({ atMs: traffic.metrics[i].atMs, value: values[i] ?? 0 });
+    for (let i = 0; i < values.length; i += stride)
+      out.push({ atMs: traffic.metrics[i].atMs, value: values[i] ?? 0 });
     return out;
   }, [traffic]);
   if (!traffic) {
@@ -58,9 +68,15 @@ function Metrics({ model, frameIndex, simTimeMs }: { model: ReplayModel; frameIn
     <>
       <div className="rp-metrics">
         {METRICS.map((metric) => (
-          <div key={metric.key} className={`rp-metric rp-metric--${metric.key}`} title={metric.hint}>
+          <div
+            key={metric.key}
+            className={`rp-metric rp-metric--${metric.key}`}
+            title={metric.hint}
+          >
             <span className="rp-metric-label">{metric.label}</span>
-            <span className="rp-metric-value">{row ? row[metric.key].toLocaleString("en-US") : "—"}</span>
+            <span className="rp-metric-value">
+              {row ? row[metric.key].toLocaleString("en-US") : "—"}
+            </span>
             <Sparkline
               points={series[metric.key] ?? []}
               startMs={model.clock.startMs}
@@ -70,10 +86,15 @@ function Metrics({ model, frameIndex, simTimeMs }: { model: ReplayModel; frameIn
           </div>
         ))}
         {atOrigin && (
-          <div className="rp-metric rp-metric--exposedVeh" title="Vehicles still at their origin inside the fire area">
+          <div
+            className="rp-metric rp-metric--exposedVeh"
+            title="Vehicles still at their origin inside the fire area"
+          >
             <span className="rp-metric-label">Still at home in fire area</span>
             <span className="rp-metric-value">
-              {frameIndex >= 0 && atOrigin[frameIndex] != null ? atOrigin[frameIndex]!.toLocaleString("en-US") : "—"}
+              {frameIndex >= 0 && atOrigin[frameIndex] != null
+                ? atOrigin[frameIndex]!.toLocaleString("en-US")
+                : "—"}
             </span>
             <Sparkline
               points={atOriginSeries}
@@ -85,8 +106,9 @@ function Metrics({ model, frameIndex, simTimeMs }: { model: ReplayModel; frameIn
         )}
       </div>
       <p className="rp-metric-foot">
-        <EvidenceChip value={traffic.evidenceClass} /> {traffic.totalVeh?.toLocaleString("en-US") ?? "—"} vehicles ·
-        clearance {traffic.clearanceTimeS == null ? "not reached" : formatDuration(traffic.clearanceTimeS)}
+        <EvidenceChip value={traffic.evidenceClass} />{" "}
+        {traffic.totalVeh?.toLocaleString("en-US") ?? "—"} vehicles · clearance{" "}
+        {traffic.clearanceTimeS == null ? "not reached" : formatDuration(traffic.clearanceTimeS)}
         {traffic.modelId && (
           <>
             {" "}
@@ -141,7 +163,9 @@ function Residents({ model, frameIndex }: { model: ReplayModel; frameIndex: numb
           return (
             <div key={key}>
               <dt>{RESIDENT_LABEL[key] ?? humanizeMetric(key)}</dt>
-              <dd>{value == null ? "—" : value.toLocaleString("en-US", { maximumFractionDigits: 1 })}</dd>
+              <dd>
+                {value == null ? "—" : value.toLocaleString("en-US", { maximumFractionDigits: 1 })}
+              </dd>
             </div>
           );
         })}
@@ -174,16 +198,26 @@ function CalmSummary({
 }) {
   const row = model.traffic && frameIndex >= 0 ? model.traffic.metrics[frameIndex] : null;
   const fmt = (n: number | undefined) => (n === undefined ? "—" : n.toLocaleString("en-US"));
+  /** A per-frame metric beyond the standard five (e.g. open_refuges), or null when absent. */
+  const extra = (key: string): number | null =>
+    model.traffic && frameIndex >= 0
+      ? (model.traffic.extraMetrics[key]?.[frameIndex] ?? null)
+      : null;
+  // Key events are historical records; fixture placeholders (synthetic zone orders) stay in
+  // the full event feed but would otherwise crowd out the real 2018 alerts here.
+  const isKey = (e: ReplayModel["events"][number]) =>
+    eventCategory(e.type) !== "closure" &&
+    (e.evidenceClass !== "fixture" || e.type === "fire_ignition");
   let last: ReplayModel["events"][number] | null = null;
   for (let i = eventIndex; i >= 0; i -= 1) {
-    if (eventCategory(model.events[i].type) !== "closure") {
+    if (isKey(model.events[i])) {
       last = model.events[i];
       break;
     }
   }
   let next: ReplayModel["events"][number] | null = null;
   for (let i = eventIndex + 1; i < model.events.length; i += 1) {
-    if (eventCategory(model.events[i].type) !== "closure") {
+    if (isKey(model.events[i])) {
       next = model.events[i];
       break;
     }
@@ -224,19 +258,41 @@ function CalmSummary({
                 <span className="rp-calm-value">{fmt(row?.blockedVeh)}</span> stuck
               </span>
               <span>
-                <span className="rp-calm-value">{fmt(row?.exposedVeh)}</span> near fire
+                <span className="rp-calm-value">{fmt(row?.exposedVeh)}</span> in fire area
               </span>
             </span>
-            <span className="rp-calm-label">Stuck or near fire</span>
+            <span className="rp-calm-label">Stuck, or on roads inside the fire</span>
           </div>
         </div>
       ) : (
         <p className="rp-empty">No traffic simulation in this bundle.</p>
       )}
       <p className="rp-calm-note">
-        Vehicles (model, {model.traffic?.totalVeh?.toLocaleString("en-US") ?? "—"} total). Stuck and near-fire counts can
-        overlap.
+        Vehicles (model, {model.traffic?.totalVeh?.toLocaleString("en-US") ?? "—"} total). Stuck and
+        in-fire-area counts can overlap.
       </p>
+      {extra("open_refuges") !== null &&
+        model.destinations?.items.some((d) => d.kind === "temporary_refuge") && (
+          <p className="rp-calm-refuges">
+            <span>
+              <strong>{fmt(extra("open_refuges") ?? undefined)}</strong> temporary refuge area
+              {extra("open_refuges") === 1 ? "" : "s"} open (recorded times)
+              {extra("active_refuges") !== null && (
+                <> · {fmt(extra("active_refuges") ?? undefined)} holding modelled arrivals</>
+              )}
+            </span>
+            {extra("trapped_by_fire_veh") !== null && (
+              <span>
+                <strong>{fmt(extra("trapped_by_fire_veh") ?? undefined)}</strong> vehicles trapped
+                by fire
+                {extra("trapped_by_closure_veh") !== null && (
+                  <> · {fmt(extra("trapped_by_closure_veh") ?? undefined)} by closures</>
+                )}{" "}
+                (model)
+              </span>
+            )}
+          </p>
+        )}
       {(last || next) && (
         <ul className="rp-rows rp-calm-events">
           {last && keyEvent("Latest", last)}
@@ -281,7 +337,9 @@ function buildFeedRows(model: ReplayModel): FeedRow[] {
     const last = rows[rows.length - 1];
     // Only modelled fire closures are grouped; responder-agent and reported closures stay individual.
     const groupable =
-      category === "closure" && event.evidenceClass === "simulated" && CLOSURE_LABEL_PREFIX.test(event.label);
+      category === "closure" &&
+      event.evidenceClass === "simulated" &&
+      CLOSURE_LABEL_PREFIX.test(event.label);
     const name = event.label.replace(CLOSURE_LABEL_PREFIX, "");
     if (groupable && last?.members && Math.floor(last.atMs / 60_000) === minute) {
       last.index = index;
@@ -304,7 +362,9 @@ function buildFeedRows(model: ReplayModel): FeedRow[] {
       ariaLabel: `Jump to ${local.time} ${local.zone}: ${event.label}`,
       evidence: event.evidenceClass,
       precision:
-        event.timePrecision && event.timePrecision !== "minute" ? event.timePrecision.replace(/_/g, " ") : null,
+        event.timePrecision && event.timePrecision !== "minute"
+          ? event.timePrecision.replace(/_/g, " ")
+          : null,
       members: groupable ? [name] : null,
     });
   });
@@ -322,7 +382,12 @@ const FeedItem = memo(function FeedItem({
 }) {
   return (
     <li className={`rp-feed-item rp-feed-item--${state}`} data-current={state === "current"}>
-      <button type="button" className="rp-feed-btn" onClick={() => onSeek(row.atMs)} aria-label={row.ariaLabel}>
+      <button
+        type="button"
+        className="rp-feed-btn"
+        onClick={() => onSeek(row.atMs)}
+        aria-label={row.ariaLabel}
+      >
         <EventGlyph category={row.category} />
         <span className="rp-feed-time">
           {row.time}
@@ -442,24 +507,41 @@ function Legend({ perParticle }: { perParticle: number | null }) {
       </li>
       <li>
         <span className="rp-key rp-key--sim" aria-hidden="true" />
-        Model fire — burned char inside, orange-yellow newest band (last 30 min), glowing edge; simulated
-        from an assumed ignition
+        Model fire — burned char inside, orange-yellow newest band (last 30 min), glowing edge; a
+        fire-spread model run, not an observation
+      </li>
+      <li>
+        <span className="rp-key rp-key--fireobs" aria-hidden="true" />
+        Fire observed — small hollow white rings where fire was recorded (off by default), shown from their
+        time
       </li>
       <li>
         <span className="rp-key rp-key--history" aria-hidden="true" />
         Earlier perimeters — thin rings, fainter with age
       </li>
       <li>
-        <span className="rp-key rp-key--line" style={{ background: COLORS.free }} aria-hidden="true" />
+        <span
+          className="rp-key rp-key--line"
+          style={{ background: COLORS.free }}
+          aria-hidden="true"
+        />
         Flowing (cyan) — mean speed ≥ 70% of limit
       </li>
       <li>
-        <span className="rp-key rp-key--line" style={{ background: COLORS.slow }} aria-hidden="true" />
-        Slow (blue) — 35–70% of limit
+        <span
+          className="rp-key rp-key--line"
+          style={{ background: COLORS.slow }}
+          aria-hidden="true"
+        />
+        Slow (mid cyan) — 35–70% of limit
       </li>
       <li>
-        <span className="rp-key rp-key--line" style={{ background: COLORS.jam }} aria-hidden="true" />
-        Jammed (violet, thick) — under 35%; hover a road for numbers
+        <span
+          className="rp-key rp-key--line"
+          style={{ background: COLORS.jam }}
+          aria-hidden="true"
+        />
+        Jammed (dark cyan, thick) — under 35%; hover a road for numbers
       </li>
       <li>
         <span className="rp-key rp-key--width" aria-hidden="true" />
@@ -470,22 +552,22 @@ function Legend({ perParticle }: { perParticle: number | null }) {
         Closed (event or modelled fire hazard) — grey dashes, “× CLOSED” label when zoomed in
       </li>
       <li>
-        <span className="rp-key rp-key--threat" aria-hidden="true" />
-        Fire expected (model) — thin pulsing dashes: amber within 30 min, orange within 10 min
-      </li>
-      <li>
         <span className="rp-key rp-key--bridge" aria-hidden="true" />
         Bridge — double casing, labelled “BRIDGE” when zoomed in
       </li>
       <li>
         <span className="rp-key rp-key--dot" aria-hidden="true" />
-        Vehicle dots — {perParticle ? `1 dot ≈ ${perParticle} modelled vehicle${perParticle === 1 ? "" : "s"}` : "modelled counts"};
-        violet, motionless dots are stopped. Illustrative, not tracked vehicles; above 1 min/s
+        Vehicle dots —{" "}
+        {perParticle
+          ? `1 dot ≈ ${perParticle} modelled vehicle${perParticle === 1 ? "" : "s"}`
+          : "modelled counts"}
+        ; white dots with a dark ring are stopped. Illustrative, not tracked vehicles; above 1 min/s
         playback their motion is slowed for legibility
       </li>
       <li>
         <span className="rp-key rp-key--zone" aria-hidden="true" />
-        Zone (synthetic, off by default) — outline flashes amber when an order is issued; hover for name
+        Zone (synthetic, off by default) — outline flashes amber when an order is issued; hover for
+        name
       </li>
       <li>
         <span className="rp-key rp-key--dest" aria-hidden="true" />
@@ -515,13 +597,23 @@ export interface SidePanelProps {
   onFocus: (coords: LngLat[]) => void;
   /** Header eyebrow, e.g. "Historical replay" or "Agent simulation". */
   eyebrow: string;
+  /** Optional control under the incident title, e.g. the replay's fire picker. */
+  picker?: ReactNode;
   /** Optional tabs supplied by the view (what-if, stress test), appended after the built-ins. */
   extraTabs?: { id: PanelTab; label: string; content: ReactNode }[];
   /** Agent simulations show resident-state metrics; the historical replay does not. */
   showResidents?: boolean;
 }
 
-export type PanelTab = "overview" | "responder" | "evacuee" | "explain" | "whatif" | "stress" | "responders";
+export type PanelTab =
+  | "overview"
+  | "responder"
+  | "evacuee"
+  | "explain"
+  | "whatif"
+  | "validation"
+  | "stress"
+  | "responders";
 
 const TABS: { id: PanelTab; label: string }[] = [
   { id: "overview", label: "Overview" },
@@ -545,6 +637,7 @@ export default function SidePanel({
   onPin,
   onFocus,
   eyebrow,
+  picker,
   extraTabs = [],
   showResidents = false,
 }: SidePanelProps) {
@@ -559,9 +652,12 @@ export default function SidePanel({
         <h1>{model.incident.name}</h1>
         <p className="rp-incident-meta">
           {model.incident.id}
-          {model.incident.packageVersion && <> · package {model.incident.packageVersion.slice(0, 8)}</>} · schema{" "}
-          {model.schemaVersion}
+          {model.incident.packageVersion && (
+            <> · package {model.incident.packageVersion.slice(0, 8)}</>
+          )}{" "}
+          · schema {model.schemaVersion}
         </p>
+        {picker}
       </header>
 
       <div className="rp-tabs" role="tablist" aria-label="Replay panels">
@@ -591,109 +687,136 @@ export default function SidePanel({
         ))}
       </div>
 
-      <div role="tabpanel" id={`rp-tabpanel-${tab}`} aria-labelledby={`rp-tab-${tab}`} className="rp-tabpanel">
+      <div
+        role="tabpanel"
+        id={`rp-tabpanel-${tab}`}
+        aria-labelledby={`rp-tab-${tab}`}
+        className="rp-tabpanel"
+      >
         {tab === "overview" && (
           <>
-        <CalmSummary model={model} frameIndex={frameIndex} eventIndex={eventIndex} simTimeMs={simTimeMs} onSeek={onSeek} />
+            <CalmSummary
+              model={model}
+              frameIndex={frameIndex}
+              eventIndex={eventIndex}
+              simTimeMs={simTimeMs}
+              onSeek={onSeek}
+            />
 
-        <details className="rp-more">
-          <summary>More details: all numbers</summary>
-        <section aria-labelledby="rp-metrics-title">
-          <h2 id="rp-metrics-title" className="rp-section-title">
-            Simulated evacuation state
-          </h2>
-          <Metrics model={model} frameIndex={frameIndex} simTimeMs={simTimeMs} />
-        </section>
-        {showResidents && <Residents model={model} frameIndex={frameIndex} />}
-        </details>
+            <details className="rp-more">
+              <summary>More details: all numbers</summary>
+              <section aria-labelledby="rp-metrics-title">
+                <h2 id="rp-metrics-title" className="rp-section-title">
+                  Simulated evacuation state
+                </h2>
+                <Metrics model={model} frameIndex={frameIndex} simTimeMs={simTimeMs} />
+              </section>
+              {showResidents && <Residents model={model} frameIndex={frameIndex} />}
+            </details>
 
-        <details className="rp-more">
-          <summary>
-            Event feed <span className="rp-count">{Math.max(0, eventIndex + 1)}/{model.events.length}</span>
-          </summary>
-        <section aria-labelledby="rp-events-title" className="rp-events">
-          <h2 id="rp-events-title" className="rp-section-title">
-            Event feed <span className="rp-count">{Math.max(0, eventIndex + 1)}/{model.events.length}</span>
-          </h2>
-          <EventFeed model={model} eventIndex={eventIndex} onSeek={onSeek} />
-        </section>
-        </details>
+            <details className="rp-more">
+              <summary>
+                Event feed{" "}
+                <span className="rp-count">
+                  {Math.max(0, eventIndex + 1)}/{model.events.length}
+                </span>
+              </summary>
+              <section aria-labelledby="rp-events-title" className="rp-events">
+                <h2 id="rp-events-title" className="rp-section-title">
+                  Event feed{" "}
+                  <span className="rp-count">
+                    {Math.max(0, eventIndex + 1)}/{model.events.length}
+                  </span>
+                </h2>
+                <EventFeed model={model} eventIndex={eventIndex} onSeek={onSeek} />
+              </section>
+            </details>
 
-        <details className="rp-more">
-          <summary>Layers, legend and limitations</summary>
+            <details className="rp-more">
+              <summary>Layers, legend and limitations</summary>
 
-        <section aria-labelledby="rp-layers-title">
-          <h2 id="rp-layers-title" className="rp-section-title">
-            Layers
-          </h2>
-          <ul className="rp-layers">
-            {(Object.keys(GROUP_LAYER) as LayerGroup[]).map((group) => {
-              const { available, status, evidence } = groupAvailability(model, group);
-              const id = `rp-layer-${group}`;
-              return (
-                <li key={group} className={available ? undefined : "rp-layer--missing"}>
-                  <input
-                    id={id}
-                    type="checkbox"
-                    checked={available && visibility[group]}
-                    disabled={!available}
-                    onChange={() => onToggleLayer(group)}
-                  />
-                  <label htmlFor={id}>
-                    {GROUP_LAYER[group].label}
-                    {!available && (
-                      <span className="rp-layer-reason">
-                        Missing{status?.reason ? `: ${status.reason}` : ""}
-                      </span>
-                    )}
-                  </label>
-                  {evidence && <EvidenceChip value={evidence} />}
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-
-        <section aria-labelledby="rp-legend-title">
-          <h2 id="rp-legend-title" className="rp-section-title">
-            Legend
-          </h2>
-          <Legend perParticle={perParticle} />
-        </section>
-
-        {(model.assumptions.length > 0 || model.limitations.length > 0) && (
-          <details className="rp-notes">
-            <summary>Assumptions & limitations</summary>
-            {model.limitations.length > 0 && (
-              <>
-                <h3>Limitations</h3>
-                <ul>
-                  {model.limitations.map((text) => (
-                    <li key={text}>{text}</li>
-                  ))}
+              <section aria-labelledby="rp-layers-title">
+                <h2 id="rp-layers-title" className="rp-section-title">
+                  Layers
+                </h2>
+                <ul className="rp-layers">
+                  {(Object.keys(GROUP_LAYER) as LayerGroup[]).map((group) => {
+                    const { available, status, evidence } = groupAvailability(model, group);
+                    const id = `rp-layer-${group}`;
+                    return (
+                      <li key={group} className={available ? undefined : "rp-layer--missing"}>
+                        <input
+                          id={id}
+                          type="checkbox"
+                          checked={available && visibility[group]}
+                          disabled={!available}
+                          onChange={() => onToggleLayer(group)}
+                        />
+                        <label htmlFor={id}>
+                          {GROUP_LAYER[group].label}
+                          {!available && (
+                            <span className="rp-layer-reason">
+                              Missing{status?.reason ? `: ${status.reason}` : ""}
+                            </span>
+                          )}
+                        </label>
+                        {evidence && <EvidenceChip value={evidence} />}
+                      </li>
+                    );
+                  })}
                 </ul>
-              </>
-            )}
-            {model.assumptions.length > 0 && (
-              <>
-                <h3>Assumptions</h3>
-                <ul>
-                  {model.assumptions.map((text) => (
-                    <li key={text}>{text}</li>
-                  ))}
-                </ul>
-              </>
-            )}
-          </details>
-        )}
-        </details>
+              </section>
+
+              <section aria-labelledby="rp-legend-title">
+                <h2 id="rp-legend-title" className="rp-section-title">
+                  Legend
+                </h2>
+                <Legend perParticle={perParticle} />
+              </section>
+
+              {(model.assumptions.length > 0 || model.limitations.length > 0) && (
+                <details className="rp-notes">
+                  <summary>Assumptions & limitations</summary>
+                  {model.limitations.length > 0 && (
+                    <>
+                      <h3>Limitations</h3>
+                      <ul>
+                        {model.limitations.map((text) => (
+                          <li key={text}>{text}</li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
+                  {model.assumptions.length > 0 && (
+                    <>
+                      <h3>Assumptions</h3>
+                      <ul>
+                        {model.assumptions.map((text) => (
+                          <li key={text}>{text}</li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
+                </details>
+              )}
+            </details>
           </>
         )}
-        {tab === "responder" && <ResponderTab model={model} simTimeMs={simTimeMs} onFocus={onFocus} />}
-        {tab === "evacuee" && (
-          <EvacueeTab model={model} simTimeMs={simTimeMs} frameIndex={frameIndex} pin={pin} onPin={onPin} />
+        {tab === "responder" && (
+          <ResponderTab model={model} simTimeMs={simTimeMs} onFocus={onFocus} />
         )}
-        {tab === "explain" && <ExplainPanel model={model} frameIndex={frameIndex} simTimeMs={simTimeMs} />}
+        {tab === "evacuee" && (
+          <EvacueeTab
+            model={model}
+            simTimeMs={simTimeMs}
+            frameIndex={frameIndex}
+            pin={pin}
+            onPin={onPin}
+          />
+        )}
+        {tab === "explain" && (
+          <ExplainPanel model={model} frameIndex={frameIndex} simTimeMs={simTimeMs} />
+        )}
         {extra?.content}
       </div>
     </div>

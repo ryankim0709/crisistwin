@@ -46,19 +46,21 @@ export const navigationItems: readonly NavigationItem[] = [
     path: "/comparison",
     label: "Strategy comparison",
     group: "Analysis",
-    description: "Prepare baseline and alternative strategies for comparison.",
+    description: "Camp Fire what-if strategies compared with the baseline.",
   },
   {
     path: "/incidents",
     label: "Incident intelligence",
     group: "Analysis",
-    description: "Review source evidence before proposing a scenario change.",
+    description:
+      "Browse the historical fires and review source evidence before proposing a scenario change.",
   },
   {
     path: "/replay",
     label: "Historical replay",
     group: "Analysis",
-    description: "Replay the 2018 Camp Fire evacuation with what-if comparisons.",
+    description:
+      "Replay past wildfire evacuations (Camp, Marshall, Kincade) with what-if comparisons.",
   },
   {
     path: "/simulate",
@@ -70,6 +72,12 @@ export const navigationItems: readonly NavigationItem[] = [
     path: "/stress-tests",
     label: "Stress testing",
     group: "Analysis",
-    description: "Configure disruptions and investigate plan vulnerabilities.",
+    description: "Camp Fire disruption runs and where the plan breaks.",
+  },
+  {
+    path: "/diorama",
+    label: "Evacuation diorama",
+    group: "Analysis",
+    description: "A fictional, scripted wildfire evacuation in miniature.",
   },
 ];

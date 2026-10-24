@@ -3,7 +3,7 @@
 Date: 2026-10-23. Status: accepted.
 
 Builds on [0004](0004-physics-fire-model.md), [0007](0007-wui-spread-mechanisms.md) and
-the crown fire model in `app/src/fire/crownFire.ts`. The `/fire` page and `simulateFireSpread` keep their behaviour.
+[0008](0008-crown-fire.md). The `/fire` page and `simulateFireSpread` keep their behaviour.
 
 ## Decision
 
@@ -50,18 +50,32 @@ precompute and the minimum-travel-time relaxation of [0004](0004-physics-fire-mo
 and [0007](0007-wui-spread-mechanisms.md) unchanged; only the seeding and the bookkeeping
 are new. `/fire` output is unchanged, so `SPREAD_MODEL.version` stays 4.0.0.
 
-- **Why earliest arrival is exact.** Everything the relaxation reads about a burning cell
-  is fixed in the precompute from that cell's fuel, slope, canopy and the scenario: head
-  rate (crown fire included), heading, eccentricity (crown ellipse included), the backing
-  floor, ember reach, and the spotting launch and landing rules. None depends on when or
-  how fire arrived. `crownType` is read only for the horizon breakdown and
-  `arrivalMechanism` is only written. So the travel time along every step and every ember
-  jump is a fixed positive cost, and the arrival field is a shortest-path problem with no
-  propagation state. Keeping only the earliest arrival per cell discards nothing.
+- **Path-dependent crown state (amended after merging crown carry, 1c1e2a9).** At first
+  every input to the relaxation was fixed per cell in the precompute, so keeping only the
+  earliest arrival per cell was exact. Since [0008](0008-crown-fire.md) let an established
+  crown fire carry through continuous canopy, one part is path-dependent. A cell whose
+  canopy can sustain an active crown fire runs as active only if the fire that reaches it
+  first comes from an actively crowning cell (`arrivedFromActiveCrown`), and that choice
+  is made once, when the cell settles. The scheduled solver uses the single-origin rule
+  unchanged: a cell takes the crown state of its earliest arrival.
+  - A scheduled ignition starts as a surface fire: its seed clears the flag.
+  - A fire that reaches another fire's start cell first brings its own crown state with
+    it.
+  - An ember landing clears the flag, as on `/fire`.
+
+  The consequence is a stated approximation, not an exact result. A slightly later
+  arrival from an actively crowning fire could have carried the cell on faster than the
+  earlier surface arrival that won, so the combined field is no longer guaranteed to be
+  the cell-by-cell minimum of each fire run alone. It can differ wherever two fires meet
+  in canopy that sustains crowning. The same approximation already applies inside a
+  single `/fire` run, where two paths of one fire compete for a cell. Everything else
+  that the relaxation reads is still fixed per cell: rate, heading, eccentricity, backing
+  floor, ember reach, and the spotting rules.
 - **Seeding.** Each source's cell is seeded at its `startMinute`, in input order, before
-  relaxation. Fire cannot leave a source earlier than that. The combined field is then
-  exactly the cell-by-cell minimum of what each source would produce alone, offset by its
-  start time (up to the horizon cut-off).
+  relaxation. Fire cannot leave a source earlier than that. Without crown carry, the
+  combined field is exactly the cell-by-cell minimum of what each source would produce
+  alone, offset by its start time (up to the horizon cut-off). With crown carry this
+  holds except where fires compete for canopy that can sustain crowning (see above).
 - **Reached before start.** If another fire reaches a source cell strictly before its
   start, that arrival stands and the source's seed is discarded when it comes off the
   heap: no reset, no reburn. The outcome is `reached-before-start`, with that arrival
@@ -87,12 +101,11 @@ are new. `/fire` output is unchanged, so `SPREAD_MODEL.version` stays 4.0.0.
   first settled edge cell. Run-level breakdowns are horizon totals over the combined
   footprint. Unlike `/fire`, the T+0 frame is contoured too, so a source starting at
   minute 0 shows its single cell.
-- **What would break this.** Anything that makes a cell's spread depend on its arrival
-  time or arrival path. Examples are time-varying wind or moisture, crown fire that needs
-  a run-up distance, spotting from a burning cell over a period of time, or
-  fire-atmosphere coupling. Each needs a time-dependent solver, for example one that
-  re-evaluates spread at the moment a cell settles. Earliest arrival on a static field
-  would then no longer be exact.
+- **What would make it worse.** Any further state carried along the arrival path or tied
+  to arrival time widens that approximation. Examples are time-varying wind or moisture,
+  crown fire that needs a run-up distance, spotting from a burning cell over a period of
+  time, or fire-atmosphere coupling. An exact treatment needs a solver whose state
+  includes them, for example one label per cell and per crown state.
 
 ## Shared landscape
 

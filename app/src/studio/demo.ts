@@ -11,9 +11,12 @@
  *
  * Measured with the scheduled solver on the real landscape box for these points (LANDFIRE
  * LF2025, run on 2026-10-24; numbers can change if the source data changes):
- * - combined footprint 28 ha at T+30, 152 ha at T+60, 550 ha at T+120, 916 ha at T+180;
- * - F1 alone: 146 ha at T+60 and 901 ha at T+180, so F1 reaches F3's point at T+38.9,
- *   before F3's T+45 start (run outcome "reached-before-start");
+ * - with crown fire carry through continuous canopy (ADR 0008, merged from main): combined
+ *   footprint 288 ha at T+60, 2,489 ha at T+120, 4,549 ha at T+180;
+ * - F1 reaches F3's point at T+34.2, before F3's T+45 start (run outcome
+ *   "reached-before-start");
+ * - before crown carry the same points gave 152 ha at T+60 and 916 ha at T+180, with F3
+ *   reached at T+38.9;
  * - no reachedEdgeMinute (the fire never touches the landscape edge).
  */
 

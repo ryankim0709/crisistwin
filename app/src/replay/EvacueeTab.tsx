@@ -99,7 +99,7 @@ export default function EvacueeTab({ model, simTimeMs, frameIndex, pin, onPin }:
                   {formatAge(simTimeMs - arrival.atMs)} before the replay clock
                 </>
               ))}
-            {grid && <small>Simulated from an assumed ignition; real spread differed.</small>}
+            {grid && <small>From a fire-spread model run; real spread differed.</small>}
           </dd>
 
           <dt>Satellite perimeter</dt>
