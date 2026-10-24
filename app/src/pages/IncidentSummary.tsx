@@ -22,7 +22,7 @@ export default function IncidentSummary({
 }) {
   const load = useJson(INCIDENTS_URL, parseIncidents);
   return (
-    <Panel title={title} eyebrow={eyebrow} aside={<Tag tone="green">Historical replays</Tag>}>
+    <Panel title={title} eyebrow={eyebrow} aside={<Tag tone="success">Historical replays</Tag>}>
       <p className="ui-help">{intro}</p>
       {load.status !== "ready" ? (
         <DataState load={load} what="incidents index" path={INCIDENTS_URL} />
@@ -37,12 +37,12 @@ export default function IncidentSummary({
                 <p>
                   {incident.place} · {formatDate(incident.date)}
                 </p>
-                <ul className="chip-list">
+                <ul className="ui-chip-list">
                   {layers.map((key) => {
                     const status = incident.layerStatus[key] ?? "not listed";
                     return (
                       <li key={key}>
-                        <Tag tone={status === "present" ? "green" : "amber"}>
+                        <Tag tone={status === "present" ? "success" : "warning"}>
                           {layerLabel(key)}: {status}
                         </Tag>
                       </li>

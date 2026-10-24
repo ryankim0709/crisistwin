@@ -3,27 +3,27 @@
   position: absolute;
   top: 96px;
   right: 10px;
-  z-index: 2;
+  z-index: var(--ct-z-map-controls);
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 4px;
+  gap: var(--ct-space-1);
   max-width: 180px;
   padding: 6px;
-  border-radius: 10px;
-  background: var(--rp-glass, rgba(252, 252, 248, 0.88));
-  border: 1px solid var(--rp-line, #dfe3d5);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  border-radius: var(--ct-radius-lg);
+  background: var(--rp-glass);
+  border: 1px solid var(--rp-line);
+  backdrop-filter: var(--ct-glass-filter);
+  -webkit-backdrop-filter: var(--ct-glass-filter);
 }
 .pv-btn {
   padding: 6px 10px;
-  border-radius: 6px;
+  border-radius: var(--ct-radius-sm);
   border: 1px solid transparent;
   background: transparent;
-  color: var(--rp-text, var(--rp-text));
+  color: var(--rp-text);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--ct-text-sm);
   text-align: left;
   cursor: pointer;
 }
@@ -31,38 +31,38 @@
   background: rgba(20, 43, 39, 0.07);
 }
 .pv-btn[aria-pressed="true"] {
-  border-color: var(--rp-amber, var(--rp-amber-fill));
-  color: var(--rp-amber, var(--rp-amber-fill));
-  font-weight: 600;
+  border-color: var(--rp-amber);
+  color: var(--rp-amber);
+  font-weight: var(--ct-weight-semibold);
 }
 .pv-btn:focus-visible,
 .pv-orbit input:focus-visible {
-  outline: 2px solid var(--rp-amber, var(--rp-amber-fill));
+  outline: 2px solid var(--rp-amber);
   outline-offset: 1px;
 }
 .pv-orbit {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 10px;
-  font-size: 11px;
-  color: var(--rp-dim, #52635c);
+  padding: var(--ct-space-1) 10px;
+  font-size: var(--ct-text-xs);
+  color: var(--rp-dim);
 }
 .pv-hint {
-  margin: 2px 4px 0;
-  font-size: 10px;
+  margin: 2px var(--ct-space-1) 0;
+  font-size: var(--ct-text-2xs);
   line-height: 1.35;
-  color: var(--rp-dim, #52635c);
+  color: var(--rp-dim);
 }
 .pv-imagery-note,
 .pv-modelled {
   position: absolute;
   left: 50%;
-  z-index: 2;
+  z-index: var(--ct-z-map-controls);
   transform: translateX(-50%);
   margin: 0;
-  padding: 5px 12px;
-  border-radius: 999px;
+  padding: 5px var(--ct-space-3);
+  border-radius: var(--ct-radius-pill);
   white-space: nowrap;
   pointer-events: none;
   max-width: calc(100% - 32px);
@@ -71,17 +71,17 @@
 }
 .pv-imagery-note {
   bottom: 150px;
-  font-size: 11px;
-  color: var(--rp-dim, #52635c);
-  background: var(--rp-glass, rgba(252, 252, 248, 0.88));
-  border: 1px dashed var(--rp-line-strong, #c3cabb);
+  font-size: var(--ct-text-xs);
+  color: var(--rp-dim);
+  background: var(--rp-glass);
+  border: 1px dashed var(--rp-line-strong);
 }
 .pv-modelled {
   top: 45%;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: var(--ct-text-md);
+  font-weight: var(--ct-weight-semibold);
   letter-spacing: 0.02em;
-  color: #8a3a10;
+  color: var(--ct-ember-core);
   background: rgba(255, 241, 232, 0.92);
   border: 1px solid rgba(194, 65, 12, 0.6);
 }
@@ -89,16 +89,16 @@
   position: absolute;
   top: 250px;
   right: 10px;
-  z-index: 2;
+  z-index: var(--ct-z-map-controls);
   width: 220px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  background: var(--rp-glass, rgba(252, 252, 248, 0.88));
-  border: 1px solid var(--rp-line-strong, #c3cabb);
-  color: var(--rp-text, var(--rp-text));
-  font-size: 12px;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  padding: 10px var(--ct-space-3);
+  border-radius: var(--ct-radius-lg);
+  background: var(--rp-glass);
+  border: 1px solid var(--rp-line-strong);
+  color: var(--rp-text);
+  font-size: var(--ct-text-sm);
+  backdrop-filter: var(--ct-glass-filter);
+  -webkit-backdrop-filter: var(--ct-glass-filter);
 }
 .pv-hud dl {
   display: grid;
@@ -106,21 +106,21 @@
   margin: 0;
 }
 .pv-hud dt {
-  font-size: 10px;
+  font-size: var(--ct-text-2xs);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: var(--rp-dim, #52635c);
+  color: var(--rp-dim);
 }
 .pv-hud dd {
   margin: 0 0 6px;
-  font-family: var(--rp-mono, ui-monospace, monospace);
-  color: var(--rp-ember-core, var(--rp-ember-core));
+  font-family: var(--rp-mono);
+  color: var(--rp-ember-core);
 }
 .pv-hud p {
   margin: 0;
 }
 .pv-hud .pv-hud-note {
-  margin-top: 4px;
-  font-size: 10px;
-  color: var(--rp-dim, #52635c);
+  margin-top: var(--ct-space-1);
+  font-size: var(--ct-text-2xs);
+  color: var(--rp-dim);
 }

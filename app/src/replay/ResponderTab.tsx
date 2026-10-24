@@ -1,3 +1,4 @@
+import { EmptyState } from "../ui";
 import { memo, useMemo } from "react";
 import { roadsCutWithin, type ThreatenedRoad } from "./insights";
 import { EvidenceChip } from "./parts";
@@ -15,7 +16,8 @@ function signedMinutes(seconds: number): string {
 
 /** Risk level as a chip with text and a per-level marker, not color alone. */
 export function RiskChip({ level }: { level: string }) {
-  const marker = level === "critical" ? "!!" : level === "high" ? "!" : level === "elevated" ? "▲" : "○";
+  const marker =
+    level === "critical" ? "!!" : level === "high" ? "!" : level === "elevated" ? "▲" : "○";
   return (
     <span className={`rp-risk rp-risk--${level}`}>
       <span aria-hidden="true">{marker}</span> {level}
@@ -57,21 +59,31 @@ function CutList({
     <ul className="rp-rows">
       {roads.slice(0, LIST_LIMIT).map((road) => (
         <li key={road.name}>
-          <button type="button" className="rp-row-btn" onClick={() => onFocus(edgeCoords(model, road.edges))}>
+          <button
+            type="button"
+            className="rp-row-btn"
+            onClick={() => onFocus(edgeCoords(model, road.edges))}
+          >
             <span className="rp-row-main">{road.name}</span>
             <span className="rp-row-side">in {formatAge(road.firstArrivalMs - simTimeMs)}</span>
           </button>
         </li>
       ))}
-      {roads.length > LIST_LIMIT && <li className="rp-row-more">+{roads.length - LIST_LIMIT} more roads</li>}
+      {roads.length > LIST_LIMIT && (
+        <li className="rp-row-more">+{roads.length - LIST_LIMIT} more roads</li>
+      )}
     </ul>
   );
 }
 
 const ZoneTable = memo(function ZoneTable({ model }: { model: ReplayModel }) {
   const insights = model.insights;
-  const zoneNames = useMemo(() => new Map((model.zones?.items ?? []).map((z) => [z.id, z.name])), [model]);
-  if (!insights || insights.zones.length === 0) return <p className="rp-empty">No zone insights in this bundle.</p>;
+  const zoneNames = useMemo(
+    () => new Map((model.zones?.items ?? []).map((z) => [z.id, z.name])),
+    [model],
+  );
+  if (!insights || insights.zones.length === 0)
+    return <p className="rp-empty">No zone insights in this bundle.</p>;
   const tz = model.incident.timezone;
   return (
     <div className="rp-table-wrap">
@@ -90,7 +102,9 @@ const ZoneTable = memo(function ZoneTable({ model }: { model: ReplayModel }) {
         <tbody>
           {insights.zones.map((z) => {
             const share =
-              z.vehicles && z.departedByFireVeh != null ? Math.round((z.departedByFireVeh / z.vehicles) * 100) : null;
+              z.vehicles && z.departedByFireVeh != null
+                ? Math.round((z.departedByFireVeh / z.vehicles) * 100)
+                : null;
             return (
               <tr key={z.zoneId}>
                 <th scope="row">{zoneNames.get(z.zoneId) ?? z.zoneId}</th>
@@ -125,7 +139,10 @@ export default function ResponderTab({ model, simTimeMs, onFocus }: ResponderTab
   const minute = Math.floor(simTimeMs / 60_000) * 60_000;
   const soon = useMemo(() => roadsCutWithin(model, minute, CUT_SOON_S), [model, minute]);
   const later = useMemo(
-    () => roadsCutWithin(model, minute, CUT_LATER_S).filter((r) => !soon.some((s) => s.name === r.name)),
+    () =>
+      roadsCutWithin(model, minute, CUT_LATER_S).filter(
+        (r) => !soon.some((s) => s.name === r.name),
+      ),
     [model, minute, soon],
   );
   const destNames = useMemo(
@@ -135,10 +152,9 @@ export default function ResponderTab({ model, simTimeMs, onFocus }: ResponderTab
 
   if (!insights) {
     return (
-      <div className="rp-empty">
-        <strong>No planning insights in this bundle.</strong>
-        <span>Regenerate the bundle with the simulator to compute zone and road insights.</span>
-      </div>
+      <EmptyState title="No planning insights in this bundle">
+        Regenerate the bundle with the simulator to compute zone and road insights.
+      </EmptyState>
     );
   }
   const tz = model.incident.timezone;
@@ -159,7 +175,9 @@ export default function ResponderTab({ model, simTimeMs, onFocus }: ResponderTab
             <div key={h.label} className="rp-headline-card">
               <span className="rp-metric-label">{h.label}</span>
               <span className="rp-headline-value">
-                {h.value == null ? "—" : h.value.toLocaleString("en-US", { maximumFractionDigits: 1 })}
+                {h.value == null
+                  ? "—"
+                  : h.value.toLocaleString("en-US", { maximumFractionDigits: 1 })}
                 {h.unit && <small> {h.unit}</small>}
               </span>
               {h.atMs != null && <span className="rp-insight-at">at {localTime(h.atMs, tz)}</span>}
@@ -173,9 +191,21 @@ export default function ResponderTab({ model, simTimeMs, onFocus }: ResponderTab
           Roads the model expects fire to reach
         </h3>
         <h4 className="rp-subtitle">Within 30 min of {localTime(minute, tz)}</h4>
-        <CutList model={model} roads={soon} simTimeMs={simTimeMs} onFocus={onFocus} empty="None in the model." />
+        <CutList
+          model={model}
+          roads={soon}
+          simTimeMs={simTimeMs}
+          onFocus={onFocus}
+          empty="None in the model."
+        />
         <h4 className="rp-subtitle">In 30–60 min</h4>
-        <CutList model={model} roads={later} simTimeMs={simTimeMs} onFocus={onFocus} empty="None in the model." />
+        <CutList
+          model={model}
+          roads={later}
+          simTimeMs={simTimeMs}
+          onFocus={onFocus}
+          empty="None in the model."
+        />
       </section>
 
       <section aria-labelledby="rp-zones-title">

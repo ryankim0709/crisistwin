@@ -1,3 +1,4 @@
+import { EmptyState } from "../ui";
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { GROUP_LAYER, groupAvailability } from "./layerGroups";
 import { COLORS, type LayerGroup } from "./mapLayers";
@@ -56,10 +57,9 @@ function Metrics({
   if (!traffic) {
     const reason = model.layerStatus.traffic?.reason;
     return (
-      <div className="rp-empty">
-        <strong>No traffic simulation in this bundle.</strong>
-        <span>{reason ?? "Fire perimeters, events and damage still replay."}</span>
-      </div>
+      <EmptyState title="No traffic simulation in this bundle">
+        {reason ?? "Fire perimeters, events and damage still replay."}
+      </EmptyState>
     );
   }
   const row = frameIndex >= 0 ? traffic.metrics[frameIndex] : null;
@@ -512,8 +512,8 @@ function Legend({ perParticle }: { perParticle: number | null }) {
       </li>
       <li>
         <span className="rp-key rp-key--fireobs" aria-hidden="true" />
-        Fire observed — small hollow white rings where fire was recorded (off by default), shown from their
-        time
+        Fire observed — small hollow white rings where fire was recorded (off by default), shown
+        from their time
       </li>
       <li>
         <span className="rp-key rp-key--history" aria-hidden="true" />

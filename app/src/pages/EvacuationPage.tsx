@@ -1,6 +1,6 @@
 import { useState } from "react";
 import IncidentSummary from "./IncidentSummary";
-import { DraftNotice, EmptyResult, Field, Panel, Tag, WorkspacePage } from "./WorkspaceUI";
+import { Button, DraftNotice, EmptyResult, Field, Panel, Tag, WorkspacePage } from "./WorkspaceUI";
 
 const initialZones = [
   { name: "Sample zone A", people: "600", vehicles: "200", departure: "0" },
@@ -35,7 +35,7 @@ export default function EvacuationPage() {
         <Panel
           title="Population & departures"
           eyebrow="01 / Demand"
-          aside={<Tag tone="amber">Synthetic inputs</Tag>}
+          aside={<Tag tone="warning">Synthetic inputs</Tag>}
         >
           <Field label="Departure strategy">
             <select value={strategy} onChange={(event) => setStrategy(event.target.value)}>
@@ -113,7 +113,7 @@ export default function EvacuationPage() {
               <strong>Sample connector A</strong>
               <p>Synthetic road · no geographic mapping</p>
             </div>
-            <Tag tone={closed ? "amber" : "green"}>
+            <Tag tone={closed ? "warning" : "success"}>
               {closed ? "Assumed closed" : "Assumed open"}
             </Tag>
           </div>
@@ -141,9 +141,7 @@ export default function EvacuationPage() {
             Clearance time, queues, people remaining, full shelters, and unreachable destinations
             will appear after a computed run.
           </EmptyResult>
-          <button type="button" disabled>
-            Run evacuation simulation
-          </button>
+          <Button disabled>Run evacuation simulation</Button>
           <p className="ui-help">Requires a road network, validated demand, and a traffic model.</p>
         </Panel>
       </div>

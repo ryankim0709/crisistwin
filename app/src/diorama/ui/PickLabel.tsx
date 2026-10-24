@@ -1,4 +1,5 @@
 import { useEffect, useRef, type RefObject } from "react";
+import { IconButton } from "../../ui";
 import type { PickTarget } from "../types";
 
 /** Gap between the picked object's projected point and the label, in CSS px. */
@@ -20,7 +21,14 @@ type PickLabelProps = {
  * Small contextual label anchored to a picked object. Its position follows the camera on
  * every animation frame by writing a transform directly, without re-rendering React.
  */
-export default function PickLabel({ target, title, lines, project, stageRef, onClose }: PickLabelProps) {
+export default function PickLabel({
+  target,
+  title,
+  lines,
+  project,
+  stageRef,
+  onClose,
+}: PickLabelProps) {
   const labelRef = useRef<HTMLDivElement>(null);
   const projectRef = useRef(project);
   useEffect(() => {
@@ -56,14 +64,26 @@ export default function PickLabel({ target, title, lines, project, stageRef, onC
   }, [target, stageRef]);
 
   return (
-    <div ref={labelRef} className="dio-pick dio-panel" role="dialog" aria-label={title} style={{ visibility: "hidden" }}>
+    <div
+      ref={labelRef}
+      className="ui-panel ui-panel--glass ui-panel--compact dio-pick"
+      role="dialog"
+      aria-label={title}
+      style={{ visibility: "hidden" }}
+    >
       <div className="dio-pick-head">
         <p className="dio-pick-title">{title}</p>
-        <button type="button" className="dio-pick-close" onClick={onClose} aria-label="Close label (Escape)">
+        <IconButton size="sm" label="Close label (Escape)" onClick={onClose}>
           <svg viewBox="0 0 12 12" aria-hidden="true">
-            <path d="m3 3 6 6M9 3 3 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            <path
+              d="m3 3 6 6M9 3 3 9"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              fill="none"
+            />
           </svg>
-        </button>
+        </IconButton>
       </div>
       {lines.length > 0 && (
         <ul className="dio-pick-lines">

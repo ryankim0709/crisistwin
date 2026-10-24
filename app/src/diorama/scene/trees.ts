@@ -22,7 +22,12 @@ function roundCanopy() {
 }
 
 function trunk(height: number) {
-  return place(paint(new THREE.CylinderGeometry(0.35, 0.55, height, 5), 0xffffff), 0, height / 2, 0);
+  return place(
+    paint(new THREE.CylinderGeometry(0.35, 0.55, height, 5), 0xffffff),
+    0,
+    height / 2,
+    0,
+  );
 }
 
 const HOT = new THREE.Color(PALETTE.amber);
@@ -52,9 +57,20 @@ export class TreeLayer {
 
   constructor(world: World, fire: FireField) {
     this.fire = fire;
-    const canopyMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.85, flatShading: true });
-    const trunkMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95, flatShading: true });
-    const geos: Record<TreeKind, { canopy: THREE.BufferGeometry; trunk: THREE.BufferGeometry; greens: readonly number[] }> = {
+    const canopyMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.85,
+      flatShading: true,
+    });
+    const trunkMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.95,
+      flatShading: true,
+    });
+    const geos: Record<
+      TreeKind,
+      { canopy: THREE.BufferGeometry; trunk: THREE.BufferGeometry; greens: readonly number[] }
+    > = {
       pine: { canopy: pineCanopy(), trunk: trunk(2.6), greens: PALETTE.pineGreens },
       round: { canopy: roundCanopy(), trunk: trunk(3.6), greens: PALETTE.roundGreens },
     };
@@ -82,7 +98,8 @@ export class TreeLayer {
       trees.forEach((tree, i) => {
         const col = Math.floor((tree.p.x - fire.originX) / fire.cellSize);
         const row = Math.floor((tree.p.z - fire.originZ) / fire.cellSize);
-        k.cell[i] = col >= 0 && row >= 0 && col < fire.cols && row < fire.rows ? row * fire.cols + col : -1;
+        k.cell[i] =
+          col >= 0 && row >= 0 && col < fire.cols && row < fire.rows ? row * fire.cols + col : -1;
         const jitter = hash2(tree.p.x, tree.p.z);
         pos.set(tree.p.x, heightAt(tree.p.x, tree.p.z) - 0.3, tree.p.z);
         quat.setFromAxisAngle(up, jitter * Math.PI * 2);
@@ -93,7 +110,9 @@ export class TreeLayer {
         k.burnedCanopy.push(new THREE.Matrix4().compose(pos, quat, scale));
         canopy.setMatrixAt(i, m);
         trunkMesh.setMatrixAt(i, m);
-        const green = new THREE.Color(g.greens[Math.floor(jitter * g.greens.length) % g.greens.length]).multiplyScalar(0.92 + hash2(tree.p.z, tree.p.x) * 0.16);
+        const green = new THREE.Color(
+          g.greens[Math.floor(jitter * g.greens.length) % g.greens.length],
+        ).multiplyScalar(0.92 + hash2(tree.p.z, tree.p.x) * 0.16);
         k.green.push(green);
         canopy.setColorAt(i, green);
         trunkMesh.setColorAt(i, TRUNK);
@@ -124,7 +143,12 @@ export class TreeLayer {
         const cell = k.cell[i];
         const ign = cell >= 0 ? ignitionTime[cell] : Infinity;
         const age = t - ign;
-        const state = age < 0 || !Number.isFinite(age) ? TreeFire.Unburned : age < burnDuration ? TreeFire.Burning : TreeFire.Burned;
+        const state =
+          age < 0 || !Number.isFinite(age)
+            ? TreeFire.Unburned
+            : age < burnDuration
+              ? TreeFire.Burning
+              : TreeFire.Burned;
         if (state === k.state[i] && state !== TreeFire.Burning) continue;
         if ((state === TreeFire.Burned) !== (k.state[i] === TreeFire.Burned)) {
           k.canopy.setMatrixAt(i, state === TreeFire.Burned ? k.burnedCanopy[i] : k.base[i]);
@@ -161,7 +185,9 @@ export class TreeLayer {
         if (k.state[i] !== TreeFire.Burning) continue;
         any = true;
         const f = Math.min(1, Math.max(0, (this.t - ignitionTime[k.cell[i]]) / burnDuration));
-        const wobble = reducedMotion ? 0.5 : 0.5 + 0.5 * Math.sin(time * 9 + i * 1.7) * Math.sin(time * 5.3 + i * 0.6);
+        const wobble = reducedMotion
+          ? 0.5
+          : 0.5 + 0.5 * Math.sin(time * 9 + i * 1.7) * Math.sin(time * 5.3 + i * 0.6);
         c.copy(CORAL).lerp(HOT, wobble);
         const glow = (1 - f) * (2.4 + wobble * 1.2);
         c.multiplyScalar(glow).lerp(CHAR, f * f);

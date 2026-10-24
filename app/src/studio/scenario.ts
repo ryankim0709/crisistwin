@@ -359,7 +359,14 @@ function parseSettings(
     horizonMinutes === null ||
     moisture === null
       ? null
-      : { windSpeedMph, windFromDegrees, moisture, midflameAdjustment, stepMinutes, horizonMinutes };
+      : {
+          windSpeedMph,
+          windFromDegrees,
+          moisture,
+          midflameAdjustment,
+          stepMinutes,
+          horizonMinutes,
+        };
   if (!settings) return null;
 
   if (raw.spotting !== undefined) {
@@ -373,7 +380,10 @@ function parseSettings(
   if (raw.structureSpread !== undefined) {
     const s = raw.structureSpread;
     if (!isRecord(s) || typeof s.enabled !== "boolean" || !isFiniteNumber(s.rateMetersPerMinute)) {
-      fail("Structure spread must be { enabled, rateMetersPerMinute } with a finite rate.", "settings");
+      fail(
+        "Structure spread must be { enabled, rateMetersPerMinute } with a finite rate.",
+        "settings",
+      );
     } else {
       settings.structureSpread = { enabled: s.enabled, rateMetersPerMinute: s.rateMetersPerMinute };
     }

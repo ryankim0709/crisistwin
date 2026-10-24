@@ -53,9 +53,12 @@ function tourFacts(model: ReplayModel, place: ReferencePlace | null): TourFacts 
   const horizon = firstPerimeterMs ?? Math.min(endMs, anchor + 6 * 3_600_000);
   const at = (fraction: number) => iso(Math.min(endMs, anchor + (horizon - anchor) * fraction));
   const year = new Intl.DateTimeFormat("en-US", { timeZone: tz, year: "numeric" }).format(startMs);
-  const dateLabel = new Intl.DateTimeFormat("en-GB", { timeZone: tz, day: "numeric", month: "short", year: "numeric" }).format(
-    ignitionMs ?? startMs,
-  );
+  const dateLabel = new Intl.DateTimeFormat("en-GB", {
+    timeZone: tz,
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  }).format(ignitionMs ?? startMs);
   const fireBody = model.fireSimulated
     ? firstPerimeterMs !== null
       ? `Orange is the fire: a model until the satellite perimeter at ${localTime(firstPerimeterMs, tz)}, then the dashed blue-grey line.`
@@ -63,11 +66,15 @@ function tourFacts(model: ReplayModel, place: ReferencePlace | null): TourFacts 
     : "The dashed blue-grey line is the satellite fire perimeter in effect at this time.";
   return {
     name: model.incident.name,
-    area: model.incident.place ?? (place && place.name !== "the population centre" ? place.name : "the affected area"),
+    area:
+      model.incident.place ??
+      (place && place.name !== "the population centre" ? place.name : "the affected area"),
     place: place?.name ?? "the population centre",
     year,
     dateLabel,
-    introAt: iso(Math.min(endMs, (ignitionMs ?? startMs) + (ignitionMs !== null ? 40 : 60) * 60_000)),
+    introAt: iso(
+      Math.min(endMs, (ignitionMs ?? startMs) + (ignitionMs !== null ? 40 : 60) * 60_000),
+    ),
     trafficAt: at(1 / 3),
     fireAt: at(1 / 2),
     fireBody,
@@ -86,7 +93,12 @@ function shared(f: TourFacts) {
     target: ".rp-map",
     seekTo: f.trafficAt,
   };
-  const fire: TourStep = { title: "The fire", body: f.fireBody, target: ".rp-map", seekTo: f.fireAt };
+  const fire: TourStep = {
+    title: "The fire",
+    body: f.fireBody,
+    target: ".rp-map",
+    seekTo: f.fireAt,
+  };
   return { timeline, traffic, fire };
 }
 

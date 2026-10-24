@@ -26,7 +26,9 @@ const MAX_FLOW_PX = 7;
 const EMPTY: FeatureCollection = { type: "FeatureCollection", features: [] };
 
 const fmt = (n: number) =>
-  Number.isInteger(n) ? n.toLocaleString("en-US") : n.toLocaleString("en-US", { maximumFractionDigits: 1 });
+  Number.isInteger(n)
+    ? n.toLocaleString("en-US")
+    : n.toLocaleString("en-US", { maximumFractionDigits: 1 });
 
 /** Largest value over all cells and hours, so circle size means the same thing at every hour. */
 function maxCellVisits(m: Mobility): number {
@@ -37,7 +39,8 @@ function maxCellVisits(m: Mobility): number {
 
 function maxFlowVisitors(m: Mobility): number {
   let max = 1;
-  for (const w of m.originFlows?.weeks ?? []) for (const f of w.items) if (f.visitors > max) max = f.visitors;
+  for (const w of m.originFlows?.weeks ?? [])
+    for (const f of w.items) if (f.visitors > max) max = f.visitors;
   return max;
 }
 
@@ -66,7 +69,12 @@ function cellCollection(m: Mobility, hour: number, maxVisits: number): FeatureCo
   return { type: "FeatureCollection", features };
 }
 
-function flowCollection(m: Mobility, origin: LngLat, week: number, maxVisitors: number): FeatureCollection {
+function flowCollection(
+  m: Mobility,
+  origin: LngLat,
+  week: number,
+  maxVisitors: number,
+): FeatureCollection {
   const label = week >= 0 ? m.eventWeeks[week] : undefined;
   const items = m.originFlows?.weeks.find((w) => w.week === label)?.items ?? [];
   return {
@@ -109,13 +117,21 @@ function tooltip(
     add(
       "span",
       `${fmt(Number(p.pois))} places in this ${m.cells.sizeDeg}° cell · ${
-        Number(p.evac) === 1 ? "mostly in the evacuation-area block groups" : "outside the evacuation area"
+        Number(p.evac) === 1
+          ? "mostly in the evacuation-area block groups"
+          : "outside the evacuation area"
       }`,
     );
   } else {
     add("strong", "Evacuation-area residents seen here (estimate)");
-    add("span", `${fmt(Number(p.visitors))} visitors in the week of ${String(p.week)} · baseline week ${fmt(Number(p.baseline))}`);
-    add("span", "Lower bound: Advan omits small home-area counts. A straight line, not a travel route.");
+    add(
+      "span",
+      `${fmt(Number(p.visitors))} visitors in the week of ${String(p.week)} · baseline week ${fmt(Number(p.baseline))}`,
+    );
+    add(
+      "span",
+      "Lower bound: Advan omits small home-area counts. A straight line, not a travel route.",
+    );
   }
   add("span", "Advan phone-panel estimates via Dewey, not counts of people.", "rp-tip-note");
   return root;
@@ -136,7 +152,14 @@ export interface MobilityOverlayProps {
  * (size = visits, color = visits vs the same hour-of-week baseline), and optional origin-flow
  * lines for the current event week. Renders no DOM; owns its sources, layers and popup.
  */
-export default function MobilityOverlay({ map, mobility, simTimeMs, visible, showFlows, origin }: MobilityOverlayProps) {
+export default function MobilityOverlay({
+  map,
+  mobility,
+  simTimeMs,
+  visible,
+  showFlows,
+  origin,
+}: MobilityOverlayProps) {
   const hour = mobility ? hourIndexAt(mobility, simTimeMs) : -1;
   const week = weekIndexAt(hour);
   const scale = useMemo(
@@ -179,10 +202,23 @@ export default function MobilityOverlay({ map, mobility, simTimeMs, visible, sho
         type: "circle",
         source: CELLS,
         paint: {
-          "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, ["*", ["get", "rad"], 1.0], 12, ["*", ["get", "rad"], 2.0]],
+          "circle-radius": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            8,
+            ["*", ["get", "rad"], 1.0],
+            12,
+            ["*", ["get", "rad"], 2.0],
+          ],
           "circle-color": "#142b27",
           "circle-blur": 1,
-          "circle-opacity": ["case", ["==", ["get", "fresh"], 1], 0.12, ["interpolate", ["linear"], ["get", "lr"], -2, 0.04, 0, 0.1, 2, 0.28]],
+          "circle-opacity": [
+            "case",
+            ["==", ["get", "fresh"], 1],
+            0.12,
+            ["interpolate", ["linear"], ["get", "lr"], -2, 0.04, 0, 0.1, 2, 0.28],
+          ],
         },
       },
       below,
@@ -194,7 +230,15 @@ export default function MobilityOverlay({ map, mobility, simTimeMs, visible, sho
         source: CELLS,
         layout: { "circle-sort-key": ["-", ["get", "rad"]] },
         paint: {
-          "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, ["*", ["get", "rad"], 0.75], 12, ["*", ["get", "rad"], 1.4]],
+          "circle-radius": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            8,
+            ["*", ["get", "rad"], 0.75],
+            12,
+            ["*", ["get", "rad"], 1.4],
+          ],
           "circle-color": [
             "case",
             ["==", ["get", "fresh"], 1],
@@ -212,14 +256,32 @@ export default function MobilityOverlay({ map, mobility, simTimeMs, visible, sho
             ],
           ],
           "circle-opacity": 0.85,
-          "circle-stroke-color": ["case", ["==", ["get", "fresh"], 1], MOBILITY_COLORS.fresh, "rgba(245,244,238,0.75)"],
-          "circle-stroke-width": ["case", ["==", ["get", "fresh"], 1], 1.4, ["==", ["get", "evac"], 1], 1.8, 0.6],
+          "circle-stroke-color": [
+            "case",
+            ["==", ["get", "fresh"], 1],
+            MOBILITY_COLORS.fresh,
+            "rgba(245,244,238,0.75)",
+          ],
+          "circle-stroke-width": [
+            "case",
+            ["==", ["get", "fresh"], 1],
+            1.4,
+            ["==", ["get", "evac"], 1],
+            1.8,
+            0.6,
+          ],
         },
       },
       below,
     );
 
-    const popup = new Popup({ closeButton: false, closeOnClick: false, className: "rp-popup", offset: 10, maxWidth: "280px" });
+    const popup = new Popup({
+      closeButton: false,
+      closeOnClick: false,
+      className: "rp-popup",
+      offset: 10,
+      maxWidth: "280px",
+    });
     const onMove = (event: MapMouseEvent) => {
       const s = live.current;
       if (!s.mobility || s.hour < 0 || !s.visible) {
@@ -235,7 +297,9 @@ export default function MobilityOverlay({ map, mobility, simTimeMs, visible, sho
       const kind = feature.layer.id === FLOWS ? "flow" : "cell";
       popup
         .setLngLat(event.lngLat)
-        .setDOMContent(tooltip(feature.properties as Record<string, unknown>, kind, s.mobility, s.hour))
+        .setDOMContent(
+          tooltip(feature.properties as Record<string, unknown>, kind, s.mobility, s.hour),
+        )
         .addTo(map);
     };
     const onOut = () => popup.remove();
@@ -260,17 +324,24 @@ export default function MobilityOverlay({ map, mobility, simTimeMs, visible, sho
   // Cells: only the clock's hour changes the data.
   useEffect(() => {
     if (!map || !map.getSource(CELLS)) return;
-    setSourceData(map, CELLS, mobility && scale && hour >= 0 ? cellCollection(mobility, hour, scale.visits) : EMPTY);
+    setSourceData(
+      map,
+      CELLS,
+      mobility && scale && hour >= 0 ? cellCollection(mobility, hour, scale.visits) : EMPTY,
+    );
   }, [map, mobility, scale, hour]);
 
   // Flows: change with the event week or the origin.
   useEffect(() => {
     if (!map || !map.getSource(FLOWS)) return;
-    const from: LngLat | null = originLon !== undefined && originLat !== undefined ? [originLon, originLat] : null;
+    const from: LngLat | null =
+      originLon !== undefined && originLat !== undefined ? [originLon, originLat] : null;
     setSourceData(
       map,
       FLOWS,
-      mobility && scale && from && week >= 0 ? flowCollection(mobility, from, week, scale.flow) : EMPTY,
+      mobility && scale && from && week >= 0
+        ? flowCollection(mobility, from, week, scale.flow)
+        : EMPTY,
     );
   }, [map, mobility, scale, week, originLon, originLat]);
 

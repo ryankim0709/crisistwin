@@ -53,7 +53,13 @@ export class FireSampler {
         const i = r * f.cols + c;
         const age = t - f.ignitionTime[i];
         if (!(age >= 0 && age < f.burnDuration)) continue;
-        const cell = { i, x: f.originX + (c + 0.5) * f.cellSize, y: this.heights[i], z: f.originZ + (r + 0.5) * f.cellSize, age };
+        const cell = {
+          i,
+          x: f.originX + (c + 0.5) * f.cellSize,
+          y: this.heights[i],
+          z: f.originZ + (r + 0.5) * f.cellSize,
+          age,
+        };
         this.burning.push(cell);
         const p = cell.x * this.toward.x + cell.z * this.toward.z;
         minP = Math.min(minP, p);
@@ -109,7 +115,13 @@ function smokeTexture(): THREE.CanvasTexture {
   return tex;
 }
 
-type SmokeParticle = { sprite: THREE.Sprite; cycle: number; origin: THREE.Vector3; offset: number; shade: number };
+type SmokeParticle = {
+  sprite: THREE.Sprite;
+  cycle: number;
+  origin: THREE.Vector3;
+  offset: number;
+  shade: number;
+};
 
 const SMOKE_LIFE = 11;
 const SMOKE_COUNT = 30;
@@ -159,7 +171,13 @@ export class EffectsLayer {
       const sprite = new THREE.Sprite(material);
       sprite.visible = false;
       sprite.renderOrder = 5;
-      this.smoke.push({ sprite, cycle: -1, origin: new THREE.Vector3(), offset: (i / SMOKE_COUNT) * SMOKE_LIFE, shade });
+      this.smoke.push({
+        sprite,
+        cycle: -1,
+        origin: new THREE.Vector3(),
+        offset: (i / SMOKE_COUNT) * SMOKE_LIFE,
+        shade,
+      });
       this.group.add(sprite);
     }
 
@@ -188,12 +206,24 @@ export class EffectsLayer {
     ringGeo.rotateX(-Math.PI / 2);
     this.ignitionRing = new THREE.Mesh(
       ringGeo,
-      new THREE.MeshBasicMaterial({ color: PALETTE.amber, transparent: true, depthWrite: false, toneMapped: false }),
+      new THREE.MeshBasicMaterial({
+        color: PALETTE.amber,
+        transparent: true,
+        depthWrite: false,
+        toneMapped: false,
+      }),
     );
     this.ignitionRing.position.set(ig.x, igY + 1, ig.z);
     const beam = new THREE.Mesh(
       new THREE.CylinderGeometry(0.5, 1.4, 34, 12, 1, true),
-      new THREE.MeshBasicMaterial({ color: PALETTE.amber, transparent: true, opacity: 0.35, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }),
+      new THREE.MeshBasicMaterial({
+        color: PALETTE.amber,
+        transparent: true,
+        opacity: 0.35,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        toneMapped: false,
+      }),
     );
     beam.position.set(ig.x, igY + 17, ig.z);
     this.ignition.add(this.ignitionRing, beam);
@@ -203,7 +233,10 @@ export class EffectsLayer {
     this.buildWind();
 
     const sprayGeo = new THREE.BufferGeometry();
-    sprayGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(MAX_CREWS * SPRAY_PARTICLES * 3), 3));
+    sprayGeo.setAttribute(
+      "position",
+      new THREE.BufferAttribute(new Float32Array(MAX_CREWS * SPRAY_PARTICLES * 3), 3),
+    );
     sprayGeo.setDrawRange(0, 0);
     this.spray = new THREE.Points(
       sprayGeo,
@@ -222,7 +255,13 @@ export class EffectsLayer {
     this.group.add(this.spray);
     for (let i = 0; i < MAX_CREWS; i++) {
       const mist = new THREE.Sprite(
-        new THREE.SpriteMaterial({ map: this.dot, color: PALETTE.waterSpray, transparent: true, opacity: 0, depthWrite: false }),
+        new THREE.SpriteMaterial({
+          map: this.dot,
+          color: PALETTE.waterSpray,
+          transparent: true,
+          opacity: 0,
+          depthWrite: false,
+        }),
       );
       mist.visible = false;
       this.sprayMist.push(mist);
@@ -236,8 +275,16 @@ export class EffectsLayer {
     // Upwind of the ignition, floating above the hills.
     const px = this.world.ignition.x - dir.x * 34 + dir.y * 26;
     const pz = this.world.ignition.z - dir.y * 34 - dir.x * 26;
-    const clampedX = THREE.MathUtils.clamp(px, -this.world.width / 2 + 20, this.world.width / 2 - 20);
-    const clampedZ = THREE.MathUtils.clamp(pz, -this.world.depth / 2 + 16, this.world.depth / 2 - 16);
+    const clampedX = THREE.MathUtils.clamp(
+      px,
+      -this.world.width / 2 + 20,
+      this.world.width / 2 - 20,
+    );
+    const clampedZ = THREE.MathUtils.clamp(
+      pz,
+      -this.world.depth / 2 + 16,
+      this.world.depth / 2 - 16,
+    );
     const y = heightAt(clampedX, clampedZ) + 22;
     this.wind.position.set(clampedX, y, clampedZ);
     this.wind.rotation.y = Math.atan2(dir.x, dir.y);
@@ -261,7 +308,13 @@ export class EffectsLayer {
     ] as const) {
       const streak = new THREE.Mesh(
         new THREE.CylinderGeometry(0.22, 0.22, len, 6),
-        new THREE.MeshStandardMaterial({ color: PALETTE.ivory, emissive: PALETTE.ivory, emissiveIntensity: 0.35, transparent: true, opacity: 0.7 }),
+        new THREE.MeshStandardMaterial({
+          color: PALETTE.ivory,
+          emissive: PALETTE.ivory,
+          emissiveIntensity: 0.35,
+          transparent: true,
+          opacity: 0.7,
+        }),
       );
       streak.rotation.x = Math.PI / 2;
       streak.position.set(x, -0.6, -2);
@@ -361,8 +414,15 @@ export class EffectsLayer {
       const h2 = hash2(spot.i * 0.73, 8.1);
       const h3 = hash2(spot.i * 1.19, 3.7);
       const rate = 4 + h2 * 6;
-      const flick = reducedMotion ? 0.8 : 0.6 + 0.4 * Math.sin(time * rate + h1 * 6.28) * Math.sin(time * (rate * 0.43) + h3 * 6.28);
-      s.position.set(spot.x + (h1 - 0.5) * cs * 0.8, spot.y + 1.6 + h3 * 1.6, spot.z + (h2 - 0.5) * cs * 0.8);
+      const flick = reducedMotion
+        ? 0.8
+        : 0.6 +
+          0.4 * Math.sin(time * rate + h1 * 6.28) * Math.sin(time * (rate * 0.43) + h3 * 6.28);
+      s.position.set(
+        spot.x + (h1 - 0.5) * cs * 0.8,
+        spot.y + 1.6 + h3 * 1.6,
+        spot.z + (h2 - 0.5) * cs * 0.8,
+      );
       s.scale.setScalar(cs * (1.1 + h3 * 1.7) * (0.6 + 0.4 * spot.weight));
       (s.material as THREE.SpriteMaterial).opacity = 0.5 * flick * spot.weight * (0.55 + 0.45 * h2);
       s.visible = true;

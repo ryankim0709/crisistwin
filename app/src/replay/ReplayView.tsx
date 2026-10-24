@@ -1,4 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  Button,
+  EvidenceTag,
+  IconButton,
+  LoadingState,
+  Notice,
+  SegmentedControl,
+  Tag,
+} from "../ui";
 import { groupAvailability } from "./layerGroups";
 import CompareTab, { CaveatChip } from "./CompareTab";
 import { BundleMissingError, REPLAY_VIEW, fetchReplayBundle, type ViewConfig } from "./loadBundle";
@@ -114,7 +123,13 @@ export default function ReplayView({
 
   if (load.status === "ready")
     return (
-      <ReplayScreen model={load.model} config={config} picker={picker} switcher={switcher} nextFire={nextFire ?? null} />
+      <ReplayScreen
+        model={load.model}
+        config={config}
+        picker={picker}
+        switcher={switcher}
+        nextFire={nextFire ?? null}
+      />
     );
 
   const sim = config.kind === "simulation";
@@ -123,11 +138,7 @@ export default function ReplayView({
       <div className="rp-state-card">
         <p className="rp-eyebrow">{config.eyebrow}</p>
         {picker}
-        {load.status === "loading" && (
-          <p role="status" className="rp-state-msg">
-            <span className="rp-spinner" aria-hidden="true" /> Loading replay bundle…
-          </p>
-        )}
+        {load.status === "loading" && <LoadingState>Loading replay bundle…</LoadingState>}
         {load.status === "missing" && (
           <div role="alert">
             <h1>{sim ? "No agent simulation yet" : "No replay bundle yet"}</h1>
@@ -136,19 +147,19 @@ export default function ReplayView({
               Generate it, then reload:
               <code>{config.generateHint}</code>
             </p>
-            <button type="button" className="rp-btn rp-btn--text" onClick={retry}>
+            <Button variant="secondary" size="sm" onClick={retry}>
               Try again
-            </button>
+            </Button>
           </div>
         )}
         {load.status === "error" && (
           <div role="alert">
             <h1>{sim ? "Simulation unavailable" : "Replay unavailable"}</h1>
-            <p className="rp-state-msg">{load.message}</p>
+            <Notice tone="danger">{load.message}</Notice>
             <p className="rp-state-msg rp-dim">Source: {config.bundleUrl}</p>
-            <button type="button" className="rp-btn rp-btn--text" onClick={retry}>
+            <Button variant="secondary" size="sm" onClick={retry}>
               Try again
-            </button>
+            </Button>
           </div>
         )}
         <a className="rp-back rp-other-route" href={config.otherRoute.href}>
@@ -158,6 +169,11 @@ export default function ReplayView({
     </main>
   );
 }
+
+const BASEMAP_OPTIONS = [
+  { value: "map", label: "Map" },
+  { value: "satellite", label: "Satellite" },
+] as const;
 
 // Default view: four layers (perimeter, model fire, roads/traffic, vehicle dots); the rest are toggles.
 const DEFAULT_OFF: LayerGroup[] = ["damage", "zones", "history", "destinations", "fireObs"];
@@ -252,12 +268,16 @@ function ReplayScreen({
   const [legendOpen, setLegendOpen] = useState(false);
   // Replay opens on the story title card; the tour is optional (Tour button). Deep links
   // (?tab=, ?variant=) skip the card; ?story=1 starts the story at once.
-  const [tourOpen, setTourOpen] = useState(() => config.kind === "simulation" && !tourSeen(config.kind));
+  const [tourOpen, setTourOpen] = useState(
+    () => config.kind === "simulation" && !tourSeen(config.kind),
+  );
   const [landing, setLanding] = useState(() => {
     const q = new URLSearchParams(window.location.search);
     return config.kind === "replay" && !q.has("tab") && !q.has("variant") && q.get("story") !== "1";
   });
-  const autoStory = useRef(config.kind === "replay" && new URLSearchParams(window.location.search).get("story") === "1");
+  const autoStory = useRef(
+    config.kind === "replay" && new URLSearchParams(window.location.search).get("story") === "1",
+  );
   const closeTour = useCallback(() => {
     markTourSeen(config.kind);
     setTourOpen(false);
@@ -508,12 +528,12 @@ function ReplayScreen({
             label: "What if…",
             content: (
               <div className="rp-tab">
-                <p className="rp-empty" role="note">
+                <Notice tone="warning">
                   The what-if runs on disk were made with a different demand (
                   {variantDemand?.toLocaleString("en-US")} vehicles) than this replay (
                   {baselineDemand?.toLocaleString("en-US")} vehicles), so they are not comparable
                   and are hidden until they are regenerated.
-                </p>
+                </Notice>
               </div>
             ),
           },
@@ -678,13 +698,15 @@ function ReplayScreen({
               aria-controls="rp-status-details"
               onClick={() => setStatusOpen((o) => !o)}
             >
-              <span className="rp-status-chip">
+              <Tag className="rp-status-chip" tone={sim ? "info" : "warning"}>
                 {sim ? "Agent simulation" : "Retrospective · modelled traffic"}
-              </span>
+              </Tag>
               {variants.shown && (
-                <span className="rp-status-chip">What-if: {variants.shown.title}</span>
+                <Tag className="rp-status-chip" tone="warning">
+                  What-if: {variants.shown.title}
+                </Tag>
               )}
-              {fixture && <span className="rp-fixture-tag">FIXTURE DEMAND</span>}
+              {fixture && <EvidenceTag kind="fixture" />}
               {derivedDemand && <span className="rp-status-text">Census demand (derived)</span>}
               <span className="rp-status-text">
                 {perimeter && perimeterEnd !== null && simTimeMs < perimeterEnd ? (
@@ -735,11 +757,13 @@ function ReplayScreen({
                     {perimeter.areaKm2 != null && <>, {perimeter.areaKm2.toFixed(0)} km²</>}
                     {perimeter.timePrecision === "half_day" ? (
                       <>
-                        ; half-day satellite composite: extent reached sometime in the 12 h window from{" "}
-                        {localTime(perimeter.atMs, model.incident.timezone)}
+                        ; half-day satellite composite: extent reached sometime in the 12 h window
+                        from {localTime(perimeter.atMs, model.incident.timezone)}
                       </>
                     ) : (
-                      perimeter.timePrecision && <>, ± {perimeter.timePrecision.replace(/_/g, " ")}</>
+                      perimeter.timePrecision && (
+                        <>, ± {perimeter.timePrecision.replace(/_/g, " ")}</>
+                      )
                     )}
                     )
                     {nextPerimeter && (
@@ -787,7 +811,7 @@ function ReplayScreen({
               )}
               {fixture && (
                 <p className="rp-fixture" role="note">
-                  <span className="rp-fixture-tag">FIXTURE DATA</span> synthetic, not historical
+                  <EvidenceTag kind="fixture" /> synthetic, not historical
                   {fixtureLayers.length > 0 && (
                     <span className="rp-fixture-layers">: {fixtureLayers.join(", ")}</span>
                   )}
@@ -797,18 +821,20 @@ function ReplayScreen({
           </div>
           <div className="rp-basemap">
             {chapters.length > 0 && (
-              <button
-                type="button"
+              <Button
+                variant="secondary"
+                size="sm"
                 className="rp-story-open"
                 aria-pressed={storyOpen}
                 onClick={storyOpen ? closeStory : startStory}
               >
                 <span aria-hidden="true">{storyOpen ? "■" : "▶"}</span>{" "}
                 {storyOpen ? "Stop story" : "Play the story"}
-              </button>
+              </Button>
             )}
-            <button
-              type="button"
+            <Button
+              variant="secondary"
+              size="sm"
               className="rp-tour-open"
               onClick={() => {
                 closeStory();
@@ -817,20 +843,13 @@ function ReplayScreen({
               }}
             >
               <span aria-hidden="true">?</span> Tour
-            </button>
-            <div className="rp-speed" role="group" aria-label="Basemap">
-              {(["map", "satellite"] as const).map((option) => (
-                <button
-                  key={option}
-                  type="button"
-                  className="rp-speed-btn"
-                  aria-pressed={basemap === option}
-                  onClick={() => setBasemap(option)}
-                >
-                  {option === "map" ? "Map" : "Satellite"}
-                </button>
-              ))}
-            </div>
+            </Button>
+            <SegmentedControl
+              label="Basemap"
+              options={BASEMAP_OPTIONS}
+              value={basemap}
+              onChange={setBasemap}
+            />
             {basemap === "satellite" && (
               <span className="rp-imagery-note">{IMAGERY_DATE_NOTE}</span>
             )}
@@ -841,7 +860,9 @@ function ReplayScreen({
             showFireObs={visibility.fireObs}
             showDestinations={visibility.destinations}
             mobilityEvidence={mobilityVisible && mobility.data ? mobility.data.evidenceClass : null}
-            peopleSource={visibility.people ? `Census ${incidentYear(model)} ACS; departures modelled` : null}
+            peopleSource={
+              visibility.people ? `Census ${incidentYear(model)} ACS; departures modelled` : null
+            }
             open={legendOpen || tourOpen}
             onToggle={() => setLegendOpen((o) => !o)}
           />
@@ -849,7 +870,7 @@ function ReplayScreen({
 
         {variantDelta && variants.shown && (
           <p className="rp-delta-pill" role="status">
-            <span className="rp-status-chip rp-status-chip--variant">WHAT-IF · SIMULATED</span>
+            <EvidenceTag kind="simulated" />
             <span>
               <strong>{variants.shown.title}:</strong>{" "}
               <strong className="rp-delta-pill-num">
@@ -926,19 +947,18 @@ function ReplayScreen({
               {config.otherRoute.label}
             </a>
           </span>
-          <button
-            type="button"
+          <IconButton
+            variant="secondary"
             className="rp-btn rp-panel-toggle"
+            label={panelOpen ? "Collapse panel" : "Expand panel"}
             aria-expanded={panelOpen}
             aria-controls="rp-panel-content"
             onClick={() => setPanelOpen((o) => !o)}
-            title={panelOpen ? "Collapse panel" : "Expand panel"}
           >
-            <svg viewBox="0 0 16 16" aria-hidden="true">
+            <svg viewBox="0 0 16 16">
               <path d={panelOpen ? "M6 3l5 5-5 5" : "M10 3 5 8l5 5"} />
             </svg>
-            <span className="rp-sr">{panelOpen ? "Collapse panel" : "Expand panel"}</span>
-          </button>
+          </IconButton>
         </div>
         <div id="rp-panel-content" hidden={!panelOpen}>
           <SidePanel

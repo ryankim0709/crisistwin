@@ -12,7 +12,11 @@ export function hash2(a: number, b: number): number {
  * Converts a geometry to non-indexed position/normal/color only (so differently built
  * pieces merge), paints it one colour and recomputes flat normals unless `smooth`.
  */
-export function paint(geometry: THREE.BufferGeometry, color: THREE.ColorRepresentation, smooth = false): THREE.BufferGeometry {
+export function paint(
+  geometry: THREE.BufferGeometry,
+  color: THREE.ColorRepresentation,
+  smooth = false,
+): THREE.BufferGeometry {
   const g = geometry.index ? geometry.toNonIndexed() : geometry;
   if (g !== geometry) geometry.dispose();
   for (const name of Object.keys(g.attributes)) {
@@ -38,7 +42,13 @@ const tmpScale = new THREE.Vector3(1, 1, 1);
 const tmpPos = new THREE.Vector3();
 
 /** Applies translation and yaw (radians about +y) in place and returns the geometry. */
-export function place(g: THREE.BufferGeometry, x: number, y: number, z: number, rotY = 0): THREE.BufferGeometry {
+export function place(
+  g: THREE.BufferGeometry,
+  x: number,
+  y: number,
+  z: number,
+  rotY = 0,
+): THREE.BufferGeometry {
   tmpEuler.set(0, rotY, 0);
   tmpQuat.setFromEuler(tmpEuler);
   tmpPos.set(x, y, z);
@@ -48,7 +58,16 @@ export function place(g: THREE.BufferGeometry, x: number, y: number, z: number, 
 }
 
 /** Painted box centred at (x, y, z) in local coordinates. */
-export function box(w: number, h: number, d: number, x: number, y: number, z: number, color: THREE.ColorRepresentation, rotY = 0) {
+export function box(
+  w: number,
+  h: number,
+  d: number,
+  x: number,
+  y: number,
+  z: number,
+  color: THREE.ColorRepresentation,
+  rotY = 0,
+) {
   return place(paint(new THREE.BoxGeometry(w, h, d), color), x, y, z, rotY);
 }
 
@@ -65,7 +84,14 @@ export function mergeAll(parts: THREE.BufferGeometry[]): THREE.BufferGeometry {
  * triangular gable-end walls (wall colour) under the ridge. Slopes are single-sided; the
  * roof material should be double-sided so the underside of the overhang renders.
  */
-export function gableRoof(w: number, d: number, rise: number, o: number, roofColor: THREE.ColorRepresentation, wallColor: THREE.ColorRepresentation) {
+export function gableRoof(
+  w: number,
+  d: number,
+  rise: number,
+  o: number,
+  roofColor: THREE.ColorRepresentation,
+  wallColor: THREE.ColorRepresentation,
+) {
   const x0 = -w / 2 - o;
   const x1 = w / 2 + o;
   const z0 = -d / 2 - o;
@@ -116,7 +142,13 @@ export function resample(points: Vec2[], step: number): Vec2[] {
  * Ribbon draped along `points`: uv.x is distance along (world units), uv.y is 0..1 across.
  * Vertex y = `heightFn(x, z)`. Indexed with position/normal/uv.
  */
-export function ribbon(points: Vec2[], width: number, heightFn: (x: number, z: number) => number, step = 2.5, across = 2): THREE.BufferGeometry {
+export function ribbon(
+  points: Vec2[],
+  width: number,
+  heightFn: (x: number, z: number) => number,
+  step = 2.5,
+  across = 2,
+): THREE.BufferGeometry {
   const pts = resample(points, step);
   const positions: number[] = [];
   const uvs: number[] = [];
