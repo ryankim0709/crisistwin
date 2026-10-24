@@ -1,0 +1,427 @@
+import * as THREE from "three";
+import { gableRoof, hash2, mergeAll, paint, place } from "../../diorama/scene/geometry";
+import { PALETTE } from "../../diorama/scene/palette";
+import type { BoardFrame } from "./board";
+import { BUSH_DENSITY, FALLBACK_CANOPY, FuelFamily, PINE_SHARE } from "./fuelStyle";
+
+/** Instance caps (totals across kinds); dense or large grids are thinned uniformly. */
+export const COVER_CAPS = { trees: 18_000, bushes: 7_000, houses: 6_000 } as const;
+/**
+ * Miniature scale of the /diorama tree shapes (≈9.7 units tall at scale 1). Trees are drawn
+ * at a constant stylized size on the 600-unit board, loosely varied by canopy height.
+ */
+const TREE_SCALE = 0.27;
+const BUSH_RADIUS = 0.55;
+/** Base house footprint (world units) before neighbourhood spacing scales it up. */
+const HOUSE = { w: 1.25, d: 0.95, h: 0.75, rise: 0.48, spacingX: 2.3, spacingZ: 2.7 } as const;
+/** Every Nth house row in a neighbourhood is left empty as a street. */
+const STREET_EVERY = 4;
+/** Side of the square neighbourhoods that share one street-grid heading (world units). */
+const NEIGHBOURHOOD = 56;
+const NEIGHBOURHOOD_ANGLES = [0, 0, 0.14, -0.2, 0.35, -0.42, 0.62, 0.08] as const;
+
+const State = { Unburned: 0, Burning: 1, Burned: 2 } as const;
+
+const HOT = new THREE.Color(PALETTE.amber);
+const CORAL = new THREE.Color(PALETTE.coral);
+const CHAR = new THREE.Color(PALETTE.char);
+
+type Part = {
+  mesh: THREE.InstancedMesh;
+  /** Unburned colour per instance (rgb). */
+  base: Float32Array;
+  burned: THREE.Color;
+  /** Burning instances glow and flicker on this part. */
+  glows: boolean;
+};
+
+/**
+ * Instances standing on grid cells whose look follows the fire arrival field: burning →
+ * flickering amber-coral glow, burned → charred and shrunk by `burnScale`.
+ */
+class FireInstances {
+  readonly count: number;
+  private readonly cells: Int32Array;
+  private readonly matrices: Float32Array;
+  private readonly parts: Part[];
+  private readonly burnScale: THREE.Vector3;
+  private arrival: Float32Array;
+  private readonly state: Uint8Array;
+  private burning: number[] = [];
+  private window = 20;
+  private t = -Infinity;
+  private readonly m = new THREE.Matrix4();
+  private readonly s = new THREE.Matrix4();
+  private readonly c = new THREE.Color();
+
+  constructor(cells: Int32Array, matrices: Float32Array, parts: Part[], burnScale: THREE.Vector3) {
+    this.count = cells.length;
+    this.cells = cells;
+    this.matrices = matrices;
+    this.parts = parts;
+    this.burnScale = burnScale;
+    this.arrival = new Float32Array(this.count).fill(Infinity);
+    this.state = new Uint8Array(this.count);
+    this.s.makeScale(burnScale.x, burnScale.y, burnScale.z);
+    for (const p of parts) {
+      for (let i = 0; i < this.count; i++) {
+        this.m.fromArray(matrices, i * 16);
+        p.mesh.setMatrixAt(i, this.m);
+        this.c.fromArray(p.base, i * 3);
+        p.mesh.setColorAt(i, this.c);
+      }
+      p.mesh.count = this.count;
+      p.mesh.instanceMatrix.needsUpdate = true;
+      if (p.mesh.instanceColor) p.mesh.instanceColor.needsUpdate = true;
+      p.mesh.computeBoundingSphere();
+      p.mesh.computeBoundingBox();
+    }
+  }
+
+  /** Per-instance arrival (minutes; Infinity = never), clamped to the run horizon. */
+  setArrival(arrival: Float32Array | null, horizon: number, window: number) {
+    this.window = window;
+    for (let i = 0; i < this.count; i++) {
+      const a = arrival ? arrival[this.cells[i]] : Infinity;
+      this.arrival[i] = a <= horizon ? a : Infinity;
+    }
+    this.t = Number.NaN;
+  }
+
+  update(t: number) {
+    if (t === this.t) return;
+    this.t = t;
+    this.burning = [];
+    let matrixDirty = false;
+    let colorDirty = false;
+    for (let i = 0; i < this.count; i++) {
+      const age = t - this.arrival[i];
+      const state = !(age >= 0) ? State.Unburned : age < this.window ? State.Burning : State.Burned;
+      if (state === State.Burning) this.burning.push(i);
+      const prev = this.state[i];
+      if (state === prev) continue;
+      this.state[i] = state;
+      if ((state === State.Burned) !== (prev === State.Burned)) {
+        this.m.fromArray(this.matrices, i * 16);
+        if (state === State.Burned) this.m.multiply(this.s);
+        for (const p of this.parts) p.mesh.setMatrixAt(i, this.m);
+        matrixDirty = true;
+      }
+      for (const p of this.parts) {
+        if (state === State.Burned) p.mesh.setColorAt(i, p.burned);
+        else if (state === State.Unburned || !p.glows) p.mesh.setColorAt(i, this.c.fromArray(p.base, i * 3).lerp(CHAR, state === State.Burning ? 0.55 : 0));
+      }
+      colorDirty = true;
+    }
+    for (const p of this.parts) {
+      if (matrixDirty) p.mesh.instanceMatrix.needsUpdate = true;
+      if (colorDirty && p.mesh.instanceColor) p.mesh.instanceColor.needsUpdate = true;
+    }
+    this.flicker(0, true);
+  }
+
+  /** Burning glow: values above 1 so tone mapping reads it as light; cools toward char. */
+  flicker(time: number, reducedMotion: boolean) {
+    if (this.burning.length === 0) return;
+    const c = this.c;
+    for (const p of this.parts) {
+      if (!p.glows) continue;
+      for (const i of this.burning) {
+        const f = Math.min(1, Math.max(0, (this.t - this.arrival[i]) / this.window));
+        const wobble = reducedMotion ? 0.5 : 0.5 + 0.5 * Math.sin(time * 9 + i * 1.7) * Math.sin(time * 5.3 + i * 0.6);
+        c.copy(CORAL).lerp(HOT, wobble);
+        c.multiplyScalar((1 - f) * (1.15 + wobble * 0.55)).lerp(CHAR, f * f);
+        p.mesh.setColorAt(i, c);
+      }
+      if (p.mesh.instanceColor) p.mesh.instanceColor.needsUpdate = true;
+    }
+  }
+}
+
+function pineCanopy() {
+  return mergeAll([
+    place(paint(new THREE.ConeGeometry(2.8, 4.4, 7), 0xffffff), 0, 4.4, 0),
+    place(paint(new THREE.ConeGeometry(2.2, 3.6, 7), 0xffffff), 0, 6.5, 0),
+    place(paint(new THREE.ConeGeometry(1.5, 2.8, 7), 0xffffff), 0, 8.3, 0),
+  ]);
+}
+
+function roundCanopy() {
+  return mergeAll([
+    place(paint(new THREE.IcosahedronGeometry(2.9, 0), 0xffffff), 0, 5.4, 0),
+    place(paint(new THREE.IcosahedronGeometry(2.0, 0), 0xffffff), 1.3, 4.5, 0.9),
+  ]);
+}
+
+function trunk(height: number) {
+  return place(paint(new THREE.CylinderGeometry(0.35, 0.55, height, 5), 0xffffff), 0, height / 2, 0);
+}
+
+function bushShape() {
+  return mergeAll([
+    place(paint(new THREE.IcosahedronGeometry(1, 0), 0xffffff), 0, 0.55, 0),
+    place(paint(new THREE.IcosahedronGeometry(0.7, 0), 0xffffff), 0.75, 0.4, 0.3),
+  ]);
+}
+
+/** Unit house body (1×1×1, base at y = 0) and a unit gable roof (eaves at y = 0, rise 1). */
+function houseShapes() {
+  const body = place(paint(new THREE.BoxGeometry(1, 1, 1), 0xffffff), 0, 0.5, 0);
+  const roof = mergeAll(gableRoof(1, 1, 1, 0.09, 0xffffff, 0xffffff));
+  return { body, roof };
+}
+
+type Placement = { cells: number[]; m: number[]; colorsA: number[]; colorsB: number[] };
+const newPlacement = (): Placement => ({ cells: [], m: [], colorsA: [], colorsB: [] });
+
+const tmpPos = new THREE.Vector3();
+const tmpQuat = new THREE.Quaternion();
+const tmpScale = new THREE.Vector3();
+const tmpMat = new THREE.Matrix4();
+const UP = new THREE.Vector3(0, 1, 0);
+const tmpColor = new THREE.Color();
+
+function pushInstance(p: Placement, cell: number, x: number, y: number, z: number, yaw: number, sx: number, sy: number, sz: number) {
+  tmpPos.set(x, y, z);
+  tmpQuat.setFromAxisAngle(UP, yaw);
+  tmpScale.set(sx, sy, sz);
+  tmpMat.compose(tmpPos, tmpQuat, tmpScale);
+  p.cells.push(cell);
+  for (const v of tmpMat.elements) p.m.push(v);
+}
+
+function pushColor(arr: number[], hex: number, jitter: number) {
+  tmpColor.set(hex).multiplyScalar(jitter);
+  arr.push(tmpColor.r, tmpColor.g, tmpColor.b);
+}
+
+/** Trees, bushes and houses standing for the fuel classes (stylized, deterministic). */
+export class CoverLayer {
+  readonly group = new THREE.Group();
+  private readonly sets: FireInstances[] = [];
+  readonly counts = { trees: 0, bushes: 0, houses: 0 };
+
+  constructor(frame: BoardFrame) {
+    const grid = frame.grid;
+    if (!grid) return;
+    const { cols, rows, families, cellWorld } = frame;
+    const cover = grid.canopyCoverFraction;
+    const heightM = grid.canopyHeightMeters;
+    const useCanopy = grid.canopyComplete;
+    const n = cols * rows;
+
+    // --- Trees and bushes: one candidate slot each per cell, thinned to the caps.
+    const treeP = new Float32Array(n);
+    const bushP = new Float32Array(n);
+    let treeSum = 0;
+    let bushSum = 0;
+    for (let i = 0; i < n; i++) {
+      const fam = families[i] as FuelFamily;
+      if (fam === FuelFamily.Water || fam === FuelFamily.None) continue;
+      const cc = useCanopy ? cover[i] || 0 : FALLBACK_CANOPY[fam];
+      const t = Math.min(1, cc) * (fam === FuelFamily.Urban ? 0.4 : 1);
+      treeP[i] = t;
+      treeSum += t;
+      const b = BUSH_DENSITY[fam] * (1 - Math.min(1, cc) * 0.5);
+      bushP[i] = b;
+      bushSum += b;
+    }
+    const treeThin = Math.min(1, COVER_CAPS.trees / Math.max(1, treeSum));
+    const bushThin = Math.min(1, COVER_CAPS.bushes / Math.max(1, bushSum));
+    const pines = newPlacement();
+    const rounds = newPlacement();
+    const bushes = newPlacement();
+    const centre = { x: 0, z: 0 };
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const i = r * cols + c;
+        if (treeP[i] > 0 && pines.cells.length + rounds.cells.length < COVER_CAPS.trees && hash2(c * 0.913, r * 1.171) < treeP[i] * treeThin) {
+          const fam = families[i] as FuelFamily;
+          frame.cellCentre(c, r, centre);
+          const x = centre.x + (hash2(c, r * 1.3) - 0.5) * cellWorld * 0.8;
+          const z = centre.z + (hash2(r * 0.7, c * 1.9) - 0.5) * cellWorld * 0.8;
+          // Stands: conifer share varies smoothly by block so pines cluster.
+          const stand = hash2(Math.floor(c / 11) * 3.1, Math.floor(r / 11) * 1.7);
+          const tall = useCanopy ? THREE.MathUtils.clamp((heightM[i] || 0) / 30, 0, 1.2) : 0.5;
+          const pine = hash2(c * 2.3, r * 0.37) < PINE_SHARE[fam] * (0.5 + stand) + (tall > 0.8 ? 0.15 : 0);
+          const jitter = hash2(x, z);
+          const s = TREE_SCALE * (0.7 + 0.5 * Math.min(1, tall)) * (0.85 + 0.3 * jitter);
+          const p = pine ? pines : rounds;
+          pushInstance(p, i, x, frame.heightAt(x, z) - 0.1, z, jitter * Math.PI * 2, s, s, s);
+          const greens = pine ? PALETTE.pineGreens : PALETTE.roundGreens;
+          pushColor(p.colorsA, greens[Math.floor(jitter * greens.length) % greens.length], 0.92 + hash2(z, x) * 0.16);
+          pushColor(p.colorsB, PALETTE.trunk, 1);
+        }
+        if (bushP[i] > 0 && bushes.cells.length < COVER_CAPS.bushes && hash2(c * 1.37 + 5.1, r * 0.79) < bushP[i] * bushThin) {
+          frame.cellCentre(c, r, centre);
+          const x = centre.x + (hash2(c * 1.1, r * 2.9) - 0.5) * cellWorld * 0.9;
+          const z = centre.z + (hash2(r * 3.3, c * 0.6) - 0.5) * cellWorld * 0.9;
+          const j = hash2(x * 1.3, z * 0.7);
+          const s = BUSH_RADIUS * (0.7 + 0.6 * j);
+          pushInstance(bushes, i, x, frame.heightAt(x, z) - 0.08, z, j * 6.28, s, s * 0.7, s);
+          pushColor(bushes.colorsA, j < 0.5 ? 0x7d8552 : 0x8b8d58, 0.9 + hash2(z, x * 2) * 0.18);
+        }
+      }
+    }
+    this.counts.trees = pines.cells.length + rounds.cells.length;
+    this.counts.bushes = bushes.cells.length;
+
+    const canopyMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.85, flatShading: true });
+    const trunkMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95, flatShading: true });
+    const trunkChar = new THREE.Color(0x221d1a);
+    const kinds: [Placement, THREE.BufferGeometry, THREE.BufferGeometry, string][] = [
+      [pines, pineCanopy(), trunk(2.6), "pine"],
+      [rounds, roundCanopy(), trunk(3.6), "round"],
+    ];
+    for (const [p, canopyGeo, trunkGeo, name] of kinds) {
+      if (p.cells.length === 0) {
+        canopyGeo.dispose();
+        trunkGeo.dispose();
+        continue;
+      }
+      const canopy = this.instanced(canopyGeo, canopyMat, p.cells.length, `${name}-canopies`);
+      const trunkMesh = this.instanced(trunkGeo, trunkMat, p.cells.length, `${name}-trunks`);
+      this.sets.push(
+        new FireInstances(
+          Int32Array.from(p.cells),
+          Float32Array.from(p.m),
+          [
+            { mesh: canopy, base: Float32Array.from(p.colorsA), burned: CHAR, glows: true },
+            { mesh: trunkMesh, base: Float32Array.from(p.colorsB), burned: trunkChar, glows: false },
+          ],
+          new THREE.Vector3(0.72, 0.78, 0.72),
+        ),
+      );
+    }
+    if (bushes.cells.length) {
+      const bushMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, flatShading: true });
+      const mesh = this.instanced(bushShape(), bushMat, bushes.cells.length, "bushes");
+      this.sets.push(
+        new FireInstances(Int32Array.from(bushes.cells), Float32Array.from(bushes.m), [{ mesh, base: Float32Array.from(bushes.colorsA), burned: CHAR, glows: true }], new THREE.Vector3(0.7, 0.45, 0.7)),
+      );
+    }
+
+    this.buildHouses(frame);
+  }
+
+  /**
+   * Houses on a rotated street lattice per neighbourhood, kept only where the lattice point
+   * falls in an urban (91) cell. Spacing (and house size, a little) grows so the expected
+   * count meets the cap instead of thinning neighbourhoods into scattered dots.
+   */
+  private buildHouses(frame: BoardFrame) {
+    const { families, cols, rows, cellWorld, halfW, halfD } = frame;
+    let urban = 0;
+    for (let i = 0; i < families.length; i++) if (families[i] === FuelFamily.Urban) urban++;
+    if (urban === 0) return;
+    const area = urban * cellWorld * cellWorld;
+    const perHouse = HOUSE.spacingX * HOUSE.spacingZ * (STREET_EVERY / (STREET_EVERY - 1));
+    const grow = Math.max(1, Math.sqrt(area / perHouse / (COVER_CAPS.houses * 0.92)));
+    const sx = HOUSE.spacingX * grow;
+    const sz = HOUSE.spacingZ * grow;
+    const size = Math.min(grow, 1.7);
+    const p = newPlacement();
+    /** Roof eave height and rise per placed house, parallel to `p`. */
+    const roofTops: number[] = [];
+    const nbx = Math.ceil((2 * halfW) / NEIGHBOURHOOD);
+    const nbz = Math.ceil((2 * halfD) / NEIGHBOURHOOD);
+    for (let bz = 0; bz < nbz && p.cells.length < COVER_CAPS.houses; bz++) {
+      for (let bx = 0; bx < nbx && p.cells.length < COVER_CAPS.houses; bx++) {
+        const x0 = -halfW + bx * NEIGHBOURHOOD;
+        const z0 = -halfD + bz * NEIGHBOURHOOD;
+        // Skip neighbourhoods without urban cells quickly (sample the block's cells sparsely).
+        const cA = Math.floor((x0 + halfW) / cellWorld);
+        const rA = Math.floor((z0 + halfD) / cellWorld);
+        const span = Math.ceil(NEIGHBOURHOOD / cellWorld);
+        let any = false;
+        const step = Math.max(1, Math.floor(span / 12));
+        for (let r = rA; r < Math.min(rows, rA + span) && !any; r += step) {
+          for (let c = cA; c < Math.min(cols, cA + span); c += step) if (families[r * cols + c] === FuelFamily.Urban) any = true;
+        }
+        if (!any) continue;
+        const h = hash2(bx * 1.31 + 0.2, bz * 0.77 + 9.1);
+        const angle = NEIGHBOURHOOD_ANGLES[Math.floor(h * NEIGHBOURHOOD_ANGLES.length) % NEIGHBOURHOOD_ANGLES.length];
+        const ca = Math.cos(angle);
+        const sa = Math.sin(angle);
+        const cx = x0 + NEIGHBOURHOOD / 2;
+        const cz = z0 + NEIGHBOURHOOD / 2;
+        const reach = Math.ceil((NEIGHBOURHOOD * 0.75) / Math.min(sx, sz));
+        // Lattice anchored on a board-wide phase so neighbouring blocks with the same heading line up.
+        for (let v = -reach; v <= reach; v++) {
+          if ((((v + Math.round(cz / sz)) % STREET_EVERY) + STREET_EVERY) % STREET_EVERY === 0) continue;
+          for (let u = -reach; u <= reach; u++) {
+            const lx = u * sx + (v % 2 ? sx * 0.12 : 0);
+            const lz = v * sz;
+            const x = cx + lx * ca + lz * sa;
+            const z = cz - lx * sa + lz * ca;
+            if (x < x0 || x >= x0 + NEIGHBOURHOOD || z < z0 || z >= z0 + NEIGHBOURHOOD) continue;
+            if (Math.abs(x) > halfW - 0.8 || Math.abs(z) > halfD - 0.8) continue;
+            const cell = frame.cellAt(x, z);
+            if (cell < 0 || families[cell] !== FuelFamily.Urban) continue;
+            if (p.cells.length >= COVER_CAPS.houses) break;
+            const j = hash2(x * 0.53, z * 0.91);
+            if (j < 0.06) continue; // the odd empty lot
+            const w = HOUSE.w * size * (0.85 + 0.3 * hash2(z, x));
+            const d = HOUSE.d * size * (0.85 + 0.25 * j);
+            const ht = HOUSE.h * size * (0.9 + 0.35 * hash2(x * 2.1, z));
+            const hw = Math.max(w, d) / 2;
+            const ground = Math.min(frame.heightAt(x - hw, z - hw), frame.heightAt(x + hw, z - hw), frame.heightAt(x - hw, z + hw), frame.heightAt(x + hw, z + hw));
+            const top = Math.max(frame.heightAt(x - hw, z - hw), frame.heightAt(x + hw, z - hw), frame.heightAt(x - hw, z + hw), frame.heightAt(x + hw, z + hw));
+            const yaw = angle + (j > 0.5 ? 0 : Math.PI / 2) * (hash2(u, v + bx) > 0.8 ? 1 : 0);
+            // Body tall enough to meet the uphill ground; roof above it.
+            pushInstance(p, cell, x, ground - 0.15, z, yaw, w, ht + (top - ground) + 0.15, d);
+            const roofIdx = Math.floor(hash2(x, z * 3.1) * 3);
+            pushColor(p.colorsA, PALETTE.walls[Math.floor(j * PALETTE.walls.length) % PALETTE.walls.length], 1);
+            pushColor(p.colorsB, [0xc27a5a, 0x6f7b86, 0x8fa182][roofIdx], 0.95 + 0.1 * j);
+            roofTops.push(top + ht, HOUSE.rise * size);
+          }
+        }
+      }
+    }
+    if (p.cells.length === 0) return;
+    this.counts.houses = p.cells.length;
+    const shapes = houseShapes();
+    const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.82, flatShading: true });
+    const roofMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.8, flatShading: true, side: THREE.DoubleSide });
+    const bodies = this.instanced(shapes.body, mat, p.cells.length, "houses");
+    const roofs = this.instanced(shapes.roof, roofMat, p.cells.length, "roofs");
+    // Roofs need their own matrices (offset up, unit rise scaled), so they get a second set.
+    const roofM = new Float32Array(p.m.length);
+    const pos = new THREE.Vector3();
+    const quat = new THREE.Quaternion();
+    const scl = new THREE.Vector3();
+    for (let i = 0; i < p.cells.length; i++) {
+      tmpMat.fromArray(p.m, i * 16).decompose(pos, quat, scl);
+      pos.y = roofTops[i * 2];
+      scl.y = roofTops[i * 2 + 1];
+      tmpMat.compose(pos, quat, scl).toArray(roofM, i * 16);
+    }
+    const cells = Int32Array.from(p.cells);
+    const burnedWall = new THREE.Color(0x4f4842);
+    this.sets.push(
+      new FireInstances(cells, Float32Array.from(p.m), [{ mesh: bodies, base: Float32Array.from(p.colorsA), burned: burnedWall, glows: false }], new THREE.Vector3(1, 1, 1)),
+      new FireInstances(cells, roofM, [{ mesh: roofs, base: Float32Array.from(p.colorsB), burned: CHAR, glows: true }], new THREE.Vector3(1, 0.5, 1)),
+    );
+  }
+
+  private instanced(geo: THREE.BufferGeometry, mat: THREE.Material, count: number, name: string) {
+    const mesh = new THREE.InstancedMesh(geo, mat, count);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    mesh.name = name;
+    this.group.add(mesh);
+    return mesh;
+  }
+
+  setArrival(arrival: Float32Array | null, horizon: number, window: number) {
+    for (const s of this.sets) s.setArrival(arrival, horizon, window);
+  }
+
+  update(t: number) {
+    for (const s of this.sets) s.update(t);
+  }
+
+  flicker(time: number, reducedMotion: boolean) {
+    for (const s of this.sets) s.flicker(time, reducedMotion);
+  }
+}
