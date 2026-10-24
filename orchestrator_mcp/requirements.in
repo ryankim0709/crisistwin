@@ -1,0 +1,4 @@
+# Direct runtime dependency of the `crisistwin_mcp` package: the official MCP Python SDK
+# (stdio server, FastMCP). Everything else (HTTP, JSON) is the standard library; pydantic comes
+# with `mcp`. Held to one major version; requirements.txt is the resolved set that gets installed.
+mcp>=1.20,<2

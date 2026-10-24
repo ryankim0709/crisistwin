@@ -35,6 +35,7 @@ Also in the repository:
 
 - **Backend** (`app/backend/`): Django REST API with `GET /api/health`, `/api/landscapes` (prebuilt landscapes from MongoDB), `/api/dispatch/area` (OpenStreetMap roads and stations for a box), `/api/dispatch/decide`, `/api/replay/explain`, `/api/live` (resident-app simulation feed), `/api/live/…` (live drill: field reports, controller guidance, twin; [contract](docs/live-reports.md)) `/api/families` and `/api/mobile/…` (schema-free iOS app data in Atlas, [ADR 0029](docs/adr/0029-mobile-data-store.md)). See [API contract](app/backend/README.md).
 - **Fire watch agent** (`agent/`): a standalone Python package that drafts evacuation advisories from satellite detections for a human to approve; never notifies residents. [README](agent/README.md), [ADR 0008](docs/adr/0008-fire-watch-agent.md).
+- **Controller MCP server** (`orchestrator_mcp/`): a stdio MCP server that lets an external orchestrator agent act as the controller of the live drill through the controller API, with every write attributed to the agent. [README](orchestrator_mcp/README.md), [ADR 0033](docs/adr/0033-controller-mcp-server.md).
 - **Historical replay simulator** (`sim/`): stdlib Python fire hindcast and evacuation traffic model that produces replay bundles. [README](sim/README.md).
 - **iOS app** (`mobile/`): SwiftUI resident app for the **live drill** on the 2018 Camp road network: a map
   with the fire estimate and the zone guidance a controller approves on `/live`, field reports and **I'm out** /
@@ -73,6 +74,7 @@ app/                  Web app
   data-manifest.json  Hashes of generated app data stored in MongoDB Atlas
   docker-compose.yml  Development stack (frontend + backend, external MongoDB)
 agent/                Fire watch agent (Anthropic SDK, standalone)
+orchestrator_mcp/     Controller MCP server for an external orchestrator agent (standalone)
 sim/                  Historical replay simulator (stdlib Python)
 tools/                Data acquisition and sync scripts (see tools/README.md)
 tests/                Unit tests for the tools incident builders
@@ -195,7 +197,8 @@ There are no CI workflows.
 - [app/src/ui/README.md](app/src/ui/README.md): the UI standard (tokens and shared components every page uses).
 - [app/AGENTS.md](app/AGENTS.md) and [AGENTS.md](AGENTS.md): rules for coding agents. Change shared guidance in `AGENTS.md`;
   Claude's [subagent model rule](AGENTS.md#choosing-a-model-for-subagents) is there too.
-- Component READMEs: [app/backend](app/backend/README.md), [agent](agent/README.md), [sim](sim/README.md),
+- Component READMEs: [app/backend](app/backend/README.md), [agent](agent/README.md),
+  [orchestrator_mcp](orchestrator_mcp/README.md), [sim](sim/README.md),
   [tools](tools/README.md), [mobile](mobile/README.md).
 
 The project grew out of [this planning conversation](https://chatgpt.com/share/6adc0b53-b864-83e8-84f7-8560e24d2a15).

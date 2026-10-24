@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import secrets
 import time
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from typing import Any
 
@@ -127,3 +129,31 @@ def col(name: str) -> Collection[dict[str, Any]]:
 
 def live_setting(name: str) -> str:
     return (getattr(settings, name, "") or "").strip()
+
+
+# ---- actor attribution (ADR 0030 "Controller surface"; docs/live-reports.md "Actor attribution") ----
+
+ACTOR_HEADER = "X-CrisisTwin-Actor"
+ACTOR_PATTERN = re.compile(r"^agent:[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+"""An agent driving the controller API names itself ``agent:<name>``; anything else is ignored."""
+_request_actor: ContextVar[str | None] = ContextVar("live_request_actor", default=None)
+
+
+def actor_from_request(request) -> str | None:
+    """The ``X-CrisisTwin-Actor`` header when it is a valid ``agent:<name>``, else None."""
+    value = (request.headers.get(ACTOR_HEADER) or "").strip()
+    return value if ACTOR_PATTERN.match(value) else None
+
+
+def set_request_actor(actor: str | None):
+    """Set for one controller request (``live_view``); returns the token for ``reset_request_actor``."""
+    return _request_actor.set(actor)
+
+
+def reset_request_actor(token) -> None:
+    _request_actor.reset(token)
+
+
+def decision_actor(actor: str) -> str:
+    """The actor to record: a controller request's agent id replaces the generic ``controller``."""
+    return (_request_actor.get() or actor) if actor == "controller" else actor

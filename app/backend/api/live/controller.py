@@ -44,7 +44,7 @@ from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError, PyMongoError
 
 from . import controllers
-from .common import ApiError, col, live_setting, new_id
+from .common import ApiError, col, decision_actor, live_setting, new_id
 from .drillcache import DrillIndex
 from .state import (
     ALTERNATIVE_LINE_MAX_POINTS,
@@ -103,7 +103,7 @@ def log_decision(
         {
             "incident_id": incident_id,
             "at": now,
-            "actor": actor,
+            "actor": decision_actor(actor),
             "action": action,
             "report_ids": report_ids or [],
             "proposal_id": proposal_id,
