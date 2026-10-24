@@ -272,6 +272,9 @@ export const STRUCTURE_BACKING_RATE_FRACTION = 1 / 3;
  * a structure plume.
  */
 export const STRUCTURE_FIRELINE_INTENSITY_BTU_PER_FOOT_PER_SECOND = 1000;
+/** Byram flame length of that assumed intensity, feet (about 10.4 ft). */
+export const STRUCTURE_FLAME_LENGTH_FEET =
+  0.45 * Math.pow(STRUCTURE_FIRELINE_INTENSITY_BTU_PER_FOOT_PER_SECOND, 0.46);
 
 /**
  * Maximum spot distance grows with wind speed and with the square root of fireline
@@ -794,6 +797,33 @@ type SpreadRunTotals = Pick<
 >;
 
 /** What the solver core hands both public entry points. */
+/**
+ * Control lines built by firefighters, per landscape cell (row-major like `fuelCodes`).
+ * Planned outside the solver (studio/firefighting.ts); the solver only enforces them.
+ *
+ * A cell with `holdFromMinute[i] <= t` is a constructed line at time t. Fire spreading at
+ * time t never crosses it on a multi-cell step. It may burn into it from an adjacent cell
+ * only when the flame facing the line in that direction is longer than
+ * `holdsFlameLengthFeet[i]` (the line is breached there), and then spreads on from it.
+ * Judging breaches on adjacent steps only keeps a fire running along a line from cutting
+ * across it at a shallow angle with head-fire intensity. Embers do not land in a built
+ * line cell but still fly over it.
+ */
+export interface ControlLines {
+  /** Minute from which the cell is built line; `Infinity` where there is no line. */
+  holdFromMinute: Float32Array;
+  /** Longest flame, feet, the crew that built this cell can hold (direct-attack limit). */
+  holdsFlameLengthFeet: Float32Array;
+}
+
+/**
+ * Byram (1959): flame length L = 0.45 I^0.46 (feet, Btu/ft/s), and fireline intensity I is
+ * proportional to the rate of spread for a given fuel consumption, so the flame facing a
+ * line in a direction spreading at rate R is L_head (R / R_head)^0.46. A flank or backing
+ * fire therefore meets a line with a far shorter flame than the head.
+ */
+export const BYRAM_FLAME_EXPONENT = 0.46;
+
 interface SpreadSolution {
   /** Arrival per cell, minutes from T+0; +Infinity where fire never arrived. */
   arrival: Float64Array;
@@ -848,6 +878,8 @@ export function simulateFireSpread(landscape: LandscapeGrid, scenario: FireScena
     landscape,
     scenario,
     [{ location: scenario.origin, startMinute: 0 }],
+    null,
+    null,
     (problems) => {
       const problem = problems[0];
       if (problem.reason === "non-burnable") throw new NonBurnableIgnitionError(problem.fuelCode);
@@ -897,28 +929,37 @@ export function simulateFireSpread(landscape: LandscapeGrid, scenario: FireScena
 export function simulateScheduledFireSpread(
   landscape: LandscapeGrid,
   input: ScheduledFireInput,
+  controlLines: ControlLines | null = null,
+  outFromMinuteBySource: readonly number[] | null = null,
 ): ScheduledFireRun {
   const startedAt = performance.now();
   assertScheduledInput(input);
   const { settings, sources, frameMinutes } = input;
-  const solution = solveSpread(landscape, settings, sources, (problems) => {
-    throw new InvalidIgnitionsError(
-      problems.map((problem) =>
-        problem.reason === "non-burnable"
-          ? {
-              sourceId: sources[problem.sourceIndex].id,
-              reason: problem.reason,
-              message: new NonBurnableIgnitionError(problem.fuelCode).message,
-              fuelCode: problem.fuelCode,
-            }
-          : {
-              sourceId: sources[problem.sourceIndex].id,
-              reason: problem.reason,
-              message: OUTSIDE_LANDSCAPE_MESSAGE,
-            },
-      ),
-    );
-  });
+  const solution = solveSpread(
+    landscape,
+    settings,
+    sources,
+    controlLines,
+    outFromMinuteBySource,
+    (problems) => {
+      throw new InvalidIgnitionsError(
+        problems.map((problem) =>
+          problem.reason === "non-burnable"
+            ? {
+                sourceId: sources[problem.sourceIndex].id,
+                reason: problem.reason,
+                message: new NonBurnableIgnitionError(problem.fuelCode).message,
+                fuelCode: problem.fuelCode,
+              }
+            : {
+                sourceId: sources[problem.sourceIndex].id,
+                reason: problem.reason,
+                message: OUTSIDE_LANDSCAPE_MESSAGE,
+              },
+        ),
+      );
+    },
+  );
 
   // Every source cell was seeded at its start minute, so its final arrival is either that
   // minute (the source ignited, including an exact tie with another fire) or strictly
@@ -1068,6 +1109,8 @@ function solveSpread(
   landscape: LandscapeGrid,
   scenario: FireSettings,
   sources: readonly SolverSource[],
+  controlLines: ControlLines | null,
+  outFromMinuteBySource: readonly number[] | null,
   rejectSources: (problems: readonly SolverSourceProblem[]) => never,
 ): SpreadSolution {
   const { width, height, fuelCodes, slopeTangent, upslopeDegrees, groundCellSizeMeters } =
@@ -1153,6 +1196,8 @@ function solveSpread(
   const eccentricity = new Float32Array(cellCount);
   const minDirectionalRate = new Float32Array(cellCount);
   const spotReach = new Float32Array(cellCount);
+  /** Surface head-fire flame length, feet (Byram), for testing control lines. */
+  const headFlameFeet = new Float32Array(cellCount);
   /**
    * 1 where a cell holds a vegetated fuel model. Firebrands fly over everything else —
    * roads, parking lots, roofs, water, bare ground — and land in vegetation, so this is
@@ -1210,6 +1255,7 @@ function solveSpread(
       eccentricity[i] = structureEccentricity;
       minDirectionalRate[i] = structureHeadRate * STRUCTURE_BACKING_RATE_FRACTION;
       spotReach[i] = structureSpotReach;
+      headFlameFeet[i] = STRUCTURE_FLAME_LENGTH_FEET;
       continue;
     }
     const bed = beds.get(code);
@@ -1313,6 +1359,7 @@ function solveSpread(
     // model still understates spotting wherever it is now predicting crown fire. That is
     // a known conservative simplification, not an oversight.
     spotReach[i] = spotReachFor(spread.firelineIntensityBtuPerFootPerSecond);
+    headFlameFeet[i] = spread.flameLengthFeet;
   }
 
   const arrival = new Float64Array(cellCount).fill(Number.POSITIVE_INFINITY);
@@ -1365,6 +1412,39 @@ function solveSpread(
   barrierStart[NEIGHBOURS.length] = barrierOffsets.length;
   const barrierPath = Int32Array.from(barrierOffsets);
 
+  const holdFrom = controlLines?.holdFromMinute ?? null;
+  const adjacentStep = NEIGHBOURS.map(([dx, dy]) => Math.max(Math.abs(dx), Math.abs(dy)) === 1);
+  const holdsFeet = controlLines?.holdsFlameLengthFeet ?? null;
+  /** True when a built line cell (at `time`) is the destination or on the step's path. */
+  const lineCrossed = (
+    cell: number,
+    destination: number,
+    pathStart: number,
+    pathEnd: number,
+    time: number,
+  ): boolean => {
+    if (holdFrom![destination] <= time) return true;
+    for (let b = pathStart; b < pathEnd; b++)
+      if (holdFrom![cell + barrierPath[b]] <= time) return true;
+    return false;
+  };
+  /** True when some built line cell on the step holds against `flame` feet. */
+  const lineHolds = (
+    destination: number,
+    pathStart: number,
+    pathEnd: number,
+    cell: number,
+    time: number,
+    flame: number,
+  ): boolean => {
+    if (holdFrom![destination] <= time && flame <= holdsFeet![destination]) return true;
+    for (let b = pathStart; b < pathEnd; b++) {
+      const c = cell + barrierPath[b];
+      if (holdFrom![c] <= time && flame <= holdsFeet![c]) return true;
+    }
+    return false;
+  };
+
   // Downwind unit vector in grid space: +x is east, +y is south, so north is -y.
   const windStepX = Math.round(Math.sin(windTowardRadians));
   const windStepY = Math.round(-Math.cos(windTowardRadians));
@@ -1388,6 +1468,18 @@ function solveSpread(
   while (heap.length > 0) {
     const { time, cell } = heap.pop();
     if (settled[cell]) continue;
+    // A fire put out at minute m spreads no further: a cell it would reach after m is
+    // dropped, and stays free for another, still burning fire to reach later. Stale heap
+    // entries for a dropped cell are skipped by the exact-time check.
+    if (outFromMinuteBySource) {
+      if (time !== arrival[cell]) continue;
+      const out = outFromMinuteBySource[firstSource[cell]] ?? Number.POSITIVE_INFINITY;
+      if (time > out) {
+        arrival[cell] = Number.POSITIVE_INFINITY;
+        firstSource[cell] = -1;
+        continue;
+      }
+    }
     if (time > scenario.horizonMinutes) break;
     settled[cell] = 1;
     settledOrder[settledCount++] = cell;
@@ -1444,6 +1536,20 @@ function solveSpread(
         e > 0 ? (rate * (1 - e)) / (1 - e * Math.cos(bearings[n] - headingRadians[cell])) : rate;
       if (rateToward < floor) rateToward = floor;
       if (rateToward <= 0) continue;
+      // Built control line on the step (destination or any cell stepped over) stops it. An
+      // adjacent step may still burn into the line when the flame facing it in this
+      // direction is longer than the line holds (see `ControlLines`).
+      // Crown fire (passive or active) is taken to breach any line. Blocking depends only
+      // on the departure time and gets stricter as time passes, so arriving later is never
+      // faster and the minimum-travel-time order stays valid.
+      if (holdFrom && lineCrossed(cell, neighbour, barrierStart[n], barrierStart[n + 1], time)) {
+        if (!adjacentStep[n]) continue;
+        const flame =
+          crownType[cell] !== CROWN_SURFACE
+            ? Number.POSITIVE_INFINITY
+            : headFlameFeet[cell] * Math.pow(Math.min(1, rateToward / rate), BYRAM_FLAME_EXPONENT);
+        if (lineHolds(neighbour, barrierStart[n], barrierStart[n + 1], cell, time, flame)) continue;
+      }
       const candidate = time + distances[n] / rateToward;
       if (candidate < arrival[neighbour]) {
         arrival[neighbour] = candidate;
@@ -1485,6 +1591,7 @@ function solveSpread(
         // The first vegetated cell on this ray is where the brands land; past it the
         // ordinary surface solver takes over.
         if (!crossedGap || settled[target] || headRate[target] <= 0) break;
+        if (holdFrom && holdFrom[target] <= time) break;
         const flightMeters = step * groundCellSizeMeters;
         const candidate =
           time + flightMeters / emberSpeedMetersPerMinute + SPOTTING_IGNITION_DELAY_MINUTES;

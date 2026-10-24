@@ -40,6 +40,7 @@ const INITIAL_STATE: StudioRunState = {
   result: null,
   stale: false,
   error: null,
+  progress: null,
 };
 
 function deepFreeze<T>(value: T): T {
@@ -82,6 +83,7 @@ export function useStudioRun(): StudioRunController {
       result: previous.result,
       stale: previous.result !== null,
       error: { message, problems },
+      progress: null,
     }));
   }, []);
 
@@ -92,7 +94,13 @@ export function useStudioRun(): StudioRunController {
       landscape: CachedLandscape,
       boardId: string | null,
     ) => {
-      setState((previous) => ({ ...previous, phase: "computing", requestId, error: null }));
+      setState((previous) => ({
+        ...previous,
+        phase: "computing",
+        requestId,
+        error: null,
+        progress: null,
+      }));
       if (workerRef.current === null) {
         const worker = new Worker(new URL("./solver.worker.ts", import.meta.url), {
           type: "module",
@@ -102,6 +110,11 @@ export function useStudioRun(): StudioRunController {
           if (response.requestId !== requestIdRef.current) return;
           if (response.type === "error") {
             fail(response.requestId, response.message, response.problems);
+            return;
+          }
+          if (response.type === "progress") {
+            const { done, total } = response;
+            setState((previous) => ({ ...previous, progress: { done, total } }));
             return;
           }
           const result: StudioRunResult = {
@@ -115,6 +128,7 @@ export function useStudioRun(): StudioRunController {
             landscape: landscape.grid,
             attribution: landscape.grid.attribution,
             elevationComplete: landscape.grid.elevationComplete,
+            firefighting: response.firefighting,
           };
           setState({
             phase: "ready",
@@ -122,6 +136,7 @@ export function useStudioRun(): StudioRunController {
             result,
             stale: false,
             error: null,
+            progress: null,
           });
         };
         worker.onerror = (event) => {
@@ -134,6 +149,7 @@ export function useStudioRun(): StudioRunController {
         requestId,
         landscape: landscape.grid,
         input: toSolverInput(snapshot),
+        firefighting: snapshot.firefighting ?? null,
       };
       workerRef.current.postMessage(request);
     },
@@ -181,6 +197,7 @@ export function useStudioRun(): StudioRunController {
         result: previous.result,
         stale: previous.result !== null,
         error: null,
+        progress: null,
       }));
       loadLandscapeForBox(requirement.box, controller.signal)
         .then((grid) => {
@@ -212,6 +229,7 @@ export function useStudioRun(): StudioRunController {
             result: previous.result,
             stale: previous.result !== null,
             error: null,
+            progress: null,
           }
         : previous,
     );

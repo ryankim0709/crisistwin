@@ -17,6 +17,7 @@ import type {
   ScheduledFireInput,
   ScheduledFireRun,
 } from "../fire/scheduledTypes";
+import type { FirefightingResult, FirefightingSettings } from "./firefighting";
 
 // ---------------------------------------------------------------------------------------
 // Scenario (user assumptions). Persisted as JSON with `schemaVersion`.
@@ -41,6 +42,8 @@ export interface StudioScenario {
   ignitions: ScheduledIgnition[];
   /** `stepMinutes` is ignored by the studio; display steps are `DISPLAY_STEP_MINUTES`. */
   settings: FireSettings;
+  /** Crews building control line (studio/firefighting.ts). Absent means none. */
+  firefighting?: FirefightingSettings;
 }
 
 /** Configurable cap on enabled ignitions, bounding solve cost and map clutter. */
@@ -120,6 +123,11 @@ export interface StudioRunResult {
   /** Sources for display: LANDFIRE fuel/canopy and terrain attribution strings. */
   attribution: LandscapeGrid["attribution"];
   elevationComplete: boolean;
+  /**
+   * With firefighting enabled: the plans tried and the best plan's run. `run` stays the
+   * fire with no firefighting, so the two can be compared.
+   */
+  firefighting: FirefightingResult | null;
 }
 
 export interface StudioRunState {
@@ -130,6 +138,8 @@ export interface StudioRunState {
   /** True when the scenario has been edited since `result` was computed. */
   stale: boolean;
   error: { message: string; problems: IgnitionProblem[] } | null;
+  /** Firefighting plans solved so far while computing, or null. */
+  progress: { done: number; total: number } | null;
 }
 
 // ---------------------------------------------------------------------------------------
@@ -142,10 +152,18 @@ export type SolverRequest = {
   requestId: number;
   landscape: LandscapeGrid;
   input: ScheduledFireInput;
+  /** When enabled, the worker also plans and solves firefighting after the free run. */
+  firefighting: FirefightingSettings | null;
 };
 
 export type SolverResponse =
-  | { type: "result"; requestId: number; run: ScheduledFireRun }
+  | {
+      type: "result";
+      requestId: number;
+      run: ScheduledFireRun;
+      firefighting: FirefightingResult | null;
+    }
+  | { type: "progress"; requestId: number; done: number; total: number }
   | { type: "error"; requestId: number; message: string; problems: IgnitionProblem[] };
 
 // ---------------------------------------------------------------------------------------
@@ -229,6 +247,8 @@ export interface ConfigPanelProps {
   /** Validated JSON import. Returns issues to show, empty on success. */
   onImport: (json: string) => ScenarioIssue[];
   onLoadDemo: () => void;
+  /** Firefighting inputs and last result, rendered after the conditions. */
+  firefighting?: ReactNode;
 }
 
 export interface PlaybackBarProps {
