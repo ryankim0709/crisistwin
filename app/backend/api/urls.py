@@ -1,11 +1,11 @@
-from django.urls import path, re_path
+from django.urls import include, path, re_path
 
 from .dispatch import decide
 from .dispatch_area import dispatch_area
 from .explain import explain
 from .families import create_family, family_detail, family_meeting_points, family_member_me, join_family
 from .landscapes import landscape_list, landscape_package
-from .live import live_broadcast, live_snapshot
+from .live_broadcast import live_broadcast, live_snapshot
 from .views import health
 
 FAMILY_ID = r"(?P<family_id>[0-9a-f]{24})"
@@ -17,6 +17,7 @@ urlpatterns = [
     path("dispatch/area", dispatch_area, name="dispatch-area"),
     path("live", live_snapshot, name="live-snapshot"),
     path("live/broadcast", live_broadcast, name="live-broadcast"),
+    path("live/", include("api.live.urls")),
     path("families", create_family, name="family-create"),
     path("families/join", join_family, name="family-join"),
     re_path(rf"^families/{FAMILY_ID}$", family_detail, name="family-detail"),

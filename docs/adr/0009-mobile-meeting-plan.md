@@ -15,6 +15,8 @@ evacuation instructions, and the UI says to follow local authorities first.
   a WGS84 latitude/longitude in decimal degrees. Points are chosen with Apple
   Maps search (`MKLocalSearch`) or by tapping a MapKit map. No location
   permission is requested and the user's position is never read.
+  (ADR 0011 adds When In Use location for reporting and navigation only; the
+  meeting plan still never reads it.)
 - Trusted contacts come from `CNContactPickerViewController`, which needs no
   Contacts permission because iOS returns only the person picked. The app keeps
   the contact identifier, display name, and first phone number.

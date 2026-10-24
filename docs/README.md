@@ -13,6 +13,9 @@
 | [historical-data.md](historical-data.md) | Incident packages, MongoDB Atlas sync, Camp Fire collector. |
 | [development.md](development.md) | Optional checks, running on the host, runtime images. |
 | [plan-api.md](plan-api.md) | Draft API for commanding a branch of the replay. |
+| [live-reports.md](live-reports.md) | Contract for the live drill API: field reports, road state, guidance, check-ins (`/api/live/…`). |
+| [twin-api.md](twin-api.md) | Contract for the real-time traffic twin behind `/live`'s what-if. |
+| [iteration-log.md](iteration-log.md) | Round-by-round log of the live-drill iteration work. |
 
 Other documentation lives next to the code: [../README.md](../README.md), [../app/src/ui/README.md](../app/src/ui/README.md)
 (UI standard), [../app/backend/README.md](../app/backend/README.md), [../sim/README.md](../sim/README.md),

@@ -139,11 +139,49 @@ returns 304. Errors are JSON: 404 `{"error": "not_found"}` for unknown/unbuilt r
 
 ### Live broadcast and families
 
-`GET /api/live`, `POST /api/live/broadcast` (`api/live.py`) and `/api/families…`
+`GET /api/live`, `POST /api/live/broadcast` (`api/live_broadcast.py`) and `/api/families…`
 (`api/families.py`) serve the resident iOS app. They use MongoDB collections
 `live_broadcast` and `families`. Request and response shapes are in
 [ADR 0016](../../docs/adr/0016-resident-live-and-family.md) and
 `app/src/live/contracts.ts`.
+
+### Live drill API (`/api/live/…`)
+
+Implements v1 and v2 of [docs/live-reports.md](../../docs/live-reports.md) (ADR 0011, 0012):
+field reports, road state, public map, check tasks, the drill clock, the fire estimate,
+per-zone guidance with controller proposals, check-ins and responder location. Code:
+`api/live/` (HTTP + MongoDB) over the pure `livecore/` package (rules, planner, routing).
+Everything is a labeled drill of the 2018 Camp Fire; nothing is a real incident. It shares
+the `/api/live` prefix with the broadcast above but no code or collections (`live_*`).
+
+- Auth: `Authorization: Bearer <token>`. `POST /api/live/devices` issues civilian tokens;
+  `POST /api/live/incidents/camp-2018-drill/join {"invite_code"}` issues responder tokens
+  (`LIVE_INVITE_CODE`); the controller uses `LIVE_CONTROLLER_TOKEN`. Unset secrets fail
+  closed (403). Device tokens are stored as SHA-256 hashes.
+- The planner fixes every level, route and number. The rationale LLM
+  (`LIVE_RATIONALE_MODEL`, `ANTHROPIC_API_KEY`) only rewrites the template text in a
+  background thread (10 s timeout); without a key the template stays.
+- `LIVE_DRILL_BUNDLE` points at the replay bundle (default
+  `app/public/replays/camp-2018.json`); it is parsed once per process on first use.
+- `POST incidents/{id}/impact` (controller) compares one road segment blocked and unblocked:
+  two planner runs give the affected zones and their ETA delta, and one twin what-if
+  (simulated, about 1-3 s) gives the vehicles at risk and window metrics (`api/live/impact.py`).
+- Not implemented yet: `POST incidents/{id}/route` returns 501.
+
+Local run (Docker MongoDB on 127.0.0.1:27017):
+
+```sh
+export MONGODB_URI=mongodb://127.0.0.1:27017 MONGODB_DATABASE=crisistwin_live_dev
+export LIVE_CONTROLLER_TOKEN=dev-controller LIVE_INVITE_CODE=DRILL
+python manage.py live_init_db            # indexes + validators, once per database
+python manage.py live_drill --reset --seed   # start the clock; add labeled drill-fixture reports
+python manage.py runserver 127.0.0.1:8000
+```
+
+`live_drill` also takes `--speed` (0..60 drill seconds per wall second) and
+`--replay-start`. `--seed` inserts three synthetic civilian reports of a full block on
+Skyway in Paradise (`evidence_class: "drill_fixture"`, note says synthetic).
+`live_init_db --drop-drill-data` drops all live drill data but keeps device tokens.
 
 ## Updating dependencies
 

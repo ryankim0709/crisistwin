@@ -79,7 +79,7 @@ notification or alert.
 `no_broadcast`, 503 `database_unavailable`.
 
 `POST /api/live/broadcast` with a `LiveSnapshot` body (<= 600 kB) -> 204; 400 with `{error,
-detail}` when invalid. Validation lives in `app/backend/api/live.py`.
+detail}` when invalid. Validation lives in `app/backend/api/live_broadcast.py`.
 
 ```json
 {

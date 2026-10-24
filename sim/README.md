@@ -13,7 +13,8 @@ All outputs are planning experiments, not operational fire or evacuation guidanc
 | `fire.py` | Fire-spread model `elliptical-mtt-ca`: minimum travel time (Dijkstra, 16-neighbour stencil) with a wind ellipse |
 | `hindcast.py` | Simulate from an observed perimeter, score against later perimeters, calibrate without look-ahead |
 | `firefront.py` | Simulated fire front from an assumed ignition, fitted to the first satellite perimeter; 10-minute isochrones |
-| `traffic.py` | Evacuation traffic `meso-link-queue`: link queues with capacity, storage and spillback, nearest-exit routing, event-driven closures |
+| `traffic.py` | Evacuation traffic `meso-link-queue`: link queues with capacity, storage and spillback, nearest-exit routing, event-driven closures. `TrafficEngine` runs it one step at a time (inject, fork); `simulate_traffic` runs it to the end |
+| `twin.py` | Real-time twin on `TrafficEngine`: simulation clock, commands with validation and an action log, monitoring snapshot, what-if forks ([API](../docs/twin-api.md)) |
 | `network.py` | Load the verified 2018 OSM road package into traffic types; unknown lanes and speeds take named class defaults |
 | `scenario.py` | Hybrid scenario: observed roads and exits with fixture demand and orders until zones and events are acquired |
 | `fixtures.py` | Fully synthetic network and scenario for development |
@@ -46,9 +47,55 @@ python3 -m sim --package $P hindcast --spread 2 --wind-from 90 --wind-speed 5 --
 python3 -m sim --package $P calibrate --train-hours 24 --test-hours 48 --output /tmp/calibration.json
 python3 -m sim --package $P bundle --roads-package data/incidents/camp-2018-evacuation/b1b318c16bbd3270 \
   --output app/public/replays/camp-2018.json   # web app replay at /replay
+python3 -m sim --package $P twin-demo --roads-package data/incidents/camp-2018-evacuation/b1b318c16bbd3270 \
+  --start-at 2018-11-08T15:30:00Z --step-min 30 --horizon-min 60   # real-time twin demo, JSON lines on stdout
 ```
 
 Every command verifies the package hashes before it reads any data.
+
+## Engine and twin (2026-10-24)
+
+`sim.traffic.TrafficEngine` is the traffic model as a resumable state machine
+([ADR 0013](../docs/adr/0013-realtime-twin.md)). `step()` runs one model step, `run_to(t_s)`
+runs every step up to a model time, and `result()` returns what `simulate_traffic` returns.
+`simulate_traffic` is now `TrafficEngine(...).run_to_end(); result()`, with the same
+signature, output and `MODEL_VERSION`. On top of that the engine can:
+
+- `inject(events)`: schedule simulated commands on their own queue, applied after the
+  controllers of their step and never merged into the historical events;
+- `fork()`: copy the state by a pickle round trip, sharing static inputs, callables and
+  fire geometries (about 30 ms at the 18:00Z peak);
+- `freeze_fire()`: hold the fire area where it is;
+- route zones to an assigned destination (`zone_rerouted` events), falling back to the
+  shared route tree where that destination is full, closed or unreachable.
+
+With `fire_area_cumulative` (the default), a shared `FireTimeline` stores the fire's
+effect at each fire check once, so later engines and forks on the same inputs skip the
+point-in-polygon work.
+
+`sim/twin.py` is the domain layer for the live drill and the agentic controller: the
+action catalog and validation, the action log, the monitoring snapshot and what-if
+branches. Its contract is [docs/twin-api.md](../docs/twin-api.md). It is pure Python with
+JSON at the boundary; an HTTP adapter in `app/backend` will wrap it later.
+
+Parity with the batch replay: with no commands, the Camp bundle built after the refactor
+is byte-identical to the one built from the previous code (`b1b318c16bbd3270` and
+`17e67cfe5669fe50` roads packages), and so is the agent simulation with responders. A
+twin stepped to the end in 7, 13 and 61 minute chunks returns the same result.
+
+Measured on the Camp bundle inputs (fixture demand, `b1b318c16bbd3270`, seed 7, laptop,
+Python 3.12):
+
+| Measurement | Time |
+| --- | --- |
+| Full run, `simulate_traffic` before and after the refactor | 5.1 s and 4.7 s |
+| Full run with a warm `FireTimeline` | 2.0 s |
+| Twin created at 16:30Z (cold) | 0.4 s |
+| Busiest hour, 18:00 to 19:00Z, stepping | 1.5 s cold, 0.2 s warm |
+| What-if, 4 sets plus the baseline, 60 min, from 17:30Z | 2.5 s cold, 1.4 s warm |
+| What-if, the same, from 15:30Z | 0.9 s cold, 0.7 s warm |
+
+"Cold" is the first engine in a process, which also builds the `FireTimeline`.
 
 ## Conventions
 

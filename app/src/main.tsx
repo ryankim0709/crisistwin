@@ -18,6 +18,7 @@ import DioramaPage from "./diorama/DioramaPage";
 import { SIMULATION_VIEW } from "./replay/loadBundle";
 import ReplayView from "./replay/ReplayView";
 import ReplayRoute from "./replay/IncidentPicker";
+import LiveCommandPage from "./live/LiveCommandPage";
 
 // The workspace has no landing page; the root opens the fire spread model.
 if (window.location.pathname === "/")
@@ -52,6 +53,7 @@ const page =
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <AppShell path={path}>{page}</AppShell>
+    {/* Live command is a full-viewport map tool with its own navigation. */}
+    {path === "/live" ? <LiveCommandPage /> : <AppShell path={path}>{page}</AppShell>}
   </StrictMode>,
 );

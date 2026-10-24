@@ -3,10 +3,10 @@ import SwiftUI
 
 /// The simulation drill: where the simulated fire is now and, while the dispatch agent runs,
 /// what the simulation tells the household's zone to do. Always labelled as a simulation.
-struct LiveView: View {
+struct BroadcastView: View {
     let openTab: (AppTab) -> Void
 
-    @Environment(LiveStore.self) private var live
+    @Environment(BroadcastStore.self) private var live
     @Environment(MeetingPlanStore.self) private var planStore
     @Environment(FamilyStore.self) private var family
     @State private var camera: MapCameraPosition = .region(PlanMap.defaultRegion)
@@ -17,11 +17,12 @@ struct LiveView: View {
 
     var body: some View {
         List {
+            Group {
             Section {
                 Label {
                     Text("Simulation drill. The fire and any orders here come from CrisisTwin's models, not from emergency services. In a real emergency, follow official orders.")
                 } icon: {
-                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Color.ctWarning)
                 }
                 .font(.subheadline)
             }
@@ -47,10 +48,14 @@ struct LiveView: View {
             case .live(let snapshot, let receivedAt):
                 liveSections(snapshot, receivedAt: receivedAt)
             }
+            }
+            .listRowBackground(Color.ctSurface)
         }
-        .background(Color("WorkspaceBackground"))
         .scrollContentBackground(.hidden)
-        .navigationTitle("Live drill")
+        .listRowSeparatorTint(Color.ctBorderSubtle)
+        .ctScreenBackground()
+        .tint(Color.ctBrand)
+        .navigationTitle("Web simulation")
         .refreshable { await live.refresh() }
         .sheet(isPresented: $editingHome) {
             MeetingPointEditor(title: "Your home", point: plan.home) { point in
@@ -69,7 +74,7 @@ struct LiveView: View {
                 .listRowInsets(EdgeInsets())
             Text(legend(snapshot))
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.ctInkMuted)
         }
 
         Section("Your household") {
@@ -120,33 +125,33 @@ struct LiveView: View {
         return Map(position: $camera) {
             ForEach(snapshot.zones) { zone in
                 MapPolygon(coordinates: zone.outline)
-                    .foregroundStyle(zone.id == myZone?.id ? Color.blue.opacity(0.12) : Color.clear)
-                    .stroke(zone.id == myZone?.id ? Color.blue : Color.gray.opacity(0.5), lineWidth: zone.id == myZone?.id ? 3 : 1)
+                    .foregroundStyle(zone.id == myZone?.id ? Color.ctRoute.opacity(0.12) : Color.clear)
+                    .stroke(zone.id == myZone?.id ? Color.ctRoute : Color.ctSmoke.opacity(0.6), lineWidth: zone.id == myZone?.id ? 3 : 1)
             }
             ForEach(Array(snapshot.fireRings.enumerated()), id: \.offset) { entry in
                 MapPolygon(coordinates: entry.element)
-                    .foregroundStyle(Color.red.opacity(0.35))
-                    .stroke(Color.red, lineWidth: 2)
+                    .foregroundStyle(Color.ctFire.opacity(0.35))
+                    .stroke(Color.ctFire, lineWidth: 2)
             }
             if let zone = myZone, !zone.routeLine.isEmpty {
                 MapPolyline(coordinates: zone.routeLine)
-                    .stroke(Color.blue, style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
+                    .stroke(Color.ctRoute, style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
             }
             if let exit = myZone?.exit {
                 Marker("Exit: \(exit.name)", systemImage: "arrow.up.right.square.fill", coordinate: exit.coordinate)
-                    .tint(.blue)
+                    .tint(Color.ctRoute)
             }
             if let home = plan.home {
                 Marker("Home", systemImage: "house.fill", coordinate: home.coordinate)
-                    .tint(.indigo)
+                    .tint(Color.ctInfo)
             }
             if let primary = plan.primary {
                 Marker("1 · \(primary.name)", systemImage: "figure.2", coordinate: primary.coordinate)
-                    .tint(Color.accentColor)
+                    .tint(Color.ctBrand)
             }
             if let backup = plan.backup {
                 Marker("2 · \(backup.name)", systemImage: "figure.2", coordinate: backup.coordinate)
-                    .tint(.orange)
+                    .tint(Color.ctInkMuted)
             }
         }
         .accessibilityLabel(mapSummary(snapshot, myZone: myZone))
@@ -161,7 +166,7 @@ struct LiveView: View {
         return parts.joined(separator: " ")
     }
 
-    private func mapSummary(_ snapshot: LiveSnapshot, myZone: LiveZone?) -> String {
+    private func mapSummary(_ snapshot: LiveSnapshot, myZone: BroadcastZone?) -> String {
         var text = "Map of the simulated fire, \(snapshot.fireRings.count) burning area\(snapshot.fireRings.count == 1 ? "" : "s")."
         if let myZone { text += " Your zone is \(myZone.name)." }
         return text
@@ -199,7 +204,7 @@ struct LiveView: View {
             }
             if reached {
                 Label("In the simulation, fire has reached your home location.", systemImage: "flame.fill")
-                    .foregroundStyle(.red)
+                    .foregroundStyle(Color.ctDanger)
             } else if let meters = snapshot.distanceToFire(from: home.coordinate) {
                 Label("Simulated fire edge is about \(distanceText(meters)) from home.", systemImage: "ruler")
             } else {
@@ -208,7 +213,7 @@ struct LiveView: View {
             Button("Change home location") { editingHome = true }
         } else {
             Text("Set your home to see your zone's simulated orders and how far the fire is. Your home stays on this phone; the app works out your zone itself.")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.ctInkMuted)
             Button {
                 editingHome = true
             } label: {
@@ -218,7 +223,7 @@ struct LiveView: View {
     }
 
     @ViewBuilder
-    private func zoneGuidance(_ zone: LiveZone, redirected: Bool) -> some View {
+    private func zoneGuidance(_ zone: BroadcastZone, redirected: Bool) -> some View {
         let style = GuidanceStyle(zone.kind)
         VStack(alignment: .leading, spacing: 8) {
             Label(style.title, systemImage: style.systemImage)
@@ -231,11 +236,11 @@ struct LiveView: View {
             }
             Text("Zone \(zone.name)")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.ctInkMuted)
             if let core = zone.fireCoreEtaMin, zone.kind != .overrun, zone.kind != .cleared {
                 Text(core == 0 ? "Simulated fire is in the zone." : "Simulated fire reaches the zone centre in about \(Int(core)) min.")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.ctInkMuted)
             }
         }
         .padding(.vertical, 4)
@@ -258,7 +263,7 @@ struct LiveView: View {
                     let isReached = reached[entry.offset]
                     LabeledContent("\(entry.element.0): \(entry.element.1.name)") {
                         Label(isReached ? "Fire reached" : "Clear", systemImage: isReached ? "flame.fill" : "checkmark.circle")
-                            .foregroundStyle(isReached ? Color.red : Color.secondary)
+                            .foregroundStyle(isReached ? Color.ctDanger : Color.ctInkMuted)
                     }
                 }
                 if let firstClear = points.indices.first(where: { !reached[$0] }) {
@@ -294,7 +299,7 @@ struct LiveView: View {
         case "finished": return "Finished · \(ago)"
         case "paused": return "Paused · updated \(ago)"
         default:
-            return age > LiveStore.staleAfter ? "No update for \(Int(age)) s; the planner may have closed the page" : "Playing · updated \(ago)"
+            return age > BroadcastStore.staleAfter ? "No update for \(Int(age)) s; the planner may have closed the page" : "Playing · updated \(ago)"
         }
     }
 }
@@ -305,16 +310,16 @@ private struct GuidanceStyle {
     let systemImage: String
     let color: Color
 
-    init(_ kind: LiveZone.Guidance?) {
+    init(_ kind: BroadcastZone.Guidance?) {
         let style: (String, String, Color)
         switch kind {
-        case .leaveNow: style = ("Leave now", "car.fill", .red)
-        case .wait: style = ("Ordered out — wait a little", "hourglass", .orange)
-        case .routeBlocked: style = ("Route blocked — hold", "xmark.octagon.fill", .red)
-        case .noOrder: style = ("No order yet — be ready", "bell", .primary)
-        case .cleared: style = ("Zone evacuated", "checkmark.seal.fill", .green)
-        case .overrun: style = ("Fire in your zone", "flame.fill", .red)
-        case nil: style = ("Update the app", "questionmark.circle", .secondary)
+        case .leaveNow: style = ("Leave now", "car.fill", .ctDanger)
+        case .wait: style = ("Ordered out — wait a little", "hourglass", .ctWarning)
+        case .routeBlocked: style = ("Route blocked — hold", "xmark.octagon.fill", .ctDanger)
+        case .noOrder: style = ("No order yet — be ready", "bell", .ctInk)
+        case .cleared: style = ("Zone evacuated", "checkmark.seal.fill", .ctSuccess)
+        case .overrun: style = ("Fire in your zone", "flame.fill", .ctDanger)
+        case nil: style = ("Update the app", "questionmark.circle", .ctInkMuted)
         }
         title = style.0
         systemImage = style.1

@@ -9,47 +9,36 @@ struct AboutView: View {
         case failed(message: String)
     }
 
-    @Environment(\.dismiss) private var dismiss
     @State private var connection: ConnectionState = .loading
     @State private var attempt = 0
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 28) {
-                Text("CAL HACKS / PROTOTYPE")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-
-                Text("CrisisTwin helps households plan where to meet if they get separated, and practice with a simulated wildfire.")
-                    .font(.title3)
-
-                Text("Meeting points are your own choices, not official shelters. The fire simulation is a simple illustrative model, not a forecast. Always follow evacuation orders from your local authorities.")
-                    .foregroundStyle(.secondary)
-
-                VStack(alignment: .leading, spacing: 16) {
-                    Label("System connection", systemImage: "network")
-                        .font(.headline)
-                    connectionContent
-                    Text("Readiness only. No live incident or simulation data is loaded.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+            VStack(spacing: 16) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("CrisisTwin shows the one instruction for your zone during a wildfire and lets you report what you see.")
+                        .font(.ctTitle)
+                        .foregroundStyle(Color.ctInk)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("The fire estimate is the latest observation or model fit, never a forecast. Meeting points are your own choices, not official shelters. Always follow evacuation orders from your local authorities.")
+                        .font(.subheadline)
+                        .foregroundStyle(Color.ctInkMuted)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding()
-                .background(.background, in: RoundedRectangle(cornerRadius: 16))
+                .ctPanel()
+
+                VStack(alignment: .leading, spacing: 12) {
+                    PlanCardHeader("Service")
+                    connectionContent
+                }
+                .ctPanel()
             }
-            .padding(24)
-            .frame(maxWidth: 640, alignment: .leading)
-            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
         }
-        .background(Color("WorkspaceBackground"))
+        .ctScreenBackground()
         .navigationTitle("About")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .confirmationAction) {
-                Button("Done") { dismiss() }
-            }
-        }
         .task(id: attempt) {
             await loadHealth(requestID: attempt)
         }
@@ -59,20 +48,35 @@ struct AboutView: View {
     private var connectionContent: some View {
         switch connection {
         case .loading:
-            ProgressView("Connecting to the API…")
+            HStack(spacing: 12) {
+                ProgressView()
+                Text("Connecting")
+                    .foregroundStyle(Color.ctInkMuted)
+            }
+            .frame(minHeight: 44)
         case .connected(let version):
-            Label("API and database connected", systemImage: "checkmark.circle")
-            Text("Version \(version) · last check succeeded")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            HStack(spacing: 12) {
+                Label("Connected", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(Color.ctSuccess)
+                Spacer(minLength: 8)
+                Text(version)
+                    .font(.subheadline)
+                    .foregroundStyle(Color.ctInkMuted)
+                    .monospacedDigit()
+            }
+            .frame(minHeight: 44)
+            .accessibilityElement(children: .combine)
             Button("Check again") { retry() }
-                .buttonStyle(.bordered)
+                .buttonStyle(PlanPillStyle(kind: .secondary, fullWidth: true))
         case .failed(let message):
-            Label("Connection unavailable", systemImage: "exclamationmark.triangle")
+            Label("Connection unavailable", systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(Color.ctWarning)
             Text(message)
                 .font(.subheadline)
+                .foregroundStyle(Color.ctInkMuted)
+                .fixedSize(horizontal: false, vertical: true)
             Button("Try again") { retry() }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(PlanPillStyle(kind: .secondary, fullWidth: true))
         }
     }
 

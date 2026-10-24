@@ -9,6 +9,10 @@ branch result is a variant document (see "Variants" in
 
 Base path: `/api/sim/`. The JSON bodies use UTC ISO 8601 times with `Z`.
 
+Plan branches are implemented as `sim.twin.Twin.replay(inputs, commands)` run to the end with
+`keep_frames=True`; the commands use the twin's action catalog and validation
+([twin-api.md](twin-api.md), [ADR 0013](adr/0013-realtime-twin.md)).
+
 ## `GET /api/sim/catalog?incident=camp-2018`
 
 Everything the UI needs to offer commands:

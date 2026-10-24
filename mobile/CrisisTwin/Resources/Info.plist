@@ -49,6 +49,8 @@
         <key>NSAllowsLocalNetworking</key>
         <true/>
     </dict>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>Your location is attached to a report you send and used for directions around reported blockages. It is never tracked in the background.</string>
     <key>NSLocalNetworkUsageDescription</key>
     <string>Connect to your development CrisisTwin API and web app on the local network.</string>
 </dict>

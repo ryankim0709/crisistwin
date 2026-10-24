@@ -7,6 +7,7 @@ Subcommands write JSON/GeoJSON for viewing or app integration:
   calibrate  pick fire parameters on a training window, report held-out skill
   bundle     run fire + traffic and write a replay bundle for the web app (docs/replay-bundle.md)
   simulate   agent simulation (resident agents + responder agents); separate from the historical replay
+  twin-demo  real-time twin (sim/twin.py): step the Camp replay, apply commands, compare them by what-if
 """
 
 from __future__ import annotations
@@ -34,6 +35,8 @@ from sim.behavior import BehaviorParams
 from sim.responders import ASSUMPTIONS as RESPONDER_ASSUMPTIONS
 from sim.responders import compare_with_history, default_responders, fire_arrival_lookup
 from sim.traffic import TrafficParams
+from sim.twin import TwinError
+from sim.twin import demo as twin_demo
 
 DEMAND_HELP = ("census: ACS block-group demand with NIST orders via a derived zone crosswalk; fixture: "
                "synthetic zone grid; auto: census when the roads package has the grounded layers")
@@ -135,6 +138,14 @@ def main() -> None:
     sim_.add_argument("--demand", choices=DEMAND_MODES, default="auto", help=DEMAND_HELP)
     sim_.add_argument("--output", type=Path, required=True, help="e.g. app/public/simulations/camp-2018.agents.json")
 
+    twin = sub.add_parser("twin-demo", help="real-time twin demo: step, apply commands, what-if (JSON lines)")
+    twin.add_argument("--roads-package", type=Path, help="default from --incident")
+    twin.add_argument("--start-at", default="2018-11-08T15:30:00Z", help="ISO 8601 replay time to start the twin")
+    twin.add_argument("--step-min", type=int, default=30, help="simulated minutes to step before the what-if")
+    twin.add_argument("--horizon-min", type=int, default=60, help="what-if horizon, simulated minutes")
+    twin.add_argument("--seed", type=int, default=TrafficParams.seed)
+    twin.add_argument("--demand", choices=DEMAND_MODES, default="auto", help=DEMAND_HELP)
+
     args = parser.parse_args()
     incident = incidents.get(args.incident) if args.incident else None
     if incident:
@@ -145,8 +156,18 @@ def main() -> None:
             args.output = incidents.REPLAYS_DIR / f"{incident.id}.json"
     if args.package is None:
         parser.error("--package or --incident is required")
-    if args.command == "simulate" and args.roads_package is None:
-        parser.error("simulate needs --roads-package or --incident")
+    if args.command in ("simulate", "twin-demo") and args.roads_package is None:
+        parser.error(f"{args.command} needs --roads-package or --incident")
+    if args.command == "twin-demo":
+        if incident is not None and incident.id != "camp-2018":
+            parser.error("twin-demo supports camp-2018 only so far")
+        os.environ[DATA_SOURCE_ENV] = args.data_source
+        try:
+            twin_demo(args.package, args.roads_package, start_at=args.start_at, step_min=args.step_min,
+                      horizon_min=args.horizon_min, demand=args.demand, seed=args.seed)
+        except (OSError, SourceError, ValueError, json.JSONDecodeError, TwinError) as exc:
+            parser.exit(1, f"error: {exc}\n")
+        return
     if args.output is None:
         parser.error("--output is required without --incident")
     generic = incident is not None and incident.kind == "package"
