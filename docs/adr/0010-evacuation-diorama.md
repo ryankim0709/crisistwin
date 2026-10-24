@@ -50,4 +50,8 @@ The scene owns its render loop, resize handling and camera. The page owns simula
 
 Simplifications: the fire is a scripted wind-biased spread over a grid with deterministic
 noise; it is not Rothermel and ignores fuel moisture and spotting. Traffic is a simple
-follow-the-leader model. Crew suppression is a scripted hold of one perimeter section.
+follow-the-leader model (dt = 0.05 s, 5-unit standstill gap) with the single-lane bridge
+metered to at most one car per second. Households of three or fewer share a car with a
+neighbour on the same street (at most six aboard), so 44 households drive 31 cars; the
+cars left behind stay parked. Engines overtake civilian traffic. Crew suppression is a
+scripted hold of the perimeter near each staging point once water starts.
