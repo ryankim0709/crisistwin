@@ -377,6 +377,13 @@ configured by this scaffold.
 
 Codex uses `AGENTS.md` directly. Cursor, Claude Code, and GitHub Copilot have small adapters that point to the same file. Change shared guidance in `AGENTS.md` to keep the tools aligned.
 
+Claude's [subagent model-selection rule](AGENTS.md#claude-subagent-model-selection)
+routes easy, low-impact tasks to Haiku, medium tasks to Sonnet, and hard or
+important tasks to Opus. It requires assessment before each launch and explicit
+model selection using the available [Claude Code subagent controls](https://code.claude.com/docs/en/sub-agents#choose-a-model).
+This is agent guidance, not an enforced runtime router or a change to the parent
+session's model; model availability and host settings still apply.
+
 For concurrent work, use separate branches and checkouts/worktrees and agree on shared interfaces before editing overlapping files. Use the pull request template to hand off changes and verification results.
 
 ## Concept background
