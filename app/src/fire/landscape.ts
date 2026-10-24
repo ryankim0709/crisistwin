@@ -798,11 +798,35 @@ export function slopeAndAspect(
   return { slopeTangent, upslopeDegrees };
 }
 
+/** Options for `loadLandscape`. */
+export interface LandscapeLoadOptions {
+  /**
+   * Requested ground cell size in metres: 30 (LANDFIRE native) or a coarser multiple used
+   * for large areas so the grid stays browser-sized. Coarser cells resample fuel codes by
+   * nearest neighbour and lose detail; callers must disclose the resolution.
+   */
+  cellMeters?: number;
+}
+
+/** Largest grid side (cells) the page and solver are expected to handle interactively. */
+export const MAX_GRID_CELLS_PER_SIDE = 900;
+
+/**
+ * Coarsest-needed cell size for a square of the given ground radius: native 30 m when it
+ * fits within `MAX_GRID_CELLS_PER_SIDE`, otherwise the next multiple of 30 m that does.
+ */
+export function landscapeCellMetersFor(groundRadiusMeters: number): number {
+  const needed = (2 * groundRadiusMeters) / MAX_GRID_CELLS_PER_SIDE;
+  return Math.max(30, Math.ceil(needed / 30) * 30);
+}
+
 export async function loadLandscape(
   longitude: number,
   latitude: number,
   groundRadiusMeters: number,
   signal: AbortSignal,
+  // Accepted now so callers can pass it; coarse resampling is implemented separately.
+  _options: LandscapeLoadOptions = {},
 ): Promise<LandscapeGrid> {
   const box = boxAround(longitude, latitude, groundRadiusMeters);
   const raster = await fetchFuelRaster(box, signal);
