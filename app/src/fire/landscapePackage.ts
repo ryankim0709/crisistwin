@@ -12,7 +12,7 @@
  * `slopeAndAspect`, so they cannot drift from it.
  */
 
-import { slopeAndAspect, type LandscapeGrid } from "./landscape";
+import { slopeAndAspect, type LandscapeGrid, type LandscapeResampling } from "./landscape";
 
 export const LANDSCAPE_PACKAGE_FORMAT = "crisistwin-landscape";
 export const LANDSCAPE_PACKAGE_VERSION = 1;
@@ -38,6 +38,7 @@ const SECTIONS: readonly { name: SectionName; dtype: SectionDtype }[] = [
   { name: "canopyCoverFraction", dtype: "float32" },
   { name: "canopyHeightMeters", dtype: "float32" },
 ];
+const RESAMPLINGS: readonly LandscapeResampling[] = ["native", "mode", "nearest"];
 const BYTES_PER_ELEMENT: Record<SectionDtype, number> = { int16: 2, float32: 4 };
 
 /** Where the package's data came from; recorded for provenance, never used to fetch. */
@@ -56,10 +57,10 @@ export interface LandscapePackageMeta {
   regionId: string;
   /** UTC ISO build time. */
   builtAt: string;
-  /** Ground cell size the grid was built at, metres (30 = LANDFIRE native). */
+  /** Cell size the grid was built at, metres; must equal `grid.cellMeters`. */
   cellMeters: number;
-  /** How native 30 m cells were reduced to `cellMeters`, e.g. "none" at 30 m. */
-  resampling: string;
+  /** How fuel reached the grid; must equal `grid.resampling` (see LandscapeGrid). */
+  resampling: LandscapeResampling;
   sources: LandscapePackageSources;
 }
 
@@ -131,6 +132,12 @@ export async function encodeLandscapePackage(
   grid: LandscapeGrid,
   meta: LandscapePackageMeta,
 ): Promise<Uint8Array> {
+  if (meta.cellMeters !== grid.cellMeters || meta.resampling !== grid.resampling) {
+    throw new LandscapePackageError(
+      `Package metadata says ${meta.cellMeters} m/${meta.resampling} but the grid is ` +
+        `${grid.cellMeters} m/${grid.resampling}.`,
+    );
+  }
   const cells = grid.width * grid.height;
   const sections: LandscapePackageSection[] = [];
   let blockLength = 0;
@@ -211,8 +218,11 @@ function validateHeader(value: unknown): LandscapePackageHeader {
     if (!isFiniteNumber(header[key])) fail(`${key} is not a finite number.`);
   }
   if ((header.groundCellSizeMeters as number) <= 0) fail("groundCellSizeMeters must be > 0.");
-  for (const key of ["regionId", "builtAt", "resampling", "payloadSha256"]) {
+  for (const key of ["regionId", "builtAt", "payloadSha256"]) {
     if (typeof header[key] !== "string") fail(`${key} is not a string.`);
+  }
+  if (!RESAMPLINGS.includes(header.resampling as LandscapeResampling)) {
+    fail(`unknown resampling ${String(header.resampling)}.`);
   }
   for (const key of ["elevationComplete", "canopyComplete"]) {
     if (typeof header[key] !== "boolean") fail(`${key} is not a boolean.`);
@@ -317,8 +327,6 @@ export async function decodeLandscapePackage(
     header.height,
     header.groundCellSizeMeters,
   );
-  // TODO(feat/fire-bay-model): if LandscapeGrid gains cellMeters/resampling, set them here
-  // from the header so a stored grid matches the live loader's output exactly.
   const grid: LandscapeGrid = {
     width: header.width,
     height: header.height,
@@ -337,6 +345,8 @@ export async function decodeLandscapePackage(
     canopyCoverFraction: read("canopyCoverFraction") as Float32Array,
     canopyHeightMeters: read("canopyHeightMeters") as Float32Array,
     canopyComplete: header.canopyComplete,
+    cellMeters: header.cellMeters,
+    resampling: header.resampling,
     attribution: { ...header.attribution },
   };
   return { grid, header };

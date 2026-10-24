@@ -14,10 +14,11 @@ import { parseArgs } from "node:util";
 import {
   LANDFIRE_CANOPY_COVERAGES,
   LANDFIRE_COVERAGE,
+  LANDFIRE_UPSTREAM_WCS_URL,
+  LANDFIRE_USER_AGENT,
   TERRAIN_TILE_URL,
   loadLandscape,
-  type LandscapeGrid,
-  type LandscapeLoadOptions,
+  type LandscapeResampling,
 } from "../../app/src/fire/landscape";
 import {
   LANDSCAPE_PACKAGE_VERSION,
@@ -25,15 +26,8 @@ import {
   type LandscapePackageSources,
 } from "../../app/src/fire/landscapePackage";
 import { SOCAL_REGIONS, type LandscapeRegion } from "../../app/src/fire/regions";
-import {
-  APP_USER_AGENT,
-  LANDFIRE_UPSTREAM,
-  fetchStats,
-  installFetch,
-  installImageShims,
-} from "./nodeShims.mts";
+import { politeFetch } from "./politeFetch.mts";
 
-const NATIVE_CELL_METERS = 30;
 const MAX_JOBS = 2;
 const MANIFEST_VERSION = 1;
 
@@ -62,7 +56,7 @@ export interface ManifestEntry {
     originY: number;
     cellSizeX: number;
     cellSizeY: number;
-    resampling: string;
+    resampling: LandscapeResampling;
   };
   elevationComplete: boolean;
   canopyComplete: boolean;
@@ -135,28 +129,7 @@ process.on("SIGINT", () => {
   controller.abort(new DOMException("Build interrupted", "AbortError"));
 });
 
-installFetch(controller.signal, log);
-installImageShims();
-
-/** Resolution fields the model branch adds to LandscapeGrid; absent before it lands. */
-type ResolvedGrid = LandscapeGrid & { cellMeters?: number; resampling?: string };
-
-function resolution(region: LandscapeRegion, grid: ResolvedGrid) {
-  if (typeof grid.cellMeters === "number") {
-    if (grid.cellMeters !== region.cellMeters) {
-      throw new Error(`Asked for ${region.cellMeters} m cells, loader built ${grid.cellMeters} m.`);
-    }
-    return { cellMeters: grid.cellMeters, resampling: grid.resampling ?? "unspecified" };
-  }
-  // A loader without coarse resampling always returns native cells.
-  if (region.cellMeters !== NATIVE_CELL_METERS) {
-    throw new Error(
-      `${region.id} needs ${region.cellMeters} m cells but this loader has no coarse ` +
-        "resampling (LandscapeGrid.cellMeters missing); merge the model branch first.",
-    );
-  }
-  return { cellMeters: NATIVE_CELL_METERS, resampling: "none" };
-}
+const { fetch: buildFetch, stats: fetchStats } = politeFetch(controller.signal, log);
 
 async function buildRegion(region: LandscapeRegion): Promise<ManifestEntry> {
   const regionStart = Date.now();
@@ -165,25 +138,25 @@ async function buildRegion(region: LandscapeRegion): Promise<ManifestEntry> {
     `${region.id}: loading ${(region.radiusMeters / 1000).toFixed(0)} km radius at ` +
       `${region.cellMeters} m cells`,
   );
-  const options = {
-    cellMeters: region.cellMeters,
-    endpoints: {
-      landfireWcs: `${LANDFIRE_UPSTREAM}/wcs`,
-      terrainTiles: TERRAIN_TILE_URL,
-      userAgent: APP_USER_AGENT,
-    },
-  } as LandscapeLoadOptions;
-  const grid: ResolvedGrid = await loadLandscape(
+  const grid = await loadLandscape(
     region.center.longitude,
     region.center.latitude,
     region.radiusMeters,
     controller.signal,
-    options,
+    {
+      cellMeters: region.cellMeters,
+      endpoints: {
+        landfireWcsUrl: LANDFIRE_UPSTREAM_WCS_URL,
+        terrainTileUrl: TERRAIN_TILE_URL,
+        userAgent: LANDFIRE_USER_AGENT,
+        fetch: buildFetch,
+      },
+    },
   );
-  const { cellMeters, resampling } = resolution(region, grid);
+  const { cellMeters, resampling } = grid;
   const builtAt = new Date().toISOString();
   const sources: LandscapePackageSources = {
-    landfireWcs: `${LANDFIRE_UPSTREAM}/wcs`,
+    landfireWcs: LANDFIRE_UPSTREAM_WCS_URL,
     coverages: [LANDFIRE_COVERAGE, ...Object.values(LANDFIRE_CANOPY_COVERAGES)],
     terrainTiles: TERRAIN_TILE_URL,
     retrievedAt,

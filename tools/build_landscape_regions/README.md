@@ -5,11 +5,11 @@ into landscape packages (format in `docs/adr/0013-prebuilt-socal-landscapes.md`)
 uploads them to MongoDB GridFS bucket `landscape_packages` for `GET /api/landscapes`.
 
 The builder runs the page's own loader (`app/src/fire/landscape.ts`) and encoder
-(`app/src/fire/landscapePackage.ts`), bundled for Node with the app's esbuild.
-`nodeShims.mts` supplies what the browser normally does: it maps the page's `/landfire/`
-proxy path to `https://edcintl.cr.usgs.gov/geoserver/landfire`, sends the app
-User-Agent, allows at most 4 concurrent requests per host, retries network errors, 5xx
-and 429 up to 3 attempts with backoff, and decodes terrarium PNG tiles.
+(`app/src/fire/landscapePackage.ts`), bundled for Node with the app's esbuild. It calls
+`loadLandscape` with `endpoints` pointing at the upstream LANDFIRE WCS
+(`LANDFIRE_UPSTREAM_WCS_URL`) and terrain tiles, the app User-Agent, and the fetch in
+`politeFetch.mts`: at most 4 concurrent requests per host, retries of network errors,
+5xx and 429 up to 3 attempts with backoff, a 90 s timeout and one SIGINT abort signal.
 
 ## Build (needs Node 22 and `npm ci` in `app/`)
 
