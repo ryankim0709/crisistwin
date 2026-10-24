@@ -1,0 +1,3013 @@
+{
+ "meta": {
+  "schema_version": 1,
+  "generated": "2026-10-24",
+  "purpose": "Sourced firefighting resource data for CrisisTwin's fire-suppression simulation. Every leaf value carries source_id + page, or assumption=true + reason.",
+  "units_note": "Source units are kept (gallons, feet, chains, lb, knots); convert at the boundary: 1 chain = 20.1168 m, 1 ft = 0.3048 m, 1 gal = 3.78541 L, 1 kt = 1.852 km/h, 1 lb = 0.453592 kg. Percent grade = rise/run x 100.",
+  "leaf_rule": "A leaf is an object with a 'value' key. It must have 'unit' and either ('source_id' and 'page') or ('assumption': true and 'reason').",
+  "fuel_models": "Fire behavior fuel models are the 13 Anderson (1982) NFFL models used by the cited tables."
+ },
+ "sources": {
+  "nwcg_pms200_equipment": {
+   "title": "NWCG Standards for Wildland Fire Resource Typing, PMS 200: Equipment (engines, water tenders, tractor plows, OHVs)",
+   "url": "https://www.nwcg.gov/publications/pms200/equipment-pms-200",
+   "access": "fetched 2026-10-24; page last modified 2024-04-25",
+   "licence": "US Government work (public domain)",
+   "page_note": "Web page; section names are used instead of page numbers."
+  },
+  "nwcg_pms200_crews": {
+   "title": "NWCG PMS 200: Crews (hand crew minimum standards)",
+   "url": "https://www.nwcg.gov/publications/pms200/crews-pms-200",
+   "access": "fetched 2026-10-24",
+   "licence": "US Government work (public domain)",
+   "page_note": "Web page; table 'Minimum Crew Standards for National Mobilization'."
+  },
+  "nwcg_pms200_aircraft": {
+   "title": "NWCG PMS 200: Aircraft (airtanker and helicopter typing)",
+   "url": "https://www.nwcg.gov/publications/pms200/aircraft-pms-200",
+   "access": "fetched 2026-10-24",
+   "licence": "US Government work (public domain)",
+   "page_note": "Web page; Airtanker Typing Standard and Helicopter Typing Standard tables."
+  },
+  "pms465_tactics_1996": {
+   "title": "Wildland Fire Suppression Tactics Reference Guide, PMS 465 / NFES 1256 (NWCG, April 1996); production tables derive from the Fireline Handbook (PMS 410-1)",
+   "url": "https://coloradofirecamp.com/suppression-tactics/suppression-tactics-guide.pdf",
+   "access": "downloaded 2026-10-24 (353-page PDF, 5.4 MB)",
+   "licence": "US Government work (public domain); hosted copy",
+   "page_note": "Printed page numbers are cited (PDF page = printed + 7)."
+  },
+  "broyles_2011": {
+   "title": "Fireline Production Rates, USDA Forest Service NTDP 1151-1805-SDTDC (G. Broyles, April 2011)",
+   "url": "https://www.fs.usda.gov/t-d/pubs/pdf/11511805.pdf",
+   "access": "downloaded 2026-10-24 (23 pages)",
+   "licence": "US Government work (public domain)",
+   "page_note": "Printed page numbers (Table 2 on p.6, Table 3 on p.7)."
+  },
+  "wheg_2013": {
+   "title": "Water Handling Equipment Guide, NWCG PMS 447-1, sixth edition, June 2013 (NFES 001275)",
+   "url": "https://www.fs.usda.gov/eng/pubs/pdfpubs/pdfWHEG13/WHEG13.pdf",
+   "access": "downloaded 2026-10-24 (158 pages)",
+   "licence": "US Government work (public domain)",
+   "page_note": "PDF page numbers are cited (printed page = PDF page - 6)."
+  },
+  "iasg_2017": {
+   "title": "Interagency Aerial Supervision Guide, NFES 002544 (April 2017)",
+   "url": "https://gacc.nifc.gov/swcc/dc/nmsdc/documents/Dispatch/Reference/Aerial_Supervision_Guide_4-17.pdf",
+   "access": "downloaded 2026-10-24; hosted by the Southwest Coordination Center",
+   "licence": "US Government work (public domain); hosted copy",
+   "page_note": "PDF page numbers are cited; the printed footer is shown where it differs."
+  },
+  "pms508_iabog_2015": {
+   "title": "Interagency Airtanker Base Operations Guide, NWCG PMS 508 (May 2015)",
+   "url": "https://gacc.nifc.gov/oncc/docs/PMS%20508_IABOG_2015_%20merge.pdf",
+   "access": "downloaded 2026-10-24",
+   "licence": "US Government work (public domain); hosted copy",
+   "page_note": "PDF page numbers are cited."
+  },
+  "calfire_house_2019": {
+   "title": "Written testimony of Dan Johnson, CAL FIRE Southern Region Chief, House Oversight Subcommittee on Environment, 20 Aug 2019",
+   "url": "https://docs.house.gov/meetings/GO/GO28/20190820/109883/HHRG-116-GO28-Wstate-JohnsonD-20190820.pdf",
+   "access": "downloaded 2026-10-24 (10 pages)",
+   "licence": "US Government publication (public domain)",
+   "page_note": "Counts are as of August 2019 and are dated."
+  },
+  "calfire_facilities": {
+   "title": "CAL FIRE Facilities for Wildland Fire Protection - Public View (ArcGIS FeatureServer layer 0)",
+   "url": "https://services1.arcgis.com/jUJYIo9tSA7EHvfZ/ArcGIS/rest/services/CAL_FIRE_Facilities_for_Wildland_Fire_Protection_-_Public_View/FeatureServer/0",
+   "access": "queried 2026-10-24 (1,617 features; item modified 2026-08-05)",
+   "licence": "No open licence stated. Item terms are a CAL FIRE disclaimer of warranties plus a contact (calfire.egis@fire.ca.gov). Treated as public state data; credit CAL FIRE.",
+   "page_note": "Field list in tools/ca_fire_bases.json meta."
+  },
+  "cal_ccr14_1273": {
+   "title": "14 CCR 1273.01-1273.07, State Minimum Fire Safe Regulations, Ingress and Egress (Cornell LII copy)",
+   "url": "https://www.law.cornell.edu/regulations/california/14-CCR-1273.01",
+   "access": "fetched 2026-10-24",
+   "licence": "California regulation (public)",
+   "page_note": "Section numbers are cited. These are DESIGN standards for new roads and driveways in SRA, not vehicle capability limits."
+  },
+  "osm_wiki_smoothness": {
+   "title": "OpenStreetMap Wiki, Key:smoothness",
+   "url": "https://wiki.openstreetmap.org/wiki/Key:smoothness",
+   "access": "fetched 2026-10-24",
+   "licence": "CC BY-SA 2.0 (wiki text)",
+   "page_note": "Vehicle classes per smoothness value."
+  },
+  "osm_wiki_tracktype": {
+   "title": "OpenStreetMap Wiki, Key:tracktype",
+   "url": "https://wiki.openstreetmap.org/wiki/Key:tracktype",
+   "access": "fetched 2026-10-24",
+   "licence": "CC BY-SA 2.0 (wiki text)",
+   "page_note": "Definitions grade1 to grade5 (surface firmness only)."
+  },
+  "calfirepilots_fire": {
+   "title": "California Fire Pilots Association, 'Fire' page (trade association, not an agency)",
+   "url": "https://www.calfirepilots.com/fire",
+   "access": "fetched 2026-10-24",
+   "licence": "Copyright California Fire Pilots Association; cited as a fact only",
+   "page_note": "Secondary source; one sentence on a typical initial wildland response and the 5-minute call-to-takeoff."
+  },
+  "nfpa_1710": {
+   "title": "NFPA 1710 (career fire departments) turnout and travel time objectives, as cited by docs/adr/0023-studio-crew-dispatch.md",
+   "url": "https://www.nfpa.org/codes-and-standards/nfpa-1710-standard-development/1710",
+   "access": "NOT re-fetched: standard is behind a registration wall. Value carried over from ADR 0023.",
+   "licence": "Copyrighted standard; only the cited number is used",
+   "page_note": "Section 4.1.2.1 (turnout 80 s fire, travel 240 s first engine 90th percentile) from memory of the standard; verify before relying.",
+   "verified": false
+  },
+  "calfire_web_snippet": {
+   "title": "fire.ca.gov mobile-equipment and aviation-program pages, seen only as search-engine summaries",
+   "url": "https://www.fire.ca.gov/what-we-do/fire-protection/mobile-equipment",
+   "access": "UNAVAILABLE to automated download (HTTP 403 Access Denied on 2026-10-24); numbers below were read from web-search summaries and are not verified against the page",
+   "licence": "State of California web content",
+   "page_note": "Undated; treat as indicative.",
+   "verified": false
+  },
+  "page_nwcg_dozers_ops": {
+   "title": "NWCG, Dozer and Plow Operations (web page)",
+   "url": "https://www.nwcg.gov/page/dozers",
+   "access": "fetched 2026-10-24",
+   "licence": "US Government work (public domain)",
+   "page_note": "Web page; guidelines list."
+  }
+ },
+ "engines": {
+  "typing": {
+   "1": {
+    "category": {
+     "value": "structure",
+     "unit": "text",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table (Types 1 and 2 structure; 3-7 wildland)"
+    },
+    "tank_min_gal": {
+     "value": 300,
+     "unit": "gal",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table"
+    },
+    "pump_min_flow_gpm": {
+     "value": 1000,
+     "unit": "gal/min",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table"
+    },
+    "pump_rated_pressure_psi": {
+     "value": 150,
+     "unit": "psi",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table"
+    },
+    "personnel_min": {
+     "value": 4,
+     "unit": "persons",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table"
+    },
+    "pump_and_roll_required": {
+     "value": false,
+     "unit": "bool",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table"
+    },
+    "max_gvwr_lb": {
+     "value": null,
+     "unit": "lb",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table (Maximum GVWR row: N/A for this type)"
+    },
+    "four_wheel_drive": {
+     "value": "not_specified",
+     "unit": "text",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines table has no drive-train row; 'All-wheel drive (includes four-wheel drive)' is listed only under 'Common Additional Needs (Request As Needed)'"
+    }
+   },
+   "2": {
+    "category": {
+     "value": "structure",
+     "unit": "text",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table (Types 1 and 2 structure; 3-7 wildland)"
+    },
+    "tank_min_gal": {
+     "value": 300,
+     "unit": "gal",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table"
+    },
+    "pump_min_flow_gpm": {
+     "value": 500,
+     "unit": "gal/min",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table"
+    },
+    "pump_rated_pressure_psi": {
+     "value": 150,
+     "unit": "psi",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table"
+    },
+    "personnel_min": {
+     "value": 3,
+     "unit": "persons",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table"
+    },
+    "pump_and_roll_required": {
+     "value": false,
+     "unit": "bool",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table"
+    },
+    "max_gvwr_lb": {
+     "value": null,
+     "unit": "lb",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table (Maximum GVWR row: N/A for this type)"
+    },
+    "four_wheel_drive": {
+     "value": "not_specified",
+     "unit": "text",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines table has no drive-train row; 'All-wheel drive (includes four-wheel drive)' is listed only under 'Common Additional Needs (Request As Needed)'"
+    }
+   },
+   "3": {
+    "category": {
+     "value": "wildland",
+     "unit": "text",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table (Types 1 and 2 structure; 3-7 wildland)"
+    },
+    "tank_min_gal": {
+     "value": 500,
+     "unit": "gal",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table"
+    },
+    "pump_min_flow_gpm": {
+     "value": 150,
+     "unit": "gal/min",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table"
+    },
+    "pump_rated_pressure_psi": {
+     "value": 250,
+     "unit": "psi",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table"
+    },
+    "personnel_min": {
+     "value": 3,
+     "unit": "persons",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table"
+    },
+    "pump_and_roll_required": {
+     "value": true,
+     "unit": "bool",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table"
+    },
+    "max_gvwr_lb": {
+     "value": null,
+     "unit": "lb",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table (Maximum GVWR row: N/A for this type)"
+    },
+    "four_wheel_drive": {
+     "value": "not_specified",
+     "unit": "text",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines table has no drive-train row; 'All-wheel drive (includes four-wheel drive)' is listed only under 'Common Additional Needs (Request As Needed)'"
+    }
+   },
+   "4": {
+    "category": {
+     "value": "wildland",
+     "unit": "text",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table (Types 1 and 2 structure; 3-7 wildland)"
+    },
+    "tank_min_gal": {
+     "value": 750,
+     "unit": "gal",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table"
+    },
+    "pump_min_flow_gpm": {
+     "value": 50,
+     "unit": "gal/min",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table"
+    },
+    "pump_rated_pressure_psi": {
+     "value": 100,
+     "unit": "psi",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table"
+    },
+    "personnel_min": {
+     "value": 2,
+     "unit": "persons",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table"
+    },
+    "pump_and_roll_required": {
+     "value": true,
+     "unit": "bool",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table"
+    },
+    "max_gvwr_lb": {
+     "value": null,
+     "unit": "lb",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table (Maximum GVWR row: N/A for this type)"
+    },
+    "four_wheel_drive": {
+     "value": "not_specified",
+     "unit": "text",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines table has no drive-train row; 'All-wheel drive (includes four-wheel drive)' is listed only under 'Common Additional Needs (Request As Needed)'"
+    }
+   },
+   "5": {
+    "category": {
+     "value": "wildland",
+     "unit": "text",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table (Types 1 and 2 structure; 3-7 wildland)"
+    },
+    "tank_min_gal": {
+     "value": 400,
+     "unit": "gal",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table"
+    },
+    "pump_min_flow_gpm": {
+     "value": 50,
+     "unit": "gal/min",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table"
+    },
+    "pump_rated_pressure_psi": {
+     "value": 100,
+     "unit": "psi",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table"
+    },
+    "personnel_min": {
+     "value": 2,
+     "unit": "persons",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table"
+    },
+    "pump_and_roll_required": {
+     "value": true,
+     "unit": "bool",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table"
+    },
+    "max_gvwr_lb": {
+     "value": 26000,
+     "unit": "lb",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table (Maximum GVWR row)"
+    },
+    "four_wheel_drive": {
+     "value": "not_specified",
+     "unit": "text",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines table has no drive-train row; 'All-wheel drive (includes four-wheel drive)' is listed only under 'Common Additional Needs (Request As Needed)'"
+    }
+   },
+   "6": {
+    "category": {
+     "value": "wildland",
+     "unit": "text",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table (Types 1 and 2 structure; 3-7 wildland)"
+    },
+    "tank_min_gal": {
+     "value": 150,
+     "unit": "gal",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table"
+    },
+    "pump_min_flow_gpm": {
+     "value": 50,
+     "unit": "gal/min",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table"
+    },
+    "pump_rated_pressure_psi": {
+     "value": 100,
+     "unit": "psi",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table"
+    },
+    "personnel_min": {
+     "value": 2,
+     "unit": "persons",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table"
+    },
+    "pump_and_roll_required": {
+     "value": true,
+     "unit": "bool",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table"
+    },
+    "max_gvwr_lb": {
+     "value": 19500,
+     "unit": "lb",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table (Maximum GVWR row)"
+    },
+    "four_wheel_drive": {
+     "value": "not_specified",
+     "unit": "text",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines table has no drive-train row; 'All-wheel drive (includes four-wheel drive)' is listed only under 'Common Additional Needs (Request As Needed)'"
+    }
+   },
+   "7": {
+    "category": {
+     "value": "wildland",
+     "unit": "text",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table (Types 1 and 2 structure; 3-7 wildland)"
+    },
+    "tank_min_gal": {
+     "value": 50,
+     "unit": "gal",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table"
+    },
+    "pump_min_flow_gpm": {
+     "value": 10,
+     "unit": "gal/min",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table"
+    },
+    "pump_rated_pressure_psi": {
+     "value": 100,
+     "unit": "psi",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table"
+    },
+    "personnel_min": {
+     "value": 2,
+     "unit": "persons",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table"
+    },
+    "pump_and_roll_required": {
+     "value": true,
+     "unit": "bool",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table"
+    },
+    "max_gvwr_lb": {
+     "value": 14000,
+     "unit": "lb",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines > Engine Typing Standard table (Maximum GVWR row)"
+    },
+    "four_wheel_drive": {
+     "value": "not_specified",
+     "unit": "text",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Engines table has no drive-train row; 'All-wheel drive (includes four-wheel drive)' is listed only under 'Common Additional Needs (Request As Needed)'"
+    }
+   }
+  },
+  "typing_notes": {
+   "value": "Type 3 engines and tactical water tenders carry a foam proportioner; engine types 3-6 and all tenders must prime from a 10 ft lift.",
+   "unit": "text",
+   "source_id": "nwcg_pms200_equipment",
+   "page": "Engines > Notes under Engine Typing Standard"
+  },
+  "reference_apparatus": {
+   "value": [
+    {
+     "designator": "LA County Type 1 (500 gal)",
+     "ics_type": 1,
+     "tank_gal": 500,
+     "all_wheel_drive": false,
+     "gvwr_lb": 42500,
+     "cab_to_axle_in": null,
+     "pdf_page": 25
+    },
+    {
+     "designator": "Sacramento Metro Type 1 (750 gal)",
+     "ics_type": 1,
+     "tank_gal": 750,
+     "all_wheel_drive": false,
+     "gvwr_lb": [
+      38400,
+      40540
+     ],
+     "cab_to_axle_in": null,
+     "pdf_page": 26
+    },
+    {
+     "designator": "Sacramento Metro Type 1 (700 gal)",
+     "ics_type": 1,
+     "tank_gal": 700,
+     "all_wheel_drive": false,
+     "gvwr_lb": [
+      42740,
+      46500
+     ],
+     "cab_to_axle_in": null,
+     "pdf_page": 27
+    },
+    {
+     "designator": "CAL FIRE Model 14/15",
+     "ics_type": 3,
+     "tank_gal": 500,
+     "all_wheel_drive": "Model 14 4x4, Model 15 4x2",
+     "gvwr_lb": 33000,
+     "cab_to_axle_in": 52,
+     "pump_gpm_at_150psi": 500,
+     "pdf_page": 28
+    },
+    {
+     "designator": "CAL FIRE Model 24/25",
+     "ics_type": 3,
+     "tank_gal": 500,
+     "all_wheel_drive": "Model 24 4x4, Model 25 4x2",
+     "gvwr_lb": 33000,
+     "cab_to_axle_in": 65,
+     "pump_gpm_at_150psi": 500,
+     "pdf_page": 29
+    },
+    {
+     "designator": "CAL FIRE Model 34/35",
+     "ics_type": 3,
+     "tank_gal": 500,
+     "all_wheel_drive": "Model 34 4x4, Model 35 4x2",
+     "gvwr_lb": 35000,
+     "cab_to_axle_in": 65,
+     "pump_gpm_at_150psi": 500,
+     "pdf_page": 30
+    },
+    {
+     "designator": "DOI 665 Interface engine",
+     "ics_type": 3,
+     "tank_gal": 500,
+     "all_wheel_drive": true,
+     "gvwr_lb": 33000,
+     "cab_to_axle_in": 62,
+     "pdf_page": 31
+    },
+    {
+     "designator": "USFS Model 326/346",
+     "ics_type": 3,
+     "tank_gal": 600,
+     "all_wheel_drive": "Model 346 4x4, 326 4x2",
+     "gvwr_lb": 33000,
+     "cab_to_axle_in": 74,
+     "pdf_page": 32
+    },
+    {
+     "designator": "DOI Model 52 (Type 4)",
+     "ics_type": 4,
+     "tank_gal": 750,
+     "all_wheel_drive": true,
+     "gvwr_lb": 25999,
+     "cab_to_axle_in": 84,
+     "pdf_page": 33
+    },
+    {
+     "designator": "DOI Wildland Heavy Engine 667",
+     "ics_type": 4,
+     "tank_gal": 850,
+     "all_wheel_drive": true,
+     "gvwr_lb": 33000,
+     "cab_to_axle_in": 92,
+     "pdf_page": 34
+    },
+    {
+     "designator": "DOI 668 Tactical 6x6 (Type 4)",
+     "ics_type": 4,
+     "tank_gal": [
+      2000,
+      2400
+     ],
+     "all_wheel_drive": true,
+     "gvwr_lb": 57320,
+     "cab_to_axle_in": 189,
+     "pdf_page": 36
+    },
+    {
+     "designator": "USFS Model 428/448 (Type 4)",
+     "ics_type": 4,
+     "tank_gal": 800,
+     "all_wheel_drive": "Model 448 4x4, 428 4x2",
+     "gvwr_lb": 37000,
+     "cab_to_axle_in": 94,
+     "pdf_page": 38
+    },
+    {
+     "designator": "DOI Model 52 (Type 6)",
+     "ics_type": 6,
+     "tank_gal": 300,
+     "all_wheel_drive": true,
+     "gvwr_lb": 18000,
+     "cab_to_axle_in": 60,
+     "pdf_page": 40
+    },
+    {
+     "designator": "DOI Wildland Light Engine 662",
+     "ics_type": 6,
+     "tank_gal": 300,
+     "all_wheel_drive": true,
+     "gvwr_lb": 19500,
+     "cab_to_axle_in": 60,
+     "pdf_page": 41
+    },
+    {
+     "designator": "USFS Model 643P (Type 6)",
+     "ics_type": 6,
+     "tank_gal": 300,
+     "all_wheel_drive": true,
+     "gvwr_lb": 19500,
+     "cab_to_axle_in": 60,
+     "pdf_page": 44
+    }
+   ],
+   "unit": "records",
+   "source_id": "wheg_2013",
+   "page": "PDF pp.24-47 (summary table on p.24, one data sheet per engine)"
+  },
+  "reference_apparatus_note": "GVWR in lb; cab_to_axle_in is the guide's 'Cab to axle distance' (a wheelbase proxy, NOT the wheelbase; no turning-radius figure is given anywhere in the guide)."
+ },
+ "water_tenders": {
+  "typing": {
+   "support_1": {
+    "tank_gal": {
+     "value": 4000,
+     "unit": "gal",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Water Tenders > Water Tender Typing Standard table"
+    },
+    "pump_min_flow_gpm": {
+     "value": 300,
+     "unit": "gal/min",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Water Tenders > Water Tender Typing Standard table"
+    },
+    "pump_rated_pressure_psi": {
+     "value": 50,
+     "unit": "psi",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Water Tenders > Water Tender Typing Standard table"
+    },
+    "max_refill_time_min": {
+     "value": 30,
+     "unit": "min",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Water Tenders > Water Tender Typing Standard table"
+    },
+    "pump_and_roll": {
+     "value": false,
+     "unit": "bool",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Water Tenders > Water Tender Typing Standard table"
+    },
+    "personnel_min": {
+     "value": 1,
+     "unit": "persons",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Water Tenders > Water Tender Typing Standard table"
+    }
+   },
+   "support_2": {
+    "tank_gal": {
+     "value": 2500,
+     "unit": "gal",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Water Tenders > Water Tender Typing Standard table"
+    },
+    "pump_min_flow_gpm": {
+     "value": 200,
+     "unit": "gal/min",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Water Tenders > Water Tender Typing Standard table"
+    },
+    "pump_rated_pressure_psi": {
+     "value": 50,
+     "unit": "psi",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Water Tenders > Water Tender Typing Standard table"
+    },
+    "max_refill_time_min": {
+     "value": 20,
+     "unit": "min",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Water Tenders > Water Tender Typing Standard table"
+    },
+    "pump_and_roll": {
+     "value": false,
+     "unit": "bool",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Water Tenders > Water Tender Typing Standard table"
+    },
+    "personnel_min": {
+     "value": 1,
+     "unit": "persons",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Water Tenders > Water Tender Typing Standard table"
+    }
+   },
+   "support_3": {
+    "tank_gal": {
+     "value": 1000,
+     "unit": "gal",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Water Tenders > Water Tender Typing Standard table"
+    },
+    "pump_min_flow_gpm": {
+     "value": 200,
+     "unit": "gal/min",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Water Tenders > Water Tender Typing Standard table"
+    },
+    "pump_rated_pressure_psi": {
+     "value": 50,
+     "unit": "psi",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Water Tenders > Water Tender Typing Standard table"
+    },
+    "max_refill_time_min": {
+     "value": 15,
+     "unit": "min",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Water Tenders > Water Tender Typing Standard table"
+    },
+    "pump_and_roll": {
+     "value": false,
+     "unit": "bool",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Water Tenders > Water Tender Typing Standard table"
+    },
+    "personnel_min": {
+     "value": 1,
+     "unit": "persons",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Water Tenders > Water Tender Typing Standard table"
+    }
+   },
+   "tactical_1": {
+    "tank_gal": {
+     "value": 2000,
+     "unit": "gal",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Water Tenders > Water Tender Typing Standard table"
+    },
+    "pump_min_flow_gpm": {
+     "value": 250,
+     "unit": "gal/min",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Water Tenders > Water Tender Typing Standard table"
+    },
+    "pump_rated_pressure_psi": {
+     "value": 150,
+     "unit": "psi",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Water Tenders > Water Tender Typing Standard table"
+    },
+    "max_refill_time_min": {
+     "value": null,
+     "unit": "min",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Water Tenders > Water Tender Typing Standard table (N/A for tactical)"
+    },
+    "pump_and_roll": {
+     "value": true,
+     "unit": "bool",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Water Tenders > Water Tender Typing Standard table"
+    },
+    "personnel_min": {
+     "value": 2,
+     "unit": "persons",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Water Tenders > Water Tender Typing Standard table"
+    }
+   },
+   "tactical_2": {
+    "tank_gal": {
+     "value": 1000,
+     "unit": "gal",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Water Tenders > Water Tender Typing Standard table"
+    },
+    "pump_min_flow_gpm": {
+     "value": 250,
+     "unit": "gal/min",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Water Tenders > Water Tender Typing Standard table"
+    },
+    "pump_rated_pressure_psi": {
+     "value": 150,
+     "unit": "psi",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Water Tenders > Water Tender Typing Standard table"
+    },
+    "max_refill_time_min": {
+     "value": null,
+     "unit": "min",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Water Tenders > Water Tender Typing Standard table (N/A for tactical)"
+    },
+    "pump_and_roll": {
+     "value": true,
+     "unit": "bool",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Water Tenders > Water Tender Typing Standard table"
+    },
+    "personnel_min": {
+     "value": 2,
+     "unit": "persons",
+     "source_id": "nwcg_pms200_equipment",
+     "page": "Water Tenders > Water Tender Typing Standard table"
+    }
+   }
+  },
+  "reference_apparatus": {
+   "value": [
+    {
+     "designator": "DOI 668 Tactical Tender",
+     "type": "Tactical 1",
+     "tank_gal": [
+      2000,
+      2800
+     ],
+     "all_wheel_drive": true,
+     "gvwr_lb": 57320,
+     "cab_to_axle_in": 189,
+     "pdf_page": 48
+    },
+    {
+     "designator": "USFS Model 22/24",
+     "type": "Tactical 2",
+     "tank_gal": 1500,
+     "all_wheel_drive": "Model 24 4x4, 22 4x2",
+     "gvwr_lb": 37000,
+     "cab_to_axle_in": 96,
+     "pdf_page": 49
+    },
+    {
+     "designator": "LA County support tender",
+     "type": "Support 2",
+     "tank_gal": 2500,
+     "all_wheel_drive": true,
+     "gvwr_lb": 56000,
+     "cab_to_axle_in": null,
+     "pdf_page": 50
+    },
+    {
+     "designator": "Auburn City Water Tender 1293",
+     "type": "Support 2",
+     "tank_gal": 3000,
+     "all_wheel_drive": false,
+     "gvwr_lb": 56000,
+     "cab_to_axle_in": 146.5,
+     "pdf_page": 51
+    },
+    {
+     "designator": "DOI 669 Water Tender",
+     "type": "Support 2",
+     "tank_gal": [
+      3000,
+      3500
+     ],
+     "all_wheel_drive": false,
+     "gvwr_lb": 60000,
+     "cab_to_axle_in": 146,
+     "pdf_page": 52
+    }
+   ],
+   "unit": "records",
+   "source_id": "wheg_2013",
+   "page": "PDF pp.48-52"
+  },
+  "note": "Support tenders in the guide are two-wheel-drive highway trucks of 56,000-60,000 lb GVWR; they shuttle water to engines and do not attack fire."
+ },
+ "dozers": {
+  "typing": {
+   "value": {
+    "1": {
+     "net_hp": "240 and up",
+     "min_base_weight_lb": 60000
+    },
+    "2": {
+     "net_hp": "150-250",
+     "min_base_weight_lb": 35000
+    },
+    "3": {
+     "net_hp": "99-165",
+     "min_base_weight_lb": 20000
+    },
+    "4": {
+     "net_hp": "50-110",
+     "min_base_weight_lb": 10000
+    }
+   },
+   "unit": "table",
+   "source_id": "nwcg_pms200_equipment",
+   "page": "Tractor Plows / Dozer Plows > Tractor Plow / Dozer Plow Standard"
+  },
+  "production_single_pass": {
+   "value": {
+    "columns": [
+     "0-25% up",
+     "0-25% down",
+     "26-40% up",
+     "26-40% down",
+     "41-55% up",
+     "41-55% down"
+    ],
+    "rows_by_dozer_size_then_fuel_model": {
+     "small_type3": {
+      "1,2,3": [
+       63,
+       88,
+       36,
+       88,
+       14,
+       16
+      ],
+      "4": [
+       22,
+       29,
+       12,
+       30,
+       3,
+       22
+      ],
+      "5": [
+       63,
+       88,
+       36,
+       88,
+       14,
+       61
+      ],
+      "6": [
+       39,
+       59,
+       22,
+       62,
+       8,
+       42
+      ],
+      "7": [
+       39,
+       52,
+       22,
+       56,
+       8,
+       35
+      ],
+      "8": [
+       63,
+       88,
+       36,
+       88,
+       14,
+       16
+      ],
+      "9,11,12": [
+       22,
+       30,
+       12,
+       30,
+       3,
+       11
+      ]
+     },
+     "medium_type2": {
+      "1,2,3": [
+       88,
+       118,
+       58,
+       112,
+       35,
+       73
+      ],
+      "4": [
+       32,
+       47,
+       18,
+       53,
+       5,
+       31
+      ],
+      "5": [
+       88,
+       118,
+       58,
+       112,
+       35,
+       73
+      ],
+      "6": [
+       51,
+       75,
+       26,
+       78,
+       9,
+       48
+      ],
+      "7": [
+       51,
+       75,
+       27,
+       78,
+       9,
+       48
+      ],
+      "8": [
+       88,
+       118,
+       58,
+       112,
+       35,
+       73
+      ],
+      "9,11,12": [
+       32,
+       47,
+       18,
+       53,
+       5,
+       31
+      ],
+      "10,13": [
+       17,
+       23,
+       10,
+       25,
+       3,
+       11
+      ]
+     },
+     "large_type1": {
+      "1,2,3": [
+       91,
+       124,
+       62,
+       118,
+       35,
+       83
+      ],
+      "4": [
+       43,
+       60,
+       27,
+       62,
+       12,
+       40
+      ],
+      "5": [
+       91,
+       124,
+       62,
+       118,
+       35,
+       83
+      ],
+      "6,7": [
+       63,
+       91,
+       41,
+       90,
+       22,
+       57
+      ],
+      "8": [
+       91,
+       124,
+       62,
+       118,
+       35,
+       83
+      ],
+      "9,11,12": [
+       43,
+       60,
+       27,
+       62,
+       12,
+       40
+      ],
+      "10,13": [
+       27,
+       38,
+       15,
+       34,
+       4,
+       16
+      ]
+     }
+    },
+    "note": "Dozers manufactured since 1975. 'up' = building line up the slope. Values as printed, including odd cells (e.g. small dozer fuel model 1,2,3, 41-55% down = 16). Row label '1,23' in the PDF is read as '1,2,3'. Small = Type 3, medium = Type 2, large = Type 1."
+   },
+   "unit": "chains/hour",
+   "source_id": "pms465_tactics_1996",
+   "page": "p.140, Table 2 'Fireline production rates (single pass) for dozers' (PDF p.147)"
+  },
+  "max_slope_in_table_pct": {
+   "value": 55,
+   "unit": "percent",
+   "source_id": "pms465_tactics_1996",
+   "page": "p.140 Table 2 (highest slope class 41-55%)"
+  },
+  "avoid_steep_terrain": {
+   "value": "Locations where dozers cannot work effectively include large rocks, rock outcrops and excessively steep terrain; complete those with hand tools.",
+   "unit": "text",
+   "source_id": "pms465_tactics_1996",
+   "page": "p.141"
+  },
+  "line_as_four_wheel_drive_road": {
+   "value": "A dozer line is often used as an access road for engines and crew movement; grade along the line matters so that four-wheel-drive vehicles can travel it.",
+   "unit": "text",
+   "source_id": "pms465_tactics_1996",
+   "page": "p.141"
+  },
+  "safe_distance_ft": {
+   "value": {
+    "in_front": 100,
+    "behind": 50
+   },
+   "unit": "ft",
+   "source_id": "page_nwcg_dozers_ops",
+   "page": "Dozer and Plow Operations, safety guidelines"
+  },
+  "transport_note": {
+   "value": "lowboy transport needs a through road; dozers walk off-road only once on site",
+   "unit": "text",
+   "assumption": true,
+   "reason": "Not stated in any retrieved source; dozers normally arrive on a transport trailer, so the access rules for tenders (heavy, long) apply to the carrier."
+  }
+ },
+ "hand_crews": {
+  "minimum_standards": {
+   "value": {
+    "type1_ihc": {
+     "crew_size": [
+      18,
+      25
+     ],
+     "production_factor": 1.0
+    },
+    "type2_ia": {
+     "crew_size": [
+      18,
+      25
+     ],
+     "production_factor": 0.8
+    },
+    "type2": {
+     "crew_size": [
+      18,
+      20
+     ],
+     "production_factor": 0.8
+    }
+   },
+   "unit": "table",
+   "source_id": "nwcg_pms200_crews",
+   "page": "Hand Crews > Minimum Crew Standards for National Mobilization (rows Crew Size, Production Factor)"
+  },
+  "production_sustained_2011_direct": {
+   "value": {
+    "columns": [
+     "fm1_2_grass",
+     "fm4_chaparral",
+     "fm5_6_brush",
+     "fm8_9_10_timber"
+    ],
+    "type1": {
+     "chains_per_hour": [
+      17,
+      6.6,
+      16.5,
+      10.5
+     ],
+     "range": [
+      [
+       12,
+       21
+      ],
+      [
+       5,
+       8
+      ],
+      [
+       14,
+       19
+      ],
+      [
+       9,
+       12
+      ]
+     ]
+    },
+    "type2": {
+     "chains_per_hour": [
+      9.5,
+      6.8,
+      7,
+      6.8
+     ],
+     "range": [
+      [
+       6,
+       13
+      ],
+      [
+       3,
+       11
+      ],
+      [
+       4,
+       10
+      ],
+      [
+       6,
+       7
+      ]
+     ]
+    }
+   },
+   "unit": "chains/hour per 20-person crew",
+   "source_id": "broyles_2011",
+   "page": "p.6 Table 2 (feet/hour in Table 3, p.7). 95% confidence sustained rate over a shift; FM 3, 7, 11-13 not measured."
+  },
+  "production_sustained_2011_indirect": {
+   "value": {
+    "columns": [
+     "fm1_2_grass",
+     "fm4_chaparral",
+     "fm5_6_brush",
+     "fm8_9_10_timber"
+    ],
+    "type1": {
+     "chains_per_hour": [
+      9.5,
+      5,
+      4.9,
+      6.9
+     ],
+     "range": [
+      [
+       7.7,
+       11.3
+      ],
+      [
+       2.7,
+       7.3
+      ],
+      [
+       3.7,
+       6.1
+      ],
+      [
+       6.0,
+       7.8
+      ]
+     ]
+    },
+    "type2": {
+     "chains_per_hour": [
+      4.3,
+      4,
+      4.2,
+      5.7
+     ],
+     "range": [
+      [
+       3,
+       6
+      ],
+      [
+       3,
+       5
+      ],
+      [
+       2,
+       6
+      ],
+      [
+       4,
+       7
+      ]
+     ]
+    }
+   },
+   "unit": "chains/hour per 20-person crew",
+   "source_id": "broyles_2011",
+   "page": "p.6 Table 2"
+  },
+  "production_sustained_legacy_1996": {
+   "value": {
+    "columns": [
+     "fuel_model",
+     "type1_chains_per_hour",
+     "type2_chains_per_hour"
+    ],
+    "rows": [
+     [
+      1,
+      30,
+      18
+     ],
+     [
+      2,
+      24,
+      16
+     ],
+     [
+      3,
+      5,
+      3
+     ],
+     [
+      4,
+      5,
+      3
+     ],
+     [
+      5,
+      6,
+      4
+     ],
+     [
+      6,
+      7,
+      5
+     ],
+     [
+      7,
+      4,
+      2
+     ],
+     [
+      8,
+      7,
+      5
+     ],
+     [
+      9,
+      28,
+      16
+     ],
+     [
+      10,
+      6,
+      4
+     ],
+     [
+      11,
+      15,
+      9
+     ],
+     [
+      12,
+      7,
+      4
+     ],
+     [
+      13,
+      5,
+      3
+     ]
+    ],
+    "note": "Fuel model 6 shown for black spruce; fuel models 8-9 conifer values as printed first (hardwood rows differ). Broyles 2011 reports these older values overestimated crew capability."
+   },
+   "unit": "chains/hour per crew",
+   "source_id": "pms465_tactics_1996",
+   "page": "p.40 Table 2 'Handcrew production, sustained attack'"
+  },
+  "production_initial_attack_1996": {
+   "value": {
+    "columns": [
+     "fuel_model",
+     "chains_per_hour_per_person"
+    ],
+    "rows": [
+     [
+      1,
+      1.0
+     ],
+     [
+      2,
+      3.0
+     ],
+     [
+      3,
+      0.7
+     ],
+     [
+      4,
+      0.4
+     ],
+     [
+      5,
+      0.7
+     ],
+     [
+      6,
+      0.7
+     ],
+     [
+      7,
+      0.7
+     ],
+     [
+      8,
+      2.0
+     ],
+     [
+      9,
+      2.0
+     ],
+     [
+      10,
+      1.0
+     ],
+     [
+      11,
+      1.0
+     ],
+     [
+      12,
+      1.0
+     ],
+     [
+      13,
+      0.4
+     ]
+    ],
+    "note": "Conifer values where conifer and hardwood differ; hardwood FM8 is 10.0 and FM9 8.0 as printed."
+   },
+   "unit": "chains/hour/person",
+   "source_id": "pms465_tactics_1996",
+   "page": "p.39 Table 1 'Handcrew production, initial attack'"
+  },
+  "flame_length_limits_ft": {
+   "value": {
+    "hand_tools_direct_attack_head_max": 4,
+    "handline_cannot_be_relied_on": [
+     4,
+     8
+    ],
+    "serious_control_problems": [
+     8,
+     11
+    ],
+    "head_attack_ineffective_above": 11
+   },
+   "unit": "ft",
+   "source_id": "pms465_tactics_1996",
+   "page": "p.12 Figure 2 'Fire suppression limitations based on flame length' (Hauling chart)"
+  },
+  "walking_pace_m_per_min": {
+   "value": 50,
+   "unit": "m/min",
+   "assumption": true,
+   "reason": "ADR 0023 assumes about 3 km/h with tools over rough ground; no retrieved table. Keep as the simulator's existing assumption."
+  }
+ },
+ "engine_production": {
+  "initial_attack_by_crew_size": {
+   "value": {
+    "columns": [
+     "fuel_model_condition",
+     "persons_1",
+     "persons_2",
+     "persons_3",
+     "persons_4",
+     "persons_5plus"
+    ],
+    "rows": [
+     [
+      "1 grass",
+      6,
+      12,
+      24,
+      35,
+      40
+     ],
+     [
+      "1 tundra",
+      2,
+      8,
+      15,
+      24,
+      30
+     ],
+     [
+      "2",
+      3,
+      7,
+      15,
+      21,
+      25
+     ],
+     [
+      "3",
+      2,
+      5,
+      10,
+      14,
+      16
+     ],
+     [
+      "4",
+      2,
+      3,
+      8,
+      15,
+      20
+     ],
+     [
+      "5",
+      3,
+      6,
+      12,
+      16,
+      20
+     ],
+     [
+      "6 (all others)",
+      3,
+      6,
+      12,
+      16,
+      20
+     ],
+     [
+      "7",
+      2,
+      5,
+      12,
+      16,
+      20
+     ],
+     [
+      "8 conifers",
+      3,
+      8,
+      15,
+      20,
+      24
+     ],
+     [
+      "8 hardwoods",
+      10,
+      30,
+      40,
+      50,
+      60
+     ],
+     [
+      "9 conifers",
+      3,
+      7,
+      12,
+      18,
+      22
+     ],
+     [
+      "9 hardwoods",
+      8,
+      25,
+      40,
+      50,
+      60
+     ],
+     [
+      "10",
+      3,
+      6,
+      12,
+      16,
+      20
+     ],
+     [
+      "11",
+      3,
+      8,
+      12,
+      16,
+      20
+     ],
+     [
+      "12",
+      3,
+      5,
+      10,
+      16,
+      20
+     ],
+     [
+      "13",
+      2,
+      4,
+      8,
+      15,
+      20
+     ]
+    ]
+   },
+   "unit": "chains/hour per engine crew",
+   "source_id": "pms465_tactics_1996",
+   "page": "p.164 Table 4 'Engine production, initial attack' (PDF p.171). Rate is per engine crew (hose lay / wet line), by persons on the crew."
+  },
+  "tactics_note": {
+   "value": "Engines work mobile or stationary; wetline made from water must be burned out immediately; safer to anchor and flank than attack the head.",
+   "unit": "text",
+   "source_id": "pms465_tactics_1996",
+   "page": "p.162"
+  }
+ },
+ "helicopters": {
+  "typing": {
+   "type1": {
+    "payload_lb_59F_sea_level": {
+     "value": 5000,
+     "unit": "lb",
+     "source_id": "nwcg_pms200_aircraft",
+     "page": "Helicopters > Helicopter Typing Standard"
+    },
+    "passenger_seats": {
+     "value": "15 or more",
+     "unit": "text",
+     "source_id": "nwcg_pms200_aircraft",
+     "page": "Helicopters > Helicopter Typing Standard"
+    },
+    "water_or_retardant_gal_min": {
+     "value": 700,
+     "unit": "gal",
+     "source_id": "nwcg_pms200_aircraft",
+     "page": "Helicopters > Helicopter Typing Standard"
+    },
+    "max_takeoff_weight_lb": {
+     "value": "12,501+",
+     "unit": "text",
+     "source_id": "nwcg_pms200_aircraft",
+     "page": "Helicopters > Helicopter Typing Standard"
+    }
+   },
+   "type2": {
+    "payload_lb_59F_sea_level": {
+     "value": 2500,
+     "unit": "lb",
+     "source_id": "nwcg_pms200_aircraft",
+     "page": "Helicopters > Helicopter Typing Standard"
+    },
+    "passenger_seats": {
+     "value": "9-14",
+     "unit": "text",
+     "source_id": "nwcg_pms200_aircraft",
+     "page": "Helicopters > Helicopter Typing Standard"
+    },
+    "water_or_retardant_gal_min": {
+     "value": 300,
+     "unit": "gal",
+     "source_id": "nwcg_pms200_aircraft",
+     "page": "Helicopters > Helicopter Typing Standard"
+    },
+    "max_takeoff_weight_lb": {
+     "value": "6,000-12,500",
+     "unit": "text",
+     "source_id": "nwcg_pms200_aircraft",
+     "page": "Helicopters > Helicopter Typing Standard"
+    }
+   },
+   "type3": {
+    "payload_lb_59F_sea_level": {
+     "value": 1200,
+     "unit": "lb",
+     "source_id": "nwcg_pms200_aircraft",
+     "page": "Helicopters > Helicopter Typing Standard"
+    },
+    "passenger_seats": {
+     "value": "4-8",
+     "unit": "text",
+     "source_id": "nwcg_pms200_aircraft",
+     "page": "Helicopters > Helicopter Typing Standard"
+    },
+    "water_or_retardant_gal_min": {
+     "value": 100,
+     "unit": "gal",
+     "source_id": "nwcg_pms200_aircraft",
+     "page": "Helicopters > Helicopter Typing Standard"
+    },
+    "max_takeoff_weight_lb": {
+     "value": "up to 6,000",
+     "unit": "text",
+     "source_id": "nwcg_pms200_aircraft",
+     "page": "Helicopters > Helicopter Typing Standard"
+    }
+   },
+   "helitanker": {
+    "value": {
+     "fixed_tank_min_gal": 1100,
+     "certified_by": "Interagency Airtanker Board"
+    },
+    "unit": "gal",
+    "source_id": "nwcg_pms200_aircraft",
+    "page": "Helicopters > Helicopter Typing Standard (Helitanker row)"
+   }
+  },
+  "examples_payload_at_8000ft_density_altitude_lb": {
+   "value": {
+    "Sikorsky S-70 Firehawk (Type 1)": 6569,
+    "Bell 212 (Type 2)": 1973,
+    "Bell 205A-1++ (Type 2)": 2806,
+    "Bell 407 (Type 3)": 1315,
+    "Bell 206 B3 (Type 3)": 715
+   },
+   "unit": "lb",
+   "source_id": "iasg_2017",
+   "page": "PDF p.56 Table 4 'Helicopter classification' (printed p.60)"
+  },
+  "turnaround_limit_min": {
+   "value": 5,
+   "unit": "min",
+   "source_id": "pms465_tactics_1996",
+   "page": "p.168 'Generally a 5 minute turnaround is considered the limit for helicopter drops'"
+  },
+  "turnaround_type1_example_min": {
+   "value": 3,
+   "unit": "min",
+   "source_id": "iasg_2017",
+   "page": "PDF p.103 (printed p.109): Type 1 helicopter with a 3-minute turnaround can deliver upwards of 45,000 gal/h (Boeing 234, S-64)"
+  },
+  "dip_site_depth_in": {
+   "value": [
+    18,
+    36
+   ],
+   "unit": "in",
+   "source_id": "iasg_2017",
+   "page": "PDF p.104 (printed p.110): tank-and-snorkel helicopters need 18 in to 3 ft of water for hover fill"
+  },
+  "cruise_speed_upper_bound_kt": {
+   "value": 130,
+   "unit": "kt",
+   "source_id": "iasg_2017",
+   "page": "PDF p.57: helicopters are the slowest tactical aircraft, 'generally less than 130 kts'"
+  },
+  "cruise_speed_typical_kt": {
+   "value": 100,
+   "unit": "kt",
+   "assumption": true,
+   "reason": "No retrieved table gives a helicopter cruise speed. 100 kt is an assumption inside the sourced <130 kt bound; Firehawk and Type 2 Hueys cruise near 120 kt in manufacturer data not retrieved."
+  },
+  "dip_turnaround_model": {
+   "value": "turnaround_min = 2 * (distance_to_dip_km / cruise_kmh * 60) + 1.5 min hover fill + 0.5 min drop",
+   "unit": "formula",
+   "assumption": true,
+   "reason": "Structure of the formula is an assumption; the 3 and 5 minute sourced values above are the sanity bounds when the dip is within a few km."
+  },
+  "drop_wind_note": {
+   "value": "Wind effect should be closely evaluated at 15 kt; drops generally not effective at 25 kt or more (airtanker text; applied to helicopters as an assumption in constraints.aviation).",
+   "unit": "text",
+   "source_id": "iasg_2017",
+   "page": "PDF p.100"
+  },
+  "calfire_fleet_2019": {
+   "value": {
+    "staffed_helicopters": 10,
+    "spare_helicopters": 2
+   },
+   "unit": "aircraft",
+   "source_id": "calfire_house_2019",
+   "page": "p.4"
+  },
+  "calfire_night_capable": {
+   "value": "CAL FIRE is replacing its UH-1H 'Huey' fleet with S-70i Black Hawks 'capable of nighttime aerial firefighting'; first delivery planned Oct 2019.",
+   "unit": "text",
+   "source_id": "calfire_house_2019",
+   "page": "p.4"
+  },
+  "s70i_tank_gal": {
+   "value": 1000,
+   "unit": "gal",
+   "source_id": "calfire_web_snippet",
+   "page": "fire.ca.gov CAL FIRE HAWK page, via search summary (unverified)"
+  },
+  "uh1h_tank_gal": {
+   "value": 360,
+   "unit": "gal",
+   "source_id": "calfire_web_snippet",
+   "page": "fire.ca.gov aviation-program page, via search summary (unverified)"
+  }
+ },
+ "airtankers": {
+  "typing_gal": {
+   "value": {
+    "VLAT": ">6000",
+    "1": "3000-5999",
+    "2": "1800-2999",
+    "3": "800-1799",
+    "4": "up to 799"
+   },
+   "unit": "gal",
+   "source_id": "nwcg_pms200_aircraft",
+   "page": "Airtankers > Airtanker Typing Standard"
+  },
+  "aircraft": {
+   "value": [
+    {
+     "type": "VLAT",
+     "model": "DC-10",
+     "max_gal": 11900,
+     "cruise_kt": 380
+    },
+    {
+     "type": "VLAT",
+     "model": "747",
+     "max_gal": 19600,
+     "cruise_kt": 500
+    },
+    {
+     "type": "1",
+     "model": "C-130 (MAFFS)",
+     "max_gal": 3000,
+     "cruise_kt": 300
+    },
+    {
+     "type": "1",
+     "model": "C-130",
+     "max_gal": 3000,
+     "cruise_kt": 300
+    },
+    {
+     "type": "1",
+     "model": "BAE-146",
+     "max_gal": 3000,
+     "cruise_kt": 330
+    },
+    {
+     "type": "1",
+     "model": "RJ-85",
+     "max_gal": 3050,
+     "cruise_kt": 340
+    },
+    {
+     "type": "2",
+     "model": "P2-V",
+     "max_gal": 2450,
+     "cruise_kt": 184
+    },
+    {
+     "type": "3",
+     "model": "CL-415 scooper",
+     "max_gal": 1600,
+     "cruise_kt": 180
+    },
+    {
+     "type": "3",
+     "model": "CL-215 scooper",
+     "max_gal": 1400,
+     "cruise_kt": 160
+    },
+    {
+     "type": "3",
+     "model": "S-2 Turbine Tracker (S-2T)",
+     "max_gal": 1200,
+     "cruise_kt": 230
+    },
+    {
+     "type": "3",
+     "model": "Air Tractor AT-802F (SEAT)",
+     "max_gal": 800,
+     "cruise_kt": 140
+    },
+    {
+     "type": "4",
+     "model": "Air Tractor AT-802/602 (SEAT)",
+     "max_gal": [
+      600,
+      799
+     ],
+     "cruise_kt": 140
+    }
+   ],
+   "unit": "records",
+   "source_id": "iasg_2017",
+   "page": "PDF p.54 Table 3 'Airtanker classification' (printed p.58); before retardant download requirements"
+  },
+  "vlat_wake_wait_min": {
+   "value": 3,
+   "unit": "min",
+   "source_id": "iasg_2017",
+   "page": "PDF p.53: wait a minimum of 3 minutes after a VLAT drop before resuming aerial operations near the pattern"
+  },
+  "coverage_levels_gal_per_100ft2": {
+   "value": {
+    "1": "FM1 western grasses; FM2 conifer with grass",
+    "2": "FM8 closed short-needle conifer; FM9 long-needle conifer",
+    "3": "FM3 tall grass; FM5 green brush; FM11 light slash",
+    "4": "FM10 heavy dead litter; FM4 southern rough",
+    "6": "FM6 cured brush; California mixed chaparral (FM4)",
+    ">6": "FM12 medium slash; FM13 heavy slash"
+   },
+   "unit": "gal/100 ft2",
+   "source_id": "iasg_2017",
+   "page": "PDF p.101 Table 7 'Recommended retardant coverage levels' (printed p.107)"
+  },
+  "line_length_ft_by_gallons_and_coverage": {
+   "value": {
+    "columns_coverage_level": [
+     0.5,
+     1,
+     2,
+     3,
+     4,
+     6,
+     8
+    ],
+    "rows": {
+     "800": [
+      2246,
+      1114,
+      526,
+      311,
+      189,
+      38,
+      0
+     ],
+     "1000": [
+      2337,
+      1202,
+      607,
+      384,
+      255,
+      90,
+      0
+     ],
+     "1200": [
+      2429,
+      1289,
+      687,
+      458,
+      321,
+      142,
+      9
+     ],
+     "1400": [
+      2520,
+      1377,
+      768,
+      531,
+      387,
+      194,
+      46
+     ],
+     "1600": [
+      2611,
+      1465,
+      848,
+      604,
+      454,
+      245,
+      84
+     ],
+     "1800": [
+      2702,
+      1552,
+      929,
+      678,
+      520,
+      297,
+      121
+     ],
+     "2000": [
+      2794,
+      1640,
+      1009,
+      751,
+      586,
+      349,
+      158
+     ],
+     "2200": [
+      2885,
+      1728,
+      1090,
+      824,
+      652,
+      400,
+      196
+     ],
+     "2400": [
+      2976,
+      1815,
+      1170,
+      897,
+      718,
+      452,
+      233
+     ],
+     "2600": [
+      3068,
+      1903,
+      1251,
+      971,
+      784,
+      504,
+      270
+     ],
+     "2800": [
+      3159,
+      1991,
+      1331,
+      1044,
+      850,
+      556,
+      308
+     ],
+     "3000": [
+      3250,
+      2078,
+      1411,
+      1117,
+      916,
+      607,
+      345
+     ]
+    }
+   },
+   "unit": "ft of line per load",
+   "source_id": "iasg_2017",
+   "page": "PDF p.102 Table 8 'Heavy airtanker line length production chart' (printed p.108); drops at recommended height and airspeed"
+  },
+  "drop_height_ft": {
+   "value": [
+    150,
+    200
+   ],
+   "unit": "ft above vegetation",
+   "source_id": "pms465_tactics_1996",
+   "page": "p.180 'proper drop height ... approximately 150 to 200 feet'"
+  },
+  "seat_min_drop_height_ft": {
+   "value": 60,
+   "unit": "ft above vegetation",
+   "source_id": "iasg_2017",
+   "page": "PDF p.103 (printed p.109)"
+  },
+  "airtanker_cycle_anchor": {
+   "value": "A Type 1 airtanker typically delivers 2,000-3,000 gal/h on a one-hour turnaround (round trip: fly, drop, return, reload).",
+   "unit": "text",
+   "source_id": "iasg_2017",
+   "page": "PDF p.103 (printed p.109)"
+  },
+  "reaction_time_min": {
+   "value": 15,
+   "unit": "min",
+   "source_id": "pms508_iabog_2015",
+   "page": "PDF p.44, IV.C.2 'Fifteen minutes is the standard reaction time as specified in the federal airtanker contract' (not for delays beyond pilot control)"
+  },
+  "call_to_takeoff_min": {
+   "value": 5,
+   "unit": "min",
+   "source_id": "calfirepilots_fire",
+   "page": "'often happens in 5 minutes or less' (CAL FIRE-style dispatch, 911 call to takeoff; trade association statement)"
+  },
+  "reload_ground_time_min": {
+   "value": 10,
+   "unit": "min",
+   "assumption": true,
+   "reason": "No retrieved document gives a ground reload time. PMS 508 describes reload bases but not a duration. 10 min for S-2T/Type 3 at a full-service base is an assumption; test against the sourced one-hour cycle."
+  },
+  "scooper_site": {
+   "value": {
+    "min_length_mi": 1,
+    "min_width_mi": 0.25,
+    "min_depth_ft": 6,
+    "scoop_speed_kt": 80,
+    "time_on_water_s": 15,
+    "distance_ft": 2000
+   },
+   "unit": "mixed",
+   "source_id": "iasg_2017",
+   "page": "PDF p.108 (CL-215/CL-415 scooping site requirements)"
+  },
+  "retardant_limits": {
+   "value": {
+    "direct_attack_flame_length_max_ft": 8,
+    "generally_ineffective_wind_mph": 20,
+    "ineffective_flame_length_use_long_term_above_ft": 4
+   },
+   "unit": "mixed",
+   "source_id": "pms465_tactics_1996",
+   "page": "pp.171-172, 174: retardant inappropriate for direct attack above 8 ft flames; generally ineffective above 20 mph wind; use long-term above 4 ft flames"
+  },
+  "calfire_fleet_2019": {
+   "value": {
+    "airtankers_available": 22,
+    "airtanker_bases": 13,
+    "spare_airtanker": 1,
+    "c130_exclusive_use": 1,
+    "c130_future_bases": [
+     "McClellan",
+     "Ramona",
+     "Fresno",
+     "Paso Robles",
+     "Chico"
+    ]
+   },
+   "unit": "counts",
+   "source_id": "calfire_house_2019",
+   "page": "p.3-4"
+  },
+  "calfire_s2t_current": {
+   "value": {
+    "s2t_airtankers": 23,
+    "gal_each": 1200
+   },
+   "unit": "counts",
+   "source_id": "calfire_web_snippet",
+   "page": "fire.ca.gov fleet page via search summary (unverified; page returns 403 to automated fetch)"
+  }
+ },
+ "air_attack": {
+  "role": {
+   "value": "Aerial supervision (ATGS 'air attack', Leadplane/ASM) directs airtankers; retardant after sunset requires aerial supervision on scene; multi-engine airtankers may arrive over a fire with no supervision only inside the daylight window.",
+   "unit": "text",
+   "source_id": "iasg_2017",
+   "page": "PDF p.37 (printed p.41)"
+  },
+  "calfire_fleet_2019": {
+   "value": {
+    "air_tactical_aircraft": 12,
+    "aerial_supervision_aircraft": 1,
+    "maintenance_spares": 2
+   },
+   "unit": "aircraft",
+   "source_id": "calfire_house_2019",
+   "page": "p.4"
+  },
+  "platform": {
+   "value": "North American OV-10A Bronco (one D model), twin turboprop, pilot plus back-seat ATGS.",
+   "unit": "text",
+   "source_id": "calfire_web_snippet",
+   "page": "fire.ca.gov aviation page via search summary (unverified)"
+  },
+  "cruise_speed_floor_kt": {
+   "value": 150,
+   "unit": "kt",
+   "source_id": "iasg_2017",
+   "page": "PDF p.57: twin-engine fixed-wing 'fast (generally greater than 150 kts)'"
+  },
+  "cruise_speed_typical_kt": {
+   "value": 180,
+   "unit": "kt",
+   "assumption": true,
+   "reason": "No retrieved OV-10A figure. Twin-engine fixed wing is >150 kt per IASG; 180 kt is an assumption."
+  },
+  "orbit_pattern": {
+   "value": "Helicopters and air attack generally orbit right (clockwise); lead planes and airtankers left.",
+   "unit": "text",
+   "source_id": "pms465_tactics_1996",
+   "page": "p.178"
+  }
+ },
+ "ground_constraints": {
+  "design_standards_14_ccr_1273": {
+   "note": "California Fire Safe Regulations are design standards for new roads/driveways in State Responsibility Area. They are the best sourced anchor for what fire apparatus is expected to use, not a limit of what an engine can drive.",
+   "two_way_min_lane_width_ft": {
+    "value": 10,
+    "unit": "ft per lane, two lanes (20 ft total), excluding shoulders",
+    "source_id": "cal_ccr14_1273",
+    "page": "14 CCR 1273.01(a)"
+   },
+   "one_way_min_lane_width_ft": {
+    "value": 12,
+    "unit": "ft",
+    "source_id": "cal_ccr14_1273",
+    "page": "14 CCR 1273.01(b)"
+   },
+   "one_way_max_length_ft": {
+    "value": 2640,
+    "unit": "ft",
+    "source_id": "cal_ccr14_1273",
+    "page": "14 CCR 1273.01(b)"
+   },
+   "driveway_min_lane_width_ft": {
+    "value": 10,
+    "unit": "ft",
+    "source_id": "cal_ccr14_1273",
+    "page": "14 CCR 1273.01(c)"
+   },
+   "driveway_horizontal_clearance_ft": {
+    "value": 14,
+    "unit": "ft",
+    "source_id": "cal_ccr14_1273",
+    "page": "14 CCR 1273.01(c)"
+   },
+   "vertical_clearance_ft": {
+    "value": 13.5,
+    "unit": "ft (13 ft 6 in; CA Vehicle Code 35250)",
+    "source_id": "cal_ccr14_1273",
+    "page": "14 CCR 1273.01(a),(c)"
+   },
+   "road_load_lb": {
+    "value": 75000,
+    "unit": "lb (fire apparatus weight roads must support, with aggregate base)",
+    "source_id": "cal_ccr14_1273",
+    "page": "14 CCR 1273.02(a)"
+   },
+   "structure_load_lb": {
+    "value": 40000,
+    "unit": "lb (minimum for road and driveway structures)",
+    "source_id": "cal_ccr14_1273",
+    "page": "14 CCR 1273.02(b)"
+   },
+   "max_grade_pct": {
+    "value": 16,
+    "unit": "percent",
+    "source_id": "cal_ccr14_1273",
+    "page": "14 CCR 1273.03(a)"
+   },
+   "max_grade_with_local_approval_pct": {
+    "value": 20,
+    "unit": "percent",
+    "source_id": "cal_ccr14_1273",
+    "page": "14 CCR 1273.03(b), needs local approval and mitigations"
+   },
+   "min_inside_curve_radius_ft": {
+    "value": 50,
+    "unit": "ft",
+    "source_id": "cal_ccr14_1273",
+    "page": "14 CCR 1273.04(a); add 4 ft surface width at 50-100 ft radius, 2 ft at 100-200 ft"
+   },
+   "turnaround_min_radius_ft": {
+    "value": 40,
+    "unit": "ft (hammerhead/T: top 60 ft long)",
+    "source_id": "cal_ccr14_1273",
+    "page": "14 CCR 1273.05(b)"
+   },
+   "turnaround_required_on": {
+    "value": "driveways and dead-end roads; dead-end roads in parcels of 5 acres or more every 1,320 ft",
+    "unit": "text",
+    "source_id": "cal_ccr14_1273",
+    "page": "14 CCR 1273.05(a),(d)"
+   },
+   "driveway_turnout_spacing_ft": {
+    "value": {
+     "midpoint_if_150_to_800": true,
+     "max_spacing_above_800": 400
+    },
+    "unit": "ft",
+    "source_id": "cal_ccr14_1273",
+    "page": "14 CCR 1273.05(c)"
+   },
+   "bridge_standard": {
+    "value": "Bridges on apparatus access roads built to AASHTO HB-17 (17th ed. 2002); weight limits posted at both entrances where required; one-lane bridges allowed with end-to-end visibility and turnouts at both ends.",
+    "unit": "text",
+    "source_id": "cal_ccr14_1273",
+    "page": "14 CCR 1273.07(b),(d)"
+   }
+  },
+  "tactical_guidance": {
+   "access_triage_factors": {
+    "value": "Ingress/egress routes: one-way or two-way, slope and steepness of road, bridges.",
+    "unit": "text",
+    "source_id": "pms465_tactics_1996",
+    "page": "p.188"
+   },
+   "bridge_width_and_load": {
+    "value": "Consider the width of bridges and their load limits; note ingress/egress and one-way or narrow roads.",
+    "unit": "text",
+    "source_id": "pms465_tactics_1996",
+    "page": "p.185"
+   },
+   "structure_watch_out_access": {
+    "value": "Watch out: roads twisting with sharp curves, narrow single-lane roads, dead ends, inadequate turning radius at road ends; bridges narrow with light or unknown load limits.",
+    "unit": "text",
+    "source_id": "pms465_tactics_1996",
+    "page": "p.200 (items 2 and 9); p.201 'ALWAYS THINK SAFE' A and L"
+   }
+  },
+  "vehicle_masses_lb": {
+   "value": {
+    "engine_type1_structure": [
+     38400,
+     46500
+    ],
+    "engine_type3_calfire_models": [
+     33000,
+     35000
+    ],
+    "engine_type4": [
+     25999,
+     57320
+    ],
+    "engine_type6": [
+     13300,
+     19500
+    ],
+    "tender_support": [
+     56000,
+     60000
+    ],
+    "tender_tactical": [
+     37000,
+     57320
+    ]
+   },
+   "unit": "lb GVWR",
+   "source_id": "wheg_2013",
+   "page": "PDF pp.25-52 data sheets (ranges over the listed reference apparatus)"
+  },
+  "drive_train": {
+   "value": {
+    "type1_structure_engines_listed": "all-wheel drive: No",
+    "calfire_type3_models_14_24_34": "4x4 (sister models 15/25/35 are 4x2)",
+    "type4_type6_listed_doi_usfs": "mostly all-wheel drive",
+    "support_tenders_listed": "all-wheel drive: No (LA County unit: Yes)"
+   },
+   "unit": "text",
+   "source_id": "wheg_2013",
+   "page": "PDF pp.25-52"
+  },
+  "osm_surface_semantics": {
+   "tracktype": {
+    "value": {
+     "grade1": "solid, usually paved",
+     "grade2": "mostly solid, gravel with sand/silt/clay",
+     "grade3": "even mixture of hard and soft",
+     "grade4": "mostly soft, soil/sand/grass with some hard material",
+     "grade5": "soft, uncompacted"
+    },
+    "unit": "enum",
+    "source_id": "osm_wiki_tracktype",
+    "page": "Key:tracktype grade1-grade5"
+   },
+   "smoothness": {
+    "value": {
+     "excellent": "asphalt/concrete",
+     "good": "racing bikes and below",
+     "intermediate": "city bikes, sports cars",
+     "bad": "normal cars; clearance above 14 cm",
+     "very_bad": "high-clearance cars and light off-road; 18 cm",
+     "horrible": "heavy-duty off-road; 21 cm",
+     "very_horrible": "tractors, ATVs; 24 cm",
+     "impassable": "no wheeled vehicle"
+    },
+    "unit": "enum",
+    "source_id": "osm_wiki_smoothness",
+    "page": "Key:smoothness table"
+   }
+  }
+ },
+ "road_access": {
+  "vehicle_classes": {
+   "engine_t1_t2": {
+    "label": "Type 1/2 structure engine",
+    "four_wheel_drive": false,
+    "gvwr_lb": {
+     "value": 46500,
+     "unit": "lb",
+     "source_id": "wheg_2013",
+     "page": "PDF pp.25-52 (upper GVWR of the listed reference apparatus for this class)"
+    }
+   },
+   "engine_t3": {
+    "label": "Type 3 engine (CAL FIRE Model 14/24/34 class, 4x4)",
+    "four_wheel_drive": true,
+    "gvwr_lb": {
+     "value": 35000,
+     "unit": "lb",
+     "source_id": "wheg_2013",
+     "page": "PDF pp.25-52 (upper GVWR of the listed reference apparatus for this class)"
+    }
+   },
+   "engine_t4_t7": {
+    "label": "Type 4-7 engine (AWD wildland)",
+    "four_wheel_drive": true,
+    "gvwr_lb": {
+     "value": 37000,
+     "unit": "lb",
+     "source_id": "wheg_2013",
+     "page": "PDF pp.25-52 (upper GVWR of the listed reference apparatus for this class)"
+    }
+   },
+   "tender_support": {
+    "label": "Support water tender",
+    "four_wheel_drive": false,
+    "gvwr_lb": {
+     "value": 60000,
+     "unit": "lb",
+     "source_id": "wheg_2013",
+     "page": "PDF pp.25-52 (upper GVWR of the listed reference apparatus for this class)"
+    }
+   },
+   "tender_tactical": {
+    "label": "Tactical water tender (T1 AWD / T2)",
+    "four_wheel_drive": true,
+    "gvwr_lb": {
+     "value": 57320,
+     "unit": "lb",
+     "source_id": "wheg_2013",
+     "page": "PDF pp.25-52 (upper GVWR of the listed reference apparatus for this class)"
+    }
+   }
+  },
+  "paved_surfaces": {
+   "value": [
+    "asphalt",
+    "concrete",
+    "paved",
+    "chipseal",
+    "concrete:plates",
+    "concrete:lanes",
+    "paving_stones",
+    "sett"
+   ],
+   "unit": "osm surface values",
+   "source_id": "osm_wiki_tracktype",
+   "page": "grade1 text: 'usually paved, often tagged asphalt, concrete, chipseal, or paved'"
+  },
+  "unpaved_surfaces": {
+   "value": [
+    "unpaved",
+    "gravel",
+    "fine_gravel",
+    "compacted",
+    "dirt",
+    "earth",
+    "ground",
+    "sand",
+    "grass",
+    "mud",
+    "pebblestone",
+    "rock"
+   ],
+   "unit": "osm surface values",
+   "assumption": true,
+   "reason": "OSM wiki lists these as unpaved values; grouping is ours."
+  },
+  "max_grade_paved_pct": {
+   "engine_t1_t2": {
+    "value": 16,
+    "unit": "percent",
+    "assumption": true,
+    "reason": "Anchored on 16% (20% with approval) design maximum of 14 CCR 1273.03; per-class limit is our judgement. Heavy 2WD structure engine held to the 16% design maximum; support tender (146 in cab-to-axle, 56-60 klb, 2WD per WHEG pdf p.51-52) held lower; 4x4 wildland engines allowed above design maximum."
+   },
+   "engine_t3": {
+    "value": 25,
+    "unit": "percent",
+    "assumption": true,
+    "reason": "Anchored on 16% (20% with approval) design maximum of 14 CCR 1273.03; per-class limit is our judgement. Heavy 2WD structure engine held to the 16% design maximum; support tender (146 in cab-to-axle, 56-60 klb, 2WD per WHEG pdf p.51-52) held lower; 4x4 wildland engines allowed above design maximum."
+   },
+   "engine_t4_t7": {
+    "value": 25,
+    "unit": "percent",
+    "assumption": true,
+    "reason": "Anchored on 16% (20% with approval) design maximum of 14 CCR 1273.03; per-class limit is our judgement. Heavy 2WD structure engine held to the 16% design maximum; support tender (146 in cab-to-axle, 56-60 klb, 2WD per WHEG pdf p.51-52) held lower; 4x4 wildland engines allowed above design maximum."
+   },
+   "tender_support": {
+    "value": 12,
+    "unit": "percent",
+    "assumption": true,
+    "reason": "Anchored on 16% (20% with approval) design maximum of 14 CCR 1273.03; per-class limit is our judgement. Heavy 2WD structure engine held to the 16% design maximum; support tender (146 in cab-to-axle, 56-60 klb, 2WD per WHEG pdf p.51-52) held lower; 4x4 wildland engines allowed above design maximum."
+   },
+   "tender_tactical": {
+    "value": 16,
+    "unit": "percent",
+    "assumption": true,
+    "reason": "Anchored on 16% (20% with approval) design maximum of 14 CCR 1273.03; per-class limit is our judgement. Heavy 2WD structure engine held to the 16% design maximum; support tender (146 in cab-to-axle, 56-60 klb, 2WD per WHEG pdf p.51-52) held lower; 4x4 wildland engines allowed above design maximum."
+   }
+  },
+  "max_grade_unpaved_pct": {
+   "engine_t1_t2": {
+    "value": 8,
+    "unit": "percent",
+    "assumption": true,
+    "reason": "No retrieved source gives off-road grade capability of fire apparatus. Values reflect drive-train (WHEG pp.25-52) and mass; treat as planning defaults to calibrate with CAL FIRE/USFS unit staff."
+   },
+   "engine_t3": {
+    "value": 20,
+    "unit": "percent",
+    "assumption": true,
+    "reason": "No retrieved source gives off-road grade capability of fire apparatus. Values reflect drive-train (WHEG pp.25-52) and mass; treat as planning defaults to calibrate with CAL FIRE/USFS unit staff."
+   },
+   "engine_t4_t7": {
+    "value": 25,
+    "unit": "percent",
+    "assumption": true,
+    "reason": "No retrieved source gives off-road grade capability of fire apparatus. Values reflect drive-train (WHEG pp.25-52) and mass; treat as planning defaults to calibrate with CAL FIRE/USFS unit staff."
+   },
+   "tender_support": {
+    "value": 6,
+    "unit": "percent",
+    "assumption": true,
+    "reason": "No retrieved source gives off-road grade capability of fire apparatus. Values reflect drive-train (WHEG pp.25-52) and mass; treat as planning defaults to calibrate with CAL FIRE/USFS unit staff."
+   },
+   "tender_tactical": {
+    "value": 15,
+    "unit": "percent",
+    "assumption": true,
+    "reason": "No retrieved source gives off-road grade capability of fire apparatus. Values reflect drive-train (WHEG pp.25-52) and mass; treat as planning defaults to calibrate with CAL FIRE/USFS unit staff."
+   }
+  },
+  "allowed_unpaved_tracktype": {
+   "engine_t1_t2": {
+    "value": [
+     "grade1"
+    ],
+    "unit": "enum list",
+    "assumption": true,
+    "reason": "2WD, high mass (WHEG pp.25-27): paved or hard-packed only."
+   },
+   "engine_t3": {
+    "value": [
+     "grade1",
+     "grade2",
+     "grade3"
+    ],
+    "unit": "enum list",
+    "assumption": true,
+    "reason": "4x4 optional (WHEG pp.28-30); 4x4 Models 14/24/34 assumed on firm gravel and mixed tracks."
+   },
+   "engine_t4_t7": {
+    "value": [
+     "grade1",
+     "grade2",
+     "grade3",
+     "grade4"
+    ],
+    "unit": "enum list",
+    "assumption": true,
+    "reason": "Light AWD wildland engines (13,300-37,000 lb, WHEG pp.33-47)."
+   },
+   "tender_support": {
+    "value": [
+     "grade1"
+    ],
+    "unit": "enum list",
+    "assumption": true,
+    "reason": "2WD, 56-60 klb (WHEG pp.51-52)."
+   },
+   "tender_tactical": {
+    "value": [
+     "grade1",
+     "grade2",
+     "grade3"
+    ],
+    "unit": "enum list",
+    "assumption": true,
+    "reason": "AWD tactical tenders (WHEG pp.48-50)."
+   }
+  },
+  "allowed_smoothness": {
+   "engine_t1_t2": {
+    "value": [
+     "excellent",
+     "good",
+     "intermediate"
+    ],
+    "unit": "enum list",
+    "assumption": true,
+    "reason": "Structure engines on normal roads."
+   },
+   "engine_t3": {
+    "value": [
+     "excellent",
+     "good",
+     "intermediate",
+     "bad",
+     "very_bad"
+    ],
+    "unit": "enum list",
+    "assumption": true,
+    "reason": "OSM 'very_bad' = high-clearance light off-road; a 4x4 engine is heavier but has comparable clearance; assumption."
+   },
+   "engine_t4_t7": {
+    "value": [
+     "excellent",
+     "good",
+     "intermediate",
+     "bad",
+     "very_bad",
+     "horrible"
+    ],
+    "unit": "enum list",
+    "assumption": true,
+    "reason": "Smaller AWD engines."
+   },
+   "tender_support": {
+    "value": [
+     "excellent",
+     "good",
+     "intermediate"
+    ],
+    "unit": "enum list",
+    "assumption": true,
+    "reason": "Highway truck on 2WD chassis (WHEG pdf pp.51-52)."
+   },
+   "tender_tactical": {
+    "value": [
+     "excellent",
+     "good",
+     "intermediate",
+     "bad",
+     "very_bad"
+    ],
+    "unit": "enum list",
+    "assumption": true,
+    "reason": "AWD tactical tender (WHEG pdf pp.48-50)."
+   }
+  },
+  "min_lane_width_m": {
+   "value": 3.05,
+   "unit": "m (10 ft)",
+   "source_id": "cal_ccr14_1273",
+   "page": "14 CCR 1273.01(a),(c): 10 ft traffic lane"
+  },
+  "two_way_min_width_m": {
+   "value": 6.1,
+   "unit": "m (20 ft)",
+   "source_id": "cal_ccr14_1273",
+   "page": "14 CCR 1273.01(a): two 10 ft lanes"
+  },
+  "driveway_clear_width_m": {
+   "value": 4.27,
+   "unit": "m (14 ft)",
+   "source_id": "cal_ccr14_1273",
+   "page": "14 CCR 1273.01(c)"
+  },
+  "min_vertical_clearance_m": {
+   "value": 4.11,
+   "unit": "m (13 ft 6 in)",
+   "source_id": "cal_ccr14_1273",
+   "page": "14 CCR 1273.01"
+  },
+  "min_inside_curve_radius_m": {
+   "value": 15.24,
+   "unit": "m (50 ft)",
+   "source_id": "cal_ccr14_1273",
+   "page": "14 CCR 1273.04(a)"
+  },
+  "turnaround_radius_m": {
+   "value": 12.19,
+   "unit": "m (40 ft)",
+   "source_id": "cal_ccr14_1273",
+   "page": "14 CCR 1273.05(b)"
+  },
+  "unknown_bridge_weight_limit_lb": {
+   "value": 40000,
+   "unit": "lb",
+   "source_id": "cal_ccr14_1273",
+   "page": "14 CCR 1273.07 / 1273.02(b): minimum design load of apparatus-route structures; used as the assumed capacity of a bridge with no maxweight tag"
+  },
+  "default_width_m_by_highway": {
+   "value": {
+    "motorway": 7.3,
+    "trunk": 7.3,
+    "primary": 6.7,
+    "secondary": 6.1,
+    "tertiary": 5.5,
+    "unclassified": 4.9,
+    "residential": 5.5,
+    "service": 3.7,
+    "track": 3.5
+   },
+   "unit": "m",
+   "assumption": true,
+   "reason": "OSM 'width' is often missing; these are typical widths, not measured; track is set just above the 3.05 m minimum lane so an untagged track is not rejected for width alone. A missing width on service/track is the main uncertainty."
+  },
+  "default_surface_by_highway": {
+   "value": {
+    "motorway": "paved",
+    "trunk": "paved",
+    "primary": "paved",
+    "secondary": "paved",
+    "tertiary": "paved",
+    "unclassified": "paved",
+    "residential": "paved",
+    "service": "paved",
+    "track": "unpaved"
+   },
+   "unit": "enum",
+   "assumption": true,
+   "reason": "OSM leaves surface untagged on many roads; track is assumed unpaved (tracktype grade3 if missing), others paved."
+  },
+  "private_access": {
+   "value": "allow access=private/no for emergency vehicles unless emergency=no or motor_vehicle=no with no emergency=yes; gates may add minutes",
+   "unit": "text",
+   "assumption": true,
+   "reason": "Fire apparatus routinely enters private roads, but locked gates are unknown from OSM."
+  },
+  "single_lane_below_width_m": {
+   "value": 5.0,
+   "unit": "m",
+   "assumption": true,
+   "reason": "A road narrower than about one lane plus passing room is treated as single-lane; 14 CCR 1273.01 requires 6.1 m for two-way, but real residential streets with parking are 5-6 m and still two-way in practice."
+  },
+  "single_lane_speed_factor": {
+   "value": 0.6,
+   "unit": "factor",
+   "assumption": true,
+   "reason": "Narrow single-lane roads with oncoming traffic and blind curves slow heavy apparatus; no retrieved figure."
+  },
+  "unpaved_speed_kmh": {
+   "value": {
+    "grade1": 40,
+    "grade2": 30,
+    "grade3": 20,
+    "grade4": 12,
+    "grade5": 8
+   },
+   "unit": "km/h",
+   "assumption": true,
+   "reason": "No retrieved source; conservative planning speeds for heavy apparatus."
+  },
+  "heavy_apparatus_speed_kmh_by_highway": {
+   "value": {
+    "motorway": 90,
+    "trunk": 80,
+    "primary": 70,
+    "secondary": 60,
+    "tertiary": 50,
+    "unclassified": 45,
+    "residential": 35,
+    "service": 25
+   },
+   "unit": "km/h",
+   "assumption": true,
+   "reason": "No retrieved source for emergency-driving speeds of heavy apparatus; ADR 0023 uses free-flow OSM speeds. These cap them. Calibrate with CAD AVL data when available."
+  },
+  "grade_speed_penalty": {
+   "value": {
+    "over_8pct": 0.8,
+    "over_12pct": 0.6,
+    "over_16pct": 0.4
+   },
+   "unit": "factor",
+   "assumption": true,
+   "reason": "Loaded engines slow on grades; no retrieved source."
+  }
+ },
+ "aviation_constraints": {
+  "fixed_wing_retardant_window": {
+   "value": "Multi-engine airtankers are dispatched to arrive with no aerial supervision not earlier than 30 min after official sunrise and not later than 30 min before official sunset; retardant operations only in daylight; after official sunset only with flight-crew concurrence AND aerial supervision on scene. Daylight hours = 30 min before sunrise to 30 min after sunset. Empty multi-engine aircraft may fly to bases after daylight.",
+   "unit": "text",
+   "source_id": "iasg_2017",
+   "page": "PDF p.37 (printed p.41) 'Retardant Operations and Low Light Conditions'"
+  },
+  "airtanker_early_late_arrival": {
+   "value": "Airtankers may arrive as early as 30 min before official sunrise and may drop as late as 30 min after official sunset provided pilot judges visibility and safety suitable.",
+   "unit": "text",
+   "source_id": "pms508_iabog_2015",
+   "page": "PDF p.46"
+  },
+  "daylight_flight_limit_single_engine_fixed_wing_min": {
+   "value": {
+    "before_sunrise": 30,
+    "after_sunset": 30
+   },
+   "unit": "min",
+   "source_id": "iasg_2017",
+   "page": "PDF p.42 Day/Night Flight Policy"
+  },
+  "twin_engine_fixed_wing_night": {
+   "value": "Not limited to daylight if aircraft and pilot are IFR-equipped/authorised (agency policy applies).",
+   "unit": "text",
+   "source_id": "iasg_2017",
+   "page": "PDF p.42"
+  },
+  "helicopter_daylight_limit_min": {
+   "value": {
+    "before_sunrise": 30,
+    "after_sunset": 30
+   },
+   "unit": "min",
+   "source_id": "iasg_2017",
+   "page": "PDF p.42; multi-engine helicopters not limited to daylight under certain stipulations (emergencies, lighted airports)"
+  },
+  "usfs_night_helicopter": {
+   "value": "USFS low-level night helicopter operations primarily use night-vision goggles; night operations VFR only, avoid fog and smoke, lights on.",
+   "unit": "text",
+   "source_id": "iasg_2017",
+   "page": "PDF p.40 'Night' and p.42"
+  },
+  "calfire_night_helicopters": {
+   "value": "CAL FIRE S-70i Black Hawks are 'capable of nighttime aerial firefighting'.",
+   "unit": "text",
+   "source_id": "calfire_house_2019",
+   "page": "p.4"
+  },
+  "visibility": {
+   "value": "Flights are suspended when poor visibility precludes safe operations, regardless of time of day.",
+   "unit": "text",
+   "source_id": "iasg_2017",
+   "page": "PDF p.40 'Visibility'"
+  },
+  "smoke": {
+   "value": "Inversions hold smoke in valley bottoms, preventing visibility of the flight path; sun glare also limits visibility.",
+   "unit": "text",
+   "source_id": "pms465_tactics_1996",
+   "page": "p.167 'Atmospheric conditions'"
+  },
+  "wind_drop_effectiveness_kt": {
+   "value": {
+    "evaluate_at": 15,
+    "generally_not_effective_at_or_above": 25
+   },
+   "unit": "kt",
+   "source_id": "iasg_2017",
+   "page": "PDF p.100 'Wind'"
+  },
+  "wind_retardant_ineffective_mph": {
+   "value": 20,
+   "unit": "mph",
+   "source_id": "pms465_tactics_1996",
+   "page": "p.172 'Retardant generally is ineffective when wind speeds exceed 20 mph' (1996; older, lower than IASG 2017)"
+  },
+  "hard_flight_wind_limit_kt": {
+   "value": 35,
+   "unit": "kt",
+   "assumption": true,
+   "reason": "Neither IASG nor PMS 465 gives a fixed maximum flight wind; they say operations stop at pilot discretion for safety of flight. 35 kt sustained is an assumed hard stop for the model."
+  },
+  "density_altitude_ft": {
+   "value": 4000,
+   "unit": "ft",
+   "source_id": "pms465_tactics_1996",
+   "page": "p.167: performance usually begins to be affected above 4,000 ft density altitude"
+  },
+  "airtanker_drop_direction": {
+   "value": "Guideline: down-sun, downhill, upwind.",
+   "unit": "text",
+   "source_id": "pms465_tactics_1996",
+   "page": "p.172"
+  },
+  "dip_or_reload_distance": {
+   "value": {
+    "helicopter_dip_max_km_effective": 8,
+    "airtanker_base_max_km_effective": 120
+   },
+   "unit": "km",
+   "assumption": true,
+   "reason": "No retrieved limit; chosen so that helicopter cycle stays near the sourced 3-5 min turnaround and airtanker cycle near the sourced one-hour cycle at 230-300 kt cruise."
+  },
+  "flame_length_limit_ft": {
+   "value": 8,
+   "unit": "ft",
+   "source_id": "pms465_tactics_1996",
+   "page": "p.171, 174: retardant inappropriate for direct attack above 8 ft flames"
+  },
+  "vlat_wake_wait_min": {
+   "value": 3,
+   "unit": "min",
+   "source_id": "iasg_2017",
+   "page": "PDF p.53"
+  }
+ },
+ "deployment": {
+  "calfire_engines_2019": {
+   "value": {
+    "year_round_engines": 343,
+    "added_fy2019_20": 13,
+    "total_after_addition": 356
+   },
+   "unit": "engines",
+   "source_id": "calfire_house_2019",
+   "page": "p.3"
+  },
+  "calfire_engines_web": {
+   "value": 383,
+   "unit": "engines (front-line, undated)",
+   "source_id": "calfire_web_snippet",
+   "page": "fire.ca.gov mobile-equipment page via search summary (unverified)"
+  },
+  "calfire_dozers_web": {
+   "value": 58,
+   "unit": "dozers (undated)",
+   "source_id": "calfire_web_snippet",
+   "page": "fire.ca.gov mobile-equipment page via search summary (unverified)"
+  },
+  "calfire_initial_attack_goal": {
+   "value": "Contain 95 percent of all fires at 10 acres or less.",
+   "unit": "text",
+   "source_id": "calfire_house_2019",
+   "page": "p.4"
+  },
+  "calfire_initial_aircraft_response": {
+   "value": {
+    "air_attack": 1,
+    "airtankers": 2,
+    "helicopters": 1
+   },
+   "unit": "aircraft",
+   "source_id": "calfirepilots_fire",
+   "page": "'generally consisting of an Air Attack, two Air Tankers, and a Helicopter'; may be augmented by fire weather and history"
+  },
+  "initial_attack_ground_first_alarm_sra_high": {
+   "value": {
+    "engines": 3,
+    "dozers": 1,
+    "hand_crews": 1,
+    "chief_officers": 1
+   },
+   "unit": "resources",
+   "assumption": true,
+   "reason": "No public CAL FIRE unit preplan or ECC dispatch matrix was retrieved (they are not published; contract-county and unit plans differ). Shape follows the SRA response described by the calfirepilots page (engines, dozers, crews, chiefs, air); counts are a placeholder for the simulator."
+  },
+  "move_up_and_cover": {
+   "value": "Neighbouring-station engines relocate to the emptied station when the nearest unit commits; typical trigger: nearest station out for >30 min",
+   "unit": "text",
+   "assumption": true,
+   "reason": "Concept is standard practice but no CAL FIRE document with thresholds was retrieved."
+  },
+  "strike_team_composition": {
+   "value": {
+    "engines": 5,
+    "leader": 1
+   },
+   "unit": "resources",
+   "assumption": true,
+   "reason": "Common NWCG definition; not re-fetched here."
+  },
+  "engines_per_station_estimate": {
+   "value": 1.6,
+   "unit": "engines per CAL FIRE-owned station",
+   "assumption": true,
+   "reason": "Derived: 343 year-round engines (house testimony p.3) / 220 active state-owned stations of type FSA/FSB/FSAB in tools/ca_fire_bases.json (196 FSB + 22 FSAB + 2 FSA). Seasonal and local engines excluded; single-engine stations are common, so this is an average."
+  }
+ },
+ "response_times": {
+  "turnout_s": {
+   "value": 80,
+   "unit": "s",
+   "source_id": "nfpa_1710",
+   "page": "4.1.2.1 (fire turnout 80 s); as used in ADR 0023; NOT re-verified"
+  },
+  "travel_first_engine_s": {
+   "value": 240,
+   "unit": "s",
+   "source_id": "nfpa_1710",
+   "page": "4.1.2.1 (first engine company, 90th percentile, urban career); NOT re-verified; rural SRA is much longer"
+  },
+  "wildland_turnout_s": {
+   "value": 120,
+   "unit": "s",
+   "assumption": true,
+   "reason": "Volunteer and call-back stations and wildland engines on duty typically exceed the NFPA 1710 80 s; no retrieved figure. Use 80 s for staffed CAL FIRE stations, 120+ s otherwise."
+  },
+  "airtanker_reaction_min": {
+   "value": 15,
+   "unit": "min",
+   "source_id": "pms508_iabog_2015",
+   "page": "PDF p.44"
+  },
+  "air_attack_call_to_takeoff_min": {
+   "value": 5,
+   "unit": "min",
+   "source_id": "calfirepilots_fire",
+   "page": "'often happens in 5 minutes or less'"
+  },
+  "helicopter_call_to_takeoff_min": {
+   "value": 10,
+   "unit": "min",
+   "assumption": true,
+   "reason": "No retrieved figure for CAL FIRE helitack (crew assembles, hook-up, start). Aviation contract reaction time for helicopters is not in the retrieved documents."
+  },
+  "hand_crew_mobilization_min": {
+   "value": 30,
+   "unit": "min",
+   "assumption": true,
+   "reason": "Crews are housed at conservation camps or crew bases, not stations (ADR 0023 notes this); crew turnout from camp assumed 30 min. No retrieved figure."
+  },
+  "dozer_mobilization_min": {
+   "value": 60,
+   "unit": "min",
+   "assumption": true,
+   "reason": "Dozers need a transport rig and lowboy driver; no retrieved figure."
+  },
+  "water_tender_refill_min": {
+   "value": [
+    15,
+    30
+   ],
+   "unit": "min",
+   "source_id": "nwcg_pms200_equipment",
+   "page": "Water Tenders > Water Tender Typing Standard table (Max refill time row, Support types)"
+  }
+ }
+}

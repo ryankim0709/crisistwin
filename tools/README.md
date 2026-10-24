@@ -21,6 +21,7 @@ packaged raw bytes offline and compares them.
 | Woolsey Fire (2018) | `woolsey_build.py` | Evacuation package: `fetch-osm`, `fetch-feds`, `extract-firms`, `extract-acs`, `build`, or `--verify-package`. |
 | Mongo sync | `mongo_data.py` | `push`, `pull`, `record`, `status` for incident-package artifacts and generated app data (`app/data-manifest.json`). Needs `MONGODB_URI`. |
 | Mobility sidecars | `dewey_mobility.py` | Aggregates licensed Advan parquet subsets into `app/public/replays/<id>.mobility.json` (needs `pyarrow`; licensed data is never committed). Format: [docs/mobility-sidecar.md](../docs/mobility-sidecar.md). |
+| Suppression resources | `suppression_data.py`, `suppression_resources.json`, `ca_fire_bases.json` | Sourced firefighting resource types, production rates, road and aviation constraints, and California stations and bases. Validate with `python3 -m tools.suppression_data`; see [docs/suppression-data.md](../docs/suppression-data.md). Both JSON files are curated data (the bases file is rebuilt with `--refresh-bases`). |
 | Landscape regions | `build_landscape_regions/` | Node builder + Python uploader for prebuilt California fire landscapes. See its [README](build_landscape_regions/README.md). |
 
 ## Data tables (`*.json` at this level)
@@ -56,6 +57,10 @@ python3.12 -m tools.kincade_build build --sources DIR
 python3.12 -m tools.kincade_build --verify-package PATH
 python3.12 -m tools.woolsey_build fetch-osm --inputs DIR      # then fetch-feds, extract-*, build
 python3.12 -m tools.marshall_build --stage DIR                # or --verify-package PATH
+
+# Suppression resource data: validate, or re-download the CAL FIRE facilities layer (network)
+python3.12 -m tools.suppression_data
+python3.12 -m tools.suppression_data --refresh-bases
 
 # Landscapes
 node tools/build_landscape_regions/run.mjs && python3 -m tools.build_landscape_regions upload
