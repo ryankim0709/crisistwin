@@ -20,3 +20,14 @@ __pycache__/
 
 # Local operating system files
 .DS_Store
+
+# Generated replay bundles (python3 -m sim ... bundle); rebuild locally
+app/public/replays/**/*.json
+app/public/simulations/**/*.json
+
+# Editor swap files
+*.swp
+
+# Incident-package artifacts live in MongoDB Atlas; fetch with `python3 -m tools.mongo_data pull`
+data/incidents/*/*/raw/
+data/incidents/*/*/normalized/

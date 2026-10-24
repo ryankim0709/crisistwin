@@ -43,6 +43,18 @@ export const navigationItems: readonly NavigationItem[] = [
     description: "Review source evidence before proposing a scenario change.",
   },
   {
+    path: "/replay",
+    label: "Historical replay",
+    group: "Analysis",
+    description: "Replay the 2018 Camp Fire evacuation with what-if comparisons.",
+  },
+  {
+    path: "/simulate",
+    label: "Agent simulation",
+    group: "Analysis",
+    description: "Modelled residents and responders, separate from the historical replay.",
+  },
+  {
     path: "/stress-tests",
     label: "Stress testing",
     group: "Analysis",

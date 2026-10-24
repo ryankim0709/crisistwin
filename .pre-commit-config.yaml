@@ -1,4 +1,6 @@
 # Basic housekeeping only. No tests, lint, type checks, or builds for the hackathon.
+# Raw incident source bytes are hashed in package manifests and must not be rewritten.
+exclude: ^data/incidents/[^/]+/[^/]+/raw/
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0

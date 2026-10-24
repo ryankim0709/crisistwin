@@ -1,0 +1,189 @@
+/* AI explanation panel. Scoped under .rp-root; uses the replay tokens from replay.css. */
+
+.rp-root .ai-panel {
+  display: grid;
+  gap: 18px;
+}
+.rp-root .ai-intro {
+  margin: 0 0 10px;
+  color: var(--rp-dim);
+  line-height: 1.45;
+}
+.rp-root .ai-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.rp-root .ai-chip {
+  padding: 5px 10px;
+  border: 1px solid var(--rp-line-strong);
+  border-radius: 999px;
+  color: var(--rp-text);
+  font-size: 12px;
+  cursor: pointer;
+}
+.rp-root .ai-chip:hover:not(:disabled) {
+  border-color: var(--rp-violet);
+}
+.rp-root .ai-chip:disabled,
+.rp-root .ai-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.rp-root .ai-form {
+  display: grid;
+  gap: 6px;
+}
+.rp-root .ai-label {
+  color: var(--rp-dim);
+  font-size: 12px;
+}
+.rp-root .ai-input {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  padding: 8px 10px;
+  border: 1px solid var(--rp-line-strong);
+  border-radius: 6px;
+  background: var(--rp-bg);
+  color: var(--rp-text);
+  font: inherit;
+  line-height: 1.4;
+}
+.rp-root .ai-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+.rp-root .ai-btn {
+  padding: 6px 14px;
+  border: 1px solid var(--rp-line-strong);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.rp-root .ai-btn--primary {
+  border-color: var(--rp-violet);
+  color: var(--rp-violet);
+  font-weight: 600;
+}
+.rp-root .ai-asked {
+  display: grid;
+  gap: 2px;
+  margin: 0 0 10px;
+}
+.rp-root .ai-asked-q {
+  font-weight: 600;
+}
+.rp-root .ai-asked-t,
+.rp-root .ai-meta,
+.rp-root .ai-status {
+  color: var(--rp-dim);
+  font-size: 12px;
+}
+.rp-root .ai-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+.rp-root .ai-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--rp-line-strong);
+  border-top-color: var(--rp-violet);
+  border-radius: 50%;
+  animation: ai-spin 0.8s linear infinite;
+}
+@keyframes ai-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rp-root .ai-spinner {
+    animation: none;
+  }
+}
+.rp-root .ai-error {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--rp-red);
+  border-left-width: 4px;
+  border-radius: 6px;
+  line-height: 1.45;
+}
+/* AI text is set apart by a dashed violet border plus an explicit "AI" tag, not color alone. */
+.rp-root .ai-answer {
+  padding: 12px;
+  border: 1px dashed var(--rp-violet);
+  border-radius: 8px;
+}
+.rp-root .ai-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  color: var(--rp-violet);
+  font-size: 12px;
+  font-weight: 600;
+}
+.rp-root .ai-badge-tag {
+  padding: 1px 6px;
+  border: 1px solid var(--rp-violet);
+  border-radius: 4px;
+  font-family: var(--rp-mono);
+  font-size: 11px;
+}
+.rp-root .ai-stale {
+  margin: 0 0 10px;
+  color: var(--rp-amber);
+  font-size: 12px;
+}
+.rp-root .ai-markdown {
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.rp-root .ai-markdown p,
+.rp-root .ai-markdown ul,
+.rp-root .ai-markdown ol {
+  margin: 0 0 10px;
+}
+.rp-root .ai-markdown ul,
+.rp-root .ai-markdown ol {
+  padding-left: 20px;
+}
+.rp-root .ai-markdown h3,
+.rp-root .ai-markdown h4 {
+  margin: 14px 0 6px;
+  font-size: 13px;
+}
+.rp-root .ai-markdown code,
+.rp-root .ai-meta code {
+  font-family: var(--rp-mono);
+  font-size: 11px;
+  color: var(--rp-ember-core);
+}
+.rp-root .ai-meta {
+  margin: 8px 0 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--rp-line);
+}
+.rp-root .ai-context {
+  margin-top: 12px;
+  color: var(--rp-dim);
+  font-size: 12px;
+}
+.rp-root .ai-context summary {
+  cursor: pointer;
+}
+.rp-root .ai-context pre {
+  max-height: 240px;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--rp-line);
+  border-radius: 6px;
+  font-family: var(--rp-mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+}

@@ -63,6 +63,9 @@ export default function App() {
           <a className="ui-button ui-button-light" href="/maps">
             Explore the map ↗
           </a>
+          <a className="ui-button ui-button-light" href="/replay">
+            Camp Fire (2018) replay ↗
+          </a>
         </div>
         <ol className="hero-workflow">
           <li>

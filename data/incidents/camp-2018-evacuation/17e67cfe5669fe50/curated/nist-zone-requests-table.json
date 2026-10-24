@@ -1,0 +1,898 @@
+{
+ "source_id": "nist-tn2252",
+ "source_url": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf",
+ "source_copy_url": "https://www.govinfo.gov (GOVPUB copy of NIST TN 2252; 278 pages)",
+ "source_sha256": "b9cdeed04f6c020b8af85e28ae300f8df467dc63a873832d72eadbc4d7dd5982",
+ "incident_local_date": "2018-11-08",
+ "time_zone": "America/Los_Angeles",
+ "time_notation": "hh:mm local; hours >= 24 denote the following calendar day as printed by NIST",
+ "table_11": {
+  "printed_page": "56",
+  "pdf_page": 94,
+  "columns": [
+   "first_fire_data_point",
+   "delta_warning_to_fire",
+   "delta_order_to_fire",
+   "warning_request",
+   "warning_codered",
+   "delta_warning_codered",
+   "order_request",
+   "order_codered",
+   "delta_order_codered",
+   "delta_warning_to_order"
+  ],
+  "rows": [
+   {
+    "zone_as_written": "Pulga",
+    "zone_id": "camp-2018-zone-pulga",
+    "first_fire_data_point": "06:58",
+    "delta_warning_to_fire": null,
+    "delta_order_to_fire": "00:03",
+    "warning_request": null,
+    "warning_codered": null,
+    "delta_warning_codered": null,
+    "order_request": "06:55",
+    "order_codered": "07:13",
+    "delta_order_codered": "00:18",
+    "delta_warning_to_order": null
+   },
+   {
+    "zone_as_written": "Concow",
+    "zone_id": "camp-2018-zone-concow",
+    "first_fire_data_point": "06:45",
+    "delta_warning_to_fire": "-00:37",
+    "delta_order_to_fire": "-00:52",
+    "warning_request": "07:22",
+    "warning_codered": null,
+    "delta_warning_codered": null,
+    "order_request": "07:37",
+    "order_codered": null,
+    "delta_order_codered": null,
+    "delta_warning_to_order": "00:15"
+   },
+   {
+    "zone_as_written": "Paradise 3",
+    "zone_id": "paradise-2017-zone-3",
+    "first_fire_data_point": "07:50",
+    "delta_warning_to_fire": "00:18",
+    "delta_order_to_fire": "00:04",
+    "warning_request": "07:32",
+    "warning_codered": null,
+    "delta_warning_codered": null,
+    "order_request": "07:46",
+    "order_codered": "07:57",
+    "delta_order_codered": "00:11",
+    "delta_warning_to_order": "00:14"
+   },
+   {
+    "zone_as_written": "Paradise 8",
+    "zone_id": "paradise-2017-zone-8",
+    "first_fire_data_point": "07:49",
+    "delta_warning_to_fire": "00:17",
+    "delta_order_to_fire": "00:03",
+    "warning_request": "07:32",
+    "warning_codered": null,
+    "delta_warning_codered": null,
+    "order_request": "07:46",
+    "order_codered": "07:57",
+    "delta_order_codered": "00:11",
+    "delta_warning_to_order": "00:14"
+   },
+   {
+    "zone_as_written": "Paradise 14",
+    "zone_id": "paradise-2017-zone-14",
+    "first_fire_data_point": "08:47",
+    "delta_warning_to_fire": "01:15",
+    "delta_order_to_fire": "01:01",
+    "warning_request": "07:32",
+    "warning_codered": null,
+    "delta_warning_codered": null,
+    "order_request": "07:46",
+    "order_codered": "07:57",
+    "delta_order_codered": "00:11",
+    "delta_warning_to_order": "00:14"
+   },
+   {
+    "zone_as_written": "L. Pentz",
+    "zone_id": "camp-2018-zone-l-pentz",
+    "first_fire_data_point": "08:54",
+    "delta_warning_to_fire": "01:22",
+    "delta_order_to_fire": "01:08",
+    "warning_request": "07:32",
+    "warning_codered": null,
+    "delta_warning_codered": null,
+    "order_request": "07:46",
+    "order_codered": "07:57",
+    "delta_order_codered": "00:11",
+    "delta_warning_to_order": "00:14"
+   },
+   {
+    "zone_as_written": "Paradise 2",
+    "zone_id": "paradise-2017-zone-2",
+    "first_fire_data_point": "08:15",
+    "delta_warning_to_fire": "00:20",
+    "delta_order_to_fire": "00:14",
+    "warning_request": "07:55",
+    "warning_codered": null,
+    "delta_warning_codered": null,
+    "order_request": "08:01",
+    "order_codered": "08:32",
+    "delta_order_codered": "00:31",
+    "delta_warning_to_order": "00:06"
+   },
+   {
+    "zone_as_written": "Paradise 6",
+    "zone_id": "paradise-2017-zone-6",
+    "first_fire_data_point": "07:57",
+    "delta_warning_to_fire": "-00:04",
+    "delta_order_to_fire": null,
+    "warning_request": "08:01",
+    "warning_codered": null,
+    "delta_warning_codered": null,
+    "order_request": null,
+    "order_codered": "08:32",
+    "delta_order_codered": null,
+    "delta_warning_to_order": null
+   },
+   {
+    "zone_as_written": "Paradise 7",
+    "zone_id": "paradise-2017-zone-7",
+    "first_fire_data_point": "08:00",
+    "delta_warning_to_fire": "00:05",
+    "delta_order_to_fire": "-00:01",
+    "warning_request": "07:55",
+    "warning_codered": null,
+    "delta_warning_codered": null,
+    "order_request": "08:01",
+    "order_codered": "08:32",
+    "delta_order_codered": "00:31",
+    "delta_warning_to_order": "00:06"
+   },
+   {
+    "zone_as_written": "Paradise 13",
+    "zone_id": "paradise-2017-zone-13",
+    "first_fire_data_point": "09:00",
+    "delta_warning_to_fire": "01:05",
+    "delta_order_to_fire": "00:59",
+    "warning_request": "07:55",
+    "warning_codered": null,
+    "delta_warning_codered": null,
+    "order_request": "08:01",
+    "order_codered": "08:32",
+    "delta_order_codered": "00:31",
+    "delta_warning_to_order": "00:06"
+   },
+   {
+    "zone_as_written": "Morgan Ridge",
+    "zone_id": "camp-2018-zone-morgan-ridge",
+    "first_fire_data_point": "n/d",
+    "delta_warning_to_fire": null,
+    "delta_order_to_fire": null,
+    "warning_request": null,
+    "warning_codered": null,
+    "delta_warning_codered": null,
+    "order_request": "08:01",
+    "order_codered": null,
+    "delta_order_codered": null,
+    "delta_warning_to_order": null
+   },
+   {
+    "zone_as_written": "Paradise 1",
+    "zone_id": "paradise-2017-zone-1",
+    "first_fire_data_point": "08:31",
+    "delta_warning_to_fire": "00:30",
+    "delta_order_to_fire": "-00:18",
+    "warning_request": "08:01",
+    "warning_codered": "08:43",
+    "delta_warning_codered": "00:42",
+    "order_request": "08:49",
+    "order_codered": "16:17",
+    "delta_order_codered": "07:28",
+    "delta_warning_to_order": "00:48"
+   },
+   {
+    "zone_as_written": "Paradise 5",
+    "zone_id": "paradise-2017-zone-5",
+    "first_fire_data_point": "08:43",
+    "delta_warning_to_fire": "00:42",
+    "delta_order_to_fire": "-00:06",
+    "warning_request": "08:01",
+    "warning_codered": "08:43",
+    "delta_warning_codered": "00:42",
+    "order_request": "08:49",
+    "order_codered": "09:09",
+    "delta_order_codered": "00:20",
+    "delta_warning_to_order": "00:48"
+   },
+   {
+    "zone_as_written": "Paradise 12",
+    "zone_id": "paradise-2017-zone-12",
+    "first_fire_data_point": "08:30",
+    "delta_warning_to_fire": "00:29",
+    "delta_order_to_fire": null,
+    "warning_request": "08:01",
+    "warning_codered": "08:46",
+    "delta_warning_codered": "00:45",
+    "order_request": null,
+    "order_codered": "16:12",
+    "delta_order_codered": null,
+    "delta_warning_to_order": null
+   },
+   {
+    "zone_as_written": "L. Clark",
+    "zone_id": "camp-2018-zone-l-clark",
+    "first_fire_data_point": "10:00",
+    "delta_warning_to_fire": "01:59",
+    "delta_order_to_fire": "01:11",
+    "warning_request": "08:01",
+    "warning_codered": "10:07",
+    "delta_warning_codered": "02:06",
+    "order_request": "08:49",
+    "order_codered": "13:34",
+    "delta_order_codered": "04:45",
+    "delta_warning_to_order": "00:48"
+   },
+   {
+    "zone_as_written": "Paradise 4",
+    "zone_id": "paradise-2017-zone-4",
+    "first_fire_data_point": "08:41",
+    "delta_warning_to_fire": "00:40",
+    "delta_order_to_fire": "-00:08",
+    "warning_request": "08:01",
+    "warning_codered": null,
+    "delta_warning_codered": null,
+    "order_request": "08:49",
+    "order_codered": null,
+    "delta_order_codered": null,
+    "delta_warning_to_order": "00:48"
+   },
+   {
+    "zone_as_written": "Paradise 9",
+    "zone_id": "paradise-2017-zone-9",
+    "first_fire_data_point": "08:41",
+    "delta_warning_to_fire": "00:40",
+    "delta_order_to_fire": "-00:08",
+    "warning_request": "08:01",
+    "warning_codered": null,
+    "delta_warning_codered": null,
+    "order_request": "08:49",
+    "order_codered": null,
+    "delta_order_codered": null,
+    "delta_warning_to_order": "00:48"
+   },
+   {
+    "zone_as_written": "Paradise 10",
+    "zone_id": "paradise-2017-zone-10",
+    "first_fire_data_point": "10:30",
+    "delta_warning_to_fire": "02:29",
+    "delta_order_to_fire": null,
+    "warning_request": "08:01",
+    "warning_codered": null,
+    "delta_warning_codered": null,
+    "order_request": null,
+    "order_codered": null,
+    "delta_order_codered": null,
+    "delta_warning_to_order": null
+   },
+   {
+    "zone_as_written": "Paradise 11",
+    "zone_id": "paradise-2017-zone-11",
+    "first_fire_data_point": "08:30",
+    "delta_warning_to_fire": "00:29",
+    "delta_order_to_fire": "-00:19",
+    "warning_request": "08:01",
+    "warning_codered": "08:46",
+    "delta_warning_codered": "00:45",
+    "order_request": "08:49",
+    "order_codered": "16:12",
+    "delta_order_codered": "07:23",
+    "delta_warning_to_order": "00:48"
+   },
+   {
+    "zone_as_written": "L. Neal",
+    "zone_id": "camp-2018-zone-l-neal",
+    "first_fire_data_point": "10:30",
+    "delta_warning_to_fire": "01:41",
+    "delta_order_to_fire": null,
+    "warning_request": "08:49",
+    "warning_codered": "10:11",
+    "delta_warning_codered": "01:22",
+    "order_request": null,
+    "order_codered": null,
+    "delta_order_codered": null,
+    "delta_warning_to_order": null
+   },
+   {
+    "zone_as_written": "U. Honey Run",
+    "zone_id": "camp-2018-zone-u-honey-run",
+    "first_fire_data_point": "08:41",
+    "delta_warning_to_fire": "-00:08",
+    "delta_order_to_fire": null,
+    "warning_request": "08:49",
+    "warning_codered": "10:11",
+    "delta_warning_codered": "01:22",
+    "order_request": null,
+    "order_codered": null,
+    "delta_order_codered": null,
+    "delta_warning_to_order": null
+   },
+   {
+    "zone_as_written": "L. Skyway",
+    "zone_id": "camp-2018-zone-l-skyway",
+    "first_fire_data_point": "10:44",
+    "delta_warning_to_fire": "01:55",
+    "delta_order_to_fire": null,
+    "warning_request": "08:49",
+    "warning_codered": "10:07",
+    "delta_warning_codered": "01:18",
+    "order_request": null,
+    "order_codered": "13:34",
+    "delta_order_codered": null,
+    "delta_warning_to_order": null
+   },
+   {
+    "zone_as_written": "Butte Creek",
+    "zone_id": "camp-2018-zone-butte-creek",
+    "first_fire_data_point": "09:11",
+    "delta_warning_to_fire": "00:22",
+    "delta_order_to_fire": null,
+    "warning_request": "08:49",
+    "warning_codered": null,
+    "delta_warning_codered": null,
+    "order_request": null,
+    "order_codered": "10:22",
+    "delta_order_codered": null,
+    "delta_warning_to_order": null
+   },
+   {
+    "zone_as_written": "Old Magalia",
+    "zone_id": "camp-2018-zone-old-magalia",
+    "first_fire_data_point": "08:41",
+    "delta_warning_to_fire": null,
+    "delta_order_to_fire": "-00:08",
+    "warning_request": null,
+    "warning_codered": null,
+    "delta_warning_codered": null,
+    "order_request": "08:49",
+    "order_codered": "09:15",
+    "delta_order_codered": "00:26",
+    "delta_warning_to_order": null
+   },
+   {
+    "zone_as_written": "S. Pines",
+    "zone_id": "camp-2018-zone-s-pines",
+    "first_fire_data_point": "10:45",
+    "delta_warning_to_fire": null,
+    "delta_order_to_fire": "01:56",
+    "warning_request": null,
+    "warning_codered": null,
+    "delta_warning_codered": null,
+    "order_request": "08:49",
+    "order_codered": "09:15",
+    "delta_order_codered": "00:26",
+    "delta_warning_to_order": null
+   },
+   {
+    "zone_as_written": "N. Pines",
+    "zone_id": "camp-2018-zone-n-pines",
+    "first_fire_data_point": "26:55",
+    "delta_warning_to_fire": null,
+    "delta_order_to_fire": "18:06",
+    "warning_request": null,
+    "warning_codered": null,
+    "delta_warning_codered": null,
+    "order_request": "08:49",
+    "order_codered": "09:29",
+    "delta_order_codered": "00:40",
+    "delta_warning_to_order": null
+   },
+   {
+    "zone_as_written": "S. Fir.",
+    "zone_id": "camp-2018-zone-s-fir",
+    "first_fire_data_point": "17:14",
+    "delta_warning_to_fire": null,
+    "delta_order_to_fire": "08:25",
+    "warning_request": null,
+    "warning_codered": null,
+    "delta_warning_codered": null,
+    "order_request": "08:49",
+    "order_codered": "09:29",
+    "delta_order_codered": "00:40",
+    "delta_warning_to_order": null
+   },
+   {
+    "zone_as_written": "N. Fir.",
+    "zone_id": "camp-2018-zone-n-fir",
+    "first_fire_data_point": "30:21",
+    "delta_warning_to_fire": null,
+    "delta_order_to_fire": "21:32",
+    "warning_request": null,
+    "warning_codered": null,
+    "delta_warning_codered": null,
+    "order_request": "08:49",
+    "order_codered": "09:29",
+    "delta_order_codered": "00:40",
+    "delta_warning_to_order": null
+   },
+   {
+    "zone_as_written": "S. Coutolenc",
+    "zone_id": "camp-2018-zone-s-coutolenc",
+    "first_fire_data_point": "23:23",
+    "delta_warning_to_fire": null,
+    "delta_order_to_fire": "14:34",
+    "warning_request": null,
+    "warning_codered": null,
+    "delta_warning_codered": null,
+    "order_request": "08:49",
+    "order_codered": "09:15",
+    "delta_order_codered": "00:26",
+    "delta_warning_to_order": null
+   },
+   {
+    "zone_as_written": "Carnegie Colter",
+    "zone_id": "camp-2018-zone-carnegie-colter",
+    "first_fire_data_point": "no fire",
+    "delta_warning_to_fire": null,
+    "delta_order_to_fire": null,
+    "warning_request": null,
+    "warning_codered": null,
+    "delta_warning_codered": null,
+    "order_request": "08:49",
+    "order_codered": "09:29",
+    "delta_order_codered": "00:40",
+    "delta_warning_to_order": null
+   },
+   {
+    "zone_as_written": "Nimshew",
+    "zone_id": "camp-2018-zone-nimshew",
+    "first_fire_data_point": "n/d",
+    "delta_warning_to_fire": null,
+    "delta_order_to_fire": null,
+    "warning_request": null,
+    "warning_codered": "09:58",
+    "delta_warning_codered": null,
+    "order_request": null,
+    "order_codered": "13:46",
+    "delta_order_codered": null,
+    "delta_warning_to_order": null
+   },
+   {
+    "zone_as_written": "Humbug",
+    "zone_id": "camp-2018-zone-humbug",
+    "first_fire_data_point": "no fire",
+    "delta_warning_to_fire": null,
+    "delta_order_to_fire": null,
+    "warning_request": null,
+    "warning_codered": "17:04",
+    "delta_warning_codered": null,
+    "order_request": null,
+    "order_codered": "25:18",
+    "delta_order_codered": null,
+    "delta_warning_to_order": null
+   },
+   {
+    "zone_as_written": "N. Coutolenc",
+    "zone_id": "camp-2018-zone-n-coutolenc",
+    "first_fire_data_point": "> Nov 9",
+    "delta_warning_to_fire": null,
+    "delta_order_to_fire": null,
+    "warning_request": null,
+    "warning_codered": "17:04",
+    "delta_warning_codered": null,
+    "order_request": "24:53",
+    "order_codered": "25:18",
+    "delta_order_codered": "00:25",
+    "delta_warning_to_order": null
+   },
+   {
+    "zone_as_written": "Stirling",
+    "zone_id": "camp-2018-zone-stirling",
+    "first_fire_data_point": "> Nov 9",
+    "delta_warning_to_fire": null,
+    "delta_order_to_fire": null,
+    "warning_request": null,
+    "warning_codered": null,
+    "delta_warning_codered": null,
+    "order_request": null,
+    "order_codered": "25:18",
+    "delta_order_codered": null,
+    "delta_warning_to_order": null
+   },
+   {
+    "zone_as_written": "Lovelock",
+    "zone_id": "camp-2018-zone-lovelock",
+    "first_fire_data_point": "> Nov 9",
+    "delta_warning_to_fire": null,
+    "delta_order_to_fire": null,
+    "warning_request": null,
+    "warning_codered": "17:04",
+    "delta_warning_codered": null,
+    "order_request": null,
+    "order_codered": "25:18",
+    "delta_order_codered": null,
+    "delta_warning_to_order": null
+   },
+   {
+    "zone_as_written": "Powellton",
+    "zone_id": "camp-2018-zone-powellton",
+    "first_fire_data_point": "no fire",
+    "delta_warning_to_fire": null,
+    "delta_order_to_fire": null,
+    "warning_request": null,
+    "warning_codered": null,
+    "delta_warning_codered": null,
+    "order_request": null,
+    "order_codered": "25:18",
+    "delta_order_codered": null,
+    "delta_warning_to_order": null
+   },
+   {
+    "zone_as_written": "Centerville",
+    "zone_id": "camp-2018-zone-centerville",
+    "first_fire_data_point": null,
+    "delta_warning_to_fire": null,
+    "delta_order_to_fire": null,
+    "warning_request": "08:49",
+    "warning_codered": null,
+    "delta_warning_codered": null,
+    "order_request": null,
+    "order_codered": "10:22",
+    "delta_order_codered": null,
+    "delta_warning_to_order": null
+   },
+   {
+    "zone_as_written": "Foothills",
+    "zone_id": "camp-2018-zone-foothills",
+    "first_fire_data_point": null,
+    "delta_warning_to_fire": null,
+    "delta_order_to_fire": null,
+    "warning_request": null,
+    "warning_codered": null,
+    "delta_warning_codered": null,
+    "order_request": null,
+    "order_codered": "11:46",
+    "delta_order_codered": null,
+    "delta_warning_to_order": null
+   },
+   {
+    "zone_as_written": "Yankee Hill",
+    "zone_id": "camp-2018-zone-yankee-hill",
+    "first_fire_data_point": null,
+    "delta_warning_to_fire": null,
+    "delta_order_to_fire": null,
+    "warning_request": null,
+    "warning_codered": null,
+    "delta_warning_codered": null,
+    "order_request": null,
+    "order_codered": "11:52",
+    "delta_order_codered": null,
+    "delta_warning_to_order": null
+   }
+  ],
+  "column_semantics": {
+   "first_fire_data_point": "time of first documented fire observation in zone (best-known arrival; absence does not mean no fire)",
+   "warning_request": "time IC requested evacuation warning",
+   "order_request": "time IC requested evacuation order",
+   "warning_codered": "CodeRED warning notification time",
+   "order_codered": "CodeRED order notification time",
+   "delta_*": "italic interval columns, transcribed only to self-check the time transcription"
+  }
+ },
+ "table_10_ecc_rows": [
+  {
+   "id": "nist-tn2252:t10:0803-ecc-all-paradise",
+   "local_time": "08:03",
+   "type": "evacuation_order",
+   "issuer": "Butte County ECC",
+   "printed_page": "54",
+   "pdf_page": 92,
+   "source_number": "TD-011, VTD-32, 911-1035-6",
+   "zones_as_written": "all of Paradise",
+   "zone_ids": [
+    "paradise-2017-zone-1",
+    "paradise-2017-zone-2",
+    "paradise-2017-zone-3",
+    "paradise-2017-zone-4",
+    "paradise-2017-zone-5",
+    "paradise-2017-zone-6",
+    "paradise-2017-zone-7",
+    "paradise-2017-zone-8",
+    "paradise-2017-zone-9",
+    "paradise-2017-zone-10",
+    "paradise-2017-zone-11",
+    "paradise-2017-zone-12",
+    "paradise-2017-zone-13",
+    "paradise-2017-zone-14"
+   ],
+   "place_names": [],
+   "description": "Butte ECC notifies PPD that it has issued mandatory evacuations for all of Paradise.",
+   "quote": "they have just issued “mandatory evacuations” for all of Paradise"
+  },
+  {
+   "id": "nist-tn2252:t10:0903-ecc-dissemination",
+   "local_time": "09:03",
+   "type": "evacuation_order",
+   "issuer": "Butte County ECC",
+   "printed_page": "54",
+   "pdf_page": 92,
+   "source_number": "911-209-1",
+   "zones_as_written": "Steiffer Rd to the town limits, Zones 1, 11, 2, 6, 12, 5, 4, Lower Clark, and Butte Creek Canyon",
+   "zone_ids": [
+    "paradise-2017-zone-1",
+    "paradise-2017-zone-11",
+    "paradise-2017-zone-2",
+    "paradise-2017-zone-6",
+    "paradise-2017-zone-12",
+    "paradise-2017-zone-5",
+    "paradise-2017-zone-4",
+    "camp-2018-zone-l-clark",
+    "camp-2018-zone-butte-creek"
+   ],
+   "place_names": [
+    "Steiffer Rd to the town limits"
+   ],
+   "description": "ECC disseminates evacuation orders by interagency phone call for the listed zones.",
+   "quote": "ECC disseminates evacuation orders for Steiffer Rd to the town limits"
+  }
+ ],
+ "zones": [
+  {
+   "zone_id": "camp-2018-zone-pulga",
+   "name_as_written": "Pulga",
+   "name_expanded": "Pulga",
+   "community": null
+  },
+  {
+   "zone_id": "camp-2018-zone-concow",
+   "name_as_written": "Concow",
+   "name_expanded": "Concow",
+   "community": null
+  },
+  {
+   "zone_id": "paradise-2017-zone-3",
+   "name_as_written": "Paradise 3",
+   "name_expanded": "Paradise 3",
+   "community": "Town of Paradise"
+  },
+  {
+   "zone_id": "paradise-2017-zone-8",
+   "name_as_written": "Paradise 8",
+   "name_expanded": "Paradise 8",
+   "community": "Town of Paradise"
+  },
+  {
+   "zone_id": "paradise-2017-zone-14",
+   "name_as_written": "Paradise 14",
+   "name_expanded": "Paradise 14",
+   "community": "Town of Paradise"
+  },
+  {
+   "zone_id": "camp-2018-zone-l-pentz",
+   "name_as_written": "L. Pentz",
+   "name_expanded": "Lower Pentz",
+   "community": null
+  },
+  {
+   "zone_id": "paradise-2017-zone-2",
+   "name_as_written": "Paradise 2",
+   "name_expanded": "Paradise 2",
+   "community": "Town of Paradise"
+  },
+  {
+   "zone_id": "paradise-2017-zone-6",
+   "name_as_written": "Paradise 6",
+   "name_expanded": "Paradise 6",
+   "community": "Town of Paradise"
+  },
+  {
+   "zone_id": "paradise-2017-zone-7",
+   "name_as_written": "Paradise 7",
+   "name_expanded": "Paradise 7",
+   "community": "Town of Paradise"
+  },
+  {
+   "zone_id": "paradise-2017-zone-13",
+   "name_as_written": "Paradise 13",
+   "name_expanded": "Paradise 13",
+   "community": "Town of Paradise"
+  },
+  {
+   "zone_id": "camp-2018-zone-morgan-ridge",
+   "name_as_written": "Morgan Ridge",
+   "name_expanded": "Morgan Ridge",
+   "community": null
+  },
+  {
+   "zone_id": "paradise-2017-zone-1",
+   "name_as_written": "Paradise 1",
+   "name_expanded": "Paradise 1",
+   "community": "Town of Paradise"
+  },
+  {
+   "zone_id": "paradise-2017-zone-5",
+   "name_as_written": "Paradise 5",
+   "name_expanded": "Paradise 5",
+   "community": "Town of Paradise"
+  },
+  {
+   "zone_id": "paradise-2017-zone-12",
+   "name_as_written": "Paradise 12",
+   "name_expanded": "Paradise 12",
+   "community": "Town of Paradise"
+  },
+  {
+   "zone_id": "camp-2018-zone-l-clark",
+   "name_as_written": "L. Clark",
+   "name_expanded": "Lower Clark",
+   "community": null
+  },
+  {
+   "zone_id": "paradise-2017-zone-4",
+   "name_as_written": "Paradise 4",
+   "name_expanded": "Paradise 4",
+   "community": "Town of Paradise"
+  },
+  {
+   "zone_id": "paradise-2017-zone-9",
+   "name_as_written": "Paradise 9",
+   "name_expanded": "Paradise 9",
+   "community": "Town of Paradise"
+  },
+  {
+   "zone_id": "paradise-2017-zone-10",
+   "name_as_written": "Paradise 10",
+   "name_expanded": "Paradise 10",
+   "community": "Town of Paradise"
+  },
+  {
+   "zone_id": "paradise-2017-zone-11",
+   "name_as_written": "Paradise 11",
+   "name_expanded": "Paradise 11",
+   "community": "Town of Paradise"
+  },
+  {
+   "zone_id": "camp-2018-zone-l-neal",
+   "name_as_written": "L. Neal",
+   "name_expanded": "Lower Neal",
+   "community": null
+  },
+  {
+   "zone_id": "camp-2018-zone-u-honey-run",
+   "name_as_written": "U. Honey Run",
+   "name_expanded": "Upper Honey Run",
+   "community": null
+  },
+  {
+   "zone_id": "camp-2018-zone-l-skyway",
+   "name_as_written": "L. Skyway",
+   "name_expanded": "Lower Skyway",
+   "community": null
+  },
+  {
+   "zone_id": "camp-2018-zone-butte-creek",
+   "name_as_written": "Butte Creek",
+   "name_expanded": "Butte Creek",
+   "community": null
+  },
+  {
+   "zone_id": "camp-2018-zone-old-magalia",
+   "name_as_written": "Old Magalia",
+   "name_expanded": "Old Magalia",
+   "community": null
+  },
+  {
+   "zone_id": "camp-2018-zone-s-pines",
+   "name_as_written": "S. Pines",
+   "name_expanded": "South Pines",
+   "community": null
+  },
+  {
+   "zone_id": "camp-2018-zone-n-pines",
+   "name_as_written": "N. Pines",
+   "name_expanded": "North Pines",
+   "community": null
+  },
+  {
+   "zone_id": "camp-2018-zone-s-fir",
+   "name_as_written": "S. Fir.",
+   "name_expanded": null,
+   "community": null
+  },
+  {
+   "zone_id": "camp-2018-zone-n-fir",
+   "name_as_written": "N. Fir.",
+   "name_expanded": null,
+   "community": null
+  },
+  {
+   "zone_id": "camp-2018-zone-s-coutolenc",
+   "name_as_written": "S. Coutolenc",
+   "name_expanded": "South Coutolenc",
+   "community": null
+  },
+  {
+   "zone_id": "camp-2018-zone-carnegie-colter",
+   "name_as_written": "Carnegie Colter",
+   "name_expanded": "Carnegie Colter",
+   "community": null
+  },
+  {
+   "zone_id": "camp-2018-zone-nimshew",
+   "name_as_written": "Nimshew",
+   "name_expanded": "Nimshew",
+   "community": null
+  },
+  {
+   "zone_id": "camp-2018-zone-humbug",
+   "name_as_written": "Humbug",
+   "name_expanded": "Humbug",
+   "community": null
+  },
+  {
+   "zone_id": "camp-2018-zone-n-coutolenc",
+   "name_as_written": "N. Coutolenc",
+   "name_expanded": "North Coutolenc",
+   "community": null
+  },
+  {
+   "zone_id": "camp-2018-zone-stirling",
+   "name_as_written": "Stirling",
+   "name_expanded": "Stirling",
+   "community": null
+  },
+  {
+   "zone_id": "camp-2018-zone-lovelock",
+   "name_as_written": "Lovelock",
+   "name_expanded": "Lovelock",
+   "community": null
+  },
+  {
+   "zone_id": "camp-2018-zone-powellton",
+   "name_as_written": "Powellton",
+   "name_expanded": "Powellton",
+   "community": null
+  },
+  {
+   "zone_id": "camp-2018-zone-centerville",
+   "name_as_written": "Centerville",
+   "name_expanded": "Centerville",
+   "community": null
+  },
+  {
+   "zone_id": "camp-2018-zone-foothills",
+   "name_as_written": "Foothills",
+   "name_expanded": "Foothills",
+   "community": null
+  },
+  {
+   "zone_id": "camp-2018-zone-yankee-hill",
+   "name_as_written": "Yankee Hill",
+   "name_expanded": "Yankee Hill",
+   "community": null
+  }
+ ],
+ "incident_events": [
+  {
+   "id": "nist-tn2252:s1.2:ignition",
+   "type": "fire_ignition",
+   "local_time": "06:20",
+   "time_precision": "approximate",
+   "printed_page": "2",
+   "pdf_page": 40,
+   "description": "Camp Fire started near Camp Creek Road and Pulga Road, Feather River Canyon north of Jarbo Gap.",
+   "quote": "at approximately 06:20 on November 8, 2018",
+   "place_name": "Camp Creek Road and Pulga Road"
+  },
+  {
+   "id": "nist-tn2252:s1.2:first-911-report",
+   "type": "fire_reported",
+   "local_time": "06:25",
+   "time_precision": "minute",
+   "printed_page": "2",
+   "pdf_page": 40,
+   "description": "First report of the fire called in to 911.",
+   "quote": "The first report was called in to 911 at 06:25",
+   "place_name": "Camp Creek Road and Pulga Road"
+  }
+ ]
+}

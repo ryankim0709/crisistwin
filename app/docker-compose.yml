@@ -11,6 +11,7 @@ services:
       DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1,backend}
       MONGODB_URI: ${MONGODB_URI:?Set MONGODB_URI in the shell or app/.env}
       MONGODB_DATABASE: ${MONGODB_DATABASE:-crisistwin}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     ports:
       - "127.0.0.1:8000:8000"
     volumes:

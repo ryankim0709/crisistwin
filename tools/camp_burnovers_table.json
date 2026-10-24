@@ -1,0 +1,307 @@
+{
+ "source_id": "nist-tn2252",
+ "source_url": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf",
+ "source_sha256": "b9cdeed04f6c020b8af85e28ae300f8df467dc63a873832d72eadbc4d7dd5982",
+ "table": "30",
+ "time_zone": "America/Los_Angeles",
+ "default_local_date": "2018-11-08",
+ "footnotes": {
+  "e": "First time of observation. Burnover conditions existed prior to the first recorded observation.",
+  "g": "November 9. All other events occurred on November 8.",
+  "n/d": "no data/unknown",
+  "n/a": "not applicable (propane tank explosion event)"
+ },
+ "fatalities_column_rule": "blank cells are kept null; they are not converted to zero",
+ "rows": [
+  {
+   "burnover_id": 1,
+   "location_as_written": "Hoffman Rd",
+   "community": "Concow",
+   "severity_category": 1,
+   "initiation_local": "07:50",
+   "initiation_footnotes": [],
+   "duration_as_written": "40",
+   "fatalities_as_written": null,
+   "printed_page": "125",
+   "pdf_page": 163
+  },
+  {
+   "burnover_id": 2,
+   "location_as_written": "Concow Rd",
+   "community": "Concow",
+   "severity_category": 2,
+   "initiation_local": "07:50",
+   "initiation_footnotes": [],
+   "duration_as_written": "70",
+   "fatalities_as_written": null,
+   "printed_page": "125",
+   "pdf_page": 163
+  },
+  {
+   "burnover_id": 20,
+   "location_as_written": "Camelot Ln",
+   "community": "Concow",
+   "severity_category": 1,
+   "initiation_local": "07:55",
+   "initiation_footnotes": [
+    "e"
+   ],
+   "duration_as_written": "50",
+   "fatalities_as_written": null,
+   "printed_page": "125",
+   "pdf_page": 163
+  },
+  {
+   "burnover_id": 3,
+   "location_as_written": "Chapman Ln",
+   "community": "Paradise",
+   "severity_category": 1,
+   "initiation_local": "08:30",
+   "initiation_footnotes": [],
+   "duration_as_written": "n/d",
+   "fatalities_as_written": null,
+   "printed_page": "125",
+   "pdf_page": 163
+  },
+  {
+   "burnover_id": 4,
+   "location_as_written": "Skyway (upper)",
+   "community": "Paradise",
+   "severity_category": 1,
+   "initiation_local": "08:30",
+   "initiation_footnotes": [],
+   "duration_as_written": "360",
+   "fatalities_as_written": null,
+   "printed_page": "125",
+   "pdf_page": 163
+  },
+  {
+   "burnover_id": 5,
+   "location_as_written": "Windermere Ln",
+   "community": "Concow",
+   "severity_category": 1,
+   "initiation_local": "08:35",
+   "initiation_footnotes": [
+    "e"
+   ],
+   "duration_as_written": "n/d",
+   "fatalities_as_written": "1",
+   "printed_page": "125",
+   "pdf_page": 163
+  },
+  {
+   "burnover_id": 6,
+   "location_as_written": "Pentz Rd",
+   "community": "Paradise",
+   "severity_category": 1,
+   "initiation_local": "08:45",
+   "initiation_footnotes": [],
+   "duration_as_written": "150",
+   "fatalities_as_written": null,
+   "printed_page": "125",
+   "pdf_page": 163
+  },
+  {
+   "burnover_id": 7,
+   "location_as_written": "Pearson Rd",
+   "community": "Paradise",
+   "severity_category": 1,
+   "initiation_local": "09:15",
+   "initiation_footnotes": [],
+   "duration_as_written": "60",
+   "fatalities_as_written": "1",
+   "printed_page": "125",
+   "pdf_page": 163
+  },
+  {
+   "burnover_id": 8,
+   "location_as_written": "Bille Rd",
+   "community": "Paradise",
+   "severity_category": 1,
+   "initiation_local": "09:25",
+   "initiation_footnotes": [],
+   "duration_as_written": "140",
+   "fatalities_as_written": null,
+   "printed_page": "125",
+   "pdf_page": 163
+  },
+  {
+   "burnover_id": 21,
+   "location_as_written": "Edgewood Ln",
+   "community": "Paradise",
+   "severity_category": 1,
+   "initiation_local": "09:30",
+   "initiation_footnotes": [],
+   "duration_as_written": "n/d",
+   "fatalities_as_written": "5",
+   "printed_page": "125",
+   "pdf_page": 163
+  },
+  {
+   "burnover_id": 9,
+   "location_as_written": "Wagstaff Rd",
+   "community": "Paradise",
+   "severity_category": 2,
+   "initiation_local": "09:30",
+   "initiation_footnotes": [],
+   "duration_as_written": "60",
+   "fatalities_as_written": null,
+   "printed_page": "125",
+   "pdf_page": 163
+  },
+  {
+   "burnover_id": 10,
+   "location_as_written": "Clark Rd / American Way",
+   "community": "Paradise",
+   "severity_category": 2,
+   "initiation_local": "10:00",
+   "initiation_footnotes": [],
+   "duration_as_written": "120",
+   "fatalities_as_written": null,
+   "printed_page": "125",
+   "pdf_page": 163
+  },
+  {
+   "burnover_id": 11,
+   "location_as_written": "Clark Rd / Airport Rd",
+   "community": "Butte County",
+   "severity_category": 2,
+   "initiation_local": "10:00",
+   "initiation_footnotes": [],
+   "duration_as_written": "90",
+   "fatalities_as_written": null,
+   "printed_page": "125",
+   "pdf_page": 163
+  },
+  {
+   "burnover_id": 12,
+   "location_as_written": "Skyway (lower)",
+   "community": "Paradise",
+   "severity_category": 2,
+   "initiation_local": "10:15",
+   "initiation_footnotes": [],
+   "duration_as_written": "90",
+   "fatalities_as_written": null,
+   "printed_page": "125",
+   "pdf_page": 163
+  },
+  {
+   "burnover_id": 13,
+   "location_as_written": "Jordan Hill Rd / Granite Hill Rd",
+   "community": "Concow",
+   "severity_category": 1,
+   "initiation_local": "11:30",
+   "initiation_footnotes": [],
+   "duration_as_written": "n/d",
+   "fatalities_as_written": null,
+   "printed_page": "125",
+   "pdf_page": 163
+  },
+  {
+   "burnover_id": 22,
+   "location_as_written": "Neal Rd",
+   "community": "Paradise",
+   "severity_category": 1,
+   "initiation_local": "11:30",
+   "initiation_footnotes": [],
+   "duration_as_written": "90",
+   "fatalities_as_written": null,
+   "printed_page": "126",
+   "pdf_page": 164
+  },
+  {
+   "burnover_id": 23,
+   "location_as_written": "Clark Rd / Cypress Ln",
+   "community": "Paradise",
+   "severity_category": 2,
+   "initiation_local": "11:45",
+   "initiation_footnotes": [
+    "e"
+   ],
+   "duration_as_written": "n/d",
+   "fatalities_as_written": null,
+   "printed_page": "126",
+   "pdf_page": 164
+  },
+  {
+   "burnover_id": 14,
+   "location_as_written": "Clark Rd / Black Bear Diner",
+   "community": "Paradise",
+   "severity_category": 2,
+   "initiation_local": "13:10",
+   "initiation_footnotes": [],
+   "duration_as_written": "n/d",
+   "fatalities_as_written": null,
+   "printed_page": "126",
+   "pdf_page": 164
+  },
+  {
+   "burnover_id": 15,
+   "location_as_written": "Rattlesnake Flats Rd",
+   "community": "Butte County",
+   "severity_category": 1,
+   "initiation_local": "15:15",
+   "initiation_footnotes": [],
+   "duration_as_written": "15",
+   "fatalities_as_written": null,
+   "printed_page": "126",
+   "pdf_page": 164
+  },
+  {
+   "burnover_id": 16,
+   "location_as_written": "Coutolenc Rd",
+   "community": "Magalia",
+   "severity_category": 2,
+   "initiation_local": "00:00",
+   "initiation_footnotes": [
+    "g"
+   ],
+   "duration_as_written": "120",
+   "fatalities_as_written": null,
+   "printed_page": "126",
+   "pdf_page": 164
+  },
+  {
+   "burnover_id": 17,
+   "location_as_written": "Chestnut Cir",
+   "community": "Magalia",
+   "severity_category": 1,
+   "initiation_local": "06:00",
+   "initiation_footnotes": [
+    "g"
+   ],
+   "duration_as_written": "n/a",
+   "fatalities_as_written": null,
+   "printed_page": "126",
+   "pdf_page": 164
+  },
+  {
+   "burnover_id": 18,
+   "location_as_written": "Ponderosa Way",
+   "community": "Magalia",
+   "severity_category": 2,
+   "initiation_local": "07:15",
+   "initiation_footnotes": [
+    "g"
+   ],
+   "duration_as_written": "n/d",
+   "fatalities_as_written": null,
+   "printed_page": "126",
+   "pdf_page": 164
+  },
+  {
+   "burnover_id": 19,
+   "location_as_written": "Concow Fire Station 37",
+   "community": "Concow",
+   "severity_category": 1,
+   "initiation_local": "07:15",
+   "initiation_footnotes": [
+    "g"
+   ],
+   "duration_as_written": "n/d",
+   "fatalities_as_written": null,
+   "printed_page": "126",
+   "pdf_page": 164
+  }
+ ]
+}
