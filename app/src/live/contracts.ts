@@ -1,7 +1,7 @@
 /**
  * Live broadcast to the resident iOS app: the run a web page is playing, at the current
  * simulation minute. `POST /api/live/broadcast` stores the latest snapshot and the app reads
- * it from `GET /api/live` (app/backend/api/live.py). Change both sides, the Swift decoder
+ * it from `GET /api/live` (app/backend/api/live_broadcast.py). Change both sides, the Swift decoder
  * (mobile/CrisisTwin/Features/Live/LiveSnapshot.swift) and
  * docs/adr/0016-resident-live-and-family.md together.
  *

@@ -21,6 +21,7 @@ Routes of the web app (`app/src/main.tsx`, `app/src/navigation.ts`); `/` redirec
 | `/fire` | Fire spread model | Rothermel surface spread with crown fire, ember spotting and structure-to-structure spread on LANDFIRE fuels, canopy and terrain; 3D diorama or USGS imagery view; 41 prebuilt California regions or a live custom area; optional NWS wind. [Reference](docs/fire-simulator.md). |
 | `/simulation` | Simulation Studio | Up to five scheduled ignitions in one solver pass on a shared landscape, Web Worker solve, JSON export/import, plus a 3D diorama view of the last run. In 3D, **Evacuation & closures** evacuates the board's synthetic households against the run and lets you close roads or bridges, comparing results with and without them (closures change traffic, not the fire). **Firefighters** in the config panel send hand crews, engines and dozers, driving in from the nearest fire stations over the board's roads, to build control line; the run estimates whether they put each fire out by direct attack once on site, searches anchor points and line distances for the best control line, and compares both with no crews. Crews the fire overwhelms leave it after a size-up and help the evacuation in the most threatened zones. [ADR 0011](docs/adr/0011-simulation-studio.md), [ADR 0016](docs/adr/0016-studio-diorama-view.md), [ADR 0018](docs/adr/0018-road-closures.md), [ADR 0020](docs/adr/0020-studio-firefighting.md), [ADR 0023](docs/adr/0023-studio-crew-dispatch.md), [ADR 0024](docs/adr/0024-studio-crews-assist-evacuation.md). |
 | `/dispatch` | Dispatch agent | The Simulation Studio UI (scheduled fires, map and 3D diorama) with its own saved draft, plus a live Claude dispatcher beside it (needs `ANTHROPIC_API_KEY`). After a run it builds OSM roads, stations and synthetic homes. A monitor checks the simulation every few simulated minutes and calls Claude only when something changes. Claude orders zones out or stages them in waves, and sends engines either to fight a fire or to support an evacuation. For each fire Claude picks a tactic (direct attack, flanking from the heel, or indirect line ahead) from options the simulator has solved (homes reached, area burned, time to contain); the fire model decides where a line holds; the console shows each zone's simulated resident notice (nothing is sent). [ADR 0014](docs/adr/0014-dispatch-agent.md), [ADR 0017](docs/adr/0017-dispatch-anywhere.md), [ADR 0019](docs/adr/0019-live-dispatch-monitor.md), [ADR 0022](docs/adr/0022-dispatch-fire-attack.md), [ADR 0025](docs/adr/0025-dispatch-fire-tactics.md). |
+| `/live` | Live command | Controller workspace for the Camp Fire live drill: field-report triage, per-zone guidance approval, the drill clock and the real-time twin. Full-viewport, outside the sidebar shell. [Contract](docs/live-reports.md), [ADR 0012](docs/adr/0012-controller-guidance.md). |
 | `/replay` | Historical replay | Replay of past fires (Camp 2018, plus Marshall and Kincade packages) with perimeters, evacuation traffic and responder/evacuee views, driven by generated replay bundles. [Bundle contract](docs/replay-bundle.md). |
 | `/simulate` | Agent simulation | Replay-style view of simulated agent runs (same map tooling as `/replay`). |
 | `/diorama` | Evacuation diorama | Fictional, scripted ~90 s three.js evacuation of the made-up town Larkspur Hollow; synthetic data. [ADR 0010](docs/adr/0010-evacuation-diorama.md). |
@@ -31,16 +32,29 @@ The workspace overview (`/overview`) and `/maps` pages were removed
 
 Also in the repository:
 
-- **Backend** (`app/backend/`): Django REST API with `GET /api/health`, `/api/landscapes` (prebuilt landscapes from MongoDB), `/api/dispatch/area` (OpenStreetMap roads and stations for a box), `/api/dispatch/decide`, `/api/replay/explain`, `/api/live` (resident-app drill feed) and `/api/families`. See [API contract](app/backend/README.md).
+- **Backend** (`app/backend/`): Django REST API with `GET /api/health`, `/api/landscapes` (prebuilt landscapes from MongoDB), `/api/dispatch/area` (OpenStreetMap roads and stations for a box), `/api/dispatch/decide`, `/api/replay/explain`, `/api/live` (resident-app simulation feed), `/api/live/…` (live drill: field reports, controller guidance, twin; [contract](docs/live-reports.md)) and `/api/families`. See [API contract](app/backend/README.md).
 - **Fire watch agent** (`agent/`): a standalone Python package that drafts evacuation advisories from satellite detections for a human to approve; never notifies residents. [README](agent/README.md), [ADR 0008](docs/adr/0008-fire-watch-agent.md).
 - **Historical replay simulator** (`sim/`): stdlib Python fire hindcast and evacuation traffic model that produces replay bundles. [README](sim/README.md).
-- **iOS app** (`mobile/`): SwiftUI resident app. Its **Live drill** tab shows, on a native map, the fire a planner is
-  playing on `/fire` (the page posts it to `POST /api/live/broadcast` while **Share with resident app** is
-  on) and, while the dispatch agent runs, what the simulation tells the household's zone (including
-  "stay home, your zone leaves in a later wave" for staged zones on `/dispatch`). **Family** lets a household
-  create or join a family by code to share meeting points and status. Everything shown is a labelled simulation drill,
-  not an alert. [README](mobile/README.md), [ADR 0010](docs/adr/0010-civilian-ios-app.md),
+- **iOS app** (`mobile/`): SwiftUI resident app for the **live drill** on the 2018 Camp road network: a map
+  with the fire estimate and the zone guidance a controller approves on `/live`, field reports and **I'm out** /
+  **Need help** check-ins ([contract](docs/live-reports.md), [ADR 0011](docs/adr/0011-live-field-reports.md),
+  [ADR 0012](docs/adr/0012-controller-guidance.md)). Its menu also holds **My Plan**, **Family** (create or join a
+  family by code to share meeting points and status) and **Web simulation**, the fire a planner plays on `/fire` or
+  `/dispatch` with **Share with resident app** on, including what the dispatch
+  simulation tells the household's zone ("stay home, your zone leaves in a later wave" for staged zones).
+  Everything shown is a labelled drill or simulation, not an
+  alert. [README](mobile/README.md), [ADR 0010](docs/adr/0010-civilian-ios-app.md),
   [ADR 0016](docs/adr/0016-resident-live-and-family.md).
+- **Live twin** (`app/backend/livecore/`, `sim/`): the planner and a steppable traffic engine behind `/live`'s what-if
+  ([ADR 0013](docs/adr/0013-realtime-twin.md), [twin API](docs/twin-api.md)).
+
+- **Incident intelligence** (`/api/intel/…`): an Apify Actor fetches public agency
+  pages (live, or Wayback Machine captures for past fires), Claude extracts candidate road closures,
+  evacuation orders and shelter updates with a verbatim quote, and a planner confirms and maps each one.
+  Every extracted record is `reported` and `unconfirmed` until a planner confirms it; Claude never
+  outputs coordinates. `APIFY_TOKEN`, `APIFY_ACTOR_ID` and `ANTHROPIC_API_KEY` are read by Django only
+  (never `VITE_*`); without them runs and extraction answer 503 and uploading Actor output still works.
+  [Contract](docs/incident-intel.md), [ADR 0018](docs/adr/0018-apify-incident-intelligence.md).
 
 Not implemented: persistent scenarios, live incident integrations, a validated evacuation model.
 Suppression is limited to control lines built by Simulation Studio firefighters ([ADR 0020](docs/adr/0020-studio-firefighting.md)); the fire model is unvalidated at demo settings.
@@ -51,8 +65,8 @@ Suppression is limited to control lines built by Simulation Studio firefighters 
 app/                  Web app
   src/                React 19 + TypeScript frontend (see app/AGENTS.md)
     ui/               Design tokens and shared component kit: the UI standard, see app/src/ui/README.md
-    fire/ studio/ dispatch/ replay/ diorama/ pages/ maps/ lib/
-  backend/            Django 5.2 REST API + PyMongo (config/, api/)
+    fire/ studio/ dispatch/ replay/ diorama/ live/ pages/ maps/ lib/
+  backend/            Django 5.2 REST API + PyMongo (config/, api/, livecore/ live-drill rules and planner)
   public/             Static assets (brand logo, map imagery; replay bundles are generated)
   data-manifest.json  Hashes of generated app data stored in MongoDB Atlas
   docker-compose.yml  Development stack (frontend + backend, external MongoDB)
@@ -113,6 +127,9 @@ python3 -m tools.mongo_data pull
 python3 -m tools.mongo_data status       # drift vs the committed manifests
 ```
 
+If `status` reports drift after you pull, the author has not yet run `record`, `push` and
+committed the manifest.
+
 See [docs/historical-data.md](docs/historical-data.md) and [tools/README.md](tools/README.md).
 
 ### iOS app
@@ -121,7 +138,7 @@ See [docs/historical-data.md](docs/historical-data.md) and [tools/README.md](too
 open mobile/CrisisTwin.xcodeproj
 ```
 
-Select the **CrisisTwin** scheme and an iOS 17+ simulator (Xcode 16.2+), then Product > Run. Debug uses
+Select the **CrisisTwin** scheme and an iOS 26 simulator (Xcode 26), then Product > Run. Debug uses
 `http://localhost:8000/api/health`, so start the Docker stack for the readiness card. Details:
 [mobile/README.md](mobile/README.md). Mobile builds and tests have not been run in this repository's
 checks.

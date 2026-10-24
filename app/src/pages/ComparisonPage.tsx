@@ -150,7 +150,6 @@ function Comparison({ index }: { index: VariantsIndex }) {
       </MetricGrid>
       <Panel
         title="What-if outcomes against the baseline"
-        eyebrow="Computed results"
         aside={<Tag tone="warning">Counterfactual, not history</Tag>}
       >
         <div className="ui-table-scroll">
@@ -192,7 +191,7 @@ function Comparison({ index }: { index: VariantsIndex }) {
         )}
       </Panel>
       <div className="ui-columns">
-        <Panel title="Same inputs for every run" eyebrow="Reproducibility">
+        <Panel title="Same inputs for every run">
           <Facts items={facts.map(([label, value]) => ({ label, value }))} />
         </Panel>
         <Panel title="Limitations">
@@ -204,7 +203,7 @@ function Comparison({ index }: { index: VariantsIndex }) {
             </ul>
           ) : (
             <EmptyResult title="No limitations recorded">
-              The index lists none. Results are still a single-seed experiment.
+              Treat results as a single-seed planning experiment.
             </EmptyResult>
           )}
         </Panel>
@@ -218,7 +217,6 @@ export default function ComparisonPage() {
   return (
     <WorkspacePage
       title="Strategy comparison"
-      description="Change one thing about the 2018 Camp Fire evacuation, then compare outcomes against the same starting conditions."
       action={
         <LinkButton href={replayHref(CAMP_ID, "&tab=whatif")}>
           Open What if&hellip; on the map →
@@ -226,13 +224,13 @@ export default function ComparisonPage() {
       }
     >
       {load.status !== "ready" ? (
-        <Panel title="What-if variants" eyebrow="Computed results">
+        <Panel title="What-if variants">
           <DataState load={load} what="what-if variants" path={VARIANTS_URL} />
         </Panel>
       ) : load.data.variants.length === 0 ? (
-        <Panel title="What-if variants" eyebrow="Computed results">
+        <Panel title="What-if variants">
           <EmptyResult title="No what-if variants listed">
-            The index has no variants. Generate them with <code>python3 -m sim.variants</code>.
+            Generate them with <code>python3 -m sim.variants</code>.
           </EmptyResult>
         </Panel>
       ) : (

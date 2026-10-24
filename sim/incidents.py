@@ -98,6 +98,43 @@ INCIDENTS = {
         traffic={"step_s": 30, "record_every_s": 300, "reroute_interval_s": 900, "fire_check_every_s": 300},
         clock_note="Orders spread over days: 30 s traffic step, 5 min frames, 15 min reroutes, from 1 h before "
                    "ignition to the manifest focus-window end; simulated fronts every 10 min until the first perimeter."),
+    "woolsey-2018": Incident(
+        "woolsey-2018", "Woolsey Fire (2018)",
+        "Malibu, Thousand Oaks and Agoura Hills, Los Angeles and Ventura Counties, California",
+        Path("data/incidents/woolsey-2018-evacuation/9902f6caf7877f3d"),
+        Path("data/incidents/woolsey-2018-evacuation/9902f6caf7877f3d"), "package",
+        # 63k-edge network (1.26x Kincade) but a 34 h focus window (Kincade: 129 h). Kincade's 30 s step makes
+        # every short suburban edge (Thousand Oaks, Agoura Hills) take >= 30 s; 15 s halves that while the step
+        # count (8,160) stays about half of Kincade's (15,480). 2 min frames: ~1,020 frames, fewer than Kincade's
+        # 1,549, so the bundle stays about Kincade-sized (roads dominate). 10 min reroutes (204 rebuilds vs 516).
+        # Fire checks every 2 min: the front reached the coast within a day.
+        traffic={"step_s": 15, "record_every_s": 120, "reroute_interval_s": 600, "fire_check_every_s": 120},
+        assumptions=(
+            "Departure triggers: the package's evacuation_order events release demand; its three voluntary "
+            "evacuation_warning events (Calabasas area to the PCH; TO Blvd; Simi Valley Wood Ranch, Long Canyon and "
+            "Bridal Path) do not (warnings release no demand, as for Marshall), so those zones stay not departed. Order times are the Citygate after-action timeline stamps (reconstructed) or bulletin/email "
+            "times (reported). The 00:22 PST Nov 9 'Kanan Road to Westlake Boulevard' entry (a statement of need per "
+            "the package) has no polygon, so it releases no demand.",
+            "Ventura County orders taken from archived vcemergency.com pages and map (Wayback) carry the capture "
+            "time as occurred_at, a latest bound ('issued at or before'); they release demand at that bound, so "
+            "departures from Oak Park, Thousand Oaks, Bell Canyon, Sunset Hills, Sherwood and Wood Ranch start "
+            "later than they did and exposure there is overstated. Orders taken from PIO tweets and alert "
+            "messages are likewise latest bounds.",
+            "LA County bulletin orders (19:00 PST Nov 10) list conditions in effect at the bulletin time with "
+            "unknown onset; that time is after the replay end, so they release no demand here. Downgrades, lifts, "
+            "repopulation and the Pepperdine shelter-in-place are timeline only: no re-entry or shelter-in-place "
+            "behaviour is modelled.",
+            "Zones without an unambiguous polygon (geometry null in the package: most LA County order areas are "
+            "described by roads) are not modelled and no polygon is drawn for them: they are listed in "
+            "demand.unmapped_zones with the package's reason, and orders naming only them stay on the timeline. "
+            "Their residents (e.g. Calabasas, Agoura Hills, Topanga, Malibou Lake) are not in the demand.",
+            "Road events name roads with from/to descriptions and mostly lack points, so most stay unresolved "
+            "(timeline only, see road_event_report); the PCH contraflow (contraflow_started, no point) is timeline "
+            "only. The concurrent Hill Fire is excluded from the package's events.",
+        ),
+        clock_note="Wind-driven fire from Woolsey Canyon to the Malibu coast within a day: 15 s traffic step, 2 min "
+                   "frames, 10 min reroutes, over the manifest focus window (14:00 PST Nov 8, 24 min before the "
+                   "first report, to 00:00 PST Nov 10); simulated fronts every 10 min until the first perimeter."),
 }
 
 
@@ -135,6 +172,8 @@ def _verifier(manifest: dict):
         from tools.marshall_build import verify
     elif version.startswith("kincade-"):
         from tools.kincade_build import verify
+    elif version.startswith("woolsey-"):
+        from tools.woolsey_build import verify
     else:
         raise SourceError(f"no verifier registered for normalizer_version {version!r}")
     return verify
@@ -210,12 +249,29 @@ def load_package_history(package: Path) -> IncidentHistory:
 
 # --- clock and ignition ------------------------------------------------------------------------------------
 
+def _published_ignition_point(package: Path) -> dict | None:
+    """(lon, lat) of a published ignition point in normalized/incident.json (Woolsey: CAL FIRE incident page,
+    written lat, lon), or None. Fails loudly if the point lies outside the package's requested bbox."""
+    path = package / "normalized/incident.json"
+    if not path.exists():
+        return None
+    meta = json.loads(path.read_text())
+    latlon = meta.get("ignition_point_lat_lon_as_published")
+    if not latlon:
+        return None
+    lat, lon = (float(v) for v in latlon)
+    x0, y0, x1, y1 = _read(package, "manifest.json")["requested_bbox"]
+    if not (x0 <= lon <= x1 and y0 <= lat <= y1):
+        raise SourceError(f"published ignition point {latlon} (lat, lon) lies outside the requested bbox")
+    return {"coord": (lon, lat), "source": meta.get("ignition_point_source") or "the package"}
+
+
 def package_ignition(package: Path, history: IncidentHistory) -> dict:
     """Ignition time and place from the package, with provenance.
 
-    Time: the fire_ignition event, else the earliest detection. Place: the event's point when it has one;
-    otherwise the place is chosen by the fire fit among cells of the earliest detection pass
-    (`candidates`), else the first perimeter's centroid.
+    Time: the fire_ignition event, else the earliest detection. Place: the event's point when it has one,
+    else a published point in normalized/incident.json (Woolsey); otherwise the place is chosen by the fire
+    fit among cells of the earliest detection pass (`candidates`), else the first perimeter's centroid.
     """
     events = [e for e in _events(package) if e["type"] == "fire_ignition"]
     detections = sorted((f for f in _read(package, "normalized/fire_detections.geojson")["features"]
@@ -236,6 +292,11 @@ def package_ignition(package: Path, history: IncidentHistory) -> dict:
     if ev is not None and ev.get("geometry"):
         return {"at": at, "candidates": [tuple(ev["geometry"]["coordinates"])],
                 "provenance": f"time and place from {time_source.removeprefix('package ')}"}
+    published = _published_ignition_point(package)
+    if published is not None:
+        return {"at": at, "candidates": [published["coord"]],
+                "provenance": f"time from {time_source}; place is the ignition point published by "
+                              f"{published['source']} (reported; package normalized/incident.json)"}
     first_pass = [f for f in detections if f["properties"]["acquired_at"] == detections[0]["properties"]["acquired_at"]] \
         if detections else []
     if first_pass:
@@ -720,6 +781,12 @@ def _split_zones(zones_src: dict, evidence: dict) -> tuple[dict, dict[str, list[
     return zones_src, parts, rows
 
 
+def _population_vintage(package: Path) -> str:
+    """ACS vintage of population_units: Marshall/Kincade write `acs_vintage`, Woolsey `vintage`."""
+    layer = _read(package, "manifest.json")["layers"]["population_units"]
+    return layer.get("acs_vintage") or layer.get("vintage") or "ACS 5-year"
+
+
 def package_demand(package: Path, network, evidence: dict | None = None) -> dict:
     """One demand zone per evacuation zone that an order or warning names, from ACS block groups.
 
@@ -768,6 +835,10 @@ def package_demand(package: Path, network, evidence: dict | None = None) -> dict
     modelled = [z for z in named if z in crosswalk and z in zones_src and zones_src[z].get("geometry")]
     unmapped = [{"zone_id": z, "reason": "no polygon in evacuation_zones" if not (zones_src.get(z) or {}).get("geometry")
                  else "no crosswalk rows"} for z in named if z not in modelled]
+    for u in unmapped:  # the package's own reason for a null geometry (Woolsey: road-described order areas)
+        why = ((zones_src.get(u["zone_id"]) or {}).get("properties") or {}).get("geometry_reason")
+        if why and u["reason"] == "no polygon in evacuation_zones":
+            u["reason"] += f" (package: {why})"
 
     covered: dict[str, dict[str, float]] = {}  # geoid -> {earlier zone: share assigned to it}
     # Parts of one split zone are disjoint, so a sibling's share is not treated as overlap.
@@ -840,7 +911,7 @@ def package_demand(package: Path, network, evidence: dict | None = None) -> dict
         "crosswalk": "package zone_population_crosswalk.json (zone x block-group area shares; derived by the "
                      "package builder), not the Camp derived crosswalk",
         "population_source": "package population_units.geojson: "
-                             f"{_read(package, 'manifest.json')['layers']['population_units'].get('acs_vintage', 'ACS 5-year')} "
+                             f"{_population_vintage(package)} "
                              "block-group estimates (population, households, vehicles available, 65+), not counts "
                              "of people present on the day",
         "orders_from_evidence": [{"event_id": o["event_id"], "at": o["occurred_at"], "type": o["type"],
@@ -944,8 +1015,19 @@ def bundle_incident(incident: Incident, history: IncidentHistory) -> dict:
     tz = manifest.get("time_zone")
     out = {"registry_id": incident.id, "name": incident.name, "place": incident.place}
     if tz:
-        out["timezone"] = tz
+        out["timezone"] = _iana_zone(tz)
     return out
+
+
+def _iana_zone(text: str) -> str:
+    """The IANA name of a manifest time_zone. Woolsey writes 'America/Los_Angeles (PST, UTC-08:00 ...)';
+    the app and update_index need the bare name."""
+    name = text.split(" ", 1)[0]
+    try:
+        ZoneInfo(name)
+    except (ValueError, KeyError) as exc:  # ZoneInfoNotFoundError is a KeyError
+        raise SourceError(f"manifest time_zone {text!r} does not start with an IANA zone name") from exc
+    return name
 
 
 def update_index(bundle: dict, output: Path, incident: Incident) -> Path:

@@ -1,4 +1,4 @@
-import "./live.css";
+import "./live-share.css";
 import type { BroadcastStatus } from "./useLiveBroadcast";
 
 function describe(status: BroadcastStatus, idleText: string): string {

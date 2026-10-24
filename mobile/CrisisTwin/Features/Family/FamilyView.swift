@@ -1,43 +1,56 @@
 import SwiftUI
 
 /// Create or join a family, share its code, post your status and see everyone else's.
-/// Meeting points are edited in My Plan and shared with the family from there.
+/// Meeting points are edited in Plan and shared with the family from there.
 struct FamilyView: View {
-    let openTab: (AppTab) -> Void
-
-    @Environment(FamilyStore.self) private var store
-    @Environment(MeetingPlanStore.self) private var planStore
-    @State private var mode: Mode = .create
-    @State private var familyName = ""
-    @State private var memberName = ""
-    @State private var joinCode = ""
-    @State private var confirmingLeave = false
-
-    private enum Mode: String, CaseIterable, Identifiable {
+    enum Mode: String, CaseIterable, Identifiable {
         case create = "Create", join = "Join"
         var id: String { rawValue }
     }
 
+    let openTab: (AppTab) -> Void
+
+    @Environment(FamilyStore.self) private var store
+    @Environment(MeetingPlanStore.self) private var planStore
+    @State private var mode: Mode
+    @State private var familyName = ""
+    @State private var memberName = ""
+    @State private var joinCode = ""
+    @State private var confirmingLeave = false
+    @State private var tick = 0
+
+    init(openTab: @escaping (AppTab) -> Void, initialMode: Mode = .create) {
+        self.openTab = openTab
+        _mode = State(initialValue: initialMode)
+    }
+
     var body: some View {
-        List {
-            if let message = store.errorMessage {
-                Section {
-                    Label(message, systemImage: "exclamationmark.triangle")
+        ScrollView {
+            VStack(spacing: 16) {
+                if let message = store.errorMessage {
+                    Label(message, systemImage: "exclamationmark.triangle.fill")
+                        .font(.subheadline)
+                        .foregroundStyle(Color.ctWarning)
+                        .ctPanel(padding: 12)
+                }
+                if let family = store.family {
+                    joined(family)
+                } else if store.isJoined {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, minHeight: 120)
+                } else {
+                    enrollment
                 }
             }
-            if let family = store.family {
-                joined(family)
-            } else if store.isJoined {
-                Section { ProgressView("Loading your family…") }
-            } else {
-                enrollment
-            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
         }
-        .background(Color("WorkspaceBackground"))
-        .scrollContentBackground(.hidden)
-        .navigationTitle("Family")
+        .ctScreenBackground()
+        .navigationTitle(store.family?.name ?? "Family")
+        .navigationBarTitleDisplayMode(.inline)
         .refreshable { await store.refresh() }
         .disabled(store.isWorking)
+        .sensoryFeedback(.selection, trigger: tick)
         .confirmationDialog("Leave this family?", isPresented: $confirmingLeave, titleVisibility: .visible) {
             Button("Leave family", role: .destructive) { Task { await store.leave() } }
         } message: {
@@ -48,42 +61,42 @@ struct FamilyView: View {
     // MARK: Not in a family
 
     private var enrollment: some View {
-        Group {
-            Section {
-                Text("Make a family so everyone shares the same meeting points and can tell each other they are safe. Only names, meeting points and status are shared, never your location.")
-                    .foregroundStyle(.secondary)
-                Picker("Create or join", selection: $mode) {
-                    ForEach(Mode.allCases) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
+        VStack(alignment: .leading, spacing: 14) {
+            Picker("Create or join", selection: $mode) {
+                ForEach(Mode.allCases) { Text($0.rawValue).tag($0) }
             }
-            Section {
-                TextField("Your name, e.g. Sam", text: $memberName)
-                    .textContentType(.givenName)
-                if mode == .create {
-                    TextField("Family name, e.g. The Parks", text: $familyName)
+            .pickerStyle(.segmented)
+
+            FamilyField(title: "Your name", text: $memberName, prompt: "Sam")
+                .textContentType(.givenName)
+            if mode == .create {
+                FamilyField(title: "Family name", text: $familyName, prompt: "The Parks")
+            } else {
+                FamilyField(title: "Join code", text: $joinCode, prompt: "ABCD-EFGH", monospaced: true)
+                    .textInputAutocapitalization(.characters)
+                    .autocorrectionDisabled()
+            }
+
+            Button {
+                Task { await submit() }
+            } label: {
+                if store.isWorking {
+                    ProgressView().tint(Color.planOnBrand)
                 } else {
-                    TextField("Join code, e.g. ABCD-EFGH", text: $joinCode)
-                        .textInputAutocapitalization(.characters)
-                        .autocorrectionDisabled()
-                        .font(.body.monospaced())
+                    Label(mode == .create ? "Create family" : "Join family",
+                          systemImage: mode == .create ? "person.3.fill" : "person.badge.plus")
                 }
-                Button {
-                    Task { await submit() }
-                } label: {
-                    if store.isWorking {
-                        ProgressView()
-                    } else {
-                        Label(mode == .create ? "Create family" : "Join family", systemImage: mode == .create ? "person.3.fill" : "person.badge.plus")
-                    }
-                }
-                .disabled(!canSubmit)
-            } footer: {
-                Text(mode == .create
-                     ? "You get a code to share with your household. Your current meeting points become the family's."
-                     : "Ask a family member for the code on their Family tab. The family's meeting points replace the ones on this phone.")
+            }
+            .buttonStyle(PlanPillStyle(kind: .primary, fullWidth: true))
+            .disabled(!canSubmit)
+
+            if mode == .join {
+                Text("Joining replaces this phone's meeting points.")
+                    .font(.footnote)
+                    .foregroundStyle(Color.ctInkMuted)
             }
         }
+        .ctPanel()
     }
 
     private var canSubmit: Bool {
@@ -111,80 +124,181 @@ struct FamilyView: View {
 
     @ViewBuilder
     private func joined(_ family: Family) -> some View {
-        Section {
-            LabeledContent("Join code") {
-                Text(family.displayJoinCode)
-                    .font(.title3.monospaced().bold())
-                    .textSelection(.enabled)
+        // The join code, as large as a code read aloud needs to be.
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Join code")
+                        .font(.subheadline)
+                        .foregroundStyle(Color.ctInkMuted)
+                    Text(family.displayJoinCode)
+                        .font(.system(.title, design: .monospaced, weight: .semibold))
+                        .foregroundStyle(Color.ctInk)
+                        .textSelection(.enabled)
+                        .minimumScaleFactor(0.7)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                ShareLink(item: family.inviteText) {
+                    Label("Invite", systemImage: "person.badge.plus")
+                }
+                .buttonStyle(PlanPillStyle(kind: .primary))
             }
-            ShareLink(item: family.inviteText) {
-                Label("Invite family members", systemImage: "square.and.arrow.up")
-            }
-        } header: {
-            Text(family.name)
-        } footer: {
-            Text("Anyone with this code can join and see the members, meeting points and status.")
+            Text("Anyone with the code can join and see members, meeting points and status.")
+                .font(.footnote)
+                .foregroundStyle(Color.ctInkMuted)
         }
+        .ctPanel()
 
         if let me = family.members.first(where: \.isMe) {
-            Section {
-                ForEach(MemberStatus.allCases.filter { $0 != .unknown }) { status in
-                    Button {
-                        Task { await store.setStatus(status) }
-                    } label: {
-                        HStack {
-                            Label(status.label, systemImage: status.systemImage)
-                                .foregroundStyle(status == .needHelp ? Color.red : Color.primary)
-                            Spacer()
-                            if me.memberStatus == status {
-                                Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
-                                    .accessibilityLabel("Current status")
-                            }
-                        }
+            VStack(alignment: .leading, spacing: 12) {
+                PlanCardHeader("My status")
+                let columns = [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)]
+                LazyVGrid(columns: columns, spacing: 8) {
+                    ForEach(MemberStatus.allCases.filter { $0 != .unknown }) { status in
+                        statusChoice(status, selected: me.memberStatus == status)
                     }
                 }
-            } header: {
-                Text("My status")
-            } footer: {
-                Text("“Need help” only tells your family. Call 911 if you are in danger.")
+                Text("Need help reaches your family only. If you are in danger, call 911.")
+                    .font(.footnote)
+                    .foregroundStyle(Color.ctInkMuted)
             }
+            .ctPanel()
         }
 
-        Section("Members") {
-            ForEach(family.members) { member in
-                HStack {
-                    VStack(alignment: .leading) {
-                        Text(member.isMe ? "\(member.name) (you)" : member.name)
-                        if let date = ServerDate.parse(member.statusUpdatedAt), member.memberStatus != .unknown {
-                            Text("Updated \(date.formatted(.relative(presentation: .named)))")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    Spacer()
-                    Label(member.memberStatus.label, systemImage: member.memberStatus.systemImage)
-                        .font(.subheadline)
-                        .foregroundStyle(member.memberStatus == .needHelp ? Color.red : Color.secondary)
+        VStack(alignment: .leading, spacing: 8) {
+            PlanCardHeader("Members")
+            VStack(spacing: 0) {
+                ForEach(Array(family.members.enumerated()), id: \.element.id) { index, member in
+                    if index > 0 { PlanRowDivider(leading: 48) }
+                    FamilyMemberRow(member: member)
                 }
-                .accessibilityElement(children: .combine)
             }
         }
+        .ctPanel()
 
-        Section {
-            LabeledContent("Primary", value: family.primary?.name ?? "Not chosen")
-            LabeledContent("Backup", value: family.backup?.name ?? "Not chosen")
+        VStack(alignment: .leading, spacing: 8) {
+            PlanCardHeader("Shared meeting points")
+            sharedPoint(.primary, family.primary)
+            PlanRowDivider(leading: 48)
+            sharedPoint(.backup, family.backup)
             if let by = family.meetingPointsUpdatedBy {
-                Text("Last changed by \(by)").font(.caption).foregroundStyle(.secondary)
+                Text("Last changed by \(by)")
+                    .font(.footnote)
+                    .foregroundStyle(Color.ctInkMuted)
             }
             Button(family.primary == nil ? "Choose meeting points" : "Change meeting points") { openTab(.plan) }
-        } header: {
-            Text("Shared meeting points")
-        } footer: {
-            Text("Changes in My Plan are shared with everyone in the family.")
+                .buttonStyle(PlanPillStyle(kind: .secondary, fullWidth: true))
+                .padding(.top, 4)
         }
+        .ctPanel()
 
-        Section {
-            Button("Leave family", role: .destructive) { confirmingLeave = true }
+        Button(role: .destructive) {
+            confirmingLeave = true
+        } label: {
+            Text("Leave family")
+                .font(.body.weight(.medium))
+                .foregroundStyle(Color.ctDanger)
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func statusChoice(_ status: MemberStatus, selected: Bool) -> some View {
+        Button {
+            tick += 1
+            Task { await store.setStatus(status) }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: status.systemImage)
+                    .foregroundStyle(selected ? status.planTone : Color.ctInkMuted)
+                    .frame(width: 22)
+                    .accessibilityHidden(true)
+                Text(status.label)
+                    .font(.subheadline.weight(selected ? .semibold : .regular))
+                    .foregroundStyle(selected ? status.planTone : Color.ctInk)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                if selected {
+                    Image(systemName: "checkmark")
+                        .font(.footnote.weight(.bold))
+                        .foregroundStyle(status.planTone)
+                        .accessibilityHidden(true)
+                }
+            }
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+            .background(selected ? status.planSoft : Color.ctSurfaceSunken,
+                        in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(selected ? status.planTone.opacity(0.45) : Color.ctBorderSubtle, lineWidth: 1))
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(status.label)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    private func sharedPoint(_ slot: MeetingSlot, _ point: MeetingPoint?) -> some View {
+        HStack(spacing: 12) {
+            MeetingPin(slot: slot, empty: point == nil)
+            Text(point?.name ?? "Not chosen")
+                .foregroundStyle(point == nil ? Color.ctInkMuted : Color.ctInk)
+            Spacer(minLength: 0)
+        }
+        .frame(minHeight: 48)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(slot == .primary ? "Primary" : "Backup"): \(point?.name ?? "Not chosen")")
+    }
+}
+
+/// A family member: initials, name, when they last updated, and their status in words.
+struct FamilyMemberRow: View {
+    let member: FamilyMember
+
+    var body: some View {
+        HStack(spacing: 12) {
+            PlanAvatar(name: member.name, tint: member.memberStatus.planTone)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(member.isMe ? "\(member.name) (you)" : member.name)
+                    .foregroundStyle(Color.ctInk)
+                if member.memberStatus != .unknown, let date = ServerDate.parse(member.statusUpdatedAt) {
+                    Text(date, format: .relative(presentation: .named))
+                        .font(.caption)
+                        .foregroundStyle(Color.ctInkMuted)
+                        .monospacedDigit()
+                }
+            }
+            Spacer(minLength: 8)
+            MemberStatusTag(status: member.memberStatus)
+        }
+        .frame(minHeight: 52)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// A labeled text field on a sunken surface, in the web kit's input style.
+private struct FamilyField: View {
+    let title: String
+    @Binding var text: String
+    let prompt: String
+    var monospaced = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(Color.ctInkMuted)
+            TextField(title, text: $text, prompt: Text(prompt).foregroundStyle(Color.ctInkSubtle))
+                .accessibilityLabel(title)
+                .font(monospaced ? .body.monospaced() : .body)
+                .foregroundStyle(Color.ctInk)
+                .padding(.horizontal, 12)
+                .frame(minHeight: 44)
+                .background(Color.ctSurfaceSunken, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color.ctBorder, lineWidth: 1))
         }
     }
 }

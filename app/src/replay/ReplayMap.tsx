@@ -36,10 +36,15 @@ import {
   setPerimeterFreshness,
   setPerimeterLabel,
   applyPeopleState,
+  applyHomeDotState,
+  homeDotsCollection,
+  type HomeDotState,
   destinationsCollection,
   setFireObservationTime,
   setSourceData,
+  setSpotlightPulse,
   simulatedFrontCollection,
+  spotlightCollection,
   trafficToRoadIndex,
   zonesCollection,
   type Basemap as BasemapChoice,
@@ -49,16 +54,11 @@ import {
 import { HILLSHADE_LAYER, restyleBasemap } from "./basemapStyle";
 import { buildEdgePath, buildTravelIndex, particlePositions, type EdgePath } from "./particles";
 import PerspectiveSwitcher from "./perspectives/PerspectiveSwitcher";
-import { edgeThreats } from "./insights";
-import { areaKm2, peopleAtHome } from "./population";
+import { edgeThreats, inArea } from "./insights";
+import { areaKm2, departedShares, peopleAtHome, type HomeDot } from "./population";
 import { openRefugeKey, refugeTimeline } from "./refuges";
-import {
-  EVIDENCE_LABEL,
-  closedEdgesAt,
-  localTime,
-  perimeterWindowEnd,
-  sameNumbers,
-} from "./timeline";
+import { EVIDENCE_LABEL, closedEdgesAt, localTime, perimeterWindowEnd, sameNumbers } from "./timeline";
+import type { Spotlight } from "./story";
 import type { EvidenceClass, LngLat, ReplayModel } from "./types";
 
 // Bundle the MapLibre worker explicitly; Vite relocates the main module.
@@ -84,6 +84,9 @@ const MAX_BOUNDS_PAD_DEG = 2.5;
 const IMAGERY_TIMEOUT_MS = 15_000;
 const IMAGERY_MAX_ERRORS = 12;
 const THREAT_BUCKET_MS = 60_000;
+/** Story spotlight ring: one breath per this many wall ms. */
+const SPOT_PULSE_MS = 1800;
+const SPOT_TICK_MS = 50;
 
 function prefersReducedMotion(): boolean {
   return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
@@ -331,6 +334,12 @@ export interface ReplayMapProps {
   /** Called with the clicked location when map picking is enabled. */
   onPick: ((p: LngLat) => void) | null;
   focus: MapFocus | null;
+  /** Dots for households (see population.homeDots), drawn with the people layer. */
+  homeDots: readonly HomeDot[];
+  /** Story mode: what the current chapter is about, highlighted until the chapter changes. */
+  spotlight: Spotlight | null;
+  /** Breathe the spotlight ring (story auto-advancing); still otherwise. */
+  spotlightAnimate: boolean;
   basemapChoice: BasemapChoice;
   /** Cosmetic motion (fire flicker) only while the clock plays, so a paused map is still. */
   animate: boolean;
@@ -354,6 +363,9 @@ export default function ReplayMap({
   pin,
   onPick,
   focus,
+  spotlight,
+  spotlightAnimate,
+  homeDots,
   basemapChoice,
   home,
   animate,
@@ -665,6 +677,27 @@ export default function ReplayMap({
 
   useEffect(() => {
     const map = mapRef.current;
+    if (ready && map) setSourceData(map, "story-spot", spotlightCollection(spotlight));
+  }, [ready, spotlight]);
+
+  // Cosmetic breathing ring on the spotlit place, on wall-clock time; still when paused.
+  const spotPoints = (spotlight?.points.length ?? 0) > 0;
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map || !spotPoints) return;
+    if (!spotlightAnimate || prefersReducedMotion()) {
+      setSpotlightPulse(map, 0.3);
+      return;
+    }
+    const timer = window.setInterval(() => {
+      const t = (performance.now() % SPOT_PULSE_MS) / SPOT_PULSE_MS;
+      setSpotlightPulse(map, t);
+    }, SPOT_TICK_MS);
+    return () => window.clearInterval(timer);
+  }, [ready, spotPoints, spotlightAnimate]);
+
+  useEffect(() => {
+    const map = mapRef.current;
     if (!ready || !map || !focus || focus.coords.length === 0) return;
     let [w, s, e, n] = [Infinity, Infinity, -Infinity, -Infinity];
     for (const [x, y] of focus.coords) {
@@ -763,6 +796,39 @@ export default function ReplayMap({
     if (ready && map && visibility.people)
       applyPeopleState(map, peopleAtHome(model, zoneAreas, peopleMinute));
   }, [ready, model, zoneAreas, peopleMinute, visibility.people]);
+
+  // Home dots: positions once; inside-fire test only when the fire shape changes; per-minute state.
+  const dotStateRef = useRef<readonly HomeDotState[] | null>(null);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map) return;
+    setSourceData(map, "people-dots", homeDotsCollection(homeDots));
+    dotStateRef.current = null;
+  }, [ready, homeDots]);
+  const fireShape = perimeter?.geometry ?? simFront?.geometry ?? null;
+  const dotsInFire = useMemo(() => {
+    if (!fireShape) return null;
+    const ring = fireShape.type === "Polygon" ? fireShape.coordinates[0] : fireShape.coordinates.flatMap((p) => p[0]);
+    let [w, s, e, n] = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const [x, y] of ring) {
+      w = Math.min(w, x);
+      s = Math.min(s, y);
+      e = Math.max(e, x);
+      n = Math.max(n, y);
+    }
+    return homeDots.map(
+      ({ coord: [x, y] }) => x >= w && x <= e && y >= s && y <= n && inArea(fireShape, [x, y]),
+    );
+  }, [homeDots, fireShape]);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map || !visibility.people) return;
+    const shares = departedShares(model, peopleMinute);
+    const next = homeDots.map((d, i): HomeDotState =>
+      d.rank < shares[d.zone] ? 0 : dotsInFire?.[i] ? 2 : 1,
+    );
+    dotStateRef.current = applyHomeDotState(map, next, dotStateRef.current);
+  }, [ready, model, homeDots, dotsInFire, peopleMinute, visibility.people]);
 
   // Refuges open and close at NIST-recorded times; redraw only when the open set changes.
   const refuges = useMemo(

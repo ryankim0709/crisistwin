@@ -73,7 +73,8 @@ for lack of reasoning, not for a transient tool error.
   routing over closed edges, explicit handling of unreachable destinations and full
   shelters.
 - Outputs are planning experiments. Do not send resident alerts, present results as
-  operational instructions, or claim authority approval.
+  operational instructions, or claim authority approval. The one authorized exception is
+  the labeled live drill of [ADR 0012](docs/adr/0012-controller-guidance.md).
 
 ## Firm: security and external services
 

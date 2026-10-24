@@ -1,6 +1,6 @@
 # Architecture decision records
 
-Parallel branches numbered ADRs independently, so numbers 0003 to 0011 each appear twice.
+Parallel branches numbered ADRs independently, so numbers 0003 to 0013 and 0016 each appear more than once.
 Files are not renumbered because code, docs and ADRs link to them by file name. **Always cite an
 ADR by its full file name**, not by number alone. This index disambiguates them.
 
@@ -13,7 +13,7 @@ Status legend: **Accepted** is current. **Superseded** is kept for history; read
 | [0002-geographic-map](0002-geographic-map.md) | Reusable imagery map | Accepted | MapLibre map with cached USGS historical imagery (`app/public/map-preview`). |
 | [0003-fire-spread-model](0003-fire-spread-model.md) | Fire spread simulator and demo spread model | **Superseded** by [0004-physics-fire-model](0004-physics-fire-model.md) | First `/fire` page and its demo model. |
 | [0003-illustrative-fire-spread](0003-illustrative-fire-spread.md) | Illustrative wind-driven fire spread | **Superseded** | Geometric ellipse model in `app/src/simulation/fire.ts` for the old `/maps` page. That page and file were removed by [0015](0015-remove-overview-and-maps.md); the physics model replaced the approach. |
-| [0004-mobile-swift-scaffold](0004-mobile-swift-scaffold.md) | Native SwiftUI mobile scaffold | Accepted | `mobile/` SwiftUI project, iOS 17+. |
+| [0004-mobile-swift-scaffold](0004-mobile-swift-scaffold.md) | Native SwiftUI mobile scaffold | Partly superseded by [0018-ios-26-baseline](0018-ios-26-baseline.md) | `mobile/` SwiftUI project; its iOS 17 / Xcode 16.2 version line no longer holds. |
 | [0004-physics-fire-model](0004-physics-fire-model.md) | Physics- and vegetation-based fire spread model | Accepted (amended by [0007-wui-spread-mechanisms](0007-wui-spread-mechanisms.md)) | Rothermel surface spread on LANDFIRE fuels and terrain; supersedes 0003-fire-spread-model. |
 | [0005-historical-incident-packages](0005-historical-incident-packages.md) | Versioned historical incident packages | Proposed; storage part superseded by [0006-incident-artifacts-in-mongodb](0006-incident-artifacts-in-mongodb.md) | Package format, provenance and offline replay semantics. |
 | [0005-workspace-navigation](0005-workspace-navigation.md) | Shared workspace navigation | Partly superseded by [0015](0015-remove-overview-and-maps.md) | Sidebar shell and routes; the `/` overview and `/maps` parts are gone. |
@@ -30,8 +30,11 @@ Status legend: **Accepted** is current. **Superseded** is kept for history; read
 | [0010-evacuation-diorama](0010-evacuation-diorama.md) | Fictional wildfire evacuation diorama | Accepted | `/diorama`: scripted, synthetic three.js evacuation of Larkspur Hollow. |
 | [0011-fire-diorama-view](0011-fire-diorama-view.md) | Diorama view for the fire spread model | Accepted | three.js miniature as the default `/fire` view. |
 | [0011-simulation-studio](0011-simulation-studio.md) | Simulation Studio and scheduled ignitions | Accepted | `/simulation`: up to five scheduled fires in one solver pass. |
+| [0011-live-field-reports](0011-live-field-reports.md) | Live field reports and road status | Accepted; amended by [0012-controller-guidance](0012-controller-guidance.md) | Camp drill: civilian and responder reports become shared road and hazard status (`/api/live/…`, [contract](../live-reports.md)). |
 | [0012-fire-large-areas](0012-fire-large-areas.md) | Large fire landscapes and long horizons | Accepted | Bigger boards and 24 h horizon. |
+| [0012-controller-guidance](0012-controller-guidance.md) | Controller guidance in the live drill | Accepted | Planner computes per-zone guidance; a controller approves it on `/live`; pure reroutes publish automatically. |
 | [0013-prebuilt-socal-landscapes](0013-prebuilt-socal-landscapes.md) | Prebuilt Southern California landscapes in MongoDB | Accepted | Station-scale regions served by `GET /api/landscapes`. |
+| [0013-realtime-twin](0013-realtime-twin.md) | A resumable traffic engine for the real-time twin | Accepted | Steppable traffic engine behind the live twin and its what-if ([twin-api.md](../twin-api.md)). |
 | [0014-dispatch-agent](0014-dispatch-agent.md) | Dispatch agent | Accepted | `/dispatch`: Claude agent orders evacuations and engines during playback. |
 | [0015-remove-overview-and-maps](0015-remove-overview-and-maps.md) | Remove the overview and `/maps` pages | Accepted | `/` redirects to `/fire`; `/maps` is not-found. |
 | [0016-resident-live-and-family](0016-resident-live-and-family.md) | Live simulation drill and families in the resident app | Accepted | iOS shows the planner's fire via `POST /api/live/broadcast`; families share meeting points. |
@@ -44,3 +47,5 @@ Status legend: **Accepted** is current. **Superseded** is kept for history; read
 | [0023-studio-crew-dispatch](0023-studio-crew-dispatch.md) | Firefighters drive in from fire stations | Accepted | Crews leave OSM fire stations at report time, drive the road graph and walk in; their arrivals drive the firefighting model and the board. |
 | [0024-studio-crews-assist-evacuation](0024-studio-crews-assist-evacuation.md) | Overwhelmed Studio crews help the evacuation | Accepted | When direct attack cannot put the fire out, crews leave after a size-up and go on evacuation support in the busiest threatened zones. |
 | [0025-dispatch-fire-tactics](0025-dispatch-fire-tactics.md) | The dispatcher chooses how to fight each fire | Accepted | Direct, flank or indirect attack with solved what-ifs; structure fires attackable; control lines judged at fire arrival. |
+| [0018-ios-26-baseline](0018-ios-26-baseline.md) | iOS 26 baseline for the phone app | Accepted | Deployment target 26.0, Xcode 26; tab app with Liquid Glass and no `#available` branches. |
+| [0018-apify-incident-intelligence](0018-apify-incident-intelligence.md) | Incident intelligence from public pages | Accepted; implementation in progress | Apify Actor fetches public/Wayback pages, Claude extracts `reported` candidates, planners confirm before use. |

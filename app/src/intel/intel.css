@@ -1,0 +1,59 @@
+/* Intel review page (intel- prefix). Generic primitives live in ../ui. */
+.intel-list {
+  display: grid;
+  gap: var(--ct-space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.intel-item {
+  display: grid;
+  gap: var(--ct-space-2);
+  padding: var(--ct-space-4);
+  border: 1px solid var(--ct-border);
+  border-radius: var(--ct-radius-lg);
+  background: var(--ct-surface);
+}
+.intel-item h3,
+.intel-item p {
+  margin: 0;
+}
+.intel-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ct-space-2);
+  align-items: center;
+}
+.intel-quote {
+  padding-left: var(--ct-space-3);
+  border-left: 3px solid var(--ct-border-strong);
+  color: var(--ct-ink-muted);
+  overflow-wrap: anywhere;
+}
+.intel-meta {
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-sm);
+  overflow-wrap: anywhere;
+}
+.intel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ct-space-2);
+}
+.intel-review {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--ct-space-3);
+}
+.intel-review .ui-field {
+  margin-bottom: 0;
+}
+.intel-asof {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ct-space-2);
+  align-items: flex-end;
+}
+.intel-asof .ui-field {
+  margin-bottom: 0;
+}

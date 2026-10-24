@@ -49,6 +49,18 @@ if not MONGODB_CONNECTION_SECRET.startswith(("mongodb://", "mongodb+srv://")):
 MONGODB_DATABASE = os.environ.get("MONGODB_DATABASE", "crisistwin")
 if not re.fullmatch(r"[A-Za-z0-9_-]{1,63}", MONGODB_DATABASE):
     raise ImproperlyConfigured("MONGODB_DATABASE must be 1–63 ASCII letters, digits, underscores, or hyphens.")
+# Live drill (docs/live-reports.md, ADR 0011/0012). Secrets come from the environment only.
+# Unset LIVE_CONTROLLER_TOKEN / LIVE_INVITE_CODE disable controller endpoints / responder join (403).
+LIVE_CONTROLLER_TOKEN = os.environ.get("LIVE_CONTROLLER_TOKEN", "").strip()
+LIVE_INVITE_CODE = os.environ.get("LIVE_INVITE_CODE", "").strip()
+# Replay bundle path; empty means app/public/replays/camp-2018.json next to the backend.
+LIVE_DRILL_BUNDLE = os.environ.get("LIVE_DRILL_BUNDLE", "").strip()
+LIVE_RATIONALE_MODEL = os.environ.get("LIVE_RATIONALE_MODEL", "claude-opus-5-5").strip()
+# Controller plug-in: rule | twin; empty = twin while the traffic twin builds, else rule.
+LIVE_CONTROLLER = os.environ.get("LIVE_CONTROLLER", "").strip()
+# Twin input packages (repo-relative or absolute); empty = the packages the Camp bundle was built from.
+LIVE_TWIN_PACKAGE = os.environ.get("LIVE_TWIN_PACKAGE", "").strip()
+LIVE_TWIN_ROADS_PACKAGE = os.environ.get("LIVE_TWIN_ROADS_PACKAGE", "").strip()
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [],
     "UNAUTHENTICATED_USER": None,

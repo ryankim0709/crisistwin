@@ -7,7 +7,16 @@ import { SATELLITE_STYLE } from "../maps/basemap";
 import { BASEMAP_BACKGROUND, SATELLITE_BACKGROUND } from "./basemapStyle";
 import { ignitionBasis } from "./timeline";
 import { REFUGE_KIND, refugeStateAt, traCode, type RefugeTimeline } from "./refuges";
-import type { LngLat, Perimeter, ReplayModel, SimulatedFront, TrafficFrame, Zone } from "./types";
+import type { HomeDot } from "./population";
+import type { Spotlight } from "./story";
+import type {
+  LngLat,
+  Perimeter,
+  ReplayModel,
+  SimulatedFront,
+  TrafficFrame,
+  Zone,
+} from "./types";
 
 /** Free OpenFreeMap basemap; no API key. restyleBasemap() recolours it to the light
  *  workspace palette, so only its layer structure is taken from upstream. */
@@ -135,6 +144,10 @@ export const COLORS = {
   /** Paper core/ring behind a marker, and the halo colour under map labels. */
   markerCore: "#f5f4ee",
   labelHalo: "#f5f4ee",
+  homeDot: "#8a948c",
+  // Story spotlight: the one non-warm, non-cyan accent, so "what this chapter is about"
+  // never reads as fire, traffic or a satellite outline.
+  spotlight: "#8e44c9",
 } as const;
 
 export type LayerGroup =
@@ -163,7 +176,7 @@ export const LAYER_GROUPS: Record<LayerGroup, string[]> = {
   fire: ["fire-glow-outer", "fire-fill", "fire-glow", "fire-line", "fire-label"],
   fireObs: ["fire-obs"],
   zones: ["zones-fill", "zones-hatch", "zones-line", "zones-line-ordered"],
-  people: ["people-fill", "people-line"],
+  people: ["people-fill", "people-line", "people-dots"],
   roads: [
     "roads-base",
     "roads-bridge",
@@ -400,6 +413,53 @@ export function peopleCollection(model: ReplayModel): FeatureCollection {
       },
     })),
   };
+}
+
+const HOME_DOT_IMAGE = "rp-home-dot";
+
+/** Home dots as points; numeric feature ids match the dot order, for feature-state. */
+export function homeDotsCollection(dots: readonly HomeDot[]): FeatureCollection {
+  return {
+    type: "FeatureCollection",
+    features: dots.map((d, i) => ({
+      type: "Feature",
+      id: i,
+      geometry: { type: "Point", coordinates: d.coord },
+      properties: {},
+    })),
+  };
+}
+
+/** Dot state: 0 = left, 1 = at home, 2 = at home inside the fire area. */
+export type HomeDotState = 0 | 1 | 2;
+
+/** Push changed dot states only; returns the states now shown. */
+export function applyHomeDotState(
+  map: MapLibreMap,
+  next: readonly HomeDotState[],
+  prev: readonly HomeDotState[] | null,
+): readonly HomeDotState[] {
+  if (!map.getSource("people-dots")) return prev ?? [];
+  for (let i = 0; i < next.length; i += 1) {
+    if (prev && prev[i] === next[i]) continue;
+    map.setFeatureState({ source: "people-dots", id: i }, { s: next[i] });
+  }
+  return next;
+}
+
+/** A small square as a signed distance field, so the icon can be recoloured per dot. */
+function squareSdf(size = 16, half = 4.5): { width: number; height: number; data: Uint8Array } {
+  const data = new Uint8Array(size * size * 4);
+  const c = (size - 1) / 2;
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const d = Math.min(half - Math.abs(x - c), half - Math.abs(y - c));
+      const o = (y * size + x) * 4;
+      data[o] = data[o + 1] = data[o + 2] = 255;
+      data[o + 3] = Math.max(0, Math.min(255, Math.round(191 + d * 32)));
+    }
+  }
+  return { width: size, height: size, data };
 }
 
 /** Push per-zone at-home figures to the people layer as feature-state. */
@@ -668,6 +728,39 @@ export function pinCollection(pin: LngLat | null): FeatureCollection {
   };
 }
 
+/** Story spotlight: points, road lines and area outlines tagged by `part`, plus one label point. */
+export function spotlightCollection(spot: Spotlight | null): FeatureCollection {
+  if (!spot) return EMPTY;
+  const features: FeatureCollection["features"] = [
+    ...spot.areas.map((geometry) => ({ type: "Feature" as const, geometry, properties: { part: "area" } })),
+    ...spot.lines.map((coordinates) => ({
+      type: "Feature" as const,
+      geometry: { type: "LineString" as const, coordinates },
+      properties: { part: "line" },
+    })),
+    ...spot.points.map((coordinates) => ({
+      type: "Feature" as const,
+      geometry: { type: "Point" as const, coordinates },
+      properties: { part: "point" },
+    })),
+  ];
+  if (spot.anchor && spot.label) {
+    features.push({
+      type: "Feature",
+      geometry: { type: "Point", coordinates: spot.anchor },
+      properties: { part: "label", label: spot.label },
+    });
+  }
+  return { type: "FeatureCollection", features };
+}
+
+/** Breathe the spotlight ring; `phase` in [0, 1]. */
+export function setSpotlightPulse(map: MapLibreMap, phase: number): void {
+  if (!map.getLayer("spot-ring")) return;
+  map.setPaintProperty("spot-ring", "circle-radius", 14 + 10 * phase);
+  map.setPaintProperty("spot-ring", "circle-stroke-opacity", 0.9 - 0.6 * phase);
+}
+
 /** Diagonal hatch so the simulated front is distinguishable from observed fire without color. */
 function hatchImage(
   rgb: [number, number, number],
@@ -699,9 +792,11 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
   geojson("fire");
   geojson("zones");
   map.addSource("people", { type: "geojson", data: peopleCollection(model) });
+  geojson("people-dots");
   geojson("roads", roadsCollection(model));
   geojson("roads-closed-labels");
   geojson("particles");
+  geojson("story-spot");
   geojson("destinations", destinationsCollection(model, new Map(), model.clock.startMs));
   geojson("fire-obs", fireObservationsCollection(model));
   geojson("damage", damageCollection(model));
@@ -801,7 +896,8 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
         ["coalesce", ["feature-state", "density"], 0],
         ...PEOPLE_RAMP.flat(),
       ],
-      "fill-opacity": ["case", [">", ["coalesce", ["feature-state", "density"], 0], 0.5], 0.42, 0],
+      // Faint context only; the home dots carry density and draining.
+      "fill-opacity": ["case", [">", ["coalesce", ["feature-state", "density"], 0], 0.5], 0.16, 0],
     },
   });
   map.addLayer({
@@ -940,6 +1036,21 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     type: "line",
     source: "fire",
     paint: { "line-color": COLORS.satellite, "line-width": 2.2, "line-dasharray": [3, 2] },
+  });
+
+  // Story spotlight on roads: a wide glow beneath the network, so the traffic stays on top.
+  map.addLayer({
+    id: "spot-line-glow",
+    type: "line",
+    source: "story-spot",
+    filter: ["==", ["get", "part"], "line"],
+    layout: { "line-cap": "round", "line-join": "round" },
+    paint: {
+      "line-color": COLORS.spotlight,
+      "line-opacity": 0.55,
+      "line-blur": 4,
+      "line-width": ["interpolate", ["linear"], ["zoom"], 10, 6, 15, 16],
+    },
   });
 
   // Road network: dim base everywhere, congestion overlay driven by feature-state.
@@ -1135,6 +1246,25 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     paint: { "text-color": COLORS.bridge, "text-halo-color": COLORS.labelHalo, "text-halo-width": 1.5 },
   });
 
+  // Home dots: grey squares (still, never cyan) so homes never read as moving vehicles; amber
+  // while still at home inside the fire area; hidden once the household has left.
+  if (!map.hasImage(HOME_DOT_IMAGE)) map.addImage(HOME_DOT_IMAGE, squareSdf(), { sdf: true });
+  map.addLayer({
+    id: "people-dots",
+    type: "symbol",
+    source: "people-dots",
+    layout: {
+      "icon-image": HOME_DOT_IMAGE,
+      "icon-size": ["interpolate", ["linear"], ["zoom"], 9, 0.3, 12, 0.5, 15, 0.85],
+      "icon-allow-overlap": true,
+      "icon-ignore-placement": true,
+    },
+    paint: {
+      "icon-color": ["match", ["feature-state", "s"], 2, COLORS.threatImminent, COLORS.homeDot],
+      "icon-opacity": ["match", ["feature-state", "s"], 2, 1, 1, 0.8, 0],
+    },
+  });
+
   // Illustrative particles (modelled counts, not tracked vehicles).
   map.addLayer({
     id: "particles-halo",
@@ -1307,6 +1437,72 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
       "circle-stroke-width": 1.2,
       "circle-stroke-opacity": 0.75,
     },
+  });
+
+  // Story spotlight: area outline, place markers with a breathing ring, and the chapter tag.
+  map.addLayer({
+    id: "spot-area-glow",
+    type: "line",
+    source: "story-spot",
+    filter: ["==", ["get", "part"], "area"],
+    paint: { "line-color": COLORS.spotlight, "line-width": 8, "line-opacity": 0.25, "line-blur": 4 },
+  });
+  map.addLayer({
+    id: "spot-area-line",
+    type: "line",
+    source: "story-spot",
+    filter: ["==", ["get", "part"], "area"],
+    paint: { "line-color": COLORS.spotlight, "line-width": 2, "line-dasharray": [3, 1.5] },
+  });
+  map.addLayer({
+    id: "spot-line",
+    type: "line",
+    source: "story-spot",
+    filter: ["==", ["get", "part"], "line"],
+    layout: { "line-cap": "round", "line-join": "round" },
+    paint: { "line-color": COLORS.spotlight, "line-width": 1.5, "line-dasharray": [2, 2] },
+  });
+  map.addLayer({
+    id: "spot-ring",
+    type: "circle",
+    source: "story-spot",
+    filter: ["==", ["get", "part"], "point"],
+    paint: {
+      "circle-radius": 18,
+      "circle-color": "rgba(0,0,0,0)",
+      "circle-stroke-color": COLORS.spotlight,
+      "circle-stroke-width": 2,
+      "circle-stroke-opacity": 0.6,
+    },
+  });
+  map.addLayer({
+    id: "spot-point",
+    type: "circle",
+    source: "story-spot",
+    filter: ["==", ["get", "part"], "point"],
+    paint: {
+      "circle-radius": 5,
+      "circle-color": COLORS.spotlight,
+      "circle-stroke-color": "#0a0e13",
+      "circle-stroke-width": 2,
+    },
+  });
+  map.addLayer({
+    id: "spot-label",
+    type: "symbol",
+    source: "story-spot",
+    filter: ["==", ["get", "part"], "label"],
+    layout: {
+      "text-field": ["get", "label"],
+      "text-font": LABEL_FONT_BOLD,
+      "text-size": 12,
+      "text-letter-spacing": 0.12,
+      "text-anchor": "bottom",
+      "text-offset": [0, -1.8],
+      "text-allow-overlap": true,
+      "text-ignore-placement": true,
+    },
+    paint: { "text-color": COLORS.spotlight, "text-halo-color": "#0a0e13", "text-halo-width": 2.5 },
   });
 
   // Evacuee-tab pin, drawn above everything.

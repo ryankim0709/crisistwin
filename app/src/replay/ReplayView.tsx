@@ -14,7 +14,7 @@ import { BundleMissingError, REPLAY_VIEW, fetchReplayBundle, type ViewConfig } f
 import RespondersTab from "./RespondersTab";
 import StressTab from "./StressTab";
 import StoryMode, { StoryLanding, storySeconds, storyTitle } from "./StoryMode";
-import { buildChapters, revealRows } from "./story";
+import { buildChapters, revealRows, type Spotlight } from "./story";
 import Tour from "./Tour";
 import ValidationTab from "./ValidationTab";
 import { homeCoords, referencePlace } from "./places";
@@ -26,6 +26,7 @@ import MobilityTab from "./MobilityTab";
 import { mobilityUrlFor } from "./mobility";
 import { useMobility } from "./useMobility";
 import { IMAGERY_DATE_NOTE, LAYER_GROUPS, type Basemap, type LayerGroup } from "./mapLayers";
+import { homeDots } from "./population";
 import ReplayMap, { type MapFocus } from "./ReplayMap";
 import SidePanel, { type PanelTab } from "./SidePanel";
 import TimelineDock, { SPEEDS } from "./TimelineDock";
@@ -286,6 +287,7 @@ function ReplayScreen({
   const [pin, setPin] = useState<LngLat | null>(null);
   const [focus, setFocus] = useState<MapFocus | null>(null);
   const [storyOpen, setStoryOpen] = useState(false);
+  const [spotlight, setSpotlight] = useState<Spotlight | null>(null);
   // Optional phone-panel mobility sidecar (replay route only); hidden when the file is absent.
   const mobility = useMobility(config.kind === "replay" ? mobilityUrlFor(config.bundleUrl) : null);
   const [mapInstance, setMapInstance] = useState<MapLibreMap | null>(null);
@@ -387,9 +389,11 @@ function ReplayScreen({
   const variantsStale =
     variantDemand !== null && baselineDemand !== null && variantDemand !== baselineDemand;
   const usableIndex = variantsStale ? null : variants.index;
+  // Dot positions depend only on zones and streets, which variants share.
+  const homes = useMemo(() => homeDots(baseline), [baseline]);
   const chapters = useMemo(
-    () => buildChapters(baseline, usableIndex, place, mobility.data),
-    [baseline, usableIndex, place, mobility.data],
+    () => buildChapters(baseline, usableIndex, place, mobility.data, homes.perDot),
+    [baseline, usableIndex, place, mobility.data, homes.perDot],
   );
   const reveal = useMemo(() => (usableIndex ? revealRows(usableIndex) : []), [usableIndex]);
   const startStory = useCallback(() => {
@@ -424,6 +428,7 @@ function ReplayScreen({
   const closeStory = useCallback(() => {
     setPanelOpen(true);
     setStoryOpen(false);
+    setSpotlight(null);
     setStoryPaused(false);
     stopAtRef.current = null;
     arriveRef.current = null;
@@ -657,6 +662,9 @@ function ReplayScreen({
           pin={tab === "evacuee" ? pin : null}
           onPick={tab === "evacuee" ? setPin : null}
           focus={focus}
+          spotlight={storyOpen ? spotlight : null}
+          homeDots={homes.dots}
+          spotlightAnimate={storyOpen && !storyPaused}
           basemapChoice={basemap}
           home={home}
           onMapReady={setMapInstance}
@@ -860,9 +868,8 @@ function ReplayScreen({
             showFireObs={visibility.fireObs}
             showDestinations={visibility.destinations}
             mobilityEvidence={mobilityVisible && mobility.data ? mobility.data.evidenceClass : null}
-            peopleSource={
-              visibility.people ? `Census ${incidentYear(model)} ACS; departures modelled` : null
-            }
+            peopleSource={visibility.people ? `Census ${incidentYear(model)} ACS; departures modelled` : null}
+            peoplePerDot={homes.perDot}
             open={legendOpen || tourOpen}
             onToggle={() => setLegendOpen((o) => !o)}
           />
@@ -912,6 +919,7 @@ function ReplayScreen({
             playTo={playTo}
             seek={seek}
             focus={focusTarget}
+            onSpotlight={setSpotlight}
             onShowVariant={showVariantFromStory}
             onClose={closeStory}
             nextFire={nextFire}
