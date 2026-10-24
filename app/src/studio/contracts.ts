@@ -76,7 +76,8 @@ export type ValidateScenario = (scenario: StudioScenario) => ScenarioIssue[];
 // ---------------------------------------------------------------------------------------
 
 /** Largest side of the shared landscape box, ground metres. Points further apart are refused. */
-export const MAX_LANDSCAPE_SPAN_METERS = 30_000;
+/** Matches the largest box /fire already loads (12 km radius). */
+export const MAX_LANDSCAPE_SPAN_METERS = 24_000;
 
 /**
  * The box a scenario needs: the bounding box of enabled ignitions grown by a spread buffer
