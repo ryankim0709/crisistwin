@@ -60,6 +60,7 @@ class Incident:
     kind: str  # "camp" (two-package Camp path) | "package" (generic evacuation package)
     traffic: dict = field(default_factory=dict)  # TrafficParams overrides for this fire
     clock_note: str = ""
+    assumptions: tuple[str, ...] = ()  # incident-specific modelling assumptions, written into the bundle
 
 
 INCIDENTS = {
@@ -72,6 +73,16 @@ INCIDENTS = {
         "marshall-2021", "Marshall Fire (2021)", "Superior and Louisville, Boulder County, Colorado",
         Path("data/incidents/marshall-2021-evacuation/415166c55516b100"),
         Path("data/incidents/marshall-2021-evacuation/415166c55516b100"), "package",
+        # The package has orders with zone IDs only for Everbridge zones 1-3, 5-8. Superior south of Discovery
+        # (zone 4) and Cherryvale/South Boulder Rd (zone 9) have warnings only; the AAR's town-wide Superior
+        # decision (19:50Z) is an `evacuation_requested` command decision, not a public order, and the only
+        # order without zone IDs (aar-1215, "unincorporated Boulder County and Superior to McCaslin") summarizes
+        # the 19:15Z Everbridge orders and precedes zone 4's own 19:49Z warning, so it cannot be zone 4's order.
+        traffic={"warning_releases_demand": True},
+        assumptions=("Warnings are treated as departure triggers (warning_releases_demand): the package lacks "
+                     "zone-level orders for Superior south of Discovery (zone 4) and Cherryvale/South Boulder Rd "
+                     "(zone 9), which were evacuated on Dec 30 (AAR: entire town of Superior evacuated by 15:30 MST). "
+                     "Assumption, not a recorded order.",),
         clock_note="Wind-driven grass fire that crossed into town within about an hour: 10 s traffic step, "
                    "1 min frames, 10 min simulated fronts, from 1 h before ignition to the manifest focus-window end."),
     "kincade-2019": Incident(
@@ -338,6 +349,26 @@ def _crosswalk(package: Path) -> dict[str, dict[str, float]]:
     return out
 
 
+CROSSWALK_CELL_M = 100.0  # raster cell for block-group shares of zones the package crosswalk omits
+
+
+def _raster_shares(zone_geometry: dict, units: dict[str, dict], unit_geometry: dict[str, dict]) -> dict[str, float]:
+    """geoid -> share of the block group's area inside the zone, by counting CROSSWALK_CELL_M cells (derived here)."""
+    zx0, zy0, zx1, zy1 = _bbox(zone_geometry)
+    out = {}
+    for geoid, geometry in unit_geometry.items():
+        x0, y0, x1, y1 = _bbox(geometry)
+        if x1 < zx0 or x0 > zx1 or y1 < zy0 or y0 > zy1:
+            continue
+        grid = Grid.covering([x0, y0, x1, y1], CROSSWALK_CELL_M)
+        unit_mask, zone_mask = rasterize(grid, geometry), rasterize(grid, zone_geometry)
+        total = sum(unit_mask)
+        both = sum(1 for u, z in zip(unit_mask, zone_mask) if u and z)
+        if total and both:
+            out[geoid] = round(both / total, 6)
+    return out
+
+
 @dataclass(frozen=True)
 class _Area:  # duck type for sim.demand._Locator
     geoid: str
@@ -353,10 +384,24 @@ def package_demand(package: Path, network) -> dict:
     lower bound on their union). Orders and warnings target zones directly by zone ID.
     """
     zones_src = {f["properties"]["zone_id"]: f for f in _read(package, "normalized/evacuation_zones.geojson")["features"]}
-    units = {f["properties"]["geoid"]: f["properties"] for f in _read(package, "normalized/population_units.geojson")["features"]}
+    unit_features = _read(package, "normalized/population_units.geojson")["features"]
+    units = {f["properties"]["geoid"]: f["properties"] for f in unit_features}
     crosswalk = _crosswalk(package)
     events = _events(package)
     notices = [e for e in events if e["type"] in NOTICE_TYPES and (e.get("target") or {}).get("zone_ids")]
+    unzoned = [{"event_id": e["event_id"], "at": e["occurred_at"], "type": e["type"],
+                "place_name": (e.get("target") or {}).get("place_name"),
+                "mapping": "none: timeline only (no zone IDs; place text is not matched to zone polygons)"}
+               for e in events if e["type"] in NOTICE_TYPES and not (e.get("target") or {}).get("zone_ids")]
+    derived_here = []
+    named_zones = {z for e in notices for z in e["target"]["zone_ids"]}
+    for z in sorted(named_zones):
+        if z not in crosswalk and (zones_src.get(z) or {}).get("geometry"):
+            crosswalk[z] = _raster_shares(zones_src[z]["geometry"], units,
+                                          {f["properties"]["geoid"]: f["geometry"] for f in unit_features})
+            derived_here.append({"zone_id": z, "block_groups": len(crosswalk[z]),
+                                 "method": f"derived in sim.incidents: block-group area share inside the zone polygon by "
+                                           f"{CROSSWALK_CELL_M:g} m raster cells (package crosswalk has no rows)"})
     first: dict[str, dict[str, datetime]] = {}
     for e in notices:
         for z in e["target"]["zone_ids"]:
@@ -431,7 +476,8 @@ def package_demand(package: Path, network) -> dict:
         "crosswalk": "package zone_population_crosswalk.json (zone x block-group area shares; derived by the "
                      "package builder), not the Camp derived crosswalk",
         "parameters": {"vehicles_taken_cap": VEHICLES_TAKEN_CAP, "evacuation_participation": EVACUATION_PARTICIPATION},
-        "totals": totals, "unmapped_zones": unmapped, "notices": mapped, "zones": stats,
+        "totals": totals, "unmapped_zones": unmapped, "crosswalk_derived_here": derived_here,
+        "orders_without_zone_ids": unzoned, "notices": mapped, "zones": stats,
     }
     return {"zones": tuple(zones), "events": tuple(traffic_events), "report": report}
 
@@ -484,6 +530,10 @@ def package_replay_inputs(incident: Incident, history: IncidentHistory) -> tuple
             f"Road events: {snapped} of {road_like} snapped to edges; day-precision (untimed) road events stay on the "
             "timeline and never close edges.",
             *ROAD_EVENT_ASSUMPTIONS,
+            *([f"Block-group shares for {', '.join(d['zone_id'] for d in report['crosswalk_derived_here'])} are derived "
+               f"here by {CROSSWALK_CELL_M:g} m raster overlap (the package crosswalk has no rows for them)."]
+              if report["crosswalk_derived_here"] else []),
+            *incident.assumptions,
             f"Clock: {clock_rule}. {incident.clock_note}",
         ],
         "demand_report": report,

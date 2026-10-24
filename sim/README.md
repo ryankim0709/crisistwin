@@ -136,6 +136,12 @@ from the evacuation package:
 - demand from `population_units` and `zone_population_crosswalk.json`, with orders and warnings
   targeting zones by their own IDs.
 
+If the package crosswalk has no rows for a zone named by an order (Kincade's Geyserville CDP), its
+block-group shares are derived here by 100 m raster overlap; `demand.crosswalk_derived_here` records this.
+Orders without zone IDs stay on the timeline only (`demand.orders_without_zone_ids`). Marshall sets
+`warning_releases_demand`, a labelled registry assumption: the package has no zone-level orders for
+Superior zone 4 or Cherryvale zone 9, which were evacuated that day.
+
 The front is `elliptical-mtt-ca`, fitted only to the first perimeter and clipped to it. The packages
 have no terrain or ground fire observations. The model settings chosen per fire are in the
 registry (Kincade: 30 s step and 5 min frames over a multi-day clock). Validation rows are

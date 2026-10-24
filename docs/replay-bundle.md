@@ -204,7 +204,8 @@ additive within 1.x.
   SHA-256. Every run re-checks all artifact hashes.
 - `demand` (non-Camp packages): `totals` (`zones`, `population`, `households`,
   `households_no_vehicle`, `evacuating_vehicles`, `orders_mapped`, `warnings_mapped`, ...),
-  `unmapped_zones` (`zone_id`, `reason`), `notices` (`event_id`, `zone_ids`,
+  `unmapped_zones` (`zone_id`, `reason`), `crosswalk_derived_here` (zones whose block-group
+  shares sim derived by raster overlap), `orders_without_zone_ids` (timeline only), `notices` (`event_id`, `zone_ids`,
   `unmapped_zone_ids`), and per-zone `zones`. Demand zones are the package's evacuation zones,
   and order and warning events target them by their own zone IDs.
 - `validation` (non-Camp packages): one row per `calibration_targets.json` target, with
