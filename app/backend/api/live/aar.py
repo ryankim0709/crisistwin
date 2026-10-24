@@ -1,0 +1,393 @@
+"""After-action report and drill score (docs/live-reports.md "After-action report").
+
+Everything is computed from the audit data the drill already stores (``live_decisions``,
+``live_guidance``, ``live_reports``, ``live_checkins``, ``live_tasks``), the twin's monitor
+totals, and the bundle's historical evacuation orders. No LLM is involved and nothing here
+writes. Evidence classes: ``observed`` = what drill participants did (audit data),
+``simulated`` = twin-derived, ``historical`` = 2018 record from the bundle.
+
+The score is a transparent weighted mean of four components in [0, 1], scaled to 0-100.
+Every constant is in this module's top block. A component without data (e.g. no help
+requests, twin still warming) is shown with ``score: null`` and dropped from the mean; the
+remaining weights are renormalised, and ``coverage`` reports the weight share that counted.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from statistics import median
+from typing import Any
+
+from livecore import drill as drillmod
+from livecore.geo import point_in_multipolygon
+
+from . import twin_service
+from .common import col, iso
+from .state import Snapshot, _aware
+
+# ---- score constants (the only place they live) ----
+
+WEIGHTS = {
+    "arrived_share": 0.35,
+    "exposed_trapped": 0.30,
+    "help_to_assign": 0.15,
+    "leave_now_vs_2018": 0.20,
+}
+"""Component weights; they sum to 1."""
+TRAPPED_VEH_MIN_EQUIV = 60.0
+"""Each vehicle trapped by fire counts as this many exposed vehicle-minutes (an hour of exposure)."""
+EXPOSED_VEH_MIN_PER_VEH_ZERO = 5.0
+"""Exposed-or-trapped vehicle-minutes per vehicle at which the component reaches 0."""
+HELP_ASSIGN_ZERO_MIN = 30.0
+"""Median wall minutes from a help request to an assigned responder at which the component reaches 0."""
+LEAVE_NOW_SPAN_MIN = 30.0
+"""A zone ordered this many minutes before 2018 scores 1, on time 0.5, this many after 0. Clamped."""
+HELP_UNASSIGNED_SCORE = 0.0
+"""Component score when help was requested but no request was assigned."""
+LEAVE_NOW_MISSED_SCORE = 0.0
+"""Zone score when the 2018 order time has passed on the drill clock and no leave-now was issued."""
+
+TRIAGE_ACTIONS = ("confirm", "dismiss", "merge", "resolve")
+HISTORICAL_ORDER_TYPE = "evacuation_order"
+
+
+def _clamp01(x: float) -> float:
+    return max(0.0, min(1.0, x))
+
+
+def _minutes(a: datetime | None, b: datetime | None) -> float | None:
+    """Minutes from ``a`` to ``b`` (rounded to 0.1), None when either is missing or ``b`` is earlier."""
+    if a is None or b is None:
+        return None
+    delta = (b - a).total_seconds() / 60.0
+    return round(delta, 1) if delta >= 0 else None
+
+
+def _median(values: list[float]) -> float | None:
+    return round(float(median(values)), 1) if values else None
+
+
+def _drill_at(snapshot: Snapshot, wall: datetime | None) -> datetime | None:
+    """Drill time at wall time ``wall`` under the current clock; an estimate when the speed changed."""
+    clock = snapshot.clock
+    if wall is None or clock.started_at is None:
+        return None
+    started = _aware(clock.started_at)
+    if wall < started:
+        return clock.replay_start
+    return drillmod.replay_now(clock.replay_start, clock.started_at, wall, clock.speed,
+                               snapshot.index.drill.clock_end)
+
+
+# ---- pure scoring ----
+
+
+def score_components(
+    twin: dict[str, Any] | None,
+    help_assign_median_min: float | None,
+    help_requests: int,
+    help_assigned: int,
+    leave_now_deltas: list[float],
+    leave_now_missed: int,
+) -> dict[str, Any]:
+    """The drill score from raw values. ``twin`` is ``{total_veh, arrived_veh, exposed_veh_min,
+    trapped_by_fire_veh}`` or None when the twin is unavailable. ``leave_now_deltas`` are minutes
+    (drill minus 2018; negative = earlier); ``leave_now_missed`` counts zones whose 2018 order time
+    passed with no leave-now."""
+    comps: list[dict[str, Any]] = []
+
+    arrived = exposed = None
+    if twin and twin["total_veh"] > 0:
+        arrived = twin["arrived_veh"] / twin["total_veh"]
+        exposed = (twin["exposed_veh_min"] + TRAPPED_VEH_MIN_EQUIV * twin["trapped_by_fire_veh"]) / twin["total_veh"]
+    comps.append({
+        "id": "arrived_share", "label": "Vehicles arrived", "evidence_class": "simulated",
+        "raw": None if arrived is None else round(arrived, 4), "unit": "share of vehicles",
+        "score": None if arrived is None else round(_clamp01(arrived), 4),
+        "rule": "arrived / total vehicles",
+    })
+    comps.append({
+        "id": "exposed_trapped", "label": "Exposed or trapped vehicle-minutes", "evidence_class": "simulated",
+        "raw": None if exposed is None else round(exposed, 3), "unit": "veh-min per vehicle",
+        "score": None if exposed is None else round(_clamp01(1 - exposed / EXPOSED_VEH_MIN_PER_VEH_ZERO), 4),
+        "rule": f"1 - (exposed veh-min + {TRAPPED_VEH_MIN_EQUIV:g} x trapped-by-fire veh) / vehicles / "
+                f"{EXPOSED_VEH_MIN_PER_VEH_ZERO:g}",
+    })
+
+    if help_assign_median_min is not None:
+        help_score: float | None = _clamp01(1 - help_assign_median_min / HELP_ASSIGN_ZERO_MIN)
+    elif help_requests > 0 and help_assigned == 0:
+        help_score = HELP_UNASSIGNED_SCORE
+    else:
+        help_score = None
+    comps.append({
+        "id": "help_to_assign", "label": "Median help to responder assigned", "evidence_class": "observed",
+        "raw": help_assign_median_min, "unit": "wall minutes",
+        "score": None if help_score is None else round(help_score, 4),
+        "rule": f"1 - median minutes / {HELP_ASSIGN_ZERO_MIN:g}; {HELP_UNASSIGNED_SCORE:g} when requests exist "
+                "and none was assigned",
+    })
+
+    zone_scores = [_clamp01(0.5 - d / (2 * LEAVE_NOW_SPAN_MIN)) for d in leave_now_deltas]
+    zone_scores += [LEAVE_NOW_MISSED_SCORE] * leave_now_missed
+    comps.append({
+        "id": "leave_now_vs_2018", "label": "Leave-now orders vs 2018", "evidence_class": "historical",
+        "raw": _median(leave_now_deltas), "unit": "minutes vs 2018 (negative = earlier), median over zones",
+        "score": round(sum(zone_scores) / len(zone_scores), 4) if zone_scores else None,
+        "rule": f"mean over zones of clamp(0.5 - minutes / {2 * LEAVE_NOW_SPAN_MIN:g}); "
+                f"{LEAVE_NOW_MISSED_SCORE:g} for a zone whose 2018 order time passed with no leave-now",
+        "zones_compared": len(leave_now_deltas), "zones_missed": leave_now_missed,
+    })
+
+    for c in comps:
+        c["weight"] = WEIGHTS[c["id"]]
+    counted = [c for c in comps if c["score"] is not None]
+    total_w = sum(c["weight"] for c in counted)
+    for c in comps:
+        c["effective_weight"] = round(c["weight"] / total_w, 4) if c["score"] is not None and total_w else None
+        c["points"] = round(100 * c["score"] * c["effective_weight"], 1) if c["effective_weight"] is not None else None
+    score = round(sum(c["points"] for c in counted), 1) if counted else None
+    return {
+        "value": score,
+        "max": 100,
+        "coverage": round(total_w, 4),
+        "components": comps,
+        "formula": "100 x sum(effective_weight x component score); components without data are dropped "
+                   "and the remaining weights renormalised",
+        "evidence_class": "simulated",
+        "label": "Planning-experiment score of a drill. Twin parts are simulated; the 2018 comparison is historical.",
+    }
+
+
+# ---- data gathering ----
+
+
+def _historical_orders(snapshot: Snapshot) -> dict[str, datetime]:
+    """Earliest 2018 evacuation order per zone from the bundle's historical events."""
+    out: dict[str, datetime] = {}
+    for at, item in snapshot.index.response_record:
+        if item.get("type") != HISTORICAL_ORDER_TYPE:
+            continue
+        for zone_id in item.get("zone_ids") or []:
+            if zone_id not in out or at < out[zone_id]:
+                out[zone_id] = at
+    return out
+
+
+def _zone_of(snapshot: Snapshot, coord: Any, cache: dict[tuple[float, float], str | None]) -> str | None:
+    if not coord or len(coord) != 2:
+        return None
+    key = (round(coord[0], 5), round(coord[1], 5))
+    if key not in cache:
+        cache[key] = next(
+            (z.id for z in snapshot.index.drill.zones if point_in_multipolygon((coord[0], coord[1]), z.geometry)),
+            None,
+        )
+    return cache[key]
+
+
+def _twin_outcomes(snapshot: Snapshot) -> dict[str, Any]:
+    try:
+        mon = twin_service.monitor(snapshot)
+    except twin_service.TwinUnavailable as exc:
+        return {"status": exc.code, "detail": exc.detail, "evidence_class": "simulated", "totals": None, "zones": {}}
+    t = mon["totals"]
+    return {
+        "status": "ok",
+        "evidence_class": "simulated",
+        "label": mon.get("label"),
+        "clock": (mon.get("clock") or {}).get("now") or mon.get("drill_replay_now"),
+        "totals": {k: t.get(k) for k in (
+            "total_veh", "not_departed_veh", "en_route_veh", "arrived_veh", "exposed_veh", "trapped_by_fire_veh",
+            "trapped_by_closure_veh", "exposed_veh_min_so_far")},
+        "zones": {z["id"]: {k: z[k] for k in ("vehicles", "arrived_veh", "exposed_veh")} for z in mon["zones"]},
+    }
+
+
+def build_aar(snapshot: Snapshot) -> dict[str, Any]:
+    incident_id = snapshot.incident_id
+    index = snapshot.index
+    zones = index.drill.zones
+    now = snapshot.now
+    replay_now = snapshot.clock.replay_now
+
+    # -- timeline
+    decisions = list(col("live_decisions").find({"incident_id": incident_id}).sort("at", 1))
+    proposals = {p["id"]: p for p in col("live_proposals").find({"incident_id": incident_id})}
+    checkins = list(col("live_checkins").find({"incident_id": incident_id}))
+    checkin_replay = {c["id"]: _aware(c.get("replay_at")) for c in checkins}
+    timeline = []
+    for d in decisions:
+        wall = _aware(d["at"])
+        prop = proposals.get(d.get("proposal_id") or "")
+        drill_at = (
+            _aware(prop.get("decided_replay_at")) if prop and d["action"] in ("approve", "reject") else None
+        ) or _drill_at(snapshot, wall)
+        timeline.append({
+            "at": iso(wall),
+            "drill_at": iso(drill_at),
+            "actor": d["actor"],
+            "action": d["action"],
+            "report_ids": d.get("report_ids") or [],
+            "proposal_id": d.get("proposal_id"),
+            "checkin_id": d.get("checkin_id"),
+            "note": d.get("note"),
+            "evidence_class": "observed",
+        })
+
+    # -- per-zone: guidance, reports
+    by_zone: dict[str, dict[str, Any]] = {
+        z.id: {"zone_id": z.id, "name": z.name, "vehicles": z.vehicles, "guidance_changes": 0,
+               "first_leave_now_at": None, "first_leave_now_wall": None, "historical_order_at": None,
+               "leave_now_vs_2018_min": None, "leave_now_status": "none",
+               "reports": 0, "triage_median_min": None}
+        for z in zones
+    }
+    first_leave: dict[str, tuple[datetime, datetime | None]] = {}
+    for g in col("live_guidance").find({"incident_id": incident_id}).sort("version", 1):
+        row = by_zone.get(g["zone_id"])
+        if row is None:
+            continue
+        row["guidance_changes"] += 1
+        if g["level"] == "evacuate_now":
+            wall = _aware(g["published_at"])
+            drill_at = _aware(g.get("replay_at")) or _drill_at(snapshot, wall)
+            if drill_at is not None and (g["zone_id"] not in first_leave or drill_at < first_leave[g["zone_id"]][0]):
+                first_leave[g["zone_id"]] = (drill_at, wall)
+
+    orders = _historical_orders(snapshot)
+    deltas: list[float] = []
+    missed = 0
+    for zone_id, row in by_zone.items():
+        hist = orders.get(zone_id)
+        row["historical_order_at"] = iso(hist)
+        if zone_id in first_leave:
+            at, wall = first_leave[zone_id]
+            row["first_leave_now_at"], row["first_leave_now_wall"] = iso(at), iso(wall)
+            if hist is not None:
+                delta = round((at - hist).total_seconds() / 60.0, 1)
+                row["leave_now_vs_2018_min"] = delta
+                row["leave_now_status"] = "earlier" if delta < 0 else "later" if delta > 0 else "same"
+                deltas.append(delta)
+        elif hist is not None and hist <= replay_now:
+            row["leave_now_status"] = "missed"
+            missed += 1
+
+    zone_cache: dict[tuple[float, float], str | None] = {}
+    triage_at: dict[str, datetime] = {}
+    for d in decisions:
+        if d["action"] in TRIAGE_ACTIONS and d.get("report_ids"):
+            triage_at.setdefault(d["report_ids"][0], _aware(d["at"]))
+    triage_all: list[float] = []
+    per_zone_triage: dict[str, list[float]] = {}
+    reports_total = 0
+    for r in col("live_reports").find({"incident_id": incident_id, "evidence_class": {"$ne": "historical_record"}}):
+        reports_total += 1
+        zone_id = _zone_of(snapshot, (r.get("location") or {}).get("coord"), zone_cache)
+        if zone_id in by_zone:
+            by_zone[zone_id]["reports"] += 1
+        mins = _minutes(_aware(r.get("received_at")), triage_at.get(r["id"]))
+        if mins is not None:
+            triage_all.append(mins)
+            if zone_id in by_zone:
+                per_zone_triage.setdefault(zone_id, []).append(mins)
+    for zone_id, vals in per_zone_triage.items():
+        by_zone[zone_id]["triage_median_min"] = _median(vals)
+
+    # -- help requests
+    assign_at: dict[str, datetime] = {}
+    resolve_at: dict[str, datetime] = {}
+    for d in decisions:
+        cid = d.get("checkin_id")
+        if cid and d["action"] == "help_assign":
+            assign_at.setdefault(cid, _aware(d["at"]))
+        elif cid and d["action"] == "help_resolve":
+            resolve_at.setdefault(cid, _aware(d["at"]))
+    help_rows = []
+    assign_mins: list[float] = []
+    resolve_mins: list[float] = []
+    for c in checkins:
+        help_ = c.get("help")
+        if not help_:
+            continue
+        # The request time is the check-in time; a resident who later checked in as out or staying
+        # overwrote it, so those requests have no known start and are listed without minutes.
+        requested = _aware(c["at"]) if c["status"] == "need_help" else None
+        assigned = assign_at.get(c["id"])
+        resolved = resolve_at.get(c["id"])
+        if resolved is None and help_.get("status") == "resolved":
+            resolved = _aware(help_.get("updated_at"))
+        to_assign = _minutes(requested, assigned)
+        to_resolve = _minutes(requested, resolved)
+        if to_assign is not None:
+            assign_mins.append(to_assign)
+        if to_resolve is not None:
+            resolve_mins.append(to_resolve)
+        help_rows.append({
+            "checkin_id": c["id"], "zone_id": c.get("zone_id"), "status": help_.get("status", "open"),
+            "requested_at": iso(requested), "assigned_at": iso(assigned), "resolved_at": iso(resolved),
+            "requested_drill_at": iso(checkin_replay.get(c["id"])),
+            "to_assign_min": to_assign, "to_resolve_min": to_resolve,
+        })
+    for zone_id in by_zone:
+        zm = [r["to_assign_min"] for r in help_rows if r["zone_id"] == zone_id and r["to_assign_min"] is not None]
+        by_zone[zone_id]["help_requests"] = sum(1 for r in help_rows if r["zone_id"] == zone_id)
+        by_zone[zone_id]["help_to_assign_median_min"] = _median(zm)
+    tasks = list(col("live_tasks").find({"incident_id": incident_id}))
+    task_mins = [
+        m for t in tasks if (m := _minutes(_aware(t.get("created_at")), _aware(t.get("accepted_at")))) is not None
+    ]
+    close_mins = [
+        m for t in tasks if (m := _minutes(_aware(t.get("accepted_at")), _aware(t.get("closed_at")))) is not None
+    ]
+
+    # -- twin and score
+    twin = _twin_outcomes(snapshot)
+    if twin["status"] == "ok":
+        for zone_id, z in twin["zones"].items():
+            if zone_id in by_zone:
+                by_zone[zone_id].update(arrived_veh=z["arrived_veh"], exposed_veh=z["exposed_veh"])
+    score_twin = None
+    if twin["totals"]:
+        t = twin["totals"]
+        score_twin = {
+            "total_veh": t["total_veh"], "arrived_veh": t["arrived_veh"],
+            "exposed_veh_min": t["exposed_veh_min_so_far"] or 0.0,
+            "trapped_by_fire_veh": t["trapped_by_fire_veh"] or 0,
+        }
+    score = score_components(
+        score_twin, _median(assign_mins), len(help_rows), len(assign_mins), deltas, missed,
+    )
+
+    return {
+        "kind": "crisistwin_live_aar",
+        "incident_id": incident_id,
+        "generated_at": iso(now),
+        "drill": {
+            "replay_start": iso(snapshot.clock.replay_start), "replay_now": iso(replay_now),
+            "started_at": iso(snapshot.clock.started_at), "speed": snapshot.clock.speed,
+            "running": snapshot.clock.running,
+        },
+        "score": score,
+        "twin": twin,
+        "zones": list(by_zone.values()),
+        "triage": {"evidence_class": "observed", "basis": "wall minutes", "reports": reports_total,
+                   "triaged": len(triage_all), "median_min": _median(triage_all)},
+        "help": {
+            "evidence_class": "observed", "basis": "wall minutes", "requests": len(help_rows),
+            "to_assign_median_min": _median(assign_mins), "to_resolve_median_min": _median(resolve_mins),
+            "task_to_accept_median_min": _median(task_mins), "task_accept_to_close_median_min": _median(close_mins),
+            "items": help_rows,
+        },
+        "timeline": timeline,
+        "evidence": {
+            "timeline": "observed: audit log; drill_at is the proposal's decided drill time, else estimated from "
+                        "the current drill clock",
+            "twin": "simulated: traffic twin at the current twin clock",
+            "historical_order_at": "historical: earliest 2018 evacuation order for the zone in the bundle",
+        },
+        "limitations": [
+            "A help request's start is the check-in time; requests a resident later closed have no minutes.",
+            "Drill times of decisions without a stored drill time assume the clock speed did not change.",
+        ],
+    }

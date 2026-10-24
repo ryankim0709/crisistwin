@@ -18,6 +18,7 @@ import { SIMULATION_VIEW } from "./replay/loadBundle";
 import ReplayView from "./replay/ReplayView";
 import ReplayRoute from "./replay/IncidentPicker";
 import LiveCommandPage from "./live/LiveCommandPage";
+import AarPage from "./live/report/AarPage";
 
 // The workspace has no landing page; the root opens the fire spread model.
 if (window.location.pathname === "/")
@@ -50,6 +51,8 @@ const page =
     <ReplayView config={SIMULATION_VIEW} />
   ) : path === "/live" ? (
     <LiveCommandPage />
+  ) : path === "/live/report" ? (
+    <AarPage />
   ) : path === "/diorama" ? (
     <DioramaPage />
   ) : (

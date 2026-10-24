@@ -15,7 +15,7 @@ const SPEED_OPTIONS = SPEEDS.map((s) => ({
 /** "Updated" shows only when the last poll is older than this. */
 const STALE_AFTER_MS = 10_000;
 
-function Menu({ twin, onSignOut }: { twin: TwinMonitor | null; onSignOut: () => void }) {
+function Menu({ twin, onSignOut }: { twin: TwinMonitor | null; onSignOut: (() => void) | null }) {
   const ref = useRef<HTMLDetailsElement>(null);
   useEffect(() => {
     const close = (e: MouseEvent) => {
@@ -33,6 +33,9 @@ function Menu({ twin, onSignOut }: { twin: TwinMonitor | null; onSignOut: () => 
       <div className="lc-menu-pop" role="menu">
         <a role="menuitem" className="lc-menu-item" href="/">
           Workspace
+        </a>
+        <a role="menuitem" className="lc-menu-item" href="/live/report">
+          After-action report
         </a>
         <details className="lc-menu-sub">
           <summary className="lc-menu-item">
@@ -53,9 +56,11 @@ function Menu({ twin, onSignOut }: { twin: TwinMonitor | null; onSignOut: () => 
             {commands.length === 0 && !twin?.command_errors.length ? <li className="lc-dim">None yet</li> : null}
           </ul>
         </details>
-        <button type="button" role="menuitem" className="lc-menu-item" onClick={onSignOut}>
-          Sign out
-        </button>
+        {onSignOut ? (
+          <button type="button" role="menuitem" className="lc-menu-item" onClick={onSignOut}>
+            Sign out
+          </button>
+        ) : null}
       </div>
     </details>
   );
@@ -139,7 +144,7 @@ export default function WorkspaceHeader({
             {error}
           </Notice>
         ) : null}
-        {onSignOut ? <Menu twin={twin} onSignOut={onSignOut} /> : null}
+        <Menu twin={twin} onSignOut={onSignOut} />
       </span>
     </header>
   );
