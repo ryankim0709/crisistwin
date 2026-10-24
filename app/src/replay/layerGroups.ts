@@ -1,4 +1,5 @@
 import type { LayerGroup } from "./mapLayers";
+import { hasPeopleLayer } from "./population";
 import type { EvidenceClass, LayerStatus, ReplayModel } from "./types";
 
 /** Which bundle layer each toggle group reads, for status and evidence. */
@@ -10,6 +11,7 @@ export const GROUP_LAYER: Record<LayerGroup, { layer: string; label: string }> =
   roads: { layer: "roads", label: "Roads & congestion" },
   particles: { layer: "traffic", label: "Vehicle dots (illustrative)" },
   zones: { layer: "zones", label: "Demand areas" },
+  people: { layer: "zones", label: "People at home (households per km²)" },
   destinations: { layer: "destinations", label: "Exits and refuges" },
   damage: { layer: "damage", label: "Damage — post-fire assessment (no damage time)" },
 };
@@ -32,6 +34,7 @@ export function groupAvailability(model: ReplayModel, group: LayerGroup): {
     roads: single(model.roads?.evidenceClass),
     particles: model.traffic?.evidenceClass ?? null,
     zones: single(model.zones?.evidenceClass),
+    people: single(model.zones?.evidenceClass),
     destinations: single(model.destinations?.evidenceClass),
     damage: single(model.damage?.evidenceClass),
   };
@@ -43,6 +46,7 @@ export function groupAvailability(model: ReplayModel, group: LayerGroup): {
     roads: (model.roads?.items.length ?? 0) > 0,
     particles: model.traffic !== null && model.roads !== null,
     zones: (model.zones?.items.length ?? 0) > 0,
+    people: hasPeopleLayer(model),
     destinations: (model.destinations?.items.length ?? 0) > 0,
     damage: (model.damage?.items.length ?? 0) > 0,
   };

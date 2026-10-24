@@ -222,6 +222,7 @@ function zone(value: unknown, path: string): Zone {
     name: str(z.name, `${path}.name`),
     households: optNum(z.households, `${path}.households`),
     vehicles: optNum(z.vehicles, `${path}.vehicles`),
+    population: optNum(z.population, `${path}.population`),
     geometry: areaGeometry(z.geometry, `${path}.geometry`),
   };
 }
@@ -307,6 +308,25 @@ const KNOWN_METRIC_KEYS = new Set([
   "exposed_veh",
 ]);
 
+/** Lenient: malformed entries are skipped; this only feeds the optional people-at-home layer. */
+function zoneDepartures(stats: Obj): Traffic["zoneDepartures"] {
+  const out: Traffic["zoneDepartures"] = {};
+  for (const [id, raw] of Object.entries(stats)) {
+    const list = objOrEmpty(raw).departures;
+    if (!Array.isArray(list)) continue;
+    const rows: [number, number][] = [];
+    for (const item of list) {
+      if (!Array.isArray(item) || typeof item[0] !== "string" || typeof item[1] !== "number") continue;
+      const t = Date.parse(item[0]);
+      if (Number.isFinite(t) && Number.isFinite(item[1])) rows.push([t, item[1]]);
+    }
+    rows.sort((a, b) => a[0] - b[0]);
+    let total = 0;
+    out[id] = { atMs: rows.map((r) => r[0]), cumVeh: rows.map((r) => (total += r[1])) };
+  }
+  return out;
+}
+
 export function traffic(body: Obj): Traffic {
   const edgeIds = strList(body.edge_ids, "traffic.edge_ids");
   const frames = ascending(
@@ -348,6 +368,7 @@ export function traffic(body: Obj): Traffic {
     totalVeh: optNum(summary.total_veh, "traffic.summary.total_veh"),
     clearanceTimeS: optNum(summary.clearance_time_s, "traffic.summary.clearance_time_s"),
     maxExposedVeh: optNum(summary.max_exposed_veh, "traffic.summary.max_exposed_veh"),
+    zoneDepartures: zoneDepartures(objOrEmpty(objOrEmpty(body.diagnostics).zone_stats)),
   };
 }
 
@@ -526,6 +547,18 @@ function layer<T>(
     evidenceClass,
     items: items.map((item, i) => parse(item, `${name}.${listKey}[${i}]`, evidenceClass)),
   };
+}
+
+/** Fill zone population from demand.zones[] (by geoid, zone id "bg:<geoid>") when missing. */
+function withPopulation(zones: Layer<Zone> | null, demand: unknown): Layer<Zone> | null {
+  if (!zones || !isObj(demand) || !Array.isArray(demand.zones)) return zones;
+  const byId = new Map<string, number>();
+  for (const z of demand.zones) {
+    if (isObj(z) && typeof z.geoid === "string" && typeof z.population === "number") {
+      byId.set(`bg:${z.geoid}`, z.population);
+    }
+  }
+  return { ...zones, items: zones.items.map((z) => (z.population != null ? z : { ...z, population: byId.get(z.id) ?? null })) };
 }
 
 function fireObservations(body: Obj): FireObservations {
@@ -719,7 +752,7 @@ export function parseBundle(data: unknown): ReplayModel {
     insights: insightsBody ? insights(insightsBody) : null,
     responders: isObj(b.responders) ? responders(objOrEmpty(b.responders)) : null,
     roads: layer(layerBody(b, "roads", layerStatusMap), "roads", "edges", roadEdge),
-    zones: layer(layerBody(b, "zones", layerStatusMap), "zones", "features", zone),
+    zones: withPopulation(layer(layerBody(b, "zones", layerStatusMap), "zones", "features", zone), b.demand),
     destinations: layer(
       layerBody(b, "destinations", layerStatusMap),
       "destinations",

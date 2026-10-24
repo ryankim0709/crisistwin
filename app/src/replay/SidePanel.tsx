@@ -613,7 +613,8 @@ export type PanelTab =
   | "whatif"
   | "validation"
   | "stress"
-  | "responders";
+  | "responders"
+  | "movement";
 
 const TABS: { id: PanelTab; label: string }[] = [
   { id: "overview", label: "Overview" },

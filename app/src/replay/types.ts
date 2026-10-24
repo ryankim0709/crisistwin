@@ -53,6 +53,8 @@ export interface Zone {
   name: string;
   households: number | null;
   vehicles: number | null;
+  /** Residents, when the demand report gives them (Census population). */
+  population: number | null;
   geometry: AreaGeometry;
 }
 
@@ -114,6 +116,11 @@ export interface Traffic {
   totalVeh: number | null;
   clearanceTimeS: number | null;
   maxExposedVeh: number | null;
+  /**
+   * Cumulative modelled departures per zone id: ascending times with the running vehicle
+   * total, from traffic.diagnostics.zone_stats[id].departures. Empty when absent.
+   */
+  zoneDepartures: Record<string, { atMs: number[]; cumVeh: number[] }>;
 }
 
 export interface DamagePoint {

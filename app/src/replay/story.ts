@@ -156,6 +156,26 @@ export function buildChapters(
     return ` At this moment ${text}.`;
   };
 
+  // Prologue: where people were before anyone left (Census households; the people layer).
+  const zones = model.zones?.items ?? [];
+  const households = zones.reduce((sum, z) => sum + (z.households ?? 0), 0);
+  const people = model.demand?.population ?? null;
+  const startAt = model.fireSimulated?.ignition?.atMs ?? model.clock.startMs;
+  if (households > 0) {
+    const zoneEvidence = model.zones?.evidenceClass;
+    chapters.push({
+      id: "people",
+      atMs: Math.max(model.clock.startMs, startAt - 60_000),
+      title: "Where people were at ignition",
+      body:
+        (people != null ? `${fmt(people)} people in ` : "") +
+        `${fmt(households)} households across ${fmt(zones.length)} Census areas. ` +
+        "Lighter grey means more households per km². Watch it drain as people leave.",
+      evidence: zoneEvidence && zoneEvidence !== "mixed" ? zoneEvidence : "derived",
+      focus: zones.flatMap((z) => ringCoords(z.geometry)),
+    });
+  }
+
   // Opening: the first 911 report when the bundle has it, else the ignition record.
   const ignition = firstEvent(model, (e) => e.type === "fire_ignition");
   const reported = firstEvent(
@@ -170,7 +190,7 @@ export function buildChapters(
       id: "ignition",
       atMs: opening.atMs,
       title: reported
-        ? "The first 911 call"
+        ? "The fire is reported"
         : sentence(splitSnappedNote(opening.label).text, false),
       body:
         (reported && ignition
@@ -183,7 +203,9 @@ export function buildChapters(
   }
 
   const order = firstEvent(model, isOrder);
-  if (order) {
+  const placeOrderFirst = place ? firstEvent(model, (e) => isOrder(e) && e.label.includes(place.name)) : null;
+  // When the reference place has its own order, that chapter carries the story instead.
+  if (order && (!placeOrderFirst || placeOrderFirst.id === order.id)) {
     chapters.push({
       id: "first-order",
       atMs: order.atMs,
@@ -327,6 +349,50 @@ export function buildChapters(
         (iou != null ? ` Perimeter overlap (IoU) ${iou.toFixed(2)}, evaluation only.` : ""),
       evidence: perimeter.evidenceClass,
       focus: ringCoords(perimeter.geometry),
+    });
+  }
+
+  // Generic beats for bundles without the place-specific ones (e.g. multi-town fires).
+  const core = () => chapters.length;
+  if (!chapters.some((c) => c.id === "place-fire")) {
+    const arrival = firstEvent(model, (e) => e.type === "fire_arrival" && HISTORICAL.has(e.evidenceClass));
+    if (arrival) {
+      chapters.push({
+        id: "fire-arrival",
+        atMs: arrival.atMs,
+        title: "Fire reaches homes",
+        body: sentence(splitSnappedNote(arrival.label).text),
+        evidence: arrival.evidenceClass,
+        focus: fireCoords(model, arrival.atMs),
+      });
+    }
+  }
+  if (traffic && traffic.metrics.length > 0 && core() < 8) {
+    const k = argmax(traffic.metrics.map((m) => m.enRouteVeh));
+    const m = traffic.metrics[k];
+    if (m.enRouteVeh > 0) {
+      const lastOrder = [...model.events].reverse().find((e) => e.atMs <= m.atMs && isOrder(e));
+      chapters.push({
+        id: "peak-traffic",
+        atMs: m.atMs,
+        title: "Everyone on the road",
+        body:
+          `Modelled peak: ${fmt(m.enRouteVeh)} vehicles on the road at once, ${fmt(m.blockedVeh)} unable to move.` +
+          (lastOrder ? ` Latest order before this: ${sentence(splitSnappedNote(lastOrder.label).text, false)}.` : ""),
+        evidence: traffic.evidenceClass,
+        focus: busyEdgeCoords(model, k, null),
+      });
+    }
+  }
+  const shelter = firstEvent(model, (e) => e.type === "shelter_opened" && HISTORICAL.has(e.evidenceClass));
+  if (shelter && core() < 8 && !/^Temporary refuge|^TRA-/i.test(shelter.label)) {
+    chapters.push({
+      id: "shelter",
+      atMs: shelter.atMs,
+      title: "A place to go",
+      body: sentence(splitSnappedNote(shelter.label).text),
+      evidence: shelter.evidenceClass,
+      focus: [],
     });
   }
 

@@ -4,10 +4,10 @@ import { VARIANT_CAVEATS } from "./compare";
 import { EvidenceChip } from "./parts";
 import type { Chapter, RevealRow } from "./story";
 import { localTime } from "./timeline";
-import type { EvidenceClass, LngLat, TrafficMetrics } from "./types";
+import type { EvidenceClass, LngLat, ReplayModel, TrafficMetrics } from "./types";
 
 /** How long a chapter stays on screen before autoplay moves on. */
-const HOLD_MS = 11_000;
+const HOLD_MS = 9_000;
 /** Wall seconds the clock takes to run into a chapter. */
 const TRAVEL_S = 4;
 /** Longer gaps are skipped: the clock jumps to this much sim time before the chapter, then runs. */
@@ -31,6 +31,8 @@ export interface StoryModeProps {
   focus: (coords: LngLat[], padding: typeof FOCUS_PADDING) => void;
   onShowVariant: (id: string) => void;
   onClose: () => void;
+  /** End of story: open the next fire straight into its story. */
+  nextFire: { label: string; open: () => void } | null;
   /** Paused by the user (dock button, Space or the card's Pause): no auto-advance, no run-in. */
   paused: boolean;
   onTogglePause: () => void;
@@ -56,6 +58,7 @@ export default function StoryMode({
   focus,
   onShowVariant,
   onClose,
+  nextFire,
   paused,
   onTogglePause,
   resumeKey,
@@ -302,14 +305,80 @@ export default function StoryMode({
             {paused ? "Resume" : "Pause"}
           </button>
         )}
-        <button
-          type="button"
-          className="rp-tour-btn rp-tour-btn--primary"
-          onClick={() => (last ? onClose() : goTo(index + 1))}
-        >
-          {last ? "Explore freely" : "Next"}
-        </button>
+        {last ? (
+          <>
+            <button type="button" className="rp-tour-btn" onClick={onClose}>
+              Explore this fire
+            </button>
+            {nextFire && (
+              <button type="button" className="rp-tour-btn rp-tour-btn--primary" onClick={nextFire.open}>
+                Watch {nextFire.label} ▶
+              </button>
+            )}
+          </>
+        ) : (
+          <button type="button" className="rp-tour-btn rp-tour-btn--primary" onClick={() => goTo(index + 1)}>
+            Next
+          </button>
+        )}
       </footer>
+    </section>
+  );
+}
+
+/** Rough wall-clock length of the story: hold plus run-in per chapter. */
+export function storySeconds(chapters: number): number {
+  return chapters * (HOLD_MS / 1000 + TRAVEL_S);
+}
+
+/** "Camp Fire, Nov 8 2018": incident name without its "(year)", plus the local start date. */
+export function storyTitle(model: ReplayModel): string {
+  const startMs = model.fireSimulated?.ignition?.atMs ?? model.clock.startMs;
+  const date = new Intl.DateTimeFormat("en-US", {
+    timeZone: model.incident.timezone,
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  })
+    .format(startMs)
+    .replace(",", "");
+  return `${model.incident.name.replace(/\s*\(\d{4}\)\s*$/, "")}, ${date}`;
+}
+
+/** Story-first landing: the fire, its chapter count and one big Play. */
+export function StoryLanding({
+  title,
+  chapters,
+  seconds,
+  onPlay,
+  onExplore,
+}: {
+  title: string;
+  chapters: number;
+  seconds: number;
+  onPlay: () => void;
+  onExplore: () => void;
+}) {
+  const playRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    playRef.current?.focus();
+  }, []);
+  return (
+    <section className="rp-landing" aria-labelledby="rp-landing-title">
+      <p className="rp-landing-eyebrow">Historical replay · the story</p>
+      <h1 id="rp-landing-title">{title}</h1>
+      <p className="rp-landing-meta">
+        {chapters} chapters · about {Math.max(1, Math.round(seconds / 60))} min · hands-free
+      </p>
+      <button ref={playRef} type="button" className="rp-landing-play" onClick={onPlay}>
+        <span aria-hidden="true">▶</span> Play the story
+      </button>
+      <button type="button" className="rp-landing-explore" onClick={onExplore}>
+        Explore freely
+      </button>
+      <p className="rp-landing-note">
+        Historical records and modelled traffic, each labelled. A planning experiment, not instructions.
+      </p>
     </section>
   );
 }

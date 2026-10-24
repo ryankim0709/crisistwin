@@ -127,6 +127,7 @@ export type LayerGroup =
   | "roads"
   | "particles"
   | "zones"
+  | "people"
   | "destinations"
   | "damage";
 
@@ -144,6 +145,7 @@ export const LAYER_GROUPS: Record<LayerGroup, string[]> = {
   fire: ["fire-glow-outer", "fire-fill", "fire-glow", "fire-line", "fire-label"],
   fireObs: ["fire-obs"],
   zones: ["zones-fill", "zones-hatch", "zones-line", "zones-line-ordered"],
+  people: ["people-fill", "people-line"],
   roads: [
     "roads-base",
     "roads-bridge",
@@ -170,6 +172,7 @@ export const INTERACTIVE_LAYERS = [
   "roads-flow",
   "sim-ignition",
   "zones-fill",
+  "people-fill",
   "fire-fill",
   "sim-front-fill",
 ];
@@ -345,6 +348,42 @@ export function applyTrafficFrame(
     if (!next.has(ri)) map.setFeatureState({ source: "roads", id: ri }, { veh: 0, speed: null, cls: 0 });
   }
   return next;
+}
+
+/** Households at home per km² -> fill colour (grey to white). Shared with the map key. */
+export const PEOPLE_RAMP: [number, string][] = [
+  [0, "#1f262e"],
+  [25, "#3a434d"],
+  [100, "#6b7682"],
+  [300, "#aab4be"],
+  [800, "#f2f5f8"],
+];
+
+/** Static zone polygons for the people layer; numeric feature ids match zone order. */
+export function peopleCollection(model: ReplayModel): FeatureCollection {
+  return {
+    type: "FeatureCollection",
+    features: (model.zones?.items ?? []).map((zone, i) => ({
+      type: "Feature",
+      id: i,
+      geometry: zone.geometry,
+      properties: { name: zone.name, households: zone.households, population: zone.population, vehicles: zone.vehicles },
+    })),
+  };
+}
+
+/** Push per-zone at-home figures to the people layer as feature-state. */
+export function applyPeopleState(
+  map: MapLibreMap,
+  rows: readonly ({ home: number; left: number; density: number } | null)[],
+): void {
+  if (!map.getSource("people")) return;
+  rows.forEach((row, i) => {
+    map.setFeatureState(
+      { source: "people", id: i },
+      row ? { density: row.density, home: row.home, left: row.left } : { density: 0, home: null, left: null },
+    );
+  });
 }
 
 export function zonesCollection(
@@ -603,6 +642,7 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
   geojson("fire-history");
   geojson("fire");
   geojson("zones");
+  map.addSource("people", { type: "geojson", data: peopleCollection(model) });
   geojson("roads", roadsCollection(model));
   geojson("roads-closed-labels");
   geojson("particles");
@@ -671,6 +711,29 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     paint: { "text-color": "#c3cdd6", "text-halo-color": "#0a0e13", "text-halo-width": 1.6, "text-opacity": 0.85 },
   });
   if (!map.hasImage(ZONE_HATCH_IMAGE)) map.addImage(ZONE_HATCH_IMAGE, hatchImage([195, 205, 214], 60, 14));
+
+  // People at home: households still home per km², a neutral grey-to-white ramp (never warm,
+  // never cyan) under everything else. Density arrives as feature-state from ReplayMap.
+  map.addLayer({
+    id: "people-fill",
+    type: "fill",
+    source: "people",
+    paint: {
+      "fill-color": [
+        "interpolate",
+        ["linear"],
+        ["coalesce", ["feature-state", "density"], 0],
+        ...PEOPLE_RAMP.flat(),
+      ],
+      "fill-opacity": ["case", [">", ["coalesce", ["feature-state", "density"], 0], 0.5], 0.42, 0],
+    },
+  });
+  map.addLayer({
+    id: "people-line",
+    type: "line",
+    source: "people",
+    paint: { "line-color": "#c3cdd6", "line-opacity": 0.18, "line-width": 0.6 },
+  });
 
   // Zones: nearly invisible until ordered; ordered zones get a faint (pulsed) hatch.
   map.addLayer({

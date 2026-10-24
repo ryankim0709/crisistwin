@@ -33,6 +33,7 @@ import {
   setBasemap,
   setGroupVisibility,
   setPerimeterFreshness,
+  applyPeopleState,
   destinationsCollection,
   setFireObservationTime,
   setSourceData,
@@ -47,6 +48,7 @@ import { HILLSHADE_LAYER, restyleDarkBasemap } from "./basemapStyle";
 import { buildEdgePath, buildTravelIndex, particlePositions, type EdgePath } from "./particles";
 import PerspectiveSwitcher from "./perspectives/PerspectiveSwitcher";
 import { edgeThreats } from "./insights";
+import { areaKm2, peopleAtHome } from "./population";
 import { openRefugeKey, refugeTimeline } from "./refuges";
 import { EVIDENCE_LABEL, closedEdgesAt, localTime, sameNumbers } from "./timeline";
 import type { EvidenceClass, LngLat, ReplayModel } from "./types";
@@ -205,6 +207,25 @@ function tooltipContent(feature: MapGeoJSONFeature, perParticle: number, timezon
       add("span", `${String(p.dest_kind).replace(/_/g, " ")} · capacity ${p.capacity_veh == null ? "unbounded" : fmt(p.capacity_veh)}`);
       add("span", evidenceText(p.evidence_class), "rp-tip-note");
       break;
+    case "people-fill": {
+      const state = feature.state as { home?: number | null; left?: number | null; density?: number };
+      add("strong", String(p.name));
+      add(
+        "span",
+        [
+          p.households != null && `${fmt(p.households)} households`,
+          p.population != null && `${fmt(p.population)} people`,
+        ]
+          .filter(Boolean)
+          .join(" · "),
+      );
+      if (state.home != null) {
+        add("span", `Still home now: ${fmt(state.home)} · left: ${fmt(state.left)} households (model)`);
+        add("span", `${fmt(state.density)} households at home per km²`);
+      }
+      add("span", "Census ACS households; departures are modelled.", "rp-tip-note");
+      break;
+    }
     case "refuges":
       add("strong", String(p.name));
       add(
@@ -642,6 +663,14 @@ export default function ReplayMap({
     const map = mapRef.current;
     if (ready && map) setSourceData(map, "zones", zonesCollection(model.zones?.items ?? [], zoneStates));
   }, [ready, model, zoneStates]);
+
+  // People at home: zone areas once, then per-minute feature-state from modelled departures.
+  const zoneAreas = useMemo(() => (model.zones?.items ?? []).map((z) => areaKm2(z.geometry)), [model.zones]);
+  const peopleMinute = Math.floor(simTimeMs / 60_000) * 60_000;
+  useEffect(() => {
+    const map = mapRef.current;
+    if (ready && map && visibility.people) applyPeopleState(map, peopleAtHome(model, zoneAreas, peopleMinute));
+  }, [ready, model, zoneAreas, peopleMinute, visibility.people]);
 
   // Refuges open and close at NIST-recorded times; redraw only when the open set changes.
   const refuges = useMemo(

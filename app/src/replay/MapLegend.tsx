@@ -1,4 +1,4 @@
-import { COLORS } from "./mapLayers";
+import { COLORS, PEOPLE_RAMP } from "./mapLayers";
 import { compassPoint } from "./timeline";
 
 /** Compact always-on key: icon plus text for each mark, so colour never carries meaning alone. */
@@ -7,6 +7,7 @@ export default function MapLegend({
   fireObsSource = null,
   showFireObs = false,
   showDestinations = false,
+  peopleSource = null,
   open,
   onToggle,
 }: {
@@ -16,6 +17,8 @@ export default function MapLegend({
   /** Extra rows only while those optional layers are switched on. */
   showFireObs?: boolean;
   showDestinations?: boolean;
+  /** Source text for the people-at-home ramp (e.g. "Census 2018 ACS"); null hides the row. */
+  peopleSource?: string | null;
   open: boolean;
   onToggle: () => void;
 }) {
@@ -98,6 +101,16 @@ export default function MapLegend({
           </svg>
           Closed road
         </li>
+        {peopleSource && (
+          <li>
+            <svg viewBox="0 0 28 14" aria-hidden="true">
+              {PEOPLE_RAMP.slice(1).map(([, color], i) => (
+                <rect key={color} x={1 + i * 6.5} y="2" width="6.5" height="10" fill={color} />
+              ))}
+            </svg>
+            Households at home per km² (0–{PEOPLE_RAMP[PEOPLE_RAMP.length - 1][0]}+), {peopleSource}
+          </li>
+        )}
         {showFireObs && fireObsSource && (
           <li>
             <svg viewBox="0 0 28 14" aria-hidden="true">
