@@ -1611,6 +1611,27 @@
   inset: 0;
 }
 
+.fr-satellite .fire-map-hint {
+  position: absolute;
+  top: calc(var(--fr-inset-top, 0px) + 8px);
+  left: 50%;
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgb(20 43 39 / 92%);
+  border: 1px solid rgb(245 244 238 / 25%);
+  color: #f5f4ee;
+  font-size: 12px;
+  pointer-events: none;
+  transform: translateX(-50%);
+  z-index: 3;
+}
+
+.fr-satellite .fire-map-hint--failed {
+  border-style: dashed;
+  border-color: #ffb547;
+}
+
 .fr-satellite .fire-map-error {
   position: absolute;
   top: calc(var(--fr-inset-top, 0px) + 8px);

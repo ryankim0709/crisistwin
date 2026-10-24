@@ -6,8 +6,8 @@ import {
   NavigationControl,
   ScaleControl,
   type GeoJSONSource,
+  type ErrorEvent,
   type ImageSource,
-  type MapOptions,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { FeatureCollection, Polygon } from "geojson";
@@ -15,6 +15,16 @@ import { FUEL_MODELS, NON_BURNABLE_CODES } from "./fuelModels";
 import { mercatorToLonLat, type LandscapeGrid } from "./landscape";
 import { formatElapsed, type FireFrame, type GeoPoint } from "./spread";
 import { ARRIVAL_COLORS, CURRENT_PERIMETER_COLOR, FUEL_COLORS } from "./fuelPalette";
+import { SATELLITE_STYLE } from "../maps/basemap";
+import {
+  BASEMAP_STYLE_URL,
+  FALLBACK_STYLE,
+  IMAGERY_DATE_NOTE,
+  IMAGERY_LAYER,
+  setBasemap,
+  type BasemapStyle,
+} from "../replay/mapLayers";
+import { HILLSHADE_LAYER, restyleDarkBasemap } from "../replay/basemapStyle";
 import "./fire.css";
 
 export type ClickMode = "origin" | "wind";
@@ -34,7 +44,6 @@ interface FireMapProps {
 
 const DEFAULT_CENTER: GeoPoint = { latitude: 37.88, longitude: -122.24 };
 const DEFAULT_ZOOM = 12;
-const IMAGERY_LOAD_TIMEOUT_MS = 15_000;
 const PERIMETER_SOURCE = "fire-perimeters";
 const FUEL_SOURCE = "fire-fuel";
 
@@ -51,22 +60,50 @@ function fuelColor(code: number): [number, number, number, number] {
   return [107, 79, 42, 150];
 }
 
-const SATELLITE_STYLE: MapOptions["style"] = {
-  version: 8,
-  sources: {
-    imagery: {
-      type: "raster",
-      tiles: [
-        "https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}",
-      ],
-      tileSize: 256,
-      maxzoom: 16,
-      attribution:
-        '<a href="https://www.usgs.gov/programs/national-geospatial-program/national-map">USDA / USGS The National Map</a> · Aerial imagery',
-    },
-  },
-  layers: [{ id: "imagery", type: "raster", source: "imagery" }],
-};
+// Mirrors the Historical replay's satellite mode (replay/ReplayMap.tsx): same timeouts.
+const STYLE_TIMEOUT_MS = 10_000;
+const IMAGERY_TIMEOUT_MS = 15_000;
+const IMAGERY_MAX_ERRORS = 12;
+
+/**
+ * Fetch and restyle the OpenFreeMap dark basemap, as the replay does. Replicated from
+ * replay/ReplayMap.tsx `loadBasemapStyle` (not exported there). Null on any failure.
+ */
+async function loadBasemapStyle(signal: AbortSignal): Promise<BasemapStyle | null> {
+  const timeout = new AbortController();
+  const timer = window.setTimeout(() => timeout.abort(), STYLE_TIMEOUT_MS);
+  const abort = () => timeout.abort();
+  signal.addEventListener("abort", abort);
+  try {
+    const response = await fetch(BASEMAP_STYLE_URL, { signal: timeout.signal });
+    if (!response.ok) return null;
+    const style: unknown = await response.json();
+    if (
+      typeof style !== "object" ||
+      style === null ||
+      !("version" in style) ||
+      style.version !== 8 ||
+      !("layers" in style) ||
+      !Array.isArray(style.layers)
+    ) {
+      return null;
+    }
+    return restyleDarkBasemap(style as BasemapStyle);
+  } catch {
+    return null;
+  } finally {
+    window.clearTimeout(timer);
+    signal.removeEventListener("abort", abort);
+  }
+}
+
+/** The teammate's USGS imagery raster source (maps/basemap.ts); replicated from replay/mapLayers.ts. */
+function imagerySource() {
+  const style = SATELLITE_STYLE;
+  if (typeof style !== "object" || style === null) return null;
+  const source = style.sources.imagery;
+  return source && source.type === "raster" ? source : null;
+}
 
 interface PerimeterFeatureProperties {
   elapsedMinutes: number;
@@ -171,153 +208,216 @@ export default function SatelliteFireMap({
   const headMarker = useRef<Marker | null>(null);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [imagery, setImagery] = useState<"loading" | "ok" | "failed">("loading");
 
   useEffect(() => {
     clickRef.current = onMapClick;
   }, [onMapClick]);
 
   useEffect(() => {
-    if (!container.current) return;
-    let map: Map;
-    try {
-      map = new Map({
-        container: container.current,
-        style: SATELLITE_STYLE,
-        center: [DEFAULT_CENTER.longitude, DEFAULT_CENTER.latitude],
-        zoom: DEFAULT_ZOOM,
-        minZoom: 2,
-        maxZoom: 19,
-        attributionControl: { compact: true },
-      });
-    } catch (cause) {
-      setError(
-        cause instanceof Error
-          ? `Unable to initialize the map: ${cause.message}`
-          : "Unable to initialize the map. This map requires WebGL2 support.",
-      );
-      return;
-    }
-    mapRef.current = map;
+    const element = container.current;
+    if (!element) return;
+    const controller = new AbortController();
+    let cancelled = false;
+    let cleanup = () => {};
 
-    const timeout = window.setTimeout(() => {
-      setError("Imagery is taking longer to load. Check your internet connection.");
-    }, IMAGERY_LOAD_TIMEOUT_MS);
-    let failed = false;
-    map.on("error", () => {
-      failed = true;
-      window.clearTimeout(timeout);
-      setError("Some imagery could not load. Check your connection or try another area.");
-    });
-    map.on("movestart", () => {
-      failed = false;
-    });
-    map.on("idle", () => {
-      window.clearTimeout(timeout);
-      if (!failed) setError(null);
-    });
+    loadBasemapStyle(controller.signal).then((style) => {
+      if (cancelled) return;
+      let map: Map;
+      try {
+        map = new Map({
+          container: element,
+          style: style ?? FALLBACK_STYLE,
+          center: [DEFAULT_CENTER.longitude, DEFAULT_CENTER.latitude],
+          zoom: DEFAULT_ZOOM,
+          minZoom: 2,
+          maxZoom: 19,
+          attributionControl: { compact: true, customAttribution: IMAGERY_DATE_NOTE },
+        });
+      } catch (cause) {
+        setError(
+          cause instanceof Error
+            ? `Unable to initialize the map: ${cause.message}`
+            : "Unable to initialize the map. This map requires WebGL2 support.",
+        );
+        return;
+      }
+      mapRef.current = map;
 
-    map.addControl(new NavigationControl({ visualizePitch: true }), "top-right");
-    map.addControl(new ScaleControl({ unit: "metric" }), "bottom-left");
+      map.addControl(new NavigationControl({ visualizePitch: true }), "top-right");
+      map.addControl(new ScaleControl({ unit: "metric" }), "bottom-left");
 
-    map.on("load", () => {
-      map.addSource(FUEL_SOURCE, {
-        type: "image",
-        url: TRANSPARENT_PIXEL,
-        coordinates: [
-          [-0.001, 0.001],
-          [0.001, 0.001],
-          [0.001, -0.001],
-          [-0.001, -0.001],
-        ],
-      });
-      map.addLayer({
-        id: "fire-fuel-layer",
-        type: "raster",
-        source: FUEL_SOURCE,
-        paint: { "raster-opacity": 0, "raster-resampling": "nearest" },
-      });
-      map.addSource(PERIMETER_SOURCE, { type: "geojson", data: EMPTY });
-      map.addLayer({
-        id: "fire-arrival-fill",
-        type: "fill",
-        source: PERIMETER_SOURCE,
-        paint: {
-          "fill-color": [
-            "interpolate",
-            ["linear"],
-            ["get", "arrivalFraction"],
-            0,
-            ARRIVAL_COLORS.earliest,
-            0.5,
-            ARRIVAL_COLORS.middle,
-            1,
-            ARRIVAL_COLORS.latest,
+      // Imagery loading hint and fallback, as in replay/ReplayMap.tsx: fall back to the restyled
+      // map on repeated imagery tile errors, or if no tile at all arrives before the timeout.
+      let loaded = false;
+      let anyTile = false;
+      let errors = 0;
+      let failed = false;
+      const fail = () => {
+        if (failed || loaded || anyTile) return;
+        failed = true;
+        setBasemap(map, "dark");
+        setImagery("failed");
+      };
+      const onData = (event: { sourceId?: string; tile?: { state?: string } }) => {
+        if (failed || event.sourceId !== IMAGERY_LAYER) return;
+        if (event.tile?.state === "loaded") anyTile = true;
+        // Errored tiles also count as "loaded" for the source, so require a real tile first.
+        if (anyTile && map.isSourceLoaded(IMAGERY_LAYER)) {
+          loaded = true;
+          setImagery("ok");
+        }
+      };
+      const onError = (event: ErrorEvent) => {
+        if ((event as unknown as { sourceId?: string }).sourceId !== IMAGERY_LAYER) return;
+        errors += 1;
+        if (errors >= IMAGERY_MAX_ERRORS) fail();
+      };
+      map.on("sourcedata", onData);
+      map.on("error", onError);
+      const timeout = window.setTimeout(() => {
+        if (!loaded && !anyTile) fail();
+      }, IMAGERY_TIMEOUT_MS);
+
+      map.on("load", () => {
+        const imagerySrc = imagerySource();
+        const layers = map.getStyle().layers;
+        // Imagery sits just under the hillshade (and so under roads and labels).
+        if (imagerySrc) {
+          map.addSource(IMAGERY_LAYER, imagerySrc);
+          const below = layers.find((l) => l.id === HILLSHADE_LAYER)?.id ?? layers.find((l) => l.type === "line" || l.type === "symbol")?.id;
+          map.addLayer(
+            {
+              id: IMAGERY_LAYER,
+              type: "raster",
+              source: IMAGERY_LAYER,
+              paint: { "raster-fade-duration": 0 },
+            },
+            below,
+          );
+          setBasemap(map, "satellite");
+        } else {
+          setImagery("failed");
+        }
+        // Fire layers go above imagery but under place labels / symbols so names stay readable.
+        const beforeId = layers.find((l) => l.type === "symbol")?.id;
+        map.addSource(FUEL_SOURCE, {
+          type: "image",
+          url: TRANSPARENT_PIXEL,
+          coordinates: [
+            [-0.001, 0.001],
+            [0.001, 0.001],
+            [0.001, -0.001],
+            [-0.001, -0.001],
           ],
-          "fill-opacity": 0.42,
-        },
+        });
+        map.addLayer(
+          {
+            id: "fire-fuel-layer",
+            type: "raster",
+            source: FUEL_SOURCE,
+            paint: { "raster-opacity": 0, "raster-resampling": "nearest" },
+          },
+          beforeId,
+        );
+        map.addSource(PERIMETER_SOURCE, { type: "geojson", data: EMPTY });
+        map.addLayer(
+          {
+            id: "fire-arrival-fill",
+            type: "fill",
+            source: PERIMETER_SOURCE,
+            paint: {
+              "fill-color": [
+                "interpolate",
+                ["linear"],
+                ["get", "arrivalFraction"],
+                0,
+                ARRIVAL_COLORS.earliest,
+                0.5,
+                ARRIVAL_COLORS.middle,
+                1,
+                ARRIVAL_COLORS.latest,
+              ],
+              "fill-opacity": 0.42,
+            },
+          },
+          beforeId,
+        );
+        map.addLayer(
+          {
+            id: "fire-perimeter-line",
+            type: "line",
+            source: PERIMETER_SOURCE,
+            paint: {
+              "line-color": [
+                "interpolate",
+                ["linear"],
+                ["get", "arrivalFraction"],
+                0,
+                ARRIVAL_COLORS.earliest,
+                0.5,
+                ARRIVAL_COLORS.middle,
+                1,
+                ARRIVAL_COLORS.latest,
+              ],
+              "line-width": 1.1,
+              "line-opacity": 0.8,
+            },
+          },
+          beforeId,
+        );
+        map.addLayer(
+          {
+            id: "fire-current-line",
+            type: "line",
+            source: PERIMETER_SOURCE,
+            filter: ["==", ["get", "current"], true],
+            paint: { "line-color": CURRENT_PERIMETER_COLOR, "line-width": 2.4 },
+          },
+          beforeId,
+        );
+        setReady(true);
       });
-      map.addLayer({
-        id: "fire-perimeter-line",
-        type: "line",
-        source: PERIMETER_SOURCE,
-        paint: {
-          "line-color": [
-            "interpolate",
-            ["linear"],
-            ["get", "arrivalFraction"],
-            0,
-            ARRIVAL_COLORS.earliest,
-            0.5,
-            ARRIVAL_COLORS.middle,
-            1,
-            ARRIVAL_COLORS.latest,
-          ],
-          "line-width": 1.1,
-          "line-opacity": 0.8,
-        },
-      });
-      map.addLayer({
-        id: "fire-current-line",
-        type: "line",
-        source: PERIMETER_SOURCE,
-        filter: ["==", ["get", "current"], true],
-        paint: { "line-color": CURRENT_PERIMETER_COLOR, "line-width": 2.4 },
-      });
-      setReady(true);
+
+      function selectPoint(longitude: number, latitude: number) {
+        clickRef.current({
+          latitude,
+          longitude: ((((longitude + 180) % 360) + 360) % 360) - 180,
+        });
+      }
+      map.on("click", (event) => selectPoint(event.lngLat.lng, event.lngLat.lat));
+      function selectCenter(event: KeyboardEvent) {
+        if (event.key !== "Enter") return;
+        const center = map.getCenter();
+        selectPoint(center.lng, center.lat);
+      }
+      const canvas = map.getCanvas();
+      canvas.addEventListener("keydown", selectCenter);
+      canvas.style.cursor = "crosshair";
+
+      const resize = new ResizeObserver(() => map.resize());
+      resize.observe(element);
+
+      cleanup = () => {
+        window.clearTimeout(timeout);
+        resize.disconnect();
+        canvas.removeEventListener("keydown", selectCenter);
+        originMarker.current?.remove();
+        windMarker.current?.remove();
+        headMarker.current?.remove();
+        originMarker.current = null;
+        windMarker.current = null;
+        headMarker.current = null;
+        setReady(false);
+        map.remove();
+        mapRef.current = null;
+      };
     });
-
-    function selectPoint(longitude: number, latitude: number) {
-      clickRef.current({
-        latitude,
-        longitude: ((((longitude + 180) % 360) + 360) % 360) - 180,
-      });
-    }
-    map.on("click", (event) => selectPoint(event.lngLat.lng, event.lngLat.lat));
-    function selectCenter(event: KeyboardEvent) {
-      if (event.key !== "Enter") return;
-      const center = map.getCenter();
-      selectPoint(center.lng, center.lat);
-    }
-    const canvas = map.getCanvas();
-    canvas.addEventListener("keydown", selectCenter);
-    canvas.style.cursor = "crosshair";
-
-    const resize = new ResizeObserver(() => map.resize());
-    resize.observe(container.current);
 
     return () => {
-      window.clearTimeout(timeout);
-      resize.disconnect();
-      canvas.removeEventListener("keydown", selectCenter);
-      originMarker.current?.remove();
-      windMarker.current?.remove();
-      headMarker.current?.remove();
-      originMarker.current = null;
-      windMarker.current = null;
-      headMarker.current = null;
-      setReady(false);
-      map.remove();
-      mapRef.current = null;
+      cancelled = true;
+      controller.abort();
+      cleanup();
     };
   }, []);
 
@@ -340,6 +440,15 @@ export default function SatelliteFireMap({
     }
     map.setPaintProperty("fire-fuel-layer", "raster-opacity", showFuel && fuelOverlay ? 0.85 : 0);
   }, [ready, fuelOverlay, showFuel]);
+
+  // Frame the loaded region so the ignition can be placed on it (default view is the Bay Area).
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready || !fuelOverlay) return;
+    const bounds = new LngLatBounds();
+    for (const corner of fuelOverlay.corners) bounds.extend(corner);
+    map.fitBounds(bounds, { padding: 40, duration: 0 });
+  }, [ready, fuelOverlay]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -442,6 +551,16 @@ export default function SatelliteFireMap({
   return (
     <div className="fire-map-container">
       <div ref={container} className="fire-map" />
+      {!error && imagery === "loading" && (
+        <p className="fire-map-hint" role="status">
+          Loading satellite imagery…
+        </p>
+      )}
+      {!error && imagery === "failed" && (
+        <p className="fire-map-hint fire-map-hint--failed" role="alert">
+          Satellite imagery (USGS) did not load — showing the map instead.
+        </p>
+      )}
       {error && (
         <p className="fire-map-error" role="status">
           {error}
