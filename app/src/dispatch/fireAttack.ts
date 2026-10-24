@@ -5,15 +5,19 @@
  * it actually arrives on the road network. Line is built at the engine rate (grass-equivalent,
  * so heavier fuel needs more work) while the fire's edge keeps growing; the edge is an
  * ellipse with the fire's modelled area and its ignition-point length-to-breadth ratio. The fire
- * is out once the line built covers it. A fire whose head flame at the ignition point is longer
- * than an engine can hold, or that crowns there, cannot be attacked directly. Pure: no React,
- * network or LLM. See docs/adr/0022-dispatch-fire-attack.md.
+ * is out once the line built covers it. Direct attack is only possible where engines can hold
+ * the head: a wildland fire whose ignition-point head flame is within the Hauling-chart limit
+ * and that is not crowning, or a structure fire (engines fight buildings directly; the chart is
+ * for wildland fuel). Every fire can still be flanked or attacked indirectly (fireTactics.ts).
+ * Pure: no React, network or LLM. See docs/adr/0022-dispatch-fire-attack.md and
+ * docs/adr/0025-dispatch-fire-tactics.md.
  */
 
 import type { ScheduledFireRun } from "../fire/scheduledTypes";
 import { RESOURCE_TYPES, productionFactor } from "../studio/firefighting";
 import { ellipsePerimeter } from "../studio/initialAttack";
 import type { LonLat } from "./area";
+import { DEVELOPED_FUEL_CODE } from "../fire/spread";
 
 /** Line one engine builds per minute in grass, metres. */
 export const ENGINE_LINE_METERS_PER_MINUTE = RESOURCE_TYPES.engine.metersPerHourInGrass / 60;
@@ -34,8 +38,12 @@ export interface FireTarget {
   lengthToBreadth: number;
   /** Grass-equivalent line work per metre of this fire's edge. */
   workPerMeter: number;
-  /** Why engines cannot attack it directly, or null when they can. */
+  /** Why engines cannot attack it at all (another fire got there first), or null. */
   notAttackable: string | null;
+  /** Why engines cannot attack its head directly, or null when they can. */
+  directBlocked: string | null;
+  /** Started on developed ground (a structure fire). */
+  structureFire: boolean;
 }
 
 /** Burned area per fire (index as in `FireTarget[]`) at one frame minute, m². */
@@ -52,6 +60,7 @@ export function fireTargets(run: ScheduledFireRun, names: Record<string, string>
     const headFlameFeet = crowning ? Infinity : conditions.spread.flameLengthFeet;
     const factor = productionFactor(conditions.fuelCode);
     const ignitedMinute = outcome.status === "ignited" ? outcome.ignitedMinute : null;
+    const structureFire = conditions.fuelCode === DEVELOPED_FUEL_CODE;
     return {
       id: source.id,
       name: names[source.id] || source.id,
@@ -60,13 +69,15 @@ export function fireTargets(run: ScheduledFireRun, names: Record<string, string>
       headFlameFeet,
       lengthToBreadth: Math.max(1, conditions.spread.lengthToBreadth),
       workPerMeter: Number.isFinite(factor) ? 1 / factor : 0,
-      notAttackable:
+      notAttackable: ignitedMinute === null ? "another fire reached this point first" : null,
+      structureFire,
+      directBlocked:
         ignitedMinute === null
           ? "another fire reached this point first"
           : crowning
-            ? "it is crowning"
-            : headFlameFeet > ENGINE_HOLDS_FLAME_FEET
-              ? `its ${headFlameFeet.toFixed(1)} ft head flame is longer than the ${ENGINE_HOLDS_FLAME_FEET} ft engines can hold`
+            ? "it is crowning; no crew can hold a crown fire's head"
+            : !structureFire && headFlameFeet > ENGINE_HOLDS_FLAME_FEET
+              ? `its ${headFlameFeet.toFixed(1)} ft head flame is longer than the ${ENGINE_HOLDS_FLAME_FEET} ft engines can hold at the head (Hauling chart); its flanks can still be worked`
               : null,
     };
   });
@@ -118,7 +129,7 @@ export function projectOutMinute(
   arrivals: readonly number[],
   horizonMinutes: number,
 ): number | null {
-  if (target.notAttackable || target.ignitedMinute === null || arrivals.length === 0) return null;
+  if (target.directBlocked || target.ignitedMinute === null || arrivals.length === 0) return null;
   for (let minute = Math.max(now, target.ignitedMinute); minute <= horizonMinutes; minute += 1) {
     let built = builtMeters;
     for (const arrival of arrivals) {

@@ -6,6 +6,7 @@
  * monitor's quiet checks. Every number is engine output; the agent's text is labelled.
  */
 
+import { FIRE_TACTICS, builtMeters, tacticBlocked, type FireTactic } from "./fireTactics";
 import { useState, type ReactNode } from "react";
 import { Button } from "../ui";
 import type { DispatchArea } from "./area";
@@ -185,7 +186,10 @@ function orderLine(
     };
   }
   if (order.type === "attack_fire") {
-    return { icon: "🔥", text: `${order.unit_id} → attack fire ${order.fire_id}` };
+    return {
+      icon: "🔥",
+      text: `${order.unit_id} → fire ${order.fire_id}, ${TACTIC_LABEL[order.tactic ?? "direct"]}`,
+    };
   }
   return { icon: "↩", text: `Recall ${order.unit_id} to station` };
 }
@@ -517,7 +521,9 @@ function unitStatusText(engine: DispatchEngine, unit: UnitState): string {
       : unit.task === "structure_defense"
         ? "structure defense"
         : unit.task === "fire_attack"
-          ? "fire attack"
+          ? unit.fire !== null
+            ? TACTIC_LABEL[engine.fires[unit.fire].tactic ?? "direct"]
+            : "fire attack"
           : "";
   const eta = engine.unitEtaMinutes(unit);
   switch (unit.status) {
@@ -545,20 +551,102 @@ function Crews({ engine }: { engine: DispatchEngine }) {
   }
   const stations = new Map(engine.area.stations.map((station) => [station.id, station]));
   return (
-    <ul className="dsp-crews">
-      {engine.units.map((unit) => {
-        const station = stations.get(unit.stationId);
-        return (
-          <li key={unit.id} className={`dsp-crew dsp-crew--${unit.status}`}>
-            <span className="dsp-crew__id">🚒 {unit.id}</span>
-            <span className="dsp-crew__body">
-              <strong>{unitStatusText(engine, unit)}</strong>
-              <span className="dsp-muted">
-                {station?.name ?? unit.stationId}
-                {station &&
-                  station.approachMeters > 200 &&
-                  ` · ${(station.approachMeters / 1000).toFixed(1)} km outside the area`}
+    <>
+      <FireCards engine={engine} />
+      <ul className="dsp-crews">
+        {engine.units.map((unit) => {
+          const station = stations.get(unit.stationId);
+          return (
+            <li key={unit.id} className={`dsp-crew dsp-crew--${unit.status}`}>
+              <span className="dsp-crew__id">🚒 {unit.id}</span>
+              <span className="dsp-crew__body">
+                <strong>{unitStatusText(engine, unit)}</strong>
+                <span className="dsp-muted">
+                  {station?.name ?? unit.stationId}
+                  {station &&
+                    station.approachMeters > 200 &&
+                    ` · ${(station.approachMeters / 1000).toFixed(1)} km outside the area`}
+                </span>
               </span>
+            </li>
+          );
+        })}
+      </ul>
+    </>
+  );
+}
+
+const TACTIC_LABEL: Record<FireTactic, string> = {
+  direct: "direct attack",
+  flank: "flank attack",
+  indirect: "indirect attack",
+};
+
+/** Each fire: status, the tactic in effect, and which tactics engines can use (and why not). */
+function FireCards({ engine }: { engine: DispatchEngine }) {
+  const minute = engine.minute;
+  const fires = engine.fires.filter(
+    (fire) => fire.target.ignitedMinute !== null && fire.target.ignitedMinute <= minute,
+  );
+  if (fires.length === 0) return null;
+  return (
+    <ul className="dsp-fires" aria-label="Fires and how engines can fight them">
+      {fires.map((fire) => {
+        const index = engine.fires.indexOf(fire);
+        const crews = engine.fireAttackers(index).map((unit) => unit.id);
+        const hectares = engine.fireAreaSquareMeters(index) / 10_000;
+        const status =
+          fire.outMinute !== null
+            ? `Out at ${hhmm(fire.outMinute)}`
+            : fire.heldAnnounced && fire.heldMinute !== null
+              ? `Held at ${hhmm(fire.heldMinute)}`
+              : fire.tactic
+                ? `${TACTIC_LABEL[fire.tactic]} by ${crews.join(", ") || "no crews"}`
+                : "No engines on it";
+        const outlook =
+          fire.outMinute === null && !fire.heldAnnounced && fire.tactic
+            ? fire.tactic === "direct"
+              ? engine.projectedOutMinute(index)
+              : fire.heldMinute
+            : null;
+        return (
+          <li key={fire.target.id} className="dsp-fire">
+            <span className="dsp-crew__id">🔥 {fire.target.name}</span>
+            <span className="dsp-crew__body">
+              <strong>
+                {status}
+                {outlook !== null && ` · simulator: contained ${hhmm(outlook)}`}
+              </strong>
+              <span className="dsp-muted">
+                {hectares < 10 ? hectares.toFixed(1) : Math.round(hectares)} ha ·{" "}
+                {fire.target.structureFire
+                  ? "structure fire"
+                  : Number.isFinite(fire.target.headFlameFeet)
+                    ? `${fire.target.headFlameFeet.toFixed(1)} ft head flame`
+                    : "crowning"}
+                {fire.line &&
+                  fire.line.cells.length > 0 &&
+                  ` · line ${(builtMeters(fire.line, minute) / 1000).toFixed(1)} of ${(fire.line.plannedMeters / 1000).toFixed(1)} km built`}
+              </span>
+              <span className="dsp-fire__tactics">
+                {FIRE_TACTICS.map((tactic) => {
+                  const blocked = tacticBlocked(fire.target, tactic);
+                  return (
+                    <span
+                      key={tactic}
+                      className={`dsp-tag${blocked ? " dsp-tag--off" : ""}`}
+                      title={blocked ?? `Engines can use ${TACTIC_LABEL[tactic]}`}
+                    >
+                      {blocked ? "✕" : "✓"} {tactic}
+                    </span>
+                  );
+                })}
+              </span>
+              {tacticBlocked(fire.target, "direct") && (
+                <span className="dsp-muted">
+                  No direct attack: {tacticBlocked(fire.target, "direct")}.
+                </span>
+              )}
             </span>
           </li>
         );

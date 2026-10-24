@@ -4,6 +4,10 @@ Date: 2026-10-24. Status: accepted for the demo. Amends [0019](0019-live-dispatc
 [0021](0021-fire-path-scoped-evacuation.md); builds on the direct-attack estimate of
 [0020](0020-studio-firefighting.md).
 
+> **Update (2026-10-24):** amended by [0025](0025-dispatch-fire-tactics.md): "not attackable"
+> now blocks only direct attack; engines can flank or attack indirectly, and structure fires can
+> be attacked directly.
+
 ## Context
 
 The dispatcher could only send engines to zones for evacuation support or structure defense, and

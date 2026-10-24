@@ -801,8 +801,9 @@ type SpreadRunTotals = Pick<
  * Control lines built by firefighters, per landscape cell (row-major like `fuelCodes`).
  * Planned outside the solver (studio/firefighting.ts); the solver only enforces them.
  *
- * A cell with `holdFromMinute[i] <= t` is a constructed line at time t. Fire spreading at
- * time t never crosses it on a multi-cell step. It may burn into it from an adjacent cell
+ * A cell with `holdFromMinute[i] <= t` is a constructed line at time t, judged at the time
+ * fire would arrive there (not when the cell behind it caught). Fire never crosses a built
+ * line on a multi-cell step. It may burn into it from an adjacent cell
  * only when the flame facing the line in that direction is longer than
  * `holdsFlameLengthFeet[i]` (the line is breached there), and then spreads on from it.
  * Judging breaches on adjacent steps only keeps a fire running along a line from cutting
@@ -1008,6 +1009,9 @@ export function simulateScheduledFireSpread(
     reachedEdgeMinute: solution.reachedEdgeMinute,
     computeMilliseconds: performance.now() - startedAt,
     arrivalMinutes: Float32Array.from(solution.arrival),
+    sourceIndexByCell: Int8Array.from(solution.firstSource, (source, cell) =>
+      solution.arrival[cell] <= settings.horizonMinutes ? source : -1,
+    ),
   };
 }
 
@@ -1536,21 +1540,27 @@ function solveSpread(
         e > 0 ? (rate * (1 - e)) / (1 - e * Math.cos(bearings[n] - headingRadians[cell])) : rate;
       if (rateToward < floor) rateToward = floor;
       if (rateToward <= 0) continue;
+      const candidate = time + distances[n] / rateToward;
       // Built control line on the step (destination or any cell stepped over) stops it. An
       // adjacent step may still burn into the line when the flame facing it in this
-      // direction is longer than the line holds (see `ControlLines`).
-      // Crown fire (passive or active) is taken to breach any line. Blocking depends only
-      // on the departure time and gets stricter as time passes, so arriving later is never
-      // faster and the minimum-travel-time order stays valid.
-      if (holdFrom && lineCrossed(cell, neighbour, barrierStart[n], barrierStart[n + 1], time)) {
+      // direction is longer than the line holds (see `ControlLines`). Crown fire (passive or
+      // active) is taken to breach any line. A line counts as built when it is finished by
+      // the time the fire would arrive (`candidate`), not when the cell behind it caught:
+      // across a 30 m cell a flank or backing fire takes an hour or more. Blocking only gets
+      // stricter for later arrivals, so arriving later is never faster and the
+      // minimum-travel-time order stays valid.
+      if (
+        holdFrom &&
+        lineCrossed(cell, neighbour, barrierStart[n], barrierStart[n + 1], candidate)
+      ) {
         if (!adjacentStep[n]) continue;
         const flame =
           crownType[cell] !== CROWN_SURFACE
             ? Number.POSITIVE_INFINITY
             : headFlameFeet[cell] * Math.pow(Math.min(1, rateToward / rate), BYRAM_FLAME_EXPONENT);
-        if (lineHolds(neighbour, barrierStart[n], barrierStart[n + 1], cell, time, flame)) continue;
+        if (lineHolds(neighbour, barrierStart[n], barrierStart[n + 1], cell, candidate, flame))
+          continue;
       }
-      const candidate = time + distances[n] / rateToward;
       if (candidate < arrival[neighbour]) {
         arrival[neighbour] = candidate;
         arrivalMechanism[neighbour] = sourceMechanism;
@@ -1591,10 +1601,11 @@ function solveSpread(
         // The first vegetated cell on this ray is where the brands land; past it the
         // ordinary surface solver takes over.
         if (!crossedGap || settled[target] || headRate[target] <= 0) break;
-        if (holdFrom && holdFrom[target] <= time) break;
         const flightMeters = step * groundCellSizeMeters;
         const candidate =
           time + flightMeters / emberSpeedMetersPerMinute + SPOTTING_IGNITION_DELAY_MINUTES;
+        // Embers do not take hold in line built by the time they would ignite.
+        if (holdFrom && holdFrom[target] <= candidate) break;
         if (candidate < arrival[target]) {
           arrival[target] = candidate;
           arrivalMechanism[target] = ARRIVAL_SPOTTING;

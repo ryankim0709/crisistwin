@@ -28,14 +28,21 @@ OBSERVATION = {
     "exits": [{"id": "E1"}, {"id": "E2"}],
     "units": [{"id": "U1"}],
     "fires": [
-        {"id": "F1", "status": "burning", "attackable": True},
+        {
+            "id": "F1",
+            "status": "burning",
+            "tactics_blocked": {"direct": None, "flank": None, "indirect": None},
+        },
         {
             "id": "F2",
             "status": "burning",
-            "attackable": False,
-            "not_attackable_reason": "it is crowning",
+            "tactics_blocked": {"direct": "it is crowning", "flank": None, "indirect": None},
         },
-        {"id": "F3", "status": "out", "attackable": True},
+        {
+            "id": "F3",
+            "status": "out",
+            "tactics_blocked": {"direct": None, "flank": None, "indirect": None},
+        },
     ],
 }
 
@@ -49,6 +56,7 @@ def order(**fields):
         "unit_id": None,
         "task": None,
         "fire_id": None,
+        "tactic": None,
         "reason": "test",
     }
     return {**base, **fields}
@@ -147,6 +155,7 @@ class FireAttackValidationTests(SimpleTestCase):
         item = ISSUE_ORDERS_TOOL["input_schema"]["properties"]["orders"]["items"]
         self.assertIn("attack_fire", ORDER_TYPES)
         self.assertIn("fire_id", item["required"])
+        self.assertIn("tactic", item["required"])
 
     def test_valid_attack_is_normalized(self):
         orders, rejected, _ = validate_orders(
@@ -154,21 +163,50 @@ class FireAttackValidationTests(SimpleTestCase):
             self.index,
         )
         self.assertEqual(rejected, [])
+        # No tactic means direct attack.
         self.assertEqual(
-            orders, [{"type": "attack_fire", "unit_id": "U1", "fire_id": "F1", "reason": "test"}]
+            orders,
+            [
+                {
+                    "type": "attack_fire",
+                    "unit_id": "U1",
+                    "fire_id": "F1",
+                    "tactic": "direct",
+                    "reason": "test",
+                }
+            ],
         )
 
-    def test_attack_rejects_unknown_unattackable_and_out_fires(self):
-        for fire_id, why in (("F9", "Unknown"), ("F2", "crowning"), ("F3", "out")):
+    def test_attack_rejects_unknown_fires_blocked_tactics_and_out_fires(self):
+        cases = (
+            ("F9", "direct", "Unknown"),
+            ("F2", "direct", "crowning"),
+            ("F3", "flank", "out"),
+            ("F1", "backfire", "Invalid tactic"),
+        )
+        for fire_id, tactic, why in cases:
             orders, rejected, _ = validate_orders(
                 {
                     "summary": "",
-                    "orders": [order(type="attack_fire", unit_id="U1", fire_id=fire_id)],
+                    "orders": [
+                        order(type="attack_fire", unit_id="U1", fire_id=fire_id, tactic=tactic)
+                    ],
                 },
                 self.index,
             )
             self.assertEqual(orders, [], fire_id)
             self.assertIn(why, rejected[0]["reason"])
+
+    def test_a_fire_too_hot_for_direct_attack_can_still_be_flanked(self):
+        orders, rejected, _ = validate_orders(
+            {
+                "summary": "",
+                "orders": [order(type="attack_fire", unit_id="U1", fire_id="F2", tactic="flank")],
+            },
+            self.index,
+        )
+        self.assertEqual(rejected, [])
+        self.assertEqual(orders[0]["tactic"], "flank")
 
     def test_one_order_per_unit(self):
         orders, rejected, _ = validate_orders(

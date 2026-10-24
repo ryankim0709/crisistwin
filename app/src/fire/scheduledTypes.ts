@@ -118,6 +118,11 @@ export interface ScheduledFireRun {
    * `FireRun.arrivalMinutes`, for renderers such as the studio's 3D diorama.
    */
   arrivalMinutes: Float32Array;
+  /**
+   * Index into `input.sources` of the fire that reached each cell first, -1 where none did
+   * (same layout as `arrivalMinutes`). Lets callers isolate one fire's footprint.
+   */
+  sourceIndexByCell: Int8Array;
 }
 
 export type IgnitionProblemReason = "outside-landscape" | "non-burnable";

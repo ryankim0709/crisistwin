@@ -974,3 +974,30 @@
     display: none;
   }
 }
+
+/* Fires and their tactics (Fire crews tab) */
+.dsp-fires {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
+}
+.dsp-fire {
+  display: flex;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--ct-danger-border);
+  border-radius: var(--ct-radius-md);
+  background: var(--ct-danger-soft);
+}
+.dsp-fire__tactics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+.dsp-tag--off {
+  opacity: 0.6;
+  text-decoration: line-through;
+}

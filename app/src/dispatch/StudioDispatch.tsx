@@ -8,7 +8,12 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ScheduledFireRun } from "../fire/scheduledTypes";
-import { simulateScheduledFireSpread } from "../fire/spread";
+import { simulateScheduledFireSpread, type ControlLines } from "../fire/spread";
+import { CompositeOverlay } from "../fire/diorama/compositeOverlay";
+import { FirelineOverlay, type FirelineView } from "../studio/FirelineOverlay";
+import { lineStatus } from "../studio/firefighting";
+import { fireArrival, joinPlans } from "./fireTactics";
+import type { SolvedFire, TacticSolver } from "./tacticOptions";
 import { LIVE_SNAPSHOT_VERSION, type LiveSnapshot } from "../live/contracts";
 import { LiveShareToggle } from "../live/LiveShareToggle";
 import { fireRings, hectares, liveZones } from "../live/snapshot";
@@ -21,7 +26,7 @@ import { fireAreaFrames, fireTargets } from "./fireAttack";
 import { computeExposure } from "./fireExposure";
 import type { FrameSummary } from "./observation";
 import { DispatchOverlay } from "./scene/DispatchOverlay";
-import { useDispatchSession, type ResolvedFire } from "./useDispatchSession";
+import { useDispatchSession } from "./useDispatchSession";
 import { Button } from "../ui";
 import "./dispatch.css";
 
@@ -44,6 +49,18 @@ function frameSummaries(run: ScheduledFireRun): FrameSummary[] {
   }));
 }
 
+/** Burned hectares and synthetic homes the fire reaches by the horizon. */
+function outcomeOf(
+  run: ScheduledFireRun,
+  exposure: { homeArrival: Float64Array },
+  horizonMinutes: number,
+): { burnedHectares: number; homesReached: number } {
+  let homesReached = 0;
+  for (const minute of exposure.homeArrival) if (minute <= horizonMinutes) homesReached += 1;
+  const last = run.frames[run.frames.length - 1];
+  return { burnedHectares: (last?.reachedAreaSquareMeters ?? 0) / 10_000, homesReached };
+}
+
 function snapBox([w, s, e, n]: Bbox): Bbox {
   const snap = (value: number, round: (v: number) => number) =>
     Number((round(value / AREA_SNAP_DEGREES) * AREA_SNAP_DEGREES).toFixed(2));
@@ -63,6 +80,12 @@ export default function StudioDispatch({
   const [areaAttempt, setAreaAttempt] = useState(0);
   const [selectedZone, setSelectedZone] = useState<number | null>(null);
   const overlay = useMemo(() => new DispatchOverlay(), []);
+  const lineOverlay = useMemo(() => new FirelineOverlay(), []);
+  const composite = useMemo(() => {
+    const value = new CompositeOverlay();
+    value.setChildren([overlay, lineOverlay]);
+    return value;
+  }, [overlay, lineOverlay]);
 
   // Only a current run is dispatched; an edited (stale) scenario must be run again first.
   const current = result && !stale ? result : null;
@@ -138,8 +161,9 @@ export default function StudioDispatch({
     (minutes: number) => {
       clockRef.current = minutes;
       overlay.setPreviewMinute(minutes);
+      lineOverlay.setMinute(minutes);
     },
-    [clockRef, overlay],
+    [clockRef, overlay, lineOverlay],
   );
   const session = useDispatchSession(pushTime);
   const sessionActive = session.status !== "idle" && session.engine !== null;
@@ -168,9 +192,9 @@ export default function StudioDispatch({
   // ---- 3D overlay ------------------------------------------------------------------------
   useEffect(() => {
     if (!scene) return;
-    scene.setOverlay(overlay);
+    scene.setOverlay(composite);
     return () => scene.setOverlay(null);
-  }, [scene, overlay]);
+  }, [scene, composite]);
   // Modelled homes replace the board's placeholder houses once the area is loaded.
   useEffect(() => {
     if (!scene) return;
@@ -186,17 +210,39 @@ export default function StudioDispatch({
   useEffect(() => {
     overlay.setSelectedZone(selectedZone);
   }, [overlay, selectedZone]);
+  // Control line the dispatched engines build (flank and indirect attack), on the live fire.
+  const lineEngine = sessionActive ? session.engine : null;
+  const firelineView = useMemo<FirelineView | null>(() => {
+    if (!lineEngine || !current || !dispatchRun) return null;
+    const line = lineEngine.fires.reduce(
+      (all, fire) => joinPlans(all, fire.line),
+      null as ReturnType<typeof joinPlans>,
+    );
+    if (!line || line.cells.length === 0) return null;
+    return {
+      grid: current.landscape,
+      line,
+      status: lineStatus(line, dispatchRun.arrivalMinutes, horizonMinutes),
+      arrival: dispatchRun.arrivalMinutes,
+    };
+    // session.version: the engine's lines change in place.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lineEngine, current, dispatchRun, horizonMinutes, session.version]);
+  useEffect(() => {
+    lineOverlay.setView(firelineView);
+  }, [lineOverlay, firelineView]);
   // Before a session, homes darken as the studio's playback clock reaches them.
   useEffect(() => {
     if (sessionActive || !area) return;
     let handle = 0;
     const tick = () => {
       overlay.setPreviewMinute(clockRef.current);
+      lineOverlay.setMinute(clockRef.current);
       handle = requestAnimationFrame(tick);
     };
     handle = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(handle);
-  }, [sessionActive, area, overlay, clockRef]);
+  }, [sessionActive, area, overlay, lineOverlay, clockRef]);
 
   const selectZone = useCallback(
     (zone: number | null) => {
@@ -209,27 +255,44 @@ export default function StudioDispatch({
     [area, scene],
   );
 
-  const resolveFire = useCallback(
-    (outFromMinuteBySource: number[]): ResolvedFire => {
+  /** The fire with some fires put out and some control lines built, for the dispatcher. */
+  const solveFire = useCallback(
+    (outFromMinuteBySource: number[], lines: ControlLines | null): SolvedFire => {
       if (!current || !area) throw new Error("No run to re-solve.");
       const run = simulateScheduledFireSpread(
         current.landscape,
         current.run.input,
-        null,
+        lines,
         outFromMinuteBySource,
       );
-      setLiveRun(run);
+      const solvedExposure = computeExposure(area, current.landscape, run.arrivalMinutes);
       return {
-        exposure: computeExposure(area, current.landscape, run.arrivalMinutes),
+        run,
+        exposure: solvedExposure,
         frames: frameSummaries(run),
         fireFrames: fireAreaFrames(run),
+        ...outcomeOf(run, solvedExposure, horizonMinutes),
       };
     },
-    [current, area],
+    [current, area, horizonMinutes],
   );
+  const solver = useMemo<TacticSolver | null>(
+    () =>
+      current
+        ? {
+            grid: current.landscape,
+            unchecked: current.run.ignitions.map((_, index) => fireArrival(current.run, index)),
+            windFromDegrees: current.scenario.settings.windFromDegrees,
+            horizonMinutes,
+            solve: solveFire,
+          }
+        : null,
+    [current, horizonMinutes, solveFire],
+  );
+  const showFire = useCallback((solved: SolvedFire) => setLiveRun(solved.run), []);
 
   const handleStart = useCallback(() => {
-    if (!area || !exposure || !current) return;
+    if (!area || !exposure || !current || !solver) return;
     showDiorama();
     setSelectedZone(null);
     setLiveRun(null);
@@ -242,7 +305,9 @@ export default function StudioDispatch({
       frames,
       fireTargets: fireTargets(current.run, names),
       fireFrames: fireAreaFrames(current.run),
-      resolveFire,
+      solver,
+      showFire,
+      initialOutcome: outcomeOf(current.run, exposure, horizonMinutes),
       baselineHomesExposed: baseline?.caught ?? null,
       horizonMinutes,
       ignitions,
@@ -259,7 +324,8 @@ export default function StudioDispatch({
     ignitions,
     session,
     showDiorama,
-    resolveFire,
+    solver,
+    showFire,
   ]);
 
   // ---- Resident app broadcast (simulated guidance per zone) -------------------------------
