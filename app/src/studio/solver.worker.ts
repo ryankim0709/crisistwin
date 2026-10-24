@@ -3,6 +3,8 @@
 import { simulateScheduledFireSpread } from "../fire/spread";
 import { InvalidIgnitionsError } from "../fire/scheduledTypes";
 import type { SolverRequest, SolverResponse } from "./contracts";
+import { planFirefighting } from "./firefighting";
+import { runInitialAttack } from "./initialAttack";
 
 // The app compiles against the DOM lib, where `self` is a Window. Inside a dedicated worker
 // it exposes the same onmessage/postMessage surface as a `Worker`, so type it as one rather
@@ -15,7 +17,30 @@ scope.onmessage = (event: MessageEvent<SolverRequest>) => {
   let response: SolverResponse;
   try {
     const run = simulateScheduledFireSpread(request.landscape, request.input);
-    response = { type: "result", requestId: request.requestId, run };
+    const firefighting = request.firefighting?.enabled
+      ? planFirefighting(
+          request.landscape,
+          request.input,
+          run,
+          request.firefighting,
+          (done, total) =>
+            scope.postMessage({
+              type: "progress",
+              requestId: request.requestId,
+              done,
+              total,
+            } satisfies SolverResponse),
+        )
+      : null;
+    if (firefighting && request.firefighting) {
+      firefighting.initialAttack = runInitialAttack(
+        request.landscape,
+        request.input,
+        run,
+        request.firefighting,
+      );
+    }
+    response = { type: "result", requestId: request.requestId, run, firefighting };
   } catch (cause) {
     response = {
       type: "error",

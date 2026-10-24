@@ -13,6 +13,12 @@ import {
 } from "./evacuation";
 import { computeExposure } from "../dispatch/fireExposure";
 import { useBoardStreets } from "../fire/useBoardStreets";
+import FirefightingFields from "./FirefightingFields";
+import FirefightingResults, { type FireShown } from "./FirefightingResults";
+import type { FirelineView } from "./FirelineOverlay";
+import { useMapFireline } from "./useMapFireline";
+import { FIRELINE_COLORS, firelineCss } from "./firelinePalette";
+import type { Map as MapLibreMap } from "maplibre-gl";
 import StudioMap from "./StudioMap";
 import {
   DISPLAY_STEP_MINUTES,
@@ -187,6 +193,17 @@ export default function SimulationStudioPage({
 
   const { state, run, cancel, markStale } = useStudioRun();
   const { result } = state;
+  // Which fire to show when the run includes firefighting: direct attack once on site, the
+  // best control-line plan, or the free run. Falls back to the free run when unavailable.
+  const [fireShown, setFireShown] = useState<FireShown>("attack");
+  const firefighting = result?.firefighting ?? null;
+  const shownRun = result
+    ? fireShown === "attack" && firefighting?.initialAttack
+      ? firefighting.initialAttack.run
+      : fireShown === "line" && firefighting?.best
+        ? firefighting.best.run
+        : result.run
+    : null;
 
   // Prebuilt region board (MongoDB), drawn in 3D before any run and used to solve fires on it.
   const [regionId, setRegionId] = useState(loadRegionId);
@@ -440,9 +457,9 @@ export default function SimulationStudioPage({
   const exposure = useMemo(
     () =>
       area && dioramaShowsRun
-        ? computeExposure(area, result.landscape, result.run.arrivalMinutes)
+        ? computeExposure(area, result.landscape, shownRun!.arrivalMinutes)
         : null,
-    [area, dioramaShowsRun, result],
+    [area, dioramaShowsRun, result, shownRun],
   );
   const evacuationInputs = useMemo<EvacuationInputs | null>(
     () =>
@@ -528,14 +545,14 @@ export default function SimulationStudioPage({
   }, [scenario.ignitions, issueIds, problemIds, result, stale, resultStates]);
 
   const visibleFrames = useMemo(
-    () => (result ? result.run.frames.slice(0, safeFrameIndex + 1) : []),
-    [result, safeFrameIndex],
+    () => (shownRun ? shownRun.frames.slice(0, safeFrameIndex + 1) : []),
+    [shownRun, safeFrameIndex],
   );
 
   const warnings = useMemo(() => {
     const list: string[] = [];
-    if (result) {
-      const { run: solved } = result;
+    if (result && shownRun) {
+      const solved = shownRun;
       if (solved.reachedEdgeMinute !== null && currentMinute >= solved.reachedEdgeMinute) {
         list.push(
           `Fire reached the edge of the modelled area at ${formatElapsed(Math.round(solved.reachedEdgeMinute))}; the footprint after that is incomplete.`,
@@ -566,7 +583,7 @@ export default function SimulationStudioPage({
     }
     list.push(OPERATIONAL_DISCLAIMER);
     return list;
-  }, [result, currentMinute, stale]);
+  }, [result, shownRun, currentMinute, stale]);
 
   /** Fuel and surface head rate per ignition, from the current (non-stale) result only. */
   const ignitionDetails = useMemo(() => {
@@ -601,16 +618,16 @@ export default function SimulationStudioPage({
 
   const dioramaRun = useMemo<DioramaRun | null>(
     () =>
-      result
+      result && shownRun
         ? {
-            arrivalMinutes: result.run.arrivalMinutes,
+            arrivalMinutes: shownRun.arrivalMinutes,
             scenario: {
               horizonMinutes: result.scenario.settings.horizonMinutes,
               stepMinutes: DISPLAY_STEP_MINUTES,
             },
           }
         : null,
-    [result],
+    [result, shownRun],
   );
   const dioramaIgnitions = useMemo<DioramaIgnition[]>(
     () =>
@@ -638,7 +655,7 @@ export default function SimulationStudioPage({
   );
 
   const metrics = useMemo(() => {
-    const frame = result?.run.frames[safeFrameIndex];
+    const frame = shownRun?.frames[safeFrameIndex];
     const upcoming = events
       .filter((event) => event.minute > currentMinute)
       .sort((a, b) => a.minute - b.minute)[0];
@@ -648,7 +665,25 @@ export default function SimulationStudioPage({
       reachedAreaSquareMeters: frame?.reachedAreaSquareMeters ?? 0,
       nextIgnition: upcoming ? { name: upcoming.name, minute: upcoming.minute } : null,
     };
-  }, [result, safeFrameIndex, events, currentMinute, scenario.ignitions]);
+  }, [shownRun, safeFrameIndex, events, currentMinute, scenario.ignitions]);
+
+  // The best plan's control line, drawn while its fire is the one shown. On a page with an
+  // aside (/dispatch) the dispatcher owns the 3D overlay, so the line is drawn on the map only.
+  const firelineView = useMemo<FirelineView | null>(
+    () =>
+      result && fireShown === "line" && firefighting?.best
+        ? {
+            grid: result.landscape,
+            line: firefighting.best.line,
+            status: firefighting.best.status,
+            arrival: firefighting.best.run.arrivalMinutes,
+          }
+        : null,
+    [result, fireShown, firefighting],
+  );
+  const fireline = dioramaShowsRun && !Aside ? firelineView : null;
+  const [studioMap, setStudioMap] = useState<MapLibreMap | null>(null);
+  useMapFireline(view === "map" ? studioMap : null, firelineView, currentMinute);
 
   const handlePlayPause = useCallback(() => {
     if (frameMinutes.length === 0 || locked) return;
@@ -691,6 +726,7 @@ export default function SimulationStudioPage({
                 onSceneChange={setScene}
                 streets={streets}
                 evacuation={evacuationView}
+                fireline={fireline}
                 evacuationPanel={
                   Aside ? undefined : (
                     <EvacuationPanel
@@ -839,6 +875,37 @@ export default function SimulationStudioPage({
                 onMapClick={handleMapClick}
                 onSelectIgnition={handleSelect}
                 onMoveIgnition={(id, point) => updateIgnition(id, { location: point })}
+                onMapReady={setStudioMap}
+                legendExtra={
+                  firelineView ? (
+                    <div className="studio-map__legend-group">
+                      <h3>Firefighters</h3>
+                      <ul className="ui-legend studio-map__extras">
+                        <li>
+                          <span
+                            className="studio-ff-dot"
+                            style={{ background: firelineCss(FIRELINE_COLORS.held) }}
+                          />
+                          Control line built, holding so far (small dot)
+                        </li>
+                        <li>
+                          <span
+                            className="studio-ff-dot is-lost"
+                            style={{ background: firelineCss(FIRELINE_COLORS.breached) }}
+                          />
+                          Line burned over by flames (large dot)
+                        </li>
+                        <li>
+                          <span
+                            className="studio-ff-dot is-lost"
+                            style={{ background: firelineCss(FIRELINE_COLORS.outrun) }}
+                          />
+                          Line the fire reached before the crew (large dot)
+                        </li>
+                      </ul>
+                    </div>
+                  ) : undefined
+                }
               />
             )}
           </div>
@@ -860,7 +927,11 @@ export default function SimulationStudioPage({
             )}
             {state.phase === "computing" && (
               <div className="studio-chip">
-                <LoadingState>Computing fire spread…</LoadingState>
+                <LoadingState>
+                  {state.progress
+                    ? `Testing firefighting plans… ${state.progress.done} of ${state.progress.total}`
+                    : "Computing fire spread…"}
+                </LoadingState>
               </div>
             )}
             {state.phase === "canceled" && (
@@ -910,6 +981,29 @@ export default function SimulationStudioPage({
               onExport={handleExport}
               onImport={handleImport}
               onLoadDemo={handleLoadDemo}
+              firefighting={
+                <FirefightingFields
+                  scenario={scenario}
+                  onScenarioChange={applyScenario}
+                  idPrefix="studio"
+                  result={
+                    firefighting ? (
+                      <FirefightingResults
+                        result={firefighting}
+                        names={Object.fromEntries(
+                          (result?.scenario.ignitions ?? []).map((ignition) => [
+                            ignition.id,
+                            ignition.name || ignition.id,
+                          ]),
+                        )}
+                        stale={stale}
+                        shown={fireShown}
+                        onShownChange={setFireShown}
+                      />
+                    ) : null
+                  }
+                />
+              }
             />
           </div>
         </div>

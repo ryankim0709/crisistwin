@@ -1,4 +1,4 @@
-# 0020: Evacuate only the fire path
+# 0021: Evacuate only the fire path
 
 Date: 2026-10-24. Status: accepted for the demo. Amends [0019](0019-live-dispatch-monitor.md).
 
