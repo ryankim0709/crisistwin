@@ -3,6 +3,12 @@ import { useMediaQuery } from "../diorama/ui/format";
 import type { FireDioramaSceneApi, GroundClickMode } from "./diorama/types";
 import { FireDioramaScene } from "./diorama/FireDioramaScene";
 import AreaPicker, { AREA_PRESETS, DEFAULT_AREA } from "./ui/AreaPicker";
+import {
+  AREA_SIZES,
+  DEFAULT_AREA_SIZE,
+  effectiveRadiusMeters,
+  type AreaSizeId,
+} from "./ui/areaSize";
 import FireDock from "./ui/FireDock";
 import FireLegend from "./ui/FireLegend";
 import { formatDuration } from "./ui/format";
@@ -10,6 +16,7 @@ import { useFirePlayback } from "./useFirePlayback";
 import {
   LANDFIRE_ATTRIBUTION,
   TERRAIN_ATTRIBUTION,
+  landscapeCellMetersFor,
   loadLandscape,
   type LandscapeGrid,
 } from "./landscape";
@@ -47,10 +54,8 @@ const PHONE_STAGE_MAX_WIDTH_PX = 720;
 const SPACE_OWNERS =
   "button, a[href], select, textarea, summary, [contenteditable], input:not([type='range'])";
 const MAX_WIND_SPEED_MPH = 60;
-/** Grid half-width: generous enough for a fast run, bounded so downloads stay small. */
-const ASSUMED_FAST_SPREAD_METERS_PER_MINUTE = 40;
-const MIN_RADIUS_METERS = 3000;
-const MAX_RADIUS_METERS = 12000;
+/** LANDFIRE's native cell size; anything coarser is disclosed next to the area. */
+const NATIVE_CELL_METERS = 30;
 
 /**
  * Demo defaults. These are presentation choices, not calibrated parameters: they put the
@@ -117,11 +122,8 @@ function nwsProvenance(reading: NwsWindReading, clampedFromMph: number | null): 
   );
 }
 
-function radiusFor(horizonMinutes: number): number {
-  return Math.min(
-    Math.max(horizonMinutes * ASSUMED_FAST_SPREAD_METERS_PER_MINUTE, MIN_RADIUS_METERS),
-    MAX_RADIUS_METERS,
-  );
+function formatKm(meters: number): string {
+  return String(Number((meters / 1000).toFixed(1)));
 }
 
 function formatArea(squareMeters: number): string {
@@ -201,6 +203,7 @@ export default function FireSimulatorPage() {
   const wide = useMediaQuery(WIDE_QUERY);
 
   const [areaCenter, setAreaCenter] = useState<GeoPoint>(DEFAULT_AREA.point);
+  const [areaSize, setAreaSize] = useState<AreaSizeId>(DEFAULT_AREA_SIZE);
   const [areaPickerOpen, setAreaPickerOpen] = useState(false);
   const [origin, setOrigin] = useState<GeoPoint | null>(null);
   const [windSpeedMph, setWindSpeedMph] = useState(DEFAULT_WIND_SPEED_MPH);
@@ -247,7 +250,8 @@ export default function FireSimulatorPage() {
   // The scenario panel starts open on wide stages and closed on phones until the user decides.
   const scenarioOpen = scenarioOpenChoice ?? !phone;
 
-  const radiusMeters = radiusFor(horizonMinutes);
+  const radiusMeters = effectiveRadiusMeters(horizonMinutes, areaSize);
+  const requestedCellMeters = landscapeCellMetersFor(radiusMeters);
 
   // Fuel and terrain depend only on where and how far, so wind, moisture and ignition edits
   // never refetch. An older request can never overwrite a newer one.
@@ -257,7 +261,9 @@ export default function FireSimulatorPage() {
     const request = ++requestRef.current;
     const controller = new AbortController();
     setLandscape({ status: "loading" });
-    loadLandscape(areaCenter.longitude, areaCenter.latitude, radiusMeters, controller.signal)
+    loadLandscape(areaCenter.longitude, areaCenter.latitude, radiusMeters, controller.signal, {
+      cellMeters: requestedCellMeters,
+    })
       .then((grid) => {
         if (request !== requestRef.current) return;
         // A longer or shorter horizon changes the box; keep the ignition only if it is inside.
@@ -273,7 +279,7 @@ export default function FireSimulatorPage() {
         });
       });
     return () => controller.abort();
-  }, [areaCenter, radiusMeters, loadAttempt]);
+  }, [areaCenter, radiusMeters, requestedCellMeters, loadAttempt]);
 
   const scenario = useMemo(
     () =>
@@ -521,9 +527,10 @@ export default function FireSimulatorPage() {
     resetScenarioRef.current = clearScenario;
   });
 
-  function changeArea(center: GeoPoint) {
+  function changeArea(center: GeoPoint, size?: AreaSizeId) {
     setAreaPickerOpen(false);
     clearScenario();
+    if (size) setAreaSize(size);
     setAreaCenter(center);
   }
 
@@ -684,7 +691,7 @@ export default function FireSimulatorPage() {
         key: "edge",
         text:
           "The fire reached the edge of the modelled area. Results past that point are " +
-          "truncated; try a longer horizon for a wider grid.",
+          "truncated; try a larger area size or a longer horizon for a wider grid.",
       });
     }
   }
@@ -695,6 +702,8 @@ export default function FireSimulatorPage() {
       : "Click downwind of the ignition point to aim the wind that way."
     : "Click the landscape to place an ignition point on vegetated ground.";
   const sceneReady = sceneStatus.kind === "ready";
+  // Report the resolution the loaded grid really has; the request is only a stand-in while loading.
+  const displayedCellMeters = grid ? grid.groundCellSizeMeters : requestedCellMeters;
 
   return (
     <main
@@ -732,7 +741,13 @@ export default function FireSimulatorPage() {
         {landscape.status === "loading" && (
           <div className="fr-veil" role="status">
             <span className="fr-veil-dot" aria-hidden="true" />
-            Sculpting terrain from LANDFIRE fuels and elevation…
+            <div>
+              <p>Sculpting terrain from LANDFIRE fuels and elevation…</p>
+              <p className="fr-veil-note">
+                {formatKm(radiusMeters)} km radius · {requestedCellMeters} m cells. Large areas
+                take longer.
+              </p>
+            </div>
           </div>
         )}
 
@@ -807,10 +822,29 @@ export default function FireSimulatorPage() {
                     Change area
                   </button>
                 </div>
+                <div className="fr-field-inline fr-area-size">
+                  <label htmlFor="area-size">Area size</label>
+                  <select
+                    id="area-size"
+                    value={areaSize}
+                    onChange={(event) => setAreaSize(event.target.value as AreaSizeId)}
+                  >
+                    {AREA_SIZES.map((size) => (
+                      <option key={size.id} value={size.id}>
+                        {size.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
                 <p className="fr-readout">
                   {areaCenter.latitude.toFixed(3)}, {areaCenter.longitude.toFixed(3)} ·{" "}
-                  {(radiusMeters / 1000).toFixed(0)} km radius
+                  {formatKm(radiusMeters)} km radius · {displayedCellMeters} m cells
                 </p>
+                {displayedCellMeters > NATIVE_CELL_METERS && (
+                  <p className="fr-hint">
+                    Coarser cells smooth narrow fuel breaks and small neighbourhoods.
+                  </p>
+                )}
               </div>
 
               <fieldset className="fr-field">
@@ -1025,13 +1059,10 @@ export default function FireSimulatorPage() {
                 >
                   {HORIZON_CHOICES.map((minutes) => (
                     <option key={minutes} value={minutes}>
-                      {minutes / 60} hours
+                      {minutes / 60} h
                     </option>
                   ))}
                 </select>
-                <span className="fr-readout">
-                  {(radiusMeters / 1000).toFixed(0)} km grid radius
-                </span>
               </div>
 
               <div className="fr-field">
@@ -1097,22 +1128,24 @@ export default function FireSimulatorPage() {
             </div>
           </section>
 
-          <button
-            type="button"
-            className="fr-btn fr-scenario-open"
-            aria-expanded={scenarioOpen}
-            aria-controls="fr-scenario"
-            onClick={() => setScenarioOpenChoice(true)}
-          >
-            <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-              <path d="M2 4.5h12M2 8h12M2 11.5h12" stroke="currentColor" strokeWidth="1.6" />
-            </svg>
-            Scenario
-          </button>
+          {!scenarioOpen && (
+            <button
+              type="button"
+              className="fr-btn fr-scenario-open"
+              aria-expanded={false}
+              aria-controls="fr-scenario"
+              onClick={() => setScenarioOpenChoice(true)}
+            >
+              <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+                <path d="M2 4.5h12M2 8h12M2 11.5h12" stroke="currentColor" strokeWidth="1.6" />
+              </svg>
+              Scenario
+            </button>
+          )}
 
           <div className="fr-notice">
             <div className="fr-notice-bar fr-panel">
-              <span className="fr-chip">Simulated · illustrative · not operational guidance</span>
+              <span className="fr-chip">Simulated · illustrative · not operational</span>
               <button
                 type="button"
                 className="fr-info-btn"
