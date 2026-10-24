@@ -354,3 +354,108 @@ the baseline `traffic.edge_ids`.
   `details.intel_events` with `status` `unresolved` or `duplicate` and are not applied. The
   added events keep `evidence_class: "reported"`; the variant itself is `simulated`. It is
   skipped when the file is absent or nothing snaps.
+
+## Drill packages
+
+A **drill package** is a replay bundle that `livecore.drill.load_drill` can run as a live drill
+([ADR 0030](adr/0030-scenario-engine.md) "Drill package"). Historical bundles (Camp) are one
+builder. The other builder turns a Simulation Studio run anywhere in California into a package
+([ADR 0037](adr/0037-studio-drill-packages.md)): `livecore/package.py` (pure), served by
+`api/live/packages.py`.
+
+### Endpoints (controller)
+
+- `POST /api/live/packages`: body is a Studio run export (below), at most 24 MB. The server picks
+  the road box from the fire, gets `/api/dispatch/area` for it (same cache), builds the package,
+  checks that it loads, and stores `{LIVE_PACKAGES_DIR}/{package_id}.json` plus a `.meta.json`
+  (default directory `app/backend/var/packages`, git-ignored). Returns `201` (or `200` for a run
+  already stored) with `{package_id, incident_id, summary}`; `summary` holds `name`, `place`,
+  `label`, `clock`, `bbox`, `zones`, `homes` (`homes_label: "synthetic"`), `vehicles`,
+  `road_segments`, `exits`, `stations`, `fronts`, `fire_area_km2` (`fire_label: "simulated"`) and
+  `clipped`. Errors: `400 invalid_run`, `413 too_large`, `422 outside_california | bad_bbox |
+  no_roads | no_exits | no_homes | invalid_area`, `502 upstream_unavailable`.
+- `GET /api/live/packages`: `{packages: [{package_id, incident_id, created_at, summary}]}`,
+  newest first.
+
+Building a package never changes the active drill. `api.live.packages.activate(package_id)`
+only reports what switching would change; `/api/live/active` owns switching.
+
+### Studio run export (`crisistwin_studio_run`, v1)
+
+```jsonc
+{
+  "kind": "crisistwin_studio_run", "schema_version": 1,
+  "scenario": { "id": "…", "name": "Ridge fire" },
+  "region_id": "sonoma" ,                    // prebuilt board the run used, or null
+  "ignition_time": "2026-10-24T20:00:00Z",   // drill T+0, chosen (the Studio has no clock)
+  "ignitions": [ { "id": "…", "name": "F1", "coord": [-122.6, 38.5], "start_minute": 0 } ],
+  "assumptions": { "wind_20ft_mph": 20, "wind_from_deg": 45,   // degrees true, blowing FROM
+                   "moisture": { "dead1h": 0.03, "dead10h": 0.04, "dead100h": 0.05,
+                                 "liveHerb": 0.3, "liveWoody": 0.6 },   // fractions
+                   "midflame_adjustment": 0.4, "horizon_min": 180,
+                   "spotting": null, "structure_spread": null },
+  "model": { "id": "rothermel-1972-mtt", "version": "4.1.0" },
+  "landscape": { "cell_m": 30, "resampling": "native", "elevation_complete": true },
+  "arrival_grid": {
+    "crs": "EPSG:3857", "order": "row_major_north_first",
+    "origin_x": 0, "origin_y": 0,          // Web Mercator metres, centre of cell (0, 0)
+    "cell_x": 30, "cell_y": -30,           // signed Mercator metres per cell; row 0 is north
+    "ground_cell_m": 23.7, "ncols": 0, "nrows": 0,
+    "arrival_s": [0, 330, null]            // row * ncols + col; integer s after T+0; null = not reached
+  },
+  "frames": [ { "minute": 10, "area_m2": 52000,
+                "geometry": { "type": "MultiPolygon", "coordinates": [] } } ]  // [lon, lat]; null = no fire yet
+}
+```
+
+The web client sends the free-burning run (never a firefighting plan), crops the grid to the
+reached cells plus two cells, coarsens it by block minimum (earliest arrival) above 1.4 M
+cells, and thins frames to the finest of 10/15/20/30/60 min that stays under 300 k vertices.
+The server rejects anything malformed: wrong kind or CRS, a grid of the wrong length,
+arrivals outside 0..horizon, wind, moisture or horizon outside the Studio's limits, a time
+without `Z`, frames out of order or outside the grid (swapped coordinates), or no fire.
+
+**California:** the box centre and every ignition must lie inside `CA_POLYGON` in
+`livecore/package.py`, a 20-vertex outline (state lines on land, a seaward coastline a few km
+offshore; accurate to a few km; islands excluded). Otherwise `422 outside_california`.
+
+**Road box:** the reached cells and ignitions plus 3 km, centred and cut to 0.26 x 0.20 deg
+(the dispatch area allows 0.28 x 0.22 before its 0.01 deg snap). A larger fire keeps its whole
+timeline but roads and zones cover its centre only (`drill_package.dispatch_area.clipped`, and
+a limitation says so).
+
+### Package shape
+
+Same top-level shape as a replay bundle (`kind: "crisistwin_replay_bundle"`), with:
+
+- `drill_package`: `{kind: "crisistwin_drill_package", version: 1, builder:
+  "studio-drill-package/1", package_id, source: "studio_scenario", label, studio: {scenario_id,
+  name, region_id, model, landscape}, dispatch_area: {id, builder, bbox, requested_bbox,
+  clipped, generated_at, sources}}`. `package_id` (`pkg_` + 12 hex) and `incident.id`
+  (`studio-` + the same 12 hex) hash the run export, the area and the builder, so the same run
+  gives the same package.
+- `mode: "scenario"`; `clock.start` = `ignition_time`, `clock.end` = start + horizon + 120 min
+  (the last front holds).
+- `roads.edges`: one directed edge per dispatch-area edge row direction (`e{i}f`, and `e{i}r`
+  for two-way roads, sharing `segment_id` `s{i}`; nodes `n{index}`). `lanes` = capacity / the
+  assumed per-lane capacity of the class. `evidence_class: "derived"` (OSM geometry, assumed
+  capacity and default speeds).
+- `zones.features`: one per dispatch-area zone, `households` = synthetic homes, `vehicles`,
+  `synthetic: true`, `evidence_class: "fixture"`; geometry is the hull of the zone's synthetic
+  homes (a 120 m square when the hull is degenerate).
+- `destinations.features`: the area's exits (`kind: "exit"`, `capacity_veh: null`, `node_id`).
+- `stations.features` (new, additive): OSM fire stations `{id, name, coord, node_id,
+  approach_m, units}`; units are one assumed engine each (`evidence_class: "fixture"`). Stations
+  are not evacuation destinations, so they are not in `destinations`.
+- `fire.perimeters: []`; `fire_observations.features: []`; `events: []`; `layer_status` marks
+  them, `traffic` and `damage` `missing` with a reason.
+- `fire_simulated`: `evidence_class: "simulated"`, `model.params` (the assumptions above),
+  `ignitions` (each `provenance: "assumed: placed in Simulation Studio"`), `fronts` (one per
+  non-empty frame, `at` = T+0 + minute), and `arrival_grid` in the bundle shape above, resampled
+  nearest-cell from the Mercator grid over the reached area at max(ground cell, 100 m).
+- `assumptions`: wind, moisture and ignition time (stated as assumed), the area's synthetic
+  demand notes. `limitations`: simulated fire (not observed or forecast), no historical record,
+  fire stops at the horizon, synthetic zones, clipping and missing terrain when they apply.
+
+Load a package with `livecore.package.load_package(path)`: it is `load_drill` with the
+package's incident id, label ("Drill: simulated Studio fire, … Not a real incident.") and name.

@@ -19,6 +19,7 @@ from .routing import (
     DESTINATION_KINDS,
     FIRE_BUFFER_M,
     Exposure,
+    Incumbent,
     Route,
     alternative_routes,
     best_routes,
@@ -30,7 +31,7 @@ EVACUATE_NOW_KM = 3.0
 """Zone within this distance of the fire estimate -> ``evacuate_now``."""
 BE_READY_KM = 8.0
 """Zone within this distance (and beyond EVACUATE_NOW_KM) -> ``be_ready``."""
-PLANNER_VERSION = "planner-v3"
+PLANNER_VERSION = "planner-v4"
 """Recorded in proposal ``inputs.planner_version``; bump when the rules change."""
 THROUGH_FIRE_CAVEAT = "Every route out passes through the fire"
 """``caveat`` when no route to any usable destination avoids the fire estimate itself."""
@@ -185,6 +186,8 @@ def plan(
     fire: FireEstimate,
     blocked_segment_ids: Collection[str],
     full_destination_ids: Collection[str] = (),
+    congestion: Mapping[str, float] | None = None,
+    incumbents: Mapping[str, Incumbent] | None = None,
 ) -> list[ZoneGuidance]:
     """Guidance for every zone, in ``drill.zones`` order.
 
@@ -194,6 +197,11 @@ def plan(
     EXPOSED_REASON and the caveat THROUGH_FIRE_CAVEAT (EXPOSED_NEAR_REASON and NEAR_FIRE_CAVEAT
     when it only enters the buffer); ``no_route`` only when even that pass finds nothing.
     ``replay_now`` is recorded by callers; the plan uses only ``fire`` for time-dependent input.
+
+    ``congestion`` (directed edge id -> simulated travel-time factor) and ``incumbents`` (zone
+    id -> the route it follows now) go to ``best_routes``: route search costs include simulated
+    queues, and a zone keeps its incumbent unless the new route saves ``routing.switch_margin_s``.
+    Deterministic for given arguments.
     """
     geometry = fire.geometry
     distances: dict[str, float | None] = {
@@ -201,7 +209,8 @@ def plan(
     }
     levels = {zid: level_for_distance(d) for zid, d in distances.items()}
     routes = (
-        best_routes(drill, blocked_segment_ids, geometry, full_destination_ids)
+        best_routes(drill, blocked_segment_ids, geometry, full_destination_ids,
+                    congestion=congestion, incumbents=incumbents)
         if any(level != "none" for level in levels.values()) else {}
     )
     out: list[ZoneGuidance] = []
@@ -266,6 +275,7 @@ def with_alternatives(
     fire_geometry: MultiPolygon | None,
     full_destination_ids: Collection[str] = (),
     preferences: Mapping[tuple[str, str], int] = {},
+    congestion: Mapping[str, float] | None = None,
 ) -> list[ZoneGuidance]:
     """``guidance`` with ``alternatives`` set on every zone that moves along a route.
 
@@ -279,6 +289,7 @@ def with_alternatives(
     whose named roads (``via``) match one already offered is skipped: to the person it is the
     same way out.
     ``preferences`` ((zone id, destination id) -> live choices) only feeds ``load``.
+    ``congestion`` (simulated factors, as in ``plan``) weights the alternatives' search.
     """
     picks = {g.zone_id: g.route for g in guidance if g.level != "none" and not g.no_route and g.route is not None}
     if not picks:
@@ -287,7 +298,8 @@ def with_alternatives(
     for (_, did), n in preferences.items():
         per_destination[did] = per_destination.get(did, 0) + n
     loads = destination_loads(drill, guidance, per_destination)
-    candidates = alternative_routes(drill, picks, blocked_segment_ids, fire_geometry, full_destination_ids)
+    candidates = alternative_routes(drill, picks, blocked_segment_ids, fire_geometry, full_destination_ids,
+                                    congestion=congestion)
     dests = {d.id: d for d in drill.destinations}
 
     def rank(r: Route) -> tuple[int, int, float, str]:

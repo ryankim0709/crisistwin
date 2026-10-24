@@ -62,7 +62,8 @@ instruction.
 MongoDB through the existing `api/mongodb.py` boundary (ADR 0008); clients poll
 with a `since` cursor. No Convex, WebSockets or push in this phase. Endpoints
 fail closed: each requires a device, responder or controller token, issued and
-checked server-side and stored hashed. Civilian submissions are rate-limited per
+checked server-side and stored hashed. (Amended: with `LIVE_CONTROLLER_TOKEN` unset, an
+untokened request is the controller, so the drill console needs no token; set it to lock.) Civilian submissions are rate-limited per
 device and per IP.
 
 ## Phases

@@ -46,6 +46,16 @@ const ROWS: { key: string; label: string; swatch: ReactNode }[] = [
     ),
   },
   {
+    key: "responder-route",
+    label: "Responder route",
+    swatch: (
+      <svg viewBox="0 0 20 14" aria-hidden="true">
+        <line x1="2" y1="7" x2="18" y2="7" stroke={MAP_COLOR.casing} strokeWidth="6" strokeLinecap="round" />
+        <line x1="2" y1="7" x2="18" y2="7" stroke={MAP_COLOR.responderRoute} strokeWidth="3" strokeLinecap="round" strokeDasharray="0.1 4" />
+      </svg>
+    ),
+  },
+  {
     key: "traffic",
     label: "Cars on the road (simulated)",
     swatch: (
@@ -92,6 +102,15 @@ const ROWS: { key: string; label: string; swatch: ReactNode }[] = [
       <svg viewBox="0 0 20 14" aria-hidden="true">
         <circle cx="6" cy="7" r="4.5" fill="#fff" stroke={MAP_COLOR.report} strokeWidth="2" />
         <circle cx="15" cy="7" r="4.5" fill={MAP_COLOR.hazard} stroke="#fff" strokeWidth="1.5" />
+      </svg>
+    ),
+  },
+  {
+    key: "ground",
+    label: "2018 calls and radio, last 30 min",
+    swatch: (
+      <svg viewBox="0 0 20 14" aria-hidden="true">
+        <circle cx="10" cy="7" r="6" fill={MAP_COLOR.ground} stroke="#fff" strokeWidth="1.5" />
       </svg>
     ),
   },

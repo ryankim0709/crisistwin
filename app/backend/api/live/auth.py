@@ -1,8 +1,11 @@
 """Bearer-token auth for the live API (docs/live-reports.md "Auth", "Controller auth (v2)").
 
-Fails closed: no token, an unknown or expired token, or an unset controller/invite secret
-is refused. Device tokens are stored only as SHA-256 hashes; the controller token is never
-stored, only compared in constant time with ``LIVE_CONTROLLER_TOKEN``.
+No controller token required by default: with ``LIVE_CONTROLLER_TOKEN`` unset, a request
+without an ``Authorization`` header is the controller, so the /live console needs no token.
+Setting it locks the controller behind that bearer token again (use that for any shared
+deployment). Otherwise fails closed: an unknown or expired token, or an unset invite code, is
+refused. Device tokens are stored only as SHA-256 hashes; the controller token is never stored,
+only compared in constant time with ``LIVE_CONTROLLER_TOKEN``.
 """
 
 from __future__ import annotations
@@ -16,13 +19,23 @@ from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from datetime import timedelta
 
+from django.conf import settings
 from django.core.cache import cache
 from livecore.drill import INCIDENT_ID
 from pymongo.errors import PyMongoError
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.permissions import AllowAny
 
-from .common import ApiError, col, error, live_setting, wall_now
+from .common import (
+    ApiError,
+    actor_from_request,
+    col,
+    error,
+    live_setting,
+    reset_request_actor,
+    set_request_actor,
+    wall_now,
+)
 
 log = logging.getLogger(__name__)
 
@@ -46,24 +59,29 @@ def token_hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def issue_token(role: str, prefix: str, incident_id: str | None) -> dict:
-    """Create a device document and return the one-time response body."""
+def issue_token(role: str, prefix: str, incident_id: str | None, simulated: bool = False) -> dict:
+    """Create a device document and return the one-time response body.
+
+    ``simulated`` marks a simulated responder (ADR 0038): stored on the device, echoed in the body."""
     token = secrets.token_urlsafe(32)
     party_key = f"{prefix}{secrets.token_hex(8)}"
     now = wall_now()
     ttl = CIVILIAN_TOKEN_TTL if role == "civilian" else RESPONDER_TOKEN_TTL
-    col("live_devices").insert_one(
-        {
-            "token_hash": token_hash(token),
-            "role": role,
-            "party_key": party_key,
-            "incident_id": incident_id,
-            "created_at": now,
-            "last_seen_at": now,
-            "expires_at": now + ttl,
-        }
-    )
-    return {"token": token, "role": role, "party_key": party_key, "incident_id": incident_id}
+    doc = {
+        "token_hash": token_hash(token),
+        "role": role,
+        "party_key": party_key,
+        "incident_id": incident_id,
+        "created_at": now,
+        "last_seen_at": now,
+        "expires_at": now + ttl,
+    }
+    body = {"token": token, "role": role, "party_key": party_key, "incident_id": incident_id}
+    if simulated:
+        doc["simulated"] = True
+        body["simulated"] = True
+    col("live_devices").insert_one(doc)
+    return body
 
 
 def secret_matches(given: str, env_name: str) -> bool:
@@ -76,6 +94,8 @@ def secret_matches(given: str, env_name: str) -> bool:
 
 def authenticate(request) -> Principal | None:
     header = request.headers.get("Authorization", "")
+    if not header and not live_setting("LIVE_CONTROLLER_TOKEN"):
+        return Principal("controller", CONTROLLER_PARTY_KEY, None)
     scheme, _, token = header.partition(" ")
     token = token.strip()
     if scheme.lower() != "bearer" or not token or len(token) > 512:
@@ -101,6 +121,8 @@ def client_ip(request) -> str:
 
 def rate_limited(key: str, limit: int, window_s: int) -> bool:
     """Fixed-window counter in the Django cache (per process with the default LocMemCache)."""
+    if getattr(settings, "LIVE_LOADTEST_RELAX_LIMITS", False):
+        return False  # load tests only; defaults off (docs/live-loadtest.md)
     cache_key = f"live-rl:{key}"
     if cache.add(cache_key, 1, timeout=window_s):
         return False
@@ -140,7 +162,14 @@ def live_view(methods: list[str], roles: Collection[str] | None = None, auth: bo
                         and principal.incident_id not in (None, incident_id)
                     ):
                         return error(403, "forbidden", "This token belongs to another incident.")
-                return func(request, *args, principal=principal, **kwargs)
+                # A controller request may name the agent acting through it (recorded in live_decisions).
+                actor = set_request_actor(
+                    actor_from_request(request) if principal is not None and principal.role == "controller" else None
+                )
+                try:
+                    return func(request, *args, principal=principal, **kwargs)
+                finally:
+                    reset_request_actor(actor)
             except ApiError as exc:
                 return error(exc.status, exc.code, exc.detail)
             except PyMongoError:

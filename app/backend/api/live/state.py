@@ -6,11 +6,14 @@ livecore values and renders livecore results in the wire shapes of docs/live-rep
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from threading import Lock
 from datetime import UTC, datetime
 from typing import Any
 
+from django.conf import settings
 from livecore import drill as drillmod
 from livecore import public
 from livecore.fire import FireEstimate, estimate_fire
@@ -35,16 +38,34 @@ COORD_DECIMALS = 5
 # ---- rendering helpers ----
 
 
-def render(value: Any, drop: Iterable[str] = ("_id",)) -> Any:
-    """Documents to JSON: datetimes to ISO ``Z``, tuples to lists, ``drop`` keys removed at the top."""
-    drop = set(drop)
+_PLAIN = (float, int, str, bool, type(None))
+
+
+def _render(value: Any) -> Any:
+    kind = type(value)
+    if kind in _PLAIN:  # most nodes are coordinates: exact-type checks avoid the slow ABC isinstance calls
+        return value
+    if kind is dict:
+        return {k: _render(v) for k, v in value.items()}
+    if kind is list or kind is tuple:
+        return [_render(v) for v in value]
+    if kind is datetime:
+        return iso(value)
     if isinstance(value, Mapping):
-        return {k: render(v, ()) for k, v in value.items() if k not in drop}
+        return {k: _render(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
-        return [render(v, ()) for v in value]
+        return [_render(v) for v in value]
     if isinstance(value, datetime):
         return iso(value)
     return value
+
+
+def render(value: Any, drop: Iterable[str] = ("_id",)) -> Any:
+    """Documents to JSON: datetimes to ISO ``Z``, tuples to lists, ``drop`` keys removed at the top."""
+    if isinstance(value, Mapping):
+        drop = set(drop)
+        return {k: _render(v) for k, v in value.items() if k not in drop}
+    return _render(value)
 
 
 def report_json(doc: Mapping[str, Any]) -> dict[str, Any]:
@@ -321,6 +342,8 @@ class Snapshot:
     blocked: frozenset[str]
     full_destinations: frozenset[str]
     fire: FireEstimate
+    injects: list[dict[str, Any]] = field(default_factory=list)
+    """Drill injects (``injects.apply_due``), any status; ``twin_service`` applies the due ones."""
 
 
 def load_public(
@@ -330,7 +353,11 @@ def load_public(
     report_docs = list(
         col("live_reports").find({"incident_id": incident_id}).sort("received_at", -1).limit(REPORTS_SNAPSHOT_LIMIT)
     )
-    facts = [report_fact(d) for d in report_docs]
+    # 2018 record entries wait in the controller's queue: they count for nothing until confirmed.
+    facts = [
+        report_fact(d) for d in report_docs
+        if d.get("evidence_class") != "historical_record" or d["status"] in ("confirmed", "resolved")
+    ]
     items = public.public_items(facts, now, index.segment_lines)
     state = public.road_state(facts, now)
     return report_docs, facts, items, state
@@ -340,8 +367,16 @@ def load_snapshot(incident_id: str, now: datetime) -> Snapshot:
     index = get_index()
     doc = drill_doc(incident_id)
     clock = clock_from(doc, index, now)
+    from . import injects as injects_mod  # local: injects reads clock_from and drill_doc from this module
+
+    injects = injects_mod.apply_due(index, incident_id, clock.replay_now, now)
+    if clock.replay_now is not None:
+        from .groundrecord import materialize_due  # local: groundrecord imports this module's dependencies
+
+        materialize_due(index, incident_id, clock, now, injects)
     report_docs, facts, items, state = load_public(incident_id, now, index)
-    fire = estimate_fire(index.drill, clock.replay_now, public.confirmed_fire_points(facts, items))
+    fire = estimate_fire(index.drill, clock.replay_now, public.confirmed_fire_points(facts, items),
+                         injects_mod.rules.spots_due(injects, clock.replay_now))
     return Snapshot(
         incident_id=incident_id,
         index=index,
@@ -355,6 +390,7 @@ def load_snapshot(incident_id: str, now: datetime) -> Snapshot:
         blocked=frozenset(public.guidance_blocked_segments(state)),
         full_destinations=frozenset(public.full_destination_ids(items)),
         fire=fire,
+        injects=injects,
     )
 
 
@@ -372,6 +408,41 @@ def current_guidance(incident_id: str, index: DrillIndex | None = None) -> list[
         order = {z.id: i for i, z in enumerate(index.drill.zones)}
         docs.sort(key=lambda d: order.get(d["zone_id"], len(order)))
     return docs
+
+
+_guidance_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+_guidance_lock = Lock()
+
+
+def rendered_guidance(incident_id: str, index: DrillIndex) -> list[dict[str, Any]]:
+    """``[guidance_json(g) ...]`` for the current guidance, cached per process for a short TTL.
+
+    Every phone polls the same guidance (about 100 KB of routes) every 3 s, and rebuilding it per
+    request was the largest single cost of ``situation`` (docs/live-loadtest.md). Writers in this
+    process call ``invalidate_guidance``; other processes see a change within
+    ``LIVE_GUIDANCE_CACHE_TTL_S`` (default 1 s; 0 turns the cache off). Callers must not mutate it.
+    """
+    ttl = float(getattr(settings, "LIVE_GUIDANCE_CACHE_TTL_S", 1.0))
+    if ttl <= 0:
+        return [guidance_json(g) for g in current_guidance(incident_id, index)]
+    now = time.monotonic()
+    with _guidance_lock:
+        hit = _guidance_cache.get(incident_id)
+    if hit is not None and hit[0] > now:
+        return hit[1]
+    rendered = [guidance_json(g) for g in current_guidance(incident_id, index)]
+    with _guidance_lock:
+        _guidance_cache[incident_id] = (now + ttl, rendered)
+    return rendered
+
+
+def invalidate_guidance(incident_id: str | None = None) -> None:
+    """Drop the cached guidance after a write to ``live_guidance`` (publish, annotate, reset)."""
+    with _guidance_lock:
+        if incident_id is None:
+            _guidance_cache.clear()
+        else:
+            _guidance_cache.pop(incident_id, None)
 
 
 def destination_preferences(incident_id: str, now: datetime) -> list[dict[str, Any]]:

@@ -1,5 +1,5 @@
 import { useMemo, type KeyboardEvent } from "react";
-import { EmptyState, SegmentedControl, Tag } from "../ui";
+import { Button, EmptyState, SegmentedControl, Tag } from "../ui";
 import { elapsed, nf, plural } from "./format";
 import KindGlyph from "./Glyph";
 import { isFixtureNote, matches, type QueueFilter, type QueueItem } from "./queue";
@@ -73,6 +73,7 @@ function Row({
           {item.conflict ? <Tag tone="warning">Conflicting</Tag> : null}
           {item.stale ? <Tag>Stale</Tag> : null}
           {item.fixture ? <Tag>Fixture</Tag> : null}
+          {item.record ? <Tag tone="info">2018 record</Tag> : null}
         </span>
         {note ? <span className="lc-q-quote">“{note}”</span> : null}
         <span className="lc-q-meta">
@@ -92,7 +93,11 @@ export default function ReviewQueue({
   selectedId,
   onSelect,
   serverNow,
+  showRecord,
+  onShowRecord,
 }: {
+  showRecord: boolean;
+  onShowRecord: (show: boolean) => void;
   items: QueueItem[];
   filter: QueueFilter;
   onFilter: (f: QueueFilter) => void;
@@ -109,6 +114,7 @@ export default function ReviewQueue({
     () => items.filter((i) => matches(i, filter) || i.id === selectedId),
     [items, filter, selectedId],
   );
+  const recordCount = useMemo(() => items.filter((i) => i.record).length, [items]);
   const options = FILTERS.map((f) => ({ value: f.value, label: `${f.label} ${counts[f.value]}`, title: f.title }));
   const current = FILTERS.find((f) => f.value === filter)!;
 
@@ -133,7 +139,15 @@ export default function ReviewQueue({
     <section className="lc-col lc-queue" aria-labelledby="lc-queue-title">
       <header className="lc-col-head">
         <h2 id="lc-queue-title">Review queue</h2>
-        <span className="lc-dim">By impact</span>
+        <Button
+          size="sm"
+          variant={showRecord ? "soft" : "ghost"}
+          aria-pressed={showRecord}
+          title={showRecord ? "Hide 2018 record items" : "Show 2018 record items"}
+          onClick={() => onShowRecord(!showRecord)}
+        >
+          2018 record{showRecord ? ` ${recordCount}` : ""}
+        </Button>
       </header>
       <SegmentedControl label="Queue filter" options={options} value={filter} onChange={onFilter} className="lc-filters" />
       <div className="lc-col-scroll">

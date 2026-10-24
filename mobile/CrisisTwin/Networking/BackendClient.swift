@@ -19,7 +19,7 @@ enum BackendError: LocalizedError {
     }
 }
 
-/// JSON calls to the CrisisTwin API (live broadcast and families). Same session rules as
+/// JSON calls to the CrisisTwin API (live broadcast, families and mobile data). Same session rules as
 /// `APIClient`: ephemeral, no cache, 10-second timeouts, no automatic retry.
 struct BackendClient {
     let baseURL: URL
@@ -43,8 +43,14 @@ struct BackendClient {
 
     /// Sends a request and returns the body of a 2xx response.
     @discardableResult
-    func send(_ method: String, _ path: String, body: (any Encodable)? = nil, token: String? = nil) async throws -> Data {
-        var request = URLRequest(url: baseURL.appending(path: "api/\(path)"), cachePolicy: .reloadIgnoringLocalCacheData)
+    func send(
+        _ method: String, _ path: String, query: [URLQueryItem] = [], body: (any Encodable)? = nil, token: String? = nil
+    ) async throws -> Data {
+        var url = baseURL.appending(path: "api/\(path)")
+        if !query.isEmpty {
+            url.append(queryItems: query)
+        }
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData)
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if let token {

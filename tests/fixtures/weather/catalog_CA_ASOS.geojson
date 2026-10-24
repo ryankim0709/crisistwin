@@ -1,0 +1,102 @@
+{
+ "type": "FeatureCollection",
+ "features": [
+  {
+   "type": "Feature",
+   "id": "APC",
+   "properties": {
+    "sname": "Napa County",
+    "archive_begin": "1972-12-31",
+    "archive_end": null,
+    "state": "CA",
+    "network": "CA_ASOS",
+    "online": true
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -122.2804,
+     38.2075
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "id": "CIC",
+   "properties": {
+    "sname": "CHICO MUNICIPAL",
+    "archive_begin": "1942-05-06",
+    "archive_end": null,
+    "state": "CA",
+    "network": "CA_ASOS",
+    "online": true
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -121.8584,
+     39.7954
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "id": "OVE",
+   "properties": {
+    "sname": "OROVILLE",
+    "archive_begin": "1998-07-01",
+    "archive_end": null,
+    "state": "CA",
+    "network": "CA_ASOS",
+    "online": true
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -121.62,
+     39.49
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "id": "RBL",
+   "properties": {
+    "sname": "RED BLUFF MUNICIPAL",
+    "archive_begin": "1939-01-16",
+    "archive_end": null,
+    "state": "CA",
+    "network": "CA_ASOS",
+    "online": true
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -122.2536,
+     40.1519
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "id": "STS",
+   "properties": {
+    "sname": "Santa Rosa",
+    "archive_begin": "1943-04-04",
+    "archive_end": null,
+    "state": "CA",
+    "network": "CA_ASOS",
+    "online": true
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -122.811,
+     38.5037
+    ]
+   }
+  }
+ ],
+ "generated_at": "2026-10-24T17:58:10Z",
+ "count": 161
+}

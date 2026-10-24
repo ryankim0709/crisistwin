@@ -1,6 +1,6 @@
 # Workspace pages reference
 
-Moved from the root README. `/overview` and `/maps` no longer exist ([ADR 0015](adr/0015-remove-overview-and-maps.md)).
+Moved from the root README. `/overview` and `/maps` no longer exist ([ADR 0015](adr/0015-remove-overview-and-maps.md)). `/scenarios` was removed and redirects to `/simulation` ([ADR 0028](adr/0028-remove-scenarios-page.md)).
 
 ## Workspace navigation
 
@@ -14,8 +14,6 @@ expands the navigation. The current page is marked with an arrow and
 content. Each page has its own URL and document title:
 
 - `/`: redirects to `/fire`.
-- `/scenarios`: editable name/weather/notes, sample templates, a local draft
-  review, reproducibility fields, and the future scenario library.
 - `/evacuation`: synthetic population/vehicle inputs, departure strategy and
   timings, shelter capacity, a sample road-closure toggle, and pending results.
 - `/comparison`: baseline/candidate strategy controls, a metric comparison
@@ -35,7 +33,7 @@ they do not transfer between pages or modify map inputs. No scenario saving,
 traffic execution, comparison results, incident ingestion, or stress-test jobs
 are connected. Unsupported execution buttons are disabled with explanations.
 Sample inputs are synthetic user assumptions, and unavailable results use empty
-states or dashes rather than fabricated metrics. `/incidents` (formerly a scaffold with a synthetic review example) redirects to `/intel`. Unknown paths show a not-found page. Trailing slashes are
+states or dashes rather than fabricated metrics. `/incidents` (formerly a scaffold with a synthetic review example) redirects to `/intel`, and `/scenarios` redirects to `/simulation`. Unknown paths show a not-found page. Trailing slashes are
 accepted. Navigation uses normal links and the existing Vite/Nginx HTML fallback,
 so direct links, refresh, and browser history use document navigation. Temporary
 map state resets when leaving or reloading the page; no scenario is saved.
@@ -93,6 +91,16 @@ closures: households that reached an exit, were caught, are still evacuating or 
 household-hours evacuating, and when everyone ordered was out. Closures last the whole run,
 change traffic only (not the fire), are not saved with the draft, and reset when the board
 changes. Homes and zones are synthetic; counts are model output, not casualty estimates.
+
+**Optimized plan** ([ADR 0027](adr/0027-evacuation-optimizer.md)). Under the evacuation table, an
+optimizer searches, in a Web Worker, for a better plan under your closures: other exits for zones
+whose routes share an over-subscribed road or cross the fire, then staging zones in waves behind
+the ones the fire reaches first. Each strategy is a full engine run; it ranks by households caught,
+then households out, then household-hours, then the all-clear time, and keeps a change only when
+it is strictly better. It re-runs (debounced) whenever closures, the order time, the run or the
+crews change, lists the strategies tried and the zones whose exit or wave changed, and **Plan
+played in the 3D view** switches playback between the fastest exit and the optimized plan. The
+search is greedy and bounded (80 engine runs), so it shows the best plan found, not a proven optimum.
 
 ## Dispatch agent (`/dispatch`)
 

@@ -8,7 +8,6 @@ import AppShell from "./AppShell";
 import FireSimulatorPage from "./fire/FireSimulatorPage";
 import SimulationStudioPage from "./studio/SimulationStudioPage";
 import DispatchAgentPage from "./dispatch/DispatchAgentPage";
-import ScenariosPage from "./pages/ScenariosPage";
 import EvacuationPage from "./pages/EvacuationPage";
 import ComparisonPage from "./pages/ComparisonPage";
 import IntelPage from "./pages/IntelPage";
@@ -19,6 +18,7 @@ import { SIMULATION_VIEW } from "./replay/loadBundle";
 import ReplayView from "./replay/ReplayView";
 import ReplayRoute from "./replay/IncidentPicker";
 import LiveCommandPage from "./live/LiveCommandPage";
+import AarPage from "./live/report/AarPage";
 
 // The workspace has no landing page; the root opens the fire spread model.
 if (window.location.pathname === "/")
@@ -26,6 +26,9 @@ if (window.location.pathname === "/")
 // /incidents was merged into /intel; keep old links working.
 if (/^\/incidents\/*$/.test(window.location.pathname))
   window.history.replaceState(null, "", "/intel" + window.location.search + window.location.hash);
+// /scenarios was a planning scaffold; saved scenarios live in Simulation Studio.
+if (/^\/scenarios\/*$/.test(window.location.pathname))
+  window.history.replaceState(null, "", "/simulation" + window.location.search + window.location.hash);
 const path = window.location.pathname.replace(/\/+$/, "") || "/";
 const page =
   path === "/fire" ? (
@@ -34,8 +37,6 @@ const page =
     <SimulationStudioPage />
   ) : path === "/dispatch" ? (
     <DispatchAgentPage />
-  ) : path === "/scenarios" ? (
-    <ScenariosPage />
   ) : path === "/evacuation" ? (
     <EvacuationPage />
   ) : path === "/comparison" ? (
@@ -50,6 +51,8 @@ const page =
     <ReplayView config={SIMULATION_VIEW} />
   ) : path === "/live" ? (
     <LiveCommandPage />
+  ) : path === "/live/report" ? (
+    <AarPage />
   ) : path === "/diorama" ? (
     <DioramaPage />
   ) : (

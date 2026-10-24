@@ -1,8 +1,11 @@
 """Zone-to-destination routes on the drill road network.
 
-Contract: docs/live-reports.md "Planner rules". Free-flow travel time; congestion is ignored
-(a stated simplification). Never routes over a blocked segment. Normal routes keep every edge
-outside the fire estimate and FIRE_BUFFER_M beyond it; a zone with no such route gets a
+Contract: docs/live-reports.md "Planner rules". The search cost of an edge is its free-flow
+travel time x its fire weight x an optional congestion factor (simulated, from the traffic
+twin; ADR 0031-congestion-aware-planner); ``Route.travel_time_s`` stays free-flow. A zone's
+incumbent route (the published one) is kept unless the new route is cheaper by a margin
+(SWITCH_MIN_GAIN_S, SWITCH_MIN_GAIN_FRACTION). Never routes over a blocked segment. Normal
+routes keep every edge outside the fire estimate and FIRE_BUFFER_M beyond it; a zone with no such route gets a
 least-exposure route (``Route.exposed``) that a controller must approve. A temporary refuge
 is a destination only when it lies farther than REFUGE_FIRE_BUFFER_M from the fire estimate,
 and a least-exposure route prefers an exit or shelter (out of the fire area) over a refuge.
@@ -52,6 +55,23 @@ MAX_SKIPPED_DESTINATIONS = 5
 ALTERNATIVE_CANDIDATES = 12
 """``alternative_routes``: a zone's search stops once it has reached this many usable exits or
 shelters (refuges met on the way are kept too)."""
+CONGESTION_MAX_FACTOR = 10.0
+"""Upper bound of a congestion factor (a stopped edge counts as 10x its free-flow time); the
+same bound as ``livecore.inbound`` (which re-exports it)."""
+SWITCH_MIN_GAIN_S = 120.0
+SWITCH_MIN_GAIN_FRACTION = 0.15
+"""Hysteresis (ADR 0031-congestion-aware-planner): a zone leaves its incumbent route only when
+the new route's search cost is lower by at least max(SWITCH_MIN_GAIN_S, SWITCH_MIN_GAIN_FRACTION
+x the incumbent's cost), both measured now with the same edge costs (fire weight x congestion).
+Planning heuristics, not calibrated: two minutes, or 15 %, is more than the swing of one twin
+reroute interval (300 s) of queue on a typical 15-30 min route."""
+SWITCH_MIN_DWELL_S = 900.0
+"""Hysteresis, second rule: for this many drill seconds after a zone's guidance was published,
+its incumbent is kept whatever the gain, as long as it stays usable (not blocked, allowed by the
+pass's fire rule, destination usable). Planning heuristic, not calibrated: the margin alone let
+zones swap exits every 5-10 min in the record comparison at 16:00-17:45Z (queues the zone's own
+vehicles build on its route make the other exit look cheaper; ADR 0031-congestion-aware-planner).
+15 min is three twin reroute intervals (300 s), time for a zone's departures to load its route."""
 
 _CLEAR, _BUFFER, _INSIDE = 0, 1, 2
 
@@ -94,6 +114,56 @@ class Route:
 def edge_travel_time_s(edge: Edge) -> float:
     """``length_m / (speed_kph / 3.6)``, in seconds."""
     return edge.length_m / (edge.speed_kph / 3.6)
+
+
+@dataclass(frozen=True)
+class Incumbent:
+    """The route a zone is following now (its published guidance), for hysteresis."""
+
+    destination_id: str
+    edge_ids: tuple[str, ...] | None = None
+    """Directed edges of the published route when known; None compares destinations only."""
+    held_s: float | None = None
+    """Drill seconds since the zone's guidance was published; under SWITCH_MIN_DWELL_S the
+    incumbent is kept while usable. None: no dwell rule."""
+
+
+def validate_congestion(congestion: Mapping[str, float] | None) -> dict[str, float]:
+    """``congestion`` as a dict; raises ``ValueError`` on a factor outside [1, CONGESTION_MAX_FACTOR]."""
+    factors = dict(congestion or {})
+    for eid, f in factors.items():
+        if not (math.isfinite(f) and 1.0 <= f <= CONGESTION_MAX_FACTOR):
+            raise ValueError(f"congestion factor of {eid} must be in [1, {CONGESTION_MAX_FACTOR}], got {f!r}")
+    return factors
+
+
+def _congested(edge_cost: Callable[[str], float | None], factors: Mapping[str, float]
+               ) -> Callable[[str], float | None]:
+    """``edge_cost`` x the edge's congestion factor (missing edges: 1)."""
+    if not factors:
+        return edge_cost
+
+    def cost(eid: str) -> float | None:
+        c = edge_cost(eid)
+        return None if c is None else c * factors.get(eid, 1.0)
+
+    return cost
+
+
+def path_cost_s(edge_cost: Callable[[str], float | None], edge_ids: Collection[str]) -> float | None:
+    """Sum of ``edge_cost`` over ``edge_ids``; None when any edge is unusable."""
+    total = 0.0
+    for eid in edge_ids:
+        c = edge_cost(eid)
+        if c is None:
+            return None
+        total += c
+    return total
+
+
+def switch_margin_s(incumbent_cost_s: float) -> float:
+    """Cost (search seconds) a new route must save over the incumbent to replace it."""
+    return max(SWITCH_MIN_GAIN_S, SWITCH_MIN_GAIN_FRACTION * incumbent_cost_s)
 
 
 # --- per-drill derived indexes (built once, cached by identity) ---------------------------
@@ -399,6 +469,8 @@ def best_routes(
     avoid_polygon: MultiPolygon | None,
     full_destination_ids: Collection[str] = (),
     kinds: tuple[DestinationKind, ...] = DESTINATION_KINDS,
+    congestion: Mapping[str, float] | None = None,
+    incumbents: Mapping[str, Incumbent] | None = None,
 ) -> dict[str, Route | None]:
     """Fastest route from every zone to its nearest usable destination by travel time.
 
@@ -421,11 +493,20 @@ def best_routes(
 
     A route shorter than MIN_ROUTE_M is skipped for the next-nearest destination.
     ``travel_time_s`` is always free-flow time. Returns zone id -> Route, or None.
+
+    ``congestion`` (directed edge id -> factor in [1, CONGESTION_MAX_FACTOR], simulated)
+    multiplies every pass's edge cost; missing edges count as 1. ``incumbents`` (zone id ->
+    the route it follows now): within each pass, a zone whose incumbent destination is in that
+    pass's destination set keeps the incumbent unless the new route saves ``switch_margin_s``
+    (``_hold_incumbents``). Raises ``ValueError`` on a factor out of range.
     """
     index = _index(drill)
     fire_class = _fire_classes(drill, avoid_polygon)
-    open_cost, near_cost, through_cost = _edge_costs(drill, index, frozenset(blocked_segment_ids), fire_class)
+    factors = validate_congestion(congestion)
+    open_cost, near_cost, through_cost = (
+        _congested(c, factors) for c in _edge_costs(drill, index, frozenset(blocked_segment_ids), fire_class))
     full = frozenset(full_destination_ids)
+    held = dict(incumbents or {})
 
     def usable_destinations(wanted: tuple[DestinationKind, ...]) -> list[str]:
         return _usable_destinations(drill, index, avoid_polygon, full, wanted)
@@ -440,7 +521,10 @@ def best_routes(
     def route(dest_ids: list[str], edge_cost: Callable[[str], float | None]) -> dict[str, Route]:
         if not pending or not dest_ids:
             return {}
-        return {z: with_exposure(r) for z, r in _route_zones(drill, index, pending, dest_ids, edge_cost).items()}
+        found = _route_zones(drill, index, pending, dest_ids, edge_cost)
+        if held:
+            found = _hold_incumbents(drill, index, found, dest_ids, edge_cost, held)
+        return {z: with_exposure(r) for z, r in found.items()}
 
     for dest_ids in (primary, fallback):
         for zone_id, r in route(dest_ids, open_cost).items():
@@ -475,6 +559,7 @@ def alternative_routes(
     avoid_polygon: MultiPolygon | None,
     full_destination_ids: Collection[str] = (),
     kinds: tuple[DestinationKind, ...] = DESTINATION_KINDS,
+    congestion: Mapping[str, float] | None = None,
 ) -> dict[str, list[Route]]:
     """Zone id -> routes from the zone's origin to other usable destinations, cheapest first.
 
@@ -487,12 +572,15 @@ def alternative_routes(
     and FALLBACK_KINDS (never inside the fire estimate, never full, refuges farther than
     REFUGE_FIRE_BUFFER_M from it). The pick's destination, destinations at the origin node and
     routes shorter than MIN_ROUTE_M are skipped. The search stops after ALTERNATIVE_CANDIDATES
-    exits or shelters. Routes carry their exposure like ``best_routes``.
+    exits or shelters. Routes carry their exposure like ``best_routes``. ``congestion`` multiplies
+    the edge costs as in ``best_routes``.
     """
     index = _index(drill)
     roads = drill.roads
     fire_class = _fire_classes(drill, avoid_polygon)
-    open_cost, near_cost, through_cost = _edge_costs(drill, index, frozenset(blocked_segment_ids), fire_class)
+    factors = validate_congestion(congestion)
+    open_cost, near_cost, through_cost = (
+        _congested(c, factors) for c in _edge_costs(drill, index, frozenset(blocked_segment_ids), fire_class))
     full = frozenset(full_destination_ids)
     primary = set(_usable_destinations(drill, index, avoid_polygon, full, kinds))
     usable = sorted(primary | set(_usable_destinations(drill, index, avoid_polygon, full, FALLBACK_KINDS)))
@@ -587,6 +675,64 @@ def _route_zones(drill: Drill, index: _Index, zones: list[Zone], dest_ids: list[
                     continue
                 out[zone.id] = route
     return out
+
+
+def _hold_incumbents(drill: Drill, index: _Index, found: Mapping[str, Route], dest_ids: Collection[str],
+                     edge_cost: Callable[[str], float | None], incumbents: Mapping[str, Incumbent]
+                     ) -> dict[str, Route]:
+    """``found`` with each zone's incumbent kept unless the new route is cheaper by the margin.
+
+    Applies when the incumbent's destination is in ``dest_ids`` (same pass, same destination
+    group). The incumbent route is its known edges when they still form a usable path from the
+    zone origin to the destination node under ``edge_cost`` (so never over a blocked edge, nor
+    into a fire class this pass does not allow); otherwise the cheapest route to the incumbent
+    destination now, when the new route goes elsewhere (same destination, unknown edges: the new
+    path is taken). Both costs are ``path_cost_s`` under ``edge_cost``. While the incumbent is
+    within SWITCH_MIN_DWELL_S of its publication (``held_s``) it is kept whenever it is usable.
+    """
+    usable = set(dest_ids)
+    zones = {z.id: z for z in drill.zones}
+    out = dict(found)
+    for zone_id, new in found.items():
+        inc = incumbents.get(zone_id)
+        if inc is None or inc.destination_id not in usable or inc.edge_ids == new.edge_ids:
+            continue
+        keep = _incumbent_path(drill, index, zone_id, new.origin_node, inc, edge_cost)
+        if keep is None and inc.destination_id != new.destination_id:
+            keep = _route_zones(drill, index, [zones[zone_id]], [inc.destination_id], edge_cost).get(zone_id)
+        if keep is None or keep.edge_ids == new.edge_ids:
+            continue
+        new_cost, old_cost = path_cost_s(edge_cost, new.edge_ids), path_cost_s(edge_cost, keep.edge_ids)
+        if new_cost is None or old_cost is None:
+            continue
+        dwelling = inc.held_s is not None and inc.held_s < SWITCH_MIN_DWELL_S
+        if dwelling or new_cost > old_cost - switch_margin_s(old_cost):
+            out[zone_id] = keep
+    return out
+
+
+def _incumbent_path(drill: Drill, index: _Index, zone_id: str, origin: str, inc: Incumbent,
+                    edge_cost: Callable[[str], float | None]) -> Route | None:
+    """The incumbent's known edges as a Route when they are a usable path from ``origin`` to its
+    destination node (contiguous, no repeated node, every edge usable, at least MIN_ROUTE_M)."""
+    if not inc.edge_ids:
+        return None
+    edges = drill.roads.edges
+    target = index.destination_nodes.get(inc.destination_id)
+    if target is None or any(e not in edges for e in inc.edge_ids):
+        return None
+    next_edge: dict[str, str] = {}
+    at = origin
+    for eid in inc.edge_ids:
+        e = edges[eid]
+        if e.from_node != at or at in next_edge or edge_cost(eid) is None:
+            return None
+        next_edge[at] = eid
+        at = e.to_node
+    if at != target or at in next_edge:
+        return None
+    route = _build_route(drill, index, zone_id, origin, next_edge, inc.destination_id)
+    return route if route.distance_m >= MIN_ROUTE_M else None
 
 
 def _build_route(drill: Drill, index: _Index, zone_id: str, origin: str, next_edge: Mapping[str, str],

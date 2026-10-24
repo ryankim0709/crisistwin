@@ -1,0 +1,130 @@
+{
+ "sources": [
+  {
+   "id": "fcc-asr-r-tower",
+   "licence": "US federal public data; no use restriction stated",
+   "decision": "used",
+   "url": "https://data.fcc.gov/download/pub/uls/complete/r_tower.zip",
+   "status": "downloaded",
+   "file": "fcc-asr-r-tower.zip",
+   "bytes": 37837914,
+   "sha256": "8674dd48a8025482f765dd7cbc440681a3afc2e04cda1a5c253bc9427897c540"
+  },
+  {
+   "id": "fcc-uls-l-cell",
+   "licence": "US federal public data; no use restriction stated",
+   "decision": "used",
+   "url": "https://data.fcc.gov/download/pub/uls/complete/l_cell.zip",
+   "status": "downloaded",
+   "file": "fcc-uls-l-cell.zip",
+   "bytes": 24098274,
+   "sha256": "11f0793eb4448dd34601e67f39193b477f2544c2c49324ca7bfa099f5e83330a"
+  },
+  {
+   "id": "nist-tn2252-sup",
+   "licence": "NIST publication, US government work (public domain in the US)",
+   "decision": "used",
+   "url": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252sup.pdf",
+   "status": "downloaded",
+   "file": "nist-tn2252-sup.pdf",
+   "bytes": 24237169,
+   "sha256": "1846b31b924f510628b550b292c160c1f87e729dcdc4242d1cad1aee88d7d401"
+  },
+  {
+   "id": "fcc-dirs-2019-10-26",
+   "licence": "FCC public document",
+   "decision": "used",
+   "url": "https://docs.fcc.gov/public/attachments/DOC-360452A1.pdf",
+   "status": "downloaded",
+   "file": "fcc-dirs-2019-10-26.pdf",
+   "bytes": 269224,
+   "sha256": "64e16f910a9d9ee16d65d6997032b0d7ba90db429a9bdd42e619fb1890412f00"
+  },
+  {
+   "id": "fcc-dirs-2019-11-01",
+   "licence": "FCC public document",
+   "decision": "cited",
+   "url": "https://docs.fcc.gov/public/attachments/DOC-360597A1.pdf",
+   "status": "downloaded",
+   "file": "fcc-dirs-2019-11-01.pdf",
+   "bytes": 297240,
+   "sha256": "893a7f46eade60bd1c9072b2e7b69d1b058f89640f28515fdcc3548a64247c66"
+  },
+  {
+   "id": "fcc-dirs-2019-10-30",
+   "licence": "FCC public document, third-party mirror (original FCC URL not found)",
+   "decision": "used",
+   "url": "https://www.tellusventure.com/downloads/fcc/2019/fcc_communications_status_report_california_30oct2019.pdf",
+   "status": "downloaded",
+   "file": "fcc-dirs-2019-10-30.pdf",
+   "bytes": 2066775,
+   "sha256": "4b4402ad85803be2ce4870feb7be0673d41832aa3b51fad5c4b3e877a5fc490b"
+  },
+  {
+   "id": "cpuc-pge-psps-2019-10-09",
+   "licence": "State of California public record",
+   "decision": "used",
+   "url": "https://www.cpuc.ca.gov/-/media/cpuc-website/divisions/safety-and-enforcement-division/reports/psps-post-event-reports/2019-and-earlier/pge-public-safety-power-shutoff-oct-912-report.pdf",
+   "status": "downloaded",
+   "file": "cpuc-pge-psps-2019-10-09.pdf",
+   "bytes": 6469791,
+   "sha256": "fa2c91b8838efe7a8e352ac3db30bff66cb00dccf18b9fd7e08e183af63dca73"
+  },
+  {
+   "id": "cpuc-pge-psps-2019-10-26",
+   "licence": "State of California public record",
+   "decision": "used",
+   "url": "https://webproda.cpuc.ca.gov/-/media/cpuc-website/divisions/safety-and-enforcement-division/reports/psps-post-event-reports/2019/pge-psps-postevent-report-oct-2629-2019-amended.pdf",
+   "status": "downloaded",
+   "file": "cpuc-pge-psps-2019-10-26.pdf",
+   "bytes": 3276832,
+   "sha256": "7c732587c95d6900ae0549b63f4788fc351bafd192c1c425216e0b17f9e0063a"
+  },
+  {
+   "id": "cdc-nhis-wireless-state-2018",
+   "licence": "CDC/NCHS public domain",
+   "decision": "used",
+   "url": "https://archive.cdc.gov/www_cdc_gov/nchs/data/nhis/earlyrelease/Wireless_state_201912-508.pdf",
+   "status": "downloaded",
+   "file": "cdc-nhis-wireless-state-2018.pdf",
+   "bytes": 108921,
+   "sha256": "c67ceb74a3c8ff080f32a9a6198286560f85f7da5e14212357021935aec71bd8"
+  },
+  {
+   "id": "house-gossner-2020",
+   "licence": "Congressional record, public",
+   "decision": "used",
+   "url": "https://www.congress.gov/116/meeting/house/110641/witnesses/HHRG-116-IF16-Wstate-GossnerA-20200227.pdf",
+   "status": "downloaded",
+   "file": "house-gossner-2020.pdf",
+   "bytes": 150623,
+   "sha256": "f4099b5976a0c457aae952e6d95be0576374af0ce144723357eab748dd27933f"
+  },
+  {
+   "id": "jenner-cpuc-d2007011",
+   "licence": "Law-firm client alert (secondary source for CPUC D.20-07-011)",
+   "decision": "secondary",
+   "url": "https://www.jenner.com/a/web/jsC8xNXB8TEjYWBUk1aJ9n/4k1WQf/New_Backup_Power_Mandates_for_California_Communications_Companies.pdf",
+   "status": "downloaded",
+   "file": "jenner-cpuc-d2007011.pdf",
+   "bytes": 166384,
+   "sha256": "5e111ebf86bce71546323020b18e4edfa736f2ea0b792a6cefcf91a736d6ea77"
+  },
+  {
+   "id": "opencellid",
+   "licence": "CC BY-SA 4.0 plus mandatory visible credit (docs.opencellid.org/docs/attribution)",
+   "decision": "unavailable",
+   "url": "https://opencellid.org/downloads.php",
+   "status": "unavailable",
+   "reason": "Downloads require an API access token (account), which the project rules exclude; share-alike would also bind any derived dataset we ship. Not used."
+  },
+  {
+   "id": "hifld-cellular-towers",
+   "licence": "data.gov record lists US Government Works; HIFLD Open was deactivated 2025-08-26",
+   "decision": "unavailable",
+   "url": "https://catalog.data.gov/dataset/cellular-towers",
+   "status": "unavailable",
+   "reason": "Live service gone; archived copies (DataLumos DOI 10.3886/E238960V1) re-derive FCC data we already read directly. Not used."
+  }
+ ]
+}

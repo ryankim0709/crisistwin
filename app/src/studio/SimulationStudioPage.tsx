@@ -3,9 +3,11 @@ import type { GeoPoint } from "../fire/spread";
 import type { ScheduledFireRun } from "../fire/scheduledTypes";
 import { formatElapsed } from "../fire/spread";
 import ConfigPanel from "./ConfigPanel";
+import LiveDrillAction from "./LiveDrillAction";
 import PlaybackBar from "./PlaybackBar";
 import StudioDiorama, { type StudioEvacuationView } from "./StudioDiorama";
-import EvacuationPanel from "./EvacuationPanel";
+import EvacuationPanel, { type PlayPlan } from "./EvacuationPanel";
+import { useEvacuationOptimizer } from "./useEvacuationOptimizer";
 import {
   DEFAULT_ORDER_MINUTE,
   nearestEdge,
@@ -195,6 +197,8 @@ export default function SimulationStudioPage({
   // Evacuation and road closures (3D view only). Closures are edge indices of one road area and
   // are dropped when the board's area changes; they never change the fire run.
   const [evacuationOn, setEvacuationOn] = useState(false);
+  // Which evacuation plan the 3D view plays: the fastest-exit policy or the optimiser's best.
+  const [playPlan, setPlayPlan] = useState<PlayPlan>("fastest");
   const [roadTool, setRoadTool] = useState(false);
   const [orderMinute, setOrderMinute] = useState(DEFAULT_ORDER_MINUTE);
   const [closures, setClosures] = useState<{ areaId: string; edges: ReadonlySet<number> }>({
@@ -565,10 +569,22 @@ export default function SimulationStudioPage({
         : null,
     [showEvacuation, evacuationInputs, closedEdges],
   );
-  const evacuationView = useMemo<StudioEvacuationView | null>(
+  // Re-optimised whenever the closures, order minute, run or crews change (debounced).
+  const optimizer = useEvacuationOptimizer(evacuationInputs, showEvacuation && dioramaShowsRun);
+  const optimizedPlan =
+    playPlan === "optimized" && optimizer.status === "ready" ? optimizer.result?.best.plan : null;
+  // The optimised plan plays only while its result matches the current inputs; otherwise the
+  // default policy does. A new `inputs` object makes the diorama rebuild its EvacuationPlayer.
+  const playedInputs = useMemo<EvacuationInputs | null>(
     () =>
-      showEvacuation && area ? { area, exposure, closedEdges, inputs: evacuationInputs } : null,
-    [showEvacuation, area, exposure, closedEdges, evacuationInputs],
+      evacuationInputs && optimizedPlan
+        ? { ...evacuationInputs, plan: optimizedPlan }
+        : evacuationInputs,
+    [evacuationInputs, optimizedPlan],
+  );
+  const evacuationView = useMemo<StudioEvacuationView | null>(
+    () => (showEvacuation && area ? { area, exposure, closedEdges, inputs: playedInputs } : null),
+    [showEvacuation, area, exposure, closedEdges, playedInputs],
   );
   const closedRoadList = useMemo(
     () => (area ? [...closedEdges].map((edge) => area.edges[edge]).filter(Boolean) : []),
@@ -828,6 +844,10 @@ export default function SimulationStudioPage({
                       baseline={baselineSummary}
                       withClosures={closuresSummary}
                       currentMinute={currentMinute}
+                      area={area}
+                      optimizer={optimizer}
+                      playPlan={playPlan}
+                      onPlayPlan={setPlayPlan}
                     />
                   )
                 }
@@ -1087,6 +1107,7 @@ export default function SimulationStudioPage({
               onExport={handleExport}
               onImport={handleImport}
               onLoadDemo={handleLoadDemo}
+              liveDrill={<LiveDrillAction result={result} stale={stale} />}
               firefighting={
                 <FirefightingFields
                   scenario={scenario}

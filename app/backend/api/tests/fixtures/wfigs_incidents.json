@@ -1,0 +1,71 @@
+{
+ "type": "FeatureCollection",
+ "features": [
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -121.7019,
+     36.3083
+    ]
+   },
+   "properties": {
+    "IrwinID": "{51374D2C-D96B-40F7-940B-6CB8E0A483A2}",
+    "IncidentName": "BRYSON",
+    "IncidentSize": 146.2,
+    "PercentContained": 100,
+    "FireDiscoveryDateTime": 1792107679000,
+    "ModifiedOnDateTime_dt": 1792629700097,
+    "POOState": "US-CA",
+    "POOCounty": "Los Angeles",
+    "IncidentTypeCategory": "WF",
+    "FireCause": "Undetermined"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -116.134455818843,
+     34.0011159685857
+    ]
+   },
+   "properties": {
+    "IrwinID": "{0D055075-348F-4B1B-A46D-59DADA09AE6C}",
+    "IncidentName": "PARK",
+    "IncidentSize": 0.1,
+    "PercentContained": null,
+    "FireDiscoveryDateTime": 1792275470000,
+    "ModifiedOnDateTime_dt": 1792710811767,
+    "POOState": "US-CA",
+    "POOCounty": "Riverside",
+    "IncidentTypeCategory": "WF",
+    "FireCause": "Undetermined"
+   }
+  },
+  {
+   "type": "Feature",
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -120.965943065179,
+     38.3892251035066
+    ]
+   },
+   "properties": {
+    "IrwinID": "{DD555ADD-FF1F-4354-926B-155350814B0F}",
+    "IncidentName": "RANCHO ARROYO SECO VMP RX",
+    "IncidentSize": 43.3,
+    "PercentContained": null,
+    "FireDiscoveryDateTime": 1767292435000,
+    "ModifiedOnDateTime_dt": 1792354197963,
+    "POOState": "US-CA",
+    "POOCounty": "Amador",
+    "IncidentTypeCategory": "RX",
+    "FireCause": "Undetermined"
+   }
+  }
+ ]
+}

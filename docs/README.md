@@ -3,7 +3,7 @@
 | Document | What it is |
 | -------- | ---------- |
 | [project-scope.md](project-scope.md) | Cal Hacks 13.0 scope: proposed features, priorities, team split, demo. Proposals, not a statement of what is built. |
-| [adr/README.md](adr/README.md) | Index of architecture decision records (note: several numbers are duplicated). |
+| [adr/](adr/) | Architecture decision records, one file each (several numbers are duplicated; cite by file name). |
 | [historical-replay.md](historical-replay.md) | Proposed format and acquisition plan for historical incident packages. |
 | [historical-replay-handoff.md](historical-replay-handoff.md) | Dated work-in-progress notes on historical replay acquisition (2026-10-23). |
 | [replay-bundle.md](replay-bundle.md) | Contract for the replay bundle JSON that `python3 -m sim ... bundle` generates and `/replay` loads. |
@@ -14,7 +14,9 @@
 | [development.md](development.md) | Optional checks, running on the host, runtime images. |
 | [plan-api.md](plan-api.md) | Draft API for commanding a branch of the replay. |
 | [live-reports.md](live-reports.md) | Contract for the live drill API: field reports, road state, guidance, check-ins (`/api/live/…`). |
+| [ground-data-calibration.md](ground-data-calibration.md) | Empirical 911, radio and rescue rates from the 2018 Camp Fire record (`sim/ground_rates.py`) and the seeded comms generator calibrated on them (`sim/gen_comms.py`). |
 | [twin-api.md](twin-api.md) | Contract for the real-time traffic twin behind `/live`'s what-if. |
+| [strategy-evaluation.md](strategy-evaluation.md) | Protocol for comparing response strategies across scenarios and seeds: paired design, metrics, statistics, prompt/tool A/B. |
 | [iteration-log.md](iteration-log.md) | Round-by-round log of the live-drill iteration work. |
 
 Other documentation lives next to the code: [../README.md](../README.md), [../app/src/ui/README.md](../app/src/ui/README.md)

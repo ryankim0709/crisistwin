@@ -16,7 +16,7 @@ app/src/
   dispatch/         /dispatch    Claude dispatch agent on top of the studio
   replay/           /replay, /simulate  historical replay and agent simulation
   diorama/          /diorama     scripted 3D evacuation diorama (synthetic)
-  pages/            planning pages (scenarios, evacuation, comparison, incidents, stress tests)
+  pages/            planning pages (evacuation, comparison, incidents, stress tests)
   maps/, lib/       shared basemap config and API client
 ```
 

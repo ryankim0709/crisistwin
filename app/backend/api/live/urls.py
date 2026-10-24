@@ -1,9 +1,10 @@
 from django.urls import path
 
-from . import views
+from . import events, injects, packages, responder_routing, views
 
 urlpatterns = [
     path("devices", views.devices, name="live-devices"),
+    path("packages", packages.packages, name="live-packages"),
     path("incidents/<str:incident_id>/join", views.join, name="live-join"),
     path("incidents/<str:incident_id>/reports", views.incident_reports, name="live-reports"),
     path("incidents/<str:incident_id>/road-state", views.road_state, name="live-road-state"),
@@ -15,8 +16,12 @@ urlpatterns = [
     path("incidents/<str:incident_id>/situation", views.situation, name="live-situation"),
     path("incidents/<str:incident_id>/checkins", views.checkins, name="live-checkins"),
     path("incidents/<str:incident_id>/command", views.command, name="live-command"),
+    path("incidents/<str:incident_id>/events", events.incident_events, name="live-events"),
     path("incidents/<str:incident_id>/replan", views.replan, name="live-replan"),
     path("incidents/<str:incident_id>/drill", views.drill_action, name="live-drill"),
+    path("incidents/<str:incident_id>/aar", views.incident_aar, name="live-aar"),
+    path("incidents/<str:incident_id>/injects", injects.incident_injects, name="live-injects"),
+    path("incidents/<str:incident_id>/injects/<str:inject_id>", injects.delete_inject, name="live-inject"),
     path("incidents/<str:incident_id>/twin", views.twin, name="live-twin"),
     path("incidents/<str:incident_id>/twin/whatif", views.twin_whatif, name="live-twin-whatif"),
     path("me/reports", views.my_reports, name="live-my-reports"),
@@ -25,6 +30,7 @@ urlpatterns = [
     path("me/destination", views.my_destination, name="live-my-destination"),
     path("reports/<str:report_id>/triage", views.triage, name="live-triage"),
     path("tasks/<str:task_id>", views.update_task, name="live-task"),
+    path("tasks/<str:task_id>/route", responder_routing.task_route, name="live-task-route"),
     path("checkins/<str:checkin_id>/help", views.checkin_help, name="live-checkin-help"),
     path("proposals/<str:proposal_id>/approve", views.approve_proposal, name="live-approve"),
     path("proposals/<str:proposal_id>/reject", views.reject_proposal, name="live-reject"),

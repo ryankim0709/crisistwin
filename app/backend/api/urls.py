@@ -12,11 +12,16 @@ from .intel import (
     intel_ingest,
     intel_runs,
 )
+from .intel_feeds_api import intel_feed_poll, intel_feeds
 from .landscapes import landscape_list, landscape_package
+from .live_active import live_active
 from .live_broadcast import live_broadcast, live_snapshot
+from .mobile_data import mobile_collection, mobile_document, register_device
 from .views import health
 
 FAMILY_ID = r"(?P<family_id>[0-9a-f]{24})"
+MOBILE_COLLECTION = r"(?P<collection>[a-z][a-z0-9_]{0,47})"
+MOBILE_DOCUMENT_ID = r"(?P<document_id>[0-9a-f]{24})"
 
 urlpatterns = [
     path("health", health, name="health"),
@@ -24,6 +29,7 @@ urlpatterns = [
     path("dispatch/decide", decide, name="dispatch-decide"),
     path("dispatch/area", dispatch_area, name="dispatch-area"),
     path("live", live_snapshot, name="live-snapshot"),
+    path("live/active", live_active, name="live-active"),
     path("live/broadcast", live_broadcast, name="live-broadcast"),
     path("live/", include("api.live.urls")),
     path("families", create_family, name="family-create"),
@@ -31,6 +37,13 @@ urlpatterns = [
     re_path(rf"^families/{FAMILY_ID}$", family_detail, name="family-detail"),
     re_path(rf"^families/{FAMILY_ID}/meeting-points$", family_meeting_points, name="family-meeting-points"),
     re_path(rf"^families/{FAMILY_ID}/members/me$", family_member_me, name="family-member-me"),
+    path("mobile/devices", register_device, name="mobile-devices"),
+    re_path(rf"^mobile/data/{MOBILE_COLLECTION}$", mobile_collection, name="mobile-collection"),
+    re_path(
+        rf"^mobile/data/{MOBILE_COLLECTION}/{MOBILE_DOCUMENT_ID}$",
+        mobile_document,
+        name="mobile-document",
+    ),
     path("intel/runs", intel_runs, name="intel-runs"),
     path("intel/ingest", intel_ingest, name="intel-ingest"),
     path("intel/documents", intel_documents, name="intel-documents"),
@@ -40,6 +53,8 @@ urlpatterns = [
         name="intel-document-extract",
     ),
     path("intel/candidates", intel_candidates, name="intel-candidates"),
+    path("intel/feeds", intel_feeds, name="intel-feeds"),
+    re_path(r"^intel/feeds/(?P<feed>[a-z]{2,16})/poll$", intel_feed_poll, name="intel-feed-poll"),
     re_path(
         r"^intel/candidates/(?P<event_id>intel-[0-9a-f]{16})/review$",
         intel_candidate_review,

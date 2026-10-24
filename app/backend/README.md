@@ -145,6 +145,14 @@ returns 304. Errors are JSON: 404 `{"error": "not_found"}` for unknown/unbuilt r
 [ADR 0016](../../docs/adr/0016-resident-live-and-family.md) and
 `app/src/live/contracts.ts`.
 
+### Mobile data (`/api/mobile/…`)
+
+`POST /api/mobile/devices` and `/api/mobile/data/<collection>[/<id>]` (`api/mobile_data.py`)
+let the iOS app push any JSON object to Atlas and pull it back while its schema is designed.
+A device registers once for a bearer token (stored as a hash) and sees only its own documents,
+kept in the `mobile_documents` collection (devices in `mobile_devices`). Limits, errors and
+examples are in [ADR 0029](../../docs/adr/0029-mobile-data-store.md).
+
 ### Live drill API (`/api/live/…`)
 
 Implements v1 and v2 of [docs/live-reports.md](../../docs/live-reports.md) (ADR 0011, 0012):
@@ -156,8 +164,8 @@ the `/api/live` prefix with the broadcast above but no code or collections (`liv
 
 - Auth: `Authorization: Bearer <token>`. `POST /api/live/devices` issues civilian tokens;
   `POST /api/live/incidents/camp-2018-drill/join {"invite_code"}` issues responder tokens
-  (`LIVE_INVITE_CODE`); the controller uses `LIVE_CONTROLLER_TOKEN`. Unset secrets fail
-  closed (403). Device tokens are stored as SHA-256 hashes.
+  (`LIVE_INVITE_CODE`, unset -> 403). The controller needs no token while
+  `LIVE_CONTROLLER_TOKEN` is unset; setting it requires that bearer token. Device tokens are stored as SHA-256 hashes.
 - The planner fixes every level, route and number. The rationale LLM
   (`LIVE_RATIONALE_MODEL`, `ANTHROPIC_API_KEY`) only rewrites the template text in a
   background thread (10 s timeout); without a key the template stays.
@@ -166,6 +174,8 @@ the `/api/live` prefix with the broadcast above but no code or collections (`liv
 - `POST incidents/{id}/impact` (controller) compares one road segment blocked and unblocked:
   two planner runs give the affected zones and their ETA delta, and one twin what-if
   (simulated, about 1-3 s) gives the vehicles at risk and window metrics (`api/live/impact.py`).
+- `GET incidents/{id}/aar` (controller) returns the after-action report and drill score
+  (`api/live/aar.py`; [contract](../../docs/live-reports.md#after-action-report)).
 - Not implemented yet: `POST incidents/{id}/route` returns 501.
 
 Local run (Docker MongoDB on 127.0.0.1:27017):
@@ -187,6 +197,19 @@ Skyway in Paradise (`evidence_class: "drill_fixture"`, note says synthetic).
 over HTTP in about 5 s, with no simulator or browser: report, triage, replan and approve,
 guidance on the phone, destination choice, check-ins, responder position and a check task. It
 writes synthetic drill data; run `live_drill --reset` afterwards.
+
+`python manage.py live_compare_record --confirm-delay-min 5 --out /tmp/record-compare` (same env;
+no server, no database writes, about 1-2 min) is a simulated planning experiment: the live twin
+and planner headless from 14:30Z to 18:00Z, without a controller, with one who confirms the 2018
+record's `road_blocked`/`fire_seen` entries N minutes late, and with the previous free-flow
+planner. It writes `.json` and `.md`; see [live-reports.md](../../docs/live-reports.md)
+("Record comparison harness") and ADR `0031-congestion-aware-planner.md`.
+
+`python manage.py live_loadtest --base http://127.0.0.1:8020 --ramp 10,50,100,200 --duration 30
+--out results.json` ramps simulated phones and consoles against a server started with
+`LIVE_LOADTEST_RELAX_LIMITS=1` and prints p50/p95/p99 per endpoint; `--cleanup` removes its
+data. Use a separate server and database, never the shared one. Method and results:
+[docs/live-loadtest.md](../../docs/live-loadtest.md).
 
 ### Incident intelligence (`/api/intel/…`)
 

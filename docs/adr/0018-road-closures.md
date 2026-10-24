@@ -54,4 +54,5 @@ the evacuation, not on the fire run.
   by seconds changes little; one that forces zones onto a shared bottleneck, or cuts them off,
   shows up clearly.
 - Not done: timed closures (closing a road mid-run), saving closures with the scenario, closures
-  in the 2D map view, and optimisation over order timing or exit choice.
+  in the 2D map view, and optimisation over order timing. Exit choice and staged waves are now
+  optimised ([0027-evacuation-optimizer](0027-evacuation-optimizer.md)).

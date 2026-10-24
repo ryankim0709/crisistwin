@@ -10,6 +10,11 @@ export function triageItem(run: RunAction, item: QueueItem, kind: TriageKind): P
   const key = `item:${item.id}`;
   if (kind === "confirm") {
     if (item.confirmed) return null;
+    if (item.grouped) {
+      return run(key, async (t) => {
+        for (const r of item.reports.filter((r) => r.status !== "confirmed")) await triageReport(t, r.id, "confirm");
+      });
+    }
     const lead = item.reports.find((r) => r.kind === item.kind && r.status !== "confirmed") ?? item.reports[0];
     return run(key, (t) => triageReport(t, lead.id, "confirm"));
   }
