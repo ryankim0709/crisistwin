@@ -5,8 +5,10 @@ import { VARIANT_CAVEATS, featurable, type VariantIndex } from "./compare";
 import { distanceM, inArea } from "./insights";
 import { buildCaption, splitSnappedNote } from "./narrative";
 import type { ReferencePlace } from "./places";
+import { EVACUATION_AREA, baselineAt, hourIndexAt, type Mobility } from "./mobility";
 import {
   frameIndexAt,
+  localTime,
   ignitionBasis,
   incidentYear,
   observationSource,
@@ -102,6 +104,47 @@ function busyEdgeCoords(
   return out;
 }
 
+/** Hours after ignition compared with a normal week, for the device-data chapter. */
+const MOBILITY_WINDOW_START_H = 2;
+const MOBILITY_WINDOW_H = 8;
+/** Only a strong drop makes a chapter: visits at most this share of normal. */
+const MOBILITY_MAX_RATIO = 0.5;
+
+/**
+ * Device-data beat: visits to places in the evacuation area in the hours after ignition,
+ * against the same hours of the baseline week. Null when the sidecar, the series or a clear
+ * drop is missing.
+ */
+function mobilityChapter(model: ReplayModel, m: Mobility | null): Chapter | null {
+  const ignitionMs = model.fireSimulated?.ignition?.atMs;
+  if (!m || ignitionMs == null) return null;
+  const series = m.series.find((s) => s.region === EVACUATION_AREA && s.category === "all");
+  const i0 = hourIndexAt(m, ignitionMs + MOBILITY_WINDOW_START_H * 3_600_000);
+  if (!series || i0 < 0 || i0 + MOBILITY_WINDOW_H > m.hourStartsMs.length) return null;
+  let visits = 0;
+  let normal = 0;
+  for (let i = i0; i < i0 + MOBILITY_WINDOW_H; i += 1) {
+    visits += series.visits[i];
+    normal += baselineAt(series.baseline, i);
+  }
+  if (normal <= 0 || visits / normal > MOBILITY_MAX_RATIO) return null;
+  const tz = model.incident.timezone;
+  const from = localTime(m.hourStartsMs[i0], tz);
+  const to = localTime(m.hourStartsMs[i0 + MOBILITY_WINDOW_H - 1] + 3_600_000, tz);
+  return {
+    id: "mobility",
+    atMs: m.hourStartsMs[i0 + Math.floor(MOBILITY_WINDOW_H / 2)],
+    title: visits / normal <= 0.25 ? "The town empties" : "Fewer people out and about",
+    body:
+      `Visits to ${fmt(series.poiCount)} places in the evacuation area from ${from} to ${to} were ` +
+      `${Math.round((visits / normal) * 100)}% of the same hours in a normal week` +
+      (m.baselineWeeks[0] ? ` (week of ${m.baselineWeeks[0]})` : "") +
+      ". Derived from phone-panel data (Advan via Dewey): visits to places, not a count of people.",
+    evidence: m.evidenceClass,
+    focus: [],
+  };
+}
+
 /** Ensure a closing full stop, unless `close` is false (then strip one). */
 function sentence(text: string, close = true): string {
   const trimmed = text.trim().replace(/[.]+$/, "");
@@ -142,6 +185,7 @@ export function buildChapters(
   model: ReplayModel,
   variants: VariantIndex | null,
   place: ReferencePlace | null,
+  mobility: Mobility | null = null,
 ): Chapter[] {
   const chapters: Chapter[] = [];
   const obs = observationSource(model);
@@ -205,7 +249,9 @@ export function buildChapters(
   }
 
   const order = firstEvent(model, isOrder);
-  const placeOrderFirst = place ? firstEvent(model, (e) => isOrder(e) && e.label.includes(place.name)) : null;
+  const placeOrderFirst = place
+    ? firstEvent(model, (e) => isOrder(e) && e.label.includes(place.name))
+    : null;
   // When the reference place has its own order, that chapter carries the story instead.
   if (order && (!placeOrderFirst || placeOrderFirst.id === order.id)) {
     chapters.push({
@@ -357,7 +403,10 @@ export function buildChapters(
   // Generic beats for bundles without the place-specific ones (e.g. multi-town fires).
   const core = () => chapters.length;
   if (!chapters.some((c) => c.id === "place-fire")) {
-    const arrival = firstEvent(model, (e) => e.type === "fire_arrival" && HISTORICAL.has(e.evidenceClass));
+    const arrival = firstEvent(
+      model,
+      (e) => e.type === "fire_arrival" && HISTORICAL.has(e.evidenceClass),
+    );
     if (arrival) {
       chapters.push({
         id: "fire-arrival",
@@ -380,13 +429,18 @@ export function buildChapters(
         title: "Everyone on the road",
         body:
           `Modelled peak: ${fmt(m.enRouteVeh)} vehicles on the road at once, ${fmt(m.blockedVeh)} unable to move.` +
-          (lastOrder ? ` Latest order before this: ${sentence(splitSnappedNote(lastOrder.label).text, false)}.` : ""),
+          (lastOrder
+            ? ` Latest order before this: ${sentence(splitSnappedNote(lastOrder.label).text, false)}.`
+            : ""),
         evidence: traffic.evidenceClass,
         focus: busyEdgeCoords(model, k, null),
       });
     }
   }
-  const shelter = firstEvent(model, (e) => e.type === "shelter_opened" && HISTORICAL.has(e.evidenceClass));
+  const shelter = firstEvent(
+    model,
+    (e) => e.type === "shelter_opened" && HISTORICAL.has(e.evidenceClass),
+  );
   if (shelter && core() < 8 && !/^Temporary refuge|^TRA-/i.test(shelter.label)) {
     chapters.push({
       id: "shelter",
@@ -397,6 +451,9 @@ export function buildChapters(
       focus: [],
     });
   }
+
+  const emptied = mobilityChapter(model, mobility);
+  if (emptied) chapters.push(emptied);
 
   chapters.sort((a, b) => a.atMs - b.atMs);
 

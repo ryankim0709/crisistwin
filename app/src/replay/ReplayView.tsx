@@ -370,8 +370,8 @@ function ReplayScreen({
     variantDemand !== null && baselineDemand !== null && variantDemand !== baselineDemand;
   const usableIndex = variantsStale ? null : variants.index;
   const chapters = useMemo(
-    () => buildChapters(baseline, usableIndex, place),
-    [baseline, usableIndex, place],
+    () => buildChapters(baseline, usableIndex, place, mobility.data),
+    [baseline, usableIndex, place, mobility.data],
   );
   const reveal = useMemo(() => (usableIndex ? revealRows(usableIndex) : []), [usableIndex]);
   const startStory = useCallback(() => {
