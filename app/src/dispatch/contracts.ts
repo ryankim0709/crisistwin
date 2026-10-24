@@ -103,12 +103,26 @@ export interface UnitObservation {
   drive_min_to: Record<string, number>;
 }
 
-export interface FireAttackOption {
+/** How engines fight a fire (fireTactics.ts). */
+export type FireTacticName = "direct" | "flank" | "indirect";
+
+/**
+ * A what-if the simulator solved: send these engines with this tactic (crews already on the
+ * fire stay and switch to it). Every figure is from re-running the fire model.
+ */
+export interface TacticOptionObservation {
+  tactic: FireTacticName;
   engines: number;
   /** The nearest units not already on this fire, fastest first. */
   unit_ids: string[];
-  /** Simulator estimate: minutes from now until the fire is out with these added; null = not by the horizon. */
-  out_eta_min: number | null;
+  /** Minutes from now until it is out (direct) or held by its line; null = not by the horizon. */
+  contained_in_min: number | null;
+  /** All fires, by the horizon, with this option instead of the current fire fighting. */
+  burned_ha_at_horizon: number;
+  homes_reached_by_horizon: number;
+  /** Line planned, and line that held against the fire (flank and indirect only), km. */
+  line_km: number | null;
+  line_held_km: number | null;
 }
 
 /**
@@ -118,27 +132,42 @@ export interface FireAttackOption {
 export interface FireObservation {
   id: string;
   name: string;
-  /** "merged": another fire reached its ignition point first. */
-  status: "not_started" | "burning" | "out" | "merged";
+  /**
+   * "merged": another fire reached its ignition point first. "out": put out by direct attack.
+   * "held": stopped by a flank or indirect line.
+   */
+  status: "not_started" | "burning" | "out" | "held" | "merged";
   /** Minutes until it starts (not_started only). */
   starts_in_min: number | null;
   area_ha: number;
   /** Head flame at the ignition point, feet; null while it crowns there. */
   head_flame_ft: number | null;
   crowning: boolean;
-  /** Engines can attack it directly (head flame within what they hold, no crowning). */
+  /** Started on developed ground (a structure fire): engines can attack its head directly. */
+  structure_fire: boolean;
+  /** Engines can fight it at all with some tactic. */
   attackable: boolean;
-  not_attackable_reason: string | null;
+  /** Per tactic, why it cannot be used now, or null when it can. */
+  tactics_blocked: Record<FireTacticName, string | null>;
+  /** The tactic the engines on it are using, or null when none are. */
+  tactic: FireTacticName | null;
   /** Units on scene or en route on fire_attack. */
   attacking: string[];
-  /** Grass-equivalent line built and still needed to ring the fire, metres. */
+  /** Direct attack: grass-equivalent line built and still needed to ring the fire, metres. */
   line_built_m: number;
   line_needed_m: number;
-  /** Simulator estimate with the units attacking it now; null when none, or not by the horizon. */
+  /** Direct attack: estimate with the units on it now; null when none, or not by the horizon. */
   out_eta_min: number | null;
   /** Minute it went out (status out). */
   out_minute: number | null;
-  attack_options: FireAttackOption[];
+  /** Flank or indirect: control line planned and built so far, km. */
+  control_line_km: number;
+  control_line_built_km: number;
+  /** Flank or indirect: minutes from now until its line holds it, per the current run. */
+  held_in_min: number | null;
+  /** Minute its line held it (status held). */
+  held_minute: number | null;
+  tactic_options: TacticOptionObservation[];
 }
 
 export interface Observation {
@@ -165,6 +194,8 @@ export interface Observation {
     upcoming_ignitions: { name: string; minute: number }[];
     /** Zones and households in the fire path (impact other than "outside") and outside it. */
     fire_path: { zones: number; homes: number; outside_zones: number; outside_homes: number };
+    /** By the horizon with the fire fighting now in effect: compare with tactic_options. */
+    current_outcome: { burned_ha_at_horizon: number; homes_reached_by_horizon: number };
     evidence_class: "simulated";
   };
   /** Household counts. */
@@ -205,7 +236,13 @@ export type WireOrder =
       task: "evacuation_support" | "structure_defense";
       reason: string;
     }
-  | { type: "attack_fire"; unit_id: string; fire_id: string; reason: string }
+  | {
+      type: "attack_fire";
+      unit_id: string;
+      fire_id: string;
+      tactic: FireTacticName;
+      reason: string;
+    }
   | { type: "recall_unit"; unit_id: string; reason: string };
 
 export type DecisionEvent =

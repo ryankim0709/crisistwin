@@ -99,6 +99,8 @@ function target(overrides: Partial<FireTarget> = {}): FireTarget {
     lengthToBreadth: 1,
     workPerMeter: 1,
     notAttackable: null,
+    directBlocked: null,
+    structureFire: false,
     ...overrides,
   };
 }
@@ -121,7 +123,7 @@ describe("direct attack estimate", () => {
   });
 
   it("cannot attack a fire engines cannot hold", () => {
-    const crowning = target({ headFlameFeet: Infinity, notAttackable: "it is crowning" });
+    const crowning = target({ headFlameFeet: Infinity, directBlocked: "it is crowning" });
     expect(projectOutMinute(crowning, FRAMES, 0, 0, 0, [0, 0, 0], HORIZON)).toBeNull();
   });
 });
@@ -152,7 +154,7 @@ describe("engines attacking a fire", () => {
 
   it("offers what-if options and rejects fires that cannot be attacked", () => {
     expect(engineWith(target()).attackOptions(0, 4)).toEqual([{ unitIds: ["E1"], outMinute: 21 }]);
-    const crowning = engineWith(target({ notAttackable: "it is crowning" }));
+    const crowning = engineWith(target({ directBlocked: "it is crowning" }));
     expect(crowning.attackOptions(0, 4)).toEqual([]);
     const [rejected] = crowning.applyOrders([
       { type: "attack_fire", unit_id: "E1", fire_id: "F1", reason: "" },
@@ -163,6 +165,44 @@ describe("engines attacking a fire", () => {
       later.applyOrders([{ type: "attack_fire", unit_id: "E1", fire_id: "F1", reason: "" }])[0]
         .accepted,
     ).toBe(false);
+  });
+
+  it("flanks a fire too hot to attack directly, and releases crews once the line holds it", () => {
+    const engine = engineWith(target({ directBlocked: "its head flame is too long" }));
+    const [direct] = engine.applyOrders([
+      { type: "attack_fire", unit_id: "E1", fire_id: "F1", tactic: "direct", reason: "" },
+    ]);
+    expect(direct.accepted).toBe(false);
+    const [flank] = engine.applyOrders([
+      { type: "attack_fire", unit_id: "E1", fire_id: "F1", tactic: "flank", reason: "" },
+    ]);
+    expect(flank.accepted).toBe(true);
+    expect(engine.fires[0].tactic).toBe("flank");
+    expect(engine.linesDirty).toBe(true);
+    // The session would re-plan and re-solve; here the run says the line holds it at T+10.
+    engine.setFireLines([null]);
+    engine.setExposure(engine.exposure, FRAMES, [10]);
+    while (engine.minute < 10) engine.step();
+    expect(engine.alerts.some((alert) => alert.type === "fire_held")).toBe(true);
+    expect(engine.fires[0].heldAnnounced).toBe(true);
+    expect(engine.fireBurning(0)).toBe(false);
+    expect(engine.units[0].task).toBeNull();
+    // Releasing crews from a held fire does not ask for another re-plan.
+    expect(engine.linesDirty).toBe(false);
+  });
+
+  it("switches every crew on a fire to a new tactic", () => {
+    const engine = engineWith(target());
+    engine.applyOrders([
+      { type: "attack_fire", unit_id: "E1", fire_id: "F1", tactic: "direct", reason: "" },
+    ]);
+    const [switched] = engine.applyOrders([
+      { type: "attack_fire", unit_id: "E1", fire_id: "F1", tactic: "indirect", reason: "" },
+    ]);
+    expect(switched.accepted).toBe(true);
+    expect(switched.note).toMatch(/switch to indirect/);
+    expect(engine.fires[0].tactic).toBe("indirect");
+    expect(engine.linesDirty).toBe(true);
   });
 
   it("stands staged zones down when the fire that threatened them is out", () => {
