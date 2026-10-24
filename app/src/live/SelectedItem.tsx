@@ -280,12 +280,15 @@ function ReportDetail({
     act(async (t) => {
       for (const r of item.reports) await triageReport(t, r.id, "dismiss");
     });
+  const helpReport = item.kind === "help_needed";
+  const nearest = nearestResponder(item.coord, data.responders);
   const fieldCheck = () =>
     act((t) =>
       createTask(t, {
-        assignee: nearestResponder(item.coord, data.responders)?.party_key ?? null,
+        assignee: nearest?.party_key ?? null,
         target: { ...(item.segmentId ? { segment_id: item.segmentId } : {}), coord: item.coord },
         report_ids: item.reports.map((r) => r.id).slice(0, 50),
+        ...(helpReport ? { kind: "assist" as const } : {}),
       }),
     );
   const impactLineText = impactLine(item);
@@ -316,7 +319,13 @@ function ReportDetail({
       <ul className="lc-sel-reports">
         {item.reports.slice(0, 4).map((r) => (
           <li key={r.id}>
-            <span>{r.reporter.role === "responder" ? `Responder ${shortKey(r.reporter.party_key)}` : "Civilian"}</span>
+            <span>
+              {r.evidence_class === "historical_record"
+                ? `2018 ${r.record?.channel === "radio" ? "radio" : r.record?.channel === "911" ? "911 call" : "record"}`
+                : r.reporter.role === "responder"
+                  ? `Responder ${shortKey(r.reporter.party_key)}`
+                  : "Civilian"}
+            </span>
             <span className="lc-dim lc-num">{inDrill && r.replay_at ? drillClock(r.replay_at) : wallClock(r.observed_at)}</span>
             <span className={`lc-sel-status lc-sel-status--${r.status}`}>{STATUS_WORD[r.status]}</span>
             {isFixtureNote(r.note) ? (
@@ -332,7 +341,10 @@ function ReportDetail({
       </ul>
       {item.task ? (
         <p className="lc-sel-task">
-          <Tag tone="info">Field check {item.task.status === "accepted" ? "accepted" : "requested"}</Tag>
+          <Tag tone="info">
+            {item.task.kind === "assist" ? "Responder sent" : "Field check"}{" "}
+            {item.task.status === "accepted" ? "accepted" : "requested"}
+          </Tag>
           <span className="lc-dim">{item.task.assignee ? shortKey(item.task.assignee) : "Any responder"}</span>
         </p>
       ) : null}
@@ -353,7 +365,9 @@ function ReportDetail({
         {!item.task || item.segmentId || proposalId ? <span className="lc-sel-break" aria-hidden="true" /> : null}
         {item.task ? null : (
           <Button variant="secondary" size="sm" disabled={disabled} onClick={() => void fieldCheck()}>
-            Request field check
+            {helpReport
+              ? `Send ${nearest ? `${shortKey(nearest.party_key)}, ${nf(distanceM(item.coord, nearest.coord))} m` : "any responder"}`
+              : "Request field check"}
           </Button>
         )}
         {item.segmentId ? (

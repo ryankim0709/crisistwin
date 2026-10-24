@@ -10,6 +10,8 @@ import MapLegend from "./MapLegend";
 import ProposalPanel from "./ProposalPanel";
 import { buildQueue, matches, proposalFor, type QueueFilter } from "./queue";
 import ResponseRecord from "./ResponseRecord";
+import GroundRecord from "./GroundRecord";
+import { labelPoint } from "./format";
 import ReviewQueue from "./ReviewQueue";
 import SelectedItem, { type ImpactState, type RunAction } from "./SelectedItem";
 import { useCommand } from "./useCommand";
@@ -308,6 +310,15 @@ export default function LiveCommandPage() {
               />
             ) : null}
             <EvacuationPicture data={data} twin={twinData} twinError={twin.error} onFocus={setFocus} />
+            <GroundRecord
+              record={data.ground_record}
+              zones={data.zones}
+              onFocusZone={(id) => {
+                const zone = data.zones.find((z) => z.id === id);
+                const coord = zone ? labelPoint(zone.geometry) : null;
+                if (coord) setFocus({ id: `zone:${id}`, coord });
+              }}
+            />
             <ResponseRecord items={data.response_record ?? []} />
             <ActivityLog decisions={data.decisions ?? []} serverNow={serverNow} onSelect={selectFromLog} />
           </div>

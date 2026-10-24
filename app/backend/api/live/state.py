@@ -330,7 +330,11 @@ def load_public(
     report_docs = list(
         col("live_reports").find({"incident_id": incident_id}).sort("received_at", -1).limit(REPORTS_SNAPSHOT_LIMIT)
     )
-    facts = [report_fact(d) for d in report_docs]
+    # 2018 record entries wait in the controller's queue: they count for nothing until confirmed.
+    facts = [
+        report_fact(d) for d in report_docs
+        if d.get("evidence_class") != "historical_record" or d["status"] in ("confirmed", "resolved")
+    ]
     items = public.public_items(facts, now, index.segment_lines)
     state = public.road_state(facts, now)
     return report_docs, facts, items, state
@@ -340,6 +344,10 @@ def load_snapshot(incident_id: str, now: datetime) -> Snapshot:
     index = get_index()
     doc = drill_doc(incident_id)
     clock = clock_from(doc, index, now)
+    if clock.replay_now is not None:
+        from .groundrecord import materialize_due  # local: groundrecord imports this module's dependencies
+
+        materialize_due(index, incident_id, clock, now)
     report_docs, facts, items, state = load_public(incident_id, now, index)
     fire = estimate_fire(index.drill, clock.replay_now, public.confirmed_fire_points(facts, items))
     return Snapshot(

@@ -373,10 +373,10 @@ def _sync(sess: _Session, snapshot: Snapshot, twinmod) -> None:
         twin.step_to(iso(target))
 
 
-def _with_twin(snapshot: Snapshot, fn):
+def _with_twin(snapshot: Snapshot, fn, lock_timeout_s: float = LOCK_TIMEOUT_S):
     twinmod = _import_sim()
     sess = _session(snapshot.incident_id)
-    if not sess.lock.acquire(timeout=LOCK_TIMEOUT_S):
+    if not sess.lock.acquire(timeout=lock_timeout_s):
         raise TwinUnavailable("busy", "The twin is busy with another request; retry shortly.")
     try:
         _sync(sess, snapshot, twinmod)
@@ -469,6 +469,19 @@ def _unreachable_published(snapshot: Snapshot, zones: list[dict[str, Any]], dest
             "action_id": a["action_id"], "at": at,
         })
     return out
+
+
+def edge_speeds(snapshot: Snapshot, lock_timeout_s: float = 2.0) -> dict[str, tuple[int, float, float]]:
+    """Directed edge id -> (vehicles, mean speed kph, free-flow kph) for the occupied edges of the
+    synced twin at the drill's ``replay_now``. Simulated. Raises ``TwinUnavailable`` (warming,
+    failed, busy) or ``sim.twin.TwinError``; waits at most ``lock_timeout_s`` for the lock."""
+
+    def run(sess, twin, twinmod):
+        engine = twin.engine
+        edges = engine.s.edges
+        return {edges[i].id: (n, speed, edges[i].speed_kph) for i, n, speed, _ in engine.edge_rows(engine.now_s or 0)}
+
+    return _with_twin(snapshot, run, lock_timeout_s)
 
 
 def monitor(snapshot: Snapshot) -> dict[str, Any]:

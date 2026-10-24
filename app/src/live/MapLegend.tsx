@@ -96,6 +96,15 @@ const ROWS: { key: string; label: string; swatch: ReactNode }[] = [
     ),
   },
   {
+    key: "ground",
+    label: "2018 calls and radio, last 30 min",
+    swatch: (
+      <svg viewBox="0 0 20 14" aria-hidden="true">
+        <circle cx="10" cy="7" r="6" fill={MAP_COLOR.ground} stroke="#fff" strokeWidth="1.5" />
+      </svg>
+    ),
+  },
+  {
     key: "help",
     label: "Help request",
     swatch: (

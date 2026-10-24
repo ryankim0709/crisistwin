@@ -51,6 +51,8 @@ export interface QueueItem {
   newestObservedAt: string;
   confirmed: boolean;
   fixture: boolean;
+  /** Every report is a 2018 record entry (911 / radio), not a drill report. */
+  record: boolean;
   isNew: boolean;
   conflict: string | null;
   stale: boolean;
@@ -196,6 +198,7 @@ export function buildQueue(data: CommandResponse, serverNowMs: number): QueueIte
       newestObservedAt: head.observed_at,
       confirmed,
       fixture: rs.every((r) => isFixtureNote(r.note)),
+      record: rs.every((r) => r.evidence_class === "historical_record"),
       isNew: !confirmed && !stale && rs.some((r) => UNREVIEWED.has(r.status)),
       conflict,
       stale,
@@ -243,6 +246,7 @@ function helpItems(data: CommandResponse): QueueItem[] {
       newestObservedAt: h.at,
       confirmed: status !== "open",
       fixture: false,
+      record: false,
       isNew: status === "open",
       conflict: null,
       stale: false,

@@ -15,7 +15,7 @@ packaged raw bytes offline and compares them.
 
 | Group | Files | Purpose |
 | ----- | ----- | ------- |
-| Camp Fire (2018) | `build_camp_history.py`, `replay_camp_history.py`, `build_camp_evacuation.py`, `add_camp_road_events.py`, `add_camp_codedred.py`, `camp_add_layers.py`, `camp_extracts.py`, `camp_terrain.py` | Paradise damage + perimeter package, pre-fire OSM roads, NIST road events and CodeRED alerts, then zones, events, population, shelters, calibration targets, FIRMS and terrain. Each step builds a child package of the previous one. `replay_camp_history` exports one perimeter frame as GeoJSON. |
+| Camp Fire (2018) | `build_camp_history.py`, `replay_camp_history.py`, `build_camp_evacuation.py`, `add_camp_road_events.py`, `add_camp_codedred.py`, `camp_add_layers.py`, `camp_extracts.py`, `camp_terrain.py`, `camp_ground_record.py` | Paradise damage + perimeter package, pre-fire OSM roads, NIST road events and CodeRED alerts, then zones, events, population, shelters, calibration targets, FIRMS and terrain. Each step builds a child package of the previous one. `replay_camp_history` exports one perimeter frame as GeoJSON. `camp_ground_record` writes the de-identified 911/radio/rescue record `camp_ground_record.json` for `/live`. |
 | Kincade Fire (2019) | `kincade_build.py` (entry point), `kincade_common.py`, `kincade_events.py`, `kincade_fire.py`, `kincade_population.py`, `kincade_roads.py`, `kincade_traffic.py`, `kincade_zones.py` | Evacuation package: `fetch`, `build`, or `--verify-package`. |
 | Marshall Fire (2021) | `marshall_build.py` (entry point), `marshall_extract.py`, `marshall_geopdf.py` | Evacuation package from OSM, FEDS, CDOT counts, Census/FIRMS subsets and the county GeoPDF launch areas. |
 | Woolsey Fire (2018) | `woolsey_build.py` | Evacuation package: `fetch-osm`, `fetch-feds`, `extract-firms`, `extract-acs`, `build`, or `--verify-package`. |
@@ -24,6 +24,8 @@ packaged raw bytes offline and compares them.
 | Landscape regions | `build_landscape_regions/` | Node builder + Python uploader for prebuilt California fire landscapes. See its [README](build_landscape_regions/README.md). |
 
 ## Data tables (`*.json` at this level)
+
+`camp_ground_record.json` is the exception: it is generated output (see Commands); rebuild it rather than editing it by hand.
 
 The `camp_*_table.json`, `kincade_*.json`, `marshall_*_table.json` and `woolsey_*.json` files are
 **inputs**, not outputs: hand-curated transcriptions of official reports and tables, read by the
@@ -42,6 +44,11 @@ python3.12 -m tools.build_camp_history --verify-package data/incidents/camp-2018
 python3.12 -m tools.build_camp_history --output-root data/incidents
 python3.12 -m tools.replay_camp_history --package data/incidents/camp-2018-paradise-slice/a6d2cc03f525ed65 \
   --at 2018-11-09T15:00:00Z --output /tmp/camp-frame.geojson
+
+# Camp Fire ground record (network; needs poppler's pdftotext). Downloads the two NIST PDFs
+# into a cache directory outside the repository, checks their pinned SHA-256 and rewrites
+# tools/camp_ground_record.json. Tests: python3.12 -m unittest tests.test_camp_ground_record
+python3.12 -m tools.camp_ground_record --cache-dir ~/crisistwin-sources/nist
 
 # Other incidents (inputs directory lives outside the repository)
 python3.12 -m tools.kincade_build fetch --sources DIR

@@ -9,3 +9,4 @@
 .rr-src { flex: none; font-size: 0.75rem; padding-top: 2px; }
 .rr-empty { margin: 0; font-size: 0.8rem; opacity: 0.65; }
 .rr-more { margin-top: 6px; background: none; border: 0; padding: 2px 6px; color: inherit; opacity: 0.7; font: inherit; font-size: 0.78rem; cursor: pointer; }
+.rr-stats { margin: 0 0 8px; font-size: 0.8rem; opacity: 0.8; }
