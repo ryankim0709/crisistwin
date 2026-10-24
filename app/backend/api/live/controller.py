@@ -109,6 +109,8 @@ def log_decision(
             "proposal_id": proposal_id,
             "checkin_id": checkin_id,
             "note": note,
+            # Drill time of the decision (None before a drill starts): scoring in drill minutes (ADR 0042).
+            "replay_at": report_replay_at(incident_id, now),
         }
     )
 
@@ -133,6 +135,7 @@ def create_task(
         "report_ids": list(report_ids),
         "note": note,
         "created_at": now,
+        "replay_at": report_replay_at(incident_id, now),
         "status": "open",
         "answer": None,
         "accepted_at": None,

@@ -204,7 +204,94 @@ def _twin_outcomes(snapshot: Snapshot) -> dict[str, Any]:
     }
 
 
-def build_aar(snapshot: Snapshot) -> dict[str, Any]:
+# ---- triage quality against the hidden truth log (ADR 0042) ----
+
+GUIDANCE_CONFIRM_LINK_S = 5.0
+"""A proposal created within this many wall seconds after a controller confirm is the replan that
+confirm triggered (views.triage replans in the same request), so it cites the confirmed report."""
+
+
+def _triage_quality_module():
+    from .simtruth import _gen_noise  # puts the repository root on sys.path
+
+    _gen_noise()
+    from sim import triage_quality
+
+    return triage_quality
+
+
+def triage_quality(snapshot: Snapshot, decisions: list[dict[str, Any]]) -> dict[str, Any]:
+    """Score triage against ``sim_truth`` (sim/triage_quality.py). Reads the truth log: call only
+    after the drill (``build_aar(..., truth_scoring=True)``)."""
+    from .simtruth import read_truth
+
+    tq = _triage_quality_module()
+    incident_id = snapshot.incident_id
+    truth = read_truth(incident_id)
+    horizon = snapshot.clock.replay_now
+    if not truth or horizon is None:
+        return {"status": "no_truth" if not truth else "no_drill", "evidence_class": "simulated"}
+
+    def drill_time(doc: dict[str, Any], wall_key: str) -> datetime | None:
+        return _aware(doc.get("replay_at")) or _drill_at(snapshot, _aware(doc.get(wall_key)))
+
+    firsts: dict[tuple[str, str], datetime] = {}
+    confirm_walls: list[tuple[datetime, list[str]]] = []
+    for d in decisions:
+        at = drill_time(d, "at")
+        ids = d.get("report_ids") or []
+        if d["action"] in TRIAGE_ACTIONS and ids and at is not None:
+            firsts.setdefault((ids[0], d["action"]), at)
+        if d["action"] == "confirm" and ids:
+            confirm_walls.append((_aware(d["at"]), ids[:1]))
+    docs = list(col("live_reports").find({"incident_id": incident_id, "evidence_class": {"$ne": "historical_record"}}))
+    outcomes = []
+    for r in docs:
+        received = drill_time(r, "received_at")
+        if received is None:
+            continue
+        coord = (r.get("location") or {}).get("coord")
+        outcomes.append(tq.ReportOutcome(
+            event_id=r["client_id"], report_id=r["id"], kind=r["kind"],
+            coord=(coord[0], coord[1]) if coord else None, received_at=received, status=r["status"],
+            confirmed_at=firsts.get((r["id"], "confirm")), dismissed_at=firsts.get((r["id"], "dismiss")),
+            resolved_at=firsts.get((r["id"], "resolve")), merged_at=firsts.get((r["id"], "merge")),
+            merged_into=r.get("merged_into"),
+        ))
+
+    # Guidance changes cite the reports behind their proposal: road_blocked reports on its cause
+    # segments received by then, and the report whose confirm triggered it.
+    blocked_by_seg: dict[str, list[dict[str, Any]]] = {}
+    for r in docs:
+        seg = (r.get("road_ref") or {}).get("segment_id")
+        if r["kind"] == "road_blocked" and seg:
+            blocked_by_seg.setdefault(seg, []).append(r)
+    proposals = {p["id"]: p for p in col("live_proposals").find({"incident_id": incident_id})}
+    acts = []
+    for g in col("live_guidance").find({"incident_id": incident_id}):
+        prop = proposals.get(g.get("proposal_id") or "")
+        if prop is None:
+            continue
+        created = _aware(prop["created_at"])
+        cited = [r["id"] for seg in prop.get("cause_segment_ids") or [] for r in blocked_by_seg.get(seg, [])
+                 if _aware(r["received_at"]) <= created]
+        cited += [i for wall, ids in confirm_walls if wall is not None
+                  and 0 <= (created - wall).total_seconds() <= GUIDANCE_CONFIRM_LINK_S for i in ids]
+        at = _aware(g.get("replay_at")) or _drill_at(snapshot, _aware(g["published_at"]))
+        if cited and at is not None:
+            acts.append(tq.Decision("guidance_change", at, tuple(dict.fromkeys(cited)), f"{g['zone_id']}@v{g['version']}"))
+    for t in col("live_tasks").find({"incident_id": incident_id}):
+        at = drill_time(t, "created_at")
+        if t.get("report_ids") and at is not None:
+            kind = "dispatch_assist" if t.get("kind") == "assist" else "dispatch_verify"
+            acts.append(tq.Decision(kind, at, tuple(t["report_ids"]), t["id"]))
+    score = tq.score_triage(truth, outcomes, acts, horizon)
+    return {"status": "ok", **score, "metrics": tq.manifest_metrics(score)}
+
+
+def build_aar(snapshot: Snapshot, truth_scoring: bool = False) -> dict[str, Any]:
+    """The AAR. ``truth_scoring`` adds ``triage_quality`` from the hidden truth log: the endpoint passes
+    it only with ``?truth=1``, ``LIVE_TRUTH_SCORING`` on and the drill stopped; headless runs pass it."""
     incident_id = snapshot.incident_id
     index = snapshot.index
     zones = index.drill.zones
@@ -359,7 +446,7 @@ def build_aar(snapshot: Snapshot) -> dict[str, Any]:
         score_twin, _median(assign_mins), len(help_rows), len(assign_mins), deltas, missed,
     )
 
-    return {
+    out = {
         "kind": "crisistwin_live_aar",
         "incident_id": incident_id,
         "generated_at": iso(now),
@@ -391,3 +478,6 @@ def build_aar(snapshot: Snapshot) -> dict[str, Any]:
             "Drill times of decisions without a stored drill time assume the clock speed did not change.",
         ],
     }
+    if truth_scoring:
+        out["triage_quality"] = triage_quality(snapshot, decisions)
+    return out

@@ -81,6 +81,10 @@ LIVE_TWIN_PACKAGE = os.environ.get("LIVE_TWIN_PACKAGE", "").strip()
 LIVE_TWIN_ROADS_PACKAGE = os.environ.get("LIVE_TWIN_ROADS_PACKAGE", "").strip()
 # Drill packages built from Studio runs (ADR 0037); empty = app/backend/var/packages.
 LIVE_PACKAGES_DIR = os.environ.get("LIVE_PACKAGES_DIR", "").strip()
+# ADR 0042: post-drill triage scoring against the hidden sim_truth log (AAR ?truth=1, drill stopped),
+# and the source-diversity corroboration check. Both off unless set to true.
+LIVE_TRUTH_SCORING = env_bool("LIVE_TRUTH_SCORING", "false")
+LIVE_SOURCE_DIVERSITY = env_bool("LIVE_SOURCE_DIVERSITY", "false")
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [],
     "UNAUTHENTICATED_USER": None,

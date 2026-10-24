@@ -68,7 +68,7 @@ VALIDATORS: dict[str, dict[str, Any]] = {
             "updated_at": DATE,
             "replay_at": NULLABLE_DATE,
             "status": _enum("unverified", "corroborated", "responder_confirmed", "confirmed", "dismissed", "resolved"),
-            "evidence_class": _enum("field_report", "drill_fixture", "historical_record"),
+            "evidence_class": _enum("field_report", "drill_fixture", "historical_record", "simulated"),
         },
     ),
     "live_tasks": _schema(
@@ -196,6 +196,20 @@ VALIDATORS: dict[str, dict[str, Any]] = {
             "expires_at": DATE,
         },
     ),
+    # Hidden ground truth of generated reports (ADR 0042). Never served: see api/live/simtruth.py.
+    "sim_truth": _schema(
+        ["incident_id", "event_id", "true", "entry", "written_at"],
+        {
+            "incident_id": STR,
+            "event_id": STR,
+            "true": {"bsonType": "bool"},
+            "kind_of_noise": NULLABLE_STR,
+            "source_event_id": NULLABLE_STR,
+            "notes": NULLABLE_STR,
+            "entry": {"bsonType": "object"},
+            "written_at": DATE,
+        },
+    ),
 }
 
 INDEXES: dict[str, list[IndexModel]] = {
@@ -247,6 +261,7 @@ INDEXES: dict[str, list[IndexModel]] = {
         IndexModel([("incident_id", ASCENDING), ("party_key", ASCENDING)], unique=True),
         IndexModel([("expires_at", ASCENDING)], expireAfterSeconds=0),
     ],
+    "sim_truth": [IndexModel([("incident_id", ASCENDING), ("event_id", ASCENDING)], unique=True)],
 }
 
 DRILL_DATA_COLLECTIONS = (
@@ -261,6 +276,7 @@ DRILL_DATA_COLLECTIONS = (
     "live_destination_choices",
     "live_plan_routes",
     "live_responder_locations",
+    "sim_truth",
 )
 """Dropped by ``live_init_db --drop-drill-data`` (devices are kept so tokens stay valid)."""
 
