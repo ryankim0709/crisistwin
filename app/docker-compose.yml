@@ -30,6 +30,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-crisistwin-dev-only}
       POSTGRES_HOST: db
       POSTGRES_PORT: "5432"
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
