@@ -30,6 +30,10 @@ choose an origin, set wind, and inspect the simulated footprint in 15-minute
 steps. Calibrated fire/traffic models, persistent scenarios, and live incident
 integrations are not implemented yet.
 
+The native iOS scaffold is in [`mobile/`](mobile/README.md): a SwiftUI workspace,
+API/database readiness card, and a scenario empty state. Native maps, simulation,
+and scenario synchronization are not implemented in the mobile app yet.
+
 This is an experimental planning simulator. Its outputs are not operational evacuation instructions; any future resident guidance should require approval by the responsible authority.
 
 ## Development
@@ -79,6 +83,9 @@ docker compose up --wait
 - React **19**, TypeScript **5.8**, Vite **7**, Tailwind CSS **4**.
 - Django **5.2 LTS**, Django REST Framework **3**, PostgreSQL **17**.
 - Vitest **3**, Testing Library, jsdom, ESLint, Prettier, and Ruff for local checks.
+- Mobile: **iOS 17+**, **Xcode 16.2+**, bundled Swift compiler in **Swift 5** mode,
+  SwiftUI/Foundation only. Future Swift dependencies use Swift Package Manager;
+  no package dependencies or resolved lockfile are needed for this scaffold.
 
 ```text
 app/
@@ -92,12 +99,37 @@ app/
   Dockerfile.dev        Vite development image
   Dockerfile            Built frontend served by Nginx, with /api proxy
   backend/Dockerfile    Django runtime and development image targets
+mobile/
+  CrisisTwin.xcodeproj/  Native iPhone/iPad project and shared scheme
+  CrisisTwin/            SwiftUI app, features, API adapter, resources
+  Config/                Debug/Release configuration and local override example
 docs/adr/               Shared architecture decisions
 ```
 
 See the [scaffold decision](docs/adr/0001-app-scaffold.md) and
 [API contract](app/backend/README.md). There are no CI workflows for this
 hackathon; checks run locally when needed.
+
+### Run the iOS app
+
+From the repository root, open the checked-in Xcode project:
+
+```sh
+open mobile/CrisisTwin.xcodeproj
+```
+
+Select the **CrisisTwin** scheme, an iOS 17+ simulator, then **Product > Run**.
+No package installation or project generation is required. Debug uses
+`http://localhost:8000/api/health`; start the Docker stack above to enable the
+readiness card. Without the backend, the app displays a connection error with
+manual retry. Release requires an explicitly configured HTTPS API origin.
+
+See the [mobile setup and API boundary](mobile/README.md) for physical devices,
+local configuration, directory details, and current limitations, and the
+[mobile scaffold decision](docs/adr/0004-mobile-swift-scaffold.md) for tradeoffs.
+The default check remains `pre-commit run --all-files` from the repository root.
+Mobile builds, tests, and simulator verification have not been run and require
+an explicit request under the repository policy.
 
 ### Map component
 
