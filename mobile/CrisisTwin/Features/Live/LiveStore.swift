@@ -19,7 +19,9 @@ final class LiveStore {
         case unavailable(String)
     }
 
-    let incidentId: String
+    private(set) var incidentId: String
+    /// The outcome of the last join link or QR code, for one line in About and an alert.
+    var joinNotice: String?
 
     private(set) var credential: LiveCredential?
     private(set) var connection: Connection = .idle
@@ -109,7 +111,7 @@ final class LiveStore {
 
     var role: LiveRole { credential?.role ?? .civilian }
 
-    init(incidentId: String = LiveIncident.defaultId) {
+    init(incidentId: String = LiveIncident.currentId) {
         self.incidentId = incidentId
         credential = CredentialStore.load(.responder) ?? CredentialStore.load(.device)
         destinationChoices = Self.loadChoices(incidentId: incidentId)
@@ -227,6 +229,74 @@ final class LiveStore {
         CredentialStore.save(issued, slot: .responder)
         credential = issued
         resetResponderData()
+        Task { await refresh() }
+    }
+
+    /// Joins the server in a link (ADR 0034): checks `GET /api/live/active` on it first, so a bad
+    /// address changes nothing; then stores it, follows its incident, and joins as a responder
+    /// when the link carries a code. Credentials belong to one server, so a new server drops them.
+    func connect(_ link: JoinLink) async throws {
+        let active = try await LiveAPIClient(baseURL: link.server).activeIncident()
+        let serverChanged = (try? AppConfiguration.apiBaseURL()) != link.server
+        ServerSettings.setOverride(link.server, incidentId: active.incidentId)
+        useIncident(active.incidentId, dropCredentials: serverChanged)
+        var notice = "Joined \(active.name) on \(ServerSettings.currentDescription)."
+        if let code = link.code {
+            do {
+                try await joinAsResponder(inviteCode: code)
+                notice += " Signed in as a responder."
+            } catch {
+                notice += " The invite code was not accepted; you can still follow the drill."
+            }
+        } else if active.join.inviteRequired {
+            notice += " Responders need an invite code."
+        }
+        joinNotice = notice
+    }
+
+    /// Opens a scanned or pasted join link and reports the outcome in `joinNotice`.
+    func joinFromText(_ text: String) async {
+        do {
+            try await connect(JoinLink.parse(text))
+        } catch let error as JoinLink.LinkError {
+            joinNotice = error.localizedDescription
+        } catch {
+            joinNotice = "Could not reach that server. Check the address and that this phone is on the same network."
+        }
+    }
+
+    func joinFromURL(_ url: URL) async { await joinFromText(url.absoluteString) }
+
+    /// Back to the build's `API_BASE_URL` and the default incident.
+    func resetServer() {
+        ServerSettings.clearOverride()
+        useIncident(LiveIncident.defaultId, dropCredentials: true)
+        joinNotice = nil
+    }
+
+    private func useIncident(_ id: String, dropCredentials: Bool) {
+        refreshGeneration += 1
+        if dropCredentials {
+            CredentialStore.delete(.device)
+            CredentialStore.delete(.responder)
+            credential = nil
+            registration = nil
+        }
+        incidentId = id
+        destinationChoices = Self.loadChoices(incidentId: id)
+        situation = nil
+        zonesCache = nil
+        myZone = nil
+        publicItems = []
+        myReports = []
+        lastCheckIn = nil
+        guidanceChange = nil
+        guidanceHistory = []
+        seenGuidance = false
+        lastSeenGuidance = nil
+        resetResponderData()
+        if let cached = SituationCache.load(incidentId: id) { applySituation(cached, save: false) }
+        connection = .idle
         Task { await refresh() }
     }
 

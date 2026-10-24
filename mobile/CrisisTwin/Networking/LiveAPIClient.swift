@@ -58,6 +58,11 @@ struct LiveAPIClient {
         return URLSession(configuration: configuration)
     }()
 
+    /// The incident this server runs; no credential needed. `baseURL` may be a not-yet-saved server.
+    func activeIncident() async throws -> ActiveIncident {
+        try await get(ActiveIncident.self, ["active"])
+    }
+
     static func configured() throws -> LiveAPIClient {
         do {
             return LiveAPIClient(baseURL: try AppConfiguration.apiBaseURL())

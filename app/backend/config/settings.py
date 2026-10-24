@@ -27,6 +27,12 @@ ALLOWED_HOSTS = [
     if host.strip()
 ]
 
+# Origins (scheme://host[:port]) allowed to POST to the console through a proxy or tunnel,
+# e.g. https://example.trycloudflare.com. The API is bearer-token JSON, not cookie-session.
+CSRF_TRUSTED_ORIGINS = [
+    origin.strip() for origin in os.environ.get("DJANGO_CSRF_TRUSTED_ORIGINS", "").split(",") if origin.strip()
+]
+
 INSTALLED_APPS = [
     "rest_framework",
     "api",
@@ -61,6 +67,12 @@ LIVE_INVITE_CODE = os.environ.get("LIVE_INVITE_CODE", "").strip()
 # Replay bundle path; empty means app/public/replays/camp-2018.json next to the backend.
 LIVE_DRILL_BUNDLE = os.environ.get("LIVE_DRILL_BUNDLE", "").strip()
 LIVE_GROUND_RECORD = os.environ.get("LIVE_GROUND_RECORD", "").strip()
+# The one incident phones join (GET /api/live/active, ADR 0034). Empty = the Camp drill's
+# defaults in livecore.drill; ADR 0030's scenario engine can set these per hosted instance.
+LIVE_ACTIVE_INCIDENT_ID = os.environ.get("LIVE_ACTIVE_INCIDENT_ID", "").strip()
+LIVE_ACTIVE_NAME = os.environ.get("LIVE_ACTIVE_NAME", "").strip()
+LIVE_ACTIVE_LABEL = os.environ.get("LIVE_ACTIVE_LABEL", "").strip()
+LIVE_ACTIVE_MODE = os.environ.get("LIVE_ACTIVE_MODE", "drill").strip()
 LIVE_RATIONALE_MODEL = os.environ.get("LIVE_RATIONALE_MODEL", "claude-opus-5-5").strip()
 # Controller plug-in: rule | twin; empty = twin while the traffic twin builds, else rule.
 LIVE_CONTROLLER = os.environ.get("LIVE_CONTROLLER", "").strip()
