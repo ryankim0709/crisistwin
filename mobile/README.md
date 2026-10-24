@@ -169,6 +169,22 @@ HTTPS origin in the Release configuration before distribution. Until then the
 app shows a configuration error instead of claiming connectivity. App Store
 icons, signing/provisioning, and distribution are not configured.
 
+## Multi-phone drill
+
+The same build joins any host: Debug accepts `http://<mac>.local[:port]` and any `https://`
+origin (Release: HTTPS only). Open `crisistwin://join?server=<origin>&code=<invite>` (`code`
+optional, signs in as a responder), or scan its QR code with Plan > About > Server > Scan join QR
+code (VisionKit; camera, physical device only). The app checks `GET /api/live/active` on that
+server first, then stores the origin in UserDefaults and follows the incident it names. About
+shows the server and "Reset to default" returns to `API_BASE_URL`. Switching servers drops this
+phone's credentials. In the simulator, `-joinlink '<link>'` (Debug launch argument) does the same
+without the system "Open in CrisisTwin?" prompt.
+
+Hosting steps for (a) same Wi-Fi with `<mac>.local`, (b) a `cloudflared tunnel --url
+http://localhost:5173` tunnel and (c) a cloud host are in the
+[root README](../README.md#multi-phone-drill); the console's /live "..." menu > Invite phones
+makes the link and QR code. Decision: [ADR 0034](../docs/adr/0034-multi-phone-hosting.md).
+
 ## Structure and boundaries
 
 ```text

@@ -144,6 +144,37 @@ Select the **CrisisTwin** scheme and an iOS 26 simulator (Xcode 26), then Produc
 [mobile/README.md](mobile/README.md). Mobile builds and tests have not been run in this repository's
 checks.
 
+### Multi-phone drill
+
+One backend and console, several real phones, one iOS build. Phones get the server from a join
+link `crisistwin://join?server=<origin>&code=<invite>` (open it, or scan its QR code in Plan >
+About > Server). The console's /live "..." menu > **Invite phones** shows the link and QR code
+([ADR 0034](docs/adr/0034-multi-phone-hosting.md)). Always set `LIVE_CONTROLLER_TOKEN` (without
+it every client is the controller) and `LIVE_INVITE_CODE`, in your shell or `app/.env`.
+
+**(a) Same Wi-Fi, the Mac serves.** Find the name with `scutil --get LocalHostName` (`<mac>.local`).
+```sh
+cd app
+export LIVE_CONTROLLER_TOKEN=<token> LIVE_INVITE_CODE=<code>
+CT_BIND_ADDR=0.0.0.0 DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,backend,<mac>.local docker compose up --build
+```
+Open `http://localhost:5173/live` on the Mac (no token form), Invite phones, server
+`http://<mac>.local:5173`. Phones use the Vite proxy on 5173 (plain HTTP works only for `.local`;
+allow local network access when iOS asks). macOS may ask to allow incoming connections.
+
+**(b) HTTPS tunnel you start yourself.** Start the stack as above (it can stay on `127.0.0.1`),
+then in another terminal `cloudflared tunnel --url http://localhost:5173`. With the printed
+`https://<name>.trycloudflare.com`, restart Compose with
+`DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,backend,<name>.trycloudflare.com VITE_ALLOWED_HOSTS=<name>.trycloudflare.com`
+(add `DJANGO_CSRF_TRUSTED_ORIGINS=https://<name>.trycloudflare.com` only if a browser POST is
+refused). Invite phones with that origin. Visitors on the tunnel, including a console opened
+there, see the token form. The hostname changes every run; regenerate the QR code.
+
+**(c) Cloud host later.** Run the backend (Dockerfile `production` target) behind HTTPS with
+`DJANGO_DEBUG=false`, `DJANGO_SECRET_KEY`, `DJANGO_ALLOWED_HOSTS=<host>`, `MONGODB_URI`,
+`LIVE_CONTROLLER_TOKEN`, `LIVE_INVITE_CODE`, and serve the built web app and `/api` from one
+origin. Invite phones with that origin. Nothing in the app changes.
+
 ### Checks
 
 The only default check is pre-commit (merge-conflict markers, trailing whitespace, final newlines):
