@@ -145,6 +145,14 @@ returns 304. Errors are JSON: 404 `{"error": "not_found"}` for unknown/unbuilt r
 [ADR 0016](../../docs/adr/0016-resident-live-and-family.md) and
 `app/src/live/contracts.ts`.
 
+### Mobile data (`/api/mobile/…`)
+
+`POST /api/mobile/devices` and `/api/mobile/data/<collection>[/<id>]` (`api/mobile_data.py`)
+let the iOS app push any JSON object to Atlas and pull it back while its schema is designed.
+A device registers once for a bearer token (stored as a hash) and sees only its own documents,
+kept in the `mobile_documents` collection (devices in `mobile_devices`). Limits, errors and
+examples are in [ADR 0027](../../docs/adr/0027-mobile-data-store.md).
+
 ### Live drill API (`/api/live/…`)
 
 Implements v1 and v2 of [docs/live-reports.md](../../docs/live-reports.md) (ADR 0011, 0012):

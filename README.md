@@ -32,7 +32,7 @@ The workspace overview (`/overview`) and `/maps` pages were removed
 
 Also in the repository:
 
-- **Backend** (`app/backend/`): Django REST API with `GET /api/health`, `/api/landscapes` (prebuilt landscapes from MongoDB), `/api/dispatch/area` (OpenStreetMap roads and stations for a box), `/api/dispatch/decide`, `/api/replay/explain`, `/api/live` (resident-app simulation feed), `/api/live/…` (live drill: field reports, controller guidance, twin; [contract](docs/live-reports.md)) and `/api/families`. See [API contract](app/backend/README.md).
+- **Backend** (`app/backend/`): Django REST API with `GET /api/health`, `/api/landscapes` (prebuilt landscapes from MongoDB), `/api/dispatch/area` (OpenStreetMap roads and stations for a box), `/api/dispatch/decide`, `/api/replay/explain`, `/api/live` (resident-app simulation feed), `/api/live/…` (live drill: field reports, controller guidance, twin; [contract](docs/live-reports.md)) `/api/families` and `/api/mobile/…` (schema-free iOS app data in Atlas, [ADR 0027](docs/adr/0027-mobile-data-store.md)). See [API contract](app/backend/README.md).
 - **Fire watch agent** (`agent/`): a standalone Python package that drafts evacuation advisories from satellite detections for a human to approve; never notifies residents. [README](agent/README.md), [ADR 0008](docs/adr/0008-fire-watch-agent.md).
 - **Historical replay simulator** (`sim/`): stdlib Python fire hindcast and evacuation traffic model that produces replay bundles. [README](sim/README.md).
 - **iOS app** (`mobile/`): SwiftUI resident app for the **live drill** on the 2018 Camp road network: a map
