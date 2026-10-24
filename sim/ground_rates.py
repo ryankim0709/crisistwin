@@ -169,6 +169,9 @@ class GroundRateParams:
     scale_911_at_least: float | None  # multiply record 911 call counts by at least this
     scale_911_source: str
     notes: tuple[str, ...] = field(default_factory=tuple)
+    # Q4, restricted to rescue rows inside radio_to_911_window_utc (the 911 sample's coverage),
+    # where a coinciding 911 row can exist: (rescue rows with coord, coinciding).
+    rescue_rows_coinciding_with_911_in_window: tuple[int, int] = (0, 0)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -766,6 +769,8 @@ def analyse(record: dict, bundle: dict) -> Analysis:
             "Radio scaling to true radio volume is not estimable: the radio log's completeness is not stated.",
             "K-1 times are first datapoints; dates after the 23:30 PST row are inferred as 11/9 by the record builder.",
         ),
+        rescue_rows_coinciding_with_911_in_window=rescue_911_coincidence(
+            [r for r in rows if r.channel != "rescue" or ratio[2][0] <= r.at <= ratio[2][1]], arrival_grid(bundle)[0]),
     )
     return Analysis(zones, rows, t0, off_obs, off_mod, fits, units, empirical, lags, ratio, rescue_lags, params)
 
