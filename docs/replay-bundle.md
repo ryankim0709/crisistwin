@@ -18,6 +18,9 @@ additive within 1.x.
   - `fixture`: synthetic stand-in data that is not historical.
 - The UI must show the class in text or with a pattern, not by color alone, and must
   label fixtures prominently.
+- A layer's `evidence_class` may be `"mixed"` only when each of its features carries
+  its own `evidence_class`; destinations do this (exits `derived`, NIST refuges and
+  shelters `reconstructed`).
 - Missing layers are present with `status: "missing"` and a `reason`. They are never
   silently empty.
 

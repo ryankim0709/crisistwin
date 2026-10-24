@@ -169,7 +169,9 @@ class TrafficEvent:
     source_id: str = ""
     source_locator: str | None = None
     capacity_factor: float | None = None  # capacity_changed only: multiplier on the edge's source capacity
-    closure_drains: bool = False  # road_closed/road_blocked only: vehicles already on the edge may still leave
+    # road_closed/road_blocked only: close to entry; vehicles on the edge, and vehicles inside an area
+    # with no open route, may still leave over it (as with fire closures). False = hard stop.
+    closure_drains: bool = False
 
 
 @dataclass(frozen=True)
@@ -705,7 +707,7 @@ def simulate_traffic(
                          if math.isinf(dist[n]) and any(usable(d) and dest_refuge[d] for d in ds))
         if refuges:
             search(refuges, _REFUGE_TIER_OFFSET_S, {v for v, x in enumerate(dist) if math.isinf(x)})
-        if fire_closed:
+        if fire_closed or event_closed_drain:
             escape(dist, nxt)
         next_edge[:] = nxt
         route_dist[:] = dist
@@ -720,11 +722,13 @@ def simulate_traffic(
         stuck = {v for v, x in enumerate(dist) if math.isinf(x)}
         if not stuck:
             return
-        hard = event_closed | event_closed_drain | contraflow_in
+        # Entry-only closures (fire, closure_drains events) may be escaped from inside; hard ones never.
+        hard = event_closed | contraflow_in
+        escapable = fire_closed | event_closed_drain
         edist: dict[int, float] = {}
         fire_m: dict[int, float] = {}
         heap = []
-        for e in sorted(fire_closed):
+        for e in sorted(escapable):
             v = e_to[e]
             if e_from[e] in stuck and v not in stuck and e not in hard and v not in edist:
                 edist[v], fire_m[v] = dist[v], 0.0
@@ -741,7 +745,7 @@ def simulate_traffic(
                 cost = e_fft[e]
                 fm = fire_m[v]
                 if closed[e]:
-                    if e not in fire_closed:
+                    if e not in escapable:
                         continue
                     cost /= FIRE_DRAIN_SPEED_FACTOR
                     fm += edges[e].length_m

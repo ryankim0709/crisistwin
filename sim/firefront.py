@@ -266,6 +266,44 @@ def calibrate_rothermel(history: IncidentHistory, package: Path, candidates: lis
     return params, truncated, grid, record
 
 
+# Cells of buffer around the first satellite perimeter the modelled front may still burn
+# (perimeter mapping error and 200 m rasterization), before the constraint cuts it off.
+PERIMETER_CONSTRAINT_BUFFER_CELLS = 2
+
+
+def constrain_to_perimeter(grid: Grid, arrival: list[float], perimeter) -> tuple[list[float], dict]:
+    """Keep modelled burning only inside the first satellite perimeter (plus a small buffer).
+
+    The real fire was inside that perimeter at its snapshot time, so the model must not burn
+    beyond it before then (with constant wind it otherwise runs far too far west). Cells outside
+    become unburned. The constraint uses later evidence, so the front is a reconstruction for
+    replay, not a forecast.
+    """
+    inside = rasterize(grid, perimeter.geometry)
+    allowed = bytearray(inside)
+    for _ in range(PERIMETER_CONSTRAINT_BUFFER_CELLS):
+        grown = bytearray(allowed)
+        for i, v in enumerate(allowed):
+            if v:
+                row, col = divmod(i, grid.ncols)
+                for dr, dc in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    r, c = row + dr, col + dc
+                    if 0 <= r < grid.nrows and 0 <= c < grid.ncols:
+                        grown[r * grid.ncols + c] = 1
+        allowed = grown
+    removed = sum(1 for a, ok in zip(arrival, allowed) if math.isfinite(a) and not ok)
+    constrained = [a if ok else math.inf for a, ok in zip(arrival, allowed)]
+    return constrained, {
+        "kind": "clipped_to_first_satellite_perimeter",
+        "perimeter_at": format_utc(perimeter.snapshot_at),
+        "buffer_m": PERIMETER_CONSTRAINT_BUFFER_CELLS * grid.cell_m,
+        "cells_removed": removed,
+        "area_removed_km2": round(removed * grid.cell_area_km2, 1),
+        "note": "Model front limited to the first satellite perimeter (plus buffer): uses later evidence, so "
+                "this is a replay reconstruction, not a forecast. Calibration scores are for the unclipped model.",
+    }
+
+
 def rothermel_fire(history: IncidentHistory, package: Path, end: datetime,
                    params: RothermelParams = ROTHERMEL_CHOSEN_PARAMS,
                    params_source: str = ROTHERMEL_PARAMS_SOURCE) -> tuple[dict, tuple]:
@@ -276,6 +314,7 @@ def rothermel_fire(history: IncidentHistory, package: Path, end: datetime,
     say where they came from in `params_source`.
     """
     params, arrival, grid, record = calibrate_rothermel(history, package, [params])
+    arrival, constraint = constrain_to_perimeter(grid, arrival, history.perimeters[0])
     t0 = datetime.fromisoformat(record["ignition"]["at"].replace("Z", "+00:00"))
     until = min(end, history.perimeters[0].snapshot_at)
     m_per_deg_lat = grid._m_per_deg_lat
@@ -303,6 +342,7 @@ def rothermel_fire(history: IncidentHistory, package: Path, end: datetime,
             "runtime_s": record["runtime_s"],
         },
         "terrain": record["terrain"],
+        "constraint": constraint,
         "fronts": isochrones(grid, arrival, t0, until=until),
         "arrival_grid": {
             "origin_lon": grid.origin_lon, "origin_lat": grid.origin_lat, "cell_m": grid.cell_m,

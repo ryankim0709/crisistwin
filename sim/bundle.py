@@ -18,6 +18,9 @@ from sim.replay import TIMELINE_ASSUMPTIONS, TIMELINE_LIMITATIONS
 from sim.traffic import TrafficParams, simulate_traffic
 
 SCHEMA_VERSION = "1.0.0"
+# Per-destination evidence: exits are boundary crossings of the road extract; refuges and
+# shelters come from NIST-reconstructed records. A layer may then be "mixed".
+DESTINATION_EVIDENCE = {"exit": "derived", "temporary_refuge": "reconstructed", "shelter": "reconstructed"}
 INCIDENT_TIMEZONE = "America/Los_Angeles"
 INCIDENT_NAMES = {"camp-2018-paradise-slice": "Camp Fire (2018)"}
 
@@ -154,7 +157,8 @@ def build_bundle(history: IncidentHistory, scenario: dict, params: TrafficParams
         for z in scenario["zones"]
     ]
     destinations = [
-        {"id": d.id, "name": d.name, "kind": d.kind, "coord": list(d.coord), "capacity_veh": d.capacity_veh}
+        {"id": d.id, "name": d.name, "kind": d.kind, "coord": list(d.coord), "capacity_veh": d.capacity_veh,
+         "evidence_class": DESTINATION_EVIDENCE.get(d.kind, destinations_class)}
         for d in scenario["destinations"]
     ]
     events = [

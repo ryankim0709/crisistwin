@@ -94,7 +94,9 @@ def _iso(at: datetime) -> str:
 
 
 def _is_replaced_order(ev: TrafficEvent) -> bool:
-    return ev.type == "evacuation_order" and ev.evidence_class == "fixture"
+    """Baseline zone orders the plan replaces: fixture waves or (grounded) derived/historical
+    block-group orders. Simulated orders and zone-less timeline events are never replaced."""
+    return ev.type == "evacuation_order" and ev.evidence_class != "simulated" and bool(ev.zone_ids)
 
 
 def schedule_events(base_events, schedule: dict[str, datetime], zone_names: dict[str, str]) -> tuple[TrafficEvent, ...]:
@@ -120,16 +122,17 @@ def _wave_schedule(priority: tuple[str, ...], wave_size: int, spacing_min: int) 
     return {z: EARLIEST_ORDER_AT + timedelta(minutes=spacing_min * (rank // wave_size)) for rank, z in enumerate(priority)}
 
 
-def _violations(schedule: dict[str, datetime], zone_ids: list[str]) -> list[str]:
+def _violations(schedule: dict[str, datetime], zone_ids: list[str],
+                earliest: datetime = EARLIEST_ORDER_AT, latest: datetime = LATEST_ORDER_AT) -> list[str]:
     problems = []
     missing = set(zone_ids) - schedule.keys()
     if missing:
         problems.append(f"{len(missing)} zones never ordered")
-    if any(at < EARLIEST_ORDER_AT for at in schedule.values()):
-        problems.append(f"order before {_iso(EARLIEST_ORDER_AT)}")
-    late = max(schedule.values(), default=EARLIEST_ORDER_AT)
-    if late > LATEST_ORDER_AT:
-        problems.append(f"last order {_iso(late)} after {_iso(LATEST_ORDER_AT)}")
+    if any(at < earliest for at in schedule.values()):
+        problems.append(f"order before {_iso(earliest)}")
+    late = max(schedule.values(), default=earliest)
+    if late > latest:
+        problems.append(f"last order {_iso(late)} after {_iso(latest)}")
     return problems
 
 
@@ -249,7 +252,7 @@ def optimize_schedule(
     zone_names = {z.id: z.name for z in zone_list}
     baseline_orders = [ev for ev in base_events if _is_replaced_order(ev)]
     if not baseline_orders:
-        raise ValueError("base_events has no fixture evacuation_order events to replace")
+        raise ValueError("base_events has no zone evacuation_order events to replace")
     baseline_schedule: dict[str, datetime] = {}
     for ev in sorted(baseline_orders, key=lambda ev: ev.at):
         for z in ev.zone_ids:
@@ -264,9 +267,14 @@ def optimize_schedule(
     def signature(schedule: dict[str, datetime]) -> tuple:
         return tuple(sorted((z, at.isoformat()) for z, at in schedule.items()))
 
+    # Bounds never stricter than history: a historical baseline order before EARLIEST_ORDER_AT
+    # or after LATEST_ORDER_AT widens them (the baseline itself is history, not a candidate).
+    earliest = min(EARLIEST_ORDER_AT, *baseline_schedule.values())
+    latest = max(LATEST_ORDER_AT, *baseline_schedule.values())
+
     def evaluate(cid: str, schedule: dict[str, datetime], spec: dict, events=None) -> dict | None:
         nonlocal runs
-        problems = _violations(schedule, zone_ids)
+        problems = _violations(schedule, zone_ids, earliest, latest)
         if problems:
             rejected.append({"id": cid, **spec, "reasons": problems})
             return None
@@ -288,7 +296,8 @@ def optimize_schedule(
         return record
 
     baseline = evaluate("baseline", baseline_schedule,
-                        {"rule": "fixture", "information": "fixture", "wave_size": None, "wave_spacing_min": None},
+                        {"rule": "baseline", "information": "baseline schedule", "wave_size": None,
+                         "wave_spacing_min": None},
                         events=tuple(base_events))
     if baseline is None:
         raise ValueError(f"baseline schedule violates the constraints: {rejected[-1]['reasons']}")
