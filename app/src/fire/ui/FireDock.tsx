@@ -104,10 +104,11 @@ export default function FireDock({
           type="button"
           className="fr-btn fr-btn--round fr-dock-step"
           onClick={() => {
+            if (!hasRun || t <= 0) return;
             playback.pause();
             playback.seek(Math.max(0, playback.getTime() - FIRE_STEP_MINUTES));
           }}
-          disabled={!hasRun || t <= 0}
+          aria-disabled={!hasRun || t <= 0}
           aria-label={`Back ${FIRE_STEP_MINUTES} minutes`}
           title={`Back ${FIRE_STEP_MINUTES} minutes`}
         >
@@ -117,10 +118,11 @@ export default function FireDock({
           type="button"
           className="fr-btn fr-btn--round fr-dock-step"
           onClick={() => {
+            if (!hasRun || ended) return;
             playback.pause();
             playback.seek(Math.min(horizonMinutes, playback.getTime() + FIRE_STEP_MINUTES));
           }}
-          disabled={!hasRun || ended}
+          aria-disabled={!hasRun || ended}
           aria-label={`Forward ${FIRE_STEP_MINUTES} minutes`}
           title={`Forward ${FIRE_STEP_MINUTES} minutes`}
         >

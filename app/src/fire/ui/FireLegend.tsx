@@ -52,9 +52,9 @@ export default function FireLegend({ windTowardDegrees, showFuel, defaultOpen }:
   const listId = useId();
 
   const items: { glyph: ReactNode; label: string }[] = [
-    { glyph: <FlameGlyph />, label: "Burning now" },
+    { glyph: <FlameGlyph />, label: "Burning (active front glows)" },
     { glyph: <FireEdgeGlyph />, label: "Fire front (current perimeter)" },
-    { glyph: <BurnedGlyph />, label: "Burned" },
+    { glyph: <BurnedGlyph />, label: "Burned (charred ground)" },
     { glyph: <IgnitionGlyph />, label: "Ignition point" },
     {
       glyph: <WindGlyph bearing={windTowardDegrees} />,
