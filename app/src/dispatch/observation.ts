@@ -3,7 +3,7 @@
  * converts its wire orders back into engine orders. Pure: no React or network.
  */
 
-import type { Observation, WireOrder, ZoneObservation } from "./contracts";
+import type { FireObservation, Observation, WireOrder, ZoneObservation } from "./contracts";
 import {
   EXIT_OPTIONS_PER_ZONE,
   FORECAST_LOOKAHEAD_MINUTES,
@@ -17,6 +17,11 @@ import {
   type Order,
   type OrderOutcome,
 } from "./engine";
+import {
+  ENGINE_HOLDS_FLAME_FEET,
+  ENGINE_LINE_METERS_PER_MINUTE,
+  MAX_ATTACK_OPTIONS,
+} from "./fireAttack";
 import { routeTo, shortestPathTree } from "./routing";
 
 const SQUARE_METERS_PER_HECTARE = 10_000;
@@ -33,6 +38,7 @@ function describeOrder(order: Order): string {
   if (order.type === "stage_evacuation")
     return `stage ${order.zone_id} after ${order.after_zone_id} via ${order.exit_id}`;
   if (order.type === "dispatch_unit") return `${order.unit_id} → ${order.zone_id} (${order.task})`;
+  if (order.type === "attack_fire") return `${order.unit_id} → fire ${order.fire_id} (fire_attack)`;
   return `recall ${order.unit_id}`;
 }
 
@@ -148,11 +154,51 @@ export function buildObservation(inputs: ObservationInputs): Observation {
       status: unit.status,
       task: unit.task,
       zone_id: unit.zone === null ? null : area.zones[unit.zone].id,
+      fire_id: unit.fire === null ? null : engine.fires[unit.fire].target.id,
       eta_min: (() => {
         const eta = engine.unitEtaMinutes(unit);
         return eta === null ? null : Math.round(eta);
       })(),
       drive_min_to: drive,
+    };
+  });
+
+  const fires: FireObservation[] = engine.fires.map((fire, index) => {
+    const { target } = fire;
+    const started = target.ignitedMinute !== null && target.ignitedMinute <= minute;
+    const status: FireObservation["status"] =
+      target.ignitedMinute === null
+        ? "merged"
+        : fire.outMinute !== null
+          ? "out"
+          : started
+            ? "burning"
+            : "not_started";
+    const minutesFromNow = (at: number | null) =>
+      at === null ? null : Math.max(0, Math.round(at - minute));
+    return {
+      id: target.id,
+      name: target.name,
+      status,
+      starts_in_min: status === "not_started" ? minutesFromNow(target.ignitedMinute) : null,
+      area_ha:
+        Math.round((engine.fireAreaSquareMeters(index) / SQUARE_METERS_PER_HECTARE) * 10) / 10,
+      head_flame_ft: Number.isFinite(target.headFlameFeet)
+        ? Math.round(target.headFlameFeet * 10) / 10
+        : null,
+      crowning: !Number.isFinite(target.headFlameFeet),
+      attackable: target.notAttackable === null,
+      not_attackable_reason: target.notAttackable,
+      attacking: engine.fireAttackers(index).map((unit) => unit.id),
+      line_built_m: Math.round(fire.lineMeters),
+      line_needed_m: status === "burning" ? Math.round(engine.fireLineNeededMeters(index)) : 0,
+      out_eta_min: status === "burning" ? minutesFromNow(engine.projectedOutMinute(index)) : null,
+      out_minute: fire.outMinute,
+      attack_options: engine.attackOptions(index, MAX_ATTACK_OPTIONS).map((option) => ({
+        engines: option.unitIds.length,
+        unit_ids: option.unitIds,
+        out_eta_min: minutesFromNow(option.outMinute),
+      })),
     };
   });
 
@@ -194,6 +240,7 @@ export function buildObservation(inputs: ObservationInputs): Observation {
       exposed: totals.caught,
     },
     zones,
+    fires,
     exits: area.exits.map((exit) => ({ id: exit.id, name: exit.name })),
     units,
     alerts: inputs.alerts.map(({ minute: m, type, text }) => ({ minute: m, type, text })),
@@ -210,7 +257,8 @@ export function buildObservation(inputs: ObservationInputs): Observation {
       `Routes avoid roads the fire reaches within ${ROUTE_LOOKAHEAD_MINUTES} min. Zones whose exit becomes unreachable hold departures until given another exit.`,
       `A staged zone (stage_evacuation) gets no order yet; the simulator orders it out automatically once every household of its after_zone has left home and the loading queue, or as soon as its own order_slack_min falls to ${STAGE_RELEASE_SLACK_MINUTES}.`,
       "order_slack_min is the simulator's estimate: minutes until fire first reaches the zone minus the larger of the departure spread and the time its vehicles need to enter the route at the bottleneck. It ignores other zones sharing the road.",
-      "structure_defense has no modelled effect on fire spread. Engines on scene withdraw automatically when fire is about to reach the zone core.",
+      "structure_defense has no modelled effect on fire spread. Engines on scene in a zone withdraw automatically when fire is about to reach the zone core.",
+      `fire_attack (attack_fire): engines stage at the nearest road point to the fire's origin and build line at about ${Math.round(ENGINE_LINE_METERS_PER_MINUTE)} m/min each in grass (slower in heavier fuel); the fire is out when the line rings its modelled edge, which keeps growing meanwhile. Engines hold flames up to ${ENGINE_HOLDS_FLAME_FEET} ft and cannot attack a crowning fire. A fire that is out stops spreading: the forecast, zone ETAs and impact are recomputed without it, and its engines return to station. out_eta_min and attack_options are the simulator's rough estimates (ellipse perimeter, no water supply or mop-up).`,
       "A household counts as exposed when fire reaches its home before it leaves, reaches the zone core while it is still in the zone, or reaches the road it is on.",
       ...area.notes,
     ],

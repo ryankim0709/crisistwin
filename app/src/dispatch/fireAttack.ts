@@ -1,0 +1,130 @@
+/**
+ * Direct attack by dispatched engines: can the engines the agent sends to a fire put it out?
+ * The same rough containment race as the Studio's initial attack (studio/initialAttack.ts,
+ * docs/adr/0020-studio-firefighting.md), but per fire and with each engine starting work when
+ * it actually arrives on the road network. Line is built at the engine rate (grass-equivalent,
+ * so heavier fuel needs more work) while the fire's edge keeps growing; the edge is an
+ * ellipse with the fire's modelled area and its ignition-point length-to-breadth ratio. The fire
+ * is out once the line built covers it. A fire whose head flame at the ignition point is longer
+ * than an engine can hold, or that crowns there, cannot be attacked directly. Pure: no React,
+ * network or LLM. See docs/adr/0022-dispatch-fire-attack.md.
+ */
+
+import type { ScheduledFireRun } from "../fire/scheduledTypes";
+import { RESOURCE_TYPES, productionFactor } from "../studio/firefighting";
+import { ellipsePerimeter } from "../studio/initialAttack";
+import type { LonLat } from "./area";
+
+/** Line one engine builds per minute in grass, metres. */
+export const ENGINE_LINE_METERS_PER_MINUTE = RESOURCE_TYPES.engine.metersPerHourInGrass / 60;
+/** Longest flame an engine crew can hold, feet (Hauling chart). */
+export const ENGINE_HOLDS_FLAME_FEET = RESOURCE_TYPES.engine.holdsFlameLengthFeet;
+/** Attack options listed per fire: the nearest 1..N engines. */
+export const MAX_ATTACK_OPTIONS = 4;
+
+export interface FireTarget {
+  /** Run source id. Index in `fires` equals the source's index in the run input. */
+  id: string;
+  name: string;
+  location: LonLat;
+  /** Minute this fire starts; null when another fire reached its point first. */
+  ignitedMinute: number | null;
+  /** Head flame at the ignition point, feet; Infinity when it crowns there. */
+  headFlameFeet: number;
+  lengthToBreadth: number;
+  /** Grass-equivalent line work per metre of this fire's edge. */
+  workPerMeter: number;
+  /** Why engines cannot attack it directly, or null when they can. */
+  notAttackable: string | null;
+}
+
+/** Burned area per fire (index as in `FireTarget[]`) at one frame minute, m². */
+export interface FireAreaFrame {
+  minute: number;
+  areaBySource: number[];
+}
+
+export function fireTargets(run: ScheduledFireRun, names: Record<string, string>): FireTarget[] {
+  return run.ignitions.map((ignition, index) => {
+    const source = run.input.sources[index];
+    const { conditions, outcome } = ignition;
+    const crowning = conditions.crown !== null && conditions.crown.type !== "surface";
+    const headFlameFeet = crowning ? Infinity : conditions.spread.flameLengthFeet;
+    const factor = productionFactor(conditions.fuelCode);
+    const ignitedMinute = outcome.status === "ignited" ? outcome.ignitedMinute : null;
+    return {
+      id: source.id,
+      name: names[source.id] || source.id,
+      location: [source.location.longitude, source.location.latitude],
+      ignitedMinute,
+      headFlameFeet,
+      lengthToBreadth: Math.max(1, conditions.spread.lengthToBreadth),
+      workPerMeter: Number.isFinite(factor) ? 1 / factor : 0,
+      notAttackable:
+        ignitedMinute === null
+          ? "another fire reached this point first"
+          : crowning
+            ? "it is crowning"
+            : headFlameFeet > ENGINE_HOLDS_FLAME_FEET
+              ? `its ${headFlameFeet.toFixed(1)} ft head flame is longer than the ${ENGINE_HOLDS_FLAME_FEET} ft engines can hold`
+              : null,
+    };
+  });
+}
+
+export function fireAreaFrames(run: ScheduledFireRun): FireAreaFrame[] {
+  const ids = run.input.sources.map((source) => source.id);
+  return run.frames.map((frame) => ({
+    minute: frame.elapsedMinutes,
+    areaBySource: ids.map((id) => frame.reachedAreaBySourceSquareMeters[id] ?? 0),
+  }));
+}
+
+/** Burned area of fire `fire` at `minute`, interpolated linearly between frames, m². */
+export function fireAreaAt(frames: readonly FireAreaFrame[], fire: number, minute: number): number {
+  if (frames.length === 0) return 0;
+  let after = frames.findIndex((frame) => frame.minute >= minute);
+  if (after < 0) after = frames.length - 1;
+  const b = frames[after];
+  if (after === 0 || b.minute <= minute) return b.areaBySource[fire] ?? 0;
+  const a = frames[after - 1];
+  const t = (minute - a.minute) / (b.minute - a.minute);
+  const from = a.areaBySource[fire] ?? 0;
+  return from + ((b.areaBySource[fire] ?? 0) - from) * t;
+}
+
+/** Grass-equivalent metres of line needed to ring the fire at `minute`. */
+export function lineNeededMeters(
+  target: FireTarget,
+  frames: readonly FireAreaFrame[],
+  fire: number,
+  minute: number,
+): number {
+  const perimeter = ellipsePerimeter(fireAreaAt(frames, fire, minute), target.lengthToBreadth);
+  return perimeter * target.workPerMeter;
+}
+
+/**
+ * Simulator estimate of the minute the fire is out: `builtMeters` already built, plus one
+ * engine starting at each minute in `arrivals` (clamped to `now`). Null when the fire cannot be
+ * attacked, nobody works it, or the line does not catch the edge by the horizon.
+ */
+export function projectOutMinute(
+  target: FireTarget,
+  frames: readonly FireAreaFrame[],
+  fire: number,
+  now: number,
+  builtMeters: number,
+  arrivals: readonly number[],
+  horizonMinutes: number,
+): number | null {
+  if (target.notAttackable || target.ignitedMinute === null || arrivals.length === 0) return null;
+  for (let minute = Math.max(now, target.ignitedMinute); minute <= horizonMinutes; minute += 1) {
+    let built = builtMeters;
+    for (const arrival of arrivals) {
+      built += ENGINE_LINE_METERS_PER_MINUTE * Math.max(0, minute - Math.max(arrival, now));
+    }
+    if (built > 0 && built >= lineNeededMeters(target, frames, fire, minute)) return minute;
+  }
+  return null;
+}

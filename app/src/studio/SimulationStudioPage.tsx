@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import type { GeoPoint } from "../fire/spread";
+import type { ScheduledFireRun } from "../fire/scheduledTypes";
 import { formatElapsed } from "../fire/spread";
 import ConfigPanel from "./ConfigPanel";
 import PlaybackBar from "./PlaybackBar";
@@ -93,6 +94,11 @@ export interface StudioAsideContext {
   clockRef: { current: number };
   setLocked: (locked: boolean) => void;
   showDiorama: () => void;
+  /**
+   * Show this run of the current result instead of the studio's own choice (the dispatcher's
+   * fire, re-solved when its engines put a fire out); null gives the choice back.
+   */
+  setRunOverride: (run: ScheduledFireRun | null) => void;
 }
 /** Gap kept between the floating panel and the framed 3D board, CSS px. */
 const DIORAMA_PANEL_GAP_PX = 12;
@@ -197,12 +203,15 @@ export default function SimulationStudioPage({
   // best control-line plan, or the free run. Falls back to the free run when unavailable.
   const [fireShown, setFireShown] = useState<FireShown>("attack");
   const firefighting = result?.firefighting ?? null;
+  const [runOverride, setRunOverride] = useState<ScheduledFireRun | null>(null);
   const shownRun = result
-    ? fireShown === "attack" && firefighting?.initialAttack
-      ? firefighting.initialAttack.run
-      : fireShown === "line" && firefighting?.best
-        ? firefighting.best.run
-        : result.run
+    ? runOverride && runOverride.input === result.run.input
+      ? runOverride
+      : fireShown === "attack" && firefighting?.initialAttack
+        ? firefighting.initialAttack.run
+        : fireShown === "line" && firefighting?.best
+          ? firefighting.best.run
+          : result.run
     : null;
 
   // Prebuilt region board (MongoDB), drawn in 3D before any run and used to solve fires on it.
@@ -1043,6 +1052,7 @@ export default function SimulationStudioPage({
           clockRef={clockRef}
           setLocked={setLocked}
           showDiorama={showDiorama}
+          setRunOverride={setRunOverride}
         />
       )}
     </main>

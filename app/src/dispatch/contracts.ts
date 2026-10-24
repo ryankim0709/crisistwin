@@ -1,8 +1,8 @@
 /**
  * Wire contract between the /dispatch page and POST /api/dispatch/decide
  * (app/backend/api/dispatch.py). Change both sides and docs/adr/0014-dispatch-agent.md (amended
- * by docs/adr/0017-dispatch-anywhere.md, 0019-live-dispatch-monitor.md and
- * 0021-fire-path-scoped-evacuation.md) together.
+ * by docs/adr/0017-dispatch-anywhere.md, 0019-live-dispatch-monitor.md,
+ * 0021-fire-path-scoped-evacuation.md and 0022-dispatch-fire-attack.md) together.
  *
  * The page calls the agent only when its live monitor (monitor.ts) finds a material change;
  * `monitor.woke_because` lists those reasons.
@@ -16,7 +16,8 @@
  * supplies a route, time or count. The server validates every order against the observation
  * and the page validates again against the live engine before applying it.
  *
- * Order slack (`order_slack_min`) is the simulator's estimate, never the agent's.
+ * Order slack (`order_slack_min`) and fire attack estimates (`fires[].out_eta_min`,
+ * `attack_options`) are the simulator's estimates, never the agent's.
  *
  * Units: minutes are elapsed simulation minutes from scenario T+0; homes are synthetic
  * households (each with the zone's average vehicles per home); vehicles are counts; capacities
@@ -94,10 +95,50 @@ export interface UnitObservation {
   status: UnitStatus;
   task: UnitTask | null;
   zone_id: string | null;
+  /** Fire the unit is attacking (task fire_attack). */
+  fire_id: string | null;
   /** Minutes until a moving unit arrives where it is heading; null when not moving. */
   eta_min: number | null;
   /** Drive minutes from the unit's position to threatened zones (fire_eta_min not null). */
   drive_min_to: Record<string, number>;
+}
+
+export interface FireAttackOption {
+  engines: number;
+  /** The nearest units not already on this fire, fastest first. */
+  unit_ids: string[];
+  /** Simulator estimate: minutes from now until the fire is out with these added; null = not by the horizon. */
+  out_eta_min: number | null;
+}
+
+/**
+ * One fire of the run, and whether engines can put it out by direct attack. Every number is
+ * simulator output (fireAttack.ts); the containment estimate is deliberately rough.
+ */
+export interface FireObservation {
+  id: string;
+  name: string;
+  /** "merged": another fire reached its ignition point first. */
+  status: "not_started" | "burning" | "out" | "merged";
+  /** Minutes until it starts (not_started only). */
+  starts_in_min: number | null;
+  area_ha: number;
+  /** Head flame at the ignition point, feet; null while it crowns there. */
+  head_flame_ft: number | null;
+  crowning: boolean;
+  /** Engines can attack it directly (head flame within what they hold, no crowning). */
+  attackable: boolean;
+  not_attackable_reason: string | null;
+  /** Units on scene or en route on fire_attack. */
+  attacking: string[];
+  /** Grass-equivalent line built and still needed to ring the fire, metres. */
+  line_built_m: number;
+  line_needed_m: number;
+  /** Simulator estimate with the units attacking it now; null when none, or not by the horizon. */
+  out_eta_min: number | null;
+  /** Minute it went out (status out). */
+  out_minute: number | null;
+  attack_options: FireAttackOption[];
 }
 
 export interface Observation {
@@ -136,6 +177,7 @@ export interface Observation {
     exposed: number;
   };
   zones: ZoneObservation[];
+  fires: FireObservation[];
   exits: { id: string; name: string }[];
   units: UnitObservation[];
   /** Alerts since the previous decision, oldest first. */
@@ -163,6 +205,7 @@ export type WireOrder =
       task: "evacuation_support" | "structure_defense";
       reason: string;
     }
+  | { type: "attack_fire"; unit_id: string; fire_id: string; reason: string }
   | { type: "recall_unit"; unit_id: string; reason: string };
 
 export type DecisionEvent =

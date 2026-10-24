@@ -23,7 +23,12 @@
  * - Engines drive at the same free-flow speeds, ignoring congestion; a station outside the
  *   road box first covers its straight-line approach at APPROACH_SPEED_KPH. "Evacuation
  *   support" shortens a zone's departure spread; "structure defense" has no modelled effect on
- *   the fire, whose spread is fixed by the precomputed run.
+ *   the fire.
+ * - Fire attack: engines sent to a fire (`attack_fire`) stage at the reachable road node nearest
+ *   its ignition point (routing as above) and build line once there (fireAttack.ts). When
+ *   the line rings the fire it is out: the engine records it and returns the crews, and the
+ *   session re-solves the fire without it and swaps the new exposure in (`setExposure`). Until
+ *   then the fire follows the precomputed run.
  * - Staged waves: a zone can be staged behind another ordered or staged zone. It gets its
  *   order automatically once every household of that zone has left home and the loading
  *   queue (the road is free for the next wave), or earlier when its own order slack falls to
@@ -32,8 +37,16 @@
  *   households of that zone would be told. Notices are simulated; nothing is sent anywhere.
  */
 
-import type { DispatchArea, LonLat } from "./area";
+import { groundMeters, type DispatchArea, type LonLat } from "./area";
 import type { FireExposure } from "./fireExposure";
+import {
+  ENGINE_LINE_METERS_PER_MINUTE,
+  fireAreaAt,
+  lineNeededMeters,
+  projectOutMinute,
+  type FireAreaFrame,
+  type FireTarget,
+} from "./fireAttack";
 import {
   edgeSeconds,
   pointAlongStep,
@@ -95,7 +108,7 @@ export type ZoneStatus = "no_order" | "ordered" | "cleared" | "overrun";
  */
 export type ZoneImpact = "burning" | "threatened" | "later" | "outside";
 export type UnitStatus = "available" | "en_route" | "on_scene" | "returning" | "stranded";
-export type UnitTask = "evacuation_support" | "structure_defense";
+export type UnitTask = "evacuation_support" | "structure_defense" | "fire_attack";
 
 export interface ZoneState {
   index: number;
@@ -128,7 +141,7 @@ export interface ZoneStage {
 }
 
 /** What a zone's households would be told. Simulated: never delivered to anyone. */
-export type NoticeKind = "leave_now" | "prepare" | "redirect" | "hold";
+export type NoticeKind = "leave_now" | "prepare" | "redirect" | "hold" | "all_clear";
 
 export interface ResidentNotice {
   id: number;
@@ -174,6 +187,10 @@ export interface UnitState {
   task: UnitTask | null;
   /** Zone index the unit is heading to or working in. */
   zone: number | null;
+  /** Fire index (into `DispatchEngine.fires`) the unit is attacking. */
+  fire: number | null;
+  /** Node the unit drives to: the zone's loading node, or its staging node at a fire. */
+  targetNode: number | null;
   /** Node the unit is at, or the tail of the edge it is on. */
   node: number;
   steps: PathStep[];
@@ -197,7 +214,8 @@ export type AlertType =
   | "unit_withdrawn"
   | "unit_stranded"
   | "vehicles_exposed"
-  | "wave_released";
+  | "wave_released"
+  | "fire_out";
 
 export interface Alert {
   minute: number;
@@ -217,6 +235,7 @@ export type Order =
       reason: string;
     }
   | { type: "dispatch_unit"; unit_id: string; zone_id: string; task: UnitTask; reason: string }
+  | { type: "attack_fire"; unit_id: string; fire_id: string; reason: string }
   | { type: "recall_unit"; unit_id: string; reason: string };
 
 export interface OrderOutcome {
@@ -239,6 +258,15 @@ export interface Totals {
   caught: number;
 }
 
+/** A fire engines can be sent to, and their progress against it. */
+export interface FireAttackState {
+  target: FireTarget;
+  /** Grass-equivalent line built around it so far, metres. */
+  lineMeters: number;
+  /** Minute the engines put it out, or null while it burns. */
+  outMinute: number | null;
+}
+
 export interface IgnitionEvent {
   minute: number;
   name: string;
@@ -256,8 +284,12 @@ export interface VehicleGroup {
 
 export class DispatchEngine {
   readonly area: DispatchArea;
-  readonly exposure: FireExposure;
+  /** Replaced by `setExposure` when a fire is put out and re-solved. */
+  exposure: FireExposure;
   readonly horizonMinutes: number;
+  /** Fires engines can attack (empty unless `setFires` was called). */
+  fires: FireAttackState[] = [];
+  private fireFrames: FireAreaFrame[] = [];
   minute = 0;
   zones: ZoneState[];
   units: UnitState[];
@@ -317,22 +349,15 @@ export class DispatchEngine {
       stage: null,
       wave: null,
     }));
-    this.work = area.zones.map((zone) => {
-      const fireOrder: number[] = [];
-      for (let h = zone.firstHome; h < zone.firstHome + zone.homes; h += 1) {
-        if (Number.isFinite(exposure.homeArrival[h])) fireOrder.push(h);
-      }
-      fireOrder.sort((a, b) => exposure.homeArrival[a] - exposure.homeArrival[b]);
-      return {
-        nextDeparture: 0,
-        departBudget: 0,
-        queue: [],
-        releaseBudget: 0,
-        fireOrder,
-        fireNext: 0,
-        vehiclesPerHome: zone.homes > 0 ? zone.vehicles / zone.homes : 0,
-      };
-    });
+    this.work = area.zones.map((zone, index) => ({
+      nextDeparture: 0,
+      departBudget: 0,
+      queue: [],
+      releaseBudget: 0,
+      fireOrder: this.fireOrderOf(index),
+      fireNext: 0,
+      vehiclesPerHome: zone.homes > 0 ? zone.vehicles / zone.homes : 0,
+    }));
     this.units = area.stations.flatMap((station) =>
       station.units.map((unit) => ({
         id: unit.id,
@@ -341,6 +366,8 @@ export class DispatchEngine {
         status: "available" as UnitStatus,
         task: null,
         zone: null,
+        fire: null,
+        targetNode: null,
         node: station.node,
         steps: [],
         stepIndex: 0,
@@ -351,6 +378,162 @@ export class DispatchEngine {
     );
     this.emitIgnitions(-1, 0);
     this.checkFire(0);
+  }
+
+  /** The zone's homes the fire reaches, earliest first. */
+  private fireOrderOf(index: number): number[] {
+    const { firstHome, homes } = this.area.zones[index];
+    const arrival = this.exposure.homeArrival;
+    const order: number[] = [];
+    for (let h = firstHome; h < firstHome + homes; h += 1) {
+      if (Number.isFinite(arrival[h])) order.push(h);
+    }
+    return order.sort((a, b) => arrival[a] - arrival[b]);
+  }
+
+  /** The fires engines can attack, and their burned area over time (from the current run). */
+  setFires(targets: readonly FireTarget[], frames: readonly FireAreaFrame[]): void {
+    this.fires = targets.map((target) => ({ target, lineMeters: 0, outMinute: null }));
+    this.fireFrames = [...frames];
+  }
+
+  /**
+   * Swap in the exposure (and per-fire areas) of a re-solved run after a fire was put out at
+   * or before the current minute. Arrivals up to now are unchanged by such a re-solve, so only
+   * the future changes. Staged zones that are no longer reached by any fire stand down.
+   */
+  setExposure(exposure: FireExposure, frames: readonly FireAreaFrame[]): void {
+    this.exposure = exposure;
+    this.fireFrames = [...frames];
+    const now = this.minute;
+    this.zones.forEach((zone, index) => {
+      const work = this.work[index];
+      work.fireOrder = this.fireOrderOf(index);
+      work.fireNext = work.fireOrder.filter((h) => exposure.homeArrival[h] <= now).length;
+      if (zone.stage && zone.status === "no_order" && this.zoneImpact(index) === "outside") {
+        zone.stage = null;
+        this.notice(
+          index,
+          "all_clear",
+          null,
+          "The fire threatening your area is out. You no longer need to leave; stay alert.",
+        );
+      }
+    });
+  }
+
+  /** Index of a fire by its id, or undefined. */
+  fireIndex(id: string): number | undefined {
+    const index = this.fires.findIndex((fire) => fire.target.id === id);
+    return index < 0 ? undefined : index;
+  }
+
+  /** Fire is burning now: started, not out. */
+  fireBurning(index: number): boolean {
+    const fire = this.fires[index];
+    return (
+      fire.outMinute === null &&
+      fire.target.ignitedMinute !== null &&
+      fire.target.ignitedMinute <= this.minute
+    );
+  }
+
+  /** Burned area of a fire now (or when it went out), m², from the current run. */
+  fireAreaSquareMeters(index: number): number {
+    return fireAreaAt(this.fireFrames, index, this.fires[index].outMinute ?? this.minute);
+  }
+
+  /** Grass-equivalent line still needed to ring the fire now, metres. */
+  fireLineNeededMeters(index: number): number {
+    return lineNeededMeters(this.fires[index].target, this.fireFrames, index, this.minute);
+  }
+
+  /** Units attacking a fire: on scene, or driving there. */
+  fireAttackers(index: number): UnitState[] {
+    return this.units.filter(
+      (unit) =>
+        unit.task === "fire_attack" &&
+        unit.fire === index &&
+        (unit.status === "on_scene" || unit.status === "en_route"),
+    );
+  }
+
+  /**
+   * Where a unit would stage to attack a fire: the reachable node (avoiding fire and closed
+   * roads) nearest the fire's ignition point, and the drive there in seconds (including a
+   * station's approach for a unit still at its station). Null when no road reaches.
+   */
+  attackRoute(
+    unit: UnitState,
+    index: number,
+  ): { node: number; route: Route; seconds: number } | null {
+    if (unit.status === "stranded") return null;
+    const from = this.unitNextNode(unit);
+    const tree = shortestPathTree(this.area, from, this.blockedAt(this.minute));
+    const location = this.fires[index].target.location;
+    let best = -1;
+    let bestMeters = Infinity;
+    for (let node = 0; node < this.area.nodes.length; node += 1) {
+      if (!Number.isFinite(tree.seconds[node])) continue;
+      const meters = groundMeters(this.area.nodes[node], location);
+      if (meters < bestMeters) {
+        best = node;
+        bestMeters = meters;
+      }
+    }
+    const route = best < 0 ? null : routeTo(this.area, tree, best);
+    if (!route) return null;
+    const approach = unit.status === "available" ? this.approachSeconds(unit) : 0;
+    return { node: best, route, seconds: route.seconds + approach };
+  }
+
+  /**
+   * Simulator estimate of the minute a fire is out with the units attacking it now plus one
+   * more engine starting at each minute in `extraArrivals`, or null if not by the horizon.
+   */
+  projectedOutMinute(index: number, extraArrivals: readonly number[] = []): number | null {
+    const fire = this.fires[index];
+    if (fire.outMinute !== null) return fire.outMinute;
+    const arrivals = this.fireAttackers(index).map((unit) =>
+      unit.status === "on_scene" ? this.minute : this.minute + (this.unitEtaMinutes(unit) ?? 0),
+    );
+    return projectOutMinute(
+      fire.target,
+      this.fireFrames,
+      index,
+      this.minute,
+      fire.lineMeters,
+      [...arrivals, ...extraArrivals],
+      this.horizonMinutes,
+    );
+  }
+
+  /**
+   * What-if options for a burning fire engines can attack: send the nearest 1..`max` units not
+   * already on it (wherever they are now, including other assignments), with the simulator's
+   * estimated out minute for each. Empty when the fire cannot be attacked now.
+   */
+  attackOptions(index: number, max: number): { unitIds: string[]; outMinute: number | null }[] {
+    const fire = this.fires[index];
+    if (!this.fireBurning(index) || fire.target.notAttackable) return [];
+    const candidates = this.units
+      .filter((unit) => !(unit.task === "fire_attack" && unit.fire === index))
+      .flatMap((unit) => {
+        const plan = this.attackRoute(unit, index);
+        return plan ? [{ unit, arrival: this.minute + plan.seconds / SECONDS_PER_MINUTE }] : [];
+      })
+      .sort((a, b) => a.arrival - b.arrival)
+      .slice(0, max);
+    return candidates.map((_, k) => {
+      const chosen = candidates.slice(0, k + 1);
+      return {
+        unitIds: chosen.map((c) => c.unit.id),
+        outMinute: this.projectedOutMinute(
+          index,
+          chosen.map((c) => c.arrival),
+        ),
+      };
+    });
   }
 
   get finished(): boolean {
@@ -442,12 +625,38 @@ export class DispatchEngine {
       return { order, accepted: true, note: `Returning to ${unit.stationId}.` };
     }
 
+    if (order.type === "attack_fire") {
+      const index = this.fireIndex(order.fire_id);
+      if (index === undefined) return reject(`Unknown fire ${order.fire_id}.`);
+      const fire = this.fires[index];
+      if (fire.outMinute !== null) return reject(`${fire.target.name} is already out.`);
+      if (!this.fireBurning(index)) return reject(`${fire.target.name} has not started.`);
+      if (fire.target.notAttackable)
+        return reject(
+          `${fire.target.name} cannot be attacked directly: ${fire.target.notAttackable}.`,
+        );
+      if (unit.task === "fire_attack" && unit.fire === index)
+        return reject(`${unit.id} is already on ${fire.target.name}.`);
+      const plan = this.attackRoute(unit, index);
+      if (!plan) return reject(`${unit.id} has no road to ${fire.target.name} avoiding fire.`);
+      const fromStation = unit.status === "available";
+      this.sendUnit(unit, from, plan.route, "en_route", "fire_attack", null, plan.node);
+      unit.fire = index;
+      if (fromStation) unit.holdSeconds = this.approachSeconds(unit);
+      const out = this.projectedOutMinute(index);
+      return {
+        order,
+        accepted: true,
+        note: `${unit.id} to ${fire.target.name}, ${Math.round(plan.seconds / SECONDS_PER_MINUTE)} min; with the crews on it the simulator estimates it out ${out === null ? "not by the horizon" : `at T+${Math.round(out)}`}.`,
+      };
+    }
+
     const index = this.zoneIndex.get(order.zone_id);
     if (index === undefined) return reject(`Unknown zone ${order.zone_id}.`);
     if (this.zones[index].status === "overrun")
       return reject(`${order.zone_id} is overrun by fire.`);
     if (order.task !== "evacuation_support" && order.task !== "structure_defense") {
-      return reject(`Unknown task ${String(order.task)}.`);
+      return reject(`Unknown zone task ${String(order.task)}; use attack_fire for a fire.`);
     }
     const route = routeTo(
       this.area,
@@ -713,6 +922,7 @@ export class DispatchEngine {
     status: UnitStatus,
     task: UnitTask | null,
     zone: number | null,
+    targetNode: number | null = zone === null ? null : this.area.zones[zone].node,
   ): void {
     unit.node = from;
     unit.steps = route.steps;
@@ -721,6 +931,8 @@ export class DispatchEngine {
     unit.holdSeconds = 0;
     unit.task = task;
     unit.zone = zone;
+    unit.fire = null;
+    unit.targetNode = targetNode;
     unit.arrivedMinute = null;
     if (route.steps.length > 0) unit.status = status;
     else if (status === "returning") unit.status = "available";
@@ -747,7 +959,37 @@ export class DispatchEngine {
     this.release();
     this.advancePackets(now, blocked);
     this.advanceUnits(now, blocked);
+    this.attackFires(blocked);
     this.checkCleared();
+  }
+
+  /** Engines on scene build line; a fire whose edge is ringed is out and its crews go home. */
+  private attackFires(blocked: (edge: number) => boolean): void {
+    this.fires.forEach((fire, index) => {
+      if (fire.outMinute !== null) return;
+      const working = this.units.filter(
+        (unit) => unit.status === "on_scene" && unit.task === "fire_attack" && unit.fire === index,
+      );
+      if (working.length === 0) return;
+      fire.lineMeters += working.length * ENGINE_LINE_METERS_PER_MINUTE;
+      if (fire.lineMeters < this.fireLineNeededMeters(index)) return;
+      fire.outMinute = this.minute;
+      const hectares = this.fireAreaSquareMeters(index) / 10_000;
+      this.alert(
+        "fire_out",
+        `${fire.target.name} is out: ${working.map((unit) => unit.id).join(", ")} contained it at ${hectares < 10 ? hectares.toFixed(1) : Math.round(hectares)} ha.`,
+        false,
+      );
+      for (const unit of this.fireAttackers(index)) {
+        const from = this.unitNextNode(unit);
+        const home = routeTo(this.area, shortestPathTree(this.area, from, blocked), unit.homeNode);
+        if (home) this.sendUnit(unit, from, home, "returning", null, null);
+        else {
+          unit.status = "stranded";
+          this.alert("unit_stranded", `${unit.id} has no fire-free route home.`, true);
+        }
+      }
+    });
   }
 
   private catchHome(zone: ZoneState, home: number): void {
@@ -1037,9 +1279,7 @@ export class DispatchEngine {
       if (ahead.some((step) => blocked(step.edge))) {
         const from = this.unitNextNode(unit);
         const target =
-          unit.status === "returning" || unit.zone === null
-            ? unit.homeNode
-            : this.area.zones[unit.zone].node;
+          unit.status === "returning" || unit.targetNode === null ? unit.homeNode : unit.targetNode;
         const route = routeTo(this.area, shortestPathTree(this.area, from, blocked), target);
         if (route) {
           const current = unit.stepElapsedSeconds > 0 ? [unit.steps[unit.stepIndex]] : [];
@@ -1091,12 +1331,16 @@ export class DispatchEngine {
           unit.status = "available";
           unit.task = null;
           unit.zone = null;
+          unit.fire = null;
+          unit.targetNode = null;
         } else {
           unit.status = "on_scene";
           unit.arrivedMinute = now;
           this.alert(
             "unit_arrived",
-            `${unit.id} on scene at ${this.area.zones[unit.zone!].id} (${unit.task === "evacuation_support" ? "evacuation support" : "structure defense"}).`,
+            unit.fire !== null
+              ? `${unit.id} on scene at ${this.fires[unit.fire].target.name}, attacking the fire.`
+              : `${unit.id} on scene at ${this.area.zones[unit.zone!].id} (${unit.task === "evacuation_support" ? "evacuation support" : "structure defense"}).`,
             false,
           );
         }
