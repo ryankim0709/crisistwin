@@ -3,6 +3,7 @@ import { Button, IconButton, Notice, SegmentedControl, Tag } from "../ui";
 import { drillAction } from "./api";
 import { drillClock, drillDate, drillNowAt, elapsed } from "./format";
 import InvitePhones from "./InvitePhones";
+import InjectsPanel from "./InjectsPanel";
 import type { RunAction } from "./SelectedItem";
 import type { CommandResponse, TwinMonitor } from "./types";
 
@@ -16,7 +17,19 @@ const SPEED_OPTIONS = SPEEDS.map((s) => ({
 /** "Updated" shows only when the last poll is older than this. */
 const STALE_AFTER_MS = 10_000;
 
-function Menu({ twin, onSignOut }: { twin: TwinMonitor | null; onSignOut: (() => void) | null }) {
+function Menu({
+  data,
+  twin,
+  run,
+  busy,
+  onSignOut,
+}: {
+  data: CommandResponse | null;
+  twin: TwinMonitor | null;
+  run: RunAction;
+  busy: string | null;
+  onSignOut: (() => void) | null;
+}) {
   const ref = useRef<HTMLDetailsElement>(null);
   const [inviting, setInviting] = useState(false);
   useEffect(() => {
@@ -64,6 +77,14 @@ function Menu({ twin, onSignOut }: { twin: TwinMonitor | null; onSignOut: (() =>
               ) : null}
             </ul>
           </details>
+          {data ? (
+            <details className="lc-menu-sub">
+              <summary className="lc-menu-item">
+                Injects <span className="lc-num lc-dim">{data.injects?.length ?? 0}</span>
+              </summary>
+              <InjectsPanel data={data} run={run} busy={busy} />
+            </details>
+          ) : null}
           <button
             type="button"
             role="menuitem"
@@ -181,7 +202,7 @@ export default function WorkspaceHeader({
             {error}
           </Notice>
         ) : null}
-        <Menu twin={twin} onSignOut={onSignOut} />
+        <Menu data={data} twin={twin} run={run} busy={busy} onSignOut={onSignOut} />
       </span>
     </header>
   );

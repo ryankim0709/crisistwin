@@ -70,9 +70,9 @@ function describe(status: number, body: Partial<LiveApiError> | null): string {
   return `Live API returned HTTP ${status}.`;
 }
 
-async function request<T>(
+export async function request<T>(
   token: string,
-  method: "GET" | "POST",
+  method: "GET" | "POST" | "DELETE",
   path: string,
   body?: unknown,
   signal?: AbortSignal,

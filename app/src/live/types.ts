@@ -3,6 +3,8 @@
 // Times are UTC ISO 8601 strings with `Z`. Coordinates are WGS84 [lon, lat]. Distances are meters.
 // "Drill time" fields (replay_*) are 2018 Camp Fire replay times; everything else is wall time.
 
+import type { DrillInject } from './injects'
+
 export type LonLat = [lon: number, lat: number]
 export type IsoTime = string
 
@@ -457,6 +459,10 @@ export interface CommandResponse {
   decisions?: Decision[]
   response_record?: ResponseRecordItem[]
   ground_record?: GroundRecord
+  /** Drill injects (instructor panel), any status; absent from older servers. */
+  injects?: DrillInject[]
+  /** Zones with no phone signal now (a comms_outage inject is active). */
+  no_signal_zone_ids?: string[]
   /** All pending plus the latest 20 decided, newest first. */
   proposals: Proposal[]
   /** Newest 500. */

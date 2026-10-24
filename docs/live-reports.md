@@ -64,6 +64,8 @@ accept becomes the assignee). `accepted` is new in v2.
 submitting a report with its `task_id`; `POST tasks/{id}` with
 `{ "status": "cancelled", "note": "Could not reach it" }` closes it unanswered.
 
+`live_injects`: drill injects, see [Injects](#injects).
+
 `live_decisions`: an append-only audit log of triage, task, approval, drill and help actions: `{ at, actor, action, report_ids, proposal_id, checkin_id, note }` `actor` is `controller`, `auto_policy`, a responder `party_key`, or `agent:<name>` (see [Actor attribution](#actor-attribution)).
 
 Road status and public items are computed when read from current reports in P0;
@@ -964,6 +966,43 @@ A component with no data (no help requests, twin warming, no zone ordered yet) h
 `coverage` is the weight share that counted. The score is a planning-experiment number from an
 uncalibrated model, not an evaluation of the controllers.
 
+## Injects
+
+Scripted or instructor-triggered events that stress a plan ([ADR 0039](adr/0039-drill-injects.md)). Every
+inject is **simulated** and labeled (`evidence_class: "simulated"`, label `Injected (simulated): ...`); nothing is
+sent to real people, and no report is created for it. `live_injects` document (controller only):
+
+```jsonc
+{ "id": "inj_...", "type": "comms_outage", "params": { "zone_ids": ["bg:060070016002"], "until": "2018-11-08T16:30:00Z" },
+  "at": "2018-11-08T15:40:00Z",         // drill time (UTC); omit on POST for "now" (the drill clock)
+  "status": "scheduled|active|ended",   // follows the drill clock
+  "actor": "controller",                // POST may set "script:<name>" (at most 40 characters)
+  "label": "Injected (simulated): no phone signal in ...", "evidence_class": "simulated",
+  "coord": null, "zone_ids": ["bg:060070016002"] }   // coord: map mark of point injects
+```
+
+| type | `params` | Effect (from `at`) |
+| --- | --- | --- |
+| `psap_reroute` | `zone_ids`, optional `until`, optional `to` (label) | The zones' 911 stream is dropped (as Paradise to Chico at 08:20 PST, 2018): their 2018 `911` record items no longer enter the review queue (`groundrecord.materialize_due`) or the `ground_record` panel from `at` (to `until`). Radio and rescue entries stay. Generated comms (`sim/gen_comms.py`) read the same windows: `zone_ids` x `[at, until or end)` |
+| `comms_outage` | `zone_ids`, `until` | Civilian reports whose location lies in a zone, and check-ins declaring one, get `503 { "error": "no_signal" }` with `Retry-After: 60` between `at` and `until` (the phone's offline outbox keeps and retries them). Responders are exempt (radio). The command poll lists `no_signal_zone_ids`; the console hatches those zones grey |
+| `silent_closure` | `segment_id` | The segment closes in the twin (`close_road`, `mode: hard`, operator actor `inject:<id>`, rationale `Injected (simulated): ...`). No report exists, so guidance and the public map do not know until a report or a responder check says so. Deleting it reopens the road |
+| `shelter_full` | `destination_id` (a shelter or refuge) | The destination is full in the twin (`fill_destination`, [twin-api.md](twin-api.md#catalog)); guidance still offers it until a `shelter_full` report arrives. Not undoable until the drill restarts |
+| `fire_jump` | `coord` `[lon, lat]`, optional `radius_m` (10..1000, default 150) | A small circle is added to the snapshot's fire estimate (`livecore.fire.estimate_fire(spots=...)`): `fire.label` ends `+ injected spot fire (simulated)`, `evidence_class` is `simulated`. Planner route safety sees it. The twin's own fire timeline is not changed |
+
+Endpoints (controller token):
+
+- `GET incidents/{id}/injects` -> `{ "injects": [DrillInject], "replay_now", "choices": { "segments": [{ "id", "name", "length_m" }] } }`
+  (`choices` feeds the console's road picker). Reading moves each inject's status to the drill clock's.
+- `POST incidents/{id}/injects` `{ "type", "params", "at"?, "actor"? }` -> `201 { "inject": DrillInject }`.
+  `400 invalid_inject` for a bad type, params or an `at` outside the drill clock; `409` past 60 injects.
+- `DELETE incidents/{id}/injects/{inject_id}` (or `DELETE incidents/{id}/injects?id=...`) -> `{ "deleted": id }`; `404` if unknown.
+
+Applied by the drill clock, idempotently, where the snapshot is loaded (`state.load_snapshot` -> `injects.apply_due`):
+the stored `status` moves with the clock (a drill reset puts every inject back to `scheduled`), and each change is
+logged once in `live_decisions` as `inject_created`, `inject_started`, `inject_ended` or `inject_deleted` (note:
+the label). `command` adds `injects` and `no_signal_zone_ids`. Index `{incident_id, at}`; `live_init_db
+--drop-drill-data` drops the collection.
+
 ## Endpoint summary (v2 additions)
 
 | Method and path | Role |
@@ -980,6 +1019,7 @@ uncalibrated model, not an evaluation of the controllers.
 | `POST proposals/{id}/approve`, `POST proposals/{id}/reject` | controller |
 | `POST incidents/{id}/drill` | controller |
 | `GET incidents/{id}/events?since=` | controller ([Event stream](#event-stream)) |
+| `GET`, `POST`, `DELETE incidents/{id}/injects[/{inject_id}]` | controller ([Injects](#injects)) |
 | `GET incidents/{id}/twin` | controller ([twin-api.md](twin-api.md#http-adapter-live-drill-appbackendapilivetwin_servicepy)) |
 | `POST incidents/{id}/twin/whatif` | controller |
 | `POST incidents/{id}/impact` | controller ([Impact analysis](#impact-analysis)) |
@@ -1004,6 +1044,7 @@ ISO 8601 `Z`. Ids are prefixed strings (`rpt_`, `tsk_`, `prp_`, `chk_`, `dev_`,
 | `live_devices` | issued token (civilian or responder) | `token_hash` (SHA-256), `role`, `party_key`, `incident_id`, `created_at`, `last_seen_at`, `expires_at` | `token_hash` unique; `party_key`; TTL on `expires_at` (`expireAfterSeconds: 0`; civilian 30 days after last seen, responder 24 h) |
 | `live_reports` | report | v1 document + `replay_at`, server-maintained `updated_at` (cursor) | `{incident_id, client_id}` unique (client_id stored lowercased); `{incident_id, received_at}`; `{incident_id, updated_at}` (the `since` cursor); `{reporter.party_key, received_at}`; `id` unique; 2dsphere on `location.coord` (optional; P0 filters in Python) |
 | `live_tasks` | task | v1 + `assignee`, `accepted_at` | `id` unique; `{incident_id, status}`; `{assignee, status}` |
+| `live_injects` | drill inject ([Injects](#injects)) | `id`, `incident_id`, `type`, `params`, `at`, `status`, `actor`, `created_at` | `id` unique; `{incident_id, at}` |
 | `live_decisions` | audit entry (append only) | `incident_id`, `at`, `actor`, `action`, `report_ids`, `proposal_id`, `note` | `{incident_id, at}` |
 | `live_drills` | incident | see [Drill clock](#drill-clock) | `incident_id` unique |
 | `live_guidance` | zone guidance version (append only; only the derived `route.safety`, `caveat`, `alternatives` of the current version are rewritten by a replan) | `ZoneGuidance` + `incident_id` | `{incident_id, zone_id, version}` unique; `{incident_id, published_at}` |

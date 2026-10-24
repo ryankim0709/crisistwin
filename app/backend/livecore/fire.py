@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from typing import Literal
 
 from .drill import Drill, FireObservation, FireSnapshot
-from .geo import MultiPolygon
+from .geo import LonLat, MultiPolygon
 
 FIRE_OBSERVATION_WINDOW_MIN = 60
 """Observations shown with the estimate: drill time in [replay_now - 60 min, replay_now]."""
@@ -37,6 +37,7 @@ def estimate_fire(
     drill: Drill,
     replay_now: datetime,
     confirmed_fire_points: Sequence[FireObservation] = (),
+    spots: Sequence[tuple[datetime, LonLat, float]] = (),
 ) -> FireEstimate:
     """Newest of the observed perimeters and simulated fronts with ``at <= replay_now``.
 
@@ -46,7 +47,30 @@ def estimate_fire(
 
     Confirmed field reports are returned as observations only; they are not buffered into
     ``geometry``, so the area stays exactly the labeled source (perimeter or model front).
+
+    ``spots`` are drill-inject spot ignitions ``(at, coord, radius_m)`` with ``at <= replay_now``
+    (``livecore.injects.spots_due``). They are added to ``geometry`` as small circles, the label
+    says so and ``evidence_class`` becomes ``simulated``; the source itself is unchanged.
     """
+    estimate = _estimate(drill, replay_now, confirmed_fire_points)
+    if not spots:
+        return estimate
+    from .injects import SPOT_LABEL, circle
+
+    areas = tuple(p for _, coord, radius in spots for p in circle(coord, radius))
+    base = tuple(estimate.geometry or ())
+    label = f"{estimate.label} + {SPOT_LABEL}" if estimate.method != "none" else f"Fire estimate: {SPOT_LABEL}"
+    return FireEstimate(
+        as_of=estimate.as_of or spots[-1][0],
+        method=estimate.method if estimate.method != "none" else "model_nowcast",
+        label=label,
+        geometry=base + areas,
+        observations=estimate.observations,
+        evidence_class="simulated",
+    )
+
+
+def _estimate(drill: Drill, replay_now: datetime, confirmed_fire_points: Sequence[FireObservation]) -> FireEstimate:
     perimeter = _latest(drill.perimeters, replay_now)
     front = _latest(drill.fronts, replay_now)
     source: FireSnapshot | None

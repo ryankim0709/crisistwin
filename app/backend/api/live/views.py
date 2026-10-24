@@ -30,6 +30,7 @@ from .common import (
 )
 from .drillcache import get_index, response_record_until, snap_to_segment
 from . import groundrecord
+from . import injects as injects_mod
 from .groundrecord import ground_record_json
 from .state import (
     checkin_json,
@@ -232,6 +233,9 @@ def _submit_report(request, incident_id: str, principal: Principal) -> Response:
     ):
         return error(429, "rate_limited", "Too many reports. Try again in a minute.")
     index = get_index()
+    refused = injects_mod.refuse_if_no_signal(incident_id, principal, wall_now(), coord=fields["location"]["coord"])
+    if refused is not None:
+        return refused
     road_ref = None
     if fields["kind"] in ROAD_KINDS:
         snapped = snap_to_segment(index, tuple(fields["location"]["coord"]))
@@ -588,6 +592,9 @@ def checkins(request, incident_id: str, principal: Principal):
     if rate_limited(f"checkin:{principal.party_key}", CHECKINS_PER_MIN, 60):
         return error(429, "rate_limited", "Too many check-ins. Try again in a minute.")
     now = wall_now()
+    refused = injects_mod.refuse_if_no_signal(incident_id, principal, now, zone_id=zone_id, coord=coord)
+    if refused is not None:
+        return refused
     checkins_col = col("live_checkins")
     key = {"incident_id": incident_id, "party_key": principal.party_key}
     previous = checkins_col.find_one(key)
@@ -823,7 +830,8 @@ def command(request, incident_id: str, principal: Principal):
             "tasks": [task_json(t) for t in tasks],
             "decisions": _recent_decisions(incident_id),
             "response_record": response_record_until(index, snapshot.clock.replay_now, COMMAND_RESPONSE_RECORD_LIMIT),
-            "ground_record": ground_record_json(index, snapshot.clock.replay_now),
+            "ground_record": ground_record_json(index, snapshot.clock.replay_now, snapshot.injects),
+            **injects_mod.command_json(index, snapshot.injects, snapshot.clock.replay_now),
         }
     )
 

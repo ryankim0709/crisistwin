@@ -15,6 +15,8 @@ import { useEffect, useRef, useState } from "react";
 import { restyleBasemap } from "../replay/basemapStyle";
 import { BASEMAP_STYLE_URL, FALLBACK_STYLE, type BasemapStyle } from "../replay/mapLayers";
 import { VERDICT, labelPoint, nf, plural, responderName, shortZoneName, wallClock } from "./format";
+import { installInjectLayers } from "./injectMap";
+import { buildInjectSources } from "./injects";
 import type { QueueItem } from "./queue";
 import type { CommandResponse, GuidanceLevel, ImpactResponse, LonLat, TwinMonitor } from "./types";
 
@@ -531,6 +533,7 @@ function installLayers(map: MapLibreMap): void {
     layout: { "text-field": ["get", "text"], "text-font": ["Noto Sans Regular"], "text-size": 12, "text-letter-spacing": 0.04 },
     paint: { "text-color": MAP_COLOR.fireEdge, "text-halo-color": "#FFFFFF", "text-halo-width": 1.8 },
   });
+  installInjectLayers(map);
 }
 
 function escapeHtml(text: string): string {
@@ -598,7 +601,7 @@ export default function CommandMap({ data, twin, items, selected, focus, layers,
         const id = e.features?.[0]?.properties.item;
         if (typeof id === "string") onSelectRef.current(id);
       });
-      for (const layer of ["lc-ground", "lc-help", "lc-responders", "lc-queues", "lc-dest"]) {
+      for (const layer of ["lc-ground", "lc-help", "lc-responders", "lc-queues", "lc-dest", "lc-inject-marks"]) {
         map.on("click", layer, (e: MapLayerMouseEvent) => {
           const f = e.features?.[0];
           if (!f || !map) return;
@@ -642,7 +645,7 @@ export default function CommandMap({ data, twin, items, selected, focus, layers,
   useEffect(() => {
     const map = mapRef.current;
     if (!ready || !map || !data) return;
-    for (const [id, fc] of Object.entries(buildSources(data, items))) {
+    for (const [id, fc] of Object.entries({ ...buildSources(data, items), ...buildInjectSources(data) })) {
       (map.getSource(id) as GeoJSONSource | undefined)?.setData(fc);
     }
     if (!fitted.current && data.zones.length) {
