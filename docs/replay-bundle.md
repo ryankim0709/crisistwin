@@ -194,11 +194,11 @@ additive within 1.x.
 ## Multiple incidents (`--incident`)
 
 `python3 -m sim --incident <id> bundle` builds `app/public/replays/<id>.json` for an id in
-`sim/incidents.py` (`camp-2018`, `marshall-2021`, `kincade-2019`), and writes or updates
+`sim/incidents.py` (`camp-2018`, `marshall-2021`, `kincade-2019`, `woolsey-2018`), and writes or updates
 `app/public/replays/index.json`. These fields are additive:
 
 - `incident.registry_id`, `incident.place`: from the registry. `incident.timezone` is the
-  package manifest's `time_zone` (IANA) when it has one, otherwise `America/Los_Angeles`.
+  package manifest's `time_zone` (its leading IANA name; Woolsey appends a note) when it has one, otherwise `America/Los_Angeles`.
 - `generated_by.verification` (non-Camp packages only): how the package was verified on this run.
   The builder's offline rebuild runs once per manifest, and its result is cached by manifest
   SHA-256. Every run re-checks all artifact hashes.

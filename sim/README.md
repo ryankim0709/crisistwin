@@ -18,7 +18,7 @@ All outputs are planning experiments, not operational fire or evacuation guidanc
 | `scenario.py` | Hybrid scenario: observed roads and exits with fixture demand and orders until zones and events are acquired |
 | `fixtures.py` | Fully synthetic network and scenario for development |
 | `insights.py` | Responder and evacuee planning insights: zone lead times, roads' modelled fire arrival, bottlenecks |
-| `incidents.py` | Incident registry (`camp-2018`, `marshall-2021`, `kincade-2019`) and the generic package path: verification, perimeters, ignition, clock, crosswalk demand, fitted front, `index.json` |
+| `incidents.py` | Incident registry (`camp-2018`, `marshall-2021`, `kincade-2019`, `woolsey-2018`) and the generic package path: verification, perimeters, ignition, clock, crosswalk demand, fitted front, `index.json` |
 | `bundle.py` | Assemble the web-app replay bundle ([contract](../docs/replay-bundle.md)) |
 | `__main__.py` | CLI |
 
@@ -122,17 +122,19 @@ Bundles record what was fetched in `generated_by.data_sources`.
 ```sh
 python3 -m sim --incident marshall-2021 bundle   # -> app/public/replays/marshall-2021.json + index.json
 python3 -m sim --incident kincade-2019 bundle
+python3 -m sim --incident woolsey-2018 bundle
 python3 -m sim --incident camp-2018 bundle       # same as the explicit Camp --package/--roads-package command
 ```
 
 `--incident` fills in `--package`, `--roads-package` and `--output`, and the explicit flags still
-override it. Camp keeps its own path. For Marshall and Kincade, `sim.incidents` takes everything
+override it. Camp keeps its own path. For Marshall, Kincade and Woolsey, `sim.incidents` takes everything
 from the evacuation package:
 - perimeters from `fire_perimeters.geojson`;
 - the ignition from the `fire_ignition` event. Kincade's place is fitted among the cells of the
-  earliest FIRMS pass; Marshall's ignitions come from its evidence file (below);
+  earliest FIRMS pass; Woolsey's is the CAL FIRE point published in `normalized/incident.json`;
+  Marshall's ignitions come from its evidence file (below);
 - the clock: the manifest focus window, starting 1 h before the hour of ignition;
-- the timezone from the manifest;
+- the timezone from the manifest (its leading IANA name);
 - demand from `population_units` and `zone_population_crosswalk.json`, with orders and warnings
   targeting zones by their own IDs.
 

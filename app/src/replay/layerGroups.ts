@@ -11,7 +11,7 @@ export const GROUP_LAYER: Record<LayerGroup, { layer: string; label: string }> =
   roads: { layer: "roads", label: "Roads & congestion" },
   particles: { layer: "traffic", label: "Vehicle dots (illustrative)" },
   zones: { layer: "zones", label: "Demand areas" },
-  people: { layer: "zones", label: "People at home (households per km²)" },
+  people: { layer: "zones", label: "People at home (household dots)" },
   destinations: { layer: "destinations", label: "Exits and refuges" },
   damage: { layer: "damage", label: "Damage — post-fire assessment (no damage time)" },
 };

@@ -55,6 +55,9 @@ python3 -m tools.mongo_data pull         # restores data/incidents/*/*/{raw,norm
 ```
 
 After building a new package locally, run `python3 -m tools.mongo_data push` and commit its manifest.
+`python3 -m tools.mongo_data status` reports local app data (replay bundles, variants, simulations)
+that differs from the committed `app/data-manifest.json`, and with `MONGODB_URI` set, any listed
+artifact missing from Atlas. If it reports drift after you pulled, the author has not yet run `record`, `push` and committed the manifest.
 
 [Historical incident packages](docs/historical-replay.md) proposes source acquisition,
 data formats, provenance, timing, and offline replay semantics for historical wildfire
