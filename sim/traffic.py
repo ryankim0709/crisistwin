@@ -16,11 +16,14 @@ from bisect import bisect_left, bisect_right
 import math
 import random
 from collections import deque
-from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
+from types import MappingProxyType
 
-from sim.geo import point_in_geometry
+from sim import behavior as bh
+from sim.behavior import BehaviorParams
+from sim.geo import EARTH_RADIUS_M, point_in_geometry
 from sim.history import format_utc
 
 MODEL_ID = "meso-link-queue"
@@ -66,6 +69,8 @@ ASSUMPTIONS = [
     "stays exposed and closed even if a later perimeter is smaller.",
     "Contraflow: each listed outbound edge gains the capacity and storage of its reverse twin (same segment_id), and "
     "the twin is closed to new entry; vehicles already on the twin drain out.",
+    "exposed_at_origin_veh counts vehicles not yet departed whose origin node lies inside the fire area in effect "
+    "(cumulative like edge exposure); exposed_veh counts only vehicles on edges.",
 ]
 LIMITATIONS = [
     "Not calibrated against observed Camp Fire traffic; outputs are planning experiments, not historical traffic counts.",
@@ -76,6 +81,8 @@ LIMITATIONS = [
     "Warnings release no demand unless warning_releases_demand is set; spontaneous early departures are not modelled.",
     "Destination capacity is the only shelter constraint; exits have unlimited capacity.",
 ]
+_FIXED_DELAY_ASSUMPTION = ASSUMPTIONS[4]  # replaced by sim.behavior.ASSUMPTIONS when agents are on
+_FIXED_DELAY_LIMITATIONS = (LIMITATIONS[3], LIMITATIONS[5])  # turning back and warnings are modelled by agents
 
 
 @dataclass(frozen=True)
@@ -153,9 +160,14 @@ class TrafficParams:
     close_edges_in_fire: bool = True
     fire_area_cumulative: bool = True  # an edge midpoint once inside the fire area stays inside (burned area only grows)
     fire_check_every_s: int = 60  # cadence of fire_area_at calls; a multiple of step_s
-    warning_releases_demand: bool = False
+    warning_releases_demand: bool = False  # fixed-delay engine only; agents respond to warnings via a hazard
+    behavior: BehaviorParams = field(default_factory=BehaviorParams)
 
     def __post_init__(self) -> None:
+        if not isinstance(self.behavior, BehaviorParams):
+            raise ValueError("behavior must be a BehaviorParams")
+        if self.behavior.enabled and self.behavior.decision_every_s % self.step_s:
+            raise ValueError("behavior.decision_every_s must be a multiple of step_s")
         for name in ("step_s", "record_every_s", "packet_size_veh", "reroute_interval_s", "fire_check_every_s"):
             if not isinstance(getattr(self, name), int) or getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be a positive integer, got {getattr(self, name)!r}")
@@ -170,7 +182,45 @@ class TrafficParams:
             raise ValueError(f"response_delay_sigma must be nonnegative, got {self.response_delay_sigma}")
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        d = asdict(self)
+        if not self.behavior.enabled:
+            d.pop("behavior")  # replay outputs carry no agent parameters
+        return d
+
+
+@dataclass(frozen=True)
+class ZoneView:
+    id: str
+    name: str
+    vehicles: int
+    ordered_at: datetime | None  # first order applied so far
+    warned_at: datetime | None  # first warning applied so far
+    waiting_veh: int
+    preparing_veh: int
+    departed_veh: int  # everyone who has left, including those who have since arrived
+    arrived_veh: int
+
+
+@dataclass(frozen=True)
+class TrafficView:
+    """Read-only snapshot handed to controllers. Mappings are MappingProxyType."""
+
+    at: datetime
+    network: RoadNetwork
+    edge_veh: Mapping[str, int]  # occupied edges only
+    edge_speed_ratio: Mapping[str, float]  # occupied edges only; mean speed / free-flow, 0.0 if stopped
+    closed_edge_ids: frozenset[str]  # closed by events, fire, or contraflow inbound
+    exposed_edge_ids: frozenset[str]  # edge midpoint inside the fire area in effect
+    zones: Mapping[str, ZoneView]
+    full_destination_ids: frozenset[str]
+    metrics: Mapping[str, int]
+    fire_area: dict | None
+    elapsed_s: int = 0  # model seconds since start
+    contraflow_outbound_edge_ids: frozenset[str] = frozenset()  # edges currently borrowing their twin's lanes
+
+
+# A controller sees the state at a tick and returns events to apply immediately (see simulate_traffic).
+Controller = Callable[[datetime, TrafficView], Sequence[TrafficEvent]]
 
 
 def default_edge_attributes(highway: str) -> dict:
@@ -247,6 +297,7 @@ def _bundle_event(
     ev_id: str, at: datetime, ev_type: str, label: str, edge_ids: list[str], *,
     evidence_class: str = "simulated", time_precision: str = FIRE_CLOSURE_TIME_PRECISION,
     source_id: str = MODEL_ID, source_locator: str | None = None,
+    zone_ids: list[str] | None = None, destination_id: str | None = None,
 ) -> dict:
     return {
         "id": ev_id,
@@ -255,7 +306,7 @@ def _bundle_event(
         "label": label,
         "evidence_class": evidence_class,
         "time_precision": time_precision,
-        "target": {"zone_ids": [], "edge_ids": edge_ids, "destination_id": None},
+        "target": {"zone_ids": zone_ids or [], "edge_ids": edge_ids, "destination_id": destination_id},
         "source": {"id": source_id, "locator": source_locator},
     }
 
@@ -299,14 +350,18 @@ def _validate(network: RoadNetwork, zones, destinations, events, start: datetime
     if not destinations:
         raise ValueError("at least one destination is required")
     for ev in events:
-        unknown = [x for x in ev.edge_ids if x not in edge_ids] + [x for x in ev.zone_ids if x not in zone_ids]
-        if ev.destination_id is not None and ev.destination_id not in dest_ids:
-            unknown.append(ev.destination_id)
-        if unknown:
-            raise ValueError(f"event {ev.id} references unknown ids: {unknown}")
-        if ev.type in CAPACITY_EVENT_TYPES and ev.edge_ids:
-            if ev.capacity_factor is None or not (math.isfinite(ev.capacity_factor) and ev.capacity_factor > 0):
-                raise ValueError(f"event {ev.id} needs a positive capacity_factor (use road_closed for zero capacity)")
+        _check_event_targets(ev, edge_ids, zone_ids, dest_ids)
+
+
+def _check_event_targets(ev: TrafficEvent, edge_ids, zone_ids, dest_ids) -> None:
+    unknown = [x for x in ev.edge_ids if x not in edge_ids] + [x for x in ev.zone_ids if x not in zone_ids]
+    if ev.destination_id is not None and ev.destination_id not in dest_ids:
+        unknown.append(ev.destination_id)
+    if unknown:
+        raise ValueError(f"event {ev.id} references unknown ids: {unknown}")
+    if ev.type in CAPACITY_EVENT_TYPES and ev.edge_ids:
+        if ev.capacity_factor is None or not (math.isfinite(ev.capacity_factor) and ev.capacity_factor > 0):
+            raise ValueError(f"event {ev.id} needs a positive capacity_factor (use road_closed for zero capacity)")
 
 
 def simulate_traffic(
@@ -319,14 +374,27 @@ def simulate_traffic(
     start: datetime,
     end: datetime,
     fire_area_at: Callable[[datetime], dict | None] | None = None,
+    controllers: Sequence[Controller] = (),
+    controller_every_s: int = 60,
 ) -> dict:
     """Run the link-queue model from start to end; return the bundle `traffic` block plus
     `generated_events`, `assumptions` and `limitations`.
 
     Events at or before a step's time take effect at that step; orders issued before
     `start` still release demand (departures already due leave at `start`).
+
+    Controllers run every `controller_every_s` (a multiple of step_s) after scheduled events
+    and the fire update, all on one TrafficView built for that tick, in sequence order. The
+    events they return must be timezone-aware with start <= at <= the tick time and unique
+    ids; they are applied immediately like scheduled events and appended to
+    `generated_events` with their own evidence_class and label.
     """
     _validate(network, zones, destinations, events, start, end)
+    if controllers and (not isinstance(controller_every_s, int) or controller_every_s <= 0
+                        or controller_every_s % params.step_s):
+        raise ValueError("controller_every_s must be a positive multiple of step_s")
+    bp = params.behavior
+    agents_on = bp.enabled
     step = params.step_s
     horizon_s = int((end - start).total_seconds())
     n_steps = horizon_s // step
@@ -360,7 +428,7 @@ def simulate_traffic(
     for i in range(n_edges):
         in_edges[e_to[i]].append(i)
 
-    queue: list[deque] = [deque() for _ in range(n_edges)]  # packets: [count, ready_at_s, zone index]
+    queue: list[deque] = [deque() for _ in range(n_edges)]  # packets: [count, ready_at_s, zone index, agent]
     occ = [0] * n_edges
     credit = [0.0] * n_edges
     active: set[int] = set()
@@ -375,33 +443,133 @@ def simulate_traffic(
     for i, d in enumerate(dest_list):
         dests_at_node.setdefault(node_ix[d.node_id], []).append(i)
 
-    # --- demand: draw every packet's delay up front so draws do not depend on event handling.
-    rng = random.Random(params.seed)
-    mu = math.log(params.response_delay_median_min * 60)
-    delay_cap_s = params.response_delay_max_min * 60
-    zone_packets: dict[str, list[tuple[float, int, int]]] = {}  # zone -> [(delay_s, origin node, count)]
+    # --- demand
     zone_list = list(zones)
+    n_zones = len(zone_list)
     zone_ix = {z.id: i for i, z in enumerate(zone_list)}
     zone_departures: list[list[list]] = [[] for _ in zone_list]  # per zone: [[t_s, veh], ...] by step
     zone_arrivals: list[list[list]] = [[] for _ in zone_list]
-    for z in zones:
-        packets = []
-        full, rest = divmod(z.vehicles, params.packet_size_veh)
-        counts = [params.packet_size_veh] * full + ([rest] if rest else [])
-        for k, count in enumerate(counts):
-            delay = min(delay_cap_s, rng.lognormvariate(mu, params.response_delay_sigma))
-            packets.append((delay, node_ix[z.origin_nodes[k % len(z.origin_nodes)]], count))
-        zone_packets[z.id] = packets
+    z_waiting = [z.vehicles for z in zone_list]  # vehicle counts by state, per zone
+    z_preparing = [0] * n_zones
+    z_departed = [0] * n_zones
+    z_arrived = [0] * n_zones
+    z_ordered_s: list[float | None] = [None] * n_zones
+    z_warned_s: list[float | None] = [None] * n_zones
+    zone_packets: dict[str, list[tuple[float, int, int]]] = {}  # fixed-delay engine: zone -> [(delay_s, node, count)]
+    # Agent arrays (behaviour on): one agent per packet.
+    ag_zone: list[int] = []
+    ag_node: list[int] = []
+    ag_count: list[int] = []
+    ag_wait_fire: list[bool] = []
+    ag_herd: list[bool] = []
+    ag_trigger: list[str | None] = []
+    ag_turn_edge: list[int] = []  # edge on which the agent last made its turn-back decision
+    zone_waiting_agents: list[list[int]] = [[] for _ in zone_list]
+    z_trigger_veh = [dict.fromkeys(bh.TRIGGERS, 0) for _ in zone_list]
+    if not agents_on:
+        # Draw every packet's delay up front so draws do not depend on event handling.
+        rng = random.Random(params.seed)
+        mu = math.log(params.response_delay_median_min * 60)
+        delay_cap_s = params.response_delay_max_min * 60
+        for z in zones:
+            packets = []
+            full, rest = divmod(z.vehicles, params.packet_size_veh)
+            counts = [params.packet_size_veh] * full + ([rest] if rest else [])
+            for k, count in enumerate(counts):
+                delay = min(delay_cap_s, rng.lognormvariate(mu, params.response_delay_sigma))
+                packets.append((delay, node_ix[z.origin_nodes[k % len(z.origin_nodes)]], count))
+            zone_packets[z.id] = packets
+    else:
+        brng = random.Random(f"{params.seed}:behavior")  # own stream; str seeds are stable across processes
+        for zi, z in enumerate(zone_list):
+            full, rest = divmod(z.vehicles, params.packet_size_veh)
+            counts = [params.packet_size_veh] * full + ([rest] if rest else [])
+            for k, count in enumerate(counts):
+                zone_waiting_agents[zi].append(len(ag_zone))
+                ag_zone.append(zi)
+                ag_node.append(node_ix[z.origin_nodes[k % len(z.origin_nodes)]])
+                ag_count.append(count)
+                ag_wait_fire.append(brng.random() < bp.wait_for_fire_share)
+                ag_herd.append(brng.random() < bp.herding_prob)
+                ag_trigger.append(None)
+                ag_turn_edge.append(-1)
+        prep_mu = math.log(bp.prep_median_min * 60)
+        prep_cap_s = bp.prep_max_min * 60
     total_veh = sum(z.vehicles for z in zones)
-    pending: list[tuple[float, int, int, int, int]] = []  # (depart_s, seq, node, count, zone index)
+    nd_at_node: dict[int, int] = {}  # origin node -> vehicles not yet departed from it
+    if agents_on:
+        for a, n in enumerate(ag_node):
+            nd_at_node[n] = nd_at_node.get(n, 0) + ag_count[a]
+    else:
+        for packets in zone_packets.values():
+            for _, n, count in packets:
+                nd_at_node[n] = nd_at_node.get(n, 0) + count
+    origin_order = sorted(nd_at_node, key=lambda n: network.nodes[node_ids[n]][0])
+    origin_lons = [network.nodes[node_ids[n]][0] for n in origin_order]
+    origin_pts = {n: network.nodes[node_ids[n]] for n in nd_at_node}
+    origin_burned: set[int] = set()  # origin nodes inside the fire area in effect (cumulative per fire_area_cumulative)
+    pending: list[tuple[float, int, int, int, int]] = []  # fixed delay: (depart_s, seq, node, count, zone index)
+    preparing: list[tuple[float, int]] = []  # agents: (depart_s, agent)
+    returning: list[tuple[float, int, int, int, int, int]] = []  # turned back: (at_s, seq, node, count, zone, agent)
     seq = 0
     released_zones: set[str] = set()
     first_order_s: float | None = None
-    waiting: dict[int, deque] = {}  # origin node -> departed packets [count, zone index] not yet on an edge
+    waiting: dict[int, deque] = {}  # node -> departed packets [count, zone index, agent] not yet on an edge
+    departed_by = dict.fromkeys(bh.TRIGGERS, 0)
+    turned_back = 0
+    zone_memory: list[dict[int, int]] = [{} for _ in zone_list]  # herding: node -> edge zone-mates last took
 
     not_departed = total_veh
     arrived = 0
     last_arrival_s: float | None = None
+
+    # --- fire cues: origin nodes bucketed so burned points can mark origins within fire_cue_distance_m
+    fire_cued = bytearray(len(node_ids))
+    zone_cued = [False] * n_zones
+    node_zones: dict[int, set[int]] = {}
+    cue_buckets: dict[tuple[int, int], list[int]] = {}
+    if agents_on and fire_area_at is not None:
+        lats = [lat for _, lat in network.nodes.values()]
+        m_lat = math.radians(1) * EARTH_RADIUS_M
+        m_lon = m_lat * math.cos(math.radians((min(lats) + max(lats)) / 2))
+        cue_d = max(bp.fire_cue_distance_m, 1.0)
+        cell_lon, cell_lat = cue_d / m_lon, cue_d / m_lat
+        for a, n in enumerate(ag_node):
+            node_zones.setdefault(n, set()).add(ag_zone[a])
+        for n in sorted(node_zones):
+            lon, lat = network.nodes[node_ids[n]]
+            cue_buckets.setdefault((math.floor(lon / cell_lon), math.floor(lat / cell_lat)), []).append(n)
+        node_pts = [network.nodes[n] for n in node_ids]
+        node_order = sorted(range(len(node_ids)), key=lambda i: node_pts[i][0])
+        node_lons = [node_pts[i][0] for i in node_order]
+    burned_nodes: set[int] = set()
+
+    def cue_from_points(points) -> None:
+        for lon, lat in points:
+            bx, by = math.floor(lon / cell_lon), math.floor(lat / cell_lat)
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    for n in cue_buckets.get((bx + dx, by + dy), ()):
+                        if fire_cued[n]:
+                            continue
+                        nlon, nlat = network.nodes[node_ids[n]]
+                        if math.hypot((nlon - lon) * m_lon, (nlat - lat) * m_lat) <= cue_d:
+                            fire_cued[n] = 1
+                            for zi in node_zones[n]:
+                                zone_cued[zi] = True
+
+    def update_fire_cues(geom: dict) -> None:
+        """Mark origins near newly burned road nodes or near the fire boundary (cues are cumulative)."""
+        x0, y0, x1, y1 = _geometry_bbox(geom)
+        candidates = (
+            i for i in node_order[bisect_left(node_lons, x0):bisect_right(node_lons, x1)]
+            if i not in burned_nodes and y0 <= node_pts[i][1] <= y1
+        )
+        newly = _points_inside(geom, node_pts, candidates)
+        burned_nodes.update(newly)
+        polygons = [geom["coordinates"]] if geom["type"] == "Polygon" else geom["coordinates"]
+        cue_from_points([node_pts[i] for i in sorted(newly)])
+        cue_from_points((q[0], q[1]) for poly in polygons if poly for q in poly[0])
 
     # --- events
     ev_sorted = sorted(events, key=lambda ev: (ev.at, ev.id))
@@ -409,6 +577,7 @@ def simulate_traffic(
     ev_next = 0
     event_closed: set[int] = set()
     edge_index = {e.id: i for i, e in enumerate(edges)}
+    used_event_ids = {ev.id for ev in events}
 
     # --- fire
     fire_closed: set[int] = set()
@@ -424,7 +593,9 @@ def simulate_traffic(
     closed_hard: set[int] = set()  # closed to entry and exit; contraflow-closed edges may still drain
     closed_list: list[int] = []  # sorted; rebuilt only when closures change
     next_edge = [-1] * len(node_ids)
+    route_dist = [math.inf] * len(node_ids)  # current route cost to the nearest open destination
     routes_dirty = True
+    closures_changed = False
     next_reroute_s = 0
 
     def refresh_capacity(i: int) -> None:
@@ -441,6 +612,7 @@ def simulate_traffic(
         """Reversed multi-source Dijkstra from all open destinations over open edges.
 
         Equivalent to taking, per node, the minimum over per-destination trees, in one pass.
+        With agents, open fire-exposed edges carry bp.fire_edge_penalty_s.
         """
         dist = [math.inf] * len(node_ids)
         nxt = [-1] * len(node_ids)
@@ -450,6 +622,7 @@ def simulate_traffic(
                 dist[node] = 0.0
                 heap.append((0.0, node))
         heapq.heapify(heap)
+        penalize = agents_on and bp.fire_edge_penalty_s > 0 and bool(exposed_edges)
         while heap:
             d, v = heapq.heappop(heap)
             if d > dist[v]:
@@ -460,6 +633,8 @@ def simulate_traffic(
                 cost = e_fft[e]
                 if params.queue_aware_routing and occ[e]:
                     cost += occ[e] / e_cap_step[e] * step
+                if penalize and e in exposed_edges:
+                    cost += bp.fire_edge_penalty_s
                 u = e_from[e]
                 nd = d + cost
                 if nd < dist[u]:
@@ -467,12 +642,23 @@ def simulate_traffic(
                     nxt[u] = e
                     heapq.heappush(heap, (nd, u))
         next_edge[:] = nxt
+        route_dist[:] = dist
 
     def open_dest_at(node: int) -> int | None:
         for d in dests_at_node.get(node, ()):
             if not dest_full[d]:
                 return d
         return None
+
+    def choose(node: int, zone: int, agent: int) -> int:
+        """Next edge from node: the route tree, or for a herding agent its zone-mates' last choice."""
+        ne = next_edge[node]
+        if ag_herd[agent]:
+            m = zone_memory[zone].get(node)
+            if (m is not None and m != ne and not closed[m] and m not in exposed_edges
+                    and route_dist[e_to[m]] < route_dist[node]):
+                return m
+        return ne
 
     def add_series(series: list[list], t: int, n: int) -> None:
         if series and series[-1][0] == t:
@@ -495,16 +681,17 @@ def simulate_traffic(
         if n > 0:
             dest_arrived[d] += n
             arrived += n
+            z_arrived[zone] += n
             last_arrival_s = t
             add_series(zone_arrivals[zone], t, n)
         if cap is not None and dest_arrived[d] >= cap:
             mark_full(d, t)
         return n
 
-    def enter(i: int, count: int, zone: int, t: int) -> None:
+    def enter(i: int, count: int, zone: int, agent: int, t: int) -> None:
         if not occ[i]:
             credit[i] = e_credit_max[i]  # an idle edge starts with full discharge credit
-        queue[i].append([count, t + e_fft[i], zone])
+        queue[i].append([count, t + e_fft[i], zone, agent])
         occ[i] += count
         active.add(i)
 
@@ -514,9 +701,67 @@ def simulate_traffic(
             return
         released_zones.add(zone_id)
         first_order_s = at_s if first_order_s is None else min(first_order_s, at_s)
+        zi = zone_ix[zone_id]
+        z_preparing[zi], z_waiting[zi] = z_waiting[zi], 0
         for delay, node, count in zone_packets[zone_id]:
-            heapq.heappush(pending, (at_s + delay, seq, node, count, zone_ix[zone_id]))
+            heapq.heappush(pending, (at_s + delay, seq, node, count, zi))
             seq += 1
+
+    def apply_event(ev: TrafficEvent, at_s: float) -> None:
+        nonlocal closures_changed, routes_dirty, first_order_s
+        if not agents_on and (
+                ev.type == "evacuation_order" or (ev.type == "evacuation_warning" and params.warning_releases_demand)):
+            for z in ev.zone_ids:
+                release_zone(z, at_s)
+        elif agents_on and ev.type in DEMAND_EVENT_TYPES:
+            notice = z_ordered_s if ev.type == "evacuation_order" else z_warned_s
+            for z in ev.zone_ids:
+                zi = zone_ix[z]
+                if notice[zi] is None:
+                    notice[zi] = at_s
+            if ev.type == "evacuation_order" and ev.zone_ids:
+                first_order_s = at_s if first_order_s is None else min(first_order_s, at_s)
+        elif ev.type in CLOSE_EVENT_TYPES:
+            event_closed.update(edge_index[x] for x in ev.edge_ids)
+            closures_changed = True
+        elif ev.type in REOPEN_EVENT_TYPES:
+            event_closed.difference_update(edge_index[x] for x in ev.edge_ids)
+            closures_changed = True
+        elif ev.type in SHELTER_FULL_EVENT_TYPES and ev.destination_id is not None:
+            mark_full(dest_ix[ev.destination_id], at_s)
+        elif ev.type in CAPACITY_EVENT_TYPES and ev.edge_ids:
+            for x in ev.edge_ids:
+                cap_factor[edge_index[x]] = ev.capacity_factor
+                refresh_capacity(edge_index[x])
+            routes_dirty = True
+        elif ev.type in CONTRAFLOW_START_EVENT_TYPES:
+            inbound = []
+            for x in ev.edge_ids:
+                i = edge_index[x]
+                j = twin[i]
+                # One-way roads have no twin; an edge already lending or borrowing lanes is left as is.
+                if j is None or i in contraflow_out or i in contraflow_in or j in contraflow_out:
+                    continue
+                contraflow_out[i] = j
+                contraflow_in.add(j)
+                refresh_capacity(i)
+                inbound.append(j)
+            if inbound:
+                names = ", ".join(sorted({edges[j].name for j in inbound}))
+                generated.append(_bundle_event(
+                    f"{ev.id}-inbound-closed", ev.at, "road_closed",
+                    f"Contraflow inbound lanes closed (derived from {ev.id}): {names}",
+                    [edges[j].id for j in inbound], evidence_class="derived",
+                    time_precision=ev.time_precision, source_id=ev.source_id, source_locator=ev.source_locator,
+                ))
+                closures_changed = True
+        elif ev.type in CONTRAFLOW_END_EVENT_TYPES:
+            for x in ev.edge_ids:
+                i = edge_index[x]
+                if i in contraflow_out:
+                    contraflow_in.discard(contraflow_out.pop(i))
+                    refresh_capacity(i)
+                    closures_changed = True
 
     def set_fire(geom: dict | None, at: datetime) -> None:
         nonlocal fire_geom, exposed_edges, fire_closed, routes_dirty
@@ -547,6 +792,23 @@ def simulate_traffic(
                     del fire_cache[next(iter(fire_cache))]
             else:
                 inside = cached[1]
+        if geom is None:
+            if not params.fire_area_cumulative:
+                origin_burned.clear()
+        else:
+            x0, y0, x1, y1 = _geometry_bbox(geom)
+            if not params.fire_area_cumulative:
+                origin_burned.clear()
+            candidates = [
+                n for n in origin_order[bisect_left(origin_lons, x0):bisect_right(origin_lons, x1)]
+                if n not in origin_burned and y0 <= origin_pts[n][1] <= y1
+            ]
+            origin_burned.update(_points_inside(geom, origin_pts, candidates))
+        if agents_on:
+            if geom is not None:
+                update_fire_cues(geom)
+            if inside != exposed_edges:
+                routes_dirty = True  # exposed edges carry a route penalty
         exposed_edges = inside
         if not params.close_edges_in_fire:
             return
@@ -562,54 +824,193 @@ def simulate_traffic(
             fire_closed = set(inside)
             routes_dirty = True
 
+    def decide_departures(t: int) -> None:
+        """Waiting agents decide to leave with a hazard from notice, fire and social cues."""
+        dt = bp.decision_every_s
+        for zi in range(n_zones):
+            agents = zone_waiting_agents[zi]
+            if not agents:
+                continue
+            if z_ordered_s[zi] is not None:
+                notice_h = bp.order_hazard_per_h
+            elif z_warned_s[zi] is not None:
+                notice_h = bp.warning_hazard_per_h
+            else:
+                notice_h = 0.0
+            vehicles = zone_list[zi].vehicles
+            social_h = bp.social_hazard_per_h * z_departed[zi] / vehicles if vehicles else 0.0
+            if notice_h == 0 and social_h == 0 and not zone_cued[zi]:
+                continue
+            still = []
+            for a in agents:
+                fire_h = bp.fire_cue_hazard_per_h if fire_cued[ag_node[a]] else 0.0
+                n_h, s_h = (0.0, 0.0) if ag_wait_fire[a] else (notice_h, social_h)
+                h = n_h + fire_h + s_h
+                if h <= 0 or brng.random() >= bh.decision_probability(h, dt):
+                    still.append(a)
+                    continue
+                u = brng.random() * h
+                ag_trigger[a] = bh.TRIGGER_ORDER if u < n_h else bh.TRIGGER_FIRE if u < n_h + fire_h else bh.TRIGGER_SOCIAL
+                prep_s = min(prep_cap_s, brng.lognormvariate(prep_mu, bp.prep_sigma))
+                heapq.heappush(preparing, (t + max(prep_s, step), a))
+                z_waiting[zi] -= ag_count[a]
+                z_preparing[zi] += ag_count[a]
+            zone_waiting_agents[zi] = still
+
+    def turn_back(t: int) -> None:
+        """Agents on a stopped or dead-end edge decide once per edge whether to turn back to its start."""
+        nonlocal seq, turned_back
+        for i in sorted(active):
+            stopped = closed[i] and i in closed_hard
+            if not (stopped or (next_edge[e_to[i]] == -1 and open_dest_at(e_to[i]) is None)):
+                continue
+            keep = deque()
+            for pkt in queue[i]:
+                count, ready, zone, a = pkt
+                if ag_turn_edge[a] == i:
+                    keep.append(pkt)
+                    continue
+                ag_turn_edge[a] = i
+                if brng.random() < bp.turn_back_prob:
+                    back_s = min(e_fft[i], max(step, t - (ready - e_fft[i])))  # retrace the distance covered
+                    heapq.heappush(returning, (t + back_s, seq, e_from[i], count, zone, a))
+                    seq += 1
+                    occ[i] -= count
+                    turned_back += count
+                else:
+                    keep.append(pkt)
+            queue[i] = keep
+            if not keep:
+                active.discard(i)
+
     frames: list[dict] = []
     metrics: list[dict] = []
     edge_ids_out = [e.id for e in edges]
-    peaks = {"en_route_veh": 0, "blocked_veh": 0, "exposed_veh": 0}
+    peaks = {"en_route_veh": 0, "blocked_veh": 0, "exposed_veh": 0, "exposed_at_origin_veh": 0}
     edge_peak: dict[int, list] = {}  # edge index -> [peak_veh, peak_t_s, min_speed_kph, congested_frames]
 
-    def record(t: int, at: datetime) -> None:
-        frame_edges = []
-        blocked = 0
+    def edge_rows(t: int) -> list[tuple[int, int, float, bool]]:
+        """(edge, vehicles, mean speed kph, stopped) for occupied edges, in index order."""
+        rows = []
         for i in sorted(active):
-            moving = sum(c for c, ready, _ in queue[i] if ready > t)
+            moving = sum(p[0] for p in queue[i] if p[1] > t)
             stopped = closed[i] and i in closed_hard
-            speed = 0.0 if stopped else edges[i].speed_kph * moving / occ[i]
-            frame_edges.append([i, occ[i], round(speed, 1)])
+            rows.append((i, occ[i], 0.0 if stopped else edges[i].speed_kph * moving / occ[i], stopped))
+        return rows
+
+    def state_counts(rows) -> dict[str, int]:
+        blocked = 0
+        for i, n, _, stopped in rows:
+            if stopped or (next_edge[e_to[i]] == -1 and open_dest_at(e_to[i]) is None):
+                blocked += n
+        for node, q in waiting.items():
+            if q and next_edge[node] == -1 and open_dest_at(node) is None:
+                blocked += sum(p[0] for p in q)
+        counts = {
+            "not_departed_veh": not_departed,
+            "en_route_veh": total_veh - not_departed - arrived,
+            "arrived_veh": arrived,
+            "blocked_veh": blocked,
+            "exposed_veh": sum(n for i, n, _, _ in rows if i in exposed_edges),
+            "exposed_at_origin_veh": sum(nd_at_node[n] for n in origin_burned),
+        }
+        if agents_on:
+            counts.update({
+                "waiting_veh": sum(z_waiting),
+                "preparing_veh": sum(z_preparing),
+                "turned_back_veh": turned_back,
+                **{f"departed_by_{trig}_veh": departed_by[trig] for trig in bh.TRIGGERS},
+            })
+        return counts
+
+    def record(t: int, at: datetime) -> None:
+        rows = edge_rows(t)
+        frame_edges = []
+        for i, n, speed, _ in rows:
+            frame_edges.append([i, n, round(speed, 1)])
             stat = edge_peak.setdefault(i, [0, t, math.inf, 0])
-            if occ[i] > stat[0]:
-                stat[0], stat[1] = occ[i], t
+            if n > stat[0]:
+                stat[0], stat[1] = n, t
             stat[2] = min(stat[2], speed)
             if speed < CONGESTED_SPEED_FRACTION * edges[i].speed_kph:
                 stat[3] += 1
-            if stopped or (next_edge[e_to[i]] == -1 and open_dest_at(e_to[i]) is None):
-                blocked += occ[i]
-        for node, q in waiting.items():
-            if q and next_edge[node] == -1 and open_dest_at(node) is None:
-                blocked += sum(c for c, _ in q)
-        exposed = sum(occ[i] for i in active if i in exposed_edges)
-        en_route = total_veh - not_departed - arrived
+        counts = state_counts(rows)
+        en_route = counts["en_route_veh"]
         if not (min(not_departed, en_route, arrived) >= 0 and not_departed + en_route + arrived == total_veh):
             raise AssertionError(f"population not conserved at {format_utc(at)}")
         on_edges = sum(occ[i] for i in active)
-        in_wait = sum(c for q in waiting.values() for c, _ in q)
-        if on_edges + in_wait != en_route or blocked > en_route or exposed > en_route:
+        in_wait = sum(p[0] for q in waiting.values() for p in q)
+        in_return = sum(r[3] for r in returning)
+        if (on_edges + in_wait + in_return != en_route or counts["blocked_veh"] > en_route
+                or counts["exposed_veh"] > en_route):
             raise AssertionError(f"inconsistent vehicle states at {format_utc(at)}")
+        if agents_on and (counts["waiting_veh"] + counts["preparing_veh"] != not_departed
+                          or sum(departed_by.values()) != total_veh - not_departed):
+            raise AssertionError(f"inconsistent resident states at {format_utc(at)}")
         frames.append({
             "at": format_utc(at),
             "edges": frame_edges,
             "closed": closed_list,
         })
-        metrics.append({
-            "at": format_utc(at),
-            "not_departed_veh": not_departed,
-            "en_route_veh": en_route,
-            "arrived_veh": arrived,
-            "blocked_veh": blocked,
-            "exposed_veh": exposed,
-        })
-        for key, value in (("en_route_veh", en_route), ("blocked_veh", blocked), ("exposed_veh", exposed)):
-            peaks[key] = max(peaks[key], value)
+        metrics.append({"at": format_utc(at), **counts})
+        if counts["exposed_at_origin_veh"] > not_departed:
+            raise AssertionError(f"inconsistent origin exposure at {format_utc(at)}")
+        for key in peaks:
+            peaks[key] = max(peaks[key], counts[key])
+
+    def view(t: int, at: datetime) -> TrafficView:
+        rows = edge_rows(t)
+
+        def when(s: float | None) -> datetime | None:
+            return None if s is None else start + timedelta(seconds=s)
+
+        return TrafficView(
+            at=at,
+            network=network,
+            edge_veh=MappingProxyType({edges[i].id: n for i, n, _, _ in rows}),
+            edge_speed_ratio=MappingProxyType({edges[i].id: speed / edges[i].speed_kph for i, _, speed, _ in rows}),
+            closed_edge_ids=frozenset(edges[i].id for i in closed_list),
+            exposed_edge_ids=frozenset(edges[i].id for i in exposed_edges),
+            zones=MappingProxyType({
+                z.id: ZoneView(
+                    id=z.id, name=z.name, vehicles=z.vehicles,
+                    ordered_at=when(z_ordered_s[zi]) if agents_on else (
+                        when(first_release_s.get(z.id))),
+                    warned_at=when(z_warned_s[zi]),
+                    waiting_veh=z_waiting[zi], preparing_veh=z_preparing[zi],
+                    departed_veh=z_departed[zi], arrived_veh=z_arrived[zi],
+                )
+                for zi, z in enumerate(zone_list)
+            }),
+            full_destination_ids=frozenset(d.id for k, d in enumerate(dest_list) if dest_full[k]),
+            metrics=MappingProxyType(state_counts(rows)),
+            fire_area=fire_geom,
+            elapsed_s=t,
+            contraflow_outbound_edge_ids=frozenset(edges[i].id for i in contraflow_out),
+        )
+
+    first_release_s: dict[str, float] = {}  # fixed-delay engine: zone -> order time, for views
+
+    def run_controllers(t: int, at: datetime) -> None:
+        snapshot = view(t, at)
+        for controller in controllers:
+            for ev in controller(at, snapshot) or ():
+                if ev.at.tzinfo is None or ev.at.utcoffset() is None or not (start <= ev.at <= at):
+                    raise ValueError(f"controller event {ev.id} must be timezone-aware with start <= at <= {at}")
+                if ev.id in used_event_ids:
+                    raise ValueError(f"controller event id {ev.id} is not unique")
+                _check_event_targets(ev, edge_index, zone_ix, dest_ix)
+                used_event_ids.add(ev.id)
+                at_s = (ev.at - start).total_seconds()
+                if not agents_on and ev.type == "evacuation_order":
+                    for z in ev.zone_ids:
+                        first_release_s.setdefault(z, at_s)
+                generated.append(_bundle_event(
+                    ev.id, ev.at, ev.type, ev.label, list(ev.edge_ids), evidence_class=ev.evidence_class,
+                    time_precision=ev.time_precision, source_id=ev.source_id, source_locator=ev.source_locator,
+                    zone_ids=list(ev.zone_ids), destination_id=ev.destination_id,
+                ))
+                apply_event(ev, at_s)
 
     for k in range(n_steps + 1):
         t = k * step
@@ -619,54 +1020,17 @@ def simulate_traffic(
         closures_changed = False
         while ev_next < len(ev_sorted) and ev_s[ev_next] <= t:
             ev = ev_sorted[ev_next]
-            ev_next += 1
-            if ev.type == "evacuation_order" or (ev.type == "evacuation_warning" and params.warning_releases_demand):
+            if not agents_on and ev.type == "evacuation_order":
                 for z in ev.zone_ids:
-                    release_zone(z, ev_s[ev_next - 1])
-            elif ev.type in CLOSE_EVENT_TYPES:
-                event_closed.update(edge_index[x] for x in ev.edge_ids)
-                closures_changed = True
-            elif ev.type in REOPEN_EVENT_TYPES:
-                event_closed.difference_update(edge_index[x] for x in ev.edge_ids)
-                closures_changed = True
-            elif ev.type in SHELTER_FULL_EVENT_TYPES and ev.destination_id is not None:
-                mark_full(dest_ix[ev.destination_id], ev_s[ev_next - 1])
-            elif ev.type in CAPACITY_EVENT_TYPES and ev.edge_ids:
-                for x in ev.edge_ids:
-                    cap_factor[edge_index[x]] = ev.capacity_factor
-                    refresh_capacity(edge_index[x])
-                routes_dirty = True
-            elif ev.type in CONTRAFLOW_START_EVENT_TYPES:
-                inbound = []
-                for x in ev.edge_ids:
-                    i = edge_index[x]
-                    j = twin[i]
-                    # One-way roads have no twin; an edge already lending or borrowing lanes is left as is.
-                    if j is None or i in contraflow_out or i in contraflow_in or j in contraflow_out:
-                        continue
-                    contraflow_out[i] = j
-                    contraflow_in.add(j)
-                    refresh_capacity(i)
-                    inbound.append(j)
-                if inbound:
-                    names = ", ".join(sorted({edges[j].name for j in inbound}))
-                    generated.append(_bundle_event(
-                        f"{ev.id}-inbound-closed", ev.at, "road_closed",
-                        f"Contraflow inbound lanes closed (derived from {ev.id}): {names}",
-                        [edges[j].id for j in inbound], evidence_class="derived",
-                        time_precision=ev.time_precision, source_id=ev.source_id, source_locator=ev.source_locator,
-                    ))
-                    closures_changed = True
-            elif ev.type in CONTRAFLOW_END_EVENT_TYPES:
-                for x in ev.edge_ids:
-                    i = edge_index[x]
-                    if i in contraflow_out:
-                        contraflow_in.discard(contraflow_out.pop(i))
-                        refresh_capacity(i)
-                        closures_changed = True
+                    first_release_s.setdefault(z, ev_s[ev_next])
+            apply_event(ev, ev_s[ev_next])
+            ev_next += 1
         # 2. fire area in effect
         if fire_area_at is not None and t % params.fire_check_every_s == 0:
             set_fire(fire_area_at(at), at)
+        # 3. controllers
+        if controllers and t % controller_every_s == 0:
+            run_controllers(t, at)
         if closures_changed or routes_dirty:
             closed_hard = event_closed | fire_closed
             union = closed_hard | contraflow_in
@@ -676,20 +1040,41 @@ def simulate_traffic(
                 closed_set = union
                 closed_list = sorted(union)
                 closures_changed = True
-        # 3. routes
+        # 4. routes
         if routes_dirty or closures_changed or t >= next_reroute_s:
             rebuild_routes()
             routes_dirty = False
             next_reroute_s = t + params.reroute_interval_s
 
-        # 4. departures due by now join their origin node
+        # 5. resident decisions, then departures and returns due by now join their node
+        if agents_on and t % bp.decision_every_s == 0:
+            decide_departures(t)
+            if bp.turn_back_prob > 0:
+                turn_back(t)
         while pending and pending[0][0] <= t:
             _, _, node, count, zone = heapq.heappop(pending)
             not_departed -= count
+            nd_at_node[node] -= count
+            z_preparing[zone] -= count
+            z_departed[zone] += count
             add_series(zone_departures[zone], t, count)
-            waiting.setdefault(node, deque()).append([count, zone])
+            waiting.setdefault(node, deque()).append([count, zone, -1])
+        while preparing and preparing[0][0] <= t:
+            _, a = heapq.heappop(preparing)
+            zone, count = ag_zone[a], ag_count[a]
+            not_departed -= count
+            nd_at_node[ag_node[a]] -= count
+            z_preparing[zone] -= count
+            z_departed[zone] += count
+            departed_by[ag_trigger[a]] += count
+            z_trigger_veh[zone][ag_trigger[a]] += count
+            add_series(zone_departures[zone], t, count)
+            waiting.setdefault(ag_node[a], deque()).append([count, zone, a])
+        while returning and returning[0][0] <= t:
+            _, _, node, count, zone, a = heapq.heappop(returning)
+            waiting.setdefault(node, deque()).append([count, zone, a])
 
-        # 5. move packets off edges, in edge-index order
+        # 6. move packets off edges, in edge-index order
         for i in sorted(active):
             q = queue[i]
             credit[i] = min(credit[i] + e_cap_step[i], e_credit_max[i])
@@ -697,7 +1082,7 @@ def simulate_traffic(
                 continue
             node = e_to[i]
             while q:
-                count, ready, zone = q[0]
+                count, ready, zone, a = q[0]
                 if ready > t or credit[i] < count:
                     break
                 d = open_dest_at(node)
@@ -710,21 +1095,23 @@ def simulate_traffic(
                         break  # remainder waits for the route rebuild at the next step
                     q.popleft()
                     continue
-                ne = next_edge[node]
+                ne = choose(node, zone, a) if agents_on else next_edge[node]
                 if ne == -1 or (occ[ne] and occ[ne] + count > e_storage[ne]):
                     break
                 q.popleft()
                 credit[i] -= count
                 occ[i] -= count
-                enter(ne, count, zone, t)
+                enter(ne, count, zone, a, t)
+                if agents_on:
+                    zone_memory[zone][node] = ne
             if not q:
                 active.discard(i)
 
-        # 6. departed packets enter their first edge
+        # 7. departed packets enter their first edge
         for node in sorted(waiting):
             wq = waiting[node]
             while wq:
-                count, zone = wq[0]
+                count, zone, a = wq[0]
                 d = open_dest_at(node)
                 if d is not None:
                     n = accept(d, count, zone, t)
@@ -733,11 +1120,13 @@ def simulate_traffic(
                         break
                     wq.popleft()
                     continue
-                ne = next_edge[node]
+                ne = choose(node, zone, a) if agents_on else next_edge[node]
                 if ne == -1 or (occ[ne] and occ[ne] + count > e_storage[ne]):
                     break
                 wq.popleft()
-                enter(ne, count, zone, t)
+                enter(ne, count, zone, a, t)
+                if agents_on:
+                    zone_memory[zone][node] = ne
             if not wq:
                 del waiting[node]
 
@@ -752,34 +1141,50 @@ def simulate_traffic(
     if all_arrived and first_order_s is not None and last_arrival_s is not None:
         clearance = int(last_arrival_s - first_order_s)
 
+    summary = {
+        "total_veh": total_veh,
+        "clearance_time_s": clearance,
+        "max_exposed_veh": peaks["exposed_veh"],
+        "max_exposed_at_origin_veh": peaks["exposed_at_origin_veh"],
+        "max_en_route_veh": peaks["en_route_veh"],
+        "max_blocked_veh": peaks["blocked_veh"],
+        "arrived_veh": arrived,
+        "not_departed_veh": not_departed,
+        "first_order_at": None if first_order_s is None else format_utc(start + timedelta(seconds=first_order_s)),
+        "last_arrival_at": None if last_arrival_s is None else format_utc(start + timedelta(seconds=last_arrival_s)),
+        "arrived_by_destination_veh": {d.id: dest_arrived[i] for i, d in enumerate(dest_list)},
+    }
+    zone_stats = {
+        z.id: {
+            "departures": [[iso(t), n] for t, n in zone_departures[k]],
+            "arrivals": [[iso(t), n] for t, n in zone_arrivals[k]],
+        }
+        for k, z in enumerate(zone_list)
+    }
+    assumptions, limitations = list(ASSUMPTIONS), list(LIMITATIONS)
+    if agents_on:
+        summary.update({
+            "departed_by_trigger_veh": dict(departed_by),
+            "turned_back_veh": turned_back,
+            "waiting_at_end_veh": sum(z_waiting),
+            "preparing_at_end_veh": sum(z_preparing),
+        })
+        for k, z in enumerate(zone_list):
+            zone_stats[z.id]["departed_by_trigger_veh"] = dict(z_trigger_veh[k])
+        assumptions = [a for a in assumptions if a != _FIXED_DELAY_ASSUMPTION] + bh.ASSUMPTIONS
+        limitations = [x for x in limitations if x not in _FIXED_DELAY_LIMITATIONS] + bh.LIMITATIONS
+
     return {
         "evidence_class": "simulated",
         "model": {"id": MODEL_ID, "version": MODEL_VERSION, "params": params.to_dict(), "seed": params.seed},
         "edge_ids": edge_ids_out,
         "frames": frames,
         "metrics": metrics,
-        "summary": {
-            "total_veh": total_veh,
-            "clearance_time_s": clearance,
-            "max_exposed_veh": peaks["exposed_veh"],
-            "max_en_route_veh": peaks["en_route_veh"],
-            "max_blocked_veh": peaks["blocked_veh"],
-            "arrived_veh": arrived,
-            "not_departed_veh": not_departed,
-            "first_order_at": None if first_order_s is None else format_utc(start + timedelta(seconds=first_order_s)),
-            "last_arrival_at": None if last_arrival_s is None else format_utc(start + timedelta(seconds=last_arrival_s)),
-            "arrived_by_destination_veh": {d.id: dest_arrived[i] for i, d in enumerate(dest_list)},
-        },
+        "summary": summary,
         "diagnostics": {
             "congested_speed_fraction": CONGESTED_SPEED_FRACTION,
             "edge_stats_sampled_every_s": params.record_every_s,  # edge stats come from recorded frames
-            "zone_stats": {
-                z.id: {
-                    "departures": [[iso(t), n] for t, n in zone_departures[k]],
-                    "arrivals": [[iso(t), n] for t, n in zone_arrivals[k]],
-                }
-                for k, z in enumerate(zone_list)
-            },
+            "zone_stats": zone_stats,
             "edge_stats": [
                 {
                     "edge_index": i,
@@ -800,6 +1205,6 @@ def simulate_traffic(
             },
         },
         "generated_events": generated,
-        "assumptions": list(ASSUMPTIONS),
-        "limitations": list(LIMITATIONS),
+        "assumptions": assumptions,
+        "limitations": limitations,
     }
