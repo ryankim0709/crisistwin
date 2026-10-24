@@ -11,3 +11,11 @@ export const FIRELINE_COLORS = {
 export function firelineCss(hex: number): string {
   return `#${hex.toString(16).padStart(6, "0")}`;
 }
+
+/** Firefighting vehicles and their routes on the 3D board and the map. */
+export const CREW_COLORS = {
+  engine: 0xc8352a,
+  hand_crew: 0x2f6b4f,
+  dozer: 0xe0a61c,
+  route: 0xc8352a,
+} as const;

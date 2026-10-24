@@ -30,6 +30,7 @@ scope.onmessage = (event: MessageEvent<SolverRequest>) => {
               done,
               total,
             } satisfies SolverResponse),
+          request.crewArrivals,
         )
       : null;
     if (firefighting && request.firefighting) {
@@ -38,6 +39,7 @@ scope.onmessage = (event: MessageEvent<SolverRequest>) => {
         request.input,
         run,
         request.firefighting,
+        request.crewArrivals,
       );
     }
     response = { type: "result", requestId: request.requestId, run, firefighting };

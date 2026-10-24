@@ -18,7 +18,11 @@ import FirefightingFields from "./FirefightingFields";
 import FirefightingResults, { type FireShown } from "./FirefightingResults";
 import type { FirelineView } from "./FirelineOverlay";
 import { useMapFireline } from "./useMapFireline";
-import { FIRELINE_COLORS, firelineCss } from "./firelinePalette";
+import { useMapCrews } from "./useMapCrews";
+import { planCrewDispatch } from "./crewDispatch";
+import { resourceList } from "./firefighting";
+import type { RunDispatch } from "./useStudioRun";
+import { CREW_COLORS, FIRELINE_COLORS, firelineCss } from "./firelinePalette";
 import type { Map as MapLibreMap } from "maplibre-gl";
 import StudioMap from "./StudioMap";
 import {
@@ -393,11 +397,6 @@ export default function SimulationStudioPage({
     }
   }, [scenario, showNotice]);
 
-  const handleRun = useCallback(() => {
-    setPlaying(false);
-    run(scenario, { id: regionId, grid: regionGrid });
-  }, [run, scenario, regionId, regionGrid]);
-
   const selectRegion = useCallback(
     (id: string) => {
       if (id === regionId || !findRegion(id)) return;
@@ -439,6 +438,43 @@ export default function SimulationStudioPage({
     () => (area && closures.areaId === area.id ? closures.edges : new Set()),
     [area, closures],
   );
+
+  /**
+   * With firefighting from stations, each resource is sent from the nearest OSM fire stations on
+   * the board's roads to the first fire, reported when it ignites (studio/crewDispatch.ts).
+   */
+  const planCrews = useCallback((): RunDispatch | undefined => {
+    const settings = scenario.firefighting;
+    if (!settings?.enabled || settings.fromStations === false) return undefined;
+    const first = scenario.ignitions
+      .filter((ignition) => ignition.enabled)
+      .sort((a, b) => a.startMinute - b.startMinute)[0];
+    if (!first) return undefined;
+    if (!area) {
+      return {
+        dispatch: null,
+        note: `The board's roads and fire stations were not loaded, so crews were assumed on site after ${settings.responseMinutes} min.`,
+      };
+    }
+    const { dispatch, note } = planCrewDispatch(
+      area,
+      [first.location.longitude, first.location.latitude],
+      first.startMinute,
+      resourceList(settings),
+      (edge) => closedEdges.has(edge),
+    );
+    return {
+      dispatch,
+      note: note
+        ? `${note} Crews were assumed on site after ${settings.responseMinutes} min.`
+        : null,
+    };
+  }, [scenario, area, closedEdges]);
+
+  const handleRun = useCallback(() => {
+    setPlaying(false);
+    run(scenario, { id: regionId, grid: regionGrid }, planCrews());
+  }, [run, scenario, regionId, regionGrid, planCrews]);
   const toggleClosure = useCallback(
     (edge: number) => {
       if (!area) return;
@@ -693,6 +729,7 @@ export default function SimulationStudioPage({
   const fireline = dioramaShowsRun && !Aside ? firelineView : null;
   const [studioMap, setStudioMap] = useState<MapLibreMap | null>(null);
   useMapFireline(view === "map" ? studioMap : null, firelineView, currentMinute);
+  useMapCrews(view === "map" ? studioMap : null, result?.crewDispatch ?? null, clockRef);
 
   const handlePlayPause = useCallback(() => {
     if (frameMinutes.length === 0 || locked) return;
@@ -736,6 +773,7 @@ export default function SimulationStudioPage({
                 streets={streets}
                 evacuation={evacuationView}
                 fireline={fireline}
+                crews={dioramaShowsRun && !Aside ? (result?.crewDispatch ?? null) : null}
                 evacuationPanel={
                   Aside ? undefined : (
                     <EvacuationPanel
@@ -886,31 +924,60 @@ export default function SimulationStudioPage({
                 onMoveIgnition={(id, point) => updateIgnition(id, { location: point })}
                 onMapReady={setStudioMap}
                 legendExtra={
-                  firelineView ? (
+                  firelineView || result?.crewDispatch ? (
                     <div className="studio-map__legend-group">
                       <h3>Firefighters</h3>
                       <ul className="ui-legend studio-map__extras">
-                        <li>
-                          <span
-                            className="studio-ff-dot"
-                            style={{ background: firelineCss(FIRELINE_COLORS.held) }}
-                          />
-                          Control line built, holding so far (small dot)
-                        </li>
-                        <li>
-                          <span
-                            className="studio-ff-dot is-lost"
-                            style={{ background: firelineCss(FIRELINE_COLORS.breached) }}
-                          />
-                          Line burned over by flames (large dot)
-                        </li>
-                        <li>
-                          <span
-                            className="studio-ff-dot is-lost"
-                            style={{ background: firelineCss(FIRELINE_COLORS.outrun) }}
-                          />
-                          Line the fire reached before the crew (large dot)
-                        </li>
+                        {result?.crewDispatch && (
+                          <>
+                            <li>
+                              <span
+                                className="studio-ff-dot is-lost"
+                                style={{ background: firelineCss(CREW_COLORS.engine) }}
+                              />
+                              Engine (largest dot); dashed line: its route while driving
+                            </li>
+                            <li>
+                              <span
+                                className="studio-ff-dot is-lost"
+                                style={{ background: firelineCss(CREW_COLORS.hand_crew) }}
+                              />
+                              Hand crew
+                            </li>
+                            <li>
+                              <span
+                                className="studio-ff-dot is-lost"
+                                style={{ background: firelineCss(CREW_COLORS.dozer) }}
+                              />
+                              Dozer
+                            </li>
+                          </>
+                        )}
+                        {firelineView && (
+                          <>
+                            <li>
+                              <span
+                                className="studio-ff-dot"
+                                style={{ background: firelineCss(FIRELINE_COLORS.held) }}
+                              />
+                              Control line built, holding so far (small dot)
+                            </li>
+                            <li>
+                              <span
+                                className="studio-ff-dot is-lost"
+                                style={{ background: firelineCss(FIRELINE_COLORS.breached) }}
+                              />
+                              Line burned over by flames (large dot)
+                            </li>
+                            <li>
+                              <span
+                                className="studio-ff-dot is-lost"
+                                style={{ background: firelineCss(FIRELINE_COLORS.outrun) }}
+                              />
+                              Line the fire reached before the crew (large dot)
+                            </li>
+                          </>
+                        )}
                       </ul>
                     </div>
                   ) : undefined
@@ -1006,6 +1073,8 @@ export default function SimulationStudioPage({
                           ]),
                         )}
                         stale={stale}
+                        dispatch={result?.crewDispatch ?? null}
+                        dispatchNote={result?.crewDispatchNote ?? null}
                         shown={fireShown}
                         onShownChange={setFireShown}
                       />

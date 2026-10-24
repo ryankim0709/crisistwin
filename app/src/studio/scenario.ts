@@ -146,6 +146,9 @@ function validateFirefighting(firefighting: FirefightingSettings): ScenarioIssue
       break;
     }
   }
+  if (firefighting.fromStations !== undefined && typeof firefighting.fromStations !== "boolean") {
+    add("Firefighting fromStations must be true or false.");
+  }
   if (!(RESPONSE_MINUTE_CHOICES as readonly number[]).includes(firefighting.responseMinutes)) {
     add(`Response time must be one of ${RESPONSE_MINUTE_CHOICES.join(", ")} minutes.`);
   }
@@ -353,6 +356,7 @@ export function parseScenario(json: unknown): {
         engines: raw.engines as number,
         dozers: raw.dozers as number,
         responseMinutes: raw.responseMinutes as number,
+        ...(typeof raw.fromStations === "boolean" ? { fromStations: raw.fromStations } : {}),
       };
     }
   }
