@@ -21,6 +21,10 @@ from .live_active import live_active
 from .live_broadcast import live_broadcast, live_snapshot
 from .mobile_data import mobile_collection, mobile_document, register_device
 from .scenario_weather import scenario_weather
+from .sim_state import advice as sim_advice
+from .sim_state import homes as sim_homes
+from .sim_state import latest as sim_latest
+from .sim_state import publish_run, tick_run
 from .suppression_bases import suppression_bases
 from .views import health
 
@@ -50,6 +54,11 @@ urlpatterns = [
     path("live/active", live_active, name="live-active"),
     path("live/broadcast", live_broadcast, name="live-broadcast"),
     path("live/", include("api.live.urls")),
+    path("sim-state/runs", publish_run, name="sim-state-publish"),
+    re_path(r"^sim-state/runs/(?P<run_id>[^/]{1,64})/tick$", tick_run, name="sim-state-tick"),
+    path("sim-state/latest", sim_latest, name="sim-state-latest"),
+    path("sim-state/advice", sim_advice, name="sim-state-advice"),
+    path("sim-state/homes", sim_homes, name="sim-state-homes"),
     path("families", create_family, name="family-create"),
     path("families/join", join_family, name="family-join"),
     re_path(rf"^families/{FAMILY_ID}$", family_detail, name="family-detail"),

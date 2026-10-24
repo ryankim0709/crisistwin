@@ -34,7 +34,7 @@ The workspace overview (`/overview`) and `/maps` pages were removed
 
 Also in the repository:
 
-- **Backend** (`app/backend/`): Django REST API with `GET /api/health`, `/api/landscapes` (prebuilt landscapes from MongoDB), `/api/dispatch/area` (OpenStreetMap roads and stations for a box), `/api/dispatch/decide`, `/api/dispatch/runs` (run journal in Atlas), `/api/demo/…` (command demo: fire-aware routes and the Claude commander, [ADR 0047](docs/adr/0047-command-demo.md)), `/api/replay/explain`, `/api/live` (resident-app simulation feed), `/api/live/…` (live drill: field reports, controller guidance, twin; [contract](docs/live-reports.md)) `/api/families` and `/api/mobile/…` (schema-free iOS app data in Atlas, [ADR 0029](docs/adr/0029-mobile-data-store.md)). See [API contract](app/backend/README.md).
+- **Backend** (`app/backend/`): Django REST API with `GET /api/health`, `/api/landscapes` (prebuilt landscapes from MongoDB), `/api/dispatch/area` (OpenStreetMap roads and stations for a box), `/api/dispatch/decide`, `/api/dispatch/runs` (run journal in Atlas), `/api/demo/…` (command demo: fire-aware routes and the Claude commander, [ADR 0047](docs/adr/0047-command-demo.md)), `/api/replay/explain`, `/api/live` (resident-app simulation feed), `/api/sim-state/…` (Studio evacuation state per synthetic home; [contract](docs/sim-state-api.md)), `/api/live/…` (live drill: field reports, controller guidance, twin; [contract](docs/live-reports.md)) `/api/families` and `/api/mobile/…` (schema-free iOS app data in Atlas, [ADR 0029](docs/adr/0029-mobile-data-store.md)). See [API contract](app/backend/README.md).
 - **Fire watch agent** (`agent/`): a standalone Python package that drafts evacuation advisories from satellite detections for a human to approve; never notifies residents. [README](agent/README.md), [ADR 0008](docs/adr/0008-fire-watch-agent.md).
 - **Live scenario runner** (`python manage.py live_run_scenario --spec api/live/specs/camp-2018-live-typical.json --base http://127.0.0.1:8000 --speed 10 --start`): fills the active live drill with simulated residents, generated 911/radio/rescue calls, simulated responders and injects on the drill clock, all labelled simulated. [Doc](docs/live-scenario-runner.md).
 - **Controller MCP server** (`orchestrator_mcp/`): a stdio MCP server that lets an external orchestrator agent act as the controller of the live drill through the controller API, with every write attributed to the agent. [README](orchestrator_mcp/README.md), [ADR 0033](docs/adr/0033-controller-mcp-server.md).
@@ -46,6 +46,9 @@ Also in the repository:
   family by code to share meeting points and status) and **Web simulation**, the fire a planner plays on `/fire` or
   `/dispatch` with **Share with resident app** on, including what the dispatch
   simulation tells the household's zone ("stay home, your zone leaves in a later wave" for staged zones).
+  From `/simulation`, **Share with resident app (homes)** publishes Studio's evacuation and every playback tick
+  to Atlas, so the app can show the household's saved home as leave now, leave at T+h:mm, already left, or no order
+  ([contract](docs/sim-state-api.md), [ADR 0029](docs/adr/0029-simulation-state-for-mobile.md)).
   Everything shown is a labelled drill or simulation, not an
   alert. [README](mobile/README.md), [ADR 0010](docs/adr/0010-civilian-ios-app.md),
   [ADR 0016](docs/adr/0016-resident-live-and-family.md).

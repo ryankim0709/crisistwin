@@ -8,6 +8,7 @@ import PlaybackBar from "./PlaybackBar";
 import StudioDiorama, { type StudioEvacuationView } from "./StudioDiorama";
 import EvacuationPanel, { type PlayPlan } from "./EvacuationPanel";
 import { useEvacuationOptimizer } from "./useEvacuationOptimizer";
+import { useSimStatePublisher } from "./useSimStatePublisher";
 import {
   DEFAULT_ORDER_MINUTE,
   nearestEdge,
@@ -576,6 +577,7 @@ export default function SimulationStudioPage({
         : null,
     [area, exposure, result, closedEdges, orderMinute, shownHandoff],
   );
+  const [publishOn, setPublishOn] = useState(false);
   const showEvacuation = evacuationOn && view === "diorama" && !Aside;
 
   const baselineSummary = useMemo(
@@ -621,6 +623,12 @@ export default function SimulationStudioPage({
   const stale = state.stale;
   const safeFrameIndex = Math.max(0, Math.min(frameIndex, frameMinutes.length - 1));
   const currentMinute = frameMinutes[safeFrameIndex] ?? 0;
+  const publishStatus = useSimStatePublisher(
+    publishOn && !Aside,
+    evacuationInputs,
+    currentMinute,
+    `Studio run · ${area?.name ?? "area"} · order at T+${orderMinute}`,
+  );
   const running = state.phase === "loading-landscape" || state.phase === "computing";
 
   const problemIds = useMemo(
@@ -873,6 +881,9 @@ export default function SimulationStudioPage({
                       optimizer={optimizer}
                       playPlan={playPlan}
                       onPlayPlan={setPlayPlan}
+                      publish={publishOn}
+                      onPublish={setPublishOn}
+                      publishStatus={publishStatus}
                     />
                   )
                 }
