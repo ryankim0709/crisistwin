@@ -482,6 +482,33 @@ struct TaskResponse: Codable, Equatable {
     var task: CheckTask
 }
 
+/// `GET tasks/{id}/route`: the drive from the responder's shared location to the task target.
+/// Computed by the server's road model (`evidence_class: simulated`), never observed.
+struct TaskRouteResponse: Codable, Equatable {
+    var taskId: String
+    var route: TaskRoute?
+    /// "unreachable" or "no_origin" when `route` is nil.
+    var reason: String?
+    /// Short phrase for "No route: <detail>".
+    var detail: String?
+    /// Drill time of the fire estimate and traffic state the route used.
+    var asOf: Date?
+}
+
+struct TaskRoute: Codable, Equatable {
+    var line: [LonLat]
+    var via: [String]
+    var distanceM: Int
+    var etaMin: Int
+    /// "clear" or "near_fire"; never through the fire.
+    var exposure: String
+    /// "twin" (simulated traffic slows the ETA) or "unavailable" (free-flow).
+    var congestion: String
+
+    var nearFire: Bool { exposure == "near_fire" }
+    var simulatedTraffic: Bool { congestion == "twin" }
+}
+
 /// `GET incidents/{id}/situation`: everything the phone's one screen shows.
 struct Situation: Codable, Equatable {
     var incidentId: String

@@ -147,6 +147,22 @@ struct LiveAPIClient {
         _ = try await send(["tasks", id], method: "POST", token: token, body: TaskUpdate(status: status, note: note))
     }
 
+    /// The route to an accepted task. A 409 with `reason: "no_origin"` (no shared location) is
+    /// returned as a response with no route; any other 409 throws `conflict`.
+    func taskRoute(id: String, token: String) async throws -> TaskRouteResponse {
+        let (data, status) = try await perform(["tasks", id, "route"], method: "GET", token: token)
+        if status == 409, let body = try? LiveJSON.decoder.decode(TaskRouteResponse.self, from: data),
+           body.reason == "no_origin" {
+            return body
+        }
+        try Self.check(status, data)
+        do {
+            return try LiveJSON.decoder.decode(TaskRouteResponse.self, from: data)
+        } catch {
+            throw LiveAPIError.invalidResponse
+        }
+    }
+
     private func get<T: Decodable>(
         _ type: T.Type, _ path: [String], method: String = "GET", query: [URLQueryItem] = [],
         token: String? = nil, body: (any Encodable)? = nil
@@ -163,6 +179,29 @@ struct LiveAPIClient {
         _ path: [String], method: String, query: [URLQueryItem] = [], token: String? = nil,
         body: (any Encodable)? = nil
     ) async throws -> Data {
+        let (data, status) = try await perform(path, method: method, query: query, token: token, body: body)
+        try Self.check(status, data)
+        return data
+    }
+
+    private static func check(_ status: Int, _ data: Data) throws {
+        switch status {
+        case 200..<300: return
+        case 400: throw LiveAPIError.rejected((try? LiveJSON.decoder.decode(ErrorBody.self, from: data))?.detail)
+        case 401: throw LiveAPIError.unauthorized
+        case 403: throw LiveAPIError.forbidden
+        case 409: throw LiveAPIError.conflict
+        case 404: throw LiveAPIError.notFound
+        case 429: throw LiveAPIError.rateLimited
+        case 503: throw LiveAPIError.serviceUnavailable
+        default: throw LiveAPIError.server(status)
+        }
+    }
+
+    private func perform(
+        _ path: [String], method: String, query: [URLQueryItem] = [], token: String? = nil,
+        body: (any Encodable)? = nil
+    ) async throws -> (Data, Int) {
         var url = baseURL.appendingPathComponent("api").appendingPathComponent("live")
         for part in path { url.appendPathComponent(part) }
         if !query.isEmpty {
@@ -191,16 +230,6 @@ struct LiveAPIClient {
         }
         try Task.checkCancellation()
         guard let http = response as? HTTPURLResponse else { throw LiveAPIError.invalidResponse }
-        switch http.statusCode {
-        case 200..<300: return data
-        case 400: throw LiveAPIError.rejected((try? LiveJSON.decoder.decode(ErrorBody.self, from: data))?.detail)
-        case 401: throw LiveAPIError.unauthorized
-        case 403: throw LiveAPIError.forbidden
-        case 409: throw LiveAPIError.conflict
-        case 404: throw LiveAPIError.notFound
-        case 429: throw LiveAPIError.rateLimited
-        case 503: throw LiveAPIError.serviceUnavailable
-        default: throw LiveAPIError.server(http.statusCode)
-        }
+        return (data, http.statusCode)
     }
 }

@@ -180,6 +180,9 @@ struct TasksView: View {
                             .foregroundStyle(Color.ctInkMuted)
                             .fixedSize(horizontal: false, vertical: true)
                     }
+                    if accepted, let response = store.taskRoutes[task.id] {
+                        routeRow(response)
+                    }
                     HStack(spacing: 8) {
                         if accepted { AcceptedTag() }
                         Text(task.createdAt, format: .relative(presentation: .named))
@@ -257,13 +260,42 @@ struct TasksView: View {
             ?? store.allReports.first { $0.roadRef?.segmentId == id }?.kind
     }
 
-    /// On-device distance from the last fix to the task target.
+    /// Road distance of the task's route, else on-device straight-line distance from the last fix.
     private func distanceText(_ task: CheckTask) -> String? {
-        guard let here = store.lastCoord, let target = store.taskTarget(task) else { return nil }
-        let meters = CLLocation(latitude: here.lat, longitude: here.lon)
-            .distance(from: CLLocation(latitude: target.lat, longitude: target.lon))
+        let meters: Double
+        if task.status == .accepted, let route = store.taskRoutes[task.id]?.route {
+            meters = Double(route.distanceM)
+        } else {
+            guard let here = store.lastCoord, let target = store.taskTarget(task) else { return nil }
+            meters = CLLocation(latitude: here.lat, longitude: here.lon)
+                .distance(from: CLLocation(latitude: target.lat, longitude: target.lon))
+        }
         return Measurement(value: meters, unit: UnitLength.meters)
             .formatted(.measurement(width: .abbreviated, usage: .road))
+    }
+
+    /// ETA and roads of the route to an accepted task, or why there is none.
+    @ViewBuilder
+    private func routeRow(_ response: TaskRouteResponse) -> some View {
+        if let route = response.route {
+            Label(Self.routeText(route), systemImage: "car.fill")
+                .font(.subheadline)
+                .foregroundStyle(Color.ctInk)
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            Label("No route: \(response.detail ?? response.reason ?? "unknown")", systemImage: "exclamationmark.triangle")
+                .font(.subheadline)
+                .foregroundStyle(Color.ctWarning)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private static func routeText(_ route: TaskRoute) -> String {
+        var parts = ["\(route.etaMin) min"]
+        if !route.via.isEmpty { parts.append("via " + route.via.joined(separator: ", ")) }
+        if route.nearFire { parts.append("near fire") }
+        if route.simulatedTraffic { parts.append("sim. traffic") }
+        return parts.joined(separator: " · ")
     }
 
     private func accept(_ task: CheckTask) {

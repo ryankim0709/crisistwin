@@ -29,6 +29,8 @@ from .common import (
     wall_now,
 )
 from .drillcache import get_index, response_record_until, snap_to_segment
+from . import groundrecord
+from .groundrecord import ground_record_json
 from .state import (
     checkin_json,
     help_json,
@@ -277,9 +279,12 @@ def _encode_cursor(doc: dict[str, Any]) -> str:
     return f"{int(doc['updated_at'].timestamp() * 1000)}:{doc['id']}"
 
 
-def _list_reports(request, incident_id: str) -> Response:
+def _list_reports(request, incident_id: str, controller_view: bool) -> Response:
     since = request.query_params.get("since")
     query: dict[str, Any] = {"incident_id": incident_id}
+    if not controller_view:
+        # 2018 record reports carry ~100 m points of callers' locations: controller console only.
+        query["evidence_class"] = {"$ne": "historical_record"}
     if since:
         millis, _, last_id = since.partition(":")
         if not millis.isdigit():
@@ -297,7 +302,7 @@ def incident_reports(request, incident_id: str, principal: Principal):
         return _submit_report(request, incident_id, principal)
     if principal.role not in ("responder", "controller"):
         return error(403, "forbidden", "Only responders and controllers read all reports.")
-    return _list_reports(request, incident_id)
+    return _list_reports(request, incident_id, principal.role == "controller")
 
 
 @live_view(["GET"])
@@ -400,9 +405,13 @@ def create_task(request, incident_id: str, principal: Principal):
     ):
         return error(400, code, f"`report_ids` must be a list of at most {MAX_REPORT_IDS} ids.")
     note = optional_str(body, "note", code, NOTE_MAX_CHARS)
+    kind = body.get("kind", "verify")
+    if kind not in ("verify", "assist"):
+        return error(400, code, "`kind` must be verify or assist.")
     now = wall_now()
     task = controller.create_task(
-        incident_id, assignee, {"segment_id": segment_id, "coord": [coord[0], coord[1]]}, report_ids, note, now
+        incident_id, assignee, {"segment_id": segment_id, "coord": [coord[0], coord[1]]}, report_ids, note, now,
+        kind=kind,
     )
     controller.log_decision(incident_id, "controller", "task_create", now, report_ids=report_ids, note=note)
     return ok({"task": task_json(task)}, status=201)
@@ -469,6 +478,11 @@ def update_task(request, task_id: str, principal: Principal):
             {"id": task.get("checkin_id"), "help.task_id": task_id},
             {"$set": {"help.status": "resolved", "help.updated_at": now}},
         )
+        if task.get("report_ids"):  # a help report the responder reached is resolved
+            col("live_reports").update_many(
+                {"id": {"$in": task["report_ids"]}, "kind": "help_needed", "status": {"$nin": ["dismissed"]}},
+                {"$set": {"status": "resolved", "updated_at": now}},
+            )
     else:
         return error(400, "invalid_request", "`status` must be accepted or cancelled (or done for an assist task).")
     controller.log_decision(
@@ -798,6 +812,7 @@ def command(request, incident_id: str, principal: Principal):
             "tasks": [task_json(t) for t in tasks],
             "decisions": _recent_decisions(incident_id),
             "response_record": response_record_until(index, snapshot.clock.replay_now, COMMAND_RESPONSE_RECORD_LIMIT),
+            "ground_record": ground_record_json(index, snapshot.clock.replay_now),
         }
     )
 
@@ -895,6 +910,9 @@ def set_drill(incident_id: str, action: str, replay_start_raw: Any = None, speed
         update = {"replay_start": DEFAULT_REPLAY_START, "started_at": None, "speed": 1.0}
         for name in ("live_guidance", "live_proposals", "live_checkins", "live_destination_choices"):
             col(name).delete_many({"incident_id": incident_id})
+        # 2018 record reports re-enter as the clock passes them again.
+        col("live_reports").delete_many({"incident_id": incident_id, "evidence_class": "historical_record"})
+        groundrecord.forget(incident_id)
     else:
         raise ApiError(400, "invalid_drill", "`action` must be start, reset or set_speed.")
     update.update({"updated_at": now, "updated_by": "controller"})

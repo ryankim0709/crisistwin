@@ -57,6 +57,7 @@ struct IncidentMap: View {
 
     @Environment(LocationProvider.self) private var location
     @Environment(AppRouter.self) private var router
+    @Environment(LiveStore.self) private var store
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var camera: MapCameraPosition = .region(LiveMap.campRegion)
@@ -86,6 +87,12 @@ struct IncidentMap: View {
     private var routeLine: [LonLat] {
         guard let guidance, guidance.hasRoute, guidance.level != .none else { return [] }
         return (guidance.route?.line ?? []).filter(\.isValid)
+    }
+
+    /// The drive to the responder's accepted task (`GET tasks/{id}/route`), when there is one.
+    private var taskRouteLine: [LonLat] {
+        guard let task, task.status == .accepted else { return [] }
+        return (store.taskRoutes[task.id]?.route?.line ?? []).filter(\.isValid)
     }
 
     private var routeKey: String? {
@@ -123,6 +130,7 @@ struct IncidentMap: View {
         let dark = colorScheme == .dark
         let edgeDash: [CGFloat] = fire?.method == .satellitePerimeter ? [] : [6, 4]
         let label = fire.flatMap { fireLabel($0, now: now) }
+        let taskRoute = taskRouteLine.map(\.clCoordinate)
 
         let ordered = orderedZones
         let otherOptions = alternativeDestinations
@@ -151,6 +159,14 @@ struct IncidentMap: View {
                 MapPolygon(polygon)
                     .foregroundStyle(Color.clear)
                     .stroke(Color.ctFire, style: StrokeStyle(lineWidth: 2, lineJoin: .round, dash: edgeDash))
+            }
+
+            // Under the way out, so the evacuation route stays on top; dotted to tell them apart.
+            if taskRoute.count > 1 {
+                MapPolyline(coordinates: taskRoute)
+                    .stroke(Color.ctCasing, style: Self.roundStroke(9))
+                MapPolyline(coordinates: taskRoute)
+                    .stroke(Color.ctBrand, style: Self.roundStroke(5, dash: [1, 9]))
             }
 
             if ghost.count > 1 {
@@ -399,11 +415,16 @@ struct IncidentMap: View {
         }
     }
 
-    /// A responder task: fly to it.
+    /// A responder task: fly to it, or frame the drive to it when it has a route.
     private func focus(_ target: LonLat?) {
         guard let target, target.isValid else { return }
+        let line = target == taskTarget ? taskRouteLine : []
         withAnimation(reduceMotion ? nil : .smooth(duration: 0.6)) {
-            camera = .region(MKCoordinateRegion(center: target.clCoordinate, latitudinalMeters: 900, longitudinalMeters: 900))
+            if !line.isEmpty, let rect = Self.boundingRect(line + [target]) {
+                camera = .rect(rect)
+            } else {
+                camera = .region(MKCoordinateRegion(center: target.clCoordinate, latitudinalMeters: 900, longitudinalMeters: 900))
+            }
         }
         framedFor = frameKey
         router.focus = nil

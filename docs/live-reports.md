@@ -541,6 +541,52 @@ and returns `201 { "task": CheckTask }`.
 `checkin_id`). An assist task has no report to answer it: the responder closes it with
 `POST tasks/{id}` `{ "status": "done" }`, which resolves the help request.
 
+### Responder route to a task
+
+`GET tasks/{id}/route[?from=lon,lat]` (responder: own or unassigned tasks, else `404`;
+controller: any task). The task must be `open` or `accepted` (`409 task_closed`). The
+origin is the caller's latest unexpired `me/location`; for a controller, `?from=lon,lat`
+(WGS84 degrees) or else the assignee's. No origin returns `409` with
+`reason: "no_origin"` and the same body shape. The phone refetches it with its poll,
+at most every 15 s per task.
+
+```jsonc
+{ "task_id": "tsk_01J...",
+  "route": {                                  // null when reason is set
+    "line": [[-121.7598, 39.73782], ...],     // [lon, lat], simplified (5 m, <= 300 points)
+    "via": ["Deer Creek Highway", "CA 99", "Neal Road"],
+    "distance_m": 27330,                      // rounded to 10 m
+    "eta_min": 21,                            // drive time, minutes, rounded up (see below)
+    "exposure": "clear",                      // clear | near_fire (never through_fire)
+    "congestion": "twin",                     // twin | unavailable (free-flow)
+    "congested_edges": 0 },                   // edges on the route slowed by the twin
+  "reason": null,                             // null | "unreachable" | "no_origin"
+  "detail": null,                             // why, for unreachable / no_origin
+  "evidence_class": "simulated",
+  "as_of": "2018-11-08T16:21:10Z" }           // drill time of the fire estimate and twin state
+```
+
+Computed by `livecore.inbound.inbound_route` (forward Dijkstra on the drill road network):
+
+- Both ends snap to the nearest node of the main road component (origin: a node with an
+  out-edge; target: one with an in-edge). More than `INBOUND_SNAP_MAX_M` (1000 m) away is
+  `unreachable` (off the network).
+- Never over a segment the twin closes: every public block guidance avoids plus every
+  controller-confirmed block (`twin_service.twin_closed_segments`).
+- Never over an edge inside or crossing the fire estimate. An edge within `FIRE_BUFFER_M`
+  (300 m) of it costs `EXPOSED_COST_BUFFER` (5) times its travel time, as in the
+  planner's near-fire pass. An origin or target whose edges are all inside the fire is
+  `unreachable`.
+- Congestion (simulated): when the traffic twin is ready, each directed edge with at
+  least 3 simulated vehicles gets `factor = clamp(free_flow_kph / speed_kph, 1, 10)`
+  (speed 0 gives 10), and its cost is multiplied by it. Direction matters: outbound
+  evacuation traffic does not slow the inbound lane. Twin speeds are cached for 10 s.
+  If the twin is warming, busy or failed, the route is free-flow and `congestion` is
+  `unavailable`.
+- `eta_min` = ceil(sum over edges of `length_m / (speed_kph / 3.6)` x congestion factor
+  / 60). The fire weighting changes the choice of route, not the ETA.
+- No path gives `reason: "unreachable"` with a `detail`, never a route over a closed edge.
+
 ## Situation (the phone's one poll)
 
 `GET incidents/{id}/situation[?zones=0]` (any role). Polled every 15-30 s in the
@@ -605,6 +651,34 @@ fetches again without `zones=0`.
 whose `evidence_class` is not `simulated` (reconstructed, reported or derived; orders, warnings, CodeRED alerts,
 contraflow, closures, shelters, burnover, fire arrival). Only events with `at` <= the drill's `replay_now`,
 newest first, at most 100. `segment_ids` are the road segments of the event's `target.edge_ids` (at most 50).
+
+`ground_record` is the 2018 911, radio and rescue record (`tools/camp_ground_record.json`, path override
+`LIVE_GROUND_RECORD`), de-identified from NIST TN 2252: template summaries only, placed by zone; the API never
+returns a point. Historical and `reported`/`reconstructed`, never drill reports.
+
+**Into the review queue.** When the drill clock passes a record item whose category is `road_blocked`,
+`heavy_traffic`, `fire_seen`, `trapped` or `help_needed` (the last two become `help_needed`), the server upserts it
+once into `live_reports` (`client_id: "record:<id>"`, `evidence_class: "historical_record"`, `status: unverified`,
+the ~100 m point as `location`, `note: "2018 record: <summary>"`, `record: {id, channel, source_locator}`). Until a
+controller confirms it, it counts for nothing: no corroboration, public map, road state or fire input. Confirming
+works like any report (a confirmed block triggers the replan). Only the controller sees these reports;
+`GET incidents/{id}/reports` omits them for responders. A drill `reset` deletes them; they re-enter as the clock
+passes them again. `POST incidents/{id}/tasks` takes `"kind": "assist"` to send a responder to a help report; the
+responder's `done` resolves its `help_needed` reports.
+
+```jsonc
+"ground_record": {
+  "available": true,                       // false (and empty) until the record file is built
+  "label": "2018 record, de-identified from NIST TN 2252. Not drill reports.",
+  "window_min": 30, "until": "2018-11-08T16:00:00Z",
+  "totals": { "911": 12, "radio": 40, "rescue": 5, "notification": 3, "evacuation": 2 },  // up to `until`
+  "window": { "911": 4, "radio": 9, "rescue": 1, "notification": 0, "evacuation": 0 },    // last window_min
+  "zones": [ { "zone_id": "bg:060070018001", "items": 6, "help": 2, "fire": 1 } ],         // last window_min
+  "items": [ { "id": "nist-a2-812", "at": "2018-11-08T15:58:00Z", "time_precision": "minute", "channel": "911",
+               "category": "trapped", "road_name": "Pentz Road", "summary": "911 call: trapped by fire, Pentz Road",
+               "evidence_class": "reported", "source_locator": "https://…/NIST.TN.2252sup.pdf#page=41; Table A-2; …",
+               "zone_id": "bg:060070018001" } ] }   // newest first, at most 100
+```
 
 ## Controller actions
 

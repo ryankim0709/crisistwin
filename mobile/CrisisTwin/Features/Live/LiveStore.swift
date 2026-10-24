@@ -33,6 +33,8 @@ final class LiveStore {
     private(set) var allReports: [FieldReport] = []
     /// Responder only: open check tasks assigned to this device.
     private(set) var tasks: [CheckTask] = []
+    /// Responder only: the latest `GET tasks/{id}/route` per accepted task (simulated model output).
+    private(set) var taskRoutes: [String: TaskRouteResponse] = [:]
     private(set) var lastRefreshed: Date?
 
     // MARK: v2 incident screen (ADR 0012). Stubs; implemented by the iosdata owner.
@@ -96,10 +98,14 @@ final class LiveStore {
     @ObservationIgnored private var locationWasShared = false
     @ObservationIgnored private var seenGuidance = false
     @ObservationIgnored private var lastSeenGuidance: ZoneGuidance?
+    @ObservationIgnored private var routeFetchedAt: [String: Date] = [:]
+    @ObservationIgnored private var routesInFlight: Set<String> = []
 
     // Matches the /live console's 3 s poll so an approval reaches the phone within seconds.
     private static let pollInterval: Duration = .seconds(3)
     private static let locationInterval: TimeInterval = 30
+    /// A task's route is refetched with the poll, at most this often.
+    private static let routeInterval: TimeInterval = 15
 
     var role: LiveRole { credential?.role ?? .civilian }
 
@@ -186,6 +192,7 @@ final class LiveStore {
             allReports = byId.values.sorted { $0.observedAt > $1.observedAt }
         }
         take(tasksResult) { tasks = $0.filter { $0.status == .open || $0.status == .accepted }.sorted { $0.createdAt < $1.createdAt } }
+        refreshTaskRoutes()
         if let failure { return finishRefresh(generation, failure: failure) }
         connection = .online
         lastRefreshed = Date()
@@ -409,6 +416,30 @@ final class LiveStore {
     func acceptTask(_ task: CheckTask) async throws {
         let accepted = try await authorized { try await $0.acceptTask(id: task.id, token: $1) }
         if let i = tasks.firstIndex(where: { $0.id == task.id }) { tasks[i] = accepted } else { tasks.append(accepted) }
+        refreshTaskRoutes()
+    }
+
+    /// Fetches the route of each accepted task whose last fetch is older than `routeInterval`,
+    /// and drops routes of tasks no longer accepted. A failed fetch keeps the last route.
+    private func refreshTaskRoutes() {
+        let accepted = role == .civilian ? [] : tasks.filter { $0.status == .accepted }
+        let ids = Set(accepted.map(\.id))
+        if taskRoutes.keys.contains(where: { !ids.contains($0) }) { taskRoutes = taskRoutes.filter { ids.contains($0.key) } }
+        routeFetchedAt = routeFetchedAt.filter { ids.contains($0.key) }
+        let now = Date()
+        for task in accepted where !routesInFlight.contains(task.id) {
+            if let last = routeFetchedAt[task.id], now.timeIntervalSince(last) < Self.routeInterval { continue }
+            routeFetchedAt[task.id] = now
+            routesInFlight.insert(task.id)
+            let id = task.id
+            Task {
+                defer { routesInFlight.remove(id) }
+                guard let response = try? await authorized({ try await $0.taskRoute(id: id, token: $1) }) else { return }
+                if tasks.contains(where: { $0.id == id && $0.status == .accepted }), taskRoutes[id] != response {
+                    taskRoutes[id] = response
+                }
+            }
+        }
     }
 
     /// Closes an accepted assist task: the responder reached the resident who asked for help.
@@ -507,6 +538,8 @@ final class LiveStore {
     private func resetResponderData() {
         allReports = []
         tasks = []
+        taskRoutes = [:]
+        routeFetchedAt = [:]
         reportsCursor = nil
     }
 

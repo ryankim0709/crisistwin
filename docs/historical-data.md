@@ -52,3 +52,34 @@ fields and do not collect addresses or parcel numbers. Six DINS records lie
 slightly outside the requested box; the manifest records the actual extent. The
 replay command writes a GeoJSON frame for viewing or testing and makes no claim
 about information availability to responders at that historical time.
+
+## Camp Fire ground record (911, radio, rescue)
+
+[`tools/camp_ground_record.json`](../tools/camp_ground_record.json) is a de-identified,
+time-stamped record of what callers and responders reported on 8 November 2018. The `/live`
+drill console replays it (`app/backend/api/live/groundrecord.py`). It comes from
+[NIST TN 2252sup](https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252sup.pdf)
+and [NIST TN 2252](https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252.pdf). Both
+are US government works. It has four parts:
+
+- Table A-2 rows whose Info. Source is a 911 call or the Radio Log: 356 items (93 from 911,
+  263 from radio), `evidence_class: "reported"`.
+- Table K-1 evacuation-assistance and rescue events: 196 items.
+- Main-report Table 10 (notification timeline): 35 items.
+- Main-report Table 13 (Paradise evacuation timeline): 18 items.
+
+Items from K-1, Table 10 and Table 13 are `"reconstructed"`. Times are UTC: the source
+gives Pacific Standard Time, and the builder adds 8 hours. Points are `[lon, lat]`, rounded
+to 3 decimals (about 100 m).
+
+The record keeps no source free text. The `summary` field is a template built from the
+channel, category and road name, for example "911 call: trapped by fire, Pentz Road". The
+category comes from keyword rules in the builder. `road_name` is limited to the
+builder's `MAIN_ROADS` list: main roads, arterials, three collectors and the state highways.
+Any other road becomes null. A row that names a residential street has its point rounded to
+2 decimals (about 1 km). `text_sha12`, a SHA-256 prefix, is used
+only to merge the same quote when NIST lists it at several places. A merged quote has no
+point.
+
+NIST transcribed these rows afterwards from a sample of the recordings. They are not a CAD
+export and not a complete call log. To rebuild, see [tools/README.md](../tools/README.md).

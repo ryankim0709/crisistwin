@@ -56,6 +56,7 @@ LIVE_CONTROLLER_TOKEN = os.environ.get("LIVE_CONTROLLER_TOKEN", "").strip()
 LIVE_INVITE_CODE = os.environ.get("LIVE_INVITE_CODE", "").strip()
 # Replay bundle path; empty means app/public/replays/camp-2018.json next to the backend.
 LIVE_DRILL_BUNDLE = os.environ.get("LIVE_DRILL_BUNDLE", "").strip()
+LIVE_GROUND_RECORD = os.environ.get("LIVE_GROUND_RECORD", "").strip()
 LIVE_RATIONALE_MODEL = os.environ.get("LIVE_RATIONALE_MODEL", "claude-opus-5-5").strip()
 # Controller plug-in: rule | twin; empty = twin while the traffic twin builds, else rule.
 LIVE_CONTROLLER = os.environ.get("LIVE_CONTROLLER", "").strip()
