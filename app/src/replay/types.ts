@@ -53,13 +53,18 @@ export interface Zone {
   name: string;
   households: number | null;
   vehicles: number | null;
+  /** Residents, when the demand report gives them (Census population). */
+  population: number | null;
   geometry: AreaGeometry;
 }
 
 export interface Destination {
   id: string;
   name: string;
+  /** "exit", "shelter" or "temporary_refuge". */
   kind: string;
+  /** Per-feature class; the layer's own class when the layer is not "mixed". */
+  evidenceClass: EvidenceClass;
   coord: LngLat;
   capacityVeh: number | null;
 }
@@ -111,6 +116,11 @@ export interface Traffic {
   totalVeh: number | null;
   clearanceTimeS: number | null;
   maxExposedVeh: number | null;
+  /**
+   * Cumulative modelled departures per zone id: ascending times with the running vehicle
+   * total, from traffic.diagnostics.zone_stats[id].departures. Empty when absent.
+   */
+  zoneDepartures: Record<string, { atMs: number[]; cumVeh: number[] }>;
 }
 
 export interface DamagePoint {
@@ -146,6 +156,14 @@ export interface SimulatedFire {
   modelVersion: string | null;
   ignition: { coord: LngLat; atMs: number; provenance: string | null } | null;
   calibrationIou: number | null;
+  /** fire_simulated.hazard_until: the model front is in effect (and drawn) until then. */
+  hazardUntilMs: number | null;
+  /** One-line calibration summary (rothermel-mtt), e.g. held-out median arrival error. */
+  calibrationHeadline: string | null;
+  /** How the model front was constrained (e.g. clipped to the first satellite perimeter). */
+  constraintNote: string | null;
+  /** Held-out arrival error at NIST observations, when the bundle has it. */
+  heldOut: { n: number | null; medianAbsErrorMin: number | null } | null;
   fronts: SimulatedFront[];
   arrivalGrid: ArrivalGrid | null;
   windFromDeg: number | null;
@@ -225,13 +243,79 @@ export interface RespondersComparison {
 }
 
 export interface Layer<T> {
-  evidenceClass: EvidenceClass;
+  /** "mixed" only when every item carries its own evidence class. */
+  evidenceClass: EvidenceClass | "mixed";
   items: T[];
+}
+
+/** A NIST fire observation point: fire was seen here during [fromMs, toMs]. Not a first arrival. */
+export interface FireObservation {
+  id: string;
+  coord: LngLat;
+  atMs: number;
+  fromMs: number | null;
+  toMs: number | null;
+  timePrecision: string | null;
+  residual: boolean;
+  locationSource: string | null;
+  sourceLocator: string | null;
+}
+
+export interface FireObservations {
+  evidenceClass: EvidenceClass;
+  sourceLabel: string | null;
+  sourceUrl: string | null;
+  items: FireObservation[];
+  notes: string[];
+}
+
+/** Derived demand summary (Census block groups); only the totals the UI shows. */
+export interface DemandSummary {
+  evidenceClass: EvidenceClass;
+  population: number | null;
+  households: number | null;
+  householdsNoVehicle: number | null;
+  population65Plus: number | null;
+  evacuatingVehicles: number | null;
+  evacuatingVehiclesMoe: number | null;
+  blockGroups: number | null;
+}
+
+/** One "model vs published 2018" comparison row. */
+export interface ValidationRow {
+  targetId: string;
+  metric: string;
+  location: string | null;
+  /** Published value as given (a local time "hh:mm", a count, ...). */
+  published: string | number | null;
+  unit: string | null;
+  /** Model side as flat label/value pairs, for display only. */
+  model: { key: string; value: string | number }[];
+  /** e.g. "partial", "weak", "tuned", "not_computed". */
+  comparability: string;
+  evidenceClass: EvidenceClass | null;
+  caveat: string | null;
+  sourceLocator: string | null;
+}
+
+export interface Validation {
+  evidenceClass: EvidenceClass;
+  grades: Record<string, string>;
+  rows: ValidationRow[];
 }
 
 export interface ReplayModel {
   schemaVersion: string;
-  incident: { id: string; name: string; packageVersion: string | null; timezone: string };
+  incident: {
+    id: string;
+    name: string;
+    packageVersion: string | null;
+    timezone: string;
+    /** Optional "Town, ST" the bundle names; used to label the distance reference. */
+    place: string | null;
+    /** Optional named point the bundle provides for "fire N km from X". */
+    referencePoint: { name: string; coord: LngLat } | null;
+  };
   mode: string;
   clock: { startMs: number; endMs: number; stepSeconds: number };
   bbox: [number, number, number, number];
@@ -248,4 +332,7 @@ export interface ReplayModel {
   events: ReplayEvent[];
   traffic: Traffic | null;
   damage: Layer<DamagePoint> | null;
+  fireObservations: FireObservations | null;
+  demand: DemandSummary | null;
+  validation: Validation | null;
 }

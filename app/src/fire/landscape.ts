@@ -344,6 +344,13 @@ const MAX_REQUEST_CELLS = 320;
 const FUEL_CELL_METERS = 30;
 /** Concurrent sub-requests; enough to be quick without hammering the service. */
 const MAX_PARALLEL_REQUESTS = 4;
+/**
+ * Overlap between neighbouring sub-requests, Mercator metres. Measured: the LF2025 WCS
+ * rounds each request's edges onto its 30 m lattice independently, so abutting requests can
+ * come back one cell apart (a full row or column of no-data, which the solver treats as a
+ * firebreak). Two cells of overlap covers that one-cell rounding with margin.
+ */
+const CHUNK_OVERLAP_METERS = 2 * FUEL_CELL_METERS;
 
 function coverageUrl(coverageId: string, box: MercatorBox): string {
   return (
@@ -383,11 +390,15 @@ function chunkBoxes(box: MercatorBox): MercatorBox[] {
   const boxes: MercatorBox[] = [];
   for (let row = 0; row < rows; row++) {
     for (let column = 0; column < columns; column++) {
+      // Interior edges overlap so the server's per-request edge rounding cannot leave a
+      // one-cell seam of no-data between neighbours; outer edges stay where requested.
       boxes.push({
-        minX: box.minX + column * chunkWidth,
-        maxX: box.minX + (column + 1) * chunkWidth,
-        minY: box.minY + row * chunkHeight,
-        maxY: box.minY + (row + 1) * chunkHeight,
+        minX: box.minX + column * chunkWidth - (column > 0 ? CHUNK_OVERLAP_METERS : 0),
+        maxX:
+          box.minX + (column + 1) * chunkWidth + (column < columns - 1 ? CHUNK_OVERLAP_METERS : 0),
+        minY: box.minY + row * chunkHeight - (row > 0 ? CHUNK_OVERLAP_METERS : 0),
+        maxY:
+          box.minY + (row + 1) * chunkHeight + (row < rows - 1 ? CHUNK_OVERLAP_METERS : 0),
       });
     }
   }
@@ -798,13 +809,19 @@ export function slopeAndAspect(
   return { slopeTangent, upslopeDegrees };
 }
 
-export async function loadLandscape(
-  longitude: number,
-  latitude: number,
-  groundRadiusMeters: number,
+/**
+ * Loads fuel, canopy and terrain for a box. The box is in Mercator metres (EPSG:3857, the
+ * grid's own coordinates); the returned grid has Mercator cell addressing and
+ * `groundCellSizeMeters` corrected with cos(latitude) at the box centre.
+ */
+export async function loadLandscapeForBox(
+  box: MercatorBox,
   signal: AbortSignal,
 ): Promise<LandscapeGrid> {
-  const box = boxAround(longitude, latitude, groundRadiusMeters);
+  const [, latitude] = mercatorToLonLat(
+    (box.minX + box.maxX) / 2,
+    (box.minY + box.maxY) / 2,
+  );
   const raster = await fetchFuelRaster(box, signal);
   // Different hosts, so the terrain tiles and the canopy coverages overlap in time.
   const [{ elevation: elevationMeters, complete: elevationComplete }, canopy] = await Promise.all([
@@ -843,4 +860,14 @@ export async function loadLandscape(
       canopy: LANDFIRE_CANOPY_ATTRIBUTION,
     },
   };
+}
+
+/** Loads a landscape in a square box of `groundRadiusMeters` around a point (used by /fire). */
+export async function loadLandscape(
+  longitude: number,
+  latitude: number,
+  groundRadiusMeters: number,
+  signal: AbortSignal,
+): Promise<LandscapeGrid> {
+  return loadLandscapeForBox(boxAround(longitude, latitude, groundRadiusMeters), signal);
 }

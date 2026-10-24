@@ -7,6 +7,13 @@ SHA-256, so identical files shared by several package versions are stored once.
   python3 -m tools.mongo_data push   # upload artifacts missing from Atlas
   python3 -m tools.mongo_data pull   # download artifacts missing locally
 
+Generated app data (replay bundles, what-if variants, agent simulations and the
+local Dewey mobility sidecars under ``app/public``) is listed the same way in the
+Git-tracked ``app/data-manifest.json`` and stored gzip-compressed. After
+regenerating any of it, refresh that manifest, push, and commit the manifest:
+
+  python3 -m tools.mongo_data record  # rewrite app/data-manifest.json from local files
+
 Requires ``pip install -r tools/requirements.txt`` and the MONGODB_URI
 environment variable (optionally MONGODB_DB, default "crisistwin").
 """
@@ -14,6 +21,7 @@ environment variable (optionally MONGODB_DB, default "crisistwin").
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
 import json
 import os
@@ -26,6 +34,9 @@ from pymongo import MongoClient
 DEFAULT_ROOT = Path("data/incidents")
 DEFAULT_DB = "crisistwin"
 BUCKET = "incident_artifacts"
+APP_MANIFEST = Path("app/data-manifest.json")
+APP_ROOT = Path("app/public")
+APP_GLOBS = ("replays/**/*.json", "simulations/**/*.json")
 
 
 def connect() -> gridfs.GridFSBucket:
@@ -37,11 +48,14 @@ def connect() -> gridfs.GridFSBucket:
 
 
 def artifacts(root: Path):
-    """Yield (package_dir, relative_path, bytes, sha256) for every manifest artifact."""
+    """Yield (base_dir, relative_path, bytes, sha256, compress) for every manifest artifact."""
     for manifest_path in sorted(root.glob("*/*/manifest.json")):
         manifest = json.loads(manifest_path.read_text())
         for entry in manifest["artifacts"]:
-            yield manifest_path.parent, entry["path"], entry["bytes"], entry["sha256"]
+            yield manifest_path.parent, entry["path"], entry["bytes"], entry["sha256"], False
+    if APP_MANIFEST.is_file():
+        for entry in json.loads(APP_MANIFEST.read_text())["artifacts"]:
+            yield APP_ROOT, entry["path"], entry["bytes"], entry["sha256"], True
 
 
 def stored(bucket: gridfs.GridFSBucket, sha256: str) -> bool:
@@ -52,9 +66,18 @@ def sha256_of(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def record() -> None:
+    entries = [
+        {"path": path.relative_to(APP_ROOT).as_posix(), "bytes": path.stat().st_size, "sha256": sha256_of(path)}
+        for path in sorted({p for pattern in APP_GLOBS for p in APP_ROOT.glob(pattern) if p.is_file()})
+    ]
+    APP_MANIFEST.write_text(json.dumps({"root": APP_ROOT.as_posix(), "artifacts": entries}, indent=1) + "\n")
+    print(f"recorded {len(entries)} app artifacts ({sum(e['bytes'] for e in entries):,} bytes) in {APP_MANIFEST}")
+
+
 def push(bucket: gridfs.GridFSBucket, root: Path) -> None:
     uploaded = skipped = 0
-    for package, rel, size, sha in artifacts(root):
+    for package, rel, size, sha, compress in artifacts(root):
         path = package / rel
         if stored(bucket, sha):
             skipped += 1
@@ -63,22 +86,30 @@ def push(bucket: gridfs.GridFSBucket, root: Path) -> None:
             sys.exit(f"{path} is missing locally and not in Atlas; run pull from a machine that has it.")
         if sha256_of(path) != sha:
             sys.exit(f"{path} does not match the SHA-256 in its manifest; refusing to upload.")
-        bucket.upload_from_stream(sha, path.read_bytes(), metadata={"bytes": size, "first_path": str(path)})
+        data = path.read_bytes()
+        metadata = {"bytes": size, "first_path": str(path)}
+        if compress:
+            data = gzip.compress(data, mtime=0)
+            metadata["encoding"] = "gzip"
+        bucket.upload_from_stream(sha, data, metadata=metadata)
         uploaded += 1
-        print(f"uploaded {path} ({size:,} bytes)")
+        print(f"uploaded {path} ({size:,} bytes, {len(data):,} stored)")
     print(f"push done: {uploaded} uploaded, {skipped} already in Atlas")
 
 
 def pull(bucket: gridfs.GridFSBucket, root: Path) -> None:
     downloaded = present = 0
-    for package, rel, _size, sha in artifacts(root):
+    for package, rel, _size, sha, _compress in artifacts(root):
         path = package / rel
         if path.is_file() and sha256_of(path) == sha:
             present += 1
             continue
         if not stored(bucket, sha):
             sys.exit(f"{package / rel} (sha256 {sha[:12]}...) is not in Atlas; run push from a machine that has it.")
-        data = bucket.open_download_stream_by_name(sha).read()
+        stream = bucket.open_download_stream_by_name(sha)
+        data = stream.read()
+        if (stream.metadata or {}).get("encoding") == "gzip":
+            data = gzip.decompress(data)
         if hashlib.sha256(data).hexdigest() != sha:
             sys.exit(f"Atlas returned corrupt bytes for {path}.")
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -90,9 +121,12 @@ def pull(bucket: gridfs.GridFSBucket, root: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=("push", "pull"))
+    parser.add_argument("command", choices=("push", "pull", "record"))
     parser.add_argument("--root", type=Path, default=DEFAULT_ROOT)
     args = parser.parse_args()
+    if args.command == "record":
+        record()
+        return
     (push if args.command == "push" else pull)(connect(), args.root)
 
 

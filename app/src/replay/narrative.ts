@@ -1,15 +1,17 @@
 // Pure builder for the one-line map caption. Every fact comes from the bundle.
 import { arrivalAt, distanceM, inArea } from "./insights";
-import { eventCategory, lastAtOrBefore, perimeterIndexAt, simulatedFrontIndexAt } from "./timeline";
+import {
+  eventCategory,
+  lastAtOrBefore,
+  perimeterIndexAt,
+  perimeterWindowEnd,
+  simulatedFrontIndexAt,
+} from "./timeline";
+import type { ReferencePlace } from "./places";
 import type { AreaGeometry, LngLat, ReplayModel } from "./types";
 
 /** Events older than this (sim time) drop out of the caption. */
 export const CAPTION_EVENT_WINDOW_MS = 20 * 60_000;
-
-/** Reference place per incident for "fire N km from X". */
-export const CAPTION_PLACES: Record<string, { name: string; coord: LngLat }> = {
-  "camp-2018-paradise-slice": { name: "Paradise", coord: [-121.6, 39.76] },
-};
 
 const SNAPPED_NOTE = /\s*\[snapped:[^\]]*\]\s*$/;
 
@@ -33,33 +35,51 @@ export interface Caption {
   fire: string | null;
 }
 
-export function buildCaption(model: ReplayModel, t: number, frameIndex: number): Caption {
+export function buildCaption(
+  model: ReplayModel,
+  t: number,
+  frameIndex: number,
+  place: ReferencePlace | null,
+): Caption {
+  // Within the window, a historical record wins over fixture placeholders (e.g. synthetic
+  // zone orders), which otherwise crowd out the real 2018 alerts.
   let event: Caption["event"] = null;
   for (let i = lastAtOrBefore(model.events, t); i >= 0; i -= 1) {
     const e = model.events[i];
     if (t - e.atMs > CAPTION_EVENT_WINDOW_MS) break;
     if (eventCategory(e.type) === "closure") continue;
-    event = { label: splitSnappedNote(e.label).text, fixture: e.evidenceClass === "fixture" };
-    break;
+    const fixture = e.evidenceClass === "fixture";
+    if (!event) event = { label: splitSnappedNote(e.label).text, fixture };
+    if (!fixture) {
+      event = { label: splitSnappedNote(e.label).text, fixture };
+      break;
+    }
   }
 
-  const enRouteVeh = model.traffic && frameIndex >= 0 ? (model.traffic.metrics[frameIndex]?.enRouteVeh ?? null) : null;
+  const enRouteVeh =
+    model.traffic && frameIndex >= 0
+      ? (model.traffic.metrics[frameIndex]?.enRouteVeh ?? null)
+      : null;
 
   let fire: string | null = null;
-  const place = CAPTION_PLACES[model.incident.id];
   if (place) {
     const perimeterIndex = perimeterIndexAt(model, t);
     const simIndex = simulatedFrontIndexAt(model, t);
     const grid = model.fireSimulated?.arrivalGrid;
     if (perimeterIndex >= 0) {
       const g = model.perimeters[perimeterIndex].geometry;
-      fire = inArea(g, place.coord)
-        ? `${place.name} inside satellite perimeter`
-        : `satellite perimeter ${(nearestVertexM(g, place.coord) / 1000).toFixed(1)} km from ${place.name}`;
+      const end = perimeterWindowEnd(model, perimeterIndex);
+      const composite = end !== null && t < end ? " (half-day composite)" : "";
+      fire =
+        (inArea(g, place.coord)
+          ? `${place.name} is inside the satellite perimeter`
+          : `satellite perimeter ${(nearestVertexM(g, place.coord) / 1000).toFixed(1)} km from ${place.name}`) +
+        composite;
     } else if (simIndex >= 0 && model.fireSimulated) {
       const g = model.fireSimulated.fronts[simIndex].geometry;
       const arrival = grid ? arrivalAt(grid, place.coord) : null;
-      const reached = inArea(g, place.coord) || (arrival?.status === "reached" && arrival.atMs <= t);
+      const reached =
+        inArea(g, place.coord) || (arrival?.status === "reached" && arrival.atMs <= t);
       fire = reached
         ? `model fire has reached ${place.name}`
         : `model fire ${(nearestVertexM(g, place.coord) / 1000).toFixed(1)} km from ${place.name}`;

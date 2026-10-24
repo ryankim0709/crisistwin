@@ -4,6 +4,9 @@
 import type { FeatureCollection } from "geojson";
 import type { GeoJSONSource, Map as MapLibreMap, MapOptions } from "maplibre-gl";
 import { SATELLITE_STYLE } from "../maps/basemap";
+import { BASEMAP_BACKGROUND, SATELLITE_BACKGROUND } from "./basemapStyle";
+import { ignitionBasis } from "./timeline";
+import { REFUGE_KIND, refugeStateAt, traCode, type RefugeTimeline } from "./refuges";
 import type {
   LngLat,
   Perimeter,
@@ -27,7 +30,7 @@ export const FALLBACK_STYLE: BasemapStyle = {
   version: 8,
   glyphs: FALLBACK_GLYPHS_URL,
   sources: {},
-  layers: [{ id: "background", type: "background", paint: { "background-color": "#0a0e13" } }],
+  layers: [{ id: "background", type: "background", paint: { "background-color": BASEMAP_BACKGROUND } }],
 };
 
 export type Basemap = "dark" | "satellite";
@@ -47,6 +50,35 @@ export function setBasemap(map: MapLibreMap, basemap: Basemap): void {
   if (map.getLayer(IMAGERY_LAYER)) {
     map.setLayoutProperty(IMAGERY_LAYER, "visibility", basemap === "satellite" ? "visible" : "none");
   }
+  // Mid-grey rather than black where imagery tiles have not arrived yet.
+  if (map.getLayer("background")) {
+    map.setPaintProperty(
+      "background",
+      "background-color",
+      basemap === "satellite" ? SATELLITE_BACKGROUND : BASEMAP_BACKGROUND,
+    );
+  }
+}
+
+/** The bundle bbox as a closed outline: where roads, traffic and fire are modelled. */
+export function simAreaCollection(model: ReplayModel): FeatureCollection {
+  const [w, s, e, n] = model.bbox;
+  return {
+    type: "FeatureCollection",
+    features: [
+      {
+        type: "Feature",
+        properties: {},
+        geometry: { type: "LineString", coordinates: [[w, s], [e, s], [e, n], [w, n], [w, s]] },
+      },
+      // Label anchored at the north-west corner, just outside the outline.
+      {
+        type: "Feature",
+        properties: { label: "Simulated area: roads, traffic and fire modelled inside" },
+        geometry: { type: "Point", coordinates: [w, n] },
+      },
+    ],
+  };
 }
 
 // Congestion bands: mean speed as a fraction of the edge's free-flow speed_kph.
@@ -64,12 +96,13 @@ export const COLORS = {
   char: "#140604",
   satellite: "#eaf4ff",
   history: "#ff9a5c",
-  // Warm colours mean fire only; cool colours mean people and traffic only.
+  // Strict palette: warm = fire only; one cyan for traffic (dimmer when slow, thicker when
+  // busy); everything else neutral grey/white so the fire and the traffic read first.
   simFront: "#ffd166",
   fireBand: "#ff9a1f",
   free: "#3df2ff",
-  slow: "#4aa8ff",
-  jam: "#b14dff",
+  slow: "#2bb3c6",
+  jam: "#16707f",
   closed: "#8a96a3",
   threat: "#ffb547",
   threatImminent: "#ff7a1a",
@@ -77,20 +110,24 @@ export const COLORS = {
   networkMajor: "#3d566c",
   bridge: "#d8e3ee",
   particle: "#e9fbff",
-  particleStopped: "#b14dff",
-  zone: "#8fb3ff",
-  zoneOrdered: "#ffb547",
-  destination: "#7cf2c9",
-  damage: "#c7a6ff",
+  particleStopped: "#ffffff",
+  zone: "#8a96a3",
+  zoneOrdered: "#c3cdd6",
+  destination: "#aab4be",
+  refuge: "#ffffff",
+  fireObs: "#ffffff",
+  damage: "#c3cdd6",
 } as const;
 
 export type LayerGroup =
   | "fire"
   | "history"
   | "simFire"
+  | "fireObs"
   | "roads"
   | "particles"
   | "zones"
+  | "people"
   | "destinations"
   | "damage";
 
@@ -106,25 +143,28 @@ export const LAYER_GROUPS: Record<LayerGroup, string[]> = {
     "sim-ignition",
   ],
   fire: ["fire-glow-outer", "fire-fill", "fire-glow", "fire-line", "fire-label"],
+  fireObs: ["fire-obs"],
   zones: ["zones-fill", "zones-hatch", "zones-line", "zones-line-ordered"],
+  people: ["people-fill", "people-line"],
   roads: [
     "roads-base",
     "roads-bridge",
     "roads-flow-glow",
     "roads-flow",
     "roads-closed",
-    "roads-threat",
     "roads-closed-label",
     "roads-bridge-label",
   ],
   particles: ["particles-halo", "particles"],
-  destinations: ["destinations-halo", "destinations"],
+  destinations: ["destinations-halo", "destinations", "refuges", "refuges-label"],
   damage: ["damage"],
 };
 
 /** Layers that show a tooltip on hover, topmost first. */
 export const INTERACTIVE_LAYERS = [
   "particles",
+  "fire-obs",
+  "refuges",
   "destinations",
   "damage",
   "roads-closed",
@@ -132,6 +172,7 @@ export const INTERACTIVE_LAYERS = [
   "roads-flow",
   "sim-ignition",
   "zones-fill",
+  "people-fill",
   "fire-fill",
   "sim-front-fill",
 ];
@@ -150,6 +191,7 @@ export function perimeterCollection(perimeter: Perimeter | null): FeatureCollect
           area_km2: perimeter.areaKm2,
           evidence_class: perimeter.evidenceClass,
           at_ms: perimeter.atMs,
+          half_day: perimeter.timePrecision === "half_day",
         },
       },
     ],
@@ -309,6 +351,42 @@ export function applyTrafficFrame(
   return next;
 }
 
+/** Households at home per km² -> fill colour (grey to white). Shared with the map key. */
+export const PEOPLE_RAMP: [number, string][] = [
+  [0, "#1f262e"],
+  [25, "#3a434d"],
+  [100, "#6b7682"],
+  [300, "#aab4be"],
+  [800, "#f2f5f8"],
+];
+
+/** Static zone polygons for the people layer; numeric feature ids match zone order. */
+export function peopleCollection(model: ReplayModel): FeatureCollection {
+  return {
+    type: "FeatureCollection",
+    features: (model.zones?.items ?? []).map((zone, i) => ({
+      type: "Feature",
+      id: i,
+      geometry: zone.geometry,
+      properties: { name: zone.name, households: zone.households, population: zone.population, vehicles: zone.vehicles },
+    })),
+  };
+}
+
+/** Push per-zone at-home figures to the people layer as feature-state. */
+export function applyPeopleState(
+  map: MapLibreMap,
+  rows: readonly ({ home: number; left: number; density: number } | null)[],
+): void {
+  if (!map.getSource("people")) return;
+  rows.forEach((row, i) => {
+    map.setFeatureState(
+      { source: "people", id: i },
+      row ? { density: row.density, home: row.home, left: row.left } : { density: 0, home: null, left: null },
+    );
+  });
+}
+
 export function zonesCollection(
   zones: readonly Zone[],
   states: Map<string, "ordered" | "warned">,
@@ -335,7 +413,8 @@ export function zonesCollection(
   };
 }
 
-function destinationsCollection(model: ReplayModel): FeatureCollection {
+/** Destinations with their own evidence class; refuges carry their open state at time t. */
+export function destinationsCollection(model: ReplayModel, refuges: RefugeTimeline, t: number): FeatureCollection {
   return {
     type: "FeatureCollection",
     features: (model.destinations?.items ?? []).map((d) => ({
@@ -344,11 +423,56 @@ function destinationsCollection(model: ReplayModel): FeatureCollection {
       properties: {
         name: d.name,
         dest_kind: d.kind,
+        evidence_class: d.evidenceClass,
         label: `${d.name} (${d.kind.replace(/_/g, " ")})`,
+        short: d.kind === REFUGE_KIND ? (traCode(d.name) ? `TRA-${traCode(d.name)}` : d.name) : "",
         capacity_veh: d.capacityVeh,
+        refuge_state: d.kind === REFUGE_KIND ? refugeStateAt(refuges, d.id, t) : "",
+        refuge_opened_ms: refuges.get(d.id)?.find((s) => s.open)?.atMs ?? null,
       },
     })),
   };
+}
+
+/** NIST fire observation points with their observed time, for a time filter on the layer. */
+export function fireObservationsCollection(model: ReplayModel): FeatureCollection {
+  return {
+    type: "FeatureCollection",
+    features: (model.fireObservations?.items ?? []).map((o) => ({
+      type: "Feature",
+      geometry: { type: "Point", coordinates: o.coord },
+      properties: {
+        at_ms: o.atMs,
+        time_precision: o.timePrecision,
+        location_source: o.locationSource,
+        residual: o.residual,
+        source_locator: o.sourceLocator,
+        evidence_class: model.fireObservations?.evidenceClass ?? null,
+      },
+    })),
+  };
+}
+
+/** How long an observation stays highlighted as "recent" after its time. */
+export const FIRE_OBS_RECENT_MS = 30 * 60_000;
+
+/** Show observations seen by t; the last FIRE_OBS_RECENT_MS of them larger and brighter. */
+export function setFireObservationTime(map: MapLibreMap, t: number): void {
+  if (map.getLayer("fire-obs")) {
+    map.setFilter("fire-obs", ["<=", ["get", "at_ms"], t]);
+    map.setPaintProperty("fire-obs", "circle-radius", [
+      "case",
+      [">", ["get", "at_ms"], t - FIRE_OBS_RECENT_MS],
+      4.5,
+      2.6,
+    ]);
+    map.setPaintProperty("fire-obs", "circle-stroke-opacity", [
+      "case",
+      [">", ["get", "at_ms"], t - FIRE_OBS_RECENT_MS],
+      1,
+      0.55,
+    ]);
+  }
 }
 
 function damageCollection(model: ReplayModel): FeatureCollection {
@@ -371,7 +495,11 @@ function ignitionCollection(model: ReplayModel): FeatureCollection {
       {
         type: "Feature",
         geometry: { type: "Point", coordinates: ignition.coord },
-        properties: { provenance: ignition.provenance, at_ms: ignition.atMs },
+        properties: {
+          provenance: ignition.provenance,
+          at_ms: ignition.atMs,
+          label: `${ignitionBasis(model) === "reconstructed" ? "Reconstructed" : "Assumed"} ignition (model start)`,
+        },
       },
     ],
   };
@@ -408,13 +536,24 @@ export function setGroupVisibility(map: MapLibreMap, group: LayerGroup, visible:
 }
 
 /** Fade the ember fill as the perimeter in effect ages (about half strength after 12 h). */
-export function setPerimeterFreshness(map: MapLibreMap, ageMs: number): void {
+export function setPerimeterFreshness(map: MapLibreMap, ageMs: number, provisional = false): void {
   const hours = Math.max(0, ageMs / 3_600_000);
   const freshness = Math.max(0.45, 1 - hours / 24);
-  if (map.getLayer("fire-fill")) map.setPaintProperty("fire-fill", "fill-opacity", 0.32 * freshness);
+  // Provisional (inside a half-day composite's window): dotted outline, faint fill, no glow.
+  if (map.getLayer("fire-fill")) map.setPaintProperty("fire-fill", "fill-opacity", provisional ? 0.12 : 0.32 * freshness);
   if (map.getLayer("fire-glow-outer")) {
-    map.setPaintProperty("fire-glow-outer", "line-opacity", 0.5 * freshness);
+    map.setPaintProperty("fire-glow-outer", "line-opacity", provisional ? 0 : 0.5 * freshness);
   }
+  if (map.getLayer("fire-glow")) map.setPaintProperty("fire-glow", "line-opacity", provisional ? 0 : 0.6);
+  if (map.getLayer("fire-line")) {
+    map.setPaintProperty("fire-line", "line-dasharray", provisional ? [1, 3] : [3, 2]);
+    map.setPaintProperty("fire-line", "line-opacity", provisional ? 0.6 : 1);
+  }
+}
+
+/** Label on the perimeter edge: the satellite tag, or "extent sometime by HH:MM" while provisional. */
+export function setPerimeterLabel(map: MapLibreMap, text: string): void {
+  if (map.getLayer("fire-label")) map.setLayoutProperty("fire-label", "text-field", text);
 }
 
 /** Cosmetic flicker of the model fire edge and pulse of ordered-zone hatching; `t` in ms. */
@@ -515,25 +654,98 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
   geojson("fire-history");
   geojson("fire");
   geojson("zones");
+  map.addSource("people", { type: "geojson", data: peopleCollection(model) });
   geojson("roads", roadsCollection(model));
   geojson("roads-closed-labels");
   geojson("particles");
-  geojson("destinations", destinationsCollection(model));
+  geojson("destinations", destinationsCollection(model, new Map(), model.clock.startMs));
+  geojson("fire-obs", fireObservationsCollection(model));
   geojson("damage", damageCollection(model));
   geojson("pin");
+  geojson("sim-area", simAreaCollection(model));
   const imagery = imagerySource();
   if (imagery) {
     map.addSource(IMAGERY_LAYER, imagery);
-    // Dimmed so the overlays stay readable; hidden until the Satellite basemap is chosen.
-    map.addLayer({
-      id: IMAGERY_LAYER,
-      type: "raster",
-      source: IMAGERY_LAYER,
-      layout: { visibility: "none" },
-      paint: { "raster-brightness-max": 0.75, "raster-saturation": -0.25, "raster-fade-duration": 0 },
-    });
+    // Dimmed so the overlays stay readable; hidden until the Satellite basemap is chosen. Placed
+    // under the basemap's place labels so towns stay named over imagery.
+    const labels = map.getStyle().layers.find((l) => l.id.startsWith("place_"))?.id;
+    map.addLayer(
+      {
+        id: IMAGERY_LAYER,
+        type: "raster",
+        source: IMAGERY_LAYER,
+        layout: { visibility: "none" },
+        paint: { "raster-brightness-max": 0.75, "raster-saturation": -0.25, "raster-fade-duration": 0 },
+      },
+      labels,
+    );
   }
-  if (!map.hasImage(ZONE_HATCH_IMAGE)) map.addImage(ZONE_HATCH_IMAGE, hatchImage([255, 181, 71], 60, 14));
+  // Extent of the modelled area, so it is clear why the traffic network ends there.
+  map.addLayer({
+    id: "sim-area-line",
+    type: "line",
+    source: "sim-area",
+    filter: ["==", ["geometry-type"], "LineString"],
+    paint: { "line-color": "#c3cdd6", "line-opacity": 0.55, "line-width": 1.2, "line-dasharray": [4, 3] },
+  });
+  // Zoomed in, the corner label is off-screen: repeat a short tag along the outline.
+  map.addLayer({
+    id: "sim-area-edge-label",
+    type: "symbol",
+    source: "sim-area",
+    minzoom: 10,
+    filter: ["==", ["geometry-type"], "LineString"],
+    layout: {
+      "symbol-placement": "line",
+      "symbol-spacing": 500,
+      "text-field": "Simulated area edge",
+      "text-font": LABEL_FONT,
+      "text-size": 10.5,
+      "text-offset": [0, -0.8],
+    },
+    paint: { "text-color": "#c3cdd6", "text-halo-color": "#0a0e13", "text-halo-width": 1.6, "text-opacity": 0.8 },
+  });
+  map.addLayer({
+    id: "sim-area-label",
+    type: "symbol",
+    source: "sim-area",
+    filter: ["==", ["geometry-type"], "Point"],
+    layout: {
+      "text-field": ["get", "label"],
+      "text-font": LABEL_FONT,
+      "text-size": 11.5,
+      "text-anchor": "bottom-left",
+      "text-offset": [0.2, -0.4],
+      "text-max-width": 40,
+      "text-allow-overlap": true,
+      "text-ignore-placement": true,
+    },
+    paint: { "text-color": "#c3cdd6", "text-halo-color": "#0a0e13", "text-halo-width": 1.6, "text-opacity": 0.85 },
+  });
+  if (!map.hasImage(ZONE_HATCH_IMAGE)) map.addImage(ZONE_HATCH_IMAGE, hatchImage([195, 205, 214], 60, 14));
+
+  // People at home: households still home per km², a neutral grey-to-white ramp (never warm,
+  // never cyan) under everything else. Density arrives as feature-state from ReplayMap.
+  map.addLayer({
+    id: "people-fill",
+    type: "fill",
+    source: "people",
+    paint: {
+      "fill-color": [
+        "interpolate",
+        ["linear"],
+        ["coalesce", ["feature-state", "density"], 0],
+        ...PEOPLE_RAMP.flat(),
+      ],
+      "fill-opacity": ["case", [">", ["coalesce", ["feature-state", "density"], 0], 0.5], 0.42, 0],
+    },
+  });
+  map.addLayer({
+    id: "people-line",
+    type: "line",
+    source: "people",
+    paint: { "line-color": "#c3cdd6", "line-opacity": 0.18, "line-width": 0.6 },
+  });
 
   // Zones: nearly invisible until ordered; ordered zones get a faint (pulsed) hatch.
   map.addLayer({
@@ -693,7 +905,7 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     source: "roads",
     layout: { "line-cap": "round", "line-join": "round" },
     paint: {
-      "line-color": ["case", ["==", ["coalesce", ["feature-state", "cls"], 0], 4], COLORS.closed, ["interpolate", ["linear"], ["coalesce", ["feature-state", "ratio"], 1], 0, COLORS.jam, CONGESTION_SLOW_RATIO, "#7a6bff", CONGESTION_FREE_RATIO, COLORS.slow, 0.9, COLORS.free]],
+      "line-color": ["case", ["==", ["coalesce", ["feature-state", "cls"], 0], 4], COLORS.closed, ["interpolate", ["linear"], ["coalesce", ["feature-state", "ratio"], 1], 0, COLORS.jam, CONGESTION_SLOW_RATIO, COLORS.jam, CONGESTION_FREE_RATIO, COLORS.slow, 0.9, COLORS.free]],
       "line-width": ["interpolate", ["linear"], ["coalesce", ["feature-state", "veh"], 0], 0, 0, 1, 6, 20, 10, 80, 16, 250, 24],
       "line-blur": 8,
       "line-opacity": ["case", [">", ["coalesce", ["feature-state", "veh"], 0], 0], 0.32, 0],
@@ -706,7 +918,7 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     source: "roads",
     layout: { "line-cap": "round", "line-join": "round" },
     paint: {
-      "line-color": ["case", ["==", ["coalesce", ["feature-state", "cls"], 0], 4], COLORS.closed, ["interpolate", ["linear"], ["coalesce", ["feature-state", "ratio"], 1], 0, COLORS.jam, CONGESTION_SLOW_RATIO, "#7a6bff", CONGESTION_FREE_RATIO, COLORS.slow, 0.9, COLORS.free]],
+      "line-color": ["case", ["==", ["coalesce", ["feature-state", "cls"], 0], 4], COLORS.closed, ["interpolate", ["linear"], ["coalesce", ["feature-state", "ratio"], 1], 0, COLORS.jam, CONGESTION_SLOW_RATIO, COLORS.jam, CONGESTION_FREE_RATIO, COLORS.slow, 0.9, COLORS.free]],
       "line-width": ["interpolate", ["linear"], ["coalesce", ["feature-state", "veh"], 0], 0, 0, 1, 2.2, 20, 4, 80, 7, 250, 11],
       "line-opacity": ["case", [">", ["coalesce", ["feature-state", "veh"], 0], 0], 0.95, 0],
       // Directed edges: offset so both directions of a two-way road stay visible.
@@ -724,11 +936,13 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
       "line-opacity": ["case", ["boolean", ["feature-state", "closed"], false], 0.55, 0],
     },
   });
-  // Roads the model expects fire to reach soon: wide dashed band, pulsed from ReplayMap.
+  // Roads the model expects fire to reach soon. Hidden: it added a second warm, moving mark;
+  // the same lookahead stays in the tooltips and the Evacuee view.
   map.addLayer({
     id: "roads-threat",
     type: "line",
     source: "roads",
+    layout: { visibility: "none" },
     paint: {
       "line-color": ["match", ["coalesce", ["feature-state", "threat"], 0], 2, COLORS.threatImminent, COLORS.threat],
       "line-width": ["interpolate", ["linear"], ["zoom"], 10, 1.2, 15, 2.5],
@@ -740,14 +954,15 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     id: "roads-closed-label",
     type: "symbol",
     source: "roads-closed-labels",
-    minzoom: 12.5,
+    // Only close in, so a burned-over town is not covered in repeated tags.
+    minzoom: 14,
     layout: {
       "text-field": "× CLOSED",
       "text-font": LABEL_FONT_BOLD,
       "text-size": 10.5,
       "text-letter-spacing": 0.1,
     },
-    paint: { "text-color": "#ffd6dc", "text-halo-color": "#3a0610", "text-halo-width": 2 },
+    paint: { "text-color": "#d6dde4", "text-halo-color": "#0a0e13", "text-halo-width": 2 },
   });
   map.addLayer({
     id: "roads-bridge-label",
@@ -772,9 +987,10 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     source: "particles",
     paint: {
       "circle-radius": ["interpolate", ["linear"], ["zoom"], 10, 5, 13, 8, 16, 12],
-      "circle-color": ["case", ["get", "stopped"], COLORS.particleStopped, "#7ff9ff"],
+      "circle-color": "#7ff9ff",
       "circle-blur": 1,
-      "circle-opacity": 0.55,
+      // Glow only on moving dots; stopped ones are plain white with a dark ring.
+      "circle-opacity": ["case", ["get", "stopped"], 0, 0.5],
     },
   });
   map.addLayer({
@@ -784,8 +1000,8 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     paint: {
       "circle-radius": ["interpolate", ["linear"], ["zoom"], 10, 2.5, 13, 3, 16, 4],
       "circle-color": ["case", ["get", "stopped"], COLORS.particleStopped, COLORS.particle],
-      "circle-stroke-color": ["case", ["get", "stopped"], COLORS.jam, "#7ff9ff"],
-      "circle-stroke-width": 0.6,
+      "circle-stroke-color": ["case", ["get", "stopped"], "#0a0e13", "#7ff9ff"],
+      "circle-stroke-width": ["case", ["get", "stopped"], 1.2, 0.6],
     },
   });
 
@@ -806,7 +1022,7 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     type: "symbol",
     source: "sim-ignition",
     layout: {
-      "text-field": "Assumed ignition (model)",
+      "text-field": ["get", "label"],
       "text-font": LABEL_FONT,
       "text-size": 11,
       "text-anchor": "left",
@@ -852,6 +1068,7 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     id: "destinations-halo",
     type: "circle",
     source: "destinations",
+    filter: ["!=", ["get", "dest_kind"], REFUGE_KIND],
     paint: {
       "circle-radius": 11,
       "circle-color": COLORS.destination,
@@ -863,11 +1080,60 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     id: "destinations",
     type: "circle",
     source: "destinations",
+    filter: ["!=", ["get", "dest_kind"], REFUGE_KIND],
     paint: {
       "circle-radius": 4.5,
       "circle-color": "#0a0e13",
       "circle-stroke-color": COLORS.destination,
       "circle-stroke-width": 2.5,
+    },
+  });
+  // Temporary refuge areas (NIST): solid marker with a white ring and a "TRA-x" tag, so they
+  // never read as exits (hollow rings). Faded while not open; open/closed is also in the tooltip.
+  map.addLayer({
+    id: "refuges",
+    type: "circle",
+    source: "destinations",
+    filter: ["==", ["get", "dest_kind"], REFUGE_KIND],
+    paint: {
+      "circle-radius": ["match", ["get", "refuge_state"], "open", 6.5, 4.5],
+      "circle-color": COLORS.refuge,
+      "circle-opacity": ["match", ["get", "refuge_state"], "closed", 0.25, 0.95],
+      "circle-stroke-color": "#4b5157",
+      "circle-stroke-width": ["match", ["get", "refuge_state"], "open", 2, 1],
+      "circle-stroke-opacity": ["match", ["get", "refuge_state"], "closed", 0.35, 1],
+    },
+  });
+  map.addLayer({
+    id: "refuges-label",
+    type: "symbol",
+    source: "destinations",
+    minzoom: 11,
+    filter: ["all", ["==", ["get", "dest_kind"], REFUGE_KIND], ["==", ["get", "refuge_state"], "open"]],
+    layout: {
+      "text-field": ["concat", ["get", "short"], " refuge"],
+      "text-font": LABEL_FONT_BOLD,
+      "text-size": 10.5,
+      "text-offset": [0, 1.1],
+      "text-anchor": "top",
+    },
+    paint: { "text-color": COLORS.refuge, "text-halo-color": "#0a0e13", "text-halo-width": 1.6 },
+  });
+
+  // NIST fire observations: small warm dots with a dark ring, shown from their observed time.
+  // Reconstructed evidence, so solid points, never an area or a glow like the model fire.
+  map.addLayer({
+    id: "fire-obs",
+    type: "circle",
+    source: "fire-obs",
+    filter: ["<=", ["get", "at_ms"], model.clock.startMs],
+    paint: {
+      "circle-radius": 2.6,
+      // Hollow white rings: evidence points, never a second warm colour next to the fire.
+      "circle-color": "rgba(0, 0, 0, 0)",
+      "circle-stroke-color": COLORS.fireObs,
+      "circle-stroke-width": 1.1,
+      "circle-stroke-opacity": 0.55,
     },
   });
 

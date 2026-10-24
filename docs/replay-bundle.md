@@ -18,6 +18,9 @@ additive within 1.x.
   - `fixture`: synthetic stand-in data that is not historical.
 - The UI must show the class in text or with a pattern, not by color alone, and must
   label fixtures prominently.
+- A layer's `evidence_class` may be `"mixed"` only when each of its features carries
+  its own `evidence_class`; destinations do this (exits `derived`, NIST refuges and
+  shelters `reconstructed`).
 - Missing layers are present with `status: "missing"` and a `reason`. They are never
   silently empty.
 
@@ -101,6 +104,36 @@ additive within 1.x.
     },
     "assumptions": ["..."]
   },
+  // fire_simulated with model "rothermel-mtt" (roads package has NIST fire observations) adds, additively:
+  //   ignition.provenance_detail: { evidence_class: "reconstructed", time_source: { event_id, occurred_at, ... },
+  //                                 place_source: { observation_id: "nist-fireobs:0001", ... } }
+  //   model.params: { wind_from_deg, wind_20ft_m_s, moisture, moisture_fractions, fuel_model: "SH5", waf,
+  //                   midflame_wind_m_s, spot_distance_m, spot_probability, seed, spotting, spot_rule, ... }
+  //   calibration: {
+  //     "method": "...", "params_source": "...", "runtime_s": 1.2,
+  //     "headline": "median arrival error 104 min on 189 held-out NIST observations (17:00-20:00Z); ...",
+  //     "perimeter": { "snapshot_at": "...Z", "iou": 0.38, "area_ratio": 1.41, "n_cells": 4100, "cell_m": 200,
+  //                    "role": "evaluation only" },
+  //     "observations": { "source": "...", "cutoff": "...Z", "held_out_until": "...Z", "objective": "...",
+  //       "train":    { "n": 169, "median_abs_error_min": 26.2, "mean_abs_error_min": 49.1,
+  //                     "median_signed_error_min": 0.0, "within_30_min": 0.55, "hit_rate": 0.53, "unreached": 5 },
+  //       "held_out": { "n": 189, ... same keys } }
+  //   }
+  //   terrain: { source_id, source_resolution, vertical_datum, resampling, missing_cells, missing_treatment, ... }
+
+  // Optional. NIST fire observation points (reconstructed), all timed points up to clock.end, not thinned.
+  "fire_observations": {
+    "evidence_class": "reconstructed",
+    "source": { "id": "nist-fire-observations", "label": "...", "url": "https://data.nist.gov/od/id/mds2-2954",
+                "license": "...", "publication": "NIST TN 2135 ..." },
+    "temporal_role": "fire present at time (not first arrival)",
+    "features": [ { "id": "nist-fireobs:0006", "coord": [-121.449305, 39.803302],
+                    "at": "...Z", "from": "...Z", "to": "...Z",          // observed_at, observed_from, observed_to
+                    "time_precision": "minute|approximate", "residual_fire": false,
+                    "location_source": "AVL", "type_of_fire_code": "V",
+                    "source_locator": "Concow!7; TD-029" } ],          // workbook sheet!row(s); source number
+    "notes": ["..."]
+  },
 
   // Optional. Derived planning insights for responders and evacuees, all from model output.
   "insights": {
@@ -142,6 +175,14 @@ additive within 1.x.
   styled like observed perimeters. When present, the traffic hazard (closures and
   exposure) uses the simulated front until the first observed perimeter, then the
   observed one. `layer_status.fire_simulated` records this.
+- **`fire_simulated.calibration` (rothermel-mtt):** params are chosen only by arrival error at
+  NIST observations before `observations.cutoff`; `held_out` (cutoff to the first perimeter) and
+  `perimeter` IoU are evaluation, not fit. Error is 0 when the modelled arrival lies in
+  `[from, to]`, else minutes to the nearer edge; `hit_rate` is the share where modelled fire had
+  arrived by `to`. Show the held-out error and IoU next to the front, not only the train error.
+- **`fire_observations`:** each point means fire was seen there during `[from, to]` (UI: "fire
+  observed here at 08:05 (NIST)"); it is not a first-arrival time and never drawn as a perimeter.
+  `layer_status.fire_observations` is `missing` when the roads package lacks the layer.
 - **`insights`:** computed from the simulation only. `risk_level` comes from
   `lead_time_s` and the share of a zone's vehicles that cleared before modelled fire
   arrival, using the rule in `risk_rule`. The UI shows the disclaimer next to
@@ -149,6 +190,64 @@ additive within 1.x.
 - **Population conservation:** at every frame,
   `not_departed + en_route + arrived == total_veh`. Blocked and exposed vehicles are
   subsets of en-route vehicles.
+
+## Multiple incidents (`--incident`)
+
+`python3 -m sim --incident <id> bundle` builds `app/public/replays/<id>.json` for an id in
+`sim/incidents.py` (`camp-2018`, `marshall-2021`, `kincade-2019`), and writes or updates
+`app/public/replays/index.json`. These fields are additive:
+
+- `incident.registry_id`, `incident.place`: from the registry. `incident.timezone` is the
+  package manifest's `time_zone` (IANA) when it has one, otherwise `America/Los_Angeles`.
+- `generated_by.verification` (non-Camp packages only): how the package was verified on this run.
+  The builder's offline rebuild runs once per manifest, and its result is cached by manifest
+  SHA-256. Every run re-checks all artifact hashes.
+- `demand` (non-Camp packages): `totals` (`zones`, `population`, `households`,
+  `households_no_vehicle`, `evacuating_vehicles`, `orders_mapped`, `warnings_mapped`, ...),
+  `unmapped_zones` (`zone_id`, `reason`), `crosswalk_derived_here` (zones whose block-group
+  shares sim derived by raster overlap), `orders_without_zone_ids` (timeline only), `notices` (`event_id`, `zone_ids`,
+  `unmapped_zone_ids`), and per-zone `zones`. Demand zones are the package's evacuation zones,
+  and order and warning events target them by their own zone IDs. `totals.block_groups` counts the
+  ACS block groups that contribute; `population_source` names the ACS vintage. With a registry
+  evidence file (`sim/evidence/<id>.json`), `orders_from_evidence` lists cited orders added to the
+  package's (`event_id` prefix `evidence:`, with `evidence_class`, `source_id`, `zone_mapping`), and
+  `zone_splits` lists zones split at a Census place boundary (`zone_id`, `derived_from`, `place`,
+  `inside`). Notices naming a split zone then name all of its parts.
+- `validation` (non-Camp packages): one row per `calibration_targets.json` target, with
+  `comparability: "not_computed"` and the reason; `next_work` lists the missing comparisons.
+- `fire_simulated` for non-Camp packages is `elliptical-mtt-ca`. It starts from the package
+  ignition (`ignition.provenance` gives the source), is fitted by IoU to the first perimeter
+  only, and is clipped to it (`constraint`). `calibration.headline` states its limits.
+- `fire_simulated` with a registry evidence file holding timed fire reports (Marshall) is fitted to
+  them instead: `ignition.provenance_detail` lists the documented ignitions; `calibration.observations`
+  has `fit` (window errors at reported first arrivals, same keys as Camp's `train`), `vs_reported_time`,
+  `leave_one_out`, `bounds` ("fire present by" sightings and FIRMS passes, evaluation only),
+  `as_replayed` (scores of the clipped front) and per-place `points` (`reported_at`, `window_utc`,
+  `model_at`, `model_at_as_replayed`, `error_vs_reported_min`, `source_id`, `source_locator`).
+  `calibration.iou` is the shape IoU with the final perimeter (model burned area when it first equals
+  the perimeter's area); `calibration.perimeter` also gives the unclipped IoU at the reported end of
+  spread. The front is clipped to the final perimeter (`constraint.kind`
+  `clipped_to_final_satellite_perimeter`). `hazard_until` (UTC) is when the observed perimeters take
+  over from the simulated front as the traffic hazard; without it they take over at the first
+  perimeter time.
+
+### `index.json`
+
+```json
+{
+  "kind": "crisistwin_replay_index", "schema_version": "1.0.0",
+  "incidents": [
+    { "id": "marshall-2021", "name": "Marshall Fire (2021)", "place": "Superior and Louisville, ...",
+      "date": "2021-12-30", "timezone": "America/Denver", "bundle": "marshall-2021.json",
+      "package_version": "415166c55516b100",
+      "clock": { "start": "...Z", "end": "...Z", "step_seconds": 60 },
+      "layer_status": { "fire_perimeters": "present", "damage": "missing", "...": "..." } }
+  ]
+}
+```
+
+`date` is the local date (in `timezone`) of the clock start. `bundle` is relative to the
+index. Entries are kept per `id` across builds, in registry order.
 
 ## Variants
 

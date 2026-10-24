@@ -1,0 +1,41 @@
+{
+  "dataset": "Marshall Fire 2021 published quantitative calibration targets",
+  "interpretation": "Only numbers printed in the cited source are recorded. No value is derived, interpolated or estimated. Survey statistics describe a convenience sample and are not population rates.",
+  "sources": {
+    "boco-everbridge-2022-01-06": "see marshall_events_table.json",
+    "boco-aar-marshall-2022": "see marshall_events_table.json",
+    "forrister-2024-tbs": {
+      "citation": "Forrister A, Kuligowski ED, Sun Y, Yan X, Lovreglio R, Cova TJ, Zhao X. Analyzing Risk Perception, Evacuation Decision and Delay Time: A Case Study of the 2021 Marshall Fire in Colorado. Travel Behaviour and Society 35 (2024) 100729.",
+      "doi": "https://doi.org/10.1016/j.tbs.2023.100729",
+      "retrieval_url": "https://mro.massey.ac.nz/server/api/core/bitstreams/5f9e7234-160d-47cf-8ee0-3261de5524c8/content",
+      "bytes": 4147028,
+      "sha256": "8ae80b389b24b41cb0f72412c2062e7d2f44cb9f28f9beb2a50aeb372cffad22",
+      "license": "CC BY 4.0 (stated on p. 1)",
+      "evidence_class": "reported"
+    },
+    "coloradosun-2022-01-26": {
+      "citation": "Najmabadi S, Prentzel O. Marshall fire evacuation alerts reached as few as 1 in 5 who were meant to receive them. The Colorado Sun, 2022-01-26.",
+      "url": "https://coloradosun.com/2022/01/26/marshall-fire-boulder-evacuation-alert/",
+      "license": "All rights reserved; facts only, short quotes",
+      "evidence_class": "reported"
+    }
+  },
+  "targets": [
+    {"target_id": "everbridge-total-contacts", "metric": "Everbridge notifications launched (sum of total contacts over 9 messages)", "value": 24289, "unit": "contacts", "window_local": ["2021-12-30T11:47:52-07:00", "2021-12-30T14:58:04-07:00"], "location": "Boulder County Everbridge launch areas Marshall Fire 1-9", "source_id": "boco-everbridge-2022-01-06", "source_locator": "p. 3, table 'What messages were sent during the Marshall Fire?' (Total Contacts column; the nine rows sum to this value)", "evidence_class": "observed", "note": "Contacts are registered contact paths (landline, VoIP, opted-in cell, text, email), not people or households."},
+    {"target_id": "everbridge-confirmed-received", "metric": "Everbridge notifications confirmed received during the emergency", "value": 4637, "unit": "contacts", "window_local": ["2021-12-30T11:47:52-07:00", null], "location": "Marshall Fire Everbridge launch areas", "source_id": "coloradosun-2022-01-26", "source_locator": "paragraph 3 (cites new Boulder County Sheriff's Office data)", "evidence_class": "reported", "note": "Unconfirmed does not mean not received; confirmation required e.g. pressing 1."},
+    {"target_id": "everbridge-unconfirmed-share", "metric": "Share of the 24,289 notifications that went unconfirmed", "value": 80, "unit": "percent", "window_local": ["2021-12-30T11:47:52-07:00", null], "location": "Marshall Fire Everbridge launch areas", "source_id": "coloradosun-2022-01-26", "source_locator": "paragraph 2", "evidence_class": "reported"},
+    {"target_id": "people-evacuated", "metric": "People evacuated", "value": 37500, "unit": "persons", "window_local": null, "duration_text": "a relatively short period of time (3-4 hours)", "duration_h_range": [3, 4], "location": "Superior, Louisville and unincorporated Boulder County", "source_id": "boco-aar-marshall-2022", "source_locator": "PDF p. 9 (printed p. 8), What Worked Well - Evacuations, last bullet", "evidence_class": "reported", "note": "Round official figure; method not stated."},
+    {"target_id": "superior-evacuation-complete", "metric": "Time the entire Town of Superior was reported evacuated", "value": "2021-12-30T15:30:00-07:00", "unit": "local_time", "location": "Town of Superior", "source_id": "boco-aar-marshall-2022", "source_locator": "PDF p. 7 (printed p. 6), entry 1530", "evidence_class": "reported", "note": "First Everbridge order covering Superior areas: 12:15:55 (row 2); decision to evacuate the whole town: 12:50 (AAR)."},
+    {"target_id": "law-enforcement-door-to-door", "metric": "Law enforcement resources performing door-to-door evacuations", "value": 300, "value_qualifier": "over", "unit": "law_enforcement_resources", "location": "Superior, Louisville and unincorporated Boulder County", "source_id": "boco-aar-marshall-2022", "source_locator": "PDF p. 9 (printed p. 8), Evacuations bullet 3", "evidence_class": "reported"},
+    {"target_id": "us36-fire-crossings", "metric": "Locations where the fire jumped US 36", "value": 3, "unit": "locations", "location": "US 36 (six-lane divided highway)", "source_id": "boco-aar-marshall-2022", "source_locator": "PDF p. 9 (printed p. 8), Evacuations bullet 4", "evidence_class": "reported"},
+    {"target_id": "fatalities", "metric": "Fatalities", "value": 2, "unit": "persons", "location": "one in the Marshall area, one in the Town of Superior", "source_id": "boco-aar-marshall-2022", "source_locator": "PDF p. 5 (printed p. 4), The Marshall Fire Begins", "evidence_class": "reported", "note": "Both had been contacted by law enforcement and advised to leave (same paragraph). No identities recorded."},
+    {"target_id": "homes-destroyed", "metric": "Homes destroyed (at last count in the AAR)", "value": 1084, "unit": "homes", "temporal_role": "post_event", "location": "Marshall Fire area", "source_id": "boco-aar-marshall-2022", "source_locator": "PDF p. 4 (printed p. 3), Introduction", "evidence_class": "reported", "note": "Later county counts differ (e.g. 1,109 in a 2025 assessor list, not acquired here)."},
+    {"target_id": "survey-sample", "metric": "Survey analysis sample (respondents in or adjacent to warning/order zones)", "value": 191, "unit": "respondents", "location": "Marshall Fire evacuation warning/order zones", "survey_period": ["2022-05-18", "2022-06-12"], "source_id": "forrister-2024-tbs", "source_locator": "Section 3.2, p. 5", "evidence_class": "reported", "note": "Convenience sample (social media + Qualtrics panel); 294 valid responses before exclusion."},
+    {"target_id": "survey-evacuated-share", "metric": "Share of survey respondents who chose to evacuate", "value": 69.11, "unit": "percent", "sample_n": 191, "location": "survey sample", "source_id": "forrister-2024-tbs", "source_locator": "Table 4, p. 8 (text p. 7 gives approximately 69 %)", "evidence_class": "reported"},
+    {"target_id": "survey-official-notice-share", "metric": "Share of respondents receiving a pre-evacuation notice, warning or order from an official source", "value": 65, "value_qualifier": "approximately", "unit": "percent", "sample_n": 191, "window_text": "often between 12:00 p.m. and 4:00 p.m. on December 30, 2021", "location": "survey sample", "source_id": "forrister-2024-tbs", "source_locator": "Section 4.1, p. 7", "evidence_class": "reported"},
+    {"target_id": "survey-informal-warning-share", "metric": "Share of respondents alerted or warned to evacuate by someone they knew", "value": 56, "unit": "percent", "sample_n": 191, "location": "survey sample", "source_id": "forrister-2024-tbs", "source_locator": "Section 4.1, p. 7", "evidence_class": "reported"},
+    {"target_id": "survey-awareness-time", "metric": "Mean awareness time (minutes after midnight, 2021-12-30 local)", "value": 701.40, "sd": 200.23, "unit": "minutes_after_local_midnight", "location": "survey sample", "source_id": "forrister-2024-tbs", "source_locator": "Table 4, p. 8", "evidence_class": "reported", "note": "Missing values were replaced with the mean of remaining observations (Section 3.4), which narrows dispersion."},
+    {"target_id": "survey-delay-time", "metric": "Mean evacuation delay time (departure minus awareness)", "value": 136.59, "sd": 263.44, "unit": "minutes", "location": "survey sample", "source_id": "forrister-2024-tbs", "source_locator": "Table 4, p. 8; definition Table 3", "evidence_class": "reported", "note": "Sample base for this descriptive is not stated in Table 4; the delay regression (Table 7) uses N = 129 evacuees."},
+    {"target_id": "survey-preparation-time", "metric": "Mean preparation time", "value": 63.64, "sd": 84.50, "unit": "minutes", "location": "survey sample", "source_id": "forrister-2024-tbs", "source_locator": "Table 4, p. 8", "evidence_class": "reported"}
+  ]
+}
