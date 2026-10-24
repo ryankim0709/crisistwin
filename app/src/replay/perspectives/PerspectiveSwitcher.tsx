@@ -155,7 +155,7 @@ export default function PerspectiveSwitcher({ map, model, frameIndex, perimeterI
             ) : (
               <p>{graph.edges.length === 0 ? "No road network in this bundle." : "Positioning camera…"}</p>
             )}
-            <p className="pv-hud-note">Simulated traffic; camera follows the road network, not a tracked vehicle.</p>
+            <p className="pv-hud-note">Camera follows the road network, not a tracked vehicle.</p>
           </section>
         </>
       )}

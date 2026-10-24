@@ -55,7 +55,6 @@ export default function CompareTab({ baseline, index, load, showVariant, onSelec
           <input type="radio" name="rp-variant" checked={selectedId === null} onChange={() => onSelect(null)} />
           <span>
             <strong>Baseline run</strong>
-            <small>The replay as modelled, with no changes.</small>
           </span>
         </label>
         {index.variants.map((v) => (

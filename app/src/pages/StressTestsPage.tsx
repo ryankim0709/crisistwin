@@ -109,12 +109,12 @@ function Results({ doc }: { doc: StressDoc }) {
       </div>
       <Panel
         title="Disruption runs against the baseline"
-        eyebrow="Computed results"
+       
         aside={<Tag tone="amber">Counterfactual, not history</Tag>}
       >
         {doc.runs.length === 0 ? (
           <EmptyResult title="No stress runs recorded">
-            The file lists no completed runs.
+            No completed runs.
           </EmptyResult>
         ) : (
           <div className="ui-table-scroll">
@@ -159,7 +159,6 @@ function Results({ doc }: { doc: StressDoc }) {
       {doc.findings && (
         <Panel
           title="AI findings"
-          eyebrow="Explanation of the results above"
           aside={<EvidenceTag kind="ai_explanation" />}
         >
           <p className="ui-notice">
@@ -170,7 +169,7 @@ function Results({ doc }: { doc: StressDoc }) {
         </Panel>
       )}
       <div className="ui-columns">
-        <Panel title="Where this comes from" eyebrow="Reproducibility">
+        <Panel title="Where this comes from">
           <dl className="ui-facts">
             <div>
               <dt>Findings</dt>
@@ -201,7 +200,7 @@ function Results({ doc }: { doc: StressDoc }) {
             </a>
           </div>
         </Panel>
-        <Panel title="Limitations" eyebrow="Read before comparing">
+        <Panel title="Limitations">
           {doc.limitations.length > 0 ? (
             <ul className="ui-checklist">
               {doc.limitations.map((line) => (
@@ -210,7 +209,7 @@ function Results({ doc }: { doc: StressDoc }) {
             </ul>
           ) : (
             <EmptyResult title="No limitations recorded">
-              The file lists none. Treat results as a single-seed planning experiment anyway.
+              Treat results as a single-seed planning experiment.
             </EmptyResult>
           )}
         </Panel>
@@ -224,13 +223,11 @@ export default function StressTestsPage() {
   return (
     <WorkspacePage
       title="Stress testing"
-      description="Where does the 2018 Camp Fire evacuation plan break? Each run disrupts the baseline once."
-      section="Analysis"
     >
       {load.status === "ready" ? (
         <Results doc={load.data} />
       ) : (
-        <Panel title="Stress-test runs" eyebrow="Computed results">
+        <Panel title="Stress-test runs">
           <DataState load={load} what="stress-test results" path={STRESS_URL} />
         </Panel>
       )}

@@ -137,7 +137,6 @@ export default function ResponderTab({ model, simTimeMs, onFocus }: ResponderTab
     return (
       <div className="rp-empty">
         <strong>No planning insights in this bundle.</strong>
-        <span>Regenerate the bundle with the simulator to compute zone and road insights.</span>
       </div>
     );
   }

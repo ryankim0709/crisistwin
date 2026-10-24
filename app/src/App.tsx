@@ -20,7 +20,6 @@ import {
   type Variant,
   type VariantsIndex,
 } from "./pages/workspaceData";
-import { navigationItems } from "./navigation";
 
 type Connection =
   { status: "loading" } | { status: "connected"; version: string } | { status: "error" };
@@ -54,7 +53,6 @@ function WhatIfHeadline({ index, camp }: { index: VariantsIndex; camp: Incident 
       <p className="headline-claim">
         <strong>{best.variant.title}</strong>: {fmtDelta(best.delta)} vehicles out by {when}
       </p>
-      <p className="ui-help">{best.variant.question}</p>
       <p className="ui-help">
         Largest gain among {index.variants.length} what-ifs. Simulated and counterfactual, one seed;
         not a reconstruction of what would have happened.
@@ -91,7 +89,7 @@ function ReplayOverview() {
           label="Historical fires"
           value={count(incidents, list?.length ?? null)}
           detail={
-            list ? "Replayable from the incidents index" : unavailable(incidents, INCIDENTS_URL)
+            list ? "In the incidents index" : unavailable(incidents, INCIDENTS_URL)
           }
         />
         <Metric
@@ -132,11 +130,11 @@ function ReplayOverview() {
             >
               {variants.status === "error"
                 ? variants.message
-                : `Needs ${VARIANTS_URL}. An empty panel does not mean no strategy changes outcomes.`}
+                : `Needs ${VARIANTS_URL}.`}
             </EmptyResult>
           )}
         </Panel>
-        <Panel title="Fires available" eyebrow="Historical replay">
+        <Panel title="Fires available">
           {list && list.length > 0 ? (
             <div className="ui-list">
               {list.map((incident) => (
@@ -202,7 +200,6 @@ export default function App() {
   return (
     <WorkspacePage
       title="Workspace overview"
-      description="A place to test what happens next."
       action={
         <a className="ui-button" href={replayHref(CAMP_ID)}>
           Open the Camp Fire replay →
@@ -211,16 +208,11 @@ export default function App() {
     >
       <section className="overview-hero" aria-labelledby="demo-title">
         <div>
-          <p className="eyebrow">Disaster response, explored.</p>
           <h2 id="demo-title">
             One change can
             <br />
             reshape the whole plan.
           </h2>
-          <p>
-            Explore wildfire spread, prepare evacuation assumptions, and make room for the
-            unexpected.
-          </p>
           <div className="hero-actions">
             <a className="ui-button ui-button-light" href="/maps">
               Explore the map ↗
@@ -247,16 +239,13 @@ export default function App() {
       </section>
       <ReplayOverview />
       <div className="ui-split">
-        <Panel title="No scenarios yet" eyebrow="Recent work">
-          <EmptyResult title="Start with a shared baseline">
-            Choose a fire origin, set the wind, and explore spread in 15-minute steps. Scenario
-            drafts and experiment runs are not saved yet.
-          </EmptyResult>
+        <Panel title="No scenarios yet">
+          <EmptyResult title="Nothing saved">Scenario drafts and runs are not saved yet.</EmptyResult>
           <a className="ui-text-link" href="/scenarios">
             Open scenario builder →
           </a>
         </Panel>
-        <Panel title="Workspace readiness" eyebrow="Connections">
+        <Panel title="Workspace readiness">
           <div className="readiness-connection" aria-live="polite" aria-atomic="true">
             <span className="connection-label">System connection</span>
             {connection.status === "loading" && <p role="status">Connecting to the API…</p>}
@@ -302,20 +291,6 @@ export default function App() {
           </dl>
         </Panel>
       </div>
-      <Panel title="Your planning workflow" eyebrow="Explore the workspace">
-        <div className="workflow-grid">
-          {navigationItems
-            .filter((item) => item.path !== "/")
-            .map((item, index) => (
-              <a key={item.path} href={item.path}>
-                <span className="workflow-number">0{index + 1}</span>
-                <strong>{item.label}</strong>
-                <p>{item.description}</p>
-                <span className="ui-text-link">Open workspace →</span>
-              </a>
-            ))}
-        </div>
-      </Panel>
     </WorkspacePage>
   );
 }

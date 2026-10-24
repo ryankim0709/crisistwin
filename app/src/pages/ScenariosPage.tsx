@@ -5,19 +5,19 @@ import { DraftNotice, EmptyResult, Field, Panel, Tag, WorkspacePage } from "./Wo
 const templates = [
   {
     name: "Wildfire baseline",
-    detail: "Establish shared weather and ignition assumptions.",
+    detail: "Shared weather and ignition assumptions.",
     wind: "10",
     direction: "270",
   },
   {
     name: "Wind shift",
-    detail: "Explore a different wind direction against the baseline.",
+    detail: "Different wind direction from the baseline.",
     wind: "20",
     direction: "180",
   },
   {
     name: "Calm conditions",
-    detail: "Start with no wind in the illustrative fire model.",
+    detail: "No wind.",
     wind: "0",
     direction: "0",
   },
@@ -38,7 +38,6 @@ export default function ScenariosPage() {
   return (
     <WorkspacePage
       title="Scenarios"
-      description="Define the starting point. Keep every assumption in view."
       action={
         <a className="ui-button" href="/maps">
           Open fire experiment ↗
@@ -49,13 +48,12 @@ export default function ScenariosPage() {
         title="Real fire inputs in the replays"
         eyebrow="Historical starting conditions"
         layers={["fire_perimeters", "fire_observations", "fire_simulated"]}
-        intro="Historical replays start from recorded fire perimeters and observations, plus a simulated front fitted to them. The draft builder below is separate and still uses illustrative assumptions."
+        intro="Replays start from recorded perimeters and observations plus a fitted simulated front. The draft builder below is separate and illustrative."
       />
       <DraftNotice />
       <div className="ui-split">
         <Panel
           title="Build a scenario"
-          eyebrow="01 / Starting conditions"
           aside={<Tag tone="amber">Unsaved draft</Tag>}
         >
           <form onSubmit={reviewDraft} onChange={() => setReview(false)}>
@@ -106,8 +104,7 @@ export default function ScenariosPage() {
             <div className="ui-inset">
               <strong>Ignition point</strong>
               <p>
-                Choose a location on the map in WGS84 latitude / longitude. This draft is not
-                transferred to the map yet.
+                Set on the map (WGS84 lat/lon). Not transferred from this draft yet.
               </p>
               <a href="/maps">Choose on map →</a>
             </div>
@@ -122,7 +119,6 @@ export default function ScenariosPage() {
             </Field>
             <div className="ui-actions">
               <button type="submit">Review draft</button>
-              <span>Local preview only</span>
             </div>
           </form>
           {review && (
@@ -132,12 +128,12 @@ export default function ScenariosPage() {
                 User assumptions: {wind} mph wind from {direction}° clockwise from north. Horizon:
                 120 minutes; step: 15 minutes. {notes}
               </p>
-              <p>Not saved or run. Ignition selection is still required on the map.</p>
+              <p>Not saved or run.</p>
             </div>
           )}
         </Panel>
         <div className="ui-stack">
-          <Panel title="Start from a template" eyebrow="Sample assumptions">
+          <Panel title="Start from a template">
             <div className="ui-list">
               {templates.map((template) => (
                 <button
@@ -161,7 +157,7 @@ export default function ScenariosPage() {
               ))}
             </div>
           </Panel>
-          <Panel title="Run record" eyebrow="Reproducibility">
+          <Panel title="Run record">
             <dl className="ui-facts">
               <div>
                 <dt>Model</dt>
@@ -188,10 +184,7 @@ export default function ScenariosPage() {
         </div>
       </div>
       <Panel title="Saved scenarios" aside={<Tag>Persistence not connected</Tag>}>
-        <EmptyResult title="Your scenario library starts here">
-          Saved inputs, model versions, source timestamps, and run history will appear here once
-          scenario storage is connected.
-        </EmptyResult>
+        <EmptyResult title="No saved scenarios">Scenario storage is not connected.</EmptyResult>
       </Panel>
     </WorkspacePage>
   );

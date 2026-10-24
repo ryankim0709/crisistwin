@@ -101,8 +101,7 @@ export default function ExplainPanel({ model, frameIndex, simTimeMs }: ExplainPa
         </h2>
         <p className="ai-intro">
           Sends the numbers shown at {localTime(simTimeMs, tz)} (metrics, insights, recent events,
-          layer status, assumptions and limitations) to an AI model for a plain-language
-          explanation.
+          layer status, assumptions, limitations) to an AI model.
         </p>
         <div className="ai-presets" role="group" aria-label="Preset questions">
           {PRESETS.map((preset) => (
@@ -124,7 +123,7 @@ export default function ExplainPanel({ model, frameIndex, simTimeMs }: ExplainPa
             ask(draft);
           }}
         >
-          <label htmlFor="ai-question" className="ai-label">
+          <label htmlFor="ai-question" className="ai-label rp-sr">
             Your question
           </label>
           <textarea
@@ -165,8 +164,7 @@ export default function ExplainPanel({ model, frameIndex, simTimeMs }: ExplainPa
           <div className="rp-empty">
             <strong>No question asked yet.</strong>
             <span>
-              Pick a preset or type a question. Answers explain the simulation; they are not
-              instructions.
+              Answers explain the simulation; they are not instructions.
             </span>
           </div>
         )}

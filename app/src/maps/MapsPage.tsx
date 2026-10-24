@@ -78,7 +78,6 @@ export default function MapsPage() {
     <main className="map-page" id="main-content" tabIndex={-1}>
       <header className="map-page-header">
         <h1>Map &amp; simulation</h1>
-        <span>Illustrative fire model</span>
       </header>
       <MapCanvas
         center={view.center}
@@ -116,18 +115,12 @@ export default function MapsPage() {
             </fieldset>
             <div>
               <strong>Planning assumptions</strong>
-              <p>
-                Configure departure timing, road availability, and shelter capacity in the planning
-                workspace. These drafts do not affect this fire experiment.
-              </p>
+              <p>Planning drafts do not affect this fire experiment.</p>
               <a href="/evacuation">Open evacuation planning →</a>
             </div>
             <div>
               <strong>Scenario assistant</strong>
-              <p>
-                Natural-language scenario controls are not connected. Use the wind and ignition
-                controls below to run the current model.
-              </p>
+              <p>Not connected.</p>
               <button type="button" disabled>
                 Ask about this scenario
               </button>
@@ -251,7 +244,6 @@ export default function MapsPage() {
               />
             </label>
             <output aria-live="polite">+{frame?.elapsedMinutes ?? 0} min</output>
-            <span className="timeline-caption">15-minute steps · 2 hours</span>
           </div>
         )}
         <p className="simulation-note">
@@ -262,7 +254,7 @@ export default function MapsPage() {
               : "Simulated footprint hidden. "
             : "Illustrative fire-spread model. "}
           Uniform fuel; terrain, water, buildings, and suppression are not modeled. Not an
-          operational forecast. Leaving this page clears the experiment.
+          operational forecast.
         </p>
       </section>
     </main>

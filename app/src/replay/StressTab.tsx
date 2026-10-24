@@ -135,7 +135,7 @@ export default function StressTab({ url }: { url: string }) {
 
       <section aria-labelledby="rp-findings-title">
         <h3 id="rp-findings-title" className="rp-section-title">
-          AI explanation — numbers come from simulator runs
+          AI explanation
         </h3>
         {result.findings ? (
           <div className="rp-findings">

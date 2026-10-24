@@ -247,7 +247,7 @@ export default function StoryMode({
           <p className="rp-reveal-note">
             Exposure = vehicle-minutes inside the fire area, on roads plus at home before leaving,
             as a share of the baseline (model, one seed). A relative comparison, not a count of
-            people. Pick a row to watch it on the map.
+            people.
           </p>
         </div>
       ) : (
@@ -368,7 +368,7 @@ export function StoryLanding({
       <p className="rp-landing-eyebrow">Historical replay · the story</p>
       <h1 id="rp-landing-title">{title}</h1>
       <p className="rp-landing-meta">
-        {chapters} chapters · about {Math.max(1, Math.round(seconds / 60))} min · hands-free
+        {chapters} chapters · about {Math.max(1, Math.round(seconds / 60))} min
       </p>
       <button ref={playRef} type="button" className="rp-landing-play" onClick={onPlay}>
         <span aria-hidden="true">▶</span> Play the story

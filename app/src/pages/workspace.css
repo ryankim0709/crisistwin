@@ -10,19 +10,10 @@
   gap: 24px;
   margin-bottom: 30px;
 }
-.workspace-heading .eyebrow {
-  margin-bottom: 12px;
-}
 .workspace-heading h1 {
   font-size: clamp(28px, 3.5vw, 42px);
   letter-spacing: -1.5px;
   line-height: 1.15;
-}
-.workspace-heading p:not(.eyebrow) {
-  margin: 12px 0 0;
-  color: #52635c;
-  font-size: 14px;
-  line-height: 1.7;
 }
 .ui-button {
   display: inline-flex;
@@ -544,47 +535,11 @@
 .readiness-connection button {
   margin-top: 10px;
 }
-.workflow-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 20px;
-}
-.workflow-grid > a {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  padding: 20px;
-  border: 1px solid #dce1d4;
-  border-radius: 8px;
-  text-decoration: none;
-}
-.workflow-grid > a:hover {
-  background: #f0f3e9;
-  border-color: #9eb89e;
-}
-.workflow-number {
-  margin-bottom: 20px;
-  font-size: 11px;
-  color: #52635c;
-}
-.workflow-grid strong {
-  font-size: 14px;
-}
-.workflow-grid p {
-  flex: 1;
-  margin: 10px 0 20px;
-  color: #52635c;
-  font-size: 12px;
-  line-height: 1.8;
-}
 @media (max-width: 1200px) {
   .ui-split {
     grid-template-columns: 1fr;
   }
-  .workflow-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .overview-hero {
+    .overview-hero {
     align-items: flex-start;
   }
   .hero-workflow {
@@ -615,14 +570,7 @@
     padding: 18px;
   }
   .ui-fields,
-  .workflow-grid {
-    grid-template-columns: 1fr;
-    gap: 0;
-  }
-  .workflow-grid {
-    gap: 14px;
-  }
-  .overview-hero {
+      .overview-hero {
     padding: 24px;
   }
 }

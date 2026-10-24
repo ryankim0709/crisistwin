@@ -258,7 +258,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-.timeline-caption,
 .simulation-note {
   color: #52635c;
   font-size: 11px;
@@ -304,9 +303,6 @@
   }
   .fire-timeline {
     flex-wrap: wrap;
-  }
-  .timeline-caption {
-    display: none;
   }
   .timeline-slider {
     min-width: 100px;

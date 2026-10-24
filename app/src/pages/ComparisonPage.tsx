@@ -147,7 +147,7 @@ function Comparison({ index }: { index: VariantsIndex }) {
       </div>
       <Panel
         title="What-if outcomes against the baseline"
-        eyebrow="Computed results"
+       
         aside={<Tag tone="amber">Counterfactual, not history</Tag>}
       >
         <div className="ui-table-scroll">
@@ -190,7 +190,7 @@ function Comparison({ index }: { index: VariantsIndex }) {
         )}
       </Panel>
       <div className="ui-columns">
-        <Panel title="Same inputs for every run" eyebrow="Reproducibility">
+        <Panel title="Same inputs for every run">
           <dl className="ui-facts">
             {facts.map(([label, value]) => (
               <div key={label}>
@@ -199,12 +199,8 @@ function Comparison({ index }: { index: VariantsIndex }) {
               </div>
             ))}
           </dl>
-          <p className="ui-help">
-            The baseline and every what-if share these inputs; the only differences are the changes
-            listed for each row.
-          </p>
         </Panel>
-        <Panel title="Limitations" eyebrow="Read before comparing">
+        <Panel title="Limitations">
           {index.limitations.length > 0 ? (
             <ul className="ui-checklist">
               {index.limitations.map((line) => (
@@ -213,7 +209,7 @@ function Comparison({ index }: { index: VariantsIndex }) {
             </ul>
           ) : (
             <EmptyResult title="No limitations recorded">
-              The index lists none. Treat results as a single-seed planning experiment anyway.
+              Treat results as a single-seed planning experiment.
             </EmptyResult>
           )}
         </Panel>
@@ -227,8 +223,6 @@ export default function ComparisonPage() {
   return (
     <WorkspacePage
       title="Strategy comparison"
-      description="Change one thing about the 2018 Camp Fire evacuation, then compare outcomes against the same starting conditions."
-      section="Analysis"
       action={
         <a className="ui-button" href={replayHref(CAMP_ID, "&tab=whatif")}>
           Open What if&hellip; on the map →
@@ -236,13 +230,13 @@ export default function ComparisonPage() {
       }
     >
       {load.status !== "ready" ? (
-        <Panel title="What-if variants" eyebrow="Computed results">
+        <Panel title="What-if variants">
           <DataState load={load} what="what-if variants" path={VARIANTS_URL} />
         </Panel>
       ) : load.data.variants.length === 0 ? (
-        <Panel title="What-if variants" eyebrow="Computed results">
+        <Panel title="What-if variants">
           <EmptyResult title="No what-if variants listed">
-            The index has no variants. Generate them with <code>python3 -m sim.variants</code>.
+            Generate them with <code>python3 -m sim.variants</code>.
           </EmptyResult>
         </Panel>
       ) : (

@@ -3,25 +3,17 @@ import { fmt, fmtDelta, verdict, type Direction, type MetricDelta } from "./work
 
 export function WorkspacePage({
   title,
-  description,
-  section = "Workspace",
   action,
   children,
 }: {
   title: string;
-  description: string;
-  section?: string;
   action?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <main className="workspace-page" id="main-content" tabIndex={-1}>
       <header className="workspace-heading">
-        <div>
-          <p className="eyebrow">{section} / CrisisTwin</p>
-          <h1>{title}</h1>
-          <p>{description}</p>
-        </div>
+        <h1>{title}</h1>
         {action}
       </header>
       {children}
@@ -70,8 +62,8 @@ export function Tag({
 export function DraftNotice() {
   return (
     <p className="ui-notice">
-      <strong>UI preview</strong> Sample inputs are editable on this page. Drafts reset when you
-      leave or reload; saving and simulation services are not connected.
+      <strong>UI preview</strong> Sample inputs; drafts reset on reload. Saving and simulation are
+      not connected.
     </p>
   );
 }
@@ -133,8 +125,7 @@ export function DataState({
   }
   return (
     <EmptyResult title={`No ${what} available`}>
-      <code>{path}</code> is not served, so there is nothing to show. An empty page does not mean
-      the analysis found no differences.
+      <code>{path}</code> is not served.
     </EmptyResult>
   );
 }

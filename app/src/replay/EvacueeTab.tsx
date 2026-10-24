@@ -40,13 +40,12 @@ export default function EvacueeTab({ model, simTimeMs, frameIndex, pin, onPin }:
   return (
     <div className="rp-tab">
       <p className="rp-disclaimer rp-disclaimer--top" role="note">
-        {model.insights?.disclaimer ?? "Planning insight from a simulation; not operational instructions."} This
-        view describes a historical model run. It is not guidance for any real event.
+        {model.insights?.disclaimer ?? "Planning insight from a simulation; not operational instructions."}
       </p>
 
       <div className="rp-pin-controls">
         <p className="rp-pin-hint">
-          {pin ? "Pin placed. Click the map to move it." : "Click or tap the map to place a pin, or choose a zone:"}
+          {pin ? "Click the map to move the pin." : "Click the map to place a pin, or choose a zone:"}
         </p>
         {zones.length > 0 && (
           <label className="rp-select-label">
