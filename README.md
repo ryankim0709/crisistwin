@@ -39,6 +39,17 @@ its fire, traffic and crew behaviour are scripted for visual demonstration, not 
 validated model or operational guidance (see
 [ADR 0010](docs/adr/0010-evacuation-diorama.md)).
 
+The `/dispatch` page ("Dispatch agent") is a copy of the Simulation Studio in which, after
+the fire run is computed, a Claude-based dispatch agent runs alongside playback. Every 10
+simulated minutes (sooner after urgent alerts, at least 3 minutes apart) the clock pauses,
+the browser sends an observation to the backend, and the agent streams its reasoning and
+issues orders: evacuate a zone via an exit (also used to redirect traffic), dispatch a fire
+engine to a zone, or recall it. The browser computes all routes, flows and counts, and the
+agent only chooses among listed options. Fire spread is not affected by orders, and a
+no-action baseline is shown for comparison. Roads and fire stations come from
+OpenStreetMap; zones and vehicle counts are synthetic. It is a planning experiment, not
+operational guidance (see [ADR 0012](docs/adr/0012-dispatch-agent.md)).
+
 The native iOS scaffold is in [`mobile/`](mobile/README.md): a SwiftUI workspace,
 API/database readiness card, and a scenario empty state. Native maps, simulation,
 and scenario synchronization are not implemented in the mobile app yet.
@@ -566,6 +577,23 @@ fires must be close enough to share one landscape (at most about 24 km across, i
 spread room); edits mark the result stale and nothing re-runs automatically; a run that
 reaches the grid edge is incomplete from that minute. It is a planning experiment, not an
 operational forecast.
+
+### Dispatch agent (`/dispatch`)
+
+Set `ANTHROPIC_API_KEY` in the environment of the Django backend and restart it; without it
+the endpoint returns 503. Optionally set `DISPATCH_AGENT_MODEL` and
+`DISPATCH_AGENT_EFFORT` (`low`, `medium` or `high`; the default is `low`). Open
+**http://localhost:5173/dispatch** (the Studio demo fires are preloaded), press **Run simulation**, then **Start
+agent**. Playback is limited to 1 or 2 simulated minutes per second so the agent has time to
+decide; each decision is a paid model call. Model, assumptions and the request/response
+contract: `docs/adr/0012-dispatch-agent.md`.
+
+To rebuild the road and station fixture from OpenStreetMap (needs internet; standard
+library only), run from the repository root:
+
+```bash
+python3 -m tools.build_dispatch_area --output app/public/dispatch/east-bay-hills.json
+```
 
 ### Build runtime images
 

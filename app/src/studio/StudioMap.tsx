@@ -344,6 +344,8 @@ export default function StudioMap({
   onMapClick,
   onSelectIgnition,
   onMoveIgnition,
+  onMapReady,
+  legendExtra,
 }: StudioMapProps) {
   const container = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
@@ -361,13 +363,15 @@ export default function StudioMap({
   const moveRef = useRef(onMoveIgnition);
   const modeRef = useRef(mode);
   const ignitionsRef = useRef(ignitions);
+  const mapReadyRef = useRef(onMapReady);
   useEffect(() => {
     clickRef.current = onMapClick;
     selectRef.current = onSelectIgnition;
     moveRef.current = onMoveIgnition;
     modeRef.current = mode;
     ignitionsRef.current = ignitions;
-  }, [onMapClick, onSelectIgnition, onMoveIgnition, mode, ignitions]);
+    mapReadyRef.current = onMapReady;
+  }, [onMapClick, onSelectIgnition, onMoveIgnition, mode, ignitions, onMapReady]);
 
   useEffect(() => {
     if (!container.current) return;
@@ -475,6 +479,7 @@ export default function StudioMap({
         paint: { "line-color": CURRENT_PERIMETER_COLOR, "line-width": CURRENT_LINE_WIDTH },
       });
       setReady(true);
+      mapReadyRef.current?.(map);
     });
 
     function emitPoint(longitude: number, latitude: number) {
@@ -510,6 +515,7 @@ export default function StudioMap({
       boxLabel.current?.remove();
       boxLabel.current = null;
       setReady(false);
+      mapReadyRef.current?.(null);
       map.remove();
       mapRef.current = null;
     };
@@ -799,6 +805,7 @@ export default function StudioMap({
             </li>
           </ul>
         </div>
+        {legendExtra}
         <div className="studio-map__legend-group studio-map__legend-group--source">
           <h3>Source data</h3>
           <ul className="studio-map__sources">
