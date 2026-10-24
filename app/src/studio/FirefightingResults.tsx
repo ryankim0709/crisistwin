@@ -8,6 +8,12 @@ import { formatElapsed } from "../fire/spread";
 import { Notice, SegmentedControl, Tag, type SegmentedOption } from "../ui";
 import { STRATEGY_LABELS, type FirefightingResult } from "./firefighting";
 import type { FireAttack } from "./initialAttack";
+import { SIZE_UP_MINUTES, type CrewHandoff } from "./crewHandoff";
+
+function firstLeave(handoff: CrewHandoff): number | null {
+  const minutes = handoff.leaveMinutes.filter((m): m is number => m !== null);
+  return minutes.length > 0 ? Math.min(...minutes) : null;
+}
 import type { CrewDispatch } from "./crewDispatch";
 
 /** Which fire the page shows: direct attack, the best line plan, or no crews. */
@@ -82,12 +88,15 @@ export interface FirefightingResultsProps {
   dispatch: CrewDispatch | null;
   /** Why they were not sent from stations, when that was asked for. */
   dispatchNote: string | null;
+  /** When the crews cannot put the fire out and leave to help the evacuation, or null. */
+  handoff: CrewHandoff | null;
 }
 
 export default function FirefightingResults({
   result,
   dispatch,
   dispatchNote,
+  handoff,
   names,
   stale,
   shown,
@@ -207,6 +216,14 @@ export default function FirefightingResults({
               </li>
             ))}
           </ul>
+          {handoff?.overwhelmedReason && (
+            <Notice compact tone="warning" className="studio-notice">
+              Overwhelmed: {handoff.overwhelmedReason}. Each crew works the fire for{" "}
+              {SIZE_UP_MINUTES} min, then leaves to help the evacuation
+              {firstLeave(handoff) !== null && ` (first at ${formatElapsed(firstLeave(handoff)!)})`}
+              . Turn on Evacuation &amp; closures in 3D to see where they go.
+            </Notice>
+          )}
         </section>
       )}
 

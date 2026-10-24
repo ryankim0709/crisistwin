@@ -23,6 +23,9 @@ import { routeCoords } from "../routing";
 /** Drawn house footprint (ground metres), kept within a readable world-unit range. */
 const HOUSE_METERS = 18;
 const HOUSE_UNITS = { min: 0.55, max: 1.6 } as const;
+/** Room for units added during a run (Studio crews leaving the fire), beyond station units. */
+const EXTRA_UNIT_SLOTS = 64;
+
 /** Drawn vehicle and engine size, world units (exaggerated so they read on a 600-unit board). */
 const CAR_UNITS = { length: 0.95, width: 0.5, height: 0.4 } as const;
 const ENGINE_UNITS = { length: 2.4, width: 1.05, height: 1.0 } as const;
@@ -420,7 +423,8 @@ export class DispatchOverlay implements BoardOverlay {
       ENGINE_UNITS.height,
       ENGINE_UNITS.width,
     ).translate(0, ENGINE_UNITS.height / 2, 0);
-    const units = area.stations.reduce((sum, station) => sum + station.units.length, 0);
+    const units =
+      area.stations.reduce((sum, station) => sum + station.units.length, 0) + EXTRA_UNIT_SLOTS;
     this.trucks = new THREE.InstancedMesh(
       truckGeo,
       new THREE.MeshStandardMaterial({ color: 0xc8352a, roughness: 0.45, emissive: 0x3a0804 }),
@@ -767,7 +771,9 @@ export class DispatchOverlay implements BoardOverlay {
     const { trucks, frame } = this;
     if (!trucks || !frame) return;
     let n = 0;
+    const capacity = trucks.instanceMatrix.count;
     for (const [id, glide] of this.unitGlide) {
+      if (n >= capacity) break;
       glide.x += (glide.tx - glide.x) * k;
       glide.z += (glide.tz - glide.z) * k;
       const y = frame.surfaceAt(glide.x, glide.z);

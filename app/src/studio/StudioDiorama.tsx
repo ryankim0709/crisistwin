@@ -37,6 +37,7 @@ import { CREW_COLORS, FIRELINE_COLORS, firelineCss } from "./firelinePalette";
 
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
 const ROADS_ATTRIBUTION = "Roads © OpenStreetMap contributors";
+const NO_LEAVES: readonly (number | null)[] = [];
 
 function RoadGlyph() {
   return (
@@ -149,6 +150,8 @@ export interface StudioDioramaProps {
   fireline: FirelineView | null;
   /** Firefighters driving in from fire stations, or null. */
   crews: CrewDispatch | null;
+  /** Minute each crew leaves the fire to help the evacuation (null = stays); empty = none. */
+  crewLeaveMinutes?: readonly (number | null)[];
   /** Shown under the board control. */
   evacuationPanel?: ReactNode;
   /** The live scene once created, and null once disposed (for a page overlay such as dispatch). */
@@ -185,6 +188,7 @@ export default function StudioDiorama(props: StudioDioramaProps) {
     onSceneChange,
     fireline,
     crews,
+    crewLeaveMinutes,
   } = props;
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [scene, setScene] = useState<FireDioramaSceneApi | null>(null);
@@ -291,6 +295,9 @@ export default function StudioDiorama(props: StudioDioramaProps) {
   useEffect(() => {
     crewOverlay.setDispatch(crews);
   }, [crewOverlay, crews]);
+  useEffect(() => {
+    crewOverlay.setLeaveMinutes(crewLeaveMinutes ?? NO_LEAVES);
+  }, [crewOverlay, crewLeaveMinutes]);
   useEffect(() => {
     lineOverlay.setView(fireline);
   }, [lineOverlay, fireline]);

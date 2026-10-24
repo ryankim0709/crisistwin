@@ -536,6 +536,31 @@ export class DispatchEngine {
     });
   }
 
+  /**
+   * Add a unit that is already out in the area (a Studio crew leaving the fire). It starts
+   * available at `node` and withdraws to `homeNode`.
+   */
+  addUnit(id: string, stationId: string, node: number, homeNode: number): UnitState {
+    const unit: UnitState = {
+      id,
+      stationId,
+      homeNode,
+      status: "available",
+      task: null,
+      zone: null,
+      fire: null,
+      targetNode: null,
+      node,
+      steps: [],
+      stepIndex: 0,
+      stepElapsedSeconds: 0,
+      holdSeconds: 0,
+      arrivedMinute: null,
+    };
+    this.units.push(unit);
+    return unit;
+  }
+
   get finished(): boolean {
     return this.minute >= this.horizonMinutes;
   }
