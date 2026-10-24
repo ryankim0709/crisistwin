@@ -11,9 +11,10 @@ twin; the AAR drill score). A result says that **strategy B did better than stra
 simulator, under its stated assumptions**. It is a planning experiment, never a claim about real
 evacuation outcomes, and it must not be reported as one.
 
-Status: the statistics and the run manifest are built. The headless runner (ADR 0030 §4), the
-truth-log scorer (ADR 0042) and the staleness metric (ADR 0041) are not built yet. This document is
-their contract.
+Status: the statistics, the run manifest and the truth-log scorer are built. The noise layer is
+`sim/gen_noise.py`, the truth log is the `sim_truth` collection, and `sim/triage_quality.py` scores
+triage against it (the AAR's `triage_quality` section; ADR 0042). The headless runner (ADR 0030 §4)
+and the staleness metric (ADR 0041) are not built yet. This document is their contract.
 
 ## 1. Experimental design
 
@@ -164,14 +165,20 @@ both runs have `coverage == 1`.
 | Key | Definition | Better | Unit |
 | --- | --- | --- | --- |
 | `first_order_min.median` (and `first_order_min.<zone_id>`) | Per zone: from the **trigger** (the truth-log time the simulated fire first comes within the planner's `EVACUATE_NOW_KM` of the zone) to the first `evacuate_now`. Zones never threatened are excluded. A zone never ordered before the horizon is censored at the horizon and counted in `first_order.missed_zones` | lower | drill minutes |
-| `triage.confirm_precision`, `triage.confirm_recall` | Against the truth log (ADR 0042): of the reports confirmed (or merged into a confirmed one), the share true at decision time; of the true reports received at least `TRIAGE_GRACE_MIN` before the horizon, the share confirmed | higher | share |
-| `triage.dismiss_precision`, `triage.dismiss_recall` | The same for dismissals of false reports | higher | share |
+| `triage.confirm_precision`, `triage.confirm_recall` | Against the truth log (ADR 0042): of the reports confirmed (or merged into a confirmed one), the share true at decision time; of the true reports received at least `TRIAGE_GRACE_MIN` (10) before the horizon, help requests excepted, the share confirmed | higher | share |
+| `triage.dismiss_precision`, `triage.dismiss_recall` | The same for dismissals (not merges) of false reports; help requests included | higher | share |
+| `triage.change_detect_min` | Median over truth changes (road state, fire, shelters) of the drill minutes from the change to the first controller decision reflecting it (confirm a report of the new state, or dismiss or resolve one of the old state, within 200 m). Undetected changes are censored at the horizon | lower | drill minutes |
+| `triage.guidance_changes_on_false`, `triage.dispatches_on_false` | The two parts of `decisions_on_false_info`: guidance versions, and assist tasks. Verify tasks on false reports are not counted (checking is the right response) | lower | count |
 | `stale_critical_min` | Over the run at a 1-minute drill cadence: the sum over the top-N information-priority places (ADR 0041, computed by the evaluator with the model code and a fixed N per scenario) of the minutes each was staler than its half-life | lower | place-minutes |
-| `decisions_on_false_info` | Consequential decisions (guidance change, reroute, closure, dispatch, task assignment) whose cited reports were all false at decision time | lower | count |
-| `rumour_containment_min` | From a rumour's onset to its dismissal or to a public correction | lower | drill minutes |
+| `decisions_on_false_info` | Consequential decisions (guidance change, assist dispatch) whose cited reports all have truth entries and were all false at decision time. A guidance change cites the `road_blocked` reports on its proposal's cause segments and the report whose confirm triggered it | lower | count |
+| `rumour_containment_min` | Median over rumours of the minutes from onset to the earlier of: every received member dismissed, resolved or merged; a controller confirm of the contradicting kind at the rumour's place (a public correction). Censored at the horizon | lower | drill minutes |
 | `agent.tokens_in`, `agent.tokens_out` | Summed over the run's model calls | lower | tokens |
 | `agent.tool_calls`, `agent.tool_errors` | MCP tool calls, and calls rejected by validation | lower | count |
 | `run.wall_s` | Wall seconds for the run. Cost only, never a quality metric | lower | s |
+
+The triage rows are `sim/evaluation.py` `TRIAGE_METRICS` (family `secondary`); `sim/triage_quality.py`
+`manifest_metrics` returns exactly those keys from a `score_triage` result, and the AAR returns them
+under `triage_quality.metrics`.
 
 Also run the invariant checks (non-negative counts, population conservation, no routing over closed
 edges). A run that fails one is **excluded and reported**, never silently dropped.
