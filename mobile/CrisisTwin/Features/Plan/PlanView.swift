@@ -21,7 +21,7 @@ private enum PointSlot: String, Identifiable {
 
 /// The household meeting plan: where to meet if separated, and who to tell.
 struct PlanView: View {
-    @State private var store = MeetingPlanStore()
+    @Environment(MeetingPlanStore.self) private var store
     @State private var editing: PointSlot?
     @State private var pickingContact = false
     @State private var composingMessage = false

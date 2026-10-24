@@ -1,6 +1,10 @@
 # CrisisTwin for iOS
 
-Native SwiftUI counterpart to the web workspace, targeting iPhone and iPad on
+The civilian CrisisTwin app, for households planning ahead and during an
+emergency; the web workspace serves planners (see
+[ADR 0010](../docs/adr/0010-civilian-ios-app.md)). Its tabs are **Home**
+(official-alerts status, one-tap actions, plan summary, and an About sheet with
+the API readiness check), **My Plan**, and **Practice**. Native SwiftUI, targeting iPhone and iPad on
 **iOS 17.0+**. Use **Xcode 16.2+** with its bundled Swift compiler in **Swift 5
 language mode**. Only Apple frameworks are used. There is no package install or
 project generation step; Swift Package Manager is the choice for future Swift
@@ -62,9 +66,11 @@ publishes port 8000 only on `127.0.0.1`, so changing the mobile hostname alone i
 not enough for a physical device. Plain HTTP IP addresses are intentionally not
 accepted by the mobile configuration.
 
-### Scenarios map
+### Practice map
 
-The Scenarios tab shows the web app's `/maps` page in a `WKWebView`, so the map
+The Practice tab, under a "practice only, not a forecast" banner, shows only the
+map and simulation: an injected stylesheet hides the web sidebar and planning
+tools, and navigation away from `/maps` is blocked. It shows the web app's `/maps` page in a `WKWebView`, so the map
 and the illustrative TypeScript fire model run unchanged (see
 [ADR 0007](../docs/adr/0007-mobile-web-map.md)). `WEB_BASE_URL` is an origin like
 `API_BASE_URL`, with the same validation; Debug uses `http://localhost:5173`, the
@@ -100,15 +106,15 @@ mobile/
     Configuration/       Validated API and web origins from the app bundle
     Networking/          Health DTO, HTTP client, and useful error messages
     Features/
-      Home/              Workspace and API readiness states
-      Scenarios/         Embedded web map with loading and error states
+      Home/              Civilian home and the About sheet with API readiness states
+      Scenarios/         Practice tab: embedded web map with loading and error states
       Plan/              Meeting plan model and on-device store, plan tab, point editor
     Resources/           Info.plist and adaptive color assets
 ```
 
 The workspace follows the web app's cream/green palette with dark-mode variants,
 system text styles, labeled controls, and status icons accompanied by text.
-The Scenarios tab embeds the web map. My Plan uses a native MapKit map for the
+The Practice tab embeds the web map. My Plan uses a native MapKit map for the
 user's own meeting points. A Swift fire model, checking meeting points against
 the simulation, traffic simulation, scenario storage/sync, authentication, and
 notifications are not implemented. No fixtures or invented simulation metrics are displayed.
