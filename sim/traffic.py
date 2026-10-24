@@ -27,12 +27,15 @@ from sim.geo import EARTH_RADIUS_M, point_in_geometry
 from sim.history import format_utc
 
 MODEL_ID = "meso-link-queue"
-MODEL_VERSION = "0.1.0"
+MODEL_VERSION = "0.2.0"
 
 DEMAND_EVENT_TYPES = ("evacuation_order", "evacuation_warning")
 CLOSE_EVENT_TYPES = ("road_closed", "road_blocked")
 REOPEN_EVENT_TYPES = ("road_reopened",)
 SHELTER_FULL_EVENT_TYPES = ("shelter_full",)
+DESTINATION_OPEN_EVENT_TYPES = ("shelter_opened",)  # with destination_id; a destination opened first starts closed
+DESTINATION_CLOSE_EVENT_TYPES = ("shelter_closed",)
+REFUGE_KIND = "temporary_refuge"  # fallback tier: routed to only from nodes that reach no exit or shelter
 CAPACITY_EVENT_TYPES = ("capacity_changed",)  # edge capacity = source capacity x event capacity_factor
 CONTRAFLOW_START_EVENT_TYPES = ("contraflow_started",)  # edge_ids are the outbound edges
 CONTRAFLOW_END_EVENT_TYPES = ("contraflow_ended",)
@@ -41,6 +44,12 @@ CONGESTED_SPEED_FRACTION = 0.5  # an occupied edge is congested in a frame when 
 FIRE_CACHE_MAX_GEOMETRIES = 4  # non-cumulative mode: distinct fire geometries whose edge-inside sets are kept
 REFERENCE_RESPONSE_DELAY_MEDIAN_MIN = 30.0  # agent hazards and preparation times are stated at this median
 FIRE_INDEX_CELL_DEG = 0.01  # bucket size (about 1 km) of the spatial index over fire polygon parts
+# Vehicles already on an edge when the fire closes it finish the edge at this x free-flow speed (smoke,
+# low visibility); planning assumption, not calibrated.
+FIRE_DRAIN_SPEED_FACTOR = 0.5
+_REFUGE_TIER_OFFSET_S = 1e9  # route cost added to refuge-tier nodes so they always rank after exit-tier nodes
+_ESCAPE_TIER_OFFSET_S = 2 * _REFUGE_TIER_OFFSET_S  # escape-tier nodes rank after both
+ENTRAPMENT_LABEL_PREFIX = "Modelled fire entrapment"
 
 # Per-lane capacity (veh/h), free-flow speed (km/h) and lane count per direction, used only
 # when the source lacks a value. Rough HCM-style planning values; the bundle labels them as assumptions.
@@ -65,7 +74,21 @@ ASSUMPTIONS = [
     "Every vehicle heads for the nearest open destination by current travel time, re-evaluated at every node.",
     "Route travel time is free-flow time plus the time to discharge the vehicles already on the edge.",
     "Departure after an evacuation order follows a seeded lognormal response delay; all vehicles of an ordered zone eventually depart.",
-    "An edge whose midpoint lies inside the fire area in effect is exposed, and closed when close_edges_in_fire is set.",
+    "An edge whose midpoint lies inside the fire area in effect is exposed, and closed to new entry when "
+    "close_edges_in_fire is set. Vehicles already on it drive on to its downstream end at "
+    f"{FIRE_DRAIN_SPEED_FACTOR} x free-flow speed, counted as exposed, then reroute over open edges.",
+    "Fire closes edges to traffic from outside the burned area only. A vehicle at a node that reaches no "
+    "destination over open edges (it is already inside the burned area) drives out over fire-closed edges at the "
+    "reduced speed toward the nearest node that does, if that path crosses at most fire_escape_max_m of burned "
+    "road (fire-intensity rule); event and contraflow closures are never crossed.",
+    "A vehicle is trapped by fire when it is on a fire-exposed edge and the downstream node has neither an open "
+    "route nor an escape within fire_escape_max_m. Each road name's first such frame is reported as a "
+    f"'{ENTRAPMENT_LABEL_PREFIX}' event (burnover-like). Event closures (road_closed / road_blocked) stop "
+    "vehicles on the edge until it reopens, unless the event sets closure_drains.",
+    "Destinations open and close with shelter_opened / shelter_closed events; a destination whose first such "
+    "event is an opening starts closed. Vehicles already arrived stay arrived when it closes.",
+    f"Temporary refuges ({REFUGE_KIND}) are a fallback: a node routes to one only when no exit or shelter is "
+    "reachable from it over open edges; otherwise vehicles drive past it.",
     "With fire_area_cumulative (default), the fire area is treated as cumulative burned area: an edge once inside "
     "stays exposed and closed even if a later perimeter is smaller.",
     "Contraflow: each listed outbound edge gains the capacity and storage of its reverse twin (same segment_id), and "
@@ -77,7 +100,9 @@ LIMITATIONS = [
     "Not calibrated against observed Camp Fire traffic; outputs are planning experiments, not historical traffic counts.",
     "No intersection control, turning delays, lane changes, or signal timing; contraflow is a capacity transfer only.",
     "Each edge takes at least one model step to traverse, which slows very short edges.",
-    "Vehicles on an edge when it closes stop until it reopens; turning back is not modelled.",
+    "Vehicles on an edge closed by an event stop until it reopens; turning back is not modelled.",
+    "Fire entrapment is topological (no onward open edge), not a fire-intensity or survivability model; "
+    "refuges have unknown capacity (unlimited) and vehicles do not leave a refuge later.",
     "Vehicles waiting at an origin node are not counted as exposed; only vehicles on edges are.",
     "Warnings release no demand unless warning_releases_demand is set; spontaneous early departures are not modelled.",
     "Destination capacity is the only shelter constraint; exits have unlimited capacity.",
@@ -144,6 +169,7 @@ class TrafficEvent:
     source_id: str = ""
     source_locator: str | None = None
     capacity_factor: float | None = None  # capacity_changed only: multiplier on the edge's source capacity
+    closure_drains: bool = False  # road_closed/road_blocked only: vehicles already on the edge may still leave
 
 
 @dataclass(frozen=True)
@@ -162,6 +188,11 @@ class TrafficParams:
     reroute_interval_s: int = 300  # periodic route-tree rebuild with current queues
     queue_aware_routing: bool = True  # add discharge time of vehicles on an edge to its route cost
     close_edges_in_fire: bool = True
+    # Fire-intensity rule: a vehicle with no route over open edges may drive out over fire-closed edges, but
+    # only through at most this much burned road (m); deeper inside it is trapped. Planning assumption, about
+    # the width of the Paradise ridge: NIST TN 2252 describes drives of several km through burning areas
+    # (Skyway, Pentz Rd, Clark Rd). Chosen after a sensitivity sweep, so burnover counts are not independent.
+    fire_escape_max_m: float = 5000.0
     fire_area_cumulative: bool = True  # an edge midpoint once inside the fire area stays inside (burned area only grows)
     fire_check_every_s: int = 60  # cadence of fire_area_at calls; a multiple of step_s
     warning_releases_demand: bool = False  # fixed-delay engine only; agents respond to warnings via a hazard
@@ -178,6 +209,8 @@ class TrafficParams:
         for name in ("record_every_s", "fire_check_every_s"):
             if getattr(self, name) % self.step_s:
                 raise ValueError(f"{name} must be a multiple of step_s")
+        if not (self.fire_escape_max_m >= 0):
+            raise ValueError(f"fire_escape_max_m must be nonnegative, got {self.fire_escape_max_m}")
         for name in ("response_delay_median_min", "response_delay_max_min", "jam_density_veh_per_km_lane"):
             value = getattr(self, name)
             if not (math.isfinite(value) and value > 0):
@@ -221,6 +254,7 @@ class TrafficView:
     fire_area: dict | None
     elapsed_s: int = 0  # model seconds since start
     contraflow_outbound_edge_ids: frozenset[str] = frozenset()  # edges currently borrowing their twin's lanes
+    closed_destination_ids: frozenset[str] = frozenset()  # closed by shelter_closed or not yet opened
 
 
 # A controller sees the state at a tick and returns events to apply immediately (see simulate_traffic).
@@ -443,6 +477,13 @@ def simulate_traffic(
     dest_full = [d.capacity_veh is not None and d.capacity_veh <= 0 for d in dest_list]
     dest_full_s: list[float | None] = [0.0 if f else None for f in dest_full]
     dest_ix = {d.id: i for i, d in enumerate(dest_list)}
+    dest_refuge = [d.kind == REFUGE_KIND for d in dest_list]
+    dest_series: list[list[list]] = [[] for _ in dest_list]  # per destination: [[t_s, veh], ...] by step
+    first_toggle: dict[str, str] = {}
+    for ev in sorted(events, key=lambda ev: (ev.at, ev.id)):
+        if ev.destination_id is not None and ev.type in DESTINATION_OPEN_EVENT_TYPES + DESTINATION_CLOSE_EVENT_TYPES:
+            first_toggle.setdefault(ev.destination_id, ev.type)
+    dest_open = [first_toggle.get(d.id) not in DESTINATION_OPEN_EVENT_TYPES for d in dest_list]
     dests_at_node: dict[int, list[int]] = {}
     for i, d in enumerate(dest_list):
         dests_at_node.setdefault(node_ix[d.node_id], []).append(i)
@@ -580,7 +621,8 @@ def simulate_traffic(
     ev_sorted = sorted(events, key=lambda ev: (ev.at, ev.id))
     ev_s = [(ev.at - start).total_seconds() for ev in ev_sorted]
     ev_next = 0
-    event_closed: set[int] = set()
+    event_closed: set[int] = set()  # hard: vehicles on the edge stop
+    event_closed_drain: set[int] = set()  # closure_drains: closed to entry only
     edge_index = {e.id: i for i, e in enumerate(edges)}
     used_event_ids = {ev.id for ev in events}
 
@@ -595,7 +637,8 @@ def simulate_traffic(
 
     closed = [False] * n_edges
     closed_set: set[int] = set()
-    closed_hard: set[int] = set()  # closed to entry and exit; contraflow-closed edges may still drain
+    closed_hard: set[int] = set()  # closed to entry and exit; fire- and contraflow-closed edges still drain
+    fire_trapped_edges: set[int] = set()  # edges that have held fire-trapped vehicles (entrapment reported once)
     closed_list: list[int] = []  # sorted; rebuilt only when closures change
     next_edge = [-1] * len(node_ids)
     route_dist = [math.inf] * len(node_ids)  # current route cost to the nearest open destination
@@ -613,45 +656,112 @@ def simulate_traffic(
         e_credit_max[i] = max(e_cap_step[i], params.packet_size_veh)
         e_storage[i] = storage
 
-    def rebuild_routes() -> None:
-        """Reversed multi-source Dijkstra from all open destinations over open edges.
+    def usable(d: int) -> bool:
+        return dest_open[d] and not dest_full[d]
 
-        Equivalent to taking, per node, the minimum over per-destination trees, in one pass.
+    def rebuild_routes() -> None:
+        """Two-tier reversed multi-source Dijkstra over open edges.
+
+        Tier 1 runs from open exits and shelters; one pass equals the per-node minimum over
+        per-destination trees. Tier 2 runs from open refuges over nodes tier 1 left unreachable
+        only, so the refuge tree never routes a node that can reach an exit (every node reachable
+        from an unreachable node is itself unreachable). Tier-2 costs carry _REFUGE_TIER_OFFSET_S.
         With agents, open fire-exposed edges carry bp.fire_edge_penalty_s.
         """
         dist = [math.inf] * len(node_ids)
         nxt = [-1] * len(node_ids)
-        heap = []
-        for node, ds in dests_at_node.items():
-            if any(not dest_full[d] for d in ds):
-                dist[node] = 0.0
-                heap.append((0.0, node))
-        heapq.heapify(heap)
         penalize = agents_on and bp.fire_edge_penalty_s > 0 and bool(exposed_edges)
-        while heap:
-            d, v = heapq.heappop(heap)
-            if d > dist[v]:
-                continue
-            for e in in_edges[v]:
-                if closed[e]:
+
+        def search(sources: list[int], base: float, allowed) -> None:
+            heap = []
+            for node in sources:
+                dist[node] = base
+                heap.append((base, node))
+            heapq.heapify(heap)
+            while heap:
+                d, v = heapq.heappop(heap)
+                if d > dist[v]:
                     continue
-                cost = e_fft[e]
-                if params.queue_aware_routing and occ[e]:
-                    cost += occ[e] / e_cap_step[e] * step
-                if penalize and e in exposed_edges:
-                    cost += bp.fire_edge_penalty_s
-                u = e_from[e]
-                nd = d + cost
-                if nd < dist[u]:
-                    dist[u] = nd
-                    nxt[u] = e
-                    heapq.heappush(heap, (nd, u))
+                for e in in_edges[v]:
+                    if closed[e]:
+                        continue
+                    u = e_from[e]
+                    if allowed is not None and u not in allowed:
+                        continue
+                    cost = e_fft[e]
+                    if params.queue_aware_routing and occ[e]:
+                        cost += occ[e] / e_cap_step[e] * step
+                    if penalize and e in exposed_edges:
+                        cost += bp.fire_edge_penalty_s
+                    nd = d + cost
+                    if nd < dist[u]:
+                        dist[u] = nd
+                        nxt[u] = e
+                        heapq.heappush(heap, (nd, u))
+
+        search(sorted(n for n, ds in dests_at_node.items() if any(usable(d) and not dest_refuge[d] for d in ds)),
+               0.0, None)
+        refuges = sorted(n for n, ds in dests_at_node.items()
+                         if math.isinf(dist[n]) and any(usable(d) and dest_refuge[d] for d in ds))
+        if refuges:
+            search(refuges, _REFUGE_TIER_OFFSET_S, {v for v, x in enumerate(dist) if math.isinf(x)})
+        if fire_closed:
+            escape(dist, nxt)
         next_edge[:] = nxt
         route_dist[:] = dist
 
+    def escape(dist: list[float], nxt: list[int]) -> None:
+        """Escape tier, in place: route nodes with no open route out over fire-closed edges.
+
+        Reversed Dijkstra over the unrouted nodes from the routed nodes they border through a
+        fire-only closure, by time (fire edges at FIRE_DRAIN_SPEED_FACTOR), keeping only paths
+        with at most params.fire_escape_max_m of fire-closed road.
+        """
+        stuck = {v for v, x in enumerate(dist) if math.isinf(x)}
+        if not stuck:
+            return
+        hard = event_closed | event_closed_drain | contraflow_in
+        edist: dict[int, float] = {}
+        fire_m: dict[int, float] = {}
+        heap = []
+        for e in sorted(fire_closed):
+            v = e_to[e]
+            if e_from[e] in stuck and v not in stuck and e not in hard and v not in edist:
+                edist[v], fire_m[v] = dist[v], 0.0
+                heap.append((dist[v], v))
+        heapq.heapify(heap)
+        while heap:
+            d, v = heapq.heappop(heap)
+            if d > edist[v]:
+                continue
+            for e in in_edges[v]:
+                u = e_from[e]
+                if u not in stuck or e in hard:
+                    continue
+                cost = e_fft[e]
+                fm = fire_m[v]
+                if closed[e]:
+                    if e not in fire_closed:
+                        continue
+                    cost /= FIRE_DRAIN_SPEED_FACTOR
+                    fm += edges[e].length_m
+                    if fm > params.fire_escape_max_m:
+                        continue
+                if params.queue_aware_routing and occ[e]:
+                    cost += occ[e] / e_cap_step[e] * step
+                nd = d + cost
+                if nd < edist.get(u, math.inf):
+                    edist[u], fire_m[u] = nd, fm
+                    nxt[u] = e
+                    heapq.heappush(heap, (nd, u))
+        for u, d in edist.items():
+            if u in stuck:
+                dist[u] = _ESCAPE_TIER_OFFSET_S + d
+
     def open_dest_at(node: int) -> int | None:
+        """Open destination that takes vehicles at node; a refuge only where no exit or shelter is reachable."""
         for d in dests_at_node.get(node, ()):
-            if not dest_full[d]:
+            if usable(d) and (not dest_refuge[d] or route_dist[node] >= _REFUGE_TIER_OFFSET_S):
                 return d
         return None
 
@@ -689,6 +799,7 @@ def simulate_traffic(
             z_arrived[zone] += n
             last_arrival_s = t
             add_series(zone_arrivals[zone], t, n)
+            add_series(dest_series[d], t, n)
         if cap is not None and dest_arrived[d] >= cap:
             mark_full(d, t)
         return n
@@ -696,7 +807,7 @@ def simulate_traffic(
     def enter(i: int, count: int, zone: int, agent: int, t: int) -> None:
         if not occ[i]:
             credit[i] = e_credit_max[i]  # an idle edge starts with full discharge credit
-        queue[i].append([count, t + e_fft[i], zone, agent])
+        queue[i].append([count, t + e_fft[i] / (FIRE_DRAIN_SPEED_FACTOR if i in fire_closed else 1.0), zone, agent])
         occ[i] += count
         active.add(i)
 
@@ -727,13 +838,21 @@ def simulate_traffic(
             if ev.type == "evacuation_order" and ev.zone_ids:
                 first_order_s = at_s if first_order_s is None else min(first_order_s, at_s)
         elif ev.type in CLOSE_EVENT_TYPES:
-            event_closed.update(edge_index[x] for x in ev.edge_ids)
+            (event_closed_drain if ev.closure_drains else event_closed).update(edge_index[x] for x in ev.edge_ids)
             closures_changed = True
         elif ev.type in REOPEN_EVENT_TYPES:
             event_closed.difference_update(edge_index[x] for x in ev.edge_ids)
+            event_closed_drain.difference_update(edge_index[x] for x in ev.edge_ids)
             closures_changed = True
         elif ev.type in SHELTER_FULL_EVENT_TYPES and ev.destination_id is not None:
             mark_full(dest_ix[ev.destination_id], at_s)
+        elif (ev.type in DESTINATION_OPEN_EVENT_TYPES + DESTINATION_CLOSE_EVENT_TYPES
+              and ev.destination_id is not None):
+            d = dest_ix[ev.destination_id]
+            is_open = ev.type in DESTINATION_OPEN_EVENT_TYPES
+            if dest_open[d] != is_open:
+                dest_open[d] = is_open
+                routes_dirty = True
         elif ev.type in CAPACITY_EVENT_TYPES and ev.edge_ids:
             for x in ev.edge_ids:
                 cap_factor[edge_index[x]] = ev.capacity_factor
@@ -825,6 +944,11 @@ def simulate_traffic(
             for name in sorted(by_name):
                 ev_id = f"sim-fire-{verb}-{len(generated) + 1}"
                 generated.append(_bundle_event(ev_id, at, ev_type, f"Modelled fire {verb}: {name}", by_name[name]))
+        t = (at - start).total_seconds()
+        for i in newly_closed:
+            for pkt in queue[i]:
+                if pkt[1] > t:  # still driving: the rest of the edge at reduced speed
+                    pkt[1] = t + (pkt[1] - t) / FIRE_DRAIN_SPEED_FACTOR
         if newly_closed or reopened:
             fire_closed = set(inside)
             routes_dirty = True
@@ -891,7 +1015,9 @@ def simulate_traffic(
     frames: list[dict] = []
     metrics: list[dict] = []
     edge_ids_out = [e.id for e in edges]
-    peaks = {"en_route_veh": 0, "blocked_veh": 0, "exposed_veh": 0, "exposed_at_origin_veh": 0}
+    peaks = {"en_route_veh": 0, "blocked_veh": 0, "exposed_veh": 0, "exposed_at_origin_veh": 0,
+             "trapped_by_fire_veh": 0, "trapped_by_closure_veh": 0, "active_refuges": 0}
+    refuge_ix = [d for d in range(len(dest_list)) if dest_refuge[d]]
     edge_peak: dict[int, list] = {}  # edge index -> [peak_veh, peak_t_s, min_speed_kph, congested_frames]
 
     def edge_rows(t: int) -> list[tuple[int, int, float, bool]]:
@@ -900,12 +1026,20 @@ def simulate_traffic(
         for i in sorted(active):
             moving = sum(p[0] for p in queue[i] if p[1] > t)
             stopped = closed[i] and i in closed_hard
-            rows.append((i, occ[i], 0.0 if stopped else edges[i].speed_kph * moving / occ[i], stopped))
+            kph = edges[i].speed_kph * (FIRE_DRAIN_SPEED_FACTOR if i in fire_closed else 1.0)
+            rows.append((i, occ[i], 0.0 if stopped else kph * moving / occ[i], stopped))
         return rows
 
+    def fire_trapped_rows(rows) -> list[tuple[int, int]]:
+        """(edge, vehicles) on fire-exposed edges (not event-stopped) whose downstream node has no route or escape."""
+        return [(i, n) for i, n, _, stopped in rows
+                if not stopped and i in exposed_edges and next_edge[e_to[i]] == -1 and open_dest_at(e_to[i]) is None]
+
     def state_counts(rows) -> dict[str, int]:
-        blocked = 0
+        blocked = by_closure = 0
         for i, n, _, stopped in rows:
+            if stopped:
+                by_closure += n
             if stopped or (next_edge[e_to[i]] == -1 and open_dest_at(e_to[i]) is None):
                 blocked += n
         for node, q in waiting.items():
@@ -918,6 +1052,10 @@ def simulate_traffic(
             "blocked_veh": blocked,
             "exposed_veh": sum(n for i, n, _, _ in rows if i in exposed_edges),
             "exposed_at_origin_veh": sum(nd_at_node[n] for n in origin_burned),
+            "trapped_by_fire_veh": sum(n for _, n in fire_trapped_rows(rows)),
+            "trapped_by_closure_veh": by_closure,
+            "open_refuges": sum(1 for d in refuge_ix if usable(d)),
+            "active_refuges": sum(1 for d in refuge_ix if usable(d) and dest_arrived[d] > 0),
         }
         if agents_on:
             counts.update({
@@ -952,6 +1090,20 @@ def simulate_traffic(
         if agents_on and (counts["waiting_veh"] + counts["preparing_veh"] != not_departed
                           or sum(departed_by.values()) != total_veh - not_departed):
             raise AssertionError(f"inconsistent resident states at {format_utc(at)}")
+        if (counts["trapped_by_fire_veh"] + counts["trapped_by_closure_veh"] > counts["blocked_veh"]):
+            raise AssertionError(f"inconsistent trapped counts at {format_utc(at)}")
+        new_traps = [i for i, _ in fire_trapped_rows(rows) if i not in fire_trapped_edges]
+        if new_traps:
+            fire_trapped_edges.update(new_traps)
+            by_name: dict[str, list[int]] = {}
+            for i in new_traps:
+                by_name.setdefault(edges[i].name, []).append(i)
+            for name in sorted(by_name):
+                ids = by_name[name]
+                generated.append(_bundle_event(
+                    f"sim-fire-entrapment-{len(generated) + 1}", at, "vehicles_trapped",
+                    f"{ENTRAPMENT_LABEL_PREFIX}: {name} ({sum(occ[i] for i in ids)} veh)",
+                    [edges[i].id for i in ids], time_precision=FIRE_CLOSURE_TIME_PRECISION))
         frames.append({
             "at": format_utc(at),
             "edges": frame_edges,
@@ -988,6 +1140,7 @@ def simulate_traffic(
                 for zi, z in enumerate(zone_list)
             }),
             full_destination_ids=frozenset(d.id for k, d in enumerate(dest_list) if dest_full[k]),
+            closed_destination_ids=frozenset(d.id for k, d in enumerate(dest_list) if not dest_open[k]),
             metrics=MappingProxyType(state_counts(rows)),
             fire_area=fire_geom,
             elapsed_s=t,
@@ -1037,8 +1190,8 @@ def simulate_traffic(
         if controllers and t % controller_every_s == 0:
             run_controllers(t, at)
         if closures_changed or routes_dirty:
-            closed_hard = event_closed | fire_closed
-            union = closed_hard | contraflow_in
+            closed_hard = set(event_closed)
+            union = closed_hard | event_closed_drain | fire_closed | contraflow_in
             if union != closed_set:
                 for i in union ^ closed_set:
                     closed[i] = i in union
@@ -1158,6 +1311,11 @@ def simulate_traffic(
         "first_order_at": None if first_order_s is None else format_utc(start + timedelta(seconds=first_order_s)),
         "last_arrival_at": None if last_arrival_s is None else format_utc(start + timedelta(seconds=last_arrival_s)),
         "arrived_by_destination_veh": {d.id: dest_arrived[i] for i, d in enumerate(dest_list)},
+        "max_trapped_by_fire_veh": peaks["trapped_by_fire_veh"],
+        "max_trapped_by_closure_veh": peaks["trapped_by_closure_veh"],
+        "fire_entrapment_edges": len(fire_trapped_edges),
+        "max_active_refuges": peaks["active_refuges"],
+        "refuges_used": sum(1 for d in refuge_ix if dest_arrived[d] > 0),
     }
     zone_stats = {
         z.id: {
@@ -1205,6 +1363,7 @@ def simulate_traffic(
                 d.id: {
                     "arrived_veh": dest_arrived[k],
                     "full_at": None if dest_full_s[k] is None else iso(dest_full_s[k]),
+                    "arrivals": [[iso(t), n] for t, n in dest_series[k]],
                 }
                 for k, d in enumerate(dest_list)
             },

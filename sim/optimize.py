@@ -450,7 +450,7 @@ def main() -> None:
     scenario = hybrid_scenario(network, exits, provenance["assumptions"])
     base_events = (*scenario["events"], *load_alert_events(args.roads_package))
     start, end = parse_utc(args.start), parse_utc(args.end)
-    _, fire_model = _simulated_fire(history, end)
+    _, fire_model = _simulated_fire(history, end, args.roads_package)
     fire_area_at = _fire_area_lookup(history, fire_model[3])
     _, report = optimize_schedule(network, scenario["zones"], exits, base_events, TrafficParams(),
                                   start=start, end=end, fire_area_at=fire_area_at,

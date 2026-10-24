@@ -5,9 +5,12 @@ from __future__ import annotations
 import math
 from bisect import bisect_right
 from datetime import datetime
+from pathlib import Path
 
 from sim import SIM_VERSION
-from sim.firefront import FIREFRONT_ASSUMPTIONS, arrival_lookup, calibrate_from_ignition, ignition_candidates, isochrones
+from sim.fire_obs import OBSERVATIONS_PATH, load_observations, observation_layer
+from sim.firefront import (FIREFRONT_ASSUMPTIONS, arrival_lookup, calibrate_from_ignition, ignition_candidates,
+                           isochrones, rothermel_fire)
 from sim.geo import EARTH_RADIUS_M
 from sim.history import IncidentHistory, format_utc
 from sim.insights import build_insights
@@ -54,8 +57,24 @@ def _closure_intervals(frames: list[dict]) -> list[list]:
     return sorted(intervals, key=lambda iv: (iv[1], iv[0]))
 
 
-def _simulated_fire(history: IncidentHistory, end: datetime) -> tuple[dict, object]:
-    """fire_simulated bundle block and its hazard lookup."""
+# Key on the fire_simulated block that carries the fire_observations layer to build_bundle; never serialized
+# inside fire_simulated (build_bundle moves it to the top-level `fire_observations`).
+_OBSERVATIONS_KEY = "_fire_observations"
+
+
+def _simulated_fire(history: IncidentHistory, end: datetime,
+                    roads_package: Path | None = None) -> tuple[dict, object]:
+    """fire_simulated bundle block and its hazard lookup.
+
+    With a roads package that has NIST fire observations (camp-2018-evacuation layered package), the
+    front is rothermel-mtt from the package ignition on terrain, with frozen calibrated params, and the
+    block carries the fire_observations layer. Otherwise the elliptical-mtt-ca front from the assumed
+    ignition, fitted to the first perimeter.
+    """
+    if roads_package is not None and (roads_package / OBSERVATIONS_PATH).exists():
+        block, model = rothermel_fire(history, roads_package, end)
+        block[_OBSERVATIONS_KEY] = observation_layer(load_observations(roads_package), roads_package, until=end)
+        return block, model
     params, arrival, grid, record = calibrate_from_ignition(history, ignition_candidates())
     t0 = datetime.fromisoformat(record["ignition"]["at"].replace("Z", "+00:00"))
     until = min(end, history.perimeters[0].snapshot_at)
@@ -170,6 +189,7 @@ def build_bundle(history: IncidentHistory, scenario: dict, params: TrafficParams
         return {"status": "fixture" if evidence == "fixture" else "present", "evidence_class": evidence, "reason": None}
 
     damage_features = [p.feature for p in history.damage]
+    observations = fire_block.get(_OBSERVATIONS_KEY) if fire_block else None
     traffic_assumptions = traffic.pop("assumptions", [])
     traffic_limitations = traffic.pop("limitations", [])
     insights = build_insights(scenario, traffic, events, start=start,
@@ -195,6 +215,8 @@ def build_bundle(history: IncidentHistory, scenario: dict, params: TrafficParams
             "events": status(bool(events), _layer_evidence(events, scenario_class), "no events in window"),
             "traffic": status(True, "simulated", ""),
             "fire_simulated": status(fire_block is not None, "simulated", "simulated fire front disabled"),
+            "fire_observations": status(observations is not None, "reconstructed",
+                                        "NIST fire observations not in the roads package"),
             "damage": status(bool(damage_features), "observed", "damage assessments not acquired"),
         },
         "assumptions": [*TIMELINE_ASSUMPTIONS, *traffic_assumptions, *scenario.get("notes", [])],
@@ -209,5 +231,7 @@ def build_bundle(history: IncidentHistory, scenario: dict, params: TrafficParams
         "insights": insights,
     }
     if fire_block:
-        bundle["fire_simulated"] = fire_block
+        bundle["fire_simulated"] = {k: v for k, v in fire_block.items() if k != _OBSERVATIONS_KEY}
+    if observations is not None:
+        bundle["fire_observations"] = observations
     return bundle

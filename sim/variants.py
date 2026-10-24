@@ -31,11 +31,12 @@ from tools.build_camp_history import SourceError
 
 from sim import SIM_VERSION
 from sim.bundle import _fire_area_lookup, _simulated_fire, build_bundle
-from sim.fire import FireParams
-from sim.firefront import FIREFRONT_ASSUMPTIONS, arrival_lookup, calibrate_from_ignition, isochrones
+from sim.fire import ROTHERMEL_MODEL_ID, FireParams
+from sim.firefront import (FIREFRONT_ASSUMPTIONS, ROTHERMEL_CHOSEN_PARAMS, arrival_lookup, calibrate_from_ignition,
+                           isochrones, rothermel_fire)
 from sim.geo import EARTH_RADIUS_M
 from sim.history import IncidentHistory, format_utc, load_history, parse_utc
-from sim.scenario import camp_bundle_inputs
+from sim.scenario import camp_replay_inputs
 from sim.traffic import (
     CONTRAFLOW_END_EVENT_TYPES, CONTRAFLOW_START_EVENT_TYPES, MODEL_ID as TRAFFIC_MODEL_ID,
     MODEL_VERSION as TRAFFIC_MODEL_VERSION, TrafficEvent, TrafficParams,
@@ -55,7 +56,7 @@ SKYWAY_NAMES = ("Skyway", "Skyway Road")
 SKYWAY_CORRIDOR_BBOX = (-121.79, 39.69, -121.655, 39.75)
 SKYWAY_CLOSED_AT = "2018-11-08T16:00:00Z"  # 08:00 PST
 RESPONSE_DELAY_FACTOR = 2.0
-WIND_SHIFT_DEG = -30.0  # toward north: wind_from 67.5 -> 37.5 deg
+WIND_SHIFT_DEG = -30.0  # toward north: wind_from 67.5 -> 37.5 deg (both fire models' calibrated wind is 67.5)
 OPTIMIZER_BUDGET_EVALS = 42
 
 COMMON_LIMITATIONS = [
@@ -83,6 +84,7 @@ class Context:
     history: IncidentHistory
     start: datetime
     end: datetime
+    roads_package: Path | None = None  # needed to rebuild a rothermel-mtt front (observations, terrain)
 
 
 @dataclass(frozen=True)
@@ -98,7 +100,8 @@ class Variant:
 
 def baseline_inputs(roads_package: Path) -> tuple[dict, datetime, datetime]:
     """Scenario and clock exactly as `python3 -m sim ... bundle --roads-package` builds them."""
-    return camp_bundle_inputs(roads_package)
+    scenario, start, end, _ = camp_replay_inputs(roads_package)
+    return scenario, start, end
 
 
 def _with_events(inputs: RunInputs, events) -> RunInputs:
@@ -202,11 +205,66 @@ def fixed_fire(history: IncidentHistory, params: FireParams, end: datetime) -> t
     return block, (grid, arrival, t0, arrival_lookup(grid, arrival, t0))
 
 
+def shifted_fire(base_fire: tuple, ctx: Context, shift_deg: float) -> tuple:
+    """Counterfactual front: the baseline's fire model and params with only wind_from_deg shifted by shift_deg.
+
+    Same ignition, grid and (for rothermel-mtt) terrain as the baseline, so `basis` is unchanged. Shared by the
+    wind-shift variant and the stress agent's shift_wind disruption.
+    """
+    model = base_fire[0]["model"]
+    p = model["params"]
+    if model["id"] != ROTHERMEL_MODEL_ID:
+        params = FireParams(p["base_spread_m_per_min"], (p["wind_from_deg"] + shift_deg) % 360, p["wind_speed_m_s"],
+                            p["wind_coef_per_m_s"])
+        return fixed_fire(ctx.history, params, ctx.end)
+    old = ROTHERMEL_CHOSEN_PARAMS
+    if p["wind_from_deg"] != old.wind_from_deg:
+        raise AssertionError("baseline rothermel-mtt front does not use ROTHERMEL_CHOSEN_PARAMS")
+    if ctx.roads_package is None:
+        raise VariantUnavailable("a rothermel-mtt baseline needs the roads package to rebuild the front")
+    new = replace(old, wind_from_deg=(old.wind_from_deg + shift_deg) % 360)
+    block, lookup = rothermel_fire(ctx.history, ctx.roads_package, ctx.end, new,
+                                   params_source=f"counterfactual: ROTHERMEL_CHOSEN_PARAMS with wind_from_deg shifted "
+                                                 f"{shift_deg:+g} deg; not fitted")
+    block["calibration"]["fixed_params"] = True
+    block["assumptions"] = [*block["assumptions"],
+                            "Counterfactual front: the wind direction is shifted, not fitted; its observation error "
+                            "and perimeter IoU are reported but were not used to choose it."]
+    return block, lookup
+
+
+def _wind_shift_rothermel(base: RunInputs, ctx: Context) -> tuple[RunInputs, list[str], dict]:
+    old = ROTHERMEL_CHOSEN_PARAMS
+    block, model = shifted_fire(base.fire, ctx, WIND_SHIFT_DEG)
+    new = replace(old, wind_from_deg=block["model"]["params"]["wind_from_deg"])
+    cal, base_cal = block["calibration"], base.fire[0]["calibration"]
+
+    def err(c: dict, part: str) -> str:
+        o = c["observations"][part]
+        return f"{o['median_abs_error_min']:.0f} min (n={o['n']}, hit rate {o['hit_rate']:.2f})"
+
+    first = format_utc(ctx.history.perimeters[0].snapshot_at)
+    changes = [
+        f"Simulated front (rothermel-mtt) wind_from_deg {old.wind_from_deg:g} -> {new.wind_from_deg:g} (30 deg more "
+        f"northerly); 20-ft wind {old.wind_20ft_m_s:g} m/s, fuel {old.fuel_model}, moisture '{old.moisture}', "
+        f"spotting and seed kept from the baseline; same ignition point, time, terrain and grid. "
+        f"{new.wind_from_deg:g} deg is outside the 45-90 deg range the baseline was calibrated over.",
+        f"Only the hazard before the first satellite perimeter ({first}) changes; from then on both runs use the "
+        "same observed perimeters.",
+        f"Median arrival error at NIST observations: calibration window {err(cal, 'train')} vs baseline "
+        f"{err(base_cal, 'train')}; held-out window {err(cal, 'held_out')} vs baseline {err(base_cal, 'held_out')}.",
+        f"Fit to the first perimeter: IoU {cal['iou']:.2f} (baseline {base_cal['iou']:.2f}).",
+    ]
+    return replace(base, fire=(block, model)), changes, {}
+
+
 def _wind_shift(base: RunInputs, ctx: Context) -> tuple[RunInputs, list[str], dict]:
+    if base.fire[0]["model"]["id"] == ROTHERMEL_MODEL_ID:
+        return _wind_shift_rothermel(base, ctx)
     p = base.fire[0]["model"]["params"]
     old = FireParams(p["base_spread_m_per_min"], p["wind_from_deg"], p["wind_speed_m_s"], p["wind_coef_per_m_s"])
     new = replace(old, wind_from_deg=(old.wind_from_deg + WIND_SHIFT_DEG) % 360)
-    fire = fixed_fire(ctx.history, new, ctx.end)
+    fire = shifted_fire(base.fire, ctx, WIND_SHIFT_DEG)
     first = format_utc(ctx.history.perimeters[0].snapshot_at)
     changes = [
         f"Simulated front wind_from_deg {old.wind_from_deg:g} -> {new.wind_from_deg:g} (30 deg more northerly); "
@@ -279,7 +337,8 @@ VARIANTS = (
             "What if residents had taken twice as long to leave after an order (median delay 60 instead of 30 min)?",
             _slower_response),
     Variant("wind-shift", "Wind 30 degrees more northerly",
-            "What if the morning wind had blown from 30 degrees further north, moving the simulated front's path?",
+            "What if the morning wind had blown from 30 degrees further north (from 37.5 instead of 67.5 deg), "
+            "moving the simulated front's path toward the south-west?",
             _wind_shift),
     Variant("no-contraflow", "No contraflow",
             "What if the reported contraflow had not been set up?", _no_contraflow),
@@ -435,8 +494,8 @@ def main() -> None:
         clock = time.perf_counter()
         history = load_history(args.package)
         scenario, start, end = baseline_inputs(args.roads_package)
-        ctx = Context(history, start, end)
-        base = RunInputs(scenario, TrafficParams(), _simulated_fire(history, end))
+        ctx = Context(history, start, end, args.roads_package)
+        base = RunInputs(scenario, TrafficParams(), _simulated_fire(history, end, args.roads_package))
         base_basis = basis(base, ctx)
         baseline = run(base, ctx, command)
         on_disk = json.loads(args.baseline.read_text())

@@ -4,7 +4,8 @@ Source events name roads ("Pearson Rd at Sawmill Rd") and may carry an unsnapped
 observation point. Snapping is a derived step: it never invents a location beyond the
 rules below, and every event reports how it was matched. Unresolved events pass
 through as timeline-only events without edge_ids. Alert events (`alert_sent`) are
-left to `sim.network.load_alert_events`.
+left to `sim.network.load_alert_events`. Every other non-road event (shelter open/close,
+fire_arrival, burnover, orders, ...) passes through unchanged, with no snapping.
 
 Matching rules, in order:
 1. Point and road name: nearest edge of the named road within SNAP_RADIUS_M, both directions.
@@ -39,6 +40,8 @@ CLOSURE_TYPES = ("road_blocked", "road_closed")
 SOFT_CLOSURE_TYPES = ("road_access_restricted",)
 CONTRAFLOW_TYPES = ("contraflow_reported", "contraflow_observed")
 ALERT_TYPES = ("alert_sent",)
+REOPEN_TYPES = ("road_reopened",)
+ROAD_EVENT_TYPES = CLOSURE_TYPES + SOFT_CLOSURE_TYPES + CONTRAFLOW_TYPES + REOPEN_TYPES  # only these are snapped
 
 ASSUMPTIONS = [
     f"Road events are snapped to OSM edges by road name within {SNAP_RADIUS_M:.0f} m of the source observation "
@@ -206,6 +209,20 @@ def resolve_road_events(
             continue
         src = json.loads(line)
         if src["type"] in ALERT_TYPES:
+            continue
+        if src["type"] not in ROAD_EVENT_TYPES:
+            events.append(TrafficEvent(
+                id=src["event_id"], at=parse_utc(src["occurred_at"]), type=src["type"], label=src["description"],
+                evidence_class=src["evidence_class"], time_precision=src["time_precision"],
+                source_id=src["source_id"], source_locator=src.get("source_locator"),
+            ))
+            report.append({
+                "event_id": src["event_id"], "at": src["occurred_at"], "source_type": src["type"],
+                "engine_type": src["type"], "road_name": (src.get("target") or {}).get("road_name") or "",
+                "evidence_class": src["evidence_class"], "status": "not_road", "method": None, "distance_m": None,
+                "direction_hint": None, "edge_ids": [], "edge_names": [], "capacity_factor": None,
+                "note": "non-road event: passed through without snapping",
+            })
             continue
         road_text = (src.get("target") or {}).get("road_name") or ""
         point = tuple(src["geometry"]["coordinates"]) if src.get("geometry") else None

@@ -20,18 +20,29 @@ from pathlib import Path
 
 from tools.build_camp_history import SourceError
 
-from sim.bundle import build_bundle
+from sim.bundle import _simulated_fire, build_bundle
 from sim.fire import FireParams
 from sim.fixtures import camp_fixture_scenario
 from sim.hindcast import calibrate, default_candidates, run_hindcast
 from sim.history import load_history, parse_utc
 from sim.replay import observed_frame, timeline
-from sim.scenario import camp_bundle_inputs
+from sim.scenario import DEMAND_MODES, camp_replay_inputs
+from sim.validation import calibration_report
 from sim.store import DATA_SOURCE_ENV, DATA_SOURCES, ensure_package
 from sim.behavior import BehaviorParams
 from sim.responders import ASSUMPTIONS as RESPONDER_ASSUMPTIONS
 from sim.responders import compare_with_history, default_responders, fire_arrival_lookup
 from sim.traffic import TrafficParams
+
+DEMAND_HELP = ("census: ACS block-group demand with NIST orders via a derived zone crosswalk; fixture: "
+               "synthetic zone grid; auto: census when the roads package has the grounded layers")
+
+
+def _add_grounding(result: dict, scenario: dict, roads_package: Path) -> None:
+    """Attach census demand provenance and the model-vs-published calibration report."""
+    result["demand"] = scenario["demand_report"]
+    result["validation"] = calibration_report(result, scenario, roads_package)
+
 
 HISTORICAL_ROAD_EVENT_TYPES = ("road_closed", "road_blocked", "capacity_changed", "contraflow_started")
 MAX_MATCH_DELTA_MIN = 120  # responder/history pairs further apart than this are reported as unmatched
@@ -110,12 +121,14 @@ def main() -> None:
     bun.add_argument("--seed", type=int, default=TrafficParams.seed)
     bun.add_argument("--record-every-s", type=int, default=TrafficParams.record_every_s)
     bun.add_argument("--no-simulated-fire", action="store_true", help="omit the simulated morning fire front")
+    bun.add_argument("--demand", choices=DEMAND_MODES, default="auto", help=DEMAND_HELP)
     bun.add_argument("--output", type=Path, required=True)
 
     sim_ = sub.add_parser("simulate", help="agent simulation: resident + responder agents (not a replay)")
     sim_.add_argument("--roads-package", type=Path, required=True)
     sim_.add_argument("--seed", type=int, default=TrafficParams.seed)
     sim_.add_argument("--no-responders", action="store_true", help="resident agents only")
+    sim_.add_argument("--demand", choices=DEMAND_MODES, default="auto", help=DEMAND_HELP)
     sim_.add_argument("--output", type=Path, required=True, help="e.g. app/public/simulations/camp-2018.agents.json")
 
     args = parser.parse_args()
@@ -142,8 +155,9 @@ def main() -> None:
                                   horizon_hours=args.hours, cell_m=args.cell_m, include_geometry=args.geometry)
             summary = json.dumps(result["summary"])
         elif args.command == "bundle":
+            grounded = False
             if args.roads_package:
-                scenario, default_start, default_end = camp_bundle_inputs(args.roads_package)
+                scenario, default_start, default_end, grounded = camp_replay_inputs(args.roads_package, args.demand)
                 start = parse_utc(args.start) if args.start else default_start
                 end = parse_utc(args.end) if args.end else default_end
             else:
@@ -151,12 +165,16 @@ def main() -> None:
                 start = parse_utc(args.start) if args.start else scenario["clock_start"]
                 end = parse_utc(args.end) if args.end else scenario["clock_end"]
             params = TrafficParams(seed=args.seed, record_every_s=args.record_every_s)
+            # Rothermel front from the package ignition when it has NIST observations; old model otherwise.
+            fire = None if args.no_simulated_fire else _simulated_fire(history, end, args.roads_package)
             result = build_bundle(history, scenario, params, start=start, end=end,
                                   command=" ".join(["python3 -m sim", *sys.argv[1:]]),
-                                  simulate_fire=not args.no_simulated_fire)
+                                  simulate_fire=fire is not None, fire=fire)
+            if grounded:
+                _add_grounding(result, scenario, args.roads_package)
             summary = json.dumps(result["traffic"]["summary"])
         elif args.command == "simulate":
-            scenario, start, end = camp_bundle_inputs(args.roads_package)
+            scenario, start, end, grounded = camp_replay_inputs(args.roads_package, args.demand)
             params = TrafficParams(seed=args.seed, behavior=BehaviorParams(enabled=True))
             agents: list = []
 
@@ -169,7 +187,8 @@ def main() -> None:
                 return tuple(agents)
 
             result = build_bundle(history, scenario, params, start=start, end=end, mode="simulation",
-                                  command=" ".join(["python3 -m sim", *sys.argv[1:]]), controllers_for=controllers_for)
+                                  command=" ".join(["python3 -m sim", *sys.argv[1:]]), controllers_for=controllers_for,
+                                  fire=_simulated_fire(history, end, args.roads_package))
             historical = [e for e in scenario["events"]
                           if e.type in HISTORICAL_ROAD_EVENT_TYPES and e.evidence_class != "simulated"]
             # Derived contraflow inbound closures share the source id but are not agent decisions.
@@ -183,6 +202,8 @@ def main() -> None:
             }
             if agents:
                 result["assumptions"] = [*result["assumptions"], *RESPONDER_ASSUMPTIONS]
+            if grounded:
+                _add_grounding(result, scenario, args.roads_package)
             summary = f"{len(responder_events)} responder actions; " + json.dumps(
                 {k: v for k, v in result["traffic"]["summary"].items() if "veh" in k and isinstance(v, int)})
         else:
