@@ -33,6 +33,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.dev
+    # Docker forwards container lookups to the host resolver, which drops queries
+    # intermittently and reaches the Vite proxy as `getaddrinfo ENOTFOUND
+    # edcintl.cr.usgs.gov`. Forward to public resolvers instead. Compose service names
+    # still resolve through Docker's embedded resolver at 127.0.0.11.
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     environment:
       VITE_API_PROXY_TARGET: http://backend:8000
     ports:

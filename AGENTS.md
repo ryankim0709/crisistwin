@@ -18,6 +18,15 @@
 
 - Start by inspecting the branch, working tree, and relevant code. Preserve unrelated and uncommitted changes; never reset, stash, delete, or overwrite a teammate's work to make your task easier.
 - For concurrent tasks, use a separate branch and checkout/worktree per task. Agree file ownership and integration points before overlapping edits; do not have agents switch branches in a shared checkout.
+- Match the subagent model to the task, since every delegated task costs tokens. Use
+  `haiku` for mechanical, fully specified work; `sonnet` for implementation, research and
+  documentation; `opus` only for orchestration and for work where a wrong answer is silent,
+  such as numerical models, solver geometry, and unit conversions across a metric boundary.
+  Definitions live in `.claude/agents/`; pass `model` explicitly when spawning ad hoc.
+- Give each concurrent agent sole ownership of the files it edits and say so in its brief.
+  Where one agent's work imports another's, fix the interface in both briefs up front, and
+  land the module before the code that imports it: an import that arrives first breaks the
+  running app for everyone sharing the checkout.
 - Make interface changes explicit in the repository: document request/response shapes, shared types, units, and representative examples in the same change. Do not rely on another agent seeing your chat.
 - Coordinate changes to shared schemas, lockfiles, configuration, and entry points. Prefer additive, compatible integration; migrate all affected callers together when a breaking change is necessary.
 - Keep commits focused. Stage only intended files after reviewing the diff. Follow the requested delivery path; use a PR for parallel feature work unless the user asks for a direct push. Never force-push shared branches.

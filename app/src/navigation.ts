@@ -19,6 +19,12 @@ export const navigationItems: readonly NavigationItem[] = [
     description: "Choose an ignition point and explore illustrative fire spread.",
   },
   {
+    path: "/fire",
+    label: "Fire spread model",
+    group: "Workspace",
+    description: "Rothermel surface spread over LANDFIRE fuels and terrain.",
+  },
+  {
     path: "/scenarios",
     label: "Scenarios",
     group: "Workspace",
