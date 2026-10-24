@@ -355,7 +355,7 @@ def suggest_tasks(
     by_segment: dict[str, list[ReportFact]] = {}
     for r in reports:
         if (r.kind == "road_blocked" and r.segment_id in used and r.segment_id not in public_blocked
-                and r.status not in ("dismissed", "resolved", "confirmed")):
+                and r.status not in ("dismissed", "resolved", "confirmed", "withdrawn")):
             by_segment.setdefault(r.segment_id, []).append(r)
     fresh = [
         p for p in responders

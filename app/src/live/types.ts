@@ -31,7 +31,7 @@ export type ReportKind =
   | 'shelter_full'
   | 'help_needed'
 export type ReportSeverity = 'full' | 'partial' | 'slow'
-export type ReportStatus = 'unverified' | 'corroborated' | 'responder_confirmed' | 'confirmed' | 'dismissed' | 'resolved'
+export type ReportStatus = 'unverified' | 'corroborated' | 'responder_confirmed' | 'confirmed' | 'dismissed' | 'resolved' | 'withdrawn'
 
 export interface RoadRef {
   segment_id: string
@@ -41,6 +41,16 @@ export interface RoadRef {
 
 export type ReportMethod = 'explicit' | 'passive'
 export type SpeedClass = 'stopped' | 'slow' | 'moving'
+
+/** A reporter's earlier values of an edited report (docs/live-reports.md); `at` is when they were replaced. */
+export interface ReportRevision {
+  at: IsoTime
+  kind: ReportKind
+  severity: ReportSeverity | null
+  location: { coord: LonLat; accuracy_m: number | null }
+  note: string | null
+  destination_id: string | null
+}
 
 export interface FieldReport {
   id: string
@@ -67,6 +77,12 @@ export interface FieldReport {
   /** ADR 0041: `passive` reports come from phone motion, not a person; absent on older servers. */
   method?: ReportMethod
   speed_class?: SpeedClass | null
+  /** The reporter edited this report (docs/live-reports.md). Absent on servers that predate edits. */
+  edited_at?: IsoTime | null
+  /** Set with `status: 'withdrawn'`: the reporter took the report back. Treated as closed. */
+  withdrawn_at?: IsoTime | null
+  /** Earlier values, oldest first, at most 10. */
+  revisions?: ReportRevision[]
 }
 
 export interface PublicMapItem {

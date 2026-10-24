@@ -10,6 +10,8 @@ enum LiveAPIError: LocalizedError {
     case rateLimited
     /// 409: another responder took the task, or it is closed.
     case conflict
+    /// 409 `report_locked`: a responder or controller acted on the report, so it can't change.
+    case reportLocked
     case serviceUnavailable
     case server(Int)
     /// 400: the server will not accept this report as written. Retrying the same draft will not help.
@@ -34,6 +36,8 @@ enum LiveAPIError: LocalizedError {
             return "Too many requests right now. Live reports will try again shortly."
         case .conflict:
             return "That task was already taken or closed."
+        case .reportLocked:
+            return "Locked: a responder or controller has acted on it."
         case .serviceUnavailable:
             return "Live reports service is temporarily unavailable. \(Self.savedNote)"
         case .server(let code):
@@ -74,12 +78,16 @@ struct LiveAPIClient {
     private struct Items<T: Decodable>: Decodable { let items: [T] }
     private struct Reports: Decodable { let reports: [FieldReport] }
     private struct Tasks: Decodable { let tasks: [CheckTask] }
+    private struct ReportResponse: Decodable { let report: FieldReport }
     private struct JoinBody: Encodable { let inviteCode: String }
     private struct TaskUpdate: Encodable {
         let status: TaskStatus
         let note: String?
     }
-    private struct ErrorBody: Decodable { let detail: String? }
+    private struct ErrorBody: Decodable {
+        let error: String?
+        let detail: String?
+    }
 
     func registerDevice() async throws -> LiveCredential {
         try await get(LiveCredential.self, ["devices"], method: "POST")
@@ -97,6 +105,17 @@ struct LiveAPIClient {
 
     func myReports(token: String) async throws -> [FieldReport] {
         try await get(Reports.self, ["me", "reports"], token: token).reports
+    }
+
+    /// Changes one of this party's own reports. 409 `report_locked` throws `reportLocked`; a report
+    /// that is not this party's, or no longer exists, is 404 (`notFound`).
+    func editReport(id: String, patch: ReportPatch, token: String) async throws -> FieldReport {
+        try await get(ReportResponse.self, ["me", "reports", id], method: "PATCH", token: token, body: patch).report
+    }
+
+    /// Withdraws one of this party's own reports (the server keeps it as `withdrawn`). Idempotent.
+    func withdrawReport(id: String, token: String) async throws -> FieldReport {
+        try await get(ReportResponse.self, ["me", "reports", id], method: "DELETE", token: token).report
     }
 
     func publicMap(incidentId: String, token: String) async throws -> [PublicMapItem] {
@@ -201,7 +220,9 @@ struct LiveAPIClient {
         case 400: throw LiveAPIError.rejected((try? LiveJSON.decoder.decode(ErrorBody.self, from: data))?.detail)
         case 401: throw LiveAPIError.unauthorized
         case 403: throw LiveAPIError.forbidden
-        case 409: throw LiveAPIError.conflict
+        case 409:
+            let error = (try? LiveJSON.decoder.decode(ErrorBody.self, from: data))?.error
+            throw error == "report_locked" ? LiveAPIError.reportLocked : LiveAPIError.conflict
         case 404: throw LiveAPIError.notFound
         case 429: throw LiveAPIError.rateLimited
         case 503: throw LiveAPIError.serviceUnavailable

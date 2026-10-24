@@ -73,6 +73,9 @@ def report_json(doc: Mapping[str, Any]) -> dict[str, Any]:
     body.setdefault("replay_at", None)
     body.setdefault("method", "explicit")
     body.setdefault("speed_class", None)
+    body.setdefault("edited_at", None)
+    body.setdefault("withdrawn_at", None)
+    body.setdefault("revisions", [])
     return body
 
 

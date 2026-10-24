@@ -11,7 +11,9 @@ enum ReportProgress: Int, Equatable, CaseIterable {
         case .unverified: self = hasOpenTask ? .beingChecked : .received
         case .corroborated: self = .beingChecked
         case .responderConfirmed, .confirmed: self = .confirmed
-        case .resolved, .dismissed: self = .resolved
+        case .resolved, .dismissed, .withdrawn: self = .resolved
+        // A status this build does not know yet: the server has it, nothing more is claimed.
+        case .unknown: self = .received
         }
     }
 
@@ -129,8 +131,14 @@ struct FieldSectionTitle: View {
     }
 }
 
+/// Opens one of this phone's reports from Yours. Keyed by `clientId`, so a draft that is sent
+/// while it is open becomes the sent report in place.
+private struct YourReportRoute: Hashable {
+    let clientId: UUID
+}
+
 /// The Reports tab: Report what I see (New report on top), pending "still there?" questions,
-/// and this device's reports with their four-step status.
+/// and this device's reports with their four-step status. A report opens to edit or delete.
 struct ReportsView: View {
     @Environment(LiveStore.self) private var store
     @Environment(AppRouter.self) private var router
@@ -175,15 +183,22 @@ struct ReportsView: View {
                             FieldSectionTitle("Yours")
                             VStack(spacing: 0) {
                                 ForEach(store.pending.filter { $0.location != nil }) { draft in
-                                    ReportRow(kind: draft.kind,
-                                              place: draft.location.flatMap { store.placeWords($0.coord, road: nil) },
-                                              time: draft.observedAt, progress: nil)
+                                    NavigationLink(value: YourReportRoute(clientId: draft.clientId)) {
+                                        ReportRow(kind: draft.kind,
+                                                  place: draft.location.flatMap { store.placeWords($0.coord, road: nil) },
+                                                  time: draft.observedAt, progress: nil)
+                                    }
+                                    .buttonStyle(.plain)
                                     if draft.id != store.pending.last(where: { $0.location != nil })?.id || !store.myReports.isEmpty { rowDivider }
                                 }
                                 ForEach(store.myReports) { report in
-                                    ReportRow(kind: report.kind,
-                                              place: store.placeWords(report.location.coord, road: report.roadRef?.name),
-                                              time: report.observedAt, progress: store.progress(of: report))
+                                    NavigationLink(value: YourReportRoute(clientId: report.clientId)) {
+                                        ReportRow(kind: report.kind,
+                                                  place: store.placeWords(report.location.coord, road: report.roadRef?.name),
+                                                  time: report.observedAt, progress: store.progress(of: report),
+                                                  edited: report.editedAt != nil)
+                                    }
+                                    .buttonStyle(.plain)
                                     if report.id != store.myReports.last?.id { rowDivider }
                                 }
                             }
@@ -206,6 +221,9 @@ struct ReportsView: View {
             }
             .refreshable { await store.refresh() }
             .animation(.snappy, value: store.stillThereItems.map(\.id) + store.boardQuestions.map(\.id))
+            .navigationDestination(for: YourReportRoute.self) { route in
+                ReportDetailView(clientId: route.clientId)
+            }
         }
     }
 
@@ -224,12 +242,13 @@ struct ReportsView: View {
     }
 }
 
-/// One of this device's reports: what, where, when, and its step.
+/// One of this device's reports: what, where, when, its step, and whether it was edited.
 private struct ReportRow: View {
     let kind: ReportKind
     let place: String?
     let time: Date
     let progress: ReportProgress?
+    var edited = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -241,6 +260,7 @@ private struct ReportRow: View {
                         .foregroundStyle(Color.ctInk)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 8)
+                    if edited { EditedTag() }
                     Text(time, format: .dateTime.hour().minute())
                         .font(.footnote)
                         .monospacedDigit()
@@ -255,11 +275,228 @@ private struct ReportRow: View {
                 ReportSteps(progress: progress)
                     .padding(.top, 2)
             }
+            Image(systemName: "chevron.forward")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(Color.ctInkSubtle)
+                .frame(maxHeight: .infinity)
+                .accessibilityHidden(true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
+        .contentShape(.rect)
         .accessibilityElement(children: .combine)
+        .accessibilityHint("Opens the report")
+    }
+}
+
+/// "Edited" in words on a quiet chip, so the tag never relies on colour.
+private struct EditedTag: View {
+    var body: some View {
+        Text("Edited")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(Color.ctInkMuted)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+            .background(Color.ctSurfaceMuted, in: .capsule)
+    }
+}
+
+/// One of this phone's reports, opened from Yours: what was sent, where, when and its step.
+/// While nobody with authority has acted on it (or it is still on the phone) it can be edited in
+/// the report sheet or deleted; otherwise it is read-only with the reason.
+private struct ReportDetailView: View {
+    let clientId: UUID
+
+    @Environment(LiveStore.self) private var store
+    @Environment(LocationProvider.self) private var location
+    @Environment(\.dismiss) private var dismiss
+
+    /// The last version seen, kept while a sent draft is between the outbox and the list.
+    @State private var last: ReportEditTarget?
+    @State private var editing: ReportEditTarget?
+    @State private var confirmingDelete = false
+    @State private var deleting = false
+    @State private var message: String?
+    @State private var tick = 0
+
+    private static let lockedLine = LiveAPIError.reportLocked.localizedDescription
+
+    /// The sent report first, so a draft that was just accepted shows its server state.
+    private var current: ReportEditTarget? {
+        if let report = store.myReports.first(where: { $0.clientId == clientId }) { return .report(report) }
+        if let draft = store.pending.first(where: { $0.clientId == clientId }) { return .draft(draft) }
+        return nil
+    }
+
+    var body: some View {
+        let shown = current ?? last
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                if let shown {
+                    summary(shown)
+                    if let note = shown.note, !note.isEmpty { notePanel(note) }
+                    actions(shown)
+                } else {
+                    Text("This report is no longer in your list.")
+                        .font(.body)
+                        .foregroundStyle(Color.ctInkMuted)
+                        .ctPanel()
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 24)
+        }
+        .ctScreenBackground()
+        .navigationTitle(shown?.kind.title ?? "Report")
+        .navigationBarTitleDisplayMode(.inline)
+        .refreshable { await store.refresh() }
+        .onChange(of: current, initial: true) { _, new in
+            if let new { last = new }
+        }
+        .sensoryFeedback(.selection, trigger: tick)
+        .sheet(item: $editing) { target in
+            NavigationStack { ReportSheet(editing: target) }
+                .presentationDetents([.large])
+                .environment(store)
+                .environment(location)
+        }
+        .confirmationDialog("Delete this report?", isPresented: $confirmingDelete, titleVisibility: .visible) {
+            Button("Delete report", role: .destructive) { delete() }
+        } message: {
+            if shown?.report == nil {
+                Text("It has not been sent yet. It will be removed from this phone.")
+            } else {
+                Text("It leaves your list and no longer counts toward the map. Controllers can still see that you withdrew it.")
+            }
+        }
+    }
+
+    private func summary(_ target: ReportEditTarget) -> some View {
+        let report = target.report
+        let place = target.location.flatMap { store.placeWords($0.coord, road: report?.roadRef?.name) }
+            ?? report?.roadRef?.name
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 12) {
+                KindBadge(kind: target.kind)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(target.kind.title)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(Color.ctInk)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let severity = target.severity, target.kind.hasSeverity {
+                        Text(severity.title)
+                            .font(.subheadline)
+                            .foregroundStyle(Color.ctInk)
+                    }
+                    if let place {
+                        Text(place)
+                            .font(.subheadline)
+                            .foregroundStyle(Color.ctInkMuted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    HStack(spacing: 8) {
+                        Text("Seen \(target.observedAt.formatted(.dateTime.hour().minute()))")
+                            .font(.footnote)
+                            .monospacedDigit()
+                            .foregroundStyle(Color.ctInkMuted)
+                        if report?.editedAt != nil { EditedTag() }
+                    }
+                }
+            }
+            ReportSteps(progress: report.map { store.progress(of: $0) })
+                .padding(.leading, 42)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .ctPanel(padding: 0)
+        .accessibilityElement(children: .combine)
+    }
+
+    private func notePanel(_ note: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Note")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(Color.ctInkMuted)
+            Text(note)
+                .font(.body)
+                .foregroundStyle(Color.ctInk)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .ctPanel(padding: 14)
+        .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder
+    private func actions(_ target: ReportEditTarget) -> some View {
+        if target.isEditable {
+            VStack(spacing: 10) {
+                if let message {
+                    Label(message, systemImage: message == Self.lockedLine ? "lock.fill" : "exclamationmark.triangle.fill")
+                        .font(.subheadline)
+                        .foregroundStyle(Color.ctWarning)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if target.canEdit {
+                    Button {
+                        tick += 1
+                        message = nil
+                        editing = target
+                    } label: {
+                        Label("Edit", systemImage: "pencil")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(FieldPill(primary: true))
+                    .disabled(deleting)
+                }
+
+                Button(role: .destructive) {
+                    confirmingDelete = true
+                } label: {
+                    Text(deleting ? "Deleting" : "Delete report")
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(Color.ctDanger)
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .disabled(deleting)
+            }
+        } else {
+            Label(Self.lockedLine, systemImage: "lock.fill")
+                .font(.subheadline)
+                .foregroundStyle(Color.ctInkMuted)
+                .fixedSize(horizontal: false, vertical: true)
+                .ctPanel(padding: 14)
+        }
+    }
+
+    private func delete() {
+        guard let target = current, !deleting else { return }
+        message = nil
+        switch target {
+        case .draft(let draft):
+            do {
+                try store.deleteDraft(draft)
+                dismiss()
+            } catch {
+                message = error.localizedDescription
+            }
+        case .report(let report):
+            deleting = true
+            Task {
+                defer { deleting = false }
+                do {
+                    try await store.withdrawReport(report)
+                    dismiss()
+                } catch is CancellationError {
+                } catch {
+                    message = error.localizedDescription
+                }
+            }
+        }
     }
 }
 

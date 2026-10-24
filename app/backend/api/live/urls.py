@@ -26,6 +26,7 @@ urlpatterns = [
     path("incidents/<str:incident_id>/twin", views.twin, name="live-twin"),
     path("incidents/<str:incident_id>/twin/whatif", views.twin_whatif, name="live-twin-whatif"),
     path("me/reports", views.my_reports, name="live-my-reports"),
+    path("me/reports/<str:report_id>", views.my_report, name="live-my-report"),
     path("me/tasks", views.my_tasks, name="live-my-tasks"),
     path("me/location", views.my_location, name="live-my-location"),
     path("me/destination", views.my_destination, name="live-my-destination"),

@@ -73,6 +73,7 @@ function Row({
           {item.conflict ? <Tag tone="warning">Conflicting</Tag> : null}
           {item.stale ? <Tag>Stale</Tag> : null}
           {item.fixture ? <Tag>Fixture</Tag> : null}
+          {item.edited ? <Tag>Edited</Tag> : null}
           {item.record ? <Tag tone="info">2018 record</Tag> : null}
           {item.reports.length > 0 && item.reports.every((r) => r.method === "passive") ? <Tag>Passive</Tag> : null}
         </span>

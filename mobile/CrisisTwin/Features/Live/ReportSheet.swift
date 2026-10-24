@@ -3,8 +3,12 @@ import SwiftUI
 
 /// "Report what you see": where it is (the minimap pin), what it is, how bad, send. Works
 /// offline; the store saves the draft on the phone first (ADR 0011).
+///
+/// With `editing`, the same form opens on one of this phone's reports and saves the changes
+/// instead: an unsent draft changes on the phone only, a sent one with `PATCH me/reports/{id}`.
 struct ReportSheet: View {
     var prefill: ReportPrefill? = nil
+    var editing: ReportEditTarget? = nil
 
     @Environment(LiveStore.self) private var store
     @Environment(LocationProvider.self) private var location
@@ -24,6 +28,11 @@ struct ReportSheet: View {
     @State private var capturedAt = Date()
     @State private var sentKind: ReportKind?
     @State private var drawn = false
+    /// Edit mode: the save request is in flight, why the last save failed, and whether the
+    /// server said the report is locked.
+    @State private var saving = false
+    @State private var saveError: String?
+    @State private var locked = false
     @State private var started = false
     @State private var tick = 0
 
@@ -36,7 +45,7 @@ struct ReportSheet: View {
             }
         }
         .ctScreenBackground()
-        .navigationTitle(sentKind == nil ? "Report" : "")
+        .navigationTitle(sentKind != nil ? "" : editing == nil ? "Report" : "Edit report")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
@@ -45,6 +54,7 @@ struct ReportSheet: View {
         }
         .presentationDetents([.large])
         .presentationBackground(Color.ctBackground)
+        .interactiveDismissDisabled(saving)
         .sensoryFeedback(.selection, trigger: tick)
         .sensoryFeedback(.success, trigger: sentKind) { _, new in new != nil }
         .task { await start() }
@@ -202,19 +212,36 @@ struct ReportSheet: View {
         }
     }
 
-    private var ready: Bool { kind != nil && pin != nil }
+    /// New reports need a kind and a pin; edits also need a change, and wait for the save.
+    private var ready: Bool {
+        guard kind != nil, pin != nil else { return false }
+        guard let editing else { return true }
+        return !saving && !locked && !changes(from: editing).isEmpty
+    }
 
     private var sendBar: some View {
-        Button(action: send) {
-            Label("Send", systemImage: "paperplane.fill")
-                .font(.headline)
-                .foregroundStyle(ready ? Color.ctBackground : Color.ctInkSubtle)
-                .frame(maxWidth: .infinity, minHeight: 52)
-                .background(ready ? Color.ctBrand : Color.ctSurfaceMuted, in: .capsule)
-                .contentShape(.capsule)
+        VStack(spacing: 8) {
+            if let saveError {
+                Label(saveError, systemImage: locked ? "lock.fill" : "exclamationmark.triangle.fill")
+                    .font(.subheadline)
+                    .foregroundStyle(Color.ctWarning)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Button {
+                if let editing { save(editing) } else { send() }
+            } label: {
+                Label(editing == nil ? "Send" : saving ? "Saving" : "Save",
+                      systemImage: editing == nil ? "paperplane.fill" : "checkmark")
+                    .font(.headline)
+                    .foregroundStyle(ready ? Color.ctBackground : Color.ctInkSubtle)
+                    .frame(maxWidth: .infinity, minHeight: 52)
+                    .background(ready ? Color.ctBrand : Color.ctSurfaceMuted, in: .capsule)
+                    .contentShape(.capsule)
+            }
+            .buttonStyle(.plain)
+            .disabled(!ready)
         }
-        .buttonStyle(.plain)
-        .disabled(!ready)
         .padding(.horizontal, 16)
         .padding(.top, 10)
         .padding(.bottom, 8)
@@ -225,6 +252,7 @@ struct ReportSheet: View {
 
     private func confirmation(for kind: ReportKind) -> some View {
         let queued = !store.pending.isEmpty
+        let title = editing != nil ? "Saved" : queued ? "Saved, sends when online" : "Sent"
         return VStack(spacing: 16) {
             Spacer()
             ZStack {
@@ -237,7 +265,7 @@ struct ReportSheet: View {
             }
             .frame(height: 88)
             .accessibilityHidden(true)
-            Text(queued ? "Saved, sends when online" : "Sent")
+            Text(title)
                 .font(.title2.bold())
                 .foregroundStyle(Color.ctInk)
             if kind == .helpNeeded {
@@ -252,7 +280,7 @@ struct ReportSheet: View {
         .accessibilityElement(children: .combine)
         .onAppear {
             withAnimation { drawn = true }
-            AccessibilityNotification.Announcement(queued ? "Saved. Sends when online." : "Sent.").post()
+            AccessibilityNotification.Announcement(title + ".").post()
         }
         .task {
             try? await Task.sleep(for: .milliseconds(1500))
@@ -272,6 +300,16 @@ struct ReportSheet: View {
     private func start() async {
         guard !started else { return }
         started = true
+        if let editing {
+            select(editing.kind)
+            severity = editing.severity
+            note = editing.note ?? ""
+            pin = editing.location?.coord
+            pinFromGPS = false
+            accuracyM = editing.location?.accuracyM
+            capturedAt = editing.observedAt
+            return
+        }
         if let prefill {
             if let coord = prefill.coord, coord.isValid {
                 pin = coord
@@ -323,6 +361,62 @@ struct ReportSheet: View {
         )
         store.submit(draft)
         sentKind = kind
+    }
+
+    /// The fields that differ from the report being edited; empty when nothing changed.
+    private func changes(from target: ReportEditTarget) -> ReportPatch {
+        guard let kind, let pin else { return ReportPatch() }
+        var patch = ReportPatch()
+        if kind != target.kind { patch.kind = kind }
+        let newSeverity = kind.hasSeverity ? severity : nil
+        if newSeverity != target.severity { patch.severity = .some(newSeverity) }
+        let newNote = Self.cleanNote(note)
+        if newNote != Self.cleanNote(target.note ?? "") { patch.note = .some(newNote) }
+        if pin != target.location?.coord {
+            patch.location = ReportLocation(coord: pin, accuracyM: pinFromGPS ? accuracyM : nil)
+        }
+        return patch
+    }
+
+    private static func cleanNote(_ text: String) -> String? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// Saves an edit. A draft changes in the outbox at once; a sent report waits for the server,
+    /// and a 409 locks the form with the server's reason.
+    private func save(_ target: ReportEditTarget) {
+        let patch = changes(from: target)
+        guard let kind, !patch.isEmpty, !saving else { return }
+        saveError = nil
+        switch target {
+        case .draft(var draft):
+            if let kind = patch.kind { draft.kind = kind }
+            if let severity = patch.severity { draft.severity = severity }
+            if let note = patch.note { draft.note = note }
+            if let location = patch.location { draft.location = location }
+            do {
+                try store.updateDraft(draft)
+                sentKind = kind
+            } catch {
+                saveError = error.localizedDescription
+            }
+        case .report(let report):
+            saving = true
+            Task {
+                defer { saving = false }
+                do {
+                    try await store.editReport(report, patch: patch)
+                    sentKind = kind
+                } catch LiveAPIError.reportLocked {
+                    locked = true
+                    saveError = LiveAPIError.reportLocked.localizedDescription
+                } catch is CancellationError {
+                } catch {
+                    saveError = error.localizedDescription
+                }
+            }
+        }
     }
 }
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -80,9 +81,18 @@ PASSIVE_KINDS = frozenset({"road_passable", "heavy_traffic"})
 SPEED_CLASSES = frozenset({"free", "slow"})
 PASSIVE_FORBIDDEN_FIELDS = ("location", "heading_deg", "note", "destination_id")
 """A passive report carries no position, heading, text or destination: the server places it on the segment."""
+SEVERITY_KINDS = frozenset({"road_blocked", "heavy_traffic"})
+"""Kinds a severity applies to; an edit that sets another kind (or severity on one) stores severity null."""
 SHELTER_FULL_DESTINATION_KINDS = frozenset({"shelter", "temporary_refuge"})
 """Destination kinds that can fill up; an exit cannot."""
 TRIAGE_ACTIONS = {"confirm": "confirmed", "dismiss": "dismissed", "resolve": "resolved", "merge": "dismissed"}
+EDITABLE_STATUSES = ("unverified", "corroborated")
+"""A reporter may edit or withdraw a report only while nobody with authority has acted on it."""
+EDIT_FIELDS = ("kind", "severity", "location", "note", "destination_id")
+"""The submit fields ``PATCH me/reports/{id}`` may change."""
+MAX_REVISIONS = 10
+"""``revisions`` keeps the previous values of the 10 most recent edits, newest last."""
+PLACEHOLDER_CLIENT_ID = str(uuid.UUID(int=0))
 REPLAN_CAUSE_ON_CONFIRM = {"road_blocked": "road_block", "fire_seen": "fire"}
 CHECKIN_STATUSES = frozenset({"out", "need_help", "staying"})
 HELP_ACTIONS = {"acknowledge": "acknowledged", "assign": "assigned", "resolve": "resolved"}
@@ -109,6 +119,8 @@ CHECKINS_PER_MIN = 10
 DESTINATION_CHOICE_TTL_S = 2 * 3600
 """A civilian destination choice counts for this long after its last POST (TTL on ``expires_at``)."""
 DESTINATION_CHOICES_PER_MIN = 10
+REPORT_EDITS_PER_MIN = 20
+"""Civilian edits plus withdrawals per minute per party (``rpt-edit:{party_key}``)."""
 
 
 def _bool_number(value: Any) -> bool:
@@ -242,8 +254,13 @@ def _validate_report(body: dict[str, Any], incident_id: str) -> dict[str, Any]:
     }
 
 
-def _refresh_corroboration(incident_id: str) -> None:
-    """Mark unverified reports in a public, not controller-confirmed item as corroborated."""
+def _refresh_corroboration(incident_id: str, recheck: Iterable[str] = ()) -> None:
+    """Mark unverified reports in a public, not controller-confirmed item as corroborated.
+
+    ``recheck``: reports an edit or withdrawal may have un-corroborated. Those still
+    ``corroborated`` or ``responder_confirmed`` but no longer in any public item go back to
+    ``unverified``.
+    """
     now = wall_now()
     _, _, items, _ = load_public(incident_id, now, get_index(incident_id))
     reports = col("live_reports")
@@ -255,6 +272,35 @@ def _refresh_corroboration(incident_id: str) -> None:
             {"incident_id": incident_id, "id": {"$in": list(item.report_ids)}, "status": "unverified"},
             {"$set": {"status": status, "updated_at": now}},
         )
+    in_public = {rid for item in items for rid in item.report_ids}
+    stale = sorted(set(recheck) - in_public)
+    if stale:
+        reports.update_many(
+            {"incident_id": incident_id, "id": {"$in": stale},
+             "status": {"$in": ["corroborated", "responder_confirmed"]}},
+            {"$set": {"status": "unverified", "updated_at": now}},
+        )
+
+
+def _public_peers(incident_id: str, report_id: str) -> set[str]:
+    """Ids of the reports sharing a public item with ``report_id`` (itself included), before a change."""
+    _, _, items, _ = load_public(incident_id, wall_now(), get_index(incident_id))
+    return {rid for item in items if report_id in item.report_ids for rid in item.report_ids}
+
+
+def _road_ref(index, kind: str, coord) -> dict[str, Any] | None:
+    """The road segment a road-kind report snaps to (submit and edit); None for other kinds or no road nearby."""
+    if kind not in ROAD_KINDS:
+        return None
+    snapped = snap_to_segment(index, tuple(coord))
+    if snapped is None:
+        return None
+    segment_id, snap_m = snapped
+    return {
+        "segment_id": segment_id,
+        "name": index.segment_names.get(segment_id) or "Unnamed road",
+        "snap_m": round(snap_m, 1),
+    }
 
 
 def _board_task(incident_id: str, task_id: str | None) -> dict[str, Any] | None:
@@ -334,15 +380,8 @@ def _submit_report(request, incident_id: str, principal: Principal) -> Response:
         snap_m = min(haversine_m(tuple(fields["location"]["coord"]), p) for p in line)
         road_ref = {"segment_id": fixed_segment, "name": index.segment_names.get(fixed_segment) or "Unnamed road",
                     "snap_m": 0.0 if fields["method"] == "passive" else round(snap_m, 1)}
-    elif fields["kind"] in ROAD_KINDS:
-        snapped = snap_to_segment(index, tuple(fields["location"]["coord"]))
-        if snapped is not None:
-            segment_id, snap_m = snapped
-            road_ref = {
-                "segment_id": segment_id,
-                "name": index.segment_names.get(segment_id) or "Unnamed road",
-                "snap_m": round(snap_m, 1),
-            }
+    else:
+        road_ref = _road_ref(index, fields["kind"], fields["location"]["coord"])
     now = wall_now()
     doc = {
         "id": new_id("rpt_"),
@@ -413,8 +452,121 @@ def incident_reports(request, incident_id: str, principal: Principal):
 
 @live_view(["GET"])
 def my_reports(request, principal: Principal):
-    docs = col("live_reports").find({"reporter.party_key": principal.party_key}).sort("received_at", -1).limit(200)
+    docs = (
+        col("live_reports")
+        .find({"reporter.party_key": principal.party_key, "status": {"$ne": "withdrawn"}})
+        .sort("received_at", -1)
+        .limit(200)
+    )
     return ok({"reports": [report_json(d) for d in docs]})
+
+
+def _own_report(principal: Principal, report_id: str) -> dict[str, Any]:
+    """The principal's report, or 404 for any other id (no probing). The controller has no own reports."""
+    doc = None
+    if principal.role != "controller":
+        doc = col("live_reports").find_one({"id": report_id, "reporter.party_key": principal.party_key})
+    if doc is None:
+        raise ApiError(404, "not_found", "Unknown report.")
+    return doc
+
+
+def _report_locked() -> Response:
+    return error(409, "report_locked", "A responder or controller has already acted on this report.")
+
+
+def _edit_rate_limited(principal: Principal) -> bool:
+    return principal.role == "civilian" and rate_limited(f"rpt-edit:{principal.party_key}", REPORT_EDITS_PER_MIN, 60)
+
+
+def _edited_fields(doc: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    """The patch merged onto the stored report and validated as a submit; the editable fields."""
+    merged = {
+        "client_id": PLACEHOLDER_CLIENT_ID,  # only EDIT_FIELDS are kept from the validation
+        "kind": doc["kind"],
+        "severity": doc.get("severity"),
+        "location": doc["location"],
+        "heading_deg": doc.get("heading_deg"),
+        "destination_id": doc.get("destination_id"),
+        "task_id": doc.get("task_id"),
+        "observed_at": iso(doc["observed_at"]),
+        "note": doc.get("note"),
+        **patch,
+    }
+    fields = _validate_report(merged, doc["incident_id"])
+    if fields["kind"] not in SEVERITY_KINDS and ("kind" in patch or "severity" in patch):
+        fields["severity"] = None
+    return {k: fields[k] for k in EDIT_FIELDS}
+
+
+def _edit_report(request, report_id: str, principal: Principal) -> Response:
+    patch = json_body(request, "invalid_report")
+    if not patch:
+        return error(400, "invalid_report", f"Give at least one of {', '.join(EDIT_FIELDS)}.")
+    extra = sorted(set(patch) - set(EDIT_FIELDS))
+    if extra:
+        return error(400, "invalid_report", f"Not editable: {', '.join(extra)}. Edit only {', '.join(EDIT_FIELDS)}.")
+    doc = _own_report(principal, report_id)
+    if doc["status"] not in EDITABLE_STATUSES:
+        return _report_locked()
+    if doc.get("method") == "passive":
+        return error(400, "invalid_report", "A passive report has nothing to edit. Withdraw it instead.")
+    fields = _edited_fields(doc, patch)
+    if _edit_rate_limited(principal):
+        return error(429, "rate_limited", "Too many edits. Try again in a minute.")
+    previous = {k: doc.get(k) for k in EDIT_FIELDS}
+    if fields == previous:
+        return ok({"report": report_json(doc)})
+    incident_id = doc["incident_id"]
+    peers = _public_peers(incident_id, report_id)
+    now = wall_now()
+    changes: dict[str, Any] = {**fields, "status": "unverified", "edited_at": now, "updated_at": now}
+    if fields["kind"] != doc["kind"] or fields["location"]["coord"] != doc["location"]["coord"]:
+        changes["road_ref"] = _road_ref(get_index(incident_id), fields["kind"], fields["location"]["coord"])
+    stored = col("live_reports").find_one_and_update(
+        {"id": report_id, "status": {"$in": list(EDITABLE_STATUSES)}},
+        {
+            "$set": changes,
+            "$push": {"revisions": {"$each": [{"at": now, **previous}], "$slice": -MAX_REVISIONS}},
+        },
+        return_document=ReturnDocument.AFTER,
+    )
+    if stored is None:  # triaged between the read and the write
+        return _report_locked()
+    _refresh_corroboration(incident_id, peers)
+    return ok({"report": report_json(col("live_reports").find_one({"id": report_id}) or stored)})
+
+
+def _withdraw_report(report_id: str, principal: Principal) -> Response:
+    doc = _own_report(principal, report_id)
+    if doc["status"] == "withdrawn":
+        return ok({"report": report_json(doc)})
+    if doc["status"] not in EDITABLE_STATUSES:
+        return _report_locked()
+    if _edit_rate_limited(principal):
+        return error(429, "rate_limited", "Too many withdrawals. Try again in a minute.")
+    incident_id = doc["incident_id"]
+    peers = _public_peers(incident_id, report_id) if doc["kind"] != "help_needed" else set()
+    now = wall_now()
+    stored = col("live_reports").find_one_and_update(
+        {"id": report_id, "status": {"$in": list(EDITABLE_STATUSES)}},
+        {"$set": {"status": "withdrawn", "withdrawn_at": now, "updated_at": now}},
+        return_document=ReturnDocument.AFTER,
+    )
+    if stored is None:  # triaged or withdrawn between the read and the write
+        current = col("live_reports").find_one({"id": report_id}) or doc
+        return ok({"report": report_json(current)}) if current["status"] == "withdrawn" else _report_locked()
+    if doc["kind"] != "help_needed":
+        _refresh_corroboration(incident_id, peers)
+    return ok({"report": report_json(stored)})
+
+
+@live_view(["PATCH", "DELETE"])
+def my_report(request, report_id: str, principal: Principal):
+    """Edit (PATCH) or withdraw (DELETE) the caller's own report while it is unverified or corroborated."""
+    if request.method == "PATCH":
+        return _edit_report(request, report_id, principal)
+    return _withdraw_report(report_id, principal)
 
 
 @live_view(["POST"], roles=["controller"])
@@ -428,6 +580,8 @@ def triage(request, report_id: str, principal: Principal):
     report = reports.find_one({"id": report_id})
     if report is None:
         return error(404, "not_found", "Unknown report.")
+    if report["status"] == "withdrawn":
+        return error(409, "report_withdrawn", "The reporter withdrew this report.")
     now = wall_now()
     update: dict[str, Any] = {"status": TRIAGE_ACTIONS[action], "updated_at": now}
     report_ids = [report_id]
@@ -595,7 +749,7 @@ def update_task(request, task_id: str, principal: Principal):
         )
         if task.get("report_ids"):  # a help report the responder reached is resolved
             col("live_reports").update_many(
-                {"id": {"$in": task["report_ids"]}, "kind": "help_needed", "status": {"$nin": ["dismissed"]}},
+                {"id": {"$in": task["report_ids"]}, "kind": "help_needed", "status": {"$nin": ["dismissed", "withdrawn"]}},
                 {"$set": {"status": "resolved", "updated_at": now}},
             )
     else:
@@ -634,7 +788,7 @@ def impact(request, incident_id: str, principal: Principal):
         report_ids = sorted(
             d["id"] for d in snapshot.report_docs
             if (d.get("road_ref") or {}).get("segment_id") == segment_id
-            and d.get("status") not in ("dismissed", "resolved")
+            and d.get("status") not in ("dismissed", "resolved", "withdrawn")
         )
     return ok(impact_mod.analyze(snapshot, segment_id, report_ids, float(horizon)))
 

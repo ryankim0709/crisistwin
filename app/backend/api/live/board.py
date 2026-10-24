@@ -120,13 +120,13 @@ def free_flow_kph(snapshot: Snapshot, segment_id: str) -> float | None:
 
 
 def _last_observed(snapshot: Snapshot) -> tuple[dict[str, datetime], dict[str, datetime], list]:
-    """Newest effective time of a non-dismissed report per segment (road kinds) and per destination
+    """Newest effective time of a non-dismissed, non-withdrawn report per segment (road kinds) and per destination
     (``shelter_full``), and fire points (``fire_seen``/``heavy_smoke``). Passive reports count."""
     segs: dict[str, datetime] = {}
     dests: dict[str, datetime] = {}
     fire_points = []
     for f in snapshot.facts:
-        if f.status in ("dismissed",):
+        if f.status in ("dismissed", "withdrawn"):
             continue
         at = effective_at(f)
         if f.kind in ("road_blocked", "road_passable", "heavy_traffic") and f.segment_id:
@@ -401,7 +401,8 @@ def task_answers(incident_id: str, task_ids: list[str]) -> dict[str, dict[str, A
     if not task_ids:
         return {}
     rows = col("live_reports").aggregate([
-        {"$match": {"incident_id": incident_id, "task_id": {"$in": task_ids}, "status": {"$ne": "dismissed"}}},
+        {"$match": {"incident_id": incident_id, "task_id": {"$in": task_ids},
+                    "status": {"$nin": ["dismissed", "withdrawn"]}}},
         {"$group": {"_id": {"task_id": "$task_id", "kind": "$kind", "method": "$method"},
                     "n": {"$sum": 1}, "last": {"$max": "$received_at"}}},
     ])
