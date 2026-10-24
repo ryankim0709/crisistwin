@@ -199,9 +199,8 @@ function MissingNote() {
   return (
     <Notice tone="info" title="No phone-panel mobility file for this fire.">
       <span>
-        This optional layer is built from licensed Advan data (Dewey). Fetch the team copy with{" "}
-        <code className="rp-mob-code">python3 -m tools.mongo_data pull</code>, or rebuild it with
-        Dewey access, then reload:
+        Built from licensed Advan data (Dewey). Fetch the team copy with{" "}
+        <code className="rp-mob-code">python3 -m tools.mongo_data pull</code>, or rebuild it:
       </span>
       <code className="rp-mob-code">{MOBILITY_BUILD_HINT}</code>
     </Notice>
@@ -404,10 +403,7 @@ function ReadyTab({
             Dashed grey line: residents’ trips from the reference place (straight lines, not routes)
           </li>
         </ul>
-        <p className="rp-rule">
-          Hover a circle for its visits and baseline. Cells with no baseline and no visits are
-          hidden.
-        </p>
+        <p className="rp-rule">Cells with no baseline and no visits are hidden.</p>
       </section>
 
       <section aria-labelledby="rp-mob-charts">
@@ -428,9 +424,8 @@ function ReadyTab({
           ))}
         </div>
         <p className="rp-rule">
-          Solid line: visits. Dashed line: baseline for that hour of the week. Vertical line: the
-          replay clock. Shaded band: the replay&apos;s own time window. Click a chart to move the
-          clock.
+          Solid: visits. Dashed: baseline for that hour of the week. Vertical line: replay clock.
+          Shaded: replay window. Click a chart to move the clock.
         </p>
         {charts.length === 0 && (
           <p className="rp-empty">No series for this category in the file.</p>

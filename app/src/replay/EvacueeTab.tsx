@@ -49,7 +49,7 @@ export default function EvacueeTab({ model, simTimeMs, frameIndex, pin, onPin }:
       <div className="rp-pin-controls">
         <p className="rp-pin-hint">
           {pin
-            ? "Pin placed. Click the map to move it."
+            ? "Click the map to move the pin."
             : "Click or tap the map to place a pin, or choose a zone:"}
         </p>
         {zones.length > 0 && (

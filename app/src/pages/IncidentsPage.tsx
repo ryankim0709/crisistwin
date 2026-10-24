@@ -89,7 +89,7 @@ function IncidentLibrary() {
   const load = useJson(INCIDENTS_URL, parseIncidents);
   if (load.status !== "ready") {
     return (
-      <Panel title="Historical incidents" eyebrow="Replay library">
+      <Panel title="Historical incidents">
         <DataState load={load} what="incidents index" path={INCIDENTS_URL} />
       </Panel>
     );
@@ -97,7 +97,7 @@ function IncidentLibrary() {
   const incidents = load.data;
   if (incidents.length === 0) {
     return (
-      <Panel title="Historical incidents" eyebrow="Replay library">
+      <Panel title="Historical incidents">
         <EmptyResult title="No incidents listed">
           <code>{INCIDENTS_URL}</code> has no incidents. Generate a replay bundle to add one.
         </EmptyResult>
@@ -143,14 +143,13 @@ export default function IncidentsPage() {
   return (
     <WorkspacePage
       title="Incident intelligence"
-      description="Inspect the evidence before it becomes a scenario assumption."
     >
       <Notice title="Historical data only">
-        Archived records, not live monitoring. The review example below is synthetic.
+        Not monitoring live incidents; the review example below is synthetic.
       </Notice>
       <IncidentLibrary />
       <div className="ui-split">
-        <Panel title="Report inbox" eyebrow="01 / Evidence" aside={<Tag>Disconnected</Tag>}>
+        <Panel title="Report inbox" aside={<Tag>Disconnected</Tag>}>
           <div className="ui-fields">
             <Field label="Search reports">
               <input
@@ -176,8 +175,8 @@ export default function IncidentsPage() {
                 : "No public reports fetched"
             }
           >
-            Connect a public source to review original links, observation times, retrieval times,
-            and conflicting evidence. An empty inbox does not mean there are no incidents.
+            Connect a public source to fill the inbox. An empty inbox does not mean there are no
+            incidents.
           </EmptyResult>
           <Button
             variant="secondary"
@@ -190,17 +189,13 @@ export default function IncidentsPage() {
         </Panel>
         <Panel
           title="Evidence review"
-          eyebrow="02 / Human review"
           aside={<Tag tone="warning">{example ? "Synthetic example" : "No selection"}</Tag>}
         >
           <div id="incident-review">
             {example ? (
               <>
                 <h3>Sample connector reported closed</h3>
-                <p className="ui-help">
-                  Fictional report for layout preview. No actual location or public source is
-                  associated with this example.
-                </p>
+                <p className="ui-help">Fictional report; no real location or source.</p>
                 <Facts
                   items={[
                     { label: "Original source", value: "None · synthetic fixture" },
@@ -218,26 +213,19 @@ export default function IncidentsPage() {
                   </p>
                 </div>
                 <Button disabled>Create scenario from report</Button>
-                <p className="ui-help">
-                  Requires source evidence, a validated road match, and scenario storage.
-                </p>
               </>
             ) : (
-              <EmptyResult title="Select a report to inspect">
-                Source provenance, freshness, contradictions, and proposed scenario changes will be
-                shown here.
-              </EmptyResult>
+              <EmptyResult title="Select a report to inspect">Nothing selected.</EmptyResult>
             )}
           </div>
         </Panel>
       </div>
-      <Panel title="Source connections" eyebrow="Ingestion status">
+      <Panel title="Source connections">
         <div className="ui-columns">
           {["Public incident bulletins", "Road status reports", "Shelter availability"].map(
             (source) => (
               <div className="ui-inset" key={source}>
                 <strong>{source}</strong>
-                <p>Provider not configured</p>
                 <Tag>Not connected</Tag>
               </div>
             ),

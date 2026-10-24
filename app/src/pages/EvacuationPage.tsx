@@ -22,7 +22,6 @@ export default function EvacuationPage() {
   return (
     <WorkspacePage
       title="Evacuation planning"
-      description="Connect population demand, departure timing, and destination capacity."
     >
       <IncidentSummary
         title="Real demand, orders and refuges in the replays"
@@ -34,7 +33,6 @@ export default function EvacuationPage() {
       <div className="ui-split">
         <Panel
           title="Population & departures"
-          eyebrow="01 / Demand"
           aside={<Tag tone="warning">Synthetic inputs</Tag>}
         >
           <Field label="Departure strategy">
@@ -81,12 +79,8 @@ export default function EvacuationPage() {
               </tbody>
             </table>
           </div>
-          <p className="ui-help">
-            People and vehicles are separate assumptions. Routes, participation, and accessibility
-            needs require a connected demand model.
-          </p>
         </Panel>
-        <Panel title="Shelter assumptions" eyebrow="02 / Destinations" aside={<Tag>Sample</Tag>}>
+        <Panel title="Shelter assumptions" aside={<Tag>Sample</Tag>}>
           <div className="ui-stack">
             {["Sample shelter A", "Sample shelter B"].map((name, index) => (
               <div className="ui-inset" key={name}>
@@ -107,7 +101,7 @@ export default function EvacuationPage() {
         </Panel>
       </div>
       <div className="ui-columns">
-        <Panel title="Road availability" eyebrow="03 / Network">
+        <Panel title="Road availability">
           <div className="ui-row">
             <div>
               <strong>Sample connector A</strong>
@@ -128,21 +122,13 @@ export default function EvacuationPage() {
           <Field label="Assumed road capacity (vehicles/hour)">
             <input type="number" min="0" max="10000" step="1" defaultValue="600" />
           </Field>
-          <p className="ui-help">
-            A connected network must exclude closed roads and report unreachable destinations.
-          </p>
         </Panel>
         <Panel
           title="Plan results"
-          eyebrow="04 / Simulation"
           aside={<Tag>Model not connected</Tag>}
         >
-          <EmptyResult title="Ready for a connected evacuation model">
-            Clearance time, queues, people remaining, full shelters, and unreachable destinations
-            will appear after a computed run.
-          </EmptyResult>
+          <EmptyResult title="No results">Run a connected evacuation model to compute them.</EmptyResult>
           <Button disabled>Run evacuation simulation</Button>
-          <p className="ui-help">Requires a road network, validated demand, and a traffic model.</p>
         </Panel>
       </div>
     </WorkspacePage>

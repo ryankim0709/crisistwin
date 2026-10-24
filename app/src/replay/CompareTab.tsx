@@ -85,7 +85,6 @@ export default function CompareTab({
           />
           <span>
             <strong>Baseline run</strong>
-            <small>The replay as modelled, with no changes.</small>
           </span>
         </label>
         {index.variants.map((v) => (

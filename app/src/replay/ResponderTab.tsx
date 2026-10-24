@@ -152,9 +152,7 @@ export default function ResponderTab({ model, simTimeMs, onFocus }: ResponderTab
 
   if (!insights) {
     return (
-      <EmptyState title="No planning insights in this bundle">
-        Regenerate the bundle with the simulator to compute zone and road insights.
-      </EmptyState>
+      <EmptyState title="No planning insights in this bundle" />
     );
   }
   const tz = model.incident.timezone;
