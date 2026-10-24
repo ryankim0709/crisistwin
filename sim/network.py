@@ -29,7 +29,11 @@ def load_road_network(package: Path) -> tuple[RoadNetwork, tuple[Destination, ..
     """
     manifest = json.loads((package / "manifest.json").read_text())
     # Hashes and offline re-normalization; each package extension has its own verifier.
-    if "road_event_normalizer_version" in manifest:
+    if "layers_normalizer_version" in manifest:
+        from tools.camp_add_layers import verify as verify_with_layers  # only needed for layered packages
+
+        verify_with_layers(package)
+    elif "road_event_normalizer_version" in manifest:
         verify_with_road_events(package)
     elif "event_normalizer_version" in manifest:
         verify_with_alerts(package)
