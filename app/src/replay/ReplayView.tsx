@@ -27,6 +27,7 @@ import {
   frameIndexAt,
   hasFixtureData,
   ignitionBasis,
+  perimeterWindowEnd,
   incidentYear,
   observationSource,
   lastAtOrBefore,
@@ -615,6 +616,7 @@ function ReplayScreen({
   );
   const perimeter = perimeterIndex >= 0 ? model.perimeters[perimeterIndex] : null;
   const nextPerimeter = model.perimeters[perimeterIndex + 1] ?? null;
+  const perimeterEnd = perimeterIndex >= 0 ? perimeterWindowEnd(model, perimeterIndex) : null;
 
   return (
     <main
@@ -688,7 +690,12 @@ function ReplayScreen({
               {fixture && <span className="rp-fixture-tag">FIXTURE DEMAND</span>}
               {derivedDemand && <span className="rp-status-text">Census demand (derived)</span>}
               <span className="rp-status-text">
-                {perimeter ? (
+                {perimeter && perimeterEnd !== null && simTimeMs < perimeterEnd ? (
+                  <>
+                    Half-day satellite composite: extent reached sometime by{" "}
+                    <strong>{localTime(perimeterEnd, model.incident.timezone)}</strong>
+                  </>
+                ) : perimeter ? (
                   <>
                     Satellite perimeter from{" "}
                     <strong>{formatAge(simTimeMs - perimeter.atMs)}</strong> ago
@@ -729,8 +736,13 @@ function ReplayScreen({
                   <>
                     satellite perimeter in effect ({PERIMETER_PROVENANCE[perimeter.evidenceClass]}
                     {perimeter.areaKm2 != null && <>, {perimeter.areaKm2.toFixed(0)} km²</>}
-                    {perimeter.timePrecision && (
-                      <>, ± {perimeter.timePrecision.replace(/_/g, " ")}</>
+                    {perimeter.timePrecision === "half_day" ? (
+                      <>
+                        ; half-day satellite composite: extent reached sometime in the 12 h window from{" "}
+                        {localTime(perimeter.atMs, model.incident.timezone)}
+                      </>
+                    ) : (
+                      perimeter.timePrecision && <>, ± {perimeter.timePrecision.replace(/_/g, " ")}</>
                     )}
                     )
                     {nextPerimeter && (

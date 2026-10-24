@@ -55,6 +55,19 @@ export function simulatedFrontIndexAt(model: ReplayModel, t: number): number {
   return lastAtOrBefore(sim.fronts, t);
 }
 
+const HALF_DAY_MS = 12 * 3_600_000;
+
+/**
+ * End of a perimeter's uncertainty window: a half-day composite's extent was reached sometime
+ * within 12 h of its label time (cut at the next snapshot). Null when precise.
+ */
+export function perimeterWindowEnd(model: ReplayModel, index: number): number | null {
+  const p = model.perimeters[index];
+  if (!p || p.timePrecision !== "half_day") return null;
+  const next = model.perimeters[index + 1]?.atMs ?? Infinity;
+  return Math.min(p.atMs + HALF_DAY_MS, next);
+}
+
 export function clampTime(model: ReplayModel, t: number): number {
   return Math.min(model.clock.endMs, Math.max(model.clock.startMs, t));
 }

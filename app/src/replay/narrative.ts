@@ -1,12 +1,17 @@
 // Pure builder for the one-line map caption. Every fact comes from the bundle.
 import { arrivalAt, distanceM, inArea } from "./insights";
-import { eventCategory, lastAtOrBefore, perimeterIndexAt, simulatedFrontIndexAt } from "./timeline";
+import {
+  eventCategory,
+  lastAtOrBefore,
+  perimeterIndexAt,
+  perimeterWindowEnd,
+  simulatedFrontIndexAt,
+} from "./timeline";
 import type { ReferencePlace } from "./places";
 import type { AreaGeometry, LngLat, ReplayModel } from "./types";
 
 /** Events older than this (sim time) drop out of the caption. */
 export const CAPTION_EVENT_WINDOW_MS = 20 * 60_000;
-
 
 const SNAPPED_NOTE = /\s*\[snapped:[^\]]*\]\s*$/;
 
@@ -51,7 +56,10 @@ export function buildCaption(
     }
   }
 
-  const enRouteVeh = model.traffic && frameIndex >= 0 ? (model.traffic.metrics[frameIndex]?.enRouteVeh ?? null) : null;
+  const enRouteVeh =
+    model.traffic && frameIndex >= 0
+      ? (model.traffic.metrics[frameIndex]?.enRouteVeh ?? null)
+      : null;
 
   let fire: string | null = null;
   if (place) {
@@ -60,13 +68,18 @@ export function buildCaption(
     const grid = model.fireSimulated?.arrivalGrid;
     if (perimeterIndex >= 0) {
       const g = model.perimeters[perimeterIndex].geometry;
-      fire = inArea(g, place.coord)
-        ? `${place.name} is inside the satellite perimeter`
-        : `satellite perimeter ${(nearestVertexM(g, place.coord) / 1000).toFixed(1)} km from ${place.name}`;
+      const end = perimeterWindowEnd(model, perimeterIndex);
+      const composite = end !== null && t < end ? " (half-day composite)" : "";
+      fire =
+        (inArea(g, place.coord)
+          ? `${place.name} is inside the satellite perimeter`
+          : `satellite perimeter ${(nearestVertexM(g, place.coord) / 1000).toFixed(1)} km from ${place.name}`) +
+        composite;
     } else if (simIndex >= 0 && model.fireSimulated) {
       const g = model.fireSimulated.fronts[simIndex].geometry;
       const arrival = grid ? arrivalAt(grid, place.coord) : null;
-      const reached = inArea(g, place.coord) || (arrival?.status === "reached" && arrival.atMs <= t);
+      const reached =
+        inArea(g, place.coord) || (arrival?.status === "reached" && arrival.atMs <= t);
       fire = reached
         ? `model fire has reached ${place.name}`
         : `model fire ${(nearestVertexM(g, place.coord) / 1000).toFixed(1)} km from ${place.name}`;

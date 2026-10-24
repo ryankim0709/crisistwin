@@ -11,8 +11,8 @@ import {
   localTime,
   ignitionBasis,
   incidentYear,
-  observationSource,
   perimeterIndexAt,
+  perimeterWindowEnd,
   simulatedFrontIndexAt,
 } from "./timeline";
 import type { AreaGeometry, EvidenceClass, LngLat, ReplayEvent, ReplayModel } from "./types";
@@ -188,7 +188,6 @@ export function buildChapters(
   mobility: Mobility | null = null,
 ): Chapter[] {
   const chapters: Chapter[] = [];
-  const obs = observationSource(model);
   const roads = edgeCoordLookup(model);
 
   const fireLine = (t: number) => {
@@ -385,16 +384,16 @@ export function buildChapters(
 
   const perimeter = model.perimeters[0];
   if (perimeter) {
-    const iou = model.fireSimulated?.calibrationIou;
-    const check = model.fireSimulated?.calibrationHeadline;
+    const windowEnd = perimeterWindowEnd(model, 0);
     chapters.push({
       id: "satellite",
       atMs: perimeter.atMs,
       title: `First satellite perimeter${perimeter.areaKm2 != null ? `: ${perimeter.areaKm2.toFixed(0)} km²` : ""}`,
       body:
-        "The dashed line is the satellite estimate; from here it replaces the model fire." +
-        (check ? ` Model check against ${obs} observations: ${check}.` : "") +
-        (iou != null ? ` Perimeter overlap (IoU) ${iou.toFixed(2)}, evaluation only.` : ""),
+        (windowEnd !== null
+          ? "The dotted line is a half-day satellite composite: the fire reached this extent sometime by " +
+            `${localTime(windowEnd, model.incident.timezone)}. From here it replaces the model fire.`
+          : "The dashed line is the satellite estimate; from here it replaces the model fire."),
       evidence: perimeter.evidenceClass,
       focus: ringCoords(perimeter.geometry),
     });

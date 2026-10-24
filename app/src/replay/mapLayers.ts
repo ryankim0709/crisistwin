@@ -191,6 +191,7 @@ export function perimeterCollection(perimeter: Perimeter | null): FeatureCollect
           area_km2: perimeter.areaKm2,
           evidence_class: perimeter.evidenceClass,
           at_ms: perimeter.atMs,
+          half_day: perimeter.timePrecision === "half_day",
         },
       },
     ],
@@ -535,13 +536,24 @@ export function setGroupVisibility(map: MapLibreMap, group: LayerGroup, visible:
 }
 
 /** Fade the ember fill as the perimeter in effect ages (about half strength after 12 h). */
-export function setPerimeterFreshness(map: MapLibreMap, ageMs: number): void {
+export function setPerimeterFreshness(map: MapLibreMap, ageMs: number, provisional = false): void {
   const hours = Math.max(0, ageMs / 3_600_000);
   const freshness = Math.max(0.45, 1 - hours / 24);
-  if (map.getLayer("fire-fill")) map.setPaintProperty("fire-fill", "fill-opacity", 0.32 * freshness);
+  // Provisional (inside a half-day composite's window): outline only, no fill or glow.
+  if (map.getLayer("fire-fill")) map.setPaintProperty("fire-fill", "fill-opacity", provisional ? 0.04 : 0.32 * freshness);
   if (map.getLayer("fire-glow-outer")) {
-    map.setPaintProperty("fire-glow-outer", "line-opacity", 0.5 * freshness);
+    map.setPaintProperty("fire-glow-outer", "line-opacity", provisional ? 0 : 0.5 * freshness);
   }
+  if (map.getLayer("fire-glow")) map.setPaintProperty("fire-glow", "line-opacity", provisional ? 0 : 0.6);
+  if (map.getLayer("fire-line")) {
+    map.setPaintProperty("fire-line", "line-dasharray", provisional ? [1, 3] : [3, 2]);
+    map.setPaintProperty("fire-line", "line-opacity", provisional ? 0.6 : 1);
+  }
+}
+
+/** Label on the perimeter edge: the satellite tag, or "extent sometime by HH:MM" while provisional. */
+export function setPerimeterLabel(map: MapLibreMap, text: string): void {
+  if (map.getLayer("fire-label")) map.setLayoutProperty("fire-label", "text-field", text);
 }
 
 /** Cosmetic flicker of the model fire edge and pulse of ordered-zone hatching; `t` in ms. */

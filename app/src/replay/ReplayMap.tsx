@@ -33,6 +33,7 @@ import {
   setBasemap,
   setGroupVisibility,
   setPerimeterFreshness,
+  setPerimeterLabel,
   applyPeopleState,
   destinationsCollection,
   setFireObservationTime,
@@ -50,7 +51,7 @@ import PerspectiveSwitcher from "./perspectives/PerspectiveSwitcher";
 import { edgeThreats } from "./insights";
 import { areaKm2, peopleAtHome } from "./population";
 import { openRefugeKey, refugeTimeline } from "./refuges";
-import { EVIDENCE_LABEL, closedEdgesAt, localTime, sameNumbers } from "./timeline";
+import { EVIDENCE_LABEL, closedEdgesAt, localTime, perimeterWindowEnd, sameNumbers } from "./timeline";
 import type { EvidenceClass, LngLat, ReplayModel } from "./types";
 
 // Same explicit worker bundling as maps/MapCanvas.tsx; Vite relocates the main module.
@@ -152,6 +153,7 @@ function tooltipContent(feature: MapGeoJSONFeature, perParticle: number, timezon
   switch (feature.layer.id) {
     case "fire-fill":
       add("strong", "Fire perimeter in effect");
+      if (p.half_day) add("span", "Half-day satellite composite: extent reached sometime in this window.");
       add("span", `${fmt(p.area_km2, 1)} km² · ${EVIDENCE_LABEL[p.evidence_class as EvidenceClass] ?? String(p.evidence_class)}`);
       add("span", "Shape held until the next snapshot; no interpolation.", "rp-tip-note");
       break;
@@ -449,10 +451,20 @@ export default function ReplayMap({
   const freshnessBucket = perimeter
     ? Math.floor((simTimeMs - perimeter.atMs) / FRESHNESS_BUCKET_MS)
     : 0;
+  // Half-day composites: dotted outline until the end of their window, then the normal style.
+  const windowEnd = perimeter ? perimeterWindowEnd(model, perimeterIndex) : null;
+  const provisional = windowEnd !== null && simTimeMs < windowEnd;
   useEffect(() => {
     const map = mapRef.current;
-    if (ready && map) setPerimeterFreshness(map, freshnessBucket * FRESHNESS_BUCKET_MS);
-  }, [ready, freshnessBucket]);
+    if (!ready || !map) return;
+    setPerimeterFreshness(map, freshnessBucket * FRESHNESS_BUCKET_MS, provisional);
+    setPerimeterLabel(
+      map,
+      provisional && windowEnd !== null
+        ? `EXTENT SOMETIME BY ${localTime(windowEnd, model.incident.timezone).replace(/ [A-Z]{3,4}$/, "")}`
+        : "SATELLITE ESTIMATE",
+    );
+  }, [ready, freshnessBucket, provisional, windowEnd, model.incident.timezone]);
 
   const simFront = simFrontIndex >= 0 ? (model.fireSimulated?.fronts[simFrontIndex] ?? null) : null;
   useEffect(() => {
