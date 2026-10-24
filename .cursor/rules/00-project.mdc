@@ -1,0 +1,10 @@
+---
+description: Shared CrisisTwin engineering, collaboration, and simulation rules
+alwaysApply: true
+---
+
+# CrisisTwin
+
+Read and follow [AGENTS.md](../../AGENTS.md) at the repository root before making changes. It is the canonical source of project rules for every coding agent.
+
+Read any nested `AGENTS.md` for the files you work on. Put shared convention changes in the root `AGENTS.md`, not in this adapter.
