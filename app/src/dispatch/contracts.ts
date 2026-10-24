@@ -3,7 +3,8 @@
  * (app/backend/api/dispatch.py). Change both sides and docs/adr/0014-dispatch-agent.md (amended
  * by docs/adr/0017-dispatch-anywhere.md, 0019-live-dispatch-monitor.md,
  * 0021-fire-path-scoped-evacuation.md, 0022-dispatch-fire-attack.md,
- * 0030-live-road-closures.md and 0031-dispatch-run-memory.md) together.
+ * 0030-live-road-closures.md, 0031-dispatch-run-memory.md and 0032-atlas-situation-search.md)
+ * together.
  *
  * The page calls the agent only when its live monitor (monitor.ts) finds a material change;
  * `monitor.woke_because` lists those reasons.
@@ -293,6 +294,8 @@ export type DecisionEvent =
       model: string;
       /** Earlier runs on these roads the agent was shown from the run journal (0 = none). */
       recalled_runs?: number;
+      /** Similar situations from other finished runs found by Atlas Vector Search (0 = none). */
+      similar_situations?: number;
       evidence_class: "ai_decision";
     }
   | { type: "error"; error: string; detail: string };

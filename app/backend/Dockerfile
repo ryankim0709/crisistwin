@@ -6,7 +6,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 EXPOSE 8000
 ENTRYPOINT ["sh", "docker-entrypoint.sh"]
-CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000"]
+# Threads: GET /api/live/stream holds a connection open per listener.
+CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--threads", "16"]
 
 FROM runtime AS development
 COPY requirements-dev.txt ./

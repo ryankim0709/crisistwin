@@ -35,6 +35,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
 
+from . import dispatch_situations
 from .mongodb import get_database
 
 logger = logging.getLogger(__name__)
@@ -158,6 +159,10 @@ def record_decision(session_id: str, obs: dict, orders: list[dict], rejected: in
         )
     except (PyMongoError, ValueError):
         logger.warning("Could not journal a dispatch decision", exc_info=True)
+        return
+    dispatch_situations.record(
+        session_id, area_id, _text(area.get("name"), 120), obs, decision["orders"], decision["summary"]
+    )
 
 
 def _memory_entry(doc: dict) -> dict:
@@ -263,6 +268,7 @@ def run_outcome(request, session_id: str):
         return _error(503, "database_unavailable", "The dispatch run journal is unavailable.")
     if result.matched_count == 0:
         return _error(404, "not_found", "No journal for that session and area.")
+    dispatch_situations.mark_outcome(session_id, outcome)
     return Response(status=204, headers={"Cache-Control": "no-store"})
 
 

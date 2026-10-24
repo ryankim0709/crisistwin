@@ -15,6 +15,7 @@ from .intel import (
 )
 from .landscapes import landscape_list, landscape_package
 from .live_broadcast import live_broadcast, live_snapshot
+from .live_stream import live_stream
 from .mobile_data import mobile_collection, mobile_document, register_device
 from .views import health
 
@@ -35,6 +36,7 @@ urlpatterns = [
     ),
     path("live", live_snapshot, name="live-snapshot"),
     path("live/broadcast", live_broadcast, name="live-broadcast"),
+    path("live/stream", live_stream, name="live-stream"),
     path("live/", include("api.live.urls")),
     path("families", create_family, name="family-create"),
     path("families/join", join_family, name="family-join"),

@@ -72,6 +72,68 @@ struct BackendClient {
         return data
     }
 
+    /// Long-lived session for Server-Sent Events: the server sends a keep-alive every 15 s, so a
+    /// 30-second idle timeout means the connection dropped; the server ends a stream after 10 min.
+    private static let streamSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 30
+        configuration.timeoutIntervalForResource = 15 * 60
+        configuration.urlCache = nil
+        return URLSession(configuration: configuration)
+    }()
+
+    /// One Server-Sent Event: `id` is the resume token to send back as `Last-Event-ID`.
+    struct ServerEvent {
+        var id: String?
+        var event = "message"
+        var data = Data()
+    }
+
+    /// Opens `GET /api/<path>` as `text/event-stream` and yields each event until the server ends
+    /// the stream. Throws `BackendError` on a non-2xx answer (for example 503: no live push).
+    func events(_ path: String, lastEventId: String? = nil) -> AsyncThrowingStream<ServerEvent, Error> {
+        var request = URLRequest(url: baseURL.appending(path: "api/\(path)"), cachePolicy: .reloadIgnoringLocalCacheData)
+        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        if let lastEventId { request.setValue(lastEventId, forHTTPHeaderField: "Last-Event-ID") }
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    let (bytes, response) = try await Self.streamSession.bytes(for: request)
+                    guard let response = response as? HTTPURLResponse else { throw BackendError.unexpectedResponse }
+                    guard (200..<300).contains(response.statusCode) else {
+                        throw BackendError.http(status: response.statusCode, code: nil, detail: nil)
+                    }
+                    // `lines` drops the blank line that ends an event, so an event is delivered at
+                    // its `data:` line: the server sends exactly one, after `id:` and `event:`.
+                    var event = ServerEvent()
+                    for try await line in bytes.lines where !line.hasPrefix(":") {
+                        let (field, value) = Self.field(line)
+                        switch field {
+                        case "id": event.id = value
+                        case "event": event.event = value
+                        case "data":
+                            event.data = Data(value.utf8)
+                            continuation.yield(event)
+                            event = ServerEvent()
+                        default: break
+                        }
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    private static func field(_ line: String) -> (String, String) {
+        guard let colon = line.firstIndex(of: ":") else { return (line, "") }
+        var value = line[line.index(after: colon)...]
+        if value.first == " " { value = value.dropFirst() }
+        return (String(line[..<colon]), String(value))
+    }
+
     func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase

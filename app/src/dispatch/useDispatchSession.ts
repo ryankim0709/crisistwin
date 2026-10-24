@@ -78,6 +78,8 @@ export interface DecisionLogEntry {
   appliedMinute: number | null;
   /** Earlier runs on these roads the agent was shown from the run journal. */
   recalledRuns: number;
+  /** Similar situations from other runs the agent was shown (Atlas Vector Search). */
+  similarSituations: number;
 }
 
 /** One live-monitor check. Quiet checks did not call the agent. */
@@ -281,6 +283,7 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
             reasons,
             appliedMinute: null,
             recalledRuns: 0,
+            similarSituations: 0,
           },
           ...entries,
         ].slice(0, MAX_LOG_ENTRIES),
@@ -322,6 +325,7 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
             rejected: decision.rejected,
             model: decision.model,
             recalledRuns: decision.recalled_runs ?? 0,
+            similarSituations: decision.similar_situations ?? 0,
           }));
           journalledRef.current = true;
           bump();

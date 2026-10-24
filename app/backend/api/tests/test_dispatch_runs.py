@@ -35,6 +35,9 @@ OUTCOME = {
 
 class RunJournalTests(SimpleTestCase):
     def setUp(self):
+        situations = patch("api.dispatch_runs.dispatch_situations")
+        situations.start()
+        self.addCleanup(situations.stop)
         dispatch_runs._recalled.clear()
         dispatch_runs._indexed = True
 
@@ -92,6 +95,9 @@ class RunJournalTests(SimpleTestCase):
 
 class RunOutcomeEndpointTests(SimpleTestCase):
     def setUp(self):
+        situations = patch("api.dispatch_runs.dispatch_situations")
+        situations.start()
+        self.addCleanup(situations.stop)
         dispatch_runs._indexed = True
 
     def post(self, body, session=SESSION):
