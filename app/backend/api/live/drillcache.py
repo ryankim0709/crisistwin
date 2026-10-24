@@ -5,16 +5,18 @@ The bundle path is ``LIVE_DRILL_BUNDLE`` (default: ``app/public/replays/camp-201
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import datetime
 from pathlib import Path
 from threading import Lock
 from typing import Any
 
 from django.conf import settings
-from livecore.drill import Destination, Drill, Zone, load_drill
+from livecore.drill import Destination, Drill, Zone, load_drill, parse_time
 from livecore.geo import LonLat, to_geojson
 
 from .common import ApiError
@@ -39,6 +41,8 @@ class DrillIndex:
     command_zones_json: list[dict[str, Any]]
     destinations_json: list[dict[str, Any]]
     grid: dict[tuple[int, int], tuple[str, ...]]
+    response_record: tuple[tuple[datetime, dict[str, Any]], ...] = ()
+    """Historical (non-simulated) bundle events as ``(at, item)``, sorted by ``at`` ascending."""
 
 
 _index: DrillIndex | None = None
@@ -54,6 +58,38 @@ def bundle_path() -> Path:
 
 def _cell(lon: float, lat: float) -> tuple[int, int]:
     return int(math.floor(lon / SNAP_CELL_DEG)), int(math.floor(lat / SNAP_CELL_DEG))
+
+
+def _response_record(drill: Drill, path: Path) -> tuple[tuple[datetime, dict[str, Any]], ...]:
+    """The 2018 response record: bundle ``events`` whose evidence_class is not ``simulated``."""
+    with open(path, encoding="utf-8") as fh:
+        events = json.load(fh).get("events") or []
+    edges = drill.roads.edges
+    out: list[tuple[datetime, dict[str, Any]]] = []
+    for e in events:
+        if not isinstance(e, dict) or e.get("evidence_class") in (None, "simulated"):
+            continue
+        try:
+            at = parse_time(e["at"])
+        except (KeyError, ValueError):
+            continue
+        target = e.get("target") or {}
+        segments = sorted({edges[i].segment_id for i in target.get("edge_ids") or [] if i in edges})
+        source = e.get("source") or {}
+        out.append((at, {
+            "id": e.get("id"),
+            "at": at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "type": e.get("type"),
+            "label": e.get("label"),
+            "evidence_class": e.get("evidence_class"),
+            "source_id": source.get("id"),
+            "source_url": source.get("locator"),
+            "time_precision": e.get("time_precision"),
+            "zone_ids": list(target.get("zone_ids") or []),
+            "segment_ids": segments[:50],
+        }))
+    out.sort(key=lambda x: x[0])
+    return tuple(out)
 
 
 def _build(drill: Drill) -> DrillIndex:
@@ -99,10 +135,11 @@ def get_index() -> DrillIndex:
         if _index is None:
             path = bundle_path()
             try:
-                _index = _build(load_drill(path))
+                built = _build(load_drill(path))
+                _index = replace(built, response_record=_response_record(built.drill, path))
             except NotImplementedError as exc:
                 raise ApiError(503, "drill_unavailable", "The drill engine is not implemented yet.") from exc
-            except (OSError, ValueError, KeyError) as exc:
+            except (OSError, ValueError, KeyError, AttributeError) as exc:
                 log.exception("live drill: cannot load bundle %s", path)
                 raise ApiError(503, "drill_unavailable", "The drill bundle could not be loaded.") from exc
     return _index
@@ -136,3 +173,9 @@ def snap_to_segment(index: DrillIndex, point: LonLat) -> tuple[str, float] | Non
     if best is None or best[1] > SNAP_MAX_M:
         return None
     return best
+
+
+def response_record_until(index: DrillIndex, until: datetime, limit: int = 100) -> list[dict[str, Any]]:
+    """Record items with ``at <= until`` (drill time), newest first, at most ``limit``."""
+    items = [item for at, item in index.response_record if at <= until]
+    return items[::-1][:limit]

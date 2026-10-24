@@ -14,6 +14,8 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       APIFY_TOKEN: ${APIFY_TOKEN:-}
       APIFY_ACTOR_ID: ${APIFY_ACTOR_ID:-}
+      LIVE_CONTROLLER_TOKEN: ${LIVE_CONTROLLER_TOKEN:-}
+      LIVE_INVITE_CODE: ${LIVE_INVITE_CODE:-}
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
@@ -44,6 +46,9 @@ services:
       - 8.8.8.8
     environment:
       VITE_API_PROXY_TARGET: http://backend:8000
+      # Lets the dev proxy sign /live's controller calls (vite.config.ts); never in the bundle.
+      LIVE_CONTROLLER_TOKEN: ${LIVE_CONTROLLER_TOKEN:-}
+      LIVE_CONTROLLER_PROXY: any
     ports:
       - "127.0.0.1:5173:5173"
     volumes:

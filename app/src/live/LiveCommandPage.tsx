@@ -3,11 +3,13 @@ import { Button, Field, IconButton, Kbd, LoadingState, Notice } from "../ui";
 import ActivityLog from "./ActivityLog";
 import { useTriageKeys } from "./useTriageKeys";
 import "./activity.css";
-import { LiveError, readToken, runImpact, writeToken } from "./api";
+import { LiveError, readToken, runImpact, SERVER_TOKEN, writeToken } from "./api";
 import CommandMap, { LAYER_KEYS, type LayerKey, type MapFocus } from "./CommandMap";
 import EvacuationPicture from "./EvacuationPicture";
+import MapLegend from "./MapLegend";
 import ProposalPanel from "./ProposalPanel";
 import { buildQueue, matches, proposalFor, type QueueFilter } from "./queue";
+import ResponseRecord from "./ResponseRecord";
 import ReviewQueue from "./ReviewQueue";
 import SelectedItem, { type ImpactState, type RunAction } from "./SelectedItem";
 import { useCommand } from "./useCommand";
@@ -256,7 +258,7 @@ export default function LiveCommandPage() {
         connectionError={data && command.error ? command.error.message : null}
         run={run}
         busy={busy}
-        onSignOut={token ? signOut : null}
+        onSignOut={token && token !== SERVER_TOKEN ? signOut : null}
       />
       {data ? (
         <ReviewQueue
@@ -280,6 +282,7 @@ export default function LiveCommandPage() {
           onSelect={select}
         />
         {data ? <LayerToggles layers={layers} onToggle={(k) => setLayers((l) => ({ ...l, [k]: !l[k] }))} /> : null}
+        {data ? <MapLegend /> : null}
         {gate}
       </main>
       {data ? (
@@ -305,6 +308,7 @@ export default function LiveCommandPage() {
               />
             ) : null}
             <EvacuationPicture data={data} twin={twinData} twinError={twin.error} onFocus={setFocus} />
+            <ResponseRecord items={data.response_record ?? []} />
             <ActivityLog decisions={data.decisions ?? []} serverNow={serverNow} onSelect={selectFromLog} />
           </div>
         </aside>

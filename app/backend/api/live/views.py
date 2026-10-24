@@ -28,7 +28,7 @@ from .common import (
     parse_iso,
     wall_now,
 )
-from .drillcache import get_index, snap_to_segment
+from .drillcache import get_index, response_record_until, snap_to_segment
 from .state import (
     checkin_json,
     help_json,
@@ -84,6 +84,7 @@ REPORTS_PAGE_LIMIT = 500
 COMMAND_REPORTS_LIMIT = 500
 COMMAND_TASKS_LIMIT = 500
 COMMAND_DECISIONS_LIMIT = 50
+COMMAND_RESPONSE_RECORD_LIMIT = 100
 MAX_REPORT_IDS = 50
 NOTE_MAX_CHARS = 500
 RESPONDER_LOCATION_TTL_S = 900
@@ -796,6 +797,7 @@ def command(request, incident_id: str, principal: Principal):
             "responders": responders,
             "tasks": [task_json(t) for t in tasks],
             "decisions": _recent_decisions(incident_id),
+            "response_record": response_record_until(index, snapshot.clock.replay_now, COMMAND_RESPONSE_RECORD_LIMIT),
         }
     )
 

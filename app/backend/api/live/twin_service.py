@@ -38,6 +38,7 @@ from typing import Any
 from django.conf import settings
 from livecore import drill as drillmod
 from livecore import routing
+from livecore.geo import simplify_line
 from livecore.public import controller_blocked_segments
 
 from .common import iso
@@ -56,6 +57,8 @@ TWIN_SEED = 7
 LOCK_TIMEOUT_S = 20.0
 """A read waits at most this long for another twin call (e.g. a what-if) before ``busy``."""
 TOP_EDGES = 15
+TRAFFIC_EDGES = 2500
+"""``traffic`` lists at most this many occupied edges, most vehicles first."""
 API_MAX_HORIZON_MIN = 120
 """HTTP what-ifs are capped below the twin's own limit to bound request time."""
 BLOCK_ACTOR = {"kind": "field_report", "id": "controller-confirmed"}
@@ -487,6 +490,19 @@ def monitor(snapshot: Snapshot) -> dict[str, Any]:
                 "veh": veh, "queued_veh": queued, "speed_kph": speed, "free_flow_kph": e.speed_kph,
                 "coord": [mid[0], mid[1]],
             })
+        # Where the simulated vehicles are: every occupied directed edge, so the map draws the
+        # stream itself (it grows as zones depart and drains as vehicles arrive). Simulated.
+        occupied = sorted((r for r in rows if r[1] > 0), key=lambda r: (-r[1], r[0]))[:TRAFFIC_EDGES]
+        traffic = [
+            {
+                "line": [[round(x, 5), round(y, 5)] for x, y in simplify_line(edges[i].coords, 12.0, 12)],
+                "veh": veh,
+                "queued_veh": queued,
+                "speed_kph": speed,
+                "free_flow_kph": edges[i].speed_kph,
+            }
+            for i, veh, speed, queued in occupied
+        ]
         totals = snap["totals"]
         conserved = totals["not_departed_veh"] + totals["en_route_veh"] + totals["arrived_veh"] == totals["total_veh"]
         assigned: dict[str, int] = {}
@@ -520,6 +536,7 @@ def monitor(snapshot: Snapshot) -> dict[str, Any]:
                 for z in snap["zones"]
             ],
             "congested_edges": top,
+            "traffic": traffic,
             "destinations": destinations,
             "closed_edges": len(snap["closed"]["rows"]),
             "commands": [

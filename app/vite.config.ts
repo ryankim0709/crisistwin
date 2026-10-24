@@ -82,6 +82,22 @@ function presentAsThisApplication(proxyReq: import("node:http").ClientRequest): 
   proxyReq.setHeader("accept-encoding", "gzip");
 }
 
+/**
+ * The /live controller console needs the controller token on every /api/live/ call. In
+ * development this proxy attaches it from the server's environment (never the bundle), so the
+ * page needs no token form. Only requests from this machine get it, unless
+ * LIVE_CONTROLLER_PROXY=any (Docker, where the published port is bound to 127.0.0.1 and the
+ * browser's requests arrive from the bridge network). A request that already carries a token
+ * is left alone.
+ */
+function attachControllerToken(proxyReq: import("node:http").ClientRequest, req: import("node:http").IncomingMessage): void {
+  const token = process.env.LIVE_CONTROLLER_TOKEN;
+  if (!token || !req.url?.startsWith("/api/live/") || req.headers.authorization) return;
+  const remote = req.socket.remoteAddress ?? "";
+  const local = remote === "127.0.0.1" || remote === "::1" || remote === "::ffff:127.0.0.1";
+  if (local || process.env.LIVE_CONTROLLER_PROXY === "any") proxyReq.setHeader("authorization", `Bearer ${token}`);
+}
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   // MapLibre loads its tile worker from a URL relative to its own module. Pre-bundling
@@ -95,6 +111,9 @@ export default defineConfig({
       "/api": {
         target: process.env.VITE_API_PROXY_TARGET ?? "http://127.0.0.1:8000",
         changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on("proxyReq", attachControllerToken);
+        },
       },
       // LANDFIRE's GeoServer advertises permissive CORS but a browser request to it
       // still fails, so fuel rasters are fetched same-origin through this proxy.

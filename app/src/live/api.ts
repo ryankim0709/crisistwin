@@ -21,6 +21,10 @@ export const INCIDENT_ID = "camp-2018-drill";
 const BASE = "/api/live/";
 const TOKEN_KEY = "crisistwin.live.controllerToken";
 
+/** No token in the page: the dev proxy signs controller calls (vite.config.ts). The token form
+ * appears only if the server rejects them. */
+export const SERVER_TOKEN = "server";
+
 export function readToken(): string | null {
   if (import.meta.env.DEV) {
     // Dev only (stripped from production builds): ?devToken=... seeds the token for headless screenshots.
@@ -28,9 +32,9 @@ export function readToken(): string | null {
     if (dev) writeToken(dev);
   }
   try {
-    return window.sessionStorage.getItem(TOKEN_KEY);
+    return window.sessionStorage.getItem(TOKEN_KEY) ?? SERVER_TOKEN;
   } catch {
-    return null;
+    return SERVER_TOKEN;
   }
 }
 
@@ -57,7 +61,7 @@ export class LiveError extends Error {
 }
 
 function describe(status: number, body: Partial<LiveApiError> | null): string {
-  if (status === 401 || status === 403) return "Controller token rejected.";
+  if (status === 401 || status === 403) return "Enter the controller token.";
   if (status === 409) return body?.detail ?? "Already decided or changed. Refreshed.";
   if (body?.detail) return body.detail;
   if (body?.error) return body.error.replace(/_/g, " ");
@@ -78,7 +82,7 @@ async function request<T>(
       signal,
       headers: {
         Accept: "application/json",
-        Authorization: `Bearer ${token}`,
+        ...(token === SERVER_TOKEN ? {} : { Authorization: `Bearer ${token}` }),
         ...(body === undefined ? {} : { "Content-Type": "application/json" }),
       },
       body: body === undefined ? undefined : JSON.stringify(body),

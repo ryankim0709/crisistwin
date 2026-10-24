@@ -32,7 +32,12 @@ export const LEVEL_COLOR: Record<GuidanceLevel, string> = {
 };
 export const MAP_COLOR = {
   fire: "#FF7A33",
-  route: "#3D9BFF",
+  fireEdge: "#B33A00",
+  /** Dark so routes never read as rivers or the basemap's roads; white dashes show the flow. */
+  route: "#1F2A44",
+  routeFlow: "#FFFFFF",
+  trafficSlow: "#A15C00",
+  selection: "#3D9BFF",
   casing: "#FFFFFF",
   hazard: "#FF5147",
   report: "#1B2430",
@@ -47,9 +52,11 @@ export type LayerKey = "zones" | "fire" | "reports" | "roads" | "shelters";
 export const LAYER_KEYS: LayerKey[] = ["zones", "fire", "reports", "roads", "shelters"];
 const LAYER_IDS: Record<LayerKey, string[]> = {
   zones: ["lc-zones-fill", "lc-zones-line", "lc-zone-labels"],
-  fire: ["lc-fire-fill", "lc-fire-line", "lc-fire-obs"],
+  fire: ["lc-fire-fill", "lc-fire-hatch", "lc-fire-line", "lc-fire-obs", "lc-fire-label"],
   reports: ["lc-points", "lc-help", "lc-responders"],
-  roads: ["lc-routes-casing", "lc-routes", "lc-hazard-casing", "lc-hazard-lines", "lc-queues"],
+  roads: [
+    "lc-routes", "lc-traffic-casing", "lc-traffic", "lc-traffic-flow", "lc-hazard-casing", "lc-hazard-lines", "lc-queues",
+  ],
   shelters: ["lc-dest", "lc-dest-labels"],
 };
 
@@ -92,6 +99,9 @@ async function loadStyle(signal: AbortSignal): Promise<BasemapStyle> {
   }
 }
 
+/** On-map zone tags, so a red zone never reads as fire. */
+const ZONE_TAG: Record<Exclude<GuidanceLevel, "none">, string> = { evacuate_now: "LEAVE NOW", be_ready: "BE READY" };
+
 function buildSources(data: CommandResponse, items: QueueItem[]): Record<string, GeoJSON.FeatureCollection> {
   const guidance = new Map(data.guidance.map((g) => [g.zone_id, g]));
   const counts = new Map(data.checkins.by_zone.map((c) => [c.zone_id, c]));
@@ -103,9 +113,9 @@ function buildSources(data: CommandResponse, items: QueueItem[]): Record<string,
     zones.push({ type: "Feature", geometry: zone.geometry, properties: { id: zone.id, level } });
     const c = counts.get(zone.id);
     const anchor = labelPoint(zone.geometry);
-    if (c && anchor && c.out + c.need_help > 0) {
-      zoneLabels.push(point(anchor, { text: c.need_help ? `${c.out} out, ${c.need_help} help` : `${c.out} out` }));
-    }
+    const parts = level === "none" ? [] : [ZONE_TAG[level]];
+    if (c && c.out + c.need_help > 0) parts.push(c.need_help ? `${c.out} out, ${c.need_help} help` : `${c.out} out`);
+    if (anchor && parts.length) zoneLabels.push(point(anchor, { text: parts.join(" · "), level }));
   }
 
   const routes = data.guidance
@@ -115,6 +125,8 @@ function buildSources(data: CommandResponse, items: QueueItem[]): Record<string,
   const fire: Feature[] = data.fire.geometry
     ? [{ type: "Feature", geometry: data.fire.geometry, properties: { method: data.fire.method } }]
     : [];
+  const fireAnchor = data.fire.geometry ? labelPoint(data.fire.geometry) : null;
+  const fireLabel = fireAnchor ? [point(fireAnchor, { text: "FIRE" })] : [];
   const fireObs = data.fire.observations.map((o) => point(o.coord, { source: o.source }));
 
   const hazardLines = data.public_items
@@ -148,6 +160,7 @@ function buildSources(data: CommandResponse, items: QueueItem[]): Record<string,
     "lc-zones": collection(zones),
     "lc-zone-labels": collection(zoneLabels),
     "lc-fire": collection(fire),
+    "lc-fire-label": collection(fireLabel),
     "lc-fire-obs": collection(fireObs),
     "lc-routes": collection(routes),
     "lc-hazard-lines": collection(hazardLines),
@@ -156,6 +169,16 @@ function buildSources(data: CommandResponse, items: QueueItem[]): Record<string,
     "lc-responders": collection(responders),
     "lc-dest": collection(dests),
   };
+}
+
+/** Twin traffic: each occupied directed edge in travel order, so the flow dashes move the right way. */
+function buildTraffic(twin: TwinMonitor | null): GeoJSON.FeatureCollection {
+  if (!twin?.traffic) return collection([]);
+  return collection(
+    twin.traffic
+      .filter((e) => e.line.length > 1)
+      .map((e) => lineFeature(e.line, { veh: e.veh, ratio: e.free_flow_kph > 0 ? e.speed_kph / e.free_flow_kph : 1 })),
+  );
 }
 
 /** Twin queues: one circle per congested edge midpoint, area by queued vehicles. Simulated. */
@@ -200,9 +223,33 @@ function buildImpact(data: CommandResponse, impact: ImpactResponse | null): Reco
 const LEVEL_MATCH = (prop: string, values: Record<GuidanceLevel, string | number>) =>
   ["match", ["get", prop], "evacuate_now", values.evacuate_now, "be_ready", values.be_ready, values.none];
 
+/** Steps of the routes' moving dashes (white dash marching along the line, start to end). */
+const FLOW_DASHES: number[][] = [
+  [0, 4, 3], [0.5, 4, 2.5], [1, 4, 2], [1.5, 4, 1.5], [2, 4, 1], [2.5, 4, 0.5], [3, 4, 0],
+  [0, 0.5, 3, 3.5], [0, 1, 3, 3], [0, 1.5, 3, 2.5], [0, 2, 3, 2], [0, 2.5, 3, 1.5], [0, 3, 3, 1], [0, 3.5, 3, 0.5],
+];
+const FLOW_STEP_MS = 70;
+
+/** Diagonal hatch for the fire estimate, so it never reads as a tinted evacuation zone. */
+function fireHatch(): ImageData {
+  const size = 10;
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext("2d")!;
+  ctx.strokeStyle = MAP_COLOR.fireEdge;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (const o of [-size, 0, size]) {
+    ctx.moveTo(o, size);
+    ctx.lineTo(o + size, 0);
+  }
+  ctx.stroke();
+  return ctx.getImageData(0, 0, size, size);
+}
+
 const SOURCES = [
-  "lc-zones", "lc-zone-labels", "lc-fire", "lc-fire-obs", "lc-routes", "lc-hazard-lines", "lc-points", "lc-help",
-  "lc-responders", "lc-dest", "lc-queues", "lc-focus", "lc-imp-zones", "lc-imp-now", "lc-imp-alt", "lc-imp-road",
+  "lc-zones", "lc-zone-labels", "lc-fire", "lc-fire-label", "lc-fire-obs", "lc-routes", "lc-hazard-lines", "lc-points", "lc-help",
+  "lc-responders", "lc-dest", "lc-queues", "lc-traffic", "lc-focus", "lc-imp-zones", "lc-imp-now", "lc-imp-alt", "lc-imp-road",
 ];
 
 function installLayers(map: MapLibreMap): void {
@@ -214,7 +261,7 @@ function installLayers(map: MapLibreMap): void {
     source: "lc-zones",
     paint: {
       "fill-color": LEVEL_MATCH("level", LEVEL_COLOR) as never,
-      "fill-opacity": LEVEL_MATCH("level", { evacuate_now: 0.12, be_ready: 0.12, none: 0.02 }) as never,
+      "fill-opacity": LEVEL_MATCH("level", { evacuate_now: 0.1, be_ready: 0.08, none: 0.02 }) as never,
     },
   });
   map.addLayer({
@@ -223,38 +270,68 @@ function installLayers(map: MapLibreMap): void {
     source: "lc-zones",
     paint: {
       "line-color": LEVEL_MATCH("level", LEVEL_COLOR) as never,
-      "line-width": LEVEL_MATCH("level", { evacuate_now: 2, be_ready: 2, none: 0.6 }) as never,
+      "line-width": LEVEL_MATCH("level", { evacuate_now: 2.5, be_ready: 2, none: 0.6 }) as never,
       "line-opacity": LEVEL_MATCH("level", { evacuate_now: 0.9, be_ready: 0.9, none: 0.5 }) as never,
     },
   });
-  map.addLayer({ id: "lc-imp-zones", type: "fill", source: "lc-imp-zones", paint: { "fill-color": MAP_COLOR.route, "fill-opacity": 0.15 } });
-  map.addLayer({ id: "lc-fire-fill", type: "fill", source: "lc-fire", paint: { "fill-color": MAP_COLOR.fire, "fill-opacity": 0.28 } });
+  map.addLayer({ id: "lc-imp-zones", type: "fill", source: "lc-imp-zones", paint: { "fill-color": MAP_COLOR.selection, "fill-opacity": 0.15 } });
+  map.addImage("lc-fire-hatch", fireHatch());
+  map.addLayer({ id: "lc-fire-fill", type: "fill", source: "lc-fire", paint: { "fill-color": MAP_COLOR.fire, "fill-opacity": 0.35 } });
+  map.addLayer({ id: "lc-fire-hatch", type: "fill", source: "lc-fire", paint: { "fill-pattern": "lc-fire-hatch", "fill-opacity": 0.6 } });
   map.addLayer({
     id: "lc-fire-line",
     type: "line",
     source: "lc-fire",
     paint: {
-      "line-color": MAP_COLOR.fire,
-      "line-width": 2,
+      "line-color": MAP_COLOR.fireEdge,
+      "line-width": 2.5,
       "line-dasharray": ["case", ["==", ["get", "method"], "model_nowcast"], ["literal", [3, 2]], ["literal", [1, 0]]] as never,
     },
   });
-  map.addLayer({
-    id: "lc-routes-casing",
-    type: "line",
-    source: "lc-routes",
-    layout: { "line-cap": "round", "line-join": "round" },
-    paint: { "line-color": MAP_COLOR.casing, "line-width": LEVEL_MATCH("level", { evacuate_now: 6, be_ready: 4.5, none: 0 }) as never },
-  });
+  // The approved route: a thin dashed plan line. The cars on it are the traffic layers below.
   map.addLayer({
     id: "lc-routes",
     type: "line",
     source: "lc-routes",
-    layout: { "line-cap": "round", "line-join": "round" },
+    layout: { "line-join": "round" },
     paint: {
       "line-color": MAP_COLOR.route,
-      "line-width": LEVEL_MATCH("level", { evacuate_now: 3, be_ready: 2, none: 0 }) as never,
-      "line-opacity": LEVEL_MATCH("level", { evacuate_now: 1, be_ready: 0.7, none: 0 }) as never,
+      "line-width": LEVEL_MATCH("level", { evacuate_now: 2, be_ready: 1.5, none: 0 }) as never,
+      "line-opacity": LEVEL_MATCH("level", { evacuate_now: 0.75, be_ready: 0.55, none: 0 }) as never,
+      "line-dasharray": [2, 1.5],
+    },
+  });
+  // Simulated traffic: where the twin's vehicles are now, width by count, amber when slow.
+  // It grows as zones leave and drains as vehicles arrive; the white dashes march with travel.
+  map.addLayer({
+    id: "lc-traffic-casing",
+    type: "line",
+    source: "lc-traffic",
+    layout: { "line-cap": "round", "line-join": "round" },
+    paint: {
+      "line-color": MAP_COLOR.casing,
+      "line-width": ["interpolate", ["linear"], ["get", "veh"], 1, 5, 20, 8, 150, 12] as never,
+    },
+  });
+  map.addLayer({
+    id: "lc-traffic",
+    type: "line",
+    source: "lc-traffic",
+    layout: { "line-cap": "round", "line-join": "round" },
+    paint: {
+      "line-color": ["case", ["<", ["get", "ratio"], 0.5], MAP_COLOR.trafficSlow, MAP_COLOR.route] as never,
+      "line-width": ["interpolate", ["linear"], ["get", "veh"], 1, 3, 20, 5.5, 150, 9] as never,
+    },
+  });
+  map.addLayer({
+    id: "lc-traffic-flow",
+    type: "line",
+    source: "lc-traffic",
+    layout: { "line-join": "round" },
+    paint: {
+      "line-color": MAP_COLOR.routeFlow,
+      "line-width": ["interpolate", ["linear"], ["get", "veh"], 1, 1, 20, 1.6, 150, 2.4] as never,
+      "line-dasharray": FLOW_DASHES[0],
     },
   });
   map.addLayer({
@@ -269,7 +346,7 @@ function installLayers(map: MapLibreMap): void {
     type: "line",
     source: "lc-imp-now",
     layout: { "line-cap": "round", "line-join": "round" },
-    paint: { "line-color": MAP_COLOR.route, "line-width": 4 },
+    paint: { "line-color": MAP_COLOR.selection, "line-width": 4 },
   });
   map.addLayer({
     id: "lc-hazard-casing",
@@ -346,7 +423,7 @@ function installLayers(map: MapLibreMap): void {
     paint: {
       "circle-radius": 17,
       "circle-color": "rgba(61,155,255,0.18)",
-      "circle-stroke-color": MAP_COLOR.route,
+      "circle-stroke-color": MAP_COLOR.selection,
       "circle-stroke-width": 2.5,
     },
   });
@@ -385,8 +462,24 @@ function installLayers(map: MapLibreMap): void {
     id: "lc-zone-labels",
     type: "symbol",
     source: "lc-zone-labels",
-    layout: { "text-field": ["get", "text"], "text-font": ["Noto Sans Regular"], "text-size": 11 },
-    paint: { "text-color": MAP_COLOR.ink, "text-halo-color": "#FFFFFF", "text-halo-width": 1.4 },
+    layout: {
+      "text-field": ["get", "text"],
+      "text-font": ["Noto Sans Regular"],
+      "text-size": ["match", ["get", "level"], "evacuate_now", 12, 11] as never,
+      "text-letter-spacing": 0.04,
+    },
+    paint: {
+      "text-color": ["match", ["get", "level"], "evacuate_now", "#B3140C", "be_ready", "#7A4B00", MAP_COLOR.ink] as never,
+      "text-halo-color": "#FFFFFF",
+      "text-halo-width": 1.6,
+    },
+  });
+  map.addLayer({
+    id: "lc-fire-label",
+    type: "symbol",
+    source: "lc-fire-label",
+    layout: { "text-field": ["get", "text"], "text-font": ["Noto Sans Regular"], "text-size": 12, "text-letter-spacing": 0.04 },
+    paint: { "text-color": MAP_COLOR.fireEdge, "text-halo-color": "#FFFFFF", "text-halo-width": 1.8 },
   });
 }
 
@@ -516,7 +609,26 @@ export default function CommandMap({ data, twin, items, selected, focus, layers,
     const map = mapRef.current;
     if (!ready || !map) return;
     (map.getSource("lc-queues") as GeoJSONSource | undefined)?.setData(buildQueues(twin));
+    (map.getSource("lc-traffic") as GeoJSONSource | undefined)?.setData(buildTraffic(twin));
   }, [ready, twin]);
+
+  // Traffic: march the white dashes in the travel direction, so the stream reads as moving.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    let frame = 0;
+    let step = -1;
+    const tick = (t: number) => {
+      const next = Math.floor(t / FLOW_STEP_MS) % FLOW_DASHES.length;
+      if (next !== step && map.getLayer("lc-traffic-flow")) {
+        step = next;
+        map.setPaintProperty("lc-traffic-flow", "line-dasharray", FLOW_DASHES[step]);
+      }
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [ready]);
 
   useEffect(() => {
     const map = mapRef.current;

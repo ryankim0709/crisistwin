@@ -591,8 +591,18 @@ fetches again without `zones=0`.
   "responders": [ { "party_key": "rsp_7c1...", "coord": [-121.6, 39.76], "accuracy_m": 15, "at": "...Z" } ],
   "tasks": [ CheckTask ],                   // all not cancelled
   "decisions": [ { "at": "...Z", "actor": "controller", "action": "confirm", "report_ids": ["rpt_..."],
-                   "proposal_id": null, "checkin_id": null, "note": null } ] }  // newest 50, for the activity log
+                   "proposal_id": null, "checkin_id": null, "note": null } ],  // newest 50, for the activity log
+  "response_record": [ { "id": "nist-tn2252:t11:concow:warning-request:bg", "at": "2018-11-08T15:22:00Z",
+                         "type": "evacuation_warning", "label": "...", "evidence_class": "reconstructed",
+                         "source_id": "nist-tn2252", "source_url": "https://...#page=94",
+                         "time_precision": "minute", "zone_ids": ["bg:060070024001"],
+                         "segment_ids": [] } ] }
 ```
+
+`response_record` is the historical 2018 Camp Fire response record, not drill actions: the bundle `events`
+whose `evidence_class` is not `simulated` (reconstructed, reported or derived; orders, warnings, CodeRED alerts,
+contraflow, closures, shelters, burnover, fire arrival). Only events with `at` <= the drill's `replay_now`,
+newest first, at most 100. `segment_ids` are the road segments of the event's `target.edge_ids` (at most 50).
 
 ## Controller actions
 
