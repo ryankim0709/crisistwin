@@ -23,7 +23,7 @@ export const VERTICAL_EXAGGERATION = { min: 1.6, max: 2.5, targetReliefUnits: 80
  * mountains (San Gorgonio 3.5 km next to a 100 m desert floor) stay at ~1.0-1.3x, a higher
  * ceiling so low coastal relief (Mt Diablo on a 100 km board) still reads, and a floor of 1x.
  */
-export const REGIONAL_EXAGGERATION = { min: 1.0, max: 7, targetReliefUnits: 38 } as const;
+export const REGIONAL_EXAGGERATION = { min: 1.3, max: 7, targetReliefUnits: 58, maxAboveMedianUnits: 70 } as const;
 /** Metres per world unit over which the board blends from local to regional tuning. */
 export const REGIONAL_BLEND_METERS_PER_UNIT = [15, 100] as const;
 /** Metres per world unit over which urban areas blend from houses to ivory blocks + streets. */
@@ -101,6 +101,16 @@ export class BoardFrame {
     const target = THREE.MathUtils.lerp(ve.targetReliefUnits, rg.targetReliefUnits, mix);
     let exaggeration = THREE.MathUtils.clamp(target / trueRelief, THREE.MathUtils.lerp(ve.min, rg.min, mix), THREE.MathUtils.lerp(ve.max, rg.max, mix));
     if (trueRelief * exaggeration > ve.maxReliefUnits) exaggeration = Math.max(1, ve.maxReliefUnits / trueRelief);
+    if (mix > 0 && grid) {
+      // Keep the tallest peak within ~70 units of the board's median surface (no spikes).
+      const stride = Math.max(1, Math.floor(n / 20000));
+      const sample: number[] = [];
+      for (let i = 0; i < n; i += stride) sample.push(surface[i]);
+      sample.sort((a, c) => a - c);
+      const above = Math.max(1e-3, (hi - sample[sample.length >> 1]) * this.unitsPerMeter);
+      const cap = THREE.MathUtils.lerp(1000, rg.maxAboveMedianUnits, mix) / above;
+      exaggeration = Math.max(1, Math.min(exaggeration, cap));
+    }
     this.verticalExaggeration = exaggeration;
     const vScale = this.unitsPerMeter * exaggeration;
 
@@ -325,6 +335,9 @@ export type FireUniforms = {
   /** Block/street layer strength (0 = none) and world units per ground metre. */
   uBlock: { value: number };
   uUnitsPerMeter: { value: number };
+  /** Slope shading strength (0..1) and board max height (world units). */
+  uRelief: { value: number };
+  uMaxH: { value: number };
 };
 
 export function emptyArrivalTexture(): THREE.DataTexture {
@@ -376,6 +389,8 @@ export function createFireUniforms(frame: BoardFrame, overlay: THREE.Texture): F
     uCell: { value: frame.cellWorld },
     uBlock: { value: frame.grid ? frame.blockMix : 0 },
     uUnitsPerMeter: { value: frame.unitsPerMeter },
+    uRelief: { value: frame.grid ? 0.35 + 0.65 * frame.regionalMix : 0 },
+    uMaxH: { value: Math.max(1, frame.maxHeight) },
   };
   setFireXform(u, frame, 1);
   return u;
@@ -409,7 +424,10 @@ uniform float uOverlay;
 uniform float uCell;
 uniform float uBlock;
 uniform float uUnitsPerMeter;
+uniform float uRelief;
+uniform float uMaxH;
 varying vec2 vFireXZ;
+varying float vFireY;
 
 float fHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float fNoise(vec2 p) {
@@ -446,6 +464,21 @@ vec3 applyUrban(vec3 base, float mask, vec2 pxU2) {
   float tone = (fHash(floor(cell) + district * 7.0) - 0.5) * 0.07 * fade;
   vec3 c = mix(base, URBAN_IVORY + tone, m * 0.8);
   return mix(c, URBAN_STREET, line * 0.55 * m);
+}
+
+// Slope shading from the facet normal: steep and north-facing slopes go darker sage, gentle
+// high ground (ridgelines, summits) a little lighter, so ranges read at the oblique view.
+vec3 applyRelief(vec3 base) {
+  vec3 p = vec3(vFireXZ.x, vFireY, vFireXZ.y);
+  vec3 n = normalize(cross(dFdx(p), dFdy(p)));
+  if (n.y < 0.0) n = -n;
+  float steep = smoothstep(0.08, 0.55, 1.0 - n.y);
+  float north = clamp(-n.z * 0.5 + 0.5, 0.0, 1.0);
+  float high = smoothstep(0.35, 1.0, vFireY / uMaxH);
+  vec3 sage = base * vec3(0.55, 0.66, 0.5);
+  vec3 c = mix(base, sage, steep * (0.35 + 0.5 * north) * uRelief);
+  c *= 1.0 + 0.16 * high * (1.0 - steep) * uRelief;
+  return c;
 }
 
 // x arrived (burning or burned), y burning, z fresh front, w recently-burned ember.
@@ -553,13 +586,13 @@ export function attachFireShader(material: THREE.MeshStandardMaterial, uniforms:
   material.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
     shader.vertexShader = shader.vertexShader
-      .replace("#include <common>", "#include <common>\nvarying vec2 vFireXZ;")
-      .replace("#include <begin_vertex>", "#include <begin_vertex>\nvFireXZ = (modelMatrix * vec4(transformed, 1.0)).xz;");
+      .replace("#include <common>", "#include <common>\nvarying vec2 vFireXZ;\nvarying float vFireY;")
+      .replace("#include <begin_vertex>", "#include <begin_vertex>\nvFireXZ = (modelMatrix * vec4(transformed, 1.0)).xz;\nvFireY = transformed.y;");
     shader.fragmentShader = shader.fragmentShader
       .replace("#include <common>", `#include <common>\n${FIRE_GLSL}`)
       .replace(
         "#include <color_fragment>",
-        "#include <color_fragment>\ndiffuseColor.rgb = applyUrban(diffuseColor.rgb, diffuseColor.a, fwidth(vFireXZ));\ndiffuseColor.rgb = mix(diffuseColor.rgb, texture2D(uOverlayTex, vMapUv).rgb, uOverlay * 0.88);\nvec3 fireEmissive = applyFire(diffuseColor.rgb);",
+        "#include <color_fragment>\ndiffuseColor.rgb = applyUrban(diffuseColor.rgb, diffuseColor.a, fwidth(vFireXZ));\ndiffuseColor.rgb = applyRelief(diffuseColor.rgb);\ndiffuseColor.rgb = mix(diffuseColor.rgb, texture2D(uOverlayTex, vMapUv).rgb, uOverlay * 0.88);\nvec3 fireEmissive = applyFire(diffuseColor.rgb);",
       )
       .replace("#include <emissivemap_fragment>", "#include <emissivemap_fragment>\ntotalEmissiveRadiance += fireEmissive;");
   };

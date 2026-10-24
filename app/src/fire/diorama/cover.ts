@@ -62,14 +62,13 @@ type Part = {
 
 /**
  * Instances standing on grid cells whose look follows the fire arrival field: burning →
- * flickering amber-coral glow, burned → charred and shrunk by `burnScale`.
+ * flickering amber-coral glow, burned → charred and shrunk by the `burnScale` constructor argument.
  */
 class FireInstances {
   readonly count: number;
   private readonly cells: Int32Array;
   private readonly matrices: Float32Array;
   private readonly parts: Part[];
-  private readonly burnScale: THREE.Vector3;
   private arrival: Float32Array;
   private readonly state: Uint8Array;
   private burning: number[] = [];
@@ -84,7 +83,6 @@ class FireInstances {
     this.cells = cells;
     this.matrices = matrices;
     this.parts = parts;
-    this.burnScale = burnScale;
     this.arrival = new Float32Array(this.count).fill(Infinity);
     this.state = new Uint8Array(this.count);
     this.s.makeScale(burnScale.x, burnScale.y, burnScale.z);
