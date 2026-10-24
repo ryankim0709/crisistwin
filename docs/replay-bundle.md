@@ -149,3 +149,100 @@ additive within 1.x.
 - **Population conservation:** at every frame,
   `not_departed + en_route + arrived == total_veh`. Blocked and exposed vehicles are
   subsets of en-route vehicles.
+
+## Variants
+
+Precomputed what-if (counterfactual) runs of the baseline bundle. Generator:
+`python3 -m sim.variants` (see `sim/variants.py` for the full command). Each variant is a
+pure transformation of the baseline inputs and runs through the same `build_bundle` path.
+Seed, clock, network, demand, destinations, fire ignition and model versions are asserted
+equal to the baseline (`basis`). The only differences are listed in `variant.changes`. All
+variant output is `simulated`. Variants are counterfactual planning experiments and must
+be labelled as such, never as history.
+
+Files sit next to the baseline: `<baseline stem>.variants/index.json` and
+`<baseline stem>.variants/<id>.json`, for example `camp-2018.variants/all-at-once.json`. A
+variant does not repeat roads, zones, destinations, perimeters or damage: the UI takes
+them from the bundle named in `baseline`, and `traffic.edge_ids` uses the same order as
+the baseline `traffic.edge_ids`.
+
+### Index
+
+```jsonc
+{
+  "kind": "crisistwin_variant_index", "schema_version": "1.0.0", "baseline": "camp-2018.json",
+  "generated_by": { "sim_version": "0.1.0", "command": "..." },
+  "basis": { "seed": 7, "clock": { "start": "...Z", "end": "...Z", "step_s": 10, "record_every_s": 60 },
+             "network": { "edges": 0, "nodes": 0, "sha": "..." }, "demand": { "zones": 51, "total_veh": 15000, "sha": "..." },
+             "destinations_sha": "...", "models": { "sim": "0.1.0", "traffic": "meso-link-queue@0.1.0",
+             "fire": "elliptical-mtt-ca@0.1.0" }, "fire_ignition": { } },
+  "baseline_metrics": { /* same keys as comparison.metrics, baseline values only */ },
+  "variants": [
+    { "id": "all-at-once", "title": "...", "question": "...", "evidence_class": "simulated",
+      "file": "all-at-once.json", "changes": ["..."], "runtime_s": 6.7, "bytes": 3861532,
+      "headline": { "arrived_by_1800z_veh": { "baseline": 5527, "variant": 12363, "delta": 6836 },
+                    "peak_exposed_veh": {}, "total_exposed_veh_min": {}, "peak_blocked_veh": {}, "clearance_time_s": {} },
+      "zone_risk_changed": 23, "fire_changed": false }
+  ],
+  "skipped": [ { "id": "no-contraflow", "title": "...", "question": "...", "reason": "..." } ],
+  "limitations": ["..."]
+}
+```
+
+### Variant file
+
+```jsonc
+{
+  "kind": "crisistwin_variant", "schema_version": "1.0.0", "baseline": "camp-2018.json",
+  "generated_by": { "sim_version": "0.1.0", "command": "..." },
+  "variant": { "id": "skyway-closed-0800", "title": "...", "question": "...", "changes": ["..."],
+               "evidence_class": "simulated",
+               "details": { } },          // variant-specific record, e.g. selected edge ids, optimizer report
+  "basis": { },                         // identical to index.basis
+  "clock": { },                         // identical to the baseline clock
+  "traffic": { },                       // same shape as bundle.traffic, including closures
+  "events": [ ],                        // full event list for this run, same shape as bundle.events
+  "insights": { },                      // same shape as bundle.insights
+  "fire_simulated": { },                // only when the variant changes the simulated front; else use the baseline's
+  "comparison": {
+    "evidence_class": "simulated",
+    "metrics": {                        // each { "baseline": n|null, "variant": n|null, "delta": variant-baseline|null }
+      "arrived_by_1700z_veh": {}, "arrived_by_1800z_veh": {}, "arrived_by_2000z_veh": {},
+      "arrived_at_end_veh": {}, "peak_en_route_veh": {}, "peak_blocked_veh": {}, "peak_exposed_veh": {},
+      "exposed_veh_min": {}, "peak_exposed_at_origin_veh": {}, "exposed_at_origin_veh_min": {},
+      "total_exposed_veh_min": {}, "blocked_at_end_veh": {}, "clearance_time_s": {}
+    },
+    "clearance_note": "...", "exposed_veh_min_rule": "...",
+    "zone_risk_changed": [ { "zone_id": "fz3", "baseline": "high", "variant": "low" } ],
+    "zone_risk_counts": { "baseline": { "critical": 0, "high": 0, "elevated": 0, "low": 0 }, "variant": {} }
+  },
+  "checks": { "population_conserved": true, "frames_checked": 1081, "total_veh": 15000 },
+  "limitations": ["..."]
+}
+```
+
+### Semantics
+
+- **Metrics:** `arrived_by_HHMMz_veh` is `arrived_veh` in the metrics frame at that UTC
+  time. `exposed_veh_min` is the sum of `exposed_veh` over frames multiplied by the frame
+  interval in minutes (vehicles on roads). `exposed_at_origin_veh_min` does the same for
+  `exposed_at_origin_veh` (vehicles not yet departed whose origin is inside the fire area).
+  `total_exposed_veh_min` is their sum and is the headline exposure figure: a variant
+  that delays departures moves exposure from roads to homes, so comparing
+  `exposed_veh_min` on its own is misleading. `clearance_time_s` is `null` when some vehicles never arrive, and
+  `delta` is then `null`. Lower is better for exposure, blocked counts and clearance;
+  higher is better for arrivals. The UI shows the sign and the unit in text.
+- **Precision:** there is one seed and fixture demand. Show deltas as whole vehicles or
+  minutes, and do not present small deltas as significant.
+- **Changed orders:** in `optimized`, the fixture `evacuation_order` events are replaced
+  by `optimized-order-<zone>` events with `evidence_class: "simulated"` (a plan, not a
+  record). The UI must show `variant.changes`, which include the optimizer's hindsight
+  limitation and verdict, wherever it shows this variant.
+- **Added events:** counterfactual events such as `variant-skyway-closed` carry
+  `evidence_class: "simulated"` and `source.id: "variant:<id>"`.
+- **Fire:** when `fire_simulated` is absent, the variant used the baseline front. When it
+  is present (`wind-shift`), it is a fixed-parameter front. Its `calibration.iou` reports
+  its fit to the first perimeter, with `fixed_params: true`. After the first observed
+  perimeter, both runs use the same observed perimeters.
+- **Skipped variants** are listed in `index.skipped` with a reason. They are never
+  silently absent.

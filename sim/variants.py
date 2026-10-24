@@ -164,8 +164,8 @@ def _slower_response(base: RunInputs, ctx: Context) -> tuple[RunInputs, list[str
         f"(x{RESPONSE_DELAY_FACTOR:g}); sigma {base.params.response_delay_sigma:g} and cap "
         f"{base.params.response_delay_max_min:g} min unchanged.",
         "Same seed, so each packet's delay is its baseline delay x2, except draws capped at the maximum.",
-        "Read exposure with care: vehicles still waiting at an origin node are not counted as exposed (engine "
-        "limitation), so later departures can lower exposed_veh while raising blocked_veh.",
+        "Later departures move exposure from roads to homes: compare total_exposed_veh_min (road + origin), "
+        "not exposed_veh_min alone.",
     ]
     return replace(base, params=params), changes, {}
 
@@ -214,8 +214,8 @@ def _wind_shift(base: RunInputs, ctx: Context) -> tuple[RunInputs, list[str], di
         "kept from the calibrated baseline front; same ignition point, time and grid.",
         f"Only the hazard before the first satellite perimeter ({first}) changes; from then on both runs use the "
         "same observed perimeters.",
-        f"Fit to the first perimeter: IoU {fire[0]['calibration']['iou']} "
-        f"(baseline {base.fire[0]['calibration']['iou']}).",
+        f"Fit to the first perimeter: IoU {fire[0]['calibration']['iou']:.2f} "
+        f"(baseline {base.fire[0]['calibration']['iou']:.2f}); the shifted front matches the observed extent less well.",
     ]
     return replace(base, fire=fire), changes, {}
 
@@ -354,6 +354,9 @@ def headline_metrics(bundle: dict) -> dict:
         "peak_blocked_veh": summary["max_blocked_veh"],
         "peak_exposed_veh": summary["max_exposed_veh"],
         "exposed_veh_min": round(sum(m["exposed_veh"] for m in metrics) * step_min),
+        "peak_exposed_at_origin_veh": summary["max_exposed_at_origin_veh"],
+        "exposed_at_origin_veh_min": round(sum(m["exposed_at_origin_veh"] for m in metrics) * step_min),
+        "total_exposed_veh_min": round(sum(m["exposed_veh"] + m["exposed_at_origin_veh"] for m in metrics) * step_min),
         "blocked_at_end_veh": metrics[-1]["blocked_veh"],
         "clearance_time_s": summary["clearance_time_s"],
     }
@@ -377,7 +380,9 @@ def compare(baseline: dict, variant: dict) -> dict:
         "evidence_class": "simulated",
         "metrics": {k: _delta(b[k], v[k]) for k in b},
         "clearance_note": "clearance_time_s is null when some vehicles never arrive within the clock window",
-        "exposed_veh_min_rule": "sum of exposed_veh over frames x frame interval (minutes)",
+        "exposed_veh_min_rule": "sum of exposed_veh (on roads) over frames x frame interval (minutes); "
+                                "exposed_at_origin_veh_min likewise for vehicles not yet departed whose origin is "
+                                "inside the fire area; total_exposed_veh_min is their sum",
         "zone_risk_changed": changed,
         "zone_risk_counts": {"baseline": levels(baseline["insights"]["zones"]),
                              "variant": levels(variant["insights"]["zones"])},
@@ -469,7 +474,7 @@ def main() -> None:
             entries.append({
                 "id": variant.id, "title": variant.title, "question": variant.question, "evidence_class": "simulated",
                 "file": name, "changes": changes, "runtime_s": runtime, "bytes": size,
-                "headline": {k: m[k] for k in ("arrived_by_1800z_veh", "peak_exposed_veh", "exposed_veh_min",
+                "headline": {k: m[k] for k in ("arrived_by_1800z_veh", "peak_exposed_veh", "total_exposed_veh_min",
                                                "peak_blocked_veh", "clearance_time_s")},
                 "zone_risk_changed": len(doc["comparison"]["zone_risk_changed"]),
                 "fire_changed": "fire_simulated" in doc,
