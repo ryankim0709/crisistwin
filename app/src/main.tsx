@@ -48,6 +48,8 @@ const page =
     <ReplayRoute />
   ) : path === "/simulate" ? (
     <ReplayView config={SIMULATION_VIEW} />
+  ) : path === "/live" ? (
+    <LiveCommandPage />
   ) : path === "/diorama" ? (
     <DioramaPage />
   ) : (
@@ -56,7 +58,6 @@ const page =
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    {/* Live command is a full-viewport map tool with its own navigation. */}
-    {path === "/live" ? <LiveCommandPage /> : <AppShell path={path}>{page}</AppShell>}
+    <AppShell path={path}>{page}</AppShell>
   </StrictMode>,
 );

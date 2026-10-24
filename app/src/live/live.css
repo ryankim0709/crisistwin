@@ -8,7 +8,8 @@
   --lc-ready: #ffb938;
   --lc-none: #9da29f;
   --lc-fire: #ff7a33;
-  --lc-route: #3d9bff;
+  --lc-route: #1f2a44;
+  --lc-route-flow: #ffffff;
   --lc-hazard: #ff5147;
   --lc-plate-evacuate: #d7261e;
   --lc-plate-evacuate-ink: #ffffff;
@@ -16,10 +17,11 @@
   --lc-plate-ready-ink: #1f1300;
   --lc-shelter: #2e7d5b;
 
-  position: fixed;
-  inset: 0;
+  /* Fills the shell's content column, like the other full-height tools. */
+  position: relative;
+  height: 100dvh;
   display: grid;
-  grid-template-columns: 360px minmax(0, 1fr) 400px;
+  grid-template-columns: 320px minmax(0, 1fr) 380px;
   grid-template-rows: 48px minmax(0, 1fr);
   grid-template-areas:
     "head head head"
@@ -335,7 +337,7 @@
   backdrop-filter: var(--ct-glass-filter, blur(10px));
   box-shadow: var(--ct-shadow-md);
 }
-/* Layer toggles double as the legend, so they stay neutral: brand teal is reserved for the
+/* Layer toggles stay neutral: brand teal is reserved for the
    selection's primary action (design spec). */
 .lc-layer {
   display: inline-flex;
@@ -373,9 +375,9 @@
 .lc-sw--fire {
   width: 12px;
   height: 12px;
-  border: 2px dashed var(--lc-fire);
+  border: 2px dashed #b33a00;
   border-radius: 2px;
-  background: color-mix(in srgb, var(--lc-fire) 30%, transparent);
+  background: repeating-linear-gradient(-45deg, #b33a00 0 1.5px, color-mix(in srgb, var(--lc-fire) 40%, transparent) 1.5px 4px);
 }
 .lc-sw--reports {
   width: 11px;
@@ -388,6 +390,46 @@
   height: 4px;
   border-radius: 2px;
   background: linear-gradient(90deg, var(--lc-route) 0 60%, var(--lc-hazard) 60% 100%);
+  box-shadow: 0 0 0 1px #fff;
+}
+/* Legend: what every mark on the map means. Light, like the basemap it sits on. */
+.lc-legend {
+  position: absolute;
+  left: var(--ct-space-3);
+  bottom: var(--ct-space-6);
+  z-index: var(--ct-z-map-controls);
+  min-width: 200px;
+  padding: var(--ct-space-2) var(--ct-space-3);
+  border: 1px solid rgba(15, 23, 32, 0.12);
+  border-radius: var(--ct-radius-md);
+  background: rgba(255, 255, 255, 0.94);
+  color: #0f1720;
+  font-size: var(--ct-text-sm);
+  box-shadow: var(--ct-shadow-md);
+}
+.lc-legend summary {
+  cursor: pointer;
+  font-weight: var(--ct-weight-semibold);
+}
+.lc-legend ul {
+  display: grid;
+  gap: 3px;
+  margin: var(--ct-space-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.lc-legend li {
+  display: flex;
+  align-items: center;
+  gap: var(--ct-space-2);
+}
+.lc-legend-sw {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+.lc-legend-sw svg {
+  width: 22px;
+  height: 15px;
 }
 .lc-sw--shelters {
   width: 10px;

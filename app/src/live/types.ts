@@ -448,6 +448,7 @@ export interface CommandResponse {
   destination_preferences?: DestinationPreferenceCount[]
   /** Newest 50 entries of the controller audit log, newest first. */
   decisions?: Decision[]
+  response_record?: ResponseRecordItem[]
   /** All pending plus the latest 20 decided, newest first. */
   proposals: Proposal[]
   /** Newest 500. */
@@ -535,6 +536,8 @@ export interface TwinMonitor {
   conserved: boolean
   zones: TwinZone[]
   congested_edges: TwinEdge[]
+  /** Every occupied directed edge (simplified line, travel direction), most vehicles first. Simulated. */
+  traffic?: TwinTrafficEdge[]
   destinations: TwinDestination[]
   closed_edges: number
   commands: TwinCommand[]
@@ -622,4 +625,28 @@ export interface ImpactResponse {
   /** Why there is no twin part: twin_warming, twin_busy, twin_finished, twin_error:<code>, ... */
   twin_fallback: string | null
   runtime_ms: number
+}
+
+/** `twin.traffic`: simulated vehicles on one directed road edge right now. */
+export interface TwinTrafficEdge {
+  line: LonLat[]
+  veh: number
+  queued_veh: number
+  speed_kph: number
+  free_flow_kph: number
+}
+
+/** One event of the historical 2018 response record (bundle events that are not simulated). Not a drill action. */
+export interface ResponseRecordItem {
+  id: string
+  at: IsoTime
+  type: string
+  label: string
+  /** reconstructed | reported | derived (never simulated). */
+  evidence_class: string
+  source_id: string | null
+  source_url: string | null
+  time_precision: string | null
+  zone_ids: string[]
+  segment_ids: string[]
 }
