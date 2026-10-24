@@ -1,0 +1,298 @@
+.studio-map {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 320px;
+  overflow: hidden;
+  background: #dfe1d6;
+}
+.studio-map__canvas {
+  position: absolute;
+  inset: 0;
+}
+
+/* Overlays: dark glass panels, as on /fire. */
+.studio-map__legend,
+.studio-map__wind {
+  background: rgb(20 43 39 / 90%);
+  color: #f5f4ee;
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.studio-map__wind {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px 6px 6px;
+  pointer-events: none;
+  font-weight: 600;
+  color: #fde68a;
+}
+.studio-map__wind span {
+  color: #f5f4ee;
+}
+.studio-map__assumption {
+  border-left: 4px solid #5eead4;
+}
+
+.studio-map__legend {
+  position: absolute;
+  right: 12px;
+  bottom: 36px;
+  z-index: 2;
+  width: 220px;
+  max-height: calc(100% - 120px);
+  overflow-y: auto;
+  padding: 8px 10px;
+}
+.studio-map__legend-group {
+  padding: 6px 0 6px 8px;
+  border-left: 4px solid transparent;
+  margin-bottom: 4px;
+}
+.studio-map__legend-group--assumption {
+  border-left-color: #5eead4;
+}
+.studio-map__legend-group--output {
+  border-left-color: #fb923c;
+}
+.studio-map__legend-group--source {
+  border-left-color: #94a3b8;
+  border-left-style: dotted;
+}
+.studio-map__legend h3 {
+  margin: 0 0 4px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.studio-map__legend-sub {
+  margin: 0 0 4px;
+  opacity: 0.8;
+}
+.studio-map__legend ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.studio-map__legend li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+}
+.studio-map__sources li {
+  display: list-item;
+  opacity: 0.85;
+}
+.studio-map__swatch {
+  flex: none;
+  width: 22px;
+  height: 12px;
+  border-radius: 2px;
+  border: 1px solid rgb(255 255 255 / 40%);
+}
+.studio-map__swatch--current {
+  background: transparent;
+  border: 2px solid #fde68a;
+}
+
+.studio-map__banners {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: min(480px, calc(100% - 200px));
+  pointer-events: none;
+}
+.studio-map__stale {
+  margin: 0;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: #fde68a;
+  color: #142b27;
+  border: 2px dashed #b45309;
+  font-size: 12px;
+  font-weight: 700;
+}
+.studio-map__warnings {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+}
+.studio-map__warnings li {
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: #fef3c7;
+  color: #78350f;
+  border: 1px solid #d97706;
+  font-size: 12px;
+  font-weight: 600;
+}
+.studio-map__error {
+  position: absolute;
+  left: 12px;
+  bottom: 36px;
+  max-width: calc(100% - 270px);
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgb(20 43 39 / 92%);
+  color: #f5f4ee;
+  font-size: 13px;
+  line-height: 1.5;
+  z-index: 3;
+}
+
+/* Ignition markers. The anchor is the icon; the label hangs below it. */
+.studio-marker {
+  position: relative;
+  display: block;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+}
+.studio-marker__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 3px solid #ffffff;
+  background: #475569;
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1;
+  box-shadow: 0 0 0 2px rgb(0 0 0 / 40%);
+}
+.studio-marker--key {
+  display: inline-block;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  cursor: default;
+}
+.studio-marker--key .studio-marker__icon {
+  width: 22px;
+  height: 22px;
+  font-size: 12px;
+  border-width: 2px;
+}
+.studio-marker--key .studio-marker__icon svg {
+  width: 12px;
+  height: 12px;
+}
+.studio-marker--draft .studio-marker__icon {
+  background: #64748b;
+  border-style: solid;
+}
+.studio-marker--scheduled .studio-marker__icon {
+  background: rgb(20 43 39 / 35%);
+  border-color: #fde68a;
+  color: #fde68a;
+}
+.studio-marker--triggered .studio-marker__icon {
+  background: #ea580c;
+  border-color: #fde68a;
+  color: #ffffff;
+}
+.studio-marker--reached-before-start .studio-marker__icon {
+  background: #0f766e;
+  border-style: double;
+  border-width: 5px;
+}
+.studio-marker--disabled .studio-marker__icon {
+  background: rgb(71 85 105 / 55%);
+  border-style: dashed;
+  color: #e2e8f0;
+}
+.studio-marker--invalid .studio-marker__icon {
+  background: #b91c1c;
+  border-radius: 6px;
+  border-color: #fecaca;
+}
+.studio-marker[data-selected="true"] {
+  z-index: 5;
+}
+.studio-marker[data-selected="true"] .studio-marker__icon {
+  box-shadow:
+    0 0 0 3px #142b27,
+    0 0 0 6px #5eead4;
+  transform: scale(1.18);
+}
+.studio-marker:focus-visible {
+  outline: none;
+}
+.studio-marker:focus-visible .studio-marker__icon {
+  outline: 3px solid #5eead4;
+  outline-offset: 4px;
+}
+.studio-marker__label {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 8px;
+  background: rgb(20 43 39 / 90%);
+  color: #fde68a;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.studio-marker__state {
+  color: #f5f4ee;
+  font-size: 10px;
+  font-weight: 500;
+  opacity: 0.85;
+}
+.studio-marker--key .studio-marker__label {
+  display: none;
+}
+
+.studio-box-label {
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgb(20 43 39 / 60%);
+  color: #f5f4ee;
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  pointer-events: none;
+}
+
+@media (max-width: 760px) {
+  .studio-map__legend {
+    width: 180px;
+    font-size: 11px;
+  }
+  .studio-map__banners {
+    width: calc(100% - 24px);
+    top: 64px;
+  }
+}
