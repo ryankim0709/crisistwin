@@ -47,7 +47,8 @@ from .state import Snapshot, current_guidance
 
 log = logging.getLogger(__name__)
 
-REPO_ROOT = Path(settings.BASE_DIR).resolve().parents[1]
+REPO_ROOT = Path(os.environ.get("CRISISTWIN_REPO_ROOT") or Path(settings.BASE_DIR).resolve().parent.parent)
+"""Holds ``sim/``, ``tools/`` and ``data/``. Docker mounts them under ``/repo`` (only ``app/backend`` is ``/app``)."""
 CAMP_PACKAGE = "data/incidents/camp-2018-paradise-slice/a6d2cc03f525ed65"
 CAMP_ROADS_PACKAGE = "data/incidents/camp-2018-evacuation/17e67cfe5669fe50"
 """The packages ``app/public/replays/camp-2018.json`` was built from (its ``generated_by``)."""

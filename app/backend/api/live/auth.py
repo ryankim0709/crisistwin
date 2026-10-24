@@ -1,8 +1,11 @@
 """Bearer-token auth for the live API (docs/live-reports.md "Auth", "Controller auth (v2)").
 
-Fails closed: no token, an unknown or expired token, or an unset controller/invite secret
-is refused. Device tokens are stored only as SHA-256 hashes; the controller token is never
-stored, only compared in constant time with ``LIVE_CONTROLLER_TOKEN``.
+No controller token required by default: with ``LIVE_CONTROLLER_TOKEN`` unset, a request
+without an ``Authorization`` header is the controller, so the /live console needs no token.
+Setting it locks the controller behind that bearer token again (use that for any shared
+deployment). Otherwise fails closed: an unknown or expired token, or an unset invite code, is
+refused. Device tokens are stored only as SHA-256 hashes; the controller token is never stored,
+only compared in constant time with ``LIVE_CONTROLLER_TOKEN``.
 """
 
 from __future__ import annotations
@@ -76,6 +79,8 @@ def secret_matches(given: str, env_name: str) -> bool:
 
 def authenticate(request) -> Principal | None:
     header = request.headers.get("Authorization", "")
+    if not header and not live_setting("LIVE_CONTROLLER_TOKEN"):
+        return Principal("controller", CONTROLLER_PARTY_KEY, None)
     scheme, _, token = header.partition(" ")
     token = token.strip()
     if scheme.lower() != "bearer" or not token or len(token) > 512:

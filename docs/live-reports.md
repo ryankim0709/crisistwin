@@ -10,7 +10,9 @@ matching the sim and replay bundle. Distances are meters.
 
 ## Auth
 
-Every endpoint needs `Authorization: Bearer <token>`. Tokens are stored hashed.
+Every endpoint needs `Authorization: Bearer <token>`, except that a request with no token is the
+controller while `LIVE_CONTROLLER_TOKEN` is unset (see [Controller auth](#controller-auth-v2)).
+Tokens are stored hashed.
 
 | Role | How the token is issued | Can |
 | --- | --- | --- |
@@ -697,9 +699,11 @@ draws the current routes solid, the other state's routes dashed, and the affecte
 
 ## Controller auth (v2)
 
-Dev and drill only: a controller sends `Authorization: Bearer <LIVE_CONTROLLER_TOKEN>`;
-the server compares it in constant time with the env value and never stores it.
-Unset -> controller endpoints return `403`. Responders join with
+Dev and drill only. With `LIVE_CONTROLLER_TOKEN` unset (the default), a request without an
+`Authorization` header is the controller, so the /live console needs no token. With it set, a
+controller sends `Authorization: Bearer <LIVE_CONTROLLER_TOKEN>`; the server compares it in
+constant time with the env value and never stores it, and an untokened request gets `401`. Set
+it on anything reachable by others. Responders join with
 `POST incidents/{id}/join { "invite_code": ... }` checked against `LIVE_INVITE_CODE`
 (unset -> join returns `403`). Both are placeholders in `app/.env.example`; real
 values stay in the shell or an ignored `.env`. A real deployment needs per-person
