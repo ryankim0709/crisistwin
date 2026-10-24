@@ -97,6 +97,23 @@ See the [scaffold decision](docs/adr/0001-app-scaffold.md) and
 [API contract](app/backend/README.md). There are no CI workflows for this
 hackathon; checks run locally when needed.
 
+### iOS app (`mobile/`)
+
+SwiftUI starter app (Swift 6, iOS 18+), built with Xcode 26. No dependencies.
+Open `mobile/CrisisTwin.xcodeproj` in Xcode, pick an iPhone simulator, and press Run.
+From the command line:
+
+```sh
+cd mobile
+xcodebuild -project CrisisTwin.xcodeproj -scheme CrisisTwin \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
+  -derivedDataPath ~/Library/Developer/Xcode/DerivedData/CrisisTwin build
+```
+
+Keep build output out of the repo: if it sits under an iCloud-synced Desktop, codesign
+fails with "resource fork, Finder information, or similar detritus not allowed".
+The simulator needs no signing team; running on a physical device needs one.
+
 ### Default hackathon check
 
 Run only pre-commit before committing, from the repository root:
