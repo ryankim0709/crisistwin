@@ -1,4 +1,4 @@
-# 0016: Dispatch agent anywhere, on the 3D diorama, with households
+# 0017: Dispatch agent anywhere, on the 3D diorama, with households
 
 Date: 2026-10-24. Status: accepted for the demo. Amends [0014](0014-dispatch-agent.md).
 

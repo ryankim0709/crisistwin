@@ -137,6 +137,14 @@ chunks with `Content-Type: application/gzip` (no `Content-Encoding`), `Content-L
 returns 304. Errors are JSON: 404 `{"error": "not_found"}` for unknown/unbuilt regions,
 503 `{"error": "unavailable"}` on MongoDB/GridFS errors (no driver text).
 
+### Live broadcast and families
+
+`GET /api/live`, `POST /api/live/broadcast` (`api/live.py`) and `/api/families…`
+(`api/families.py`) serve the resident iOS app. They use MongoDB collections
+`live_broadcast` and `families`. Request and response shapes are in
+[ADR 0016](../../docs/adr/0016-resident-live-and-family.md) and
+`app/src/live/contracts.ts`.
+
 ## Updating dependencies
 
 Edit the `.in` files, then resolve with [uv](https://docs.astral.sh/uv/pip/compile/):

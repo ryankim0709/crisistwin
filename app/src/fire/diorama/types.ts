@@ -20,6 +20,18 @@ import type { LabelLayer } from "./labels";
 
 export type { LandscapeGrid, FireRun, GeoPoint };
 
+/**
+ * The part of a run the diorama draws. `FireRun` satisfies it; the Simulation Studio builds
+ * one from a `ScheduledFireRun`, whose arrivals are minutes from scenario T+0.
+ */
+export type DioramaRun = {
+  arrivalMinutes: Float32Array;
+  scenario: { horizonMinutes: number; stepMinutes: number };
+};
+
+/** A labelled ignition pin (Simulation Studio draws several). */
+export type DioramaIgnition = { id: string; point: GeoPoint; label: string };
+
 export type GroundClickMode = "origin" | "wind";
 
 /** CSS px of the scene container covered by floating page UI. */
@@ -47,10 +59,12 @@ export interface FireDioramaSceneApi {
   /** Rebuild the board for a newly loaded landscape; `null` shows an empty plinth. */
   setLandscape(grid: LandscapeGrid | null): void;
   /** Arrival field to draw (`run.arrivalMinutes`); `null` clears the fire. */
-  setRun(run: FireRun | null): void;
+  setRun(run: DioramaRun | null): void;
   /** Simulation time in minutes since ignition (continuous; the page animates it). */
   setTime(minutes: number): void;
   setIgnition(point: GeoPoint | null): void;
+  /** Several labelled pins; replaces `setIgnition`'s single pin. The wind glyph sits by the first. */
+  setIgnitions(ignitions: readonly DioramaIgnition[]): void;
   /** Meteorological wind direction (degrees the wind blows FROM) and speed. */
   setWind(fromDegrees: number, speedMph: number): void;
   /** Tint the ground by fuel family (the page's existing fuel legend colours). */

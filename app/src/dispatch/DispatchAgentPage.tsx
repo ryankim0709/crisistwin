@@ -3,7 +3,7 @@
  * custom US area, with an AI dispatcher that orders evacuations and sends fire engines while
  * the run plays. The road network, synthetic homes and fire stations are built from
  * OpenStreetMap for the box the fire threatens. See docs/adr/0014-dispatch-agent.md and
- * docs/adr/0016-dispatch-anywhere.md.
+ * docs/adr/0017-dispatch-anywhere.md.
  */
 
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
@@ -45,6 +45,10 @@ import {
 import { noActionBaseline } from "./engine";
 import { computeExposure } from "./fireExposure";
 import { useDispatchSession } from "./useDispatchSession";
+import { LIVE_SNAPSHOT_VERSION, type LiveSnapshot } from "../live/contracts";
+import { LiveShareToggle } from "../live/LiveShareToggle";
+import { fireRings, hectares, liveZones } from "../live/snapshot";
+import { newSessionId, useLiveBroadcast } from "../live/useLiveBroadcast";
 import "../fire/fire.css";
 import "./dispatch.css";
 
@@ -469,6 +473,67 @@ export default function DispatchAgentPage() {
   const areaLabel = region
     ? region.name
     : `Custom area (${areaCenter.latitude.toFixed(2)}, ${areaCenter.longitude.toFixed(2)})`;
+
+  // ---- Resident app broadcast -------------------------------------------------------------
+  // Fire footprint at the shown minute; while the agent runs, every zone's guidance as well.
+  const liveEngine = sessionActive ? session.engine : null;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const liveSessionId = useMemo(() => (run ? newSessionId() : null), [run, liveEngine]);
+  const { getTime, playing } = playback;
+  const getLiveSnapshot = useCallback((): LiveSnapshot | null => {
+    if (!run || !liveSessionId) return null;
+    const minute = Math.min(liveEngine ? liveEngine.minute : getTime(), horizonMinutes);
+    const frame = [...run.frames].reverse().find((f) => f.elapsedMinutes <= minute);
+    const latest = session.log.find((entry) => entry.status === "done");
+    const status: LiveSnapshot["playback"] = liveEngine
+      ? session.status === "finished"
+        ? "finished"
+        : session.status === "running" || session.status === "thinking"
+          ? "playing"
+          : "paused"
+      : playing
+        ? "playing"
+        : minute >= horizonMinutes
+          ? "finished"
+          : "paused";
+    return {
+      version: LIVE_SNAPSHOT_VERSION,
+      source: liveEngine ? "dispatch_agent" : "fire_model",
+      session_id: liveSessionId,
+      evidence_class: "simulated",
+      playback: status,
+      area_name: areaLabel,
+      minute: Math.round(minute),
+      horizon_minutes: horizonMinutes,
+      wind: { from_degrees: run.scenario.windFromDegrees, speed_mph: run.scenario.windSpeedMph },
+      bbox: area ? area.bbox : null,
+      fire: {
+        perimeters: frame ? fireRings(frame.perimeters) : [],
+        burned_area_ha: hectares(frame?.burnedAreaSquareMeters ?? 0),
+      },
+      zones: liveEngine ? liveZones(liveEngine) : [],
+      agent:
+        liveEngine && latest && latest.model
+          ? { summary: latest.summary, model: latest.model, minute: latest.minute }
+          : null,
+    };
+  }, [
+    run,
+    liveSessionId,
+    liveEngine,
+    getTime,
+    playing,
+    horizonMinutes,
+    session.log,
+    session.status,
+    areaLabel,
+    area,
+  ]);
+  const liveBroadcast = useLiveBroadcast(
+    getLiveSnapshot,
+    `${liveSessionId}:${Math.floor(playback.t)}:${playing}:${session.status}:${session.version}`,
+  );
+
   const steps: SetupStep[] = [
     {
       label: "Landscape",
@@ -785,6 +850,16 @@ export default function DispatchAgentPage() {
             </aside>
 
             <div className="dsp-dock">
+              {run && (
+                <LiveShareToggle
+                  id="dispatch-live-share"
+                  className="fr-panel fr-toggle-row live-share dispatch-live-share"
+                  enabled={liveBroadcast.enabled}
+                  onChange={liveBroadcast.setEnabled}
+                  status={liveBroadcast.status}
+                  idleText="Shares the fire, and each zone's orders while the agent runs, with the resident app."
+                />
+              )}
               {sessionActive && session.engine ? (
                 <section className="fr-panel dsp-session-dock" aria-label="Dispatcher clock">
                   <strong className="dsp-clock">{hhmm(session.engine.minute)}</strong>

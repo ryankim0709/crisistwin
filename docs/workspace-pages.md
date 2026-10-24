@@ -51,7 +51,9 @@ set constant wind and fuel moisture, press **Run simulation**, and play the comb
 on one timeline. All fires run through one solver pass on one shared landscape, so overlap
 and "fire F1 reached F3 before its scheduled start" are modelled, not overlaid. The solve runs
 in a Web Worker; the draft is kept in `localStorage` ("Saved on this device") and can be
-exported or imported as JSON. Model and contracts: [ADR 0011](adr/0011-simulation-studio.md).
+exported or imported as JSON. Model and contracts: [ADR 0011](adr/0011-simulation-studio.md). The
+**3D diorama** toggle draws the last run's landscape and fire as the `/fire` miniature
+([ADR 0016](adr/0016-studio-diorama-view.md)).
 
 Limits: wind and moisture are constant for the whole run; horizons are 1, 2, 3 or 6 hours;
 fires must be close enough to share one landscape (at most about 24 km across, including
@@ -69,4 +71,4 @@ landscape), wait for the roads and homes to load from OpenStreetMap (the backend
 internet the first time a box is used; results are cached), then press **Start the AI
 dispatcher**. Playback runs at 1, 2 or 4 simulated minutes per second so the agent has time to
 decide; each decision is a paid model call. Model, assumptions and contracts:
-[ADR 0014](adr/0014-dispatch-agent.md) and [ADR 0016](adr/0016-dispatch-anywhere.md).
+[ADR 0014](adr/0014-dispatch-agent.md) and [ADR 0017](adr/0017-dispatch-anywhere.md).

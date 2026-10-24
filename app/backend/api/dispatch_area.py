@@ -2,7 +2,7 @@
 
 The /dispatch page (docs/adr/0014-dispatch-agent.md) needs a road graph, evacuation zones,
 exits and fire stations. This endpoint builds them at runtime from the OpenStreetMap
-Overpass API and caches the result (docs/adr/0016-dispatch-anywhere.md). It ports the
+Overpass API and caches the result (docs/adr/0017-dispatch-anywhere.md). It ports the
 logic of tools/build_dispatch_area.py, which produced one static fixture offline.
 
 Observed (OSM): road geometry, class, name, lanes, maxspeed, oneway; place names; fire

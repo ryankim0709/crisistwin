@@ -1,7 +1,7 @@
 /**
  * Wire contract between the /dispatch page and POST /api/dispatch/decide
  * (app/backend/api/dispatch.py). Change both sides and docs/adr/0014-dispatch-agent.md (amended
- * by docs/adr/0016-dispatch-anywhere.md) together.
+ * by docs/adr/0017-dispatch-anywhere.md) together.
  *
  * Request body: `{ "observation": Observation }`, JSON, at most 200 kB.
  * Response: `application/x-ndjson`, one `DecisionEvent` per line, ending with exactly one

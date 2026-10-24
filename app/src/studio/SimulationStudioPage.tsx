@@ -3,8 +3,10 @@ import type { GeoPoint } from "../fire/spread";
 import { formatElapsed } from "../fire/spread";
 import ConfigPanel from "./ConfigPanel";
 import PlaybackBar from "./PlaybackBar";
+import StudioDiorama from "./StudioDiorama";
 import StudioMap from "./StudioMap";
 import {
+  DISPLAY_STEP_MINUTES,
   MAX_ENABLED_IGNITIONS,
   type IgnitionDisplayState,
   type MapMode,
@@ -21,10 +23,30 @@ import {
   solverInputChanged,
   validateScenario,
 } from "./scenario";
-import { LoadingState, Notice } from "../ui";
+import { Button, LoadingState, Notice, SegmentedControl, type SegmentedOption } from "../ui";
 import { downloadJson, frameIndexAt } from "./playbackUtils";
 import { useStudioRun } from "./useStudioRun";
+import type { DioramaIgnition, DioramaRun } from "../fire/diorama/types";
 import "./studio.css";
+
+type StudioView = "map" | "diorama";
+const VIEW_OPTIONS: readonly SegmentedOption<StudioView>[] = [
+  { value: "map", label: "Map" },
+  { value: "diorama", label: "3D diorama" },
+];
+const VIEW_STORAGE_KEY = "crisistwin.studio.view";
+/** Gap kept between the floating panel and the framed 3D board, CSS px. */
+const DIORAMA_PANEL_GAP_PX = 12;
+/** Room kept clear at the bottom of the 3D view for the view toggle and legend, CSS px. */
+const DIORAMA_BOTTOM_INSET_PX = 56;
+
+function loadView(): StudioView {
+  try {
+    return window.localStorage.getItem(VIEW_STORAGE_KEY) === "diorama" ? "diorama" : "map";
+  } catch {
+    return "map";
+  }
+}
 
 const SPEED_CHOICES = [1, 5, 10, 30, 60] as const;
 const DEFAULT_SPEED = 10;
@@ -56,6 +78,38 @@ export default function SimulationStudioPage() {
   const [mode, setMode] = useState<MapMode>("select");
   const [panelCollapsed, setPanelCollapsed] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [view, setView] = useState<StudioView>(loadView);
+  const chooseView = useCallback((next: StudioView) => {
+    setView(next);
+    try {
+      window.localStorage.setItem(VIEW_STORAGE_KEY, next);
+    } catch {
+      // Storage can be unavailable (private mode); the choice then lasts for this visit only.
+    }
+  }, []);
+
+  // The 3D camera frames the board in the area the floating panel leaves uncovered.
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const [panelInset, setPanelInset] = useState(0);
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (!panel) return;
+    const measure = () => {
+      const stage = panel.parentElement?.getBoundingClientRect();
+      const box = panel.firstElementChild?.getBoundingClientRect();
+      // Below 900px the panel spans the width, so it cannot be framed around; ignore it there.
+      if (!stage || !box || box.width >= stage.width * 0.6) {
+        setPanelInset(0);
+        return;
+      }
+      setPanelInset(Math.round(box.right - stage.left + DIORAMA_PANEL_GAP_PX));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(panel);
+    if (panel.firstElementChild) observer.observe(panel.firstElementChild);
+    return () => observer.disconnect();
+  }, [panelCollapsed]);
 
   const { state, run, cancel, markStale } = useStudioRun();
   const { result } = state;
@@ -230,6 +284,21 @@ export default function SimulationStudioPage() {
     run(scenario);
   }, [run, scenario]);
 
+  const handleLoadDemo = useCallback(() => {
+    applyScenario(demoScenario());
+    setMode("select");
+  }, [applyScenario]);
+
+  // Before the first run the 3D view has no board to click, so placing a fire goes to the map.
+  const dioramaHasBoard = Boolean(result?.landscape);
+  const handleModeChange = useCallback(
+    (next: MapMode) => {
+      if (next !== "select" && view === "diorama" && !dioramaHasBoard) chooseView("map");
+      setMode(next);
+    },
+    [view, dioramaHasBoard, chooseView],
+  );
+
   // ---- Derived display state -------------------------------------------------------------
 
   const stale = state.stale;
@@ -345,6 +414,31 @@ export default function SimulationStudioPage() {
   const playbackHorizon =
     result?.scenario.settings.horizonMinutes ?? scenario.settings.horizonMinutes;
 
+  const dioramaRun = useMemo<DioramaRun | null>(
+    () =>
+      result
+        ? {
+            arrivalMinutes: result.run.arrivalMinutes,
+            scenario: {
+              horizonMinutes: result.scenario.settings.horizonMinutes,
+              stepMinutes: DISPLAY_STEP_MINUTES,
+            },
+          }
+        : null,
+    [result],
+  );
+  const dioramaIgnitions = useMemo<DioramaIgnition[]>(
+    () =>
+      scenario.ignitions
+        .filter((ignition) => ignition.enabled)
+        .map((ignition) => ({
+          id: ignition.id,
+          point: ignition.location,
+          label: ignition.name || ignition.id,
+        })),
+    [scenario.ignitions],
+  );
+
   const events = useMemo(
     () =>
       (result?.run.input.sources ?? []).map((source) => ({
@@ -389,24 +483,82 @@ export default function SimulationStudioPage() {
     <main className="studio-page" id="main-content" aria-label="Simulation Studio">
       <div className="studio-stage">
         <div className="studio-page-map">
-          <StudioMap
-            ignitions={scenario.ignitions}
-            ignitionStates={ignitionStates}
-            selectedId={selectedId}
-            mode={mode}
-            visibleFrames={visibleFrames}
-            currentMinute={currentMinute}
-            horizonMinutes={playbackHorizon}
-            windSpeedMph={scenario.settings.windSpeedMph}
-            windFromDegrees={scenario.settings.windFromDegrees}
-            landscapeBox={result?.landscapeBox ?? null}
-            footprintIsStale={stale}
-            ignitionDetails={ignitionDetails}
-            warnings={warnings}
-            attribution={attribution}
-            onMapClick={handleMapClick}
-            onSelectIgnition={handleSelect}
-            onMoveIgnition={(id, point) => updateIgnition(id, { location: point })}
+          {view === "diorama" ? (
+            <StudioDiorama
+              landscape={result?.landscape ?? null}
+              run={dioramaRun}
+              ignitions={dioramaIgnitions}
+              windFromDegrees={scenario.settings.windFromDegrees}
+              windSpeedMph={scenario.settings.windSpeedMph}
+              mode={mode}
+              timeRef={clockRef}
+              insets={{ top: 12, right: 12, bottom: DIORAMA_BOTTOM_INSET_PX, left: panelInset }}
+              fitKey={resultKey}
+              warnings={warnings}
+              attribution={attribution}
+              onGroundClick={handleMapClick}
+              emptyState={
+                <>
+                  <p className="studio-diorama__card-title">No landscape yet</p>
+                  <p>
+                    The 3D view is built from the fuel and terrain a run downloads.{" "}
+                    {scenario.ignitions.length === 0
+                      ? "Load the demo scenario, or place fires on the map, then run it."
+                      : "Run the scenario to build it."}
+                  </p>
+                  <div className="studio-row">
+                    {scenario.ignitions.length === 0 ? (
+                      <>
+                        <Button size="sm" onClick={handleLoadDemo}>
+                          Load demo
+                        </Button>
+                        <Button variant="secondary" size="sm" onClick={() => handleModeChange("add")}>
+                          Place fires on map
+                        </Button>
+                      </>
+                    ) : (
+                      <>
+                        <Button size="sm" onClick={handleRun} disabled={issues.length > 0 || running}>
+                          {running ? "Running…" : "Run simulation"}
+                        </Button>
+                        <Button variant="secondary" size="sm" onClick={() => chooseView("map")}>
+                          Back to map
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                </>
+              }
+            />
+          ) : (
+            <StudioMap
+              ignitions={scenario.ignitions}
+              ignitionStates={ignitionStates}
+              selectedId={selectedId}
+              mode={mode}
+              visibleFrames={visibleFrames}
+              currentMinute={currentMinute}
+              horizonMinutes={playbackHorizon}
+              windSpeedMph={scenario.settings.windSpeedMph}
+              windFromDegrees={scenario.settings.windFromDegrees}
+              landscapeBox={result?.landscapeBox ?? null}
+              footprintIsStale={stale}
+              ignitionDetails={ignitionDetails}
+              warnings={warnings}
+              attribution={attribution}
+              onMapClick={handleMapClick}
+              onSelectIgnition={handleSelect}
+              onMoveIgnition={(id, point) => updateIgnition(id, { location: point })}
+            />
+          )}
+        </div>
+
+        <div className="studio-view">
+          <SegmentedControl
+            label="View"
+            options={VIEW_OPTIONS}
+            value={view}
+            onChange={chooseView}
           />
         </div>
 
@@ -431,7 +583,8 @@ export default function SimulationStudioPage() {
               {state.error.message}
             </Notice>
           )}
-          {!running && scenario.ignitions.length === 0 && (
+          {/* In 3D the empty-state card carries this instead. */}
+          {!running && scenario.ignitions.length === 0 && view === "map" && (
             <Notice tone="info" className="studio-chip-notice">
               Choose “Add ignition” and click the map to place a fire, or load the demo scenario.
             </Notice>
@@ -443,7 +596,10 @@ export default function SimulationStudioPage() {
           )}
         </div>
 
-        <div className={`studio-page-panel${panelCollapsed ? " is-collapsed" : ""}`}>
+        <div
+          ref={panelRef}
+          className={`studio-page-panel${panelCollapsed ? " is-collapsed" : ""}`}
+        >
           <ConfigPanel
             scenario={scenario}
             issues={issues}
@@ -455,7 +611,7 @@ export default function SimulationStudioPage() {
             draftStatus={draftStatusText(savedAt, saveFailed)}
             collapsed={panelCollapsed}
             onToggleCollapsed={() => setPanelCollapsed((value) => !value)}
-            onModeChange={setMode}
+            onModeChange={handleModeChange}
             onSelectIgnition={handleSelect}
             onScenarioChange={applyScenario}
             onRun={handleRun}
@@ -463,10 +619,7 @@ export default function SimulationStudioPage() {
             onClear={handleClear}
             onExport={handleExport}
             onImport={handleImport}
-            onLoadDemo={() => {
-              applyScenario(demoScenario());
-              setMode("select");
-            }}
+            onLoadDemo={handleLoadDemo}
           />
         </div>
       </div>

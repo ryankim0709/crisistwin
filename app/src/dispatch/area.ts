@@ -1,7 +1,7 @@
 /**
  * The dispatch area: an OSM road graph, synthetic homes and evacuation zones, exits and fire
  * stations for one bounding box, built at runtime by `GET /api/dispatch/area`
- * (app/backend/api/dispatch_area.py, schema 2). See docs/adr/0016-dispatch-anywhere.md.
+ * (app/backend/api/dispatch_area.py, schema 2). See docs/adr/0017-dispatch-anywhere.md.
  *
  * Units: WGS84 [longitude, latitude]; metres; km/h; vehicles per hour per direction.
  */

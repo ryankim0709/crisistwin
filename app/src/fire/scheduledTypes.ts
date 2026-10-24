@@ -112,6 +112,12 @@ export interface ScheduledFireRun {
   reachedEdgeMinute: number | null;
   cellSizeMeters: number;
   computeMilliseconds: number;
+  /**
+   * Combined fire arrival per landscape cell, elapsed minutes from scenario T+0, row-major
+   * like `LandscapeGrid.fuelCodes`; `Infinity` where no fire arrives. Same meaning as
+   * `FireRun.arrivalMinutes`, for renderers such as the studio's 3D diorama.
+   */
+  arrivalMinutes: Float32Array;
 }
 
 export type IgnitionProblemReason = "outside-landscape" | "non-burnable";

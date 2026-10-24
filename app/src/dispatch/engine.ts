@@ -3,7 +3,7 @@
  * graph, stepped one simulation minute at a time against a precomputed fire run.
  * Deterministic, no randomness, no network. The agent only issues orders (`applyOrders`);
  * every route, travel time, flow and count comes from here. See docs/adr/0014-dispatch-agent.md
- * and docs/adr/0016-dispatch-anywhere.md.
+ * and docs/adr/0017-dispatch-anywhere.md.
  *
  * Model, deliberately simple and visible in the UI:
  * - Every synthetic home is one household with the zone's average vehicles per home. Homes
