@@ -194,6 +194,7 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     this.rig = new FireCameraRig(canvas);
 
     canvas.addEventListener("pointerdown", this.onPointerDown);
+    canvas.addEventListener("pointermove", this.onPointerMove);
     canvas.addEventListener("pointerup", this.onPointerUp);
     canvas.addEventListener("pointercancel", this.onPointerCancel);
     canvas.addEventListener("keydown", this.onKeyDown);
@@ -285,6 +286,7 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     this.resizeObserver.disconnect();
     const canvas = this.renderer.domElement;
     canvas.removeEventListener("pointerdown", this.onPointerDown);
+    canvas.removeEventListener("pointermove", this.onPointerMove);
     canvas.removeEventListener("pointerup", this.onPointerUp);
     canvas.removeEventListener("pointercancel", this.onPointerCancel);
     canvas.removeEventListener("keydown", this.onKeyDown);
@@ -552,7 +554,7 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     const action = this.clickMode === "wind" ? "set the direction the wind blows from toward the view centre" : "place the ignition at the view centre";
     this.renderer.domElement.setAttribute(
       "aria-label",
-      `3D miniature of the loaded fuel and terrain landscape with the simulated fire. Press Enter to ${action}; arrow keys pan, plus and minus zoom; click the ground with a pointer. Trees and houses are symbols for fuel classes, not observed objects.`,
+      `3D miniature of the loaded fuel and terrain landscape with the simulated fire. Press Enter to ${action}; arrow keys pan, plus and minus zoom; with a pointer, click the ground, drag to pan, right-drag or Ctrl-drag to rotate, scroll to zoom. Trees and houses are symbols for fuel classes, not observed objects.`,
     );
   }
 
@@ -561,13 +563,22 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     this.pointerDown = { x: e.clientX, y: e.clientY, id: e.pointerId };
   };
 
+  /** Crosshair while hovering (click places), grabbing once a press travels past the click tolerance. */
+  private readonly onPointerMove = (e: PointerEvent) => {
+    const down = this.pointerDown;
+    if (!down || down.id !== e.pointerId) return;
+    if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > CLICK_TOLERANCE_PX) this.renderer.domElement.style.cursor = "grabbing";
+  };
+
   private readonly onPointerCancel = () => {
     this.pointerDown = null;
+    this.renderer.domElement.style.cursor = "crosshair";
   };
 
   private readonly onPointerUp = (e: PointerEvent) => {
     const down = this.pointerDown;
     this.pointerDown = null;
+    this.renderer.domElement.style.cursor = "crosshair";
     if (!down || down.id !== e.pointerId) return;
     if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > CLICK_TOLERANCE_PX) return;
     const rect = this.renderer.domElement.getBoundingClientRect();
