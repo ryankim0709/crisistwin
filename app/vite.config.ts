@@ -7,6 +7,8 @@ import { defineConfig } from "vite";
 
 const LANDFIRE_ORIGIN = "https://edcintl.cr.usgs.gov";
 const LANDFIRE_DNS_TTL_MS = 5 * 60_000;
+/** Identifies this application to the data service rather than impersonating a browser. */
+const LANDFIRE_USER_AGENT = "CrisisTwin/0.1 (hackathon planning prototype)";
 
 const lastGoodAddresses = new Map<string, { entries: dns.LookupAddress[]; resolvedAt: number }>();
 
@@ -50,6 +52,36 @@ const resilientLookup: LookupFunction = (hostname, options, callback) => {
 // which also means far fewer lookups to fail.
 const landfireAgent = new https.Agent({ keepAlive: true, lookup: resilientLookup });
 
+/**
+ * Headers the browser attaches that have no business being forwarded to a public data
+ * service. Left in place they make a proxied raster request look like cross-site browser
+ * traffic: the USGS web application firewall answers those with an HTML block page
+ * ("Attack ID 20000051") that arrives as a 500, while the identical request carrying
+ * plain client headers succeeds. Strip them and say who we actually are instead.
+ */
+const BROWSER_ONLY_HEADERS = [
+  "origin",
+  "referer",
+  "cookie",
+  "sec-fetch-dest",
+  "sec-fetch-mode",
+  "sec-fetch-site",
+  "sec-fetch-user",
+  "sec-ch-ua",
+  "sec-ch-ua-mobile",
+  "sec-ch-ua-platform",
+  "upgrade-insecure-requests",
+  "priority",
+];
+
+function presentAsThisApplication(proxyReq: import("node:http").ClientRequest): void {
+  for (const header of BROWSER_ONLY_HEADERS) proxyReq.removeHeader(header);
+  proxyReq.setHeader("user-agent", LANDFIRE_USER_AGENT);
+  proxyReq.setHeader("accept", "image/tiff,application/xml;q=0.9,*/*;q=0.8");
+  // Chrome asks for br and zstd; ask for what the service actually returns.
+  proxyReq.setHeader("accept-encoding", "gzip");
+}
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   // MapLibre loads its tile worker from a URL relative to its own module. Pre-bundling
@@ -71,6 +103,9 @@ export default defineConfig({
         changeOrigin: true,
         agent: landfireAgent,
         rewrite: (path) => path.replace(/^\/landfire/, "/geoserver/landfire"),
+        configure: (proxy) => {
+          proxy.on("proxyReq", presentAsThisApplication);
+        },
       },
     },
   },
