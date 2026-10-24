@@ -75,8 +75,12 @@ but not wired, unmarked = not started. Items are in dependency order within each
       helicopters and airtankers with daylight, wind and turnaround limits, first-alarm preset.
 - [ ] Use the CAL FIRE bases in the live drill: simulated responders start at real stations
       instead of the four approximate Chico points.
-- [ ] Licence decision for `tools/ca_fire_bases.json` (local-only now; the source layer states
-      no open licence). Ask CAL FIRE or use another dataset.
+- [ ] Licence decisions for local-only data: `tools/ca_fire_bases.json` (CAL FIRE layer, no open
+      licence) and `tools/people_facilities_butte_fixture.json` (CDPH, CDSS, CDE "Terms of Use" or
+      none). Ask the agencies or use other datasets.
+- [ ] A Camp-day population extract: the ACS fixture is 2018-2022 on 2020 block groups, so it
+      does not describe Paradise before the fire and won't join the Camp package; ACS 2014-2018
+      needs a Census API key (keyless requests were refused).
 - [ ] Suppression in the live drill: today it lives in Studio (browser); the live fire is a
       timeline. Decide whether live drills get suppression (crews changing the fire) or stay
       replay-only for fire.
