@@ -1,4 +1,5 @@
 import { useId, useState, type ReactNode } from "react";
+import { Button, Panel } from "../../ui";
 import type { World } from "../types";
 import { bearingDeg, compassName } from "./format";
 import {
@@ -38,9 +39,11 @@ export default function Legend({ world, defaultOpen }: LegendProps) {
   ];
 
   return (
-    <section className="dio-legend dio-panel" aria-label="Map legend" data-open={open}>
-      <button
-        type="button"
+    <Panel glass compact className="dio-legend" aria-label="Map legend">
+      <Button
+        variant="ghost"
+        size="sm"
+        block
         className="dio-legend-toggle"
         aria-expanded={open}
         aria-controls={listId}
@@ -48,10 +51,15 @@ export default function Legend({ world, defaultOpen }: LegendProps) {
       >
         <span>Legend</span>
         <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
-          <path d={open ? "M2.5 4.5 6 8l3.5-3.5" : "M2.5 7.5 6 4l3.5 3.5"} fill="none" stroke="currentColor" strokeWidth="1.5" />
+          <path
+            d={open ? "M2.5 4.5 6 8l3.5-3.5" : "M2.5 7.5 6 4l3.5 3.5"}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+          />
         </svg>
-      </button>
-      <ul id={listId} className="dio-legend-list" hidden={!open}>
+      </Button>
+      <ul id={listId} className="ui-legend dio-legend-list" hidden={!open}>
         {items.map((item) => (
           <li key={item.label}>
             {item.glyph}
@@ -59,6 +67,6 @@ export default function Legend({ world, defaultOpen }: LegendProps) {
           </li>
         ))}
       </ul>
-    </section>
+    </Panel>
   );
 }

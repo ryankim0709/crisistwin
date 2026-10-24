@@ -3,7 +3,10 @@ import {
   DeltaCell,
   EmptyResult,
   EvidenceTag,
+  Facts,
+  LinkButton,
   Metric,
+  MetricGrid,
   Panel,
   Tag,
   WorkspacePage,
@@ -38,7 +41,7 @@ function VariantRow({ variant }: { variant: Variant }) {
       <th scope="row">
         <strong>{variant.title}</strong>
         <div className="ui-help">{variant.question}</div>
-        <details className="variant-notes">
+        <details className="ws-variant-notes">
           <summary>What changed and caveats</summary>
           <ul>
             {shown.map((line) => (
@@ -128,7 +131,7 @@ function Comparison({ index }: { index: VariantsIndex }) {
 
   return (
     <>
-      <div className="ui-metrics">
+      <MetricGrid>
         <Metric
           label={`Baseline: vehicles out by ${when}`}
           value={fmt(base[ARRIVED_BY_1800.key] ?? null)}
@@ -144,14 +147,14 @@ function Comparison({ index }: { index: VariantsIndex }) {
           value={fmt(base.peak_blocked_veh ?? null)}
           detail="Simulated vehicles"
         />
-      </div>
+      </MetricGrid>
       <Panel
         title="What-if outcomes against the baseline"
         eyebrow="Computed results"
-        aside={<Tag tone="amber">Counterfactual, not history</Tag>}
+        aside={<Tag tone="warning">Counterfactual, not history</Tag>}
       >
         <div className="ui-table-scroll">
-          <table className="ui-table comparison-table">
+          <table className="ui-table ws-comparison-table">
             <caption>
               Each cell is the what-if value, then its change from the baseline. Higher is better
               for vehicles out; lower is better for exposure and blocked vehicles.
@@ -190,14 +193,7 @@ function Comparison({ index }: { index: VariantsIndex }) {
       </Panel>
       <div className="ui-columns">
         <Panel title="Same inputs for every run" eyebrow="Reproducibility">
-          <dl className="ui-facts">
-            {facts.map(([label, value]) => (
-              <div key={label}>
-                <dt>{label}</dt>
-                <dd>{value}</dd>
-              </div>
-            ))}
-          </dl>
+          <Facts items={facts.map(([label, value]) => ({ label, value }))} />
         </Panel>
         <Panel title="Limitations">
           {index.limitations.length > 0 ? (
@@ -224,9 +220,9 @@ export default function ComparisonPage() {
       title="Strategy comparison"
       description="Change one thing about the 2018 Camp Fire evacuation, then compare outcomes against the same starting conditions."
       action={
-        <a className="ui-button" href={replayHref(CAMP_ID, "&tab=whatif")}>
+        <LinkButton href={replayHref(CAMP_ID, "&tab=whatif")}>
           Open What if&hellip; on the map →
-        </a>
+        </LinkButton>
       }
     >
       {load.status !== "ready" ? (

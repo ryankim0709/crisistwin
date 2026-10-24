@@ -1,4 +1,5 @@
 import { memo, useMemo } from "react";
+import { IconButton, SegmentedControl } from "../ui";
 import { EVENT_CATEGORY_LABEL, EventGlyph } from "./parts";
 import { clockParts, eventCategory, eventTicks, formatAge } from "./timeline";
 import type { ReplayEvent } from "./types";
@@ -9,6 +10,11 @@ export const SPEEDS = [
   { value: 600, label: "10 min/s" },
   { value: 3600, label: "1 h/s" },
 ] as const;
+
+const SPEED_OPTIONS = SPEEDS.map((option) => ({
+  value: String(option.value),
+  label: option.label,
+}));
 
 /** Scrubber tick positions; dense event streams collapse into one tick per bucket and category. */
 const TICK_BUCKETS = 240;
@@ -22,7 +28,10 @@ const EventTicks = memo(function EventTicks({
   startMs: number;
   endMs: number;
 }) {
-  const ticks = useMemo(() => eventTicks(events, startMs, endMs, TICK_BUCKETS), [events, startMs, endMs]);
+  const ticks = useMemo(
+    () => eventTicks(events, startMs, endMs, TICK_BUCKETS),
+    [events, startMs, endMs],
+  );
   return (
     <div className="rp-ticks" aria-hidden="true">
       {ticks.map((tick) => (
@@ -30,7 +39,9 @@ const EventTicks = memo(function EventTicks({
           key={tick.key}
           className={`rp-tick rp-tick--${tick.category}`}
           style={{ left: `${tick.fraction * 100}%` }}
-          title={tick.count > 1 ? `${tick.count} × ${EVENT_CATEGORY_LABEL[tick.category]}` : tick.label}
+          title={
+            tick.count > 1 ? `${tick.count} × ${EVENT_CATEGORY_LABEL[tick.category]}` : tick.label
+          }
         >
           <EventGlyph category={tick.category} size={10} />
         </span>
@@ -97,60 +108,66 @@ export default function TimelineDock({
       <div className="rp-clock" aria-live="off">
         <Clock ms={simTimeMs} timeZone={timezone} label="Local" />
         <Clock ms={simTimeMs} timeZone="UTC" label="UTC" />
-        <span className="rp-clock-elapsed">T+{formatAge(simTimeMs - startMs)} on simulation clock</span>
+        <span className="rp-clock-elapsed">
+          T+{formatAge(simTimeMs - startMs)} on simulation clock
+        </span>
       </div>
 
       <div className="rp-dock-main">
         <div className="rp-controls">
-          <button type="button" className="rp-btn" onClick={onReset} aria-label="Reset to start" title="Reset (Home)">
-            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 3v10M13 3 6 8l7 5z" /></svg>
-          </button>
-          <button
-            type="button"
+          <IconButton
+            variant="secondary"
             className="rp-btn"
-            onClick={() => onStep(-1)}
-            aria-label={`Step back ${stepLabel}`}
-            title={`Step back ${stepLabel} (←)`}
+            label="Reset to start (Home)"
+            onClick={onReset}
           >
-            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3 2 8l6 5zM14 3 8 8l6 5z" /></svg>
-          </button>
-          <button
-            type="button"
+            <svg viewBox="0 0 16 16">
+              <path d="M3 3v10M13 3 6 8l7 5z" />
+            </svg>
+          </IconButton>
+          <IconButton
+            variant="secondary"
+            className="rp-btn"
+            label={`Step back ${stepLabel} (←)`}
+            onClick={() => onStep(-1)}
+          >
+            <svg viewBox="0 0 16 16">
+              <path d="M8 3 2 8l6 5zM14 3 8 8l6 5z" />
+            </svg>
+          </IconButton>
+          <IconButton
             className="rp-btn rp-btn--play"
+            label={playing ? "Pause (Space)" : "Play (Space)"}
             onClick={onTogglePlay}
-            aria-label={playing ? "Pause" : "Play"}
-            aria-pressed={playing}
-            title="Play / pause (Space)"
           >
             {playing ? (
-              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2h3v12H4zM9 2h3v12H9z" /></svg>
+              <svg viewBox="0 0 16 16">
+                <path d="M4 2h3v12H4zM9 2h3v12H9z" />
+              </svg>
             ) : (
-              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2l10 6-10 6z" /></svg>
+              <svg viewBox="0 0 16 16">
+                <path d="M4 2l10 6-10 6z" />
+              </svg>
             )}
-          </button>
-          <button
-            type="button"
+          </IconButton>
+          <IconButton
+            variant="secondary"
             className="rp-btn"
+            label={`Step forward ${stepLabel} (→)`}
             onClick={() => onStep(1)}
-            aria-label={`Step forward ${stepLabel}`}
-            title={`Step forward ${stepLabel} (→)`}
           >
-            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3l6 5-6 5zM2 3l6 5-6 5z" /></svg>
-          </button>
+            <svg viewBox="0 0 16 16">
+              <path d="M8 3l6 5-6 5zM2 3l6 5-6 5z" />
+            </svg>
+          </IconButton>
 
-          <div className="rp-speed" role="group" aria-label="Playback speed">
-            {SPEEDS.map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                className="rp-speed-btn"
-                aria-pressed={speed === option.value}
-                onClick={() => onSpeed(option.value)}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
+          <SegmentedControl
+            className="rp-speed"
+            label="Playback speed"
+            options={SPEED_OPTIONS}
+            value={String(speed)}
+            onChange={(value) => onSpeed(Number(value))}
+          />
         </div>
 
         <div className="rp-scrub">

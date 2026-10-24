@@ -71,7 +71,8 @@ function distanceToSegment(p: Vec2, a: Vec2, b: Vec2): number {
 
 export function distanceToPolyline(p: Vec2, points: Vec2[]): number {
   let best = Infinity;
-  for (let i = 1; i < points.length; i++) best = Math.min(best, distanceToSegment(p, points[i - 1], points[i]));
+  for (let i = 1; i < points.length; i++)
+    best = Math.min(best, distanceToSegment(p, points[i - 1], points[i]));
   return best;
 }
 
@@ -86,7 +87,10 @@ function curve(a: Vec2, b: Vec2, bend = 0, n = 10): Vec2[] {
   for (let i = 0; i <= n; i++) {
     const t = i / n;
     const u = 1 - t;
-    points.push({ x: u * u * a.x + 2 * u * t * cx + t * t * b.x, z: u * u * a.z + 2 * u * t * cz + t * t * b.z });
+    points.push({
+      x: u * u * a.x + 2 * u * t * cx + t * t * b.x,
+      z: u * u * a.z + 2 * u * t * cz + t * t * b.z,
+    });
   }
   return points;
 }
@@ -264,13 +268,49 @@ function buildWorld(): World {
   const rng = createRng(WORLD_SEED);
   const { buildings, households } = generateHomes(rng);
   buildings.push(
-    { id: "shelter", kind: "shelter", p: { x: 246, z: 86 }, rotation: Math.PI, w: 38, d: 24, h: 9, variant: 0 },
-    { id: "station", kind: "station", p: { x: -60, z: 146 }, rotation: Math.PI, w: 24, d: 16, h: 8, variant: 0 },
+    {
+      id: "shelter",
+      kind: "shelter",
+      p: { x: 246, z: 86 },
+      rotation: Math.PI,
+      w: 38,
+      d: 24,
+      h: 9,
+      variant: 0,
+    },
+    {
+      id: "station",
+      kind: "station",
+      p: { x: -60, z: 146 },
+      rotation: Math.PI,
+      w: 24,
+      d: 16,
+      h: 8,
+      variant: 0,
+    },
   );
   const stagings: Staging[] = [
-    { id: "east-flank", label: "East flank", p: { x: -18, z: -110 }, target: { x: -40, z: -126 }, nodeId: "SE" },
-    { id: "west-flank", label: "West flank", p: { x: -136, z: -118 }, target: { x: -118, z: -136 }, nodeId: "SW" },
-    { id: "ridge-lane", label: "Ridge Lane homes", p: { x: -46, z: -70 }, target: { x: -70, z: -88 }, nodeId: "U3" },
+    {
+      id: "east-flank",
+      label: "East flank",
+      p: { x: -18, z: -110 },
+      target: { x: -40, z: -126 },
+      nodeId: "SE",
+    },
+    {
+      id: "west-flank",
+      label: "West flank",
+      p: { x: -136, z: -118 },
+      target: { x: -118, z: -136 },
+      nodeId: "SW",
+    },
+    {
+      id: "ridge-lane",
+      label: "Ridge Lane homes",
+      p: { x: -46, z: -70 },
+      target: { x: -70, z: -88 },
+      nodeId: "U3",
+    },
   ];
   return {
     width: 640,

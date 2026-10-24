@@ -17,13 +17,23 @@ const MAX_SEGMENTS = 224;
  * [MIN, MAX], then capped so very steep areas stay plausible on a 600-unit board. It only
  * changes the drawing; the model's slope uses the true elevations.
  */
-export const VERTICAL_EXAGGERATION = { min: 1.6, max: 2.5, targetReliefUnits: 80, maxReliefUnits: 150 } as const;
+export const VERTICAL_EXAGGERATION = {
+  min: 1.6,
+  max: 2.5,
+  targetReliefUnits: 80,
+  maxReliefUnits: 150,
+} as const;
 /**
  * Regional boards (tens of km across) blend toward these: a smaller relief target so big
  * mountains (San Gorgonio 3.5 km next to a 100 m desert floor) stay at ~1.0-1.3x, a higher
  * ceiling so low coastal relief (Mt Diablo on a 100 km board) still reads, and a floor of 1x.
  */
-export const REGIONAL_EXAGGERATION = { min: 1.3, max: 7, targetReliefUnits: 58, maxAboveMedianUnits: 70 } as const;
+export const REGIONAL_EXAGGERATION = {
+  min: 1.3,
+  max: 7,
+  targetReliefUnits: 58,
+  maxAboveMedianUnits: 70,
+} as const;
 /** Metres per world unit over which the board blends from local to regional tuning. */
 export const REGIONAL_BLEND_METERS_PER_UNIT = [15, 100] as const;
 /** Metres per world unit over which urban areas blend from houses to ivory blocks + streets. */
@@ -76,8 +86,16 @@ export class BoardFrame {
     this.halfD = (this.rows * this.cellWorld) / 2;
     this.unitsPerMeter = grid ? this.cellWorld / grid.groundCellSizeMeters : 0.1;
     this.metersPerUnit = grid ? grid.groundCellSizeMeters / this.cellWorld : 10;
-    this.blockMix = THREE.MathUtils.smoothstep(this.metersPerUnit, BLOCK_BLEND_METERS_PER_UNIT[0], BLOCK_BLEND_METERS_PER_UNIT[1]);
-    this.regionalMix = THREE.MathUtils.smoothstep(this.metersPerUnit, REGIONAL_BLEND_METERS_PER_UNIT[0], REGIONAL_BLEND_METERS_PER_UNIT[1]);
+    this.blockMix = THREE.MathUtils.smoothstep(
+      this.metersPerUnit,
+      BLOCK_BLEND_METERS_PER_UNIT[0],
+      BLOCK_BLEND_METERS_PER_UNIT[1],
+    );
+    this.regionalMix = THREE.MathUtils.smoothstep(
+      this.metersPerUnit,
+      REGIONAL_BLEND_METERS_PER_UNIT[0],
+      REGIONAL_BLEND_METERS_PER_UNIT[1],
+    );
     const n = this.cols * this.rows;
     this.families = new Uint8Array(n);
     if (grid) for (let i = 0; i < n; i++) this.families[i] = fuelFamily(grid.fuelCodes[i]);
@@ -99,8 +117,13 @@ export class BoardFrame {
     const rg = REGIONAL_EXAGGERATION;
     const mix = this.regionalMix;
     const target = THREE.MathUtils.lerp(ve.targetReliefUnits, rg.targetReliefUnits, mix);
-    let exaggeration = THREE.MathUtils.clamp(target / trueRelief, THREE.MathUtils.lerp(ve.min, rg.min, mix), THREE.MathUtils.lerp(ve.max, rg.max, mix));
-    if (trueRelief * exaggeration > ve.maxReliefUnits) exaggeration = Math.max(1, ve.maxReliefUnits / trueRelief);
+    let exaggeration = THREE.MathUtils.clamp(
+      target / trueRelief,
+      THREE.MathUtils.lerp(ve.min, rg.min, mix),
+      THREE.MathUtils.lerp(ve.max, rg.max, mix),
+    );
+    if (trueRelief * exaggeration > ve.maxReliefUnits)
+      exaggeration = Math.max(1, ve.maxReliefUnits / trueRelief);
     if (mix > 0 && grid) {
       // Keep the tallest peak within ~70 units of the board's median surface (no spikes).
       const stride = Math.max(1, Math.floor(n / 20000));
@@ -125,7 +148,11 @@ export class BoardFrame {
     this.waterLevel = new Float32Array(this.heights.length);
     this.isWater = new Uint8Array(this.heights.length);
     this.waterFrac = new Float32Array(this.heights.length);
-    const depression = THREE.MathUtils.lerp(WATER_DEPRESSION, REGIONAL_WATER_DEPRESSION, this.regionalMix);
+    const depression = THREE.MathUtils.lerp(
+      WATER_DEPRESSION,
+      REGIONAL_WATER_DEPRESSION,
+      this.regionalMix,
+    );
     let maxH = 0;
     for (let j = 0; j <= this.segZ; j++) {
       const gz = (j / this.segZ) * this.rows - 0.5;
@@ -201,7 +228,10 @@ export class BoardFrame {
     if (!g) return null;
     const col = (mx - g.originX) / g.cellSizeX;
     const row = (my - g.originY) / g.cellSizeY;
-    return { x: (col + 0.5 - this.cols / 2) * this.cellWorld, z: (row + 0.5 - this.rows / 2) * this.cellWorld };
+    return {
+      x: (col + 0.5 - this.cols / 2) * this.cellWorld,
+      z: (row + 0.5 - this.rows / 2) * this.cellWorld,
+    };
   }
 
   inside(x: number, z: number) {
@@ -210,8 +240,16 @@ export class BoardFrame {
 
   /** Terrain surface height at (x, z), exactly on the mesh triangles. */
   heightAt(x: number, z: number): number {
-    const fx = THREE.MathUtils.clamp(((x + this.halfW) / (2 * this.halfW)) * this.segX, 0, this.segX - 1e-6);
-    const fz = THREE.MathUtils.clamp(((z + this.halfD) / (2 * this.halfD)) * this.segZ, 0, this.segZ - 1e-6);
+    const fx = THREE.MathUtils.clamp(
+      ((x + this.halfW) / (2 * this.halfW)) * this.segX,
+      0,
+      this.segX - 1e-6,
+    );
+    const fz = THREE.MathUtils.clamp(
+      ((z + this.halfD) / (2 * this.halfD)) * this.segZ,
+      0,
+      this.segZ - 1e-6,
+    );
     const i = Math.floor(fx);
     const j = Math.floor(fz);
     const u = fx - i;
@@ -222,14 +260,20 @@ export class BoardFrame {
     const h01 = this.heights[(j + 1) * vx + i];
     const h11 = this.heights[(j + 1) * vx + i + 1];
     // Diagonal from (0,0) to (1,1), matching the mesh index order.
-    return u >= v ? h00 + (h10 - h00) * u + (h11 - h10) * v : h00 + (h11 - h01) * u + (h01 - h00) * v;
+    return u >= v
+      ? h00 + (h10 - h00) * u + (h11 - h10) * v
+      : h00 + (h11 - h01) * u + (h01 - h00) * v;
   }
 
   /** Height of whatever is visible at (x, z): water surface over water, else terrain. */
   surfaceAt(x: number, z: number): number {
     const t = this.heightAt(x, z);
-    const fx = Math.round(THREE.MathUtils.clamp(((x + this.halfW) / (2 * this.halfW)) * this.segX, 0, this.segX));
-    const fz = Math.round(THREE.MathUtils.clamp(((z + this.halfD) / (2 * this.halfD)) * this.segZ, 0, this.segZ));
+    const fx = Math.round(
+      THREE.MathUtils.clamp(((x + this.halfW) / (2 * this.halfW)) * this.segX, 0, this.segX),
+    );
+    const fz = Math.round(
+      THREE.MathUtils.clamp(((z + this.halfD) / (2 * this.halfD)) * this.segZ, 0, this.segZ),
+    );
     const v = fz * (this.segX + 1) + fx;
     return this.isWater[v] ? Math.max(t, this.waterLevel[v]) : t;
   }
@@ -267,7 +311,10 @@ function makeTexture(data: Uint8Array, w: number, h: number, mipmaps: boolean): 
  * texture's alpha channel carries the urban mask (255 on urban cells) for the terrain
  * shader's block/street layer; the terrain material is opaque, so it is never blended.
  */
-export function buildGroundTextures(frame: BoardFrame): { ground: THREE.DataTexture; overlay: THREE.DataTexture } {
+export function buildGroundTextures(frame: BoardFrame): {
+  ground: THREE.DataTexture;
+  overlay: THREE.DataTexture;
+} {
   const { cols, rows, families, grid } = frame;
   const ground = new Uint8Array(cols * rows * 4);
   const overlay = new Uint8Array(cols * rows * 4);
@@ -299,14 +346,18 @@ export function buildGroundTextures(frame: BoardFrame): { ground: THREE.DataText
         const mottle = hash2(Math.floor(c / 9) * 0.71, Math.floor(r / 9) * 1.37);
         tmpA.multiplyScalar(0.95 + mottle * 0.08 + (hash2(c * 0.37, r * 0.53) - 0.5) * 0.04);
         const cover = grid.canopyCoverFraction[i] || 0;
-        if (cover > 0 && fam !== FuelFamily.Urban && fam !== FuelFamily.Water) tmpA.lerp(forest, Math.min(0.35, cover * 0.4));
+        if (cover > 0 && fam !== FuelFamily.Urban && fam !== FuelFamily.Water)
+          tmpA.lerp(forest, Math.min(0.35, cover * 0.4));
       }
       putColor(ground, i, tmpA, fam === FuelFamily.Urban ? 255 : 0);
       tmpB.set(OVERLAY_COLORS[fam]);
       putColor(overlay, i, tmpB);
     }
   }
-  return { ground: makeTexture(ground, cols, rows, true), overlay: makeTexture(overlay, cols, rows, true) };
+  return {
+    ground: makeTexture(ground, cols, rows, true),
+    overlay: makeTexture(overlay, cols, rows, true),
+  };
 }
 
 // ---------------------------------------------------------------------------------------
@@ -357,7 +408,11 @@ function arrivalTexture(data: Float32Array, w: number, h: number) {
  * Packs `arrivalMinutes` (row-major, Infinity = never) into a float texture; arrivals past
  * `horizon` count as never, matching the model's frames.
  */
-export function buildArrivalTexture(frame: BoardFrame, arrival: Float32Array, horizon: number): { tex: THREE.DataTexture; factor: number } {
+export function buildArrivalTexture(
+  frame: BoardFrame,
+  arrival: Float32Array,
+  horizon: number,
+): { tex: THREE.DataTexture; factor: number } {
   const factor = Math.max(1, Math.ceil(Math.max(frame.cols, frame.rows) / MAX_FIRE_TEXTURE));
   const w = Math.ceil(frame.cols / factor);
   const h = Math.ceil(frame.rows / factor);
@@ -586,15 +641,24 @@ export function attachFireShader(material: THREE.MeshStandardMaterial, uniforms:
   material.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
     shader.vertexShader = shader.vertexShader
-      .replace("#include <common>", "#include <common>\nvarying vec2 vFireXZ;\nvarying float vFireY;")
-      .replace("#include <begin_vertex>", "#include <begin_vertex>\nvFireXZ = (modelMatrix * vec4(transformed, 1.0)).xz;\nvFireY = transformed.y;");
+      .replace(
+        "#include <common>",
+        "#include <common>\nvarying vec2 vFireXZ;\nvarying float vFireY;",
+      )
+      .replace(
+        "#include <begin_vertex>",
+        "#include <begin_vertex>\nvFireXZ = (modelMatrix * vec4(transformed, 1.0)).xz;\nvFireY = transformed.y;",
+      );
     shader.fragmentShader = shader.fragmentShader
       .replace("#include <common>", `#include <common>\n${FIRE_GLSL}`)
       .replace(
         "#include <color_fragment>",
         "#include <color_fragment>\ndiffuseColor.rgb = applyUrban(diffuseColor.rgb, diffuseColor.a, fwidth(vFireXZ));\ndiffuseColor.rgb = applyRelief(diffuseColor.rgb);\ndiffuseColor.rgb = mix(diffuseColor.rgb, texture2D(uOverlayTex, vMapUv).rgb, uOverlay * 0.88);\nvec3 fireEmissive = applyFire(diffuseColor.rgb);",
       )
-      .replace("#include <emissivemap_fragment>", "#include <emissivemap_fragment>\ntotalEmissiveRadiance += fireEmissive;");
+      .replace(
+        "#include <emissivemap_fragment>",
+        "#include <emissivemap_fragment>\ntotalEmissiveRadiance += fireEmissive;",
+      );
   };
   material.customProgramCacheKey = () => "fire-diorama-terrain";
 }
@@ -603,7 +667,11 @@ export function attachFireShader(material: THREE.MeshStandardMaterial, uniforms:
 // Meshes
 
 /** Faceted terrain with the ground texture, fuel overlay and fire in its material. */
-export function buildTerrain(frame: BoardFrame, ground: THREE.Texture, uniforms: FireUniforms): THREE.Mesh {
+export function buildTerrain(
+  frame: BoardFrame,
+  ground: THREE.Texture,
+  uniforms: FireUniforms,
+): THREE.Mesh {
   const { segX, segZ, halfW, halfD, heights } = frame;
   const vx = segX + 1;
   const count = vx * (segZ + 1);
@@ -642,7 +710,12 @@ export function buildTerrain(frame: BoardFrame, ground: THREE.Texture, uniforms:
   g.setIndex(new THREE.BufferAttribute(index, 1));
   g.computeVertexNormals();
   g.computeBoundingSphere();
-  const material = new THREE.MeshStandardMaterial({ map: ground, roughness: 0.96, metalness: 0, flatShading: true });
+  const material = new THREE.MeshStandardMaterial({
+    map: ground,
+    roughness: 0.96,
+    metalness: 0,
+    flatShading: true,
+  });
   attachFireShader(material, uniforms);
   const mesh = new THREE.Mesh(g, material);
   mesh.receiveShadow = true;
@@ -658,7 +731,17 @@ export function buildPlinth(frame: BoardFrame): THREE.Group {
   const positions: number[] = [];
   const colors: number[] = [];
   const c = new THREE.Color();
-  const quad = (ax: number, az: number, bx: number, bz: number, ya0: number, ya1: number, yb0: number, yb1: number, col: number) => {
+  const quad = (
+    ax: number,
+    az: number,
+    bx: number,
+    bz: number,
+    ya0: number,
+    ya1: number,
+    yb0: number,
+    yb1: number,
+    col: number,
+  ) => {
     c.set(col);
     positions.push(ax, ya0, az, bx, yb0, bz, bx, yb1, bz, ax, ya0, az, bx, yb1, bz, ax, ya1, az);
     for (let n = 0; n < 6; n++) colors.push(c.r, c.g, c.b);
@@ -673,10 +756,42 @@ export function buildPlinth(frame: BoardFrame): THREE.Group {
   const vx = segX + 1;
   // Each side walks the edge vertices of the height lattice.
   const sides: { n: number; at: (s: number) => [number, number, number, number] }[] = [
-    { n: segX, at: (s) => [-halfW + (s / segX) * 2 * halfW, -halfD, frame.heights[s], frame.waterLevel[s] * frame.isWater[s]] },
-    { n: segZ, at: (s) => [halfW, -halfD + (s / segZ) * 2 * halfD, frame.heights[s * vx + segX], frame.waterLevel[s * vx + segX] * frame.isWater[s * vx + segX]] },
-    { n: segX, at: (s) => [halfW - (s / segX) * 2 * halfW, halfD, frame.heights[segZ * vx + segX - s], frame.waterLevel[segZ * vx + segX - s] * frame.isWater[segZ * vx + segX - s]] },
-    { n: segZ, at: (s) => [-halfW, halfD - (s / segZ) * 2 * halfD, frame.heights[(segZ - s) * vx], frame.waterLevel[(segZ - s) * vx] * frame.isWater[(segZ - s) * vx]] },
+    {
+      n: segX,
+      at: (s) => [
+        -halfW + (s / segX) * 2 * halfW,
+        -halfD,
+        frame.heights[s],
+        frame.waterLevel[s] * frame.isWater[s],
+      ],
+    },
+    {
+      n: segZ,
+      at: (s) => [
+        halfW,
+        -halfD + (s / segZ) * 2 * halfD,
+        frame.heights[s * vx + segX],
+        frame.waterLevel[s * vx + segX] * frame.isWater[s * vx + segX],
+      ],
+    },
+    {
+      n: segX,
+      at: (s) => [
+        halfW - (s / segX) * 2 * halfW,
+        halfD,
+        frame.heights[segZ * vx + segX - s],
+        frame.waterLevel[segZ * vx + segX - s] * frame.isWater[segZ * vx + segX - s],
+      ],
+    },
+    {
+      n: segZ,
+      at: (s) => [
+        -halfW,
+        halfD - (s / segZ) * 2 * halfD,
+        frame.heights[(segZ - s) * vx],
+        frame.waterLevel[(segZ - s) * vx] * frame.isWater[(segZ - s) * vx],
+      ],
+    },
   ];
   for (const side of sides) {
     for (let s = 0; s < side.n; s++) {
@@ -684,16 +799,26 @@ export function buildPlinth(frame: BoardFrame): THREE.Group {
       const [bx, bz, hb, wb] = side.at(s + 1);
       const la = levels(ha);
       const lb = levels(hb);
-      for (let n = 0; n < 4; n++) quad(ax, az, bx, bz, la[n + 1], la[n], lb[n + 1], lb[n], bands[n]);
+      for (let n = 0; n < 4; n++)
+        quad(ax, az, bx, bz, la[n + 1], la[n], lb[n + 1], lb[n], bands[n]);
       // Resin "water" where open water meets the cut edge.
-      if (wa > ha || wb > hb) quad(ax, az, bx, bz, ha, Math.max(wa, ha), hb, Math.max(wb, hb), PALETTE.waterSide);
+      if (wa > ha || wb > hb)
+        quad(ax, az, bx, bz, ha, Math.max(wa, ha), hb, Math.max(wb, hb), PALETTE.waterSide);
     }
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
   g.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
   g.computeVertexNormals();
-  const sidesMesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, side: THREE.DoubleSide, flatShading: true }));
+  const sidesMesh = new THREE.Mesh(
+    g,
+    new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      roughness: 1,
+      side: THREE.DoubleSide,
+      flatShading: true,
+    }),
+  );
   sidesMesh.receiveShadow = true;
   group.add(sidesMesh);
 
@@ -788,7 +913,11 @@ function buildWaterMask(frame: BoardFrame): THREE.DataTexture {
  * (sea level for the Bay and ocean). The mask in the shader cuts the shoreline; the terrain
  * under water is pressed down so it never pokes through.
  */
-export function buildWater(frame: BoardFrame): { mesh: THREE.Mesh | null; uniforms: { uTime: { value: number } }; mask: THREE.Texture | null } {
+export function buildWater(frame: BoardFrame): {
+  mesh: THREE.Mesh | null;
+  uniforms: { uTime: { value: number } };
+  mask: THREE.Texture | null;
+} {
   const { segX, segZ, halfW, halfD, waterFrac, waterLevel } = frame;
   const vx = segX + 1;
   const positions: number[] = [];
@@ -825,7 +954,10 @@ export function buildWater(frame: BoardFrame): { mesh: THREE.Mesh | null; unifor
   const u = uniforms as unknown as Record<string, { value: unknown }>;
   u.uMask.value = mask;
   // Mip bias so the shore gradient spans ~6 and ~30 world units whatever the cell size.
-  (u.uBias.value as THREE.Vector2).set(THREE.MathUtils.clamp(Math.log2(6 / frame.cellWorld), 0, 6), THREE.MathUtils.clamp(Math.log2(30 / frame.cellWorld), 0, 8));
+  (u.uBias.value as THREE.Vector2).set(
+    THREE.MathUtils.clamp(Math.log2(6 / frame.cellWorld), 0, 6),
+    THREE.MathUtils.clamp(Math.log2(30 / frame.cellWorld), 0, 8),
+  );
   const g = new THREE.BufferGeometry();
   g.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
   const material = new THREE.ShaderMaterial({

@@ -222,7 +222,10 @@ function fireThrough(
           {
             type: "Feature" as const,
             properties: {},
-            geometry: { type: "LineString" as const, coordinates: labelPath(polygon.geometry.coordinates[0]) },
+            geometry: {
+              type: "LineString" as const,
+              coordinates: labelPath(polygon.geometry.coordinates[0]),
+            },
           },
         ]
       : [],
@@ -411,7 +414,8 @@ export default function SatelliteFireMap({
         // As in the replay: imagery under the place labels (so it sits above the hillshade and
         // roads), and the fire layers added after it, under the same labels.
         const beforeId =
-          layers.find((l) => l.id.startsWith("place_"))?.id ?? layers.find((l) => l.type === "symbol")?.id;
+          layers.find((l) => l.id.startsWith("place_"))?.id ??
+          layers.find((l) => l.type === "symbol")?.id;
         if (imagerySrc) {
           map.addSource(IMAGERY_LAYER, imagerySrc);
           map.addLayer(
@@ -420,7 +424,11 @@ export default function SatelliteFireMap({
               type: "raster",
               source: IMAGERY_LAYER,
               // Same paint as replay/mapLayers.ts.
-              paint: { "raster-brightness-max": 0.75, "raster-saturation": -0.25, "raster-fade-duration": 0 },
+              paint: {
+                "raster-brightness-max": 0.75,
+                "raster-saturation": -0.25,
+                "raster-fade-duration": 0,
+              },
             },
             beforeId,
           );
@@ -448,26 +456,42 @@ export default function SatelliteFireMap({
           beforeId,
         );
         // The loaded region's extent, so the framed view reads as a region (replay "sim-area" style).
-        map.addSource(REGION_SOURCE, { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+        map.addSource(REGION_SOURCE, {
+          type: "geojson",
+          data: { type: "FeatureCollection", features: [] },
+        });
         map.addLayer(
           {
             id: "fire-region-line",
             type: "line",
             source: REGION_SOURCE,
-            paint: { "line-color": "#c3cdd6", "line-opacity": 0.55, "line-width": 1.2, "line-dasharray": [4, 3] },
+            paint: {
+              "line-color": "#c3cdd6",
+              "line-opacity": 0.55,
+              "line-width": 1.2,
+              "line-dasharray": [4, 3],
+            },
           },
           beforeId,
         );
         // Layer recipe follows the replay's satellite fire (replay/mapLayers.ts).
         map.addSource(PERIMETER_SOURCE, { type: "geojson", data: EMPTY });
         map.addSource(BURNED_SOURCE, { type: "geojson", data: EMPTY });
-        map.addSource(EDGE_SOURCE, { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+        map.addSource(EDGE_SOURCE, {
+          type: "geojson",
+          data: { type: "FeatureCollection", features: [] },
+        });
         map.addLayer(
           {
             id: "fire-glow-outer",
             type: "line",
             source: PERIMETER_SOURCE,
-            paint: { "line-color": COLORS.emberDeep, "line-width": 16, "line-blur": 10, "line-opacity": 0.75 },
+            paint: {
+              "line-color": COLORS.emberDeep,
+              "line-width": 16,
+              "line-blur": 10,
+              "line-opacity": 0.75,
+            },
           },
           beforeId,
         );
@@ -494,7 +518,12 @@ export default function SatelliteFireMap({
             id: "fire-glow",
             type: "line",
             source: PERIMETER_SOURCE,
-            paint: { "line-color": COLORS.ember, "line-width": 5, "line-blur": 2, "line-opacity": 0.95 },
+            paint: {
+              "line-color": COLORS.ember,
+              "line-width": 5,
+              "line-blur": 2,
+              "line-opacity": 0.95,
+            },
           },
           beforeId,
         );

@@ -7,14 +7,7 @@ import { SATELLITE_STYLE } from "../maps/basemap";
 import { BASEMAP_BACKGROUND, SATELLITE_BACKGROUND } from "./basemapStyle";
 import { ignitionBasis } from "./timeline";
 import { REFUGE_KIND, refugeStateAt, traCode, type RefugeTimeline } from "./refuges";
-import type {
-  LngLat,
-  Perimeter,
-  ReplayModel,
-  SimulatedFront,
-  TrafficFrame,
-  Zone,
-} from "./types";
+import type { LngLat, Perimeter, ReplayModel, SimulatedFront, TrafficFrame, Zone } from "./types";
 
 /** Free OpenFreeMap dark basemap; no API key. */
 export const BASEMAP_STYLE_URL = "https://tiles.openfreemap.org/styles/dark";
@@ -30,7 +23,9 @@ export const FALLBACK_STYLE: BasemapStyle = {
   version: 8,
   glyphs: FALLBACK_GLYPHS_URL,
   sources: {},
-  layers: [{ id: "background", type: "background", paint: { "background-color": BASEMAP_BACKGROUND } }],
+  layers: [
+    { id: "background", type: "background", paint: { "background-color": BASEMAP_BACKGROUND } },
+  ],
 };
 
 export type Basemap = "dark" | "satellite";
@@ -48,7 +43,11 @@ function imagerySource() {
 
 export function setBasemap(map: MapLibreMap, basemap: Basemap): void {
   if (map.getLayer(IMAGERY_LAYER)) {
-    map.setLayoutProperty(IMAGERY_LAYER, "visibility", basemap === "satellite" ? "visible" : "none");
+    map.setLayoutProperty(
+      IMAGERY_LAYER,
+      "visibility",
+      basemap === "satellite" ? "visible" : "none",
+    );
   }
   // Mid-grey rather than black where imagery tiles have not arrived yet.
   if (map.getLayer("background")) {
@@ -69,7 +68,16 @@ export function simAreaCollection(model: ReplayModel): FeatureCollection {
       {
         type: "Feature",
         properties: {},
-        geometry: { type: "LineString", coordinates: [[w, s], [e, s], [e, n], [w, n], [w, s]] },
+        geometry: {
+          type: "LineString",
+          coordinates: [
+            [w, s],
+            [e, s],
+            [e, n],
+            [w, n],
+            [w, s],
+          ],
+        },
       },
       // Label anchored at the north-west corner, just outside the outline.
       {
@@ -318,8 +326,10 @@ export function applyClosedState(
     const ri = trafficToRoad[ti];
     if (ri !== undefined && ri >= 0) next.add(ri);
   }
-  for (const ri of next) if (!previous.has(ri)) map.setFeatureState({ source: "roads", id: ri }, { closed: true });
-  for (const ri of previous) if (!next.has(ri)) map.setFeatureState({ source: "roads", id: ri }, { closed: false });
+  for (const ri of next)
+    if (!previous.has(ri)) map.setFeatureState({ source: "roads", id: ri }, { closed: true });
+  for (const ri of previous)
+    if (!next.has(ri)) map.setFeatureState({ source: "roads", id: ri }, { closed: false });
   return next;
 }
 
@@ -342,11 +352,15 @@ export function applyTrafficFrame(
     if (ri === undefined || ri < 0) continue;
     const cls = roadClass(closed.has(ti), veh, speed, roads[ri].speedKph);
     const ratio = roads[ri].speedKph > 0 ? Math.min(1, speed / roads[ri].speedKph) : 1;
-    map.setFeatureState({ source: "roads", id: ri }, { veh, speed, ratio, cls: ROAD_CLASS_CODE[cls] });
+    map.setFeatureState(
+      { source: "roads", id: ri },
+      { veh, speed, ratio, cls: ROAD_CLASS_CODE[cls] },
+    );
     next.add(ri);
   }
   for (const ri of previous) {
-    if (!next.has(ri)) map.setFeatureState({ source: "roads", id: ri }, { veh: 0, speed: null, cls: 0 });
+    if (!next.has(ri))
+      map.setFeatureState({ source: "roads", id: ri }, { veh: 0, speed: null, cls: 0 });
   }
   return next;
 }
@@ -368,7 +382,12 @@ export function peopleCollection(model: ReplayModel): FeatureCollection {
       type: "Feature",
       id: i,
       geometry: zone.geometry,
-      properties: { name: zone.name, households: zone.households, population: zone.population, vehicles: zone.vehicles },
+      properties: {
+        name: zone.name,
+        households: zone.households,
+        population: zone.population,
+        vehicles: zone.vehicles,
+      },
     })),
   };
 }
@@ -382,7 +401,9 @@ export function applyPeopleState(
   rows.forEach((row, i) => {
     map.setFeatureState(
       { source: "people", id: i },
-      row ? { density: row.density, home: row.home, left: row.left } : { density: 0, home: null, left: null },
+      row
+        ? { density: row.density, home: row.home, left: row.left }
+        : { density: 0, home: null, left: null },
     );
   });
 }
@@ -414,7 +435,11 @@ export function zonesCollection(
 }
 
 /** Destinations with their own evidence class; refuges carry their open state at time t. */
-export function destinationsCollection(model: ReplayModel, refuges: RefugeTimeline, t: number): FeatureCollection {
+export function destinationsCollection(
+  model: ReplayModel,
+  refuges: RefugeTimeline,
+  t: number,
+): FeatureCollection {
   return {
     type: "FeatureCollection",
     features: (model.destinations?.items ?? []).map((d) => ({
@@ -540,11 +565,13 @@ export function setPerimeterFreshness(map: MapLibreMap, ageMs: number, provision
   const hours = Math.max(0, ageMs / 3_600_000);
   const freshness = Math.max(0.45, 1 - hours / 24);
   // Provisional (inside a half-day composite's window): dotted outline, faint fill, no glow.
-  if (map.getLayer("fire-fill")) map.setPaintProperty("fire-fill", "fill-opacity", provisional ? 0.12 : 0.32 * freshness);
+  if (map.getLayer("fire-fill"))
+    map.setPaintProperty("fire-fill", "fill-opacity", provisional ? 0.12 : 0.32 * freshness);
   if (map.getLayer("fire-glow-outer")) {
     map.setPaintProperty("fire-glow-outer", "line-opacity", provisional ? 0 : 0.5 * freshness);
   }
-  if (map.getLayer("fire-glow")) map.setPaintProperty("fire-glow", "line-opacity", provisional ? 0 : 0.6);
+  if (map.getLayer("fire-glow"))
+    map.setPaintProperty("fire-glow", "line-opacity", provisional ? 0 : 0.6);
   if (map.getLayer("fire-line")) {
     map.setPaintProperty("fire-line", "line-dasharray", provisional ? [1, 3] : [3, 2]);
     map.setPaintProperty("fire-line", "line-opacity", provisional ? 0.6 : 1);
@@ -558,14 +585,20 @@ export function setPerimeterLabel(map: MapLibreMap, text: string): void {
 
 /** Cosmetic flicker of the model fire edge and pulse of ordered-zone hatching; `t` in ms. */
 export function setFireFlicker(map: MapLibreMap, t: number): void {
-  const flicker = 0.5 + 0.25 * Math.sin(t / 130) + 0.15 * Math.sin(t / 53) + 0.1 * Math.sin(t / 311);
+  const flicker =
+    0.5 + 0.25 * Math.sin(t / 130) + 0.15 * Math.sin(t / 53) + 0.1 * Math.sin(t / 311);
   if (map.getLayer("sim-edge-glow")) {
     map.setPaintProperty("sim-edge-glow", "line-opacity", 0.4 + 0.35 * flicker);
     map.setPaintProperty("sim-edge-glow", "line-width", 18 + 8 * flicker);
   }
-  if (map.getLayer("sim-edge-mid")) map.setPaintProperty("sim-edge-mid", "line-opacity", 0.7 + 0.3 * flicker);
+  if (map.getLayer("sim-edge-mid"))
+    map.setPaintProperty("sim-edge-mid", "line-opacity", 0.7 + 0.3 * flicker);
   if (map.getLayer("zones-hatch")) {
-    map.setPaintProperty("zones-hatch", "fill-opacity", ZONE_HATCH_OPACITY * (0.6 + 0.4 * Math.sin(t / 900)));
+    map.setPaintProperty(
+      "zones-hatch",
+      "fill-opacity",
+      ZONE_HATCH_OPACITY * (0.6 + 0.4 * Math.sin(t / 900)),
+    );
   }
 }
 
@@ -593,7 +626,8 @@ export function applyThreatState(
     if (ri !== undefined && ri >= 0) next.set(ri, Math.max(code, next.get(ri) ?? 0));
   }
   for (const [ri, code] of next) {
-    if (previous.get(ri) !== code) map.setFeatureState({ source: "roads", id: ri }, { threat: code });
+    if (previous.get(ri) !== code)
+      map.setFeatureState({ source: "roads", id: ri }, { threat: code });
   }
   for (const ri of previous.keys()) {
     if (!next.has(ri)) map.setFeatureState({ source: "roads", id: ri }, { threat: 0 });
@@ -675,7 +709,11 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
         type: "raster",
         source: IMAGERY_LAYER,
         layout: { visibility: "none" },
-        paint: { "raster-brightness-max": 0.75, "raster-saturation": -0.25, "raster-fade-duration": 0 },
+        paint: {
+          "raster-brightness-max": 0.75,
+          "raster-saturation": -0.25,
+          "raster-fade-duration": 0,
+        },
       },
       labels,
     );
@@ -686,7 +724,12 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     type: "line",
     source: "sim-area",
     filter: ["==", ["geometry-type"], "LineString"],
-    paint: { "line-color": "#c3cdd6", "line-opacity": 0.55, "line-width": 1.2, "line-dasharray": [4, 3] },
+    paint: {
+      "line-color": "#c3cdd6",
+      "line-opacity": 0.55,
+      "line-width": 1.2,
+      "line-dasharray": [4, 3],
+    },
   });
   // Zoomed in, the corner label is off-screen: repeat a short tag along the outline.
   map.addLayer({
@@ -703,7 +746,12 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
       "text-size": 10.5,
       "text-offset": [0, -0.8],
     },
-    paint: { "text-color": "#c3cdd6", "text-halo-color": "#0a0e13", "text-halo-width": 1.6, "text-opacity": 0.8 },
+    paint: {
+      "text-color": "#c3cdd6",
+      "text-halo-color": "#0a0e13",
+      "text-halo-width": 1.6,
+      "text-opacity": 0.8,
+    },
   });
   map.addLayer({
     id: "sim-area-label",
@@ -720,9 +768,15 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
       "text-allow-overlap": true,
       "text-ignore-placement": true,
     },
-    paint: { "text-color": "#c3cdd6", "text-halo-color": "#0a0e13", "text-halo-width": 1.6, "text-opacity": 0.85 },
+    paint: {
+      "text-color": "#c3cdd6",
+      "text-halo-color": "#0a0e13",
+      "text-halo-width": 1.6,
+      "text-opacity": 0.85,
+    },
   });
-  if (!map.hasImage(ZONE_HATCH_IMAGE)) map.addImage(ZONE_HATCH_IMAGE, hatchImage([195, 205, 214], 60, 14));
+  if (!map.hasImage(ZONE_HATCH_IMAGE))
+    map.addImage(ZONE_HATCH_IMAGE, hatchImage([195, 205, 214], 60, 14));
 
   // People at home: households still home per km², a neutral grey-to-white ramp (never warm,
   // never cyan) under everything else. Density arrives as feature-state from ReplayMap.
@@ -814,7 +868,12 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     id: "sim-edge-glow",
     type: "line",
     source: "sim-front",
-    paint: { "line-color": COLORS.emberDeep, "line-width": 16, "line-blur": 10, "line-opacity": 0.75 },
+    paint: {
+      "line-color": COLORS.emberDeep,
+      "line-width": 16,
+      "line-blur": 10,
+      "line-opacity": 0.75,
+    },
   });
   map.addLayer({
     id: "sim-edge-mid",
@@ -847,7 +906,12 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     id: "fire-glow-outer",
     type: "line",
     source: "fire",
-    paint: { "line-color": COLORS.emberDeep, "line-width": 18, "line-blur": 14, "line-opacity": 0.5 },
+    paint: {
+      "line-color": COLORS.emberDeep,
+      "line-width": 18,
+      "line-blur": 14,
+      "line-opacity": 0.5,
+    },
   });
   map.addLayer({
     id: "fire-fill",
@@ -876,7 +940,15 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     layout: { "line-cap": "round", "line-join": "round" },
     paint: {
       // Minor (residential) roads fade in at zoom 12; flow and closure layers still show them.
-      "line-opacity": ["interpolate", ["linear"], ["zoom"], 11.5, ["case", ["get", "major"], 1, 0], 12.5, 1],
+      "line-opacity": [
+        "interpolate",
+        ["linear"],
+        ["zoom"],
+        11.5,
+        ["case", ["get", "major"], 1, 0],
+        12.5,
+        1,
+      ],
       "line-color": ["case", ["get", "major"], COLORS.networkMajor, COLORS.network],
       "line-width": [
         "interpolate",
@@ -895,7 +967,12 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     source: "roads",
     minzoom: 11,
     filter: ["==", ["get", "bridge"], true],
-    paint: { "line-color": COLORS.bridge, "line-width": 1, "line-gap-width": 6, "line-opacity": 0.8 },
+    paint: {
+      "line-color": COLORS.bridge,
+      "line-width": 1,
+      "line-gap-width": 6,
+      "line-opacity": 0.8,
+    },
   });
   // Congestion: continuous red -> amber -> green by speed ratio, width by vehicle count,
   // with a soft glow underneath so busy corridors pop.
@@ -905,8 +982,39 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     source: "roads",
     layout: { "line-cap": "round", "line-join": "round" },
     paint: {
-      "line-color": ["case", ["==", ["coalesce", ["feature-state", "cls"], 0], 4], COLORS.closed, ["interpolate", ["linear"], ["coalesce", ["feature-state", "ratio"], 1], 0, COLORS.jam, CONGESTION_SLOW_RATIO, COLORS.jam, CONGESTION_FREE_RATIO, COLORS.slow, 0.9, COLORS.free]],
-      "line-width": ["interpolate", ["linear"], ["coalesce", ["feature-state", "veh"], 0], 0, 0, 1, 6, 20, 10, 80, 16, 250, 24],
+      "line-color": [
+        "case",
+        ["==", ["coalesce", ["feature-state", "cls"], 0], 4],
+        COLORS.closed,
+        [
+          "interpolate",
+          ["linear"],
+          ["coalesce", ["feature-state", "ratio"], 1],
+          0,
+          COLORS.jam,
+          CONGESTION_SLOW_RATIO,
+          COLORS.jam,
+          CONGESTION_FREE_RATIO,
+          COLORS.slow,
+          0.9,
+          COLORS.free,
+        ],
+      ],
+      "line-width": [
+        "interpolate",
+        ["linear"],
+        ["coalesce", ["feature-state", "veh"], 0],
+        0,
+        0,
+        1,
+        6,
+        20,
+        10,
+        80,
+        16,
+        250,
+        24,
+      ],
       "line-blur": 8,
       "line-opacity": ["case", [">", ["coalesce", ["feature-state", "veh"], 0], 0], 0.32, 0],
       "line-offset": 1.4,
@@ -918,8 +1026,39 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     source: "roads",
     layout: { "line-cap": "round", "line-join": "round" },
     paint: {
-      "line-color": ["case", ["==", ["coalesce", ["feature-state", "cls"], 0], 4], COLORS.closed, ["interpolate", ["linear"], ["coalesce", ["feature-state", "ratio"], 1], 0, COLORS.jam, CONGESTION_SLOW_RATIO, COLORS.jam, CONGESTION_FREE_RATIO, COLORS.slow, 0.9, COLORS.free]],
-      "line-width": ["interpolate", ["linear"], ["coalesce", ["feature-state", "veh"], 0], 0, 0, 1, 2.2, 20, 4, 80, 7, 250, 11],
+      "line-color": [
+        "case",
+        ["==", ["coalesce", ["feature-state", "cls"], 0], 4],
+        COLORS.closed,
+        [
+          "interpolate",
+          ["linear"],
+          ["coalesce", ["feature-state", "ratio"], 1],
+          0,
+          COLORS.jam,
+          CONGESTION_SLOW_RATIO,
+          COLORS.jam,
+          CONGESTION_FREE_RATIO,
+          COLORS.slow,
+          0.9,
+          COLORS.free,
+        ],
+      ],
+      "line-width": [
+        "interpolate",
+        ["linear"],
+        ["coalesce", ["feature-state", "veh"], 0],
+        0,
+        0,
+        1,
+        2.2,
+        20,
+        4,
+        80,
+        7,
+        250,
+        11,
+      ],
       "line-opacity": ["case", [">", ["coalesce", ["feature-state", "veh"], 0], 0], 0.95, 0],
       // Directed edges: offset so both directions of a two-way road stay visible.
       "line-offset": 1.4,
@@ -944,7 +1083,13 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     source: "roads",
     layout: { visibility: "none" },
     paint: {
-      "line-color": ["match", ["coalesce", ["feature-state", "threat"], 0], 2, COLORS.threatImminent, COLORS.threat],
+      "line-color": [
+        "match",
+        ["coalesce", ["feature-state", "threat"], 0],
+        2,
+        COLORS.threatImminent,
+        COLORS.threat,
+      ],
       "line-width": ["interpolate", ["linear"], ["zoom"], 10, 1.2, 15, 2.5],
       "line-dasharray": [2, 2],
       "line-opacity": ["match", ["coalesce", ["feature-state", "threat"], 0], 2, 0.9, 1, 0.6, 0],
@@ -1004,7 +1149,6 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
       "circle-stroke-width": ["case", ["get", "stopped"], 1.2, 0.6],
     },
   });
-
 
   map.addLayer({
     id: "sim-ignition",
@@ -1109,7 +1253,11 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     type: "symbol",
     source: "destinations",
     minzoom: 11,
-    filter: ["all", ["==", ["get", "dest_kind"], REFUGE_KIND], ["==", ["get", "refuge_state"], "open"]],
+    filter: [
+      "all",
+      ["==", ["get", "dest_kind"], REFUGE_KIND],
+      ["==", ["get", "refuge_state"], "open"],
+    ],
     layout: {
       "text-field": ["concat", ["get", "short"], " refuge"],
       "text-font": LABEL_FONT_BOLD,
@@ -1156,7 +1304,12 @@ export function installLayers(map: MapLibreMap, model: ReplayModel): void {
     id: "pin-halo",
     type: "circle",
     source: "pin",
-    paint: { "circle-radius": 16, "circle-color": "#ffffff", "circle-opacity": 0.15, "circle-blur": 0.5 },
+    paint: {
+      "circle-radius": 16,
+      "circle-color": "#ffffff",
+      "circle-opacity": 0.15,
+      "circle-blur": 0.5,
+    },
   });
   map.addLayer({
     id: "pin",

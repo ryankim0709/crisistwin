@@ -74,8 +74,7 @@ export function landscapeRequirement(scenario: StudioScenario): LandscapeRequire
   const minY = Math.min(...ys);
   const maxY = Math.max(...ys);
   const scale = groundScale(minY, maxY);
-  const extentMeters =
-    Math.max(Math.max(...xs) - Math.min(...xs), maxY - minY) * scale;
+  const extentMeters = Math.max(Math.max(...xs) - Math.min(...xs), maxY - minY) * scale;
 
   // Snapping can add up to SNAP_METERS on each side; keep that slack out of the buffer.
   const roomForBuffer = (MAX_LANDSCAPE_SPAN_METERS - extentMeters - 2 * SNAP_METERS) / 2;
@@ -108,8 +107,7 @@ export function spanProblem(scenario: StudioScenario): string | null {
   const requirement = landscapeRequirement(scenario);
   if (requirement.spanMeters <= MAX_LANDSCAPE_SPAN_METERS) return null;
   const extentKm = ignitionExtentMeters(scenario) / 1000;
-  const maxExtentKm =
-    (MAX_LANDSCAPE_SPAN_METERS - 2 * MIN_BUFFER_METERS - 2 * SNAP_METERS) / 1000;
+  const maxExtentKm = (MAX_LANDSCAPE_SPAN_METERS - 2 * MIN_BUFFER_METERS - 2 * SNAP_METERS) / 1000;
   return (
     `The enabled fires are about ${extentKm.toFixed(1)} km apart, but one run can cover ` +
     `them only within about ${Math.floor(maxExtentKm)} km. Move them closer together or ` +

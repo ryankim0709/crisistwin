@@ -1,14 +1,15 @@
 /*
  * Simulation Studio: map fills the page, the panel floats on the left, playback docks below.
  * The page's wrappers are `studio-page-*` so they never collide with the `studio-map` and
- * `studio-panel` roots that StudioMap and ConfigPanel style themselves.
+ * `studio-panel` roots that StudioMap and ConfigPanel style themselves. Dispatch reuses
+ * these wrappers.
  */
 .studio-page {
   display: flex;
   flex-direction: column;
   height: 100dvh;
   min-height: 0;
-  background: #fcfcf8;
+  background: var(--ct-surface);
 }
 .studio-stage {
   position: relative;
@@ -26,8 +27,8 @@
      panel scroll inside it instead of overflowing. */
   top: 64px;
   bottom: 44px;
-  left: 12px;
-  z-index: 5;
+  left: var(--ct-space-3);
+  z-index: var(--ct-z-overlay);
   display: flex;
   align-items: flex-start;
   width: min(340px, calc(100% - 24px));
@@ -44,53 +45,50 @@
 }
 .studio-page-status {
   position: absolute;
-  top: 12px;
+  top: var(--ct-space-3);
   left: 50%;
-  z-index: 4;
+  z-index: var(--ct-z-overlay);
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
+  gap: var(--ct-space-2);
   max-width: min(560px, calc(100% - 440px));
   /* Wind indicator sits top-left on the map; the panel is top-right. */
   transform: translateX(-50%);
   pointer-events: none;
 }
+/* Floating status pills over the map: a loading line, or a Notice with the pill treatment. */
 .studio-chip {
-  margin: 0;
-  padding: 8px 14px;
-  border: 1px solid #d4d8ca;
-  border-radius: 999px;
-  background: #fcfcf8;
-  box-shadow: 0 1px 4px rgb(0 0 0 / 15%);
-  font-size: 14px;
-  line-height: 1.4;
-  text-align: center;
+  padding: var(--ct-space-2) var(--ct-space-4);
+  border: 1px solid var(--ct-border);
+  border-radius: var(--ct-radius-pill);
+  background: var(--ct-surface);
+  box-shadow: var(--ct-shadow-md);
 }
-.studio-chip-error {
-  border-color: #b3261e;
-  border-radius: 12px;
-  color: #8c1d18;
+.studio-chip-notice.ui-notice {
+  justify-content: center;
+  margin: 0;
+  padding: var(--ct-space-2) var(--ct-space-4);
+  box-shadow: var(--ct-shadow-md);
+  text-align: center;
   pointer-events: auto;
 }
 .studio-dock {
   flex: none;
-  border-top: 1px solid #d4d8ca;
-  background: #fcfcf8;
+  border-top: 1px solid var(--ct-border);
+  background: var(--ct-surface);
 }
-.studio-previous {
+.studio-previous.ui-notice {
   margin: 0;
-  padding: 6px 16px;
-  border-bottom: 1px solid #d4d8ca;
-  background: #f4ecd2;
-  font-size: 13px;
-  font-weight: 600;
+  padding: var(--ct-space-2) var(--ct-space-4);
+  border-width: 0 0 1px;
+  border-radius: 0;
 }
 
 @media (max-width: 900px) {
   .studio-page-status {
     top: auto;
-    bottom: 12px;
+    bottom: var(--ct-space-3);
     max-width: calc(100% - 24px);
   }
 }

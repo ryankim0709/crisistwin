@@ -1,5 +1,6 @@
 import type { KeyboardEvent } from "react";
 import { SQUARE_METERS_PER_ACRE, SQUARE_METERS_PER_HECTARE } from "../fire/spread";
+import { Field, IconButton } from "../ui";
 import type { IgnitionDisplayState, PlaybackBarProps } from "./contracts";
 import "./studioControls.css";
 
@@ -88,46 +89,42 @@ export default function PlaybackBar(props: PlaybackBarProps) {
     >
       <div className="studio-playback-main">
         <div className="studio-transport">
-          <button
-            type="button"
-            className="studio-btn studio-btn-secondary"
-            aria-label="Restart"
-            title="Restart"
+          <IconButton
+            label="Restart"
+            variant="secondary"
+            size="sm"
             disabled={!enabled}
             onClick={onRestart}
           >
             ⏮
-          </button>
-          <button
-            type="button"
-            className="studio-btn studio-btn-secondary"
-            aria-label="Previous step"
-            title="Previous step"
+          </IconButton>
+          <IconButton
+            label="Previous step"
+            variant="secondary"
+            size="sm"
             disabled={!enabled || index <= 0}
             onClick={() => onStep(-1)}
           >
             ◀
-          </button>
-          <button
-            type="button"
-            className="studio-btn studio-btn-primary studio-play"
-            aria-label={playing ? "Pause" : "Play"}
-            title={playing ? "Pause" : "Play"}
+          </IconButton>
+          <IconButton
+            label={playing ? "Pause" : "Play"}
+            variant="primary"
+            size="sm"
             disabled={!enabled}
             onClick={onPlayPause}
           >
             {playing ? "❚❚" : "▶"}
-          </button>
-          <button
-            type="button"
-            className="studio-btn studio-btn-secondary"
-            aria-label="Next step"
-            title="Next step"
+          </IconButton>
+          <IconButton
+            label="Next step"
+            variant="secondary"
+            size="sm"
             disabled={!enabled || index >= lastIndex}
             onClick={() => onStep(1)}
           >
             ▶▶
-          </button>
+          </IconButton>
         </div>
 
         <div className="studio-scrub">
@@ -169,21 +166,20 @@ export default function PlaybackBar(props: PlaybackBarProps) {
         </div>
 
         <div className="studio-speed">
-          <label htmlFor="studio-speed-select">Viewing speed</label>
-          <select
-            id="studio-speed-select"
-            className="studio-input"
-            value={speed}
-            disabled={!enabled}
-            title="Changes how fast you watch the playback, not how fast the fire spreads."
-            onChange={(event) => onSpeedChange(Number(event.target.value))}
-          >
-            {speedChoices.map((choice) => (
-              <option key={choice} value={choice}>
-                ×{choice} = {choice} sim-min/s
-              </option>
-            ))}
-          </select>
+          <Field label="Viewing speed">
+            <select
+              value={speed}
+              disabled={!enabled}
+              title="Changes how fast you watch the playback, not how fast the fire spreads."
+              onChange={(event) => onSpeedChange(Number(event.target.value))}
+            >
+              {speedChoices.map((choice) => (
+                <option key={choice} value={choice}>
+                  ×{choice} = {choice} sim-min/s
+                </option>
+              ))}
+            </select>
+          </Field>
         </div>
       </div>
 
@@ -192,8 +188,7 @@ export default function PlaybackBar(props: PlaybackBarProps) {
           Ignitions triggered {metrics.ignitionsTriggered}/{metrics.ignitionsTotal}
         </span>
         <span>
-          Modelled area reached {formatArea(hectares)} ha · {formatArea(acres)}{" "}
-          ac
+          Modelled area reached {formatArea(hectares)} ha · {formatArea(acres)} ac
         </span>
         <span>
           {metrics.nextIgnition

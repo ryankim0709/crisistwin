@@ -236,7 +236,9 @@ export function parseArea(json: unknown): DispatchArea {
 export async function loadArea(signal: AbortSignal): Promise<DispatchArea> {
   const response = await fetch(DISPATCH_AREA_URL, { signal });
   if (!response.ok) {
-    throw new Error(`Could not load the dispatch area (${DISPATCH_AREA_URL}, HTTP ${response.status}).`);
+    throw new Error(
+      `Could not load the dispatch area (${DISPATCH_AREA_URL}, HTTP ${response.status}).`,
+    );
   }
   return parseArea(await response.json());
 }

@@ -1,6 +1,14 @@
+import { LoadingState, Notice } from "../ui";
 import { useEffect, useState } from "react";
 import { Markdown } from "./ai/markdown";
-import { METRIC_INFO, deltaVerdict, fetchJson, formatDelta, formatValue, type MetricDelta } from "./compare";
+import {
+  METRIC_INFO,
+  deltaVerdict,
+  fetchJson,
+  formatDelta,
+  formatValue,
+  type MetricDelta,
+} from "./compare";
 import { EvidenceChip } from "./parts";
 import { arr, isObj, obj, objOrEmpty, optNum, strList } from "./validate";
 
@@ -51,9 +59,18 @@ function parseStress(data: unknown): StressResult {
   return { mode: text(s.mode), runs, findings, limitations: strList(s.limitations, "limitations") };
 }
 
-type Load = { status: "loading" } | { status: "missing" } | { status: "ready"; result: StressResult } | { status: "error"; message: string };
+type Load =
+  | { status: "loading" }
+  | { status: "missing" }
+  | { status: "ready"; result: StressResult }
+  | { status: "error"; message: string };
 
-const HEADLINE_METRICS = ["arrived_by_1800z_veh", "peak_exposed_veh", "exposed_veh_min", "peak_blocked_veh"];
+const HEADLINE_METRICS = [
+  "arrived_by_1800z_veh",
+  "peak_exposed_veh",
+  "exposed_veh_min",
+  "peak_blocked_veh",
+];
 
 export default function StressTab({ url }: { url: string }) {
   const [load, setLoad] = useState<Load>({ status: "loading" });
@@ -64,11 +81,16 @@ export default function StressTab({ url }: { url: string }) {
     fetchJson(url, controller.signal)
       .then((data) => {
         if (!active) return;
-        setLoad(data === null ? { status: "missing" } : { status: "ready", result: parseStress(data) });
+        setLoad(
+          data === null ? { status: "missing" } : { status: "ready", result: parseStress(data) },
+        );
       })
       .catch((error: unknown) => {
         if (active && !(error instanceof DOMException && error.name === "AbortError")) {
-          setLoad({ status: "error", message: error instanceof Error ? error.message : "Could not load." });
+          setLoad({
+            status: "error",
+            message: error instanceof Error ? error.message : "Could not load.",
+          });
         }
       });
     return () => {
@@ -78,22 +100,21 @@ export default function StressTab({ url }: { url: string }) {
   }, [url]);
 
   if (load.status === "loading") {
-    return (
-      <p role="status" className="rp-pin-hint">
-        <span className="rp-spinner" aria-hidden="true" /> Loading stress test…
-      </p>
-    );
+    return <LoadingState>Loading stress test…</LoadingState>;
   }
-  if (load.status === "missing") return <p className="rp-empty">No stress test has been run yet.</p>;
-  if (load.status === "error") return <p role="alert" className="rp-empty">Stress test unavailable: {load.message}</p>;
+  if (load.status === "missing")
+    return <p className="rp-empty">No stress test has been run yet.</p>;
+  if (load.status === "error")
+    return <Notice tone="danger">Stress test unavailable: {load.message}</Notice>;
 
   const { result } = load;
   return (
     <div className="rp-tab">
-      <p className="rp-disclaimer rp-disclaimer--top" role="note">
-        <EvidenceChip value="simulated" /> Disruptions were proposed by an AI agent and run through the simulator. Every
-        number below comes from simulator runs.{result.mode === "dry_run" && " This was a dry run (no AI findings)."}
-      </p>
+      <Notice tone="info">
+        <EvidenceChip value="simulated" /> Disruptions were proposed by an AI agent and run through
+        the simulator. Every number below comes from simulator runs.
+        {result.mode === "dry_run" && " This was a dry run (no AI findings)."}
+      </Notice>
 
       {result.runs.length === 0 ? (
         <p className="rp-empty">The stress test has no runs.</p>

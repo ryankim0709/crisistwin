@@ -40,7 +40,10 @@ export async function requestDecision(
     method: "POST",
     // DRF negotiates a renderer before the view runs, so JSON must be acceptable too (error
     // bodies are JSON); a successful response is the NDJSON stream either way.
-    headers: { "Content-Type": "application/json", Accept: "application/x-ndjson, application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/x-ndjson, application/json",
+    },
     body: JSON.stringify({ observation }),
     signal,
   });

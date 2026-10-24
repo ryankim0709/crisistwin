@@ -16,7 +16,10 @@ export interface ReferencePlace {
  */
 export function shortPlaceName(place: string | null | undefined): string | null {
   if (!place) return null;
-  const parts = place.split(",").map((p) => p.trim()).filter(Boolean);
+  const parts = place
+    .split(",")
+    .map((p) => p.trim())
+    .filter(Boolean);
   const towns = parts.filter((p) => !/\b(county|parish|borough)\b/i.test(p));
   if (towns.length === 0 || parts.some((p) => /\band\b|&/.test(p))) return null;
   // "Town, County, State": one town before the county.
@@ -25,9 +28,13 @@ export function shortPlaceName(place: string | null | undefined): string | null 
   return parts[0];
 }
 
-export function referencePlace(model: ReplayModel, placeHint: string | null): ReferencePlace | null {
+export function referencePlace(
+  model: ReplayModel,
+  placeHint: string | null,
+): ReferencePlace | null {
   if (model.incident.referencePoint) return model.incident.referencePoint;
-  const name = shortPlaceName(model.incident.place) ?? shortPlaceName(placeHint) ?? "the population centre";
+  const name =
+    shortPlaceName(model.incident.place) ?? shortPlaceName(placeHint) ?? "the population centre";
   const zones = model.zones?.items ?? [];
   let weight = 0;
   let x = 0;

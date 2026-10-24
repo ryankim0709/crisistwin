@@ -1,3 +1,4 @@
+import { Notice } from "../ui";
 import { EvidenceChip } from "./parts";
 import { splitSnappedNote } from "./narrative";
 import type { RespondersComparison } from "./types";
@@ -13,11 +14,11 @@ function timing(deltaMin: number | null): string {
 export default function RespondersTab({ responders }: { responders: RespondersComparison }) {
   return (
     <div className="rp-tab">
-      <p className="rp-disclaimer rp-disclaimer--top" role="note">
-        <EvidenceChip value={responders.evidenceClass} /> Responder agents are simulated decision rules, compared
-        with responder actions reported for 2018. A match means the same kind of action on a road with the same name,
-        not that the model reproduced what happened.
-      </p>
+      <Notice tone="info">
+        <EvidenceChip value={responders.evidenceClass} /> Responder agents are simulated decision
+        rules, compared with responder actions reported for 2018. A match means the same kind of
+        action on a road with the same name, not that the model reproduced what happened.
+      </Notice>
 
       <section aria-labelledby="rp-resp-matches">
         <h3 id="rp-resp-matches" className="rp-section-title">
@@ -32,20 +33,27 @@ export default function RespondersTab({ responders }: { responders: RespondersCo
               return (
                 <li key={i} className="rp-row-static rp-resp-match">
                   <span className="rp-row-main">
-                    {m.simulated.kind ?? "Action"} on {m.simulated.road ?? m.historical.road ?? "road"}:{" "}
-                    {timing(m.deltaMin)}
+                    {m.simulated.kind ?? "Action"} on{" "}
+                    {m.simulated.road ?? m.historical.road ?? "road"}: {timing(m.deltaMin)}
                   </span>
                   <span className="rp-resp-line">
                     <EvidenceChip value="simulated" /> {m.simulated.localTime ?? "—"} PST ·{" "}
                     {m.simulated.label.replace(/^Responder agent \(simulated\):\s*/, "")}
                   </span>
                   <span className="rp-resp-line">
-                    {m.historical.evidenceClass && <EvidenceChip value={m.historical.evidenceClass} />}{" "}
+                    {m.historical.evidenceClass && (
+                      <EvidenceChip value={m.historical.evidenceClass} />
+                    )}{" "}
                     {m.historical.localTime ?? "—"} PST · {historical.text}
                     {m.historical.locator && (
                       <>
                         {" "}
-                        <a href={m.historical.locator} target="_blank" rel="noreferrer" className="rp-source-link">
+                        <a
+                          href={m.historical.locator}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="rp-source-link"
+                        >
                           source
                         </a>
                       </>
@@ -62,7 +70,9 @@ export default function RespondersTab({ responders }: { responders: RespondersCo
 
       {responders.simulatedOnly.length > 0 && (
         <details className="rp-notes">
-          <summary>Simulated actions with no 2018 counterpart ({responders.simulatedOnly.length})</summary>
+          <summary>
+            Simulated actions with no 2018 counterpart ({responders.simulatedOnly.length})
+          </summary>
           <ul>
             {responders.simulatedOnly.map((a, i) => (
               <li key={i}>
@@ -75,7 +85,9 @@ export default function RespondersTab({ responders }: { responders: RespondersCo
       )}
       {responders.historicalOnly.length > 0 && (
         <details className="rp-notes">
-          <summary>Reported 2018 actions with no simulated counterpart ({responders.historicalOnly.length})</summary>
+          <summary>
+            Reported 2018 actions with no simulated counterpart ({responders.historicalOnly.length})
+          </summary>
           <ul>
             {responders.historicalOnly.map((a, i) => (
               <li key={i}>
