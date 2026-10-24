@@ -14,7 +14,6 @@
 
 import {
   EFFECTIVE_MINERAL_CONTENT,
-  HEAT_CONTENT_BTU_PER_LB,
   PARTICLE_DENSITY_LB_PER_FT3,
   SAV_DEAD_100H,
   SAV_DEAD_10H,
@@ -252,7 +251,7 @@ export function prepareFuelBed(fuel: FuelModel, moisture: FuelMoisture): FuelBed
 
   const reactionIntensity =
     reactionVelocity *
-    HEAT_CONTENT_BTU_PER_LB *
+    fuel.heatContentBtuPerLb *
     mineralDamping *
     (netLoadDead * dampingDead * categoryDead + netLoadLive * dampingLive * categoryLive);
 

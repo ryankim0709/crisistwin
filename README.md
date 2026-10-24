@@ -238,40 +238,70 @@ Open **http://localhost:5173/fire**. Click the map to place an ignition point, s
 20-foot wind speed and the direction it blows from, pick a fuel-moisture preset, then
 play or step the perimeter forward in **15-minute** intervals over a 2, 3, or 6 hour
 horizon. The presets are the standard dead and live moisture scenarios that go with the
-Scott & Burgan fuel models; _Advanced: individual moisture classes_ opens the 1-hour,
-10-hour, 100-hour, live herbaceous, and live woody values, plus the midflame wind factor
-(the share of the open wind that reaches flame height, 0.5 by default). Switching the
+Scott & Burgan fuel models; _Advanced: moisture classes and spread parameters_ opens the
+1-hour, 10-hour, 100-hour, live herbaceous, and live woody values, the midflame wind
+factor (the share of the open wind that reaches flame height, 0.5 by default), the
+maximum spotting distance, and the structure-to-structure spread rate. Switching the
 click target to _Wind direction_ lets you click downwind of the ignition point to aim the
 wind; the numeric field and the arrow at the ignition point stay in sync with it. _Show
 the fuel layer the model is using_ draws the mapped fuel models under the perimeters, and
 _Fit view to run_ frames the whole horizon. Each band is one 15-minute step, shaded by the
 time the fire reached it, with the current perimeter outlined in bright amber.
 
+Two wildland-urban interface mechanisms sit on top of the Rothermel surface model, under
+_Extra spread mechanisms (your assumptions)_, both on by default and both switchable off.
+**Ember spotting** carries firebrands downwind across ground that holds no fuel model and
+lands them in the first vegetation past it, so a road, a parking lot, or a subdivision is
+a delay rather than a wall; it never jumps continuous wildland fuel.
+**Structure-to-structure spread** gives developed ground (FBFM40 code 91) its own
+wind-driven rate, so a neighbourhood burns instead of acting as a firebreak, and placing
+the ignition point on developed ground is accepted while that toggle is on, refused while
+it is off. Neither is physics: both are coarse
+assumptions with sources, the page warns as much while structure spread is on, and the
+panel attributes every burned cell to the mechanism that reached it first — surface
+spread, spotting, or structure-to-structure — so you can see how much of a run is the
+Rothermel model and how much is an assumption you switched on.
+
+**Use current NWS wind** replaces the wind speed and direction with the US National
+Weather Service hourly forecast for the ignition point, labelled as **observed** data with
+the location, forecast hour, and the source's own wording, including when the reported
+speed was a range and the upper bound was taken. Until then — and the moment you edit
+either wind control by hand — the page says the wind is an assumption you set. The default
+moisture preset (critical / Red Flag) and the default 40 mph wind are demo settings chosen
+to show peak fire weather; they are **explicitly unvalidated**, and the page says so.
+
 Placing an ignition point fetches the real landscape around it: a LANDFIRE FBFM40 fuel
 raster and terrain elevation tiles, over a radius scaled to the horizon — roughly 5 km at
 two hours and 12 km at six.
 The page therefore needs internet access and works only in the contiguous United States,
 where LANDFIRE publishes this layer; elsewhere the run fails with an explicit error rather
-than inventing fuel. Igniting on ground that carries no fire — water, pavement, bare rock,
-developed land — is refused for the same reason. Wind and moisture edits re-solve without
-refetching. Alongside the perimeters the panel reports the fuel model at the ignition
-point, head rate of spread, flame length, slope, elevation, what share of the modelled
-grid is burnable at all, and the grid and solve time; it warns when the effective wind is
-past Rothermel's validated range, when the fire is boxed in by non-burnable ground before
-the horizon, and when it has run off the edge of the modelled area.
+than inventing fuel. The fuel raster is fetched as a mosaic of bounded sub-requests
+through a same-origin proxy, with bounded retry; the browser never calls LANDFIRE
+directly. Igniting on water, snow, agricultural land, or bare ground is refused, and so is
+developed land while structure-to-structure spread is switched off. Wind and moisture
+edits re-solve without refetching. Alongside the perimeters the panel reports the fuel
+model at the ignition point, head rate of spread, flame length, slope, elevation, what
+share of the modelled grid is burnable at all and what share is developed, the burned area
+split across the three mechanisms, and the grid and solve time; it warns when the
+effective wind is past Rothermel's validated range, when the fire is boxed in by
+non-burnable ground before the horizon, and when it has run off the edge of the modelled
+area. A fire started on developed ground reports its Rothermel quantities as zero, because
+they are undefined for a burning subdivision rather than measured to be nothing.
 
 Keyboard: focus the map, then use arrow keys to pan, `+`/`-` to zoom, and `Enter`
 to act on the map centre. The map needs WebGL2. No API key, backend call, or
-persistence is involved; the two data services are called directly from the browser.
+persistence is involved; terrain tiles and the National Weather Service forecast are
+called straight from the browser, and LANDFIRE through the same-origin proxy.
 
 | File                                 | Role                                                                       |
 | ------------------------------------ | -------------------------------------------------------------------------- |
 | `app/src/fire/fuelModels.ts`         | Scott & Burgan (2005) 40 fuel models, keyed by LANDFIRE FBFM40 code.       |
 | `app/src/fire/rothermel.ts`          | Rothermel (1972) surface spread, wind/slope vectors, ellipse geometry.     |
-| `app/src/fire/landscape.ts`          | LANDFIRE WCS fetch, GeoTIFF decode, terrain tiles, slope and aspect.       |
-| `app/src/fire/spread.ts`             | Minimum-travel-time propagation, perimeter contouring, scenario types.     |
+| `app/src/fire/landscape.ts`          | LANDFIRE WCS mosaic fetch, GeoTIFF decode, terrain, slope and aspect.      |
+| `app/src/fire/spread.ts`             | Propagation, spotting, structure spread, contouring, scenario types.       |
+| `app/src/fire/weather.ts`            | National Weather Service wind lookup with provenance; no UI state.         |
 | `app/src/fire/FireMap.tsx`           | MapLibre GL JS map, USGS aerial imagery, fuel overlay, perimeter layers.   |
-| `app/src/fire/FireSimulatorPage.tsx` | Scenario controls, landscape loading, 15-minute playback, metrics, legend. |
+| `app/src/fire/FireSimulatorPage.tsx` | Scenario controls, mechanism toggles, playback, attribution, metrics.      |
 
 ```ts
 // Fuel and terrain around the ignition point. Network call; contiguous US only.
@@ -285,6 +315,8 @@ const run = simulateFireSpread(landscape, {
   midflameAdjustment: DEFAULT_MIDFLAME_ADJUSTMENT, // 0.5 of the open wind
   stepMinutes: FIRE_STEP_MINUTES, // 15
   horizonMinutes: FIRE_HORIZON_MINUTES, // 180
+  spotting: DEFAULT_SPOTTING, // { enabled: true, maxDistanceMeters: 500 }
+  structureSpread: DEFAULT_STRUCTURE_SPREAD, // { enabled: true, rateMetersPerMinute: 4 }
 });
 
 run.ignition.fuelLabel; // "TU2 — Moderate load, humid climate timber-shrub"
@@ -292,13 +324,20 @@ run.ignition.spread.headRateFeetPerMinute; // Rothermel output stays Imperial
 run.frames[12].perimeters; // GeoJSON Polygon features at T+3:00
 run.frames[12].burnedAreaSquareMeters;
 run.frames[12].maxReachMeters;
-run.burnableFraction; // share of the modelled grid that carries fire at all
+run.burnableFraction; // share of the modelled grid holding a vegetated fuel model
+run.developedFraction; // share mapped as urban or developed, FBFM40 91
+run.arrivalBreakdown; // burned area by surface, spotting, and structure spread
+run.appliedOptions; // the two mechanisms as actually applied, for reproducibility
 ```
 
-`simulateFireSpread` is deterministic: the same scenario over the same landscape gives the
-same run, so nothing records a seed. It throws `NonBurnableIgnitionError` when the
-ignition cell carries no fuel. Units are explicit at the boundaries. The Rothermel
-equations keep the Imperial units they were published in and return feet per minute;
+Both mechanism options are optional in `FireScenario`; omitting one applies its default,
+and the defaults have both mechanisms on. Switch them off by passing `enabled: false`.
+
+`simulateFireSpread` is deterministic, spotting and structure spread included: the same
+scenario over the same landscape gives the same run, so nothing records a seed. It throws
+`NonBurnableIgnitionError` when the ignition cell can carry no fire under the options
+given. Units are explicit at the boundaries. The Rothermel equations keep the Imperial
+units they were published in and return feet per minute;
 everything the solver does is in metres and metres per minute, and miles per hour,
 kilometres, hectares, and acres are display conversions only. Wind direction is
 meteorological, the bearing the wind blows **from**. Times are elapsed simulation-clock
@@ -311,20 +350,27 @@ Berkeley, so a 30 Mercator metre LANDFIRE cell is about 23.7 m across on the gro
 addressing uses Mercator metres; slope, spread distance, burned area, and reach all use
 ground metres, converted once where the landscape is built.
 
-The model is **surface fire only**. There is no crown fire, no spotting or ember
-transport, no suppression, and no structure-to-structure urban spread, so a fire that
-reaches the edge of the vegetation simply stops — which understates real risk at the
-wildland-urban interface. Wind is uniform over the grid and constant in time, fuel
-moisture is uniform, and there is no diurnal weather change. LANDFIRE fuel is a 2025
-mapped product, not an observation of today's vegetation. USGS imagery is historical
-aerial coverage, not live fire observation, and its highest native zoom is 16. In the
-Berkeley hills a wind-driven run often stalls within a few hundred metres because the
-vegetated patch is small and bounded by streets; with the ellipse capped at 8:1 the
-flanking rate is under 1 percent of the head rate, so a barrier directly downwind can halt
-a run. That is the model reporting the landscape, not a defect. Outputs are planning
-experiments, not operational evacuation instructions. See the
+The **physics is surface fire only**. There is no crown fire and no suppression, and
+nothing in the model represents plume-dominated behaviour. The two interface mechanisms
+are assumptions layered on that surface model, not validated models: spotting is
+deterministic, so every ember landing in receptive fuel ignites with no ignition
+probability, and structure spread ignores building materials, spacing, defensible space,
+and suppression, resting on an assumed fireline intensity for a burning structure. Their
+combination can compound — structures carry fire into a subdivision, burning structures
+throw embers into the next patch of brush — which is what the 2017 and 2018 California
+fires did, and is also the most likely place this model runs hot. LANDFIRE gives roads and
+houses the same code 91, so a freeway burns like a street of houses. Wind is uniform over
+the grid and constant in time, fuel moisture is uniform, and there is no diurnal weather
+change. LANDFIRE fuel is a 2025 mapped product, not an observation of today's vegetation.
+USGS imagery is historical aerial coverage, not live fire observation, and its highest
+native zoom is 16. A run that still stalls is fuel-limited: with both mechanisms off, or
+where the vegetated patch is bounded by water or bare rock, the fire stops where its fuel
+does, and the page says so rather than hiding it. Outputs are planning experiments, not
+operational evacuation instructions. See the
 [fire model decision](docs/adr/0004-physics-fire-model.md), which supersedes the
-[original ellipse](docs/adr/0003-fire-spread-model.md).
+[original ellipse](docs/adr/0003-fire-spread-model.md), and the
+[interface mechanisms](docs/adr/0007-wui-spread-mechanisms.md) for the constants, their
+sources, and where they are least trustworthy.
 
 ### Default hackathon check
 

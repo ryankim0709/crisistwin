@@ -30,9 +30,13 @@ export interface FuelModel {
   savDead1hPerFoot: number;
   savLiveHerbPerFoot: number;
   savLiveWoodyPerFoot: number;
+  /** Low heat content, Btu/lb. */
+  heatContentBtuPerLb: number;
   /**
    * Dynamic models move part of the live herbaceous load into a dead herbaceous class as
-   * herbaceous moisture falls, which is what makes cured grass carry fire.
+   * herbaceous moisture falls, which is what makes cured grass carry fire. In the SB40 set
+   * this is exactly the models carrying live herbaceous load, so it is derived rather than
+   * listed: a hand-kept flag had SH1 wrong.
    */
   dynamic: boolean;
 }
@@ -40,8 +44,10 @@ export interface FuelModel {
 /** Fixed SAV ratios for the dead 10-hour and 100-hour classes, ft²/ft³. */
 export const SAV_DEAD_10H = 109;
 export const SAV_DEAD_100H = 30;
-/** Low heat content, Btu/lb. Uniform across the SB40 set. */
+/** Low heat content, Btu/lb. Every SB40 model uses this except GR6. */
 export const HEAT_CONTENT_BTU_PER_LB = 8000;
+/** Scott & Burgan Table 7 gives GR6 a higher heat content than the rest of the set. */
+const HEAT_CONTENT_OVERRIDES: ReadonlyMap<number, number> = new Map([[106, 9000]]);
 /** Oven-dry fuel particle density, lb/ft³. */
 export const PARTICLE_DENSITY_LB_PER_FT3 = 32;
 /** Total and effective mineral content, fraction of oven-dry weight. */
@@ -76,43 +82,12 @@ type Row = [
   number,
   number,
   number,
-  boolean,
   string,
 ];
 
 const ROWS: Row[] = [
-  [
-    101,
-    "GR1",
-    0.4,
-    15,
-    0.0046,
-    0,
-    0,
-    0.0138,
-    0,
-    2200,
-    2000,
-    0,
-    true,
-    "Short, sparse, dry climate grass",
-  ],
-  [
-    102,
-    "GR2",
-    1.0,
-    15,
-    0.0046,
-    0,
-    0,
-    0.0459,
-    0,
-    2000,
-    1800,
-    0,
-    true,
-    "Low load, dry climate grass",
-  ],
+  [101, "GR1", 0.4, 15, 0.0046, 0, 0, 0.0138, 0, 2200, 2000, 0, "Short, sparse, dry climate grass"],
+  [102, "GR2", 1.0, 15, 0.0046, 0, 0, 0.0459, 0, 2000, 1800, 0, "Low load, dry climate grass"],
   [
     103,
     "GR3",
@@ -126,41 +101,10 @@ const ROWS: Row[] = [
     1500,
     1300,
     0,
-    true,
     "Low load, very coarse, humid climate grass",
   ],
-  [
-    104,
-    "GR4",
-    2.0,
-    15,
-    0.0115,
-    0,
-    0,
-    0.0872,
-    0,
-    2000,
-    1800,
-    0,
-    true,
-    "Moderate load, dry climate grass",
-  ],
-  [
-    105,
-    "GR5",
-    1.5,
-    40,
-    0.0184,
-    0,
-    0,
-    0.1148,
-    0,
-    1800,
-    1600,
-    0,
-    true,
-    "Low load, humid climate grass",
-  ],
+  [104, "GR4", 2.0, 15, 0.0115, 0, 0, 0.0872, 0, 2000, 1800, 0, "Moderate load, dry climate grass"],
+  [105, "GR5", 1.5, 40, 0.0184, 0, 0, 0.1148, 0, 1800, 1600, 0, "Low load, humid climate grass"],
   [
     106,
     "GR6",
@@ -174,25 +118,9 @@ const ROWS: Row[] = [
     2200,
     2000,
     0,
-    true,
     "Moderate load, humid climate grass",
   ],
-  [
-    107,
-    "GR7",
-    3.0,
-    15,
-    0.0459,
-    0,
-    0,
-    0.2479,
-    0,
-    2000,
-    1800,
-    0,
-    true,
-    "High load, dry climate grass",
-  ],
+  [107, "GR7", 3.0, 15, 0.0459, 0, 0, 0.2479, 0, 2000, 1800, 0, "High load, dry climate grass"],
   [
     108,
     "GR8",
@@ -206,7 +134,6 @@ const ROWS: Row[] = [
     1500,
     1300,
     0,
-    true,
     "High load, very coarse, humid climate grass",
   ],
   [
@@ -222,7 +149,6 @@ const ROWS: Row[] = [
     1800,
     1600,
     0,
-    true,
     "Very high load, humid climate grass",
   ],
   [
@@ -238,7 +164,6 @@ const ROWS: Row[] = [
     2000,
     1800,
     1800,
-    true,
     "Low load, dry climate grass-shrub",
   ],
   [
@@ -254,7 +179,6 @@ const ROWS: Row[] = [
     2000,
     1800,
     1800,
-    true,
     "Moderate load, dry climate grass-shrub",
   ],
   [
@@ -270,7 +194,6 @@ const ROWS: Row[] = [
     1800,
     1600,
     1600,
-    true,
     "Moderate load, humid climate grass-shrub",
   ],
   [
@@ -286,7 +209,6 @@ const ROWS: Row[] = [
     1800,
     1600,
     1600,
-    true,
     "High load, humid climate grass-shrub",
   ],
   [
@@ -302,7 +224,6 @@ const ROWS: Row[] = [
     2000,
     1800,
     1600,
-    false,
     "Low load, dry climate shrub",
   ],
   [
@@ -318,7 +239,6 @@ const ROWS: Row[] = [
     2000,
     0,
     1600,
-    false,
     "Moderate load, dry climate shrub",
   ],
   [
@@ -334,7 +254,6 @@ const ROWS: Row[] = [
     1600,
     0,
     1400,
-    false,
     "Moderate load, humid climate shrub",
   ],
   [
@@ -350,25 +269,9 @@ const ROWS: Row[] = [
     2000,
     1800,
     1600,
-    false,
     "Low load, humid climate timber-shrub",
   ],
-  [
-    145,
-    "SH5",
-    6.0,
-    15,
-    0.1653,
-    0.0964,
-    0,
-    0,
-    0.1331,
-    750,
-    0,
-    1600,
-    false,
-    "High load, dry climate shrub",
-  ],
+  [145, "SH5", 6.0, 15, 0.1653, 0.0964, 0, 0, 0.1331, 750, 0, 1600, "High load, dry climate shrub"],
   [
     146,
     "SH6",
@@ -382,7 +285,6 @@ const ROWS: Row[] = [
     750,
     0,
     1600,
-    false,
     "Low load, humid climate shrub",
   ],
   [
@@ -398,7 +300,6 @@ const ROWS: Row[] = [
     750,
     0,
     1600,
-    false,
     "Very high load, dry climate shrub",
   ],
   [
@@ -414,7 +315,6 @@ const ROWS: Row[] = [
     750,
     0,
     1600,
-    false,
     "High load, humid climate shrub",
   ],
   [
@@ -430,7 +330,6 @@ const ROWS: Row[] = [
     750,
     1800,
     1500,
-    true,
     "Very high load, humid climate shrub",
   ],
   [
@@ -446,7 +345,6 @@ const ROWS: Row[] = [
     2000,
     1800,
     1600,
-    true,
     "Low load, dry climate timber-grass-shrub",
   ],
   [
@@ -462,7 +360,6 @@ const ROWS: Row[] = [
     2000,
     0,
     1600,
-    false,
     "Moderate load, humid climate timber-shrub",
   ],
   [
@@ -478,25 +375,9 @@ const ROWS: Row[] = [
     1800,
     1600,
     1400,
-    true,
     "Moderate load, humid climate timber-grass-shrub",
   ],
-  [
-    164,
-    "TU4",
-    0.5,
-    12,
-    0.2066,
-    0,
-    0,
-    0,
-    0.0918,
-    2300,
-    0,
-    2000,
-    false,
-    "Dwarf conifer with understory",
-  ],
+  [164, "TU4", 0.5, 12, 0.2066, 0, 0, 0, 0.0918, 2300, 0, 2000, "Dwarf conifer with understory"],
   [
     165,
     "TU5",
@@ -510,7 +391,6 @@ const ROWS: Row[] = [
     1500,
     0,
     750,
-    false,
     "Very high load, dry climate timber-shrub",
   ],
   [
@@ -526,76 +406,15 @@ const ROWS: Row[] = [
     2000,
     0,
     0,
-    false,
     "Low load, compact conifer litter",
   ],
-  [
-    182,
-    "TL2",
-    0.2,
-    25,
-    0.0643,
-    0.1056,
-    0.101,
-    0,
-    0,
-    2000,
-    0,
-    0,
-    false,
-    "Low load broadleaf litter",
-  ],
-  [
-    183,
-    "TL3",
-    0.3,
-    20,
-    0.023,
-    0.101,
-    0.1286,
-    0,
-    0,
-    2000,
-    0,
-    0,
-    false,
-    "Moderate load conifer litter",
-  ],
-  [184, "TL4", 0.4, 25, 0.023, 0.0689, 0.1928, 0, 0, 2000, 0, 0, false, "Small downed logs"],
-  [
-    185,
-    "TL5",
-    0.6,
-    25,
-    0.0528,
-    0.1148,
-    0.202,
-    0,
-    0,
-    2000,
-    0,
-    1600,
-    false,
-    "High load conifer litter",
-  ],
-  [
-    186,
-    "TL6",
-    0.3,
-    25,
-    0.1102,
-    0.0551,
-    0.0551,
-    0,
-    0,
-    2000,
-    0,
-    0,
-    false,
-    "Moderate load broadleaf litter",
-  ],
-  [187, "TL7", 0.4, 25, 0.0138, 0.0643, 0.3719, 0, 0, 2000, 0, 0, false, "Large downed logs"],
-  [188, "TL8", 0.3, 35, 0.2663, 0.0643, 0.0505, 0, 0, 1800, 0, 0, false, "Long-needle litter"],
+  [182, "TL2", 0.2, 25, 0.0643, 0.1056, 0.101, 0, 0, 2000, 0, 0, "Low load broadleaf litter"],
+  [183, "TL3", 0.3, 20, 0.023, 0.101, 0.1286, 0, 0, 2000, 0, 0, "Moderate load conifer litter"],
+  [184, "TL4", 0.4, 25, 0.023, 0.0689, 0.1928, 0, 0, 2000, 0, 0, "Small downed logs"],
+  [185, "TL5", 0.6, 25, 0.0528, 0.1148, 0.202, 0, 0, 2000, 0, 1600, "High load conifer litter"],
+  [186, "TL6", 0.3, 25, 0.1102, 0.0551, 0.0551, 0, 0, 2000, 0, 0, "Moderate load broadleaf litter"],
+  [187, "TL7", 0.4, 25, 0.0138, 0.0643, 0.3719, 0, 0, 2000, 0, 0, "Large downed logs"],
+  [188, "TL8", 0.3, 35, 0.2663, 0.0643, 0.0505, 0, 0, 1800, 0, 0, "Long-needle litter"],
   [
     189,
     "TL9",
@@ -609,10 +428,9 @@ const ROWS: Row[] = [
     1800,
     0,
     1600,
-    false,
     "Very high load broadleaf litter",
   ],
-  [201, "SB1", 1.0, 25, 0.0689, 0.1377, 0.5051, 0, 0, 2000, 0, 0, false, "Low load activity fuel"],
+  [201, "SB1", 1.0, 25, 0.0689, 0.1377, 0.5051, 0, 0, 2000, 0, 0, "Low load activity fuel"],
   [
     202,
     "SB2",
@@ -626,7 +444,6 @@ const ROWS: Row[] = [
     2000,
     0,
     0,
-    false,
     "Moderate load activity or low load blowdown",
   ],
   [
@@ -642,10 +459,9 @@ const ROWS: Row[] = [
     2000,
     0,
     0,
-    false,
     "High load activity or moderate load blowdown",
   ],
-  [204, "SB4", 2.7, 25, 0.241, 0.1607, 0.241, 0, 0, 2000, 0, 0, false, "High load blowdown"],
+  [204, "SB4", 2.7, 25, 0.241, 0.1607, 0.241, 0, 0, 2000, 0, 0, "High load blowdown"],
 ];
 
 export const FUEL_MODELS: ReadonlyMap<number, FuelModel> = new Map(
@@ -660,8 +476,9 @@ export const FUEL_MODELS: ReadonlyMap<number, FuelModel> = new Map(
       savDead1hPerFoot: r[9],
       savLiveHerbPerFoot: r[10],
       savLiveWoodyPerFoot: r[11],
-      dynamic: r[12],
-      description: r[13],
+      heatContentBtuPerLb: HEAT_CONTENT_OVERRIDES.get(r[0]) ?? HEAT_CONTENT_BTU_PER_LB,
+      dynamic: r[7] > 0,
+      description: r[12],
     },
   ]),
 );
@@ -670,11 +487,17 @@ export function isBurnable(code: number): boolean {
   return FUEL_MODELS.has(code);
 }
 
-/** Human-readable label for any FBFM40 code, burnable or not. */
+/**
+ * Human-readable label for any FBFM40 code.
+ *
+ * "No wildland fuel" rather than "non-burnable": these codes carry no Scott & Burgan
+ * fuel model, but developed ground can still carry fire when structure-to-structure
+ * spread is switched on, so the label must not assert that it cannot burn.
+ */
 export function fuelLabel(code: number): string {
   const model = FUEL_MODELS.get(code);
   if (model) return `${model.name} — ${model.description}`;
-  const nonBurnable = NON_BURNABLE_CODES.get(code);
-  if (nonBurnable) return `${nonBurnable} (non-burnable)`;
+  const unmodelled = NON_BURNABLE_CODES.get(code);
+  if (unmodelled) return `${unmodelled} (no wildland fuel model)`;
   return code === FUEL_NO_DATA ? "Outside mapped area" : `Unmapped fuel code ${code}`;
 }

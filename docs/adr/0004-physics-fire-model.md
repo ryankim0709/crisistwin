@@ -2,6 +2,11 @@
 
 Date: 2026-10-23. Status: accepted.
 
+Amended by [0005](0007-wui-spread-mechanisms.md), which adds ember spotting and
+structure-to-structure spread on top of this model and floors the directional rate. The
+paragraphs below that it changed have been corrected in place and say where to read the
+detail; everything else here still holds.
+
 Supersedes [0003](0003-fire-spread-model.md), which was numbered 0003 because
 `origin/feat/berkeley-hills-maps` already publishes `0002-geographic-map.md`; this
 entry continues that sequence.
@@ -21,10 +26,11 @@ rather than extended.
 
 ## Decision
 
-Use `rothermel-1972-mtt` v2.0.0: Rothermel surface spread per cell over a real fuel and
-terrain raster, propagated as a minimum-travel-time arrival field. `fuelModels.ts` holds
-the fuel table, `rothermel.ts` the spread equations, and `spread.ts` the propagation and
-contouring; all three keep the rule from 0003 that the model imports no React, DOM,
+Use `rothermel-1972-mtt`, v2.0.0 at this decision and v3.0.0 since
+[0005](0007-wui-spread-mechanisms.md): Rothermel surface spread per cell over a real fuel
+and terrain raster, propagated as a minimum-travel-time arrival field. `fuelModels.ts`
+holds the fuel table, `rothermel.ts` the spread equations, and `spread.ts` the propagation
+and contouring; all three keep the rule from 0003 that the model imports no React, DOM,
 MapLibre, or network code, and they take the landscape as an argument. The network lives
 in `landscape.ts` alone, which fetches the fuel and elevation rasters and derives terrain
 from them. `FireMap.tsx` renders the output and `FireSimulatorPage.tsx` owns scenario
@@ -66,7 +72,10 @@ wind turns the fire instead of only speeding it up.
 Ellipse elongation uses the Anderson (1983) length-to-breadth relationship from effective
 wind speed, capped at 8 as FARSITE does, since the relationship is unbounded in strong
 wind. The rate at an angle away from the heading direction follows Alexander (1985) for
-an ellipse ignited at its rear focus.
+an ellipse ignited at its rear focus. That rate is now floored at the no-wind, no-slope
+rate of spread, as BehavePlus computes backing spread; see
+[0005](0007-wui-spread-mechanisms.md) for why the unfloored 0.4 percent of head was wrong
+and why the cap of 8 was left alone.
 
 ## The effective wind limit is reported, not enforced
 
@@ -88,14 +97,20 @@ backing spread all fall out of one field rather than being special-cased.
 
 Each cell offers sixteen neighbours, not eight. With only the immediate ring, spread
 directions quantise to 45 degrees and perimeters come out visibly octagonal. A two-cell
-step must find a passable cell roughly halfway along it, so fire cannot hop a one-cell
-barrier such as a road. Cells with no fuel are never reached at all, which is what keeps
-fire out of the bay and off the streets.
+step must find a passable cell roughly halfway along it, so a step cannot hop a one-cell
+barrier such as a road. A cell with no spread rate of its own is never reached at all,
+which is what keeps fire out of the bay. At this decision that was every cell without a
+fuel model; since [0005](0007-wui-spread-mechanisms.md) developed ground carries a rate of
+its own while structure spread is on, so it can be entered and can pass fire on, and
+embers can cross a gap to vegetation beyond it. Water, snow or ice, agricultural land, and
+bare ground stay unreachable under every mechanism.
 
 Perimeters are produced per frame by marching squares over the burned/unburned mask at
 that elapsed time, assembled into GeoJSON polygons with holes identified by containment
-depth rather than winding order. A 675 × 676 grid, about 456,000 cells, solves in roughly
-100 to 140 ms, which is fast enough to re-solve when a control changes.
+depth rather than winding order. A 675 × 676 grid, about 456,000 cells, solved in roughly
+100 to 140 ms when this was measured, which is fast enough to re-solve when a control
+changes. The mechanisms added in [0005](0007-wui-spread-mechanisms.md) cost about a third
+more on the grid measured there.
 
 ## Landscape data
 
@@ -106,12 +121,15 @@ uncompressed 16-bit GeoTIFF. `landscape.ts` decodes exactly that layout and reje
 anything else rather than silently misreading it, so no GeoTIFF dependency was added.
 EPSG:3857 is the projection MapLibre renders in, so the grid needs no reprojection. The
 coverage is United States only: outside the contiguous US the run fails with an explicit
-error instead of an empty landscape.
+error instead of an empty landscape. One request per scenario did not survive contact
+with the service; how the grid is now fetched, and what the browser needed before it
+could reach the service at all, is in [0005](0007-wui-spread-mechanisms.md).
 
 Terrain comes from the keyless AWS Open Data terrarium elevation tiles at zoom 13, whose
 pixels are near the 30 m fuel cell, decoded as `R × 256 + G + B / 256 − 32768` metres and
 sampled onto the fuel grid. Slope and aspect are derived by Horn's method over the eight
-neighbours of each cell.
+neighbours of each cell. A tile that cannot be fetched is reported on the grid rather
+than read as sea level, which had been silently flattening slope.
 
 ## Units: Mercator metres are not ground metres
 
@@ -133,11 +151,17 @@ times are elapsed simulation-clock minutes from ignition.
 The run is fully determined by its scenario and the fetched landscape. No randomness is
 used, so no seed is recorded; a run returns the scenario, the model id and version, the
 derived spread rates at the ignition cell, the burnable fraction of the modelled area,
-whether fire reached the edge of that area, and the solve time.
+whether fire reached the edge of that area, and the solve time. Since
+[0005](0007-wui-spread-mechanisms.md) it also returns the options actually applied, the
+developed and fire-carrying fractions, and the burned area split by the mechanism that
+delivered fire to it.
 
-Igniting on a cell that carries no fuel — 91 urban or developed, 92 snow or ice, 93
-agricultural, 98 open water, 99 bare ground — is refused with `NonBurnableIgnitionError`
-naming the ground, rather than producing a fire that could not start there.
+Igniting on a cell that carries no fuel — 92 snow or ice, 93 agricultural, 98 open water,
+99 bare ground — is refused with `NonBurnableIgnitionError` naming the ground, rather than
+producing a fire that could not start there. Developed ground, 91, was refused on the same
+terms at this decision; since 0005 it is accepted when structure-to-structure spread is
+switched on and refused when it is off, because the rest of the run carries fire through
+developed ground.
 
 ## What it does on real ground
 
@@ -146,20 +170,33 @@ head rate is 14.9 m/min, and the fire reaches 33 ha and 1.29 km by T+3:00 over a
 that is 87 percent burnable. In Los Padres chaparral, ignition lands in TU5, the head rate
 is 6.5 m/min, and the fire reaches 36 ha and 1.47 km by T+3:00 at 90 percent burnable.
 
-The Berkeley wildland-urban interface behaves differently, and that is the finding rather
-than a defect. A wind-driven run there often stalls within a few hundred metres: the
-vegetated patch is small and bounded by streets, and with length-to-breadth capped at 8
-the flanking rate is under 1 percent of the head rate, so a non-burnable barrier directly
-downwind can halt the run outright. The old ellipse hid this by burning through the same
-ground at full speed.
+The Berkeley wildland-urban interface behaved differently, and at this decision that was
+read as a finding rather than a defect. A wind-driven run there stalled within a few
+hundred metres: the vegetated patch is small and bounded by streets, and with
+length-to-breadth capped at 8 the flanking rate was under 1 percent of the head rate, so
+a non-burnable barrier directly downwind could halt the run outright. The old ellipse hid
+this by burning through the same ground at full speed.
+
+That reading was only half right. Where the barrier is water or bare rock, the stall is
+the landscape. Across a street it was the model omitting two mechanisms that carry real
+interface fires, and the backing rate it leaned on was not how Rothermel-based systems
+compute backing. [0005](0007-wui-spread-mechanisms.md) records both corrections and what
+they do to this run.
 
 ## Limits
 
-The model is surface fire only. There is no crown fire, no spotting or ember transport, no
-suppression, and no structure-to-structure urban spread. The last omission matters most
-here: a fire that reaches the edge of the vegetation simply stops, which understates real
-wildland-urban interface risk, where structures have historically carried fire through
-exactly the developed ground this model treats as inert.
+The surface physics is surface fire only: there is no crown fire and no suppression, and
+the Rothermel part of the model stops at the edge of the vegetation.
+
+Spotting and structure-to-structure spread were absent at this decision, and the second
+omission mattered most: a fire that reached the edge of the vegetation simply stopped,
+which understated real wildland-urban interface risk, where structures have historically
+carried fire through exactly the developed ground this model treated as inert. Both now
+exist, as deterministic and optional assumptions layered on top of the surface model
+rather than as physics, and the burned area each delivers is reported separately. Their
+constants, sources, and the places they are most likely to run hot are in
+[0005](0007-wui-spread-mechanisms.md). Crown fire and suppression are still absent, and
+no part of the model represents plume-dominated behaviour.
 
 Weather is static. Wind is uniform over the grid and constant in time, fuel moisture is
 uniform across the landscape, and there is no diurnal change in either. LANDFIRE fuel is a
