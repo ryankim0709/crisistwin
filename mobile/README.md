@@ -72,6 +72,18 @@ Vite server started by `docker compose up` in `app/`. The tab shows a loading
 state, then the map, or an error with a retry button when the web app is not
 reachable or returns a non-200 status. Nothing is stored between launches.
 
+### My Plan
+
+The My Plan tab holds a household meeting plan: a primary meeting point, an
+optional backup, and trusted contacts (see
+[ADR 0008](../docs/adr/0008-mobile-meeting-plan.md)). Points are chosen with
+Apple Maps search or by tapping the map; contacts come from the system picker,
+which needs no Contacts permission. The plan is saved only on the device as
+versioned JSON and needs no backend. **Open in Maps** gives directions, and
+sharing opens Messages for the contacts' numbers, or the share sheet where
+Messages is unavailable, such as the simulator. The app never sends anything on
+its own or reads the user's location.
+
 Release does not include `Local.xcconfig` and has empty `API_BASE_URL` and `WEB_BASE_URL`. Set an
 HTTPS origin in the Release configuration before distribution. Until then the
 app shows a configuration error instead of claiming connectivity. App Store
@@ -90,14 +102,16 @@ mobile/
     Features/
       Home/              Workspace and API readiness states
       Scenarios/         Embedded web map with loading and error states
+      Plan/              Meeting plan model and on-device store, plan tab, point editor
     Resources/           Info.plist and adaptive color assets
 ```
 
 The workspace follows the web app's cream/green palette with dark-mode variants,
 system text styles, labeled controls, and status icons accompanied by text.
-The Scenarios tab embeds the web map. Native maps, a Swift fire model, traffic
-simulation, scenario storage/sync, authentication, and notifications are not
-implemented. No fixtures or invented simulation metrics are displayed.
+The Scenarios tab embeds the web map. My Plan uses a native MapKit map for the
+user's own meeting points. A Swift fire model, checking meeting points against
+the simulation, traffic simulation, scenario storage/sync, authentication, and
+notifications are not implemented. No fixtures or invented simulation metrics are displayed.
 
 ### Health boundary
 
@@ -136,3 +150,7 @@ The embedded map was built with Xcode 26.6 and run on an iOS 26.5 simulator. Its
 loading, error and retry states were checked, and the real `/maps` page from
 `docker compose up` rendered with its fire controls. It has not been checked on a
 physical device.
+
+My Plan was run on the same simulator: Apple Maps search, tap-to-place, save,
+reload after relaunch, the contact picker, and the share-sheet fallback were
+exercised. Messages composing needs a physical device and was not checked.
