@@ -3,7 +3,7 @@
  * simulated minutes, and this module decides, deterministically, whether anything changed
  * enough to wake the agent. Quiet checks cost nothing; the agent is only called with the list
  * of reasons this module found. Pure: no React, network or LLM. See
- * docs/adr/0018-live-dispatch-monitor.md.
+ * docs/adr/0019-live-dispatch-monitor.md.
  */
 
 import {

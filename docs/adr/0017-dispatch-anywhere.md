@@ -9,7 +9,7 @@ Date: 2026-10-24. Status: accepted for the demo. Amends [0014](0014-dispatch-age
 >
 > **Update (2026-10-24, later):** the dispatcher is reattached on top of the studio run, with a
 > live monitor, staged evacuation waves and simulated resident notices. See
-> [0018](0018-live-dispatch-monitor.md).
+> [0019](0019-live-dispatch-monitor.md).
 
 ## Context
 

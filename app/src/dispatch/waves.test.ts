@@ -29,6 +29,7 @@ function tinyArea(): DispatchArea {
     capacityVph: 1800,
     oneway: false,
     name: null,
+    bridge: false,
     coords: [nodes[from], nodes[to]],
   }));
   const outgoing: Arc[][] = nodes.map(() => []);

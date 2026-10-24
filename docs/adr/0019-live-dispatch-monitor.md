@@ -1,4 +1,4 @@
-# 0018: Live dispatch monitor, staged evacuation waves and resident notices
+# 0019: Live dispatch monitor, staged evacuation waves and resident notices
 
 Date: 2026-10-24. Status: accepted for the demo. Amends [0014](0014-dispatch-agent.md) and
 [0017](0017-dispatch-anywhere.md).
@@ -66,6 +66,9 @@ changes, and evacuates in waves so neighbourhoods are not all sent onto the same
   computed values come from numerical models.
 - Order slack is deliberately simple: it ignores shared roads and downstream congestion. The
   deadline backstop makes that safe in the simulation, not accurate.
+- On `/dispatch` the studio's own evacuation-and-closures panel ([0018](0018-road-closures.md))
+  is hidden, because the dispatcher owns the 3D overlay there; closures are not yet fed to the
+  dispatch engine, although it already supports closed edges.
 - Still a planning experiment. There is no real alerting channel, and adding one is out of scope.
 
 ## Revisit

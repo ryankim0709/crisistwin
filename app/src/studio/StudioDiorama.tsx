@@ -4,9 +4,17 @@
  * and the run's combined arrival field, with one labelled pin per enabled ignition, plus the
  * board's OSM roads with synthetic homes along residential streets. Presentation only; frames,
  * areas and outcomes stay the solver's. See docs/adr/0016-studio-diorama-view.md.
+ *
+ * With the evacuation on, the dispatch overlay draws households by state, routes, vehicles and
+ * closed roads, positioned by an `EvacuationPlayer` at the playback clock
+ * (docs/adr/0018-road-closures.md).
  */
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import type { DispatchArea } from "../dispatch/area";
+import { HomeStatus } from "../dispatch/engine";
+import type { FireExposure } from "../dispatch/fireExposure";
+import { DispatchOverlay, HOME_COLORS, cssColor } from "../dispatch/scene/DispatchOverlay";
 import { BurnedGlyph, FireEdgeGlyph, WindGlyph } from "../diorama/ui/glyphs";
 import { useMediaQuery } from "../diorama/ui/format";
 import { FireDioramaScene } from "../fire/diorama/FireDioramaScene";
@@ -18,8 +26,9 @@ import type {
 } from "../fire/diorama/types";
 import type { LandscapeGrid } from "../fire/landscape";
 import type { GeoPoint } from "../fire/spread";
-import { useBoardStreets } from "../fire/useBoardStreets";
-import { Button, Legend, Panel } from "../ui";
+import type { BoardStreetsState } from "../fire/useBoardStreets";
+import { Button, Legend, Panel, type LegendItem } from "../ui";
+import { EvacuationPlayer, type EvacuationInputs } from "./evacuation";
 
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
 const ROADS_ATTRIBUTION = "Roads © OpenStreetMap contributors";
@@ -31,6 +40,43 @@ function RoadGlyph() {
       <path d="M2 12C8 12 10 4 22 4" stroke="#6b7480" strokeWidth="3" fill="none" />
     </svg>
   );
+}
+
+function ClosedRoadGlyph() {
+  return (
+    <svg width="24" height="16" viewBox="0 0 24 16" aria-hidden="true">
+      <path d="M2 8H22" stroke="#1a1a1a" strokeWidth="4" />
+      <path d="M9 3l6 10M15 3 9 13" stroke="#fff" strokeWidth="1.6" />
+    </svg>
+  );
+}
+
+const HOUSEHOLD_STATES: readonly [HomeStatus, string][] = [
+  [HomeStatus.idle, "Household: no order (or cut off)"],
+  [HomeStatus.ordered, "Household: ordered, getting ready"],
+  [HomeStatus.queued, "Household: queued to enter the road"],
+  [HomeStatus.driving, "Household: driving out"],
+  [HomeStatus.safe, "Household: reached an exit"],
+  [HomeStatus.caught, "Household: caught by the modelled fire"],
+];
+
+function RoofGlyph({ color }: { color: string }) {
+  return (
+    <svg width="24" height="16" viewBox="0 0 24 16" aria-hidden="true">
+      <path d="M7 14V8h10v6z" fill="#e7e1d3" stroke="#8a8172" strokeWidth="1" />
+      <path d="M5 8.5 12 3l7 5.5z" fill={color} />
+    </svg>
+  );
+}
+
+/** What the evacuation overlay draws; null leaves the board as plain streets. */
+export interface StudioEvacuationView {
+  area: DispatchArea;
+  /** Fire exposure of the run shown, or null before a run (homes only, no evacuation). */
+  exposure: FireExposure | null;
+  closedEdges: ReadonlySet<number>;
+  /** Policy inputs to play, or null before a run. */
+  inputs: EvacuationInputs | null;
 }
 
 function HomeGlyph() {
@@ -63,6 +109,11 @@ export interface StudioDioramaProps {
   emptyState: ReactNode;
   /** Region picker and board provenance, shown top right whether or not a board is loaded. */
   boardControl?: ReactNode;
+  /** OSM roads and synthetic homes for the board (the page loads them). */
+  streets: BoardStreetsState;
+  evacuation: StudioEvacuationView | null;
+  /** Shown under the board control. */
+  evacuationPanel?: ReactNode;
   /** The live scene once created, and null once disposed (for a page overlay such as dispatch). */
   onSceneChange?: (scene: FireDioramaSceneApi | null) => void;
 }
@@ -91,6 +142,9 @@ export default function StudioDiorama(props: StudioDioramaProps) {
     onGroundClick,
     emptyState,
     boardControl,
+    streets,
+    evacuation,
+    evacuationPanel,
     onSceneChange,
   } = props;
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -98,8 +152,16 @@ export default function StudioDiorama(props: StudioDioramaProps) {
   const [error, setError] = useState<string | null>(null);
   const [legendOpen, setLegendOpen] = useState(false);
   const reducedMotion = useMediaQuery(REDUCED_MOTION_QUERY);
-  const streets = useBoardStreets(landscape);
   const streetArea = streets.status === "ready" ? streets.area : null;
+  // The overlay draws its own homes (coloured by household state), so the streets layer then
+  // draws roads only.
+  const sceneStreets = useMemo(
+    () => (streetArea && evacuation ? { edges: streetArea.edges, homes: [] } : streetArea),
+    [streetArea, evacuation],
+  );
+  const [overlay] = useState(() => new DispatchOverlay());
+  const inputs = evacuation?.inputs ?? null;
+  const player = useMemo(() => (inputs ? new EvacuationPlayer(inputs) : null), [inputs]);
   const reducedMotionRef = useRef(reducedMotion);
   const clickRef = useRef(onGroundClick);
   useEffect(() => {
@@ -140,19 +202,40 @@ export default function StudioDiorama(props: StudioDioramaProps) {
     if (!scene) return;
     let handle = 0;
     const tick = () => {
-      scene.setTime(timeRef.current);
+      const time = timeRef.current;
+      scene.setTime(time);
+      if (player) {
+        if (player.syncTo(time)) overlay.setEngine(player.engine);
+      } else overlay.setPreviewMinute(time);
       handle = requestAnimationFrame(tick);
     };
     handle = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(handle);
-  }, [scene, timeRef]);
+  }, [scene, timeRef, player, overlay]);
+
+  const evacuationShown = evacuation !== null;
+  useEffect(() => {
+    scene?.setOverlay(evacuationShown ? overlay : null);
+  }, [scene, overlay, evacuationShown]);
+  const evacArea = evacuation?.area ?? null;
+  const evacExposure = evacuation?.exposure ?? null;
+  useEffect(() => {
+    overlay.setArea(evacArea, evacExposure);
+  }, [overlay, evacArea, evacExposure]);
+  const closedEdges = evacuation?.closedEdges;
+  useEffect(() => {
+    if (closedEdges) overlay.setClosedEdges(closedEdges);
+  }, [overlay, closedEdges]);
+  useEffect(() => {
+    overlay.setEngine(player?.engine ?? null);
+  }, [overlay, player, evacArea]);
 
   useEffect(() => {
     scene?.setLandscape(landscape);
   }, [scene, landscape]);
   useEffect(() => {
-    scene?.setStreets(streetArea);
-  }, [scene, streetArea]);
+    scene?.setStreets(sceneStreets);
+  }, [scene, sceneStreets]);
   useEffect(() => {
     scene?.setRun(run);
   }, [scene, run]);
@@ -218,6 +301,7 @@ export default function StudioDiorama(props: StudioDioramaProps) {
               </Button>
             </div>
           )}
+          {landscape && evacuationPanel}
         </div>
       )}
 
@@ -267,6 +351,20 @@ export default function StudioDiorama(props: StudioDioramaProps) {
                             label: "Synthetic home along a residential street",
                             color: "var(--ct-ink)",
                             glyph: <HomeGlyph />,
+                          },
+                        ]
+                      : []),
+                    ...(evacuation
+                      ? [
+                          ...HOUSEHOLD_STATES.map(([status, label]): LegendItem => ({
+                            label,
+                            color: cssColor(HOME_COLORS[status]),
+                            glyph: <RoofGlyph color={cssColor(HOME_COLORS[status])} />,
+                          })),
+                          {
+                            label: "Closed road or bridge (labelled), your assumption",
+                            color: "var(--ct-ink)",
+                            glyph: <ClosedRoadGlyph />,
                           },
                         ]
                       : []),

@@ -1,7 +1,7 @@
 /**
  * Wire contract between the /dispatch page and POST /api/dispatch/decide
  * (app/backend/api/dispatch.py). Change both sides and docs/adr/0014-dispatch-agent.md (amended
- * by docs/adr/0017-dispatch-anywhere.md and docs/adr/0018-live-dispatch-monitor.md) together.
+ * by docs/adr/0017-dispatch-anywhere.md and docs/adr/0019-live-dispatch-monitor.md) together.
  *
  * The page calls the agent only when its live monitor (monitor.ts) finds a material change;
  * `monitor.woke_because` lists those reasons.
