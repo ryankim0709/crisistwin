@@ -25,6 +25,12 @@ import type { FireAreaFrame, FireTarget } from "./fireAttack";
 import type { FireExposure } from "./fireExposure";
 import { detectChanges, takeBaseline, type MonitorBaseline } from "./monitor";
 import { buildObservation, toEngineOrders, type FrameSummary } from "./observation";
+import {
+  evaluateTacticOptions,
+  refreshFire as refreshTacticFire,
+  type SolvedFire,
+  type TacticSolver,
+} from "./tacticOptions";
 
 /** Simulated minutes per real second; slow enough to read the streamed reasoning. */
 export const DISPATCH_SPEED_CHOICES = [1, 2, 4] as const;
@@ -58,13 +64,6 @@ export interface MonitorCheck {
   reasons: string[];
 }
 
-/** The fire re-solved with some fires stopped at the minute engines put them out. */
-export interface ResolvedFire {
-  exposure: FireExposure;
-  frames: readonly FrameSummary[];
-  fireFrames: readonly FireAreaFrame[];
-}
-
 export interface SessionInputs {
   area: DispatchArea;
   exposure: FireExposure;
@@ -73,10 +72,14 @@ export interface SessionInputs {
   fireTargets: readonly FireTarget[];
   fireFrames: readonly FireAreaFrame[];
   /**
-   * Re-solve the fire with each fire stopped from its minute in `outFromMinuteBySource`
-   * (Infinity = keeps burning). Called when engines put a fire out.
+   * Re-solves the fire with fires put out and control lines built (tacticOptions.ts), for the
+   * live fire and for the what-if options the agent is shown.
    */
-  resolveFire: (outFromMinuteBySource: number[]) => ResolvedFire;
+  solver: TacticSolver;
+  /** Show a re-solved fire as the live one (the 3D view and playback). */
+  showFire: (solved: SolvedFire) => void;
+  /** Burned hectares and homes reached by the horizon with no fire fighting. */
+  initialOutcome: { burnedHectares: number; homesReached: number };
   baselineHomesExposed: number | null;
   horizonMinutes: number;
   ignitions: IgnitionEvent[];
@@ -130,6 +133,8 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
 
   const engineRef = useRef<DispatchEngine | null>(null);
   const inputsRef = useRef<SessionInputs | null>(null);
+  /** Burned hectares and homes reached by the horizon with the fire fighting in effect. */
+  const outcomeRef = useRef({ burnedHectares: 0, homesReached: 0 });
   const clockRef = useRef(0);
   const lastCheckRef = useRef(0);
   const lastDecisionRef = useRef(-1);
@@ -165,6 +170,22 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
     return (frame?.burnedAreaSquareMeters ?? 0) / SQUARE_METERS_PER_HECTARE;
   }, []);
 
+  /**
+   * After engines put a fire out, or crews joined or left a line: re-plan the lines, re-solve
+   * the fire and swap it into the engine and the view.
+   */
+  const refreshFire = useCallback((engine: DispatchEngine) => {
+    const inputs = inputsRef.current;
+    if (!inputs) return;
+    const solved = refreshTacticFire(engine, inputs.solver);
+    inputs.showFire(solved);
+    outcomeRef.current = {
+      burnedHectares: solved.burnedHectares,
+      homesReached: solved.homesReached,
+    };
+    inputsRef.current = { ...inputs, exposure: solved.exposure, frames: solved.frames };
+  }, []);
+
   const decide = useCallback(
     (reasons: string[]) => {
       const engine = engineRef.current;
@@ -176,6 +197,8 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
       const alerts = engine.alerts.filter((alert) => alert.minute > lastDecisionRef.current);
       const observation = buildObservation({
         engine,
+        tacticOptions: evaluateTacticOptions(engine, inputs.solver),
+        currentOutcome: outcomeRef.current,
         frames: inputs.frames,
         baselineHomesExposed: inputs.baselineHomesExposed,
         windFromDegrees: inputs.windFromDegrees,
@@ -225,6 +248,7 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
         .then((decision) => {
           if (controller.signal.aborted || engineRef.current !== engine) return;
           const outcomes = engine.applyOrders(toEngineOrders(decision.orders as WireOrder[]));
+          if (engine.linesDirty) refreshFire(engine);
           previousOutcomesRef.current = outcomes;
           previousSummaryRef.current = decision.summary;
           lastDecisionRef.current = minute;
@@ -255,19 +279,8 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
           if (abortRef.current === controller) abortRef.current = null;
         });
     },
-    [bump, burnedHectaresAt, setSessionStatus, updateEntry],
+    [bump, burnedHectaresAt, refreshFire, setSessionStatus, updateEntry],
   );
-
-  /** After engines put a fire out: re-solve the fire without it and swap it into the engine. */
-  const refreshFire = useCallback((engine: DispatchEngine) => {
-    const inputs = inputsRef.current;
-    if (!inputs) return;
-    const resolved = inputs.resolveFire(
-      engine.fires.map((fire) => fire.outMinute ?? Number.POSITIVE_INFINITY),
-    );
-    engine.setExposure(resolved.exposure, resolved.fireFrames);
-    inputsRef.current = { ...inputs, exposure: resolved.exposure, frames: resolved.frames };
-  }, []);
 
   /** True when the monitor should look at the engine now. */
   const checkDue = useCallback((engine: DispatchEngine): boolean => {
@@ -315,7 +328,10 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
         const out = engine.fires.filter((fire) => fire.outMinute !== null).length;
         engine.step();
         stepped = true;
-        if (engine.fires.filter((fire) => fire.outMinute !== null).length > out) {
+        if (
+          engine.fires.filter((fire) => fire.outMinute !== null).length > out ||
+          engine.linesDirty
+        ) {
           refreshFire(engine);
         }
         if (checkDue(engine)) {
@@ -366,6 +382,7 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
       engine.setFires(inputs.fireTargets, inputs.fireFrames);
       engineRef.current = engine;
       inputsRef.current = inputs;
+      outcomeRef.current = inputs.initialOutcome;
       clockRef.current = 0;
       onTimeRef.current?.(0);
       lastCheckRef.current = 0;

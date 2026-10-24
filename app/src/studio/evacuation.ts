@@ -13,17 +13,36 @@
  *   time, so a cut-off zone cannot become reachable again.
  * - When an ordered zone's route is cut by fire, it is re-ordered the same minute to its
  *   fastest reachable exit; with none left its departures stay held (engine behaviour).
+ * - Firefighters overwhelmed by the fire (studio/crewHandoff.ts) join at their leave minute and
+ *   go on evacuation support, which shortens a zone's departure spread while they are on scene.
+ *   A crew whose road point the fire has already cut off from every zone still evacuating pulls
+ *   back to the nearest node that can reach one.
+ *   Every CREW_REVIEW_MINUTES an idle crew (just arrived from the fire, withdrawn, or in a zone
+ *   that has cleared) goes to the ordered zone with the fewest crews, then the earliest fire
+ *   contact, then the most households still at home, skipping zones the fire is about to reach.
  */
 
-import type { DispatchArea } from "../dispatch/area";
-import { DispatchEngine, type Totals } from "../dispatch/engine";
+import { groundMeters, type DispatchArea } from "../dispatch/area";
+import {
+  DispatchEngine,
+  UNIT_WITHDRAW_MARGIN_MINUTES,
+  type Totals,
+  type UnitState,
+} from "../dispatch/engine";
 import type { FireExposure } from "../dispatch/fireExposure";
 import { routeTo, shortestPathTree } from "../dispatch/routing";
 import { lonLatToMercator } from "../fire/landscape";
+import type { EvacuationCrew } from "./crewHandoff";
 
 /** Minutes after T+0 at which the evacuation order goes out. */
 export const ORDER_MINUTE_CHOICES = [0, 15, 30, 60] as const;
 export const DEFAULT_ORDER_MINUTE = 0;
+/** Idle crews are given a zone this often, simulated minutes. */
+export const CREW_REVIEW_MINUTES = 5;
+/** Crews are not sent to a zone whose core the fire reaches within this many minutes. */
+const CREW_ZONE_MARGIN_MINUTES = UNIT_WITHDRAW_MARGIN_MINUTES + 10;
+/** Zones tried per idle crew before it waits for the next review. */
+const CREW_ZONE_TRIES = 3;
 
 export interface EvacuationInputs {
   area: DispatchArea;
@@ -32,6 +51,8 @@ export interface EvacuationInputs {
   /** Edge indices closed to traffic for the whole run. */
   closedEdges: ReadonlySet<number>;
   orderMinute: number;
+  /** Firefighters who leave the fire to support the evacuation (none when omitted). */
+  crews?: readonly EvacuationCrew[];
 }
 
 export interface EvacuationSummary {
@@ -55,6 +76,8 @@ export class EvacuationPolicyRun {
   private ordered = false;
   /** Ordered zones whose route was cut and that have no exit left; not searched again. */
   private stranded = new Set<number>();
+  /** Crew units by id once they have left the fire. */
+  private crewUnits = new Map<string, UnitState>();
 
   constructor(inputs: EvacuationInputs) {
     this.inputs = inputs;
@@ -110,6 +133,122 @@ export class EvacuationPolicyRun {
   }
 
   private applyPolicy(): void {
+    this.applyOrderPolicy();
+    this.assignCrews();
+  }
+
+  /** Crews that left the fire and have nothing useful to do. */
+  private idleCrews(): UnitState[] {
+    const { engine } = this;
+    const idle: UnitState[] = [];
+    for (const crew of this.inputs.crews ?? []) {
+      if (engine.minute < crew.leaveMinute) continue;
+      let unit = this.crewUnits.get(crew.id);
+      if (!unit) {
+        unit = engine.addUnit(crew.id, "studio-crew", this.pullBackNode(crew.node), crew.homeNode);
+        this.crewUnits.set(crew.id, unit);
+      }
+      const done =
+        unit.status === "on_scene" &&
+        unit.zone !== null &&
+        (engine.zones[unit.zone].status !== "ordered" || engine.zones[unit.zone].atHome === 0);
+      if (unit.status === "available" || unit.status === "returning" || done) idle.push(unit);
+    }
+    return idle;
+  }
+
+  /**
+   * Where a crew leaving the fire starts: its road point when a zone still evacuating can be
+   * reached from there avoiding fire and closures; otherwise the nearest node that can (it pulls
+   * back to open roads first).
+   */
+  private pullBackNode(node: number): number {
+    const { area } = this.inputs;
+    const blocked = this.engine.blockedAt(this.engine.minute);
+    // Nodes that can drive to such a zone: a search from their loading nodes along open arcs,
+    // reversed.
+    const into: number[][] = area.nodes.map(() => []);
+    area.outgoing.forEach((arcs, from) => {
+      for (const arc of arcs) if (!blocked(arc.edge)) into[arc.head].push(from);
+    });
+    const reaches = new Uint8Array(area.nodes.length);
+    const queue = this.engine.zones
+      .filter((zone) => zone.status !== "cleared" && zone.status !== "overrun")
+      .map((zone) => area.zones[zone.index].node);
+    for (const start of queue) reaches[start] = 1;
+    for (let i = 0; i < queue.length; i += 1) {
+      for (const from of into[queue[i]]) {
+        if (!reaches[from]) {
+          reaches[from] = 1;
+          queue.push(from);
+        }
+      }
+    }
+    if (reaches[node]) return node;
+    let best = node;
+    let bestMeters = Infinity;
+    area.nodes.forEach((point, candidate) => {
+      if (!reaches[candidate]) return;
+      const meters = groundMeters(point, area.nodes[node]);
+      if (meters < bestMeters) {
+        best = candidate;
+        bestMeters = meters;
+      }
+    });
+    return best;
+  }
+
+  private assignCrews(): void {
+    const { engine } = this;
+    const crews = this.inputs.crews ?? [];
+    if (crews.length === 0) return;
+    const fresh = crews.some((crew) => crew.leaveMinute === engine.minute);
+    if (!fresh && engine.minute % CREW_REVIEW_MINUTES !== 0) return;
+    const idle = this.idleCrews();
+    if (idle.length === 0) return;
+    const { zoneContact, zoneCore } = engine.exposure;
+    const helpers = new Map<number, number>();
+    for (const unit of engine.units) {
+      if (unit.task === "evacuation_support" && unit.zone !== null && !idle.includes(unit)) {
+        helpers.set(unit.zone, (helpers.get(unit.zone) ?? 0) + 1);
+      }
+    }
+    for (const unit of idle) {
+      const candidates = engine.zones
+        .filter(
+          (zone) =>
+            zone.status === "ordered" &&
+            zone.atHome > 0 &&
+            zone.index !== unit.zone &&
+            zoneCore[zone.index] > engine.minute + CREW_ZONE_MARGIN_MINUTES,
+        )
+        .sort(
+          (a, b) =>
+            (helpers.get(a.index) ?? 0) - (helpers.get(b.index) ?? 0) ||
+            zoneContact[a.index] - zoneContact[b.index] ||
+            b.atHome - a.atHome ||
+            a.index - b.index,
+        )
+        .slice(0, CREW_ZONE_TRIES);
+      for (const zone of candidates) {
+        const [outcome] = engine.applyOrders([
+          {
+            type: "dispatch_unit",
+            unit_id: unit.id,
+            zone_id: this.inputs.area.zones[zone.index].id,
+            task: "evacuation_support",
+            reason: "Studio policy: crews overwhelmed by the fire help the evacuation.",
+          },
+        ]);
+        if (outcome.accepted) {
+          helpers.set(zone.index, (helpers.get(zone.index) ?? 0) + 1);
+          break;
+        }
+      }
+    }
+  }
+
+  private applyOrderPolicy(): void {
     const { engine } = this;
     if (engine.minute < this.inputs.orderMinute) return;
     if (!this.ordered) {

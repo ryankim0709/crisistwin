@@ -187,3 +187,83 @@ describe("studio evacuation policy", () => {
     expect(nearestEdge(area, [0.015, 0.015])).toBeNull();
   });
 });
+
+describe("firefighters overwhelmed by the fire", () => {
+  it("join the evacuation at their leave minute and speed up departures", () => {
+    const area = testArea();
+    const inputs = {
+      area,
+      exposure: noFire(area),
+      horizonMinutes: HORIZON,
+      closedEdges: new Set<number>(),
+      orderMinute: 0,
+    };
+    const without = simulateEvacuation(inputs);
+    const crews = [{ id: "Engine 1", node: 2, homeNode: 2, leaveMinute: 0 }];
+    const run = new EvacuationPolicyRun({ ...inputs, crews });
+    const unit = run.engine.units.find((candidate) => candidate.id === "Engine 1");
+    expect(unit?.task).toBe("evacuation_support");
+    expect(unit?.zone).toBe(0);
+    const helped = simulateEvacuation({ ...inputs, crews });
+    expect(helped.final.safe).toBe(10);
+    expect(helped.allClearMinute!).toBeLessThan(without.allClearMinute!);
+  });
+
+  it("stay away until they leave the fire", () => {
+    const area = testArea();
+    const run = new EvacuationPolicyRun({
+      area,
+      exposure: noFire(area),
+      horizonMinutes: HORIZON,
+      closedEdges: new Set<number>(),
+      orderMinute: 0,
+      crews: [{ id: "Engine 1", node: 2, homeNode: 2, leaveMinute: 30 }],
+    });
+    while (run.minute < 29) run.step();
+    expect(run.engine.units.some((unit) => unit.id === "Engine 1")).toBe(false);
+    run.step();
+    expect(run.engine.units.find((unit) => unit.id === "Engine 1")?.status).toBe("en_route");
+  });
+});
+
+describe("crews leaving a fire that has reached their road point", () => {
+  it("pull back to the nearest open road and still join", () => {
+    const area = testArea();
+    const exposure = noFire(area);
+    // Fire is on node 2 and its only road (1-2) when the crew leaves.
+    exposure.nodeArrival[2] = 0;
+    exposure.edgeArrival[1] = 0;
+    const run = new EvacuationPolicyRun({
+      area,
+      exposure,
+      horizonMinutes: HORIZON,
+      closedEdges: new Set<number>(),
+      orderMinute: 0,
+      crews: [{ id: "Engine 1", node: 2, homeNode: 4, leaveMinute: 0 }],
+    });
+    const unit = run.engine.units.find((candidate) => candidate.id === "Engine 1");
+    expect(unit?.task).toBe("evacuation_support");
+  });
+});
+
+describe("crews in a pocket the fire has cut off", () => {
+  it("pull back to a node that can still reach the zone", () => {
+    const area = testArea();
+    const exposure = noFire(area);
+    // Both roads from node 3 (to the zone at 0 and to exit node 4) are burning: a crew parked
+    // there cannot reach the zone and must start from the nearest node that can.
+    exposure.edgeArrival[2] = 0;
+    exposure.edgeArrival[3] = 0;
+    const run = new EvacuationPolicyRun({
+      area,
+      exposure,
+      horizonMinutes: HORIZON,
+      closedEdges: new Set<number>(),
+      orderMinute: 0,
+      crews: [{ id: "Engine 1", node: 3, homeNode: 2, leaveMinute: 0 }],
+    });
+    const unit = run.engine.units.find((candidate) => candidate.id === "Engine 1");
+    expect(unit?.task).toBe("evacuation_support");
+    expect(unit?.node).not.toBe(3);
+  });
+});

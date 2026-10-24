@@ -39,6 +39,8 @@
 
 import { groundMeters, type DispatchArea, type LonLat } from "./area";
 import type { FireExposure } from "./fireExposure";
+import { tacticBlocked, type FireTactic } from "./fireTactics";
+import type { LinePlan } from "../studio/firefighting";
 import {
   ENGINE_LINE_METERS_PER_MINUTE,
   fireAreaAt,
@@ -215,7 +217,8 @@ export type AlertType =
   | "unit_stranded"
   | "vehicles_exposed"
   | "wave_released"
-  | "fire_out";
+  | "fire_out"
+  | "fire_held";
 
 export interface Alert {
   minute: number;
@@ -235,7 +238,14 @@ export type Order =
       reason: string;
     }
   | { type: "dispatch_unit"; unit_id: string; zone_id: string; task: UnitTask; reason: string }
-  | { type: "attack_fire"; unit_id: string; fire_id: string; reason: string }
+  | {
+      type: "attack_fire";
+      unit_id: string;
+      fire_id: string;
+      /** How to fight it; "direct" when absent (fireTactics.ts). */
+      tactic?: FireTactic;
+      reason: string;
+    }
   | { type: "recall_unit"; unit_id: string; reason: string };
 
 export interface OrderOutcome {
@@ -265,6 +275,14 @@ export interface FireAttackState {
   lineMeters: number;
   /** Minute the engines put it out, or null while it burns. */
   outMinute: number | null;
+  /** How the engines on it are fighting it, or null when none have been sent. */
+  tactic: FireTactic | null;
+  /** Control line planned and built around it by flank or indirect attack (incl. built part). */
+  line: LinePlan | null;
+  /** Minute a line tactic holds it (it stops growing), from the current run; else null. */
+  heldMinute: number | null;
+  /** The held alert was raised and its crews released. */
+  heldAnnounced: boolean;
 }
 
 export interface IgnitionEvent {
@@ -393,7 +411,15 @@ export class DispatchEngine {
 
   /** The fires engines can attack, and their burned area over time (from the current run). */
   setFires(targets: readonly FireTarget[], frames: readonly FireAreaFrame[]): void {
-    this.fires = targets.map((target) => ({ target, lineMeters: 0, outMinute: null }));
+    this.fires = targets.map((target) => ({
+      target,
+      lineMeters: 0,
+      outMinute: null,
+      tactic: null,
+      line: null,
+      heldMinute: null,
+      heldAnnounced: false,
+    }));
     this.fireFrames = [...frames];
   }
 
@@ -402,9 +428,18 @@ export class DispatchEngine {
    * or before the current minute. Arrivals up to now are unchanged by such a re-solve, so only
    * the future changes. Staged zones that are no longer reached by any fire stand down.
    */
-  setExposure(exposure: FireExposure, frames: readonly FireAreaFrame[]): void {
+  setExposure(
+    exposure: FireExposure,
+    frames: readonly FireAreaFrame[],
+    heldMinutes: readonly (number | null)[] | null = null,
+  ): void {
     this.exposure = exposure;
     this.fireFrames = [...frames];
+    if (heldMinutes) {
+      this.fires.forEach((fire, index) => {
+        if (!fire.heldAnnounced) fire.heldMinute = heldMinutes[index] ?? null;
+      });
+    }
     const now = this.minute;
     this.zones.forEach((zone, index) => {
       const work = this.work[index];
@@ -422,20 +457,63 @@ export class DispatchEngine {
     });
   }
 
+  /** Per-fire burned area over time in the current run. */
+  fireFramesNow(): readonly FireAreaFrame[] {
+    return this.fireFrames;
+  }
+
   /** Index of a fire by its id, or undefined. */
   fireIndex(id: string): number | undefined {
     const index = this.fires.findIndex((fire) => fire.target.id === id);
     return index < 0 ? undefined : index;
   }
 
-  /** Fire is burning now: started, not out. */
+  /** Fire is burning now: started, not out, not held by a line. */
   fireBurning(index: number): boolean {
     const fire = this.fires[index];
     return (
       fire.outMinute === null &&
+      !fire.heldAnnounced &&
       fire.target.ignitedMinute !== null &&
       fire.target.ignitedMinute <= this.minute
     );
+  }
+
+  /** Set when a line tactic gained or lost crews: the session re-plans lines and re-solves. */
+  linesDirty = false;
+
+  /** Start minute of each engine on a fire: arrival on scene, or now plus its drive. */
+  crewMinutes(index: number): number[] {
+    return this.fireAttackers(index).map((unit) =>
+      unit.status === "on_scene"
+        ? (unit.arrivedMinute ?? this.minute)
+        : this.minute + (this.unitEtaMinutes(unit) ?? 0),
+    );
+  }
+
+  /** Install re-planned lines (one per fire, null for none) after a re-solve. */
+  setFireLines(lines: readonly (LinePlan | null)[]): void {
+    this.fires.forEach((fire, index) => {
+      fire.line = lines[index] ?? null;
+    });
+    this.linesDirty = false;
+  }
+
+  /**
+   * The nearest `max` units not already on a fire, with the minute each would start work
+   * there; for what-if options of every tactic.
+   */
+  nearestUnits(index: number, max: number): { unitId: string; minute: number }[] {
+    return this.units
+      .filter((unit) => !(unit.task === "fire_attack" && unit.fire === index))
+      .flatMap((unit) => {
+        const plan = this.attackRoute(unit, index);
+        return plan
+          ? [{ unitId: unit.id, minute: this.minute + plan.seconds / SECONDS_PER_MINUTE }]
+          : [];
+      })
+      .sort((a, b) => a.minute - b.minute)
+      .slice(0, max);
   }
 
   /** Burned area of a fire now (or when it went out), m², from the current run. */
@@ -515,7 +593,7 @@ export class DispatchEngine {
    */
   attackOptions(index: number, max: number): { unitIds: string[]; outMinute: number | null }[] {
     const fire = this.fires[index];
-    if (!this.fireBurning(index) || fire.target.notAttackable) return [];
+    if (!this.fireBurning(index) || fire.target.directBlocked) return [];
     const candidates = this.units
       .filter((unit) => !(unit.task === "fire_attack" && unit.fire === index))
       .flatMap((unit) => {
@@ -534,6 +612,31 @@ export class DispatchEngine {
         ),
       };
     });
+  }
+
+  /**
+   * Add a unit that is already out in the area (a Studio crew leaving the fire). It starts
+   * available at `node` and withdraws to `homeNode`.
+   */
+  addUnit(id: string, stationId: string, node: number, homeNode: number): UnitState {
+    const unit: UnitState = {
+      id,
+      stationId,
+      homeNode,
+      status: "available",
+      task: null,
+      zone: null,
+      fire: null,
+      targetNode: null,
+      node,
+      steps: [],
+      stepIndex: 0,
+      stepElapsedSeconds: 0,
+      holdSeconds: 0,
+      arrivedMinute: null,
+    };
+    this.units.push(unit);
+    return unit;
   }
 
   get finished(): boolean {
@@ -631,23 +734,45 @@ export class DispatchEngine {
       const fire = this.fires[index];
       if (fire.outMinute !== null) return reject(`${fire.target.name} is already out.`);
       if (!this.fireBurning(index)) return reject(`${fire.target.name} has not started.`);
-      if (fire.target.notAttackable)
+      const tactic = order.tactic ?? "direct";
+      const blockedTactic = tacticBlocked(fire.target, tactic);
+      if (blockedTactic)
         return reject(
-          `${fire.target.name} cannot be attacked directly: ${fire.target.notAttackable}.`,
+          `${fire.target.name} cannot be fought by ${tactic} attack: ${blockedTactic}.`,
         );
-      if (unit.task === "fire_attack" && unit.fire === index)
+      if (fire.heldAnnounced) return reject(`${fire.target.name} is already held by its line.`);
+      const switching = fire.tactic !== null && fire.tactic !== tactic;
+      if (unit.task === "fire_attack" && unit.fire === index && !switching)
         return reject(`${unit.id} is already on ${fire.target.name}.`);
-      const plan = this.attackRoute(unit, index);
-      if (!plan) return reject(`${unit.id} has no road to ${fire.target.name} avoiding fire.`);
-      const fromStation = unit.status === "available";
-      this.sendUnit(unit, from, plan.route, "en_route", "fire_attack", null, plan.node);
-      unit.fire = index;
-      if (fromStation) unit.holdSeconds = this.approachSeconds(unit);
-      const out = this.projectedOutMinute(index);
+      let seconds = 0;
+      if (!(unit.task === "fire_attack" && unit.fire === index)) {
+        const plan = this.attackRoute(unit, index);
+        if (!plan) return reject(`${unit.id} has no road to ${fire.target.name} avoiding fire.`);
+        const fromStation = unit.status === "available";
+        this.sendUnit(unit, from, plan.route, "en_route", "fire_attack", null, plan.node);
+        unit.fire = index;
+        if (fromStation) unit.holdSeconds = this.approachSeconds(unit);
+        seconds = plan.seconds;
+      }
+      // One tactic per fire: every crew on it now fights it this way.
+      const lineBefore = fire.tactic !== null && fire.tactic !== "direct";
+      if (lineBefore || tactic !== "direct") this.linesDirty = true;
+      fire.tactic = tactic;
+      const switched = switching
+        ? ` All crews on ${fire.target.name} switch to ${tactic} attack.`
+        : "";
+      if (tactic === "direct") {
+        const out = this.projectedOutMinute(index);
+        return {
+          order,
+          accepted: true,
+          note: `${unit.id} to ${fire.target.name} (direct attack), ${Math.round(seconds / SECONDS_PER_MINUTE)} min; with the crews on it the simulator estimates it out ${out === null ? "not by the horizon" : `at T+${Math.round(out)}`}.${switched}`,
+        };
+      }
       return {
         order,
         accepted: true,
-        note: `${unit.id} to ${fire.target.name}, ${Math.round(plan.seconds / SECONDS_PER_MINUTE)} min; with the crews on it the simulator estimates it out ${out === null ? "not by the horizon" : `at T+${Math.round(out)}`}.`,
+        note: `${unit.id} to ${fire.target.name} (${tactic} attack), ${Math.round(seconds / SECONDS_PER_MINUTE)} min; the simulator re-plans the line and re-runs the fire.${switched}`,
       };
     }
 
@@ -929,6 +1054,8 @@ export class DispatchEngine {
     unit.stepIndex = 0;
     unit.stepElapsedSeconds = 0;
     unit.holdSeconds = 0;
+    if (unit.fire !== null && this.fires[unit.fire]?.tactic !== "direct" && !this.releasing)
+      this.linesDirty = true;
     unit.task = task;
     unit.zone = zone;
     unit.fire = null;
@@ -963,10 +1090,30 @@ export class DispatchEngine {
     this.checkCleared();
   }
 
-  /** Engines on scene build line; a fire whose edge is ringed is out and its crews go home. */
+  /** Crews leaving a fire that is out or held: no line re-plan is needed for them. */
+  private releasing = false;
+
+  /**
+   * Direct attack: engines on scene build line, and a fire whose edge is ringed is out. Line
+   * tactics: the line is in the fire model already; once the run shows the fire held, its crews
+   * are released. Either way the crews go home.
+   */
   private attackFires(blocked: (edge: number) => boolean): void {
     this.fires.forEach((fire, index) => {
       if (fire.outMinute !== null) return;
+      if (fire.tactic !== null && fire.tactic !== "direct") {
+        if (fire.heldAnnounced || fire.heldMinute === null || fire.heldMinute > this.minute) return;
+        fire.heldAnnounced = true;
+        const hectares = this.fireAreaSquareMeters(index) / 10_000;
+        const crews = this.fireAttackers(index);
+        this.alert(
+          "fire_held",
+          `${fire.target.name} is held by its ${fire.tactic} line at ${hectares < 10 ? hectares.toFixed(1) : Math.round(hectares)} ha${crews.length > 0 ? `; ${crews.map((unit) => unit.id).join(", ")} released` : ""}.`,
+          false,
+        );
+        this.sendHome(crews, blocked);
+        return;
+      }
       const working = this.units.filter(
         (unit) => unit.status === "on_scene" && unit.task === "fire_attack" && unit.fire === index,
       );
@@ -980,16 +1127,22 @@ export class DispatchEngine {
         `${fire.target.name} is out: ${working.map((unit) => unit.id).join(", ")} contained it at ${hectares < 10 ? hectares.toFixed(1) : Math.round(hectares)} ha.`,
         false,
       );
-      for (const unit of this.fireAttackers(index)) {
-        const from = this.unitNextNode(unit);
-        const home = routeTo(this.area, shortestPathTree(this.area, from, blocked), unit.homeNode);
-        if (home) this.sendUnit(unit, from, home, "returning", null, null);
-        else {
-          unit.status = "stranded";
-          this.alert("unit_stranded", `${unit.id} has no fire-free route home.`, true);
-        }
-      }
+      this.sendHome(this.fireAttackers(index), blocked);
     });
+  }
+
+  private sendHome(units: readonly UnitState[], blocked: (edge: number) => boolean): void {
+    this.releasing = true;
+    for (const unit of units) {
+      const from = this.unitNextNode(unit);
+      const home = routeTo(this.area, shortestPathTree(this.area, from, blocked), unit.homeNode);
+      if (home) this.sendUnit(unit, from, home, "returning", null, null);
+      else {
+        unit.status = "stranded";
+        this.alert("unit_stranded", `${unit.id} has no fire-free route home.`, true);
+      }
+    }
+    this.releasing = false;
   }
 
   private catchHome(zone: ZoneState, home: number): void {

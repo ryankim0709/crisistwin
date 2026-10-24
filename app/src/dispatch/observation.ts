@@ -3,6 +3,8 @@
  * converts its wire orders back into engine orders. Pure: no React or network.
  */
 
+import { FIRE_TACTICS, builtMeters, tacticBlocked } from "./fireTactics";
+import type { TacticOption } from "./tacticOptions";
 import type { FireObservation, Observation, WireOrder, ZoneObservation } from "./contracts";
 import {
   EXIT_OPTIONS_PER_ZONE,
@@ -17,11 +19,7 @@ import {
   type Order,
   type OrderOutcome,
 } from "./engine";
-import {
-  ENGINE_HOLDS_FLAME_FEET,
-  ENGINE_LINE_METERS_PER_MINUTE,
-  MAX_ATTACK_OPTIONS,
-} from "./fireAttack";
+import { ENGINE_HOLDS_FLAME_FEET, ENGINE_LINE_METERS_PER_MINUTE } from "./fireAttack";
 import { routeTo, shortestPathTree } from "./routing";
 
 const SQUARE_METERS_PER_HECTARE = 10_000;
@@ -63,6 +61,10 @@ export interface ObservationInputs {
   alerts: Alert[];
   previousOutcomes: OrderOutcome[];
   previousSummary: string;
+  /** What-if tactic options per fire index (tacticOptions.ts); fires missing have none. */
+  tacticOptions?: ReadonlyMap<number, readonly TacticOption[]>;
+  /** By the horizon with the fire fighting in effect now. */
+  currentOutcome?: { burnedHectares: number; homesReached: number };
 }
 
 export function buildObservation(inputs: ObservationInputs): Observation {
@@ -171,11 +173,14 @@ export function buildObservation(inputs: ObservationInputs): Observation {
         ? "merged"
         : fire.outMinute !== null
           ? "out"
-          : started
-            ? "burning"
-            : "not_started";
+          : fire.heldAnnounced
+            ? "held"
+            : started
+              ? "burning"
+              : "not_started";
     const minutesFromNow = (at: number | null) =>
       at === null ? null : Math.max(0, Math.round(at - minute));
+    const direct = fire.tactic === "direct";
     return {
       id: target.id,
       name: target.name,
@@ -187,17 +192,37 @@ export function buildObservation(inputs: ObservationInputs): Observation {
         ? Math.round(target.headFlameFeet * 10) / 10
         : null,
       crowning: !Number.isFinite(target.headFlameFeet),
-      attackable: target.notAttackable === null,
-      not_attackable_reason: target.notAttackable,
+      structure_fire: target.structureFire,
+      attackable: FIRE_TACTICS.some((tactic) => tacticBlocked(target, tactic) === null),
+      tactics_blocked: {
+        direct: tacticBlocked(target, "direct"),
+        flank: tacticBlocked(target, "flank"),
+        indirect: tacticBlocked(target, "indirect"),
+      },
+      tactic: fire.tactic,
       attacking: engine.fireAttackers(index).map((unit) => unit.id),
-      line_built_m: Math.round(fire.lineMeters),
-      line_needed_m: status === "burning" ? Math.round(engine.fireLineNeededMeters(index)) : 0,
-      out_eta_min: status === "burning" ? minutesFromNow(engine.projectedOutMinute(index)) : null,
+      line_built_m: direct ? Math.round(fire.lineMeters) : 0,
+      line_needed_m:
+        status === "burning" && direct ? Math.round(engine.fireLineNeededMeters(index)) : 0,
+      out_eta_min:
+        status === "burning" && direct ? minutesFromNow(engine.projectedOutMinute(index)) : null,
       out_minute: fire.outMinute,
-      attack_options: engine.attackOptions(index, MAX_ATTACK_OPTIONS).map((option) => ({
+      control_line_km: round1((fire.line?.plannedMeters ?? 0) / 1000),
+      control_line_built_km: round1(builtMeters(fire.line, minute) / 1000),
+      held_in_min:
+        status === "burning" && !direct && fire.tactic !== null
+          ? minutesFromNow(fire.heldMinute)
+          : null,
+      held_minute: fire.heldAnnounced ? fire.heldMinute : null,
+      tactic_options: (inputs.tacticOptions?.get(index) ?? []).map((option) => ({
+        tactic: option.tactic,
         engines: option.unitIds.length,
         unit_ids: option.unitIds,
-        out_eta_min: minutesFromNow(option.outMinute),
+        contained_in_min: minutesFromNow(option.containedMinute),
+        burned_ha_at_horizon: Math.round(option.burnedHectares),
+        homes_reached_by_horizon: option.homesReached,
+        line_km: option.lineKm === null ? null : round1(option.lineKm),
+        line_held_km: option.lineHeldKm === null ? null : round1(option.lineHeldKm),
       })),
     };
   });
@@ -229,6 +254,10 @@ export function buildObservation(inputs: ObservationInputs): Observation {
         outside_zones: outside.length,
         outside_homes: outsideHomes,
       },
+      current_outcome: {
+        burned_ha_at_horizon: Math.round(inputs.currentOutcome?.burnedHectares ?? 0),
+        homes_reached_by_horizon: inputs.currentOutcome?.homesReached ?? 0,
+      },
       evidence_class: "simulated",
     },
     totals: {
@@ -258,7 +287,7 @@ export function buildObservation(inputs: ObservationInputs): Observation {
       `A staged zone (stage_evacuation) gets no order yet; the simulator orders it out automatically once every household of its after_zone has left home and the loading queue, or as soon as its own order_slack_min falls to ${STAGE_RELEASE_SLACK_MINUTES}.`,
       "order_slack_min is the simulator's estimate: minutes until fire first reaches the zone minus the larger of the departure spread and the time its vehicles need to enter the route at the bottleneck. It ignores other zones sharing the road.",
       "structure_defense has no modelled effect on fire spread. Engines on scene in a zone withdraw automatically when fire is about to reach the zone core.",
-      `fire_attack (attack_fire): engines stage at the nearest road point to the fire's origin and build line at about ${Math.round(ENGINE_LINE_METERS_PER_MINUTE)} m/min each in grass (slower in heavier fuel); the fire is out when the line rings its modelled edge, which keeps growing meanwhile. Engines hold flames up to ${ENGINE_HOLDS_FLAME_FEET} ft and cannot attack a crowning fire. A fire that is out stops spreading: the forecast, zone ETAs and impact are recomputed without it, and its engines return to station. out_eta_min and attack_options are the simulator's rough estimates (ellipse perimeter, no water supply or mop-up).`,
+      `fire_attack (attack_fire with a tactic): engines stage at the nearest road point to the fire's origin. direct: they build line around the whole edge at about ${Math.round(ENGINE_LINE_METERS_PER_MINUTE)} m/min each in grass (slower in heavier fuel) and the fire is out when the line rings its modelled edge, which keeps growing meanwhile; possible only where they can hold the head (head flame up to ${ENGINE_HOLDS_FLAME_FEET} ft and not crowning, or a structure fire). flank: they anchor at the heel and build line up both flanks toward the head; indirect: they build line around where the fire will be in about an hour, starting across the head. For flank and indirect the line is run through the fire model, which decides stretch by stretch whether it holds (the flame facing it is within what engines hold) or burns over; flanks burn far less intensely than the head. A fire that is out or held stops spreading: the forecast, zone ETAs and impact are recomputed, and its engines return to station. tactic_options are solved what-ifs; their contained_in_min, burned_ha_at_horizon and homes_reached_by_horizon compare with fire.current_outcome. Rough: ellipse perimeter for direct attack, no water supply, mop-up or rekindle.`,
       "A household counts as exposed when fire reaches its home before it leaves, reaches the zone core while it is still in the zone, or reaches the road it is on.",
       ...area.notes,
     ],
@@ -268,4 +297,8 @@ export function buildObservation(inputs: ObservationInputs): Observation {
 /** Wire orders to engine orders; the engine validates them again against its live state. */
 export function toEngineOrders(orders: readonly WireOrder[]): Order[] {
   return orders.map((order) => ({ ...order }));
+}
+
+function round1(value: number): number {
+  return Math.round(value * 10) / 10;
 }

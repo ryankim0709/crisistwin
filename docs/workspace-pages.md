@@ -66,6 +66,9 @@ operational forecast.
 when they start: by default the fire is reported when it ignites and each resource drives in
 from the nearest OpenStreetMap fire stations over the board's roads, then walks to the fire
 ([ADR 0023](adr/0023-studio-crew-dispatch.md)); in 3D and on the map you can watch them arrive.
+If the direct-attack estimate says they cannot put the fire out, they are overwhelmed: each
+crew leaves the fire after a 10-minute size-up and, with **Evacuation & closures** on, drives to
+the most threatened zones to speed up departures ([ADR 0024](adr/0024-studio-crews-assist-evacuation.md)).
 The run estimates whether the crews put each fire out by direct attack once on
 site (line built against the fire's growing edge, a rough estimate), and separately tries anchoring at the fire's heel or head and building around
 where the unchecked fire would be at several later minutes, solves each plan and keeps the one

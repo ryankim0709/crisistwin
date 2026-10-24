@@ -20,6 +20,7 @@ import type { FirelineView } from "./FirelineOverlay";
 import { useMapFireline } from "./useMapFireline";
 import { useMapCrews } from "./useMapCrews";
 import { planCrewDispatch } from "./crewDispatch";
+import { crewHandoff, evacuationCrews } from "./crewHandoff";
 import { resourceList } from "./firefighting";
 import type { RunDispatch } from "./useStudioRun";
 import { CREW_COLORS, FIRELINE_COLORS, firelineCss } from "./firelinePalette";
@@ -217,6 +218,29 @@ export default function SimulationStudioPage({
           ? firefighting.best.run
           : result.run
     : null;
+  // Crews that cannot put the fire out leave it to help the evacuation (studio/crewHandoff.ts).
+  // Only with the direct-attack fire shown: on the line plan they keep building line.
+  const fireNames = useMemo(
+    () =>
+      Object.fromEntries(
+        (result?.scenario.ignitions ?? []).map((ignition) => [
+          ignition.id,
+          ignition.name || ignition.id,
+        ]),
+      ),
+    [result],
+  );
+  const handoff = useMemo(
+    () =>
+      result?.crewDispatch && firefighting?.initialAttack
+        ? crewHandoff(result.crewDispatch, firefighting.initialAttack.estimate, fireNames)
+        : null,
+    [result, firefighting, fireNames],
+  );
+  const shownHandoff =
+    handoff && firefighting?.initialAttack && shownRun === firefighting.initialAttack.run
+      ? handoff
+      : null;
 
   // Prebuilt region board (MongoDB), drawn in 3D before any run and used to solve fires on it.
   const [regionId, setRegionId] = useState(loadRegionId);
@@ -515,11 +539,16 @@ export default function SimulationStudioPage({
             horizonMinutes: result.scenario.settings.horizonMinutes,
             closedEdges,
             orderMinute,
+            crews:
+              shownHandoff && result.crewDispatch
+                ? evacuationCrews(area, result.crewDispatch, shownHandoff)
+                : undefined,
           }
         : null,
-    [area, exposure, result, closedEdges, orderMinute],
+    [area, exposure, result, closedEdges, orderMinute, shownHandoff],
   );
   const showEvacuation = evacuationOn && view === "diorama" && !Aside;
+
   const baselineSummary = useMemo(
     () =>
       showEvacuation && evacuationInputs
@@ -527,7 +556,7 @@ export default function SimulationStudioPage({
         : null,
     // Not rerun when only the closures change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [showEvacuation, area, exposure, result, orderMinute],
+    [showEvacuation, area, exposure, result, orderMinute, shownHandoff],
   );
   const closuresSummary = useMemo(
     () =>
@@ -774,6 +803,7 @@ export default function SimulationStudioPage({
                 evacuation={evacuationView}
                 fireline={fireline}
                 crews={dioramaShowsRun && !Aside ? (result?.crewDispatch ?? null) : null}
+                crewLeaveMinutes={shownHandoff?.leaveMinutes}
                 evacuationPanel={
                   Aside ? undefined : (
                     <EvacuationPanel
@@ -1066,13 +1096,9 @@ export default function SimulationStudioPage({
                     firefighting ? (
                       <FirefightingResults
                         result={firefighting}
-                        names={Object.fromEntries(
-                          (result?.scenario.ignitions ?? []).map((ignition) => [
-                            ignition.id,
-                            ignition.name || ignition.id,
-                          ]),
-                        )}
+                        names={fireNames}
                         stale={stale}
+                        handoff={handoff}
                         dispatch={result?.crewDispatch ?? null}
                         dispatchNote={result?.crewDispatchNote ?? null}
                         shown={fireShown}
