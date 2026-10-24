@@ -109,6 +109,12 @@ export interface StudioRunResult {
   frameMinutes: number[];
   landscapeKey: string;
   landscapeBox: MercatorBox;
+  /**
+   * Prebuilt region board selected when the run started (`fire/regions.ts` id), or null.
+   * The run was solved on that board when its enabled fires were all on it; otherwise on a
+   * box downloaded for the fires, and `landscapeKey` is that box's key.
+   */
+  boardId: string | null;
   /** The grid the run was solved on (shared with the landscape cache, not a copy). */
   landscape: LandscapeGrid;
   /** Sources for display: LANDFIRE fuel/canopy and terrain attribution strings. */

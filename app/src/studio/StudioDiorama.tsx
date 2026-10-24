@@ -1,7 +1,7 @@
 /**
  * 3D diorama view for Simulation Studio: the fire page's three.js miniature (ADR 0011,
- * `fire/diorama/`) drawing the last run's landscape and its combined arrival field, with one
- * labelled pin per enabled ignition. Presentation only; frames, areas and outcomes stay the
+ * `fire/diorama/`) drawing the selected prebuilt region board (or the last run's landscape)
+ * and the run's combined arrival field, with one labelled pin per enabled ignition. Presentation only; frames, areas and outcomes stay the
  * solver's. See docs/adr/0016-studio-diorama-view.md.
  */
 
@@ -17,15 +17,9 @@ import type {
 } from "../fire/diorama/types";
 import type { LandscapeGrid } from "../fire/landscape";
 import type { GeoPoint } from "../fire/spread";
-import type { MapMode } from "./contracts";
-import { Button, Legend, Notice, Panel, Tag } from "../ui";
+import { Button, Legend, Panel } from "../ui";
 
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
-
-const MODE_PROMPT: Partial<Record<MapMode, string>> = {
-  add: "Click the board to add an ignition.",
-  move: "Click the board to move the selected ignition.",
-};
 
 export interface StudioDioramaProps {
   /** Landscape of the latest result; null before the first run. */
@@ -34,19 +28,20 @@ export interface StudioDioramaProps {
   ignitions: DioramaIgnition[];
   windFromDegrees: number;
   windSpeedMph: number;
-  mode: MapMode;
   /** Smooth playback clock in minutes from T+0, read every animation frame. */
   timeRef: { readonly current: number };
   insets: ViewInsets;
   /** Changing this frames the burn (a new result arrived). */
   fitKey: number | null;
-  /** Model warnings and the planning disclaimer, as the map shows them. */
+  /** Model warnings and the planning disclaimer, as the map shows them; listed in the legend. */
   warnings: string[];
   /** Source data credits for the landscape. */
   attribution: string[];
   onGroundClick: (point: GeoPoint) => void;
-  /** Shown over the empty plinth before any run. */
+  /** Shown over the empty plinth while there is no board to draw. */
   emptyState: ReactNode;
+  /** Region picker and board provenance, shown top right whether or not a board is loaded. */
+  boardControl?: ReactNode;
 }
 
 function IgnitionGlyph() {
@@ -65,7 +60,6 @@ export default function StudioDiorama(props: StudioDioramaProps) {
     ignitions,
     windFromDegrees,
     windSpeedMph,
-    mode,
     timeRef,
     insets,
     fitKey,
@@ -73,6 +67,7 @@ export default function StudioDiorama(props: StudioDioramaProps) {
     attribution,
     onGroundClick,
     emptyState,
+    boardControl,
   } = props;
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [scene, setScene] = useState<FireDioramaSceneApi | null>(null);
@@ -142,8 +137,6 @@ export default function StudioDiorama(props: StudioDioramaProps) {
     if (fitKey !== null) scene?.resetView(true);
   }, [scene, fitKey]);
 
-  const prompt = landscape ? MODE_PROMPT[mode] : undefined;
-
   return (
     <div className="studio-diorama">
       <div
@@ -158,8 +151,8 @@ export default function StudioDiorama(props: StudioDioramaProps) {
         <Panel glass className="studio-diorama__card" role="alert">
           <p className="studio-diorama__card-title">3D view unavailable in this browser</p>
           <p>
-            The diorama needs WebGL, which appears to be disabled or unsupported here. Switch to
-            the map view; the scenario and results still work.
+            The diorama needs WebGL, which appears to be disabled or unsupported here. Switch to the
+            map view; the scenario and results still work.
           </p>
           <p className="studio-diorama__detail">{error}</p>
         </Panel>
@@ -170,40 +163,34 @@ export default function StudioDiorama(props: StudioDioramaProps) {
         </Panel>
       )}
 
+      {!error && (
+        <div className="studio-diorama__tools">
+          {boardControl}
+          {landscape && (
+            <div className="studio-diorama__buttons">
+              <Button variant="secondary" size="sm" onClick={() => scene?.resetView(false)}>
+                Whole board
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => scene?.resetView(true)}
+                disabled={!run}
+              >
+                Frame fire
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+
       {!error && landscape && (
         <>
-          <div className="studio-diorama__top">
-            {prompt && (
-              <Tag tone="brand" className="studio-diorama__pill">
-                {prompt}
-              </Tag>
-            )}
-            <ul className="studio-diorama__warnings" aria-label="Model warnings">
-              {warnings.map((warning) => (
-                <li key={warning}>
-                  <Notice compact className="studio-diorama__warning">
-                    <span aria-hidden="true">⚠</span> {warning}
-                  </Notice>
-                </li>
-              ))}
-            </ul>
-          </div>
           {attribution.length > 0 && (
-            <p className="studio-diorama__credit">Sources: {attribution.join(" · ")}</p>
+            <p className="studio-diorama__credit">
+              Planning experiment, not an operational forecast · Sources: {attribution.join(" · ")}
+            </p>
           )}
-          <div className="studio-diorama__tools">
-            <Button variant="secondary" size="sm" onClick={() => scene?.resetView(false)}>
-              Whole board
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => scene?.resetView(true)}
-              disabled={!run}
-            >
-              Frame fire
-            </Button>
-          </div>
           <section className="studio-diorama__legend" aria-label="3D view legend">
             <Button
               variant="secondary"
@@ -242,6 +229,13 @@ export default function StudioDiorama(props: StudioDioramaProps) {
                     },
                   ]}
                 />
+                {warnings.length > 0 && (
+                  <ul className="studio-diorama__warnings" aria-label="Model warnings">
+                    {warnings.map((warning) => (
+                      <li key={warning}>⚠ {warning}</li>
+                    ))}
+                  </ul>
+                )}
                 <p className="studio-diorama__legend-note">
                   Trees and houses symbolise LANDFIRE fuel classes; relief is exaggerated.
                 </p>
