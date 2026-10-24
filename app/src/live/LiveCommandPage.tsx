@@ -8,6 +8,8 @@ import { fetchActive } from "./active";
 import { DEFAULT_INCIDENT_ID, LiveError, readToken, runImpact, SERVER_TOKEN, writeToken } from "./api";
 import CommandMap, { LAYER_KEYS, type LayerKey, type MapFocus } from "./CommandMap";
 import EvacuationPicture from "./EvacuationPicture";
+import FireBehaviorPanel from "./FireBehaviorPanel";
+import { headBehavior } from "./fireBehavior";
 import MapLegend from "./MapLegend";
 import ProposalPanel from "./ProposalPanel";
 import { buildQueue, matches, proposalFor, type QueueFilter } from "./queue";
@@ -19,6 +21,7 @@ import ReviewQueue from "./ReviewQueue";
 import SelectedItem, { type ImpactState, type RunAction } from "./SelectedItem";
 import { useCommand } from "./useCommand";
 import { usePoll } from "./usePoll";
+import { useFireBehavior } from "./useFireBehavior";
 import { useTwin } from "./useTwin";
 import WorkspaceHeader from "./WorkspaceHeader";
 import "./live.css";
@@ -164,6 +167,7 @@ export default function LiveCommandPage() {
   const incidentToken = active.loading ? null : token;
   const command = useCommand(incidentToken, incidentId);
   const twin = useTwin(incidentToken, incidentId);
+  const fireInputs = useFireBehavior(incidentToken, incidentId);
   const [busy, setBusy] = useState<string | null>(null);
   const [focus, setFocus] = useState<MapFocus | null>(null);
   const [filter, setFilter] = useState<QueueFilter>("new");
@@ -213,6 +217,9 @@ export default function LiveCommandPage() {
   const unauthorized = command.error?.unauthorized ?? false;
   const data = unauthorized ? null : command.data;
   const twinData = data ? twin.data : null;
+  // Only inputs for the incident on screen (the poll keeps the last answer across a switch).
+  const fireData = data && fireInputs.data?.incident_id === incidentId ? fireInputs.data : null;
+  const head = useMemo(() => headBehavior(fireData), [fireData]);
   const serverNow =
     data && command.receivedAt !== null
       ? new Date(data.generated_at).getTime() + (now - command.receivedAt)
@@ -232,7 +239,11 @@ export default function LiveCommandPage() {
     selected?.task && (selected.task.status === "open" || selected.task.status === "accepted")
       ? selected.task.id
       : null;
-  const taskRoute = useTaskRoute(data ? token : null, routeTask);
+  // Route the assignee's own apparatus class when it declared one (simulated station engines do).
+  const assigneeClass =
+    (selected?.task?.assignee && data?.responders.find((r) => r.party_key === selected.task!.assignee)?.apparatus?.access_class) ||
+    null;
+  const taskRoute = useTaskRoute(data ? token : null, routeTask, assigneeClass);
 
   // A map click selects an item outside the current filter too; the queue keeps it listed.
   const select = useCallback((id: string | null) => {
@@ -352,6 +363,8 @@ export default function LiveCommandPage() {
           layers={layers}
           impact={impactResult}
           taskRoute={taskRoute?.route?.route?.line ?? null}
+          fireInputs={fireData}
+          head={head}
           onSelect={select}
         />
         {data ? (
@@ -393,6 +406,7 @@ export default function LiveCommandPage() {
                 impact={impact}
                 route={taskRoute}
                 proposalId={proposalFor(selected, data)}
+                headFlameFeet={head?.headFlameFeet ?? null}
                 onRunImpact={() => void onRunImpact()}
                 onReviewProposal={reviewProposal}
                 onClose={() => select(null)}
@@ -402,6 +416,13 @@ export default function LiveCommandPage() {
               items={data.stale_critical}
               tasks={data.tasks}
               serverNow={serverNow}
+              onFocus={setFocus}
+            />
+            <FireBehaviorPanel
+              inputs={fireData}
+              error={fireInputs.error && !fireInputs.error.unauthorized ? fireInputs.error.message : null}
+              head={head}
+              data={data}
               onFocus={setFocus}
             />
             <EvacuationPicture

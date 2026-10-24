@@ -7,6 +7,7 @@ from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from livecore.apparatus import ACCESS_CLASSES, GROUND_KINDS
 from livecore.drill import MAX_DRILL_SPEED, default_replay_start
 from livecore.geo import haversine_m
 from django.conf import settings
@@ -148,7 +149,26 @@ def join(request, incident_id: str, principal: None):
     simulated = body.get("simulated", False)
     if not isinstance(simulated, bool):
         return error(400, "invalid_request", "`simulated` must be a boolean.")
-    return ok(issue_token("responder", "rsp_", incident_id, simulated), status=201)
+    return ok(issue_token("responder", "rsp_", incident_id, simulated, _parse_apparatus(body.get("apparatus"))),
+              status=201)
+
+
+def _parse_apparatus(raw: Any) -> dict[str, Any] | None:
+    """Optional ``apparatus`` on join: ``{kind, access_class?, label?, station?}``."""
+    if raw is None:
+        return None
+    code = "invalid_request"
+    if not isinstance(raw, dict) or raw.get("kind") not in GROUND_KINDS:
+        raise ApiError(400, code, f"`apparatus.kind` must be one of {', '.join(sorted(GROUND_KINDS))}.")
+    access = raw.get("access_class")
+    if access is not None and access not in ACCESS_CLASSES:
+        raise ApiError(400, code, f"`apparatus.access_class` must be one of {', '.join(ACCESS_CLASSES)}.")
+    return {
+        "kind": raw["kind"],
+        "access_class": access,
+        "label": optional_str(raw, "label", code, 80),
+        "station": optional_str(raw, "station", code, 120),
+    }
 
 
 # ---- v1: reports ----
@@ -1056,15 +1076,16 @@ def command(request, incident_id: str, principal: Principal):
     controller.maybe_auto_replan(snapshot)
     index, now = snapshot.index, snapshot.now
     locations = list(col("live_responder_locations").find({"incident_id": incident_id, "expires_at": {"$gt": now}}))
-    simulated = {
-        d["party_key"]
+    devices = {
+        d["party_key"]: d
         for d in col("live_devices").find(
-            {"party_key": {"$in": [d["party_key"] for d in locations]}, "simulated": True}, {"party_key": 1}
+            {"party_key": {"$in": [d["party_key"] for d in locations]}}, {"party_key": 1, "simulated": 1, "apparatus": 1}
         )
     }
     responders = [
         {"party_key": d["party_key"], "coord": d["coord"], "accuracy_m": d.get("accuracy_m"), "at": iso(d["at"]),
-         "simulated": d["party_key"] in simulated}
+         "simulated": bool(devices.get(d["party_key"], {}).get("simulated")),
+         "apparatus": devices.get(d["party_key"], {}).get("apparatus")}
         for d in locations
     ]
     board.maybe_refresh(snapshot)

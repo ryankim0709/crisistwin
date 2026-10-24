@@ -96,6 +96,7 @@ store them in their own collection only if reads get slow.
 | `GET incidents/{id}/prompts?near=lon,lat` | any | Nearby items to answer "still there?" with `road_blocked` / `road_passable` |
 | `POST incidents/{id}/tasks`, `GET me/tasks`, `POST tasks/{id}` | controller; responder | Create, list and answer check tasks |
 | `POST incidents/{id}/impact` | controller | Impact of one road segment, blocked vs unblocked: affected zones, ETA delta, vehicles at risk (v2, [Impact analysis](#impact-analysis)) |
+| `GET incidents/{id}/fire-behavior` | controller | Observed wind at the drill clock, slope at the head of the fire, zones the fire touches and ACS carless households per zone ([live-fire-behavior.md](live-fire-behavior.md)) |
 | `POST incidents/{id}/route` | any | `{ origin, destination }` -> a route avoiding publicly confirmed blocks; not stored (P1) |
 
 `POST devices` and `POST incidents/{id}/join` (body `{ "invite_code": "..." }`) return
@@ -103,7 +104,13 @@ store them in their own collection only if reads get slow.
 `join` also takes an optional `"simulated": true` (a boolean, else `400`) for simulated responders
 ([ADR 0038](adr/0038-simulated-responders.md)): the device stores it, the join response echoes
 `"simulated": true`, and each `command.responders[]` item carries `simulated` (`false` for real
-phones). The console tags those units "sim".
+phones). The console tags those units "sim". An optional `"apparatus": { "kind": "engine_t3",
+"access_class": "engine_t3"|null, "label": "..."|null, "station": "..."|null }` says what the
+responder drives (`kind` one of the Studio ground kinds of `app/src/studio/apparatus.ts`,
+`access_class` one of the road-access classes, else `400`); it is stored on the device, echoed,
+and returned as `command.responders[].apparatus` (null when not declared). The console uses it to
+route the assignee's own class and to say whether its line can hold the modelled head flame
+([live-fire-behavior.md](live-fire-behavior.md)). `live_sim_responders` declares each station engine.
 
 The driver, `manage.py live_sim_responders --units N` (`livecore.responders_sim`), starts its
 units at the real CAL FIRE-layer stations nearest the fire estimate at the drill's current time
@@ -865,7 +872,9 @@ fetches again without `zones=0`.
                      "help": { "status": "open", "assignee": null, "task_id": null, "updated_at": "...Z" } } ] },
                                             // need_help counts and list exclude resolved requests
   "destination_preferences": [ { "zone_id": "bg:060070009011", "destination_id": "exit:osm-node:86546172", "count": 4 } ],
-  "responders": [ { "party_key": "rsp_7c1...", "coord": [-121.6, 39.76], "accuracy_m": 15, "at": "...Z" } ],
+  "responders": [ { "party_key": "rsp_7c1...", "coord": [-121.6, 39.76], "accuracy_m": 15, "at": "...Z",
+                   "simulated": true, "apparatus": { "kind": "engine_t3", "access_class": "engine_t3",
+                   "label": "CAL FIRE Type 3 engine", "station": "Paradise" } } ],  // apparatus null when undeclared
   "tasks": [ CheckTask ],                   // all not cancelled
   "decisions": [ { "at": "...Z", "actor": "controller", "action": "confirm", "report_ids": ["rpt_..."],
                    "proposal_id": null, "checkin_id": null, "note": null } ],  // newest 50, for the activity log

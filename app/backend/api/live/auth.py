@@ -61,10 +61,13 @@ def token_hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def issue_token(role: str, prefix: str, incident_id: str | None, simulated: bool = False) -> dict:
+def issue_token(role: str, prefix: str, incident_id: str | None, simulated: bool = False,
+                apparatus: dict | None = None) -> dict:
     """Create a device document and return the one-time response body.
 
-    ``simulated`` marks a simulated responder (ADR 0038): stored on the device, echoed in the body."""
+    ``simulated`` marks a simulated responder (ADR 0038): stored on the device, echoed in the body.
+    ``apparatus`` (``{kind, access_class, label, station}``, validated by the caller) is what the
+    responder drives; the console shows it and judges whether that apparatus can hold the fire."""
     token = secrets.token_urlsafe(32)
     party_key = f"{prefix}{secrets.token_hex(8)}"
     now = wall_now()
@@ -82,6 +85,9 @@ def issue_token(role: str, prefix: str, incident_id: str | None, simulated: bool
     if simulated:
         doc["simulated"] = True
         body["simulated"] = True
+    if apparatus:
+        doc["apparatus"] = apparatus
+        body["apparatus"] = apparatus
     col("live_devices").insert_one(doc)
     return body
 

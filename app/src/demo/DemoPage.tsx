@@ -22,7 +22,6 @@ import {
   fireAreaHa,
   ignite,
   setActivity,
-  setRoutes,
   step,
   totals,
   zoneForecasts,
@@ -31,12 +30,8 @@ import {
   type Board,
 } from "./model";
 import SelectedPanel, { type PanelActions } from "./SelectedPanel";
-import { kindShort, windAt } from "./realism";
-import { useCrewRoutes } from "./useCrewRoutes";
 import { useDemoAgent } from "./useDemoAgent";
-import { WEATHER_PRESETS, useDemoEnvironment } from "./useDemoEnvironment";
 import { useDemoRoutes } from "./useDemoRoutes";
-import { CONGESTION_LABEL, TRAVEL_LABEL } from "./observation";
 import "./demo.css";
 
 const TICK_MS = 200;
@@ -82,29 +77,18 @@ export default function DemoPage() {
   const [igniteMode, setIgniteMode] = useState(false);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [weather, setWeather] = useState<string>(WEATHER_PRESETS[0].value);
-  const preset = WEATHER_PRESETS.find((p) => p.value === weather) ?? WEATHER_PRESETS[0];
-  const env = useDemoEnvironment(preset);
 
-  // Start the board once the drill zones and the fire inputs arrive.
+  // Start the board once the drill zones arrive.
   useEffect(() => {
-    if (!data || !env || boardRef.current) return;
-    const created = createBoard(baseZones(data), activity, newSeed(), env);
+    if (!data || boardRef.current) return;
+    const created = createBoard(baseZones(data), activity, newSeed());
     boardRef.current = created;
     setBoard(created);
-  }, [data, env, activity]);
-
-  // A new weather choice swaps the inputs under the running board (fires keep their shape).
-  useEffect(() => {
-    const b = boardRef.current;
-    if (!b || !env || b.env === env) return;
-    b.env = env;
-    bump();
-  }, [env, bump]);
+  }, [data, activity]);
 
   const restart = () => {
-    if (!data || !env) return;
-    const created = createBoard(baseZones(data), activity, Math.floor(Math.random() * 2 ** 31), env);
+    if (!data) return;
+    const created = createBoard(baseZones(data), activity, Math.floor(Math.random() * 2 ** 31));
     boardRef.current = created;
     setBoard(created);
     setSelection(null);
@@ -129,9 +113,7 @@ export default function DemoPage() {
   const routesRef = useRef(routes.routes);
   useEffect(() => {
     routesRef.current = routes.routes;
-    if (boardRef.current) setRoutes(boardRef.current, routes.routes);
-  }, [routes.routes, board]);
-  const crewRoutes = useCrewRoutes(board, version);
+  }, [routes.routes]);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps -- the board is mutated in place; version marks changes
   const forecasts = useMemo(() => (board ? zoneForecasts(board) : new Map()), [board, version]);
@@ -214,8 +196,7 @@ export default function DemoPage() {
   }, [data]);
   const name = useCallback((id: string) => names.get(id) ?? id, [names]);
 
-  const t = board ? totals(board, forecasts) : null;
-  const windNow = board ? windAt(board.env.spread.wind, board.minute) : null;
+  const t = board ? totals(board) : null;
   const fires = board
     ? activeFires(board).sort((a, b) => (a.status === b.status ? fireAreaHa(b) - fireAreaHa(a) : a.status === "burning" ? -1 : 1))
     : [];
@@ -244,12 +225,6 @@ export default function DemoPage() {
         <LoadingState>Loading the drill map…</LoadingState>
       </div>
     );
-  } else if (!board) {
-    gate = (
-      <div className="lc-token">
-        <LoadingState>Loading wind, terrain and fire stations…</LoadingState>
-      </div>
-    );
   }
 
   return (
@@ -272,17 +247,6 @@ export default function DemoPage() {
               value={activity}
               onChange={changeActivity}
             />
-            <SegmentedControl
-              label="Wind"
-              options={WEATHER_PRESETS.map((p) => ({ value: p.value, label: p.label, title: p.title }))}
-              value={weather}
-              onChange={setWeather}
-            />
-            {windNow ? (
-              <span className="lc-dim lc-num" title={board.env.spread.wind.label}>
-                Wind {windNow.speedMetersPerSecond.toFixed(1)} m/s from {Math.round(windNow.fromDegrees)}°
-              </span>
-            ) : null}
             <span className="lc-head-end">
               <Button size="sm" variant={igniteMode ? "primary" : "secondary"} aria-pressed={igniteMode} onClick={() => setIgniteMode((m) => !m)}>
                 {igniteMode ? "Click the map to start a fire" : "Add fire"}
@@ -296,7 +260,7 @@ export default function DemoPage() {
       </header>
 
       {board ? (
-        <aside className="lc-col lc-queue" aria-label="Fires and firefighting units">
+        <aside className="lc-col lc-queue" aria-label="Fires and strike teams">
           <div className="lc-col-head">
             <h2>Active fires</h2>
             <span className="lc-dim lc-num">
@@ -335,15 +299,14 @@ export default function DemoPage() {
                           <Tag>{SOURCE_LABEL[f.source]}</Tag>
                         </span>
                         <span className="lc-q-meta lc-num">
-                          {fireAreaHa(f).toFixed(1)} ha · {f.headRate} m/min · flame {Math.round(f.rates.headFlameFeet)} ft · started{" "}
-                          {simClock(f.ignitedAt)}
+                          {fireAreaHa(f).toFixed(1)} ha · {f.headRate} m/min · started {simClock(f.ignitedAt)}
                         </span>
                         <span className={`lc-q-meta${f.status === "burning" && (crews.length === 0 || eta === null) ? " lc-error" : ""}`}>
                           {f.status !== "burning"
                             ? "Mopping up"
                             : crews.length === 0
-                              ? "No units assigned"
-                              : `${crews.join(", ")} · ${eta === null ? "outrunning its units" : `contained in about ${eta} min`}`}
+                              ? "No teams assigned"
+                              : `${crews.join(", ")} · ${eta === null ? "outrunning its teams" : `contained in about ${eta} min`}`}
                         </span>
                       </span>
                     </li>
@@ -352,7 +315,7 @@ export default function DemoPage() {
               </ul>
             )}
             <div className="lc-col-head">
-              <h2>Units</h2>
+              <h2>Strike teams</h2>
               <span className="lc-dim lc-num">{board.teams.filter((tm) => tm.status === "available").length} free</span>
             </div>
             <ul className="dm-teams">
@@ -360,7 +323,6 @@ export default function DemoPage() {
                 <li key={tm.id}>
                   <button type="button" className="dm-team" onClick={() => setSelection({ kind: "team", id: tm.id })}>
                     <strong>{tm.id}</strong>
-                    <span className="lc-dim">{kindShort(tm.kind)}</span>
                     <span className={`dm-team-status dm-team-status--${tm.status}`}>{TEAM_STATUS[tm.status]}</span>
                     <span className="lc-dim">
                       {tm.fireId ?? board.stations.find((s) => s.id === tm.station)?.name}
@@ -426,7 +388,6 @@ export default function DemoPage() {
                 <Metric label="Households out" value={nf(t.out)} detail={`${nf(t.enRoute)} on the road now`} />
                 <Metric label="At risk, no order" value={nf(threatenedHome)} detail="households in zones fire may reach" />
                 <Metric label="Caught by fire" value={nf(t.caughtTotal)} detail="households, whole run" />
-                <Metric label="No vehicle, at risk" value={nf(t.noVehicleAtRisk)} detail="households needing transport" />
                 <Metric label="Fires out" value={nf(t.firesOutTotal)} detail={`${nf(t.burnedHa)} ha burned`} />
               </MetricGrid>
             </section>
@@ -446,26 +407,9 @@ export default function DemoPage() {
                 ))}
               </ol>
             </section>
-            <section className="dm-section" aria-label="Model inputs">
-              <div className="dm-section-head">
-                <h2>Model inputs</h2>
-              </div>
-              <ul className="dm-note dm-inputs">
-                <li>Wind: {board.env.spread.wind.label}; {board.env.spread.wind.heightNote}.</li>
-                <li>Fuel: {board.env.spread.ground.fuelLabel}; moisture {ACTIVITY[activity].moisture} (Scott &amp; Burgan 2005).</li>
-                <li>Terrain: {board.env.spread.ground.terrainLabel}.</li>
-                <li>Stations: {board.env.basesLabel}.</li>
-                <li>
-                  Travel: {TRAVEL_LABEL}
-                  {crewRoutes.error ? ` (road times unavailable: ${crewRoutes.error})` : ""}.
-                </li>
-                <li>Carless households: {board.env.noVehicleLabel}.</li>
-                <li>Congestion: {CONGESTION_LABEL}.</li>
-              </ul>
-            </section>
             <p className="dm-note dm-footnote">
-              Planning demo: fires, units and households are simulated on the 2018 Camp Fire drill zones and roads. Not
-              operational guidance.
+              Planning demo: fires, strike teams and households are simulated on the 2018 Camp Fire drill zones and roads.
+              Stations are synthetic. Not operational guidance.
             </p>
           </div>
         </aside>

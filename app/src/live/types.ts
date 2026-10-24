@@ -497,6 +497,15 @@ export interface HelpRequest {
   at: IsoTime
   help: HelpState | null
 }
+/** What a responder drives, declared on join (simulated units send their station engine). */
+export interface ResponderApparatus {
+  /** Studio apparatus kind (studio/apparatus.ts GroundKind), e.g. engine_t3. */
+  kind: string
+  /** Road-access class for routing (`tasks/{id}/route?class=`); null when not declared. */
+  access_class: string | null
+  label: string | null
+  station: string | null
+}
 export interface ResponderPosition {
   party_key: string
   /** Simulated responder (ADR 0038): shown with a "sim" tag. */
@@ -504,6 +513,48 @@ export interface ResponderPosition {
   coord: LonLat
   accuracy_m: number | null
   at: IsoTime
+  /** Absent from older servers; null when the responder declared none. */
+  apparatus?: ResponderApparatus | null
+}
+
+// ---- fire behaviour inputs (GET incidents/{id}/fire-behavior, docs/live-fire-behavior.md) ----
+
+export interface FireBehaviorWind {
+  /** Drill hour the sample stands for (sim.weather bins reports to the nearest hour). */
+  t_utc: IsoTime
+  /** Set when that hour had no report and an earlier hour is held (assumption). */
+  held_from: IsoTime | null
+  /** As the station reported, m/s. */
+  speed_ms: number | null
+  /** Open 20 ft wind, m/s, after the height conversion. */
+  speed_20ft_ms: number
+  /** Degrees true the wind blows FROM; null when calm. */
+  from_deg: number | null
+  gust_ms: number | null
+  rh_pct: number | null
+  evidence_class: string
+  station: { id: string | null; name: string | null; distance_km: number | null; source: string | null } | null
+  height: { from: string | null; factor: number | null }
+}
+
+export interface FireBehaviorResponse {
+  incident_id: string
+  /** Drill time the inputs are for. */
+  as_of: IsoTime | null
+  fire: { as_of: IsoTime | null; method: string; evidence_class: string }
+  /** False for drills other than the Camp replay; `detail` says why. */
+  available: boolean
+  detail?: string
+  wind?: FireBehaviorWind | null
+  wind_detail?: string | null
+  /** Perimeter vertex farthest downwind, and the slope there (rise/run). */
+  head?: { coord: LonLat; slope_tan: number; upslope_deg: number; terrain: 'observed' | 'flat' | 'outside' } | null
+  terrain?: { source: string; evidence_class: string } | null
+  terrain_detail?: string | null
+  zones_fire_touches?: string[]
+  /** ACS households with no vehicle per zone id (observed, block group). */
+  households_no_vehicle?: Record<string, { households: number; moe: number | null }>
+  households_no_vehicle_source?: string | null
 }
 
 // ---- v2: command (web controller poll) ----
@@ -652,8 +703,10 @@ export interface TaskRoute {
     congestion: 'twin' | 'unavailable'
     congested_edges: number
   } | null
-  reason: 'unreachable' | 'no_origin' | null
+  reason: 'unreachable' | 'no_origin' | 'no_access' | null
   detail: string | null
+  /** The road-access class the route was computed for. */
+  apparatus?: { class: string; label: string | null; basis: string }
   evidence_class: string
   as_of: IsoTime
 }

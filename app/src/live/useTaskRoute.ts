@@ -11,15 +11,20 @@ export interface TaskRouteState {
   error: string | null;
 }
 
-/** The responder route for one task, refetched every 15 s while a task id is given. */
-export function useTaskRoute(token: string | null, taskId: string | null): TaskRouteState | null {
+/** The responder route for one task, refetched every 15 s while a task id is given; routed for
+ * the assignee's road-access class when known. */
+export function useTaskRoute(
+  token: string | null,
+  taskId: string | null,
+  accessClass: string | null = null,
+): TaskRouteState | null {
   const [state, setState] = useState<TaskRouteState | null>(null);
   useEffect(() => {
     if (!token || !taskId) return;
     const controller = new AbortController();
     const load = async () => {
       try {
-        const route = await fetchTaskRoute(token, taskId, controller.signal);
+        const route = await fetchTaskRoute(token, taskId, controller.signal, accessClass);
         setState({ taskId, route, error: null });
       } catch (error) {
         if (controller.signal.aborted) return;
@@ -33,6 +38,6 @@ export function useTaskRoute(token: string | null, taskId: string | null): TaskR
       controller.abort();
       window.clearInterval(id);
     };
-  }, [token, taskId]);
+  }, [token, taskId, accessClass]);
   return taskId && state?.taskId === taskId ? state : null;
 }

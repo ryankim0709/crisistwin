@@ -13,11 +13,12 @@ import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useEffect, useRef, useState } from "react";
 import { fireHatch, loadStyle } from "./mapStyle";
+import { holdPhrase, noVehicleAtRisk, type HeadRates } from "./fireBehavior";
 import { VERDICT, labelPoint, nf, plural, responderName, shortZoneName, wallClock } from "./format";
 import { installInjectLayers } from "./injectMap";
 import { buildInjectSources } from "./injects";
 import type { QueueItem } from "./queue";
-import type { CommandResponse, GuidanceLevel, ImpactResponse, LonLat, TwinMonitor } from "./types";
+import type { CommandResponse, FireBehaviorResponse, GuidanceLevel, ImpactResponse, LonLat, TwinMonitor } from "./types";
 
 setWorkerUrl(workerUrl);
 
@@ -87,9 +88,16 @@ const lineFeature = (coords: LonLat[], properties: Feature["properties"] = {}): 
 /** On-map zone tags, so a red zone never reads as fire. */
 const ZONE_TAG: Record<Exclude<GuidanceLevel, "none">, string> = { evacuate_now: "LEAVE NOW", be_ready: "BE READY" };
 
-function buildSources(data: CommandResponse, items: QueueItem[]): Record<string, GeoJSON.FeatureCollection> {
+function buildSources(
+  data: CommandResponse,
+  items: QueueItem[],
+  fireInputs: FireBehaviorResponse | null,
+  head: HeadRates | null,
+): Record<string, GeoJSON.FeatureCollection> {
   const guidance = new Map(data.guidance.map((g) => [g.zone_id, g]));
   const counts = new Map(data.checkins.by_zone.map((c) => [c.zone_id, c]));
+  const noVehicle = new Map(noVehicleAtRisk(fireInputs, data.guidance).map((z) => [z.zoneId, z.households]));
+  const flame = head ? head.headFlameFeet : null;
 
   const zones: Feature[] = [];
   const zoneLabels: Feature[] = [];
@@ -100,6 +108,8 @@ function buildSources(data: CommandResponse, items: QueueItem[]): Record<string,
     const anchor = labelPoint(zone.geometry);
     const parts = level === "none" ? [] : [ZONE_TAG[level]];
     if (c && c.out + c.need_help > 0) parts.push(c.need_help ? `${c.out} out, ${c.need_help} help` : `${c.out} out`);
+    const carless = noVehicle.get(zone.id);
+    if (carless) parts.push(`${nf(carless)} no vehicle`);
     if (anchor && parts.length) zoneLabels.push(point(anchor, { text: parts.join(" · "), level }));
   }
 
@@ -112,6 +122,13 @@ function buildSources(data: CommandResponse, items: QueueItem[]): Record<string,
     : [];
   const fireAnchor = data.fire.geometry ? labelPoint(data.fire.geometry) : null;
   const fireLabel = fireAnchor ? [point(fireAnchor, { text: "FIRE" })] : [];
+  if (head && fireInputs?.head) {
+    fireLabel.push(
+      point(fireInputs.head.coord, {
+        text: `HEAD (model) ${head.headMetersPerMinute.toFixed(0)} m/min, ${head.headFlameFeet.toFixed(0)} ft`,
+      }),
+    );
+  }
   const fireObs = data.fire.observations.map((o) => point(o.coord, { source: o.source }));
 
   const hazardLines = data.public_items
@@ -128,9 +145,10 @@ function buildSources(data: CommandResponse, items: QueueItem[]): Record<string,
   const help = data.checkins.need_help
     .filter((h) => h.coord)
     .map((h) => point(h.coord!, { label: `Needs help, ${wallClock(h.at)}` }));
-  const responders = data.responders.map((r) =>
-    point(r.coord, { label: `Responder ${responderName(r)}, ${wallClock(r.at)}` }),
-  );
+  const responders = data.responders.map((r) => {
+    const phrase = holdPhrase(r.apparatus?.kind, flame);
+    return point(r.coord, { label: `Responder ${responderName(r)}${phrase ? `, ${phrase}` : ""}, ${wallClock(r.at)}` });
+  });
   const dests = data.destinations
     .filter((d) => d.kind !== "exit")
     .map((d) =>
@@ -521,10 +539,25 @@ interface Props {
   layers: Record<LayerKey, boolean>;
   impact: ImpactResponse | null;
   taskRoute: LonLat[] | null;
+  /** Fire-behaviour inputs and the modelled head (fireBehavior.ts); null when unavailable. */
+  fireInputs: FireBehaviorResponse | null;
+  head: HeadRates | null;
   onSelect: (itemId: string | null) => void;
 }
 
-export default function CommandMap({ data, twin, items, selected, focus, layers, impact, taskRoute, onSelect }: Props) {
+export default function CommandMap({
+  data,
+  twin,
+  items,
+  selected,
+  focus,
+  layers,
+  impact,
+  taskRoute,
+  fireInputs,
+  head,
+  onSelect,
+}: Props) {
   const container = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const dataRef = useRef<CommandResponse | null>(data);
@@ -607,7 +640,7 @@ export default function CommandMap({ data, twin, items, selected, focus, layers,
   useEffect(() => {
     const map = mapRef.current;
     if (!ready || !map || !data) return;
-    for (const [id, fc] of Object.entries({ ...buildSources(data, items), ...buildInjectSources(data) })) {
+    for (const [id, fc] of Object.entries({ ...buildSources(data, items, fireInputs, head), ...buildInjectSources(data) })) {
       (map.getSource(id) as GeoJSONSource | undefined)?.setData(fc);
     }
     if (!fitted.current && data.zones.length) {
@@ -619,7 +652,7 @@ export default function CommandMap({ data, twin, items, selected, focus, layers,
       if (!bounds.isEmpty()) map.fitBounds(bounds, { padding: FIT_PADDING, duration: 0 });
       fitted.current = true;
     }
-  }, [ready, data, items]);
+  }, [ready, data, items, fireInputs, head]);
 
   useEffect(() => {
     const map = mapRef.current;

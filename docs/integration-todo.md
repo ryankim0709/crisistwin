@@ -87,10 +87,10 @@ but not wired, unmarked = not started. Items are in dependency order within each
 - [ ] Time-varying wind in the Studio/`/fire` solver: it takes one wind per run, so "Historical"
       uses the peak hour (a worst-hour run, not a replay). Weather humidity and temperature are not
       yet fed into fuel moisture.
-- [ ] No LANDFIRE landscape covers Camp, so `/demo` uses SH5 everywhere; add a Camp region.
-- [ ] `/demo`: an "escaped fire handed off" rule for long 24/7 runs (under real winds most fires
-      escape and the board fills its 25-fire cap); `app/src/demo/model.test.ts` and
-      `observation.test.ts` are stale after the realism change.
+- [ ] No LANDFIRE landscape covers Camp, so the `/live` fire-behaviour readout assumes SH5 at the
+      head ([live-fire-behavior.md](live-fire-behavior.md)); add a Camp region.
+- [ ] `/live` fire behaviour: derive fuel moisture from the observed hourly humidity instead of the
+      fixed "critical" preset, and track the head point between perimeters.
 
 - [ ] **[wip]** Suppression engine: sourced rates, road access R01-R12 per apparatus class,
       helicopters and airtankers with daylight, wind and turnaround limits, first-alarm preset.

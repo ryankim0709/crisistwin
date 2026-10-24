@@ -37,6 +37,11 @@ log = logging.getLogger(__name__)
 
 ACCESS_CLASSES = ("engine_t1_t2", "engine_t3", "engine_t4_t7", "tender_support", "tender_tactical")
 """Road-access vehicle classes of the decision table (docs/suppression-data.md)."""
+GROUND_KINDS = frozenset({
+    "engine_t1", "engine_t3", "engine_t6", "hand_crew_t1", "hand_crew_t2", "dozer_t1", "dozer_t2",
+    "tender_support", "tender_tactical", "chief",
+})
+"""Studio ground apparatus kinds (app/src/studio/apparatus.ts GROUND_KINDS), as a responder may declare on join."""
 DEFAULT_CLASS = "engine_t3"
 """CAL FIRE Type 3 engine, the data's default state engine."""
 STATION_TYPES = frozenset({"FSA", "FSB", "FSAB", "FSL", "FSCC", "FSO"})

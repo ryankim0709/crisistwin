@@ -52,7 +52,7 @@ const ROWS: { key: string; label: string; swatch: ReactNode }[] = [
   },
   {
     key: "team",
-    label: "Firefighting unit",
+    label: "Strike team",
     swatch: (
       <svg viewBox="0 0 20 14" aria-hidden="true">
         <circle cx="10" cy="7" r="5" fill={MAP_COLOR.responder} stroke="#fff" strokeWidth="2" />
@@ -61,7 +61,7 @@ const ROWS: { key: string; label: string; swatch: ReactNode }[] = [
   },
   {
     key: "enroute",
-    label: "Unit en route",
+    label: "Team en route",
     swatch: (
       <svg viewBox="0 0 20 14" aria-hidden="true">
         <line x1="1" y1="7" x2="19" y2="7" stroke={MAP_COLOR.responder} strokeWidth="1.5" strokeDasharray="2 2" />

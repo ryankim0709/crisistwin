@@ -116,10 +116,8 @@ function buildTeams(board: Board) {
   for (const team of board.teams) {
     const pos = teamPosition(board, team);
     teams.push(point(pos, { id: team.id, status: team.status }));
-    // En route: the road line when known (whole route), else the straight line to its target.
-    if (team.status === "en_route" && team.target) {
-      lines.push(lineFeature(team.route && team.route.length > 1 ? team.route : [pos, team.target], { id: team.id }));
-    }
+    const fire = team.status === "en_route" ? board.fires.find((f) => f.id === team.fireId) : undefined;
+    if (fire) lines.push(lineFeature([pos, fire.origin], { id: team.id }));
   }
   return { teams, lines };
 }

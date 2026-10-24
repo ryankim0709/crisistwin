@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button, EvidenceTag, IconButton, LoadingState, Notice, Tag } from "../ui";
 import { createTask, helpAction, triageReport } from "./api";
 import { KIND_LABEL, answersLine, drillClock, elapsed, nf, plural, responderName, shortKey, shortZoneName, wallClock } from "./format";
+import { holdPhrase } from "./fireBehavior";
 import { distanceM } from "./geo";
 import KindGlyph from "./Glyph";
 import { impactLine } from "./ReviewQueue";
@@ -61,6 +62,14 @@ function nearestResponder(coord: [number, number], responders: ResponderPosition
   let best: ResponderPosition | null = null;
   for (const r of responders) if (!best || distanceM(coord, r.coord) < distanceM(coord, best.coord)) best = r;
   return best;
+}
+
+/** The assignee's short key, plus its apparatus and whether it can hold the head flame (model). */
+function assigneeLine(assignee: string | null, data: CommandResponse, headFlameFeet: number | null): string {
+  if (!assignee) return "Any responder";
+  const apparatus = data.responders.find((r) => r.party_key === assignee)?.apparatus;
+  const phrase = holdPhrase(apparatus?.kind, headFlameFeet);
+  return phrase ? `${shortKey(assignee)}, ${phrase}` : shortKey(assignee);
 }
 
 function signed(n: number): string {
@@ -220,6 +229,7 @@ function HelpDetail({
   run,
   busy,
   route,
+  headFlameFeet,
   onClose,
 }: {
   item: QueueItem;
@@ -228,6 +238,7 @@ function HelpDetail({
   run: RunAction;
   busy: string | null;
   route: TaskRouteState | null;
+  headFlameFeet: number | null;
   onClose: () => void;
 }) {
   const [error, setError] = useState<string | null>(null);
@@ -257,7 +268,7 @@ function HelpDetail({
         <Tag tone={status === "open" ? "danger" : "info"}>{HELP_WORD[status]}</Tag>
         {task ? (
           <span className="lc-dim">
-            {task.assignee ? shortKey(task.assignee) : "Any responder"}, {task.status === "accepted" ? "on the way" : "not accepted yet"}
+            {assigneeLine(task.assignee, data, headFlameFeet)}, {task.status === "accepted" ? "on the way" : "not accepted yet"}
           </span>
         ) : null}
       </p>
@@ -304,6 +315,7 @@ function ReportDetail({
   route,
   impact,
   proposalId,
+  headFlameFeet,
   onRunImpact,
   onReviewProposal,
   onClose,
@@ -316,6 +328,8 @@ function ReportDetail({
   route: TaskRouteState | null;
   impact: ImpactState | null;
   proposalId: string | null;
+  /** Modelled head flame length, feet (fireBehavior.ts), or null when unknown. */
+  headFlameFeet: number | null;
   onRunImpact: () => void;
   onReviewProposal: (id: string) => void;
   onClose: () => void;
@@ -412,7 +426,7 @@ function ReportDetail({
             {item.task.status === "accepted" ? "accepted" : "requested"}
           </Tag>
           {item.task.created_by === "priority" ? <Tag>Board</Tag> : null}
-          <span className="lc-dim">{item.task.assignee ? shortKey(item.task.assignee) : "Any responder"}</span>
+          <span className="lc-dim">{assigneeLine(item.task.assignee, data, headFlameFeet)}</span>
           {item.task.answers !== undefined ? (
             <span className="lc-dim lc-num">{answersLine(item.task.answers, serverNow)}</span>
           ) : null}

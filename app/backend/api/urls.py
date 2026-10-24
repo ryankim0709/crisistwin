@@ -1,7 +1,6 @@
 from django.urls import include, path, re_path
 
 from .demo import demo_decide, demo_routes
-from .demo_realism import demo_crew_routes, demo_environment, demo_wind
 from .dispatch import decide
 from .dispatch_area import dispatch_area
 from .dispatch_runs import run_list, run_outcome
@@ -41,9 +40,6 @@ urlpatterns = [
     path("suppression/bases", suppression_bases, name="suppression-bases"),
     path("demo/routes", demo_routes, name="demo-routes"),
     path("demo/decide", demo_decide, name="demo-decide"),
-    path("demo/crew_routes", demo_crew_routes, name="demo-crew-routes"),
-    path("demo/environment", demo_environment, name="demo-environment"),
-    path("demo/wind", demo_wind, name="demo-wind"),
     path("dispatch/runs", run_list, name="dispatch-runs"),
     re_path(
         r"^dispatch/runs/(?P<session_id>[0-9a-f-]{36})/outcome$",

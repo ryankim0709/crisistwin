@@ -252,7 +252,11 @@ class Fleet:
         for u in self.units:
             if not u.join_sent:
                 u.join_sent = True
-                calls.append(self._call(at, u, "join", "POST", f"incidents/{self.incident_id}/join", {"simulated": True}))
+                join: dict[str, Any] = {"simulated": True}
+                if u.apparatus is not None:  # shown on the console with whether it can hold the fire
+                    a = u.apparatus
+                    join["apparatus"] = {"kind": a.kind, "access_class": a.vehicle, "label": a.label, "station": a.station}
+                calls.append(self._call(at, u, "join", "POST", f"incidents/{self.incident_id}/join", join))
                 continue
             if u.party_key is None:
                 continue

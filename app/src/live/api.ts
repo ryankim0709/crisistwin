@@ -7,6 +7,7 @@ import type {
   CommandResponse,
   CreateTaskRequest,
   DrillRequest,
+  FireBehaviorResponse,
   HelpAction,
   DrillResponse,
   ImpactRequest,
@@ -190,6 +191,28 @@ export const drillAction = (token: string, incidentId: string, body: DrillReques
 export const runImpact = (token: string, incidentId: string, body: ImpactRequest) =>
   request<ImpactResponse>(token, "POST", `incidents/${encodeURIComponent(incidentId)}/impact`, body);
 
-/** The route from the responder (or the assignee's last location) to an open task. */
-export const fetchTaskRoute = (token: string, taskId: string, signal?: AbortSignal) =>
-  request<TaskRoute>(token, "GET", `tasks/${encodeURIComponent(taskId)}/route`, undefined, signal);
+/** The route from the responder (or the assignee's last location) to an open task, for the
+ * assignee's road-access class when known (else the server's default, a Type 3 engine). */
+export const fetchTaskRoute = (token: string, taskId: string, signal?: AbortSignal, accessClass?: string | null) =>
+  request<TaskRoute>(
+    token,
+    "GET",
+    `tasks/${encodeURIComponent(taskId)}/route${accessClass ? `?class=${encodeURIComponent(accessClass)}` : ""}`,
+    undefined,
+    signal,
+  );
+
+/** Wind, slope at the head and carless households at the drill clock (docs/live-fire-behavior.md). */
+export async function fetchFireBehavior(token: string, incidentId: string, signal: AbortSignal): Promise<FireBehaviorResponse> {
+  const data = await request<FireBehaviorResponse>(
+    token,
+    "GET",
+    `incidents/${encodeURIComponent(incidentId)}/fire-behavior`,
+    undefined,
+    signal,
+  );
+  if (typeof data !== "object" || data === null || typeof data.available !== "boolean") {
+    throw new LiveError(200, "bad_response", "The fire behaviour endpoint returned an unexpected response.");
+  }
+  return data;
+}
