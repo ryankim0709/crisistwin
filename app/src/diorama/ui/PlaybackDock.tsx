@@ -6,6 +6,15 @@ import { PLAYBACK_SPEEDS, type Playback } from "./usePlayback";
 /** Arrow-key seek on the timeline, in scenario seconds (Shift for the larger step). */
 const SEEK_STEP_S = 2;
 const SEEK_BIG_STEP_S = 10;
+/** One-word names keep short phases legible on the timeline; full labels stay in titles. */
+const PHASE_SHORT_LABELS: Record<PhaseId, string> = {
+  ignition: "Ignition",
+  spread: "Spread",
+  evacuation: "Evacuation",
+  congestion: "Congestion",
+  response: "Response",
+  resolution: "Resolution",
+};
 
 type PlaybackDockProps = {
   playback: Playback;
@@ -112,8 +121,9 @@ export default function PlaybackDock({
                 aria-current={phase.id === currentPhase ? "step" : undefined}
                 onClick={() => playback.seek(phase.start)}
                 title={`Jump to ${phase.label}`}
+                aria-label={`Jump to ${phase.label}`}
               >
-                {phase.label}
+                {PHASE_SHORT_LABELS[phase.id]}
               </button>
             </li>
           ))}

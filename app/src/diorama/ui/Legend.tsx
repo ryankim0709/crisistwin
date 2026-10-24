@@ -23,7 +23,7 @@ export default function Legend({ world, defaultOpen }: LegendProps) {
 
   const items: { glyph: ReactNode; label: string }[] = [
     { glyph: <CarGlyph />, label: "Resident vehicle" },
-    { glyph: <TruckGlyph />, label: "Fire engine (lights on when responding)" },
+    { glyph: <TruckGlyph />, label: "Fire engine" },
     { glyph: <FireEdgeGlyph />, label: "Active fire edge" },
     { glyph: <BurnedGlyph />, label: "Burned area" },
     { glyph: <HeldLineGlyph />, label: "Section held by crews" },
@@ -33,7 +33,7 @@ export default function Legend({ world, defaultOpen }: LegendProps) {
     { glyph: <ClosedRoadGlyph />, label: "Closed road" },
     {
       glyph: <WindGlyph bearing={bearing} />,
-      label: `Wind toward ${compassName(bearing)} (map north up) · ${world.wind.label}`,
+      label: `Wind ${world.wind.label}, blowing ${compassName(bearing)}`,
     },
   ];
 

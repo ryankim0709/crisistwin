@@ -16,7 +16,7 @@ import "./diorama.css";
 /** Seconds the recap stays up before the ~90 s loop restarts on its own. */
 const RECAP_AUTO_RESTART_S = 8;
 /** The legend starts expanded only where the sidebar and a wide stage leave room for it. */
-const WIDE_QUERY = "(min-width: 1100px)";
+const WIDE_QUERY = "(min-width: 1680px)";
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
 
 type SceneStatus = { kind: "loading" } | { kind: "ready" } | { kind: "error"; message: string };
