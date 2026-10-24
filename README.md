@@ -27,8 +27,14 @@ Vite and Tailwind CSS, a Django REST Framework API, PostgreSQL, Vitest, and Dock
 The workspace checks the API and database connection. The imagery map at `/maps`
 starts over San Francisco and supports an illustrative fire-spread experiment:
 choose an origin, set wind, and inspect the simulated footprint in 15-minute
-steps. Calibrated fire/traffic models, persistent scenarios, and live incident
-integrations are not implemented yet.
+steps. Database models and migrations support households, roads, evacuation
+destinations/plans, road events, and fire scenario/run storage; save/replay
+endpoints and frontend persistence are not implemented yet. Calibrated fire/traffic
+models and live incident integrations are also pending. See the
+[persistence contract](app/backend/persistence.md).
+The [evacuation input contract](app/backend/evacuation-persistence.md) documents
+occupant/car counts, seats, capacities, units, and dataset sealing. These are
+storage definitions; no evacuation data import or traffic execution is wired yet.
 
 This is an experimental planning simulator. Its outputs are not operational evacuation instructions; any future resident guidance should require approval by the responsible authority.
 
@@ -85,7 +91,7 @@ app/
   src/                  React UI and API client (lib/), Vitest setup (test/)
   backend/
     config/             Django settings, routes, WSGI
-    api/                HTTP endpoints and backend contract tests
+    api/                HTTP endpoints, persistence models/migrations, contract tests
     requirements*.in    Direct Python dependency declarations
     requirements*.txt   Resolved, pinned Python dependencies
   docker-compose.yml    Development frontend + backend + PostgreSQL
