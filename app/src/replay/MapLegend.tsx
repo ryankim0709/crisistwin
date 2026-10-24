@@ -11,6 +11,7 @@ export default function MapLegend({
   showFireObs = false,
   showDestinations = false,
   peopleSource = null,
+  peoplePerDot = 1,
   mobilityEvidence = null,
   open,
   onToggle,
@@ -23,6 +24,8 @@ export default function MapLegend({
   showDestinations?: boolean;
   /** Source text for the people-at-home ramp (e.g. "Census 2018 ACS"); null hides the row. */
   peopleSource?: string | null;
+  /** Households each home dot stands for. */
+  peoplePerDot?: number;
   /** Evidence class of the device-movement layer while it is shown; null hides the row. */
   mobilityEvidence?: EvidenceClass | null;
   open: boolean;
@@ -120,14 +123,25 @@ export default function MapLegend({
           Closed road
         </li>
         {peopleSource && (
-          <li>
-            <svg viewBox="0 0 28 14" aria-hidden="true">
-              {PEOPLE_RAMP.slice(1).map(([, color], i) => (
-                <rect key={color} x={1 + i * 6.5} y="2" width="6.5" height="10" fill={color} />
-              ))}
-            </svg>
-            Households at home per km² (0–{PEOPLE_RAMP[PEOPLE_RAMP.length - 1][0]}+), {peopleSource}
-          </li>
+          <>
+            <li>
+              <svg viewBox="0 0 28 14" aria-hidden="true">
+                <rect x="4" y="4" width="6" height="6" fill={COLORS.homeDot} />
+                <rect x="17" y="4" width="6" height="6" fill={COLORS.threatImminent} />
+              </svg>
+              {peoplePerDot === 1 ? "1 household" : `${peoplePerDot} households`} still at home; amber:
+              inside the fire area. Gone once they have left. Placed at random along the streets of
+              their Census block group, not real home locations. {peopleSource}
+            </li>
+            <li>
+              <svg viewBox="0 0 28 14" aria-hidden="true">
+                {PEOPLE_RAMP.slice(1).map(([, color], i) => (
+                  <rect key={color} x={1 + i * 6.5} y="2" width="6.5" height="10" fill={color} opacity="0.5" />
+                ))}
+              </svg>
+              Faint shading: households at home per km² (0–{PEOPLE_RAMP[PEOPLE_RAMP.length - 1][0]}+)
+            </li>
+          </>
         )}
         {mobilityEvidence && (
           <li>

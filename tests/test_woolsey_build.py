@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 from tools import woolsey_build as wb
+from tools import woolsey_layers as wl
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -14,7 +15,11 @@ PACKAGE_ROOT = ROOT / "data" / "incidents" / wb.INCIDENT_ID
 
 
 def tables() -> tuple[dict, dict, dict, dict]:
-    return tuple(json.loads(path.read_bytes()) for path in wb.CURATED.values())  # type: ignore[return-value]
+    return tuple(json.loads(wb.CURATED[path].read_bytes()) for path in wb.V1_CURATED)  # type: ignore[return-value]
+
+
+def zones_table() -> dict:
+    return json.loads(wb.CURATED["curated/zones.json"].read_bytes())
 
 
 def osm(elements: list[dict]) -> bytes:
@@ -108,6 +113,65 @@ class PopulationTests(unittest.TestCase):
         self.assertTrue(wb.bbox_contains(wb.ring_bbox(clockwise), (0.2, 0.2, 0.8, 0.8)))
 
 
+class ZoneTests(unittest.TestCase):
+    def test_mercator_ring_becomes_counter_clockwise_lon_lat(self) -> None:
+        r = wl.MERCATOR_R_M
+        x0, x1 = -118.9 * 3.141592653589793 / 180 * r, -118.8 * 3.141592653589793 / 180 * r
+        y0, y1 = 4040000.0, 4050000.0
+        clockwise = [[x0, y0], [x0, y1], [x1, y1], [x1, y0], [x0, y0]]
+        polygon = wl.webmap_polygon([clockwise])
+        ring = polygon["coordinates"][0]
+        self.assertGreater(wl._ring_area2(ring), 0)
+        self.assertAlmostEqual(ring[0][0], -118.9, places=6)
+        self.assertTrue(34.0 < ring[0][1] < 34.2)
+        with self.assertRaises(wb.SourceError):
+            wl.webmap_polygon([clockwise, clockwise])
+
+    def test_order_times_are_latest_bounds_in_utc(self) -> None:
+        events = {e["event_id"]: e for e in wl.zone_order_events(zones_table(), tables()[0])}
+        oak = events["woolsey-vc-20181109-oak-park"]
+        self.assertEqual((oak["occurred_at"], oak["occurred_from"], oak["time_precision"]),
+                         ("2018-11-09T17:30:00Z", None, "approximate"))
+        self.assertEqual(oak["available_at"], "2018-11-09T18:28:43Z")
+        self.assertEqual(events["woolsey-vc-20181109-bell-canyon-all"]["occurred_at"], "2018-11-09T19:00:00Z")
+        self.assertEqual(events["woolsey-vc-20181110-wood-ranch-long-canyon"]["occurred_at"], "2018-11-10T06:06:08Z")
+        malibu = events["woolsey-cg-se070-order"]
+        self.assertEqual((malibu["occurred_at"], malibu["available_at"]), ("2018-11-09T14:50:00Z", "2018-11-09T14:57:00Z"))
+        tweet = events["woolsey-cg-se031-order"]
+        self.assertEqual((tweet["occurred_to"], tweet["occurred_from"]), ("2018-11-09T03:09:00Z", None))
+        for event in events.values():
+            self.assertLessEqual(len(event["quote"].split()), 25, event["event_id"])
+
+    def test_every_zone_reference_exists(self) -> None:
+        table = zones_table()
+        ids = {z["zone_id"] for z in table["zones"]}
+        self.assertEqual(len(ids), len(table["zones"]))
+        referenced = {z for o in table["orders"] for z in o["zone_ids"]}
+        referenced |= {z for row in table["event_zone_ids"].values() for z in row["zone_ids"]}
+        self.assertEqual(referenced - ids, set())
+        for zone in table["zones"]:
+            if zone["geometry_source"] is None:
+                self.assertTrue(zone["geometry_reason"], zone["zone_id"])
+
+    def test_unknown_zone_ids_are_rejected(self) -> None:
+        event = {"event_id": "x", "type": "evacuation_order", "target": {"zone_ids": ["nope"]}}
+        with self.assertRaises(wb.SourceError):
+            wl.apply_zone_ids([event], {"event_zone_ids": {}}, {"woolsey-zone-vc-oak-park"})
+
+    def test_dins_rejects_address_fields_and_short_pages(self) -> None:
+        attrs = {"OBJECTID": 1, "GLOBALID": "ABC", "DAMAGE": "Destroyed (>50%)", "INCIDENTNAME": "Woolsey",
+                 "INCIDENTNUM": "CALAC 33891", "INCIDENTSTARTDATE": 1541635200000, "STRUCTURECATEGORY": "Single Residence"}
+        page = lambda a: json.dumps({"spatialReference": {"wkid": 4326},
+                                     "features": [{"attributes": a, "geometry": {"x": -118.8, "y": 34.1}}]}).encode()
+        fc, quality = wl.normalize_dins([page(attrs)], 1)
+        self.assertEqual(fc["features"][0]["id"], "calfire-dins:abc")
+        self.assertEqual(fc["features"][0]["properties"]["incident_start_date"], "2018-11-08")
+        with self.assertRaises(wb.SourceError):
+            wl.normalize_dins([page({**attrs, "SITEADDRESS": "x"})], 1)
+        with self.assertRaises(wb.SourceError):
+            wl.normalize_dins([page(attrs)], 2)
+
+
 class PackageTests(unittest.TestCase):
     def test_committed_packages_verify_offline(self) -> None:
         packages = sorted(p for p in PACKAGE_ROOT.glob("*") if (p / "manifest.json").exists())
@@ -117,6 +181,11 @@ class PackageTests(unittest.TestCase):
             result = wb.verify(package)
             self.assertEqual(result["package_version"], package.name)
             self.assertEqual(result["layers"]["roads"], "present")
+            if result["normalizer_version"] == wb.NORMALIZER_VERSION:
+                self.assertEqual(result["zone_targeting"]["without_zone_ids"], [])
+                for name in ("evacuation_zones", "fire_perimeters", "damage_assessments"):
+                    self.assertTrue((package / "normalized" / f"{name}.geojson").exists())
+                self.assertTrue((package / "normalized/zone_population_crosswalk.json").exists())
 
 
 if __name__ == "__main__":

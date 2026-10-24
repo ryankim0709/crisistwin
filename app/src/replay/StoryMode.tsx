@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { CaveatChip } from "./CompareTab";
 import { VARIANT_CAVEATS } from "./compare";
 import { EvidenceChip } from "./parts";
-import type { Chapter, RevealRow } from "./story";
+import { chapterFrame, cutoffClock, type Chapter, type RevealRow, type Spotlight } from "./story";
 import { localTime } from "./timeline";
 import type { EvidenceClass, LngLat, ReplayModel, TrafficMetrics } from "./types";
 
@@ -14,8 +14,16 @@ const TRAVEL_S = 4;
 /** Longer gaps are skipped: the clock jumps to this much sim time before the chapter, then runs. */
 const MAX_RUN_IN_MS = 40 * 60_000;
 const MIN_SPEED = 60;
-/** Keep the framed area clear of the story card (right) and the HUD and dock. */
-const FOCUS_PADDING = { top: 150, bottom: 190, left: 80, right: 450 };
+/**
+ * Symmetric padding, so the chapter's subject sits in the middle of the window; wide enough at
+ * the sides to keep the framed area clear of the story card, narrowed on small screens.
+ */
+function focusPadding(): FocusPadding {
+  const side = Math.max(40, Math.min(420, (window.innerWidth - 320) / 2));
+  const vertical = Math.max(40, Math.min(170, (window.innerHeight - 240) / 2));
+  return { top: vertical, bottom: vertical, left: side, right: side };
+}
+type FocusPadding = { top: number; bottom: number; left: number; right: number };
 
 export interface StoryModeProps {
   chapters: Chapter[];
@@ -29,7 +37,9 @@ export interface StoryModeProps {
   /** Run the clock to `ms` at `speed` (sim s per wall s), then call onArrive. */
   playTo: (ms: number, speed: number, onArrive: () => void) => void;
   seek: (ms: number) => void;
-  focus: (coords: LngLat[], padding: typeof FOCUS_PADDING) => void;
+  focus: (coords: LngLat[], padding: FocusPadding) => void;
+  /** Highlight the current chapter's subject on the map. */
+  onSpotlight: (spot: Spotlight) => void;
   onShowVariant: (id: string) => void;
   onClose: () => void;
   /** End of story: open the next fire straight into its story. */
@@ -45,6 +55,11 @@ function fmt(n: number): string {
   return Math.round(n).toLocaleString("en-US");
 }
 
+/** "Nov 9" in the given zone. */
+function localDay(ms: number, timeZone: string): string {
+  return new Intl.DateTimeFormat("en-US", { timeZone, month: "short", day: "numeric" }).format(ms);
+}
+
 /** Guided autoplay through bundle-anchored chapters; the camera and clock follow each one. */
 export default function StoryMode({
   chapters,
@@ -57,6 +72,7 @@ export default function StoryMode({
   playTo,
   seek,
   focus,
+  onSpotlight,
   onShowVariant,
   onClose,
   nextFire,
@@ -80,7 +96,8 @@ export default function StoryMode({
       if (!ch) return;
       setIndex(i);
       setArrived(false);
-      if (ch.focus.length > 0) focus(ch.focus, FOCUS_PADDING);
+      if (ch.focus.length > 0) focus(chapterFrame(ch), focusPadding());
+      onSpotlight(ch.spot);
       if (ch.reveal) {
         seek(ch.atMs);
         setArrived(true);
@@ -99,7 +116,7 @@ export default function StoryMode({
       const speed = Math.max(MIN_SPEED, ahead / 1000 / TRAVEL_S);
       playTo(ch.atMs, speed, () => setArrived(true));
     },
-    [chapters, focus, playTo, seek],
+    [chapters, focus, onSpotlight, playTo, seek],
   );
 
   // Start from the first chapter when opened (deferred so StrictMode's remount runs it once).
@@ -145,6 +162,11 @@ export default function StoryMode({
   const notOut = metrics ? metrics.notDepartedVeh + metrics.enRouteVeh : null;
   const total = metrics ? metrics.notDepartedVeh + metrics.enRouteVeh + metrics.arrivedVeh : null;
   const maxBar = Math.max(100, ...revealRows.map((r) => r.exposurePct));
+  // Dates only when the story runs over more than one local day.
+  const multiDay = new Set(chapters.filter((c) => !c.reveal).map((c) => localDay(c.atMs, timezone))).size > 1;
+  // The what-if "out by" count is taken at the first 18:00 UTC after the first order.
+  const firstOrder = chapters.find((c) => c.id === "first-order");
+  const cutoff = firstOrder ? cutoffClock(firstOrder.atMs, timezone) : null;
 
   return (
     <section
@@ -179,6 +201,7 @@ export default function StoryMode({
       <div aria-live="polite">
         {!chapter.reveal && (
           <p className="rp-story-when">
+            {multiDay && `${localDay(chapter.atMs, timezone)} · `}
             {localTime(chapter.atMs, timezone)}
             {paused ? (
               <span className="rp-dim"> · paused</span>
@@ -187,10 +210,28 @@ export default function StoryMode({
             )}
           </p>
         )}
+        {chapter.lead && chapter.lead.length > 0 && (
+          <ul className="rp-story-lead" aria-label="Before this">
+            {chapter.lead.map((note) => (
+              <li key={note.text}>
+                <EvidenceChip value={note.evidence} /> {note.text}
+              </li>
+            ))}
+          </ul>
+        )}
         <h2 className="rp-story-title">{chapter.title}</h2>
         <p className="rp-story-body">
           <EvidenceChip value={chapter.evidence} /> {chapter.body}
         </p>
+        {chapter.then && chapter.then.length > 0 && (
+          <ul className="rp-story-then" aria-label="What followed">
+            {chapter.then.map((note) => (
+              <li key={note.text}>
+                <EvidenceChip value={note.evidence} /> {note.text}
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
 
       {chapter.reveal ? (
@@ -198,8 +239,10 @@ export default function StoryMode({
           <div className="rp-reveal-row rp-reveal-row--base">
             <span className="rp-reveal-name">
               Baseline run
-              {revealRows[0]?.arrivedBaseline != null && (
-                <small>{fmt(revealRows[0].arrivedBaseline)} out by 10:00</small>
+              {revealRows[0]?.arrivedBaseline != null && cutoff && (
+                <small>
+                  {fmt(revealRows[0].arrivedBaseline)} out by {cutoff}
+                </small>
               )}
             </span>
             <span className="rp-reveal-bar" aria-hidden="true">
@@ -224,7 +267,11 @@ export default function StoryMode({
               >
                 <span className="rp-reveal-name">
                   {r.title}
-                  {r.arrivedVariant !== null && <small>{fmt(r.arrivedVariant)} out by 10:00</small>}
+                  {r.arrivedVariant !== null && cutoff && (
+                    <small>
+                      {fmt(r.arrivedVariant)} out by {cutoff}
+                    </small>
+                  )}
                   <CaveatChip id={r.id} />
                 </span>
                 <span className="rp-reveal-bar" aria-hidden="true">

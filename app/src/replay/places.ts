@@ -22,19 +22,20 @@ export function shortPlaceName(place: string | null | undefined): string | null 
     .filter(Boolean);
   const towns = parts.filter((p) => !/\b(county|parish|borough)\b/i.test(p));
   if (towns.length === 0 || parts.some((p) => /\band\b|&/.test(p))) return null;
+  // "Sonoma County, CA": no town at all; distances to a county's centre would mislead.
+  if (/\b(county|parish|borough)\b/i.test(parts[0])) return null;
   // "Town, County, State": one town before the county.
   const countyAt = parts.findIndex((p) => /\bcounty\b/i.test(p));
   if (countyAt > 1) return null;
   return parts[0];
 }
 
-export function referencePlace(
-  model: ReplayModel,
-  placeHint: string | null,
-): ReferencePlace | null {
+/** Name used when the incident has no single town: the household-weighted centre of its zones. */
+export const POPULATION_CENTRE = "the population centre";
+
+export function referencePlace(model: ReplayModel, placeHint: string | null): ReferencePlace | null {
   if (model.incident.referencePoint) return model.incident.referencePoint;
-  const name =
-    shortPlaceName(model.incident.place) ?? shortPlaceName(placeHint) ?? "the population centre";
+  const name = shortPlaceName(model.incident.place) ?? shortPlaceName(placeHint) ?? POPULATION_CENTRE;
   const zones = model.zones?.items ?? [];
   let weight = 0;
   let x = 0;

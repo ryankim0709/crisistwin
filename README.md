@@ -113,6 +113,9 @@ python3 -m tools.mongo_data pull
 python3 -m tools.mongo_data status       # drift vs the committed manifests
 ```
 
+If `status` reports drift after you pull, the author has not yet run `record`, `push` and
+committed the manifest.
+
 See [docs/historical-data.md](docs/historical-data.md) and [tools/README.md](tools/README.md).
 
 ### iOS app
