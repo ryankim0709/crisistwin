@@ -23,6 +23,16 @@
 - Keep commits focused. Stage only intended files after reviewing the diff. Follow the requested delivery path; use a PR for parallel feature work unless the user asks for a direct push. Never force-push shared branches.
 - Finish with a short handoff: behavior changed, files/interfaces affected, checks and results, and any remaining integration work. Clearly distinguish completed work from proposals.
 
+## Claude subagent model selection
+
+- Before launching each Claude subagent, assess the delegated task's ambiguity, reasoning depth, scope, and impact of an incorrect result. Classify the actual subtask, not the overall project; choose the lowest tier that satisfies both complexity and importance. An explicit user model choice takes precedence.
+- **Easy / low impact → Haiku (`haiku`):** bounded lookups, file discovery, concise summaries, documentation edits, or mechanical changes with a clear recipe. Do not classify a task as easy just because it changes few lines.
+- **Medium → Sonnet (`sonnet`):** routine feature implementation, localized debugging, or integration that follows established interfaces and requires moderate reasoning. Use this tier when complexity is uncertain but impact is limited.
+- **Hard or important → Opus (`opus`):** architecture decisions, ambiguous debugging across components, security-sensitive work, data migrations, simulation mathematics or invariants, and changes to shared contracts with substantial downstream impact. Importance raises the tier even when the edit looks small.
+- Before dispatch, record one short line with the subtask, tier, selected model, and reason (for example, "Find sidebar styles — easy — haiku — bounded read-only lookup"). Set the model explicitly through the supported launch option or a matching subagent definition; do not rely on inheriting the parent model or merely mentioning a model in the prompt. If selection is unavailable or overridden, disclose the limitation instead of claiming the requested model ran.
+- Reassess when scope grows, new risks appear, or an attempt fails because the task needs deeper reasoning. Escalate to Sonnet or Opus as warranted and carry forward findings rather than repeatedly retrying the same underpowered approach. Do not escalate for a transient tool error alone.
+- Keep delegation economical: handle trivial work directly when delegation overhead outweighs the benefit, send only relevant context plus applicable repository instructions, and request concise findings or a focused patch. This rule governs model choice when delegating; it does not require additional subagents or change permissions, worktree requirements, or verification rules.
+
 ## Implementation quality
 
 - Prioritize a working hackathon demo. Keep changes pragmatic; skip polish, extra abstractions, and cleanup unless needed for the task.
