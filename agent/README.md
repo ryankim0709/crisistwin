@@ -323,7 +323,7 @@ Read these before showing anyone a result.
 
 ## Decisions
 
-See [ADR 0007](../docs/adr/0007-fire-watch-agent.md) for why the loop is built
+See [ADR 0008](../docs/adr/0008-fire-watch-agent.md) for why the loop is built
 on the SDK tool runner rather than a graph framework, why the fire model is
 driven through a Node sidecar instead of ported to Python, why every dependency
 is a port, why advisories are gated on a human, and why this is a standalone

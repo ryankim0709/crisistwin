@@ -1,10 +1,11 @@
-# 0007: Fire watch agent
+# 0008: Fire watch agent
 
 Date: 2026-10-23. Status: accepted; implementation in progress.
 
-0007 is the next free number. The directory carries two 0003 entries and two
-0004 entries because parallel branches numbered independently; 0005 and 0006
-are single, so the sequence continues here without adding a third collision.
+Numbered 0008, not 0007. The directory already carries two 0003 entries and two
+0004 entries because parallel branches numbered independently, and
+`feat/fire-simulation` took 0007 for the WUI spread mechanisms while this branch
+was open. Moved rather than adding a third collision.
 
 ## Decision
 

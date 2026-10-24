@@ -6,7 +6,7 @@ operator choice made here, not something the model picks for itself.
 
 Approving an advisory is deliberately NOT a command. Approval is a human act
 performed by a named planner in a reviewed workflow; this CLI can only draft and
-queue. See ``advisory.py`` and ``docs/adr/0007-fire-watch-agent.md``.
+queue. See ``advisory.py`` and ``docs/adr/0008-fire-watch-agent.md``.
 """
 
 from __future__ import annotations
