@@ -9,6 +9,7 @@ import ComparisonPage from "./pages/ComparisonPage";
 import IncidentsPage from "./pages/IncidentsPage";
 import StressTestsPage from "./pages/StressTestsPage";
 import NotFoundPage from "./pages/NotFoundPage";
+import DioramaPage from "./diorama/DioramaPage";
 import { SIMULATION_VIEW } from "./replay/loadBundle";
 import ReplayView from "./replay/ReplayView";
 import "./index.css";
@@ -30,6 +31,8 @@ const page =
     <IncidentsPage />
   ) : path === "/stress-tests" ? (
     <StressTestsPage />
+  ) : path === "/diorama" ? (
+    <DioramaPage />
   ) : (
     <NotFoundPage />
   );

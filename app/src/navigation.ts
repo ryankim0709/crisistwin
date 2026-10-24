@@ -60,4 +60,10 @@ export const navigationItems: readonly NavigationItem[] = [
     group: "Analysis",
     description: "Configure disruptions and investigate plan vulnerabilities.",
   },
+  {
+    path: "/diorama",
+    label: "Evacuation diorama",
+    group: "Analysis",
+    description: "A fictional, scripted wildfire evacuation in miniature.",
+  },
 ];
