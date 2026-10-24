@@ -1,0 +1,123 @@
+{
+  "source": "USDA / USGS The National Map",
+  "retrievedAt": "2026-10-24T02:36:34.269424+00:00",
+  "description": "Cached low-resolution SF overview, for progressive loading only. Historical imagery; acquisition dates vary.",
+  "tiles": [
+    {
+      "file": "81-197.png",
+      "source": "https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/9/197/81",
+      "coordinates": [
+        [
+          -123.046875,
+          38.27268853598096
+        ],
+        [
+          -122.34375,
+          38.27268853598096
+        ],
+        [
+          -122.34375,
+          37.718590325588146
+        ],
+        [
+          -123.046875,
+          37.718590325588146
+        ]
+      ],
+      "bytes": 118325
+    },
+    {
+      "file": "82-197.jpg",
+      "source": "https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/9/197/82",
+      "coordinates": [
+        [
+          -122.34375,
+          38.27268853598096
+        ],
+        [
+          -121.640625,
+          38.27268853598096
+        ],
+        [
+          -121.640625,
+          37.718590325588146
+        ],
+        [
+          -122.34375,
+          37.718590325588146
+        ]
+      ],
+      "bytes": 27654
+    },
+    {
+      "file": "81-198.png",
+      "source": "https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/9/198/81",
+      "coordinates": [
+        [
+          -123.046875,
+          37.718590325588146
+        ],
+        [
+          -122.34375,
+          37.718590325588146
+        ],
+        [
+          -122.34375,
+          37.160316546736766
+        ],
+        [
+          -123.046875,
+          37.160316546736766
+        ]
+      ],
+      "bytes": 38499
+    },
+    {
+      "file": "82-198.png",
+      "source": "https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/9/198/82",
+      "coordinates": [
+        [
+          -122.34375,
+          37.718590325588146
+        ],
+        [
+          -121.640625,
+          37.718590325588146
+        ],
+        [
+          -121.640625,
+          37.160316546736766
+        ],
+        [
+          -122.34375,
+          37.160316546736766
+        ]
+      ],
+      "bytes": 160757
+    }
+  ],
+  "cityOverview": {
+    "file": "sf-city.jpg",
+    "source": "https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/export?f=pjson&bbox=-13651665.271218073%2C4531675.354340559%2C-13603665.271218073%2C4563675.354340559&bboxSR=3857&imageSR=3857&size=1536%2C1024&format=jpg&transparent=false",
+    "retrievedAt": "2026-10-24T02:39:54.408198+00:00",
+    "coordinates": [
+      [
+        -122.63499566818868,
+        37.888420595272
+      ],
+      [
+        -122.2038043318113,
+        37.888420595272
+      ],
+      [
+        -122.2038043318113,
+        37.66120482921475
+      ],
+      [
+        -122.63499566818868,
+        37.66120482921475
+      ]
+    ],
+    "bytes": 344437
+  }
+}
