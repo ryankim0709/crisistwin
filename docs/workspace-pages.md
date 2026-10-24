@@ -75,4 +75,3 @@ library only), run from the repository root:
 ```bash
 python3 -m tools.build_dispatch_area --output app/public/dispatch/east-bay-hills.json
 ```
-

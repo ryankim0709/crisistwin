@@ -52,4 +52,3 @@ fields and do not collect addresses or parcel numbers. Six DINS records lie
 slightly outside the requested box; the manifest records the actual extent. The
 replay command writes a GeoJSON frame for viewing or testing and makes no claim
 about information availability to responders at that historical time.
-

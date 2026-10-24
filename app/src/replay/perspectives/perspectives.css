@@ -28,7 +28,7 @@
   cursor: pointer;
 }
 .pv-btn:hover {
-  background: rgba(160, 190, 220, 0.1);
+  background: rgba(20, 43, 39, 0.07);
 }
 .pv-btn[aria-pressed="true"] {
   border-color: var(--rp-amber);
@@ -82,8 +82,8 @@
   font-weight: var(--ct-weight-semibold);
   letter-spacing: 0.02em;
   color: var(--ct-ember-core);
-  background: rgba(30, 10, 2, 0.6);
-  border: 1px solid rgba(255, 106, 26, 0.55);
+  background: rgba(255, 241, 232, 0.92);
+  border: 1px solid rgba(194, 65, 12, 0.6);
 }
 .pv-hud {
   position: absolute;

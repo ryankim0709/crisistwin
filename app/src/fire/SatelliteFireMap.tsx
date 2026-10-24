@@ -25,7 +25,7 @@ import {
   setBasemap,
   type BasemapStyle,
 } from "../replay/mapLayers";
-import { restyleDarkBasemap } from "../replay/basemapStyle";
+import { restyleBasemap } from "../replay/basemapStyle";
 import "./fire.css";
 
 export type ClickMode = "origin" | "wind";
@@ -117,7 +117,7 @@ async function loadBasemapStyle(signal: AbortSignal): Promise<BasemapStyle | nul
     ) {
       return null;
     }
-    return withoutMissingIcons(restyleDarkBasemap(style as BasemapStyle));
+    return withoutMissingIcons(restyleBasemap(style as BasemapStyle));
   } catch {
     return null;
   } finally {
@@ -265,7 +265,11 @@ function createMarkerElement(className: string, innerHTML: string): HTMLDivEleme
 
 const WIND_ARROW_SVG = `
 <svg viewBox="0 0 40 160" width="40" height="160" aria-hidden="true">
-  <g fill="none" stroke="#eaf4ff" stroke-width="1.6" stroke-linecap="round">
+  <g fill="none" stroke="rgba(20, 43, 39, 0.65)" stroke-width="4.5" stroke-linecap="round">
+    <line x1="20" y1="78" x2="20" y2="20" />
+    <path d="M11 31 L20 18 L29 31" stroke-linejoin="round" />
+  </g>
+  <g fill="none" stroke="#f5f4ee" stroke-width="1.6" stroke-linecap="round">
     <line x1="20" y1="78" x2="20" y2="20" />
     <path d="M11 31 L20 18 L29 31" stroke-linejoin="round" />
   </g>
@@ -385,7 +389,7 @@ export default function SatelliteFireMap({
       const fail = () => {
         if (failed || loaded || anyTile) return;
         failed = true;
-        setBasemap(map, "dark");
+        setBasemap(map, "map");
         setImagery("failed");
       };
       const onData = (event: { sourceId?: string; tile?: { state?: string } }) => {
@@ -466,8 +470,8 @@ export default function SatelliteFireMap({
             type: "line",
             source: REGION_SOURCE,
             paint: {
-              "line-color": "#c3cdd6",
-              "line-opacity": 0.55,
+              "line-color": "#7f8c80",
+              "line-opacity": 0.8,
               "line-width": 1.2,
               "line-dasharray": [4, 3],
             },
@@ -550,7 +554,7 @@ export default function SatelliteFireMap({
             "text-letter-spacing": 0.15,
             "text-offset": [0, -1.2],
           },
-          paint: { "text-color": "#ffc46b", "text-halo-color": "#1a0702", "text-halo-width": 2 },
+          paint: { "text-color": "#c2410c", "text-halo-color": "#f5f4ee", "text-halo-width": 2 },
         });
         setReady(true);
       });

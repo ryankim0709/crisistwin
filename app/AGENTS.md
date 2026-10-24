@@ -7,14 +7,14 @@ Applies to `app/`. The root [`AGENTS.md`](../AGENTS.md) still applies.
 ```
 app/src/
   main.tsx          route table (path → page); `/` redirects to `/fire`
-  AppShell.tsx      sidebar shell used by every page except the full-viewport replay tools
+  AppShell.tsx      sidebar shell used by every page
   navigation.ts     sidebar entries; add a route here and in main.tsx together
   index.css         element defaults + imports of the design system
   ui/               design system: tokens, component kit, UI standard (README.md)
   fire/             /fire        fire spread model (landing page, 3D diorama + maps)
   studio/           /simulation  Simulation Studio (fire + evacuation run)
   dispatch/         /dispatch    Claude dispatch agent on top of the studio
-  replay/           /replay, /simulate  historical replay and agent simulation (dark theme)
+  replay/           /replay, /simulate  historical replay and agent simulation
   diorama/          /diorama     scripted 3D evacuation diorama (synthetic)
   pages/            planning pages (scenarios, evacuation, comparison, incidents, stress tests)
   maps/, lib/       shared basemap config and API client

@@ -207,4 +207,3 @@ operational evacuation instructions. See the
 [crown fire decision](adr/0008-crown-fire.md), and the
 [solver direction set decision](adr/0009-solver-direction-set.md) for the constants,
 their sources, and where they are least trustworthy.
-

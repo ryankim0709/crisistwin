@@ -61,9 +61,9 @@ function tourFacts(model: ReplayModel, place: ReferencePlace | null): TourFacts 
   }).format(ignitionMs ?? startMs);
   const fireBody = model.fireSimulated
     ? firstPerimeterMs !== null
-      ? `Orange is the fire: a model until the satellite perimeter at ${localTime(firstPerimeterMs, tz)}, then the white dashed line.`
+      ? `Orange is the fire: a model until the satellite perimeter at ${localTime(firstPerimeterMs, tz)}, then the dashed blue-grey line.`
       : "Orange is the fire, from a fire-spread model; this bundle has no satellite perimeter to compare it with."
-    : "The dashed white line is the satellite fire perimeter in effect at this time.";
+    : "The dashed blue-grey line is the satellite fire perimeter in effect at this time.";
   return {
     name: model.incident.name,
     area:
@@ -89,7 +89,7 @@ function shared(f: TourFacts) {
   };
   const traffic: TourStep = {
     title: "People leaving",
-    body: "Cyan is traffic, thicker and darker where jammed. White dots are stopped cars; grey dashes are closed roads.",
+    body: "Blue-green is traffic, thicker and darker where jammed. Dark dots are stopped cars; grey dashes are closed roads.",
     target: ".rp-map",
     seekTo: f.trafficAt,
   };

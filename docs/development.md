@@ -61,4 +61,3 @@ Gunicorn backend image. Nginx expects a backend reachable at `backend:8000`.
 `npm run preview` only previews static build output; use Compose to exercise
 the full stack. Deployment, TLS, hosting, and production secrets are not
 configured by this scaffold.
-

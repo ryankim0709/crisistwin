@@ -50,9 +50,11 @@ imports components from `../ui` (or `../../ui`), never from an individual file.
 ## Themes
 
 The default theme is **sage paper**: warm off-white surfaces, deep green ink, a single
-green brand colour. Full-viewport map tools (historical replay, agent simulation) use the
-**operations console** dark theme: add `ui-theme-dark` to the tool's root element. The
-same token names resolve to dark values, so every kit component restyles itself.
+green brand colour; every page uses it, including the historical replay and agent
+simulation. The kit also ships an **operations console** dark theme, used for overlays
+drawn over imagery (the studio map's wind badge and legend): add `ui-theme-dark` to an
+element and the same token names resolve to dark
+values, so every kit component restyles itself.
 
 ## Tokens
 
