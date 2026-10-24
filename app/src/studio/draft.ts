@@ -19,9 +19,9 @@ export interface LoadedDraft {
 }
 
 /** The saved draft, or null when none exists, storage is unavailable or the data is invalid. */
-export function loadDraft(): LoadedDraft | null {
+export function loadDraft(key: string = DRAFT_STORAGE_KEY): LoadedDraft | null {
   try {
-    const raw = window.localStorage.getItem(DRAFT_STORAGE_KEY);
+    const raw = window.localStorage.getItem(key);
     if (raw === null) return null;
     const stored = JSON.parse(raw) as Partial<StoredDraft> | null;
     if (!stored || typeof stored !== "object") return null;
@@ -35,20 +35,23 @@ export function loadDraft(): LoadedDraft | null {
 }
 
 /** Saves the draft. Returns the save time, or null when storage refused it. */
-export function saveDraft(scenario: StudioScenario): Date | null {
+export function saveDraft(
+  scenario: StudioScenario,
+  key: string = DRAFT_STORAGE_KEY,
+): Date | null {
   try {
     const savedAt = new Date();
     const stored: StoredDraft = { savedAtIso: savedAt.toISOString(), scenario };
-    window.localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(stored));
+    window.localStorage.setItem(key, JSON.stringify(stored));
     return savedAt;
   } catch {
     return null;
   }
 }
 
-export function clearDraft(): void {
+export function clearDraft(key: string = DRAFT_STORAGE_KEY): void {
   try {
-    window.localStorage.removeItem(DRAFT_STORAGE_KEY);
+    window.localStorage.removeItem(key);
   } catch {
     // Nothing to clear when storage is unavailable.
   }

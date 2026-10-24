@@ -2,6 +2,11 @@
 
 Date: 2026-10-24. Status: accepted for the demo. Amends [0014](0014-dispatch-agent.md).
 
+> **Update (2026-10-24):** the `/dispatch` page now renders the Simulation Studio UI
+> (`SimulationStudioPage` with its own draft namespace) instead of the single-fire `/fire`-style
+> page described below. The agent modules in `app/src/dispatch/` are kept but not wired into
+> the page while the dispatcher is reattached on top of the studio run.
+
 ## Context
 
 The first `/dispatch` page worked only for the Oakland/Berkeley hills: one road fixture built

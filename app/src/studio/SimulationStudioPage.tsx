@@ -15,7 +15,14 @@ import {
   type StudioScenario,
 } from "./contracts";
 import { demoScenario } from "./demo";
-import { clearDraft, draftStatusText, exportScenarioJson, loadDraft, saveDraft } from "./draft";
+import {
+  DRAFT_STORAGE_KEY,
+  clearDraft,
+  draftStatusText,
+  exportScenarioJson,
+  loadDraft,
+  saveDraft,
+} from "./draft";
 import {
   createIgnition,
   emptyScenario,
@@ -43,14 +50,24 @@ const VIEW_OPTIONS: readonly SegmentedOption<StudioView>[] = [
   { value: "diorama", label: "3D diorama" },
 ];
 const VIEW_STORAGE_KEY = "crisistwin.studio.view";
+
+export interface SimulationStudioPageProps {
+  /** Accessible name of the page landmark. */
+  label?: string;
+  /**
+   * Suffix for the device-local draft and view keys, so a page that reuses the studio
+   * (/dispatch) keeps its own scenario instead of sharing the /simulation draft.
+   */
+  storageNamespace?: string;
+}
 /** Gap kept between the floating panel and the framed 3D board, CSS px. */
 const DIORAMA_PANEL_GAP_PX = 12;
 /** Room kept clear at the bottom of the 3D view for the view toggle and legend, CSS px. */
 const DIORAMA_BOTTOM_INSET_PX = 56;
 
-function loadView(): StudioView {
+function loadView(key: string): StudioView {
   try {
-    return window.localStorage.getItem(VIEW_STORAGE_KEY) === "diorama" ? "diorama" : "map";
+    return window.localStorage.getItem(key) === "diorama" ? "diorama" : "map";
   } catch {
     return "map";
   }
@@ -75,8 +92,13 @@ const SMALL_SPREAD_HECTARES = 5;
 const SQUARE_METERS_PER_HECTARE = 10_000;
 const OPERATIONAL_DISCLAIMER = "Planning experiment; not an operational forecast.";
 
-export default function SimulationStudioPage() {
-  const [initialDraft] = useState(loadDraft);
+export default function SimulationStudioPage({
+  label = "Simulation Studio",
+  storageNamespace,
+}: SimulationStudioPageProps = {}) {
+  const draftKey = storageNamespace ? `${DRAFT_STORAGE_KEY}.${storageNamespace}` : DRAFT_STORAGE_KEY;
+  const viewKey = storageNamespace ? `${VIEW_STORAGE_KEY}.${storageNamespace}` : VIEW_STORAGE_KEY;
+  const [initialDraft] = useState(() => loadDraft(draftKey));
   const [scenario, setScenario] = useState<StudioScenario>(
     () => initialDraft?.scenario ?? emptyScenario(),
   );
@@ -86,15 +108,15 @@ export default function SimulationStudioPage() {
   const [mode, setMode] = useState<MapMode>("select");
   const [panelCollapsed, setPanelCollapsed] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const [view, setView] = useState<StudioView>(loadView);
+  const [view, setView] = useState<StudioView>(() => loadView(viewKey));
   const chooseView = useCallback((next: StudioView) => {
     setView(next);
     try {
-      window.localStorage.setItem(VIEW_STORAGE_KEY, next);
+      window.localStorage.setItem(viewKey, next);
     } catch {
       // Storage can be unavailable (private mode); the choice then lasts for this visit only.
     }
-  }, []);
+  }, [viewKey]);
 
   // The 3D camera frames the board in the area the floating panel leaves uncovered.
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -187,12 +209,12 @@ export default function SimulationStudioPage() {
   // Draft autosave, debounced; labelled "Saved on this device".
   useEffect(() => {
     const handle = window.setTimeout(() => {
-      const saved = saveDraft(scenario);
+      const saved = saveDraft(scenario, draftKey);
       setSaveFailed(saved === null);
       if (saved) setSavedAt(saved);
     }, AUTOSAVE_DELAY_MS);
     return () => window.clearTimeout(handle);
-  }, [scenario]);
+  }, [scenario, draftKey]);
 
   const issues = useMemo(() => validateScenario(scenario), [scenario]);
 
@@ -273,11 +295,11 @@ export default function SimulationStudioPage() {
   );
 
   const handleClear = useCallback(() => {
-    clearDraft();
+    clearDraft(draftKey);
     setSavedAt(null);
     applyScenario(emptyScenario());
     setMode("select");
-  }, [applyScenario]);
+  }, [applyScenario, draftKey]);
 
   const handleSelect = useCallback((id: string | null) => {
     setSelectedId(id);
@@ -512,7 +534,7 @@ export default function SimulationStudioPage() {
   );
 
   return (
-    <main className="studio-page" id="main-content" aria-label="Simulation Studio">
+    <main className="studio-page" id="main-content" aria-label={label}>
       <div className="studio-stage">
         <div className="studio-page-map">
           {view === "diorama" ? (
