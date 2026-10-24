@@ -3,7 +3,16 @@ import type { GeoPoint } from "../fire/spread";
 import { formatElapsed } from "../fire/spread";
 import ConfigPanel from "./ConfigPanel";
 import PlaybackBar from "./PlaybackBar";
-import StudioDiorama from "./StudioDiorama";
+import StudioDiorama, { type StudioEvacuationView } from "./StudioDiorama";
+import EvacuationPanel from "./EvacuationPanel";
+import {
+  DEFAULT_ORDER_MINUTE,
+  nearestEdge,
+  simulateEvacuation,
+  type EvacuationInputs,
+} from "./evacuation";
+import { computeExposure } from "../dispatch/fireExposure";
+import { useBoardStreets } from "../fire/useBoardStreets";
 import StudioMap from "./StudioMap";
 import {
   DISPLAY_STEP_MINUTES,
@@ -140,6 +149,16 @@ export default function SimulationStudioPage({
     if (panel.firstElementChild) observer.observe(panel.firstElementChild);
     return () => observer.disconnect();
   }, [panelCollapsed]);
+
+  // Evacuation and road closures (3D view only). Closures are edge indices of one road area and
+  // are dropped when the board's area changes; they never change the fire run.
+  const [evacuationOn, setEvacuationOn] = useState(false);
+  const [roadTool, setRoadTool] = useState(false);
+  const [orderMinute, setOrderMinute] = useState(DEFAULT_ORDER_MINUTE);
+  const [closures, setClosures] = useState<{ areaId: string; edges: ReadonlySet<number> }>({
+    areaId: "",
+    edges: new Set(),
+  });
 
   const { state, run, cancel, markStale } = useStudioRun();
   const { result } = state;
@@ -348,9 +367,91 @@ export default function SimulationStudioPage({
   const handleModeChange = useCallback(
     (next: MapMode) => {
       if (next !== "select" && view === "diorama" && !dioramaHasBoard) chooseView("map");
+      if (next !== "select") setRoadTool(false);
       setMode(next);
     },
     [view, dioramaHasBoard, chooseView],
+  );
+
+  // ---- Evacuation and road closures -------------------------------------------------------
+
+  const streets = useBoardStreets(dioramaLandscape);
+  const area = streets.status === "ready" ? streets.area : null;
+  const closedEdges = useMemo<ReadonlySet<number>>(
+    () => (area && closures.areaId === area.id ? closures.edges : new Set()),
+    [area, closures],
+  );
+  const toggleClosure = useCallback(
+    (edge: number) => {
+      if (!area) return;
+      const next = new Set(closures.areaId === area.id ? closures.edges : []);
+      if (next.has(edge)) next.delete(edge);
+      else next.add(edge);
+      setClosures({ areaId: area.id, edges: next });
+    },
+    [area, closures],
+  );
+
+  const handleGroundClick = useCallback(
+    (point: GeoPoint) => {
+      if (!roadTool || !area) {
+        handleMapClick(point);
+        return;
+      }
+      const edge = nearestEdge(area, [point.longitude, point.latitude]);
+      if (edge === null) showNotice("No road there. Click closer to a road to close it.");
+      else toggleClosure(edge);
+    },
+    [roadTool, area, handleMapClick, toggleClosure, showNotice],
+  );
+
+  const exposure = useMemo(
+    () =>
+      area && dioramaShowsRun
+        ? computeExposure(area, result.landscape, result.run.arrivalMinutes)
+        : null,
+    [area, dioramaShowsRun, result],
+  );
+  const evacuationInputs = useMemo<EvacuationInputs | null>(
+    () =>
+      area && exposure && result
+        ? {
+            area,
+            exposure,
+            horizonMinutes: result.scenario.settings.horizonMinutes,
+            closedEdges,
+            orderMinute,
+          }
+        : null,
+    [area, exposure, result, closedEdges, orderMinute],
+  );
+  const showEvacuation = evacuationOn && view === "diorama";
+  const baselineSummary = useMemo(
+    () =>
+      showEvacuation && evacuationInputs
+        ? simulateEvacuation({ ...evacuationInputs, closedEdges: new Set() })
+        : null,
+    // Not rerun when only the closures change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [showEvacuation, area, exposure, result, orderMinute],
+  );
+  const closuresSummary = useMemo(
+    () =>
+      showEvacuation && evacuationInputs && closedEdges.size > 0
+        ? simulateEvacuation(evacuationInputs)
+        : null,
+    [showEvacuation, evacuationInputs, closedEdges],
+  );
+  const evacuationView = useMemo<StudioEvacuationView | null>(
+    () =>
+      showEvacuation && area
+        ? { area, exposure, closedEdges, inputs: evacuationInputs }
+        : null,
+    [showEvacuation, area, exposure, closedEdges, evacuationInputs],
+  );
+  const closedRoadList = useMemo(
+    () => (area ? [...closedEdges].map((edge) => area.edges[edge]).filter(Boolean) : []),
+    [area, closedEdges],
   );
 
   // ---- Derived display state -------------------------------------------------------------
@@ -551,7 +652,34 @@ export default function SimulationStudioPage({
               attribution={
                 dioramaShowsRun ? attribution : Object.values(regionGrid?.attribution ?? {})
               }
-              onGroundClick={handleMapClick}
+              onGroundClick={handleGroundClick}
+              streets={streets}
+              evacuation={evacuationView}
+              evacuationPanel={
+                <EvacuationPanel
+                  streets={streets}
+                  hasRun={dioramaShowsRun}
+                  stale={stale}
+                  enabled={evacuationOn}
+                  onToggle={() => {
+                    setEvacuationOn((on) => !on);
+                    setRoadTool(false);
+                  }}
+                  roadTool={roadTool}
+                  onRoadTool={() => {
+                    setRoadTool((on) => !on);
+                    setMode("select");
+                  }}
+                  orderMinute={orderMinute}
+                  onOrderMinute={setOrderMinute}
+                  closedEdges={closedRoadList}
+                  onReopen={toggleClosure}
+                  onReopenAll={() => setClosures({ areaId: "", edges: new Set() })}
+                  baseline={baselineSummary}
+                  withClosures={closuresSummary}
+                  currentMinute={currentMinute}
+                />
+              }
               boardControl={
                 <Panel glass compact className="studio-region">
                   <div className="studio-region__row">

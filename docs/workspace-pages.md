@@ -61,6 +61,17 @@ spread room); edits mark the result stale and nothing re-runs automatically; a r
 reaches the grid edge is incomplete from that minute. It is a planning experiment, not an
 operational forecast.
 
+**Evacuation and road closures** (3D view, [ADR 0018](adr/0018-road-closures.md)). Once the
+board's roads load, **Evacuation & closures → Show** evacuates the board's synthetic households
+against the last run: every zone is ordered at the chosen minute (T+0, 15, 30 or 60) to its
+fastest open exit and re-routed when fire cuts its route. **Close roads or bridges**, then click
+a road on the board to close it (click again to reopen); closed roads are drawn dark and
+labelled "Closed" or "Bridge out". The panel compares the run with all roads open and with your
+closures: households that reached an exit, were caught, are still evacuating or were cut off,
+household-hours evacuating, and when everyone ordered was out. Closures last the whole run,
+change traffic only (not the fire), are not saved with the draft, and reset when the board
+changes. Homes and zones are synthetic; counts are model output, not casualty estimates.
+
 ## Dispatch agent (`/dispatch`)
 
 Set `ANTHROPIC_API_KEY` in the environment of the Django backend and restart it; without it
