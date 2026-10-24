@@ -220,6 +220,30 @@ not continuously monitored health.
 
 ## Verification
 
+### Live drill UI tests
+
+`CrisisTwinUITests` drives the live features headlessly with XCUITest (no screen or mouse
+control), against the local backend and a running drill (`http://localhost:8000`, controller
+token `dev-controller`, invite `DRILL`; override with `TEST_RUNNER_QA_API` and
+`TEST_RUNNER_QA_CONTROLLER`). It uses the controller token to create tasks and to acknowledge,
+assign and resolve its own help request; it never touches proposals or the drill clock. Set the
+simulator location first, then run one test at a time:
+
+```sh
+SIM=<udid>   # xcrun simctl create "CT QA iPhone" "iPhone 17 Pro"; xcrun simctl boot $SIM
+xcrun simctl location $SIM set 39.7255,-121.8083    # a zone with no order, for testHomeNoOrder
+xcrun simctl location $SIM set 39.7596,-121.6219    # Paradise, for the other tests
+TEST_RUNNER_QA_SHOTS=/tmp/ios-qa xcodebuild test -project mobile/CrisisTwin.xcodeproj \
+  -scheme CrisisTwin -destination "id=$SIM" -derivedDataPath /tmp/dd-qa \
+  -only-testing:CrisisTwinUITests/CrisisTwinUITests/testHelpStates
+```
+
+Tests: `testHomeNoOrder` (Ready card, fire trend), `testHelpStates` ("Help requested", "Request
+seen", "Responder assigned"), `testResponderTasks` (join, share location, assist and verify
+tasks, route card, Done), `testResponderRouteLine` (route on Map; run as a responder outside the
+fire, for example at 39.7255,-121.8083). Screenshots are attached to the result and written to
+`TEST_RUNNER_QA_SHOTS`. Responder tests create tasks in the drill's database.
+
 From the repository root, the only default check is:
 
 ```sh
