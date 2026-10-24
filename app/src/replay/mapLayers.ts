@@ -539,8 +539,8 @@ export function setGroupVisibility(map: MapLibreMap, group: LayerGroup, visible:
 export function setPerimeterFreshness(map: MapLibreMap, ageMs: number, provisional = false): void {
   const hours = Math.max(0, ageMs / 3_600_000);
   const freshness = Math.max(0.45, 1 - hours / 24);
-  // Provisional (inside a half-day composite's window): outline only, no fill or glow.
-  if (map.getLayer("fire-fill")) map.setPaintProperty("fire-fill", "fill-opacity", provisional ? 0.04 : 0.32 * freshness);
+  // Provisional (inside a half-day composite's window): dotted outline, faint fill, no glow.
+  if (map.getLayer("fire-fill")) map.setPaintProperty("fire-fill", "fill-opacity", provisional ? 0.12 : 0.32 * freshness);
   if (map.getLayer("fire-glow-outer")) {
     map.setPaintProperty("fire-glow-outer", "line-opacity", provisional ? 0 : 0.5 * freshness);
   }

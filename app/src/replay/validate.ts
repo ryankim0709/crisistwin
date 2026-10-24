@@ -393,6 +393,7 @@ export function simulatedFire(body: Obj): SimulatedFire {
       "fire_simulated.calibration.iou",
     ),
     calibrationHeadline: typeof calibration.headline === "string" ? calibration.headline : null,
+    hazardUntilMs: body.hazard_until == null ? null : utcMs(body.hazard_until, "fire_simulated.hazard_until"),
     constraintNote:
       typeof objOrEmpty(body.constraint).note === "string" ? (objOrEmpty(body.constraint).note as string) : null,
     heldOut: isObj(objOrEmpty(calibration.observations).held_out)

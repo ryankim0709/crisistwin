@@ -156,6 +156,8 @@ export interface SimulatedFire {
   modelVersion: string | null;
   ignition: { coord: LngLat; atMs: number; provenance: string | null } | null;
   calibrationIou: number | null;
+  /** fire_simulated.hazard_until: the model front is in effect (and drawn) until then. */
+  hazardUntilMs: number | null;
   /** One-line calibration summary (rothermel-mtt), e.g. held-out median arrival error. */
   calibrationHeadline: string | null;
   /** How the model front was constrained (e.g. clipped to the first satellite perimeter). */

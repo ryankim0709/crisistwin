@@ -1,5 +1,11 @@
 // Pure time and data lookups for the replay view. No React, DOM or MapLibre here.
-import type { ClosureInterval, EvidenceClass, ReplayEvent, ReplayModel, TrafficMetrics } from "./types";
+import type {
+  ClosureInterval,
+  EvidenceClass,
+  ReplayEvent,
+  ReplayModel,
+  TrafficMetrics,
+} from "./types";
 
 /** Index of the last item with atMs <= t, or -1 if every item is later. Items ascend by atMs. */
 export function lastAtOrBefore(items: readonly { atMs: number }[], t: number): number {
@@ -44,14 +50,20 @@ export function sameNumbers(a: readonly number[], b: readonly number[]): boolean
 }
 
 /**
- * Simulated front in effect, shown only before the first observed perimeter (after that the
- * observed perimeter drives the hazard). -1 when none applies.
+ * Simulated front in effect, -1 when none applies. Drawn until `fire_simulated.hazard_until`
+ * when the bundle sets it (the traffic hazard uses the model until then), otherwise until the
+ * first perimeter is firm (end of a half-day window, or its time when precise). After the last
+ * front's time the latest front stays drawn rather than disappearing.
  */
 export function simulatedFrontIndexAt(model: ReplayModel, t: number): number {
   const sim = model.fireSimulated;
   if (!sim) return -1;
-  const firstObserved = model.perimeters[0]?.atMs ?? Infinity;
-  if (t >= firstObserved) return -1;
+  const until =
+    sim.hazardUntilMs ??
+    (model.perimeters.length > 0
+      ? (perimeterWindowEnd(model, 0) ?? model.perimeters[0].atMs)
+      : Infinity);
+  if (t >= until) return -1;
   return lastAtOrBefore(sim.fronts, t);
 }
 
@@ -169,7 +181,24 @@ export function clockParts(ms: number, timeZone: string): ClockParts {
   };
 }
 
-const COMPASS_POINTS = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
+const COMPASS_POINTS = [
+  "N",
+  "NNE",
+  "NE",
+  "ENE",
+  "E",
+  "ESE",
+  "SE",
+  "SSE",
+  "S",
+  "SSW",
+  "SW",
+  "WSW",
+  "W",
+  "WNW",
+  "NW",
+  "NNW",
+];
 
 /** 16-point compass name for a bearing in degrees (0 = north, clockwise). */
 export function compassPoint(deg: number): string {
@@ -194,7 +223,8 @@ export function metricSeries(
   if (rows.length === 0) return [];
   const stride = Math.max(1, Math.ceil(rows.length / maxPoints));
   const out: { atMs: number; value: number }[] = [];
-  for (let i = 0; i < rows.length; i += stride) out.push({ atMs: rows[i].atMs, value: rows[i][key] });
+  for (let i = 0; i < rows.length; i += stride)
+    out.push({ atMs: rows[i].atMs, value: rows[i][key] });
   const last = rows[rows.length - 1];
   if (out[out.length - 1].atMs !== last.atMs) out.push({ atMs: last.atMs, value: last[key] });
   return out;
@@ -211,9 +241,10 @@ export function ignitionBasis(model: ReplayModel): "assumed" | "reconstructed" {
 
 /** Calendar year of the incident (clock start, local time). */
 export function incidentYear(model: ReplayModel): string {
-  return new Intl.DateTimeFormat("en-US", { timeZone: model.incident.timezone, year: "numeric" }).format(
-    model.clock.startMs,
-  );
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: model.incident.timezone,
+    year: "numeric",
+  }).format(model.clock.startMs);
 }
 
 /** Short name of who recorded the fire observations ("NIST"), or a neutral word. */
