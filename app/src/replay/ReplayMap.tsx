@@ -19,6 +19,7 @@ import {
   applyClosedState,
   applyThreatState,
   pinCollection,
+  setFireFlicker,
   setThreatPulse,
   closedLabelCollection,
   installLayers,
@@ -46,6 +47,13 @@ import type { EvidenceClass, LngLat, ReplayModel } from "./types";
 setWorkerUrl(workerUrl);
 
 const STYLE_TIMEOUT_MS = 10_000;
+/** Older fronts this many steps back render as burned char inside the live front. */
+const CHAR_LAG_FRONTS = 3;
+const FLICKER_INTERVAL_MS = 90;
+/** Opening camera per incident; otherwise the bundle bbox is fitted. */
+const INITIAL_VIEW: Record<string, { center: LngLat; zoom: number }> = {
+  "camp-2018-paradise-slice": { center: [-121.6, 39.77], zoom: 11.3 },
+};
 const FRESHNESS_BUCKET_MS = 10 * 60_000;
 const THREAT_BUCKET_MS = 60_000;
 const PULSE_PERIOD_MS = 1400;
@@ -257,8 +265,7 @@ export default function ReplayMap({
         m = new MapLibreMap({
           container,
           style: style ?? FALLBACK_STYLE,
-          bounds: model.bbox,
-          fitBoundsOptions: { padding: 48 },
+          ...(INITIAL_VIEW[model.incident.id] ?? { bounds: model.bbox, fitBoundsOptions: { padding: 48 } }),
           attributionControl: { compact: true },
           dragRotate: false,
           pitchWithRotate: false,
@@ -269,6 +276,8 @@ export default function ReplayMap({
       }
       map = m;
       mapRef.current = m;
+      // Dev-only handle for debugging in the browser console.
+      if (import.meta.env.DEV) (window as unknown as { __replayMap?: MapLibreMap }).__replayMap = m;
       m.addControl(new NavigationControl({ showCompass: false }), "top-right");
       m.addControl(new ScaleControl({ unit: "metric" }), "bottom-right");
       m.on("load", () => {
@@ -342,8 +351,22 @@ export default function ReplayMap({
   const simFront = simFrontIndex >= 0 ? (model.fireSimulated?.fronts[simFrontIndex] ?? null) : null;
   useEffect(() => {
     const map = mapRef.current;
-    if (ready && map) setSourceData(map, "sim-front", simulatedFrontCollection(simFront));
-  }, [ready, simFront]);
+    if (!ready || !map) return;
+    setSourceData(map, "sim-front", simulatedFrontCollection(simFront));
+    const charFront =
+      simFrontIndex >= CHAR_LAG_FRONTS ? (model.fireSimulated?.fronts[simFrontIndex - CHAR_LAG_FRONTS] ?? null) : null;
+    setSourceData(map, "sim-char", simulatedFrontCollection(charFront));
+  }, [ready, model, simFront, simFrontIndex]);
+
+  // Cosmetic flicker on wall-clock time (no data meaning); off for reduced motion.
+  const fireVisible = simFront !== null && visibility.simFire;
+  const hasOrderedZones = Array.from(zoneStates.values()).includes("ordered");
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map || (!fireVisible && !hasOrderedZones) || prefersReducedMotion()) return;
+    const timer = window.setInterval(() => setFireFlicker(map, performance.now()), FLICKER_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [ready, fireVisible, hasOrderedZones]);
 
   const frame = model.traffic && frameIndex >= 0 ? model.traffic.frames[frameIndex] : null;
   const closed = useMemo(

@@ -28,7 +28,6 @@ export const IMAGERY_ATTRIBUTION =
   '<a href="https://www.usgs.gov/programs/national-geospatial-program/national-map">USDA / USGS The National Map</a> · Historical imagery · imagery dates vary — not Nov 2018';
 
 const TERRAIN_SOURCE = "persp-terrain";
-const HILLSHADE_SOURCE = "persp-hillshade-dem";
 const IMAGERY_SOURCE = "persp-imagery";
 const IMAGERY_LAYER = "persp-imagery";
 const HILLSHADE_LAYER = "persp-hillshade";
@@ -44,6 +43,8 @@ const OBLIQUE_BEARING = -20;
 const OBLIQUE_ZOOM = 12.2;
 const OBLIQUE_FLY_MS = 2600;
 const ORBIT_DEG_PER_S = 2;
+/** Start orbiting anyway if the map never goes idle (e.g. playback keeps updating sources). */
+const ORBIT_IDLE_TIMEOUT_MS = 15_000;
 
 const GROUND_PITCH = 80;
 const GROUND_FALLBACK_ZOOM = 17;
@@ -53,7 +54,8 @@ const GROUND_LOOKAHEAD_M = 60;
 /** Exponential smoothing rates (per second) for bearing and terrain elevation. */
 const BEARING_SMOOTH_PER_S = 2.5;
 const ELEVATION_SMOOTH_PER_S = 4;
-const MAX_DT_S = 0.1;
+/** Caps per-frame time so a stalled tab does not jump the camera; generous for slow GPUs. */
+const MAX_DT_S = 0.5;
 const HUD_INTERVAL_MS = 250;
 
 /** Sky turns smoky when the active fire area is within this distance of the camera target. */
@@ -194,18 +196,17 @@ function install3d(map: MapLibreMap, state: State, ctx: PerspectiveContext): boo
         attribution: IMAGERY_ATTRIBUTION,
       });
     }
-    // Separate DEM sources for terrain and hillshade, as MapLibre recommends.
-    for (const id of [TERRAIN_SOURCE, HILLSHADE_SOURCE]) {
-      if (!map.getSource(id)) {
-        map.addSource(id, {
-          type: "raster-dem",
-          tiles: [TERRAIN_TILES_URL],
-          encoding: "terrarium",
-          tileSize: 256,
-          maxzoom: 15,
-          attribution: TERRAIN_ATTRIBUTION,
-        });
-      }
+    // One DEM source feeds both terrain and hillshade: the tile hosts can be slow, and a second
+    // source would double the DEM requests.
+    if (!map.getSource(TERRAIN_SOURCE)) {
+      map.addSource(TERRAIN_SOURCE, {
+        type: "raster-dem",
+        tiles: [TERRAIN_TILES_URL],
+        encoding: "terrarium",
+        tileSize: 256,
+        maxzoom: 15,
+        attribution: TERRAIN_ATTRIBUTION,
+      });
     }
     const before = firstAnchor(map);
     if (!map.getLayer(IMAGERY_LAYER)) {
@@ -219,7 +220,7 @@ function install3d(map: MapLibreMap, state: State, ctx: PerspectiveContext): boo
         {
           id: HILLSHADE_LAYER,
           type: "hillshade",
-          source: HILLSHADE_SOURCE,
+          source: TERRAIN_SOURCE,
           paint: { "hillshade-exaggeration": 0.35, "hillshade-shadow-color": "#1a0f08" },
         },
         before,
@@ -252,7 +253,7 @@ function teardown3d(map: MapLibreMap, state: State): void {
   try {
     if (map.getTerrain()) map.setTerrain(null);
     for (const id of [HILLSHADE_LAYER, IMAGERY_LAYER]) if (map.getLayer(id)) map.removeLayer(id);
-    for (const id of [HILLSHADE_SOURCE, TERRAIN_SOURCE, IMAGERY_SOURCE]) if (map.getSource(id)) map.removeSource(id);
+    for (const id of [TERRAIN_SOURCE, IMAGERY_SOURCE]) if (map.getSource(id)) map.removeSource(id);
     if (state.saved) {
       map.setSky(state.saved.sky ?? {});
       if (!state.saved.dragRotate) map.dragRotate.disable();
@@ -298,6 +299,8 @@ function startOblique(map: MapLibreMap, ctx: PerspectiveContext): () => void {
   const reduced = prefersReducedMotion();
   let raf = 0;
   let orbiting = false;
+  let stopped = false;
+  let idleTimer: number | undefined;
 
   const stopOrbit = () => {
     orbiting = false;
@@ -305,7 +308,7 @@ function startOblique(map: MapLibreMap, ctx: PerspectiveContext): () => void {
   };
   const interactions = ["mousedown", "touchstart", "wheel"] as const;
   const startOrbit = () => {
-    if (reduced || orbiting) return;
+    if (reduced || orbiting || stopped) return;
     orbiting = true;
     let last = performance.now();
     const tick = (now: number) => {
@@ -317,17 +320,26 @@ function startOblique(map: MapLibreMap, ctx: PerspectiveContext): () => void {
     };
     raf = requestAnimationFrame(tick);
   };
+  const afterFly = () => {
+    if (stopped) return;
+    map.once("idle", startOrbit);
+    idleTimer = window.setTimeout(startOrbit, ORBIT_IDLE_TIMEOUT_MS);
+  };
   for (const type of interactions) map.on(type, stopOrbit);
 
   if (reduced) {
     map.jumpTo(camera);
   } else {
-    map.once("moveend", startOrbit);
+    // Orbit only once tiles have settled: rotating sooner keeps cancelling slow tile requests.
+    map.once("moveend", afterFly);
     map.flyTo({ ...camera, duration: OBLIQUE_FLY_MS, essential: false });
   }
   return () => {
+    stopped = true;
+    window.clearTimeout(idleTimer);
     stopOrbit();
-    map.off("moveend", startOrbit);
+    map.off("moveend", afterFly);
+    map.off("idle", startOrbit);
     for (const type of interactions) map.off(type, stopOrbit);
     map.stop();
   };

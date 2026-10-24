@@ -22,4 +22,4 @@ __pycache__/
 .DS_Store
 
 # Generated replay bundles (python3 -m sim ... bundle); rebuild locally
-app/public/replays/*.json
+app/public/replays/**/*.json

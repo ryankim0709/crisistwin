@@ -120,7 +120,8 @@ export default function ReplayView() {
 function initialVisibility(model: ReplayModel): Record<LayerGroup, boolean> {
   const out = {} as Record<LayerGroup, boolean>;
   for (const group of Object.keys(LAYER_GROUPS) as LayerGroup[]) {
-    out[group] = groupAvailability(model, group).available;
+    // Damage is a post-fire assessment; off by default so it never reads as live damage.
+    out[group] = group !== "damage" && groupAvailability(model, group).available;
   }
   return out;
 }

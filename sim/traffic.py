@@ -30,6 +30,9 @@ DEMAND_EVENT_TYPES = ("evacuation_order", "evacuation_warning")
 CLOSE_EVENT_TYPES = ("road_closed", "road_blocked")
 REOPEN_EVENT_TYPES = ("road_reopened",)
 SHELTER_FULL_EVENT_TYPES = ("shelter_full",)
+CAPACITY_EVENT_TYPES = ("capacity_changed",)  # edge capacity = source capacity x event capacity_factor
+CONTRAFLOW_START_EVENT_TYPES = ("contraflow_started",)  # edge_ids are the outbound edges
+CONTRAFLOW_END_EVENT_TYPES = ("contraflow_ended",)
 FIRE_CLOSURE_TIME_PRECISION = "model_step"  # closure time is the first model step the perimeter is in effect
 CONGESTED_SPEED_FRACTION = 0.5  # an occupied edge is congested in a frame when mean speed < this x free-flow speed
 FIRE_CACHE_MAX_GEOMETRIES = 4  # non-cumulative mode: distinct fire geometries whose edge-inside sets are kept
@@ -61,10 +64,12 @@ ASSUMPTIONS = [
     "An edge whose midpoint lies inside the fire area in effect is exposed, and closed when close_edges_in_fire is set.",
     "With fire_area_cumulative (default), the fire area is treated as cumulative burned area: an edge once inside "
     "stays exposed and closed even if a later perimeter is smaller.",
+    "Contraflow: each listed outbound edge gains the capacity and storage of its reverse twin (same segment_id), and "
+    "the twin is closed to new entry; vehicles already on the twin drain out.",
 ]
 LIMITATIONS = [
     "Not calibrated against observed Camp Fire traffic; outputs are planning experiments, not historical traffic counts.",
-    "No intersection control, turning delays, lane changes, contraflow, or signal timing.",
+    "No intersection control, turning delays, lane changes, or signal timing; contraflow is a capacity transfer only.",
     "Each edge takes at least one model step to traverse, which slows very short edges.",
     "Vehicles on an edge when it closes stop until it reopens; turning back is not modelled.",
     "Vehicles waiting at an origin node are not counted as exposed; only vehicles on edges are.",
@@ -130,6 +135,7 @@ class TrafficEvent:
     destination_id: str | None = None
     source_id: str = ""
     source_locator: str | None = None
+    capacity_factor: float | None = None  # capacity_changed only: multiplier on the edge's source capacity
 
 
 @dataclass(frozen=True)
@@ -237,16 +243,20 @@ def _geometry_bbox(geometry: dict) -> tuple[float, float, float, float]:
     return min(xs), min(ys), max(xs), max(ys)
 
 
-def _bundle_event(ev_id: str, at: datetime, ev_type: str, label: str, edge_ids: list[str]) -> dict:
+def _bundle_event(
+    ev_id: str, at: datetime, ev_type: str, label: str, edge_ids: list[str], *,
+    evidence_class: str = "simulated", time_precision: str = FIRE_CLOSURE_TIME_PRECISION,
+    source_id: str = MODEL_ID, source_locator: str | None = None,
+) -> dict:
     return {
         "id": ev_id,
         "at": format_utc(at),
         "type": ev_type,
         "label": label,
-        "evidence_class": "simulated",
-        "time_precision": FIRE_CLOSURE_TIME_PRECISION,
+        "evidence_class": evidence_class,
+        "time_precision": time_precision,
         "target": {"zone_ids": [], "edge_ids": edge_ids, "destination_id": None},
-        "source": {"id": MODEL_ID, "locator": None},
+        "source": {"id": source_id, "locator": source_locator},
     }
 
 
@@ -294,6 +304,9 @@ def _validate(network: RoadNetwork, zones, destinations, events, start: datetime
             unknown.append(ev.destination_id)
         if unknown:
             raise ValueError(f"event {ev.id} references unknown ids: {unknown}")
+        if ev.type in CAPACITY_EVENT_TYPES and ev.edge_ids:
+            if ev.capacity_factor is None or not (math.isfinite(ev.capacity_factor) and ev.capacity_factor > 0):
+                raise ValueError(f"event {ev.id} needs a positive capacity_factor (use road_closed for zero capacity)")
 
 
 def simulate_traffic(
@@ -333,6 +346,13 @@ def simulate_traffic(
     e_storage = [
         max(params.packet_size_veh, e.length_m / 1000 * e.lanes * params.jam_density_veh_per_km_lane) for e in edges
     ]
+    e_base_vph = [e.capacity_veh_per_hour for e in edges]
+    e_base_storage = list(e_storage)
+    cap_factor: dict[int, float] = {}  # edge -> capacity_changed factor
+    seg_dir = {(e.segment_id, e.from_node, e.to_node): i for i, e in enumerate(edges)}
+    twin = [seg_dir.get((e.segment_id, e.to_node, e.from_node)) for e in edges]
+    contraflow_out: dict[int, int] = {}  # outbound edge -> reverse twin it borrows lanes from
+    contraflow_in: set[int] = set()  # reverse twins closed to new entry by contraflow
     e_mid = [_midpoint(e.coords) if e.coords else network.nodes[e.from_node] for e in edges]
     mid_order = sorted(range(n_edges), key=lambda i: e_mid[i][0])  # edges by midpoint longitude
     mid_lons = [e_mid[i][0] for i in mid_order]
@@ -401,10 +421,21 @@ def simulate_traffic(
 
     closed = [False] * n_edges
     closed_set: set[int] = set()
+    closed_hard: set[int] = set()  # closed to entry and exit; contraflow-closed edges may still drain
     closed_list: list[int] = []  # sorted; rebuilt only when closures change
     next_edge = [-1] * len(node_ids)
     routes_dirty = True
     next_reroute_s = 0
+
+    def refresh_capacity(i: int) -> None:
+        vph = e_base_vph[i] * cap_factor.get(i, 1.0)
+        storage = e_base_storage[i]
+        if i in contraflow_out:
+            vph += e_base_vph[contraflow_out[i]]
+            storage += e_base_storage[contraflow_out[i]]
+        e_cap_step[i] = vph * step / 3600
+        e_credit_max[i] = max(e_cap_step[i], params.packet_size_veh)
+        e_storage[i] = storage
 
     def rebuild_routes() -> None:
         """Reversed multi-source Dijkstra from all open destinations over open edges.
@@ -542,7 +573,8 @@ def simulate_traffic(
         blocked = 0
         for i in sorted(active):
             moving = sum(c for c, ready, _ in queue[i] if ready > t)
-            speed = 0.0 if closed[i] else edges[i].speed_kph * moving / occ[i]
+            stopped = closed[i] and i in closed_hard
+            speed = 0.0 if stopped else edges[i].speed_kph * moving / occ[i]
             frame_edges.append([i, occ[i], round(speed, 1)])
             stat = edge_peak.setdefault(i, [0, t, math.inf, 0])
             if occ[i] > stat[0]:
@@ -550,7 +582,7 @@ def simulate_traffic(
             stat[2] = min(stat[2], speed)
             if speed < CONGESTED_SPEED_FRACTION * edges[i].speed_kph:
                 stat[3] += 1
-            if closed[i] or (next_edge[e_to[i]] == -1 and open_dest_at(e_to[i]) is None):
+            if stopped or (next_edge[e_to[i]] == -1 and open_dest_at(e_to[i]) is None):
                 blocked += occ[i]
         for node, q in waiting.items():
             if q and next_edge[node] == -1 and open_dest_at(node) is None:
@@ -599,11 +631,45 @@ def simulate_traffic(
                 closures_changed = True
             elif ev.type in SHELTER_FULL_EVENT_TYPES and ev.destination_id is not None:
                 mark_full(dest_ix[ev.destination_id], ev_s[ev_next - 1])
+            elif ev.type in CAPACITY_EVENT_TYPES and ev.edge_ids:
+                for x in ev.edge_ids:
+                    cap_factor[edge_index[x]] = ev.capacity_factor
+                    refresh_capacity(edge_index[x])
+                routes_dirty = True
+            elif ev.type in CONTRAFLOW_START_EVENT_TYPES:
+                inbound = []
+                for x in ev.edge_ids:
+                    i = edge_index[x]
+                    j = twin[i]
+                    # One-way roads have no twin; an edge already lending or borrowing lanes is left as is.
+                    if j is None or i in contraflow_out or i in contraflow_in or j in contraflow_out:
+                        continue
+                    contraflow_out[i] = j
+                    contraflow_in.add(j)
+                    refresh_capacity(i)
+                    inbound.append(j)
+                if inbound:
+                    names = ", ".join(sorted({edges[j].name for j in inbound}))
+                    generated.append(_bundle_event(
+                        f"{ev.id}-inbound-closed", ev.at, "road_closed",
+                        f"Contraflow inbound lanes closed (derived from {ev.id}): {names}",
+                        [edges[j].id for j in inbound], evidence_class="derived",
+                        time_precision=ev.time_precision, source_id=ev.source_id, source_locator=ev.source_locator,
+                    ))
+                    closures_changed = True
+            elif ev.type in CONTRAFLOW_END_EVENT_TYPES:
+                for x in ev.edge_ids:
+                    i = edge_index[x]
+                    if i in contraflow_out:
+                        contraflow_in.discard(contraflow_out.pop(i))
+                        refresh_capacity(i)
+                        closures_changed = True
         # 2. fire area in effect
         if fire_area_at is not None and t % params.fire_check_every_s == 0:
             set_fire(fire_area_at(at), at)
         if closures_changed or routes_dirty:
-            union = event_closed | fire_closed
+            closed_hard = event_closed | fire_closed
+            union = closed_hard | contraflow_in
             if union != closed_set:
                 for i in union ^ closed_set:
                     closed[i] = i in union
@@ -627,7 +693,7 @@ def simulate_traffic(
         for i in sorted(active):
             q = queue[i]
             credit[i] = min(credit[i] + e_cap_step[i], e_credit_max[i])
-            if closed[i]:
+            if closed[i] and i in closed_hard:
                 continue
             node = e_to[i]
             while q:

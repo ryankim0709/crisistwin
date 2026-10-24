@@ -670,12 +670,7 @@ p.rp-state-msg[role="status"] {
   gap: 14px;
   padding: 12px 10px;
 }
-.rp-root--collapsed .rp-panel-toggle svg {
-  fill: none;
-  stroke-width: 2;
-  stroke-linecap: round;
-}
-.rp-panel-top .rp-back {
+.rp-root--collapsed .rp-panel-top .rp-back {
   writing-mode: vertical-rl;
   transform: rotate(180deg);
 }
@@ -748,7 +743,7 @@ p.rp-state-msg[role="status"] {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 10px 12px 8px;
+  padding: 7px 10px 6px;
   border-radius: 10px;
   background: linear-gradient(160deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.01));
   border: 1px solid var(--rp-line);
@@ -766,6 +761,13 @@ p.rp-state-msg[role="status"] {
 }
 .rp-metric:first-child {
   grid-column: span 2;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 12px;
+}
+.rp-metric:first-child .rp-spark {
+  flex-basis: 100%;
 }
 .rp-metric--notDepartedVeh {
   --accent: #8fb3ff;
@@ -788,14 +790,14 @@ p.rp-state-msg[role="status"] {
 }
 .rp-metric-value {
   font-family: var(--rp-mono);
-  font-size: 22px;
+  font-size: 19px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.5px;
 }
 .rp-spark {
   width: 100%;
-  height: 26px;
+  height: 18px;
   margin-top: 2px;
   overflow: visible;
 }
