@@ -258,6 +258,23 @@ runs' metrics, action hashes and run ids exactly. Building the world takes 13 s.
 - Drill guidance moves more vehicles earlier and also raises exposure in this simulator (orders
   put vehicles on roads the fire reaches). That is a finding about the model, not about Camp.
 
+## Running a scenario live
+
+The same spec can fill a watched drill: `live_run_scenario` runs its generators (twin, residents,
+comms, noise and truth log, responders, injects and tower-failure outages) against the active incident
+on the live drill clock, through the live API. Example spec:
+`api/live/specs/camp-2018-live-typical.json`.
+
+```sh
+python manage.py live_run_scenario --spec api/live/specs/camp-2018-live-typical.json \
+    --base http://127.0.0.1:8040 --speed 10 --start
+```
+
+Two spec fields added for it also apply here: `twin.people` (sourced compliance, shadow evacuation and
+departure delays; default `historical`, unchanged) and `comms.bursts` (default true). The `live` block
+is ignored by the batch runner. Details, run numbers and calibration: [live scenario
+runner](live-scenario-runner.md).
+
 ## Limitations
 
 - Lockstep measures decisions without latency; `realtime@k` is not built.

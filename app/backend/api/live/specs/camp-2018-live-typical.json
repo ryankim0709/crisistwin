@@ -1,0 +1,18 @@
+{
+  "kind": "crisistwin_batch_scenario",
+  "scenario_id": "camp-2018-drill",
+  "package": {"kind": "camp_bundle", "path": "app/public/replays/camp-2018.json"},
+  "window": {"start": "2018-11-08T15:30:00Z", "end": "2018-11-08T18:00:00Z"},
+  "clock": {"mode": "lockstep", "tick_s": 60, "decision_every_min": 1},
+  "injects": [
+    {"type": "psap_reroute", "at": "2018-11-08T16:20:00Z", "params": {"zone_ids": ["bg:060070017021", "bg:060070017022"], "to": "Chico PSAP"}}
+  ],
+  "record_2018": false,
+  "comms": {"enabled": true, "scale_911": null, "bursts": true},
+  "residents": {"enabled": true},
+  "responders": {"enabled": true, "units": 4},
+  "twin": {"enabled": true, "people": "camp_2018_sourced"},
+  "auto_policy": true,
+  "seeds": {"list": [20181108]},
+  "live": {"noise_profile": "typical", "comms_towers": {"enabled": true, "scenario_date": "2018-11-08"}}
+}
