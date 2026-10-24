@@ -19,6 +19,7 @@ from .landscapes import landscape_list, landscape_package
 from .live_active import live_active
 from .live_broadcast import live_broadcast, live_snapshot
 from .mobile_data import mobile_collection, mobile_document, register_device
+from .scenario_weather import scenario_weather
 from .suppression_bases import suppression_bases
 from .views import health
 
@@ -31,6 +32,7 @@ urlpatterns = [
     path("replay/explain", explain, name="replay-explain"),
     path("dispatch/decide", decide, name="dispatch-decide"),
     path("dispatch/area", dispatch_area, name="dispatch-area"),
+    path("weather/scenario", scenario_weather, name="weather-scenario"),
     path("suppression/bases", suppression_bases, name="suppression-bases"),
     path("demo/routes", demo_routes, name="demo-routes"),
     path("demo/decide", demo_decide, name="demo-decide"),

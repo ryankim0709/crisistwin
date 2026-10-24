@@ -1,0 +1,63 @@
+.fr-wp {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ct-space-2);
+  min-width: 0;
+}
+
+.fr-wp-title {
+  color: var(--ct-ink);
+  font-size: var(--ct-text-sm);
+  font-weight: var(--ct-weight-semibold);
+}
+
+.fr-wp-row {
+  display: flex;
+  gap: var(--ct-space-2);
+}
+
+.fr-wp-field {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-sm);
+}
+
+.fr-wp-field :is(input, select) {
+  width: 100%;
+  min-width: 0;
+}
+
+.fr-wp-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ct-space-2);
+}
+
+.fr-wp-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.fr-wp-note {
+  margin: 0;
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-sm);
+  line-height: var(--ct-leading-snug);
+}
+
+.fr-wp-details summary {
+  cursor: pointer;
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-sm);
+}
+
+.fr-wp .ui-segmented button {
+  flex: 1;
+  padding-inline: 6px;
+  white-space: nowrap;
+}

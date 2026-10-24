@@ -47,6 +47,8 @@ import {
   type GeoPoint,
 } from "./spread";
 import { fetchNwsWind, type NwsWindReading } from "./weather";
+import type { ScenarioWindRecord } from "./scenarioWeather";
+import WindSourcePicker from "./ui/WindSourcePicker";
 import {
   Button,
   EvidenceTag,
@@ -102,7 +104,7 @@ function nwsProvenance(reading: NwsWindReading, clampedFromMph: number | null): 
       ? ""
       : ` Clamped from ${clampedFromMph} mph to the ${MAX_WIND_SPEED_MPH} mph slider maximum.`;
   return (
-    `Observed — ${reading.locationLabel}, US National Weather Service hourly forecast for the ` +
+    `Forecast — ${reading.locationLabel}, US National Weather Service hourly forecast for the ` +
     `hour beginning ${reading.forecastTimeUtcIso}. Reported ${reading.windSpeedText}${range} ` +
     `from ${reading.windFromCompass}.${clamped}`
   );
@@ -237,6 +239,8 @@ export default function FireSimulatorPage() {
   const [landscape, setLandscape] = useState<LandscapeState>({ status: "idle" });
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [windSource, setWindSource] = useState<WindSourceState>({ status: "idle" });
+  // Scenario weather (historical, worst case, forecast series) behind the current wind, if any.
+  const [scenarioWind, setScenarioWind] = useState<ScenarioWindRecord | null>(null);
 
   const [scene, setScene] = useState<FireDioramaSceneApi | null>(null);
   const [sceneStatus, setSceneStatus] = useState<SceneStatus>({ kind: "loading" });
@@ -485,7 +489,19 @@ export default function FireSimulatorPage() {
     windAbortRef.current?.abort();
     windAbortRef.current = null;
     setWindSource((current) => (current.status === "idle" ? current : { status: "idle" }));
+    setScenarioWind(null);
   }, []);
+
+  const applyScenarioWind = useCallback(
+    (record: ScenarioWindRecord | null) => {
+      dropWindProvenance();
+      if (record === null) return;
+      setWindSpeedMph(record.applied.speed20ftMph);
+      setWindFromDegrees(record.applied.fromDeg);
+      setScenarioWind(record);
+    },
+    [dropWindProvenance],
+  );
 
   useEffect(
     () => () => {
@@ -508,6 +524,7 @@ export default function FireSimulatorPage() {
         if (request !== windRequestRef.current) return;
         const rounded = Math.round(reading.windSpeedMph);
         const applied = clamp(rounded, 0, MAX_WIND_SPEED_MPH);
+        setScenarioWind(null);
         setWindSpeedMph(applied);
         setWindFromDegrees(Math.round(((reading.windFromDegrees % 360) + 360) % 360));
         setWindSource({
@@ -1030,6 +1047,14 @@ export default function FireSimulatorPage() {
                 )}
               </div>
 
+              <WindSourcePicker
+                lon={origin?.longitude ?? null}
+                lat={origin?.latitude ?? null}
+                horizonHours={horizonMinutes / 60}
+                record={scenarioWind}
+                onApply={applyScenarioWind}
+              />
+
               <div className="fr-field">
                 <label htmlFor="wind-speed">
                   Wind speed (20-foot) <strong>{windSpeedMph} mph</strong>
@@ -1497,7 +1522,8 @@ export default function FireSimulatorPage() {
         <p className="fr-attribution">
           Fuel: LANDFIRE · Terrain: AWS terrain tiles (USGS 3DEP and others)
           {view === "satellite" ? " · Imagery: USGS The National Map" : ""}
-          {windSource.status === "ready" ? " · Wind: NWS" : ""}
+          {windSource.status === "ready" ? " · Wind: NWS forecast" : ""}
+          {scenarioWind ? ` · Wind: ${scenarioWind.station?.name ?? "NWS gridpoint"} (${scenarioWind.evidenceClass})` : ""}
           {view === "diorama" && streetArea
             ? " · Roads: © OpenStreetMap contributors · Homes along streets: synthetic"
             : ""}

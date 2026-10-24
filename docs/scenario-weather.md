@@ -51,8 +51,8 @@ W.scenario_wind(lon, lat, start, hours, mode)                # dict, see below
   degrees.
 - Gust is the maximum reported in the hour; it is never synthesised from sustained speed.
 - Gaps stay as `None` samples (`summary.missing_speed_samples`). Nothing is interpolated.
-- No height conversion: ASOS and gridpoint winds are 10 m, RAWS 20 ft, the Rothermel input is the
-  open 20 ft wind. Same simplification as `app/src/fire/weather.ts`; label it.
+- No height conversion in the module: ASOS and gridpoint winds are 10 m, RAWS 20 ft, the Rothermel
+  input is the open 20 ft wind. `GET /api/weather/scenario` converts (see "Consumed by").
 
 ### Evidence classes
 
@@ -181,30 +181,90 @@ Use these as defaults, labelled ASSUMPTION (derived from two events, order-of-ma
 - Always show "forecast" and "wind shift inject" as separate, labelled layers over the replayed or
   forecast series.
 
-## How the Studio and the fire model should consume `scenario_wind`
+## Consumed by
 
-Not wired yet (`app/src` was not touched); the follow-up should:
+Wired in the Simulation Studio (`/simulation`) and the fire page (`/fire`). `sim/weather.py` itself
+still does no height conversion; the endpoint adds it.
 
-1. **Serve it from the backend**, not the browser: add `GET /api/scenario-weather?lon&lat&start&hours&mode`
-   to `app/backend` calling `sim.weather.scenario_wind` (the cache directory and `User-Agent`
-   stay server-side). Return the dict above unchanged, so provenance and evidence class reach the UI.
-2. **Replace the single wind in the fire model with a series.** `FireScenario` today holds one
-   `windSpeedMph` and `windFromDegrees` (`app/src/fire/spread.ts`, `weather.ts`). Convert each
-   sample once at the boundary: `mph = speed_ms / 0.44704`, `windFromDegrees = from_deg` (same
-   "from" contract, no flip). Step the simulation clock through the series (hold each hourly
-   value for its hour; interpolate direction through the shortest arc, never through 180).
-   A `None` sample must stop the run or fall back visibly to the user's assumed wind, never to a
-   silent default. Feed `rh_pct` and `temp_c` into the dead-fuel-moisture preset the same way
-   (replacing the "critical / Red Flag" demo preset only when the data exists).
-3. **Label it.** The wind panel shows evidence class (observed / forecast / derived / assumption),
-   the station, its distance, and the 10 m versus 20 ft note. `historical_replay` for 2018-11-08
-   at the Camp ignition is the validation case: the fire runs on the observed Jarbo Gap wind, not
-   an assumed one.
-4. **Wind-shift inject** (live drills, ADR 0030): a controller event that adds a direction offset
-   and speed/gust factors from the table above to the series from a chosen simulation time,
-   recorded as `evidence_class: "simulated"`.
-5. Keep observed, forecast, derived and assumed series separate in the stored scenario
-   (ADR 0030 drill package). Never merge them into one unlabelled array.
+### `GET /api/weather/scenario`
+
+`app/backend/api/scenario_weather.py`, public and throttled (30/min per client).
+
+| Query | Meaning |
+| --- | --- |
+| `lon`, `lat` | WGS84 degrees, the ignition point |
+| `start` | ISO 8601 UTC with `Z`. Required except for `forecast`, which defaults to the current UTC hour |
+| `hours` | Integer 1 to 72, default 24. The series has `hours + 1` hourly samples |
+| `mode` | `historical_replay` (default), `climatology_percentile`, `forecast` |
+| `percentile` | 50 to 99.9, default 95, `climatology_percentile` only |
+
+The body is `scenario_wind` unchanged (m/s, degrees FROM, hourly UTC, `evidence_class`, `station`
+with `distance_km`, `provenance`, `summary`) plus per sample `speed_20ft_ms` and `speed_20ft_mph`
+(`null` where `speed_ms` is `null`) and a `height_conversion` object
+`{from_height, to_height, factor, method, note}`. The raw archive cache is the module's own
+(`$CRISISTWIN_WEATHER_CACHE`); `forecast` answers carry `Cache-Control: no-store`. Errors are
+`{error, detail}`: 400 bad query, 502 no data or an upstream parse failure, 503 upstream
+unreachable.
+
+```sh
+curl "http://127.0.0.1:8060/api/weather/scenario?lon=-121.6&lat=39.81&start=2018-11-08T00:00:00Z&hours=36&mode=historical_replay"
+```
+
+### Height conversion to the 20 ft open wind
+
+The Rothermel input is the open wind at 20 ft (6.096 m) above the vegetation. Stations do not all
+report there:
+
+- ASOS/AWOS airports and the NWS gridpoint forecast are 10 m winds. They are scaled by **0.87**.
+  This is the neutral-stability log wind profile, `u(z2)/u(z1) = ln(z2/z0) / ln(z1/z0)`, with an
+  open-terrain roughness length `z0 = 0.2 m` (between the Davenport-Wieringa "roughly open" 0.1 m
+  and "rough" 0.25 m classes): `ln(6.096/0.2) / ln(10/0.2) = 0.873`. The 0.87 factor is the one
+  commonly quoted for 10 m to 20 ft; we did not find a primary table to cite for it, so treat the
+  derivation above as the source and the factor as an assumption about terrain.
+- RAWS (via HADS) are already 20 ft: factor 1.0, no conversion.
+
+`speed_ms` stays as reported; only `speed_20ft_*` is converted. Gusts are not converted. Station
+exposure (a valley airport against a ridge) is not corrected: that error is larger than the height
+factor, see the Camp table above.
+
+This is separate from the **midflame adjustment** the solver applies afterwards: the 20 ft open
+wind is multiplied by 0.5 (or, with canopy data, a per-cell Albini and Baughman factor) to get the
+wind at flame height. The UI labels both steps.
+
+### Studio and `/fire`
+
+A "Wind source" selector (`app/src/fire/ui/WindSourcePicker.tsx`, `app/src/fire/scenarioWeather.ts`):
+
+| Choice | Request |
+| --- | --- |
+| Assumed | None. The user's own speed and direction, as before |
+| Historical | `historical_replay` from a UTC date and time (default 2018-11-08 14:00, the Camp ignition) |
+| Worst | `climatology_percentile` for a month and P90/P95/P99 (derived, offshore sector) |
+| Forecast | `forecast` from the current hour (NWS) |
+
+The solver takes one wind per run: spread rates are computed once per cell for a fixed wind
+(`app/src/fire/spread.ts`), and the run is not stepped through weather. So the hourly series is
+**reduced to its peak 20 ft hour with a valid direction inside the run window** (`hours` =
+horizon in hours, 6 at most in the Studio, 24 on `/fire`) and that speed and direction drive the
+whole run, capped at the 60 mph slider maximum. This overstates the wind in the hours around
+it, so a run on a "Historical" series is a worst-hour run, not a replay. The wind panel shows the
+evidence class (Observed, Forecast, Derived), the station name and id, its distance in km, the
+peak hour, the conversion, and "How this wind is used". Editing the speed or direction by hand
+returns the source to Assumed. Fuel moisture is not taken from the series' RH and temperature;
+it stays on the preset.
+
+The Studio keeps the record in `StudioScenario.weather` (saved in the draft and the scenario
+JSON, dropped on import if the wind no longer equals the applied value). Drill packages carry it
+in `assumptions.wind_source`: `{kind: "assumed"}`, or `{kind: "scenario_weather", mode,
+evidence_class, station, source, query, analog, height_conversion, applied, units, series,
+raw_sha256}` where `series` is every hourly sample (UTC time, `speed_ms`, `speed_20ft_mph`,
+`from_deg`, `gust_ms`) and `applied` is the value the solver ran on. `wind_20ft_mph` and
+`wind_from_deg` still hold that applied value. The backend package builder ignores the extra key.
+
+Still open: a time-varying solver (step the wind through the series, interpolating direction
+through the shortest arc), moisture from the series, and the wind-shift inject for live drills
+(ADR 0030), recorded as `evidence_class: "simulated"`. Keep observed, forecast, derived and
+assumed series separate wherever they are stored.
 
 ## Fixtures
 
