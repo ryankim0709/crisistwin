@@ -31,3 +31,4 @@ app/public/simulations/**/*.json
 # Incident-package artifacts live in MongoDB Atlas; fetch with `python3 -m tools.mongo_data pull`
 data/incidents/*/*/raw/
 data/incidents/*/*/normalized/
+data/incidents/*/*/derived/
