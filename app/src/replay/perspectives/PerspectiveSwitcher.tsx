@@ -61,7 +61,6 @@ export default function PerspectiveSwitcher({ map, model, frameIndex, perimeterI
 
   useEffect(() => {
     if (!map) return;
-    (window as unknown as { __pvMap: unknown }).__pvMap = map; // TEMP debug
     setPerspective(map, mode, ctx);
   }, [map, mode, ctx]);
 
