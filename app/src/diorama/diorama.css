@@ -533,10 +533,12 @@
 }
 
 .dio-phase-labels button {
+  position: relative;
   display: block;
-  max-width: 100%;
-  padding: 3px 4px;
-  overflow: hidden;
+  /* Short phases (e.g. the brief spread phase) may overhang their segment rather than truncate. */
+  max-width: none;
+  padding: 3px 2px;
+  overflow: visible;
   border: 0;
   border-radius: 4px;
   background: transparent;
@@ -550,6 +552,21 @@
 .dio-phase-labels button:hover {
   color: var(--dio-ink);
   background: rgba(212, 216, 202, 0.5);
+}
+
+.dio-phase-labels button.is-compact {
+  color: transparent;
+}
+
+.dio-phase-labels button.is-compact::before {
+  content: "";
+  position: absolute;
+  top: 7px;
+  left: 4px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--dio-muted);
 }
 
 .dio-phase-labels button.is-current {

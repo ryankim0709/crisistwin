@@ -6,6 +6,8 @@ import { PLAYBACK_SPEEDS, type Playback } from "./usePlayback";
 /** Arrow-key seek on the timeline, in scenario seconds (Shift for the larger step). */
 const SEEK_STEP_S = 2;
 const SEEK_BIG_STEP_S = 10;
+/** Phases shorter than this only show their name while current, so neighbours don't collide. */
+const MIN_LABELLED_PHASE_S = 7;
 /** One-word names keep short phases legible on the timeline; full labels stay in titles. */
 const PHASE_SHORT_LABELS: Record<PhaseId, string> = {
   ignition: "Ignition",
@@ -117,7 +119,13 @@ export default function PlaybackDock({
             >
               <button
                 type="button"
-                className={phase.id === currentPhase ? "is-current" : undefined}
+                className={
+                  phase.id === currentPhase
+                    ? "is-current"
+                    : phase.end - phase.start < MIN_LABELLED_PHASE_S
+                      ? "is-compact"
+                      : undefined
+                }
                 aria-current={phase.id === currentPhase ? "step" : undefined}
                 onClick={() => playback.seek(phase.start)}
                 title={`Jump to ${phase.label}`}
