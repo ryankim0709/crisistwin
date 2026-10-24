@@ -23,6 +23,11 @@
   background: var(--dio-ivory);
 }
 
+/* Undo the global green filled `button` style (index.css) without outranking component classes. */
+.dio-page :where(button) {
+  color: var(--dio-ink);
+}
+
 .dio-page:focus {
   outline: none;
 }

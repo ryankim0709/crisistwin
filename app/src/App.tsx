@@ -140,7 +140,7 @@ export default function App() {
             .filter((item) => item.path !== "/")
             .map((item, index) => (
               <a key={item.path} href={item.path}>
-                <span className="workflow-number">0{index + 1}</span>
+                <span className="workflow-number">{String(index + 1).padStart(2, "0")}</span>
                 <strong>{item.label}</strong>
                 <p>{item.description}</p>
                 <span className="ui-text-link">Open workspace →</span>
