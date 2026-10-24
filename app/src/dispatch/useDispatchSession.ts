@@ -85,6 +85,12 @@ export interface SessionInputs {
   ignitions: IgnitionEvent[];
   windFromDegrees: number;
   windSpeedMph: number;
+  /**
+   * Planner-confirmed live reported closures resolved to area edges (`liveClosures(area,
+   * reports).closedEdges`, src/intel/closures.ts). Fixed for the run: changes apply on the next
+   * start. Routing never uses these edges; optional.
+   */
+  closedEdges?: ReadonlySet<number>;
 }
 
 export interface DispatchSession {
@@ -377,6 +383,7 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
         inputs.exposure,
         inputs.horizonMinutes,
         inputs.ignitions,
+        inputs.closedEdges,
       );
       engine.restrictToFirePath = true;
       engine.setFires(inputs.fireTargets, inputs.fireFrames);

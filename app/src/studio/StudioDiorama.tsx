@@ -34,10 +34,17 @@ import { FirelineOverlay, type FirelineView } from "./FirelineOverlay";
 import { CrewOverlay } from "./CrewOverlay";
 import type { CrewDispatch } from "./crewDispatch";
 import { CREW_COLORS, FIRELINE_COLORS, firelineCss } from "./firelinePalette";
+import type { IntelCandidate } from "../intel/api";
+import { liveClosures } from "../intel/closures";
+import { useConfirmedClosures } from "../intel/useConfirmedClosures";
 
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
 const ROADS_ATTRIBUTION = "Roads © OpenStreetMap contributors";
 const NO_LEAVES: readonly (number | null)[] = [];
+
+function closureLabel(report: IntelCandidate): string {
+  return report.mapping?.road_name || report.target.road_name || report.description;
+}
 
 function RoadGlyph() {
   return (
@@ -208,6 +215,14 @@ export default function StudioDiorama(props: StudioDioramaProps) {
   const [composite] = useState(() => new CompositeOverlay());
   const inputs = evacuation?.inputs ?? null;
   const player = useMemo(() => (inputs ? new EvacuationPlayer(inputs) : null), [inputs]);
+  const [closures, refreshClosures] = useConfirmedClosures(streetArea ? streetArea.bbox : null);
+  const live = useMemo(
+    () =>
+      streetArea && closures.status === "ready"
+        ? liveClosures(streetArea, closures.closures)
+        : null,
+    [streetArea, closures],
+  );
   const reducedMotionRef = useRef(reducedMotion);
   const clickRef = useRef(onGroundClick);
   useEffect(() => {
@@ -398,6 +413,7 @@ export default function StudioDiorama(props: StudioDioramaProps) {
               {streets.status === "loading" && " · Loading roads…"}
             </p>
           )}
+
           <section className="studio-diorama__legend" aria-label="3D view legend">
             <Button
               variant="secondary"
@@ -520,6 +536,38 @@ export default function StudioDiorama(props: StudioDioramaProps) {
                       ? "Roads could not be loaded, so houses symbolise the LANDFIRE urban fuel class. Trees symbolise fuel classes; relief is exaggerated."
                       : "Trees and houses symbolise LANDFIRE fuel classes; relief is exaggerated."}
                 </p>
+                {streetArea && closures.status !== "idle" && (
+                  <div className="studio-diorama__legend-note" role="status">
+                    {closures.status === "loading" ? (
+                      "Reported closures: loading…"
+                    ) : closures.status === "error" ? (
+                      `Reported closures unavailable: ${closures.message}`
+                    ) : live && live.applied.length + live.unmatched.length > 0 ? (
+                      <>
+                        Reported closure · planner-confirmed: {live.applied.length} in force,{" "}
+                        {live.closedEdges.size} road segments closed to routing (not fire spread).
+                        Applied when a dispatch run starts; changes apply on the next start. The run
+                        stays simulated.
+                      </>
+                    ) : (
+                      "No planner-confirmed live closures in this area."
+                    )}
+                    {live && live.unmatched.length > 0 && (
+                      <ul className="studio-diorama__warnings" aria-label="Unmatched closures">
+                        {live.unmatched.map((report) => (
+                          <li key={report.event_id}>
+                            ⚠ Not applied, no matching road: {closureLabel(report)}
+                          </li>
+                        ))}
+                      </ul>
+                    )}{" "}
+                    {closures.status !== "loading" && (
+                      <Button variant="secondary" size="sm" onClick={refreshClosures}>
+                        Re-check
+                      </Button>
+                    )}
+                  </div>
+                )}
               </Panel>
             )}
           </section>

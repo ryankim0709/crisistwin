@@ -1,0 +1,100 @@
+{
+  "title": "Incident intelligence input",
+  "type": "object",
+  "schemaVersion": 1,
+  "required": [
+    "mode",
+    "sources"
+  ],
+  "properties": {
+    "mode": {
+      "title": "Mode",
+      "type": "string",
+      "description": "live fetches each URL now (honours robots.txt); archive reads Wayback Machine captures inside the window.",
+      "editor": "select",
+      "enum": [
+        "live",
+        "archive"
+      ],
+      "default": "archive"
+    },
+    "sources": {
+      "title": "Sources",
+      "type": "array",
+      "description": "1 to 20 pages. id is a lowercase slug; kind is one of agency, road_status, shelter, news, other.",
+      "editor": "json",
+      "minItems": 1,
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "url",
+          "kind"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Source id",
+            "description": "Lowercase slug, e.g. calfire-incidents.",
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{1,63}$"
+          },
+          "url": {
+            "title": "URL",
+            "description": "http(s) page to fetch.",
+            "type": "string",
+            "pattern": "^https?://",
+            "maxLength": 2000
+          },
+          "kind": {
+            "title": "Kind",
+            "description": "agency, road_status, shelter, news or other.",
+            "type": "string",
+            "enum": [
+              "agency",
+              "road_status",
+              "shelter",
+              "news",
+              "other"
+            ]
+          }
+        }
+      }
+    },
+    "window": {
+      "title": "Archive window (UTC)",
+      "type": "object",
+      "description": "Required in archive mode, ignored in live mode. Example: {\"from\": \"2018-11-08T00:00:00Z\", \"to\": \"2018-11-12T00:00:00Z\"}.",
+      "editor": "json",
+      "properties": {
+        "from": {
+          "title": "From",
+          "description": "UTC ISO 8601, e.g. 2018-11-08T00:00:00Z.",
+          "type": "string"
+        },
+        "to": {
+          "title": "To",
+          "description": "UTC ISO 8601, after from.",
+          "type": "string"
+        }
+      }
+    },
+    "max_documents": {
+      "title": "Max documents",
+      "type": "integer",
+      "description": "Total items pushed per run.",
+      "minimum": 1,
+      "maximum": 200,
+      "default": 25
+    },
+    "max_captures_per_source": {
+      "title": "Max captures per source",
+      "type": "integer",
+      "description": "Archive mode only.",
+      "minimum": 1,
+      "maximum": 50,
+      "default": 10
+    }
+  }
+}

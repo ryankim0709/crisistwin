@@ -14,9 +14,11 @@
  *   at the route's bottleneck capacity; zones whose routes share an edge split its capacity.
  *   Downstream queues are not modelled: once released, a group drives at free-flow speed.
  * - Routing avoids every edge the fire model reaches within ROUTE_LOOKAHEAD_MINUTES, and every
- *   edge the planner has closed (a road closure or a failed bridge, closed for the whole run).
- *   Drivers already on the road re-route around such edges by themselves; a zone whose
- *   ordered exit becomes unreachable holds departures until it is given another exit.
+ *   edge the planner has closed (a road closure, a failed bridge, or a planner-confirmed
+ *   reported closure from src/intel/closures.ts; closed for the whole run). Drivers already
+ *   on the road re-route around such edges by themselves; a zone whose ordered exit becomes
+ *   unreachable holds departures until it is given another exit, and a zone that can reach
+ *   no exit at start is alerted.
  * - A household is "caught" when the modelled fire reaches its home before it leaves, when
  *   fire reaches its zone's core (loading node or centroid) while it is still in the zone, or
  *   when fire reaches the road it is on. This is a model count, not a casualty estimate.
@@ -396,6 +398,22 @@ export class DispatchEngine {
     );
     this.emitIgnitions(-1, 0);
     this.checkFire(0);
+    this.alertUnreachableZones();
+  }
+
+  /** Closures can cut a zone off before any fire does; say so instead of hiding it. */
+  private alertUnreachableZones(): void {
+    if (this.closedEdges.size === 0) return;
+    const blocked = this.blockedAt(0);
+    for (const zone of this.area.zones) {
+      const tree = shortestPathTree(this.area, zone.node, blocked);
+      if (this.area.exits.some((exit) => routeTo(this.area, tree, exit.node))) continue;
+      this.alert(
+        "route_blocked",
+        `${zone.name} can reach no exit without crossing fire or a closed road.`,
+        true,
+      );
+    }
   }
 
   /** The zone's homes the fire reaches, earliest first. */
@@ -723,7 +741,7 @@ export class DispatchEngine {
     if (order.type === "recall_unit") {
       if (unit.status === "available") return reject(`${unit.id} is already at its station.`);
       const route = routeTo(this.area, shortestPathTree(this.area, from, blocked), unit.homeNode);
-      if (!route) return reject(`${unit.id} has no fire-free route home.`);
+      if (!route) return reject(`${unit.id} has no route home avoiding fire and closed roads.`);
       this.sendUnit(unit, from, route, "returning", null, null);
       return { order, accepted: true, note: `Returning to ${unit.stationId}.` };
     }
@@ -1217,7 +1235,7 @@ export class DispatchEngine {
         else
           this.alert(
             "route_changed",
-            `Route from ${id} to ${zone.exitId} re-planned around fire.`,
+            `Route from ${id} to ${zone.exitId} re-planned around fire and closed roads.`,
             false,
           );
       } else if (!zone.routeBlocked) {
@@ -1447,13 +1465,13 @@ export class DispatchEngine {
           if (home && unit.status !== "returning") {
             this.alert(
               "unit_stranded",
-              `${unit.id} cannot reach its assignment avoiding fire; returning.`,
+              `${unit.id} cannot reach its assignment avoiding fire and closed roads; returning.`,
               true,
             );
             this.sendUnit(unit, from, home, "returning", null, null);
           } else {
             unit.status = "stranded";
-            this.alert("unit_stranded", `${unit.id} has no fire-free route.`, true);
+            this.alert("unit_stranded", `${unit.id} has no route avoiding fire and closed roads.`, true);
             continue;
           }
         }

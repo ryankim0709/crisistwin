@@ -48,6 +48,14 @@ Also in the repository:
 - **Live twin** (`app/backend/livecore/`, `sim/`): the planner and a steppable traffic engine behind `/live`'s what-if
   ([ADR 0013](docs/adr/0013-realtime-twin.md), [twin API](docs/twin-api.md)).
 
+- **Incident intelligence** (`/api/intel/…`): an Apify Actor fetches public agency
+  pages (live, or Wayback Machine captures for past fires), Claude extracts candidate road closures,
+  evacuation orders and shelter updates with a verbatim quote, and a planner confirms and maps each one.
+  Every extracted record is `reported` and `unconfirmed` until a planner confirms it; Claude never
+  outputs coordinates. `APIFY_TOKEN`, `APIFY_ACTOR_ID` and `ANTHROPIC_API_KEY` are read by Django only
+  (never `VITE_*`); without them runs and extraction answer 503 and uploading Actor output still works.
+  [Contract](docs/incident-intel.md), [ADR 0018](docs/adr/0018-apify-incident-intelligence.md).
+
 Not implemented: persistent scenarios, live incident integrations, a validated evacuation model.
 Suppression is limited to control lines built by Simulation Studio firefighters ([ADR 0020](docs/adr/0020-studio-firefighting.md)); the fire model is unvalidated at demo settings.
 
