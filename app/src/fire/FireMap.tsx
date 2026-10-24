@@ -304,7 +304,8 @@ export default function FireMap({
       const element = createMarkerElement("fire-origin-marker", "");
       element.setAttribute("role", "img");
       element.setAttribute("aria-label", "Ignition point");
-      originMarker.current = new Marker({ element }).addTo(map);
+      // Position before adding: Marker.addTo reads the marker's position immediately.
+      originMarker.current = new Marker({ element }).setLngLat(position).addTo(map);
     }
     originMarker.current.setLngLat(position);
 
@@ -312,7 +313,9 @@ export default function FireMap({
       windMarker.current = new Marker({
         element: createMarkerElement("fire-wind-marker", WIND_ARROW_SVG),
         rotationAlignment: "map",
-      }).addTo(map);
+      })
+        .setLngLat(position)
+        .addTo(map);
     }
     windMarker.current.setLngLat(position).setRotation(windTowardDegrees);
     windMarker.current
@@ -335,7 +338,9 @@ export default function FireMap({
         element: createMarkerElement("fire-head-marker", ""),
         anchor: "bottom",
         offset: [0, -8],
-      }).addTo(map);
+      })
+        .setLngLat([head.longitude, head.latitude])
+        .addTo(map);
     }
     headMarker.current.getElement().textContent = `${formatElapsed(frame.elapsedMinutes)} head`;
     headMarker.current.setLngLat([head.longitude, head.latitude]);

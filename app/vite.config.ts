@@ -4,6 +4,9 @@ import { defineConfig } from "vite";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  // MapLibre loads its tile worker from a URL relative to its own module. Pre-bundling
+  // rewrites that URL and the worker fails to load, which silently breaks tile rendering.
+  optimizeDeps: { exclude: ["maplibre-gl"] },
   server: {
     host: "0.0.0.0",
     port: 5173,
