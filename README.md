@@ -23,7 +23,8 @@ documented below and in the [scaffold decision](docs/adr/0001-app-scaffold.md).
 ## Project status
 
 The full stack development scaffold is in [`app/`](app/): React/TypeScript with
-Vite and Tailwind CSS, a Django REST Framework API, PostgreSQL, Vitest, and Docker.
+Vite and Tailwind CSS, a Django REST Framework API, MongoDB via PyMongo, Vitest,
+and Docker.
 The workspace has shared sidebar navigation, page-specific UI scaffolds, and an
 overview that checks the API and database connection. Planning pages support
 temporary local input editing; they do not save scenarios or execute evacuation
@@ -50,23 +51,36 @@ cd crisistwin
 
 ### Start with Docker
 
-Install Docker with Compose v2 or newer. From the repository root:
+Install Docker with Compose v2 or newer and configure your MongoDB connection.
+For the existing Atlas setup, keep your personal connection string in
+`~/.mongodb_uri` with permissions `600`. Your Atlas database user needs access to
+`crisistwin`, and your current IP must be allowed in the project network access
+list. From the repository root:
 
 ```sh
 cd app
+export MONGODB_URI="$(cat ~/.mongodb_uri)"
 docker compose up --build --wait
 ```
 
 Open **http://localhost:5173**. The API is at **http://localhost:8000/api/health**;
-PostgreSQL is exposed on `127.0.0.1:5434`. These ports differ from Duedi's local
-ports so both projects can run together. Frontend and backend source changes
-reload automatically. The backend applies migrations before starting; PostgreSQL
-data is retained in a named volume.
+the backend connects directly to MongoDB Atlas. Frontend and backend source
+changes reload automatically. Compose runs only the app processes; it does not
+provision a database or run SQL migrations.
 
-No environment file or API keys are required. Optional local overrides are
-documented in [`app/.env.example`](app/.env.example); copy it to `app/.env` for
-Compose. Development credentials are local placeholders. Keep real credentials
-out of Git and browser environment variables.
+Alternatively copy [`app/.env.example`](app/.env.example) to ignored `app/.env`
+and replace the URI placeholder there. `MONGODB_URI` is required;
+`MONGODB_DATABASE` defaults to `crisistwin` and overrides any database in the URI
+path. Keep real credentials out of Git, logs, and browser environment variables.
+Do not paste connection strings or share expanded `docker compose config` output.
+A local MongoDB server is also supported: use `mongodb://127.0.0.1:27017` for a
+host backend, or `mongodb://host.docker.internal:27017` for Docker Desktop if the
+server is reachable from containers. There is no automatic local fallback.
+
+When replacing an existing PostgreSQL stack, stop it with `docker compose down`
+from its original checkout before starting this worktree (both use the same
+Compose project name and app ports). Keep its volumes; this change does not
+transfer PostgreSQL data. No application persistence models exist on `main` yet.
 
 ```sh
 # Follow logs / stop the stack (keeps database data)
@@ -84,7 +98,8 @@ docker compose up --wait
 - Node.js **22.12+** (Node 22 in Docker and `.nvmrc`), **npm**, and `package-lock.json`.
 - Python **3.12**, **pip**, and fully pinned runtime/development `requirements*.txt`.
 - React **19**, TypeScript **5.8**, Vite **7**, Tailwind CSS **4**.
-- Django **5.2 LTS**, Django REST Framework **3**, PostgreSQL **17**.
+- Django **5.2 LTS**, Django REST Framework **3**, PyMongo **4** with MongoDB Atlas
+  or an existing compatible MongoDB server.
 - Vitest **3**, Testing Library, jsdom, ESLint, Prettier, and Ruff for local checks.
 - Mobile: **iOS 17+**, **Xcode 16.2+**, bundled Swift compiler in **Swift 5** mode,
   SwiftUI/Foundation only. Future Swift dependencies use Swift Package Manager;
@@ -97,11 +112,12 @@ app/
     navigation.ts       Route labels and descriptions
     pages/              Planning page scaffolds, shared UI, and not-found page
   backend/
-    config/             Django settings, routes, WSGI
+    config/             Django settings, routes, WSGI, credential redaction
     api/                HTTP endpoints and backend contract tests
+      mongodb.py        Shared MongoDB client and explicit database selection
     requirements*.in    Direct Python dependency declarations
     requirements*.txt   Resolved, pinned Python dependencies
-  docker-compose.yml    Development frontend + backend + PostgreSQL
+  docker-compose.yml    Development frontend + backend (external MongoDB)
   Dockerfile.dev        Vite development image
   Dockerfile            Built frontend served by Nginx, with /api proxy
   backend/Dockerfile    Django runtime and development image targets
@@ -112,7 +128,8 @@ mobile/
 docs/adr/               Shared architecture decisions
 ```
 
-See the [scaffold decision](docs/adr/0001-app-scaffold.md) and
+See the [scaffold decision](docs/adr/0001-app-scaffold.md),
+[MongoDB decision](docs/adr/0008-mongodb-backend.md), and
 [API contract](app/backend/README.md). There are no CI workflows for this
 hackathon; checks run locally when needed.
 
@@ -260,7 +277,6 @@ docker compose exec frontend npm run test:coverage
 docker compose exec backend ruff check .
 docker compose exec backend ruff format --check .
 docker compose exec backend python manage.py check
-docker compose exec backend python manage.py makemigrations --check --dry-run
 docker compose exec backend python manage.py test --noinput
 ```
 
@@ -272,14 +288,13 @@ and the health endpoint check the real database connection.
 
 ### Run app processes on your host
 
-Use the versions above. Start only PostgreSQL with Docker, then create a local
-Python environment. From `app/`:
+Use the versions above and the existing Atlas connection (or a running local
+MongoDB server), then create a local Python environment. From `app/`:
 
 ```sh
-docker compose up -d --wait db
+export MONGODB_URI="$(cat ~/.mongodb_uri)"
 python3.12 -m venv backend/.venv
 backend/.venv/bin/python -m pip install -r backend/requirements-dev.txt
-backend/.venv/bin/python backend/manage.py migrate
 backend/.venv/bin/python backend/manage.py runserver 127.0.0.1:8000
 ```
 
@@ -291,17 +306,15 @@ npm ci
 npm run dev
 ```
 
-The default host configuration uses the same local database values as Compose.
 Django reads environment variables from the shell; it does not load `.env`
-automatically. If you change database credentials in Compose, export the matching
-`POSTGRES_DB`, `POSTGRES_USER`, and `POSTGRES_PASSWORD` in the backend shell.
+automatically. Export `MONGODB_URI` and, if needed, `MONGODB_DATABASE` in the backend
+shell. The default database is `crisistwin` for both host and Compose.
 Vite proxies `/api` to `http://127.0.0.1:8000` on the host and `http://backend:8000`
 in Docker. To change the host target, use
 `VITE_API_PROXY_TARGET=http://127.0.0.1:8000 npm run dev`.
 
 Optional host backend checks run from `app/backend/` using `.venv/bin/ruff check .`,
-`.venv/bin/ruff format --check .`, `.venv/bin/python manage.py check`,
-`.venv/bin/python manage.py makemigrations --check --dry-run`, and
+`.venv/bin/ruff format --check .`, `.venv/bin/python manage.py check`, and
 `.venv/bin/python manage.py test --noinput`.
 
 ### Build runtime images

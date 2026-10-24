@@ -13,25 +13,21 @@ djangorestframework==3.18.3
     # via
     #   -c requirements.txt
     #   -r requirements.in
+dnspython==2.9.0
+    # via
+    #   -c requirements.txt
+    #   pymongo
 gunicorn==26.2.0
     # via
     #   -c requirements.txt
     #   -r requirements.in
-psycopg==3.3.6
+pymongo==4.19.0
     # via
     #   -c requirements.txt
     #   -r requirements.in
-psycopg-binary==3.3.6
-    # via
-    #   -c requirements.txt
-    #   psycopg
 ruff==0.14.5
     # via -r requirements-dev.in
 sqlparse==0.6.0
     # via
     #   -c requirements.txt
     #   django
-typing-extensions==4.16.0
-    # via
-    #   -c requirements.txt
-    #   psycopg
