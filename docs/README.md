@@ -14,6 +14,7 @@
 | [development.md](development.md) | Optional checks, running on the host, runtime images. |
 | [plan-api.md](plan-api.md) | Draft API for commanding a branch of the replay. |
 | [live-reports.md](live-reports.md) | Contract for the live drill API: field reports, road state, guidance, check-ins (`/api/live/…`). |
+| [ground-data-calibration.md](ground-data-calibration.md) | Empirical 911, radio and rescue rates from the 2018 Camp Fire record (`sim/ground_rates.py`) for a future ground-report generator. |
 | [twin-api.md](twin-api.md) | Contract for the real-time traffic twin behind `/live`'s what-if. |
 | [iteration-log.md](iteration-log.md) | Round-by-round log of the live-drill iteration work. |
 

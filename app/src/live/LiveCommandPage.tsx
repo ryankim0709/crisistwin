@@ -3,6 +3,7 @@ import { Button, Field, IconButton, Kbd, LoadingState, Notice } from "../ui";
 import ActivityLog from "./ActivityLog";
 import { useTriageKeys } from "./useTriageKeys";
 import "./activity.css";
+import { useTaskRoute } from "./useTaskRoute";
 import { LiveError, readToken, runImpact, SERVER_TOKEN, writeToken } from "./api";
 import CommandMap, { LAYER_KEYS, type LayerKey, type MapFocus } from "./CommandMap";
 import EvacuationPicture from "./EvacuationPicture";
@@ -28,7 +29,13 @@ const LAYER_LABEL: Record<LayerKey, string> = {
   shelters: "Shelters",
 };
 
-function TokenForm({ error, onSubmit }: { error: string | null; onSubmit: (token: string) => void }) {
+function TokenForm({
+  error,
+  onSubmit,
+}: {
+  error: string | null;
+  onSubmit: (token: string) => void;
+}) {
   const [value, setValue] = useState("");
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -37,7 +44,12 @@ function TokenForm({ error, onSubmit }: { error: string | null; onSubmit: (token
   return (
     <form className="lc-token" onSubmit={submit}>
       <Field label="Controller token">
-        <input type="password" autoComplete="off" value={value} onChange={(e) => setValue(e.target.value)} />
+        <input
+          type="password"
+          autoComplete="off"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+        />
       </Field>
       <Button type="submit" disabled={!value.trim()}>
         Connect
@@ -62,7 +74,13 @@ function LayerToggles({
   return (
     <div className="lc-layers" role="group" aria-label="Map layers">
       {LAYER_KEYS.map((key) => (
-        <button key={key} type="button" className="lc-layer" aria-pressed={layers[key]} onClick={() => onToggle(key)}>
+        <button
+          key={key}
+          type="button"
+          className="lc-layer"
+          aria-pressed={layers[key]}
+          onClick={() => onToggle(key)}
+        >
           <span className={`lc-sw lc-sw--${key}`} aria-hidden="true" />
           {LAYER_LABEL[key]}
         </button>
@@ -85,7 +103,10 @@ function ShortcutHint() {
   useEffect(() => {
     if (!open) return;
     const close = (e: Event) => {
-      if (e instanceof KeyboardEvent ? e.key === "Escape" : !ref.current?.contains(e.target as Node)) setOpen(false);
+      if (
+        e instanceof KeyboardEvent ? e.key === "Escape" : !ref.current?.contains(e.target as Node)
+      )
+        setOpen(false);
     };
     document.addEventListener("pointerdown", close);
     document.addEventListener("keydown", close);
@@ -96,7 +117,12 @@ function ShortcutHint() {
   }, [open]);
   return (
     <div className="lc-keys" ref={ref}>
-      <IconButton label="Keyboard shortcuts" size="sm" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+      <IconButton
+        label="Keyboard shortcuts"
+        size="sm"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
         ?
       </IconButton>
       {open ? (
@@ -133,6 +159,8 @@ export default function LiveCommandPage() {
   const [focus, setFocus] = useState<MapFocus | null>(null);
   const [filter, setFilter] = useState<QueueFilter>("new");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [showRecord, setShowRecord] = useState(true);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [impact, setImpact] = useState<ImpactState | null>(null);
   const [highlight, setHighlight] = useState<string | null>(null);
   const [layers, setLayers] = useState<Record<LayerKey, boolean>>({
@@ -169,14 +197,30 @@ export default function LiveCommandPage() {
   const data = unauthorized ? null : command.data;
   const twinData = data ? twin.data : null;
   const serverNow =
-    data && command.receivedAt !== null ? new Date(data.generated_at).getTime() + (now - command.receivedAt) : now;
+    data && command.receivedAt !== null
+      ? new Date(data.generated_at).getTime() + (now - command.receivedAt)
+      : now;
   // The queue re-sorts on each poll only, so rows do not jump while ages tick.
-  const items = useMemo(() => (data ? buildQueue(data, new Date(data.generated_at).getTime()) : []), [data]);
+  const items = useMemo(
+    () => (data ? buildQueue(data, new Date(data.generated_at).getTime()) : []),
+    [data],
+  );
   const selected = items.find((i) => i.id === selectedId) ?? null;
+  // Hiding 2018 record items keeps the selected one listed, as filters do.
+  const listed = useMemo(
+    () => (showRecord ? items : items.filter((i) => !i.record || i.id === selectedId)),
+    [items, showRecord, selectedId],
+  );
+  const routeTask =
+    selected?.task && (selected.task.status === "open" || selected.task.status === "accepted")
+      ? selected.task.id
+      : null;
+  const taskRoute = useTaskRoute(data ? token : null, routeTask);
 
   // A map click selects an item outside the current filter too; the queue keeps it listed.
   const select = useCallback((id: string | null) => {
     setSelectedId(id);
+    setActionError(null);
     setFocus(null);
     setImpact((cur) => (cur && cur.itemId === id ? cur : null));
   }, []);
@@ -187,18 +231,22 @@ export default function LiveCommandPage() {
     setImpact({ itemId, loading: true, result: null, error: null });
     try {
       const result = await runImpact(token, { segment_id: selected.segmentId });
-      setImpact((cur) => (cur?.itemId === itemId ? { itemId, loading: false, result, error: null } : cur));
+      setImpact((cur) =>
+        cur?.itemId === itemId ? { itemId, loading: false, result, error: null } : cur,
+      );
     } catch (error) {
       const message = error instanceof LiveError ? error.message : "Impact analysis failed.";
-      setImpact((cur) => (cur?.itemId === itemId ? { itemId, loading: false, result: null, error: message } : cur));
+      setImpact((cur) =>
+        cur?.itemId === itemId ? { itemId, loading: false, result: null, error: message } : cur,
+      );
     }
   };
 
   const shown = useMemo(
-    () => items.filter((i) => matches(i, filter) || i.id === selectedId),
-    [items, filter, selectedId],
+    () => listed.filter((i) => matches(i, filter) || i.id === selectedId),
+    [listed, filter, selectedId],
   );
-  useTriageKeys({ shown, selected, busy, run, onSelect: select });
+  useTriageKeys({ shown, selected, busy, run, onSelect: select, onError: setActionError });
 
   const selectFromLog = (reportIds: string[]) => {
     const hit = items.find((i) => i.reports.some((r) => reportIds.includes(r.id)));
@@ -264,7 +312,9 @@ export default function LiveCommandPage() {
       />
       {data ? (
         <ReviewQueue
-          items={items}
+          items={listed}
+          showRecord={showRecord}
+          onShowRecord={setShowRecord}
           filter={filter}
           onFilter={setFilter}
           selectedId={selectedId}
@@ -281,9 +331,15 @@ export default function LiveCommandPage() {
           focus={focus}
           layers={layers}
           impact={impactResult}
+          taskRoute={taskRoute?.route?.route?.line ?? null}
           onSelect={select}
         />
-        {data ? <LayerToggles layers={layers} onToggle={(k) => setLayers((l) => ({ ...l, [k]: !l[k] }))} /> : null}
+        {data ? (
+          <LayerToggles
+            layers={layers}
+            onToggle={(k) => setLayers((l) => ({ ...l, [k]: !l[k] }))}
+          />
+        ) : null}
         {data ? <MapLegend /> : null}
         {gate}
       </main>
@@ -293,7 +349,19 @@ export default function LiveCommandPage() {
             <div style={{ display: "flex", justifyContent: "flex-end", padding: "4px 8px 0" }}>
               <ShortcutHint />
             </div>
-            <ProposalPanel data={data} twin={twinData} run={run} busy={busy} serverNow={serverNow} highlightId={highlight} />
+            <ProposalPanel
+              data={data}
+              twin={twinData}
+              run={run}
+              busy={busy}
+              serverNow={serverNow}
+              highlightId={highlight}
+            />
+            {actionError ? (
+              <Notice tone="danger" compact>
+                {actionError}
+              </Notice>
+            ) : null}
             {selected ? (
               <SelectedItem
                 key={selected.id}
@@ -303,13 +371,19 @@ export default function LiveCommandPage() {
                 run={run}
                 busy={busy}
                 impact={impact}
+                route={taskRoute}
                 proposalId={proposalFor(selected, data)}
                 onRunImpact={() => void onRunImpact()}
                 onReviewProposal={reviewProposal}
                 onClose={() => select(null)}
               />
             ) : null}
-            <EvacuationPicture data={data} twin={twinData} twinError={twin.error} onFocus={setFocus} />
+            <EvacuationPicture
+              data={data}
+              twin={twinData}
+              twinError={twin.error}
+              onFocus={setFocus}
+            />
             <GroundRecord
               record={data.ground_record}
               zones={data.zones}
@@ -320,7 +394,11 @@ export default function LiveCommandPage() {
               }}
             />
             <ResponseRecord items={data.response_record ?? []} />
-            <ActivityLog decisions={data.decisions ?? []} serverNow={serverNow} onSelect={selectFromLog} />
+            <ActivityLog
+              decisions={data.decisions ?? []}
+              serverNow={serverNow}
+              onSelect={selectFromLog}
+            />
           </div>
         </aside>
       ) : null}

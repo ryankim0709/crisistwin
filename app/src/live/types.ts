@@ -554,6 +554,26 @@ export interface TwinMonitor {
 export interface LiveApiError {
   error: string
   detail?: string
+  /** Task route errors (409 no_origin) carry `reason` instead of `error`. */
+  reason?: string
+}
+
+/** GET tasks/{id}/route (docs/live-reports.md "Responder route to a task"); planner route, twin congestion simulated. */
+export interface TaskRoute {
+  task_id: string
+  route: {
+    line: LonLat[]
+    via: string[]
+    distance_m: number
+    eta_min: number
+    exposure: 'clear' | 'near_fire'
+    congestion: 'twin' | 'unavailable'
+    congested_edges: number
+  } | null
+  reason: 'unreachable' | 'no_origin' | null
+  detail: string | null
+  evidence_class: string
+  as_of: IsoTime
 }
 
 // ---- Impact analysis (docs/live-reports.md "Impact analysis"); planner routes computed, twin values simulated ----

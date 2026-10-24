@@ -20,6 +20,7 @@ All outputs are planning experiments, not operational fire or evacuation guidanc
 | `fixtures.py` | Fully synthetic network and scenario for development |
 | `insights.py` | Responder and evacuee planning insights: zone lead times, roads' modelled fire arrival, bottlenecks |
 | `incidents.py` | Incident registry (`camp-2018`, `marshall-2021`, `kincade-2019`, `woolsey-2018`) and the generic package path: verification, perimeters, ignition, clock, crosswalk demand, fitted front, `index.json` |
+| `ground_rates.py` | Empirical 911, radio and rescue rates from the Camp 2018 ground record, relative to zone fire arrival and orders; `fit_camp_2018()` ([calibration](../docs/ground-data-calibration.md)) |
 | `bundle.py` | Assemble the web-app replay bundle ([contract](../docs/replay-bundle.md)) |
 | `__main__.py` | CLI |
 

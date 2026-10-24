@@ -45,6 +45,8 @@ export const MAP_COLOR = {
   help: "#F5A623",
   /** 2018 911 / radio / rescue activity per zone (historical record). */
   ground: "#BE185D",
+  /** Responder route to a task: teal, unused by fire, zones, routes or traffic. */
+  responderRoute: "#0A8EA6",
   queue: "#8A6D00",
   shelter: "#2E7D5B",
   ink: "#0F1720",
@@ -264,7 +266,7 @@ function fireHatch(): ImageData {
 
 const SOURCES = [
   "lc-zones", "lc-zone-labels", "lc-fire", "lc-fire-label", "lc-fire-obs", "lc-routes", "lc-hazard-lines", "lc-points", "lc-help",
-  "lc-responders", "lc-dest", "lc-queues", "lc-traffic", "lc-ground", "lc-focus", "lc-imp-zones", "lc-imp-now", "lc-imp-alt", "lc-imp-road",
+  "lc-responders", "lc-dest", "lc-queues", "lc-traffic", "lc-ground", "lc-focus", "lc-imp-zones", "lc-imp-now", "lc-imp-alt", "lc-imp-road", "lc-resp-route",
 ];
 
 function installLayers(map: MapLibreMap): void {
@@ -380,6 +382,20 @@ function installLayers(map: MapLibreMap): void {
       "line-width": 5,
       "line-dasharray": ["case", ["get", "confirmed"], ["literal", [1, 0]], ["literal", [1.5, 1]]] as never,
     },
+  });
+  map.addLayer({
+    id: "lc-resp-route-casing",
+    type: "line",
+    source: "lc-resp-route",
+    layout: { "line-join": "round", "line-cap": "round" },
+    paint: { "line-color": MAP_COLOR.casing, "line-width": 7, "line-opacity": 0.95 },
+  });
+  map.addLayer({
+    id: "lc-resp-route",
+    type: "line",
+    source: "lc-resp-route",
+    layout: { "line-join": "round", "line-cap": "round" },
+    paint: { "line-color": MAP_COLOR.responderRoute, "line-width": 3.5, "line-dasharray": [0.1, 1.6] },
   });
   map.addLayer({
     id: "lc-imp-road",
@@ -539,10 +555,11 @@ interface Props {
   focus: MapFocus | null;
   layers: Record<LayerKey, boolean>;
   impact: ImpactResponse | null;
+  taskRoute: LonLat[] | null;
   onSelect: (itemId: string | null) => void;
 }
 
-export default function CommandMap({ data, twin, items, selected, focus, layers, impact, onSelect }: Props) {
+export default function CommandMap({ data, twin, items, selected, focus, layers, impact, taskRoute, onSelect }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const dataRef = useRef<CommandResponse | null>(data);
@@ -687,6 +704,14 @@ export default function CommandMap({ data, twin, items, selected, focus, layers,
     if (target) map.flyTo({ center: target.coord, zoom: Math.max(map.getZoom(), FOCUS_ZOOM) });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fly on a new selection or focus, not on each poll
   }, [ready, selectedId, focus]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map) return;
+    (map.getSource("lc-resp-route") as GeoJSONSource | undefined)?.setData(
+      collection(taskRoute && taskRoute.length > 1 ? [lineFeature(taskRoute)] : []),
+    );
+  }, [ready, taskRoute]);
 
   useEffect(() => {
     const map = mapRef.current;
