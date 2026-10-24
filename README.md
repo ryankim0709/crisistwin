@@ -77,7 +77,7 @@ tools/                Data acquisition and sync scripts (see tools/README.md)
 tests/                Unit tests for the tools incident builders
 data/incidents/       Incident packages; manifests in Git, bytes in MongoDB Atlas
 mobile/               Native iOS app (Xcode project)
-docs/                 Docs index: docs/README.md; decisions: docs/adr/README.md
+docs/                 Docs index: docs/README.md; decisions: docs/adr/
 AGENTS.md             Shared rules for coding agents (CLAUDE.md, Cursor and Copilot adapt it)
 ```
 
@@ -159,7 +159,7 @@ There are no CI workflows.
 ## Documentation
 
 - [docs/README.md](docs/README.md): index of all docs. [Project scope](docs/project-scope.md) (proposals, not status).
-- [docs/adr/README.md](docs/adr/README.md): architecture decisions, with duplicate numbers disambiguated.
+- [docs/adr/](docs/adr/): architecture decisions. Some numbers repeat, so cite them by full file name.
 - [app/src/ui/README.md](app/src/ui/README.md): the UI standard (tokens and shared components every page uses).
 - [app/AGENTS.md](app/AGENTS.md) and [AGENTS.md](AGENTS.md): rules for coding agents. Change shared guidance in `AGENTS.md`;
   Claude's [subagent model rule](AGENTS.md#choosing-a-model-for-subagents) is there too.
