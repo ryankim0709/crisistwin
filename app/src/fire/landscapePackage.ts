@@ -383,8 +383,13 @@ export class RegionUnavailableError extends Error {
   }
 }
 
-/** Statuses that mean "no stored copy right now" rather than a broken response. */
-const UNAVAILABLE_STATUSES = new Set([404, 502, 503, 504]);
+/**
+ * Statuses that mean "no stored copy right now" rather than a broken package: 404, and any
+ * 5xx (the Vite dev proxy answers 500 when the backend is not running at all).
+ */
+function isUnavailableStatus(status: number): boolean {
+  return status === 404 || status >= 500;
+}
 
 async function getOrUnavailable(url: string, signal: AbortSignal): Promise<Response> {
   let response: Response;
@@ -394,7 +399,7 @@ async function getOrUnavailable(url: string, signal: AbortSignal): Promise<Respo
     if (signal.aborted) throw cause;
     throw new RegionUnavailableError(`Could not reach ${url}.`, 0);
   }
-  if (UNAVAILABLE_STATUSES.has(response.status)) {
+  if (isUnavailableStatus(response.status)) {
     throw new RegionUnavailableError(`${url} is unavailable (${response.status}).`, response.status);
   }
   if (!response.ok) throw new Error(`${url} failed (${response.status}).`);
