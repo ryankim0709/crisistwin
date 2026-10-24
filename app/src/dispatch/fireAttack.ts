@@ -127,8 +127,9 @@ export function lineNeededMeters(
 
 /**
  * Simulator estimate of the minute the fire is out: `builtMeters` already built, plus one
- * engine starting at each minute in `arrivals` (clamped to `now`). Null when the fire cannot be
- * attacked, nobody works it, or the line does not catch the edge by the horizon.
+ * engine starting at each minute in `arrivals` (clamped to `now`), building `rates[i]` metres
+ * per minute (default ENGINE_LINE_METERS_PER_MINUTE, the Type 3 engine). Null when the fire
+ * cannot be attacked, nobody works it, or the line does not catch the edge by the horizon.
  */
 export function projectOutMinute(
   target: FireTarget,
@@ -138,15 +139,17 @@ export function projectOutMinute(
   builtMeters: number,
   arrivals: readonly number[],
   horizonMinutes: number,
+  rates?: readonly number[],
 ): number | null {
   if (target.directBlocked || target.ignitedMinute === null || arrivals.length === 0) return null;
   for (let minute = Math.max(now, target.ignitedMinute); minute <= horizonMinutes; minute += 1) {
     let built = builtMeters;
-    for (const arrival of arrivals) {
+    arrivals.forEach((arrival, i) => {
       // Work starts the whole minute after arrival, as the engine steps it.
       built +=
-        ENGINE_LINE_METERS_PER_MINUTE * Math.max(0, minute - Math.ceil(Math.max(arrival, now)));
-    }
+        (rates?.[i] ?? ENGINE_LINE_METERS_PER_MINUTE) *
+        Math.max(0, minute - Math.ceil(Math.max(arrival, now)));
+    });
     if (built > 0 && built >= lineNeededMeters(target, frames, fire, minute)) return minute;
   }
   return null;

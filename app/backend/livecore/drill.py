@@ -45,6 +45,12 @@ class Edge:
     capacity_veh_per_hour: float
     length_m: float
     coords: tuple[LonLat, ...]
+    bridge: bool = False
+    """The bundle's OSM bridge flag (False when the bundle has none)."""
+    tags: tuple[tuple[str, str], ...] = ()
+    """OSM access tags (surface, tracktype, width, ...) when the bundle carries ``tags`` per
+    edge; empty for bundles built without them (camp-2018 has none). Read by
+    ``livecore.apparatus`` for the road-access rules."""
 
 
 @dataclass(frozen=True)
@@ -199,6 +205,8 @@ def _road_graph(raw_edges: Any) -> RoadGraph:
                 capacity_veh_per_hour=float(raw.get("capacity_veh_per_hour") or 0.0),
                 length_m=float(raw["length_m"]),
                 coords=coords,
+                bridge=bool(raw.get("bridge")),
+                tags=tuple(sorted((str(k), str(v)) for k, v in (raw.get("tags") if isinstance(raw.get("tags"), Mapping) else {}).items())),
             )
         except (KeyError, TypeError, ValueError, IndexError) as exc:
             raise ValueError(f"bundle: malformed road edge {raw.get('id') if isinstance(raw, Mapping) else raw!r}") from exc

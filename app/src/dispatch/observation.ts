@@ -23,6 +23,8 @@ import {
 import { ENGINE_HOLDS_FLAME_FEET, ENGINE_LINE_METERS_PER_MINUTE } from "./fireAttack";
 import { routeTo, shortestPathTree } from "./routing";
 import { roadLabel } from "./area";
+import { GROUND_APPARATUS } from "../studio/apparatus";
+import type { NoAccess } from "./engine";
 
 const SQUARE_METERS_PER_HECTARE = 10_000;
 /** Named roads listed in `roads.fire_cut_roads`, nearest-in-time first. */
@@ -180,15 +182,31 @@ export function buildObservation(inputs: ObservationInputs): Observation {
   );
   const units = engine.units.map((unit) => {
     const drive: Record<string, number> = {};
+    const noAccess: Record<string, string> = {};
     if (unit.status !== "stranded" && threatened.length > 0) {
-      const tree = shortestPathTree(area, unit.node, blocked);
+      const tree = engine.unitTree(unit, unit.node, blocked);
       for (const zone of threatened) {
-        const route = routeTo(area, tree, area.zones.find((z) => z.id === zone.id)!.node);
+        const node = area.zones.find((z) => z.id === zone.id)!.node;
+        const route = routeTo(area, tree, node);
         if (route) drive[zone.id] = Math.max(0, Math.round(route.seconds / 60));
+        else {
+          const reason = engine.noAccessTo(unit, unit.node, node, blocked);
+          if (reason) noAccess[zone.id] = noAccessText(reason);
+        }
       }
+    }
+    if (unit.status !== "stranded" && engine.apparatusAccess) {
+      engine.fires.forEach((fire, index) => {
+        if (!engine.fireBurning(index) || (unit.task === "fire_attack" && unit.fire === index)) return;
+        if (engine.attackRoute(unit, index)) return;
+        const reason = engine.attackNoAccess(unit, index);
+        if (reason) noAccess[fire.target.id] = noAccessText(reason);
+      });
     }
     return {
       id: unit.id,
+      apparatus: GROUND_APPARATUS[unit.kind].label,
+      access_class: engine.unitClass(unit),
       station_id: unit.stationId,
       status: unit.status,
       task: unit.task,
@@ -199,6 +217,7 @@ export function buildObservation(inputs: ObservationInputs): Observation {
         return eta === null ? null : Math.round(eta);
       })(),
       drive_min_to: drive,
+      no_access: noAccess,
     };
   });
 
@@ -329,6 +348,7 @@ export function buildObservation(inputs: ObservationInputs): Observation {
       "structure_defense has no modelled effect on fire spread. Engines on scene in a zone withdraw automatically when fire is about to reach the zone core.",
       `fire_attack (attack_fire with a tactic): engines stage at the nearest road point to the fire's origin. direct: they build line around the whole edge at about ${Math.round(ENGINE_LINE_METERS_PER_MINUTE)} m/min each in grass (slower in heavier fuel) and the fire is out when the line rings its modelled edge, which keeps growing meanwhile; possible only where they can hold the head (head flame up to ${ENGINE_HOLDS_FLAME_FEET} ft and not crowning, or a structure fire). flank: they anchor at the heel and build line up both flanks toward the head; indirect: they build line around where the fire will be in about an hour, starting across the head. For flank and indirect the line is run through the fire model, which decides stretch by stretch whether it holds (the flame facing it is within what engines hold) or burns over; flanks burn far less intensely than the head. A fire that is out or held stops spreading: the forecast, zone ETAs and impact are recomputed, and its engines return to station. tactic_options are solved what-ifs; their contained_in_min, burned_ha_at_horizon and homes_reached_by_horizon compare with fire.current_outcome. Rough: ellipse perimeter for direct attack, no water supply, mop-up or rekindle.`,
       "A household counts as exposed when fire reaches its home before it leaves, reaches the zone core while it is still in the zone, or reaches the road it is on.",
+      ...engine.apparatusNotes,
       ...area.notes,
     ],
   };
@@ -337,6 +357,11 @@ export function buildObservation(inputs: ObservationInputs): Observation {
 /** Wire orders to engine orders; the engine validates them again against its live state. */
 export function toEngineOrders(orders: readonly WireOrder[]): Order[] {
   return orders.map((order) => ({ ...order }));
+}
+
+/** "R04 unpaved track too soft: grade3 not allowed for engine_t1_t2 (Foo Road)". */
+function noAccessText(reason: NoAccess): string {
+  return `${reason.rule ? `${reason.rule} ` : ""}${reason.why}${reason.road ? ` (${reason.road})` : ""}`;
 }
 
 function round1(value: number): number {

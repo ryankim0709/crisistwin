@@ -24,7 +24,12 @@
  *   fire reaches its zone's core (loading node or centroid) while it is still in the zone, or
  *   when fire reaches the road it is on. This is a model count, not a casualty estimate.
  * - Engines drive at the same free-flow speeds, ignoring congestion; a station outside the
- *   road box first covers its straight-line approach at APPROACH_SPEED_KPH. "Evacuation
+ *   road box first covers its straight-line approach at APPROACH_SPEED_KPH. With apparatus
+ *   access on (`setApparatusAccess`, the agent's session) each unit is a ground apparatus kind
+ *   (studio/apparatus.ts) routed only over the roads its road-access class may use (rules
+ *   R01-R12, studio/roadAccess.ts; service roads and tracks included) at that class's speed, with
+ *   the kind's turnout and line rate; a unit kept from a target by those rules gets "no access"
+ *   and the rule (`noAccessTo`, `attackNoAccess`). Closed roads stay closed to every class. "Evacuation
  *   support" shortens a zone's departure spread; "structure defense" has no modelled effect on
  *   the fire.
  * - Fire attack: engines sent to a fire (`attack_fire`) stage at the reachable road node nearest
@@ -45,6 +50,14 @@ import type { FireExposure } from "./fireExposure";
 import { tacticBlocked, type FireTactic } from "./fireTactics";
 import type { LinePlan } from "../studio/firefighting";
 import {
+  GROUND_APPARATUS,
+  grassRateMetersPerHour,
+  type AccessClass,
+  type GroundKind,
+} from "../studio/apparatus";
+import { RULE_TEXT, type EdgeAccess, type RoadRule } from "../studio/roadAccess";
+import {
+  DISPATCH_ENGINE_KIND,
   ENGINE_LINE_METERS_PER_MINUTE,
   fireAreaAt,
   lineNeededMeters,
@@ -61,6 +74,7 @@ import {
   stepHead,
   type PathStep,
   type Route,
+  type ShortestPathTree,
 } from "./routing";
 
 /** The live monitor checks the simulation this often by default (simulated minutes). */
@@ -85,6 +99,11 @@ export const UNIT_WITHDRAW_MARGIN_MINUTES = 5;
 export const APPROACH_SPEED_KPH = 40;
 /** NFPA 1710 turnout for fire calls: an engine leaves its station 80 s after the order. */
 export const TURNOUT_SECONDS = 80;
+/**
+ * With apparatus access on, a fire farther than this from every road a unit's class can use is
+ * out of that unit's reach (the Studio crew dispatch's limit, studio/crewDispatch.ts).
+ */
+export const MAX_ROAD_GAP_METERS = 1500;
 export const EXIT_OPTIONS_PER_ZONE = 3;
 const SECONDS_PER_MINUTE = 60;
 const VEHICLE_EPSILON = 0.01;
@@ -186,8 +205,18 @@ interface Packet {
   stuck: boolean;
 }
 
+/** Why a unit's road-access class keeps it from a target (studio/roadAccess.ts rules). */
+export interface NoAccess {
+  /** R01-R10; null when no single rule decides (e.g. no class road within reach of a fire). */
+  rule: RoadRule | null;
+  why: string;
+  road: string | null;
+}
+
 export interface UnitState {
   id: string;
+  /** Ground apparatus kind (studio/apparatus.ts); a Type 3 engine unless set otherwise. */
+  kind: GroundKind;
   stationId: string;
   homeNode: number;
   status: UnitStatus;
@@ -342,6 +371,11 @@ export class DispatchEngine {
   /** The planner's closures in effect, oldest first. */
   roadClosures: RoadClosure[];
   /**
+   * Road access of every edge per apparatus class (studio/roadAccess.ts), or null: every unit
+   * then drives public roads at free-flow speed (the Studio's evacuation run).
+   */
+  private access: readonly EdgeAccess[] | null = null;
+  /**
    * When set (the agent's session), zones outside the modelled fire path cannot be ordered or
    * staged: evacuating them would only add traffic to the roads threatened zones need. The
    * studio's evacuate-everyone policy leaves it off.
@@ -395,6 +429,7 @@ export class DispatchEngine {
     this.units = area.stations.flatMap((station) =>
       station.units.map((unit) => ({
         id: unit.id,
+        kind: DISPATCH_ENGINE_KIND as GroundKind,
         stationId: station.id,
         homeNode: station.node,
         status: "available" as UnitStatus,
@@ -579,18 +614,9 @@ export class DispatchEngine {
   ): { node: number; route: Route; seconds: number } | null {
     if (unit.status === "stranded") return null;
     const from = this.unitNextNode(unit);
-    const tree = shortestPathTree(this.area, from, this.blockedAt(this.minute));
-    const location = this.fires[index].target.location;
-    let best = -1;
-    let bestMeters = Infinity;
-    for (let node = 0; node < this.area.nodes.length; node += 1) {
-      if (!Number.isFinite(tree.seconds[node])) continue;
-      const meters = groundMeters(this.area.nodes[node], location);
-      if (meters < bestMeters) {
-        best = node;
-        bestMeters = meters;
-      }
-    }
+    const tree = this.unitTree(unit, from, this.blockedAt(this.minute));
+    const { node: best, meters: bestMeters } = this.nearestReached(tree, this.fires[index].target.location);
+    if (this.access && bestMeters > MAX_ROAD_GAP_METERS) return null;
     const route = best < 0 ? null : routeTo(this.area, tree, best);
     if (!route) return null;
     const approach = unit.status === "available" ? this.approachSeconds(unit) : 0;
@@ -601,12 +627,21 @@ export class DispatchEngine {
    * Simulator estimate of the minute a fire is out with the units attacking it now plus one
    * more engine starting at each minute in `extraArrivals`, or null if not by the horizon.
    */
-  projectedOutMinute(index: number, extraArrivals: readonly number[] = []): number | null {
+  projectedOutMinute(
+    index: number,
+    extraArrivals: readonly number[] = [],
+    extraRates?: readonly number[],
+  ): number | null {
     const fire = this.fires[index];
     if (fire.outMinute !== null) return fire.outMinute;
-    const arrivals = this.fireAttackers(index).map((unit) =>
+    const attackers = this.fireAttackers(index);
+    const arrivals = attackers.map((unit) =>
       unit.status === "on_scene" ? this.minute : this.minute + (this.unitEtaMinutes(unit) ?? 0),
     );
+    const rates = [
+      ...attackers.map((unit) => this.unitLineMetersPerMinute(unit)),
+      ...extraArrivals.map((_, i) => extraRates?.[i] ?? ENGINE_LINE_METERS_PER_MINUTE),
+    ];
     return projectOutMinute(
       fire.target,
       this.fireFrames,
@@ -615,6 +650,7 @@ export class DispatchEngine {
       fire.lineMeters,
       [...arrivals, ...extraArrivals],
       this.horizonMinutes,
+      rates,
     );
   }
 
@@ -641,6 +677,7 @@ export class DispatchEngine {
         outMinute: this.projectedOutMinute(
           index,
           chosen.map((c) => c.arrival),
+          chosen.map((c) => this.unitLineMetersPerMinute(c.unit)),
         ),
       };
     });
@@ -650,9 +687,16 @@ export class DispatchEngine {
    * Add a unit that is already out in the area (a Studio crew leaving the fire). It starts
    * available at `node` and withdraws to `homeNode`.
    */
-  addUnit(id: string, stationId: string, node: number, homeNode: number): UnitState {
+  addUnit(
+    id: string,
+    stationId: string,
+    node: number,
+    homeNode: number,
+    kind: GroundKind = DISPATCH_ENGINE_KIND,
+  ): UnitState {
     const unit: UnitState = {
       id,
+      kind,
       stationId,
       homeNode,
       status: "available",
@@ -673,6 +717,135 @@ export class DispatchEngine {
 
   get closedEdges(): ReadonlySet<number> {
     return this.closed;
+  }
+
+  /**
+   * Route units per apparatus class over `access` (one entry per area edge, from
+   * studio/crewDispatch.ts `accessTableFor`), and set unit kinds by id (others keep theirs).
+   * Planner closures and the fire still block every class.
+   */
+  setApparatusAccess(
+    access: readonly EdgeAccess[] | null,
+    kinds: ReadonlyMap<string, GroundKind> = new Map(),
+    notes: readonly string[] = [],
+  ): void {
+    this.access = access && access.length === this.area.edges.length ? access : null;
+    for (const unit of this.units) unit.kind = kinds.get(unit.id) ?? unit.kind;
+    this.apparatusNotes = this.access ? [...notes] : [];
+  }
+
+  /** How unit kinds and road access were decided (sources, assumptions), for the agent. */
+  apparatusNotes: string[] = [];
+
+  get apparatusAccess(): boolean {
+    return this.access !== null;
+  }
+
+  unitClass(unit: UnitState): AccessClass {
+    return GROUND_APPARATUS[unit.kind].access;
+  }
+
+  /** Seconds for `unit` to drive an edge: its class's speed there, else the edge's free-flow. */
+  unitEdgeSeconds(unit: UnitState, edge: number): number {
+    const kmh = this.access?.[edge].byClass[this.unitClass(unit)].speedKmh;
+    return kmh ? this.area.edges[edge].lengthMeters / (kmh / 3.6) : edgeSeconds(this.area, edge);
+  }
+
+  /** Fastest drives for `unit` from `from` over the roads its class may use, avoiding `blocked`. */
+  unitTree(unit: UnitState, from: number, blocked: (edge: number) => boolean): ShortestPathTree {
+    const access = this.access;
+    if (!access) return shortestPathTree(this.area, from, blocked);
+    const cls = this.unitClass(unit);
+    return shortestPathTree(
+      this.area,
+      from,
+      (edge) => blocked(edge) || !access[edge].byClass[cls].passable,
+      {
+        arcs: this.area.allOutgoing ?? this.area.outgoing,
+        seconds: (edge) => this.unitEdgeSeconds(unit, edge),
+      },
+    );
+  }
+
+  /** The first edge closed to `unit`'s class on `steps`, as a no-access reason; else null. */
+  private firstClosedToClass(unit: UnitState, steps: readonly PathStep[]): NoAccess | null {
+    const access = this.access;
+    if (!access) return null;
+    const cls = this.unitClass(unit);
+    for (const step of steps) {
+      const result = access[step.edge].byClass[cls];
+      if (!result.passable) {
+        return {
+          rule: result.rule,
+          why: `${RULE_TEXT[result.rule]}: ${result.notes[result.notes.length - 1] ?? RULE_TEXT[result.rule]}`,
+          road: roadLabel(this.area.edges[step.edge]),
+        };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Why `unit` cannot reach node `target` from `from` although an unrestricted vehicle could
+   * (avoiding fire and closures): the first edge closed to its class on that vehicle's route.
+   * Null when access is off or roads (fire, closures) are the block.
+   */
+  noAccessTo(unit: UnitState, from: number, target: number, blocked: (edge: number) => boolean): NoAccess | null {
+    if (!this.access) return null;
+    const tree = shortestPathTree(this.area, from, blocked, {
+      arcs: this.area.allOutgoing ?? this.area.outgoing,
+    });
+    const open = routeTo(this.area, tree, target);
+    return open ? this.firstClosedToClass(unit, open.steps) : null;
+  }
+
+  /**
+   * Why `unit` cannot attack fire `index` (attackRoute is null): the rule on the unrestricted
+   * route toward the fire, or the reach limit. Null when access is off.
+   */
+  attackNoAccess(unit: UnitState, index: number): NoAccess | null {
+    if (!this.access || unit.status === "stranded") return null;
+    const blocked = this.blockedAt(this.minute);
+    const from = this.unitNextNode(unit);
+    const tree = shortestPathTree(this.area, from, blocked, {
+      arcs: this.area.allOutgoing ?? this.area.outgoing,
+    });
+    const node = this.nearestReached(tree, this.fires[index].target.location);
+    const open = node.node < 0 ? null : routeTo(this.area, tree, node.node);
+    const km = MAX_ROAD_GAP_METERS / 1000;
+    if (!open || node.meters > MAX_ROAD_GAP_METERS)
+      return { rule: null, why: `no open road within ${km} km of the fire (fire or closures)`, road: null };
+    return (
+      this.firstClosedToClass(unit, open.steps) ?? {
+        rule: null,
+        why: `no road its class can use within ${km} km of the fire`,
+        road: null,
+      }
+    );
+  }
+
+  private nearestReached(tree: ShortestPathTree, location: LonLat): { node: number; meters: number } {
+    let best = -1;
+    let bestMeters = Infinity;
+    for (let node = 0; node < this.area.nodes.length; node += 1) {
+      if (!Number.isFinite(tree.seconds[node])) continue;
+      const meters = groundMeters(this.area.nodes[node], location);
+      if (meters < bestMeters) {
+        best = node;
+        bestMeters = meters;
+      }
+    }
+    return { node: best, meters: bestMeters };
+  }
+
+  /** Grass-equivalent line one unit builds per minute (studio/apparatus.ts rates; 0 if none). */
+  unitLineMetersPerMinute(unit: UnitState): number {
+    return GROUND_APPARATUS[unit.kind].line ? grassRateMetersPerHour(unit.kind) / 60 : 0;
+  }
+
+  private noAccessText(reason: NoAccess | null): string {
+    if (!reason) return "";
+    return ` No access for its class: ${reason.rule ? `${reason.rule} ` : ""}${reason.why}${reason.road ? ` (${reason.road})` : ""}.`;
   }
 
   /**
@@ -790,8 +963,11 @@ export class DispatchEngine {
 
     if (order.type === "recall_unit") {
       if (unit.status === "available") return reject(`${unit.id} is already at its station.`);
-      const route = routeTo(this.area, shortestPathTree(this.area, from, blocked), unit.homeNode);
-      if (!route) return reject(`${unit.id} has no route home avoiding fire and closed roads.`);
+      const route = routeTo(this.area, this.unitTree(unit, from, blocked), unit.homeNode);
+      if (!route)
+        return reject(
+          `${unit.id} has no route home avoiding fire and closed roads.${this.noAccessText(this.noAccessTo(unit, from, unit.homeNode, blocked))}`,
+        );
       this.sendUnit(unit, from, route, "returning", null, null);
       return { order, accepted: true, note: `Returning to ${unit.stationId}.` };
     }
@@ -815,7 +991,10 @@ export class DispatchEngine {
       let seconds = 0;
       if (!(unit.task === "fire_attack" && unit.fire === index)) {
         const plan = this.attackRoute(unit, index);
-        if (!plan) return reject(`${unit.id} has no road to ${fire.target.name} avoiding fire.`);
+        if (!plan)
+          return reject(
+            `${unit.id} has no road to ${fire.target.name} avoiding fire.${this.noAccessText(this.attackNoAccess(unit, index))}`,
+          );
         const fromStation = unit.status === "available";
         this.sendUnit(unit, from, plan.route, "en_route", "fire_attack", null, plan.node);
         unit.fire = index;
@@ -851,13 +1030,11 @@ export class DispatchEngine {
     if (order.task !== "evacuation_support" && order.task !== "structure_defense") {
       return reject(`Unknown zone task ${String(order.task)}; use attack_fire for a fire.`);
     }
-    const route = routeTo(
-      this.area,
-      shortestPathTree(this.area, from, blocked),
-      this.area.zones[index].node,
-    );
+    const route = routeTo(this.area, this.unitTree(unit, from, blocked), this.area.zones[index].node);
     if (!route)
-      return reject(`${unit.id} cannot reach ${order.zone_id} avoiding fire and closed roads.`);
+      return reject(
+        `${unit.id} cannot reach ${order.zone_id} avoiding fire and closed roads.${this.noAccessText(this.noAccessTo(unit, from, this.area.zones[index].node, blocked))}`,
+      );
     const fromStation = unit.status === "available";
     this.sendUnit(unit, from, route, "en_route", order.task, index);
     if (fromStation) this.holdAtStation(unit);
@@ -1110,7 +1287,8 @@ export class DispatchEngine {
   /** Time from the order to an engine at its station reaching the road graph: turnout, then its approach. */
   private approachSeconds(unit: UnitState): number {
     const station = this.area.stations[this.stationIndex.get(unit.stationId) ?? -1];
-    return TURNOUT_SECONDS + (station ? station.approachMeters / (APPROACH_SPEED_KPH / 3.6) : 0);
+    const turnout = this.access ? GROUND_APPARATUS[unit.kind].turnoutMinutes * 60 : TURNOUT_SECONDS;
+    return turnout + (station ? station.approachMeters / (APPROACH_SPEED_KPH / 3.6) : 0);
   }
 
   /** Node the unit is at, or the head of the edge it is driving (it finishes that edge). */
@@ -1204,7 +1382,7 @@ export class DispatchEngine {
           (unit.arrivedMinute ?? 0) < this.minute,
       );
       if (working.length === 0) return;
-      fire.lineMeters += working.length * ENGINE_LINE_METERS_PER_MINUTE;
+      fire.lineMeters += working.reduce((sum, unit) => sum + this.unitLineMetersPerMinute(unit), 0);
       if (fire.lineMeters < this.fireLineNeededMeters(index)) return;
       fire.outMinute = this.minute;
       const hectares = this.fireAreaSquareMeters(index) / 10_000;
@@ -1221,7 +1399,7 @@ export class DispatchEngine {
     this.releasing = true;
     for (const unit of units) {
       const from = this.unitNextNode(unit);
-      const home = routeTo(this.area, shortestPathTree(this.area, from, blocked), unit.homeNode);
+      const home = routeTo(this.area, this.unitTree(unit, from, blocked), unit.homeNode);
       if (home) this.sendUnit(unit, from, home, "returning", null, null);
       else {
         unit.status = "stranded";
@@ -1495,11 +1673,7 @@ export class DispatchEngine {
         core[unit.zone] <= now + UNIT_WITHDRAW_MARGIN_MINUTES
       ) {
         const zoneId = this.area.zones[unit.zone].id;
-        const route = routeTo(
-          this.area,
-          shortestPathTree(this.area, unit.node, blocked),
-          unit.homeNode,
-        );
+        const route = routeTo(this.area, this.unitTree(unit, unit.node, blocked), unit.homeNode);
         if (route) {
           this.sendUnit(unit, unit.node, route, "returning", null, null);
           this.alert(
@@ -1519,17 +1693,13 @@ export class DispatchEngine {
         const from = this.unitNextNode(unit);
         const target =
           unit.status === "returning" || unit.targetNode === null ? unit.homeNode : unit.targetNode;
-        const route = routeTo(this.area, shortestPathTree(this.area, from, blocked), target);
+        const route = routeTo(this.area, this.unitTree(unit, from, blocked), target);
         if (route) {
           const current = unit.stepElapsedSeconds > 0 ? [unit.steps[unit.stepIndex]] : [];
           unit.steps = [...current, ...route.steps];
           unit.stepIndex = 0;
         } else {
-          const home = routeTo(
-            this.area,
-            shortestPathTree(this.area, from, blocked),
-            unit.homeNode,
-          );
+          const home = routeTo(this.area, this.unitTree(unit, from, blocked), unit.homeNode);
           if (home && unit.status !== "returning") {
             this.alert(
               "unit_stranded",
@@ -1556,7 +1726,7 @@ export class DispatchEngine {
       }
       while (budget > 0 && unit.stepIndex < unit.steps.length) {
         const step = unit.steps[unit.stepIndex];
-        const left = edgeSeconds(this.area, step.edge) - unit.stepElapsedSeconds;
+        const left = this.unitEdgeSeconds(unit, step.edge) - unit.stepElapsedSeconds;
         if (left > budget) {
           unit.stepElapsedSeconds += budget;
           budget = 0;
@@ -1670,7 +1840,7 @@ export class DispatchEngine {
     return pointAlongStep(
       this.area,
       step,
-      unit.stepElapsedSeconds / edgeSeconds(this.area, step.edge),
+      unit.stepElapsedSeconds / this.unitEdgeSeconds(unit, step.edge),
     );
   }
 
@@ -1685,7 +1855,7 @@ export class DispatchEngine {
     if (unit.status !== "en_route" && unit.status !== "returning") return null;
     let seconds = unit.holdSeconds - unit.stepElapsedSeconds;
     for (let i = unit.stepIndex; i < unit.steps.length; i += 1)
-      seconds += edgeSeconds(this.area, unit.steps[i].edge);
+      seconds += this.unitEdgeSeconds(unit, unit.steps[i].edge);
     return Math.max(0, seconds / SECONDS_PER_MINUTE);
   }
 
