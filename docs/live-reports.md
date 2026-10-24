@@ -327,8 +327,10 @@ Planner rules (`livecore.planner.plan`, constants named in code):
   back to `temporary_refuge` when neither is reachable), snapped to their nearest
   road node, excluding destinations inside the fire estimate and shelters with a
   public `shelter_full` item. Multi-source Dijkstra on free-flow travel time
-  (`length_m / speed_kph`). Never uses an edge whose `segment_id` is blocked or
-  whose midpoint lies inside the fire estimate. Unreachable -> `no_route: true`.
+  (`length_m / speed_kph`), times the simulated congestion factor of each directed
+  edge when the twin is ready (see "Congestion-aware planning" below). Never uses an
+  edge whose `segment_id` is blocked or whose midpoint lies inside the fire estimate.
+  Unreachable -> `no_route: true`. `eta_min` stays free-flow.
 - Blocked segments for guidance are road-state items with `status: "blocked"` and
   `public: true` (this includes controller confirmations). The impact analysis
   (`POST incidents/{id}/impact`) starts from the same blocks and toggles one segment.
@@ -358,7 +360,12 @@ An ETA change alone is not a change. `live_proposals` document (`Proposal`):
   "cause_segment_ids": ["osm-way:10287575:0"],  // newly blocked backed segments; on pending, plus crowd-only segments driving its changes
   "inputs": { "fire_as_of": "2018-11-08T16:00:00Z", "fire_method": "model_nowcast",
               "blocked_segment_ids": ["osm-way:10287575:0"], "full_destination_ids": [],
-              "planner_version": "planner-v1", "controller": "twin" },
+              "planner_version": "planner-v4", "controller": "twin",
+              "congestion": "twin@2018-11-08T16:10:00Z",   // or "unavailable" (free-flow); simulated input
+              "congestion_evidence_class": "simulated",     // null when unavailable
+              "congested_edges": 214,                       // edges with a factor > 1 in that twin read
+              "incumbents": 31, "incumbents_with_edges": 31, // published routes held by hysteresis
+              "hysteresis": { "min_gain_s": 120.0, "min_gain_fraction": 0.15, "min_dwell_s": 900.0 } },
   "controller": { "id": "twin", "version": "twin-controller-v1", "fallback": null },  // see Controllers
   "twin": TwinEvidence | null,            // TwinController only; see Controllers
   "changes": [
@@ -420,6 +427,57 @@ pending proposal is kept and `replan` returns its id again.
 
 An automatic replan triggered by a `situation` or `command` read runs in a background
 thread, so the read never waits for it; its proposals appear in the next `command` poll.
+
+### Congestion-aware planning (planner-v4, ADR 0031-congestion-aware-planner)
+
+Every replan reads the traffic twin's current per-edge state once (simulated; `inputs.congestion
+= "twin@<twin clock>"`) and multiplies each directed edge's search cost by the same factor as
+responder routes: `factor = clamp(free_flow_kph / speed_kph, 1, 10)` on edges with at least
+`CONGESTION_MIN_VEH` (3) simulated vehicles (speed 0 gives 10), 1 elsewhere. So the edge cost is
+
+    cost_s = length_m / (speed_kph / 3.6) x fire_weight x factor
+
+with `fire_weight` 1, `EXPOSED_COST_BUFFER` (5) or `EXPOSED_COST_INSIDE` (20) by pass, as before.
+Route selection, destination choice and alternatives use it; `eta_min` and `distance_m` do not
+(they stay free-flow). While the twin is warming, busy or failed, or with `LIVE_CONTROLLER=rule`
+before the twin was built, the plan is free-flow and `inputs.congestion` is `"unavailable"`.
+Congestion is read only when a replan happens for another reason (fire, block, shelter, manual);
+it never triggers a replan by itself. The impact analysis stays free-flow.
+
+Hysteresis, so zones do not swap exits as queues move. Each zone's published route is its
+incumbent: its edges come from `live_plan_routes` (the edges of every proposed route, keyed by
+zone, destination and `via`; never served), or, when unknown, the cheapest route to the same
+destination now. Within each routing pass, the zone keeps the incumbent unless
+
+    new_cost_s <= incumbent_cost_s - max(SWITCH_MIN_GAIN_S, SWITCH_MIN_GAIN_FRACTION x incumbent_cost_s)
+
+(120 s, 0.15), both costs measured now with the same edge costs, and in any case keeps it for
+`SWITCH_MIN_DWELL_S` (900 drill seconds) after the zone's guidance was published. Safety rules
+come first: an incumbent over a blocked segment, into a fire class the pass does not allow, or to
+a destination that is no longer usable (full, inside the fire, a refuge near it) is never kept.
+`crowd_influence` plans with and without crowd-only blocks under the same congestion and
+incumbents, so only the blocks differ. The planner is deterministic for given inputs.
+
+### Record comparison harness (`live_compare_record`)
+
+A headless, simulated planning experiment (not a claim about 2018):
+
+    python manage.py live_compare_record --confirm-delay-min 5 --out /tmp/record-compare
+
+runs the live twin inputs (seed `--seed`, default 7) and the planner on one simulation clock over
+a drill window (default 14:30Z-18:00Z = 06:30-10:00 PST, 2018-11-08), three ways, each a fresh twin:
+`A` the bundle's historical actions only; `B` a controller who confirms each 2018 record entry
+that enters the queue as `road_blocked` or `fire_seen` (`groundrecord.REPORT_KIND`, entries with
+a point) at its time + N minutes (entries queued before the start are confirmed at the start),
+approves every resulting change, and between confirms lets the auto policy publish pure
+unexposed reroutes on a new fire estimate; `B_free` as B with the previous planner (free-flow,
+no hysteresis). Guidance reaches the twin as `twin_service` syncs it (`close_road` hard,
+`order_zone`, `reroute_zone`). It writes `<out>.json` (`kind: crisistwin_record_comparison`,
+`evidence_class: simulated`) and `<out>.md`: per zone and in total, the twin order time and the
+drill's first `evacuate_now`, arrivals by checkpoint (default 15:30, 16:30, 17:30, 18:00Z),
+exposure (vehicles on fire-exposed edges or waiting at an origin in the fire area, sampled every
+`--sample-s` 60 s, in veh-min), trapped-by-fire (twin total), destination and route changes, and
+each zone's published history. No database writes; about 1-2 min.
 
 ## Controllers
 

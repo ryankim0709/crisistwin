@@ -195,19 +195,21 @@ def fresh_responders(incident_id: str, now: datetime) -> list[ResponderPosition]
     return [ResponderPosition(d["party_key"], (d["coord"][0], d["coord"][1]), d["at"]) for d in docs]
 
 
-def crowd_influence(snapshot: Snapshot) -> dict[str, frozenset[str]]:
+def crowd_influence(snapshot: Snapshot, ctx: controllers.PlanContext | None = None) -> dict[str, frozenset[str]]:
     """Zones whose guidance is driven by crowd-only blocked segments -> those segments.
 
     Compares the rule plan with and without the blocks backed only by civilian reports
-    (``livecore.policy.crowd_driven_zones``). The segments are the crowd-only ones on the
+    (``livecore.policy.crowd_driven_zones``), both with the replan's congestion and incumbents
+    (``ctx``), so only the blocks differ. The segments are the crowd-only ones on the
     route the zone would take without them (empty when the effect is indirect).
     """
     crowd = crowd_only_segments(snapshot.blocked, snapshot.road_state)
     if not crowd:
         return {}
     drill, replay_now, fire, full = snapshot.index.drill, snapshot.clock.replay_now, snapshot.fire, snapshot.full_destinations
-    with_crowd = plan(drill, replay_now, fire, snapshot.blocked, full)
-    without = plan(drill, replay_now, fire, snapshot.blocked - crowd, full)
+    congestion, held = (ctx.congestion, ctx.incumbents) if ctx is not None else (None, None)
+    with_crowd = plan(drill, replay_now, fire, snapshot.blocked, full, congestion=congestion, incumbents=held)
+    without = plan(drill, replay_now, fire, snapshot.blocked - crowd, full, congestion=congestion, incumbents=held)
     zones = crowd_driven_zones(with_crowd, without)
     return {
         g.zone_id: frozenset(seg for seg in (g.route.segment_ids if g.route else ()) if seg in crowd)
@@ -368,11 +370,14 @@ def replan(snapshot: Snapshot, causes: list[str]) -> tuple[dict[str, Any] | None
     published_docs = current_guidance(incident_id)
     published = published_summaries(published_docs)
     result = controllers.active().propose(snapshot, published)
+    ctx = result.context or controllers.plan_context(snapshot, published)
     guidance = with_alternatives(index.drill, result.guidance, snapshot.blocked, snapshot.fire.geometry,
-                                 snapshot.full_destinations, preference_counts(incident_id, now))
+                                 snapshot.full_destinations, preference_counts(incident_id, now),
+                                 congestion=ctx.congestion)
     changes = diff(published, guidance)
     refresh_published(index, published_docs, guidance, snapshot.fire.geometry)
-    crowd = crowd_influence(snapshot)
+    controllers.remember_routes(incident_id, guidance, now, replay_at)
+    crowd = crowd_influence(snapshot, ctx)
     if "manual" in causes:
         auto, rest = [], list(changes)
     else:
@@ -388,7 +393,7 @@ def replan(snapshot: Snapshot, causes: list[str]) -> tuple[dict[str, Any] | None
         if s.segment_id is None or s.segment_id not in covered
     ]
 
-    inputs = {**plan_inputs(snapshot), "controller": result.controller["id"]}
+    inputs = {**plan_inputs(snapshot), "controller": result.controller["id"], **ctx.inputs()}
     new_blocked = set(inputs["blocked_segment_ids"]) - set(last_plan_inputs(snapshot).get("blocked_segment_ids") or [])
     backed_new = new_blocked - crowd_only_segments(snapshot.blocked, snapshot.road_state)
     crowd_used = {seg for c in rest for seg in crowd.get(c.zone_id, ())}

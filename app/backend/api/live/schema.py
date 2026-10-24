@@ -157,6 +157,19 @@ VALIDATORS: dict[str, dict[str, Any]] = {
             "expires_at": DATE,
         },
     ),
+    "live_plan_routes": _schema(
+        ["incident_id", "zone_id", "destination_id", "via_key", "edge_ids"],
+        {
+            "incident_id": STR,
+            "zone_id": STR,
+            "destination_id": STR,
+            "via_key": STR,
+            "via": {"bsonType": "array", "items": STR},
+            "edge_ids": {"bsonType": "array", "items": STR},
+            "planned_at": DATE,
+            "replay_at": NULLABLE_DATE,
+        },
+    ),
     "live_responder_locations": _schema(
         ["incident_id", "party_key", "coord", "at", "expires_at"],
         {
@@ -207,6 +220,10 @@ INDEXES: dict[str, list[IndexModel]] = {
         IndexModel([("incident_id", ASCENDING), ("zone_id", ASCENDING), ("destination_id", ASCENDING)]),
         IndexModel([("expires_at", ASCENDING)], expireAfterSeconds=0),
     ],
+    "live_plan_routes": [
+        IndexModel([("incident_id", ASCENDING), ("zone_id", ASCENDING), ("destination_id", ASCENDING),
+                    ("via_key", ASCENDING)], unique=True),
+    ],
     "live_responder_locations": [
         IndexModel([("incident_id", ASCENDING), ("party_key", ASCENDING)], unique=True),
         IndexModel([("expires_at", ASCENDING)], expireAfterSeconds=0),
@@ -222,6 +239,7 @@ DRILL_DATA_COLLECTIONS = (
     "live_proposals",
     "live_checkins",
     "live_destination_choices",
+    "live_plan_routes",
     "live_responder_locations",
 )
 """Dropped by ``live_init_db --drop-drill-data`` (devices are kept so tokens stay valid)."""

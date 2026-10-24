@@ -108,8 +108,10 @@ def alternatives(
     blocked_segment_ids: Collection[str],
     avoid_polygon: MultiPolygon | None,
     full_destination_ids: Collection[str],
+    congestion: Mapping[str, float] | None = None,
 ) -> dict[str, list[Route]]:
-    """Zone id -> routes to distinct destinations, the planner's first.
+    """Zone id -> routes to distinct destinations, the planner's first. ``congestion`` (simulated
+    edge factors) weights the search as in ``planner.plan``.
 
     Round n reruns ``best_routes`` with every destination chosen in earlier rounds for these
     zones treated as unavailable, so each zone gets its next-nearest usable destination.
@@ -118,7 +120,7 @@ def alternatives(
     excluded = set(full_destination_ids)
     for _ in range(ALTERNATIVE_ROUNDS - 1):
         excluded |= {r.destination_id for routes in out.values() for r in routes}
-        routes = best_routes(drill, blocked_segment_ids, avoid_polygon, excluded)
+        routes = best_routes(drill, blocked_segment_ids, avoid_polygon, excluded, congestion=congestion)
         for zone_id, have in out.items():
             r = routes.get(zone_id)
             if r is not None and all(r.destination_id != h.destination_id for h in have):

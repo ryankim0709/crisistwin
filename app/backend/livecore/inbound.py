@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import heapq
 import math
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from typing import Literal
 
@@ -28,6 +28,7 @@ from .drill import Drill
 from .geo import LonLat, MultiPolygon, haversine_m
 from .routing import (
     _INSIDE,
+    CONGESTION_MAX_FACTOR,
     Route,
     _build_route,
     _edge_costs,
@@ -35,12 +36,14 @@ from .routing import (
     _index,
     _nearest_node,
     _with_exposure,
+    validate_congestion,
 )
 
 INBOUND_SNAP_MAX_M = 1000.0
 """An origin or target farther than this from a routable road node is off the network."""
-CONGESTION_MAX_FACTOR = 10.0
-"""Upper bound of a congestion factor (a stopped edge counts as 10x its free-flow time)."""
+CONGESTION_MIN_VEH = 3
+"""An edge is congested only with at least this many simulated vehicles on it (one car waiting
+at a junction is not a jam). Shared by responder routes and the evacuation planner."""
 
 InboundReason = Literal["origin_off_network", "target_off_network", "origin_in_fire", "target_in_fire", "no_open_road"]
 
@@ -88,6 +91,18 @@ def congestion_factor(speed_kph: float, free_flow_kph: float) -> float:
     return min(CONGESTION_MAX_FACTOR, max(1.0, free_flow_kph / speed_kph))
 
 
+def congestion_factors(speeds: Mapping[str, tuple[int, float, float]], known_edges: Collection[str]
+                       ) -> dict[str, float]:
+    """Directed edge id -> ``congestion_factor`` for the simulated twin's occupied edges
+    (``speeds``: edge id -> (vehicles, mean speed kph, free-flow kph)) that are in ``known_edges``,
+    have at least CONGESTION_MIN_VEH vehicles and a factor above 1. Other edges are free-flow."""
+    return {
+        eid: f
+        for eid, (veh, speed, free_flow) in sorted(speeds.items())
+        if veh >= CONGESTION_MIN_VEH and eid in known_edges and (f := congestion_factor(speed, free_flow)) > 1.0
+    }
+
+
 def inbound_route(
     drill: Drill,
     origin: LonLat,
@@ -108,10 +123,7 @@ def inbound_route(
     an end inside the fire estimate, or no open road between them. Origin and target on the
     same node give a zero-length route.
     """
-    factors = dict(congestion or {})
-    for eid, f in factors.items():
-        if not (math.isfinite(f) and 1.0 <= f <= CONGESTION_MAX_FACTOR):
-            raise ValueError(f"congestion factor of {eid} must be in [1, {CONGESTION_MAX_FACTOR}], got {f!r}")
+    factors = validate_congestion(congestion)
     index = _index(drill)
     roads = drill.roads
     origin_ok, target_ok = _end_nodes(drill)

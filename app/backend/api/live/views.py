@@ -908,7 +908,7 @@ def set_drill(incident_id: str, action: str, replay_start_raw: Any = None, speed
         update = {"replay_start": clock.replay_now, "started_at": now, "speed": speed}
     elif action == "reset":
         update = {"replay_start": DEFAULT_REPLAY_START, "started_at": None, "speed": 1.0}
-        for name in ("live_guidance", "live_proposals", "live_checkins", "live_destination_choices"):
+        for name in ("live_guidance", "live_proposals", "live_checkins", "live_destination_choices", "live_plan_routes"):
             col(name).delete_many({"incident_id": incident_id})
         # 2018 record reports re-enter as the clock passes them again.
         col("live_reports").delete_many({"incident_id": incident_id, "evidence_class": "historical_record"})

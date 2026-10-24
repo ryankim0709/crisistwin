@@ -196,6 +196,13 @@ over HTTP in about 5 s, with no simulator or browser: report, triage, replan and
 guidance on the phone, destination choice, check-ins, responder position and a check task. It
 writes synthetic drill data; run `live_drill --reset` afterwards.
 
+`python manage.py live_compare_record --confirm-delay-min 5 --out /tmp/record-compare` (same env;
+no server, no database writes, about 1-2 min) is a simulated planning experiment: the live twin
+and planner headless from 14:30Z to 18:00Z, without a controller, with one who confirms the 2018
+record's `road_blocked`/`fire_seen` entries N minutes late, and with the previous free-flow
+planner. It writes `.json` and `.md`; see [live-reports.md](../../docs/live-reports.md)
+("Record comparison harness") and ADR `0031-congestion-aware-planner.md`.
+
 ### Incident intelligence (`/api/intel/…`)
 
 Public agency pages, fetched by the Apify Actor in `actors/incident-intel/`, become source

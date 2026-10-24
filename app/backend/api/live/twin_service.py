@@ -121,21 +121,29 @@ def _planner_destinations(inputs, twinmod, destination_nodes) -> tuple[Any, dict
     return dataclasses.replace(inputs, scenario=scenario, fingerprint=fingerprint, cache={}), moved
 
 
+def build_camp_inputs(seed: int = TWIN_SEED):
+    """The Camp twin inputs the live drill uses (destinations on the planner's road nodes), built
+    synchronously. ``seed``: ``TrafficParams.seed``. Used by the background warm-up and by
+    headless experiments (``live_compare_record``)."""
+    twinmod = _import_sim()
+    inputs = twinmod.camp_inputs(
+        _package("LIVE_TWIN_PACKAGE", CAMP_PACKAGE),
+        _package("LIVE_TWIN_ROADS_PACKAGE", CAMP_ROADS_PACKAGE),
+        TWIN_DEMAND,
+        seed,
+    )
+    inputs, moved = _planner_destinations(inputs, twinmod, routing._index(get_index().drill).destination_nodes)
+    if moved:
+        log.info("live twin: %d destinations moved to the planner's road node: %s", len(moved),
+                 ", ".join(f"{k} {a}->{b}" for k, (a, b) in sorted(moved.items())))
+    twinmod._template(inputs)  # engine at the scenario start + the shared FireTimeline (the slow part)
+    return inputs
+
+
 def _build_inputs() -> None:
     t0 = time.perf_counter()
     try:
-        twinmod = _import_sim()
-        inputs = twinmod.camp_inputs(
-            _package("LIVE_TWIN_PACKAGE", CAMP_PACKAGE),
-            _package("LIVE_TWIN_ROADS_PACKAGE", CAMP_ROADS_PACKAGE),
-            TWIN_DEMAND,
-            TWIN_SEED,
-        )
-        inputs, moved = _planner_destinations(inputs, twinmod, routing._index(get_index().drill).destination_nodes)
-        if moved:
-            log.info("live twin: %d destinations moved to the planner's road node: %s", len(moved),
-                     ", ".join(f"{k} {a}->{b}" for k, (a, b) in sorted(moved.items())))
-        twinmod._template(inputs)  # engine at the scenario start + the shared FireTimeline (the slow part)
+        inputs = build_camp_inputs()
     except Exception as exc:  # noqa: BLE001 - any failure means "no twin"; the rule controller takes over
         log.exception("live twin: building the Camp twin inputs failed")
         with _inputs_lock:
@@ -477,12 +485,22 @@ def edge_speeds(snapshot: Snapshot, lock_timeout_s: float = 2.0) -> dict[str, tu
     synced twin at the drill's ``replay_now``. Simulated. Raises ``TwinUnavailable`` (warming,
     failed, busy) or ``sim.twin.TwinError``; waits at most ``lock_timeout_s`` for the lock."""
 
-    def run(sess, twin, twinmod):
-        engine = twin.engine
-        edges = engine.s.edges
-        return {edges[i].id: (n, speed, edges[i].speed_kph) for i, n, speed, _ in engine.edge_rows(engine.now_s or 0)}
+    return _with_twin(snapshot, lambda sess, twin, twinmod: edge_speed_rows(twin), lock_timeout_s)
 
-    return _with_twin(snapshot, run, lock_timeout_s)
+
+def edge_speeds_at(snapshot: Snapshot, lock_timeout_s: float = 2.0) -> tuple[str, dict[str, tuple[int, float, float]]]:
+    """``(twin clock ISO, edge_speeds)`` from one locked read: the simulated drill time the speeds
+    describe, for the planner's ``inputs.congestion`` label. Same errors as ``edge_speeds``."""
+
+    return _with_twin(snapshot, lambda sess, twin, twinmod: (twin.now, edge_speed_rows(twin)), lock_timeout_s)
+
+
+def edge_speed_rows(twin) -> dict[str, tuple[int, float, float]]:
+    """Directed edge id -> (vehicles, mean speed kph, free-flow kph) for the occupied edges of
+    ``twin`` (a ``sim.twin.Twin``) at its ``now``. Simulated."""
+    engine = twin.engine
+    edges = engine.s.edges
+    return {edges[i].id: (n, speed, edges[i].speed_kph) for i, n, speed, _ in engine.edge_rows(engine.now_s or 0)}
 
 
 def monitor(snapshot: Snapshot) -> dict[str, Any]:
