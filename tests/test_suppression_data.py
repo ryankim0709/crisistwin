@@ -8,6 +8,11 @@ import unittest
 from tools import suppression_data as sd
 
 
+# tools/ca_fire_bases.json is not in git (the CAL FIRE layer states no open licence); build it
+# locally with `python -m tools.suppression_data --refresh-bases` to run these.
+BASES_SKIP = "tools/ca_fire_bases.json not built (python -m tools.suppression_data --refresh-bases)"
+
+
 class ResourcesSchemaTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -171,6 +176,7 @@ class UnitsAndPhysicsTests(unittest.TestCase):
         self.assertLess(rt["turnout_s"]["value"], rt["wildland_turnout_s"]["value"])
         self.assertLess(rt["hand_crew_mobilization_min"]["value"], rt["dozer_mobilization_min"]["value"])
 
+    @unittest.skipUnless(sd.BASES_PATH.exists(), BASES_SKIP)
     def test_engines_per_station_estimate_is_consistent(self) -> None:
         bases = sd.load_bases()["bases"]
         state = [b for b in bases if b["owner"] == "STATE" and b["type"] in ("FSA", "FSB", "FSAB")]
@@ -250,6 +256,7 @@ class RoadAccessTests(unittest.TestCase):
         self.assertTrue(any("tracktype inferred" in n for n in result["notes"]))
 
 
+@unittest.skipUnless(sd.BASES_PATH.exists(), BASES_SKIP)
 class BasesTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:

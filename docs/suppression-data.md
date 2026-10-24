@@ -9,7 +9,7 @@ constraints, California bases and response times. Decision record:
 | File | What |
 | --- | --- |
 | `tools/suppression_resources.json` | 250 values, each with `unit` and either `source_id` + `page` or `assumption: true` + `reason` |
-| `tools/ca_fire_bases.json` | 1,046 active CAL FIRE-layer facilities with coordinates, agency, unit, owner, funding |
+| `tools/ca_fire_bases.json` (not in git; build with `python -m tools.suppression_data --refresh-bases`) | 1,046 active CAL FIRE-layer facilities with coordinates, agency, unit, owner, funding. Kept out of git because the source layer states no open licence |
 | `tools/suppression_data.py` | loader, validator, summary, unit converters, `road_access()`, `--refresh-bases` |
 | `tests/test_suppression_data.py` | schema, units, "every number sourced or flagged", road rules |
 
