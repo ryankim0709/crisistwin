@@ -88,6 +88,37 @@ cell (z11, 76 m pixels, for 120 m cells at 38° N, instead of z13). Each coarse 
 the mean of the pixels whose centres fall inside it. Slope and aspect then come from the
 coarse elevations by Horn's method, at the coarse ground cell size.
 
+**Terrain artefacts and water (both paths, native and coarse).** At some coastlines the
+terrarium tiles hold values deeper than any ocean: −13,500 m near Point Mugu and
+−12,700 m near Carpinteria. In the first builds of the Santa Monica Mountains and Ventura
+regions these pushed land-cell slope tangents up to about 70, with 255 and 146 land cells
+above 3. The loader now handles terrain like this:
+
+- A tile sample below −500 m or above 9000 m is treated as missing before any averaging.
+- After the fuel codes are known (`repairElevation`):
+  - Open water (98) that is missing or below 0 m is set to 0 m. The board and the slope
+    model want the water surface, not bathymetry. Lakes above sea level keep their
+    surface elevation.
+  - Unmapped cells (offshore, outside CONUS) below 0 m are set to 0 m.
+  - A land cell below −100 m, or with no valid sample, is refilled with the mean of its
+    valid 8-neighbours, growing outward pass by pass. −100 m is below Death Valley
+    (−86 m) and the Salton basin (−70 m).
+- `elevationComplete` is false if any tile was missing, or if more than 1 % of land cells
+  had to be filled.
+
+After the fix:
+
+| Region | Max land slope tangent | Land cells above 3 | Land cells filled |
+| --- | --- | --- | --- |
+| Santa Monica Mountains (60 m) | 1.18 | 0 | 0 |
+| Ventura / Los Padres (90 m) | 1.51 | 0 | 4 of 518,730 |
+
+- In both regions, `elevationComplete` stayed true and every value is finite.
+- Water cells sit at a median of 0 m and a 90th percentile of 2–4 m. The higher water
+  values are inland reservoirs.
+- Water slope reaches 0.44 only in cells at the shoreline. Water carries no fire, so this
+  does not affect spread.
+
 ## What a coarse cell loses
 
 These are real losses, and the page must state the resolution next to any result:
