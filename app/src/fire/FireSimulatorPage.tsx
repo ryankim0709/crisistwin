@@ -1506,7 +1506,7 @@ export default function FireSimulatorPage() {
                     aria-controls="fr-details"
                     onClick={() => setDetailsOpen((open) => !open)}
                   >
-                    {detailsOpen ? "Hide details" : "Details"}
+                    <span className="fr-details-label">{detailsOpen ? "Hide details" : "Details"}</span>
                     <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
                       <path
                         d={detailsOpen ? "M2.5 7.5 6 4l3.5 3.5" : "M2.5 4.5 6 8l3.5-3.5"}
@@ -1518,6 +1518,23 @@ export default function FireSimulatorPage() {
                   </button>
                   <div id="fr-details" className="fr-details" hidden={!detailsOpen}>
                     <div className="fr-card">
+                      <div className="fr-card-row fr-mix-row">
+                        <span>Whole-run mix</span>
+                        <strong>
+                          Spotting{" "}
+                          {run.appliedOptions.spotting.enabled
+                            ? formatShare(run.arrivalBreakdown.spottingSquareMeters, breakdownTotal)
+                            : "off"}{" "}
+                          · Structures{" "}
+                          {run.appliedOptions.structureSpread.enabled
+                            ? formatShare(run.arrivalBreakdown.structureSquareMeters, breakdownTotal)
+                            : "off"}{" "}
+                          · Crown{" "}
+                          {run.crownFire.modelled
+                            ? formatShare(crownShareSquareMeters, crownTotal)
+                            : "n/a"}
+                        </strong>
+                      </div>
                       <div className="fr-card-row">
                         <span>Fuel at ignition</span>
                         <strong>{run.ignition.fuelLabel}</strong>
