@@ -1,9 +1,11 @@
 # Persistence contract
 
-The `api` app has four domain models and two migrations: `0001_initial` creates
-the tables and constraints; `0002_snapshot_immutability` adds reversible
-PostgreSQL triggers. Django's auth migrations provide users. No API endpoints,
-automatic save/replay, data imports, or seed users are added.
+The `api` app's initial four domain models are created by `0001_initial`;
+`0002_snapshot_immutability` adds reversible PostgreSQL triggers. Migrations
+`0003_evacuation_inputs` and `0004_seal_evacuation_datasets` add seven evacuation
+input models and dataset sealing. See the [evacuation input contract](evacuation-persistence.md).
+Django's auth migrations provide users. No API endpoints, automatic save/replay,
+data imports, or seed users are added.
 
 ## Records
 
@@ -11,12 +13,15 @@ automatic save/replay, data imports, or seed users are added.
   `observed`), optional source URL/time and retrieval time, schema version,
   JSON object `content`, and creation time. Observed sources require a URL and
   retrieval time; a null source timestamp means unknown, not fresh. Content is
-  reserved for future typed dataset consumers and is not currently interpreted.
-  Snapshots cannot be updated. Create a new record for a changed source.
+  source metadata rather than a second copy of the relational road/household data.
+  Metadata cannot be updated apart from setting `sealed_at` once via `seal()`;
+  sealed relational inputs cannot be changed. Create a new record for a changed source.
 - `Scenario`: UUID, required Django user `owner`, name, optional region label,
   optional parent scenario and dataset, schema version, JSON `inputs`, free-text
   `assumptions`, creation/update times. Parent scenarios must have the same owner.
-  Region is a display label, not a geometry or dataset identifier.
+  Region is a display label, not a geometry or dataset identifier. The optional
+  dataset must be sealed. Evacuation timing fields and related plans/events are
+  defined in the evacuation contract; `inputs` retains the fire-only shape below.
 - `SimulationRun`: UUID, required scenario, optional pinned dataset, schema
   version, JSON `input_snapshot`, `assumptions_snapshot`, nullable `random_seed`,
   status, error message, creation/start/finish times. Inputs, assumptions, source

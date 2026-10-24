@@ -10,11 +10,15 @@ with explicit inputs/outputs, without importing Django or provider clients.
 ## Database migrations
 
 The `api` app defines dataset snapshots, owned scenarios, simulation runs with
-immutable input snapshots, and fire timeline frames. See the
+immutable input snapshots, and fire timeline frames. It also stores household
+occupants/cars/seats, directed roads, shelters/exits, per-household evacuation
+plans, and timed road closures; see the [evacuation input contract](evacuation-persistence.md).
+See the
 [persistence contract](persistence.md) for fields, payloads, units, migration
 commands, deletion behavior, and integration requirements. These are storage
 models only; scenario save/replay endpoints and frontend persistence are not
-implemented. Existing Docker startup applies the migrations automatically.
+implemented. Traffic execution and traffic run/result storage are separate work.
+Existing Docker startup applies the migrations automatically.
 
 ## API contract
 

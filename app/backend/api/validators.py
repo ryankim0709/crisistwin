@@ -90,3 +90,17 @@ def validate_fire_perimeter_v1(value):
         require_number(point[1], -90, 90, "Latitude")
     if ring[0] != ring[-1]:
         raise ValidationError("The polygon ring must be closed.")
+
+
+def validate_road_geometry_v1(value):
+    require_keys(value, ("type", "coordinates"))
+    if value["type"] != "LineString":
+        raise ValidationError("Road geometry must be a GeoJSON LineString.")
+    points = value["coordinates"]
+    if not isinstance(points, list) or not 2 <= len(points) <= 10000:
+        raise ValidationError("A road needs 2 to 10,000 coordinates.")
+    for point in points:
+        if not isinstance(point, list) or len(point) != 2:
+            raise ValidationError("Road coordinates must be [longitude, latitude].")
+        require_number(point[0], -180, 180, "Longitude")
+        require_number(point[1], -90, 90, "Latitude")
