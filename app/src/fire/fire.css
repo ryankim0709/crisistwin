@@ -1687,6 +1687,15 @@
   left: var(--fr-inset-left, 0px);
 }
 
+/* The imagery date note is long; keep the expanded attribution beside the left panel. */
+.fr-satellite .maplibregl-ctrl-bottom-right {
+  max-width: calc(100% - var(--fr-inset-left, 0px) - 16px);
+}
+
+.fr-satellite .maplibregl-ctrl-attrib.maplibregl-compact-show {
+  max-width: 100%;
+}
+
 @container fr-stage (max-width: 720px) {
   /* Phone: icon-only toggle. */
   .fr-view-label,
