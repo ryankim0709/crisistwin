@@ -1,0 +1,289 @@
+// Story mode: a short guided walk through the replay, built only from bundle data.
+// Each chapter is anchored to a real bundle item (an event, a perimeter or a traffic frame)
+// and carries that item's evidence class. Pure: no React, DOM or MapLibre here.
+import { VARIANT_CAVEATS, featurable, type VariantIndex } from "./compare";
+import { distanceM, inArea } from "./insights";
+import { CAPTION_PLACES, buildCaption, splitSnappedNote } from "./narrative";
+import { frameIndexAt, perimeterIndexAt, simulatedFrontIndexAt } from "./timeline";
+import type { AreaGeometry, EvidenceClass, LngLat, ReplayEvent, ReplayModel } from "./types";
+
+export interface Chapter {
+  id: string;
+  atMs: number;
+  title: string;
+  body: string;
+  evidence: EvidenceClass;
+  /** Coordinates the camera frames for this chapter; empty keeps the current view. */
+  focus: LngLat[];
+  /** The closing what-if comparison instead of a moment on the clock. */
+  reveal?: boolean;
+}
+
+export interface RevealRow {
+  id: string;
+  title: string;
+  question: string;
+  /** Combined exposure (road + home) as a percentage of the baseline run's. */
+  exposurePct: number;
+  /** Vehicles arrived by 10:00 PST (arrived_by_1800z_veh), when the index has it. */
+  arrivedBaseline: number | null;
+  arrivedVariant: number | null;
+}
+
+const HISTORICAL = new Set<EvidenceClass>(["observed", "reported", "reconstructed", "derived"]);
+const MAX_FOCUS_EDGES = 150;
+
+function ringCoords(g: AreaGeometry): LngLat[] {
+  return g.type === "Polygon" ? g.coordinates[0] : g.coordinates.flatMap((poly) => poly[0]);
+}
+
+function edgeCoordLookup(model: ReplayModel): Map<string, LngLat[]> {
+  return new Map((model.roads?.items ?? []).map((e) => [e.id, e.coords]));
+}
+
+function eventCoords(event: ReplayEvent, roads: Map<string, LngLat[]>): LngLat[] {
+  return event.edgeIds.flatMap((id) => roads.get(id) ?? []);
+}
+
+/** Fire area in effect at t: the observed perimeter if any, else the simulated front. */
+function fireAt(model: ReplayModel, t: number): AreaGeometry | null {
+  const p = perimeterIndexAt(model, t);
+  if (p >= 0) return model.perimeters[p].geometry;
+  const s = simulatedFrontIndexAt(model, t);
+  return s >= 0 && model.fireSimulated ? model.fireSimulated.fronts[s].geometry : null;
+}
+
+function fireCoords(model: ReplayModel, t: number): LngLat[] {
+  const g = fireAt(model, t);
+  return g ? ringCoords(g) : [];
+}
+
+/** Below this modelled mean speed an edge counts as jammed for framing the camera. */
+const JAM_KPH = 15;
+/** Frame the gridlock around the reference place, not jams at distant destinations. */
+const GRIDLOCK_RADIUS_M = 8000;
+
+/**
+ * Coordinates of the edges carrying the most modelled vehicles at frame k, optionally only
+ * inside `area` and/or only jammed ones.
+ */
+function busyEdgeCoords(
+  model: ReplayModel,
+  k: number,
+  area: AreaGeometry | null,
+  jammedOnly = false,
+  near: { coord: LngLat; m: number } | null = null,
+): LngLat[] {
+  const traffic = model.traffic;
+  if (!traffic || k < 0) return [];
+  const roads = edgeCoordLookup(model);
+  const out: LngLat[] = [];
+  let taken = 0;
+  const edges = [...traffic.frames[k].edges].sort((a, b) => b[1] - a[1]);
+  for (const [index, veh, speed] of edges) {
+    if (veh <= 0 || taken >= MAX_FOCUS_EDGES) break;
+    if (jammedOnly && speed >= JAM_KPH) continue;
+    const coords = roads.get(traffic.edgeIds[index]);
+    if (!coords || coords.length === 0) continue;
+    const mid = coords[Math.floor(coords.length / 2)];
+    if (area && !inArea(area, mid)) continue;
+    if (near && distanceM(near.coord, mid) > near.m) continue;
+    out.push(...coords);
+    taken += 1;
+  }
+  return out;
+}
+
+function argmax(values: number[]): number {
+  let best = -1;
+  for (let i = 0; i < values.length; i += 1) if (best < 0 || values[i] > values[best]) best = i;
+  return best;
+}
+
+function fmt(n: number): string {
+  return Math.round(n).toLocaleString("en-US");
+}
+
+function firstEvent(model: ReplayModel, test: (e: ReplayEvent) => boolean): ReplayEvent | null {
+  return model.events.find(test) ?? null;
+}
+
+function isOrder(e: ReplayEvent): boolean {
+  return HISTORICAL.has(e.evidenceClass) && (e.type === "evacuation_order" || e.type === "alert_sent") && /\border\b/i.test(e.label);
+}
+
+/** Chapters in clock order. Chapters whose source data is absent are simply left out. */
+export function buildChapters(model: ReplayModel, variants: VariantIndex | null): Chapter[] {
+  const chapters: Chapter[] = [];
+  const roads = edgeCoordLookup(model);
+  const place = CAPTION_PLACES[model.incident.id] ?? null;
+  const fireLine = (t: number) => {
+    const fire = buildCaption(model, t, frameIndexAt(model, t)).fire;
+    return fire ? ` At this moment the ${fire.replace(/^model fire/, "modelled fire")}.` : "";
+  };
+
+  const ignition = firstEvent(model, (e) => e.type === "fire_ignition");
+  const ignitionCoord = model.fireSimulated?.ignition?.coord ?? null;
+  if (ignition) {
+    chapters.push({
+      id: "ignition",
+      atMs: ignition.atMs,
+      title: splitSnappedNote(ignition.label).text,
+      body:
+        "Before the first satellite image, the orange area is a fire-spread model run from this assumed start, " +
+        "not an observation. Alerts and road reports are reconstructed from 2018 records.",
+      evidence: ignition.evidenceClass,
+      focus: [...(ignitionCoord ? [ignitionCoord] : []), ...(place ? [place.coord] : [])],
+    });
+  }
+
+  const order = firstEvent(model, isOrder);
+  if (order) {
+    chapters.push({
+      id: "first-order",
+      atMs: order.atMs,
+      title: "First evacuation order",
+      body: `${splitSnappedNote(order.label).text}.${fireLine(order.atMs)}`,
+      evidence: order.evidenceClass,
+      focus: [...fireCoords(model, order.atMs), ...(place ? [place.coord] : [])],
+    });
+  }
+
+  if (place) {
+    const placeOrder = firstEvent(model, (e) => isOrder(e) && e.label.includes(place.name));
+    if (placeOrder && placeOrder.id !== order?.id) {
+      chapters.push({
+        id: "place-order",
+        atMs: placeOrder.atMs,
+        title: `${place.name} is ordered out`,
+        body: `${splitSnappedNote(placeOrder.label).text}.${fireLine(placeOrder.atMs)}`,
+        evidence: placeOrder.evidenceClass,
+        focus: [...fireCoords(model, placeOrder.atMs), place.coord],
+      });
+    }
+  }
+
+  const traffic = model.traffic;
+  if (traffic && traffic.metrics.length > 0) {
+    const k = argmax(traffic.metrics.map((m) => m.enRouteVeh));
+    const m = traffic.metrics[k];
+    if (m.enRouteVeh > 0) {
+      chapters.push({
+        id: "peak-traffic",
+        atMs: m.atMs,
+        title: "Gridlock on the way out",
+        body:
+          `Modelled peak: ${fmt(m.enRouteVeh)} vehicles on the road at once, ` +
+          `${fmt(m.blockedVeh)} of them unable to move. Violet roads are jammed.`,
+        evidence: traffic.evidenceClass,
+        focus: [
+          ...busyEdgeCoords(model, k, null, true, place ? { coord: place.coord, m: GRIDLOCK_RADIUS_M } : null),
+          ...(place ? [place.coord] : []),
+        ],
+      });
+    }
+  }
+
+  const contraflow = firstEvent(model, (e) => e.type === "contraflow_started" && HISTORICAL.has(e.evidenceClass));
+  if (contraflow) {
+    chapters.push({
+      id: "contraflow",
+      atMs: contraflow.atMs,
+      title: "Contraflow: every lane outbound",
+      body: `${splitSnappedNote(contraflow.label).text}.`,
+      evidence: contraflow.evidenceClass,
+      focus: eventCoords(contraflow, roads),
+    });
+  }
+
+  const blocked = firstEvent(
+    model,
+    (e) => e.type === "road_blocked" && HISTORICAL.has(e.evidenceClass) && /fire|burning/i.test(e.label),
+  );
+  if (blocked) {
+    const coords = eventCoords(blocked, roads);
+    chapters.push({
+      id: "road-blocked",
+      atMs: blocked.atMs,
+      title: "Fire cuts an escape road",
+      body: `${splitSnappedNote(blocked.label).text}.`,
+      evidence: blocked.evidenceClass,
+      focus: [...coords, ...fireCoords(model, blocked.atMs)],
+    });
+  }
+
+  if (traffic && traffic.metrics.length > 0) {
+    const k = argmax(traffic.metrics.map((m) => m.exposedVeh));
+    const m = traffic.metrics[k];
+    if (m.exposedVeh > 0) {
+      chapters.push({
+        id: "peak-exposure",
+        atMs: m.atMs,
+        title: "Cars inside the fire",
+        body:
+          `Modelled peak: ${fmt(m.exposedVeh)} vehicles on roads inside the fire area, ` +
+          `${fmt(m.notDepartedVeh + m.enRouteVeh)} of ${fmt(m.notDepartedVeh + m.enRouteVeh + m.arrivedVeh)} not yet out.`,
+        evidence: traffic.evidenceClass,
+        focus: [...busyEdgeCoords(model, k, fireAt(model, m.atMs)), ...(place ? [place.coord] : [])],
+      });
+    }
+  }
+
+  const perimeter = model.perimeters[0];
+  if (perimeter) {
+    const iou = model.fireSimulated?.calibrationIou;
+    chapters.push({
+      id: "satellite",
+      atMs: perimeter.atMs,
+      title: `First satellite perimeter${perimeter.areaKm2 != null ? `: ${perimeter.areaKm2.toFixed(0)} km²` : ""}`,
+      body:
+        "The dashed line is the satellite estimate; from here it replaces the model fire." +
+        (iou != null ? ` The model run overlapped a satellite perimeter with IoU ${iou.toFixed(2)} (calibration, simulated).` : ""),
+      evidence: perimeter.evidenceClass,
+      focus: ringCoords(perimeter.geometry),
+    });
+  }
+
+  chapters.sort((a, b) => a.atMs - b.atMs);
+
+  if (variants && revealRows(variants).length > 0) {
+    chapters.push({
+      id: "what-if",
+      // The map sits at the modelled worst moment while the alternatives are compared.
+      atMs: chapters.find((c) => c.id === "peak-exposure")?.atMs ?? chapters[chapters.length - 1]?.atMs ?? model.clock.startMs,
+      title: "Could it have gone differently?",
+      body:
+        "The same modelled morning, re-run with one change each. Bars: exposure to fire on roads and at home, " +
+        "relative to the baseline (shorter is better). Planning experiments on fixture demand, not history.",
+      evidence: "simulated",
+      focus: chapters.find((c) => c.id === "peak-exposure")?.focus ?? [],
+      reveal: true,
+    });
+  }
+  return chapters;
+}
+
+/**
+ * Featurable variants (not flagged as artifact, noise or worse at home) with a combined-exposure headline,
+ * lowest exposure first.
+ */
+export function revealRows(index: VariantIndex): RevealRow[] {
+  const rows: RevealRow[] = [];
+  for (const v of index.variants) {
+    // A road-only gain bought with worse exposure at home is not a result to feature here;
+    // the What if… tab shows it with the full road / home breakdown.
+    if (!featurable(v.id) || VARIANT_CAVEATS[v.id]?.kind === "worse-at-home") continue;
+    const h = v.headline.total_exposed_veh_min;
+    if (!h || h.baseline == null || h.variant == null || h.baseline <= 0) continue;
+    const a = v.headline.arrived_by_1800z_veh;
+    rows.push({
+      id: v.id,
+      title: v.title,
+      question: v.question,
+      exposurePct: (h.variant / h.baseline) * 100,
+      arrivedBaseline: a?.baseline ?? null,
+      arrivedVariant: a?.variant ?? null,
+    });
+  }
+  return rows.sort((a, b) => a.exposurePct - b.exposurePct);
+}

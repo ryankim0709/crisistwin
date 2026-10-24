@@ -34,13 +34,19 @@ export interface Caption {
 }
 
 export function buildCaption(model: ReplayModel, t: number, frameIndex: number): Caption {
+  // Within the window, a historical record wins over fixture placeholders (e.g. synthetic
+  // zone orders), which otherwise crowd out the real 2018 alerts.
   let event: Caption["event"] = null;
   for (let i = lastAtOrBefore(model.events, t); i >= 0; i -= 1) {
     const e = model.events[i];
     if (t - e.atMs > CAPTION_EVENT_WINDOW_MS) break;
     if (eventCategory(e.type) === "closure") continue;
-    event = { label: splitSnappedNote(e.label).text, fixture: e.evidenceClass === "fixture" };
-    break;
+    const fixture = e.evidenceClass === "fixture";
+    if (!event) event = { label: splitSnappedNote(e.label).text, fixture };
+    if (!fixture) {
+      event = { label: splitSnappedNote(e.label).text, fixture };
+      break;
+    }
   }
 
   const enRouteVeh = model.traffic && frameIndex >= 0 ? (model.traffic.metrics[frameIndex]?.enRouteVeh ?? null) : null;

@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { groupAvailability } from "./layerGroups";
-import CompareTab from "./CompareTab";
+import CompareTab, { CaveatChip } from "./CompareTab";
 import { BundleMissingError, REPLAY_VIEW, fetchReplayBundle, type ViewConfig } from "./loadBundle";
 import RespondersTab from "./RespondersTab";
 import StressTab from "./StressTab";
+import StoryMode from "./StoryMode";
+import { buildChapters, revealRows } from "./story";
 import Tour from "./Tour";
 import { REPLAY_TOUR, SIMULATION_TOUR, markTourSeen, tourSeen } from "./tourSteps";
 import { useVariants } from "./useVariants";
@@ -151,6 +153,7 @@ function isTextEntry(target: EventTarget | null): boolean {
 function ReplayScreen({ model: baseline, config }: { model: ReplayModel; config: ViewConfig }) {
   const variants = useVariants(baseline, config.variantsUrl);
   const model = variants.shown?.model ?? baseline;
+  const selectVariant = variants.select;
   const { startMs, endMs } = model.clock;
   const [simTimeMs, setSimTimeMs] = useState(startMs);
   const [playing, setPlaying] = useState(false);
@@ -169,9 +172,13 @@ function ReplayScreen({ model: baseline, config }: { model: ReplayModel; config:
   const [basemap, setBasemap] = useState<Basemap>("dark");
   const [pin, setPin] = useState<LngLat | null>(null);
   const [focus, setFocus] = useState<MapFocus | null>(null);
+  const [storyOpen, setStoryOpen] = useState(false);
   const timeRef = useRef(startMs);
-  const focusTarget = useCallback((coords: LngLat[]) => {
-    setFocus((prev) => ({ key: (prev?.key ?? 0) + 1, coords }));
+  /** Story mode: playback stops at this sim time and then calls arriveRef. */
+  const stopAtRef = useRef<number | null>(null);
+  const arriveRef = useRef<(() => void) | null>(null);
+  const focusTarget = useCallback((coords: LngLat[], padding?: MapFocus["padding"]) => {
+    setFocus((prev) => ({ key: (prev?.key ?? 0) + 1, coords, padding }));
   }, []);
 
   const seek = useCallback(
@@ -179,6 +186,9 @@ function ReplayScreen({ model: baseline, config }: { model: ReplayModel; config:
       const t = clampTime(model, ms);
       timeRef.current = t;
       setSimTimeMs(t);
+      // Any manual seek cancels a story run-to.
+      stopAtRef.current = null;
+      arriveRef.current = null;
     },
     [model],
   );
@@ -192,11 +202,16 @@ function ReplayScreen({ model: baseline, config }: { model: ReplayModel; config:
     const tick = (now: number) => {
       const dt = Math.min(0.25, Math.max(0, now - last) / 1000);
       last = now;
-      const next = Math.min(endMs, timeRef.current + dt * speed * 1000);
+      const limit = Math.min(endMs, stopAtRef.current ?? endMs);
+      const next = Math.min(limit, timeRef.current + dt * speed * 1000);
       timeRef.current = next;
       setSimTimeMs(next);
-      if (next >= endMs) {
+      if (next >= limit) {
         setPlaying(false);
+        const arrive = arriveRef.current;
+        stopAtRef.current = null;
+        arriveRef.current = null;
+        arrive?.();
         return;
       }
       frame = requestAnimationFrame(tick);
@@ -207,8 +222,49 @@ function ReplayScreen({ model: baseline, config }: { model: ReplayModel; config:
 
   const togglePlay = useCallback(() => {
     if (!playing && timeRef.current >= endMs) seek(startMs);
+    stopAtRef.current = null;
+    arriveRef.current = null;
     setPlaying((p) => !p);
   }, [playing, endMs, startMs, seek]);
+
+  const playTo = useCallback(
+    (ms: number, rate: number, onArrive: () => void) => {
+      seek(timeRef.current);
+      stopAtRef.current = clampTime(model, ms);
+      arriveRef.current = onArrive;
+      setSpeed(rate);
+      setPlaying(true);
+    },
+    [model, seek],
+  );
+
+  const chapters = useMemo(() => buildChapters(baseline, variants.index), [baseline, variants.index]);
+  const reveal = useMemo(() => (variants.index ? revealRows(variants.index) : []), [variants.index]);
+  const startStory = useCallback(() => {
+    markTourSeen(config.kind);
+    setTourOpen(false);
+    selectVariant(null);
+    setTab("overview");
+    setStoryOpen(true);
+  }, [config.kind, selectVariant]);
+  const closeStory = useCallback(() => {
+    setStoryOpen(false);
+    stopAtRef.current = null;
+    arriveRef.current = null;
+    setPlaying(false);
+    setSpeed(DEFAULT_SPEED);
+  }, []);
+  const peakExposureMs = useMemo(() => chapters.find((c) => c.id === "peak-exposure")?.atMs ?? null, [chapters]);
+  const showVariantFromStory = useCallback(
+    (id: string) => {
+      closeStory();
+      selectVariant(id);
+      setTab("whatif");
+      setPanelOpen(true);
+      if (peakExposureMs !== null) seek(peakExposureMs);
+    },
+    [closeStory, selectVariant, peakExposureMs, seek],
+  );
 
   const step = useCallback(
     (direction: -1 | 1, seconds = STEP_SECONDS) => {
@@ -300,6 +356,15 @@ function ReplayScreen({ model: baseline, config }: { model: ReplayModel; config:
     ...(config.stressUrl ? [{ id: "stress" as const, label: "Stress test", content: <StressTab url={config.stressUrl} /> }] : []),
   ];
   const caption = buildCaption(model, simTimeMs, frameIndex);
+  // While a what-if is on the map, set it against the baseline at the same clock time.
+  const baselineFrame = variants.shown ? frameIndexAt(baseline, simTimeMs) : -1;
+  const variantDelta =
+    variants.shown && baselineFrame >= 0 && frameIndex >= 0 && model.traffic && baseline.traffic
+      ? {
+          variant: model.traffic.metrics[frameIndex]?.exposedVeh ?? 0,
+          baseline: baseline.traffic.metrics[baselineFrame]?.exposedVeh ?? 0,
+        }
+      : null;
   const atEnd = simTimeMs >= endMs;
   // Damage is auto-shown once the replay reaches its end.
   const mapVisibility = useMemo(
@@ -345,6 +410,7 @@ function ReplayScreen({ model: baseline, config }: { model: ReplayModel; config:
             <span>{caption.enRouteVeh.toLocaleString("en-US")} vehicles on the road (model)</span>
           )}
           {caption.fire && <span className="rp-caption-fire">{caption.fire}</span>}
+
           {atEnd && model.damage && <span>Post-fire damage assessment shown (no damage time)</span>}
         </p>
 
@@ -416,10 +482,21 @@ function ReplayScreen({ model: baseline, config }: { model: ReplayModel; config:
             )}
           </div>
           <div className="rp-basemap">
+            {chapters.length > 0 && (
+              <button
+                type="button"
+                className="rp-story-open"
+                aria-pressed={storyOpen}
+                onClick={storyOpen ? closeStory : startStory}
+              >
+                <span aria-hidden="true">{storyOpen ? "■" : "▶"}</span> {storyOpen ? "Stop story" : "Play the story"}
+              </button>
+            )}
             <button
               type="button"
               className="rp-tour-open"
               onClick={() => {
+                closeStory();
                 setTab("overview");
                 setTourOpen(true);
               }}
@@ -447,6 +524,37 @@ function ReplayScreen({ model: baseline, config }: { model: ReplayModel; config:
             onToggle={() => setLegendOpen((o) => !o)}
           />
         </div>
+
+        {variantDelta && variants.shown && (
+          <p className="rp-delta-pill" role="status">
+            <span className="rp-status-chip rp-status-chip--variant">WHAT-IF · SIMULATED</span>
+            <span>
+              <strong>{variants.shown.title}:</strong>{" "}
+              <strong className="rp-delta-pill-num">{variantDelta.variant.toLocaleString("en-US")}</strong> vehicles on
+              roads inside the fire now, vs{" "}
+              <strong className="rp-delta-pill-base">{variantDelta.baseline.toLocaleString("en-US")}</strong> in the
+              baseline run
+            </span>
+            <CaveatChip id={variants.shown.id} />
+          </p>
+        )}
+
+        {storyOpen && (
+          <StoryMode
+            chapters={chapters}
+            revealRows={reveal}
+            simTimeMs={simTimeMs}
+            timezone={model.incident.timezone}
+            metrics={model.traffic && frameIndex >= 0 ? (model.traffic.metrics[frameIndex] ?? null) : null}
+            trafficEvidence={model.traffic?.evidenceClass ?? null}
+            fixtureDemand={fixture}
+            playTo={playTo}
+            seek={seek}
+            focus={focusTarget}
+            onShowVariant={showVariantFromStory}
+            onClose={closeStory}
+          />
+        )}
 
         <TimelineDock
           simTimeMs={simTimeMs}
@@ -511,7 +619,14 @@ function ReplayScreen({ model: baseline, config }: { model: ReplayModel; config:
           />
         </div>
       </aside>
-      {tourOpen && <Tour steps={sim ? SIMULATION_TOUR : REPLAY_TOUR} onSeek={seekAndPause} onClose={closeTour} />}
+      {tourOpen && (
+        <Tour
+          steps={sim ? SIMULATION_TOUR : REPLAY_TOUR}
+          onSeek={seekAndPause}
+          onClose={closeTour}
+          onStory={chapters.length > 0 ? startStory : undefined}
+        />
+      )}
     </main>
   );
 }

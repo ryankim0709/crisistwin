@@ -174,16 +174,20 @@ function CalmSummary({
 }) {
   const row = model.traffic && frameIndex >= 0 ? model.traffic.metrics[frameIndex] : null;
   const fmt = (n: number | undefined) => (n === undefined ? "—" : n.toLocaleString("en-US"));
+  // Key events are historical records; fixture placeholders (synthetic zone orders) stay in
+  // the full event feed but would otherwise crowd out the real 2018 alerts here.
+  const isKey = (e: ReplayModel["events"][number]) =>
+    eventCategory(e.type) !== "closure" && (e.evidenceClass !== "fixture" || e.type === "fire_ignition");
   let last: ReplayModel["events"][number] | null = null;
   for (let i = eventIndex; i >= 0; i -= 1) {
-    if (eventCategory(model.events[i].type) !== "closure") {
+    if (isKey(model.events[i])) {
       last = model.events[i];
       break;
     }
   }
   let next: ReplayModel["events"][number] | null = null;
   for (let i = eventIndex + 1; i < model.events.length; i += 1) {
-    if (eventCategory(model.events[i].type) !== "closure") {
+    if (isKey(model.events[i])) {
       next = model.events[i];
       break;
     }
@@ -224,18 +228,18 @@ function CalmSummary({
                 <span className="rp-calm-value">{fmt(row?.blockedVeh)}</span> stuck
               </span>
               <span>
-                <span className="rp-calm-value">{fmt(row?.exposedVeh)}</span> near fire
+                <span className="rp-calm-value">{fmt(row?.exposedVeh)}</span> in fire area
               </span>
             </span>
-            <span className="rp-calm-label">Stuck or near fire</span>
+            <span className="rp-calm-label">Stuck, or on roads inside the fire</span>
           </div>
         </div>
       ) : (
         <p className="rp-empty">No traffic simulation in this bundle.</p>
       )}
       <p className="rp-calm-note">
-        Vehicles (model, {model.traffic?.totalVeh?.toLocaleString("en-US") ?? "—"} total). Stuck and near-fire counts can
-        overlap.
+        Vehicles (model, {model.traffic?.totalVeh?.toLocaleString("en-US") ?? "—"} total). Stuck and in-fire-area counts
+        can overlap.
       </p>
       {(last || next) && (
         <ul className="rp-rows rp-calm-events">

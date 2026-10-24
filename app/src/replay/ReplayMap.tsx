@@ -60,7 +60,8 @@ const ZONE_FLASH_TICK_MS = 50;
 const IGNITION_LABEL_MS = 90 * 60_000;
 /** Opening camera per incident; otherwise the bundle bbox is fitted. */
 const INITIAL_VIEW: Record<string, { center: LngLat; zoom: number }> = {
-  "camp-2018-paradise-slice": { center: [-121.6, 39.77], zoom: 11.3 },
+  // Frames both the assumed ignition near Pulga and Paradise, so the fire is on screen at open.
+  "camp-2018-paradise-slice": { center: [-121.52, 39.79], zoom: 11.0 },
 };
 const FRESHNESS_BUCKET_MS = 10 * 60_000;
 const THREAT_BUCKET_MS = 60_000;
@@ -75,6 +76,9 @@ function prefersReducedMotion(): boolean {
 export interface MapFocus {
   key: number;
   coords: LngLat[];
+  /** Screen padding in px, e.g. to keep the framed area clear of an overlay card. */
+  padding?: { top: number; bottom: number; left: number; right: number };
+  maxZoom?: number;
 }
 
 type StyleStatus = "loading" | "ok" | "fallback";
@@ -458,7 +462,12 @@ export default function ReplayMap({
     }
     map.fitBounds(
       [w, s, e, n],
-      { padding: 120, maxZoom: 15, duration: prefersReducedMotion() ? 0 : 1600, essential: true },
+      {
+        padding: focus.padding ?? 120,
+        maxZoom: focus.maxZoom ?? 15,
+        duration: prefersReducedMotion() ? 0 : 1600,
+        essential: true,
+      },
     );
   }, [ready, focus]);
 

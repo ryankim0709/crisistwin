@@ -71,7 +71,7 @@ export const REPLAY_TOUR: TourStep[] = [
   },
   {
     title: "Go further",
-    body: "The What if… tab compares alternative plans, and the 3D buttons on the map show the same moment from a helicopter or a driver's seat. Reopen this tour any time with the Tour button.",
+    body: "Play the story for a guided walk through the key moments. The What if… tab compares alternative plans, and the 3D buttons on the map show the same moment from a helicopter or a driver's seat. Reopen this tour any time with the Tour button.",
     target: ".rp-tabs",
   },
 ];

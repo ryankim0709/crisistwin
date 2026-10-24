@@ -32,6 +32,8 @@ export interface VariantSummary {
   changes: string[];
   zoneRiskChanged: number | null;
   fireChanged: boolean;
+  /** Index headline deltas (e.g. peak_exposed_veh) so variants can be ranked before loading. */
+  headline: Record<string, MetricDelta>;
 }
 
 export interface VariantIndex {
@@ -61,10 +63,65 @@ export const METRIC_INFO: Record<string, { label: string; unit: "veh" | "veh·mi
   peak_en_route_veh: { label: "Peak on the road", unit: "veh", better: "lower" },
   peak_blocked_veh: { label: "Peak blocked", unit: "veh", better: "lower" },
   peak_exposed_veh: { label: "Peak exposed to fire", unit: "veh", better: "lower" },
-  exposed_veh_min: { label: "Exposure (vehicle-minutes)", unit: "veh·min", better: "lower" },
+  total_exposed_veh_min: { label: "Total exposure, road + home (vehicle-minutes)", unit: "veh·min", better: "lower" },
+  exposed_veh_min: { label: "Exposure on roads (vehicle-minutes)", unit: "veh·min", better: "lower" },
+  exposed_at_origin_veh_min: { label: "Exposure at home, not yet left (vehicle-minutes)", unit: "veh·min", better: "lower" },
+  peak_exposed_at_origin_veh: { label: "Peak at home inside the fire", unit: "veh", better: "lower" },
   blocked_at_end_veh: { label: "Blocked at end", unit: "veh", better: "lower" },
   clearance_time_s: { label: "Clearance time", unit: "s", better: "lower" },
 };
+
+export type CaveatKind = "artifact" | "noise" | "worse-at-home" | "hindsight" | "poor-fire-fit";
+
+export interface VariantCaveat {
+  kind: CaveatKind;
+  label: string;
+  text: string;
+}
+
+/**
+ * Review notes from the simulation team on how each precomputed variant may be read. The
+ * index does not carry these, so they are kept here by variant id; unknown ids get none.
+ */
+export const VARIANT_CAVEATS: Record<string, VariantCaveat> = {
+  "skyway-closed-0800": {
+    kind: "artifact",
+    label: "Model artifact",
+    text: "The apparent improvement comes from a routing artifact on fixture demand, not a finding.",
+  },
+  "no-contraflow": {
+    kind: "noise",
+    label: "Noise",
+    text: "The difference is within single-seed noise.",
+  },
+  "slower-response": {
+    kind: "worse-at-home",
+    label: "Worse at home",
+    text: "Fewer cars on burning roads only because people leave later; exposure at home rises sharply.",
+  },
+  optimized: {
+    kind: "hindsight",
+    label: "Hindsight bound",
+    text: "Scored against the modelled fire, which responders did not have; not a feasible real-time plan.",
+  },
+  "wind-shift": {
+    kind: "poor-fire-fit",
+    label: "Poor fire fit",
+    text: "This run's fire fits the satellite perimeter poorly; a sensitivity check, not a plan.",
+  },
+};
+
+/** Artifact and noise variants are listed but never featured as results. */
+export function featurable(id: string): boolean {
+  const kind = VARIANT_CAVEATS[id]?.kind;
+  return kind !== "artifact" && kind !== "noise";
+}
+
+/** Relative change in percent, rounded; null when not comparable. */
+export function pctChange(m: MetricDelta | undefined): number | null {
+  if (!m || m.baseline == null || m.variant == null || m.baseline === 0) return null;
+  return Math.round(((m.variant - m.baseline) / m.baseline) * 100);
+}
 
 function metricDelta(value: unknown): MetricDelta {
   const m = objOrEmpty(value);
@@ -89,6 +146,9 @@ export function parseVariantIndex(data: unknown): VariantIndex {
         changes: strList(item.changes, `variants[${i}].changes`),
         zoneRiskChanged: optNum(item.zone_risk_changed, `variants[${i}].zone_risk_changed`),
         fireChanged: item.fire_changed === true,
+        headline: Object.fromEntries(
+          Object.entries(objOrEmpty(item.headline)).map(([key, value]) => [key, metricDelta(value)]),
+        ),
       };
     }),
     skipped: arr(index.skipped ?? [], "skipped").map((v, i) => {
