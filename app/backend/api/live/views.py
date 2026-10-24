@@ -123,7 +123,10 @@ def join(request, incident_id: str, principal: None):
     code = body.get("invite_code")
     if not isinstance(code, str) or not secret_matches(code.strip(), "LIVE_INVITE_CODE"):
         return error(403, "forbidden", "Invalid invite code.")
-    return ok(issue_token("responder", "rsp_", incident_id), status=201)
+    simulated = body.get("simulated", False)
+    if not isinstance(simulated, bool):
+        return error(400, "invalid_request", "`simulated` must be a boolean.")
+    return ok(issue_token("responder", "rsp_", incident_id, simulated), status=201)
 
 
 # ---- v1: reports ----
@@ -781,9 +784,17 @@ def command(request, incident_id: str, principal: Principal):
     snapshot = load_snapshot(incident_id, wall_now())
     controller.maybe_auto_replan(snapshot)
     index, now = snapshot.index, snapshot.now
+    locations = list(col("live_responder_locations").find({"incident_id": incident_id, "expires_at": {"$gt": now}}))
+    simulated = {
+        d["party_key"]
+        for d in col("live_devices").find(
+            {"party_key": {"$in": [d["party_key"] for d in locations]}, "simulated": True}, {"party_key": 1}
+        )
+    }
     responders = [
-        {"party_key": d["party_key"], "coord": d["coord"], "accuracy_m": d.get("accuracy_m"), "at": iso(d["at"])}
-        for d in col("live_responder_locations").find({"incident_id": incident_id, "expires_at": {"$gt": now}})
+        {"party_key": d["party_key"], "coord": d["coord"], "accuracy_m": d.get("accuracy_m"), "at": iso(d["at"]),
+         "simulated": d["party_key"] in simulated}
+        for d in locations
     ]
     tasks = (
         col("live_tasks")

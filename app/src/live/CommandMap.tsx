@@ -14,7 +14,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { useEffect, useRef, useState } from "react";
 import { restyleBasemap } from "../replay/basemapStyle";
 import { BASEMAP_STYLE_URL, FALLBACK_STYLE, type BasemapStyle } from "../replay/mapLayers";
-import { VERDICT, labelPoint, nf, plural, shortKey, shortZoneName, wallClock } from "./format";
+import { VERDICT, labelPoint, nf, plural, responderName, shortZoneName, wallClock } from "./format";
 import type { QueueItem } from "./queue";
 import type { CommandResponse, GuidanceLevel, ImpactResponse, LonLat, TwinMonitor } from "./types";
 
@@ -148,7 +148,7 @@ function buildSources(data: CommandResponse, items: QueueItem[]): Record<string,
     .filter((h) => h.coord)
     .map((h) => point(h.coord!, { label: `Needs help, ${wallClock(h.at)}` }));
   const responders = data.responders.map((r) =>
-    point(r.coord, { label: `Responder ${shortKey(r.party_key)}, ${wallClock(r.at)}` }),
+    point(r.coord, { label: `Responder ${responderName(r)}, ${wallClock(r.at)}` }),
   );
   const dests = data.destinations
     .filter((d) => d.kind !== "exit")
