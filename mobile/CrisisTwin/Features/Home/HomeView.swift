@@ -20,6 +20,7 @@ struct HomeView: View {
                     VStack(alignment: .leading, spacing: 12) {
                         header
                             .padding(.bottom, 4)
+                        EvacuateButton()
                         content
                         Color.clear.frame(height: 1).id("home-bottom")
                     }

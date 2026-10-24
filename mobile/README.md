@@ -72,6 +72,16 @@ The Practice view was removed from the phone. It showed the web app's `/fire` pa
 `WKWebView` with the sidebar hidden (see [ADR 0007](../docs/adr/0007-mobile-web-map.md)).
 `WEB_BASE_URL` is still validated like `API_BASE_URL`; Debug uses `http://localhost:5173`.
 
+### Evacuate button
+
+Home shows a red **Evacuate** button above everything else. Three taps within 1.5 s arm it
+(a dot fills per tap and the count resets if you pause), then a confirmation asks
+"Start evacuating?". VoiceOver gets a single activation, still confirmed. **Start does nothing
+yet.** The planned flow: post **On the way** to the family, open Messages to the emergency
+contacts with the destination (the person taps Send), then show the backend's
+fire-checked destinations (shelters and exits) and follow the chosen route on Map. Meeting
+points join that list once the backend rates them; the app does not check safety itself.
+
 ### Meeting point
 
 Plan > Meeting point holds a household meeting plan: a primary meeting point, an
