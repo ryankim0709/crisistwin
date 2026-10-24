@@ -3,7 +3,6 @@
  * converts its wire orders back into engine orders. Pure: no React or network.
  */
 
-import type { ScheduledFireFrame } from "../fire/scheduledTypes";
 import type { Observation, WireOrder, ZoneObservation } from "./contracts";
 import {
   EXIT_OPTIONS_PER_ZONE,
@@ -34,9 +33,17 @@ function describeOrder(order: Order): string {
   return `recall ${order.unit_id}`;
 }
 
+/** The part of a fire frame the observation reads. */
+export interface FrameSummary {
+  elapsedMinutes: number;
+  burnedAreaSquareMeters: number;
+}
+
 export interface ObservationInputs {
   engine: DispatchEngine;
-  frames: readonly ScheduledFireFrame[];
+  frames: readonly FrameSummary[];
+  /** No-action baseline: households exposed by the horizon with no orders. */
+  baselineHomesExposed: number | null;
   windFromDegrees: number;
   windSpeedMph: number;
   ignitions: IgnitionEvent[];
@@ -84,21 +91,25 @@ export function buildObservation(inputs: ObservationInputs): Observation {
         });
       }
     }
+    const perHome = engine.vehiclesPerHome(state.index);
+    const waitingVehicles = (state.atHome + state.queued) * perHome;
     return {
       id: zone.id,
       name: zone.name,
       status: state.status,
-      vehicles_total: zone.vehicles,
-      vehicles_waiting: Math.round(state.notReady + state.queued),
-      vehicles_en_route: Math.round(engine.enRoute(state.index)),
-      vehicles_out: Math.round(state.arrived),
-      vehicles_exposed: Math.round(state.exposed),
+      order_rank: state.orderRank,
+      homes_total: zone.homes,
+      homes_waiting: state.status === "no_order" ? 0 : state.atHome + state.queued,
+      homes_en_route: state.onRoad,
+      homes_out: state.safe,
+      homes_exposed: state.caught,
+      vehicles_waiting: Math.round(state.status === "no_order" ? 0 : waitingVehicles),
       fire_eta_min: etaWithin(exposure.zoneContact[state.index], minute),
       fire_core_eta_min: etaWithin(exposure.zoneCore[state.index], minute),
       assigned_exit: state.exitId,
       queue_clear_min:
         state.route && !state.routeBlocked
-          ? Math.round(((state.notReady + state.queued) / state.route.bottleneckVph) * 60)
+          ? Math.round((waitingVehicles / state.route.bottleneckVph) * 60)
           : null,
       route_blocked: state.routeBlocked,
       exit_options: options,
@@ -122,6 +133,10 @@ export function buildObservation(inputs: ObservationInputs): Observation {
       status: unit.status,
       task: unit.task,
       zone_id: unit.zone === null ? null : area.zones[unit.zone].id,
+      eta_min: (() => {
+        const eta = engine.unitEtaMinutes(unit);
+        return eta === null ? null : Math.round(eta);
+      })(),
       drive_min_to: drive,
     };
   });
@@ -135,19 +150,20 @@ export function buildObservation(inputs: ObservationInputs): Observation {
       next_regular_decision_minute: inputs.nextRegularDecisionMinute,
     },
     fire: {
-      burned_area_ha: Math.round((frame?.reachedAreaSquareMeters ?? 0) / SQUARE_METERS_PER_HECTARE),
+      burned_area_ha: Math.round((frame?.burnedAreaSquareMeters ?? 0) / SQUARE_METERS_PER_HECTARE),
+      no_action_homes_exposed: inputs.baselineHomesExposed,
       wind_from_degrees: inputs.windFromDegrees,
       wind_speed_mph: inputs.windSpeedMph,
       upcoming_ignitions: inputs.ignitions.filter((i) => i.minute > minute),
       evidence_class: "simulated",
     },
     totals: {
-      vehicles: Math.round(totals.vehicles),
-      not_ordered: Math.round(totals.notOrdered),
-      waiting: Math.round(totals.waiting),
-      en_route: Math.round(totals.enRoute),
-      out: Math.round(totals.arrived),
-      exposed: Math.round(totals.exposed),
+      homes: totals.homes,
+      not_ordered: totals.notOrdered,
+      waiting: totals.waiting,
+      en_route: totals.onRoad,
+      out: totals.safe,
+      exposed: totals.caught,
     },
     zones,
     exits: area.exits.map((exit) => ({ id: exit.id, name: exit.name })),
@@ -161,10 +177,10 @@ export function buildObservation(inputs: ObservationInputs): Observation {
     previous_summary: inputs.previousSummary,
     model_notes: [
       `Fire ETAs are the fire model's forecast, shown up to ${FORECAST_LOOKAHEAD_MINUTES} min ahead; the fire spread is precomputed and is not changed by any order.`,
-      `After an evacuation order households leave over ${DEPARTURE_SPREAD_MINUTES} min (${SUPPORTED_DEPARTURE_SPREAD_MINUTES} min while an engine is on scene on evacuation_support), then queue for road capacity.`,
+      `After an evacuation order households leave over ${DEPARTURE_SPREAD_MINUTES} min (${SUPPORTED_DEPARTURE_SPREAD_MINUTES} min while an engine is on scene on evacuation_support), then queue at the zone's loading point for road capacity.`,
       `Routes avoid roads the fire reaches within ${ROUTE_LOOKAHEAD_MINUTES} min. Zones whose exit becomes unreachable hold departures until given another exit.`,
       "structure_defense has no modelled effect on fire spread. Engines on scene withdraw automatically when fire is about to reach the zone core.",
-      "Vehicles still in a zone when fire reaches its core, or on a road fire reaches, count as exposed.",
+      "A household counts as exposed when fire reaches its home before it leaves, reaches the zone core while it is still in the zone, or reaches the road it is on.",
       ...area.notes,
     ],
   };

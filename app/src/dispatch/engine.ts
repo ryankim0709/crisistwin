@@ -1,23 +1,28 @@
 /**
- * Dispatch simulation: evacuation traffic and fire engines over the area road graph, stepped
- * one simulation minute at a time against a precomputed fire run. Deterministic, no
- * randomness, no network. The agent only issues orders (`applyOrders`); every route, travel
- * time, flow and count comes from here. See docs/adr/0014-dispatch-agent.md.
+ * Dispatch simulation: households, evacuation traffic and fire engines over the area road
+ * graph, stepped one simulation minute at a time against a precomputed fire run.
+ * Deterministic, no randomness, no network. The agent only issues orders (`applyOrders`);
+ * every route, travel time, flow and count comes from here. See docs/adr/0014-dispatch-agent.md
+ * and docs/adr/0016-dispatch-anywhere.md.
  *
  * Model, deliberately simple and visible in the UI:
- * - Residents leave only on an evacuation order. After the order, households become ready to
- *   drive uniformly over DEPARTURE_SPREAD_MINUTES (shorter while an engine supports the zone).
- * - Ready vehicles queue at the zone's loading node and enter their route at most at the
- *   route's bottleneck capacity; zones whose routes share an edge split its capacity.
- *   Downstream queues are not modelled: once released, a cohort drives at free-flow speed.
+ * - Every synthetic home is one household with the zone's average vehicles per home. Homes
+ *   leave only on an evacuation order for their zone, one at a time in the area's departure
+ *   order, spread uniformly over DEPARTURE_SPREAD_MINUTES (shorter while an engine supports
+ *   the zone).
+ * - Households that have left queue at the zone's loading node and enter their route at most
+ *   at the route's bottleneck capacity; zones whose routes share an edge split its capacity.
+ *   Downstream queues are not modelled: once released, a group drives at free-flow speed.
  * - Routing avoids every edge the fire model reaches within ROUTE_LOOKAHEAD_MINUTES.
  *   Drivers already on the road re-route around such edges by themselves; a zone whose
  *   ordered exit becomes unreachable holds departures until it is given another exit.
- * - Vehicles still in a zone when fire reaches its core, or on an edge fire reaches, are
- *   counted "exposed": the model's fire reached them. This is not a casualty estimate.
- * - Engines drive at the same free-flow speeds, ignoring congestion. "Evacuation support"
- *   shortens a zone's departure spread; "structure defense" has no modelled effect on the
- *   fire, whose spread is fixed by the precomputed run.
+ * - A household is "caught" when the modelled fire reaches its home before it leaves, when
+ *   fire reaches its zone's core (loading node or centroid) while it is still in the zone, or
+ *   when fire reaches the road it is on. This is a model count, not a casualty estimate.
+ * - Engines drive at the same free-flow speeds, ignoring congestion; a station outside the
+ *   road box first covers its straight-line approach at APPROACH_SPEED_KPH. "Evacuation
+ *   support" shortens a zone's departure spread; "structure defense" has no modelled effect on
+ *   the fire, whose spread is fixed by the precomputed run.
  */
 
 import type { DispatchArea, LonLat } from "./area";
@@ -45,10 +50,26 @@ export const DEPARTURE_SPREAD_MINUTES = 45;
 export const SUPPORTED_DEPARTURE_SPREAD_MINUTES = 20;
 /** Engines on scene withdraw when the fire is this close to the zone core. */
 export const UNIT_WITHDRAW_MARGIN_MINUTES = 5;
+/** Assumed speed over a station's straight-line approach to the road box. */
+export const APPROACH_SPEED_KPH = 40;
 export const EXIT_OPTIONS_PER_ZONE = 3;
 const SECONDS_PER_MINUTE = 60;
 const VEHICLE_EPSILON = 0.01;
 const MAX_ALERTS = 200;
+
+/** Household states, in the order a household moves through them. */
+export const HomeStatus = {
+  /** No evacuation order for its zone yet. */
+  idle: 0,
+  /** Ordered, still at home (getting ready). */
+  ordered: 1,
+  /** Left home, queued at the zone's loading point for road capacity. */
+  queued: 2,
+  driving: 3,
+  safe: 4,
+  caught: 5,
+} as const;
+export type HomeStatus = (typeof HomeStatus)[keyof typeof HomeStatus];
 
 export type ZoneStatus = "no_order" | "ordered" | "cleared" | "overrun";
 export type UnitStatus = "available" | "en_route" | "on_scene" | "returning" | "stranded";
@@ -58,19 +79,38 @@ export interface ZoneState {
   index: number;
   status: ZoneStatus;
   exitId: string | null;
+  /** 1 for the first zone ordered to leave, 2 for the next, … */
+  orderRank: number | null;
   orderedMinute: number | null;
+  clearedMinute: number | null;
   route: Route | null;
   routeBlocked: boolean;
-  notReady: number;
+  /** Households not yet out of their homes (idle or ordered). */
+  atHome: number;
   queued: number;
-  arrived: number;
-  exposed: number;
+  onRoad: number;
+  safe: number;
+  caught: number;
   fireContact: boolean;
+}
+
+interface ZoneWork {
+  /** Offset (within the zone's homes) of the next household to leave. */
+  nextDeparture: number;
+  departBudget: number;
+  /** Home indices waiting at the loading point, first in first out. */
+  queue: number[];
+  releaseBudget: number;
+  /** Home indices the fire reaches, by arrival; `fireNext` is the first not yet reached. */
+  fireOrder: number[];
+  fireNext: number;
+  vehiclesPerHome: number;
 }
 
 interface Packet {
   id: number;
   zone: number;
+  homes: number[];
   vehicles: number;
   exitId: string;
   steps: PathStep[];
@@ -92,11 +132,16 @@ export interface UnitState {
   steps: PathStep[];
   stepIndex: number;
   stepElapsedSeconds: number;
+  /** Seconds still to cover on a station's approach before driving the route. */
+  holdSeconds: number;
+  /** Minute the unit arrived on scene, for the crews panel. */
+  arrivedMinute: number | null;
 }
 
 export type AlertType =
   | "ignition"
   | "fire_contact"
+  | "homes_caught"
   | "zone_overrun"
   | "route_blocked"
   | "route_changed"
@@ -126,18 +171,32 @@ export interface OrderOutcome {
   note: string;
 }
 
+/** Household counts (homes, not vehicles) across the area. */
 export interface Totals {
+  homes: number;
   vehicles: number;
+  /** In zones with no order yet. */
   notOrdered: number;
+  /** Ordered, at home or queued at the loading point. */
   waiting: number;
-  enRoute: number;
-  arrived: number;
-  exposed: number;
+  onRoad: number;
+  safe: number;
+  caught: number;
 }
 
 export interface IgnitionEvent {
   minute: number;
   name: string;
+}
+
+export interface VehicleGroup {
+  id: number;
+  zone: number;
+  position: LonLat;
+  /** A point a little further along the route, for heading. */
+  ahead: LonLat;
+  vehicles: number;
+  stuck: boolean;
 }
 
 export class DispatchEngine {
@@ -147,11 +206,16 @@ export class DispatchEngine {
   minute = 0;
   zones: ZoneState[];
   units: UnitState[];
+  /** Per home (index into `area.homes`). */
+  readonly homeStatus: Uint8Array;
   alerts: Alert[] = [];
+  private work: ZoneWork[];
   private packets: Packet[] = [];
   private nextPacketId = 1;
+  private nextOrderRank = 1;
   private exitIndex: Map<string, number>;
   private zoneIndex: Map<string, number>;
+  private stationIndex: Map<string, number>;
   private ignitions: IgnitionEvent[];
 
   constructor(
@@ -166,19 +230,40 @@ export class DispatchEngine {
     this.ignitions = [...ignitions].sort((a, b) => a.minute - b.minute);
     this.exitIndex = new Map(area.exits.map((exit, i) => [exit.id, i]));
     this.zoneIndex = new Map(area.zones.map((zone, i) => [zone.id, i]));
+    this.stationIndex = new Map(area.stations.map((station, i) => [station.id, i]));
+    this.homeStatus = new Uint8Array(area.homes.length);
     this.zones = area.zones.map((zone, index) => ({
       index,
       status: "no_order",
       exitId: null,
+      orderRank: null,
       orderedMinute: null,
+      clearedMinute: null,
       route: null,
       routeBlocked: false,
-      notReady: zone.vehicles,
+      atHome: zone.homes,
       queued: 0,
-      arrived: 0,
-      exposed: 0,
+      onRoad: 0,
+      safe: 0,
+      caught: 0,
       fireContact: false,
     }));
+    this.work = area.zones.map((zone) => {
+      const fireOrder: number[] = [];
+      for (let h = zone.firstHome; h < zone.firstHome + zone.homes; h += 1) {
+        if (Number.isFinite(exposure.homeArrival[h])) fireOrder.push(h);
+      }
+      fireOrder.sort((a, b) => exposure.homeArrival[a] - exposure.homeArrival[b]);
+      return {
+        nextDeparture: 0,
+        departBudget: 0,
+        queue: [],
+        releaseBudget: 0,
+        fireOrder,
+        fireNext: 0,
+        vehiclesPerHome: zone.homes > 0 ? zone.vehicles / zone.homes : 0,
+      };
+    });
     this.units = area.stations.flatMap((station) =>
       station.units.map((unit) => ({
         id: unit.id,
@@ -191,6 +276,8 @@ export class DispatchEngine {
         steps: [],
         stepIndex: 0,
         stepElapsedSeconds: 0,
+        holdSeconds: 0,
+        arrivedMinute: null,
       })),
     );
     this.emitIgnitions(-1, 0);
@@ -206,6 +293,10 @@ export class DispatchEngine {
     const arrival = this.exposure.edgeArrival;
     const limit = minute + ROUTE_LOOKAHEAD_MINUTES;
     return (edge) => arrival[edge] <= limit;
+  }
+
+  vehiclesPerHome(zone: number): number {
+    return this.work[zone].vehiclesPerHome;
   }
 
   private alert(type: AlertType, text: string, urgent: boolean): void {
@@ -224,7 +315,7 @@ export class DispatchEngine {
   private emitIgnitions(after: number, upTo: number): void {
     for (const ignition of this.ignitions) {
       if (ignition.minute > after && ignition.minute <= upTo) {
-        this.alert("ignition", `Fire ${ignition.name} starts (scheduled ignition).`, true);
+        this.alert("ignition", `Fire ${ignition.name} starts.`, true);
       }
     }
   }
@@ -245,6 +336,7 @@ export class DispatchEngine {
       if (!this.exitIndex.has(order.exit_id)) return reject(`Unknown exit ${order.exit_id}.`);
       const zone = this.zones[index];
       if (zone.status === "overrun") return reject(`${order.zone_id} is already overrun by fire.`);
+      if (zone.status === "cleared") return reject(`${order.zone_id} has already cleared.`);
       const tree = shortestPathTree(this.area, this.area.zones[index].node, blocked);
       const route = routeTo(this.area, tree, this.exitNode(order.exit_id));
       if (!route) return reject(`${order.exit_id} is not reachable from ${order.zone_id} avoiding fire.`);
@@ -252,6 +344,11 @@ export class DispatchEngine {
       if (zone.status === "no_order") {
         zone.status = "ordered";
         zone.orderedMinute = this.minute;
+        zone.orderRank = this.nextOrderRank++;
+        const { firstHome, homes } = this.area.zones[index];
+        for (let h = firstHome; h < firstHome + homes; h += 1) {
+          if (this.homeStatus[h] === HomeStatus.idle) this.homeStatus[h] = HomeStatus.ordered;
+        }
       }
       zone.exitId = order.exit_id;
       zone.route = route;
@@ -271,6 +368,7 @@ export class DispatchEngine {
 
     const unit = this.units.find((candidate) => candidate.id === order.unit_id);
     if (!unit) return reject(`Unknown unit ${order.unit_id}.`);
+    if (unit.status === "stranded") return reject(`${unit.id} is cut off by fire.`);
     const from = this.unitNextNode(unit);
 
     if (order.type === "recall_unit") {
@@ -293,9 +391,16 @@ export class DispatchEngine {
       this.area.zones[index].node,
     );
     if (!route) return reject(`${unit.id} cannot reach ${order.zone_id} avoiding fire.`);
+    const fromStation = unit.status === "available";
     this.sendUnit(unit, from, route, "en_route", order.task, index);
-    const minutes = Math.round(route.seconds / SECONDS_PER_MINUTE);
+    if (fromStation) unit.holdSeconds = this.approachSeconds(unit);
+    const minutes = Math.round((route.seconds + unit.holdSeconds) / SECONDS_PER_MINUTE);
     return { order, accepted: true, note: `${unit.id} en route to ${order.zone_id}, ${minutes} min.` };
+  }
+
+  private approachSeconds(unit: UnitState): number {
+    const station = this.area.stations[this.stationIndex.get(unit.stationId) ?? -1];
+    return station ? station.approachMeters / (APPROACH_SPEED_KPH / 3.6) : 0;
   }
 
   /** Node the unit is at, or the head of the edge it is driving (it finishes that edge). */
@@ -318,9 +423,16 @@ export class DispatchEngine {
     unit.steps = route.steps;
     unit.stepIndex = 0;
     unit.stepElapsedSeconds = 0;
+    unit.holdSeconds = 0;
     unit.task = task;
     unit.zone = zone;
-    unit.status = route.steps.length === 0 ? (status === "returning" ? "available" : "on_scene") : status;
+    unit.arrivedMinute = null;
+    if (route.steps.length > 0) unit.status = status;
+    else if (status === "returning") unit.status = "available";
+    else {
+      unit.status = "on_scene";
+      unit.arrivedMinute = this.minute;
+    }
   }
 
   // ---- Stepping ------------------------------------------------------------------------
@@ -342,26 +454,57 @@ export class DispatchEngine {
     this.checkCleared();
   }
 
+  private catchHome(zone: ZoneState, home: number): void {
+    const status = this.homeStatus[home];
+    if (status === HomeStatus.idle || status === HomeStatus.ordered) zone.atHome -= 1;
+    else if (status === HomeStatus.queued) zone.queued -= 1;
+    else return;
+    this.homeStatus[home] = HomeStatus.caught;
+    zone.caught += 1;
+  }
+
   private checkFire(now: number): void {
-    const { zoneContact, zoneCore } = this.exposure;
+    const { zoneContact, zoneCore, homeArrival } = this.exposure;
     for (const zone of this.zones) {
       const name = this.zoneName(zone.index);
+      const work = this.work[zone.index];
       if (!zone.fireContact && zoneContact[zone.index] <= now) {
         zone.fireContact = true;
-        const remaining = Math.round(zone.notReady + zone.queued);
+        const remaining = zone.atHome + zone.queued;
         this.alert(
           "fire_contact",
-          `Fire reaches the edge of ${name}; ${remaining} vehicles have not left.`,
+          `Fire reaches ${name}; ${remaining} homes have not left.`,
           zone.status !== "cleared" && remaining > 0,
         );
       }
+      // Households still at home when the fire reaches their house.
+      let caughtAtHome = 0;
+      while (work.fireNext < work.fireOrder.length && homeArrival[work.fireOrder[work.fireNext]] <= now) {
+        const home = work.fireOrder[work.fireNext++];
+        const status = this.homeStatus[home];
+        if (status === HomeStatus.idle || status === HomeStatus.ordered) {
+          this.catchHome(zone, home);
+          caughtAtHome += 1;
+        }
+      }
+      if (caughtAtHome > 0 && zone.status !== "overrun") {
+        this.alert(
+          "homes_caught",
+          `Fire reached ${caughtAtHome} home${caughtAtHome === 1 ? "" : "s"} in ${zone.status === "no_order" ? "unordered " : ""}${name} before they left.`,
+          true,
+        );
+      }
       if (zone.status !== "overrun" && zone.status !== "cleared" && zoneCore[zone.index] <= now) {
-        const caught = zone.notReady + zone.queued;
-        zone.exposed += caught;
-        zone.notReady = 0;
-        zone.queued = 0;
+        const before = zone.caught;
+        const { firstHome, homes } = this.area.zones[zone.index];
+        for (let h = firstHome; h < firstHome + homes; h += 1) this.catchHome(zone, h);
+        work.queue = [];
         zone.status = "overrun";
-        this.alert("zone_overrun", `Fire reaches the core of ${name}: ${Math.round(caught)} vehicles still there.`, true);
+        this.alert(
+          "zone_overrun",
+          `Fire reaches the core of ${name}: ${zone.caught - before} homes still there are caught.`,
+          true,
+        );
       }
     }
   }
@@ -372,16 +515,11 @@ export class DispatchEngine {
       if (zone.route && !zone.route.steps.some((step) => blocked(step.edge))) continue;
       const tree = shortestPathTree(this.area, this.area.zones[zone.index].node, blocked);
       const route = routeTo(this.area, tree, this.exitNode(zone.exitId));
+      const id = this.area.zones[zone.index].id;
       if (route) {
         zone.route = route;
         if (zone.routeBlocked) zone.routeBlocked = false;
-        else {
-          this.alert(
-            "route_changed",
-            `Route from ${zone.index >= 0 ? this.area.zones[zone.index].id : ""} to ${zone.exitId} re-planned around fire.`,
-            false,
-          );
-        }
+        else this.alert("route_changed", `Route from ${id} to ${zone.exitId} re-planned around fire.`, false);
       } else if (!zone.routeBlocked) {
         zone.route = null;
         zone.routeBlocked = true;
@@ -401,42 +539,64 @@ export class DispatchEngine {
         .map((unit) => unit.zone as number),
     );
     for (const zone of this.zones) {
-      if (zone.status !== "ordered" || zone.notReady <= 0) continue;
+      if (zone.status !== "ordered" || zone.atHome <= 0) continue;
+      const { firstHome, homes } = this.area.zones[zone.index];
+      const work = this.work[zone.index];
       const spread = supported.has(zone.index) ? SUPPORTED_DEPARTURE_SPREAD_MINUTES : DEPARTURE_SPREAD_MINUTES;
-      const leaving = Math.min(zone.notReady, this.area.zones[zone.index].vehicles / spread);
-      zone.notReady -= leaving;
-      zone.queued += leaving;
+      work.departBudget += homes / spread;
+      while (work.departBudget >= 1 && work.nextDeparture < homes) {
+        const home = firstHome + work.nextDeparture++;
+        if (this.homeStatus[home] !== HomeStatus.ordered) continue;
+        this.homeStatus[home] = HomeStatus.queued;
+        work.queue.push(home);
+        zone.atHome -= 1;
+        zone.queued += 1;
+        work.departBudget -= 1;
+      }
+      if (work.nextDeparture >= homes) work.departBudget = 0;
     }
   }
 
-  /** Release queued vehicles onto their routes, sharing each edge's capacity between zones. */
+  /** Release queued households onto their routes, sharing each edge's capacity between zones. */
   private release(): void {
     const desired = new Map<number, number>();
     const load = new Map<number, number>();
     for (const zone of this.zones) {
-      if (zone.status !== "ordered" || !zone.route || zone.routeBlocked || zone.queued <= VEHICLE_EPSILON) continue;
-      const want = Math.min(zone.queued, zone.route.bottleneckVph / SECONDS_PER_MINUTE);
+      const work = this.work[zone.index];
+      if (zone.status !== "ordered" || !zone.route || zone.routeBlocked || work.queue.length === 0) continue;
+      const want = Math.min(work.queue.length * work.vehiclesPerHome, zone.route.bottleneckVph / SECONDS_PER_MINUTE);
       desired.set(zone.index, want);
       for (const step of zone.route.steps) load.set(step.edge, (load.get(step.edge) ?? 0) + want);
     }
     for (const [index, want] of desired) {
       const zone = this.zones[index];
+      const work = this.work[index];
       let factor = 1;
       for (const step of zone.route!.steps) {
         const capacityPerMinute = this.area.edges[step.edge].capacityVph / SECONDS_PER_MINUTE;
         factor = Math.min(factor, capacityPerMinute / (load.get(step.edge) ?? capacityPerMinute));
       }
       const vehicles = want * factor;
-      if (vehicles <= VEHICLE_EPSILON) continue;
-      zone.queued -= vehicles;
+      if (vehicles <= VEHICLE_EPSILON || work.vehiclesPerHome <= 0) continue;
+      work.releaseBudget += vehicles / work.vehiclesPerHome;
+      const count = Math.min(work.queue.length, Math.floor(work.releaseBudget + 1e-9));
+      work.releaseBudget -= count;
+      if (work.queue.length === count) work.releaseBudget = Math.min(work.releaseBudget, 1);
+      if (count === 0) continue;
+      const homes = work.queue.splice(0, count);
+      zone.queued -= count;
       if (zone.route!.steps.length === 0) {
-        zone.arrived += vehicles;
+        for (const home of homes) this.homeStatus[home] = HomeStatus.safe;
+        zone.safe += count;
         continue;
       }
+      for (const home of homes) this.homeStatus[home] = HomeStatus.driving;
+      zone.onRoad += count;
       this.packets.push({
         id: this.nextPacketId++,
         zone: index,
-        vehicles,
+        homes,
+        vehicles: count * work.vehiclesPerHome,
         exitId: zone.exitId!,
         steps: zone.route!.steps,
         stepIndex: 0,
@@ -477,14 +637,16 @@ export class DispatchEngine {
 
   private advancePackets(now: number, blocked: (edge: number) => boolean): void {
     const arrival = this.exposure.edgeArrival;
-    const exposedByZone = new Map<number, number>();
+    const caughtByZone = new Map<number, number>();
     const remaining: Packet[] = [];
     for (const packet of this.packets) {
       const zone = this.zones[packet.zone];
       const current = packet.steps[packet.stepIndex];
       if (current && arrival[current.edge] <= now) {
-        zone.exposed += packet.vehicles;
-        exposedByZone.set(packet.zone, (exposedByZone.get(packet.zone) ?? 0) + packet.vehicles);
+        for (const home of packet.homes) this.homeStatus[home] = HomeStatus.caught;
+        zone.onRoad -= packet.homes.length;
+        zone.caught += packet.homes.length;
+        caughtByZone.set(packet.zone, (caughtByZone.get(packet.zone) ?? 0) + packet.homes.length);
         continue;
       }
       const ahead = packet.steps.slice(packet.stepIndex + 1);
@@ -505,14 +667,17 @@ export class DispatchEngine {
           }
         }
       }
-      if (packet.stepIndex >= packet.steps.length) zone.arrived += packet.vehicles;
-      else remaining.push(packet);
+      if (packet.stepIndex >= packet.steps.length) {
+        for (const home of packet.homes) this.homeStatus[home] = HomeStatus.safe;
+        zone.onRoad -= packet.homes.length;
+        zone.safe += packet.homes.length;
+      } else remaining.push(packet);
     }
     this.packets = remaining;
-    for (const [index, vehicles] of exposedByZone) {
+    for (const [index, homes] of caughtByZone) {
       this.alert(
         "vehicles_exposed",
-        `${Math.round(vehicles)} vehicles from ${this.area.zones[index].id} caught on a road the fire reached.`,
+        `${homes} households from ${this.area.zones[index].id} caught on a road the fire reached.`,
         true,
       );
     }
@@ -556,6 +721,11 @@ export class DispatchEngine {
         }
       }
       let budget = SECONDS_PER_MINUTE;
+      if (unit.holdSeconds > 0) {
+        const used = Math.min(budget, unit.holdSeconds);
+        unit.holdSeconds -= used;
+        budget -= used;
+      }
       while (budget > 0 && unit.stepIndex < unit.steps.length) {
         const step = unit.steps[unit.stepIndex];
         const left = edgeSeconds(this.area, step.edge) - unit.stepElapsedSeconds;
@@ -569,7 +739,7 @@ export class DispatchEngine {
           unit.stepElapsedSeconds = 0;
         }
       }
-      if (unit.stepIndex >= unit.steps.length) {
+      if (unit.stepIndex >= unit.steps.length && unit.holdSeconds <= 0) {
         unit.steps = [];
         unit.stepIndex = 0;
         if (unit.status === "returning") {
@@ -578,6 +748,7 @@ export class DispatchEngine {
           unit.zone = null;
         } else {
           unit.status = "on_scene";
+          unit.arrivedMinute = now;
           this.alert(
             "unit_arrived",
             `${unit.id} on scene at ${this.area.zones[unit.zone!].id} (${unit.task === "evacuation_support" ? "evacuation support" : "structure defense"}).`,
@@ -589,50 +760,58 @@ export class DispatchEngine {
   }
 
   private checkCleared(): void {
-    const enRoute = this.enRouteByZone();
     for (const zone of this.zones) {
       if (zone.status !== "ordered") continue;
-      if (zone.notReady + zone.queued + (enRoute.get(zone.index) ?? 0) <= VEHICLE_EPSILON) {
+      if (zone.atHome + zone.queued + zone.onRoad === 0) {
         zone.status = "cleared";
-        this.alert("zone_cleared", `${this.zoneName(zone.index)} is clear: every vehicle reached an exit.`, false);
+        zone.clearedMinute = this.minute;
+        this.alert(
+          "zone_cleared",
+          `${this.zoneName(zone.index)} is clear: ${zone.safe} homes reached an exit${zone.caught > 0 ? `, ${zone.caught} were caught` : ""}.`,
+          false,
+        );
       }
     }
-  }
-
-  private enRouteByZone(): Map<number, number> {
-    const totals = new Map<number, number>();
-    for (const packet of this.packets) totals.set(packet.zone, (totals.get(packet.zone) ?? 0) + packet.vehicles);
-    return totals;
   }
 
   // ---- Read models ---------------------------------------------------------------------
 
   totals(): Totals {
-    let vehicles = 0;
-    let notOrdered = 0;
-    let waiting = 0;
-    let arrived = 0;
-    let exposed = 0;
+    const totals: Totals = { homes: 0, vehicles: 0, notOrdered: 0, waiting: 0, onRoad: 0, safe: 0, caught: 0 };
     for (const zone of this.zones) {
-      vehicles += this.area.zones[zone.index].vehicles;
-      if (zone.status === "no_order") notOrdered += zone.notReady;
-      else waiting += zone.notReady + zone.queued;
-      arrived += zone.arrived;
-      exposed += zone.exposed;
+      const area = this.area.zones[zone.index];
+      totals.homes += area.homes;
+      totals.vehicles += area.vehicles;
+      if (zone.status === "no_order") totals.notOrdered += zone.atHome;
+      else totals.waiting += zone.atHome + zone.queued;
+      totals.onRoad += zone.onRoad;
+      totals.safe += zone.safe;
+      totals.caught += zone.caught;
     }
-    const enRoute = this.packets.reduce((sum, packet) => sum + packet.vehicles, 0);
-    return { vehicles, notOrdered, waiting, enRoute, arrived, exposed };
+    return totals;
   }
 
-  /** Cohorts on the road, for the map. */
-  vehiclePositions(): { position: LonLat; vehicles: number; zone: number; stuck: boolean }[] {
+  /** Households queued at a zone's loading point, as vehicles. */
+  queuedVehicles(zone: number): number {
+    return this.zones[zone].queued * this.work[zone].vehiclesPerHome;
+  }
+
+  /** Groups on the road, for the 3D view. */
+  vehicleGroups(): VehicleGroup[] {
     return this.packets.map((packet) => {
       const step = packet.steps[packet.stepIndex];
-      const fraction = step ? packet.stepElapsedSeconds / edgeSeconds(this.area, step.edge) : 1;
+      if (!step) {
+        const node = this.area.nodes[this.area.zones[packet.zone].node];
+        return { id: packet.id, zone: packet.zone, position: node, ahead: node, vehicles: packet.vehicles, stuck: packet.stuck };
+      }
+      const seconds = edgeSeconds(this.area, step.edge);
+      const fraction = packet.stepElapsedSeconds / seconds;
       return {
-        position: step ? pointAlongStep(this.area, step, fraction) : this.area.nodes[this.area.zones[packet.zone].node],
-        vehicles: packet.vehicles,
+        id: packet.id,
         zone: packet.zone,
+        position: pointAlongStep(this.area, step, fraction),
+        ahead: pointAlongStep(this.area, step, Math.min(1, fraction + 0.05)),
+        vehicles: packet.vehicles,
         stuck: packet.stuck,
       };
     });
@@ -650,15 +829,19 @@ export class DispatchEngine {
     return routeCoords(this.area, unit.steps, unit.stepIndex);
   }
 
-  /** Active evacuation routes, for the map. */
-  activeRoutes(): { zone: number; exitId: string; coords: LonLat[] }[] {
-    return this.zones
-      .filter((zone) => zone.status === "ordered" && zone.route && !zone.routeBlocked && zone.exitId)
-      .map((zone) => ({ zone: zone.index, exitId: zone.exitId!, coords: routeCoords(this.area, zone.route!.steps) }));
+  /** Minutes until a moving unit reaches its destination, or null when it is not moving. */
+  unitEtaMinutes(unit: UnitState): number | null {
+    if (unit.status !== "en_route" && unit.status !== "returning") return null;
+    let seconds = unit.holdSeconds - unit.stepElapsedSeconds;
+    for (let i = unit.stepIndex; i < unit.steps.length; i += 1) seconds += edgeSeconds(this.area, unit.steps[i].edge);
+    return Math.max(0, seconds / SECONDS_PER_MINUTE);
   }
 
-  enRoute(zone: number): number {
-    return this.enRouteByZone().get(zone) ?? 0;
+  /** Active evacuation routes, for the map. */
+  activeRoutes(): { zone: number; exitId: string; route: Route }[] {
+    return this.zones
+      .filter((zone) => zone.status === "ordered" && zone.route && !zone.routeBlocked && zone.exitId)
+      .map((zone) => ({ zone: zone.index, exitId: zone.exitId!, route: zone.route! }));
   }
 }
 

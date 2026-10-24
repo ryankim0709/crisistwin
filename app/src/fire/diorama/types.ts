@@ -12,8 +12,11 @@
  * is the north edge). Convert to longitude/latitude with `mercatorToLonLat` from
  * `../landscape`. Scene axes follow three.js: +x east, +z south, +y up.
  */
+import type * as THREE from "three";
 import type { LandscapeGrid } from "../landscape";
 import type { FireRun, GeoPoint } from "../spread";
+import type { BoardFrame } from "./board";
+import type { LabelLayer } from "./labels";
 
 export type { LandscapeGrid, FireRun, GeoPoint };
 
@@ -23,6 +26,18 @@ export type GroundClickMode = "origin" | "wind";
 export type ViewInsets = { top: number; right: number; bottom: number; left: number };
 
 export type FireDioramaOptions = { reducedMotion: boolean };
+
+/**
+ * Extra 3D content another page draws on the board (the dispatch page's homes, routes and
+ * vehicles). `attach` runs every time the board is rebuilt; the overlay adds its objects
+ * under `parent` and must remove and dispose them in `detach`.
+ */
+export interface BoardOverlay {
+  attach(frame: BoardFrame, parent: THREE.Group, labels: LabelLayer): void;
+  detach(): void;
+  /** Every animation frame: seconds since start (frozen under reduced motion), frame delta, viewport px. */
+  tick(time: number, dt: number, reducedMotion: boolean, width: number, height: number): void;
+}
 
 /**
  * Public surface of `FireDioramaScene` (implemented in `FireDioramaScene.ts`).
@@ -47,5 +62,11 @@ export interface FireDioramaSceneApi {
   /** Animate to a view that frames the board (or the burn, when `focusFire` is true). */
   resetView(focusFire?: boolean): void;
   setReducedMotion(value: boolean): void;
+  /** Draw (or clear) another page's content on the board; survives board rebuilds. */
+  setOverlay(overlay: BoardOverlay | null): void;
+  /** Show or hide the stylized fuel-class houses (a page drawing its own homes hides them). */
+  setCoverHouses(visible: boolean): void;
+  /** Animate to a view of the ground within `radiusMeters` of `point`. */
+  focusOn(point: GeoPoint, radiusMeters: number): void;
   dispose(): void;
 }

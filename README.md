@@ -36,16 +36,17 @@ its fire, traffic and crew behaviour are scripted for visual demonstration, not 
 validated model or operational guidance (see
 [ADR 0010](docs/adr/0010-evacuation-diorama.md)).
 
-The `/dispatch` page ("Dispatch agent") is a copy of the Simulation Studio in which, after
-the fire run is computed, a Claude-based dispatch agent runs alongside playback. Every 10
-simulated minutes (sooner after urgent alerts, at least 3 minutes apart) the clock pauses,
-the browser sends an observation to the backend, and the agent streams its reasoning and
-issues orders: evacuate a zone via an exit (also used to redirect traffic), dispatch a fire
-engine to a zone, or recall it. The browser computes all routes, flows and counts, and the
-agent only chooses among listed options. Fire spread is not affected by orders, and a
-no-action baseline is shown for comparison. Roads and fire stations come from
-OpenStreetMap; zones and vehicle counts are synthetic. It is a planning experiment, not
-operational guidance (see [ADR 0014](docs/adr/0014-dispatch-agent.md)).
+The `/dispatch` page ("Dispatch agent") runs the fire spread model's 3D diorama for any
+stored region or custom US area, with a Claude-based dispatcher alongside playback. After a
+fire is placed, the backend builds the road network, fire stations and synthetic homes for
+the area the fire threatens from OpenStreetMap. Every 10 simulated minutes (sooner after
+urgent alerts) the clock pauses and the agent streams its reasoning and issues orders:
+evacuate a zone via an exit, dispatch a fire engine to a zone, or recall it. The browser
+computes all routes, flows and counts; each home's roof in 3D shows whether its household is
+waiting, driving out, safe or caught, and the console lists zones in evacuation order with a
+check when clear. Fire spread is not affected by orders, and a no-action baseline is shown
+for comparison. It is a planning experiment, not operational guidance (see
+[ADR 0014](docs/adr/0014-dispatch-agent.md) and [ADR 0016](docs/adr/0016-dispatch-anywhere.md)).
 
 The native iOS scaffold is in [`mobile/`](mobile/README.md): a SwiftUI workspace,
 API/database readiness card, and a scenario empty state. Native maps, simulation,
@@ -552,17 +553,12 @@ operational forecast.
 Set `ANTHROPIC_API_KEY` in the environment of the Django backend and restart it; without it
 the endpoint returns 503. Optionally set `DISPATCH_AGENT_MODEL` and
 `DISPATCH_AGENT_EFFORT` (`low`, `medium` or `high`; the default is `low`). Open
-**http://localhost:5173/dispatch** (the Studio demo fires are preloaded), press **Run simulation**, then **Start
-agent**. Playback is limited to 1 or 2 simulated minutes per second so the agent has time to
-decide; each decision is a paid model call. Model, assumptions and the request/response
-contract: `docs/adr/0014-dispatch-agent.md`.
-
-To rebuild the road and station fixture from OpenStreetMap (needs internet; standard
-library only), run from the repository root:
-
-```bash
-python3 -m tools.build_dispatch_area --output app/public/dispatch/east-bay-hills.json
-```
+**http://localhost:5173/dispatch**, press **Load demo fire** (or pick an area and click the
+landscape), wait for the roads and homes to load from OpenStreetMap (the backend needs
+internet the first time a box is used; results are cached), then press **Start the AI
+dispatcher**. Playback runs at 1, 2 or 4 simulated minutes per second so the agent has time to
+decide; each decision is a paid model call. Model, assumptions and contracts:
+`docs/adr/0014-dispatch-agent.md` and `docs/adr/0016-dispatch-anywhere.md`.
 
 ### Build runtime images
 
