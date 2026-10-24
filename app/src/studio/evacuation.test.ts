@@ -267,3 +267,188 @@ describe("crews in a pocket the fire has cut off", () => {
     expect(unit?.node).not.toBe(3);
   });
 });
+
+/**
+ * Zones Z01 (node 0) and Z02 (node 1), 10 homes each, sharing junction 2 and one road (2-3) to
+ * exit X01; Z01 also has a road of its own (0-4) to exit X02.
+ */
+function twoZoneArea(): DispatchArea {
+  const nodes: LonLat[] = [
+    [0, 0],
+    [0, 0.01],
+    [0.01, 0.005],
+    [0.02, 0.005],
+    [-0.01, 0],
+  ];
+  const spec: [number, number, number][] = [
+    [0, 2, 500],
+    [1, 2, 500],
+    [2, 3, 500],
+    [0, 4, 3000],
+  ];
+  const edges: RoadEdge[] = spec.map(([from, to, lengthMeters], index) => ({
+    index,
+    from,
+    to,
+    lengthMeters,
+    roadClass: "secondary",
+    speedKph: 36,
+    capacityVph: 600,
+    oneway: false,
+    name: null,
+    bridge: false,
+    coords: [nodes[from], nodes[to]],
+  }));
+  const outgoing: Arc[][] = nodes.map(() => []);
+  for (const edge of edges) {
+    outgoing[edge.from].push({ edge: edge.index, forward: true, head: edge.to });
+    outgoing[edge.to].push({ edge: edge.index, forward: false, head: edge.from });
+  }
+  const zone = (id: string, node: number, firstHome: number) => ({
+    id,
+    name: `Zone ${id}`,
+    node,
+    homes: 10,
+    vehicles: 15,
+    centroid: nodes[node],
+    polygon: [],
+    firstHome,
+  });
+  return {
+    id: "test2",
+    name: "Two zones",
+    bbox: [-0.01, 0, 0.02, 0.01],
+    attribution: "",
+    osmTimestamp: null,
+    notes: [],
+    nodes,
+    edges,
+    outgoing,
+    zones: [zone("Z01", 0, 0), zone("Z02", 1, 10)],
+    homes: [
+      ...Array.from({ length: 10 }, () => ({ position: nodes[0], zone: 0 })),
+      ...Array.from({ length: 10 }, () => ({ position: nodes[1], zone: 1 })),
+    ],
+    exits: [
+      { id: "X01", name: "East", node: 3, road: "" },
+      { id: "X02", name: "West", node: 4, road: "" },
+    ],
+    stations: [],
+  };
+}
+
+describe("studio evacuation with a plan", () => {
+  const base = () => {
+    const area = testArea();
+    return {
+      area,
+      exposure: noFire(area),
+      horizonMinutes: HORIZON,
+      closedEdges: new Set<number>(),
+      orderMinute: 0,
+    };
+  };
+
+  it("orders a zone to its planned exit", () => {
+    const inputs = { ...base(), plan: { exits: { Z01: "X02" }, after: {} } };
+    const run = new EvacuationPolicyRun(inputs);
+    expect(run.engine.zones[0].exitId).toBe("X02");
+    expect(run.initialOrders.get(0)).toEqual({ exitId: "X02", after: null });
+    const planned = simulateEvacuation(inputs);
+    const fastest = simulateEvacuation(base());
+    expect(planned.final.safe).toBe(10);
+    expect(planned.householdHoursEvacuating).toBeGreaterThan(fastest.householdHoursEvacuating);
+  });
+
+  it("falls back to the fastest open exit when the planned one is unreachable", () => {
+    const inputs = {
+      ...base(),
+      closedEdges: new Set([2]),
+      plan: { exits: { Z01: "X02" }, after: {} },
+    };
+    expect(new EvacuationPolicyRun(inputs).engine.zones[0].exitId).toBe("X01");
+    const unknown = { ...base(), plan: { exits: { Z01: "nowhere" }, after: {} } };
+    expect(new EvacuationPolicyRun(unknown).engine.zones[0].exitId).toBe("X01");
+  });
+
+  it("behaves exactly like the default policy with an empty plan", () => {
+    const inputs = { ...base(), closedEdges: new Set([1]) };
+    expect(simulateEvacuation({ ...inputs, plan: { exits: {}, after: {} } })).toEqual(
+      simulateEvacuation(inputs),
+    );
+  });
+
+  it("stages a zone behind its predecessor, delaying its order", () => {
+    const area = twoZoneArea();
+    const inputs = {
+      area,
+      exposure: noFire(area),
+      horizonMinutes: HORIZON,
+      closedEdges: new Set<number>(),
+      orderMinute: 0,
+    };
+    const planned = { ...inputs, plan: { exits: {}, after: { Z02: "Z01" } } };
+    const run = new EvacuationPolicyRun(planned);
+    const [first, second] = run.engine.zones;
+    expect(first.status).toBe("ordered");
+    expect(second.status).toBe("no_order");
+    expect(second.stage?.after).toBe(0);
+    expect(run.initialOrders.get(1)).toEqual({ exitId: "X01", after: 0 });
+    while (!run.finished && second.orderedMinute === null) run.step();
+    // Released once every Z01 household is out of home and the loading queue.
+    expect(second.orderedMinute).not.toBeNull();
+    expect(second.orderedMinute!).toBeGreaterThanOrEqual(45);
+    expect(second.orderRank).toBe(2);
+    const staged = simulateEvacuation(planned);
+    const together = simulateEvacuation(inputs);
+    expect(staged.final.safe).toBe(20);
+    expect(staged.stagedHomes).toBe(0);
+    expect(staged.allClearMinute!).toBeGreaterThan(together.allClearMinute!);
+    // Waiting for the wave at home counts as time evacuating.
+    expect(staged.householdHoursEvacuating).toBeGreaterThan(together.householdHoursEvacuating);
+  });
+
+  it("orders a planned wave directly when its predecessor is cut off", () => {
+    const area = twoZoneArea();
+    const run = new EvacuationPolicyRun({
+      area,
+      exposure: noFire(area),
+      horizonMinutes: HORIZON,
+      // Z01's two roads closed: it is cut off.
+      closedEdges: new Set([0, 3]),
+      orderMinute: 0,
+      plan: { exits: {}, after: { Z02: "Z01" } },
+    });
+    expect(run.cutOff.has(0)).toBe(true);
+    expect(run.engine.zones[1].status).toBe("ordered");
+    expect(run.initialOrders.get(1)).toEqual({ exitId: "X01", after: null });
+  });
+
+  it("orders waves that wait on each other directly", () => {
+    const area = twoZoneArea();
+    const run = new EvacuationPolicyRun({
+      area,
+      exposure: noFire(area),
+      horizonMinutes: HORIZON,
+      closedEdges: new Set<number>(),
+      orderMinute: 0,
+      plan: { exits: {}, after: { Z01: "Z02", Z02: "Z01" } },
+    });
+    expect(run.engine.zones.map((zone) => zone.status)).toEqual(["ordered", "ordered"]);
+  });
+
+  it("has no all-clear while a planned wave is still waiting at the horizon", () => {
+    const area = twoZoneArea();
+    const summary = simulateEvacuation({
+      area,
+      exposure: noFire(area),
+      horizonMinutes: 30,
+      closedEdges: new Set<number>(),
+      orderMinute: 0,
+      plan: { exits: {}, after: { Z02: "Z01" } },
+    });
+    expect(summary.allClearMinute).toBeNull();
+    expect(summary.stagedHomes).toBe(10);
+    expect(summary.final.notOrdered).toBe(10);
+  });
+});

@@ -4,12 +4,23 @@
  * and without the closures. Every number is the dispatch engine's (studio/evacuation.ts).
  */
 
-import type { RoadEdge } from "../dispatch/area";
+import type { DispatchArea, RoadEdge } from "../dispatch/area";
 import type { Totals } from "../dispatch/engine";
 import { formatElapsed } from "../fire/spread";
 import type { BoardStreetsState } from "../fire/useBoardStreets";
-import { Button, Field, LoadingState, Panel, Tag } from "../ui";
+import { Button, Field, LoadingState, Notice, Panel, SegmentedControl, Tag } from "../ui";
 import { ORDER_MINUTE_CHOICES, type EvacuationSummary } from "./evacuation";
+import { describeImprovement } from "./evacuationAdvice";
+import type { EvacuationOptimization } from "./evacuationOptimizer";
+import type { EvacuationOptimizerState } from "./useEvacuationOptimizer";
+
+/** Which plan the 3D view plays: the default policy or the optimiser's best. */
+export type PlayPlan = "fastest" | "optimized";
+
+const PLAY_OPTIONS = [
+  { value: "fastest", label: "Fastest exit", title: "Every zone to its fastest open exit" },
+  { value: "optimized", label: "Optimized plan", title: "The best plan the search found" },
+] as const;
 
 export interface EvacuationPanelProps {
   streets: BoardStreetsState;
@@ -29,6 +40,11 @@ export interface EvacuationPanelProps {
   baseline: EvacuationSummary | null;
   withClosures: EvacuationSummary | null;
   currentMinute: number;
+  /** Road graph, for exit and zone names in the optimised plan. */
+  area: DispatchArea | null;
+  optimizer: EvacuationOptimizerState;
+  playPlan: PlayPlan;
+  onPlayPlan: (plan: PlayPlan) => void;
 }
 
 function roadLabel(edge: RoadEdge): string {
@@ -64,6 +80,163 @@ function liveLine(totals: Totals | undefined, minute: number): string | null {
   return `At ${formatElapsed(minute)}: ${totals.waiting} waiting, ${totals.onRoad} on the road, ${totals.safe} out, ${totals.caught} caught.`;
 }
 
+function OptimizedPlan({
+  optimizer,
+  area,
+  closureCount,
+  playPlan,
+  onPlayPlan,
+}: {
+  optimizer: EvacuationOptimizerState;
+  area: DispatchArea | null;
+  closureCount: number;
+  playPlan: PlayPlan;
+  onPlayPlan: (plan: PlayPlan) => void;
+}) {
+  const result = optimizer.status === "ready" ? optimizer.result : undefined;
+  const exitName = (id: string | null) =>
+    id === null ? "no exit" : (area?.exits.find((exit) => exit.id === id)?.name ?? id);
+  const zoneName = (id: string) => area?.zones.find((zone) => zone.id === id)?.name ?? id;
+
+  return (
+    <section className="studio-evac__plan" aria-labelledby="studio-evac-plan-title">
+      <div className="studio-evac__head">
+        <strong id="studio-evac-plan-title">Optimized plan</strong>
+        <Tag>Simulated</Tag>
+      </div>
+
+      <div role="status" aria-live="polite" className="studio-evac__status">
+        {optimizer.status === "running" && (
+          <LoadingState>
+            Testing strategies…
+            {optimizer.progress ? ` ${optimizer.progress.done}/${optimizer.progress.total}` : ""}
+          </LoadingState>
+        )}
+        {optimizer.status === "error" && (
+          <Notice tone="danger" compact title="The search failed">
+            {optimizer.error}
+          </Notice>
+        )}
+        {result && (
+          <p className="studio-evac__summary">
+            {describeImprovement({
+              baseline: result.baseline.summary,
+              best: result.best.summary,
+              changes: result.changes,
+              improved: result.improved,
+              closureCount,
+            })}
+          </p>
+        )}
+      </div>
+
+      {result && (
+        <>
+          <StrategyTable result={result} />
+          {result.best.summary.stagedHomes > 0 && (
+            <p className="studio-evac__note">
+              In the best plan {result.best.summary.stagedHomes} households in staged zones were
+              still at home waiting for their wave at the horizon.
+            </p>
+          )}
+          {result.changes.length > 0 && (
+            <details className="studio-evac__changes">
+              <summary>
+                What changes in the best plan ({result.changes.length}{" "}
+                {result.changes.length === 1 ? "zone" : "zones"})
+              </summary>
+              <ul>
+                {result.changes.map((change) => {
+                  const moved = change.exitId !== change.fastestExitId;
+                  return (
+                    <li key={change.zoneId}>
+                      <strong>{change.zoneName}</strong> ({change.homes} homes):{" "}
+                      {moved
+                        ? `${exitName(change.fastestExitId)} → ${exitName(change.exitId)}`
+                        : `stays on ${exitName(change.exitId)}`}
+                      {change.afterZoneId && `, waits for ${zoneName(change.afterZoneId)}`}
+                    </li>
+                  );
+                })}
+              </ul>
+            </details>
+          )}
+        </>
+      )}
+
+      <SegmentedControl
+        label="Plan played in the 3D view"
+        options={PLAY_OPTIONS.map((option) => ({
+          ...option,
+          disabled: option.value === "optimized" && !result,
+        }))}
+        value={playPlan}
+        onChange={onPlayPlan}
+        className="studio-evac__play"
+      />
+      {playPlan === "optimized" && !result && (
+        <p className="studio-evac__note">Playing the fastest exit until the search finishes.</p>
+      )}
+
+      {result && (
+        <p className="studio-evac__note">
+          Model experiment over synthetic homes, not an instruction to anyone. The search tried{" "}
+          {result.evaluations} strategies and re-runs when you change closures or the order time.
+        </p>
+      )}
+    </section>
+  );
+}
+
+function StrategyTable({ result }: { result: EvacuationOptimization }) {
+  return (
+    <div className="ui-table-scroll">
+      <table className="ui-table studio-evac__table studio-evac__strategies">
+        <caption className="studio-evac__sr">Strategies tried at the horizon, best first</caption>
+        <thead>
+          <tr>
+            <th scope="col">Strategy</th>
+            <th scope="col" className="num" title="Households that reached an exit">
+              Out
+            </th>
+            <th scope="col" className="num" title="Households caught by the fire">
+              Caught
+            </th>
+            <th scope="col" className="num" title="Household-hours evacuating">
+              HH-hours
+            </th>
+            <th scope="col" className="num" title="Everyone ordered is out by">
+              All clear
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {result.tried.map((candidate) => {
+            const { final } = candidate.summary;
+            return (
+              <tr key={candidate.id} title={candidate.description}>
+                <th scope="row">
+                  {candidate.label}
+                  {candidate.id === result.best.id && (
+                    <>
+                      {" "}
+                      <Tag tone="success">Best</Tag>
+                    </>
+                  )}
+                </th>
+                <td className="num">{final.safe}</td>
+                <td className="num">{final.caught}</td>
+                <td className="num">{candidate.summary.householdHoursEvacuating.toFixed(1)}</td>
+                <td className="num">{clearText(candidate.summary)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export default function EvacuationPanel(props: EvacuationPanelProps) {
   const {
     streets,
@@ -81,9 +254,17 @@ export default function EvacuationPanel(props: EvacuationPanelProps) {
     baseline,
     withClosures,
     currentMinute,
+    area,
+    optimizer,
+    playPlan,
+    onPlayPlan,
   } = props;
   const ready = streets.status === "ready";
-  const shown = withClosures ?? baseline;
+  const playingOptimized = playPlan === "optimized" && optimizer.status === "ready";
+  const shown =
+    playingOptimized && optimizer.result
+      ? optimizer.result.best.summary
+      : (withClosures ?? baseline);
   const minute = Math.floor(currentMinute);
 
   return (
@@ -242,6 +423,7 @@ export default function EvacuationPanel(props: EvacuationPanelProps) {
               </div>
               {shown && (
                 <p className="studio-evac__live" aria-live="off">
+                  {playingOptimized ? "Optimized plan. " : ""}
                   {liveLine(shown.totalsByMinute[minute], minute)}
                 </p>
               )}
@@ -250,13 +432,21 @@ export default function EvacuationPanel(props: EvacuationPanelProps) {
                   Evacuating against the previous run&rsquo;s fire; run again to include your edits.
                 </p>
               )}
+              <OptimizedPlan
+                optimizer={optimizer}
+                area={area}
+                closureCount={closedEdges.length}
+                playPlan={playPlan}
+                onPlayPlan={onPlayPlan}
+              />
             </>
           )}
 
           <p className="studio-evac__note">
-            Every zone is ordered at {formatElapsed(orderMinute)} to its fastest open exit and
-            re-routed when fire cuts its route. Closures change traffic only, not the fire. Homes
-            and zones are synthetic; counts are model output, not casualty estimates.
+            Unless you play the optimized plan, every zone is ordered at{" "}
+            {formatElapsed(orderMinute)} to its fastest open exit and re-routed when fire cuts its
+            route. Closures change traffic only, not the fire. Homes and zones are synthetic; counts
+            are model output, not casualty estimates.
           </p>
         </>
       )}

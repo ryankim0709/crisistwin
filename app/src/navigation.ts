@@ -26,11 +26,6 @@ export const navigationItems: readonly NavigationItem[] = [
     group: "Workspace",
   },
   {
-    path: "/scenarios",
-    label: "Scenarios",
-    group: "Workspace",
-  },
-  {
     path: "/evacuation",
     label: "Evacuation planning",
     group: "Workspace",
