@@ -96,6 +96,10 @@ export function buildObservation(inputs: ObservationInputs): Observation {
       fire_eta_min: etaWithin(exposure.zoneContact[state.index], minute),
       fire_core_eta_min: etaWithin(exposure.zoneCore[state.index], minute),
       assigned_exit: state.exitId,
+      queue_clear_min:
+        state.route && !state.routeBlocked
+          ? Math.round(((state.notReady + state.queued) / state.route.bottleneckVph) * 60)
+          : null,
       route_blocked: state.routeBlocked,
       exit_options: options,
       units_on_scene: unitsOnScene.get(state.index) ?? [],

@@ -46,6 +46,11 @@ export interface ZoneObservation {
   /** Minutes until fire reaches the zone core (vehicles still there are exposed), same rules. */
   fire_core_eta_min: number | null;
   assigned_exit: string | null;
+  /**
+   * Minutes for `vehicles_waiting` to enter the assigned route at its bottleneck capacity,
+   * ignoring departure spread and other zones sharing the road; null with no usable route.
+   */
+  queue_clear_min: number | null;
   route_blocked: boolean;
   /** Up to 3 reachable exits, fastest first. Empty when no exit is reachable. */
   exit_options: ExitOption[];

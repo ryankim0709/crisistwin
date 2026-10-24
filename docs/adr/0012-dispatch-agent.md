@@ -27,7 +27,9 @@ validated orders -> engine.
 - **The agent chooses from listed options.** The observation lists, for each zone, up to
   three reachable exits with drive minutes and bottleneck capacity (`exit_options`, fastest
   first), the units, and the tasks. An order names an id from those lists. The agent never
-  supplies a route, time or count. The browser computes every route (Dijkstra, `routing.ts`),
+  supplies a route, time or count, and derived figures it would otherwise compute itself,
+  such as how long a zone's queue takes to clear at the route bottleneck
+  (`queue_clear_min`), are supplied by the simulator. The browser computes every route (Dijkstra, `routing.ts`),
   flow and count (`engine.ts`).
 - **Two validation layers.** The server checks every order against the observation it
   received (known zone, unit and task; the exit must be in that zone's `exit_options`; at
