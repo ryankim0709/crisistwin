@@ -177,3 +177,36 @@ describe("live monitor", () => {
     expect(grown).toEqual(["Fire grew from 10 ha to 20 ha since the last decision at T+6."]);
   });
 });
+
+describe("fire path scope", () => {
+  it("classifies zones by the fire forecast", () => {
+    const engine = engineWith([30, Infinity]);
+    expect(engine.zoneImpact(0)).toBe("threatened");
+    expect(engine.zoneImpact(1)).toBe("outside");
+    expect(engineWith([90, 300]).zoneImpact(0)).toBe("later");
+    // Contact after the 240-minute horizon is outside the modelled fire path.
+    expect(engineWith([90, 300]).zoneImpact(1)).toBe("outside");
+    expect(engineWith([0, 300]).zoneImpact(0)).toBe("burning");
+  });
+
+  it("refuses to order or stage zones outside the fire path when restricted", () => {
+    const engine = engineWith([30, Infinity]);
+    engine.restrictToFirePath = true;
+    const [inPath, ordered, staged] = engine.applyOrders([
+      { type: "order_evacuation", zone_id: "A", exit_id: "E1", reason: "" },
+      { type: "order_evacuation", zone_id: "B", exit_id: "E1", reason: "" },
+      { type: "stage_evacuation", zone_id: "B", exit_id: "E1", after_zone_id: "A", reason: "" },
+    ]);
+    expect(inPath.accepted).toBe(true);
+    expect(ordered.accepted).toBe(false);
+    expect(ordered.note).toContain("outside the fire path");
+    expect(staged.accepted).toBe(false);
+
+    // The studio's evacuate-everyone policy runs unrestricted.
+    const studio = engineWith([30, Infinity]);
+    const [all] = studio.applyOrders([
+      { type: "order_evacuation", zone_id: "B", exit_id: "E1", reason: "" },
+    ]);
+    expect(all.accepted).toBe(true);
+  });
+});

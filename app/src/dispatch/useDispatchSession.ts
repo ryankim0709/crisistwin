@@ -331,6 +331,7 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
         inputs.horizonMinutes,
         inputs.ignitions,
       );
+      engine.restrictToFirePath = true;
       engineRef.current = engine;
       inputsRef.current = inputs;
       clockRef.current = 0;

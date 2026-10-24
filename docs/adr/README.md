@@ -38,3 +38,4 @@ Status legend: **Accepted** is current. **Superseded** is kept for history; read
 | [0017-dispatch-anywhere](0017-dispatch-anywhere.md) | Dispatch agent anywhere | Accepted | `/dispatch` on the 3D diorama for any area, with roads, stations and homes built at runtime. |
 | [0018-road-closures](0018-road-closures.md) | Evacuation and road closures in the Studio 3D view | Accepted | Click roads or bridges closed; a fixed policy evacuates against the run with and without them. |
 | [0019-live-dispatch-monitor](0019-live-dispatch-monitor.md) | Live dispatch monitor and staged waves | Accepted | `/dispatch` reattached on the Studio; a monitor wakes Claude only on change; zones evacuate in waves with simulated resident notices. |
+| [0020-fire-path-scoped-evacuation](0020-fire-path-scoped-evacuation.md) | Evacuate only the fire path | Accepted | Zones get a simulator `impact` tier; the dispatcher never orders zones the fire is not forecast to reach. |

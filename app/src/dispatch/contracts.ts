@@ -1,7 +1,8 @@
 /**
  * Wire contract between the /dispatch page and POST /api/dispatch/decide
  * (app/backend/api/dispatch.py). Change both sides and docs/adr/0014-dispatch-agent.md (amended
- * by docs/adr/0017-dispatch-anywhere.md and docs/adr/0019-live-dispatch-monitor.md) together.
+ * by docs/adr/0017-dispatch-anywhere.md, 0019-live-dispatch-monitor.md and
+ * 0020-fire-path-scoped-evacuation.md) together.
  *
  * The page calls the agent only when its live monitor (monitor.ts) finds a material change;
  * `monitor.woke_because` lists those reasons.
@@ -22,7 +23,7 @@
  * are vehicles per hour.
  */
 
-import type { UnitStatus, UnitTask, ZoneStatus } from "./engine";
+import type { UnitStatus, UnitTask, ZoneImpact, ZoneStatus } from "./engine";
 
 export const DECIDE_URL = "/api/dispatch/decide";
 export const MAX_ORDERS_PER_DECISION = 20;
@@ -55,6 +56,13 @@ export interface ZoneObservation {
    * 0 when fire is already in the zone; null when not forecast within the lookahead.
    */
   fire_eta_min: number | null;
+  /**
+   * Simulator classification from the fire model's first contact: "burning" (fire is there),
+   * "threatened" (within the forecast lookahead), "later" (after the lookahead, before the
+   * horizon) or "outside" (not reached by the horizon). Outside zones cannot be ordered or
+   * staged.
+   */
+  impact: ZoneImpact;
   /** Minutes until fire reaches the zone core (vehicles still there are exposed), same rules. */
   fire_core_eta_min: number | null;
   assigned_exit: string | null;
@@ -114,6 +122,8 @@ export interface Observation {
     wind_from_degrees: number;
     wind_speed_mph: number;
     upcoming_ignitions: { name: string; minute: number }[];
+    /** Zones and households in the fire path (impact other than "outside") and outside it. */
+    fire_path: { zones: number; homes: number; outside_zones: number; outside_homes: number };
     evidence_class: "simulated";
   };
   /** Household counts. */

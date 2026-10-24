@@ -113,6 +113,7 @@ export function buildObservation(inputs: ObservationInputs): Observation {
       homes_exposed: state.caught,
       vehicles_waiting: Math.round(state.status === "no_order" ? 0 : waitingVehicles),
       fire_eta_min: etaWithin(exposure.zoneContact[state.index], minute),
+      impact: engine.zoneImpact(state.index),
       fire_core_eta_min: etaWithin(exposure.zoneCore[state.index], minute),
       assigned_exit: state.exitId,
       order_slack_min: slack === null ? null : Math.round(slack),
@@ -155,6 +156,8 @@ export function buildObservation(inputs: ObservationInputs): Observation {
     };
   });
 
+  const outside = zones.filter((zone) => zone.impact === "outside");
+  const outsideHomes = outside.reduce((sum, zone) => sum + zone.homes_total, 0);
   const totals = engine.totals();
   return {
     area: { id: area.id, name: area.name },
@@ -174,6 +177,12 @@ export function buildObservation(inputs: ObservationInputs): Observation {
       wind_from_degrees: inputs.windFromDegrees,
       wind_speed_mph: inputs.windSpeedMph,
       upcoming_ignitions: inputs.ignitions.filter((i) => i.minute > minute),
+      fire_path: {
+        zones: zones.length - outside.length,
+        homes: totals.homes - outsideHomes,
+        outside_zones: outside.length,
+        outside_homes: outsideHomes,
+      },
       evidence_class: "simulated",
     },
     totals: {
@@ -195,6 +204,7 @@ export function buildObservation(inputs: ObservationInputs): Observation {
     })),
     previous_summary: inputs.previousSummary,
     model_notes: [
+      `impact classifies each zone from the fire model's first contact: burning (fire is there), threatened (within ${FORECAST_LOOKAHEAD_MINUTES} min), later (after that, by T+${engine.horizonMinutes}), outside (not reached by T+${engine.horizonMinutes}). Outside zones cannot be ordered or staged; the fire forecast is fixed, so a zone outside stays outside.`,
       `Fire ETAs are the fire model's forecast, shown up to ${FORECAST_LOOKAHEAD_MINUTES} min ahead; the fire spread is precomputed and is not changed by any order.`,
       `After an evacuation order households leave over ${DEPARTURE_SPREAD_MINUTES} min (${SUPPORTED_DEPARTURE_SPREAD_MINUTES} min while an engine is on scene on evacuation_support), then queue at the zone's loading point for road capacity.`,
       `Routes avoid roads the fire reaches within ${ROUTE_LOOKAHEAD_MINUTES} min. Zones whose exit becomes unreachable hold departures until given another exit.`,

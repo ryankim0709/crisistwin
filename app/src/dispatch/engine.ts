@@ -88,6 +88,12 @@ export const HomeStatus = {
 export type HomeStatus = (typeof HomeStatus)[keyof typeof HomeStatus];
 
 export type ZoneStatus = "no_order" | "ordered" | "cleared" | "overrun";
+/**
+ * Where a zone sits relative to the modelled fire, from its first fire contact: fire already
+ * there, forecast within FORECAST_LOOKAHEAD_MINUTES, forecast later within the horizon, or not
+ * forecast to reach it by the horizon at all ("outside" the fire path).
+ */
+export type ZoneImpact = "burning" | "threatened" | "later" | "outside";
 export type UnitStatus = "available" | "en_route" | "on_scene" | "returning" | "stranded";
 export type UnitTask = "evacuation_support" | "structure_defense";
 
@@ -270,6 +276,12 @@ export class DispatchEngine {
   private ignitions: IgnitionEvent[];
   /** Edges closed to traffic for the whole run (indices into `area.edges`). */
   readonly closedEdges: ReadonlySet<number>;
+  /**
+   * When set (the agent's session), zones outside the modelled fire path cannot be ordered or
+   * staged: evacuating them would only add traffic to the roads threatened zones need. The
+   * studio's evacuate-everyone policy leaves it off.
+   */
+  restrictToFirePath = false;
 
   constructor(
     area: DispatchArea,
@@ -398,6 +410,14 @@ export class DispatchEngine {
       const zone = this.zones[index];
       if (zone.status === "overrun") return reject(`${order.zone_id} is already overrun by fire.`);
       if (zone.status === "cleared") return reject(`${order.zone_id} has already cleared.`);
+      if (
+        this.restrictToFirePath &&
+        zone.status === "no_order" &&
+        this.zoneImpact(index) === "outside"
+      )
+        return reject(
+          `${order.zone_id} is outside the fire path (no fire contact forecast by T+${this.horizonMinutes}); evacuating it would only add traffic.`,
+        );
       const tree = shortestPathTree(this.area, this.area.zones[index].node, blocked);
       const route = routeTo(this.area, tree, this.exitNode(order.exit_id));
       if (!route)
@@ -551,6 +571,14 @@ export class DispatchEngine {
       return zone.wave === null ? null : zone.wave + depth;
     }
     return null;
+  }
+
+  zoneImpact(index: number): ZoneImpact {
+    const contact = this.exposure.zoneContact[index];
+    if (!Number.isFinite(contact) || contact > this.horizonMinutes) return "outside";
+    const minutes = contact - this.minute;
+    if (minutes <= 0) return "burning";
+    return minutes <= FORECAST_LOOKAHEAD_MINUTES ? "threatened" : "later";
   }
 
   /**
