@@ -50,6 +50,10 @@ python3.12 -m tools.replay_camp_history --package data/incidents/camp-2018-parad
 # tools/camp_ground_record.json. Tests: python3.12 -m unittest tests.test_camp_ground_record
 python3.12 -m tools.camp_ground_record --cache-dir ~/crisistwin-sources/nist
 
+# Marshall/Woolsey/Kincade 911, dispatch and alert aggregates (network; needs pdftotext). Pins source
+# SHA-256, checks anchors, rewrites tools/ground_stats_other_fires.json. Tests: tests.test_ground_stats_other_fires
+python3.12 -m tools.ground_stats_other_fires --cache-dir ~/crisistwin-sources/ground [--check]
+
 # Other incidents (inputs directory lives outside the repository)
 python3.12 -m tools.kincade_build fetch --sources DIR
 python3.12 -m tools.kincade_build build --sources DIR
