@@ -5,12 +5,24 @@ import App from "./App";
 
 const health = { status: "ok", service: "crisistwin-api", version: "0.1.0" };
 const ready = () => ({ ok: true, json: async () => health });
+const notServed = () => ({ ok: false, status: 404, json: async () => ({}) });
+const isHealth = (url: unknown) => String(url).includes("/api/health");
+
+/** Replay data files are not under test here; they answer 404 so the overview shows empty states. */
+function routed(health: (url: string, options: RequestInit) => unknown) {
+  return vi.fn((url: string, options: RequestInit) =>
+    isHealth(url) ? health(url, options) : Promise.resolve(notServed()),
+  );
+}
 
 afterEach(() => vi.useRealTimers());
 
 describe("workspace connection", () => {
   it("shows the empty workspace and a confirmed connection", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ready()));
+    vi.stubGlobal(
+      "fetch",
+      routed(() => Promise.resolve(ready())),
+    );
     render(<App />);
     expect(screen.getByRole("status")).toHaveTextContent("Connecting");
     expect(screen.getByRole("heading", { name: "No scenarios yet" })).toBeInTheDocument();
@@ -18,24 +30,25 @@ describe("workspace connection", () => {
   });
 
   it("lets the user retry after a failure", async () => {
-    const fetch = vi
-      .fn()
-      .mockRejectedValueOnce(new TypeError("offline"))
-      .mockResolvedValueOnce(ready());
+    const healthResponses = [
+      () => Promise.reject(new TypeError("offline")),
+      () => Promise.resolve(ready()),
+    ];
+    const fetch = routed(() => healthResponses.shift()!());
     vi.stubGlobal("fetch", fetch);
     const user = userEvent.setup();
     render(<App />);
     expect(await screen.findByRole("alert")).toHaveTextContent("Cannot reach");
     await user.click(screen.getByRole("button", { name: "Try again" }));
     expect(await screen.findByText(/API and database connected/)).toBeInTheDocument();
-    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch.mock.calls.filter(([url]) => isHealth(url))).toHaveLength(2);
   });
 
   it("cancels the pending request on unmount", () => {
     let signal: AbortSignal | undefined;
     vi.stubGlobal(
       "fetch",
-      vi.fn((_url, options: RequestInit) => {
+      routed((_url, options) => {
         signal = options.signal ?? undefined;
         return new Promise(() => {});
       }),
@@ -49,8 +62,8 @@ describe("workspace connection", () => {
     vi.useFakeTimers();
     vi.stubGlobal(
       "fetch",
-      vi.fn(
-        (_url, options: RequestInit) =>
+      routed(
+        (_url, options) =>
           new Promise((_resolve, reject) => {
             options.signal?.addEventListener("abort", () =>
               reject(new DOMException("Aborted", "AbortError")),

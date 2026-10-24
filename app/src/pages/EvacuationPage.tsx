@@ -1,4 +1,5 @@
 import { useState } from "react";
+import IncidentSummary from "./IncidentSummary";
 import { DraftNotice, EmptyResult, Field, Panel, Tag, WorkspacePage } from "./WorkspaceUI";
 
 const initialZones = [
@@ -23,6 +24,12 @@ export default function EvacuationPage() {
       title="Evacuation planning"
       description="Connect population demand, departure timing, and destination capacity."
     >
+      <IncidentSummary
+        title="Real demand, orders and refuges in the replays"
+        eyebrow="Historical evacuations"
+        layers={["zones", "events", "destinations", "roads", "traffic"]}
+        intro="Historical replays include evacuation zones with fixture demand, recorded orders and closures, exits and refuges, and a simulated traffic run. The sample tables below are separate synthetic inputs."
+      />
       <DraftNotice />
       <div className="ui-split">
         <Panel

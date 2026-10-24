@@ -49,7 +49,7 @@ EARLIEST_ORDER_AT = datetime.fromisoformat("2018-11-08T15:13:00+00:00")
 LATEST_ORDER_AT = datetime.fromisoformat("2018-11-08T17:30:00+00:00")
 ARRIVALS_REPORTED_BY = datetime.fromisoformat("2018-11-08T18:00:00+00:00")
 
-# Objective, minimised: exposed vehicle-minutes (primary) plus secondary penalties in
+# Objective, minimised: exposed vehicle-minutes on roads and at home (primary) plus secondary penalties in
 # the same unit. A vehicle still blocked at the horizon costs as much as an hour exposed;
 # each minute of clearance costs one vehicle-minute. An uncleared run (not every vehicle
 # arrived) is charged clearance from EARLIEST_ORDER_AT to the horizon end.
@@ -78,9 +78,10 @@ LIMITATIONS = [
     "perimeters), which real responders did not have; the best schedule is not a feasible real-time plan.",
     "The information-feasible rule (ignition distance) uses no fire forecast, but its wave size and spacing "
     "were still selected by scoring against the modelled fire.",
-    "Demand is fixture: a 2 km zone grid with a synthetic 15,000 vehicles; zone order times are not the 2018 orders.",
+    "Demand and the baseline order schedule are the replay's (Census-derived where the package has the layers, "
+    "fixture otherwise); the optimized schedule replaces zone order times only.",
     "Only order times change. Routing, response delays, road events and fire are identical to the baseline.",
-    "Exposure counts vehicles on edges inside the fire area; vehicles stopped on burned edges stay exposed to the "
+    "Exposure counts vehicles on edges inside the fire area and vehicles still at home inside it; vehicles stopped on burned edges stay exposed to the "
     "horizon, so stranding early dominates the objective.",
     "Selection uses one traffic seed (one response-delay draw shared by all candidates). The objective is very "
     "sensitive to which few vehicles strand on burned edges, so neighbouring schedules can differ tenfold; see "
@@ -94,7 +95,9 @@ def _iso(at: datetime) -> str:
 
 
 def _is_replaced_order(ev: TrafficEvent) -> bool:
-    return ev.type == "evacuation_order" and ev.evidence_class == "fixture"
+    """Baseline zone orders the plan replaces: fixture waves or (grounded) derived/historical
+    block-group orders. Simulated orders and zone-less timeline events are never replaced."""
+    return ev.type == "evacuation_order" and ev.evidence_class != "simulated" and bool(ev.zone_ids)
 
 
 def schedule_events(base_events, schedule: dict[str, datetime], zone_names: dict[str, str]) -> tuple[TrafficEvent, ...]:
@@ -120,16 +123,17 @@ def _wave_schedule(priority: tuple[str, ...], wave_size: int, spacing_min: int) 
     return {z: EARLIEST_ORDER_AT + timedelta(minutes=spacing_min * (rank // wave_size)) for rank, z in enumerate(priority)}
 
 
-def _violations(schedule: dict[str, datetime], zone_ids: list[str]) -> list[str]:
+def _violations(schedule: dict[str, datetime], zone_ids: list[str],
+                earliest: datetime = EARLIEST_ORDER_AT, latest: datetime = LATEST_ORDER_AT) -> list[str]:
     problems = []
     missing = set(zone_ids) - schedule.keys()
     if missing:
         problems.append(f"{len(missing)} zones never ordered")
-    if any(at < EARLIEST_ORDER_AT for at in schedule.values()):
-        problems.append(f"order before {_iso(EARLIEST_ORDER_AT)}")
-    late = max(schedule.values(), default=EARLIEST_ORDER_AT)
-    if late > LATEST_ORDER_AT:
-        problems.append(f"last order {_iso(late)} after {_iso(LATEST_ORDER_AT)}")
+    if any(at < earliest for at in schedule.values()):
+        problems.append(f"order before {_iso(earliest)}")
+    late = max(schedule.values(), default=earliest)
+    if late > latest:
+        problems.append(f"last order {_iso(late)} after {_iso(latest)}")
     return problems
 
 
@@ -199,7 +203,10 @@ def _score(result: dict, params: TrafficParams, end: datetime) -> dict:
     metrics = result["metrics"]
     summary = result["summary"]
     frame_min = params.record_every_s / 60
-    exposed_veh_min = sum(m["exposed_veh"] for m in metrics) * frame_min
+    road_veh_min = sum(m["exposed_veh"] for m in metrics) * frame_min
+    # Count people still at home inside the fire too; road-only exposure rewards ordering late.
+    home_veh_min = sum(m.get("exposed_at_origin_veh", 0) for m in metrics) * frame_min
+    exposed_veh_min = road_veh_min + home_veh_min
     blocked_end = metrics[-1]["blocked_veh"] if metrics else 0
     by = _iso(ARRIVALS_REPORTED_BY)
     arrived_by = max((m["arrived_veh"] for m in metrics if m["at"] <= by), default=0)
@@ -210,6 +217,8 @@ def _score(result: dict, params: TrafficParams, end: datetime) -> dict:
     return {
         "objective": round(objective, 1),
         "exposed_veh_min": round(exposed_veh_min, 1),
+        "road_exposed_veh_min": round(road_veh_min, 1),
+        "home_exposed_veh_min": round(home_veh_min, 1),
         "peak_exposed_veh": summary["max_exposed_veh"],
         "peak_blocked_veh": summary["max_blocked_veh"],
         "blocked_at_end_veh": blocked_end,
@@ -249,7 +258,7 @@ def optimize_schedule(
     zone_names = {z.id: z.name for z in zone_list}
     baseline_orders = [ev for ev in base_events if _is_replaced_order(ev)]
     if not baseline_orders:
-        raise ValueError("base_events has no fixture evacuation_order events to replace")
+        raise ValueError("base_events has no zone evacuation_order events to replace")
     baseline_schedule: dict[str, datetime] = {}
     for ev in sorted(baseline_orders, key=lambda ev: ev.at):
         for z in ev.zone_ids:
@@ -264,9 +273,14 @@ def optimize_schedule(
     def signature(schedule: dict[str, datetime]) -> tuple:
         return tuple(sorted((z, at.isoformat()) for z, at in schedule.items()))
 
+    # Bounds never stricter than history: a historical baseline order before EARLIEST_ORDER_AT
+    # or after LATEST_ORDER_AT widens them (the baseline itself is history, not a candidate).
+    earliest = min(EARLIEST_ORDER_AT, *baseline_schedule.values())
+    latest = max(LATEST_ORDER_AT, *baseline_schedule.values())
+
     def evaluate(cid: str, schedule: dict[str, datetime], spec: dict, events=None) -> dict | None:
         nonlocal runs
-        problems = _violations(schedule, zone_ids)
+        problems = _violations(schedule, zone_ids, earliest, latest)
         if problems:
             rejected.append({"id": cid, **spec, "reasons": problems})
             return None
@@ -288,7 +302,8 @@ def optimize_schedule(
         return record
 
     baseline = evaluate("baseline", baseline_schedule,
-                        {"rule": "fixture", "information": "fixture", "wave_size": None, "wave_spacing_min": None},
+                        {"rule": "baseline", "information": "baseline schedule", "wave_size": None,
+                         "wave_spacing_min": None},
                         events=tuple(base_events))
     if baseline is None:
         raise ValueError(f"baseline schedule violates the constraints: {rejected[-1]['reasons']}")
@@ -450,7 +465,7 @@ def main() -> None:
     scenario = hybrid_scenario(network, exits, provenance["assumptions"])
     base_events = (*scenario["events"], *load_alert_events(args.roads_package))
     start, end = parse_utc(args.start), parse_utc(args.end)
-    _, fire_model = _simulated_fire(history, end)
+    _, fire_model = _simulated_fire(history, end, args.roads_package)
     fire_area_at = _fire_area_lookup(history, fire_model[3])
     _, report = optimize_schedule(network, scenario["zones"], exits, base_events, TrafficParams(),
                                   start=start, end=end, fire_area_at=fire_area_at,

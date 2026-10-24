@@ -1,0 +1,29 @@
+{
+  "dataset": "Kincade Fire 2019 evacuation centers as listed by NBC Bay Area (citing Cal Fire / Sonoma County lists)",
+  "source_id": "nbcbayarea-kincade-evac-centers",
+  "source_url": "https://www.nbcbayarea.com/news/local/Kincade-Fire-Evacuation-Centers-563926721.html",
+  "source_sha256": "8ae1f5d12b5d5fb0b2abbae9c43325580865a09819ab26209700b6a7371928d7",
+  "published_local": "2019-10-26T19:23:07-07:00",
+  "modified_as_written": ["dateModified 2019-11-02T19:52:37-07:00", "time element 2019-11-02T12:52:37-07:00"],
+  "interpretation": "The page is a single list that was revised during the event; only its final state (modified 2019-11-02) was retrieved. The status headings therefore describe that update, not opening times. Opening times and capacities were not published there. Locations are public facility addresses geocoded with OSM Nominatim (current OSM, retrieved 2026-10-24); 'street' precision means only the street matched.",
+  "geocoder": "https://nominatim.openstreetmap.org/search (format=jsonv2, limit=1, countrycodes=us)",
+  "shelters": [
+    {"id": "santa-rosa-veterans-memorial", "name": "Santa Rosa Veterans Memorial Building", "address": "1351 Maple Ave., Santa Rosa", "listed_status": "open", "kind": "evacuation_center", "lon_lat": [-122.7010868, 38.4341348], "geocode_precision": "address_point", "osm": "node/8413936299"},
+    {"id": "sonoma-county-fairgrounds", "name": "Sonoma County Fairgrounds", "address": "1350 Bennett Valley Rd., Santa Rosa", "listed_status": "open", "kind": "evacuation_center", "lon_lat": [-122.7013279, 38.4323084], "geocode_precision": "address_point", "osm": "way/708693961"},
+    {"id": "petaluma-community-center", "name": "Petaluma Community Center", "address": "320 N. McDowell Blvd., Petaluma", "listed_status": "open", "kind": "evacuation_center", "lon_lat": [-122.6306846, 38.2520170], "geocode_precision": "address_point", "osm": "way/516028095"},
+    {"id": "iglesia-cristiana-petaluma", "name": "Iglesia Cristiana", "address": "1129 Industrial Ave., #104, Petaluma", "listed_status": "open", "kind": "evacuation_center", "lon_lat": [-122.6649870, 38.2645902], "geocode_precision": "address_point", "osm": "node/10031387963"},
+    {"id": "napa-valley-expo", "name": "Napa Valley Expo", "address": "575 3rd St., Napa", "listed_status": "open", "kind": "evacuation_center", "lon_lat": [-122.2787668, 38.2990064], "geocode_precision": "address_point", "osm": "way/1088099335"},
+    {"id": "crosswalk-church-napa", "name": "CrossWalk Community Church Napa", "address": "2590 1st St., Napa", "listed_status": "open", "kind": "evacuation_center", "lon_lat": [-122.3042343, 38.2999364], "geocode_precision": "address_point", "osm": "way/504679617"},
+    {"id": "st-marys-cathedral-sf", "name": "St. Mary's Cathedral", "address": "1111 Gough St., San Francisco", "listed_status": "open", "kind": "evacuation_center", "lon_lat": [-122.4253376, 37.7840235], "geocode_precision": "address_point", "osm": "relation/7814696"},
+    {"id": "calvary-chapel-petaluma", "name": "Calvary Chapel Church", "address": "1955 McDowell Blvd., Petaluma", "listed_status": "open", "kind": "evacuation_center", "lon_lat": [-122.5953147, 38.2300216], "geocode_precision": "address_point_assumed_south_mcdowell", "osm": "way/27577132"},
+    {"id": "new-life-church-petaluma", "name": "New Life Church", "address": "1315 Rand St., Petaluma", "listed_status": "open", "kind": "evacuation_center", "lon_lat": [-122.6612991, 38.2662749], "geocode_precision": "address_point", "osm": "way/7714767"},
+    {"id": "first-presbyterian-petaluma", "name": "First Presbyterian Church", "address": "939 B St., Petaluma", "listed_status": "open", "kind": "evacuation_center", "lon_lat": [-122.6441226, 38.2251819], "geocode_precision": "address_point", "osm": "way/244650063"},
+    {"id": "marin-county-fairgrounds", "name": "Marin County Fairgrounds", "address": "10 Ave. of the Flags, San Rafael", "listed_status": "open", "kind": "evacuation_center", "lon_lat": [-122.5335691, 38.0023822], "geocode_precision": "address_point", "osm": "way/48675204"},
+    {"id": "petaluma-veterans-building", "name": "Petaluma Veterans Building", "address": "1094 Petaluma Blvd. S, Petaluma", "listed_status": "open", "kind": "evacuation_center", "lon_lat": [-122.6249335, 38.2273860], "geocode_precision": "address_point", "osm": "way/37516323"},
+    {"id": "petaluma-valley-baptist", "name": "Petaluma Valley Baptist Church", "address": "580 Sonoma Mountain Pkwy., Petaluma", "listed_status": "at_capacity", "kind": "evacuation_center", "lon_lat": [-122.6325660, 38.2649985], "geocode_precision": "address_point", "osm": "relation/13649934"},
+    {"id": "petaluma-fairgrounds", "name": "Petaluma Fairgrounds", "address": "100 Fairgrounds Dr., Petaluma", "listed_status": "at_capacity", "kind": "evacuation_center", "lon_lat": [-122.6224694, 38.2410967], "geocode_precision": "street", "osm": "way/7717285"},
+    {"id": "muir-memory-care-petaluma", "name": "Muir Memory Care", "address": "750 N. McDowell Blvd., Petaluma", "listed_status": "at_capacity", "kind": "care_facility_evacuation_site", "lon_lat": [-122.6455645, 38.2610488], "geocode_precision": "address_point", "osm": "relation/13649935"},
+    {"id": "alameda-county-fairgrounds", "name": "Alameda County Fairgrounds", "address": "4501 Pleasanton Ave., Pleasanton", "listed_status": "listed_under_large_animals_heading_without_status", "kind": "large_animal_shelter", "lon_lat": [-121.8861419, 37.6589775], "geocode_precision": "address_point", "osm": "node/4384755020"},
+    {"id": "sonoma-marin-fairgrounds", "name": "Sonoma-Marin Fairgrounds", "address": "100 Fairgrounds Drive, Petaluma", "listed_status": "listed_under_large_animals_heading_without_status", "kind": "large_animal_shelter", "lon_lat": [-122.6224694, 38.2410967], "geocode_precision": "street", "osm": "way/7717285"}
+  ]
+}

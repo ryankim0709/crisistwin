@@ -38,12 +38,11 @@ from tools.build_camp_history import SourceError
 
 from sim import SIM_VERSION
 from sim.bundle import _simulated_fire
-from sim.fire import FireParams
 from sim.history import format_utc, load_history, parse_utc
 from sim.traffic import CONTRAFLOW_END_EVENT_TYPES, CONTRAFLOW_START_EVENT_TYPES, TrafficEvent, TrafficParams
 from sim.variants import (
     COMMON_LIMITATIONS, Context, RunInputs, _with_events, baseline_inputs, basis, check_population, compare,
-    fixed_fire, headline_metrics, run,
+    headline_metrics, run, shifted_fire,
 )
 
 KIND = "crisistwin_stress_test"
@@ -218,8 +217,8 @@ class StressLab:
         self.command, self.budget = command, budget
         history = load_history(package)
         scenario, start, end = baseline_inputs(roads_package)
-        self.ctx = Context(history, start, end)
-        self.base = RunInputs(scenario, TrafficParams(), _simulated_fire(history, end))
+        self.ctx = Context(history, start, end, roads_package)
+        self.base = RunInputs(scenario, TrafficParams(), _simulated_fire(history, end, roads_package))
         self.base_basis = basis(self.base, self.ctx)
         self.baseline = run(self.base, self.ctx, command)
         check_population(self.baseline)
@@ -406,10 +405,7 @@ class StressLab:
 
     def _fire(self, shift: int) -> tuple:
         if shift not in self.fires:
-            p = self.base.fire[0]["model"]["params"]
-            params = FireParams(p["base_spread_m_per_min"], (p["wind_from_deg"] + shift) % 360, p["wind_speed_m_s"],
-                                p["wind_coef_per_m_s"])
-            self.fires[shift] = fixed_fire(self.ctx.history, params, self.ctx.end)
+            self.fires[shift] = shifted_fire(self.base.fire, self.ctx, shift)  # either fire model
         return self.fires[shift]
 
     def _apply(self, spec: dict, run_id: str) -> tuple[RunInputs, list[str]]:

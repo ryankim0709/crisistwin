@@ -1,5 +1,127 @@
 import { useState } from "react";
-import { EmptyResult, Field, Metric, Panel, Tag, WorkspacePage } from "./WorkspaceUI";
+import { DataState, EmptyResult, Field, Metric, Panel, Tag, WorkspacePage } from "./WorkspaceUI";
+import {
+  CAMP_ID,
+  INCIDENTS_URL,
+  formatDate,
+  layerLabel,
+  orderedLayers,
+  parseIncidents,
+  replayHref,
+  useJson,
+  type Incident,
+} from "./workspaceData";
+
+function IncidentCard({ incident }: { incident: Incident }) {
+  const layers = orderedLayers(incident.layerStatus);
+  const clock = incident.clock;
+  return (
+    <article className="incident-card" aria-labelledby={`incident-${incident.id}`}>
+      <div>
+        <h3 id={`incident-${incident.id}`}>{incident.name}</h3>
+        <p>{incident.place}</p>
+      </div>
+      <dl>
+        <dt>Date</dt>
+        <dd>{formatDate(incident.date)}</dd>
+        <dt>Time zone</dt>
+        <dd>{incident.timezone}</dd>
+        {clock && (
+          <>
+            <dt>Replay clock</dt>
+            <dd>
+              {clock.start.replace("T", " ").replace(":00Z", "")} to{" "}
+              {clock.end.replace("T", " ").replace(":00Z", "")} UTC, {clock.stepSeconds} s step
+            </dd>
+          </>
+        )}
+        {incident.packageVersion && (
+          <>
+            <dt>Data package</dt>
+            <dd>{incident.packageVersion}</dd>
+          </>
+        )}
+      </dl>
+      <div>
+        <p className="ui-help" id={`layers-${incident.id}`}>
+          Data layers in this replay
+        </p>
+        <ul className="chip-list" aria-labelledby={`layers-${incident.id}`}>
+          {layers.map(([key, status]) => (
+            <li key={key}>
+              <Tag
+                tone={status === "present" ? "green" : status === "missing" ? "amber" : "neutral"}
+              >
+                {layerLabel(key)}: {status}
+              </Tag>
+            </li>
+          ))}
+        </ul>
+      </div>
+      <div className="card-actions">
+        <a className="ui-button" href={replayHref(incident.id)}>
+          Open replay →
+        </a>
+        {incident.id === CAMP_ID && (
+          <a className="ui-button ui-button-light" href="/simulate">
+            Agent simulation →
+          </a>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function IncidentLibrary() {
+  const load = useJson(INCIDENTS_URL, parseIncidents);
+  if (load.status !== "ready") {
+    return (
+      <Panel title="Historical incidents" eyebrow="Replay library">
+        <DataState load={load} what="incidents index" path={INCIDENTS_URL} />
+      </Panel>
+    );
+  }
+  const incidents = load.data;
+  if (incidents.length === 0) {
+    return (
+      <Panel title="Historical incidents" eyebrow="Replay library">
+        <EmptyResult title="No incidents listed">
+          <code>{INCIDENTS_URL}</code> has no incidents. Generate a replay bundle to add one.
+        </EmptyResult>
+      </Panel>
+    );
+  }
+  const missing = incidents.reduce(
+    (total, i) => total + Object.values(i.layerStatus).filter((s) => s === "missing").length,
+    0,
+  );
+  return (
+    <>
+      <div className="ui-metrics">
+        <Metric
+          label="Historical incidents"
+          value={String(incidents.length)}
+          detail="Listed in the replay index"
+        />
+        <Metric
+          label="Layers missing"
+          value={String(missing)}
+          detail="Across all incidents; a missing layer is not shown on that replay"
+        />
+        <Metric
+          label="Live sources"
+          value="0"
+          detail="Ingestion not configured; replays are historical"
+        />
+      </div>
+      <section className="incident-grid" aria-label="Historical incidents">
+        {incidents.map((incident) => (
+          <IncidentCard key={incident.id} incident={incident} />
+        ))}
+      </section>
+    </>
+  );
+}
 
 export default function IncidentsPage() {
   const [kind, setKind] = useState("All report types");
@@ -12,14 +134,11 @@ export default function IncidentsPage() {
       section="Analysis"
     >
       <p className="ui-notice">
-        <strong>No sources connected</strong> This workspace is not monitoring incidents. The
-        optional review example below is synthetic.
+        <strong>Historical data only</strong> Replays use archived fire, road and order records.
+        This workspace is not monitoring live incidents; the review example further down is
+        synthetic.
       </p>
-      <div className="ui-metrics">
-        <Metric label="Connected sources" value="0" detail="Ingestion not configured" />
-        <Metric label="Reports to review" value="—" detail="No reports have been fetched" />
-        <Metric label="Last retrieval" value="—" detail="No source timestamp available" />
-      </div>
+      <IncidentLibrary />
       <div className="ui-split">
         <Panel title="Report inbox" eyebrow="01 / Evidence" aside={<Tag>Disconnected</Tag>}>
           <div className="ui-fields">
