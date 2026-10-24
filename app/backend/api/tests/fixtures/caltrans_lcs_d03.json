@@ -1,0 +1,669 @@
+{
+ "data": [
+  {
+   "lcs": {
+    "index": "FIXTURE-A-0001",
+    "recordTimestamp": {
+     "recordDate": "2026-10-24",
+     "recordTime": "10:48:02",
+     "recordEpoch": "1792864082"
+    },
+    "location": {
+     "travelFlowDirection": "North",
+     "begin": {
+      "beginDistrict": "3",
+      "beginLocationName": "Old River Rd/County Rd 22",
+      "beginFreeFormDescription": "",
+      "beginNearbyPlace": "Chico",
+      "beginLongitude": "-121.840",
+      "beginLatitude": "39.720",
+      "beginElevation": "19",
+      "beginDirection": "North",
+      "beginCounty": "Butte",
+      "beginRoute": "I-5",
+      "beginRouteSuffix": "",
+      "beginPostmilePrefix": "",
+      "beginPostmile": "0.572",
+      "beginAlignment": "",
+      "beginMilepost": "530.302"
+     },
+     "end": {
+      "endDistrict": "3",
+      "endLocationName": "Route 5",
+      "endFreeFormDescription": "",
+      "endNearbyPlace": "Chico",
+      "endLongitude": "-121.840",
+      "endLatitude": "39.720",
+      "endElevation": "19",
+      "endDirection": "North",
+      "endCounty": "Butte",
+      "endRoute": "I-5",
+      "endRouteSuffix": "",
+      "endPostmilePrefix": "",
+      "endPostmile": "0.572",
+      "endAlignment": "",
+      "endMilepost": "530.302"
+     }
+    },
+    "closure": {
+     "closureID": "C5DB",
+     "logNumber": "1",
+     "closureTimestamp": {
+      "closureRequestDate": "2026-10-12",
+      "closureRequestTime": "16:16:06",
+      "closureRequestEpoch": "1791846966",
+      "closureStartDate": "2026-10-23",
+      "closureStartTime": "21:01:00",
+      "closureStartEpoch": "1792800000",
+      "closureEndDate": "2026-10-24",
+      "closureEndTime": "06:59:00",
+      "closureEndEpoch": "1792900000",
+      "isClosureEndIndefinite": "false"
+     },
+     "facility": "On Ramp",
+     "typeOfClosure": "Full",
+     "typeOfWork": "Bridge Work",
+     "durationOfClosure": "Standard",
+     "estimatedDelay": "Not Reported",
+     "lanesClosed": "All",
+     "totalExistingLanes": "2",
+     "isCHINReportable": "false",
+     "code1097": {
+      "isCode1097": "true",
+      "code1097Timestamp": {
+       "code1097Date": "2026-10-23",
+       "code1097Time": "20:58:10",
+       "code1097Epoch": "1792814290"
+      }
+     },
+     "code1098": {
+      "isCode1098": "false",
+      "code1098Timestamp": {
+       "code1098Date": "2026-10-24",
+       "code1098Time": "07:33:52",
+       "code1098Epoch": "1792852432"
+      }
+     },
+     "code1022": {
+      "isCode1022": "false",
+      "code1022Timestamp": {
+       "code1022Date": "",
+       "code1022Time": "",
+       "code1022Epoch": ""
+      }
+     }
+    }
+   }
+  },
+  {
+   "lcs": {
+    "index": "FIXTURE-B-0001",
+    "recordTimestamp": {
+     "recordDate": "2026-10-24",
+     "recordTime": "10:48:02",
+     "recordEpoch": "1792864082"
+    },
+    "location": {
+     "travelFlowDirection": "North",
+     "begin": {
+      "beginDistrict": "3",
+      "beginLocationName": "Old River Rd/County Rd 22",
+      "beginFreeFormDescription": "",
+      "beginNearbyPlace": "Chico",
+      "beginLongitude": "-121.841",
+      "beginLatitude": "39.721",
+      "beginElevation": "19",
+      "beginDirection": "",
+      "beginCounty": "Butte",
+      "beginRoute": "I-5",
+      "beginRouteSuffix": "",
+      "beginPostmilePrefix": "",
+      "beginPostmile": "0.572",
+      "beginAlignment": "",
+      "beginMilepost": "530.302"
+     },
+     "end": {
+      "endDistrict": "3",
+      "endLocationName": "County Rd 102",
+      "endFreeFormDescription": "",
+      "endNearbyPlace": "Chico",
+      "endLongitude": "-121.841",
+      "endLatitude": "39.721",
+      "endElevation": "42",
+      "endDirection": "",
+      "endCounty": "Butte",
+      "endRoute": "I-5",
+      "endRouteSuffix": "",
+      "endPostmilePrefix": "",
+      "endPostmile": "5.530",
+      "endAlignment": "",
+      "endMilepost": "530.302"
+     }
+    },
+    "closure": {
+     "closureID": "C5DB",
+     "logNumber": "2",
+     "closureTimestamp": {
+      "closureRequestDate": "2026-10-12",
+      "closureRequestTime": "16:17:39",
+      "closureRequestEpoch": "1791847059",
+      "closureStartDate": "2026-10-23",
+      "closureStartTime": "22:01:00",
+      "closureStartEpoch": "1792700000",
+      "closureEndDate": "2026-10-24",
+      "closureEndTime": "05:59:00",
+      "closureEndEpoch": "",
+      "isClosureEndIndefinite": "true"
+     },
+     "facility": "Mainline",
+     "typeOfClosure": "Full",
+     "typeOfWork": "Bridge Work",
+     "durationOfClosure": "Standard",
+     "estimatedDelay": "Not Reported",
+     "lanesClosed": "All",
+     "totalExistingLanes": "2",
+     "isCHINReportable": "true",
+     "code1097": {
+      "isCode1097": "true",
+      "code1097Timestamp": {
+       "code1097Date": "2026-10-23",
+       "code1097Time": "21:59:18",
+       "code1097Epoch": "1792817958"
+      }
+     },
+     "code1098": {
+      "isCode1098": "false",
+      "code1098Timestamp": {
+       "code1098Date": "2026-10-24",
+       "code1098Time": "07:10:53",
+       "code1098Epoch": "1792851053"
+      }
+     },
+     "code1022": {
+      "isCode1022": "false",
+      "code1022Timestamp": {
+       "code1022Date": "",
+       "code1022Time": "",
+       "code1022Epoch": ""
+      }
+     }
+    }
+   }
+  },
+  {
+   "lcs": {
+    "index": "FIXTURE-C-0001",
+    "recordTimestamp": {
+     "recordDate": "2026-10-24",
+     "recordTime": "10:48:02",
+     "recordEpoch": "1792864082"
+    },
+    "location": {
+     "travelFlowDirection": "North",
+     "begin": {
+      "beginDistrict": "3",
+      "beginLocationName": "Old River Rd/County Rd 22",
+      "beginFreeFormDescription": "",
+      "beginNearbyPlace": "Chico",
+      "beginLongitude": "-121.840",
+      "beginLatitude": "39.720",
+      "beginElevation": "19",
+      "beginDirection": "North",
+      "beginCounty": "Butte",
+      "beginRoute": "I-5",
+      "beginRouteSuffix": "",
+      "beginPostmilePrefix": "",
+      "beginPostmile": "0.572",
+      "beginAlignment": "",
+      "beginMilepost": "530.302"
+     },
+     "end": {
+      "endDistrict": "3",
+      "endLocationName": "Route 5",
+      "endFreeFormDescription": "",
+      "endNearbyPlace": "Chico",
+      "endLongitude": "-121.840",
+      "endLatitude": "39.720",
+      "endElevation": "19",
+      "endDirection": "North",
+      "endCounty": "Butte",
+      "endRoute": "I-5",
+      "endRouteSuffix": "",
+      "endPostmilePrefix": "",
+      "endPostmile": "0.572",
+      "endAlignment": "",
+      "endMilepost": "530.302"
+     }
+    },
+    "closure": {
+     "closureID": "C5DB",
+     "logNumber": "1",
+     "closureTimestamp": {
+      "closureRequestDate": "2026-10-12",
+      "closureRequestTime": "16:16:06",
+      "closureRequestEpoch": "1791846966",
+      "closureStartDate": "2026-10-23",
+      "closureStartTime": "21:01:00",
+      "closureStartEpoch": "1793500000",
+      "closureEndDate": "2026-10-24",
+      "closureEndTime": "06:59:00",
+      "closureEndEpoch": "1793600000",
+      "isClosureEndIndefinite": "false"
+     },
+     "facility": "On Ramp",
+     "typeOfClosure": "Full",
+     "typeOfWork": "Bridge Work",
+     "durationOfClosure": "Standard",
+     "estimatedDelay": "Not Reported",
+     "lanesClosed": "All",
+     "totalExistingLanes": "2",
+     "isCHINReportable": "false",
+     "code1097": {
+      "isCode1097": "true",
+      "code1097Timestamp": {
+       "code1097Date": "2026-10-23",
+       "code1097Time": "20:58:10",
+       "code1097Epoch": "1792814290"
+      }
+     },
+     "code1098": {
+      "isCode1098": "true",
+      "code1098Timestamp": {
+       "code1098Date": "2026-10-24",
+       "code1098Time": "07:33:52",
+       "code1098Epoch": "1792852432"
+      }
+     },
+     "code1022": {
+      "isCode1022": "false",
+      "code1022Timestamp": {
+       "code1022Date": "",
+       "code1022Time": "",
+       "code1022Epoch": ""
+      }
+     }
+    }
+   }
+  },
+  {
+   "lcs": {
+    "index": "FIXTURE-D-0001",
+    "recordTimestamp": {
+     "recordDate": "2026-10-24",
+     "recordTime": "10:48:02",
+     "recordEpoch": "1792864082"
+    },
+    "location": {
+     "travelFlowDirection": "North",
+     "begin": {
+      "beginDistrict": "3",
+      "beginLocationName": "Old River Rd/County Rd 22",
+      "beginFreeFormDescription": "",
+      "beginNearbyPlace": "Chico",
+      "beginLongitude": "-121.840",
+      "beginLatitude": "39.720",
+      "beginElevation": "19",
+      "beginDirection": "North",
+      "beginCounty": "Butte",
+      "beginRoute": "I-5",
+      "beginRouteSuffix": "",
+      "beginPostmilePrefix": "",
+      "beginPostmile": "0.572",
+      "beginAlignment": "",
+      "beginMilepost": "530.302"
+     },
+     "end": {
+      "endDistrict": "3",
+      "endLocationName": "Route 5",
+      "endFreeFormDescription": "",
+      "endNearbyPlace": "Chico",
+      "endLongitude": "-121.840",
+      "endLatitude": "39.720",
+      "endElevation": "19",
+      "endDirection": "North",
+      "endCounty": "Butte",
+      "endRoute": "I-5",
+      "endRouteSuffix": "",
+      "endPostmilePrefix": "",
+      "endPostmile": "0.572",
+      "endAlignment": "",
+      "endMilepost": "530.302"
+     }
+    },
+    "closure": {
+     "closureID": "C5DB",
+     "logNumber": "1",
+     "closureTimestamp": {
+      "closureRequestDate": "2026-10-12",
+      "closureRequestTime": "16:16:06",
+      "closureRequestEpoch": "1791846966",
+      "closureStartDate": "2026-10-23",
+      "closureStartTime": "21:01:00",
+      "closureStartEpoch": "1792000000",
+      "closureEndDate": "2026-10-24",
+      "closureEndTime": "06:59:00",
+      "closureEndEpoch": "1792100000",
+      "isClosureEndIndefinite": "false"
+     },
+     "facility": "On Ramp",
+     "typeOfClosure": "Full",
+     "typeOfWork": "Bridge Work",
+     "durationOfClosure": "Standard",
+     "estimatedDelay": "Not Reported",
+     "lanesClosed": "All",
+     "totalExistingLanes": "2",
+     "isCHINReportable": "false",
+     "code1097": {
+      "isCode1097": "true",
+      "code1097Timestamp": {
+       "code1097Date": "2026-10-23",
+       "code1097Time": "20:58:10",
+       "code1097Epoch": "1792814290"
+      }
+     },
+     "code1098": {
+      "isCode1098": "true",
+      "code1098Timestamp": {
+       "code1098Date": "2026-10-24",
+       "code1098Time": "07:33:52",
+       "code1098Epoch": "1792852432"
+      }
+     },
+     "code1022": {
+      "isCode1022": "false",
+      "code1022Timestamp": {
+       "code1022Date": "",
+       "code1022Time": "",
+       "code1022Epoch": ""
+      }
+     }
+    }
+   }
+  },
+  {
+   "lcs": {
+    "index": "FIXTURE-E-0001",
+    "recordTimestamp": {
+     "recordDate": "2026-10-24",
+     "recordTime": "10:48:02",
+     "recordEpoch": "1792864082"
+    },
+    "location": {
+     "travelFlowDirection": "North",
+     "begin": {
+      "beginDistrict": "3",
+      "beginLocationName": "Old River Rd/County Rd 22",
+      "beginFreeFormDescription": "",
+      "beginNearbyPlace": "Chico",
+      "beginLongitude": "-121.840",
+      "beginLatitude": "39.720",
+      "beginElevation": "19",
+      "beginDirection": "North",
+      "beginCounty": "Butte",
+      "beginRoute": "I-5",
+      "beginRouteSuffix": "",
+      "beginPostmilePrefix": "",
+      "beginPostmile": "0.572",
+      "beginAlignment": "",
+      "beginMilepost": "530.302"
+     },
+     "end": {
+      "endDistrict": "3",
+      "endLocationName": "Route 5",
+      "endFreeFormDescription": "",
+      "endNearbyPlace": "Chico",
+      "endLongitude": "-121.840",
+      "endLatitude": "39.720",
+      "endElevation": "19",
+      "endDirection": "North",
+      "endCounty": "Butte",
+      "endRoute": "I-5",
+      "endRouteSuffix": "",
+      "endPostmilePrefix": "",
+      "endPostmile": "0.572",
+      "endAlignment": "",
+      "endMilepost": "530.302"
+     }
+    },
+    "closure": {
+     "closureID": "C5DB",
+     "logNumber": "1",
+     "closureTimestamp": {
+      "closureRequestDate": "2026-10-12",
+      "closureRequestTime": "16:16:06",
+      "closureRequestEpoch": "1791846966",
+      "closureStartDate": "2026-10-23",
+      "closureStartTime": "21:01:00",
+      "closureStartEpoch": "1792700000",
+      "closureEndDate": "2026-10-24",
+      "closureEndTime": "06:59:00",
+      "closureEndEpoch": "1792900000",
+      "isClosureEndIndefinite": "false"
+     },
+     "facility": "On Ramp",
+     "typeOfClosure": "Full",
+     "typeOfWork": "Bridge Work",
+     "durationOfClosure": "Standard",
+     "estimatedDelay": "Not Reported",
+     "lanesClosed": "All",
+     "totalExistingLanes": "2",
+     "isCHINReportable": "false",
+     "code1097": {
+      "isCode1097": "true",
+      "code1097Timestamp": {
+       "code1097Date": "2026-10-23",
+       "code1097Time": "20:58:10",
+       "code1097Epoch": "1792814290"
+      }
+     },
+     "code1098": {
+      "isCode1098": "true",
+      "code1098Timestamp": {
+       "code1098Date": "2026-10-24",
+       "code1098Time": "07:33:52",
+       "code1098Epoch": "1792852432"
+      }
+     },
+     "code1022": {
+      "isCode1022": "false",
+      "code1022Timestamp": {
+       "code1022Date": "",
+       "code1022Time": "",
+       "code1022Epoch": ""
+      }
+     }
+    }
+   }
+  },
+  {
+   "lcs": {
+    "index": "FIXTURE-F-0001",
+    "recordTimestamp": {
+     "recordDate": "2026-10-24",
+     "recordTime": "10:48:02",
+     "recordEpoch": "1792864082"
+    },
+    "location": {
+     "travelFlowDirection": "East",
+     "begin": {
+      "beginDistrict": "3",
+      "beginLocationName": "",
+      "beginFreeFormDescription": "pm 6.5",
+      "beginNearbyPlace": "Chico",
+      "beginLongitude": "-121.879118",
+      "beginLatitude": "39.740288",
+      "beginElevation": "173",
+      "beginDirection": "",
+      "beginCounty": "Butte",
+      "beginRoute": "SR-32",
+      "beginRouteSuffix": "S",
+      "beginPostmilePrefix": "",
+      "beginPostmile": "6.500",
+      "beginAlignment": "",
+      "beginMilepost": "Not Reported"
+     },
+     "end": {
+      "endDistrict": "3",
+      "endLocationName": "",
+      "endFreeFormDescription": "pm 6.9",
+      "endNearbyPlace": "Chico",
+      "endLongitude": "-121.872300",
+      "endLatitude": "39.737354",
+      "endElevation": "177",
+      "endDirection": "",
+      "endCounty": "Butte",
+      "endRoute": "SR-32",
+      "endRouteSuffix": "S",
+      "endPostmilePrefix": "",
+      "endPostmile": "6.900",
+      "endAlignment": "",
+      "endMilepost": "Not Reported"
+     }
+    },
+    "closure": {
+     "closureID": "C32VA",
+     "logNumber": "2",
+     "closureTimestamp": {
+      "closureRequestDate": "2026-10-21",
+      "closureRequestTime": "09:37:42",
+      "closureRequestEpoch": "1792600662",
+      "closureStartDate": "2026-10-26",
+      "closureStartTime": "07:01:00",
+      "closureStartEpoch": "1793023260",
+      "closureEndDate": "2026-10-26",
+      "closureEndTime": "16:59:00",
+      "closureEndEpoch": "1793059140",
+      "isClosureEndIndefinite": "false"
+     },
+     "facility": "Mainline",
+     "typeOfClosure": "Lane",
+     "typeOfWork": "Sign Work",
+     "durationOfClosure": "Standard",
+     "estimatedDelay": "10",
+     "lanesClosed": "1",
+     "totalExistingLanes": "3",
+     "isCHINReportable": "false",
+     "code1097": {
+      "isCode1097": "false",
+      "code1097Timestamp": {
+       "code1097Date": "",
+       "code1097Time": "",
+       "code1097Epoch": ""
+      }
+     },
+     "code1098": {
+      "isCode1098": "false",
+      "code1098Timestamp": {
+       "code1098Date": "",
+       "code1098Time": "",
+       "code1098Epoch": ""
+      }
+     },
+     "code1022": {
+      "isCode1022": "false",
+      "code1022Timestamp": {
+       "code1022Date": "",
+       "code1022Time": "",
+       "code1022Epoch": ""
+      }
+     }
+    }
+   }
+  },
+  {
+   "lcs": {
+    "index": "FIXTURE-G-0001",
+    "recordTimestamp": {
+     "recordDate": "2026-10-24",
+     "recordTime": "10:48:02",
+     "recordEpoch": "1792864082"
+    },
+    "location": {
+     "travelFlowDirection": "East",
+     "begin": {
+      "beginDistrict": "3",
+      "beginLocationName": "Route 80",
+      "beginFreeFormDescription": "",
+      "beginNearbyPlace": "Alta",
+      "beginLongitude": "-120.752742",
+      "beginLatitude": "39.237228",
+      "beginElevation": "4307",
+      "beginDirection": "East",
+      "beginCounty": "Placer",
+      "beginRoute": "I-80",
+      "beginRouteSuffix": "",
+      "beginPostmilePrefix": "",
+      "beginPostmile": "49.000",
+      "beginAlignment": "",
+      "beginMilepost": "150.504"
+     },
+     "end": {
+      "endDistrict": "3",
+      "endLocationName": "Drum Forebay Rd",
+      "endFreeFormDescription": "",
+      "endNearbyPlace": "Alta",
+      "endLongitude": "-120.752742",
+      "endLatitude": "39.237228",
+      "endElevation": "4307",
+      "endDirection": "East",
+      "endCounty": "Placer",
+      "endRoute": "I-80",
+      "endRouteSuffix": "",
+      "endPostmilePrefix": "",
+      "endPostmile": "49.000",
+      "endAlignment": "",
+      "endMilepost": "147.814"
+     }
+    },
+    "closure": {
+     "closureID": "C80OA",
+     "logNumber": "21",
+     "closureTimestamp": {
+      "closureRequestDate": "2026-10-13",
+      "closureRequestTime": "16:31:57",
+      "closureRequestEpoch": "1791934317",
+      "closureStartDate": "2026-10-14",
+      "closureStartTime": "07:01:00",
+      "closureStartEpoch": "1792700000",
+      "closureEndDate": "2026-11-13",
+      "closureEndTime": "11:59:00",
+      "closureEndEpoch": "1792900000",
+      "isClosureEndIndefinite": "false"
+     },
+     "facility": "Off Ramp",
+     "typeOfClosure": "Full",
+     "typeOfWork": "Miscellaneous Work",
+     "durationOfClosure": "Long Term",
+     "estimatedDelay": "Not Reported",
+     "lanesClosed": "All",
+     "totalExistingLanes": "2",
+     "isCHINReportable": "false",
+     "code1097": {
+      "isCode1097": "true",
+      "code1097Timestamp": {
+       "code1097Date": "2026-10-14",
+       "code1097Time": "07:38:05",
+       "code1097Epoch": "1791988685"
+      }
+     },
+     "code1098": {
+      "isCode1098": "false",
+      "code1098Timestamp": {
+       "code1098Date": "",
+       "code1098Time": "",
+       "code1098Epoch": ""
+      }
+     },
+     "code1022": {
+      "isCode1022": "false",
+      "code1022Timestamp": {
+       "code1022Date": "",
+       "code1022Time": "",
+       "code1022Epoch": ""
+      }
+     }
+    }
+   }
+  }
+ ]
+}

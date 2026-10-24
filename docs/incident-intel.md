@@ -360,6 +360,61 @@ content types stay `text/html` and `text/plain`. CHP's `media.chp.ca.gov/sa_xml/
 `text/xml` (131 KB, truncated by the 50,000-character cap) and is also not offered. Add a
 preset only after confirming its URL and content type the same way.
 
+## Live feeds
+
+Open structured feeds enter the same candidate collection (`intel_candidates`) with `feed` set to
+`nws`, `caltrans` or `wfigs`. Decision, terms as read and exclusions:
+[ADR 0032](adr/0032-open-live-feeds.md). Adapters: `intel_feeds.py`; storage and views:
+`intel_feeds_api.py`; command: `intel_poll_feeds`. Same firm rules: `evidence_class: "reported"`,
+`review_status: "unconfirmed"`, only the review endpoint confirms.
+
+| Feed | Type | Source | Geometry | `details` |
+| ---- | ---- | ------ | -------- | --------- |
+| `nws` | `weather_alert` | Red Flag Warning, Fire Weather Watch | Polygon or null (zones in `details.zones`) | `event`, `severity`, `certainty`, `urgency`, `expires`, `ends`, `zones` |
+| `caltrans` | `road_closure` | LCS `typeOfClosure: "Full"` in effect now | Point or LineString (begin to end) | `closure_id`, `facility`, `type_of_work`, `direction`, `county`, `closure_end_indefinite` |
+| `wfigs` | `fire_incident` | Current wildfire and complex incidents | Point | `acres`, `percent_contained`, `discovered_at`, `cause`, `perimeter` (Polygon or null), `perimeter_gis_acres` |
+
+Feed candidates add `feed`, `source_key` (the source's own id; `event_id` is
+`"intel-" + sha256("<feed>:<source_key>")[:16]`), `source_url`, `fetched_at`, `source_updated_at`,
+`last_seen_at`, `seen_count`, `details`, `geocode_method: "source_provided"` (or `unresolved`) and
+`extraction: null`. `available_at` is the fetch time (`fetched_upper_bound`).
+
+### `POST /api/intel/feeds/<feed>/poll`
+
+Open and throttled (12/min) like the rest of `/api/intel/`. Body (all optional):
+`{"incident": slug (default "live-feeds"), "bbox": [west, south, east, north],
+"districts": [1..12] (Caltrans, default INTEL_FEEDS_CALTRANS_DISTRICTS), "area": "CA" (NWS without bbox)}`.
+NWS with a `bbox` queries `point=<lat>,<lon>` at its centre; WFIGS requires a `bbox`.
+
+- 200 `{"feed", "status": "ok", "incident", "fetched_at", "candidates", "created", "updated",
+  "unchanged", "stats", "raw": [{"id", "url", "size", "sha256", "http_status"}]}`. `unchanged`
+  counts reviewed candidates, which a poll never overwrites.
+- 400 `invalid_request`, 404 `not_found` (unknown feed), 429 `polled_recently` (minimum
+  intervals NWS 60 s, Caltrans and WFIGS 300 s; `retry_after_s`).
+- Network failure: 503 `feed_unreachable` / `feed_unavailable` (upstream HTTP error), 504
+  `feed_timeout`, 502 `feed_invalid` / `feed_too_large`; always with `detail`.
+
+Raw responses are stored in `intel_feed_raw` (`_id` `raw-<sha256[:16]>`, zlib body, `size`,
+`stored_bytes`, `sha256`, `seen_count`); per-feed state in `intel_feeds`.
+
+### `GET /api/intel/feeds?incident=`
+
+200 `{"feeds": [{"feed", "label", "source_id", "type", "min_interval_s", "status":
+"never"|"ok"|"error", "last_poll_at", "last_success_at", "error", "last_summary", "counts":
+{"unconfirmed", "confirmed", "rejected"}}]}`. `GET /api/intel/candidates?types=` also accepts
+`weather_alert`, `road_closure`, `fire_incident`.
+
+### Command
+
+```sh
+python manage.py intel_poll_feeds --bbox -122.1 39.3 -121.0 40.2 --incident butte-live
+python manage.py intel_poll_feeds --feed nws --feed caltrans --districts 3
+```
+
+(`--bbox=-122.1,39.3,-121.0,40.2` also works.) No scheduler is installed; call it from cron.
+Settings: `INTEL_FEEDS_CONTACT`, `INTEL_FEEDS_NWS_AREA`, `INTEL_FEEDS_CALTRANS_DISTRICTS`.
+The `/intel` page has a Feeds panel (last poll, status, counts, "Poll now") above the review list.
+
 ## Scheduling
 
 An Apify schedule can start the Actor without anyone clicking Start run: for example every 15

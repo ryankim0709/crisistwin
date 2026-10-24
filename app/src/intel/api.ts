@@ -24,7 +24,9 @@ export const INTEL_TYPES = [
   "shelter_full",
   "shelter_closed",
 ] as const;
-export type IntelType = (typeof INTEL_TYPES)[number];
+/** Candidate types created by the open live feeds (ADR 0032-open-live-feeds), not by extraction. */
+export const FEED_TYPES = ["weather_alert", "road_closure", "fire_incident"] as const;
+export type IntelType = (typeof INTEL_TYPES)[number] | (typeof FEED_TYPES)[number];
 export type ReviewStatus = "unconfirmed" | "confirmed" | "rejected";
 
 export const isRoadType = (type: string): boolean => (ROAD_TYPES as readonly string[]).includes(type);
@@ -81,8 +83,14 @@ export interface IntelCandidate {
     prompt_version: string;
     extracted_at: string;
     document_sha256: string;
-  };
+  } | null;
   created_at: string;
+  /** Set on candidates made by an open feed ("nws", "caltrans", "wfigs"). */
+  feed?: string;
+  source_url?: string;
+  fetched_at?: string;
+  /** Feed-specific fields as published (acres, containment, closure id, severity, ...). */
+  details?: Record<string, unknown>;
 }
 
 export interface IntelDocument {
@@ -355,4 +363,48 @@ export async function reviewCandidate(
   return candidate(
     await request(`/candidates/${encodeURIComponent(eventId)}/review`, signal, review),
   );
+}
+
+export type FeedName = "nws" | "caltrans" | "wfigs";
+export interface FeedStatus {
+  feed: FeedName;
+  label: string;
+  status: "never" | "ok" | "error";
+  last_poll_at: string | null;
+  error: { code: string; detail: string } | null;
+  counts: { unconfirmed: number; confirmed: number; rejected: number };
+}
+export interface PollResult {
+  feed: FeedName;
+  candidates: number;
+  created: number;
+  updated: number;
+  unchanged: number;
+}
+
+export async function listFeeds(incident: string, signal?: AbortSignal): Promise<FeedStatus[]> {
+  const body = await request(`/feeds?incident=${encodeURIComponent(incident)}`, signal);
+  return list(body.feeds, "feed list").map((raw) => {
+    const row = record(raw, "feed");
+    str(row.feed, "feed");
+    str(row.label, "label");
+    record(row.counts, "counts");
+    return row as unknown as FeedStatus;
+  });
+}
+
+/** Fetches one open feed now; candidates arrive unconfirmed. `bbox` is [west, south, east, north]. */
+export async function pollFeed(
+  feed: FeedName,
+  options: { incident: string; bbox: readonly number[] },
+  signal?: AbortSignal,
+): Promise<PollResult> {
+  const body = await request(`/feeds/${feed}/poll`, signal, options);
+  return {
+    feed: str(body.feed, "feed") as FeedName,
+    candidates: num(body.candidates, "candidates"),
+    created: num(body.created, "created"),
+    updated: num(body.updated, "updated"),
+    unchanged: num(body.unchanged, "unchanged"),
+  };
 }

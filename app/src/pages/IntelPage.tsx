@@ -28,6 +28,7 @@ import {
   type IntelDocument,
   type ReviewStatus,
 } from "../intel/api";
+import FeedsPanel from "../intel/FeedsPanel";
 import "../intel/intel.css";
 
 const DEFAULT_INCIDENT = "camp-2018";
@@ -40,6 +41,12 @@ const STATUS_OPTIONS: { value: ReviewStatus | "all"; label: string }[] = [
 ];
 
 const typeLabel = (type: string) => type.replace(/_/g, " ");
+const FEED_LABELS: Record<string, string> = { nws: "NWS", caltrans: "Caltrans", wfigs: "WFIGS" };
+const detailFacts = (details: Record<string, unknown> | undefined) =>
+  Object.entries(details ?? {})
+    .filter(([key, value]) => value !== null && value !== "" && typeof value !== "object" && key !== "irwin_id")
+    .slice(0, 8)
+    .map(([key, value]) => ({ label: key.replace(/_/g, " "), value: String(value) }));
 const utc = (value: string | null) => (value ? value.replace("T", " ").replace(/:00Z$/, "Z") : "none");
 const message = (cause: unknown) =>
   cause instanceof IntelRequestError ? cause.detail : "The intel service request failed.";
@@ -163,6 +170,7 @@ function CandidateCard({
       <div className="intel-tags">
         <h3 id={id}>{typeLabel(candidate.type)}</h3>
         <EvidenceTag kind="reported" />
+        {candidate.feed && <Tag>Source: {FEED_LABELS[candidate.feed] ?? candidate.feed}</Tag>}
         <Tag tone={statusTone}>{statusText}</Tag>
         {candidate.flags.map((flag) => (
           <Tag key={flag} tone="info">
@@ -181,6 +189,7 @@ function CandidateCard({
       <p className="intel-quote">{candidate.quote}</p>
       <Facts
         items={[
+          ...detailFacts(candidate.details),
           { label: "Time as written", value: candidate.local_time_as_written ?? "none" },
           { label: "Occurred at (UTC)", value: utc(candidate.occurred_at) },
           {
@@ -560,6 +569,8 @@ export default function IntelPage() {
           </details>
         </Panel>
       </div>
+
+      <FeedsPanel incident={incidentId} onPolled={() => setReload((n) => n + 1)} />
 
       <Panel title="Candidates" eyebrow="03 / Review">
         <div className="intel-asof">
