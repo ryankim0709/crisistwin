@@ -25,7 +25,7 @@ import {
   encodeLandscapePackage,
   type LandscapePackageSources,
 } from "../../app/src/fire/landscapePackage";
-import { SOCAL_REGIONS, type LandscapeRegion } from "../../app/src/fire/regions";
+import { CALIFORNIA_REGIONS, type LandscapeRegion } from "../../app/src/fire/regions";
 import { politeFetch } from "./politeFetch.mts";
 
 const MAX_JOBS = 2;
@@ -85,7 +85,7 @@ if (args.help) {
   console.log(
     "Usage: node tools/build_landscape_regions/run.mjs [--region <id>]... [--jobs 1|2] [--out <dir>]\n" +
       "       [--radius <m>] [--cell-meters <m>]   (smoke-test overrides of the catalogue)\n" +
-      `Regions: ${SOCAL_REGIONS.map((region) => region.id).join(", ")}`,
+      `Regions: ${CALIFORNIA_REGIONS.map((region) => region.id).join(", ")}`,
   );
   process.exit(0);
 }
@@ -98,14 +98,14 @@ const outDir = path.resolve(args.out ?? "data/landscapes");
 const jobs = Math.min(Math.max(1, Number.parseInt(args.jobs ?? "1", 10) || 1), MAX_JOBS);
 const regions: LandscapeRegion[] = args.region?.length
   ? args.region.map((id) => {
-      const region = SOCAL_REGIONS.find((candidate) => candidate.id === id);
+      const region = CALIFORNIA_REGIONS.find((candidate) => candidate.id === id);
       if (!region) {
-        console.error(`Unknown region ${id}. Known: ${SOCAL_REGIONS.map((r) => r.id).join(", ")}`);
+        console.error(`Unknown region ${id}. Known: ${CALIFORNIA_REGIONS.map((r) => r.id).join(", ")}`);
         process.exit(2);
       }
       return region;
     })
-  : [...SOCAL_REGIONS];
+  : [...CALIFORNIA_REGIONS];
 for (const [key, field] of [
   ["radius", "radiusMeters"],
   ["cell-meters", "cellMeters"],

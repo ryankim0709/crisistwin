@@ -61,7 +61,7 @@ python3 -m tools.mongo_data pull         # restores data/incidents/*/*/{raw,norm
 
 After building a new package locally, run `python3 -m tools.mongo_data push` and commit its manifest.
 
-Prebuilt Southern California fire landscapes (ADR 0013) are built and uploaded with
+Prebuilt California fire landscapes from the San Francisco Bay Area to San Diego (ADR 0013) are built and uploaded with
 [`tools/build_landscape_regions`](tools/build_landscape_regions/README.md):
 `node tools/build_landscape_regions/run.mjs` then
 `python3 -m tools.build_landscape_regions upload`.
@@ -312,8 +312,8 @@ docker compose restart frontend
 
 Open **http://localhost:5173/fire**. The page opens on a three.js miniature of the loaded
 landscape (see [ADR 0011](docs/adr/0011-fire-diorama-view.md)), built from LANDFIRE fuels,
-terrain elevation, and canopy. It opens on a prebuilt Southern California region (San Gabriel
-Mountains by default; _Region_ lists the seven in `app/src/fire/regions.ts`, marked _stored_ or
+terrain elevation, and canopy. It opens on a prebuilt California region (San Gabriel
+Mountains by default; _Region_ lists the 20 in `app/src/fire/regions.ts`, grouped by area and marked _stored_ or
 _not built yet_ from `GET /api/landscapes`), pulled from MongoDB through the backend
 ([ADR 0013](docs/adr/0013-prebuilt-socal-landscapes.md)). The area readout says whether the
 board is a _Stored landscape_ (build date, LANDFIRE 2025, cell size) or _Live from LANDFIRE_.

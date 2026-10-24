@@ -10,11 +10,22 @@ instead of rebuilding it. Live per-area fetching (ADR 0011) stays available for 
 areas. The model (ADRs 0003–0009, 0012) is unchanged; a stored region is exactly the
 `LandscapeGrid` the live loader would have produced at that cell size, plus provenance.
 
+Update (2026-10-24): the catalogue grew from seven Southern California regions to 20
+covering the San Francisco Bay Area to San Diego (`CALIFORNIA_REGIONS`). The sentence about
+Southern California counties above describes the original seven-region scope. Named regions
+were chosen over a full statewide tiling because the MongoDB Atlas free tier (about 512 MB of
+storage) cannot hold a statewide set of packages. Northern California north of the
+Napa–Sonoma hills, the Central Valley floor and the deserts are intentionally not covered.
+The package format, storage and API are unchanged.
+
 ## Catalogue
 
-`app/src/fire/regions.ts` (`SOCAL_REGIONS`) lists region id, name, counties, centre,
-radius and cell size. Regions frame vegetated ranges and their foothill neighbourhoods;
-they are presentation choices, not risk designations.
+`app/src/fire/regions.ts` (`CALIFORNIA_REGIONS`) lists region id, name, `area`, counties,
+centre, radius and cell size. `area` is one of `REGION_AREAS` (San Francisco Bay Area,
+Central Coast, Central Sierra & Kern, Southern California) and only groups the `/fire`
+region picker; it is not part of the package metadata or the API response. Regions frame
+vegetated ranges and their foothill neighbourhoods; they are presentation choices, not risk
+designations.
 
 ## Package format (`app/src/fire/landscapePackage.ts`)
 

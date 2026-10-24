@@ -19,7 +19,7 @@ import {
   fetchRegionCatalog,
   fetchRegionLandscape,
 } from "./landscapePackage";
-import { DEFAULT_REGION_ID, SOCAL_REGIONS } from "./regions";
+import { DEFAULT_REGION_ID, CALIFORNIA_REGIONS, REGION_AREAS } from "./regions";
 import {
   LANDFIRE_ATTRIBUTION,
   TERRAIN_ATTRIBUTION,
@@ -295,7 +295,7 @@ export default function FireSimulatorPage() {
   // The scenario panel starts open on wide stages and closed on phones until the user decides.
   const scenarioOpen = scenarioOpenChoice ?? !phone;
 
-  const region = SOCAL_REGIONS.find((candidate) => candidate.id === selection) ?? null;
+  const region = CALIFORNIA_REGIONS.find((candidate) => candidate.id === selection) ?? null;
   // Stored regions are fixed boards; only a custom area is sized by the horizon and area size.
   const radiusMeters = region
     ? region.radiusMeters
@@ -986,49 +986,31 @@ export default function FireSimulatorPage() {
             </header>
 
             <div className="fr-scenario-body" id="fr-scenario-body" hidden={!scenarioOpen}>
-              <p className="fr-lede">
-                Rothermel surface spread over real LANDFIRE fuels and terrain, stepped forward in{" "}
-                {FIRE_STEP_MINUTES}-minute intervals, plus optional wildland-urban mechanisms you
-                switch on as assumptions.
-              </p>
-
-              <fieldset className="fr-field fr-regions">
-                <legend>Region (Southern California)</legend>
-                <ul className="fr-region-list">
-                  {SOCAL_REGIONS.map((entry) => {
-                    const status =
-                      catalog.status === "loading"
-                        ? "checking…"
-                        : catalog.status === "error"
-                          ? "catalog unavailable"
-                          : catalog.ids.has(entry.id)
-                            ? "stored"
-                            : "not built yet";
-                    return (
-                      <li key={entry.id}>
-                        <label>
-                          <input
-                            type="radio"
-                            name="region"
-                            checked={selection === entry.id}
-                            onChange={() => selectRegion(entry.id)}
-                          />
-                          <span className="fr-region-text">
-                            <strong>{entry.name}</strong>
-                            <span className="fr-readout">
-                              {entry.counties.join(", ")} · {status}
-                            </span>
-                            <span className="fr-readout">{entry.summary}</span>
-                          </span>
-                        </label>
-                      </li>
-                    );
-                  })}
-                </ul>
-                <div className="fr-area-row">
-                  <span className="fr-area-name">
-                    {region ? region.name : `Custom: ${areaLabel(areaCenter)}`}
-                  </span>
+              <div className="fr-field">
+                <div className="fr-region-row">
+                  <label htmlFor="region">Region</label>
+                  <select
+                    id="region"
+                    value={region ? region.id : ""}
+                    onChange={(event) => {
+                      const id = event.target.value;
+                      if (id) selectRegion(id);
+                    }}
+                  >
+                    {!region && <option value="">Custom: {areaLabel(areaCenter)}</option>}
+                    {REGION_AREAS.map((area) => (
+                      <optgroup key={area} label={area}>
+                        {CALIFORNIA_REGIONS.filter((entry) => entry.area === area).map((entry) => (
+                          <option key={entry.id} value={entry.id}>
+                            {entry.name}
+                            {catalog.status === "ready" && !catalog.ids.has(entry.id)
+                              ? " (not built)"
+                              : ""}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ))}
+                  </select>
                   <button
                     type="button"
                     id="fr-change-area"
@@ -1036,7 +1018,7 @@ export default function FireSimulatorPage() {
                     onClick={() => setAreaPickerOpen(true)}
                     aria-haspopup="dialog"
                   >
-                    Custom area…
+                    Custom…
                   </button>
                 </div>
                 {!region && (
@@ -1056,22 +1038,20 @@ export default function FireSimulatorPage() {
                   </div>
                 )}
                 <p className="fr-readout">
+                  {region && `${region.summary} · `}
                   {centerLatitude.toFixed(3)}, {centerLongitude.toFixed(3)} ·{" "}
-                  {formatKm(radiusMeters)} km radius · {displayedCellMeters} m cells
+                  {formatKm(radiusMeters)} km · {displayedCellMeters} m cells
                   {resamplingNote}
+                  {displayedCellMeters > NATIVE_CELL_METERS &&
+                    " · coarse cells smooth narrow fuel breaks"}
                 </p>
                 {provenanceText && <p className="fr-readout">{provenanceText}</p>}
                 {storedUnavailable && (
                   <p className="fr-alert" role="status">
-                    Stored region unavailable — loading live from LANDFIRE; this takes longer.
+                    Stored region unavailable — loading live from LANDFIRE instead.
                   </p>
                 )}
-                {displayedCellMeters > NATIVE_CELL_METERS && (
-                  <p className="fr-hint">
-                    Coarser cells smooth narrow fuel breaks and small neighbourhoods.
-                  </p>
-                )}
-              </fieldset>
+              </div>
 
               <fieldset className="fr-field">
                 <legend>Clicking the landscape sets</legend>
@@ -1140,11 +1120,7 @@ export default function FireSimulatorPage() {
                 >
                   Use current NWS wind
                 </button>
-                {!origin && (
-                  <p className="fr-hint">
-                    Place an ignition point first: the forecast is looked up for that location.
-                  </p>
-                )}
+                {!origin && <p className="fr-hint">Place an ignition point first.</p>}
                 {windSource.status === "loading" && (
                   <div className="fr-loading" role="status">
                     <span className="fr-spinner" aria-hidden="true" />
@@ -1162,8 +1138,7 @@ export default function FireSimulatorPage() {
                   </p>
                 ) : (
                   <p className="fr-status">
-                    Assumption — the wind above is a value you set, not an observation. Nothing
-                    has been fetched for this scenario.
+                    Assumption, not an observation — nothing fetched for this scenario yet.
                   </p>
                 )}
               </div>
@@ -1290,9 +1265,7 @@ export default function FireSimulatorPage() {
                   ))}
                 </select>
                 {region && (
-                  <span className="fr-readout">
-                    The board is fixed for a stored region; a long run may reach its edge.
-                  </span>
+                  <span className="fr-readout">A long run may reach the stored board's edge.</span>
                 )}
               </div>
 
@@ -1308,8 +1281,8 @@ export default function FireSimulatorPage() {
                   <label htmlFor="spotting-enabled">Ember spotting</label>
                 </div>
                 <p className="fr-hint">
-                  Burning embers are carried downwind and start new fires ahead of the front, so
-                  the fire can cross a road, a river, or a firebreak instead of stopping at it.
+                  Embers carried downwind start new fires ahead of the front, letting it cross
+                  roads and firebreaks instead of stopping at them.
                 </p>
                 <div className="fr-toggle-row">
                   <input
@@ -1321,19 +1294,17 @@ export default function FireSimulatorPage() {
                   <label htmlFor="structure-spread-enabled">Structure-to-structure spread</label>
                 </div>
                 <p className="fr-hint">
-                  Once fire reaches a built-up area, burning buildings ignite their neighbours, so
-                  the fire keeps moving through streets and yards that carry no vegetation.
+                  Burning buildings ignite their neighbours, carrying fire through streets and
+                  yards with no vegetation.
                 </p>
               </div>
 
               {structureSpreadEnabled && (
                 <p className="fr-warning" role="status">
-                  Structure-to-structure spread is a coarse stand-in for urban conflagration, not
-                  a validated structure-fire model. It ignores building materials, spacing,
-                  defensible space, and suppression, and it will overstate losses in some
-                  neighbourhoods and understate them in others. Treat any burned area it
-                  contributes as an assumption you have switched on, not as a prediction of which
-                  homes are lost.
+                  A coarse stand-in for urban conflagration, not a validated structure-fire model
+                  — it ignores building materials, spacing, defensible space, and suppression.
+                  Any burned area it contributes is an assumption you switched on, not a
+                  prediction of which homes are lost.
                 </p>
               )}
 
