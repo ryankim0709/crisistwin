@@ -25,10 +25,41 @@ documented below and in the [scaffold decision](docs/adr/0001-app-scaffold.md).
 The full stack development scaffold is in [`app/`](app/): React/TypeScript with
 Vite and Tailwind CSS, a Django REST Framework API, PostgreSQL, Vitest, and Docker.
 The starter page checks the API and database connection. Scenario creation,
-simulation, maps, and data integrations are not implemented yet; the items above
+simulation, maps, and application data integrations are not implemented yet; the items above
 describe the intended prototype.
 
 This is an experimental planning simulator. Its outputs are not operational evacuation instructions; any future resident guidance should require approval by the responsible authority.
+
+## Historical data research
+
+[Historical incident packages](docs/historical-replay.md) proposes source acquisition,
+data formats, provenance, timing, and offline replay semantics for historical wildfire
+scenarios. [The historical package decision](docs/adr/0002-historical-incident-packages.md)
+records the proposed tradeoffs. The first [Camp Fire incident package](data/incidents/camp-2018-paradise-slice/a6d2cc03f525ed65/manifest.json)
+contains 290 public structure assessments in a bounded Paradise area from
+[CAL FIRE DINS](https://publish.data.ca.gov/dataset/cal-fire-damage-inspection-dins-data)
+and 45 historical satellite-derived fire perimeters from
+[NASA VEDA FEDS](https://docs.openveda.cloud/user-guide/notebooks/tutorials/mapping-fires.html).
+It includes original API responses, normalized GeoJSON, attribution, and checksums.
+The damage data describe post-fire outcomes, not building ignition times. The
+perimeters are half-day estimates, not exact fire arrival times. A small offline
+replay tool selects the latest observed perimeter and reports its age. Road
+closures, traffic, and population movement have not been added to this package.
+
+The collector uses the Python standard library and curl; it adds no dependency to
+the app's Python lockfile. From the repository root, with Python 3.12 and curl:
+
+```sh
+python3.12 -m tools.build_camp_history --verify-package data/incidents/camp-2018-paradise-slice/a6d2cc03f525ed65
+python3.12 -m tools.replay_camp_history --package data/incidents/camp-2018-paradise-slice/a6d2cc03f525ed65 --at 2018-11-09T15:00:00Z --output /tmp/camp-frame.geojson
+```
+
+To reacquire these sources, run `python3.12 -m tools.build_camp_history --output-root data/incidents`
+with internet access. The queries fix the incident, date window, box, and selected
+fields and do not collect addresses or parcel numbers. Six DINS records lie
+slightly outside the requested box; the manifest records the actual extent. The
+replay command writes a GeoJSON frame for viewing or testing and makes no claim
+about information availability to responders at that historical time.
 
 ## Development
 
