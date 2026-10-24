@@ -144,6 +144,26 @@ change by another member replaces the points on this phone. The membership token
 the Keychain; the family refreshes every 10 seconds in the foreground. Contract:
 [ADR 0016](../docs/adr/0016-resident-live-and-family.md).
 
+### Mobile data (Atlas)
+
+`MobileDataStore.shared` pushes any `Codable` value to MongoDB Atlas and pulls it back,
+through the API's `/api/mobile/…` endpoints (see
+[ADR 0029](../docs/adr/0029-mobile-data-store.md)). The app holds no Atlas credential. On its
+first call, the store registers this phone for a device token and keeps it in the Keychain. A
+phone sees only its own documents. Until the schema is designed, nothing in the UI uses it yet:
+
+```swift
+struct Note: Codable { let title: String }
+let saved = try await MobileDataStore.shared.push(Note(title: "hello"), to: "notes")
+let notes = try await MobileDataStore.shared.pull(Note.self, from: "notes")
+try await MobileDataStore.shared.replace(id: saved.id, in: "notes", with: Note(title: "bye"))
+try await MobileDataStore.shared.delete(id: saved.id, in: "notes")
+```
+
+Collection names are lowercase letters, digits and `_`. Property names go over the wire in
+snake_case. It needs the backend running with `MONGODB_URI` pointing at Atlas, the same setup
+as Family.
+
 Release does not include `Local.xcconfig` and has empty `API_BASE_URL` and `WEB_BASE_URL`. Set an
 HTTPS origin in the Release configuration before distribution. Until then the
 app shows a configuration error instead of claiming connectivity. App Store
@@ -158,7 +178,7 @@ mobile/
   CrisisTwin/
     App/                 SwiftUI app entry point and tab navigation
     Configuration/       Validated API and web origins from the app bundle
-    Networking/          Health, live-report and JSON backend HTTP clients, Keychain credentials
+    Networking/          Health, live-report, mobile-data and JSON backend HTTP clients, Keychain credentials
     Features/
       Home/              Home tab, the guidance Slab and bottom accessory, About with API readiness states
       Plan/              Plan tab, meeting plan model and on-device store, point editor

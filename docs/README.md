@@ -3,7 +3,7 @@
 | Document | What it is |
 | -------- | ---------- |
 | [project-scope.md](project-scope.md) | Cal Hacks 13.0 scope: proposed features, priorities, team split, demo. Proposals, not a statement of what is built. |
-| [adr/README.md](adr/README.md) | Index of architecture decision records (note: several numbers are duplicated). |
+| [adr/](adr/) | Architecture decision records, one file each (several numbers are duplicated; cite by file name). |
 | [historical-replay.md](historical-replay.md) | Proposed format and acquisition plan for historical incident packages. |
 | [historical-replay-handoff.md](historical-replay-handoff.md) | Dated work-in-progress notes on historical replay acquisition (2026-10-23). |
 | [replay-bundle.md](replay-bundle.md) | Contract for the replay bundle JSON that `python3 -m sim ... bundle` generates and `/replay` loads. |

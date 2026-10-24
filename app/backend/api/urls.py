@@ -14,9 +14,12 @@ from .intel import (
 )
 from .landscapes import landscape_list, landscape_package
 from .live_broadcast import live_broadcast, live_snapshot
+from .mobile_data import mobile_collection, mobile_document, register_device
 from .views import health
 
 FAMILY_ID = r"(?P<family_id>[0-9a-f]{24})"
+MOBILE_COLLECTION = r"(?P<collection>[a-z][a-z0-9_]{0,47})"
+MOBILE_DOCUMENT_ID = r"(?P<document_id>[0-9a-f]{24})"
 
 urlpatterns = [
     path("health", health, name="health"),
@@ -31,6 +34,13 @@ urlpatterns = [
     re_path(rf"^families/{FAMILY_ID}$", family_detail, name="family-detail"),
     re_path(rf"^families/{FAMILY_ID}/meeting-points$", family_meeting_points, name="family-meeting-points"),
     re_path(rf"^families/{FAMILY_ID}/members/me$", family_member_me, name="family-member-me"),
+    path("mobile/devices", register_device, name="mobile-devices"),
+    re_path(rf"^mobile/data/{MOBILE_COLLECTION}$", mobile_collection, name="mobile-collection"),
+    re_path(
+        rf"^mobile/data/{MOBILE_COLLECTION}/{MOBILE_DOCUMENT_ID}$",
+        mobile_document,
+        name="mobile-document",
+    ),
     path("intel/runs", intel_runs, name="intel-runs"),
     path("intel/ingest", intel_ingest, name="intel-ingest"),
     path("intel/documents", intel_documents, name="intel-documents"),
