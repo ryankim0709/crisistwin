@@ -1,0 +1,817 @@
+/* Fictional wildfire evacuation diorama (/diorama). Full-height 3D stage with a floating overlay.
+   Layout and scene-specific bits only: buttons, panels, tags, notices and metrics come from the
+   shared kit (app/src/ui). */
+
+.dio-page {
+  --dio-gutter: var(--ct-space-6);
+
+  position: relative;
+  height: 100dvh;
+  min-height: 520px;
+  color: var(--ct-ink);
+  background: var(--ct-bg);
+}
+
+.dio-page:focus {
+  outline: none;
+}
+
+.dio-stage {
+  container: dio-stage / inline-size;
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: radial-gradient(
+    120% 90% at 50% 10%,
+    var(--ct-surface) 0%,
+    var(--ct-surface-muted) 55%,
+    var(--ct-border-subtle) 100%
+  );
+}
+
+/* The scene appends its canvas (and any label layer) here; it needs an explicit size. */
+.dio-scene {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.dio-scene canvas {
+  display: block;
+  touch-action: none;
+}
+
+.dio-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---------- Overlay layout ---------- */
+
+.dio-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: var(--ct-z-map-controls);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  grid-template-areas:
+    "title counters"
+    ". ."
+    "caption legend"
+    "dock dock";
+  gap: var(--ct-space-4);
+  padding: var(--dio-gutter);
+  pointer-events: none;
+}
+
+.dio-overlay > * {
+  pointer-events: auto;
+}
+
+.dio-page .dio-title {
+  grid-area: title;
+  align-self: start;
+  justify-self: start;
+  max-width: 420px;
+}
+
+.dio-page .dio-counters {
+  grid-area: counters;
+  align-self: start;
+}
+
+.dio-page .dio-caption {
+  grid-area: caption;
+  align-self: end;
+  justify-self: start;
+  width: min(560px, 100%);
+}
+
+.dio-page .dio-legend {
+  grid-area: legend;
+  align-self: end;
+  justify-self: end;
+}
+
+.dio-page .dio-dock {
+  grid-area: dock;
+  justify-self: center;
+  width: min(1040px, 100%);
+}
+
+/* ---------- Title and disclaimer ---------- */
+
+.dio-title h1 {
+  font-size: var(--ct-text-lg);
+  font-weight: var(--ct-weight-semibold);
+  line-height: var(--ct-leading-tight);
+}
+
+.dio-disclaimer {
+  display: flex;
+  align-items: center;
+  gap: var(--ct-space-2);
+  margin-top: var(--ct-space-3);
+}
+
+.dio-disclaimer .ui-tag {
+  white-space: normal;
+}
+
+.dio-disclaimer .ui-button--icon {
+  font-family: var(--ct-font-display);
+  font-style: italic;
+  font-weight: var(--ct-weight-bold);
+}
+
+.dio-disclaimer-note {
+  display: none;
+  margin-top: var(--ct-space-2);
+}
+
+.dio-disclaimer-note .ui-notice {
+  margin: 0;
+  padding: var(--ct-space-2) var(--ct-space-3);
+  font-size: var(--ct-text-xs);
+}
+
+.dio-disclaimer-note[data-open="true"],
+.dio-title:hover .dio-disclaimer-note,
+.dio-title:focus-within .dio-disclaimer-note {
+  display: block;
+}
+
+/* ---------- Counters ---------- */
+
+.dio-page .dio-counters {
+  display: grid;
+  grid-template-columns: repeat(4, auto);
+  padding: var(--ct-space-1);
+}
+
+.dio-page .dio-counter {
+  min-width: 108px;
+  gap: var(--ct-space-1);
+  padding: var(--ct-space-2) var(--ct-space-3);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  white-space: nowrap;
+}
+
+.dio-counter + .dio-counter {
+  border-left: 1px solid var(--ct-border-subtle);
+}
+
+.dio-page .dio-counter > span:first-child {
+  font-size: var(--ct-text-2xs);
+  font-weight: var(--ct-weight-semibold);
+}
+
+.dio-page .dio-counter strong {
+  font-size: var(--ct-text-xl);
+  font-weight: var(--ct-weight-semibold);
+  letter-spacing: var(--ct-tracking-tight);
+}
+
+.dio-counter-total {
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-sm);
+  font-weight: var(--ct-weight-regular);
+}
+
+.dio-counter--sheltered strong {
+  color: var(--ct-success);
+}
+
+.dio-counter--queued strong {
+  color: var(--ct-warning);
+}
+
+/* ---------- Caption ---------- */
+
+.dio-page .dio-caption {
+  padding: var(--ct-space-3) var(--ct-space-4) var(--ct-space-4);
+}
+
+.dio-caption .ui-eyebrow {
+  margin-bottom: 6px;
+  color: var(--ct-brand);
+}
+
+.dio-caption-lines {
+  display: grid;
+}
+
+.dio-caption-text {
+  grid-area: 1 / 1;
+  margin: 0;
+  font-family: var(--ct-font-display);
+  font-size: var(--ct-text-lg);
+  font-weight: var(--ct-weight-medium);
+  line-height: var(--ct-leading-snug);
+}
+
+.dio-caption-text.is-entering {
+  animation: dio-caption-in 520ms ease-out both;
+}
+
+.dio-caption-text.is-leaving {
+  animation: dio-caption-out 420ms ease-in both;
+}
+
+@keyframes dio-caption-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes dio-caption-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/* ---------- Legend ---------- */
+
+.dio-page .dio-legend {
+  max-width: 300px;
+  max-height: min(420px, 100%);
+  overflow: auto;
+  padding: var(--ct-space-1);
+}
+
+.dio-page .dio-legend-toggle {
+  justify-content: space-between;
+  font-size: var(--ct-text-xs);
+  font-weight: var(--ct-weight-bold);
+  letter-spacing: var(--ct-tracking-eyebrow);
+  text-transform: uppercase;
+}
+
+.dio-page .dio-legend-list {
+  gap: var(--ct-space-2);
+  padding: var(--ct-space-1) var(--ct-space-3) var(--ct-space-3);
+}
+
+.dio-legend-list[hidden] {
+  display: none;
+}
+
+.dio-legend-list li {
+  gap: var(--ct-space-3);
+  line-height: var(--ct-leading-tight);
+}
+
+.dio-legend-list svg {
+  flex-shrink: 0;
+}
+
+/* ---------- Playback dock ---------- */
+
+.dio-page .dio-dock {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-areas: "buttons scrub time end";
+  align-items: start;
+  gap: var(--ct-space-4);
+  padding: var(--ct-space-3) var(--ct-space-4) var(--ct-space-2);
+}
+
+.dio-dock-buttons {
+  grid-area: buttons;
+  display: flex;
+  gap: var(--ct-space-2);
+}
+
+.dio-scrub {
+  grid-area: scrub;
+  position: relative;
+  min-width: 0;
+  height: 62px;
+}
+
+.dio-scrub-rail {
+  position: absolute;
+  top: 17px;
+  left: 0;
+  right: 0;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--ct-border);
+}
+
+.dio-scrub-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--ct-ember), var(--ct-fire));
+}
+
+.dio-scrub-segment {
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  z-index: var(--ct-z-scene-labels);
+  border-left: 2px solid var(--ct-surface);
+}
+
+.dio-scrub-segment:first-child {
+  border-left: 0;
+}
+
+.dio-scrub-segment.is-current::after {
+  content: "";
+  position: absolute;
+  inset: -3px 0;
+  border: 1.5px solid var(--ct-brand);
+  border-radius: var(--ct-radius-xs);
+}
+
+.dio-scrub-input {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2;
+  width: 100%;
+  height: var(--ct-control-height);
+  margin: 0;
+  background: transparent;
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+}
+
+.dio-scrub-input::-webkit-slider-runnable-track {
+  height: var(--ct-control-height);
+  background: transparent;
+}
+
+.dio-scrub-input::-moz-range-track {
+  height: var(--ct-control-height);
+  background: transparent;
+}
+
+.dio-scrub-input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  margin-top: 11px;
+  border: 3px solid var(--ct-brand);
+  border-radius: 50%;
+  background: var(--ct-surface-raised);
+  box-shadow: var(--ct-shadow-md);
+}
+
+.dio-scrub-input::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: 3px solid var(--ct-brand);
+  border-radius: 50%;
+  background: var(--ct-surface-raised);
+  box-shadow: var(--ct-shadow-md);
+}
+
+.dio-phase-labels {
+  position: absolute;
+  top: 36px;
+  left: 0;
+  right: 0;
+  height: 26px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dio-phase-labels li {
+  position: absolute;
+  top: 0;
+  min-width: 0;
+}
+
+.dio-phase-labels button {
+  position: relative;
+  display: block;
+  /* Short phases (e.g. the brief spread phase) may overhang their segment rather than truncate. */
+  max-width: none;
+  padding: 3px 2px;
+  overflow: visible;
+  border: 0;
+  border-radius: var(--ct-radius-xs);
+  background: transparent;
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-xs);
+  line-height: var(--ct-leading-tight);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dio-phase-labels button:hover {
+  color: var(--ct-ink);
+  background: var(--ct-brand-soft);
+}
+
+.dio-phase-labels button.is-compact {
+  color: transparent;
+}
+
+.dio-phase-labels button.is-compact::before {
+  content: "";
+  position: absolute;
+  top: 7px;
+  left: 4px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--ct-ink-muted);
+}
+
+.dio-phase-labels button.is-current {
+  color: var(--ct-brand);
+  font-weight: var(--ct-weight-bold);
+}
+
+.dio-time {
+  grid-area: time;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  margin: 3px 0 0;
+  font-size: var(--ct-text-lg);
+  font-weight: var(--ct-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.dio-time-total {
+  color: var(--ct-ink-muted);
+  font-weight: var(--ct-weight-medium);
+}
+
+.dio-time-phase {
+  display: none;
+  color: var(--ct-brand);
+  font-size: var(--ct-text-2xs);
+  font-weight: var(--ct-weight-bold);
+  letter-spacing: var(--ct-tracking-eyebrow);
+  text-transform: uppercase;
+}
+
+.dio-dock-end {
+  grid-area: end;
+  display: flex;
+  align-items: center;
+  gap: var(--ct-space-3);
+}
+
+/* ---------- Pick label ---------- */
+
+.dio-pick {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: var(--ct-z-overlay);
+  width: max-content;
+  max-width: 260px;
+  padding: var(--ct-space-3);
+  background: var(--ct-surface-glass-strong);
+  will-change: transform;
+}
+
+.dio-pick-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--ct-space-3);
+}
+
+.dio-pick-title {
+  margin: var(--ct-space-1) 0 0;
+  font-size: var(--ct-text-md);
+  font-weight: var(--ct-weight-semibold);
+}
+
+.dio-pick-head .ui-button--icon {
+  margin: -2px -4px 0 0;
+}
+
+.dio-pick-lines {
+  display: grid;
+  gap: 3px;
+  margin: 6px 0 0;
+  padding: 0;
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-sm);
+  line-height: var(--ct-leading-snug);
+  list-style: none;
+}
+
+/* ---------- Recap ---------- */
+
+.dio-recap-layer {
+  position: absolute;
+  inset: 0;
+  z-index: var(--ct-z-sheet);
+  display: grid;
+  place-items: center;
+  padding: var(--dio-gutter);
+  background: color-mix(in srgb, var(--ct-ink) 14%, transparent);
+  pointer-events: none;
+  animation: dio-fade-in 400ms ease-out both;
+}
+
+.dio-recap {
+  width: min(460px, 100%);
+  max-height: 100%;
+  overflow: auto;
+  border-radius: var(--ct-radius-xl);
+  pointer-events: auto;
+}
+
+.dio-recap .ui-panel {
+  background: var(--ct-surface-glass-strong);
+}
+
+.dio-recap-summary {
+  margin: 0;
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-md);
+  line-height: var(--ct-leading-normal);
+}
+
+.dio-recap-items {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--ct-space-3);
+  margin-top: var(--ct-space-4);
+}
+
+.dio-recap-items .ui-metric {
+  gap: var(--ct-space-1);
+  padding: var(--ct-space-3);
+  background: var(--ct-surface-sunken);
+}
+
+.dio-recap-items .ui-metric > span {
+  font-size: var(--ct-text-xs);
+  font-weight: var(--ct-weight-semibold);
+}
+
+.dio-recap-items .ui-metric strong {
+  font-size: var(--ct-text-xl);
+  font-weight: var(--ct-weight-semibold);
+  letter-spacing: var(--ct-tracking-tight);
+}
+
+.dio-recap-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ct-space-3);
+  margin-top: var(--ct-space-5);
+}
+
+.dio-recap-actions .ui-button:first-child {
+  flex: 1 1 auto;
+}
+
+/* ---------- Loading and error ---------- */
+
+.dio-veil {
+  position: absolute;
+  inset: 0;
+  z-index: var(--ct-z-scene-labels);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(
+    120% 90% at 50% 10%,
+    var(--ct-surface) 0%,
+    var(--ct-surface-muted) 60%,
+    var(--ct-border-subtle) 100%
+  );
+}
+
+.dio-page .dio-error {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: var(--ct-z-scene-labels);
+  width: min(420px, calc(100% - 32px));
+  transform: translate(-50%, -60%);
+}
+
+.dio-error .ui-notice {
+  margin: 0;
+}
+
+.dio-error-detail {
+  margin: var(--ct-space-2) 0 0;
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-xs);
+  overflow-wrap: anywhere;
+}
+
+@keyframes dio-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* ---------- Medium widths: stack counters 2 x 2 ---------- */
+
+@container dio-stage (max-width: 1080px) {
+  .dio-page .dio-counters {
+    grid-template-columns: repeat(2, auto);
+  }
+  .dio-counter + .dio-counter {
+    border-left: 0;
+  }
+  .dio-counter:nth-child(even) {
+    border-left: 1px solid var(--ct-border-subtle);
+  }
+  .dio-counter:nth-child(n + 3) {
+    border-top: 1px solid var(--ct-border-subtle);
+  }
+  .dio-page .dio-dock {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "buttons scrub time"
+      "end end end";
+    row-gap: var(--ct-space-1);
+  }
+  .dio-dock-end {
+    justify-content: flex-end;
+    padding-bottom: var(--ct-space-1);
+  }
+}
+
+/* ---------- Narrow: phone layout ---------- */
+
+@container dio-stage (max-width: 720px) {
+  .dio-overlay {
+    --dio-gutter: var(--ct-space-4);
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto auto minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      "title"
+      "counters"
+      "caption"
+      "."
+      "legend"
+      "dock";
+    gap: var(--ct-space-2);
+    padding: var(--ct-space-3) var(--ct-space-4) var(--ct-space-4);
+  }
+  .dio-page .dio-title {
+    justify-self: stretch;
+    max-width: none;
+    padding: var(--ct-space-3);
+  }
+  .dio-title h1 {
+    font-size: var(--ct-text-md);
+  }
+  .dio-disclaimer {
+    margin-top: 6px;
+  }
+  .dio-disclaimer .ui-tag {
+    font-size: var(--ct-text-2xs);
+  }
+  /* One compact row of four keeps the landscape visible on phones. */
+  .dio-page .dio-counters {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    padding: 2px;
+  }
+  .dio-page .dio-counter {
+    min-width: 0;
+    padding: 6px var(--ct-space-2);
+    white-space: normal;
+  }
+  .dio-counter:nth-child(n) {
+    border-top: 0;
+    border-left: 1px solid var(--ct-border-subtle);
+  }
+  .dio-counter:first-child {
+    border-left: 0;
+  }
+  .dio-page .dio-counter > span:first-child {
+    font-size: var(--ct-text-2xs);
+    line-height: 1.2;
+  }
+  .dio-page .dio-counter strong {
+    font-size: var(--ct-text-lg);
+  }
+  .dio-counter-total {
+    font-size: var(--ct-text-xs);
+  }
+  .dio-page .dio-caption {
+    width: 100%;
+    padding: var(--ct-space-3);
+  }
+  .dio-caption .ui-eyebrow {
+    margin-bottom: var(--ct-space-1);
+  }
+  .dio-caption-text {
+    font-size: var(--ct-text-md);
+  }
+  .dio-page .dio-legend {
+    max-width: min(300px, 100%);
+    max-height: 46vh;
+  }
+  .dio-page .dio-dock {
+    width: 100%;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "time time time"
+      "scrub scrub scrub"
+      "buttons . end";
+    gap: 6px;
+    padding: var(--ct-space-3);
+  }
+  .dio-time {
+    flex-direction: row;
+    align-items: baseline;
+    justify-content: space-between;
+    margin: 0;
+    font-size: var(--ct-text-md);
+  }
+  .dio-time-phase {
+    display: block;
+  }
+  .dio-scrub {
+    height: var(--ct-control-height);
+  }
+  .dio-phase-labels {
+    display: none;
+  }
+  .dio-dock-end {
+    gap: 6px;
+    padding-bottom: 0;
+  }
+  /* The label stays available to assistive technology; the button collapses to an icon. */
+  .dio-reset-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+  .dio-page .dio-reset {
+    width: var(--ct-control-height-sm);
+    padding: 0;
+  }
+  .dio-speed button {
+    padding: 0 var(--ct-space-1);
+  }
+  .dio-recap .ui-panel {
+    padding: var(--ct-space-5) var(--ct-space-4) var(--ct-space-4);
+  }
+}
+
+/* The sidebar becomes a ~77px top bar below 761px (see navigation.css). */
+@media (max-width: 760px) {
+  .dio-page {
+    height: calc(100dvh - 77px);
+  }
+}
+
+/* ---------- Reduced motion ---------- */
+
+.dio-page[data-reduced-motion="true"] *,
+.dio-page[data-reduced-motion="true"] *::before,
+.dio-page[data-reduced-motion="true"] *::after {
+  animation: none !important;
+  transition: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dio-page *,
+  .dio-page *::before,
+  .dio-page *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

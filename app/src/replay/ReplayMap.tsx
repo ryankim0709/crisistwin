@@ -1,3 +1,4 @@
+import { Spinner } from "../ui";
 import {
   Map as MapLibreMap,
   NavigationControl,
@@ -45,16 +46,22 @@ import {
   type BasemapStyle,
   type LayerGroup,
 } from "./mapLayers";
-import { HILLSHADE_LAYER, restyleDarkBasemap } from "./basemapStyle";
+import { HILLSHADE_LAYER, restyleBasemap } from "./basemapStyle";
 import { buildEdgePath, buildTravelIndex, particlePositions, type EdgePath } from "./particles";
 import PerspectiveSwitcher from "./perspectives/PerspectiveSwitcher";
 import { edgeThreats } from "./insights";
 import { areaKm2, peopleAtHome } from "./population";
 import { openRefugeKey, refugeTimeline } from "./refuges";
-import { EVIDENCE_LABEL, closedEdgesAt, localTime, perimeterWindowEnd, sameNumbers } from "./timeline";
+import {
+  EVIDENCE_LABEL,
+  closedEdgesAt,
+  localTime,
+  perimeterWindowEnd,
+  sameNumbers,
+} from "./timeline";
 import type { EvidenceClass, LngLat, ReplayModel } from "./types";
 
-// Same explicit worker bundling as maps/MapCanvas.tsx; Vite relocates the main module.
+// Bundle the MapLibre worker explicitly; Vite relocates the main module.
 setWorkerUrl(workerUrl);
 
 const STYLE_TIMEOUT_MS = 10_000;
@@ -112,7 +119,7 @@ async function loadBasemapStyle(signal: AbortSignal): Promise<BasemapStyle | nul
     ) {
       return null;
     }
-    return restyleDarkBasemap(style as BasemapStyle);
+    return restyleBasemap(style as BasemapStyle);
   } catch {
     return null;
   } finally {
@@ -140,7 +147,11 @@ function evidenceText(value: unknown): string {
   return EVIDENCE_LABEL[value as EvidenceClass] ?? "Evidence class unknown";
 }
 
-function tooltipContent(feature: MapGeoJSONFeature, perParticle: number, timezone: string): HTMLElement {
+function tooltipContent(
+  feature: MapGeoJSONFeature,
+  perParticle: number,
+  timezone: string,
+): HTMLElement {
   const p = feature.properties as Record<string, unknown>;
   const root = document.createElement("div");
   root.className = "rp-tip";
@@ -153,8 +164,12 @@ function tooltipContent(feature: MapGeoJSONFeature, perParticle: number, timezon
   switch (feature.layer.id) {
     case "fire-fill":
       add("strong", "Fire perimeter in effect");
-      if (p.half_day) add("span", "Half-day satellite composite: extent reached sometime in this window.");
-      add("span", `${fmt(p.area_km2, 1)} km² · ${EVIDENCE_LABEL[p.evidence_class as EvidenceClass] ?? String(p.evidence_class)}`);
+      if (p.half_day)
+        add("span", "Half-day satellite composite: extent reached sometime in this window.");
+      add(
+        "span",
+        `${fmt(p.area_km2, 1)} km² · ${EVIDENCE_LABEL[p.evidence_class as EvidenceClass] ?? String(p.evidence_class)}`,
+      );
       add("span", "Shape held until the next snapshot; no interpolation.", "rp-tip-note");
       break;
     case "roads-flow": {
@@ -163,7 +178,10 @@ function tooltipContent(feature: MapGeoJSONFeature, perParticle: number, timezon
       add("strong", `${String(p.name)}${p.bridge ? " · bridge" : ""}`);
       add("span", ROAD_CLASS_LABEL[ROAD_CLASS_BY_CODE[state.cls ?? 0] ?? "idle"]);
       if (veh > 0) {
-        add("span", `${fmt(veh)} modelled vehicles · ${fmt(state.speed, 1)} of ${fmt(p.speed_kph)} km/h`);
+        add(
+          "span",
+          `${fmt(veh)} modelled vehicles · ${fmt(state.speed, 1)} of ${fmt(p.speed_kph)} km/h`,
+        );
         add("span", "Simulated traffic, not recorded movement.", "rp-tip-note");
       } else {
         add("span", `Free-flow speed ${fmt(p.speed_kph)} km/h`);
@@ -173,7 +191,12 @@ function tooltipContent(feature: MapGeoJSONFeature, perParticle: number, timezon
     case "roads-threat": {
       const state = feature.state as { threat?: number };
       add("strong", String(p.name));
-      add("span", state.threat === 2 ? "Modelled fire arrival within 10 min" : "Modelled fire arrival within 30 min");
+      add(
+        "span",
+        state.threat === 2
+          ? "Modelled fire arrival within 10 min"
+          : "Modelled fire arrival within 30 min",
+      );
       add("span", "From the simulated fire front; not an observation.", "rp-tip-note");
       break;
     }
@@ -181,13 +204,18 @@ function tooltipContent(feature: MapGeoJSONFeature, perParticle: number, timezon
       const state = feature.state as { veh?: number };
       add("strong", `${String(p.name)}${p.bridge ? " · bridge" : ""}`);
       add("span", "Closed at this time (event or modelled fire hazard)");
-      if ((state.veh ?? 0) > 0) add("span", `${fmt(state.veh)} modelled vehicles held on this edge`);
+      if ((state.veh ?? 0) > 0)
+        add("span", `${fmt(state.veh)} modelled vehicles held on this edge`);
       break;
     }
     case "sim-front-fill":
       add("strong", "Simulated fire front (model output)");
       add("span", `${fmt(p.area_km2, 1)} km² · fire-spread model run`);
-      add("span", "Not an observation; shown only before the first satellite perimeter.", "rp-tip-note");
+      add(
+        "span",
+        "Not an observation; shown only before the first satellite perimeter.",
+        "rp-tip-note",
+      );
       break;
     case "sim-ignition":
       add("strong", String(p.label ?? "Ignition (model input)"));
@@ -201,16 +229,30 @@ function tooltipContent(feature: MapGeoJSONFeature, perParticle: number, timezon
       break;
     case "zones-fill":
       add("strong", String(p.name));
-      add("span", p.state === "ordered" ? "Evacuation order issued" : p.state === "warned" ? "Warning issued" : "No order yet");
+      add(
+        "span",
+        p.state === "ordered"
+          ? "Evacuation order issued"
+          : p.state === "warned"
+            ? "Warning issued"
+            : "No order yet",
+      );
       add("span", `${fmt(p.households)} households · ${fmt(p.vehicles)} vehicles`);
       break;
     case "destinations":
       add("strong", String(p.name));
-      add("span", `${String(p.dest_kind).replace(/_/g, " ")} · capacity ${p.capacity_veh == null ? "unbounded" : fmt(p.capacity_veh)}`);
+      add(
+        "span",
+        `${String(p.dest_kind).replace(/_/g, " ")} · capacity ${p.capacity_veh == null ? "unbounded" : fmt(p.capacity_veh)}`,
+      );
       add("span", evidenceText(p.evidence_class), "rp-tip-note");
       break;
     case "people-fill": {
-      const state = feature.state as { home?: number | null; left?: number | null; density?: number };
+      const state = feature.state as {
+        home?: number | null;
+        left?: number | null;
+        density?: number;
+      };
       add("strong", String(p.name));
       add(
         "span",
@@ -222,7 +264,10 @@ function tooltipContent(feature: MapGeoJSONFeature, perParticle: number, timezon
           .join(" · "),
       );
       if (state.home != null) {
-        add("span", `Still home now: ${fmt(state.home)} · left: ${fmt(state.left)} households (model)`);
+        add(
+          "span",
+          `Still home now: ${fmt(state.home)} · left: ${fmt(state.left)} households (model)`,
+        );
         add("span", `${fmt(state.density)} households at home per km²`);
       }
       add("span", "Census ACS households; departures are modelled.", "rp-tip-note");
@@ -238,17 +283,28 @@ function tooltipContent(feature: MapGeoJSONFeature, perParticle: number, timezon
             ? "Temporary refuge area · not open at this time"
             : "Temporary refuge area · open times not recorded",
       );
-      add("span", `${evidenceText(p.evidence_class)} · NIST-identified refuge; used in the model only when no exit is reachable`, "rp-tip-note");
+      add(
+        "span",
+        `${evidenceText(p.evidence_class)} · NIST-identified refuge; used in the model only when no exit is reachable`,
+        "rp-tip-note",
+      );
       break;
     case "fire-obs":
       add("strong", `Fire observed here at ${localTime(Number(p.at_ms), timezone)} (NIST)`);
       add(
         "span",
-        [p.location_source && `located by ${String(p.location_source)}`, p.time_precision && `time ${String(p.time_precision)}`]
+        [
+          p.location_source && `located by ${String(p.location_source)}`,
+          p.time_precision && `time ${String(p.time_precision)}`,
+        ]
           .filter(Boolean)
           .join(" · "),
       );
-      add("span", `${evidenceText(p.evidence_class)} · fire present at that time, not its first arrival`, "rp-tip-note");
+      add(
+        "span",
+        `${evidenceText(p.evidence_class)} · fire present at that time, not its first arrival`,
+        "rp-tip-note",
+      );
       break;
     case "damage":
       add("strong", String(p.damage ?? "Damage assessment"));
@@ -332,7 +388,10 @@ export default function ReplayMap({
     });
   }, [model]);
   const travelIndex = useMemo(
-    () => (model.traffic ? buildTravelIndex(model.traffic.frames, edgePaths, model.traffic.closures) : []),
+    () =>
+      model.traffic
+        ? buildTravelIndex(model.traffic.frames, edgePaths, model.traffic.closures)
+        : [],
     [model, edgePaths],
   );
 
@@ -406,22 +465,24 @@ export default function ReplayMap({
       m.on("mousemove", (event) => {
         const layers = INTERACTIVE_LAYERS.filter((id) => m.getLayer(id));
         // roads-flow covers the whole network (transparent where empty); skip empty edges.
-        const feature = m
-          .queryRenderedFeatures(event.point, { layers })
-          .find((f) => {
-            const state = f.state as { veh?: number; closed?: boolean };
-            if (f.layer.id === "roads-flow") return (state.veh ?? 0) > 0;
-            if (f.layer.id === "roads-closed") return state.closed === true;
-            if (f.layer.id === "roads-threat") return ((f.state as { threat?: number }).threat ?? 0) > 0;
-            return true;
-          });
+        const feature = m.queryRenderedFeatures(event.point, { layers }).find((f) => {
+          const state = f.state as { veh?: number; closed?: boolean };
+          if (f.layer.id === "roads-flow") return (state.veh ?? 0) > 0;
+          if (f.layer.id === "roads-closed") return state.closed === true;
+          if (f.layer.id === "roads-threat")
+            return ((f.state as { threat?: number }).threat ?? 0) > 0;
+          return true;
+        });
         if (!feature) {
           popup.remove();
           m.getCanvas().style.cursor = onPickRef.current ? "crosshair" : "";
           return;
         }
         m.getCanvas().style.cursor = "pointer";
-        popup.setLngLat(event.lngLat).setDOMContent(tooltipContent(feature, perParticleRef.current, model.incident.timezone)).addTo(m);
+        popup
+          .setLngLat(event.lngLat)
+          .setDOMContent(tooltipContent(feature, perParticleRef.current, model.incident.timezone))
+          .addTo(m);
       });
       m.on("mouseout", () => popup.remove());
       m.on("click", (event) => onPickRef.current?.([event.lngLat.lng, event.lngLat.lat]));
@@ -445,7 +506,11 @@ export default function ReplayMap({
     const map = mapRef.current;
     if (!ready || !map) return;
     setSourceData(map, "fire", perimeterCollection(perimeter));
-    setSourceData(map, "fire-history", perimeterHistoryCollection(model.perimeters, perimeterIndex));
+    setSourceData(
+      map,
+      "fire-history",
+      perimeterHistoryCollection(model.perimeters, perimeterIndex),
+    );
   }, [ready, model, perimeter, perimeterIndex]);
 
   const freshnessBucket = perimeter
@@ -472,7 +537,9 @@ export default function ReplayMap({
     if (!ready || !map) return;
     setSourceData(map, "sim-front", simulatedFrontCollection(simFront));
     const charFront =
-      simFrontIndex >= CHAR_LAG_FRONTS ? (model.fireSimulated?.fronts[simFrontIndex - CHAR_LAG_FRONTS] ?? null) : null;
+      simFrontIndex >= CHAR_LAG_FRONTS
+        ? (model.fireSimulated?.fronts[simFrontIndex - CHAR_LAG_FRONTS] ?? null)
+        : null;
     setSourceData(map, "sim-char", simulatedFrontCollection(charFront));
   }, [ready, model, simFront, simFrontIndex]);
 
@@ -481,8 +548,12 @@ export default function ReplayMap({
   const hasOrderedZones = Array.from(zoneStates.values()).includes("ordered");
   useEffect(() => {
     const map = mapRef.current;
-    if (!ready || !map || !animate || (!fireVisible && !hasOrderedZones) || prefersReducedMotion()) return;
-    const timer = window.setInterval(() => setFireFlicker(map, performance.now()), FLICKER_INTERVAL_MS);
+    if (!ready || !map || !animate || (!fireVisible && !hasOrderedZones) || prefersReducedMotion())
+      return;
+    const timer = window.setInterval(
+      () => setFireFlicker(map, performance.now()),
+      FLICKER_INTERVAL_MS,
+    );
     return () => window.clearInterval(timer);
   }, [ready, animate, fireVisible, hasOrderedZones]);
 
@@ -537,12 +608,15 @@ export default function ReplayMap({
   }, [ready]);
 
   // Satellite: show a loading hint while USGS tiles stream; on repeated errors or a timeout with
-  // no tile loaded, fall back to the (restyled) dark map with a notice. Status is set from callbacks only.
+  // no tile loaded, fall back to the (restyled) vector map with a notice. Status is set from callbacks only.
   const [imagery, setImagery] = useState<"idle" | "loading" | "ok" | "failed">("idle");
   useEffect(() => {
     const map = mapRef.current;
     if (!ready || !map) return;
-    const reset = window.setTimeout(() => setImagery(basemapChoice === "satellite" ? "loading" : "idle"), 0);
+    const reset = window.setTimeout(
+      () => setImagery(basemapChoice === "satellite" ? "loading" : "idle"),
+      0,
+    );
     setBasemap(map, basemapChoice);
     if (basemapChoice !== "satellite") return () => window.clearTimeout(reset);
     let loaded = false;
@@ -552,7 +626,7 @@ export default function ReplayMap({
     const fail = () => {
       if (failed || loaded || anyTile) return;
       failed = true;
-      setBasemap(map, "dark");
+      setBasemap(map, "map");
       setImagery("failed");
     };
     const onData = (event: { sourceId?: string; tile?: { state?: string } }) => {
@@ -599,15 +673,12 @@ export default function ReplayMap({
       e = Math.max(e, x);
       n = Math.max(n, y);
     }
-    map.fitBounds(
-      [w, s, e, n],
-      {
-        padding: focus.padding ?? 120,
-        maxZoom: focus.maxZoom ?? 15,
-        duration: prefersReducedMotion() ? 0 : 1600,
-        essential: true,
-      },
-    );
+    map.fitBounds([w, s, e, n], {
+      padding: focus.padding ?? 120,
+      maxZoom: focus.maxZoom ?? 15,
+      duration: prefersReducedMotion() ? 0 : 1600,
+      essential: true,
+    });
   }, [ready, focus]);
 
   useEffect(() => {
@@ -624,7 +695,10 @@ export default function ReplayMap({
     }
     return out;
   }, [model]);
-  const zoneIndex = useMemo(() => new Map((model.zones?.items ?? []).map((z, i) => [z.id, i])), [model]);
+  const zoneIndex = useMemo(
+    () => new Map((model.zones?.items ?? []).map((z, i) => [z.id, i])),
+    [model],
+  );
   const orderedRef = useRef<Set<string>>(new Set());
   const flashesRef = useRef<Map<number, number>>(new Map());
   const [flashTick, setFlashTick] = useState(0);
@@ -665,7 +739,8 @@ export default function ReplayMap({
   }, [ready, flashTick]);
 
   const ignitionAt = model.fireSimulated?.ignition?.atMs ?? null;
-  const ignitionLabel = ignitionAt !== null && visibility.simFire && simTimeMs < ignitionAt + IGNITION_LABEL_MS;
+  const ignitionLabel =
+    ignitionAt !== null && visibility.simFire && simTimeMs < ignitionAt + IGNITION_LABEL_MS;
   useEffect(() => {
     const map = mapRef.current;
     if (ready && map) setIgnitionLabelVisible(map, ignitionLabel);
@@ -673,15 +748,20 @@ export default function ReplayMap({
 
   useEffect(() => {
     const map = mapRef.current;
-    if (ready && map) setSourceData(map, "zones", zonesCollection(model.zones?.items ?? [], zoneStates));
+    if (ready && map)
+      setSourceData(map, "zones", zonesCollection(model.zones?.items ?? [], zoneStates));
   }, [ready, model, zoneStates]);
 
   // People at home: zone areas once, then per-minute feature-state from modelled departures.
-  const zoneAreas = useMemo(() => (model.zones?.items ?? []).map((z) => areaKm2(z.geometry)), [model.zones]);
+  const zoneAreas = useMemo(
+    () => (model.zones?.items ?? []).map((z) => areaKm2(z.geometry)),
+    [model.zones],
+  );
   const peopleMinute = Math.floor(simTimeMs / 60_000) * 60_000;
   useEffect(() => {
     const map = mapRef.current;
-    if (ready && map && visibility.people) applyPeopleState(map, peopleAtHome(model, zoneAreas, peopleMinute));
+    if (ready && map && visibility.people)
+      applyPeopleState(map, peopleAtHome(model, zoneAreas, peopleMinute));
   }, [ready, model, zoneAreas, peopleMinute, visibility.people]);
 
   // Refuges open and close at NIST-recorded times; redraw only when the open set changes.
@@ -696,7 +776,12 @@ export default function ReplayMap({
   }, [simTimeMs]);
   useEffect(() => {
     const map = mapRef.current;
-    if (ready && map) setSourceData(map, "destinations", destinationsCollection(model, refuges, refugeTimeRef.current));
+    if (ready && map)
+      setSourceData(
+        map,
+        "destinations",
+        destinationsCollection(model, refuges, refugeTimeRef.current),
+      );
   }, [ready, model, refuges, openKey]);
 
   // Fire observations appear at their observed time (minute buckets keep filter updates cheap).
@@ -756,10 +841,16 @@ export default function ReplayMap({
         aria-label={`Map of ${model.incident.name}: fire perimeter, roads and evacuation overlays`}
       />
       {/* Perspective hook point: render overlays here with map={mapInstance} once ready. */}
-      <PerspectiveSwitcher map={mapInstance} model={model} frameIndex={frameIndex} perimeterIndex={perimeterIndex} simTimeMs={simTimeMs} />
+      <PerspectiveSwitcher
+        map={mapInstance}
+        model={model}
+        frameIndex={frameIndex}
+        perimeterIndex={perimeterIndex}
+        simTimeMs={simTimeMs}
+      />
       {mapInstance === null && !mapError && (
         <div className="rp-map-state" role="status">
-          <span className="rp-spinner" aria-hidden="true" />
+          <Spinner />
           {styleStatus === "loading" ? "Loading basemap…" : "Preparing map layers…"}
         </div>
       )}
@@ -770,7 +861,7 @@ export default function ReplayMap({
       )}
       {basemapChoice === "satellite" && imagery === "loading" && (
         <p className="rp-imagery-status" role="status">
-          <span className="rp-spinner" aria-hidden="true" /> Loading satellite imagery…
+          <Spinner /> Loading satellite imagery…
         </p>
       )}
       {basemapChoice === "satellite" && imagery === "failed" && (

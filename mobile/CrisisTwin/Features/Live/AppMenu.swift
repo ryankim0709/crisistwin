@@ -1,15 +1,17 @@
 import SwiftUI
 
 /// The menu sheet behind the incident screen's one menu button: My reports, Responder (join or
-/// leave, share location), My plan and About. Reads `LiveStore` from the environment.
+/// leave, share location), My plan, Family, the web simulation feed and About. Reads `LiveStore`
+/// from the environment.
 struct AppMenu: View {
     init() {}
 
     private enum Destination: String, Hashable {
-        case myreports, responder, plan, about
+        case myreports, responder, plan, family, broadcast, about
     }
 
     @Environment(LiveStore.self) private var store
+    @Environment(BroadcastStore.self) private var broadcast
     @Environment(\.incidentActions) private var actions
     @Environment(\.dismiss) private var dismiss
     @State private var path: [Destination] = DebugLaunch.screen.flatMap(Destination.init(rawValue:)).map { [$0] } ?? []
@@ -31,6 +33,9 @@ struct AppMenu: View {
                     NavigationLink(value: Destination.plan) {
                         Label("My plan", systemImage: "figure.2")
                     }
+                    NavigationLink(value: Destination.family) {
+                        Label("Family", systemImage: "person.3")
+                    }
                 }
                 Section {
                     NavigationLink(value: Destination.responder) {
@@ -44,6 +49,9 @@ struct AppMenu: View {
                     }
                 }
                 Section {
+                    NavigationLink(value: Destination.broadcast) {
+                        Label("Web simulation", systemImage: "dot.radiowaves.left.and.right")
+                    }
                     NavigationLink(value: Destination.about) {
                         Label("About", systemImage: "info.circle")
                     }
@@ -63,12 +71,28 @@ struct AppMenu: View {
                 switch destination {
                 case .myreports: MyReportsView()
                 case .plan: PlanView()
+                case .family: FamilyView(openTab: open)
+                case .broadcast:
+                    BroadcastView(openTab: open)
+                        .task {
+                            while !Task.isCancelled {
+                                await broadcast.refresh()
+                                try? await Task.sleep(for: BroadcastStore.pollInterval)
+                            }
+                        }
                 case .about: AboutView()
                 case .responder:
                     // Replaces the menu with the prefilled report sheet.
                     ResponderView(onReport: actions.openReport)
                 }
             }
+        }
+    }
+
+    private func open(_ tab: AppTab) {
+        switch tab {
+        case .family: path.append(.family)
+        case .plan: path.append(.plan)
         }
     }
 }
@@ -78,4 +102,6 @@ struct AppMenu: View {
         .environment(LiveStore())
         .environment(LocationProvider())
         .environment(MeetingPlanStore())
+        .environment(BroadcastStore())
+        .environment(FamilyStore())
 }

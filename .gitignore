@@ -5,6 +5,11 @@
 *.pem
 *.key
 
+# Local agent run output: drafted and delivered advisories from a watch run.
+# These are experimental planning artefacts, not records to keep in Git.
+agent/review_queue.jsonl
+agent/*.jsonl
+
 # Local caches and build outputs
 node_modules/
 .next/
@@ -18,8 +23,14 @@ __pycache__/
 .ruff_cache/
 *.tsbuildinfo
 
-# Local operating system files
+# Local operating system files and logs
 .DS_Store
+*.log
+
+# Xcode per-user state (the project and workspace files themselves stay tracked)
+xcuserdata/
+*.xcuserstate
+DerivedData/
 
 # Generated replay bundles (python3 -m sim ... bundle); rebuild locally
 app/public/replays/**/*.json
@@ -32,3 +43,6 @@ app/public/simulations/**/*.json
 data/incidents/*/*/raw/
 data/incidents/*/*/normalized/
 data/incidents/*/*/derived/
+
+# Prebuilt landscape packages live in MongoDB GridFS; rebuild with tools/build_landscape_regions
+data/landscapes/

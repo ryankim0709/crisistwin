@@ -11,7 +11,7 @@ import {
 import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useEffect, useRef, useState } from "react";
-import { restyleDarkBasemap } from "../replay/basemapStyle";
+import { restyleBasemap } from "../replay/basemapStyle";
 import { BASEMAP_STYLE_URL, FALLBACK_STYLE, type BasemapStyle } from "../replay/mapLayers";
 import { KIND_LABEL, LEVEL_LABEL, STATUS_LABEL, labelPoint, shortKey, wallClock } from "./format";
 import type { CommandResponse, GuidanceLevel, LonLat, TwinMonitor } from "./types";
@@ -59,7 +59,7 @@ async function loadStyle(signal: AbortSignal): Promise<BasemapStyle> {
     if (typeof style !== "object" || style === null || !("layers" in style) || !Array.isArray(style.layers)) {
       return FALLBACK_STYLE;
     }
-    return restyleDarkBasemap(style as BasemapStyle);
+    return restyleBasemap(style as BasemapStyle);
   } catch {
     return FALLBACK_STYLE;
   } finally {

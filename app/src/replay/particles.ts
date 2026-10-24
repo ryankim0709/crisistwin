@@ -78,8 +78,9 @@ export function buildTravelIndex(
     intervals.set(edge, list);
   }
   const closedAt = (edge: number, k: number) =>
-    intervals.get(edge)?.some(([first, reopened]) => first <= k && (reopened === null || k < reopened)) ??
-    false;
+    intervals
+      .get(edge)
+      ?.some(([first, reopened]) => first <= k && (reopened === null || k < reopened)) ?? false;
   const running = new Map<number, number>();
   const index: TravelIndex = [];
   for (let k = 0; k < frames.length; k += 1) {
@@ -138,7 +139,8 @@ export function particlePositions({
     const isStopped = closed.has(edgeIndex) || speedKph <= 0;
     const start = offsets?.get(edgeIndex) ?? 0;
     const travel =
-      (start + (isStopped ? 0 : (intoFrameSeconds * speedKph * KPH_TO_MPS) / path.lengthM)) * motionScale;
+      (start + (isStopped ? 0 : (intoFrameSeconds * speedKph * KPH_TO_MPS) / path.lengthM)) *
+      motionScale;
     for (let k = 0; k < n && coords.length < MAX_PARTICLES; k += 1) {
       const base = (k + jitter(edgeIndex, k) * 0.6) / n;
       const fraction = (((base + travel) % 1) + 1) % 1;

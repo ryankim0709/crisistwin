@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { VariantLoad } from "./CompareTab";
-import { fetchJson, parseVariant, parseVariantIndex, type Variant, type VariantIndex } from "./compare";
+import {
+  fetchJson,
+  parseVariant,
+  parseVariantIndex,
+  type Variant,
+  type VariantIndex,
+} from "./compare";
 import type { ReplayModel } from "./types";
 
 export interface VariantsState {
@@ -76,7 +82,11 @@ export function useVariants(baseline: ReplayModel, indexUrl: string | null): Var
         })
         .catch((error: unknown) => {
           if (controller.signal.aborted) return;
-          setLoad({ status: "error", id, message: error instanceof Error ? error.message : "unknown error" });
+          setLoad({
+            status: "error",
+            id,
+            message: error instanceof Error ? error.message : "unknown error",
+          });
         });
     },
     [baseline, index, indexUrl],

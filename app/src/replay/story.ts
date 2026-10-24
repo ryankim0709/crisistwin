@@ -215,7 +215,7 @@ export function buildChapters(
       body:
         (people != null ? `${fmt(people)} people in ` : "") +
         `${fmt(households)} households across ${fmt(zones.length)} Census areas. ` +
-        "Lighter grey means more households per km². Watch it drain as people leave.",
+        "Darker green means more households per km². Watch it drain as people leave.",
       evidence: zoneEvidence && zoneEvidence !== "mixed" ? zoneEvidence : "derived",
       focus: zones.flatMap((z) => ringCoords(z.geometry)),
     });
@@ -390,10 +390,10 @@ export function buildChapters(
       atMs: perimeter.atMs,
       title: `First satellite perimeter${perimeter.areaKm2 != null ? `: ${perimeter.areaKm2.toFixed(0)} km²` : ""}`,
       body:
-        (windowEnd !== null
+        windowEnd !== null
           ? "The dotted line is a half-day satellite composite: the fire reached this extent sometime by " +
             `${localTime(windowEnd, model.incident.timezone)}. From here it replaces the model fire.`
-          : "The dashed line is the satellite estimate; from here it replaces the model fire."),
+          : "The dashed line is the satellite estimate; from here it replaces the model fire.",
       evidence: perimeter.evidenceClass,
       focus: ringCoords(perimeter.geometry),
     });

@@ -1,3 +1,4 @@
+/* Sidebar shell. Classes: app-layout, sidebar-*, nav-*. Primitives come from ./ui. */
 .app-layout {
   display: grid;
   grid-template-columns: 248px minmax(0, 1fr);
@@ -6,13 +7,13 @@
 
 .skip-link {
   position: fixed;
-  top: 12px;
-  left: 12px;
-  z-index: 1000;
-  padding: 12px 18px;
-  border-radius: 6px;
-  background: #142b27;
-  color: #fff;
+  top: var(--ct-space-3);
+  left: var(--ct-space-3);
+  z-index: var(--ct-z-skip-link);
+  padding: var(--ct-space-3) 18px;
+  border-radius: var(--ct-radius-sm);
+  background: var(--ct-brand-strong);
+  color: var(--ct-ink-inverse);
   transform: translateY(-160%);
 }
 
@@ -27,16 +28,16 @@
   flex-direction: column;
   height: 100dvh;
   overflow-y: auto;
-  padding: 28px 20px 20px;
-  border-right: 1px solid #d4d8ca;
-  background: #eeefe6;
+  padding: var(--ct-space-7) var(--ct-space-5) var(--ct-space-5);
+  border-right: 1px solid var(--ct-border);
+  background: var(--ct-surface-muted);
 }
 
 .sidebar-brand {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: var(--ct-space-4);
 }
 
 .sidebar-logo {
@@ -55,19 +56,19 @@
 }
 
 .sidebar-nav {
-  padding: 40px 0 24px;
+  padding: var(--ct-space-10) 0 var(--ct-space-6);
 }
 
 .nav-group + .nav-group {
-  margin-top: 28px;
+  margin-top: var(--ct-space-7);
 }
 
 .nav-group-label {
-  margin: 0 12px 10px;
-  color: #52635c;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 1.6px;
+  margin: 0 var(--ct-space-3) 10px;
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-2xs);
+  font-weight: var(--ct-weight-bold);
+  letter-spacing: var(--ct-tracking-eyebrow);
   text-transform: uppercase;
 }
 
@@ -81,45 +82,28 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--ct-space-2);
   min-height: 44px;
-  margin: 4px 0;
-  padding: 10px 12px;
-  border-radius: 6px;
-  color: #40584e;
-  font-size: 13px;
+  margin: var(--ct-space-1) 0;
+  padding: 10px var(--ct-space-3);
+  border-radius: var(--ct-radius-sm);
+  color: var(--ct-ink);
+  font-size: var(--ct-text-md);
   text-decoration: none;
 }
 
 .nav-group a:hover {
-  background: #e0e5d9;
+  background: var(--ct-brand-soft);
 }
 
 .nav-group a[aria-current="page"] {
-  color: #fff;
-  background: #245c4f;
-  font-weight: 600;
+  color: var(--ct-ink-inverse);
+  background: var(--ct-brand);
+  font-weight: var(--ct-weight-semibold);
 }
 
-.sidebar-note {
-  margin-top: auto;
-  padding-top: 24px;
-  border-top: 1px solid #d4d8ca;
-}
-
-.sidebar-note .badge {
-  display: inline-block;
-  font-size: 10px;
-}
-
-.sidebar-note p {
-  margin: 14px 0 0;
-  color: #52635c;
-  font-size: 11px;
-  line-height: 1.7;
-}
-
-.menu-toggle {
+/* Mobile menu button: a kit secondary Button, hidden on desktop. */
+.sidebar .menu-toggle {
   display: none;
 }
 
@@ -127,75 +111,24 @@
   min-width: 0;
 }
 
-.planning-page {
-  max-width: 1120px;
-  margin: 0 auto;
-  padding: 64px 48px;
+/* Desktop-only collapse: the sidebar shrinks to a rail holding just the expand button. */
+.sidebar .sidebar-collapse {
+  align-self: flex-end;
+  margin: -16px -8px 8px 0;
 }
-
-.planning-header {
-  margin-bottom: 40px;
+.app-layout.is-sidebar-collapsed {
+  grid-template-columns: 52px minmax(0, 1fr);
 }
-
-.planning-header h1 {
-  font-size: clamp(32px, 4vw, 52px);
-  letter-spacing: -1.8px;
+.is-sidebar-collapsed .sidebar {
+  padding: var(--ct-space-7) 10px;
 }
-
-.planning-empty {
-  padding: 32px;
-  border: 1px solid #d4d8ca;
-  border-radius: 12px;
-  background: #fcfcf8;
+.is-sidebar-collapsed .sidebar .sidebar-collapse {
+  align-self: center;
+  margin: -16px 0 0;
 }
-
-.planning-empty .badge {
-  display: inline-block;
-  margin-bottom: 24px;
-}
-
-.planning-empty p,
-.planned-capabilities li {
-  max-width: 640px;
-  color: #52635c;
-  font-size: 14px;
-  line-height: 1.8;
-}
-
-.action-link {
-  display: inline-block;
-  margin-top: 20px;
-  font-size: 14px;
-  font-weight: 600;
-  text-underline-offset: 4px;
-}
-
-.planned-capabilities {
-  margin-top: 36px;
-}
-
-.planned-capabilities h2 {
-  font-size: 17px;
-}
-
-.planned-capabilities ul {
-  padding-left: 20px;
-  list-style: disc;
-}
-
-.planned-capabilities li + li {
-  margin-top: 8px;
-}
-
-@media (min-width: 761px) and (max-width: 1100px) {
-  .app-content .workspace {
-    grid-template-columns: 1fr;
-  }
-  .app-content .connection {
-    border-left: 0;
-    border-top: 1px solid #d4d8ca;
-    padding: 24px 0 0;
-  }
+.is-sidebar-collapsed .sidebar-brand,
+.is-sidebar-collapsed .sidebar-nav {
+  display: none;
 }
 
 @media (max-width: 760px) {
@@ -205,29 +138,30 @@
   .sidebar {
     position: static;
     height: auto;
-    padding: 16px 20px;
+    padding: var(--ct-space-4) var(--ct-space-5);
     border-right: 0;
-    border-bottom: 1px solid #d4d8ca;
+    border-bottom: 1px solid var(--ct-border);
   }
-  .menu-toggle {
-    display: block;
+  .sidebar .menu-toggle {
+    display: inline-flex;
     min-height: 44px;
   }
-  .sidebar-nav:not(.is-open),
-  .sidebar-note {
+  .sidebar-nav:not(.is-open) {
     display: none;
   }
   .sidebar-nav {
-    padding: 24px 0 0;
+    padding: var(--ct-space-6) 0 0;
   }
-  .planning-page {
-    padding: 36px 24px;
+  .sidebar .sidebar-collapse {
+    display: none;
   }
-  .planning-empty {
-    padding: 24px;
+  .is-sidebar-collapsed .sidebar {
+    padding: var(--ct-space-4) var(--ct-space-5);
   }
-  .app-content .map-page {
-    height: calc(100dvh - 77px);
-    min-height: 640px;
+  .is-sidebar-collapsed .sidebar-brand {
+    display: flex;
+  }
+  .is-sidebar-collapsed .sidebar-nav.is-open {
+    display: block;
   }
 }

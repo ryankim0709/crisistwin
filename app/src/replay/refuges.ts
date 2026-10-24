@@ -14,7 +14,10 @@ export function traCode(text: string): string | null {
 /** Ascending open/close times per refuge destination id. */
 export type RefugeTimeline = Map<string, { atMs: number; open: boolean }[]>;
 
-export function refugeTimeline(destinations: readonly Destination[], events: readonly ReplayEvent[]): RefugeTimeline {
+export function refugeTimeline(
+  destinations: readonly Destination[],
+  events: readonly ReplayEvent[],
+): RefugeTimeline {
   const byCode = new Map<string, string>();
   for (const d of destinations) {
     if (d.kind !== REFUGE_KIND) continue;

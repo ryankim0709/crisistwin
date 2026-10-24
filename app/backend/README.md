@@ -114,13 +114,45 @@ Set `ANTHROPIC_API_KEY` in the backend's environment to enable it (see
 endpoint does not query MongoDB. Run the backend with a gunicorn timeout longer than a
 model call, e.g. `gunicorn config.wsgi -b 127.0.0.1:8000 --timeout 120`.
 
-## Live drill API (`/api/live/`)
+### `GET /api/landscapes` and `GET /api/landscapes/<region_id>`
+
+Public (`AllowAny`), read-only GET/HEAD endpoints in `api/landscapes.py` over the GridFS
+bucket `landscape_packages` written by the offline builder (ADR 0013). The server never
+writes and never creates indexes. Recommended index (the builder/uploader may create it):
+
+```js
+db.getCollection("landscape_packages.files").createIndex({ "metadata.regionId": 1, "metadata.builtAt": -1 })
+```
+
+List: `{"regions": [{id, name?, counties?, summary?, center?, radiusMeters?, cellMeters, width,
+height, builtAt, bytes, sha256}]}`, newest package per `metadata.regionId`, at most 100,
+`Cache-Control: public, max-age=60`. Catalogue fields (`name`, `counties`, `summary`,
+`center`, `radiusMeters`) and lattice fields (`width`, `height`, `cellMeters`, from
+`metadata.lattice`) are passed through when the builder stored them and omitted otherwise,
+so the client should join missing ones with `src/fire/regions.ts`.
+
+Package: `region_id` must match `^[a-z0-9-]{1,64}$`. Streams the newest package in GridFS
+chunks with `Content-Type: application/gzip` (no `Content-Encoding`), `Content-Length`,
+`ETag: "<sha256>"` and `Cache-Control: public, max-age=3600`; a matching `If-None-Match`
+returns 304. Errors are JSON: 404 `{"error": "not_found"}` for unknown/unbuilt regions,
+503 `{"error": "unavailable"}` on MongoDB/GridFS errors (no driver text).
+
+### Live broadcast and families
+
+`GET /api/live`, `POST /api/live/broadcast` (`api/live_broadcast.py`) and `/api/families…`
+(`api/families.py`) serve the resident iOS app. They use MongoDB collections
+`live_broadcast` and `families`. Request and response shapes are in
+[ADR 0016](../../docs/adr/0016-resident-live-and-family.md) and
+`app/src/live/contracts.ts`.
+
+### Live drill API (`/api/live/…`)
 
 Implements v1 and v2 of [docs/live-reports.md](../../docs/live-reports.md) (ADR 0011, 0012):
 field reports, road state, public map, check tasks, the drill clock, the fire estimate,
 per-zone guidance with controller proposals, check-ins and responder location. Code:
 `api/live/` (HTTP + MongoDB) over the pure `livecore/` package (rules, planner, routing).
-Everything is a labeled drill of the 2018 Camp Fire; nothing is a real incident.
+Everything is a labeled drill of the 2018 Camp Fire; nothing is a real incident. It shares
+the `/api/live` prefix with the broadcast above but no code or collections (`live_*`).
 
 - Auth: `Authorization: Bearer <token>`. `POST /api/live/devices` issues civilian tokens;
   `POST /api/live/incidents/camp-2018-drill/join {"invite_code"}` issues responder tokens

@@ -1,395 +1,155 @@
 # CrisisTwin
 
-A Cal Hacks project exploring disaster response and evacuation planning through an interactive digital twin.
+CrisisTwin is a Cal Hacks wildfire evacuation planning simulator: an interactive digital twin that
+lets an emergency planner see how fire spread, road capacity, evacuation demand and resource
+decisions interact. It combines a physics-based fire spread model on real LANDFIRE fuels and terrain, a
+multi-fire Simulation Studio, a Claude-powered dispatch agent that issues evacuation and engine
+orders during playback, and a replay of historical California fires with traffic and evacuation
+overlays. The web workspace serves planners; an iOS app is the civilian companion.
 
-CrisisTwin will let emergency planners test how fire spread, road closures, evacuation demand, and resource decisions interact before comparing possible responses.
+> **Safety:** this is an experimental planning simulator. Its outputs are not operational
+> evacuation instructions; any future resident guidance should require approval by the
+> responsible authority. Wind, moisture, demand and many other inputs are assumptions the pages
+> label as such.
 
-## Full project scope
+## What is implemented
 
-See the [Cal Hacks 13.0 project scope](docs/project-scope.md) for the full feature
-plan, priorities, sponsor integrations, three-person team responsibilities, and
-target demo. It describes proposed work, not implemented functionality. Its
-suggested technology choices are proposals; the current stack and setup are
-documented below and in the [scaffold decision](docs/adr/0001-app-scaffold.md).
+Routes of the web app (`app/src/main.tsx`, `app/src/navigation.ts`); `/` redirects to `/fire`.
 
-## Initial demo scope
+| Route | Page | What it does |
+| ----- | ---- | ------------ |
+| `/fire` | Fire spread model | Rothermel surface spread with crown fire, ember spotting and structure-to-structure spread on LANDFIRE fuels, canopy and terrain; 3D diorama or USGS imagery view; 41 prebuilt California regions or a live custom area; optional NWS wind. [Reference](docs/fire-simulator.md). |
+| `/simulation` | Simulation Studio | Up to five scheduled ignitions in one solver pass on a shared landscape, Web Worker solve, JSON export/import, plus a 3D diorama view of the last run. [ADR 0011](docs/adr/0011-simulation-studio.md), [ADR 0016](docs/adr/0016-studio-diorama-view.md). |
+| `/dispatch` | Dispatch agent | The fire model's 3D diorama for any stored region or custom US area, with roads, fire stations and synthetic homes built from OpenStreetMap. A Claude agent pauses playback every few simulated minutes and orders zone evacuations and fire engines; the browser computes routes, per-household evacuation and counts, and the agent chooses among listed options. Needs `ANTHROPIC_API_KEY` on the backend. [ADR 0014](docs/adr/0014-dispatch-agent.md), [ADR 0017](docs/adr/0017-dispatch-anywhere.md). |
+| `/live` | Live command | Controller workspace for the Camp Fire live drill: field-report triage, per-zone guidance approval, the drill clock and the real-time twin. Full-viewport, outside the sidebar shell. [Contract](docs/live-reports.md), [ADR 0012](docs/adr/0012-controller-guidance.md). |
+| `/replay` | Historical replay | Replay of past fires (Camp 2018, plus Marshall and Kincade packages) with perimeters, evacuation traffic and responder/evacuee views, driven by generated replay bundles. [Bundle contract](docs/replay-bundle.md). |
+| `/simulate` | Agent simulation | Replay-style view of simulated agent runs (same map tooling as `/replay`). |
+| `/diorama` | Evacuation diorama | Fictional, scripted ~90 s three.js evacuation of the made-up town Larkspur Hollow; synthetic data. [ADR 0010](docs/adr/0010-evacuation-diorama.md). |
+| `/scenarios`, `/evacuation`, `/comparison`, `/incidents`, `/stress-tests` | Planning pages | UI scaffolds with temporary local input; they do not save scenarios or run evacuation models. [Details](docs/workspace-pages.md), [ADR 0006](docs/adr/0006-planning-ui-scaffolds.md). |
 
-- Visualize a wildfire scenario and a surrounding road network.
-- Simulate community evacuation demand and traffic bottlenecks.
-- Inject changes such as a wind shift, bridge closure, or simultaneous departures.
-- Compare evacuation strategies, departure times, and shelter assignments.
-- Show assumptions, uncertainty, and which missing observations could change a decision.
+The workspace overview (`/overview`) and `/maps` pages were removed
+([ADR 0015](docs/adr/0015-remove-overview-and-maps.md)).
 
-## Project status
+Also in the repository:
 
-The full stack development scaffold is in [`app/`](app/): React/TypeScript with
-Vite and Tailwind CSS, a Django REST Framework API, MongoDB via PyMongo, Vitest,
-and Docker.
-The workspace has shared sidebar navigation, page-specific UI scaffolds, and an
-overview that checks the API and database connection. Planning pages support
-temporary local input editing; they do not save scenarios or execute evacuation
-models. The imagery map at `/maps` starts over San Francisco and supports an
-illustrative fire-spread experiment:
-choose an origin, set wind, and inspect the simulated footprint in 15-minute
-steps. A historical replay simulator for the 2018 Camp Fire is in progress in [`sim/`](sim/README.md);
-persistent scenarios are not implemented yet.
+- **Backend** (`app/backend/`): Django REST API with `GET /api/health`, `/api/landscapes` (prebuilt landscapes from MongoDB), `/api/dispatch/area` (OpenStreetMap roads and stations for a box), `/api/dispatch/decide`, `/api/replay/explain`, `/api/live` (resident-app simulation feed), `/api/live/…` (live drill: field reports, controller guidance, twin; [contract](docs/live-reports.md)) and `/api/families`. See [API contract](app/backend/README.md).
+- **Fire watch agent** (`agent/`): a standalone Python package that drafts evacuation advisories from satellite detections for a human to approve; never notifies residents. [README](agent/README.md), [ADR 0008](docs/adr/0008-fire-watch-agent.md).
+- **Historical replay simulator** (`sim/`): stdlib Python fire hindcast and evacuation traffic model that produces replay bundles. [README](sim/README.md).
+- **iOS app** (`mobile/`): SwiftUI resident app for the **live drill** on the 2018 Camp road network: a map
+  with the fire estimate and the zone guidance a controller approves on `/live`, field reports and **I'm out** /
+  **Need help** check-ins ([contract](docs/live-reports.md), [ADR 0011](docs/adr/0011-live-field-reports.md),
+  [ADR 0012](docs/adr/0012-controller-guidance.md)). Its menu also holds **My Plan**, **Family** (create or join a
+  family by code to share meeting points and status) and **Web simulation**, the fire a planner plays on `/fire` or
+  `/dispatch` with **Share with resident app** on. Everything shown is a labelled drill or simulation, not an
+  alert. [README](mobile/README.md), [ADR 0010](docs/adr/0010-civilian-ios-app.md),
+  [ADR 0016](docs/adr/0016-resident-live-and-family.md).
+- **Live twin** (`app/backend/livecore/`, `sim/`): the planner and a steppable traffic engine behind `/live`'s what-if
+  ([ADR 0013](docs/adr/0013-realtime-twin.md), [twin API](docs/twin-api.md)).
 
-A live drill loop on the Camp road network runs locally: the iOS app in
-[`mobile/`](mobile/README.md) is one incident screen that sends field reports and
-check-ins and shows the zone guidance that a controller approves through the
-backend command API, with pure reroutes around confirmed blocks published automatically
-(see [docs/live-reports.md](docs/live-reports.md)). It is a drill on 2018 data,
-not connected to real incidents. The controller's web page at `/live` builds but
-has not been tried in a browser yet.
+Not implemented: persistent scenarios, live incident integrations, a validated evacuation model.
+The fire model has no suppression and is unvalidated at demo settings.
 
-This is an experimental planning simulator. Its outputs are not operational evacuation instructions; any future resident guidance should require approval by the responsible authority.
+## Repository map
 
-## Historical data research
-
-### Incident data in MongoDB Atlas
-
-Large incident-package files (`raw/` and `normalized/`) are not stored in Git.
-Each package's `manifest.json` stays in Git and lists every artifact with its SHA-256;
-the bytes live in MongoDB Atlas (GridFS, deduplicated by hash). After cloning:
-
-```sh
-pip install -r tools/requirements.txt
-export MONGODB_URI='mongodb+srv://...'   # ask a teammate; never commit it
-python3 -m tools.mongo_data pull         # restores data/incidents/*/*/{raw,normalized}
+```text
+app/                  Web app
+  src/                React 19 + TypeScript frontend (see app/AGENTS.md)
+    ui/               Design tokens and shared component kit: the UI standard, see app/src/ui/README.md
+    fire/ studio/ dispatch/ replay/ diorama/ live/ pages/ maps/ lib/
+  backend/            Django 5.2 REST API + PyMongo (config/, api/, livecore/ live-drill rules and planner)
+  public/             Static assets (brand logo, map imagery; replay bundles are generated)
+  data-manifest.json  Hashes of generated app data stored in MongoDB Atlas
+  docker-compose.yml  Development stack (frontend + backend, external MongoDB)
+agent/                Fire watch agent (Anthropic SDK, standalone)
+sim/                  Historical replay simulator (stdlib Python)
+tools/                Data acquisition and sync scripts (see tools/README.md)
+tests/                Unit tests for the tools incident builders
+data/incidents/       Incident packages; manifests in Git, bytes in MongoDB Atlas
+mobile/               Native iOS app (Xcode project)
+docs/                 Docs index: docs/README.md; decisions: docs/adr/README.md
+AGENTS.md             Shared rules for coding agents (CLAUDE.md, Cursor and Copilot adapt it)
 ```
 
-After building a new package locally, run `python3 -m tools.mongo_data push` and commit its manifest.
+## Quick start
 
-[Historical incident packages](docs/historical-replay.md) proposes source acquisition,
-data formats, provenance, timing, and offline replay semantics for historical wildfire
-scenarios. [The historical package decision](docs/adr/0005-historical-incident-packages.md)
-records the proposed tradeoffs. The first [Camp Fire incident package](data/incidents/camp-2018-paradise-slice/a6d2cc03f525ed65/manifest.json)
-contains 290 public structure assessments in a bounded Paradise area from
-[CAL FIRE DINS](https://publish.data.ca.gov/dataset/cal-fire-damage-inspection-dins-data)
-and 45 historical satellite-derived fire perimeters from
-[NASA VEDA FEDS](https://docs.openveda.cloud/user-guide/notebooks/tutorials/mapping-fires.html).
-It includes original API responses, normalized GeoJSON, attribution, and checksums.
-The damage data describe post-fire outcomes, not building ignition times. The
-perimeters are half-day estimates, not exact fire arrival times. A small offline
-replay tool selects the latest observed perimeter and reports its age. Road
-closures, traffic, and population movement have not been added to this package.
-
-The collector uses the Python standard library and curl; it adds no dependency to
-the app's Python lockfile. From the repository root, with Python 3.12 and curl:
-
-```sh
-python3.12 -m tools.build_camp_history --verify-package data/incidents/camp-2018-paradise-slice/a6d2cc03f525ed65
-python3.12 -m tools.replay_camp_history --package data/incidents/camp-2018-paradise-slice/a6d2cc03f525ed65 --at 2018-11-09T15:00:00Z --output /tmp/camp-frame.geojson
-```
-
-To reacquire these sources, run `python3.12 -m tools.build_camp_history --output-root data/incidents`
-with internet access. The queries fix the incident, date window, box, and selected
-fields and do not collect addresses or parcel numbers. Six DINS records lie
-slightly outside the requested box; the manifest records the actual extent. The
-replay command writes a GeoJSON frame for viewing or testing and makes no claim
-about information availability to responders at that historical time.
-
-## Development
-
-Clone the repository:
+Requirements: Docker with Compose v2 and a MongoDB connection (Atlas or local). Keep the
+connection string in `~/.mongodb_uri` (permissions `600`); your IP must be in the Atlas
+network access list. Never commit or paste it.
 
 ```sh
 git clone https://github.com/ryankim0709/crisistwin.git
-cd crisistwin
-```
-
-### Start with Docker
-
-Install Docker with Compose v2 or newer and configure your MongoDB connection.
-For the existing Atlas setup, keep your personal connection string in
-`~/.mongodb_uri` with permissions `600`. Your Atlas database user needs access to
-`crisistwin`, and your current IP must be allowed in the project network access
-list. From the repository root:
-
-```sh
-cd app
+cd crisistwin/app
 export MONGODB_URI="$(cat ~/.mongodb_uri)"
 docker compose up --build --wait
 ```
 
-Open **http://localhost:5173**. The API is at **http://localhost:8000/api/health**;
-the backend connects directly to MongoDB Atlas. Frontend and backend source
-changes reload automatically. Compose runs only the app processes; it does not
-provision a database or run SQL migrations.
+Open **http://localhost:5173** (redirects to `/fire`). The API health check is at
+**http://localhost:8000/api/health**. Frontend and backend source changes reload automatically.
+Compose runs only the app processes; it does not provision a database.
 
-Alternatively copy [`app/.env.example`](app/.env.example) to ignored `app/.env`
-and replace the URI placeholder there. `MONGODB_URI` is required;
-`MONGODB_DATABASE` defaults to `crisistwin` and overrides any database in the URI
-path. Keep real credentials out of Git, logs, and browser environment variables.
-Do not paste connection strings or share expanded `docker compose config` output.
-A local MongoDB server is also supported: use `mongodb://127.0.0.1:27017` for a
-host backend, or `mongodb://host.docker.internal:27017` for Docker Desktop if the
-server is reachable from containers. There is no automatic local fallback.
-
-When replacing an existing PostgreSQL stack, stop it with `docker compose down`
-from its original checkout before starting this worktree (both use the same
-Compose project name and app ports). Keep its volumes; this change does not
-transfer PostgreSQL data. No application persistence models exist on `main` yet.
+Alternatively copy [`app/.env.example`](app/.env.example) to ignored `app/.env`. `MONGODB_URI` is
+required; `MONGODB_DATABASE` defaults to `crisistwin`. Do not share expanded `docker compose config`
+output.
 
 ```sh
-# Follow logs / stop the stack (keeps database data)
-docker compose logs -f
-docker compose down
-
-# After changing dependencies, rebuild and refresh the frontend dependency volume
-docker compose build
-docker compose run --rm --no-deps frontend npm ci
-docker compose up --wait
+docker compose logs -f      # follow logs
+docker compose down         # stop the stack
 ```
 
-### Stack and directory map
+For the dispatch agent, set `ANTHROPIC_API_KEY` (optionally `DISPATCH_AGENT_MODEL`,
+`DISPATCH_AGENT_EFFORT`) in the backend environment; without it the endpoint returns 503.
+The dispatch area endpoint needs internet the first time a box is used (results are cached).
+The `/fire` page needs internet access (LANDFIRE, terrain tiles, NWS) and works in the contiguous US only.
 
-- Node.js **22.12+** (Node 22 in Docker and `.nvmrc`), **npm**, and `package-lock.json`.
-- Python **3.12**, **pip**, and fully pinned runtime/development `requirements*.txt`.
-- React **19**, TypeScript **5.8**, Vite **7**, Tailwind CSS **4**.
-- Django **5.2 LTS**, Django REST Framework **3**, PyMongo **4** with MongoDB Atlas
-  or an existing compatible MongoDB server.
-- Vitest **3**, Testing Library, jsdom, ESLint, Prettier, and Ruff for local checks.
-- Mobile: **iOS 17+**, **Xcode 16.2+**, bundled Swift compiler in **Swift 5** mode,
-  SwiftUI/Foundation only. Future Swift dependencies use Swift Package Manager;
-  no package dependencies or resolved lockfile are needed for this scaffold.
+Stack: Node 22.12+ with npm, Python 3.12, React 19, TypeScript 5.8, Vite 7, Tailwind CSS 4, Django 5.2,
+DRF 3, PyMongo 4, Vitest. Running on the host without Docker, checks, and runtime images:
+[docs/development.md](docs/development.md).
 
-```text
-app/
-  src/                  React UI and API client (lib/), Vitest setup (test/)
-    AppShell.tsx        Shared sidebar and responsive navigation
-    navigation.ts       Route labels and descriptions
-    pages/              Planning page scaffolds, shared UI, and not-found page
-  backend/
-    config/             Django settings, routes, WSGI, credential redaction
-    api/                HTTP endpoints and backend contract tests
-      mongodb.py        Shared MongoDB client and explicit database selection
-    requirements*.in    Direct Python dependency declarations
-    requirements*.txt   Resolved, pinned Python dependencies
-  docker-compose.yml    Development frontend + backend (external MongoDB)
-  Dockerfile.dev        Vite development image
-  Dockerfile            Built frontend served by Nginx, with /api proxy
-  backend/Dockerfile    Django runtime and development image targets
-mobile/
-  CrisisTwin.xcodeproj/  Native iPhone/iPad project and shared scheme
-  CrisisTwin/            SwiftUI app, features, API adapter, resources
-  Config/                Debug/Release configuration and local override example
-docs/adr/               Shared architecture decisions
+### Data
+
+Large incident-package files (`raw/`, `normalized/`) and generated replay bundles are not in Git; they
+live in MongoDB Atlas. After cloning:
+
+```sh
+pip install -r tools/requirements.txt
+export MONGODB_URI='mongodb+srv://...'   # ask a teammate; never commit it
+python3 -m tools.mongo_data pull
+python3 -m tools.mongo_data status       # drift vs the committed manifests
 ```
 
-See the [scaffold decision](docs/adr/0001-app-scaffold.md),
-[MongoDB decision](docs/adr/0008-mongodb-backend.md), and
-[API contract](app/backend/README.md). There are no CI workflows for this
-hackathon; checks run locally when needed.
+See [docs/historical-data.md](docs/historical-data.md) and [tools/README.md](tools/README.md).
 
-### Run the iOS app
-
-From the repository root, open the checked-in Xcode project:
+### iOS app
 
 ```sh
 open mobile/CrisisTwin.xcodeproj
 ```
 
-Select the **CrisisTwin** scheme, an iOS 17+ simulator, then **Product > Run**.
-No package installation or project generation is required. Debug uses
-`http://localhost:8000/api/health`; start the Docker stack above to enable the
-readiness card. Without the backend, the app displays a connection error with
-manual retry. Release requires an explicitly configured HTTPS API origin.
+Select the **CrisisTwin** scheme and an iOS 17+ simulator (Xcode 16.2+), then Product > Run. Debug uses
+`http://localhost:8000/api/health`, so start the Docker stack for the readiness card. Details:
+[mobile/README.md](mobile/README.md). Mobile builds and tests have not been run in this repository's
+checks.
 
-See the [mobile setup and API boundary](mobile/README.md) for physical devices,
-local configuration, directory details, and current limitations, and the
-[mobile scaffold decision](docs/adr/0004-mobile-swift-scaffold.md) for tradeoffs.
-The default check remains `pre-commit run --all-files` from the repository root.
-Mobile builds, tests, and simulator verification have not been run and require
-an explicit request under the repository policy.
+### Checks
 
-### Workspace navigation
-
-The sidebar home link uses the transparent logo at
-`app/public/brand/crisistwin-logo.png`, served at `/brand/crisistwin-logo.png`.
-Asset usage and the generation prompt are in `app/public/brand/logo-notes.txt`.
-
-The web app shares a sidebar across all pages. On narrow screens, **Menu**
-expands the navigation. The current page is marked with an arrow and
-`aria-current`; a keyboard-accessible **Skip to content** link reaches the main
-content. Each page has its own URL and document title:
-
-- `/`: workflow shortcuts, recent-work empty state, and API/database readiness.
-- `/maps`: working imagery map and illustrative fire simulation, a footprint
-  visibility toggle, and a collapsible preview of future map layers and tools.
-- `/scenarios`: editable name/weather/notes, sample templates, a local draft
-  review, reproducibility fields, and the future scenario library.
-- `/evacuation`: synthetic population/vehicle inputs, departure strategy and
-  timings, shelter capacity, a sample road-closure toggle, and pending results.
-- `/comparison`: baseline/candidate strategy controls, a metric comparison
-  layout, compatibility requirements, and an explanation empty state.
-- `/incidents`: disconnected source status, inbox search/type controls, and an
-  optional clearly labeled synthetic evidence-review example.
-- `/stress-tests`: selectable disruptions, a bounded candidate-run budget,
-  investigation progress, and findings/unknowns empty states.
-
-These are UI scaffolds based on [the project scope](docs/project-scope.md).
-Editable inputs are temporary component state and reset on navigation/reload;
-they do not transfer between pages or modify map inputs. No scenario saving,
-traffic execution, comparison results, incident ingestion, or stress-test jobs
-are connected. Unsupported execution buttons are disabled with explanations.
-Sample inputs are synthetic user assumptions, and unavailable results use empty
-states or dashes rather than fabricated metrics. Unknown paths show a not-found page. Trailing slashes are
-accepted. Navigation uses normal links and the existing Vite/Nginx HTML fallback,
-so direct links, refresh, and browser history use document navigation. Temporary
-map state resets when leaving or reloading the page; no scenario is saved.
-
-To integrate a feature, extend its component in `app/src/pages/`, retaining its
-URL and shared `AppShell`. `WorkspaceUI.tsx` and `workspace.css` provide common
-page headers, panels, fields, status tags, and empty states. `navigationItems`
-holds route metadata only. Pages own their main landmark with `id="main-content"`
-and `tabIndex={-1}`. No backend contract changed. See the
-[navigation decision](docs/adr/0005-workspace-navigation.md) and
-[UI scaffold boundaries](docs/adr/0006-planning-ui-scaffolds.md).
-
-### Map component
-
-Open **http://localhost:5173/maps** for the map and fire-spread demo:
-
-1. Click to choose the fire origin (or focus the map and press Enter).
-2. Set wind speed in **mph** and the compass direction it comes **from**.
-3. Select **Simulate fire**. The map focuses on the origin and shows +15 minutes.
-4. Step, scrub, or play through **0–120 minutes in 15-minute intervals**.
-
-Changing wind or origin clears the previous run. Playback advances through
-precomputed frames; it does not change the model's simulation clock. The model
-is an illustrative uniform-fuel approximation: terrain, water, buildings,
-moisture, and suppression are not modeled. The map's imagery is not a model
-input. See the [fire model and frame contract](docs/adr/0003-illustrative-fire-spread.md).
-
-`app/src/maps/MapCanvas.tsx` is the reusable **MapLibre GL JS** component. It uses
-USGS historical imagery and a bundled SF overview so the first view has geography
-while detailed tiles stream. Cached-image sources, retrieval times, and bounds
-are in `app/public/map-preview/provenance.json`. Outside that preview coverage,
-imagery requires the remote service. WebGL2 is required; no API key is needed.
-MapLibre's worker is explicitly bundled using Vite's `?worker&url` import so
-GeoJSON simulation overlays can render in development and production.
-
-```tsx
-<MapCanvas
-  center={{ latitude: 37.7749, longitude: -122.4194 }}
-  zoom={11.5}
-  selectedLocation={origin}
-  firePerimeter={frame?.perimeter}
-  onLocationSelect={setOrigin}
-/>
-```
-
-The parent supplies a container height. `center` and `zoom` move the existing map;
-`selectedLocation` controls the marker (`null` clears it); `firePerimeter` updates
-only the GeoJSON overlay. Optional `mapStyle` accepts a MapLibre style object or
-URL and recreates the map when changed. Keep style objects stable. Selection
-callbacks return WGS84 decimal degrees, with longitude normalized to [-180, 180).
-Arrow keys pan and `+`/`-` zoom when the map canvas is focused.
-
-USGS imagery is historical, not live fire data. Detailed coverage is primarily
-in the US. We cap remote requests at native zoom 16 and overscale at closer
-views. A local SF overview, bounded image concurrency, tile caching, and
-canceling obsolete zoom requests reduce loading stalls. **Retry imagery** retries
-remote tiles on demand. See the [map decision](docs/adr/0002-geographic-map.md).
-
-After pulling changed dependencies into an existing Docker setup, refresh its
-separate npm volume:
-
-```sh
-cd app
-docker compose exec -T frontend npm ci
-docker compose restart frontend
-```
-
-### Default hackathon check
-
-Run only pre-commit before committing, from the repository root:
+The only default check is pre-commit (merge-conflict markers, trailing whitespace, final newlines):
 
 ```sh
 python3 -m pip install pre-commit
 pre-commit run --all-files
 ```
 
-The hooks check merge-conflict markers, trailing whitespace, and final newlines.
-Agents should not add or run tests, coverage, lint, type checks, builds, Docker
-verification, or browser verification unless explicitly requested.
+Tests, lint, type checks and builds are optional and listed in [docs/development.md](docs/development.md).
+There are no CI workflows.
 
-### Optional local checks in Docker
+## Documentation
 
-These commands are available on request; they are not required for the hackathon.
-With the stack running, execute them from `app/`:
-
-```sh
-docker compose exec frontend npm run check
-docker compose exec frontend npm run test:coverage
-docker compose exec backend ruff check .
-docker compose exec backend ruff format --check .
-docker compose exec backend python manage.py check
-docker compose exec backend python manage.py test --noinput
-```
-
-`npm run check` runs Prettier, ESLint, TypeScript, Vitest, and the frontend build.
-Individual commands are `npm run format:check`, `npm run lint`,
-`npm run typecheck`, `npm test`, and `npm run build`. Use `npm run test:watch`
-while developing. Tests use mocked network/database boundaries; Docker startup
-and the health endpoint check the real database connection.
-
-### Run app processes on your host
-
-Use the versions above and the existing Atlas connection (or a running local
-MongoDB server), then create a local Python environment. From `app/`:
-
-```sh
-export MONGODB_URI="$(cat ~/.mongodb_uri)"
-python3.12 -m venv backend/.venv
-backend/.venv/bin/python -m pip install -r backend/requirements-dev.txt
-backend/.venv/bin/python backend/manage.py runserver 127.0.0.1:8000
-```
-
-In a second terminal, from `app/`:
-
-```sh
-nvm use
-npm ci
-npm run dev
-```
-
-Django reads environment variables from the shell; it does not load `.env`
-automatically. Export `MONGODB_URI` and, if needed, `MONGODB_DATABASE` in the backend
-shell. The default database is `crisistwin` for both host and Compose.
-Vite proxies `/api` to `http://127.0.0.1:8000` on the host and `http://backend:8000`
-in Docker. To change the host target, use
-`VITE_API_PROXY_TARGET=http://127.0.0.1:8000 npm run dev`.
-
-Optional host backend checks run from `app/backend/` using `.venv/bin/ruff check .`,
-`.venv/bin/ruff format --check .`, `.venv/bin/python manage.py check`, and
-`.venv/bin/python manage.py test --noinput`.
-
-### Build runtime images
-
-From `app/`, `docker build -t crisistwin-frontend .` builds the Nginx frontend
-image. `docker build --target runtime -t crisistwin-backend backend` builds the
-Gunicorn backend image. Nginx expects a backend reachable at `backend:8000`.
-`npm run preview` only previews static build output; use Compose to exercise
-the full stack. Deployment, TLS, hosting, and production secrets are not
-configured by this scaffold.
-
-## Working with coding agents
-
-[AGENTS.md](AGENTS.md) contains the shared engineering, collaboration, verification, and simulation rules. Read it before starting work and keep team decisions in the repository so both partners' agents see the same context.
-
-Codex uses `AGENTS.md` directly. Cursor, Claude Code, and GitHub Copilot have small adapters that point to the same file. Change shared guidance in `AGENTS.md` to keep the tools aligned.
-
-Claude's [subagent model-selection rule](AGENTS.md#claude-subagent-model-selection)
-routes easy, low-impact tasks to Haiku, medium tasks to Sonnet, and hard or
-important tasks to Opus. It requires assessment before each launch and explicit
-model selection using the available [Claude Code subagent controls](https://code.claude.com/docs/en/sub-agents#choose-a-model).
-This is agent guidance, not an enforced runtime router or a change to the parent
-session's model; model availability and host settings still apply.
-
-For concurrent work, use separate branches and checkouts/worktrees and agree on shared interfaces before editing overlapping files. Use the pull request template to hand off changes and verification results.
-
-## Concept background
+- [docs/README.md](docs/README.md): index of all docs. [Project scope](docs/project-scope.md) (proposals, not status).
+- [docs/adr/README.md](docs/adr/README.md): architecture decisions, with duplicate numbers disambiguated.
+- [app/src/ui/README.md](app/src/ui/README.md): the UI standard (tokens and shared components every page uses).
+- [app/AGENTS.md](app/AGENTS.md) and [AGENTS.md](AGENTS.md): rules for coding agents. Change shared guidance in `AGENTS.md`;
+  Claude's [subagent model rule](AGENTS.md#choosing-a-model-for-subagents) is there too.
+- Component READMEs: [app/backend](app/backend/README.md), [agent](agent/README.md), [sim](sim/README.md),
+  [tools](tools/README.md), [mobile](mobile/README.md).
 
 The project grew out of [this planning conversation](https://chatgpt.com/share/6adc0b53-b864-83e8-84f7-8560e24d2a15).

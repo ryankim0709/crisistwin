@@ -1,3 +1,4 @@
+import { Button } from "../ui";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 export interface TourStep {
@@ -40,10 +41,14 @@ function cardPosition(rect: Rect | null, cardHeight: number): { top: number; lef
   const vh = window.innerHeight;
   const clampLeft = (x: number) => Math.max(16, Math.min(vw - CARD_WIDTH - 16, x));
   const clampTop = (y: number) => Math.max(16, Math.min(vh - cardHeight - 16, y));
-  if (!rect) return { top: clampTop((vh - cardHeight) / 2), left: clampLeft((vw - CARD_WIDTH) / 2) };
+  if (!rect)
+    return { top: clampTop((vh - cardHeight) / 2), left: clampLeft((vw - CARD_WIDTH) / 2) };
   // Large regions (the map): put the card inside, near the top-centre.
   if (rect.width > vw * 0.5 && rect.height > vh * 0.5) {
-    return { top: clampTop(rect.top + 110), left: clampLeft(rect.left + (rect.width - CARD_WIDTH) / 2) };
+    return {
+      top: clampTop(rect.top + 110),
+      left: clampLeft(rect.left + (rect.width - CARD_WIDTH) / 2),
+    };
   }
   if (rect.top + rect.height + CARD_GAP + cardHeight < vh) {
     return { top: rect.top + rect.height + CARD_GAP, left: clampLeft(rect.left) };
@@ -172,23 +177,23 @@ export default function Tour({ steps, onSeek, onClose, onStory }: TourProps) {
         <h2 id="rp-tour-title">{step.title}</h2>
         <p id="rp-tour-body">{step.body}</p>
         {index === 0 && onStory && (
-          <button type="button" className="rp-story-open rp-story-open--tour" onClick={onStory}>
+          <Button variant="soft" size="sm" className="rp-story-open--tour" onClick={onStory}>
             <span aria-hidden="true">▶</span> Play the story instead (about 2 min, hands-free)
-          </button>
+          </Button>
         )}
         <div className="rp-tour-actions">
-          <button type="button" className="rp-tour-skip" onClick={onClose}>
+          <Button variant="ghost" size="sm" onClick={onClose}>
             Skip tour
-          </button>
+          </Button>
           <span>
             {index > 0 && (
-              <button type="button" className="rp-tour-btn" onClick={() => go(-1)}>
+              <Button variant="secondary" size="sm" onClick={() => go(-1)}>
                 Back
-              </button>
+              </Button>
             )}
-            <button type="button" className="rp-tour-btn rp-tour-btn--primary" onClick={() => go(1)}>
+            <Button size="sm" onClick={() => go(1)}>
               {last ? "Start exploring" : "Next"}
-            </button>
+            </Button>
           </span>
         </div>
       </div>

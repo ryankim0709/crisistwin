@@ -10,9 +10,15 @@ import {
   type Variant,
   type VariantIndex,
 } from "./compare";
+import { LoadingState, Notice, SegmentedControl } from "../ui";
 import { EvidenceChip } from "./parts";
 import { RiskChip } from "./ResponderTab";
 import type { ReplayModel } from "./types";
+
+const MAP_OPTIONS = [
+  { value: "baseline", label: "Map: baseline" },
+  { value: "variant", label: "Map: what-if" },
+] as const;
 
 export type VariantLoad =
   | { status: "idle" }
@@ -30,29 +36,53 @@ export interface CompareTabProps {
 }
 
 /** "What if…" panel: pick a precomputed counterfactual and compare it with the baseline. */
-export default function CompareTab({ baseline, index, load, showVariant, onSelect, onShowVariant }: CompareTabProps) {
-  const zoneNames = useMemo(() => new Map((baseline.zones?.items ?? []).map((z) => [z.id, z.name])), [baseline]);
+export default function CompareTab({
+  baseline,
+  index,
+  load,
+  showVariant,
+  onSelect,
+  onShowVariant,
+}: CompareTabProps) {
+  const zoneNames = useMemo(
+    () => new Map((baseline.zones?.items ?? []).map((z) => [z.id, z.name])),
+    [baseline],
+  );
   const selectedId =
-    load.status === "ready" ? load.variant.id : load.status === "loading" || load.status === "error" ? load.id : null;
+    load.status === "ready"
+      ? load.variant.id
+      : load.status === "loading" || load.status === "error"
+        ? load.id
+        : null;
 
   return (
     <div className="rp-tab">
-      <p className="rp-disclaimer rp-disclaimer--top" role="note">
-        <EvidenceChip value="simulated" /> What-if variants are simulated counterfactuals on the same seed, network and
+      <Notice tone="info">
+        <EvidenceChip value="simulated" /> Simulated counterfactuals on the same seed, network and
         demand
-        {index.demandTotalVeh != null && <> ({index.demandTotalVeh.toLocaleString("en-US")} vehicles)</>} as the
-        baseline run. They are planning experiments, not history. Fire perimeters, roads and damage shown on the map
-        are unchanged.
-      </p>
+        {index.demandTotalVeh != null && (
+          <> ({index.demandTotalVeh.toLocaleString("en-US")} vehicles)</>
+        )}{" "}
+        as the baseline. Fire perimeters, roads and damage on the map are unchanged.
+      </Notice>
 
       {load.status === "ready" && (
-        <HeadlineDelta id={load.variant.id} metrics={load.variant.metrics} title={load.variant.title} />
+        <HeadlineDelta
+          id={load.variant.id}
+          metrics={load.variant.metrics}
+          title={load.variant.title}
+        />
       )}
 
       <fieldset className="rp-variants">
         <legend className="rp-section-title">What if…</legend>
         <label className="rp-variant">
-          <input type="radio" name="rp-variant" checked={selectedId === null} onChange={() => onSelect(null)} />
+          <input
+            type="radio"
+            name="rp-variant"
+            checked={selectedId === null}
+            onChange={() => onSelect(null)}
+          />
           <span>
             <strong>Baseline run</strong>
             <small>The replay as modelled, with no changes.</small>
@@ -60,7 +90,12 @@ export default function CompareTab({ baseline, index, load, showVariant, onSelec
         </label>
         {index.variants.map((v) => (
           <label key={v.id} className="rp-variant">
-            <input type="radio" name="rp-variant" checked={selectedId === v.id} onChange={() => onSelect(v.id)} />
+            <input
+              type="radio"
+              name="rp-variant"
+              checked={selectedId === v.id}
+              onChange={() => onSelect(v.id)}
+            />
             <span>
               <strong>{v.title}</strong>
               <small>{v.question}</small>
@@ -75,27 +110,20 @@ export default function CompareTab({ baseline, index, load, showVariant, onSelec
         </p>
       )}
 
-      {load.status === "loading" && (
-        <p role="status" className="rp-pin-hint">
-          <span className="rp-spinner" aria-hidden="true" /> Loading variant…
-        </p>
-      )}
+      {load.status === "loading" && <LoadingState>Loading variant…</LoadingState>}
       {load.status === "error" && (
-        <p role="alert" className="rp-empty">
-          This variant could not be loaded: {load.message}
-        </p>
+        <Notice tone="danger">This variant could not be loaded: {load.message}</Notice>
       )}
 
       {load.status === "ready" && (
         <>
-          <div className="rp-speed rp-compare-toggle" role="group" aria-label="Traffic shown on the map">
-            <button type="button" className="rp-speed-btn" aria-pressed={!showVariant} onClick={() => onShowVariant(false)}>
-              Map: baseline
-            </button>
-            <button type="button" className="rp-speed-btn" aria-pressed={showVariant} onClick={() => onShowVariant(true)}>
-              Map: what-if
-            </button>
-          </div>
+          <SegmentedControl
+            className="rp-compare-toggle"
+            label="Traffic shown on the map"
+            options={MAP_OPTIONS}
+            value={showVariant ? "variant" : "baseline"}
+            onChange={(value) => onShowVariant(value === "variant")}
+          />
 
           <section aria-labelledby="rp-changes-title">
             <h3 id="rp-changes-title" className="rp-section-title">
@@ -125,7 +153,11 @@ export default function CompareTab({ baseline, index, load, showVariant, onSelec
                 </thead>
                 <tbody>
                   {Object.entries(load.variant.metrics).map(([key, m]) => {
-                    const info = METRIC_INFO[key] ?? { label: key.replace(/_/g, " "), unit: "veh", better: "higher" };
+                    const info = METRIC_INFO[key] ?? {
+                      label: key.replace(/_/g, " "),
+                      unit: "veh",
+                      better: "higher",
+                    };
                     const verdict = deltaVerdict(m.delta, info.better);
                     return (
                       <tr key={key}>
@@ -142,7 +174,9 @@ export default function CompareTab({ baseline, index, load, showVariant, onSelec
                 </tbody>
               </table>
             </div>
-            <p className="rp-rule">One seed: treat small differences as noise, not as significant.</p>
+            <p className="rp-rule">
+              One seed: treat small differences as noise, not as significant.
+            </p>
           </section>
 
           <section aria-labelledby="rp-risk-title">
@@ -203,7 +237,10 @@ function ExposureBadge({ id, delta }: { id: string; delta: MetricDelta | undefin
   // A caveated result is not shown as an improvement.
   const verdict = caveat ? "n/a" : deltaVerdict(delta.delta, "lower");
   return (
-    <span className={`rp-peak-badge rp-delta--${verdict}`} title="Change in total exposure, road + home (model)">
+    <span
+      className={`rp-peak-badge rp-delta--${verdict}`}
+      title="Change in total exposure, road + home (model)"
+    >
       {signed(pct)}
       <small>exposure (road + home)</small>
       <CaveatChip id={id} />
@@ -212,7 +249,15 @@ function ExposureBadge({ id, delta }: { id: string; delta: MetricDelta | undefin
 }
 
 /** The first thing to read: combined exposure, then road and home separately, baseline vs what-if. */
-function HeadlineDelta({ id, metrics, title }: { id: string; metrics: Record<string, MetricDelta>; title: string }) {
+function HeadlineDelta({
+  id,
+  metrics,
+  title,
+}: {
+  id: string;
+  metrics: Record<string, MetricDelta>;
+  title: string;
+}) {
   const total = metrics.total_exposed_veh_min;
   const pct = pctChange(total);
   if (!total || pct === null) return null;
@@ -230,7 +275,9 @@ function HeadlineDelta({ id, metrics, title }: { id: string; metrics: Record<str
       <p className="rp-headline-delta-nums">
         <span>
           <small>Change vs baseline</small>
-          <strong className={`rp-delta--${caveat ? "n/a" : deltaVerdict(total.delta, "lower")}`}>{signed(pct)}</strong>
+          <strong className={`rp-delta--${caveat ? "n/a" : deltaVerdict(total.delta, "lower")}`}>
+            {signed(pct)}
+          </strong>
         </span>
         {caveat && <CaveatChip id={id} />}
       </p>
@@ -248,13 +295,15 @@ function HeadlineDelta({ id, metrics, title }: { id: string; metrics: Record<str
         })}
         {arrived && arrived.baseline != null && arrived.variant != null && (
           <li className={`rp-delta--${deltaVerdict(arrived.delta, "higher")}`}>
-            Out by 10:00 PST: {formatValue(arrived.baseline, "veh")} → {formatValue(arrived.variant, "veh")} vehicles
+            Out by 10:00 PST: {formatValue(arrived.baseline, "veh")} →{" "}
+            {formatValue(arrived.variant, "veh")} vehicles
           </li>
         )}
       </ul>
       {caveat && <p className="rp-rule">{caveat.text}</p>}
       <p className="rp-rule">
-        Relative comparison only: vehicle-minutes are dominated by stranded vehicles and are not a count of people.
+        Relative comparison only: vehicle-minutes are dominated by stranded vehicles and are not a
+        count of people.
       </p>
     </section>
   );

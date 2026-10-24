@@ -1,0 +1,121 @@
+{
+  "synthetic": true,
+  "data_class": "synthetic-fixture",
+  "registry_id": "berkeley-hills-synthetic-assets-v1",
+  "registry_name": "Berkeley Hills synthetic asset registry",
+  "version": 1,
+  "note": "SYNTHETIC DEMONSTRATION DATA. Every asset, population estimate, shelter capacity, and road segment in this file was invented for the CrisisTwin fire-watch demo. The places are loosely Berkeley-shaped so the coordinates land on plausible terrain, but they describe no real community, no real building, and no real household. No resident data of any kind is used here, and no number in this file counts real people or real capacity.",
+  "crs": "EPSG:4326 (WGS84 decimal degrees)",
+  "coordinate_note": "Points are given as named latitude/longitude fields. GeoJSON elsewhere in the project orders positions [longitude, latitude]; convert once at that boundary.",
+  "representation_note": "Every asset is reduced to one representative_point for the point-in-perimeter exposure test. A neighborhood point is a rough centre, not its built footprint; a road point is the midpoint of the endpoints listed with it, not its length.",
+  "assets": [
+    {
+      "asset_id": "nbhd_grizzly_ridge",
+      "kind": "neighborhood",
+      "name": "Grizzly Ridge (synthetic)",
+      "population_estimate": 820,
+      "representative_point": { "latitude": 37.8905, "longitude": -122.2432 },
+      "note": "Ridge-top cluster of invented parcels on the upslope side of the watch area."
+    },
+    {
+      "asset_id": "nbhd_cragmont_slope",
+      "kind": "neighborhood",
+      "name": "Cragmont Slope (synthetic)",
+      "population_estimate": 2340,
+      "representative_point": { "latitude": 37.8872, "longitude": -122.2561 },
+      "note": "Largest invented population block; depends on the Shasta egress segment in this registry."
+    },
+    {
+      "asset_id": "nbhd_panoramic_hill",
+      "kind": "neighborhood",
+      "name": "Panoramic Hill (synthetic)",
+      "population_estimate": 1480,
+      "representative_point": { "latitude": 37.8668, "longitude": -122.2384 },
+      "note": "Southern invented cluster, steep and narrow-streeted in the scenario description."
+    },
+    {
+      "asset_id": "nbhd_tilden_gate",
+      "kind": "neighborhood",
+      "name": "Tilden Gate (synthetic)",
+      "population_estimate": 610,
+      "representative_point": { "latitude": 37.8938, "longitude": -122.2365 },
+      "note": "Small invented cluster at the wildland edge of the watch area."
+    },
+    {
+      "asset_id": "shelter_hills_community_center",
+      "kind": "shelter",
+      "name": "Hills Community Center (synthetic shelter)",
+      "capacity": 450,
+      "population_estimate": null,
+      "representative_point": { "latitude": 37.8833, "longitude": -122.2468 },
+      "note": "Capacity is invented. A shelter carries no population_estimate: capacity is not people at risk, and summing it into a population figure would double-count."
+    },
+    {
+      "asset_id": "shelter_canyon_school_gym",
+      "kind": "shelter",
+      "name": "Canyon School Gym (synthetic shelter)",
+      "capacity": 260,
+      "population_estimate": null,
+      "representative_point": { "latitude": 37.8694, "longitude": -122.2452 },
+      "note": "Invented capacity; nearest modelled shelter to the Panoramic Hill cluster."
+    },
+    {
+      "asset_id": "shelter_north_ridge_hall",
+      "kind": "shelter",
+      "name": "North Ridge Hall (synthetic shelter)",
+      "capacity": 180,
+      "population_estimate": null,
+      "representative_point": { "latitude": 37.8916, "longitude": -122.2520 },
+      "note": "Smallest invented shelter; sits upslope, so it is plausibly exposed in the same run it would be used in."
+    },
+    {
+      "asset_id": "road_shasta_egress",
+      "kind": "road_segment",
+      "name": "Shasta Road egress (synthetic)",
+      "single_egress": true,
+      "serves_asset_ids": ["nbhd_cragmont_slope", "shelter_north_ridge_hall"],
+      "endpoints": [
+        { "latitude": 37.8876, "longitude": -122.2448 },
+        { "latitude": 37.8846, "longitude": -122.2490 }
+      ],
+      "representative_point": { "latitude": 37.8861, "longitude": -122.2469 },
+      "note": "Scenario assumption: the only modelled outbound route for the Cragmont Slope cluster. The registry records the dependency; nothing in this package routes traffic over it, so exposure of this segment is not by itself a finding that the cluster is cut off."
+    },
+    {
+      "asset_id": "road_grizzly_peak_blvd_north",
+      "kind": "road_segment",
+      "name": "Grizzly Peak Blvd, north segment (synthetic)",
+      "single_egress": false,
+      "endpoints": [
+        { "latitude": 37.8930, "longitude": -122.2412 },
+        { "latitude": 37.8858, "longitude": -122.2378 }
+      ],
+      "representative_point": { "latitude": 37.8894, "longitude": -122.2395 },
+      "note": "Ridge road running along the wildland edge; invented alignment."
+    },
+    {
+      "asset_id": "road_spruce_descent",
+      "kind": "road_segment",
+      "name": "Spruce Street descent (synthetic)",
+      "single_egress": false,
+      "endpoints": [
+        { "latitude": 37.8902, "longitude": -122.2590 },
+        { "latitude": 37.8820, "longitude": -122.2640 }
+      ],
+      "representative_point": { "latitude": 37.8861, "longitude": -122.2615 },
+      "note": "Downslope route out of the hills to the west; invented alignment."
+    },
+    {
+      "asset_id": "road_claremont_canyon_connector",
+      "kind": "road_segment",
+      "name": "Claremont Canyon connector (synthetic)",
+      "single_egress": false,
+      "endpoints": [
+        { "latitude": 37.8648, "longitude": -122.2400 },
+        { "latitude": 37.8612, "longitude": -122.2286 }
+      ],
+      "representative_point": { "latitude": 37.8630, "longitude": -122.2343 },
+      "note": "Canyon-bottom connector serving the southern cluster; invented alignment."
+    }
+  ]
+}

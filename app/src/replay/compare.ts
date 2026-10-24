@@ -57,7 +57,10 @@ export interface Variant {
 }
 
 /** Display metadata for comparison metrics; `better` says which direction is an improvement. */
-export const METRIC_INFO: Record<string, { label: string; unit: "veh" | "veh·min" | "s"; better: "higher" | "lower" }> = {
+export const METRIC_INFO: Record<
+  string,
+  { label: string; unit: "veh" | "veh·min" | "s"; better: "higher" | "lower" }
+> = {
   arrived_by_1700z_veh: { label: "Arrived by 09:00 PST", unit: "veh", better: "higher" },
   arrived_by_1800z_veh: { label: "Arrived by 10:00 PST", unit: "veh", better: "higher" },
   arrived_by_2000z_veh: { label: "Arrived by 12:00 PST", unit: "veh", better: "higher" },
@@ -65,10 +68,26 @@ export const METRIC_INFO: Record<string, { label: string; unit: "veh" | "veh·mi
   peak_en_route_veh: { label: "Peak on the road", unit: "veh", better: "lower" },
   peak_blocked_veh: { label: "Peak blocked", unit: "veh", better: "lower" },
   peak_exposed_veh: { label: "Peak exposed to fire", unit: "veh", better: "lower" },
-  total_exposed_veh_min: { label: "Total exposure, road + home (vehicle-minutes)", unit: "veh·min", better: "lower" },
-  exposed_veh_min: { label: "Exposure on roads (vehicle-minutes)", unit: "veh·min", better: "lower" },
-  exposed_at_origin_veh_min: { label: "Exposure at home, not yet left (vehicle-minutes)", unit: "veh·min", better: "lower" },
-  peak_exposed_at_origin_veh: { label: "Peak at home inside the fire", unit: "veh", better: "lower" },
+  total_exposed_veh_min: {
+    label: "Total exposure, road + home (vehicle-minutes)",
+    unit: "veh·min",
+    better: "lower",
+  },
+  exposed_veh_min: {
+    label: "Exposure on roads (vehicle-minutes)",
+    unit: "veh·min",
+    better: "lower",
+  },
+  exposed_at_origin_veh_min: {
+    label: "Exposure at home, not yet left (vehicle-minutes)",
+    unit: "veh·min",
+    better: "lower",
+  },
+  peak_exposed_at_origin_veh: {
+    label: "Peak at home inside the fire",
+    unit: "veh",
+    better: "lower",
+  },
   blocked_at_end_veh: { label: "Blocked at end", unit: "veh", better: "lower" },
   clearance_time_s: { label: "Clearance time", unit: "s", better: "lower" },
 };
@@ -136,7 +155,8 @@ function metricDelta(value: unknown): MetricDelta {
 
 export function parseVariantIndex(data: unknown): VariantIndex {
   const index = obj(data, "index");
-  if (index.kind !== "crisistwin_variant_index") throw new BundleError("kind", "expected crisistwin_variant_index");
+  if (index.kind !== "crisistwin_variant_index")
+    throw new BundleError("kind", "expected crisistwin_variant_index");
   const basisDemand = objOrEmpty(objOrEmpty(index.basis).demand);
   return {
     demandTotalVeh: typeof basisDemand.total_veh === "number" ? basisDemand.total_veh : null,
@@ -151,7 +171,10 @@ export function parseVariantIndex(data: unknown): VariantIndex {
         zoneRiskChanged: optNum(item.zone_risk_changed, `variants[${i}].zone_risk_changed`),
         fireChanged: item.fire_changed === true,
         headline: Object.fromEntries(
-          Object.entries(objOrEmpty(item.headline)).map(([key, value]) => [key, metricDelta(value)]),
+          Object.entries(objOrEmpty(item.headline)).map(([key, value]) => [
+            key,
+            metricDelta(value),
+          ]),
         ),
       };
     }),
@@ -183,7 +206,8 @@ export function parseVariant(data: unknown, baseline: ReplayModel): Variant {
   );
   const comparison = objOrEmpty(v.comparison);
   const metrics: Record<string, MetricDelta> = {};
-  for (const [key, value] of Object.entries(objOrEmpty(comparison.metrics))) metrics[key] = metricDelta(value);
+  for (const [key, value] of Object.entries(objOrEmpty(comparison.metrics)))
+    metrics[key] = metricDelta(value);
   const fire = isObj(v.fire_simulated) ? simulatedFire(v.fire_simulated) : baseline.fireSimulated;
   return {
     id: str(meta.id, "variant.id"),
@@ -191,14 +215,16 @@ export function parseVariant(data: unknown, baseline: ReplayModel): Variant {
     question: str(meta.question, "variant.question"),
     changes: strList(meta.changes, "variant.changes"),
     metrics,
-    zoneRiskChanged: arr(comparison.zone_risk_changed ?? [], "comparison.zone_risk_changed").map((z, i) => {
-      const item = obj(z, `comparison.zone_risk_changed[${i}]`);
-      return {
-        zoneId: str(item.zone_id, `comparison.zone_risk_changed[${i}].zone_id`),
-        baseline: str(item.baseline, `comparison.zone_risk_changed[${i}].baseline`),
-        variant: str(item.variant, `comparison.zone_risk_changed[${i}].variant`),
-      };
-    }),
+    zoneRiskChanged: arr(comparison.zone_risk_changed ?? [], "comparison.zone_risk_changed").map(
+      (z, i) => {
+        const item = obj(z, `comparison.zone_risk_changed[${i}]`);
+        return {
+          zoneId: str(item.zone_id, `comparison.zone_risk_changed[${i}].zone_id`),
+          baseline: str(item.baseline, `comparison.zone_risk_changed[${i}].baseline`),
+          variant: str(item.variant, `comparison.zone_risk_changed[${i}].variant`),
+        };
+      },
+    ),
     limitations: strList(v.limitations, "limitations"),
     model: {
       ...baseline,
@@ -228,10 +254,13 @@ export function formatValue(value: number | null, unit: string): string {
 }
 
 /** "better" / "worse" / "same" in words, so the table never relies on colour. */
-export function deltaVerdict(delta: number | null, better: "higher" | "lower"): "better" | "worse" | "same" | "n/a" {
+export function deltaVerdict(
+  delta: number | null,
+  better: "higher" | "lower",
+): "better" | "worse" | "same" | "n/a" {
   if (delta === null) return "n/a";
   if (Math.round(delta) === 0) return "same";
-  return (delta > 0) === (better === "higher") ? "better" : "worse";
+  return delta > 0 === (better === "higher") ? "better" : "worse";
 }
 
 export async function fetchJson(url: string, signal: AbortSignal): Promise<unknown | null> {

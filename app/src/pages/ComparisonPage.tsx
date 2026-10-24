@@ -3,7 +3,10 @@ import {
   DeltaCell,
   EmptyResult,
   EvidenceTag,
+  Facts,
+  LinkButton,
   Metric,
+  MetricGrid,
   Panel,
   Tag,
   WorkspacePage,
@@ -38,7 +41,7 @@ function VariantRow({ variant }: { variant: Variant }) {
       <th scope="row">
         <strong>{variant.title}</strong>
         <div className="ui-help">{variant.question}</div>
-        <details className="variant-notes">
+        <details className="ws-variant-notes">
           <summary>What changed and caveats</summary>
           <ul>
             {shown.map((line) => (
@@ -128,7 +131,7 @@ function Comparison({ index }: { index: VariantsIndex }) {
 
   return (
     <>
-      <div className="ui-metrics">
+      <MetricGrid>
         <Metric
           label={`Baseline: vehicles out by ${when}`}
           value={fmt(base[ARRIVED_BY_1800.key] ?? null)}
@@ -144,18 +147,17 @@ function Comparison({ index }: { index: VariantsIndex }) {
           value={fmt(base.peak_blocked_veh ?? null)}
           detail="Simulated vehicles"
         />
-      </div>
+      </MetricGrid>
       <Panel
         title="What-if outcomes against the baseline"
         eyebrow="Computed results"
-        aside={<Tag tone="amber">Counterfactual, not history</Tag>}
+        aside={<Tag tone="warning">Counterfactual, not history</Tag>}
       >
         <div className="ui-table-scroll">
-          <table className="ui-table comparison-table">
+          <table className="ui-table ws-comparison-table">
             <caption>
               Each cell is the what-if value, then its change from the baseline. Higher is better
-              for vehicles out; lower is better for exposure and blocked vehicles. Clearance time is
-              not shown: it is undefined when some vehicles never arrive.
+              for vehicles out; lower is better for exposure and blocked vehicles.
             </caption>
             <thead>
               <tr>
@@ -191,20 +193,9 @@ function Comparison({ index }: { index: VariantsIndex }) {
       </Panel>
       <div className="ui-columns">
         <Panel title="Same inputs for every run" eyebrow="Reproducibility">
-          <dl className="ui-facts">
-            {facts.map(([label, value]) => (
-              <div key={label}>
-                <dt>{label}</dt>
-                <dd>{value}</dd>
-              </div>
-            ))}
-          </dl>
-          <p className="ui-help">
-            The baseline and every what-if share these inputs; the only differences are the changes
-            listed for each row.
-          </p>
+          <Facts items={facts.map(([label, value]) => ({ label, value }))} />
         </Panel>
-        <Panel title="Limitations" eyebrow="Read before comparing">
+        <Panel title="Limitations">
           {index.limitations.length > 0 ? (
             <ul className="ui-checklist">
               {index.limitations.map((line) => (
@@ -213,7 +204,7 @@ function Comparison({ index }: { index: VariantsIndex }) {
             </ul>
           ) : (
             <EmptyResult title="No limitations recorded">
-              The index lists none. Treat results as a single-seed planning experiment anyway.
+              The index lists none. Results are still a single-seed experiment.
             </EmptyResult>
           )}
         </Panel>
@@ -228,11 +219,10 @@ export default function ComparisonPage() {
     <WorkspacePage
       title="Strategy comparison"
       description="Change one thing about the 2018 Camp Fire evacuation, then compare outcomes against the same starting conditions."
-      section="Analysis"
       action={
-        <a className="ui-button" href={replayHref(CAMP_ID, "&tab=whatif")}>
+        <LinkButton href={replayHref(CAMP_ID, "&tab=whatif")}>
           Open What if&hellip; on the map →
-        </a>
+        </LinkButton>
       }
     >
       {load.status !== "ready" ? (

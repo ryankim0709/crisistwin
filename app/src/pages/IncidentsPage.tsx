@@ -1,5 +1,18 @@
 import { useState } from "react";
-import { DataState, EmptyResult, Field, Metric, Panel, Tag, WorkspacePage } from "./WorkspaceUI";
+import {
+  Button,
+  DataState,
+  EmptyResult,
+  Facts,
+  Field,
+  LinkButton,
+  Metric,
+  MetricGrid,
+  Notice,
+  Panel,
+  Tag,
+  WorkspacePage,
+} from "./WorkspaceUI";
 import {
   CAMP_ID,
   INCIDENTS_URL,
@@ -16,7 +29,7 @@ function IncidentCard({ incident }: { incident: Incident }) {
   const layers = orderedLayers(incident.layerStatus);
   const clock = incident.clock;
   return (
-    <article className="incident-card" aria-labelledby={`incident-${incident.id}`}>
+    <article className="ui-card ws-incident-card" aria-labelledby={`incident-${incident.id}`}>
       <div>
         <h3 id={`incident-${incident.id}`}>{incident.name}</h3>
         <p>{incident.place}</p>
@@ -46,11 +59,13 @@ function IncidentCard({ incident }: { incident: Incident }) {
         <p className="ui-help" id={`layers-${incident.id}`}>
           Data layers in this replay
         </p>
-        <ul className="chip-list" aria-labelledby={`layers-${incident.id}`}>
+        <ul className="ui-chip-list" aria-labelledby={`layers-${incident.id}`}>
           {layers.map(([key, status]) => (
             <li key={key}>
               <Tag
-                tone={status === "present" ? "green" : status === "missing" ? "amber" : "neutral"}
+                tone={
+                  status === "present" ? "success" : status === "missing" ? "warning" : "neutral"
+                }
               >
                 {layerLabel(key)}: {status}
               </Tag>
@@ -58,14 +73,12 @@ function IncidentCard({ incident }: { incident: Incident }) {
           ))}
         </ul>
       </div>
-      <div className="card-actions">
-        <a className="ui-button" href={replayHref(incident.id)}>
-          Open replay →
-        </a>
+      <div className="ws-card-actions">
+        <LinkButton href={replayHref(incident.id)}>Open replay →</LinkButton>
         {incident.id === CAMP_ID && (
-          <a className="ui-button ui-button-light" href="/simulate">
+          <LinkButton variant="soft" href="/simulate">
             Agent simulation →
-          </a>
+          </LinkButton>
         )}
       </div>
     </article>
@@ -97,7 +110,7 @@ function IncidentLibrary() {
   );
   return (
     <>
-      <div className="ui-metrics">
+      <MetricGrid>
         <Metric
           label="Historical incidents"
           value={String(incidents.length)}
@@ -113,8 +126,8 @@ function IncidentLibrary() {
           value="0"
           detail="Ingestion not configured; replays are historical"
         />
-      </div>
-      <section className="incident-grid" aria-label="Historical incidents">
+      </MetricGrid>
+      <section className="ws-incident-grid" aria-label="Historical incidents">
         {incidents.map((incident) => (
           <IncidentCard key={incident.id} incident={incident} />
         ))}
@@ -131,13 +144,10 @@ export default function IncidentsPage() {
     <WorkspacePage
       title="Incident intelligence"
       description="Inspect the evidence before it becomes a scenario assumption."
-      section="Analysis"
     >
-      <p className="ui-notice">
-        <strong>Historical data only</strong> Replays use archived fire, road and order records.
-        This workspace is not monitoring live incidents; the review example further down is
-        synthetic.
-      </p>
+      <Notice title="Historical data only">
+        Archived records, not live monitoring. The review example below is synthetic.
+      </Notice>
       <IncidentLibrary />
       <div className="ui-split">
         <Panel title="Report inbox" eyebrow="01 / Evidence" aside={<Tag>Disconnected</Tag>}>
@@ -169,20 +179,19 @@ export default function IncidentsPage() {
             Connect a public source to review original links, observation times, retrieval times,
             and conflicting evidence. An empty inbox does not mean there are no incidents.
           </EmptyResult>
-          <button
-            type="button"
-            className="ui-secondary"
+          <Button
+            variant="secondary"
             aria-expanded={example}
             aria-controls="incident-review"
             onClick={() => setExample((value) => !value)}
           >
             {example ? "Hide review example" : "Explore a synthetic review example"}
-          </button>
+          </Button>
         </Panel>
         <Panel
           title="Evidence review"
           eyebrow="02 / Human review"
-          aside={<Tag tone="amber">{example ? "Synthetic example" : "No selection"}</Tag>}
+          aside={<Tag tone="warning">{example ? "Synthetic example" : "No selection"}</Tag>}
         >
           <div id="incident-review">
             {example ? (
@@ -192,28 +201,15 @@ export default function IncidentsPage() {
                   Fictional report for layout preview. No actual location or public source is
                   associated with this example.
                 </p>
-                <dl className="ui-facts">
-                  <div>
-                    <dt>Original source</dt>
-                    <dd>None · synthetic fixture</dd>
-                  </div>
-                  <div>
-                    <dt>Observed at (UTC)</dt>
-                    <dd>Unavailable</dd>
-                  </div>
-                  <div>
-                    <dt>Retrieved at (UTC)</dt>
-                    <dd>Not fetched</dd>
-                  </div>
-                  <div>
-                    <dt>Verification</dt>
-                    <dd>Unverified example</dd>
-                  </div>
-                  <div>
-                    <dt>Network match</dt>
-                    <dd>Unresolved</dd>
-                  </div>
-                </dl>
+                <Facts
+                  items={[
+                    { label: "Original source", value: "None · synthetic fixture" },
+                    { label: "Observed at (UTC)", value: "Unavailable" },
+                    { label: "Retrieved at (UTC)", value: "Not fetched" },
+                    { label: "Verification", value: "Unverified example" },
+                    { label: "Network match", value: "Unresolved" },
+                  ]}
+                />
                 <div className="ui-inset">
                   <strong>Proposed hypothetical change</strong>
                   <p>
@@ -221,9 +217,7 @@ export default function IncidentsPage() {
                     original baseline would remain available.
                   </p>
                 </div>
-                <button type="button" disabled>
-                  Create scenario from report
-                </button>
+                <Button disabled>Create scenario from report</Button>
                 <p className="ui-help">
                   Requires source evidence, a validated road match, and scenario storage.
                 </p>

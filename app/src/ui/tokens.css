@@ -1,0 +1,186 @@
+/* CrisisTwin design tokens. The single source for colour, type, spacing, radius,
+   elevation, layering and motion. See app/src/ui/README.md for usage rules.
+
+   Feature stylesheets reference these variables instead of hard-coded values. A
+   feature may alias a token locally (e.g. `--fr-ink: var(--ct-ink)`) but must not
+   introduce a new hue without adding it here first. */
+
+:root {
+  /* ---- Neutrals: "sage paper" light theme ---- */
+  --ct-ink: #142b27;
+  --ct-ink-muted: #52635c;
+  --ct-ink-subtle: #6a7166;
+  --ct-ink-inverse: #ffffff;
+  --ct-bg: #f5f4ee;
+  --ct-surface: #fcfcf8;
+  --ct-surface-raised: #ffffff;
+  --ct-surface-sunken: #f4f5ef;
+  --ct-surface-muted: #eeefe6;
+  --ct-surface-glass: rgba(252, 252, 248, 0.82);
+  --ct-surface-glass-strong: rgba(252, 252, 248, 0.95);
+  --ct-scrim: rgba(20, 43, 39, 0.35);
+  --ct-border: #d4d8ca;
+  --ct-border-subtle: #e2e5db;
+  --ct-border-strong: #c3cabb;
+
+  /* ---- Brand ---- */
+  --ct-brand: #245c4f;
+  --ct-brand-strong: #142b27;
+  --ct-brand-soft: #e8ede5;
+  --ct-brand-soft-hover: #dae4d6;
+  --ct-focus: #236d5e;
+
+  /* ---- Status: always paired with a text label or icon, never colour alone ---- */
+  --ct-success: #215b45;
+  --ct-success-soft: #e5eddf;
+  --ct-success-border: #c8d9bf;
+  --ct-warning: #795a20;
+  --ct-warning-soft: #f5ecd8;
+  --ct-warning-border: #e6d6ad;
+  --ct-danger: #b3261e;
+  --ct-danger-strong: #8c1d18;
+  --ct-danger-soft: #fcebea;
+  --ct-danger-border: #f0c4c0;
+  --ct-info: #1d5f8a;
+  --ct-info-soft: #e6f0f6;
+  --ct-info-border: #bcd5e6;
+
+  /* ---- Hazard & map data palette (legends, scene overlays, charts) ---- */
+  --ct-fire: #ee6b4d;
+  --ct-fire-hot: #ff6a1a;
+  --ct-ember: #f2a33a;
+  --ct-ember-core: #ffd29a;
+  --ct-burned: #3b2a24;
+  --ct-smoke: #8b9aa8;
+  --ct-water: #3fb8c9;
+  --ct-route: #3b82c4;
+  --ct-evacuee: #5eead4;
+  --ct-responder: #c7a6ff;
+  --ct-shelter: #22c55e;
+  --ct-closure: #dc2626;
+  --ct-vegetation: #8fa98a;
+
+  /* ---- Typography ---- */
+  --ct-font-sans: Inter, "Segoe UI", system-ui, sans-serif;
+  --ct-font-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  --ct-font-display: Georgia, "Times New Roman", serif; /* diorama captions only */
+  --ct-text-2xs: 10px;
+  --ct-text-xs: 11px;
+  --ct-text-sm: 12px;
+  --ct-text-md: 13px;
+  --ct-text-base: 14px;
+  --ct-text-lg: 16px;
+  --ct-text-xl: 18px;
+  --ct-text-2xl: 23px;
+  --ct-text-3xl: clamp(28px, 3.5vw, 42px);
+  --ct-text-metric: 29px;
+  --ct-weight-regular: 400;
+  --ct-weight-medium: 500;
+  --ct-weight-semibold: 600;
+  --ct-weight-bold: 700;
+  --ct-leading-tight: 1.25;
+  --ct-leading-snug: 1.4;
+  --ct-leading-normal: 1.6;
+  --ct-leading-relaxed: 1.7;
+  --ct-tracking-tight: -0.5px;
+  --ct-tracking-display: -1.5px;
+  --ct-tracking-eyebrow: 1.6px;
+
+  /* ---- Spacing: 4px grid ---- */
+  --ct-space-1: 4px;
+  --ct-space-2: 8px;
+  --ct-space-3: 12px;
+  --ct-space-4: 16px;
+  --ct-space-5: 20px;
+  --ct-space-6: 24px;
+  --ct-space-7: 28px;
+  --ct-space-8: 32px;
+  --ct-space-10: 40px;
+  --ct-space-12: 48px;
+
+  /* ---- Shape ---- */
+  --ct-radius-xs: 4px;
+  --ct-radius-sm: 6px;
+  --ct-radius-md: 8px;
+  --ct-radius-lg: 10px;
+  --ct-radius-xl: 12px;
+  --ct-radius-pill: 999px;
+  --ct-control-height: 40px;
+  --ct-control-height-sm: 32px;
+
+  /* ---- Elevation ---- */
+  --ct-shadow-sm: 0 1px 2px rgba(20, 43, 39, 0.06);
+  --ct-shadow-md: 0 10px 30px rgba(20, 43, 39, 0.08), 0 1px 2px rgba(20, 43, 39, 0.06);
+  --ct-shadow-lg: 0 24px 60px rgba(20, 43, 39, 0.16), 0 2px 6px rgba(20, 43, 39, 0.08);
+  --ct-glass-filter: blur(14px) saturate(1.15);
+
+  /* ---- Layering: pick from this list, never an ad hoc z-index ---- */
+  --ct-z-base: 0;
+  --ct-z-scene-labels: 1;
+  --ct-z-map-controls: 10;
+  --ct-z-overlay: 20;
+  --ct-z-sheet: 30;
+  --ct-z-popover: 40;
+  --ct-z-modal: 50;
+  --ct-z-toast: 60;
+  --ct-z-skip-link: 1000;
+
+  /* ---- Motion ---- */
+  --ct-duration-fast: 120ms;
+  --ct-duration: 200ms;
+  --ct-duration-slow: 320ms;
+  --ct-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* Dark "operations console" theme, used for overlays drawn over imagery (studio map
+   wind badge and legend). Apply `ui-theme-dark` to an element; the
+   same token names resolve to dark values, so shared components restyle themselves. */
+.ui-theme-dark {
+  --ct-ink: #e6edf3;
+  --ct-ink-muted: #8b9aa8;
+  --ct-ink-subtle: #6b7a88;
+  --ct-ink-inverse: #070a0e;
+  --ct-bg: #070a0e;
+  --ct-surface: #0c1117;
+  --ct-surface-raised: #121922;
+  --ct-surface-sunken: #080c11;
+  --ct-surface-muted: #10161d;
+  --ct-surface-glass: rgba(10, 15, 21, 0.78);
+  --ct-surface-glass-strong: rgba(8, 12, 17, 0.94);
+  --ct-scrim: rgba(0, 0, 0, 0.55);
+  --ct-border: rgba(160, 190, 220, 0.14);
+  --ct-border-subtle: rgba(160, 190, 220, 0.08);
+  --ct-border-strong: rgba(160, 190, 220, 0.28);
+  --ct-brand: #3ddbb4;
+  --ct-brand-strong: #7cf2c9;
+  --ct-brand-soft: rgba(61, 219, 180, 0.12);
+  --ct-brand-soft-hover: rgba(61, 219, 180, 0.2);
+  --ct-focus: #ffb547;
+  --ct-success: #7cf2c9;
+  --ct-success-soft: rgba(124, 242, 201, 0.1);
+  --ct-success-border: rgba(124, 242, 201, 0.3);
+  --ct-warning: #ffb547;
+  --ct-warning-soft: rgba(255, 181, 71, 0.1);
+  --ct-warning-border: rgba(255, 181, 71, 0.3);
+  --ct-danger: #ff4d6d;
+  --ct-danger-strong: #ff8098;
+  --ct-danger-soft: rgba(255, 77, 109, 0.1);
+  --ct-danger-border: rgba(255, 77, 109, 0.3);
+  --ct-info: #9fc6ec;
+  --ct-info-soft: rgba(159, 198, 236, 0.1);
+  --ct-info-border: rgba(159, 198, 236, 0.3);
+  --ct-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --ct-shadow-md: 0 10px 30px rgba(0, 0, 0, 0.45);
+  --ct-shadow-lg: 0 24px 60px rgba(0, 0, 0, 0.6);
+
+  color: var(--ct-ink);
+  color-scheme: dark;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --ct-duration-fast: 0ms;
+    --ct-duration: 0ms;
+    --ct-duration-slow: 0ms;
+  }
+}

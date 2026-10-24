@@ -1,6 +1,16 @@
 import { useState, type FormEvent } from "react";
 import IncidentSummary from "./IncidentSummary";
-import { DraftNotice, EmptyResult, Field, Panel, Tag, WorkspacePage } from "./WorkspaceUI";
+import {
+  Button,
+  DraftNotice,
+  EmptyResult,
+  Facts,
+  Field,
+  LinkButton,
+  Panel,
+  Tag,
+  WorkspacePage,
+} from "./WorkspaceUI";
 
 const templates = [
   {
@@ -39,24 +49,20 @@ export default function ScenariosPage() {
     <WorkspacePage
       title="Scenarios"
       description="Define the starting point. Keep every assumption in view."
-      action={
-        <a className="ui-button" href="/maps">
-          Open fire experiment ↗
-        </a>
-      }
+      action={<LinkButton href="/fire">Open fire experiment ↗</LinkButton>}
     >
       <IncidentSummary
         title="Real fire inputs in the replays"
         eyebrow="Historical starting conditions"
         layers={["fire_perimeters", "fire_observations", "fire_simulated"]}
-        intro="Historical replays start from recorded fire perimeters and observations, plus a simulated front fitted to them. The draft builder below is separate and still uses illustrative assumptions."
+        intro="Replays start from recorded perimeters and observations, plus a simulated front fitted to them. The draft builder below uses illustrative assumptions instead."
       />
       <DraftNotice />
       <div className="ui-split">
         <Panel
           title="Build a scenario"
           eyebrow="01 / Starting conditions"
-          aside={<Tag tone="amber">Unsaved draft</Tag>}
+          aside={<Tag tone="warning">Unsaved draft</Tag>}
         >
           <form onSubmit={reviewDraft} onChange={() => setReview(false)}>
             <div className="ui-fields">
@@ -109,7 +115,9 @@ export default function ScenariosPage() {
                 Choose a location on the map in WGS84 latitude / longitude. This draft is not
                 transferred to the map yet.
               </p>
-              <a href="/maps">Choose on map →</a>
+              <a className="ui-text-link" href="/fire">
+                Choose on map →
+              </a>
             </div>
             <Field label="Assumptions & notes">
               <textarea
@@ -121,7 +129,7 @@ export default function ScenariosPage() {
               />
             </Field>
             <div className="ui-actions">
-              <button type="submit">Review draft</button>
+              <Button type="submit">Review draft</Button>
               <span>Local preview only</span>
             </div>
           </form>
@@ -141,7 +149,7 @@ export default function ScenariosPage() {
             <div className="ui-list">
               {templates.map((template) => (
                 <button
-                  className="template-option"
+                  className="ws-template-option"
                   key={template.name}
                   type="button"
                   onClick={() => {
@@ -162,28 +170,15 @@ export default function ScenariosPage() {
             </div>
           </Panel>
           <Panel title="Run record" eyebrow="Reproducibility">
-            <dl className="ui-facts">
-              <div>
-                <dt>Model</dt>
-                <dd>Illustrative fire spread</dd>
-              </div>
-              <div>
-                <dt>Time step / horizon</dt>
-                <dd>15 min / 120 min</dd>
-              </div>
-              <div>
-                <dt>Randomness</dt>
-                <dd>None in current model</dd>
-              </div>
-              <div>
-                <dt>Source timestamps</dt>
-                <dd>No observed inputs</dd>
-              </div>
-              <div>
-                <dt>Run ID & model version</dt>
-                <dd>Awaiting a run</dd>
-              </div>
-            </dl>
+            <Facts
+              items={[
+                { label: "Model", value: "Illustrative fire spread" },
+                { label: "Time step / horizon", value: "15 min / 120 min" },
+                { label: "Randomness", value: "None in current model" },
+                { label: "Source timestamps", value: "No observed inputs" },
+                { label: "Run ID & model version", value: "Awaiting a run" },
+              ]}
+            />
           </Panel>
         </div>
       </div>

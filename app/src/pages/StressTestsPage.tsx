@@ -3,7 +3,10 @@ import {
   DeltaCell,
   EmptyResult,
   EvidenceTag,
+  Facts,
+  Notice,
   Metric,
+  MetricGrid,
   Panel,
   Tag,
   WorkspacePage,
@@ -42,7 +45,7 @@ function RunRow({ run }: { run: StressRun }) {
           {run.runId}
           {run.rationale ? ` · ${run.rationale}` : ""}
         </div>
-        <details className="variant-notes">
+        <details className="ws-variant-notes">
           <summary>What changed and where traffic moved</summary>
           <ul>
             {run.changes.map((line) => (
@@ -86,7 +89,7 @@ function Results({ doc }: { doc: StressDoc }) {
   const { budget } = doc;
   return (
     <>
-      <div className="ui-metrics">
+      <MetricGrid>
         <Metric
           label="Runs completed"
           value={fmt(budget.runsUsed ?? doc.runs.length)}
@@ -106,11 +109,11 @@ function Results({ doc }: { doc: StressDoc }) {
           value={fmt(doc.baselineMetrics[ARRIVED_BY_1800.key] ?? null)}
           detail="Simulated; every run is compared with this"
         />
-      </div>
+      </MetricGrid>
       <Panel
         title="Disruption runs against the baseline"
         eyebrow="Computed results"
-        aside={<Tag tone="amber">Counterfactual, not history</Tag>}
+        aside={<Tag tone="warning">Counterfactual, not history</Tag>}
       >
         {doc.runs.length === 0 ? (
           <EmptyResult title="No stress runs recorded">
@@ -118,12 +121,10 @@ function Results({ doc }: { doc: StressDoc }) {
           </EmptyResult>
         ) : (
           <div className="ui-table-scroll">
-            <table className="ui-table comparison-table">
+            <table className="ui-table ws-comparison-table">
               <caption>
                 Each cell is the disrupted value, then its change from the baseline. Higher is
                 better for vehicles out ({when}); lower is better for exposure and blocked vehicles.
-                All values are simulator output for a single seed; small changes are not
-                significant.
               </caption>
               <thead>
                 <tr>
@@ -157,39 +158,29 @@ function Results({ doc }: { doc: StressDoc }) {
         )}
       </Panel>
       {doc.findings && (
-        <Panel
-          title="AI findings"
-          eyebrow="Explanation of the results above"
-          aside={<EvidenceTag kind="ai_explanation" />}
-        >
-          <p className="ui-notice">
-            <strong>AI explanation</strong> Written by {doc.findings.model ?? "an AI model"} from
-            the simulator&rsquo;s numbers. It is not a computed result; check it against the table.
-          </p>
-          <pre className="ai-findings">{doc.findings.markdown}</pre>
+        <Panel title="AI findings" aside={<EvidenceTag kind="ai_explanation" />}>
+          <Notice tone="info" title="AI explanation">
+            Written by {doc.findings.model ?? "an AI model"} from the numbers above, not computed.
+          </Notice>
+          <pre className="ws-ai-findings">{doc.findings.markdown}</pre>
         </Panel>
       )}
       <div className="ui-columns">
         <Panel title="Where this comes from" eyebrow="Reproducibility">
-          <dl className="ui-facts">
-            <div>
-              <dt>Findings</dt>
-              <dd>
-                {doc.findings
+          <Facts
+            items={[
+              {
+                label: "Findings",
+                value: doc.findings
                   ? "AI explanation present"
                   : doc.mode === "dry_run"
                     ? "None: a dry run does not call an AI model"
-                    : "None recorded"}
-              </dd>
-            </div>
-            {budget.stopped && (
-              <div>
-                <dt>Stopped because</dt>
-                <dd>{budget.stopped}</dd>
-              </div>
-            )}
-          </dl>
-          <div className="entry-links">
+                    : "None recorded",
+              },
+              ...(budget.stopped ? [{ label: "Stopped because", value: budget.stopped }] : []),
+            ]}
+          />
+          <div className="ws-entry-links">
             <a className="ui-text-link" href="/simulate">
               Agent simulation →
             </a>
@@ -201,7 +192,7 @@ function Results({ doc }: { doc: StressDoc }) {
             </a>
           </div>
         </Panel>
-        <Panel title="Limitations" eyebrow="Read before comparing">
+        <Panel title="Limitations">
           {doc.limitations.length > 0 ? (
             <ul className="ui-checklist">
               {doc.limitations.map((line) => (
@@ -210,7 +201,7 @@ function Results({ doc }: { doc: StressDoc }) {
             </ul>
           ) : (
             <EmptyResult title="No limitations recorded">
-              The file lists none. Treat results as a single-seed planning experiment anyway.
+              The file lists none. Results are still a single-seed experiment.
             </EmptyResult>
           )}
         </Panel>
@@ -225,7 +216,6 @@ export default function StressTestsPage() {
     <WorkspacePage
       title="Stress testing"
       description="Where does the 2018 Camp Fire evacuation plan break? Each run disrupts the baseline once."
-      section="Analysis"
     >
       {load.status === "ready" ? (
         <Results doc={load.data} />

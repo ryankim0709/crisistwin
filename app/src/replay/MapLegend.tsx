@@ -1,3 +1,4 @@
+import { Button } from "../ui";
 import { COLORS, PEOPLE_RAMP } from "./mapLayers";
 import { MOBILITY_COLORS } from "./mobility";
 import type { EvidenceClass } from "./types";
@@ -29,16 +30,28 @@ export default function MapLegend({
 }) {
   if (!open) {
     return (
-      <button type="button" className="rp-key-btn" aria-expanded={false} onClick={onToggle}>
+      <Button
+        variant="secondary"
+        size="sm"
+        className="rp-key-btn"
+        aria-expanded={false}
+        onClick={onToggle}
+      >
         Key
-      </button>
+      </Button>
     );
   }
   return (
     <div className="rp-maplegend" aria-label="Map key">
-      <button type="button" className="rp-key-close" aria-expanded={true} onClick={onToggle}>
+      <Button
+        variant="ghost"
+        size="sm"
+        className="rp-key-close"
+        aria-expanded={true}
+        onClick={onToggle}
+      >
         Hide key
-      </button>
+      </Button>
       <ul>
         <li>
           <svg viewBox="0 0 28 14" aria-hidden="true">
@@ -80,13 +93,13 @@ export default function MapLegend({
         </li>
         <li>
           <svg viewBox="0 0 28 14" aria-hidden="true">
-            <circle cx="9" cy="7" r="3" fill={COLORS.particle} stroke="#7ff9ff" strokeWidth="0.8" />
+            <circle cx="9" cy="7" r="3" fill={COLORS.particle} stroke={COLORS.particleGlow} strokeWidth="0.8" />
             <circle
               cx="19"
               cy="7"
               r="3"
               fill={COLORS.particleStopped}
-              stroke="#0a0e13"
+              stroke={COLORS.markerCore}
               strokeWidth="1.4"
             />
           </svg>
@@ -123,7 +136,8 @@ export default function MapLegend({
               <circle cx="14" cy="7" r="3.5" fill={MOBILITY_COLORS.near} />
               <circle cx="23" cy="7" r="4" fill={MOBILITY_COLORS.above} />
             </svg>
-            Movement (device data, {EVIDENCE_LABEL[mobilityEvidence]}): brighter = more visits than usual
+            Movement (device data, {EVIDENCE_LABEL[mobilityEvidence]}): darker = more visits than
+            usual
           </li>
         )}
         {showFireObs && fireObsSource && (
@@ -142,7 +156,7 @@ export default function MapLegend({
                 cx="8"
                 cy="7"
                 r="4"
-                fill="#0a0e13"
+                fill={COLORS.markerCore}
                 stroke={COLORS.destination}
                 strokeWidth="2.2"
               />
@@ -151,7 +165,7 @@ export default function MapLegend({
                 cy="7"
                 r="4.6"
                 fill={COLORS.refuge}
-                stroke="#4b5157"
+                stroke={COLORS.refugeRing}
                 strokeWidth="1.6"
               />
             </svg>

@@ -3,8 +3,8 @@
 The civilian CrisisTwin app, for households planning ahead and during an
 emergency; the web workspace serves planners (see
 [ADR 0010](../docs/adr/0010-civilian-ios-app.md)). It is one screen about the
-live incident (see **Live** below), with no tab bar; **My Plan**, My reports,
-responder join and About sit behind one menu button. Native SwiftUI, targeting iPhone and iPad on
+live incident (see **Live** below), with no tab bar; **My Plan**, **Family**, My reports,
+responder join, the **Web simulation** feed and About sit behind one menu button. Native SwiftUI, targeting iPhone and iPad on
 **iOS 17.0+**. Use **Xcode 16.2+** with its bundled Swift compiler in **Swift 5
 language mode**. Only Apple frameworks are used. There is no package install or
 project generation step; Swift Package Manager is the choice for future Swift
@@ -68,15 +68,9 @@ accepted by the mobile configuration.
 
 ### Practice map
 
-The Practice view is no longer reachable on the phone (its code still builds). It showed, under a "practice only, not a forecast" banner, shows only the
-map and simulation: an injected stylesheet hides the web sidebar and planning
-tools, and navigation away from `/maps` is blocked. It shows the web app's `/maps` page in a `WKWebView`, so the map
-and the illustrative TypeScript fire model run unchanged (see
-[ADR 0007](../docs/adr/0007-mobile-web-map.md)). `WEB_BASE_URL` is an origin like
-`API_BASE_URL`, with the same validation; Debug uses `http://localhost:5173`, the
-Vite server started by `docker compose up` in `app/`. The tab shows a loading
-state, then the map, or an error with a retry button when the web app is not
-reachable or returns a non-200 status. Nothing is stored between launches.
+The Practice view was removed from the phone. It showed the web app's `/fire` page in a
+`WKWebView` with the sidebar hidden (see [ADR 0007](../docs/adr/0007-mobile-web-map.md)).
+`WEB_BASE_URL` is still validated like `API_BASE_URL`; Debug uses `http://localhost:5173`.
 
 ### My Plan
 
@@ -114,6 +108,30 @@ it locally, start the backend and drill as described in
 [`app/backend/README.md`](../app/backend/README.md); Debug points at
 `http://localhost:8000`.
 
+### Web simulation (menu)
+
+Shows, natively in MapKit, the simulation a planner is playing on the web `/fire` or
+`/dispatch` page with **Share with resident app** on (see
+[ADR 0016](../docs/adr/0016-resident-live-and-family.md)). The app polls `GET /api/live`
+every 3 seconds while the screen is open and draws the simulated fire, the household's home and
+meeting points, and, while the dispatch agent runs, the household's zone, its assigned exit
+and route. The guidance card says what the simulation tells that zone: no order yet, leave
+now, wait about N minutes (the route is backed up and the fire is far), route blocked, zone
+evacuated, or fire in the zone, and "route changed" when the agent redirects it. Meeting
+points the simulated fire reaches are marked and the first clear one is offered. Set a home
+location on that screen; it stays on the phone, and the zone is worked out locally. A banner
+says it is a simulation drill, not an emergency service. Needs the Docker stack and a web
+page broadcasting.
+
+### Family
+
+Create a family or join one with its 8-character code. Members share one primary and
+backup meeting point and post a status (safe, on the way, at meeting point, need help);
+no location is shared. Meeting points are edited in My Plan and synced to the family; a
+change by another member replaces the points on this phone. The membership token is kept in
+the Keychain; the family refreshes every 10 seconds in the foreground. Contract:
+[ADR 0016](../docs/adr/0016-resident-live-and-family.md).
+
 Release does not include `Local.xcconfig` and has empty `API_BASE_URL` and `WEB_BASE_URL`. Set an
 HTTPS origin in the Release configuration before distribution. Until then the
 app shows a configuration error instead of claiming connectivity. App Store
@@ -128,21 +146,22 @@ mobile/
   CrisisTwin/
     App/                 SwiftUI app entry point and tab navigation
     Configuration/       Validated API and web origins from the app bundle
-    Networking/          Health and live-report HTTP clients, Keychain credentials
+    Networking/          Health, live-report and JSON backend HTTP clients, Keychain credentials
     Features/
-      Home/              Civilian home and the About sheet with API readiness states
-      Scenarios/         Practice tab: embedded web map with loading and error states
+      Home/              The About sheet with API readiness states
       Plan/              Meeting plan model and on-device store, plan tab, point editor
       Live/              Field-report models, store, outbox, location, map, report and responder views
+      Broadcast/         Web simulation feed: broadcast model, poller, map and household guidance
+      Family/            Family model, Keychain membership, server store, family view
     Resources/           Info.plist and adaptive color assets
 ```
 
 The workspace follows the web app's cream/green palette with dark-mode variants,
 system text styles, labeled controls, and status icons accompanied by text.
-The Practice tab embeds the web map. My Plan uses a native MapKit map for the
-user's own meeting points. A Swift fire model, checking meeting points against
-the simulation, traffic simulation, scenario storage/sync, authentication, and
-notifications are not implemented. No fixtures or invented simulation metrics are displayed.
+The Practice tab embeds the web map. My Plan and Live drill use native MapKit maps.
+Live drill checks meeting points against the broadcast fire; there is no Swift fire model.
+Push notifications, user accounts beyond family tokens, and per-incident broadcasts are not
+implemented. No fixtures or invented simulation metrics are displayed.
 
 ### Health boundary
 
@@ -178,9 +197,13 @@ pre-commit run --all-files
 No tests, lint, type checks, builds, simulator/device runs, or browser verification
 are part of the default agent workflow. They require an explicit user request.
 The embedded map was built with Xcode 26.6 and run on an iOS 26.5 simulator. Its
-loading, error and retry states were checked, and the real `/maps` page from
-`docker compose up` rendered with its fire controls. It has not been checked on a
+loading, error and retry states were checked, and the then-current `/maps` page from
+`docker compose up` rendered with its fire controls. The tab now loads `/fire`
+instead; that has not been run on a simulator. It has not been checked on a
 physical device.
+
+Live drill and Family have not been built or run; the new backend endpoints have not been
+exercised.
 
 My Plan was run on the same simulator: Apple Maps search, tap-to-place, save,
 reload after relaunch, the contact picker, and the share-sheet fallback were

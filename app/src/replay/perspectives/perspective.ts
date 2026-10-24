@@ -19,7 +19,8 @@ import {
 export type PerspectiveMode = "observer" | "oblique" | "ground";
 
 /** AWS Terrain Tiles (public dataset, terrarium encoding). */
-export const TERRAIN_TILES_URL = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
+export const TERRAIN_TILES_URL =
+  "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
 export const TERRAIN_ATTRIBUTION = "Terrain: AWS Terrain Tiles / Mapzen";
 export const IMAGERY_TILES_URL =
   "https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}";
@@ -33,7 +34,13 @@ const IMAGERY_LAYER = "persp-imagery";
 const HILLSHADE_LAYER = "persp-hillshade";
 const TERRAIN_EXAGGERATION = 1.5;
 /** Replay data layers, bottom-most first; imagery and hillshade go beneath the first present. */
-const DATA_LAYER_ANCHORS = ["zones-fill", "sim-front-fill", "fire-history", "fire-glow-outer", "roads-base"];
+const DATA_LAYER_ANCHORS = [
+  "zones-fill",
+  "sim-front-fill",
+  "fire-history",
+  "fire-glow-outer",
+  "roads-base",
+];
 /** Layers that represent the road network for click-to-follow. */
 export const ROAD_PICK_LAYERS = ["roads-flow", "roads-closed", "roads-base"];
 
@@ -120,11 +127,9 @@ interface State {
 const states = new WeakMap<MapLibreMap, State>();
 
 export function prefersReducedMotion(): boolean {
-  return typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-}
-
-export function getPerspective(map: MapLibreMap): PerspectiveMode {
-  return states.get(map)?.mode ?? "observer";
+  return (
+    typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
 }
 
 /**
@@ -132,10 +137,21 @@ export function getPerspective(map: MapLibreMap): PerspectiveMode {
  * re-targets the drive. Throws nothing if the style is still loading: the switch is retried
  * once the style reports ready.
  */
-export function setPerspective(map: MapLibreMap, mode: PerspectiveMode, ctx: PerspectiveContext): void {
+export function setPerspective(
+  map: MapLibreMap,
+  mode: PerspectiveMode,
+  ctx: PerspectiveContext,
+): void {
   let state = states.get(map);
   if (!state) {
-    state = { mode: "observer", saved: null, stopMode: null, observerCamera: null, skyTimer: null, skyKey: "" };
+    state = {
+      mode: "observer",
+      saved: null,
+      stopMode: null,
+      observerCamera: null,
+      skyTimer: null,
+      skyKey: "",
+    };
     states.set(map, state);
   }
   state.stopMode?.();
@@ -211,7 +227,12 @@ function install3d(map: MapLibreMap, state: State, ctx: PerspectiveContext): boo
     const before = firstAnchor(map);
     if (!map.getLayer(IMAGERY_LAYER)) {
       map.addLayer(
-        { id: IMAGERY_LAYER, type: "raster", source: IMAGERY_SOURCE, paint: { "raster-opacity": 0.92 } },
+        {
+          id: IMAGERY_LAYER,
+          type: "raster",
+          source: IMAGERY_SOURCE,
+          paint: { "raster-opacity": 0.92 },
+        },
         before,
       );
     }
@@ -221,19 +242,24 @@ function install3d(map: MapLibreMap, state: State, ctx: PerspectiveContext): boo
           id: HILLSHADE_LAYER,
           type: "hillshade",
           source: TERRAIN_SOURCE,
-          paint: { "hillshade-exaggeration": 0.35, "hillshade-shadow-color": "#1a0f08" },
+          paint: { "hillshade-exaggeration": 0.35, "hillshade-shadow-color": "rgba(74, 96, 88, 0.5)" },
         },
         before,
       );
     }
-    if (!map.getTerrain()) map.setTerrain({ source: TERRAIN_SOURCE, exaggeration: TERRAIN_EXAGGERATION });
+    if (!map.getTerrain())
+      map.setTerrain({ source: TERRAIN_SOURCE, exaggeration: TERRAIN_EXAGGERATION });
   } catch (error) {
     if (error instanceof Error && /style is not done loading/i.test(error.message)) return false;
     throw error;
   }
 
   if (!state.saved) {
-    state.saved = { maxPitch: map.getMaxPitch(), dragRotate: map.dragRotate.isEnabled(), sky: map.getSky() };
+    state.saved = {
+      maxPitch: map.getMaxPitch(),
+      dragRotate: map.dragRotate.isEnabled(),
+      sky: map.getSky(),
+    };
     map.setMaxPitch(MAX_PITCH_3D);
     map.dragRotate.enable();
   }
@@ -267,10 +293,13 @@ function teardown3d(map: MapLibreMap, state: State): void {
 }
 
 /** The fire area in effect: observed perimeter, else the simulated front before the first one. */
-export function activeFire(ctx: PerspectiveContext): { geometry: AreaGeometry; source: FireSource } | null {
+export function activeFire(
+  ctx: PerspectiveContext,
+): { geometry: AreaGeometry; source: FireSource } | null {
   const { model } = ctx;
   const pi = ctx.perimeterIndex();
-  if (pi >= 0 && model.perimeters[pi]) return { geometry: model.perimeters[pi].geometry, source: "observed perimeter" };
+  if (pi >= 0 && model.perimeters[pi])
+    return { geometry: model.perimeters[pi].geometry, source: "observed perimeter" };
   const si = simulatedFrontIndexAt(model, ctx.simTimeMs());
   const front = si >= 0 ? model.fireSimulated?.fronts[si] : undefined;
   return front ? { geometry: front.geometry, source: "simulated front" } : null;
@@ -280,7 +309,8 @@ const toLngLat = (c: MapLngLat): LngLat => [c.lng, c.lat];
 
 function updateSky(map: MapLibreMap, state: State, ctx: PerspectiveContext): void {
   const fire = activeFire(ctx);
-  const near = fire !== null && distanceToAreaM(toLngLat(map.getCenter()), fire.geometry) < FIRE_NEAR_M;
+  const near =
+    fire !== null && distanceToAreaM(toLngLat(map.getCenter()), fire.geometry) < FIRE_NEAR_M;
   const key = near ? "smoke" : "clear";
   if (key === state.skyKey) return;
   state.skyKey = key;
@@ -437,17 +467,26 @@ function startGround(map: MapLibreMap, ctx: PerspectiveContext): () => void {
         ? bearingDeg(line.coords[Math.max(0, lineEnd - 1)], line.coords[lineEnd])
         : bearingDeg(pos, ahead);
     bearing =
-      bearing === null ? target : bearing + angleDiff(bearing, target) * (1 - Math.exp(-dt * BEARING_SMOOTH_PER_S));
+      bearing === null
+        ? target
+        : bearing + angleDiff(bearing, target) * (1 - Math.exp(-dt * BEARING_SMOOTH_PER_S));
 
     const ground = map.queryTerrainElevation(pos);
     if (ground !== null) {
       elevation =
-        elevation === null ? ground : elevation + (ground - elevation) * (1 - Math.exp(-dt * ELEVATION_SMOOTH_PER_S));
+        elevation === null
+          ? ground
+          : elevation + (ground - elevation) * (1 - Math.exp(-dt * ELEVATION_SMOOTH_PER_S));
     }
     try {
       if (elevation !== null) {
         map.jumpTo(
-          map.calculateCameraOptionsFromCameraLngLatAltRotation(pos, elevation + GROUND_EYE_HEIGHT_M, bearing, GROUND_PITCH),
+          map.calculateCameraOptionsFromCameraLngLatAltRotation(
+            pos,
+            elevation + GROUND_EYE_HEIGHT_M,
+            bearing,
+            GROUND_PITCH,
+          ),
         );
       } else {
         map.jumpTo({ center: pos, zoom: GROUND_FALLBACK_ZOOM, pitch: GROUND_PITCH, bearing });

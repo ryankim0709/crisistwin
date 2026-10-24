@@ -22,6 +22,7 @@ private enum PointSlot: String, Identifiable {
 /// The household meeting plan: where to meet if separated, and who to tell.
 struct PlanView: View {
     @Environment(MeetingPlanStore.self) private var store
+    @Environment(FamilyStore.self) private var family
     @State private var editing: PointSlot?
     @State private var pickingContact = false
     @State private var composingMessage = false
@@ -57,6 +58,13 @@ struct PlanView: View {
                 .listRowInsets(EdgeInsets())
                 .listRowBackground(Color.clear)
                 .accessibilityLabel(mapSummary)
+            }
+
+            if let shared = family.family {
+                Section {
+                    Label("Meeting points are shared with \(shared.name).", systemImage: "person.3")
+                        .font(.subheadline)
+                }
             }
 
             pointSection(.primary, point: plan.primary)
@@ -114,6 +122,7 @@ struct PlanView: View {
                 store.update { plan in
                     if slot == .primary { plan.primary = point } else { plan.backup = point }
                 }
+                shareWithFamily()
                 fitCamera()
             }
         }
@@ -130,6 +139,13 @@ struct PlanView: View {
                 if !plan.contacts.contains(where: { $0.id == contact.id }) { plan.contacts.append(contact) }
             }
         })
+    }
+
+    /// In a family, meeting points are shared: send the new ones to the server.
+    private func shareWithFamily() {
+        guard family.isJoined else { return }
+        let plan = store.plan
+        Task { await family.setMeetingPoints(primary: plan.primary, backup: plan.backup) }
     }
 
     /// Frame the chosen points, or the demo area when there are none.
@@ -204,8 +220,10 @@ struct PlanView: View {
                 .listRowBackground(Color.ctSurface)
                 Button(role: .destructive) {
                     store.update { plan in
-                        if slot == .primary { plan.primary = nil } else { plan.backup = nil }
+                        // Without a primary, the backup moves up rather than standing alone.
+                        if slot == .primary { plan.primary = plan.backup; plan.backup = nil } else { plan.backup = nil }
                     }
+                    shareWithFamily()
                     fitCamera()
                 } label: {
                     Label("Remove", systemImage: "trash")
@@ -290,10 +308,6 @@ private struct LegendChip: View {
         .padding(.vertical, 5)
         .background(.regularMaterial, in: Capsule())
     }
-}
-
-private extension MeetingPoint {
-    var coordinate: CLLocationCoordinate2D { CLLocationCoordinate2D(latitude: latitude, longitude: longitude) }
 }
 
 /// Presents the system contact picker. It needs no Contacts permission: iOS returns only the chosen person.

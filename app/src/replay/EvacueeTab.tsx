@@ -1,3 +1,4 @@
+import { Button, Notice } from "../ui";
 import { useMemo } from "react";
 import { areaCenter, arrivalAt, inArea, nearestDestinations, zoneAt } from "./insights";
 import { closedEdgesAt, formatAge, lastAtOrBefore, localTime, zoneStatesAt } from "./timeline";
@@ -29,7 +30,9 @@ export default function EvacueeTab({ model, simTimeMs, frameIndex, pin, onPin }:
   const eventIndex = lastAtOrBefore(model.events, simTimeMs);
   const zoneState = zone ? zoneStatesAt(model.events, eventIndex).get(zone.id) : undefined;
   const orderEvent = zone
-    ? model.events.find((e, i) => i <= eventIndex && e.zoneIds.includes(zone.id) && e.type.includes("order"))
+    ? model.events.find(
+        (e, i) => i <= eventIndex && e.zoneIds.includes(zone.id) && e.type.includes("order"),
+      )
     : undefined;
   const grid = model.fireSimulated?.arrivalGrid ?? null;
   const arrival = pin && grid ? arrivalAt(grid, pin) : null;
@@ -39,14 +42,15 @@ export default function EvacueeTab({ model, simTimeMs, frameIndex, pin, onPin }:
 
   return (
     <div className="rp-tab">
-      <p className="rp-disclaimer rp-disclaimer--top" role="note">
-        {model.insights?.disclaimer ?? "Planning insight from a simulation; not operational instructions."} This
-        view describes a historical model run. It is not guidance for any real event.
-      </p>
+      <Notice tone="info">
+        {model.insights?.disclaimer ?? "Planning insight from a simulated historical run."}
+      </Notice>
 
       <div className="rp-pin-controls">
         <p className="rp-pin-hint">
-          {pin ? "Pin placed. Click the map to move it." : "Click or tap the map to place a pin, or choose a zone:"}
+          {pin
+            ? "Pin placed. Click the map to move it."
+            : "Click or tap the map to place a pin, or choose a zone:"}
         </p>
         {zones.length > 0 && (
           <label className="rp-select-label">
@@ -69,9 +73,9 @@ export default function EvacueeTab({ model, simTimeMs, frameIndex, pin, onPin }:
           </label>
         )}
         {pin && (
-          <button type="button" className="rp-btn rp-btn--text" onClick={() => onPin(null)}>
+          <Button variant="secondary" size="sm" onClick={() => onPin(null)}>
             Clear pin
-          </button>
+          </Button>
         )}
       </div>
 
@@ -90,8 +94,8 @@ export default function EvacueeTab({ model, simTimeMs, frameIndex, pin, onPin }:
             {arrival?.status === "reached" &&
               (arrival.atMs > simTimeMs ? (
                 <>
-                  {localTime(arrival.atMs, tz)} — <strong>{formatAge(arrival.atMs - simTimeMs)}</strong> after the
-                  replay clock
+                  {localTime(arrival.atMs, tz)} —{" "}
+                  <strong>{formatAge(arrival.atMs - simTimeMs)}</strong> after the replay clock
                 </>
               ) : (
                 <>
@@ -121,7 +125,9 @@ export default function EvacueeTab({ model, simTimeMs, frameIndex, pin, onPin }:
                   : zoneState === "warned"
                     ? "warning in the replay"
                     : "no order yet in the replay"}
-                {model.layerStatus.zones?.status === "fixture" && <small>Zones and orders are synthetic fixtures.</small>}
+                {model.layerStatus.zones?.status === "fixture" && (
+                  <small>Zones and orders are synthetic fixtures.</small>
+                )}
               </>
             ) : (
               "Not inside a modelled zone."
@@ -139,14 +145,17 @@ export default function EvacueeTab({ model, simTimeMs, frameIndex, pin, onPin }:
                     <span className="rp-row-main">{d.name}</span>
                     <span className="rp-row-side">
                       {(d.distanceM / 1000).toFixed(1)} km ·{" "}
-                      {d.closureNearby ? "modelled closure near this exit" : "no modelled closure near this exit"}
+                      {d.closureNearby
+                        ? "modelled closure near this exit"
+                        : "no modelled closure near this exit"}
                     </span>
                   </li>
                 ))}
               </ul>
             )}
             <small>
-              Closures are checked within 150 m of each exit at the current replay time; full routes are not evaluated.
+              Closures are checked within 150 m of each exit at the current replay time; full routes
+              are not evaluated.
             </small>
           </dd>
         </dl>

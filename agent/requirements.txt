@@ -1,0 +1,44 @@
+# Resolved Python dependencies for the fire-watch agent.
+#
+# THIS FILE WAS NOT COMPILED WITH uv. The project convention in
+# app/backend/README.md is to compile the .in file with uv:
+#
+#     uv pip compile requirements.in --python-version 3.12 --output-file requirements.txt
+#
+# Neither uv nor python3.12 was installed on the machine this was generated on,
+# so the set below is a pip freeze of a real install instead:
+#
+#     python3.13 -m venv .venv
+#     .venv/bin/python -m pip install -r requirements.in
+#     .venv/bin/python -m pip freeze --exclude-editable
+#
+# Resolved 2026-10-23 with pip 25.1.1 under CPython 3.13.5, macOS arm64.
+#
+# Two differences from a uv lock, worth knowing before trusting this file:
+#   - It records one resolution for CPython 3.13 on arm64, not uv's resolution
+#     for Python 3.12. Packages with compiled wheels (jiter, pydantic_core) and
+#     any marker-dependent pins can come out differently on another interpreter
+#     or platform.
+#   - pip freeze keeps no record of which requirement pulled in which package,
+#     so uv's "# via" provenance comments are missing. Only `anthropic` is a
+#     direct dependency; every other line below is transitive.
+#
+# Recompile with the uv command above as soon as uv and Python 3.12 are
+# available, and replace this header with the one uv writes.
+
+annotated-types==0.8.0
+anthropic==2.3.0
+anyio==4.15.1
+docstring_parser==0.18.0
+h11==0.16.0
+httpcore2==2.16.0
+httpx2==2.16.0
+idna==3.20
+jiter==0.18.0
+opentelemetry-api==1.45.1
+pydantic==2.14.1
+pydantic_core==2.50.1
+sniffio==1.3.1
+truststore==0.10.5
+typing-inspection==0.4.4
+typing_extensions==4.16.0
