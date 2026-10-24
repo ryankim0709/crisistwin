@@ -195,3 +195,53 @@ struct StillThereRow: View {
         withAnimation(.snappy) { store.answerStillThere(item, stillThere: stillThere) }
     }
 }
+
+/// One board question ("Pentz Road: passable?") with its answers, in the same shape as
+/// `StillThereRow`. An answer is an ordinary report at the place, never the device position.
+struct BoardQuestionRow: View {
+    let question: BoardQuestion
+
+    @Environment(LiveStore.self) private var store
+    @State private var tick = 0
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                label.fixedSize()
+                Spacer(minLength: 8)
+                answers
+            }
+            VStack(alignment: .leading, spacing: 10) {
+                label
+                answers.padding(.leading, 40)
+            }
+        }
+        .buttonStyle(.bordered)
+        .buttonBorderShape(.capsule)
+        .controlSize(.large)
+        .sensoryFeedback(.selection, trigger: tick)
+        .accessibilityElement(children: .contain)
+    }
+
+    private var label: some View {
+        HStack(spacing: 12) {
+            Image(systemName: question.symbol)
+                .foregroundStyle(Color.ctInkMuted)
+                .frame(width: 28)
+                .accessibilityHidden(true)
+            Text(question.title)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var answers: some View {
+        HStack(spacing: 10) {
+            ForEach(question.answers, id: \.self) { answer in
+                Button(answer.title) {
+                    tick += 1
+                    withAnimation(.snappy) { store.answerBoard(question, answer) }
+                }
+            }
+        }
+    }
+}

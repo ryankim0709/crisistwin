@@ -159,6 +159,8 @@ function summary(
     final,
     cutOffZones: 0,
     cutOffHomes: 0,
+    cutOffZoneIndices: [],
+    zoneOrderMinutes: [],
     allClearMinute,
     householdHoursEvacuating: hours,
     stagedHomes: 0,

@@ -36,40 +36,61 @@ but not wired, unmarked = not started. Items are in dependency order within each
 
 ## 2. Scenario → live data (generators wired to the drill)
 
-- [ ] A scenario spec (package + window + injects + generator params + noise profile + seed)
+- [x] A scenario spec (package + window + injects + generator params + noise profile + seed)
       shared by live drills and the batch runner (the batch runner **[wip]** defines it; reuse it).
-- [ ] `live_run_scenario`: one process that ticks the generators against the active incident
+- [x] `live_run_scenario`: one process that ticks the generators against the active incident
       on the drill clock, so a watched drill fills itself.
-- [ ] Comms generator → queue: `groundrecord.materialize_due` labels everything
+- [x] Comms generator → queue: `groundrecord.materialize_due` labels everything
       `historical_record`; add a `simulated` path for `sim/gen_comms.py` output (same queue
       rules, same controller-only points).
-- [ ] Residents → live: a driver that posts or inserts `sim/gen_residents.py` events (reports,
+- [x] Residents → live: a driver that posts or inserts `sim/gen_residents.py` events (reports,
       check-ins, help, destination choices); `offered=` from live guidance.
 - [ ] Responders: wire the `silent_closure` inject into `World.truth_blocked`; give simulated
       responders server-side congestion (responder tokens cannot read the twin).
 - [ ] **[wip]** Noise layer and hidden truth log over all generated streams; the truth log is never
       readable by the console, phones or MCP.
-- [ ] Injects ↔ generators: `psap_reroute` and `comms_outage` windows applied to generated comms
+- [x] Injects ↔ generators: `psap_reroute` and `comms_outage` windows applied to generated comms
       and residents (helpers exist in `livecore/injects.py`).
 
 ## 3. Calibration fixes before trusting generated data
 
-- [ ] Residents' help rate is about 10x the Camp rescue rate and 3.4x the scaled 911 bound:
+- [x] Residents' help rate is about 10x the Camp rescue rate and 3.4x the scaled 911 bound:
       sweep `help_at_home_per_h` against `sim/ground_rates.py` targets.
 - [ ] Comms generator: radio burstiness (dispersion 1.9 vs 3.5) needs a within-zone burst
-      process; rescue-to-911 binding 24-28% vs 43%.
+      process; rescue-to-911 binding 24-28% vs 43%. Bursts done (radio refit dispersion 3.63 vs
+      3.53, `comms.bursts`); binding is still short (0.22 with bursts).
 - [ ] Validate generators against Camp end to end (the "D" check): generated Camp vs the 2018
       record on timing, rates and category mix, many seeds.
 - [ ] **[wip]** People data (R1) into `sim/behavior.py` and `gen_residents` (departure delays,
-      compliance, shadow evacuation, no-vehicle households, care facilities, schools).
+      compliance, shadow evacuation, no-vehicle households, care facilities, schools). Done behind
+      `twin.people` and in `gen_residents`: departure delays, compliance, shadow evacuation,
+      no-vehicle households ([live scenario runner](live-scenario-runner.md)); facilities and schools open.
 - [ ] Comms-infra data into a tower-failure model (sites fail with fire exposure; battery life;
       72 h rule after 2021) driving `comms_outage` automatically; alert reach (CodeRED 55% / 7%).
+      Tower model done (`sim/comms_towers.py`, uncalibrated, posted live by `live_run_scenario`);
+      alert reach open.
 - [ ] Scenario weather: `sim/weather.py` is not consumed by Studio or the fire model yet;
       wire `scenario_wind` into Studio and convert 10 m / 20 ft heights.
 - [ ] Planner hysteresis: congestion-aware planning changes destinations ~3.4x as often with no
       measured benefit on one seed; tune margin/dwell/smoothing with multi-seed runs.
 
 ## 4. Firefighting
+
+- [ ] **Rothermel implementations disagree** for live-fuel models: at Camp inputs for SH5,
+      `app/src/fire/rothermel.ts` gives 85 m/min (reaction intensity 3,030) and `sim/fire.py` 173 m/min
+      (6,144). The TS code weights each category's reaction term by its area share, the Python does
+      not; they agree for dead-only fuels. Check both against Andrews (2018), RMRS-GTR-371, and fix
+      the wrong one.
+- [ ] Drill roads carry no surface, track, width, weight or grade tags, so access rules R01-R12
+      never block on Camp (every class can use every edge). Enrich the drill road graph with OSM
+      tags (as `dispatch_area.py` does) and grade from terrain.
+- [ ] Time-varying wind in the Studio/`/fire` solver: it takes one wind per run, so "Historical"
+      uses the peak hour (a worst-hour run, not a replay). Weather humidity and temperature are not
+      yet fed into fuel moisture.
+- [ ] No LANDFIRE landscape covers Camp, so `/demo` uses SH5 everywhere; add a Camp region.
+- [ ] `/demo`: an "escaped fire handed off" rule for long 24/7 runs (under real winds most fires
+      escape and the board fills its 25-fire cap); `app/src/demo/model.test.ts` and
+      `observation.test.ts` are stale after the realism change.
 
 - [ ] **[wip]** Suppression engine: sourced rates, road access R01-R12 per apparatus class,
       helicopters and airtankers with daylight, wind and turnaround limits, first-alarm preset.

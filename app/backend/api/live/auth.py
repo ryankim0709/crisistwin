@@ -21,11 +21,11 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.core.cache import cache
-from livecore.drill import INCIDENT_ID
 from pymongo.errors import PyMongoError
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.permissions import AllowAny
 
+from . import incidents
 from .common import (
     ApiError,
     actor_from_request,
@@ -45,7 +45,6 @@ RESPONDER_TOKEN_TTL = timedelta(hours=24)
 """Responder tokens expire 24 h after joining."""
 LAST_SEEN_WRITE_INTERVAL = timedelta(minutes=5)
 CONTROLLER_PARTY_KEY = "controller"
-INCIDENTS = frozenset({INCIDENT_ID})
 
 
 @dataclass(frozen=True)
@@ -53,6 +52,9 @@ class Principal:
     role: str  # civilian | responder | controller
     party_key: str
     incident_id: str | None
+    simulated: bool = False
+    """A simulated participant's device (``live_sim_responders``, ``live_run_scenario``): what it stores is
+    labelled ``evidence_class: simulated``, never ``field_report``."""
 
 
 def token_hash(token: str) -> str:
@@ -112,7 +114,7 @@ def authenticate(request) -> Principal | None:
         if doc["role"] == "civilian":
             update["expires_at"] = now + CIVILIAN_TOKEN_TTL
         devices.update_one({"_id": doc["_id"]}, {"$set": update})
-    return Principal(doc["role"], doc["party_key"], doc.get("incident_id"))
+    return Principal(doc["role"], doc["party_key"], doc.get("incident_id"), bool(doc.get("simulated")))
 
 
 def client_ip(request) -> str:
@@ -138,8 +140,9 @@ def live_view(methods: list[str], roles: Collection[str] | None = None, auth: bo
     """DRF function view with live auth, role checks, incident checks and uniform errors.
 
     ``roles`` None means any authenticated role. The wrapped view receives ``principal``
-    (None when ``auth`` is False). A path ``incident_id`` must be a known incident, and a
-    responder token only works for the incident it joined.
+    (None when ``auth`` is False). A path ``incident_id`` must be a known incident (Camp or the
+    active one, ``incidents.is_known``), and a responder token only works for the incident it
+    joined. ``drillcache.get_index()`` without an argument then reads the path's incident.
     """
 
     def decorator(func: Callable) -> Callable:
@@ -147,7 +150,7 @@ def live_view(methods: list[str], roles: Collection[str] | None = None, auth: bo
         def wrapper(request, *args, **kwargs):
             try:
                 incident_id = kwargs.get("incident_id")
-                if incident_id is not None and incident_id not in INCIDENTS:
+                if incident_id is not None and not incidents.is_known(incident_id):
                     return error(404, "not_found", "Unknown incident.")
                 principal = None
                 if auth:
@@ -166,9 +169,11 @@ def live_view(methods: list[str], roles: Collection[str] | None = None, auth: bo
                 actor = set_request_actor(
                     actor_from_request(request) if principal is not None and principal.role == "controller" else None
                 )
+                scoped = incidents.set_request_incident(incident_id)
                 try:
                     return func(request, *args, principal=principal, **kwargs)
                 finally:
+                    incidents.reset_request_incident(scoped)
                     reset_request_actor(actor)
             except ApiError as exc:
                 return error(exc.status, exc.code, exc.detail)

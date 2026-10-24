@@ -1,28 +1,35 @@
 /**
- * Firefighting inputs in the Studio config panel: whether crews respond, how many of each
- * resource, and how long after the first ignition they start building line. These are user
- * assumptions; the plan itself is chosen by `planFirefighting` (studio/firefighting.ts).
+ * Firefighting inputs in the Studio config panel: whether resources respond, how many of each
+ * ground and air resource type (or the first-alarm preset), when T+0 is on the clock (for the
+ * aviation daylight rules), and how resources reach the fire. These are user assumptions; the
+ * plan itself is chosen by `planFirefighting` (studio/firefighting.ts). Resource numbers come
+ * from tools/suppression_resources.json (docs/adr/0048-suppression-engine.md).
  */
 
 import type { ReactNode } from "react";
 import { formatElapsed } from "../fire/spread";
-import { Field } from "../ui";
+import { Button, Field, Fieldset } from "../ui";
 import type { StudioScenario } from "./contracts";
 import {
   DEFAULT_FIREFIGHTING,
+  DEFAULT_START_LOCAL_ISO,
+  FIRST_ALARM,
   MAX_RESOURCES_PER_KIND,
-  RESOURCE_TYPES,
   RESPONSE_MINUTE_CHOICES,
+  apparatusCounts,
   type FirefightingSettings,
-  type ResourceKind,
 } from "./firefighting";
+import {
+  AIR_KINDS,
+  GROUND_APPARATUS,
+  GROUND_KINDS,
+  apparatusLabel,
+  grassRateMetersPerHour,
+  isAirKind,
+  type ApparatusKind,
+} from "./apparatus";
+import { AIRCRAFT } from "./aircraft";
 import { TURNOUT_MINUTES } from "./crewDispatch";
-
-const FIELD_FOR: Record<ResourceKind, "handCrews" | "engines" | "dozers"> = {
-  hand_crew: "handCrews",
-  engine: "engines",
-  dozer: "dozers",
-};
 
 export interface FirefightingFieldsProps {
   scenario: StudioScenario;
@@ -32,6 +39,26 @@ export interface FirefightingFieldsProps {
   result?: ReactNode;
 }
 
+function hintFor(kind: ApparatusKind): string {
+  if (isAirKind(kind)) {
+    const spec = AIRCRAFT[kind];
+    return spec.gallons > 0 ? `${spec.gallons} gal · ${spec.cruiseKnots} kt` : `${spec.cruiseKnots} kt`;
+  }
+  const spec = GROUND_APPARATUS[kind];
+  return spec.line
+    ? `${Math.round(grassRateMetersPerHour(kind))} m/h in grass · holds ≤ ${spec.holdsFlameLengthFeet} ft`
+    : "builds no line";
+}
+
+const sameCounts = (a: Partial<Record<string, number>>, b: Partial<Record<string, number>>) =>
+  [...new Set([...Object.keys(a), ...Object.keys(b)])].every((k) => (a[k] ?? 0) === (b[k] ?? 0));
+
+/** "2026-08-15T13:00-07:00" -> the datetime-local part and the offset. */
+function splitIso(iso: string): { local: string; offset: string } {
+  const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})(?::\d{2})?(Z|[+-]\d{2}:\d{2})$/.exec(iso);
+  return match ? { local: match[1], offset: match[2] } : splitIso(DEFAULT_START_LOCAL_ISO);
+}
+
 export default function FirefightingFields({
   scenario,
   onScenarioChange,
@@ -39,8 +66,30 @@ export default function FirefightingFields({
   result,
 }: FirefightingFieldsProps) {
   const settings = scenario.firefighting ?? DEFAULT_FIREFIGHTING;
+  const counts = apparatusCounts(settings);
   const set = (patch: Partial<FirefightingSettings>) =>
     onScenarioChange({ ...scenario, firefighting: { ...settings, ...patch } });
+  const setCount = (kind: ApparatusKind, value: number) =>
+    set({ resources: { ...counts, [kind]: Math.max(0, Math.min(MAX_RESOURCES_PER_KIND, Math.round(value))) } });
+  const clock = splitIso(settings.startLocalIso ?? DEFAULT_START_LOCAL_ISO);
+  const isFirstAlarm = sameCounts(counts, FIRST_ALARM);
+
+  const countField = (kind: ApparatusKind) => (
+    <Field key={kind} label={apparatusLabel(kind)} hint={hintFor(kind)}>
+      <input
+        type="number"
+        className="ui-input studio-input-number"
+        min={0}
+        max={MAX_RESOURCES_PER_KIND}
+        step={1}
+        value={counts[kind] ?? 0}
+        onChange={(event) => {
+          const value = Number(event.target.value);
+          if (Number.isFinite(value)) setCount(kind, value);
+        }}
+      />
+    </Field>
+  );
 
   return (
     <section className="studio-section" aria-labelledby={`${idPrefix}-ff`}>
@@ -53,44 +102,50 @@ export default function FirefightingFields({
           checked={settings.enabled}
           onChange={(event) => set({ enabled: event.target.checked })}
         />
-        <span>Send crews to build control line</span>
+        <span>Send resources</span>
       </label>
       {settings.enabled && (
         <>
-          <div className="studio-ff-grid">
-            {(Object.keys(RESOURCE_TYPES) as ResourceKind[]).map((kind) => {
-              const key = FIELD_FOR[kind];
-              const type = RESOURCE_TYPES[kind];
-              return (
-                <Field
-                  key={kind}
-                  label={type.label}
-                  hint={`${type.metersPerHourInGrass} m/h in grass · holds ≤ ${type.holdsFlameLengthFeet} ft flames`}
-                >
-                  <input
-                    type="number"
-                    className="ui-input studio-input-number"
-                    min={0}
-                    max={MAX_RESOURCES_PER_KIND}
-                    step={1}
-                    value={settings[key]}
-                    onChange={(event) => {
-                      const value = Number(event.target.value);
-                      if (!Number.isFinite(value)) return;
-                      set({
-                        [key]: Math.max(0, Math.min(MAX_RESOURCES_PER_KIND, Math.round(value))),
-                      });
-                    }}
-                  />
-                </Field>
-              );
-            })}
+          <div className="studio-row">
+            <Button
+              size="sm"
+              variant={isFirstAlarm ? "primary" : "secondary"}
+              aria-pressed={isFirstAlarm}
+              onClick={() => set({ resources: { ...FIRST_ALARM } })}
+            >
+              First alarm
+            </Button>
+            <span className="studio-hint">3 engines, dozer, crew, chief; air attack, 2 airtankers, helicopter</span>
           </div>
+          <Fieldset legend="Ground">
+            <div className="studio-ff-grid">{GROUND_KINDS.map(countField)}</div>
+          </Fieldset>
+          <Fieldset legend="Air">
+            <div className="studio-ff-grid">{AIR_KINDS.map(countField)}</div>
+          </Fieldset>
+          <Field label="T+0 local time" hint={`UTC offset ${clock.offset}; sets aircraft daylight`}>
+            <input
+              type="datetime-local"
+              className="ui-input"
+              value={clock.local}
+              onChange={(event) => {
+                if (event.target.value) set({ startLocalIso: `${event.target.value}${clock.offset}` });
+              }}
+            />
+          </Field>
+          <label className="studio-row studio-ff-toggle">
+            <input
+              type="checkbox"
+              checked={settings.nightHelicopters === true}
+              onChange={(event) => set({ nightHelicopters: event.target.checked })}
+            />
+            <span>Night-capable helicopters</span>
+          </label>
           <Field
-            label="Crews start work"
+            label="Resources start work"
             hint={
               settings.fromStations !== false
-                ? `Reported when the first fire starts; ${(TURNOUT_MINUTES * 60).toFixed(0)} s turnout, then driving the board's roads. Falls back to ${settings.responseMinutes} min if no station can reach it.`
+                ? `${(TURNOUT_MINUTES * 60).toFixed(0)} s turnout, then each vehicle class on the roads it can use. Falls back to ${settings.responseMinutes} min.`
                 : undefined
             }
           >
@@ -105,7 +160,7 @@ export default function FirefightingFields({
                   : set({ fromStations: false, responseMinutes: Number(event.target.value) })
               }
             >
-              <option value="stations">When they drive in from the nearest fire stations</option>
+              <option value="stations">Drive in from their bases</option>
               {RESPONSE_MINUTE_CHOICES.map((minutes) => (
                 <option key={minutes} value={minutes}>
                   {minutes} min after the first fire ({formatElapsed(minutes)})
@@ -113,14 +168,6 @@ export default function FirefightingFields({
               ))}
             </select>
           </Field>
-          <p className="studio-hint">
-            The run estimates whether the crews put each fire out by direct attack once on site
-            (line built against the fire&rsquo;s growing edge), and separately searches for the best
-            control line, anchored at the heel or head and built around the fire&rsquo;s outline at
-            several distances. Production rates are assumed; crews hold flames up to the
-            Hauling-chart limit (hand crews 4 ft, engines and dozers 8 ft), and crown fire breaks
-            any line.
-          </p>
         </>
       )}
       {result}

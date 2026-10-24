@@ -18,7 +18,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { DispatchArea } from "./area";
-import { DecisionError, requestDecision } from "./agentClient";
+import { DecisionError, reportOutcome, requestDecision } from "./agentClient";
 import type { WireOrder } from "./contracts";
 import {
   DEFAULT_CHECK_INTERVAL_MINUTES,
@@ -30,6 +30,7 @@ import {
 } from "./engine";
 import type { FireAreaFrame, FireTarget } from "./fireAttack";
 import type { FireExposure } from "./fireExposure";
+import type { DispatchApparatus } from "./stationApparatus";
 import { detectChanges, takeBaseline, type MonitorBaseline } from "./monitor";
 import { buildObservation, toEngineOrders, type FrameSummary } from "./observation";
 import {
@@ -76,6 +77,8 @@ export interface DecisionLogEntry {
   reasons: string[];
   /** Minute the orders took effect (the clock kept running while the agent thought). */
   appliedMinute: number | null;
+  /** Earlier runs on these roads the agent was shown from the run journal. */
+  recalledRuns: number;
 }
 
 /** One live-monitor check. Quiet checks did not call the agent. */
@@ -107,11 +110,16 @@ export interface SessionInputs {
   windFromDegrees: number;
   windSpeedMph: number;
   /**
-   * Planner-confirmed live reported closures resolved to area edges (`liveClosures(area,
-   * reports).closedEdges`, src/intel/closures.ts). Fixed for the run: changes apply on the next
-   * start. Routing never uses these edges; optional.
+   * Roads closed from T+0: the planner's own closures, or planner-confirmed reported closures
+   * resolved to area edges (src/intel/closures.ts). Routing never uses these edges; optional.
+   * `setRoadClosed` changes them during the run.
    */
   closedEdges?: ReadonlySet<number>;
+  /**
+   * Apparatus kinds and per-class road access (stationApparatus.ts); without it every unit is
+   * a Type 3 engine on public roads at free-flow speed.
+   */
+  apparatus?: DispatchApparatus | null;
 }
 
 export interface DispatchSession {
@@ -139,6 +147,12 @@ export interface DispatchSession {
   skip: () => void;
   /** Exact (fractional) session clock, minutes. */
   getClock: () => number;
+  /**
+   * Close or reopen a road in the running session (docs/adr/0030-live-road-closures.md). The
+   * monitor checks at once and wakes the agent; false when there is no session or nothing
+   * changed.
+   */
+  setRoadClosed: (edge: number, closed: boolean) => boolean;
 }
 
 /**
@@ -179,6 +193,9 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
   const previousOutcomesRef = useRef<OrderOutcome[]>([]);
   const previousSummaryRef = useRef("");
   const abortRef = useRef<AbortController | null>(null);
+  /** Run journal id (dispatch_runs.py); a decision must land before an outcome is sent. */
+  const sessionIdRef = useRef<string | null>(null);
+  const journalledRef = useRef(false);
   const entryIdRef = useRef(0);
   const statusRef = useRef<SessionStatus>("idle");
   const onTimeRef = useRef(onTime);
@@ -269,6 +286,7 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
             alerts,
             reasons,
             appliedMinute: null,
+            recalledRuns: 0,
           },
           ...entries,
         ].slice(0, MAX_LOG_ENTRIES),
@@ -285,6 +303,7 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
               : { ...entry, text: entry.text + event.text },
           ),
         controller.signal,
+        sessionIdRef.current ?? undefined,
       )
         .then((decision) => {
           if (controller.signal.aborted || engineRef.current !== engine) return;
@@ -299,7 +318,7 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
           lastCheckRef.current = appliedMinute;
           baselineRef.current = seen;
           // Anything that changed while it was thinking can wake it again straight away.
-          recheckRef.current = appliedMinute > minute;
+          recheckRef.current = recheckRef.current || appliedMinute > minute;
           updateEntry(id, (entry) => ({
             ...entry,
             appliedMinute,
@@ -308,7 +327,9 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
             outcomes,
             rejected: decision.rejected,
             model: decision.model,
+            recalledRuns: decision.recalled_runs ?? 0,
           }));
+          journalledRef.current = true;
           bump();
           if (statusRef.current === "thinking")
             setSessionStatus(engine.finished ? "finished" : "running");
@@ -416,20 +437,52 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
     return () => cancelAnimationFrame(handle);
   }, [status, speed, decide, check, checkDue, refreshFire, bump, setSessionStatus]);
 
+  /** Send the run's outcome to the journal once, when it finishes or is stopped. */
+  const journalOutcome = useCallback((finished: boolean) => {
+    const engine = engineRef.current;
+    const inputs = inputsRef.current;
+    const sessionId = sessionIdRef.current;
+    if (!engine || !inputs || !sessionId || !journalledRef.current) return;
+    sessionIdRef.current = null;
+    const totals = engine.totals();
+    reportOutcome(sessionId, {
+      area_id: inputs.area.id,
+      minute: engine.minute,
+      horizon_minutes: engine.horizonMinutes,
+      finished,
+      totals: {
+        homes: totals.homes,
+        not_ordered: totals.notOrdered,
+        waiting: totals.waiting,
+        en_route: totals.onRoad,
+        out: totals.safe,
+        exposed: totals.caught,
+      },
+      no_action_exposed: inputs.baselineHomesExposed,
+    });
+  }, []);
+  useEffect(() => {
+    if (status === "finished") journalOutcome(true);
+  }, [status, journalOutcome]);
+
   const stop = useCallback(() => {
+    journalOutcome(false);
     abortRef.current?.abort();
     abortRef.current = null;
     engineRef.current = null;
     inputsRef.current = null;
     setSessionStatus("idle");
     bump();
-  }, [bump, setSessionStatus]);
+  }, [bump, journalOutcome, setSessionStatus]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
   const start = useCallback(
     (inputs: SessionInputs) => {
+      journalOutcome(false);
       abortRef.current?.abort();
+      sessionIdRef.current = crypto.randomUUID();
+      journalledRef.current = false;
       const engine = new DispatchEngine(
         inputs.area,
         inputs.exposure,
@@ -438,6 +491,9 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
         inputs.closedEdges,
       );
       engine.restrictToFirePath = true;
+      if (inputs.apparatus) {
+        engine.setApparatusAccess(inputs.apparatus.access, inputs.apparatus.kinds, inputs.apparatus.notes);
+      }
       engine.setFires(inputs.fireTargets, inputs.fireFrames);
       engineRef.current = engine;
       inputsRef.current = inputs;
@@ -456,7 +512,7 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
       bump();
       decide([FIRST_LOOK]);
     },
-    [bump, decide],
+    [bump, decide, journalOutcome],
   );
 
   const pause = useCallback(() => {
@@ -465,6 +521,18 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
   const resume = useCallback(() => {
     if (statusRef.current === "paused") setSessionStatus("running");
   }, [setSessionStatus]);
+  const setRoadClosed = useCallback(
+    (edge: number, closed: boolean): boolean => {
+      const engine = engineRef.current;
+      if (!engine || !engine.setRoadClosed(edge, closed)) return false;
+      // While running, look now; while thinking, the check after the answer compares the
+      // closures against what the agent saw, so the change still wakes it.
+      recheckRef.current = true;
+      bump();
+      return true;
+    },
+    [bump],
+  );
   const retry = useCallback(() => {
     if (statusRef.current === "failed") decide(pendingReasonsRef.current);
   }, [decide]);
@@ -499,5 +567,6 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
     retry,
     skip,
     getClock: useCallback(() => clockRef.current, []),
+    setRoadClosed,
   };
 }

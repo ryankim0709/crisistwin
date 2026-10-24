@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { Button, EvidenceTag, IconButton, LoadingState, Notice, Tag } from "../ui";
 import { createTask, helpAction, triageReport } from "./api";
-import { drillClock, elapsed, nf, plural, responderName, shortKey, shortZoneName, wallClock } from "./format";
+import { KIND_LABEL, answersLine, drillClock, elapsed, nf, plural, responderName, shortKey, shortZoneName, wallClock } from "./format";
 import { distanceM } from "./geo";
 import KindGlyph from "./Glyph";
 import { impactLine } from "./ReviewQueue";
-import { isFixtureNote, type QueueItem } from "./queue";
+import { isEdited, isFixtureNote, priorVersions, type QueueItem } from "./queue";
 import type { TaskRouteState } from "./useTaskRoute";
 import type {
   CommandResponse,
@@ -18,7 +18,7 @@ import type {
 } from "./types";
 
 /** Runs one controller action at a time per key; resolves to an error message or null. */
-export type RunAction = (key: string, action: (token: string) => Promise<unknown>) => Promise<string | null>;
+export type RunAction = (key: string, action: (token: string, incidentId: string) => Promise<unknown>) => Promise<string | null>;
 
 export interface ImpactState {
   itemId: string;
@@ -34,6 +34,7 @@ const STATUS_WORD: Record<FieldReport["status"], string> = {
   confirmed: "Confirmed",
   dismissed: "Dismissed",
   resolved: "Resolved",
+  withdrawn: "Withdrawn by reporter",
 };
 const CHANGE_WORD: Record<ImpactChange, string> = {
   slower: "Slower",
@@ -178,6 +179,38 @@ function ImpactResult({ impact }: { impact: ImpactResponse }) {
   );
 }
 
+/** "Edited" tag and the reporter's earlier versions, newest first (docs/live-reports.md). */
+function Revisions({ report, serverNow }: { report: FieldReport; serverNow: number }) {
+  const prior = priorVersions(report);
+  const editedAt = report.edited_at ? new Date(report.edited_at).getTime() : NaN;
+  return (
+    <div className="lc-sel-edited">
+      <Tag>Edited</Tag>
+      {Number.isNaN(editedAt) ? null : (
+        <span className="lc-dim" title={wallClock(report.edited_at)}>
+          {elapsed(serverNow - editedAt)} ago
+        </span>
+      )}
+      {prior.length ? (
+        <details className="lc-more">
+          <summary>{prior.length === 1 ? "1 earlier version" : `${prior.length} earlier versions`}</summary>
+          <ol className="lc-sel-revs" aria-label="Earlier versions, newest first">
+            {prior.map((v, i) => (
+              <li key={`${v.at}-${i}`}>
+                <span>{KIND_LABEL[v.kind] ?? v.kind}</span>
+                <time className="lc-dim lc-num" dateTime={v.at} title={`Replaced at ${wallClock(v.at)}`}>
+                  replaced {elapsed(serverNow - new Date(v.at).getTime())} ago
+                </time>
+                {v.note ? <q className="lc-q-quote">{v.note}</q> : null}
+              </li>
+            ))}
+          </ol>
+        </details>
+      ) : null}
+    </div>
+  );
+}
+
 /** A need-help check-in: acknowledge it (the phone shows "Request seen"), send the nearest
  * responder (an assist task; the phone shows "Responder assigned"), or resolve it. */
 function HelpDetail({
@@ -203,7 +236,7 @@ function HelpDetail({
   const key = `item:${item.id}`;
   const shared = help.coord !== null;
   const nearest = shared ? nearestResponder(help.coord!, data.responders) : null;
-  const act = async (fn: (t: string) => Promise<unknown>) => setError(await run(key, fn));
+  const act = async (fn: (t: string, incidentId: string) => Promise<unknown>) => setError(await run(key, fn));
   const disabled = busy !== null;
   const task = item.task;
   return (
@@ -295,7 +328,7 @@ function ReportDetail({
   const key = `item:${item.id}`;
   const inDrill = data.drill.started_at !== null;
   const lead = item.reports.find((r) => r.kind === item.kind && r.status !== "confirmed") ?? item.reports[0];
-  const act = async (fn: (t: string) => Promise<unknown>) => setError(await run(key, fn));
+  const act = async (fn: (t: string, incidentId: string) => Promise<unknown>) => setError(await run(key, fn));
   const confirm = () =>
     act(async (t) => {
       if (!item.grouped) return triageReport(t, lead.id, "confirm");
@@ -312,8 +345,8 @@ function ReportDetail({
   const helpReport = item.kind === "help_needed";
   const nearest = nearestResponder(item.coord, data.responders);
   const fieldCheck = () =>
-    act((t) =>
-      createTask(t, {
+    act((t, incidentId) =>
+      createTask(t, incidentId, {
         assignee: nearest?.party_key ?? null,
         target: { ...(item.segmentId ? { segment_id: item.segmentId } : {}), coord: item.coord },
         report_ids: item.reports.map((r) => r.id).slice(0, 50),
@@ -357,6 +390,9 @@ function ReportDetail({
             </span>
             <span className="lc-dim lc-num">{inDrill && r.replay_at ? drillClock(r.replay_at) : wallClock(r.observed_at)}</span>
             <span className={`lc-sel-status lc-sel-status--${r.status}`}>{STATUS_WORD[r.status]}</span>
+            {r.method === "passive" ? (
+              <Tag>{r.speed_class ? `Passive, ${r.speed_class}` : "Passive"}</Tag>
+            ) : null}
             {isFixtureNote(r.note) ? (
               <span className="lc-sel-fixture">
                 <Tag>Fixture</Tag>
@@ -364,6 +400,7 @@ function ReportDetail({
             ) : r.note ? (
               <q className="lc-q-quote">{r.note}</q>
             ) : null}
+            {isEdited(r) ? <Revisions report={r} serverNow={serverNow} /> : null}
           </li>
         ))}
         {item.reports.length > 4 ? <li className="lc-dim">{plural(item.reports.length - 4, "older report")}</li> : null}
@@ -374,7 +411,11 @@ function ReportDetail({
             {item.task.kind === "assist" ? "Responder sent" : "Field check"}{" "}
             {item.task.status === "accepted" ? "accepted" : "requested"}
           </Tag>
+          {item.task.created_by === "priority" ? <Tag>Board</Tag> : null}
           <span className="lc-dim">{item.task.assignee ? shortKey(item.task.assignee) : "Any responder"}</span>
+          {item.task.answers !== undefined ? (
+            <span className="lc-dim lc-num">{answersLine(item.task.answers, serverNow)}</span>
+          ) : null}
         </p>
       ) : null}
       <RouteLine state={route} />

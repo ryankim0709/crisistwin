@@ -86,6 +86,10 @@ export interface EvacuationSummary {
   /** Zones (and their homes) with no reachable exit when the order went out. */
   cutOffZones: number;
   cutOffHomes: number;
+  /** Indices of the cut-off zones. */
+  cutOffZoneIndices: number[];
+  /** Per zone, the minute it first got an order over the full run, or null if never ordered. */
+  zoneOrderMinutes: (number | null)[];
   /** Minute the last ordered zone cleared, or null if some zone had not by the horizon. */
   allClearMinute: number | null;
   /**
@@ -411,9 +415,16 @@ export function runEvacuation(inputs: EvacuationInputs): {
 } {
   const run = new EvacuationPolicyRun(inputs);
   const totalsByMinute: Totals[] = [run.engine.totals()];
+  const zoneOrderMinutes: (number | null)[] = run.engine.zones.map(() => null);
+  const noteOrders = () =>
+    run.engine.zones.forEach((zone, i) => {
+      if (zoneOrderMinutes[i] === null) zoneOrderMinutes[i] = zone.orderedMinute;
+    });
+  noteOrders();
   let evacuatingMinutes = 0;
   while (!run.finished) {
     run.step();
+    noteOrders();
     const totals = run.engine.totals();
     totalsByMinute.push(totals);
     evacuatingMinutes += totals.waiting + totals.onRoad + stagedAtHome(run);
@@ -446,6 +457,8 @@ export function runEvacuation(inputs: EvacuationInputs): {
       final: totalsByMinute[totalsByMinute.length - 1],
       cutOffZones: run.cutOff.size,
       cutOffHomes,
+      cutOffZoneIndices: [...run.cutOff],
+      zoneOrderMinutes,
       allClearMinute,
       householdHoursEvacuating: evacuatingMinutes / 60,
       stagedHomes: stagedAtHome(run),

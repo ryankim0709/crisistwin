@@ -17,6 +17,7 @@ from typing import Any
 
 from django.conf import settings
 from livecore import injects as rules
+from livecore.drill import INCIDENT_ID
 from livecore.geo import point_in_multipolygon
 
 from pymongo import UpdateOne
@@ -42,6 +43,10 @@ REPORT_KIND = {
 """Record categories that enter the review queue as reports; the rest stay in the panel only."""
 EVIDENCE_CLASS = "historical_record"
 PARTY_KEY = "record_nist_2018"
+SIM_EVIDENCE_CLASS = "simulated"
+"""Generated 911/radio/rescue items (``sim/gen_comms.py``, via ``live_run_scenario``): same queue rules as the record."""
+SIM_PARTY_PREFIX = "sim_comms_"
+"""One party per generated call (as the batch runner counts them); never a device token's prefix."""
 ITEM_KEYS = ("id", "at", "time_precision", "channel", "category", "road_name", "summary", "evidence_class",
              "source_locator")
 
@@ -99,8 +104,14 @@ def _load(index: DrillIndex) -> GroundRecord:
     return GroundRecord(True, tuple(items), points)
 
 
+NO_RECORD = GroundRecord(False, (), {})
+
+
 def get_record(index: DrillIndex) -> GroundRecord:
+    """The 2018 Camp record; other incidents (Studio packages) have none."""
     global _record
+    if index.drill.incident_id != INCIDENT_ID:
+        return NO_RECORD
     # Retry while the file is missing, so a record built after start-up appears without a restart.
     if _record is None or not _record.available:
         with _lock:
@@ -223,3 +234,85 @@ def materialize_due(index: DrillIndex, incident_id: str, clock: Any, wall: datet
     if ops:
         col("live_reports").bulk_write(ops, ordered=False)
     return len(ops)
+
+
+def queue_only(doc: dict[str, Any]) -> bool:
+    """A report that waits in the controller's queue and counts for nothing (corroboration, public map, road
+    state, fire) until a controller confirms it, and whose ~100 m caller point is controller-only: a 2018
+    record entry, or a generated comms item (``comms`` set, ``evidence_class: simulated``)."""
+    return doc.get("evidence_class") == EVIDENCE_CLASS or bool(doc.get("comms"))
+
+
+NOT_QUEUE_ONLY = {"evidence_class": {"$ne": EVIDENCE_CLASS}, "comms": {"$exists": False}}
+"""Mongo filter: reports a responder or phone may read (``queue_only`` false)."""
+
+
+def materialize_simulated(index: DrillIndex, incident_id: str, items: list[dict[str, Any]], clock: Any,
+                          wall: datetime, injects: list[dict[str, Any]] | None = None, *, seed: int,
+                          params_hash: str | None = None, run_label: str | None = None,
+                          done: set[str] | None = None) -> dict[str, int]:
+    """Upsert generated comms items (``sim/gen_comms.py`` dicts: id, at, channel, category, coord, summary)
+    that the drill clock has passed into ``live_reports`` as unverified ``simulated`` reports in the review
+    queue, with the record's rules: controller-only point, nothing counts until confirmed (``queue_only``),
+    idempotent by ``client_id`` (``simcomms:<seed>:<item id>``, stable across restarts), and a
+    ``psap_reroute`` inject drops the 911 items of its zones. ``items`` ascending by ``at``. ``done``: item
+    ids already handled by the caller (skipped without a DB round trip). Returns counts: new (inserted),
+    existing (already stored), dropped_psap, not_queue (a category the queue does not take)."""
+    psap = injects_mod.psap_windows(injects)
+    counts = {"new": 0, "existing": 0, "dropped_psap": 0, "not_queue": 0}
+    done = done if done is not None else set()
+    ops = []
+    for item in items:
+        at = parse_iso(item["at"], "at", "invalid_item") if isinstance(item["at"], str) else item["at"]
+        if at > clock.replay_now:
+            break
+        if item["id"] in done:
+            continue
+        done.add(item["id"])
+        kind = REPORT_KIND.get(item["category"])
+        coord = item.get("coord")
+        if kind is None or not coord:
+            counts["not_queue"] += 1
+            continue
+        zone_id = _zone_of(index, list(coord))
+        if item["channel"] == "911" and zone_id in psap and rules.in_window(psap[zone_id], at):
+            counts["dropped_psap"] += 1
+            continue
+        point = (float(coord[0]), float(coord[1]))
+        snapped = snap_to_segment(index, point) if kind in ("road_blocked", "heavy_traffic") else None
+        road_ref = (
+            {"segment_id": snapped[0], "name": index.segment_names.get(snapped[0]), "snap_m": round(snapped[1], 1)}
+            if snapped else None
+        )
+        doc = {
+            "id": new_id("rpt_"),
+            "client_id": f"simcomms:{seed}:{item['id']}",
+            "incident_id": incident_id,
+            "reporter": {"role": "responder" if item["channel"] == "radio" else "civilian",
+                         "party_key": f"{SIM_PARTY_PREFIX}{item['id']}"},
+            "kind": kind,
+            "severity": "full" if kind == "road_blocked" else None,
+            "location": {"coord": [point[0], point[1]], "accuracy_m": 100.0},
+            "heading_deg": None,
+            "road_ref": road_ref,
+            "destination_id": None,
+            "task_id": None,
+            "observed_at": _wall_at(at, clock, wall),
+            "received_at": _wall_at(at, clock, wall),
+            "note": f"Simulated {item['channel']}: {item.get('summary') or item['category']}",
+            "status": "unverified",
+            "evidence_class": SIM_EVIDENCE_CLASS,
+            "replay_at": at,
+            "updated_at": wall,
+            "comms": {"id": item["id"], "channel": item["channel"], "category": item["category"], "seed": seed,
+                      "params_hash": params_hash, "generator": item.get("generator"), "run": run_label,
+                      "label": "Simulated call (sim/gen_comms.py, calibrated to the NIST TN 2252 sample of the "
+                               "2018 Camp Fire). Not an observed call."},
+        }
+        ops.append(UpdateOne({"incident_id": incident_id, "client_id": doc["client_id"]}, {"$setOnInsert": doc},
+                             upsert=True))
+    if ops:
+        result = col("live_reports").bulk_write(ops, ordered=False)
+        counts["new"] = result.upserted_count
+        counts["existing"] = len(ops) - result.upserted_count
+    return counts

@@ -82,14 +82,19 @@ OUT_CHECKIN_LAG_SIGMA = 0.8
 OUT_CHECKIN_LAG_MAX_MIN = 60.0
 """ASSUMPTION: delay draws above this are capped."""
 
-# ---- Help requests (ASSUMPTION; compared with, not fitted to, the 2018 record below)
-NEED_HELP_HAZARD_AT_HOME_PER_H = 0.1
-"""ASSUMPTION: hazard (per hour) that a household still at home (not departed, or carless) asks for help
-while modelled fire has reached an origin node of its zone. Not fitted: the Camp record gives zone rates
-per 1,000 households, not per household still at home, and the twin's departure model is uncalibrated."""
-NEED_HELP_HAZARD_TRAPPED_PER_H = 0.5
-"""ASSUMPTION: hazard (per hour) for a household whose vehicle the twin reports blocked (stopped on a
-closed edge, or at a node with no open route; the twin's blocked_veh)."""
+# ---- Help requests (CALIBRATED by simulation against the 2018 record below; see HELP_RATE_CALIBRATION)
+NEED_HELP_TRAPPED_TO_HOME_RATIO = 5.0
+"""ASSUMPTION: a household whose vehicle the twin reports blocked asks for help 5x as readily as one still at
+home with fire in its zone (the ratio of the original uncalibrated hazards, 0.5/h : 0.1/h, kept)."""
+NEED_HELP_HAZARD_AT_HOME_PER_H = 0.0095
+"""CALIBRATED (by simulation, HELP_RATE_CALIBRATION): hazard (per hour) that a household still at home (not
+departed, carless or not complying) asks for help while modelled fire has reached an origin node of its zone.
+Chosen so the latent help rate over all households in fire zones matches the Camp rescue (K-1) rate,
+CAMP_RESCUE_RATE_FIRE_IN_ZONE_PER_KHH_H. Was 0.1 (an assumption), which gave about 10x that rate."""
+NEED_HELP_HAZARD_TRAPPED_PER_H = NEED_HELP_HAZARD_AT_HOME_PER_H * NEED_HELP_TRAPPED_TO_HOME_RATIO
+"""Hazard (per hour) for a household whose vehicle the twin reports blocked (stopped on a closed edge, or at
+a node with no open route; the twin's blocked_veh): the at-home hazard x NEED_HELP_TRAPPED_TO_HOME_RATIO.
+Was 0.5 (an assumption)."""
 
 CAMP_RESCUE_RATE_FIRE_IN_ZONE_PER_KHH_H = 3.41
 """CALIBRATED reference (not used to generate): K-1 rescue rows per 1,000 households per hour in zones the
@@ -100,6 +105,40 @@ CAMP_911_RATE_FIRE_IN_ZONE_PER_KHH_H = 2.82
 same document puts the true 911 volume at >= 3.67x the sample (a lower bound)."""
 CAMP_911_SAMPLE_SCALE_MIN = 3.67
 """CALIBRATED reference: lower bound on 911 volume / NIST sample (docs/ground-data-calibration.md, sec. 5)."""
+CAMP_911_HELP_SHARE_AFTER_ARRIVAL = 0.60
+"""CALIBRATED reference: help_needed (0.41) + trapped (0.19) share of 911 rows after the zone's fire arrival
+(docs/ground-data-calibration.md, section 3)."""
+HELP_RATE_CALIBRATION = {
+    "target": "CAMP_RESCUE_RATE_FIRE_IN_ZONE_PER_KHH_H = 3.41 /kHH/h [2.71, 4.25] (K-1 rescue rows, fire in zone, "
+              "order 0-2 h): one latent help request per household is an incident, which the rescue log counts",
+    "ceiling": "911 help calls, scaled: 2.82 x 3.67 x 0.60 = 6.21 /kHH/h (a lower bound on calls, and calls repeat "
+               "per incident); all 911 calls scaled: 10.35 /kHH/h",
+    "measure": "ResidentGenerator.rates()['fire_zone_latent_help_per_khh_h']: latent help (app or not, at home or "
+               "trapped) per 1,000 households x hours in zones whose origin nodes the modelled fire reached",
+    "run": "Camp twin as the live drill builds it (historical orders, behaviour off), 2018-11-08 14:30-18:00Z, "
+           "observed every 60 s, seeds 1-3",
+    "before": "help_at_home_per_h 0.1, help_trapped_per_h 0.5: 35.0 /kHH/h (seed 1; 10.3x the target)",
+    "sweep": "help_at_home_per_h 0.0085 / 0.0095 / 0.0105 (trapped 5x), seeds 1-3: 3.52, 3.22, 3.26 / 3.39, 3.52, "
+             "3.13 / 4.05, 3.92, 3.74 /kHH/h",
+    "after": "help_at_home_per_h 0.0095, help_trapped_per_h 0.0475: mean 3.35 /kHH/h over seeds 1-3 (target 3.41, "
+             "CI 2.71-4.25), below the 911 help-call ceiling 6.21; with households without a vehicle on (default)",
+}
+"""How NEED_HELP_HAZARD_AT_HOME_PER_H was set (sweep in a scratch script; numbers in the doc)."""
+
+# ---- Households with no vehicle, and households that do not comply (ACS; people_behavior.json)
+NO_VEHICLE_SHARE_BUTTE_ACS_2022 = 0.0608
+"""DERIVED (tools/people_behavior.json `no_vehicle_households_butte`): 5,063 / 83,319 Butte County households
+with no vehicle available, ACS 2018-2022 B25044. Used only when the twin's scenario carries no per-zone ACS
+count (its `demand_report`, ACS 2014-2018, is preferred: same vintage and clipping as the twin's demand)."""
+CARLESS_TRANSPORT_REQUEST_SHARE = 0.5
+"""ASSUMPTION: share of households with no vehicle that ask the drill for transport (need_help check-in with
+their location) once their zone is ordered or fire reaches it; the rest are taken to leave with neighbours or
+family, which the twin does not model. No source gives this share: NIST TN 2252 sec. 10.5.8 says at least 30%
+of 198 Camp entrapment/assistance/rescue events involved a pre-existing condition, including no vehicle, and
+Grajdura (2022, p. 74) that at least 7% of respondents needed a stranger's or police vehicle or walked."""
+CARLESS_TRANSPORT_HAZARD_PER_H = 2.0
+"""ASSUMPTION reused from sim/behavior.py (order_hazard_per_h, median decision about 21 min): hazard (per hour)
+of a transport request once the zone is ordered or fire has reached it."""
 
 # ---- Field reports (ASSUMPTION)
 REPORT_PROB_PER_ENCOUNTER = {"heavy_traffic": 0.05, "road_blocked": 0.2, "fire_seen": 0.1}
@@ -129,6 +168,15 @@ REPORT_ACCURACY_M = 10.0
 under open sky; worse under smoke, trees and in canyons)."""
 COORD_DECIMALS = 6
 
+# ---- Task board (ADR 0041; ASSUMPTION)
+BOARD_ANSWER_SHARE = 0.3
+"""ASSUMPTION: chance an app household answers a board question about the road it is driving on (once per
+question). Only questions handed in through `board` (the public GET board items) are answered."""
+PASSIVE_SETTING_SHARE = 0.2
+"""ASSUMPTION: share of app households that turned on "Share road observations" (off by default on phones)."""
+PASSIVE_KINDS = frozenset({"road_passable", "heavy_traffic"})  # views.PASSIVE_KINDS
+SPEED_CLASSES = frozenset({"free", "slow"})  # views.SPEED_CLASSES
+
 # ---- Destination choices (ASSUMPTION)
 DESTINATION_CHOICE_SHARE = 0.3
 """ASSUMPTION: share of departing app households that pick a destination in the app."""
@@ -149,14 +197,24 @@ ASSUMPTIONS = [
     f"{STAYING_SHARE:g} of vehicle households say they are staying; they are the zone's last departures.",
     f"{OUT_CHECKIN_SHARE:g} of app households check in out after arrival, after a lognormal delay "
     f"(median {OUT_CHECKIN_LAG_MEDIAN_MIN:g} min).",
-    f"Help hazards: {NEED_HELP_HAZARD_AT_HOME_PER_H:g}/h at home with fire in the zone, "
-    f"{NEED_HELP_HAZARD_TRAPPED_PER_H:g}/h when the twin reports the vehicle blocked; one request per household.",
+    f"Help hazards: {NEED_HELP_HAZARD_AT_HOME_PER_H:g}/h at home with fire in the zone (calibrated by simulation "
+    f"to the Camp rescue rate, {CAMP_RESCUE_RATE_FIRE_IN_ZONE_PER_KHH_H:g} /kHH/h), "
+    f"{NEED_HELP_HAZARD_TRAPPED_PER_H:g}/h when the twin reports the vehicle blocked (ratio "
+    f"{NEED_HELP_TRAPPED_TO_HOME_RATIO:g}, assumed); one request per household.",
+    "Households with no vehicle: the per-zone ACS count of the twin's demand report (else Butte County "
+    f"{NO_VEHICLE_SHARE_BUTTE_ACS_2022:g}); they own no twin vehicle and never drive. "
+    f"{CARLESS_TRANSPORT_REQUEST_SHARE:g} of them ask for transport (need_help with location) at "
+    f"{CARLESS_TRANSPORT_HAZARD_PER_H:g}/h once ordered or fire reaches the zone (assumed).",
+    "Households that do not comply (noncompliant_share, 0 unless a scenario sets it from the order-compliance "
+    "range 0.870-0.968 of Wong et al. 2020) own no twin vehicle, never leave and say they are staying.",
     "Reports: once per encounter with probabilities " + ", ".join(
         f"{k} {v:g}" for k, v in sorted(REPORT_PROB_PER_ENCOUNTER.items())) + f"; fire seen within "
     f"{FIRE_SIGHTING_DISTANCE_M:g} m; heavy traffic at >= {HEAVY_TRAFFIC_MIN_QUEUED_VEH} queued vehicles and "
     f"< {HEAVY_TRAFFIC_SPEED_FRACTION:g} of free-flow speed.",
     f"{DESTINATION_CHOICE_SHARE:g} of departing app households choose a destination; "
     f"{RECOMMENDED_CHOICE_SHARE:g} of them the recommended one. Choices do not steer the twin's vehicles.",
+    f"Task board (when given): {BOARD_ANSWER_SHARE:g} chance to answer a question about the road being driven; "
+    f"{PASSIVE_SETTING_SHARE:g} of app households share passive road observations (one per question).",
 ]
 LIMITATIONS = [
     "Which household is in which packet is assigned, not tracked: the fixed-delay twin does not carry packet "
@@ -183,13 +241,27 @@ class ResidentParams:
     fire_sighting_distance_m: float = FIRE_SIGHTING_DISTANCE_M
     destination_choice_share: float = DESTINATION_CHOICE_SHARE
     recommended_choice_share: float = RECOMMENDED_CHOICE_SHARE
+    board_answer_share: float = BOARD_ANSWER_SHARE
+    passive_setting_share: float = PASSIVE_SETTING_SHARE
+    no_vehicle_share: float | None = None
+    """None: per-zone ACS households with no vehicle from the twin's demand report (else
+    NO_VEHICLE_SHARE_BUTTE_ACS_2022); a number overrides it for every zone; 0 reproduces the old population."""
+    noncompliant_share: float = 0.0
+    """Share of vehicle households that never leave (1 - order compliance). The twin's vehicles must exclude them
+    (sim.demand participation), so the twin and the phones tell one story."""
+    carless_transport_share: float = CARLESS_TRANSPORT_REQUEST_SHARE
+    carless_transport_per_h: float = CARLESS_TRANSPORT_HAZARD_PER_H
 
     def __post_init__(self) -> None:
         for name in ("app_adoption", "staying_share", "out_checkin_share", "destination_choice_share",
-                     "recommended_choice_share", "heavy_traffic_speed_fraction"):
+                     "recommended_choice_share", "heavy_traffic_speed_fraction", "board_answer_share",
+                     "passive_setting_share", "noncompliant_share", "carless_transport_share"):
             if not 0 <= getattr(self, name) <= 1:
                 raise ValueError(f"{name} must be in [0, 1], got {getattr(self, name)!r}")
-        for name in ("help_at_home_per_h", "help_trapped_per_h", "out_lag_sigma", "fire_sighting_distance_m"):
+        if self.no_vehicle_share is not None and not 0 <= self.no_vehicle_share <= 1:
+            raise ValueError(f"no_vehicle_share must be in [0, 1] or null, got {self.no_vehicle_share!r}")
+        for name in ("help_at_home_per_h", "help_trapped_per_h", "out_lag_sigma", "fire_sighting_distance_m",
+                     "carless_transport_per_h"):
             v = getattr(self, name)
             if not (math.isfinite(v) and v >= 0):
                 raise ValueError(f"{name} must be nonnegative and finite, got {v!r}")
@@ -216,8 +288,10 @@ class Household:
     vehicles: int  # twin vehicles it owns; 0 = carless
     origin_node: int  # engine node index (where it starts); -1 when the zone has no origin node
     has_app: bool
-    stays: bool  # tells the app it is staying (see STAYING_SHARE)
+    stays: bool  # tells the app it is staying (see STAYING_SHARE; always for a noncompliant household)
     rank: int  # position in the zone's departure order; carless households rank after every vehicle household
+    no_vehicle: bool = False  # ACS: no vehicle available (carless by circumstance, may ask for transport)
+    noncompliant: bool = False  # owns vehicles but does not leave (no twin vehicle)
 
 
 def allocate_vehicles(households: int, vehicles: int) -> list[int]:
@@ -255,20 +329,55 @@ class ZonePopulation:
     centroid: tuple[float, float]
 
 
-def build_population(engine, params: ResidentParams) -> list[ZonePopulation]:
-    """Households per twin zone (scenario order). Deterministic in (params.seed, zone ids, zone counts)."""
+def no_vehicle_counts(scenario: dict | None) -> dict[str, tuple[int, int]]:
+    """Zone id -> (households with no vehicle, households) from a grounded scenario's `demand_report`
+    (ACS B25044 clipped to the road extract, sim/demand.py); empty when the scenario has none."""
+    report = (scenario or {}).get("demand_report") or {}
+    return {z["zone_id"]: (int(z.get("households_no_vehicle_in_extract") or 0), int(z.get("households_in_extract") or 0))
+            for z in report.get("zones") or [] if z.get("zone_id")}
+
+
+def build_population(engine, params: ResidentParams,
+                     no_vehicle: dict[str, tuple[int, int]] | None = None) -> list[ZonePopulation]:
+    """Households per twin zone (scenario order). Deterministic in (params.seed, zone ids, zone counts).
+
+    Households with no vehicle (`no_vehicle`, per zone, else `params.no_vehicle_share`) and noncompliant
+    households own no twin vehicle; the zone's twin vehicles are shared among the rest (conserved exactly)."""
     s = engine.s
     nodes = s.network.nodes
     pops = []
     for zi, z in enumerate(s.zone_list):
         rng = random.Random(f"{params.seed}:{GENERATOR_ID}:population:{z.id}")
-        alloc = allocate_vehicles(z.households, z.vehicles)
+        if params.no_vehicle_share is not None:
+            share = params.no_vehicle_share
+        elif no_vehicle and z.id in no_vehicle and no_vehicle[z.id][1] > 0:
+            share = no_vehicle[z.id][0] / no_vehicle[z.id][1]
+        else:
+            share = NO_VEHICLE_SHARE_BUTTE_ACS_2022 if no_vehicle is not None else 0.0
+        n_novehicle = min(z.households, round(share * z.households))
+        n_noncompliant = round(params.noncompliant_share * (z.households - n_novehicle))
+        if z.vehicles > 0 and z.households - n_novehicle - n_noncompliant < 1:  # someone must own the vehicles
+            n_noncompliant = max(0, z.households - n_novehicle - 1)
+            n_novehicle = min(n_novehicle, z.households - 1)
+        n_vehicle_hh = z.households - n_novehicle - n_noncompliant
+        alloc = allocate_vehicles(n_vehicle_hh, z.vehicles)
         rng.shuffle(alloc)  # which household index owns two vehicles is seeded
+        # Which household indexes have no vehicle, or do not comply, is seeded too (a stream of its own).
+        kinds = ["none"] * n_novehicle + ["noncompliant"] * n_noncompliant
+        krng = random.Random(f"{params.seed}:{GENERATOR_ID}:carless:{z.id}")
+        slots = sorted(krng.sample(range(z.households), len(kinds))) if kinds else []
+        krng.shuffle(kinds)
+        special = dict(zip(slots, kinds))
+        it = iter(alloc)
         origin_ix = [s.node_ix[n] for n in z.origin_nodes]
-        hh = [Household(index=h, zone_id=z.id, party_key=party_key(params.seed, z.id, h), vehicles=alloc[h],
-                        origin_node=origin_ix[h % len(origin_ix)] if origin_ix else -1,
-                        has_app=rng.random() < params.app_adoption, stays=False, rank=-1)
-              for h in range(len(alloc))]
+        hh = []
+        for h in range(z.households):
+            kind = special.get(h)
+            hh.append(Household(index=h, zone_id=z.id, party_key=party_key(params.seed, z.id, h),
+                                vehicles=0 if kind else next(it),
+                                origin_node=origin_ix[h % len(origin_ix)] if origin_ix else -1,
+                                has_app=rng.random() < params.app_adoption, stays=kind == "noncompliant", rank=-1,
+                                no_vehicle=kind == "none", noncompliant=kind == "noncompliant"))
         movers = [h for h in hh if h.vehicles > 0]
         rng.shuffle(movers)
         n_stay = round(params.staying_share * len(movers))
@@ -342,6 +451,17 @@ def report_body(*, client_id: str, kind: str, coord, observed_at: str, severity:
     return body
 
 
+def passive_body(*, client_id: str, kind: str, segment_id: str, speed_class: str, observed_at: str,
+                 task_id: str | None, incident_id: str | None = None) -> dict:
+    """A passive road observation (ADR 0041): segment, time and coarse speed class; no location."""
+    body = {"client_id": client_id, "kind": kind, "method": "passive", "segment_id": segment_id,
+            "speed_class": speed_class, "task_id": task_id, "observed_at": observed_at,
+            "severity": "slow" if kind == "heavy_traffic" else None}
+    if incident_id is not None:
+        body["incident_id"] = incident_id
+    return body
+
+
 def checkin_body(status: str, zone_id: str | None, coord=None) -> dict:
     """POST incidents/{id}/checkins body; `coord` only with need_help (else the server answers 400)."""
     body = {"status": status, "zone_id": zone_id}
@@ -370,7 +490,21 @@ def validate_body(event: dict) -> None:
                                                               for v in c)
                 and math.isfinite(c[0]) and math.isfinite(c[1]) and -180 <= c[0] <= 180 and -90 <= c[1] <= 90)
 
-    if t == "report":
+    if t == "report" and b.get("method") == "passive":
+        uuid.UUID(str(b.get("client_id")))
+        if b.get("kind") not in PASSIVE_KINDS:
+            raise ValueError("a passive report is road_passable or heavy_traffic")
+        if any(b.get(k) is not None for k in ("location", "heading_deg", "note", "destination_id")):
+            raise ValueError("a passive report carries no location, heading, note or destination")
+        if not isinstance(b.get("segment_id"), str) or b.get("speed_class") not in SPEED_CLASSES:
+            raise ValueError("segment_id and speed_class")
+        if b["kind"] == "heavy_traffic" and b["speed_class"] != "slow":
+            raise ValueError("passive heavy_traffic needs speed_class slow")
+        obs = b.get("observed_at")
+        if not isinstance(obs, str) or not obs.endswith("Z"):
+            raise ValueError("observed_at must be ISO 8601 with Z")
+        parse_utc(obs)
+    elif t == "report":
         uuid.UUID(str(b.get("client_id")))
         if b.get("kind") not in REPORT_KINDS:
             raise ValueError(f"kind {b.get('kind')!r}")
@@ -418,6 +552,7 @@ class _HState:
     traffic_roads: set = field(default_factory=set)  # road keys already met in a queue
     blocked_roads: set = field(default_factory=set)  # road keys already met closed
     report_times: list = field(default_factory=list)
+    board_seen: set = field(default_factory=set)  # board task ids already answered or passed
 
 
 class ResidentGenerator:
@@ -426,16 +561,21 @@ class ResidentGenerator:
     Call `observe()` after each `twin.step_to(...)`; it returns the new events with `at <= twin.now`, in
     time order. `offered(zone_id, at_iso) -> [destination_id, ...]` (recommended first) supplies the
     destinations a zone's guidance offers; by default the nearest usable twin destinations.
+    `board(at_iso) -> [board item, ...]` (optional; the `items` of GET incidents/{id}/board) supplies open
+    board questions: a household driving a question's segment answers it, or sends a passive observation if
+    it shares road observations (ADR 0041). Without `board` the event stream is unchanged.
     """
 
     def __init__(self, twin, params: ResidentParams | None = None, *, incident_id: str | None = None,
-                 offered=None):
+                 offered=None, board=None):
         self.twin = twin
         self.engine = twin.engine
         self.p = params or ResidentParams()
         self.incident_id = incident_id
         self.offered = offered or self._default_offered
-        self.pops = build_population(self.engine, self.p)
+        self.board = board
+        self.board_rng = random.Random(f"{self.p.seed}:{GENERATOR_ID}:board")  # separate: board use leaves the rest unchanged
+        self.pops = build_population(self.engine, self.p, no_vehicle_counts(getattr(twin.inputs, "scenario", None)))
         self.state: dict[str, _HState] = {h.party_key: _HState() for z in self.pops for h in z.households}
         self.rng = random.Random(f"{self.p.seed}:{GENERATOR_ID}:events")
         self.last_t_s: float | None = None
@@ -457,6 +597,10 @@ class ResidentGenerator:
         self.latent_help = {"at_home_fire": 0, "trapped": 0}
         self.fire_zone_khh_h = 0.0  # 1,000 households x hours in zones with fire at an origin node
         self.fire_zone_latent_help = 0
+        self.latent_transport = 0  # transport requests of households with no vehicle (not in the help rate)
+        self.transport_rng = random.Random(f"{self.p.seed}:{GENERATOR_ID}:transport")  # own stream
+        self.asks_transport = {h.party_key: self.transport_rng.random() < self.p.carless_transport_share
+                               for z in self.pops for h in z.households if h.no_vehicle}
 
     # --- helpers
 
@@ -480,6 +624,45 @@ class ResidentGenerator:
         body = report_body(client_id=_client_id(self.p.seed, hh.party_key, n), kind=kind, coord=coord,
                            observed_at=at, severity=severity, incident_id=self.incident_id)
         return self._event("report", hh, at, body, cause)
+
+    def shares_road_observations(self, party_key: str) -> bool:
+        """The household's per-device setting, a seeded draw that does not touch the event stream."""
+        digest = hashlib.sha256(f"{self.p.seed}:{party_key}:passive".encode()).digest()
+        return int.from_bytes(digest[:8], "big") / 2 ** 64 < self.p.passive_setting_share
+
+    def _board_events(self, hh: Household, st: _HState, info: dict, questions: dict, at: str,
+                      t_s: float) -> list[dict]:
+        """Answer or passively complete a board question about the edge the household is on."""
+        if info["kind"] != "edge" or info["edge"] is None:
+            return []
+        seg = self.engine.s.edges[info["edge"]].segment_id
+        item = questions.get(seg)
+        if item is None or item["task_id"] in st.board_seen:
+            return []
+        st.board_seen.add(item["task_id"])
+        cause = {"state": "board_question", "at": at, "edge_index": info["edge"], "task_id": item["task_id"]}
+        if self.board_rng.random() < self.p.board_answer_share:
+            kind, severity = (("road_blocked", "full") if info["blocked"]
+                              else ("heavy_traffic", "slow") if info["congested"] else ("road_passable", None))
+            ev = self._report(hh, st, kind, item["place"]["coord"], at, cause, severity, t_s)
+            if ev:
+                ev["body"]["task_id"] = item["task_id"]
+            return [ev] if ev else []
+        if info["blocked"] or not self.shares_road_observations(hh.party_key):
+            return []  # a stopped phone never infers anything passively
+        speed = "slow" if info["congested"] else "free"
+        out = []
+        for kind in ("road_passable",) + (("heavy_traffic",) if speed == "slow" else ()):
+            recent = [x for x in st.report_times if x > t_s - 60]
+            if len(recent) >= MAX_REPORTS_PER_HOUSEHOLD_PER_MIN:
+                break
+            st.report_times = recent + [t_s]
+            n = self.n_msgs[hh.party_key] = self.n_msgs.get(hh.party_key, 0) + 1
+            body = passive_body(client_id=_client_id(self.p.seed, hh.party_key, n), kind=kind, segment_id=seg,
+                                speed_class=speed, observed_at=at, task_id=item["task_id"],
+                                incident_id=self.incident_id)
+            out.append(self._event("report", hh, at, body, {**cause, "state": "board_passive"}))
+        return out
 
     def _default_offered(self, zone_id: str, at: str) -> list[str]:
         e, s = self.engine, self.engine.s
@@ -584,7 +767,14 @@ class ResidentGenerator:
         slots = self._slots(t_s)
         p_home = 1.0 - math.exp(-p.help_at_home_per_h * dt_h)
         p_trap = 1.0 - math.exp(-p.help_trapped_per_h * dt_h)
+        p_transport = 1.0 - math.exp(-p.carless_transport_per_h * dt_h)
         burned = e.origin_burned
+        questions = {}
+        if self.board is not None:
+            for item in self.board(at) or []:
+                place = item.get("place") or {}
+                if item.get("question") == "road_status" and place.get("segment_id"):
+                    questions.setdefault(place["segment_id"], item)
 
         for pop in self.pops:
             if not pop.households:
@@ -638,6 +828,14 @@ class ResidentGenerator:
                     out.append(self._event("checkin", hh, at, checkin_body("staying", pop.zone_id),
                                            {"state": "not_departed_staying", "at": at,
                                             "trigger": "fire_in_zone" if fire_in_zone else "order"}))
+                if (hh.no_vehicle and (ordered or fire_in_zone) and dt_h > 0 and not st.help_latent
+                        and self.asks_transport[hh.party_key] and self.transport_rng.random() < p_transport):
+                    st.help_latent = True  # one request per household: a transport request is its help request
+                    self.latent_transport += 1
+                    if hh.has_app:
+                        out.append(self._event("checkin", hh, at, checkin_body("need_help", pop.zone_id, home),
+                                               {"state": "no_vehicle_transport", "at": at,
+                                                "trigger": "fire_in_zone" if fire_in_zone else "order"}))
                 if fire_in_zone and dt_h > 0 and not st.help_latent:
                     self.exposure_h["at_home_fire"] += dt_h
                     if rng.random() < p_home:
@@ -689,6 +887,8 @@ class ResidentGenerator:
                                                     "node_index": info["node"]}))
                 if not hh.has_app:
                     continue
+                if questions:
+                    out.extend(self._board_events(hh, st, info, questions, at, t_s))
                 if info["congested"] and self._road_key(info["edge"]) not in st.traffic_roads:
                     st.traffic_roads.add(self._road_key(info["edge"]))
                     if rng.random() < p.report_prob["heavy_traffic"]:
@@ -726,6 +926,9 @@ class ResidentGenerator:
         hh = [h for z in self.pops for h in z.households]
         return {"households": len(hh), "app_households": sum(h.has_app for h in hh),
                 "carless_households": sum(h.vehicles == 0 for h in hh),
+                "no_vehicle_households": sum(h.no_vehicle for h in hh),
+                "noncompliant_households": sum(h.noncompliant for h in hh),
+                "no_vehicle_app_households": sum(h.no_vehicle and h.has_app for h in hh),
                 "staying_households": sum(h.stays for h in hh),
                 "vehicles": sum(h.vehicles for h in hh), "zones": len(self.pops)}
 
@@ -739,6 +942,7 @@ class ResidentGenerator:
             "latent_help_per_household_h": {k: per(self.latent_help[k], self.exposure_h[k]) for k in self.latent_help},
             "fire_zone_khh_h": round(self.fire_zone_khh_h, 3),
             "fire_zone_latent_help_per_khh_h": per(self.fire_zone_latent_help, self.fire_zone_khh_h),
+            "transport_requests_latent": self.latent_transport,
             "camp_record_reference_per_khh_h": {
                 "rescue_k1": CAMP_RESCUE_RATE_FIRE_IN_ZONE_PER_KHH_H,
                 "nist_911_sample": CAMP_911_RATE_FIRE_IN_ZONE_PER_KHH_H,
@@ -811,12 +1015,12 @@ def camp_twin(start_at: str, root: str = "."):
 
 
 def run_residents(twin, until: str, params: ResidentParams | None = None, *, every_s: int = OBSERVE_EVERY_S,
-                  incident_id: str | None = None, offered=None) -> dict:
+                  incident_id: str | None = None, offered=None, board=None) -> dict:
     """Step `twin` from its `now` to `until` every `every_s` simulated seconds, observing residents after
     each step. Returns events (time-ordered, invariants checked) with summary, rates and provenance."""
     if not isinstance(every_s, int) or every_s <= 0:
         raise ValueError("every_s must be a positive integer")
-    gen = ResidentGenerator(twin, params, incident_id=incident_id, offered=offered)
+    gen = ResidentGenerator(twin, params, incident_id=incident_id, offered=offered, board=board)
     start = twin.now
     until_dt = parse_utc(until)
     events = gen.observe()  # baseline: states already present at the start

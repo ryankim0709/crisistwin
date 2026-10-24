@@ -27,6 +27,8 @@ struct BroadcastView: View {
                 .font(.subheadline)
             }
 
+            SimulationAdviceSection { editingHome = true }
+
             switch live.state {
             case .loading:
                 Section { ProgressView("Looking for a simulation…") }

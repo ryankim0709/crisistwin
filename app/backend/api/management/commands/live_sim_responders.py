@@ -6,6 +6,12 @@ time: reads the drill clock, open tasks and road state over HTTP, steps the pure
 The units show on the console (tagged "sim") and on phones. Stop with Ctrl-C (or ``--duration``);
 their locations are removed on exit.
 
+Units are engines at the CAL FIRE-layer stations nearest the fire estimate at the drill's
+current time (tools/ca_fire_bases.json via ``api.suppression_bases.load_bases``; local-only,
+no open licence), typed, counted and turned out from the suppression data, and routed per
+road-access class (``livecore.apparatus``). Without the bases file (or ``--no-bases``) they
+fall back to the assumed Chico points and type table, which the command prints.
+
     python manage.py live_sim_responders --units 4 --speed-up 1 --base http://127.0.0.1:8000
 """
 
@@ -19,9 +25,11 @@ from datetime import UTC, datetime
 from django.core.management.base import BaseCommand, CommandError
 
 from api.live.drillcache import get_index
+from api.suppression_bases import load_bases
 from livecore.drill import INCIDENT_ID, parse_time
 from livecore.fire import estimate_fire
-from livecore.responders_sim import Fleet, World
+from livecore.geo import centroid
+from livecore.responders_sim import Fleet, World, fleet_apparatus
 
 
 class Command(BaseCommand):
@@ -37,6 +45,8 @@ class Command(BaseCommand):
         parser.add_argument("--interval", type=float, default=2.0, help="Wall seconds between ticks.")
         parser.add_argument("--duration", type=float, default=0.0, help="Stop after this many wall seconds (0 = run until Ctrl-C).")
         parser.add_argument("--seed", type=int, default=0)
+        parser.add_argument("--no-bases", action="store_true",
+                            help="Ignore the CAL FIRE bases file and use the fallback Chico points.")
 
     # -- http -----------------------------------------------------------------------------
 
@@ -67,14 +77,32 @@ class Command(BaseCommand):
             raise CommandError("Give --invite or set LIVE_INVITE_CODE.")
         self.base = opts["base"].rstrip("/") + "/api/live/"
         inc = opts["incident"]
-        drill = get_index().drill
-        fleet = Fleet(drill, opts["units"], seed=opts["seed"], incident_id=inc, tempo=opts["speed_up"])
-        tokens: dict[str, str] = {}
-        self.locations = 0
+        drill = get_index(inc).drill
         _, dev = self.http("POST", "devices", None, {}, ok=(200, 201))
         self.clock_token = dev["token"]  # a civilian token only reads the drill clock
+        apparatus = None
+        bases = None if opts["no_bases"] else load_bases()
+        if bases is not None:
+            _, sit = self.http("GET", f"incidents/{inc}/situation?zones=0", self.clock_token)
+            fire = estimate_fire(drill, parse_time(sit["drill"]["replay_now"])).geometry
+            snapshots = drill.perimeters or drill.fronts
+            incident = centroid(fire) if fire is not None else centroid(snapshots[0].geometry) if snapshots else None
+            if incident is not None:
+                apparatus = fleet_apparatus(drill, bases["bases"], incident, opts["units"]) or None
+                self.stdout.write(f"incident point {incident[0]:.4f},{incident[1]:.4f} (fire estimate centroid)")
+        fleet = Fleet(drill, opts["units"], seed=opts["seed"], incident_id=inc, tempo=opts["speed_up"],
+                      apparatus=apparatus)
+        tokens: dict[str, str] = {}
+        self.locations = 0
         started = time.monotonic()
         self.stdout.write(f"{len(fleet.units)} simulated units, drill {inc}, base {self.base}")
+        for note in fleet.notes:
+            self.stdout.write(f"  {note}")
+        for unit in fleet.units:
+            app = unit.apparatus
+            if app is not None:
+                self.stdout.write(f"  {unit.id}: {app.label} ({app.vehicle}) from {app.station} [{app.agency}], "
+                                  f"{app.distance_km} km from the fire, turnout {app.turnout_s:.0f} s; {app.basis}")
         try:
             while True:
                 try:
@@ -119,7 +147,8 @@ class Command(BaseCommand):
             _, resp = self.http("POST", call["path"], None, {**body, "invite_code": invite}, ok=(201,))
             tokens[uid] = resp["token"]
             fleet.bind(uid, resp["party_key"])
-            self.stdout.write(f"{uid} joined as {resp['party_key']} (simulated={resp.get('simulated')})")
+            self.stdout.write(f"{fleet.describe(fleet.unit(uid))} joined as {resp['party_key']} "
+                              f"(simulated={resp.get('simulated')})")
             return
         if op == "report":
             body["observed_at"] = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -129,4 +158,5 @@ class Command(BaseCommand):
         elif op == "location":
             self.locations += code == 204
         else:
-            self.stdout.write(f"{call['at']} {uid} {op} {call['path']} -> {code}")
+            note = f" ({body['note']})" if op == "cancel" and body.get("note") else ""
+            self.stdout.write(f"{call['at']} {uid} {op} {call['path']} -> {code}{note}")

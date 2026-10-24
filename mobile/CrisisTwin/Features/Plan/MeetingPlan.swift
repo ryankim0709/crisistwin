@@ -44,7 +44,8 @@ struct MeetingPlan: Codable, Equatable {
     var backup: MeetingPoint?
     var contacts: [TrustedContact] = []
     /// Where the household lives, used only on this phone to find its zone in the live
-    /// simulation. Never shared or sent to the server. Optional, so older files still load.
+    /// simulation. Never shared with family. Its coordinates are sent to the API only for the
+    /// Web simulation screen's "Your home" simulated-advice lookup. Optional, so older files still load.
     var home: MeetingPoint?
 
     var shareText: String {

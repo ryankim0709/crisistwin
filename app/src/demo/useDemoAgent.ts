@@ -1,0 +1,203 @@
+/**
+ * The /demo autopilot: watches the board on the simulation clock and calls the AI commander
+ * (POST /api/demo/decide) only when the monitor (observation.ts wakeReasons) finds a reason.
+ * At most one call is in flight; the clock keeps running while it thinks, and its orders apply
+ * at the board's minute when they arrive (the page's `apply`, which validates through
+ * model.applyOrder). Disabling the autopilot or unmounting aborts the call so a late response
+ * cannot apply. After a failed call the monitor waits ERROR_BACKOFF_MINUTES (or decideNow).
+ */
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import { DecisionError, streamNdjson } from "../dispatch/agentClient";
+import { DECIDE_URL, type DecisionEvent, type DemoObservation, type DemoOrder } from "./contracts";
+import type { Board, RouteOption, ZoneForecast } from "./model";
+import {
+  MONITOR_EVERY_MINUTES,
+  buildObservation,
+  rememberDecision,
+  wakeReasons,
+  type MonitorMemory,
+} from "./observation";
+
+/** Simulated minutes the monitor stays quiet after a failed call. */
+export const ERROR_BACKOFF_MINUTES = 10;
+const MAX_DECISIONS = 30;
+const MANUAL_REASON = "Operator asked for a decision now.";
+
+type FinalDecision = Extract<DecisionEvent, { type: "orders" }>;
+
+export interface AgentDecision {
+  id: number;
+  /** Board minute of the observation the agent decided on. */
+  minute: number;
+  wokeBecause: string[];
+  /** Streamed "text" deltas. */
+  assessment: string;
+  summary: string;
+  model: string;
+  /** Page-side application result per order. */
+  applied: { order: DemoOrder; error: string | null }[];
+  /** Server-side rejections. */
+  rejected: { reason: string }[];
+}
+
+export interface DemoAgentOptions {
+  /** Mutated in place; `version` bumps on every change. */
+  board: Board | null;
+  version: number;
+  routes: ReadonlyMap<string, RouteOption[]>;
+  forecasts: Map<string, ZoneForecast>;
+  /** Autopilot toggle. */
+  enabled: boolean;
+  /** Applies orders (model.applyOrder, actor "agent"); returns a per-order error or null. */
+  apply: (orders: DemoOrder[]) => (string | null)[];
+}
+
+export interface DemoAgent {
+  status: "off" | "watching" | "thinking" | "error";
+  /** Live streamed thinking summary for the current call (cleared per call). */
+  thinking: string;
+  /** Live streamed assessment text for the current call. */
+  streamText: string;
+  /** Newest first, last MAX_DECISIONS. */
+  decisions: AgentDecision[];
+  error: string | null;
+  lastWoke: string[];
+  /** Force a call now; works with the autopilot off (one-off call). */
+  decideNow: () => void;
+}
+
+export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
+  const { board, version, enabled } = opts;
+  const [inFlight, setInFlight] = useState(false);
+  const [thinking, setThinking] = useState("");
+  const [streamText, setStreamText] = useState("");
+  const [decisions, setDecisions] = useState<AgentDecision[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [lastWoke, setLastWoke] = useState<string[]>([]);
+
+  // Latest options for callbacks that run outside render (stream events, the monitor).
+  const optsRef = useRef(opts);
+  useEffect(() => {
+    optsRef.current = opts;
+  });
+
+  const abortRef = useRef<AbortController | null>(null);
+  const boardRef = useRef<Board | null>(null);
+  const memoryRef = useRef<MonitorMemory | null>(null);
+  const previousRef = useRef<DemoObservation["previous"]>(null);
+  const lastBucketRef = useRef<number | null>(null);
+  const backoffUntilRef = useRef(-Infinity);
+  const idRef = useRef(0);
+
+  // Aborting rejects the stream; its `finally` then clears the in-flight state.
+  const cancel = useCallback(() => abortRef.current?.abort(), []);
+
+  const call = useCallback((current: Board, reasons: string[]) => {
+    if (abortRef.current) return;
+    const { routes, forecasts } = optsRef.current;
+    const observation = buildObservation(current, routes, forecasts, reasons, previousRef.current);
+    const seen = rememberDecision(current, forecasts);
+    const minute = observation.clock.minute;
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setInFlight(true);
+    setThinking("");
+    setStreamText("");
+    setLastWoke(reasons);
+    let assessment = "";
+
+    streamNdjson<FinalDecision>(
+      DECIDE_URL,
+      { observation },
+      (event) => event.type === "orders",
+      (event) => {
+        if (controller.signal.aborted) return;
+        if (event.type === "thinking") setThinking((t) => t + event.text);
+        else {
+          assessment += event.text;
+          setStreamText(assessment);
+        }
+      },
+      controller.signal,
+    )
+      .then((decision) => {
+        if (controller.signal.aborted || boardRef.current !== current) return;
+        const errors = optsRef.current.apply(decision.orders);
+        const applied = decision.orders.map((order, i) => ({ order, error: errors[i] ?? null }));
+        memoryRef.current = seen;
+        previousRef.current = {
+          minute,
+          summary: decision.summary,
+          rejected: [
+            ...decision.rejected.map((r) => r.reason),
+            ...applied.filter((a) => a.error !== null).map((a) => `Not applied: ${a.error}`),
+          ],
+        };
+        idRef.current += 1;
+        const entry: AgentDecision = {
+          id: idRef.current,
+          minute,
+          wokeBecause: reasons,
+          assessment,
+          summary: decision.summary,
+          model: decision.model,
+          applied,
+          rejected: decision.rejected.map((r) => ({ reason: r.reason })),
+        };
+        setDecisions((list) => [entry, ...list].slice(0, MAX_DECISIONS));
+        setError(null);
+      })
+      .catch((cause: unknown) => {
+        if (controller.signal.aborted || boardRef.current !== current) return;
+        backoffUntilRef.current = current.minute + ERROR_BACKOFF_MINUTES;
+        setError(
+          cause instanceof DecisionError || cause instanceof Error ? cause.message : "The agent request failed.",
+        );
+      })
+      .finally(() => {
+        if (abortRef.current !== controller) return;
+        abortRef.current = null;
+        setInFlight(false);
+      });
+  }, []);
+
+  // A new board is a new run: forget the old one and drop any call made on it.
+  useEffect(() => {
+    if (boardRef.current === board) return;
+    boardRef.current = board;
+    cancel();
+    memoryRef.current = null;
+    previousRef.current = null;
+    lastBucketRef.current = null;
+    backoffUntilRef.current = -Infinity;
+  }, [board, cancel]);
+
+  // Turning the autopilot off cancels its call; unmounting cancels any call.
+  useEffect(() => {
+    if (!enabled) cancel();
+  }, [enabled, cancel]);
+  useEffect(() => cancel, [cancel]);
+
+  // The monitor: once per MONITOR_EVERY_MINUTES of simulated time, while idle.
+  useEffect(() => {
+    if (!enabled || !board || abortRef.current) return;
+    const bucket = Math.floor(board.minute / MONITOR_EVERY_MINUTES);
+    if (bucket === lastBucketRef.current) return;
+    lastBucketRef.current = bucket;
+    if (board.minute < backoffUntilRef.current) return;
+    const reasons = wakeReasons(board, optsRef.current.forecasts, memoryRef.current);
+    if (reasons.length > 0) call(board, reasons);
+  }, [board, version, enabled, call]);
+
+  const decideNow = useCallback(() => {
+    const current = optsRef.current.board;
+    if (!current || abortRef.current) return;
+    backoffUntilRef.current = -Infinity;
+    const reasons = wakeReasons(current, optsRef.current.forecasts, memoryRef.current);
+    call(current, [MANUAL_REASON, ...reasons]);
+  }, [call]);
+
+  const status: DemoAgent["status"] = inFlight ? "thinking" : !enabled ? "off" : error ? "error" : "watching";
+  return { status, thinking, streamText, decisions, error, lastWoke, decideNow };
+}

@@ -1,6 +1,7 @@
 # 0040: Realistic suppression resource data
 
-Date: 2026-10-24. Status: accepted as data and loader; not yet wired into the simulator.
+Date: 2026-10-24. Status: accepted as data and loader; wired into the simulator by
+[0048-suppression-engine](0048-suppression-engine.md).
 Builds on [0020-studio-firefighting](0020-studio-firefighting.md),
 [0023-studio-crew-dispatch](0023-studio-crew-dispatch.md) and
 [0025-dispatch-fire-tactics](0025-dispatch-fire-tactics.md).
@@ -30,7 +31,7 @@ Add a sourced dataset and a small loader; do not change the simulator yet.
 - `tools/ca_fire_bases.json`: 1,046 active stations, camps, helitack bases, air attack bases
   and dispatch centers from the CAL FIRE facilities layer, with the raw download's size and
   SHA-256, and the licence recorded as "none stated, disclaimer only". It is small enough (309
-  KB) to commit; `--refresh-bases` rebuilds it.
+  KB) to commit; `--refresh-bases` rebuilds it. (Later made local-only; see 0048.)
 - `tools/suppression_data.py`: loads and validates both files, prints a coverage summary,
   converts units, and implements `road_access(tags, grade, vehicle)` as the decision table in
   [suppression-data.md](../suppression-data.md). The thresholds are mostly assumptions and are

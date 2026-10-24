@@ -19,11 +19,11 @@ BASE, CONTROLLER, INCIDENT = base.BASE, base.CONTROLLER, base.INCIDENT
 TWIN_NOW = "2018-11-08T16:30:00Z"
 
 
-def _ready():
+def _ready(*_):
     return {"status": "ready", "error": None, "build_s": 1.0}
 
 
-def _warming():
+def _warming(*_):
     return {"status": "warming", "error": None, "build_s": None}
 
 

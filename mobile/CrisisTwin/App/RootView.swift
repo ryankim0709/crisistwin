@@ -160,7 +160,9 @@ struct RootView: View {
                     try? await Task.sleep(for: FamilyStore.pollInterval)
                 }
             }
+            .onChange(of: router.following, initial: true) { _, following in liveStore.navigating = following }
             .onChange(of: location.lastLocation) { _, fix in
+                if let fix { liveStore.observeFix(fix) }
                 liveStore.updateLocation(
                     fix.map { LonLat(lon: $0.coordinate.longitude, lat: $0.coordinate.latitude) },
                     accuracyM: fix?.horizontalAccuracy)
@@ -210,7 +212,7 @@ struct RootView: View {
             Tab("Reports", systemImage: "exclamationmark.bubble", value: AppTab.reports) {
                 ReportsView()
             }
-            .badge(liveStore.stillThereItems.count)
+            .badge(liveStore.stillThereItems.count + liveStore.boardQuestions.count)
             Tab("Plan", systemImage: "list.bullet.clipboard", value: AppTab.plan) {
                 PlanTab()
             }

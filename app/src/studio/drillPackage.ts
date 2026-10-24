@@ -7,6 +7,7 @@
  * WGS84 [lon, lat], and the run's assumptions. Arrival times are integer seconds after T+0.
  */
 
+import type { ScenarioWindRecord } from "../fire/scenarioWeather";
 import type { StudioRunResult } from "./contracts";
 
 export const RUN_EXPORT_KIND = "crisistwin_studio_run";
@@ -18,6 +19,83 @@ const FRAME_STEP_CHOICES = [10, 15, 20, 30, 60];
 const PAD_CELLS = 2;
 
 type LonLat = [number, number];
+
+export type WindSourceExport =
+  | { kind: "assumed"; note: string }
+  | {
+      kind: "scenario_weather";
+      mode: ScenarioWindRecord["mode"];
+      /** observed (station), forecast (NWS gridpoint) or derived (climatology analog). */
+      evidence_class: ScenarioWindRecord["evidenceClass"];
+      station: { id: string; name: string; distance_km: number } | null;
+      source: string;
+      query: { lon: number; lat: number; start_utc: string; hours: number; percentile?: number };
+      analog: unknown | null;
+      height_conversion: { from_height: string; factor: number; method: string };
+      applied: {
+        basis: string;
+        t_utc: string;
+        wind_20ft_mph: number;
+        from_deg: number;
+        clamped_from_mph: number | null;
+      };
+      units: string;
+      series: {
+        t_utc: string;
+        speed_ms: number | null;
+        speed_20ft_mph: number | null;
+        from_deg: number | null;
+        gust_ms: number | null;
+      }[];
+      raw_sha256: string | null;
+    };
+
+function windSourceExport(weather: ScenarioWindRecord | undefined): WindSourceExport {
+  if (!weather) return { kind: "assumed", note: "Wind speed and direction typed in by the author." };
+  return {
+    kind: "scenario_weather",
+    mode: weather.mode,
+    evidence_class: weather.evidenceClass,
+    station: weather.station
+      ? {
+          id: weather.station.id,
+          name: weather.station.name,
+          distance_km: weather.station.distanceKm,
+        }
+      : null,
+    source: weather.source,
+    query: {
+      lon: weather.query.lon,
+      lat: weather.query.lat,
+      start_utc: weather.query.startUtc,
+      hours: weather.query.hours,
+      ...(weather.query.percentile !== undefined ? { percentile: weather.query.percentile } : {}),
+    },
+    analog: weather.analog,
+    height_conversion: {
+      from_height: weather.heightConversion.fromHeight,
+      factor: weather.heightConversion.factor,
+      method: weather.heightConversion.method,
+    },
+    applied: {
+      basis: weather.applied.basis,
+      t_utc: weather.applied.tUtc,
+      wind_20ft_mph: weather.applied.speed20ftMph,
+      from_deg: weather.applied.fromDeg,
+      clamped_from_mph: weather.applied.clampedFromMph,
+    },
+    units:
+      "hourly UTC; speed_ms m/s as the station reported (10 m or RAWS 20 ft); speed_20ft_mph open 20 ft wind in mph; from_deg degrees true the wind blows FROM; gust_ms m/s",
+    series: weather.series.map((s) => ({
+      t_utc: s.tUtc,
+      speed_ms: s.speedMs,
+      speed_20ft_mph: s.speed20ftMph,
+      from_deg: s.fromDeg,
+      gust_ms: s.gustMs,
+    })),
+    raw_sha256: weather.rawSha256,
+  };
+}
 
 export interface StudioRunExport {
   kind: typeof RUN_EXPORT_KIND;
@@ -31,6 +109,12 @@ export interface StudioRunExport {
     wind_20ft_mph: number;
     /** Degrees true, the direction the wind blows FROM. */
     wind_from_deg: number;
+    /**
+     * Where the wind came from. `assumed` is the author's own value; otherwise the hourly series
+     * (m/s as reported, mph at 20 ft after the stated conversion, degrees FROM, UTC hours), the
+     * evidence class, station and distance. The solver ran on `applied`, one value per run.
+     */
+    wind_source: WindSourceExport;
     moisture: Record<string, number>;
     midflame_adjustment: number;
     horizon_min: number;
@@ -194,6 +278,7 @@ export function buildRunExport(result: StudioRunResult, ignitionTime: Date): Stu
     assumptions: {
       wind_20ft_mph: settings.windSpeedMph,
       wind_from_deg: settings.windFromDegrees,
+      wind_source: windSourceExport(scenario.weather),
       moisture: { ...settings.moisture },
       midflame_adjustment: settings.midflameAdjustment,
       horizon_min: settings.horizonMinutes,

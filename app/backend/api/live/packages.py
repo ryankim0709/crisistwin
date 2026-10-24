@@ -11,7 +11,8 @@ same run was already stored).
 ``GET /api/live/packages`` (controller): ``{packages: [{package_id, incident_id, created_at,
 summary}]}``, newest first.
 
-Building a package never changes the active drill. ``activate`` only reports what would change.
+Building a package never changes the active drill. ``activate`` only reports what would change;
+``POST /api/live/active {package_id}`` (``api.live_active``) switches.
 """
 
 from __future__ import annotations
@@ -28,10 +29,10 @@ from typing import Any
 
 from django.conf import settings
 
-from livecore.drill import INCIDENT_ID
 from livecore.package import PackageError, area_box, build_package, load_package, package_summary, parse_run
 
 from .. import dispatch_area
+from . import incidents
 from .auth import Principal, live_view
 from .common import ApiError, ok
 from .drillcache import bundle_path
@@ -151,11 +152,10 @@ def list_packages() -> list[dict[str, Any]]:
 def activate(package_id: str) -> dict[str, Any]:
     """What making ``package_id`` the active drill would change. Changes nothing.
 
-    Not wired to any endpoint: ``GET/PUT /api/live/active`` (ADR 0030 item 5) owns switching.
-    That change would point the drill index (``drillcache.get_index``) at
-    ``livecore.package.load_package(path)``, add the package's ``incident_id`` to the incidents
-    ``live_view`` accepts, and rebuild the traffic twin from the package's roads and zones
-    (``twin_service`` is built from the Camp packages today). Raises ``ApiError(404)``.
+    A dry run of ``POST /api/live/active {package_id}`` (docs/adr/0047-active-incident.md), which
+    loads the package's drill index (``drillcache.get_index``), makes its ``incident_id`` the one
+    ``live_view`` accepts next to Camp, and warms a traffic twin built from the package's roads,
+    zones and fronts (``sim.twin.package_inputs``). Raises ``ApiError(404)``.
     """
     if not PACKAGE_ID_RE.fullmatch(package_id or ""):
         raise ApiError(404, "not_found", "Unknown package.")
@@ -168,12 +168,12 @@ def activate(package_id: str) -> dict[str, Any]:
         "applied": False,
         "package_id": package_id,
         "would_change": {
-            "incident_id": {"from": INCIDENT_ID, "to": meta["incident_id"]},
+            "incident_id": {"from": incidents.active_incident_id(), "to": meta["incident_id"]},
             "drill_bundle": {"from": str(bundle_path()), "to": str(path)},
             "loader": "livecore.package.load_package",
             "clock": meta["summary"]["clock"],
             "label": meta["summary"]["label"],
-            "twin": "rebuild from the package roads and zones (not supported yet)",
+            "twin": "built from the package roads, synthetic zones and simulated fronts",
             "response_record": "none (the package has no events)",
         },
     }

@@ -2,12 +2,16 @@
  * Wire contract between the /dispatch page and POST /api/dispatch/decide
  * (app/backend/api/dispatch.py). Change both sides and docs/adr/0014-dispatch-agent.md (amended
  * by docs/adr/0017-dispatch-anywhere.md, 0019-live-dispatch-monitor.md,
- * 0021-fire-path-scoped-evacuation.md and 0022-dispatch-fire-attack.md) together.
+ * 0021-fire-path-scoped-evacuation.md, 0022-dispatch-fire-attack.md,
+ * 0030-live-road-closures.md and 0031-dispatch-run-memory.md) together.
  *
  * The page calls the agent only when its live monitor (monitor.ts) finds a material change;
  * `monitor.woke_because` lists those reasons.
  *
- * Request body: `{ "observation": Observation }`, JSON, at most 200 kB.
+ * Request body: `{ "observation": Observation, "session_id"?: string }`, JSON, at most 200 kB.
+ * With `session_id` (a lowercase UUID per dispatcher run) the server journals each decision in
+ * MongoDB Atlas and shows the agent earlier finished runs on the same `area.id`
+ * (app/backend/api/dispatch_runs.py, docs/adr/0031-dispatch-run-memory.md).
  * Response: `application/x-ndjson`, one `DecisionEvent` per line, ending with exactly one
  * "orders" or "error" event. Non-2xx responses carry `{ error, detail }` JSON instead.
  *
@@ -27,6 +31,19 @@
 import type { UnitStatus, UnitTask, ZoneImpact, ZoneStatus } from "./engine";
 
 export const DECIDE_URL = "/api/dispatch/decide";
+/** POST the simulator's outcome when a run ends: `RunOutcome` → 204 (404 with no journal). */
+export const runOutcomeUrl = (sessionId: string) => `/api/dispatch/runs/${sessionId}/outcome`;
+
+export interface RunOutcome {
+  area_id: string;
+  minute: number;
+  horizon_minutes: number;
+  /** True when the run reached the horizon; false when it was stopped early. */
+  finished: boolean;
+  totals: Observation["totals"];
+  /** Households exposed by the horizon if nobody is ordered out (simulator baseline). */
+  no_action_exposed: number | null;
+}
 export const MAX_ORDERS_PER_DECISION = 20;
 
 export interface ExitOption {
@@ -91,6 +108,10 @@ export interface ZoneObservation {
 
 export interface UnitObservation {
   id: string;
+  /** Apparatus label, e.g. "Type 3 engine (4x4)" (studio/apparatus.ts). */
+  apparatus: string;
+  /** Road-access class it routes by (docs/suppression-data.md, R01-R12). */
+  access_class: string;
   station_id: string;
   status: UnitStatus;
   task: UnitTask | null;
@@ -101,6 +122,12 @@ export interface UnitObservation {
   eta_min: number | null;
   /** Drive minutes from the unit's position to threatened zones (fire_eta_min not null). */
   drive_min_to: Record<string, number>;
+  /**
+   * Threatened zones and burning fires (by id) the unit cannot reach because of its road-access
+   * class, with the blocking rule, e.g. "R05 paved grade too steep: grade 19% above 16% limit
+   * for engine_t1_t2 (Foo Road)". Empty when nothing is blocked by class.
+   */
+  no_access: Record<string, string>;
 }
 
 /** How engines fight a fire (fireTactics.ts). */
@@ -213,6 +240,17 @@ export interface Observation {
     exposed: number;
   };
   zones: ZoneObservation[];
+  /**
+   * Roads routing cannot use now. `planner_closed` are the planner's closures (an assumption,
+   * closed at start or mid-run at `since_minute`); `fire_cut_*` are road segments the fire model
+   * reaches within the routing lookahead. Every exit option already avoids both.
+   */
+  roads: {
+    planner_closed: { road: string; bridge: boolean; since_minute: number }[];
+    fire_cut_segments: number;
+    /** Named roads among them, earliest cut first, at most 12. */
+    fire_cut_roads: string[];
+  };
   fires: FireObservation[];
   exits: { id: string; name: string }[];
   units: UnitObservation[];
@@ -263,6 +301,8 @@ export type DecisionEvent =
       /** One- or two-sentence summary the page sends back as `previous_summary`. */
       summary: string;
       model: string;
+      /** Earlier runs on these roads the agent was shown from the run journal (0 = none). */
+      recalled_runs?: number;
       evidence_class: "ai_decision";
     }
   | { type: "error"; error: string; detail: string };

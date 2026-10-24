@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { Button, IconButton, Notice, SegmentedControl, Tag } from "../ui";
 import { drillAction } from "./api";
 import { drillClock, drillDate, drillNowAt, elapsed } from "./format";
+import type { ActiveIncident } from "./active";
+import DrillPicker from "./DrillPicker";
 import InvitePhones from "./InvitePhones";
 import InjectsPanel from "./InjectsPanel";
 import type { RunAction } from "./SelectedItem";
@@ -23,15 +25,22 @@ function Menu({
   run,
   busy,
   onSignOut,
+  token,
+  active,
+  onSwitched,
 }: {
   data: CommandResponse | null;
   twin: TwinMonitor | null;
   run: RunAction;
   busy: string | null;
   onSignOut: (() => void) | null;
+  token: string | null;
+  active: ActiveIncident | null;
+  onSwitched: () => void;
 }) {
   const ref = useRef<HTMLDetailsElement>(null);
   const [inviting, setInviting] = useState(false);
+  const [picking, setPicking] = useState(false);
   useEffect(() => {
     const close = (e: MouseEvent) => {
       if (ref.current?.open && !ref.current.contains(e.target as Node)) ref.current.open = false;
@@ -96,6 +105,18 @@ function Menu({
           >
             Invite phones
           </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="lc-menu-item"
+            disabled={!token}
+            onClick={() => {
+              if (ref.current) ref.current.open = false;
+              setPicking(true);
+            }}
+          >
+            Drill
+          </button>
           {onSignOut ? (
             <button type="button" role="menuitem" className="lc-menu-item" onClick={onSignOut}>
               Sign out
@@ -104,6 +125,14 @@ function Menu({
         </div>
       </details>
       {inviting ? <InvitePhones onClose={() => setInviting(false)} /> : null}
+      {picking && token ? (
+        <DrillPicker
+          token={token}
+          active={active}
+          onSwitched={onSwitched}
+          onClose={() => setPicking(false)}
+        />
+      ) : null}
     </>
   );
 }
@@ -117,6 +146,9 @@ export default function WorkspaceHeader({
   run,
   busy,
   onSignOut,
+  token,
+  active,
+  onSwitched,
 }: {
   data: CommandResponse | null;
   twin: TwinMonitor | null;
@@ -126,6 +158,9 @@ export default function WorkspaceHeader({
   run: RunAction;
   busy: string | null;
   onSignOut: (() => void) | null;
+  token: string | null;
+  active: ActiveIncident | null;
+  onSwitched: () => void;
 }) {
   const [error, setError] = useState<string | null>(null);
   const drill = data?.drill ?? null;
@@ -138,13 +173,13 @@ export default function WorkspaceHeader({
   const age = receivedAt === null ? 0 : now - receivedAt;
   const setSpeed = async (speed: Speed) =>
     setError(
-      await run("drill", (tok) => drillAction(tok, { action: "set_speed", speed: Number(speed) })),
+      await run("drill", (tok, id) => drillAction(tok, id, { action: "set_speed", speed: Number(speed) })),
     );
   const start = async () =>
-    setError(await run("drill", (tok) => drillAction(tok, { action: "start" })));
+    setError(await run("drill", (tok, id) => drillAction(tok, id, { action: "start" })));
   const reset = async () => {
     if (!window.confirm("Reset the drill? Guidance, proposals and check-ins are deleted.")) return;
-    setError(await run("drill", (tok) => drillAction(tok, { action: "reset" })));
+    setError(await run("drill", (tok, id) => drillAction(tok, id, { action: "reset" })));
   };
   return (
     <header className="lc-head">
@@ -202,7 +237,16 @@ export default function WorkspaceHeader({
             {error}
           </Notice>
         ) : null}
-        <Menu data={data} twin={twin} run={run} busy={busy} onSignOut={onSignOut} />
+        <Menu
+          data={data}
+          twin={twin}
+          run={run}
+          busy={busy}
+          onSignOut={onSignOut}
+          token={token}
+          active={active}
+          onSwitched={onSwitched}
+        />
       </span>
     </header>
   );

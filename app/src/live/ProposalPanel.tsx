@@ -298,8 +298,8 @@ export default function ProposalPanel({
   const onReplan = async () => {
     setStatus(null);
     let outcome: string | null = null;
-    const err = await run("replan", async (t) => {
-      const result = await replan(t);
+    const err = await run("replan", async (t, incidentId) => {
+      const result = await replan(t, incidentId);
       if (result.proposal === null && result.auto_approved === null) outcome = "No changes";
     });
     setError(err);

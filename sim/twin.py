@@ -12,6 +12,8 @@ Outputs are planning experiments from an uncalibrated model, not operational ins
 
 from __future__ import annotations
 
+import bisect
+import dataclasses
 import functools
 import hashlib
 import json
@@ -29,7 +31,7 @@ from sim.responders import CAMP_EGRESS_CORRIDORS, CHP_UNITS, FIRE_CLOSURE_CHECK_
 from sim.responders import FIRE_CLOSURE_MAX_ROADS_PER_CHECK, egress_corridors
 from sim.scenario import camp_replay_inputs
 from sim.traffic import MODEL_ID, MODEL_VERSION, REFUGE_KIND, FireTimeline, TrafficEngine, TrafficEvent
-from sim.traffic import TrafficParams
+from sim.traffic import DemandZone, Destination, RoadEdge, RoadNetwork, TrafficParams, _points_inside
 
 SNAPSHOT_SCHEMA_VERSION = "0.1.0"
 COMMAND_SOURCE_ID = "twin-command"
@@ -145,6 +147,126 @@ def _camp_inputs(package: str, roads_package: str, demand: str, seed: int) -> Tw
 def camp_inputs(package, roads_package, demand: str = "auto", seed: int = TrafficParams.seed) -> TwinInputs:
     """Camp inputs as the `bundle` command builds them; cached per process."""
     return _camp_inputs(str(Path(package).resolve()), str(Path(roads_package).resolve()), demand, int(seed))
+
+
+# Drill packages (Studio scenarios, docs/adr/0037-studio-drill-packages.md). Planning assumptions:
+PACKAGE_MIN_EDGE_M = 1.0
+"""An OSM edge shorter than this (or zero) is given this length; the engine needs positive lengths."""
+PACKAGE_LANE_CAPACITY_VPH = 600.0
+"""Per-lane capacity for an edge whose package capacity is zero (the dispatch area's `other` class)."""
+PACKAGE_ASSUMPTIONS = [
+    "Demand is synthetic: the package's homes per zone (homes per km of residential street) times its "
+    "vehicles per home; every vehicle evacuates once its zone is ordered.",
+    "Vehicles start at the road nodes inside each zone's hull (the nearest node when none is inside).",
+    "No historical orders, closures or events: zones depart only when drill guidance orders them.",
+    "Fire is the package's simulated Studio fronts (latest front at or before each time; none before the first).",
+    f"Edges shorter than {PACKAGE_MIN_EDGE_M:g} m are lengthened to it; zero-capacity edges get "
+    f"{PACKAGE_LANE_CAPACITY_VPH:g} veh/h per lane.",
+]
+
+
+def _nearest_node(nodes: dict[str, tuple[float, float]], ids: list[str], lon: float, lat: float) -> str:
+    kx = math.cos(math.radians(lat))
+    return min(ids, key=lambda n: ((nodes[n][0] - lon) * kx) ** 2 + (nodes[n][1] - lat) ** 2)
+
+
+def _ring_centroid(geometry: dict) -> tuple[float, float]:
+    ring = (geometry["coordinates"] if geometry["type"] == "Polygon" else geometry["coordinates"][0])[0]
+    return sum(p[0] for p in ring) / len(ring), sum(p[1] for p in ring) / len(ring)
+
+
+@functools.lru_cache(maxsize=4)
+def _package_inputs(path: str, seed: int) -> TwinInputs:
+    with open(path, encoding="utf-8") as fh:
+        bundle = json.load(fh)
+    meta = bundle.get("drill_package") or {}
+    nodes: dict[str, tuple[float, float]] = {}
+    edges = []
+    for raw in bundle["roads"]["edges"]:
+        coords = tuple((float(c[0]), float(c[1])) for c in raw["coords"])
+        nodes.setdefault(str(raw["from_node"]), coords[0])
+        nodes.setdefault(str(raw["to_node"]), coords[-1])
+        lanes = max(1, int(raw.get("lanes") or 1))
+        capacity = float(raw.get("capacity_veh_per_hour") or 0.0) or lanes * PACKAGE_LANE_CAPACITY_VPH
+        edges.append(RoadEdge(
+            id=str(raw["id"]), segment_id=str(raw.get("segment_id") or raw["id"]),
+            from_node=str(raw["from_node"]), to_node=str(raw["to_node"]),
+            length_m=max(float(raw["length_m"]), PACKAGE_MIN_EDGE_M), lanes=lanes,
+            speed_kph=float(raw["speed_kph"]), capacity_veh_per_hour=capacity, name=str(raw.get("name") or ""),
+            highway=str(raw.get("highway") or "road"), bridge=bool(raw.get("bridge")), coords=coords))
+    network = RoadNetwork(nodes=nodes, edges=tuple(edges))
+    departing = sorted({e.from_node for e in edges})
+    points = [nodes[n] for n in departing]
+    zones = []
+    for feat in bundle["zones"]["features"]:
+        geometry = feat["geometry"]
+        inside = sorted(departing[i] for i in _points_inside(geometry, points, range(len(points))))
+        origins = tuple(inside) or (_nearest_node(nodes, departing, *_ring_centroid(geometry)),)
+        zones.append(DemandZone(id=str(feat["id"]), name=str(feat.get("name") or feat["id"]),
+                                households=int(feat.get("households") or 0), vehicles=int(feat.get("vehicles") or 0),
+                                origin_nodes=origins, geometry=geometry))
+    destinations = []
+    for feat in bundle["destinations"]["features"]:
+        lon, lat = (float(v) for v in feat["coord"])
+        node = str(feat.get("node_id") or "")
+        if node not in nodes:
+            node = _nearest_node(nodes, list(nodes), lon, lat)
+        cap = feat.get("capacity_veh")
+        destinations.append(Destination(id=str(feat["id"]), name=str(feat.get("name") or feat["id"]),
+                                        kind=str(feat.get("kind") or "exit"), node_id=node, coord=(lon, lat),
+                                        capacity_veh=int(cap) if cap is not None else None))
+    simulated = bundle.get("fire_simulated") or {}
+    fronts = sorted(((parse_utc(f["at"]), f["geometry"]) for f in simulated.get("fronts") or []), key=lambda f: f[0])
+    times = [t for t, _ in fronts]
+
+    def fire_area_at(at: datetime) -> dict | None:
+        i = bisect.bisect_right(times, at) - 1
+        return fronts[i][1] if i >= 0 else None
+
+    start, end = parse_utc(bundle["clock"]["start"]), parse_utc(bundle["clock"]["end"])
+    scenario = {
+        "network": network, "zones": tuple(zones), "destinations": tuple(destinations), "events": (),
+        "evidence_class": "fixture", "roads_evidence_class": "derived", "destinations_evidence_class": "derived",
+        "notes": list(PACKAGE_ASSUMPTIONS),
+    }
+    params = TrafficParams(seed=seed)
+    model = simulated.get("model") or {}
+    fire_meta = {"model": model.get("id"), "version": model.get("version"), "ignition": simulated.get("ignition"),
+                 "hazard_until": None}
+    incident = str((bundle.get("incident") or {}).get("id") or meta.get("package_id") or "package")
+    return TwinInputs(scenario=scenario, history_id=incident, params=params, start=start, end=end,
+                      fire_area_at=fire_area_at if fronts else None, fire_model_meta=fire_meta,
+                      fingerprint=inputs_fingerprint(scenario, params, start, end, fire_meta),
+                      roads_package=str(meta.get("package_id") or Path(path).name))
+
+
+def package_inputs(path, seed: int = TrafficParams.seed) -> TwinInputs:
+    """Twin inputs from a Studio drill package (a replay bundle with `drill_package`): its roads, synthetic
+    zones, exits and simulated fire fronts; assumptions in `PACKAGE_ASSUMPTIONS`. Cached per process."""
+    return _package_inputs(str(Path(path).resolve()), int(seed))
+
+
+def with_people_behavior(inputs: TwinInputs, people) -> TwinInputs:
+    """Inputs with sourced people behaviour (sim.behavior.PeopleBehavior) on the fixed-delay engine: demand
+    vehicles x order compliance (sim.demand.with_participation), shadow evacuation on the fire cue
+    (TrafficParams.shadow_evacuation_share) and the departure delay. Default behaviour returns `inputs` itself,
+    so historical replays (and their fingerprints) are unchanged. The fire timeline is rebuilt: fewer vehicles
+    can leave some origin nodes empty, and the timeline is keyed on the occupied origins."""
+    from sim.demand import with_participation
+
+    if people.is_default:
+        return inputs
+    scenario = dict(inputs.scenario)
+    scenario["zones"] = with_participation(scenario["zones"], people.order_compliance)
+    scenario["people_behavior"] = dataclasses.asdict(people)
+    changes = {"shadow_evacuation_share": people.shadow_evacuation_share}
+    if people.departure_delay_median_min is not None:
+        changes["response_delay_median_min"] = people.departure_delay_median_min
+    if people.departure_delay_sigma is not None:
+        changes["response_delay_sigma"] = people.departure_delay_sigma
+    params = dataclasses.replace(inputs.params, **changes)
+    fingerprint = inputs_fingerprint(scenario, params, inputs.start, inputs.end, inputs.fire_model_meta)
+    return dataclasses.replace(inputs, scenario=scenario, params=params, fingerprint=fingerprint, cache={})
 
 
 def _template(inputs: TwinInputs) -> TrafficEngine:
@@ -838,7 +960,9 @@ class Twin:
             else:
                 for zi, z in enumerate(s.zone_list):
                     if z.id not in e.released_zones:
-                        at_origin[zi] += sum(c for _, n, c in s.zone_packets[z.id] if n in burned)
+                        gone = s.shadow_packets.get(z.id, ()) if z.id in e.shadow_released else ()
+                        at_origin[zi] += sum(c for k, (_, n, c) in enumerate(s.zone_packets[z.id])
+                                             if n in burned and k not in gone)
                 for _, _, node, count, zi in e.pending:
                     if node in burned:
                         at_origin[zi] += count

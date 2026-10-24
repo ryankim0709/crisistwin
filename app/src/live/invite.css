@@ -34,6 +34,31 @@
   font-size: var(--ct-text-sm);
   color: var(--ct-ink-muted);
 }
+/* Drill picker (DrillPicker.tsx) */
+.lc-pick {
+  width: min(92vw, 460px);
+}
+.lc-pick-list {
+  display: grid;
+  gap: var(--ct-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.lc-pick-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ct-space-3);
+  padding: var(--ct-space-2) var(--ct-space-3);
+  border: 1px solid var(--ct-border);
+  border-radius: var(--ct-radius-md);
+}
+.lc-pick-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
 .lc-invite-actions {
   display: flex;
   gap: var(--ct-space-2);

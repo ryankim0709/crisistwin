@@ -118,7 +118,10 @@ now", "Be ready to leave"), the way out, its destination and ETA, and **Start**;
 out** and **Need help**, "Still there?" questions about nearby hazards, what is near you, and
 changes to your zone's guidance. **Map** is the full-screen map with one glass drawer.
 **Reports** sends a new report and lists yours with their progress (Received, Being checked,
-Confirmed, Resolved). **Plan** holds Family, the meeting point, emergency contacts, permission
+Confirmed, Resolved). Tap one of yours to open it: while it is unsent, unverified or corroborated
+it can be edited in the report sheet or deleted (unsent ones change on the phone only; sent ones
+use `PATCH`/`DELETE me/reports/{id}`, and a deleted report is kept as `withdrawn` on the server).
+Once a responder or controller has acted on it, it is read-only. Edited reports show "Edited". **Plan** holds Family, the meeting point, emergency contacts, permission
 status, the web simulation feed, responder join and About. **Tasks** appears for responders.
 While a zone has an order, the bottom accessory under every tab repeats the verdict and ETA and
 opens Map.
@@ -146,6 +149,26 @@ it locally, start the backend and drill as described in
 [`app/backend/README.md`](../app/backend/README.md); Debug points at
 `http://localhost:8000`.
 
+### Task board and road observations (ADR 0041)
+
+The phone reads the public `GET incidents/{id}/board` with each situation poll and picks its
+questions **on the device** (`Features/Live/Board.swift`): items whose road segment lies on its own
+published route (two of the segment's quarter points within 30 m), or whose place is within the
+server's `radius_m` (1500 m) of the phone; never anything within 1000 m of the fire estimate or
+inside it; the server's rank order, at most `max_questions` (3). They appear beside "Still there?"
+on Home and Reports: "Pentz Road: passable?" (Passable, Slow, Blocked) or "Gym: full?" (Full, Has
+space). An answer is an ordinary report with `task_id` at the place's own coordinate, one per task
+per device. Your position is only compared on the phone; it is not sent to fetch the board.
+
+**Plan > Share road observations** (`shareRoadObservations`, per device, **off by default**): while
+Map is following your route, driving through a board road (in at one end, out at the other, at
+driving speed) sends one `road_passable` report, plus `heavy_traffic` when the average speed was
+under `slow_ratio` x free-flow. The report has `method: "passive"`, the segment, the time and a
+`free`/`slow` class, and no location, heading, note or track; the phone keeps only a running distance
+and time per road in memory. With the setting off nothing passive runs. Separately, if you sit
+stopped inside a board road for longer than `stall_s` (120 s) while navigating, the phone asks "Road
+ahead blocked?" (an explicit answer, never inferred).
+
 ### Web simulation (Plan tab)
 
 Shows, natively in MapKit, the simulation a planner is playing on the web `/fire` or
@@ -157,9 +180,20 @@ and route. The guidance card says what the simulation tells that zone: no order 
 now, wait about N minutes (the route is backed up and the fire is far), route blocked, zone
 evacuated, or fire in the zone, and "route changed" when the agent redirects it. Meeting
 points the simulated fire reaches are marked and the first clear one is offered. Set a home
-location on that screen; it stays on the phone, and the zone is worked out locally. A banner
+location on that screen; it is saved on the phone and the zone is worked out locally. A banner
 says it is a simulation drill, not an emergency service. Needs the Docker stack and a web
 page broadcasting.
+
+A **Your home** section at the top of the screen shows the per-home advice from Simulation
+Studio's published evacuation run (`GET /api/sim-state/advice?lon=&lat=`, see
+[`docs/sim-state-api.md`](../docs/sim-state-api.md)): leave now, leave at T+h:mm (in N min),
+already left, no order, no road out, zone cleared or fire reached the zone. It polls every
+10 seconds while the screen is open and always shows the server's notice: a simulated planning
+exercise, synthetic homes and addresses, not an evacuation order. It uses the home set in this
+screen, so **that home's coordinates are sent to the API** for this lookup (the zone lookup for
+the live guidance above still happens on the phone). States: no simulation published, no
+synthetic home within 300 m, and errors. Code: `Networking/SimStateClient.swift` and
+`Features/Broadcast/SimulationAdviceSection.swift`.
 
 ### Family
 
@@ -261,6 +295,17 @@ from changing the current state. The success label describes the last check,
 not continuously monitored health.
 
 ## Verification
+
+### Unit tests
+
+`CrisisTwinTests` (hosted in the app) covers the board logic: tolerant decoding, on-device
+selection and fire exclusion, answers, passive traversal and the stall detector. `testShareRoadObservationsOffByDefault`
+in `CrisisTwinUITests` needs no backend.
+
+```sh
+xcodebuild test -project mobile/CrisisTwin.xcodeproj -scheme CrisisTwin \
+  -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:CrisisTwinTests
+```
 
 ### Live drill UI tests
 

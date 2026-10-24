@@ -14,15 +14,25 @@
  */
 
 import type { ScheduledFireRun } from "../fire/scheduledTypes";
-import { RESOURCE_TYPES, productionFactor } from "../studio/firefighting";
+import { GROUND_APPARATUS, grassRateMetersPerHour } from "../studio/apparatus";
+import { productionFactor } from "../studio/firefighting";
 import { ellipsePerimeter } from "../studio/initialAttack";
 import type { LonLat } from "./area";
 import { DEVELOPED_FUEL_CODE } from "../fire/spread";
 
-/** Line one engine builds per minute in grass, metres. */
-export const ENGINE_LINE_METERS_PER_MINUTE = RESOURCE_TYPES.engine.metersPerHourInGrass / 60;
-/** Longest flame an engine crew can hold, feet (Hauling chart). */
-export const ENGINE_HOLDS_FLAME_FEET = RESOURCE_TYPES.engine.holdsFlameLengthFeet;
+/**
+ * The dispatch agent's engines are CAL FIRE Type 3 engines, the data's default state engine
+ * (docs/suppression-data.md, "How the simulator should use it").
+ */
+export const DISPATCH_ENGINE_KIND = "engine_t3" as const;
+/**
+ * Line one engine builds per minute in grass, metres: PMS 465 p.164 Table 4, three-person
+ * engine crew in fuel model 1 (24 chains/h = 483 m/h). It was an assumed 600 m/h before
+ * docs/adr/0048-suppression-engine.md.
+ */
+export const ENGINE_LINE_METERS_PER_MINUTE = grassRateMetersPerHour(DISPATCH_ENGINE_KIND) / 60;
+/** Longest flame an engine crew can hold, feet (Hauling chart, PMS 465 p.12). */
+export const ENGINE_HOLDS_FLAME_FEET = GROUND_APPARATUS[DISPATCH_ENGINE_KIND].holdsFlameLengthFeet;
 /** Attack options listed per fire: the nearest 1..N engines. */
 export const MAX_ATTACK_OPTIONS = 4;
 
@@ -58,7 +68,7 @@ export function fireTargets(run: ScheduledFireRun, names: Record<string, string>
     const { conditions, outcome } = ignition;
     const crowning = conditions.crown !== null && conditions.crown.type !== "surface";
     const headFlameFeet = crowning ? Infinity : conditions.spread.flameLengthFeet;
-    const factor = productionFactor(conditions.fuelCode);
+    const factor = productionFactor(conditions.fuelCode, DISPATCH_ENGINE_KIND);
     const ignitedMinute = outcome.status === "ignited" ? outcome.ignitedMinute : null;
     const structureFire = conditions.fuelCode === DEVELOPED_FUEL_CODE;
     return {
@@ -117,8 +127,9 @@ export function lineNeededMeters(
 
 /**
  * Simulator estimate of the minute the fire is out: `builtMeters` already built, plus one
- * engine starting at each minute in `arrivals` (clamped to `now`). Null when the fire cannot be
- * attacked, nobody works it, or the line does not catch the edge by the horizon.
+ * engine starting at each minute in `arrivals` (clamped to `now`), building `rates[i]` metres
+ * per minute (default ENGINE_LINE_METERS_PER_MINUTE, the Type 3 engine). Null when the fire
+ * cannot be attacked, nobody works it, or the line does not catch the edge by the horizon.
  */
 export function projectOutMinute(
   target: FireTarget,
@@ -128,15 +139,17 @@ export function projectOutMinute(
   builtMeters: number,
   arrivals: readonly number[],
   horizonMinutes: number,
+  rates?: readonly number[],
 ): number | null {
   if (target.directBlocked || target.ignitedMinute === null || arrivals.length === 0) return null;
   for (let minute = Math.max(now, target.ignitedMinute); minute <= horizonMinutes; minute += 1) {
     let built = builtMeters;
-    for (const arrival of arrivals) {
+    arrivals.forEach((arrival, i) => {
       // Work starts the whole minute after arrival, as the engine steps it.
       built +=
-        ENGINE_LINE_METERS_PER_MINUTE * Math.max(0, minute - Math.ceil(Math.max(arrival, now)));
-    }
+        (rates?.[i] ?? ENGINE_LINE_METERS_PER_MINUTE) *
+        Math.max(0, minute - Math.ceil(Math.max(arrival, now)));
+    });
     if (built > 0 && built >= lineNeededMeters(target, frames, fire, minute)) return minute;
   }
   return null;

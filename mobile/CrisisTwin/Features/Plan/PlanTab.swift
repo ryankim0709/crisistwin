@@ -28,6 +28,7 @@ struct PlanTab: View {
                     FamilyCard { mode in path.append(mode == .join ? .familyJoin : .family) }
                     TrustedContactsCard()
                     morePanel
+                    roadObservations
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 4)
@@ -87,6 +88,23 @@ struct PlanTab: View {
         }
         .ctPanel(padding: 0)
         .padding(.horizontal, 0)
+    }
+
+    /// Per-device, off by default. One short line says what it sends.
+    private var roadObservations: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle(isOn: Bindable(live).shareRoadObservations) {
+                rowLabel("Share road observations", systemImage: "car.fill")
+            }
+            .accessibilityIdentifier("share-road-observations")
+            .padding(.horizontal, 16)
+            .frame(minHeight: 50)
+            .ctPanel(padding: 0)
+            Text("Sends only \u{201C}road passable\u{201D} or \u{201C}slow\u{201D} for board roads you drive through. No track.")
+                .font(.footnote)
+                .foregroundStyle(Color.ctInkMuted)
+                .padding(.horizontal, 16)
+        }
     }
 
     private func rowLabel(_ title: String, systemImage: String) -> some View {

@@ -7,6 +7,8 @@ import {
   STRUCTURE_SPREAD_REFERENCE_WIND_MPH,
   compassPoint,
 } from "../fire/spread";
+import WindSourcePicker from "../fire/ui/WindSourcePicker";
+import type { ScenarioWindRecord } from "../fire/scenarioWeather";
 import type { FireSettings, IgnitionProblem } from "../fire/scheduledTypes";
 import { Button, EmptyState, Field, IconButton, Notice, Panel } from "../ui";
 import {
@@ -120,7 +122,31 @@ export default function ConfigPanel(props: ConfigPanelProps) {
   );
 
   function setSettings(patch: Partial<FireSettings>) {
-    onScenarioChange({ ...scenario, settings: { ...settings, ...patch } });
+    // Editing the wind by hand makes it an assumption again.
+    const editsWind = "windSpeedMph" in patch || "windFromDegrees" in patch;
+    const { weather: _dropped, ...withoutWeather } = scenario;
+    onScenarioChange({
+      ...(editsWind ? withoutWeather : scenario),
+      settings: { ...settings, ...patch },
+    });
+  }
+
+  const firstFire = ignitions.find((ignition) => ignition.enabled) ?? ignitions[0] ?? null;
+  function applyWeather(record: ScenarioWindRecord | null) {
+    if (record === null) {
+      const { weather: _dropped, ...withoutWeather } = scenario;
+      onScenarioChange(withoutWeather);
+      return;
+    }
+    onScenarioChange({
+      ...scenario,
+      weather: record,
+      settings: {
+        ...settings,
+        windSpeedMph: record.applied.speed20ftMph,
+        windFromDegrees: record.applied.fromDeg,
+      },
+    });
   }
 
   function updateIgnition(id: string, patch: Partial<ScheduledIgnition>) {
@@ -386,6 +412,14 @@ export default function ConfigPanel(props: ConfigPanelProps) {
           <h3 id={`${uid}-wx`} className="studio-subtitle">
             Conditions <span className="studio-subtitle-note">constant for the run</span>
           </h3>
+
+          <WindSourcePicker
+            lon={firstFire?.location.longitude ?? null}
+            lat={firstFire?.location.latitude ?? null}
+            horizonHours={horizon / 60}
+            record={scenario.weather ?? null}
+            onApply={applyWeather}
+          />
 
           <Field label="Wind speed, mph (20-ft)">
             <div className="studio-row">

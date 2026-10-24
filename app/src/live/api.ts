@@ -19,7 +19,8 @@ import type {
   TwinMonitor,
 } from "./types";
 
-export const INCIDENT_ID = "camp-2018-drill";
+/** Fallback when `/api/live/active` is unreachable; the live incident is otherwise read from it (active.ts). */
+export const DEFAULT_INCIDENT_ID = "camp-2018-drill";
 const BASE = "/api/live/";
 const TOKEN_KEY = "crisistwin.live.controllerToken";
 
@@ -133,8 +134,8 @@ function isCommand(data: unknown): data is CommandResponse {
   );
 }
 
-export async function fetchCommand(token: string, signal: AbortSignal): Promise<CommandResponse> {
-  const data = await request<unknown>(token, "GET", `incidents/${INCIDENT_ID}/command`, undefined, signal);
+export async function fetchCommand(token: string, incidentId: string, signal: AbortSignal): Promise<CommandResponse> {
+  const data = await request<unknown>(token, "GET", `incidents/${encodeURIComponent(incidentId)}/command`, undefined, signal);
   if (!isCommand(data)) throw new LiveError(200, "bad_response", "The live API returned an unexpected response.");
   return data;
 }
@@ -155,8 +156,8 @@ function isTwin(data: unknown): data is TwinMonitor {
   );
 }
 
-export async function fetchTwin(token: string, signal: AbortSignal): Promise<TwinMonitor> {
-  const data = await request<unknown>(token, "GET", `incidents/${INCIDENT_ID}/twin`, undefined, signal);
+export async function fetchTwin(token: string, incidentId: string, signal: AbortSignal): Promise<TwinMonitor> {
+  const data = await request<unknown>(token, "GET", `incidents/${encodeURIComponent(incidentId)}/twin`, undefined, signal);
   if (!isTwin(data)) throw new LiveError(200, "bad_response", "The twin returned an unexpected response.");
   return data;
 }
@@ -170,10 +171,10 @@ export const helpAction = (token: string, checkinId: string, action: HelpAction,
     ...(action === "assign" ? { assignee: assignee ?? null } : {}),
   });
 
-export const createTask = (token: string, body: CreateTaskRequest) =>
-  request<unknown>(token, "POST", `incidents/${INCIDENT_ID}/tasks`, body);
+export const createTask = (token: string, incidentId: string, body: CreateTaskRequest) =>
+  request<unknown>(token, "POST", `incidents/${encodeURIComponent(incidentId)}/tasks`, body);
 
-export const replan = (token: string) => request<ReplanResponse>(token, "POST", `incidents/${INCIDENT_ID}/replan`, {});
+export const replan = (token: string, incidentId: string) => request<ReplanResponse>(token, "POST", `incidents/${encodeURIComponent(incidentId)}/replan`, {});
 
 export const approveProposal = (token: string, id: string, zoneIds?: string[]) => {
   const body: ApproveProposalRequest = zoneIds ? { zone_ids: zoneIds } : {};
@@ -183,11 +184,11 @@ export const approveProposal = (token: string, id: string, zoneIds?: string[]) =
 export const rejectProposal = (token: string, id: string) =>
   request<RejectProposalResponse>(token, "POST", `proposals/${encodeURIComponent(id)}/reject`, {});
 
-export const drillAction = (token: string, body: DrillRequest) =>
-  request<DrillResponse>(token, "POST", `incidents/${INCIDENT_ID}/drill`, body);
+export const drillAction = (token: string, incidentId: string, body: DrillRequest) =>
+  request<DrillResponse>(token, "POST", `incidents/${encodeURIComponent(incidentId)}/drill`, body);
 
-export const runImpact = (token: string, body: ImpactRequest) =>
-  request<ImpactResponse>(token, "POST", `incidents/${INCIDENT_ID}/impact`, body);
+export const runImpact = (token: string, incidentId: string, body: ImpactRequest) =>
+  request<ImpactResponse>(token, "POST", `incidents/${encodeURIComponent(incidentId)}/impact`, body);
 
 /** The route from the responder (or the assignee's last location) to an open task. */
 export const fetchTaskRoute = (token: string, taskId: string, signal?: AbortSignal) =>

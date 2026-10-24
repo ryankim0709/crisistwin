@@ -41,7 +41,7 @@ struct HomeView: View {
             .ctScreenBackground()
             .ctOwnHeader()
             .refreshable { await store.refresh() }
-            .animation(.snappy, value: store.stillThereItems.map(\.id))
+            .animation(.snappy, value: store.stillThereItems.map(\.id) + store.boardQuestions.map(\.id))
         }
     }
 
@@ -102,10 +102,12 @@ struct HomeView: View {
 
     @ViewBuilder private var stillThere: some View {
         let items = Array(store.stillThereItems.prefix(3))
-        if !items.isEmpty {
+        let board = store.boardQuestions
+        if !items.isEmpty || !board.isEmpty {
             HomePanel(title: "Still there?") {
                 VStack(alignment: .leading, spacing: 14) {
                     ForEach(items) { StillThereRow(item: $0) }
+                    ForEach(board) { BoardQuestionRow(question: $0) }
                 }
             }
         }

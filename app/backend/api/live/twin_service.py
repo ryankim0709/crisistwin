@@ -1,7 +1,8 @@
 """The real-time traffic twin (ADR 0013, docs/twin-api.md) inside the live API process.
 
-One ``sim.twin.Twin`` per incident per process, built from the same Camp inputs as the drill
-bundle at the drill's ``replay_start`` and advanced to ``replay_now`` whenever it is read.
+One ``sim.twin.Twin`` per incident per process, built from the incident's inputs (Camp: the
+packages the drill bundle was built from; a Studio drill package: its own roads, synthetic
+zones and simulated fire, ``sim.twin.package_inputs``) at the drill's ``replay_start`` and advanced to ``replay_now`` whenever it is read.
 Before each read the twin is synced with the drill's decisions, as labeled simulated
 commands (history is never altered):
 
@@ -16,7 +17,7 @@ Each command is applied at the drill time it was published or confirmed, or at t
 next step when that time has already passed. The session is rebuilt from ``replay_start``
 when the drill restarts (its ``started_at`` or ``replay_start`` changes) or its clock moves
 back. The inputs (history, scenario, fire timeline) are built once per process in a
-background thread on first use; until then reads raise ``TwinUnavailable("warming")``.
+background thread on first use, per incident; until then reads raise ``TwinUnavailable("warming")``.
 Destinations use the planner's road nodes (``livecore.routing``: an exit node without
 in-edges is snapped to the nearest reachable node), so the twin routes to the same nodes
 the published guidance does. Twin calls are serialized by a per-incident lock.
@@ -39,8 +40,10 @@ from django.conf import settings
 from livecore import drill as drillmod
 from livecore import routing
 from livecore.geo import simplify_line
+from livecore.drill import INCIDENT_ID
 from livecore.public import controller_blocked_segments
 
+from . import incidents
 from .common import iso
 from .drillcache import get_index
 from .state import Snapshot, current_guidance
@@ -93,10 +96,19 @@ def _package(name: str, default: str) -> Path:
     return path if path.is_absolute() else REPO_ROOT / path
 
 
-# ---- inputs (built once per process) ----
+# ---- inputs (built once per incident per process) ----
 
 _inputs_lock = threading.Lock()
-_inputs: dict[str, Any] = {"status": "idle", "error": None, "inputs": None, "seconds": None}
+_inputs: dict[str, dict[str, Any]] = {}
+"""Incident id -> ``{status: idle|warming|ready|failed, error, inputs, seconds}``."""
+
+
+FAILED_RETRY_S = 300.0
+"""A failed build is retried by the next read after this long."""
+
+
+def _state(incident_id: str) -> dict[str, Any]:
+    return _inputs.setdefault(incident_id, {"status": "idle", "error": None, "inputs": None, "seconds": None})
 
 
 def _planner_destinations(inputs, twinmod, destination_nodes) -> tuple[Any, dict[str, tuple[str, str]]]:
@@ -132,7 +144,24 @@ def build_camp_inputs(seed: int = TWIN_SEED):
         TWIN_DEMAND,
         seed,
     )
-    inputs, moved = _planner_destinations(inputs, twinmod, routing._index(get_index().drill).destination_nodes)
+    return _finish_inputs(inputs, twinmod, INCIDENT_ID)
+
+
+def build_package_inputs(incident_id: str, seed: int = TWIN_SEED):
+    """Twin inputs of a Studio drill package incident (``sim.twin.package_inputs``), built synchronously."""
+    source = incidents.source_for(incident_id)
+    if source is None or source.kind != "package":
+        raise ValueError(f"no twin source for incident {incident_id}")
+    twinmod = _import_sim()
+    return _finish_inputs(twinmod.package_inputs(source.path, seed), twinmod, incident_id)
+
+
+def build_inputs(incident_id: str, seed: int = TWIN_SEED):
+    return build_camp_inputs(seed) if incident_id == INCIDENT_ID else build_package_inputs(incident_id, seed)
+
+
+def _finish_inputs(inputs, twinmod, incident_id: str):
+    inputs, moved = _planner_destinations(inputs, twinmod, routing._index(get_index(incident_id).drill).destination_nodes)
     if moved:
         log.info("live twin: %d destinations moved to the planner's road node: %s", len(moved),
                  ", ".join(f"{k} {a}->{b}" for k, (a, b) in sorted(moved.items())))
@@ -140,42 +169,52 @@ def build_camp_inputs(seed: int = TWIN_SEED):
     return inputs
 
 
-def _build_inputs() -> None:
+def _build_inputs(incident_id: str) -> None:
     t0 = time.perf_counter()
     try:
-        inputs = build_camp_inputs()
+        inputs = build_inputs(incident_id)
     except Exception as exc:  # noqa: BLE001 - any failure means "no twin"; the rule controller takes over
-        log.exception("live twin: building the Camp twin inputs failed")
+        log.exception("live twin: building the twin inputs of %s failed", incident_id)
         with _inputs_lock:
-            _inputs.update(status="failed", error=f"{type(exc).__name__}: {exc}")
+            _state(incident_id).update(status="failed", error=f"{type(exc).__name__}: {exc}",
+                                       failed_at=time.monotonic())
         return
     seconds = round(time.perf_counter() - t0, 1)
     with _inputs_lock:
-        _inputs.update(status="ready", inputs=inputs, seconds=seconds)
-    log.info("live twin: Camp inputs ready in %.1f s (fingerprint %s)", seconds, inputs.fingerprint)
+        _state(incident_id).update(status="ready", inputs=inputs, seconds=seconds)
+    log.info("live twin: %s inputs ready in %.1f s (fingerprint %s)", incident_id, seconds, inputs.fingerprint)
 
 
-def warm() -> str:
-    """Start building the inputs in the background (once). Returns the current status."""
+def warm(incident_id: str | None = None) -> str:
+    """Start building the incident's inputs in the background (once). Returns the current status.
+
+    ``incident_id`` defaults to the request's incident, else the active one."""
+    incident_id = incident_id or incidents.request_incident()
     with _inputs_lock:
-        if _inputs["status"] == "idle":
-            _inputs["status"] = "warming"
-            threading.Thread(target=_build_inputs, name="live-twin-warm", daemon=True).start()
-        return _inputs["status"]
+        state = _state(incident_id)
+        if state["status"] == "failed" and time.monotonic() - state.get("failed_at", 0.0) > FAILED_RETRY_S:
+            state["status"] = "idle"  # e.g. a package written after a failed first build
+        if state["status"] == "idle":
+            state["status"] = "warming"
+            threading.Thread(target=_build_inputs, args=(incident_id,), name=f"live-twin-warm-{incident_id}",
+                             daemon=True).start()
+        return state["status"]
 
 
-def status() -> dict[str, Any]:
+def status(incident_id: str | None = None) -> dict[str, Any]:
+    incident_id = incident_id or incidents.request_incident()
     with _inputs_lock:
-        return {"status": _inputs["status"], "error": _inputs["error"], "build_s": _inputs["seconds"]}
+        state = _state(incident_id)
+        return {"status": state["status"], "error": state["error"], "build_s": state["seconds"]}
 
 
-def _ready_inputs():
-    state = warm()
+def _ready_inputs(incident_id: str):
+    state = warm(incident_id)
     if state == "warming":
-        raise TwinUnavailable("warming", "The twin is loading the Camp inputs; retry in a few seconds.")
+        raise TwinUnavailable("warming", "The twin is loading its inputs; retry in a few seconds.")
     if state == "failed":
-        raise TwinUnavailable("failed", f"The twin could not be built: {_inputs['error']}")
-    return _inputs["inputs"]
+        raise TwinUnavailable("failed", f"The twin could not be built: {_inputs[incident_id]['error']}")
+    return _inputs[incident_id]["inputs"]
 
 
 # ---- per-incident session ----
@@ -367,7 +406,7 @@ def _restarted(sess: _Session, snapshot: Snapshot) -> str | None:
 
 def _sync(sess: _Session, snapshot: Snapshot, twinmod) -> None:
     """Advance the twin to the drill's ``replay_now``, applying new commands at their drill times."""
-    inputs = _ready_inputs()
+    inputs = _ready_inputs(snapshot.incident_id)
     clock = snapshot.clock
     target = min(clock.replay_now, inputs.end)
     if sess.twin is not None:
@@ -445,9 +484,9 @@ def _with_twin(snapshot: Snapshot, fn, lock_timeout_s: float = LOCK_TIMEOUT_S):
 # ---- public API ----
 
 
-def ensure_ready() -> bool:
-    """True when the inputs are built (starts warming otherwise)."""
-    return warm() == "ready"
+def ensure_ready(incident_id: str | None = None) -> bool:
+    """True when the incident's inputs are built (starts warming otherwise)."""
+    return warm(incident_id) == "ready"
 
 
 def whatif(snapshot: Snapshot, action_sets: list, horizon_min: float, fire_ahead: str,
@@ -543,6 +582,17 @@ def edge_speeds_at(snapshot: Snapshot, lock_timeout_s: float = 2.0) -> tuple[str
     return _with_twin(snapshot, lambda sess, twin, twinmod: (twin.now, edge_speed_rows(twin)), lock_timeout_s)
 
 
+def destination_arrivals(snapshot: Snapshot, lock_timeout_s: float = 2.0) -> dict[str, tuple[int, int]]:
+    """Destination id -> (arrived vehicles, arrived in the last 10 simulated minutes) from the synced
+    twin's summary snapshot. Simulated. Same errors as ``edge_speeds``."""
+
+    def run(sess, twin, twinmod):
+        return {d["id"]: (int(d["arrived_veh"]), int(d["arrived_last_10_min_veh"]))
+                for d in twin.snapshot(detail="summary")["destinations"]}
+
+    return _with_twin(snapshot, run, lock_timeout_s)
+
+
 def edge_speed_rows(twin) -> dict[str, tuple[int, float, float]]:
     """Directed edge id -> (vehicles, mean speed kph, free-flow kph) for the occupied edges of
     ``twin`` (a ``sim.twin.Twin``) at its ``now``. Simulated."""
@@ -628,6 +678,8 @@ def monitor(snapshot: Snapshot) -> dict[str, Any]:
             "limitations": [
                 "Simulated by an uncalibrated meso traffic model on the replay's demand; not observed traffic.",
                 "Drill decisions enter as labeled simulated commands; historical events are unchanged.",
+                # A Studio package's twin states its synthetic-demand assumptions (sim.twin.PACKAGE_ASSUMPTIONS).
+                *(twin.inputs.scenario.get("notes") or [] if snapshot.incident_id != INCIDENT_ID else []),
             ],
         }
 

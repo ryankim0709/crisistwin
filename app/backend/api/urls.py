@@ -1,7 +1,10 @@
 from django.urls import include, path, re_path
 
+from .demo import demo_decide, demo_routes
+from .demo_realism import demo_crew_routes, demo_environment, demo_wind
 from .dispatch import decide
 from .dispatch_area import dispatch_area
+from .dispatch_runs import run_list, run_outcome
 from .explain import explain
 from .families import create_family, family_detail, family_meeting_points, family_member_me, join_family
 from .intel import (
@@ -17,6 +20,12 @@ from .landscapes import landscape_list, landscape_package
 from .live_active import live_active
 from .live_broadcast import live_broadcast, live_snapshot
 from .mobile_data import mobile_collection, mobile_document, register_device
+from .scenario_weather import scenario_weather
+from .sim_state import advice as sim_advice
+from .sim_state import homes as sim_homes
+from .sim_state import latest as sim_latest
+from .sim_state import publish_run, tick_run
+from .suppression_bases import suppression_bases
 from .views import health
 
 FAMILY_ID = r"(?P<family_id>[0-9a-f]{24})"
@@ -28,10 +37,28 @@ urlpatterns = [
     path("replay/explain", explain, name="replay-explain"),
     path("dispatch/decide", decide, name="dispatch-decide"),
     path("dispatch/area", dispatch_area, name="dispatch-area"),
+    path("weather/scenario", scenario_weather, name="weather-scenario"),
+    path("suppression/bases", suppression_bases, name="suppression-bases"),
+    path("demo/routes", demo_routes, name="demo-routes"),
+    path("demo/decide", demo_decide, name="demo-decide"),
+    path("demo/crew_routes", demo_crew_routes, name="demo-crew-routes"),
+    path("demo/environment", demo_environment, name="demo-environment"),
+    path("demo/wind", demo_wind, name="demo-wind"),
+    path("dispatch/runs", run_list, name="dispatch-runs"),
+    re_path(
+        r"^dispatch/runs/(?P<session_id>[0-9a-f-]{36})/outcome$",
+        run_outcome,
+        name="dispatch-run-outcome",
+    ),
     path("live", live_snapshot, name="live-snapshot"),
     path("live/active", live_active, name="live-active"),
     path("live/broadcast", live_broadcast, name="live-broadcast"),
     path("live/", include("api.live.urls")),
+    path("sim-state/runs", publish_run, name="sim-state-publish"),
+    re_path(r"^sim-state/runs/(?P<run_id>[^/]{1,64})/tick$", tick_run, name="sim-state-tick"),
+    path("sim-state/latest", sim_latest, name="sim-state-latest"),
+    path("sim-state/advice", sim_advice, name="sim-state-advice"),
+    path("sim-state/homes", sim_homes, name="sim-state-homes"),
     path("families", create_family, name="family-create"),
     path("families/join", join_family, name="family-join"),
     re_path(rf"^families/{FAMILY_ID}$", family_detail, name="family-detail"),

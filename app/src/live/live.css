@@ -674,6 +674,23 @@
 .lc-sel-reports .lc-q-quote {
   grid-column: 1 / -1;
 }
+.lc-sel-edited {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ct-space-1) var(--ct-space-2);
+}
+.lc-sel-revs {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--ct-space-1);
+}
+.lc-sel-revs li {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
 .lc-sel-status {
   color: var(--ct-ink-muted);
 }

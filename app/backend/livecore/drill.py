@@ -1,4 +1,4 @@
-"""The drill: Camp replay bundle data and the drill clock.
+"""The drill: replay bundle data (Camp, or a Studio drill package) and the drill clock.
 
 Bundle format: docs/replay-bundle.md. Clock contract: docs/live-reports.md "Drill clock".
 """
@@ -45,6 +45,12 @@ class Edge:
     capacity_veh_per_hour: float
     length_m: float
     coords: tuple[LonLat, ...]
+    bridge: bool = False
+    """The bundle's OSM bridge flag (False when the bundle has none)."""
+    tags: tuple[tuple[str, str], ...] = ()
+    """OSM access tags (surface, tracktype, width, ...) when the bundle carries ``tags`` per
+    edge; empty for bundles built without them (camp-2018 has none). Read by
+    ``livecore.apparatus`` for the road-access rules."""
 
 
 @dataclass(frozen=True)
@@ -199,6 +205,8 @@ def _road_graph(raw_edges: Any) -> RoadGraph:
                 capacity_veh_per_hour=float(raw.get("capacity_veh_per_hour") or 0.0),
                 length_m=float(raw["length_m"]),
                 coords=coords,
+                bridge=bool(raw.get("bridge")),
+                tags=tuple(sorted((str(k), str(v)) for k, v in (raw.get("tags") if isinstance(raw.get("tags"), Mapping) else {}).items())),
             )
         except (KeyError, TypeError, ValueError, IndexError) as exc:
             raise ValueError(f"bundle: malformed road edge {raw.get('id') if isinstance(raw, Mapping) else raw!r}") from exc
@@ -322,6 +330,14 @@ def load_drill(bundle_path: str | Path, incident_id: str = INCIDENT_ID) -> Drill
         observations=tuple(observations),
         fire_model=fire_model,
     )
+
+
+def default_replay_start(drill: Drill) -> datetime:
+    """Where the drill clock starts unless the controller picks a time: ``DEFAULT_REPLAY_START``
+    for the Camp replay, else the drill's ``clock_start`` (a Studio package starts at T+0)."""
+    if drill.clock_start <= DEFAULT_REPLAY_START < drill.clock_end:
+        return DEFAULT_REPLAY_START
+    return drill.clock_start
 
 
 def replay_now(

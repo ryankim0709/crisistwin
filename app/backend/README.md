@@ -153,6 +153,23 @@ A device registers once for a bearer token (stored as a hash) and sees only its 
 kept in the `mobile_documents` collection (devices in `mobile_devices`). Limits, errors and
 examples are in [ADR 0029](../../docs/adr/0029-mobile-data-store.md).
 
+### Command demo (`/api/demo/…`)
+
+`api/demo.py` serves the `/demo` page ([ADR 0047](../../docs/adr/0047-command-demo.md); wire
+shapes in `app/src/demo/contracts.ts`). Both endpoints are anonymous for the local demo, answer
+`Cache-Control: no-store` and return errors as `{"error", "detail"}`. The game itself runs in the
+browser; nothing here is stored.
+
+- `POST /api/demo/routes` `{fires: [ring, ...]}` (at most 60 closed `[lon, lat]` rings of 4-200
+  points; body at most 300 kB; 120/min) returns `{zones: [{zone_id, options}], evidence_class:
+  "simulated"}`: each drill zone's best route and up to 3 alternatives around the fires, from
+  `livecore.routing` over the drill road graph. Distances are metres, `eta_min` minutes.
+- `POST /api/demo/decide` `{observation}` (at most 200 kB; 40/min) streams `application/x-ndjson`
+  like `/api/dispatch/decide`: `thinking`/`text` lines, then one `orders` or `error` line. Claude
+  can `send_crew`, `release_crew` or `order_evacuation`; each order is validated against the ids
+  in the observation (at most 20 per decision). Needs `ANTHROPIC_API_KEY` (else 503
+  `ai_unavailable`) and reuses `DISPATCH_AGENT_MODEL` and `DISPATCH_AGENT_EFFORT`.
+
 ### Live drill API (`/api/live/…`)
 
 Implements v1 and v2 of [docs/live-reports.md](../../docs/live-reports.md) (ADR 0011, 0012):
@@ -211,6 +228,13 @@ planner. It writes `.json` and `.md`; see [live-reports.md](../../docs/live-repo
 data. Use a separate server and database, never the shared one. Method and results:
 [docs/live-loadtest.md](../../docs/live-loadtest.md).
 
+`python manage.py live_batch --spec api/live/specs/camp-2018-pilot.json --strategies
+historical_only,rule_auto,record_delay_5 --workers 8 --out /tmp/batch-pilot` (same env; no
+server, no database writes; about 3 min for 24 runs on 8 cores) is the headless batch runner:
+scenario × strategy × seed in lockstep on the drill clock, scored with the AAR in drill minutes,
+one `RunManifest` per run and a paired comparison table. Simulated planning experiments; see
+[batch-runner.md](../../docs/batch-runner.md) and ADR `0049-batch-runner.md`.
+
 ### Incident intelligence (`/api/intel/…`)
 
 Public agency pages, fetched by the Apify Actor in `actors/incident-intel/`, become source
@@ -258,3 +282,17 @@ the optional explain, dispatch and intel extraction endpoints need a provider ke
 (`ANTHROPIC_API_KEY`); intel runs need `APIFY_TOKEN`/`APIFY_ACTOR_ID`.
 Optional existing contract tests mock the MongoDB boundary; they still require a
 syntactically valid `MONGODB_URI` environment variable to load Django settings.
+
+### Simulation state (`/api/sim-state/…`)
+
+`api/sim_state.py` stores the Studio's evacuation run and serves per-home advice to the
+iOS app. Everything is simulated (synthetic homes and addresses). No auth; throttled.
+Collections `sim_runs` (run, zones, current tick state) and `sim_homes` (one document per
+home with a 2dsphere `location`); only the 3 newest runs are kept. Full contract, limits
+and documents: [`docs/sim-state-api.md`](../../docs/sim-state-api.md).
+
+- `POST /api/sim-state/runs`: publish a run (zones and homes), returns `201 {run_id}`.
+- `POST /api/sim-state/runs/<run_id>/tick`: push the state at one simulation minute.
+- `GET /api/sim-state/latest`: latest run, current minute and per-zone state.
+- `GET /api/sim-state/advice?lon=&lat=` or `?home_id=`: advice for one home.
+- `GET /api/sim-state/homes?q=&limit=`: address search.

@@ -5,9 +5,13 @@ import type { FireAttack, InitialAttackEstimate } from "./initialAttack";
 
 function trip(label: string, arriveMinute: number): CrewTrip {
   return {
-    kind: "engine",
+    kind: "engine_t3",
     label,
     stationName: "Station",
+    origin: "station",
+    roadPoint: [0, 0],
+    hikeMeters: 0,
+    stoppedShortBy: null,
     departMinute: 1,
     atRoadMinute: arriveMinute,
     arriveMinute,
@@ -26,6 +30,8 @@ const DISPATCH: CrewDispatch = {
   hikeMeters: 0,
   hikeMinutes: 0,
   trips: [trip("Engine 1", 12), trip("Engine 2", 20)],
+  noAccess: [],
+  notes: [],
 };
 
 function fire(overrides: Partial<FireAttack>): FireAttack {

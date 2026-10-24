@@ -1,9 +1,16 @@
 /**
  * Calls POST /api/dispatch/decide and reads its NDJSON stream (contracts.ts). The caller's
- * AbortSignal cancels both the request and the read.
+ * AbortSignal cancels both the request and the read. `streamNdjson` is the shared reader,
+ * also used by the /demo agent (demo/useDemoAgent.ts).
  */
 
-import { DECIDE_URL, type DecisionEvent, type Observation } from "./contracts";
+import {
+  DECIDE_URL,
+  runOutcomeUrl,
+  type DecisionEvent,
+  type Observation,
+  type RunOutcome,
+} from "./contracts";
 
 export type FinalDecision = Extract<DecisionEvent, { type: "orders" }>;
 
@@ -17,7 +24,10 @@ export class DecisionError extends Error {
   }
 }
 
-function parseEvent(line: string): DecisionEvent {
+/** A streamed delta line, common to every NDJSON decision endpoint. */
+export type StreamDelta = { type: "thinking"; text: string } | { type: "text"; text: string };
+
+function parseEvent(line: string, isFinal: (event: { type: string }) => boolean): { type: string } {
   let value: unknown;
   try {
     value = JSON.parse(line);
@@ -25,18 +35,29 @@ function parseEvent(line: string): DecisionEvent {
     throw new DecisionError("bad_stream", "The agent service sent an unreadable line.");
   }
   const type = (value as { type?: unknown } | null)?.type;
-  if (type !== "thinking" && type !== "text" && type !== "orders" && type !== "error") {
+  if (typeof type !== "string") {
     throw new DecisionError("bad_stream", "The agent service sent an unknown event.");
   }
-  return value as DecisionEvent;
+  const event = value as { type: string };
+  if (type !== "thinking" && type !== "text" && type !== "error" && !isFinal(event)) {
+    throw new DecisionError("bad_stream", "The agent service sent an unknown event.");
+  }
+  return event;
 }
 
-export async function requestDecision(
-  observation: Observation,
-  onEvent: (event: Extract<DecisionEvent, { type: "thinking" | "text" }>) => void,
+/**
+ * POSTs `body` as JSON to `url` and reads its NDJSON stream: "thinking"/"text" lines go to
+ * `onEvent`, an "error" line throws DecisionError, and the first line `isFinal` accepts is
+ * returned. Non-2xx responses throw with the body's `{ error, detail }` when it has one.
+ */
+export async function streamNdjson<TFinal>(
+  url: string,
+  body: unknown,
+  isFinal: (event: { type: string }) => boolean,
+  onEvent: (event: StreamDelta) => void,
   signal: AbortSignal,
-): Promise<FinalDecision> {
-  const response = await fetch(DECIDE_URL, {
+): Promise<TFinal> {
+  const response = await fetch(url, {
     method: "POST",
     // DRF negotiates a renderer before the view runs, so JSON must be acceptable too (error
     // bodies are JSON); a successful response is the NDJSON stream either way.
@@ -44,16 +65,16 @@ export async function requestDecision(
       "Content-Type": "application/json",
       Accept: "application/x-ndjson, application/json",
     },
-    body: JSON.stringify({ observation }),
+    body: JSON.stringify(body),
     signal,
   });
   if (!response.ok) {
     let detail = `The agent service returned HTTP ${response.status}.`;
     let code = "http_error";
     try {
-      const body = (await response.json()) as { error?: string; detail?: string };
-      if (body.detail) detail = body.detail;
-      if (body.error) code = body.error;
+      const data = (await response.json()) as { error?: string; detail?: string };
+      if (data.detail) detail = data.detail;
+      if (data.error) code = data.error;
     } catch {
       // Not JSON (for example a proxy error page); keep the status message.
     }
@@ -72,14 +93,45 @@ export async function requestDecision(
       const line = buffer.slice(0, newline).trim();
       buffer = buffer.slice(newline + 1);
       if (line) {
-        const event = parseEvent(line);
-        if (event.type === "orders") return event;
-        if (event.type === "error") throw new DecisionError(event.error, event.detail);
-        onEvent(event);
+        const event = parseEvent(line, isFinal);
+        if (event.type === "error") {
+          const { error, detail } = event as { error?: unknown; detail?: unknown };
+          throw new DecisionError(String(error), String(detail));
+        }
+        if (event.type === "thinking" || event.type === "text") onEvent(event as StreamDelta);
+        else return event as TFinal;
       }
       newline = buffer.indexOf("\n");
     }
     if (done) break;
   }
   throw new DecisionError("bad_stream", "The agent stream ended without a decision.");
+}
+
+export function requestDecision(
+  observation: Observation,
+  onEvent: (event: Extract<DecisionEvent, { type: "thinking" | "text" }>) => void,
+  signal: AbortSignal,
+  sessionId?: string,
+): Promise<FinalDecision> {
+  return streamNdjson<FinalDecision>(
+    DECIDE_URL,
+    sessionId ? { observation, session_id: sessionId } : { observation },
+    (event) => event.type === "orders",
+    onEvent,
+    signal,
+  );
+}
+
+/**
+ * Journal the run's outcome (best effort: the journal is optional and a failure only means the
+ * next run on these roads has less to learn from).
+ */
+export function reportOutcome(sessionId: string, outcome: RunOutcome): void {
+  void fetch(runOutcomeUrl(sessionId), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(outcome),
+    keepalive: true,
+  }).catch(() => undefined);
 }

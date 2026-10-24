@@ -136,7 +136,7 @@ class ApprovalFlowTest(base.LiveApiTest):
                 ]
                 return dataclasses.replace(plan, guidance=guidance)
 
-        with mock.patch.object(controller.controllers, "active", lambda: LosesRoute()):
+        with mock.patch.object(controller.controllers, "active", lambda *_: LosesRoute()):
             pending, auto = controller.replan(load_snapshot(INCIDENT, wall_now()), ["fire"])
         self.assertIsNotNone(pending)
         lost = [c for c in pending["changes"] if c["zone_id"] == routed["zone_id"]]

@@ -4,15 +4,17 @@
  * and without the closures. Every number is the dispatch engine's (studio/evacuation.ts).
  */
 
-import type { DispatchArea, RoadEdge } from "../dispatch/area";
+import { roadLabel, type DispatchArea, type RoadEdge } from "../dispatch/area";
 import type { Totals } from "../dispatch/engine";
 import { formatElapsed } from "../fire/spread";
 import type { BoardStreetsState } from "../fire/useBoardStreets";
+import "../live/live-share.css";
 import { Button, Field, LoadingState, Notice, Panel, SegmentedControl, Tag } from "../ui";
 import { ORDER_MINUTE_CHOICES, type EvacuationSummary } from "./evacuation";
 import { describeImprovement } from "./evacuationAdvice";
 import type { EvacuationOptimization } from "./evacuationOptimizer";
 import type { EvacuationOptimizerState } from "./useEvacuationOptimizer";
+import type { SimStatePublishStatus } from "./useSimStatePublisher";
 
 /** Which plan the 3D view plays: the default policy or the optimiser's best. */
 export type PlayPlan = "fastest" | "optimized";
@@ -45,11 +47,25 @@ export interface EvacuationPanelProps {
   optimizer: EvacuationOptimizerState;
   playPlan: PlayPlan;
   onPlayPlan: (plan: PlayPlan) => void;
+  /** Share the run's homes and advice with the resident app (docs/sim-state-api.md). */
+  publish: boolean;
+  onPublish: (on: boolean) => void;
+  publishStatus: SimStatePublishStatus;
 }
 
-function roadLabel(edge: RoadEdge): string {
-  const name = edge.name ?? `Unnamed ${edge.roadClass.replace("_", " ")} road`;
-  return edge.bridge ? `${name} (bridge)` : name;
+function publishText(status: SimStatePublishStatus): string {
+  switch (status.state) {
+    case "idle":
+      return "Not shared. Shares once a run exists.";
+    case "publishing":
+      return "Publishing homes and zones…";
+    case "live":
+      return status.minute === null
+        ? "Published. Waiting for the first playback minute."
+        : `Resident app sees T+${status.minute} min (simulated).`;
+    case "error":
+      return `Could not share: ${status.message}`;
+  }
 }
 
 function clearText(summary: EvacuationSummary): string {
@@ -258,6 +274,9 @@ export default function EvacuationPanel(props: EvacuationPanelProps) {
     optimizer,
     playPlan,
     onPlayPlan,
+    publish,
+    onPublish,
+    publishStatus,
   } = props;
   const ready = streets.status === "ready";
   const playingOptimized = playPlan === "optimized" && optimizer.status === "ready";
@@ -440,6 +459,27 @@ export default function EvacuationPanel(props: EvacuationPanelProps) {
                 onPlayPlan={onPlayPlan}
               />
             </>
+          )}
+
+          {hasRun && (
+            <div className="live-share">
+              <input
+                id="studio-evac-publish"
+                type="checkbox"
+                checked={publish}
+                onChange={(event) => onPublish(event.target.checked)}
+              />
+              <label htmlFor="studio-evac-publish">Share with resident app (homes)</label>{" "}
+              <Tag>Simulated</Tag>
+              <p className="live-share__status" role="status" data-state={publishStatus.state}>
+                {publishText(publishStatus)}
+              </p>
+              <p className="studio-evac__note">
+                Sends this run&rsquo;s synthetic homes and made-up street addresses with leave-now /
+                leave-later advice as playback moves. A planning experiment, not an evacuation
+                order.
+              </p>
+            </div>
           )}
 
           <p className="studio-evac__note">

@@ -21,12 +21,16 @@ import { newSessionId, useLiveBroadcast } from "../live/useLiveBroadcast";
 import type { StudioAsideContext } from "../studio/SimulationStudioPage";
 import DispatchConsole, { type SetupStep } from "./DispatchConsole";
 import { AreaRequestError, dispatchBoxFor, loadArea, type Bbox, type DispatchArea } from "./area";
-import { noActionBaseline, type IgnitionEvent } from "./engine";
+import { noActionBaseline, type IgnitionEvent, type RoadClosure } from "./engine";
 import { fireAreaFrames, fireTargets } from "./fireAttack";
 import { computeExposure } from "./fireExposure";
-import type { FrameSummary } from "./observation";
+import { roadsObservation, type FrameSummary } from "./observation";
+import RoadClosures from "./RoadClosures";
+import { nearestEdge } from "../studio/evacuation";
 import { DispatchOverlay } from "./scene/DispatchOverlay";
+import { dispatchApparatus } from "./stationApparatus";
 import { useDispatchSession } from "./useDispatchSession";
+import { useSuppressionBases } from "../studio/suppressionBases";
 import { Button } from "../ui";
 import "./dispatch.css";
 
@@ -35,6 +39,7 @@ const AREA_DEBOUNCE_MS = 500;
 /** Road boxes are snapped to this grid (degrees), like the backend cache. */
 const AREA_SNAP_DEGREES = 0.01;
 const ZONE_FOCUS_METERS = 900;
+const ROAD_NOTICE_MS = 4000;
 
 type AreaState =
   | { status: "idle" }
@@ -75,6 +80,7 @@ export default function StudioDispatch({
   setLocked,
   showDiorama,
   setRunOverride,
+  groundClickRef,
 }: StudioAsideContext) {
   const [areaState, setAreaState] = useState<AreaState>({ status: "idle" });
   const [areaAttempt, setAreaAttempt] = useState(0);
@@ -151,6 +157,12 @@ export default function StudioDispatch({
       area && grid && current ? computeExposure(area, grid, current.run.arrivalMinutes) : null,
     [area, grid, current],
   );
+  // CAL FIRE-layer stations near the box (local-only file; null while loading or absent).
+  const areaCentre = useMemo<[number, number] | null>(
+    () => (area ? [(area.bbox[0] + area.bbox[2]) / 2, (area.bbox[1] + area.bbox[3]) / 2] : null),
+    [area],
+  );
+  const suppressionBases = useSuppressionBases(areaCentre);
   const baseline = useMemo(
     () => (area && exposure ? noActionBaseline(area, exposure, horizonMinutes) : null),
     [area, exposure, horizonMinutes],
@@ -168,6 +180,75 @@ export default function StudioDispatch({
   const session = useDispatchSession(pushTime);
   const sessionActive = session.status !== "idle" && session.engine !== null;
   const { stop: stopSession } = session;
+
+  // ---- Road closures: planned before the start (held from T+0), live during a session ------
+  const [roadTool, setRoadTool] = useState(false);
+  const [roadNotice, setRoadNotice] = useState<string | null>(null);
+  const [planned, setPlanned] = useState<{ key: string; closures: RoadClosure[] }>({
+    key: "",
+    closures: [],
+  });
+  const plannedClosures = useMemo(
+    () => (area && planned.key === area.id ? planned.closures : []),
+    [area, planned],
+  );
+  const liveRoads = sessionActive ? session.engine : null;
+  const closures = liveRoads ? liveRoads.roadClosures : plannedClosures;
+  const closedEdges = useMemo<ReadonlySet<number>>(
+    () => (liveRoads ? liveRoads.closedEdges : new Set(plannedClosures.map((c) => c.edge))),
+    // session.version: the engine replaces its closed set in place of mutation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [liveRoads, plannedClosures, session.version],
+  );
+  const toggleRoad = useCallback(
+    (edge: number) => {
+      if (!area) return;
+      if (liveRoads) {
+        session.setRoadClosed(edge, !liveRoads.closedEdges.has(edge));
+        return;
+      }
+      setPlanned(({ key, closures: list }) => {
+        const current = key === area.id ? list : [];
+        return {
+          key: area.id,
+          closures: current.some((c) => c.edge === edge)
+            ? current.filter((c) => c.edge !== edge)
+            : [...current, { edge, minute: 0 }],
+        };
+      });
+    },
+    [area, liveRoads, session],
+  );
+  useEffect(() => {
+    if (!roadTool || !area) return;
+    groundClickRef.current = (point) => {
+      const edge = nearestEdge(area, [point.longitude, point.latitude]);
+      if (edge === null) setRoadNotice("No road there. Click closer to a road to close it.");
+      else {
+        setRoadNotice(null);
+        toggleRoad(edge);
+      }
+      return true;
+    };
+    return () => {
+      groundClickRef.current = null;
+    };
+  }, [roadTool, area, toggleRoad, groundClickRef]);
+  useEffect(() => {
+    if (!roadNotice) return;
+    const handle = window.setTimeout(() => setRoadNotice(null), ROAD_NOTICE_MS);
+    return () => window.clearTimeout(handle);
+  }, [roadNotice]);
+  useEffect(() => {
+    overlay.setClosedEdges(closedEdges);
+  }, [overlay, closedEdges]);
+  const fireCut = useMemo(() => {
+    if (!liveRoads) return null;
+    const roads = roadsObservation(liveRoads);
+    return { segments: roads.fire_cut_segments, roads: roads.fire_cut_roads };
+    // session.version: the engine's minute advances in place.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveRoads, session.version]);
 
   useEffect(() => {
     setLocked(sessionActive);
@@ -313,8 +394,12 @@ export default function StudioDispatch({
       ignitions,
       windFromDegrees: current.scenario.settings.windFromDegrees,
       windSpeedMph: current.scenario.settings.windSpeedMph,
+      closedEdges: new Set(plannedClosures.map((closure) => closure.edge)),
+      apparatus: dispatchApparatus(area, current.landscape, suppressionBases),
     });
   }, [
+    suppressionBases,
+    plannedClosures,
     area,
     exposure,
     current,
@@ -452,6 +537,24 @@ export default function StudioDispatch({
       onSpeedChange={session.setSpeed}
       onCheckIntervalChange={session.setCheckInterval}
       onSelectZone={selectZone}
+      roads={
+        area && (
+          <RoadClosures
+            area={area}
+            closures={closures}
+            fireCut={fireCut}
+            tool={roadTool}
+            onTool={() => {
+              setRoadTool((on) => !on);
+              setRoadNotice(null);
+              showDiorama();
+            }}
+            onReopen={toggleRoad}
+            live={liveRoads !== null}
+            notice={roadNotice}
+          />
+        )
+      }
       footer={
         <>
           {areaState.status === "error" && (

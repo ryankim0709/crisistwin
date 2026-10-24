@@ -1,6 +1,6 @@
 // Drill injects (docs/live-reports.md "Injects"): wire types, client calls and map features.
 // Every inject is simulated and labeled; nothing is sent to real people.
-import { INCIDENT_ID, request } from "./api";
+import { request } from "./api";
 import type { CommandResponse, IsoTime, LonLat } from "./types";
 
 export type InjectType = "psap_reroute" | "comms_outage" | "silent_closure" | "shelter_full" | "fire_jump";
@@ -50,10 +50,12 @@ export const INJECT_LABEL: Record<InjectType, string> = {
 
 export const INJECT_TYPES = Object.keys(INJECT_LABEL) as InjectType[];
 
-const path = `incidents/${INCIDENT_ID}/injects`;
-export const listInjects = (token: string) => request<InjectList>(token, "GET", path);
-export const createInject = (token: string, body: InjectRequest) => request<unknown>(token, "POST", path, body);
-export const deleteInject = (token: string, id: string) => request<unknown>(token, "DELETE", `${path}/${encodeURIComponent(id)}`);
+const path = (incidentId: string) => `incidents/${encodeURIComponent(incidentId)}/injects`;
+export const listInjects = (token: string, incidentId: string) => request<InjectList>(token, "GET", path(incidentId));
+export const createInject = (token: string, incidentId: string, body: InjectRequest) =>
+  request<unknown>(token, "POST", path(incidentId), body);
+export const deleteInject = (token: string, incidentId: string, id: string) =>
+  request<unknown>(token, "DELETE", `${path(incidentId)}/${encodeURIComponent(id)}`);
 
 type Feature = GeoJSON.Feature<GeoJSON.Geometry, Record<string, string | number | boolean | null>>;
 const collection = (features: Feature[]): GeoJSON.FeatureCollection => ({ type: "FeatureCollection", features });

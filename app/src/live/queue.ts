@@ -1,6 +1,6 @@
 // The review queue (D7): open field reports grouped into items the controller decides on,
 // with the new / conflicting / stale / high-impact flags and an impact score. Pure: no React.
-import { KIND_LABEL, labelPoint, nf, shortZoneName } from "./format";
+import { isClosedStatus, KIND_LABEL, labelPoint, nf, shortZoneName } from "./format";
 import { distanceM, distanceToAreaM, distanceToLineM, pointInArea, routeUsesSegment } from "./geo";
 import type {
   CheckTask,
@@ -9,12 +9,12 @@ import type {
   HelpRequest,
   LonLat,
   ReportKind,
+  ReportRevision,
   ZoneGuidance,
 } from "./types";
 
 export type QueueFilter = "new" | "conflicting" | "stale" | "high";
 
-const CLOSED = new Set(["dismissed", "resolved"]);
 const ROAD_KINDS = new Set<ReportKind>(["road_blocked", "road_passable", "heavy_traffic"]);
 /** Reports a controller has not reviewed yet. */
 const UNREVIEWED = new Set(["unverified", "corroborated", "responder_confirmed"]);
@@ -44,6 +44,12 @@ const FIXTURE_NOTE = /^drill fixture/i;
 /** Seeded drill reports carry this note; the UI labels them "Fixture" instead of quoting it. */
 export const isFixtureNote = (note: string | null) => !!note && FIXTURE_NOTE.test(note);
 
+/** The reporter changed this report after sending it. */
+export const isEdited = (r: FieldReport): boolean => !!r.edited_at;
+
+/** Earlier versions of an edited report, newest first (the server keeps them oldest first). */
+export const priorVersions = (r: FieldReport): ReportRevision[] => [...(r.revisions ?? [])].reverse();
+
 export interface QueueItem {
   id: string;
   kind: ReportKind;
@@ -52,13 +58,15 @@ export interface QueueItem {
   line: LonLat[] | null;
   segmentId: string | null;
   roadName: string | null;
-  /** Not dismissed or resolved, newest first. */
+  /** Not dismissed, resolved or withdrawn, newest first. */
   reports: FieldReport[];
   civilians: number;
   responders: number;
   newestObservedAt: string;
   confirmed: boolean;
   fixture: boolean;
+  /** Some report in the item was edited by its reporter (docs/live-reports.md). */
+  edited: boolean;
   /** Every report is a 2018 record entry (911 / radio), not a drill report. */
   record: boolean;
   isNew: boolean;
@@ -163,7 +171,7 @@ function routeZonesFor(
 
 /** Every open item, sorted by impact (vehicles affected, then on-route, then newest). */
 export function buildQueue(data: CommandResponse, serverNowMs: number): QueueItem[] {
-  const open = data.reports.filter((r) => !CLOSED.has(r.status));
+  const open = data.reports.filter((r) => !isClosedStatus(r.status));
   const routes = data.guidance.filter((g) => g.level !== "none" && g.route && !g.no_route);
   const vehicles = new Map(data.zones.map((z) => [z.id, z.vehicles]));
   const levels = new Map(data.guidance.map((g) => [g.zone_id, g.level]));
@@ -242,6 +250,7 @@ export function buildQueue(data: CommandResponse, serverNowMs: number): QueueIte
       newestObservedAt: head.observed_at,
       confirmed,
       fixture: rs.every((r) => isFixtureNote(r.note)),
+      edited: rs.some(isEdited),
       record: rs.every((r) => r.evidence_class === "historical_record"),
       isNew: !confirmed && !stale && rs.some((r) => UNREVIEWED.has(r.status)),
       conflict,
@@ -291,6 +300,7 @@ function helpItems(data: CommandResponse): QueueItem[] {
       newestObservedAt: h.at,
       confirmed: status !== "open",
       fixture: false,
+      edited: false,
       record: false,
       isNew: status === "open",
       conflict: null,

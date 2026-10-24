@@ -85,6 +85,31 @@ final class LiveStore {
         }
     }
 
+    /// The board's selected questions for this phone (civilians), best first, plus a stall question.
+    /// Chosen on the device from the public board; see `BoardSelector`.
+    private(set) var boardQuestions: [BoardQuestion] = []
+    /// Set by the Map while it follows the device along the route (the person is navigating).
+    var navigating = false {
+        didSet { if navigating != oldValue { navigationChanged() } }
+    }
+    /// Per-device opt-in: send `road_passable` / `heavy_traffic` passively for board roads driven
+    /// through while navigating. Off by default; nothing else leaves the phone.
+    var shareRoadObservations: Bool = UserDefaults.standard.bool(forKey: LiveStore.shareRoadObservationsKey) {
+        didSet {
+            UserDefaults.standard.set(shareRoadObservations, forKey: Self.shareRoadObservationsKey)
+            passive.reset()
+            updateTracking()
+        }
+    }
+    static let shareRoadObservationsKey = "shareRoadObservations"
+
+    @ObservationIgnored private var board = BoardResponse()
+    @ObservationIgnored private var boardAnswered: [String: Date] = LiveStore.loadBoardAnswered()
+    @ObservationIgnored private var stallQuestions: [String: BoardItem] = [:]
+    @ObservationIgnored private var passive = PassiveTraversal()
+    @ObservationIgnored private var stall = StallDetector()
+    @ObservationIgnored private var selectedBoardItems: [BoardItem] = []
+    @ObservationIgnored private var boardComputedAt: LonLat?
     @ObservationIgnored private let outbox = ReportOutbox()
     @ObservationIgnored private let monitor = NWPathMonitor()
     @ObservationIgnored private var networkSatisfied = true
@@ -93,6 +118,9 @@ final class LiveStore {
     @ObservationIgnored private var refreshGeneration = 0
     /// Cursor for `GET incidents/{id}/reports?since=`; only advanced by a response that is applied.
     @ObservationIgnored private var reportsCursor: String?
+    /// Set by a situation 404; makes the poll loop re-read `GET /api/live/active` at once.
+    @ObservationIgnored private var activeCheckWanted = false
+    @ObservationIgnored private var lastActiveCheck = Date()
 
     @ObservationIgnored private var zonesCache: (version: String, zones: [LiveZone])?
     @ObservationIgnored private var lastLocationSend: Date?
@@ -108,6 +136,8 @@ final class LiveStore {
     private static let locationInterval: TimeInterval = 30
     /// A task's route is refetched with the poll, at most this often.
     private static let routeInterval: TimeInterval = 15
+    /// How often the poll loop re-reads which incident the server runs.
+    private static let activeInterval: TimeInterval = 60
 
     var role: LiveRole { credential?.role ?? .civilian }
 
@@ -147,6 +177,60 @@ final class LiveStore {
         if await flush(force: true) > 0 { await refresh() }
     }
 
+    // MARK: Your reports: edit and delete
+
+    /// Replaces an unsent draft on the phone (no network), then tries to send it.
+    func updateDraft(_ draft: ReportDraft) throws {
+        guard outbox.update(draft) else { throw ReportChangeError.sending }
+        Task {
+            if await flush(force: false) > 0 { await refresh() }
+        }
+    }
+
+    /// Removes an unsent draft from the phone; nothing is sent.
+    func deleteDraft(_ draft: ReportDraft) throws {
+        guard outbox.remove(clientId: draft.clientId) else { throw ReportChangeError.sending }
+    }
+
+    /// Edits one of this phone's sent reports (`PATCH me/reports/{id}`), then refreshes. Only
+    /// while it is unverified or corroborated; otherwise throws `LiveAPIError.reportLocked`.
+    func editReport(_ report: FieldReport, patch: ReportPatch) async throws {
+        guard !patch.isEmpty else { return }
+        let updated = try await changeOwnReport { try await $0.editReport(id: report.id, patch: patch, token: $1) }
+        updateMine { mine in
+            if let index = mine.firstIndex(where: { $0.id == updated.id }) { mine[index] = updated }
+        }
+    }
+
+    /// Deletes one of this phone's sent reports. The server keeps it as `withdrawn` for the
+    /// record and drops it from this phone's list; same lock as `editReport`.
+    func withdrawReport(_ report: FieldReport) async throws {
+        _ = try await changeOwnReport { try await $0.withdrawReport(id: report.id, token: $1) }
+        updateMine { $0.removeAll { $0.id == report.id } }
+    }
+
+    /// Runs an edit or withdrawal. A locked or missing report refreshes the list, so the phone
+    /// shows what the server has, and rethrows in words for the person.
+    private func changeOwnReport(_ call: (LiveAPIClient, String) async throws -> FieldReport) async throws -> FieldReport {
+        do {
+            return try await authorized(call)
+        } catch LiveAPIError.reportLocked {
+            Task { await refresh() }
+            throw LiveAPIError.reportLocked
+        } catch LiveAPIError.notFound {
+            Task { await refresh() }
+            throw ReportChangeError.gone
+        }
+    }
+
+    /// Applies a change to `myReports` at once, so a poll already in flight cannot put the old
+    /// list back, then refreshes from the server.
+    private func updateMine(_ change: (inout [FieldReport]) -> Void) {
+        refreshGeneration += 1
+        change(&myReports)
+        Task { await refresh() }
+    }
+
     /// Fetches the public map, own reports, and responder data for the current role.
     func refresh() async {
         refreshGeneration += 1
@@ -173,7 +257,9 @@ final class LiveStore {
             ? fetch { try await $0.reports(incidentId: incidentId, since: sinceCursor, token: $1) } : nil
         async let openTasks = wantsResponderData
             ? fetch { try await $0.myTasks(token: $1) } : nil
+        async let boardFetch = fetch { try await $0.board(incidentId: incidentId, token: $1) }
         let (sitResult, mineResult, pageResult, tasksResult) = await (sit, mine, page, openTasks)
+        let boardResult = await boardFetch
 
         // A slower, older refresh must not overwrite a newer one.
         guard generation == refreshGeneration, !Task.isCancelled else { return resetConnecting() }
@@ -185,7 +271,15 @@ final class LiveStore {
             case nil: break
             }
         }
+        if case .failure(LiveAPIError.notFound) = sitResult { activeCheckWanted = true }
         take(sitResult) { applySituation($0) }
+        // An older server has no board; its failure never marks the connection as down.
+        switch boardResult {
+        case .success(let response): board = response
+        case .failure(let error): if case LiveAPIError.notFound = error { board = BoardResponse() }
+        }
+        recomputeBoard()
+        if navigating { showStall(stall.due(now: Date(), stallS: board.limits.stallS)) }
         take(mineResult) { myReports = $0.sorted { $0.observedAt > $1.observedAt } }
         take(pageResult) { page in
             reportsCursor = page.nextCursor
@@ -206,9 +300,28 @@ final class LiveStore {
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.refresh()
+                await self?.followActiveIncidentIfDue()
                 try? await Task.sleep(for: Self.pollInterval)
             }
         }
+    }
+
+    /// Re-reads `GET /api/live/active` after a situation 404 and every minute. A failed read
+    /// changes nothing; a different incident id switches this phone to it.
+    private func followActiveIncidentIfDue() async {
+        guard activeCheckWanted || Date().timeIntervalSince(lastActiveCheck) >= Self.activeInterval else { return }
+        activeCheckWanted = false
+        lastActiveCheck = Date()
+        guard let active = try? await LiveAPIClient.configured().activeIncident(), !Task.isCancelled,
+              active.incidentId != incidentId else { return }
+        ServerSettings.setFollowedIncident(active.incidentId)
+        // Device tokens are server-scoped and stay; a responder token is for the old incident only.
+        CredentialStore.delete(.responder)
+        credential = CredentialStore.load(.device)
+        outbox.discard(notFor: active.incidentId)
+        withdrawnChoices = [:]
+        answeredStillThere = []
+        useIncident(active.incidentId, dropCredentials: false)
     }
 
     func stopPolling() {
@@ -319,6 +432,8 @@ final class LiveStore {
     /// Civilian positions are never sent from here.
     func updateLocation(_ coord: LonLat?, accuracyM: Double? = nil) {
         lastCoord = coord
+        if let coord, let last = boardComputedAt, BoardGeo.distance(last, coord) > 50 { recomputeBoard() }
+        if coord != nil, boardComputedAt == nil { recomputeBoard() }
         let zone = coord.flatMap { c in situation?.zones.flatMap { ZoneLocator.zone(containing: c, in: $0) } }
         setZone(zone)
         guard let coord, role == .responder, shareResponderLocation else { return }
@@ -363,8 +478,8 @@ final class LiveStore {
         }
         return myReports.contains {
             matches(kind: $0.kind, coord: $0.location.coord, segment: $0.roadRef?.segmentId, at: $0.observedAt)
-        } || pending.contains {
-            matches(kind: $0.kind, coord: $0.location.coord, segment: nil, at: $0.observedAt)
+        } || pending.contains { draft in
+            draft.location.map { matches(kind: draft.kind, coord: $0.coord, segment: nil, at: draft.observedAt) } ?? false
         }
     }
 
@@ -701,6 +816,21 @@ final class LiveStore {
     }
 }
 
+/// Why a change to one of this phone's own reports did not happen, worded for the person.
+enum ReportChangeError: LocalizedError {
+    /// The unsent draft is being sent right now, or was just sent.
+    case sending
+    /// The server has no such report for this phone (404).
+    case gone
+
+    var errorDescription: String? {
+        switch self {
+        case .sending: return "This report is being sent right now. Try again in a moment."
+        case .gone: return "This report is no longer on the server."
+        }
+    }
+}
+
 /// A destination this phone chose for a zone (D1). `expiresAt` comes from the server once the
 /// choice was accepted; nil until then.
 struct StoredDestinationChoice: Codable, Equatable {
@@ -738,5 +868,116 @@ extension ZoneGuidance {
     /// The recommended option's destination id (the controller's pick).
     var recommendedDestinationId: String? {
         exitOptions.first(where: \.recommended)?.id ?? destination?.id
+    }
+}
+
+
+// MARK: - Task board (ADR 0041)
+
+extension LiveStore {
+    private static let boardAnsweredKey = "live.boardAnswered"
+
+    /// Answered task ids with their expiry; entries drop once expired.
+    fileprivate static func loadBoardAnswered() -> [String: Date] {
+        let raw = UserDefaults.standard.dictionary(forKey: boardAnsweredKey) as? [String: TimeInterval] ?? [:]
+        let now = Date()
+        return raw.mapValues { Date(timeIntervalSince1970: $0) }.filter { $0.value > now }
+    }
+
+    fileprivate func markBoardAnswered(_ item: BoardItem) {
+        let now = Date()
+        boardAnswered[item.taskId] = item.expiresAt
+        boardAnswered = boardAnswered.filter { $0.value > now }
+        UserDefaults.standard.set(boardAnswered.mapValues { $0.timeIntervalSince1970 }, forKey: Self.boardAnsweredKey)
+    }
+
+    /// Picks this phone's questions from the public board on the device. The position is only
+    /// compared locally; nothing is sent.
+    fileprivate func recomputeBoard() {
+        boardComputedAt = lastCoord
+        guard role == .civilian else {
+            selectedBoardItems = []
+            return rebuildBoardQuestions()
+        }
+        let now = Date()
+        boardAnswered = boardAnswered.filter { $0.value > now }
+        selectedBoardItems = BoardSelector.select(
+            items: board.items.filter { boardAnswered[$0.taskId] == nil },
+            route: myGuidance?.route?.line, device: lastCoord, fire: situation?.fire.geometry,
+            limits: board.limits, now: now)
+        rebuildBoardQuestions()
+    }
+
+    fileprivate func rebuildBoardQuestions() {
+        let now = Date()
+        stallQuestions = stallQuestions.filter { $0.value.expiresAt > now && boardAnswered[$0.key] == nil }
+        let stalled = stallQuestions.values.sorted { $0.rank < $1.rank }.map { BoardQuestion(item: $0, isStall: true) }
+        let regular = selectedBoardItems.filter { stallQuestions[$0.taskId] == nil }.map { BoardQuestion(item: $0) }
+        boardQuestions = stalled + regular
+        updateTracking()
+    }
+
+    /// The segments to watch while navigating: the selected road questions.
+    fileprivate func updateTracking() {
+        guard navigating, role == .civilian else {
+            passive.reset()
+            stall.reset()
+            return
+        }
+        let segments = selectedBoardItems.compactMap(BoardTracked.init(item:))
+        stall.track(segments)
+        passive.slowRatio = board.limits.slowRatio
+        if shareRoadObservations { passive.track(segments) } else { passive.reset() }
+    }
+
+    fileprivate func navigationChanged() {
+        if !navigating { stallQuestions = [:] }
+        passive.reset()
+        stall.reset()
+        rebuildBoardQuestions()
+    }
+
+    /// Feeds a location fix to the on-device detectors while navigating. Passive traversal runs
+    /// only with "Share road observations" on; the stall question needs no setting. The fix itself
+    /// is never stored or sent.
+    func observeFix(_ fix: CLLocation) {
+        guard navigating, role == .civilian, fix.horizontalAccuracy >= 0, fix.horizontalAccuracy <= 50 else { return }
+        let sample = BoardFix(
+            coord: LonLat(lon: fix.coordinate.longitude, lat: fix.coordinate.latitude),
+            at: fix.timestamp, speedMps: fix.speed >= 0 ? fix.speed : nil)
+        if shareRoadObservations {
+            for event in passive.feed(sample) { sendPassive(event) }
+        }
+        showStall(stall.feed(sample, stallS: board.limits.stallS))
+    }
+
+    private func sendPassive(_ event: PassiveTraversal.Traversed) {
+        guard let item = selectedBoardItems.first(where: { $0.taskId == event.taskId }) else { return }
+        markBoardAnswered(item)
+        submit(.passive(incidentId: incidentId, kind: .roadPassable, segmentId: event.segmentId,
+                        taskId: event.taskId, observedAt: event.exitedAt, slow: event.slow))
+        if event.slow {
+            submit(.passive(incidentId: incidentId, kind: .heavyTraffic, segmentId: event.segmentId,
+                            taskId: event.taskId, observedAt: event.exitedAt, slow: true))
+        }
+        recomputeBoard()
+    }
+
+    fileprivate func showStall(_ taskIds: [String]) {
+        guard !taskIds.isEmpty else { return }
+        for id in taskIds {
+            if let item = selectedBoardItems.first(where: { $0.taskId == id }), boardAnswered[id] == nil {
+                stallQuestions[id] = item
+            }
+        }
+        rebuildBoardQuestions()
+    }
+
+    /// An explicit answer: one per task per device. "Has space" and "No" send nothing.
+    func answerBoard(_ question: BoardQuestion, _ answer: BoardAnswer) {
+        markBoardAnswered(question.item)
+        stallQuestions[question.id] = nil
+        if let draft = question.draft(for: answer, incidentId: incidentId) { submit(draft) }
+        recomputeBoard()
     }
 }

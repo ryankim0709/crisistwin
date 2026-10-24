@@ -568,6 +568,21 @@ class MetricSpec:
     unit: str = ""
 
 
+TRIAGE_METRICS: tuple[MetricSpec, ...] = (
+    MetricSpec("triage.confirm_precision", True, "secondary", "share"),
+    MetricSpec("triage.confirm_recall", True, "secondary", "share"),
+    MetricSpec("triage.dismiss_precision", True, "secondary", "share"),
+    MetricSpec("triage.dismiss_recall", True, "secondary", "share"),
+    MetricSpec("triage.change_detect_min", False, "secondary", "drill minutes"),
+    MetricSpec("triage.guidance_changes_on_false", False, "secondary", "count"),
+    MetricSpec("triage.dispatches_on_false", False, "secondary", "count"),
+    MetricSpec("decisions_on_false_info", False, "secondary", "count"),
+    MetricSpec("rumour_containment_min", False, "secondary", "drill minutes"),
+)
+"""Secondary metrics scored against the truth log (ADR 0042) by ``sim/triage_quality.py``
+(``manifest_metrics`` gives these keys). Definitions: docs/strategy-evaluation.md §3."""
+
+
 @dataclass(frozen=True)
 class Comparison:
     metric: str

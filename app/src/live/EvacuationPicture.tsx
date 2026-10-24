@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { EvidenceTag, LoadingState, Notice, Tag } from "../ui";
 import type { LiveError } from "./api";
 import type { MapFocus } from "./CommandMap";
-import { labelPoint, nf, plural, shortZoneName } from "./format";
+import { isClosedStatus, labelPoint, nf, plural, shortZoneName } from "./format";
 import { routeUsesSegment } from "./geo";
 import Plate from "./Plate";
 import { destinationLoad, NEAR_FULL, type DestLoad } from "./load";
@@ -233,7 +233,7 @@ export default function EvacuationPicture({
     const withCapacity = data.destinations.filter((d) => d.capacity_veh !== null);
     const full = data.public_items.filter((i) => i.kind === "shelter_full");
     const reportedFull = data.reports.filter(
-      (r) => r.kind === "shelter_full" && r.status !== "dismissed" && r.status !== "resolved",
+      (r) => r.kind === "shelter_full" && !isClosedStatus(r.status),
     );
     const load = destinationLoad(data, twin).filter(
       (r) => r.zones > 0 || r.phones > 0 || r.reportedFull || (r.simArrivedVeh ?? 0) > 0,
