@@ -1,0 +1,4718 @@
+{
+ "camp": {
+  "event": "Camp Fire, 2018-11-08",
+  "ignition_utc": "2018-11-08T14:29:00Z",
+  "evidence_class": "observed vs archived forecast",
+  "products": [
+   {
+    "product_id": "201811071231-KSTO-FNUS56-FWFSTO",
+    "issued_utc": "2018-11-07T12:31:00Z",
+    "sha256": "ee2c781fb9a6147e660a3aea1e316834d5a4081f9261890542eb09e8f19fbf38",
+    "bytes": 24186
+   },
+   {
+    "product_id": "201811072329-KSTO-FNUS56-FWFSTO",
+    "issued_utc": "2018-11-07T23:29:00Z",
+    "sha256": "e8023b1a49c02b3eaa0a26c9af1e4b29d943ef5a8dc50b3369a6d20517fc0838",
+    "bytes": 26810
+   },
+   {
+    "product_id": "201811081356-KSTO-FNUS56-FWFSTO",
+    "issued_utc": "2018-11-08T13:56:00Z",
+    "sha256": "38d7099c0a3032c50f3c12a366163991c487ac19556623bc8a628f3839c1e551",
+    "bytes": 22761
+   },
+   {
+    "product_id": "201811082247-KSTO-FNUS56-FWFSTO",
+    "issued_utc": "2018-11-08T22:47:00Z",
+    "sha256": "5f59701791cd3f0ce22a8d5bbf85d9ee22a955097ee78133a2d57f9195c358e6",
+    "bytes": 26560
+   }
+  ],
+  "station_zone_assumption": {
+   "CIC": [
+    "CAZ216",
+    "all"
+   ],
+   "OVE": [
+    "CAZ216",
+    "all"
+   ],
+   "JBGC1": [
+    "CAZ266",
+    "ridge"
+   ],
+   "PKCC1": [
+    "CAZ266",
+    "ridge"
+   ]
+  },
+  "comparisons": [
+   {
+    "station": "CIC",
+    "zone": "CAZ216",
+    "sub_area": "all",
+    "period": "TODAY",
+    "window_utc": [
+     "2018-11-07T12:31:00Z",
+     "2018-11-08T02:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 315.0,
+    "fc_speed_ms": [
+     3.13,
+     5.81
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 2.84,
+    "obs_vector_from_deg": 300,
+    "obs_max_gust_ms": 11.32,
+    "dir_error_deg": -15,
+    "speed_error_ms": -1.63,
+    "speed_ratio": 0.64,
+    "hours_in_forecast_range": 0.08,
+    "gust_ratio": null,
+    "issued_utc": "2018-11-07T12:31:00Z"
+   },
+   {
+    "station": "CIC",
+    "zone": "CAZ216",
+    "sub_area": "all",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2018-11-08T02:00:00Z",
+     "2018-11-08T14:00:00Z"
+    ],
+    "lead_h": 13.5,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     5.36,
+     8.05
+    ],
+    "fc_gust_ms": 13.41,
+    "obs_mean_speed_ms": 2.01,
+    "obs_vector_from_deg": 339,
+    "obs_max_gust_ms": null,
+    "dir_error_deg": -21,
+    "speed_error_ms": -4.69,
+    "speed_ratio": 0.3,
+    "hours_in_forecast_range": 0.0,
+    "gust_ratio": null,
+    "issued_utc": "2018-11-07T12:31:00Z"
+   },
+   {
+    "station": "CIC",
+    "zone": "CAZ216",
+    "sub_area": "all",
+    "period": "THURSDAY",
+    "window_utc": [
+     "2018-11-08T14:00:00Z",
+     "2018-11-09T02:00:00Z"
+    ],
+    "lead_h": 25.5,
+    "window_contains_ignition": true,
+    "n_hours": 11,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     6.71,
+     9.83
+    ],
+    "fc_gust_ms": 13.41,
+    "obs_mean_speed_ms": 5.99,
+    "obs_vector_from_deg": 300,
+    "obs_max_gust_ms": 9.26,
+    "dir_error_deg": -60,
+    "speed_error_ms": -2.28,
+    "speed_ratio": 0.72,
+    "hours_in_forecast_range": 0.27,
+    "gust_ratio": 0.69,
+    "issued_utc": "2018-11-07T12:31:00Z"
+   },
+   {
+    "station": "OVE",
+    "zone": "CAZ216",
+    "sub_area": "all",
+    "period": "TODAY",
+    "window_utc": [
+     "2018-11-07T12:31:00Z",
+     "2018-11-08T02:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 13,
+    "multi_phase": false,
+    "dir_valid": false,
+    "fc_from_deg": 315.0,
+    "fc_speed_ms": [
+     3.13,
+     5.81
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 1.07,
+    "obs_vector_from_deg": 271,
+    "obs_max_gust_ms": null,
+    "dir_error_deg": -44,
+    "speed_error_ms": -3.4,
+    "speed_ratio": 0.24,
+    "hours_in_forecast_range": 0.0,
+    "gust_ratio": null,
+    "issued_utc": "2018-11-07T12:31:00Z"
+   },
+   {
+    "station": "OVE",
+    "zone": "CAZ216",
+    "sub_area": "all",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2018-11-08T02:00:00Z",
+     "2018-11-08T14:00:00Z"
+    ],
+    "lead_h": 13.5,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     5.36,
+     8.05
+    ],
+    "fc_gust_ms": 13.41,
+    "obs_mean_speed_ms": 2.83,
+    "obs_vector_from_deg": 311,
+    "obs_max_gust_ms": 7.72,
+    "dir_error_deg": -49,
+    "speed_error_ms": -3.88,
+    "speed_ratio": 0.42,
+    "hours_in_forecast_range": 0.0,
+    "gust_ratio": 0.58,
+    "issued_utc": "2018-11-07T12:31:00Z"
+   },
+   {
+    "station": "OVE",
+    "zone": "CAZ216",
+    "sub_area": "all",
+    "period": "THURSDAY",
+    "window_utc": [
+     "2018-11-08T14:00:00Z",
+     "2018-11-09T02:00:00Z"
+    ],
+    "lead_h": 25.5,
+    "window_contains_ignition": true,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     6.71,
+     9.83
+    ],
+    "fc_gust_ms": 13.41,
+    "obs_mean_speed_ms": 4.67,
+    "obs_vector_from_deg": 317,
+    "obs_max_gust_ms": 12.86,
+    "dir_error_deg": -43,
+    "speed_error_ms": -3.6,
+    "speed_ratio": 0.57,
+    "hours_in_forecast_range": 0.08,
+    "gust_ratio": 0.96,
+    "issued_utc": "2018-11-07T12:31:00Z"
+   },
+   {
+    "station": "JBGC1",
+    "zone": "CAZ266",
+    "sub_area": "ridge",
+    "period": "TODAY",
+    "window_utc": [
+     "2018-11-07T12:31:00Z",
+     "2018-11-08T02:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 13,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     3.13,
+     5.81
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 2.72,
+    "obs_vector_from_deg": 43,
+    "obs_max_gust_ms": 8.49,
+    "dir_error_deg": 43,
+    "speed_error_ms": -1.75,
+    "speed_ratio": 0.61,
+    "hours_in_forecast_range": 0.46,
+    "gust_ratio": null,
+    "issued_utc": "2018-11-07T12:31:00Z"
+   },
+   {
+    "station": "JBGC1",
+    "zone": "CAZ266",
+    "sub_area": "ridge",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2018-11-08T02:00:00Z",
+     "2018-11-08T14:00:00Z"
+    ],
+    "lead_h": 13.5,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 45.0,
+    "fc_speed_ms": [
+     6.71,
+     9.39
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 10.62,
+    "obs_vector_from_deg": 39,
+    "obs_max_gust_ms": 23.25,
+    "dir_error_deg": -6,
+    "speed_error_ms": 2.57,
+    "speed_ratio": 1.32,
+    "hours_in_forecast_range": 0.08,
+    "gust_ratio": null,
+    "issued_utc": "2018-11-07T12:31:00Z"
+   },
+   {
+    "station": "JBGC1",
+    "zone": "CAZ266",
+    "sub_area": "ridge",
+    "period": "THURSDAY",
+    "window_utc": [
+     "2018-11-08T14:00:00Z",
+     "2018-11-09T02:00:00Z"
+    ],
+    "lead_h": 25.5,
+    "window_contains_ignition": true,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 45.0,
+    "fc_speed_ms": [
+     6.71,
+     12.07
+    ],
+    "fc_gust_ms": 15.65,
+    "obs_mean_speed_ms": 5.89,
+    "obs_vector_from_deg": 34,
+    "obs_max_gust_ms": 17.88,
+    "dir_error_deg": -11,
+    "speed_error_ms": -3.5,
+    "speed_ratio": 0.63,
+    "hours_in_forecast_range": 0.33,
+    "gust_ratio": 1.14,
+    "issued_utc": "2018-11-07T12:31:00Z"
+   },
+   {
+    "station": "PKCC1",
+    "zone": "CAZ266",
+    "sub_area": "ridge",
+    "period": "TODAY",
+    "window_utc": [
+     "2018-11-07T12:31:00Z",
+     "2018-11-08T02:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 13,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     3.13,
+     5.81
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 2.3,
+    "obs_vector_from_deg": 243,
+    "obs_max_gust_ms": 5.81,
+    "dir_error_deg": -117,
+    "speed_error_ms": -2.17,
+    "speed_ratio": 0.52,
+    "hours_in_forecast_range": 0.38,
+    "gust_ratio": null,
+    "issued_utc": "2018-11-07T12:31:00Z"
+   },
+   {
+    "station": "PKCC1",
+    "zone": "CAZ266",
+    "sub_area": "ridge",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2018-11-08T02:00:00Z",
+     "2018-11-08T14:00:00Z"
+    ],
+    "lead_h": 13.5,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 45.0,
+    "fc_speed_ms": [
+     6.71,
+     9.39
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 7.79,
+    "obs_vector_from_deg": 54,
+    "obs_max_gust_ms": 19.22,
+    "dir_error_deg": 9,
+    "speed_error_ms": -0.26,
+    "speed_ratio": 0.97,
+    "hours_in_forecast_range": 0.5,
+    "gust_ratio": null,
+    "issued_utc": "2018-11-07T12:31:00Z"
+   },
+   {
+    "station": "PKCC1",
+    "zone": "CAZ266",
+    "sub_area": "ridge",
+    "period": "THURSDAY",
+    "window_utc": [
+     "2018-11-08T14:00:00Z",
+     "2018-11-09T02:00:00Z"
+    ],
+    "lead_h": 25.5,
+    "window_contains_ignition": true,
+    "n_hours": 9,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 45.0,
+    "fc_speed_ms": [
+     6.71,
+     12.07
+    ],
+    "fc_gust_ms": 15.65,
+    "obs_mean_speed_ms": 5.86,
+    "obs_vector_from_deg": 60,
+    "obs_max_gust_ms": 15.65,
+    "dir_error_deg": 15,
+    "speed_error_ms": -3.53,
+    "speed_ratio": 0.62,
+    "hours_in_forecast_range": 0.33,
+    "gust_ratio": 1.0,
+    "issued_utc": "2018-11-07T12:31:00Z"
+   },
+   {
+    "station": "CIC",
+    "zone": "CAZ216",
+    "sub_area": "all",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2018-11-07T23:29:00Z",
+     "2018-11-08T14:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 14,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     5.81,
+     8.49
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 2.57,
+    "obs_vector_from_deg": 326,
+    "obs_max_gust_ms": 11.32,
+    "dir_error_deg": -34,
+    "speed_error_ms": -4.58,
+    "speed_ratio": 0.36,
+    "hours_in_forecast_range": 0.07,
+    "gust_ratio": null,
+    "issued_utc": "2018-11-07T23:29:00Z"
+   },
+   {
+    "station": "CIC",
+    "zone": "CAZ216",
+    "sub_area": "all",
+    "period": "THURSDAY",
+    "window_utc": [
+     "2018-11-08T14:00:00Z",
+     "2018-11-09T02:00:00Z"
+    ],
+    "lead_h": 14.5,
+    "window_contains_ignition": true,
+    "n_hours": 11,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 315.0,
+    "fc_speed_ms": [
+     6.26,
+     11.62
+    ],
+    "fc_gust_ms": 17.88,
+    "obs_mean_speed_ms": 5.99,
+    "obs_vector_from_deg": 300,
+    "obs_max_gust_ms": 9.26,
+    "dir_error_deg": -15,
+    "speed_error_ms": -2.95,
+    "speed_ratio": 0.67,
+    "hours_in_forecast_range": 0.45,
+    "gust_ratio": 0.52,
+    "issued_utc": "2018-11-07T23:29:00Z"
+   },
+   {
+    "station": "CIC",
+    "zone": "CAZ216",
+    "sub_area": "all",
+    "period": "THURSDAY NIGHT",
+    "window_utc": [
+     "2018-11-09T02:00:00Z",
+     "2018-11-09T14:00:00Z"
+    ],
+    "lead_h": 26.5,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": false,
+    "fc_from_deg": 315.0,
+    "fc_speed_ms": [
+     5.36,
+     8.05
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 0.64,
+    "obs_vector_from_deg": 356,
+    "obs_max_gust_ms": null,
+    "dir_error_deg": 41,
+    "speed_error_ms": -6.06,
+    "speed_ratio": 0.1,
+    "hours_in_forecast_range": 0.0,
+    "gust_ratio": null,
+    "issued_utc": "2018-11-07T23:29:00Z"
+   },
+   {
+    "station": "OVE",
+    "zone": "CAZ216",
+    "sub_area": "all",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2018-11-07T23:29:00Z",
+     "2018-11-08T14:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 14,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     5.81,
+     8.49
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 2.57,
+    "obs_vector_from_deg": 309,
+    "obs_max_gust_ms": 7.72,
+    "dir_error_deg": -51,
+    "speed_error_ms": -4.58,
+    "speed_ratio": 0.36,
+    "hours_in_forecast_range": 0.0,
+    "gust_ratio": null,
+    "issued_utc": "2018-11-07T23:29:00Z"
+   },
+   {
+    "station": "OVE",
+    "zone": "CAZ216",
+    "sub_area": "all",
+    "period": "THURSDAY",
+    "window_utc": [
+     "2018-11-08T14:00:00Z",
+     "2018-11-09T02:00:00Z"
+    ],
+    "lead_h": 14.5,
+    "window_contains_ignition": true,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 315.0,
+    "fc_speed_ms": [
+     6.26,
+     11.62
+    ],
+    "fc_gust_ms": 17.88,
+    "obs_mean_speed_ms": 4.67,
+    "obs_vector_from_deg": 317,
+    "obs_max_gust_ms": 12.86,
+    "dir_error_deg": 2,
+    "speed_error_ms": -4.27,
+    "speed_ratio": 0.52,
+    "hours_in_forecast_range": 0.17,
+    "gust_ratio": 0.72,
+    "issued_utc": "2018-11-07T23:29:00Z"
+   },
+   {
+    "station": "OVE",
+    "zone": "CAZ216",
+    "sub_area": "all",
+    "period": "THURSDAY NIGHT",
+    "window_utc": [
+     "2018-11-09T02:00:00Z",
+     "2018-11-09T14:00:00Z"
+    ],
+    "lead_h": 26.5,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 315.0,
+    "fc_speed_ms": [
+     5.36,
+     8.05
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 2.62,
+    "obs_vector_from_deg": 326,
+    "obs_max_gust_ms": 8.23,
+    "dir_error_deg": 11,
+    "speed_error_ms": -4.09,
+    "speed_ratio": 0.39,
+    "hours_in_forecast_range": 0.0,
+    "gust_ratio": null,
+    "issued_utc": "2018-11-07T23:29:00Z"
+   },
+   {
+    "station": "JBGC1",
+    "zone": "CAZ266",
+    "sub_area": "ridge",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2018-11-07T23:29:00Z",
+     "2018-11-08T14:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 14,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 45.0,
+    "fc_speed_ms": [
+     6.26,
+     11.62
+    ],
+    "fc_gust_ms": 17.88,
+    "obs_mean_speed_ms": 9.23,
+    "obs_vector_from_deg": 39,
+    "obs_max_gust_ms": 23.25,
+    "dir_error_deg": -6,
+    "speed_error_ms": 0.29,
+    "speed_ratio": 1.03,
+    "hours_in_forecast_range": 0.36,
+    "gust_ratio": 1.3,
+    "issued_utc": "2018-11-07T23:29:00Z"
+   },
+   {
+    "station": "JBGC1",
+    "zone": "CAZ266",
+    "sub_area": "ridge",
+    "period": "THURSDAY",
+    "window_utc": [
+     "2018-11-08T14:00:00Z",
+     "2018-11-09T02:00:00Z"
+    ],
+    "lead_h": 14.5,
+    "window_contains_ignition": true,
+    "n_hours": 12,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 45.0,
+    "fc_speed_ms": [
+     6.26,
+     11.62
+    ],
+    "fc_gust_ms": 20.12,
+    "obs_mean_speed_ms": 5.89,
+    "obs_vector_from_deg": 34,
+    "obs_max_gust_ms": 17.88,
+    "dir_error_deg": -11,
+    "speed_error_ms": -3.05,
+    "speed_ratio": 0.66,
+    "hours_in_forecast_range": 0.58,
+    "gust_ratio": 0.89,
+    "issued_utc": "2018-11-07T23:29:00Z"
+   },
+   {
+    "station": "JBGC1",
+    "zone": "CAZ266",
+    "sub_area": "ridge",
+    "period": "THURSDAY NIGHT",
+    "window_utc": [
+     "2018-11-09T02:00:00Z",
+     "2018-11-09T14:00:00Z"
+    ],
+    "lead_h": 26.5,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 45.0,
+    "fc_speed_ms": [
+     5.81,
+     8.49
+    ],
+    "fc_gust_ms": 15.65,
+    "obs_mean_speed_ms": 10.73,
+    "obs_vector_from_deg": 36,
+    "obs_max_gust_ms": 21.46,
+    "dir_error_deg": -9,
+    "speed_error_ms": 3.58,
+    "speed_ratio": 1.5,
+    "hours_in_forecast_range": 0.25,
+    "gust_ratio": 1.37,
+    "issued_utc": "2018-11-07T23:29:00Z"
+   },
+   {
+    "station": "PKCC1",
+    "zone": "CAZ266",
+    "sub_area": "ridge",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2018-11-07T23:29:00Z",
+     "2018-11-08T14:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 14,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 45.0,
+    "fc_speed_ms": [
+     6.26,
+     11.62
+    ],
+    "fc_gust_ms": 17.88,
+    "obs_mean_speed_ms": 7.09,
+    "obs_vector_from_deg": 52,
+    "obs_max_gust_ms": 19.22,
+    "dir_error_deg": 7,
+    "speed_error_ms": -1.85,
+    "speed_ratio": 0.79,
+    "hours_in_forecast_range": 0.71,
+    "gust_ratio": 1.07,
+    "issued_utc": "2018-11-07T23:29:00Z"
+   },
+   {
+    "station": "PKCC1",
+    "zone": "CAZ266",
+    "sub_area": "ridge",
+    "period": "THURSDAY",
+    "window_utc": [
+     "2018-11-08T14:00:00Z",
+     "2018-11-09T02:00:00Z"
+    ],
+    "lead_h": 14.5,
+    "window_contains_ignition": true,
+    "n_hours": 9,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 45.0,
+    "fc_speed_ms": [
+     6.26,
+     11.62
+    ],
+    "fc_gust_ms": 20.12,
+    "obs_mean_speed_ms": 5.86,
+    "obs_vector_from_deg": 60,
+    "obs_max_gust_ms": 15.65,
+    "dir_error_deg": 15,
+    "speed_error_ms": -3.08,
+    "speed_ratio": 0.66,
+    "hours_in_forecast_range": 0.44,
+    "gust_ratio": 0.78,
+    "issued_utc": "2018-11-07T23:29:00Z"
+   },
+   {
+    "station": "PKCC1",
+    "zone": "CAZ266",
+    "sub_area": "ridge",
+    "period": "THURSDAY NIGHT",
+    "window_utc": [
+     "2018-11-09T02:00:00Z",
+     "2018-11-09T14:00:00Z"
+    ],
+    "lead_h": 26.5,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 45.0,
+    "fc_speed_ms": [
+     5.81,
+     8.49
+    ],
+    "fc_gust_ms": 15.65,
+    "obs_mean_speed_ms": 8.08,
+    "obs_vector_from_deg": 58,
+    "obs_max_gust_ms": 16.09,
+    "dir_error_deg": 13,
+    "speed_error_ms": 0.93,
+    "speed_ratio": 1.13,
+    "hours_in_forecast_range": 0.42,
+    "gust_ratio": 1.03,
+    "issued_utc": "2018-11-07T23:29:00Z"
+   },
+   {
+    "station": "CIC",
+    "zone": "CAZ216",
+    "sub_area": "all",
+    "period": "TODAY",
+    "window_utc": [
+     "2018-11-08T13:56:00Z",
+     "2018-11-09T02:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": true,
+    "n_hours": 11,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 315.0,
+    "fc_speed_ms": [
+     7.15,
+     12.52
+    ],
+    "fc_gust_ms": 22.35,
+    "obs_mean_speed_ms": 5.99,
+    "obs_vector_from_deg": 300,
+    "obs_max_gust_ms": 9.26,
+    "dir_error_deg": -15,
+    "speed_error_ms": -3.84,
+    "speed_ratio": 0.61,
+    "hours_in_forecast_range": 0.45,
+    "gust_ratio": 0.41,
+    "issued_utc": "2018-11-08T13:56:00Z"
+   },
+   {
+    "station": "CIC",
+    "zone": "CAZ216",
+    "sub_area": "all",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2018-11-09T02:00:00Z",
+     "2018-11-09T14:00:00Z"
+    ],
+    "lead_h": 12.1,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": false,
+    "fc_from_deg": 315.0,
+    "fc_speed_ms": [
+     5.36,
+     8.05
+    ],
+    "fc_gust_ms": 13.41,
+    "obs_mean_speed_ms": 0.64,
+    "obs_vector_from_deg": 356,
+    "obs_max_gust_ms": null,
+    "dir_error_deg": 41,
+    "speed_error_ms": -6.06,
+    "speed_ratio": 0.1,
+    "hours_in_forecast_range": 0.0,
+    "gust_ratio": null,
+    "issued_utc": "2018-11-08T13:56:00Z"
+   },
+   {
+    "station": "OVE",
+    "zone": "CAZ216",
+    "sub_area": "all",
+    "period": "TODAY",
+    "window_utc": [
+     "2018-11-08T13:56:00Z",
+     "2018-11-09T02:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": true,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 315.0,
+    "fc_speed_ms": [
+     7.15,
+     12.52
+    ],
+    "fc_gust_ms": 22.35,
+    "obs_mean_speed_ms": 4.67,
+    "obs_vector_from_deg": 317,
+    "obs_max_gust_ms": 12.86,
+    "dir_error_deg": 2,
+    "speed_error_ms": -5.16,
+    "speed_ratio": 0.48,
+    "hours_in_forecast_range": 0.08,
+    "gust_ratio": 0.58,
+    "issued_utc": "2018-11-08T13:56:00Z"
+   },
+   {
+    "station": "OVE",
+    "zone": "CAZ216",
+    "sub_area": "all",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2018-11-09T02:00:00Z",
+     "2018-11-09T14:00:00Z"
+    ],
+    "lead_h": 12.1,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 315.0,
+    "fc_speed_ms": [
+     5.36,
+     8.05
+    ],
+    "fc_gust_ms": 13.41,
+    "obs_mean_speed_ms": 2.62,
+    "obs_vector_from_deg": 326,
+    "obs_max_gust_ms": 8.23,
+    "dir_error_deg": 11,
+    "speed_error_ms": -4.09,
+    "speed_ratio": 0.39,
+    "hours_in_forecast_range": 0.0,
+    "gust_ratio": 0.61,
+    "issued_utc": "2018-11-08T13:56:00Z"
+   },
+   {
+    "station": "JBGC1",
+    "zone": "CAZ266",
+    "sub_area": "ridge",
+    "period": "TODAY",
+    "window_utc": [
+     "2018-11-08T13:56:00Z",
+     "2018-11-09T02:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": true,
+    "n_hours": 12,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 45.0,
+    "fc_speed_ms": [
+     6.71,
+     12.07
+    ],
+    "fc_gust_ms": 22.35,
+    "obs_mean_speed_ms": 5.89,
+    "obs_vector_from_deg": 34,
+    "obs_max_gust_ms": 17.88,
+    "dir_error_deg": -11,
+    "speed_error_ms": -3.5,
+    "speed_ratio": 0.63,
+    "hours_in_forecast_range": 0.33,
+    "gust_ratio": 0.8,
+    "issued_utc": "2018-11-08T13:56:00Z"
+   },
+   {
+    "station": "JBGC1",
+    "zone": "CAZ266",
+    "sub_area": "ridge",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2018-11-09T02:00:00Z",
+     "2018-11-09T14:00:00Z"
+    ],
+    "lead_h": 12.1,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 45.0,
+    "fc_speed_ms": [
+     5.81,
+     8.49
+    ],
+    "fc_gust_ms": 20.12,
+    "obs_mean_speed_ms": 10.73,
+    "obs_vector_from_deg": 36,
+    "obs_max_gust_ms": 21.46,
+    "dir_error_deg": -9,
+    "speed_error_ms": 3.58,
+    "speed_ratio": 1.5,
+    "hours_in_forecast_range": 0.25,
+    "gust_ratio": 1.07,
+    "issued_utc": "2018-11-08T13:56:00Z"
+   },
+   {
+    "station": "PKCC1",
+    "zone": "CAZ266",
+    "sub_area": "ridge",
+    "period": "TODAY",
+    "window_utc": [
+     "2018-11-08T13:56:00Z",
+     "2018-11-09T02:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": true,
+    "n_hours": 9,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 45.0,
+    "fc_speed_ms": [
+     6.71,
+     12.07
+    ],
+    "fc_gust_ms": 22.35,
+    "obs_mean_speed_ms": 5.86,
+    "obs_vector_from_deg": 60,
+    "obs_max_gust_ms": 15.65,
+    "dir_error_deg": 15,
+    "speed_error_ms": -3.53,
+    "speed_ratio": 0.62,
+    "hours_in_forecast_range": 0.33,
+    "gust_ratio": 0.7,
+    "issued_utc": "2018-11-08T13:56:00Z"
+   },
+   {
+    "station": "PKCC1",
+    "zone": "CAZ266",
+    "sub_area": "ridge",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2018-11-09T02:00:00Z",
+     "2018-11-09T14:00:00Z"
+    ],
+    "lead_h": 12.1,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 45.0,
+    "fc_speed_ms": [
+     5.81,
+     8.49
+    ],
+    "fc_gust_ms": 20.12,
+    "obs_mean_speed_ms": 8.08,
+    "obs_vector_from_deg": 58,
+    "obs_max_gust_ms": 16.09,
+    "dir_error_deg": 13,
+    "speed_error_ms": 0.93,
+    "speed_ratio": 1.13,
+    "hours_in_forecast_range": 0.42,
+    "gust_ratio": 0.8,
+    "issued_utc": "2018-11-08T13:56:00Z"
+   },
+   {
+    "station": "CIC",
+    "zone": "CAZ216",
+    "sub_area": "all",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2018-11-08T22:47:00Z",
+     "2018-11-09T14:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 15,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 315.0,
+    "fc_speed_ms": [
+     5.36,
+     8.05
+    ],
+    "fc_gust_ms": 13.41,
+    "obs_mean_speed_ms": 2.3,
+    "obs_vector_from_deg": 310,
+    "obs_max_gust_ms": null,
+    "dir_error_deg": -5,
+    "speed_error_ms": -4.41,
+    "speed_ratio": 0.34,
+    "hours_in_forecast_range": 0.07,
+    "gust_ratio": null,
+    "issued_utc": "2018-11-08T22:47:00Z"
+   },
+   {
+    "station": "OVE",
+    "zone": "CAZ216",
+    "sub_area": "all",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2018-11-08T22:47:00Z",
+     "2018-11-09T14:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 15,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 315.0,
+    "fc_speed_ms": [
+     5.36,
+     8.05
+    ],
+    "fc_gust_ms": 13.41,
+    "obs_mean_speed_ms": 2.81,
+    "obs_vector_from_deg": 325,
+    "obs_max_gust_ms": 9.26,
+    "dir_error_deg": 10,
+    "speed_error_ms": -3.89,
+    "speed_ratio": 0.42,
+    "hours_in_forecast_range": 0.0,
+    "gust_ratio": 0.69,
+    "issued_utc": "2018-11-08T22:47:00Z"
+   },
+   {
+    "station": "JBGC1",
+    "zone": "CAZ266",
+    "sub_area": "ridge",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2018-11-08T22:47:00Z",
+     "2018-11-09T14:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 15,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 45.0,
+    "fc_speed_ms": [
+     6.26,
+     8.94
+    ],
+    "fc_gust_ms": 20.12,
+    "obs_mean_speed_ms": 9.51,
+    "obs_vector_from_deg": 36,
+    "obs_max_gust_ms": 21.46,
+    "dir_error_deg": -9,
+    "speed_error_ms": 1.91,
+    "speed_ratio": 1.25,
+    "hours_in_forecast_range": 0.2,
+    "gust_ratio": 1.07,
+    "issued_utc": "2018-11-08T22:47:00Z"
+   },
+   {
+    "station": "PKCC1",
+    "zone": "CAZ266",
+    "sub_area": "ridge",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2018-11-08T22:47:00Z",
+     "2018-11-09T14:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 14,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 45.0,
+    "fc_speed_ms": [
+     6.26,
+     8.94
+    ],
+    "fc_gust_ms": 20.12,
+    "obs_mean_speed_ms": 7.5,
+    "obs_vector_from_deg": 57,
+    "obs_max_gust_ms": 16.09,
+    "dir_error_deg": 12,
+    "speed_error_ms": -0.1,
+    "speed_ratio": 0.99,
+    "hours_in_forecast_range": 0.43,
+    "gust_ratio": 0.8,
+    "issued_utc": "2018-11-08T22:47:00Z"
+   }
+  ],
+  "summary_all_periods": {
+   "n_comparisons": 30,
+   "n_excluded_multi_phase": 6,
+   "n_direction_comparisons": 27,
+   "dir_error_deg": {
+    "mean_signed": -12.2,
+    "mean_abs": 22.3,
+    "median_abs": 13,
+    "p90_abs": 51,
+    "max_abs": 117
+   },
+   "speed_error_ms": {
+    "mean_signed": -2.49,
+    "mean_abs": 3.28
+   },
+   "speed_ratio_obs_over_forecast_mid": {
+    "median": 0.59,
+    "min": 0.1,
+    "max": 1.5
+   },
+   "mean_fraction_of_hours_inside_forecast_range": 0.21,
+   "gust_ratio_obs_max_over_forecast": {
+    "median": 0.8,
+    "n": 17
+   }
+  },
+  "summary_event_window": {
+   "n_comparisons": 4,
+   "n_excluded_multi_phase": 4,
+   "n_direction_comparisons": 4,
+   "dir_error_deg": {
+    "mean_signed": -2.0,
+    "mean_abs": 8.0,
+    "median_abs": 7.5,
+    "p90_abs": 15,
+    "max_abs": 15
+   },
+   "speed_error_ms": {
+    "mean_signed": -4.33,
+    "mean_abs": 4.33
+   },
+   "speed_ratio_obs_over_forecast_mid": {
+    "median": 0.45,
+    "min": 0.34,
+    "max": 0.61
+   },
+   "mean_fraction_of_hours_inside_forecast_range": 0.15,
+   "gust_ratio_obs_max_over_forecast": {
+    "median": 0.58,
+    "n": 3
+   }
+  },
+  "summary_by_station_lead_le_24h": {
+   "CIC": {
+    "n_comparisons": 7,
+    "n_excluded_multi_phase": 0,
+    "n_direction_comparisons": 6,
+    "dir_error_deg": {
+     "mean_signed": -17.5,
+     "mean_abs": 17.5,
+     "median_abs": 15.0,
+     "p90_abs": 34,
+     "max_abs": 34
+    },
+    "speed_error_ms": {
+     "mean_signed": -4.02,
+     "mean_abs": 4.02
+    },
+    "speed_ratio_obs_over_forecast_mid": {
+     "median": 0.36,
+     "min": 0.1,
+     "max": 0.67
+    },
+    "mean_fraction_of_hours_inside_forecast_range": 0.16,
+    "gust_ratio_obs_max_over_forecast": {
+     "median": 0.46,
+     "n": 2
+    }
+   },
+   "OVE": {
+    "n_comparisons": 7,
+    "n_excluded_multi_phase": 0,
+    "n_direction_comparisons": 6,
+    "dir_error_deg": {
+     "mean_signed": -12.5,
+     "mean_abs": 20.8,
+     "median_abs": 10.5,
+     "p90_abs": 51,
+     "max_abs": 51
+    },
+    "speed_error_ms": {
+     "mean_signed": -4.18,
+     "mean_abs": 4.18
+    },
+    "speed_ratio_obs_over_forecast_mid": {
+     "median": 0.42,
+     "min": 0.24,
+     "max": 0.52
+    },
+    "mean_fraction_of_hours_inside_forecast_range": 0.04,
+    "gust_ratio_obs_max_over_forecast": {
+     "median": 0.61,
+     "n": 5
+    }
+   },
+   "JBGC1": {
+    "n_comparisons": 4,
+    "n_excluded_multi_phase": 3,
+    "n_direction_comparisons": 4,
+    "dir_error_deg": {
+     "mean_signed": 5.5,
+     "mean_abs": 16.0,
+     "median_abs": 7.5,
+     "p90_abs": 43,
+     "max_abs": 43
+    },
+    "speed_error_ms": {
+     "mean_signed": 1.17,
+     "mean_abs": 2.05
+    },
+    "speed_ratio_obs_over_forecast_mid": {
+     "median": 1.18,
+     "min": 0.61,
+     "max": 1.5
+    },
+    "mean_fraction_of_hours_inside_forecast_range": 0.29,
+    "gust_ratio_obs_max_over_forecast": {
+     "median": 1.19,
+     "n": 2
+    }
+   },
+   "PKCC1": {
+    "n_comparisons": 4,
+    "n_excluded_multi_phase": 3,
+    "n_direction_comparisons": 4,
+    "dir_error_deg": {
+     "mean_signed": -22.0,
+     "mean_abs": 36.5,
+     "median_abs": 11.0,
+     "p90_abs": 117,
+     "max_abs": 117
+    },
+    "speed_error_ms": {
+     "mean_signed": -0.84,
+     "mean_abs": 1.3
+    },
+    "speed_ratio_obs_over_forecast_mid": {
+     "median": 0.88,
+     "min": 0.52,
+     "max": 1.13
+    },
+    "mean_fraction_of_hours_inside_forecast_range": 0.5,
+    "gust_ratio_obs_max_over_forecast": {
+     "median": 0.94,
+     "n": 2
+    }
+   }
+  }
+ },
+ "tubbs": {
+  "event": "Tubbs Fire, 2017-10-08/09",
+  "ignition_utc": "2017-10-09T04:45:00Z",
+  "evidence_class": "observed vs archived forecast",
+  "products": [
+   {
+    "product_id": "201710071141-KMTR-FNUS56-FWFMTR",
+    "issued_utc": "2017-10-07T11:41:00Z",
+    "sha256": "c910cf1dad2486f2fc4ef7d59fc634a8937029c5204e9448cad48d975f7bcd70",
+    "bytes": 26140
+   },
+   {
+    "product_id": "201710072209-KMTR-FNUS56-FWFMTR",
+    "issued_utc": "2017-10-07T22:09:00Z",
+    "sha256": "1b509431c31e9320568b42c3f4b6e64fdc26e4e732bf1fd81506ccac1e727210",
+    "bytes": 26983
+   },
+   {
+    "product_id": "201710081118-KMTR-FNUS56-FWFMTR",
+    "issued_utc": "2017-10-08T11:18:00Z",
+    "sha256": "63b340d56f8e1c3bec62577e554ea8afbd0442710535ed822836fc7dfc3d77ef",
+    "bytes": 23000
+   },
+   {
+    "product_id": "201710082231-KMTR-FNUS56-FWFMTR",
+    "issued_utc": "2017-10-08T22:31:00Z",
+    "sha256": "9c01e2fb97dd74086187bf17d7e169969c9213ee2ad69001f3de8bb13ca2db55",
+    "bytes": 25721
+   },
+   {
+    "product_id": "201710091213-KMTR-FNUS56-FWFMTR",
+    "issued_utc": "2017-10-09T12:13:00Z",
+    "sha256": "a26a72ebc604d1c301e5b78f9bff321c30f9dd5495b3d4d2618d56664854a232",
+    "bytes": 21613
+   },
+   {
+    "product_id": "201710092319-KMTR-FNUS56-FWFMTR",
+    "issued_utc": "2017-10-09T23:19:00Z",
+    "sha256": "b481de47e65053bd816e6566145cc4008d5d44ad02e87e1f53fed31d8ddd775f",
+    "bytes": 30817
+   }
+  ],
+  "station_zone_assumption": {
+   "STS": [
+    "CAZ506",
+    "all"
+   ],
+   "RSAC1": [
+    "CAZ506",
+    "all"
+   ],
+   "APC": [
+    "CAZ506",
+    "all"
+   ],
+   "O69": [
+    "CAZ506",
+    "all"
+   ],
+   "HWKC1": [
+    "CAZ507",
+    "valley"
+   ],
+   "ATLC1": [
+    "CAZ507",
+    "ridge"
+   ]
+  },
+  "comparisons": [
+   {
+    "station": "STS",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TODAY",
+    "window_utc": [
+     "2017-10-07T11:41:00Z",
+     "2017-10-08T01:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 13,
+    "multi_phase": false,
+    "dir_valid": false,
+    "fc_from_deg": 270.0,
+    "fc_speed_ms": [
+     2.24,
+     2.24
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 1.54,
+    "obs_vector_from_deg": 165,
+    "obs_max_gust_ms": null,
+    "dir_error_deg": -105,
+    "speed_error_ms": -0.69,
+    "speed_ratio": 0.69,
+    "hours_in_forecast_range": 0.0,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-07T11:41:00Z"
+   },
+   {
+    "station": "STS",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2017-10-08T01:00:00Z",
+     "2017-10-08T13:00:00Z"
+    ],
+    "lead_h": 13.3,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": false,
+    "fc_from_deg": 270.0,
+    "fc_speed_ms": [
+     2.24,
+     4.47
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 1.97,
+    "obs_vector_from_deg": 5,
+    "obs_max_gust_ms": null,
+    "dir_error_deg": 95,
+    "speed_error_ms": -1.38,
+    "speed_ratio": 0.59,
+    "hours_in_forecast_range": 0.17,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-07T11:41:00Z"
+   },
+   {
+    "station": "STS",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "SUNDAY",
+    "window_utc": [
+     "2017-10-08T13:00:00Z",
+     "2017-10-09T01:00:00Z"
+    ],
+    "lead_h": 25.3,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 315.0,
+    "fc_speed_ms": [
+     2.24,
+     4.47
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 4.37,
+    "obs_vector_from_deg": 23,
+    "obs_max_gust_ms": 13.38,
+    "dir_error_deg": 68,
+    "speed_error_ms": 1.02,
+    "speed_ratio": 1.3,
+    "hours_in_forecast_range": 0.42,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-07T11:41:00Z"
+   },
+   {
+    "station": "RSAC1",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TODAY",
+    "window_utc": [
+     "2017-10-07T11:41:00Z",
+     "2017-10-08T01:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 13,
+    "multi_phase": false,
+    "dir_valid": false,
+    "fc_from_deg": 270.0,
+    "fc_speed_ms": [
+     2.24,
+     2.24
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 1.86,
+    "obs_vector_from_deg": 228,
+    "obs_max_gust_ms": 6.26,
+    "dir_error_deg": -42,
+    "speed_error_ms": -0.38,
+    "speed_ratio": 0.83,
+    "hours_in_forecast_range": 0.15,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-07T11:41:00Z"
+   },
+   {
+    "station": "RSAC1",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2017-10-08T01:00:00Z",
+     "2017-10-08T13:00:00Z"
+    ],
+    "lead_h": 13.3,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 270.0,
+    "fc_speed_ms": [
+     2.24,
+     4.47
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 2.01,
+    "obs_vector_from_deg": 343,
+    "obs_max_gust_ms": 8.05,
+    "dir_error_deg": 73,
+    "speed_error_ms": -1.34,
+    "speed_ratio": 0.6,
+    "hours_in_forecast_range": 0.5,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-07T11:41:00Z"
+   },
+   {
+    "station": "RSAC1",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "SUNDAY",
+    "window_utc": [
+     "2017-10-08T13:00:00Z",
+     "2017-10-09T01:00:00Z"
+    ],
+    "lead_h": 25.3,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 315.0,
+    "fc_speed_ms": [
+     2.24,
+     4.47
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 2.76,
+    "obs_vector_from_deg": 42,
+    "obs_max_gust_ms": 10.73,
+    "dir_error_deg": 87,
+    "speed_error_ms": -0.6,
+    "speed_ratio": 0.82,
+    "hours_in_forecast_range": 0.42,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-07T11:41:00Z"
+   },
+   {
+    "station": "APC",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TODAY",
+    "window_utc": [
+     "2017-10-07T11:41:00Z",
+     "2017-10-08T01:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 13,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 270.0,
+    "fc_speed_ms": [
+     2.24,
+     2.24
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 2.73,
+    "obs_vector_from_deg": 232,
+    "obs_max_gust_ms": null,
+    "dir_error_deg": -38,
+    "speed_error_ms": 0.5,
+    "speed_ratio": 1.22,
+    "hours_in_forecast_range": 0.0,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-07T11:41:00Z"
+   },
+   {
+    "station": "APC",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2017-10-08T01:00:00Z",
+     "2017-10-08T13:00:00Z"
+    ],
+    "lead_h": 13.3,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 270.0,
+    "fc_speed_ms": [
+     2.24,
+     4.47
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 2.4,
+    "obs_vector_from_deg": 187,
+    "obs_max_gust_ms": null,
+    "dir_error_deg": -83,
+    "speed_error_ms": -0.95,
+    "speed_ratio": 0.72,
+    "hours_in_forecast_range": 0.33,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-07T11:41:00Z"
+   },
+   {
+    "station": "APC",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "SUNDAY",
+    "window_utc": [
+     "2017-10-08T13:00:00Z",
+     "2017-10-09T01:00:00Z"
+    ],
+    "lead_h": 25.3,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 315.0,
+    "fc_speed_ms": [
+     2.24,
+     4.47
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 3.71,
+    "obs_vector_from_deg": 4,
+    "obs_max_gust_ms": 12.86,
+    "dir_error_deg": 49,
+    "speed_error_ms": 0.36,
+    "speed_ratio": 1.11,
+    "hours_in_forecast_range": 0.25,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-07T11:41:00Z"
+   },
+   {
+    "station": "O69",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TODAY",
+    "window_utc": [
+     "2017-10-07T11:41:00Z",
+     "2017-10-08T01:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 13,
+    "multi_phase": false,
+    "dir_valid": false,
+    "fc_from_deg": 270.0,
+    "fc_speed_ms": [
+     2.24,
+     2.24
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 1.54,
+    "obs_vector_from_deg": 274,
+    "obs_max_gust_ms": 5.14,
+    "dir_error_deg": 4,
+    "speed_error_ms": -0.69,
+    "speed_ratio": 0.69,
+    "hours_in_forecast_range": 0.0,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-07T11:41:00Z"
+   },
+   {
+    "station": "O69",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2017-10-08T01:00:00Z",
+     "2017-10-08T13:00:00Z"
+    ],
+    "lead_h": 13.3,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": false,
+    "fc_from_deg": 270.0,
+    "fc_speed_ms": [
+     2.24,
+     4.47
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 1.04,
+    "obs_vector_from_deg": 289,
+    "obs_max_gust_ms": null,
+    "dir_error_deg": 19,
+    "speed_error_ms": -2.31,
+    "speed_ratio": 0.31,
+    "hours_in_forecast_range": 0.17,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-07T11:41:00Z"
+   },
+   {
+    "station": "O69",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "SUNDAY",
+    "window_utc": [
+     "2017-10-08T13:00:00Z",
+     "2017-10-09T01:00:00Z"
+    ],
+    "lead_h": 25.3,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 315.0,
+    "fc_speed_ms": [
+     2.24,
+     4.47
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 1.92,
+    "obs_vector_from_deg": 30,
+    "obs_max_gust_ms": 8.75,
+    "dir_error_deg": 75,
+    "speed_error_ms": -1.43,
+    "speed_ratio": 0.57,
+    "hours_in_forecast_range": 0.08,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-07T11:41:00Z"
+   },
+   {
+    "station": "HWKC1",
+    "zone": "CAZ507",
+    "sub_area": "valley",
+    "period": "TODAY",
+    "window_utc": [
+     "2017-10-07T11:41:00Z",
+     "2017-10-08T01:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 13,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 45.0,
+    "fc_speed_ms": [
+     0.0,
+     2.24
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 2.24,
+    "obs_vector_from_deg": 279,
+    "obs_max_gust_ms": 8.05,
+    "dir_error_deg": -126,
+    "speed_error_ms": 1.12,
+    "speed_ratio": 2.0,
+    "hours_in_forecast_range": 0.54,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-07T11:41:00Z"
+   },
+   {
+    "station": "HWKC1",
+    "zone": "CAZ507",
+    "sub_area": "valley",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2017-10-08T01:00:00Z",
+     "2017-10-08T13:00:00Z"
+    ],
+    "lead_h": 13.3,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 315.0,
+    "fc_speed_ms": [
+     4.47,
+     6.71
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 2.76,
+    "obs_vector_from_deg": 358,
+    "obs_max_gust_ms": 10.28,
+    "dir_error_deg": 43,
+    "speed_error_ms": -2.83,
+    "speed_ratio": 0.49,
+    "hours_in_forecast_range": 0.17,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-07T11:41:00Z"
+   },
+   {
+    "station": "HWKC1",
+    "zone": "CAZ507",
+    "sub_area": "valley",
+    "period": "SUNDAY",
+    "window_utc": [
+     "2017-10-08T13:00:00Z",
+     "2017-10-09T01:00:00Z"
+    ],
+    "lead_h": 25.3,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     4.47,
+     6.71
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 2.64,
+    "obs_vector_from_deg": 46,
+    "obs_max_gust_ms": 12.52,
+    "dir_error_deg": 46,
+    "speed_error_ms": -2.94,
+    "speed_ratio": 0.47,
+    "hours_in_forecast_range": 0.25,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-07T11:41:00Z"
+   },
+   {
+    "station": "ATLC1",
+    "zone": "CAZ507",
+    "sub_area": "ridge",
+    "period": "TODAY",
+    "window_utc": [
+     "2017-10-07T11:41:00Z",
+     "2017-10-08T01:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 13,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     2.24,
+     2.24
+    ],
+    "fc_gust_ms": 13.41,
+    "obs_mean_speed_ms": 3.06,
+    "obs_vector_from_deg": 227,
+    "obs_max_gust_ms": 8.94,
+    "dir_error_deg": -133,
+    "speed_error_ms": 0.83,
+    "speed_ratio": 1.37,
+    "hours_in_forecast_range": 0.0,
+    "gust_ratio": 0.67,
+    "issued_utc": "2017-10-07T11:41:00Z"
+   },
+   {
+    "station": "ATLC1",
+    "zone": "CAZ507",
+    "sub_area": "ridge",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2017-10-08T01:00:00Z",
+     "2017-10-08T13:00:00Z"
+    ],
+    "lead_h": 13.3,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 315.0,
+    "fc_speed_ms": [
+     4.47,
+     8.94
+    ],
+    "fc_gust_ms": 13.41,
+    "obs_mean_speed_ms": 3.02,
+    "obs_vector_from_deg": 283,
+    "obs_max_gust_ms": 9.39,
+    "dir_error_deg": -32,
+    "speed_error_ms": -3.69,
+    "speed_ratio": 0.45,
+    "hours_in_forecast_range": 0.17,
+    "gust_ratio": 0.7,
+    "issued_utc": "2017-10-07T11:41:00Z"
+   },
+   {
+    "station": "ATLC1",
+    "zone": "CAZ507",
+    "sub_area": "ridge",
+    "period": "SUNDAY",
+    "window_utc": [
+     "2017-10-08T13:00:00Z",
+     "2017-10-09T01:00:00Z"
+    ],
+    "lead_h": 25.3,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     4.47,
+     8.94
+    ],
+    "fc_gust_ms": 17.88,
+    "obs_mean_speed_ms": 3.46,
+    "obs_vector_from_deg": 21,
+    "obs_max_gust_ms": 10.28,
+    "dir_error_deg": 21,
+    "speed_error_ms": -3.24,
+    "speed_ratio": 0.52,
+    "hours_in_forecast_range": 0.33,
+    "gust_ratio": 0.57,
+    "issued_utc": "2017-10-07T11:41:00Z"
+   },
+   {
+    "station": "STS",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2017-10-07T22:09:00Z",
+     "2017-10-08T13:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 14,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 225.0,
+    "fc_speed_ms": [
+     2.24,
+     4.47
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 2.28,
+    "obs_vector_from_deg": 62,
+    "obs_max_gust_ms": null,
+    "dir_error_deg": -163,
+    "speed_error_ms": -1.07,
+    "speed_ratio": 0.68,
+    "hours_in_forecast_range": 0.21,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-07T22:09:00Z"
+   },
+   {
+    "station": "STS",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "SUNDAY",
+    "window_utc": [
+     "2017-10-08T13:00:00Z",
+     "2017-10-09T01:00:00Z"
+    ],
+    "lead_h": 14.8,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 270.0,
+    "fc_speed_ms": [
+     2.24,
+     2.24
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 4.37,
+    "obs_vector_from_deg": 23,
+    "obs_max_gust_ms": 13.38,
+    "dir_error_deg": 113,
+    "speed_error_ms": 2.14,
+    "speed_ratio": 1.96,
+    "hours_in_forecast_range": 0.0,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-07T22:09:00Z"
+   },
+   {
+    "station": "STS",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "SUNDAY NIGHT",
+    "window_utc": [
+     "2017-10-09T01:00:00Z",
+     "2017-10-09T13:00:00Z"
+    ],
+    "lead_h": 26.9,
+    "window_contains_ignition": true,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     4.47,
+     8.94
+    ],
+    "fc_gust_ms": 13.41,
+    "obs_mean_speed_ms": 7.85,
+    "obs_vector_from_deg": 11,
+    "obs_max_gust_ms": 15.95,
+    "dir_error_deg": 11,
+    "speed_error_ms": 1.14,
+    "speed_ratio": 1.17,
+    "hours_in_forecast_range": 0.83,
+    "gust_ratio": 1.19,
+    "issued_utc": "2017-10-07T22:09:00Z"
+   },
+   {
+    "station": "RSAC1",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2017-10-07T22:09:00Z",
+     "2017-10-08T13:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 14,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 225.0,
+    "fc_speed_ms": [
+     2.24,
+     4.47
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 2.24,
+    "obs_vector_from_deg": 320,
+    "obs_max_gust_ms": 8.05,
+    "dir_error_deg": 95,
+    "speed_error_ms": -1.12,
+    "speed_ratio": 0.67,
+    "hours_in_forecast_range": 0.57,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-07T22:09:00Z"
+   },
+   {
+    "station": "RSAC1",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "SUNDAY",
+    "window_utc": [
+     "2017-10-08T13:00:00Z",
+     "2017-10-09T01:00:00Z"
+    ],
+    "lead_h": 14.8,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 270.0,
+    "fc_speed_ms": [
+     2.24,
+     2.24
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 2.76,
+    "obs_vector_from_deg": 42,
+    "obs_max_gust_ms": 10.73,
+    "dir_error_deg": 132,
+    "speed_error_ms": 0.52,
+    "speed_ratio": 1.23,
+    "hours_in_forecast_range": 0.08,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-07T22:09:00Z"
+   },
+   {
+    "station": "RSAC1",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "SUNDAY NIGHT",
+    "window_utc": [
+     "2017-10-09T01:00:00Z",
+     "2017-10-09T13:00:00Z"
+    ],
+    "lead_h": 26.9,
+    "window_contains_ignition": true,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     4.47,
+     8.94
+    ],
+    "fc_gust_ms": 13.41,
+    "obs_mean_speed_ms": 6.97,
+    "obs_vector_from_deg": 60,
+    "obs_max_gust_ms": 30.4,
+    "dir_error_deg": 60,
+    "speed_error_ms": 0.26,
+    "speed_ratio": 1.04,
+    "hours_in_forecast_range": 0.42,
+    "gust_ratio": 2.27,
+    "issued_utc": "2017-10-07T22:09:00Z"
+   },
+   {
+    "station": "RSAC1",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "COLUMBUS DAY",
+    "window_utc": [
+     "2017-10-09T13:00:00Z",
+     "2017-10-10T01:00:00Z"
+    ],
+    "lead_h": 38.9,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 45.0,
+    "fc_speed_ms": [
+     4.47,
+     8.94
+    ],
+    "fc_gust_ms": 13.41,
+    "obs_mean_speed_ms": 3.91,
+    "obs_vector_from_deg": 201,
+    "obs_max_gust_ms": 17.43,
+    "dir_error_deg": 156,
+    "speed_error_ms": -2.79,
+    "speed_ratio": 0.58,
+    "hours_in_forecast_range": 0.33,
+    "gust_ratio": 1.3,
+    "issued_utc": "2017-10-07T22:09:00Z"
+   },
+   {
+    "station": "APC",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2017-10-07T22:09:00Z",
+     "2017-10-08T13:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 14,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 225.0,
+    "fc_speed_ms": [
+     2.24,
+     4.47
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 2.9,
+    "obs_vector_from_deg": 191,
+    "obs_max_gust_ms": null,
+    "dir_error_deg": -34,
+    "speed_error_ms": -0.45,
+    "speed_ratio": 0.87,
+    "hours_in_forecast_range": 0.29,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-07T22:09:00Z"
+   },
+   {
+    "station": "APC",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "SUNDAY",
+    "window_utc": [
+     "2017-10-08T13:00:00Z",
+     "2017-10-09T01:00:00Z"
+    ],
+    "lead_h": 14.8,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 270.0,
+    "fc_speed_ms": [
+     2.24,
+     2.24
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 3.71,
+    "obs_vector_from_deg": 4,
+    "obs_max_gust_ms": 12.86,
+    "dir_error_deg": 94,
+    "speed_error_ms": 1.47,
+    "speed_ratio": 1.66,
+    "hours_in_forecast_range": 0.0,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-07T22:09:00Z"
+   },
+   {
+    "station": "APC",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "SUNDAY NIGHT",
+    "window_utc": [
+     "2017-10-09T01:00:00Z",
+     "2017-10-09T13:00:00Z"
+    ],
+    "lead_h": 26.9,
+    "window_contains_ignition": true,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     4.47,
+     8.94
+    ],
+    "fc_gust_ms": 13.41,
+    "obs_mean_speed_ms": 8.91,
+    "obs_vector_from_deg": 16,
+    "obs_max_gust_ms": 19.03,
+    "dir_error_deg": 16,
+    "speed_error_ms": 2.21,
+    "speed_ratio": 1.33,
+    "hours_in_forecast_range": 0.42,
+    "gust_ratio": 1.42,
+    "issued_utc": "2017-10-07T22:09:00Z"
+   },
+   {
+    "station": "APC",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "COLUMBUS DAY",
+    "window_utc": [
+     "2017-10-09T13:00:00Z",
+     "2017-10-10T01:00:00Z"
+    ],
+    "lead_h": 38.9,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 45.0,
+    "fc_speed_ms": [
+     4.47,
+     8.94
+    ],
+    "fc_gust_ms": 13.41,
+    "obs_mean_speed_ms": 3.52,
+    "obs_vector_from_deg": 202,
+    "obs_max_gust_ms": null,
+    "dir_error_deg": 157,
+    "speed_error_ms": -3.19,
+    "speed_ratio": 0.52,
+    "hours_in_forecast_range": 0.25,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-07T22:09:00Z"
+   },
+   {
+    "station": "O69",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2017-10-07T22:09:00Z",
+     "2017-10-08T13:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 14,
+    "multi_phase": false,
+    "dir_valid": false,
+    "fc_from_deg": 225.0,
+    "fc_speed_ms": [
+     2.24,
+     4.47
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 1.48,
+    "obs_vector_from_deg": 284,
+    "obs_max_gust_ms": null,
+    "dir_error_deg": 59,
+    "speed_error_ms": -1.88,
+    "speed_ratio": 0.44,
+    "hours_in_forecast_range": 0.29,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-07T22:09:00Z"
+   },
+   {
+    "station": "O69",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "SUNDAY",
+    "window_utc": [
+     "2017-10-08T13:00:00Z",
+     "2017-10-09T01:00:00Z"
+    ],
+    "lead_h": 14.8,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 270.0,
+    "fc_speed_ms": [
+     2.24,
+     2.24
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 1.92,
+    "obs_vector_from_deg": 30,
+    "obs_max_gust_ms": 8.75,
+    "dir_error_deg": 120,
+    "speed_error_ms": -0.31,
+    "speed_ratio": 0.86,
+    "hours_in_forecast_range": 0.0,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-07T22:09:00Z"
+   },
+   {
+    "station": "O69",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "SUNDAY NIGHT",
+    "window_utc": [
+     "2017-10-09T01:00:00Z",
+     "2017-10-09T13:00:00Z"
+    ],
+    "lead_h": 26.9,
+    "window_contains_ignition": true,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     4.47,
+     8.94
+    ],
+    "fc_gust_ms": 13.41,
+    "obs_mean_speed_ms": 3.13,
+    "obs_vector_from_deg": 256,
+    "obs_max_gust_ms": 15.95,
+    "dir_error_deg": -104,
+    "speed_error_ms": -3.58,
+    "speed_ratio": 0.47,
+    "hours_in_forecast_range": 0.17,
+    "gust_ratio": 1.19,
+    "issued_utc": "2017-10-07T22:09:00Z"
+   },
+   {
+    "station": "O69",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "COLUMBUS DAY",
+    "window_utc": [
+     "2017-10-09T13:00:00Z",
+     "2017-10-10T01:00:00Z"
+    ],
+    "lead_h": 38.9,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 45.0,
+    "fc_speed_ms": [
+     4.47,
+     8.94
+    ],
+    "fc_gust_ms": 13.41,
+    "obs_mean_speed_ms": 1.93,
+    "obs_vector_from_deg": 179,
+    "obs_max_gust_ms": 7.2,
+    "dir_error_deg": 134,
+    "speed_error_ms": -4.78,
+    "speed_ratio": 0.29,
+    "hours_in_forecast_range": 0.0,
+    "gust_ratio": 0.54,
+    "issued_utc": "2017-10-07T22:09:00Z"
+   },
+   {
+    "station": "HWKC1",
+    "zone": "CAZ507",
+    "sub_area": "valley",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2017-10-07T22:09:00Z",
+     "2017-10-08T13:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 14,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 315.0,
+    "fc_speed_ms": [
+     2.24,
+     4.47
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 3.16,
+    "obs_vector_from_deg": 346,
+    "obs_max_gust_ms": 10.28,
+    "dir_error_deg": 31,
+    "speed_error_ms": -0.19,
+    "speed_ratio": 0.94,
+    "hours_in_forecast_range": 0.57,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-07T22:09:00Z"
+   },
+   {
+    "station": "HWKC1",
+    "zone": "CAZ507",
+    "sub_area": "valley",
+    "period": "SUNDAY",
+    "window_utc": [
+     "2017-10-08T13:00:00Z",
+     "2017-10-09T01:00:00Z"
+    ],
+    "lead_h": 14.8,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     2.24,
+     6.71
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 2.64,
+    "obs_vector_from_deg": 46,
+    "obs_max_gust_ms": 12.52,
+    "dir_error_deg": 46,
+    "speed_error_ms": -1.83,
+    "speed_ratio": 0.59,
+    "hours_in_forecast_range": 0.5,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-07T22:09:00Z"
+   },
+   {
+    "station": "HWKC1",
+    "zone": "CAZ507",
+    "sub_area": "valley",
+    "period": "SUNDAY NIGHT",
+    "window_utc": [
+     "2017-10-09T01:00:00Z",
+     "2017-10-09T13:00:00Z"
+    ],
+    "lead_h": 26.9,
+    "window_contains_ignition": true,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     4.47,
+     8.94
+    ],
+    "fc_gust_ms": 13.41,
+    "obs_mean_speed_ms": 14.38,
+    "obs_vector_from_deg": 37,
+    "obs_max_gust_ms": 35.32,
+    "dir_error_deg": 37,
+    "speed_error_ms": 7.67,
+    "speed_ratio": 2.14,
+    "hours_in_forecast_range": 0.17,
+    "gust_ratio": 2.63,
+    "issued_utc": "2017-10-07T22:09:00Z"
+   },
+   {
+    "station": "HWKC1",
+    "zone": "CAZ507",
+    "sub_area": "valley",
+    "period": "COLUMBUS DAY",
+    "window_utc": [
+     "2017-10-09T13:00:00Z",
+     "2017-10-10T01:00:00Z"
+    ],
+    "lead_h": 38.9,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 45.0,
+    "fc_speed_ms": [
+     4.47,
+     8.94
+    ],
+    "fc_gust_ms": 13.41,
+    "obs_mean_speed_ms": 2.91,
+    "obs_vector_from_deg": 138,
+    "obs_max_gust_ms": 16.99,
+    "dir_error_deg": 93,
+    "speed_error_ms": -3.8,
+    "speed_ratio": 0.43,
+    "hours_in_forecast_range": 0.08,
+    "gust_ratio": 1.27,
+    "issued_utc": "2017-10-07T22:09:00Z"
+   },
+   {
+    "station": "ATLC1",
+    "zone": "CAZ507",
+    "sub_area": "ridge",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2017-10-07T22:09:00Z",
+     "2017-10-08T13:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 14,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 315.0,
+    "fc_speed_ms": [
+     2.24,
+     6.71
+    ],
+    "fc_gust_ms": 8.94,
+    "obs_mean_speed_ms": 3.51,
+    "obs_vector_from_deg": 254,
+    "obs_max_gust_ms": 9.39,
+    "dir_error_deg": -61,
+    "speed_error_ms": -0.96,
+    "speed_ratio": 0.79,
+    "hours_in_forecast_range": 0.79,
+    "gust_ratio": 1.05,
+    "issued_utc": "2017-10-07T22:09:00Z"
+   },
+   {
+    "station": "ATLC1",
+    "zone": "CAZ507",
+    "sub_area": "ridge",
+    "period": "SUNDAY",
+    "window_utc": [
+     "2017-10-08T13:00:00Z",
+     "2017-10-09T01:00:00Z"
+    ],
+    "lead_h": 14.8,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     4.47,
+     8.94
+    ],
+    "fc_gust_ms": 17.88,
+    "obs_mean_speed_ms": 3.46,
+    "obs_vector_from_deg": 21,
+    "obs_max_gust_ms": 10.28,
+    "dir_error_deg": 21,
+    "speed_error_ms": -3.24,
+    "speed_ratio": 0.52,
+    "hours_in_forecast_range": 0.33,
+    "gust_ratio": 0.57,
+    "issued_utc": "2017-10-07T22:09:00Z"
+   },
+   {
+    "station": "ATLC1",
+    "zone": "CAZ507",
+    "sub_area": "ridge",
+    "period": "SUNDAY NIGHT",
+    "window_utc": [
+     "2017-10-09T01:00:00Z",
+     "2017-10-09T13:00:00Z"
+    ],
+    "lead_h": 26.9,
+    "window_contains_ignition": true,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     6.71,
+     11.18
+    ],
+    "fc_gust_ms": 24.59,
+    "obs_mean_speed_ms": 5.74,
+    "obs_vector_from_deg": 15,
+    "obs_max_gust_ms": 15.2,
+    "dir_error_deg": 15,
+    "speed_error_ms": -3.2,
+    "speed_ratio": 0.64,
+    "hours_in_forecast_range": 0.17,
+    "gust_ratio": 0.62,
+    "issued_utc": "2017-10-07T22:09:00Z"
+   },
+   {
+    "station": "ATLC1",
+    "zone": "CAZ507",
+    "sub_area": "ridge",
+    "period": "COLUMBUS DAY",
+    "window_utc": [
+     "2017-10-09T13:00:00Z",
+     "2017-10-10T01:00:00Z"
+    ],
+    "lead_h": 38.9,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 45.0,
+    "fc_speed_ms": [
+     6.71,
+     11.18
+    ],
+    "fc_gust_ms": 22.35,
+    "obs_mean_speed_ms": 2.72,
+    "obs_vector_from_deg": 51,
+    "obs_max_gust_ms": 11.18,
+    "dir_error_deg": 6,
+    "speed_error_ms": -6.22,
+    "speed_ratio": 0.3,
+    "hours_in_forecast_range": 0.0,
+    "gust_ratio": 0.5,
+    "issued_utc": "2017-10-07T22:09:00Z"
+   },
+   {
+    "station": "STS",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TODAY",
+    "window_utc": [
+     "2017-10-08T11:18:00Z",
+     "2017-10-09T01:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 13,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 270.0,
+    "fc_speed_ms": [
+     2.24,
+     2.24
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 4.35,
+    "obs_vector_from_deg": 24,
+    "obs_max_gust_ms": 13.38,
+    "dir_error_deg": 114,
+    "speed_error_ms": 2.12,
+    "speed_ratio": 1.95,
+    "hours_in_forecast_range": 0.0,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-08T11:18:00Z"
+   },
+   {
+    "station": "STS",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2017-10-09T01:00:00Z",
+     "2017-10-09T13:00:00Z"
+    ],
+    "lead_h": 13.7,
+    "window_contains_ignition": true,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     4.47,
+     8.94
+    ],
+    "fc_gust_ms": 13.41,
+    "obs_mean_speed_ms": 7.85,
+    "obs_vector_from_deg": 11,
+    "obs_max_gust_ms": 15.95,
+    "dir_error_deg": 11,
+    "speed_error_ms": 1.14,
+    "speed_ratio": 1.17,
+    "hours_in_forecast_range": 0.83,
+    "gust_ratio": 1.19,
+    "issued_utc": "2017-10-08T11:18:00Z"
+   },
+   {
+    "station": "RSAC1",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TODAY",
+    "window_utc": [
+     "2017-10-08T11:18:00Z",
+     "2017-10-09T01:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 13,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 270.0,
+    "fc_speed_ms": [
+     2.24,
+     2.24
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 2.61,
+    "obs_vector_from_deg": 41,
+    "obs_max_gust_ms": 10.73,
+    "dir_error_deg": 131,
+    "speed_error_ms": 0.38,
+    "speed_ratio": 1.17,
+    "hours_in_forecast_range": 0.08,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-08T11:18:00Z"
+   },
+   {
+    "station": "RSAC1",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2017-10-09T01:00:00Z",
+     "2017-10-09T13:00:00Z"
+    ],
+    "lead_h": 13.7,
+    "window_contains_ignition": true,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     4.47,
+     8.94
+    ],
+    "fc_gust_ms": 13.41,
+    "obs_mean_speed_ms": 6.97,
+    "obs_vector_from_deg": 60,
+    "obs_max_gust_ms": 30.4,
+    "dir_error_deg": 60,
+    "speed_error_ms": 0.26,
+    "speed_ratio": 1.04,
+    "hours_in_forecast_range": 0.42,
+    "gust_ratio": 2.27,
+    "issued_utc": "2017-10-08T11:18:00Z"
+   },
+   {
+    "station": "RSAC1",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "COLUMBUS DAY",
+    "window_utc": [
+     "2017-10-09T13:00:00Z",
+     "2017-10-10T01:00:00Z"
+    ],
+    "lead_h": 25.7,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 45.0,
+    "fc_speed_ms": [
+     4.47,
+     6.71
+    ],
+    "fc_gust_ms": 11.18,
+    "obs_mean_speed_ms": 3.91,
+    "obs_vector_from_deg": 201,
+    "obs_max_gust_ms": 17.43,
+    "dir_error_deg": 156,
+    "speed_error_ms": -1.68,
+    "speed_ratio": 0.7,
+    "hours_in_forecast_range": 0.33,
+    "gust_ratio": 1.56,
+    "issued_utc": "2017-10-08T11:18:00Z"
+   },
+   {
+    "station": "APC",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TODAY",
+    "window_utc": [
+     "2017-10-08T11:18:00Z",
+     "2017-10-09T01:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 13,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 270.0,
+    "fc_speed_ms": [
+     2.24,
+     2.24
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 3.54,
+    "obs_vector_from_deg": 12,
+    "obs_max_gust_ms": 12.86,
+    "dir_error_deg": 102,
+    "speed_error_ms": 1.31,
+    "speed_ratio": 1.58,
+    "hours_in_forecast_range": 0.0,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-08T11:18:00Z"
+   },
+   {
+    "station": "APC",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2017-10-09T01:00:00Z",
+     "2017-10-09T13:00:00Z"
+    ],
+    "lead_h": 13.7,
+    "window_contains_ignition": true,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     4.47,
+     8.94
+    ],
+    "fc_gust_ms": 13.41,
+    "obs_mean_speed_ms": 8.91,
+    "obs_vector_from_deg": 16,
+    "obs_max_gust_ms": 19.03,
+    "dir_error_deg": 16,
+    "speed_error_ms": 2.21,
+    "speed_ratio": 1.33,
+    "hours_in_forecast_range": 0.42,
+    "gust_ratio": 1.42,
+    "issued_utc": "2017-10-08T11:18:00Z"
+   },
+   {
+    "station": "APC",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "COLUMBUS DAY",
+    "window_utc": [
+     "2017-10-09T13:00:00Z",
+     "2017-10-10T01:00:00Z"
+    ],
+    "lead_h": 25.7,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 45.0,
+    "fc_speed_ms": [
+     4.47,
+     6.71
+    ],
+    "fc_gust_ms": 11.18,
+    "obs_mean_speed_ms": 3.52,
+    "obs_vector_from_deg": 202,
+    "obs_max_gust_ms": null,
+    "dir_error_deg": 157,
+    "speed_error_ms": -2.07,
+    "speed_ratio": 0.63,
+    "hours_in_forecast_range": 0.17,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-08T11:18:00Z"
+   },
+   {
+    "station": "O69",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TODAY",
+    "window_utc": [
+     "2017-10-08T11:18:00Z",
+     "2017-10-09T01:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 13,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 270.0,
+    "fc_speed_ms": [
+     2.24,
+     2.24
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 1.77,
+    "obs_vector_from_deg": 30,
+    "obs_max_gust_ms": 8.75,
+    "dir_error_deg": 120,
+    "speed_error_ms": -0.46,
+    "speed_ratio": 0.79,
+    "hours_in_forecast_range": 0.0,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-08T11:18:00Z"
+   },
+   {
+    "station": "O69",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2017-10-09T01:00:00Z",
+     "2017-10-09T13:00:00Z"
+    ],
+    "lead_h": 13.7,
+    "window_contains_ignition": true,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     4.47,
+     8.94
+    ],
+    "fc_gust_ms": 13.41,
+    "obs_mean_speed_ms": 3.13,
+    "obs_vector_from_deg": 256,
+    "obs_max_gust_ms": 15.95,
+    "dir_error_deg": -104,
+    "speed_error_ms": -3.58,
+    "speed_ratio": 0.47,
+    "hours_in_forecast_range": 0.17,
+    "gust_ratio": 1.19,
+    "issued_utc": "2017-10-08T11:18:00Z"
+   },
+   {
+    "station": "O69",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "COLUMBUS DAY",
+    "window_utc": [
+     "2017-10-09T13:00:00Z",
+     "2017-10-10T01:00:00Z"
+    ],
+    "lead_h": 25.7,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 45.0,
+    "fc_speed_ms": [
+     4.47,
+     6.71
+    ],
+    "fc_gust_ms": 11.18,
+    "obs_mean_speed_ms": 1.93,
+    "obs_vector_from_deg": 179,
+    "obs_max_gust_ms": 7.2,
+    "dir_error_deg": 134,
+    "speed_error_ms": -3.66,
+    "speed_ratio": 0.35,
+    "hours_in_forecast_range": 0.0,
+    "gust_ratio": 0.64,
+    "issued_utc": "2017-10-08T11:18:00Z"
+   },
+   {
+    "station": "HWKC1",
+    "zone": "CAZ507",
+    "sub_area": "valley",
+    "period": "TODAY",
+    "window_utc": [
+     "2017-10-08T11:18:00Z",
+     "2017-10-09T01:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 13,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     2.24,
+     6.71
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 2.65,
+    "obs_vector_from_deg": 41,
+    "obs_max_gust_ms": 12.52,
+    "dir_error_deg": 41,
+    "speed_error_ms": -1.82,
+    "speed_ratio": 0.59,
+    "hours_in_forecast_range": 0.54,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-08T11:18:00Z"
+   },
+   {
+    "station": "HWKC1",
+    "zone": "CAZ507",
+    "sub_area": "valley",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2017-10-09T01:00:00Z",
+     "2017-10-09T13:00:00Z"
+    ],
+    "lead_h": 13.7,
+    "window_contains_ignition": true,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     4.47,
+     8.94
+    ],
+    "fc_gust_ms": 13.41,
+    "obs_mean_speed_ms": 14.38,
+    "obs_vector_from_deg": 37,
+    "obs_max_gust_ms": 35.32,
+    "dir_error_deg": 37,
+    "speed_error_ms": 7.67,
+    "speed_ratio": 2.14,
+    "hours_in_forecast_range": 0.17,
+    "gust_ratio": 2.63,
+    "issued_utc": "2017-10-08T11:18:00Z"
+   },
+   {
+    "station": "HWKC1",
+    "zone": "CAZ507",
+    "sub_area": "valley",
+    "period": "COLUMBUS DAY",
+    "window_utc": [
+     "2017-10-09T13:00:00Z",
+     "2017-10-10T01:00:00Z"
+    ],
+    "lead_h": 25.7,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 45.0,
+    "fc_speed_ms": [
+     4.47,
+     8.94
+    ],
+    "fc_gust_ms": 11.18,
+    "obs_mean_speed_ms": 2.91,
+    "obs_vector_from_deg": 138,
+    "obs_max_gust_ms": 16.99,
+    "dir_error_deg": 93,
+    "speed_error_ms": -3.8,
+    "speed_ratio": 0.43,
+    "hours_in_forecast_range": 0.08,
+    "gust_ratio": 1.52,
+    "issued_utc": "2017-10-08T11:18:00Z"
+   },
+   {
+    "station": "ATLC1",
+    "zone": "CAZ507",
+    "sub_area": "ridge",
+    "period": "TODAY",
+    "window_utc": [
+     "2017-10-08T11:18:00Z",
+     "2017-10-09T01:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 13,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     4.47,
+     8.94
+    ],
+    "fc_gust_ms": 17.88,
+    "obs_mean_speed_ms": 3.34,
+    "obs_vector_from_deg": 23,
+    "obs_max_gust_ms": 10.28,
+    "dir_error_deg": 23,
+    "speed_error_ms": -3.37,
+    "speed_ratio": 0.5,
+    "hours_in_forecast_range": 0.31,
+    "gust_ratio": 0.57,
+    "issued_utc": "2017-10-08T11:18:00Z"
+   },
+   {
+    "station": "ATLC1",
+    "zone": "CAZ507",
+    "sub_area": "ridge",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2017-10-09T01:00:00Z",
+     "2017-10-09T13:00:00Z"
+    ],
+    "lead_h": 13.7,
+    "window_contains_ignition": true,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     6.71,
+     11.18
+    ],
+    "fc_gust_ms": 24.59,
+    "obs_mean_speed_ms": 5.74,
+    "obs_vector_from_deg": 15,
+    "obs_max_gust_ms": 15.2,
+    "dir_error_deg": 15,
+    "speed_error_ms": -3.2,
+    "speed_ratio": 0.64,
+    "hours_in_forecast_range": 0.17,
+    "gust_ratio": 0.62,
+    "issued_utc": "2017-10-08T11:18:00Z"
+   },
+   {
+    "station": "ATLC1",
+    "zone": "CAZ507",
+    "sub_area": "ridge",
+    "period": "COLUMBUS DAY",
+    "window_utc": [
+     "2017-10-09T13:00:00Z",
+     "2017-10-10T01:00:00Z"
+    ],
+    "lead_h": 25.7,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 45.0,
+    "fc_speed_ms": [
+     6.71,
+     11.18
+    ],
+    "fc_gust_ms": 22.35,
+    "obs_mean_speed_ms": 2.72,
+    "obs_vector_from_deg": 51,
+    "obs_max_gust_ms": 11.18,
+    "dir_error_deg": 6,
+    "speed_error_ms": -6.22,
+    "speed_ratio": 0.3,
+    "hours_in_forecast_range": 0.0,
+    "gust_ratio": 0.5,
+    "issued_utc": "2017-10-08T11:18:00Z"
+   },
+   {
+    "station": "STS",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2017-10-08T22:31:00Z",
+     "2017-10-09T13:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": true,
+    "n_hours": 14,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     6.71,
+     11.18
+    ],
+    "fc_gust_ms": 13.41,
+    "obs_mean_speed_ms": 7.94,
+    "obs_vector_from_deg": 16,
+    "obs_max_gust_ms": 15.95,
+    "dir_error_deg": 16,
+    "speed_error_ms": -1.0,
+    "speed_ratio": 0.89,
+    "hours_in_forecast_range": 0.71,
+    "gust_ratio": 1.19,
+    "issued_utc": "2017-10-08T22:31:00Z"
+   },
+   {
+    "station": "RSAC1",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2017-10-08T22:31:00Z",
+     "2017-10-09T13:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": true,
+    "n_hours": 14,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     6.71,
+     11.18
+    ],
+    "fc_gust_ms": 13.41,
+    "obs_mean_speed_ms": 6.55,
+    "obs_vector_from_deg": 59,
+    "obs_max_gust_ms": 30.4,
+    "dir_error_deg": 59,
+    "speed_error_ms": -2.39,
+    "speed_ratio": 0.73,
+    "hours_in_forecast_range": 0.29,
+    "gust_ratio": 2.27,
+    "issued_utc": "2017-10-08T22:31:00Z"
+   },
+   {
+    "station": "RSAC1",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "COLUMBUS DAY",
+    "window_utc": [
+     "2017-10-09T13:00:00Z",
+     "2017-10-10T01:00:00Z"
+    ],
+    "lead_h": 14.5,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     4.47,
+     8.94
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 3.91,
+    "obs_vector_from_deg": 201,
+    "obs_max_gust_ms": 17.43,
+    "dir_error_deg": -159,
+    "speed_error_ms": -2.79,
+    "speed_ratio": 0.58,
+    "hours_in_forecast_range": 0.33,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-08T22:31:00Z"
+   },
+   {
+    "station": "RSAC1",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "MONDAY NIGHT",
+    "window_utc": [
+     "2017-10-10T01:00:00Z",
+     "2017-10-10T13:00:00Z"
+    ],
+    "lead_h": 26.5,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": false,
+    "fc_from_deg": 135.0,
+    "fc_speed_ms": [
+     2.24,
+     4.47
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 1.27,
+    "obs_vector_from_deg": 99,
+    "obs_max_gust_ms": 5.36,
+    "dir_error_deg": -36,
+    "speed_error_ms": -2.09,
+    "speed_ratio": 0.38,
+    "hours_in_forecast_range": 0.08,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-08T22:31:00Z"
+   },
+   {
+    "station": "RSAC1",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TUESDAY",
+    "window_utc": [
+     "2017-10-10T13:00:00Z",
+     "2017-10-11T01:00:00Z"
+    ],
+    "lead_h": 38.5,
+    "window_contains_ignition": false,
+    "n_hours": 6,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 45.0,
+    "fc_speed_ms": [
+     2.24,
+     4.47
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 0.75,
+    "obs_vector_from_deg": 216,
+    "obs_max_gust_ms": 2.24,
+    "dir_error_deg": 171,
+    "speed_error_ms": -2.61,
+    "speed_ratio": 0.22,
+    "hours_in_forecast_range": 0.0,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-08T22:31:00Z"
+   },
+   {
+    "station": "APC",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2017-10-08T22:31:00Z",
+     "2017-10-09T13:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": true,
+    "n_hours": 14,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     6.71,
+     11.18
+    ],
+    "fc_gust_ms": 13.41,
+    "obs_mean_speed_ms": 8.78,
+    "obs_vector_from_deg": 17,
+    "obs_max_gust_ms": 19.03,
+    "dir_error_deg": 17,
+    "speed_error_ms": -0.16,
+    "speed_ratio": 0.98,
+    "hours_in_forecast_range": 0.57,
+    "gust_ratio": 1.42,
+    "issued_utc": "2017-10-08T22:31:00Z"
+   },
+   {
+    "station": "APC",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "COLUMBUS DAY",
+    "window_utc": [
+     "2017-10-09T13:00:00Z",
+     "2017-10-10T01:00:00Z"
+    ],
+    "lead_h": 14.5,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     4.47,
+     8.94
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 3.52,
+    "obs_vector_from_deg": 202,
+    "obs_max_gust_ms": null,
+    "dir_error_deg": -158,
+    "speed_error_ms": -3.19,
+    "speed_ratio": 0.52,
+    "hours_in_forecast_range": 0.25,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-08T22:31:00Z"
+   },
+   {
+    "station": "APC",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "MONDAY NIGHT",
+    "window_utc": [
+     "2017-10-10T01:00:00Z",
+     "2017-10-10T13:00:00Z"
+    ],
+    "lead_h": 26.5,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": false,
+    "fc_from_deg": 135.0,
+    "fc_speed_ms": [
+     2.24,
+     4.47
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 1.57,
+    "obs_vector_from_deg": 121,
+    "obs_max_gust_ms": null,
+    "dir_error_deg": -14,
+    "speed_error_ms": -1.78,
+    "speed_ratio": 0.47,
+    "hours_in_forecast_range": 0.17,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-08T22:31:00Z"
+   },
+   {
+    "station": "APC",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TUESDAY",
+    "window_utc": [
+     "2017-10-10T13:00:00Z",
+     "2017-10-11T01:00:00Z"
+    ],
+    "lead_h": 38.5,
+    "window_contains_ignition": false,
+    "n_hours": 6,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 45.0,
+    "fc_speed_ms": [
+     2.24,
+     4.47
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 0.66,
+    "obs_vector_from_deg": 321,
+    "obs_max_gust_ms": null,
+    "dir_error_deg": -84,
+    "speed_error_ms": -2.69,
+    "speed_ratio": 0.2,
+    "hours_in_forecast_range": 0.0,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-08T22:31:00Z"
+   },
+   {
+    "station": "O69",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2017-10-08T22:31:00Z",
+     "2017-10-09T13:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": true,
+    "n_hours": 14,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     6.71,
+     11.18
+    ],
+    "fc_gust_ms": 13.41,
+    "obs_mean_speed_ms": 3.72,
+    "obs_vector_from_deg": 324,
+    "obs_max_gust_ms": 15.95,
+    "dir_error_deg": -36,
+    "speed_error_ms": -5.22,
+    "speed_ratio": 0.42,
+    "hours_in_forecast_range": 0.07,
+    "gust_ratio": 1.19,
+    "issued_utc": "2017-10-08T22:31:00Z"
+   },
+   {
+    "station": "O69",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "COLUMBUS DAY",
+    "window_utc": [
+     "2017-10-09T13:00:00Z",
+     "2017-10-10T01:00:00Z"
+    ],
+    "lead_h": 14.5,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     4.47,
+     8.94
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 1.93,
+    "obs_vector_from_deg": 179,
+    "obs_max_gust_ms": 7.2,
+    "dir_error_deg": 179,
+    "speed_error_ms": -4.78,
+    "speed_ratio": 0.29,
+    "hours_in_forecast_range": 0.0,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-08T22:31:00Z"
+   },
+   {
+    "station": "O69",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "MONDAY NIGHT",
+    "window_utc": [
+     "2017-10-10T01:00:00Z",
+     "2017-10-10T13:00:00Z"
+    ],
+    "lead_h": 26.5,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": false,
+    "fc_from_deg": 135.0,
+    "fc_speed_ms": [
+     2.24,
+     4.47
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 0.37,
+    "obs_vector_from_deg": 311,
+    "obs_max_gust_ms": null,
+    "dir_error_deg": 176,
+    "speed_error_ms": -2.98,
+    "speed_ratio": 0.11,
+    "hours_in_forecast_range": 0.08,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-08T22:31:00Z"
+   },
+   {
+    "station": "O69",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TUESDAY",
+    "window_utc": [
+     "2017-10-10T13:00:00Z",
+     "2017-10-11T01:00:00Z"
+    ],
+    "lead_h": 38.5,
+    "window_contains_ignition": false,
+    "n_hours": 6,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 45.0,
+    "fc_speed_ms": [
+     2.24,
+     4.47
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 0.09,
+    "obs_vector_from_deg": 270,
+    "obs_max_gust_ms": null,
+    "dir_error_deg": -135,
+    "speed_error_ms": -3.27,
+    "speed_ratio": 0.03,
+    "hours_in_forecast_range": 0.0,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-08T22:31:00Z"
+   },
+   {
+    "station": "HWKC1",
+    "zone": "CAZ507",
+    "sub_area": "valley",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2017-10-08T22:31:00Z",
+     "2017-10-09T13:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": true,
+    "n_hours": 14,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     8.94,
+     15.65
+    ],
+    "fc_gust_ms": 24.59,
+    "obs_mean_speed_ms": 13.0,
+    "obs_vector_from_deg": 37,
+    "obs_max_gust_ms": 35.32,
+    "dir_error_deg": 37,
+    "speed_error_ms": 0.7,
+    "speed_ratio": 1.06,
+    "hours_in_forecast_range": 0.29,
+    "gust_ratio": 1.44,
+    "issued_utc": "2017-10-08T22:31:00Z"
+   },
+   {
+    "station": "HWKC1",
+    "zone": "CAZ507",
+    "sub_area": "valley",
+    "period": "COLUMBUS DAY",
+    "window_utc": [
+     "2017-10-09T13:00:00Z",
+     "2017-10-10T01:00:00Z"
+    ],
+    "lead_h": 14.5,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 90.0,
+    "fc_speed_ms": [
+     6.71,
+     11.18
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 2.91,
+    "obs_vector_from_deg": 138,
+    "obs_max_gust_ms": 16.99,
+    "dir_error_deg": 48,
+    "speed_error_ms": -6.04,
+    "speed_ratio": 0.33,
+    "hours_in_forecast_range": 0.08,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-08T22:31:00Z"
+   },
+   {
+    "station": "HWKC1",
+    "zone": "CAZ507",
+    "sub_area": "valley",
+    "period": "MONDAY NIGHT",
+    "window_utc": [
+     "2017-10-10T01:00:00Z",
+     "2017-10-10T13:00:00Z"
+    ],
+    "lead_h": 26.5,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 135.0,
+    "fc_speed_ms": [
+     2.24,
+     4.47
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 2.79,
+    "obs_vector_from_deg": 141,
+    "obs_max_gust_ms": 6.71,
+    "dir_error_deg": 6,
+    "speed_error_ms": -0.56,
+    "speed_ratio": 0.83,
+    "hours_in_forecast_range": 0.83,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-08T22:31:00Z"
+   },
+   {
+    "station": "HWKC1",
+    "zone": "CAZ507",
+    "sub_area": "valley",
+    "period": "TUESDAY",
+    "window_utc": [
+     "2017-10-10T13:00:00Z",
+     "2017-10-11T01:00:00Z"
+    ],
+    "lead_h": 38.5,
+    "window_contains_ignition": false,
+    "n_hours": 6,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 135.0,
+    "fc_speed_ms": [
+     2.24,
+     2.24
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 1.79,
+    "obs_vector_from_deg": 155,
+    "obs_max_gust_ms": 6.71,
+    "dir_error_deg": 20,
+    "speed_error_ms": -0.45,
+    "speed_ratio": 0.8,
+    "hours_in_forecast_range": 0.0,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-08T22:31:00Z"
+   },
+   {
+    "station": "ATLC1",
+    "zone": "CAZ507",
+    "sub_area": "ridge",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2017-10-08T22:31:00Z",
+     "2017-10-09T13:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": true,
+    "n_hours": 14,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     8.94,
+     15.65
+    ],
+    "fc_gust_ms": 26.82,
+    "obs_mean_speed_ms": 5.33,
+    "obs_vector_from_deg": 14,
+    "obs_max_gust_ms": 15.2,
+    "dir_error_deg": 14,
+    "speed_error_ms": -6.96,
+    "speed_ratio": 0.43,
+    "hours_in_forecast_range": 0.0,
+    "gust_ratio": 0.57,
+    "issued_utc": "2017-10-08T22:31:00Z"
+   },
+   {
+    "station": "ATLC1",
+    "zone": "CAZ507",
+    "sub_area": "ridge",
+    "period": "COLUMBUS DAY",
+    "window_utc": [
+     "2017-10-09T13:00:00Z",
+     "2017-10-10T01:00:00Z"
+    ],
+    "lead_h": 14.5,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 45.0,
+    "fc_speed_ms": [
+     8.94,
+     15.65
+    ],
+    "fc_gust_ms": 26.82,
+    "obs_mean_speed_ms": 2.72,
+    "obs_vector_from_deg": 51,
+    "obs_max_gust_ms": 11.18,
+    "dir_error_deg": 6,
+    "speed_error_ms": -9.57,
+    "speed_ratio": 0.22,
+    "hours_in_forecast_range": 0.0,
+    "gust_ratio": 0.42,
+    "issued_utc": "2017-10-08T22:31:00Z"
+   },
+   {
+    "station": "ATLC1",
+    "zone": "CAZ507",
+    "sub_area": "ridge",
+    "period": "MONDAY NIGHT",
+    "window_utc": [
+     "2017-10-10T01:00:00Z",
+     "2017-10-10T13:00:00Z"
+    ],
+    "lead_h": 26.5,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 135.0,
+    "fc_speed_ms": [
+     2.24,
+     6.71
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 3.2,
+    "obs_vector_from_deg": 237,
+    "obs_max_gust_ms": 8.49,
+    "dir_error_deg": 102,
+    "speed_error_ms": -1.27,
+    "speed_ratio": 0.72,
+    "hours_in_forecast_range": 0.58,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-08T22:31:00Z"
+   },
+   {
+    "station": "ATLC1",
+    "zone": "CAZ507",
+    "sub_area": "ridge",
+    "period": "TUESDAY",
+    "window_utc": [
+     "2017-10-10T13:00:00Z",
+     "2017-10-11T01:00:00Z"
+    ],
+    "lead_h": 38.5,
+    "window_contains_ignition": false,
+    "n_hours": 6,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 135.0,
+    "fc_speed_ms": [
+     2.24,
+     2.24
+    ],
+    "fc_gust_ms": 8.94,
+    "obs_mean_speed_ms": 2.61,
+    "obs_vector_from_deg": 63,
+    "obs_max_gust_ms": 6.26,
+    "dir_error_deg": -72,
+    "speed_error_ms": 0.37,
+    "speed_ratio": 1.17,
+    "hours_in_forecast_range": 0.0,
+    "gust_ratio": 0.7,
+    "issued_utc": "2017-10-08T22:31:00Z"
+   },
+   {
+    "station": "RSAC1",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TODAY",
+    "window_utc": [
+     "2017-10-09T12:13:00Z",
+     "2017-10-10T01:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     4.47,
+     6.71
+    ],
+    "fc_gust_ms": 11.18,
+    "obs_mean_speed_ms": 3.91,
+    "obs_vector_from_deg": 201,
+    "obs_max_gust_ms": 17.43,
+    "dir_error_deg": -159,
+    "speed_error_ms": -1.68,
+    "speed_ratio": 0.7,
+    "hours_in_forecast_range": 0.33,
+    "gust_ratio": 1.56,
+    "issued_utc": "2017-10-09T12:13:00Z"
+   },
+   {
+    "station": "RSAC1",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2017-10-10T01:00:00Z",
+     "2017-10-10T13:00:00Z"
+    ],
+    "lead_h": 12.8,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 225.0,
+    "fc_speed_ms": [
+     2.24,
+     2.24
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 1.27,
+    "obs_vector_from_deg": 99,
+    "obs_max_gust_ms": 5.36,
+    "dir_error_deg": -126,
+    "speed_error_ms": -0.97,
+    "speed_ratio": 0.57,
+    "hours_in_forecast_range": 0.0,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-09T12:13:00Z"
+   },
+   {
+    "station": "RSAC1",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TUESDAY",
+    "window_utc": [
+     "2017-10-10T13:00:00Z",
+     "2017-10-11T01:00:00Z"
+    ],
+    "lead_h": 24.8,
+    "window_contains_ignition": false,
+    "n_hours": 6,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 135.0,
+    "fc_speed_ms": [
+     0.0,
+     2.24
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 0.75,
+    "obs_vector_from_deg": 216,
+    "obs_max_gust_ms": 2.24,
+    "dir_error_deg": 81,
+    "speed_error_ms": -0.37,
+    "speed_ratio": 0.67,
+    "hours_in_forecast_range": 1.0,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-09T12:13:00Z"
+   },
+   {
+    "station": "APC",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TODAY",
+    "window_utc": [
+     "2017-10-09T12:13:00Z",
+     "2017-10-10T01:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     4.47,
+     6.71
+    ],
+    "fc_gust_ms": 11.18,
+    "obs_mean_speed_ms": 3.52,
+    "obs_vector_from_deg": 202,
+    "obs_max_gust_ms": null,
+    "dir_error_deg": -158,
+    "speed_error_ms": -2.07,
+    "speed_ratio": 0.63,
+    "hours_in_forecast_range": 0.17,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-09T12:13:00Z"
+   },
+   {
+    "station": "APC",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2017-10-10T01:00:00Z",
+     "2017-10-10T13:00:00Z"
+    ],
+    "lead_h": 12.8,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 225.0,
+    "fc_speed_ms": [
+     2.24,
+     2.24
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 1.57,
+    "obs_vector_from_deg": 121,
+    "obs_max_gust_ms": null,
+    "dir_error_deg": -104,
+    "speed_error_ms": -0.66,
+    "speed_ratio": 0.7,
+    "hours_in_forecast_range": 0.0,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-09T12:13:00Z"
+   },
+   {
+    "station": "APC",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TUESDAY",
+    "window_utc": [
+     "2017-10-10T13:00:00Z",
+     "2017-10-11T01:00:00Z"
+    ],
+    "lead_h": 24.8,
+    "window_contains_ignition": false,
+    "n_hours": 6,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 135.0,
+    "fc_speed_ms": [
+     0.0,
+     2.24
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 0.66,
+    "obs_vector_from_deg": 321,
+    "obs_max_gust_ms": null,
+    "dir_error_deg": -174,
+    "speed_error_ms": -0.45,
+    "speed_ratio": 0.59,
+    "hours_in_forecast_range": 1.0,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-09T12:13:00Z"
+   },
+   {
+    "station": "O69",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TODAY",
+    "window_utc": [
+     "2017-10-09T12:13:00Z",
+     "2017-10-10T01:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     4.47,
+     6.71
+    ],
+    "fc_gust_ms": 11.18,
+    "obs_mean_speed_ms": 1.93,
+    "obs_vector_from_deg": 179,
+    "obs_max_gust_ms": 7.2,
+    "dir_error_deg": 179,
+    "speed_error_ms": -3.66,
+    "speed_ratio": 0.35,
+    "hours_in_forecast_range": 0.0,
+    "gust_ratio": 0.64,
+    "issued_utc": "2017-10-09T12:13:00Z"
+   },
+   {
+    "station": "O69",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2017-10-10T01:00:00Z",
+     "2017-10-10T13:00:00Z"
+    ],
+    "lead_h": 12.8,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 225.0,
+    "fc_speed_ms": [
+     2.24,
+     2.24
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 0.37,
+    "obs_vector_from_deg": 311,
+    "obs_max_gust_ms": null,
+    "dir_error_deg": 86,
+    "speed_error_ms": -1.86,
+    "speed_ratio": 0.17,
+    "hours_in_forecast_range": 0.0,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-09T12:13:00Z"
+   },
+   {
+    "station": "O69",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TUESDAY",
+    "window_utc": [
+     "2017-10-10T13:00:00Z",
+     "2017-10-11T01:00:00Z"
+    ],
+    "lead_h": 24.8,
+    "window_contains_ignition": false,
+    "n_hours": 6,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 135.0,
+    "fc_speed_ms": [
+     0.0,
+     2.24
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 0.09,
+    "obs_vector_from_deg": 270,
+    "obs_max_gust_ms": null,
+    "dir_error_deg": 135,
+    "speed_error_ms": -1.03,
+    "speed_ratio": 0.08,
+    "hours_in_forecast_range": 1.0,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-09T12:13:00Z"
+   },
+   {
+    "station": "HWKC1",
+    "zone": "CAZ507",
+    "sub_area": "valley",
+    "period": "TODAY",
+    "window_utc": [
+     "2017-10-09T12:13:00Z",
+     "2017-10-10T01:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 45.0,
+    "fc_speed_ms": [
+     4.47,
+     6.71
+    ],
+    "fc_gust_ms": 17.88,
+    "obs_mean_speed_ms": 2.91,
+    "obs_vector_from_deg": 138,
+    "obs_max_gust_ms": 16.99,
+    "dir_error_deg": 93,
+    "speed_error_ms": -2.68,
+    "speed_ratio": 0.52,
+    "hours_in_forecast_range": 0.08,
+    "gust_ratio": 0.95,
+    "issued_utc": "2017-10-09T12:13:00Z"
+   },
+   {
+    "station": "HWKC1",
+    "zone": "CAZ507",
+    "sub_area": "valley",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2017-10-10T01:00:00Z",
+     "2017-10-10T13:00:00Z"
+    ],
+    "lead_h": 12.8,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 135.0,
+    "fc_speed_ms": [
+     2.24,
+     2.24
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 2.79,
+    "obs_vector_from_deg": 141,
+    "obs_max_gust_ms": 6.71,
+    "dir_error_deg": 6,
+    "speed_error_ms": 0.56,
+    "speed_ratio": 1.25,
+    "hours_in_forecast_range": 0.17,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-09T12:13:00Z"
+   },
+   {
+    "station": "HWKC1",
+    "zone": "CAZ507",
+    "sub_area": "valley",
+    "period": "TUESDAY",
+    "window_utc": [
+     "2017-10-10T13:00:00Z",
+     "2017-10-11T01:00:00Z"
+    ],
+    "lead_h": 24.8,
+    "window_contains_ignition": false,
+    "n_hours": 6,
+    "multi_phase": false,
+    "dir_valid": false,
+    "fc_from_deg": 225.0,
+    "fc_speed_ms": [
+     2.24,
+     4.47
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 1.79,
+    "obs_vector_from_deg": 155,
+    "obs_max_gust_ms": 6.71,
+    "dir_error_deg": -70,
+    "speed_error_ms": -1.56,
+    "speed_ratio": 0.53,
+    "hours_in_forecast_range": 0.17,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-09T12:13:00Z"
+   },
+   {
+    "station": "ATLC1",
+    "zone": "CAZ507",
+    "sub_area": "ridge",
+    "period": "TODAY",
+    "window_utc": [
+     "2017-10-09T12:13:00Z",
+     "2017-10-10T01:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 45.0,
+    "fc_speed_ms": [
+     6.71,
+     11.18
+    ],
+    "fc_gust_ms": 22.35,
+    "obs_mean_speed_ms": 2.72,
+    "obs_vector_from_deg": 51,
+    "obs_max_gust_ms": 11.18,
+    "dir_error_deg": 6,
+    "speed_error_ms": -6.22,
+    "speed_ratio": 0.3,
+    "hours_in_forecast_range": 0.0,
+    "gust_ratio": 0.5,
+    "issued_utc": "2017-10-09T12:13:00Z"
+   },
+   {
+    "station": "ATLC1",
+    "zone": "CAZ507",
+    "sub_area": "ridge",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2017-10-10T01:00:00Z",
+     "2017-10-10T13:00:00Z"
+    ],
+    "lead_h": 12.8,
+    "window_contains_ignition": false,
+    "n_hours": 12,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 135.0,
+    "fc_speed_ms": [
+     2.24,
+     4.47
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 3.2,
+    "obs_vector_from_deg": 237,
+    "obs_max_gust_ms": 8.49,
+    "dir_error_deg": 102,
+    "speed_error_ms": -0.15,
+    "speed_ratio": 0.96,
+    "hours_in_forecast_range": 0.25,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-09T12:13:00Z"
+   },
+   {
+    "station": "ATLC1",
+    "zone": "CAZ507",
+    "sub_area": "ridge",
+    "period": "TUESDAY",
+    "window_utc": [
+     "2017-10-10T13:00:00Z",
+     "2017-10-11T01:00:00Z"
+    ],
+    "lead_h": 24.8,
+    "window_contains_ignition": false,
+    "n_hours": 6,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 225.0,
+    "fc_speed_ms": [
+     2.24,
+     6.71
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 2.61,
+    "obs_vector_from_deg": 63,
+    "obs_max_gust_ms": 6.26,
+    "dir_error_deg": -162,
+    "speed_error_ms": -1.86,
+    "speed_ratio": 0.58,
+    "hours_in_forecast_range": 0.67,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-09T12:13:00Z"
+   },
+   {
+    "station": "RSAC1",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2017-10-09T23:19:00Z",
+     "2017-10-10T13:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 13,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 225.0,
+    "fc_speed_ms": [
+     2.24,
+     4.47
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 1.44,
+    "obs_vector_from_deg": 178,
+    "obs_max_gust_ms": 5.36,
+    "dir_error_deg": -47,
+    "speed_error_ms": -1.91,
+    "speed_ratio": 0.43,
+    "hours_in_forecast_range": 0.15,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-09T23:19:00Z"
+   },
+   {
+    "station": "RSAC1",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TUESDAY",
+    "window_utc": [
+     "2017-10-10T13:00:00Z",
+     "2017-10-11T01:00:00Z"
+    ],
+    "lead_h": 13.7,
+    "window_contains_ignition": false,
+    "n_hours": 6,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     0.0,
+     2.24
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 0.75,
+    "obs_vector_from_deg": 216,
+    "obs_max_gust_ms": 2.24,
+    "dir_error_deg": -144,
+    "speed_error_ms": -0.37,
+    "speed_ratio": 0.67,
+    "hours_in_forecast_range": 1.0,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-09T23:19:00Z"
+   },
+   {
+    "station": "APC",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2017-10-09T23:19:00Z",
+     "2017-10-10T13:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 13,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 225.0,
+    "fc_speed_ms": [
+     2.24,
+     4.47
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 1.85,
+    "obs_vector_from_deg": 158,
+    "obs_max_gust_ms": null,
+    "dir_error_deg": -67,
+    "speed_error_ms": -1.51,
+    "speed_ratio": 0.55,
+    "hours_in_forecast_range": 0.15,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-09T23:19:00Z"
+   },
+   {
+    "station": "APC",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TUESDAY",
+    "window_utc": [
+     "2017-10-10T13:00:00Z",
+     "2017-10-11T01:00:00Z"
+    ],
+    "lead_h": 13.7,
+    "window_contains_ignition": false,
+    "n_hours": 6,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     0.0,
+     2.24
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 0.66,
+    "obs_vector_from_deg": 321,
+    "obs_max_gust_ms": null,
+    "dir_error_deg": -39,
+    "speed_error_ms": -0.45,
+    "speed_ratio": 0.59,
+    "hours_in_forecast_range": 1.0,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-09T23:19:00Z"
+   },
+   {
+    "station": "O69",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2017-10-09T23:19:00Z",
+     "2017-10-10T13:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 13,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 225.0,
+    "fc_speed_ms": [
+     2.24,
+     4.47
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 0.57,
+    "obs_vector_from_deg": 270,
+    "obs_max_gust_ms": null,
+    "dir_error_deg": 45,
+    "speed_error_ms": -2.79,
+    "speed_ratio": 0.17,
+    "hours_in_forecast_range": 0.15,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-09T23:19:00Z"
+   },
+   {
+    "station": "O69",
+    "zone": "CAZ506",
+    "sub_area": "all",
+    "period": "TUESDAY",
+    "window_utc": [
+     "2017-10-10T13:00:00Z",
+     "2017-10-11T01:00:00Z"
+    ],
+    "lead_h": 13.7,
+    "window_contains_ignition": false,
+    "n_hours": 6,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 0.0,
+    "fc_speed_ms": [
+     0.0,
+     2.24
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 0.09,
+    "obs_vector_from_deg": 270,
+    "obs_max_gust_ms": null,
+    "dir_error_deg": -90,
+    "speed_error_ms": -1.03,
+    "speed_ratio": 0.08,
+    "hours_in_forecast_range": 1.0,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-09T23:19:00Z"
+   },
+   {
+    "station": "HWKC1",
+    "zone": "CAZ507",
+    "sub_area": "valley",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2017-10-09T23:19:00Z",
+     "2017-10-10T13:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 13,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 180.0,
+    "fc_speed_ms": [
+     2.24,
+     4.47
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 2.79,
+    "obs_vector_from_deg": 142,
+    "obs_max_gust_ms": 6.71,
+    "dir_error_deg": -38,
+    "speed_error_ms": -0.57,
+    "speed_ratio": 0.83,
+    "hours_in_forecast_range": 0.85,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-09T23:19:00Z"
+   },
+   {
+    "station": "HWKC1",
+    "zone": "CAZ507",
+    "sub_area": "valley",
+    "period": "TUESDAY",
+    "window_utc": [
+     "2017-10-10T13:00:00Z",
+     "2017-10-11T01:00:00Z"
+    ],
+    "lead_h": 13.7,
+    "window_contains_ignition": false,
+    "n_hours": 6,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 90.0,
+    "fc_speed_ms": [
+     0.0,
+     2.24
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 1.79,
+    "obs_vector_from_deg": 155,
+    "obs_max_gust_ms": 6.71,
+    "dir_error_deg": 65,
+    "speed_error_ms": 0.67,
+    "speed_ratio": 1.6,
+    "hours_in_forecast_range": 0.83,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-09T23:19:00Z"
+   },
+   {
+    "station": "ATLC1",
+    "zone": "CAZ507",
+    "sub_area": "ridge",
+    "period": "TONIGHT",
+    "window_utc": [
+     "2017-10-09T23:19:00Z",
+     "2017-10-10T13:00:00Z"
+    ],
+    "lead_h": 0.0,
+    "window_contains_ignition": false,
+    "n_hours": 13,
+    "multi_phase": false,
+    "dir_valid": true,
+    "fc_from_deg": 180.0,
+    "fc_speed_ms": [
+     4.47,
+     6.71
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 3.13,
+    "obs_vector_from_deg": 233,
+    "obs_max_gust_ms": 8.49,
+    "dir_error_deg": 53,
+    "speed_error_ms": -2.46,
+    "speed_ratio": 0.56,
+    "hours_in_forecast_range": 0.38,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-09T23:19:00Z"
+   },
+   {
+    "station": "ATLC1",
+    "zone": "CAZ507",
+    "sub_area": "ridge",
+    "period": "TUESDAY",
+    "window_utc": [
+     "2017-10-10T13:00:00Z",
+     "2017-10-11T01:00:00Z"
+    ],
+    "lead_h": 13.7,
+    "window_contains_ignition": false,
+    "n_hours": 6,
+    "multi_phase": true,
+    "dir_valid": false,
+    "fc_from_deg": 90.0,
+    "fc_speed_ms": [
+     0.0,
+     2.24
+    ],
+    "fc_gust_ms": null,
+    "obs_mean_speed_ms": 2.61,
+    "obs_vector_from_deg": 63,
+    "obs_max_gust_ms": 6.26,
+    "dir_error_deg": -27,
+    "speed_error_ms": 1.49,
+    "speed_ratio": 2.33,
+    "hours_in_forecast_range": 0.33,
+    "gust_ratio": null,
+    "issued_utc": "2017-10-09T23:19:00Z"
+   }
+  ],
+  "summary_all_periods": {
+   "n_comparisons": 52,
+   "n_excluded_multi_phase": 52,
+   "n_direction_comparisons": 42,
+   "dir_error_deg": {
+    "mean_signed": 7.7,
+    "mean_abs": 48.4,
+    "median_abs": 37.5,
+    "p90_abs": 102,
+    "max_abs": 163
+   },
+   "speed_error_ms": {
+    "mean_signed": -1.21,
+    "mean_abs": 2.14
+   },
+   "speed_ratio_obs_over_forecast_mid": {
+    "median": 0.68,
+    "min": 0.11,
+    "max": 2.14
+   },
+   "mean_fraction_of_hours_inside_forecast_range": 0.33,
+   "gust_ratio_obs_max_over_forecast": {
+    "median": 1.19,
+    "n": 23
+   }
+  },
+  "summary_event_window": {
+   "n_comparisons": 8,
+   "n_excluded_multi_phase": 8,
+   "n_direction_comparisons": 8,
+   "dir_error_deg": {
+    "mean_signed": 15.2,
+    "mean_abs": 33.8,
+    "median_abs": 36.5,
+    "p90_abs": 59,
+    "max_abs": 59
+   },
+   "speed_error_ms": {
+    "mean_signed": -2.26,
+    "mean_abs": 2.43
+   },
+   "speed_ratio_obs_over_forecast_mid": {
+    "median": 0.78,
+    "min": 0.42,
+    "max": 1.06
+   },
+   "mean_fraction_of_hours_inside_forecast_range": 0.39,
+   "gust_ratio_obs_max_over_forecast": {
+    "median": 1.3,
+    "n": 6
+   }
+  },
+  "summary_by_station_lead_le_24h": {
+   "STS": {
+    "n_comparisons": 5,
+    "n_excluded_multi_phase": 2,
+    "n_direction_comparisons": 3,
+    "dir_error_deg": {
+     "mean_signed": -45.3,
+     "mean_abs": 63.3,
+     "median_abs": 16,
+     "p90_abs": 163,
+     "max_abs": 163
+    },
+    "speed_error_ms": {
+     "mean_signed": -0.6,
+     "mean_abs": 1.06
+    },
+    "speed_ratio_obs_over_forecast_mid": {
+     "median": 0.69,
+     "min": 0.59,
+     "max": 1.17
+    },
+    "mean_fraction_of_hours_inside_forecast_range": 0.38,
+    "gust_ratio_obs_max_over_forecast": {
+     "median": 1.19,
+     "n": 2
+    }
+   },
+   "RSAC1": {
+    "n_comparisons": 5,
+    "n_excluded_multi_phase": 7,
+    "n_direction_comparisons": 4,
+    "dir_error_deg": {
+     "mean_signed": 71.8,
+     "mean_abs": 71.8,
+     "median_abs": 66.5,
+     "p90_abs": 95,
+     "max_abs": 95
+    },
+    "speed_error_ms": {
+     "mean_signed": -0.99,
+     "mean_abs": 1.1
+    },
+    "speed_ratio_obs_over_forecast_mid": {
+     "median": 0.73,
+     "min": 0.6,
+     "max": 1.04
+    },
+    "mean_fraction_of_hours_inside_forecast_range": 0.39,
+    "gust_ratio_obs_max_over_forecast": {
+     "median": 2.27,
+     "n": 2
+    }
+   },
+   "APC": {
+    "n_comparisons": 5,
+    "n_excluded_multi_phase": 7,
+    "n_direction_comparisons": 5,
+    "dir_error_deg": {
+     "mean_signed": -24.4,
+     "mean_abs": 37.6,
+     "median_abs": 34,
+     "p90_abs": 83,
+     "max_abs": 83
+    },
+    "speed_error_ms": {
+     "mean_signed": 0.23,
+     "mean_abs": 0.85
+    },
+    "speed_ratio_obs_over_forecast_mid": {
+     "median": 0.98,
+     "min": 0.72,
+     "max": 1.33
+    },
+    "mean_fraction_of_hours_inside_forecast_range": 0.32,
+    "gust_ratio_obs_max_over_forecast": {
+     "median": 1.42,
+     "n": 2
+    }
+   },
+   "O69": {
+    "n_comparisons": 5,
+    "n_excluded_multi_phase": 7,
+    "n_direction_comparisons": 2,
+    "dir_error_deg": {
+     "mean_signed": -70.0,
+     "mean_abs": 70.0,
+     "median_abs": 70.0,
+     "p90_abs": 104,
+     "max_abs": 104
+    },
+    "speed_error_ms": {
+     "mean_signed": -2.74,
+     "mean_abs": 2.74
+    },
+    "speed_ratio_obs_over_forecast_mid": {
+     "median": 0.44,
+     "min": 0.31,
+     "max": 0.69
+    },
+    "mean_fraction_of_hours_inside_forecast_range": 0.14,
+    "gust_ratio_obs_max_over_forecast": {
+     "median": 1.19,
+     "n": 2
+    }
+   },
+   "HWKC1": {
+    "n_comparisons": 9,
+    "n_excluded_multi_phase": 3,
+    "n_direction_comparisons": 9,
+    "dir_error_deg": {
+     "mean_signed": 27.9,
+     "mean_abs": 36.3,
+     "median_abs": 38,
+     "p90_abs": 48,
+     "max_abs": 48
+    },
+    "speed_error_ms": {
+     "mean_signed": -0.48,
+     "mean_abs": 2.47
+    },
+    "speed_ratio_obs_over_forecast_mid": {
+     "median": 0.83,
+     "min": 0.33,
+     "max": 2.14
+    },
+    "mean_fraction_of_hours_inside_forecast_range": 0.37,
+    "gust_ratio_obs_max_over_forecast": {
+     "median": 2.04,
+     "n": 2
+    }
+   },
+   "ATLC1": {
+    "n_comparisons": 8,
+    "n_excluded_multi_phase": 4,
+    "n_direction_comparisons": 8,
+    "dir_error_deg": {
+     "mean_signed": 16.9,
+     "mean_abs": 40.1,
+     "median_abs": 27.5,
+     "p90_abs": 102,
+     "max_abs": 102
+    },
+    "speed_error_ms": {
+     "mean_signed": -3.0,
+     "mean_abs": 3.0
+    },
+    "speed_ratio_obs_over_forecast_mid": {
+     "median": 0.54,
+     "min": 0.43,
+     "max": 0.96
+    },
+    "mean_fraction_of_hours_inside_forecast_range": 0.3,
+    "gust_ratio_obs_max_over_forecast": {
+     "median": 0.59,
+     "n": 6
+    }
+   }
+  }
+ },
+ "pooled_event_window": {
+  "n_comparisons": 12,
+  "n_excluded_multi_phase": 12,
+  "n_direction_comparisons": 12,
+  "dir_error_deg": {
+   "mean_signed": 9.5,
+   "mean_abs": 25.2,
+   "median_abs": 16.5,
+   "p90_abs": 53,
+   "max_abs": 59
+  },
+  "speed_error_ms": {
+   "mean_signed": -2.95,
+   "mean_abs": 3.06
+  },
+  "speed_ratio_obs_over_forecast_mid": {
+   "median": 0.58,
+   "min": 0.34,
+   "max": 1.06
+  },
+  "mean_fraction_of_hours_inside_forecast_range": 0.31,
+  "gust_ratio_obs_max_over_forecast": {
+   "median": 1.19,
+   "n": 9
+  }
+ }
+}

@@ -1,0 +1,178 @@
+{
+ "type": "FeatureCollection",
+ "features": [
+  {
+   "type": "Feature",
+   "id": "BKCC1",
+   "properties": {
+    "sname": "BUTTE CK NR CHICO",
+    "archive_begin": "2010-12-07",
+    "archive_end": null,
+    "state": "CA",
+    "network": "CA_DCP",
+    "online": true
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -121.7078,
+     39.7261
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "id": "CBXC1",
+   "properties": {
+    "sname": "Mineral - Colby Mountains RAWS",
+    "archive_begin": "2015-09-24",
+    "archive_end": null,
+    "state": "CA",
+    "network": "CA_DCP",
+    "online": true
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -121.5225,
+     40.1458
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "id": "CICC1",
+   "properties": {
+    "sname": "Openshaw RAWS",
+    "archive_begin": "2010-11-30",
+    "archive_end": null,
+    "state": "CA",
+    "network": "CA_DCP",
+    "online": true
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -121.6353,
+     39.5897
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "id": "CSTC1",
+   "properties": {
+    "sname": "COHASSET RAWS",
+    "archive_begin": "2010-12-07",
+    "archive_end": null,
+    "state": "CA",
+    "network": "CA_DCP",
+    "online": true
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -121.7692,
+     39.87
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "id": "JBGC1",
+   "properties": {
+    "sname": "JARBO GAP RAWS",
+    "archive_begin": "2010-12-07",
+    "archive_end": null,
+    "state": "CA",
+    "network": "CA_DCP",
+    "online": true
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -121.4889,
+     39.7358
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "id": "ORRC1",
+   "properties": {
+    "sname": "OROVILLE DAM RAWS",
+    "archive_begin": "2010-12-07",
+    "archive_end": null,
+    "state": "CA",
+    "network": "CA_DCP",
+    "online": true
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -121.4911,
+     39.5428
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "id": "PDEC1",
+   "properties": {
+    "sname": "PARADISE",
+    "archive_begin": "2010-12-07",
+    "archive_end": null,
+    "state": "CA",
+    "network": "CA_DCP",
+    "online": true
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -121.6247,
+     39.7536
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "id": "PKCC1",
+   "properties": {
+    "sname": "PIKE COUNTY LOOKOUT RAWS",
+    "archive_begin": "2010-12-07",
+    "archive_end": null,
+    "state": "CA",
+    "network": "CA_DCP",
+    "online": true
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -121.2025,
+     39.475
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "id": "RSAC1",
+   "properties": {
+    "sname": "SANTA ROSA RAWS",
+    "archive_begin": "2010-12-07",
+    "archive_end": null,
+    "state": "CA",
+    "network": "CA_DCP",
+    "online": true
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -122.7119,
+     38.4789
+    ]
+   }
+  }
+ ],
+ "generated_at": "2026-10-24T18:11:35Z",
+ "count": 4251
+}
