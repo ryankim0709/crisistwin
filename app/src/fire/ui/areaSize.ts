@@ -10,7 +10,7 @@ export const AREA_SIZES: readonly {
   { id: "local", label: "Local (fits the horizon)", radiusMeters: null },
   { id: "city", label: "10 km radius", radiusMeters: 10_000 },
   { id: "region", label: "25 km radius", radiusMeters: 25_000 },
-  { id: "bay", label: "Bay Area (50 km radius)", radiusMeters: 50_000 },
+  { id: "bay", label: "Largest (50 km radius)", radiusMeters: 50_000 },
 ];
 
 export const DEFAULT_AREA_SIZE: AreaSizeId = "local";

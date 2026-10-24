@@ -312,14 +312,18 @@ docker compose restart frontend
 
 Open **http://localhost:5173/fire**. The page opens on a three.js miniature of the loaded
 landscape (see [ADR 0011](docs/adr/0011-fire-diorama-view.md)), built from LANDFIRE fuels,
-terrain elevation, and canopy around an *area centre* (Berkeley Hills by default; _Change
-area_ offers presets, including a San Francisco Bay Area preset, and a small locator map).
-_Area size_ sets how much ground the board covers: _Local_ fits the horizon (up to 12 km
-radius), or choose 10 km, 25 km, or Bay Area (50 km radius); the page uses the larger of the
-two. Beyond 13.5 km radius the cells coarsen from LANDFIRE's native 30 m (for example 120
-m at 50 km) to keep the grid at most 900 cells a side, and the page states the radius and
-cell size next to the area, because coarser cells smooth narrow fuel breaks and small
-neighbourhoods. Large areas take longer to load. Click the landscape to place an ignition
+terrain elevation, and canopy. It opens on a prebuilt Southern California region (San Gabriel
+Mountains by default; _Region_ lists the seven in `app/src/fire/regions.ts`, marked _stored_ or
+_not built yet_ from `GET /api/landscapes`), pulled from MongoDB through the backend
+([ADR 0013](docs/adr/0013-prebuilt-socal-landscapes.md)). The area readout says whether the
+board is a _Stored landscape_ (build date, LANDFIRE 2025, cell size) or _Live from LANDFIRE_.
+If a stored region is missing or the API is down, the page says so and loads that region live,
+which takes longer. _Custom area…_ opens a locator map and SoCal presets and loads live;
+there, _Area size_ sets how much ground the board covers (Local fits the horizon, up to 12 km
+radius, or 10 km, 25 km, 50 km). A stored region's board is fixed, so the horizon does not
+resize it and a long run may reach its edge. Cells coarsen from LANDFIRE's native 30 m on
+large boards to keep the grid at most 900 cells a side; the page states radius and cell size
+(fuels resampled by majority; Details has a resolution card) because coarser cells smooth narrow fuel breaks and small neighbourhoods. Click the landscape to place an ignition
 point, set the 20-foot wind speed and the direction it blows from, pick a fuel-moisture
 preset, then play the fire forward over a 2, 3, 6, 12, or 24 hour horizon. Playback is
 continuous (1× is 10 model minutes per second, rising to horizon ÷ 18 for horizons past
@@ -335,7 +339,7 @@ canopy cover, canopy height, and fuel bed depth, lower under a closed stand than
 open; moving the control off its default applies that one flat value everywhere instead.
 Switching the click target to _Wind direction_ lets you click downwind of the ignition point
 to aim the wind; the numeric field and the arrow at the ignition point stay in sync with it.
-_Show the fuel layer the model is using_ tints the ground by fuel family, _Focus fire_
+The _View_ switch flips between the diorama and the original USGS aerial-imagery map (needs a network connection) with the same run, time, and clicks; the choice is remembered in the browser. _Show the fuel layer the model is using_ tints the ground by fuel family, _Focus fire_
 frames the burn, and _Reset view_ frames the whole board. Controls and results float over
 the stage; the scenario panel collapses (a bottom sheet on phones) and the results strip
 expands to the full breakdowns. Trees and houses are symbols for fuel classes, not observed

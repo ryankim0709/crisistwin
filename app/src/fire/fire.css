@@ -1491,3 +1491,199 @@
     transition: none !important;
   }
 }
+
+/* ---------- Region picker ---------- */
+
+.fr-region-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  margin: 0 0 8px;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.fr-region-list label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--fr-sage);
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.fr-region-list label:has(input:checked) {
+  border-color: var(--fr-green);
+}
+
+.fr-region-list input {
+  margin-top: 3px;
+}
+
+.fr-region-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  font-size: 12.5px;
+}
+
+/* ---------- View switch (diorama / satellite) ---------- */
+
+.fr-notice {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.fr-view {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+}
+
+.fr-view-label {
+  padding: 0 6px 0 8px;
+  color: var(--fr-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.fr-view label {
+  position: relative;
+  display: inline-flex;
+}
+
+.fr-view input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.fr-view label > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  color: var(--fr-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.fr-view input:checked + span {
+  background: #fff;
+  color: var(--fr-ink);
+  box-shadow: 0 1px 3px rgba(20, 43, 39, 0.16);
+}
+
+.fr-view input:focus-visible + span {
+  outline: 2px solid var(--fr-green);
+  outline-offset: 1px;
+}
+
+/* ---------- Satellite view ---------- */
+
+.fr-satellite {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+}
+
+.fr-satellite .fire-map-container {
+  position: absolute;
+  inset: 0;
+  background: #dfe1d6;
+}
+
+.fr-satellite .fire-map {
+  position: absolute;
+  inset: 0;
+}
+
+.fr-satellite .fire-map-error {
+  position: absolute;
+  top: calc(var(--fr-inset-top, 0px) + 8px);
+  left: 50%;
+  width: min(420px, calc(100% - 32px));
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgb(20 43 39 / 92%);
+  color: #f5f4ee;
+  font-size: 13px;
+  line-height: 1.5;
+  transform: translateX(-50%);
+}
+
+.fire-origin-marker {
+  width: 16px;
+  height: 16px;
+  border: 3px solid #b91c1c;
+  border-radius: 50%;
+  background: #fde68a;
+  box-shadow: 0 0 0 2px rgb(0 0 0 / 35%);
+}
+
+.fire-wind-marker {
+  pointer-events: none;
+  filter: drop-shadow(0 0 3px rgb(0 0 0 / 70%));
+}
+
+.fire-head-marker {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: rgb(20 43 39 / 88%);
+  color: #fde68a;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Keep MapLibre's controls and attribution clear of the floating panels (set from the page). */
+.fr-satellite .maplibregl-ctrl-top-right {
+  top: calc(var(--fr-inset-top, 0px) + 8px);
+}
+
+.fr-satellite .maplibregl-ctrl-bottom-left,
+.fr-satellite .maplibregl-ctrl-bottom-right {
+  bottom: var(--fr-inset-bottom, 0px);
+}
+
+.fr-satellite .maplibregl-ctrl-bottom-left {
+  left: var(--fr-inset-left, 0px);
+}
+
+@container fr-stage (max-width: 720px) {
+  /* Phone: icon-only toggle. */
+  .fr-view-label,
+  .fr-view-text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+  .fr-view label > span {
+    min-width: 40px;
+    min-height: 36px;
+    justify-content: center;
+    padding: 0 8px;
+  }
+  .fr-notice {
+    align-items: flex-end;
+  }
+}

@@ -2,33 +2,21 @@ import { useEffect, useRef, useState } from "react";
 import { Map, Marker, NavigationControl, type MapOptions } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { GeoPoint } from "../spread";
-import type { AreaSizeId } from "./areaSize";
+
+export type AreaPreset = { id: string; label: string; point: GeoPoint };
 
 export const DEFAULT_AREA: AreaPreset = {
-  id: "berkeley",
-  label: "Berkeley Hills, CA",
-  point: { latitude: 37.88, longitude: -122.24 },
+  id: "malibu",
+  label: "Malibu / Woolsey, CA",
+  point: { latitude: 34.08, longitude: -118.79 },
 };
 
-export type AreaPreset = {
-  id: string;
-  label: string;
-  point: GeoPoint;
-  /** Also selects this area size (the Bay Area preset only makes sense wide). */
-  areaSize?: AreaSizeId;
-};
-
-/** LANDFIRE FBFM40 is a CONUS product, so non-CONUS places (Lahaina, HI) are not offered. */
+/** Southern California starting points for a custom area; any CONUS click also works. */
 export const AREA_PRESETS: readonly AreaPreset[] = [
   DEFAULT_AREA,
-  { id: "paradise", label: "Paradise, CA", point: { latitude: 39.76, longitude: -121.62 } },
-  { id: "malibu", label: "Malibu / Woolsey, CA", point: { latitude: 34.08, longitude: -118.79 } },
-  {
-    id: "bay-area",
-    label: "San Francisco Bay Area",
-    point: { latitude: 37.77, longitude: -122.27 },
-    areaSize: "bay",
-  },
+  { id: "altadena", label: "Altadena / Eaton, CA", point: { latitude: 34.19, longitude: -118.13 } },
+  { id: "arrowhead", label: "Lake Arrowhead, CA", point: { latitude: 34.25, longitude: -117.19 } },
+  { id: "ramona", label: "Ramona, CA", point: { latitude: 33.04, longitude: -116.87 } },
 ];
 
 /** Rough CONUS box; a click outside it cannot load LANDFIRE fuels. */
@@ -64,7 +52,7 @@ const LOCATOR_STYLE: MapOptions["style"] = {
 
 type AreaPickerProps = {
   current: GeoPoint;
-  onSelect: (point: GeoPoint, areaSize?: AreaSizeId) => void;
+  onSelect: (point: GeoPoint) => void;
   onClose: () => void;
 };
 
@@ -204,7 +192,7 @@ export default function AreaPicker({ current, onSelect, onClose }: AreaPickerPro
         <ul className="fr-area-presets" aria-label="Preset places">
           {AREA_PRESETS.map((preset) => (
             <li key={preset.id}>
-              <button type="button" className="fr-chip-btn" onClick={() => onSelect(preset.point, preset.areaSize)}>
+              <button type="button" className="fr-chip-btn" onClick={() => onSelect(preset.point)}>
                 {preset.label}
               </button>
             </li>
