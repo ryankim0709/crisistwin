@@ -13,6 +13,10 @@ Git-tracked ``app/data-manifest.json`` and stored gzip-compressed. After
 regenerating any of it, refresh that manifest, push, and commit the manifest:
 
   python3 -m tools.mongo_data record  # rewrite app/data-manifest.json from local files
+  python3 -m tools.mongo_data status  # compare local files with the manifests (and Atlas, if MONGODB_URI is set)
+
+``push`` refuses to run while local app data differs from ``app/data-manifest.json``:
+otherwise the new files stay local and teammates silently get the previously recorded ones.
 
 Requires ``pip install -r tools/requirements.txt`` and the MONGODB_URI
 environment variable (optionally MONGODB_DB, default "crisistwin").
@@ -28,8 +32,6 @@ import os
 import sys
 from pathlib import Path
 
-import gridfs
-from pymongo import MongoClient
 
 DEFAULT_ROOT = Path("data/incidents")
 DEFAULT_DB = "crisistwin"
@@ -39,10 +41,15 @@ APP_ROOT = Path("app/public")
 APP_GLOBS = ("replays/**/*.json", "simulations/**/*.json")
 
 
-def connect() -> gridfs.GridFSBucket:
+def connect():
     uri = os.environ.get("MONGODB_URI")
     if not uri:
         sys.exit("MONGODB_URI is not set; export it in your shell (never commit it).")
+    try:
+        import gridfs
+        from pymongo import MongoClient
+    except ImportError:
+        sys.exit("pymongo is not installed; run: pip install -r tools/requirements.txt")
     db = MongoClient(uri, serverSelectionTimeoutMS=10_000)[os.environ.get("MONGODB_DB", DEFAULT_DB)]
     return gridfs.GridFSBucket(db, bucket_name=BUCKET)
 
@@ -58,12 +65,43 @@ def artifacts(root: Path):
             yield APP_ROOT, entry["path"], entry["bytes"], entry["sha256"], True
 
 
-def stored(bucket: gridfs.GridFSBucket, sha256: str) -> bool:
+def stored(bucket, sha256: str) -> bool:
     return next(bucket.find({"filename": sha256}, limit=1), None) is not None
 
 
 def sha256_of(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def app_drift() -> tuple[list[str], list[str], list[str]]:
+    """(changed, missing, unlisted) app files relative to app/data-manifest.json."""
+    listed = {e["path"]: e["sha256"] for e in json.loads(APP_MANIFEST.read_text())["artifacts"]} if APP_MANIFEST.is_file() else {}
+    local = {p.relative_to(APP_ROOT).as_posix() for pattern in APP_GLOBS for p in APP_ROOT.glob(pattern) if p.is_file()}
+    changed = sorted(rel for rel, sha in listed.items() if rel in local and sha256_of(APP_ROOT / rel) != sha)
+    missing = sorted(set(listed) - local)
+    unlisted = sorted(local - set(listed))
+    return changed, missing, unlisted
+
+
+def status(root: Path) -> None:
+    changed, missing, unlisted = app_drift()
+    for label, paths in (("differs from manifest", changed), ("missing locally", missing),
+                         ("not in manifest", unlisted)):
+        for rel in paths:
+            print(f"{APP_ROOT / rel}: {label}")
+    ok = not (changed or missing or unlisted)
+    print("app data matches app/data-manifest.json" if ok else
+          "app data differs: the author runs record, push, and commits the manifest; everyone else runs pull")
+    if os.environ.get("MONGODB_URI"):
+        bucket = connect()
+        absent = [f"{base / rel}" for base, rel, _size, sha, _c in artifacts(root) if not stored(bucket, sha)]
+        for path in absent:
+            print(f"{path}: listed in a manifest but not in Atlas (push it from the machine that built it)")
+        print(f"Atlas has {'every' if not absent else 'NOT every'} listed artifact")
+        ok = ok and not absent
+    else:
+        print("MONGODB_URI not set: Atlas not checked")
+    sys.exit(0 if ok else 1)
 
 
 def record() -> None:
@@ -75,7 +113,15 @@ def record() -> None:
     print(f"recorded {len(entries)} app artifacts ({sum(e['bytes'] for e in entries):,} bytes) in {APP_MANIFEST}")
 
 
-def push(bucket: gridfs.GridFSBucket, root: Path) -> None:
+def require_recorded() -> None:
+    changed, _missing, unlisted = app_drift()
+    if changed or unlisted:
+        sys.exit("Local app data differs from app/data-manifest.json ("
+                 + ", ".join(changed + unlisted)
+                 + "). Run `python3 -m tools.mongo_data record` first, then push and commit the manifest.")
+
+
+def push(bucket, root: Path) -> None:
     uploaded = skipped = 0
     for package, rel, size, sha, compress in artifacts(root):
         path = package / rel
@@ -97,15 +143,17 @@ def push(bucket: gridfs.GridFSBucket, root: Path) -> None:
     print(f"push done: {uploaded} uploaded, {skipped} already in Atlas")
 
 
-def pull(bucket: gridfs.GridFSBucket, root: Path) -> None:
+def pull(bucket, root: Path) -> None:
     downloaded = present = 0
+    absent: list[str] = []
     for package, rel, _size, sha, _compress in artifacts(root):
         path = package / rel
         if path.is_file() and sha256_of(path) == sha:
             present += 1
             continue
         if not stored(bucket, sha):
-            sys.exit(f"{package / rel} (sha256 {sha[:12]}...) is not in Atlas; run push from a machine that has it.")
+            absent.append(f"{path} (sha256 {sha[:12]}...)")
+            continue
         stream = bucket.open_download_stream_by_name(sha)
         data = stream.read()
         if (stream.metadata or {}).get("encoding") == "gzip":
@@ -117,16 +165,25 @@ def pull(bucket: gridfs.GridFSBucket, root: Path) -> None:
         downloaded += 1
         print(f"downloaded {path} ({len(data):,} bytes)")
     print(f"pull done: {downloaded} downloaded, {present} already up to date")
+    _changed, _missing, unlisted = app_drift()
+    for rel in unlisted:
+        print(f"note: {APP_ROOT / rel} is not in app/data-manifest.json (stale or unrecorded local file)")
+    if absent:
+        sys.exit("Not in Atlas, so left as is locally (whoever built them must push):\n  " + "\n  ".join(absent))
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=("push", "pull", "record"))
+    parser.add_argument("command", choices=("push", "pull", "record", "status"))
     parser.add_argument("--root", type=Path, default=DEFAULT_ROOT)
     args = parser.parse_args()
     if args.command == "record":
         record()
         return
+    if args.command == "status":
+        status(args.root)
+    if args.command == "push":
+        require_recorded()  # before connecting, so a stale manifest fails fast
     (push if args.command == "push" else pull)(connect(), args.root)
 
 
