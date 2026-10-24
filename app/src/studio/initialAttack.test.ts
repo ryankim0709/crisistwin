@@ -57,6 +57,8 @@ function input(windSpeedMph: number, horizon = 120): ScheduledFireInput {
 
 const crews = (patch: Partial<FirefightingSettings>): FirefightingSettings => ({
   ...DEFAULT_FIREFIGHTING,
+  // Legacy counts: Type 2 crews, Type 3 engines, Type 2 dozers.
+  resources: undefined,
   enabled: true,
   ...patch,
 });

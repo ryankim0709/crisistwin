@@ -33,6 +33,26 @@ supports, watch the dispatch in the fire diorama, and see each household's evacu
   0.22° × 0.28°. Errors: 400 `bad_bbox`, 422 `no_roads` / `no_exits`, 502
   `upstream_unavailable`. Throttled at 20 requests per minute per anonymous client. The
   static fixture and `tools/build_dispatch_area.py` are removed.
+- **Access-only roads and tags (builder `dispatch-area/4`, wire schema still 2, additive).**
+  For fire-apparatus routing (`docs/suppression-data.md`, road-access table) the area also
+  carries OSM `highway=service` (not driveway, parking_aisle, drive-through) and
+  `highway=track` ways. `classes` gains `"service"` and `"track"` at the end; their edges have
+  accessOnly = 1, assumed speed 25 / 15 km/h and the default lane capacity, come after all
+  public edges, and are kept only if reachable from the evacuation component through
+  access-only edges. Evacuation (zones, homes, exits, station `node`) uses public-road nodes
+  only. Edge rows are `[from, to, lengthM, class, kph, capacityVph, oneway, name, geometry,
+  bridge, tagSet, accessOnly]`: index 10 indexes the top-level `tagSets` (deduplicated objects
+  with the OSM tags highway, surface, tracktype, smoothness, width, maxweight, maxheight,
+  bridge, access, emergency, motor_vehicle, lanes, oneway, maxspeed, service, junction,
+  noexit); index 11 is the accessOnly flag. `turningNodes` lists node indices tagged
+  `highway=turning_circle|turning_loop`; `boundaryNodes` lists node indices where a way
+  continues outside the box (not a dead end). A public way is split where an access-only way
+  joins it. `GET /api/suppression/bases?lon=&lat=&radius_km=` (default 250, max 600; 400
+  on bad input) returns `{available, attribution, licence, retrieved, bases: [{id, name, type,
+  agency, unit, lon, lat, distanceKm}]}`, nearest first: all HB and AAB in range, the nearest
+  40 stations and 10 CC/FCFFC. It reads the local-only `tools/ca_fire_bases.json` (path
+  override `SUPPRESSION_BASES_PATH`); if the file is absent it answers 200 with
+  `available: false` and a `detail` message.
 - **Which box.** The page asks for the cells the fire reaches by the horizon plus 2.5 km,
   half-width clamped to 3–6 km and clipped to the board (`dispatchBoxFor`, `area.ts`). It is
   requested automatically 0.5 s after the fire changes.

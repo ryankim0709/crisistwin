@@ -228,6 +228,13 @@ planner. It writes `.json` and `.md`; see [live-reports.md](../../docs/live-repo
 data. Use a separate server and database, never the shared one. Method and results:
 [docs/live-loadtest.md](../../docs/live-loadtest.md).
 
+`python manage.py live_batch --spec api/live/specs/camp-2018-pilot.json --strategies
+historical_only,rule_auto,record_delay_5 --workers 8 --out /tmp/batch-pilot` (same env; no
+server, no database writes; about 3 min for 24 runs on 8 cores) is the headless batch runner:
+scenario × strategy × seed in lockstep on the drill clock, scored with the AAR in drill minutes,
+one `RunManifest` per run and a paired comparison table. Simulated planning experiments; see
+[batch-runner.md](../../docs/batch-runner.md) and ADR `0049-batch-runner.md`.
+
 ### Incident intelligence (`/api/intel/…`)
 
 Public agency pages, fetched by the Apify Actor in `actors/incident-intel/`, become source

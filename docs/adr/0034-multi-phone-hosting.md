@@ -50,5 +50,5 @@ worth the risk. Used only in the dialog; the link carries no more than an origin
 - Tunnel quick-start hostnames change per run, so the link and QR must be regenerated.
 - iOS asks for local-network and camera permission; plain HTTP works only for `.local` names.
 - Switching servers drops this phone's device and responder credentials (they belong to one server).
-- When ADR 0030's scenario engine can change the active incident, only the `LIVE_ACTIVE_*`
-  source changes; phones follow the endpoint.
+- The console can now change the active incident ([0047-active-incident](0047-active-incident.md));
+  `LIVE_ACTIVE_*` is only the default before a switch, and phones follow the endpoint.

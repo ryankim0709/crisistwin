@@ -1,0 +1,15 @@
+{
+  "kind": "crisistwin_batch_scenario",
+  "scenario_id": "camp-2018-drill",
+  "package": {"kind": "camp_bundle", "path": "app/public/replays/camp-2018.json"},
+  "window": {"start": "2018-11-08T14:30:00Z", "end": "2018-11-08T18:00:00Z"},
+  "clock": {"mode": "lockstep", "tick_s": 60, "decision_every_min": 1},
+  "injects": [],
+  "record_2018": true,
+  "comms": {"enabled": true, "scale_911": null},
+  "residents": {"enabled": true},
+  "responders": {"enabled": true, "units": 6},
+  "twin": {"enabled": true},
+  "auto_policy": true,
+  "seeds": {"panel": "dev", "n": 8, "root": 0}
+}

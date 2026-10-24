@@ -17,6 +17,7 @@ from typing import Any
 
 from django.conf import settings
 from livecore import injects as rules
+from livecore.drill import INCIDENT_ID
 from livecore.geo import point_in_multipolygon
 
 from pymongo import UpdateOne
@@ -99,8 +100,14 @@ def _load(index: DrillIndex) -> GroundRecord:
     return GroundRecord(True, tuple(items), points)
 
 
+NO_RECORD = GroundRecord(False, (), {})
+
+
 def get_record(index: DrillIndex) -> GroundRecord:
+    """The 2018 Camp record; other incidents (Studio packages) have none."""
     global _record
+    if index.drill.incident_id != INCIDENT_ID:
+        return NO_RECORD
     # Retry while the file is missing, so a record built after start-up appears without a restart.
     if _record is None or not _record.available:
         with _lock:

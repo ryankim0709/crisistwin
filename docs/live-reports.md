@@ -51,7 +51,7 @@ by distance. `help_needed` is never public.
   "received_at": "2026-10-24T18:05:41Z", // server clock; later when queued offline
   "note": "Tree across both lanes",
   "status": "unverified",                // unverified|corroborated|responder_confirmed|confirmed|dismissed|resolved
-  "evidence_class": "field_report",
+  "evidence_class": "field_report",       // field_report | simulated (generated, ADR 0042) | historical_record | drill_fixture
   "replay_at": "2018-11-08T16:12:00Z"   // v2, server-filled: drill time at received_at; null when no drill runs
 }
 ```
@@ -96,7 +96,10 @@ store them in their own collection only if reads get slow.
 phones). The console tags those units "sim".
 
 A submitted report needs every field of the stored document except `id`,
-`reporter`, `road_ref`, `received_at`, `status` and `evidence_class`, which the server fills.
+`reporter`, `road_ref`, `received_at`, `status` and `evidence_class`, which the server fills. ADR 0041 adds optional `method` (`explicit` default |
+`passive`) and, for passive reports only, `segment_id` and `speed_class`; see
+[Passive observations](#passive-observations-method-passive). Stored reports carry `method` and
+`speed_class` (null for explicit).
 
 `public-map` and `prompts` item:
 
@@ -126,6 +129,10 @@ Errors: `400 { "error": "invalid_report", "detail": "..." }`, `401`, `403`, `404
 
 - **Same party:** same `party_key`, the same household group (later), or
   submitted within `SAME_PARTY_WINDOW_S` = 120 and `SAME_PARTY_RADIUS_M` = 100 of each other.
+  Optional source-diversity check (`LIVE_SOURCE_DIVERSITY=true`, default false; ADR 0042): parties
+  whose first reports in a group arrive within `SOURCE_BURST_WINDOW_S` = 600 and
+  `SOURCE_BURST_RADIUS_M` = 1000 of a counted party also count as that one party. It folds true
+  crowds as well as rumours; see the ADR before turning it on.
 - **Public** when not dismissed or stale and one of: at least
   `PUBLIC_MIN_CIVILIAN_PARTIES` = 3 independent civilian parties; one responder
   and one independent civilian party; or controller `confirm`. A newer
@@ -156,10 +163,49 @@ Everything below is additive. Pure computations live in `app/backend/livecore/`
 documents and serves the endpoints. The web types are `app/src/live/types.ts`; the
 iOS types are `mobile/CrisisTwin/Features/Live/LiveModels.swift`.
 
-The P0 incident is `camp-2018-drill`. Its drill data (roads, zones, destinations,
+The default incident is `camp-2018-drill`. Its drill data (roads, zones, destinations,
 fire perimeters, fitted model fronts, fire observations) is the Camp replay bundle
 (`app/public/replays/camp-2018.json`, format in [replay-bundle.md](replay-bundle.md)),
 read once per process from the path in `LIVE_DRILL_BUNDLE`.
+
+## Active incident (ADR 0047)
+
+The hosted instance runs **one active wildfire** at a time
+([0047-active-incident](adr/0047-active-incident.md)). Every endpoint below is keyed by
+the `incident_id` in its path; routes without one (`me/...`) use the active incident. The
+API serves `camp-2018-drill` (always) and the active incident; any other id is
+`404 not_found`, so a phone that gets 404 re-reads the active incident.
+
+`GET /api/live/active` (no auth, `Cache-Control: no-store`):
+
+```jsonc
+{ "incident_id": "studio-1a2b3c4d5e6f",       // or "camp-2018-drill" (the default)
+  "name": "Ridge fire (Studio scenario)",
+  "mode": "drill",
+  "label": "Drill: simulated Studio fire, Ridge fire. Not a real incident.",
+  "source": "package",                        // "bundle" (Camp) | "package" (Studio drill package)
+  "package_id": "pkg_1a2b3c4d5e6f",           // null for Camp
+  "activated_at": "2026-10-24T20:01:00Z",     // null until a controller switches
+  "join": { "invite_required": true } }
+```
+
+`POST /api/live/active` (controller) with `{"package_id": "pkg_..."}` or
+`{"incident_id": "camp-2018-drill"}` loads the drill (it must load first: `503
+drill_unavailable` otherwise), stores the switch in `live_active` (one document:
+`incident_id, source, package_id, bundle, name, label, activated_at, actor`), logs
+`incident_activated` in `live_decisions`, starts warming its twin and returns
+`200 {"active": <as GET>, "changed": bool}`. Errors: `400 invalid_request` (neither or
+both keys), `401`/`403` (not the controller), `404 not_found` (unknown package or
+incident). Data of the previous incident stays in MongoDB under its id; switching back
+resumes it. Other processes see a switch within 2 s (`ACTIVE_CACHE_S`).
+
+A Studio package incident differs from Camp: the drill clock starts at the package's
+T+0 (`clock.start`) instead of 15:00Z, there is no 2018 response or ground record, and
+its traffic twin is built from the package (`sim.twin.package_inputs`): OSM roads,
+synthetic zones (homes per km of residential street times vehicles per home, all of
+which evacuate once ordered), exits and the simulated fronts. It has no historical orders,
+so zones depart only when guidance orders them. Those assumptions are listed in the
+twin's `limitations`.
 
 ## Drill clock
 
@@ -949,7 +995,10 @@ Timeline `at` is wall time; `drill_at` is the proposal's decided drill time for 
 reject, else estimated from the current drill clock (wrong if the speed changed since).
 `historical_record` reports (the 2018 queue entries) are not field reports and are not counted in
 triage times. Help minutes are wall minutes from the check-in time; a request the resident later
-closed by checking in again has no start time and no minutes.
+closed by checking in again has no start time and no minutes. The response carries
+`time_basis: "wall"`. The same computation is `aar.compute_aar(context, data, time_basis)`, pure
+over explicit documents; the headless batch runner calls it with `time_basis: "drill"` (minutes
+between the documents' drill times, help unit `drill minutes`; [batch-runner.md](batch-runner.md)).
 
 **Drill score** (0 to 100): `100 x sum(effective_weight x component score)`. Constants are at the
 top of `aar.py`.
@@ -965,6 +1014,52 @@ A component with no data (no help requests, twin warming, no zone ordered yet) h
 `score: null` and is left out; the remaining weights are renormalised (`effective_weight`) and
 `coverage` is the weight share that counted. The score is a planning-experiment number from an
 uncalibrated model, not an evaluation of the controllers.
+
+### Triage quality against the truth log (post-drill, ADR 0042)
+
+`GET incidents/{id}/aar?truth=1` adds `triage_quality`, scored by `sim/triage_quality.py`
+against the hidden ground-truth log `sim_truth` of generated reports
+([ADR 0042](adr/0042-adversarial-ground-data.md), `sim/gen_noise.py`). It is refused with `403
+truth_scoring_disabled` unless the server sets `LIVE_TRUTH_SCORING=true` (default false), and with
+`409 drill_running` while the drill clock runs; stop or pause the drill (speed 0) first. Without
+`?truth=1` the section is absent. Headless runs call `aar.build_aar(snapshot, truth_scoring=True)`.
+No other endpoint, console view, phone view or MCP tool reads `sim_truth`
+(`api/live/tests/test_sim_truth.py`). Only reports with a truth entry (generated, `simulated`) are
+scored; real participants' reports and the 2018 record are not.
+
+```jsonc
+"triage_quality": { "status": "ok",          // or no_truth | no_drill
+  "evidence_class": "simulated", "basis": "drill minutes; ...", "horizon": "...Z",  // horizon = drill now
+  "reports_scored": 7, "reports_false": 5, "false_auto_corroborated": 0,          // false reports the 3-party rule made public
+  "confirm": { "n": 2, "true": 1, "precision": 0.5, "recall_pool": 2, "recall": 0.5 },
+  "dismiss": { "n": 4, "false": 3, "precision": 0.75, "recall_pool": 5, "recall": 0.6 },
+  "truth_changes": { "n": 1, "undetected": 0, "median_min": 40.0,
+    "items": [ { "id": "truth_change:C", "at": "...Z", "before": "road_passable", "after": "road_blocked",
+                 "detected": true, "minutes": 40.0 } ] },   // undetected: censored at the horizon
+  "decisions_on_false": { "guidance_changes": 1, "dispatches_assist": 1, "verify_tasks": 0, "total": 2,
+                          "of": { "guidance_change": 1, "dispatch_assist": 1, "dispatch_verify": 0 }, "items": [] },
+  "rumours": { "n": 1, "contained": 1, "median_min": 30.0,
+    "items": [ { "rumour_id": "...", "onset_at": "...Z", "members_received": 3, "members_dismissed": 3,
+                 "members_corroborated": 0, "members_confirmed": 0, "contained": true, "minutes": 30.0 } ] },
+  "metrics": { "triage.confirm_precision": 0.5, "...": null },   // sim/evaluation.py TRIAGE_METRICS keys
+  "constants": { "TRIAGE_GRACE_MIN": 10.0, "CHANGE_MATCH_RADIUS_M": 200.0, "CONFIRM_RECALL_EXCLUDED_KINDS": ["help_needed"] } }
+```
+
+All minutes are drill minutes. Report times are `replay_at`; decision and task times are their
+stored `replay_at` (new: `live_decisions` and `live_tasks` now record the drill time), else estimated
+from the drill clock. Definitions are in the `sim/triage_quality.py` docstring and
+[strategy-evaluation.md](strategy-evaluation.md) §3. A guidance change cites the `road_blocked`
+reports on its proposal's `cause_segment_ids` received by then, plus a report whose controller
+confirm triggered the replan (within `GUIDANCE_CONFIRM_LINK_S`, 5 s); it counts as on false
+information when every cited report has a truth entry and was false at that drill time. Verify
+tasks on false reports are listed but not penalised.
+
+**Injecting generated data.** `python manage.py live_inject_noise --events <json> --profile
+typical|hostile|clean --seed N [--changes <json>] [--until <drill time>]` applies the noise layer,
+writes the truth map to `sim_truth`, and inserts the due phone and responder reports into
+`live_reports` with `evidence_class: "simulated"` (same validation, road snapping, `client_id`
+idempotency and civilian rate limits as `POST reports`; `replay_at` is the event's upload drill
+time). Re-run it as the drill clock advances. Nothing about truth or noise is stored on a report.
 
 ## Injects
 
@@ -1003,10 +1098,166 @@ logged once in `live_decisions` as `inject_created`, `inject_started`, `inject_e
 the label). `command` adds `injects` and `no_signal_zone_ids`. Index `{incident_id, at}`; `live_init_db
 --drop-drill-data` drops the collection.
 
+## Task board, passive observations and information priority (ADR 0041)
+
+See [ADR 0041](adr/0041-crowdsourced-task-board.md). The model ranks which places most need a fresh
+observation; the top ones become open questions on a public board; phones pick, on the device,
+the questions on their own route or near them, and (opt-in) answer road questions passively while
+navigating. Pure maths: `livecore/priority.py`; storage and endpoints: `api/live/board.py`.
+
+### Information priority
+
+For every candidate place, `priority = impact × p_change × staleness`, each in 0..1:
+
+- **impact** = `1 - exp(-v / IMPACT_SCALE_VEH)` (`IMPACT_SCALE_VEH` = 5000; a Camp zone has about 1700 vehicles), where `v` is
+  vehicle-equivalents at stake (computed from the models, never an LLM):
+  - **segment** (road segments on published routes): the vehicles of every zone (level not `none`)
+    whose published route crosses the segment, a zone counting `LOSE_ROUTE_WEIGHT` (2) times when
+    none of its published alternatives avoids the segment (closing it would lose or force a long
+    detour), else once (it would lengthen). This is the cheap approximation from published route
+    edges, not the two planner runs of `POST impact`: the route's segments come from the planner's
+    remembered edge ids (`live_plan_routes`) for the published (zone, destination, via), and an
+    alternative avoids the segment when fewer than two of the segment's quarter points lie within
+    `ON_ROUTE_M` (30 m) of its line (the impact analysis test). Segments shorter than
+    `MIN_SEGMENT_LENGTH_M` (150 m) are not candidates, and only the `SEGMENT_REFINE_MAX` (150)
+    segments with the most vehicles are scored (cost bound; about 1 s per refresh on Camp).
+  - **destination**: `heading × load`, with `heading` = vehicles arriving per capacity window and
+    `load = min(1, heading / capacity)`. Capacity as in the planner's `load` (`capacity_veh`, or for
+    an exit the hourly capacity of its entering edges). Arrivals come from the traffic twin when it
+    is ready (`arrived_veh` for a destination with `capacity_veh`, else `arrived_last_10_min_veh × 6`
+    per hour; simulated), else from the vehicles of the `evacuate_now` zones the published plan
+    sends there. Destinations with unknown capacity are not candidates.
+  - **gateway** (fire-growth gateways): zones with households that the drill's simulated fire
+    model (`fire_simulated.fronts`, never future observed perimeters) reaches within
+    `GATEWAY_HORIZON_MIN` (30) drill minutes but the current estimate does not yet touch.
+    `v` = the zone's vehicles × `spread_ratio`, where `spread_ratio` = clamp(modelled area growth in
+    the next 30 min / growth in the last 30 min, 1, `GATEWAY_MAX_SPREAD_RATIO` (3)): accelerating
+    spread raises the priority. The place is the zone's boundary vertex nearest the current fire.
+    Gateways are console-only suggestions (responder tasks are never auto-dispatched).
+- **p_change** = `1 - (1 - p_base) × (1 - p_fire)`: `p_base = 1 - 0.5 ** (PRIORITY_HORIZON_S / half_life)`
+  (`PRIORITY_HORIZON_S` = 1800) with `half_life` = `HALF_LIFE_S["road_blocked"]` (7200 s) for a
+  segment, `["shelter_full"]` (3600 s) for a destination, `["fire_seen"]` (900 s) for a gateway; and
+  `p_fire = exp(-d / FIRE_DECAY_M)` with `d` the distance in meters from the place to the fire
+  estimate (`FIRE_DECAY_M` = 2000; 0 when there is no estimate or beyond `FIRE_DISTANCE_MAX_M`,
+  10 km). For ranking, `d` is measured from the place's ends and quarter points to the nearest fire
+  boundary vertex (an overestimate by at most half the vertex spacing); the board's fire exclusion
+  below uses the exact line-to-area distance.
+- **staleness** = `1 - 0.5 ** (age_s / half_life)`, `age_s` = wall seconds since the newest
+  independent observation of the place (any non-dismissed report: road kinds on the segment,
+  `shelter_full` for the destination, `fire_seen`/`heavy_smoke` within `GATEWAY_OBSERVATION_M`
+  (1000 m) for a gateway; passive reports count). Never observed: 1.
+
+### Board refresh (auto-created questions)
+
+On a `command` or `board` read, at most once per `BOARD_REFRESH_S` (60 s wall) per incident (an
+atomic claim on the drill document; computed in the request, with the twin's arrivals read in a
+background thread and cached for `TWIN_ARRIVALS_MAX_AGE_S`, 120 s): priorities are
+recomputed and stored (`live_board`, one document per incident); expired board tasks close (`done`
+with answers, else `cancelled` with note `"Expired"`); then the top-ranked **segment and destination**
+places become open `verify` tasks with `created_by: "priority"`, until `BOARD_MAX_OPEN` (8) board
+tasks are open: one open task per place (deduplicated), at most `BOARD_CREATE_PER_REFRESH` (3) new
+per refresh, not within `BOARD_PLACE_COOLDOWN_S` (600 s) of the last board task on that place, only
+with `priority >= BOARD_MIN_PRIORITY` (0.05), at least `BOARD_MIN_SPACING_M` (1500 m) from every
+other open question (so one long road does not fill the board; the stored console list is spaced the
+same way), and never for a place within `BOARD_FIRE_EXCLUSION_M` (1000 m) of the fire estimate. Only
+while a drill has been started. Each refresh that creates questions logs one `board_tasks` decision
+(actor `auto_policy`). A drill `reset` cancels open board questions and clears `live_board`.
+
+Board task (`CheckTask` additions; older tasks have no `created_by`, which means `controller`):
+
+```jsonc
+{ "id": "tsk_01J...", "kind": "verify", "assignee": null, "status": "open",
+  "created_by": "priority",                       // controller | proposal | priority
+  "question": "road_status",                      // road_status | shelter_full
+  "target": { "segment_id": "osm-way:10288574:0", "coord": [-121.6012, 39.7593], "destination_id": null },
+  "place": { "kind": "segment", "name": "Pentz Road" },  // segment | destination
+  "expires_at": "2026-10-24T18:35:00Z",           // created_at + PASSIVE_TTL_S (1800)
+  "priority": { "priority": 0.42, "impact": 0.81, "p_change": 0.55, "staleness": 0.94 },  // at creation
+  "report_ids": [], "note": null, "created_at": "...Z" }
+```
+
+Board tasks never appear in a responder's `me/tasks` or `situation.tasks`. Anyone (civilian,
+responder, controller) answers one with a report carrying its `task_id`: `road_status` takes
+`road_blocked`, `road_passable` or `heavy_traffic`, and the report's `road_ref` is set to the
+question's segment (not snapped; phones send the question's `place.coord`, never their own
+position); `shelter_full` takes `shelter_full` with the question's `destination_id`. Other kinds are
+`400`; an expired or closed question is `409`. Answers do not close a board task; it closes at
+`expires_at`. A civilian answering a non-board task still gets `403`.
+
+### `GET incidents/{id}/board` (any role)
+
+Questions only: no reports, no help requests, no responder assignments, no locations of people,
+no priority numbers. Open board tasks that have not expired and are not within
+`BOARD_FIRE_EXCLUSION_M` of the current fire estimate, best first.
+
+```jsonc
+{ "incident_id": "camp-2018-drill", "generated_at": "...Z",
+  "limits": { "radius_m": 1500, "max_questions": 3, "stall_s": 120, "slow_ratio": 0.5 },  // PASSIVE_RADIUS_M, MAX_PASSIVE_QUESTIONS, STALL_S, SLOW_RATIO
+  "items": [
+    { "task_id": "tsk_01J...", "rank": 1, "question": "road_status",
+      "place": { "kind": "segment", "segment_id": "osm-way:10288574:0", "destination_id": null,
+                 "name": "Pentz Road", "coord": [-121.6012, 39.7593],
+                 "line": [[-121.6015, 39.7590], [-121.6009, 39.7596]],   // null for a destination
+                 "free_flow_kph": 56 },                                  // null for a destination
+      "expires_at": "2026-10-24T18:35:00Z" } ] }
+```
+
+The phone selects, on the device, items whose segment lies on its own published route (two of the
+segment's quarter points within 30 m of the route line) or whose `coord` is within `radius_m` of
+the device; drops any item within 1000 m of the fire estimate it already has (and any route
+segment the planner marks near the fire); and shows at most `max_questions`. The device position
+never leaves the phone for this.
+
+### Passive observations (`method: "passive"`)
+
+Reports gain `method`: `explicit` (default; stored on every new report) or `passive`, and
+`speed_class`: `free` | `slow` | `null`. A passive report is a phone's automatic note that it drove
+through a board segment (opt-in "Share road observations" setting, off by default):
+
+```jsonc
+{ "client_id": "uuid", "kind": "road_passable",   // or heavy_traffic (requires speed_class slow)
+  "method": "passive", "segment_id": "osm-way:10288574:0", "task_id": "tsk_01J..." /* optional */,
+  "observed_at": "2026-10-24T18:07:00Z", "speed_class": "free" }
+```
+
+It must not carry `location`, `heading_deg`, `note` or `destination_id` (`400`): the server sets
+`location` to the segment's midpoint (`accuracy_m: null`) and `road_ref` from `segment_id` (`snap_m: 0`),
+so no device position is stored. Kinds other than `road_passable` and `heavy_traffic` are `400`.
+
+Evidence weighting (`livecore.public`): a party whose reports on an item are all passive counts
+`PASSIVE_PARTY_WEIGHT` (0.5) of an explicit party toward `PUBLIC_MIN_CIVILIAN_PARTIES` and the
+responder + civilian rule; a passive-only group never overrides (opens) a block or another
+contradicting state; passive reports never confirm a block (they cannot be `road_blocked`). They do
+corroborate `road_passable` and `slow` states. Public items and road state add `passive_parties`
+(parties whose reports there are all passive; included in `independent_parties`).
+
+### Command additions
+
+`command` adds `stale_critical` (the top `STALE_CRITICAL_LIMIT` (10) priority items, any kind) and
+`board_computed_at`; each task gains `answers`:
+
+```jsonc
+"stale_critical": [
+  { "id": "seg:osm-way:10288574:0", "kind": "segment",   // segment | destination | gateway
+    "name": "Pentz Road", "coord": [-121.6012, 39.7593], "line": [[...]],   // line null unless segment
+    "segment_id": "osm-way:10288574:0", "destination_id": null, "zone_id": null,
+    "priority": 0.42, "impact": 0.81, "p_change": 0.55, "staleness": 0.94,
+    "vehicles": 1240, "zones": 3, "zones_losing_route": 1,   // segment; else null
+    "load": null,                                             // destination: 0..1
+    "households": null, "spread_ratio": null,                 // gateway
+    "fire_distance_m": 2400, "half_life_s": 7200, "last_observed_at": null,
+    "reason": "1240 vehicles on 3 routes", "task_id": "tsk_01J..." } ],
+"tasks": [ { "...": "CheckTask",
+  "answers": { "road_passable": 3, "road_blocked": 1, "heavy_traffic": 0, "shelter_full": 0,
+               "passive": 2, "total": 4, "last_at": "2026-10-24T18:07:00Z" } } ]
+```
+
 ## Endpoint summary (v2 additions)
 
 | Method and path | Role |
 | --- | --- |
+| `GET /api/live/active` | none ([Active incident](#active-incident-adr-0047)) |
+| `POST /api/live/active` | controller |
 | `GET incidents/{id}/situation[?zones=0]` | any |
 | `POST incidents/{id}/checkins` | any |
 | `POST me/location`, `DELETE me/location` | responder |
@@ -1024,12 +1275,14 @@ the label). `command` adds `injects` and `no_signal_zone_ids`. Index `{incident_
 | `POST incidents/{id}/twin/whatif` | controller |
 | `POST incidents/{id}/impact` | controller ([Impact analysis](#impact-analysis)) |
 | `GET incidents/{id}/aar` | controller ([After-action report](#after-action-report)) |
+| `GET incidents/{id}/board` | any ([Task board](#task-board-passive-observations-and-information-priority-adr-0041)) |
 
 ## Location (v2)
 
 Unchanged for civilians: the zone is found on the device; position leaves the
 phone only inside a report, a prompts query, a route request, or a `need_help`
-check-in. Responders who turn on sharing send their latest position while the app
+check-in. Board questions (ADR 0041) are picked on the device; a board answer carries the
+question's place, and a passive report carries no position at all. Responders who turn on sharing send their latest position while the app
 is in the foreground; the server keeps only that one position, for 15 minutes.
 
 ## MongoDB plan
@@ -1043,7 +1296,7 @@ ISO 8601 `Z`. Ids are prefixed strings (`rpt_`, `tsk_`, `prp_`, `chk_`, `dev_`,
 | --- | --- | --- | --- |
 | `live_devices` | issued token (civilian or responder) | `token_hash` (SHA-256), `role`, `party_key`, `incident_id`, `created_at`, `last_seen_at`, `expires_at` | `token_hash` unique; `party_key`; TTL on `expires_at` (`expireAfterSeconds: 0`; civilian 30 days after last seen, responder 24 h) |
 | `live_reports` | report | v1 document + `replay_at`, server-maintained `updated_at` (cursor) | `{incident_id, client_id}` unique (client_id stored lowercased); `{incident_id, received_at}`; `{incident_id, updated_at}` (the `since` cursor); `{reporter.party_key, received_at}`; `id` unique; 2dsphere on `location.coord` (optional; P0 filters in Python) |
-| `live_tasks` | task | v1 + `assignee`, `accepted_at` | `id` unique; `{incident_id, status}`; `{assignee, status}` |
+| `live_tasks` | task | v1 + `assignee`, `accepted_at`; board questions add `created_by`, `question`, `place`, `place_id`, `expires_at`, `priority` (ADR 0041) | `id` unique; `{incident_id, status}`; `{assignee, status}`; `{incident_id, created_by, status}` |
 | `live_injects` | drill inject ([Injects](#injects)) | `id`, `incident_id`, `type`, `params`, `at`, `status`, `actor`, `created_at` | `id` unique; `{incident_id, at}` |
 | `live_decisions` | audit entry (append only) | `incident_id`, `at`, `actor`, `action`, `report_ids`, `proposal_id`, `note` | `{incident_id, at}` |
 | `live_drills` | incident | see [Drill clock](#drill-clock) | `incident_id` unique |
@@ -1051,7 +1304,9 @@ ISO 8601 `Z`. Ids are prefixed strings (`rpt_`, `tsk_`, `prp_`, `chk_`, `dev_`,
 | `live_proposals` | proposal | `Proposal` | `id` unique; `{incident_id, status, created_at}` |
 | `live_checkins` | party per incident (latest only) | `CheckIn` + `incident_id`, `party_key` | `{incident_id, party_key}` unique; `{incident_id, zone_id, status}` |
 | `live_destination_choices` | device per incident and zone (latest only) | `incident_id`, `party_key`, `zone_id`, `destination_id`, `guidance_version`, `at`, `expires_at`; no location | `{incident_id, party_key, zone_id}` unique; `{incident_id, zone_id, destination_id}`; TTL on `expires_at` (`at + 2 h`) |
+| `live_board` | incident (latest only) | `incident_id`, `computed_at`, `replay_at`, `arrivals_source`, `items` (ranked priority places; no people data) | `incident_id` unique |
 | `live_responder_locations` | responder (latest only) | `incident_id`, `party_key`, `coord`, `accuracy_m`, `at`, `expires_at` | `{incident_id, party_key}` unique; TTL on `expires_at` (`at + 900 s`) |
+| `sim_truth` | generated event per incident (hidden ground truth, ADR 0042) | `incident_id`, `event_id` (the report's `client_id`, or `truth_change:<id>`), `true`, `kind_of_noise`, `source_event_id`, `notes`, `entry` (the full `sim/gen_noise.py` truth entry), `profile`, `seed`, `written_at` | `{incident_id, event_id}` unique. Read only by the AAR's `triage_quality` after the drill; never served |
 
 Current guidance per zone is the max `version` for `{incident_id, zone_id}` (an
 aggregation with `$sort` + `$group`, or a cached `current: true` flag flipped in

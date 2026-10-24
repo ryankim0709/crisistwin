@@ -256,7 +256,7 @@ class LiveApiTest(SimpleTestCase):
         zone_id, point = self.road_point_on_a_route(civ)
         rid = self.report(civ, point, minutes_ago=2).json()["report"]["id"]
         # The planner part stands alone; the twin part is covered in test_impact.py.
-        with mock.patch.object(twin_service, "ensure_ready", lambda: False):
+        with mock.patch.object(twin_service, "ensure_ready", lambda *_: False):
             r = self.call("POST", path, {"report_id": rid}, CONTROLLER)
             self.assertEqual(r.status_code, 200, r.content)
             body = r.json()

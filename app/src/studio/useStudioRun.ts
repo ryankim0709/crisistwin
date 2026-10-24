@@ -19,11 +19,14 @@ import type { IgnitionProblem } from "../fire/scheduledTypes";
 import { toSolverInput, validateScenario } from "./scenario";
 import { gridBox, gridCoversScenario } from "./useRegionBoard";
 import { arrivalsOf, type CrewDispatch } from "./crewDispatch";
+import type { AirBase } from "./aircraft";
 
 /** Resources sent from fire stations for a run, or why they were not. */
 export interface RunDispatch {
   dispatch: CrewDispatch | null;
   note: string | null;
+  /** Helitack and air attack bases for the aircraft model, or null without base data. */
+  airBases?: AirBase[] | null;
 }
 
 /** A prebuilt region board offered for a run; `grid` is null while it is still loading. */
@@ -161,6 +164,7 @@ export function useStudioRun(): StudioRunController {
         input: toSolverInput(snapshot),
         firefighting: snapshot.firefighting ?? null,
         crewArrivals: crews?.dispatch ? arrivalsOf(crews.dispatch) : null,
+        airBases: crews?.airBases ?? null,
       };
       workerRef.current.postMessage(request);
     },

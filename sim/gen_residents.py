@@ -129,6 +129,15 @@ REPORT_ACCURACY_M = 10.0
 under open sky; worse under smoke, trees and in canyons)."""
 COORD_DECIMALS = 6
 
+# ---- Task board (ADR 0041; ASSUMPTION)
+BOARD_ANSWER_SHARE = 0.3
+"""ASSUMPTION: chance an app household answers a board question about the road it is driving on (once per
+question). Only questions handed in through `board` (the public GET board items) are answered."""
+PASSIVE_SETTING_SHARE = 0.2
+"""ASSUMPTION: share of app households that turned on "Share road observations" (off by default on phones)."""
+PASSIVE_KINDS = frozenset({"road_passable", "heavy_traffic"})  # views.PASSIVE_KINDS
+SPEED_CLASSES = frozenset({"free", "slow"})  # views.SPEED_CLASSES
+
 # ---- Destination choices (ASSUMPTION)
 DESTINATION_CHOICE_SHARE = 0.3
 """ASSUMPTION: share of departing app households that pick a destination in the app."""
@@ -157,6 +166,8 @@ ASSUMPTIONS = [
     f"< {HEAVY_TRAFFIC_SPEED_FRACTION:g} of free-flow speed.",
     f"{DESTINATION_CHOICE_SHARE:g} of departing app households choose a destination; "
     f"{RECOMMENDED_CHOICE_SHARE:g} of them the recommended one. Choices do not steer the twin's vehicles.",
+    f"Task board (when given): {BOARD_ANSWER_SHARE:g} chance to answer a question about the road being driven; "
+    f"{PASSIVE_SETTING_SHARE:g} of app households share passive road observations (one per question).",
 ]
 LIMITATIONS = [
     "Which household is in which packet is assigned, not tracked: the fixed-delay twin does not carry packet "
@@ -183,10 +194,13 @@ class ResidentParams:
     fire_sighting_distance_m: float = FIRE_SIGHTING_DISTANCE_M
     destination_choice_share: float = DESTINATION_CHOICE_SHARE
     recommended_choice_share: float = RECOMMENDED_CHOICE_SHARE
+    board_answer_share: float = BOARD_ANSWER_SHARE
+    passive_setting_share: float = PASSIVE_SETTING_SHARE
 
     def __post_init__(self) -> None:
         for name in ("app_adoption", "staying_share", "out_checkin_share", "destination_choice_share",
-                     "recommended_choice_share", "heavy_traffic_speed_fraction"):
+                     "recommended_choice_share", "heavy_traffic_speed_fraction", "board_answer_share",
+                     "passive_setting_share"):
             if not 0 <= getattr(self, name) <= 1:
                 raise ValueError(f"{name} must be in [0, 1], got {getattr(self, name)!r}")
         for name in ("help_at_home_per_h", "help_trapped_per_h", "out_lag_sigma", "fire_sighting_distance_m"):
@@ -342,6 +356,17 @@ def report_body(*, client_id: str, kind: str, coord, observed_at: str, severity:
     return body
 
 
+def passive_body(*, client_id: str, kind: str, segment_id: str, speed_class: str, observed_at: str,
+                 task_id: str | None, incident_id: str | None = None) -> dict:
+    """A passive road observation (ADR 0041): segment, time and coarse speed class; no location."""
+    body = {"client_id": client_id, "kind": kind, "method": "passive", "segment_id": segment_id,
+            "speed_class": speed_class, "task_id": task_id, "observed_at": observed_at,
+            "severity": "slow" if kind == "heavy_traffic" else None}
+    if incident_id is not None:
+        body["incident_id"] = incident_id
+    return body
+
+
 def checkin_body(status: str, zone_id: str | None, coord=None) -> dict:
     """POST incidents/{id}/checkins body; `coord` only with need_help (else the server answers 400)."""
     body = {"status": status, "zone_id": zone_id}
@@ -370,7 +395,21 @@ def validate_body(event: dict) -> None:
                                                               for v in c)
                 and math.isfinite(c[0]) and math.isfinite(c[1]) and -180 <= c[0] <= 180 and -90 <= c[1] <= 90)
 
-    if t == "report":
+    if t == "report" and b.get("method") == "passive":
+        uuid.UUID(str(b.get("client_id")))
+        if b.get("kind") not in PASSIVE_KINDS:
+            raise ValueError("a passive report is road_passable or heavy_traffic")
+        if any(b.get(k) is not None for k in ("location", "heading_deg", "note", "destination_id")):
+            raise ValueError("a passive report carries no location, heading, note or destination")
+        if not isinstance(b.get("segment_id"), str) or b.get("speed_class") not in SPEED_CLASSES:
+            raise ValueError("segment_id and speed_class")
+        if b["kind"] == "heavy_traffic" and b["speed_class"] != "slow":
+            raise ValueError("passive heavy_traffic needs speed_class slow")
+        obs = b.get("observed_at")
+        if not isinstance(obs, str) or not obs.endswith("Z"):
+            raise ValueError("observed_at must be ISO 8601 with Z")
+        parse_utc(obs)
+    elif t == "report":
         uuid.UUID(str(b.get("client_id")))
         if b.get("kind") not in REPORT_KINDS:
             raise ValueError(f"kind {b.get('kind')!r}")
@@ -418,6 +457,7 @@ class _HState:
     traffic_roads: set = field(default_factory=set)  # road keys already met in a queue
     blocked_roads: set = field(default_factory=set)  # road keys already met closed
     report_times: list = field(default_factory=list)
+    board_seen: set = field(default_factory=set)  # board task ids already answered or passed
 
 
 class ResidentGenerator:
@@ -426,15 +466,20 @@ class ResidentGenerator:
     Call `observe()` after each `twin.step_to(...)`; it returns the new events with `at <= twin.now`, in
     time order. `offered(zone_id, at_iso) -> [destination_id, ...]` (recommended first) supplies the
     destinations a zone's guidance offers; by default the nearest usable twin destinations.
+    `board(at_iso) -> [board item, ...]` (optional; the `items` of GET incidents/{id}/board) supplies open
+    board questions: a household driving a question's segment answers it, or sends a passive observation if
+    it shares road observations (ADR 0041). Without `board` the event stream is unchanged.
     """
 
     def __init__(self, twin, params: ResidentParams | None = None, *, incident_id: str | None = None,
-                 offered=None):
+                 offered=None, board=None):
         self.twin = twin
         self.engine = twin.engine
         self.p = params or ResidentParams()
         self.incident_id = incident_id
         self.offered = offered or self._default_offered
+        self.board = board
+        self.board_rng = random.Random(f"{self.p.seed}:{GENERATOR_ID}:board")  # separate: board use leaves the rest unchanged
         self.pops = build_population(self.engine, self.p)
         self.state: dict[str, _HState] = {h.party_key: _HState() for z in self.pops for h in z.households}
         self.rng = random.Random(f"{self.p.seed}:{GENERATOR_ID}:events")
@@ -480,6 +525,45 @@ class ResidentGenerator:
         body = report_body(client_id=_client_id(self.p.seed, hh.party_key, n), kind=kind, coord=coord,
                            observed_at=at, severity=severity, incident_id=self.incident_id)
         return self._event("report", hh, at, body, cause)
+
+    def shares_road_observations(self, party_key: str) -> bool:
+        """The household's per-device setting, a seeded draw that does not touch the event stream."""
+        digest = hashlib.sha256(f"{self.p.seed}:{party_key}:passive".encode()).digest()
+        return int.from_bytes(digest[:8], "big") / 2 ** 64 < self.p.passive_setting_share
+
+    def _board_events(self, hh: Household, st: _HState, info: dict, questions: dict, at: str,
+                      t_s: float) -> list[dict]:
+        """Answer or passively complete a board question about the edge the household is on."""
+        if info["kind"] != "edge" or info["edge"] is None:
+            return []
+        seg = self.engine.s.edges[info["edge"]].segment_id
+        item = questions.get(seg)
+        if item is None or item["task_id"] in st.board_seen:
+            return []
+        st.board_seen.add(item["task_id"])
+        cause = {"state": "board_question", "at": at, "edge_index": info["edge"], "task_id": item["task_id"]}
+        if self.board_rng.random() < self.p.board_answer_share:
+            kind, severity = (("road_blocked", "full") if info["blocked"]
+                              else ("heavy_traffic", "slow") if info["congested"] else ("road_passable", None))
+            ev = self._report(hh, st, kind, item["place"]["coord"], at, cause, severity, t_s)
+            if ev:
+                ev["body"]["task_id"] = item["task_id"]
+            return [ev] if ev else []
+        if info["blocked"] or not self.shares_road_observations(hh.party_key):
+            return []  # a stopped phone never infers anything passively
+        speed = "slow" if info["congested"] else "free"
+        out = []
+        for kind in ("road_passable",) + (("heavy_traffic",) if speed == "slow" else ()):
+            recent = [x for x in st.report_times if x > t_s - 60]
+            if len(recent) >= MAX_REPORTS_PER_HOUSEHOLD_PER_MIN:
+                break
+            st.report_times = recent + [t_s]
+            n = self.n_msgs[hh.party_key] = self.n_msgs.get(hh.party_key, 0) + 1
+            body = passive_body(client_id=_client_id(self.p.seed, hh.party_key, n), kind=kind, segment_id=seg,
+                                speed_class=speed, observed_at=at, task_id=item["task_id"],
+                                incident_id=self.incident_id)
+            out.append(self._event("report", hh, at, body, {**cause, "state": "board_passive"}))
+        return out
 
     def _default_offered(self, zone_id: str, at: str) -> list[str]:
         e, s = self.engine, self.engine.s
@@ -585,6 +669,12 @@ class ResidentGenerator:
         p_home = 1.0 - math.exp(-p.help_at_home_per_h * dt_h)
         p_trap = 1.0 - math.exp(-p.help_trapped_per_h * dt_h)
         burned = e.origin_burned
+        questions = {}
+        if self.board is not None:
+            for item in self.board(at) or []:
+                place = item.get("place") or {}
+                if item.get("question") == "road_status" and place.get("segment_id"):
+                    questions.setdefault(place["segment_id"], item)
 
         for pop in self.pops:
             if not pop.households:
@@ -689,6 +779,8 @@ class ResidentGenerator:
                                                     "node_index": info["node"]}))
                 if not hh.has_app:
                     continue
+                if questions:
+                    out.extend(self._board_events(hh, st, info, questions, at, t_s))
                 if info["congested"] and self._road_key(info["edge"]) not in st.traffic_roads:
                     st.traffic_roads.add(self._road_key(info["edge"]))
                     if rng.random() < p.report_prob["heavy_traffic"]:
@@ -811,12 +903,12 @@ def camp_twin(start_at: str, root: str = "."):
 
 
 def run_residents(twin, until: str, params: ResidentParams | None = None, *, every_s: int = OBSERVE_EVERY_S,
-                  incident_id: str | None = None, offered=None) -> dict:
+                  incident_id: str | None = None, offered=None, board=None) -> dict:
     """Step `twin` from its `now` to `until` every `every_s` simulated seconds, observing residents after
     each step. Returns events (time-ordered, invariants checked) with summary, rates and provenance."""
     if not isinstance(every_s, int) or every_s <= 0:
         raise ValueError("every_s must be a positive integer")
-    gen = ResidentGenerator(twin, params, incident_id=incident_id, offered=offered)
+    gen = ResidentGenerator(twin, params, incident_id=incident_id, offered=offered, board=board)
     start = twin.now
     until_dt = parse_utc(until)
     events = gen.observe()  # baseline: states already present at the start

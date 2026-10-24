@@ -124,7 +124,7 @@ def _public(option: dict[str, Any] | None) -> dict[str, Any] | None:
 def _twin_part(snapshot: Snapshot, segment_id: str, closed_now: bool,
                horizon_min: float) -> tuple[dict[str, Any] | None, dict[str, int] | None, str | None]:
     """(twin evidence, zone remaining vehicles, fallback reason)."""
-    if not twin_service.ensure_ready():
+    if not twin_service.ensure_ready(snapshot.incident_id):
         return None, None, "twin_warming"
     edge_ids = list(snapshot.index.drill.roads.segment_edges.get(segment_id, ()))
     if not edge_ids:

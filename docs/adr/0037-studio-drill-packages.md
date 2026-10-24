@@ -52,6 +52,6 @@ stations and synthetic homes grouped into zones for any box.
 
 - A package is a few MB (roads, fronts, grid); the run export up to 24 MB, read past Django's
   2.5 MB upload limit on this endpoint only.
-- The traffic twin, ground record and incident list are still Camp-only; activation must
-  rebuild the twin from the package's roads and zones.
+- Activation is `POST /api/live/active` ([0047-active-incident](0047-active-incident.md)), which
+  also builds a traffic twin from the package; the ground record stays Camp-only.
 - Packages depend on OSM at build time; once stored they are self-contained.

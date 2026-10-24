@@ -14,7 +14,11 @@
  * - Direct attack is possible only where the head flame at the ignition point is within the
  *   longest flame the crews can hold (Hauling chart) and the fire is not crowning there; a
  *   fire that fails this is never put out by direct attack and gets no line.
- * - Travel time, staging, water and mop-up are not modelled.
+ * - Travel time, staging, water and mop-up are not modelled. Aircraft drops are not part of
+ *   this race; they are in the control-line plan (studio/firefighting.ts, studio/aircraft.ts).
+ * - Rates are the sourced production tables (studio/apparatus.ts) on flat ground: each
+ *   resource's grass rate builds the pool, and a fire's edge costs the pool's grass rate over
+ *   its rate in that fire's fuel per metre.
  *
  * The result feeds `simulateScheduledFireSpread(..., outFromMinuteBySource)`, which stops each
  * fire from spreading after its put-out minute, so playback shows the contained fire.
@@ -23,14 +27,16 @@
 import type { LandscapeGrid } from "../fire/landscape";
 import type { ScheduledFireInput, ScheduledFireRun } from "../fire/scheduledTypes";
 import { simulateScheduledFireSpread } from "../fire/spread";
+import { GROUND_APPARATUS, lineRateMetersPerHour } from "./apparatus";
 import {
-  RESOURCE_TYPES,
   burnedAreas,
   crewArrivals,
   type CrewArrival,
-  productionFactor,
   type FirefightingSettings,
 } from "./firefighting";
+
+/** Grass reference for "grass-equivalent" line: LANDFIRE GR1, Anderson model 1. */
+const GRASS_FUEL_CODE = 101;
 
 export interface FireAttack {
   sourceId: string;
@@ -82,18 +88,24 @@ export function estimateInitialAttack(
       : Math.min(...sources.map((s) => s.startMinute)) + settings.responseMinutes;
   let lineMetersPerMinute = 0;
   let holdsFlameLengthFeet = 0;
+  const grassPerMinute = (kind: CrewArrival["kind"]) =>
+    lineRateMetersPerHour(GROUND_APPARATUS[kind].line!, GRASS_FUEL_CODE) / 60;
   for (const { kind } of arrivals) {
-    lineMetersPerMinute += RESOURCE_TYPES[kind].metersPerHourInGrass / 60;
-    holdsFlameLengthFeet = Math.max(
-      holdsFlameLengthFeet,
-      RESOURCE_TYPES[kind].holdsFlameLengthFeet,
-    );
+    lineMetersPerMinute += grassPerMinute(kind);
+    holdsFlameLengthFeet = Math.max(holdsFlameLengthFeet, GROUND_APPARATUS[kind].holdsFlameLengthFeet);
   }
+  /** Pool rate in this fuel over the pool's grass rate (Infinity on non-burnable ground). */
+  const poolFactor = (fuelCode: number) => {
+    let here = 0;
+    for (const { kind } of arrivals) {
+      here += lineRateMetersPerHour(GROUND_APPARATUS[kind].line!, fuelCode) / 60;
+    }
+    return lineMetersPerMinute > 0 ? here / lineMetersPerMinute : 0;
+  };
   /** Grass-equivalent line built by `minute`, each resource working from its own arrival. */
   const builtBy = (minute: number) =>
     arrivals.reduce(
-      (sum, { kind, minute: start }) =>
-        sum + (RESOURCE_TYPES[kind].metersPerHourInGrass / 60) * Math.max(0, minute - start),
+      (sum, { kind, minute: start }) => sum + grassPerMinute(kind) * Math.max(0, minute - start),
       0,
     );
 
@@ -102,7 +114,7 @@ export function estimateInitialAttack(
       const { conditions, outcome } = ignition;
       const crowning = conditions.crown !== null && conditions.crown.type !== "surface";
       const headFlameFeet = crowning ? Number.POSITIVE_INFINITY : conditions.spread.flameLengthFeet;
-      const factor = productionFactor(conditions.fuelCode);
+      const factor = poolFactor(conditions.fuelCode);
       return {
         sourceId: sources[index].id,
         ignitedMinute: outcome.status === "ignited" ? outcome.ignitedMinute : null,
@@ -115,7 +127,7 @@ export function estimateInitialAttack(
         areaSquareMeters: 0,
         perimeterMeters: 0,
         // Grass-equivalent work per metre of this fire's edge.
-        work: Number.isFinite(factor) ? 1 / factor : 0,
+        work: Number.isFinite(factor) && factor > 0 ? 1 / factor : 0,
         ratio: Math.max(1, conditions.spread.lengthToBreadth),
       };
     },

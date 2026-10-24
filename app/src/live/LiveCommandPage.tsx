@@ -4,7 +4,8 @@ import ActivityLog from "./ActivityLog";
 import { useTriageKeys } from "./useTriageKeys";
 import "./activity.css";
 import { useTaskRoute } from "./useTaskRoute";
-import { LiveError, readToken, runImpact, SERVER_TOKEN, writeToken } from "./api";
+import { fetchActive } from "./active";
+import { DEFAULT_INCIDENT_ID, LiveError, readToken, runImpact, SERVER_TOKEN, writeToken } from "./api";
 import CommandMap, { LAYER_KEYS, type LayerKey, type MapFocus } from "./CommandMap";
 import EvacuationPicture from "./EvacuationPicture";
 import MapLegend from "./MapLegend";
@@ -13,14 +14,17 @@ import { buildQueue, matches, proposalFor, type QueueFilter } from "./queue";
 import ResponseRecord from "./ResponseRecord";
 import GroundRecord from "./GroundRecord";
 import { labelPoint } from "./format";
+import StalePanel from "./StalePanel";
 import ReviewQueue from "./ReviewQueue";
 import SelectedItem, { type ImpactState, type RunAction } from "./SelectedItem";
 import { useCommand } from "./useCommand";
+import { usePoll } from "./usePoll";
 import { useTwin } from "./useTwin";
 import WorkspaceHeader from "./WorkspaceHeader";
 import "./live.css";
 
 const HIGHLIGHT_MS = 2_500;
+const ACTIVE_POLL_MS = 30_000;
 const LAYER_LABEL: Record<LayerKey, string> = {
   zones: "Zones",
   fire: "Fire",
@@ -153,8 +157,13 @@ function useNow(ms: number): number {
 
 export default function LiveCommandPage() {
   const [token, setToken] = useState<string | null>(() => readToken());
-  const command = useCommand(token);
-  const twin = useTwin(token);
+  // The hosted instance's one active incident; re-read every 30 s and right after a switch. If it
+  // cannot be read, the console falls back to the default incident rather than staying blank.
+  const active = usePoll(token, fetchActive, ACTIVE_POLL_MS, "Live API");
+  const incidentId = active.data?.incident_id ?? DEFAULT_INCIDENT_ID;
+  const incidentToken = active.loading ? null : token;
+  const command = useCommand(incidentToken, incidentId);
+  const twin = useTwin(incidentToken, incidentId);
   const [busy, setBusy] = useState<string | null>(null);
   const [focus, setFocus] = useState<MapFocus | null>(null);
   const [filter, setFilter] = useState<QueueFilter>("new");
@@ -170,6 +179,14 @@ export default function LiveCommandPage() {
     roads: true,
     shelters: true,
   });
+  // A different incident: drop the selection and per-incident panels (the polls restart themselves).
+  useEffect(() => {
+    setSelectedId(null);
+    setFocus(null);
+    setImpact(null);
+    setActionError(null);
+    setHighlight(null);
+  }, [incidentId]);
   const now = useNow(1000);
   const busyRef = useRef(false);
   const { refresh } = command;
@@ -180,7 +197,7 @@ export default function LiveCommandPage() {
       busyRef.current = true;
       setBusy(key);
       try {
-        await action(token);
+        await action(token, incidentId);
         return null;
       } catch (error) {
         return error instanceof LiveError ? error.message : "Action failed.";
@@ -190,7 +207,7 @@ export default function LiveCommandPage() {
         refresh();
       }
     },
-    [token, refresh],
+    [token, incidentId, refresh],
   );
 
   const unauthorized = command.error?.unauthorized ?? false;
@@ -230,7 +247,7 @@ export default function LiveCommandPage() {
     const itemId = selected.id;
     setImpact({ itemId, loading: true, result: null, error: null });
     try {
-      const result = await runImpact(token, { segment_id: selected.segmentId });
+      const result = await runImpact(token, incidentId, { segment_id: selected.segmentId });
       setImpact((cur) =>
         cur?.itemId === itemId ? { itemId, loading: false, result, error: null } : cur,
       );
@@ -309,6 +326,9 @@ export default function LiveCommandPage() {
         run={run}
         busy={busy}
         onSignOut={token && token !== SERVER_TOKEN ? signOut : null}
+        token={token}
+        active={active.data}
+        onSwitched={active.refresh}
       />
       {data ? (
         <ReviewQueue
@@ -378,6 +398,12 @@ export default function LiveCommandPage() {
                 onClose={() => select(null)}
               />
             ) : null}
+            <StalePanel
+              items={data.stale_critical}
+              tasks={data.tasks}
+              serverNow={serverNow}
+              onFocus={setFocus}
+            />
             <EvacuationPicture
               data={data}
               twin={twinData}

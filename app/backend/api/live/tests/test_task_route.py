@@ -45,7 +45,7 @@ class TaskRouteTest(SimpleTestCase):
         self.assertEqual(r.status_code, 200, r.content)
         self.rsp = self.call("POST", f"{BASE}/join", {"invite_code": INVITE}).json()
         self.task = self.create_task(self.rsp["party_key"])
-        patcher = mock.patch.object(twin_service, "ensure_ready", lambda: False)
+        patcher = mock.patch.object(twin_service, "ensure_ready", lambda *_: False)
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -126,7 +126,7 @@ class TaskRouteTest(SimpleTestCase):
         self.assertIsNone(free.reason)
         edges = get_index().drill.roads.edges
         jam = {free.route.edge_ids[0]: (20, 0.0, edges[free.route.edge_ids[0]].speed_kph)}
-        with mock.patch.object(twin_service, "ensure_ready", lambda: True), \
+        with mock.patch.object(twin_service, "ensure_ready", lambda *_: True), \
                 mock.patch.object(twin_service, "edge_speeds", lambda snapshot: jam):
             body = self.route(self.task["id"], self.rsp["token"]).json()
         self.assertEqual(body["route"]["congestion"], "twin")

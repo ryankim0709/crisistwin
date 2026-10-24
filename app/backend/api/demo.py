@@ -32,6 +32,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
 
+from livecore.drill import INCIDENT_ID as CAMP_INCIDENT_ID
 from livecore.geo import haversine_m, simplify_line, to_multipolygon
 from livecore.planner import ALTERNATIVE_MIN_SEPARATION_M, ALTERNATIVES_MAX, SAFETY_BY_EXPOSURE
 from livecore.routing import alternative_routes, best_routes
@@ -247,7 +248,7 @@ def demo_routes(request):
     if isinstance(rings, str):
         return _error(400, "invalid_request", rings)
     try:
-        index = get_index()
+        index = get_index(CAMP_INCIDENT_ID)  # the board is the Camp drill map (0047-command-demo.md)
     except ApiError as exc:
         return _error(exc.status, exc.code, exc.detail)
     return Response(

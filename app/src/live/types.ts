@@ -39,6 +39,9 @@ export interface RoadRef {
   snap_m: number | null
 }
 
+export type ReportMethod = 'explicit' | 'passive'
+export type SpeedClass = 'stopped' | 'slow' | 'moving'
+
 export interface FieldReport {
   id: string
   client_id: string
@@ -61,6 +64,9 @@ export interface FieldReport {
   record?: { id: string; channel: string; source_locator: string | null } | null
   /** v2: drill time at received_at; null when no drill ran. */
   replay_at: IsoTime | null
+  /** ADR 0041: `passive` reports come from phone motion, not a person; absent on older servers. */
+  method?: ReportMethod
+  speed_class?: SpeedClass | null
 }
 
 export interface PublicMapItem {
@@ -74,6 +80,8 @@ export interface PublicMapItem {
   responder_reports: number
   controller_confirmed: boolean
   confidence: number
+  /** ADR 0041: distinct phones whose motion supports the item. */
+  passive_parties?: number
   first_reported_at: IsoTime
   last_observed_at: IsoTime
   /** Controller views only (command): the reports behind the item and its destination (shelter_full). */
@@ -88,6 +96,7 @@ export interface RoadStateItem {
   status: RoadStatus
   confidence: number
   independent_parties: number
+  passive_parties?: number
   responder_reports: number
   last_observed_at: IsoTime
   report_ids: string[]
@@ -109,6 +118,52 @@ export interface CheckTask {
   note: string | null
   created_at: IsoTime
   status: TaskStatus
+  /** ADR 0041 task board fields; absent on older servers. */
+  created_by?: 'controller' | 'priority' | string
+  question?: string | null
+  place?: string | null
+  expires_at?: IsoTime | null
+  priority?: number | null
+  answers?: TaskAnswers | null
+}
+
+export interface TaskAnswers {
+  road_passable: number
+  road_blocked: number
+  heavy_traffic: number
+  shelter_full: number
+  passive: number
+  total: number
+  last_at: IsoTime | null
+}
+
+export type PriorityKind = 'segment' | 'destination' | 'gateway'
+/** One row of `command.stale_critical`: an item ranked by impact x change x staleness. */
+export interface PriorityItem {
+  id: string
+  kind: PriorityKind
+  name: string
+  coord: LonLat
+  /** Null unless a segment. */
+  line: LonLat[] | null
+  segment_id: string | null
+  destination_id: string | null
+  zone_id: string | null
+  priority: number
+  impact: number
+  p_change: number
+  staleness: number
+  vehicles: number | null
+  zones: number | null
+  zones_losing_route: number | null
+  load: number | null
+  households: number | null
+  spread_ratio: number | null
+  fire_distance_m: number | null
+  half_life_s: number | null
+  last_observed_at: IsoTime | null
+  reason: string
+  task_id: string | null
 }
 
 export type TriageAction = 'confirm' | 'dismiss' | 'merge' | 'resolve'
@@ -472,6 +527,9 @@ export interface CommandResponse {
   checkins: { by_zone: ZoneCheckInCounts[]; need_help: HelpRequest[] }
   responders: ResponderPosition[]
   tasks: CheckTask[]
+  /** ADR 0041; absent on older servers. */
+  stale_critical?: PriorityItem[]
+  board_computed_at?: IsoTime | null
 }
 
 // ---- Traffic twin monitor (docs/twin-api.md "HTTP adapter"); all values simulated ----

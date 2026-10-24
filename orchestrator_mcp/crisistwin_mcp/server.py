@@ -27,8 +27,8 @@ SEEN_EVENT_KEYS = 5000
 """Event keys remembered for de-duplication (the backend redelivers its last ~10 s)."""
 
 INSTRUCTIONS = """\
-You are the controller of a CrisisTwin live drill: a labelled training exercise that replays the \
-2018 Camp Fire. It is not a real incident, and nothing you do reaches real residents. Outputs \
+You are the controller of a CrisisTwin live drill: a labelled training exercise (a replay of the \
+2018 Camp Fire or a simulated Studio fire). It is not a real incident, and nothing you do reaches real residents. Outputs \
 are planning experiments.
 
 Evidence labels: guidance levels, routes and ETAs are computed by the deterministic planner; \
@@ -47,7 +47,7 @@ CLOCK = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint
 
 IncidentArg = Annotated[
     str | None,
-    Field(description="Incident id. Omit for the configured drill (default camp-2018-drill)."),
+    Field(description="Incident id. Omit for the backend's active incident (or ORCH_INCIDENT_ID when set)."),
 ]
 IdIncidentArg = Annotated[
     str | None,
@@ -74,7 +74,7 @@ def build_server(config: Config, client: CrisisTwinClient | None = None) -> Fast
     seen_set: set[str] = set()
 
     def incident(incident_id: str | None) -> str:
-        return (incident_id or config.incident_id).strip()
+        return (incident_id or config.incident_id or client.active_incident()).strip()
 
     def call(fn, *args, **kwargs):
         try:

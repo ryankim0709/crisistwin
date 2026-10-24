@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, EvidenceTag, LoadingState, Metric, MetricGrid, Notice, SegmentedControl, Tag } from "../ui";
-import { LiveError, readToken, triageReport } from "../live/api";
+import { DEFAULT_INCIDENT_ID, LiveError, readToken, triageReport } from "../live/api";
 import { labelPoint } from "../live/format";
 import type { CommandResponse, LonLat } from "../live/types";
 import { useCommand } from "../live/useCommand";
@@ -62,7 +62,8 @@ function newSeed(): number {
 
 export default function DemoPage() {
   const [token] = useState(() => readToken());
-  const command = useCommand(token);
+  // The board is built on the Camp drill map (0047-command-demo.md), not the active incident.
+  const command = useCommand(token, DEFAULT_INCIDENT_ID);
   const data = command.data;
   const boardRef = useRef<Board | null>(null);
   const [board, setBoard] = useState<Board | null>(null);

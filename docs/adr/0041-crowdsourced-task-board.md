@@ -1,6 +1,6 @@
 # 0041: Crowdsourced task board, passive auto-completion, and information priority
 
-Date: 2026-10-24. Status: proposed. Builds on [0011](0011-live-field-reports.md),
+Date: 2026-10-24. Status: accepted (implemented; see Implementation notes). Builds on [0011](0011-live-field-reports.md),
 [0012](0012-controller-guidance.md) and [0030](0030-scenario-engine.md).
 
 ## Context
@@ -78,3 +78,44 @@ same board, so batch runs exercise it.
   count as weaker evidence than an explicit answer and never confirm a block on their own.
 - New constants (`PASSIVE_RADIUS_M`, `PASSIVE_TTL_S`, `SLOW_RATIO`, `STALL_S`,
   `MAX_PASSIVE_QUESTIONS`, the priority weights) are assumptions to calibrate in drills.
+
+## Implementation notes
+
+Contract and constants: [live-reports.md "Task board, passive observations and information
+priority"](../live-reports.md#task-board-passive-observations-and-information-priority-adr-0041).
+
+- **Priority** (`app/backend/livecore/priority.py`, pure): `impact = 1 - exp(-v / 5000)` over
+  vehicle-equivalents `v`; `p_change` combines the kind's half-life over a 30 min horizon with
+  `exp(-d_fire / 2000 m)`; `staleness = 1 - 0.5 ** (age / half_life)` since the newest non-dismissed
+  report there (passive included), 1 when never observed.
+- **Road impact uses the cheap approximation**, not the impact analysis's two planner runs per
+  segment: segments of each published route come from the planner's remembered edge ids
+  (`live_plan_routes`), and a zone counts double when none of its published alternatives avoids the
+  segment. Running `plan` twice per candidate would cost minutes per refresh.
+- **Destinations** use the twin's simulated arrivals when a cached read is fresh, else the vehicles
+  of the `evacuate_now` zones the published plan sends there; only destinations with a known
+  capacity (Camp: exits, by their entering edges' hourly capacity) are candidates.
+- **Gateways** use only the simulated fire model's fronts within the next 30 drill minutes (never
+  future observed perimeters), with a spread-acceleration factor. They are console suggestions and
+  never board questions; the controller dispatches a responder if it wants one.
+- **Board** (`app/backend/api/live/board.py`): refreshed at most once a minute on a `command` or
+  `board` read; segment and destination places become `created_by: "priority"` verify tasks,
+  deduplicated per place, spaced 1500 m, at most 3 new per refresh and 8 open, 10 min cooldown,
+  expiring after 30 min, never within 1000 m of the fire estimate (re-checked on every board read).
+  `GET board` returns only task id, rank, question, place and expiry: no reports, people, help
+  requests or assignments. Board tasks are not in responders' task lists.
+- **Passive reports**: `method: "passive"` with `segment_id`, `speed_class` and time only; a
+  `location`, heading, note or destination is rejected, and the server places the report at the
+  segment midpoint. Only `road_passable` and `heavy_traffic`. A party seen only through passive
+  reports counts 0.5 toward publicity (`PASSIVE_PARTY_WEIGHT`); passive-only reports never reopen a
+  block, and a responder's passive report is not a responder report.
+- **Phone** (`mobile/CrisisTwin/Features/Live/Board.swift`): selection on the device (own route or
+  within 1500 m, not within 1000 m of the fire estimate, at most 3); passive traversal only with
+  "Share road observations" on (default off), keeping no list of positions; a stall over 120 s asks
+  one explicit question. The situation has no per-segment near-fire flag, so the phone uses the
+  geometric fire exclusion only.
+- **Simulated residents** (`sim/gen_residents.py`) answer board questions on the road they drive
+  (`BOARD_ANSWER_SHARE` 0.3) or send passive observations (`PASSIVE_SETTING_SHARE` 0.2), both
+  ASSUMPTIONs, when given the board.
+- Not done: the AAR "minutes critical places were stale" metric; simulated responders do not yet
+  read the board.

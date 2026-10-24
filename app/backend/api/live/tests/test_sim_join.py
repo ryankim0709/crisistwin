@@ -34,7 +34,7 @@ class SimulatedJoinTest(SimpleTestCase):
         db = get_database()
         for name in [n for n in db.list_collection_names() if n.startswith("live_")]:
             db[name].delete_many({})
-        patcher = mock.patch.object(twin_service, "warm", lambda: "idle")
+        patcher = mock.patch.object(twin_service, "warm", lambda *_: "idle")
         patcher.start()
         self.addCleanup(patcher.stop)
 

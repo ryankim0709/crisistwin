@@ -39,6 +39,17 @@ final class ReportOutbox {
         onChange?()
     }
 
+    /// Drops queued drafts addressed to any incident other than `incidentId`.
+    func discard(notFor incidentId: String) {
+        let kept = drafts.filter { $0.incidentId == incidentId }
+        guard kept.count != drafts.count else { return }
+        let keptIds = Set(kept.map(\.clientId))
+        drafts = kept
+        retry = retry.filter { keptIds.contains($0.key) }
+        persist()
+        onChange?()
+    }
+
     /// Sends queued drafts oldest first, one at a time. Returns how many the server accepted.
     /// Only one flush runs at a time; a call during a flush returns 0. With `force`, backoff and the
     /// automatic retry limit are ignored.
