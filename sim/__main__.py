@@ -147,7 +147,9 @@ def main() -> None:
                                   command=" ".join(["python3 -m sim", *sys.argv[1:]]), controllers_for=controllers_for)
             historical = [e for e in scenario["events"]
                           if e.type in HISTORICAL_ROAD_EVENT_TYPES and e.evidence_class != "simulated"]
-            responder_events = [e for e in result["events"] if e["source"]["id"] == "responder-agent"]
+            # Derived contraflow inbound closures share the source id but are not agent decisions.
+            responder_events = [e for e in result["events"]
+                                if e["source"]["id"] == "responder-agent" and e["evidence_class"] == "simulated"]
             result["responders"] = {
                 "evidence_class": "simulated",
                 "agents": [a.describe() for a in agents],
