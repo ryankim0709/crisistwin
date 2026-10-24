@@ -24,10 +24,11 @@ documented below and in the [scaffold decision](docs/adr/0001-app-scaffold.md).
 
 The full stack development scaffold is in [`app/`](app/): React/TypeScript with
 Vite and Tailwind CSS, a Django REST Framework API, PostgreSQL, Vitest, and Docker.
-The workspace checks the API and database connection. An imagery-based geographic map at
-`/maps` supports zooming, panning, and selecting a location. Scenario creation,
-simulation, and data integrations are not implemented yet; the items above
-describe the intended prototype.
+The workspace checks the API and database connection. The imagery map at `/maps`
+starts over San Francisco and supports an illustrative fire-spread experiment:
+choose an origin, set wind, and inspect the simulated footprint in 15-minute
+steps. Calibrated fire/traffic models, persistent scenarios, and live incident
+integrations are not implemented yet.
 
 This is an experimental planning simulator. Its outputs are not operational evacuation instructions; any future resident guidance should require approval by the responsible authority.
 
@@ -100,33 +101,49 @@ hackathon; checks run locally when needed.
 
 ### Map component
 
-Open **http://localhost:5173/maps** for the map. `app/src/maps/MapCanvas.tsx`
-provides a reusable **MapLibre GL JS** component with USGS aerial imagery,
-smooth zoom/pan, compass controls, and location selection. It defaults to a
-Sierra Nevada view, with no region restrictions or demo overlays. The map needs
-WebGL2 and internet access; no API key or backend is needed.
+Open **http://localhost:5173/maps** for the map and fire-spread demo:
+
+1. Click to choose the fire origin (or focus the map and press Enter).
+2. Set wind speed in **mph** and the compass direction it comes **from**.
+3. Select **Simulate fire**. The map focuses on the origin and shows +15 minutes.
+4. Step, scrub, or play through **0–120 minutes in 15-minute intervals**.
+
+Changing wind or origin clears the previous run. Playback advances through
+precomputed frames; it does not change the model's simulation clock. The model
+is an illustrative uniform-fuel approximation: terrain, water, buildings,
+moisture, and suppression are not modeled. The map's imagery is not a model
+input. See the [fire model and frame contract](docs/adr/0003-illustrative-fire-spread.md).
+
+`app/src/maps/MapCanvas.tsx` is the reusable **MapLibre GL JS** component. It uses
+USGS historical imagery and a bundled SF overview so the first view has geography
+while detailed tiles stream. Cached-image sources, retrieval times, and bounds
+are in `app/public/map-preview/provenance.json`. Outside that preview coverage,
+imagery requires the remote service. WebGL2 is required; no API key is needed.
+MapLibre's worker is explicitly bundled using Vite's `?worker&url` import so
+GeoJSON simulation overlays can render in development and production.
 
 ```tsx
 <MapCanvas
-  center={{ latitude: 37.75, longitude: -119.6 }}
-  zoom={11}
-  onLocationSelect={({ latitude, longitude }) => {
-    // Decimal degrees in WGS84; connect to scenario inputs here.
-  }}
+  center={{ latitude: 37.7749, longitude: -122.4194 }}
+  zoom={11.5}
+  selectedLocation={origin}
+  firePerimeter={frame?.perimeter}
+  onLocationSelect={setOrigin}
 />
 ```
 
-The parent supplies a container height. `center`, `zoom`, and optional `mapStyle`
-(a MapLibre style object or URL) reset the map when changed. Keep object props
-stable when the view should be preserved. `onLocationSelect` receives a WGS84
-coordinate on click, or when Enter selects the map center. Arrow keys pan;
-`+`/`-` zoom. Selection is local UI state and does not run a simulation.
+The parent supplies a container height. `center` and `zoom` move the existing map;
+`selectedLocation` controls the marker (`null` clears it); `firePerimeter` updates
+only the GeoJSON overlay. Optional `mapStyle` accepts a MapLibre style object or
+URL and recreates the map when changed. Keep style objects stable. Selection
+callbacks return WGS84 decimal degrees, with longitude normalized to [-180, 180).
+Arrow keys pan and `+`/`-` zoom when the map canvas is focused.
 
-USGS imagery is historical, not live fire data. Detailed aerial coverage is
-primarily in the US; other regions may have only coarse imagery. The default
-source's highest native zoom is 16; closer views enlarge those tiles. Supply an
-appropriately licensed `mapStyle` for another provider or coverage area. See the
-[map decision](docs/adr/0002-geographic-map.md).
+USGS imagery is historical, not live fire data. Detailed coverage is primarily
+in the US. We cap remote requests at native zoom 16 and overscale at closer
+views. A local SF overview, bounded image concurrency, tile caching, and
+canceling obsolete zoom requests reduce loading stalls. **Retry imagery** retries
+remote tiles on demand. See the [map decision](docs/adr/0002-geographic-map.md).
 
 After pulling changed dependencies into an existing Docker setup, refresh its
 separate npm volume:
