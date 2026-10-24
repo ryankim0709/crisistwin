@@ -4,6 +4,8 @@ import CompareTab from "./CompareTab";
 import { BundleMissingError, REPLAY_VIEW, fetchReplayBundle, type ViewConfig } from "./loadBundle";
 import RespondersTab from "./RespondersTab";
 import StressTab from "./StressTab";
+import Tour from "./Tour";
+import { REPLAY_TOUR, SIMULATION_TOUR, markTourSeen, tourSeen } from "./tourSteps";
 import { useVariants } from "./useVariants";
 import { IMAGERY_DATE_NOTE, LAYER_GROUPS, type Basemap, type LayerGroup } from "./mapLayers";
 import ReplayMap, { type MapFocus } from "./ReplayMap";
@@ -157,6 +159,13 @@ function ReplayScreen({ model: baseline, config }: { model: ReplayModel; config:
   const [visibility, setVisibility] = useState(() => initialVisibility(baseline));
   const [perParticle, setPerParticle] = useState<number | null>(null);
   const [tab, setTab] = useState<PanelTab>("overview");
+  const [statusOpen, setStatusOpen] = useState(false);
+  const [legendOpen, setLegendOpen] = useState(false);
+  const [tourOpen, setTourOpen] = useState(() => !tourSeen(config.kind));
+  const closeTour = useCallback(() => {
+    markTourSeen(config.kind);
+    setTourOpen(false);
+  }, [config.kind]);
   const [basemap, setBasemap] = useState<Basemap>("dark");
   const [pin, setPin] = useState<LngLat | null>(null);
   const [focus, setFocus] = useState<MapFocus | null>(null);
@@ -340,29 +349,45 @@ function ReplayScreen({ model: baseline, config }: { model: ReplayModel; config:
         </p>
 
         <div className="rp-hud">
-          <div className="rp-banners">
-            {sim ? (
-              <p className="rp-banner rp-banner--sim" role="note">
-                <strong>AGENT SIMULATION</strong> — modelled residents and responders; not a historical replay.
-              </p>
-            ) : (
-              <p className="rp-banner" role="note">
-                <strong>Retrospective reconstruction</strong> — simulated traffic, not recorded vehicle movement.
-                Planning experiment only.
-              </p>
-            )}
-            {variants.shown && (
-              <p className="rp-banner rp-banner--variant" role="note">
-                <strong>WHAT-IF: {variants.shown.title}</strong> — simulated counterfactual traffic; fire perimeters
-                and other evidence unchanged.
-              </p>
-            )}
-            {fixture && (
-              <p className="rp-fixture" role="note">
-                <span className="rp-fixture-tag">FIXTURE DATA</span> synthetic, not historical
-                {fixtureLayers.length > 0 && <span className="rp-fixture-layers">: {fixtureLayers.join(", ")}</span>}
-              </p>
-            )}
+          <div className="rp-status">
+            <button
+              type="button"
+              className="rp-statusline"
+              aria-expanded={statusOpen}
+              aria-controls="rp-status-details"
+              onClick={() => setStatusOpen((o) => !o)}
+            >
+              <span className={`rp-status-chip${sim ? " rp-status-chip--sim" : ""}`}>
+                {sim ? "AGENT SIMULATION" : "RETROSPECTIVE · MODELLED TRAFFIC"}
+              </span>
+              {variants.shown && <span className="rp-status-chip rp-status-chip--variant">WHAT-IF: {variants.shown.title}</span>}
+              {fixture && <span className="rp-fixture-tag">FIXTURE DEMAND</span>}
+              <span className="rp-status-more">{statusOpen ? "Hide ▴" : "What does this mean? ▾"}</span>
+            </button>
+            <div id="rp-status-details" className="rp-banners" hidden={!statusOpen}>
+              {sim ? (
+                <p className="rp-banner rp-banner--sim" role="note">
+                  <strong>AGENT SIMULATION</strong> — modelled residents and responders; not a historical replay.
+                </p>
+              ) : (
+                <p className="rp-banner" role="note">
+                  <strong>Retrospective reconstruction</strong> — simulated traffic, not recorded vehicle movement.
+                  Planning experiment only.
+                </p>
+              )}
+              {variants.shown && (
+                <p className="rp-banner rp-banner--variant" role="note">
+                  <strong>WHAT-IF: {variants.shown.title}</strong> — simulated counterfactual traffic; fire perimeters
+                  and other evidence unchanged.
+                </p>
+              )}
+              {fixture && (
+                <p className="rp-fixture" role="note">
+                  <span className="rp-fixture-tag">FIXTURE DATA</span> synthetic, not historical
+                  {fixtureLayers.length > 0 && <span className="rp-fixture-layers">: {fixtureLayers.join(", ")}</span>}
+                </p>
+              )}
+            </div>
           </div>
           <div className="rp-perimeter-badge">
             {perimeter ? (
@@ -391,6 +416,16 @@ function ReplayScreen({ model: baseline, config }: { model: ReplayModel; config:
             )}
           </div>
           <div className="rp-basemap">
+            <button
+              type="button"
+              className="rp-tour-open"
+              onClick={() => {
+                setTab("overview");
+                setTourOpen(true);
+              }}
+            >
+              <span aria-hidden="true">?</span> Tour
+            </button>
             <div className="rp-speed" role="group" aria-label="Basemap">
               {(["dark", "satellite"] as const).map((option) => (
                 <button
@@ -406,7 +441,11 @@ function ReplayScreen({ model: baseline, config }: { model: ReplayModel; config:
             </div>
             {basemap === "satellite" && <span className="rp-imagery-note">{IMAGERY_DATE_NOTE}</span>}
           </div>
-          <MapLegend windFromDeg={model.fireSimulated?.windFromDeg ?? null} />
+          <MapLegend
+            windFromDeg={model.fireSimulated?.windFromDeg ?? null}
+            open={legendOpen || tourOpen}
+            onToggle={() => setLegendOpen((o) => !o)}
+          />
         </div>
 
         <TimelineDock
@@ -472,6 +511,7 @@ function ReplayScreen({ model: baseline, config }: { model: ReplayModel; config:
           />
         </div>
       </aside>
+      {tourOpen && <Tour steps={sim ? SIMULATION_TOUR : REPLAY_TOUR} onSeek={seekAndPause} onClose={closeTour} />}
     </main>
   );
 }

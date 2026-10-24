@@ -1773,3 +1773,248 @@ p.rp-state-msg[role="status"] {
   color: #7cf2c9;
   font-size: 11px;
 }
+
+/* Compact status line (replaces stacked banners) */
+.rp-status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  pointer-events: auto;
+}
+.rp-root .rp-statusline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  background: var(--rp-glass);
+  border: 1px solid var(--rp-line-strong);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  font-size: 11px;
+}
+.rp-status-chip {
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  color: var(--rp-amber);
+  border: 1px solid rgba(255, 181, 71, 0.45);
+}
+.rp-status-chip--sim {
+  color: #7cf2c9;
+  border-color: rgba(124, 242, 201, 0.5);
+}
+.rp-status-chip--variant {
+  color: #e2d0ff;
+  border-color: #c7a6ff;
+  border-style: dashed;
+}
+.rp-status-more {
+  color: var(--rp-dim);
+}
+.rp-banners[hidden] {
+  display: none;
+}
+
+/* Collapsible on-map key */
+.rp-root .rp-key-btn,
+.rp-root .rp-tour-open {
+  padding: 5px 10px;
+  border-radius: 8px;
+  background: var(--rp-glass);
+  border: 1px solid var(--rp-line-strong);
+  font-size: 11.5px;
+  font-weight: 600;
+  pointer-events: auto;
+}
+.rp-root .rp-tour-open span {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  margin-right: 4px;
+  border-radius: 50%;
+  background: var(--rp-amber);
+  color: #1a0b02;
+  font-size: 10.5px;
+}
+.rp-root .rp-key-close {
+  float: right;
+  margin: -2px 0 4px 12px;
+  font-size: 10.5px;
+  color: var(--rp-dim);
+}
+
+/* Timeline marker key: shown on hover or focus only */
+.rp-tick-legend {
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.rp-dock:hover .rp-tick-legend,
+.rp-dock:focus-within .rp-tick-legend {
+  opacity: 1;
+}
+
+/* Calm overview */
+.rp-calm {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.rp-calm-cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.rp-calm-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--rp-line);
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.01));
+}
+.rp-calm-card--risk {
+  grid-column: span 2;
+}
+.rp-calm-card--road {
+  border-left: 3px solid #3df2ff;
+}
+.rp-calm-card--safe {
+  border-left: 3px solid #7cf2c9;
+}
+.rp-calm-card--risk {
+  border-left: 3px solid #b14dff;
+}
+.rp-calm-value {
+  font-family: var(--rp-mono);
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+}
+.rp-calm-split {
+  display: flex;
+  gap: 18px;
+  align-items: baseline;
+  color: #c4cfda;
+}
+.rp-calm-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #c4cfda;
+}
+.rp-calm-note {
+  margin: 0;
+  font-size: 10.5px;
+  color: var(--rp-dim);
+}
+.rp-more {
+  border-top: 1px solid var(--rp-line);
+  padding-top: 10px;
+}
+.rp-more > summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: #c4cfda;
+  margin-bottom: 10px;
+}
+.rp-more[open] > summary {
+  margin-bottom: 14px;
+}
+
+/* Guided tour */
+.rp-tour {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+}
+.rp-tour-dim {
+  position: absolute;
+  inset: 0;
+  background: rgba(2, 4, 8, 0.62);
+}
+.rp-tour-spot {
+  position: absolute;
+  border-radius: 12px;
+  box-shadow:
+    0 0 0 9999px rgba(2, 4, 8, 0.62),
+    0 0 0 2px var(--rp-amber),
+    0 0 24px 4px rgba(255, 181, 71, 0.35);
+  transition:
+    top 0.35s ease,
+    left 0.35s ease,
+    width 0.35s ease,
+    height 0.35s ease;
+  pointer-events: none;
+}
+.rp-tour-card {
+  position: absolute;
+  padding: 18px 18px 14px;
+  border-radius: 14px;
+  background: #0f151c;
+  border: 1px solid var(--rp-line-strong);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
+  color: var(--rp-text);
+  transition:
+    top 0.35s ease,
+    left 0.35s ease;
+}
+.rp-tour-card:focus {
+  outline: none;
+}
+.rp-tour-card h2 {
+  margin: 2px 0 8px;
+  font-size: 18px;
+  font-weight: 650;
+}
+.rp-tour-card p {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: #d3dce5;
+}
+.rp-tour-count {
+  font-size: 10.5px !important;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: var(--rp-amber) !important;
+}
+.rp-tour-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 16px;
+}
+.rp-tour-actions span {
+  display: flex;
+  gap: 8px;
+}
+.rp-root .rp-tour-skip {
+  font-size: 12px;
+  color: var(--rp-dim);
+}
+.rp-root .rp-tour-btn {
+  padding: 7px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--rp-line-strong);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.rp-root .rp-tour-btn--primary {
+  border: 0;
+  color: #1a0b02;
+  background: linear-gradient(140deg, #ffb547, var(--rp-ember));
+}
+@media (prefers-reduced-motion: reduce) {
+  .rp-tour-spot,
+  .rp-tour-card,
+  .rp-tick-legend {
+    transition: none;
+  }
+}

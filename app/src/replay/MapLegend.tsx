@@ -2,9 +2,27 @@ import { COLORS } from "./mapLayers";
 import { compassPoint } from "./timeline";
 
 /** Compact always-on key: icon plus text for each mark, so colour never carries meaning alone. */
-export default function MapLegend({ windFromDeg }: { windFromDeg: number | null }) {
+export default function MapLegend({
+  windFromDeg,
+  open,
+  onToggle,
+}: {
+  windFromDeg: number | null;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  if (!open) {
+    return (
+      <button type="button" className="rp-key-btn" aria-expanded={false} onClick={onToggle}>
+        Key
+      </button>
+    );
+  }
   return (
     <div className="rp-maplegend" aria-label="Map key">
+      <button type="button" className="rp-key-close" aria-expanded={true} onClick={onToggle}>
+        Hide key
+      </button>
       <ul>
         <li>
           <svg viewBox="0 0 28 14" aria-hidden="true">

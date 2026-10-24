@@ -5,7 +5,9 @@ import { EVENT_CATEGORY_LABEL, EvidenceChip, EventGlyph, Sparkline } from "./par
 import {
   clockParts,
   eventCategory,
+  formatAge,
   formatDuration,
+  localTime,
   metricSeries,
   type EventCategory,
   type MetricKey,
@@ -154,6 +156,95 @@ function humanizeMetric(key: string): string {
     .replace(/^residents?_/, "")
     .replace(/_/g, " ");
   return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/** The calm default: three big numbers and the key events around the current time. */
+function CalmSummary({
+  model,
+  frameIndex,
+  eventIndex,
+  simTimeMs,
+  onSeek,
+}: {
+  model: ReplayModel;
+  frameIndex: number;
+  eventIndex: number;
+  simTimeMs: number;
+  onSeek: (ms: number) => void;
+}) {
+  const row = model.traffic && frameIndex >= 0 ? model.traffic.metrics[frameIndex] : null;
+  const fmt = (n: number | undefined) => (n === undefined ? "—" : n.toLocaleString("en-US"));
+  let last: ReplayModel["events"][number] | null = null;
+  for (let i = eventIndex; i >= 0; i -= 1) {
+    if (eventCategory(model.events[i].type) !== "closure") {
+      last = model.events[i];
+      break;
+    }
+  }
+  let next: ReplayModel["events"][number] | null = null;
+  for (let i = eventIndex + 1; i < model.events.length; i += 1) {
+    if (eventCategory(model.events[i].type) !== "closure") {
+      next = model.events[i];
+      break;
+    }
+  }
+  const tz = model.incident.timezone;
+  const keyEvent = (label: string, e: ReplayModel["events"][number]) => {
+    const { text } = splitSnappedNote(e.label);
+    return (
+      <li>
+        <button type="button" className="rp-row-btn" onClick={() => onSeek(e.atMs)}>
+          <span className="rp-row-side">
+            {label} · {localTime(e.atMs, tz)}
+            {e.atMs > simTimeMs ? ` (in ${formatAge(e.atMs - simTimeMs)})` : ""}
+          </span>
+          <span className="rp-row-main">{text}</span>
+          <span>
+            <EvidenceChip value={e.evidenceClass} />
+          </span>
+        </button>
+      </li>
+    );
+  };
+  return (
+    <section className="rp-calm" aria-label="Current situation">
+      {model.traffic ? (
+        <div className="rp-calm-cards">
+          <div className="rp-calm-card rp-calm-card--road">
+            <span className="rp-calm-value">{fmt(row?.enRouteVeh)}</span>
+            <span className="rp-calm-label">On the road</span>
+          </div>
+          <div className="rp-calm-card rp-calm-card--safe">
+            <span className="rp-calm-value">{fmt(row?.arrivedVeh)}</span>
+            <span className="rp-calm-label">Out safely</span>
+          </div>
+          <div className="rp-calm-card rp-calm-card--risk">
+            <span className="rp-calm-split">
+              <span>
+                <span className="rp-calm-value">{fmt(row?.blockedVeh)}</span> stuck
+              </span>
+              <span>
+                <span className="rp-calm-value">{fmt(row?.exposedVeh)}</span> near fire
+              </span>
+            </span>
+            <span className="rp-calm-label">Stuck or near fire</span>
+          </div>
+        </div>
+      ) : (
+        <p className="rp-empty">No traffic simulation in this bundle.</p>
+      )}
+      <p className="rp-calm-note">
+        Vehicles (model, {model.traffic?.totalVeh?.toLocaleString("en-US") ?? "—"} total). Stuck and near-fire counts can
+        overlap.
+      </p>
+      {(last || next) && (
+        <ul className="rp-rows rp-calm-events">
+          {last && keyEvent("Latest", last)}
+          {next && keyEvent("Next", next)}
+        </ul>
+      )}
+    </section>
+  );
 }
 
 interface FeedRow {
@@ -503,6 +594,10 @@ export default function SidePanel({
       <div role="tabpanel" id={`rp-tabpanel-${tab}`} aria-labelledby={`rp-tab-${tab}`} className="rp-tabpanel">
         {tab === "overview" && (
           <>
+        <CalmSummary model={model} frameIndex={frameIndex} eventIndex={eventIndex} simTimeMs={simTimeMs} onSeek={onSeek} />
+
+        <details className="rp-more">
+          <summary>More details: all numbers</summary>
         <section aria-labelledby="rp-metrics-title">
           <h2 id="rp-metrics-title" className="rp-section-title">
             Simulated evacuation state
@@ -510,13 +605,22 @@ export default function SidePanel({
           <Metrics model={model} frameIndex={frameIndex} simTimeMs={simTimeMs} />
         </section>
         {showResidents && <Residents model={model} frameIndex={frameIndex} />}
+        </details>
 
+        <details className="rp-more">
+          <summary>
+            Event feed <span className="rp-count">{Math.max(0, eventIndex + 1)}/{model.events.length}</span>
+          </summary>
         <section aria-labelledby="rp-events-title" className="rp-events">
           <h2 id="rp-events-title" className="rp-section-title">
             Event feed <span className="rp-count">{Math.max(0, eventIndex + 1)}/{model.events.length}</span>
           </h2>
           <EventFeed model={model} eventIndex={eventIndex} onSeek={onSeek} />
         </section>
+        </details>
+
+        <details className="rp-more">
+          <summary>Layers, legend and limitations</summary>
 
         <section aria-labelledby="rp-layers-title">
           <h2 id="rp-layers-title" className="rp-section-title">
@@ -582,6 +686,7 @@ export default function SidePanel({
             )}
           </details>
         )}
+        </details>
           </>
         )}
         {tab === "responder" && <ResponderTab model={model} simTimeMs={simTimeMs} onFocus={onFocus} />}
