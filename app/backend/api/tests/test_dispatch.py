@@ -1,11 +1,29 @@
 from django.test import SimpleTestCase
 
-from api.dispatch import ISSUE_ORDERS_TOOL, ORDER_TYPES, build_index, validate_orders
+from api.dispatch import (
+    ISSUE_ORDERS_TOOL,
+    ORDER_TYPES,
+    SYSTEM_PROMPT,
+    build_index,
+    validate_orders,
+)
 
 OBSERVATION = {
     "zones": [
         {"id": "Z1", "exit_options": [{"exit_id": "E1"}, {"exit_id": "E2"}]},
         {"id": "Z2", "exit_options": [{"exit_id": "E1"}]},
+        {
+            "id": "Z3",
+            "status": "no_order",
+            "impact": "outside",
+            "exit_options": [{"exit_id": "E1"}],
+        },
+        {
+            "id": "Z4",
+            "status": "ordered",
+            "impact": "outside",
+            "exit_options": [{"exit_id": "E1"}, {"exit_id": "E2"}],
+        },
     ],
     "exits": [{"id": "E1"}, {"id": "E2"}],
     "units": [{"id": "U1"}],
@@ -82,3 +100,29 @@ class StageEvacuationValidationTests(SimpleTestCase):
         )
         self.assertEqual(len(orders), 1)
         self.assertIn("Duplicate", rejected[0]["reason"])
+
+
+class FirePathScopeTests(SimpleTestCase):
+    def setUp(self):
+        self.index = build_index(OBSERVATION)
+
+    def test_outside_zone_cannot_be_ordered_or_staged(self):
+        cases = [
+            order(type="order_evacuation", zone_id="Z3", exit_id="E1"),
+            order(type="stage_evacuation", zone_id="Z3", exit_id="E1", after_zone_id="Z1"),
+        ]
+        for case in cases:
+            orders, rejected, _ = validate_orders({"summary": "", "orders": [case]}, self.index)
+            self.assertEqual(orders, [], case)
+            self.assertIn("outside the fire path", rejected[0]["reason"])
+
+    def test_already_ordered_outside_zone_can_be_redirected(self):
+        orders, rejected, _ = validate_orders(
+            {"summary": "", "orders": [order(type="order_evacuation", zone_id="Z4", exit_id="E2")]},
+            self.index,
+        )
+        self.assertEqual(rejected, [])
+        self.assertEqual(len(orders), 1)
+
+    def test_prompt_scopes_evacuation_to_fire_path(self):
+        self.assertIn('impact is "outside"', SYSTEM_PROMPT)

@@ -287,6 +287,7 @@ function ZoneRow({
       ? threatTier(engine.orderSlackMinutes(zone.index))
       : "none";
   const slack = tier === "none" ? null : engine.orderSlackMinutes(zone.index);
+  const outside = zone.status === "no_order" && engine.zoneImpact(zone.index) === "outside";
   const badge =
     zone.status === "cleared" ? (
       <span className="dsp-badge dsp-badge--done" aria-label="Cleared">
@@ -362,7 +363,12 @@ function ZoneRow({
             </span>
           ) : (
             <span className="dsp-zone__route dsp-muted">
-              No evacuation order{tier !== "none" ? ` · ${tierLabel(tier)}` : ""}
+              No evacuation order
+              {outside
+                ? " · outside the fire path"
+                : tier !== "none"
+                  ? ` · ${tierLabel(tier)}`
+                  : ""}
             </span>
           )}
           <ZoneProgress zone={zone} homes={info.homes} />
@@ -402,11 +408,13 @@ function EvacuationBoard({
       (a, b) => (engine.waveOf(a.index) ?? 0) - (engine.waveOf(b.index) ?? 0) || a.index - b.index,
     );
   const slackOf = (zone: ZoneState) => engine.orderSlackMinutes(zone.index) ?? Infinity;
-  const waiting = engine.zones
+  const unordered = engine.zones
     .filter((zone) => zone.orderRank === null && zone.stage === null)
     .sort(
       (a, b) => slackOf(a) - slackOf(b) || contact[a.index] - contact[b.index] || a.index - b.index,
     );
+  const waiting = unordered.filter((zone) => engine.zoneImpact(zone.index) !== "outside");
+  const outside = unordered.filter((zone) => engine.zoneImpact(zone.index) === "outside");
   const select = (index: number) => onSelectZone(selectedZone === index ? null : index);
   return (
     <div className="dsp-board">
@@ -457,6 +465,25 @@ function EvacuationBoard({
           <h3>Not yet ordered · least time to order first</h3>
           <ul className="dsp-zones">
             {waiting.map((zone) => (
+              <ZoneRow
+                key={zone.index}
+                engine={engine}
+                zone={zone}
+                selected={selectedZone === zone.index}
+                onSelect={() => select(zone.index)}
+              />
+            ))}
+          </ul>
+        </>
+      )}
+      {outside.length > 0 && (
+        <>
+          <h3>
+            Outside the fire path{" "}
+            <span className="dsp-muted">· fire not forecast to reach them, no evacuation</span>
+          </h3>
+          <ul className="dsp-zones">
+            {outside.map((zone) => (
               <ZoneRow
                 key={zone.index}
                 engine={engine}
