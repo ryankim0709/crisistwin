@@ -1,15 +1,20 @@
 import type { KeyboardEvent } from "react";
 import { FIRE_STEP_MINUTES } from "../spread";
-import {
-  MODEL_MINUTES_PER_SECOND,
-  PLAYBACK_SPEEDS,
-  type FirePlayback,
-} from "../useFirePlayback";
+import { PLAYBACK_SPEEDS, modelMinutesPerSecond, type FirePlayback } from "../useFirePlayback";
 import { formatDuration } from "./format";
 
 const HOUR_MINUTES = 60;
 const SEEK_STEP_MINUTES = FIRE_STEP_MINUTES;
 const SEEK_BIG_STEP_MINUTES = HOUR_MINUTES;
+/** Per-frame minor ticks crowd the rail beyond this many frames. */
+const MAX_MINOR_TICK_FRAMES = 30;
+
+/** Spacing of labelled hour marks: every 1 h up to 6 h, every 3 h for 12 h, every 6 h beyond. */
+function labelIntervalMinutes(horizonMinutes: number): number {
+  if (horizonMinutes <= 6 * HOUR_MINUTES) return HOUR_MINUTES;
+  if (horizonMinutes <= 12 * HOUR_MINUTES) return 3 * HOUR_MINUTES;
+  return 6 * HOUR_MINUTES;
+}
 
 type FireDockProps = {
   playback: FirePlayback;
@@ -33,10 +38,18 @@ export default function FireDock({
   const { t, playing, speed } = playback;
   const ended = t >= horizonMinutes;
   const progress = horizonMinutes > 0 ? (t / horizonMinutes) * 100 : 0;
-  const frameTicks = Array.from(
-    { length: Math.floor(horizonMinutes / FIRE_STEP_MINUTES) + 1 },
-    (_, index) => index * FIRE_STEP_MINUTES,
+  const labelInterval = labelIntervalMinutes(horizonMinutes);
+  const frameCount = Math.floor(horizonMinutes / FIRE_STEP_MINUTES);
+  const tickStep = frameCount <= MAX_MINOR_TICK_FRAMES ? FIRE_STEP_MINUTES : labelInterval;
+  const ticks = Array.from(
+    { length: Math.floor(horizonMinutes / tickStep) + 1 },
+    (_, index) => index * tickStep,
   );
+  const labelMarks = Array.from(
+    { length: Math.floor(horizonMinutes / labelInterval) + 1 },
+    (_, index) => index * labelInterval,
+  );
+  const minutesPerSecond = modelMinutesPerSecond(horizonMinutes);
 
   const onSliderKey = (event: KeyboardEvent<HTMLInputElement>) => {
     const step = event.shiftKey ? SEEK_BIG_STEP_MINUTES : SEEK_STEP_MINUTES;
@@ -133,10 +146,10 @@ export default function FireDock({
       <div className="fr-scrub">
         <div className="fr-scrub-rail" aria-hidden="true">
           <span className="fr-scrub-fill" style={{ width: `${progress}%` }} />
-          {frameTicks.map((minutes) => (
+          {ticks.map((minutes) => (
             <span
               key={minutes}
-              className={`fr-scrub-tick${minutes % HOUR_MINUTES === 0 ? " is-hour" : ""}`}
+              className={`fr-scrub-tick${minutes % labelInterval === 0 ? " is-hour" : ""}`}
               style={{ left: `${(minutes / horizonMinutes) * 100}%` }}
             />
           ))}
@@ -158,30 +171,29 @@ export default function FireDock({
           aria-valuetext={`${formatDuration(t)} of ${formatDuration(horizonMinutes)}`}
         />
         <ol className="fr-scrub-labels" aria-label="Hours since ignition">
-          {frameTicks
-            .filter((minutes) => minutes % HOUR_MINUTES === 0)
-            .map((minutes) => (
-              <li key={minutes} style={{ left: `${(minutes / horizonMinutes) * 100}%` }}>
-                <button
-                  type="button"
-                  disabled={!hasRun}
-                  onClick={() => {
-                    playback.pause();
-                    playback.seek(minutes);
-                  }}
-                  aria-label={`Jump to ${formatDuration(minutes)}`}
-                >
-                  {minutes === 0 ? "0" : `${minutes / HOUR_MINUTES} h`}
-                </button>
-              </li>
-            ))}
+          {labelMarks.map((minutes) => (
+            <li key={minutes} style={{ left: `${(minutes / horizonMinutes) * 100}%` }}>
+              <button
+                type="button"
+                disabled={!hasRun}
+                onClick={() => {
+                  playback.pause();
+                  playback.seek(minutes);
+                }}
+                aria-label={`Jump to ${formatDuration(minutes)}`}
+              >
+                {minutes === 0 ? "0" : `${minutes / HOUR_MINUTES} h`}
+              </button>
+            </li>
+          ))}
         </ol>
       </div>
 
       <p className="fr-time">
         <span className="fr-time-now">{formatDuration(t)}</span>
         <span className="fr-time-total">
-          of {formatDuration(horizonMinutes)} · frames every {FIRE_STEP_MINUTES} min
+          of {formatDuration(horizonMinutes)}
+          <span className="fr-time-frames"> · frames every {FIRE_STEP_MINUTES} min</span>
         </span>
       </p>
 
@@ -193,7 +205,7 @@ export default function FireDock({
               type="button"
               aria-pressed={speed === value}
               onClick={() => playback.setSpeed(value)}
-              title={`${value * MODEL_MINUTES_PER_SECOND} model minutes per second`}
+              title={`${Math.round(value * minutesPerSecond)} model minutes per second`}
             >
               {value}×
             </button>
@@ -234,7 +246,7 @@ export default function FireDock({
         </button>
       </div>
       <p className="fr-speed-note">
-        1× = {MODEL_MINUTES_PER_SECOND} model minutes per second
+        1× = {Math.round(minutesPerSecond)} model minutes per second
       </p>
     </section>
   );
