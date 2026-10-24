@@ -41,13 +41,8 @@ export const navigationItems: readonly NavigationItem[] = [
     group: "Analysis",
   },
   {
-    path: "/incidents",
-    label: "Incident intelligence",
-    group: "Analysis",
-  },
-  {
     path: "/intel",
-    label: "Intel review",
+    label: "Incident intelligence",
     group: "Analysis",
   },
   {

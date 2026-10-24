@@ -11,7 +11,6 @@ import DispatchAgentPage from "./dispatch/DispatchAgentPage";
 import ScenariosPage from "./pages/ScenariosPage";
 import EvacuationPage from "./pages/EvacuationPage";
 import ComparisonPage from "./pages/ComparisonPage";
-import IncidentsPage from "./pages/IncidentsPage";
 import IntelPage from "./pages/IntelPage";
 import StressTestsPage from "./pages/StressTestsPage";
 import NotFoundPage from "./pages/NotFoundPage";
@@ -24,6 +23,9 @@ import LiveCommandPage from "./live/LiveCommandPage";
 // The workspace has no landing page; the root opens the fire spread model.
 if (window.location.pathname === "/")
   window.history.replaceState(null, "", "/fire" + window.location.search + window.location.hash);
+// /incidents was merged into /intel; keep old links working.
+if (/^\/incidents\/*$/.test(window.location.pathname))
+  window.history.replaceState(null, "", "/intel" + window.location.search + window.location.hash);
 const path = window.location.pathname.replace(/\/+$/, "") || "/";
 const page =
   path === "/fire" ? (
@@ -38,8 +40,6 @@ const page =
     <EvacuationPage />
   ) : path === "/comparison" ? (
     <ComparisonPage />
-  ) : path === "/incidents" ? (
-    <IncidentsPage />
   ) : path === "/intel" ? (
     <IntelPage />
   ) : path === "/stress-tests" ? (

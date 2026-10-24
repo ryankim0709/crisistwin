@@ -11,6 +11,7 @@ import {
   WorkspacePage,
 } from "./WorkspaceUI";
 import { LoadingState } from "../ui";
+import IncidentLibrary from "./IncidentLibrary";
 import {
   IntelRequestError,
   extractDocument,
@@ -404,13 +405,20 @@ export default function IntelPage() {
 
   return (
     <WorkspacePage
-      title="Intel review"
-      description="Publicly reported records from fetched pages, confirmed by a planner before use."
+      title="Incident intelligence"
+      description="Historical incidents and the publicly reported records fetched for them, confirmed by a planner before use."
     >
       <Notice title="Reported, not observed" tone="info">
         Records are extracted by a model from page text and stay unconfirmed until you confirm
         them. Page content is untrusted. Nothing here is fetched until you add it.
       </Notice>
+      <IncidentLibrary
+        selectedId={incidentId}
+        onSelect={(picked) => {
+          setIncident(picked.id);
+          setZone(picked.timezone);
+        }}
+      />
       <Panel title="Incident" eyebrow="Scope">
         <div className="ui-fields">
           <Field label="Incident id">
