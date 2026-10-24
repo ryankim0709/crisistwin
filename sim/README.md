@@ -23,6 +23,18 @@ All outputs are planning experiments, not operational fire or evacuation guidanc
 
 ## Commands
 
+Package `raw/` and `normalized/` files are not in Git; they live in MongoDB Atlas. Before the
+first run on a fresh clone, restore them (see
+[Incident data in MongoDB Atlas](../README.md#incident-data-in-mongodb-atlas)):
+
+```sh
+pip install -r tools/requirements.txt   # pymongo, needed only for this step
+export MONGODB_URI='mongodb+srv://...'  # from a teammate; never commit it
+python3 -m tools.mongo_data pull
+```
+
+`sim/` itself still reads the local files with the standard library only.
+
 Run these from the repository root:
 
 ```sh
@@ -83,3 +95,23 @@ demonstration of the mechanics until the zones, population, and order events lay
 replace them.
 
 On the real network, the run takes about 8 s and writes a 15 MB bundle (1.6 MB gzipped).
+
+## Data source: local files or MongoDB Atlas
+
+Package artifacts (`raw/`, `normalized/`) live in MongoDB Atlas GridFS per
+[ADR 0006](../docs/adr/0006-incident-artifacts-in-mongodb.md); manifests stay in Git.
+`sim` reads them directly. Every loader calls `sim.store.ensure_package`, which
+downloads only the artifacts that are missing or whose SHA-256 differs from the
+manifest, hash-checks them, and writes them into the package directory as a cache.
+The package's own verifier then checks everything as before.
+
+```sh
+pip install -r tools/requirements.txt         # pymongo; only needed when a download is required
+export MONGODB_URI='mongodb+srv://...'        # secret: shell only, never commit or log it
+python3 -m sim --data-source auto --package ... bundle --roads-package ... --output ...
+```
+
+`--data-source` (or `CRISISTWIN_DATA_SOURCE` for `sim.variants`, `sim.optimize`,
+`sim.stress_agent`) is `auto` by default: use valid local files, otherwise fetch from
+MongoDB. `local` never connects, and `mongo` always reconciles with the manifest.
+Bundles record what was fetched in `generated_by.data_sources`.

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import timedelta
 from pathlib import Path
@@ -26,6 +27,7 @@ from sim.hindcast import calibrate, default_candidates, run_hindcast
 from sim.history import load_history, parse_utc
 from sim.replay import observed_frame, timeline
 from sim.scenario import camp_bundle_inputs
+from sim.store import DATA_SOURCE_ENV, DATA_SOURCES, ensure_package
 from sim.behavior import BehaviorParams
 from sim.responders import ASSUMPTIONS as RESPONDER_ASSUMPTIONS
 from sim.responders import compare_with_history, default_responders, fire_arrival_lookup
@@ -68,6 +70,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="python3 -m sim", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--package", type=Path, required=True, help="verified incident package directory")
+    parser.add_argument("--data-source", choices=DATA_SOURCES, default="auto",
+                        help="where package artifacts come from: local files, MongoDB Atlas GridFS, or auto "
+                             "(local when valid, otherwise fetched from MongoDB; needs MONGODB_URI)")
     sub = parser.add_subparsers(dest="command", required=True)
 
     frame = sub.add_parser("frame", help="observed GeoJSON frame at one time")
@@ -114,7 +119,11 @@ def main() -> None:
     sim_.add_argument("--output", type=Path, required=True, help="e.g. app/public/simulations/camp-2018.agents.json")
 
     args = parser.parse_args()
+    os.environ[DATA_SOURCE_ENV] = args.data_source  # loaders called below use the same mode
     try:
+        data_sources = [ensure_package(args.package, source=args.data_source)]
+        if getattr(args, "roads_package", None):
+            data_sources.append(ensure_package(args.roads_package, source=args.data_source))
         history = load_history(args.package)
         if args.command == "frame":
             result = observed_frame(history, parse_utc(args.at))
@@ -180,6 +189,8 @@ def main() -> None:
             result = calibrate(history, default_candidates(), start_index=args.start_index,
                                train_hours=args.train_hours, test_hours=args.test_hours, cell_m=args.cell_m)
             summary = f"best {json.dumps(result['best_params'])}"
+        if "generated_by" in result:
+            result["generated_by"]["data_sources"] = data_sources
         _write(args.output, result)
     except (OSError, SourceError, ValueError, json.JSONDecodeError) as exc:
         parser.exit(1, f"error: {exc}\n")

@@ -11,6 +11,7 @@ from tools.add_camp_road_events import verify as verify_with_road_events
 from tools.build_camp_evacuation import verify as verify_roads
 
 from sim.history import parse_utc
+from sim.store import ensure_package
 from sim.traffic import Destination, RoadEdge, RoadNetwork, TrafficEvent, default_edge_attributes
 
 
@@ -27,6 +28,7 @@ def load_road_network(package: Path) -> tuple[RoadNetwork, tuple[Destination, ..
     returned provenance counts how many edges used each default so the bundle can
     label them as assumptions.
     """
+    ensure_package(package)  # fetch missing artifacts from MongoDB (ADR 0006) when needed
     manifest = json.loads((package / "manifest.json").read_text())
     # Hashes and offline re-normalization; each package extension has its own verifier.
     if "layers_normalizer_version" in manifest:

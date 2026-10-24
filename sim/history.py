@@ -9,6 +9,8 @@ from pathlib import Path
 
 from tools.build_camp_history import SourceError, verify_package
 
+from sim.store import ensure_package
+
 
 def parse_utc(value: str) -> datetime:
     """Parse an ISO 8601 timestamp that carries Z or an offset; return aware UTC."""
@@ -69,6 +71,7 @@ class IncidentHistory:
 
 def load_history(package: Path) -> IncidentHistory:
     """Verify the package hashes and normalization, then load its layers."""
+    ensure_package(package)  # fetch missing artifacts from MongoDB (ADR 0006) when needed
     manifest = verify_package(package)
     perimeter_features = json.loads((package / "normalized/fire_perimeters.geojson").read_text())["features"]
     perimeters = sorted(
