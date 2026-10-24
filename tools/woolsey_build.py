@@ -3,7 +3,10 @@
 Layers: pre-fire OSM roads (attic snapshot, ten Overpass tiles), curated event
 timeline (Citygate AAR, unified-command bulletins, CPUC), shelters, published
 calibration facts, ACS 2013-2017 block-group population, FEDS perimeters and
-FIRMS detections. Stdlib Python plus curl only.
+FIRMS detections. Version 2 (normalizer woolsey-2) adds evacuation zones, zone-targeted
+orders, the zone x block-group crosswalk, fire_perimeters.geojson in the shared schema and
+DINS damage points (tools/woolsey_layers.py). Packages built by woolsey-1 still verify.
+Stdlib Python plus curl only.
 
 Typical use (inputs directory lives outside the repository):
 
@@ -11,6 +14,8 @@ Typical use (inputs directory lives outside the repository):
     python3.12 -m tools.woolsey_build fetch-feds --inputs DIR
     python3.12 -m tools.woolsey_build extract-firms --inputs DIR --modis CSV --viirs CSV
     python3.12 -m tools.woolsey_build extract-acs --inputs DIR --acs-dir DIR --tiger ZIP
+    python3.12 -m tools.woolsey_build fetch-dins --inputs DIR
+    python3.12 -m tools.woolsey_build extract-zones --inputs DIR --webmap-dir DIR --place-zip ZIP
     python3.12 -m tools.woolsey_build build --inputs DIR
     python3.12 -m tools.woolsey_build --verify-package data/incidents/woolsey-2018-evacuation/<version>
 """
@@ -34,6 +39,7 @@ import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from tools import woolsey_layers
 from tools.build_camp_evacuation import (
     SourceError,
     artifact,
@@ -49,7 +55,8 @@ from tools.build_camp_evacuation import (
 
 
 INCIDENT_ID = "woolsey-2018-evacuation"
-NORMALIZER_VERSION = "woolsey-1"
+NORMALIZER_VERSION = "woolsey-2"
+LEGACY_NORMALIZER_VERSION = "woolsey-1"  # 4d4ccdead01abb0d: no zones/DINS layers
 SNAPSHOT_AT = "2018-11-08T00:00:00Z"
 # west, south, east, north. Contains the final FEDS F17192 perimeter extent
 # [-118.987, 34.013, -118.646, 34.281] with margin for the evacuated communities
@@ -102,7 +109,12 @@ CURATED = {
     "curated/lacofd-bulletins.json": TOOLS_DIR / "woolsey_lacofd_bulletins.json",
     "curated/shelters.json": TOOLS_DIR / "woolsey_shelters_table.json",
     "curated/facts.json": TOOLS_DIR / "woolsey_facts_table.json",
+    "curated/zones.json": TOOLS_DIR / "woolsey_zones_table.json",
 }
+V1_CURATED = tuple(path for path in CURATED if path != "curated/zones.json")
+V2_RAW = ("raw/vcoes-webmap-subsets.json", "raw/tiger2018-place-subset.geojson",
+          *(f"raw/calfire-dins-woolsey-offset{o}.json" for o in woolsey_layers.DINS_OFFSETS))
+PLACE_GEOIDS = ("0633518", "0645246", "0684438")  # Hidden Hills, Malibu, Westlake Village
 PST = timezone(timedelta(hours=-8))
 LAYER_NAMES = (
     "roads", "events", "evacuation_zones", "population_units", "traffic_observations",
@@ -751,18 +763,22 @@ def input_files(inputs: Path) -> dict[str, bytes]:
 
 
 def package_files(inputs: dict[str, bytes]) -> dict[str, bytes]:
+    """Normalize a package from its raw/ and curated/ inputs. Inputs with curated/zones.json build
+    version 2 (woolsey-2); inputs without it rebuild the legacy woolsey-1 package byte for byte."""
+    v2 = "curated/zones.json" in inputs
     tile_paths = [f"raw/osm-roads-tile{i}.json.gz" for i in range(1, len(TILES) + 1)]
     required = tile_paths + ["raw/osm-shelter-features.json", "raw/feds-F17192.json", "raw/acquisition.json",
                              "raw/dins-woolsey-damage-stats.json",
                              "raw/acs2017-5yr-bg-subset.json", "raw/tiger2017-bg-subset.geojson",
-                             *[path for _, path in FIRMS_FILES.values()], *CURATED]
+                             *[path for _, path in FIRMS_FILES.values()], *V1_CURATED,
+                             *(("curated/zones.json", *V2_RAW) if v2 else ())]
     missing = [path for path in required if path not in inputs]
     if missing:
         raise SourceError(f"missing package inputs: {missing}")
     extra = set(inputs) - set(required)
     if extra:
         raise SourceError(f"unexpected package inputs: {sorted(extra)}")
-    citygate, bulletins, shelters_table, facts = (load_json(inputs[p], p) for p in CURATED)
+    citygate, bulletins, shelters_table, facts = (load_json(inputs[p], p) for p in V1_CURATED)
     acquisition = load_json(inputs["raw/acquisition.json"], "acquisition log")
     tiles = []
     for path in tile_paths:
@@ -774,6 +790,15 @@ def package_files(inputs: dict[str, bytes]) -> dict[str, bytes]:
     nodes, edges, exits, road_quality = normalize_roads(tiles)
     shelters = normalize_shelters(shelters_table, inputs["raw/osm-shelter-features.json"])
     events = normalize_events(citygate, bulletins, facts, shelters)
+    if v2:
+        zones_table = load_json(inputs["curated/zones.json"], "curated/zones.json")
+        zones, zone_quality = woolsey_layers.normalize_zones(
+            zones_table, inputs["raw/vcoes-webmap-subsets.json"], inputs["raw/tiger2018-place-subset.geojson"], citygate)
+        events = woolsey_layers.apply_zone_ids(
+            events + woolsey_layers.zone_order_events(zones_table, citygate), zones_table, {f["id"] for f in zones["features"]})
+        if len({e["event_id"] for e in events}) != len(events):
+            raise SourceError("duplicate event IDs after adding zone orders")
+        events.sort(key=lambda e: (e["occurred_at"], e["event_id"]))
     perimeters = normalize_feds(inputs["raw/feds-F17192.json"])
     detections = []
     for product, (_, path) in sorted(FIRMS_FILES.items()):
@@ -801,6 +826,21 @@ def package_files(inputs: dict[str, bytes]) -> dict[str, bytes]:
     }
     for path, (value, _) in normalized.items():
         files[path] = encoded_json(value)
+    if v2:
+        crosswalk = woolsey_layers.zone_crosswalk(population, zones)
+        shared_perimeters, perimeter_quality = woolsey_layers.normalize_perimeters(inputs["raw/feds-F17192.json"])
+        dins_total = sum(f["attributes"]["n"] for f in load_json(inputs["raw/dins-woolsey-damage-stats.json"], "DINS stats")["features"])
+        damage, damage_quality = woolsey_layers.normalize_dins(
+            [inputs[f"raw/calfire-dins-woolsey-offset{o}.json"] for o in woolsey_layers.DINS_OFFSETS], dins_total)
+        added = {
+            "normalized/evacuation_zones.geojson": (zones, len(zones["features"])),
+            "normalized/zone_population_crosswalk.json": (crosswalk, len(crosswalk["rows"])),
+            "normalized/fire_perimeters.geojson": (shared_perimeters, len(shared_perimeters["features"])),
+            "normalized/damage_assessments.geojson": (damage, len(damage["features"])),
+        }
+        for path, (value, _) in added.items():
+            files[path] = encoded_json(value)
+        normalized |= added
     files["normalized/events.jsonl"] = b"".join(encoded_json(e) for e in events)
     counts = {path: count for path, (_, count) in normalized.items()} | {"normalized/events.jsonl": len(events)}
     type_counts = collections.Counter(e["type"] for e in events)
@@ -824,16 +864,28 @@ def package_files(inputs: dict[str, bytes]) -> dict[str, bytes]:
                             "time_coverage_utc": [detections[0]["properties"]["acquired_at"],
                                                   detections[-1]["properties"]["acquired_at"]]},
     }
+    if v2:
+        quality["events"]["zone_targeting"] = woolsey_layers.notice_zone_check(events, zones)
+        quality |= {"evacuation_zones": zone_quality, "fire_perimeters_shared_schema": perimeter_quality,
+                    "damage_assessments": damage_quality,
+                    "zone_population_crosswalk": {"rows": len(crosswalk["rows"]),
+                                                  "zones": len({r["zone_id"] for r in crosswalk["rows"]}),
+                                                  "block_groups_without_lattice_points": crosswalk["small_block_groups_without_lattice_points"]}}
     files["quality.json"] = encoded_json(quality)
-    files["sources.json"] = encoded_json({"acquisition_log": acquisition, "curated_table_sources": {
-        "citygate-aar-2019": facts["sources"]["citygate-aar-2019"],
-        **facts["sources"], "shelters": shelters_table["sources"],
-        "lacofd-bulletins": bulletins["bulletins"]}})
+    source_tables = {"citygate-aar-2019": facts["sources"]["citygate-aar-2019"],
+                     **facts["sources"], "shelters": shelters_table["sources"],
+                     "lacofd-bulletins": bulletins["bulletins"]}
+    if v2:
+        source_tables |= {"zones": zones_table["sources"], **V2_SOURCES}
+    files["sources.json"] = encoded_json({"acquisition_log": acquisition, "curated_table_sources": source_tables})
+    normalizer = NORMALIZER_VERSION if v2 else LEGACY_NORMALIZER_VERSION
     version = sha256(b"".join(path.encode() + b"\0" + sha256(data).encode() + b"\n"
-                              for path, data in sorted(inputs.items())) + NORMALIZER_VERSION.encode())[:16]
+                              for path, data in sorted(inputs.items())) + normalizer.encode())[:16]
     layers = layer_status(events, shelters, population, perimeters, detections, calibration, nodes, edges)
+    if v2:
+        layers = layer_status_v2(layers, quality, counts)
     manifest = {
-        "schema_version": "0.1.0", "normalizer_version": NORMALIZER_VERSION, "incident_id": INCIDENT_ID,
+        "schema_version": "0.1.0", "normalizer_version": normalizer, "incident_id": INCIDENT_ID,
         "incident_numbers": [n["value"] for n in incident["incident_numbers"]],
         "package_version": version, "requested_bbox": list(BBOX), "actual_road_bbox": road_quality["actual_bbox"],
         "coordinate_reference_system": "OGC:CRS84", "coordinate_order": "longitude, latitude",
@@ -844,6 +896,10 @@ def package_files(inputs: dict[str, bytes]) -> dict[str, bytes]:
         "layers": layers,
         "artifacts": [artifact(path, data, counts.get(path)) for path, data in sorted(files.items())],
     }
+    if v2:
+        manifest["time_zone"] = "America/Los_Angeles"
+        manifest["time_zone_note"] = "PST (UTC-08:00) throughout the incident; all converted timestamps are UTC with Z"
+        manifest = dict(sorted(manifest.items()))
     files["manifest.json"] = encoded_json(manifest)
     return files
 
@@ -879,6 +935,60 @@ def layer_status(events, shelters, population, perimeters, detections, calibrati
     return layers
 
 
+V2_SOURCES = {
+    "calfire-dins-points": {
+        "provider": "CAL FIRE Damage Inspection (DINS) POSTFIRE_MASTER_DATA_SHARE", "url": woolsey_layers.DINS_URL,
+        "query": {"where": woolsey_layers.DINS_WHERE, "outFields": ",".join(woolsey_layers.DINS_FIELDS), "outSR": "4326",
+                  "orderByFields": "OBJECTID", "resultRecordCount": woolsey_layers.DINS_PAGE_SIZE,
+                  "resultOffset": list(woolsey_layers.DINS_OFFSETS)},
+        "license": "CAL FIRE public data; no license stated",
+        "privacy": "address, APN, owner-value and structure-detail fields not requested"},
+    "census-tiger-2018-place": {"provider": "US Census Bureau TIGER/Line 2018 places (California)",
+                                "url": woolsey_layers.PLACE_URL, "geoids": list(PLACE_GEOIDS),
+                                "license": "public domain (US federal)"},
+    "traffic-mirror-search-2026-10-24": {
+        "outcome": "no public mirror of Caltrans PeMS District 7 detector data for 2018-11-08..10 found; traffic stays access_blocked",
+        "searched": ["Zenodo API (woolsey traffic / PeMS / evacuation; PeMS District 7 2018; creators Rohaert: Kincade, Glass, Silverado datasets only)",
+                     "figshare API (Woolsey traffic): no results", "Dryad API (Woolsey fire): no results",
+                     "Zenodo 10.5281/zenodo.3939793 (PeMS speeds, first 12 weeks of 2018 only): out of window",
+                     "web search: Menon, Staes & Bertini (2020) 'Measuring Transportation Network Performance During Emergency Evacuations: A Case Study of Hurricane Irma and Woolsey Fire', CTEDD/USDOT, https://rosap.ntl.bts.gov/view/dot/54690 - analyses PeMS District 7 detectors on US-101 (Table 3, figures) but publishes no detector data release or DOI dataset"]},
+}
+
+
+def layer_status_v2(layers: dict, quality: dict, counts: dict) -> dict:
+    zq, targeting = quality["evacuation_zones"], quality["events"]["zone_targeting"]
+    layers = dict(layers)
+    layers["evacuation_zones"] = {
+        "status": "partial", "count": counts["normalized/evacuation_zones.geojson"], "path": "normalized/evacuation_zones.geojson",
+        "with_geometry": zq["with_geometry"], "without_geometry": zq["without_geometry"], "by_kind": zq["by_kind"],
+        "zone_system_version": "ad hoc 2018 incident areas: Ventura County OES web map layers (observed, Wayback), "
+                               "TIGER 2018 cities named whole (reconstructed), described areas without geometry",
+        "gaps": "no LA County order polygons found; most LA County order areas are road-described and have geometry null"}
+    layers["events"] = {
+        "status": "partial", "count": counts["normalized/events.jsonl"],
+        "coverage": "Citygate AAR timeline, two unified-command bulletins, CPUC lockout, Ventura County vcemergency.com "
+                    "order lists and web map (Wayback captures), orders derived from Citygate alert texts",
+        "zone_targeting": targeting,
+        "missing": "issue times of most Ventura County orders (only latest bounds from page captures), VC Alert/Nixle log, "
+                   "CHP/Caltrans closure onset and reopening log, OSM edge matches"}
+    layers["population_units"] = {
+        **layers["population_units"], "acs_vintage": "ACS 2013-2017 5-year",
+        "zone_population_crosswalk": "present: normalized/zone_population_crosswalk.json (derived lattice area shares)"}
+    layers["fire_perimeters"] = {
+        "status": "present", "count": counts["normalized/fire_perimeters.geojson"], "path": "normalized/fire_perimeters.geojson",
+        "source": "NASA VEDA FEDS F17192", "bbox": quality["fire_perimeters_shared_schema"]["bbox"],
+        "max_gap_hours": quality["fire_perimeters_shared_schema"]["max_gap_hours"],
+        "legacy_path": "normalized/fire_perimeters_feds.geojson (same features, woolsey-1 schema)"}
+    layers["damage_assessments"] = {"status": "present", "count": counts["normalized/damage_assessments.geojson"],
+                                    "path": "normalized/damage_assessments.geojson", "temporal_role": "post_event"}
+    layers["traffic_observations"] = {
+        "status": "access_blocked",
+        "reason": "Caltrans PeMS District 7 requires an account (no credentials). A 2026-10-24 search of Zenodo, figshare, "
+                  "Dryad and the web found no public mirror for 2018-11-08..10 (see sources.json "
+                  "traffic-mirror-search-2026-10-24); Citygate Finding 47 is qualitative only."}
+    return dict(sorted(layers.items()))
+
+
 def write_package(files: dict[str, bytes], output_root: Path) -> Path:
     version = load_json(files["manifest.json"], "manifest")["package_version"]
     target = output_root / INCIDENT_ID / version
@@ -897,7 +1007,8 @@ def write_package(files: dict[str, bytes], output_root: Path) -> Path:
 
 def verify(package: Path) -> dict:
     manifest = load_json((package / "manifest.json").read_bytes(), "manifest")
-    if manifest.get("incident_id") != INCIDENT_ID or manifest.get("normalizer_version") != NORMALIZER_VERSION:
+    if manifest.get("incident_id") != INCIDENT_ID or manifest.get("normalizer_version") not in (
+            NORMALIZER_VERSION, LEGACY_NORMALIZER_VERSION):
         raise SourceError("package identity or normalizer version mismatch")
     listed = {item["path"] for item in manifest["artifacts"]}
     for item in manifest["artifacts"]:
@@ -918,7 +1029,14 @@ def verify(package: Path) -> dict:
     if package.name != manifest["package_version"]:
         raise SourceError("package directory and version differ")
     quality = load_json((package / "quality.json").read_bytes(), "quality")
-    return {"package_version": manifest["package_version"],
+    extra = {}
+    if "evacuation_zones" in quality:
+        extra = {"evacuation_zones": {k: quality["evacuation_zones"][k] for k in ("zone_count", "with_geometry", "without_geometry")},
+                 "zone_targeting": quality["events"]["zone_targeting"],
+                 "crosswalk_rows": quality["zone_population_crosswalk"]["rows"],
+                 "damage_assessments": quality["damage_assessments"]["record_count"],
+                 "fire_perimeters_shared_schema": quality["fire_perimeters_shared_schema"]["perimeter_count"]}
+    return {"package_version": manifest["package_version"], "normalizer_version": manifest["normalizer_version"], **extra,
             "layers": {k: v["status"] for k, v in manifest["layers"].items()},
             "roads": {k: quality["roads"][k] for k in ("node_count", "directed_edge_count",
                                                       "largest_strongly_connected_component_nodes", "exit_node_count")},
@@ -941,13 +1059,16 @@ def log_acquisition(inputs: Path, key: str, entry: dict) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", nargs="?", choices=["fetch-osm", "fetch-shelters", "fetch-feds",
-                                                       "extract-firms", "extract-acs", "build"])
+                                                       "extract-firms", "extract-acs", "fetch-dins",
+                                                       "extract-zones", "build"])
     parser.add_argument("--inputs", type=Path)
     parser.add_argument("--output-root", type=Path, default=Path("data/incidents"))
     parser.add_argument("--modis", type=Path)
     parser.add_argument("--viirs", type=Path)
     parser.add_argument("--acs-dir", type=Path)
     parser.add_argument("--tiger", type=Path)
+    parser.add_argument("--webmap-dir", type=Path, help="directory of Wayback web-map captures webmap_<timestamp>.json")
+    parser.add_argument("--place-zip", type=Path, help="tl_2018_06_place.zip")
     parser.add_argument("--overpass-url", default=OVERPASS_URL, choices=OVERPASS_MIRRORS)
     parser.add_argument("--verify-package", type=Path)
     args = parser.parse_args()
@@ -1008,6 +1129,36 @@ def main() -> None:
                         "sha256": sha256(tiger_bytes)}, **info, "subset_sha256": sha256(tiger), "evidence_class": "derived",
                         "extraction": "stdlib .shp/.dbf reader; LA and Ventura block groups whose bbox intersects the package bbox",
                         "license": "US Census Bureau TIGER/Line, public domain"})
+    elif args.command == "fetch-dins":
+        for offset in woolsey_layers.DINS_OFFSETS:
+            params = {"where": woolsey_layers.DINS_WHERE, "outFields": ",".join(woolsey_layers.DINS_FIELDS),
+                      "outSR": "4326", "orderByFields": "OBJECTID", "resultOffset": str(offset),
+                      "resultRecordCount": str(woolsey_layers.DINS_PAGE_SIZE), "f": "json"}
+            data = curl(["--get", *sum((["--data-urlencode", f"{k}={v}"] for k, v in params.items()), []),
+                         f"{woolsey_layers.DINS_URL}/query"], 300)
+            name = f"calfire-dins-woolsey-offset{offset}.json"
+            (raw_dir / name).write_bytes(data)
+            log_acquisition(args.inputs, name, {"url": f"{woolsey_layers.DINS_URL}/query", "params": params,
+                            "acquired_at": now_text(), "bytes": len(data), "sha256": sha256(data),
+                            "license": "CAL FIRE public data; no license stated",
+                            "privacy": "only OBJECTID, GLOBALID, DAMAGE, incident and STRUCTURECATEGORY fields requested; no address/APN"})
+    elif args.command == "extract-zones":
+        captures = {path.stem.split("_", 1)[1]: path.read_bytes() for path in sorted(args.webmap_dir.glob("webmap_*.json"))}
+        subset = woolsey_layers.extract_webmaps(captures)
+        (raw_dir / "vcoes-webmap-subsets.json").write_bytes(subset)
+        log_acquisition(args.inputs, "vcoes-webmap-subsets.json", {
+            "full_files": {ts: {"url": woolsey_layers.wayback(ts, woolsey_layers.WEBMAP_URL), "bytes": len(data),
+                                "sha256": sha256(data)} for ts, data in sorted(captures.items())},
+            "subset_sha256": sha256(subset), "evidence_class": "derived",
+            "extraction": "woolsey_layers.extract_webmaps: evacuation layers only, staff-name attributes dropped",
+            "license": "public government web map; no license stated"})
+        place_zip = args.place_zip.read_bytes()
+        places = woolsey_layers.extract_places(place_zip, list(PLACE_GEOIDS))
+        (raw_dir / "tiger2018-place-subset.geojson").write_bytes(places)
+        log_acquisition(args.inputs, "tiger2018-place-subset.geojson", {
+            "full_file": {"url": woolsey_layers.PLACE_URL, "bytes": len(place_zip), "sha256": sha256(place_zip)},
+            "geoids": list(PLACE_GEOIDS), "subset_sha256": sha256(places), "evidence_class": "derived",
+            "license": "US Census Bureau TIGER/Line, public domain"})
     elif args.command == "build":
         print(write_package(package_files(input_files(args.inputs)), args.output_root))
 

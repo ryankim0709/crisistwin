@@ -48,8 +48,8 @@
   },
   {
    "path": "replays/index.json",
-   "bytes": 2084,
-   "sha256": "04347df207fae9f5b919c8ac9c9658f825582cbee62d3616e79df56881fd7261"
+   "bytes": 2790,
+   "sha256": "0cd7c459359e431a16874166fb81710e3ce77166e32fb4629df821d22313ef21"
   },
   {
    "path": "replays/kincade-2019.json",
@@ -63,13 +63,18 @@
   },
   {
    "path": "replays/marshall-2021.json",
-   "bytes": 13692954,
-   "sha256": "3fe57e20d869809e232f4c2f37d9d6c8a8cc33e3e46b264e80675f44cfde1883"
+   "bytes": 13850111,
+   "sha256": "08b7bcace58d795ff2c6c2ef2a3eb69edd6e377a6549e39c80bd906bcff21c54"
   },
   {
    "path": "replays/marshall-2021.mobility.json",
    "bytes": 1129898,
    "sha256": "840509411ae3d6248737fba3dc0a17f087ac0af5ce813f8ee69b3e3c33e0574d"
+  },
+  {
+   "path": "replays/woolsey-2018.json",
+   "bytes": 37293785,
+   "sha256": "2beb4896ad7726e4aa4c2698c068dc254cabbb8e38c212dd211207018a54cf76"
   },
   {
    "path": "replays/woolsey-2018.mobility.json",
