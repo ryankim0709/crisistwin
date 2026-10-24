@@ -1,4 +1,5 @@
 import os
+import re
 from pathlib import Path
 
 from django.core.exceptions import ImproperlyConfigured
@@ -27,34 +28,30 @@ ALLOWED_HOSTS = [
 ]
 
 INSTALLED_APPS = [
-    "django.contrib.auth",
-    "django.contrib.contenttypes",
-    "django.contrib.sessions",
     "rest_framework",
     "api",
 ]
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
-    "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
-    "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 ROOT_URLCONF = "config.urls"
 WSGI_APPLICATION = "config.wsgi.application"
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": os.environ.get("POSTGRES_DB", "crisistwin"),
-        "USER": os.environ.get("POSTGRES_USER", "crisistwin"),
-        "PASSWORD": os.environ.get("POSTGRES_PASSWORD", "crisistwin-dev-only"),
-        "HOST": os.environ.get("POSTGRES_HOST", "127.0.0.1"),
-        "PORT": os.environ.get("POSTGRES_PORT", "5434"),
-        "OPTIONS": {"connect_timeout": 3},
-    }
-}
+DEFAULT_EXCEPTION_REPORTER_FILTER = "config.errors.MongoSafeExceptionReporterFilter"
+# Persistence uses PyMongo; no SQL-backed models, sessions, or migrations.
+DATABASES = {}
+# SECRET in the setting name makes Django redact the URI in debug error reports.
+MONGODB_CONNECTION_SECRET = os.environ.get("MONGODB_URI", "").strip()
+if not MONGODB_CONNECTION_SECRET.startswith(("mongodb://", "mongodb+srv://")):
+    raise ImproperlyConfigured("Set MONGODB_URI to a mongodb:// or mongodb+srv:// connection string.")
+MONGODB_DATABASE = os.environ.get("MONGODB_DATABASE", "crisistwin")
+if not re.fullmatch(r"[A-Za-z0-9_-]{1,63}", MONGODB_DATABASE):
+    raise ImproperlyConfigured("MONGODB_DATABASE must be 1–63 ASCII letters, digits, underscores, or hyphens.")
 REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": [],
+    "UNAUTHENTICATED_USER": None,
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
     "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],
 }
@@ -62,7 +59,5 @@ LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"
 USE_I18N = True
 USE_TZ = True
-DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
-SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG
 X_FRAME_OPTIONS = "DENY"

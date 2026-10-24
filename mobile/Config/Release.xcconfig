@@ -1,0 +1,6 @@
+// Configure an HTTPS API origin before distribution; there is no deployed API yet.
+API_BASE_URL =
+WEB_BASE_URL =
+PRODUCT_BUNDLE_IDENTIFIER = org.crisistwin.mobile
+SWIFT_COMPILATION_MODE = wholemodule
+SWIFT_OPTIMIZATION_LEVEL = -O

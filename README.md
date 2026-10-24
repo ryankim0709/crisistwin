@@ -23,12 +23,20 @@ documented below and in the [scaffold decision](docs/adr/0001-app-scaffold.md).
 ## Project status
 
 The full stack development scaffold is in [`app/`](app/): React/TypeScript with
-Vite and Tailwind CSS, a Django REST Framework API, PostgreSQL, Vitest, and Docker.
-The workspace checks the API and database connection. The imagery map at `/maps`
-starts over San Francisco and supports an illustrative fire-spread experiment:
+Vite and Tailwind CSS, a Django REST Framework API, MongoDB via PyMongo, Vitest,
+and Docker.
+The workspace has shared sidebar navigation, page-specific UI scaffolds, and an
+overview that checks the API and database connection. Planning pages support
+temporary local input editing; they do not save scenarios or execute evacuation
+models. The imagery map at `/maps` starts over San Francisco and supports an
+illustrative fire-spread experiment:
 choose an origin, set wind, and inspect the simulated footprint in 15-minute
 steps. A historical replay simulator for the 2018 Camp Fire is in progress in [`sim/`](sim/README.md);
 persistent scenarios and live incident integrations are not implemented yet.
+
+The native iOS scaffold is in [`mobile/`](mobile/README.md): a SwiftUI workspace,
+API/database readiness card, and a scenario empty state. Native maps, simulation,
+and scenario synchronization are not implemented in the mobile app yet.
 
 This is an experimental planning simulator. Its outputs are not operational evacuation instructions; any future resident guidance should require approval by the responsible authority.
 
@@ -88,23 +96,36 @@ cd crisistwin
 
 ### Start with Docker
 
-Install Docker with Compose v2 or newer. From the repository root:
+Install Docker with Compose v2 or newer and configure your MongoDB connection.
+For the existing Atlas setup, keep your personal connection string in
+`~/.mongodb_uri` with permissions `600`. Your Atlas database user needs access to
+`crisistwin`, and your current IP must be allowed in the project network access
+list. From the repository root:
 
 ```sh
 cd app
+export MONGODB_URI="$(cat ~/.mongodb_uri)"
 docker compose up --build --wait
 ```
 
 Open **http://localhost:5173**. The API is at **http://localhost:8000/api/health**;
-PostgreSQL is exposed on `127.0.0.1:5434`. These ports differ from Duedi's local
-ports so both projects can run together. Frontend and backend source changes
-reload automatically. The backend applies migrations before starting; PostgreSQL
-data is retained in a named volume.
+the backend connects directly to MongoDB Atlas. Frontend and backend source
+changes reload automatically. Compose runs only the app processes; it does not
+provision a database or run SQL migrations.
 
-No environment file or API keys are required. Optional local overrides are
-documented in [`app/.env.example`](app/.env.example); copy it to `app/.env` for
-Compose. Development credentials are local placeholders. Keep real credentials
-out of Git and browser environment variables.
+Alternatively copy [`app/.env.example`](app/.env.example) to ignored `app/.env`
+and replace the URI placeholder there. `MONGODB_URI` is required;
+`MONGODB_DATABASE` defaults to `crisistwin` and overrides any database in the URI
+path. Keep real credentials out of Git, logs, and browser environment variables.
+Do not paste connection strings or share expanded `docker compose config` output.
+A local MongoDB server is also supported: use `mongodb://127.0.0.1:27017` for a
+host backend, or `mongodb://host.docker.internal:27017` for Docker Desktop if the
+server is reachable from containers. There is no automatic local fallback.
+
+When replacing an existing PostgreSQL stack, stop it with `docker compose down`
+from its original checkout before starting this worktree (both use the same
+Compose project name and app ports). Keep its volumes; this change does not
+transfer PostgreSQL data. No application persistence models exist on `main` yet.
 
 ```sh
 # Follow logs / stop the stack (keeps database data)
@@ -122,27 +143,105 @@ docker compose up --wait
 - Node.js **22.12+** (Node 22 in Docker and `.nvmrc`), **npm**, and `package-lock.json`.
 - Python **3.12**, **pip**, and fully pinned runtime/development `requirements*.txt`.
 - React **19**, TypeScript **5.8**, Vite **7**, Tailwind CSS **4**.
-- Django **5.2 LTS**, Django REST Framework **3**, PostgreSQL **17**.
+- Django **5.2 LTS**, Django REST Framework **3**, PyMongo **4** with MongoDB Atlas
+  or an existing compatible MongoDB server.
 - Vitest **3**, Testing Library, jsdom, ESLint, Prettier, and Ruff for local checks.
+- Mobile: **iOS 17+**, **Xcode 16.2+**, bundled Swift compiler in **Swift 5** mode,
+  SwiftUI/Foundation only. Future Swift dependencies use Swift Package Manager;
+  no package dependencies or resolved lockfile are needed for this scaffold.
 
 ```text
 app/
   src/                  React UI and API client (lib/), Vitest setup (test/)
+    AppShell.tsx        Shared sidebar and responsive navigation
+    navigation.ts       Route labels and descriptions
+    pages/              Planning page scaffolds, shared UI, and not-found page
   backend/
-    config/             Django settings, routes, WSGI
+    config/             Django settings, routes, WSGI, credential redaction
     api/                HTTP endpoints and backend contract tests
+      mongodb.py        Shared MongoDB client and explicit database selection
     requirements*.in    Direct Python dependency declarations
     requirements*.txt   Resolved, pinned Python dependencies
-  docker-compose.yml    Development frontend + backend + PostgreSQL
+  docker-compose.yml    Development frontend + backend (external MongoDB)
   Dockerfile.dev        Vite development image
   Dockerfile            Built frontend served by Nginx, with /api proxy
   backend/Dockerfile    Django runtime and development image targets
+mobile/
+  CrisisTwin.xcodeproj/  Native iPhone/iPad project and shared scheme
+  CrisisTwin/            SwiftUI app, features, API adapter, resources
+  Config/                Debug/Release configuration and local override example
 docs/adr/               Shared architecture decisions
 ```
 
-See the [scaffold decision](docs/adr/0001-app-scaffold.md) and
+See the [scaffold decision](docs/adr/0001-app-scaffold.md),
+[MongoDB decision](docs/adr/0008-mongodb-backend.md), and
 [API contract](app/backend/README.md). There are no CI workflows for this
 hackathon; checks run locally when needed.
+
+### Run the iOS app
+
+From the repository root, open the checked-in Xcode project:
+
+```sh
+open mobile/CrisisTwin.xcodeproj
+```
+
+Select the **CrisisTwin** scheme, an iOS 17+ simulator, then **Product > Run**.
+No package installation or project generation is required. Debug uses
+`http://localhost:8000/api/health`; start the Docker stack above to enable the
+readiness card. Without the backend, the app displays a connection error with
+manual retry. Release requires an explicitly configured HTTPS API origin.
+
+See the [mobile setup and API boundary](mobile/README.md) for physical devices,
+local configuration, directory details, and current limitations, and the
+[mobile scaffold decision](docs/adr/0004-mobile-swift-scaffold.md) for tradeoffs.
+The default check remains `pre-commit run --all-files` from the repository root.
+Mobile builds, tests, and simulator verification have not been run and require
+an explicit request under the repository policy.
+
+### Workspace navigation
+
+The sidebar home link uses the transparent logo at
+`app/public/brand/crisistwin-logo.png`, served at `/brand/crisistwin-logo.png`.
+Asset usage and the generation prompt are in `app/public/brand/logo-notes.txt`.
+
+The web app shares a sidebar across all pages. On narrow screens, **Menu**
+expands the navigation. The current page is marked with an arrow and
+`aria-current`; a keyboard-accessible **Skip to content** link reaches the main
+content. Each page has its own URL and document title:
+
+- `/`: workflow shortcuts, recent-work empty state, and API/database readiness.
+- `/maps`: working imagery map and illustrative fire simulation, a footprint
+  visibility toggle, and a collapsible preview of future map layers and tools.
+- `/scenarios`: editable name/weather/notes, sample templates, a local draft
+  review, reproducibility fields, and the future scenario library.
+- `/evacuation`: synthetic population/vehicle inputs, departure strategy and
+  timings, shelter capacity, a sample road-closure toggle, and pending results.
+- `/comparison`: baseline/candidate strategy controls, a metric comparison
+  layout, compatibility requirements, and an explanation empty state.
+- `/incidents`: disconnected source status, inbox search/type controls, and an
+  optional clearly labeled synthetic evidence-review example.
+- `/stress-tests`: selectable disruptions, a bounded candidate-run budget,
+  investigation progress, and findings/unknowns empty states.
+
+These are UI scaffolds based on [the project scope](docs/project-scope.md).
+Editable inputs are temporary component state and reset on navigation/reload;
+they do not transfer between pages or modify map inputs. No scenario saving,
+traffic execution, comparison results, incident ingestion, or stress-test jobs
+are connected. Unsupported execution buttons are disabled with explanations.
+Sample inputs are synthetic user assumptions, and unavailable results use empty
+states or dashes rather than fabricated metrics. Unknown paths show a not-found page. Trailing slashes are
+accepted. Navigation uses normal links and the existing Vite/Nginx HTML fallback,
+so direct links, refresh, and browser history use document navigation. Temporary
+map state resets when leaving or reloading the page; no scenario is saved.
+
+To integrate a feature, extend its component in `app/src/pages/`, retaining its
+URL and shared `AppShell`. `WorkspaceUI.tsx` and `workspace.css` provide common
+page headers, panels, fields, status tags, and empty states. `navigationItems`
+holds route metadata only. Pages own their main landmark with `id="main-content"`
+and `tabIndex={-1}`. No backend contract changed. See the
+[navigation decision](docs/adr/0005-workspace-navigation.md) and
+[UI scaffold boundaries](docs/adr/0006-planning-ui-scaffolds.md).
 
 ### Map component
 
@@ -223,7 +322,6 @@ docker compose exec frontend npm run test:coverage
 docker compose exec backend ruff check .
 docker compose exec backend ruff format --check .
 docker compose exec backend python manage.py check
-docker compose exec backend python manage.py makemigrations --check --dry-run
 docker compose exec backend python manage.py test --noinput
 ```
 
@@ -235,14 +333,13 @@ and the health endpoint check the real database connection.
 
 ### Run app processes on your host
 
-Use the versions above. Start only PostgreSQL with Docker, then create a local
-Python environment. From `app/`:
+Use the versions above and the existing Atlas connection (or a running local
+MongoDB server), then create a local Python environment. From `app/`:
 
 ```sh
-docker compose up -d --wait db
+export MONGODB_URI="$(cat ~/.mongodb_uri)"
 python3.12 -m venv backend/.venv
 backend/.venv/bin/python -m pip install -r backend/requirements-dev.txt
-backend/.venv/bin/python backend/manage.py migrate
 backend/.venv/bin/python backend/manage.py runserver 127.0.0.1:8000
 ```
 
@@ -254,17 +351,15 @@ npm ci
 npm run dev
 ```
 
-The default host configuration uses the same local database values as Compose.
 Django reads environment variables from the shell; it does not load `.env`
-automatically. If you change database credentials in Compose, export the matching
-`POSTGRES_DB`, `POSTGRES_USER`, and `POSTGRES_PASSWORD` in the backend shell.
+automatically. Export `MONGODB_URI` and, if needed, `MONGODB_DATABASE` in the backend
+shell. The default database is `crisistwin` for both host and Compose.
 Vite proxies `/api` to `http://127.0.0.1:8000` on the host and `http://backend:8000`
 in Docker. To change the host target, use
 `VITE_API_PROXY_TARGET=http://127.0.0.1:8000 npm run dev`.
 
 Optional host backend checks run from `app/backend/` using `.venv/bin/ruff check .`,
-`.venv/bin/ruff format --check .`, `.venv/bin/python manage.py check`,
-`.venv/bin/python manage.py makemigrations --check --dry-run`, and
+`.venv/bin/ruff format --check .`, `.venv/bin/python manage.py check`, and
 `.venv/bin/python manage.py test --noinput`.
 
 ### Build runtime images
