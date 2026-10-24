@@ -29,6 +29,9 @@ export function markTourSeen(kind: string): void {
 
 interface TourFacts {
   name: string;
+  /** Where the roads are, e.g. "Superior and Louisville, Boulder County, Colorado". */
+  area: string;
+  /** What captions measure fire distance from. */
   place: string;
   year: string;
   dateLabel: string;
@@ -60,7 +63,8 @@ function tourFacts(model: ReplayModel, place: ReferencePlace | null): TourFacts 
     : "The dashed white line is the satellite fire perimeter in effect at this time.";
   return {
     name: model.incident.name,
-    place: place && place.name !== "the populated area" ? place.name : "the affected area",
+    area: model.incident.place ?? (place && place.name !== "the population centre" ? place.name : "the affected area"),
+    place: place?.name ?? "the population centre",
     year,
     dateLabel,
     introAt: iso(Math.min(endMs, (ignitionMs ?? startMs) + (ignitionMs !== null ? 40 : 60) * 60_000)),
@@ -92,7 +96,7 @@ export function replayTour(model: ReplayModel, place: ReferencePlace | null): To
   return [
     {
       title: `${f.name}, ${f.dateLabel}`,
-      body: `This is the ${f.name} replayed over the real roads of ${f.place}. Fire and evacuation traffic are modelled; alerts and road reports are from ${f.year} records.`,
+      body: `This is the ${f.name} replayed over the real roads of ${f.area}. Fire and evacuation traffic are modelled; alerts and road reports are from ${f.year} records.`,
       target: null,
       seekTo: f.introAt,
     },
@@ -128,7 +132,7 @@ export function simulationTour(model: ReplayModel, place: ReferencePlace | null)
   return [
     {
       title: "Agent simulation",
-      body: `This is not a replay of ${f.year}. Modelled residents decide when to leave and modelled responders manage traffic, over the real roads of ${f.place}.`,
+      body: `This is not a replay of ${f.year}. Modelled residents decide when to leave and modelled responders manage traffic, over the real roads of ${f.area}.`,
       target: null,
       seekTo: f.introAt,
     },

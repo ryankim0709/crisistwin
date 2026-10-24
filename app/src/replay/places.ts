@@ -9,15 +9,25 @@ export interface ReferencePlace {
   coord: LngLat;
 }
 
-/** "Paradise, CA" -> "Paradise"; empty -> null. */
+/**
+ * "Paradise, Butte County, California" -> "Paradise". A list of several towns
+ * ("Geyserville, Healdsburg and Windsor, ...") returns null: the weighted centre lies between
+ * them, so naming any one town would misstate the distance.
+ */
 export function shortPlaceName(place: string | null | undefined): string | null {
-  const name = place?.split(",")[0]?.trim();
-  return name ? name : null;
+  if (!place) return null;
+  const parts = place.split(",").map((p) => p.trim()).filter(Boolean);
+  const towns = parts.filter((p) => !/\b(county|parish|borough)\b/i.test(p));
+  if (towns.length === 0 || parts.some((p) => /\band\b|&/.test(p))) return null;
+  // "Town, County, State": one town before the county.
+  const countyAt = parts.findIndex((p) => /\bcounty\b/i.test(p));
+  if (countyAt > 1) return null;
+  return parts[0];
 }
 
 export function referencePlace(model: ReplayModel, placeHint: string | null): ReferencePlace | null {
   if (model.incident.referencePoint) return model.incident.referencePoint;
-  const name = shortPlaceName(model.incident.place) ?? shortPlaceName(placeHint) ?? "the populated area";
+  const name = shortPlaceName(model.incident.place) ?? shortPlaceName(placeHint) ?? "the population centre";
   const zones = model.zones?.items ?? [];
   let weight = 0;
   let x = 0;
