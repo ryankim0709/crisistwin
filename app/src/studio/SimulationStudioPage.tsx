@@ -35,6 +35,18 @@ const DEFAULT_SPEED = 10;
 const AUTOSAVE_DELAY_MS = 600;
 const NOTICE_MS = 4000;
 const MAX_IMPORT_CHARACTERS = 1_000_000;
+const METERS_PER_FOOT = 0.3048;
+/**
+ * Surface head-rate bands for the per-fire description, metres per minute. These are display
+ * labels over modelled output, not model inputs: under 1 m/min a fire creeps (litter beneath
+ * canopy, typically a few cells per hour at 24 m resolution); 1 to 10 m/min is typical shrub
+ * or light grass behaviour; over 10 m/min is rapid (wind-driven grass).
+ */
+const SLOW_HEAD_RATE_METERS_PER_MINUTE = 1;
+const FAST_HEAD_RATE_METERS_PER_MINUTE = 10;
+/** Below this total reached area at the horizon, warn that modelled spread is small. */
+const SMALL_SPREAD_HECTARES = 5;
+const SQUARE_METERS_PER_HECTARE = 10_000;
 const OPERATIONAL_DISCLAIMER = "Planning experiment; not an operational forecast.";
 
 /** Index of the last frame at or before `minute`. */
@@ -305,11 +317,52 @@ export default function SimulationStudioPage() {
       if (!result.elevationComplete) {
         list.push("Elevation data was incomplete for part of the area, so slope is understated there.");
       }
+      const horizonFrame = solved.frames[solved.frames.length - 1];
+      if (
+        !stale &&
+        horizonFrame &&
+        horizonFrame.reachedAreaSquareMeters < SMALL_SPREAD_HECTARES * SQUARE_METERS_PER_HECTARE
+      ) {
+        const fuels = [
+          ...new Set(
+            solved.ignitions.map((entry) => entry.conditions.fuelLabel.split(/ — | \(/)[0]),
+          ),
+        ].join(", ");
+        list.push(
+          `Modelled spread is small: these fires are on slow-burning fuels (${fuels}). Try grass or shrub areas, or stronger wind/drier fuel.`,
+        );
+      }
       if (stale) list.push("Showing the previous run. Your edits have not been simulated yet.");
     }
     list.push(OPERATIONAL_DISCLAIMER);
     return list;
   }, [result, currentMinute, stale]);
+
+  /** Fuel and surface head rate per ignition, from the current (non-stale) result only. */
+  const ignitionDetails = useMemo(() => {
+    const details: Record<string, string> = {};
+    if (!result || stale) return details;
+    for (const entry of result.run.ignitions) {
+      const { conditions } = entry;
+      const headMetersPerMinute = conditions.spread.headRateFeetPerMinute * METERS_PER_FOOT;
+      const band =
+        headMetersPerMinute < SLOW_HEAD_RATE_METERS_PER_MINUTE
+          ? "slow"
+          : headMetersPerMinute > FAST_HEAD_RATE_METERS_PER_MINUTE
+            ? "fast"
+            : "moderate";
+      const parts = [
+        conditions.fuelLabel.replace(" — ", " · "),
+        `head ${headMetersPerMinute < 10 ? headMetersPerMinute.toFixed(1) : Math.round(headMetersPerMinute)} m/min (${band})`,
+      ];
+      if (conditions.crown && conditions.crown.type !== "surface") {
+        parts.push(`${conditions.crown.type} crown fire`);
+      }
+      parts.push(`midflame wind ${Math.round(conditions.midflameAdjustment * 100)}%`);
+      details[entry.sourceId] = parts.join(" · ");
+    }
+    return details;
+  }, [result, stale]);
 
   const attribution = useMemo(
     () => (result ? Object.values(result.attribution) : []),
@@ -374,6 +427,7 @@ export default function SimulationStudioPage() {
             windFromDegrees={scenario.settings.windFromDegrees}
             landscapeBox={result?.landscapeBox ?? null}
             footprintIsStale={stale}
+            ignitionDetails={ignitionDetails}
             warnings={warnings}
             attribution={attribution}
             onMapClick={handleMapClick}

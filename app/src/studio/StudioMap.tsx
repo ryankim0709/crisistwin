@@ -9,7 +9,7 @@ import {
   type MapOptions,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import type { Feature, FeatureCollection, Polygon } from "geojson";
+import type { Feature, FeatureCollection, Polygon, Position } from "geojson";
 import { ARRIVAL_COLORS, CURRENT_PERIMETER_COLOR } from "../fire/FireMap";
 import { mercatorToLonLat, type MercatorBox } from "../fire/landscape";
 import { formatElapsed, type GeoPoint } from "../fire/spread";
@@ -23,8 +23,18 @@ const FIT_PADDING = 120;
 const IMAGERY_LOAD_TIMEOUT_MS = 15_000;
 const FOOTPRINT_SOURCE = "studio-footprint";
 const BOX_SOURCE = "studio-box";
-const FOOTPRINT_FILL_OPACITY = 0.42;
-const FOOTPRINT_LINE_OPACITY = 0.8;
+const FOOTPRINT_FILL_OPACITY = 0.6;
+const FOOTPRINT_LINE_OPACITY = 0.95;
+/** Dark casing under the light current outline so it reads on any imagery. */
+const CURRENT_CASING_COLOR = "#142b27";
+/** Line widths in screen pixels (constant at every zoom, so tiny footprints never vanish). */
+const CURRENT_LINE_WIDTH = 2.6;
+const CURRENT_CASING_WIDTH = 5.4;
+/** A footprint whose screen bbox is under this many pixels also gets a locator ring. */
+const TINY_FOOTPRINT_PIXELS = 12;
+const ZOOM_TO_FIRE_MAX_ZOOM = 17;
+const ZOOM_TO_FIRE_PADDING = 140;
+const SQUARE_METERS_PER_HECTARE = 10_000;
 const STALE_DIM = 0.4;
 const LEGEND_BAND_COUNT = 4;
 const MARKER_CLASS = "studio-marker";
@@ -93,6 +103,74 @@ function footprintCollection(
   // Newest underneath, oldest on top, so the arrival bands stay readable.
   features.sort((a, b) => b.properties.elapsedMinutes - a.properties.elapsedMinutes);
   return { type: "FeatureCollection", features };
+}
+
+interface Locator {
+  id: string;
+  position: [number, number];
+  areaSquareMeters: number;
+  /** Screen-space bbox size of this fire's footprint is computed in the component. */
+  bbox: [number, number, number, number] | null;
+}
+
+function polygonBbox(ring: Position[]): [number, number, number, number] {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const [x, y] of ring) {
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x);
+    maxY = Math.max(maxY, y);
+  }
+  return [minX, minY, maxX, maxY];
+}
+
+function bboxContains(box: [number, number, number, number], [x, y]: [number, number]): boolean {
+  return x >= box[0] && x <= box[2] && y >= box[1] && y <= box[3];
+}
+
+/** "0 ha" for a fire that has ignited but burned nothing yet, otherwise at least two figures. */
+function formatHectares(squareMeters: number): string {
+  const hectares = squareMeters / SQUARE_METERS_PER_HECTARE;
+  if (hectares === 0) return "0 ha";
+  return `${hectares < 0.1 ? hectares.toFixed(2) : hectares < 10 ? hectares.toFixed(1) : Math.round(hectares)} ha`;
+}
+
+/**
+ * One locator per fire ignited by the current frame. Its position is the centre of the bbox of
+ * the current-frame polygon that contains the ignition point (a merged polygon shared by
+ * several fires, or no polygon, falls back to the ignition point itself). The area is the
+ * solver's own per-source figure, never recomputed here.
+ */
+function locatorsFor(
+  frame: StudioMapProps["visibleFrames"][number] | undefined,
+  ignitions: ScheduledIgnition[],
+  allowPointFallback: boolean,
+): Locator[] {
+  if (!frame) return [];
+  const boxes = frame.perimeters.map((perimeter) => polygonBbox(perimeter.geometry.coordinates[0]));
+  const result: Locator[] = [];
+  for (const id of frame.ignitedSourceIds) {
+    const ignition = ignitions.find((candidate) => candidate.id === id);
+    if (!ignition) continue;
+    const point: [number, number] = [ignition.location.longitude, ignition.location.latitude];
+    const containing = boxes.filter((box) => bboxContains(box, point));
+    const area = frame.reachedAreaBySourceSquareMeters[id] ?? 0;
+    if (containing.length === 1) {
+      const box = containing[0];
+      result.push({
+        id,
+        position: [(box[0] + box[2]) / 2, (box[1] + box[3]) / 2],
+        areaSquareMeters: area,
+        bbox: box,
+      });
+    } else if (allowPointFallback) {
+      result.push({ id, position: point, areaSquareMeters: area, bbox: null });
+    }
+  }
+  return result;
 }
 
 function boxCollection(box: MercatorBox | null): FeatureCollection<Polygon> {
@@ -168,6 +246,7 @@ function applyMarker(
   ignition: ScheduledIgnition,
   state: IgnitionDisplayState,
   selected: boolean,
+  detail: string | undefined,
 ) {
   element.className = `${MARKER_CLASS} ${MARKER_CLASS}--${state}`;
   element.dataset.selected = String(selected);
@@ -175,8 +254,8 @@ function applyMarker(
   element.setAttribute(
     "aria-label",
     `${ignition.name}, starts ${formatElapsed(ignition.startMinute)}, ${STATE_TEXT[state]}${
-      selected ? ", selected" : ""
-    }`,
+      detail ? `, modelled: ${detail}` : ""
+    }${selected ? ", selected" : ""}`,
   );
   const icon = element.querySelector<HTMLElement>(".studio-marker__icon");
   if (icon) icon.innerHTML = STATE_GLYPH[state];
@@ -184,6 +263,13 @@ function applyMarker(
   if (title) title.textContent = startLabel(ignition);
   const status = element.querySelector<HTMLElement>(".studio-marker__state");
   if (status) status.textContent = STATE_TEXT[state];
+  const detailElement = element.querySelector<HTMLElement>(".studio-marker__detail");
+  if (detailElement) {
+    detailElement.textContent = detail ?? "";
+    detailElement.hidden = !detail;
+  }
+  // The tooltip repeats the modelled line for pointer users; the aria-label keeps it too.
+  element.title = detail ? `${ignition.name}: ${detail} (modelled)` : "";
 }
 
 function createMarkerElement(): HTMLButtonElement {
@@ -193,7 +279,8 @@ function createMarkerElement(): HTMLButtonElement {
     '<span class="studio-marker__icon" aria-hidden="true"></span>' +
     '<span class="studio-marker__label" aria-hidden="true">' +
     '<span class="studio-marker__title"></span>' +
-    '<span class="studio-marker__state"></span></span>';
+    '<span class="studio-marker__state"></span>' +
+    '<span class="studio-marker__detail" hidden></span></span>';
   return element;
 }
 
@@ -247,6 +334,7 @@ export default function StudioMap({
   windFromDegrees,
   landscapeBox,
   footprintIsStale,
+  ignitionDetails,
   warnings,
   attribution,
   onMapClick,
@@ -259,6 +347,9 @@ export default function StudioMap({
   const boxLabel = useRef<Marker | null>(null);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const locatorMarkers = useRef(new Map<string, Marker>());
+  // Bumped when the camera moves so screen-size checks are recomputed.
+  const [viewTick, setViewTick] = useState(0);
 
   // Handlers and mode are read through refs so the map is created once.
   const clickRef = useRef(onMapClick);
@@ -322,6 +413,8 @@ export default function StudioMap({
       if (!failed) setError(null);
     });
 
+    map.on("zoomend", () => setViewTick((tick) => tick + 1));
+    map.on("moveend", () => setViewTick((tick) => tick + 1));
     map.addControl(new NavigationControl({ visualizePitch: true }), "top-right");
     map.addControl(new ScaleControl({ unit: "metric" }), "bottom-left");
 
@@ -354,16 +447,28 @@ export default function StudioMap({
         source: FOOTPRINT_SOURCE,
         paint: {
           "line-color": ARRIVAL_EXPRESSION as unknown as string,
-          "line-width": 1.1,
+          "line-width": 1.6,
           "line-opacity": FOOTPRINT_LINE_OPACITY,
         },
+      });
+      // Layer order, bottom to top: imagery, modelled-area box, footprint fill, every frame's
+      // outline, the current frame's dark casing and light line. Ignition markers and locator
+      // rings are DOM markers, so they always sit above all of these.
+      map.addLayer({
+        id: "studio-footprint-casing",
+        type: "line",
+        source: FOOTPRINT_SOURCE,
+        filter: ["==", ["get", "current"], true],
+        layout: { "line-join": "round" },
+        paint: { "line-color": CURRENT_CASING_COLOR, "line-width": CURRENT_CASING_WIDTH },
       });
       map.addLayer({
         id: "studio-footprint-current",
         type: "line",
         source: FOOTPRINT_SOURCE,
         filter: ["==", ["get", "current"], true],
-        paint: { "line-color": CURRENT_PERIMETER_COLOR, "line-width": 2.4 },
+        layout: { "line-join": "round" },
+        paint: { "line-color": CURRENT_PERIMETER_COLOR, "line-width": CURRENT_LINE_WIDTH },
       });
       setReady(true);
     });
@@ -396,6 +501,8 @@ export default function StudioMap({
       canvas.removeEventListener("keydown", pointAtCenter);
       for (const marker of markerMap.values()) marker.remove();
       markerMap.clear();
+      for (const marker of locatorMarkers.current.values()) marker.remove();
+      locatorMarkers.current.clear();
       boxLabel.current?.remove();
       boxLabel.current = null;
       setReady(false);
@@ -459,14 +566,87 @@ export default function StudioMap({
         ignition,
         state,
         ignition.id === selectedId,
+        ignitionDetails?.[ignition.id],
       );
     }
-  }, [ignitions, ignitionStates, selectedId, ready]);
+  }, [ignitions, ignitionStates, selectedId, ready, ignitionDetails]);
 
   const footprint = useMemo(
     () => footprintCollection(visibleFrames, horizonMinutes),
     [visibleFrames, horizonMinutes],
   );
+
+  const currentFrame = visibleFrames[visibleFrames.length - 1];
+
+  // Locator rings: a dashed ring and area label at each ignited fire whose footprint is
+  // under TINY_FOOTPRINT_PIXELS across at this zoom. A locator, not burned area.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    const wanted = new Map<string, { locator: Locator; element: HTMLElement | null }>();
+    for (const locator of locatorsFor(currentFrame, ignitions, !footprintIsStale)) {
+      let tiny = true;
+      if (locator.bbox) {
+        const low = map.project([locator.bbox[0], locator.bbox[1]]);
+        const high = map.project([locator.bbox[2], locator.bbox[3]]);
+        tiny = Math.max(Math.abs(high.x - low.x), Math.abs(high.y - low.y)) < TINY_FOOTPRINT_PIXELS;
+      }
+      if (tiny) wanted.set(locator.id, { locator, element: null });
+    }
+    for (const [id, marker] of locatorMarkers.current) {
+      if (!wanted.has(id)) {
+        marker.remove();
+        locatorMarkers.current.delete(id);
+      }
+    }
+    for (const { locator } of wanted.values()) {
+      let marker = locatorMarkers.current.get(locator.id);
+      if (!marker) {
+        const element = document.createElement("div");
+        element.className = "studio-locator";
+        element.innerHTML = '<span class="studio-locator__label"></span>';
+        marker = new Marker({ element, anchor: "center" }).setLngLat(locator.position).addTo(map);
+        locatorMarkers.current.set(locator.id, marker);
+      } else {
+        marker.setLngLat(locator.position);
+      }
+      const element = marker.getElement();
+      element.dataset.stale = String(footprintIsStale);
+      const label = element.querySelector<HTMLElement>(".studio-locator__label");
+      if (label) {
+        label.textContent = `${formatHectares(locator.areaSquareMeters)}${
+          footprintIsStale ? " (previous run)" : ""
+        }`;
+      }
+    }
+  }, [ready, currentFrame, ignitions, footprintIsStale, viewTick]);
+
+  // Explicit user action only; playback never moves the camera.
+  const zoomToFire = () => {
+    const map = mapRef.current;
+    if (!map) return;
+    const bounds = new LngLatBounds();
+    let any = false;
+    for (const perimeter of currentFrame?.perimeters ?? []) {
+      for (const [longitude, latitude] of perimeter.geometry.coordinates[0]) {
+        bounds.extend([longitude, latitude]);
+        any = true;
+      }
+    }
+    if (!any) {
+      for (const { location, enabled } of ignitions) {
+        if (!enabled) continue;
+        bounds.extend([location.longitude, location.latitude]);
+        any = true;
+      }
+    }
+    if (!any) return;
+    map.fitBounds(bounds, {
+      padding: ZOOM_TO_FIRE_PADDING,
+      maxZoom: ZOOM_TO_FIRE_MAX_ZOOM,
+      duration: 600,
+    });
+  };
 
   useEffect(() => {
     const map = mapRef.current;
@@ -487,6 +667,7 @@ export default function StudioMap({
       "line-opacity",
       FOOTPRINT_LINE_OPACITY * scale,
     );
+    map.setPaintProperty("studio-footprint-casing", "line-opacity", scale);
     map.setPaintProperty("studio-footprint-current", "line-opacity", scale);
   }, [ready, footprintIsStale]);
 
@@ -531,6 +712,10 @@ export default function StudioMap({
   return (
     <div className="studio-map">
       <div ref={container} className="studio-map__canvas" />
+
+      <button type="button" className="studio-map__zoom-fire" onClick={zoomToFire}>
+        Zoom to fire
+      </button>
 
       <div className="studio-map__banners">
         {footprintIsStale && (
@@ -603,6 +788,10 @@ export default function StudioMap({
             <li>
               <span className="studio-map__swatch studio-map__swatch--current" />
               Current extent, {formatElapsed(currentMinute)}
+            </li>
+            <li>
+              <span className="studio-map__swatch studio-map__swatch--locator" />
+              Locator ring: footprint too small to see at this zoom (dashed, not burned area)
             </li>
           </ul>
         </div>

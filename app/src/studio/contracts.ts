@@ -176,6 +176,12 @@ export interface StudioMapProps {
   landscapeBox: MercatorBox | null;
   /** Show the footprint dimmed and labelled "Previous run" when the result is stale. */
   footprintIsStale: boolean;
+  /**
+   * Optional modelled-output line per ignition id (fuel, head rate), computed by the page from
+   * the current, non-stale result. Shown on the marker label and tooltip. Ids missing here
+   * show no line.
+   */
+  ignitionDetails?: Record<string, string>;
   /** Model warnings to display over the map (clipped at edge, surface-only, etc.). */
   warnings: string[];
   attribution: string[];
