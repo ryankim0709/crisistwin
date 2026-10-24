@@ -105,12 +105,13 @@ def _simulated_fire(history: IncidentHistory, end: datetime,
 def build_bundle(history: IncidentHistory, scenario: dict, params: TrafficParams, *,
                  start: datetime, end: datetime, command: str, simulate_fire: bool = True,
                  fire: tuple[dict, tuple] | None = None, controllers_for=None,
-                 mode: str = "retrospective") -> dict:
+                 mode: str = "retrospective", incident: dict | None = None) -> dict:
     """Run traffic for the scenario and merge it with the package's observed layers.
 
     `scenario` holds `network`, `zones`, `destinations`, `events` (sim.traffic types),
     an `evidence_class` for those layers (`fixture` until real layers are acquired),
-    and `notes`.
+    and `notes`. `incident` (sim.incidents.bundle_incident) adds registry fields to the bundle's
+    `incident` block and replaces the Camp name and timezone defaults.
     """
     if start >= end:
         raise ValueError("bundle start must be before end")
@@ -180,7 +181,8 @@ def build_bundle(history: IncidentHistory, scenario: dict, params: TrafficParams
             "label": f"Satellite perimeter: {p['area_km2']:.0f} km²", "evidence_class": p["evidence_class"],
             "time_precision": p["time_precision"],
             "target": {"zone_ids": [], "edge_ids": [], "destination_id": None},
-            "source": {"id": "feds-veda-archive", "locator": None},
+            "source": {"id": history.perimeters[p["snapshot_index"]].feature["properties"].get(
+                "source_id", "feds-veda-archive"), "locator": None},
         }
         for p in perimeters
         if p["at"] >= format_utc(start)
@@ -207,6 +209,7 @@ def build_bundle(history: IncidentHistory, scenario: dict, params: TrafficParams
             "name": INCIDENT_NAMES.get(history.incident_id, history.incident_id),
             "package_version": history.package_version,
             "timezone": INCIDENT_TIMEZONE,
+            **(incident or {}),
         },
         "mode": mode,
         "clock": {"start": format_utc(start), "end": format_utc(end), "step_seconds": params.record_every_s},

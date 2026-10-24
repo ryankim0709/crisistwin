@@ -20,6 +20,7 @@ from pathlib import Path
 
 from tools.build_camp_history import SourceError
 
+from sim import incidents
 from sim.bundle import _simulated_fire, build_bundle
 from sim.fire import FireParams
 from sim.fixtures import camp_fixture_scenario
@@ -80,7 +81,10 @@ def _fire_params(args: argparse.Namespace) -> FireParams:
 def main() -> None:
     parser = argparse.ArgumentParser(prog="python3 -m sim", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--package", type=Path, required=True, help="verified incident package directory")
+    parser.add_argument("--incident", choices=list(incidents.INCIDENTS),
+                        help="registry incident (sim/incidents.py): sets --package, --roads-package and the default "
+                             "--output app/public/replays/<id>.json, and updates app/public/replays/index.json")
+    parser.add_argument("--package", type=Path, help="verified incident package directory (default from --incident)")
     parser.add_argument("--data-source", choices=DATA_SOURCES, default="auto",
                         help="where package artifacts come from: local files, MongoDB Atlas GridFS, or auto "
                              "(local when valid, otherwise fetched from MongoDB; needs MONGODB_URI)")
@@ -122,22 +126,40 @@ def main() -> None:
     bun.add_argument("--record-every-s", type=int, default=TrafficParams.record_every_s)
     bun.add_argument("--no-simulated-fire", action="store_true", help="omit the simulated morning fire front")
     bun.add_argument("--demand", choices=DEMAND_MODES, default="auto", help=DEMAND_HELP)
-    bun.add_argument("--output", type=Path, required=True)
+    bun.add_argument("--output", type=Path, help="default with --incident: app/public/replays/<id>.json")
 
     sim_ = sub.add_parser("simulate", help="agent simulation: resident + responder agents (not a replay)")
-    sim_.add_argument("--roads-package", type=Path, required=True)
+    sim_.add_argument("--roads-package", type=Path, help="default from --incident")
     sim_.add_argument("--seed", type=int, default=TrafficParams.seed)
     sim_.add_argument("--no-responders", action="store_true", help="resident agents only")
     sim_.add_argument("--demand", choices=DEMAND_MODES, default="auto", help=DEMAND_HELP)
     sim_.add_argument("--output", type=Path, required=True, help="e.g. app/public/simulations/camp-2018.agents.json")
 
     args = parser.parse_args()
+    incident = incidents.get(args.incident) if args.incident else None
+    if incident:
+        args.package = args.package or incident.package
+        if hasattr(args, "roads_package"):
+            args.roads_package = args.roads_package or incident.roads_package
+        if getattr(args, "output", None) is None and args.command == "bundle":
+            args.output = incidents.REPLAYS_DIR / f"{incident.id}.json"
+    if args.package is None:
+        parser.error("--package or --incident is required")
+    if args.command == "simulate" and args.roads_package is None:
+        parser.error("simulate needs --roads-package or --incident")
+    if args.output is None:
+        parser.error("--output is required without --incident")
+    generic = incident is not None and incident.kind == "package"
     os.environ[DATA_SOURCE_ENV] = args.data_source  # loaders called below use the same mode
     try:
         data_sources = [ensure_package(args.package, source=args.data_source)]
-        if getattr(args, "roads_package", None):
+        if getattr(args, "roads_package", None) and args.roads_package != args.package:
             data_sources.append(ensure_package(args.roads_package, source=args.data_source))
-        history = load_history(args.package)
+        if generic:
+            verification = incidents.verify_package(args.package)
+            history = incidents.load_package_history(args.package)
+        else:
+            history = load_history(args.package)
         if args.command == "frame":
             result = observed_frame(history, parse_utc(args.at))
             meta = result["replay"]
@@ -154,6 +176,21 @@ def main() -> None:
             result = run_hindcast(history, _fire_params(args), start_index=args.start_index,
                                   horizon_hours=args.hours, cell_m=args.cell_m, include_geometry=args.geometry)
             summary = json.dumps(result["summary"])
+        elif args.command == "bundle" and generic:
+            scenario, start, end, ignition = incidents.package_replay_inputs(incident, history)
+            start = parse_utc(args.start) if args.start else start
+            end = parse_utc(args.end) if args.end else end
+            params = TrafficParams(**{"seed": args.seed, "record_every_s": args.record_every_s, **incident.traffic})
+            fire = None if args.no_simulated_fire else incidents.package_fire(history, ignition, end)
+            result = build_bundle(history, scenario, params, start=start, end=end,
+                                  command=" ".join(["python3 -m sim", *sys.argv[1:]]),
+                                  simulate_fire=fire is not None, fire=fire,
+                                  incident=incidents.bundle_incident(incident, history))
+            result["demand"] = scenario["demand_report"]
+            result["validation"] = incidents.not_computed_validation(args.roads_package)
+            result["generated_by"]["verification"] = verification
+            summary = json.dumps({k: v for k, v in result["traffic"]["summary"].items()
+                                  if k != "arrived_by_destination_veh"})
         elif args.command == "bundle":
             grounded = False
             if args.roads_package:
@@ -169,10 +206,13 @@ def main() -> None:
             fire = None if args.no_simulated_fire else _simulated_fire(history, end, args.roads_package)
             result = build_bundle(history, scenario, params, start=start, end=end,
                                   command=" ".join(["python3 -m sim", *sys.argv[1:]]),
-                                  simulate_fire=fire is not None, fire=fire)
+                                  simulate_fire=fire is not None, fire=fire,
+                                  incident=incidents.bundle_incident(incident, history) if incident else None)
             if grounded:
                 _add_grounding(result, scenario, args.roads_package)
             summary = json.dumps(result["traffic"]["summary"])
+        elif args.command == "simulate" and generic:
+            raise ValueError("simulate --incident supports camp-2018 only so far")
         elif args.command == "simulate":
             scenario, start, end, grounded = camp_replay_inputs(args.roads_package, args.demand)
             params = TrafficParams(seed=args.seed, behavior=BehaviorParams(enabled=True))
@@ -213,6 +253,8 @@ def main() -> None:
         if "generated_by" in result:
             result["generated_by"]["data_sources"] = data_sources
         _write(args.output, result)
+        if incident and args.command == "bundle":
+            summary += f"; index {incidents.update_index(result, args.output, incident)}"
     except (OSError, SourceError, ValueError, json.JSONDecodeError) as exc:
         parser.exit(1, f"error: {exc}\n")
     print(f"{args.output}: {summary}")

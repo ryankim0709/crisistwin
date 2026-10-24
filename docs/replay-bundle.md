@@ -191,6 +191,46 @@ additive within 1.x.
   `not_departed + en_route + arrived == total_veh`. Blocked and exposed vehicles are
   subsets of en-route vehicles.
 
+## Multiple incidents (`--incident`)
+
+`python3 -m sim --incident <id> bundle` builds `app/public/replays/<id>.json` for an id in
+`sim/incidents.py` (`camp-2018`, `marshall-2021`, `kincade-2019`), and writes or updates
+`app/public/replays/index.json`. These fields are additive:
+
+- `incident.registry_id`, `incident.place`: from the registry. `incident.timezone` is the
+  package manifest's `time_zone` (IANA) when it has one, otherwise `America/Los_Angeles`.
+- `generated_by.verification` (non-Camp packages only): how the package was verified on this run.
+  The builder's offline rebuild runs once per manifest, and its result is cached by manifest
+  SHA-256. Every run re-checks all artifact hashes.
+- `demand` (non-Camp packages): `totals` (`zones`, `population`, `households`,
+  `households_no_vehicle`, `evacuating_vehicles`, `orders_mapped`, `warnings_mapped`, ...),
+  `unmapped_zones` (`zone_id`, `reason`), `notices` (`event_id`, `zone_ids`,
+  `unmapped_zone_ids`), and per-zone `zones`. Demand zones are the package's evacuation zones,
+  and order and warning events target them by their own zone IDs.
+- `validation` (non-Camp packages): one row per `calibration_targets.json` target, with
+  `comparability: "not_computed"` and the reason; `next_work` lists the missing comparisons.
+- `fire_simulated` for non-Camp packages is `elliptical-mtt-ca`. It starts from the package
+  ignition (`ignition.provenance` gives the source), is fitted by IoU to the first perimeter
+  only, and is clipped to it (`constraint`). `calibration.headline` states its limits.
+
+### `index.json`
+
+```json
+{
+  "kind": "crisistwin_replay_index", "schema_version": "1.0.0",
+  "incidents": [
+    { "id": "marshall-2021", "name": "Marshall Fire (2021)", "place": "Superior and Louisville, ...",
+      "date": "2021-12-30", "timezone": "America/Denver", "bundle": "marshall-2021.json",
+      "package_version": "415166c55516b100",
+      "clock": { "start": "...Z", "end": "...Z", "step_seconds": 60 },
+      "layer_status": { "fire_perimeters": "present", "damage": "missing", "...": "..." } }
+  ]
+}
+```
+
+`date` is the local date (in `timezone`) of the clock start. `bundle` is relative to the
+index. Entries are kept per `id` across builds, in registry order.
+
 ## Variants
 
 Precomputed what-if (counterfactual) runs of the baseline bundle. Generator:

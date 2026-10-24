@@ -18,6 +18,7 @@ All outputs are planning experiments, not operational fire or evacuation guidanc
 | `scenario.py` | Hybrid scenario: observed roads and exits with fixture demand and orders until zones and events are acquired |
 | `fixtures.py` | Fully synthetic network and scenario for development |
 | `insights.py` | Responder and evacuee planning insights: zone lead times, roads' modelled fire arrival, bottlenecks |
+| `incidents.py` | Incident registry (`camp-2018`, `marshall-2021`, `kincade-2019`) and the generic package path: verification, perimeters, ignition, clock, crosswalk demand, fitted front, `index.json` |
 | `bundle.py` | Assemble the web-app replay bundle ([contract](../docs/replay-bundle.md)) |
 | `__main__.py` | CLI |
 
@@ -115,3 +116,32 @@ python3 -m sim --data-source auto --package ... bundle --roads-package ... --out
 `sim.stress_agent`) is `auto` by default: use valid local files, otherwise fetch from
 MongoDB. `local` never connects, and `mongo` always reconciles with the manifest.
 Bundles record what was fetched in `generated_by.data_sources`.
+
+## Other fires: `--incident` (2026-10-23)
+
+```sh
+python3 -m sim --incident marshall-2021 bundle   # -> app/public/replays/marshall-2021.json + index.json
+python3 -m sim --incident kincade-2019 bundle
+python3 -m sim --incident camp-2018 bundle       # same as the explicit Camp --package/--roads-package command
+```
+
+`--incident` fills in `--package`, `--roads-package` and `--output`, and the explicit flags still
+override it. Camp keeps its own path. For Marshall and Kincade, `sim.incidents` takes everything
+from the evacuation package:
+- perimeters from `fire_perimeters.geojson`;
+- the ignition from the `fire_ignition` event. Marshall's event has no coordinates, so its place
+  is fitted among the cells of the earliest FIRMS pass;
+- the clock: the manifest focus window, starting 1 h before the hour of ignition;
+- the timezone from the manifest;
+- demand from `population_units` and `zone_population_crosswalk.json`, with orders and warnings
+  targeting zones by their own IDs.
+
+The front is `elliptical-mtt-ca`, fitted only to the first perimeter and clipped to it. The packages
+have no terrain or ground fire observations. The model settings chosen per fire are in the
+registry (Kincade: 30 s step and 5 min frames over a multi-day clock). Validation rows are
+`not_computed` for now. `simulate --incident` supports only Camp, and `sim.variants` still takes
+explicit Camp packages.
+
+The full offline verifier runs once per package manifest. The result is cached in
+`~/.cache/crisistwin/verified/`, and the Kincade rebuild alone takes about 2 min. Later runs
+re-check every artifact hash.
