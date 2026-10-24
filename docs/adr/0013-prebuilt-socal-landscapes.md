@@ -10,11 +10,31 @@ instead of rebuilding it. Live per-area fetching (ADR 0011) stays available for 
 areas. The model (ADRs 0003–0009, 0012) is unchanged; a stored region is exactly the
 `LandscapeGrid` the live loader would have produced at that cell size, plus provenance.
 
+Update (2026-10-24): the catalogue grew from seven Southern California regions to 20
+covering the San Francisco Bay Area to San Diego (`CALIFORNIA_REGIONS`). The sentence about
+Southern California counties above describes the original seven-region scope. Named regions
+were chosen over a full statewide tiling because the MongoDB Atlas free tier (about 512 MB of
+storage) cannot hold a statewide set of packages. Northern California north of the
+Napa–Sonoma hills, the Central Valley floor and the deserts are intentionally not covered.
+The package format, storage and API are unchanged.
+
+Update (2026-10-24, later): regions are now station-scale. The 20 range-sized boards
+(25–40 km radius at 60–90 m) became 41 boards of 5–8 km radius at LANDFIRE's native 30 m,
+each framed around one real fire station and the neighbourhoods, canyons and parks it would
+work. Station name, agency, position and OSM id come from OpenStreetMap (looked up through
+Nominatim) and are kept on each region as `station`; agency names were checked by hand where
+OSM has no operator tag. Boards are presentation choices, not official response-area
+boundaries. Packages of the earlier large regions may remain in GridFS; the page lists only
+catalogue ids.
+
 ## Catalogue
 
-`app/src/fire/regions.ts` (`SOCAL_REGIONS`) lists region id, name, counties, centre,
-radius and cell size. Regions frame vegetated ranges and their foothill neighbourhoods;
-they are presentation choices, not risk designations.
+`app/src/fire/regions.ts` (`CALIFORNIA_REGIONS`) lists region id, name, `area`, counties,
+anchor `station`, centre, radius and cell size. `area` is one of `REGION_AREAS` (San Francisco Bay Area,
+Central Coast, Central Sierra & Kern, Southern California) and only groups the `/fire`
+region picker; it is not part of the package metadata or the API response. Each region frames
+one station's neighbourhoods and the adjacent wildland; they are presentation choices, not
+response-area boundaries or risk designations.
 
 ## Package format (`app/src/fire/landscapePackage.ts`)
 
