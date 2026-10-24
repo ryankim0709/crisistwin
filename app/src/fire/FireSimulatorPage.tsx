@@ -3,13 +3,27 @@ import { useMediaQuery } from "../diorama/ui/format";
 import type { FireDioramaSceneApi, GroundClickMode } from "./diorama/types";
 import { FireDioramaScene } from "./diorama/FireDioramaScene";
 import AreaPicker, { AREA_PRESETS, DEFAULT_AREA } from "./ui/AreaPicker";
+import {
+  AREA_SIZES,
+  DEFAULT_AREA_SIZE,
+  effectiveRadiusMeters,
+  type AreaSizeId,
+} from "./ui/areaSize";
+import SatelliteFireMap from "./SatelliteFireMap";
 import FireDock from "./ui/FireDock";
 import FireLegend from "./ui/FireLegend";
 import { formatDuration } from "./ui/format";
 import { useFirePlayback } from "./useFirePlayback";
 import {
+  RegionUnavailableError,
+  fetchRegionCatalog,
+  fetchRegionLandscape,
+} from "./landscapePackage";
+import { DEFAULT_REGION_ID, SOCAL_REGIONS } from "./regions";
+import {
   LANDFIRE_ATTRIBUTION,
   TERRAIN_ATTRIBUTION,
+  landscapeCellMetersFor,
   loadLandscape,
   type LandscapeGrid,
 } from "./landscape";
@@ -47,10 +61,10 @@ const PHONE_STAGE_MAX_WIDTH_PX = 720;
 const SPACE_OWNERS =
   "button, a[href], select, textarea, summary, [contenteditable], input:not([type='range'])";
 const MAX_WIND_SPEED_MPH = 60;
-/** Grid half-width: generous enough for a fast run, bounded so downloads stay small. */
-const ASSUMED_FAST_SPREAD_METERS_PER_MINUTE = 40;
-const MIN_RADIUS_METERS = 3000;
-const MAX_RADIUS_METERS = 12000;
+/** From this horizon on, constant weather is a material caveat. */
+const LONG_HORIZON_MINUTES = 720;
+/** LANDFIRE's native cell size; anything coarser is disclosed next to the area. */
+const NATIVE_CELL_METERS = 30;
 
 /**
  * Demo defaults. These are presentation choices, not calibrated parameters: they put the
@@ -117,11 +131,8 @@ function nwsProvenance(reading: NwsWindReading, clampedFromMph: number | null): 
   );
 }
 
-function radiusFor(horizonMinutes: number): number {
-  return Math.min(
-    Math.max(horizonMinutes * ASSUMED_FAST_SPREAD_METERS_PER_MINUTE, MIN_RADIUS_METERS),
-    MAX_RADIUS_METERS,
-  );
+function formatKm(meters: number): string {
+  return String(Number((meters / 1000).toFixed(1)));
 }
 
 function formatArea(squareMeters: number): string {
@@ -160,10 +171,36 @@ const MOISTURE_FIELDS: { key: keyof FuelMoisture; label: string; title: string }
   { key: "liveWoody", label: "Woody", title: "Live woody fuel moisture" },
 ];
 
+/** Where the board's data came from, shown next to the area. */
+type Provenance =
+  | { kind: "stored"; builtAt: string; cellMeters: number }
+  | { kind: "live"; storedUnavailable: boolean };
+
+/** A stored SoCal region, or a custom area loaded live. */
+const CUSTOM_SELECTION = "custom";
+
+type ViewMode = "diorama" | "satellite";
+const VIEW_STORAGE_KEY = "crisistwin.fire.view";
+/** How long the "outside the loaded region" hint stays up. */
+const OUTSIDE_HINT_MS = 3500;
+
+function readStoredView(): ViewMode {
+  try {
+    return window.localStorage.getItem(VIEW_STORAGE_KEY) === "satellite" ? "satellite" : "diorama";
+  } catch {
+    return "diorama";
+  }
+}
+
+type CatalogState =
+  | { status: "loading" }
+  | { status: "ready"; ids: ReadonlySet<string> }
+  | { status: "error" };
+
 type LandscapeState =
   | { status: "idle" }
-  | { status: "loading" }
-  | { status: "ready"; grid: LandscapeGrid }
+  | { status: "loading"; storedUnavailable: boolean }
+  | { status: "ready"; grid: LandscapeGrid; provenance: Provenance }
   | { status: "error"; message: string };
 
 /** Provenance for the wind inputs: either the user's own assumption, or an NWS reading. */
@@ -196,11 +233,22 @@ function areaLabel(center: GeoPoint): string {
     : `${center.latitude.toFixed(2)}, ${center.longitude.toFixed(2)}`;
 }
 
+function formatBuilt(iso: string): string {
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? iso : date.toISOString().slice(0, 10);
+}
+
 export default function FireSimulatorPage() {
   const reducedMotion = useMediaQuery(REDUCED_MOTION_QUERY);
   const wide = useMediaQuery(WIDE_QUERY);
 
   const [areaCenter, setAreaCenter] = useState<GeoPoint>(DEFAULT_AREA.point);
+  const [view, setView] = useState<ViewMode>(readStoredView);
+  const [fitSignal, setFitSignal] = useState(0);
+  const [outsideHint, setOutsideHint] = useState(false);
+  const [selection, setSelection] = useState<string>(DEFAULT_REGION_ID);
+  const [catalog, setCatalog] = useState<CatalogState>({ status: "loading" });
+  const [areaSize, setAreaSize] = useState<AreaSizeId>(DEFAULT_AREA_SIZE);
   const [areaPickerOpen, setAreaPickerOpen] = useState(false);
   const [origin, setOrigin] = useState<GeoPoint | null>(null);
   const [windSpeedMph, setWindSpeedMph] = useState(DEFAULT_WIND_SPEED_MPH);
@@ -247,33 +295,84 @@ export default function FireSimulatorPage() {
   // The scenario panel starts open on wide stages and closed on phones until the user decides.
   const scenarioOpen = scenarioOpenChoice ?? !phone;
 
-  const radiusMeters = radiusFor(horizonMinutes);
+  const region = SOCAL_REGIONS.find((candidate) => candidate.id === selection) ?? null;
+  // Stored regions are fixed boards; only a custom area is sized by the horizon and area size.
+  const radiusMeters = region
+    ? region.radiusMeters
+    : effectiveRadiusMeters(horizonMinutes, areaSize);
+  const requestedCellMeters = region
+    ? region.cellMeters
+    : landscapeCellMetersFor(radiusMeters);
+  const centerLatitude = region ? region.center.latitude : areaCenter.latitude;
+  const centerLongitude = region ? region.center.longitude : areaCenter.longitude;
+
+  // Which regions are stored is advisory: a load still tries the store directly.
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchRegionCatalog(controller.signal)
+      .then((regions) => setCatalog({ status: "ready", ids: new Set(regions.map((r) => r.id)) }))
+      .catch(() => {
+        if (!controller.signal.aborted) setCatalog({ status: "error" });
+      });
+    return () => controller.abort();
+  }, [loadAttempt]);
 
   // Fuel and terrain depend only on where and how far, so wind, moisture and ignition edits
   // never refetch. An older request can never overwrite a newer one.
   const resetScenarioRef = useRef<() => void>(() => undefined);
   const requestRef = useRef(0);
   useEffect(() => {
+    // One request id covers the stored and the live path, so neither can overwrite a newer load.
     const request = ++requestRef.current;
     const controller = new AbortController();
-    setLandscape({ status: "loading" });
-    loadLandscape(areaCenter.longitude, areaCenter.latitude, radiusMeters, controller.signal)
-      .then((grid) => {
-        if (request !== requestRef.current) return;
-        // A longer or shorter horizon changes the box; keep the ignition only if it is inside.
-        const kept = originRef.current;
-        if (kept && cellAt(grid, kept) < 0) resetScenarioRef.current();
-        setLandscape({ status: "ready", grid });
-      })
-      .catch((cause: unknown) => {
-        if (controller.signal.aborted || request !== requestRef.current) return;
-        setLandscape({
-          status: "error",
-          message: cause instanceof Error ? cause.message : "Could not load fuel and terrain data.",
-        });
+    const stale = () => controller.signal.aborted || request !== requestRef.current;
+    setLandscape({ status: "loading", storedUnavailable: false });
+
+    const finish = (grid: LandscapeGrid, provenance: Provenance) => {
+      // A longer or shorter horizon changes a custom box; keep the ignition only if inside.
+      const kept = originRef.current;
+      if (kept && cellAt(grid, kept) < 0) resetScenarioRef.current();
+      setLandscape({ status: "ready", grid, provenance });
+    };
+    const live = (storedUnavailable: boolean) =>
+      loadLandscape(centerLongitude, centerLatitude, radiusMeters, controller.signal, {
+        cellMeters: requestedCellMeters,
+      }).then((grid) => {
+        if (!stale()) finish(grid, { kind: "live", storedUnavailable });
       });
+
+    const work = region
+      ? fetchRegionLandscape(region.id, controller.signal).then(
+          ({ grid, header }) => {
+            if (!stale()) {
+              finish(grid, {
+                kind: "stored",
+                builtAt: header.builtAt,
+                cellMeters: header.cellMeters,
+              });
+            }
+          },
+          (cause: unknown) => {
+            if (stale()) return;
+            // A missing store or a dead API is expected; a corrupt package is not.
+            if (!(cause instanceof RegionUnavailableError) && !(cause instanceof TypeError)) {
+              throw cause;
+            }
+            setLandscape({ status: "loading", storedUnavailable: true });
+            return live(true);
+          },
+        )
+      : live(false);
+    work.catch((cause: unknown) => {
+      if (stale()) return;
+      setLandscape({
+        status: "error",
+        message: cause instanceof Error ? cause.message : "Could not load fuel and terrain data.",
+      });
+    });
     return () => controller.abort();
-  }, [areaCenter, radiusMeters, loadAttempt]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selection, centerLatitude, centerLongitude, radiusMeters, requestedCellMeters, loadAttempt]);
 
   const scenario = useMemo(
     () =>
@@ -337,8 +436,10 @@ export default function FireSimulatorPage() {
 
   // Scene creation: StrictMode-safe (the cleanup disposes, the re-run builds a fresh scene).
   useEffect(() => {
+    // The diorama host only exists in the diorama view; the scene is rebuilt on return and the
+    // effects below re-push every piece of state because `scene` changes.
     const host = sceneHostRef.current;
-    if (!host) return;
+    if (view !== "diorama" || !host) return;
     let created: FireDioramaSceneApi;
     try {
       created = new FireDioramaScene(host, { reducedMotion: reducedMotionRef.current });
@@ -358,7 +459,7 @@ export default function FireSimulatorPage() {
       setScene(null);
       created.dispose();
     };
-  }, []);
+  }, [view]);
 
   // Continuous model time, pushed to the scene every animation frame without a React render.
   const onTime = useCallback((minutes: number) => sceneRef.current?.setTime(minutes), []);
@@ -400,6 +501,7 @@ export default function FireSimulatorPage() {
     if (runKey === lastStartKey.current) return;
     lastStartKey.current = runKey;
     restartPlayback();
+    setFitSignal((value) => value + 1);
   }, [runKey, restartPlayback]);
 
   // An NWS reading belongs to one ignition point and to wind values nobody has overridden.
@@ -481,12 +583,34 @@ export default function FireSimulatorPage() {
         if (origin) editWindDirection(Math.round((bearingBetween(origin, point) + 180) % 360));
         return;
       }
+      // The satellite map can be clicked anywhere; the model only covers the loaded board.
+      if (grid && cellAt(grid, point) < 0) {
+        setOutsideHint(true);
+        return;
+      }
       // A reading belongs to one ignition point, so moving the point drops it.
       setOrigin(point);
       dropWindProvenance();
     },
-    [clickMode, origin, editWindDirection, dropWindProvenance],
+    [clickMode, origin, editWindDirection, dropWindProvenance, grid],
   );
+  useEffect(() => {
+    if (!outsideHint) return;
+    const timer = window.setTimeout(() => setOutsideHint(false), OUTSIDE_HINT_MS);
+    return () => window.clearTimeout(timer);
+  }, [outsideHint]);
+
+  function chooseView(next: ViewMode) {
+    if (next === view) return;
+    setView(next);
+    setOutsideHint(false);
+    if (next === "satellite" && hasRun) setFitSignal((value) => value + 1);
+    try {
+      window.localStorage.setItem(VIEW_STORAGE_KEY, next);
+    } catch {
+      // Private mode or blocked storage: the choice just is not remembered.
+    }
+  }
   const groundClickRef = useRef(handleGroundClick);
   useEffect(() => {
     groundClickRef.current = handleGroundClick;
@@ -521,10 +645,18 @@ export default function FireSimulatorPage() {
     resetScenarioRef.current = clearScenario;
   });
 
-  function changeArea(center: GeoPoint) {
+  function changeArea(center: GeoPoint, size?: AreaSizeId) {
     setAreaPickerOpen(false);
     clearScenario();
+    if (size) setAreaSize(size);
+    setSelection(CUSTOM_SELECTION);
     setAreaCenter(center);
+  }
+
+  function selectRegion(id: string) {
+    if (id === selection) return;
+    clearScenario();
+    setSelection(id);
   }
 
   // Track the stage width for the phone layout, independent of whether WebGL started.
@@ -545,7 +677,7 @@ export default function FireSimulatorPage() {
   useEffect(() => {
     const stage = stageRef.current;
     const overlay = stage?.querySelector<HTMLElement>(".fr-overlay");
-    if (!stage || !overlay || !scene) return;
+    if (!stage || !overlay) return;
     const measure = () => {
       const box = stage.getBoundingClientRect();
       const middle = box.top + box.height / 2;
@@ -561,7 +693,11 @@ export default function FireSimulatorPage() {
         } else if (r.top + r.height / 2 < middle) top = Math.max(top, r.bottom - box.top);
         else bottom = Math.max(bottom, box.bottom - r.top);
       }
-      scene.setViewInsets({ top, right: 0, bottom, left });
+      scene?.setViewInsets({ top, right: 0, bottom, left });
+      // The satellite map's own controls are kept clear of the floating panels with these.
+      stage.style.setProperty("--fr-inset-top", `${top}px`);
+      stage.style.setProperty("--fr-inset-bottom", `${bottom}px`);
+      stage.style.setProperty("--fr-inset-left", `${left}px`);
     };
     const observer = new ResizeObserver(measure);
     const observeChildren = () => {
@@ -596,11 +732,22 @@ export default function FireSimulatorPage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [togglePlayback, hasRun]);
 
-  const resetView = useCallback(() => sceneRef.current?.resetView(false), []);
-  const focusFire = useCallback(() => sceneRef.current?.resetView(true), []);
+  const resetView = useCallback(() => {
+    if (view === "satellite") setFitSignal((value) => value + 1);
+    else sceneRef.current?.resetView(false);
+  }, [view]);
+  const focusFire = useCallback(() => {
+    if (view === "satellite") setFitSignal((value) => value + 1);
+    else sceneRef.current?.resetView(true);
+  }, [view]);
 
   const windTowardDegrees = (windFromDegrees + 180) % 360;
   const frame = frameAtOrBefore(frames, playback.t);
+  let satelliteFrameIndex = 0;
+  for (let index = 0; index < frames.length; index++) {
+    if (frames[index].elapsedMinutes > playback.t) break;
+    satelliteFrameIndex = index;
+  }
   // Attribution covers the whole run, so the three mechanisms sum to the final burned area.
   const breakdownTotal = run
     ? run.arrivalBreakdown.surfaceSquareMeters +
@@ -679,12 +826,18 @@ export default function FireSimulatorPage() {
               "wildland-urban edge."),
       });
     }
+    if (run.scenario.horizonMinutes >= LONG_HORIZON_MINUTES) {
+      warnings.push({
+        key: "constant-weather",
+        text: "Wind and fuel moisture are held constant for the whole run; no day–night change is modelled.",
+      });
+    }
     if (run.reachedEdge) {
       warnings.push({
         key: "edge",
         text:
           "The fire reached the edge of the modelled area. Results past that point are " +
-          "truncated; try a longer horizon for a wider grid.",
+          "truncated; try a larger area size or a longer horizon for a wider grid.",
       });
     }
   }
@@ -695,6 +848,24 @@ export default function FireSimulatorPage() {
       : "Click downwind of the ignition point to aim the wind that way."
     : "Click the landscape to place an ignition point on vegetated ground.";
   const sceneReady = sceneStatus.kind === "ready";
+  // Report the resolution the loaded grid really has; the request is only a stand-in while loading.
+  const displayedCellMeters = grid ? grid.cellMeters : requestedCellMeters;
+  const resamplingNote =
+    grid?.resampling === "mode"
+      ? " · fuels resampled by majority"
+      : grid?.resampling === "nearest"
+        ? " · fuels resampled by nearest cell"
+        : "";
+  const provenance = landscape.status === "ready" ? landscape.provenance : null;
+  const provenanceText = provenance
+    ? provenance.kind === "stored"
+      ? `Stored landscape · built ${formatBuilt(provenance.builtAt)} · LANDFIRE 2025 · ${provenance.cellMeters} m cells`
+      : "Live from LANDFIRE"
+    : null;
+  const storedUnavailable =
+    landscape.status === "loading"
+      ? landscape.storedUnavailable
+      : provenance?.kind === "live" && provenance.storedUnavailable;
 
   return (
     <main
@@ -705,19 +876,36 @@ export default function FireSimulatorPage() {
       aria-label="Fire spread model diorama"
     >
       <div className="fr-stage" ref={stageRef}>
-        <div
-          className="fr-scene"
-          ref={sceneHostRef}
-          aria-hidden={sceneStatus.kind === "error"}
-          role="group"
-          aria-label={
-            clickMode === "origin"
-              ? "3D landscape. Click to place the ignition point."
-              : "3D landscape. Click to aim the wind from the ignition point toward that location."
-          }
-        />
+        {view === "diorama" ? (
+          <div
+            className="fr-scene"
+            ref={sceneHostRef}
+            aria-hidden={sceneStatus.kind === "error"}
+            role="group"
+            aria-label={
+              clickMode === "origin"
+                ? "3D landscape. Click to place the ignition point."
+                : "3D landscape. Click to aim the wind from the ignition point toward that location."
+            }
+          />
 
-        {sceneStatus.kind === "error" && (
+        ) : (
+          <div className="fr-satellite">
+            <SatelliteFireMap
+              origin={origin}
+              windFromDegrees={windFromDegrees}
+              frames={frames as FireFrame[]}
+              frameIndex={satelliteFrameIndex}
+              landscape={grid}
+              showFuel={showFuel}
+              fitSignal={fitSignal}
+              clickMode={clickMode}
+              onMapClick={handleGroundClick}
+            />
+          </div>
+        )}
+
+        {view === "diorama" && sceneStatus.kind === "error" && (
           <div className="fr-error fr-panel" role="alert">
             <p className="fr-error-title">3D view unavailable in this browser</p>
             <p>
@@ -732,7 +920,18 @@ export default function FireSimulatorPage() {
         {landscape.status === "loading" && (
           <div className="fr-veil" role="status">
             <span className="fr-veil-dot" aria-hidden="true" />
-            Sculpting terrain from LANDFIRE fuels and elevation…
+            <div>
+              <p>Sculpting terrain from LANDFIRE fuels and elevation…</p>
+              <p className="fr-veil-note">
+                {formatKm(radiusMeters)} km radius · {requestedCellMeters} m cells. Large areas
+                take longer.
+              </p>
+              {storedUnavailable && (
+                <p className="fr-veil-note">
+                  Stored region unavailable — loading live from LANDFIRE; this takes longer.
+                </p>
+              )}
+            </div>
           </div>
         )}
 
@@ -793,10 +992,43 @@ export default function FireSimulatorPage() {
                 switch on as assumptions.
               </p>
 
-              <div className="fr-field">
-                <span className="fr-field-title">Area</span>
+              <fieldset className="fr-field fr-regions">
+                <legend>Region (Southern California)</legend>
+                <ul className="fr-region-list">
+                  {SOCAL_REGIONS.map((entry) => {
+                    const status =
+                      catalog.status === "loading"
+                        ? "checking…"
+                        : catalog.status === "error"
+                          ? "catalog unavailable"
+                          : catalog.ids.has(entry.id)
+                            ? "stored"
+                            : "not built yet";
+                    return (
+                      <li key={entry.id}>
+                        <label>
+                          <input
+                            type="radio"
+                            name="region"
+                            checked={selection === entry.id}
+                            onChange={() => selectRegion(entry.id)}
+                          />
+                          <span className="fr-region-text">
+                            <strong>{entry.name}</strong>
+                            <span className="fr-readout">
+                              {entry.counties.join(", ")} · {status}
+                            </span>
+                            <span className="fr-readout">{entry.summary}</span>
+                          </span>
+                        </label>
+                      </li>
+                    );
+                  })}
+                </ul>
                 <div className="fr-area-row">
-                  <span className="fr-area-name">{areaLabel(areaCenter)}</span>
+                  <span className="fr-area-name">
+                    {region ? region.name : `Custom: ${areaLabel(areaCenter)}`}
+                  </span>
                   <button
                     type="button"
                     id="fr-change-area"
@@ -804,14 +1036,42 @@ export default function FireSimulatorPage() {
                     onClick={() => setAreaPickerOpen(true)}
                     aria-haspopup="dialog"
                   >
-                    Change area
+                    Custom area…
                   </button>
                 </div>
+                {!region && (
+                  <div className="fr-field-inline fr-area-size">
+                    <label htmlFor="area-size">Area size</label>
+                    <select
+                      id="area-size"
+                      value={areaSize}
+                      onChange={(event) => setAreaSize(event.target.value as AreaSizeId)}
+                    >
+                      {AREA_SIZES.map((size) => (
+                        <option key={size.id} value={size.id}>
+                          {size.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 <p className="fr-readout">
-                  {areaCenter.latitude.toFixed(3)}, {areaCenter.longitude.toFixed(3)} ·{" "}
-                  {(radiusMeters / 1000).toFixed(0)} km radius
+                  {centerLatitude.toFixed(3)}, {centerLongitude.toFixed(3)} ·{" "}
+                  {formatKm(radiusMeters)} km radius · {displayedCellMeters} m cells
+                  {resamplingNote}
                 </p>
-              </div>
+                {provenanceText && <p className="fr-readout">{provenanceText}</p>}
+                {storedUnavailable && (
+                  <p className="fr-alert" role="status">
+                    Stored region unavailable — loading live from LANDFIRE; this takes longer.
+                  </p>
+                )}
+                {displayedCellMeters > NATIVE_CELL_METERS && (
+                  <p className="fr-hint">
+                    Coarser cells smooth narrow fuel breaks and small neighbourhoods.
+                  </p>
+                )}
+              </fieldset>
 
               <fieldset className="fr-field">
                 <legend>Clicking the landscape sets</legend>
@@ -1025,13 +1285,15 @@ export default function FireSimulatorPage() {
                 >
                   {HORIZON_CHOICES.map((minutes) => (
                     <option key={minutes} value={minutes}>
-                      {minutes / 60} hours
+                      {minutes / 60} h
                     </option>
                   ))}
                 </select>
-                <span className="fr-readout">
-                  {(radiusMeters / 1000).toFixed(0)} km grid radius
-                </span>
+                {region && (
+                  <span className="fr-readout">
+                    The board is fixed for a stored region; a long run may reach its edge.
+                  </span>
+                )}
               </div>
 
               <div className="fr-field">
@@ -1097,22 +1359,24 @@ export default function FireSimulatorPage() {
             </div>
           </section>
 
-          <button
-            type="button"
-            className="fr-btn fr-scenario-open"
-            aria-expanded={scenarioOpen}
-            aria-controls="fr-scenario"
-            onClick={() => setScenarioOpenChoice(true)}
-          >
-            <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
-              <path d="M2 4.5h12M2 8h12M2 11.5h12" stroke="currentColor" strokeWidth="1.6" />
-            </svg>
-            Scenario
-          </button>
+          {!scenarioOpen && (
+            <button
+              type="button"
+              className="fr-btn fr-scenario-open"
+              aria-expanded={false}
+              aria-controls="fr-scenario"
+              onClick={() => setScenarioOpenChoice(true)}
+            >
+              <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+                <path d="M2 4.5h12M2 8h12M2 11.5h12" stroke="currentColor" strokeWidth="1.6" />
+              </svg>
+              Scenario
+            </button>
+          )}
 
           <div className="fr-notice">
             <div className="fr-notice-bar fr-panel">
-              <span className="fr-chip">Simulated · illustrative · not operational guidance</span>
+              <span className="fr-chip">Simulated · illustrative · not operational</span>
               <button
                 type="button"
                 className="fr-info-btn"
@@ -1123,6 +1387,40 @@ export default function FireSimulatorPage() {
               >
                 i
               </button>
+            </div>
+            <div className="fr-view fr-panel" role="radiogroup" aria-label="View">
+              <span className="fr-view-label" aria-hidden="true">
+                View
+              </span>
+              <label>
+                <input
+                  type="radio"
+                  name="fire-view"
+                  checked={view === "diorama"}
+                  onChange={() => chooseView("diorama")}
+                />
+                <span title="Diorama">
+                  <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+                    <path d="M1.5 12.5 8 9l6.5 3.5L8 15.5zM3 8.5 8 6l5 2.5M5 4.5 8 3l3 1.5" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+                  </svg>
+                  <span className="fr-view-text">Diorama</span>
+                </span>
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="fire-view"
+                  checked={view === "satellite"}
+                  onChange={() => chooseView("satellite")}
+                />
+                <span title="Satellite (USGS aerial imagery, needs a network connection)">
+                  <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+                    <circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" strokeWidth="1.3" />
+                    <path d="M2.5 8h11M8 2.5c-2 2-2 9 0 11M8 2.5c2 2 2 9 0 11" fill="none" stroke="currentColor" strokeWidth="1.1" />
+                  </svg>
+                  <span className="fr-view-text">Satellite</span>
+                </span>
+              </label>
             </div>
             <div id="fr-notice-note" className="fr-notice-note fr-panel" hidden={!noticeOpen}>
               <div className="fr-sources">
@@ -1208,7 +1506,7 @@ export default function FireSimulatorPage() {
                     aria-controls="fr-details"
                     onClick={() => setDetailsOpen((open) => !open)}
                   >
-                    {detailsOpen ? "Hide details" : "Details"}
+                    <span className="fr-details-label">{detailsOpen ? "Hide details" : "Details"}</span>
                     <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
                       <path
                         d={detailsOpen ? "M2.5 7.5 6 4l3.5 3.5" : "M2.5 4.5 6 8l3.5-3.5"}
@@ -1220,6 +1518,23 @@ export default function FireSimulatorPage() {
                   </button>
                   <div id="fr-details" className="fr-details" hidden={!detailsOpen}>
                     <div className="fr-card">
+                      <div className="fr-card-row fr-mix-row">
+                        <span>Whole-run mix</span>
+                        <strong>
+                          Spotting{" "}
+                          {run.appliedOptions.spotting.enabled
+                            ? formatShare(run.arrivalBreakdown.spottingSquareMeters, breakdownTotal)
+                            : "off"}{" "}
+                          · Structures{" "}
+                          {run.appliedOptions.structureSpread.enabled
+                            ? formatShare(run.arrivalBreakdown.structureSquareMeters, breakdownTotal)
+                            : "off"}{" "}
+                          · Crown{" "}
+                          {run.crownFire.modelled
+                            ? formatShare(crownShareSquareMeters, crownTotal)
+                            : "n/a"}
+                        </strong>
+                      </div>
                       <div className="fr-card-row">
                         <span>Fuel at ignition</span>
                         <strong>{run.ignition.fuelLabel}</strong>
@@ -1261,6 +1576,24 @@ export default function FireSimulatorPage() {
                           ms
                         </strong>
                       </div>
+                    </div>
+
+                    <div className="fr-card">
+                      <h2>Resolution</h2>
+                      <p>
+                        {run.resolution.cellMeters} m cells (
+                        {run.resolution.groundCellSizeMeters.toFixed(0)} m on the ground), fuels{" "}
+                        {run.resolution.resampling === "native"
+                          ? "at LANDFIRE's native resolution"
+                          : run.resolution.resampling === "mode"
+                            ? "resampled by majority"
+                            : "resampled by nearest cell"}
+                        .
+                        {run.resolution.cellMeters > NATIVE_CELL_METERS &&
+                          " Coarse cells lose narrow firebreaks and roads, small urban patches and parks, and smooth slope, so spread across them can be over- or understated."}
+                        {run.resolution.spottingReachCeilingMeters > 0 &&
+                          ` Spotting is capped at ${(run.resolution.spottingReachCeilingMeters / 1000).toFixed(1)} km by the cell size and path-length limit.`}
+                      </p>
                     </div>
 
                     <div className="fr-card">
@@ -1370,20 +1703,26 @@ export default function FireSimulatorPage() {
             </ul>
           )}
 
-          {showHint && (
+          {outsideHint && (
+            <p className="fr-hint-chip fr-panel" role="status">
+              That spot is outside the loaded region. Click inside the shaded board.
+            </p>
+          )}
+
+          {showHint && !outsideHint && (
             <p className="fr-hint-chip fr-panel" role="status">
               Click the landscape to place an ignition point
             </p>
           )}
 
-          <FireLegend windTowardDegrees={windTowardDegrees} showFuel={showFuel} defaultOpen={wide} />
+          <FireLegend view={view} windTowardDegrees={windTowardDegrees} showFuel={showFuel} defaultOpen={wide} />
 
           <FireDock
             playback={playback}
             horizonMinutes={horizonMinutes}
             hasRun={hasRun}
             canFocusFire={hasRun}
-            sceneReady={sceneReady}
+            sceneReady={sceneReady || view === "satellite"}
             onResetView={resetView}
             onFocusFire={focusFire}
           />
@@ -1391,12 +1730,13 @@ export default function FireSimulatorPage() {
 
         <p className="fr-attribution">
           Fuel: LANDFIRE · Terrain: AWS terrain tiles (USGS 3DEP and others)
+          {view === "satellite" ? " · Imagery: USGS The National Map" : ""}
           {windSource.status === "ready" ? " · Wind: NWS" : ""} · Simulated, not operational
         </p>
 
         {areaPickerOpen && (
           <AreaPicker
-            current={areaCenter}
+            current={region ? region.center : areaCenter}
             onSelect={changeArea}
             onClose={() => setAreaPickerOpen(false)}
           />

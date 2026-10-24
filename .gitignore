@@ -32,3 +32,6 @@ app/public/simulations/**/*.json
 data/incidents/*/*/raw/
 data/incidents/*/*/normalized/
 data/incidents/*/*/derived/
+
+# Prebuilt landscape packages live in MongoDB GridFS; rebuild with tools/build_landscape_regions
+data/landscapes/

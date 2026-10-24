@@ -19,6 +19,31 @@ const WIND_LIFT = 13;
 /** Re-pick hot spots only when model time moves at least this much (minutes). */
 const RESAMPLE_MINUTES = 0.5;
 
+/**
+ * Minutes a cell stays "burning" on screen: at least `minWindow` and two model steps, and
+ * at least twice the time the front takes to cross one cell (median arrival difference of
+ * neighbouring burned cells), so coarse cells and long steps still show a readable active
+ * band. Capped at a quarter of the horizon.
+ */
+export function burnWindowMinutes(cols: number, rows: number, arrival: Float32Array, horizon: number, stepMinutes: number, minWindow: number): number {
+  const base = Math.max(minWindow, 2 * stepMinutes);
+  const stride = Math.max(1, Math.floor(Math.sqrt((cols * rows) / 20000)));
+  const diffs: number[] = [];
+  for (let r = 0; r < rows; r += stride) {
+    for (let c = 0; c < cols - 1; c += stride) {
+      const a = arrival[r * cols + c];
+      const b = arrival[r * cols + c + 1];
+      if (!(a <= horizon && b <= horizon)) continue;
+      const d = Math.abs(a - b);
+      if (d > 0) diffs.push(d);
+    }
+  }
+  if (diffs.length < 8) return base;
+  diffs.sort((x, y) => x - y);
+  const crossing = diffs[diffs.length >> 1];
+  return Math.min(Math.max(base, 2 * crossing), Math.max(base, horizon * 0.25));
+}
+
 export type HotSpot = { i: number; x: number; y: number; z: number; weight: number };
 
 /**
@@ -37,6 +62,10 @@ export class FireSampler {
   readonly headRange = { min: 0, max: 1 };
   /** Bounding box (world x/z) of everything the run burns by its horizon, or null. */
   burnBox: { minX: number; maxX: number; minZ: number; maxZ: number } | null = null;
+  /** World units per cell of the current board (for size scaling). */
+  get cellWorld() {
+    return this.frame ? this.frame.cellWorld : 1;
+  }
   /** Burning-cell count at the last update. */
   burningCount = 0;
 
@@ -67,9 +96,20 @@ export class FireSampler {
       minR = Math.min(minR, r);
       maxR = Math.max(maxR, r);
     }
-    ids.sort((a, b) => arrival[a] - arrival[b]);
-    this.order = Int32Array.from(ids);
-    this.sorted = Float32Array.from(ids, (i) => arrival[i]);
+    // Counting sort by arrival time (fine buckets over the horizon): O(n) even for ~10^6 burned
+    // cells; order inside a bucket (< horizon/4096 minutes) does not matter for the band slice.
+    const buckets = 4096;
+    const scale = (buckets - 1) / Math.max(1e-6, horizon);
+    const start = new Int32Array(buckets + 1);
+    for (const i of ids) start[Math.min(buckets - 1, Math.max(0, Math.floor(arrival[i] * scale))) + 1]++;
+    for (let b = 0; b < buckets; b++) start[b + 1] += start[b];
+    this.order = new Int32Array(ids.length);
+    this.sorted = new Float32Array(ids.length);
+    for (const i of ids) {
+      const slot = start[Math.min(buckets - 1, Math.max(0, Math.floor(arrival[i] * scale)))]++;
+      this.order[slot] = i;
+      this.sorted[slot] = arrival[i];
+    }
     if (ids.length) {
       const cw = frame.cellWorld;
       this.burnBox = {
@@ -359,7 +399,8 @@ export class FxLayer {
     const tx = this.toward.x;
     const tz = this.toward.y;
     // Bigger fires make taller, broader plumes, within limits.
-    const size = THREE.MathUtils.clamp(Math.sqrt(this.sampler.burningCount) * 0.35, 6, 22);
+    // Cell-size aware: the band's ground footprint (not its cell count) sets the plume.
+    const size = THREE.MathUtils.clamp(Math.sqrt((this.sampler.burningCount * this.sampler.cellWorld) / 1.5) * 0.35, 6, 22);
     for (let i = 0; i < this.smoke.length; i++) {
       const p = this.smoke[i];
       if (i >= active || spots.length === 0) {
@@ -403,7 +444,7 @@ export class FxLayer {
       const flick = reducedMotion ? 0.8 : 0.6 + 0.4 * Math.sin(time * rate + h1 * 6.28) * Math.sin(time * rate * 0.43 + h3 * 6.28);
       s.position.set(spot.x, spot.y + 1.5 + h3 * 1.5, spot.z);
       s.scale.setScalar((5 + h3 * 7) * (0.6 + 0.4 * spot.weight));
-      s.scale.setScalar(Math.max(s.scale.x, this.worldPerPixel * 8));
+      s.scale.setScalar(Math.max(s.scale.x, this.worldPerPixel * 8, this.sampler.cellWorld * 1.5));
       (s.material as THREE.SpriteMaterial).opacity = 0.45 * flick * spot.weight * (0.55 + 0.45 * h2);
       s.visible = true;
     }
