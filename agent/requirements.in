@@ -1,0 +1,10 @@
+# Direct runtime dependencies of the `crisistwin_agent` package.
+# Everything this package needs beyond the Anthropic SDK is in the Python
+# standard library; the Rothermel physics stays in TypeScript and is reached
+# through the Node sidecar, not through a Python science stack.
+#
+# The agent loop uses `client.beta.messages.tool_runner` and the `@beta_tool`
+# decorator. Those live in the SDK's beta namespace and can change shape within
+# a major version, so the range is held to the major the agent was written
+# against and the resolved set in requirements.txt is what gets installed.
+anthropic>=2.3.0,<3
