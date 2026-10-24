@@ -1,6 +1,8 @@
 /**
- * Landscape fire growth: Rothermel rate of spread per 30 m cell, propagated as a
- * minimum-travel-time arrival field (after Finney 2002), then contoured into perimeters.
+ * Landscape fire growth: Rothermel rate of spread per landscape cell (LANDFIRE's native
+ * 30 m, or a coarser resampled lattice for large areas — `LandscapeGrid.cellMeters`),
+ * propagated as a minimum-travel-time arrival field (after Finney 2002), then contoured
+ * into perimeters.
  *
  * A cell's fire spreads to its neighbours at the elliptical rate for the direction of
  * travel, so heading, flanking, and backing spread all fall out of one field.
@@ -57,7 +59,7 @@
 import type { Feature, Polygon, Position } from "geojson";
 import { FUEL_MODELS, NON_BURNABLE_CODES, fuelLabel, isBurnable } from "./fuelModels";
 import { prepareFuelBed, spreadFromBed, type FuelMoisture, type SpreadResult } from "./rothermel";
-import { mercatorToLonLat, type LandscapeGrid } from "./landscape";
+import { mercatorToLonLat, type LandscapeGrid, type LandscapeResampling } from "./landscape";
 import {
   DEFAULT_FOLIAR_MOISTURE_FRACTION,
   TEN_METER_WIND_PER_TWENTY_FOOT_WIND,
@@ -141,9 +143,21 @@ export const MOISTURE_PRESETS: readonly MoisturePreset[] = [
   },
 ] as const;
 
+/**
+ * Simulation-clock minutes between output frames. It is an output sampling interval, not
+ * a solver time step: arrival times are continuous, and the frames are contours of the
+ * same arrival field at multiples of this interval. It stays 15 minutes at every horizon
+ * (a 24-hour run has 97 frames), so frame k is always at k x 15 minutes.
+ */
 export const FIRE_STEP_MINUTES = 15;
 export const FIRE_HORIZON_MINUTES = 180;
-export const HORIZON_CHOICES = [120, 180, 360] as const;
+/**
+ * Horizons the page offers, minutes. The 12- and 24-hour choices hold wind, wind
+ * direction and fuel moisture constant for the whole horizon — no diurnal cycle, no
+ * overnight humidity recovery, no wind shift — so they are a constant-weather stress
+ * test rather than a forecast of a day's growth (docs/adr/0012-fire-large-areas.md).
+ */
+export const HORIZON_CHOICES = [120, 180, 360, 720, 1440] as const;
 /**
  * Flat midflame fraction, kept as the scenario default, as the value the page's control
  * starts from, and as the fallback when no canopy data is available.
@@ -299,7 +313,11 @@ export const SPOTTING_BEARING_OFFSETS_DEGREES = [-30, -15, 0, 15, 30] as const;
  * Hard bound on how many cells one spotting ray may walk, so that a caller raising
  * `maxDistanceMeters` cannot turn the solver quadratic. Effective reach is the smaller of
  * this and the distance limit; at the 23.7 m Berkeley ground cell this is about 1.1 km,
- * so the 500 m default ceiling binds first.
+ * so the 500 m default ceiling binds first. The bound is in cells because it bounds work,
+ * so in metres it grows with the cell (5.8 km at 120 m cells) and a coarse run honours a
+ * page distance above 1.1 km that a native run would cut short; the effective ceiling is
+ * reported as `FireRun.resolution.spottingReachCeilingMeters`. Coarse cells also make the
+ * shortest spot longer: one gap cell and one landing cell is 240 m at 120 m cells.
  */
 export const SPOTTING_MAX_PATH_CELLS = 48;
 
@@ -395,12 +413,20 @@ export function crownLengthToBreadth(twentyFootWindSpeedMph: number): number {
  * What it does not fix: the remaining 19 percent worst-case head deficit, which needs
  * either a lower `MAX_LENGTH_TO_BREADTH` or a solver that advances along the per-cell
  * heading instead of along lattice directions. That is recorded, not claimed as solved.
+ *
+ * The radius stays in cells on coarse landscapes, deliberately. What it buys is angular:
+ * the direction set, and with it the ellipse the lattice can draw, depends only on the
+ * offsets, not on how many metres a cell is. The price grows with the cell: a step
+ * carries its source cell's rate up to 10.6 cells (offset (8, 7), 1.28 km at 120 m
+ * cells), and only the passability of the cells it crosses is checked, not their rates,
+ * so in patchy fuel a long step can run fast fuel's rate through a slower patch.
+ * Barriers still hold at any cell size. See docs/adr/0012-fire-large-areas.md.
  */
 export const NEIGHBOUR_STENCIL_RADIUS = 8;
 
 export const SPREAD_MODEL = {
   id: "rothermel-1972-mtt",
-  version: "4.0.0",
+  version: "4.1.0",
   surfaceSpread: "Rothermel (1972), per Andrews RMRS-GTR-371 (2018)",
   fuelModels: "Scott & Burgan (2005) 40 standard fire behavior fuel models",
   ellipse:
@@ -410,7 +436,7 @@ export const SPREAD_MODEL = {
   midflameWind:
     "Albini & Baughman (1979) wind adjustment factor per cell from canopy cover, canopy height and fuel bed depth; a scenario midflame factor moved off its default overrides it everywhere",
   propagation:
-    "Minimum travel time over a 30 m grid (after Finney 2002), stepped along every integer offset within 8 cells with no common factor (176 directions)",
+    "Minimum travel time over the landscape grid (LANDFIRE 30 m, or a coarser mode-resampled lattice for large areas) (after Finney 2002), stepped along every integer offset within 8 cells with no common factor (176 directions)",
   backingRate:
     "Directional rate floored at the no-wind, no-slope rate, as BehavePlus computes backing spread (Andrews RMRS-GTR-371, 2018)",
   spotting:
@@ -545,7 +571,13 @@ export interface FireRun {
   midflameWind: MidflameWindSummary;
   /** True when fire reached the edge of the modelled area, so the run is truncated. */
   reachedEdge: boolean;
+  /** Ground metres per cell, same as `resolution.groundCellSizeMeters`. */
   cellSizeMeters: number;
+  /**
+   * Resolution the run was solved at, for the page to state. Copied from the landscape so
+   * a run carries it wherever it is read.
+   */
+  resolution: FireRunResolution;
   computeMilliseconds: number;
   /**
    * Fire arrival time per landscape cell, minutes since ignition, in the same row-major
@@ -553,6 +585,22 @@ export interface FireRun {
    * the horizon are kept so renderers can clamp them consistently with the frames.
    */
   arrivalMinutes: Float32Array;
+}
+
+export interface FireRunResolution {
+  /** `LandscapeGrid.cellMeters`: 30 for LANDFIRE's native lattice, else the coarse cell. */
+  cellMeters: number;
+  /** Ground metres per cell actually used for distances, areas and slope. */
+  groundCellSizeMeters: number;
+  /** `LandscapeGrid.resampling`: "native", or how coarse cells were filled. */
+  resampling: LandscapeResampling;
+  /** Longest straight step the solver takes, ground metres (offset (8, 7) x cell). */
+  maxStepMeters: number;
+  /**
+   * Furthest a firebrand could travel in this run, ground metres: the scenario's
+   * `maxDistanceMeters` cut to `SPOTTING_MAX_PATH_CELLS` cells. 0 when spotting is off.
+   */
+  spottingReachCeilingMeters: number;
 }
 
 export class NonBurnableIgnitionError extends Error {
@@ -1107,21 +1155,56 @@ export function simulateFireSpread(landscape: LandscapeGrid, scenario: FireScena
   const cellArea = groundCellSizeMeters * groundCellSizeMeters;
   const originX = originCell % width;
   const originY = (originCell - originX) / width;
-  const frames: FireFrame[] = [];
+  // Frame statistics from one pass over the grid instead of one pass per frame: each
+  // burned cell is binned to the first frame whose time it is inside, and the per-frame
+  // count, reach and bounding box accumulate from there. A 24-hour run has 97 frames, and
+  // scanning an 833 x 833 grid once per frame was most of its cost. The results are the
+  // same as the per-frame scan (`arrival <= minutes` exactly), and contouring is limited
+  // to the burned bounding box, outside which every square is unburned and emits nothing.
+  const frameTimes: number[] = [];
   for (let minutes = 0; minutes <= scenario.horizonMinutes; minutes += scenario.stepMinutes) {
-    let burned = 0;
-    let maxReach = 0;
-    for (let i = 0; i < cellCount; i++) {
-      if (arrival[i] > minutes) continue;
-      burned++;
-      const x = i % width;
-      const y = (i - x) / width;
-      const reach = Math.hypot(x - originX, y - originY) * groundCellSizeMeters;
-      if (reach > maxReach) maxReach = reach;
-    }
+    frameTimes.push(minutes);
+  }
+  const frameCount = frameTimes.length;
+  const binCount = new Float64Array(frameCount);
+  const binReach = new Float64Array(frameCount);
+  const binMinX = new Int32Array(frameCount).fill(width);
+  const binMinY = new Int32Array(frameCount).fill(height);
+  const binMaxX = new Int32Array(frameCount).fill(-1);
+  const binMaxY = new Int32Array(frameCount).fill(-1);
+  const lastFrameTime = frameCount > 0 ? frameTimes[frameCount - 1] : -1;
+  for (let i = 0; i < cellCount; i++) {
+    const t = arrival[i];
+    if (!(t <= lastFrameTime)) continue;
+    // First frame k with frameTimes[k] >= t; frames are few, so a short search is fine.
+    let k = Math.min(Math.max(Math.ceil(t / scenario.stepMinutes), 0), frameCount - 1);
+    while (k > 0 && frameTimes[k - 1] >= t) k--;
+    while (frameTimes[k] < t) k++;
+    const x = i % width;
+    const y = (i - x) / width;
+    binCount[k]++;
+    const reach = Math.hypot(x - originX, y - originY) * groundCellSizeMeters;
+    if (reach > binReach[k]) binReach[k] = reach;
+    if (x < binMinX[k]) binMinX[k] = x;
+    if (x > binMaxX[k]) binMaxX[k] = x;
+    if (y < binMinY[k]) binMinY[k] = y;
+    if (y > binMaxY[k]) binMaxY[k] = y;
+  }
+  const frames: FireFrame[] = [];
+  let burned = 0;
+  let maxReach = 0;
+  const box = { minX: width, minY: height, maxX: -1, maxY: -1 };
+  for (let k = 0; k < frameCount; k++) {
+    const minutes = frameTimes[k];
+    burned += binCount[k];
+    if (binReach[k] > maxReach) maxReach = binReach[k];
+    box.minX = Math.min(box.minX, binMinX[k]);
+    box.minY = Math.min(box.minY, binMinY[k]);
+    box.maxX = Math.max(box.maxX, binMaxX[k]);
+    box.maxY = Math.max(box.maxY, binMaxY[k]);
     frames.push({
       elapsedMinutes: minutes,
-      perimeters: minutes === 0 ? [] : contour(landscape, arrival, minutes),
+      perimeters: minutes === 0 || box.maxX < 0 ? [] : contour(landscape, arrival, minutes, box),
       burnedAreaSquareMeters: burned * cellArea,
       maxReachMeters: maxReach,
     });
@@ -1211,6 +1294,13 @@ export function simulateFireSpread(landscape: LandscapeGrid, scenario: FireScena
     },
     reachedEdge,
     cellSizeMeters: groundCellSizeMeters,
+    resolution: {
+      cellMeters: landscape.cellMeters,
+      groundCellSizeMeters,
+      resampling: landscape.resampling,
+      maxStepMeters: Math.max(...distances),
+      spottingReachCeilingMeters: spottingActive ? maxSpotCells * groundCellSizeMeters : 0,
+    },
     computeMilliseconds: performance.now() - startedAt,
     arrivalMinutes: Float32Array.from(arrival),
   };
@@ -1285,12 +1375,22 @@ const EDGE_TABLE: readonly (readonly (readonly [number, number])[])[] = [
   [],
 ];
 
+/**
+ * `bounds` is the inclusive cell bounding box of everything burned by `threshold`; only
+ * squares touching it are visited, which yields exactly the segments a full scan would,
+ * in the same order.
+ */
 function contour(
   landscape: LandscapeGrid,
   arrival: Float64Array,
   threshold: number,
+  bounds: { minX: number; minY: number; maxX: number; maxY: number },
 ): FirePerimeter[] {
   const { width, height } = landscape;
+  const fromY = Math.max(bounds.minY - 1, 0);
+  const toY = Math.min(bounds.maxY, height - 2);
+  const fromX = Math.max(bounds.minX - 1, 0);
+  const toX = Math.min(bounds.maxX, width - 2);
   // Edge midpoints of the square whose top-left cell is (x, y): top, right, bottom, left.
   const edgePoint = (x: number, y: number, edge: number): [number, number] =>
     edge === 0
@@ -1303,8 +1403,8 @@ function contour(
   const key = (p: [number, number]) => `${Math.round(p[0] * 2)},${Math.round(p[1] * 2)}`;
 
   const starts = new Map<string, [number, number][]>();
-  for (let y = 0; y < height - 1; y++) {
-    for (let x = 0; x < width - 1; x++) {
+  for (let y = fromY; y <= toY; y++) {
+    for (let x = fromX; x <= toX; x++) {
       const burnedAt = (cx: number, cy: number) => (arrival[cy * width + cx] <= threshold ? 1 : 0);
       const index =
         burnedAt(x, y) * 8 +
@@ -1362,10 +1462,19 @@ function assemblePolygons(
     }),
   );
 
-  // Depth by containment, so holes are identified without relying on winding order.
+  // Depth by containment, so holes are identified without relying on winding order. A
+  // bounding-box test first: a point outside a ring's box is outside the ring, so this
+  // only skips work and never changes the answer. Long runs produce hundreds of rings.
+  const boxes = geographic.map(ringBounds);
+  const inside = (j: number, point: Position) =>
+    point[0] >= boxes[j][0] &&
+    point[0] <= boxes[j][2] &&
+    point[1] >= boxes[j][1] &&
+    point[1] <= boxes[j][3] &&
+    containsPoint(geographic[j], point);
   const depth = geographic.map((ring, i) =>
     geographic.reduce(
-      (count, other, j) => (i !== j && containsPoint(other, ring[0]) ? count + 1 : count),
+      (count, _other, j) => (i !== j && inside(j, ring[0]) ? count + 1 : count),
       0,
     ),
   );
@@ -1374,7 +1483,7 @@ function assemblePolygons(
   geographic.forEach((ring, i) => {
     if (depth[i] % 2 !== 0) return;
     const holes = geographic.filter(
-      (other, j) => depth[j] === depth[i] + 1 && containsPoint(ring, other[0]),
+      (other, j) => depth[j] === depth[i] + 1 && inside(i, other[0]),
     );
     polygons.push({
       type: "Feature",
@@ -1386,6 +1495,20 @@ function assemblePolygons(
     });
   });
   return polygons;
+}
+
+function ringBounds(ring: Position[]): [number, number, number, number] {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const [x, y] of ring) {
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+  return [minX, minY, maxX, maxY];
 }
 
 function signedArea(ring: Position[]): number {
