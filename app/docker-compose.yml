@@ -1,22 +1,6 @@
 name: crisistwin
 
 services:
-  db:
-    image: postgres:17-alpine
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-crisistwin}
-      POSTGRES_USER: ${POSTGRES_USER:-crisistwin}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-crisistwin-dev-only}
-    ports:
-      - "127.0.0.1:5434:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
-      interval: 3s
-      timeout: 3s
-      retries: 15
-
   backend:
     build:
       context: ./backend
@@ -25,18 +9,12 @@ services:
       DJANGO_DEBUG: ${DJANGO_DEBUG:-true}
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-insecure-local-development-only-crisistwin}
       DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1,backend}
-      POSTGRES_DB: ${POSTGRES_DB:-crisistwin}
-      POSTGRES_USER: ${POSTGRES_USER:-crisistwin}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-crisistwin-dev-only}
-      POSTGRES_HOST: db
-      POSTGRES_PORT: "5432"
+      MONGODB_URI: ${MONGODB_URI:?Set MONGODB_URI in the shell or app/.env}
+      MONGODB_DATABASE: ${MONGODB_DATABASE:-crisistwin}
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
       - ./backend:/app
-    depends_on:
-      db:
-        condition: service_healthy
     healthcheck:
       test:
         [
@@ -66,5 +44,4 @@ services:
         condition: service_healthy
 
 volumes:
-  postgres_data:
   node_modules:
