@@ -105,9 +105,9 @@ const CLOSURE_MAX_S = 40;
 /** Routes avoid edges that close within this many seconds after departure. */
 const CLOSURE_LOOKAHEAD_S = 25;
 
-/** Crew-held fire section: fuel cells this close to the Ridge Lane and east flank stagings. */
-const HOLD_RADIUS = 34;
-const HOLD_STAGINGS = ["ridge-lane", "east-flank"];
+/** Crew-held fire sections: fuel cells within this radius of the unburned perimeter nearest each staging. */
+const HOLD_RADIUS = 45;
+const HOLD_STAGINGS = ["ridge-lane", "east-flank", "west-flank"];
 
 const CAPTION_MIN_GAP_S = 3.5;
 /** The congestion phase label starts no earlier than this, once the queue is substantial. */
@@ -450,7 +450,12 @@ export function createScenario(world: World): Scenario {
   // ---- Fire pass 2 with the crew hold -------------------------------------------------------
   const holdEngines = engineIdx.filter((_, k) => HOLD_STAGINGS.includes(engineStagings[k].id));
   const heldFrom = Math.max(...holdEngines.map((i) => sim.arrival[i] + SPRAY_DELAY_S));
-  const holdCenters = engineStagings.filter((s) => HOLD_STAGINGS.includes(s.id)).map((s) => s.p);
+  // Each crew holds the stretch of perimeter nearest its staging: centred on the closest
+  // forest cell the fire has not reached yet when the water starts.
+  const holdCenters = engineStagings
+    .filter((s) => HOLD_STAGINGS.includes(s.id))
+    .map((s) => firePreview.nearestUnburned(s.p, heldFrom))
+    .filter((p): p is Vec2 => p !== null);
   const fireBuild = buildFire(
     world,
     duration,
@@ -551,7 +556,7 @@ export function createScenario(world: World): Scenario {
   if (Number.isFinite(heldFrom) && heldFrom <= duration) {
     events.push({
       t: heldFrom + 1,
-      text: "Crews hold the fire's edge at the east flank and above Ridge Lane.",
+      text: "Crews hold the fire's edge above Ridge Lane and along the west flank.",
     });
   }
   if (queueClears <= duration) {
