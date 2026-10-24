@@ -5,11 +5,12 @@ exits and fire stations. This endpoint builds them at runtime from the OpenStree
 Overpass API and caches the result (docs/adr/0017-dispatch-anywhere.md). It ports the
 logic of tools/build_dispatch_area.py, which produced one static fixture offline.
 
-Observed (OSM): road geometry, class, name, lanes, maxspeed, oneway; place names; fire
+Observed (OSM): road geometry, class, name, lanes, maxspeed, oneway, bridge; place names; fire
 station locations. Assumed (named constants below): lane capacity and default speed by
 class, homes per km of residential street, vehicles per home, one engine per station.
 Synthetic: homes are placed along residential streets, not real buildings; zones are grid
-cells over residential streets, not official evacuation zones. Wire schema: version 2.
+cells over residential streets, not official evacuation zones. Wire schema: version 2; edge rows
+carry a trailing bridge flag since builder dispatch-area/3 (older cached rows lack it).
 
 Caching: in-process LRU, then MongoDB `dispatch_areas`, then a fresh build. The cache key
 is the builder version plus the bbox snapped outward to a 0.01 degree grid. MongoDB being
@@ -46,7 +47,7 @@ from .mongodb import get_database
 
 logger = logging.getLogger(__name__)
 
-BUILDER_VERSION = "dispatch-area/2"
+BUILDER_VERSION = "dispatch-area/3"
 COLLECTION = "dispatch_areas"
 MAX_STORED_BYTES = 15 * 1024 * 1024
 LRU_ENTRIES = 8
@@ -377,6 +378,7 @@ def build_area(box: Box) -> dict:
         kph = round(parse_speed_kph(tags.get("maxspeed"), cls), 1)
         base = cls.removesuffix("_link")
         capacity = lanes_one_direction(tags, oneway) * CAPACITY_PER_LANE_VPH.get(base, DEFAULT_CAPACITY_PER_LANE_VPH)
+        bridge = 1 if tags.get("bridge", "no") not in ("no", "") else 0
         start = 0
         for i in range(1, len(run)):
             ref = run[i]
@@ -387,7 +389,7 @@ def build_area(box: Box) -> dict:
                     geometry = [c for r in segment[1:-1] for c in (round(coords[r][0], 6), round(coords[r][1], 6))]
                     edges.append([
                         node_id(segment[0]), node_id(segment[-1]), round(length, 1), class_list.index(cls),
-                        kph, capacity, 1 if oneway else 0, name_index.get(name, -1), geometry,
+                        kph, capacity, 1 if oneway else 0, name_index.get(name, -1), geometry, bridge,
                     ])
                 start = i
 

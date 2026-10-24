@@ -13,7 +13,8 @@
  * - Households that have left queue at the zone's loading node and enter their route at most
  *   at the route's bottleneck capacity; zones whose routes share an edge split its capacity.
  *   Downstream queues are not modelled: once released, a group drives at free-flow speed.
- * - Routing avoids every edge the fire model reaches within ROUTE_LOOKAHEAD_MINUTES.
+ * - Routing avoids every edge the fire model reaches within ROUTE_LOOKAHEAD_MINUTES, and every
+ *   edge the planner has closed (a road closure or a failed bridge, closed for the whole run).
  *   Drivers already on the road re-route around such edges by themselves; a zone whose
  *   ordered exit becomes unreachable holds departures until it is given another exit.
  * - A household is "caught" when the modelled fire reaches its home before it leaves, when
@@ -217,14 +218,18 @@ export class DispatchEngine {
   private zoneIndex: Map<string, number>;
   private stationIndex: Map<string, number>;
   private ignitions: IgnitionEvent[];
+  /** Edges closed to traffic for the whole run (indices into `area.edges`). */
+  readonly closedEdges: ReadonlySet<number>;
 
   constructor(
     area: DispatchArea,
     exposure: FireExposure,
     horizonMinutes: number,
     ignitions: IgnitionEvent[],
+    closedEdges: ReadonlySet<number> = new Set(),
   ) {
     this.area = area;
+    this.closedEdges = closedEdges;
     this.exposure = exposure;
     this.horizonMinutes = horizonMinutes;
     this.ignitions = [...ignitions].sort((a, b) => a.minute - b.minute);
@@ -288,11 +293,15 @@ export class DispatchEngine {
     return this.minute >= this.horizonMinutes;
   }
 
-  /** Blocked for routing at `minute`: the fire model reaches the edge within the lookahead. */
+  /**
+   * Blocked for routing at `minute`: closed by the planner, or the fire model reaches the edge
+   * within the lookahead.
+   */
   blockedAt(minute: number): (edge: number) => boolean {
     const arrival = this.exposure.edgeArrival;
+    const closed = this.closedEdges;
     const limit = minute + ROUTE_LOOKAHEAD_MINUTES;
-    return (edge) => arrival[edge] <= limit;
+    return (edge) => closed.has(edge) || arrival[edge] <= limit;
   }
 
   vehiclesPerHome(zone: number): number {
@@ -340,7 +349,9 @@ export class DispatchEngine {
       const tree = shortestPathTree(this.area, this.area.zones[index].node, blocked);
       const route = routeTo(this.area, tree, this.exitNode(order.exit_id));
       if (!route)
-        return reject(`${order.exit_id} is not reachable from ${order.zone_id} avoiding fire.`);
+        return reject(
+          `${order.exit_id} is not reachable from ${order.zone_id} avoiding fire and closed roads.`,
+        );
       const redirect = zone.status !== "no_order" && zone.exitId !== order.exit_id;
       if (zone.status === "no_order") {
         zone.status = "ordered";
@@ -392,7 +403,8 @@ export class DispatchEngine {
       shortestPathTree(this.area, from, blocked),
       this.area.zones[index].node,
     );
-    if (!route) return reject(`${unit.id} cannot reach ${order.zone_id} avoiding fire.`);
+    if (!route)
+      return reject(`${unit.id} cannot reach ${order.zone_id} avoiding fire and closed roads.`);
     const fromStation = unit.status === "available";
     this.sendUnit(unit, from, route, "en_route", order.task, index);
     if (fromStation) unit.holdSeconds = this.approachSeconds(unit);
@@ -539,7 +551,7 @@ export class DispatchEngine {
         zone.routeBlocked = true;
         this.alert(
           "route_blocked",
-          `${this.zoneName(zone.index)} cannot reach ${zone.exitId} without crossing fire; departures are held until it gets another exit.`,
+          `${this.zoneName(zone.index)} cannot reach ${zone.exitId} without crossing fire or a closed road; departures are held until it gets another exit.`,
           true,
         );
       }

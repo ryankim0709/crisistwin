@@ -34,6 +34,8 @@ export interface RoadEdge {
   /** One-way edges are drivable only from `from` to `to`. */
   oneway: boolean;
   name: string | null;
+  /** Tagged as a bridge in OSM (false for areas cached before builder dispatch-area/3). */
+  bridge: boolean;
   /** Full polyline from `from` to `to`. */
   coords: LonLat[];
 }
@@ -147,7 +149,7 @@ export function parseArea(json: unknown): DispatchArea {
 
   const edges: RoadEdge[] = asArray(raw.edges, "edges").map((value, index) => {
     const row = asArray(value, `edges[${index}]`);
-    const [from, to, length, cls, kph, capacity, oneway, name, flat] = row;
+    const [from, to, length, cls, kph, capacity, oneway, name, flat, bridge] = row;
     if (
       typeof length !== "number" ||
       length <= 0 ||
@@ -177,6 +179,7 @@ export function parseArea(json: unknown): DispatchArea {
       capacityVph: capacity,
       oneway: oneway === 1,
       name: name >= 0 ? (names[name] ?? null) : null,
+      bridge: bridge === 1,
       coords,
     };
   });

@@ -35,6 +35,9 @@ const LINE_LIFT = 0.45;
 const DRAPE_STEP_UNITS = 1.5;
 const ROUTE_WIDTH_PX = 4;
 const ROUTE_SELECTED_WIDTH_PX = 7;
+const CLOSURE_WIDTH_PX = 6;
+/** Closed roads: drawn above routes, in a colour no household state or exit uses. */
+const CLOSURE_COLOR = 0x1a1a1a;
 const FLOW_SPEED_UNITS_PER_S = 9;
 /** Glide rate toward the latest simulated position (1/s). */
 const GLIDE_RATE = 7;
@@ -77,6 +80,7 @@ const LABEL_CSS = `
 .fdx-dsp-swatch { width: 9px; height: 9px; border-radius: 2px; flex: none; }
 .fdx-dsp-unit { font-size: 10.5px; padding: 2px 7px; background: #b3362b; color: #fff; border-color: #7f2018; }
 .fdx-dsp-exit { font-size: 10.5px; padding: 2px 7px; gap: 4px; background: rgba(20, 43, 39, 0.88); color: #fff; border-color: rgba(0,0,0,0.2); }
+.fdx-dsp-closed { font-size: 10.5px; padding: 2px 7px; background: #1a1a1a; color: #fff; border-color: #000; font-weight: 700; }
 .fdx-compact .fdx-dsp-zone { font-size: 9.5px; padding: 2px 6px; }
 `;
 
@@ -95,6 +99,8 @@ export class DispatchOverlay implements BoardOverlay {
   private engine: DispatchEngine | null = null;
   private previewMinute = -1;
   private selectedZone: number | null = null;
+  private closedEdges: ReadonlySet<number> = new Set();
+  private closures: { line: Line2; label: CSS2DObject }[] = [];
 
   // Static (per area): homes, exits, stations.
   private walls: THREE.InstancedMesh | null = null;
@@ -135,6 +141,7 @@ export class DispatchOverlay implements BoardOverlay {
     this.style.textContent = LABEL_CSS;
     labels.renderer.domElement.appendChild(this.style);
     this.buildStatic();
+    this.buildClosures();
     this.refresh();
   }
 
@@ -143,6 +150,8 @@ export class DispatchOverlay implements BoardOverlay {
     for (const label of [...this.zoneLabels.values(), ...this.unitLabels.values()])
       this.labels?.remove(label.obj);
     for (const marker of this.exitMarkers) this.labels?.remove(marker.label);
+    for (const closure of this.closures) this.labels?.remove(closure.label);
+    this.closures = [];
     this.zoneLabels.clear();
     this.unitLabels.clear();
     this.exitMarkers = [];
@@ -207,6 +216,13 @@ export class DispatchOverlay implements BoardOverlay {
     if (whole === this.previewMinute) return;
     this.previewMinute = whole;
     if (!this.engine) this.paintHomes();
+  }
+
+  /** Edges closed to traffic, drawn as dark bars labelled "Closed" or "Bridge out". */
+  setClosedEdges(edges: ReadonlySet<number>): void {
+    if (edges === this.closedEdges) return;
+    this.closedEdges = edges;
+    this.buildClosures();
   }
 
   setSelectedZone(zone: number | null): void {
@@ -413,6 +429,34 @@ export class DispatchOverlay implements BoardOverlay {
     this.trucks.name = "dispatch-engines";
     this.cars.castShadow = this.trucks.castShadow = true;
     group.add(this.cars, this.trucks);
+  }
+
+  private buildClosures() {
+    for (const closure of this.closures) {
+      this.disposeLine(closure.line);
+      this.labels?.remove(closure.label);
+    }
+    this.closures = [];
+    const { group, area, labels, frame } = this;
+    if (!group || !area || !labels || !frame) return;
+    for (const index of this.closedEdges) {
+      const edge = area.edges[index];
+      if (!edge) continue;
+      const positions = this.drape(edge.coords, LINE_LIFT + 0.15);
+      if (positions.length < 6) continue;
+      const line = this.line(positions, CLOSURE_COLOR, CLOSURE_WIDTH_PX, false);
+      line.renderOrder = 4;
+      group.add(line);
+      const mid = Math.floor(positions.length / 6) * 3;
+      const label = labels.add(
+        group,
+        "fdx-dsp-closed",
+        new THREE.Vector3(positions[mid], positions[mid + 1] + 2.5, positions[mid + 2]),
+        new THREE.Vector2(0.5, 1),
+      );
+      label.el.textContent = edge.bridge ? "✕ Bridge out" : "✕ Closed";
+      this.closures.push({ line, label: label.obj });
+    }
   }
 
   // ------------------------------------------------------------------ dynamic content

@@ -146,6 +146,12 @@
   align-items: flex-end;
   gap: var(--ct-space-2);
   max-width: min(320px, calc(100% - 24px));
+  /* Stops above the legend button; only the panels themselves take pointer input. */
+  max-height: calc(100% - var(--ct-space-3) - 56px);
+  pointer-events: none;
+}
+.studio-diorama__tools > * {
+  pointer-events: auto;
 }
 .studio-diorama__buttons {
   display: flex;
@@ -176,6 +182,66 @@
   color: var(--ct-ink-muted);
   font-size: var(--ct-text-xs);
   line-height: var(--ct-leading-snug);
+}
+.studio-evac.ui-panel {
+  display: grid;
+  gap: var(--ct-space-2);
+  grid-auto-rows: max-content;
+  box-sizing: border-box;
+  width: 300px;
+  max-width: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  font-size: var(--ct-text-sm);
+}
+.studio-evac__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ct-space-2);
+}
+.studio-evac__note,
+.studio-evac__live {
+  margin: 0;
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-xs);
+  line-height: var(--ct-leading-snug);
+}
+.studio-evac__live {
+  color: var(--ct-ink);
+}
+.studio-evac__tool {
+  display: grid;
+  gap: var(--ct-space-1);
+}
+.studio-evac__closures ul {
+  display: grid;
+  gap: 2px;
+  margin: var(--ct-space-1) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.studio-evac__closures li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ct-space-2);
+}
+.studio-evac__table {
+  width: 100%;
+  table-layout: fixed;
+  font-size: var(--ct-text-xs);
+}
+.studio-evac__table :is(td, th) {
+  padding-inline: var(--ct-space-1);
+}
+.studio-evac__table thead th:first-child {
+  width: 42%;
+}
+.studio-evac__delta {
+  display: block;
+  color: var(--ct-ink-muted);
+  white-space: nowrap;
 }
 .studio-diorama__legend {
   position: absolute;
