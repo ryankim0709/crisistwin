@@ -51,7 +51,7 @@ by distance. `help_needed` is never public.
   "received_at": "2026-10-24T18:05:41Z", // server clock; later when queued offline
   "note": "Tree across both lanes",
   "status": "unverified",                // unverified|corroborated|responder_confirmed|confirmed|dismissed|resolved
-  "evidence_class": "field_report",
+  "evidence_class": "field_report",       // field_report | simulated (generated, ADR 0042) | historical_record | drill_fixture
   "replay_at": "2018-11-08T16:12:00Z"   // v2, server-filled: drill time at received_at; null when no drill runs
 }
 ```
@@ -129,6 +129,10 @@ Errors: `400 { "error": "invalid_report", "detail": "..." }`, `401`, `403`, `404
 
 - **Same party:** same `party_key`, the same household group (later), or
   submitted within `SAME_PARTY_WINDOW_S` = 120 and `SAME_PARTY_RADIUS_M` = 100 of each other.
+  Optional source-diversity check (`LIVE_SOURCE_DIVERSITY=true`, default false; ADR 0042): parties
+  whose first reports in a group arrive within `SOURCE_BURST_WINDOW_S` = 600 and
+  `SOURCE_BURST_RADIUS_M` = 1000 of a counted party also count as that one party. It folds true
+  crowds as well as rumours; see the ADR before turning it on.
 - **Public** when not dismissed or stale and one of: at least
   `PUBLIC_MIN_CIVILIAN_PARTIES` = 3 independent civilian parties; one responder
   and one independent civilian party; or controller `confirm`. A newer
@@ -1008,6 +1012,52 @@ A component with no data (no help requests, twin warming, no zone ordered yet) h
 `coverage` is the weight share that counted. The score is a planning-experiment number from an
 uncalibrated model, not an evaluation of the controllers.
 
+### Triage quality against the truth log (post-drill, ADR 0042)
+
+`GET incidents/{id}/aar?truth=1` adds `triage_quality`, scored by `sim/triage_quality.py`
+against the hidden ground-truth log `sim_truth` of generated reports
+([ADR 0042](adr/0042-adversarial-ground-data.md), `sim/gen_noise.py`). It is refused with `403
+truth_scoring_disabled` unless the server sets `LIVE_TRUTH_SCORING=true` (default false), and with
+`409 drill_running` while the drill clock runs; stop or pause the drill (speed 0) first. Without
+`?truth=1` the section is absent. Headless runs call `aar.build_aar(snapshot, truth_scoring=True)`.
+No other endpoint, console view, phone view or MCP tool reads `sim_truth`
+(`api/live/tests/test_sim_truth.py`). Only reports with a truth entry (generated, `simulated`) are
+scored; real participants' reports and the 2018 record are not.
+
+```jsonc
+"triage_quality": { "status": "ok",          // or no_truth | no_drill
+  "evidence_class": "simulated", "basis": "drill minutes; ...", "horizon": "...Z",  // horizon = drill now
+  "reports_scored": 7, "reports_false": 5, "false_auto_corroborated": 0,          // false reports the 3-party rule made public
+  "confirm": { "n": 2, "true": 1, "precision": 0.5, "recall_pool": 2, "recall": 0.5 },
+  "dismiss": { "n": 4, "false": 3, "precision": 0.75, "recall_pool": 5, "recall": 0.6 },
+  "truth_changes": { "n": 1, "undetected": 0, "median_min": 40.0,
+    "items": [ { "id": "truth_change:C", "at": "...Z", "before": "road_passable", "after": "road_blocked",
+                 "detected": true, "minutes": 40.0 } ] },   // undetected: censored at the horizon
+  "decisions_on_false": { "guidance_changes": 1, "dispatches_assist": 1, "verify_tasks": 0, "total": 2,
+                          "of": { "guidance_change": 1, "dispatch_assist": 1, "dispatch_verify": 0 }, "items": [] },
+  "rumours": { "n": 1, "contained": 1, "median_min": 30.0,
+    "items": [ { "rumour_id": "...", "onset_at": "...Z", "members_received": 3, "members_dismissed": 3,
+                 "members_corroborated": 0, "members_confirmed": 0, "contained": true, "minutes": 30.0 } ] },
+  "metrics": { "triage.confirm_precision": 0.5, "...": null },   // sim/evaluation.py TRIAGE_METRICS keys
+  "constants": { "TRIAGE_GRACE_MIN": 10.0, "CHANGE_MATCH_RADIUS_M": 200.0, "CONFIRM_RECALL_EXCLUDED_KINDS": ["help_needed"] } }
+```
+
+All minutes are drill minutes. Report times are `replay_at`; decision and task times are their
+stored `replay_at` (new: `live_decisions` and `live_tasks` now record the drill time), else estimated
+from the drill clock. Definitions are in the `sim/triage_quality.py` docstring and
+[strategy-evaluation.md](strategy-evaluation.md) §3. A guidance change cites the `road_blocked`
+reports on its proposal's `cause_segment_ids` received by then, plus a report whose controller
+confirm triggered the replan (within `GUIDANCE_CONFIRM_LINK_S`, 5 s); it counts as on false
+information when every cited report has a truth entry and was false at that drill time. Verify
+tasks on false reports are listed but not penalised.
+
+**Injecting generated data.** `python manage.py live_inject_noise --events <json> --profile
+typical|hostile|clean --seed N [--changes <json>] [--until <drill time>]` applies the noise layer,
+writes the truth map to `sim_truth`, and inserts the due phone and responder reports into
+`live_reports` with `evidence_class: "simulated"` (same validation, road snapping, `client_id`
+idempotency and civilian rate limits as `POST reports`; `replay_at` is the event's upload drill
+time). Re-run it as the drill clock advances. Nothing about truth or noise is stored on a report.
+
 ## Injects
 
 Scripted or instructor-triggered events that stress a plan ([ADR 0039](adr/0039-drill-injects.md)). Every
@@ -1253,6 +1303,7 @@ ISO 8601 `Z`. Ids are prefixed strings (`rpt_`, `tsk_`, `prp_`, `chk_`, `dev_`,
 | `live_destination_choices` | device per incident and zone (latest only) | `incident_id`, `party_key`, `zone_id`, `destination_id`, `guidance_version`, `at`, `expires_at`; no location | `{incident_id, party_key, zone_id}` unique; `{incident_id, zone_id, destination_id}`; TTL on `expires_at` (`at + 2 h`) |
 | `live_board` | incident (latest only) | `incident_id`, `computed_at`, `replay_at`, `arrivals_source`, `items` (ranked priority places; no people data) | `incident_id` unique |
 | `live_responder_locations` | responder (latest only) | `incident_id`, `party_key`, `coord`, `accuracy_m`, `at`, `expires_at` | `{incident_id, party_key}` unique; TTL on `expires_at` (`at + 900 s`) |
+| `sim_truth` | generated event per incident (hidden ground truth, ADR 0042) | `incident_id`, `event_id` (the report's `client_id`, or `truth_change:<id>`), `true`, `kind_of_noise`, `source_event_id`, `notes`, `entry` (the full `sim/gen_noise.py` truth entry), `profile`, `seed`, `written_at` | `{incident_id, event_id}` unique. Read only by the AAR's `triage_quality` after the drill; never served |
 
 Current guidance per zone is the max `version` for `{incident_id, zone_id}` (an
 aggregation with `$sort` + `$group`, or a cached `current: true` flag flipped in

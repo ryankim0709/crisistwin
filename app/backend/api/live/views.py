@@ -8,6 +8,7 @@ from typing import Any
 
 from livecore.drill import MAX_DRILL_SPEED, default_replay_start
 from livecore.geo import haversine_m
+from django.conf import settings
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 from rest_framework.response import Response
@@ -1122,6 +1123,16 @@ def twin_whatif(request, incident_id: str, principal: Principal):
 
 @live_view(["GET"], roles=["controller"])
 def incident_aar(request, incident_id: str, principal: Principal):
-    """After-action report and drill score (docs/live-reports.md "After-action report")."""
+    """After-action report and drill score (docs/live-reports.md "After-action report").
+
+    ``?truth=1`` adds ``triage_quality``, scored against the hidden ``sim_truth`` log (ADR 0042). It is
+    refused unless ``LIVE_TRUTH_SCORING`` is on (403) and the drill is stopped (409), so nobody can
+    read truth-derived numbers while a drill runs."""
+    want_truth = request.query_params.get("truth") in ("1", "true")
+    if want_truth and not getattr(settings, "LIVE_TRUTH_SCORING", False):
+        return error(403, "truth_scoring_disabled", "Truth scoring is off (LIVE_TRUTH_SCORING).")
     twin_service.warm(incident_id)
-    return ok(aar.build_aar(load_snapshot(incident_id, wall_now())))
+    snapshot = load_snapshot(incident_id, wall_now())
+    if want_truth and snapshot.clock.running:
+        return error(409, "drill_running", "Stop the drill before scoring triage against the truth log.")
+    return ok(aar.build_aar(snapshot, truth_scoring=want_truth))

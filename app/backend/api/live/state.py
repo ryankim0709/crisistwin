@@ -355,6 +355,8 @@ def load_public(
     incident_id: str, now: datetime, index: DrillIndex
 ) -> tuple[list[dict[str, Any]], list[public.ReportFact], list[public.PublicItem], list[public.RoadStatus]]:
     """Reports (newest first), their facts, public items and road state at wall time ``now``."""
+    # Source-diversity check (ADR 0042), off unless LIVE_SOURCE_DIVERSITY is true.
+    public.SOURCE_DIVERSITY_ENABLED = bool(getattr(settings, "LIVE_SOURCE_DIVERSITY", False))
     report_docs = list(
         col("live_reports").find({"incident_id": incident_id}).sort("received_at", -1).limit(REPORTS_SNAPSHOT_LIMIT)
     )

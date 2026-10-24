@@ -48,6 +48,17 @@ PASSIVE_PARTY_WEIGHT = 0.5
 drove through a segment, opt-in) counts this fraction of an explicit party. ASSUMPTION to calibrate
 in drills. Passive-only evidence never overrides a block or another contradicting state."""
 
+SOURCE_DIVERSITY_ENABLED = False
+"""Source-diversity check (docs/adr/0042-adversarial-ground-data.md), off by default. When on,
+``independent_counts`` also folds a civilian party into a counted anchor when the two parties' first
+reports in the group were received within SOURCE_BURST_WINDOW_S and SOURCE_BURST_RADIUS_M of each
+other: one burst from one coarse place counts as one party. The backend sets it per request from
+``settings.LIVE_SOURCE_DIVERSITY`` (api/live/state.py ``load_public``)."""
+SOURCE_BURST_WINDOW_S = 600
+"""ASSUMPTION: a "short burst" for the source-diversity check (10 min)."""
+SOURCE_BURST_RADIUS_M = 1000
+"""ASSUMPTION: a "coarse location" for the source-diversity check (1 km, a block group's scale)."""
+
 Role = Literal["civilian", "responder", "controller"]
 ReportStatusValue = Literal["unverified", "corroborated", "responder_confirmed", "confirmed", "dismissed", "resolved"]
 RoadStatusValue = Literal["open", "slow", "blocked", "unknown"]
@@ -136,6 +147,12 @@ def same_party(a: ReportFact, b: ReportFact) -> bool:
             and haversine_m(a.coord, b.coord) <= SAME_PARTY_RADIUS_M)
 
 
+def same_burst(a: ReportFact, b: ReportFact) -> bool:
+    """Received within SOURCE_BURST_WINDOW_S and SOURCE_BURST_RADIUS_M of each other (source-diversity check)."""
+    return (abs((a.received_at - b.received_at).total_seconds()) <= SOURCE_BURST_WINDOW_S
+            and haversine_m(a.coord, b.coord) <= SOURCE_BURST_RADIUS_M)
+
+
 def _live(reports: Sequence[ReportFact]) -> list[ReportFact]:
     return [r for r in reports if r.status not in ("dismissed", "resolved")]
 
@@ -144,7 +161,7 @@ def _is_responder(r: ReportFact) -> bool:
     return r.role in ("responder", "controller")
 
 
-def independent_counts(reports: Sequence[ReportFact]) -> tuple[int, int]:
+def independent_counts(reports: Sequence[ReportFact], source_diversity: bool | None = None) -> tuple[int, int]:
     """``(independent civilian parties, responder reports)`` among the non-dismissed reports.
 
     Each civilian ``party_key`` is one candidate, represented by its first report (server
@@ -152,7 +169,13 @@ def independent_counts(reports: Sequence[ReportFact]) -> tuple[int, int]:
     first report is ``same_party`` with any responder report; otherwise it folds into the first
     counted anchor whose first report is directly ``same_party`` with its own, or becomes a new
     counted anchor. Not transitive: a steady crowd arriving over time is not chained into one.
+
+    ``source_diversity`` (default: SOURCE_DIVERSITY_ENABLED) also folds a party into an anchor whose
+    first report is ``same_burst`` with its own. Off, correlated parties (a rumour, a Sybil set) that
+    stay outside ``same_party`` each count as independent (measured in tests/test_gen_noise.py and
+    docs/adr/0042-adversarial-ground-data.md).
     """
+    diverse = SOURCE_DIVERSITY_ENABLED if source_diversity is None else source_diversity
     live = [r for r in reports if r.status != "dismissed"]
     responders = [r for r in live if _is_responder(r)]
     firsts: dict[str, ReportFact] = {}
@@ -166,7 +189,7 @@ def independent_counts(reports: Sequence[ReportFact]) -> tuple[int, int]:
     for first in sorted(firsts.values(), key=lambda r: (r.received_at, r.id)):
         if any(same_party(first, r) for r in responders):
             continue
-        if not any(same_party(a, first) for a in anchors):
+        if not any(same_party(a, first) or (diverse and same_burst(a, first)) for a in anchors):
             anchors.append(first)
     return len(anchors), len(responders)
 
