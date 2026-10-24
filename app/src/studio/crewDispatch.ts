@@ -41,8 +41,8 @@ import { CREW_TYPES, STATION_TYPES, type SuppressionBases } from "./suppressionB
 export const TURNOUT_MINUTES = dataValue<number>("response_times.turnout_s") / 60;
 /** Board stations tried, nearest first by straight line. */
 const MAX_STATIONS = 12;
-/** Board exits tried as entry points for off-board units, nearest the fire first. */
-const MAX_ENTRY_EXITS = 6;
+/** Board-edge entry nodes tried per off-board unit, nearest the unit's base first. */
+const MAX_ENTRY_EXITS = 4;
 /** ASSUMPTION (data: hand_crews.walking_pace_m_per_min): walking pace with tools, 50 m/min. */
 export const HIKE_METERS_PER_MINUTE = dataValue<number>("hand_crews.walking_pace_m_per_min");
 /** A fire farther than this from any road a class can use is out of that class's reach. */
@@ -276,9 +276,21 @@ export function planCrewDispatch(
     });
     return { node: best, meters: bestM };
   };
-  const entryExits = [...area.exits]
-    .sort((a, b) => groundMeters(area.nodes[a.node], fire) - groundMeters(area.nodes[b.node], fire))
-    .slice(0, MAX_ENTRY_EXITS);
+  // Entry points for off-board units: public nodes where a road leaves the box (evacuation
+  // exits can be the outbound end of a one-way road, so the boundary nodes are used when known).
+  const publicNode = new Uint8Array(area.nodes.length);
+  for (const edge of area.edges) if (!edge.accessOnly) publicNode[edge.from] = publicNode[edge.to] = 1;
+  const entryNodes = [
+    ...new Set([
+      ...(area.boundaryNodes ?? []).filter((node) => publicNode[node]),
+      ...area.exits.map((exit) => exit.node),
+    ]),
+  ].sort((a, b) => a - b);
+  const entryExits = entryNodes.map((node) => ({ node }));
+  const entriesNear = (point: LonLat) =>
+    [...entryExits]
+      .sort((a, b) => groundMeters(area.nodes[a.node], point) - groundMeters(area.nodes[b.node], point) || a.node - b.node)
+      .slice(0, MAX_ENTRY_EXITS);
   /** Off-board base: straight line x circuity at OFFBOARD_SPEED_KMH to an exit, then the board. */
   const legFromOffBoard = (cls: AccessClass, origin: Origin): Leg | null => {
     if (inBox(origin.location)) {
@@ -286,7 +298,7 @@ export function planCrewDispatch(
       return legFrom(cls, origin, snap.node, snap.meters * approachMinutesPerMeter, [origin.location]);
     }
     let best: Leg | null = null;
-    for (const exit of entryExits) {
+    for (const exit of entriesNear(origin.location)) {
       const km = groundMeters(origin.location, area.nodes[exit.node]) / 1000;
       const minutes = ((km * OFFBOARD_CIRCUITY) / OFFBOARD_SPEED_KMH) * 60;
       const leg = legFrom(cls, origin, exit.node, minutes, [origin.location]);
@@ -319,15 +331,16 @@ export function planCrewDispatch(
     );
   }
 
-  // Which rule keeps each class from the fire: walk the route an unrestricted vehicle would
-  // take from the nearest board station (or exit) to the fire's nearest road node.
-  const firstOrigin = boardOrigins[0]?.node ?? entryExits[0]?.node ?? null;
-  const openTree =
-    firstOrigin !== null ? shortestPathTree(area, firstOrigin, blocked, { arcs }) : null;
-  const openRoute = openTree ? routeTo(area, openTree, fireNode) : null;
-  const limitFor = new Map<AccessClass, { rule: RoadRule; why: string; road: string | null } | null>();
-  const limitOf = (cls: AccessClass) => {
-    if (limitFor.has(cls)) return limitFor.get(cls)!;
+  // Which rule keeps a class from the fire: walk the route an unrestricted vehicle would take
+  // from the unit's starting node (a board station, or the board exit an off-board unit
+  // enters by) to the fire's nearest road node; the first edge closed to the class decides.
+  const firstOrigin = boardOrigins[0]?.node ?? entriesNear(fire)[0]?.node ?? null;
+  const limitFor = new Map<string, { rule: RoadRule; why: string; road: string | null } | null>();
+  const limitOf = (cls: AccessClass, source: number | null = firstOrigin) => {
+    const key = `${cls}:${source}`;
+    if (limitFor.has(key)) return limitFor.get(key)!;
+    const openRoute =
+      source !== null ? routeTo(area, shortestPathTree(area, source, blocked, { arcs }), fireNode) : null;
     let found: { rule: RoadRule; why: string; road: string | null } | null = null;
     for (const step of openRoute?.steps ?? []) {
       const result = access[step.edge].byClass[cls];
@@ -340,8 +353,23 @@ export function planCrewDispatch(
         break;
       }
     }
-    limitFor.set(cls, found);
+    limitFor.set(key, found);
     return found;
+  };
+  /** Starting node of an origin: its own node, else the entry exit nearest to it. */
+  const sourceOf = (origin: Origin): number | null => {
+    if (origin.node !== null) return origin.node;
+    if (inBox(origin.location)) return nearestNode(origin.location).node;
+    let best: number | null = null;
+    let bestKm = Infinity;
+    for (const exit of entriesNear(origin.location)) {
+      const km = groundMeters(origin.location, area.nodes[exit.node]);
+      if (km < bestKm) {
+        bestKm = km;
+        best = exit.node;
+      }
+    }
+    return best;
   };
 
   // Allocate units kind by kind: engines first, then tenders and chiefs, crews, dozers.
@@ -390,7 +418,7 @@ export function planCrewDispatch(
           a.origin.name.localeCompare(b.origin.name),
       );
     if (options.length === 0) {
-      const limit = limitOf(cls);
+      const limit = limitOf(cls, candidates.length > 0 ? sourceOf(candidates[0].origin) : firstOrigin);
       noAccess.push({
         kind,
         label,
@@ -420,7 +448,7 @@ export function planCrewDispatch(
     }
     const departMinute = reportMinute + spec.turnoutMinutes;
     const leg = pick.leg;
-    const limit = leg.node !== fireNode ? limitOf(cls) : null;
+    const limit = leg.node !== fireNode ? limitOf(cls, sourceOf(pick.origin)) : null;
     trips[index] = {
       kind,
       label,
