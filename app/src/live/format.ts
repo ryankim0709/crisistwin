@@ -73,6 +73,11 @@ export function shortKey(key: string): string {
   return key.length > 10 ? `${key.slice(0, 10)}…` : key;
 }
 
+/** A responder's short name, tagged "sim" when it is a simulated unit. */
+export function responderName(r: { party_key: string; simulated?: boolean }): string {
+  return r.simulated ? `${shortKey(r.party_key)} (sim)` : shortKey(r.party_key);
+}
+
 /** Vertex mean of the largest outer ring: a label anchor, not a true centroid. */
 export function labelPoint(geometry: AreaGeometry): LonLat | null {
   const polygons = geometry.type === "Polygon" ? [geometry.coordinates] : geometry.coordinates;

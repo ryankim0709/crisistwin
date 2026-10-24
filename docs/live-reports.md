@@ -88,6 +88,11 @@ store them in their own collection only if reads get slow.
 
 `POST devices` and `POST incidents/{id}/join` (body `{ "invite_code": "..." }`) return
 `{ "token": "...", "role": "civilian|responder", "party_key": "dev_9f2...", "incident_id": "..."|null }`.
+`join` also takes an optional `"simulated": true` (a boolean, else `400`) for simulated responders
+([ADR 0038](adr/0038-simulated-responders.md)): the device stores it, the join response echoes
+`"simulated": true`, and each `command.responders[]` item carries `simulated` (`false` for real
+phones). The console tags those units "sim".
+
 A submitted report needs every field of the stored document except `id`,
 `reporter`, `road_ref`, `received_at`, `status` and `evidence_class`, which the server fills.
 

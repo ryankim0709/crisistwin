@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Button, EvidenceTag, IconButton, LoadingState, Notice, Tag } from "../ui";
 import { createTask, helpAction, triageReport } from "./api";
-import { drillClock, elapsed, nf, plural, shortKey, shortZoneName, wallClock } from "./format";
+import { drillClock, elapsed, nf, plural, responderName, shortKey, shortZoneName, wallClock } from "./format";
 import { distanceM } from "./geo";
 import KindGlyph from "./Glyph";
 import { impactLine } from "./ReviewQueue";
@@ -219,7 +219,7 @@ function HelpDetail({
             disabled={disabled}
             onClick={() => void act((t) => helpAction(t, help.id, "assign", nearest?.party_key ?? null))}
           >
-            {task ? "Reassign" : "Send"} {nearest ? `${shortKey(nearest.party_key)}, ${nf(distanceM(help.coord!, nearest.coord))} m` : "any responder"}
+            {task ? "Reassign" : "Send"} {nearest ? `${responderName(nearest)}, ${nf(distanceM(help.coord!, nearest.coord))} m` : "any responder"}
           </Button>
         ) : null}
         <Button variant="ghost" size="sm" disabled={disabled} onClick={() => void act((t) => helpAction(t, help.id, "resolve"))}>
@@ -366,7 +366,7 @@ function ReportDetail({
         {item.task ? null : (
           <Button variant="secondary" size="sm" disabled={disabled} onClick={() => void fieldCheck()}>
             {helpReport
-              ? `Send ${nearest ? `${shortKey(nearest.party_key)}, ${nf(distanceM(item.coord, nearest.coord))} m` : "any responder"}`
+              ? `Send ${nearest ? `${responderName(nearest)}, ${nf(distanceM(item.coord, nearest.coord))} m` : "any responder"}`
               : "Request field check"}
           </Button>
         )}

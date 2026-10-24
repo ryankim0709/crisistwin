@@ -38,6 +38,7 @@ VALIDATORS: dict[str, dict[str, Any]] = {
             "created_at": DATE,
             "last_seen_at": DATE,
             "expires_at": DATE,
+            "simulated": {"bsonType": "bool"},
         },
     ),
     "live_reports": _schema(

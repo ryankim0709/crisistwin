@@ -426,6 +426,8 @@ export interface HelpRequest {
 }
 export interface ResponderPosition {
   party_key: string
+  /** Simulated responder (ADR 0038): shown with a "sim" tag. */
+  simulated?: boolean
   coord: LonLat
   accuracy_m: number | null
   at: IsoTime

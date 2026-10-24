@@ -49,24 +49,29 @@ def token_hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def issue_token(role: str, prefix: str, incident_id: str | None) -> dict:
-    """Create a device document and return the one-time response body."""
+def issue_token(role: str, prefix: str, incident_id: str | None, simulated: bool = False) -> dict:
+    """Create a device document and return the one-time response body.
+
+    ``simulated`` marks a simulated responder (ADR 0038): stored on the device, echoed in the body."""
     token = secrets.token_urlsafe(32)
     party_key = f"{prefix}{secrets.token_hex(8)}"
     now = wall_now()
     ttl = CIVILIAN_TOKEN_TTL if role == "civilian" else RESPONDER_TOKEN_TTL
-    col("live_devices").insert_one(
-        {
-            "token_hash": token_hash(token),
-            "role": role,
-            "party_key": party_key,
-            "incident_id": incident_id,
-            "created_at": now,
-            "last_seen_at": now,
-            "expires_at": now + ttl,
-        }
-    )
-    return {"token": token, "role": role, "party_key": party_key, "incident_id": incident_id}
+    doc = {
+        "token_hash": token_hash(token),
+        "role": role,
+        "party_key": party_key,
+        "incident_id": incident_id,
+        "created_at": now,
+        "last_seen_at": now,
+        "expires_at": now + ttl,
+    }
+    body = {"token": token, "role": role, "party_key": party_key, "incident_id": incident_id}
+    if simulated:
+        doc["simulated"] = True
+        body["simulated"] = True
+    col("live_devices").insert_one(doc)
+    return body
 
 
 def secret_matches(given: str, env_name: str) -> bool:
