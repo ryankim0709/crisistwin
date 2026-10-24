@@ -46,9 +46,9 @@ export function fuelFamily(code: number): FuelFamily {
 /** Miniature ground tones per family (sRGB hex), in the /diorama palette's register. */
 export const GROUND_COLORS: Record<FuelFamily, number> = {
   [FuelFamily.None]: 0xc2b9a6,
-  [FuelFamily.Grass]: 0xc6c393,
-  [FuelFamily.GrassShrub]: 0xa9ae80,
-  [FuelFamily.Shrub]: 0x8e9462,
+  [FuelFamily.Grass]: 0xd0c698,
+  [FuelFamily.GrassShrub]: 0xb9b68a,
+  [FuelFamily.Shrub]: 0x848a5b,
   [FuelFamily.TimberUnderstory]: 0x6f8c5b,
   [FuelFamily.TimberLitter]: 0x587650,
   [FuelFamily.Slash]: 0x80795a,
@@ -56,7 +56,7 @@ export const GROUND_COLORS: Record<FuelFamily, number> = {
   [FuelFamily.Snow]: 0xf5f4ef,
   [FuelFamily.Agriculture]: 0xc4c48c,
   [FuelFamily.Water]: 0x7fae9f,
-  [FuelFamily.Barren]: 0xd3c7b0,
+  [FuelFamily.Barren]: 0xd6cbb4,
 };
 
 /** Alternating furrow tones for agricultural (93) fields. */
