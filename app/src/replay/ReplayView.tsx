@@ -388,11 +388,14 @@ function ReplayScreen({
   // ?story=1 (from "Watch another fire"): start the story once chapters exist, then drop the flag.
   useEffect(() => {
     if (!autoStory.current || chapters.length === 0) return;
-    autoStory.current = false;
-    const url = new URL(window.location.href);
-    url.searchParams.delete("story");
-    window.history.replaceState(null, "", url);
-    const timer = window.setTimeout(startStory, 0);
+    // Flip the flag only when the start actually runs (StrictMode re-runs effects).
+    const timer = window.setTimeout(() => {
+      autoStory.current = false;
+      const url = new URL(window.location.href);
+      url.searchParams.delete("story");
+      window.history.replaceState(null, "", url);
+      startStory();
+    }, 0);
     return () => window.clearTimeout(timer);
   }, [chapters.length, startStory]);
   const exploreFire = useCallback(() => {
