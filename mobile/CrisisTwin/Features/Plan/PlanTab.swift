@@ -29,9 +29,7 @@ struct PlanTab: View {
                     morePanel
                     roadObservations
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 4)
-                .padding(.bottom, 24)
+                .ctScreenPadding()
             }
             .ctScreenBackground()
             .navigationTitle("Plan")

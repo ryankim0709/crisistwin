@@ -1,5 +1,5 @@
 /**
- * Command demo (/demo): a continuously running fire board on the Camp drill zones. Fires keep
+ * Command demo (/demo): a continuously running fire board on the active drill's zones (Camp by default). Fires keep
  * starting, firefighting units fight them and households evacuate, on a simulation clock with
  * no end state (24/7 monitoring). Pure: no React, network or LLM; seeded, so a seed, the same
  * environment and the same orders replay the same run. See docs/adr/0047-command-demo.md and,
@@ -40,6 +40,7 @@
  * flame lengths feet (the Hauling chart's unit).
  */
 
+import { isBurnable } from "../fire/fuelModels";
 import { SPOTTING_MIN_FIRELINE_INTENSITY_BTU_PER_FOOT_PER_SECOND } from "../fire/spread";
 import { ellipsePerimeter } from "../studio/initialAttack";
 import type { LonLat } from "../live/types";
@@ -660,19 +661,51 @@ export function ignite(
     board,
     "ignition",
     actor,
-    `${SOURCE_TEXT[source]}: ${fire.id}${zone ? ` in ${zone.name}` : ""}, head ${fire.headRate} m/min, flame ${rates.headFlameFeet.toFixed(0)} ft.`,
+    `${SOURCE_TEXT[source]}: ${fire.id}${zone ? ` in ${zone.name}` : ""}, head ${fire.headRate} m/min, flame ${rates.headFlameFeet.toFixed(0)} ft${isBurnable(rates.fuelCode) ? "" : " (no wildland fuel here, so no spread)"}.`,
   );
   return fire;
 }
 
-/** A random point inside a random zone (between its core and one of its vertices). */
+/** Candidates a scheduled ignition tries before giving up on finding wildland fuel. */
+const IGNITION_CANDIDATES = 24;
+/** How far beyond a zone's edge (outward from its core) a scheduled ignition may land, m. */
+const IGNITION_OUTSIDE_MAX_M = 1500;
+
+/**
+ * A scheduled ignition point near a community. Candidates alternate, starting inside: inside a
+ * random zone (between its core and a vertex), then in a ring up to IGNITION_OUTSIDE_MAX_M beyond
+ * a vertex, pointing away from the core (toward the wildland around a town). The first candidate on a
+ * Scott & Burgan fuel model wins: dense urban zones (LANDFIRE NB91 etc.) carry no fire on this
+ * board, so a fire there would never spread. If none of IGNITION_CANDIDATES is burnable, the
+ * first in-zone candidate is used. All draws come from the board's seeded generator.
+ */
 function randomIgnitionPoint(board: Board): LonLat | null {
   if (board.zones.length === 0) return null;
-  const zone = board.zones[Math.floor(nextRandom(board) * board.zones.length)];
-  const vertex = zone.ring[Math.floor(nextRandom(board) * zone.ring.length)];
-  if (!vertex) return zone.core;
-  const u = 0.15 + 0.6 * nextRandom(board);
-  return [zone.core[0] + (vertex[0] - zone.core[0]) * u, zone.core[1] + (vertex[1] - zone.core[1]) * u];
+  let fallback: LonLat | null = null;
+  for (let i = 0; i < IGNITION_CANDIDATES; i++) {
+    const zone = board.zones[Math.floor(nextRandom(board) * board.zones.length)];
+    const vertex = zone.ring[Math.floor(nextRandom(board) * zone.ring.length)];
+    const u = nextRandom(board);
+    let p: LonLat;
+    if (!vertex) p = zone.core;
+    else if (i % 2 === 0) {
+      const t = 0.15 + 0.6 * u;
+      p = [zone.core[0] + (vertex[0] - zone.core[0]) * t, zone.core[1] + (vertex[1] - zone.core[1]) * t];
+    } else {
+      const [x, y] = toLocal(zone.core, vertex);
+      const r = Math.hypot(x, y);
+      const out = r > 1 ? (r + IGNITION_OUTSIDE_MAX_M * u) / r : 1;
+      p = fromLocal(zone.core, [x * out, y * out]);
+    }
+    fallback ??= p;
+    if (isBurnable(board.env.spread.ground.fuelCodeAt(p))) return p;
+  }
+  return fallback;
+}
+
+/** Whether the fire's head is on a Scott & Burgan fuel model (else it cannot spread here). */
+export function headOnWildlandFuel(fire: Fire): boolean {
+  return isBurnable(fire.rates.fuelCode);
 }
 
 /**

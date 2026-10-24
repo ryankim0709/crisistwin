@@ -31,7 +31,7 @@ struct FamilyView: View {
                     Label(message, systemImage: "exclamationmark.triangle.fill")
                         .font(.subheadline)
                         .foregroundStyle(Color.ctWarning)
-                        .ctPanel(padding: 12)
+                        .ctPanel()
                 }
                 if let family = store.family {
                     joined(family)
@@ -42,8 +42,7 @@ struct FamilyView: View {
                     enrollment
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
+            .ctScreenPadding()
         }
         .ctScreenBackground()
         .navigationTitle(store.family?.name ?? "Family")
@@ -61,7 +60,7 @@ struct FamilyView: View {
     // MARK: Not in a family
 
     private var enrollment: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 12) {
             Picker("Create or join", selection: $mode) {
                 ForEach(Mode.allCases) { Text($0.rawValue).tag($0) }
             }
@@ -261,7 +260,7 @@ struct FamilyMemberRow: View {
     var body: some View {
         HStack(spacing: 12) {
             PlanAvatar(name: member.name, tint: member.memberStatus.planTone)
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(member.isMe ? "\(member.name) (you)" : member.name)
                     .foregroundStyle(Color.ctInk)
                 if member.memberStatus != .unknown, let date = ServerDate.parse(member.statusUpdatedAt) {

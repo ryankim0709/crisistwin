@@ -22,8 +22,7 @@ struct PlanView: View {
                 MeetingPointCard()
                 TrustedContactsCard()
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
+            .ctScreenPadding()
         }
         .ctScreenBackground()
         .navigationTitle("Meeting points")

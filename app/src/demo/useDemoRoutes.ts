@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { LonLat } from "../live/types";
-import { ROUTES_URL, type RoutesRequest, type RoutesResponse } from "./contracts";
+import { ROUTES_URL, demoUrl, type RoutesRequest, type RoutesResponse } from "./contracts";
 import { activeFires, fireRing, type Board, type RouteOption } from "./model";
 
 /** Re-route at most this often (simulation minutes) while the fires keep growing. */
@@ -20,7 +20,7 @@ export interface RoutesState {
  * of active fires changes, and every ROUTE_REFRESH_MINUTES while any fire burns. One request at
  * a time; an answer for an older board is dropped.
  */
-export function useDemoRoutes(board: Board | null, version: number): RoutesState {
+export function useDemoRoutes(board: Board | null, version: number, incidentId: string): RoutesState {
   const [state, setState] = useState<RoutesState>({ routes: new Map(), asOf: null, error: null });
   const inflight = useRef(false);
   const last = useRef<{ board: Board | null; key: string; minute: number; failedAt: number }>({
@@ -31,7 +31,13 @@ export function useDemoRoutes(board: Board | null, version: number): RoutesState
   });
 
   useEffect(() => {
-    if (!board || inflight.current) return;
+    if (!board) {
+      // Incident switch: forget the old board so its in-flight answer is dropped.
+      last.current = { board: null, key: "", minute: -Infinity, failedAt: -Infinity };
+      setState((s) => (s.asOf === null && s.routes.size === 0 && !s.error ? s : { routes: new Map(), asOf: null, error: null }));
+      return;
+    }
+    if (inflight.current) return;
     const fires = activeFires(board);
     const key = fires.map((f) => `${f.id}:${f.status}`).join(",");
     const prev = last.current;
@@ -47,7 +53,7 @@ export function useDemoRoutes(board: Board | null, version: number): RoutesState
     inflight.current = true;
     last.current = { ...prev, board, key, minute };
     // Not aborted on re-render: the page re-renders several times a second and the answer is still wanted.
-    fetch(ROUTES_URL, {
+    fetch(demoUrl(ROUTES_URL, incidentId), {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify(body),
@@ -61,6 +67,7 @@ export function useDemoRoutes(board: Board | null, version: number): RoutesState
         setState({ routes: new Map(data.zones.map((z) => [z.zone_id, z.options])), asOf: minute, error: null });
       })
       .catch((error: unknown) => {
+        if (last.current.board !== board) return; // an older board's (or incident's) request
         // Forget the key so the request is retried after RETRY_WALL_MS.
         last.current = { ...last.current, key: "", failedAt: Date.now() };
         setState((s) => ({ ...s, error: error instanceof Error ? error.message : "Routes unavailable." }));
@@ -68,7 +75,7 @@ export function useDemoRoutes(board: Board | null, version: number): RoutesState
       .finally(() => {
         inflight.current = false;
       });
-  }, [board, version]);
+  }, [board, version, incidentId]);
 
   return state;
 }

@@ -143,7 +143,7 @@ struct ReportLocationMap: View {
             }
             .buttonStyle(.plain)
             .glassEffect(.regular.interactive(), in: .circle)
-            .padding(10)
+            .padding(8)
             .accessibilityLabel("Put the pin on my location")
         }
     }

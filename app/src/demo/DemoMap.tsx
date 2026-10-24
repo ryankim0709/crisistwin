@@ -337,6 +337,11 @@ function installLayers(map: MapLibreMap): void {
   });
 }
 
+const CLEARED_SOURCES = [
+  "dm-zones", "dm-zone-labels", "dm-routes", "dm-fires", "dm-fire-labels", "dm-team-lines",
+  "dm-teams", "dm-stations", "dm-dest", "dm-sel-area", "dm-sel-point",
+];
+
 export default function DemoMap({
   zones, destinations, board, version, forecasts, selected, igniteMode, onSelect, onIgnite,
 }: Props) {
@@ -408,9 +413,20 @@ export default function DemoMap({
     container.current?.classList.toggle("dm-map--ignite", igniteMode);
   }, [igniteMode]);
 
+  // A different drill: frame its zones again once the new board is drawn.
+  const zonesKey = zones.map((z) => z.id).join("|");
+  useEffect(() => {
+    fitted.current = false;
+  }, [zonesKey]);
+
   useEffect(() => {
     const map = mapRef.current;
-    if (!ready || !map || !board) return;
+    if (!ready || !map) return;
+    if (!board) {
+      // Between boards (drill switch): do not leave the previous drill's marks on the map.
+      for (const id of CLEARED_SOURCES) (map.getSource(id) as GeoJSONSource | undefined)?.setData(collection([]));
+      return;
+    }
     const z = buildZones(zones, board, forecasts);
     const f = buildFires(board);
     const t = buildTeams(board);
@@ -442,7 +458,7 @@ export default function DemoMap({
     }
     // `board` is mutated in place; `version` is what signals a change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, version, forecasts, selected, zones, destinations]);
+  }, [ready, version, forecasts, selected, zones, destinations, board]);
 
   // Move the camera only when the selection changes, not on each board update.
   const selKey = selected ? `${selected.kind}:${selected.id}` : null;

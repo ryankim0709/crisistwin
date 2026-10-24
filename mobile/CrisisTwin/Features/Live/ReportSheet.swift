@@ -69,13 +69,13 @@ struct ReportSheet: View {
 
     private var form: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 16) {
                 placeCard
                 kindGrid
                 if let kind { details(for: kind) }
             }
             .padding(.horizontal, 16)
-            .padding(.top, 4)
+            .padding(.top, 8)
             .padding(.bottom, 16)
         }
         .scrollDismissesKeyboard(.interactively)
@@ -108,7 +108,7 @@ struct ReportSheet: View {
 
     private var placeLine: some View {
         let words = place
-        return HStack(alignment: .firstTextBaseline, spacing: 10) {
+        return HStack(alignment: .firstTextBaseline, spacing: 12) {
             Image(systemName: pinFromGPS ? "location.fill" : "mappin.and.ellipse")
                 .foregroundStyle(Color.ctBrand)
                 .frame(width: 22)
@@ -126,7 +126,7 @@ struct ReportSheet: View {
                     .multilineTextAlignment(.trailing)
             }
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 16)
         .frame(minHeight: 48)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Report goes here: \([words.primary, words.secondary].compactMap { $0 }.joined(separator: ", "))")
@@ -142,7 +142,7 @@ struct ReportSheet: View {
     }
 
     private var kindGrid: some View {
-        LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+        LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
             ForEach(ReportKind.allCases) { option in
                 KindTile(kind: option, selected: kind == option) {
                     tick += 1
@@ -154,7 +154,7 @@ struct ReportSheet: View {
 
     @ViewBuilder
     private func details(for kind: ReportKind) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 12) {
             if kind == .helpNeeded {
                 Label("If you are in danger, call 911.", systemImage: "phone.fill")
                     .font(.headline)
@@ -176,7 +176,7 @@ struct ReportSheet: View {
                     if value.count > Self.noteLimit { note = String(value.prefix(Self.noteLimit)) }
                 }
         }
-        .ctPanel(padding: 14)
+        .ctPanel()
         .transition(.opacity.combined(with: .move(edge: .bottom)))
     }
 
@@ -243,7 +243,7 @@ struct ReportSheet: View {
             .disabled(!ready)
         }
         .padding(.horizontal, 16)
-        .padding(.top, 10)
+        .padding(.top, 8)
         .padding(.bottom, 8)
         .background(Color.ctBackground)
     }
@@ -317,6 +317,10 @@ struct ReportSheet: View {
                 capturedAt = Date()
             }
             if let kind = prefill.kind { select(kind) }
+            if let kind, kind.hasSeverity, let prefilled = prefill.severity { severity = prefilled }
+            if let prefilled = prefill.note?.trimmingCharacters(in: .whitespacesAndNewlines), !prefilled.isEmpty {
+                note = String(prefilled.prefix(Self.noteLimit))
+            }
         }
         if pin == nil, let last = location.lastLocation {
             adopt(last)
@@ -428,7 +432,7 @@ private struct KindTile: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(alignment: .center, spacing: 10) {
+            HStack(alignment: .center, spacing: 12) {
                 Image(systemName: kind.systemImage)
                     .font(.system(size: 19, weight: .semibold))
                     .foregroundStyle(kind.symbolColor)

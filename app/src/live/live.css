@@ -1,5 +1,5 @@
-/* /live planner workspace (D7, design spec section 2): one dense dark workspace in three columns
-   under a 48px header. Kit components restyle through `ui-theme-dark`; this sheet owns layout,
+/* /live planner workspace (D7, design spec section 2): one dense workspace in three columns
+   under a 48px header, in the shell's sage paper theme. This sheet owns layout,
    the mini plates (the Slab on the web) and the map overlays. Status hues are the --lc-* tokens
    of the spec; MapLibre mirrors them in CommandMap.tsx. */
 

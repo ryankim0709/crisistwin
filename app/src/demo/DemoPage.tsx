@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, EvidenceTag, LoadingState, Metric, MetricGrid, Notice, SegmentedControl, Tag } from "../ui";
+import { fetchActive } from "../live/active";
 import { DEFAULT_INCIDENT_ID, LiveError, readToken, triageReport } from "../live/api";
+import DrillPicker from "../live/DrillPicker";
 import { labelPoint } from "../live/format";
 import type { CommandResponse, LonLat } from "../live/types";
 import { useCommand } from "../live/useCommand";
+import { usePoll } from "../live/usePoll";
 import "../live/live.css";
 import AgentConsole from "./AgentConsole";
 import type { DemoOrder } from "./contracts";
@@ -20,6 +23,7 @@ import {
   createBoard,
   currentContainment,
   fireAreaHa,
+  headOnWildlandFuel,
   ignite,
   setActivity,
   setRoutes,
@@ -34,12 +38,13 @@ import SelectedPanel, { type PanelActions } from "./SelectedPanel";
 import { kindShort, windAt } from "./realism";
 import { useCrewRoutes } from "./useCrewRoutes";
 import { useDemoAgent } from "./useDemoAgent";
-import { WEATHER_PRESETS, useDemoEnvironment } from "./useDemoEnvironment";
+import { WEATHER_PRESETS, useDemoEnvironment, zonesCenter } from "./useDemoEnvironment";
 import { useDemoRoutes } from "./useDemoRoutes";
 import { CONGESTION_LABEL, TRAVEL_LABEL } from "./observation";
 import "./demo.css";
 
 const TICK_MS = 200;
+const ACTIVE_POLL_MS = 30_000;
 /** Playback speeds: simulated minutes per real minute. */
 const SPEEDS = [
   { value: "1", label: "1×", title: "Real time" },
@@ -49,6 +54,11 @@ const SPEEDS = [
   { value: "120", label: "120×", title: "Two simulated minutes per second" },
 ] as const;
 type Speed = (typeof SPEEDS)[number]["value"];
+/** Off by default: Claude is only called while monitoring is on (or by "Ask Claude now"). */
+const MONITORING = [
+  { value: "off", label: "Off", title: "Claude is not called" },
+  { value: "on", label: "On", title: "Claude watches the board and acts when something changes" },
+] as const;
 const OPEN_REPORT = new Set(["unverified", "corroborated", "responder_confirmed", "confirmed"]);
 
 function baseZones(data: CommandResponse): BaseZone[] {
@@ -67,9 +77,14 @@ function newSeed(): number {
 
 export default function DemoPage() {
   const [token] = useState(() => readToken());
-  // The board is built on the Camp drill map (0047-command-demo.md), not the active incident.
-  const command = useCommand(token, DEFAULT_INCIDENT_ID);
-  const data = command.data;
+  // The board runs on the hosted instance's one active incident (Camp or a Studio drill package),
+  // exactly as /live follows it; if it cannot be read the page falls back to the Camp drill.
+  const active = usePoll(token, fetchActive, ACTIVE_POLL_MS, "Live API");
+  const incidentId = active.data?.incident_id ?? DEFAULT_INCIDENT_ID;
+  const command = useCommand(active.loading ? null : token, incidentId);
+  // The poll keeps the previous incident's data until the new answer lands; ignore it meanwhile.
+  const data = command.data?.incident_id === incidentId ? command.data : null;
+  const [picking, setPicking] = useState(false);
   const boardRef = useRef<Board | null>(null);
   const [board, setBoard] = useState<Board | null>(null);
   const [version, setVersion] = useState(0);
@@ -84,7 +99,18 @@ export default function DemoPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [weather, setWeather] = useState<string>(WEATHER_PRESETS[0].value);
   const preset = WEATHER_PRESETS.find((p) => p.value === weather) ?? WEATHER_PRESETS[0];
-  const env = useDemoEnvironment(preset);
+  const zoneCentre = useMemo(() => (data ? zonesCenter(data.zones) : null), [data]);
+  const env = useDemoEnvironment(preset, incidentId, zoneCentre);
+
+  // A different drill: drop the board and selection; the effect below rebuilds it from the new data.
+  useEffect(() => {
+    boardRef.current = null;
+    setBoard(null);
+    setSelection(null);
+    setNotice(null);
+    setIgniteMode(false);
+    bump();
+  }, [incidentId, bump]);
 
   // Start the board once the drill zones and the fire inputs arrive.
   useEffect(() => {
@@ -125,13 +151,13 @@ export default function DemoPage() {
     if (changed) bump();
   }, [data, board, bump]);
 
-  const routes = useDemoRoutes(board, version);
+  const routes = useDemoRoutes(board, version, incidentId);
   const routesRef = useRef(routes.routes);
   useEffect(() => {
     routesRef.current = routes.routes;
     if (boardRef.current) setRoutes(boardRef.current, routes.routes);
   }, [routes.routes, board]);
-  const crewRoutes = useCrewRoutes(board, version);
+  const crewRoutes = useCrewRoutes(board, version, incidentId);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps -- the board is mutated in place; version marks changes
   const forecasts = useMemo(() => (board ? zoneForecasts(board) : new Map()), [board, version]);
@@ -145,7 +171,7 @@ export default function DemoPage() {
     },
     [bump],
   );
-  const agent = useDemoAgent({ board, version, routes: routes.routes, forecasts, enabled: autopilot, apply });
+  const agent = useDemoAgent({ board, version, incidentId, routes: routes.routes, forecasts, enabled: autopilot, apply });
 
   // The simulation clock. Holds while Claude decides, if asked to.
   const clock = useRef({ running, speed, hold, thinking: false });
@@ -253,12 +279,29 @@ export default function DemoPage() {
   }
 
   return (
-    <div className={`lc-root dm-root ui-theme-dark${board ? "" : " lc-root--gate"}`}>
+    <div className={`lc-root dm-root${board ? "" : " lc-root--gate"}`}>
       <header className="lc-head dm-head">
         <h1>Command demo</h1>
         <EvidenceTag kind="simulated" />
+        <span className="lc-dim dm-drill-name" title={active.data?.label || undefined}>
+          {active.data?.name ?? "Camp Fire 2018 replay"}
+        </span>
+        <Button size="sm" variant="secondary" disabled={!token} onClick={() => setPicking(true)}>
+          Drill
+        </Button>
         {board ? (
           <>
+            <span className="dm-monitor">
+              <span className="dm-monitor-label" aria-hidden="true">
+                AI monitoring
+              </span>
+              <SegmentedControl
+                label="AI monitoring"
+                options={MONITORING}
+                value={autopilot ? "on" : "off"}
+                onChange={(value) => setAutopilot(value === "on")}
+              />
+            </span>
             <span className="lc-clock" aria-label="Simulation clock">
               <span className="lc-num">{simClock(board.minute)}</span>
             </span>
@@ -335,7 +378,8 @@ export default function DemoPage() {
                           <Tag>{SOURCE_LABEL[f.source]}</Tag>
                         </span>
                         <span className="lc-q-meta lc-num">
-                          {fireAreaHa(f).toFixed(1)} ha · {f.headRate} m/min · flame {Math.round(f.rates.headFlameFeet)} ft · started{" "}
+                          {fireAreaHa(f).toFixed(1)} ha · {f.headRate} m/min · flame {Math.round(f.rates.headFlameFeet)} ft
+                          {f.status === "burning" && !headOnWildlandFuel(f) ? " · no wildland fuel at head" : ""} · started{" "}
                           {simClock(f.ignitedAt)}
                         </span>
                         <span className={`lc-q-meta${f.status === "burning" && (crews.length === 0 || eta === null) ? " lc-error" : ""}`}>
@@ -464,11 +508,14 @@ export default function DemoPage() {
               </ul>
             </section>
             <p className="dm-note dm-footnote">
-              Planning demo: fires, units and households are simulated on the 2018 Camp Fire drill zones and roads. Not
-              operational guidance.
+              Planning demo: fires, units and households are simulated on the {active.data?.name ?? "Camp Fire 2018 replay"}{" "}
+              drill zones and roads. Not operational guidance.
             </p>
           </div>
         </aside>
+      ) : null}
+      {picking && token ? (
+        <DrillPicker token={token} active={active.data} onSwitched={active.refresh} onClose={() => setPicking(false)} />
       ) : null}
     </div>
   );

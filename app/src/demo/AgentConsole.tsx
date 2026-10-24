@@ -1,4 +1,4 @@
-import { Button, EvidenceTag, Notice, Spinner, Tag } from "../ui";
+import { Button, EvidenceTag, Eyebrow, Notice, Spinner, Tag } from "../ui";
 import type { DemoOrder } from "./contracts";
 import { simClock } from "./format";
 import type { useDemoAgent } from "./useDemoAgent";
@@ -11,9 +11,18 @@ function orderText(order: DemoOrder, name: (id: string) => string): string {
   return `Evacuate ${name(order.zone_id)} to ${name(order.destination_id)}`;
 }
 
+const STATUS_TONE: Record<Agent["status"], "neutral" | "warning" | "success" | "info" | "danger"> = {
+  off: "neutral",
+  paused: "warning",
+  watching: "success",
+  thinking: "info",
+  error: "danger",
+};
+
 const STATUS: Record<Agent["status"], string> = {
-  off: "Autopilot off",
-  watching: "Watching",
+  off: "Monitoring off",
+  paused: "Paused: tab hidden",
+  watching: "Monitoring",
   thinking: "Deciding",
   error: "Error",
 };
@@ -37,20 +46,23 @@ export default function AgentConsole({
   const latest = agent.decisions[0];
   return (
     <section className="dm-section" aria-label="AI incident commander">
-      <div className="dm-section-head">
-        <h2>AI incident commander</h2>
-        <span className="dm-tags">
-          <Tag tone={agent.status === "error" ? "danger" : agent.status === "thinking" ? "info" : "neutral"}>
+      <div className="dm-section-head dm-console-head">
+        <div>
+          <Eyebrow>AI commander · simulated</Eyebrow>
+          <h2>Incident commander</h2>
+        </div>
+        <span className="dm-tags" role="status" aria-live="polite">
+          <Tag tone={STATUS_TONE[agent.status]}>
             {agent.status === "thinking" ? <Spinner /> : null} {STATUS[agent.status]}
           </Tag>
           <EvidenceTag kind="ai_explanation" />
         </span>
       </div>
       <div className="dm-actions">
-        <Button size="sm" variant={autopilot ? "primary" : "secondary"} aria-pressed={autopilot} onClick={() => onAutopilot(!autopilot)}>
-          {autopilot ? "Autopilot on" : "Turn autopilot on"}
+        <Button variant={autopilot ? "secondary" : "primary"} className="dm-autopilot" onClick={() => onAutopilot(!autopilot)}>
+          {autopilot ? "Turn monitoring off" : "Turn monitoring on"}
         </Button>
-        <Button size="sm" variant="ghost" disabled={agent.status === "thinking"} onClick={agent.decideNow}>
+        <Button variant="secondary" disabled={agent.status === "thinking"} onClick={agent.decideNow}>
           Ask Claude now
         </Button>
       </div>
@@ -74,7 +86,7 @@ export default function AgentConsole({
         <p className="lc-dim dm-note">
           {autopilot
             ? "Claude is watching. It is called when something changes: a new fire, a fire its teams cannot hold, freed teams, a zone running out of time, or a periodic review."
-            : "Turn autopilot on to let Claude send teams and order evacuations, or ask it once."}
+            : "Monitoring is off, so Claude is not called. Turn it on to let Claude watch the board and send teams or order evacuations, or ask it once."}
         </p>
       ) : null}
       <ol className="dm-decisions">

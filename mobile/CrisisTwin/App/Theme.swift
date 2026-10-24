@@ -132,6 +132,13 @@ extension Font {
     static let ctMapLabel = Font.system(.caption, weight: .semibold)
 }
 
+/// Spacing follows the web kit's 4 pt scale (`--ct-space-*`), by role:
+/// - 2: a line and its detail line; 4: a label and its control.
+/// - 8: buttons or chips in a row; a section title above a panel.
+/// - 12: rows in a panel, a panel's title to its content, an icon column to its text.
+/// - 16: panel padding, screen margins, and the gap between panels.
+/// - 24: between titled sections, and the end of a scrolling screen.
+
 /// The web kit's Panel: surface, 12 pt radius, 1 pt border. Use for content cards on the
 /// Home, Reports and Plan screens; floating controls over the map use Liquid Glass instead.
 struct CTPanel: ViewModifier {
@@ -148,6 +155,13 @@ struct CTPanel: ViewModifier {
 
 extension View {
     func ctPanel(padding: CGFloat = 16) -> some View { modifier(CTPanel(padding: padding)) }
+
+    /// The margins of a scrolling screen of panels: 16 at the sides, 8 on top, 24 at the end.
+    func ctScreenPadding() -> some View {
+        padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 24)
+    }
 
     /// The screen background behind panels (`--ct-bg`).
     func ctScreenBackground() -> some View {

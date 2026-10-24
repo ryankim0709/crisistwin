@@ -143,12 +143,12 @@ const ROWS: { key: string; label: string; swatch: ReactNode }[] = [
   },
 ];
 
-export default function MapLegend() {
+export default function MapLegend({ record = true }: { record?: boolean }) {
   return (
     <details className="lc-legend" open>
       <summary>Legend</summary>
       <ul>
-        {ROWS.map((r) => (
+        {ROWS.filter((r) => record || r.key !== "ground").map((r) => (
           <li key={r.key}>
             <span className="lc-legend-sw">{r.swatch}</span>
             {r.label}

@@ -27,7 +27,7 @@ Routes of the web app (`app/src/main.tsx`, `app/src/navigation.ts`); `/` redirec
 | `/replay` | Historical replay | Replay of past fires (Camp 2018, plus Marshall and Kincade packages) with perimeters, evacuation traffic and responder/evacuee views, driven by generated replay bundles. [Bundle contract](docs/replay-bundle.md). |
 | `/simulate` | Agent simulation | Replay-style view of simulated agent runs (same map tooling as `/replay`). |
 | `/diorama` | Evacuation diorama | Fictional, scripted ~90 s three.js evacuation of the made-up town Larkspur Hollow; synthetic data. [ADR 0010](docs/adr/0010-evacuation-diorama.md). |
-| `/evacuation`, `/comparison`, `/stress-tests` | Planning pages | UI scaffolds with temporary local input; they do not save scenarios or run evacuation models. [Details](docs/workspace-pages.md), [ADR 0006](docs/adr/0006-planning-ui-scaffolds.md). |
+| `/comparison`, `/stress-tests` | Planning pages | UI scaffolds with temporary local input; they do not save scenarios or run evacuation models. `/evacuation` was removed and redirects to `/simulation`. [Details](docs/workspace-pages.md), [ADR 0006](docs/adr/0006-planning-ui-scaffolds.md). |
 
 The workspace overview (`/overview`) and `/maps` pages were removed
 ([ADR 0015](docs/adr/0015-remove-overview-and-maps.md)).
@@ -118,6 +118,15 @@ docker compose down         # stop the stack
 For the dispatch agent, set `ANTHROPIC_API_KEY` (optionally `DISPATCH_AGENT_MODEL`,
 `DISPATCH_AGENT_EFFORT`) in the backend environment; without it the endpoint returns 503.
 The dispatch area endpoint needs internet the first time a box is used (results are cached).
+
+For the phone's voice mode (`POST /api/live/incidents/{id}/voice`), Cartesia is the speech
+provider (speech-to-text and text-to-speech; paid, server-side only). Set `CARTESIA_API_KEY`
+alongside `ANTHROPIC_API_KEY` (optionally `CARTESIA_VOICE_ID`, `CARTESIA_TTS_MODEL`,
+`VOICE_MODEL`) in the backend environment, for example
+`export CARTESIA_API_KEY=... ANTHROPIC_API_KEY=...` before `docker compose up`. Without
+`CARTESIA_API_KEY` recorded audio answers 503 and typed `text` turns work without speech. Contract:
+[docs/live-reports.md](docs/live-reports.md#voice-mode); a curl example is in
+[`app/backend/README.md`](app/backend/README.md#voice-mode-post-apiliveincidentsidvoice).
 The `/fire` page needs internet access (LANDFIRE, terrain tiles, NWS) and works in the contiguous US only.
 
 Stack: Node 22.12+ with npm, Python 3.12, React 19, TypeScript 5.8, Vite 7, Tailwind CSS 4, Django 5.2,

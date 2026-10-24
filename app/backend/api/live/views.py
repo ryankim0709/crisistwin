@@ -1005,11 +1005,16 @@ def my_destination(request, principal: Principal):
 # ---- v2: controller ----
 
 
+# A proposal's changes carry every zone's full route line and alternatives (~1 MB per
+# proposal); the command view shows neither, and the 5 s poll must stay small.
+_COMMAND_PROPOSAL_PROJECTION = {"_id": 0, "changes.to.route.line": 0, "changes.to.alternatives": 0}
+
+
 def _proposals_for_command(incident_id: str) -> list[dict[str, Any]]:
     proposals = col("live_proposals")
-    pending = list(proposals.find({"incident_id": incident_id, "status": "pending"}, {"_id": 0}))
+    pending = list(proposals.find({"incident_id": incident_id, "status": "pending"}, _COMMAND_PROPOSAL_PROJECTION))
     decided = list(
-        proposals.find({"incident_id": incident_id, "status": {"$ne": "pending"}}, {"_id": 0})
+        proposals.find({"incident_id": incident_id, "status": {"$ne": "pending"}}, _COMMAND_PROPOSAL_PROJECTION)
         .sort("created_at", -1)
         .limit(controller.DECIDED_PROPOSALS_IN_COMMAND)
     )

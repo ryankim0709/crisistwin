@@ -97,7 +97,10 @@ export default function ReviewQueue({
   serverNow,
   showRecord,
   onShowRecord,
+  hasRecord = true,
 }: {
+  /** False on a Studio package drill, which has no 2018 record. */
+  hasRecord?: boolean;
   showRecord: boolean;
   onShowRecord: (show: boolean) => void;
   items: QueueItem[];
@@ -141,15 +144,17 @@ export default function ReviewQueue({
     <section className="lc-col lc-queue" aria-labelledby="lc-queue-title">
       <header className="lc-col-head">
         <h2 id="lc-queue-title">Review queue</h2>
-        <Button
-          size="sm"
-          variant={showRecord ? "soft" : "ghost"}
-          aria-pressed={showRecord}
-          title={showRecord ? "Hide 2018 record items" : "Show 2018 record items"}
-          onClick={() => onShowRecord(!showRecord)}
-        >
-          2018 record{showRecord ? ` ${recordCount}` : ""}
-        </Button>
+        {hasRecord ? (
+          <Button
+            size="sm"
+            variant={showRecord ? "soft" : "ghost"}
+            aria-pressed={showRecord}
+            title={showRecord ? "Hide 2018 record items" : "Show 2018 record items"}
+            onClick={() => onShowRecord(!showRecord)}
+          >
+            2018 record{showRecord ? ` ${recordCount}` : ""}
+          </Button>
+        ) : null}
       </header>
       <SegmentedControl label="Queue filter" options={options} value={filter} onChange={onFilter} className="lc-filters" />
       <div className="lc-col-scroll">

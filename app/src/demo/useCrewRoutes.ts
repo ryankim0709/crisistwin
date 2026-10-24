@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { LonLat } from "../live/types";
 import { GROUND_APPARATUS } from "../studio/apparatus";
-import { CREW_ROUTES_URL, type CrewRouteRequest, type CrewRoutesRequest, type CrewRoutesResponse } from "./contracts";
+import { CREW_ROUTES_URL, demoUrl, type CrewRouteRequest, type CrewRoutesRequest, type CrewRoutesResponse } from "./contracts";
 import { activeFires, applyTravelLeg, crewTarget, distanceM, fireRing, travelKey, type Board } from "./model";
 
 /** Free units per burning fire whose road time is fetched ahead (nearest by straight line). */
@@ -23,7 +23,7 @@ export interface CrewRoutesState {
  * the nearest free units to each burning fire are fetched ahead so the commander's options use
  * road times. One request at a time; a leg is asked for once.
  */
-export function useCrewRoutes(board: Board | null, version: number): CrewRoutesState {
+export function useCrewRoutes(board: Board | null, version: number, incidentId: string): CrewRoutesState {
   const [state, setState] = useState<CrewRoutesState>({ fetched: 0, noRoute: 0, error: null });
   const inflight = useRef(false);
   const asked = useRef<{ board: Board | null; keys: Set<string>; failedAt: number }>({ board: null, keys: new Set(), failedAt: -Infinity });
@@ -58,7 +58,7 @@ export function useCrewRoutes(board: Board | null, version: number): CrewRoutesS
     const body: CrewRoutesRequest = { fires: fires.map((f) => fireRing(f, RING_POINTS) as LonLat[]), requests };
     for (const r of requests) seen.add(r.id);
     inflight.current = true;
-    fetch(CREW_ROUTES_URL, {
+    fetch(demoUrl(CREW_ROUTES_URL, incidentId), {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify(body),
@@ -82,6 +82,7 @@ export function useCrewRoutes(board: Board | null, version: number): CrewRoutesS
         setState((s) => ({ fetched: s.fetched + fetched, noRoute: s.noRoute + noRoute, error: null }));
       })
       .catch((error: unknown) => {
+        if (asked.current.board !== board) return; // an older board's (or incident's) request
         for (const r of requests) seen.delete(r.id);
         asked.current.failedAt = Date.now();
         setState((s) => ({ ...s, error: error instanceof Error ? error.message : "Crew routes unavailable." }));
@@ -89,7 +90,7 @@ export function useCrewRoutes(board: Board | null, version: number): CrewRoutesS
       .finally(() => {
         inflight.current = false;
       });
-  }, [board, version]);
+  }, [board, version, incidentId]);
 
   return state;
 }

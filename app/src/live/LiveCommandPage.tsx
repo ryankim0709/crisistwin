@@ -160,6 +160,8 @@ export default function LiveCommandPage() {
   // The hosted instance's one active incident; re-read every 30 s and right after a switch. If it
   // cannot be read, the console falls back to the default incident rather than staying blank.
   const active = usePoll(token, fetchActive, ACTIVE_POLL_MS, "Live API");
+  // A Studio package has no 2018 ground or response record (docs/adr/0047-active-incident.md).
+  const isPackage = active.data?.source === "package";
   const incidentId = active.data?.incident_id ?? DEFAULT_INCIDENT_ID;
   const incidentToken = active.loading ? null : token;
   const command = useCommand(incidentToken, incidentId);
@@ -316,7 +318,7 @@ export default function LiveCommandPage() {
   const impactResult = impact && selected && impact.itemId === selected.id ? impact.result : null;
 
   return (
-    <div className={`lc-root ui-theme-dark${data ? "" : " lc-root--gate"}`}>
+    <div className={`lc-root${data ? "" : " lc-root--gate"}`}>
       <WorkspaceHeader
         data={data}
         twin={twinData}
@@ -335,6 +337,7 @@ export default function LiveCommandPage() {
           items={listed}
           showRecord={showRecord}
           onShowRecord={setShowRecord}
+          hasRecord={!isPackage}
           filter={filter}
           onFilter={setFilter}
           selectedId={selectedId}
@@ -360,7 +363,7 @@ export default function LiveCommandPage() {
             onToggle={(k) => setLayers((l) => ({ ...l, [k]: !l[k] }))}
           />
         ) : null}
-        {data ? <MapLegend /> : null}
+        {data ? <MapLegend record={!isPackage} /> : null}
         {gate}
       </main>
       {data ? (
@@ -419,7 +422,7 @@ export default function LiveCommandPage() {
                 if (coord) setFocus({ id: `zone:${id}`, coord });
               }}
             />
-            <ResponseRecord items={data.response_record ?? []} />
+            {isPackage ? null : <ResponseRecord items={data.response_record ?? []} />}
             <ActivityLog
               decisions={data.decisions ?? []}
               serverNow={serverNow}
