@@ -5,21 +5,28 @@ Subcommands write JSON/GeoJSON for viewing or app integration:
   timeline   compact observed replay for animation
   hindcast   simulate fire spread from an observed perimeter and score it against later ones
   calibrate  pick fire parameters on a training window, report held-out skill
+  bundle     run fire + traffic and write a replay bundle for the web app (docs/replay-bundle.md)
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import sys
 from datetime import timedelta
 from pathlib import Path
 
 from tools.build_camp_history import SourceError
 
+from sim.bundle import build_bundle
 from sim.fire import FireParams
+from sim.fixtures import camp_fixture_scenario
 from sim.hindcast import calibrate, default_candidates, run_hindcast
 from sim.history import load_history, parse_utc
+from sim.network import load_road_network
 from sim.replay import observed_frame, timeline
+from sim.scenario import hybrid_scenario
+from sim.traffic import TrafficParams
 
 
 def _write(path: Path, payload: dict) -> None:
@@ -69,6 +76,16 @@ def main() -> None:
     cal.add_argument("--cell-m", type=float, default=200)
     cal.add_argument("--output", type=Path, required=True)
 
+    bun = sub.add_parser("bundle", help="fire + traffic replay bundle for the web app")
+    bun.add_argument("--roads-package", type=Path,
+                     help="verified road package (camp-2018-evacuation); omit for the synthetic fixture network")
+    bun.add_argument("--start", help="ISO 8601 (default: scenario start)")
+    bun.add_argument("--end", help="ISO 8601 (default: scenario end)")
+    bun.add_argument("--seed", type=int, default=TrafficParams.seed)
+    bun.add_argument("--record-every-s", type=int, default=TrafficParams.record_every_s)
+    bun.add_argument("--no-simulated-fire", action="store_true", help="omit the simulated morning fire front")
+    bun.add_argument("--output", type=Path, required=True)
+
     args = parser.parse_args()
     try:
         history = load_history(args.package)
@@ -88,6 +105,21 @@ def main() -> None:
             result = run_hindcast(history, _fire_params(args), start_index=args.start_index,
                                   horizon_hours=args.hours, cell_m=args.cell_m, include_geometry=args.geometry)
             summary = json.dumps(result["summary"])
+        elif args.command == "bundle":
+            if args.roads_package:
+                network, exits, provenance = load_road_network(args.roads_package)
+                scenario = hybrid_scenario(network, exits, provenance["assumptions"])
+                start = parse_utc(args.start or "2018-11-08T14:00:00Z")
+                end = parse_utc(args.end or "2018-11-09T08:00:00Z")
+            else:
+                scenario = camp_fixture_scenario()
+                start = parse_utc(args.start) if args.start else scenario["clock_start"]
+                end = parse_utc(args.end) if args.end else scenario["clock_end"]
+            params = TrafficParams(seed=args.seed, record_every_s=args.record_every_s)
+            result = build_bundle(history, scenario, params, start=start, end=end,
+                                  command=" ".join(["python3 -m sim", *sys.argv[1:]]),
+                                  simulate_fire=not args.no_simulated_fire)
+            summary = json.dumps(result["traffic"]["summary"])
         else:
             result = calibrate(history, default_candidates(), start_index=args.start_index,
                                train_hours=args.train_hours, test_hours=args.test_hours, cell_m=args.cell_m)

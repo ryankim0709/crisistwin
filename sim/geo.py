@@ -161,3 +161,90 @@ def mask_to_geometry(grid: Grid, mask: bytearray | list) -> dict:
             corners = [grid.to_lonlat(x, y) for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0))]
             rects.append([[[round(lon, 6), round(lat, 6)] for lon, lat in corners]])
     return {"type": "MultiPolygon", "coordinates": rects}
+
+
+def _ring_area(ring: list[tuple[float, float]]) -> float:
+    return sum(x0 * y1 - x1 * y0 for (x0, y0), (x1, y1) in zip(ring, ring[1:] + ring[:1])) / 2
+
+
+def _point_in_ring(x: float, y: float, ring: list[tuple[float, float]]) -> bool:
+    inside = False
+    for (x0, y0), (x1, y1) in zip(ring, ring[1:] + ring[:1]):
+        if (y0 <= y) != (y1 <= y) and x < x0 + (y - y0) * (x1 - x0) / (y1 - y0):
+            inside = not inside
+    return inside
+
+
+def _chaikin(ring: list[tuple[float, float]], iterations: int) -> list[tuple[float, float]]:
+    for _ in range(iterations):
+        smoothed = []
+        for (x0, y0), (x1, y1) in zip(ring, ring[1:] + ring[:1]):
+            smoothed.append((0.75 * x0 + 0.25 * x1, 0.75 * y0 + 0.25 * y1))
+            smoothed.append((0.25 * x0 + 0.75 * x1, 0.25 * y0 + 0.75 * y1))
+        ring = smoothed
+    return ring
+
+
+def mask_contour(grid: Grid, mask: bytearray | list, *, smooth_iterations: int = 2, min_cells: int = 1) -> dict:
+    """Outline of the set cells as a MultiPolygon with holes, Chaikin-smoothed for display.
+
+    Smoothing shifts edges by under half a cell, so the outline is a display aid; use
+    the mask (not this geometry) for any calculation. Rings enclosing fewer than
+    `min_cells` cells are dropped.
+    """
+    ncols, nrows = grid.ncols, grid.nrows
+
+    def filled(col: int, row: int) -> bool:
+        return 0 <= col < ncols and 0 <= row < nrows and bool(mask[row * ncols + col])
+
+    # Directed cell-boundary edges with the filled cell on the left (outer rings CCW).
+    outgoing: dict[tuple[int, int], list[tuple[int, int]]] = {}
+    for row in range(nrows):
+        for col in range(ncols):
+            if not mask[row * ncols + col]:
+                continue
+            if not filled(col, row - 1):
+                outgoing.setdefault((col, row), []).append((col + 1, row))
+            if not filled(col + 1, row):
+                outgoing.setdefault((col + 1, row), []).append((col + 1, row + 1))
+            if not filled(col, row + 1):
+                outgoing.setdefault((col + 1, row + 1), []).append((col, row + 1))
+            if not filled(col - 1, row):
+                outgoing.setdefault((col, row + 1), []).append((col, row))
+
+    rings = []
+    while outgoing:
+        start = next(iter(outgoing))
+        ring, vertex = [], start
+        while True:
+            ring.append(vertex)
+            targets = outgoing[vertex]
+            nxt = targets.pop()
+            if not targets:
+                del outgoing[vertex]
+            vertex = nxt
+            if vertex == start:
+                break
+        # Drop collinear vertices before smoothing.
+        ring = [p for i, p in enumerate(ring)
+                if (ring[i - 1][0] - p[0]) * (ring[(i + 1) % len(ring)][1] - p[1])
+                != (ring[i - 1][1] - p[1]) * (ring[(i + 1) % len(ring)][0] - p[0])]
+        if len(ring) >= 3:
+            rings.append(ring)
+
+    outers = [r for r in rings if _ring_area(r) > 0 and _ring_area(r) >= min_cells]
+    holes = [r for r in rings if _ring_area(r) < 0 and -_ring_area(r) >= min_cells]
+    polygons = [[outer] for outer in sorted(outers, key=_ring_area, reverse=True)]
+    for hole in holes:
+        hx, hy = hole[0]
+        for polygon in sorted(polygons, key=lambda p: _ring_area(p[0])):
+            if _point_in_ring(hx, hy, polygon[0]):
+                polygon.append(hole)
+                break
+
+    def to_coords(ring: list[tuple[int, int]]) -> list[list[float]]:
+        pts = _chaikin([(float(c), float(r)) for c, r in ring], smooth_iterations)
+        coords = [[round(v, 6) for v in grid.to_lonlat(c * grid.cell_m, r * grid.cell_m)] for c, r in pts]
+        return coords + coords[:1]
+
+    return {"type": "MultiPolygon", "coordinates": [[to_coords(r) for r in polygon] for polygon in polygons]}
