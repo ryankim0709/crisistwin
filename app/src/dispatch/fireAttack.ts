@@ -16,7 +16,7 @@
 import type { ScheduledFireRun } from "../fire/scheduledTypes";
 import { GROUND_APPARATUS, grassRateMetersPerHour } from "../studio/apparatus";
 import { productionFactor } from "../studio/firefighting";
-import { ellipsePerimeter } from "../studio/initialAttack";
+import { ellipsePerimeter } from "../studio/ellipse";
 import type { LonLat } from "./area";
 import { DEVELOPED_FUEL_CODE } from "../fire/spread";
 

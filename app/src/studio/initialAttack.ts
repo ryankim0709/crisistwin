@@ -37,6 +37,7 @@
  */
 
 import { UNIT_WITHDRAW_MARGIN_MINUTES } from "../dispatch/engine";
+import { ellipsePerimeter } from "./ellipse";
 import type { LandscapeGrid } from "../fire/landscape";
 import type { ScheduledFireInput, ScheduledFireRun } from "../fire/scheduledTypes";
 import { cellAt, simulateScheduledFireSpread } from "../fire/spread";
@@ -117,14 +118,7 @@ export interface InitialAttackEstimate {
   outFromMinuteBySource: number[];
 }
 
-/** Ramanujan's perimeter of the ellipse with this area and length-to-breadth ratio. */
-export function ellipsePerimeter(areaSquareMeters: number, lengthToBreadth: number): number {
-  if (areaSquareMeters <= 0) return 0;
-  const ratio = Math.max(1, lengthToBreadth);
-  const a = Math.sqrt((areaSquareMeters * ratio) / Math.PI);
-  const b = a / ratio;
-  return Math.PI * (3 * (a + b) - Math.sqrt((3 * a + b) * (a + 3 * b)));
-}
+export { ellipsePerimeter };
 
 /** Rate and holding limit of a unit that walked `hikeMeters` from where it parked (response/reach.ts planWork). */
 function unitWork(kind: GroundKind, hikeMeters: number, fuelCode: number) {
