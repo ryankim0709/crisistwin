@@ -321,8 +321,9 @@ def rothermel_fuel(params: RothermelParams) -> dict:
         g = _size_class_weights([(f, s) for f, _, s, _ in cls])
         net_load = sum(g_ij * w for g_ij, (_, w, _, _) in zip(g, cls)) * (1 - _TOTAL_MINERAL)
         moisture = sum(f * mo for f, _, _, mo in cls)
-        rm = min(1.0, moisture / mx)
-        eta_m = max(0.0, 1 - 2.59 * rm + 5.11 * rm ** 2 - 3.52 * rm ** 3)
+        rm = moisture / mx
+        # Rothermel (1972) damping; exactly 0 at or above extinction (the cubic leaves 4.4e-16 at rm = 1).
+        eta_m = 0.0 if rm >= 1 else max(0.0, 1 - 2.59 * rm + 5.11 * rm ** 2 - 3.52 * rm ** 3)
         # I_R = Gamma' sum_i w_n,i h eta_M,i eta_s (Rothermel 1972 eq. 27): category terms summed, not f_i-weighted.
         ir += gamma * net_load * fm.heat_btu_lb * eta_m * eta_s
         heat_sink += f_cat * sum(f * math.exp(-138 / s) * (250 + 1116 * mo) for f, _, s, mo in cls)
