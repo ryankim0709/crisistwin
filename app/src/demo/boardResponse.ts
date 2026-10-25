@@ -46,7 +46,7 @@ import {
   reportDelay,
   type ReportDelay,
 } from "../response/report";
-import { engineCrewHandLineMPerMin, formatDuration, planWork, type WorkMode } from "../response/reach";
+import { engineCrewHandLineMPerMin, formatDuration, planWork, type WorkMode, type WorkPlan } from "../response/reach";
 import { countAtMost } from "./fireField";
 import type { LonLat } from "../live/types";
 import { commanderTactic, type ChosenStrategy } from "./strategyOptions";
@@ -1708,7 +1708,8 @@ function edgeOf(board: Board, fire: Fire, fr: FireResponse): LonLat[] {
  */
 export function reachFraction(board: Board, fire: Fire, fr: FireResponse | null = board.response.fires.get(fire.id) ?? null): number | null {
   if (!fr) return null;
-  const units = board.teams.filter((t) => t.fireId === fire.id && (t.status === "on_scene" || t.status === "refilling") && t.workMode !== null);
+  // Direct-attack units only: a unit building an attack line works its line, not the fire's edge.
+  const units = board.teams.filter((t) => t.fireId === fire.id && t.lineId === null && (t.status === "on_scene" || t.status === "refilling") && t.workMode !== null);
   if (units.length === 0) return null;
   const edge = edgeOf(board, fire, fr);
   if (edge.length === 0) return 1;
@@ -1725,6 +1726,62 @@ export function reachFraction(board: Board, fire: Fire, fr: FireResponse | null 
     fr.reach.unitsKey = key;
   }
   return fraction;
+}
+
+/**
+ * Why a unit on scene at a burning fire does no work now ("standing there"), or null when it
+ * works or is about to: parked out of reach (work mode out_of_reach: of the fire's edge on direct
+ * attack, of its line's anchor on an attack line), or on direct attack with no point of the
+ * fire's open edge (the same sample as reachFraction) within its reach radius. A unit still
+ * hiking in (workStartAt ahead), building an attack line or with unknown access is not counted.
+ * Model output (the reach model and the solver's edge), for the agent's monitor.
+ */
+export function idleOnSceneReason(board: Board, team: Team): string | null {
+  if (team.status !== "on_scene" || team.fireId === null) return null;
+  const fire = board.fires.find((f) => f.id === team.fireId);
+  if (!fire || fire.status !== "burning") return null;
+  if (team.workMode === "out_of_reach") {
+    const line = team.lineId ? board.lines.find((l) => l.id === team.lineId) : undefined;
+    const what = line ? `its ${fire.id} ${line.plan.id} line` : fire.id;
+    return team.parkedM !== null && team.accessKnown
+      ? `parked ${distanceText(team.parkedM)} from ${what}, too far to build line`
+      : `too far from ${what} to build line`;
+  }
+  if (team.workMode === null || team.lineId !== null) return null;
+  if (team.workStartAt !== null && team.workStartAt > board.minute) return null;
+  const fr = board.response.fires.get(fire.id);
+  if (!fr) return null;
+  const edge = edgeOf(board, fire, fr);
+  if (edge.length === 0 || edge.some((p) => distanceM(team.position, p) <= team.reachM)) return null;
+  return `no open edge of ${fire.id} within its ${Math.round(team.reachM)} m reach`;
+}
+
+/**
+ * How a ground unit parked at `parked` works ground at `target` (response/reach.ts planWork):
+ * the straight-line distance, the climb between the two on the landscape's elevation, and the
+ * steepest slope sampled at 11 points on the way. Used for direct attack (target: the nearest
+ * point of the fire's open edge) and for an attack line (target: the line's anchor point).
+ */
+export function accessWorkPlan(board: Board, kind: GroundResponseKind, parked: LonLat, target: LonLat): WorkPlan & { distanceM: number } {
+  const ground = board.env.spread.ground;
+  const grid = board.env.landscape;
+  const elev = (p: LonLat) => {
+    const c = cellAt(grid, { longitude: p[0], latitude: p[1] });
+    return c >= 0 ? grid.elevationMeters[c] : 0;
+  };
+  let maxSlopePct = 0;
+  for (let i = 0; i <= 10; i += 1) {
+    const p: LonLat = [parked[0] + ((target[0] - parked[0]) * i) / 10, parked[1] + ((target[1] - parked[1]) * i) / 10];
+    maxSlopePct = Math.max(maxSlopePct, ground.slopeAt(p).slopeTangent * 100);
+  }
+  const d = distanceM(parked, target);
+  return { ...planWork(kind, d, elev(target) - elev(parked), maxSlopePct), distanceM: d };
+}
+
+/** The fire's open-edge sample now (the same one reachFraction and idleOnSceneReason read), WGS84 points; [] without a solve. */
+export function fireEdgeSample(board: Board, fire: Fire): LonLat[] {
+  const fr = board.response.fires.get(fire.id);
+  return fr ? edgeOf(board, fire, fr) : edgeSample(board, fire, board.minute);
 }
 
 /**
@@ -1754,18 +1811,7 @@ export function arriveOnScene(board: Board, team: Team, fire: Fire): void {
       nearest = p;
     }
   }
-  const ground = board.env.spread.ground;
-  const grid = board.env.landscape;
-  const elev = (p: LonLat) => {
-    const c = cellAt(grid, { longitude: p[0], latitude: p[1] });
-    return c >= 0 ? grid.elevationMeters[c] : 0;
-  };
-  let maxSlopePct = 0;
-  for (let i = 0; i <= 10; i += 1) {
-    const p: LonLat = [parked[0] + ((nearest[0] - parked[0]) * i) / 10, parked[1] + ((nearest[1] - parked[1]) * i) / 10];
-    maxSlopePct = Math.max(maxSlopePct, ground.slopeAt(p).slopeTangent * 100);
-  }
-  const plan = planWork(team.kind, d, elev(nearest) - elev(parked), maxSlopePct);
+  const plan = accessWorkPlan(board, team.kind, parked, nearest);
   team.workMode = plan.mode;
   team.workStartAt = arrivedAt + plan.startDelayMinutes;
   team.parkedM = d;
@@ -1791,7 +1837,8 @@ const MODE_TEXT: Record<WorkMode, string> = {
   out_of_reach: "too far from the fire to build line",
 };
 
-function distanceText(m: number): string {
+/** "830 m" / "1.2 km" (ground metres, for labels). */
+export function distanceText(m: number): string {
   return m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m / 10) * 10} m`;
 }
 
@@ -1800,7 +1847,10 @@ export function unitAccessText(board: Board, team: Team): string {
   if (team.status !== "on_scene" && team.status !== "refilling") return "";
   if (team.workMode === null || team.parkedM === null) return `${team.id} on scene.`;
   const wait = team.workStartAt !== null ? Math.ceil(team.workStartAt - board.minute) : 0;
-  const where = team.accessKnown ? `parked ${distanceText(team.parkedM)} from ${team.fireId}` : `at ${team.fireId} (road access not known; straight-line estimate)`;
+  // A unit building an attack line parks for its line's anchor, not for the fire's edge.
+  const line = team.lineId ? board.lines.find((l) => l.id === team.lineId) : undefined;
+  const what = line ? `its ${line.fireId} ${line.plan.id} line` : team.fireId;
+  const where = team.accessKnown ? `parked ${distanceText(team.parkedM)} from ${what}` : `at ${what} (road access not known; straight-line estimate)`;
   const mode = MODE_TEXT[team.workMode];
   return `${team.id} ${where} — ${wait > 0 ? `${mode}, ~${formatDuration(wait)}` : team.workMode === "hand_line" ? "building hand line" : team.workMode === "dozer" ? "cutting dozer line" : mode}.`;
 }

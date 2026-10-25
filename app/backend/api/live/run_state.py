@@ -7,11 +7,13 @@ of the incident's *current* run: one ``live_run_state`` document per incident, a
 ``livecore.household_states`` (a deterministic stand-in: which household is "safe" is an
 allocation, not an observation). Contract: docs/live-reports.md "Run state".
 
-Writes to the household collection run in a per-incident background thread (an Atlas free tier
-wrote about 250 documents a second when measured, so a run's first 20k households take ~80 s): the
-PUT stores the summary, queues the counts, waits a few seconds for the writer, then answers with
-what was written so far. The writer coalesces PUTs (it always applies the newest counts) and writes
-only documents that changed, in batches of ``WRITE_BATCH``.
+Writes to the household collection run in a per-incident background thread: the PUT stores the
+summary, queues the counts, waits a few seconds for the writer, then answers with what was written
+so far. The writer coalesces PUTs (it always applies the newest counts) and writes only documents
+that changed, in batches of ``WRITE_BATCH``. It is paced (``_pace``): the Atlas free tier moves
+about 100 KB/s for the whole API, and a writer going flat out (1000-document batches, a 20k
+snapshot read) made every other query wait about a second, so the console's polls took 10-15 s and
+/live showed OFFLINE (measured 2026-10-25). Paced, a run's first 20k households take about 3 min.
 """
 
 from __future__ import annotations
@@ -49,7 +51,17 @@ MAX_ROUTE_VIA = 5
 MAX_ZONES = 2000
 MAX_BODY_BYTES = 1_000_000
 MAX_COUNT = 10_000_000
-WRITE_BATCH = 1000
+WRITE_BATCH = 250
+"""Documents per bulk write (about 35 KB), so a poll's queries never queue behind a long one."""
+DELETE_BATCH = 1000
+READ_BATCH = 1000
+"""Rows per batch of the writer's whole-run reads (snapshot households, stored states)."""
+PACE_FACTOR = 2.0
+"""After each batch the writer pauses this many times as long as the batch took: it uses at most a
+third of the cluster's throughput and leaves the rest to the console's polls."""
+PACE_MIN_S = 0.2
+SNAPSHOT_LOAD_S = 600
+"""Local ``pymongo.timeout`` for a paced whole-snapshot read (20k households: about a minute)."""
 SYNC_WAIT_S = 5.0
 """How long a PUT waits for the writer before answering with ``materialization: "writing"``."""
 LIMIT_DEFAULT = LIMIT_MAX = 5000
@@ -200,6 +212,25 @@ def _body(request) -> dict[str, Any]:
 
 # ---- MongoDB ----
 
+_HEAVY = threading.Lock()
+"""Held by a writer for one batch and its pause, so two incidents' writers do not add up."""
+
+
+def _pace(started: float) -> None:
+    """Pause the writer thread after a batch that began at ``started`` (``PACE_FACTOR``)."""
+    time.sleep(max(PACE_MIN_S, (time.monotonic() - started) * PACE_FACTOR))
+
+
+def _paced_rows(cursor, batch: int = READ_BATCH):
+    """Rows of ``cursor`` (open with ``batch_size(batch)``), pausing after every ``batch`` rows."""
+    started = time.monotonic()
+    for i, row in enumerate(cursor, 1):
+        yield row
+        if i % batch == 0:
+            _pace(started)
+            started = time.monotonic()
+
+
 # A ``live_household_state`` document, short-keyed to fit the free tier (about 140 B instead of 290 B):
 # {_id: "<incident_id>:<household_id>", z: zone_id, x: lon, y: lat, o: occupants, v: vehicles,
 #  s: status, m: since_minute, u: updated_at}. The run is the incident's ``live_run_state.run_id``
@@ -265,12 +296,12 @@ def _load_snapshot(incident_id: str, snapshot_id: str) -> _Snapshot:
     if cached is not None:
         return cached
     started = time.monotonic()
-    with pymongo.timeout(LONG_OP_S):
-        rows = list(col(SNAPSHOT_HOUSEHOLDS).find(
+    with pymongo.timeout(SNAPSHOT_LOAD_S):
+        rows = list(_paced_rows(col(SNAPSHOT_HOUSEHOLDS).find(
             {"snapshot_id": snapshot_id},
             {"_id": 0, "household_id": 1, "zone_id": 1, "location.coordinates": 1, "occupants.value": 1,
              "vehicles.value": 1},
-        ).batch_size(5000))
+        ).batch_size(READ_BATCH)))
     snap = _Snapshot(snapshot_id, rows)
     log.info("run state: loaded %d snapshot households of %s in %.1f s", len(rows), incident_id,
              time.monotonic() - started)
@@ -397,8 +428,9 @@ class _Writer:
             return
         run_id = job["run_id"]
         if job["run_changed"] or (self.run_id is not None and self.run_id != run_id):
+            if not self._delete_paced(epoch):  # the previous run's
+                return
             with self.write_lock, pymongo.timeout(LONG_OP_S):
-                _households().delete_many(_incident_docs(self.incident_id))  # the previous run's
                 _gc_other_incidents()
             with self.lock:
                 if epoch != self.epoch:
@@ -434,14 +466,34 @@ class _Writer:
                            "pending": len(self.dirty), "state": "writing", "snapshot": True}
             self.lock.notify_all()
 
+    def _delete_paced(self, epoch: int) -> bool:
+        """Delete the incident's household states in paced batches; False when a reset happened meanwhile."""
+        states = _households()
+        while True:
+            with _HEAVY:
+                started = time.monotonic()
+                with pymongo.timeout(LONG_OP_S):
+                    ids = [d["_id"] for d in states.find(_incident_docs(self.incident_id), {"_id": 1})
+                           .limit(DELETE_BATCH).batch_size(DELETE_BATCH)]
+                if not ids:
+                    return True
+                with self.write_lock:
+                    if epoch != self.epoch:
+                        return False
+                    with pymongo.timeout(LONG_OP_S):
+                        states.delete_many({"_id": {"$in": ids}})
+                if len(ids) < DELETE_BATCH:
+                    return True
+                _pace(started)
+
     def _reload(self, run_id: str, snapshot: _Snapshot, epoch: int) -> bool:
         """Read what MongoDB holds for the incident (after a restart, another process or a failure).
 
         False when a reset (``reset_memory``) happened meanwhile: what was read may be deleted by now."""
         prefix = f"{self.incident_id}:"
-        with pymongo.timeout(LONG_OP_S):
-            docs = list(_households().find(_incident_docs(self.incident_id), {"_id": 1, "s": 1, "m": 1})
-                        .batch_size(5000))
+        with pymongo.timeout(SNAPSHOT_LOAD_S):
+            docs = list(_paced_rows(_households().find(_incident_docs(self.incident_id), {"_id": 1, "s": 1, "m": 1})
+                                    .batch_size(READ_BATCH)))
         written: dict[str, State] = {}
         stale: list[str] = []
         for d in docs:
@@ -486,34 +538,37 @@ class _Writer:
                 batch = sorted(self.dirty)[:WRITE_BATCH]
                 states = {hid: self.target[hid] for hid in batch}
                 static = self.snapshot.static
-            with self.write_lock:
-                if epoch != self.epoch:
-                    return
-                now = wall_now()
-                known = set(self.written or ())
-                ops = [self._op(hid, state, static, now, insert=hid not in known)
-                       for hid, state in states.items()]
-                with pymongo.timeout(LONG_OP_S):
-                    try:
-                        _households().bulk_write(ops, ordered=False)
-                    except BulkWriteError as exc:
-                        # A document this process did not know of exists (another process wrote it):
-                        # retry those as upserts; anything else is a real failure.
-                        errors = exc.details.get("writeErrors", [])
-                        if not errors or any(e.get("code") != 11000 for e in errors):
-                            raise
-                        retry = [list(states)[e["index"]] for e in errors]
-                        _households().bulk_write([self._op(hid, states[hid], static, now, insert=False)
-                                                  for hid in retry], ordered=False)
-            with self.lock:
-                if epoch != self.epoch or self.written is None:
-                    return
-                for hid, state in states.items():
-                    self.written[hid] = state
-                    if self.target.get(hid) == state:
-                        self.dirty.discard(hid)
-                self.result = {**self.result, "written": self.result["written"] + len(ops),
-                               "pending": len(self.dirty)}
+            with _HEAVY:  # one batch and its pause at a time, across every incident's writer
+                started = time.monotonic()
+                with self.write_lock:
+                    if epoch != self.epoch:
+                        return
+                    now = wall_now()
+                    known = set(self.written or ())
+                    ops = [self._op(hid, state, static, now, insert=hid not in known)
+                           for hid, state in states.items()]
+                    with pymongo.timeout(LONG_OP_S):
+                        try:
+                            _households().bulk_write(ops, ordered=False)
+                        except BulkWriteError as exc:
+                            # A document this process did not know of exists (another process wrote it):
+                            # retry those as upserts; anything else is a real failure.
+                            errors = exc.details.get("writeErrors", [])
+                            if not errors or any(e.get("code") != 11000 for e in errors):
+                                raise
+                            retry = [list(states)[e["index"]] for e in errors]
+                            _households().bulk_write([self._op(hid, states[hid], static, now, insert=False)
+                                                      for hid in retry], ordered=False)
+                with self.lock:
+                    if epoch != self.epoch or self.written is None:
+                        return
+                    for hid, state in states.items():
+                        self.written[hid] = state
+                        if self.target.get(hid) == state:
+                            self.dirty.discard(hid)
+                    self.result = {**self.result, "written": self.result["written"] + len(ops),
+                                   "pending": len(self.dirty)}
+                _pace(started)
 
 
 _writers: dict[str, _Writer] = {}

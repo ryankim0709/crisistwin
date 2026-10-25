@@ -1234,6 +1234,12 @@
 .lc-agent-ask {
   margin-left: auto;
 }
+.lc-agent-spend {
+  margin: 0;
+  font-size: var(--ct-text-sm);
+  color: var(--ct-ink-muted);
+  font-variant-numeric: tabular-nums;
+}
 .lc-needs {
   display: grid;
   gap: var(--ct-space-2);

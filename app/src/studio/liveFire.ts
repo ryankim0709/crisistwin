@@ -57,11 +57,48 @@ const WEATHER_SOURCE = {
   forecast: { source: "forecast", text: "forecast wind" },
 } as const;
 
-/** The wind the run actually used (`settings`), described by where it came from. */
+/** `wind.source` for a run on an hourly series (FireWeatherSeries.evidence) with no weather record. */
+const SERIES_SOURCE: Record<string, string> = {
+  observed: "historical",
+  forecast: "forecast",
+  derived: "climatology",
+  modelled: "climatology",
+  assumed: "assumed",
+};
+
+/** The server's limit on a publish's descriptive labels (api/live/studio_fires.py LABEL_MAX_CHARS). */
+export const LIVE_LABEL_MAX_CHARS = 300;
+
+/** A label cut to the server's limit (with an ellipsis), so a long provenance never blocks the publish. */
+function clampLabel(text: string): string {
+  return text.length <= LIVE_LABEL_MAX_CHARS ? text : `${text.slice(0, LIVE_LABEL_MAX_CHARS - 1).trimEnd()}…`;
+}
+
 function windOf(result: StudioRunResult): LiveFirePayload["wind"] {
+  const wind = windOfRun(result);
+  return { ...wind, label: clampLabel(wind.label) };
+}
+
+/** The wind the run actually used (`settings`, or its hourly series), described by where it came from. */
+function windOfRun(result: StudioRunResult): LiveFirePayload["wind"] {
   const { settings, weather } = result.scenario;
   const speed = settings.windSpeedMph;
   const from = settings.windFromDegrees;
+  const series = settings.weatherSeries;
+  if (!weather && series?.enabled && series.samples.length > 0) {
+    // An hourly series with no weather record (a random scenario's draw, or a draft's series): the
+    // run used that series, not a hand-set wind. Live command runs one constant wind, so it gets
+    // the series' peak hour within the run, labelled with the series' own source and evidence.
+    const inRun = series.samples.filter((s) => s.minute >= 0 && s.minute <= settings.horizonMinutes);
+    const peak = (inRun.length > 0 ? inRun : series.samples).reduce((a, b) => (b.windSpeedMph > a.windSpeedMph ? b : a));
+    const evidence = series.evidence ?? "unrecorded";
+    return {
+      speed_mph: Math.round(peak.windSpeedMph * 10) / 10,
+      from_deg: ((Math.round(peak.windFromDegrees) % 360) + 360) % 360,
+      source: SERIES_SOURCE[evidence] ?? "series",
+      label: `Peak hour of the hourly weather series the run used (${series.source ?? "source not recorded"}, ${evidence}); run on Live command as one constant wind`,
+    };
+  }
   if (!weather) {
     return {
       speed_mph: speed,
@@ -108,7 +145,7 @@ export function buildLiveFirePayload(result: StudioRunResult, regionId: string):
     wind: windOf(result),
     moisture: {
       preset: preset?.id ?? "custom",
-      label: preset?.label ?? "Custom",
+      label: clampLabel(preset?.label ?? "Custom"),
       values: {
         dead1h: moisture.dead1h,
         dead10h: moisture.dead10h,

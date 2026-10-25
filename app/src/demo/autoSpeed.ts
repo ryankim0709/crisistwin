@@ -12,8 +12,14 @@ import { ORDER_COMPLIANCE, departedShare } from "./realism";
 
 /** UI choice: nothing going on (no reported fire, nobody moving) — skip ahead to the next report. */
 export const AUTO_SPEED_IDLE = 60;
-/** UI choice: Claude is deciding — real time, so the board barely moves before its orders land. */
+/** UI choice: Claude is deciding on an URGENT wake (observation.ts WakeUrgency) — real time, so the board barely moves before its orders land. */
 export const AUTO_SPEED_THINKING = 1;
+/**
+ * UI choice: Claude is on a ROUTINE wake (a continuous review, an arrival, a finished line...).
+ * Reviews run almost back to back while a fire burns, so 1× here would pin the board at real
+ * time; 5× keeps it moving (a ~30 s review is ~2.5 board minutes) while orders still land soon.
+ */
+export const AUTO_SPEED_REVIEWING = 5;
 /** UI choice: something is happening and Claude is not deciding — fast, but watchable. */
 export const AUTO_SPEED_ACTIVE = 20;
 /** UI choice: board minutes the board must stay idle before Auto goes back up to the idle speed. */
@@ -21,18 +27,21 @@ export const AUTO_IDLE_HOLD_MINUTES = 5;
 /** UI choice: a pending resource order counts as activity when it arrives within this many board minutes. */
 export const AUTO_ORDER_SOON_MINUTES = 30;
 
-export type AutoSpeedReason = "idle" | "thinking" | "active";
+/** thinking = Claude deciding on an urgent wake; reviewing = Claude on a routine wake. */
+export type AutoSpeedReason = "idle" | "thinking" | "reviewing" | "active";
 
 export const AUTO_SPEED: Record<AutoSpeedReason, number> = {
   idle: AUTO_SPEED_IDLE,
   thinking: AUTO_SPEED_THINKING,
+  reviewing: AUTO_SPEED_REVIEWING,
   active: AUTO_SPEED_ACTIVE,
 };
 
 /** Shown next to the speed while Auto is on ("60× · idle"). */
 export const AUTO_REASON_TEXT: Record<AutoSpeedReason, string> = {
   idle: "idle",
-  thinking: "Claude thinking",
+  thinking: "Claude deciding (urgent)",
+  reviewing: "Claude reviewing",
   active: "active",
 };
 
@@ -77,18 +86,22 @@ export interface AutoSpeedState {
 }
 
 /**
- * One Auto evaluation, with hysteresis:
- * - Claude thinking: 1× at once (and the idle hold restarts after it, so its orders play out at 20×);
+ * One Auto evaluation, with hysteresis. `thinking` is the urgency of the call in flight (null = none):
+ * - Claude deciding on an urgent wake (new fire, zone late, fire outrunning its crews or breaching
+ *   a line, failing strategy, a unit standing at a fire, "Ask Claude now", or an urgent event
+ *   queued behind a routine call): 1× at once;
+ * - Claude on a routine wake (continuous review, arrivals, finished lines...): AUTO_SPEED_REVIEWING;
+ *   after either the idle hold restarts, so its orders play out at 20×;
  * - activity: 20× at once;
  * - idle: 60× once the board has been idle for AUTO_IDLE_HOLD_MINUTES board minutes (at once on a
  *   fresh board that starts idle).
  */
 export function nextAutoSpeed(
   prev: AutoSpeedState | null,
-  now: { minute: number; idle: boolean; thinking: boolean },
+  now: { minute: number; idle: boolean; thinking: "urgent" | "routine" | null },
 ): AutoSpeedState {
   const fresh = prev === null || now.minute < prev.minute;
-  if (now.thinking) return { reason: "thinking", idleSince: null, minute: now.minute };
+  if (now.thinking) return { reason: now.thinking === "urgent" ? "thinking" : "reviewing", idleSince: null, minute: now.minute };
   if (!now.idle) return { reason: "active", idleSince: null, minute: now.minute };
   if (fresh) return { reason: "idle", idleSince: now.minute, minute: now.minute };
   const idleSince = prev.idleSince ?? now.minute;

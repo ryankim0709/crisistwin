@@ -23,8 +23,11 @@ board minute and the clock stays paused. Simulation Studio publishes are still i
 paused (their ignitions are scheduled from the board minute).
 
 **Auto speed** (`app/src/demo/autoSpeed.ts`, on by default, remembered per browser): the speed
-follows the board. While Claude is deciding (a call in flight, also "Ask Claude now") it is 1×, so
-the board barely moves before the orders land; while nothing is going on (`boardIsIdle`: no
+follows the board. While Claude is deciding on an **urgent** wake (below; also "Ask Claude now",
+or an urgent event queued behind a routine call) it is 1×, so the board barely moves before the
+orders land; while it is on a **routine** wake (a continuous review, an arrival, a finished line)
+it is 5× (`AUTO_SPEED_REVIEWING`), because reviews run almost back to back while a fire burns and
+1× would pin the board at real time; while nothing is going on (`boardIsIdle`: no
 reported fire burning or contained — an unreported or scheduled fire does not count — no unit
 moving or working, no zone leaving or scheduled, no aircraft flying, no resource order due within
 30 min) it is 60×; otherwise 20×. It drops to 20× (or 1×) at once and goes back up to 60× only
@@ -32,7 +35,100 @@ after the board has been idle for 5 board minutes, also after each Claude call. 
 UI choices; only the board minutes per real second change, and `step` lands on the same minutes
 and events at any rate, so results do not depend on them. Moving the speed slider turns Auto off
 and keeps that speed; the "Auto" button turns it back on. The speed reads "60× · idle",
-"1× · Claude thinking", "20× · active" or "· manual". With the agent Off it shows what Auto would pick.
+"1× · Claude deciding (urgent)", "5× · Claude reviewing", "20× · active" or "· manual". With the
+agent Off it shows what Auto would pick.
+
+### AI agent cadence: near-continuous while a fire burns
+
+The monitor (`app/src/demo/observation.ts` `wakeReasons`, run by `useDemoAgent.ts`) compares the
+board with what Claude saw at its last decision and calls `POST /api/demo/decide`:
+
+- **At once on events** (checked every board minute, a new reported fire on every board change):
+  a new reported fire, an extended-attack stage due, a fire outrunning its crews (with free crews),
+  a line breached, the chosen strategy turning `not_containable` or no longer offered, a unit on
+  scene at a burning fire with no work ("standing there": parked out of reach, or on direct
+  attack with no open edge within its reach radius, `boardResponse.ts` `idleOnSceneReason`), a
+  zone reached by fire (urgent with people home), a zone short of order slack — all **urgent** —
+  and units arrived on scene, a line finished, crews freed, a zone newly threatened with people
+  home and no order, a road closure, or orders refused in the last decision (at most one
+  follow-up in a row) — **routine**.
+- **Continuous review**: while a reported fire burns or a zone is threatened, Claude is called
+  again `CONTINUOUS_GAP_MINUTES` = 3 board minutes (a UI/ops choice) after each decision's orders
+  land, even with no event; with only contained fires or leaving zones, every 30 board minutes
+  (`REVIEW_EVERY_MINUTES`). Nothing on the board: no calls.
+- Every wake after the first ends with "Since the last decision (T+…, n min ago): …": per fire its
+  area and growth (ha), reach from ignition (m), containment % before → now, and which units are
+  working, walking in, en route or idle on scene; fires gone out; orders refused. All numbers come
+  from the board's models; Claude only reads them (`observation.monitor`, `previous`).
+- **One call in flight.** Events while Claude thinks are compared with what that call saw, so they
+  start exactly one follow-up call as soon as it finishes (the feed's pending row says "follow-up
+  queued"). A decision's own orders (a released crew, a new strategy) do not wake it again.
+- The feed's pending row reads "Claude is deciding (urgent)…" or "Claude is reviewing the
+  board…" with the wake reasons; reviews that issue no orders collapse into "Claude reviewed the
+  board n times: no change." The decision log keeps the last 80 decisions.
+
+**Cost and effort.** The request carries `urgency` (`urgent` | `routine`, validated in
+`api/demo.py`): urgent runs at `DISPATCH_AGENT_EFFORT` (default `low`), routine at
+`DISPATCH_AGENT_ROUTINE_EFFORT` (default `low`, never above the urgent effort), and on
+`DISPATCH_AGENT_ROUTINE_MODEL` when set (default: the urgent model). Keep both efforts equal: an
+effort or model change gives the other kind of call its own cache entries (effort can invalidate
+the system cache on this model; caches are per model). Expected load with Auto speed, from a
+timing model of the cadence (3-minute gap at 20×, routine calls at 5×, urgent at 1×; scratch
+model, not measured): **about 10–20 calls per hot board hour** and about 75–170 calls per real hour
+while a fire burns (measured on 2026-10-25: calls 6–18 s apart). Turn the agent Off between
+demos; hiding the tab pauses it.
+
+**Prompt caching** (`api/demo.py` `system_blocks`, `split_observation`, `build_user_content`).
+Render order is tools → system → messages; two breakpoints:
+
+1. Tools + system prompt (~6.3k tokens, constant per incident), **1-hour TTL**. While the board
+   runs, calls are seconds apart and any TTL stays warm; the 1-hour write ($8 vs $5 per MTok)
+   pays off on the first Off/tab-hidden pause of 5–60 minutes, which demos have.
+2. `<observation_static>` (~7.1k tokens on Berkeley Hills: clock constants, `activity`, `inputs`,
+   wind provenance, each crew's identity fields — kind, class, label, base, station, department,
+   tier, `holds_flame_ft` — the departments' fixed fields, `response.orderable` and the auto flags),
+   **5-minute TTL**. The server splits the posted observation (the wire contract is unchanged) and
+   serializes it with sorted keys, so it is byte-identical for a whole run: one digest
+   (`static=` in the `Demo decide` log line) across every call, even across consoles. It changes
+   only when the board does (new run, a Studio fire setting moisture, units added): one write.
+   The rest (`<observation>`, the minute, fires, unit status, zones, forecasts, wake reasons) follows
+   uncached. The system prompt tells Claude to read both parts as one observation, by id.
+
+Measured (count_tokens on a captured observation, 1 fire, 29 units, 8 listed zones, 59 kB, then
+real calls on 2026-10-25; Claude Opus 5.5 list prices: $4 input, $20 output, $0.20 cache read,
+$5 / $8 cache write 5 min / 1 h per MTok):
+
+| per call | before (tools + system cached) | after (+ static observation cached) |
+|---|---|---|
+| cached prefix (read) | 6.2k | 13.5k |
+| uncached input | 27.8k (whole observation) | 21.5k (dynamic part) |
+| input cost, warm | $0.113 | $0.089 |
+| real warm calls, early board (9.8–13.1k uncached, 13.5k read, 290–1,300 output) | ≈ $0.074–0.105 (same calls, old shape, estimated) | **$0.050–0.081** (measured) |
+| first call of a run (cold: 6.3k 1-h write, 7.2k 5-min write) | — | $0.155 (measured) |
+
+Output (thinking plus the assessment and the tool call) was 290–1,300 tokens per call at `low`
+effort ($0.006–0.026). Per real hour of a burning fire (75–170 calls): **about $4–14** on an early
+board (before: $5.5–18), and **about $8–19** with mid-fire observations around 28k tokens (before:
+$10–23), more as the observation grows. Every call's usage and cost are logged
+(`Decision usage: … cost_usd=…` from `api.dispatch`, INFO) and returned as `usage` on the final
+NDJSON line; /live shows "Claude spend this session: $X.XX (N calls, cache hit Y%)" under the AI
+agent switch (`demo/AgentSpend.tsx`; list-price estimate since page load).
+
+Not done, and why:
+- **Dynamic part as a diff in a multi-turn session** (previous turns cached, only changes sent):
+  nearly every number in the dynamic part (ETAs, margins, forecasts, strategy options, line
+  progress) moves every 3 board minutes, so a diff stays a large share of it, while the model would
+  have to apply patches to read exact values it must not invent (a stale ETA sends a crew to the
+  wrong place), each turn's tool call needs a tool result, preserved thinking ties history to the
+  conversation, and history grows the cached read and latency every turn. The saving (at most the
+  ~$0.086 dynamic input, realistically well under half of it) is not worth that risk here.
+- **Pre-warm with `max_tokens: 0` when the agent is switched On**: the first real call follows
+  within seconds and writes the same prefix; a pre-warm only moves that write earlier (about a
+  second of prefill on 13k tokens) and is a pure extra write when no call follows.
+- **Biggest remaining lever** is the dynamic observation itself: dropping `null` values and empty
+  lists cut the captured observation from 27.8k to 22.9k tokens (−18%, count_tokens) but needs a
+  prompt rule ("absent = null"); `DISPATCH_AGENT_ROUTINE_MODEL=claude-sonnet-5-5` would halve
+  routine calls ($2 / $10, cache read $0.10) at a quality cost not yet measured.
 
 ## Fires come from Simulation Studio
 
@@ -435,11 +531,17 @@ selected-fire panel) can send them to build line where the fire is forecast to g
   between cells.
 - **Orders**: `send_crew` takes an optional `position_id` (validated on the server against that
   fire's listed ids, and again by the page). The unit drives the road route to the position's
-  anchor point, then builds line outward both ways at its sourced rate (`lineMetersPerMinute` at
-  the anchor's fuel and slope); several units on one line add up. Without `position_id`, the
-  unit attacks the fire's edge as before (perimeter race). When a line is finished its units are
-  free; the line stays. Options per position give `arrive_min` and `line_done_min` for the
-  nearest free units that can reach it by road.
+  anchor point, parks where its road leg ends, reaches the anchor as its off-road reach allows
+  (`lineAccessPlan`: hose within reach, else the crew hikes in and builds hand line, else out of
+  reach and builds nothing; see "Why units stand away from the fire"), then builds line outward
+  both ways at its sourced rate (`lineMetersPerMinute` at the anchor's fuel and slope; an engine
+  crew on foot at the PMS 465 p.39 hand-line rate); several units on one line add up. Without
+  `position_id`, the unit attacks the fire's edge as before (perimeter race). When a line is
+  finished its units are free; the line stays. When the fire reaches an unfinished line's
+  anchor its units pull back (`withdrawFromOverrunLines`). Options per position give
+  `arrive_min`, `work_starts_min` (arrival plus the walk in) and `line_done_min` for the free
+  units that start building first; units whose road leg ends out of their reach of the anchor
+  are left out.
 - **Reachability per apparatus class**: road access differs by class (`access_class`, rules
   R01-R12 of [suppression-data.md](suppression-data.md); measured 2026-10-24 on drill
   `studio-f5caaabd2a1e`, scratch script: to -122.19607, 37.87509 in the Berkeley hills every
@@ -485,6 +587,180 @@ selected-fire panel) can send them to build line where the fire is forecast to g
     A zone_Z24 line cuts T+150 from 27.1 to 12.6 ha.
   - Solves on the board with line: about one per 100 m of line (16 for the four lines above),
     about 50 ms each with one fire.
+
+## Why units stand away from the fire
+
+Code: `app/src/demo/unitActivity.ts` (`unitActivity`, `unitSpotLabel`: what each unit is doing and
+how far it is from its fire, for the map labels), `model.ts` (`lineAccessPlan`, `lineWorkers`,
+`withdrawFromOverrunLines`), `boardResponse.ts` (`accessWorkPlan`, `fireEdgeSample`).
+
+**Measured** (2026-10-25, scratch copy of the evaluation harness with a per-unit probe every 10
+board minutes, drill `studio-f5caaabd2a1e` on Berkeley Hills & Tilden, Studio fire 'Three fires
+(illustrative demo)' F1 at -122.24292, 37.86686, 25 mph from 45°, critical moisture, seed 1,
+`--fast`; distance = unit to the nearest burned cell of its fire):
+
+| Why it is there | Spread policy (all units over head_60, head_30, flanks, the rest direct) | Baseline policy (decision aids) |
+| --- | --- | --- |
+| Driving from its station (label `→ S1-F1`) | direct: median 1.9 km, max 4.1 km; to lines 0.7-1.7 km | to head_30: median 2.6 km, max 5.2 km (22 units, "all units" package) |
+| Direct attack, parked at the heel anchor | all 18 at one road point 72-99 m from the edge; 120 m from the burned area | 123-134 m |
+| Building line ahead of the head (`head_60`, `head_30`) | head_60 830 m ahead at T+10 (fire there in 43 min), 500 m at T+20; head_30 240-490 m | head_30 181 m, head_60 130-217 m |
+| Building line on a flank (`flank_*`) | 10-42 m | 390-499 m |
+| Still building after the fire reached the anchor (before the fix) | head_60 36 m, head_30 13 m, until the line ran out | none |
+
+So the far units are, in order: driving (kilometres, while the label says `→ S1-F1`), building
+an indirect line where the head is forecast in 30-60 min (a few hundred metres to about 0.8 km
+ahead), or anchored at the heel 100-130 m off the burned edge while the head runs away from them.
+In this drill the road end was within 43 m of every line anchor and 99 m of the heel, so parking
+was not the cause here; with sparser roads it can be (the router snaps a target to a road node up
+to 1 km away and stops a class short by up to 3 km, `livecore/inbound.py`).
+
+**Against practice** (NWCG Incident Response Pocket Guide, PMS 461, 2022; S-130/S-190, S-215,
+S-290; Fire Behavior Field Reference Guide, PMS 437, Hauling chart):
+
+- Realistic: driving in from stations a few km away; anchoring at the heel and working the flanks
+  ("anchor, flank and pinch"; Watch Out 8 is building line without a safe anchor point); indirect
+  line set back from a fast head far enough to finish it before the fire arrives (here 0.2-0.8 km
+  for a 30-60 min lead), with the Hauling chart's limits (control at the head probably
+  ineffective above 8 ft flame, ineffective above 11 ft) shown on each option; engines confined
+  to roads they can drive, with hose reach (PMS 200 minimum hose) and a crew hike beyond it;
+  structure protection at the zone edge the fire reaches first (`zone_<id>`, S-215 triage).
+- Not realistic, fixed: a crew parked away from its line built it at once from the road end
+  (now it walks in first, or is out of reach and builds nothing, and options count the walk);
+  crews kept building where the fire had already arrived, and the overrun line stayed listed as
+  a position (LCES and the Standard Firefighting Orders: crews disengage to a safety zone; now
+  they pull back and the position is re-planned). Measured after the fix (same drill and fire,
+  scratch check at T+12 with three Type 3 engines sent to head_30, 746 m of line, fire there in
+  23 min, road legs ending 0, 250 and 600 m from the anchor): the first two use hose (within
+  305 m) and build from arrival at 8.05 m/min each; the third parks 600 m off, hikes 16 min and
+  then builds hand line at 1.01 m/min (it used to build at 8.05 m/min from the road end at once).
+  The fire reaches the anchor at T+35 with 276 m built: all three pull back, the overrun line
+  leaves the list and head_30 is re-planned 12 min ahead of the fire, and a new send there is
+  accepted (before: 12 orders refused as "Fire has already reached" in the spread-policy run).
+  In the spread-policy run, no unit stood on a line after the fire reached its anchor (before: 5
+  samples at 13-36 m); burned area and containment were unchanged (19.4 ha, contained T+93 vs
+  T+94).
+- Not realistic, not changed (listed for the decision aids and the prompt): every direct-attack
+  unit parks at the one heel point and never progresses along a flank (with 305 m of hose most
+  of them work the same few hundred metres of edge; the reach cap keeps the line count honest);
+  the "all units" decision aid can send 20+ engines to one short line (a strike team is 5 engines
+  under a leader, ICS span of control 3-7); a frontal line across a 25 mph head is offered
+  whenever it is forecast to finish in time (Watch Out 10, frontal assault, and 11, unburned fuel
+  between you and the fire, call for burnout and lookouts that the board does not model); there
+  are no staging areas or trigger points.
+
+**Labels.** The 3D board labels each spot with `unitSpotLabel`: the ids on each job and the job,
+e.g. `S03-E1 S06-E1 · building S1-F1 head_60 line 830 m ahead of the head · 35/722 m`,
+`S04-E3 · parked, crew hiking 600 m to its S1-F1 head_30 line · 17 min`,
+`S01-E1 · driving to S1-F1 · 7 min`, `S05-E1 · hose line on the S1-F1 edge (120 m away)`.
+`unitActivity(board, team)` returns `{kind, label, fireId, positionId, workPoint, fromFireM}`:
+`kind` one of `awaiting_route`, `rerouting`, `driving`, `hiking_in`, `building_line`,
+`direct_attack`, `out_of_reach`, `no_edge_in_reach`, `refilling`, `resting`, `returning`,
+`moving_up`, `blocked_by_fire`, `out_of_service`, `available`; `workPoint` (WGS84) is the line's
+anchor or the nearest point of the fire's open edge when that is not where the unit stands (for
+a leader line); `fromFireM` is ground metres to the fire's open edge. The observation adds
+`crews[].from_fire_m`, `attack_positions[].from_fire_m` and `options[].work_starts_min`.
+
+## Run metrics, decision aids and the evaluation harness
+
+### Run metrics (`app/src/demo/scoring.ts`)
+
+Pure functions over the board; the /live outcomes panel shows "Homes burned", the commander's
+observation carries them as `outcomes`, and the harness reports all of them.
+
+- **Casualties (caught)**: households and persons still home when fire reaches their zone's core
+  (the board's catch rule, `model.ts`). `caughtBreakdown` splits a zone's caught households by why
+  they were home: `no_vehicle` (carless; the board has no pickup), `no_order` (never ordered: no
+  self-evacuation), `stayed_despite_order` (the 8% of ordered households with a vehicle that do
+  not comply, `ORDER_COMPLIANCE` 0.92) and `ordered_too_late` (complying households still inside
+  their departure delay). Only the last two depend on the commander's timing, and only the last
+  can be driven to zero by ordering earlier. Persons apportion vehicle persons evenly per
+  household with a vehicle (rounded per part).
+- **Unable to reach safety**: `outcomes.ts` `unable` (caught in zones still overrun plus carless
+  persons home in threatened zones).
+- **Homes burned**: the board carries no household points, so each zone's households are spread
+  evenly over its developed cells (FBFM40 91; a zone without any: its burnable cells), and
+  homes burned = households x the share of those cells burning or burned out. Cells crews put
+  out before they burned out count as "reached, saved". **ASSUMPTION**: homes uniform over
+  those cells.
+- **Area burned** (all fires, removed ones included), **containment and out minutes** (the
+  harness records each fire's report, containment and out minute).
+
+### Decision aids (`app/src/demo/decisionAids.ts`, observation `decision_aids`)
+
+Model output the commander chooses from; Claude never computes these numbers.
+
+- **Evacuation schedule** (`evacuationSchedule`): every zone a reported burning fire reaches
+  within the solver's lookahead (360 min) in the free-burn field (line already built is in the
+  field; a containment that has not happened is not assumed: plan for the strategy failing).
+  `latest_safe_start_minute` = now + core ETA - (departure lead + clearance_min + congested
+  drive) - `EVAC_SAFETY_MARGIN_MIN` (30 min). The departure lead is the time for
+  `EVAC_TARGET_DEPARTED_SHARE` (90%) of complying households to leave under the exponential
+  departure curve (mean 93 min): 93 x ln 10 = 214 min. Both are **ASSUMPTIONS** (planning
+  targets). `recommended_start_minute` is now when that is already past (`too_late`, "order now")
+  and otherwise the earliest minute (5-min steps) the zone's departure peak fits every road
+  segment of its route beside the decaying departure flows of zones already leaving or planned,
+  never after the latest safe start (`over_capacity` when it cannot). Each entry gives the
+  expected caught persons if ordered now and at the recommended start. With the 214-min lead,
+  almost every zone within reach of a fast fire is "order now"; staging only applies to zones
+  four or more hours out. Zones on the schedule are listed in `observation.zones` so they can be
+  ordered.
+- **Strategy recommendation** (`strategyAid`): per reported burning fire, every strategy option
+  with the homes the solver's forecast burns by its containment minute (or by the fire reaching a
+  finished line, or by the 120-min forecast horizon when it does not contain), whether it is
+  containable (contained, or a line finished before the fire with no breach or crown warning),
+  and `recommended_strategy_id` = the containable option burning the fewest homes (ties: sooner,
+  fewer units). `recommended_send` is that option's units (the fewest the forecast needs) plus the
+  run card's closest free units still needed (`initialAttackRecommendation`), so a first attack
+  is not sized at the bare minimum of a forecast. `overdue` is set when the chosen strategy is
+  still burning `STRATEGY_OVERDUE_GRACE_MIN` (15 min, **ASSUMPTION**) past its predicted
+  containment or line-done minute. When nothing contains, or the strategy is overdue,
+  `all_units`: a protection line finished before the fire reaches it (no crown fire forecast
+  there) in front of the most households not yet overrun, else the perimeter option burning the
+  fewest homes (flank last; the homes forecast cannot rank lines, whose effect is only in the
+  field once built); every free unit that can reach the fire; the available aircraft; and the
+  cumulative sized extended-attack orders of the stages due (at least stage 1,
+  `ESCALATION_ORDERS`, capped by `MAX_ORDER_COUNT`) less what was already ordered for the fire.
+  `idle_units` lists free units while it burns.
+- The decide prompt (`app/backend/api/demo.py`) ranks life safety (follow the schedule; order
+  early rather than late), then property (the recommended strategy, or all units), then
+  containment (a strategy and initial attack on every new fire, never idle units while a fire
+  grows), and tells it to use `monitor.urgency`.
+
+### Evaluation harness (`app/scripts/live-eval/`)
+
+`evaluate.ts` runs one scenario headless and prints the metrics. It loads the board as /live
+does (the active drill's command zones, resource snapshot and Studio fires from the live API;
+landscape and inputs through `useDemoEnvironment.loadEnvironment`; zone routes from
+`POST /api/demo/routes` and road legs from `POST /api/demo/crew_routes`), runs the fire solver
+in-process, steps the clock deterministically (every solve, route refresh and awaited road leg
+is awaited before the clock moves, as the page's holds do) and calls the commander at
+useDemoAgent's cadence (monitor every board minute, a new reported fire at once, one call in
+flight). It is board-local: no run-state PUTs, guidance, Studio publishes or report triage.
+
+- `--policy claude`: the real `POST /api/demo/decide` (costs money: at most a few full runs).
+  While Claude thinks, the board advances latency x Auto speed (1 board min per real min urgent,
+  5 routine), then the orders apply. Cost per run comes from the orders line's `usage`
+  (`dispatch.decision_usage`), or from matching the backend's "Decision usage" log lines to the
+  run's call windows.
+- `--policy baseline`: `baselinePolicy.ts`, a scripted commander that reads only the
+  observation and follows the decision aids (free). `--policy none`: no orders.
+- Scenario: the drill's newest Studio publish per scenario (as a fresh /live board takes it),
+  `--fire-id sf_...` for one listed publish, or a synthetic, never published fire for scenario
+  search: `--ign lon,lat --start 0 --report 4 --wind 10 --from 45 --moisture dry`.
+- `--fast` (search only): routes every 15 board min and one prefetch request per minute (the
+  routes call takes about 4 s on the dev backend). `--seed`, `--minutes`, `--out file.json`,
+  `--base URL`.
+
+```sh
+cd app && npx esbuild scripts/live-eval/evaluate.ts --bundle --platform=node --format=esm \
+  --outfile=/tmp/live-eval.mjs --log-level=error
+node /tmp/live-eval.mjs --policy baseline --fire-id sf_48d1e76013b7 --out /tmp/base.json
+```
+
+A run takes 10-40 min of wall time, almost all of it in the routes and crew_routes calls; the
+backend's single runserver process is the bottleneck, so parallel runs need their own backend
+processes (e.g. extra `runserver --noreload` ports in the backend container, with the harness run
+in the frontend container against `--base http://backend:<port>`).
 
 ## Endpoints
 
@@ -724,8 +1000,11 @@ the AI agent see them (each console polls every 4 s).
   and indirect line from direct-attack units is not placed on cells. "Burning" is at cell
   resolution (a 24-30 m cell counts while the front is in it). Line at attack positions is
   built along its path and blocks every fire, but its production rate is the anchor cell's
-  (fuel and slope along the line are not varied), the last stretch from a road node within 1 km
-  (the router's snap distance) is walked at no time cost, and the line's length is fixed when it is started.
+  (fuel and slope along the line are not varied), the walk from the road end to the anchor is
+  timed (Tobler) but the line is still built outward from the anchor only, and the line's length
+  is fixed when it is started. Units on one line add their production linearly, with no span of
+  control or crowding (20 engines on a 367 m line build it 20 times as fast). Crews pull back only
+  when the fire reaches the anchor itself, not at an earlier trigger point.
 - The containment check uses the head flame at the leading front cell and takes it to persist in
   the forecast; a fire whose head has stalled at a barrier is judged at its farthest still-open
   cell, often a flank.

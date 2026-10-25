@@ -898,7 +898,11 @@ fetches again without `zones=0`.
 
 ## Command (the web controller's one poll)
 
-`GET incidents/{id}/command` (controller). Polled every 5 s.
+`GET incidents/{id}/command` (controller). Polled every 3 s. Every open /live tab polls it, so one
+computation per incident serves all of them for `LIVE_POLL_CACHE_TTL_S` (default 1.5 s; 0 turns it
+off), and requests that arrive while it runs wait for it (`api/live/pollcache.py`; `GET
+incidents/{id}/twin` too). A write through the live API (any successful non-GET) drops the cached
+body, so the poll after a console action shows it. `generated_at` is when the body was computed.
 
 ```jsonc
 { "incident_id": "camp-2018-drill",
@@ -2018,6 +2022,15 @@ moisture, horizon_minutes, outside_drill}], evidence_class: "simulated"}`, newes
 Every ignition carries `report_minute` (`null` when not set, including fires stored before the
 field existed).
 
+`wind` is the one constant wind the Live board runs (mph, bearing FROM, degrees true): the run's
+wind, or, for a run on an hourly series with no weather record (a random scenario), the series'
+peak hour within the run. `source` is `assumed` (set by hand), `historical`, `forecast`,
+`worst_case` (climatology percentile) or `climatology` (a series' climatology analog); `label`
+names it. On the board (`model.ts` `ingestStudioFire`) an ignition whose `id` is already a board
+fire on the same landscape cell (burning, contained or waiting to start) is not started again:
+a Studio rerun, or another Studio tab synced to the same shared world, republishes it. That
+publish's wind and moisture still apply.
+
 ## Road closures
 
 The controller closes drill roads on the Live map for the simulated command board (a drill
@@ -2100,14 +2113,18 @@ Rules:
 - **Response.** The answer is `{run_id, board_minute, households_written, households_changed,
   households_pending, materialization, snapshot, guidance_published}` (`guidance_published`: guidance
   versions this PUT published from the board's orders; `null` when publishing failed, which never
-  fails the PUT). Writing to Atlas is slow (about 400 household
-  documents a second on the free tier, measured 2026-10-25; a run's first 20k take about 50 s), so a
-  background thread does it for each incident.
+  fails the PUT). Writing to Atlas is slow, so a background thread does it for each incident. The
+  writer is paced so the console's polls keep working: the free tier moves about 100 KB/s for the
+  whole API, and a writer going flat out made every other query wait about a second (`command`
+  polls took 10 to 15 s and /live showed OFFLINE, measured 2026-10-25). After each batch the writer
+  pauses twice as long as the batch took, and only one batch runs at a time across incidents
+  (`run_state.py` `_pace`, `PACE_FACTOR`). That is about 75 household documents a second, so a run's
+  first 20k take about 4.5 min.
   It always applies the newest PUT. The PUT waits up to 5 s for it. `materialization` is one of:
   - `done`: everything is written.
   - `writing`: `households_pending` documents are still to write.
-  - `loading`: the snapshot households or the stored states are still being read, which takes about
-    40 s after a backend restart. `households_changed` and `households_pending` are `null` while
+  - `loading`: the snapshot households or the stored states are still being read (paced too), which
+    takes about 80 s for 20k households after a backend restart. `households_changed` and `households_pending` are `null` while
     loading.
   - `no_snapshot`: only the summary is stored.
 
@@ -2151,7 +2168,8 @@ One `live_household_state` document per snapshot household, with short keys to f
 - There is no run id per document: the documents are the run of the incident's `live_run_state`
   (a new run deletes the previous run's documents before writing its own). The incident and the
   household id are the two halves of `_id`.
-- Only changed documents are written, in unordered batches of 1000.
+- Only changed documents are written, in unordered batches of 250. A new run deletes the previous
+  run's documents in paced batches of 1000.
 - One index besides `_id`: `u` (for `changed_since`), created best effort. Incident, status and zone
   filters run on the `_id` prefix range (at most one snapshot's households). The writer deletes
   documents of the older long-keyed format when it reloads an incident and rewrites them.

@@ -3,7 +3,7 @@ import { Button, SegmentedControl, Tag } from "../ui";
 import { simClock } from "../demo/format";
 import { boardCellMetersFor } from "../fire/boardSize";
 import { readinessLabel, useCachedBoards } from "../fire/useCachedBoards";
-import { AUTO_REASON_TEXT, AUTO_SPEED_ACTIVE, AUTO_SPEED_IDLE, AUTO_SPEED_THINKING } from "../demo/autoSpeed";
+import { AUTO_REASON_TEXT, AUTO_SPEED_ACTIVE, AUTO_SPEED_IDLE, AUTO_SPEED_REVIEWING, AUTO_SPEED_THINKING } from "../demo/autoSpeed";
 import { AGENT_OFF_PAUSE, BOARD_SPEED_STEPS, type ClockPause, type CommandBoard } from "../demo/useCommandBoard";
 
 /** The clock's state in words (never colour alone). */
@@ -64,7 +64,8 @@ function speedWords(speed: number): string {
 /**
  * The speed slider (stepped stops, BOARD_SPEED_STEPS, so the useful range is not squashed) with
  * the Auto toggle (demo/autoSpeed.ts). While Auto is on the value says why ("60× · idle",
- * "1× · Claude thinking", "20× · active"); moving the slider picks a speed by hand and turns Auto off.
+ * "1× · Claude deciding (urgent)", "5× · Claude reviewing", "20× · active"); moving the slider
+ * picks a speed by hand and turns Auto off.
  */
 export function BoardSpeedSlider({ board: cb }: { board: CommandBoard }) {
   const index = Math.max(0, BOARD_SPEED_STEPS.indexOf(cb.speed));
@@ -82,7 +83,7 @@ export function BoardSpeedSlider({ board: cb }: { board: CommandBoard }) {
         aria-pressed={cb.autoSpeed}
         title={
           cb.autoSpeed
-            ? `Auto speed on: ${AUTO_SPEED_IDLE}× while nothing is going on, ${AUTO_SPEED_THINKING}× while Claude is thinking, ${AUTO_SPEED_ACTIVE}× otherwise. Move the slider to pick a speed by hand.`
+            ? `Auto speed on: ${AUTO_SPEED_IDLE}× while nothing is going on, ${AUTO_SPEED_THINKING}× while Claude decides on something urgent, ${AUTO_SPEED_REVIEWING}× while it reviews the board, ${AUTO_SPEED_ACTIVE}× otherwise. Move the slider to pick a speed by hand.`
             : "Auto speed off: click to let the speed follow the board and Claude again."
         }
         onClick={() => cb.setAutoSpeed(!cb.autoSpeed)}

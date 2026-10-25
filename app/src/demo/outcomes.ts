@@ -19,12 +19,16 @@
  *   an order in effect nor one scheduled (nobody leaves those: the board has no self-evacuation).
  * - Unable to reach safety: caught (home when fire reached the zone core, zones still overrun)
  *   plus carless persons still home in threatened zones (the board has no pickup model, so they
- *   cannot leave). The two never overlap: an overrun zone's carless persons are caught.
+ *   cannot leave). The two never overlap: an overrun zone's carless persons are caught. With
+ *   model.EVERY_HOUSEHOLD_DRIVES (the drill simplification) no household is carless on the board,
+ *   so need transport is 0 and only the caught count.
  * - Close call: left home less than CLOSE_CALL_MINUTES before fire reached their zone's core
  *   (zone.overrunAt), from the cohort departure minutes (zone.trips.at, whole-minute traffic
  *   steps). The model's catch rule is "still home at core arrival", so this is the margin by
  *   which they escaped it. Zones still overrun only (a reopened zone's trips are cleared).
  * - Arrivals by destination: arrived cohorts by the destination they left toward (trips.dest).
+ * - Homes burned: demo/scoring.ts zoneHomes (each zone's households x its share of developed
+ *   cells burned; losses are counted whichever fire burned them).
  * - Report rule (boardResponse.ts): the commander's picture. `forecasts` are
  *   zoneForecasts(board, "reported"), so a fire not yet reported to dispatch threatens no zone
  *   here, and the fire counts and burned area leave it out until its report. Caught households
@@ -33,6 +37,7 @@
 
 import { isReported } from "./boardResponse";
 import { FORECAST_MINUTES, totals, vehiclePersons, zoneCounts, zonePeople, zoneThreatened, type Board, type ZoneForecast, type ZoneState } from "./model";
+import { HOMES_METHOD_LABEL, zoneHomes } from "./scoring";
 
 /** ASSUMPTION: a display threshold for "close call", not a model parameter. */
 export const CLOSE_CALL_MINUTES = 15;
@@ -78,6 +83,8 @@ export interface BoardOutcomes {
   /** Arrived so far, most people first. */
   destinations: DestinationArrivals[];
   fires: { burning: number; contained: number; outTotal: number; burnedHa: number };
+  /** Homes (households) burned and reached by fire but put out by crews, by demo/scoring.ts HOMES_METHOD_LABEL. */
+  homes: { burned: number; reachedSaved: number; zones: number; method: string };
 }
 
 const add = (a: number | null, b: number | null): number | null => (a === null || b === null ? null : a + b);
@@ -138,7 +145,13 @@ export function boardOutcomes(board: Board, forecasts: Map<string, ZoneForecast>
     closeCalls: { ...zero(), zones: 0 },
     destinations: [],
     fires: reportedFires(board, t.firesOutTotal),
+    homes: { burned: 0, reachedSaved: 0, zones: 0, method: HOMES_METHOD_LABEL },
   };
+  for (const h of zoneHomes(board)) {
+    o.homes.burned += h.homesBurned;
+    o.homes.reachedSaved += h.homesReachedSaved;
+    if (h.homesBurned > 0) o.homes.zones += 1;
+  }
   const names = destinationNames(board);
   const byDest = new Map<string, DestinationArrivals>();
   for (const zone of board.zones) {

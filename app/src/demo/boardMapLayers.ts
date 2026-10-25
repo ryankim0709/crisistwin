@@ -10,6 +10,7 @@ import { boardFireFeatures, firePolygons } from "./fireFootprint";
 import { crewWork, fireStatePolygons, type CrewWork } from "./fireState";
 import { simClock } from "./format";
 import { zoneSafeShare } from "./safeHouses";
+import { BoardMotion, teamSubjects } from "./unitMotion";
 import {
   activeRoute,
   attackPositions,
@@ -276,18 +277,43 @@ function buildRoutes(board: Board, routes: ReadonlyMap<string, RouteOption[]>, s
 /** Driving on a road line: to a fire, home to its station, or to cover another station. */
 const DRIVING: ReadonlySet<Board["teams"][number]["status"]> = new Set(["en_route", "returning", "moving_up"]);
 
-function buildTeams(board: Board) {
-  const teams: Feature[] = [];
+/** Road lines of driving units (the unit dots themselves are drawn per frame from BoardMotion). */
+function buildTeamLines(board: Board) {
   const lines: Feature[] = [];
   for (const team of board.teams) {
-    teams.push(point(teamPosition(board, team), { id: team.id, status: team.status }));
     // Units follow roads: only a known road route is drawn, never a straight line to the target.
     // A unit still waiting for its road route draws no line.
     if (DRIVING.has(team.status) && team.route && team.route.length > 1) {
       lines.push(lineFeature(team.route, { id: team.id, status: team.status }));
     }
   }
-  return { teams, lines };
+  return lines;
+}
+
+/** Spacing of units fanned out at one spot (unitMotion slot units), screen px. */
+const SPOT_SPACING_PX = 15;
+/** Metres per screen pixel at `zoom` and latitude (MapLibre's 512 px tiles). */
+const metresPerPixel = (zoom: number, lat: number) => (78271.517 * Math.cos((lat * Math.PI) / 180)) / 2 ** zoom;
+
+/**
+ * Unit dots at their smoothed positions (unitMotion.ts): units at one spot fanned out by
+ * a few pixels, labelled once at the group's lead with every id; a driving unit labelled with its id.
+ */
+function buildTeamPoints(board: Board, motion: BoardMotion, zoom: number): Feature[] {
+  const teams: Feature[] = [];
+  for (const team of board.teams) {
+    const d = motion.get(team.id);
+    if (!d) continue;
+    let at = d.at;
+    if (d.offset[0] !== 0 || d.offset[1] !== 0) {
+      const m = metresPerPixel(zoom, at[1]) * SPOT_SPACING_PX;
+      const lat = (at[1] * Math.PI) / 180;
+      at = [at[0] + (d.offset[0] * m) / (111_320 * Math.cos(lat)), at[1] + (d.offset[1] * m) / 111_320];
+    }
+    const label = !d.group ? team.id : d.group.lead === team.id ? d.group.ids.join(" ") : "";
+    teams.push(point(at, { id: team.id, status: team.status, label }));
+  }
+  return teams;
 }
 
 /** A point `f` of the way from `p` to `q` (straight, a few hundred metres at most). */
@@ -514,7 +540,7 @@ function installLayers(map: MapLibreMap, beforeId: string): string[] {
     "circle-opacity": ["match", ["get", "status"], "en_route", 0.75, ["returning", "moving_up"], 0.55, 1] as never,
   } });
   add({ id: "bd-team-labels", type: "symbol", source: "bd-teams",
-    layout: { "text-field": ["get", "id"], "text-font": FONT, "text-size": 11, "text-offset": [0, -1], "text-anchor": "bottom", "text-allow-overlap": true },
+    layout: { "text-field": ["get", "label"], "text-font": FONT, "text-size": 11, "text-offset": [0, -1], "text-anchor": "bottom", "text-allow-overlap": true },
     paint: text(MAP_COLOR.responder, 1.6) });
   add({ id: "bd-zone-labels", type: "symbol", source: "bd-zone-labels",
     layout: { "text-field": ["get", "text"], "text-font": FONT, "text-size": 12, "text-letter-spacing": 0.04 },
@@ -566,6 +592,43 @@ export function attachBoardLayers(
   const setData = (id: string, features: Feature[]) =>
     (map.getSource(id) as GeoJSONSource | undefined)?.setData(collection(features));
 
+  // Unit dots move smoothly between board updates (unitMotion.ts): one GeoJSON source (bd-teams,
+  // dots and labels) and the selected unit's ring are redrawn per animation frame while anything
+  // moves, and only then. Snapped on board updates under prefers-reduced-motion or while the map is
+  // hidden under the 3D view; browsers pause animation frames in a hidden tab.
+  const motion = new BoardMotion();
+  const reducedQuery = typeof window !== "undefined" && "matchMedia" in window ? window.matchMedia("(prefers-reduced-motion: reduce)") : null;
+  motion.setReducedMotion(reducedQuery?.matches ?? false);
+  let selectedTeam: string | null = null;
+  let mapHidden = false;
+  let raf = 0;
+  const renderUnits = (now: number): boolean => {
+    if (!board) return false;
+    const changing = motion.frame(now, mapHidden);
+    const teams = buildTeamPoints(board, motion, map.getZoom());
+    setData("bd-teams", teams);
+    if (selectedTeam) {
+      const f = teams.find((t) => t.properties.id === selectedTeam);
+      setData("bd-sel-point", f ? [point((f.geometry as GeoJSON.Point).coordinates as LonLat, { id: selectedTeam })] : []);
+    }
+    return changing;
+  };
+  const loop = (now: number) => {
+    raf = 0;
+    if (disposed) return;
+    if (renderUnits(now) && !mapHidden) raf = requestAnimationFrame(loop);
+  };
+  const schedule = () => {
+    if (!raf && !disposed && !mapHidden) raf = requestAnimationFrame(loop);
+  };
+  const onReduced = () => {
+    motion.setReducedMotion(reducedQuery?.matches ?? false);
+    schedule();
+  };
+  reducedQuery?.addEventListener("change", onReduced);
+  // Standing offsets are in screen pixels: redraw as the zoom changes.
+  map.on("zoom", schedule);
+
   return {
     claimsClick(e) {
       return !disposed && hitBoard(e) !== null;
@@ -576,12 +639,12 @@ export function attachBoardLayers(
       if (!board) {
         // Between boards: do not leave the previous drill's marks on the map.
         for (const id of SOURCES) setData(id, []);
+        motion.sample(null, []);
         lastSelKey = null;
         return;
       }
       const z = buildZones(board, input.forecasts);
       const r = buildRoutes(board, input.routes, input.selection);
-      const t = buildTeams(board);
       const sel = buildSelection(input.selection, board);
       setData("bd-zones", z.areas);
       setData("bd-zone-labels", z.labels);
@@ -592,12 +655,12 @@ export function attachBoardLayers(
       setData("bd-crews", crews.dots);
       setData("bd-crew-trails", crews.trails);
       setData("bd-fire-labels", buildFireLabels(board));
-      setData("bd-team-lines", t.lines);
-      setData("bd-teams", t.teams);
+      setData("bd-team-lines", buildTeamLines(board));
       setData("bd-stations", stationFeatures(board));
       setData("bd-dest", r.dests);
       setData("bd-sel-area", sel.areas);
-      setData("bd-sel-point", sel.points);
+      selectedTeam = input.selection?.kind === "team" ? input.selection.id : null;
+      if (!selectedTeam) setData("bd-sel-point", sel.points);
       setData("bd-no-truck", buildClosedRoads(board, input));
       setData("bd-evac", evacueeMarkers(board).map((m) => point(m.at, { zone_id: m.zoneId, vehicles: m.vehicles })));
       const al = buildAttackLines(board, input.selection);
@@ -610,10 +673,17 @@ export function attachBoardLayers(
         if (center) map.easeTo({ center, zoom: Math.max(map.getZoom(), FOCUS_ZOOM) });
       }
       lastSelKey = key;
+      const now = performance.now();
+      mapHidden = getComputedStyle(map.getContainer()).visibility === "hidden";
+      motion.sample(board, teamSubjects(board), now);
+      if (renderUnits(now)) schedule();
     },
     dispose() {
       if (disposed) return;
       disposed = true;
+      if (raf) cancelAnimationFrame(raf);
+      reducedQuery?.removeEventListener("change", onReduced);
+      map.off("zoom", schedule);
       map.off("click", onClick);
       for (const layer of INTERACTIVE) {
         map.off("mouseenter", layer, pointer);

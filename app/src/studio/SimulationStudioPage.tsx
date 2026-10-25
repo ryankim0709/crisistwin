@@ -549,13 +549,6 @@ export default function SimulationStudioPage({
     },
     [regionId, cancel, markStale],
   );
-  const liveSync = useLiveRegionSync({
-    enabled: publishLiveFire,
-    boardId,
-    liveFire,
-    blocked: result !== null || state.phase === "loading-landscape" || state.phase === "computing",
-    select: selectRegion,
-  });
 
   // The area size is part of the shared world's region (useStudioWorldSync writes it).
   const selectBoardSize = useCallback(
@@ -576,6 +569,14 @@ export default function SimulationStudioPage({
     },
     [selectRegion, selectBoardSize],
   );
+  const liveSync = useLiveRegionSync({
+    enabled: publishLiveFire,
+    boardId,
+    liveFire,
+    blocked: result !== null || state.phase === "loading-landscape" || state.phase === "computing",
+    // The drill's board: its region and its size ("<region>@<N>km").
+    select: selectBoard,
+  });
 
   const handleLoadDemo = useCallback(() => {
     applyScenario(freshScenario(demoScenario()));
@@ -853,7 +854,10 @@ export default function SimulationStudioPage({
           id="studio-quick-region"
           className="ui-input"
           value={regionId}
-          onChange={(event) => selectRegion(event.target.value)}
+          onChange={(event) => {
+            liveSync.userPicked();
+            selectRegion(event.target.value);
+          }}
         >
           {REGION_AREAS.map((areaName) => (
             <optgroup key={areaName} label={areaName}>
@@ -872,7 +876,10 @@ export default function SimulationStudioPage({
           id="studio-quick-size"
           className="ui-input"
           value={boardRadius ?? ""}
-          onChange={(event) => selectBoardSize(event.target.value === "" ? null : Number(event.target.value))}
+          onChange={(event) => {
+            liveSync.userPicked();
+            selectBoardSize(event.target.value === "" ? null : Number(event.target.value));
+          }}
         >
           {STUDIO_BOARD_SIZES.map((size) => (
             <option key={size.label} value={size.radiusMeters ?? ""}>
@@ -1415,9 +1422,10 @@ export default function SimulationStudioPage({
                         id="studio-area-size"
                         className="ui-input"
                         value={boardRadius ?? ""}
-                        onChange={(event) =>
-                          selectBoardSize(event.target.value === "" ? null : Number(event.target.value))
-                        }
+                        onChange={(event) => {
+                          liveSync.userPicked();
+                          selectBoardSize(event.target.value === "" ? null : Number(event.target.value));
+                        }}
                       >
                         {STUDIO_BOARD_SIZES.map((size) => (
                           <option key={size.label} value={size.radiusMeters ?? ""}>

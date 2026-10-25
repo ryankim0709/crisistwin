@@ -10,8 +10,8 @@ import type { LandscapeRegion } from "../fire/regions";
 import { pacificIso } from "../fire/runClock";
 import { drawRandomScenario, type IgnitionPlacement } from "../world/randomScenario";
 import type { WorldWeather } from "../world/contracts";
-import type { StudioScenario } from "./contracts";
-import { DEFAULT_FIREFIGHTING } from "./firefighting";
+import { MAX_REPORT_MINUTE, type StudioScenario } from "./contracts";
+import { DEFAULT_FIREFIGHTING, ignitionReportDelayMinutes } from "./firefighting";
 import { createIgnition } from "./scenario";
 
 export {
@@ -56,10 +56,6 @@ export async function buildRandomScenario(input: RandomScenarioInput): Promise<R
     horizonMinutes: base.settings.horizonMinutes,
   });
   if (!draw) return null;
-  let ignitions: StudioScenario["ignitions"] = [];
-  for (const ignition of draw.ignitions) {
-    ignitions = [...ignitions, createIgnition(ignitions, ignition.at, ignition.startMinute)];
-  }
   let settings: StudioScenario["settings"] = {
     ...base.settings,
     windSpeedMph: draw.windSpeedMph,
@@ -82,6 +78,16 @@ export async function buildRandomScenario(input: RandomScenarioInput): Promise<R
   const firefighting = observedStart
     ? { ...(base.firefighting ?? DEFAULT_FIREFIGHTING), startLocalIso: observedStart }
     : base.firefighting;
+  // Each fire gets a set report time: its start plus the modelled call-in delay (response/report.ts,
+  // seeded by location and start, so the same seed gives the same report times), at the scenario's clock.
+  const reportClock = firefighting ?? DEFAULT_FIREFIGHTING;
+  let ignitions: StudioScenario["ignitions"] = [];
+  for (const ignition of draw.ignitions) {
+    const created = createIgnition(ignitions, ignition.at, ignition.startMinute);
+    const delay = ignitionReportDelayMinutes(grid, ignition.at, ignition.startMinute, reportClock);
+    const reportMinute = Math.min(MAX_REPORT_MINUTE, ignition.startMinute + Math.max(1, Math.round(delay)));
+    ignitions = [...ignitions, { ...created, reportMinute }];
+  }
   return {
     scenario: {
       ...base,

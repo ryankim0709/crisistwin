@@ -26,6 +26,8 @@ LIST_LIMIT = 10
 MAX_IGNITIONS = 5
 OUTSIDE_DRILL_KM = 3.0
 CODE = "invalid_studio_fire"
+# Descriptive provenance labels (wind source, weather series); Studio clamps to this (studio/liveFire.ts).
+LABEL_MAX_CHARS = 300
 MOISTURE_KEYS = ("dead1h", "dead10h", "dead100h", "liveHerb", "liveWoody")
 _index_ready = False
 
@@ -96,7 +98,7 @@ def validate(body: dict[str, Any]) -> dict[str, Any]:
         "speed_mph": _num(wind_in.get("speed_mph"), "wind.speed_mph", 0, 60),
         "from_deg": _num(wind_in.get("from_deg"), "wind.from_deg", 0, 360),
         "source": _text(wind_in.get("source"), "wind.source", 40),
-        "label": _text(wind_in.get("label"), "wind.label", 120, required=False),
+        "label": _text(wind_in.get("label"), "wind.label", LABEL_MAX_CHARS, required=False),
     }
     moist_in = _obj(body.get("moisture"), "moisture")
     values_in = _obj(moist_in.get("values"), "moisture.values")
@@ -109,7 +111,7 @@ def validate(body: dict[str, Any]) -> dict[str, Any]:
         "wind": wind,
         "moisture": {
             "preset": _text(moist_in.get("preset"), "moisture.preset", 40),
-            "label": _text(moist_in.get("label"), "moisture.label", 120, required=False),
+            "label": _text(moist_in.get("label"), "moisture.label", LABEL_MAX_CHARS, required=False),
             "values": values,
         },
         "horizon_minutes": horizon,

@@ -159,7 +159,8 @@ Both are contained and covered by `api/tests/test_live_loadtest.py`.
    `list`, `datetime`) before the ABC `isinstance` fallback. Output is identical (test pins the
    conversion). `situation` 22.2 to 17.6 ms.
 2. **Guidance cache** (`rendered_guidance` in `api/live/state.py`): the rendered guidance list
-   is kept per process for `LIVE_GUIDANCE_CACHE_TTL_S` (default 1 s; 0 disables). Writers in
+   (and, since 2026-10-25, the `current_guidance` aggregate behind it, which a `twin` poll read three
+   times) is kept per process for `LIVE_GUIDANCE_CACHE_TTL_S` (default 1 s; 0 disables). Writers in
    the process (`controller.publish`, the safety re-annotation, `drill reset`) call
    `invalidate_guidance`, so a controller's approval is visible to the next poll on the same
    process; other processes see it within 1 s, well inside the 3 s poll. `situation` 17.6 to

@@ -91,6 +91,8 @@ LIVE_ACTIVE_MODE = os.environ.get("LIVE_ACTIVE_MODE", "drill").strip()
 LIVE_LOADTEST_RELAX_LIMITS = os.environ.get("LIVE_LOADTEST_RELAX_LIMITS", "").strip() == "1"
 # Seconds the rendered guidance JSON is cached per process (api/live/state.py); 0 turns it off.
 LIVE_GUIDANCE_CACHE_TTL_S = float(os.environ.get("LIVE_GUIDANCE_CACHE_TTL_S", "1") or "1")
+# Seconds one console poll (command, twin) is shared by every open /live tab (api/live/pollcache.py); 0 = off.
+LIVE_POLL_CACHE_TTL_S = float(os.environ.get("LIVE_POLL_CACHE_TTL_S", "1.5") or "1.5")
 LIVE_RATIONALE_MODEL = os.environ.get("LIVE_RATIONALE_MODEL", "claude-opus-5-5").strip()
 # Controller plug-in: rule | twin; empty = twin while the traffic twin builds, else rule.
 LIVE_CONTROLLER = os.environ.get("LIVE_CONTROLLER", "").strip()
@@ -125,3 +127,12 @@ CSRF_COOKIE_SECURE = not DEBUG
 if env_bool("DJANGO_BEHIND_PROXY", "false"):
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 X_FRAME_OPTIONS = "DENY"
+# The api.* loggers print INFO to the console (docker logs), e.g. the AI agent's per-call token
+# usage and cost (api/dispatch.py stream_decision). Nothing of a prompt or a secret is logged.
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {"plain": {"format": "%(levelname)s %(name)s %(message)s"}},
+    "handlers": {"console": {"class": "logging.StreamHandler", "formatter": "plain"}},
+    "loggers": {"api": {"handlers": ["console"], "level": "INFO", "propagate": False}},
+}

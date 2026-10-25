@@ -14,7 +14,7 @@ from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 from rest_framework.response import Response
 
-from . import aar, board, controller, incidents, twin_service, virtual_people
+from . import aar, board, controller, incidents, pollcache, twin_service, virtual_people
 from . import impact as impact_mod
 from .auth import Principal, client_ip, issue_token, live_view, rate_limited, secret_matches
 from .common import (
@@ -1097,6 +1097,11 @@ def _checkin_summary(incident_id: str) -> dict[str, Any]:
 
 @live_view(["GET"], roles=["controller"])
 def command(request, incident_id: str, principal: Principal):
+    # Several /live tabs poll this every 3 s: one computation serves them all (pollcache.py).
+    return ok(pollcache.cached("command", incident_id, lambda: _command_body(incident_id)))
+
+
+def _command_body(incident_id: str) -> dict[str, Any]:
     twin_service.warm(incident_id)
     snapshot = load_snapshot(incident_id, wall_now())
     controller.maybe_auto_replan(snapshot)
@@ -1123,36 +1128,34 @@ def command(request, incident_id: str, principal: Principal):
     )
     answers = board.task_answers(incident_id, [t["id"] for t in tasks])
     stale_critical, board_computed_at = board.stale_critical_json(incident_id)
-    return ok(
-        {
-            "incident_id": incident_id,
-            "generated_at": iso(now),
-            "incident": incident_json(index),
-            "drill": drill_state_json(index, snapshot.clock),
-            "fire": fire_json(snapshot.fire),
-            "zones_version": index.drill.zones_version,
-            "zones": index.command_zones_json,
-            "destinations": index.destinations_json,
-            "guidance": rendered_guidance(incident_id, index),
-            # Empty while the proposal flow is off (controller.proposals_enabled): Live follows the AI agent.
-            "proposals": [proposal_json(p) for p in _proposals_for_command(incident_id)]
-            if controller.proposals_enabled()
-            else [],
-            "reports": [report_json(d) for d in snapshot.report_docs[:COMMAND_REPORTS_LIMIT]],
-            "road_state": [road_status_json(s) for s in snapshot.road_state],
-            "public_items": [public_item_json(i, controller=True) for i in snapshot.items],
-            "checkins": _checkin_summary(incident_id),
-            "destination_preferences": destination_preferences(incident_id, now),
-            "responders": responders,
-            "tasks": [{**task_json(t), "answers": answers.get(t["id"]) or board.empty_answers()} for t in tasks],
-            "stale_critical": stale_critical,
-            "board_computed_at": board_computed_at,
-            "decisions": _recent_decisions(incident_id),
-            "response_record": response_record_until(index, snapshot.clock.replay_now, COMMAND_RESPONSE_RECORD_LIMIT),
-            "ground_record": ground_record_json(index, snapshot.clock.replay_now, snapshot.injects),
-            **injects_mod.command_json(index, snapshot.injects, snapshot.clock.replay_now),
-        }
-    )
+    return {
+        "incident_id": incident_id,
+        "generated_at": iso(now),
+        "incident": incident_json(index),
+        "drill": drill_state_json(index, snapshot.clock),
+        "fire": fire_json(snapshot.fire),
+        "zones_version": index.drill.zones_version,
+        "zones": index.command_zones_json,
+        "destinations": index.destinations_json,
+        "guidance": rendered_guidance(incident_id, index),
+        # Empty while the proposal flow is off (controller.proposals_enabled): Live follows the AI agent.
+        "proposals": [proposal_json(p) for p in _proposals_for_command(incident_id)]
+        if controller.proposals_enabled()
+        else [],
+        "reports": [report_json(d) for d in snapshot.report_docs[:COMMAND_REPORTS_LIMIT]],
+        "road_state": [road_status_json(s) for s in snapshot.road_state],
+        "public_items": [public_item_json(i, controller=True) for i in snapshot.items],
+        "checkins": _checkin_summary(incident_id),
+        "destination_preferences": destination_preferences(incident_id, now),
+        "responders": responders,
+        "tasks": [{**task_json(t), "answers": answers.get(t["id"]) or board.empty_answers()} for t in tasks],
+        "stale_critical": stale_critical,
+        "board_computed_at": board_computed_at,
+        "decisions": _recent_decisions(incident_id),
+        "response_record": response_record_until(index, snapshot.clock.replay_now, COMMAND_RESPONSE_RECORD_LIMIT),
+        "ground_record": ground_record_json(index, snapshot.clock.replay_now, snapshot.injects),
+        **injects_mod.command_json(index, snapshot.injects, snapshot.clock.replay_now),
+    }
 
 
 def _recent_decisions(incident_id: str) -> list[dict[str, Any]]:
@@ -1303,7 +1306,8 @@ def _twin_unavailable(exc: twin_service.TwinUnavailable) -> Response:
 @live_view(["GET"], roles=["controller"])
 def twin(request, incident_id: str, principal: Principal):
     try:
-        return ok(twin_service.monitor(load_snapshot(incident_id, wall_now())))
+        return ok(pollcache.cached("twin", incident_id,
+                                   lambda: twin_service.monitor(load_snapshot(incident_id, wall_now()))))
     except twin_service.TwinUnavailable as exc:
         return _twin_unavailable(exc)
 
