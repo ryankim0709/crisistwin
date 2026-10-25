@@ -15,6 +15,8 @@ import {
   TRIGGER_SAFETY_BUFFER_MINUTES,
   type EvacuationSummary,
 } from "./evacuation";
+import type { AreaCoverage } from "./areaCoverage";
+import AreaCoverageNotice from "./AreaCoverageNotice";
 import { describeImprovement } from "./evacuationAdvice";
 import type { EvacuationOptimization } from "./evacuationOptimizer";
 import type { EvacuationOptimizerState } from "./useEvacuationOptimizer";
@@ -58,6 +60,8 @@ export interface EvacuationPanelProps {
   currentMinute: number;
   /** Road graph, for exit and zone names in the optimised plan. */
   area: DispatchArea | null;
+  /** Which part of the board the area covers, and what the fires do outside it. */
+  coverage?: AreaCoverage | null;
   optimizer: EvacuationOptimizerState;
   playPlan: PlayPlan;
   onPlayPlan: (plan: PlayPlan) => void;
@@ -291,6 +295,7 @@ export default function EvacuationPanel(props: EvacuationPanelProps) {
     withClosures,
     currentMinute,
     area,
+    coverage,
     optimizer,
     playPlan,
     onPlayPlan,
@@ -326,8 +331,9 @@ export default function EvacuationPanel(props: EvacuationPanelProps) {
       {streets.status === "loading" && <LoadingState>Loading roads…</LoadingState>}
       {streets.status === "idle" && <p className="studio-evac__note">Load a board first.</p>}
       {streets.status === "empty" && (
-        <p className="studio-evac__note">This board has no drivable roads to evacuate on.</p>
+        <p className="studio-evac__note">No drivable roads around these fires to evacuate on.</p>
       )}
+      {ready && <AreaCoverageNotice coverage={coverage ?? null} />}
       {streets.status === "error" && (
         <p className="studio-evac__note">Roads could not be loaded: {streets.message}</p>
       )}

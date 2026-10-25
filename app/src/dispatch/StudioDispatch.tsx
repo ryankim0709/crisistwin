@@ -41,6 +41,8 @@ import {
   type HouseholdBehaviorMode,
 } from "../population";
 import DispatchPeople from "./DispatchPeople";
+import { areaCoverage } from "../studio/areaCoverage";
+import AreaCoverageNotice from "../studio/AreaCoverageNotice";
 import { Button } from "../ui";
 import "./dispatch.css";
 
@@ -168,6 +170,25 @@ export default function StudioDispatch({
     () =>
       area && grid && current ? computeExposure(area, grid, current.run.arrivalMinutes) : null,
     [area, grid, current],
+  );
+
+  // Which part of the board the road box covers, and what the fires do outside it.
+  const coverage = useMemo(
+    () =>
+      area && grid && current
+        ? areaCoverage({
+            grid,
+            area,
+            fires: current.scenario.ignitions
+              .filter((ignition) => ignition.enabled)
+              .map((ignition) => ({
+                name: ignition.name || ignition.id,
+                at: [ignition.location.longitude, ignition.location.latitude],
+              })),
+            run: { arrivalMinutes: current.run.arrivalMinutes, horizonMinutes },
+          })
+        : null,
+    [area, grid, current, horizonMinutes],
   );
 
   // ---- People: snapshot households for the area, and how households respond to orders ------
@@ -632,6 +653,7 @@ export default function StudioDispatch({
       }
       footer={
         <>
+          <AreaCoverageNotice coverage={coverage} />
           {areaState.status === "error" && (
             <p className="dsp-note">
               <Button variant="secondary" size="sm" onClick={() => setAreaAttempt((v) => v + 1)}>

@@ -26,7 +26,7 @@ import type {
 } from "../fire/diorama/types";
 import type { LandscapeGrid } from "../fire/landscape";
 import type { GeoPoint } from "../fire/spread";
-import type { BoardStreetsState } from "../fire/useBoardStreets";
+import { sceneryOf, type BoardStreetsState } from "../fire/useBoardStreets";
 import { Button, Legend, Panel, type LegendItem } from "../ui";
 import { EvacuationPlayer, type EvacuationInputs } from "./evacuation";
 import { CompositeOverlay } from "../fire/diorama/compositeOverlay";
@@ -217,7 +217,7 @@ export default function StudioDiorama(props: StudioDioramaProps) {
   const streetArea = streets.status === "ready" ? streets.area : null;
   // The overlay draws its own homes (coloured by household state), so the streets layer then
   // draws roads only.
-  const streetScenery = streets.status === "ready" ? streets.scenery : null;
+  const streetScenery = sceneryOf(streets);
   const sceneStreets = useMemo(
     () => (streetScenery && evacuation ? { edges: streetScenery.edges, homes: [] } : streetScenery),
     [streetScenery, evacuation],

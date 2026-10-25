@@ -23,6 +23,8 @@ import {
 } from "./evacuation";
 import { computeExposure } from "../dispatch/fireExposure";
 import { useBoardStreets } from "../fire/useBoardStreets";
+import { areaCoverage } from "./areaCoverage";
+import AreaCoverageNotice from "./AreaCoverageNotice";
 import FirefightingFields from "./FirefightingFields";
 import FirefightingResults, { type FireShown } from "./FirefightingResults";
 import type { FirelineView } from "./FirelineOverlay";
@@ -583,7 +585,16 @@ export default function SimulationStudioPage({
 
   // ---- Evacuation and road closures -------------------------------------------------------
 
-  const streets = useBoardStreets(dioramaLandscape);
+  // The enabled fires by start minute: the routing area is the board's road box that holds them.
+  const enabledFires = useMemo(
+    () => scenario.ignitions.filter((ignition) => ignition.enabled).sort((a, b) => a.startMinute - b.startMinute),
+    [scenario.ignitions],
+  );
+  const fireFocus = useMemo<[number, number][]>(
+    () => enabledFires.map((ignition) => [ignition.location.longitude, ignition.location.latitude]),
+    [enabledFires],
+  );
+  const streets = useBoardStreets(dioramaLandscape, fireFocus);
   const area = streets.status === "ready" ? streets.area : null;
   const closedEdges = useMemo<ReadonlySet<number>>(
     () => (area && closures.areaId === area.id ? closures.edges : new Set()),
@@ -592,16 +603,17 @@ export default function SimulationStudioPage({
 
   // Fire facilities around the board (CAL FIRE layer; local-only data, may be absent): the
   // firefighting resources are a pure function of them (studio/mapResources.ts).
+  // Centred on the first fire (rounded to 0.01 degrees so a nudge does not refetch), not the area.
+  const firstFire = fireFocus[0] ?? null;
   const basesPoint = useMemo((): [number, number] | null => {
-    if (!scenario.firefighting?.enabled) return null;
-    if (area) return [(area.bbox[0] + area.bbox[2]) / 2, (area.bbox[1] + area.bbox[3]) / 2];
-    const first = scenario.ignitions
-      .filter((ignition) => ignition.enabled)
-      .sort((a, b) => a.startMinute - b.startMinute)[0];
-    return first ? [first.location.longitude, first.location.latitude] : null;
-  }, [scenario, area]);
+    if (!scenario.firefighting?.enabled || !firstFire) return null;
+    return [Math.round(firstFire[0] * 100) / 100, Math.round(firstFire[1] * 100) / 100];
+  }, [scenario.firefighting?.enabled, firstFire]);
   const suppressionBases = useSuppressionBases(basesPoint);
-  const fromMap = useMemo(() => mapResources(area, suppressionBases), [area, suppressionBases]);
+  const fromMap = useMemo(
+    () => mapResources(area, suppressionBases, firstFire),
+    [area, suppressionBases, firstFire],
+  );
 
   /**
    * The run card from the units on the map (studio/mapResources.ts), each ground unit driven from
@@ -754,7 +766,9 @@ export default function SimulationStudioPage({
   // Run once the first fire's crew bases are in (or after a short wait).
   useEffect(() => {
     if (!pendingRun) return;
-    if (pendingRun.scenario === scenario && (suppressionBases || pendingRun.waited)) {
+    // Also wait for the road area around the new fires (the crew plan needs it).
+    const roadsReady = streets.status !== "loading";
+    if (pendingRun.scenario === scenario && ((suppressionBases && roadsReady) || pendingRun.waited)) {
       setPendingRun(null);
       handleRun();
       return;
@@ -762,7 +776,7 @@ export default function SimulationStudioPage({
     if (pendingRun.waited) return;
     const handle = window.setTimeout(() => setPendingRun((p) => (p ? { ...p, waited: true } : p)), 3000);
     return () => window.clearTimeout(handle);
-  }, [pendingRun, scenario, suppressionBases, handleRun]);
+  }, [pendingRun, scenario, suppressionBases, streets.status, handleRun]);
 
   const randomControls = (
     <div className="studio-random">
@@ -919,6 +933,21 @@ export default function SimulationStudioPage({
         ? computeExposure(area, result.landscape, shownRun!.arrivalMinutes)
         : null,
     [area, dioramaShowsRun, result, shownRun],
+  );
+  // Which part of the board has roads and evacuation, and what the fires do outside it.
+  const coverage = useMemo(
+    () =>
+      area && dioramaLandscape
+        ? areaCoverage({
+            grid: dioramaLandscape,
+            area,
+            fires: enabledFires.map((f) => ({ name: f.name || f.id, at: [f.location.longitude, f.location.latitude] })),
+            run: dioramaShowsRun && shownRun
+              ? { arrivalMinutes: shownRun.arrivalMinutes, horizonMinutes: result.scenario.settings.horizonMinutes }
+              : null,
+          })
+        : null,
+    [area, dioramaLandscape, enabledFires, dioramaShowsRun, shownRun, result],
   );
   const evacuationInputs = useMemo<EvacuationInputs | null>(
     () =>
@@ -1274,6 +1303,7 @@ export default function SimulationStudioPage({
                       withClosures={closuresSummary}
                       currentMinute={currentMinute}
                       area={area}
+                      coverage={coverage}
                       optimizer={optimizer}
                       playPlan={playPlan}
                       onPlayPlan={setPlayPlan}
@@ -1631,6 +1661,7 @@ export default function SimulationStudioPage({
               Playing the previous run; run again to include your edits.
             </Notice>
           )}
+          {showEvacuation && dioramaShowsRun && view === "map" && <AreaCoverageNotice coverage={coverage} />}
           {showEvacuation && dioramaShowsRun && (
             <StudioPeople
               map={view === "map" ? studioMap : null}
