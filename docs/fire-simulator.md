@@ -89,11 +89,34 @@ the ground, torches individual trees, or runs through the crowns, where forest f
 most of their speed. The panel reports whether crown fire was modelled for the run (it
 needs canopy data; a run without it says so rather than reading as treeless ground), the
 burned area split by surface, passive (torching), and active crown fire, and the
-length-to-breadth applied to actively crowning cells at the run's wind. Crown fire can
-also carry from an already-crowning cell into a neighbour whose own canopy can sustain it,
-not only where a cell's own surface fire is intense enough to start crowning on its own.
-See [the crown fire decision](adr/0008-crown-fire.md) for the sources, the
-constants, and where it is least trustworthy.
+length-to-breadth applied to actively crowning cells at the run's wind. See
+[the crown fire decision](adr/0008-crown-fire.md) for the sources, the constants, and where
+it is least trustworthy. `SPREAD_MODEL` 5.0.0 changes four things in that record:
+
+- **No crown-to-crown carry.** A cell crowns only where its own surface fire reaches Van
+  Wagner's (1977) critical intensity. A canopy that could carry an active crown fire but
+  whose surface fire cannot ignite it (Scott & Reinhardt's "conditional" crown fire) burns as
+  surface fire, as in FlamMap and FARSITE (Scott 2006, RMRS-RP-58 p. 18; Finney 1998, revised
+  2004, RMRS-RP-4 pp. 10, 20). ADR 0008's "crown fire carries into a neighbour whose canopy can
+  sustain it" (the NEXUS treatment) no longer applies.
+- **Per direction.** As FARSITE does per perimeter vertex, each direction out of a cell is
+  classified on that direction's surface intensity (Byram: proportional to its rate), so the
+  flanks and back of a crowning cell burn as surface fire and crown fire no longer backs.
+- **Crown direction.** The active crown head is aimed along FARSITE's wind-slope vector at 0.4
+  of the open wind (Finney 1998 p. 6), not the sheltered surface heading, which under closed
+  canopy is slope-dominated. The cell's own fuel bed stands in for FARSITE's fuel model 10.
+- **Broadleaf canopy torches only.** Cruz et al. (2005) is fitted to conifer stands. Cells
+  whose surface fuel is a Scott & Burgan broadleaf litter (TL2, TL6, TL9) may torch but never
+  go active, and their passive fire spreads at the surface rate (FARSITE's rule for passive
+  crown fire). ASSUMPTION: canopy type from the fuel model, because LANDFIRE EVT is not loaded.
+
+The 100 m/min crown cap now applies after the stochastic rate field, which could previously
+push crown cells to 237 m/min.
+
+Each stencil step is timed through every cell it crosses (Finney 2002): the length in each cell
+over that cell's own rate in the step's direction. Previously a step of up to 8 cells ran at the
+origin cell's rate, so a grass cell lit houses 380 m away at grass speed and litter next to
+grass burned at grass speed.
 
 **Use current NWS wind** replaces the wind speed and direction with the US National
 Weather Service hourly forecast for the ignition point, labelled as **observed** data with
@@ -387,7 +410,7 @@ the options in its solve key.
 | Mechanism | What it does | Source | Evidence |
 | --- | --- | --- | --- |
 | ROS field | Per-cell multiplier exp(sigma z), z a unit-variance Gaussian field (white noise blurred by a separable Gaussian, rescaled to unit variance at every cell, edges included). Scales head, flank/backing floor and sustained-crown rates of vegetated cells; intensity scales with it and flame length with its 0.46 power (Byram 1959). Crown classification stays on the unperturbed fire. | sigma = ln(1.35): Cruz & Alexander (2013) propose a 35% error interval as about one standard deviation of heading-ROS prediction error with accurate inputs (49 datasets, 1278 fires; most datasets had 51-75% mean absolute error, so this is the narrow end). | Sigma sourced; applying a whole-fire error as cell-scale variability, the 90 m correlation length and median 1 (their under-prediction bias not applied) are assumptions. |
-| Wind wander | Each 10-minute step draws a speed factor exp(s z - s^2/2) capped at the gust factor, and a direction offset 0.8 s z' radians, independent per step. A cell spreads out at the wind of the step it ignites in (rate, heading, ellipse, crown state recomputed). | s = (G - 1) x 0.117 / 1.267: 0.117 is Durst's (1960) ratio of 10-minute to 3-second gust excess over the hourly mean (ASCE 7-05 form), 1.267 the expected maximum of six independent normals; 0.8 = sigma_v / sigma_u (Kaimal & Finnigan 1994). Default G = Durst's 3-second gust, 1.52; an observed gust replaces it. At the default s = 0.048 (speed) and 2.2 degrees (direction). | Formulas sourced; independent steps, reading the sample's speed as the hourly mean, and the 10-minute step are assumptions. |
+| Wind wander | Each 10-minute step draws a speed factor exp(s z - s^2/2) capped at the gust factor, and a direction offset 0.8 s z' radians, independent per step. A cell starts spreading at the wind of the step it ignites in (rate, heading, ellipse, crown state recomputed); since 5.0.0 a crossing still under way is re-timed at each later step. | s = (G - 1) x 0.117 / 1.267: 0.117 is Durst's (1960) ratio of 10-minute to 3-second gust excess over the hourly mean (ASCE 7-05 form), 1.267 the expected maximum of six independent normals; 0.8 = sigma_v / sigma_u (Kaimal & Finnigan 1994). Default G = Durst's 3-second gust, 1.52; an observed gust replaces it. At the default s = 0.048 (speed) and 2.2 degrees (direction). | Formulas sourced; independent steps, reading the sample's speed as the hourly mean, and the 10-minute step are assumptions. |
 | Stochastic spotting | A cell above 100 Btu/ft/s launches one firebrand with probability 1 - exp(-0.001 per m x cell width) (2.9% at 30 m), at most 5000 per solve. Distance is lognormal with median a quarter of the maximum and the maximum at the 99th percentile; draws past it or past the scenario's spotting ceiling start nothing. Direction is downwind plus the direction sigma. Only vegetated, unburned fuel outside built line can ignite. Arrival = flight at half the wind + the existing 10-minute delay. | Maximum distance: Albini (1979, 1983) surface-fire spotting as implemented in BehavePlus (`firelab/behave` `spot.cpp`), flat terrain. Ignition: Schroeder (1969) probability of ignition as in BehavePlus `ignite.cpp`, fuel temperature = air + 25 F - 20 F x shade, shade = landing cell's canopy cover. Lognormal shape: Sardoy et al. (2008), Himoto & Tanaka (2005). | Albini and Schroeder sourced (ignition reproduces BehavePlus's worked examples to 8 decimals); launch rate, median fraction, air temperature, closed-canopy cut-off (cover >= 0.5) are assumptions. |
 
 The deterministic gap-crossing spotting (above) still runs alongside; stochastic spots are
@@ -465,10 +488,17 @@ interface FireWeatherSeries {
 ```
 
 How the solver uses it. It extends the stochastic wind wander's machinery rather than adding a
-second one: the run is read in the same 10-minute steps (`WIND_STEP_MINUTES`), and a cell spreads
-out at the weather of the step it ignites in (rate, heading, ellipse, crown state and ember reach
-recomputed), so fire that ignited before a wind shift keeps its old heading and fire that ignites
-after it takes the new one. A step reads the series at its start minute: speed and each moisture
+second one: the run is read in the same 10-minute steps (`WIND_STEP_MINUTES`), and a cell starts
+spreading out at the weather of the step it ignites in (rate, heading, ellipse, crown state and
+ember reach recomputed). Since `SPREAD_MODEL` 5.0.0 a crossing that is still under way at a step
+boundary is re-timed at the next step's weather: the share already covered is kept and the rest
+runs at the new rate, so a crossing whose origin or destination fuel passes its moisture of
+extinction stops, and resumes when the fuel can spread again. Simplification: after the first step
+the remaining time is rescaled by the change in the origin cell's rate in that direction, and is
+re-timed through every crossed cell only when the crossing resumes after waiting. Fire no longer
+reaches cells too wet to burn and waits there, so the many cells that used to ignite in the same
+minute when the moisture fell back below extinction now arrive at their own travel times. A step
+reads the series at its start minute: speed and each moisture
 fraction linear in time, direction along the shorter arc of the compass (350 to 10 degrees passes
 north; an exact reversal turns clockwise), the first sample held before it and the last after it.
 With wind wander on, the wander's anomaly is applied around each step's series wind. With
