@@ -271,6 +271,12 @@ export function planCrewDispatch(
   bases: SuppressionBases | null = null,
 ): { dispatch: CrewDispatch | null; note: string | null } {
   if (resources.length === 0) return { dispatch: null, note: "No resources assigned." };
+  // Outside the area's box the roads are unknown: snapping to its nearest node would stage units
+  // at the box edge, kilometres from the fire (fire/useBoardStreets.ts picks the box).
+  const box = area.bbox;
+  if (fire[0] < box[0] || fire[0] > box[2] || fire[1] < box[1] || fire[1] > box[3]) {
+    return { dispatch: null, note: "The fire is outside the modelled road area, so no units were routed to it." };
+  }
   const kindsOnly = resources.some((r) => typeof r === "string");
   if (kindsOnly && area.stations.length === 0 && !bases?.available) {
     return { dispatch: null, note: "No fire stations on or near this board's roads." };

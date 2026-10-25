@@ -23,6 +23,9 @@ import {
 } from "./evacuation";
 import { computeExposure } from "../dispatch/fireExposure";
 import { useBoardStreets } from "../fire/useBoardStreets";
+import { seriesActive, weatherAtStep, weatherStepAt } from "../fire/weatherSeries";
+import { areaCoverage } from "./areaCoverage";
+import AreaCoverageNotice from "./AreaCoverageNotice";
 import FirefightingFields from "./FirefightingFields";
 import FirefightingResults, { type FireShown } from "./FirefightingResults";
 import type { FirelineView } from "./FirelineOverlay";
@@ -572,7 +575,16 @@ export default function SimulationStudioPage({
 
   // ---- Evacuation and road closures -------------------------------------------------------
 
-  const streets = useBoardStreets(dioramaLandscape);
+  // The enabled fires by start minute: the routing area is the board's road box that holds them.
+  const enabledFires = useMemo(
+    () => scenario.ignitions.filter((ignition) => ignition.enabled).sort((a, b) => a.startMinute - b.startMinute),
+    [scenario.ignitions],
+  );
+  const fireFocus = useMemo<[number, number][]>(
+    () => enabledFires.map((ignition) => [ignition.location.longitude, ignition.location.latitude]),
+    [enabledFires],
+  );
+  const streets = useBoardStreets(dioramaLandscape, fireFocus);
   const area = streets.status === "ready" ? streets.area : null;
   const closedEdges = useMemo<ReadonlySet<number>>(
     () => (area && closures.areaId === area.id ? closures.edges : new Set()),
@@ -581,16 +593,17 @@ export default function SimulationStudioPage({
 
   // Fire facilities around the board (CAL FIRE layer; local-only data, may be absent): the
   // firefighting resources are a pure function of them (studio/mapResources.ts).
+  // Centred on the first fire (rounded to 0.01 degrees so a nudge does not refetch), not the area.
+  const firstFire = fireFocus[0] ?? null;
   const basesPoint = useMemo((): [number, number] | null => {
-    if (!scenario.firefighting?.enabled) return null;
-    if (area) return [(area.bbox[0] + area.bbox[2]) / 2, (area.bbox[1] + area.bbox[3]) / 2];
-    const first = scenario.ignitions
-      .filter((ignition) => ignition.enabled)
-      .sort((a, b) => a.startMinute - b.startMinute)[0];
-    return first ? [first.location.longitude, first.location.latitude] : null;
-  }, [scenario, area]);
+    if (!scenario.firefighting?.enabled || !firstFire) return null;
+    return [Math.round(firstFire[0] * 100) / 100, Math.round(firstFire[1] * 100) / 100];
+  }, [scenario.firefighting?.enabled, firstFire]);
   const suppressionBases = useSuppressionBases(basesPoint);
-  const fromMap = useMemo(() => mapResources(area, suppressionBases), [area, suppressionBases]);
+  const fromMap = useMemo(
+    () => mapResources(area, suppressionBases, firstFire),
+    [area, suppressionBases, firstFire],
+  );
 
   /**
    * The run card from the units on the map (studio/mapResources.ts), each ground unit driven from
@@ -732,7 +745,9 @@ export default function SimulationStudioPage({
   // Run once the first fire's crew bases are in (or after a short wait).
   useEffect(() => {
     if (!pendingRun) return;
-    if (pendingRun.scenario === scenario && (suppressionBases || pendingRun.waited)) {
+    // Also wait for the road area around the new fires (the crew plan needs it).
+    const roadsReady = streets.status !== "loading";
+    if (pendingRun.scenario === scenario && ((suppressionBases && roadsReady) || pendingRun.waited)) {
       setPendingRun(null);
       handleRun();
       return;
@@ -740,7 +755,7 @@ export default function SimulationStudioPage({
     if (pendingRun.waited) return;
     const handle = window.setTimeout(() => setPendingRun((p) => (p ? { ...p, waited: true } : p)), 3000);
     return () => window.clearTimeout(handle);
-  }, [pendingRun, scenario, suppressionBases, handleRun]);
+  }, [pendingRun, scenario, suppressionBases, streets.status, handleRun]);
 
   const randomControls = (
     <div className="studio-random">
@@ -914,6 +929,21 @@ export default function SimulationStudioPage({
     [result, firefighting, fireNames, shownRun, orderMinute, exposure],
   );
   const shownHandoff = handoff;
+  // Which part of the board has roads and evacuation, and what the fires do outside it.
+  const coverage = useMemo(
+    () =>
+      area && dioramaLandscape
+        ? areaCoverage({
+            grid: dioramaLandscape,
+            area,
+            fires: enabledFires.map((f) => ({ name: f.name || f.id, at: [f.location.longitude, f.location.latitude] })),
+            run: dioramaShowsRun && shownRun
+              ? { arrivalMinutes: shownRun.arrivalMinutes, horizonMinutes: result.scenario.settings.horizonMinutes }
+              : null,
+          })
+        : null,
+    [area, dioramaLandscape, enabledFires, dioramaShowsRun, shownRun, result],
+  );
   const evacuationInputs = useMemo<EvacuationInputs | null>(
     () =>
       area && exposure && result
@@ -983,6 +1013,18 @@ export default function SimulationStudioPage({
   const stale = state.stale;
   const safeFrameIndex = Math.max(0, Math.min(frameIndex, frameMinutes.length - 1));
   const currentMinute = frameMinutes[safeFrameIndex] ?? 0;
+  // Wind shown at the playback minute: the weather step the solver used there (10-min steps),
+  // or the scenario's constant wind when no hourly series is active.
+  const weatherSeries = scenario.settings.weatherSeries;
+  const baseWindSpeedMph = scenario.settings.windSpeedMph;
+  const baseWindFromDegrees = scenario.settings.windFromDegrees;
+  const displayWind = useMemo(() => {
+    if (seriesActive(weatherSeries)) {
+      const w = weatherAtStep(weatherSeries, weatherStepAt(currentMinute));
+      return { speedMph: w.windSpeedMph, fromDegrees: w.windFromDegrees };
+    }
+    return { speedMph: baseWindSpeedMph, fromDegrees: baseWindFromDegrees };
+  }, [weatherSeries, currentMinute, baseWindSpeedMph, baseWindFromDegrees]);
   const publishStatus = useSimStatePublisher(
     publishOn && !Aside,
     evacuationInputs,
@@ -1227,8 +1269,8 @@ export default function SimulationStudioPage({
                 landscape={dioramaLandscape}
                 run={dioramaShowsRun ? dioramaRun : null}
                 ignitions={dioramaIgnitions}
-                windFromDegrees={scenario.settings.windFromDegrees}
-                windSpeedMph={scenario.settings.windSpeedMph}
+                windFromDegrees={displayWind.fromDegrees}
+                windSpeedMph={displayWind.speedMph}
                 timeRef={clockRef}
                 insets={{ top: 12, right: 12, bottom: DIORAMA_BOTTOM_INSET_PX, left: panelInset }}
                 fitKey={dioramaShowsRun ? resultKey : null}
@@ -1268,6 +1310,7 @@ export default function SimulationStudioPage({
                       withClosures={closuresSummary}
                       currentMinute={currentMinute}
                       area={area}
+                      coverage={coverage}
                       optimizer={optimizer}
                       playPlan={playPlan}
                       onPlayPlan={setPlayPlan}
@@ -1337,8 +1380,9 @@ export default function SimulationStudioPage({
                         sizeReady({ longitude: region.center.longitude, latitude: region.center.latitude, radiusMeters: boardRadius, cellMeters: boardCellMetersFor(boardRadius) })
                           ? "This size is cached and loads right away."
                           : `The first load of this size takes about ${firstLoadSeconds(boardRadius, boardCellMetersFor(boardRadius))} s; later loads are cached.`}
-                        {boardRadius > 13_000
-                          ? " Evacuation and roads cover the centre of the board only."
+                        {/* One routing box (fire/useBoardStreets.ts) is 0.26 x 0.2 degrees, about 22 km. */}
+                        {boardRadius > 11_000
+                          ? " Roads and evacuation cover only the part of the board around the fires (about 22 km across)."
                           : ""}
                       </p>
                     )}
@@ -1436,8 +1480,8 @@ export default function SimulationStudioPage({
                 visibleFrames={visibleFrames}
                 currentMinute={currentMinute}
                 horizonMinutes={playbackHorizon}
-                windSpeedMph={scenario.settings.windSpeedMph}
-                windFromDegrees={scenario.settings.windFromDegrees}
+                windSpeedMph={displayWind.speedMph}
+                windFromDegrees={displayWind.fromDegrees}
                 landscapeBox={result?.landscapeBox ?? null}
                 footprintIsStale={stale}
                 ignitionDetails={ignitionDetails}
@@ -1625,6 +1669,7 @@ export default function SimulationStudioPage({
               Playing the previous run; run again to include your edits.
             </Notice>
           )}
+          {showEvacuation && dioramaShowsRun && view === "map" && <AreaCoverageNotice coverage={coverage} />}
           {showEvacuation && dioramaShowsRun && (
             <StudioPeople
               map={view === "map" ? studioMap : null}

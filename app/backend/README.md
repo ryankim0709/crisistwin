@@ -194,10 +194,18 @@ node tools/prewarm_landscapes/run.mjs --only live --no-streets      # a subset
 ```
 
 Boards load through `/api/geo/landfire/wcs` and `/api/geo/terrarium` (raw tiles cached too), two
-at a time, then are POSTed to `/api/landscapes/cache`. Street boxes (up to 3x3 per board, same
-boxes as `useBoardStreets`) are requested one at a time, backing off on 429 and 5xx. Boards
+at a time, then are POSTed to `/api/landscapes/cache`. Street boxes are the same boxes as
+`app/src/fire/useBoardStreets.ts` (`allStreetBoxesFor`): the drawn tiles (up to 3x3 per board)
+plus every routing-area candidate (the largest box the endpoint takes, 0.26 x 0.2 degrees, slid
+across the board in half-box steps, 3x3 on a 30 km board). Roads, evacuation zones, routing and
+unit staging run on the candidate holding the most enabled fires, so a board needs only these
+fixed boxes. They are requested one at a time, backing off on 429 and 5xx. Boards
 already cached are skipped (`HEAD`) and finished street boxes are recorded in the state file, so
-re-running the same command resumes. With a server cap lower than the board count the script
+re-running the same command resumes. State files from before the routing-area candidates (key
+`boxes`, now `streetBoxes`) are re-enumerated once. One board's streets only (here the 30 km
+Berkeley Hills & Tilden board; `--only berkeley-hills-tilden` takes every size of the region):
+`node tools/prewarm_landscapes/run.mjs --only "studio:berkeley-hills-tilden r15000" --streets-only`.
+With a server cap lower than the board count the script
 builds only what fits and warns; raise `LANDSCAPE_CACHE_MAX_FILES` and re-run. Measured: about
 1.3 MB for a region default, 2 MB for a 60 km board.
 

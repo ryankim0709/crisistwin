@@ -196,6 +196,47 @@ established. Climatology for the same Eaton point now picks Palmdale (PMD, 47 km
 across the range, warned as more than 30 km) over El Monte (EMT, 14 km, 795 m lower): the
 elevation term does not know about the ridge between.
 
+### Observation quality control (`qc_observations`, version `obs-qc/1`)
+
+Every source (ASOS, RAWS via HADS, ERA5, NWS gridpoint, the climatology analog's station) goes
+through `qc_observations` before hourly binning. A failed value becomes `null`; it is never
+replaced by a plausible-looking number. The record is `provenance.obs_qc` (every removed value with
+its time, value and check) and each removal adds a sentence to `warnings`.
+
+| Check | Rule | Source |
+| --- | --- | --- |
+| RH range | 0.01 % <= RH <= 103 % (RH exactly 0 fails: no water vapour, dew point minus infinity) | Synoptic Data QC `sl_range_check` |
+| Dew point range | dew point implied by the report's T and RH >= -59.44 degC (-75 degF) | Synoptic Data QC `sl_range_check` |
+| RH step | change from the previous accepted report <= 50 % per hour | NOAA MADIS validity check "Relative humidity 1hr chng" |
+| Dew point step | change <= 35 degF (19.4 degC) per hour | NOAA MADIS temporal consistency check |
+| Step reference | previous accepted report at most 75 min earlier; a flagged value is never the reference | assumption |
+| RH persistence | RH range < 0.5 % over 24 h with >= 24 reports | Synoptic Data QC `sl_pers_check` |
+| Wind persistence | speed range < 0.25 m/s over 24 h with >= 24 reports; removes speed, direction and gust | Synoptic Data QC `sl_pers_check` and secondary persistence check |
+
+Dew point is the Magnus form with the Alduchov and Eskridge (1996) coefficients (17.625, 243.04
+degC). Sources: https://docs.synopticdata.com/services/mesonet-data-qc and
+https://madis.ncep.noaa.gov/madis_sfc_qc_notes.shtml (both read 2026-10-24). Short calm or
+saturated runs stay valid: an 8 h calm is not a persistence failure.
+
+**RH gap fill (`historical_replay`).** After QC, an RH gap of 4 h or more at the chosen station
+(shorter gaps are interpolated by `sim/fuel_moisture.py`) is filled hour by hour from up to 3
+next-ranked stations within 30 km and 500 m of the site (the existing warning limits). The donor's
+dew point is combined with the chosen station's own temperature, `RH = e_s(Td_donor) / e_s(T)`,
+capped at 100 %. That is an assumption (dew point carries across neighbouring stations better than
+RH, which follows each site's temperature; Synoptic's spatial check also compares humidity through
+dew point). Filled hours carry `rh_from: "<donor id>"` in `samples`, `provenance.rh_gap_fill` lists
+the gaps, donors and every filled value, and a warning names them. Hours without a station
+temperature or a donor stay `null`.
+
+Measured (2026-10-25, MOFD portable RAWS XOSC1, Berkeley hills -122.245, 37.905,
+2023-05-20T19Z + 25 h): the RH channel read 93-99 % until 05:47Z, then exactly 0.0 for 8 reports
+(06:47Z-14:47Z) at 47-50 degF while the station's own 10-h fuel stick read 21-26 %. Before: 1-h
+dead moisture 1 % for 07Z-15Z (Table E RH 0-4 % column) and the 10-h fell from 15.9 % to 7.3 %.
+After: the 8 zeros fail the range check; 8 of the 9 hours are filled from Oakland North RAWS ONOC1
+(4.9 km; RH 83-100 %), the ninth (13Z, no report) is interpolated; 1-h is 23-25 % (25 is Table E's
+"25+" lower bound) and the 10-h rises to 21.0 %, in line with the stick. A normal day (ONOC1,
+2021-07-10T09Z) is unchanged.
+
 ### Cache
 
 Raw responses live outside the repo: `$CRISISTWIN_WEATHER_CACHE` or `~/.cache/crisistwin/weather`,
@@ -422,8 +463,9 @@ same `station` override. The answer carries `candidates` and `warnings`; `eviden
 answer spins up from the 48 reanalysis hours before `start`. A station more than 100 km away
 (`MAX_STATION_DISTANCE_KM`, assumption; only reachable through the climatology fallback or a
 forced station) is refused with `502 no_station_coverage`. The cache key includes the selection
-version and `station` (`CACHE_SCHEMA` `conditions/2`), so answers from before `station-rank/1` are
-not served.
+version, the QC version and `station` (`CACHE_SCHEMA` `conditions/3`), so answers from before
+`station-rank/1` or `obs-qc/1` are not served. Each hour has `rh_from` (a donor station id when
+the RH was filled after QC, else `null`); QC removals in the 48 spin-up hours add a warning too.
 
 | Query | Meaning |
 | --- | --- |
