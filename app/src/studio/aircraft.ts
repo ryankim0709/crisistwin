@@ -323,11 +323,21 @@ export const PILOT_MIN_REST_MINUTES = 10 * 60;
  * ASSUMPTION: drop line with no ground line tied in on that fire by this long after the drop does
  * not count as held line. Water from a bucket cools an edge for minutes; long-term retardant keeps
  * working after it dries but is laid to be tied into by ground forces (IASG 2017 ch. 7 tactics:
- * aerial retardant "slows" the fire for ground forces). The solver's control line cannot expire,
- * so an untied drop is dropped from the line instead (docs/response-model.md, "Aircraft").
+ * aerial retardant "slows" the fire for ground forces). An untied drop is not held line.
  */
 export const WATER_TIE_IN_MINUTES = 30;
 export const RETARDANT_TIE_IN_MINUTES = 120;
+/**
+ * ASSUMPTION: how long a held drop holds in the solver before it expires
+ * (`ControlLines.holdUntilMinute`, fire/spread.ts 5.1.0), minutes after the drop: the same
+ * windows as the tie-in, by which ground line must have taken over. No published effective-life
+ * figure is used: water holds only while the fuel is wet; long-term retardant is credited for
+ * the tie-in window, not for the hours it may stay on the fuel.
+ */
+export const DROP_HOLD_MINUTES: Record<"water" | "retardant", number> = {
+  water: WATER_TIE_IN_MINUTES,
+  retardant: RETARDANT_TIE_IN_MINUTES,
+};
 
 // ---- plan -------------------------------------------------------------------------------
 
@@ -380,6 +390,8 @@ export interface AircraftPlan {
   /** Held line cells (tied-in drops only) with the minute each is laid, and the aircraft that laid it. */
   cells: Int32Array;
   holdFromMinute: Float32Array;
+  /** Minute each cell stops holding (laid + DROP_HOLD_MINUTES for its agent). */
+  holdUntilMinute: Float32Array;
   aircraftIndex: Int16Array;
   /** Base open wind (the run's `windSpeedMph`), knots, and its effect; per-drop values are on `drops`. */
   windKnots: number;
@@ -534,6 +546,7 @@ export function planAircraft(inputs: AircraftInputs): AircraftPlan {
     drops: [],
     cells: new Int32Array(0),
     holdFromMinute: new Float32Array(0),
+    holdUntilMinute: new Float32Array(0),
     aircraftIndex: new Int16Array(0),
     windKnots: baseKnots,
     windEffect: windEffect(baseKnots),
@@ -735,6 +748,7 @@ export function planAircraft(inputs: AircraftInputs): AircraftPlan {
   const cellSize = grid.groundCellSizeMeters;
   const cells: number[] = [];
   const holds: number[] = [];
+  const untils: number[] = [];
   const owners: number[] = [];
   const taken = new Set<number>();
   const { width, height } = grid;
@@ -822,6 +836,7 @@ export function planAircraft(inputs: AircraftInputs): AircraftPlan {
         if (drop.tiedIn) {
           cells.push(c);
           holds.push(drop.minute);
+          untils.push(drop.minute + DROP_HOLD_MINUTES[drop.agent]);
           owners.push(drop.aircraft);
         }
         covered[side] = list[j][0];
@@ -856,6 +871,7 @@ export function planAircraft(inputs: AircraftInputs): AircraftPlan {
     drops,
     cells: Int32Array.from(cells),
     holdFromMinute: Float32Array.from(holds),
+    holdUntilMinute: Float32Array.from(untils),
     aircraftIndex: Int16Array.from(owners),
     windKnots: baseKnots,
     windEffect: windEffect(baseKnots),

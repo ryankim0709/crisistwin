@@ -540,7 +540,10 @@ export const SPREAD_MODEL = {
   // stochastic ROS multiplier; each stencil step timed through every cell it crosses (Finney
   // 2002); a crossing re-timed at each later 10-minute weather step; moisture damping exactly 0
   // at extinction; arrivals past the horizon reported as Infinity.
-  version: "5.0.0",
+  // 5.1.0: control lines may expire (`ControlLines.holdUntilMinute`, for aircraft drops); a step
+  // a line held is re-tried when that line cell expires, finishing the rest of the crossing from
+  // then. Runs without expiring lines are unchanged.
+  version: "5.1.0",
   surfaceSpread:
     "Rothermel (1972) with Albini (1976), per Andrews RMRS-GTR-371 (2018); checked against Behave (BehavePlus engine)",
   fuelModels: "Scott & Burgan (2005) 40 standard fire behavior fuel models",
@@ -998,10 +1001,18 @@ type SpreadRunTotals = Pick<
  * Judging breaches on adjacent steps only keeps a fire running along a line from cutting
  * across it at a shallow angle with head-fire intensity. Embers do not land in a built
  * line cell but still fly over it.
+ *
+ * A cell with `holdUntilMinute[i] <= t` no longer holds at time t (a drop that dried out or
+ * was diluted). A step a line cell held is re-tried at that cell's expiry minute, the same way a
+ * weather-delayed arrival goes back on the heap: the fire waits at the line's edge and crosses
+ * the rest of the step (from the expired cell on) at the rates of then. The origin cell keeps
+ * the behaviour it ignited with (ASSUMPTION; its own state is not recomputed for the retry).
  */
 export interface ControlLines {
   /** Minute from which the cell is built line; `Infinity` where there is no line. */
   holdFromMinute: Float32Array;
+  /** Minute the cell stops holding; absent or `Infinity`: holds for the rest of the run. */
+  holdUntilMinute?: Float32Array;
   /** Longest flame, feet, the crew that built this cell can hold (direct-attack limit). */
   holdsFlameLengthFeet: Float32Array;
 }
@@ -2136,6 +2147,9 @@ function solveSpread(
 
   const holdFrom = controlLines?.holdFromMinute ?? null;
   const holdsFeet = controlLines?.holdsFlameLengthFeet ?? null;
+  const holdUntil = controlLines?.holdUntilMinute ?? null;
+  /** True when cell c is line that holds at minute t (built, and not yet expired). */
+  const lineAt = (c: number, t: number): boolean => holdFrom![c] <= t && (holdUntil === null || t < holdUntil[c]);
   /** Surface head rate the cell's head flame length belongs to, m/min. */
   const surfaceHeadOf = (c: number): number =>
     crownMode[c] !== 0 ? surfaceHeadRate[c] * (rosField ? rosField[c] : 1) : headRate[c];
@@ -2149,17 +2163,18 @@ function solveSpread(
    * any line). A breached line cell is crossed and the next one is tested against the same
    * approaching flame. For an adjacent step this is exactly the earlier rule; longer steps
    * used to be refused outright at any line cell, which pinned fires inside a ring of
-   * retardant drops whatever their flame length.
+   * retardant drops whatever their flame length. Returns the crossed-cell index (from the
+   * step's start) of the line cell that holds, or -1 when none does.
    */
-  const stepLineHolds = (cell: number, n: number, time: number): boolean => {
+  const stepLineHeldAt = (cell: number, n: number, time: number): number => {
     const start = traversalStart[n];
     const end = traversalStart[n + 1];
     let flame = 0;
     for (let k = start; k < end; k++) {
       const c = cell + traversalOffset[k];
       const j = k - start;
-      if (k > start && holdFrom![c] <= time) {
-        if (flame <= holdsFeet![c]) return true;
+      if (k > start && lineAt(c, time)) {
+        if (flame <= holdsFeet![c]) return j;
         continue;
       }
       const head = surfaceHeadOf(c);
@@ -2170,7 +2185,7 @@ function solveSpread(
             ? headFlameFeet[c] * Math.pow(Math.min(1, pathRate[j] / head), BYRAM_FLAME_EXPONENT)
             : 0;
     }
-    return false;
+    return -1;
   };
 
   // Ember directions and speed live on the wind state (`windStateFor`): the scenario's on a
@@ -2303,7 +2318,7 @@ function solveSpread(
     const spotMinutes = distance / w.emberSpeedMetersPerMinute + SPOTTING_IGNITION_DELAY_MINUTES;
     const candidate =
       fixed === 0 ? time + spotMinutes : resumedSpotArrival(time, spotMinutes, distance);
-    if (holdFrom && holdFrom[target] <= candidate) return;
+    if (holdFrom && lineAt(target, candidate)) return;
     if (candidate < arrival[target]) {
       arrival[target] = candidate;
       arrivalMechanism[target] = ARRIVAL_SPOTTING;
@@ -2480,9 +2495,24 @@ function solveSpread(
    * reads) each cell's behaviour at ignition, as before.
    */
   const ignitionBehaviour = new Map<number, [number, number, number, number, number, number]>();
+  /**
+   * Steps a control line held that it will stop holding (`ControlLines.holdUntilMinute`): heap
+   * entries at `2 * cellCount + index`, re-tried at the holding cell's expiry minute.
+   */
+  const lineRetries: { cell: number; n: number; neighbour: number; mechanism: number; crossed: number }[] = [];
   /** Relax step n out of `cell` to `candidate`, unless a built control line holds it. */
   const relax = (cell: number, n: number, neighbour: number, candidate: number, mechanism: number): void => {
-    if (holdFrom && stepLineHolds(cell, n, candidate)) return;
+    if (holdFrom) {
+      const crossed = stepLineHeldAt(cell, n, candidate);
+      if (crossed >= 0) {
+        const until = holdUntil ? holdUntil[cell + traversalOffset[traversalStart[n] + crossed]] : Number.POSITIVE_INFINITY;
+        if (until <= scenario.horizonMinutes && !settled[neighbour]) {
+          lineRetries.push({ cell, n, neighbour, mechanism, crossed });
+          heap.push(until, 2 * cellCount + lineRetries.length - 1);
+        }
+        return;
+      }
+    }
     if (candidate < arrival[neighbour]) {
       arrival[neighbour] = candidate;
       arrivalMechanism[neighbour] = mechanism;
@@ -2595,6 +2625,25 @@ function solveSpread(
 
   while (heap.length > 0) {
     const { time, cell: entry } = heap.pop();
+    // Entries at or past `2 * cellCount` are steps re-tried where a line expired (`relax`).
+    if (entry >= 2 * cellCount) {
+      if (time > scenario.horizonMinutes) break;
+      const retry = lineRetries[entry - 2 * cellCount];
+      if (settled[retry.neighbour]) continue;
+      if (stepped) {
+        travelStep = weatherStepAt(time);
+        travelWind = windStateAtStep(travelStep);
+      }
+      // Refills `pathRate` for the line test and the rest of the crossing.
+      const minutes = stepMinutes(retry.cell, retry.n);
+      if (minutes === STEP_BLOCKED || !Number.isFinite(minutes)) continue;
+      const start = traversalStart[retry.n];
+      const end = traversalStart[retry.n + 1];
+      let minutesPerMeter = 0;
+      for (let k = start + retry.crossed; k < end; k++) minutesPerMeter += traversalShare[k] / pathRate[k - start];
+      relax(retry.cell, retry.n, retry.neighbour, time + minutesPerMeter * distances[retry.n], retry.mechanism);
+      continue;
+    }
     // Entries at or past `cellCount` are crossing continuations, not arrivals.
     if (entry >= cellCount) {
       if (time > scenario.horizonMinutes) break;
@@ -2721,11 +2770,12 @@ function solveSpread(
       const candidate =
         fixed === 0 ? time + minutes : resumedStepArrival(cell, n, time, minutes);
       // Built control line on the step stops it unless the flame facing it is longer than
-      // the line holds, tested per crossed line cell (`stepLineHolds`). A line counts as
+      // the line holds, tested per crossed line cell (`stepLineHeldAt`). A line counts as
       // built when it is finished by the time the fire would arrive (`candidate`), not when
       // the cell behind it caught: across a 30 m cell a flank or backing fire takes an hour
-      // or more. Blocking only gets stricter for later arrivals, so arriving later is never
-      // faster and the minimum-travel-time order stays valid.
+      // or more. Without expiry blocking only gets stricter for later arrivals, so arriving later
+      // is never faster and the minimum-travel-time order stays valid; a step held by a line that
+      // expires is re-tried at the expiry minute (`relax`), never earlier than now.
       relax(cell, n, neighbour, candidate, sourceMechanism);
     }
     if (progress) {
@@ -2783,7 +2833,7 @@ function solveSpread(
             ? time + spotMinutes
             : resumedSpotArrival(time, spotMinutes, flightMeters);
         // Embers do not take hold in line built by the time they would ignite.
-        if (holdFrom && holdFrom[target] <= candidate) break;
+        if (holdFrom && lineAt(target, candidate)) break;
         if (candidate < arrival[target]) {
           arrival[target] = candidate;
           arrivalMechanism[target] = ARRIVAL_SPOTTING;

@@ -956,21 +956,23 @@ export default function SimulationStudioPage({
     [area, dioramaShowsRun, result, shownRun],
   );
   // Units leave a fire they cannot hold for the evacuation only when there is an evacuation task,
-  // and withdraw when the fire reaches where they parked (studio/crewHandoff.ts). Only with the
-  // direct-attack fire shown: on the line plan every unit keeps building line, so none is counted
-  // twice.
+  // withdraw when the fire reaches where they parked, and are released when their fire is out
+  // (studio/crewHandoff.ts), all from the initial attack and its run, whichever run is shown.
+  // Leaving for the evacuation applies only with the direct-attack fire shown: on the line plan
+  // every unit keeps building line, so none is counted twice.
+  const iaShown = !!firefighting?.initialAttack && shownRun === firefighting.initialAttack.run;
   const handoff = useMemo(
     () =>
-      result?.crewDispatch && firefighting?.initialAttack && shownRun === firefighting.initialAttack.run
+      result?.crewDispatch && firefighting?.initialAttack
         ? crewHandoff(result.crewDispatch, firefighting.initialAttack.estimate, fireNames, {
-            evacuationFromMinute: evacuationTaskFromMinute(orderMinute, exposure),
+            evacuationFromMinute: evacuationTaskFromMinute(orderMinute, iaShown ? exposure : null),
             grid: result.landscape,
-            arrival: shownRun.arrivalMinutes,
+            arrival: firefighting.initialAttack.run.arrivalMinutes,
           })
         : null,
-    [result, firefighting, fireNames, shownRun, orderMinute, exposure],
+    [result, firefighting, fireNames, iaShown, orderMinute, exposure],
   );
-  const shownHandoff = handoff;
+  const shownHandoff = iaShown ? handoff : null;
   // Which part of the board has roads and evacuation, and what the fires do outside it.
   const coverage = useMemo(
     () =>
@@ -1340,6 +1342,7 @@ export default function SimulationStudioPage({
                 fireline={fireline}
                 crews={dioramaShowsRun && !Aside ? (result?.crewDispatch ?? null) : null}
                 crewLeaveMinutes={shownHandoff?.leaveMinutes}
+                crewReleaseMinutes={handoff?.releaseMinutes}
                 evacuationPanel={
                   Aside ? undefined : (
                     <EvacuationPanel

@@ -16,6 +16,11 @@
  *   units on a fire edge; for units holding a road it is the shown run's fire reaching that road
  *   point within UNIT_WITHDRAW_MARGIN_MINUTES).
  *
+ * - Release: when the initial attack puts a unit's fire out, the first engine and first hand crew
+ *   on scene stay for mop-up and the others are released and return to quarters (MOPUP_KEEP,
+ *   response/units.ts, ASSUMPTION, the board's rule). A unit still on its way is turned back at
+ *   that minute. Released units are not re-dispatched to another fire here.
+ *
  * A unit that has left builds no line: the initial attack already stops a withdrawn unit's line,
  * and the page applies this handoff only to the direct-attack run (the run in which it is true),
  * never to the control-line plan. Pure, deterministic. See
@@ -29,6 +34,10 @@ import type { LandscapeGrid } from "../fire/landscape";
 import { cellAt } from "../fire/spread";
 import type { CrewDispatch } from "./crewDispatch";
 import type { FireAttack, InitialAttackEstimate } from "./initialAttack";
+import { MOPUP_KEEP } from "../response/units";
+import { vehicleFamily } from "./apparatus";
+
+const MOPUP_FAMILY = { engine: "engines", hand_crew: "hand_crews", dozer: "dozers" } as const;
 
 /** ASSUMED: how long crews work a fire before they conclude they cannot hold it, minutes. */
 export const SIZE_UP_MINUTES = 10;
@@ -40,6 +49,8 @@ export interface CrewHandoff {
   leaveMinutes: (number | null)[];
   /** Minute each trip withdrew for safety (same order); null = never. */
   withdrawMinutes: (number | null)[];
+  /** Minute each trip is released because its fire is out (same order); null = stays (burning, or mop-up). */
+  releaseMinutes: (number | null)[];
   /** First minute there is an evacuation task, or null when there is none in the run. */
   evacuationFromMinute: number | null;
 }
@@ -128,7 +139,31 @@ export function crewHandoff(
     const free = overwhelmed ? Math.min(trip.arriveMinute + SIZE_UP_MINUTES, withdraw ?? Infinity) : withdraw!;
     return Math.ceil(Math.max(free, evacuationFromMinute));
   });
-  return { overwhelmedReason, leaveMinutes, withdrawMinutes, evacuationFromMinute };
+  // The fire each unit works in the initial attack (a fire another reached first is that one).
+  const fireOfLabel = new Map<string, FireAttack>();
+  for (const fire of estimate.fires) for (const unit of fire.units ?? []) if (unit.label) fireOfLabel.set(unit.label, fire);
+  const fireOfTrip = (trip: CrewDispatch["trips"][number]) =>
+    (trip.label ? fireOfLabel.get(trip.label) : undefined) ?? (trip.sourceId ? fireOf.get(trip.sourceId) : undefined) ?? firstFire;
+  const releaseMinutes: (number | null)[] = dispatch.trips.map(() => null);
+  for (const fire of estimate.fires) {
+    if (fire.outMinute === null) continue;
+    const out = fire.outMinute;
+    const keep: Record<string, number> = { ...MOPUP_KEEP };
+    dispatch.trips
+      .map((trip, index) => ({ trip, index }))
+      .filter(({ trip }) => fireOfTrip(trip) === fire)
+      .sort((a, b) => a.trip.arriveMinute - b.trip.arriveMinute)
+      .forEach(({ trip, index }) => {
+        const family = MOPUP_FAMILY[vehicleFamily(trip.kind)];
+        const onScene = trip.arriveMinute <= out && withdrawMinutes[index] === null;
+        if (onScene && (keep[family] ?? 0) > 0) {
+          keep[family] -= 1;
+          return;
+        }
+        releaseMinutes[index] = Math.ceil(out);
+      });
+  }
+  return { overwhelmedReason, leaveMinutes, withdrawMinutes, releaseMinutes, evacuationFromMinute };
 }
 
 /** A crew joining the evacuation run: where it starts and where it withdraws to. */

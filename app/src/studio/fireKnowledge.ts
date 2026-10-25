@@ -1,7 +1,8 @@
 /**
  * The fire as the evacuation policy may know it: only fires that have been reported, each with
- * its predicted spread from the run's arrival field. A fire is reported at its ignition plus the
- * seeded call-in and processing delay of response/report.ts (`ignitionReportDelayMinutes`, the
+ * its predicted spread from the run's arrival field. A fire is reported at its user-set report
+ * minute, else its ignition plus the seeded call-in and processing delay of response/report.ts
+ * (studio/firefighting.ts `ignitionReportMinute`, the
  * same per-fire delay the Studio's firefighting and the Dispatch agent use). Before that the
  * policy cannot order anyone because of it, and its cells are invisible to the policy.
  *
@@ -16,7 +17,7 @@ import { lonLatToMercator, type LandscapeGrid } from "../fire/landscape";
 import type { ScheduledFireRun } from "../fire/scheduledTypes";
 import type { DispatchArea, LonLat } from "../dispatch/area";
 import { arrivalAt, computeExposure, type FireExposure } from "../dispatch/fireExposure";
-import { ignitionReportDelayMinutes, type FirefightingSettings } from "./firefighting";
+import { ignitionReportMinute, type FirefightingSettings } from "./firefighting";
 
 export interface FireKnowledge {
   grid: LandscapeGrid;
@@ -40,7 +41,7 @@ export interface KnownFire {
   cells: { arrival: Float64Array; x: Float64Array; y: Float64Array };
 }
 
-/** Per source of a run, the minute it is reported (ignition + report delay); Infinity if it never ignites. */
+/** Per source of a run, the minute it is reported (user-set, else ignition + report delay); Infinity if it never ignites. */
 export function fireReportMinutes(
   run: ScheduledFireRun,
   grid: LandscapeGrid,
@@ -49,11 +50,9 @@ export function fireReportMinutes(
   return run.input.sources.map((source, index) => {
     const outcome = run.ignitions[index]?.outcome;
     if (!outcome || outcome.status !== "ignited") return Infinity;
-    // Same call as the Studio's firefighting (studio/firefighting.ts), seeded on the source.
-    return (
-      source.startMinute +
-      ignitionReportDelayMinutes(grid, source.location, source.startMinute, settings)
-    );
+    // Same call as the Studio's firefighting (studio/firefighting.ts): the user-set report minute
+    // when there is one, else the modelled delay seeded on the source.
+    return ignitionReportMinute(grid, source, settings).minute;
   });
 }
 

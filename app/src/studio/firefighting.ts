@@ -667,6 +667,8 @@ export function controlLinesFor(
   const count = grid.width * grid.height;
   const holdFromMinute = new Float32Array(count).fill(Number.POSITIVE_INFINITY);
   const holdsFlameLengthFeet = new Float32Array(count);
+  // Ground line holds for the rest of the run; drops until they expire (studio/aircraft.ts).
+  const holdUntilMinute = new Float32Array(count).fill(Number.POSITIVE_INFINITY);
   for (let k = 0; plan && k < plan.cells.length; k += 1) {
     const cell = plan.cells[k];
     // A cell on two flanks (rare, where they meet) counts as built by the earlier crew.
@@ -677,12 +679,24 @@ export function controlLinesFor(
   }
   for (let k = 0; drops && k < drops.cells.length; k += 1) {
     const cell = drops.cells[k];
-    if (drops.holdFromMinute[k] < holdFromMinute[cell]) {
-      holdFromMinute[cell] = drops.holdFromMinute[k];
-      holdsFlameLengthFeet[cell] = DROP_HOLDS_FLAME_FEET;
+    const from = drops.holdFromMinute[k];
+    const until = drops.holdUntilMinute?.[k] ?? Number.POSITIVE_INFINITY;
+    if (from >= holdFromMinute[cell]) continue;
+    const ground = holdFromMinute[cell];
+    // A drop before ground line on the same cell: held from the drop, and for good if the ground
+    // line is built before the drop expires; with a gap between them only the ground line counts
+    // (ASSUMPTION: one hold window per cell).
+    if (Number.isFinite(ground) && ground > until) continue;
+    if (Number.isFinite(ground)) {
+      holdFromMinute[cell] = from;
+      holdsFlameLengthFeet[cell] = Math.min(holdsFlameLengthFeet[cell], DROP_HOLDS_FLAME_FEET);
+      continue;
     }
+    holdFromMinute[cell] = from;
+    holdsFlameLengthFeet[cell] = DROP_HOLDS_FLAME_FEET;
+    holdUntilMinute[cell] = Math.min(holdUntilMinute[cell], until);
   }
-  return { holdFromMinute, holdsFlameLengthFeet };
+  return { holdFromMinute, holdsFlameLengthFeet, holdUntilMinute };
 }
 
 export function lineStatus(plan: LinePlan, arrival: Float32Array, horizon: number): Uint8Array {
