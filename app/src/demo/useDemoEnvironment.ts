@@ -5,19 +5,21 @@
  * landscape when a prebuilt one covers the drill area (GET /api/landscapes; its grid is also the
  * 3D diorama's board, DemoDiorama.tsx). Every input that
  * fails falls back to the labelled assumption in realism.ts / model.ts, and the board starts
- * once all have answered or failed.
+ * once all have answered or failed. The landscape is required (the fire solver runs on it): with
+ * no stored region covering the drill, it is loaded live from LANDFIRE and 3DEP around the drill
+ * centre (BOARD_RADIUS_M); if that fails too the board does not start and the error is returned.
  */
 
 import { useEffect, useRef, useState } from "react";
 import { DEFAULT_INCIDENT_ID } from "../live/api";
 import { cellAt } from "../fire/spread";
 import { fetchRegionCatalog, fetchRegionLandscape } from "../fire/landscapePackage";
-import type { LandscapeGrid } from "../fire/landscape";
+import { landscapeCellMetersFor, loadLandscape, type LandscapeGrid } from "../fire/landscape";
 import type { LonLat } from "../live/types";
 import { CREW_TYPES, STATION_TYPES, SUPPRESSION_BASES_URL, parseBases, type SuppressionBases } from "../studio/suppressionBases";
 import { ENVIRONMENT_URL, WIND_URL, demoUrl, type EnvironmentResponse, type WindResponse } from "./contracts";
 import type { DemoEnvironment, Station } from "./model";
-import { FALLBACK_WIND, SpreadCache, groundFrom, type Ground, type TerrainGrid, type WindSeries } from "./realism";
+import { FALLBACK_WIND, type Ground, type WindSeries } from "./realism";
 
 /** Mean of the zones' vertex bounding box, WGS84 [lon, lat]; the fallback when the server gives no centre. */
 export function zonesCenter(zones: readonly { geometry: { type: string; coordinates: unknown } }[]): LonLat | null {
@@ -56,6 +58,12 @@ export const WEATHER_PRESETS: readonly WeatherPreset[] = [
 ];
 
 const BASE_RADIUS_KM = 60;
+/**
+ * Half-width of the live-loaded board landscape around the drill centre, ground metres. An
+ * assumption: it covers Paradise, Magalia and Concow on the Camp drill at a 60 m cell
+ * (landscapeCellMetersFor); zones beyond it have no fuel on the board, so no fire reaches them.
+ */
+const BOARD_RADIUS_M = 15_000;
 
 async function getJson<T>(url: string, signal: AbortSignal): Promise<T | null> {
   try {
@@ -90,22 +98,6 @@ export async function loadWind(preset: WeatherPreset, incidentId: string, signal
   };
 }
 
-export function terrainGrid(data: EnvironmentResponse["terrain"]): TerrainGrid | null {
-  if (!data || data.slope_milli.length !== data.ncols * data.nrows) return null;
-  return {
-    originLon: data.origin_lon,
-    originLat: data.origin_lat,
-    cellMeters: data.cell_m,
-    ncols: data.ncols,
-    nrows: data.nrows,
-    metersPerDegLon: data.m_per_deg_lon,
-    metersPerDegLat: data.m_per_deg_lat,
-    slopeTangent: Float32Array.from(data.slope_milli, (v) => v / 1000),
-    upslopeDegrees: Float32Array.from(data.upslope_deg),
-    label: `Observed terrain: ${data.source}`,
-  };
-}
-
 /**
  * Decoded region landscapes by region id, so a weather change (which reloads the environment)
  * keeps the same grid object and the 3D board is not rebuilt. A failed fetch is not kept.
@@ -128,34 +120,13 @@ function regionGrid(regionId: string, signal: AbortSignal): Promise<LandscapeGri
   });
 }
 
-/** A prebuilt landscape that covers `p`: its LANDFIRE fuel and terrain lookup, and the grid itself (the 3D board), or null. */
-async function landscapeGround(
-  p: LonLat,
-  signal: AbortSignal,
-): Promise<{ ground: Ground; grid: LandscapeGrid; region: { id: string; name: string } } | null> {
-  let catalog;
-  try {
-    catalog = await fetchRegionCatalog(signal);
-  } catch {
-    return null;
-  }
-  const region = catalog.find((r) => {
-    const dx = (p[0] - r.center.longitude) * 111_320 * Math.cos((p[1] * Math.PI) / 180);
-    const dy = (p[1] - r.center.latitude) * 111_320;
-    return Math.hypot(dx, dy) < r.radiusMeters * 0.8;
-  });
-  if (!region) return null;
-  let grid: LandscapeGrid;
-  try {
-    grid = await regionGrid(region.id, signal);
-  } catch {
-    return null;
-  }
+/** Fuel and slope lookups on the solver's landscape grid. */
+function groundOf(grid: LandscapeGrid, name: string): Ground {
   const index = (q: LonLat) => cellAt(grid, { longitude: q[0], latitude: q[1] });
-  const ground: Ground = {
-    fuelLabel: `LANDFIRE FBFM40 from the prebuilt landscape "${region.name}"`,
+  return {
+    fuelLabel: `LANDFIRE FBFM40 from ${name}`,
     fuelEvidence: "landfire",
-    terrainLabel: `Terrain from the prebuilt landscape "${region.name}"`,
+    terrainLabel: `Terrain from ${name}`,
     terrainEvidence: "observed",
     fuelCodeAt: (q) => {
       const i = index(q);
@@ -166,7 +137,44 @@ async function landscapeGround(
       return i < 0 ? { slopeTangent: 0, upslopeDegrees: 0, cell: -1 } : { slopeTangent: grid.slopeTangent[i], upslopeDegrees: grid.upslopeDegrees[i], cell: i };
     },
   };
-  return { ground, grid, region: { id: region.id, name: region.name } };
+}
+
+/** Live-loaded landscapes by centre, kept like regionGrids so a weather change keeps the same grid. */
+const liveGrids = new Map<string, Promise<LandscapeGrid>>();
+
+function liveGrid(p: LonLat, signal: AbortSignal): Promise<LandscapeGrid> {
+  const key = `${p[0].toFixed(4)},${p[1].toFixed(4)}`;
+  let cached = liveGrids.get(key);
+  if (!cached) {
+    cached = loadLandscape(p[0], p[1], BOARD_RADIUS_M, new AbortController().signal, { cellMeters: landscapeCellMetersFor(BOARD_RADIUS_M) });
+    liveGrids.set(key, cached);
+    cached.catch(() => liveGrids.delete(key));
+  }
+  const pending = cached;
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) reject(signal.reason);
+    signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    pending.then(resolve, reject);
+  });
+}
+
+type BoardLandscape = { ground: Ground; grid: LandscapeGrid; region: { id: string; name: string }; source: "stored" | "live" };
+
+/** A prebuilt landscape that covers `p`, else one loaded live around `p`; throws when neither loads. */
+async function landscapeGround(p: LonLat, signal: AbortSignal): Promise<BoardLandscape> {
+  const catalog = await fetchRegionCatalog(signal).catch(() => []);
+  const region = catalog.find((r) => {
+    const dx = (p[0] - r.center.longitude) * 111_320 * Math.cos((p[1] * Math.PI) / 180);
+    const dy = (p[1] - r.center.latitude) * 111_320;
+    return Math.hypot(dx, dy) < r.radiusMeters * 0.8;
+  });
+  if (region) {
+    const grid = await regionGrid(region.id, signal).catch(() => null);
+    if (grid) return { ground: groundOf(grid, `the prebuilt landscape "${region.name}"`), grid, region: { id: region.id, name: region.name }, source: "stored" };
+  }
+  const grid = await liveGrid(p, signal);
+  const name = `the drill area (${BOARD_RADIUS_M / 1000} km around the drill centre)`;
+  return { ground: groundOf(grid, `${name}, loaded live`), grid, region: { id: "live", name }, source: "live" };
 }
 
 export function stationsFrom(bases: SuppressionBases | null): DemoEnvironment["bases"] {
@@ -214,16 +222,15 @@ export async function loadEnvironment(
     center
       ? getJson<unknown>(`${SUPPRESSION_BASES_URL}?lon=${center[0]}&lat=${center[1]}&radius_km=${BASE_RADIUS_KM}`, signal)
       : Promise.resolve(null),
-    center ? landscapeGround(center, signal) : Promise.resolve(null),
+    center ? landscapeGround(center, signal) : Promise.reject(new Error("The drill has no centre to load a landscape around.")),
   ]);
-  const ground = landscape?.ground ?? groundFrom(terrainGrid(envData?.terrain ?? null));
   const parsed = basesJson ? parseBases(basesJson) : null;
   const calfire = stationsFrom(parsed);
   const packageBases = calfire ? null : stationsFromPackage(envData?.stations, center);
   const bases = calfire ?? packageBases;
   const noVehicle = new Map(Object.entries(envData?.households_no_vehicle ?? {}));
   return {
-    spread: new SpreadCache(ground, wind),
+    spread: { ground: landscape.ground, wind },
     bases,
     basesLabel: packageBases
       ? `${envData?.stations_source ?? "Fire stations from OpenStreetMap (drill package)"}; CAL FIRE bases unavailable, so unit types and counts per station are assumed, and crew camps reuse the nearest ${OSM_CREW_CAMPS} stations`
@@ -232,8 +239,9 @@ export async function loadEnvironment(
       : "Synthetic stations (assumed: CAL FIRE bases file unavailable)",
     noVehicle,
     noVehicleLabel: envData?.households_no_vehicle_source ?? "Carless households unknown (counted as 0)",
-    landscape: landscape?.grid ?? null,
-    landscapeRegion: landscape?.region ?? null,
+    landscape: landscape.grid,
+    landscapeRegion: landscape.region,
+    landscapeSource: landscape.source,
   };
 }
 
@@ -251,9 +259,14 @@ export function useDemoEnvironment(preset: WeatherPreset, incidentId: string, fa
   useEffect(() => {
     if (!ready) return;
     const controller = new AbortController();
-    loadEnvironment(preset, incidentId, fallback.current, controller.signal).then((env) => {
-      if (!controller.signal.aborted) setState({ key, env });
-    });
+    loadEnvironment(preset, incidentId, fallback.current, controller.signal).then(
+      (env) => {
+        if (!controller.signal.aborted) setState({ key, env });
+      },
+      (cause: unknown) => {
+        if (!controller.signal.aborted) console.error("Command board landscape failed to load; the board cannot start.", cause);
+      },
+    );
     return () => controller.abort();
   }, [preset, incidentId, key, ready]);
   return state?.key === key ? state.env : null;

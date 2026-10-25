@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import type { LonLat } from "../live/types";
 import { ROUTES_URL, demoUrl, type RoutesRequest, type RoutesResponse } from "./contracts";
-import { activeFires, fireRing, type Board, type RouteOption } from "./model";
+import { fireRingsForRouting } from "./fireFootprint";
+import { activeFires, type Board, type RouteOption } from "./model";
 
 /** Re-route at most this often (simulation minutes) while the fires keep growing. */
 export const ROUTE_REFRESH_MINUTES = 5;
@@ -49,7 +49,7 @@ export function useDemoRoutes(board: Board | null, version: number, incidentId: 
     if (!due || Date.now() - prev.failedAt < RETRY_WALL_MS) return;
 
     const minute = board.minute;
-    const body: RoutesRequest = { fires: fires.map((f) => fireRing(f, RING_POINTS) as LonLat[]) };
+    const body: RoutesRequest = { fires: fireRingsForRouting(board, RING_POINTS) };
     inflight.current = true;
     last.current = { ...prev, board, key, minute };
     // Not aborted on re-render: the page re-renders several times a second and the answer is still wanted.

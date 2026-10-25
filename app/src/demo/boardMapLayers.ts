@@ -2,7 +2,8 @@ import type { GeoJSONSource, Map as MapLibreMap, MapMouseEvent } from "maplibre-
 import { LEVEL_COLOR, MAP_COLOR } from "../live/CommandMap";
 import { fireHatch } from "../live/mapStyle";
 import type { LonLat } from "../live/types";
-import { fireRing, teamPosition, type Board, type RouteOption, type ZoneForecast } from "./model";
+import { boardFireFeatures, firePolygons } from "./fireFootprint";
+import { teamPosition, type Board, type RouteOption, type ZoneForecast } from "./model";
 
 /**
  * The simulated fire board drawn on top of the live command map (a framework-free port of
@@ -83,10 +84,9 @@ function zoneTag(state: ZoneMapState, forecast: ZoneForecast | undefined): strin
   return "";
 }
 
-/** Fire footprints at board.minute. */
-// TODO: switch to boardFireFeatures(board) from the fire model module when it lands.
+/** Fire footprints at board.minute (the solver's burned cells, fireFootprint.ts). */
 function fireFeatures(board: Board): Feature[] {
-  return board.fires.map((fire) => polygon(fireRing(fire), { id: fire.id, status: fire.status }));
+  return boardFireFeatures(board).features.map((f): Feature => ({ ...f, properties: { ...f.properties } }));
 }
 
 function buildFireLabels(board: Board): Feature[] {
@@ -152,7 +152,12 @@ function buildSelection(sel: BoardSelection | null, board: Board): { areas: Feat
   if (!sel) return none;
   if (sel.kind === "fire") {
     const fire = board.fires.find((f) => f.id === sel.id);
-    return fire ? { areas: [polygon(fireRing(fire), { id: fire.id })], points: [point(fire.origin, { id: fire.id })] } : none;
+    return fire
+      ? {
+          areas: firePolygons(board, fire).map((p): Feature => ({ type: "Feature", geometry: p.geometry, properties: { id: fire.id } })),
+          points: [point(fire.origin, { id: fire.id })],
+        }
+      : none;
   }
   if (sel.kind === "zone") {
     const zone = board.zones.find((z) => z.id === sel.id);

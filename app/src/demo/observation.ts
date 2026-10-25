@@ -24,7 +24,7 @@ import {
   perimeterGrowth,
   pointInRing,
   unitLineOn,
-  waitMinutes,
+  fireReachesZone,
   totals,
   zoneCounts,
   zoneForecasts,
@@ -67,11 +67,6 @@ function spreadLimit(board: Board, fire: Fire): number {
   return Math.min(currentContainment(board, fire) ?? FORECAST_MINUTES, FORECAST_MINUTES);
 }
 
-/** Whether `fire` reaches the zone (an edge vertex or its core) within `limit` minutes. */
-function fireReaches(fire: Fire, zone: ZoneState, limit: number): boolean {
-  const reaches = (p: (typeof zone.ring)[number]): boolean => waitMinutes(fire, p, limit) !== null;
-  return pointInRing(fire.origin, zone.ring) || reaches(zone.core) || zone.ring.some(reaches);
-}
 
 function listIds(ids: string[]): string {
   if (ids.length <= MAX_IDS_IN_REASON) return ids.join(", ");
@@ -160,7 +155,7 @@ export function buildObservation(
         crews: o.teams,
         contained_in_min: o.contained_in_min === null ? null : Math.round(o.contained_in_min),
       })),
-      threatens_zone_ids: listed.filter((zone) => fireReaches(fire, zone, limit)).map((zone) => zone.id),
+      threatens_zone_ids: listed.filter((zone) => fireReachesZone(board, fire, zone, limit)).map((zone) => zone.id),
       head_m_per_min: round1(fire.rates.headMetersPerMinute),
       head_flame_ft: round1(fire.rates.headFlameFeet),
       heading_deg: Math.round(fire.rates.headingDegrees),
