@@ -57,6 +57,7 @@ import {
 import { demoScenario } from "./demo";
 import {
   FIREFIGHTING_ON_DEFAULTS_VERSION,
+  HORIZON_24H_DEFAULTS_VERSION,
   DRAFT_STORAGE_KEY,
   clearDraft,
   draftStatusText,
@@ -65,6 +66,7 @@ import {
   saveDraft,
 } from "./draft";
 import {
+  DEFAULT_HORIZON_MINUTES,
   createIgnition,
   emptyScenario,
   parseScenario,
@@ -204,9 +206,15 @@ export default function SimulationStudioPage({
     // A draft saved before firefighting was on by default picks it up once; the autosave then
     // records the new defaults version, so turning it off later sticks.
     // (Version 3, units from the map, needs nothing here: parseScenario already dropped counts.)
-    return initialDraft.defaultsVersion < FIREFIGHTING_ON_DEFAULTS_VERSION
-      ? freshScenario(initialDraft.scenario)
-      : initialDraft.scenario;
+    let next =
+      initialDraft.defaultsVersion < FIREFIGHTING_ON_DEFAULTS_VERSION
+        ? freshScenario(initialDraft.scenario)
+        : initialDraft.scenario;
+    // Drafts still on the old 3 h default move to the 24 h default once.
+    if (initialDraft.defaultsVersion < HORIZON_24H_DEFAULTS_VERSION && next.settings.horizonMinutes === 180) {
+      next = { ...next, settings: { ...next.settings, horizonMinutes: DEFAULT_HORIZON_MINUTES } };
+    }
+    return next;
   });
   const [savedAt, setSavedAt] = useState<Date | null>(initialDraft?.savedAt ?? null);
   const [saveFailed, setSaveFailed] = useState(false);

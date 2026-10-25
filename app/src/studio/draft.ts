@@ -14,7 +14,9 @@ export const DRAFT_STORAGE_KEY = "crisistwin.simulationStudio.draft.v1";
  * draft saved before version 2 gets firefighting turned on once by the page; after that the
  * user's own choice is kept.
  */
-export const DRAFT_DEFAULTS_VERSION = 3;
+export const DRAFT_DEFAULTS_VERSION = 4;
+/** Version 4: default run length went from 3 h to 24 h; older drafts still on 3 h move up once. */
+export const HORIZON_24H_DEFAULTS_VERSION = 4;
 /** Drafts saved before this version get firefighting turned on once (the page's migration). */
 export const FIREFIGHTING_ON_DEFAULTS_VERSION = 2;
 

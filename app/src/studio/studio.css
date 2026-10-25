@@ -104,6 +104,8 @@
   transform: translateX(-50%);
 }
 .studio-view .ui-segmented {
+  flex: none;
+  white-space: nowrap;
   background: var(--ct-surface-glass-strong);
   box-shadow: var(--ct-shadow-md);
 }
@@ -114,11 +116,29 @@
   max-width: calc(100% - 2 * var(--ct-space-3));
 }
 /* Shared-world bar (scenario menu, sync status) beside the view toggle. */
-.studio-world {
-  padding: 4px 10px 4px 4px;
+.wld-bar.studio-world {
+  flex-wrap: nowrap;
+  min-width: 0;
+  max-width: 560px;
+  padding: 4px 12px 4px 4px;
   border-radius: var(--ct-radius-pill);
   background: var(--ct-surface-glass-strong);
   box-shadow: var(--ct-shadow-md);
+  white-space: nowrap;
+}
+/* One line: the sync status shortens with an ellipsis instead of wrapping the pill. */
+.studio-world .wld-bar__status {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.studio-world > * {
+  flex-shrink: 0;
+}
+.studio-world > .wld-bar__status {
+  flex-shrink: 1;
 }
 
 /* 3D diorama view. Scene labels use the scene's own `fdx-` classes; the card, buttons,
