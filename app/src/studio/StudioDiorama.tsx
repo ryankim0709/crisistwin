@@ -120,6 +120,24 @@ function FirelineGlyph({ kind }: { kind: "held" | "breached" | "outrun" }) {
   );
 }
 
+function FlowGlyph() {
+  return (
+    <svg width="24" height="16" viewBox="0 0 24 16" aria-hidden="true">
+      <rect x="1" y="9" width="22" height="5" rx="2" fill="#14b8a6" />
+      <rect x="1" y="3" width="22" height="2" rx="1" fill="#f2a33a" />
+    </svg>
+  );
+}
+
+function GlowGlyph() {
+  return (
+    <svg width="24" height="16" viewBox="0 0 24 16" aria-hidden="true">
+      <circle cx="12" cy="8" r="7" fill="#ffb347" opacity="0.35" />
+      <circle cx="12" cy="8" r="3.5" fill="#ffb347" opacity="0.7" />
+    </svg>
+  );
+}
+
 function HomeGlyph() {
   return (
     <svg width="24" height="16" viewBox="0 0 24 16" aria-hidden="true">
@@ -157,6 +175,8 @@ export interface StudioDioramaProps {
   fireline: FirelineView | null;
   /** Firefighters driving in from fire stations, or null. */
   crews: CrewDispatch | null;
+  /** Wall-clock time of T+0 (epoch ms), for the 3D time readout. */
+  startMs?: number;
   /** Minute each crew leaves the fire to help the evacuation (null = stays); empty = none. */
   crewLeaveMinutes?: readonly (number | null)[];
   /** Shown under the board control. */
@@ -195,6 +215,7 @@ export default function StudioDiorama(props: StudioDioramaProps) {
     onSceneChange,
     fireline,
     crews,
+    startMs,
     crewLeaveMinutes,
   } = props;
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -326,6 +347,9 @@ export default function StudioDiorama(props: StudioDioramaProps) {
   useEffect(() => {
     if (closedEdges) overlay.setClosedEdges(closedEdges);
   }, [overlay, closedEdges]);
+  useEffect(() => {
+    overlay.setStartMs(startMs ?? null);
+  }, [overlay, startMs]);
   useEffect(() => {
     overlay.setEngine(player?.engine ?? null);
   }, [overlay, player, evacArea]);
@@ -465,6 +489,16 @@ export default function StudioDiorama(props: StudioDioramaProps) {
                             color: cssColor(HOME_COLORS[status]),
                             glyph: <RoofGlyph color={cssColor(HOME_COLORS[status])} />,
                           })),
+                          {
+                            label: "Road ribbon: thicker = more people; teal moving, amber slow, red stuck",
+                            color: "#14b8a6",
+                            glyph: <FlowGlyph />,
+                          },
+                          {
+                            label: "Warm glow: people still home, fades as they leave",
+                            color: "#ffb347",
+                            glyph: <GlowGlyph />,
+                          },
                           {
                             label: "Closed road or bridge (labelled), your assumption",
                             color: "var(--ct-ink)",

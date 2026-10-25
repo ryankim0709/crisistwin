@@ -304,6 +304,10 @@ export default function StudioDispatch({
   useEffect(() => {
     overlay.setEngine(sessionActive ? session.engine : null);
   }, [overlay, sessionActive, session.engine, session.version]);
+  const startMsValue = startMsOf(current?.scenario.firefighting ?? DEFAULT_FIREFIGHTING);
+  useEffect(() => {
+    overlay.setStartMs(startMsValue);
+  }, [overlay, startMsValue]);
   useEffect(() => {
     overlay.setSelectedZone(selectedZone);
   }, [overlay, selectedZone]);
