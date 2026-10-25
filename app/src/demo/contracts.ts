@@ -591,7 +591,7 @@ export interface ZoneObservation {
   /**
    * The zone's evacuation order (model.ts zoneOrderStatus): none, scheduled (departures start at
    * start_minute), leaving (in effect since start_minute), done (everyone it sends out has left and
-   * arrived), overrun. Nobody leaves a zone without an order (no self-evacuation on this board).
+   * arrived), overrun. Without an order only self-evacuees leave (self_evacuated, demo/selfEvacuation.ts).
    */
   order: {
     status: "none" | "scheduled" | "leaving" | "done" | "overrun";
@@ -656,6 +656,14 @@ export interface ZoneObservation {
    */
   margin_min: number | null;
   options: ZoneRouteObservation[];
+  /**
+   * Households with their own vehicle that have left on their own cues, no order needed
+   * (self-evacuation, demo/selfEvacuation.ts; included in households_en_route / households_out).
+   * Simulated.
+   */
+  self_evacuated: number;
+  /** Strongest self-evacuation cue so far (fire forecast within 60 min, most neighbours gone, fire in the zone, fire within 500 m of the core); null = none. */
+  self_evac_cue: "fire_approaching" | "neighbours_leaving" | "fire_in_zone" | "fire_near_core" | null;
 }
 
 /**

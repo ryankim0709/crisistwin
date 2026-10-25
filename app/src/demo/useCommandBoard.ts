@@ -59,10 +59,9 @@ import { useParticipants } from "../appint/api";
  * Run modes (runContracts.ts BoardRunMode; the /run page): "ai" (default) is the /live behaviour
  * above. "baseline" is the no-action run: the clock runs without the AI agent (no agent_off
  * pause), the agent is never called, nothing is dispatched (aiOnly) and no orders are taken (the
- * panel actions refuse). Households never leave without an order on this board (model.ts
- * departedExact is 0 while zone.orderedAt is null: no self-evacuation on fire cues, a deliberate
- * model simplification), so a baseline run is a pure fire race: nobody moves, every household is
- * still home when the fire reaches its zone, and fires burn uncontained. `restart(seed)` replays a
+ * panel actions refuse). With no order, only self-evacuees leave (demo/selfEvacuation.ts:
+ * households with their own vehicle on fire and social cues), so a baseline run is a fire race
+ * where people leave only on their own cues, and fires burn uncontained. `restart(seed)` replays a
  * run from T+0 on a given seed with the incident's current Studio fire; the /run page starts each
  * run (baseline and AI) with it so both start identically. `timeline` samples scorePoint.ts once
  * per board minute (at most 2 minutes apart: a baseline or fixed-speed clock advances at most

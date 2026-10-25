@@ -53,9 +53,10 @@
  *   households that need transport. Without a snapshot (or a zone it does not list) the drill
  *   file's households and vehicles and the environment's carless counts are used, and persons
  *   are unknown. Carless households cannot drive out and stay home. Households
- *   with a vehicle leave only on an evacuation order (ORDER_COMPLIANCE of them): this board has
- *   no self-evacuation on the fire cue (a deliberate simplification, docs/command-demo-realism.md),
- *   so who leaves when is the commander's call. An order leaves now or is scheduled for a later
+ *   with their own vehicle also leave on their own fire and social cues, with no order
+ *   (self-evacuation, demo/selfEvacuation.ts: shadow evacuation, sourced shares per cue); an
+ *   evacuation order sends ORDER_COMPLIANCE of the households with a vehicle in total, the rest
+ *   on the order's curve. An order leaves now or is scheduled for a later
  *   board minute (ZoneState.pendingOrder), so zones can be staged instead of all loading the
  *   roads at once. From the minute an order takes effect each household has an exponential departure
  *   delay of mean DEPARTURE_MEAN_MINUTES (Camp, Grajdura 2022), then drives the order's route,
@@ -100,6 +101,16 @@ import { applyStrategyOrder, commanderTactic, type SetStrategyOrder } from "./st
 import { onRescue, stepInjuries } from "./injuries";
 import { uniform } from "../response/rng";
 import { createSimComms, stepSimComms } from "./simComms";
+import {
+  departedHouseholds,
+  firstSelfCue,
+  householdsLeaving,
+  peakHouseholdsPerMinute,
+  selfEvacKey,
+  selfEvacuating,
+  stepSelfEvacuation,
+  type SelfEvacZone,
+} from "./selfEvacuation";
 import type { SimCommsState } from "./runContracts";
 import { engineCrewHandLineMPerMin, type WorkMode, type WorkPlan } from "../response/reach";
 import { AVAILABILITY_DRAW_EVERY_MINUTES, ENGINE_WATER_USE_GPM, OUT_OF_SERVICE_MINUTES, OUT_OF_SERVICE_PROBABILITY, TANK_GALLONS } from "../response/units";
@@ -184,7 +195,6 @@ import {
   ORDER_COMPLIANCE,
   ROSTER,
   SNAPSHOT_ENGINE_KIND,
-  departedShare,
   accessClassOf,
   holdsFlameFeet,
   kindShort,
@@ -469,6 +479,8 @@ export interface ZoneState {
   vehicles: number;
   /** Departed cohorts and their congested arrivals (traffic.ts). */
   trips: Trips;
+  /** Self-evacuation on the zone's own cues (demo/selfEvacuation.ts); absent until its first cue. */
+  selfEvac?: SelfEvacZone;
 }
 
 /** An evacuation order scheduled for a later board minute (order_evacuation with start_minute). */
@@ -651,8 +663,10 @@ export type BoardEventAction =
   | "evacuation_cancelled"
   /** A scheduled order's start minute arrived: departures begin (logged by the board). */
   | "evacuation_started"
-  /** Fire first touched a zone with no order in effect (refs.startMinute when one is scheduled). Nobody leaves without an order. */
+  /** Fire first touched a zone with no order in effect (refs.startMinute when one is scheduled). Only self-evacuees leave without an order. */
   | "zone_reached_no_order"
+  /** Households of a zone with no order in effect decided to leave on their own cue (demo/selfEvacuation.ts). */
+  | "self_evacuation"
   | "zone_overrun"
   | "zone_reopened"
   | "contained"
@@ -3326,9 +3340,10 @@ export function withVehicle(zone: ZoneState): number {
 }
 
 /**
- * Households with a vehicle that have left by `minute`: the ordered share (ORDER_COMPLIANCE)
- * times the exponential departure curve since the order took effect (zone.orderedAt; a scheduled
- * order counts from its start minute). Nobody leaves without an order. Frozen at overrun.
+ * Households with a vehicle that have left by `minute`: the self-evacuees on their own cues
+ * (demo/selfEvacuation.ts) plus the order's share (ORDER_COMPLIANCE in total) on the exponential
+ * departure curve since the order took effect (zone.orderedAt; a scheduled order counts from its
+ * start minute). Frozen at overrun.
  */
 export function departed(zone: ZoneState, minute: number): number {
   return Math.floor(departedExact(zone, minute));
@@ -3336,9 +3351,7 @@ export function departed(zone: ZoneState, minute: number): number {
 
 /** departed() before rounding down: the departure curve itself (for traffic flows). */
 function departedExact(zone: ZoneState, minute: number): number {
-  const end = zone.overrunAt !== null ? Math.min(minute, zone.overrunAt) : minute;
-  const ordered = zone.orderedAt === null ? 0 : ORDER_COMPLIANCE * departedShare(end - zone.orderedAt);
-  return withVehicle(zone) * ordered;
+  return departedHouseholds(zone, minute);
 }
 
 export interface ZoneCounts {
@@ -3424,9 +3437,9 @@ function caughtPeopleAt(zone: ZoneState, minute: number): number | null {
 
 // ---- evacuation traffic (demo/traffic.ts) ----
 
-/** The route a zone's households are leaving on: the order in effect's (null without one; a scheduled order's route is not in use yet). */
+/** The route a zone's households are leaving on: the order in effect's or the self-evacuees' (null without either; a scheduled order's route is not in use yet). */
 export function activeRoute(zone: ZoneState): RouteOption | null {
-  return zone.orderedAt === null ? null : zone.route;
+  return zone.orderedAt === null && !selfEvacuating(zone) ? null : zone.route;
 }
 
 /**
@@ -3444,8 +3457,8 @@ export function vehiclesPerHousehold(zone: ZoneState): number {
 
 /** Households with a vehicle the model will still send out after `minute` (0 once overrun). */
 function stillToLeave(zone: ZoneState, minute: number): number {
-  if (zone.overrunAt !== null || zone.orderedAt === null) return 0;
-  return Math.max(0, withVehicle(zone) * ORDER_COMPLIANCE - departedExact(zone, minute));
+  if (zone.overrunAt !== null || (zone.orderedAt === null && !selfEvacuating(zone))) return 0;
+  return Math.max(0, householdsLeaving(zone) - departedExact(zone, minute));
 }
 
 /**
@@ -3492,7 +3505,7 @@ function evacuationTrafficStep(board: Board, m: number): void {
 
 /** Highest departure rate a zone's curve reaches (at the order's start), vehicles per minute; 0 with no order in effect. */
 function peakDepartureRate(zone: ZoneState): number {
-  return zone.orderedAt === null ? 0 : orderPeakVehiclesPerMinute(zone);
+  return peakHouseholdsPerMinute(zone) * vehiclesPerHousehold(zone);
 }
 
 /**
@@ -3526,7 +3539,7 @@ function segmentQueues(
     if (!s) continue;
     const perMinute = s.capacity_veh_h / 60;
     if (zones.reduce((sum, z) => sum + peakDepartureRate(z), 0) <= perMinute) continue;
-    const key = zones.map((z) => `${z.id}@${z.orderedAt}:${z.overrunAt}`).join("|");
+    const key = zones.map((z) => `${z.id}@${z.orderedAt}:${z.overrunAt}:${selfEvacKey(z)}`).join("|");
     const hit = board.traffic.queueCache.get(id);
     let t: number;
     let q: number;
@@ -3534,7 +3547,7 @@ function segmentQueues(
       t = hit.t;
       q = hit.q;
     } else {
-      const cues = zones.flatMap((z) => (z.orderedAt === null ? [] : [z.orderedAt]));
+      const cues = zones.flatMap((z) => [z.orderedAt, firstSelfCue(z)].filter((c): c is number => c !== null));
       t = Math.floor(Math.min(m, ...cues));
       q = 0;
     }
@@ -3784,6 +3797,7 @@ function reopenZones(board: Board): void {
     zone.orderedAt = zone.overrunAt = zone.touchedAt = zone.knownTouchedAt = zone.lastFireAt = null;
     zone.route = null;
     zone.pendingOrder = null;
+    zone.selfEvac = undefined;
     zone.caught = 0;
     zone.caughtPeople = zone.occupants === null ? null : 0;
     zone.trips = emptyTrips();
@@ -3980,8 +3994,8 @@ function stepOnce(board: Board, dt: number, landOn: number | null): void {
     if (knownAt <= board.minute) {
       const firstKnown = zone.knownTouchedAt === null;
       zone.knownTouchedAt ??= knownAt;
-      // Fire at a zone with no order in effect: nobody leaves on their own on this board (no
-      // self-evacuation); the log flags it for the commander, once a reported fire is there
+      // Fire at a zone with no order in effect: only self-evacuees leave (demo/selfEvacuation.ts);
+      // the log flags it for the commander, once a reported fire is there
       // (an unreported fire touching it is not logged: report rule, boardResponse.ts).
       if (firstKnown && zone.orderedAt === null && zone.overrunAt === null) {
         const pending = zone.pendingOrder;
@@ -3991,7 +4005,7 @@ function stepOnce(board: Board, dt: number, landOn: number | null): void {
           "board",
           pending
             ? `Fire reached ${zone.name} before its scheduled evacuation (${simClock(pending.startMinute)}): households are still home.`
-            : `Fire reached ${zone.name} with no evacuation order: households stay home until ordered out.`,
+            : `Fire reached ${zone.name} with no evacuation order: only households leaving on their own cues are going.`,
           {
             action: "zone_reached_no_order",
             zoneId: zone.id,
@@ -4030,6 +4044,10 @@ function stepOnce(board: Board, dt: number, landOn: number | null): void {
   }
 
   if (wholeMinute) {
+    // Self-evacuation on fire and social cues (demo/selfEvacuation.ts), before the minute's traffic.
+    stepSelfEvacuation(board, Math.floor(board.minute + 1e-9), departedExact, (zone, text, households) =>
+      log(board, "zone", "board", text, { action: "self_evacuation", zoneId: zone.id, households }),
+    );
     evacuationTrafficStep(board, Math.floor(board.minute + 1e-9));
     reopenZones(board);
     // Simulated communications for the minute just finished (demo/simComms.ts).
@@ -4112,7 +4130,7 @@ function reportBoardInvariants(board: Board): void {
  *   carless households home are at most the households home;
  * - persons (where known): home + on the road + out + caught = the zone's persons, all non-negative;
  * - a scheduled evacuation (pendingOrder) is never held by a zone already leaving or overrun, and
- *   nobody leaves a zone with no order in effect (no self-evacuation).
+ *   nobody leaves a zone with no order in effect unless it self-evacuates (demo/selfEvacuation.ts).
  */
 export function checkBoardInvariants(board: Board): string[] {
   const problems: string[] = [];
@@ -4157,7 +4175,7 @@ export function checkBoardInvariants(board: Board): string[] {
     if (left + zone.caught > zone.households) problems.push(`${zone.id}: ${left} left + ${zone.caught} caught > ${zone.households} households`);
     if (c.noVehicleHome > c.home) problems.push(`${zone.id}: ${c.noVehicleHome} carless home > ${c.home} home`);
     if (zone.pendingOrder && (zone.orderedAt !== null || zone.overrunAt !== null)) problems.push(`${zone.id}: scheduled evacuation on a zone already leaving or overrun`);
-    if (zone.orderedAt === null && left > 0) problems.push(`${zone.id}: ${left} households left with no order in effect`);
+    if (zone.orderedAt === null && !selfEvacuating(zone) && left > 0) problems.push(`${zone.id}: ${left} households left with no order in effect`);
     const p = zonePeople(zone, board.minute);
     if (p.total !== null) {
       const parts = [p.home!, p.enRoute!, p.out!, p.caught!];

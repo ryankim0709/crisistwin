@@ -466,7 +466,7 @@ function ZoneDetail({
       <p className="dm-note">
         After an order {Math.round(ORDER_COMPLIANCE * 100)}% of households with a vehicle leave, after{" "}
         {DEPARTURE_SPREAD_MINUTES} min on average from the order's start (now, or the minute it was scheduled
-        for); with no order nobody leaves (this board has no self-evacuation). Households without a vehicle stay. Those still home when fire reaches the zone core are caught.
+        for); with no order only households with their own vehicle leave, on their own fire and social cues (simulated self-evacuation). Households without a vehicle stay. Those still home when fire reaches the zone core are caught.
         Travel times are simulated traffic: zones sharing a road slow each other (BPR volume-delay on assumed road
         capacities); margin = fire at core − ({DEPARTURE_SPREAD_MINUTES} min departure + bottleneck clearance + time in
         traffic).

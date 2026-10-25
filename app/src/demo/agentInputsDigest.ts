@@ -328,6 +328,7 @@ function zoneRows(obs: DemoObservation, prev: DemoObservation | null): DigestRow
       order.text + (destName && (z.order.status === "scheduled" || z.order.status === "leaving") ? ` to ${destName}` : ""),
       z.households_no_vehicle_home > 0 ? `${plural(z.households_no_vehicle_home, "household")} without a car still home` : null,
       z.households_en_route > 0 ? `${plural(z.households_en_route, "household")} on the road` : null,
+      z.self_evacuated > 0 ? `${plural(z.self_evacuated, "household")} left on their own (no order)` : null,
     ];
     let delta: Delta | null = null;
     if (prev) {
