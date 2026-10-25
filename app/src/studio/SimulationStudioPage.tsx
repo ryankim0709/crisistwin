@@ -37,7 +37,7 @@ import { DEFAULT_FIREFIGHTING, startMsOf } from "./firefighting";
 import StudioPeople from "./StudioPeople";
 import {
   behaviorLabel,
-  householdDepartureDelays,
+  householdBehavior as drawHouseholdBehavior,
   type HouseholdBehaviorMode,
 } from "../population/householdBehavior";
 import { useSuppressionBases } from "./suppressionBases";
@@ -81,6 +81,7 @@ import {
 import { Button, LoadingState, Notice, Panel, SegmentedControl, type SegmentedOption } from "../ui";
 import { downloadJson, frameIndexAt } from "./playbackUtils";
 import { useStudioRun } from "./useStudioRun";
+import { fireReportMinutes } from "./fireKnowledge";
 import {
   STUDIO_DEFAULT_REGION_ID,
   findRegion,
@@ -145,6 +146,12 @@ export interface StudioAsideContext {
   map: MapLibreMap | null;
   /** A slot above the playback bar for the aside's strip (its people summary); portal into it. */
   dock: HTMLElement | null;
+  /**
+   * How households respond (population/householdBehavior.ts): one setting for the page, so the
+   * aside's session and the studio's evacuation numbers use the same behaviour.
+   */
+  householdBehavior: HouseholdBehaviorMode;
+  setHouseholdBehavior: (mode: HouseholdBehaviorMode) => void;
 }
 /** Gap kept between the floating panel and the framed 3D board, CSS px. */
 const DIORAMA_PANEL_GAP_PX = 12;
@@ -957,12 +964,25 @@ export default function SimulationStudioPage({
               shownHandoff && result.crewDispatch
                 ? evacuationCrews(area, result.crewDispatch, shownHandoff)
                 : undefined,
-            ...(studioDefaults && householdBehavior === "grounded"
-              ? { departureDelays: householdDepartureDelays(area) }
+            // Same behaviour on /simulation and /dispatch (the page's one setting).
+            ...(householdBehavior === "grounded"
+              ? { departureDelays: drawHouseholdBehavior(area) }
               : {}),
+            // The policy acts only on reported fires (studio/fireKnowledge.ts).
+            fireKnowledge: {
+              grid: result.landscape,
+              arrivalMinutes: shownRun!.arrivalMinutes,
+              sourceIndexByCell: shownRun!.sourceIndexByCell,
+              reportMinutes: fireReportMinutes(
+                shownRun!,
+                result.landscape,
+                result.scenario.firefighting ?? DEFAULT_FIREFIGHTING,
+              ),
+            },
+            startEpochMs: startMsOf(result.scenario.firefighting ?? DEFAULT_FIREFIGHTING),
           }
         : null,
-    [area, exposure, result, closedEdges, orderMinute, shownHandoff, studioDefaults, householdBehavior],
+    [area, exposure, result, shownRun, closedEdges, orderMinute, shownHandoff, householdBehavior],
   );
   const [publishOn, setPublishOn] = useState(false);
   // The evacuation plays on both views; the /dispatch page draws its own.
@@ -1718,6 +1738,8 @@ export default function SimulationStudioPage({
           groundClickRef={asideClickRef}
           map={view === "map" ? studioMap : null}
           dock={asideDock}
+          householdBehavior={householdBehavior}
+          setHouseholdBehavior={setHouseholdBehavior}
         />
       )}
     </main>

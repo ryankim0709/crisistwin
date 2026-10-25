@@ -16,6 +16,7 @@
  * See docs/adr/0026-live-dispatch-clock.md.
  */
 
+import type { HouseholdBehavior } from "../population/householdBehavior";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { DispatchArea } from "./area";
 import { DecisionError, reportOutcome, requestDecision } from "./agentClient";
@@ -123,11 +124,13 @@ export interface SessionInputs {
    */
   apparatus?: DispatchApparatus | null;
   /**
-   * Per-household minutes from the zone's order to leaving home, Infinity for a household that
-   * stays (population/householdBehavior.ts); the engine's uniform 45 min spread when omitted. It
-   * changes departures, so it changes what the agent sees and the run's outcome.
+   * Per-household behaviour (population/householdBehavior.ts: order and fire-cue delays,
+   * staying by choice); the engine's uniform 45 min spread when omitted. It changes
+   * departures, so it changes what the agent sees and the run's outcome.
    */
-  departureDelays?: Float32Array | null;
+  departureDelays?: HouseholdBehavior | null;
+  /** T+0 as UTC epoch ms: households asleep at their first trigger wake first. */
+  startEpochMs?: number | null;
 }
 
 export interface DispatchSession {
@@ -499,7 +502,8 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
         inputs.closedEdges,
       );
       engine.restrictToFirePath = true;
-      if (inputs.departureDelays) engine.setDepartureDelays(inputs.departureDelays);
+      if (inputs.departureDelays) engine.setHouseholdBehavior(inputs.departureDelays);
+      engine.setClock(inputs.startEpochMs ?? null);
       if (inputs.apparatus) {
         engine.setApparatusAccess(inputs.apparatus.access, inputs.apparatus.kinds, inputs.apparatus.notes);
       }
