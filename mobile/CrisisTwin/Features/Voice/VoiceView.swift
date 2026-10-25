@@ -25,10 +25,16 @@ struct VoiceView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
-                        if agent.turns.isEmpty && agent.errorMessage == nil { emptyState }
+                        if let reason = agent.onDeviceReason { onDeviceCard(reason) }
+                        if agent.turns.isEmpty && agent.errorMessage == nil && agent.phase != .listening { emptyState }
                         ForEach(agent.turns) { turn in
-                            TurnView(turn: turn)
+                            TurnView(
+                                turn: turn,
+                                canUndo: agent.canUndo(turn),
+                                busy: agent.isBusy,
+                                onUndo: { agent.undoLastReport() })
                         }
+                        if agent.phase == .listening { captionBubble }
                         if let action = agent.pending { pendingCard(action) }
                         if let message = agent.errorMessage { errorCard(message) }
                         if agent.audio.permission == .denied { deniedCard }
@@ -43,6 +49,9 @@ struct VoiceView: View {
                 .onChange(of: agent.turns.count) { scrollDown(proxy) }
                 .onChange(of: agent.pending) { scrollDown(proxy) }
                 .onChange(of: agent.errorMessage) { scrollDown(proxy) }
+                .onChange(of: agent.phase) { scrollDown(proxy) }
+                .onChange(of: agent.caption) { scrollDown(proxy) }
+                .onChange(of: agent.turns.last?.reply) { scrollDown(proxy) }
             }
             .safeAreaInset(edge: .bottom, spacing: 0) { controls }
             .ctScreenBackground()
@@ -57,7 +66,11 @@ struct VoiceView: View {
         .presentationBackground(Color.ctBackground)
         .sensoryFeedback(.selection, trigger: agent.phase)
         .onAppear { agent.attach(store: store, location: location, router: router) }
+        .task { await agent.prepare() }
         .onDisappear { agent.stop() }
+        .onChange(of: agent.onDeviceReason != nil) { _, onDevice in
+            if onDevice { typing = true }
+        }
         .onChange(of: agent.phase) { _, phase in
             if phase == .listening { AccessibilityNotification.Announcement("Listening").post() }
         }
@@ -100,11 +113,46 @@ struct VoiceView: View {
     }
 
     private var footer: some View {
-        Text("Drill assistant. Your voice is sent to the CrisisTwin server and transcribed by Cartesia; nothing is saved. If you are in danger, call 911.")
+        Text(footerText)
             .font(.footnote)
             .foregroundStyle(Color.ctInkMuted)
             .fixedSize(horizontal: false, vertical: true)
             .padding(.top, 4)
+    }
+
+    private var footerText: String {
+        if agent.onDeviceReason != nil {
+            return "Drill assistant. Your typed words go to the CrisisTwin server; replies are read aloud by this phone. Nothing is saved. If you are in danger, call 911."
+        }
+        return "Drill assistant. While you talk, your voice is streamed to Cartesia to be transcribed, and Cartesia speaks the reply; the words go to the CrisisTwin server. Nothing is saved. If you are in danger, call 911."
+    }
+
+    /// What the assistant is hearing right now, word by word.
+    private var captionBubble: some View {
+        let words = agent.caption.trimmingCharacters(in: .whitespacesAndNewlines)
+        return Text(words.isEmpty ? "Listening\u{2026}" : words)
+            .font(.body)
+            .foregroundStyle(words.isEmpty ? Color.ctInkMuted : Color.ctInk)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(Color.ctBrandSoft, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .accessibilityLabel(words.isEmpty ? "Listening" : "Hearing: \(words)")
+    }
+
+    private func onDeviceCard(_ reason: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label("Using on-device voice", systemImage: "iphone")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Color.ctInk)
+            Text("\(reason) You can type, and replies are read aloud by this phone.")
+                .font(.footnote)
+                .foregroundStyle(Color.ctInkMuted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityElement(children: .combine)
+        .ctPanel()
     }
 
     private func errorCard(_ message: String) -> some View {
@@ -238,7 +286,7 @@ struct VoiceView: View {
     }
 
     private func proposalButtons(canEdit: Bool) -> some View {
-        let busy = agent.phase == .thinking
+        let busy = agent.isBusy
         return ViewThatFits(in: .horizontal) {
             HStack(spacing: 8) { buttons(canEdit: canEdit, busy: busy) }
             VStack(spacing: 8) { buttons(canEdit: canEdit, busy: busy) }
@@ -316,19 +364,21 @@ struct VoiceView: View {
 
     private var statusWords: String {
         switch agent.phase {
-        case .idle: return agent.audio.permission == .denied ? "Microphone is off" : "Tap to talk"
+        case .idle:
+            if !agent.canListen { return "Voice input is off. Type instead." }
+            return agent.audio.permission == .denied ? "Microphone is off" : "Tap to talk"
         case .listening: return "Listening. Tap to send."
         case .thinking: return "Thinking"
-        case .speaking: return "Speaking. Tap to stop."
+        case .speaking: return agent.canListen ? "Speaking. Tap to interrupt and talk." : "Speaking. Tap to stop."
         }
     }
 
     private var micLabel: String {
         switch agent.phase {
-        case .idle: return "Talk"
+        case .idle: return agent.canListen ? "Talk" : "Talk, unavailable"
         case .listening: return "Stop listening and send"
         case .thinking: return "Thinking"
-        case .speaking: return "Stop speaking"
+        case .speaking: return agent.canListen ? "Stop speaking and talk" : "Stop speaking"
         }
     }
 
@@ -367,7 +417,7 @@ struct VoiceView: View {
             }
         }
         .frame(width: Self.micSize * 1.5, height: Self.micSize * 1.2)
-        .disabled(agent.audio.permission == .denied || agent.phase == .thinking)
+        .disabled(agent.phase == .thinking || (agent.phase == .idle && (agent.audio.permission == .denied || !agent.canListen)))
         .accessibilityLabel(micLabel)
         .accessibilityValue(statusWords)
     }
@@ -411,7 +461,7 @@ struct VoiceView: View {
     }
 
     private var canSendTyped: Bool {
-        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && agent.phase != .thinking
+        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !agent.isBusy
     }
 
     private func sendTyped() {
@@ -425,6 +475,9 @@ struct VoiceView: View {
 /// phone did.
 private struct TurnView: View {
     let turn: VoiceTurnLog
+    var canUndo = false
+    var busy = false
+    var onUndo: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -446,6 +499,12 @@ private struct TurnView: View {
                         .font(.body)
                         .foregroundStyle(Color.ctInk)
                         .fixedSize(horizontal: false, vertical: true)
+                    if let attribution = turn.attribution {
+                        Text(attribution)
+                            .font(.caption)
+                            .foregroundStyle(Color.ctInkMuted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
@@ -453,13 +512,23 @@ private struct TurnView: View {
                 .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.ctBorder))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityElement(children: .combine)
-                .accessibilityLabel("AI assistant says: \(turn.reply)")
+                .accessibilityLabel(
+                    ["AI assistant says: \(turn.reply)", turn.attributionSpoken].compactMap { $0 }.joined(separator: ". "))
             }
             if let result = turn.result {
                 Label(result, systemImage: turn.failed ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(turn.failed ? Color.ctWarning : Color.ctSuccess)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            if canUndo {
+                Button(action: onUndo) {
+                    Label("Undo", systemImage: "arrow.uturn.backward")
+                }
+                .buttonStyle(CTPillButtonStyle(prominent: false))
+                .disabled(busy)
+                .accessibilityLabel("Undo")
+                .accessibilityHint("Takes back the report the assistant just filed")
             }
             if turn.showsEmergencyLine {
                 Label("If you are in danger, call 911.", systemImage: "phone.fill")

@@ -127,14 +127,7 @@ docker exec crisistwin-backend-1 python manage.py live_init_db          # collec
 docker exec crisistwin-backend-1 python manage.py live_seed_snapshots   # Camp, Berkeley Hills, Palisades
 ```
 
-For the phone's voice mode (`POST /api/live/incidents/{id}/voice`), Cartesia is the speech
-provider (speech-to-text and text-to-speech; paid, server-side only). Set `CARTESIA_API_KEY`
-alongside `ANTHROPIC_API_KEY` (optionally `CARTESIA_VOICE_ID`, `CARTESIA_TTS_MODEL`,
-`VOICE_MODEL`) in the backend environment, for example
-`export CARTESIA_API_KEY=... ANTHROPIC_API_KEY=...` before `docker compose up`. Without
-`CARTESIA_API_KEY` recorded audio answers 503 and typed `text` turns work without speech. Contract:
-[docs/live-reports.md](docs/live-reports.md#voice-mode); a curl example is in
-[`app/backend/README.md`](app/backend/README.md#voice-mode-post-apiliveincidentsidvoice).
+For the phone's voice mode, see [Voice mode (Cartesia)](#voice-mode-cartesia) below.
 The `/fire` page needs internet access (LANDFIRE, terrain tiles, NWS) and works in the contiguous US only.
 
 Stack: Node 22.12+ with npm, Python 3.12, React 19, TypeScript 5.8, Vite 7, Tailwind CSS 4, Django 5.2,
@@ -168,6 +161,67 @@ Select the **CrisisTwin** scheme and an iOS 26 simulator (Xcode 26), then Produc
 `http://localhost:8000/api/health`, so start the Docker stack for the readiness card. Details:
 [mobile/README.md](mobile/README.md). Mobile builds and tests have not been run in this repository's
 checks.
+
+### Voice mode (Cartesia)
+
+The phone can be talked to: a person reports a blocked road or checks in by voice, asks what to do
+from the published guidance, and in Drive mode hears guidance changes read aloud. Claude only
+interprets what was said and proposes one action; the phone asks before it sends anything, and the
+model computes no route, time or hazard. Cartesia supplies the speech:
+
+- Speech-to-text: `ink-2` streamed over a WebSocket, so the screen shows live captions while the
+  person talks. Up to 10 `keyterm` boosts come from the incident's own road and exit names, so
+  "Pentz Road" is not heard as "Pence Road".
+- Text-to-speech: Sonic (`sonic-3.6`) streamed over a WebSocket. Reply text is sent in continuations
+  as the model writes it, so audio starts before the reply is finished. Guidance announcements in
+  Drive mode use the `calm` emotion and a slightly lower speed.
+- Short-lived access tokens: the server mints a 300 s token with only speech-to-text and
+  text-to-speech grants (`POST /api/live/incidents/{id}/voice/token`), so the phone talks to Cartesia
+  directly and the `CARTESIA_API_KEY` stays on the server.
+- The batch `/stt` and `/tts/bytes` endpoints remain as the non-streaming path (a recorded WAV in,
+  a WAV reply out).
+
+Jev makes the agent act on its own. For each utterance the server first asks TypeSafe's Jev model
+typed questions (what kind of request, which report kind, is it first-hand and here) and gets
+calibrated probabilities back. A confident first-hand hazard report (a blocked road, fire, smoke,
+traffic, a downed line, a full shelter) is filed by the phone without asking, and the person can say
+"undo" or tap Undo within 5 minutes. Everything else is confirmed first: `help_needed` reports and
+every check-in are never filed automatically, and questions and uncertain turns go to Claude, which
+also handles every turn when `TYPESAFE_API_KEY` is unset. Jev's replies are fixed templates. Jev is
+optional and paid; the thresholds and the contract are in
+[docs/live-reports.md](docs/live-reports.md#decisions-jev). This path has not been run on a device.
+
+Measured on the local stack, the first reply text arrives about 3.2 s after the transcript is posted
+and the whole reply about 3.7 s, against about 6.8 s without streaming. Those figures cover the model
+call only; they were not timed on a phone.
+
+Setup. Put `CARTESIA_API_KEY` (and `ANTHROPIC_API_KEY`) in the ignored `app/.env`, optionally
+`CARTESIA_VOICE_ID`, `CARTESIA_TTS_MODEL`, `VOICE_MODEL`, `TYPESAFE_API_KEY` and `JEV_MODEL`, then:
+
+```sh
+cd app && docker compose up -d backend
+```
+
+Both services are paid usage. Without the keys the token endpoint answers 503 `voice_unavailable`
+and the phone falls back to typed input and on-device speech. The wire contract is in
+[docs/live-reports.md](docs/live-reports.md#voice-mode) and
+[streaming voice](docs/live-reports.md#streaming-voice-token-endpoint-and-ndjson-replies); curl
+examples are in [`app/backend/README.md`](app/backend/README.md#voice-mode-post-apiliveincidentsidvoice);
+the phone side is in [mobile/README.md](mobile/README.md#voice).
+
+Known limitations:
+
+- English only.
+- A report's location is the phone's GPS position, even when the person names another place.
+  Reports Jev files automatically are pinned the same way, and the person only learns of a wrong
+  place by looking at the report or saying undo.
+- The Jev confidence thresholds are not calibrated on labelled data, so how often it files wrongly
+  or asks needlessly is unknown.
+- Speech-to-text and text-to-speech need a network signal. Typed input and on-device speech are
+  the fallback.
+- Barge-in (talking over a reply) on the speakerphone depends on Apple's echo cancellation.
+- The backend streaming path was timed on the local stack. The iOS voice and Drive mode have not been built or run
+  on a simulator or a physical device yet.
 
 ### Multi-phone drill
 

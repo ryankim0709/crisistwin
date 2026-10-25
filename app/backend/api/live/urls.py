@@ -19,6 +19,7 @@ urlpatterns = [
     path("incidents/<str:incident_id>/situation", views.situation, name="live-situation"),
     path("incidents/<str:incident_id>/checkins", views.checkins, name="live-checkins"),
     path("incidents/<str:incident_id>/voice", voice.voice_turn, name="live-voice"),
+    path("incidents/<str:incident_id>/voice/token", voice.voice_token, name="live-voice-token"),
     path("incidents/<str:incident_id>/command", views.command, name="live-command"),
     path("incidents/<str:incident_id>/events", events.incident_events, name="live-events"),
     path("incidents/<str:incident_id>/replan", views.replan, name="live-replan"),

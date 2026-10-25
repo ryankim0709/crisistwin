@@ -1375,20 +1375,29 @@ corroborate `road_passable` and `slow` states. Public items and road state add `
 ## Voice mode
 
 `POST incidents/{id}/voice` is one turn of the phone's voice mode: the person speaks (or the phone
-sends typed `text`), the server transcribes it, Claude turns it into a short spoken reply and at
-most one proposed phone action, and the server speaks the reply back. Code:
-`app/backend/api/live/voice.py` (endpoint, validation, prompt) and `app/backend/api/cartesia.py`
+sends typed `text`), the server transcribes it, a short spoken reply and at most one phone action
+are chosen, and the server speaks the reply back. Jev (TypeSafe) decides first when it is
+configured and sure; Claude writes the reply and picks the action otherwise ([Decisions
+(Jev)](#decisions-jev)). There are two paths. The
+batch path (this section down to "What leaves the phone") sends a recording or text and returns
+one JSON answer, with the speech as a WAV. The streaming path ([Streaming voice](#streaming-voice-token-endpoint-and-ndjson-replies))
+has the phone talk to Cartesia's WebSockets itself with a short-lived token, and posts only the
+transcript here with `"stream": true` to get the reply as NDJSON while the model writes it. Code:
+`app/backend/api/live/voice.py` (endpoints, validation, prompt) and `app/backend/api/cartesia.py`
 (Cartesia speech adapter). Auth is any live bearer token (civilian, responder or controller; the
 usual incident check applies). The limit is 12 turns per minute per device (`voice:{party_key}`,
 fixed window, counted per server process), after the body has been checked, so an invalid request
-does not use a turn; over it, `429 { "error": "rate_limited" }`.
+does not use a turn; over it, `429 { "error": "rate_limited" }`. Streaming turns count against the
+same limit.
 
 Responsibilities are split the same way as the rest of the live API. The model only interprets
 what was said and answers from the guidance text the phone already shows; it computes no route,
 time, distance or hazard, and the prompt forbids inventing them. The server validates every
 parameter the model returns (below). The phone proposes the action out loud, waits for a yes, and
 only then sends the report or check-in through the ordinary `POST incidents/{id}/reports` and
-`POST incidents/{id}/checkins` calls. The voice endpoint itself writes no report and no check-in.
+`POST incidents/{id}/checkins` calls. The one exception is a report Jev marks `auto`, which the
+phone files at once and the person can take back ([Decisions (Jev)](#decisions-jev)). The voice
+endpoint itself writes no report and no check-in.
 The reply is labeled `evidence_class: "ai_interpretation"` and is never observed data.
 
 Limits: request body 1,500,000 bytes (else `413 too_large`), decoded WAV 1,000,000 bytes (about
@@ -1427,7 +1436,10 @@ Response `200`:
   "audio_b64": "<base64 24 kHz 16-bit mono WAV>",    // null when no audio was produced
   "audio_format": "wav",                              // null with audio_b64
   "tts": "cartesia",                                  // cartesia | failed | skipped
-  "model": "claude-opus-5-5",                         // null when nothing was heard
+  "model": "claude-opus-5-5",                         // null when nothing was heard; Jev's model id when Jev decided
+  "decided_by": "claude",                             // jev | claude | null (null when nothing was heard)
+  "auto": false,                                      // true only for a report the phone may file without asking
+  "confidence": null,                                 // Jev's probability (0-1, 3 decimals) when decided_by is jev; else null
   "evidence_class": "ai_interpretation" }
 ```
 
@@ -1440,6 +1452,7 @@ Response `200`:
 | `check_in` | `status`: `out`, `need_help` or `staying` | Asks, then calls `POST incidents/{id}/checkins` |
 | `open` | `screen`: `home`, `map`, `route` (starts directions on the published route), `reports` or `plan` | Shows that screen |
 | `confirm`, `cancel` | none | Answers the `pending` proposal; the server returns them only when `pending` was sent |
+| `undo` | none | Take back the report the phone just sent. The server does not check that there is one; the phone does ([Decisions (Jev)](#decisions-jev)) |
 
 `report` and `check_in` are proposals. Nothing is sent until the person says yes, so the phone
 holds the proposal as `pending` and sends it back on the next turn; "yes" then comes back as
@@ -1450,7 +1463,8 @@ the model returns a fixed apology that includes the 911 line, with `action: null
 
 Help actions. When the action is a `help_needed` report or a `need_help` check-in, or a `confirm`
 of one, the server appends "If you are in danger, call 911." to the reply unless it already says
-911. This is a drill and the voice reply never says that anyone has been alerted.
+911. This is a drill and the voice reply never says that anyone has been alerted. The rule applies
+the same way to a Jev decision, whose fixed templates do not contain "911".
 
 Speech. The reply is spoken by Cartesia `sonic-3.6` (the first 600 characters), as a 24 kHz WAV.
 `tts` is `skipped` when `speak` is false or `CARTESIA_API_KEY` is unset, and `failed` when Cartesia
@@ -1472,18 +1486,289 @@ Errors, always `{ "error": code, "detail": "..." }`:
 | 503 | `voice_unavailable` | `ANTHROPIC_API_KEY` is unset, or `CARTESIA_API_KEY` is unset for an audio turn, or a provider rejected its key |
 | 504 | `upstream_timeout` | Anthropic did not answer in 30 s (one retry) |
 
-What leaves the phone. For a spoken turn, the recording goes through this server to Cartesia for
-transcription. The transcript and the context (zone name, the guidance text above, the pending
+What leaves the phone on the batch path. For a spoken turn, the recording goes through this server
+to Cartesia for transcription. The transcript and the context (zone name, the guidance text above, the pending
 proposal, the last 6 turns) go to Anthropic, and the reply text goes to Cartesia for speech.
 Coordinates are not part of the request: the location of a report is attached on the phone when
 the report is sent, after the person agrees, and a `need_help` check-in carries its coordinates as
 described under [Check-ins](#check-ins). The server stores no audio, transcript, reply or context
-from a turn and logs only provider error codes. This document does not state how long Cartesia or
-Anthropic keep what they receive; that was not checked.
+from a turn and logs only provider error codes. When `TYPESAFE_API_KEY` is set, a smaller state also
+goes to TypeSafe on every turn (see [Decisions (Jev)](#decisions-jev)). This document does not state
+how long Cartesia, Anthropic or TypeSafe keep what they receive; that was not checked.
 
 Configuration (server environment, never `VITE_*`): `ANTHROPIC_API_KEY` and `CARTESIA_API_KEY`
 (both paid), optional `CARTESIA_VOICE_ID`, `CARTESIA_TTS_MODEL` (default `sonic-3.6`) and
-`VOICE_MODEL` (default `claude-opus-5-5`). See [`app/backend/README.md`](../app/backend/README.md).
+`VOICE_MODEL` (default `claude-opus-5-5`), and optional `TYPESAFE_API_KEY` (paid) with `JEV_MODEL`
+(default `jev-latest`). See [`app/backend/README.md`](../app/backend/README.md).
+
+### Streaming voice (token endpoint and NDJSON replies)
+
+The streaming path exists to cut the wait. The backend half is implemented in
+`app/backend/api/live/voice.py` and `app/backend/api/cartesia.py`. The iOS half is written against
+this contract but has not been built or run, on a simulator or a device, so everything below about
+what the phone does is its intended behaviour, not something observed.
+
+**Token.** `POST incidents/{id}/voice/token` takes no body and returns a Cartesia access token
+minted with only the `stt` and `tts` grants (`agent` is off) and a lifetime of 300 s
+(`ACCESS_TOKEN_TTL_S`). The Cartesia API key never leaves the server; a token that leaks stops
+working within five minutes. Auth is any live bearer token. The limit is 6 token requests per
+minute per device (`voice-token:{party_key}`, fixed window, per server process), checked before
+the configuration check; over it, `429 { "error": "rate_limited" }`. Nothing is stored. The token is not
+bound to an incident or a device on our side: whoever holds it can use Cartesia speech-to-text and
+text-to-speech, billed to the server's account, until it expires.
+
+```jsonc
+// POST /api/live/incidents/camp-2018-drill/voice/token   Authorization: Bearer <live token>
+// 200
+{ "token": "<Cartesia access token>",
+  "expires_in": 300,                     // seconds
+  "version": "2026-08-14",               // Cartesia API version header value
+  "stt": { "url": "wss://api.cartesia.ai/stt/websocket", "model": "ink-2", "language": "en",
+           "encoding": "pcm_s16le", "sample_rate": 16000,
+           "keyterms": ["CA 99", "Skyway Road", "Pentz Road", "..."] },   // up to 30 place names
+  "tts": { "url": "wss://api.cartesia.ai/tts/websocket", "model": "sonic-3.6",   // CARTESIA_TTS_MODEL
+           "voice_id": "db6b0ed5-d5d3-463d-ae85-518a07d3c2b4",                   // CARTESIA_VOICE_ID
+           "language": "en", "encoding": "pcm_f32le", "sample_rate": 24000 } }
+```
+
+| Status | `error` | When |
+| --- | --- | --- |
+| 401, 403, 404 | `unauthorized`, `forbidden`, `not_found` | As for every live endpoint |
+| 429 | `rate_limited` | More than 6 token requests in a minute |
+| 502 | `token_failed` | Cartesia could not mint the token (unreachable, or an error or unreadable answer) |
+| 503 | `voice_unavailable` | `CARTESIA_API_KEY` or `ANTHROPIC_API_KEY` is unset, or Cartesia rejected the key |
+
+A 503 tells the phone to fall back to typed input, on-device speech and the batch `text` path.
+
+**Key terms.** Streaming STT uses `ink-2` because it accepts `keyterm` boosts. `keyterms` lists the
+incident's 40 busiest named roads (by segment count), then its exit and shelter names (prefixes such
+as `TRA-B:` and quoted notes removed), then other roads, capped at 30 names and 600 characters. The
+phone sends at most 10 as `keyterm` query parameters, in this order: the roads on its zone's
+published route, its destination, the places in its on-device board questions, then the server's
+list. More boosts dilute each other: measured on the Camp drill with a synthesized "There's a tree
+down across Pentz Road", `ink-whisper` and unboosted `ink-2` heard "Pence Road", `ink-2` with 3 or 10
+terms heard "Pentz Road", and with 20 or more it heard "Pence Road" again. None of the terms is the
+person's position; they are public map names.
+
+**Streaming request.** `POST incidents/{id}/voice` with `"stream": true` and `text` (a transcript
+of at most 500 characters). The rest of the body is the same as above. `audio_b64` with `stream`
+is `400 invalid_voice`, because the phone transcribes over Cartesia's WebSocket; `stream` must be a
+boolean. `speak` is accepted and ignored, since this server does no synthesis on this path. The
+path needs `ANTHROPIC_API_KEY` but not `CARTESIA_API_KEY`. Everything that can fail before the
+model is called (invalid body, auth, `413`, the 12-per-minute `429`, a missing Anthropic key) is
+answered with the ordinary JSON error from the table above and no stream. After that the answer is
+`200` with `Content-Type: application/x-ndjson`, `Cache-Control: no-store` and
+`X-Accel-Buffering: no`: one JSON object per line.
+
+| `type` | Fields | Meaning |
+| --- | --- | --- |
+| `reply_delta` | `text` | The next piece of the spoken reply. Concatenate in order, exactly, with no trimming: pieces carry their own spaces. Tabs and line breaks in the model's text arrive as spaces |
+| `reply_end` | none | The reply text is complete. It can arrive before `final`, because the model is still finishing its call |
+| `final` | as the batch answer, plus `streamed` and `spoken_extra` | Always the last line of a successful stream |
+| `error` | `error`, `detail` | The stream failed after it started; no `final` follows. Codes: `upstream_timeout` (30 s), `upstream_rate_limited`, `upstream_error` |
+
+```ndjson
+{"type": "reply_delta", "text": "Report a fully"}
+{"type": "reply_delta", "text": " blocked road here."}
+{"type": "reply_delta", "text": " Send it?"}
+{"type": "reply_end"}
+{"type": "final", "transcript": "pentz road is completely blocked", "reply": "Report a fully blocked road here. Send it?", "streamed": true, "spoken_extra": null, "action": {"type": "report", "kind": "road_blocked", "severity": "full", "note": null}, "audio_b64": null, "audio_format": null, "tts": "client", "model": "claude-opus-5-5", "decided_by": "claude", "auto": false, "confidence": null, "evidence_class": "ai_interpretation"}
+```
+
+How the piece boundaries fall depends on the model's output, so the example is illustrative. In
+`final`, `audio_b64` and `audio_format` are always `null` and `tts` is `"client"`: the phone
+speaks. `streamed` is `true` when `reply_delta` lines were sent; `reply` is then the spoken text
+(whitespace collapsed, cut at 400 characters), so the transcript on screen matches the audio. When
+`streamed` is `false` nothing usable was streamed (a refusal, or an empty reply) and the phone
+speaks `reply` whole. `spoken_extra` is `"If you are in danger, call 911."` under the same rule
+as the help-action rule above and `null` otherwise. It is appended to `reply` and is not among the
+`reply_delta` lines, so the phone speaks it after the streamed reply. `action` is validated as on
+the batch path and is only sent in `final`, so the phone does not act on it until `final` has arrived.
+
+How it works. The request to Claude declares the `respond` tool with eager input streaming, and the
+server reads the `reply` string out of the partial tool-input JSON as it arrives (`ReplyScanner`).
+The streaming request therefore does not set `strict` on the tool; the server's own checks of
+`action` (`_clean_action`) still apply and are the only validation on this path. Fixed `reply` text
+such as the refusal apology is sent whole in `final`.
+
+Latency, measured on the local Docker stack: the first `reply_delta` arrives about 3.2 s after the
+request is posted and the whole reply about 3.7 s. The batch path on the same stack took about
+6.8 s. These figures cover the model call only. They do not include speech-to-text, speech
+synthesis or the network from a phone, the number of runs is not recorded here, and nothing has
+been timed end to end on a phone.
+
+**What the phone does (intended, not yet run).** The phone requests a token before it listens and
+asks for a new one when it expires. It then talks to Cartesia directly:
+
+- Speech-to-text. While the person is speaking the phone sends microphone audio as 16 kHz mono
+  signed 16-bit PCM over the `stt` WebSocket, with the token as the `access_token` query
+  parameter, and shows the interim and final transcripts as live captions. When the person stops,
+  the phone asks Cartesia to finalize and takes the concatenated final text as the transcript.
+- Server turn. The phone posts that transcript to `voice` with `"stream": true`.
+- Text-to-speech. It forwards `reply_delta` text to the `tts` WebSocket as the pieces arrive (one
+  context per utterance, the last piece marked as final), and plays the returned 24 kHz float PCM
+  chunks as they come in, so speech starts before the reply is complete. Replies use normal
+  speed and a neutral emotion.
+- Barge-in. If the person speaks or taps while the reply is playing, the phone cancels the
+  Cartesia context, stops playback and starts listening. On a speakerphone this relies on Apple's
+  echo cancellation (voice processing) to tell the person from the phone's own speaker; that is an
+  assumption, not something tested.
+- Fallback. When the token endpoint answers 503, or Cartesia cannot be reached before any audio has
+  played, the phone uses typed input and the on-device speech synthesizer, and for transcripts the
+  batch `text` path.
+
+What goes where, on this path:
+
+| Destination | What it receives |
+| --- | --- |
+| Cartesia, directly from the phone | Microphone audio while the phone is listening; the reply text, and any announcement text, to be spoken; the access token. Cartesia sees the phone's network address |
+| This server (and from it, Anthropic) | The transcript, the zone name, the guidance text, the pending proposal and the last 6 turns, as in `context` above |
+| TypeSafe, from this server, when `TYPESAFE_API_KEY` is set | The transcript, the pending proposal, the last reply and the guidance headline ([Decisions (Jev)](#decisions-jev)) |
+| Not sent anywhere | Coordinates, as before. Microphone audio does not reach this server on the streaming path |
+
+**Drive mode.** The phone's Drive mode is a voice-first full screen that reads guidance changes
+aloud. The announcements are built on the phone, from the guidance the phone has already fetched
+(the published title, spoken sentence, reason and caveat, and what changed), with fixed wording.
+There is no LLM and no call to `voice` in that path, so an announcement can never say anything
+the published guidance does not. Only the resulting sentence goes to Cartesia for speech, in a calm
+voice at a slightly reduced speed, or to the on-device synthesizer when Cartesia is unavailable. It
+is stated as a drill when Drive mode starts. Questions asked in Drive mode go through the ordinary
+voice turn above.
+
+Known limits of the whole voice mode: English only (`language` is `en` in the token response and
+Cartesia is asked for English); the report's location is the phone's position when the report is
+sent, even if the person names another place; speech-to-text and text-to-speech need a network
+connection; the iOS half has not been run on a physical device.
+
+### Decisions (Jev)
+
+Most voice turns are small decisions: is this a report, which kind, is it a yes. Jev is TypeSafe
+AI's "System One" model, which answers bounded questions (a choice among options, a score, or the
+probability of a yes, called `noul`) with typed, calibrated probabilities instead of prose. The
+vendor reports 70 to 500 ms per call and early access from September 2026; those are the vendor's
+claims, not measured here. The backend half is implemented in `app/backend/api/jev.py` (the
+adapter) and `app/backend/api/live/voice_decide.py` (questions and policy), wired in
+`app/backend/api/live/voice.py`. The iOS half is written against this contract and has not been
+built or run on a simulator or a device.
+
+**Flow.** On every turn with a transcript, on both the batch and the streaming path, the server
+asks Jev first. If Jev's answers clear the thresholds below, the server returns Jev's action and a
+fixed reply (`decided_by: "jev"`) and Claude is not called. Otherwise Claude handles the turn as
+described above (`decided_by: "claude"`). Claude handles questions ("where do I go"), turns with an
+intent Jev rates `other`, and any turn where Jev is unsure. It also handles the turn when
+`TYPESAFE_API_KEY` is unset and when the Jev call fails (key rejected, request refused, an error
+status, an unreadable answer, or a request that exceeds the 4 second HTTP timeout); the log records
+only the error code. A slow Jev call therefore delays the Claude answer by about 4 seconds, at most
+(the timeout is per socket operation, not a cap on total time). A turn with no audible speech skips
+Jev and gets the "didn't catch that" reply. `ANTHROPIC_API_KEY` is still required for every voice
+turn, because that check runs before Jev is asked, and the 12-turns-per-minute limit counts Jev
+turns too. On the streaming path a Jev decision arrives in the same NDJSON shape: one `reply_delta`
+with the whole reply, `reply_end`, then `final`.
+
+**Questions.** One call carries all of these, each reading the same state:
+
+| Question | Answers |
+| --- | --- |
+| `intent` | `report`, `check_in`, `question`, `open`, `undo`, `other` |
+| `kind` | the eight [report kinds](#report-kinds), or `none` |
+| `severity` | `full`, `partial`, `slow`, `unknown` (used only for `road_blocked` and `heavy_traffic`) |
+| `status` | `out`, `staying`, `need_help` |
+| `screen` | `home`, `map`, `route`, `reports`, `plan`, `none` |
+| `firsthand` | `noul`: the probability that the person is describing something happening now, first-hand, not asking, speculating or repeating hearsay |
+| `here` | `noul`: the probability that what they describe is at or next to where they are, not at a place they name elsewhere |
+| `pending_reply` | `yes`, `no`, `change`, `other`; asked only when the phone sent a `pending` proposal |
+
+The state Jev sees has four fields: the transcript (`said`), the pending proposal, the last reply
+(`last_reply`, the `agent` text of the newest history turn) and the guidance headline. It holds no
+position, no zone name and no other guidance text. The pending proposal can carry the `note`,
+which is the person's own words.
+
+**Thresholds.** Constants in `voice_decide.py`. A choice's `confidence` is the value Jev returns
+with the answer it picked. The `confidence` returned to the phone is the smallest one the action rests on
+(for a report, the lower of `intent` and `kind`; for `open` and `check_in`, `intent` and `screen`
+or `status`; for `confirm`, `cancel` and `undo`, the single answer).
+
+| Constant | Value | Applies to |
+| --- | --- | --- |
+| `AUTO_CONFIDENCE` | 0.85 | `intent` and `kind` must both reach it for a report to be filed without asking |
+| `AUTO_FIRSTHAND` | 0.8 | `firsthand` probability, also required for an automatic filing |
+| `AUTO_HERE` | 0.6 | `here` probability, also required for an automatic filing |
+| `PROPOSE_CONFIDENCE` | 0.6 | `intent`, and the `kind`, `status` or `screen` that follows it; below it Claude takes the turn |
+| `ANSWER_CONFIDENCE` | 0.8 | a `yes` or `no` to a pending proposal, and an `undo` intent |
+| `SEVERITY_CONFIDENCE` | 0.6 | `severity`; below it the report carries `severity: null` and the turn stays with Jev |
+
+These values are starting points. They have not been calibrated on labelled utterances, so the
+rates at which Jev files wrongly, asks needlessly or hands over to Claude are unknown.
+
+**What Jev may decide.**
+
+- With a proposal pending, a confident `yes` returns `confirm` ("Sending it now.") and a confident
+  `no` returns `cancel` ("Okay, I won't send it."). A `change`, `other` or unsure answer falls
+  through to the rest, so a correction becomes a new proposal.
+- `open` returns the screen with a fixed reply such as "Opening the map."
+- `undo` returns `undo` ("Okay, taking back your last report.").
+- `check_in` returns a proposal ("Check you in as staying where you are? Say yes to send it.") that
+  the person confirms. A `need_help` check-in says that it shares the location with responders, and
+  the 911 line is appended.
+- `report` returns a proposal ("Report a fully blocked road at your location? Say yes to send it.")
+  with `auto: false`, or, when every condition below holds, the same report with `auto: true` and
+  the reply "Reported a fully blocked road at your location. Say undo to take it back."
+
+A report is `auto` only when its kind is one of `road_blocked`, `road_passable`, `heavy_traffic`,
+`fire_seen`, `heavy_smoke`, `hazard_down` or `shelter_full`; `intent` and `kind` are at least 0.85;
+`firsthand` is at least 0.8; and `here` is at least 0.6. `help_needed` is never automatic: it is
+about another person and always confirmed, with the 911 line. Check-ins are never automatic: a
+`need_help` check-in shares the person's position with responders, and a check-in cannot be taken
+back. `here` matters because the phone pins the report at its own position, so "the gym is full",
+said elsewhere, is proposed and not filed. The `note` of a report is the person's own transcript
+with whitespace collapsed, cut at 280 characters; no model writes or rewrites it. Every reply on
+this path is a fixed template in `voice_decide.py`, so no model writes what the phone says, and the
+reply names only the kind and severity, not a place.
+
+**Response fields.** `decided_by` is `jev`, `claude` or `null` (nothing was heard). `auto` is
+`true` only for a Jev report that may be filed without asking; it is `false` for everything else,
+including every Claude answer. `confidence` is the figure described above, rounded to three decimals, or
+`null` when Claude decided. `model` is the model id TypeSafe returned (the `JEV_MODEL` value if it
+returned none) for a Jev decision.
+
+```jsonc
+// "Pentz Road is completely blocked", said at the person's own position
+{ "transcript": "Pentz Road is completely blocked",
+  "reply": "Reported a fully blocked road at your location. Say undo to take it back.",
+  "action": { "type": "report", "kind": "road_blocked", "severity": "full",
+              "note": "Pentz Road is completely blocked" },
+  "audio_b64": null, "audio_format": null, "tts": "client",
+  "model": "jev-latest", "decided_by": "jev", "auto": true, "confidence": 0.94,
+  "evidence_class": "ai_interpretation" }
+
+// "undo that"
+{ "transcript": "undo that",
+  "reply": "Okay, taking back your last report.",
+  "action": { "type": "undo" },
+  "audio_b64": null, "audio_format": null, "tts": "client",
+  "model": "jev-latest", "decided_by": "jev", "auto": false, "confidence": 0.97,
+  "evidence_class": "ai_interpretation" }
+```
+
+The values are illustrative, not captured output. `undo` is also in the Claude `respond` tool's
+action list, so Claude can return it with `decided_by: "claude"`.
+
+**What the phone does (intended, not yet run).** On `auto: true` the phone files the report at once
+and does not ask. It checks the action again on the device and
+does not file `help_needed` or a check-in automatically, whatever the server sent. For 5 minutes
+after a report it filed, "undo" by voice or an Undo button takes it back: an unsent draft is
+deleted, and a report already sent is withdrawn, unless a responder has already acted on it. The server
+allows a withdrawal only while the report is `unverified` or `corroborated` ([Edit or withdraw your
+own report](#edit-or-withdraw-your-own-report)). Under a reply the sheet shows "Jev · 94% · filed
+automatically" for an automatic report, and "Claude" for a Claude answer. The server returns `undo` without knowing whether there is
+anything to take back and keeps no record of the report. None of this has been run on a device.
+
+**Limits and assumptions.** The thresholds are uncalibrated (above). An automatic report is pinned
+at the phone's own position, so a place the person names is not located (`here` lowers the chance,
+and does not remove it). A report is filed on the strength of a speech-to-text transcript, which can
+mishear. The Jev questions and the 4-second timeout are set in code and not configurable except for
+the model id. TypeSafe's accuracy, latency and retention of what it receives have not been checked
+here.
 
 ## Studio fires
 
@@ -1541,8 +1826,11 @@ moisture, horizon_minutes, outside_drill}], evidence_class: "simulated"}`, newes
 | `POST incidents/{id}/twin/whatif` | controller |
 | `POST incidents/{id}/impact` | controller ([Impact analysis](#impact-analysis)) |
 | `GET incidents/{id}/aar` | controller ([After-action report](#after-action-report)) |
+| `POST /api/live/studio-fires` | controller ([Studio fires](#studio-fires)) |
+| `GET incidents/{id}/studio-fires[?after=]` | any |
 | `GET incidents/{id}/board` | any ([Task board](#task-board-passive-observations-and-information-priority-adr-0041)) |
-| `POST incidents/{id}/voice` | any ([Voice mode](#voice-mode)) |
+| `POST incidents/{id}/voice` | any ([Voice mode](#voice-mode)); with `"stream": true` it answers NDJSON ([Streaming voice](#streaming-voice-token-endpoint-and-ndjson-replies)) |
+| `POST incidents/{id}/voice/token` | any (a 300 s Cartesia token with `stt` and `tts` grants; 6 per minute per device) |
 
 ## Location (v2)
 
@@ -1616,5 +1904,3 @@ change; the API never creates indexes on request paths.
    Moving real (non-drill) data later would need its own plan.
 5. Atlas user: read/write on that one database only; network access as the team
    already configured.
-| `POST /api/live/studio-fires` | controller ([Studio fires](#studio-fires)) |
-| `GET incidents/{id}/studio-fires[?after=]` | any |

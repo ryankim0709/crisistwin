@@ -3,8 +3,8 @@ import SwiftUI
 /// Debug builds accept launch arguments so every tab and state can be screenshotted:
 /// - `-screen <name>`: a tab (`home`, `map`, `reports`, `plan`, `tasks`), or a screen opened on
 ///   top of one: `report` (the report sheet over Map), `newreport` (over Reports), and `family`,
-///   `meeting`, `broadcast`, `responder`, `about` (pushed in Plan), and `voice` (the voice sheet
-///   over Home). Anything else opens Home.
+///   `meeting`, `broadcast`, `responder`, `about` (pushed in Plan), `voice` (the voice sheet
+///   over Home), and `drive` (the full-screen Drive mode over Home). Anything else opens Home.
 /// - `-join <code>`: joins as a responder on launch, so the Tasks tab appears.
 /// - `-start 1`: taps Start shortly after launch (Map, following).
 /// - `detail` opens the guidance detail over Home (`detailexit` with the exits listed),
@@ -67,6 +67,8 @@ final class AppRouter {
     var detail = false
     /// The voice assistant sheet.
     var voice = DebugLaunch.screen == "voice"
+    /// Drive mode, the full-screen voice-first view.
+    var drive = DebugLaunch.screen == "drive"
 
     /// Home's Start: Map, pitched, following the device.
     func start() {
@@ -80,6 +82,11 @@ final class AppRouter {
 
     func openVoice() {
         voice = true
+    }
+
+    func openDrive() {
+        voice = false
+        drive = true
     }
 
     func openReport(_ prefill: ReportPrefill? = nil, from sourceID: String) {
@@ -148,6 +155,13 @@ struct RootView: View {
                 VoiceView()
                     .presentationDetents([.medium, .large])
                     .presentationDragIndicator(.visible)
+                    .environment(liveStore)
+                    .environment(location)
+                    .environment(router)
+                    .tint(.primary)
+            }
+            .fullScreenCover(isPresented: $router.drive) {
+                DriveView()
                     .environment(liveStore)
                     .environment(location)
                     .environment(router)

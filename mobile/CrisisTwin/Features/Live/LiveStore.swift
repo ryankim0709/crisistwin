@@ -606,6 +606,24 @@ final class LiveStore {
         }
     }
 
+    /// A short-lived Cartesia token for the phone's own speech WebSockets (`POST voice/token`).
+    /// Throws `VoiceTurnError` with `status` 503 when the server has no Cartesia/Anthropic key.
+    func voiceToken() async throws -> VoiceToken {
+        let incidentId = incidentId
+        return try await authorized {
+            try await $0.voiceToken(incidentId: incidentId, token: $1)
+        }
+    }
+
+    /// A streamed voice turn (`stream: true`, typed or transcribed `text`): reply pieces as the
+    /// model writes them, then the final turn. HTTP errors throw before the stream starts.
+    func voiceTurnStream(_ request: VoiceTurnRequest) async throws -> AsyncThrowingStream<VoiceStreamEvent, Error> {
+        let incidentId = incidentId
+        return try await authorized {
+            try await $0.voiceTurnStream(incidentId: incidentId, request: request, token: $1)
+        }
+    }
+
     /// Accepts a check task (`POST tasks/{id}` with `accepted`); the task stays in `tasks` with
     /// status `accepted`. Throws on 409 when another responder took it.
     func acceptTask(_ task: CheckTask) async throws {

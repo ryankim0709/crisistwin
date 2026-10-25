@@ -50,13 +50,11 @@ struct HomeView: View {
 
     // MARK: Header
 
-    /// The incident name with the Exercise tag inline; tapping either explains the tag.
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .center, spacing: 12) {
-                HomeBrandLogo()
-                    .frame(height: 30)
-                Spacer(minLength: 8)
+    /// "Talk to report" and "Drive mode", as glass capsules. The Drive label gives way to its icon
+    /// when the row is too narrow (large text sizes).
+    private func headerButtons(driveLabelShown: Bool) -> some View {
+        GlassEffectContainer(spacing: 8) {
+            HStack(spacing: 8) {
                 Button { router.openVoice() } label: {
                     Label("Talk to report", systemImage: "mic.fill")
                         .font(.subheadline.weight(.semibold))
@@ -69,6 +67,40 @@ struct HomeView: View {
                 .glassEffect(.regular.interactive(), in: .capsule)
                 .accessibilityLabel("Talk to report")
                 .accessibilityHint("Opens the voice assistant")
+
+                Button { router.openDrive() } label: {
+                    Group {
+                        if driveLabelShown {
+                            Label("Drive mode", systemImage: "car.fill")
+                        } else {
+                            Image(systemName: "car.fill")
+                        }
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .padding(.horizontal, driveLabelShown ? 16 : 12)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(.capsule)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.interactive(), in: .capsule)
+                .accessibilityLabel("Drive mode")
+                .accessibilityHint("Opens the hands-free voice view that reads guidance changes aloud")
+            }
+        }
+    }
+
+    /// The incident name with the Exercise tag inline; tapping either explains the tag.
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .center, spacing: 12) {
+                HomeBrandLogo()
+                    .frame(height: 30)
+                Spacer(minLength: 8)
+                ViewThatFits(in: .horizontal) {
+                    headerButtons(driveLabelShown: true)
+                    headerButtons(driveLabelShown: false)
+                }
             }
             .padding(.bottom, 8)
             if store.isExercise {
