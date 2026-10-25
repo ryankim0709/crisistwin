@@ -13,7 +13,7 @@ import { usePoll } from "../live/usePoll";
 import { addVirtualPeople, useParticipants } from "./api";
 import AppMap, { type MapLayerKey } from "./AppMap";
 import { BehaviourPanel, MessagesPanel, NeedsOk, ParticipantList, type Decide } from "./Panels";
-import PhoneMirror from "./PhoneMirror";
+import { PhoneMirror } from "./PhoneMirror";
 import { everyoneElse, isJoinedNow, nf, personSummary } from "./plain";
 import "./appint.css";
 
