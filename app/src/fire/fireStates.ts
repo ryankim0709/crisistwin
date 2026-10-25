@@ -187,6 +187,8 @@ export interface CellStateInput {
    * flaming cells as CELL_STATE.burning (unclassified).
    */
   behaviour: Pick<CellBehaviour, "headRateMetersPerMinute" | "headFlameFeet" | "crownType"> | null;
+  /** Front flame per cell, feet, precomputed (frontFlameFeetAt); omitted, computed per flaming cell. */
+  flameFeet?: ArrayLike<number> | null;
   /** Per cell, minute a crew put it out (Infinity never); null when the model puts no cell out. */
   extinguishedAt?: ArrayLike<number> | null;
   /** Owning fire per cell (-1 none) and, per owner, the minute it is contained / out; null = never. */
@@ -243,7 +245,7 @@ export function classifyCellStates(input: CellStateInput, minute: number, codes:
         if (counts && s >= 0) counts.smouldering[s]++;
         continue;
       }
-      const flame = behaviour ? frontFlameFeetAt(grid, arrival, behaviour, c) : -1;
+      const flame = input.flameFeet ? input.flameFeet[c] : behaviour ? frontFlameFeetAt(grid, arrival, behaviour, c) : -1;
       const code = flamingCode(flame, crown ? crown[c] : 0);
       codes[c] = code;
       if (counts && s >= 0) {
@@ -315,3 +317,42 @@ export const UNATTENDED_FIRE_WORDS: Record<ReturnType<typeof unattendedFireState
   smouldering: "Smouldering · no open flame",
   burned_out: "Burned out on its own · no crews",
 };
+
+/** A whole run's cell states at any minute (Studio, /fire): see createRunCellStates. */
+export interface RunCellStates {
+  /** Codes and heat at `minute` (two alternating buffers: keep at most the latest two results). */
+  at(minute: number, counts?: CellStateCounts | null): { codes: Uint8Array; heat: Uint8Array };
+  /** Owners (fires) in `owner`, for sizing cellStateCounts; 0 without owners. */
+  owners: number;
+}
+
+/**
+ * Precomputes a run's burn durations and front flames once (both depend only on the arrival
+ * field and the solver's behaviour), so `at(minute)` is one pass of comparisons: cheap enough to
+ * call on every scrubbed minute. `arrivalMinutes` and `minute` share one clock.
+ */
+export function createRunCellStates(
+  input: Omit<CellStateInput, "burnMinutes" | "flameFeet"> & { horizonMinutes?: number; owners?: number },
+): RunCellStates {
+  const { grid, arrivalMinutes, behaviour } = input;
+  const n = grid.width * grid.height;
+  const burnMinutes = burnMinutesField(grid, arrivalMinutes, behaviour?.headRateMetersPerMinute ?? null, input.horizonMinutes);
+  let flameFeet: Float32Array | null = null;
+  if (behaviour && arrivalMinutes.length === n) {
+    flameFeet = new Float32Array(n).fill(-1);
+    for (let c = 0; c < n; c++) if (burnMinutes[c] >= 0) flameFeet[c] = frontFlameFeetAt(grid, arrivalMinutes, behaviour, c);
+  }
+  const full: CellStateInput = { ...input, burnMinutes, flameFeet };
+  const codes = [new Uint8Array(n), new Uint8Array(n)];
+  const heat = [new Uint8Array(n), new Uint8Array(n)];
+  let next = 0;
+  return {
+    owners: input.owners ?? 0,
+    at(minute, counts) {
+      const i = next;
+      next = 1 - i;
+      classifyCellStates(full, minute, codes[i], heat[i], counts);
+      return { codes: codes[i], heat: heat[i] };
+    },
+  };
+}
