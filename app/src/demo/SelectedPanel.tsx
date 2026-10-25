@@ -213,7 +213,7 @@ function TeamDetail({ board, id, actions }: { board: Board; id: string; actions:
           { label: "Status", value: TEAM_STATUS[team.status] },
           { label: "Fire", value: team.fireId ?? "None" },
           { label: "Type", value: kindLabel(team.kind) },
-          { label: "Home base", value: station ? `${station.name}${station.type === "synthetic" ? " (synthetic)" : ""}` : "None" },
+          { label: "Home base", value: station ? (station.label ?? station.name) : "None" },
           { label: "Line", value: `${unitLineOn(board, team, fire).toFixed(1)} m/min here` },
           { label: "Holds flames up to", value: `${holdsFlameFeet(team.kind)} ft` },
           ...(team.status === "en_route"

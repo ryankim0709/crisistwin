@@ -48,6 +48,7 @@ const ORIGIN_NOTE: Record<CrewTrip["origin"], string> = {
   crew_camp: " (crew camp)",
   dozer_base: " (dozer base)",
   fallback: " (assumed from a board station)",
+  state: " (out of the area, state order)",
 };
 
 function NoAccessList({ dispatch }: { dispatch: CrewDispatch }) {
@@ -132,7 +133,7 @@ function DispatchSummary({ dispatch }: { dispatch: CrewDispatch }) {
         Crews sent <Tag>Road travel</Tag>
       </h4>
       <p className="studio-hint">
-        Fire reported at {formatElapsed(dispatch.reportMinute)}; {trips.length} resources from{" "}
+        Fire reported at {formatElapsed(Math.round(dispatch.reportMinute))}; {trips.length} resources from{" "}
         {stations} station{stations === 1 ? "" : "s"}. First on scene: {first.label} from{" "}
         {first.stationName} at {formatElapsed(Math.round(first.arriveMinute))}; all on scene by{" "}
         {formatElapsed(Math.round(last.arriveMinute))}

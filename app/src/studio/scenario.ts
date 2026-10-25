@@ -16,13 +16,12 @@ import { weatherSeriesProblems, type FireWeatherSample } from "../fire/weatherSe
 import { spanProblem } from "./bounds";
 import {
   DEFAULT_FIREFIGHTING,
-  FIRST_ALARM,
   MAX_RESOURCES_PER_KIND,
   RESPONSE_MINUTE_CHOICES,
-  apparatusCounts,
+  hasHandSetCounts,
   type FirefightingSettings,
 } from "./firefighting";
-import { APPARATUS_KINDS, type ApparatusCounts } from "./apparatus";
+import { APPARATUS_KINDS } from "./apparatus";
 import {
   DISPLAY_STEP_MINUTES,
   MAX_ENABLED_IGNITIONS,
@@ -72,21 +71,12 @@ export function emptyScenario(): StudioScenario {
 }
 
 /**
- * The scenario with firefighting on (the Studio's default): its own resource counts when it has
- * any, else the first-alarm package (studio/firefighting.ts FIRST_ALARM, from the shared
- * response model's run card), sent from real stations.
+ * The scenario with firefighting on (the Studio's default). Its units come from the facilities
+ * on the map at run time (studio/mapResources.ts), not from the scenario.
  */
 export function withFirefightingOn(scenario: StudioScenario): StudioScenario {
   const settings = scenario.firefighting ?? DEFAULT_FIREFIGHTING;
-  const empty = Object.values(apparatusCounts(settings)).every((count) => !count);
-  return {
-    ...scenario,
-    firefighting: {
-      ...settings,
-      enabled: true,
-      ...(empty ? { resources: { ...FIRST_ALARM } } : {}),
-    },
-  };
+  return { ...scenario, firefighting: { ...settings, enabled: true } };
 }
 
 /** New ignition named with the lowest unused F-number and a stable unique id. */
@@ -215,12 +205,6 @@ function validateFirefighting(firefighting: FirefightingSettings): ScenarioIssue
   }
   if (!(RESPONSE_MINUTE_CHOICES as readonly number[]).includes(firefighting.responseMinutes)) {
     add(`Response time must be one of ${RESPONSE_MINUTE_CHOICES.join(", ")} minutes.`);
-  }
-  if (
-    firefighting.enabled &&
-    Object.values(apparatusCounts(firefighting)).every((count) => !count)
-  ) {
-    add("Firefighting is on but no resources are assigned.");
   }
   return issues;
 }
@@ -414,18 +398,26 @@ export function parseScenario(json: unknown): {
         "settings",
       );
     } else {
+      // Units come from the facilities on the map: hand-set counts (and the old "start after N
+      // min" and night-helicopter choices) from older drafts and files are dropped, and the
+      // panel says so once (`countsDropped`).
+      const dropped =
+        raw.countsDropped === true ||
+        hasHandSetCounts({
+          handCrews: Number(raw.handCrews),
+          engines: Number(raw.engines),
+          dozers: Number(raw.dozers),
+          resources: isRecord(raw.resources) ? (raw.resources as FirefightingSettings["resources"]) : undefined,
+        });
       firefighting = {
         enabled: raw.enabled,
-        handCrews: raw.handCrews as number,
-        engines: raw.engines as number,
-        dozers: raw.dozers as number,
+        handCrews: 0,
+        engines: 0,
+        dozers: 0,
         responseMinutes: raw.responseMinutes as number,
-        ...(typeof raw.fromStations === "boolean" ? { fromStations: raw.fromStations } : {}),
-        ...(isRecord(raw.resources) ? { resources: raw.resources as ApparatusCounts } : {}),
+        fromStations: true,
         ...(typeof raw.startLocalIso === "string" ? { startLocalIso: raw.startLocalIso } : {}),
-        ...(typeof raw.nightHelicopters === "boolean"
-          ? { nightHelicopters: raw.nightHelicopters }
-          : {}),
+        ...(dropped ? { countsDropped: true } : {}),
       };
     }
   }

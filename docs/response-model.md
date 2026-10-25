@@ -3,7 +3,7 @@
 Date: 2026-10-24. A shared, pure TypeScript model of how fire agencies respond to a fire and
 manage their resources: initial attack by run card, containment tactics, escalation and resource
 orders, departments and mutual aid, and unit states. It runs the `/live` command board's
-rule-based response today. Simulation Studio reads its run card and staffing turnout. Every
+rule-based response today. Simulation Studio sends its run card from the same fleet. Every
 number below is sourced, derived from sourced numbers, or a named **ASSUMPTION**. Outputs are
 planning experiments, not operational dispatch guidance.
 
@@ -12,7 +12,9 @@ planning experiments, not operational dispatch guidance.
 | File | What |
 | --- | --- |
 | `app/src/response/rng.ts` | Seeded stream (mulberry32, as the board), derived from the board seed with a salt, so response draws do not move the ignition sequence |
-| `app/src/response/fleet.ts` | Departments, tiers and units from the CAL FIRE facilities layer (`buildFleet`), turnout by staffing (`engineTurnoutMinutes`) |
+| `app/src/response/fleet.ts` | Departments, tiers, units and aircraft from the facilities on and near the board (`buildFleet`), the one units-per-facility table (`FACILITY_INVENTORY`), the plain summary (`summarizeFleet`), turnout by staffing (`engineTurnoutMinutes`) |
+| `app/src/studio/mapResources.ts` | Studio: the fleet from the facilities around the board (`mapResources`) and the run card filled from it (`planMapDispatch`) |
+| `app/src/studio/useMapStations.ts` | Studio map: a labelled marker for every facility that can respond |
 | `app/src/response/runCards.ts` | Dispatch level from fire danger, run cards, initial-attack (IA) size, escalation stages and orders, the Operations Bulletin #1 caps, `ORDERABLE` |
 | `app/src/response/containment.ts` | Tactic by flame length, production per tactic, line needed, seeded holding test, Fried & Fried check |
 | `app/src/response/orders.ts` | Mutual aid and state tiers, fill draws, lead times, state caps |
@@ -28,9 +30,10 @@ same dispatch path (`dispatchTeam`), and the new `order_resources` order calls `
 `crews[].department/tier/water_pct/work_h`, and a `response` block (departments, aircraft,
 orders, `orderable`, IA record). The shapes are in `demo/contracts.ts`.
 `useCommandBoard` exposes `ruleResponse` and `setRuleResponse`; both are on by default and the
-page has no toggle yet. In Studio, `firefighting.ts` takes `FIRST_ALARM` from the shared medium run
-card, with the same numbers as before. `crewDispatch.ts` gives off-board engines the staffing
-turnout. The server validates `order_resources` in `app/backend/api/demo.py`.
+page has no toggle yet. In Studio, `studio/mapResources.ts` builds the same fleet from the
+facilities around the board and sends the run card from it (see "Resources come from the map");
+`crewDispatch.ts` routes each chosen unit from its own base. The server validates
+`order_resources` in `app/backend/api/demo.py`.
 
 ## Before: three response models disagreed
 
@@ -227,32 +230,75 @@ growth P = k·t and line rate R from arrival t_a, it reduces to t* = R·t_a / (R
   The count is capped at 5/5/2/4/2 (the bulletin's caps; airtankers 4 is an **ASSUMPTION**).
   It is validated by the server (`normalize_order`) and again by the board (`applyOrder`).
 
+## Resources come from the map
+
+The units that can respond are a pure function of the fire facilities on and near the current
+board. Nothing is set by hand: Studio has no unit counts (only Firefighting on/off and the T+0
+clock, which sets aviation daylight), and the /live board has no fixed roster.
+
+- **Facilities** (`GET /api/suppression/bases`): the CAL FIRE Facilities for Wildland Fire
+  Protection layer, with observed location, facility type, agency, unit code and staffing, plus
+  the OpenStreetMap fire stations the layer does not list (`withOsmStations`: an OSM station within
+  500 m of a layer facility is that facility, **ASSUMPTION** as `crewDispatch.ts`). The layer covers
+  wildland protection, so city departments (San Francisco, Oakland) are often only in OSM. OSM
+  stations come from the drill package (/live) or the board's roads (`DispatchArea.stations`,
+  Studio). Without the layer, OSM stations alone. Neither path invents crew camps or air bases.
+- **Tiers**: facilities inside the board answer initial attack (closest resource). The rest of
+  the list (the endpoint returns the nearest 40 stations and 10 camps) is the mutual-aid pool.
+  Beyond that, orders go to the state system ("Escalation and resource ordering").
+- **Aircraft** come only from air attack bases (AAB) and helitack bases (HB) in the layer, within
+  a dispatch radius of a 20-minute flight at the aircraft's cruise (`AIR_DISPATCH_FLIGHT_MINUTES`,
+  **ASSUMPTION** after CAL FIRE's commonly quoted goal of reaching most fires within 20 minutes,
+  not re-fetched): about 142 km for an S-2T (230 kt, IASG Table 3) and 62 km for a helicopter
+  (100 kt, assumed). Time over the fire and the airtanker cycle follow from the distance
+  (`studio/aircraft.ts`). /live fetches facilities within 150 km of the drill centre so the
+  airtanker radius is covered; Studio uses the endpoint default of 250 km around the board centre.
+- **No facilities at all**: no local units. /live says "No fire stations found on this map" and
+  every run card goes short, so its ground shortfall is ordered from out of the area through the
+  state tier (about 4.5 h to the board edge). Studio sends the shortfall the same way.
+- **On the map**: every contributing facility is drawn with a plain label, for example
+  "Paradise FS · CAL FIRE · 2 engines, 1 dozer" (Studio map: `studio/useMapStations.ts`;
+  /live board: `demo/boardMapLayers.ts`). Mutual aid is drawn fainter and labelled
+  "mutual aid"; air bases are squares in Studio. So what is on the map is what can respond.
+- **Studio summary**: one line, for example "From the map: 9 stations · 11 engines, 2 crews,
+  1 dozer · air from Chico AAB, ~10 min", with the per-station list, counts per type and their
+  line rates, the inventory table and the T+0 clock under a collapsed "Details".
+- **Studio dispatch** (`planMapDispatch`): the run card for the dispatch level from the scenario's
+  fuel moisture (nearest `MOISTURE_PRESETS` entry by 1-h moisture, **ASSUMPTION**) and wind, or the
+  structure card when the fire starts on developed ground; filled by the closest units on or off
+  the board by estimated arrival (turnout + straight line × 1.3 at the heavy-apparatus secondary
+  road speed), then routed on the board's roads. Aircraft: the nearest of each kind within its
+  radius of the fire; an aircraft the map cannot supply is reported, not flown. Studio sends the
+  initial-attack card only; escalation needs the board's minute loop (/live).
+- **Old Studio drafts and files** with hand-set counts: the counts are dropped on load
+  (`parseScenario`, draft defaults version 3) and the panel says "Units now come from the stations
+  on the map".
+
+### Units per facility (`FACILITY_INVENTORY`, `response/fleet.ts`)
+
+The layer has no apparatus, so what each facility fields is the one remaining assumption, kept in
+a single table. Staffing sets turnout (80 s paid, 120 s otherwise; "Initial attack"), not counts:
+no source ties counts to staffing.
+
+| Facility (type, agency) | Units | Evidence |
+| --- | --- | --- |
+| CAL FIRE station (FSA, FSB, FSAB, FSL, FSCC, FSO; agency CAL FIRE) | 1.6 Type 3 engines (k-th station of a unit: floor(1.6k) − floor(1.6(k−1))) | Derived: 343 engines / 220 stations, 2019 (calfire_house_2019; data leaf), as `livecore/apparatus.py` |
+| CAL FIRE unit | 1 Type 2 dozer at its first (nearest) station | ASSUMPTION |
+| Local, Schedule A or contract county station | 1 Type 1 engine | ASSUMPTION, as `livecore/apparatus.py` |
+| Federal station | 1 Type 3 engine | ASSUMPTION |
+| OSM station (CAL FIRE layer unavailable) | 1 Type 3 engine | ASSUMPTION, as `dispatch/stationApparatus.ts` |
+| Conservation camp or crew fire centre (CC, FCFFC) | 2 Type 1 crews | ASSUMPTION |
+| Air attack base (AAB) | 1 air attack + 2 S-2T | Derived: 12 air tactical and 22 airtankers at 13 bases (calfire_house_2019) |
+| Helitack base (HB) | 1 Type 2 helicopter | ASSUMPTION (10 staffed helicopters, 17 bases in the layer) |
+
 ## Departments and mutual aid
 
-`buildFleet` groups the CAL FIRE facilities layer (`GET /api/suppression/bases`, which now
-returns `staffing`) into departments by agency class and unit code. Examples near Paradise: CAL
-FIRE BTU unit, Paradise FD (PRA, Schedule A), Butte County Fire (BTC, Schedule A), and the
-volunteer companies of the BTU area. The layer has no apparatus, so the counts per facility are
-assumptions:
-
-| Facility | Units | Evidence |
-| --- | --- | --- |
-| CAL FIRE station | 1.6 Type 3 engines (k-th station: floor(1.6k) − floor(1.6(k−1))) | Derived: 343 engines / 220 stations, 2019 (data leaf) |
-| CAL FIRE unit | 1 Type 2 dozer at its first station | ASSUMPTION |
-| Other station (local, Schedule A, contract county) | 1 Type 1 engine | ASSUMPTION, as `livecore/apparatus.py` |
-| Federal station | 1 Type 3 engine | ASSUMPTION |
-| Conservation camp or crew fire centre | 2 Type 1 crews | ASSUMPTION |
-| Air attack base | 1 air attack + 2 S-2T | Derived: 12 air tactical and 22 airtankers at 13 bases (calfire_house_2019) |
-| Helitack base | 1 Type 2 helicopter | ASSUMPTION |
-| OSM-only package station | 1 Type 3 engine; the 2 nearest also as crew bases | ASSUMPTION |
-
-Facilities inside the board's landscape answer IA. The rest (the bases endpoint returns up to 40
-stations and 10 camps within 60 km, and every air base) form the mutual-aid pool. On a 60 km board
-(`fire/boardSize.ts` on `feat/shared-world`) most of them are on the board. **Drawdown**: a
-department keeps floor(25% of its engines) uncommitted (**ASSUMPTION**), so a department with
-fewer than 4 engines keeps none. It always answers fires within 5 km of one of its stations
-(**ASSUMPTION**). Without layer metadata the board falls back to the fixed roster, one
-department per station.
+`buildFleet` groups the facilities into departments by agency class and unit code. Examples near
+Paradise: CAL FIRE BTU unit, Paradise FD (PRA, Schedule A), Butte County Fire (BTC, Schedule A),
+and the volunteer companies of the BTU area. On a 60 km board (`fire/boardSize.ts`) most of the
+listed stations are on the board. **Drawdown**: a department keeps floor(25% of its engines)
+uncommitted (**ASSUMPTION**), so a department with fewer than 4 engines keeps none. It always
+answers fires within 5 km of one of its stations (**ASSUMPTION**).
 
 ## Resource management
 

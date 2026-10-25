@@ -37,13 +37,11 @@ import {
   AIR_KINDS,
   GROUND_APPARATUS,
   GROUND_KINDS,
-  dataValue,
   lineRateMetersPerHour,
   type ApparatusCounts,
   type GroundKind,
 } from "./apparatus";
 import { DROP_HOLDS_FLAME_FEET, planAircraft, type AircraftPlan, type AirBase } from "./aircraft";
-import { WILDLAND_RUN_CARDS } from "../response/runCards";
 import { lineOfSight, nearestDeveloped, reportDelay } from "../response/report";
 import { deriveStream } from "../response/rng";
 import { cellAt as gridCellAt } from "../fire/spread";
@@ -54,23 +52,26 @@ export type ResourceKind = GroundKind;
 export interface FirefightingSettings {
   enabled: boolean;
   /**
-   * Legacy counts (scenarios saved before ADR 0048): Type 2 hand crews, Type 3 engines and
-   * Type 2 dozers. Ignored when `resources` is present.
+   * Legacy counts (scenarios saved before ADR 0048). Always 0 now: units come from the
+   * facilities on the map, and parseScenario drops older hand-set counts.
    */
   handCrews: number;
   engines: number;
   dozers: number;
-  /** Count per apparatus kind, ground and air (studio/apparatus.ts). */
-  resources?: ApparatusCounts;
   /**
-   * Minutes after the first ignition before any resource starts building line. With
-   * `fromStations` this is only the fallback when no station can reach the fire.
+   * Units sent, per apparatus kind, ground and air. Never set by hand: the run fills it from the
+   * facilities on the map (studio/mapResources.ts via useStudioRun). A scenario saved with
+   * counts has them dropped on load (`countsDropped`).
+   */
+  resources?: ApparatusCounts;
+  /** Set when hand-set unit counts were dropped on load, so the panel can say why. */
+  countsDropped?: boolean;
+  /**
+   * Fallback only: minutes after the first ignition before work starts when the board's roads
+   * did not load, so no trip could be planned.
    */
   responseMinutes: number;
-  /**
-   * Drive each resource from its base on the board's roads, the fire reported when it ignites
-   * (studio/crewDispatch.ts). Absent in scenarios saved before this existed.
-   */
+  /** Legacy: units always drive in from their bases now (studio/crewDispatch.ts). */
   fromStations?: boolean;
   /**
    * Wall-clock time of T+0, ISO 8601 with a UTC offset (e.g. 2026-08-15T13:00-07:00), for the
@@ -78,7 +79,7 @@ export interface FirefightingSettings {
    * DEFAULT_START_LOCAL_ISO.
    */
   startLocalIso?: string;
-  /** Allow helicopter drops at night (a night-capable S-70i base; the data cannot place one). */
+  /** Legacy: helicopter drops at night. Off for every run: the facilities layer cannot place a night-capable base. */
   nightHelicopters?: boolean;
 }
 
@@ -91,21 +92,6 @@ export function startMsOf(settings: FirefightingSettings): number {
   return Number.isFinite(ms) ? ms : Date.parse(DEFAULT_START_LOCAL_ISO);
 }
 
-const GROUND_FIRST_ALARM = dataValue<{
-  engines: number;
-  dozers: number;
-  hand_crews: number;
-  chief_officers: number;
-}>("deployment.initial_attack_ground_first_alarm_sra_high");
-/** The shared response model's medium-level wildland run card (response/runCards.ts), the /live board's too. */
-const RUN_CARD = WILDLAND_RUN_CARDS.medium;
-
-/**
- * First-alarm package. Ground (ASSUMPTION in the data: no public CAL FIRE dispatch matrix):
- * 3 engines, 1 dozer, 1 hand crew, 1 chief officer, as Type 3 engines, a Type 2 dozer and a
- * Type 2 crew. Air (California Fire Pilots Association, secondary source): air attack, two
- * airtankers (CAL FIRE's S-2T) and one helicopter (Type 2 here; ASSUMPTION on the type).
- */
 /**
  * Minutes from an ignition to dispatch (call-in, answer, transfer, processing;
  * response/report.ts), seeded per ignition from its place and minute so a rerun gives the
@@ -142,36 +128,32 @@ export function ignitionReportDelayMinutes(
   }).totalMinutes;
 }
 
-export const FIRST_ALARM: ApparatusCounts = {
-  engine_t3: RUN_CARD.engines,
-  dozer_t2: RUN_CARD.dozers,
-  hand_crew_t2: RUN_CARD.hand_crews,
-  chief: GROUND_FIRST_ALARM.chief_officers,
-  air_attack: RUN_CARD.air_attack,
-  airtanker_s2t: RUN_CARD.airtankers,
-  helicopter_t2: RUN_CARD.helicopters,
-};
-
+/**
+ * No unit counts: a run's units come from the facilities on the map (studio/mapResources.ts).
+ * Turned on, a scenario sends the shared run card (response/runCards.ts) from the closest of them.
+ */
 export const DEFAULT_FIREFIGHTING: FirefightingSettings = {
   enabled: false,
   handCrews: 0,
   engines: 0,
   dozers: 0,
-  resources: { ...FIRST_ALARM },
   responseMinutes: 30,
   fromStations: true,
 };
+/** Upper bound accepted when parsing counts in older scenario files (validation only). */
 export const MAX_RESOURCES_PER_KIND = 20;
 export const RESPONSE_MINUTE_CHOICES = [15, 30, 60, 90] as const;
 
-/** Count per kind for these settings (legacy counts mapped when `resources` is absent). */
+/** Units sent per kind: the run's map-derived counts (empty outside a run). */
 export function apparatusCounts(settings: FirefightingSettings): ApparatusCounts {
-  if (settings.resources) return settings.resources;
-  return {
-    hand_crew_t2: settings.handCrews,
-    engine_t3: settings.engines,
-    dozer_t2: settings.dozers,
-  };
+  return settings.resources ?? {};
+}
+
+/** True when the settings carry hand-set unit counts (scenarios saved before units came from the map). */
+export function hasHandSetCounts(settings: Partial<FirefightingSettings> | null | undefined): boolean {
+  if (!settings) return false;
+  const legacy = (settings.handCrews ?? 0) + (settings.engines ?? 0) + (settings.dozers ?? 0) > 0;
+  return legacy || Object.values(settings.resources ?? {}).some((n) => (n ?? 0) > 0);
 }
 
 /** Target outline minutes tried, after the crews arrive. */

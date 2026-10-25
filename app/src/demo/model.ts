@@ -36,8 +36,9 @@
  *   drive their route's free-flow time. Households home when fire reaches the zone core are
  *   caught. "Touches" and "reaches" read the solver's arrival field over the zone's cells and at
  *   its core cell. Congestion is not modelled.
- * - Units belong to departments built from the CAL FIRE facilities layer (response/fleet.ts;
- *   GET /api/suppression/bases) or, without it, the fixed ROSTER at its stations; they drive the
+ * - Units belong to departments built from the facilities on and near the board (response/fleet.ts
+ *   buildFleet: the CAL FIRE facilities layer via GET /api/suppression/bases, else the drill
+ *   package's OSM stations; no facilities, no local units); they drive the
  *   road network for their apparatus class (POST /api/demo/crew_routes) after their turnout, or a
  *   straight line x 1.3 while no road time is known, slowed by the board's evacuation traffic
  *   on shared roads (response/travel.ts) and varied by a seeded factor.
@@ -55,7 +56,7 @@ import { MAX_ORDER_COUNT, ORDERABLE, type Orderable } from "../response/runCards
 import { buildsOn, chooseTactic, lineNeededMeters, tacticHoldsFeet, tacticRateFactor } from "../response/containment";
 import { uniform } from "../response/rng";
 import type { WorkMode } from "../response/reach";
-import { AVAILABILITY_DRAW_EVERY_MINUTES, OUT_OF_SERVICE_MINUTES, OUT_OF_SERVICE_PROBABILITY, TANK_GALLONS } from "../response/units";
+import { AVAILABILITY_DRAW_EVERY_MINUTES, OUT_OF_SERVICE_MINUTES, OUT_OF_SERVICE_PROBABILITY } from "../response/units";
 import {
   advanceContainment,
   arriveOnScene,
@@ -98,15 +99,12 @@ import {
   DEPARTURE_MEAN_MINUTES,
   FALLBACK_CIRCUITY,
   FALLBACK_SPEED_KMH,
-  KIND_PREFIX,
   ORDER_COMPLIANCE,
-  ROSTER,
   SHADOW_SHARE,
   departedShare,
   holdsFlameFeet,
   kindShort,
   lineMetersPerMinute,
-  turnoutMinutes,
   windAt,
   type DemoApparatusKind,
   type MoistureId,
@@ -132,7 +130,6 @@ const MAX_STEP_MINUTES = 1;
 const METERS_PER_DEG = 111_320;
 const SQUARE_METERS_PER_HECTARE = 10_000;
 const ZONE_RING_POINTS = 40;
-const SYNTHETIC_STATION_COUNT = 3;
 /** The hourly wind series changes on these boundaries (realism.ts windAt). */
 const WIND_SAMPLE_MINUTES = 60;
 
@@ -292,12 +289,14 @@ export interface Station {
   id: string;
   name: string;
   location: LonLat;
-  /** CAL FIRE facility type (FSB, FSA, CC, ...) or "synthetic". */
+  /** CAL FIRE facility type (FSB, FSA, CC, AAB, HB, ...) or "osm_fire_station". */
   type: string;
   /** Facilities-layer agency, unit code and staffing (P/C/V), when known. */
   agency?: string;
   unit?: string | null;
   staffing?: string | null;
+  /** What it fields, for the map: "Paradise FS · CAL FIRE · 2 engines, 1 dozer" (response/fleet.ts). */
+  label?: string;
 }
 
 /** A road leg from POST /api/demo/crew_routes (drive minutes, after turnout). */
@@ -311,13 +310,10 @@ export interface TravelLeg {
 export interface DemoEnvironment {
   /** Fuel/terrain lookups and the hourly wind. */
   spread: SpreadInputs;
-  /** Real stations by roster base; null = synthetic stations (bases file unavailable). */
+  /** Facilities on and near the board (CAL FIRE layer, else OSM stations); null = none found. */
   bases: {
-    calfireStations: Station[];
-    localStations: Station[];
-    crewCamps: Station[];
     /** Every facility with its layer metadata (stations, camps, air bases): the response fleet's input. */
-    all?: Station[];
+    all: Station[];
   } | null;
   basesLabel: string;
   /** Carless households per zone id; missing zones count 0. */
@@ -664,72 +660,36 @@ function refreshFire(board: Board, fire: Fire): void {
 // ---- setup ----
 
 /**
- * Synthetic stations (fallback when the CAL FIRE bases file is unavailable): `count` zone
- * cores spread across the area by farthest-point sampling, starting from the zone with the
- * most households. Not real fire stations; labelled so on the board.
+ * The board's units: a pure function of the facilities on and near the board (`env.bases.all`,
+ * the CAL FIRE facilities layer, else the drill package's OSM stations) through the response
+ * fleet (response/fleet.ts buildFleet and its FACILITY_INVENTORY). Stations on the board answer
+ * initial attack, the others form the mutual-aid pool, and aircraft come from air bases within
+ * their dispatch radius. With no facilities at all the board has no local units: every fire's
+ * run card goes short and is ordered from out of the area (the state tier, response/orders.ts).
  */
-export function pickStations(zones: BaseZone[], count: number): Station[] {
-  if (zones.length === 0) return [];
-  const chosen = [zones.reduce((best, z) => (z.households > best.households ? z : best))];
-  while (chosen.length < Math.min(count, zones.length)) {
-    let best = zones[0];
-    let bestD = -1;
-    for (const z of zones) {
-      const d = Math.min(...chosen.map((c) => distanceM(c.core, z.core)));
-      if (d > bestD) {
-        bestD = d;
-        best = z;
-      }
-    }
-    chosen.push(best);
-  }
-  return chosen.map((z, i) => ({ id: `S${i + 1}`, name: `Synthetic station ${i + 1}`, location: z.core, type: "synthetic" }));
-}
-
-/**
- * The board's units. With the facilities metadata (`env.bases.all`): the response fleet
- * (response/fleet.ts), departments and counts per facility, stations on the board answering
- * initial attack and the others forming the mutual-aid pool. Otherwise the fixed ROSTER (below).
- */
-function buildFleetTeams(board: Board, zones: BaseZone[], env: DemoEnvironment, seed: number): void {
-  const all = env.bases?.all;
+function buildFleetTeams(board: Board, env: DemoEnvironment, seed: number): void {
+  const all = env.bases?.all ?? [];
   const grid = env.landscape;
   const onBoard = (p: LonLat) => cellAt(grid, { longitude: p[0], latitude: p[1] }) >= 0;
-  const stationOf = new Map<string, Station>();
-  const useFleet = !!all && all.length > 0;
-  for (const s of all ?? []) stationOf.set(s.id, s);
+  const center = mercatorToLonLat(grid.originX + (grid.width / 2) * grid.cellSizeX, grid.originY + (grid.height / 2) * grid.cellSizeY);
   const fleet = buildFleet(
-    (all ?? []).map((s): BaseInput => ({ id: s.id, name: s.name, type: s.type, location: s.location, agency: s.agency, unit: s.unit, staffing: s.staffing })),
+    all.map((s): BaseInput => ({ id: s.id, name: s.name, type: s.type, location: s.location, agency: s.agency, unit: s.unit, staffing: s.staffing })),
     onBoard,
+    center,
   );
-  if (!useFleet) {
-    // ROSTER fallback: each roster station is one assumed department.
-    const { teams, stations } = buildTeams(zones, env);
-    for (const t of teams) t.department = `roster:${t.station}`;
-    fleet.departments = stations.map((s) => ({
-      id: `roster:${s.id}`,
-      name: s.name,
-      agencyClass: "synthetic" as const,
-      tier: "closest" as const,
-      stationIds: [s.id],
-      engines: teams.filter((t) => t.station === s.id && t.kind.startsWith("engine")).length,
-      keepEngines: 0,
-    }));
-    fleet.label = "Fixed roster (assumed): CAL FIRE facilities metadata unavailable";
-    board.teams = teams;
-    board.stations = stations;
-  }
+  const labelOf = new Map(fleet.facilities.map((f) => [f.id, f.label]));
+  const stationOf = new Map<string, Station>();
+  for (const s of all) stationOf.set(s.id, { ...s, label: labelOf.get(s.id) });
   const offBoard = [...new Set(fleet.offBoardUnits.map((u) => u.stationId))].map((id) => stationOf.get(id)).filter((s): s is Station => !!s);
   board.response = createResponseState(seed, fleet.departments, fleet.offBoardUnits, offBoard, fleet.aircraft, onBoard, env.spread.wind.startUtc, fleet.label);
-  if (useFleet) {
-    const used = new Map<string, Station>();
-    for (const u of fleet.units) {
-      board.teams.push(teamFromSeed(board, u));
-      const st = stationOf.get(u.stationId);
-      if (st) used.set(st.id, st);
-    }
-    board.stations = [...used.values()];
+  board.response.facilities = fleet.facilities;
+  const used = new Map<string, Station>();
+  for (const u of fleet.units) {
+    board.teams.push(teamFromSeed(board, u));
+    const st = stationOf.get(u.stationId);
+    if (st) used.set(st.id, st);
   }
+  board.stations = [...used.values()];
   // Seeded availability at T+0: some units start out of service.
   for (const t of board.teams) {
     if (uniform(board.response.rng) < OUT_OF_SERVICE_PROBABILITY) {
@@ -739,65 +699,6 @@ function buildFleetTeams(board: Board, zones: BaseZone[], env: DemoEnvironment, 
     }
   }
   board.response.nextAvailabilityDraw = AVAILABILITY_DRAW_EVERY_MINUTES;
-}
-
-/** The roster's units, each at its base: real bases nearest first, else synthetic round-robin. */
-function buildTeams(zones: BaseZone[], env: DemoEnvironment): { teams: Team[]; stations: Station[] } {
-  const synthetic = env.bases ? [] : pickStations(zones, SYNTHETIC_STATION_COUNT);
-  const used = new Map<string, Station>();
-  const counters: Record<string, number> = {};
-  const teams: Team[] = [];
-  let robin = 0;
-  for (const { kind, count, base } of ROSTER) {
-    const pool = env.bases
-      ? base === "calfire_station"
-        ? env.bases.calfireStations
-        : base === "local_station"
-          ? env.bases.localStations
-          : env.bases.crewCamps
-      : synthetic;
-    for (let i = 0; i < count; i += 1) {
-      // One unit of a kind per real base (crewDispatch.ts UNITS_PER_KIND_PER_STATION); crews
-      // and the synthetic fallback cycle through the pool.
-      const station = env.bases && base !== "crew_camp" ? pool[i % Math.max(1, pool.length)] : pool[robin++ % Math.max(1, pool.length)];
-      const prefix = KIND_PREFIX[kind];
-      counters[prefix] = (counters[prefix] ?? 0) + 1;
-      const location = station?.location ?? zones[0]?.core ?? [0, 0];
-      if (station) used.set(station.id, station);
-      teams.push({
-        id: `${prefix}${counters[prefix]}`,
-        kind,
-        station: station?.id ?? "",
-        position: location,
-        status: "available",
-        fireId: null,
-        departAt: null,
-        arriveAt: null,
-        target: null,
-        route: null,
-        travel: null,
-        department: "roster",
-        tier: "closest",
-        home: location,
-        turnoutMinutes: turnoutMinutes(kind),
-        rollAt: null,
-        travelFactor: 1,
-        waterGallons: TANK_GALLONS[kind] ?? null,
-        workMinutes: 0,
-        restOwed: 0,
-        restUntil: null,
-        outOfServiceUntil: null,
-        coverStation: null,
-        demobilise: false,
-        workMode: null,
-        workStartAt: null,
-        parkedM: null,
-        reachM: 0,
-        accessKnown: false,
-      });
-    }
-  }
-  return { teams, stations: [...used.values()] };
 }
 
 /** Zones rasterised on the landscape's cells (cell centres inside the thinned ring, plus core and ring cells). */
@@ -852,7 +753,7 @@ export function createBoard(zones: BaseZone[], activity: Activity, seed: number,
     removedBurnedHa: 0,
     response: undefined as unknown as ResponseState,
   };
-  buildFleetTeams(board, zones, env, seed);
+  buildFleetTeams(board, env, seed);
   const byKind = new Map<string, number>();
   for (const t of board.teams) byKind.set(t.kind, (byKind.get(t.kind) ?? 0) + 1);
   const kinds = [...byKind].map(([k, n]) => `${n} ${kindShort(k as DemoApparatusKind)}${n > 1 ? "s" : ""}`).join(", ");
@@ -861,7 +762,11 @@ export function createBoard(zones: BaseZone[], activity: Activity, seed: number,
     board,
     "board",
     "board",
-    `Monitoring started, ${ACTIVITY[activity].label.toLowerCase()} fire activity, seed ${seed}. On the board: ${kinds}${air ? `, ${air} aircraft in range` : ""}; ${board.response.pool.length} units in the mutual-aid pool.`,
+    `Monitoring started, ${ACTIVITY[activity].label.toLowerCase()} fire activity, seed ${seed}. ${
+      kinds ? `On the board: ${kinds}` : "No fire stations found on this map: no local units"
+    }${air ? `, ${air} aircraft in range` : ""}; ${board.response.pool.length} units in the mutual-aid pool${
+      board.response.pool.length === 0 ? "; out-of-area resources only through the state system" : ""
+    }.`,
   );
   return board;
 }

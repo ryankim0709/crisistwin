@@ -21,6 +21,7 @@ import { toSolverInput, validateScenario } from "./scenario";
 import { gridBox, gridCoversScenario } from "./useRegionBoard";
 import { arrivalsOf, type CrewDispatch } from "./crewDispatch";
 import type { AirBase } from "./aircraft";
+import type { ApparatusCounts } from "./apparatus";
 
 /** Resources sent from fire stations for a run, or why they were not. */
 export interface RunDispatch {
@@ -28,6 +29,11 @@ export interface RunDispatch {
   note: string | null;
   /** Helitack and air attack bases for the aircraft model, or null without base data. */
   airBases?: AirBase[] | null;
+  /**
+   * Units sent, ground and air, derived from the facilities on the map (studio/mapResources.ts).
+   * They replace any counts in the scenario: Studio has no hand-set unit counts.
+   */
+  resources?: ApparatusCounts;
 }
 
 /** A prebuilt region board offered for a run; `grid` is null while it is still loading. */
@@ -163,7 +169,11 @@ export function useStudioRun(): StudioRunController {
         requestId,
         landscape: landscape.grid,
         input: toSolverInput(snapshot),
-        firefighting: snapshot.firefighting ?? null,
+        // Units come from the map, not the scenario: drive in from their bases, no night-flying
+        // helicopter the facilities layer cannot place.
+        firefighting: snapshot.firefighting
+          ? { ...snapshot.firefighting, fromStations: true, nightHelicopters: false, resources: crews?.resources ?? {} }
+          : null,
         crewArrivals: crews?.dispatch ? arrivalsOf(crews.dispatch) : null,
         airBases: crews?.airBases ?? null,
       };

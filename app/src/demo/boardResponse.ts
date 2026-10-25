@@ -44,7 +44,7 @@ import {
   TACTIC_LABEL,
   type Tactic,
 } from "../response/containment";
-import { OWN_AREA_RADIUS_M, type AirResponseKind, type Department, type GroundResponseKind, type Tier, type UnitSeed, type AircraftSeed } from "../response/fleet";
+import { OWN_AREA_RADIUS_M, type AirResponseKind, type Department, type FacilityContribution, type GroundResponseKind, type Tier, type UnitSeed, type AircraftSeed } from "../response/fleet";
 import {
   MUTUAL_AID_ASSEMBLY_MINUTES,
   STATE_AIR_DISTANCE_KM,
@@ -229,6 +229,8 @@ export interface ResponseState {
   /** UTC epoch ms of board minute 0 (the wind series' start, else DEFAULT_START_LOCAL_ISO). */
   startEpochMs: number;
   label: string;
+  /** Every facility that fields a unit (on the board, mutual aid, air bases in range), for the map. */
+  facilities: FacilityContribution[];
 }
 
 const MAX_TEAMS = 160;
@@ -290,6 +292,7 @@ export function createResponseState(
     flows: null,
     startEpochMs: Number.isFinite(parsed) ? parsed : Date.parse(DEFAULT_START_LOCAL_ISO),
     label,
+    facilities: [],
   };
 }
 

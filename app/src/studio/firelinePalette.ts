@@ -12,6 +12,13 @@ export function firelineCss(hex: number): string {
   return `#${hex.toString(16).padStart(6, "0")}`;
 }
 
+/** Fire facilities on the map (studio/useMapStations.ts): marker fill, outline and label halo. */
+export const STATION_COLORS = {
+  fill: 0xffffff,
+  ink: 0x1f2a24,
+  halo: 0xffffff,
+} as const;
+
 /** Firefighting vehicles and their routes on the 3D board and the map. */
 export const CREW_COLORS = {
   engine: 0xc8352a,

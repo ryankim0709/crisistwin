@@ -420,6 +420,19 @@
   gap: var(--ct-space-2);
   margin-block: var(--ct-space-2);
 }
+/* Resources from the map: one summary line, details collapsed. */
+.studio-ff-fleet {
+  margin-block: var(--ct-space-2);
+  font-size: var(--ct-text-sm);
+  line-height: var(--ct-leading-snug);
+}
+.studio-ff-list {
+  display: grid;
+  gap: var(--ct-space-1);
+  margin: var(--ct-space-2) 0;
+  padding-left: var(--ct-space-4);
+  font-size: var(--ct-text-xs);
+}
 .studio-ff-result {
   display: grid;
   gap: var(--ct-space-2);

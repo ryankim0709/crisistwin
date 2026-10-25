@@ -13,7 +13,10 @@
  * the route an unrestricted vehicle would take. Service roads and tracks are open to apparatus
  * but not to evacuation traffic.
  *
- * Bases (ASSUMPTIONS, named below): engines, tenders and chief officers come from the board's
+ * The Studio passes units already chosen from the facilities on the map (`DispatchUnit`,
+ * studio/mapResources.ts); each drives from its own base and nothing below picks bases for it.
+ *
+ * Bases for bare kinds (older callers; ASSUMPTIONS, named below): engines, tenders and chief officers come from the board's
  * OSM fire stations, at most one unit of each kind per station; further units are mutual aid
  * from CAL FIRE-layer stations off the board (tools/ca_fire_bases.json via the bases endpoint),
  * driven at OFFBOARD_SPEED_KMH over the straight-line distance x OFFBOARD_CIRCUITY to the
@@ -61,7 +64,22 @@ export const OFFBOARD_SPEED_KMH = dataValue<Record<string, number>>(
 /** ASSUMPTION: at most this many units of one kind from one board station. */
 export const UNITS_PER_KIND_PER_STATION = 1;
 
-export type TripOrigin = "station" | "mutual_aid" | "crew_camp" | "dozer_base" | "fallback";
+export type TripOrigin = "station" | "mutual_aid" | "crew_camp" | "dozer_base" | "fallback" | "state";
+
+/**
+ * One unit already chosen from the facilities on the map (studio/mapResources.ts): it drives from
+ * its own base. Units are a pure function of the map, so the planner only routes them.
+ */
+export interface DispatchUnit {
+  kind: GroundKind;
+  baseName: string;
+  location: LonLat;
+  origin: TripOrigin;
+  /** Report to rolling: turnout by staffing, or the kind's mobilisation time. */
+  turnoutMinutes: number;
+  /** Further minutes before it reaches its starting point (a state order's lead time), else 0. */
+  leadMinutes: number;
+}
 
 export interface CrewTrip {
   kind: GroundKind;
@@ -154,21 +172,24 @@ export function accessTableFor(area: DispatchArea, grid: LandscapeGrid | null): 
 }
 
 /**
- * Plan every ground resource's trip, or explain why there is none. `blocked` marks edges
- * closed to traffic (the Studio's road closures). `grid` gives road grades (null: 0% assumed,
- * labelled). `bases` are the off-board CAL FIRE-layer facilities, or null.
+ * Plan every ground resource's trip, or explain why there is none. A `DispatchUnit` (the Studio:
+ * units chosen from the facilities on the map, studio/mapResources.ts) drives from its own base;
+ * a bare kind (older callers) gets a base by the rules above. `blocked` marks edges closed to
+ * traffic (the Studio's road closures). `grid` gives road grades (null: 0% assumed, labelled).
+ * `bases` are the off-board CAL FIRE-layer facilities, or null.
  */
 export function planCrewDispatch(
   area: DispatchArea,
   fire: LonLat,
   reportMinute: number,
-  resources: readonly GroundKind[],
+  resources: readonly (GroundKind | DispatchUnit)[],
   blocked: (edge: number) => boolean = () => false,
   grid: LandscapeGrid | null = null,
   bases: SuppressionBases | null = null,
 ): { dispatch: CrewDispatch | null; note: string | null } {
   if (resources.length === 0) return { dispatch: null, note: "No resources assigned." };
-  if (area.stations.length === 0 && !bases?.available) {
+  const kindsOnly = resources.some((r) => typeof r === "string");
+  if (kindsOnly && area.stations.length === 0 && !bases?.available) {
     return { dispatch: null, note: "No fire stations on or near this board's roads." };
   }
   const near: { node: number; meters: number }[] = [];
@@ -328,7 +349,7 @@ export function planCrewDispatch(
     (type, agency) => STATION_TYPES.has(type) && agency.startsWith("CAL FIRE"),
     "dozer_base",
   );
-  if (!bases?.available) {
+  if (kindsOnly && !bases?.available) {
     notes.push(
       "No CAL FIRE base data (tools/ca_fire_bases.json is local-only): every unit comes from the board's OSM stations, round-robin, with no off-board mutual aid.",
     );
@@ -381,7 +402,7 @@ export function planCrewDispatch(
     return k.base === "station" ? (k.line ? 0 : 1) : k.base === "crew_camp" ? 2 : 3;
   };
   const sorted = resources
-    .map((kind, index) => ({ kind, index }))
+    .map((r, index) => (typeof r === "string" ? { kind: r, unit: null, index } : { kind: r.kind, unit: r, index }))
     .sort((a, b) => order(a.kind) - order(b.kind) || a.index - b.index);
   const used = new Map<string, number>();
   const counts: Partial<Record<GroundKind, number>> = {};
@@ -397,13 +418,14 @@ export function planCrewDispatch(
   };
   let fellBack = false;
 
-  for (const { kind, index } of sorted) {
+  for (const { kind, unit, index } of sorted) {
     const spec = GROUND_APPARATUS[kind];
     const cls = spec.access;
     counts[kind] = (counts[kind] ?? 0) + 1;
     const label = `${spec.short} ${counts[kind]}`;
-    const candidates: { origin: Origin; offBoard: boolean }[] =
-      spec.base === "crew_camp" && crewCamps.length > 0
+    const candidates: { origin: Origin; offBoard: boolean }[] = unit
+      ? [{ origin: { name: unit.baseName, origin: unit.origin, node: null, location: unit.location, approachMeters: 0 }, offBoard: true }]
+      : spec.base === "crew_camp" && crewCamps.length > 0
         ? crewCamps.map((origin) => ({ origin, offBoard: true }))
         : spec.base === "dozer_base" && dozerBases.length > 0
           ? dozerBases.map((origin) => ({ origin, offBoard: true }))
@@ -435,7 +457,7 @@ export function planCrewDispatch(
     }
     // Camps and dozer bases are not depleted (ASSUMPTION); stations give one unit per kind,
     // and without base data units round-robin over the board's stations.
-    const perStation = spec.base === "station" || !bases?.available;
+    const perStation = !unit && (spec.base === "station" || !bases?.available);
     let pick = options[0];
     if (perStation) {
       const free = options.find(
@@ -451,8 +473,11 @@ export function planCrewDispatch(
     }
     // Engines from a base whose staffing the layer gives: 80 s paid, 120 s otherwise (response/fleet.ts,
     // as livecore/apparatus.py); board OSM stations (staffing unknown) keep the kind's turnout.
-    const turnout =
-      spec.line?.kind === "engine" && pick.origin.staffing != null ? engineTurnoutMinutes(pick.origin.staffing) : spec.turnoutMinutes;
+    const turnout = unit
+      ? unit.turnoutMinutes + unit.leadMinutes
+      : spec.line?.kind === "engine" && pick.origin.staffing != null
+        ? engineTurnoutMinutes(pick.origin.staffing)
+        : spec.turnoutMinutes;
     const departMinute = reportMinute + turnout;
     const leg = pick.leg;
     const limit = leg.node !== fireNode ? limitOf(cls, sourceOf(pick.origin)) : null;
@@ -460,7 +485,7 @@ export function planCrewDispatch(
       kind,
       label,
       stationName: pick.origin.name,
-      origin: !bases?.available && spec.base !== "station" ? "fallback" : pick.origin.origin,
+      origin: unit ? unit.origin : !bases?.available && spec.base !== "station" ? "fallback" : pick.origin.origin,
       departMinute,
       atRoadMinute: departMinute + leg.minutes,
       arriveMinute: departMinute + leg.minutes + leg.hikeMeters / HIKE_METERS_PER_MINUTE,
