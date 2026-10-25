@@ -156,11 +156,17 @@ polls `GET /api/live/incidents/<id>/studio-fires` every 5 s (`app/src/demo/useSt
   landscape are skipped, with a board event saying why. Every ingest is logged
   ("Studio fire 'X' received as S1: 2 ignitions, wind 25 mph from 45° (assumed), Dry fuel
   moisture.") and shows in the audit log as source "Simulation Studio".
-- Which publishes a board takes: every publish that appears after the board first read the
-  feed, plus, at that first read, those published in the last 10 minutes (server time), the
-  newest per Studio scenario only. This covers a run published while Live command was closed or
-  while the board was still loading after Studio switched the drill. "Restart board" takes none
-  of the publishes already listed.
+- Which publish a board runs: Studio's newest run only (Studio is the source of truth). At its
+  first read of the feed a board takes the newest stored publish (the server keeps only that one:
+  a publish clears the previous run's state, [live-reports.md](live-reports.md#studio-fires)). This
+  covers a reload, a run published while Live command was closed or while the board was still
+  loading after Studio switched the drill. A publish that appears later restarts the board on
+  that run alone at T+0 (a new board: new run id, Claude's memory cleared; feed line "Simulation
+  Studio run S1 received: board restarted with its 2 fires."). "Restart board" restarts on the
+  newest publish with a new seed; "Reset board" deletes the publishes and starts empty. A new
+  shared-world seed (Studio's random scenario) no longer restarts the board. With a
+  `weather_series` the board's wind and moisture follow Studio's hourly series at the same Studio
+  minute. Map and 3D labels show Studio's ignition name with the board id: "F1 (S1-F1)".
 - With no fire on the board the stage shows "No fires. Run a simulation in Simulation Studio to
   start one here." and the AI commander's monitor has nothing to wake it.
 
@@ -194,7 +200,7 @@ The /live map's People layer (`app/src/live/people/`) is documented in [twin-api
 | Bases | 3 synthetic stations | With a snapshot: its stations (OSM / NIST locations, observed; Camp's four Chico points synthetic), all of them, also those with no available engine. Without one: real CAL FIRE facilities from `GET /api/suppression/bases`: Type 3 engines and the dozer at the nearest CAL FIRE state stations (Paradise, Jarbo Gap, Stirling City, Forest Ranch, Cohasset, Harts Mill), Type 1 engines at the nearest Schedule A stations (Paradise FD 81 and 82, Upper Ridge), crews from Table Mountain Fire Center. Without the local-only bases file: synthetic stations, labelled. The map marks each station | Observed locations |
 | Travel | Straight line × 1.3 at 50 km/h | `POST /api/demo/crew_routes`: `livecore.inbound.reach_route` over the drill roads, per apparatus class (`tools.suppression_data.road_access`, rules R01-R12, on each road's OSM tags and DEM grade: "Road access" below), avoiding fire. A unit no allowed road brings to its fire stops at the nearest point it can reach. A base (or a target, such as an attack position in the wildland) off the network gets a straight-line × 1.3 leg at the heavy-apparatus secondary-road cap to (from) the nearest road node. Units only move along that road line: a unit dispatched before its road time is known waits at its base (travel `pending`) and sets off, timed from its dispatch, when the leg arrives; a trip with no road route releases the unit with the router's reason. **ASSUMPTION** straight line × 1.3 at 60 km/h only for options and ETAs shown before a road time is known. On top of the leg the board applies the unit's turnout (from rest only), the congestion factor and a seeded trip variation (`model.ts` `dispatch`, `travelMinutesTo`), and reroutes a unit whose road fire cuts (`rerouteTeam`: it waits where it stands for a new road leg; the straight-line fallback is never a trip; at most 3 reroutes per trip with a backoff, then the trip is reported blocked by fire and the unit stays free where it stopped, [response-model.md](response-model.md)). The board clock holds while a dispatched, returning or moving-up unit waits for its road leg (`model.ts` `roadLegsAwaited`, `useCrewRoutes.ts` `createRoadLegHold`), as it does for a fire solve, so a unit sets off at the board minute it was sent whatever the router's latency or the playback speed; each leg holds the clock for at most 10 s of real time (`ROAD_LEG_HOLD_MAX_MS`, **ASSUMPTION**), after which the clock runs on and the unit waits as before (console warning; timing then depends on the router). Sending a unit home, moving it up and covering a station are road trips too (`driveHome`, `startRoadTrip`) ([response-model.md](response-model.md)) | Model |
 | Departure | Uniform over 45 min after an order, everyone leaves | Exponential delay, mean 93 min, counted from the minute the order takes effect: now, or the `start_minute` it was scheduled for (Camp awareness-to-departure, Grajdura 2022; the exponential shape is an **ASSUMPTION**). 92% of households with a vehicle leave on an order (**ASSUMPTION** inside the sourced 0.87-0.97). See "Staged evacuation orders" below | Sourced mean and range |
-| Shadow evacuation | With no order, 30% of households with a vehicle left once fire touched the zone (**ASSUMPTION** inside the sourced 0.29-0.75), on the zone's best route | **None (simplification)**: households leave only on an order, the AI commander's or a person's, so the commander decides who is on the road when. This departs from the evidence (0.29-0.75 of non-recipients leave anyway, Wong et al. 2020 Table 11; the live scenario runner keeps it, [live-scenario-runner.md](live-scenario-runner.md)); "What is still not realistic" lists it. Fire reaching a zone with no order is logged (`zone_reached_no_order`) and nobody leaves | Design choice |
+| Shadow evacuation | With no order, 30% of households with a vehicle left once fire touched the zone (**ASSUMPTION** inside the sourced 0.29-0.75), on the zone's best route | **Cue-driven self-evacuation** (`demo/selfEvacuation.ts`, both board modes): with no order, households with their own vehicle (not the drill's given cars) decide to leave on cues read from the fire solver (any fire, reported or not) and from neighbours: fire forecast at the zone edge within 60 min 15.5% (0.367 x 0.423, Zhao et al. 2022 Kincade, derived; lead time **ASSUMPTION**), most neighbours within 2 km gone 29.1% (Wong et al. 2020 Table 11 shadow share; radius and 50% threshold **ASSUMPTION**), fire in the zone 36.7% (shadow + wait-and-see, Studio's grounded draw), fire within 500 m of the core 92% (Studio's near cue). Each rise departs on the board's exponential curve (mean 93 min; 45 min after the near cue, derived from McGee 2018 p. 1157), +18.5 min at night for a zone's first cue (NIST TN 2174), binomial spread per zone from its own seeded stream. Self-evacuees take the zone's best open route and load the roads. An order sends 92% in total, the rest on its own curve. The observation shows `self_evacuated` and `self_evac_cue` per zone; `self_evacuation` events log a zone's new cue | Sourced shares, assumed cue thresholds |
 | No vehicle | none | The snapshot's `needs_transport_households` per zone (Camp: ACS, 1,172 over 43 zones, the replay bundle's demand table; packages: synthetic, 1,586 Berkeley, 672 Palisades); without a snapshot the environment's ACS count (Camp) or none. They stay home and are shown as "No vehicle, at risk" when a fire touches or is forecast to reach their zone | Observed (ACS) |
 | Congestion | not modelled | One traffic state. Households: evacuating vehicles load their route's road segments each minute; BPR volume-delay on the flow that passes plus a point queue where demand exceeds capacity, on the drill roads' per-segment assumed capacities (see "Evacuation traffic" below). Fire units read the same evacuees' flows (`board.traffic.zoneFlow`, the zones' departure flow in veh/h, `boardResponse.ts` `flowIndex`): `response/travel.ts` slows a responder's road leg where it runs within `SHARED_ROAD_M` (60 m) of a route in use by a leaving zone, by a BPR factor against a fixed `CAPACITY_VEH_PER_HOUR` of 1,700 veh/h per direction (**ASSUMPTION**, HCM 2010 two-lane highway; opposing flow weighted `OPPOSING_FLOW_WEIGHT` 0.5, **ASSUMPTION**), not the segment's own capacity and not the evacuees' queues ([response-model.md](response-model.md)) | Model on assumed capacities |
 
@@ -286,7 +292,10 @@ twin, so the board runs this small deterministic model on the same drill roads i
   count and name, so two zones on the same stretch list the same id. Ids are per answer; on each
   new answer the board moves every leaving zone onto the newest route to its destination
   (`setRoutes`), so loads keep matching. Option `destination_capacity_veh` is the bundle's
-  destination capacity (null for exits, unknown).
+  destination capacity (from the safe area's capacity since dispatch-area/6; null for a map-edge
+  exit). The request may carry `excluded_destination_ids`: destinations the board closed
+  (`demo/safeDestinations.ts`: the fire is forecast to reach the road node or within 300 m of it
+  within FORECAST_MINUTES, or vehicles sent reach `capacity_veh`); no route goes to them.
 - **Capacity** (veh/h, one direction, all lanes) is the bundle edge's `capacity_veh_per_hour`:
   lanes x an assumed per-lane capacity by OSM class. Camp: `sim/traffic.py` `_HIGHWAY_DEFAULTS`
   (motorway 2,000, trunk 1,800, primary 1,600, secondary 1,200, tertiary 1,000, unclassified
@@ -347,7 +356,7 @@ twin, so the board runs this small deterministic model on the same drill roads i
 
 ### Staged evacuation orders
 
-People leave only on an order (no self-evacuation, see the Shadow evacuation row), and an order
+Most people leave on an order (some self-evacuate on their own cues, see the Shadow evacuation row), and an order
 can start later than it is given, so the commander can stagger zones by fire ETA instead of
 putting every zone's cars on a shared road at once (`model.ts` `applyOrder`, `orderEvacuation`,
 `startScheduledEvacuations`).
@@ -669,8 +678,8 @@ observation carries them as `outcomes`, and the harness reports all of them.
 
 - **Casualties (caught)**: households and persons still home when fire reaches their zone's core
   (the board's catch rule, `model.ts`). `caughtBreakdown` splits a zone's caught households by why
-  they were home: `no_vehicle` (carless; the board has no pickup), `no_order` (never ordered: no
-  self-evacuation), `stayed_despite_order` (the 8% of ordered households with a vehicle that do
+  they were home: `no_vehicle` (carless; the board has no pickup), `no_order` (no order in effect by the
+  overrun and not gone on their own cues: self-evacuation, `demo/selfEvacuation.ts`), `stayed_despite_order` (the 8% of ordered households with a vehicle that do
   not comply, `ORDER_COMPLIANCE` 0.92) and `ordered_too_late` (complying households still inside
   their departure delay). Only the last two depend on the commander's timing, and only the last
   can be driven to zero by ordering earlier. Persons apportion vehicle persons evenly per
@@ -725,6 +734,48 @@ Model output the commander chooses from; Claude never computes these numbers.
   early rather than late), then property (the recommended strategy, or all units), then
   containment (a strategy and initial attack on every new fire, never idle units while a fire
   grows), and tells it to use `monitor.urgency`.
+
+### Next-state prediction and evacuation balance (`app/src/demo/predict.ts`, `app/src/demo/evacBalance.ts`; observation `predicted`, `evac_balance`)
+
+Simulated model output, never observed; Claude quotes it and never recomputes it. Types in
+`app/src/demo/contracts.ts` (`PredictedObservation`, `EvacBalanceObservation`).
+
+- **`predicted`** (horizons 30 / 60 / 120 min from now). `zones`: `edge_eta_min`, `core_eta_min`
+  (minutes) and `burned_pct` (percent of the zone's ground, one value per horizon). `segments` (of
+  the current and scheduled orders): `vc` (demand / capacity, veh/h over veh/h, per horizon),
+  `peak_vc`, `peak_queue_vehicles`, `queue_delay_min`, `fire_eta_min`, `clears_in_min` (until 90%
+  of the committed traffic has passed) and `danger` (fire before clearance). `destinations`:
+  `committed_vehicles` against `capacity_veh` and `over_capacity`. `dangers`: one line per problem.
+- **`evac_balance`**: per zone of `decision_aids.evacuation`, `action` (order_now / schedule /
+  reschedule / keep / leaving), `destination_id`, `start_minute` (absolute board minute), `peak_vc`,
+  `worst_segment`, `expected_caught_*`, `exposed_vehicles`, `fire_cuts_route`, `why`; `totals` of
+  the plan against `all_now` (every listed zone ordered now to decision_aids' destinations).
+- **Fire.** The solver's free-burn arrival field of the reported fires (line built so far in the
+  field, containment not assumed) gives each zone's edge / core ETA and burned share. A segment's
+  fire arrival samples its route line, split over the segments by length share.
+  `predictedFireRings(board, minutes[])` (minutes AHEAD of the board minute, e.g. `[30, 60, 120]`)
+  returns, per horizon, the closed `[lon, lat]` outer rings of the reported fires' predicted
+  footprint for the 3D overlay (largest first, at most 40 rings of 240 points).
+- **Traffic.** The board's exponential departure curve, static loading of segments by zone, and a
+  Lindley point queue per segment at `PREDICT_STEP_MIN` = 5-min steps over the solver's 360-min
+  lookahead (`PREDICT_WINDOW_MIN`), starting from the board's current queues. Moving time is free
+  flow (BPR adds at most 15% on the flow that passes, `traffic.ts`).
+- **Optimizer.** Picks a destination (one of the zone's route options) and a start minute jointly
+  across zones, minimising expected people caught at home + people on a segment when the fire
+  reaches it + destination overload + a small queue-time term. Greedy by latest safe start, then
+  local improvement passes; deterministic, target under 50 ms. A zone is never routed through a
+  segment the fire reaches before 90% of its traffic has passed, unless every option is cut
+  (`fire_cuts_route` true).
+- **Parameters.** Start offsets 0-240 min in 5-min steps (board rule, the schedule's
+  `EVAC_SCHEDULE_STEP_MIN` and `MAX_SCHEDULE_AHEAD_MINUTES`). `QUEUE_WEIGHT_PERSON_PER_VEH_MIN` =
+  1/600 (**ASSUMPTION**: 10 vehicle-hours of queueing weigh as one person at risk).
+  `FIRE_CUT_PENALTY` = 10000 person-equivalents per zone (**ASSUMPTION**: makes the fire-cut rule
+  effectively hard). Destination overload counted as persons at risk (**ASSUMPTION**). Clearance =
+  90% of complying vehicles past the segment (`EVAC_TARGET_DEPARTED_SHARE` in `decisionAids.ts`,
+  **ASSUMPTION**). `MAX_IMPROVE_PASSES` = 3.
+- The decide prompt (`app/backend/api/demo.py`) tells the commander to issue
+  `order_evacuation(zone_id, destination_id, start_minute)` with the plan's own destination and
+  start for order_now / schedule / reschedule entries, never after `latest_safe_start_minute`.
 
 ### Evaluation harness (`app/scripts/live-eval/`)
 
@@ -1025,16 +1076,16 @@ the AI agent see them (each console polls every 4 s).
   until contained or closed.
 - Ingest timing is a wall-clock input (when the poll sees the publish); given the same publishes
   ingested at the same board minutes, a run replays exactly.
-- No shadow (self-) evacuation: households leave only on an order, although 0.29-0.75 of
-  households without an order leave anyway in the evidence (Wong et al. 2020 Table 11). The board
-  drops it so the commander's staging alone decides who is on the road; real zones would also
-  put unordered cars on the road once fire is near.
+- Self-evacuation is per zone and aggregate (shares per cue, not per household); its cue lead
+  time (60 min), neighbour radius (2 km) and social threshold (50% gone) are assumptions, and
+  the fire forecast stands in for what residents can see.
 - Household evacuation traffic uses static loading (a vehicle loads its whole route at departure), point
   queues without spillback into upstream links, no intersections or signals, and assumed
   capacities; a zone redirected mid-evacuation moves its past departures to the new route in the
   queue history. Fire units read these households' zone flows (`board.traffic.zoneFlow`) but are slowed by a BPR factor
   at a fixed 1,700 veh/h per direction on route lines near leaving zones, not by the per-segment capacities or queues ([response-model.md](response-model.md)). Destination
-  capacity is reported, not enforced (exits have none). Carless households have no pickup model.
+  capacity is enforced only at routing: a full destination is left out of new routes
+  (`demo/safeDestinations.ts`); zones already going there keep going (map-edge exits have none). Carless households have no pickup model.
 - Fires that leave the board keep their burned ground in the field (no reburn) until restart.
 - `fire/rothermel.ts` used to give SH5 half the replay's head rate (85 against 173 m/min) by
   weighting each category's reaction term by its surface-area share. Since `SPREAD_MODEL`

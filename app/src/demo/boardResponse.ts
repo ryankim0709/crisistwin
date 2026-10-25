@@ -65,7 +65,7 @@ import {
   TACTIC_LABEL,
   type Tactic,
 } from "../response/containment";
-import { OWN_AREA_RADIUS_M, type AirResponseKind, type Department, type FacilityContribution, type GroundResponseKind, type Tier, type UnitSeed, type AircraftSeed } from "../response/fleet";
+import { OWN_AREA_RADIUS_M, type AirResponseKind, type Department, type FacilityContribution, type GroundResponseKind, type Tier, type UnitSeed, type AircraftSeed, type EmsSeed } from "../response/fleet";
 import {
   MUTUAL_AID_ASSEMBLY_MINUTES,
   STATE_AIR_DISTANCE_KM,
@@ -145,7 +145,7 @@ import {
   type Station,
   type Team,
 } from "./model";
-import { KIND_PREFIX, holdsFlameFeet } from "./realism";
+import { KIND_PREFIX, fireKindOf, holdsFlameFeet, type TeamKind } from "./realism";
 import { simClock } from "./format";
 
 // ---- state ----
@@ -267,6 +267,12 @@ export interface ResponseState {
   label: string;
   /** Every facility that fields a unit (on the board, mutual aid, air bases in range), for the map. */
   facilities: FacilityContribution[];
+  /**
+   * ALS ambulances at stations with a published roster (response/fleet.ts buildFleet `ems`;
+   * Berkeley FD Medic 1, 2, 3, 5 around Berkeley). Not fire units: the injury/rescue model
+   * (demo/injuries.ts) dispatches them. [] when no roster lists any.
+   */
+  ems: EmsSeed[];
 }
 
 /**
@@ -280,6 +286,22 @@ const MAX_TEAMS = 160;
 const MAX_ORDERS_KEPT = 60;
 const TACTIC_REVIEW_MINUTES = 10;
 const HOME_M = 60;
+
+/**
+ * A seeded stream for one draw, keyed by what the draw is about (its purpose and a key such as
+ * the fire or the unit) and derived from the board seed alone. The same draw then comes out the
+ * same in every run of a seed, whatever else happened before it: a baseline run (nobody acts)
+ * and an AI run of the same seed get the same report delays and the same out-of-service draws,
+ * and an order or a trip in one run cannot shift a draw in the other (one shared stream did).
+ */
+export function keyedStream(board: Pick<Board, "seed">, purpose: string, key: string): RngStream {
+  return deriveStream(board.seed, `${purpose}:${key}`);
+}
+
+/** A fire's key for keyed draws: where and when it ignited (ids can shift between runs, an ignition does not). */
+export function fireDrawKey(fire: Pick<Fire, "origin" | "ignitedAt">): string {
+  return `${fire.origin[0].toFixed(5)},${fire.origin[1].toFixed(5)}@${fire.ignitedAt.toFixed(2)}`;
+}
 
 export function createResponseState(
   seed: number,
@@ -336,6 +358,7 @@ export function createResponseState(
     startEpochMs: Number.isFinite(parsed) ? parsed : Date.parse(DEFAULT_START_LOCAL_ISO),
     label,
     facilities: [],
+    ems: [],
   };
 }
 
@@ -345,10 +368,16 @@ export function fireResponse(board: Board, fire: Fire): FireResponse | null {
 
 // ---- helpers ----
 
-const isEngine = (k: GroundResponseKind) => k === "engine_t3" || k === "engine_t1";
+const isEngine = (k: GroundResponseKind | TeamKind) => k === "engine_t3" || k === "engine_t1";
 const DISPATCHABLE = new Set(["available", "returning", "moving_up"]);
 
+/** A fire unit that can take an order: available, returning and moving_up. Ambulances never take fire orders (only demo/injuries.ts sends them). */
 export function dispatchable(team: Team): boolean {
+  return team.kind !== "ambulance" && DISPATCHABLE.has(team.status);
+}
+
+/** Whether a unit of any kind (an ambulance included) is free to be sent somewhere: the status test of `dispatchable`. */
+export function statusFree(team: Team): boolean {
   return DISPATCHABLE.has(team.status);
 }
 
@@ -507,27 +536,16 @@ export function respondToNewFire(board: Board, fire: Fire): void {
 /** ASSUMPTION: households within this distance (in sight of the smoke) could see the fire; reported only. */
 const VIEW_RADIUS_M = 3000;
 
-/** Metres from `p` to the nearest point of a polyline. */
-function toPolylineM(p: LonLat, line: readonly LonLat[]): number {
-  let best = Infinity;
-  for (let i = 1; i < line.length; i += 1) {
-    const [ax, ay] = toLocal(p, line[i - 1]);
-    const [bx, by] = toLocal(p, line[i]);
-    const vx = bx - ax;
-    const vy = by - ay;
-    const len2 = vx * vx + vy * vy;
-    const t = len2 > 0 ? Math.max(0, Math.min(1, -(ax * vx + ay * vy) / len2)) : 0;
-    best = Math.min(best, Math.hypot(ax + t * vx, ay + t * vy));
-  }
-  return best;
-}
-
 /**
  * The seeded delay from ignition to dispatch for a new fire (response/report.ts), from how
  * remote its origin is: the nearest occupied home (a developed cell of the landscape, or a
  * zone dense enough to be suburban that contains it), whether terrain hides the fire from it,
- * the nearest known road (the board's evacuation route lines: drill roads, a partial network),
- * and the time of day.
+ * and the time of day. Deterministic for a seed: the draw is keyed to the fire (keyedStream) and
+ * reads only what the board has at ingest (landscape, zones). The board's route lines are not
+ * used for the nearest road: they load asynchronously, so a fire after T+0 got a different delay
+ * depending on whether they had arrived. Mapped roads are in the landscape's developed cells
+ * (LANDFIRE FBFM40 NB1 covers its developed EVT classes, roads included; as documented by
+ * LANDFIRE, not re-fetched), so nearestDeveloped already finds a road beside the fire.
  */
 function reportFor(board: Board, fire: Fire, structure: boolean): { reportAt: number; report: ReportDelay } {
   const grid = board.env.landscape;
@@ -543,26 +561,24 @@ function reportFor(board: Board, fire: Fire, structure: boolean): { reportAt: nu
   }
   const home = denseZone ? { meters: 0, at: fire.origin } : nearestDeveloped(grid, fire.origin);
   const homeInSight = home ? lineOfSight(grid, fire.origin, home.at) : true;
-  let road = Infinity;
-  for (const options of board.routes.values()) for (const o of options) if (o.line.length > 1) road = Math.min(road, toPolylineM(fire.origin, o.line));
   let householdsInView = 0;
   for (const z of board.zones) {
     if (z.households > 0 && distanceM(z.core, fire.origin) <= VIEW_RADIUS_M && lineOfSight(grid, fire.origin, z.core)) householdsInView += z.households;
   }
-  const modelled = reportDelay(board.response.rng, {
+  const modelled = reportDelay(keyedStream(board, "report", fireDrawKey(fire)), {
     ignitionEpochMs: board.response.startEpochMs + fire.ignitedAt * 60_000,
     location: fire.origin,
     nearestHomeM: home?.meters ?? null,
     homeInSight,
-    nearestRoadM: Number.isFinite(road) ? road : null,
+    nearestRoadM: null,
     householdsInView,
     developed: structure,
     wildland: !structure,
     // Studio ignitions are not reported at ignition; a field report that joins the fire reports it then (model.ts joinFieldReport).
     alreadyReported: false,
   });
-  // The modelled delay is drawn even when Studio set the report time, so the seeded stream (and
-  // with it every later draw) is the same whether or not a report time is set.
+  // The modelled delay is drawn even when Studio set the report time (its own keyed stream, so
+  // nothing else depends on it).
   const set = fire.studio.reportAfterMin;
   if (set === null) return { reportAt: fire.ignitedAt + modelled.totalMinutes, report: modelled };
   // Studio-set: a scenario assumption, not modelled; the whole delay is the set time.
@@ -678,7 +694,7 @@ function fillCard(board: Board, fire: Fire, card: ResourceCounts): ResourceCount
   type Candidate = { t: Team | null; seed: UnitSeed | null; kind: GroundResponseKind; eta: number; id: string };
   const candidates: Candidate[] = board.teams
     .filter((t) => dispatchable(t) && t.fireId === null && legStatus(board, t, fire.id, crewTarget(fire)).route !== "none")
-    .map((t) => ({ t, seed: null, kind: t.kind, eta: expectedArrival(board, t, fire), id: t.id }));
+    .map((t) => ({ t, seed: null, kind: fireKindOf(t), eta: expectedArrival(board, t, fire), id: t.id }));
   const flows = flowIndex(board);
   const byDistance = [...r.pool].sort((a, b) => distanceM(a.location, fire.origin) - distanceM(b.location, fire.origin));
   const perKind = new Map<string, number>();
@@ -816,7 +832,7 @@ export function initialAttackRecommendation(board: Board, fire: Fire): InitialAt
   if (!fr || fire.status !== "burning" || !isReported(board, fire)) return null;
   const card = runCard(fr.level, fr.structure);
   const need: ResourceCounts = { ...card };
-  for (const t of board.teams) if (t.fireId === fire.id) need[groundFamilyOf(t.kind)] -= 1;
+  for (const t of board.teams) if (t.fireId === fire.id) need[groundFamilyOf(fireKindOf(t))] -= 1;
   for (const a of r.aircraft) {
     if (a.fireId !== fire.id) continue;
     if (a.kind === "air_attack") need.air_attack -= 1;
@@ -855,7 +871,7 @@ export function initialAttackRecommendation(board: Board, fire: Fire): InitialAt
   for (const pass of [0, 1]) {
     for (const c of candidates) {
       if (picked.has(c.team)) continue;
-      const family = groundFamilyOf(c.team.kind);
+      const family = groundFamilyOf(fireKindOf(c.team));
       if (need[family] <= 0) continue;
       if (pass === 0 && !keepsReserve(c.team)) continue;
       picked.add(c.team);
@@ -913,14 +929,16 @@ export function placeOrder(board: Board, fire: Fire, resource: Orderable, count:
     ids.push(id);
     if (resource === "airtanker" || resource === "helicopter") {
       const air: AirResponseKind = resource === "airtanker" ? "airtanker_s2t" : "helicopter_t2";
-      const ok = stateHasRoom(board, true, 1) && fills(r.rng, "state", boardActivity(board));
+      const rng = keyedStream(board, "order", id);
+      const ok = stateHasRoom(board, true, 1) && fills(rng, "state", boardActivity(board));
       const lead = firstOverFireMinutes(air, STATE_AIR_DISTANCE_KM);
-      pushOrder(board, { id, fireId: fire.id, resource, tier: "state", placedAt: board.minute, readyAt: board.minute + (ok ? variedLead(r.rng, lead) : UNABLE_TO_FILL_RETRY_MINUTES), status: ok ? "pending" : "unable_to_fill", seeds: [], air, by });
+      pushOrder(board, { id, fireId: fire.id, resource, tier: "state", placedAt: board.minute, readyAt: board.minute + (ok ? variedLead(rng, lead) : UNABLE_TO_FILL_RETRY_MINUTES), status: ok ? "pending" : "unable_to_fill", seeds: [], air, by });
       if (!ok) r.stats.ordersUnableToFill += 1;
       placed.push(`${id} ${resource} (state${ok ? "" : ", unable to fill yet"})`);
       continue;
     }
     const spec = RESOURCE_UNITS[resource];
+    const orderRng = keyedStream(board, "order", id);
     const capKey = resource === "engine_strike_team" ? "engine_strike_teams" : resource === "crew_strike_team" ? "crew_strike_teams" : "dozer_strike_teams";
     const usedHere = r.orders.filter((o) => o.fireId === fire.id && o.tier === "mutual_aid" && o.resource === resource).length;
     let tier: "mutual_aid" | "state" = !fr?.immediateNeedUsed && usedHere < IMMEDIATE_NEED_CAPS[capKey] ? "mutual_aid" : "state";
@@ -936,7 +954,7 @@ export function placeOrder(board: Board, fire: Fire, resource: Orderable, count:
         picked.push(s);
         r.pool = r.pool.filter((x) => x !== s); // so the next pick sees the reduced reserve
       }
-      if (picked.length >= spec.per && fills(r.rng, "mutual_aid", boardActivity(board))) {
+      if (picked.length >= spec.per && fills(orderRng, "mutual_aid", boardActivity(board))) {
         seeds = picked;
       } else {
         r.pool.push(...picked);
@@ -944,7 +962,7 @@ export function placeOrder(board: Board, fire: Fire, resource: Orderable, count:
       }
     }
     if (tier === "state") {
-      const ok = stateHasRoom(board, false, spec.per) && fills(r.rng, "state", boardActivity(board));
+      const ok = stateHasRoom(board, false, spec.per) && fills(orderRng, "state", boardActivity(board));
       const entry = boardEntry(board, fire.origin);
       seeds = Array.from({ length: spec.per }, () => ({
         kind: spec.kind,
@@ -955,11 +973,11 @@ export function placeOrder(board: Board, fire: Fire, resource: Orderable, count:
         tier: "state" as Tier,
       }));
       const lead = stateGroundLeadMinutes();
-      pushOrder(board, { id, fireId: fire.id, resource, tier, placedAt: board.minute, readyAt: board.minute + (ok ? variedLead(r.rng, lead) : UNABLE_TO_FILL_RETRY_MINUTES), status: ok ? "pending" : "unable_to_fill", seeds, air: null, by });
+      pushOrder(board, { id, fireId: fire.id, resource, tier, placedAt: board.minute, readyAt: board.minute + (ok ? variedLead(orderRng, lead) : UNABLE_TO_FILL_RETRY_MINUTES), status: ok ? "pending" : "unable_to_fill", seeds, air: null, by });
       if (!ok) r.stats.ordersUnableToFill += 1;
       placed.push(`${id} ${resource.replace(/_/g, " ")} (state system${ok ? `, at the board edge in about ${Math.round(lead / 60)} h` : ", unable to fill yet"})`);
     } else {
-      pushOrder(board, { id, fireId: fire.id, resource, tier, placedAt: board.minute, readyAt: board.minute + variedLead(r.rng, MUTUAL_AID_ASSEMBLY_MINUTES), status: "pending", seeds, air: null, by });
+      pushOrder(board, { id, fireId: fire.id, resource, tier, placedAt: board.minute, readyAt: board.minute + variedLead(orderRng, MUTUAL_AID_ASSEMBLY_MINUTES), status: "pending", seeds, air: null, by });
       placed.push(`${id} ${resource.replace(/_/g, " ")} (mutual aid from ${r.offBoardStations.get(seeds[0].stationId)?.name ?? "an adjacent area"})`);
     }
   }
@@ -1142,7 +1160,7 @@ export function responseTick(board: Board, dt: number, wholeMinute: boolean): vo
         team.restUntil = now + ENGINE_REFILL_MINUTES;
       }
     } else if (team.status === "refilling" && team.restUntil !== null && now >= team.restUntil) {
-      team.waterGallons = TANK_GALLONS[team.kind] ?? null;
+      team.waterGallons = TANK_GALLONS[fireKindOf(team)] ?? null;
       team.restUntil = null;
       const fire = board.fires.find((f) => f.id === team.fireId);
       if (fire && fire.status !== "out") team.status = "on_scene";
@@ -1150,7 +1168,7 @@ export function responseTick(board: Board, dt: number, wholeMinute: boolean): vo
     } else if ((team.status === "returning" || team.status === "moving_up") && team.travel !== "pending" && team.arriveAt !== null && now >= team.arriveAt) {
       if (team.demobilise && team.status === "returning") {
         removed.add(team);
-        if (team.tier === "mutual_aid") r.pool.push({ kind: team.kind, stationId: team.station, departmentId: team.department, location: team.home, turnoutMinutes: team.turnoutMinutes, tier: "mutual_aid" });
+        if (team.tier === "mutual_aid") r.pool.push({ kind: fireKindOf(team), stationId: team.station, departmentId: team.department, location: team.home, turnoutMinutes: team.turnoutMinutes, tier: "mutual_aid" });
         continue;
       }
       arriveHome(board, team);
@@ -1166,13 +1184,16 @@ export function responseTick(board: Board, dt: number, wholeMinute: boolean): vo
 
   // Seeded availability: idle units at home may go out of service (maintenance, training, elsewhere).
   if (now >= r.nextAvailabilityDraw) {
+    // Keyed per unit and scheduled draw time, so a unit's draw does not depend on the others'.
+    const drawAt = r.nextAvailabilityDraw;
     r.nextAvailabilityDraw = now + AVAILABILITY_DRAW_EVERY_MINUTES;
     for (const team of board.teams) {
       if (team.status !== "available" || team.demobilise) continue;
-      if (chance(r.rng, OUT_OF_SERVICE_PROBABILITY)) {
+      const rng = keyedStream(board, "availability", `${team.id}@${drawAt.toFixed(2)}`);
+      if (chance(rng, OUT_OF_SERVICE_PROBABILITY)) {
         team.status = "out_of_service";
         const [lo, hi] = OUT_OF_SERVICE_MINUTES;
-        team.outOfServiceUntil = now + lo + (hi - lo) * uniform(r.rng);
+        team.outOfServiceUntil = now + lo + (hi - lo) * uniform(rng);
       }
     }
   }
@@ -1187,11 +1208,12 @@ export function responseTick(board: Board, dt: number, wholeMinute: boolean): vo
         continue;
       }
       // Retry with the state system.
-      const ok = stateHasRoom(board, order.air !== null, Math.max(1, order.seeds.length)) && fills(r.rng, "state", boardActivity(board));
+      const rng = keyedStream(board, "order", `${order.id}:retry@${order.readyAt.toFixed(2)}`);
+      const ok = stateHasRoom(board, order.air !== null, Math.max(1, order.seeds.length)) && fills(rng, "state", boardActivity(board));
       order.tier = "state";
       if (ok) {
         order.status = "pending";
-        order.readyAt = now + variedLead(r.rng, order.air ? firstOverFireMinutes(order.air, STATE_AIR_DISTANCE_KM) : stateGroundLeadMinutes());
+        order.readyAt = now + variedLead(rng, order.air ? firstOverFireMinutes(order.air, STATE_AIR_DISTANCE_KM) : stateGroundLeadMinutes());
       } else {
         order.readyAt = now + UNABLE_TO_FILL_RETRY_MINUTES;
         r.stats.ordersUnableToFill += 1;
@@ -1424,7 +1446,7 @@ export function tacticLineRate(board: Board, fire: Fire, teams: Team[], tactic: 
   const fuel = board.env.spread.ground.fuelCodeAt(fire.origin);
   let rate = 0;
   for (const t of teams) {
-    if (!buildsOn(t.kind, tactic)) continue;
+    if (!buildsOn(fireKindOf(t), tactic)) continue;
     // Off-road reach (response/reach.ts): nothing until it has walked in, nothing out of reach,
     // and an engine crew on foot builds hand line at PMS 465 p.39 per-person rates.
     if (t.workStartAt !== null && at < t.workStartAt) continue;
@@ -1433,7 +1455,7 @@ export function tacticLineRate(board: Board, fire: Fire, teams: Team[], tactic: 
       rate += engineCrewHandLineMPerMin(t.kind, fuel);
       continue;
     }
-    rate += unitLineOn(board, t, fire) * tacticRateFactor(t.kind, fuel, tactic);
+    rate += unitLineOn(board, t, fire) * tacticRateFactor(fireKindOf(t), fuel, tactic);
   }
   return rate;
 }
@@ -1447,7 +1469,7 @@ function projectedLine(board: Board, fire: Fire, tactic: Tactic, t: number): num
   for (const team of board.teams) {
     if (team.fireId !== fire.id || team.lineId !== null) continue;
     const eta = expectedArrival(board, team, fire);
-    if (eta >= t || !buildsOn(team.kind, tactic)) continue;
+    if (eta >= t || !buildsOn(fireKindOf(team), tactic)) continue;
     line += tacticLineRate(board, fire, [team], tactic) * (t - eta);
   }
   return line;
@@ -1550,7 +1572,7 @@ export function advanceContainment(board: Board, fire: Fire, decide = true): boo
   // Direct attack waits for a unit whose line holds the head (crews alone at 4-8 ft do not test it).
   if (fr.tactic === "direct" && directHolds(board, fire, teams) < fire.rates.headFlameFeet) return false;
   const holds = tacticHoldsFeet(fr.tactic, directHolds(board, fire, teams));
-  const test = holdingTest(board.response.rng, fire.rates.headFlameFeet, holds);
+  const test = holdingTest(keyedStream(board, "holding", `${fireDrawKey(fire)}@${board.minute.toFixed(2)}`), fire.rates.headFlameFeet, holds);
   if (test.held) return true;
   breach(board, fire, fr, `a ${test.flameFeet.toFixed(1)} ft flame crossed the line (holds ${holds} ft)`);
   return false;
@@ -1589,7 +1611,7 @@ export function onContained(board: Board, fire: Fire): void {
     .filter((t) => t.fireId === fire.id)
     .sort((a, b) => Number(a.demobilise) - Number(b.demobilise) || distanceM(a.home, fire.origin) - distanceM(b.home, fire.origin));
   for (const t of assigned) {
-    const family = groundFamilyOf(t.kind);
+    const family = groundFamilyOf(fireKindOf(t));
     if (t.status === "on_scene" && (keep[family] ?? 0) > 0) {
       keep[family] -= 1;
       continue;
@@ -1811,7 +1833,7 @@ export function arriveOnScene(board: Board, team: Team, fire: Fire): void {
       nearest = p;
     }
   }
-  const plan = accessWorkPlan(board, team.kind, parked, nearest);
+  const plan = accessWorkPlan(board, fireKindOf(team), parked, nearest);
   team.workMode = plan.mode;
   team.workStartAt = arrivedAt + plan.startDelayMinutes;
   team.parkedM = d;
@@ -1886,10 +1908,15 @@ export function notReportedText(board: Board, fire: Fire): string | null {
   return `Not yet reported (simulated): reported to dispatch at ${simClock(fr.reportAt)} (${wallClock(board, fr.reportAt)}), ${fr.report.by === "studio" ? "set in Simulation Studio" : "modelled report delay"}. No unit can act on it before then.`;
 }
 
-/** Map / 3D label of a fire: "S1-F1", "S1-F1 · contained", or "S1-F1 · not yet reported (sim)". */
+/**
+ * Map / 3D label of a fire: Studio's ignition name with the board id the orders use, "F1 (S1-F1)",
+ * "F1 (S1-F1) · contained", or "F1 (S1-F1) · not yet reported (sim)" (just the id when the names match).
+ */
 export function fireMapLabel(board: Board, fire: Fire): string {
-  if (fire.status !== "burning") return `${fire.id} · ${fire.status}`;
-  return isReported(board, fire) ? fire.id : `${fire.id} · not yet reported (sim)`;
+  const studioName = fire.studio?.ignition?.trim();
+  const name = studioName && studioName !== fire.id ? `${studioName} (${fire.id})` : fire.id;
+  if (fire.status !== "burning") return `${name} · ${fire.status}`;
+  return isReported(board, fire) ? name : `${name} · not yet reported (sim)`;
 }
 
 /** "Started 14:02 · reported 14:11 · first engine 14:24" (only what has happened). */

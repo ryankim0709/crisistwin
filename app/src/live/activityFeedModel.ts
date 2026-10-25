@@ -106,6 +106,7 @@ const UNIT_KIND: Record<string, [string, string]> = {
   engine_t1: ["Engine", "engines"],
   hand_crew_t1: ["Hand crew", "hand crews"],
   dozer_t2: ["Dozer", "dozers"],
+  ambulance: ["Ambulance", "ambulances"],
   air_attack: ["Air attack", "air attack aircraft"],
   airtanker_s2t: ["Airtanker", "airtankers"],
   helicopter_t2: ["Helicopter", "helicopters"],
@@ -515,6 +516,8 @@ function renderGroup(ctx: Ctx, g: Group): Rendered {
       return { title: "Fire model failed; the clock holds until it runs again.", sub: null, state: "info", attention: { tone: "danger", label: "Model error" }, boardRef: null };
     case "studio_received":
       return quiet(`Simulation Studio scenario ${r.studioTag ?? ""} received.`.replace(" .", "."), "info", null);
+    case "studio_restart":
+      return quiet(first.ev.text.replace(/ \(.*\)\.$/, "."), "info", null);
     case "ignition_started": {
       const where = r.zoneId ? ` in ${zoneName(ctx, r.zoneId)}` : "";
       const fire = r.fireId ? ctx.board?.fires.find((f) => f.id === r.fireId) : undefined;
@@ -675,7 +678,7 @@ function renderGroup(ctx: Ctx, g: Group): Rendered {
       return {
         title: scheduled
           ? `Fire reached ${zone} before its scheduled evacuation (${simClock(r.startMinute!)}); households are still home.`
-          : `Fire reached ${zone} with no evacuation order; households stay home until ordered out.`,
+          : `Fire reached ${zone} with no evacuation order; only households leaving on their own cues are going.`,
         sub: null,
         state: "info",
         attention: { tone: "warning", label: scheduled ? "Not started" : "No order" },
@@ -1024,7 +1027,10 @@ export function buildActivityFeed({ board, decisions, liveDecisions, name, stamp
     }
   }
   items.push(...claudeItems(ctx, decisions, agentEvents, stamp));
-  items.push(...drillItems(liveDecisions));
+  // A Studio run starts a clean feed: drill decisions logged before it was published (the previous
+  // run's guidance, closures) stay in the audit log only.
+  const runStart = board?.conditions ? Date.parse(board.conditions.publishedAt) : NaN;
+  items.push(...drillItems(Number.isFinite(runStart) ? liveDecisions.filter((d) => !(Date.parse(d.at) < runStart)) : liveDecisions));
   // Ties (items first seen together): later board minute first, then the later-built item (newer).
   const order = new Map(items.map((it, i) => [it, i]));
   items.sort((a, b) => b.wallMs - a.wallMs || (b.minute ?? -1) - (a.minute ?? -1) || order.get(b)! - order.get(a)!);

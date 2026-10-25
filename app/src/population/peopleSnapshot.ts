@@ -362,7 +362,7 @@ export function studioPeopleSnapshot(
     return {
       id: exit.id,
       name: exit.name,
-      kind: "exit",
+      kind: exit.kind === "safe-area" ? "shelter" : "exit",
       coord: area.nodes[exit.node],
       people: Math.round(entry.people),
       veh: Math.round(entry.vehicles),

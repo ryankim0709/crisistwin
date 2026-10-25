@@ -11,9 +11,16 @@ import {
 import "maplibre-gl/dist/maplibre-gl.css";
 import { attachStations } from "../maps/stations";
 import { AERIAL_STYLE } from "../maps/basemap";
-import type { Feature, FeatureCollection, Polygon, Position } from "geojson";
+import type { Feature, FeatureCollection, MultiPolygon, Polygon, Position } from "geojson";
 import { ARRIVAL_COLORS, CURRENT_PERIMETER_COLOR } from "../fire/FireMap";
-import { mercatorToLonLat, type MercatorBox } from "../fire/landscape";
+import {
+  MAP_FIRE_STATE_COLOR,
+  MAP_FIRE_STATE_LABEL,
+  cellStatePolygons,
+  type MapFireState,
+  type RunCellStates,
+} from "../fire/fireStates";
+import { mercatorToLonLat, type LandscapeGrid, type MercatorBox } from "../fire/landscape";
 import { formatElapsed, type GeoPoint } from "../fire/spread";
 import { Button, Legend, Notice, Panel, Tag } from "../ui";
 import type { IgnitionDisplayState, ScheduledIgnition, StudioMapProps } from "./contracts";
@@ -41,6 +48,71 @@ const SQUARE_METERS_PER_HECTARE = 10_000;
 const STALE_DIM = 0.4;
 const LEGEND_BAND_COUNT = 4;
 const MARKER_CLASS = "studio-marker";
+const FIRE_STATE_SOURCE = "studio-fire-state";
+const FIRE_STATE_FILL_LAYER = "studio-fire-state-fill";
+const FIRE_STATE_EDGE_LAYER = "studio-fire-state-edge";
+const FIRE_STATE_FILL_OPACITY = 0.85;
+const FIRE_STATE_EDGE_OPACITY = 0.95;
+const FIRE_STATE_EDGE_COLOR = "#2b0a05";
+const FIRE_STATE_EDGE_WIDTH = 1;
+/** States with open flame (or active burning): these get a thin solid edge. */
+const FLAMING_MAP_STATES: readonly MapFireState[] = [
+  "flame_low",
+  "flame_moderate",
+  "flame_high",
+  "flame_extreme",
+  "crown",
+  "burning",
+];
+/** Legend rows always shown when a run's fire states are drawn: hottest first. */
+const FIRE_STATE_LEGEND_STATES: readonly MapFireState[] = [
+  "crown",
+  "flame_extreme",
+  "flame_high",
+  "flame_moderate",
+  "flame_low",
+  "smouldering",
+  "burned_out",
+];
+/** Shown only when the current minute actually has cells in them. */
+const FIRE_STATE_LEGEND_OPTIONAL: readonly MapFireState[] = ["burning", "extinguished"];
+
+/** Optional fire-state overlay: the shown run's cell states at the current minute (simulated). */
+export interface StudioMapFireStateProps {
+  /** Cell states of the run currently shown; minutes share the clock of `currentMinute`. */
+  fireStates?: RunCellStates | null;
+  /** Landscape grid of that same run (row-major cells), needed to contour `fireStates`. */
+  fireStatesGrid?: LandscapeGrid | null;
+}
+
+const FIRE_STATE_COLOR_EXPRESSION = [
+  "match",
+  ["get", "state"],
+  ...Object.entries(MAP_FIRE_STATE_COLOR).flat(),
+  "#000000",
+] as const;
+
+interface FireStateProperties {
+  state: MapFireState;
+}
+type FireStateCollection = FeatureCollection<MultiPolygon, FireStateProperties>;
+const EMPTY_FIRE_STATES: FireStateCollection = { type: "FeatureCollection", features: [] };
+
+function fireStateCollection(
+  states: RunCellStates,
+  grid: LandscapeGrid,
+  minute: number,
+): FireStateCollection {
+  const { codes } = states.at(minute);
+  return {
+    type: "FeatureCollection",
+    features: cellStatePolygons(grid, codes).map(({ state, geometry }) => ({
+      type: "Feature",
+      geometry,
+      properties: { state },
+    })),
+  };
+}
 
 /** Aerial imagery plus the OpenFreeMap glyphs the people layer's labels need (as on /live). */
 const SATELLITE_STYLE: MapOptions["style"] = {
@@ -339,7 +411,9 @@ export default function StudioMap({
   legendExtra,
   legendMode = "full",
   recenterKey,
-}: StudioMapProps) {
+  fireStates = null,
+  fireStatesGrid = null,
+}: StudioMapProps & StudioMapFireStateProps) {
   const compactLegend = legendMode === "compact";
   const [legendOpen, setLegendOpen] = useState(!compactLegend);
   const container = useRef<HTMLDivElement>(null);
@@ -469,8 +543,33 @@ export default function StudioMap({
           "line-opacity": FOOTPRINT_LINE_OPACITY,
         },
       });
+      // Fire states at the current minute (simulated), above the arrival bands, below the
+      // current outline. Empty unless the page passes fireStates.
+      map.addSource(FIRE_STATE_SOURCE, { type: "geojson", data: EMPTY_FIRE_STATES });
+      map.addLayer({
+        id: FIRE_STATE_FILL_LAYER,
+        type: "fill",
+        source: FIRE_STATE_SOURCE,
+        paint: {
+          "fill-color": FIRE_STATE_COLOR_EXPRESSION as unknown as string,
+          "fill-opacity": FIRE_STATE_FILL_OPACITY,
+        },
+      });
+      map.addLayer({
+        id: FIRE_STATE_EDGE_LAYER,
+        type: "line",
+        source: FIRE_STATE_SOURCE,
+        filter: ["in", ["get", "state"], ["literal", [...FLAMING_MAP_STATES]]],
+        layout: { "line-join": "round" },
+        paint: {
+          "line-color": FIRE_STATE_EDGE_COLOR,
+          "line-width": FIRE_STATE_EDGE_WIDTH,
+          "line-opacity": FIRE_STATE_EDGE_OPACITY,
+        },
+      });
       // Layer order, bottom to top: imagery, modelled-area box, footprint fill, every frame's
-      // outline, the current frame's dark casing and light line. Ignition markers and locator
+      // outline, fire states (fill, flame edge), the current frame's dark casing and light line.
+      // Ignition markers and locator
       // rings are DOM markers, so they always sit above all of these.
       map.addLayer({
         id: "studio-footprint-casing",
@@ -686,7 +785,29 @@ export default function StudioMap({
     map.setPaintProperty("studio-footprint-line", "line-opacity", FOOTPRINT_LINE_OPACITY * scale);
     map.setPaintProperty("studio-footprint-casing", "line-opacity", scale);
     map.setPaintProperty("studio-footprint-current", "line-opacity", scale);
+    map.setPaintProperty(FIRE_STATE_FILL_LAYER, "fill-opacity", FIRE_STATE_FILL_OPACITY * scale);
+    map.setPaintProperty(FIRE_STATE_EDGE_LAYER, "line-opacity", FIRE_STATE_EDGE_OPACITY * scale);
   }, [ready, footprintIsStale]);
+
+  // Contouring the grid is not cheap: recompute only when the whole minute or the run changes.
+  const stateMinute = Math.round(currentMinute);
+  const fireStateData = useMemo(
+    () =>
+      fireStates && fireStatesGrid
+        ? fireStateCollection(fireStates, fireStatesGrid, stateMinute)
+        : EMPTY_FIRE_STATES,
+    [fireStates, fireStatesGrid, stateMinute],
+  );
+  const showFireStates = Boolean(fireStates && fireStatesGrid);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    map
+      .getSource<GeoJSONSource>(FIRE_STATE_SOURCE)
+      ?.setData(fireStateData)
+      .catch(() => setError("The simulated fire states could not be displayed."));
+  }, [ready, fireStateData]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -724,6 +845,16 @@ export default function StudioMap({
     from: Math.round((horizonMinutes * i) / LEGEND_BAND_COUNT),
     to: Math.round((horizonMinutes * (i + 1)) / LEGEND_BAND_COUNT),
     color: arrivalColor((i + 0.5) / LEGEND_BAND_COUNT),
+  }));
+
+  const presentFireStates = new Set(fireStateData.features.map((f) => f.properties.state));
+  const fireStateLegendItems = [
+    ...FIRE_STATE_LEGEND_STATES,
+    ...FIRE_STATE_LEGEND_OPTIONAL.filter((state) => presentFireStates.has(state)),
+  ].map((state) => ({
+    label: MAP_FIRE_STATE_LABEL[state],
+    color: MAP_FIRE_STATE_COLOR[state],
+    shape: "square" as const,
   }));
 
   return (
@@ -824,6 +955,14 @@ export default function StudioMap({
                 color: band.color,
               }))}
             />
+            {showFireStates && (
+              <>
+                <p className="studio-map__legend-sub">
+                  Fire state at {formatElapsed(stateMinute)} (simulated; flaming states have a thin outline)
+                </p>
+                <Legend label="Fire states at the current minute" items={fireStateLegendItems} />
+              </>
+            )}
             <ul className="ui-legend studio-map__extras">
               <li>
                 <span className="studio-map__swatch studio-map__swatch--current" />

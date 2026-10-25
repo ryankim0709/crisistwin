@@ -4,14 +4,14 @@
  * STUDIO_POLL_MS through the live API client. Fetch and validation here; which publishes a
  * board ingests is `studioBaseline` (pure) and the ingest itself is model.ts ingestStudioFire.
  *
- * Ingest rule, per board (each publish is ingested at most once per board, by fire_id):
- * - every publish that appears after the board first read the feed is ingested when it appears;
- * - when a board first reads the feed, the publishes already stored for the incident are
- *   ingested too, the newest per Studio scenario only (re-running one scenario supersedes its
- *   earlier runs). The stored feed is the drill's fire: a reload, a Studio run published while
- *   Live command was closed, or one published while the board was still loading its landscape
- *   all show it. "Reset board" deletes the stored publishes;
- * - "Restart board" ingests none of the publishes already listed: a restart starts empty.
+ * Ingest rule, per board: Studio is the source of truth, so the board runs Studio's newest run only.
+ * - when a board first reads the feed it takes the newest publish stored for the incident (the
+ *   server keeps only the newest anyway: a publish clears the older ones, api/live/studio_fires.py).
+ *   A reload, a Studio run published while Live command was closed, or one published while the
+ *   board was still loading its landscape all show it. "Restart board" also restarts on it;
+ * - a publish that appears later (a new Studio run) restarts the board on that run alone, at T+0
+ *   (useCommandBoard.ts); a board still at T+0 with no Studio fire just takes it;
+ * - "Reset board" deletes the stored publishes and starts empty.
  */
 
 import { useCallback } from "react";
@@ -70,7 +70,29 @@ function parseFire(raw: unknown): StudioFire | null {
     },
     horizon_minutes: isNum(f.horizon_minutes) ? f.horizon_minutes : 0,
     outside_drill: Array.isArray(f.outside_drill) ? f.outside_drill.filter(isStr) : [],
+    weather_series: parseSeries(f.weather_series),
   };
+}
+
+function parseMoisture(raw: unknown): StudioFire["moisture"]["values"] | null {
+  const v = (typeof raw === "object" && raw !== null ? raw : null) as Record<string, unknown> | null;
+  if (!v || !MOISTURE_KEYS.every((k) => isNum(v[k]) && (v[k] as number) > 0)) return null;
+  return { dead1h: v.dead1h as number, dead10h: v.dead10h as number, dead100h: v.dead100h as number, liveHerb: v.liveHerb as number, liveWoody: v.liveWoody as number };
+}
+
+/** The publish's hourly series, or null when absent or malformed (the board then runs `wind`). */
+function parseSeries(raw: unknown): StudioFire["weather_series"] {
+  if (typeof raw !== "object" || raw === null) return null;
+  const s = raw as Record<string, unknown>;
+  if (!Array.isArray(s.samples) || s.samples.length === 0) return null;
+  const samples: NonNullable<StudioFire["weather_series"]>["samples"] = [];
+  for (const item of s.samples as unknown[]) {
+    const g = (typeof item === "object" && item !== null ? item : {}) as Record<string, unknown>;
+    if (!isNum(g.minute) || !isNum(g.wind_speed_mph) || g.wind_speed_mph < 0 || !isNum(g.wind_from_deg)) return null;
+    if (samples.length > 0 && g.minute <= samples[samples.length - 1].minute) return null;
+    samples.push({ minute: g.minute, wind_speed_mph: g.wind_speed_mph, wind_from_deg: ((g.wind_from_deg % 360) + 360) % 360, moisture: parseMoisture(g.moisture) });
+  }
+  return { source: isStr(s.source) ? s.source : "", evidence: isStr(s.evidence) ? s.evidence : "", samples };
 }
 
 export async function fetchStudioFires(token: string, incidentId: string, signal: AbortSignal): Promise<StudioFire[]> {
@@ -102,19 +124,16 @@ export function useStudioFires(token: string | null, incidentId: string): PollSt
 
 /**
  * The publishes a board ignores, fixed at its first read of the feed: everything listed except,
- * when `recent` is true, the newest publish per scenario.
+ * when `recent` is true, the newest publish (Studio's last run).
  */
 export function studioBaseline(fires: readonly StudioFire[], recent: boolean): string[] {
-  const keep = new Set<string>();
+  let newest: StudioFire | null = null;
   if (recent) {
-    const newestByScenario = new Map<string, StudioFire>();
     for (const f of fires) {
-      const cur = newestByScenario.get(f.scenario_id);
-      if (!cur || Date.parse(f.published_at) > Date.parse(cur.published_at)) newestByScenario.set(f.scenario_id, f);
+      if (!newest || Date.parse(f.published_at) > Date.parse(newest.published_at) || (f.published_at === newest.published_at && f.fire_id > newest.fire_id)) newest = f;
     }
-    for (const f of newestByScenario.values()) keep.add(f.fire_id);
   }
-  return fires.filter((f) => !keep.has(f.fire_id)).map((f) => f.fire_id);
+  return fires.filter((f) => f !== newest).map((f) => f.fire_id);
 }
 
 /** Publishes not yet ingested by the board and not in its baseline, oldest first. */

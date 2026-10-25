@@ -1,86 +1,575 @@
-# CrisisTwin
+<div align="center">
 
-CrisisTwin is a Cal Hacks wildfire evacuation planning simulator: an interactive digital twin that
-lets an emergency planner see how fire spread, road capacity, evacuation demand and resource
-decisions interact. It combines a physics-based fire spread model on real LANDFIRE fuels and terrain, a
-multi-fire Simulation Studio, a Claude-powered dispatch agent that issues evacuation and engine
-orders during playback, and a replay of historical California fires with traffic and evacuation
-overlays. The web workspace serves planners; an iOS app is the civilian companion.
+<img src="app/public/brand/crisistwin-logo.png" alt="CrisisTwin" width="420">
 
-> **Safety:** this is an experimental planning simulator. Its outputs are not operational
-> evacuation instructions; any future resident guidance should require approval by the
-> responsible authority. Wind, moisture, demand and many other inputs are assumptions the pages
-> label as such.
+### A digital twin of a wildfire response.
 
-## What is implemented
+**Run a fire with nobody acting. Then hand command to an AI that looks ahead.<br>Same fire, same seed, scored side by side.**
 
-Routes of the web app (`app/src/main.tsx`, `app/src/navigation.ts`); `/` redirects to `/fire`.
+![Built at Cal Hacks 13.0](https://img.shields.io/badge/Cal%20Hacks-13.0-ff6a28)
+![Claude](https://img.shields.io/badge/AI%20commander-Claude-d97757)
+![Cartesia](https://img.shields.io/badge/voice-Cartesia%20Sonic-1f2937)
+![Apify](https://img.shields.io/badge/actor-Apify-97d700)
+![React 19 · three.js](https://img.shields.io/badge/React%2019-three.js-149eca)
+![Django · MongoDB](https://img.shields.io/badge/Django%205.2-MongoDB%20Atlas-0c4b33)
+![SwiftUI](https://img.shields.io/badge/iOS-SwiftUI-f05138)
+
+[Why](#why-this-matters) · [What it does](#what-it-does) · [How it works](#how-it-works) · [How we built it](#how-we-built-it) · [Sponsor tracks](#sponsor-tracks) · [Quick start](#quick-start)
+
+<img src="docs/media/readme/hero.jpg" alt="The /run page during the AI step: a 3D Berkeley Hills board with the fire, engines, evacuation orders and safe areas; the agent's inputs on the right; the scoreboard below" width="100%">
+
+<sub>The single-view <code>/run</code> page: the fire, the roads, engines, aircraft and evacuees on a 3D Berkeley Hills board; what the AI sees on the right; the scoreboard against the no-action baseline below. Everything on it is a labelled simulation.</sub>
+
+</div>
+
+> [!IMPORTANT]
+> CrisisTwin is an experimental **planning simulator**. Its fires, people, units and AI decisions
+> are simulated; nothing it shows is an operational evacuation instruction, and it never contacts
+> residents. Wind, moisture, demand and many other inputs are assumptions the pages label as such.
+
+## Why this matters
+
+- **Fires now outrun evacuations.** The 2018 Camp Fire reached Paradise within hours; 85 people
+  died, some of them on roads that jammed as the fire arrived.
+- **These hills have burned before.** The 1991 Oakland–Berkeley Hills fire killed 25 people and
+  destroyed more than 3,000 homes, in the hills our demo board covers.
+- **Dispatchers decide under pressure.** They work with partial information, minutes to spare, and
+  roads that fill the moment people leave. An order given too late strands people. One given to
+  everyone at once jams the only road out.
+
+CrisisTwin lets the people who plan for that day rehearse it. Build a realistic fire on real
+terrain, watch what happens if nobody acts, then see what a look-ahead commander does with the
+same information, minute by minute.
+
+## What it does
+
+<table>
+<tr>
+<td width="33%" valign="top">
+
+**1 · Set up**
+
+Pick a curated Berkeley Hills fire (ignition, wind, fuel moisture), or tweak one. CrisisTwin
+solves the fire on real terrain and fuels. It then builds the board: roads, fire stations with
+their real fleets, safe areas away from the fire, and the households in its path.
+
+</td>
+<td width="33%" valign="top">
+
+**2 · Baseline: nobody acts**
+
+No firefighting, no evacuation orders. Residents leave only on their own cues: seeing the fire,
+neighbours leaving, smoke and flames. The roads load up and people are caught. The page computes
+all six hours in about a minute and a half, then lets you scrub back through them.
+
+</td>
+<td width="33%" valign="top">
+
+**3 · AI dispatch**
+
+The same fire and seed, with **Claude in command**. The clock keeps running while it thinks, like
+a real dispatcher's. It orders evacuations in waves, routes each wave to a road and safe area
+with room, and sends engines, aircraft and ambulances.
+
+</td>
+</tr>
+</table>
+
+A **scoreboard** compares the two runs at the same board minute, each measure with its curve over
+time:
+- homes burned;
+- people caught by fire;
+- people injured;
+- people safe;
+- acres burned;
+- the worst road congestion.
+
+**Drag the timeline to scrub either run:** the 3D board, the scoreboard and the incident status
+all move to that minute.
+
+**Fire you can read at a glance.** Each burning cell is drawn by its state:
+- flaming, coloured by flame length using the firefighters' "hauling chart" bands (under 4 ft,
+  hand crews can hold it; 4–8 ft, engines and dozers; 8–11 ft, aircraft; over 11 ft, out of
+  control);
+- crown fire;
+- smouldering;
+- burned out;
+- put out by crews.
+
+A contained fire turns blue. Every fire carries a plain-words label such as "Burning hard ·
+flames ~9 ft · 65 m/min W", "Out · burned out".
+
+Fires close realistically. A fire that runs out of fuel closes as *burned out* even with no crews,
+and the preset offshore wind eases after a few hours. That gives crews a real chance later in the
+run.
+
+<p>
+<img src="docs/media/readme/baseline.jpg" alt="Scrubbing the recorded baseline to T+1:48: the 30 by 30 km Berkeley and Oakland hills board with the fire labelled by state, the incident status panel and the scoreboard at that minute" width="49%">
+<img src="docs/media/readme/agent-sees.jpg" alt="Helicopters and engines on the fire beside the What the agent sees panel: why Claude was called and what changed since its last call" width="49%">
+</p>
+
+**The right panel, live.** It shows three things, top to bottom:
+
+1. **Incident status**, in every phase:
+   - each fire's state, acres, spread rate and heading;
+   - homes lost, people caught, injured, safe and still at risk;
+   - units committed.
+2. **What Claude knows now**, the curated inputs of the latest call:
+   - simulated 911 calls, civilian and first-responder field reports, and police and fire radio;
+   - the models' forecasts: fire reach at +30/60/120 minutes per zone, and the load on each road;
+   - why Claude was woken, e.g. a life-threat call, a new fire, or a zone running out of time.
+3. **What Claude did**, newest first:
+   - each order in plain words;
+   - how long the decision took;
+   - Claude's stated reason;
+   - any order the server refused, with its reason.
+
+The panel never scrolls sideways.
+
+**One twin, many uses.** The same twin also runs:
+
+| Use | Page | |
+| --- | ---- | - |
+| Plan before fire season | `/simulation` | Up to five scheduled fires, road and bridge closures, a staged-evacuation optimizer, and ground and air crews building control line. |
+| Run a live drill | `/live` | Field-report triage, the drill clock, and an AI incident commander on a simulated command board. |
+| Bring residents in | iOS app, `/app-integration` | Phones join the drill alongside hundreds of simulated people (not all of them obey orders). A participant can follow a simulated evacuee's drive on their own phone. Voice reports through Cartesia. |
+| Learn from past fires | `/replay`, `/live/report` | Replays of the 2018 Camp, Marshall and Kincade fires with evacuation traffic, plus an after-action score for every drill. |
+| Watch real incidents | `/intel` | An Apify Actor collects public agency pages; Claude extracts candidate closures and orders; a planner confirms each one. |
+
+## How it works
+
+```mermaid
+flowchart LR
+  subgraph Browser["Browser · /run (React 19 + three.js)"]
+    direction TB
+    Fire["Fire solver<br/>Rothermel surface spread, crown fire,<br/>ember spotting, house-to-house<br/>on LANDFIRE fuels + terrain"]
+    Board["Command board<br/>households · self-evacuation<br/>road queues · injuries<br/>engines · aircraft · ambulances"]
+    Aids["Decision aids<br/>fire forecast +30/60/120 min<br/>road load · evacuation balance"]
+    Comms["Simulated comms<br/>911 calls · field reports<br/>PD / FD radio"]
+    Panel["What the agent sees<br/>(curated, live)"]
+    Fire --> Board --> Aids
+    Board --> Comms
+  end
+  subgraph Server["Django API + MongoDB"]
+    direction TB
+    Decide["/api/demo/decide<br/>Claude commander<br/>one tool: issue_orders"]
+    Check["Order validation<br/>bad orders rejected with a reason"]
+    Routes["/api/demo/routes<br/>fire-aware routing,<br/>road-class weighting"]
+    Live["Live drill<br/>simulated people · follow API"]
+  end
+  Phone["iPhone app<br/>follow a simulated evacuee<br/>voice via Cartesia"]
+  Aids --> Decide
+  Comms --> Decide
+  Decide --> Check --> Board
+  Decide -. explanation .-> Panel
+  Board <--> Routes
+  Board --> Live --> Phone
+```
+
+**Design rules that keep the AI honest:**
+
+- **Models compute every number; the LLM decides.** Fire arrival times, road loads, safe-start
+  windows and evacuation schedules come from deterministic, sourced models. Claude chooses among
+  them and explains itself; it never invents a figure.
+- **One narrow tool.** Claude acts only through `issue_orders`:
+  - evacuate a zone (now or at a later minute, by a chosen route to a chosen safe area), or cancel an evacuation;
+  - send or release a crew, send a rescue to an injured person, or order aircraft and strike teams;
+  - set a fire's strategy, close a road, or confirm a report.
+
+  The server validates every order and returns a reason for each one it rejects.
+- **Sourced or labelled.** Model parameters cite their source (Rothermel and Andrews fire behaviour,
+  Hess 2015 road speeds, Wong et al. 2020 and Zhao et al. 2022 for self-evacuation, NIST TN 2174
+  for night-time response, published department rosters for the fleets). Anything without a
+  source is marked `ASSUMPTION` in the code. Every simulated value in the UI is tagged
+  *Simulated*.
+- **No resident data.** Homes and people on the board are synthetic.
+
+## How we built it
+
+CrisisTwin started as a set of separate tools: a fire spread model, a Simulation Studio, a
+Claude dispatch agent, historical replays, a live-drill command page and an iOS resident app.
+During Cal Hacks we joined them into one product: the single-view `/run` page, where setting up
+a fire, running the no-action baseline and handing over to the AI all happen without leaving the
+page.
+
+**AI-assisted engineering, at scale.** We built `/run` with Claude Code acting as an
+orchestrator:
+
+1. **Contracts first.** The orchestrator wrote and froze the shared TypeScript contracts
+   (`app/src/demo/runContracts.ts`) before any parallel work began.
+2. **Two dozen parallel leads.** Lead agents worked side by side, each in its own git worktree, and
+   many spawned their own subagents. Their areas were the page shell, run modes and scoring, the
+   agent-inputs panel, simulated 911 and radio, injuries, forecasting, evacuation balancing, safe
+   areas, road-class routing, real station fleets, 3D apparatus and aircraft, iOS follow, demo-seed
+   curation, a fire-solver bug hunt, and the video tooling.
+3. **Gated merges.** Each lead merged back into `feat/one-view` only after a TypeScript check, a
+   production build and a Django system check passed.
+4. **Shared rules for every agent.** [`AGENTS.md`](AGENTS.md) sets them: cite a source or label
+   `ASSUMPTION`; label simulated and observed data; never let an LLM invent a computed number;
+   pick the cheapest capable model (Haiku for mechanical work, Sonnet for routine work, Opus for
+   maths and contracts).
+5. **Curated, low-variance demo seeds.** A headless evaluation harness
+   (`app/scripts/live-eval/evaluate.ts`) measured every candidate fire across seeds. We kept the
+   ones where the decision aids beat no action every time ([docs/demo-seeds.md](docs/demo-seeds.md)).
+6. **A resumable build log.** A running log of the build let a fresh session pick up where the
+   last one stopped.
+
+The demo video was recorded headlessly by an agent driving the real page through a Chrome
+DevTools screencast. Its narration is Cartesia Sonic.
+
+| | |
+| --- | --- |
+| Commits | 660+ |
+| TypeScript / TSX (web app) | ~129k lines |
+| Python (Django backend) | ~42k lines |
+| Architecture decision records | 60+ in [`docs/adr/`](docs/adr/) |
+
+## Sponsor tracks
+
+| Track | How CrisisTwin uses it | Where |
+| ----- | ---------------------- | ----- |
+| **Anthropic** | See [the Claude section](#anthropic-claude) below: Claude is the incident commander, plus four other jobs. | [`api/demo.py`](app/backend/api/demo.py), [`api/dispatch.py`](app/backend/api/dispatch.py), [`api/live/voice.py`](app/backend/api/live/voice.py), [`agent/`](agent/README.md) |
+| **Cartesia** · Best Use of Cartesia | See [the Cartesia section](#cartesia) below: voice is how a resident reports and gets guidance on a phone. | [`api/live/voice.py`](app/backend/api/live/voice.py), [`api/cartesia.py`](app/backend/api/cartesia.py), [Voice mode](#voice-mode-cartesia) |
+| **Apify** · Best use of Apify, Best Actor | See [the Apify section](#apify) below: our own Actor gathers public incident pages. | [`actors/incident-intel/`](actors/incident-intel/README.md), [docs/incident-intel.md](docs/incident-intel.md) |
+| **Microsoft** · Built for the Real World | See [the Microsoft section](#microsoft-built-for-the-real-world) below: a production-minded agent, scored against its own judging criteria. | [docs/deploy.md](docs/deploy.md), [`orchestrator_mcp/`](orchestrator_mcp/README.md) |
+| **MLH** · Best Use of Gen AI | The Anthropic Claude API is the decision-maker, the voice understanding and the extraction engine across the product. | as above |
+| **Cal Hacks** · Most Technically Complex, People-First, Planet-First | See [the Cal Hacks section](#cal-hacks-general-tracks) below: one fire twin coupled to traffic, people and an AI commander. | this repository |
+
+### Anthropic (Claude)
+
+Claude is the **incident commander** on `/run` and `/live`.
+- It reads a curated observation (simulated 911 calls, radio, field reports, model forecasts).
+- It acts only through the validated `issue_orders` tool.
+- It uses prompt caching and a lower effort for routine reviews.
+
+Claude also has four other jobs:
+- the `/dispatch` agent;
+- voice understanding on the phone;
+- extracting incident facts from agency pages;
+- drafting advisories in the fire-watch agent.
+
+**Who it's for:** dispatchers and evacuation planners in California's wildland–urban interface,
+starting with the Berkeley–Oakland hills.
+
+**Where it can go wrong, and what guards it:**
+
+| Risk | Guard |
+| ---- | ----- |
+| It can act late (the clock keeps running while it thinks). | Urgent events wake it at once. |
+| It can over-evacuate and load roads. | The scoreboard shows the worst road's volume-to-capacity ratio. |
+| It can trust an unconfirmed call. | Reports carry their confirmation status. |
+| It can issue an invalid order. | The server rejects it with a reason. |
+
+### Cartesia
+
+Voice is how a resident on a phone reports a blocked road, checks in, or asks what to do. It is
+especially useful hands-free while driving. Cartesia provides:
+- streaming speech-to-text (`ink-2`) with keyterm boosts from the incident's own road names;
+- streaming text-to-speech (Sonic `sonic-3.6`);
+- short-lived tokens, so the API key stays on the server;
+- batch fallbacks (`ink-whisper`, Sonic).
+
+### Apify
+
+`actors/incident-intel` is our own Actor. In **archive** mode it reads Wayback Machine captures;
+in **live** mode it respects robots.txt. Claude extracts candidate closures, orders and shelters,
+each with a verbatim quote. Every record stays *unconfirmed* until a planner checks it.
+
+### Microsoft (Built for the Real World)
+
+A production-minded agent, against the track's criteria:
+
+| Criterion | How CrisisTwin meets it |
+| --------- | ----------------------- |
+| Customer understanding | It is built for dispatchers and evacuation planners. |
+| Measurable usefulness | A scoreboard compares the AI with the baseline on the same seed. |
+| Path to production | A Django and MongoDB service, a single-VM deploy recipe, a controller MCP server for external agents, and multi-phone drills. |
+| Responsible design | Labels on everything simulated, no resident data, validated orders and human-confirmed intel. |
+| End-to-end functionality | It works from setup to scoreboard to phone. |
+
+### Cal Hacks (general tracks)
+
+- **Most Technically Complex:** one twin couples a physics-based fire model, a traffic model, a
+  sourced model of how people behave, real fire fleets, an LLM commander, a web 3D board and an
+  iOS app.
+- **People-First:** its purpose is getting people out alive.
+- **Planet-First:** wildfire resilience in a warming climate.
+
+MongoDB Atlas holds the app's data (landscapes, incident packages, run journals, drill state).
+
+## All pages
+
+<details>
+<summary>Routes of the web app (<code>app/src/main.tsx</code>, <code>app/src/navigation.ts</code>); <code>/</code> redirects to <code>/fire</code></summary>
 
 | Route | Page | What it does |
 | ----- | ---- | ------------ |
-| `/fire` | Fire spread model | Rothermel surface spread with crown fire, ember spotting and structure-to-structure spread on LANDFIRE fuels, canopy and terrain; 3D diorama or USGS imagery view; 13 prebuilt regions (11 in the San Francisco Bay Area, 2 in Los Angeles) or a live custom area; optional NWS wind. [Reference](docs/fire-simulator.md). |
-| `/simulation` | Simulation Studio | Up to five scheduled ignitions in one solver pass on a shared landscape, Web Worker solve, JSON export/import, plus a 3D diorama view of the last run. In 3D, **Evacuation & closures** evacuates the board's synthetic households against the run and lets you close roads or bridges, comparing results with and without them (closures change traffic, not the fire). An **optimizer** re-runs on every closure change, searching other exits and staged waves per zone, and shows its best plan against the fastest-exit policy; the 3D view can play either. **Firefighters** in the config panel send hand crews, engines, dozers and aircraft, driving in over the roads each vehicle class can use (rules in `docs/suppression-data.md`) or flying from the nearest CAL FIRE bases, to build control line; the run estimates whether they put each fire out by direct attack once on site, searches anchor points and line distances for the best control line, and compares both with no crews. Crews the fire overwhelms leave it after a size-up and help the evacuation in the most threatened zones. [ADR 0011](docs/adr/0011-simulation-studio.md), [ADR 0016](docs/adr/0016-studio-diorama-view.md), [ADR 0018](docs/adr/0018-road-closures.md), [ADR 0020](docs/adr/0020-studio-firefighting.md), [ADR 0023](docs/adr/0023-studio-crew-dispatch.md), [ADR 0048](docs/adr/0048-suppression-engine.md), [ADR 0024](docs/adr/0024-studio-crews-assist-evacuation.md), [ADR 0029](docs/adr/0027-evacuation-optimizer.md). |
-| `/dispatch` | Dispatch agent | The Simulation Studio UI (scheduled fires, map and 3D diorama) with its own saved draft, plus a live Claude dispatcher beside it (needs `ANTHROPIC_API_KEY`). After a run it builds OSM roads, stations and synthetic homes. A monitor checks the simulation every few simulated minutes and calls Claude only when something changes. Claude orders zones out or stages them in waves, and sends engines either to fight a fire or to support an evacuation. For each fire Claude picks a tactic (direct attack, flanking from the heel, or indirect line ahead) from options the simulator has solved (homes reached, area burned, time to contain); the fire model decides where a line holds; the console shows each zone's simulated resident notice (nothing is sent). [ADR 0014](docs/adr/0014-dispatch-agent.md), [ADR 0017](docs/adr/0017-dispatch-anywhere.md), [ADR 0019](docs/adr/0019-live-dispatch-monitor.md), [ADR 0022](docs/adr/0022-dispatch-fire-attack.md), [ADR 0025](docs/adr/0025-dispatch-fire-tactics.md). **Road closures**: click roads closed or open on the 3D board before or during a run; traffic re-routes, roads the fire cuts are avoided, and the agent is woken to respond ([ADR 0030](docs/adr/0030-live-road-closures.md)). Each run's decisions and outcome are journalled in MongoDB Atlas, and the agent is shown earlier runs on the same roads as lessons ([ADR 0031](docs/adr/0031-dispatch-run-memory.md)). |
-| `/live` | Live command | Controller workspace for the active live drill: field-report triage, the drill clock and the real-time twin, plus a simulated command board with an AI incident commander on the same drill zones. Live follows the AI agent: its board orders are what the drill follows, and the twin-controller proposal flow (replan, pending proposals, approve) is off (`LIVE_PROPOSALS=false`, [contract](docs/live-reports.md#proposals-and-the-approval-policy)). It is the former `/demo`, which now redirects here. The left column switches between **Reports** (the review queue) and **Fires & units** (the board); the centre switches between the map and a **3D diorama** of the board. The board runs a 24/7 simulation clock in the browser with its own speed, fire activity (Quiet, Active, Severe) and wind preset: fires come from seeded ignitions, spot fires, `fire_seen` field reports from the drill and fires you add on the map; engine strike teams race each fire and households leave on an order. The Claude commander (needs `ANTHROPIC_API_KEY`) is **off by default** and is only called while **AI monitoring** is on (or by **Ask Claude now**). Board content is labelled simulated and kept apart from live drill data; closing a board fire resolves its field reports. Not operational guidance. [Contract](docs/live-reports.md), [ADR 0012](docs/adr/0012-controller-guidance.md), [ADR 0047](docs/adr/0047-command-demo.md). |
-| `/app-integration` | App integration | The phone app inside the server-side live drill (the incident of `GET /api/live/active`), in real time: every joined phone (solid dot) and every simulated person (hollow dot, acting through the same live API with their own, not always obedient, choices) on one map over the estimated population, fire, zone guidance and traffic; what waits for the controller's OK (Send / Don't send), one message timeline to and from phones, what a chosen person's phone shows, and what the simulated people did. Practice speed-ups only while no real phone is joined. [Doc](docs/app-integration.md). |
-| `/live/report` | After-action report | Drill score with its component breakdown, per-zone leave-now vs 2018, triage and help times, and the decision timeline; Export JSON. Opened from the `/live` header menu. [Contract](docs/live-reports.md#after-action-report). |
-| `/replay` | Historical replay | Replay of past fires (Camp 2018, plus Marshall and Kincade packages) with perimeters, evacuation traffic and responder/evacuee views, driven by generated replay bundles. [Bundle contract](docs/replay-bundle.md). |
-| `/simulate` | Agent simulation | Replay-style view of simulated agent runs (same map tooling as `/replay`). |
-| `/diorama` | Evacuation diorama | Fictional, scripted ~90 s three.js evacuation of the made-up town Larkspur Hollow; synthetic data. [ADR 0010](docs/adr/0010-evacuation-diorama.md). |
-| `/comparison`, `/stress-tests` | Planning pages | UI scaffolds with temporary local input; they do not save scenarios or run evacuation models. `/evacuation` was removed and redirects to `/simulation`. [Details](docs/workspace-pages.md), [ADR 0006](docs/adr/0006-planning-ui-scaffolds.md). |
-
-The workspace overview (`/overview`) and `/maps` pages were removed
-([ADR 0015](docs/adr/0015-remove-overview-and-maps.md)).
+| `/run` | Scenario run | The single-view page. Set up a curated Berkeley Hills fire, run the no-action baseline, then the AI dispatch step on the same seed. It shows a 3D board, what the agent sees, and a scoreboard against the baseline. It has no sidebar, so the steps never reload. Seeds: [docs/demo-seeds.md](docs/demo-seeds.md). |
+| `/fire` | Fire spread model | Rothermel surface spread with crown fire, ember spotting and structure-to-structure spread, on LANDFIRE fuels, canopy and terrain. Views: a 3D diorama or USGS imagery. Areas: 13 prebuilt regions (11 in the San Francisco Bay Area, 2 in Los Angeles) or a live custom area. Optional NWS wind. [Reference](docs/fire-simulator.md). |
+| `/simulation` | Simulation Studio | Up to five scheduled ignitions in one solver pass, solved in a Web Worker. JSON export and import, and a 3D diorama of the last run. **Evacuation & closures** evacuates the synthetic households and compares runs with and without road or bridge closures. An **optimizer** searches exits and staged waves. **Firefighters** sends hand crews, engines, dozers and aircraft to build control line. [ADR 0011](docs/adr/0011-simulation-studio.md), [ADR 0018](docs/adr/0018-road-closures.md), [ADR 0020](docs/adr/0020-studio-firefighting.md), [ADR 0048](docs/adr/0048-suppression-engine.md). |
+| `/dispatch` | Dispatch agent | Studio with a live Claude dispatcher beside it (needs `ANTHROPIC_API_KEY`). It orders zones out or stages them in waves, and sends engines to fight a fire or to support an evacuation. It picks a tactic from options the simulator has solved. Runs are journalled in MongoDB Atlas and shown to the agent as lessons. [ADR 0014](docs/adr/0014-dispatch-agent.md), [ADR 0022](docs/adr/0022-dispatch-fire-attack.md), [ADR 0031](docs/adr/0031-dispatch-run-memory.md). |
+| `/live` | Live command | The controller workspace for the active live drill. It has field-report triage, the drill clock and the real-time twin. Beside them is a simulated command board with an AI incident commander, off by default (**AI monitoring**). [Contract](docs/live-reports.md), [ADR 0047](docs/adr/0047-command-demo.md). |
+| `/app-integration` | App integration | The phone app inside the live drill, in real time. Every joined phone and every simulated person appears on one map. The page shows what waits for the controller's OK, one message timeline, and what a chosen person's phone shows. [Doc](docs/app-integration.md). |
+| `/live/report` | After-action report | Drill score with its breakdown, per-zone timing, triage and help times, and the decision timeline. Export as JSON. [Contract](docs/live-reports.md#after-action-report). |
+| `/replay` | Historical replay | Replays of past fires (Camp 2018, Marshall, Kincade) with perimeters, evacuation traffic and responder or evacuee views. [Bundle contract](docs/replay-bundle.md). |
+| `/intel` | Incident intelligence | An Apify Actor fetches public agency pages; Claude extracts candidate closures, orders and shelter updates with a verbatim quote; a planner confirms and maps each one. [Contract](docs/incident-intel.md), [ADR 0018](docs/adr/0018-apify-incident-intelligence.md). |
+| `/simulate` | Agent simulation | Replay-style view of simulated agent runs. |
+| `/diorama` | Evacuation diorama | A fictional, scripted ~90 s three.js evacuation of a made-up town. [ADR 0010](docs/adr/0010-evacuation-diorama.md). |
+| `/comparison`, `/stress-tests` | Planning pages | UI scaffolds with temporary local input. [Details](docs/workspace-pages.md). |
 
 Also in the repository:
 
-- **Backend** (`app/backend/`): Django REST API with `GET /api/health`, `/api/landscapes` (prebuilt landscapes from MongoDB) and `/api/landscapes/cache` (write-back cache of live-loaded grids), `/api/geo/…` (read-through Mongo cache of LANDFIRE WCS, terrain and imagery tiles), `/api/dispatch/area` (OpenStreetMap roads and stations for a box), `/api/dispatch/decide`, `/api/dispatch/runs` (run journal in Atlas), `/api/demo/…` (command demo: fire-aware routes and the Claude commander, [ADR 0047](docs/adr/0047-command-demo.md)), `/api/replay/explain`, `/api/live` (resident-app simulation feed), `/api/sim-state/…` (Studio evacuation state per synthetic home; [contract](docs/sim-state-api.md)), `/api/live/…` (live drill: field reports, controller guidance, twin; [contract](docs/live-reports.md)) `/api/world/…` (the shared world the workspace tabs read and control, and saved scenarios; [contract](docs/shared-world.md)), `/api/families` and `/api/mobile/…` (schema-free iOS app data in Atlas, [ADR 0029](docs/adr/0029-mobile-data-store.md)). See [API contract](app/backend/README.md).
-- **Fire watch agent** (`agent/`): a standalone Python package that drafts evacuation advisories from satellite detections for a human to approve; never notifies residents. [README](agent/README.md), [ADR 0008](docs/adr/0008-fire-watch-agent.md).
-- **Live scenario runner** (`python manage.py live_run_scenario --spec api/live/specs/camp-2018-live-typical.json --base http://127.0.0.1:8000 --speed 10 --start`): fills the active live drill with simulated residents, generated 911/radio/rescue calls, simulated responders and injects on the drill clock, all labelled simulated. [Doc](docs/live-scenario-runner.md).
-- **Simulated people** (`POST /api/live/incidents/<id>/virtual-people {"count": 20}`; headless: `python manage.py live_virtual_people --add 20`): virtual phones, synthetic households with evidence-drawn behaviour that follow the drill clock and act through the phone API, labelled simulated. [Doc](docs/app-integration.md#simulated-people).
-- **Controller MCP server** (`orchestrator_mcp/`): a stdio MCP server that lets an external orchestrator agent act as the controller of the live drill through the controller API, with every write attributed to the agent. [README](orchestrator_mcp/README.md), [ADR 0033](docs/adr/0033-controller-mcp-server.md).
-- **Historical replay simulator** (`sim/`): stdlib Python fire hindcast and evacuation traffic model that produces replay bundles. [README](sim/README.md).
-- **iOS app** (`mobile/`): SwiftUI resident app for the **live drill** on the 2018 Camp road network: a map
-  with the fire estimate and the zone guidance a controller approves on `/live`, field reports and **I'm out** /
-  **Need help** check-ins ([contract](docs/live-reports.md), [ADR 0011](docs/adr/0011-live-field-reports.md),
-  [ADR 0012](docs/adr/0012-controller-guidance.md)). Its menu also holds **My Plan**, **Family** (create or join a
-  family by code to share meeting points and status) and **Web simulation**, the fire a planner plays on `/fire` or
-  `/dispatch` with **Share with resident app** on, including what the dispatch
-  simulation tells the household's zone ("stay home, your zone leaves in a later wave" for staged zones).
-  From `/simulation`, **Share with resident app (homes)** publishes Studio's evacuation and every playback tick
-  to Atlas, so the app can show the household's saved home as leave now, leave at T+h:mm, already left, or no order
-  ([contract](docs/sim-state-api.md), [ADR 0029](docs/adr/0029-simulation-state-for-mobile.md)).
-  Everything shown is a labelled drill or simulation, not an
-  alert. [README](mobile/README.md), [ADR 0010](docs/adr/0010-civilian-ios-app.md),
-  [ADR 0016](docs/adr/0016-resident-live-and-family.md).
-- **Live twin** (`app/backend/livecore/`, `sim/`): the planner and a steppable traffic engine behind `/live`'s what-if
-  ([ADR 0013](docs/adr/0013-realtime-twin.md), [twin API](docs/twin-api.md)).
-  `GET /api/live/incidents/{id}/people` turns the twin into estimated people (still home, driving, in traffic,
-  stuck, out) for the `/live` map's People layer ([contract](docs/twin-api.md#people-snapshot), simulated).
+- **Backend** (`app/backend/`): Django REST API.
+  - Fire data: landscapes, a LANDFIRE and terrain tile cache, and OSM roads and stations.
+  - Agents: the dispatch and command-demo agents.
+  - Live drill: drill, twin and simulated-people APIs, and the shared world.
+  - Mobile: the mobile data store.
+  - [API contract](app/backend/README.md).
+- **iOS app** (`mobile/`): SwiftUI resident app for the live drill.
+  - It shows the fire estimate and zone guidance, takes field reports and check-ins, and offers voice mode.
+  - It has family meeting points.
+  - A participant can **follow a simulated person** on the Map.
+  - [README](mobile/README.md).
+- **Fire watch agent** (`agent/`): drafts evacuation advisories from satellite detections for a
+  human to approve. [README](agent/README.md).
+- **Controller MCP server** (`orchestrator_mcp/`): lets an external agent act as the drill's
+  controller, with every write attributed to the agent. [README](orchestrator_mcp/README.md).
+- **Historical replay simulator** (`sim/`): stdlib Python fire hindcast and evacuation traffic
+  model. [README](sim/README.md).
+- **Live scenario runner** and **simulated people**: fill a drill with simulated residents, 911,
+  radio and rescue calls. [Doc](docs/live-scenario-runner.md), [Doc](docs/app-integration.md#simulated-people).
 
-- **Incident intelligence** (`/intel`, API `/api/intel/…`): the page lists the historical incidents from the
-  replay index (pick one to scope the review; `/incidents` redirects here). An Apify Actor fetches public agency
-  pages (live, or Wayback Machine captures for past fires), Claude extracts candidate road closures,
-  evacuation orders and shelter updates with a verbatim quote, and a planner confirms and maps each one.
-  Every extracted record is `reported` and `unconfirmed` until a planner confirms it; Claude never
-  outputs coordinates. `APIFY_TOKEN`, `APIFY_ACTOR_ID` and `ANTHROPIC_API_KEY` are read by Django only
-  (never `VITE_*`); without them runs and extraction answer 503 and uploading Actor output still works.
-  [Contract](docs/incident-intel.md), [ADR 0018](docs/adr/0018-apify-incident-intelligence.md).
+</details>
 
-Not implemented: persistent scenarios, live incident integrations, a validated evacuation model.
-Suppression is limited to control lines built by Simulation Studio ground crews and aircraft ([ADR 0020](docs/adr/0020-studio-firefighting.md), [ADR 0048](docs/adr/0048-suppression-engine.md)); the fire model is unvalidated at demo settings.
+## Known limitations
+
+- The fire model is **unvalidated at demo settings**. It may under-predict how fast fire spreads
+  from house to house in a wind-driven urban fire. The 1991 fire destroyed far more homes in its
+  first hour than our board does.
+- **AI runs are not bit-reproducible.** The seed fixes the fire, wind, people and units, but
+  Claude's response time varies, so its orders land at different board minutes. The baseline
+  replays exactly.
+- The **headless harness and the page can differ**. The demo seeds were measured headlessly, and
+  a run on the page can give other numbers.
+- **Some inputs are unverified.**
+  - Mutual-aid lead times are `ASSUMPTION`.
+  - Some department rosters (Moraga-Orinda, Con Fire, Albany, Richmond) are not verified.
+  - Drills outside Camp get 0% road grade.
+- **iOS voice and follow mode have not been tested on a physical device.**
+- **The demo presets' easing wind is an `ASSUMPTION`.** Each holds its offshore wind until
+  T+2:30, then drops to 12 mph; fuel goes from critical to dry at T+4:00. Their harness numbers
+  were measured before this change and are marked stale in `app/src/oneview/demoSeeds.ts` until
+  they are re-measured.
+- **The fast baseline waits on the route service.** A 6-hour baseline takes about 85–90 s on the
+  dev server, almost all of it routing requests.
+- **Smouldering and "creeping" are labelled assumptions.** Smouldering is shown for a 60-minute
+  window, and "creeping" means under 2 m/min.
+- **Not modelled yet:** aircraft grounding at night or in high wind.
+
+## Quick start
+
+Requirements: Docker with Compose v2 and a MongoDB connection (Atlas or local). Keep the
+connection string in `~/.mongodb_uri` (permissions `600`). Your IP must be in the Atlas network
+access list. Never commit or paste the connection string.
+
+```sh
+git clone https://github.com/ryankim0709/crisistwin.git
+cd crisistwin/app
+export MONGODB_URI="$(cat ~/.mongodb_uri)"
+docker compose up --build --wait
+```
+
+Open **http://localhost:5173** (it redirects to `/fire`), or **http://localhost:5173/run** for the
+single-view demo. The API health check is at **http://localhost:8000/api/health**. Frontend and
+backend source changes reload automatically. Compose runs only the app processes; it does not
+provision a database.
+
+Alternatively, copy [`app/.env.example`](app/.env.example) to the ignored `app/.env`.
+`MONGODB_URI` is required; `MONGODB_DATABASE` defaults to `crisistwin`. Do not share expanded
+`docker compose config` output.
+
+```sh
+docker compose logs -f      # follow logs
+docker compose down         # stop the stack
+```
+
+**AI commander and dispatch agent.** Set `ANTHROPIC_API_KEY` in the backend environment; without
+it the endpoints return 503. Optional settings:
+- `DISPATCH_AGENT_MODEL` and `DISPATCH_AGENT_EFFORT`;
+- `DISPATCH_AGENT_ROUTINE_EFFORT` and `DISPATCH_AGENT_ROUTINE_MODEL`, for routine continuous reviews.
+
+Per-call token usage and cost print in `docker compose logs backend` (`Decision usage: …`) and on
+the page. The dispatch area endpoint needs internet the first time a box is used; results are
+cached.
+
+**Scenario resource snapshots.** These are the households, fire stations and engines at T+0 of
+each live drill ([docs/scenario-snapshots.md](docs/scenario-snapshots.md)). Create them once per
+database, and again after changing `tools/snapshot_assumptions.json`:
+
+```sh
+docker exec crisistwin-backend-1 python manage.py live_init_db          # collections + validators
+docker exec crisistwin-backend-1 python manage.py live_seed_snapshots   # Camp, Berkeley Hills, Palisades
+```
+
+**Other requirements.**
+- The `/fire` page needs internet access (LANDFIRE, terrain tiles, NWS) and works in the
+  contiguous US only.
+- `/run` needs a Berkeley Hills & Tilden drill package. Its **Prepare** step builds and stores one
+  if none exists.
+
+Stack: Node 22.12+ with npm, Python 3.12, React 19, TypeScript 5.8, Vite 7, Tailwind CSS 4, three.js,
+Django 5.2, DRF 3, PyMongo 4. Running on the host without Docker, checks, and runtime images:
+[docs/development.md](docs/development.md).
+
+### Data
+
+Large incident-package files (`raw/`, `normalized/`) and generated replay bundles are not in Git;
+they live in MongoDB Atlas. After cloning:
+
+```sh
+pip install -r tools/requirements.txt
+export MONGODB_URI='mongodb+srv://...'   # ask a teammate; never commit it
+python3 -m tools.mongo_data pull
+python3 -m tools.mongo_data status       # drift vs the committed manifests
+```
+
+If `status` reports drift after you pull, the author has not yet run `record` and `push` and
+committed the manifest. See [docs/historical-data.md](docs/historical-data.md) and
+[tools/README.md](tools/README.md).
+
+### iOS app
+
+```sh
+open mobile/CrisisTwin.xcodeproj
+```
+
+Select the **CrisisTwin** scheme and an iOS 26 simulator (Xcode 26), then choose Product > Run.
+Debug builds use `http://localhost:8000/api/health`, so start the Docker stack for the readiness
+card. Details: [mobile/README.md](mobile/README.md).
+
+### Voice mode (Cartesia)
+
+On the phone, a person can:
+- report a blocked road or check in by voice;
+- ask what to do, and get answers from the published guidance;
+- in Drive mode, hear guidance changes read aloud.
+
+Claude only interprets what was said and proposes one action, and the phone asks before it sends
+anything. The model computes no route, time or hazard.
+
+When Claude answers a question, it uses only the incident facts the server builds for that turn:
+- the zone's published guidance and its recent versions;
+- reported hazards and nearby shelters;
+- the fire estimate.
+
+It says when those facts do not cover the question. The phone shows which facts it used ("From:
+published guidance · fire estimate"). The phone sends its zone id for this, never its
+coordinates ([Grounded answers](docs/live-reports.md#grounded-answers)).
+
+Cartesia supplies the speech:
+
+- **Speech-to-text:** `ink-2`, streamed over a WebSocket, so the screen shows live captions while
+  the person talks.
+  - Up to 10 `keyterm` boosts come from the incident's own road and exit names, so "Pentz Road"
+    is not heard as "Pence Road".
+- **Text-to-speech:** Sonic (`sonic-3.6`), streamed over a WebSocket.
+  - Reply text is sent in continuations as the model writes it, so audio starts before the reply
+    is finished.
+  - Guidance announcements in Drive mode use the `calm` emotion and a slightly lower speed.
+- **Short-lived access tokens:** the server mints a 300 s token with only speech-to-text and
+  text-to-speech grants (`POST /api/live/incidents/{id}/voice/token`). The phone talks to
+  Cartesia directly, and the `CARTESIA_API_KEY` stays on the server.
+- **Batch endpoints:** `/stt` and `/tts/bytes` remain as the non-streaming path (a recorded WAV
+  in, a WAV reply out).
+
+Optionally, TypeSafe's Jev model classifies each utterance first, as a typed question with
+calibrated probabilities.
+- A confident first-hand hazard report is filed without asking, and the person can undo it within
+  5 minutes.
+- Everything else is confirmed first.
+- Without `TYPESAFE_API_KEY`, Claude handles every turn.
+
+See [docs/live-reports.md](docs/live-reports.md#decisions-jev).
+
+Measured on the local stack, the first reply text arrives about 3.2 s after the transcript is
+posted. The whole reply takes about 3.7 s, against about 6.8 s without streaming. These figures
+cover the model call only; they were not timed on a phone.
+
+**Setup.** Put `CARTESIA_API_KEY` (and `ANTHROPIC_API_KEY`) in the ignored `app/.env`. Optional
+settings: `CARTESIA_VOICE_ID`, `CARTESIA_TTS_MODEL`, `VOICE_MODEL`, `TYPESAFE_API_KEY` and
+`JEV_MODEL`. Then run `cd app && docker compose up -d backend`.
+
+Both services are paid usage. Without the keys, the token endpoint answers 503
+`voice_unavailable`, and the phone falls back to typed input and on-device speech.
+- Wire contract: [docs/live-reports.md](docs/live-reports.md#voice-mode).
+- curl examples: [`app/backend/README.md`](app/backend/README.md#voice-mode-post-apiliveincidentsidvoice).
+- Phone side: [mobile/README.md](mobile/README.md#voice).
+
+**Known limitations:**
+- English only.
+- A report's location is the phone's GPS position, even when the person names another place.
+- The Jev thresholds are not calibrated on labelled data.
+- Speech needs a network signal.
+- Barge-in on the speakerphone depends on Apple's echo cancellation.
+- The iOS voice and Drive mode have not been run on a simulator or a device yet.
+
+### Multi-phone drill
+
+One backend and console serve several real phones from one iOS build. Phones get the server from
+a join link, `crisistwin://join?server=<origin>&code=<invite>`. Open the link, or scan its QR code
+in Plan > About > Server. The `/live` "..." menu > **Invite phones** shows the link and QR code
+([ADR 0034](docs/adr/0034-multi-phone-hosting.md)). Always set `LIVE_CONTROLLER_TOKEN` (without it
+every client is the controller) and `LIVE_INVITE_CODE`.
+
+**(a) Same Wi-Fi, the Mac serves.** Find the Mac's name with `scutil --get LocalHostName`
+(`<mac>.local`).
+```sh
+cd app
+export LIVE_CONTROLLER_TOKEN=<token> LIVE_INVITE_CODE=<code>
+CT_BIND_ADDR=0.0.0.0 DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,backend,<mac>.local docker compose up --build
+```
+Open `http://localhost:5173/live` on the Mac, choose Invite phones, and give the server
+`http://<mac>.local:5173`.
+
+**(b) HTTPS tunnel.**
+1. Run `cloudflared tunnel --url http://localhost:5173`. It prints a hostname,
+   `<name>.trycloudflare.com`.
+2. Restart Compose with
+   `DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,backend,<name>.trycloudflare.com VITE_ALLOWED_HOSTS=<name>.trycloudflare.com`.
+3. Invite phones with that origin.
+
+**(c) Cloud VM.** A ready-made single-VM stack is in `deploy/`; the steps are in
+[docs/deploy.md](docs/deploy.md).
+
+### Checks
+
+The only default check is pre-commit (merge-conflict markers, trailing whitespace, final
+newlines):
+
+```sh
+python3 -m pip install pre-commit
+pre-commit run --all-files
+```
+
+Type checks and builds are optional and listed in [docs/development.md](docs/development.md).
+There are no CI workflows.
 
 ## Repository map
 
 ```text
 app/                  Web app
   src/                React 19 + TypeScript frontend (see app/AGENTS.md)
+    oneview/          /run: the single-view scenario run (setup → baseline → AI dispatch)
+    demo/             Command board: run modes, scoring, forecasts, evacuation balance, comms, injuries
+    response/         Fire departments and fleets
     ui/               Design tokens and shared component kit: the UI standard, see app/src/ui/README.md
-    fire/ studio/ dispatch/ demo/ replay/ diorama/ live/ pages/ maps/ lib/
+    fire/ studio/ dispatch/ replay/ diorama/ live/ appint/ pages/ maps/ lib/
   backend/            Django 5.2 REST API + PyMongo (config/, api/, livecore/ live-drill rules and planner)
+  scripts/live-eval/  Headless evaluation harness for the command board
   public/             Static assets (brand logo, map imagery; replay bundles are generated)
   data-manifest.json  Hashes of generated app data stored in MongoDB Atlas
   docker-compose.yml  Development stack (frontend + backend, external MongoDB)
+actors/incident-intel/ Apify Actor for public incident pages
 agent/                Fire watch agent (Anthropic SDK, standalone)
 orchestrator_mcp/     Controller MCP server for an external orchestrator agent (standalone)
 sim/                  Historical replay simulator (stdlib Python)
@@ -92,198 +581,15 @@ docs/                 Docs index: docs/README.md; decisions: docs/adr/
 AGENTS.md             Shared rules for coding agents (CLAUDE.md, Cursor and Copilot adapt it)
 ```
 
-## Quick start
-
-Requirements: Docker with Compose v2 and a MongoDB connection (Atlas or local). Keep the
-connection string in `~/.mongodb_uri` (permissions `600`); your IP must be in the Atlas
-network access list. Never commit or paste it.
-
-```sh
-git clone https://github.com/ryankim0709/crisistwin.git
-cd crisistwin/app
-export MONGODB_URI="$(cat ~/.mongodb_uri)"
-docker compose up --build --wait
-```
-
-Open **http://localhost:5173** (redirects to `/fire`). The API health check is at
-**http://localhost:8000/api/health**. Frontend and backend source changes reload automatically.
-Compose runs only the app processes; it does not provision a database.
-
-Alternatively copy [`app/.env.example`](app/.env.example) to ignored `app/.env`. `MONGODB_URI` is
-required; `MONGODB_DATABASE` defaults to `crisistwin`. Do not share expanded `docker compose config`
-output.
-
-```sh
-docker compose logs -f      # follow logs
-docker compose down         # stop the stack
-```
-
-For the dispatch agent, set `ANTHROPIC_API_KEY` (optionally `DISPATCH_AGENT_MODEL`,
-`DISPATCH_AGENT_EFFORT`, and `DISPATCH_AGENT_ROUTINE_EFFORT` / `DISPATCH_AGENT_ROUTINE_MODEL`
-for the live board's routine continuous reviews) in the backend environment; without it the
-endpoint returns 503. Per-call token usage and cost print in `docker compose logs backend`
-(`Decision usage: …`) and on /live under the AI agent switch.
-The dispatch area endpoint needs internet the first time a box is used (results are cached).
-
-Scenario resource snapshots (households, fire stations and engines at T+0 of each live drill,
-[docs/scenario-snapshots.md](docs/scenario-snapshots.md)), once per database and again after
-changing `tools/snapshot_assumptions.json` (a few minutes on a rate-limited Atlas tier):
-
-```sh
-docker exec crisistwin-backend-1 python manage.py live_init_db          # collections + validators
-docker exec crisistwin-backend-1 python manage.py live_seed_snapshots   # Camp, Berkeley Hills, Palisades
-```
-
-For the phone's voice mode, see [Voice mode (Cartesia)](#voice-mode-cartesia) below.
-The `/fire` page needs internet access (LANDFIRE, terrain tiles, NWS) and works in the contiguous US only.
-
-Stack: Node 22.12+ with npm, Python 3.12, React 19, TypeScript 5.8, Vite 7, Tailwind CSS 4, Django 5.2,
-DRF 3, PyMongo 4, Vitest. Running on the host without Docker, checks, and runtime images:
-[docs/development.md](docs/development.md).
-
-### Data
-
-Large incident-package files (`raw/`, `normalized/`) and generated replay bundles are not in Git; they
-live in MongoDB Atlas. After cloning:
-
-```sh
-pip install -r tools/requirements.txt
-export MONGODB_URI='mongodb+srv://...'   # ask a teammate; never commit it
-python3 -m tools.mongo_data pull
-python3 -m tools.mongo_data status       # drift vs the committed manifests
-```
-
-If `status` reports drift after you pull, the author has not yet run `record`, `push` and
-committed the manifest.
-
-See [docs/historical-data.md](docs/historical-data.md) and [tools/README.md](tools/README.md).
-
-### iOS app
-
-```sh
-open mobile/CrisisTwin.xcodeproj
-```
-
-Select the **CrisisTwin** scheme and an iOS 26 simulator (Xcode 26), then Product > Run. Debug uses
-`http://localhost:8000/api/health`, so start the Docker stack for the readiness card. Details:
-[mobile/README.md](mobile/README.md). Mobile builds and tests have not been run in this repository's
-checks.
-
-### Voice mode (Cartesia)
-
-The phone can be talked to: a person reports a blocked road or checks in by voice, asks what to do
-from the published guidance, and in Drive mode hears guidance changes read aloud. Claude only
-interprets what was said and proposes one action; the phone asks before it sends anything, and the
-model computes no route, time or hazard. When it answers a question, Claude uses only incident facts
-the server builds for that turn (the zone's published guidance and its recent versions, reported
-hazards, nearby shelters and the fire estimate), says when they do not cover the question, and the
-phone shows which it used ("From: published guidance · fire estimate"); the phone sends its zone id for
-this and no coordinates ([Grounded answers](docs/live-reports.md#grounded-answers)). Cartesia
-supplies the speech:
-
-- Speech-to-text: `ink-2` streamed over a WebSocket, so the screen shows live captions while the
-  person talks. Up to 10 `keyterm` boosts come from the incident's own road and exit names, so
-  "Pentz Road" is not heard as "Pence Road".
-- Text-to-speech: Sonic (`sonic-3.6`) streamed over a WebSocket. Reply text is sent in continuations
-  as the model writes it, so audio starts before the reply is finished. Guidance announcements in
-  Drive mode use the `calm` emotion and a slightly lower speed.
-- Short-lived access tokens: the server mints a 300 s token with only speech-to-text and
-  text-to-speech grants (`POST /api/live/incidents/{id}/voice/token`), so the phone talks to Cartesia
-  directly and the `CARTESIA_API_KEY` stays on the server.
-- The batch `/stt` and `/tts/bytes` endpoints remain as the non-streaming path (a recorded WAV in,
-  a WAV reply out).
-
-Jev makes the agent act on its own. For each utterance the server first asks TypeSafe's Jev model
-typed questions (what kind of request, which report kind, is it first-hand and here) and gets
-calibrated probabilities back. A confident first-hand hazard report (a blocked road, fire, smoke,
-traffic, a downed line, a full shelter) is filed by the phone without asking, and the person can say
-"undo" or tap Undo within 5 minutes. Everything else is confirmed first: `help_needed` reports and
-every check-in are never filed automatically, and questions and uncertain turns go to Claude, which
-also handles every turn when `TYPESAFE_API_KEY` is unset. Jev's replies are fixed templates. Jev is
-optional and paid; the thresholds and the contract are in
-[docs/live-reports.md](docs/live-reports.md#decisions-jev). This path has not been run on a device.
-
-Measured on the local stack, the first reply text arrives about 3.2 s after the transcript is posted
-and the whole reply about 3.7 s, against about 6.8 s without streaming. Those figures cover the model
-call only; they were not timed on a phone.
-
-Setup. Put `CARTESIA_API_KEY` (and `ANTHROPIC_API_KEY`) in the ignored `app/.env`, optionally
-`CARTESIA_VOICE_ID`, `CARTESIA_TTS_MODEL`, `VOICE_MODEL`, `TYPESAFE_API_KEY` and `JEV_MODEL`, then:
-
-```sh
-cd app && docker compose up -d backend
-```
-
-Both services are paid usage. Without the keys the token endpoint answers 503 `voice_unavailable`
-and the phone falls back to typed input and on-device speech. The wire contract is in
-[docs/live-reports.md](docs/live-reports.md#voice-mode) and
-[streaming voice](docs/live-reports.md#streaming-voice-token-endpoint-and-ndjson-replies); curl
-examples are in [`app/backend/README.md`](app/backend/README.md#voice-mode-post-apiliveincidentsidvoice);
-the phone side is in [mobile/README.md](mobile/README.md#voice).
-
-Known limitations:
-
-- English only.
-- A report's location is the phone's GPS position, even when the person names another place.
-  Reports Jev files automatically are pinned the same way, and the person only learns of a wrong
-  place by looking at the report or saying undo.
-- The Jev confidence thresholds are not calibrated on labelled data, so how often it files wrongly
-  or asks needlessly is unknown.
-- Speech-to-text and text-to-speech need a network signal. Typed input and on-device speech are
-  the fallback.
-- Barge-in (talking over a reply) on the speakerphone depends on Apple's echo cancellation.
-- The backend streaming path was timed on the local stack. The iOS voice and Drive mode have not been built or run
-  on a simulator or a physical device yet.
-
-### Multi-phone drill
-
-One backend and console, several real phones, one iOS build. Phones get the server from a join
-link `crisistwin://join?server=<origin>&code=<invite>` (open it, or scan its QR code in Plan >
-About > Server). The console's /live "..." menu > **Invite phones** shows the link and QR code
-([ADR 0034](docs/adr/0034-multi-phone-hosting.md)). Always set `LIVE_CONTROLLER_TOKEN` (without
-it every client is the controller) and `LIVE_INVITE_CODE`, in your shell or `app/.env`.
-
-**(a) Same Wi-Fi, the Mac serves.** Find the name with `scutil --get LocalHostName` (`<mac>.local`).
-```sh
-cd app
-export LIVE_CONTROLLER_TOKEN=<token> LIVE_INVITE_CODE=<code>
-CT_BIND_ADDR=0.0.0.0 DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,backend,<mac>.local docker compose up --build
-```
-Open `http://localhost:5173/live` on the Mac (no token form), Invite phones, server
-`http://<mac>.local:5173`. Phones use the Vite proxy on 5173 (plain HTTP works only for `.local`;
-allow local network access when iOS asks). macOS may ask to allow incoming connections.
-
-**(b) HTTPS tunnel you start yourself.** Start the stack as above (it can stay on `127.0.0.1`),
-then in another terminal `cloudflared tunnel --url http://localhost:5173`. With the printed
-`https://<name>.trycloudflare.com`, restart Compose with
-`DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,backend,<name>.trycloudflare.com VITE_ALLOWED_HOSTS=<name>.trycloudflare.com`
-(add `DJANGO_CSRF_TRUSTED_ORIGINS=https://<name>.trycloudflare.com` only if a browser POST is
-refused). Invite phones with that origin. Visitors on the tunnel, including a console opened
-there, see the token form. The hostname changes every run; regenerate the QR code.
-
-**(c) Cloud VM.** Ready-made single-VM stack (Caddy HTTPS, one-worker API, local cache mongod, Atlas for app data) in `deploy/`; step-by-step in [docs/deploy.md](docs/deploy.md).
-
-### Checks
-
-The only default check is pre-commit (merge-conflict markers, trailing whitespace, final newlines):
-
-```sh
-python3 -m pip install pre-commit
-pre-commit run --all-files
-```
-
-Tests, lint, type checks and builds are optional and listed in [docs/development.md](docs/development.md).
-There are no CI workflows.
-
 ## Documentation
 
 - [docs/README.md](docs/README.md): index of all docs. [Project scope](docs/project-scope.md) (proposals, not status).
 - [docs/adr/](docs/adr/): architecture decisions. Some numbers repeat, so cite them by full file name.
-- [app/src/ui/README.md](app/src/ui/README.md): the UI standard (tokens and shared components every page uses).
-- [app/AGENTS.md](app/AGENTS.md) and [AGENTS.md](AGENTS.md): rules for coding agents. Change shared guidance in `AGENTS.md`;
-  Claude's [subagent model rule](AGENTS.md#choosing-a-model-for-subagents) is there too.
+- [docs/demo-seeds.md](docs/demo-seeds.md): how the `/run` presets were chosen and measured.
+- [app/src/ui/README.md](app/src/ui/README.md): the UI standard.
+- [AGENTS.md](AGENTS.md) and [app/AGENTS.md](app/AGENTS.md): rules for coding agents.
 - Component READMEs: [app/backend](app/backend/README.md), [agent](agent/README.md),
   [orchestrator_mcp](orchestrator_mcp/README.md), [sim](sim/README.md),
-  [tools](tools/README.md), [mobile](mobile/README.md).
+  [tools](tools/README.md), [mobile](mobile/README.md), [actors/incident-intel](actors/incident-intel/README.md).
 
-The project grew out of [this planning conversation](https://chatgpt.com/share/6adc0b53-b864-83e8-84f7-8560e24d2a15).
+<div align="center"><sub>Built at Cal Hacks 13.0 · A simulated planning experiment, not operational guidance.</sub></div>

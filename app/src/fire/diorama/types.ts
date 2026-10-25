@@ -107,13 +107,16 @@ export interface FireDioramaSceneApi {
   setStations(stations: readonly MapStation[] | null, suffix?: string): void;
   setStationSuffix(suffix: string): void;
   /**
-   * Opt-in fire states per landscape cell (row-major, the grid's cells): 0 unburned, 1 burning
-   * (glow, flames, smoke), 2 burned out (char), 3 extinguished (wet slate with a pale hatch and a
-   * dashed cool outline, no glow). While set they replace the arrival-window rule for the ground,
-   * trees, houses and flames; the arrival still freshens the front. `null` (the default, and any
-   * array of the wrong length) goes back to the arrival field alone.
+   * Opt-in fire states per landscape cell (row-major, the grid's cells), cellStates.ts CELL_STATE:
+   * 0 unburned, 1 burning (glow, flames, smoke), 2 burned out (ash-grey char, quiet), 3
+   * extinguished (wet slate with a pale hatch and a dashed cool outline, no glow), 4 smouldering
+   * (ember glow by `heat`, 0-255 per cell), 5-8 flaming by Hauling-chart flame band (deep red ..
+   * pale yellow, brighter), 9 crown fire; CELL_CONTAINED_BIT turns the cell's perimeter cool blue.
+   * While set they replace the arrival-window rule for the ground, trees, houses and flames; the
+   * arrival still freshens the front. `null` (the default, and any array of the wrong length)
+   * goes back to the arrival field alone. Both arrays are copied.
    */
-  setCellStates(states: Uint8Array | null): void;
+  setCellStates(states: Uint8Array | null, heat?: Uint8Array | null): void;
   /**
    * Geographic position of every stylized cover house, in instance order. The array keeps its
    * identity until the cover is rebuilt (new landscape or streets), so a page can cache work on it.

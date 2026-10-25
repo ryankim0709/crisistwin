@@ -149,7 +149,7 @@ kept as a JSON string, `extrasJson`). Implementation: `app/backend/api/world.py`
 | `conditions.startUtc`, `weather` | wind source picker (record refetched at the ignition, hour-by-hour series); assumed = the wind sliders | wind source picker / the Random scenario's date and weather; assumed = the wind fields | the closest wind preset (`climatology_percentile` → Nov P95; `historical_replay` → the nearest preset start; assumed and forecast leave it) | shown (date) |
 | `moisture` | preset buttons (`derived` leaves the preset) | moisture preset; `derived` when the Random scenario's series sets it | — | — |
 | `fire.ignitions` | the earliest ignition is the page's one origin; the others are kept and noted | the enabled fires (disabled ones stay local) | — (board fires are its own simulation) | — |
-| `fire.stochastic` | natural variation on/off + seed | natural variation on/off + seed | `seed` is the board seed ("Restart board" writes a new one; a new seed restarts the board) | — |
+| `fire.stochastic` | natural variation on/off + seed | natural variation on/off + seed | `seed` is the board seed ("Restart board" writes a new one; a new seed is taken by the next board only: only a Studio publish restarts the running board) | — |
 | `seed` | — | the Random scenario seed (pre-fills the seed box) | — | — |
 | `liveIncidentId` | — | — | written when the active drill switches | shown |
 | extras | spotting, structure spread, fire-induced wind, wind over the run, ensemble runs | the full `StudioScenario`, region and area size | speed, activity, running, wind preset | — |

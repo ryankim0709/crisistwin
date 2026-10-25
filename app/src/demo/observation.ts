@@ -25,6 +25,7 @@
  * fire has touched it (zone.knownTouchedAt); the board still counts them (outcomes, audit log).
  */
 
+import { selfEvacuated, selfEvacuating } from "./selfEvacuation";
 import type {
   AttackPositionObservation,
   CrewObservation,
@@ -87,13 +88,17 @@ import {
 } from "./model";
 import { LOOKAHEAD_MINUTES } from "./fireField";
 import { fireStateAreas } from "./fireState";
-import { ORDER_COMPLIANCE, accessClassOf, holdsFlameFeet, kindLabel } from "./realism";
+import { ORDER_COMPLIANCE, accessClassOf, fireKindOf, holdsFlameFeet, kindLabel } from "./realism";
 import { departmentStatus, dispatchable, fireEdgeSample, idleOnSceneReason, initialAttackRecommendation, isReported, reachFraction, unitAccessText } from "./boardResponse";
 import { TANK_GALLONS } from "../response/units";
 import { computeStrategyOptions, strategyLabel } from "./strategyOptions";
 import { closedIds, closedRoadsObservation, closureKey } from "./roadClosures";
+import { simCommsObservation } from "./simComms";
+import { emsObservation } from "./injuries";
 import { simClock } from "./format";
 import { EVAC_SCHEDULE_LABEL, evacuationSchedule, strategyAid, type ZoneEvacPlan } from "./decisionAids";
+import { predictedObservation } from "./predict";
+import { evacBalanceObservation } from "./evacBalance";
 import { runScore } from "./scoring";
 
 /** The fire's strategy options and its chosen strategy for the wire (demo/strategyOptions.ts; model output, rounded). */
@@ -113,7 +118,7 @@ function strategyObs(board: Board, fire: Fire): Pick<FireObservation, "strategy_
       flame_ft: Math.round(o.flameFt * 10) / 10,
       holds_flame_ft: o.holdsFlameFt,
       units_needed: o.unitsNeeded,
-      send: o.send.map((s) => ({ crew_id: s.team.id, kind: s.team.kind, eta_min: Math.round(s.etaMin), route: s.road ? "road" : "estimate" })),
+      send: o.send.map((s) => ({ crew_id: s.team.id, kind: fireKindOf(s.team), eta_min: Math.round(s.etaMin), route: s.road ? "road" : "estimate" })),
       already_assigned: o.assigned.map((t) => t.id),
       outcome: o.outcome,
       contained_in_min: minutes(o.containedInMin),
@@ -271,6 +276,7 @@ function responseObservation(board: Board): DemoObservation["response"] {
     dispatch_level_now: dispatchLevel(boardMoistureClass(board), wind.speedMetersPerSecond),
     departments: departmentStatus(board),
     mutual_aid_pool_units: r.pool.length,
+    ems: emsObservation(board),
     // Bounded for the 200 kB decide body: assigned aircraft first, at most MAX_LISTED.
     aircraft: [...r.aircraft]
       .sort((a, b) => Number(a.fireId === null) - Number(b.fireId === null))
@@ -309,11 +315,21 @@ export const WIND_APPROACH_LABEL = `the wind is held constant, as Simulation Stu
 
 const pct = (v: number) => `${Math.round(v * 100)}%`;
 
+/** WIND_APPROACH_LABEL, or its hourly-series form when the Studio run used an hourly series. */
+export function windApproachLabel(board: Board): string {
+  if (!board.conditions?.series) return WIND_APPROACH_LABEL;
+  return `the wind and fuel moisture follow the Studio run's hourly weather series in 10-minute steps (interpolated as Studio does), and the fire model re-solves at each new step; each solve looks ${LOOKAHEAD_MINUTES / 60} h ahead and the fire model also re-solves on a new, contained or closed fire and as fire line is built (line is a barrier in the model), continuing from the burned ground`;
+}
+
 /** "Assumed in Simulation Studio: ..." wind line for the board (null before any Studio fire). */
 export function studioWindLabel(board: Board): string | null {
   const c = board.conditions;
   if (!c) return null;
   const speed = Math.round(c.windSpeedMph * 10) / 10;
+  if (c.series) {
+    const src = [c.series.source, c.series.evidence].filter(Boolean).join(", ");
+    return `From Simulation Studio (${c.tag}, '${c.name}'): the run's hourly weather series${src ? ` (${src})` : ""}, read at the same Studio minute; peak hour ${speed} mph from ${Math.round(c.windFromDegrees)}°`;
+  }
   return `Assumed in Simulation Studio (${c.tag}, '${c.name}'): ${speed} mph (${c.windSpeedMetersPerSecond.toFixed(1)} m/s) from ${Math.round(c.windFromDegrees)}°, ${c.windSource.replace(/_/g, " ")}${c.windLabel ? ` (${c.windLabel})` : ""}, constant`;
 }
 
@@ -341,7 +357,7 @@ export function fireModelLabel(board: Board): string {
   const conditions = c
     ? `wind and fuel moisture assumed in Simulation Studio ('${c.name}', ${c.tag}): ${Math.round(c.windSpeedMph * 10) / 10} mph from ${Math.round(c.windFromDegrees)}°, ${c.moistureLabel} fuel moisture`
     : "no fire yet: wind and fuel moisture will come from the Simulation Studio run that starts one";
-  return `the simulator's cell solver, the same as /fire and Simulation Studio (Rothermel 1972 surface spread with crown fire, ember spotting and structure-to-structure spread at their defaults), on LANDFIRE fuel, canopy and terrain of ${where}; ${conditions}; ${WIND_APPROACH_LABEL}`;
+  return `the simulator's cell solver, the same as /fire and Simulation Studio (Rothermel 1972 surface spread with crown fire, ember spotting and structure-to-structure spread at their defaults), on LANDFIRE fuel, canopy and terrain of ${where}; ${conditions}; ${windApproachLabel(board)}`;
 }
 
 /** Where the zones' households, persons and vehicles come from (observation.inputs.demand). */
@@ -434,6 +450,7 @@ export function buildObservation(
       planned.has(zone.id) ||
       zone.orderedAt !== null ||
       zone.pendingOrder !== null ||
+      selfEvacuating(zone) ||
       knownOverrun(zone) ||
       f?.edgeEta != null ||
       f?.coreEta != null ||
@@ -519,6 +536,8 @@ export function buildObservation(
       margin_min: margin === null ? null : Math.round(margin),
       destination_id: ordered ? (zone.route?.destination_id ?? null) : null,
       options: options.map((o, i) => routeObs(o, estimates[i])),
+      self_evacuated: selfEvacuated(zone, minute),
+      self_evac_cue: zone.selfEvac?.cue ?? null,
     };
   });
 
@@ -588,7 +607,10 @@ export function buildObservation(
       position_id: team.lineId ? (board.lines.find((l) => l.id === team.lineId)?.plan.id ?? null) : null,
       department: board.response.departments.find((d) => d.id === team.department)?.name ?? team.department,
       tier: team.tier,
-      water_pct: team.waterGallons === null ? null : Math.round((team.waterGallons / (TANK_GALLONS[team.kind] ?? team.waterGallons)) * 100),
+      water_pct:
+        team.waterGallons === null || team.kind === "ambulance"
+          ? null
+          : Math.round((team.waterGallons / (TANK_GALLONS[team.kind] ?? team.waterGallons)) * 100),
       work_h: round1(team.workMinutes / 60),
       parked_m: team.parkedM === null || !team.accessKnown ? null : Math.round(team.parkedM),
       from_fire_m: fire && fire.status === "burning" ? edgeDistanceM(fireEdgeSample(board, fire), teamPosition(board, team)) : null,
@@ -632,7 +654,7 @@ export function buildObservation(
       from_deg: Math.round(wind.fromDegrees),
       speed_m_s: round1(wind.speedMetersPerSecond),
       evidence: studio ? "assumption" : spread.wind.evidence,
-      source: `${studioWindLabel(board) ?? spread.wind.label}; ${WIND_APPROACH_LABEL}`,
+      source: `${studioWindLabel(board) ?? spread.wind.label}; ${windApproachLabel(board)}`,
     },
     inputs: {
       fuel: spread.ground.fuelLabel,
@@ -717,8 +739,11 @@ export function buildObservation(
         ];
       }),
     },
+    predicted: predictedObservation(board, routes),
+    evac_balance: evacBalanceObservation(board, routes, plans),
     incident_picture: incidentPicture,
     closed_roads: closedRoadsObservation(board),
+    sim_comms: simCommsObservation(board),
   };
 }
 
@@ -739,6 +764,9 @@ function outcomesObs(board: Board): NonNullable<DemoObservation["outcomes"]> {
     homes_reached_saved: s.homesReachedSaved,
     homes_method: s.homesMethod,
     area_burned_ha: s.areaBurnedHa,
+    injured_people: s.injuries.injuredPeople,
+    injury_deaths: s.injuries.injuryDeaths,
+    injured_open: s.injuries.openPeople,
   };
 }
 
@@ -803,6 +831,8 @@ export type WakeKind =
   | "road_closed"
   | "refused"
   | "live_report"
+  /** A new simulated life-threat call (trapped party, critical injury; simComms.ts), used by useDemoAgent's realtime pacing. */
+  | "life_threat_call"
   | "continuous_review"
   | "periodic_review"
   | "changes";
@@ -923,6 +953,12 @@ function slackTiers(board: Board, forecasts: Map<string, ZoneForecast>): Record<
     out[zone.id] = slack <= 0 ? 2 : 1;
   }
   return out;
+}
+
+/** Zones with no order in effect whose order slack is spent (the zone_slack wake's "already late" tier); useDemoAgent's realtime pacing calls the agent at once for a new one. */
+export function lateZoneIds(board: Board, forecasts: Map<string, ZoneForecast>): string[] {
+  const tiers = slackTiers(board, forecasts);
+  return Object.keys(tiers).filter((id) => tiers[id] === 2);
 }
 
 /** Whether the fire's chosen strategy is not containable now or no longer offered (strategyOptions.ts). */
