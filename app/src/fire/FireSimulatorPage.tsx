@@ -84,6 +84,12 @@ import { useBoardStreets } from "./useBoardStreets";
 import HistoricalFireDiorama from "../historical/HistoricalFireDiorama";
 import { useHistoricalFireIndex } from "../historical/data";
 import type { World, WorldChanges, WorldIgnition, WorldRegion } from "../world/contracts";
+import {
+  PLACEMENT_LABELS,
+  drawRandomScenario,
+  resolveSeed,
+  type IgnitionPlacement,
+} from "../world/randomScenario";
 import { useWorldSync, type WorldPath } from "../world/useWorldSync";
 import { WorldBar } from "../world/WorldBar";
 import {
@@ -927,6 +933,79 @@ export default function FireSimulatorPage() {
   }, [recordOffBoard, grid]);
   useEffect(() => () => worldWindAbortRef.current?.abort(), []);
 
+  // Quick setup (default) vs Custom: Custom shows every control. The choice is remembered.
+  const [panelCustom, setPanelCustomState] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem("crisistwin.fire.panelCustom") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const setPanelCustom = (custom: boolean) => {
+    setPanelCustomState(custom);
+    try {
+      window.localStorage.setItem("crisistwin.fire.panelCustom", custom ? "1" : "0");
+    } catch {
+      // Storage blocked: the choice just is not remembered.
+    }
+  };
+  const [quickPlacement, setQuickPlacement] = useState<IgnitionPlacement>("away");
+  const [quickSeedText, setQuickSeedText] = useState("");
+  const [quickBusy, setQuickBusy] = useState(false);
+  const [quickResult, setQuickResult] = useState<{ seed: number; summary: string } | null>(null);
+  const [quickError, setQuickError] = useState<string | null>(null);
+
+  async function generateRandom() {
+    if (!grid) return;
+    const seed = resolveSeed(quickSeedText);
+    setQuickBusy(true);
+    setQuickError(null);
+    try {
+      const draw = await drawRandomScenario({
+        seed,
+        regionId: region ? region.id : null,
+        regionName: region ? region.name : areaLabel(areaCenter),
+        grid,
+        roadNodes: streetArea ? streetArea.nodes : null,
+        placement: quickPlacement,
+        horizonMinutes,
+      });
+      if (!draw) {
+        setQuickError("This area has no ground that can burn. Pick another location.");
+        return;
+      }
+      const [first, ...rest] = draw.ignitions;
+      const at = { longitude: first.at.longitude, latitude: first.at.latitude };
+      setOrigin(at);
+      setFiresCleared(false);
+      setWorldFires({
+        id: "F1",
+        startMinute: first.startMinute,
+        others: rest.map((ignition, index) => ({
+          id: `F${index + 2}`,
+          at: [ignition.at.longitude, ignition.at.latitude] as [number, number],
+          startMinute: ignition.startMinute,
+        })),
+      });
+      if (draw.weather.mode === "assumed") {
+        worldWindAbortRef.current?.abort();
+        dropWindProvenance();
+        setPinned(null);
+        setWindSpeedMph(clamp(Math.round(draw.windSpeedMph), 0, MAX_WIND_SPEED_MPH));
+        setWindFromDegrees(Math.round(draw.windFromDegrees) % 360);
+      } else {
+        loadWorldWeather({ startUtc: draw.startUtc, weather: draw.weather }, at);
+      }
+      setVariation((current) => ({ ...(current ?? {}), enabled: true, seed }));
+      setQuickSeedText(String(seed));
+      setQuickResult({ seed, summary: draw.summary });
+    } catch (cause) {
+      setQuickError(cause instanceof Error ? cause.message : "Could not generate a scenario.");
+    } finally {
+      setQuickBusy(false);
+    }
+  }
+
   function applyWorld(w: World, changed: ReadonlySet<WorldPath>) {
     const r = w.region;
     if (changed.has("region")) {
@@ -1376,7 +1455,7 @@ export default function FireSimulatorPage() {
             <div className="fr-scenario-body" id="fr-scenario-body" hidden={!scenarioOpen}>
               <div className="fr-field">
                 <div className="fr-region-row">
-                  <label htmlFor="region">Region</label>
+                  <label htmlFor="region">{panelCustom ? "Region" : "Location"}</label>
                   <select
                     id="region"
                     className="ui-input"
@@ -1421,14 +1500,20 @@ export default function FireSimulatorPage() {
                     Custom…
                   </Button>
                 </div>
-                {!region && (
+                {(!region || !panelCustom) && (
                   <div className="fr-field-inline fr-area-size">
-                    <label htmlFor="area-size">Area size</label>
+                    <label htmlFor="area-size">{panelCustom ? "Area size" : "Map size"}</label>
                     <select
                       id="area-size"
                       className="ui-input"
                       value={areaSize}
-                      onChange={(event) => setAreaSize(event.target.value as AreaSizeId)}
+                      onChange={(event) => {
+                        if (region) {
+                          setAreaCenter({ longitude: region.center.longitude, latitude: region.center.latitude });
+                          setSelection(CUSTOM_SELECTION);
+                        }
+                        setAreaSize(event.target.value as AreaSizeId);
+                      }}
                     >
                       {AREA_SIZES.map((size) => {
                         const radius = effectiveRadiusMeters(horizonMinutes, size.id);
@@ -1451,6 +1536,19 @@ export default function FireSimulatorPage() {
               </div>
 
               <div className="fr-field">
+                <SegmentedControl
+                  label="Scenario setup"
+                  options={[
+                    { value: "quick", label: "Quick setup" },
+                    { value: "custom", label: "Custom" },
+                  ]}
+                  value={panelCustom ? "custom" : "quick"}
+                  onChange={(value) => setPanelCustom(value === "custom")}
+                />
+              </div>
+
+              {panelCustom && (
+              <div className="fr-field">
                 <span className="fr-field-title">Clicking the landscape sets</span>
                 <SegmentedControl
                   className="fr-click-mode"
@@ -1467,6 +1565,7 @@ export default function FireSimulatorPage() {
                   </p>
                 )}
               </div>
+              )}
 
               <HorizonControl
                 value={horizonMinutes}
@@ -1474,6 +1573,46 @@ export default function FireSimulatorPage() {
                 frameStepMinutes={stepMinutes}
               />
 
+              {!panelCustom && (
+                <div className="fr-field">
+                  <label htmlFor="quick-placement">Fire starts</label>
+                  <select
+                    id="quick-placement"
+                    className="ui-input"
+                    value={quickPlacement}
+                    onChange={(event) => setQuickPlacement(event.target.value as IgnitionPlacement)}
+                  >
+                    {(Object.keys(PLACEMENT_LABELS) as IgnitionPlacement[]).map((key) => (
+                      <option key={key} value={key}>
+                        {PLACEMENT_LABELS[key]}
+                      </option>
+                    ))}
+                  </select>
+                  <Button block onClick={() => void generateRandom()} disabled={!grid || quickBusy}>
+                    {quickBusy ? "Generating…" : "Generate random scenario"}
+                  </Button>
+                  <div className="fr-field-inline">
+                    <label htmlFor="quick-seed">Use seed…</label>
+                    <input
+                      id="quick-seed"
+                      className="ui-input"
+                      inputMode="numeric"
+                      placeholder="random"
+                      value={quickSeedText}
+                      onChange={(event) => setQuickSeedText(event.target.value)}
+                    />
+                  </div>
+                  {quickError && <Notice tone="danger" className="fr-compact-notice">{quickError}</Notice>}
+                  {quickResult && (
+                    <p className="fr-hint">
+                      {quickResult.summary} (simulated) · seed {quickResult.seed}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {panelCustom && (
+              <>
               <WindSourcePicker
                 lon={origin?.longitude ?? null}
                 lat={origin?.latitude ?? null}
@@ -1751,6 +1890,8 @@ export default function FireSimulatorPage() {
               >
                 Clear scenario
               </Button>
+              </>
+              )}
             </div>
           </section>
 
