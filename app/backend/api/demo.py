@@ -202,10 +202,13 @@ ground units. \
 - options lists, for each fire, what sending the n nearest free crews would do: \
 contained_in_min (null = the fire outruns them). contained_in_min on the fire itself is the \
 estimate with the crews already assigned.
-- Nobody leaves a zone without an evacuation order: there is no self-evacuation in this game, \
-so you (or the human commander) decide who leaves when. From the minute an order takes effect, a \
-share order_compliance of households with a vehicle leave, after departure_mean_min on average \
-(many leave later, so not all at once). Every household has a vehicle in this drill (an \
+- Some households leave without an order (self-evacuation, simulated): households with their own \
+vehicle go on their own cues (fire forecast within about an hour of the zone, most neighbours gone, \
+fire in the zone, fire within 500 m of the core), a growing share at each cue, and they load the \
+roads on the zone's best open route. Each zone's self_evacuated counts them and self_evac_cue \
+names the strongest cue so far. Most people still wait for an order: from the minute an order \
+takes effect, a share order_compliance of households with a vehicle leave in total (those already \
+gone on their own included), after departure_mean_min on average (many leave later, so not all at once). Every household has a vehicle in this drill (an \
 assumption: the snapshot's carless households drive one car each). Anyone home when fire reaches \
 the zone core is caught. \
 order_slack_min = fire_core_eta_min - departure_mean_min if ordered now (negative = already \

@@ -25,6 +25,7 @@
  * fire has touched it (zone.knownTouchedAt); the board still counts them (outcomes, audit log).
  */
 
+import { selfEvacuated, selfEvacuating } from "./selfEvacuation";
 import type {
   AttackPositionObservation,
   CrewObservation,
@@ -447,6 +448,7 @@ export function buildObservation(
       planned.has(zone.id) ||
       zone.orderedAt !== null ||
       zone.pendingOrder !== null ||
+      selfEvacuating(zone) ||
       knownOverrun(zone) ||
       f?.edgeEta != null ||
       f?.coreEta != null ||
@@ -532,6 +534,8 @@ export function buildObservation(
       margin_min: margin === null ? null : Math.round(margin),
       destination_id: ordered ? (zone.route?.destination_id ?? null) : null,
       options: options.map((o, i) => routeObs(o, estimates[i])),
+      self_evacuated: selfEvacuated(zone, minute),
+      self_evac_cue: zone.selfEvac?.cue ?? null,
     };
   });
 

@@ -677,7 +677,7 @@ function renderGroup(ctx: Ctx, g: Group): Rendered {
       return {
         title: scheduled
           ? `Fire reached ${zone} before its scheduled evacuation (${simClock(r.startMinute!)}); households are still home.`
-          : `Fire reached ${zone} with no evacuation order; households stay home until ordered out.`,
+          : `Fire reached ${zone} with no evacuation order; only households leaving on their own cues are going.`,
         sub: null,
         state: "info",
         attention: { tone: "warning", label: scheduled ? "Not started" : "No order" },

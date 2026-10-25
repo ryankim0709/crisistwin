@@ -250,7 +250,6 @@ export function departedShare(minutesSinceCue: number): number {
  * et al. 2020 Table 11). The rest stay (wait and see, stay and defend).
  */
 export const ORDER_COMPLIANCE = 0.92;
-// No shadow (self-) evacuation on the command board: households leave only on an order (agent
-// or person), so the commander's staging decides who is on the road when. Sourced data say
-// otherwise (0.291-0.75 of non-recipients leave anyway, Wong et al. 2020 Table 11; the live
-// scenario runner keeps it, docs/live-scenario-runner.md); docs/command-demo-realism.md lists this simplification.
+// Shadow (self-) evacuation on the command board: demo/selfEvacuation.ts (households with their
+// own vehicle leave on fire and social cues with no order; 0.291-0.75 of non-recipients leave
+// anyway, Wong et al. 2020 Table 11). An order sends ORDER_COMPLIANCE in total, the rest on its curve.
