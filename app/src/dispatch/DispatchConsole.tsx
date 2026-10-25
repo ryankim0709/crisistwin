@@ -110,7 +110,7 @@ function Tiles({ totals, baseline }: { totals: Totals; baseline: Totals | null }
     ["Safe", totals.safe, HOME_COLORS[4]],
     ["Driving out", totals.onRoad, HOME_COLORS[3]],
     ["Ordered, still home", totals.waiting, HOME_COLORS[1]],
-    ["Caught by fire", totals.caught, HOME_COLORS[5]],
+    ["Reached by fire (not by choice)", totals.caught - (totals.caughtByChoice ?? 0), HOME_COLORS[5]],
   ];
   const segments: [number, number][] = [
     [totals.safe, HOME_COLORS[4]],

@@ -36,7 +36,7 @@ import {
   HOUSEHOLD_BEHAVIOR_OPTIONS,
   behaviorLabel,
   householdBehaviorText,
-  householdDepartureDelays,
+  householdBehavior as drawHouseholdBehavior,
   useZoneHouseholds,
   type HouseholdBehaviorMode,
 } from "../population";
@@ -95,6 +95,8 @@ export default function StudioDispatch({
   groundClickRef,
   map,
   dock,
+  householdBehavior: behaviorMode,
+  setHouseholdBehavior: setBehaviorMode,
 }: StudioAsideContext) {
   const [areaState, setAreaState] = useState<AreaState>({ status: "idle" });
   const [areaAttempt, setAreaAttempt] = useState(0);
@@ -193,7 +195,6 @@ export default function StudioDispatch({
 
   // ---- People: snapshot households for the area, and how households respond to orders ------
   const areaHouseholds = useZoneHouseholds(area);
-  const [behaviorMode, setBehaviorMode] = useState<HouseholdBehaviorMode>("grounded");
   // CAL FIRE-layer stations near the box (local-only file; null while loading or absent).
   const areaCentre = useMemo<[number, number] | null>(
     () => (area ? [(area.bbox[0] + area.bbox[2]) / 2, (area.bbox[1] + area.bbox[3]) / 2] : null),
@@ -447,7 +448,8 @@ export default function StudioDispatch({
       windSpeedMph: current.scenario.settings.windSpeedMph,
       closedEdges: new Set(plannedClosures.map((closure) => closure.edge)),
       apparatus: dispatchApparatus(area, current.landscape, suppressionBases),
-      departureDelays: behaviorMode === "grounded" ? householdDepartureDelays(area) : null,
+      departureDelays: behaviorMode === "grounded" ? drawHouseholdBehavior(area) : null,
+      startEpochMs: startMsOf(firefightingSettings),
     });
   }, [
     behaviorMode,
