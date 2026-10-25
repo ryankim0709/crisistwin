@@ -208,6 +208,15 @@ struct RootView: View {
             .onChange(of: liveStore.role) { _, role in
                 if role == .civilian, router.tab == .tasks { router.tab = .home }
             }
+            .sheet(isPresented: Binding(
+                get: { liveStore.needsProfileSetup && joinAlert == nil }, set: { _ in })
+            ) {
+                FirstJoinSheet()
+                    .interactiveDismissDisabled()
+                    .environment(liveStore)
+                    .environment(location)
+                    .tint(.primary)
+            }
             .task { await debugLaunch() }
             // crisistwin://join?server=<origin>&code=<invite> (ADR 0034).
             .onOpenURL { url in Task { await liveStore.joinFromURL(url) } }

@@ -77,13 +77,28 @@ final class LiveStore {
     /// "Still there?" items answered or set aside on this phone.
     private(set) var answeredStillThere: Set<String> = []
     /// Share this phone's position with the drill (latest position only, foreground only; needs
-    /// location permission). On by default; off calls `DELETE me/location`. Persisted on the device.
-    var shareResponderLocation: Bool = (UserDefaults.standard.object(forKey: "live.shareLocation") as? Bool) ?? true {
+    /// location permission). Off until the person agrees in the first-join sheet; off calls `DELETE me/location`. Persisted on the device.
+    var shareResponderLocation: Bool = (UserDefaults.standard.object(forKey: "live.shareLocation") as? Bool) ?? false {
         didSet {
             UserDefaults.standard.set(shareResponderLocation, forKey: "live.shareLocation")
             shareSettingChanged()
         }
     }
+    /// The first-join sheet (name, kind, location consent) was answered or skipped once.
+    private(set) var profileOnboarded: Bool = UserDefaults.standard.bool(forKey: "live.profileOnboarded")
+    /// True until the first-join sheet has been seen, once this phone is joined (has a credential).
+    var needsProfileSetup: Bool { !profileOnboarded && credential != nil }
+
+    /// Finishes the first-join sheet: stores name and kind, sets location sharing, sends the profile.
+    func completeProfileSetup(name: String, kind: ParticipantKind, shareLocation: Bool) {
+        displayName = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(24))
+        participantKind = kind
+        shareResponderLocation = shareLocation
+        profileOnboarded = true
+        UserDefaults.standard.set(true, forKey: "live.profileOnboarded")
+        syncProfile()
+    }
+
     /// Optional short nickname shown to the controller. Sent with `syncProfile()`.
     var displayName: String = UserDefaults.standard.string(forKey: "live.displayName") ?? "" {
         didSet {
