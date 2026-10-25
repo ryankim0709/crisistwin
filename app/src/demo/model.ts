@@ -349,6 +349,8 @@ export interface FireSolverState {
 
 export interface Board {
   seed: number;
+  /** Seeded natural variation in fire spread (fire/stochastic.ts), seeded from `seed`; on by default. */
+  naturalVariation: boolean;
   activity: Activity;
   minute: number;
   rng: number;
@@ -526,6 +528,13 @@ export function buildFireSolveRequest(board: Board): FireSolveRequest {
     const keep = new Set([...burning, ...stopped]);
     candidates = candidates.filter((f) => keep.has(f));
   }
+  // A resumed solve cannot start a fire before the minute it resumes from: a fire the field
+  // has not seen yet (ignited while an earlier solve was running) starts at the resume minute.
+  if (field) {
+    for (const f of candidates) {
+      if (!field.sourceIndex.has(f.id) && f.startMinute < board.minute) f.startMinute = Math.ceil(board.minute);
+    }
+  }
   const sources: SolveSource[] = candidates.map((f) => ({
     fireId: f.id,
     location: f.origin,
@@ -552,7 +561,7 @@ export function buildFireSolveRequest(board: Board): FireSolveRequest {
     resume = { arrivalMinutes, sourceIndexByCell, earlierBehaviour: field.behaviour, earlierWindSpeedMph: field.windSpeedMph };
   }
   return {
-    key: `${board.seed}|${board.minute}|${weather.key}|${sources.map((s) => `${s.fireId}:${s.stopMinute}`).join(",")}`,
+    key: `${board.seed}|${board.naturalVariation ? "nv" : "det"}|${board.minute}|${weather.key}|${sources.map((s) => `${s.fireId}:${s.stopMinute}`).join(",")}`,
     fromMinute: field ? board.minute : null,
     horizonMinutes,
     windSpeedMetersPerSecond: weather.speed,
@@ -560,7 +569,14 @@ export function buildFireSolveRequest(board: Board): FireSolveRequest {
     moisture: weather.moisture,
     sources,
     resume,
+    // Same seed for every solve of a board, so a resumed solve repeats the same draws.
+    stochastic: board.naturalVariation ? { enabled: true, seed: board.seed } : null,
   };
+}
+
+/** Turns seeded natural variation in fire spread on or off; the next solve starts over from the burned ground. */
+export function setNaturalVariation(board: Board, on: boolean): void {
+  board.naturalVariation = on;
 }
 
 /**
@@ -800,6 +816,7 @@ export function createBoard(zones: BaseZone[], activity: Activity, seed: number,
   });
   const board: Board = {
     seed,
+    naturalVariation: true,
     activity,
     minute: 0,
     rng: seed >>> 0,

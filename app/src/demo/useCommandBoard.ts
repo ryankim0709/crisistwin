@@ -27,6 +27,7 @@ import { useCrewRoutes } from "./useCrewRoutes";
 import { useDemoAgent } from "./useDemoAgent";
 import { WEATHER_PRESETS, useDemoEnvironment, zonesCenter } from "./useDemoEnvironment";
 import { useDemoRoutes } from "./useDemoRoutes";
+import { useFireSolver } from "./useFireSolver";
 import { useArrivalField } from "./useArrivalField";
 
 /**
@@ -165,6 +166,8 @@ export function useCommandBoard({ token, incidentId, data: commandData }: Comman
     },
     [bump],
   );
+  // Keeps the fire field solved in a worker; the board clock holds while a needed solve runs.
+  const solver = useFireSolver(board, version, bump);
   const agent = useDemoAgent({ board, version, incidentId, routes: routes.routes, forecasts, enabled: autopilot, apply });
 
   // The simulation clock. Holds while Claude decides, if asked to.
@@ -280,6 +283,8 @@ export function useCommandBoard({ token, incidentId, data: commandData }: Comman
     hold,
     setHold,
     agent,
+    // Fire solver state (why a solve is running, last solve time, last error)
+    solver,
     // Rule-based dispatch and escalation (demo/boardResponse.ts)
     ruleResponse,
     setRuleResponse,
