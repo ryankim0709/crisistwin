@@ -9,7 +9,7 @@
  * length; wind speed arrives in m/s and is shown in m/s and mph (1 m/s = 2.23694 mph).
  */
 
-import type { DemoObservation } from "./contracts";
+import type { DemoObservation, EvacBalanceObservation, EvacBalanceTotals, PredictedObservation } from "./contracts";
 import { nf, simClock } from "./format";
 import type { AgentDecision } from "./useDemoAgent";
 import type { AgentInputSnapshot, CommsChannel, InjuryEvent, SimCommsItem } from "./runContracts";
@@ -119,7 +119,7 @@ export interface InputDigest {
   injuries: DigestRow[];
   injuriesSummary: string;
 
-  /** evac_balance / predicted when the observation has them (lead E; shapes are read defensively). */
+  /** evac_balance / predicted when the observation has them (contracts.ts EvacBalanceObservation, PredictedObservation). */
   extras: ExtraSection[];
 
   outcomes: string | null;
@@ -137,8 +137,6 @@ export interface ObservationSimComms {
 /** DemoObservation plus the optional fields other leads add (contracts.ts gets them at merge). */
 export type ObservationPlus = DemoObservation & {
   sim_comms?: ObservationSimComms;
-  evac_balance?: unknown;
-  predicted?: unknown;
 };
 
 export const CHANNEL_LABEL: Record<CommsChannel, string> = {
@@ -576,62 +574,204 @@ function injuryRows(obs: DemoObservation, prev: DemoObservation | null): DigestR
   return rows;
 }
 
-// --- evac_balance / predicted: shapes are lead E's and not fixed yet, so they are read defensively.
+// --- evac_balance / predicted (contracts.ts EvacBalanceObservation, PredictedObservation): model output, shown as given.
 
-type Rec = Record<string, unknown>;
-const isRec = (v: unknown): v is Rec => typeof v === "object" && v !== null && !Array.isArray(v);
-const isPrimitive = (v: unknown): v is string | number | boolean => ["string", "number", "boolean"].includes(typeof v);
-const words = (key: string) => key.replace(/_/g, " ");
-const showValue = (v: string | number | boolean): string => (typeof v === "number" ? (Number.isInteger(v) ? nf(v) : v.toFixed(1)) : String(v));
+const MAX_PLAN_ZONES = 12;
+const MAX_FORECAST_ROADS = 6;
+const MAX_FORECAST_DESTINATIONS = 5;
+const MAX_FORECAST_DANGERS = 6;
 
-function primitiveParts(rec: Rec, skip: string[], max: number): string[] {
-  return Object.entries(rec)
-    .filter(([k, v]) => !skip.includes(k) && isPrimitive(v))
-    .slice(0, max)
-    .map(([k, v]) => `${words(k)} ${showValue(v as string | number | boolean)}`);
+const times = (n: number) => `${n.toFixed(1)}x`;
+const peopleOrHomes = (people: number | null, households: number) =>
+  people !== null ? `${plural(people, "person", "people")} (${plural(households, "household")})` : `${plural(households, "household")} (people not known)`;
+
+/** "Z2 to Strawberry Canyon Rec Area" lookups: the zones' route options, then the forecast's destinations. */
+function destinationNames(obs: DemoObservation): Map<string, string> {
+  const names = new Map<string, string>();
+  for (const z of obs.zones) for (const o of z.options) names.set(o.destination_id, o.name);
+  for (const d of obs.predicted?.destinations ?? []) names.set(d.destination_id, d.name);
+  return names;
 }
 
-function extraRows(value: unknown): DigestRow[] {
-  if (value === null || value === undefined) return [];
-  const arrays: unknown[][] = [];
-  const collect = (v: unknown, depth: number) => {
-    if (Array.isArray(v)) {
-      if (v.some(isRec)) arrays.push(v);
-      return;
-    }
-    if (isRec(v) && depth < 2) for (const inner of Object.values(v)) collect(inner, depth + 1);
-  };
-  collect(value, 0);
-  const idKeys = ["zone_id", "zoneId", "zone", "id", "name", "segment", "destination_id", "destination"];
-  const rows: DigestRow[] = [];
-  for (const arr of arrays) {
-    for (const item of arr) {
-      if (!isRec(item) || rows.length >= 8) continue;
-      const idKey = idKeys.find((k) => typeof item[k] === "string");
-      rows.push({
-        key: `extra-${rows.length}`,
-        title: idKey ? String(item[idKey]) : `item ${rows.length + 1}`,
-        detail: primitiveParts(item, idKey ? [idKey] : [], 5).join(", ") + ".",
-        tag: null,
-        delta: null,
-      });
-    }
+type EvacZone = EvacBalanceObservation["zones"][number];
+
+/** What to do and when, in words: "Order now", "Schedule departure at T+00:45 (in 20 min)". */
+function evacActionText(z: EvacZone, nowMinute: number): { text: string; tag: string } {
+  const at = simClock(z.start_minute);
+  const inMin = Math.round(z.start_minute - nowMinute);
+  const when = inMin > 0 ? `${at}, in ${min(inMin)}` : at;
+  switch (z.action) {
+    case "order_now":
+      return { text: "Order now", tag: "Order now" };
+    case "schedule":
+      return { text: `Schedule departure at ${when}`, tag: "Schedule" };
+    case "reschedule":
+      return { text: `Move the scheduled departure to ${when}`, tag: "Reschedule" };
+    case "keep":
+      return { text: `Keep the scheduled departure at ${when}`, tag: "Keep" };
+    case "leaving":
+      return { text: `Already leaving (started ${at})`, tag: "Leaving" };
   }
-  if (rows.length === 0 && isRec(value)) {
-    const parts = primitiveParts(value, [], 6);
-    if (parts.length) rows.push({ key: "extra-summary", title: "Summary", detail: parts.join(", ") + ".", tag: null, delta: null });
+}
+
+function totalsText(t: EvacBalanceTotals): string {
+  const parts = [
+    `${peopleOrHomes(t.expected_caught_people, t.expected_caught_households)} still at home when the fire arrives`,
+    `${plural(t.exposed_vehicles, "vehicle")} on a road when fire reaches it`,
+    `worst road load ${times(t.peak_vc)} capacity`,
+    `${plural(t.zones_fire_cuts_route, "zone")} with a route cut by fire`,
+    `${plural(t.destinations_over_capacity, "destination")} over capacity`,
+  ];
+  return parts.join("; ");
+}
+
+function evacBalanceRows(obs: DemoObservation, eb: EvacBalanceObservation): DigestRow[] {
+  const dest = destinationNames(obs);
+  const rows: DigestRow[] = [];
+  const { totals, all_now: allNow } = eb;
+  // Lower is better; people when both runs know them, else households.
+  const useP = totals.expected_caught_people !== null && allNow.expected_caught_people !== null;
+  const plan = useP ? (totals.expected_caught_people as number) : totals.expected_caught_households;
+  const now = useP ? (allNow.expected_caught_people as number) : allNow.expected_caught_households;
+  const verdict: DigestRow["tag"] =
+    plan < now ? { text: "Fewer caught than all now", tone: "success" } : plan > now ? { text: "More caught than all now", tone: "warning" } : { text: "Same as all now", tone: "neutral" };
+  rows.push({
+    key: "evac-totals",
+    title: "Whole plan against ordering every zone now",
+    detail: `Plan: ${totalsText(totals)}. Everyone leaving now: ${totalsText(allNow)}.`,
+    tag: verdict,
+    delta: null,
+  });
+  for (const z of eb.zones.slice(0, MAX_PLAN_ZONES)) {
+    const action = evacActionText(z, obs.clock.minute);
+    const to = z.destination_id ? ` to ${dest.get(z.destination_id) ?? z.destination_id}` : " (no destination chosen)";
+    const parts = [
+      `${action.text}${to}`,
+      `its road peaks at ${times(z.peak_vc)} capacity${z.peak_vc > 1 ? " (queues form)" : ""}${z.worst_segment ? `, worst at ${z.worst_segment}` : ""}`,
+      `expected still home when the fire arrives: ${peopleOrHomes(z.expected_caught_people, z.expected_caught_households)}`,
+    ];
+    if (z.exposed_vehicles > 0) parts.push(`${plural(z.exposed_vehicles, "vehicle")} on a road when fire reaches it`);
+    rows.push({
+      key: `evac-${z.zone_id}`,
+      title: zoneNameOf(obs, z.zone_id),
+      detail: `${parts.join("; ")}.${z.why ? ` ${z.why}` : ""}`,
+      tag: z.fire_cuts_route
+        ? { text: "Fire cuts route", tone: "danger" }
+        : z.peak_vc > 1
+          ? { text: "Road over capacity", tone: "warning" }
+          : { text: action.tag, tone: z.action === "order_now" ? "info" : "neutral" },
+      delta: null,
+    });
+  }
+  if (eb.zones.length > MAX_PLAN_ZONES) {
+    rows.push({ key: "evac-more", title: "More zones", detail: `${plural(eb.zones.length - MAX_PLAN_ZONES, "more zone")} in the plan are not listed here.`, tag: null, delta: null });
+  }
+  return rows;
+}
+
+/** Which forecast window a fire-edge arrival falls in: the first horizon at or after it. */
+function horizonIndex(horizons: readonly number[], eta: number): number {
+  const i = horizons.findIndex((h) => eta <= h);
+  return i === -1 ? horizons.length - 1 : i;
+}
+
+function predictedRows(obs: DemoObservation, p: PredictedObservation): DigestRow[] {
+  const rows: DigestRow[] = [];
+  p.dangers.slice(0, MAX_FORECAST_DANGERS).forEach((line, i) => {
+    rows.push({ key: `pred-danger-${i}`, title: "Danger flagged by the forecast", detail: line, tag: { text: "Danger", tone: "danger" }, delta: null });
+  });
+
+  // Zones by when the fire edge arrives.
+  const hs = p.horizons_min;
+  const last = hs[hs.length - 1] ?? 120;
+  const groups = hs.map(() => [] as PredictedObservation["zones"]);
+  for (const z of p.zones) {
+    const eta = z.edge_eta_min ?? z.core_eta_min;
+    if (eta === null) continue;
+    groups[horizonIndex(hs, eta)]?.push(z);
+  }
+  const reached = groups.reduce((n, g) => n + g.length, 0);
+  groups.forEach((g, i) => {
+    if (g.length === 0) return;
+    const from = i === 0 ? null : hs[i - 1];
+    const title = from === null ? `Fire edge arrives within ${min(hs[i])}` : `Fire edge arrives in ${from} to ${min(hs[i])}`;
+    const detail = g
+      .map((z) => {
+        const eta = z.edge_eta_min ?? z.core_eta_min ?? 0;
+        const edge = eta <= 0 ? "fire already at the zone" : `edge in ${min(eta)}`;
+        const core = z.core_eta_min !== null && z.edge_eta_min !== null ? `, core in ${min(z.core_eta_min)}` : "";
+        const burned = z.burned_pct[i] !== undefined ? `, ${Math.round(z.burned_pct[i])}% of its ground burned by +${min(hs[i])}` : "";
+        return `${zoneNameOf(obs, z.zone_id)} (${edge}${core}${burned})`;
+      })
+      .join("; ");
+    rows.push({ key: `pred-zones-${i}`, title, detail: `${detail}.`, tag: { text: i === 0 ? "Soonest" : i === 1 ? "Next" : "Later", tone: i === 0 ? "danger" : i === 1 ? "warning" : "info" }, delta: null });
+  });
+  if (reached === 0) {
+    rows.push({ key: "pred-zones-none", title: "Fire edge arrival", detail: `No zone's fire edge arrives within ${min(last)}.`, tag: null, delta: null });
+  }
+
+  // Roads whose fire arrives before their traffic has cleared.
+  const dangerSegs = p.segments.filter((s) => s.danger);
+  for (const s of dangerSegs.slice(0, MAX_FORECAST_ROADS)) {
+    const zones = s.zone_ids.map((id) => zoneNameOf(obs, id)).join(", ");
+    rows.push({
+      key: `pred-road-${s.segment_id}`,
+      title: s.name,
+      detail: `${s.fire_eta_min !== null ? `Fire reaches it in ${min(s.fire_eta_min)}` : "Fire reaches it"}${
+        s.clears_in_min !== null ? `, but traffic from ${zones || "its zones"} will not have cleared for ${min(s.clears_in_min)}` : ""
+      }. Load peaks at ${times(s.peak_vc)} capacity (${nf(s.capacity_veh_h)} vehicles/h), queue up to ${plural(Math.round(s.peak_queue_vehicles), "vehicle")}.`,
+      tag: { text: "Fire before clearance", tone: "danger" },
+      delta: null,
+    });
+  }
+  if (dangerSegs.length > MAX_FORECAST_ROADS) {
+    rows.push({ key: "pred-road-more", title: "More roads", detail: `${plural(dangerSegs.length - MAX_FORECAST_ROADS, "more road segment")} with fire before clearance are not listed here.`, tag: null, delta: null });
+  }
+  const others = p.segments.filter((s) => !s.danger);
+  if (others.length > 0) {
+    const busiest = others.reduce((a, b) => (b.peak_vc > a.peak_vc ? b : a));
+    rows.push({
+      key: "pred-road-others",
+      title: "Other roads on current orders",
+      detail: `${plural(others.length, "segment")} not reached by fire before its traffic clears; busiest is ${busiest.name} at ${times(busiest.peak_vc)} capacity.`,
+      tag: null,
+      delta: null,
+    });
+  }
+
+  // Destinations over capacity.
+  const over = p.destinations.filter((d) => d.over_capacity);
+  for (const d of over.slice(0, MAX_FORECAST_DESTINATIONS)) {
+    rows.push({
+      key: `pred-dest-${d.destination_id}`,
+      title: d.name,
+      detail: `${plural(d.committed_vehicles, "vehicle")} committed (arrived, on the way or still to leave) against room for ${d.capacity_veh !== null ? nf(d.capacity_veh) : "an unknown number"}.`,
+      tag: { text: "Over capacity", tone: "danger" },
+      delta: null,
+    });
+  }
+  if (p.destinations.length > 0 && over.length === 0) {
+    rows.push({ key: "pred-dest-ok", title: "Destinations", detail: `${plural(p.destinations.length, "destination")} on current orders; none over capacity.`, tag: null, delta: null });
   }
   return rows;
 }
 
 function extraSections(obs: DemoObservation): ExtraSection[] {
-  const plus = obs as ObservationPlus;
   const out: ExtraSection[] = [];
-  const balance = extraRows(plus.evac_balance);
-  if (balance.length)
-    out.push({ key: "evac_balance", title: "Evacuation plan balancing roads and destinations", note: "Model output (simulated), not an order.", rows: balance });
-  const predicted = extraRows(plus.predicted);
-  if (predicted.length) out.push({ key: "predicted", title: "Predicted next states", note: "Model forecast (simulated), not an observation.", rows: predicted });
+  if (obs.evac_balance)
+    out.push({
+      key: "evac_balance",
+      title: "Evacuation plan balancing roads and destinations",
+      note: "Model output (simulated), not an order: where and when each zone could leave, against ordering every zone now.",
+      rows: evacBalanceRows(obs, obs.evac_balance),
+    });
+  if (obs.predicted)
+    out.push({
+      key: "predicted",
+      title: "Predicted next states",
+      note: `Model forecast (simulated), not an observation: if the current orders proceed, over the next ${obs.predicted.horizons_min[obs.predicted.horizons_min.length - 1] ?? 120} min.`,
+      rows: predictedRows(obs, obs.predicted),
+    });
   return out;
 }
 
