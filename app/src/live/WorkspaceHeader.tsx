@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode, type RefObject } from "rea
 import { Button, EvidenceTag, IconButton, Notice, SegmentedControl, Tag, buttonClass } from "../ui";
 import { simClock } from "../demo/format";
 import { ACTIVITIES, ACTIVITY } from "../demo/model";
+import { boardCellMetersFor } from "../fire/boardSize";
 import { BOARD_SPEEDS, MONITORING, type CommandBoard } from "../demo/useCommandBoard";
 import { WEATHER_PRESETS } from "../demo/useDemoEnvironment";
 import { drillAction } from "./api";
@@ -162,6 +163,12 @@ function useDismiss(ref: RefObject<HTMLDetailsElement | null>) {
  * The simulated board's controls: AI monitoring, the board clock (its own simulated time, not
  * the drill clock), and a "Conditions" popover for fire activity, wind and restart.
  */
+const BOARD_SIZES = [15, 30, 45, 60].map((km) => ({
+  value: String(km),
+  label: `${km} km`,
+  title: `Board about ${km * 2} \u00d7 ${km * 2} km (${km} km from the centre to each edge)`,
+}));
+
 export function BoardControls({ board: cb }: { board: CommandBoard }) {
   const ref = useRef<HTMLDetailsElement>(null);
   useDismiss(ref);
@@ -214,6 +221,18 @@ export function BoardControls({ board: cb }: { board: CommandBoard }) {
                 value={cb.weather}
                 onChange={cb.setWeather}
               />
+              <span className="lc-board-label">Board size</span>
+              <SegmentedControl
+                label="Board size, km from the centre to each edge"
+                options={BOARD_SIZES}
+                value={String(cb.boardRadius / 1000)}
+                onChange={(value) => cb.setBoardRadius(Number(value) * 1000)}
+              />
+              <span className="lc-dim">
+                {cb.boardLoading
+                  ? "Loading the larger board; a new size takes a while the first time."
+                  : `About ${cb.boardRadius / 500} \u00d7 ${cb.boardRadius / 500} km, ${boardCellMetersFor(cb.boardRadius)} m cells.`}
+              </span>
               {windNow ? (
                 <span className="lc-dim lc-num" title={board.env.spread.wind.label}>
                   Wind now {windNow.speedMetersPerSecond.toFixed(1)} m/s from {Math.round(windNow.fromDegrees)}°
