@@ -607,7 +607,19 @@ after the first soaking rains in autumn. For the herb layer in November-January 
 is more trustworthy than the model: this is a known mismatch between the temperate-phenology GSI
 and a winter-wet Mediterranean climate. Nothing was tuned to close the gap. The value is the
 published NFDRS 2016 method, and it errs dry (more fire spread) in winter. Woody values (chaparral
-and shrub foliage) are less affected.
+and shrub foliage) are less affected. When this happens (annual-herb class, herb at 30 %, and
+the 21-day mean daylength indicator below 0.5, so daylength alone forces the floor:
+`sim.live_moisture.short_day_herb_floor`), the answer's `warnings` carry
+`SHORT_DAY_HERB_WARNING` and `provenance.live_gsi.warning` repeats it. Measured on the four dates
+above: present on 2023-01-10 and 2022-12-20, absent on 2021-07-01 and 2020-09-27 (herb at 30 %
+there, but with long days). The Studio and `/fire` weather picker (`WindSourcePicker`) now shows
+the `/api/conditions` warnings next to the weather's own, without repeating identical lines.
+
+FEMS (the successor to the NFMD) has public field samples at
+`https://fems.fs2c.usda.gov/fuelmodel/apis/graphql` and `.../fuelmodel/sample/download`. The
+nearest sites are Chabot (PG&E, site 202, 14.6 km) and Las Trampas (PG&E, site 690, 19.4 km).
+Checked 2026-10-25: the GraphQL sample query failed with "Java heap space" and the CSV download
+returned only a header for 2020-06 to 2023-03, so there is no measured comparison yet.
 
 Measured live fuel moisture (the National Fuel Moisture Database) is not used yet. Within this
 change's time box no machine-readable NFMD endpoint for a site near the Berkeley Hills was

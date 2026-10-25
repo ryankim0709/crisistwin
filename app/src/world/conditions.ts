@@ -140,6 +140,8 @@ export interface Conditions {
   };
   /** Server provenance (weather records, spin-up, table clock, model citations), kept opaque. */
   provenance: unknown;
+  /** Plain-language caveats from the server (station, QC, live moisture), to show the user. */
+  warnings: string[];
   cache: { hit: boolean; storedUtc: string | null; key: string } | null;
 }
 
@@ -233,6 +235,7 @@ interface ApiConditions {
     max_temp_c: number | null;
   };
   provenance: unknown;
+  warnings?: string[];
   cache?: { hit: boolean; stored_utc: string | null; key: string };
 }
 
@@ -443,6 +446,7 @@ export function toConditions(d: ApiConditions): Conditions {
       maxTempC: d.summary.max_temp_c,
     },
     provenance: d.provenance,
+    warnings: Array.isArray(d.warnings) ? d.warnings.filter((w): w is string => typeof w === "string") : [],
     cache: d.cache ? { hit: d.cache.hit, storedUtc: d.cache.stored_utc, key: d.cache.key } : null,
   };
 }

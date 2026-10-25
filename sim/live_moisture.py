@@ -80,6 +80,25 @@ HERB_IS_ANNUAL_BY_PHENOLOGY_CLASS = {
 MAX_LEAD_GAP_DAYS = 10
 MIN_VALID_DAYS = GSI_AVERAGING_DAYS
 
+# Shown when the photoperiod alone holds an annual herb layer at its dry floor (winter). The claim
+# about green-up is the known behaviour of California annual grassland after the first autumn
+# rains, against which the temperate-phenology GSI is too dry; see docs/scenario-weather.md.
+SHORT_DAY_HERB_WARNING = (
+    "Live herb moisture from the NFDRS Growing Season Index is at its dry floor ({herb_pct:g} %) "
+    "because days are short (the daylength term averaged {photo:.2f} of 1 over the last 21 days). "
+    "California annual grass is usually green after the first rains, so winter spread on grass is "
+    "likely overstated here."
+)
+
+
+def short_day_herb_floor(res: dict) -> bool:
+    """True when an ``ok`` GSI result has an annual herb layer at its minimum and the window-mean
+    photoperiod indicator is below the green-up threshold (so daylength alone forces the floor)."""
+    photo = res.get("i_photo_window_mean")
+    return bool(res.get("ok") and res.get("herb_is_annual") and photo is not None
+                and res.get("herb_pct") is not None and res["herb_pct"] <= HERB_LFM_MIN_PCT
+                and photo < GSI_GREENUP_THRESHOLD)
+
 
 # --------------------------------------------------------------------------- daily GSI
 
@@ -153,11 +172,11 @@ def live_moisture_from_daily(days: Sequence[dict], lat_deg: float, herb_is_annua
     modelled (ASSUMPTION: no snow day). Returns ``{herb_pct, woody_pct, gsi, valid_days,
     last_day, window_days, herb_state}`` or ``None`` values when no day is valid.
     """
-    q: deque[float] = deque()
+    q: deque[tuple[float, float]] = deque()  # (iGSI, iPhoto) per queued day
     last: date | None = None
     yesterday_doy = -1
     herb = {"greened": False, "can_increase": False, "exceeded120": False, "last": -1.0}
-    herb_pct = woody_pct = gsi_avg = None
+    herb_pct = woody_pct = gsi_avg = photo_avg = None
     last_daily = None
     valid = 0
 
@@ -181,11 +200,12 @@ def live_moisture_from_daily(days: Sequence[dict], lat_deg: float, herb_is_annua
             if gap > 1:  # LiveFuelMoisture::Update: drop extra values for a gap
                 for _ in range(min(gap - 1, len(q))):
                     q.popleft()
-        q.append(g["gsi"])
+        q.append((g["gsi"], g["i_photo"]))
         while len(q) > GSI_AVERAGING_DAYS:
             q.popleft()
         last, yesterday_doy, valid, last_daily = day, doy, valid + 1, g
-        gsi_avg = sum(q) / len(q)  # CalcRunningAvgGSI
+        gsi_avg = sum(v[0] for v in q) / len(q)  # CalcRunningAvgGSI
+        photo_avg = sum(v[1] for v in q) / len(q)
         rescale = max(0.0, min(1.0, gsi_avg / GSI_MAX))
         # CalcRunningAvgWoodyFM
         woody_pct = (_linear_lfm_pct(rescale, WOODY_LFM_MIN_PCT, WOODY_LFM_MAX_PCT)
@@ -209,6 +229,9 @@ def live_moisture_from_daily(days: Sequence[dict], lat_deg: float, herb_is_annua
         "woody_pct": None if woody_pct is None else round(woody_pct, 1),
         "gsi": None if gsi_avg is None else round(gsi_avg, 4),
         "gsi_window_days": len(q),
+        # Mean iPhoto over the same window. GSI <= iPhoto each day, so a mean below the green-up
+        # threshold means daylength alone holds the GSI below green-up.
+        "i_photo_window_mean": None if photo_avg is None else round(photo_avg, 4),
         "valid_days": valid,
         "last_day": None if last is None else last.isoformat(),
         "last_daily": None if last_daily is None else {k: round(v, 4) for k, v in last_daily.items()},

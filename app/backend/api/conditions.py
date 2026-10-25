@@ -191,6 +191,8 @@ def _apply_live_gsi(fm, hours: list[dict], lon: float, lat: float, table_start: 
         for h in hours:
             h["live"]["method"] = "assumed_calendar"
         return res
+    res["warning"] = (lm.SHORT_DAY_HERB_WARNING.format(herb_pct=res["herb_pct"], photo=res["i_photo_window_mean"])
+                      if lm.short_day_herb_floor(res) else None)
     herb, woody = res["herb_pct"], res["woody_pct"]
     for h in hours:
         h["moisture"]["liveHerb"] = round(herb / 100.0, 4)
@@ -283,7 +285,8 @@ def build_conditions(params: dict) -> dict:
         "candidates": result.get("candidates", []),
         "warnings": (result.get("warnings", []) + ([spin_info["qc_warning"]] if spin_info.get("qc_warning") else [])
                      + ([] if live_gsi["ok"] else [f"Live fuel moisture fell back to the assumed phenology "
-                                                   f"calendar: {live_gsi['reason']}."])),
+                                                   f"calendar: {live_gsi['reason']}."])
+                     + ([live_gsi["warning"]] if live_gsi.get("warning") else [])),
         "height_conversion": result.get("height_conversion"),
         "site": {"aspect": site.aspect, "slope_pct": site.slope_pct, "shading": site.shading,
                  "elevation_band": site.elevation_band, "night_inversion": site.night_inversion,

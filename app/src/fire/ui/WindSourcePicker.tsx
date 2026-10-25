@@ -156,6 +156,9 @@ export default function WindSourcePicker({
   const [dateValue, setDateValue] = useState(DEFAULT_HISTORICAL);
   const [presets, setPresets] = useState<RegionConditionsPresets | null>(null);
   const [fallback, setFallback] = useState<string | null>(null);
+  // Caveats from /api/conditions (e.g. live fuel moisture at its winter floor), shown with the
+  // weather's own warnings; the station and QC lines repeat those and are de-duplicated.
+  const [conditionsWarnings, setConditionsWarnings] = useState<string[]>([]);
   const [status, setStatus] = useState<
     { kind: "idle" } | { kind: "loading" } | { kind: "error"; message: string }
   >({ kind: "idle" });
@@ -262,6 +265,7 @@ export default function WindSourcePicker({
     const controller = new AbortController();
     abortRef.current = controller;
     setStatus({ kind: "loading" });
+    setConditionsWarnings([]);
     // The same window's fuel moisture from the date's weather (/api/conditions). Wind still
     // comes from /api/weather/scenario (station choice, height conversion); a failed
     // conditions call leaves moisture as set rather than blocking the wind.
@@ -281,6 +285,7 @@ export default function WindSourcePicker({
         if (controller.signal.aborted) return;
         setStatus({ kind: "idle" });
         setFallback(null);
+        setConditionsWarnings(cond?.warnings ?? []);
         onApplyRef.current(next, cond);
       })
       .catch((cause: unknown) => {
@@ -304,6 +309,7 @@ export default function WindSourcePicker({
   }
 
   const showMode: PickerMode = record ? "historical" : mode;
+  const shownWarnings = [...new Set([...(record?.warnings ?? []), ...(record ? conditionsWarnings : [])])];
   // Ranked alternatives, best first (sim/weather.py); stations without a wind sensor are left out.
   const pickable = (record?.candidates ?? []).filter((c) => c.status !== "no_wind_sensor");
   const chosenId =
@@ -370,9 +376,7 @@ export default function WindSourcePicker({
               real hours that came after it, so the wind usually eases.
             </p>
           )}
-          {(record.warnings ?? []).length > 0 && (
-            <Notice tone="warning">{(record.warnings ?? []).join(" ")}</Notice>
-          )}
+          {shownWarnings.length > 0 && <Notice tone="warning">{shownWarnings.join(" ")}</Notice>}
           {record.mode === "historical_replay" && pickable.length > 1 && (
             <label className="fr-wp-field" htmlFor={`${uid}-station`}>
               <span>Station</span>
