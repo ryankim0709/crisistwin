@@ -724,13 +724,24 @@ needs a shared `coord` (else `400`) and creates a task `{ "kind": "assist", "che
 `done`. `409` when the request is resolved or the check-in is no longer `need_help`. Each
 action is logged in `live_decisions` as `help_<action>` with `checkin_id`.
 
-## Responder location (opt-in)
+## Phone location, name and kind (opt-in)
 
-`POST me/location` (responder only): `{ "coord": [-121.6, 39.76], "accuracy_m": 15, "at": "2026-10-24T18:06:00Z" }`
--> `204`. Upserts the one latest position per responder, expiring after
-`RESPONDER_LOCATION_TTL_S` (900) s. `DELETE me/location` -> `204` removes it at once
-(the phone calls it when sharing is turned off). Phones send at most one update per
-`RESPONDER_LOCATION_MIN_INTERVAL_S` (30) s, foreground only. Civilian tokens get `403`.
+`POST me/location` (civilian or responder): `{ "coord": [-121.6, 39.76], "accuracy_m": 15, "at": "2026-10-24T18:06:00Z" }`
+(`{ "lon", "lat" }` is accepted in place of `coord`) -> `204`. Stores the one latest position on the
+device document (`location`, with `last_seen_at`); a responder's also upserts `live_responder_locations`
+for task routing, expiring after `RESPONDER_LOCATION_TTL_S` (900) s. `DELETE me/location` -> `204`
+removes both at once (the phone calls it when sharing is turned off). The phone shares only while its
+"Share my location" setting is on (default) and location is allowed, foreground only: one post per 45 s,
+sooner after moving 150 m (never under 10 s apart); offline posts are dropped, not queued.
+
+`POST me/profile` (civilian or responder): `{ "name": "Ana", "kind": "resident" }` -> `204`. `name` is an
+optional nickname of at most 24 characters (`""` or null clears it); `kind` is `resident`, `firefighter`
+or `observer` (default resident, firefighter for a responder token). Both keys are optional.
+
+`GET participants` (controller): `{ "participants": [{ party_key, role, kind, name, incident_id,
+simulated, last_seen_at, location: { coord, accuracy_m, at, stale } | null }], "as_of" }` for every
+device seen in the last hour; `location.stale` is true after 900 s. Civilian devices carry
+`incident_id: null` (they follow the active incident).
 
 ## Tasks (v2 additions)
 
@@ -1492,7 +1503,8 @@ Configuration (server environment, never `VITE_*`): `ANTHROPIC_API_KEY` and `CAR
 | `POST /api/live/active` | controller |
 | `GET incidents/{id}/situation[?zones=0]` | any |
 | `POST incidents/{id}/checkins` | any |
-| `POST me/location`, `DELETE me/location` | responder |
+| `POST me/location`, `DELETE me/location`, `POST me/profile` | civilian, responder |
+| `GET participants` | controller |
 | `POST me/destination` | civilian, responder |
 | `POST tasks/{id}` with `accepted` | responder |
 | `POST tasks/{id}` with `done` (assist tasks) | responder, controller |
