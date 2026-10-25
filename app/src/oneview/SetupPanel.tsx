@@ -111,8 +111,8 @@ export default function SetupPanel({
       <p className="ov-blurb">{preset.blurb}</p>
       {preset.measured ? (
         <p className="ov-dim">
-          <EvidenceTag kind="simulated" /> No-action run measured: {preset.measured.homesBurned} homes burned,{" "}
-          {preset.measured.caughtPeople} people caught by fire by {formatClock(preset.measured.atMinute)}.
+          <EvidenceTag kind="simulated" /> Headless harness, seed 1, nobody acting: {preset.measured.homesBurned} homes burned,{" "}
+          {preset.measured.caughtPeople} people caught by {formatClock(preset.measured.atMinute)}. A run on this page can differ.
         </p>
       ) : null}
       <details className="ov-tweaks">

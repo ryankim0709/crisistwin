@@ -33,7 +33,7 @@ export const DEMO_SEEDS: DemoSeedPreset[] = [
     id: "berkeley-grizzly-peak-ene",
     label: "Grizzly Peak hills fire, strong ENE wind (slow build)",
     blurb:
-      "A fire in the hills east of Grizzly Peak, driven toward the Berkeley neighbourhoods by a strong offshore wind. It builds slowly: with nobody acting the first home burns after about two and a half hours, and by hour 6 about 730 homes have burned and about 370 people were caught. With the model's decision aids followed (crews sent, evacuation orders sequenced) this seed ends with about 465 homes burned and 129 people caught; the two other seeds tested went the same way, with 36 to 69 percent fewer homes burned and 53 to 65 percent fewer people caught.",
+      "A fire in the hills east of Grizzly Peak, driven toward the Berkeley neighbourhoods by a strong offshore wind. It builds slowly, then runs into the hill homes in the afternoon; the clearest case for early, staggered evacuation.",
     regionId: BERKELEY_BOARD_ID,
     seed: 1,
     ignitions: [{ lon: -122.218, lat: 37.876, startMinute: 0, reportMinute: REPORT_DELAY_MINUTES }],
@@ -46,7 +46,7 @@ export const DEMO_SEEDS: DemoSeedPreset[] = [
     id: "berkeley-claremont-hills-ene",
     label: "Claremont hills brush fire, strong ENE wind",
     blurb:
-      "A brush fire in the hills east of Claremont Canyon, pushed downhill by a strong offshore wind. With nobody acting it reaches homes within half an hour and, by hour 6, has burned about 1,120 homes and caught about 810 people. With the model's decision aids followed, this seed contains the fire at minute 18 with no homes lost; on the two other seeds tested the fire was not contained early, but 71 to 82 percent fewer people were caught and 12 to 15 percent fewer homes burned. It shows what a fast dispatch is worth.",
+      "A brush fire in the hills east of Claremont Canyon, pushed downhill by a strong offshore wind. It reaches homes within half an hour: it shows what a fast first dispatch is worth.",
     regionId: BERKELEY_BOARD_ID,
     seed: 1,
     ignitions: [{ lon: -122.218, lat: 37.86, startMinute: 0, reportMinute: REPORT_DELAY_MINUTES }],
@@ -59,7 +59,7 @@ export const DEMO_SEEDS: DemoSeedPreset[] = [
     id: "berkeley-two-spot-ene",
     label: "Two spot fires in the Berkeley hills, ENE wind",
     blurb:
-      "Two fires start at once in the Berkeley hills and merge under an east-northeast wind: two fronts for the dispatcher to cover. With nobody acting about 1,030 homes burn and about 1,115 people are caught by hour 6 (on the other two seeds tested the people caught were 449 and 1,104, so this scenario varies more from seed to seed). With the model's decision aids followed, this seed ends with about 950 homes burned and 496 people caught; across the three seeds the aids cut homes burned by 7 to 22 percent and people caught by 42 to 79 percent.",
+      "Two fires start at once in the Berkeley hills and merge under an east-northeast wind: two fronts for the dispatcher to cover, and the hardest evacuation to stagger.",
     regionId: BERKELEY_BOARD_ID,
     seed: 1,
     ignitions: [
@@ -75,7 +75,7 @@ export const DEMO_SEEDS: DemoSeedPreset[] = [
     id: "berkeley-south-hills-east-wind",
     label: "South Berkeley hills fire, strong east wind",
     blurb:
-      "A fire on the slope above the south Berkeley hill neighbourhoods in a strong, almost due-east wind. With nobody acting the first homes burn within half an hour and the first households are caught within two hours; by hour 6 about 1,040 homes have burned and about 780 people were caught. With the model's decision aids followed, this seed ends with about 935 homes burned and 136 people caught. The gain is the least steady of the four: across the three seeds the aids cut people caught by 23 to 82 percent and homes burned by only 2 to 20 percent.",
+      "A fire on the slope above the south Berkeley hill neighbourhoods in a strong, almost due-east wind: homes are close, and the evacuation roads downhill fill quickly.",
     regionId: BERKELEY_BOARD_ID,
     seed: 1,
     ignitions: [{ lon: -122.234, lat: 37.868, startMinute: 0, reportMinute: REPORT_DELAY_MINUTES }],
