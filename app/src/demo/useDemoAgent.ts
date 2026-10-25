@@ -26,6 +26,18 @@
  * after it arrives (bursts are batched) and at most once per PICTURE_MIN_GAP_MS, so phone
  * actions reach the commander within seconds even when the board clock runs slowly. These are
  * urgent wakes (kind live_report) and go through the same single-call queue.
+ *
+ * Pacing (`pacing`, AiPacing). "auto" (default, /live): the cadence above; Auto speed
+ * (autoSpeed.ts) slows the board while a call is in flight. "realtime" (/run's AI step, user
+ * decision 2026-10-25 "clock keeps running"): the board runs at the page's speed while Claude
+ * thinks, like a dispatcher under time pressure. Only a new reported fire, a zone newly too late
+ * (no order, order slack spent: observation.ts lateZoneIds) or a new life-threat call (simComms
+ * trapped / critical injury, one per injury or zone) calls at once; while a call is in flight such
+ * an event queues one urgent follow-up. Every other wake (events and reviews alike) waits until
+ * REALTIME_ROUTINE_GAP_MINUTES board minutes after the last call ended. Orders still apply when
+ * they land, validated against the board then (model.applyOrder); a refusal that landed after the
+ * board moved says so in the decision and in the board's audit log. Because model latency varies,
+ * a realtime run is not bit-reproducible even on the same seed.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -41,21 +53,24 @@ import {
   type DemoOrder,
   type LiveOrder,
 } from "./contracts";
-import type { Board, RouteOption, ZoneForecast } from "./model";
+import { logEvent, type Board, type RouteOption, type ZoneForecast } from "./model";
+import { simClock } from "./format";
 import { pictureWakeReasons, type PictureKeys, type PictureResult } from "./incidentPicture";
 import {
   MONITOR_EVERY_MINUTES,
   REVIEW_KINDS,
   afterDecision,
   buildObservation,
+  lateZoneIds,
   newReportedFireIds,
   rememberDecision,
   wakeReasons,
   type MonitorMemory,
   type Wake,
+  type WakeTrigger,
   type WakeUrgency,
 } from "./observation";
-import type { AgentInputSnapshot } from "./runContracts";
+import type { AgentInputSnapshot, SimCommsState } from "./runContracts";
 
 /** Simulated minutes the monitor stays quiet after a failed call. */
 export const ERROR_BACKOFF_MINUTES = 10;
@@ -68,6 +83,35 @@ const MANUAL_REASON = "Operator asked for a decision now.";
 export const PICTURE_DEBOUNCE_MS = 2_000;
 /** Wall ms between two picture-triggered calls (bounds Claude calls while phones are busy). */
 export const PICTURE_MIN_GAP_MS = 15_000;
+/**
+ * How the agent's calls are paced against the board clock (see the top comment). "auto": /live
+ * (Auto speed slows the board while Claude decides). "realtime": the clock keeps running (/run).
+ */
+export type AiPacing = "auto" | "realtime";
+/**
+ * Realtime pacing: board minutes after a call ends before a routine (non-urgent) wake may call
+ * again. UI/ops choice (user decision 2026-10-25: routine reviews spaced out so a 6 h run fits in
+ * about 5-10 real minutes at 60×), not a sourced dispatch interval.
+ */
+export const REALTIME_ROUTINE_GAP_MINUTES = 10;
+/** Life-threat calls named in one wake reason before "and n more". */
+const MAX_LIFE_THREAT_LISTED = 3;
+
+/**
+ * Simulated life-threat calls on the board (simComms.ts: severity life_threat, or a trapped call),
+ * keyed per injury (its reminders repeat) or else per zone, so one party wakes the agent once.
+ */
+function lifeThreatCalls(board: Board): { key: string; text: string }[] {
+  const comms = (board as { simComms?: SimCommsState }).simComms;
+  if (!comms) return [];
+  const out = new Map<string, string>();
+  for (const item of comms.items) {
+    if (item.severity !== "life_threat" && item.kind !== "trapped") continue;
+    const key = item.injuryId ?? (item.zoneId ? `zone:${item.zoneId}:${item.kind}` : item.id);
+    if (!out.has(key)) out.set(key, `${item.from} (${item.channel}, ${simClock(item.minute)}${item.injuryId ? `, ${item.injuryId}` : ""}${item.zoneId ? `, ${item.zoneId}` : ""}): "${item.text}"`);
+  }
+  return [...out].map(([key, text]) => ({ key, text }));
+}
 
 type FinalDecision = Extract<DecisionEvent, { type: "orders" }>;
 
@@ -112,6 +156,10 @@ export interface AgentDecision {
   id: number;
   /** Board minute of the observation the agent decided on. */
   minute: number;
+  /** Board minute when its orders landed (applied); the board kept running from `minute` to here. */
+  landedMinute: number;
+  /** Wall ms from the request to the orders landing (model latency; display only). */
+  latencyMs: number;
   wokeBecause: string[];
   /** Streamed "text" deltas. */
   assessment: string;
@@ -139,6 +187,8 @@ export interface DemoAgentOptions {
   applyLive?: (orders: LiveOrder[]) => (string | null)[];
   /** The live drill's incident picture and its monitor keys; null without a live drill. */
   picture?: PictureResult | null;
+  /** "auto" (default, /live) or "realtime" (/run: the clock keeps running while Claude decides). See the top comment. */
+  pacing?: AiPacing;
 }
 
 export interface DemoAgent {
@@ -227,6 +277,11 @@ export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
   /** Picture items the agent has seen (at its last decision, or when monitoring started). */
   const seenPictureRef = useRef<PictureKeys | null>(null);
   const lastPictureCallRef = useRef(-Infinity);
+  /** Realtime pacing: board minute the last call ended (routine wakes wait REALTIME_ROUTINE_GAP_MINUTES after it). */
+  const lastEndMinuteRef = useRef(-Infinity);
+  /** Realtime pacing: late zones and life-threat calls already shown to the agent (each calls at once only once). */
+  const calledLateZoneIdsRef = useRef(new Set<string>());
+  const calledLifeKeysRef = useRef(new Set<string>());
 
   // Aborting rejects the stream; its `finally` then clears the in-flight state.
   const cancel = useCallback(() => abortRef.current?.abort(), []);
@@ -249,6 +304,10 @@ export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
     };
     setInputLog((log) => ({ board: current, list: [...(log.board === current ? log.list : []), snapshot].slice(-MAX_INPUTS) }));
     for (const f of observation.fires) calledFireIdsRef.current.add(f.id);
+    if (optsRef.current.pacing === "realtime") {
+      for (const id of lateZoneIds(current, forecasts)) calledLateZoneIdsRef.current.add(id);
+      for (const c of lifeThreatCalls(current)) calledLifeKeysRef.current.add(c.key);
+    }
     const seen = rememberDecision(current, forecasts);
     seenRef.current = seen;
     const wokeOnRefusal = wake.triggers.some((t) => t.kind === "refused");
@@ -290,6 +349,23 @@ export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
           ...boardOrders.map((order, i) => ({ order: order as CommanderOrder, error: boardErrors[i] ?? null })),
           ...live.map((order, i) => ({ order: order as CommanderOrder, error: liveErrors[i] ?? null })),
         ];
+        // Realtime pacing: the board kept running while Claude decided, so an order can land on a
+        // board that has moved on (zone overrun or already leaving, fire out, unit busy). applyOrder
+        // validated it against the board now; say when it landed and keep it in the audit log.
+        const landedMinute = current.minute;
+        const lag = Math.floor(landedMinute) - minute;
+        if (optsRef.current.pacing === "realtime" && lag >= 1) {
+          const late = applied.filter((a) => a.error !== null);
+          for (const a of late) a.error = `${a.error} (decided on the ${simClock(minute)} board, landed at ${simClock(landedMinute)})`;
+          if (late.length > 0) {
+            logEvent(
+              current,
+              "order",
+              "agent",
+              `${late.length} of Claude's order${late.length > 1 ? "s" : ""} not applied: decided on the ${simClock(minute)} board, landed ${lag} board min later. ${late.map((a) => `${a.order.type}: ${a.error}`).join(" ")}`,
+            );
+          }
+        }
         const refused = [
           ...decision.rejected.map((r) => r.reason),
           ...applied.filter((a) => a.error !== null).map((a) => `Not applied: ${a.error}`),
@@ -307,6 +383,8 @@ export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
         const entry: AgentDecision = {
           id: idRef.current,
           minute,
+          landedMinute,
+          latencyMs: Date.now() - snapshot.sentAtMs,
           wokeBecause: reasons,
           assessment,
           summary: decision.summary,
@@ -332,6 +410,7 @@ export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
         if (abortRef.current !== controller) return;
         abortRef.current = null;
         seenRef.current = null;
+        if (boardRef.current === current) lastEndMinuteRef.current = current.minute;
         // Check again on the next board change: a queued event starts its follow-up call at once.
         lastBucketRef.current = null;
         setInFlight(false);
@@ -352,6 +431,9 @@ export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
     backoffUntilRef.current = -Infinity;
     seenPictureRef.current = null;
     calledFireIdsRef.current = new Set();
+    lastEndMinuteRef.current = -Infinity;
+    calledLateZoneIdsRef.current = new Set();
+    calledLifeKeysRef.current = new Set();
     // A new board (reset, drill switch) starts a clean log.
     setDecisions([]);
     setInputLog({ board, list: [] });
@@ -386,6 +468,55 @@ export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
     return { triggers, reasons: texts, urgency: "urgent" };
   }, []);
 
+  // Realtime pacing (top comment): the board does not wait for Claude. Urgent events (a new reported
+  // fire, a zone newly too late, a new life-threat call) call at once, or queue one urgent follow-up
+  // while a call is in flight; every other wake waits REALTIME_ROUTINE_GAP_MINUTES after the last call ended.
+  const realtimeMonitor = useCallback(
+    (current: Board) => {
+      const { forecasts } = optsRef.current;
+      const memory = abortRef.current ? seenRef.current : memoryRef.current;
+      const newFires = newReportedFireIds(current, memory).filter((id) => !calledFireIdsRef.current.has(id));
+      const late = lateZoneIds(current, forecasts).filter((id) => !calledLateZoneIdsRef.current.has(id));
+      const life = lifeThreatCalls(current).filter((c) => !calledLifeKeysRef.current.has(c.key));
+      const urgent = newFires.length + late.length + life.length > 0;
+      const bucket = Math.floor(current.minute / MONITOR_EVERY_MINUTES);
+      if (bucket === lastBucketRef.current && !urgent) return;
+      lastBucketRef.current = bucket;
+      if (abortRef.current) {
+        // One urgent follow-up starts when the call in flight ends; routine events wait for the gap.
+        if (urgent) setQueued("urgent");
+        return;
+      }
+      const lifeTriggers: WakeTrigger[] = life.length
+        ? [
+            {
+              kind: "life_threat_call",
+              urgency: "urgent",
+              text:
+                `New life-threat call${life.length > 1 ? "s" : ""} (simulated): ${life.slice(0, MAX_LIFE_THREAT_LISTED).map((c) => c.text).join("; ")}` +
+                (life.length > MAX_LIFE_THREAT_LISTED ? `; and ${life.length - MAX_LIFE_THREAT_LISTED} more.` : "."),
+            },
+          ]
+        : [];
+      const lifeWake: Wake = { triggers: lifeTriggers, reasons: lifeTriggers.map((t) => t.text), urgency: "urgent" };
+      const wake = mergeWakes(mergeWakes(lifeWake, wakeReasons(current, forecasts, memory)), pictureWake());
+      if (urgent) {
+        if (wake.triggers.length > 0) {
+          call(current, { ...wake, urgency: "urgent" });
+        } else {
+          // Nothing to say about them (the monitor already knew): do not re-check them on every tick.
+          for (const id of newFires) calledFireIdsRef.current.add(id);
+          for (const id of late) calledLateZoneIdsRef.current.add(id);
+        }
+        return;
+      }
+      if (current.minute < backoffUntilRef.current) return;
+      if (current.minute - lastEndMinuteRef.current < REALTIME_ROUTINE_GAP_MINUTES) return;
+      if (wake.triggers.length > 0) call(current, wake);
+    },
+    [call, pictureWake],
+  );
+
   // The monitor: once per MONITOR_EVERY_MINUTES of simulated time. A newly reported fire the
   // agent has not been shown yet is checked at once (on the board's next change, also inside an
   // error backoff): nothing dispatches initial attack on this board but the agent. While a call is
@@ -393,6 +524,10 @@ export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
   // saw); the follow-up starts when the call finishes (`finally` resets the bucket).
   useEffect(() => {
     if (!enabled || !board) return;
+    if (optsRef.current.pacing === "realtime") {
+      realtimeMonitor(board);
+      return;
+    }
     const memory = abortRef.current ? seenRef.current : memoryRef.current;
     const urgent = newReportedFireIds(board, memory).some((id) => !calledFireIdsRef.current.has(id));
     const bucket = Math.floor(board.minute / MONITOR_EVERY_MINUTES);
@@ -409,7 +544,7 @@ export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
     const live = pictureWake();
     const merged = mergeWakes(wake, live);
     if (merged.triggers.length > 0) call(board, merged);
-  }, [board, version, enabled, call, pictureWake]);
+  }, [board, version, enabled, call, pictureWake, realtimeMonitor]);
 
   // The picture monitor (wall time): new live items wake the agent within seconds.
   const pictureKeys = opts.picture?.keys ?? null;

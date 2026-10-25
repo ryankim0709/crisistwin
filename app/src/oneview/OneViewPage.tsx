@@ -12,7 +12,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Button, EmptyState, EvidenceTag, IconButton, LoadingState, Notice, Panel, Spinner, Tag } from "../ui";
 import AgentInputsPanel from "../demo/AgentInputsPanel";
 import DemoDiorama from "../demo/DemoDiorama";
-import { BOARD_SPEED_STEPS, type BoardSpeed } from "../demo/useCommandBoard";
+import { BOARD_SPEED_STEPS, type BoardSpeed, type CommandBoard } from "../demo/useCommandBoard";
+import { REALTIME_ROUTINE_GAP_MINUTES } from "../demo/useDemoAgent";
 import { usePredictedFire } from "../demo/usePredictedFire";
 import { useRunStateSync } from "../demo/useRunStateSync";
 import type { RunTimeline } from "../demo/runContracts";
@@ -35,6 +36,12 @@ import "./oneview.css";
 const ACTIVE_POLL_MS = 5_000;
 /** Baseline clock: board minutes per real minute (a fast, fixed pick; the fire solver still holds the clock while it solves). */
 const BASELINE_SPEED: BoardSpeed = 120;
+/**
+ * AI dispatch clock: board minutes per real minute. The clock keeps running at this speed while
+ * Claude decides (useCommandBoard aiPacing "realtime"; user decision 2026-10-25), so a 6 h run takes
+ * about 6 real minutes plus fire-solver holds. UI choice.
+ */
+const AI_SPEED: BoardSpeed = 60;
 /** The server drill clock's limit (app/backend/livecore/drill.py MAX_DRILL_SPEED). */
 const MAX_DRILL_SPEED = 60;
 /** A change of the wanted drill clock (running / speed) is posted only after it has held this long (Auto speed flips every time the agent starts or stops deciding); the first start goes out at once. */
@@ -59,6 +66,49 @@ function Step({ n, title, state, children }: { n: number; title: string; state: 
       </div>
       {children ? <div className="ov-step-body">{children}</div> : null}
     </li>
+  );
+}
+
+/** Wall-clock now, refreshed every `ms` while `on` (display only: how long Claude has been deciding). */
+function useNow(on: boolean, ms = 1_000): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!on) return;
+    const tick = () => setNow(Date.now());
+    const first = window.setTimeout(tick, 0);
+    const id = window.setInterval(tick, ms);
+    return () => {
+      window.clearTimeout(first);
+      window.clearInterval(id);
+    };
+  }, [on, ms]);
+  return now;
+}
+
+/** The AI step's pacing line: the board kept running while Claude decided ("decided in 14 s = 14 board min at 60×"). */
+function AiPacingNote({ agent, minute, speed }: { agent: CommandBoard["agent"]; minute: number | null; speed: number }) {
+  const thinking = agent.status === "thinking";
+  const now = useNow(thinking);
+  const input = agent.lastInput;
+  const last = agent.decisions[0] ?? null;
+  const refused = last ? last.applied.filter((a) => a.error !== null).length + last.rejected.length : 0;
+  return (
+    <>
+      {thinking && input && minute !== null ? (
+        <p className="ov-dim">
+          Claude deciding for {Math.max(0, Math.round((now - input.sentAtMs) / 1000))} s on the {formatClock(input.minute)} board; the board
+          kept running {Math.max(0, Math.floor(minute) - input.minute)} board min since
+          {agent.queued === "urgent" ? "; an urgent follow-up is queued" : ""}.
+        </p>
+      ) : null}
+      {last ? (
+        <p className="ov-dim">
+          Last decision: decided in {Math.round(last.latencyMs / 1000)} s = {Math.max(0, Math.floor(last.landedMinute) - last.minute)} board min
+          at {speed}&times; (saw {formatClock(last.minute)}, orders landed {formatClock(last.landedMinute)}
+          {refused > 0 ? `; ${refused} refused` : ""}). {agent.decisions.length} decision{agent.decisions.length === 1 ? "" : "s"} so far.
+        </p>
+      ) : null}
+    </>
   );
 }
 
@@ -98,12 +148,18 @@ export default function OneViewPage() {
   const data = unauthorized ? null : command.data;
 
   const [phase, setPhase] = useState<RunPhase>("setup");
+  // Each run's clock speed is the page's own pick (useCommandBoard `speed`), so /run never writes /live's saved Auto choice.
+  const [baselineSpeed, setBaselineSpeed] = useState<BoardSpeed>(BASELINE_SPEED);
+  const [aiSpeed, setAiSpeed] = useState<BoardSpeed>(AI_SPEED);
   const cb = useRunBoard({
     token,
     incidentId,
     data,
     studioBoardId: active.data?.region_id ?? null,
     runMode: phase === "ai" ? "ai" : "baseline",
+    speed: phase === "ai" ? aiSpeed : phase === "baseline" ? baselineSpeed : null,
+    // The AI step: the clock keeps running at aiSpeed while Claude decides (user decision 2026-10-25).
+    aiPacing: "realtime",
   });
   // As on /live: controller road closures re-route the board, and the run state is saved for the server's simulated people.
   useRoadClosures({ token: unauthorized ? null : token, incidentId, board: cb.board, routes: cb.routes, bump: cb.bump });
@@ -162,7 +218,6 @@ export default function OneViewPage() {
     setBaselineDone(false);
     setAiDone(false);
     setPhase("baseline");
-    cb.setSpeed(BASELINE_SPEED);
     cb.setRunning(true);
   };
   const finishBaseline = useCallback(() => {
@@ -193,7 +248,6 @@ export default function OneViewPage() {
     kickBoard.current = c.board;
     const seed = baseline?.seed ?? draft.seed;
     if (!restartBoard(c, seed)) setAiNotice("This build's board cannot restart on a chosen seed yet, so the AI run continues the current board.");
-    c.setAutoSpeed(true);
     c.setAutopilot(true);
   }, [phase, baseline, draft.seed]);
   const finishAi = useCallback(() => {
@@ -409,7 +463,11 @@ export default function OneViewPage() {
             ) : null}
           </Step>
           <Step n={3} title="AI dispatch" state={phase === "ai" ? (aiDone ? "done" : "active") : "todo"}>
-            <p className="ov-dim">Same seed and fire; the AI commander dispatches units and orders evacuations.</p>
+            <p className="ov-dim">
+              Same seed and fire; the AI commander dispatches units and orders evacuations. The clock keeps running at {aiSpeed}&times; while
+              Claude decides, like a dispatcher under time pressure: its orders apply at the board minute they arrive. New fires, zones too
+              late and life-threat calls call it at once; other reviews come at most every {REALTIME_ROUTINE_GAP_MINUTES} board min.
+            </p>
             {phase !== "ai" ? (
               <Button onClick={startAi} disabled={!baselineDone}>
                 Run AI dispatch
@@ -417,14 +475,19 @@ export default function OneViewPage() {
             ) : !aiDone ? (
               <>
                 <p className="ov-status" role="status">
-                  {cb.running ? <Spinner /> : null} {formatClock(minute)} &middot; agent {cb.agent.status}
+                  {cb.running ? <Spinner /> : null} {formatClock(minute)} of {formatClock(horizon)} at {cb.speed}&times; &middot; agent{" "}
+                  {cb.agent.status}
                 </p>
+                <AiPacingNote agent={cb.agent} minute={minute} speed={cb.speed} />
                 <Button variant="secondary" size="sm" onClick={finishAi}>
                   Stop the AI run
                 </Button>
               </>
             ) : (
-              <p className="ov-dim">Finished at {formatClock(minute)}.</p>
+              <>
+                <p className="ov-dim">Finished at {formatClock(minute)}.</p>
+                <AiPacingNote agent={cb.agent} minute={minute} speed={cb.speed} />
+              </>
             )}
             {aiNotice ? (
               <Notice tone="warning" compact>
@@ -447,6 +510,11 @@ export default function OneViewPage() {
                 {drillNote}
               </Notice>
             ) : null}
+            <p className="ov-foot">
+              Not bit-reproducible: the seed fixes the fire, wind, people and units, but Claude&rsquo;s response time varies from call to call,
+              so its orders land at different board minutes (and it sees a different board) on every AI run. The baseline replays exactly on its
+              seed.
+            </p>
           </Step>
         </ol>
         {phase !== "setup" ? (
@@ -494,10 +562,13 @@ export default function OneViewPage() {
           speed={cb.speed}
           speedSteps={BOARD_SPEED_STEPS}
           onSpeed={(s) => {
-            if (BOARD_SPEED_STEPS.some((v) => v === s)) cb.setSpeed(s as BoardSpeed);
+            if (!BOARD_SPEED_STEPS.some((v) => v === s)) return;
+            if (phase === "ai") setAiSpeed(s as BoardSpeed);
+            else if (phase === "baseline") setBaselineSpeed(s as BoardSpeed);
+            else cb.setSpeed(s as BoardSpeed);
           }}
-          autoSpeed={phase === "ai" ? cb.autoSpeed : null}
-          onAutoSpeed={phase === "ai" ? cb.setAutoSpeed : null}
+          autoSpeed={null}
+          onAutoSpeed={null}
           baseline={baselineShown}
           ai={aiShown}
           baselineDone={baselineDone}

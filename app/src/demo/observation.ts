@@ -831,6 +831,8 @@ export type WakeKind =
   | "road_closed"
   | "refused"
   | "live_report"
+  /** A new simulated life-threat call (trapped party, critical injury; simComms.ts), used by useDemoAgent's realtime pacing. */
+  | "life_threat_call"
   | "continuous_review"
   | "periodic_review"
   | "changes";
@@ -951,6 +953,12 @@ function slackTiers(board: Board, forecasts: Map<string, ZoneForecast>): Record<
     out[zone.id] = slack <= 0 ? 2 : 1;
   }
   return out;
+}
+
+/** Zones with no order in effect whose order slack is spent (the zone_slack wake's "already late" tier); useDemoAgent's realtime pacing calls the agent at once for a new one. */
+export function lateZoneIds(board: Board, forecasts: Map<string, ZoneForecast>): string[] {
+  const tiers = slackTiers(board, forecasts);
+  return Object.keys(tiers).filter((id) => tiers[id] === 2);
 }
 
 /** Whether the fire's chosen strategy is not containable now or no longer offered (strategyOptions.ts). */

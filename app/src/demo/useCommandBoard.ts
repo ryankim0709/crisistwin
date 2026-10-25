@@ -27,7 +27,7 @@ import { NO_SNAPSHOT_LABEL } from "./realism";
 import { AUTO_SPEED, boardIsIdle, nextAutoSpeed, type AutoSpeedReason, type AutoSpeedState } from "./autoSpeed";
 import type { PanelActions } from "./SelectedPanel";
 import { createRoadLegHold, useCrewRoutes } from "./useCrewRoutes";
-import { useDemoAgent } from "./useDemoAgent";
+import { useDemoAgent, type AiPacing } from "./useDemoAgent";
 import { DEFAULT_BOARD_RADIUS_METERS, boardCellMetersFor } from "../fire/boardSize";
 import { parseStudioBoardId } from "../studio/useRegionBoard";
 import type { World } from "../world/contracts";
@@ -232,6 +232,12 @@ export interface CommandBoardOptions {
    * without touching the browser's saved Auto choice (the /run page's fast baseline). Omit: /live behaviour.
    */
   speed?: BoardSpeed | null;
+  /**
+   * How Claude's calls are paced against the clock (useDemoAgent.ts AiPacing). "auto" (default,
+   * /live): Auto speed slows the board while Claude decides. "realtime" (/run's AI step): the clock
+   * keeps running at its speed while Claude decides; routine calls are spaced out, urgent ones call at once.
+   */
+  aiPacing?: AiPacing;
 }
 
 export function useCommandBoard({
@@ -241,6 +247,7 @@ export function useCommandBoard({
   studioBoardId = null,
   runMode = "ai",
   speed: fixedSpeed = null,
+  aiPacing = "auto",
 }: CommandBoardOptions) {
   const baseline = runMode === "baseline";
   // The poll keeps the previous incident's data until the new answer lands; ignore it meanwhile.
@@ -601,7 +608,7 @@ export function useCommandBoard({
     const { token: t, incidentId: id, data: d } = liveRef.current;
     return runLiveOrders(t, id, d, orders, setNotice, boardRef.current);
   }, []);
-  const agentRun = useDemoAgent({ board, version, incidentId, routes: routes.routes, forecasts, enabled: autopilot && !baseline, apply, applyLive, picture });
+  const agentRun = useDemoAgent({ board, version, incidentId, routes: routes.routes, forecasts, enabled: autopilot && !baseline, apply, applyLive, picture, pacing: aiPacing });
   // A baseline run never calls the agent ("Ask Claude now" included).
   const agent = baseline ? { ...agentRun, decideNow: () => {} } : agentRun;
   // Turning the AI agent on starts the clock (clearing an earlier Pause); off stops it (below).
@@ -631,7 +638,8 @@ export function useCommandBoard({
   // (routine wake), 60× while the board is idle (after a short hold), else 20×. It only sets how
   // many board minutes pass per real second; step() lands on the same minutes and events at any
   // rate. With the agent off it shows what it would pick.
-  const thinking = agent.status === "thinking" ? (agent.urgency ?? "urgent") : null;
+  // Realtime pacing: the clock does not slow down for Claude (Auto then reads only the board).
+  const thinking = aiPacing !== "realtime" && agent.status === "thinking" ? (agent.urgency ?? "urgent") : null;
   const autoState = useRef<{ board: Board | null; state: AutoSpeedState | null }>({ board: null, state: null });
   useEffect(() => {
     if (!board) return;
@@ -817,6 +825,8 @@ export function useCommandBoard({
     agent,
     /** How this board runs (runContracts.ts BoardRunMode). */
     runMode,
+    /** How Claude's calls are paced against the clock (CommandBoardOptions.aiPacing). */
+    aiPacing,
     /** The current board's seed; null before the first board. */
     seed: board?.seed ?? null,
     /** Score samples of the current board's run (scorePoint.ts), oldest first; reset by every new board. */
