@@ -95,6 +95,25 @@ function webglAvailable(): boolean {
   }
 }
 
+/**
+ * Software WebGL (SwiftShader in headless Chrome or with the GPU blocklisted, Mesa llvmpipe in
+ * VMs). There the compositor reads every drawn frame back synchronously (GLES2 ReadPixels in
+ * Commit), so a regional board blocked the page's main thread about 4 s per frame and starved
+ * every fetch callback and React update (measured on /run, chrome-headless-shell, 30x30 km board).
+ */
+function isSoftwareWebgl(gl: WebGLRenderingContext | WebGL2RenderingContext): boolean {
+  try {
+    const info = gl.getExtension("WEBGL_debug_renderer_info");
+    const name = String(gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER) ?? "");
+    return /swiftshader|llvmpipe|softpipe|software|basic render/i.test(name);
+  } catch {
+    return false;
+  }
+}
+/** Software WebGL: wait at least this long, and this many times the last frame's cost, between frames. */
+const SOFTWARE_MIN_GAP_MS = 1000;
+const SOFTWARE_GAP_FACTOR = 3;
+
 /** Everything built for one loaded landscape (rebuilt on `setLandscape`). */
 type Board = {
   frame: BoardFrame;
@@ -173,6 +192,10 @@ export class FireDioramaScene implements FireDioramaSceneApi {
   private disposed = false;
   private width = 1;
   private height = 1;
+  /** Software WebGL: frames are throttled (see isSoftwareWebgl). */
+  private readonly softwareGl: boolean;
+  private softwareDrawnAt: number | null = null;
+  private softwareNextAt = 0;
 
   constructor(container: HTMLElement, options: FireDioramaOptions) {
     if (!webglAvailable())
@@ -191,7 +214,9 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.0;
-    this.renderer.shadowMap.enabled = true;
+    this.softwareGl = isSoftwareWebgl(this.renderer.getContext());
+    // Shadows cost a second geometry pass; a software renderer skips them.
+    this.renderer.shadowMap.enabled = !this.softwareGl;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     const canvas = this.renderer.domElement;
     canvas.style.display = "block";
@@ -870,6 +895,16 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     const dt = Math.min(0.1, (now - this.lastFrame) / 1000);
     this.lastFrame = now;
     if (document.hidden || this.width < 2 || this.height < 2) return;
+    if (this.softwareGl) {
+      // The first callback after a drawn frame comes once its readback finished: that gap is the frame's cost.
+      if (this.softwareDrawnAt !== null) {
+        const cost = now - this.softwareDrawnAt;
+        this.softwareNextAt = now + Math.max(SOFTWARE_MIN_GAP_MS, cost * SOFTWARE_GAP_FACTOR);
+        this.softwareDrawnAt = null;
+      }
+      if (now < this.softwareNextAt) return;
+      this.softwareDrawnAt = now;
+    }
     if (!this.reducedMotion) this.time += dt;
     const time = this.time;
     const reduced = this.reducedMotion;
