@@ -27,10 +27,11 @@
  * per minute; grid column x east, row y south.
  */
 
-import { CELL_CONTAINED_BIT, CELL_STATE } from "./diorama/cellStates";
+import { CELL_CODE_MASK, CELL_CONTAINED_BIT, CELL_STATE } from "./diorama/cellStates";
 import { FUEL_MODELS, SAV_DEAD_100H, SAV_DEAD_10H } from "./fuelModels";
 import type { LandscapeGrid } from "./landscape";
-import { BYRAM_FLAME_EXPONENT, compassPoint, type CellBehaviour } from "./spread";
+import type { MultiPolygon, Position } from "geojson";
+import { BYRAM_FLAME_EXPONENT, compassPoint, contourArrival, type CellBehaviour } from "./spread";
 import { haulingBand } from "../response/containment";
 
 /**
@@ -356,3 +357,117 @@ export function createRunCellStates(
     },
   };
 }
+
+/** 2D map groups of cell codes (the 3D codes merged where a map would not tell them apart). */
+export type MapFireState = "flame_low" | "flame_moderate" | "flame_high" | "flame_extreme" | "crown" | "burning" | "smouldering" | "burned_out" | "extinguished";
+
+/** Map group of a cell byte (CELL_CONTAINED_BIT ignored), or null for unburned. */
+export function mapFireStateOf(byte: number): MapFireState | null {
+  switch (byte & CELL_CODE_MASK) {
+    case CELL_STATE.flameLow:
+      return "flame_low";
+    case CELL_STATE.flameModerate:
+      return "flame_moderate";
+    case CELL_STATE.flameHigh:
+      return "flame_high";
+    case CELL_STATE.flameExtreme:
+      return "flame_extreme";
+    case CELL_STATE.crown:
+      return "crown";
+    case CELL_STATE.burning:
+      return "burning";
+    case CELL_STATE.smouldering:
+      return "smouldering";
+    case CELL_STATE.burnedOut:
+      return "burned_out";
+    case CELL_STATE.extinguished:
+      return "extinguished";
+    default:
+      return null;
+  }
+}
+
+/** Drawing order of the map states, coolest first (hotter states draw on top). */
+export const MAP_FIRE_STATE_ORDER: readonly MapFireState[] = ["burned_out", "extinguished", "smouldering", "burning", "flame_low", "flame_moderate", "flame_high", "flame_extreme", "crown"];
+const polygonScratch = new WeakMap<LandscapeGrid, Float64Array>();
+
+/**
+ * Polygons (WGS84 [lon, lat]; outer ring first, then holes) per map state, contoured with the
+ * solver's own marching squares (fire/spread.ts contourArrival) over the cells in that state, in
+ * MAP_FIRE_STATE_ORDER. For the 2D maps: features with a `state` property feed one fill layer
+ * coloured by MAP_FIRE_STATE_COLOR. States with no cells are omitted. O(cells) plus the contours;
+ * call it once per whole minute, not per animation frame.
+ */
+export function cellStatePolygons(grid: LandscapeGrid, codes: Uint8Array): { state: MapFireState; geometry: MultiPolygon }[] {
+  const n = grid.width * grid.height;
+  if (codes.length !== n) return [];
+  const boxes = new Map<MapFireState, { minX: number; maxX: number; minY: number; maxY: number }>();
+  for (let c = 0; c < n; c++) {
+    if (codes[c] === 0) continue;
+    const st = mapFireStateOf(codes[c]);
+    if (!st) continue;
+    const x = c % grid.width;
+    const y = (c - x) / grid.width;
+    const b = boxes.get(st);
+    if (!b) boxes.set(st, { minX: x, maxX: x, minY: y, maxY: y });
+    else {
+      if (x < b.minX) b.minX = x;
+      if (x > b.maxX) b.maxX = x;
+      if (y < b.minY) b.minY = y;
+      if (y > b.maxY) b.maxY = y;
+    }
+  }
+  let scratch = polygonScratch.get(grid);
+  if (!scratch || scratch.length !== n) {
+    scratch = new Float64Array(n).fill(Number.POSITIVE_INFINITY);
+    polygonScratch.set(grid, scratch);
+  }
+  const out: { state: MapFireState; geometry: MultiPolygon }[] = [];
+  for (const st of MAP_FIRE_STATE_ORDER) {
+    const box = boxes.get(st);
+    if (!box) continue;
+    const cells: number[] = [];
+    for (let y = box.minY; y <= box.maxY; y++)
+      for (let x = box.minX; x <= box.maxX; x++) {
+        const c = y * grid.width + x;
+        if (codes[c] !== 0 && mapFireStateOf(codes[c]) === st) {
+          scratch[c] = 0;
+          cells.push(c);
+        }
+      }
+    const polygons = contourArrival(grid, scratch, 0, box);
+    for (const c of cells) scratch[c] = Number.POSITIVE_INFINITY;
+    out.push({ state: st, geometry: { type: "MultiPolygon", coordinates: polygons.map((p) => p.geometry.coordinates as Position[][]) } });
+  }
+  return out;
+}
+
+/**
+ * CSS colour of each map state: fire/diorama/cellStates.ts FIRE_STATE_COLORS (and
+ * EXTINGUISHED_LEGEND.fill for put out), so the 2D maps match the 3D board. "burning"
+ * (unclassified flame) uses the 4-8 ft hue.
+ */
+export const MAP_FIRE_STATE_COLOR: Record<MapFireState, string> = {
+  flame_low: "#c0281a",
+  flame_moderate: "#f26a1b",
+  flame_high: "#ffb01f",
+  flame_extreme: "#ffe27a",
+  crown: "#fff6d8",
+  burning: "#f26a1b",
+  smouldering: "#d2401a",
+  burned_out: "#4a4644",
+  extinguished: "#7d8c99",
+};
+
+/** Plain-words legend label of each map state (simulated). */
+export const MAP_FIRE_STATE_LABEL: Record<MapFireState, string> = {
+  flame_low: "Flames under 4 ft (simulated): hand crews can hold it (Hauling chart, PMS 465)",
+  flame_moderate: "Flames 4 to 8 ft (simulated): engines and dozers",
+  flame_high: "Flames 8 to 11 ft (simulated): serious control problems",
+  flame_extreme: "Flames over 11 ft (simulated): head not attackable",
+  crown: "Crown fire (simulated): torching or crowning",
+  burning: "Burning (simulated)",
+  smouldering: `Smouldering (simulated): up to ${SMOULDER_WINDOW_MINUTES} min after flaming ends (assumption)`,
+  burned_out: "Burned out (simulated)",
+  extinguished: "Put out by crews (simulated)",
+};
