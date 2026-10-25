@@ -57,7 +57,7 @@ export function baselineOrders(obs: DemoObservation): { orders: DemoOrder[]; sum
     const current = fire.strategy;
     const currentOption = current ? fire.strategy_options.find((o) => o.id === current.id) : undefined;
     const currentHolds = current !== null && current.still_offered && aid.options.find((o) => o.id === current.id)?.containable === true;
-    if (aid.recommended_strategy_id) {
+    if (aid.recommended_strategy_id && !aid.overdue) {
       if (!currentHolds && current?.id !== aid.recommended_strategy_id) {
         orders.push({ type: "set_strategy", fire_id: fire.id, strategy_id: aid.recommended_strategy_id, reason: "decision aid: containable, fewest homes burned" });
         for (const u of aid.recommended_send) send(u.crew_id, fire.id, u.position_id, `for ${aid.recommended_strategy_id}`);
@@ -69,11 +69,15 @@ export function baselineOrders(obs: DemoObservation): { orders: DemoOrder[]; sum
     }
     const pkg = aid.all_units;
     if (!pkg) continue;
-    if (current?.id !== pkg.strategy_id) orders.push({ type: "set_strategy", fire_id: fire.id, strategy_id: pkg.strategy_id, reason: "decision aid: nothing contains; fewest homes burned with every unit" });
-    for (const u of pkg.send) send(u.crew_id, fire.id, u.position_id, "all available units");
+    // Overdue with a strategy the model still calls containable: keep it and put every unit on it.
+    const keep = aid.overdue && currentHolds && currentOption !== undefined;
+    const strategyId = keep ? currentOption!.id : pkg.strategy_id;
+    const positionId = keep ? currentOption!.position_id : (pkg.send[0]?.position_id ?? null);
+    if (current?.id !== strategyId) orders.push({ type: "set_strategy", fire_id: fire.id, strategy_id: strategyId, reason: "decision aid: nothing contains; fewest homes burned with every unit" });
+    for (const u of pkg.send) send(u.crew_id, fire.id, positionId, aid.overdue ? "overdue containment: all available units" : "all available units");
     for (const a of pkg.aircraft) send(a.aircraft_id, fire.id, null, "available aircraft");
     for (const o of pkg.order_resources) orders.push({ type: "order_resources", fire_id: fire.id, resource: o.resource, count: o.count, reason: "all available units: sized extended-attack order" });
-    notes.push(`${fire.id}: all units on ${pkg.strategy_id}`);
+    notes.push(`${fire.id}: all units on ${strategyId}${aid.overdue ? " (overdue)" : ""}`);
   }
   const evac = orders.filter((o) => o.type === "order_evacuation").length;
   return { orders, summary: `${orders.length} orders (scripted): ${evac} evacuation${notes.length ? `; ${notes.join("; ")}` : ""}` };

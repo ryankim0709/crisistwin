@@ -851,9 +851,12 @@ export interface EvacuationPlanObservation {
 /** Per reported burning fire (demo/decisionAids.ts strategyAid): homes each strategy option burns, the recommendation, and the all-units package when nothing contains. */
 export interface StrategyAidObservation {
   fire_id: string;
-  /** Containable option burning the fewest homes; null when none contains (see all_units). */
+  /** Containable option burning the fewest homes; null when none contains (see all_units, also filled when overdue). */
   recommended_strategy_id: string | null;
+  /** The option's units plus the run card's closest free units still needed. */
   recommended_send: { crew_id: string; position_id: string | null }[];
+  /** The chosen strategy is past its predicted containment (or line done) by 15+ min and the fire still burns: all_units is filled. */
+  overdue: boolean;
   options: { id: string; containable: boolean; homes_burned_forecast: number; by_min: number; households_in_zones_reached: number }[];
   all_units: {
     strategy_id: string;

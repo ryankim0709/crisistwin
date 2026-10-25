@@ -531,11 +531,17 @@ selected-fire panel) can send them to build line where the fire is forecast to g
   between cells.
 - **Orders**: `send_crew` takes an optional `position_id` (validated on the server against that
   fire's listed ids, and again by the page). The unit drives the road route to the position's
-  anchor point, then builds line outward both ways at its sourced rate (`lineMetersPerMinute` at
-  the anchor's fuel and slope); several units on one line add up. Without `position_id`, the
-  unit attacks the fire's edge as before (perimeter race). When a line is finished its units are
-  free; the line stays. Options per position give `arrive_min` and `line_done_min` for the
-  nearest free units that can reach it by road.
+  anchor point, parks where its road leg ends, reaches the anchor as its off-road reach allows
+  (`lineAccessPlan`: hose within reach, else the crew hikes in and builds hand line, else out of
+  reach and builds nothing; see "Why units stand away from the fire"), then builds line outward
+  both ways at its sourced rate (`lineMetersPerMinute` at the anchor's fuel and slope; an engine
+  crew on foot at the PMS 465 p.39 hand-line rate); several units on one line add up. Without
+  `position_id`, the unit attacks the fire's edge as before (perimeter race). When a line is
+  finished its units are free; the line stays. When the fire reaches an unfinished line's
+  anchor its units pull back (`withdrawFromOverrunLines`). Options per position give
+  `arrive_min`, `work_starts_min` (arrival plus the walk in) and `line_done_min` for the free
+  units that start building first; units whose road leg ends out of their reach of the anchor
+  are left out.
 - **Reachability per apparatus class**: road access differs by class (`access_class`, rules
   R01-R12 of [suppression-data.md](suppression-data.md); measured 2026-10-24 on drill
   `studio-f5caaabd2a1e`, scratch script: to -122.19607, 37.87509 in the Berkeley hills every
@@ -581,6 +587,78 @@ selected-fire panel) can send them to build line where the fire is forecast to g
     A zone_Z24 line cuts T+150 from 27.1 to 12.6 ha.
   - Solves on the board with line: about one per 100 m of line (16 for the four lines above),
     about 50 ms each with one fire.
+
+## Why units stand away from the fire
+
+Code: `app/src/demo/unitActivity.ts` (`unitActivity`, `unitSpotLabel`: what each unit is doing and
+how far it is from its fire, for the map labels), `model.ts` (`lineAccessPlan`, `lineWorkers`,
+`withdrawFromOverrunLines`), `boardResponse.ts` (`accessWorkPlan`, `fireEdgeSample`).
+
+**Measured** (2026-10-25, scratch copy of the evaluation harness with a per-unit probe every 10
+board minutes, drill `studio-f5caaabd2a1e` on Berkeley Hills & Tilden, Studio fire 'Three fires
+(illustrative demo)' F1 at -122.24292, 37.86686, 25 mph from 45°, critical moisture, seed 1,
+`--fast`; distance = unit to the nearest burned cell of its fire):
+
+| Why it is there | Spread policy (all units over head_60, head_30, flanks, the rest direct) | Baseline policy (decision aids) |
+| --- | --- | --- |
+| Driving from its station (label `→ S1-F1`) | direct: median 1.9 km, max 4.1 km; to lines 0.7-1.7 km | to head_30: median 2.6 km, max 5.2 km (22 units, "all units" package) |
+| Direct attack, parked at the heel anchor | all 18 at one road point 72-99 m from the edge; 120 m from the burned area | 123-134 m |
+| Building line ahead of the head (`head_60`, `head_30`) | head_60 830 m ahead at T+10 (fire there in 43 min), 500 m at T+20; head_30 240-490 m | head_30 181 m, head_60 130-217 m |
+| Building line on a flank (`flank_*`) | 10-42 m | 390-499 m |
+| Still building after the fire reached the anchor (before the fix) | head_60 36 m, head_30 13 m, until the line ran out | none |
+
+So the far units are, in order: driving (kilometres, while the label says `→ S1-F1`), building
+an indirect line where the head is forecast in 30-60 min (a few hundred metres to about 0.8 km
+ahead), or anchored at the heel 100-130 m off the burned edge while the head runs away from them.
+In this drill the road end was within 43 m of every line anchor and 99 m of the heel, so parking
+was not the cause here; with sparser roads it can be (the router snaps a target to a road node up
+to 1 km away and stops a class short by up to 3 km, `livecore/inbound.py`).
+
+**Against practice** (NWCG Incident Response Pocket Guide, PMS 461, 2022; S-130/S-190, S-215,
+S-290; Fire Behavior Field Reference Guide, PMS 437, Hauling chart):
+
+- Realistic: driving in from stations a few km away; anchoring at the heel and working the flanks
+  ("anchor, flank and pinch"; Watch Out 8 is building line without a safe anchor point); indirect
+  line set back from a fast head far enough to finish it before the fire arrives (here 0.2-0.8 km
+  for a 30-60 min lead), with the Hauling chart's limits (control at the head probably
+  ineffective above 8 ft flame, ineffective above 11 ft) shown on each option; engines confined
+  to roads they can drive, with hose reach (PMS 200 minimum hose) and a crew hike beyond it;
+  structure protection at the zone edge the fire reaches first (`zone_<id>`, S-215 triage).
+- Not realistic, fixed: a crew parked away from its line built it at once from the road end
+  (now it walks in first, or is out of reach and builds nothing, and options count the walk);
+  crews kept building where the fire had already arrived, and the overrun line stayed listed as
+  a position (LCES and the Standard Firefighting Orders: crews disengage to a safety zone; now
+  they pull back and the position is re-planned). Measured after the fix (same drill and fire,
+  scratch check at T+12 with three Type 3 engines sent to head_30, 746 m of line, fire there in
+  23 min, road legs ending 0, 250 and 600 m from the anchor): the first two use hose (within
+  305 m) and build from arrival at 8.05 m/min each; the third parks 600 m off, hikes 16 min and
+  then builds hand line at 1.01 m/min (it used to build at 8.05 m/min from the road end at once).
+  The fire reaches the anchor at T+35 with 276 m built: all three pull back, the overrun line
+  leaves the list and head_30 is re-planned 12 min ahead of the fire, and a new send there is
+  accepted (before: 12 orders refused as "Fire has already reached" in the spread-policy run).
+  In the spread-policy run, no unit stood on a line after the fire reached its anchor (before: 5
+  samples at 13-36 m); burned area and containment were unchanged (19.4 ha, contained T+93 vs
+  T+94).
+- Not realistic, not changed (listed for the decision aids and the prompt): every direct-attack
+  unit parks at the one heel point and never progresses along a flank (with 305 m of hose most
+  of them work the same few hundred metres of edge; the reach cap keeps the line count honest);
+  the "all units" decision aid can send 20+ engines to one short line (a strike team is 5 engines
+  under a leader, ICS span of control 3-7); a frontal line across a 25 mph head is offered
+  whenever it is forecast to finish in time (Watch Out 10, frontal assault, and 11, unburned fuel
+  between you and the fire, call for burnout and lookouts that the board does not model); there
+  are no staging areas or trigger points.
+
+**Labels.** The 3D board labels each spot with `unitSpotLabel`: the ids on each job and the job,
+e.g. `S03-E1 S06-E1 · building S1-F1 head_60 line 830 m ahead of the head · 35/722 m`,
+`S04-E3 · parked, crew hiking 600 m to its S1-F1 head_30 line · 17 min`,
+`S01-E1 · driving to S1-F1 · 7 min`, `S05-E1 · hose line on the S1-F1 edge (120 m away)`.
+`unitActivity(board, team)` returns `{kind, label, fireId, positionId, workPoint, fromFireM}`:
+`kind` one of `awaiting_route`, `rerouting`, `driving`, `hiking_in`, `building_line`,
+`direct_attack`, `out_of_reach`, `no_edge_in_reach`, `refilling`, `resting`, `returning`,
+`moving_up`, `blocked_by_fire`, `out_of_service`, `available`; `workPoint` (WGS84) is the line's
+anchor or the nearest point of the fire's open edge when that is not where the unit stands (for
+a leader line); `fromFireM` is ground metres to the fire's open edge. The observation adds
+`crews[].from_fire_m`, `attack_positions[].from_fire_m` and `options[].work_starts_min`.
 
 ## Run metrics, decision aids and the evaluation harness
 
@@ -631,10 +709,18 @@ Model output the commander chooses from; Claude never computes these numbers.
   finished line, or by the 120-min forecast horizon when it does not contain), whether it is
   containable (contained, or a line finished before the fire with no breach or crown warning),
   and `recommended_strategy_id` = the containable option burning the fewest homes (ties: sooner,
-  fewer units). When nothing contains, `all_units`: the option burning the fewest homes (flank
-  last), every free unit that can reach the fire, the available aircraft, and the cumulative
-  sized extended-attack orders of the stages due (at least stage 1, `ESCALATION_ORDERS`, capped by
-  `MAX_ORDER_COUNT`) less what was already ordered. `idle_units` lists free units while it burns.
+  fewer units). `recommended_send` is that option's units (the fewest the forecast needs) plus the
+  run card's closest free units still needed (`initialAttackRecommendation`), so a first attack
+  is not sized at the bare minimum of a forecast. `overdue` is set when the chosen strategy is
+  still burning `STRATEGY_OVERDUE_GRACE_MIN` (15 min, **ASSUMPTION**) past its predicted
+  containment or line-done minute. When nothing contains, or the strategy is overdue,
+  `all_units`: a protection line finished before the fire reaches it (no crown fire forecast
+  there) in front of the most households not yet overrun, else the perimeter option burning the
+  fewest homes (flank last; the homes forecast cannot rank lines, whose effect is only in the
+  field once built); every free unit that can reach the fire; the available aircraft; and the
+  cumulative sized extended-attack orders of the stages due (at least stage 1,
+  `ESCALATION_ORDERS`, capped by `MAX_ORDER_COUNT`) less what was already ordered for the fire.
+  `idle_units` lists free units while it burns.
 - The decide prompt (`app/backend/api/demo.py`) ranks life safety (follow the schedule; order
   early rather than late), then property (the recommended strategy, or all units), then
   containment (a strategy and initial attack on every new fire, never idle units while a fire
@@ -842,8 +928,11 @@ the AI agent see them (each console polls every 4 s).
   and indirect line from direct-attack units is not placed on cells. "Burning" is at cell
   resolution (a 24-30 m cell counts while the front is in it). Line at attack positions is
   built along its path and blocks every fire, but its production rate is the anchor cell's
-  (fuel and slope along the line are not varied), the last stretch from a road node within 1 km
-  (the router's snap distance) is walked at no time cost, and the line's length is fixed when it is started.
+  (fuel and slope along the line are not varied), the walk from the road end to the anchor is
+  timed (Tobler) but the line is still built outward from the anchor only, and the line's length
+  is fixed when it is started. Units on one line add their production linearly, with no span of
+  control or crowding (20 engines on a 367 m line build it 20 times as fast). Crews pull back only
+  when the fire reaches the anchor itself, not at an earlier trigger point.
 - The containment check uses the head flame at the leading front cell and takes it to persist in
   the forecast; a fire whose head has stalled at a barrier is judged at its farthest still-open
   cell, often a flank.

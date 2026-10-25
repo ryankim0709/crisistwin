@@ -2510,10 +2510,13 @@ function plansFor(board: Board, fire: Fire): AttackPlan[] {
   return plans;
 }
 
-/** Attack positions of a burning fire now: the planned ones, with any unfinished line kept where it was laid out. */
+/** Attack positions of a burning fire now: the planned ones, with any unfinished line the fire has not reached kept where it was laid out. */
 export function attackPositions(board: Board, fire: Fire): AttackPosition[] {
   if (fire.status !== "burning") return [];
-  const open = board.lines.filter((l) => l.fireId === fire.id && l.completedAt === null);
+  // An unfinished line whose anchor the fire has reached is no longer a position (its crew pulled
+  // back, withdrawFromOverrunLines; its built cells stay in the solver): it neither shadows the
+  // re-planned position of the same id nor stays listed with the fire already there.
+  const open = board.lines.filter((l) => l.fireId === fire.id && l.completedAt === null && positionEta(board, l.plan) !== 0);
   const out: AttackPosition[] = plansFor(board, fire).map((p) => {
     const line = open.find((l) => l.plan.id === p.id) ?? null;
     return { ...(line?.plan ?? p), line };

@@ -59,6 +59,8 @@ export const EVAC_TARGET_DEPARTED_SHARE = 0.9;
 export const EVAC_SAFETY_MARGIN_MIN = 30;
 /** Zones are planned for while a reported fire reaches them within the solver's lookahead (fireField.ts LOOKAHEAD_MINUTES). */
 export const EVAC_PLANNING_HORIZON_MIN = LOOKAHEAD_MINUTES;
+/** ASSUMPTION (aid rule, not sourced): a chosen strategy still burning this long after its predicted containment (or line done) is overdue. */
+export const STRATEGY_OVERDUE_GRACE_MIN = 15;
 /** Schedule search step, minutes (a board rule for the aid, not sourced). */
 export const EVAC_SCHEDULE_STEP_MIN = 5;
 /** Departure lead for EVAC_TARGET_DEPARTED_SHARE, minutes. */
@@ -242,7 +244,18 @@ export interface FireStrategyAid {
   options: StrategyHomes[];
   /** The containable option burning the fewest homes (ties: sooner, fewer units), or null when none contains. */
   recommended: StrategyHomes | null;
-  /** When nothing contains: every free unit on the option burning the fewest homes, available aircraft and the stage's sized orders. */
+  /**
+   * Units to send for the recommended option: the option's own (the fewest that contain) plus the
+   * run card's closest free units still needed (boardResponse.initialAttackRecommendation), so a
+   * first attack is not sized at the bare minimum of a forecast. [] without a recommendation.
+   */
+  recommendedSend: { crewId: string; positionId: string | null }[];
+  /**
+   * The chosen strategy predicted containment (or its line finished) more than
+   * STRATEGY_OVERDUE_GRACE_MIN ago and the fire still burns: the forecast has failed, so allUnits is filled too.
+   */
+  overdue: boolean;
+  /** When nothing contains (or the chosen strategy is overdue): every free unit on the option burning the fewest homes, available aircraft and the stage's sized orders. */
   allUnits: {
     option: StrategyHomes;
     send: { crewId: string; positionId: string | null; etaMin: number }[];
@@ -296,9 +309,20 @@ export function strategyAid(board: Board, fire: Fire): FireStrategyAid | null {
     a.option.id.localeCompare(b.option.id);
   const containable = scored.filter((x) => x.containable).sort(order);
   const recommended = containable[0] ?? null;
+  const chosen = board.response.fires.get(fire.id)?.strategy ?? null;
+  const promised = chosen ? (chosen.containedInMin ?? chosen.lineDoneMin) : null;
+  const overdue = chosen !== null && promised !== null && board.minute > chosen.at + promised + STRATEGY_OVERDUE_GRACE_MIN;
+  const recommendedSend: FireStrategyAid["recommendedSend"] = [];
+  if (recommended) {
+    const positionId = recommended.option.positionId;
+    for (const u of recommended.option.send) recommendedSend.push({ crewId: u.team.id, positionId });
+    for (const u of initialAttackRecommendation(board, fire)?.units ?? []) {
+      if (!recommendedSend.some((x) => x.crewId === u.team.id)) recommendedSend.push({ crewId: u.team.id, positionId });
+    }
+  }
   const idleUnits = board.teams.filter((t) => dispatchable(t) && t.fireId === null && t.status !== "returning").map((t) => t.id);
   let allUnits: FireStrategyAid["allUnits"] = null;
-  if (!recommended) {
+  if (!recommended || overdue) {
     // Nothing holds the fire. The homes forecast cannot rank these (a line's effect on the fire is
     // only in the field once built), so: a protection line finished before the fire reaches it, with
     // no crown fire forecast there, in front of the most households not yet overrun; else the
@@ -328,5 +352,5 @@ export function strategyAid(board: Board, fire: Fire): FireStrategyAid | null {
       orders: ORDER_KEYS.map(([resource, key]) => ({ resource, count: Math.min(MAX_ORDER_COUNT[resource], due(key) - (ordered.get(resource) ?? 0)) })).filter((o) => o.count > 0),
     };
   }
-  return { fire, options: scored, recommended, allUnits, idleUnits };
+  return { fire, options: scored, recommended, recommendedSend, overdue, allUnits, idleUnits };
 }

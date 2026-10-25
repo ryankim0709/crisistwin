@@ -690,7 +690,8 @@ export function buildObservation(
           {
             fire_id: fire.id,
             recommended_strategy_id: aid.recommended?.option.id ?? null,
-            recommended_send: aid.recommended ? aid.recommended.option.send.map((u) => ({ crew_id: u.team.id, position_id: aid.recommended!.option.positionId })) : [],
+            recommended_send: aid.recommendedSend.map((u) => ({ crew_id: u.crewId, position_id: u.positionId })),
+            overdue: aid.overdue,
             options: aid.options.map((o) => ({
               id: o.option.id,
               containable: o.containable,
