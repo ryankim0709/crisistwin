@@ -12,6 +12,19 @@ export const COVER_CAPS = { trees: 18_000, bushes: 7_000, houses: 6_000 } as con
  * at a constant stylized size on the 600-unit board, loosely varied by canopy height.
  */
 const TREE_SCALE = 0.27;
+/** Cells with at least this canopy cover, or timber fuel classes, count as forest (closed canopy). */
+const FOREST_COVER = 0.4;
+/** Share of the tree cap the closed-canopy forest may use; the rest is for open ground. */
+const FOREST_CAP_SHARE = 0.75;
+const CLOSE_SKIP = new Set<FuelFamily>([
+  FuelFamily.Water,
+  FuelFamily.None,
+  FuelFamily.Urban,
+  FuelFamily.Barren,
+  FuelFamily.Snow,
+]);
+const isTimber = (f: FuelFamily) =>
+  f === FuelFamily.TimberUnderstory || f === FuelFamily.TimberLitter;
 const BUSH_RADIUS = 0.55;
 /** Base house footprint (world units) before neighbourhood spacing scales it up. */
 const HOUSE = { w: 1.25, d: 0.95, h: 0.75, rise: 0.48, spacingX: 2.3, spacingZ: 2.7 } as const;
@@ -33,7 +46,7 @@ const HOUSE_ROOFS = [0xc27a5a, 0x6f7b86, 0x8fa182] as const;
 const CLUMP_UNITS = 16;
 const REGIONAL = {
   treeScale: 1.5,
-  treeCapCut: 0.4,
+  treeCapCut: 0.15,
   bushScale: 1.2,
   bushCapCut: 0.6,
   houseSize: 1.0,
@@ -277,6 +290,7 @@ export class CoverLayer {
 
     // --- Trees and bushes: one candidate slot each per cell, thinned to the caps.
     const treeP = new Float32Array(n);
+    const forest = new Uint8Array(n);
     const bushP = new Float32Array(n);
     let treeSum = 0;
     let bushSum = 0;
@@ -285,6 +299,7 @@ export class CoverLayer {
       if (fam === FuelFamily.Water || fam === FuelFamily.None) continue;
       const cc = useCanopy ? cover[i] || 0 : FALLBACK_CANOPY[fam];
       let t = Math.min(1, cc) * (fam === FuelFamily.Urban ? 0.4 : 1);
+      if (isTimber(fam) || (cc >= FOREST_COVER && fam !== FuelFamily.Urban)) forest[i] = 1;
       if (blend > 0 && t > 0) {
         // Forest masses: modulate density by smooth noise so trees gather into soft clumps.
         const c = i % cols;
@@ -300,54 +315,100 @@ export class CoverLayer {
       bushP[i] = b;
       bushSum += b;
     }
+    // Close small holes: a vegetated cell mostly ringed by forest is forest too.
+    const closed = forest.slice();
+    for (let r = 1; r < rows - 1; r++) {
+      for (let c = 1; c < cols - 1; c++) {
+        const i = r * cols + c;
+        if (forest[i]) continue;
+        const fam = families[i] as FuelFamily;
+        if (CLOSE_SKIP.has(fam)) continue;
+        let k = 0;
+        for (let dr = -1; dr <= 1; dr++)
+          for (let dc = -1; dc <= 1; dc++) if ((dr || dc) && forest[i + dr * cols + dc]) k++;
+        if (k >= 6) closed[i] = 1;
+      }
+    }
+    forest.set(closed);
+    let forestCells = 0;
+    for (let i = 0; i < n; i++) if (forest[i]) forestCells++;
+    // Everything outside forest keeps the original sampling and thinning.
     const treeThin = Math.min(1, treeCap / Math.max(1, treeSum));
     const bushThin = Math.min(1, bushCap / Math.max(1, bushSum));
     const pines = newPlacement();
     const rounds = newPlacement();
     const bushes = newPlacement();
     const centre = { x: 0, z: 0 };
+    const addTree = (i: number, c: number, r: number, x: number, z: number) => {
+      const fam = families[i] as FuelFamily;
+      // Stands: conifer share varies smoothly by block so pines cluster.
+      const stand =
+        blend < 0.01
+          ? hash2(Math.floor(c / 11) * 3.1, Math.floor(r / 11) * 1.7)
+          : hash2(Math.floor(x / 24) * 3.1, Math.floor(z / 24) * 1.7);
+      const tall = useCanopy ? THREE.MathUtils.clamp((heightM[i] || 0) / 30, 0, 1.2) : 0.5;
+      const pine =
+        hash2(c * 2.3, r * 0.37) < PINE_SHARE[fam] * (0.5 + stand) + (tall > 0.8 ? 0.15 : 0);
+      const jitter = hash2(x, z);
+      const s =
+        TREE_SCALE *
+        (1 + (REGIONAL.treeScale - 1) * blend) *
+        (0.7 + 0.5 * Math.min(1, tall)) *
+        (0.85 + 0.3 * jitter);
+      const p = pine ? pines : rounds;
+      pushInstance(p, i, x, frame.heightAt(x, z) - 0.1, z, jitter * Math.PI * 2, s, s, s);
+      const greens = pine ? PALETTE.pineGreens : PALETTE.roundGreens;
+      pushColor(
+        p.colorsA,
+        greens[Math.floor(jitter * greens.length) % greens.length],
+        0.92 + hash2(z, x) * 0.16,
+      );
+      pushColor(p.colorsB, PALETTE.trunk, 1);
+    };
+    // Closed canopy: one jittered tree per spacing-sized block of forest, the spacing set by
+    // the tree's crown width, or wider when the forest budget needs it (even, never cut off).
+    const forestCap = Math.round(treeCap * FOREST_CAP_SHARE);
+    const crown = 5.8 * TREE_SCALE * (1 + (REGIONAL.treeScale - 1) * blend) * 0.95;
+    const spacing = Math.max(
+      crown * 0.75,
+      Math.sqrt((forestCells * cellWorld * cellWorld) / Math.max(1, forestCap)),
+    );
+    let nonForestTrees = 0;
+    for (let bz = -frame.halfD; bz < frame.halfD; bz += spacing) {
+      for (let bx = -frame.halfW; bx < frame.halfW; bx += spacing) {
+        const bi = Math.round(bx / spacing + 1000) * 7.31 + Math.round(bz / spacing + 1000) * 1.77;
+        const x = bx + hash2(bi, 0.37) * spacing;
+        const z = bz + hash2(0.91, bi) * spacing;
+        if (!frame.inside(x, z)) continue;
+        const at = frame.cellAt(x, z);
+        if (at < 0 || !forest[at]) continue;
+        if (streets?.onRoad(x, z)) continue;
+        addTree(at, at % cols, Math.floor(at / cols), x, z);
+      }
+    }
+    const forestTrees = pines.cells.length + rounds.cells.length;
+    const nonForestCap = Math.max(Math.round(treeCap * 0.2), treeCap - forestTrees);
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
         const i = r * cols + c;
-        tree: if (
+        if (
+          !forest[i] &&
           treeP[i] > 0 &&
-          pines.cells.length + rounds.cells.length < treeCap &&
+          nonForestTrees < nonForestCap &&
           hash2(c * 0.913, r * 1.171) < treeP[i] * treeThin
         ) {
-          const fam = families[i] as FuelFamily;
           frame.cellCentre(c, r, centre);
           const spread = cellWorld * 0.8 + blend * REGIONAL.treeSpread;
           const x = centre.x + (hash2(c, r * 1.3) - 0.5) * spread;
           const z = centre.z + (hash2(r * 0.7, c * 1.9) - 0.5) * spread;
-          if (blend > 0 && !frame.inside(x, z)) break tree;
+          if (blend > 0 && !frame.inside(x, z)) continue;
           if (blend > 0) {
             const at = frame.cellAt(x, z);
-            if (at < 0 || families[at] === FuelFamily.Water) break tree;
+            if (at < 0 || families[at] === FuelFamily.Water) continue;
           }
-          if (streets?.onRoad(x, z)) break tree;
-          // Stands: conifer share varies smoothly by block so pines cluster.
-          const stand =
-            blend < 0.01
-              ? hash2(Math.floor(c / 11) * 3.1, Math.floor(r / 11) * 1.7)
-              : hash2(Math.floor(x / 24) * 3.1, Math.floor(z / 24) * 1.7);
-          const tall = useCanopy ? THREE.MathUtils.clamp((heightM[i] || 0) / 30, 0, 1.2) : 0.5;
-          const pine =
-            hash2(c * 2.3, r * 0.37) < PINE_SHARE[fam] * (0.5 + stand) + (tall > 0.8 ? 0.15 : 0);
-          const jitter = hash2(x, z);
-          const s =
-            TREE_SCALE *
-            (1 + (REGIONAL.treeScale - 1) * blend) *
-            (0.7 + 0.5 * Math.min(1, tall)) *
-            (0.85 + 0.3 * jitter);
-          const p = pine ? pines : rounds;
-          pushInstance(p, i, x, frame.heightAt(x, z) - 0.1, z, jitter * Math.PI * 2, s, s, s);
-          const greens = pine ? PALETTE.pineGreens : PALETTE.roundGreens;
-          pushColor(
-            p.colorsA,
-            greens[Math.floor(jitter * greens.length) % greens.length],
-            0.92 + hash2(z, x) * 0.16,
-          );
-          pushColor(p.colorsB, PALETTE.trunk, 1);
+          if (streets?.onRoad(x, z)) continue;
+          addTree(i, c, r, x, z);
+          nonForestTrees++;
         }
         if (
           bushP[i] > 0 &&
