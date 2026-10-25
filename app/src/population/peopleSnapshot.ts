@@ -190,6 +190,7 @@ export function studioPeopleSnapshot(
     let longWait = 0;
     let held = 0;
     let longest = 0;
+    const loadingHeld = engine.loadingHeld(z);
     for (let h = zone.firstHome; h < zone.firstHome + zone.homes; h += 1) {
       const status = engine.homeStatus[h];
       if (status === HomeStatus.idle || status === HomeStatus.ordered) {
@@ -198,7 +199,7 @@ export function studioPeopleSnapshot(
         else counts.home += pph;
       } else if (status === HomeStatus.queued) {
         const wait = minute - Math.max(0, engine.queuedSince(h));
-        if (state.routeBlocked) held += pph;
+        if (loadingHeld) held += pph;
         else if (wait >= LONG_QUEUE_MINUTES) {
           longWait += pph;
           longest = Math.max(longest, wait);

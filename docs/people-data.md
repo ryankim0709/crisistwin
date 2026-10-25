@@ -221,8 +221,32 @@ The Studio's evacuation (`app/src/population/householdBehavior.ts`, on by defaul
 evacuations") draws two `grounded` values per synthetic home, seeded by the road area and home index:
 order compliance 0.875 (the rest stay home) and the departure delay lognormal (median 42.8 min, sigma
 1.246, cap 1,440 min) from the zone's order. The dispatch engine applies them
-(`DispatchEngine.setDepartureDelays`); without them it keeps its uniform 45 min spread. Shadow evacuation
-and wait-and-see are not drawn there yet. The values reach TypeScript through
+(`DispatchEngine.setHouseholdBehavior`); without them it keeps its uniform 45 min spread.
+
+Since 2026-10-25 the same draw also gives wait-and-see (0.13 of compliers: they leave only on a fire cue)
+and shadow evacuation (0.291 of all households, nested in the compliance draw, an assumption: they leave on
+the fire cue with no order), and the engine applies fire cues and a night wake-up:
+
+| Rule | Value | Source / label |
+| --- | --- | --- |
+| Neighbourhood cue: fire reaches the household's zone | cue delay drawn again from the same lognormal | Grajdura 2022 Table 3 p. 46 (saw fire as first source: +4.9 min, n.s.); zone as the cue's reach: assumption |
+| Near cue: fire within 500 m of the house; everyone not staying by choice leaves at once | 500 m, +0 min | assumption (TN 2103: flames and embers, not smoke, raised risk perception; no distance published); 0 min is the optimistic bound (McGee 2018: 11.7% left with no preparation) |
+| Asleep at the first trigger (23:00-06:00 Pacific, response/report.ts hours) | +18.5 min before acting | NIST TN 2174 Table 2 night offset, transferred from reporting a fire to responding (derived) |
+| Households staying by choice | 0.125, never leave | Wong 2020 Table 11; reported apart as "staying by choice" |
+
+"Caught" is split: staying by choice (fire reached a household that chose to stay), still home when the fire
+arrived (not by choice), and reached by fire after leaving home (at a loading point or on the road). These are
+model counts, not casualties. With the near cue at +0 min, "still home when the fire arrived" (not by choice) is
+close to zero by construction except at night; the households the fire catches are then counted after leaving
+home. Zones load through up to 4 road nodes (assumption), each household at the nearest. Fire reaching a
+zone's core marks it overrun but no longer counts everyone in it as caught.
+
+The Studio's trigger policy (`studio/evacuation.ts`) acts only on reported fires: a fire is known from its
+ignition plus the response/report.ts delay (`studio/fireKnowledge.ts`), and triggers and exit scoring use the
+arrival field restricted to cells first reached by a reported fire (its predicted spread from report time).
+Exits are scored by the route's time margin to that known fire, whether the known fire reaches the exit's
+shelter within the run, and bearing away from the nearest burning cell. /simulation and /dispatch use one
+household setting for the page. The values reach TypeScript through
 `app/src/population/behaviorParams.generated.ts`; regenerate it after editing `sim/behavior_params.json` with
 `python3 -m tools.gen_behavior_ts` (`--check` reports drift).
 

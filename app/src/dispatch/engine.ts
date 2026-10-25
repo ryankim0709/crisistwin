@@ -919,6 +919,16 @@ export class DispatchEngine {
     return this.stayingAtHome[zone];
   }
 
+  /**
+   * True when a zone's queued households cannot get onto any road: its ordered route is cut,
+   * or (no order, or overrun) none of its loading points has a route to any exit.
+   */
+  loadingHeld(zone: number): boolean {
+    const state = this.zones[zone];
+    if (state.status === "ordered") return state.routeBlocked || !state.route;
+    return !this.work[zone].groups.some((group) => group.route);
+  }
+
   /** Road node home `h` loads through (its zone's nearest loading point). */
   loadingNodeOf(home: number): number {
     const zone = this.area.homes[home].zone;
