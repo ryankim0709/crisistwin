@@ -248,3 +248,25 @@ export function weatherSeriesProblems(series: FireWeatherSeries): string[] {
 export function fahrenheitOfCelsius(celsius: number): number {
   return (celsius * 9) / 5 + 32;
 }
+
+/**
+ * The wind series with fuel moisture taken from a second series for the same window (the
+ * date's weather from `/api/conditions`, world/conditions.ts `weatherSeriesFromConditions`:
+ * dead 1-h from the Rothermel 1983 tables, 10-h/100-h derived, live from the phenology
+ * calendar). Each wind sample gets the moisture series read at its own minute
+ * (`weatherAtMinute`, linear in time). Wind, direction and timing are unchanged; a minute with
+ * no moisture keeps none (the scenario's moisture applies there), never an invented value.
+ */
+export function withMoistureFromSeries(
+  windSeries: FireWeatherSeries,
+  moistureSeries: FireWeatherSeries,
+): FireWeatherSeries {
+  if (!seriesActive(moistureSeries)) return windSeries;
+  return {
+    ...windSeries,
+    samples: windSeries.samples.map((sample) => {
+      const moisture = weatherAtMinute(moistureSeries, sample.minute).moisture;
+      return moisture ? { ...sample, moisture } : sample;
+    }),
+  };
+}
