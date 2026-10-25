@@ -39,6 +39,8 @@ export type WindSourceExport =
         from_deg: number;
         clamped_from_mph: number | null;
       };
+      /** "hourly_series": the solve followed the whole series (FireSettings.weatherSeries); "peak_hour": `applied` held all run. */
+      run_wind: "hourly_series" | "peak_hour";
       units: string;
       series: {
         t_utc: string;
@@ -50,7 +52,10 @@ export type WindSourceExport =
       raw_sha256: string | null;
     };
 
-function windSourceExport(weather: ScenarioWindRecord | undefined): WindSourceExport {
+function windSourceExport(
+  weather: ScenarioWindRecord | undefined,
+  usesSeries: boolean,
+): WindSourceExport {
   if (!weather) return { kind: "assumed", note: "Wind speed and direction typed in by the author." };
   return {
     kind: "scenario_weather",
@@ -84,6 +89,7 @@ function windSourceExport(weather: ScenarioWindRecord | undefined): WindSourceEx
       from_deg: weather.applied.fromDeg,
       clamped_from_mph: weather.applied.clampedFromMph,
     },
+    run_wind: usesSeries ? "hourly_series" : "peak_hour",
     units:
       "hourly UTC; speed_ms m/s as the station reported (10 m or RAWS 20 ft); speed_20ft_mph open 20 ft wind in mph; from_deg degrees true the wind blows FROM; gust_ms m/s",
     series: weather.series.map((s) => ({
@@ -278,7 +284,7 @@ export function buildRunExport(result: StudioRunResult, ignitionTime: Date): Stu
     assumptions: {
       wind_20ft_mph: settings.windSpeedMph,
       wind_from_deg: settings.windFromDegrees,
-      wind_source: windSourceExport(scenario.weather),
+      wind_source: windSourceExport(scenario.weather, scenario.settings.weatherSeries?.enabled === true),
       moisture: { ...settings.moisture },
       midflame_adjustment: settings.midflameAdjustment,
       horizon_min: settings.horizonMinutes,

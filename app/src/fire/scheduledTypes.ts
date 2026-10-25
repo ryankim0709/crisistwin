@@ -22,6 +22,8 @@ import type {
   StructureSpreadOptions,
 } from "./spread";
 import type { StochasticRunSummary } from "./stochastic";
+import type { WeatherSeriesSummary } from "./weatherSeries";
+import type { FireInducedWindSummary } from "./fireInducedWind";
 
 /** Everything a run needs besides where and when fire starts. */
 export type FireSettings = Omit<FireScenario, "origin">;
@@ -110,6 +112,10 @@ export interface ScheduledFireRun {
   midflameWind: MidflameWindSummary;
   /** Present only on a stochastic run; same meaning as `FireRun.stochastic`. */
   stochastic?: StochasticRunSummary;
+  /** Present only when the settings carried a weather series; same meaning as `FireRun.weatherSeries`. */
+  weatherSeries?: WeatherSeriesSummary;
+  /** Present only when fire-induced wind was on; same meaning as `FireRun.fireInducedWind`. */
+  fireInducedWind?: FireInducedWindSummary;
   /** True when fire reached the edge of the modelled area, so the footprint is clipped. */
   reachedEdge: boolean;
   /** Earliest minute fire reached the grid edge, or null. Frames at or after it are clipped. */

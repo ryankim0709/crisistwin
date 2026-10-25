@@ -152,7 +152,9 @@ export const TRANSVERSE_TO_LONGITUDINAL_TURBULENCE = 0.8;
  * They are larger than stationary turbulence implies, but no source here sizes them, and the
  * empirical length-to-breadth relations the solver uses (Anderson 1983; Alexander 1985) were
  * fitted to fires that already burned under naturally fluctuating wind. Hour-to-hour change
- * comes from the weather series (the /live board re-solves on every hourly sample).
+ * comes from the weather series: inside one solve with `FireScenario.weatherSeries`
+ * (weatherSeries.ts; the wander is then applied around each step's series wind), or by
+ * re-solving on every hourly sample (the /live board).
  */
 
 // ---------------------------------------------------------------------------------------
@@ -292,6 +294,8 @@ export const STREAM_SPOT_DISTANCE = 5;
 export const STREAM_SPOT_LATERAL = 6;
 export const STREAM_SPOT_IGNITION = 7;
 export const STREAM_ENSEMBLE = 8;
+/** Fire-induced wind direction offsets (fireInducedWind.ts), keyed on the igniting cell. */
+export const STREAM_PLUME_DIRECTION = 9;
 
 /** 32-bit integer finaliser ("lowbias32", C. Wellons 2018); a bijection on uint32. */
 function mix32(value: number): number {

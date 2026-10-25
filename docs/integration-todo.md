@@ -84,9 +84,15 @@ but not wired, unmarked = not started. Items are in dependency order within each
 - [ ] Drill roads carry no surface, track, width, weight or grade tags, so access rules R01-R12
       never block on Camp (every class can use every edge). Enrich the drill road graph with OSM
       tags (as `dispatch_area.py` does) and grade from terrain.
-- [ ] Time-varying wind in the Studio/`/fire` solver: it takes one wind per run, so "Historical"
-      uses the peak hour (a worst-hour run, not a replay). Weather humidity and temperature are not
-      yet fed into fuel moisture.
+- [x] Time-varying wind in the Studio/`/fire` solver: `FireScenario.weatherSeries` (hourly wind,
+      direction, moisture inside one solve; docs/fire-simulator.md "Time-varying weather"); `/fire`
+      and Studio run the whole scenario-weather series. Left: `/fire`'s series has no moisture
+      (`/api/weather/scenario` carries none; `weatherSeriesFromConditions` does, not yet wired to a
+      page); the /live board still re-solves hourly instead of passing a series.
+- [ ] Eaton 2025 check of the series (docs/fire-simulator.md "Validation"): the conditions API
+      picks Mount Wilson ASOS (1-8 mph during the windstorm) and assumes live moisture 230%/87%, so
+      runs burn 50-250 ha against ~5,500 ha. Needs a representative station choice (RAWS / canyon
+      stations) and observed live fuel moisture before the series can be judged on Eaton.
 - [ ] No LANDFIRE landscape covers Camp, so `/demo` uses SH5 everywhere; add a Camp region.
 - [ ] `/demo`: an "escaped fire handed off" rule for long 24/7 runs (under real winds most fires
       escape and the board fills its 25-fire cap); `app/src/demo/model.test.ts` and

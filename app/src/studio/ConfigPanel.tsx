@@ -9,7 +9,7 @@ import {
 } from "../fire/spread";
 import WindSourcePicker from "../fire/ui/WindSourcePicker";
 import NaturalVariationControl, { observedGustFactor } from "../fire/ui/NaturalVariationControl";
-import type { ScenarioWindRecord } from "../fire/scenarioWeather";
+import { weatherSeriesFromRecord, type ScenarioWindRecord } from "../fire/scenarioWeather";
 import type { FireSettings, IgnitionProblem } from "../fire/scheduledTypes";
 import { Button, EmptyState, Field, IconButton, Notice, Panel } from "../ui";
 import {
@@ -61,6 +61,13 @@ function isBusy(phase: RunPhase): boolean {
 function numberFrom(event: ChangeEvent<HTMLInputElement>): number | null {
   const value = event.target.valueAsNumber;
   return Number.isFinite(value) ? value : null;
+}
+
+/** The settings with no weather series (the wind becomes one constant value again). */
+function settingsWithoutSeries(settings: FireSettings): FireSettings {
+  const copy = { ...settings };
+  delete copy.weatherSeries;
+  return copy;
 }
 
 export default function ConfigPanel(props: ConfigPanelProps) {
@@ -123,28 +130,33 @@ export default function ConfigPanel(props: ConfigPanelProps) {
   );
 
   function setSettings(patch: Partial<FireSettings>) {
-    // Editing the wind by hand makes it an assumption again.
+    // Editing the wind by hand makes it an assumption again: one constant wind, no series.
     const editsWind = "windSpeedMph" in patch || "windFromDegrees" in patch;
     const { weather: _dropped, ...withoutWeather } = scenario;
+    const withoutSeries = settingsWithoutSeries(settings);
     onScenarioChange({
       ...(editsWind ? withoutWeather : scenario),
-      settings: { ...settings, ...patch },
+      settings: { ...(editsWind ? withoutSeries : settings), ...patch },
     });
   }
 
   const firstFire = ignitions.find((ignition) => ignition.enabled) ?? ignitions[0] ?? null;
   function applyWeather(record: ScenarioWindRecord | null) {
+    const withoutSeries = settingsWithoutSeries(settings);
     if (record === null) {
       const { weather: _dropped, ...withoutWeather } = scenario;
-      onScenarioChange(withoutWeather);
+      onScenarioChange({ ...withoutWeather, settings: withoutSeries });
       return;
     }
     const gust = observedGustFactor(record);
+    // The whole hourly series runs inside the solve; the wind fields hold its peak hour.
+    const converted = weatherSeriesFromRecord(record);
     onScenarioChange({
       ...scenario,
       weather: record,
       settings: {
-        ...settings,
+        ...withoutSeries,
+        ...(converted ? { weatherSeries: converted.series } : {}),
         ...(settings.stochastic ? { stochastic: { ...settings.stochastic, gustFactor: gust } } : {}),
         windSpeedMph: record.applied.speed20ftMph,
         windFromDegrees: record.applied.fromDeg,
@@ -413,7 +425,10 @@ export default function ConfigPanel(props: ConfigPanelProps) {
 
         <section className="studio-section" aria-labelledby={`${uid}-wx`}>
           <h3 id={`${uid}-wx`} className="studio-subtitle">
-            Conditions <span className="studio-subtitle-note">constant for the run</span>
+            Conditions{" "}
+            <span className="studio-subtitle-note">
+              {settings.weatherSeries?.enabled ? "wind hour by hour" : "constant for the run"}
+            </span>
           </h3>
 
           <WindSourcePicker
@@ -422,6 +437,7 @@ export default function ConfigPanel(props: ConfigPanelProps) {
             horizonHours={horizon / 60}
             record={scenario.weather ?? null}
             onApply={applyWeather}
+            usesSeries={settings.weatherSeries?.enabled === true}
           />
 
           <Field label="Wind speed, mph (20-ft)">
@@ -646,6 +662,23 @@ export default function ConfigPanel(props: ConfigPanelProps) {
                   }}
                 />
               </Field>
+            </div>
+
+            <div className="studio-field">
+              <label className="ui-check">
+                <input
+                  type="checkbox"
+                  checked={settings.fireInducedWind?.enabled === true}
+                  onChange={(event) =>
+                    setSettings({ fireInducedWind: { enabled: event.target.checked } })
+                  }
+                />
+                Fire-induced wind (simplified)
+              </label>
+              <p className="studio-hint">
+                Where Byram&rsquo;s convective number says the fire is plume-dominated, it draws
+                wind toward itself and spreads more erratically. Effect sizes are assumptions.
+              </p>
             </div>
           </details>
         </section>

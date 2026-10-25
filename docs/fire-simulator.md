@@ -50,9 +50,12 @@ _Wind source_ chooses where the wind comes from: **Assumed** (the slider and fie
 default), **Historical** (a UTC date and time), **Worst** (a month and P90, P95 or P99 offshore peak,
 a real observed episode picked statistically), or **Forecast** (NWS, from now). The last three call
 `GET /api/weather/scenario` ([scenario weather](scenario-weather.md)) for the ignition point and show
-the evidence class (Observed, Derived, Forecast), the station and its distance in km. The solver
-takes a single wind per run, so the series is reduced to its **peak hour in the 24 hour window** and
-that speed and direction drive the whole run; the panel says so. Station winds are converted to the
+the evidence class (Observed, Derived, Forecast), the station and its distance in km. By default the
+run follows the **whole hourly series** (_Wind over the run_: **Hour by hour**): speed and direction
+change inside the one solve, a strip under the playback bar draws the wind over the run and the
+current hour's wind, and the speed and direction controls show the series' peak hour. **Peak hour**
+holds that one wind for the whole run instead (a worst-hour run, not a replay). See
+[Time-varying weather](#time-varying-weather-inside-one-solve). Station winds are converted to the
 open 20 foot wind first (10 m stations x 0.87, RAWS unchanged, citation and limits in the scenario
 weather doc), and the midflame factor below is then applied to that 20 foot wind. Changing the speed
 or direction by hand goes back to Assumed. Simulation Studio has the same selector and records the
@@ -195,7 +198,8 @@ ground metres, converted once where the landscape is built.
 
 The surface physics models crown fire as well as surface spread. The only suppression is
 control line built by Simulation Studio ground crews and aircraft ([ADR 0020](adr/0020-studio-firefighting.md),
-[ADR 0048](adr/0048-suppression-engine.md)); the `/fire` page runs without it. Nothing in the model represents plume-dominated behaviour — including
+[ADR 0048](adr/0048-suppression-engine.md)); the `/fire` page runs without it. Plume-dominated behaviour is represented only by the opt-in,
+simplified [fire-induced wind](#fire-induced-wind-simplified-opt-in) (off by default) — including
 in cells that are now predicted to crown, which is why ember spotting stays on the surface
 fireline intensity with its 500 m ceiling even there, well short of the Camp Fire's
 measured 6.3 km maximum spot. The two interface mechanisms
@@ -207,8 +211,9 @@ combination can compound — structures carry fire into a subdivision, burning s
 throw embers into the next patch of brush — which is what the 2017 and 2018 California
 fires did, and is also the most likely place this model runs hot. LANDFIRE gives roads and
 houses the same code 91, so a freeway burns like a street of houses. Wind is uniform over
-the grid and constant in time, fuel moisture is uniform, and there is no diurnal weather
-change. LANDFIRE fuel is a 2025 mapped product, not an observation of today's vegetation.
+the grid; unless the run follows a weather series it is also constant in time, and fuel moisture
+is uniform over the grid (a series can vary it hour by hour, `/fire`'s scenario-weather series
+does not: that API has no moisture). LANDFIRE fuel is a 2025 mapped product, not an observation of today's vegetation.
 The locator map uses historical USGS aerial imagery, not live fire observation. A run that still stalls is fuel-limited: with both mechanisms off, or
 where the vegetated patch is bounded by water or bare rock, the fire stops where its fuel
 does, and the page says so rather than hiding it. Outputs are planning experiments, not
@@ -322,3 +327,171 @@ from. The results card shows the seed and spot fires started, labelled simulated
 (`burnProbability.worker.ts`, progress per member) and the per-cell fraction burned is drawn on
 the satellite map as "Chance this spot burns", labelled simulated. The 3D diorama does not draw
 it yet. The layer hides when the scenario changes after the run.
+
+## Time-varying weather inside one solve
+
+`FireScenario.weatherSeries` (so `FireSettings.weatherSeries` in Studio scenarios) gives the
+solver hourly or sub-hourly weather instead of one wind and one moisture
+(`app/src/fire/weatherSeries.ts`, pure):
+
+```ts
+interface FireWeatherSeries {
+  enabled: boolean;
+  samples: {
+    minute: number;            // simulation minute from T+0 (may be negative)
+    windSpeedMph: number;      // open 20 ft wind, mph
+    windFromDegrees: number;   // bearing the wind blows FROM, degrees true
+    moisture?: FuelMoisture;   // fractions of oven-dry weight; absent = scenario moisture
+    airTemperatureF?: number;  // firebrand ignition and Byram's convective number
+  }[];                         // strictly ascending minutes, at most 433 samples
+  source?: string;             // e.g. "historical_replay BUR"
+  evidence?: "observed" | "forecast" | "derived" | "assumed";
+}
+```
+
+How the solver uses it. It extends the stochastic wind wander's machinery rather than adding a
+second one: the run is read in the same 10-minute steps (`WIND_STEP_MINUTES`), and a cell spreads
+out at the weather of the step it ignites in (rate, heading, ellipse, crown state and ember reach
+recomputed), so fire that ignited before a wind shift keeps its old heading and fire that ignites
+after it takes the new one. A step reads the series at its start minute: speed and each moisture
+fraction linear in time, direction along the shorter arc of the compass (350 to 10 degrees passes
+north; an exact reversal turns clockwise), the first sample held before it and the last after it.
+With wind wander on, the wander's anomaly is applied around each step's series wind. With
+`enabled` absent or false every output is bit-for-bit unchanged; a one-sample series equal to the
+scenario's wind and moisture also reproduces the constant run exactly (both checked by
+fingerprinting arrival fields, cell behaviour and resumed solves before and after).
+
+Moisture of extinction. A fuel's rate is zero only while its dead fuel is above the moisture of
+extinction, and with a series that changes hour to hour. A cell counts as able to carry fire
+(steps may enter or cross it, embers may land in it) if its fuel can spread at the moisture of
+any step of the horizon. When fire reaches a cell at a step where its fuel cannot spread, the
+arrival is moved to the first later step where it can (ASSUMPTION: the fire holds at the edge,
+smouldering in heavier fuel, no burnout modelled), or dropped if no step in the horizon allows it.
+`run.weatherSeries.delayedArrivals` and `droppedArrivals` count these. Rothermel's damping reaches
+zero only to round-off (about 1e-16 ft/min at 25% dead moisture), so "cannot spread" is a no-wind
+rate at or below `EXTINCT_RATE_FEET_PER_MINUTE` = 1e-9 ft/min, a numerical threshold. Measured on
+a flat GR2 grid: wet (25% dead) from T+1 h to T+3 h held the front still (7.7 ha at both T+2 h and
+T+3 h) and it resumed at T+3 h 10 min; an all-dry run burned 51.9 ha by T+3 h.
+
+Building a series:
+
+- `weatherSeriesFromRecord(record)` (`fire/scenarioWeather.ts`): a `/api/weather/scenario` record
+  (wind only). T+0 is the query start. Hours with no speed are skipped; a calm hour without a
+  direction carries the previous one; speeds above 60 mph are capped like the applied peak.
+- `weatherSeriesFromConditions(conditions, t0Utc, {maxWindMph})` (`world/conditions.ts`): a
+  `/api/conditions` answer, with wind, all five moisture classes and air temperature per hour.
+  Hours `applyConditionsHour` refuses are skipped, never filled.
+
+Pages: `/fire` and Studio use the record's whole series whenever the wind source is Historical,
+Worst or Forecast (Studio always; `/fire` unless _Peak hour_ is chosen). Assumed stays one
+constant wind. The `/fire` playback dock shows the wind strip (`fire/ui/WindStrip.tsx`: speed
+line, direction arrows, a marker and "Wind now ... mph from ..." at the playback time) and the
+results details list the series used. The /live board still re-solves hourly with `ResumeFrom`
+(`app/src/demo/fireField.ts`); it could pass a series instead but does not yet.
+
+Cost: a series run recomputes every cell when it ignites (as wind wander does) and prepares one
+set of fuel beds per distinct moisture. Synthetic 241 x 201 grid, 6 h: 23 ms constant, 30 ms
+one-sample series. Eaton 807 x 807 (24.8 m cells), 24 h: 0.2 to 2.6 s per deterministic solve,
+up to 4.1 s with natural variation, growing with burned area.
+
+## Fire-induced wind (simplified, opt-in)
+
+`FireScenario.fireInducedWind = {enabled, seed?}` (`app/src/fire/fireInducedWind.ts`). Off by
+default; `/fire` has a "Fire-induced wind (simplified)" switch under spread mechanisms, Studio one
+under advanced model settings. With it off nothing changes (fingerprinted). Every output with it
+on is simulated.
+
+Published and used as published:
+
+- Byram's convective number, `N_c = 2 g I / (rho c_p T_0 (U - R)^3)`, Byram (1959, in Davis (ed.),
+  *Forest Fire: Control and Use*, pp. 90-123), derivation in Nelson (1993, *Int. J. Wildland Fire*
+  3(3):131-138, doi:10.1071/WF9930131), in the form of Hassan et al. (2026, *Fire Safety Journal*
+  162:104753, Eq. 1), with U "at a reference height (typically 10 m at field scale)". Here U is the
+  ambient 10 m open wind of the cell's step (20 ft wind x 1.15, Turner & Lawson 1978), R the cell's
+  head rate in m/s, I its fireline intensity, T_0 the step's air temperature (else the stochastic
+  default 86 F), rho from the ideal gas law at sea-level standard pressure (ASSUMPTION: at 1,000 m
+  the real density is about 11% lower, so N_c about 11% higher), c_p 1004 J/(kg K). Nelson (1993)
+  itself was not readable for this change; the form above is the 2026 paper's.
+- Byram's buoyant velocity `U_B = (2 g I / (rho c_p T_0))^(1/3)` (same paper, Eq. 2), so
+  `N_c = (U_B / (U - R))^3`; checked numerically to 3 decimals.
+- Regimes: N_c <= 2 wind-driven, N_c >= 10 plume-dominated, mixed between (Nelson 2015,
+  *Int. J. Wildland Fire* 24(7):1001-1007, after Pagni & Peterson 1973, as quoted by Hassan et al.
+  2026; Nelson 2015 not read directly).
+- Fireline intensity is Byram's I = H w R at the cell's final rate: the surface fire's heat per
+  unit area (I / R from Rothermel) plus, where it crowns, crown fraction burned x canopy bulk
+  density x crown depth x 18,608 kJ/kg (ASSUMPTIONS: canopy fuel spread evenly over the crown depth,
+  and the SB40 low heat content 8,000 Btu/lb for canopy fuel).
+
+Assumed (no source sets these; each is an exported constant with its reasoning):
+
+| Effect | What it does | Constant |
+| --- | --- | --- |
+| Plume weight phi | 0 at N_c <= 2, 1 at N_c >= 10, linear in ln N_c between | (shape assumed) |
+| Indraft | Adds a wind toward the fire's active centre (intensity-weighted centroid of the cells that ignited in the last 60 min, per fire) of phi x 0.2 x U_B, tapering linearly to 0 at 2 x the active area's equivalent radius (at least 3 cells). The cell then spreads with the summed wind through the ordinary Rothermel / crown / spotting code. | `INDRAFT_SPEED_FRACTION_OF_BUOYANT_VELOCITY` 0.2, `INDRAFT_RADIUS_FACTOR` 2, `INDRAFT_MIN_RADIUS_CELLS` 3, `PLUME_MEMORY_MINUTES` 60 |
+| Direction variability | Seeded offset phi x 30 deg x z (z standard normal, clamped to +/- 2) on the summed wind; stream `STREAM_PLUME_DIRECTION`, keyed on the cell; seed = option seed, else the stochastic seed, else 0 | `PLUME_DIRECTION_SIGMA_DEGREES` 30 |
+| Spotting | Stochastic firebrand launch probability x (1 + 2 phi); needs natural variation's spotting | `PLUME_SPOT_LAUNCH_MULTIPLIER` 3 |
+
+Bounds: the indraft is at most 0.2 U_B (about 1.6 m/s for a 10,000 kW/m front, 3 to 5 m/s at the
+most intense Eaton cells), zero beyond the reach and for wind-driven cells; the direction offset
+is at most 60 degrees; the launch probability at most 3x. Run summary: `run.fireInducedWind`
+(cells evaluated, mixed, plume-dominated, with indraft, largest finite N_c, largest indraft).
+Under a strong wind it does nothing: at 25 mph on the synthetic grid the largest N_c was 0.13; at
+3 mph it reached 6.2 and cut the 6 h area from 5.22 to 4.59 ha (the indraft opposes the head).
+
+## Validation: Eaton Fire, 7-8 January 2025
+
+Scratch run, not committed. Ignition 18:18 PST 7 Jan 2025 (02:18Z 8 Jan), CAL FIRE incident page
+(`[34.203483, -118.069155]`, "Near Altadena Drive and Midwick Drive"); that point is at 1,210 m in
+TL6 broadleaf litter under 65% canopy, which looks high for the street address, so the task's
+approximate point (-118.084, 34.204; SH2, 882 m) was run as well. Landscape: `loadLandscape`
+(upstream LANDFIRE LF2025, terrain tiles), centre (-118.10, 34.215), 10 km radius, 807 x 807 cells
+of 24.8 m. Weather: `/api/conditions` `historical_replay` from 2025-01-08T02:00Z, 25 hours, through
+`weatherSeriesFromConditions`; T+0 at ignition. Observed areas (Wikipedia, from incident updates):
+>1,000 ac (405 ha) by 00:07 PST, 2,227 ac (901 ha) by 06:30, >10,600 ac (4,290 ha) by 10:36 on
+8 January; final 14,021 ac (5,674 ha, CAL FIRE). Direction (LA County after-action review): spread
+east first; around 03:00 on 8 January the wind strengthened and changed direction and the fire ran
+west; the front crossed Lake Avenue (about -118.131) into west Altadena after 05:00.
+
+Findings, honestly:
+
+1. The API's automatic station is unusable for this fire. For the ignition point it picks Mount
+   Wilson ASOS (MWS, 3.3 km away, on the summit): 1 to 8 mph all day, 0 to 7 C. Burbank (BUR,
+   22 km west, valley floor) recorded 25 to 35 mph 20 ft winds from 10 to 30 degrees in the first
+   hours, gusts to 71 mph, then lulls and north-westerly hours (330 to 350) around 01:00 to 03:00
+   PST and north-easterly again from 05:00. Neither is Eaton Canyon; the runs below that use BUR
+   are a station substitution.
+2. The assumed live fuel moisture dominates. `/api/conditions` gives live herb 230% and live woody
+   87% (its phenology calendar, an assumption). With those, every run burned 50 to 250 ha in 24 h
+   against roughly 5,500 ha observed, with constant or time-varying wind, from either station.
+   With live herb and woody set to 60% (a drought sensitivity value, not data) areas reach the
+   observed order.
+3. Constant peak hour vs hour by hour (BUR, live 60%, task point):
+
+   | Run | 00:07 | 06:30 | 10:36 | +24 h | Growth bearing T+0-8.7 h / 8.7-16.3 h / 16.3-24 h | West edge at Lake Ave |
+   | --- | --- | --- | --- | --- | --- | --- |
+   | Observed | 405 | 901 | 4,290 | ~5,500 | east, then west after 03:00 | after 05:00 PST |
+   | Constant peak (35 mph from 20) | 489 | 2,820 | 5,017 | 8,311 | 189 / 201 / 324 deg | 11:08 PST |
+   | Hour by hour | 211 | 1,693 | 3,346 | 11,984 (edge) | 109 / 38 / 289 deg | 13:48 PST |
+   | Hour by hour + fire-induced | 209 | 1,929 | 3,825 | 13,261 (edge) | 111 / 38 / 258 deg | 13:48 PST |
+   | Hour by hour + variation, 3 seeds | 169 to 2,672 at 06:30; 321 to 4,827 at 10:36; 2,400 to 14,727 at +24 h | | | | | 13:48 PST for two seeds, never for one |
+
+   Hour by hour does change the shape the way the wind does: the series run grows east-south-east
+   first (the north-westerly hours push it there), then north-east upslope in the lulls, then west
+   (289 degrees) once north-easterlies return, where the constant run heads south-south-west all
+   day. But the westward run comes about 8 to 9 hours later than observed (Lake Avenue at 13:48
+   against after 05:00), and its early direction comes from Burbank's north-westerly hours, which
+   are not the Eaton Canyon winds; the after-action review gives no compass directions to check
+   against. Area: the series run is within a factor of two of the observed area at 00:07, 06:30
+   and 10:36 (0.52x, 1.88x, 0.78x), but overshoots by +24 h (the board edge at 10 km truncates it). At the CAL FIRE point (TL6 under
+   canopy) the same settings give 9, 71, 214 and 1,092 ha (hour by hour) and 18, 1,209, 2,559 and
+   5,249 ha (constant peak).
+4. Fire-induced wind under these winds: under the constant 35 mph peak every cell was wind-driven
+   (largest N_c 1.9); in the series' lulls N_c reached 160, about 54,000 of 215,000 evaluated cells
+   were mixed or plume-dominated, and indrafts reached 3 to 5 m/s. Its area effect was -1% to +14%
+   in deterministic runs, and it changes which embers launch in stochastic runs.
+
+What we trust: the solver does what it is told with a time-varying wind (the fire turns with it),
+and a single held peak hour cannot represent a shift at all. What we do not trust: any single run
+as a reconstruction of Eaton. The local wind field (canyon and downslope winds, gusts of 60 to
+100 mph reported in the area) is not in any station the API offers, and the live fuel moisture is
+an assumption. No constant was changed to close the gap.

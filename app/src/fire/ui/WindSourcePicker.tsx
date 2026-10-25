@@ -52,8 +52,9 @@ function modeFromRecord(record: ScenarioWindRecord | null): WindSourceMode {
 
 /**
  * Wind source selector shared by /fire and the Studio. "Assumed" leaves the user's own wind
- * alone; the other three fetch hourly weather for the ignition point and hand back a record
- * whose peak hour the page applies (the solver takes one wind per run).
+ * alone; the other three fetch hourly weather for the ignition point and hand back a record:
+ * the page shows its peak hour on the wind controls and, unless the user holds the peak hour,
+ * runs the whole hourly series (`weatherSeriesFromRecord`).
  */
 export default function WindSourcePicker({
   lon,
@@ -61,6 +62,7 @@ export default function WindSourcePicker({
   horizonHours,
   record,
   onApply,
+  usesSeries = false,
 }: {
   /** Ignition point, WGS84. Null until one is placed. */
   lon: number | null;
@@ -70,6 +72,8 @@ export default function WindSourcePicker({
   /** The weather behind the current wind, or null when it is the user's assumption. */
   record: ScenarioWindRecord | null;
   onApply: (record: ScenarioWindRecord | null) => void;
+  /** True when the run follows the whole hourly series rather than the peak hour. */
+  usesSeries?: boolean;
 }) {
   const uid = useId();
   const [mode, setMode] = useState<WindSourceMode>(() => modeFromRecord(record));
@@ -215,8 +219,10 @@ export default function WindSourcePicker({
           <details className="fr-wp-details">
             <summary>How this wind is used</summary>
             <p className="fr-wp-note">
-              The solver takes one wind per run, so the peak hour of the {record.query.hours} h
-              window is used; all {record.series.length} hourly values are recorded. Height:{" "}
+              {usesSeries
+                ? `The run follows all ${record.series.length} hourly values of the ${record.query.hours} h window: a cell spreads with the wind of the 10-minute step it ignites in (direction interpolated around the compass). The wind controls show the peak hour.`
+                : `The peak hour of the ${record.query.hours} h window is held for the whole run; all ${record.series.length} hourly values are recorded.`}{" "}
+              Height:{" "}
               {record.heightConversion.fromHeight} to open 20 ft, {record.heightConversion.method}.
               The midflame factor then cuts the 20 ft wind to flame height (default 0.5, or per
               cell from canopy). Fuel moisture stays as set.
