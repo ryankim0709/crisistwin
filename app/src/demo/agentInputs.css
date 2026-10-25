@@ -231,14 +231,8 @@
   font-weight: var(--ct-weight-semibold);
   white-space: nowrap;
 }
-.ais-delta--up {
-  border-color: var(--ct-warning-border);
-  color: var(--ct-warning);
-}
-.ais-delta--down {
-  border-color: var(--ct-success-border);
-  color: var(--ct-success);
-}
+/* Up and down carry no good/bad tone: whether more is worse depends on the figure, so the arrow
+   and the "was ..." words say what moved and the colour stays neutral. */
 
 /* Resources table. */
 .ais-table {

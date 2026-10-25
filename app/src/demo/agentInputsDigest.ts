@@ -56,6 +56,8 @@ export interface ResourceRow {
 export interface CommsRow {
   key: string;
   minute: number;
+  /** When it was heard: board clock ("T+01:12") for simulated comms, "N min before this call" for the live picture (drill time). */
+  timeLabel: string;
   /** "simulated comms" items carry their channel; incident_picture.messages are civilian reports. */
   channel: CommsChannel;
   /** "911 call", "Civilian report", "Fire radio", "Police radio", "EMS radio". Shown with the glyph, never colour alone. */
@@ -178,17 +180,24 @@ export function matchDecisions(inputs: readonly AgentInputSnapshot[], decisions:
   const out = new Map<string, AgentDecision>();
   const claimed = new Set<AgentDecision>();
   const oldestFirst = [...decisions].reverse();
+  const oldInputsFirst = [...inputs].reverse();
   const sameReasons = (d: AgentDecision, i: AgentInputSnapshot) =>
     d.wokeBecause.length === i.reasons.length && d.wokeBecause.every((r, k) => r === i.reasons[k]);
-  for (const input of [...inputs].reverse()) {
-    const free = oldestFirst.filter((d) => !claimed.has(d));
-    const hit =
-      free.find((d) => (d as { inputId?: string }).inputId === input.id) ??
-      free.find((d) => d.minute === input.minute && sameReasons(d, input)) ??
-      free.find((d) => d.minute === input.minute);
-    if (hit) {
-      claimed.add(hit);
-      out.set(input.id, hit);
+  // Passes from the surest match to the loosest, each over every unmatched call, so a loose match
+  // never takes a decision that a surer match (an explicit id, the same reasons) would have.
+  const passes: ((d: AgentDecision, i: AgentInputSnapshot) => boolean)[] = [
+    (d, i) => (d as { inputId?: string }).inputId === i.id,
+    (d, i) => d.minute === i.minute && sameReasons(d, i),
+    (d, i) => d.minute === i.minute && (d as { inputId?: string }).inputId === undefined,
+  ];
+  for (const matches of passes) {
+    for (const input of oldInputsFirst) {
+      if (out.has(input.id)) continue;
+      const hit = oldestFirst.find((d) => !claimed.has(d) && matches(d, input));
+      if (hit) {
+        claimed.add(hit);
+        out.set(input.id, hit);
+      }
     }
   }
   return out;
@@ -252,7 +261,7 @@ function fireRows(obs: DemoObservation, prev: DemoObservation | null): DigestRow
         ? null
         : f.contained_in_min !== null
           ? `forecast contained in ${min(f.contained_in_min)} with the units assigned`
-          : "not containable with the units assigned",
+          : "not forecast to be contained within the forecast window with the units assigned",
       reach.length ? `forecast to reach ${reach.join(", ")}` : "no zone forecast to be reached",
       f.strategy ? `strategy: ${f.strategy.name}` : `${plural(f.strategy_options.length, "strategy option")} offered, none chosen`,
     ];
@@ -277,7 +286,7 @@ function orderWords(z: DemoObservation["zones"][number]): { text: string; tag: D
     case "leaving":
       return { text: `leaving since ${o.start_minute !== null ? simClock(o.start_minute) : "the order"}`, tag: { text: "Leaving", tone: "info" } };
     case "done":
-      return { text: "everyone it sends out has arrived", tag: { text: "Evacuated", tone: "success" } };
+      return { text: "everyone the order sends out has arrived (households without a car or that did not comply may still be home)", tag: { text: "Order complete", tone: "success" } };
     case "overrun":
       return { text: "the fire has overrun the zone", tag: { text: "Overrun", tone: "danger" } };
     default:
@@ -293,22 +302,30 @@ function zoneRows(obs: DemoObservation, prev: DemoObservation | null): DigestRow
     const destName = dest ? (z.options.find((o) => o.destination_id === dest)?.name ?? dest) : null;
     const home = z.people_home !== null ? `${nf(z.people_home)} people home (${plural(z.households_home, "household")})` : `${plural(z.households_home, "household")} home, people unknown`;
     const eta =
-      z.fire_core_eta_min !== null
-        ? `fire reaches the core in ${min(z.fire_core_eta_min)}`
-        : z.fire_eta_min !== null
-          ? `fire reaches the edge in ${min(z.fire_eta_min)}`
-          : "no fire arrival forecast";
+      z.fire_eta_min !== null || z.fire_core_eta_min !== null
+        ? `fire forecast to reach the edge ${z.fire_eta_min !== null ? `in ${min(z.fire_eta_min)}` : "(no edge time)"} and the core ${
+            z.fire_core_eta_min !== null ? `in ${min(z.fire_core_eta_min)}` : "(no core time)"
+          }`
+        : "no fire arrival forecast";
+    // order_slack_min = core ETA minus the mean departure delay: it leaves out the drive and queue time.
     const slack =
       z.order_slack_min === null
         ? null
         : z.order_slack_min >= 0
-          ? `${min(z.order_slack_min)} to spare if ordered now`
-          : `short by ${min(-z.order_slack_min)} even if ordered now`;
+          ? `${min(z.order_slack_min)} between the average household leaving and the fire reaching the core (drive not counted)`
+          : `the fire reaches the core ${min(-z.order_slack_min)} before the average household would even leave`;
+    const margin =
+      z.margin_min == null
+        ? null
+        : z.margin_min >= 0
+          ? `traffic margin ${min(z.margin_min)} (drive and queue counted, as if ordered now)`
+          : `${min(-z.margin_min)} short once the drive and queue are counted (as if ordered now)`;
     const parts = [
       home,
       eta,
       slack,
-      order.text + (destName && z.order.status !== "none" ? ` to ${destName}` : ""),
+      margin,
+      order.text + (destName && (z.order.status === "scheduled" || z.order.status === "leaving") ? ` to ${destName}` : ""),
       z.households_no_vehicle_home > 0 ? `${plural(z.households_no_vehicle_home, "household")} without a car still home` : null,
       z.households_en_route > 0 ? `${plural(z.households_en_route, "household")} on the road` : null,
     ];
@@ -317,9 +334,13 @@ function zoneRows(obs: DemoObservation, prev: DemoObservation | null): DigestRow
       if (!before) delta = { kind: "new", text: "newly listed" };
       else if (before.order.status !== z.order.status) delta = { kind: "changed", text: `order was: ${orderWords(before).tag?.text.toLowerCase() ?? before.order.status}` };
       else {
-        const was = before.fire_core_eta_min ?? before.fire_eta_min;
-        const now = z.fire_core_eta_min ?? z.fire_eta_min;
-        if (was !== null && now !== null && Math.abs(now - was) >= 2) delta = { kind: now < was ? "down" : "up", text: `fire arrival was ${min(was)}` };
+        // Core with core, else edge with edge: never one against the other.
+        const useCore = before.fire_core_eta_min !== null && z.fire_core_eta_min !== null;
+        const was = useCore ? before.fire_core_eta_min : before.fire_eta_min;
+        const now = useCore ? z.fire_core_eta_min : z.fire_eta_min;
+        if (was !== null && now !== null && Math.abs(now - was) >= 2) {
+          delta = { kind: now < was ? "down" : "up", text: `fire ${useCore ? "core" : "edge"} arrival was ${min(was)}` };
+        }
       }
     }
     return {
@@ -350,7 +371,7 @@ function trafficSection(obs: DemoObservation, prev: DemoObservation | null): Inp
       worst.push({
         key: `${z.id}-${o.destination_id}`,
         title: `${z.name} to ${o.name}`,
-        detail: `drive ${min(o.free_flow_min)} empty roads, ${min(o.congested_eta_min)} with today's traffic${
+        detail: `drive ${min(o.free_flow_min)} empty roads, ${min(o.congested_eta_min)} with current traffic plus this zone's own departure flow (as if ordered now)${
           o.bottleneck ? `; bottleneck ${o.bottleneck.name} (${nf(o.bottleneck.capacity_veh_h)} vehicles/h)` : ""
         }.`,
         tag: { text: "Slow route", tone: "warning" },
@@ -358,7 +379,10 @@ function trafficSection(obs: DemoObservation, prev: DemoObservation | null): Inp
       });
     }
   }
-  worst.sort((a, b) => a.key.localeCompare(b.key));
+  // Worst first: the most minutes lost to congestion.
+  const lost = new Map<string, number>();
+  for (const z of obs.zones) for (const o of z.options) lost.set(`${z.id}-${o.destination_id}`, o.congested_eta_min - o.free_flow_min);
+  worst.sort((a, b) => (lost.get(b.key) ?? 0) - (lost.get(a.key) ?? 0) || a.key.localeCompare(b.key));
   const closedRoads = (obs.closed_roads ?? []).map((c) => ({
     key: c.segment_id,
     title: c.name || c.segment_id,
@@ -471,6 +495,7 @@ function commsRows(obs: DemoObservation, prev: DemoObservation | null): CommsRow
     rows.push({
       key,
       minute: m.minute,
+      timeLabel: simClock(m.minute),
       channel: m.channel,
       channelLabel: CHANNEL_LABEL[m.channel],
       glyph: CHANNEL_GLYPH[m.channel],
@@ -484,16 +509,16 @@ function commsRows(obs: DemoObservation, prev: DemoObservation | null): CommsRow
   const now = obs.clock.minute;
   for (const m of obs.incident_picture?.messages ?? []) {
     const key = `pic-${m.id}`;
-    const confirmed = m.status === "confirmed" || m.status === "responder_confirmed";
     rows.push({
       key,
       minute: m.min_ago !== null ? Math.max(0, now - m.min_ago) : now,
+      timeLabel: m.min_ago !== null ? `${m.min_ago} min before this call` : "time not given",
       channel: "civilian_report",
       channelLabel: CHANNEL_LABEL.civilian_report,
       glyph: CHANNEL_GLYPH.civilian_report,
       from: m.kind.replace(/_/g, " "),
       text: m.line,
-      severity: confirmed && /trapped|injur|help|block/.test(m.kind) ? "urgent" : "info",
+      severity: "info",
       origin: PICTURE_ORIGIN[m.source] ?? m.source,
       isNew: prev !== null && !prevKeys.has(key),
     });
@@ -503,6 +528,7 @@ function commsRows(obs: DemoObservation, prev: DemoObservation | null): CommsRow
     rows.push({
       key: "pic-911-window",
       minute: now,
+      timeLabel: `last ${calls.window_min ?? "few"} min`,
       channel: "911",
       channelLabel: CHANNEL_LABEL["911"],
       glyph: CHANNEL_GLYPH["911"],
@@ -536,7 +562,7 @@ function injuryRows(obs: DemoObservation, prev: DemoObservation | null): DigestR
     });
   }
   for (const h of obs.incident_picture?.help_requests.items ?? []) {
-    const real = h.source === "real_phone";
+    const real = h.source === "real_phone" || h.source === "phone";
     rows.push({
       key: h.id,
       title: h.type === "checkin" ? "Phone check-in asking for help" : "Report asking for help",
@@ -632,13 +658,13 @@ function changeBullets(snapshot: AgentInputSnapshot, previous: AgentInputSnapsho
     out.push(`Wind changed from ${compass(pw.from_deg)} ${Math.round(pw.speed_m_s * MPH_PER_M_S)} mph to ${compass(w.from_deg)} ${Math.round(w.speed_m_s * MPH_PER_M_S)} mph.`);
   }
   const avail = (o: DemoObservation) => o.crews.filter((c) => c.status === "available").length;
-  const enRoute = (o: DemoObservation) => o.crews.filter((c) => c.status === "en_route").length;
+  const enRoute = (o: DemoObservation) => o.crews.filter((c) => c.status === "en_route" || c.status === "moving_up").length;
   if (avail(obs) !== avail(prev)) out.push(`${nf(Math.abs(avail(obs) - avail(prev)))} ${avail(obs) > avail(prev) ? "more" : "fewer"} units available (${avail(obs)} now).`);
   if (enRoute(obs) !== enRoute(prev)) out.push(`${nf(Math.abs(enRoute(obs) - enRoute(prev)))} ${enRoute(obs) > enRoute(prev) ? "more" : "fewer"} units en route (${enRoute(obs)} now).`);
   const newComms = d.comms.filter((c) => c.isNew).length;
   if (newComms > 0) out.push(`${plural(newComms, "new call or radio message")}.`);
   const newInjuries = d.injuries.filter((r) => r.delta?.kind === "new").length;
-  if (newInjuries > 0) out.push(`${plural(newInjuries, "new person")} waiting for help.`);
+  if (newInjuries > 0) out.push(`${plural(newInjuries, "new injury or help report")} waiting.`);
   const closedNow = (obs.closed_roads ?? []).length;
   if (closedNow !== (prev.closed_roads ?? []).length) out.push(`${plural(closedNow, "road")} closed now.`);
   return out.slice(0, 8);

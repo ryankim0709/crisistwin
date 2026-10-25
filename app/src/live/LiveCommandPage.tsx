@@ -720,7 +720,7 @@ export default function LiveCommandPage() {
               </section>
             ) : null}
             <Outcomes board={board} version={cb.version} forecasts={cb.forecasts} />
-            <AgentInputsPanel agent={cb.agent} board={board} />
+            <AgentInputsPanel agent={cb.agent} board={board} showSpend={false} />
           </div>
           <section className="lc-sim" aria-labelledby="lc-sim-title">
             <header className="lc-sim-head">
