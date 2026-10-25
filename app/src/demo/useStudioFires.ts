@@ -18,6 +18,7 @@ import { useCallback } from "react";
 import { LiveError, request } from "../live/api";
 import { usePoll, type PollState } from "../live/usePoll";
 import type { StudioFire, StudioFiresResponse } from "./contracts";
+import { parseFireSettings } from "../studio/scenario";
 
 export const STUDIO_POLL_MS = 5_000;
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
@@ -43,6 +44,13 @@ function parseFire(raw: unknown): StudioFire | null {
     return [{ id: g.id, name: isStr(g.name) ? g.name : g.id, lon: g.lon, lat: g.lat, start_minute: g.start_minute, report_minute: report }];
   });
   if (ignitions.length === 0) return null;
+  const settings = f.fire_settings == null ? null : parseFireSettings(f.fire_settings);
+  // A malformed new contract must not silently run a different fire with fallback settings.
+  if (f.fire_settings != null && settings === null) throw new LiveError(200, "bad_response", "The Studio fire feed returned invalid fire settings. Run the scenario again in Simulation Studio.");
+  const box = f.landscape_box as Record<string, unknown> | null | undefined;
+  if (box != null && !(isNum(box.minX) && isNum(box.minY) && isNum(box.maxX) && isNum(box.maxY) && box.minX < box.maxX && box.minY < box.maxY)) {
+    throw new LiveError(200, "bad_response", "The Studio fire feed returned an invalid landscape box. Run the scenario again in Simulation Studio.");
+  }
   return {
     fire_id: f.fire_id,
     published_at: f.published_at,
@@ -69,6 +77,8 @@ function parseFire(raw: unknown): StudioFire | null {
       },
     },
     horizon_minutes: isNum(f.horizon_minutes) ? f.horizon_minutes : 0,
+    fire_settings: settings,
+    landscape_box: box ? { minX: box.minX as number, minY: box.minY as number, maxX: box.maxX as number, maxY: box.maxY as number } : null,
     outside_drill: Array.isArray(f.outside_drill) ? f.outside_drill.filter(isStr) : [],
     weather_series: parseSeries(f.weather_series),
   };

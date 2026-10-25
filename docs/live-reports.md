@@ -2002,6 +2002,19 @@ fires. Everything is simulated (`evidence_class: "simulated"`). Code: `api/live/
   "moisture": { "preset": "dry", "label": "Dry fuels",
     "values": { "dead1h": 0.03, "dead10h": 0.04, "dead100h": 0.05, "liveHerb": 0.3, "liveWoody": 0.6 } },
   "horizon_minutes": 360,
+  "landscape_box": null,
+  "fire_settings": {
+    "windSpeedMph": 25, "windFromDegrees": 45, "midflameAdjustment": 0.5,
+    "moisture": { "dead1h": 0.03, "dead10h": 0.04, "dead100h": 0.05, "liveHerb": 0.3, "liveWoody": 0.6 },
+    "stepMinutes": 15, "horizonMinutes": 360,
+    "spotting": { "enabled": true, "maxDistanceMeters": 500 },
+    "structureSpread": { "enabled": true, "rateMetersPerMinute": 4 },
+    "stochastic": { "enabled": true, "seed": 1234, "rosSigma": 0.3, "windWander": false },
+    "fireInducedWind": { "enabled": false },
+    "weatherSeries": { "enabled": true, "source": "historical_replay ONOC1", "evidence": "observed",
+      "samples": [{ "minute": 0, "windSpeedMph": 8, "windFromDegrees": 22, "airTemperatureF": 75 },
+                  { "minute": 60, "windSpeedMph": 11, "windFromDegrees": 30, "airTemperatureF": 78 }] }
+  },
   "weather_series": { "source": "historical_replay ONOC1", "evidence": "observed",
     "samples": [{ "minute": 0, "wind_speed_mph": 8, "wind_from_deg": 22, "moisture": null },
                 { "minute": 60, "wind_speed_mph": 11, "wind_from_deg": 30, "moisture": null }] } }
@@ -2009,12 +2022,13 @@ fires. Everything is simulated (`evidence_class: "simulated"`). Code: `api/live/
 
 Limits: 1 to 5 ignitions with unique ids, finite WGS84 `lon`/`lat`, integer `start_minute` 0 to
 `horizon_minutes`, optional `report_minute` (the minute on the same Studio clock the fire is
-reported to dispatch, set by the Studio user: an integer from `start_minute` to 1440, or `null`
-/ absent when not set, so Live models its own report delay), horizon 1 to 1440, wind speed 0 to 60 mph, `from_deg` 0 to 360, moisture values
+reported to dispatch, set by the Studio user: an integer from `start_minute` to 10080, or `null`
+/ absent when not set, so Live models its own report delay), horizon 1 to 10080 (seven days), wind
+summary speed 0 to 120 mph (constant native settings remain 0 to 60 mph), `from_deg` 0 to 360, moisture values
 finite 0.01 to 3, strings capped (`name` 80). `weather_series` is optional (`null` / absent: the
 run had one constant wind): 1 to 433 samples in strictly ascending `minute` (Studio clock, -4320 to
 4320, may be fractional), wind 0 to 120 mph, `from_deg` 0 to 360, `moisture` `null` (the publish's
-`moisture` applies) or the five values as above. Errors are `400 {error: "invalid_studio_fire", detail}`.
+`moisture` applies) or the five fractions from 0 to 4. Errors are `400 {error: "invalid_studio_fire", detail}`.
 The fire is stamped with the active incident; `outside_drill` lists ignition ids more than 3 km
 outside the bounding box of the drill's zones. Stored in `live_studio_fires`. Answers `201`:
 
@@ -2040,16 +2054,53 @@ scenario in Studio, or a new shared-world seed, does not touch the Live board: o
 
 `GET /api/live/incidents/{id}/studio-fires[?after=<ISO Z>]` (any live role) answers
 `{fires: [{fire_id, published_at, incident_id, name, scenario_id, region_id, ignitions, wind,
-moisture, horizon_minutes, outside_drill}], evidence_class: "simulated"}`, newest first, at most 10.
+moisture, horizon_minutes, fire_settings, landscape_box, weather_series, outside_drill}], evidence_class: "simulated"}`, newest first, at most 10.
 Every ignition carries `report_minute` (`null` when not set, including fires stored before the
 field existed).
 
+`fire_settings` is the authoritative native `FireSettings` from the completed Studio run,
+copied before publishing and validated on both sides of the API. The API stores and returns it,
+including the natural-variation toggle, seed and all overrides (`rosSigma`, `rosCorrelationMeters`,
+`spotting`, `windWander`, `gustFactor`, `airTemperatureF`), midflame adjustment, spotting distance,
+structure-spread toggle/rate, fire-induced-wind toggle/seed and the complete native weather series.
+Native series samples retain their temperature (degrees F), moisture fractions (0 to 4), and all
+sample minutes, including those outside the older `weather_series` transport's +/-72 h window.
+Its horizon is a whole minute from 60 to 10080 and must equal `horizon_minutes`; all numbers must
+be finite. Optional mechanisms stay absent when omitted so the shared solver applies its own
+defaults. Absent/disabled stochastic spread stays deterministic. The values in the example above
+illustrate the request shape; they are not additional model defaults.
+
+Live passes these settings directly to `simulateScheduledFireSpread` with every ignition in the
+published order (including future starts), the original horizon, and no resumed approximation
+before an intervention. Native runs no longer re-solve and resume at each weather change: the
+solver reads the full series itself, as Studio does. Solver times are relative to Studio T+0,
+then returned as board minutes, so seeded wind steps use the same clock. Before firefighting,
+the fire's arrival field and 3D flame display use Studio's calculation and display window. The
+response model has its own seed; restarting or resetting the board never changes the shared
+world's fire seed. After firefighting/manual closure, or when Live continues past the original
+Studio horizon, the board preserves burned history with `app/src/fire/spread.ts` `ResumeFrom`;
+those interventions/continued forecasts can differ from Studio's original unchecked run.
+
+The published `region_id` fixes Live's landscape and resolution; its size control is read-only
+and directs changes back to Studio. When Studio actually solved on a downloaded box instead of
+its selected region board, `landscape_box` carries that run's `{minX, minY, maxX, maxY}` in
+EPSG:3857 metres, with positive width/height and coordinates within the Web Mercator world.
+Live loads it with the same `loadLandscapeForBoxCached` loader and cache key as Studio. A region
+board run sends `null`; older publishes may omit it. Native ignitions on this landscape are
+retained even outside the drill zones, so zone coverage does not silently change the fire input.
+
+Older stored fires return `fire_settings: null`. Live labels these as legacy publishes, uses
+their known weather with the shared solver defaults and natural variation off, and asks for a
+Studio rerun to recover exact settings. Invalid non-null settings fail explicitly rather than
+silently substituting defaults.
+
 `wind` is the run's constant wind (mph, bearing FROM, degrees true), or, for a run on an hourly
 series with no weather record (a random scenario), the series' peak hour within the run. With
-`weather_series` the Live board follows the series instead, read exactly as Studio's solver and
+`fire_settings.weatherSeries` the Live board follows the native series instead, read exactly as Studio's solver and
 diorama read it (`fire/weatherSeries.ts` `weatherAtStep` at the same Studio minute, 10-minute steps),
-re-solving at each new step; `wind` is then only the summary in labels. GET returns
-`weather_series` (`null` for fires published before the field existed). `source` is `assumed` (set by hand), `historical`, `forecast`,
+with the whole series available inside each solve; `wind` is then only the summary in labels. GET returns
+`weather_series` for older clients (`null` for fires published before the field existed); legacy
+publishes use it when native settings are absent. `source` is `assumed` (set by hand), `historical`, `forecast`,
 `worst_case` (climatology percentile) or `climatology` (a series' climatology analog); `label`
 names it. On the board (`model.ts` `ingestStudioFire`) an ignition whose `id` is already a board
 fire on the same landscape cell (burning, contained or waiting to start) is not started again:

@@ -1,4 +1,5 @@
-import { Button, Facts, IconButton, Notice, Tag } from "../ui";
+import { Button, Facts, IconButton, Notice, ProgressBar, Tag } from "../ui";
+import { containmentPct } from "./observation";
 import { FIRE_STATUS, SOURCE_LABEL, TEAM_STATUS, nf, simClock } from "./format";
 import {
   DEPARTURE_SPREAD_MINUTES,
@@ -252,6 +253,8 @@ function FireDetail({ board, id, actions }: { board: Board; id: string; actions:
         {fireTimeline(board, fire)}
         {reportText(board, fire) ? <><br />{reportText(board, fire)}</> : null}
       </p>
+      <p className="dm-subhead">{fire.status === "out" ? "Resolved" : `${containmentPct(fire)}% contained`}</p>
+      <ProgressBar value={containmentPct(fire) / 100} label={`${fire.id}: ${containmentPct(fire)}% contained`} />
       <Facts
         items={[
           { label: "Started", value: simClock(fire.ignitedAt) },

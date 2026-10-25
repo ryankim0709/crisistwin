@@ -84,6 +84,9 @@ export function useFireSolver(board: Board | null, version: number, onApplied: (
         const current = boardRef.current;
         if (current !== asked.board) {
           setState((s) => ({ ...s, solving: null }));
+          // The replacement board may already have skipped its effect while this request
+          // was in flight. Wake it even when paused, so it can request its own field.
+          onAppliedRef.current();
           return;
         }
         if (reply.type === "error") {

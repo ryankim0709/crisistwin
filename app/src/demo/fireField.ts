@@ -1,23 +1,19 @@
 /**
  * The /demo board's fire spread: Simulation Studio's and /fire's cell solver
  * (fire/spread.ts simulateScheduledFireSpread, Rothermel 1972 surface spread with crown fire,
- * ember spotting and structure-to-structure spread at their defaults) on the drill's LANDFIRE
+ * ember spotting and structure-to-structure spread with Studio's settings) on the drill's LANDFIRE
  * landscape, and what the board reads back from its arrival field. Pure: no React, worker or
  * network. The worker (fireSolver.worker.ts) runs `solveFireField`; the board (model.ts)
  * builds the request and applies the result. See docs/command-demo-realism.md.
  *
- * Time. Solver minutes are board minutes (the board's T+0 is the solver's T+0), so the
- * arrival field reads directly against `board.minute`.
+ * Time. Returned arrivals are board minutes and read directly against `board.minute`.
+ * The solver uses the published run's T+0 so time-keyed draws match Studio's.
  *
- * Wind. The solver takes one wind per run. The board's wind and fuel moisture are the newest
- * Simulation Studio fire's (constant, as Studio runs them). When they change (a newer Studio
- * fire with other conditions), the board re-solves from that minute, continuing from the burned
- * state with the solver's progress-preserving resume (spread.ts ResumeFrom): cells already
- * burned keep their times, steps in progress finish at the new rate. New fires and containment
- * re-solve the same way, which with unchanged weather reproduces an uninterrupted run exactly.
- * A Studio run on an hourly weather series changes the wind (and moisture) at each 10-minute
- * weather step as Studio does (model.ts boardWind), which re-solves the same way.
- * Forecasts (zone ETAs, containment estimates) assume the current wind persists.
+ * Settings. The published FireSettings go straight to the shared solver, including its seed,
+ * weather series and optional mechanisms. Until an intervention, Live solves the complete Studio
+ * input with its original horizon from T+0. Resume applies after firefighting changes the fire,
+ * or when Live continues past Studio's horizon. Resume and control-line times are translated to
+ * the Studio clock before the solve; returned arrivals use board minutes.
  *
  * Units: minutes are board minutes; distances ground metres; areas square metres here
  * (hectares on the board); wind mph at the solver boundary (FireSettings), m/s on the board;
@@ -27,19 +23,16 @@
 import { isBurnable } from "../fire/fuelModels";
 import type { LandscapeGrid } from "../fire/landscape";
 import {
-  DEFAULT_MIDFLAME_ADJUSTMENT,
-  DEFAULT_SPOTTING,
   DEFAULT_STRUCTURE_SPREAD,
   DEVELOPED_FUEL_CODE,
-  FIRE_STEP_MINUTES,
   NonBurnableIgnitionError,
   cellAt,
   simulateScheduledFireSpread,
   type CellBehaviour,
   type ControlLines,
 } from "../fire/spread";
-import type { IgnitionSource } from "../fire/scheduledTypes";
-import type { StochasticRunSummary, StochasticSpreadOptions } from "../fire/stochastic";
+import type { FireSettings, IgnitionSource } from "../fire/scheduledTypes";
+import type { StochasticRunSummary } from "../fire/stochastic";
 import type { LonLat } from "../live/types";
 import type { FuelMoisture } from "../fire/spread";
 import { METERS_PER_SECOND_PER_MPH } from "./realism";
@@ -101,6 +94,12 @@ export interface FireSolveRequest {
   /** Resume minute (the board minute of the request), or null for a fresh field. */
   fromMinute: number | null;
   horizonMinutes: number;
+  /** Published Studio settings; the horizon grows only after Live continues past the Studio run. */
+  settings: FireSettings;
+  /** Board minute corresponding to Studio T+0, so stochastic wind steps use Studio's clock. */
+  clockStartMinute: number;
+  /** True after Live firefighting/manual closure changes the Studio fire; only then resume history. */
+  intervened: boolean;
   /** Open 20-ft wind, m/s, and the bearing it blows FROM, degrees true. */
   windSpeedMetersPerSecond: number;
   windFromDegrees: number;
@@ -131,16 +130,13 @@ export interface FireSolveRequest {
     earlierBehaviour: CellBehaviour;
     earlierWindSpeedMph: number;
   } | null;
-  /**
-   * Seeded stochastic spread (fire/stochastic.ts), off when absent. Keep the seed fixed for a
-   * board: draws are keyed on cells and simulation minutes, so resumed solves with one seed
-   * continue one realisation. Include it in `key` when a caller sets it.
-   */
-  stochastic?: StochasticSpreadOptions | null;
 }
 
 export interface FireSolveResult {
   key: string;
+  /** Published settings and clock origin this field used; detects changes beyond weather. */
+  settingsKey: string;
+  intervened: boolean;
   fromMinute: number | null;
   horizonMinutes: number;
   windSpeedMetersPerSecond: number;
@@ -169,20 +165,20 @@ export interface FireSolveResult {
   computeMilliseconds: number;
 }
 
-/** Ground that carries fire in the solver at its defaults: vegetated fuel, or developed ground (structure spread on). */
-export function carriesFire(fuelCode: number): boolean {
-  return isBurnable(fuelCode) || (fuelCode === DEVELOPED_FUEL_CODE && DEFAULT_STRUCTURE_SPREAD.enabled);
+/** Ground that carries fire under the run's structure-spread setting (default applies when absent). */
+export function carriesFire(fuelCode: number, settings?: Pick<FireSettings, "structureSpread">): boolean {
+  return isBurnable(fuelCode) || (fuelCode === DEVELOPED_FUEL_CODE && (settings?.structureSpread ?? DEFAULT_STRUCTURE_SPREAD).enabled);
 }
 
 /**
  * Why a fire at `p` cannot spread in the solver, or null when it can: off the modelled area, on
  * ground that carries no fire (the solver's own message), or on ground already burned by `minute`.
  */
-export function noSpreadReason(grid: LandscapeGrid, arrival: Float32Array | null, p: LonLat, minute: number): string | null {
+export function noSpreadReason(grid: LandscapeGrid, arrival: Float32Array | null, p: LonLat, minute: number, settings?: FireSettings): string | null {
   const cell = cellAt(grid, { longitude: p[0], latitude: p[1] });
   if (cell < 0) return "outside the modelled area, so it cannot spread";
   const code = grid.fuelCodes[cell];
-  if (!carriesFire(code)) return new NonBurnableIgnitionError(code).reason;
+  if (!carriesFire(code, settings)) return new NonBurnableIgnitionError(code).reason;
   if (arrival && arrival[cell] <= minute) return "on ground that has already burned";
   return null;
 }
@@ -191,10 +187,12 @@ export function noSpreadReason(grid: LandscapeGrid, arrival: Float32Array | null
 export function solveFireField(grid: LandscapeGrid, request: FireSolveRequest): FireSolveResult {
   const started = performance.now();
   const windSpeedMph = request.windSpeedMetersPerSecond / METERS_PER_SECOND_PER_MPH;
+  const offset = request.clockStartMinute;
+  const solverTimes = (times: Float32Array): Float32Array => offset === 0 ? times : times.map((t) => t - offset);
   const sources: IgnitionSource[] = request.sources.map((s) => ({
     id: s.fireId,
     location: { longitude: s.location[0], latitude: s.location[1] },
-    startMinute: s.startMinute,
+    startMinute: Math.max(0, s.startMinute - offset),
   }));
   // Put-out cells: fixed with source -1 in the resume (inert), their fire restored afterwards.
   const inert: { cell: number; owner: number }[] = [];
@@ -211,31 +209,34 @@ export function solveFireField(grid: LandscapeGrid, request: FireSolveRequest): 
     grid,
     {
       settings: {
-        windSpeedMph,
-        windFromDegrees: request.windFromDegrees,
-        moisture: request.moisture,
-        midflameAdjustment: DEFAULT_MIDFLAME_ADJUSTMENT,
-        stepMinutes: FIRE_STEP_MINUTES,
-        horizonMinutes: request.horizonMinutes,
-        spotting: DEFAULT_SPOTTING,
-        structureSpread: DEFAULT_STRUCTURE_SPREAD,
-        ...(request.stochastic ? { stochastic: request.stochastic } : {}),
+        ...request.settings,
+        horizonMinutes: request.horizonMinutes - offset,
       },
       sources,
       // No frames: the board reads the arrival field, and the map contours per fire.
       frameMinutes: [],
     },
-    request.controlLines && request.controlLines.cells.length > 0 ? denseControlLines(grid, request.controlLines) : null,
-    request.sources.map((s) => s.stopMinute ?? Number.POSITIVE_INFINITY),
+    request.controlLines && request.controlLines.cells.length > 0
+      ? denseControlLines(grid, { ...request.controlLines, holdFromMinute: solverTimes(request.controlLines.holdFromMinute) })
+      : null,
+    request.sources.some((s) => s.stopMinute !== null)
+      ? request.sources.map((s) => s.stopMinute === null ? Number.POSITIVE_INFINITY : s.stopMinute - offset)
+      : null,
     {
       reportCellBehaviour: true,
       resume:
         request.resume && request.fromMinute !== null
-          ? { fromMinute: request.fromMinute, ...request.resume, sourceIndexByCell: resumeOwners ?? request.resume.sourceIndexByCell }
+          ? {
+              ...request.resume,
+              fromMinute: request.fromMinute - offset,
+              arrivalMinutes: solverTimes(request.resume.arrivalMinutes),
+              sourceIndexByCell: resumeOwners ?? request.resume.sourceIndexByCell,
+            }
           : null,
     },
   );
   const arrival = run.arrivalMinutes;
+  if (offset !== 0) for (let i = 0; i < arrival.length; i++) arrival[i] += offset;
   const owner = run.sourceIndexByCell;
   // Fixed cells keep their resumed arrival, so an inert cell is still burned: give it back its fire.
   for (const { cell, owner: s } of inert) if (arrival[cell] <= request.horizonMinutes) owner[cell] = s;
@@ -305,6 +306,8 @@ export function solveFireField(grid: LandscapeGrid, request: FireSolveRequest): 
 
   return {
     key: request.key,
+    settingsKey: `${request.clockStartMinute}|${JSON.stringify(request.settings)}`,
+    intervened: request.intervened,
     fromMinute: request.fromMinute,
     horizonMinutes: request.horizonMinutes,
     windSpeedMetersPerSecond: request.windSpeedMetersPerSecond,

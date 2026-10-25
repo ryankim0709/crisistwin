@@ -11,11 +11,16 @@
  * `weather_series` (present when the run used an hourly series): the series' samples, `minute` on
  * the same Studio clock (may be negative), same wind and moisture units; Live command reads it
  * exactly as Studio's solver and diorama do (fire/weatherSeries.ts weatherAtStep).
+ * `fire_settings` is the complete native FireSettings object used by the run, including the
+ * stochastic seed, optional spread mechanisms and unabridged weather (with temperature).
+ * It is authoritative; the snake_case wind, moisture and series fields remain for older clients.
  */
 
 import { MOISTURE_PRESETS } from "../fire/spread";
 import { MAX_WEATHER_SAMPLES, seriesActive } from "../fire/weatherSeries";
 import type { StudioRunResult } from "./contracts";
+import type { FireSettings } from "../fire/scheduledTypes";
+import type { MercatorBox } from "../fire/landscape";
 
 export interface LiveFirePayload {
   scenario_id: string;
@@ -42,6 +47,10 @@ export interface LiveFirePayload {
     };
   };
   horizon_minutes: number;
+  /** Exact solver settings, including the run's stochastic seed and complete weather series. */
+  fire_settings: FireSettings;
+  /** Actual downloaded solve box when the run did not use its selected region board (EPSG:3857). */
+  landscape_box: MercatorBox | null;
   /** The run's hourly weather series, or null when it ran one constant wind. */
   weather_series: LiveWeatherSeries | null;
 }
@@ -104,8 +113,8 @@ function windOfRun(result: StudioRunResult): LiveFirePayload["wind"] {
   const series = settings.weatherSeries;
   if (!weather && series?.enabled && series.samples.length > 0) {
     // An hourly series with no weather record (a random scenario's draw, or a draft's series): the
-    // run used that series, not a hand-set wind. Live command runs one constant wind, so it gets
-    // the series' peak hour within the run, labelled with the series' own source and evidence.
+    // run used that series, not a hand-set wind. The summary names its peak hour within the run;
+    // Live command's solver receives the complete native series in fire_settings.
     const inRun = series.samples.filter((s) => s.minute >= 0 && s.minute <= settings.horizonMinutes);
     const peak = (inRun.length > 0 ? inRun : series.samples).reduce((a, b) => (b.windSpeedMph > a.windSpeedMph ? b : a));
     const evidence = series.evidence ?? "unrecorded";
@@ -199,6 +208,8 @@ export function buildLiveFirePayload(result: StudioRunResult, regionId: string):
       },
     },
     horizon_minutes: scenario.settings.horizonMinutes,
+    fire_settings: structuredClone(scenario.settings),
+    landscape_box: result.landscapeKey === `region:${result.boardId}` ? null : { ...result.landscapeBox },
     weather_series: weatherSeriesOf(result),
   };
 }

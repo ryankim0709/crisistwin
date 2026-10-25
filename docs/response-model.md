@@ -407,7 +407,16 @@ called contained only because of the perimeter bug below.
 - **Mop-up release** (**ASSUMPTION**): at containment the nearest engine and crew stay for mop-up.
   Everything else is released, and pending orders are cancelled.
 - **Out**: a contained fire is out once none of its cells is still burning (burned out, or put out
-  by mop-up), and no sooner than `MOPUP_MINUTES` (10, **ASSUMPTION**, board rule) after containment.
+  by mop-up), checked at the next whole simulation minute. There is no additional minimum
+  mop-up timer: the former assumed 10-minute delay has been removed. Containment and zero burning
+  cells are still required; completing a single line or dispatching units is insufficient.
+  The activity feed announces “Fire resolved” and releases the remaining units. This is the
+  simulated board's existing `out` status, not a resolution of live resident reports or an all-clear.
+- **Containment display**: Live's outcome panel shows a percentage and progress bar for each
+  reported fire; selecting a fire also shows its progress. Both use the existing
+  `containmentPct` calculation read by Claude (line coverage of the open perimeter, capped at
+  100%, and 100% once contained or out). Contained fires show “Mop-up in progress”; out fires
+  show “Resolved”. Containment is simulated, can fall as a fire grows, and is not extinguishment.
 - **Stopped on its own**: a fire with no line and no knocked-down edge is held (contained, then
   out by the rule above) once the forecast shows no further spread and none of its cells is still
   burning: its fuel ran out, or the dead fuel is wetter than the fuel model's moisture of

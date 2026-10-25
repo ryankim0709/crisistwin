@@ -3,6 +3,8 @@ import { EmptyState, EvidenceTag, Metric, MetricGrid, ProgressBar } from "../ui"
 import { nf, simClock } from "../demo/format";
 import type { Board, ZoneForecast } from "../demo/model";
 import { boardOutcomes, CLOSE_CALL_MINUTES, FORECAST_MINUTES, type Count } from "../demo/outcomes";
+import { isReported } from "../demo/boardResponse";
+import { containmentPct } from "../demo/observation";
 
 /** Persons, or "unknown" when some zone's occupants are not known (never 0 for unknown). */
 const people = (n: number | null) => (n === null ? "unknown" : nf(n));
@@ -158,6 +160,26 @@ export default function Outcomes({
         Fires: {nf(o.fires.burning)} burning, {nf(o.fires.contained)} contained, {nf(o.fires.outTotal)} out ·{" "}
         {nf(o.fires.burnedHa)} ha burned
       </p>
+
+      {board && board.fires.some((fire) => isReported(board, fire)) ? (
+        <div className="ui-stack ui-inset" role="group" aria-label="Simulated fire containment">
+          <strong>Fire containment</strong>
+          {board.fires.filter((fire) => isReported(board, fire)).map((fire) => {
+            const percent = containmentPct(fire);
+            const label = fire.status === "out"
+              ? `${fire.id} · Resolved`
+              : `${fire.id} · ${percent}% contained`;
+            return (
+              <div key={fire.id} className="ui-stack">
+                <span className="lc-num">{label}</span>
+                <ProgressBar value={percent / 100} label={label} />
+                {fire.status === "contained" ? <span className="lc-dim">Mop-up in progress</span> : null}
+              </div>
+            );
+          })}
+          <span className="lc-dim">Modelled containment; 100% contained does not mean extinguished.</span>
+        </div>
+      ) : null}
 
       <details className="lc-out-help">
         <summary>How these are counted</summary>

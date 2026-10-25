@@ -26,8 +26,8 @@ paused (their ignitions are scheduled from the board minute).
 follows the board. While Claude is deciding on an **urgent** wake (below; also "Ask Claude now",
 or an urgent event queued behind a routine call) it is 1×, so the board barely moves before the
 orders land; while it is on a **routine** wake (a continuous review, an arrival, a finished line)
-it is 5× (`AUTO_SPEED_REVIEWING`), because reviews run almost back to back while a fire burns and
-1× would pin the board at real time; while nothing is going on (`boardIsIdle`: no
+it is also 1× (`AUTO_SPEED_REVIEWING`). Fire, units and traffic share the same simulation
+clock during every decision; while nothing is going on (`boardIsIdle`: no
 reported fire burning or contained — an unreported or scheduled fire does not count — no unit
 moving or working, no zone leaving or scheduled, no aircraft flying, no resource order due within
 30 min) it is 60×; otherwise 20×. It drops to 20× (or 1×) at once and goes back up to 60× only
@@ -35,8 +35,9 @@ after the board has been idle for 5 board minutes, also after each Claude call. 
 UI choices; only the board minutes per real second change, and `step` lands on the same minutes
 and events at any rate, so results do not depend on them. Moving the speed slider turns Auto off
 and keeps that speed; the "Auto" button turns it back on. The speed reads "60× · idle",
-"1× · Claude deciding (urgent)", "5× · Claude reviewing", "20× · active" or "· manual". With the
-agent Off it shows what Auto would pick.
+"1× · Claude deciding (urgent)", "1× · Claude reviewing", "20× · active" or "· manual". With the
+agent Off it shows what Auto would pick. While Claude is thinking, playback is temporarily
+held to 1× even with manual speed selected; the selected speed resumes after the decision.
 
 ### AI agent cadence: near-continuous while a fire burns
 
@@ -72,8 +73,8 @@ board with what Claude saw at its last decision and calls `POST /api/demo/decide
 `DISPATCH_AGENT_ROUTINE_EFFORT` (default `low`, never above the urgent effort), and on
 `DISPATCH_AGENT_ROUTINE_MODEL` when set (default: the urgent model). Keep both efforts equal: an
 effort or model change gives the other kind of call its own cache entries (effort can invalidate
-the system cache on this model; caches are per model). Expected load with Auto speed, from a
-timing model of the cadence (3-minute gap at 20×, routine calls at 5×, urgent at 1×; scratch
+the system cache on this model; caches are per model). Historical load estimates under the
+previous Auto speeds (not estimates for the current 1× reviews), from a timing model of the cadence (3-minute gap at 20×, routine calls at 5×, urgent at 1×; scratch
 model, not measured): **about 10–20 calls per hot board hour** and about 75–170 calls per real hour
 while a fire burns (measured on 2026-10-25: calls 6–18 s apart). Turn the agent Off between
 demos; hiding the tab pauses it.
@@ -905,7 +906,7 @@ flight). It is board-local: no run-state PUTs, guidance, Studio publishes or rep
 
 - `--policy claude`: the real `POST /api/demo/decide` (costs money: at most a few full runs).
   While Claude thinks, the board advances latency x Auto speed (1 board min per real min urgent,
-  5 routine), then the orders apply. Cost per run comes from the orders line's `usage`
+  1 routine), then the orders apply. Cost per run comes from the orders line's `usage`
   (`dispatch.decision_usage`), or from matching the backend's "Decision usage" log lines to the
   run's call windows.
 - `--policy baseline`: `baselinePolicy.ts`, a scripted commander that reads only the
@@ -1223,3 +1224,9 @@ the AI agent see them (each console polls every 4 s).
   4.4.0 both codes match Behave (173 m/min, 6,144 Btu/ft²/min), so board fires in SH5 now
   spread about twice as fast and burn about twice as hot as the figures measured before it
   ([fire-simulator.md](fire-simulator.md#surface-model-equations-and-reference-check)).
+
+Live fire synchronization: a native Studio field includes scheduled future ignitions. When
+one starts, its own source-owned arrival does not count as previously burned ground; an
+arrival owned by another source still does. A discarded worker reply for an older board
+wakes the replacement board to request its field, including while the clock is paused.
+Playback speed changes only the shared board clock, not numerical fire spread rates.

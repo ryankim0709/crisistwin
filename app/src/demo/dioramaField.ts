@@ -12,6 +12,7 @@
 
 import type { DioramaRun } from "../fire/diorama/types";
 import type { LandscapeGrid } from "../fire/landscape";
+import { studioDisplayStepMinutes } from "../studio/contracts";
 import type { Board } from "./model";
 
 /** The fire scene's minimum burn window is set from the arrival spacing; the field has no frame step, so one minute. */
@@ -23,18 +24,25 @@ export interface ArrivalField {
   readonly arrival: Float32Array;
   /** Last minute the field covers (the solve's horizon). */
   readonly horizonMinutes: number;
+  /** Match Studio's flame display window for native runs. */
+  readonly stepMinutes?: number;
 }
 
 /** The board's current solver field as an arrival field, or null before the first solve. */
 export function arrivalFieldOf(board: Board): ArrivalField | null {
   const field = board.solver.field;
-  return field ? { grid: board.env.landscape, arrival: field.arrivalMinutes, horizonMinutes: field.horizonMinutes } : null;
+  return field ? {
+    grid: board.env.landscape,
+    arrival: field.arrivalMinutes,
+    horizonMinutes: field.horizonMinutes,
+    stepMinutes: board.conditions?.settings ? studioDisplayStepMinutes(board.conditions.horizonMinutes) : FIELD_STEP_MINUTES,
+  } : null;
 }
 
 /** The field as the scene's run; the scene's time (board minute) decides what shows as burned. */
 export function dioramaRun(field: ArrivalField): DioramaRun {
   return {
     arrivalMinutes: field.arrival,
-    scenario: { horizonMinutes: field.horizonMinutes, stepMinutes: FIELD_STEP_MINUTES },
+    scenario: { horizonMinutes: field.horizonMinutes, stepMinutes: field.stepMinutes ?? FIELD_STEP_MINUTES },
   };
 }

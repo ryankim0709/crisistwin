@@ -67,10 +67,9 @@ export const MONITORING = [
   { value: "off", label: "Off", title: "Claude is not called and the simulation is paused" },
   { value: "on", label: "On", title: "The simulation runs; Claude watches the board and acts when something changes" },
 ] as const;
-/** Why the board clock is stopped: the AI agent is off, the tab is hidden (the agent pauses), or the Pause button. */
+/** Why the board clock is stopped: AI off, hidden tab, or Pause. */
 export type ClockPause = "agent_off" | "tab_hidden" | "operator";
-/** Shown while the AI agent is off (the board clock waits for it). */
-export const AGENT_OFF_PAUSE = "Simulation paused \u2014 turn on the AI agent to run it.";
+export const AGENT_OFF_PAUSE = "Simulation paused — turn on the AI agent to run it.";
 /** The live board's rule: no run cards or automatic escalation; Claude or a person orders everything. */
 export const AI_ONLY_TEXT = "AI agent only: nothing is dispatched or ordered unless the AI agent (or you) orders it.";
 const OPEN_REPORT = new Set(["unverified", "corroborated", "responder_confirmed", "confirmed"]);
@@ -213,7 +212,7 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
   const [board, setBoard] = useState<Board | null>(null);
   const [version, setVersion] = useState(0);
   const bump = useCallback(() => setVersion((v) => v + 1), []);
-  // The Pause button's choice; the clock also waits for the AI agent (clockRunning below).
+  // The Pause button's choice; the clock also waits for the AI agent.
   const [running, setRunning] = useState(true);
   // The manual speed (used while Auto is off) and the Auto choice (autoSpeed.ts; on by default, per browser).
   const [manualSpeed, setManualSpeed] = useState<BoardSpeed>(60);
@@ -227,7 +226,7 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
   const zoneCentre = useMemo(() => (data ? zonesCenter(data.zones) : null), [data]);
   // Board size: the shared world's region radius (docs/shared-world.md); the live board never goes below 15 km.
   // A Studio drill instead starts on the board Studio ran it on (its region centre, radius and cells),
-  // so the landscape is the one Studio loaded and cached; a size picked here then keeps that centre.
+  // so the landscape is the one Studio loaded and cached. Its size stays owned by Studio.
   // ASSUMPTION: a Studio board smaller than 15 km is still big enough, since the Studio fire was solved on it.
   const [radius, setRadius] = useState(DEFAULT_BOARD_RADIUS_METERS);
   // The seed the next board starts from when the shared world names one.
@@ -249,10 +248,13 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
     },
   });
   const { write: writeWorld } = sync;
-  const drillBoard = useMemo(() => (studioBoardId ? parseStudioBoardId(studioBoardId) : null), [studioBoardId]);
-  const [picked, setPicked] = useState<{ incidentId: string; radiusMeters: number } | null>(null);
-  const pickedRadius = picked?.incidentId === incidentId ? picked.radiusMeters : null;
-  const studioRadius = drillBoard ? (pickedRadius ?? drillBoard.radiusMeters) : null;
+  // The completed run owns the landscape, even if another tab has edited the shared world since.
+  const studio = useStudioFires(data ? token : null, incidentId);
+  const published = studio.data?.find((f) => f.incident_id === incidentId) ?? null;
+  const publishedBoardId = published?.region_id || studioBoardId;
+  const drillBoard = useMemo(() => (publishedBoardId ? parseStudioBoardId(publishedBoardId) : null), [publishedBoardId]);
+  const studioRadius = drillBoard?.radiusMeters ?? null;
+  const boardSizeLocked = drillBoard !== null || published?.landscape_box != null;
   const boardRadius = drillBoard
     ? (studioRadius ?? drillBoard.region.radiusMeters)
     : Math.max(DEFAULT_BOARD_RADIUS_METERS, radius);
@@ -273,11 +275,11 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
       : null;
   const setBoardRadius = useCallback(
     (radiusMeters: number) => {
-      setPicked({ incidentId, radiusMeters });
+      if (boardSizeLocked) return;
       setRadius(radiusMeters);
       writeWorld({ region: { radiusMeters, cellMeters: boardCellMetersFor(radiusMeters) } });
     },
-    [writeWorld, incidentId],
+    [writeWorld, boardSizeLocked],
   );
   const setWeather = useCallback(
     (value: string) => {
@@ -304,7 +306,7 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
   // The zones' half-width sizes the live LANDFIRE landscape when no prebuilt region covers the drill.
   const zonesHalfWidth = useMemo(() => (data ? (zonesExtent(data.zones)?.halfWidthMeters ?? null) : null), [data]);
   const [envAttempt, setEnvAttempt] = useState(0);
-  const environment = useDemoEnvironmentState(preset, incidentId, zoneCentre, zonesHalfWidth, envAttempt, boardRadius, studioBoard, worldCentre);
+  const environment = useDemoEnvironmentState(preset, incidentId, zoneCentre, zonesHalfWidth, envAttempt, boardRadius, studioBoard, worldCentre, published?.landscape_box ?? null);
   const env = environment.env;
 
   // A new board size or centre loads a new landscape: rebuild the board on it once it arrives.
@@ -320,7 +322,6 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
   }, [boardKey, bump]);
 
   // Simulation Studio's published runs for this incident: the board's only fire source.
-  const studio = useStudioFires(data ? token : null, incidentId);
   const studioRef = useRef(studio.data);
   useEffect(() => {
     studioRef.current = studio.data;
@@ -408,13 +409,11 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
   useEffect(() => {
     restartRef.current = restartWith;
   });
-  /** "Restart board": a new seed (written to the shared world); `load` and `studio` as restartWith. */
+  /** "Restart board": a new response-model seed; the published fire settings stay fixed. */
   const restart = (load: SnapshotLoad | null = snapshot, studio: "newest" | "none" = "newest") => {
     if (!data || !env || !load) return;
     const seed = Math.floor(Math.random() * 2 ** 31);
     restartWith(seed, load, studio);
-    worldSeed.current = seed;
-    writeWorld({ fire: { stochastic: { seed } } });
   };
 
   // "Reset board": clear the incident's published Studio fires on the server (so no console or
@@ -527,25 +526,16 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
     return runLiveOrders(t, id, d, orders, setNotice);
   }, []);
   const agent = useDemoAgent({ board, version, incidentId, routes: routes.routes, routesClosed: routes.closedSegmentIds, forecasts, enabled: autopilot, apply, applyLive, picture });
-  // Turning the AI agent on starts the clock (clearing an earlier Pause); off stops it (below).
+  // The AI toggle gates the shared simulation clock; enabling it clears Pause.
   const turnAgent = useCallback((on: boolean) => {
     setAutopilot(on);
     if (on) setRunning(true);
   }, []);
-
-  // The simulation clock. The live board is AI agent only, so it runs only while the agent is
-  // monitoring (on, tab shown) and not paused; nothing advances otherwise (fire, traffic, units).
-  // It keeps running while Claude decides; orders apply when they arrive. Studio publishes are
-  // still ingested while it waits: they are scheduled from the board minute (model.ingestStudioFire).
   const clockPause: ClockPause | null = !autopilot
     ? "agent_off"
-    : agent.status === "paused"
-      ? "tab_hidden"
-      : !running
-        ? "operator"
-        : null;
+    : agent.status === "paused" ? "tab_hidden" : !running ? "operator" : null;
   const clockRunning = clockPause === null;
-  // Auto speed (autoSpeed.ts): 1× while Claude decides on an urgent wake, 5× while it reviews
+  // Auto speed (autoSpeed.ts): 1× while Claude decides on an urgent wake or reviews
   // (routine wake), 60× while the board is idle (after a short hold), else 20×. It only sets how
   // many board minutes pass per real second; step() lands on the same minutes and events at any
   // rate. With the agent off it shows what it would pick.
@@ -559,7 +549,7 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
     autoState.current = { board, state: next };
     setAutoReason(next.reason);
   }, [board, version, thinking]);
-  const speed: BoardSpeed = autoSpeedOn ? (AUTO_SPEED[autoReason] as BoardSpeed) : manualSpeed;
+  const speed: BoardSpeed = thinking ? 1 : autoSpeedOn ? (AUTO_SPEED[autoReason] as BoardSpeed) : manualSpeed;
   // Picking a speed by hand turns Auto off and keeps that speed; turning Auto off keeps the current one.
   const setSpeed = useCallback((s: BoardSpeed) => {
     setManualSpeed(s);
@@ -667,8 +657,7 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
     version,
     /** Marks an in-place board change made outside this hook (live/useRoadClosures.ts road closures). */
     bump,
-    // Clock: `running` is whether it runs (false while the AI agent is off, see clockPause);
-    // setRunning is the Pause button's choice, which only counts while the agent is on.
+    // Shared simulation clock, gated by AI monitoring and Pause.
     running: clockRunning,
     clockPause,
     setRunning,
@@ -686,6 +675,7 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
     setWeather,
     boardRadius,
     setBoardRadius,
+    boardSizeLocked,
     /** Centre of the board's landscape when the drill names its Studio board (WGS84 [lon, lat]); else null (the drill centre). */
     boardCentre: drillBoard ? ([drillBoard.region.center.longitude, drillBoard.region.center.latitude] as [number, number]) : null,
     /** True while the landscape for a new board size is still loading. */

@@ -16,10 +16,10 @@ export const AUTO_SPEED_IDLE = 60;
 export const AUTO_SPEED_THINKING = 1;
 /**
  * UI choice: Claude is on a ROUTINE wake (a continuous review, an arrival, a finished line...).
- * Reviews run almost back to back while a fire burns, so 1× here would pin the board at real
- * time; 5× keeps it moving (a ~30 s review is ~2.5 board minutes) while orders still land soon.
+ * All Claude decisions run at real time: a 30 s review advances the shared simulation
+ * clock by 30 s, just like an urgent decision.
  */
-export const AUTO_SPEED_REVIEWING = 5;
+export const AUTO_SPEED_REVIEWING = 1;
 /** UI choice: something is happening and Claude is not deciding — fast, but watchable. */
 export const AUTO_SPEED_ACTIVE = 20;
 /** UI choice: board minutes the board must stay idle before Auto goes back up to the idle speed. */

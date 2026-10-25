@@ -494,6 +494,13 @@ function parseWeather(raw: unknown, settings: FireSettings): ScenarioWindRecord 
     : undefined;
 }
 
+/** Shared with the Live fire feed: validate settings with the same rules as a Studio import. */
+export function parseFireSettings(raw: unknown): FireSettings | null {
+  let failed = false;
+  const settings = parseSettings(raw, () => { failed = true; });
+  return settings && !failed && validateSettings(settings).length === 0 ? settings : null;
+}
+
 function parseSettings(
   raw: unknown,
   fail: (message: string, field?: ScenarioIssue["field"]) => void,
@@ -621,8 +628,11 @@ function parseSettings(
           enabled: s.enabled,
           samples,
           ...(typeof s.source === "string" ? { source: s.source } : {}),
-          ...(s.evidence === "observed" || s.evidence === "forecast" || s.evidence === "derived" || s.evidence === "assumed"
+          ...(s.evidence === "observed" || s.evidence === "forecast" || s.evidence === "derived" || s.evidence === "modelled" || s.evidence === "assumed"
             ? { evidence: s.evidence }
+            : {}),
+          ...(isRecord(s.missing) && isFiniteNumber(s.missing.hours) && isFiniteNumber(s.missing.longestGapHours) && typeof s.missing.startMissing === "boolean"
+            ? { missing: { hours: s.missing.hours, longestGapHours: s.missing.longestGapHours, startMissing: s.missing.startMissing } }
             : {}),
         };
       }

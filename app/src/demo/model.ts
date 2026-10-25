@@ -11,15 +11,15 @@
  * Model, shown in the UI:
  * - Fire spread is the simulator's cell solver, the same one /fire and Simulation Studio run
  *   (fire/spread.ts simulateScheduledFireSpread: Rothermel 1972 surface spread with crown fire,
- *   ember spotting and structure-to-structure spread at their defaults, seeded natural variation
- *   on by default) on the drill's LANDFIRE landscape, with every board fire as a source.
+ *   ember spotting, structure spread and natural variation configured by the Studio run)
+ *   on the drill's LANDFIRE landscape, with every board fire as a source.
  *   demo/fireField.ts holds the solve and what is read back from it; the page runs it off the
  *   main thread (useFireSolver) and the board clock holds while a required solve is pending
  *   (fireSolveDue), so a run does not depend on machine speed. A solve is required for a new
  *   fire, a contained or closed fire, a change of wind or fuel moisture (a newer Studio fire),
  *   and when the lookahead runs short; each continues from the burned state at that minute
- *   (spread.ts ResumeFrom). Wind and moisture are the newest Studio fire's (constant, as Studio
- *   runs them; StudioConditions).
+ *   (spread.ts ResumeFrom). Full solver settings, including the weather series and seeds, come
+ *   from the newest Studio run (StudioConditions), independently of the response-model seed.
  * - Response (demo/boardResponse.ts, the shared model in app/src/response/, docs/response-model.md):
  *   AI agent only: the board decides nothing itself. Once a fire is reported (seeded report delay
  *   by remoteness) the run card for its dispatch level is computed as a recommendation for the
@@ -39,7 +39,7 @@
  *   out. Direct-attack units put out burning edge cells within reach at their line production
  *   rate (the knocked-down edge stops advancing: inert in the solver, with line around it);
  *   mop-up units put out burning cells inside a contained fire. A contained fire is out once
- *   nothing of it still burns (and MOPUP_MINUTES after containment at the earliest).
+ *   nothing of it still burns, on the next whole-minute status update.
  * - The AI commander's orders (applyOrder) act on the same units and state machine: send_crew
  *   adds a unit (or an available aircraft) to a fire or reassigns it from another;
  *   release_crew sends it home; order_resources places an order; order_evacuation orders a zone
@@ -93,8 +93,9 @@
 import { fuelLabel } from "../fire/fuelModels";
 import { simClock } from "./format";
 import { mercatorToLonLat, type LandscapeGrid } from "../fire/landscape";
-import { DEVELOPED_FUEL_CODE, cellAt, type FuelMoisture } from "../fire/spread";
-import { weatherAtStep, weatherStepAt, type FireWeatherSeries } from "../fire/weatherSeries";
+import { DEFAULT_MIDFLAME_ADJUSTMENT, FIRE_STEP_MINUTES, DEVELOPED_FUEL_CODE, cellAt, type FuelMoisture } from "../fire/spread";
+import type { FireSettings } from "../fire/scheduledTypes";
+import { seriesActive, weatherAtStep, weatherStepAt, type FireWeatherSeries } from "../fire/weatherSeries";
 import type { LonLat } from "../live/types";
 import type { EngineKind, EngineStatus, ScenarioSnapshot, SnapshotBasis, SnapshotTotals, SnapshotZone } from "../live/scenarioSnapshot";
 import { DRAWDOWN_KEEP_SHARE, buildFleet, engineTurnoutMinutes, type BaseInput, type Department, type Tier, type UnitSeed } from "../response/fleet";
@@ -151,6 +152,7 @@ import {
   type ZoneArrivals,
   type ZoneCells,
 } from "./fireField";
+import { firstCarryingMinute, fuelCarriesFireAt, tooWetText, type RunMoisture } from "./fuelCarry";
 import type { StudioFire } from "./contracts";
 import type { AccessClass } from "../studio/apparatus";
 import { endLiftForNewOrder, finishLifts, liftEvacuation, noteZoneThreats, type ZoneLift } from "./allClear";
@@ -223,12 +225,6 @@ export { dispatchable } from "./boardResponse";
 /** Mean departure delay after the cue (Camp, sourced). The observation's departure figure. */
 export const DEPARTURE_SPREAD_MINUTES = DEPARTURE_MEAN_MINUTES;
 
-/**
- * ASSUMPTION (board rule, not sourced): a contained fire is out no sooner than this many minutes
- * after containment, and only once none of its cells is still burning (demo/suppression.ts:
- * burned out, or put out by mop-up).
- */
-export const MOPUP_MINUTES = 10;
 export const OUT_KEEP_MINUTES = 30;
 export const REOPEN_MINUTES = 90;
 /** Forecasts (zone fire ETAs, containment estimates) look this far ahead in the solver's lookahead. */
@@ -308,7 +304,15 @@ export interface Fire {
   status: FireStatus;
   containedAt: number | null;
   outAt: number | null;
-  closedBy: "teams" | "manual" | null;
+  /** "self": it went out on its own (no line; fuel or fuel moisture stopped it), see `outReason`. */
+  closedBy: "teams" | "manual" | "self" | null;
+  /** Why a fire that went out on its own stopped, in the model's numbers (closedBy "self"), else null. */
+  outReason: string | null;
+  /**
+   * Why the ignition waits before it spreads (its fuel too wet at its Studio weather step; the
+   * solver's source-cell rule, demo/fuelCarry.ts), or null. Spread starts at `startMinute`.
+   */
+  waitReason: string | null;
 }
 
 /**
@@ -686,6 +690,8 @@ export type BoardEventAction =
   | "zone_back_home"
   | "contained"
   | "out"
+  /** A fire with no line that stopped spreading and burned out by itself (refs.areaHa; refs.label the model's reason). */
+  | "went_out"
   | "closed_by_hand"
   /** Burning edge put out by direct attack since the last report (refs.areaHa, teamIds; demo/suppression.ts). */
   | "knocked_down"
@@ -767,6 +773,12 @@ export interface StudioConditions {
   series: FireWeatherSeries | null;
   /** Board minute of Studio's T+0 (the ingest minute). */
   seriesStartMinute: number;
+  /** The Studio run's horizon, minutes on its clock (StudioFire.horizon_minutes): how far its series is read. */
+  horizonMinutes: number;
+  /** Exact published solver settings; null on legacy publishes, whose missing settings are labelled. */
+  settings: FireSettings | null;
+  /** All published ignitions in Studio's solver order, including ones scheduled for later. */
+  sources: SolveSource[];
 }
 
 /** A Studio ignition waiting for its start minute. */
@@ -799,10 +811,8 @@ export interface FireSolverState {
 }
 
 export interface Board {
-  /** Run seed: the response model's stream (response/rng.ts) and the solver's natural variation derive from it. */
+  /** Response-model seed (response/rng.ts). Fire spread uses the published Studio settings' seed. */
   seed: number;
-  /** Seeded natural variation in fire spread (fire/stochastic.ts), seeded from `seed`; on by default. */
-  naturalVariation: boolean;
   minute: number;
   fireCount: number;
   fires: Fire[];
@@ -1035,6 +1045,12 @@ export function boardWind(board: Board): WindNow {
   return windAt(board.env.spread.wind, board.minute);
 }
 
+/** The Studio run's moisture over its clock (demo/fuelCarry.ts), or null before any Studio fire. */
+function runMoisture(board: Board): RunMoisture | null {
+  const c = board.conditions;
+  return c ? { series: c.series, moisture: c.moisture, horizonMinutes: c.horizonMinutes } : null;
+}
+
 /** Fuel moisture the board runs on now: the Studio series' at this minute when it carries one, else the publish's. */
 export function boardMoisture(board: Board): FuelMoisture {
   const c = board.conditions;
@@ -1093,6 +1109,22 @@ function fieldWeatherKey(field: FireSolveResult): string {
   return `${field.windSpeedMetersPerSecond}|${field.windFromDegrees}|${field.moistureKey}`;
 }
 
+/** Old publishes retain their known weather and the shared solver defaults, without inventing a seed. */
+function boardFireSettings(board: Board): FireSettings {
+  const c = board.conditions;
+  if (c?.settings) return c.settings;
+  const weather = weatherNow(board);
+  return {
+    windSpeedMph: c?.windSpeedMph ?? weather.speed / METERS_PER_SECOND_PER_MPH,
+    windFromDegrees: c?.windFromDegrees ?? weather.from,
+    moisture: c?.moisture ?? weather.moisture,
+    midflameAdjustment: DEFAULT_MIDFLAME_ADJUSTMENT,
+    stepMinutes: FIRE_STEP_MINUTES,
+    horizonMinutes: c?.horizonMinutes ?? LOOKAHEAD_MINUTES,
+    ...(c?.series ? { weatherSeries: c.series } : {}),
+  };
+}
+
 /**
  * Why the board needs a new solve before its clock may move, or null. Pure; `step` holds while
  * this is non-null, so every solve happens at a board-defined minute.
@@ -1102,16 +1134,25 @@ export function fireSolveDue(board: Board): string | null {
   if (error) return "the last fire solve failed";
   const spreading = board.fires.filter((f) => f.status === "burning" && f.noSpread === null);
   if (!field) return spreading.length > 0 ? `new fire ${spreading[0].id}` : null;
-  for (const f of spreading) if (!field.sourceIndex.has(f.id)) return `new fire ${f.id}`;
+  // An ignition still waiting past this field's horizon (Fire.waitReason) joins at a lookahead renewal.
+  for (const f of spreading) if (!field.sourceIndex.has(f.id) && f.startMinute < field.horizonMinutes) return `new fire ${f.id}`;
   for (const f of board.fires) {
     if (f.status === "burning") continue;
     const s = field.sourceIndex.get(f.id);
-    if (s !== undefined && field.sources[s].stopMinute !== stopMinute(f)) return `${f.id} ${f.status === "contained" ? "contained" : "closed"}`;
+    const stop = board.conditions?.settings && f.closedBy === "self" ? null : stopMinute(f);
+    if (s !== undefined && field.sources[s].stopMinute !== stop) return `${f.id} ${f.status === "contained" ? "contained" : "closed"}`;
   }
   if (spreading.length === 0) return null;
-  if (weatherNow(board).key !== fieldWeatherKey(field)) return "wind or fuel moisture changed";
+  if (field.settingsKey !== `${board.conditions?.seriesStartMinute ?? 0}|${JSON.stringify(boardFireSettings(board))}`) return "Studio fire settings changed";
+  // Native runs carry the whole series inside the solver. Re-solving it at each weather step
+  // through ResumeFrom would introduce a different stochastic approximation from Studio.
+  if (!board.conditions?.settings && weatherNow(board).key !== fieldWeatherKey(field)) return "wind or fuel moisture changed";
   if (lineKey(board) !== field.lineKey) return "fire line built";
-  if (board.minute + FORECAST_MINUTES > field.horizonMinutes) return "lookahead renewed";
+  const c = board.conditions;
+  // Keep the exact Studio horizon throughout its run; extending it early can change whether
+  // the solver waits for a later dry step at an otherwise extinguished source cell.
+  const withinStudioRun = c?.settings && board.minute < c.seriesStartMinute + c.horizonMinutes;
+  if (!withinStudioRun && board.minute + FORECAST_MINUTES > field.horizonMinutes) return "lookahead renewed";
   return null;
 }
 
@@ -1119,7 +1160,24 @@ export function fireSolveDue(board: Board): string | null {
 export function buildFireSolveRequest(board: Board): FireSolveRequest {
   const field = board.solver.field;
   const weather = weatherNow(board);
-  const horizonMinutes = Math.ceil(board.minute) + LOOKAHEAD_MINUTES;
+  const settings = boardFireSettings(board);
+  const native = board.conditions?.settings ? board.conditions : null;
+  const nativeEnd = native ? native.seriesStartMinute + settings.horizonMinutes : 0;
+  const withinStudioRun = native !== null && board.minute < nativeEnd;
+  const controlLines = builtLineCells(board);
+  const inertCells = field ? inertCellsForSolve(board) : null;
+  const intervened = (field?.intervened ?? false) || controlLines !== null || (inertCells?.length ?? 0) > 0 ||
+    board.fires.some((f) => f.status !== "burning" && f.closedBy !== "self" && f.noSpread === null);
+  // Until Live changes the fire, solve the identical Studio input from T+0. No rolling
+  // stochastic resumes, omitted future ignitions, or shortened Studio horizon.
+  const resumeField = field && (!native || intervened || !withinStudioRun) ? field : null;
+  // A wet ignition can wait beyond the usual lookahead for Studio's first dry weather step.
+  // Include at least that start so the solver always has a valid source, even on its first solve.
+  const firstStart = board.fires.reduce((m, f) => f.status === "burning" && f.noSpread === null ? Math.min(m, f.startMinute) : m, Infinity);
+  const horizonMinutes = withinStudioRun ? nativeEnd : Math.max(
+    Math.ceil(board.minute) + LOOKAHEAD_MINUTES,
+    Number.isFinite(firstStart) ? firstStart + 1 : 0,
+  );
   let candidates = board.fires.filter(
     (f) => f.noSpread === null && f.startMinute < horizonMinutes && (f.status === "burning" || field?.sourceIndex.has(f.id)),
   );
@@ -1132,58 +1190,69 @@ export function buildFireSolveRequest(board: Board): FireSolveRequest {
   }
   // A resumed solve cannot start a fire before the minute it resumes from: a fire the field
   // has not seen yet (ignited while an earlier solve was running) starts at the resume minute.
-  if (field) {
+  if (resumeField && !native) {
     for (const f of candidates) {
-      if (!field.sourceIndex.has(f.id) && f.startMinute < board.minute) f.startMinute = Math.ceil(board.minute);
+      if (!resumeField.sourceIndex.has(f.id) && f.startMinute < board.minute) f.startMinute = Math.ceil(board.minute);
     }
   }
-  const sources: SolveSource[] = candidates.map((f) => ({
+  const byId = new Map(board.fires.map((f) => [f.id, f]));
+  const sources: SolveSource[] = native ? native.sources.map((s) => {
+    const f = byId.get(s.fireId);
+    const previous = field?.sources[field.sourceIndex.get(s.fireId) ?? -1];
+    const cell = cellAt(board.env.landscape, { longitude: s.location[0], latitude: s.location[1] });
+    // Weather may have delayed an original source past the resume minute. It is not burned
+    // history yet, so ResumeFrom must retry it from now (the same weather gate still applies).
+    const retryUnburned = resumeField && s.startMinute < board.minute && cell >= 0 && !(resumeField.arrivalMinutes[cell] <= board.minute);
+    return {
+      ...s,
+      startMinute: retryUnburned ? Math.ceil(board.minute) : s.startMinute,
+      // A fire that stopped on its own needs no artificial stop: Studio's numerical field
+      // already determines its final footprint. Keep retired fires in the input as well.
+      stopMinute: f ? (f.closedBy === "self" ? null : stopMinute(f)) : (previous?.stopMinute ?? null),
+    };
+  }) : candidates.map((f) => ({
     fireId: f.id,
     location: f.origin,
     startMinute: f.startMinute,
     stopMinute: stopMinute(f),
   }));
   let resume: FireSolveRequest["resume"] = null;
-  if (field) {
-    const remap = new Int8Array(field.sources.length).fill(-1);
+  if (resumeField) {
+    const remap = new Int8Array(resumeField.sources.length).fill(-1);
     sources.forEach((s, i) => {
-      const old = field.sourceIndex.get(s.fireId);
+      const old = resumeField.sourceIndex.get(s.fireId);
       if (old !== undefined) remap[old] = i;
     });
-    const arrivalMinutes = field.arrivalMinutes.slice();
+    const arrivalMinutes = resumeField.arrivalMinutes.slice();
     const sourceIndexByCell = new Int8Array(arrivalMinutes.length);
     for (let i = 0; i < arrivalMinutes.length; i++) {
-      const old = field.sourceIndexByCell[i];
+      const old = resumeField.sourceIndexByCell[i];
       const next = old >= 0 ? remap[old] : -1;
       sourceIndexByCell[i] = next;
       // A stopped fire's cells past its stop are not history (the board stops before it moves on).
       const stop = next >= 0 ? sources[next].stopMinute : null;
       if (stop !== null && arrivalMinutes[i] > stop) arrivalMinutes[i] = Number.POSITIVE_INFINITY;
     }
-    resume = { arrivalMinutes, sourceIndexByCell, earlierBehaviour: field.behaviour, earlierWindSpeedMph: field.windSpeedMph };
+    resume = { arrivalMinutes, sourceIndexByCell, earlierBehaviour: resumeField.behaviour, earlierWindSpeedMph: resumeField.windSpeedMph };
   }
   return {
-    key: `${board.seed}|${board.naturalVariation ? "nv" : "det"}|${board.minute}|${weather.key}|${sources.map((s) => `${s.fireId}:${s.stopMinute}`).join(",")}|${lineKey(board)}`,
-    fromMinute: field ? board.minute : null,
+    key: `${board.conditions?.seriesStartMinute ?? 0}|${JSON.stringify(settings)}|${board.minute}|${weather.key}|${sources.map((s) => `${s.fireId}:${s.stopMinute}`).join(",")}|${lineKey(board)}`,
+    fromMinute: resumeField ? board.minute : null,
     horizonMinutes,
+    settings,
+    clockStartMinute: board.conditions?.seriesStartMinute ?? 0,
+    intervened,
     windSpeedMetersPerSecond: weather.speed,
     windFromDegrees: weather.from,
     moisture: weather.moisture,
     moistureKey: weather.moistureKey,
     sources,
-    controlLines: builtLineCells(board),
+    controlLines,
     lineKey: lineKey(board),
     resume,
     // Cells put out by suppression spread no further (demo/suppression.ts; only with a resume).
-    inertCells: field ? inertCellsForSolve(board) : null,
-    // Same seed for every solve of a board, so a resumed solve repeats the same draws.
-    stochastic: board.naturalVariation ? { enabled: true, seed: board.seed } : null,
+    inertCells: resumeField ? inertCells : null,
   };
-}
-
-/** Turns seeded natural variation in fire spread on or off; the next solve starts over from the burned ground. */
-export function setNaturalVariation(board: Board, on: boolean): void {
-  board.naturalVariation = on;
 }
 
 /** Metres of a line the solver counts: whole LINE_RESOLVE_CHUNK_M chunks, or all of a finished line. */
@@ -1776,7 +1845,6 @@ export function createBoard(zones: BaseZone[], seed: number, env: DemoEnvironmen
   ).aircraft;
   const board: Board = {
     seed,
-    naturalVariation: true,
     minute: 0,
     fireCount: 0,
     fires: [],
@@ -1889,7 +1957,13 @@ function ignite(board: Board, id: string, origin: LonLat, at: number, studio: Fi
   if (activeFires(board).length >= MAX_ACTIVE_FIRES) return null;
   board.fireCount += 1;
   const grid = board.env.landscape;
-  const noSpread = noSpreadReason(grid, board.solver.field?.arrivalMinutes ?? null, origin, board.minute);
+  const field = board.solver.field;
+  const originCell = cellAt(grid, { longitude: origin[0], latitude: origin[1] });
+  // Native Studio fields include future ignitions. Their own arrival at the scheduled
+  // minute is not previously burned ground; another source's arrival still is.
+  const owner = originCell >= 0 ? field?.sourceIndexByCell[originCell] : undefined;
+  const ownArrival = owner !== undefined && owner >= 0 && field?.sources[owner]?.fireId === id;
+  const noSpread = noSpreadReason(grid, ownArrival ? null : (field?.arrivalMinutes ?? null), origin, board.minute, boardFireSettings(board));
   const fire: Fire = {
     id,
     source: "studio",
@@ -1911,7 +1985,23 @@ function ignite(board: Board, id: string, origin: LonLat, at: number, studio: Fi
     containedAt: null,
     outAt: null,
     closedBy: null,
+    outReason: null,
+    waitReason: null,
   };
+  // Fuel too wet to spread at the ignition's Studio weather step: the ignition waits for the first
+  // later step that lets it spread, as Studio's solver does (fire/spread.ts settle step); with no
+  // such step it ignites and spreads nothing, and goes out on its own (wentOutOnItsOwn).
+  const run = runMoisture(board);
+  if (run && noSpread === null && originCell >= 0) {
+    const c = board.conditions!;
+    const code = grid.fuelCodes[originCell];
+    const studioAt = at - c.seriesStartMinute;
+    const carries = firstCarryingMinute(run, code, studioAt);
+    if (carries !== null && carries > studioAt) {
+      fire.startMinute = Math.ceil(carries + c.seriesStartMinute);
+      fire.waitReason = tooWetText(code, boardMoisture(board));
+    }
+  }
   board.fires.push(fire);
   refreshFire(board, fire);
   const zone = zoneAt(board, origin);
@@ -1920,7 +2010,11 @@ function ignite(board: Board, id: string, origin: LonLat, at: number, studio: Fi
     board,
     "ignition",
     "studio",
-    `Studio ignition ${fire.id} started${zone ? ` in ${zone.name}` : ""}${cell >= 0 ? `, ${fuelLabel(grid.fuelCodes[cell])}` : ""}${noSpread ? ` (${noSpread})` : ""}.`,
+    `Studio ignition ${fire.id} started${zone ? ` in ${zone.name}` : ""}${cell >= 0 ? `, ${fuelLabel(grid.fuelCodes[cell])}` : ""}${noSpread ? ` (${noSpread})` : ""}${
+      fire.waitReason
+        ? `. It smoulders without spreading (${fire.waitReason}); the fire model starts its spread at ${simClock(fire.startMinute)}, the first weather step whose fuel moisture lets it spread, as Simulation Studio does`
+        : ""
+    }.`,
     { action: "ignition_started", fireId: fire.id, zoneId: zone?.id, studioTag: fire.studio.tag },
   );
   // The response model: report delay, then the run card (boardResponse.ts).
@@ -1930,6 +2024,12 @@ function ignite(board: Board, id: string, origin: LonLat, at: number, studio: Fi
 
 /** A publish's hourly series in the solver's shape (fire/weatherSeries.ts), or null. */
 function seriesOf(fire: StudioFire): FireWeatherSeries | null {
+  // The complete native series is authoritative, including air temperature and samples outside
+  // the older weather_series transport's +/-72 h window. Disabled means constant weather.
+  if (fire.fire_settings) {
+    const series = fire.fire_settings.weatherSeries;
+    return seriesActive(series) ? structuredClone(series) : null;
+  }
   const s = fire.weather_series;
   if (!s || s.samples.length === 0) return null;
   const evidence = (["observed", "forecast", "derived", "modelled", "assumed"] as const).find((e) => e === s.evidence);
@@ -1977,8 +2077,8 @@ function ignitionPart(name: string, index: number): string {
 }
 
 /**
- * Ingests one Simulation Studio publish (once per fire_id). Its wind and fuel moisture become the
- * board's conditions: the solver runs one wind, so a newer publish's conditions apply to every
+ * Ingests one Simulation Studio publish (once per fire_id). Its complete solver settings become the
+ * board's conditions, so a newer publish's settings apply to every
  * fire on the board. Each ignition is scheduled at the board minute now + its Studio
  * start_minute, as fire "S<n>-<ignition name>" (n counts this board's publishes). Ignitions the
  * server lists in `outside_drill`, or off the board's landscape, are skipped with an event saying
@@ -1992,13 +2092,15 @@ export function ingestStudioFire(board: Board, fire: StudioFire, restarted = fal
   const tag = `S${board.studioCount}`;
   const previous = board.conditions;
   const replacing = previous !== null && (activeFires(board).length > 0 || board.scheduled.length > 0);
-  const v = fire.moisture.values;
+  const settings = fire.fire_settings ? structuredClone(fire.fire_settings) : null;
+  const v = settings?.moisture ?? fire.moisture.values;
+  const windSpeedMph = settings?.windSpeedMph ?? fire.wind.speed_mph;
   board.conditions = {
     tag,
     name: fire.name,
-    windSpeedMph: fire.wind.speed_mph,
-    windSpeedMetersPerSecond: fire.wind.speed_mph * METERS_PER_SECOND_PER_MPH,
-    windFromDegrees: fire.wind.from_deg,
+    windSpeedMph,
+    windSpeedMetersPerSecond: windSpeedMph * METERS_PER_SECOND_PER_MPH,
+    windFromDegrees: settings?.windFromDegrees ?? fire.wind.from_deg,
     windSource: fire.wind.source,
     windLabel: fire.wind.label,
     moisture: { dead1h: v.dead1h, dead10h: v.dead10h, dead100h: v.dead100h, liveHerb: v.liveHerb, liveWoody: v.liveWoody },
@@ -2007,6 +2109,9 @@ export function ingestStudioFire(board: Board, fire: StudioFire, restarted = fal
     publishedAt: fire.published_at,
     series: seriesOf(fire),
     seriesStartMinute: board.minute,
+    horizonMinutes: settings?.horizonMinutes ?? fire.horizon_minutes,
+    settings,
+    sources: [],
   };
   if (restarted) {
     const n = fire.ignitions.length;
@@ -2029,7 +2134,7 @@ export function ingestStudioFire(board: Board, fire: StudioFire, restarted = fal
   let reportSet = 0;
   fire.ignitions.forEach((ign, i) => {
     const name = ign.name || ign.id;
-    if (outside.has(ign.id)) {
+    if (!settings && outside.has(ign.id)) {
       skipped.push(`${name} is more than 3 km outside the drill's zones`);
       return;
     }
@@ -2046,6 +2151,12 @@ export function ingestStudioFire(board: Board, fire: StudioFire, restarted = fal
     let id = base;
     for (let k = 2; taken.has(id); k += 1) id = `${base}-${k}`;
     taken.add(id);
+    board.conditions!.sources.push({
+      fireId: id,
+      location: [ign.lon, ign.lat],
+      startMinute: board.minute + ign.start_minute,
+      stopMinute: null,
+    });
     board.scheduled.push({
       id,
       origin: [ign.lon, ign.lat],
@@ -2065,7 +2176,11 @@ export function ingestStudioFire(board: Board, fire: StudioFire, restarted = fal
     "studio",
     "studio",
     `Studio fire '${fire.name}' received as ${tag}: ${count}, wind ${Math.round(c.windSpeedMph * 10) / 10} mph from ${Math.round(c.windFromDegrees)}° (${c.windSource.replace(/_/g, " ")}), ${c.moistureLabel} fuel moisture.${
-      replacing ? ` These conditions now apply to every fire on the board (the fire model runs one wind), replacing ${previous!.tag}'s.` : ""
+      replacing ? ` These settings now apply to every fire on the board, replacing ${previous!.tag}'s.` : ""
+    }${
+      settings
+        ? ` Fire settings copied from Studio: ${settings.stochastic?.enabled ? `natural variation on, seed ${settings.stochastic.seed}` : "natural variation off"}; ${settings.fireInducedWind?.enabled ? "fire-induced wind on" : "fire-induced wind off"}.`
+        : " Legacy publish: full fire settings were not recorded; using shared solver defaults with natural variation off. Run the scenario again in Simulation Studio to match all settings."
     }${
       reportSet > 0
         ? ` Report time set in Studio for ${reportSet === scheduled ? (scheduled === 1 ? "its ignition" : `all ${scheduled} ignitions`) : `${reportSet} of ${scheduled} ignitions`}; nobody can act on a fire before its report.`
@@ -2880,22 +2995,59 @@ function nextTimedEvent(board: Board): number {
 }
 
 /**
- * The fire is held by the line: the field already includes the line built now and forecasts no
- * cell of this fire burning after now (to its horizon, at least FORECAST_MINUTES ahead).
+ * The fire is held by the line: the field already includes the line built now (attack-line cells,
+ * or the line around its knocked-down edge, demo/suppression.ts) and forecasts no cell of this
+ * fire burning after now (to its horizon, at least FORECAST_MINUTES ahead). Firefighting only:
+ * a reported fire with line or knockdown. A fire with neither that stops is wentOutOnItsOwn's.
  * Returns the minute it stopped growing, or null.
  */
 function heldByLine(board: Board, fire: Fire): number | null {
   const field = board.solver.field;
   const s = field?.sourceIndex.get(fire.id);
   if (!field || s === undefined || field.lineKey !== lineKey(board)) return null;
-  // Line: attack-line cells, or the line around its knocked-down edge (demo/suppression.ts). With
-  // neither, a fire that has stopped on its own (fuel runs out, or dead fuel wetter than its
-  // moisture of extinction, Rothermel 1972: zero spread) is held only once nothing of it is
-  // still burning: no flaming cell is left to spread or throw embers (smouldering is not modelled).
-  if (!board.lines.some((l) => l.fireId === fire.id && l.builtM > 0) && !hasKnockdown(board, fire.id) && burningCellCount(board, fire) > 0) return null;
+  if (!isReported(board, fire)) return null;
+  if (!board.lines.some((l) => l.fireId === fire.id && l.builtM > 0) && !hasKnockdown(board, fire.id)) return null;
   const arrivals = field.arrivalBySource[s];
-  const last = arrivals.length ? arrivals[arrivals.length - 1] : Number.NEGATIVE_INFINITY;
+  // No cell of it in the forecast yet (it starts later, or past the horizon): nothing is held.
+  if (arrivals.length === 0) return null;
+  const last = arrivals[arrivals.length - 1];
   return last <= board.minute ? Math.max(last, field.fromMinute ?? 0) : null;
+}
+
+/**
+ * A fire with no line and no knocked-down edge that the forecast shows not spreading, with nothing
+ * of it still burning (no flaming cell left to spread or throw embers; smouldering is not modelled):
+ * it went out on its own. Returns the model's reason, or null while it is not out. Not out while:
+ * the forecast does not include it yet, it is waiting to start (Fire.waitReason), or its burned fuel
+ * is too wet now but a later step of the Studio run lets that fuel spread (the board's re-solve at
+ * that step resumes it from its burned cells, as Studio's one solve does; fire/spread.ts ResumeFrom).
+ */
+function wentOutOnItsOwn(board: Board, fire: Fire): string | null {
+  const field = board.solver.field;
+  const s = field?.sourceIndex.get(fire.id);
+  if (!field || s === undefined || field.lineKey !== lineKey(board)) return null;
+  if (board.lines.some((l) => l.fireId === fire.id && l.builtM > 0) || hasKnockdown(board, fire.id)) return null;
+  if (board.minute < fire.startMinute) return null;
+  const arrivals = field.arrivalBySource[s];
+  if (arrivals.length === 0 || arrivals[arrivals.length - 1] > board.minute) return null;
+  if (burningCellCount(board, fire) > 0) return null;
+  const grid = board.env.landscape;
+  const codes = new Set<number>();
+  for (const c of field.cellsBySource[s]) codes.add(grid.fuelCodes[c]);
+  const now = boardMoisture(board);
+  const run = runMoisture(board);
+  const c = board.conditions;
+  const wet = [...codes].filter((code) => !fuelCarriesFireAt(code, now));
+  if (run && c) {
+    const studioNow = board.minute - c.seriesStartMinute;
+    // Stalled, not out: a later step of the run lets one of its too-wet fuels spread again.
+    if (wet.some((code) => firstCarryingMinute(run, code, studioNow) !== null)) return null;
+  }
+  if (wet.length === codes.size && wet.length > 0) {
+    const origin = cellAt(grid, { longitude: fire.origin[0], latitude: fire.origin[1] });
+    return tooWetText(origin >= 0 && codes.has(grid.fuelCodes[origin]) ? grid.fuelCodes[origin] : wet[0], now);
+  }
+  return "no fuel left next to its burned ground that carries fire";
 }
 
 /** One order option at a position: the n nearest free units that can reach it, added to those on the line. */
@@ -4119,20 +4271,22 @@ function stepOnce(board: Board, dt: number, landOn: number | null): void {
     refreshFire(board, fire);
     if (fire.status === "burning") {
       const held = decide ? heldByLine(board, fire) : null;
-      // Tactic by flame length, line per tactic, seeded holding test (boardResponse.ts).
-      if (advanceContainment(board, fire, decide)) {
+      const selfOut = decide && held === null ? wentOutOnItsOwn(board, fire) : null;
+      // Tactic by flame length, line per tactic, seeded holding test (boardResponse.ts). Firefighting
+      // containment only once the fire is reported (nobody acts on it before then).
+      if (isReported(board, fire) && advanceContainment(board, fire, decide)) {
         fire.status = "contained";
         fire.containedAt = board.minute;
         reportKnockdown(board, fire.id);
         log(board, "contained", "board", `${fire.id} contained at ${fire.areaHa.toFixed(1)} ha.`, { action: "contained", fireId: fire.id, areaHa: fire.areaHa });
         onContained(board, fire);
       } else if (held !== null) {
-        // Held: with the line at attack positions and the knocked-down edge so far (or none, once nothing
-        // burns), the solver forecasts no further spread. The edge-tactic containment route for ground units.
+        // Held: with the line at attack positions and the knocked-down edge so far, the solver
+        // forecasts no further spread. The edge-tactic containment route for ground units.
         fire.status = "contained";
         fire.containedAt = held;
         const built = board.lines.filter((l) => l.fireId === fire.id).reduce((sum, l) => sum + l.builtM, 0);
-        const past = built > 0 ? `past its ${Math.round(built)} m of line` : hasKnockdown(board, fire.id) ? "past its knocked-down edge" : "and nothing of it is still burning (fuel or fuel moisture stopped it)";
+        const past = built > 0 ? `past its ${Math.round(built)} m of line` : "past its knocked-down edge";
         reportKnockdown(board, fire.id);
         log(board, "contained", "board", `${fire.id} contained at ${fire.areaHa.toFixed(1)} ha: the fire model forecasts no further spread ${past}.`, {
           action: "contained",
@@ -4141,8 +4295,24 @@ function stepOnce(board: Board, dt: number, landOn: number | null): void {
           lineM: built,
         });
         onContained(board, fire);
-      } else if (decide) {
-        // "Cannot catch it": ground units on scene, none still coming, and no containment in the forecast.
+      } else if (selfOut !== null) {
+        // No line, no spread in the forecast, nothing still burning: it went out on its own (not
+        // contained: no firefighting stopped it). Out at once; any units sent to it head back.
+        fire.status = "out";
+        fire.outAt = board.minute;
+        fire.closedBy = "self";
+        fire.outReason = selfOut;
+        board.firesOutTotal += 1;
+        for (const team of board.teams) if (team.fireId === fire.id) release(board, team);
+        log(board, "out", "board", `${fire.id} went out on its own at ${fire.areaHa < 1 ? fire.areaHa.toFixed(2) : fire.areaHa.toFixed(1)} ha (${selfOut}); the fire model forecasts no further spread and nothing of it is still burning.`, {
+          action: "went_out",
+          fireId: fire.id,
+          areaHa: fire.areaHa,
+          label: selfOut,
+        });
+      } else if (decide && board.minute >= fire.startMinute) {
+        // "Cannot catch it": ground units on scene, none still coming, and no containment in the forecast
+        // (not while the ignition is still waiting to spread: nothing is there to catch yet).
         escalate(
           board,
           fire,
@@ -4156,7 +4326,6 @@ function stepOnce(board: Board, dt: number, landOn: number | null): void {
       decide &&
       fire.status === "contained" &&
       fire.containedAt !== null &&
-      board.minute - fire.containedAt >= MOPUP_MINUTES &&
       // Out = nothing of it still burning (burned out, or put out by mop-up).
       burningCellCount(board, fire) === 0
     ) {
@@ -4166,7 +4335,7 @@ function stepOnce(board: Board, dt: number, landOn: number | null): void {
       board.firesOutTotal += 1;
       reportKnockdown(board, fire.id);
       for (const team of board.teams) if (team.fireId === fire.id) release(board, team);
-      log(board, "out", "board", `${fire.id} is out: nothing of it is still burning; its units head back to their stations.`, { action: "out", fireId: fire.id, areaHa: fire.areaHa });
+      log(board, "out", "board", `${fire.id} resolved (simulated): contained and no cells still burning; its units head back to their stations.`, { action: "out", fireId: fire.id, areaHa: fire.areaHa });
     }
   }
 

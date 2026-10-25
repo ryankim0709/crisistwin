@@ -69,6 +69,8 @@
  */
 
 import { DEFAULT_INCIDENT_ID } from "../live/api";
+import type { FireSettings } from "../fire/scheduledTypes";
+import type { MercatorBox } from "../fire/landscape";
 import type { LonLat } from "../live/types";
 import type { RouteOption, TeamStatus, FireSource, FireStatus, TravelBasis } from "./model";
 import type { RouteSegment } from "./traffic";
@@ -130,6 +132,10 @@ export interface StudioFire {
     values: { dead1h: number; dead10h: number; dead100h: number; liveHerb: number; liveWoody: number };
   };
   horizon_minutes: number;
+  /** Exact Studio solver settings; absent/null on older publishes. Seed belongs to this run. */
+  fire_settings?: FireSettings | null;
+  /** Studio's actual downloaded solve box, EPSG:3857; null/absent for region-board runs. */
+  landscape_box?: MercatorBox | null;
   /** Ignition ids more than 3 km outside the drill zones' box; the board skips them. */
   outside_drill: string[];
   /**

@@ -765,7 +765,7 @@ function renderGroup(ctx: Ctx, g: Group): Rendered {
     case "contained":
       return quiet(`${fireLabel(ctx, fireId)} contained${r.areaHa !== undefined ? ` (${r.areaHa.toFixed(1)} ha)` : ""}.`, "completed");
     case "out":
-      return quiet(`${fireLabel(ctx, fireId)} is out${r.areaHa !== undefined ? ` (${r.areaHa.toFixed(1)} ha burned)` : ""}; units heading back.`, "completed");
+      return quiet(`Fire resolved: ${fireLabel(ctx, fireId)} is out${r.areaHa !== undefined ? ` (${r.areaHa.toFixed(1)} ha burned)` : ""}; units heading back.`, "completed");
     case "closed_by_hand":
       return quiet(`You closed out ${fireLabel(ctx, fireId)}.`, "completed");
     case "knocked_down":

@@ -27,10 +27,10 @@ import { useEffect, useRef, useState } from "react";
 import { cellAt } from "../fire/spread";
 import { CALIFORNIA_REGIONS } from "../fire/regions";
 import { RegionUnavailableError, fetchRegionCatalog, fetchRegionLandscape } from "../fire/landscapePackage";
-import type { LandscapeGrid } from "../fire/landscape";
+import type { LandscapeGrid, MercatorBox } from "../fire/landscape";
 import type { LandscapeRegion } from "../fire/regions";
 import { DEFAULT_BOARD_RADIUS_METERS, boardCellMetersFor, clampBoardRadiusMeters } from "../fire/boardSize";
-import { loadLandscapeCached, type CachedLandscapeResult } from "../fire/landscapeCache";
+import { loadLandscapeCached, loadLandscapeForBoxCached, type CachedLandscapeResult } from "../fire/landscapeCache";
 import type { LonLat } from "../live/types";
 import { CREW_TYPES, STATION_TYPES, SUPPRESSION_BASES_URL, parseBases, type SuppressionBases } from "../studio/suppressionBases";
 import { studioBoardId } from "../studio/useRegionBoard";
@@ -380,12 +380,16 @@ export async function loadEnvironment(
   studioBoard: StudioBoard | null = null,
   /** The shared world's centre when its area is this drill (useCommandBoard); null: the drill's own. */
   centerOverride: LonLat | null = null,
+  /** Studio's actual solve box when its fires fell outside the selected region board. */
+  studioBox: MercatorBox | null = null,
 ): Promise<DemoEnvironment> {
   // The wind and the environment answer independently; the centre (the shared world's area when
   // it is this drill, else the environment `center`, else the zones' centroid, else the Studio
   // board's centre) is needed for the bases lookup, and for the
   // landscape unless the drill names its Studio board (that load starts at once).
-  const studioLandscape = studioBoard ? loadStudioBoard(studioBoard, onLiveLandscape, signal) : null;
+  const studioLandscape = studioBox
+    ? loadLandscapeForBoxCached(studioBox, signal).then((loaded) => fromCached(loaded, { id: `studio-box:${JSON.stringify(studioBox)}`, name: "Simulation Studio's solve area" }))
+    : studioBoard ? loadStudioBoard(studioBoard, onLiveLandscape, signal) : null;
   // Keep a rejection from surfacing as unhandled while the other inputs are still loading.
   studioLandscape?.catch(() => undefined);
   const envPromise = getJson<EnvironmentResponse>(demoUrl(ENVIRONMENT_URL, incidentId), signal);
@@ -458,19 +462,20 @@ export function useDemoEnvironmentState(
   studioBoard: StudioBoard | null = null,
   /** The shared world's centre when its area is this drill (useCommandBoard); null: the drill's own. */
   centerOverride: LonLat | null = null,
+  studioBox: MercatorBox | null = null,
 ): DemoEnvironmentState {
   const radius = clampBoardRadiusMeters(radiusMeters);
   const [state, setState] = useState<{ key: string } & DemoEnvironmentState>({ key: "", env: null, liveLandscape: false, error: null });
   const studioId = studioBoard ? studioBoardId(studioBoard.region.id, studioBoard.radiusMeters) : "";
   const centreKey = centerOverride ? `${centerOverride[0].toFixed(4)},${centerOverride[1].toFixed(4)}` : "";
-  const key = `${incidentId}|${preset.value}|${radius}|${studioId}|${centreKey}|${attempt}`;
-  const zones = useRef({ fallbackCenter, zonesHalfWidthMeters, studioBoard, centerOverride });
-  zones.current = { fallbackCenter, zonesHalfWidthMeters, studioBoard, centerOverride };
+  const key = `${incidentId}|${preset.value}|${radius}|${studioId}|${JSON.stringify(studioBox)}|${centreKey}|${attempt}`;
+  const zones = useRef({ fallbackCenter, zonesHalfWidthMeters, studioBoard, centerOverride, studioBox });
+  zones.current = { fallbackCenter, zonesHalfWidthMeters, studioBoard, centerOverride, studioBox };
   const ready = fallbackCenter !== null || studioBoard !== null;
   useEffect(() => {
     if (!ready) return;
     const controller = new AbortController();
-    const { fallbackCenter: center, zonesHalfWidthMeters: half, studioBoard: board, centerOverride: override } = zones.current;
+    const { fallbackCenter: center, zonesHalfWidthMeters: half, studioBoard: board, centerOverride: override, studioBox: box } = zones.current;
     setState({ key, env: null, liveLandscape: false, error: null });
     loadEnvironment(
       preset,
@@ -484,6 +489,7 @@ export function useDemoEnvironmentState(
       radius,
       board,
       override,
+      box,
     ).then(
       (env) => {
         if (!controller.signal.aborted) setState({ key, env, liveLandscape: env.landscapeSource === "live", error: null });

@@ -313,6 +313,9 @@ const pct = (v: number) => `${Math.round(v * 100)}%`;
 
 /** WIND_APPROACH_LABEL, or its hourly-series form when the Studio run used an hourly series. */
 export function windApproachLabel(board: Board): string {
+  if (board.conditions?.settings) {
+    return "the fire uses the completed Simulation Studio run's full settings, weather series, horizon and ignition order from T+0; Live preserves that fire until firefighting changes it, and only extends the forecast after Studio's horizon";
+  }
   if (!board.conditions?.series) return WIND_APPROACH_LABEL;
   return `the wind and fuel moisture follow the Studio run's hourly weather series in 10-minute steps (interpolated as Studio does), and the fire model re-solves at each new step; each solve looks ${LOOKAHEAD_MINUTES / 60} h ahead and the fire model also re-solves on a new, contained or closed fire and as fire line is built (line is a barrier in the model), continuing from the burned ground`;
 }
@@ -353,7 +356,10 @@ export function fireModelLabel(board: Board): string {
   const conditions = c
     ? `wind and fuel moisture assumed in Simulation Studio ('${c.name}', ${c.tag}): ${Math.round(c.windSpeedMph * 10) / 10} mph from ${Math.round(c.windFromDegrees)}°, ${c.moistureLabel} fuel moisture`
     : "no fire yet: wind and fuel moisture will come from the Simulation Studio run that starts one";
-  return `the simulator's cell solver, the same as /fire and Simulation Studio (Rothermel 1972 surface spread with crown fire, ember spotting and structure-to-structure spread at their defaults), on LANDFIRE fuel, canopy and terrain of ${where}; ${conditions}; ${windApproachLabel(board)}`;
+  const variation = c?.settings
+    ? c.settings.stochastic?.enabled ? `natural variation with Studio seed ${c.settings.stochastic.seed}` : "natural variation off, as in Studio"
+    : "legacy publish: shared solver defaults; rerun in Studio to recover its exact settings";
+  return `the simulator's cell solver, the same as /fire and Simulation Studio (Rothermel 1972 surface spread with crown fire and Studio's configured spread mechanisms; ${variation}), on LANDFIRE fuel, canopy and terrain of ${where}; ${conditions}; ${windApproachLabel(board)}`;
 }
 
 /** Where the zones' households, persons and vehicles come from (observation.inputs.demand). */

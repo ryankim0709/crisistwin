@@ -39,6 +39,8 @@ MOISTURE_KEYS = ("dead1h", "dead10h", "dead100h", "liveHerb", "liveWoody")
 MAX_SERIES_SAMPLES = 433
 MAX_SERIES_WIND_MPH = 120
 SERIES_MINUTE_RANGE = (-4320, 4320)
+# Same run limit as fire/horizon.ts (seven days); validation limits, not model parameters.
+MAX_HORIZON_MINUTES = 10080
 _index_ready = False
 
 
@@ -75,9 +77,9 @@ def _obj(value: Any, field: str) -> dict[str, Any]:
     return value
 
 
-def _moisture_values(value: Any, field: str) -> dict[str, float]:
+def _moisture_values(value: Any, field: str, lo: float = 0.01, hi: float = 3) -> dict[str, float]:
     values = _obj(value, field)
-    return {k: _num(values.get(k), f"{field}.{k}", 0.01, 3) for k in MOISTURE_KEYS}
+    return {k: _num(values.get(k), f"{field}.{k}", lo, hi) for k in MOISTURE_KEYS}
 
 
 def _weather_series(value: Any) -> dict[str, Any] | None:
@@ -101,7 +103,7 @@ def _weather_series(value: Any) -> dict[str, Any] | None:
             "wind_speed_mph": _num(item.get("wind_speed_mph"), f"weather_series.samples[{i}].wind_speed_mph", 0,
                                    MAX_SERIES_WIND_MPH),
             "wind_from_deg": _num(item.get("wind_from_deg"), f"weather_series.samples[{i}].wind_from_deg", 0, 360),
-            "moisture": None if moisture is None else _moisture_values(moisture, f"weather_series.samples[{i}].moisture"),
+            "moisture": None if moisture is None else _moisture_values(moisture, f"weather_series.samples[{i}].moisture", 0, 4),
         })
     return {
         "source": _text(series.get("source"), "weather_series.source", 80, required=False),
@@ -110,8 +112,105 @@ def _weather_series(value: Any) -> dict[str, Any] | None:
     }
 
 
+def _fire_settings(value: Any, horizon: int) -> dict[str, Any] | None:
+    """Studio's FireSettings, in its native camelCase shape (studio/scenario.ts).
+
+    Keep optional mechanisms absent when absent: the shared solver supplies their defaults.
+    Older publishes have no settings; never manufacture a stochastic seed for them.
+    """
+    if value is None:
+        return None
+    raw = _obj(value, "fire_settings")
+
+    def number(obj, key, path, lo=-math.inf, hi=math.inf):
+        return _num(obj.get(key), f"{path}.{key}", lo, hi)
+
+    def flag(obj, key, path):
+        val = obj.get(key)
+        if not isinstance(val, bool):
+            raise ApiError(400, CODE, f"`{path}.{key}` must be a boolean.")
+        return val
+
+    settings = {
+        "windSpeedMph": number(raw, "windSpeedMph", "fire_settings", 0, 60),
+        "windFromDegrees": number(raw, "windFromDegrees", "fire_settings", 0, 360),
+        "moisture": _moisture_values(raw.get("moisture"), "fire_settings.moisture"),
+        "midflameAdjustment": number(raw, "midflameAdjustment", "fire_settings", 0.01, 1),
+        "stepMinutes": number(raw, "stepMinutes", "fire_settings"),
+        "horizonMinutes": _int(raw.get("horizonMinutes"), "fire_settings.horizonMinutes", 60, MAX_HORIZON_MINUTES),
+    }
+    if settings["horizonMinutes"] != horizon:
+        raise ApiError(400, CODE, "`fire_settings.horizonMinutes` must match `horizon_minutes`.")
+    for key, fields in (
+        ("spotting", {"maxDistanceMeters": (0, 2000)}),
+        ("structureSpread", {"rateMetersPerMinute": (0, 1000)}),
+        ("stochastic", {"seed": (-math.inf, math.inf)}),
+        ("fireInducedWind", {}),
+    ):
+        if key not in raw:
+            continue
+        path = f"fire_settings.{key}"
+        obj = _obj(raw[key], path)
+        out = {"enabled": flag(obj, "enabled", path)}
+        out.update({field: number(obj, field, path, *bounds) for field, bounds in fields.items()})
+        if key == "stochastic":
+            for field in ("rosSigma", "rosCorrelationMeters", "gustFactor", "airTemperatureF"):
+                if field not in obj:
+                    continue
+                if field == "gustFactor" and obj[field] is None:
+                    out[field] = None
+                else:
+                    bounds = (0, math.log(3)) if field == "rosSigma" else (-math.inf, math.inf)
+                    out[field] = number(obj, field, path, *bounds)
+            for field in ("spotting", "windWander"):
+                if field in obj:
+                    out[field] = flag(obj, field, path)
+        if key == "fireInducedWind" and "seed" in obj:
+            out["seed"] = number(obj, "seed", path)
+        settings[key] = out
+    if "weatherSeries" in raw:
+        path = "fire_settings.weatherSeries"
+        obj = _obj(raw["weatherSeries"], path)
+        enabled = flag(obj, "enabled", path)
+        samples = obj.get("samples")
+        if not isinstance(samples, list) or not (1 if enabled else 0) <= len(samples) <= MAX_SERIES_SAMPLES:
+            raise ApiError(400, CODE, f"`{path}.samples` must have at most {MAX_SERIES_SAMPLES} samples, and at least one when enabled.")
+        out = {"enabled": enabled, "samples": []}
+        last = None
+        for i, sample in enumerate(samples):
+            at = f"{path}.samples[{i}]"
+            sample = _obj(sample, at)
+            minute = number(sample, "minute", at)
+            if last is not None and minute <= last:
+                raise ApiError(400, CODE, f"`{path}.samples` must be strictly ascending in minute.")
+            last = minute
+            item = {
+                "minute": minute,
+                "windSpeedMph": number(sample, "windSpeedMph", at, 0, MAX_SERIES_WIND_MPH),
+                "windFromDegrees": number(sample, "windFromDegrees", at),
+            }
+            if "moisture" in sample:
+                moist = _obj(sample["moisture"], f"{at}.moisture")
+                item["moisture"] = {k: number(moist, k, f"{at}.moisture", 0, 4) for k in MOISTURE_KEYS}
+            if "airTemperatureF" in sample:
+                item["airTemperatureF"] = number(sample, "airTemperatureF", at)
+            out["samples"].append(item)
+        for field in ("source", "evidence"):
+            if field in obj:
+                out[field] = _text(obj[field], f"{path}.{field}", 10000, required=False)
+        if "missing" in obj:
+            missing = _obj(obj["missing"], f"{path}.missing")
+            out["missing"] = {
+                "hours": number(missing, "hours", f"{path}.missing", 0),
+                "longestGapHours": number(missing, "longestGapHours", f"{path}.missing", 0),
+                "startMissing": flag(missing, "startMissing", f"{path}.missing"),
+            }
+        settings["weatherSeries"] = out
+    return settings
+
+
 def validate(body: dict[str, Any]) -> dict[str, Any]:
-    horizon = _int(body.get("horizon_minutes"), "horizon_minutes", 1, 1440)
+    horizon = _int(body.get("horizon_minutes"), "horizon_minutes", 1, MAX_HORIZON_MINUTES)
     raw = body.get("ignitions")
     if not isinstance(raw, list) or not 1 <= len(raw) <= MAX_IGNITIONS:
         raise ApiError(400, CODE, f"`ignitions` must be a list of 1 to {MAX_IGNITIONS} items.")
@@ -127,7 +226,7 @@ def validate(body: dict[str, Any]) -> dict[str, Any]:
         # absent = not set, and Live models its own report delay.
         report = item.get("report_minute")
         if report is not None:
-            report = _int(report, f"ignitions[{i}].report_minute", start, 1440)
+            report = _int(report, f"ignitions[{i}].report_minute", start, MAX_HORIZON_MINUTES)
         ignitions.append(
             {
                 "id": ign_id,
@@ -140,13 +239,21 @@ def validate(body: dict[str, Any]) -> dict[str, Any]:
         )
     wind_in = _obj(body.get("wind"), "wind")
     wind = {
-        "speed_mph": _num(wind_in.get("speed_mph"), "wind.speed_mph", 0, 60),
+        # A native series' peak-hour summary can exceed the constant-wind slider's 60 mph.
+        "speed_mph": _num(wind_in.get("speed_mph"), "wind.speed_mph", 0, MAX_SERIES_WIND_MPH),
         "from_deg": _num(wind_in.get("from_deg"), "wind.from_deg", 0, 360),
         "source": _text(wind_in.get("source"), "wind.source", 40),
         "label": _text(wind_in.get("label"), "wind.label", LABEL_MAX_CHARS, required=False),
     }
     moist_in = _obj(body.get("moisture"), "moisture")
     values = _moisture_values(moist_in.get("values"), "moisture.values")
+    box = body.get("landscape_box")
+    if box is not None:
+        box = _obj(box, "landscape_box")
+        box = {k: _num(box.get(k), f"landscape_box.{k}", -20_037_509, 20_037_509)
+               for k in ("minX", "minY", "maxX", "maxY")}
+        if box["minX"] >= box["maxX"] or box["minY"] >= box["maxY"]:
+            raise ApiError(400, CODE, "`landscape_box` must have positive width and height.")
     return {
         "scenario_id": _text(body.get("scenario_id"), "scenario_id", 80),
         "name": _text(body.get("name"), "name", 80),
@@ -159,6 +266,8 @@ def validate(body: dict[str, Any]) -> dict[str, Any]:
             "values": values,
         },
         "horizon_minutes": horizon,
+        "fire_settings": _fire_settings(body.get("fire_settings"), horizon),
+        "landscape_box": box,
         "weather_series": _weather_series(body.get("weather_series")),
     }
 
@@ -271,6 +380,8 @@ def _fire_json(doc: dict[str, Any]) -> dict[str, Any]:
         "wind": doc["wind"],
         "moisture": doc["moisture"],
         "horizon_minutes": doc["horizon_minutes"],
+        "fire_settings": doc.get("fire_settings"),
+        "landscape_box": doc.get("landscape_box"),
         "outside_drill": doc.get("outside_drill", []),
         # Absent on fires published before the field existed, and on runs with one constant wind.
         "weather_series": doc.get("weather_series"),

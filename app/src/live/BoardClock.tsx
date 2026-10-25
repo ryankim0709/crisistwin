@@ -22,19 +22,15 @@ export function ClockState({ board: cb }: { board: CommandBoard }) {
   );
 }
 
-/**
- * Pause / Resume. The live board is AI agent only: while the agent is off the clock waits for it,
- * so Resume is disabled with that reason (turning the agent on starts the clock).
- */
+/** Pause / Resume is available while AI monitoring is on. */
 export function PauseButton({ board: cb, className }: { board: CommandBoard; className?: string }) {
-  const agentOff = !cb.autopilot;
   return (
     <Button
       size="sm"
       variant="secondary"
       className={className}
-      disabled={agentOff}
-      title={agentOff ? AGENT_OFF_PAUSE : undefined}
+      disabled={!cb.autopilot}
+      title={!cb.autopilot ? AGENT_OFF_PAUSE : undefined}
       onClick={() => cb.setRunning((r) => !r)}
       aria-pressed={!cb.running}
     >
@@ -64,13 +60,13 @@ function speedWords(speed: number): string {
 /**
  * The speed slider (stepped stops, BOARD_SPEED_STEPS, so the useful range is not squashed) with
  * the Auto toggle (demo/autoSpeed.ts). While Auto is on the value says why ("60× · idle",
- * "1× · Claude deciding (urgent)", "5× · Claude reviewing", "20× · active"); moving the slider
+ * "1× · Claude deciding (urgent)", "1× · Claude reviewing", "20× · active"); moving the slider
  * picks a speed by hand and turns Auto off.
  */
 export function BoardSpeedSlider({ board: cb }: { board: CommandBoard }) {
   const index = Math.max(0, BOARD_SPEED_STEPS.indexOf(cb.speed));
   const labelId = useId();
-  const why = cb.autoSpeed ? AUTO_REASON_TEXT[cb.autoReason] : "manual";
+  const why = cb.agent.status === "thinking" ? "Claude deciding" : cb.autoSpeed ? AUTO_REASON_TEXT[cb.autoReason] : "manual";
   return (
     <div className="lc-speed" role="group" aria-labelledby={labelId}>
       <span className="lc-speed-label" id={labelId}>
@@ -159,13 +155,16 @@ export function BoardSizeControl({ board: cb }: { board: CommandBoard }) {
         label="Board size, km from the centre to each edge"
         options={sizes.map((s) => ({
           ...s,
-          title: `${s.title}. ${readinessLabel(ready(Number(s.value)), Number(s.value) * 1000, boardCellMetersFor(Number(s.value) * 1000))}`,
+          disabled: cb.boardSizeLocked,
+          title: cb.boardSizeLocked ? "Board size comes from Simulation Studio. Change it there and run the simulation again." : `${s.title}. ${readinessLabel(ready(Number(s.value)), Number(s.value) * 1000, boardCellMetersFor(Number(s.value) * 1000))}`,
         }))}
         value={String(cb.boardRadius / 1000)}
         onChange={(value) => cb.setBoardRadius(Number(value) * 1000)}
       />
       <span className="lc-dim">
-        {cb.boardLoading
+        {cb.boardSizeLocked
+          ? "Uses the simulator's landscape and cell size. Change the board in Simulation Studio and run it again."
+          : cb.boardLoading
           ? "Loading the board\u2026"
           : `About ${cb.boardRadius / 500} \u00d7 ${cb.boardRadius / 500} km, ${boardCellMetersFor(cb.boardRadius)} m cells. ${readinessLabel(
               ready(cb.boardRadius / 1000),
@@ -180,9 +179,8 @@ export function BoardSizeControl({ board: cb }: { board: CommandBoard }) {
 /**
  * The board clock in the /live "Controls" block, under the AI agent row: board time (T+hh:mm),
  * one state tag (running, or why not), Pause/Resume and the speed-up slider, with the board size
- * and Reset board behind a disclosure. The live board is AI agent only, so the clock runs only
- * while the AI agent is on; while it is off the tag says "Paused — turn on the AI agent" and there
- * is no Pause/Resume (the agent switch is the control). Faster playback only shows board minutes
+ * and Reset board behind a disclosure. The clock runs only while AI monitoring is on.
+ * Faster playback only shows board minutes
  * sooner; the clock still lands on every fire re-solve and ignition, so the fire model's results
  * do not change with speed.
  */
@@ -198,7 +196,6 @@ export default function BoardClock({ board: cb }: { board: CommandBoard }) {
           {simClock(board.minute)}
         </span>
         <ClockState board={cb} />
-        {/* While the AI agent is off it is the clock's control; Pause/Resume only while it is on. */}
         {cb.autopilot ? <PauseButton board={cb} className="lc-board-clock-pause" /> : null}
       </div>
       <BoardSpeedSlider board={cb} />

@@ -240,11 +240,12 @@ export default function DemoDiorama({ board, version, field, landscape, regionNa
   }, [scene, overlay, board, version, forecasts]);
   useEffect(() => () => overlay.setBoard(null, new Map()), [overlay]);
 
-  // Per-cell fire states (burning / burned out / put out, fireState.ts); the cells must be the
-  // scene's landscape's (the board's own), else the arrival field alone decides.
+  // Show the identical Studio arrival-field animation until Live firefighting changes the fire.
+  // Then use the board's cell states to show suppression; the cells must be this landscape's.
   useEffect(() => {
     if (!scene) return;
-    const states = board.env.landscape === landscape ? fireCellStates(board) : null;
+    const studioFire = board.conditions?.settings && !board.solver.field?.intervened;
+    const states = !studioFire && board.env.landscape === landscape ? fireCellStates(board) : null;
     scene.setCellStates(states);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the board is mutated in place; version marks changes
   }, [scene, board, version, landscape, field]);
