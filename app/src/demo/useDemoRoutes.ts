@@ -48,16 +48,51 @@ export interface RoutesState {
   safeDestinations: SafeDestinationStatus[];
 }
 
+/** What a routes refresh check reads now (useDemoRoutes; demo/fastRun.ts runs the same rule). */
+export interface RoutesPlan {
+  /** Active fires (id:status), controller closures and excluded destinations: a new key re-routes at once. */
+  key: string;
+  /** Some fire burns: routes also refresh every ROUTE_REFRESH_MINUTES. */
+  burning: boolean;
+  closures: string;
+  safe: SafeDestinationStatus[];
+  excluded: string[];
+}
+
+export function routesPlan(board: Board, destinations?: readonly Destination[] | null): RoutesPlan {
+  const fires = activeFires(board);
+  // A controller road closure (or reopening) changes the key too: routes are recomputed around it.
+  const closures = closureKey(board);
+  // Safe destinations (fire forecast, capacity) are re-checked on every refresh check, which runs
+  // on board updates; a destination closing or reopening changes the key and re-routes at once.
+  const safe = destinations && destinations.length > 0 ? safeDestinationStatus(board, destinations) : [];
+  const excluded = excludedDestinationIds(safe);
+  return {
+    key: `${fires.map((f) => `${f.id}:${f.status}`).join(",")}|${closures}|${excluded.join(",")}`,
+    burning: fires.some((f) => f.status === "burning"),
+    closures,
+    safe,
+    excluded,
+  };
+}
+
+/** The POST /api/demo/routes body for the board now. */
+export function routesBody(board: Board, excluded: string[]): RoutesRequest {
+  return { fires: fireRingsForRouting(board, RING_POINTS), excluded_destination_ids: excluded };
+}
+
 /**
  * Zone routes around the fires that are not out (POST /api/demo/routes). Refreshes when the set
  * of active fires changes, and every ROUTE_REFRESH_MINUTES while any fire burns. One request at
- * a time; an answer for an older board is dropped.
+ * a time; an answer for an older board is dropped. `paused`: another driver owns the board's
+ * routes (the /run fast baseline, demo/fastRun.ts), so no request starts meanwhile.
  */
 export function useDemoRoutes(
   board: Board | null,
   version: number,
   incidentId: string,
   destinations?: readonly Destination[] | null,
+  paused = false,
 ): RoutesState {
   const [state, setState] = useState<RoutesState>({ routes: new Map(), asOf: null, error: null, closedSegmentIds: null, safeDestinations: [] });
   const inflight = useRef(false);
@@ -77,17 +112,9 @@ export function useDemoRoutes(
       setState((s) => (s.asOf === null && s.routes.size === 0 && !s.error ? s : { routes: new Map(), asOf: null, error: null, closedSegmentIds: null, safeDestinations: [] }));
       return;
     }
-    if (inflight.current) return;
-    const fires = activeFires(board);
-    // A controller road closure (or reopening) changes the key too: routes are recomputed around it.
-    const closures = closureKey(board);
+    if (inflight.current || paused) return;
     const prev = last.current;
-    // Safe destinations (fire forecast, capacity) are re-checked on every refresh check, which runs
-    // on board updates; a destination closing or reopening changes the key and re-routes at once.
-    const safe = destinations && destinations.length > 0 ? safeDestinationStatus(board, destinations) : [];
-    const excluded = excludedDestinationIds(safe);
-    const key = `${fires.map((f) => `${f.id}:${f.status}`).join(",")}|${closures}|${excluded.join(",")}`;
-    const burning = fires.some((f) => f.status === "burning");
+    const { key, burning, closures, safe, excluded } = routesPlan(board, destinations);
     const due =
       prev.board !== board ||
       key !== prev.key ||
@@ -95,7 +122,7 @@ export function useDemoRoutes(
     if (!due || Date.now() - prev.failedAt < RETRY_WALL_MS) return;
 
     const minute = board.minute;
-    const body: RoutesRequest = { fires: fireRingsForRouting(board, RING_POINTS), excluded_destination_ids: excluded };
+    const body = routesBody(board, excluded);
     inflight.current = true;
     last.current = { ...prev, board, key, minute };
     let askAgain = false;
@@ -134,7 +161,7 @@ export function useDemoRoutes(
         inflight.current = false;
         if (askAgain) setRetry((n) => n + 1);
       });
-  }, [board, version, incidentId, retry, destinations]);
+  }, [board, version, incidentId, retry, destinations, paused]);
 
   return state;
 }

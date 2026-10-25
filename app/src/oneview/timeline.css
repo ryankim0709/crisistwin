@@ -38,6 +38,24 @@
   background: var(--ct-brand);
   transition: width var(--ct-duration) var(--ct-ease);
 }
+/* Scrubber over the recorded runs: the recorded part of the track is filled, the rest is not reachable. */
+.ov-scrubber {
+  width: 100%;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--ct-brand);
+  background: linear-gradient(
+      to right,
+      var(--ct-brand-soft, var(--ct-surface-sunken)) 0 var(--ov-recorded, 100%),
+      var(--ct-surface-sunken) var(--ov-recorded, 100%) 100%
+    )
+    center / 100% 4px no-repeat;
+  cursor: pointer;
+}
+.ov-scrubber:focus-visible {
+  outline: 2px solid var(--ct-focus, var(--ct-brand));
+  outline-offset: 2px;
+}
 .ov-caption {
   color: var(--ct-ink-subtle);
   font-size: var(--ct-text-2xs);

@@ -8,15 +8,20 @@
  * (no WorldBar, no size or weather changes).
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Button, EmptyState, EvidenceTag, IconButton, LoadingState, Notice, Panel, Spinner, Tag } from "../ui";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Button, EmptyState, EvidenceTag, IconButton, LoadingState, Notice, Panel, ProgressBar, Spinner, Tag } from "../ui";
 import AgentInputsPanel from "../demo/AgentInputsPanel";
 import DemoDiorama from "../demo/DemoDiorama";
+import { arrivalFieldOf } from "../demo/dioramaField";
+import type { FastRunStats } from "../demo/fastRun";
+import { boardWind, zoneForecasts, type Board } from "../demo/model";
+import { snapshotAt, viewBoardAt, type RunHistory } from "../demo/runHistory";
+import type { ArrivalFieldState } from "../demo/useArrivalField";
 import { BOARD_SPEED_STEPS, type BoardSpeed, type CommandBoard } from "../demo/useCommandBoard";
 import { REALTIME_ROUTINE_GAP_MINUTES } from "../demo/useDemoAgent";
 import { usePredictedFire } from "../demo/usePredictedFire";
 import { useRunStateSync } from "../demo/useRunStateSync";
-import type { RunTimeline } from "../demo/runContracts";
+import type { BoardRunMode, RunTimeline } from "../demo/runContracts";
 import { fetchActive } from "../live/active";
 import { DEFAULT_INCIDENT_ID, INCIDENT_GONE_EVENT, drillAction, readToken } from "../live/api";
 import { useCommand } from "../live/useCommand";
@@ -28,7 +33,7 @@ import { boardSeed, boardTimeline, hasRunModes, restartBoard, useRunBoard } from
 import { formatClock } from "./format";
 import { PRESETS_ARE_CURATED, RUN_PRESETS } from "./optionalModules";
 import { BERKELEY_REGION, publishScenario } from "./publishScenario";
-import RunTimelineBar from "./RunTimelineBar";
+import RunTimelineBar, { type ScrubView } from "./RunTimelineBar";
 import SetupPanel from "./SetupPanel";
 import { draftFromPreset, type PrepareState, type RunPhase, type ScenarioDraft } from "./types";
 import "./oneview.css";
@@ -48,7 +53,29 @@ const MAX_DRILL_SPEED = 60;
 const DRILL_DEBOUNCE_MS = 2_000;
 const DRILL_START_DELAY_MS = 300;
 
-const snapshotOf = (t: RunTimeline | null): RunTimeline | null => (t ? { ...t, points: t.points.slice() } : null);
+/**
+ * "?baseline=clock" runs the baseline on the board clock at the speed picked (the earlier
+ * behaviour), to compare it with the fast run on the same seed. Default: the fast run.
+ */
+const CLOCK_BASELINE = new URLSearchParams(window.location.search).get("baseline") === "clock";
+
+/** A finished (or stopped) run kept for scrubbing: its final board (no longer stepped) and its history. */
+interface RecordedRun {
+  board: Board;
+  history: RunHistory;
+  timeline: RunTimeline;
+}
+
+/** Copies the board hook's current history (it keeps growing while the board runs). */
+function recordRun(c: CommandBoard, mode: BoardRunMode): RecordedRun | null {
+  const h = c.getHistory();
+  if (!h?.board) return null;
+  const points = h.points.slice();
+  return { board: h.board, history: { board: h.board, points, snapshots: h.snapshots.slice() }, timeline: { mode, seed: h.board.seed, points } };
+}
+
+const NO_FOLLOWED: never[] = [];
+const NO_PREDICTION: never[] = [];
 
 type StepState = "todo" | "active" | "done";
 
@@ -208,25 +235,44 @@ export default function OneViewPage() {
 
   // ---- 2 Baseline ----------------------------------------------------------------------------
   const live = boardTimeline(cb);
-  const [baseline, setBaseline] = useState<RunTimeline | null>(null);
-  const [ai, setAi] = useState<RunTimeline | null>(null);
+  // Each finished run's final board and history (score points every minute, board snapshots), for the scoreboard and the scrubber.
+  const [baselineRec, setBaselineRec] = useState<RecordedRun | null>(null);
+  const [aiRec, setAiRec] = useState<RecordedRun | null>(null);
+  const baseline = baselineRec?.timeline ?? null;
+  const ai = aiRec?.timeline ?? null;
   const [baselineDone, setBaselineDone] = useState(false);
   const [aiDone, setAiDone] = useState(false);
-  const startBaseline = () => {
-    setBaseline(null);
-    setAi(null);
-    setBaselineDone(false);
-    setAiDone(false);
-    setPhase("baseline");
-    cb.setRunning(true);
-  };
+  const [fastResult, setFastResult] = useState<{ stats: FastRunStats | null; error: string | null } | null>(null);
+  const [scrubMinute, setScrubMinute] = useState<number | null>(null);
+  const [scrubView, setScrubView] = useState<ScrubView>("baseline");
+  const baselineRunId = useRef(0);
   const finishBaseline = useCallback(() => {
     const c = cbRef.current;
+    c.stopFast();
     c.setRunning(false);
-    const t = boardTimeline(c);
-    if (t && t.mode === "baseline") setBaseline(snapshotOf(t));
+    setBaselineRec((prev) => prev ?? recordRun(c, "baseline"));
     setBaselineDone(true);
   }, []);
+  const startBaseline = () => {
+    setBaselineRec(null);
+    setAiRec(null);
+    setBaselineDone(false);
+    setAiDone(false);
+    setFastResult(null);
+    setScrubMinute(null);
+    setPhase("baseline");
+    if (CLOCK_BASELINE) {
+      cb.setRunning(true);
+      return;
+    }
+    // The fast run: the same model stepped minute by minute as fast as it goes (demo/fastRun.ts).
+    const id = ++baselineRunId.current;
+    void cb.runFast(horizon).then((result) => {
+      if (baselineRunId.current !== id) return; // Start over (or a new baseline) meanwhile
+      setFastResult(result);
+      if (!result.error) finishBaseline();
+    });
+  };
 
   // ---- 3 AI dispatch -------------------------------------------------------------------------
   const aiKick = useRef(false);
@@ -234,7 +280,8 @@ export default function OneViewPage() {
   const [aiNotice, setAiNotice] = useState<string | null>(null);
   const startAi = () => {
     aiKick.current = false;
-    setAi(null);
+    setAiRec(null);
+    setScrubMinute(null);
     setAiDone(false);
     setAiNotice(null);
     setPhase("ai");
@@ -254,8 +301,8 @@ export default function OneViewPage() {
     const c = cbRef.current;
     c.setAutopilot(false);
     c.setRunning(false);
-    const t = boardTimeline(c);
-    if (t && t.mode === "ai") setAi(snapshotOf(t));
+    // Only the restarted AI board's history (never the baseline board's, kept before the restart).
+    if (c.board !== kickBoard.current || !hasRunModes(c)) setAiRec(recordRun(c, "ai"));
     setAiDone(true);
   }, []);
 
@@ -271,11 +318,15 @@ export default function OneViewPage() {
     const c = cbRef.current;
     c.setAutopilot(false);
     c.setRunning(false);
+    c.stopFast();
+    baselineRunId.current += 1;
     setPhase("setup");
     setBaselineDone(false);
     setAiDone(false);
-    setBaseline(null);
-    setAi(null);
+    setBaselineRec(null);
+    setAiRec(null);
+    setFastResult(null);
+    setScrubMinute(null);
     seedKick.current = null;
     restartBoard(c, draft.seed);
   };
@@ -324,8 +375,31 @@ export default function OneViewPage() {
   const liveAi = phase === "ai" && live?.mode === "ai" ? live : null;
   const baselineShown = baselineDone ? baseline : (liveBaseline ?? baseline);
   const aiShown = aiDone ? ai : (liveAi ?? ai);
-  const canPlay = !!board && ((phase === "baseline" && !baselineDone) || (phase === "ai" && !aiDone));
+  const computing = cb.fast;
+  const canPlay = !!board && !computing && ((phase === "baseline" && !baselineDone) || (phase === "ai" && !aiDone));
   const onPlayPause = () => cb.setRunning(!cb.running);
+
+  // ---- Scrubbing the recorded runs (never changes a run: snapshots are copies, demo/runHistory.ts)
+  const scrubViews: ScrubView[] = [...(baselineRec ? (["baseline"] as const) : []), ...(aiRec ? (["ai"] as const) : [])];
+  const scrubMax = Math.max(0, ...[baselineRec, aiRec].map((r) => (r ? Math.floor(r.board.minute + 1e-9) : 0)));
+  const canScrub = scrubViews.length > 0 && !computing;
+  const shownView: ScrubView = scrubViews.includes(scrubView) ? scrubView : (scrubViews[0] ?? "baseline");
+  const scrubRec = canScrub && scrubMinute !== null ? (shownView === "ai" ? aiRec : baselineRec) : null;
+  const scrubbed = useMemo(() => {
+    if (!scrubRec || scrubMinute === null) return null;
+    const final = scrubRec.board;
+    if (scrubMinute >= final.minute - 1e-9) return { board: final, forecasts: zoneForecasts(final, "reported") };
+    const snap = snapshotAt(scrubRec.history, scrubMinute);
+    return snap ? { board: viewBoardAt(final, snap), forecasts: snap.forecasts } : null;
+  }, [scrubRec, scrubMinute]);
+  // The fire extent while scrubbing: the run's final arrival field, revealed up to the shown minute.
+  const scrubFinal = scrubRec?.board ?? null;
+  const scrubField = useMemo<ArrivalFieldState | null>(() => {
+    if (!scrubFinal || !cb.landscape || scrubFinal.env.landscape !== cb.landscape) return null;
+    const field = arrivalFieldOf(scrubFinal);
+    return field ? { board: scrubFinal, field, stamp: 0 } : null;
+  }, [scrubFinal, cb.landscape]);
+  const viewBoard = scrubbed?.board ?? board;
 
   // ---- Status lines
   const isBerkeley = (active.data?.region_id ?? "").split("@")[0] === BERKELEY_REGION;
@@ -371,18 +445,19 @@ export default function OneViewPage() {
     <main className="ov-root" id="main-content" tabIndex={-1}>
       <h1 className="ov-sr">Scenario run: baseline vs AI dispatch (simulated)</h1>
       <div className="ov-stage">
-        {board && cb.landscape ? (
+        {board && viewBoard && cb.landscape ? (
+          // While scrubbing: a recorded board at the scrubbed minute (drawn only, never stepped); live-only layers are hidden.
           <DemoDiorama
-            board={board}
-            version={cb.version}
-            field={cb.field}
+            board={viewBoard}
+            version={scrubbed ? -1 - Math.round(scrubbed.board.minute * 1000) : cb.version}
+            field={scrubbed ? scrubField : cb.field}
             landscape={cb.landscape}
             regionName={board.env.landscapeRegion?.name ?? null}
-            forecasts={cb.forecasts}
-            wind={cb.windNow}
-            selected={cb.selection}
-            followed={followed}
-            predictedFire={predictedFire}
+            forecasts={scrubbed ? scrubbed.forecasts : cb.forecasts}
+            wind={scrubbed ? boardWind(scrubbed.board) : cb.windNow}
+            selected={scrubbed ? null : cb.selection}
+            followed={scrubbed ? NO_FOLLOWED : followed}
+            predictedFire={scrubbed ? NO_PREDICTION : predictedFire}
           />
         ) : (
           <div className="ov-stage-msg">{stage}</div>
@@ -445,9 +520,26 @@ export default function OneViewPage() {
               </Button>
             ) : phase === "baseline" && !baselineDone ? (
               <>
-                <p className="ov-status" role="status">
-                  {cb.running ? <Spinner /> : null} {formatClock(minute)} of {formatClock(horizon)} at {cb.speed}&times;
-                </p>
+                {computing ? (
+                  <>
+                    <p className="ov-status" role="status">
+                      <Spinner /> Computing baseline&hellip; {formatClock(computing.minute)} of {formatClock(horizon)}
+                    </p>
+                    <ProgressBar value={computing.minute / Math.max(1, horizon)} label="Baseline computed, board minutes" />
+                    <p className="ov-dim">
+                      The simulated board runs at full model speed, one board minute at a time; each fire solve and route answer is awaited
+                      before the clock moves, so the result does not depend on the network or this machine.
+                    </p>
+                  </>
+                ) : fastResult?.error ? (
+                  <Notice tone="danger" compact title="The fast baseline stopped">
+                    {fastResult.error} It stopped at {formatClock(minute)}; keep it as it is or start over.
+                  </Notice>
+                ) : (
+                  <p className="ov-status" role="status">
+                    {cb.running ? <Spinner /> : null} {formatClock(minute)} of {formatClock(horizon)} at {cb.speed}&times;
+                  </p>
+                )}
                 <Button variant="secondary" size="sm" onClick={finishBaseline}>
                   Stop and keep this baseline
                 </Button>
@@ -455,7 +547,11 @@ export default function OneViewPage() {
             ) : (
               <p className="ov-dim">
                 Recorded to {formatClock(baseline?.points.at(-1)?.minute ?? null)}
-                {baseline ? "" : " (no score timeline in this build)"}.
+                {baseline ? "" : " (no score timeline in this build)"}
+                {fastResult?.stats && !fastResult.stats.stopped
+                  ? ` in ${(fastResult.stats.wallMs / 1000).toFixed(1)} s (${fastResult.stats.solves} fire solves, ${fastResult.stats.routeCalls} route requests)`
+                  : ""}
+                . Drag the timeline to replay it.
               </p>
             )}
             {!runModes && phase !== "ai" ? (
@@ -574,6 +670,20 @@ export default function OneViewPage() {
           baseline={baselineShown}
           ai={aiShown}
           baselineDone={baselineDone}
+          computing={computing}
+          scrub={
+            canScrub
+              ? {
+                  minute: scrubMinute,
+                  max: scrubMax,
+                  onScrub: setScrubMinute,
+                  view: shownView,
+                  views: scrubViews,
+                  onView: setScrubView,
+                  boardMinute: scrubbed ? scrubbed.board.minute : null,
+                }
+              : null
+          }
         />
       </Panel>
     </main>

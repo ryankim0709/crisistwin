@@ -158,7 +158,7 @@ export function applyCrewRoutes(board: Board, routes: CrewRoutesResponse["routes
  * notes the class). At most MAX_REQUESTS legs per request, one request at a time (the effect
  * runs again on the next board version for the rest); a leg is asked for once.
  */
-export function useCrewRoutes(board: Board | null, version: number, incidentId: string): CrewRoutesState {
+export function useCrewRoutes(board: Board | null, version: number, incidentId: string, paused = false): CrewRoutesState {
   const [state, setState] = useState<CrewRoutesState>({ fetched: 0, noRoute: 0, error: null });
   const inflight = useRef(false);
   const asked = useRef<{ board: Board | null; keys: Set<string>; failedAt: number }>({ board: null, keys: new Set(), failedAt: -Infinity });
@@ -166,7 +166,7 @@ export function useCrewRoutes(board: Board | null, version: number, incidentId: 
   const [retry, setRetry] = useState(0);
 
   useEffect(() => {
-    if (!board || inflight.current) return;
+    if (!board || inflight.current || paused) return;
     if (asked.current.board !== board) asked.current = { board, keys: new Set(), failedAt: -Infinity };
     if (Date.now() - asked.current.failedAt < RETRY_WALL_MS) return;
     const seen = asked.current.keys;
@@ -213,7 +213,7 @@ export function useCrewRoutes(board: Board | null, version: number, incidentId: 
         inflight.current = false;
         if (askAgain) setRetry((n) => n + 1);
       });
-  }, [board, version, incidentId, retry]);
+  }, [board, version, incidentId, retry, paused]);
 
   return state;
 }

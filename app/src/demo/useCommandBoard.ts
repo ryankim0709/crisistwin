@@ -37,8 +37,9 @@ import { useDemoRoutes } from "./useDemoRoutes";
 import { useArrivalField } from "./useArrivalField";
 import { useFireSolver } from "./useFireSolver";
 import { clearStudioFires, studioBaseline, studioFiresToIngest, useStudioFires } from "./useStudioFires";
-import type { BoardRunMode, RunTimeline, ScorePoint } from "./runContracts";
-import { scorePoint } from "./scorePoint";
+import type { BoardRunMode, RunTimeline } from "./runContracts";
+import { emptyHistory, recordHistory, type RunHistory } from "./runHistory";
+import { createFireSolverClient, fastForward, type FastRunStats, type FireSolverClient } from "./fastRun";
 import { buildIncidentPicture } from "./incidentPicture";
 import { usePeople } from "../live/people";
 import { useParticipants } from "../appint/api";
@@ -574,15 +575,21 @@ export function useCommandBoard({
     [data, peopleData, participantsData],
   );
 
-  const routes = useDemoRoutes(board, version, incidentId, data?.destinations);
+  // The fast run (runFast below, demo/fastRun.ts) owns this board's solves, routes and road legs
+  // while it runs: the background hooks start nothing meanwhile and the clock does not tick.
+  const fastRef = useRef<{ board: Board; cancel: boolean } | null>(null);
+  const [fast, setFast] = useState<{ board: Board; minute: number; toMinute: number } | null>(null);
+  const fastBusy = fast !== null && fast.board === board;
+  const routes = useDemoRoutes(board, version, incidentId, data?.destinations, fastBusy);
   const routesRef = useRef(routes.routes);
   useEffect(() => {
     routesRef.current = routes.routes;
-    if (boardRef.current) setRoutes(boardRef.current, routes.routes);
+    // A fast run sets the board's routes itself (an answer the hook had in flight is not used).
+    if (boardRef.current && fastRef.current?.board !== boardRef.current) setRoutes(boardRef.current, routes.routes);
   }, [routes.routes, board]);
-  const crewRoutes = useCrewRoutes(board, version, incidentId);
+  const crewRoutes = useCrewRoutes(board, version, incidentId, fastBusy);
   // Fire spread: the simulator's cell solver in a worker. model.step holds the clock while a solve is due.
-  const fireSolver = useFireSolver(board, version, bump);
+  const fireSolver = useFireSolver(board, version, bump, fastBusy);
 
   // The commander's picture: zone forecasts from reported fires only (model.ts ForecastScope; the
   // report rule in boardResponse.ts). Claude, the outcomes, the panels and the map tags all read
@@ -690,7 +697,7 @@ export function useCommandBoard({
       last = now;
       const b = boardRef.current;
       const c = clock.current;
-      if (!b || !c.running) return;
+      if (!b || !c.running || fastRef.current) return;
       step(b, Math.min(c.maxTick, (seconds * c.speed) / 60), holdForLegs);
       bump();
     }, TICK_MS);
@@ -761,26 +768,86 @@ export function useCommandBoard({
   // The run's score timeline: one scorePoint per board minute the clock lands on (a fast clock
   // can step 2 minutes per tick, so points may be 2 minutes apart). A new board starts a new one.
   // The state names its board, so a new board never shows the old run's points (even for one render).
-  const timelineRef = useRef<{ board: Board | null; points: ScorePoint[] }>({ board: null, points: [] });
+  // The run's history (runHistory.ts) also keeps board snapshots every few minutes for /run's scrubber.
+  const timelineRef = useRef<RunHistory>(emptyHistory(null));
+  const historyOf = useCallback((b: Board): RunHistory => {
+    if (timelineRef.current.board !== b) timelineRef.current = emptyHistory(b);
+    return timelineRef.current;
+  }, []);
   const [sampled, setSampled] = useState<{ board: Board | null; timeline: RunTimeline } | null>(null);
+  const renderedMinute = board?.minute ?? null;
   useEffect(() => {
-    if (timelineRef.current.board !== board) timelineRef.current = { board, points: [] };
+    if (timelineRef.current.board !== board) timelineRef.current = emptyHistory(board);
     const points = timelineRef.current.points;
-    if (board) {
-      const minute = Math.floor(board.minute);
-      if (points.length === 0 || minute > points[points.length - 1].minute) points.push(scorePoint(board, forecasts));
-    }
+    // A fast run records every minute itself. The clock may have moved since render: then the
+    // rendered forecasts are another minute's, so recordHistory computes them for the minute now.
+    if (board && fastRef.current?.board !== board) recordHistory(timelineRef.current, board, renderedMinute === board.minute ? forecasts : undefined);
     const seed = board?.seed ?? 0;
     setSampled((prev) =>
       prev && prev.board === board && prev.timeline.mode === runMode && prev.timeline.points.length === points.length
         ? prev
         : { board, timeline: { mode: runMode, seed, points: [...points] } },
     );
-  }, [board, version, forecasts, runMode]);
+  }, [board, version, forecasts, runMode, renderedMinute]);
   const timeline: RunTimeline =
     sampled && sampled.board === board && sampled.timeline.mode === runMode
       ? sampled.timeline
       : { mode: runMode, seed: board?.seed ?? 0, points: [] };
+
+  // The fast run (/run's baseline): see demo/fastRun.ts. One at a time; stopped by stopFast, a new
+  // board or unmount. The page redraws every VIEW_EVERY_MS meanwhile (bump), not every step.
+  const solverClient = useRef<FireSolverClient | null>(null);
+  useEffect(
+    () => () => {
+      if (fastRef.current) fastRef.current.cancel = true;
+      solverClient.current?.terminate();
+      solverClient.current = null;
+    },
+    [],
+  );
+  const runFast = useCallback(
+    async (toMinute: number): Promise<{ stats: FastRunStats | null; error: string | null }> => {
+      const b = boardRef.current;
+      if (!b || fastRef.current) return { stats: null, error: b ? "A fast run is already running." : "No board yet." };
+      const own = { board: b, cancel: false };
+      fastRef.current = own;
+      setFast({ board: b, minute: b.minute, toMinute });
+      solverClient.current ??= createFireSolverClient();
+      try {
+        const stats = await fastForward({
+          board: b,
+          incidentId: liveRef.current.incidentId,
+          destinations: liveRef.current.data?.destinations ?? null,
+          toMinute,
+          solver: solverClient.current,
+          onSample: (x) => {
+            recordHistory(historyOf(x), x);
+          },
+          onView: (x) => {
+            setFast((f) => (f && f.board === x ? { ...f, minute: x.minute } : f));
+            bump();
+          },
+          cancelled: () => own.cancel || boardRef.current !== b,
+        });
+        return { stats, error: null };
+      } catch (error) {
+        return { stats: null, error: error instanceof Error ? error.message : "The fast run failed." };
+      } finally {
+        if (fastRef.current === own) fastRef.current = null;
+        setFast((f) => (f?.board === b ? null : f));
+        bump();
+      }
+    },
+    [bump, historyOf],
+  );
+  const stopFast = useCallback(() => {
+    if (fastRef.current) fastRef.current.cancel = true;
+  }, []);
+  /** The current board's history (score points and snapshots), live: copy it to keep it. */
+  const getHistory = useCallback((): RunHistory | null => {
+    const b = boardRef.current;
+    return b ? historyOf(b) : null;
+  }, [historyOf]);
 
   return {
     /** The board, mutated in place; `version` changes whenever it does. Null until zones and inputs load. */
@@ -831,6 +898,17 @@ export function useCommandBoard({
     seed: board?.seed ?? null,
     /** Score samples of the current board's run (scorePoint.ts), oldest first; reset by every new board. */
     timeline,
+    /** The current board's run history (runHistory.ts: score points and board snapshots), or null before a board. */
+    getHistory,
+    /**
+     * Steps the current board to `toMinute` as fast as the model and routing allow (demo/fastRun.ts;
+     * /run's baseline). Resolves with its stats, or the error that stopped it.
+     */
+    runFast,
+    /** Stops a fast run at the next board minute (it resolves with stats.stopped). */
+    stopFast,
+    /** The fast run in progress on this board (board minute reached, target), or null. */
+    fast: fastBusy && fast ? { minute: fast.minute, toMinute: fast.toMinute } : null,
     /** The Simulation Studio feed: its last error (404 until the server has the endpoint), whether it has answered. */
     studio: { error: studio.error, loaded: studio.data !== null },
     /** Alias of fireSolver (one solver hook; why a solve is running, last solve time, last error). */
