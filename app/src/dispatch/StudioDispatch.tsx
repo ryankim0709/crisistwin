@@ -20,7 +20,8 @@ import { fireRings, hectares, liveZones } from "../live/snapshot";
 import { newSessionId, useLiveBroadcast } from "../live/useLiveBroadcast";
 import type { StudioAsideContext } from "../studio/SimulationStudioPage";
 import DispatchConsole, { type SetupStep } from "./DispatchConsole";
-import { AreaRequestError, dispatchBoxFor, loadArea, type Bbox, type DispatchArea } from "./area";
+import { AreaRequestError, loadArea, type DispatchArea } from "./area";
+import { areaBoxFor } from "../fire/useBoardStreets";
 import { noActionBaseline, type IgnitionEvent, type RoadClosure } from "./engine";
 import { fireAreaFrames, fireTargets } from "./fireAttack";
 import { computeExposure } from "./fireExposure";
@@ -48,8 +49,6 @@ import "./dispatch.css";
 
 /** Wait this long after the run changes before asking for the road network. */
 const AREA_DEBOUNCE_MS = 500;
-/** Road boxes are snapped to this grid (degrees), like the backend cache. */
-const AREA_SNAP_DEGREES = 0.01;
 const ZONE_FOCUS_METERS = 900;
 const ROAD_NOTICE_MS = 4000;
 
@@ -76,12 +75,6 @@ function outcomeOf(
   for (const minute of exposure.homeArrival) if (minute <= horizonMinutes) homesReached += 1;
   const last = run.frames[run.frames.length - 1];
   return { burnedHectares: (last?.reachedAreaSquareMeters ?? 0) / 10_000, homesReached };
-}
-
-function snapBox([w, s, e, n]: Bbox): Bbox {
-  const snap = (value: number, round: (v: number) => number) =>
-    Number((round(value / AREA_SNAP_DEGREES) * AREA_SNAP_DEGREES).toFixed(2));
-  return [snap(w, Math.floor), snap(s, Math.floor), snap(e, Math.ceil), snap(n, Math.ceil)];
 }
 
 export default function StudioDispatch({
@@ -130,12 +123,16 @@ export default function StudioDispatch({
   }, [current]);
 
   // ---- Road network, homes and stations for the box the fires threaten ------------------
-  const box = useMemo(
-    () =>
-      grid && current ? dispatchBoxFor(grid, current.run.arrivalMinutes, horizonMinutes) : null,
-    [grid, current, horizonMinutes],
-  );
-  const snapped = useMemo(() => (box ? snapBox(box) : null), [box]);
+  // The same box the Studio picks (areaBoxFor, enabled fires by start minute), so both pages
+  // model the same roads, zones and people for one scenario.
+  const snapped = useMemo(() => {
+    if (!grid || !current) return null;
+    const focus = current.scenario.ignitions
+      .filter((ignition) => ignition.enabled)
+      .sort((a, b) => a.startMinute - b.startMinute)
+      .map((ignition): [number, number] => [ignition.location.longitude, ignition.location.latitude]);
+    return areaBoxFor(grid, focus);
+  }, [grid, current]);
   const boxKey = snapped ? snapped.join(",") : null;
   useEffect(() => {
     if (!boxKey || !snapped) {
