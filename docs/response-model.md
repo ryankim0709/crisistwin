@@ -224,7 +224,12 @@ Live as `report_minute` ([live-reports.md](live-reports.md#studio-fires)).
 `report_minute` is reported at ignition + (`report_minute` − `start_minute`), the same offset
 convention as its start (`model.ts` `studioReportAfterMin`), with `reported_by: "studio"` and the
 reason "report time set in Simulation Studio (S1, 15 min after ignition), not modelled". The
-modelled delay is still drawn (and discarded), so the seeded stream is the same either way.
+modelled delay is still drawn (and discarded). The response draws have keyed streams from the
+board seed (`boardResponse.ts` `keyedStream`: report delay per fire, keyed by its origin and
+ignition minute; out-of-service per unit and draw time; each order; each holding test), so a
+baseline run and an AI run of one seed get the same report delays and availability draws. Only
+the T+0 out-of-service draws (same in every run) and per-trip travel variation (trips happen only
+when someone acts) still use the shared response stream.
 `report_minute: null` keeps the modelled delay. A `fire_seen` field report pulls a modelled report
 forward to its own minute, but never a Studio-set one: the set time wins, and the field report is
 not joined to that fire until it is reported (it is checked again on later polls).
@@ -258,7 +263,10 @@ from it, distance to the nearest road).
 - *Homes*: the nearest developed landscape cell (FBFM40 91), or 0 inside a drill zone dense
   enough to be NFPA 1720 "suburban" (500 people/mi² or more, at 2.5 persons per household).
 - *Line of sight*: 12 elevation samples between smoke 30 m up and an eye 2 m up.
-- *Roads*: the board's evacuation route lines (drill roads; a partial network).
+- *Roads*: not used separately on the Live board (`nearestRoadM` null). The board's route lines
+  load asynchronously, so using them made a later fire's delay depend on load timing. LANDFIRE's
+  developed fuel class (NB1) includes its mapped roads, so the nearest developed cell already
+  covers a road beside the fire.
 - *Assumptions*: the ×2, the 30 m and 2 m heights, and the household size. The NFPA 1720 bands
   are labels only.
 
