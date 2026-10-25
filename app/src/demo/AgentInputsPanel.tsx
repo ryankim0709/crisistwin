@@ -156,7 +156,7 @@ function CommsTicker({ rows }: { rows: CommsRow[] }) {
               <span className="ais-chan">
                 <span aria-hidden="true">{m.glyph}</span> {m.channelLabel}
               </span>
-              <span className="ais-comm-time">{simClock(m.minute)}</span>
+              <span className="ais-comm-time">{m.timeLabel}</span>
               <span className="ais-comm-from">{m.from}</span>
               {severity ? <Tag tone={severity.tone}>{severity.text}</Tag> : null}
               {m.isNew ? <DeltaChip delta={{ kind: "new", text: "not in the previous call" }} /> : null}
@@ -195,12 +195,15 @@ function DecisionBlock({
   input,
   decision,
   inFlight,
+  newest,
   agent,
 }: {
   input: AgentInputSnapshot;
   decision: AgentDecision | null;
   /** This is the newest call and Claude is still working on it. */
   inFlight: boolean;
+  /** This is the newest call (the agent's current error, if any, belongs to it). */
+  newest: boolean;
   agent: CommandBoard["agent"];
 }) {
   const nameOf = useMemo(() => nameResolver(input.observation), [input.observation]);
@@ -260,8 +263,9 @@ function DecisionBlock({
   }
   if (inFlight) {
     return (
-      <div className="ais-decision" role="status" aria-live="polite">
-        <p className="ais-summary">
+      <div className="ais-decision">
+        {/* Only this line is a live region: the streamed text below changes with every token. */}
+        <p className="ais-summary" role="status">
           <Spinner /> Claude is deciding on this call{agent.urgency ? ` (${agent.urgency})` : ""}…
         </p>
         {agent.thinking ? <p className="ais-live">Thinking: {tail(agent.thinking)}</p> : null}
@@ -269,7 +273,7 @@ function DecisionBlock({
       </div>
     );
   }
-  if (agent.error && agent.status === "error") {
+  if (newest && agent.error && agent.status === "error") {
     return (
       <Notice tone="danger" compact>
         The last call failed: {agent.error}
@@ -299,10 +303,14 @@ function ExactInput({ input, sizeLabel }: { input: AgentInputSnapshot; sizeLabel
               <Button
                 variant="secondary"
                 size="sm"
+                disabled={typeof navigator === "undefined" || !navigator.clipboard}
                 onClick={() => {
-                  void navigator.clipboard
-                    ?.writeText(json)
-                    .then(() => setCopied(true))
+                  navigator.clipboard
+                    .writeText(json)
+                    .then(() => {
+                      setCopied(true);
+                      window.setTimeout(() => setCopied(false), 1500);
+                    })
                     .catch(() => setCopied(false));
                 }}
               >
@@ -310,7 +318,7 @@ function ExactInput({ input, sizeLabel }: { input: AgentInputSnapshot; sizeLabel
               </Button>
               <span className="ais-meta">Simulated board data, shown unredacted; pretty-printed here ({sizeLabel} as sent).</span>
             </div>
-            <pre className="ais-json" tabIndex={0} aria-label="Exact observation JSON">
+            <pre className="ais-json" tabIndex={0} role="region" aria-label="Exact observation JSON">
               {json}
             </pre>
           </>
@@ -327,12 +335,14 @@ function CallBody({
   previous,
   decision,
   inFlight,
+  newest,
   agent,
 }: {
   input: AgentInputSnapshot;
   previous: AgentInputSnapshot | null;
   decision: AgentDecision | null;
   inFlight: boolean;
+  newest: boolean;
   agent: CommandBoard["agent"];
 }) {
   const d: InputDigest = useMemo(() => digestInput(input, previous), [input, previous]);
@@ -442,7 +452,7 @@ function CallBody({
       ) : null}
 
       <Section title="Decision" summary={decision ? decision.summary : inFlight ? "Claude is deciding" : "No decision recorded"}>
-        <DecisionBlock input={input} decision={decision} inFlight={inFlight} agent={agent} />
+        <DecisionBlock input={input} decision={decision} inFlight={inFlight} newest={newest} agent={agent} />
       </Section>
 
       <ExactInput input={input} sizeLabel={d.sizeLabel} />
@@ -465,7 +475,16 @@ function wallTime(ms: number): string {
  * and the decision log; sizes itself with CSS variable `--ais-max-height` (default 80vh), so a host
  * with its own scroll area can set it to `none` or `100%`.
  */
-export default function AgentInputsPanel({ agent, board }: { agent: CommandBoard["agent"]; board: Board | null }) {
+export default function AgentInputsPanel({
+  agent,
+  board,
+  showSpend = true,
+}: {
+  agent: CommandBoard["agent"];
+  board: Board | null;
+  /** The session spend line; /live hides it because AgentControl shows it. */
+  showSpend?: boolean;
+}) {
   const { inputs: rawInputs, lastInput } = agent as AgentWithInputs;
   const inputs = useMemo(() => listInputs(rawInputs, lastInput), [rawInputs, lastInput]);
   const [toggled, setToggled] = useState<Record<string, boolean>>({});
@@ -537,13 +556,15 @@ export default function AgentInputsPanel({ agent, board }: { agent: CommandBoard
                         <Tag tone={orders > 0 ? "success" : "neutral"}>{orders} order{orders === 1 ? "" : "s"}</Tag>
                       ) : null}
                     </span>
-                    <span className="ais-call-why">{input.reasons[0] ?? "No reason recorded."}</span>
+                    <span className="ais-call-why" title={input.reasons.join("; ")}>
+                      {input.reasons[0] ?? "No reason recorded."}
+                    </span>
                     <span className="ais-meta">
                       {wallTime(input.sentAtMs)} · {(input.bytes / 1000).toFixed(1)} kB
                     </span>
                   </summary>
                   {open ? (
-                    <CallBody input={input} previous={inputs[index + 1] ?? null} decision={decision} inFlight={inFlight} agent={agent} />
+                    <CallBody input={input} previous={inputs[index + 1] ?? null} decision={decision} inFlight={inFlight} newest={index === 0} agent={agent} />
                   ) : null}
                 </details>
               </li>
@@ -551,7 +572,7 @@ export default function AgentInputsPanel({ agent, board }: { agent: CommandBoard
           })}
         </ol>
       )}
-      <AgentSpend spend={agent.spend} />
+      {showSpend ? <AgentSpend spend={agent.spend} /> : null}
     </section>
   );
 }
