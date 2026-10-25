@@ -27,9 +27,10 @@ scope.onmessage = (event: MessageEvent<SolverRequest>) => {
   let response: SolverResponse;
   try {
     const firefightingOn = request.firefighting?.enabled === true;
-    // Per-cell behaviour only when firefighting needs it; same arrivals either way.
+    // Per-cell behaviour always: firefighting judges attack and drops on it, and the diorama and
+    // map classify flame bands and crown fire from it (fire/fireStates.ts). Same arrivals either way.
     const run = simulateScheduledFireSpread(request.landscape, request.input, null, null, {
-      reportCellBehaviour: firefightingOn,
+      reportCellBehaviour: true,
     });
     const initialAttack =
       firefightingOn && request.firefighting
@@ -59,8 +60,6 @@ scope.onmessage = (event: MessageEvent<SolverRequest>) => {
     // The air-supported initial attack (planFirefighting) when drops hold on a fire, else the
     // ground-only one.
     if (firefighting && initialAttack) firefighting.initialAttack = firefighting.initialAttack ?? initialAttack;
-    // The page does not use the per-cell behaviour; keep the message as before.
-    delete run.cellBehaviour;
     response = { type: "result", requestId: request.requestId, run, firefighting };
   } catch (cause) {
     response = {
