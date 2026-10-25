@@ -649,6 +649,30 @@ function renderGroup(ctx: Ctx, g: Group): Rendered {
         progressZone: r.zoneId,
       };
     }
+    case "evacuation_warned": {
+      // demo/evacWarning.ts: be ready to leave, nobody leaves.
+      const zone = r.zoneId ? zoneName(ctx, r.zoneId) : "Zone";
+      const dest = r.destinationId ? ` → ${ctx.name(r.destinationId)}` : "";
+      return {
+        title: `${who(first.ev) ? "You: evacuation warning" : "Evacuation warning"}: ${zone}, be ready to leave${dest}.`,
+        sub: null,
+        state: "proposed",
+        attention: null,
+        boardRef: r.zoneId ? { kind: "zone", id: r.zoneId } : null,
+        progressZone: r.zoneId,
+      };
+    }
+    case "evacuation_warning_withdrawn": {
+      const zone = r.zoneId ? zoneName(ctx, r.zoneId) : "Zone";
+      return {
+        title: `${who(first.ev) ? "You withdrew" : "Withdrew"} the evacuation warning for ${zone}.`,
+        sub: null,
+        state: "completed",
+        attention: null,
+        boardRef: r.zoneId ? { kind: "zone", id: r.zoneId } : null,
+        progressZone: r.zoneId,
+      };
+    }
     case "evacuation_cancelled": {
       const zone = r.zoneId ? zoneName(ctx, r.zoneId) : "Zone";
       const at = r.startMinute !== undefined ? ` (was ${simClock(r.startMinute)})` : "";
@@ -785,7 +809,8 @@ function orderShort(ctx: Ctx, o: CommanderOrder): string {
   if (o.type === "send_crew") return `send ${unitLabel(ctx, o.crew_id)} → ${fireLabel(ctx, o.fire_id)}${o.position_id ? ` ${o.position_id}` : ""}`;
   if (o.type === "release_crew") return `release ${unitLabel(ctx, o.crew_id)}`;
   if (o.type === "order_resources") return `order ${plural(o.count, RESOURCE[o.resource] ?? [o.resource, o.resource])} for ${fireLabel(ctx, o.fire_id)}`;
-  if (o.type === "cancel_evacuation") return `cancel the scheduled evacuation of ${zoneName(ctx, o.zone_id)}`;
+  if (o.type === "cancel_evacuation") return `cancel the scheduled evacuation (or warning) of ${zoneName(ctx, o.zone_id)}`;
+  if (o.type === "warn_evacuation") return `warn ${zoneName(ctx, o.zone_id)}: be ready to leave${o.destination_id ? ` → ${ctx.name(o.destination_id)}` : ""}`;
   if (o.type === "lift_evacuation") return `lift the evacuation order for ${zoneName(ctx, o.zone_id)} (all clear)`;
   const at = o.start_minute != null ? ` at ${simClock(o.start_minute)}` : "";
   return `evacuate ${zoneName(ctx, o.zone_id)} → ${ctx.name(o.destination_id)}${at}`;
@@ -805,6 +830,7 @@ function orderIds(o: CommanderOrder): string[] {
   if (o.type === "release_crew") return [o.crew_id];
   if (o.type === "order_resources" || o.type === "set_strategy") return [o.fire_id];
   if (o.type === "cancel_evacuation" || o.type === "lift_evacuation") return [o.zone_id];
+  if (o.type === "warn_evacuation") return o.destination_id ? [o.zone_id, o.destination_id] : [o.zone_id];
   return [o.zone_id, o.destination_id];
 }
 
@@ -1091,6 +1117,9 @@ export function buildActivityFeed({ board, decisions, liveDecisions, name, stamp
       it.sub = `Leaves at ${simClock(start)} (in ${nf(wait)} min)${progress ? ` · ${progress}` : ""}`;
     } else if (status === "leaving") {
       if (it.state === "proposed") it.state = "in_progress";
+    } else if (status === "warning") {
+      // Be ready to leave (demo/evacWarning.ts): nobody leaves; the warning stays proposed until ordered or withdrawn.
+      it.sub = `Be ready to leave (warning)${progress ? ` · ${progress}` : ""}`;
     } else if (it.state === "in_progress" || it.state === "proposed") it.state = "completed";
   }
   return items.slice(0, FEED_CAP);

@@ -1639,18 +1639,73 @@
   }
 }
 
-/* Controller drill road closures over the map (RoadClosureTool.tsx). */
+/* Controller drill road closures (RoadClosureTool.tsx): a row of the Controls block, in both views. */
 .lc-rc {
-  /* Bottom right of the map, clear of the layer toggles (top) and the legend (bottom left). */
+  display: flex;
+  flex-direction: column;
+  gap: var(--ct-space-1);
+  font-size: var(--ct-text-sm);
+}
+.lc-rc .lc-rc-list {
+  max-height: 128px;
+  overflow-y: auto;
+}
+/* The armed tool's instruction, the confirm and the notice: bottom centre of the stage (Map or
+   3D), just above the view toggle and its Close a road button, clear of the map's control column
+   and the 3D tools at the top. Over an open legend while it is up. */
+.lc-rc-stage {
   position: absolute;
-  right: var(--ct-space-3);
-  bottom: 56px;
-  z-index: calc(var(--ct-z-map-controls) + 1); /* over an open legend */
-  max-width: 320px;
+  bottom: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: calc(var(--ct-z-overlay) + 1);
+  width: min(400px, calc(100% - 2 * var(--ct-space-3)));
+  justify-content: flex-end;
   display: flex;
   flex-direction: column;
   gap: var(--ct-space-2);
   font-size: var(--ct-text-sm);
+}
+.lc-rc-prompt.ui-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ct-space-2);
+  margin: 0;
+  box-shadow: var(--ct-shadow-md);
+}
+.lc-rc-prompt > p {
+  flex: 1;
+  margin: 0;
+  min-width: 0;
+}
+.lc-rc-prompt.lc-rc-confirm {
+  flex-direction: column;
+  align-items: stretch;
+  border-top: 0;
+}
+.lc-rc-toast {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--ct-space-2);
+  padding: var(--ct-space-1);
+  border-radius: var(--ct-radius-md);
+  background: var(--ct-surface-glass-strong);
+  box-shadow: var(--ct-shadow-md);
+}
+.lc-rc-toast > .ui-notice {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+/* The Close a road shortcut beside the Map / 3D toggle. */
+.lc-view-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--ct-space-2);
+}
+.lc-view-bar > .ui-button {
+  box-shadow: var(--ct-shadow-md);
 }
 .lc-rc-head {
   display: flex;

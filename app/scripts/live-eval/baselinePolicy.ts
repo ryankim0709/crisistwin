@@ -5,9 +5,12 @@
  * compared with it, and checks whether a scenario is winnable at all.
  *
  * Rules, every call:
- * - Evacuation: each schedule entry with action order_now is ordered out now, schedule / reschedule
- *   with start_minute = recommended_start_minute, to the entry's destination. A zone scheduled
- *   earlier that has left the schedule (no free-burn threat any more) is cancelled.
+ * - Evacuation, by the schedule's tiers (demo/decisionAids.ts): each entry with action order_now is
+ *   ordered out now, schedule / reschedule with start_minute = recommended_start_minute, to the
+ *   entry's destination; warn gets warn_evacuation (be ready to leave) toward it. A zone scheduled
+ *   or warned earlier that has left the schedule (no fire reaches it any more) is cancelled /
+ *   its warning withdrawn. All clear: each zone decision_aids.all_clear lists (never one whose
+ *   entry is tier order) is lifted; one still listed with tier warn is warned on the next call.
  * - Fires: a fire with no strategy, or whose strategy no longer contains (or is no longer offered),
  *   gets the recommended strategy and its units; with a containable strategy kept, the units its
  *   option still asks for are sent. When nothing contains, the all-units package: its strategy,
@@ -30,8 +33,10 @@ export function baselineOrders(obs: DemoObservation): { orders: DemoOrder[]; sum
     inPlan.add(p.zone_id);
     const zone = zones.get(p.zone_id);
     if (!zone || !p.destination_id || !zone.options.some((o) => o.destination_id === p.destination_id)) continue;
-    if (p.action === "order_now" && (zone.order.status === "none" || zone.order.status === "scheduled" || zone.order.status === "lifted")) {
+    if (p.action === "order_now" && (zone.order.status === "none" || zone.order.status === "warning" || zone.order.status === "scheduled" || zone.order.status === "lifted")) {
       orders.push({ type: "order_evacuation", zone_id: p.zone_id, destination_id: p.destination_id, start_minute: null, reason: `schedule: order now (eta ${p.eta_min} min, ${p.too_late ? "too late" : "start now"})` });
+    } else if (p.action === "warn" && zone.order.status !== "leaving" && zone.order.status !== "done" && zone.order.status !== "overrun") {
+      orders.push({ type: "warn_evacuation", zone_id: p.zone_id, destination_id: p.destination_id, reason: `schedule: be ready (${p.threat === "if_containment_fails" ? `only if containment by minute ${p.contained_by_minute} fails` : `order by minute ${p.order_by_minute}`})` });
     } else if ((p.action === "schedule" || p.action === "reschedule") && zone.order.status !== "leaving" && zone.order.status !== "done") {
       const start = Math.min(maxStart, p.recommended_start_minute);
       if (zone.order.status === "scheduled" && zone.order.start_minute === start && zone.order.destination_id === p.destination_id) continue;
@@ -39,11 +44,16 @@ export function baselineOrders(obs: DemoObservation): { orders: DemoOrder[]; sum
     }
   }
   for (const zone of obs.zones) {
-    if (zone.order.status === "scheduled" && !inPlan.has(zone.id)) orders.push({ type: "cancel_evacuation", zone_id: zone.id, reason: "no longer in the evacuation schedule" });
+    if ((zone.order.status === "scheduled" || zone.order.status === "warning") && !inPlan.has(zone.id)) {
+      orders.push({ type: "cancel_evacuation", zone_id: zone.id, reason: "no longer in the evacuation schedule" });
+    }
   }
-  // All clear (demo/allClear.ts): lift each zone the decision aid lists as eligible and no longer in the schedule.
+  // All clear (demo/allClear.ts): lift each zone the decision aid lists as eligible (the observation
+  // already leaves out zones the schedule still orders, tier "order"); a zone still listed with tier
+  // warn is then warned on the next call (its plan action becomes warn once lifted).
+  const orderTier = new Set(aids.evacuation.filter((p) => p.tier === "order").map((p) => p.zone_id));
   for (const c of aids.all_clear ?? []) {
-    if (!inPlan.has(c.zone_id)) orders.push({ type: "lift_evacuation", zone_id: c.zone_id, reason: `all clear: ${c.basis}` });
+    if (!orderTier.has(c.zone_id)) orders.push({ type: "lift_evacuation", zone_id: c.zone_id, reason: `all clear: ${c.basis}` });
   }
 
   // ---- fires ----
@@ -84,5 +94,6 @@ export function baselineOrders(obs: DemoObservation): { orders: DemoOrder[]; sum
     notes.push(`${fire.id}: all units on ${strategyId}${aid.overdue ? " (overdue)" : ""}`);
   }
   const evac = orders.filter((o) => o.type === "order_evacuation").length;
-  return { orders, summary: `${orders.length} orders (scripted): ${evac} evacuation${notes.length ? `; ${notes.join("; ")}` : ""}` };
+  const warned = orders.filter((o) => o.type === "warn_evacuation").length;
+  return { orders, summary: `${orders.length} orders (scripted): ${evac} evacuation, ${warned} warning${notes.length ? `; ${notes.join("; ")}` : ""}` };
 }

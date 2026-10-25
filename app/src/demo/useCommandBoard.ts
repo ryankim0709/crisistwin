@@ -526,7 +526,7 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
     const { token: t, incidentId: id, data: d } = liveRef.current;
     return runLiveOrders(t, id, d, orders, setNotice);
   }, []);
-  const agent = useDemoAgent({ board, version, incidentId, routes: routes.routes, forecasts, enabled: autopilot, apply, applyLive, picture });
+  const agent = useDemoAgent({ board, version, incidentId, routes: routes.routes, routesClosed: routes.closedSegmentIds, forecasts, enabled: autopilot, apply, applyLive, picture });
   // Turning the AI agent on starts the clock (clearing an earlier Pause); off stops it (below).
   const turnAgent = useCallback((on: boolean) => {
     setAutopilot(on);

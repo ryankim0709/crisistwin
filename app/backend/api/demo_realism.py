@@ -448,7 +448,7 @@ def crew_route(drill, fire, request: dict, offboard_kmh: float, access=None, blo
         + line_tail
     )
     stop = drill.roads.node_coords[stop_node] if stop_node else None
-    return {
+    leg = {
         **out,
         "travel_breakdown": _travel_breakdown(drill, access, result.route.edge_ids),
         "drive_min": round(offboard_min + result.travel_time_s / 60, 1),
@@ -460,6 +460,83 @@ def crew_route(drill, fire, request: dict, offboard_kmh: float, access=None, blo
         "stop_point": [round(stop[0], 6), round(stop[1], 6)] if stop else None,
         "off_road_m_to_target": round(off_road_m) if off_road_m is not None else None,
         "unrestricted_drive_min": round(offboard_min + free_s / 60, 1) if free_s is not None and status == "detour" else None,
+        "road_graph": "drill",
+    }
+    if access is None or line_tail or off_road_m is None:
+        return leg
+    return _extend_on_board_area(drill, fire, request, leg, off_road_m, access, result.route.edge_ids, offboard_min, line_head)
+
+
+def _extend_on_board_area(drill, fire, request: dict, leg: dict, off_road_m: float, access, edge_ids, offboard_min: float,
+                          line_head: list) -> dict:
+    """A leg that ends more than ``EXTENSION_TRY_MIN_M`` from its target continues on the cached
+    board-area roads the diorama draws (``api.crew_extension``) when they bring the class closer.
+
+    The two graphs are the same OSM ways cut at different box edges, so the drill leg is cut at
+    its last road node that is also a node of the area (within ``EXTENSION_JOIN_MAX_M``; the drill
+    graph's own box-edge cut node is not), and from there ``reach_route`` runs on the area with the
+    class's access rules on the area's OSM tags. Drive time: the drill part at the class's speed
+    on its edges (as ``inbound_route``), plus the area part. ``road_graph`` is then
+    ``drill+board_area``. The controller's road closures are drill segment ids and are not applied
+    on the area part."""
+    from livecore.inbound import _end_nodes, reach_route
+    from livecore.routing import _nearest_node
+
+    from .crew_extension import EXTENSION_JOIN_MAX_M, EXTENSION_TRY_MIN_M, board_area_drill, board_area_profile
+
+    if off_road_m <= EXTENSION_TRY_MIN_M or not edge_ids:
+        return leg
+    roads = drill.roads
+    target = tuple(request["to"])
+    found = board_area_drill(drill, roads.node_coords[roads.edges[edge_ids[-1]].to_node], target)
+    if found is None:
+        return leg
+    area_key, graph = found
+    area_access = board_area_profile(graph, request["access_class"])
+    if area_access is None:
+        return leg
+    area_index = _index(graph)
+    origin_ok, _ = _end_nodes(graph)
+    join = None
+    for k in range(len(edge_ids) - 1, -1, -1):
+        p = roads.node_coords[roads.edges[edge_ids[k]].to_node]
+        node = _nearest_node(area_index.grid, graph.roads.node_coords, p, origin_ok)
+        if node is not None and haversine_m(p, graph.roads.node_coords[node]) <= EXTENSION_JOIN_MAX_M:
+            join = (k, p)
+            break
+    if join is None:
+        return leg
+    k, p = join
+    r = reach_route(graph, p, target, frozenset(), fire, area_access)
+    res = r.result
+    if res.route is None or res.travel_time_s is None or r.off_road_m is None or r.off_road_m >= off_road_m - 1.0:
+        return leg
+    kept = list(edge_ids[: k + 1])
+    index = _index(drill)
+    kept_s = sum(index.edge_time_s[e] * roads.edges[e].speed_kph / access.speed_kph(e, roads.edges[e].speed_kph) for e in kept)
+    kept_m = sum(roads.edges[e].length_m for e in kept)
+    coords: list = []
+    for e in kept:
+        c = list(roads.edges[e].coords)
+        coords.extend(c if not coords else c[1:])
+    line = line_head + [list(q) for q in simplify_line(coords + list(res.route.line[1:]), ROUTE_TOLERANCE_M, ROUTE_MAX_POINTS)]
+    stop = graph.roads.node_coords[r.stop_node] if r.stop_node else None
+    part1 = _travel_breakdown(drill, access, kept)
+    part2 = _travel_breakdown(graph, area_access, res.route.edge_ids)
+    breakdown = {key: round(part1.get(key, 0) + part2.get(key, 0), 2) for key in part1} if part1 and part2 else None
+    return {
+        **leg,
+        **_blocked_fields(graph, area_access, r.blocked_edge),
+        "travel_breakdown": breakdown,
+        "drive_min": round(offboard_min + (kept_s + res.travel_time_s) / 60, 1),
+        "distance_m": round(leg["distance_m"] - sum(roads.edges[e].length_m for e in edge_ids) + kept_m + res.route.distance_m),
+        "line": line,
+        "access_status": r.status,
+        "stop_point": [round(stop[0], 6), round(stop[1], 6)] if stop else None,
+        "off_road_m_to_target": round(r.off_road_m),
+        "unrestricted_drive_min": None,
+        "road_graph": "drill+board_area",
+        "board_area": area_key,
     }
 
 

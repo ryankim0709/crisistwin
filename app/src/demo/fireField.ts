@@ -285,8 +285,14 @@ export function solveFireField(grid: LandscapeGrid, request: FireSolveRequest): 
         }
         const n = ny * width + nx;
         if (done[n]) {
+          // Close the edge the earlier neighbour opened toward this cell, which it counted only
+          // when this cell was passable (below). A burned cell can be impassable in this field:
+          // a resumed solve keeps cells burned under earlier weather, and Rothermel spread is 0
+          // once the dead fuel is wetter than the fuel model's moisture of extinction (Rothermel
+          // 1972), e.g. GR2 (Mx 15%) at the 15% 1-h moisture of an overnight series hour.
+          // Decrementing then would drive the perimeter negative.
           const t = owner[n];
-          if (t >= 0) edges[t]--;
+          if (t >= 0 && passable[c] > 0) edges[t]--;
         } else if (passable[n] > 0 && s >= 0) edges[s]++;
       }
       done[c] = 1;

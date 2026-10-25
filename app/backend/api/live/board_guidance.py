@@ -14,6 +14,9 @@ Order status (``model.ts`` ``zoneOrderStatus``) -> guidance:
   force (everyone who leaves has left; nobody goes back), so it is not a new version.
 - ``scheduled``: ``be_ready`` with the route and ``reason`` "Leave at T+01:30 on the simulated board
   clock ...". A new start minute or destination is a new version.
+- ``warning`` (``warn_evacuation``, ``app/src/demo/evacWarning.ts``): ``be_ready`` with the route to
+  be ready for, no start (``board_start_minute`` null), ``reason_code: "board_warning"``. Withdrawing
+  it (status back to ``none``) publishes ``level: none`` "Evacuation warning withdrawn ...".
 - ``none``: withdraws (``level: none``) whatever the zone was last told: a cancelled schedule, a
   new board run (Reset board), or guidance left over from the former proposal flow.
 - ``lifted``: the order was lifted (fire contained). A zone that had been told something gets
@@ -59,6 +62,8 @@ log = logging.getLogger(__name__)
 GUIDANCE = "live_guidance"
 SOURCE = "board"
 ALL_CLEAR = "board_all_clear"
+WARNING = "board_warning"
+"""``reason_code`` of an evacuation warning: level ``be_ready`` with no scheduled start."""
 """``reason_code`` of a lifted order: level ``none`` (the iOS decoder knows no other level) with this code."""
 ACTION = "board_guidance"
 """``live_decisions.action`` of a published change (the activity feed renders its note)."""
@@ -103,7 +108,11 @@ def _moving(order: dict[str, Any], route: dict[str, Any] | None, index: DrillInd
     if destination is None or not route or len(route.get("line") or ()) < 2:
         return None  # no route sent (an older page) or a destination the drill does not know: change nothing
     route_doc = _route_json(route)
-    if level == "be_ready":
+    warning = order.get("status") == "warning"
+    if warning:
+        reason = (f"Evacuation warning from {_issuer(order)} on the simulated board: be ready to leave; "
+                  "no evacuation order yet")
+    elif level == "be_ready":
         start = order.get("start_minute")
         reason = f"Leave at {_clock(start)} on the simulated board clock (scheduled by {_issuer(order)})"
     else:
@@ -114,10 +123,10 @@ def _moving(order: dict[str, Any], route: dict[str, Any] | None, index: DrillInd
         "route": route_doc,
         "no_route": False,
         "reason": reason,
-        "reason_code": "board_scheduled" if level == "be_ready" else "board_order",
+        "reason_code": WARNING if warning else "board_scheduled" if level == "be_ready" else "board_order",
         "caveat": CAVEAT_BY_SAFETY.get(route_doc["safety"]),
         "alternatives": [],
-        "board_start_minute": order.get("start_minute") if level == "be_ready" else None,
+        "board_start_minute": order.get("start_minute") if level == "be_ready" and not warning else None,
     }
 
 
@@ -140,7 +149,7 @@ def target(order: dict[str, Any], route: dict[str, Any] | None, index: DrillInde
         told = True  # a new board run withdraws the former all-clear too
     if status in ("leaving", "done"):
         return _moving(order, route, index, "evacuate_now")
-    if status == "scheduled":
+    if status in ("scheduled", "warning"):
         return _moving(order, route, index, "be_ready")
     if status == "overrun":
         if not told and not order.get("destination_id"):
@@ -152,6 +161,8 @@ def target(order: dict[str, Any], route: dict[str, Any] | None, index: DrillInde
         return None
     if restarted:
         reason = "The simulated board restarted: no evacuation order"
+    elif latest.get("source") == SOURCE and latest.get("reason_code") == WARNING:
+        reason = f"Evacuation warning withdrawn by {_issuer(order)} on the simulated board: no need to be ready to leave"
     elif latest.get("source") == SOURCE and latest.get("level") == "be_ready" and order.get("issued_by"):
         reason = f"Scheduled evacuation cancelled by {_issuer(order)} on the simulated board"
     else:
@@ -182,9 +193,12 @@ def _feed_text(zone_label: str, doc: dict[str, Any], latest: dict[str, Any] | No
     elif level == "none":
         reason = doc.get("reason") or ""
         what = "No order" + (" (scheduled evacuation cancelled)" if reason.startswith("Scheduled evacuation cancelled")
+                             else " (evacuation warning withdrawn)" if reason.startswith("Evacuation warning withdrawn")
                              else " (board restarted)" if reason.startswith("The simulated board restarted") else "")
     elif doc.get("no_route"):
         what = "No open route, shelter in place"
+    elif level == "be_ready" and doc.get("reason_code") == WARNING:
+        what = f"Be ready to leave (evacuation warning, no order yet){where}"
     elif level == "be_ready":
         what = f"Be ready, leave at {_clock(doc.get('board_start_minute'))}{where}"
     else:

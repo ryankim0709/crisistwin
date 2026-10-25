@@ -7,13 +7,26 @@
  *
  * 1. Evacuation schedule (evacuationSchedule): every zone a reported burning fire reaches within
  *    the solver's lookahead in free burn (the field already includes the line built so far, but not
- *    a containment that has not happened: plan for the strategy failing), with
+ *    a containment that has not happened), with
  *    - its latest safe start: core ETA - (the departure lead for EVAC_TARGET_DEPARTED_SHARE of the
  *      complying households + route clearance + congested drive) - EVAC_SAFETY_MARGIN_MIN;
- *    - a recommended start: now when that is already past ("too late: order now"), else the
- *      earliest minute at which the zone's departure peak fits under every shared road segment's
- *      capacity next to the zones already leaving or scheduled (their exponential departure
- *      flows), and never after the latest safe start;
+ *    - its threat: "if_containment_fails" when every fire reaching it is expected contained at
+ *      least EVAC_CONTAINMENT_MARGIN_MIN before it arrives (demo/evacThreat.ts: the assigned
+ *      units' containment, or for a fresh fire with nothing on it the recommended strategy's),
+ *      else "free_burn";
+ *    - its tier (action), proportional to the threat:
+ *      order_now  free_burn and the latest safe start is within EVAC_DECISION_WINDOW_MIN of now (or
+ *                 past: too_late) and the departure peak fits the roads now;
+ *      schedule / reschedule / scheduled_ok  free_burn, latest safe start within the window, but
+ *                 the earliest start whose departure peak fits under every shared road segment's
+ *                 capacity beside the zones already leaving or scheduled is later (never after the
+ *                 latest safe start); scheduled_ok also for a zone already scheduled in time;
+ *      warn / warned  be ready to leave (warn_evacuation): the threat is if_containment_fails, or
+ *                 free_burn with the latest safe start more than the window away (the aid says
+ *                 order_now at recommended_start_minute = latest safe start - window, re-checked
+ *                 at every call); warned when the zone already has a warning;
+ *      leaving    an order is in effect.
+ *      Zones not in the list need no action (a warning or schedule there can be withdrawn).
  *    - the expected caught if ordered now and at the recommended start (model.ts catch rule: home
  *      when fire reaches the core; carless and non-complying households never leave).
  * 2. Strategy recommendation per reported burning fire (strategyAid): each strategy option with
@@ -45,28 +58,45 @@ import {
   type RouteOption,
   type ZoneState,
 } from "./model";
+import {
+  EVAC_CONTAINMENT_MARGIN_MIN,
+  EVAC_DECISION_WINDOW_MIN,
+  EVAC_DEPARTURE_LEAD_MIN,
+  EVAC_SAFETY_MARGIN_MIN,
+  EVAC_TARGET_DEPARTED_SHARE,
+  STRATEGY_OVERDUE_GRACE_MIN,
+  coreArrivalOf,
+  expectedContainmentMinute,
+  heldBefore,
+  strategyOverdue,
+} from "./evacThreat";
 import { DEPARTURE_MEAN_MINUTES, ORDER_COMPLIANCE } from "./realism";
 import { forecastHomesBurned } from "./scoring";
 import { computeStrategyOptions, type StrategyOption } from "./strategyOptions";
 
 /**
- * ASSUMPTION (planning target, not sourced): a zone is "clear" when this share of its complying
- * households with a vehicle have left. With exponential departures of mean DEPARTURE_MEAN_MINUTES
- * that takes DEPARTURE_MEAN_MINUTES x ln(1 / (1 - share)) minutes (90%: about 214 min).
+ * The schedule's assumptions (each labelled where it is defined, demo/evacThreat.ts, shared with
+ * demo/allClear.ts): target departed share and its departure lead, safety margin, decision
+ * window, containment margin, strategy overdue grace.
  */
-export const EVAC_TARGET_DEPARTED_SHARE = 0.9;
-/** ASSUMPTION (planning buffer, not sourced): the schedule wants every zone clear this many minutes before fire reaches its core. */
-export const EVAC_SAFETY_MARGIN_MIN = 30;
-/** Zones are planned for while a reported fire reaches them within the solver's lookahead (fireField.ts LOOKAHEAD_MINUTES). */
+export {
+  EVAC_CONTAINMENT_MARGIN_MIN,
+  EVAC_DECISION_WINDOW_MIN,
+  EVAC_DEPARTURE_LEAD_MIN,
+  EVAC_SAFETY_MARGIN_MIN,
+  EVAC_TARGET_DEPARTED_SHARE,
+  STRATEGY_OVERDUE_GRACE_MIN,
+};
+/** Zones are listed while a reported fire reaches them within the solver's lookahead (fireField.ts LOOKAHEAD_MINUTES). */
 export const EVAC_PLANNING_HORIZON_MIN = LOOKAHEAD_MINUTES;
-/** ASSUMPTION (aid rule, not sourced): a chosen strategy still burning this long after its predicted containment (or line done) is overdue. */
-export const STRATEGY_OVERDUE_GRACE_MIN = 15;
 /** Schedule search step, minutes (a board rule for the aid, not sourced). */
 export const EVAC_SCHEDULE_STEP_MIN = 5;
-/** Departure lead for EVAC_TARGET_DEPARTED_SHARE, minutes. */
-export const EVAC_DEPARTURE_LEAD_MIN = Math.round(DEPARTURE_MEAN_MINUTES * Math.log(1 / (1 - EVAC_TARGET_DEPARTED_SHARE)));
 
-export const EVAC_SCHEDULE_LABEL = `Evacuation schedule (model output, demo/decisionAids.ts): zones a reported burning fire reaches within ${EVAC_PLANNING_HORIZON_MIN} min in the fire model's free-burn forecast (line built so far included, containment not assumed). latest_safe_start_minute = now + core ETA - (${EVAC_DEPARTURE_LEAD_MIN} min for ${Math.round(EVAC_TARGET_DEPARTED_SHARE * 100)}% of complying households to leave, exponential departures of mean ${DEPARTURE_MEAN_MINUTES} min + clearance_min + congested drive) - ${EVAC_SAFETY_MARGIN_MIN} min margin (ASSUMPTIONS: target share and margin). recommended_start_minute: now when too_late, else the earliest minute the zone's departure peak fits every shared road segment's capacity beside the zones already leaving or scheduled, never after latest_safe_start_minute. expected_caught_*: households / persons still home at the core ETA under the board's catch rule (carless and the ${Math.round((1 - ORDER_COMPLIANCE) * 100)}% who do not comply never leave).`;
+export const EVAC_SCHEDULE_LABEL = `Evacuation schedule (model output, demo/decisionAids.ts): zones a reported burning fire reaches within ${EVAC_PLANNING_HORIZON_MIN} min in the fire model's free-burn forecast (line built so far included, containment not assumed in the ETA). threat: if_containment_fails when every fire reaching the zone is expected contained (its assigned units' estimate, or for a fresh fire with nothing on it the recommended strategy's) at least ${EVAC_CONTAINMENT_MARGIN_MIN} min before it arrives (contained_by_minute), else free_burn. Tiers (action): order_now = free_burn and latest_safe_start_minute within ${EVAC_DECISION_WINDOW_MIN} min of now (or past: too_late); schedule / reschedule = the same but the roads fit only from recommended_start_minute; scheduled_ok = already scheduled in time; warn = be ready to leave (warn_evacuation), for if_containment_fails zones and free_burn zones whose latest safe start is further than ${EVAC_DECISION_WINDOW_MIN} min (order_by_minute: when the aid will say order_now if nothing changes); warned = already warned; leaving = ordered. ASSUMPTIONS: the ${EVAC_DECISION_WINDOW_MIN} min decision window and the ${EVAC_CONTAINMENT_MARGIN_MIN} min containment margin (${STRATEGY_OVERDUE_GRACE_MIN} min overdue grace + ${EVAC_SAFETY_MARGIN_MIN} min safety margin). latest_safe_start_minute = now + core ETA - (${EVAC_DEPARTURE_LEAD_MIN} min for ${Math.round(EVAC_TARGET_DEPARTED_SHARE * 100)}% of complying households to leave, exponential departures of mean ${DEPARTURE_MEAN_MINUTES} min + clearance_min + congested drive) - ${EVAC_SAFETY_MARGIN_MIN} min margin (ASSUMPTIONS: target share and margin). recommended_start_minute: now when too_late, else the earliest minute the zone's departure peak fits every shared road segment's capacity beside the zones already leaving or scheduled, never after latest_safe_start_minute. expected_caught_*: households / persons still home at the core ETA under the board's catch rule (carless and the ${Math.round((1 - ORDER_COMPLIANCE) * 100)}% who do not comply never leave).`;
+
+/** The schedule's tiers (see the module comment). */
+export type EvacAction = "order_now" | "schedule" | "reschedule" | "scheduled_ok" | "leaving" | "warn" | "warned";
+export type EvacThreat = "free_burn" | "if_containment_fails";
 
 export interface ZoneEvacPlan {
   zone: ZoneState;
@@ -83,7 +113,19 @@ export interface ZoneEvacPlan {
   tooLate: boolean;
   /** Recommended start could not keep a shared segment under capacity before the latest safe start (it starts then anyway). */
   overCapacity: boolean;
-  action: "order_now" | "schedule" | "leaving" | "scheduled_ok" | "reschedule";
+  action: EvacAction;
+  /** free_burn, or if_containment_fails (every fire reaching the zone held before it: demo/evacThreat.ts). */
+  threat: EvacThreat;
+  /**
+   * What the zone needs now, order or not: "order" (free_burn and the latest safe start within
+   * EVAC_DECISION_WINDOW_MIN, or past) or "warn". For a zone leaving it says whether the order is
+   * still needed (observation.ts refuses an all clear while it is "order").
+   */
+  tier: "order" | "warn";
+  /** if_containment_fails: the latest expected containment (board minute) of the fires reaching the zone; null otherwise. */
+  containedByMinute: number | null;
+  /** Board minute the aid says order_now at in free burn if nothing changes: latest safe start - EVAC_DECISION_WINDOW_MIN (now at the earliest). */
+  orderByMinute: number;
   expectedCaughtNow: { households: number; people: number | null };
   expectedCaughtAtRecommended: { households: number; people: number | null };
 }
@@ -100,15 +142,33 @@ export function expectedCaught(zone: ZoneState, start: number, eta: number): { h
   return { households, people };
 }
 
+/**
+ * Whether every reported burning fire reaching the zone within the horizon is held before it
+ * (demo/evacThreat.ts heldBefore at its free-burn arrival at the zone's core, coreArrivalOf), and
+ * the latest of their expected containments; null when one is not held.
+ */
+function heldBeforeZone(board: Board, zone: ZoneState, sources: ReadonlyMap<number, number | null>): { containedBy: number } | null {
+  const za = board.solver.field?.zones.get(zone.id);
+  if (!za) return null;
+  const limit = board.minute + EVAC_PLANNING_HORIZON_MIN;
+  let containedBy = -Infinity;
+  for (const [s, containedAt] of sources) {
+    if (!(za.earliestBySource[s] <= limit)) continue;
+    if (!heldBefore(containedAt, coreArrivalOf(board, zone, s))) return null;
+    containedBy = Math.max(containedBy, containedAt!);
+  }
+  return Number.isFinite(containedBy) ? { containedBy } : null;
+}
+
 /** Free-burn arrivals of reported burning fires at the zone (core, else edge), minutes from now, within the horizon; null when none. */
-function freeBurnEta(board: Board, zone: ZoneState, sources: Set<number>): { etaMin: number; basis: "core" | "edge" } | null {
+function freeBurnEta(board: Board, zone: ZoneState, sources: ReadonlyMap<number, unknown>): { etaMin: number; basis: "core" | "edge" } | null {
   const field = board.solver.field;
   const za = field?.zones.get(zone.id);
   if (!field || !za) return null;
   const limit = board.minute + EVAC_PLANNING_HORIZON_MIN;
   if (sources.has(za.coreSource) && za.coreArrival <= limit) return { etaMin: Math.max(0, za.coreArrival - board.minute), basis: "core" };
   let edge = Infinity;
-  for (const s of sources) edge = Math.min(edge, za.earliestBySource[s]);
+  for (const s of sources.keys()) edge = Math.min(edge, za.earliestBySource[s]);
   return edge <= limit ? { etaMin: Math.max(0, edge - board.minute), basis: "edge" } : null;
 }
 
@@ -120,19 +180,23 @@ function flowAt(z: ZoneState, start: number, t: number): number {
 /**
  * The evacuation schedule over the zones reported fires threaten in free burn (see the module
  * comment), most urgent first (latest safe start ascending). `forecastCore` gives the contained
- * forecast's core ETA per zone (model.zoneForecasts "reported").
+ * forecast's core ETA per zone (model.zoneForecasts "reported"). `recommendedContainedInMin`: per
+ * fire id, the strategy aid's recommended containment in minutes from now (strategyAid, null when
+ * none contains); used only for a fire with no strategy and no unit yet (demo/evacThreat.ts).
  */
 export function evacuationSchedule(
   board: Board,
   routes: ReadonlyMap<string, RouteOption[]>,
   forecastCore: (zoneId: string) => number | null,
+  recommendedContainedInMin: ReadonlyMap<string, number | null> = new Map(),
 ): ZoneEvacPlan[] {
   const field = board.solver.field;
   if (!field) return [];
-  const sources = new Set<number>();
+  // Source index -> the fire's expected containment (board minute) or null.
+  const sources = new Map<number, number | null>();
   for (const f of activeFires(board)) {
     const s = field.sourceIndex.get(f.id);
-    if (s !== undefined && f.status === "burning" && isReported(board, f)) sources.add(s);
+    if (s !== undefined && f.status === "burning" && isReported(board, f)) sources.set(s, expectedContainmentMinute(board, f, recommendedContainedInMin.get(f.id) ?? null));
   }
   if (sources.size === 0) return [];
   const now = board.minute;
@@ -163,6 +227,7 @@ export function evacuationSchedule(
       best = { option: current, clearance: e.clearanceMin, drive: e.congestedEtaMin, latest: coreAbs - (EVAC_DEPARTURE_LEAD_MIN + e.clearanceMin + e.congestedEtaMin) - EVAC_SAFETY_MARGIN_MIN };
     }
     const latest = best ? best.latest : coreAbs - EVAC_DEPARTURE_LEAD_MIN - EVAC_SAFETY_MARGIN_MIN;
+    const held = heldBeforeZone(board, zone, sources);
     drafts.push({
       zone,
       etaMin: Math.round(eta.etaMin),
@@ -176,6 +241,10 @@ export function evacuationSchedule(
       tooLate: latest <= now,
       overCapacity: false,
       action: "order_now",
+      threat: held ? "if_containment_fails" : "free_burn",
+      tier: !held && latest <= now + EVAC_DECISION_WINDOW_MIN ? "order" : "warn",
+      containedByMinute: held ? Math.round(held.containedBy) : null,
+      orderByMinute: Math.max(Math.round(now), Math.floor(latest - EVAC_DECISION_WINDOW_MIN)),
       expectedCaughtNow: leaving(zone) ? expectedCaught(zone, zone.orderedAt!, coreAbs) : expectedCaught(zone, now, coreAbs),
       expectedCaughtAtRecommended: { households: 0, people: null },
     });
@@ -205,6 +274,23 @@ export function evacuationSchedule(
       plan.expectedCaughtAtRecommended = expectedCaught(zone, zone.orderedAt!, coreAbs);
       continue;
     }
+    const pending = zone.pendingOrder;
+    // Warning tier: threatened only if containment fails, or (free burn) the latest safe start is
+    // more than the decision window away. A schedule already set in time stays (its departures
+    // are committed on the roads); for a contingent zone warn_evacuation replaces it.
+    if (plan.tier === "warn") {
+      if (plan.threat === "free_burn" && pending && pending.startMinute <= plan.latestSafeStartMinute) {
+        plan.action = "scheduled_ok";
+        plan.recommendedStartMinute = pending.startMinute;
+        plan.expectedCaughtAtRecommended = expectedCaught(zone, pending.startMinute, coreAbs);
+        if (plan.option) planned.push({ zone, start: pending.startMinute, segments: new Set(plan.option.segments.map((s) => s.id)) });
+        continue;
+      }
+      plan.action = zone.warning && !pending && zone.lift === null ? "warned" : "warn";
+      plan.recommendedStartMinute = plan.orderByMinute;
+      plan.expectedCaughtAtRecommended = expectedCaught(zone, plan.orderByMinute, coreAbs);
+      continue;
+    }
     let start = Math.round(now);
     const latest = Math.min(plan.latestSafeStartMinute, Math.floor(now + MAX_SCHEDULE_AHEAD_MINUTES));
     if (!plan.tooLate && plan.option) {
@@ -218,7 +304,6 @@ export function evacuationSchedule(
     }
     plan.recommendedStartMinute = start;
     plan.expectedCaughtAtRecommended = expectedCaught(zone, start, coreAbs);
-    const pending = zone.pendingOrder;
     if (start <= now + 1e-9) plan.action = "order_now";
     else if (pending && pending.startMinute <= plan.latestSafeStartMinute && pending.startMinute <= start + EVAC_SCHEDULE_STEP_MIN) plan.action = "scheduled_ok";
     else plan.action = pending ? "reschedule" : "schedule";
@@ -311,9 +396,7 @@ export function strategyAid(board: Board, fire: Fire): FireStrategyAid | null {
     a.option.id.localeCompare(b.option.id);
   const containable = scored.filter((x) => x.containable).sort(order);
   const recommended = containable[0] ?? null;
-  const chosen = board.response.fires.get(fire.id)?.strategy ?? null;
-  const promised = chosen ? (chosen.containedInMin ?? chosen.lineDoneMin) : null;
-  const overdue = chosen !== null && promised !== null && board.minute > chosen.at + promised + STRATEGY_OVERDUE_GRACE_MIN;
+  const overdue = strategyOverdue(board, fire);
   const recommendedSend: FireStrategyAid["recommendedSend"] = [];
   if (recommended) {
     const positionId = recommended.option.positionId;

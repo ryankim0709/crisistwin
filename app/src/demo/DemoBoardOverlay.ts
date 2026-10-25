@@ -6,7 +6,8 @@
  * (only a road route: never a straight line to its target), each fire line ahead of a fire
  * (planned dashed, built solid), small cars for the sampled evacuating vehicles on their road
  * routes, and the outline of each ordered, threatened or overrun zone draped on the ground with
- * its tag. Draws the simulated board only; it never changes it.
+ * its tag; crews at work as firefighter figures (screen-size minimum) with their hoses, water,
+ * dug line, dust and steam (firefightingFx3d.ts). Draws the simulated board only; it never changes it.
  */
 
 import * as THREE from "three";
@@ -16,13 +17,14 @@ import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import type { CSS2DObject } from "three/examples/jsm/renderers/CSS2DRenderer.js";
 import type { BoardFrame } from "../fire/diorama/board";
 import type { LabelLayer } from "../fire/diorama/labels";
-import type { BoardOverlay } from "../fire/diorama/types";
+import type { BoardOverlay, OverlayView } from "../fire/diorama/types";
 import { lonLatToMercator } from "../fire/landscape";
 import { LEVEL_COLOR } from "../live/CommandMap";
 import type { LonLat } from "../live/types";
 import { vehicleFamily, type VehicleFamily } from "../studio/apparatus";
 import { CREW_COLORS } from "../studio/firelinePalette";
-import { crewWork, type CrewWork } from "./fireState";
+import { FirefightingFx } from "./firefightingFx3d";
+import { firefightingWork, justPutOut, type FirefightingWork } from "./firefightingWork";
 import { EVACUEE_MARKERS_MAX, distanceM, evacueeMarkers, lineBuiltExtent, zoneOrderStatus, type Board, type ZoneForecast } from "./model";
 import { allClearLabelShown } from "./allClear";
 import { BoardMotion, teamSubjects } from "./unitMotion";
@@ -35,6 +37,8 @@ export const DEMO_3D_COLORS = {
   route: 0x6b5bd2,
   ordered: LEVEL_COLOR.evacuate_now,
   threatened: LEVEL_COLOR.be_ready,
+  /** A zone with an evacuation warning (be ready to leave, demo/evacWarning.ts): the be-ready amber, dashed. */
+  warning: LEVEL_COLOR.be_ready,
   overrun: "#b3140c",
   /** A zone whose evacuation order was lifted (all clear, demo/allClear.ts): neutral, thin (boardMapLayers BOARD_COLOR.allClear). */
   lifted: "#5b6470",
@@ -55,6 +59,12 @@ const CREW_INWARD_WORLD = 2.4;
 const CREW_BOB_WORLD = 0.6;
 /** Figure: body and helmet, world units (exaggerated like the vehicles). */
 const FIGURE = { bodyRadius: 0.34, bodyHeight: 1.25, headRadius: 0.32 } as const;
+/**
+ * Figures are drawn at least this tall on screen (CSS px) so they read at the whole-board framing
+ * (at true scale they are a pixel or two there), and at most FIGURE_SCALE_MAX times their size.
+ */
+const FIGURE_MIN_PX = 11;
+const FIGURE_SCALE_MAX = 5;
 
 type CrewPath = {
   points: { x: number; z: number }[];
@@ -65,7 +75,7 @@ type CrewPath = {
   target: number;
   /** Unit inward direction on the board (x east, z south). */
   inward: { x: number; z: number };
-  kind: CrewWork["kind"];
+  kind: FirefightingWork["kind"];
   color: THREE.Color;
   phase: number;
   /** Share of the path worked (0..1), for the inward step. */
@@ -87,8 +97,8 @@ const SPOT_SPACING_WORLD = 5.5;
 /** An available unit this close to its station is shown as parked there, metres. */
 const AT_STATION_M = 60;
 
-type ZoneState = "overrun" | "ordered" | "threatened" | "lifted";
-const ZONE_TAG: Record<ZoneState, string> = { overrun: "Overrun", ordered: "Leave now", threatened: "At risk", lifted: "All clear" };
+type ZoneState = "overrun" | "ordered" | "warning" | "threatened" | "lifted";
+const ZONE_TAG: Record<ZoneState, string> = { overrun: "Overrun", ordered: "Leave now", warning: "Be ready", threatened: "At risk", lifted: "All clear" };
 
 const LABEL_CSS = `
 .fdx-dmunit { font-size: 10.5px; padding: 2px 8px; background: rgba(36, 30, 64, 0.88); color: #fff; border-color: rgba(20, 16, 40, 0.6); font-weight: 700; }
@@ -97,6 +107,7 @@ const LABEL_CSS = `
 .fdx-dmzone-overrun { color: #fff; background: rgba(122, 10, 5, 0.9); }
 .fdx-dmzone-ordered { color: #7a0a05; }
 .fdx-dmzone-threatened { color: #7a4b00; }
+.fdx-dmzone-warning { color: #7a4b00; }
 .fdx-dmzone-lifted { color: #3a3f45; font-weight: 600; }
 .fdx-compact .fdx-dmunit, .fdx-compact .fdx-dmstation, .fdx-compact .fdx-dmzone { font-size: 9px; padding: 1px 6px; }
 /* Station name tags are hidden: the red firehouses mark stations; names are in the panels. */
@@ -115,6 +126,8 @@ function zoneState(zone: Board["zones"][number], forecast: ZoneForecast | undefi
   }
   if (zone.overrunAt !== null) return "overrun";
   if (zone.orderedAt !== null) return "ordered";
+  // Evacuation warning (demo/evacWarning.ts): "Be ready", amber and dashed, never the orange "Leave now".
+  if (zone.warning && !zone.pendingOrder) return "warning";
   if (forecast && forecast.edgeEta !== null) return "threatened";
   return null;
 }
@@ -158,6 +171,8 @@ export class DemoBoardOverlay implements BoardOverlay {
   /** Firefighter figures (body + helmet) for the crews at work, and what they walk along. */
   private crewMeshes: { body: THREE.InstancedMesh; helmet: THREE.InstancedMesh } | null = null;
   private crewPaths = new Map<string, CrewPath>();
+  /** Hoses, water spray, dug line, dust and steam of the crews at work (firefightingFx3d.ts). */
+  private fx: FirefightingFx | null = null;
   /** Unit labels by group lead (or unit) id, kept per id so a label never jumps to another unit. */
   private unitLabels = new Map<string, Label>();
   /** What each unit label says and how high it floats; rebuilt on board updates. */
@@ -169,6 +184,7 @@ export class DemoBoardOverlay implements BoardOverlay {
   private readonly quat = new THREE.Quaternion();
   private readonly up = new THREE.Vector3(0, 1, 0);
   private readonly one = new THREE.Vector3(1, 1, 1);
+  private readonly scaleVec = new THREE.Vector3(1, 1, 1);
 
   attach(frame: BoardFrame, parent: THREE.Group, labels: LabelLayer): void {
     this.detach();
@@ -181,6 +197,8 @@ export class DemoBoardOverlay implements BoardOverlay {
     this.style = document.createElement("style");
     this.style.textContent = LABEL_CSS;
     labels.renderer.domElement.appendChild(this.style);
+    this.fx = new FirefightingFx();
+    this.group.add(this.fx.group);
     this.update();
   }
 
@@ -193,6 +211,8 @@ export class DemoBoardOverlay implements BoardOverlay {
     this.clearZones();
     this.clearEvacuees();
     this.clearCrews();
+    this.fx?.dispose();
+    this.fx = null;
     this.group.removeFromParent();
     this.group = null;
     this.style?.remove();
@@ -201,11 +221,14 @@ export class DemoBoardOverlay implements BoardOverlay {
     this.labels = null;
   }
 
-  tick(time: number, dt: number, reducedMotion: boolean, width: number, height: number): void {
+  tick(time: number, dt: number, reducedMotion: boolean, width: number, height: number, view?: OverlayView): void {
     for (const material of this.materials) material.resolution.set(width, height);
     this.motion.setReducedMotion(reducedMotion);
     if (this.unitsMoving) this.unitsMoving = this.placeUnits(performance.now());
-    this.placeCrews(time, dt, reducedMotion);
+    // World units per CSS px at the orbit target (as FireDioramaScene hands the fx layer).
+    const wpp = view ? (2 * view.distance * Math.tan(THREE.MathUtils.degToRad(view.camera.fov / 2))) / Math.max(1, height) : 0;
+    this.placeCrews(time, dt, reducedMotion, wpp);
+    this.fx?.tick(time, reducedMotion, wpp, width, height);
   }
 
   /** The board as it is now (mutated in place by the page; call again after every change). */
@@ -258,6 +281,7 @@ export class DemoBoardOverlay implements BoardOverlay {
     this.unitsMoving = this.placeUnits(now);
     this.labels?.invalidate();
     this.placeEvacuees();
+    this.updateFirefighting();
     this.updateCrews();
   }
 
@@ -579,7 +603,7 @@ export class DemoBoardOverlay implements BoardOverlay {
       if (!state || zone.ring.length < 3) continue;
       const positions = this.drape([...zone.ring, zone.ring[0]], ZONE_LIFT);
       if (positions.length >= 6) {
-        group.add(this.line(positions, DEMO_3D_COLORS[state], state === "overrun" ? 4 : state === "lifted" ? 1.5 : 3, state === "threatened" || state === "lifted"));
+        group.add(this.line(positions, DEMO_3D_COLORS[state], state === "overrun" ? 4 : state === "lifted" ? 1.5 : 3, state === "threatened" || state === "warning" || state === "lifted"));
       }
       const core = this.toWorld(zone.core);
       if (core) {
@@ -653,17 +677,23 @@ export class DemoBoardOverlay implements BoardOverlay {
   private updateCrews(): void {
     const { group, board } = this;
     if (!group) return;
-    const work: CrewWork[] = board ? crewWork(board) : [];
+    // The worked ground ending at the point worked now (firefightingWork: the cells put out, or
+    // the attack line from its anchor out to this crew's tip), so the lead stands at the work.
+    const work: FirefightingWork[] = board ? firefightingWork(board) : [];
     const next = new Map<string, CrewPath>();
     for (const w of work) {
       const points: { x: number; z: number }[] = [];
       const cum: number[] = [];
-      for (const p of w.path) {
+      // Drawn clear of its (oversized) vehicle, as its hose end and dug line (firefightingFx3d).
+      const shift = this.fx?.shiftOf(w.teamId) ?? { x: 0, z: 0 };
+      for (const p of w.trail) {
         const at = this.toWorld(p);
         if (!at) continue;
         const last = points[points.length - 1];
-        cum.push(last ? cum[cum.length - 1] + Math.hypot(at.x - last.x, at.z - last.z) : 0);
-        points.push({ x: at.x, z: at.z });
+        const x = at.x + shift.x;
+        const z = at.z + shift.z;
+        cum.push(last ? cum[cum.length - 1] + Math.hypot(x - last.x, z - last.z) : 0);
+        points.push({ x, z });
       }
       if (points.length === 0) continue;
       const key = `${w.teamId}>${w.fireId}`;
@@ -676,8 +706,8 @@ export class DemoBoardOverlay implements BoardOverlay {
         points,
         cum,
         // A new crew appears at its current spot; a known one keeps easing from where it is drawn.
-        shown: previous ? Math.min(previous.shown, total) : progress * total,
-        target: progress * total,
+        shown: previous ? Math.min(previous.shown, total) : total,
+        target: total,
         // inward is [east, north]; the board's z runs south.
         inward: len > 0 ? { x: w.inward[0] / len, z: -w.inward[1] / len } : { x: 0, z: 0 },
         kind: w.kind,
@@ -707,6 +737,32 @@ export class DemoBoardOverlay implements BoardOverlay {
     }
   }
 
+  /**
+   * Hoses, spray, dug line, dust and steam for the board minute (firefightingFx3d.ts): what the
+   * crews work (firefightingWork) and the cells just put out (justPutOut). A hose starts at its
+   * engine where the board draws it (fanned out at its spot, as placeUnits).
+   */
+  private updateFirefighting(): void {
+    const { fx, frame, board } = this;
+    if (!fx || !frame) return;
+    fx.setWork(
+      {
+        frame,
+        toWorld: (p) => this.toWorld(p),
+        vehicleWorld: (id) => {
+          const d = this.motion.get(id);
+          const at = d ? this.toWorld(d.at) : null;
+          if (!d || !at) return null;
+          const x = at.x + d.offset[0] * SPOT_SPACING_WORLD;
+          const z = at.z - d.offset[1] * SPOT_SPACING_WORLD;
+          return { x, y: frame.surfaceAt(x, z), z };
+        },
+      },
+      board ? firefightingWork(board) : [],
+      board ? justPutOut(board) : [],
+    );
+  }
+
   /** Point at worked length `s` along the path. */
   private along(path: CrewPath, s: number): { x: number; z: number } {
     const { points, cum } = path;
@@ -725,23 +781,27 @@ export class DemoBoardOverlay implements BoardOverlay {
    * along the path, stepping in toward the fire as the work progresses and bobbing as they work
    * (direct and mop-up crews swing in and out at the edge). Static under reduced motion.
    */
-  private placeCrews(time: number, dt: number, reducedMotion: boolean): void {
+  private placeCrews(time: number, dt: number, reducedMotion: boolean, wpp: number): void {
     const meshes = this.crewMeshes;
     const frame = this.frame;
     if (!meshes || !frame) return;
+    // Screen-pixel minimum height; spacing and steps grow with the figures.
+    const figureWorld = FIGURE.bodyHeight + FIGURE.headRadius * 2;
+    const scale = Math.min(FIGURE_SCALE_MAX, Math.max(1, (FIGURE_MIN_PX * wpp) / figureWorld));
+    this.scaleVec.setScalar(scale);
     let n = 0;
     for (const path of this.crewPaths.values()) {
       path.shown = reducedMotion ? path.target : path.shown + (path.target - path.shown) * Math.min(1, dt * 2.5);
       for (let k = 0; k < CREW_FIGURES && n < CREW_FIGURES_MAX; k++) {
-        const at = this.along(path, path.shown - k * CREW_SPACING_WORLD);
+        const at = this.along(path, path.shown - k * CREW_SPACING_WORLD * scale);
         const swing =
           reducedMotion || path.kind === "line" ? 0.5 : 0.5 + 0.5 * Math.sin(time * (path.kind === "mopup" ? 1.4 : 2.6) + path.phase + k * 1.7);
-        const step = CREW_INWARD_WORLD * (0.25 + 0.75 * path.progress) * (path.kind === "line" ? 0.4 : 1) + CREW_BOB_WORLD * swing;
+        const step = (CREW_INWARD_WORLD * (0.25 + 0.75 * path.progress) * (path.kind === "line" ? 0.4 : 1) + CREW_BOB_WORLD * swing) * Math.sqrt(scale);
         const x = at.x + path.inward.x * step;
         const z = at.z + path.inward.z * step;
         const hop = reducedMotion ? 0 : Math.abs(Math.sin(time * 5 + path.phase + k)) * 0.18;
         this.quat.setFromAxisAngle(this.up, Math.atan2(path.inward.x, path.inward.z));
-        this.matrix.compose(new THREE.Vector3(x, frame.surfaceAt(x, z) + hop, z), this.quat, this.one);
+        this.matrix.compose(new THREE.Vector3(x, frame.surfaceAt(x, z) + hop * scale, z), this.quat, this.scaleVec);
         meshes.body.setMatrixAt(n, this.matrix);
         meshes.helmet.setMatrixAt(n, this.matrix);
         meshes.body.setColorAt(n, path.color);

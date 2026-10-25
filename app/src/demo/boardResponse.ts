@@ -48,6 +48,7 @@ import {
 } from "../response/report";
 import { engineCrewHandLineMPerMin, formatDuration, planWork, type WorkMode, type WorkPlan } from "../response/reach";
 import { countAtMost } from "./fireField";
+import { EDGE_TACTICS, heldEdge, worksAlongEdge } from "./suppression";
 import type { LonLat } from "../live/types";
 import { commanderTactic, type ChosenStrategy } from "./strategyOptions";
 import { DROP_HOLDS_FLAME_FEET, nearestWaterKm } from "../studio/aircraft";
@@ -1511,6 +1512,8 @@ function reviewTactic(board: Board, fire: Fire, fr: FireResponse, teams: Team[])
 export function accrueContainmentLine(board: Board, fire: Fire, from: number, dt: number): void {
   const fr = board.response.fires.get(fire.id);
   if (!fr || dt <= 0 || fire.status !== "burning") return;
+  // Edge tactics: the line is the edge that holds in the fire model (advanceContainment), not a tally.
+  if (EDGE_TACTICS.has(fr.tactic)) return;
   const teams = builders(board, fire, from);
   if (teams.length > 0) fr.groundLineM += tacticLineRate(board, fire, teams, fr.tactic, from) * dt;
 }
@@ -1527,14 +1530,26 @@ export function advanceContainment(board: Board, fire: Fire, decide = true): boo
   if (!fr) return false;
   const teams = builders(board, fire);
   if (decide && board.minute - fr.tacticAt >= TACTIC_REVIEW_MINUTES) reviewTactic(board, fire, fr, teams);
-  if (teams.length === 0 && fr.airLineM <= 0) return false;
   const needed = lineNeededMeters(fr.tactic, fire.perimeterM, fr.target?.perimeterM ?? null);
+  if (EDGE_TACTICS.has(fr.tactic)) {
+    // Line at the edge (direct, flank, structure): the share of the open edge that holds in the
+    // fire model (suppression.ts heldEdge: knocked-down edge and built line the forecast does not
+    // cross), so it is partial while crews work the flanks, grows as the edge is put out, and
+    // shrinks where the fire outflanks or crosses it. Ground-only containment is the solver's
+    // (model.ts heldByLine: no further spread forecast); this race closes only with aircraft line.
+    const held = heldEdge(board, fire);
+    fr.groundLineM = (held?.share ?? 0) * needed;
+    fire.lineM = Math.min(needed, fr.groundLineM + fr.airLineM);
+    if (!decide || teams.length === 0 || fr.airLineM <= 0 || fire.lineM < needed - 1e-6) return false;
+  } else if (teams.length === 0 && fr.airLineM <= 0) return false;
   // Ground line covers at most the share of the edge within reach of the units working it
   // (response/reach.ts); aircraft line can cover the rest. Line cannot exceed what the tactic
   // needs; flank line is outflanked as the perimeter grows.
-  if (decide) fr.groundLineM = Math.min(needed * (reachFraction(board, fire, fr) ?? 1), fr.groundLineM);
-  fire.lineM = Math.min(needed, fr.groundLineM + fr.airLineM);
-  if (!decide) return false;
+  if (!EDGE_TACTICS.has(fr.tactic)) {
+    if (decide) fr.groundLineM = Math.min(needed * (reachFraction(board, fire, fr) ?? 1), fr.groundLineM);
+    fire.lineM = Math.min(needed, fr.groundLineM + fr.airLineM);
+    if (!decide) return false;
+  }
   // Aircraft lay line, but only ground resources on scene finish and hold it (retardant supports ground forces).
   if (fr.tactic === "flank" || teams.length === 0) return false;
   if (fr.tactic === "indirect" && fr.target) {
@@ -1717,8 +1732,12 @@ export function reachFraction(board: Board, fire: Fire, fr: FireResponse | null 
   const key = units.map((t) => `${t.id}:${t.workMode}:${t.reachM}`).join(",");
   if (fr.reach && fr.reach.fraction !== null && fr.reach.unitsKey === key) return fr.reach.fraction;
   let inside = 0;
-  for (const p of edge) {
-    if (units.some((t) => !offEdge(t.workMode) && distanceM(t.position, p) <= t.reachM)) inside += 1;
+  // Hand crews and dozers build progressive line along the whole edge (suppression.ts worksAlongEdge).
+  if (units.some((t) => worksAlongEdge(t))) inside = edge.length;
+  else {
+    for (const p of edge) {
+      if (units.some((t) => !offEdge(t.workMode) && distanceM(t.position, p) <= t.reachM)) inside += 1;
+    }
   }
   const fraction = inside / edge.length;
   if (fr.reach) {
@@ -1754,7 +1773,7 @@ export function idleOnSceneReason(board: Board, team: Team): string | null {
   const fr = board.response.fires.get(fire.id);
   if (!fr) return null;
   const edge = edgeOf(board, fire, fr);
-  if (edge.length === 0 || edge.some((p) => distanceM(team.position, p) <= team.reachM)) return null;
+  if (edge.length === 0 || worksAlongEdge(team) || edge.some((p) => distanceM(team.position, p) <= team.reachM)) return null;
   return `no open edge of ${fire.id} within its ${Math.round(team.reachM)} m reach`;
 }
 

@@ -333,7 +333,12 @@ unknown; it is taken to park at its target and labelled "road access not known".
   fire's edge and nothing on an attack line's anchor either (`unitLineRateOn` is 0); its label
   and the agent's monitor say it is parked too far to build line. Free units whose known road leg
   to a fire ends out of their reach are left out of the direct-attack forecasts and the all-units
-  package (`nearestFree`), as `lineWorkers` already does for attack positions.
+  package (`nearestFree`), as `lineWorkers` already does for attack positions. While a unit's
+  own leg is not known yet, the park point of another unit of its access class for the same
+  target stands in (`classParkPoint`, `legEnd`): the router ends every leg of one class to one
+  target at the same road node, whatever the origin. Failing that, the class's last park point
+  for any target of the same fire is used as an estimate (positions and the fire's anchor move
+  every replan).
 - **Water**: an engine drains its tank (`ENGINE_WATER_USE_GPM`) only while it works with hose
   (`usesWater`); an engine whose crew is on foot, or that is holding its road, does not.
 - **Road data extent**: the drill's road graph is the package's box (fire reach plus 3 km,

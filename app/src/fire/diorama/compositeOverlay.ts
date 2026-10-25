@@ -6,7 +6,7 @@
 import type * as THREE from "three";
 import type { BoardFrame } from "./board";
 import type { LabelLayer } from "./labels";
-import type { BoardOverlay } from "./types";
+import type { BoardOverlay, OverlayView } from "./types";
 
 export class CompositeOverlay implements BoardOverlay {
   private children: readonly BoardOverlay[] = [];
@@ -32,7 +32,7 @@ export class CompositeOverlay implements BoardOverlay {
     this.attached = null;
   }
 
-  tick(time: number, dt: number, reducedMotion: boolean, width: number, height: number): void {
-    for (const child of this.children) child.tick(time, dt, reducedMotion, width, height);
+  tick(time: number, dt: number, reducedMotion: boolean, width: number, height: number, view?: OverlayView): void {
+    for (const child of this.children) child.tick(time, dt, reducedMotion, width, height, view);
   }
 }

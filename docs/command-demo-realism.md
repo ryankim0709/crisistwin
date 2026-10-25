@@ -383,8 +383,8 @@ putting every zone's cars on a shared road at once (`model.ts` `applyOrder`, `or
   before its start minute is caught as an unordered zone and the schedule is dropped (logged with
   the overrun). Invariant (`checkBoardInvariants`): a schedule never sits on a zone already
   leaving or overrun, and no household leaves a zone with no order in effect.
-- **What the commander sees** (`observation.zones[]`): `status` (`no_order`, `scheduled`,
-  `ordered`, `overrun`, `lifted`), `order: {status: none | scheduled | leaving | done | overrun | lifted,
+- **What the commander sees** (`observation.zones[]`): `status` (`no_order`, `warning`, `scheduled`,
+  `ordered`, `overrun`, `lifted`), `order: {status: none | warning | scheduled | leaving | done | overrun | lifted,
   start_minute, starts_in_min, destination_id, margin_at_start_min}` (`model.ts`
   `zoneOrderStatus`; done = every household the order sends out has left and arrived;
   `margin_at_start_min` = the scheduled option's `margin_min` - `starts_in_min`, traffic as now),
@@ -440,13 +440,17 @@ i.e. scripts.)
   every reported fire that threatened it is contained or out, and has been for at least
   `ALL_CLEAR_HOLD_MINUTES` = 30 (**ASSUMPTION**, a board rule: a line that has just passed its
   holding test is not trusted at once; real repopulation follows damage and hazard assessment over
-  hours to days); (3) no reported burning fire reaches the zone within `ALL_CLEAR_WINDOW_MINUTES` =
-  360 (**ASSUMPTION**: the solver's whole lookahead, `LOOKAHEAD_MINUTES`; the field always reaches
-  at least 120 min ahead) in the solver's arrival field (free burn past the line built so far; no
-  containment estimate is assumed). The whole lookahead, not the 120-min `FORECAST_MINUTES`, so a
-  zone the free-burn evacuation schedule still wants out (it reads the whole lookahead) is never
-  liftable. "Threatened" (`zone.threatFireIds`, recorded every whole minute by `noteZoneThreats`)
-  = a reported fire whose arrival at any of the zone's cells came within that window. Unreported fires neither block
+  hours to days); (3) no other reported burning fire puts the zone in the evacuation order tier
+  now (`evacThreat.ts` `orderTierThreat`, see [Evacuation tiers](#evacuation-tiers-and-warnings)):
+  arriving within `ALL_CLEAR_WINDOW_MINUTES` = 360 (**ASSUMPTION**: the solver's whole lookahead)
+  and within the latest safe start plus the 30-min decision window, and not expected contained
+  45 min before it reaches the zone's core. On /live the observation adds (4): the evacuation
+  schedule (with each route's traffic) does not still give the zone tier `order`.
+  "Threatened" (`zone.threatFireIds`, recorded every whole minute by `noteZoneThreats`) = a
+  reported fire that put the zone in the order tier at some minute. Until 2026-10-25 rule (3)
+  blocked a lift for any reported burning fire arriving within 360 min in free burn, and any such
+  fire was recorded as threatening: a zone ordered for a small fire stayed ordered while another
+  fire, under control or hours away, burned anywhere within six hours of it. Unreported fires neither block
   nor allow a lift (report rule). Reasons are listed when not eligible, e.g. "S1-F1 was contained
   12 min ago (wait 30 min)", "S1-F2 is still burning", "S2-F1 is forecast to reach it in 48 min".
 - **Order contract**: `{type: "lift_evacuation", zone_id, reason}` (`contracts.ts` `DemoOrder`,
@@ -477,10 +481,10 @@ i.e. scripts.)
   eligible zones with `basis` ("fire S1-F2 contained 45 min ago") and `households_away`. The monitor
   wakes the agent (routine) the first time a zone becomes eligible (`all_clear_eligible`), so the
   all clear is not missed after the fires are out (periodic reviews stop then). The prompt
-  (`demo.py`): life safety first, lift only an eligible zone that is not in
-  `decision_aids.evacuation`, keep the order when in doubt; returning residents re-enter the roads
-  (timed at free flow, not loaded on the traffic model). The baseline policy
-  (`scripts/live-eval/baselinePolicy.ts`) lifts every eligible zone not in the schedule.
+  (`demo.py`): life safety first, lift only an eligible zone (never one the schedule gives tier
+  `order`; one still listed as `warn` is warned next), keep the order when in doubt; returning
+  residents re-enter the roads (timed at free flow, not loaded on the traffic model). The baseline
+  policy (`scripts/live-eval/baselinePolicy.ts`) lifts every eligible zone not in tier `order`.
 - **On screen.** The orange "Leave now" / "LEAVE NOW (sim)" signs go at the lift; the 2D board map
   and the 3D diorama show a neutral "ALL CLEAR (sim) · Z23 · n returning" / "All clear · <zone>"
   label with a thin grey outline and no fill for 30 board minutes, then nothing (a fire forecast to
@@ -781,7 +785,8 @@ Model output the commander chooses from; Claude never computes these numbers.
 
 - **Evacuation schedule** (`evacuationSchedule`): every zone a reported burning fire reaches
   within the solver's lookahead (360 min) in the free-burn field (line already built is in the
-  field; a containment that has not happened is not assumed: plan for the strategy failing).
+  field; a containment that has not happened is not assumed in the ETA), in tiers: see
+  [Evacuation tiers and warnings](#evacuation-tiers-and-warnings).
   `latest_safe_start_minute` = now + core ETA - (departure lead + clearance_min + congested
   drive) - `EVAC_SAFETY_MARGIN_MIN` (30 min). The departure lead is the time for
   `EVAC_TARGET_DEPARTED_SHARE` (90%) of complying households to leave under the exponential
@@ -791,9 +796,8 @@ Model output the commander chooses from; Claude never computes these numbers.
   segment of its route beside the decaying departure flows of zones already leaving or planned,
   never after the latest safe start (`over_capacity` when it cannot). Each entry gives the
   expected caught persons if ordered now and at the recommended start. With the 214-min lead,
-  almost every zone within reach of a fast fire is "order now"; staging only applies to zones
-  four or more hours out. Zones on the schedule are listed in `observation.zones` so they can be
-  ordered.
+  almost every zone within reach of a fast fire is "order now". Zones on the schedule are listed
+  in `observation.zones` so they can be ordered or warned.
 - **Strategy recommendation** (`strategyAid`): per reported burning fire, every strategy option
   with the homes the solver's forecast burns by its containment minute (or by the fire reaching a
   finished line, or by the 120-min forecast horizon when it does not contain), whether it is
@@ -811,10 +815,65 @@ Model output the commander chooses from; Claude never computes these numbers.
   cumulative sized extended-attack orders of the stages due (at least stage 1,
   `ESCALATION_ORDERS`, capped by `MAX_ORDER_COUNT`) less what was already ordered for the fire.
   `idle_units` lists free units while it burns.
-- The decide prompt (`app/backend/api/demo.py`) ranks life safety (follow the schedule; order
-  early rather than late), then property (the recommended strategy, or all units), then
+- The decide prompt (`app/backend/api/demo.py`) ranks life safety in proportion to the threat
+  (follow the schedule's tiers: leave now only for `order_now`, or a fire plainly outrunning its
+  containment toward the zone; `warn_evacuation` for `warn`; withdraw warnings and cancel
+  schedules whose zones leave the list), then property (the recommended strategy, or all units), then
   containment (a strategy and initial attack on every new fire, never idle units while a fire
   grows), and tells it to use `monitor.urgency`.
+
+### Evacuation tiers and warnings
+
+Code: `app/src/demo/evacThreat.ts` (the shared threat rule), `decisionAids.ts`
+(`evacuationSchedule`), `evacWarning.ts` (`warn_evacuation`), `allClear.ts`. Until 2026-10-25 the
+schedule listed every zone any reported burning fire reached within 360 min of free burn and,
+because the 214-min departure lead plus the 30-min margin put almost every such zone past its
+latest safe start, said "order now" for all of them: a 0.06 ha litter fire that the first engines
+contained in minutes had its two neighbouring zones (Z09, Z16 on Berkeley Hills) ordered out at
+T+3 and kept ordered while other fires burned. The schedule now answers in proportion to the
+threat. Every number is a board model result; the thresholds are **ASSUMPTIONS** (board rules,
+not sourced), named in `evacThreat.ts`:
+
+- **Threat** (`threat`). `if_containment_fails` when every reported burning fire reaching the zone
+  is expected contained at least `EVAC_CONTAINMENT_MARGIN_MIN` = 45 min (15 min overdue grace + 30
+  min safety margin) before its free-burn arrival at the zone's core (`contained_by_minute`);
+  otherwise `free_burn`. The containment estimate is the units on the fire
+  (`currentContainment`, direct attack, including units en route), none when the chosen strategy
+  is overdue; for a fresh fire with no strategy and no unit, the strategy aid's recommended
+  perimeter option (`containedInMin`). The core, because the board catches households still home
+  when fire reaches the core; a fire other than the core's first arrival uses max(its arrival at
+  any zone cell, the core's earliest arrival), a lower bound. Life-safety trade: if that
+  containment fails, the failure shows (overdue) about 30 min before the fire reaches the core by
+  the same forecast, far less than the 214-min lead; a fire outrunning its crews also wakes the
+  commander (`outrun`, `strategy_failing`, `line_breached`) and the prompt says to order then.
+- **Tier** (`tier`, `action`). `order` when the threat is `free_burn` and the latest safe start is
+  within `EVAC_DECISION_WINDOW_MIN` = 30 min of now (or past: `too_late`): `order_now`, or
+  `schedule` / `reschedule` / `scheduled_ok` when the roads fit only later (unchanged staggering).
+  Ordering at the latest safe start still meets the schedule's own target (90% of complying
+  households gone 30 min before core arrival); the window covers the agent's 3-min review cadence
+  and think time. Otherwise `warn`: `action` `warn` (or `warned` when the zone already has one), with
+  `order_by_minute` = latest safe start - 30 (when the aid will say order now if nothing changes).
+  A zone already scheduled in time keeps `scheduled_ok` in free burn; for a contingent zone the
+  warning replaces the schedule. `leaving` for a zone ordered out, with its `tier` still computed.
+  Zones off the list need nothing (a warning or schedule there is withdrawn).
+- **Warning order** (`{type: "warn_evacuation", zone_id, destination_id | null, reason}`,
+  `contracts.ts` `DemoOrder`, `model.ts` `BoardOrder`, `demo.py`): order status `warning`, residents
+  told to be ready to leave toward `destination_id` (null = the zone's first route option). Nobody
+  leaves (no source on how much a warning shortens a later order's departures, so the departure
+  curve is unchanged). Allowed on none, warning (new route), scheduled (replaces the schedule) and
+  lifted (ends the lift, as a new order does); refused on leaving, done, overrun.
+  `order_evacuation` supersedes it; `cancel_evacuation` withdraws it. Phones get `be_ready` with the
+  route and `reason_code: "board_warning"` ([live-reports.md](live-reports.md#guidance-from-the-live-boards-orders)).
+  On screen: "BE READY (sim) · Z09 · fire n min" on the 2D map, "Be ready · <zone>" in 3D, both
+  amber and dashed like "At risk" (never the orange "Leave now"); zone panel "Be ready (warning)"
+  with "Withdraw evacuation warning"; feed "Evacuation warning: <zone>, be ready to leave".
+- **All clear** follows the same rule ([All clear](#all-clear-lifting-an-evacuation-order)): an
+  order stays only while some reported fire puts the zone in the order tier, or a fire that did
+  has been contained less than 30 min. A contained small fire's zones become eligible 30 min after
+  containment unless another fire threatens them in the order tier.
+- **Baseline policy**: `order_now` -> ordered, `schedule` -> scheduled, `warn` -> warned; scheduled
+  or warned zones off the list are cancelled / withdrawn; eligible zones lifted (never tier
+  `order`), then warned next call if still listed as `warn`.
 
 ### Evaluation harness (`app/scripts/live-eval/`)
 
@@ -1051,6 +1110,17 @@ the AI agent see them (each console polls every 4 s).
   zones rerouted", "Road reopened: …", and "<zone>: no open route around the closed road;
   households wait". The observation lists `closed_roads` (segment id, name, since minute, by) and
   the prompt says routes already avoid them. The agent cannot close or reopen roads.
+- **Claude reacts at once** (`demo/useDemoAgent.ts` closure monitor, `demo/closureWake.ts`): a
+  closure or reopening wakes the agent on wall time with urgency `urgent` (board at 1× while it
+  decides), without waiting for the board monitor's minute bucket. It first waits for the routes
+  answer for the new closure set and the rerouted units' new legs (at most 5 s wall; the reason
+  says so when it times out). A routine review in flight is aborted (its plan was for the old
+  roads); an urgent call in flight queues one urgent follow-up. The reason names the road, the
+  rerouted units (minutes gained or lost, new arrival) and the zones whose route changed or has
+  none left, e.g. "Controller closed Grizzly Peak Blvd (segment s22) at T+00:42: units rerouted:
+  S04-E1 to F2 (+7 min, arrives T+00:55); zones affected: Z30 (evacuating) redirected to Exit B
+  14 min (was Exit A 8 min); Z23 best route now CA 13 south 12 min (was Exit A 9 min); Z29: no
+  route left." Every number comes from the board's routers.
 
 ## Measured
 

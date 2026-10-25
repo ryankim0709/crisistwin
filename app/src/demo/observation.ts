@@ -400,9 +400,11 @@ function knownOverrun(zone: ZoneState): boolean {
 }
 
 function zoneStatus(zone: ZoneState, minute: number): ZoneObservation["status"] {
-  if (zoneOrderStatus(zone, minute) === "lifted") return "lifted";
+  const status = zoneOrderStatus(zone, minute);
+  if (status === "lifted") return "lifted";
   if (zone.overrunAt !== null) return "overrun";
   if (zone.pendingOrder) return "scheduled";
+  if (status === "warning") return "warning";
   return zone.orderedAt !== null ? "ordered" : "no_order";
 }
 
@@ -437,8 +439,15 @@ export function buildObservation(
   // The commander sees only fires the dispatch centre knows about (response/report.ts).
   const fires = activeFires(board).filter((f) => isReported(board, f));
   // Decision aids (demo/decisionAids.ts): zones in the free-burn evacuation schedule are listed too, so they can be ordered.
-  const plans = evacuationSchedule(board, routes, (id) => forecasts.get(id)?.coreEta ?? null);
+  // The strategy aids first: a fresh fire's recommended containment sets its zones' evacuation tier (demo/evacThreat.ts).
+  const strategyAids = new Map(fires.map((fire) => [fire.id, strategyAid(board, fire)] as const));
+  const recommendedContainment = new Map(
+    [...strategyAids].map(([id, aid]) => [id, aid?.recommended?.option.outcome === "contained" ? (aid.recommended.option.containedInMin ?? null) : null] as const),
+  );
+  const plans = evacuationSchedule(board, routes, (id) => forecasts.get(id)?.coreEta ?? null, recommendedContainment);
   const planned = new Set(plans.map((p) => p.zone.id));
+  // All clear: never while the schedule still orders the zone (tier "order"; demo/allClear.ts module comment).
+  const stillOrdered = new Map(plans.filter((p) => p.tier === "order").map((p) => [p.zone.id, p] as const));
 
   const listed = board.zones.filter((zone) => {
     const f = forecasts.get(zone.id);
@@ -447,6 +456,7 @@ export function buildObservation(
       zone.orderedAt !== null ||
       zone.lift !== null ||
       zone.pendingOrder !== null ||
+      zone.warning !== null ||
       knownOverrun(zone) ||
       f?.edgeEta != null ||
       f?.coreEta != null ||
@@ -496,6 +506,11 @@ export function buildObservation(
     const lifted = orderStatus === "lifted";
     // demo/allClear.ts: whether lift_evacuation may end the order now (null when there is none to lift).
     const clear = orderStatus === "leaving" || orderStatus === "done" || orderStatus === "overrun" ? allClearCheck(board, zone) : null;
+    const orderedBy = stillOrdered.get(zone.id);
+    if (clear && orderedBy) {
+      clear.eligible = false;
+      clear.reasons.push(`the evacuation schedule still orders it (decision_aids.evacuation tier order: fire ${orderedBy.etaBasis} ETA ${orderedBy.etaMin} min, latest safe start minute ${orderedBy.latestSafeStartMinute})`);
+    }
     return {
       id: zone.id,
       name: zone.name,
@@ -503,9 +518,17 @@ export function buildObservation(
       status: zoneStatus(zone, minute),
       order: {
         status: orderStatus,
-        start_minute: lifted ? Math.round(zone.lift!.at) : pending ? pending.startMinute : zone.orderedAt !== null ? Math.round(zone.orderedAt) : null,
+        start_minute: lifted ? Math.round(zone.lift!.at) : pending ? pending.startMinute : zone.orderedAt !== null ? Math.round(zone.orderedAt) : orderStatus === "warning" ? Math.round(zone.warning!.at) : null,
         starts_in_min: startsIn,
-        destination_id: lifted ? null : pending ? pending.route.destination_id : ordered ? (zone.route?.destination_id ?? null) : null,
+        destination_id: lifted
+          ? null
+          : pending
+            ? pending.route.destination_id
+            : ordered
+              ? (zone.route?.destination_id ?? null)
+              : orderStatus === "warning"
+                ? (zone.warning!.route?.destination_id ?? null)
+                : null,
         margin_at_start_min: scheduledMargin === null || startsIn === null ? null : Math.round(scheduledMargin - startsIn),
       },
       departure_peak_veh_h: Math.round(orderPeakVehiclesPerMinute(zone) * 60),
@@ -709,9 +732,9 @@ export function buildObservation(
     decision_aids: {
       evacuation_method: EVAC_SCHEDULE_LABEL,
       evacuation: plans.map(planObs),
-      all_clear: allClearAids(board, listed),
+      all_clear: allClearAids(board, listed.filter((z) => !stillOrdered.has(z.id))),
       strategy: fires.flatMap((fire) => {
-        const aid = strategyAid(board, fire);
+        const aid = strategyAids.get(fire.id) ?? null;
         if (!aid) return [];
         return [
           {
@@ -785,6 +808,10 @@ function planObs(p: ZoneEvacPlan): NonNullable<DemoObservation["decision_aids"]>
   return {
     zone_id: p.zone.id,
     action: p.action,
+    threat: p.threat,
+    tier: p.tier,
+    contained_by_minute: p.containedByMinute,
+    order_by_minute: p.orderByMinute,
     eta_min: p.etaMin,
     eta_basis: p.etaBasis,
     forecast_core_eta_min: p.forecastCoreEtaMin,

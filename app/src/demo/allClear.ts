@@ -11,12 +11,19 @@
  * 1. The zone has an evacuation order in effect or done, or was overrun (zoneOrderStatus leaving,
  *    done, overrun), and is not already lifted.
  * 2. Every reported fire that threatened the zone (zone.threatFireIds, noteZoneThreats: a reported
- *    fire whose solver arrival at any of the zone's cells came within ALL_CLEAR_WINDOW_MINUTES of
- *    the board clock, kept until the zone is back to normal) is contained or out, and has been
+ *    fire that put the zone in the evacuation order tier at some minute, demo/evacThreat.ts
+ *    orderTierThreat, kept until the zone is back to normal) is contained or out, and has been
  *    for at least ALL_CLEAR_HOLD_MINUTES (containedAt, else outAt for a fire closed by hand).
- * 3. No reported burning fire reaches the zone within ALL_CLEAR_WINDOW_MINUTES in the fire
- *    model's spread (the solver's arrival field: free-burn past the line built so far; a
- *    containment estimate is not assumed).
+ * 3. No other reported burning fire puts the zone in the order tier now (orderTierThreat: not
+ *    expected contained, with margin, before it reaches the zone's core, and arriving within the
+ *    latest safe start plus the decision window in the solver's free-burn spread). A fire that
+ *    reaches the zone only if its containment fails, or only hours later, warns the zone
+ *    (warn_evacuation) rather than keeping its order: the lift is proportional to the threat.
+ *    Before, any reported burning fire whose free-burn arrival came within
+ *    ALL_CLEAR_WINDOW_MINUTES blocked the lift, which kept zones ordered for hours after a small
+ *    fire was out while another fire burned under control elsewhere.
+ * On /live the observation adds one more (observation.ts): the evacuation schedule
+ * (decisionAids.ts, with each route's traffic) must not still order the zone (tier "order").
  * Only reported fires count (the commander's picture, boardResponse.ts report rule): an
  * unreported fire cannot block or allow a lift.
  *
@@ -32,17 +39,17 @@
 
 import { simClock } from "./format";
 import { isReported } from "./boardResponse";
+import { orderTierThreat } from "./evacThreat";
 import { activeFires, departed, logEvent, zoneCounts, zoneOrderStatus, type Board, type Fire, type ZoneState } from "./model";
 import { emptyTrips } from "./traffic";
 
 /**
- * ASSUMPTION (a board rule, not sourced): no reported burning fire may be forecast to reach the
- * zone within this many minutes of the board clock for its order to be lifted, and a fire whose
- * arrival came within it counts as having threatened the zone. Equal to fireField.ts
+ * ASSUMPTION (a board rule, not sourced): only a fire whose solver arrival at the zone comes within
+ * this many minutes of the board clock can count as threatening it (rules 2 and 3). Equal to fireField.ts
  * LOOKAHEAD_MINUTES: every arrival the solver forecasts counts (its field always reaches at least
  * model.ts FORECAST_MINUTES = 120 ahead, up to 360). Longer than FORECAST_MINUTES on purpose: the
- * free-burn evacuation schedule (decisionAids.ts) reads the whole lookahead, so a zone it still
- * wants out is never liftable. A literal: allClear.ts and model.ts import each other, so a
+ * free-burn evacuation schedule (decisionAids.ts) reads the whole lookahead (and on /live the
+ * observation refuses a lift the schedule still orders). A literal: allClear.ts and model.ts import each other, so a
  * constant of their modules cannot be read at module load.
  */
 export const ALL_CLEAR_WINDOW_MINUTES = 360;
@@ -104,14 +111,16 @@ function arrivalsAt(board: Board, zone: ZoneState): Map<Fire, number> {
 }
 
 /**
- * Records, for every zone, the reported fires whose arrival at the zone comes within
- * ALL_CLEAR_WINDOW_MINUTES (or has come): the fires a lift waits for. Called by model.step on
- * every whole minute; cleared when a lifted zone is back to normal (finishLifts).
+ * Records, for every zone, the reported fires that put it in the evacuation order tier now
+ * (demo/evacThreat.ts orderTierThreat; arrival within ALL_CLEAR_WINDOW_MINUTES): the fires a lift
+ * waits for. Called by model.step on every whole minute; cleared when a lifted zone is back to
+ * normal (finishLifts).
  */
 export function noteZoneThreats(board: Board): void {
   for (const zone of board.zones) {
     for (const [fire, at] of arrivalsAt(board, zone)) {
-      if (at <= board.minute + ALL_CLEAR_WINDOW_MINUTES && !zone.threatFireIds.includes(fire.id)) zone.threatFireIds.push(fire.id);
+      if (zone.threatFireIds.includes(fire.id) || at > board.minute + ALL_CLEAR_WINDOW_MINUTES) continue;
+      if (orderTierThreat(board, zone, fire)) zone.threatFireIds.push(fire.id);
     }
   }
 }
@@ -149,9 +158,9 @@ export function allClearCheck(board: Board, zone: ZoneState): AllClearCheck {
   }
   for (const [fire, at] of arrivalsAt(board, zone)) {
     if (fire.status !== "burning" || zone.threatFireIds.includes(fire.id)) continue;
-    if (at <= minute + ALL_CLEAR_WINDOW_MINUTES) {
+    if (at <= minute + ALL_CLEAR_WINDOW_MINUTES && orderTierThreat(board, zone, fire)) {
       const wait = Math.max(0, Math.round(at - minute));
-      reasons.push(`${fire.id} is forecast to reach it ${wait === 0 ? "now" : `in ${wait} min`}`);
+      reasons.push(`${fire.id} is forecast to reach it ${wait === 0 ? "now" : `in ${wait} min`} and is not expected contained before it`);
     }
   }
   return { eligible: reasons.length === 0, reasons, fires };

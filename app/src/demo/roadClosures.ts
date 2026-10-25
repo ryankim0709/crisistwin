@@ -79,23 +79,59 @@ interface Applied {
   samples: Sample[];
 }
 
+/**
+ * One change of the closure set as this board applied it, with what it did (the AI commander's
+ * urgent wake reads it, demo/closureWake.ts). `units` is filled by applyClosureSet, `zones` by the
+ * reconcileZones runs after it (until the next change).
+ */
+export interface ClosureChange {
+  /** 1, 2, ... per board (closureSeq). */
+  seq: number;
+  minute: number;
+  closed: RoadClosure[];
+  reopened: RoadClosure[];
+  /** Units stopped for a new road leg: their arrival minute before the closure and where they drive ("to F2", "home"). */
+  units: { teamId: string; wasArriveAt: number | null; to: string }[];
+  /** Evacuating or scheduled zones whose route the board switched (to null: no open route left). */
+  zones: { zoneId: string; scheduled: boolean; from: RouteOption | null; to: RouteOption | null }[];
+}
+
 interface ClosureState {
   /** Closed segment ids, sorted. */
   ids: string[];
   byId: Map<string, Applied>;
   /** A closure whose summary waits for the zones' reroute (logged by reconcileZones). */
   pending: { names: string[]; teamIds: string[]; by: string } | null;
+  /** The last MAX_CHANGES changes, oldest first. */
+  changes: ClosureChange[];
 }
 
 const STATE = new WeakMap<Board, ClosureState>();
+const MAX_CHANGES = 20;
 
 function stateOf(board: Board): ClosureState {
   let s = STATE.get(board);
   if (!s) {
-    s = { ids: [], byId: new Map(), pending: null };
+    s = { ids: [], byId: new Map(), pending: null, changes: [] };
     STATE.set(board, s);
   }
   return s;
+}
+
+/** Sequence number of the board's latest closure change (0: none yet). */
+export function closureSeq(board: Board): number {
+  const c = STATE.get(board)?.changes;
+  return c && c.length ? c[c.length - 1].seq : 0;
+}
+
+/** Closure changes after sequence number `seq`, oldest first. */
+export function closureChangesSince(board: Board, seq: number): ClosureChange[] {
+  return (STATE.get(board)?.changes ?? []).filter((c) => c.seq > seq);
+}
+
+/** Whether a road line (a route option's `line`) runs along a drill road segment's line (the module note's test). */
+export function lineUsesRoad(line: readonly LonLat[], road: readonly LonLat[]): boolean {
+  return usedAt(line, samplesOf(road)).length > 0;
 }
 
 /** Closed segment ids on this board, sorted. */
@@ -298,6 +334,16 @@ export function applyClosureSet(board: Board, list: readonly RoadClosure[]): boo
   for (const a of fresh) s.byId.set(a.closure.segmentId, a);
   for (const a of removed) s.byId.delete(a.closure.segmentId);
   s.ids = [...s.byId.keys()].sort();
+  const change: ClosureChange = {
+    seq: closureSeq(board) + 1,
+    minute: board.minute,
+    closed: added,
+    reopened: removed.map((a) => a.closure),
+    units: [],
+    zones: [],
+  };
+  s.changes.push(change);
+  if (s.changes.length > MAX_CHANGES) s.changes.splice(0, s.changes.length - MAX_CHANGES);
 
   if (removed.length) {
     // Roads open again: every cached leg, no-route answer and reach note may now be beaten.
@@ -316,6 +362,8 @@ export function applyClosureSet(board: Board, list: readonly RoadClosure[]): boo
   for (const team of board.teams) {
     if (!onTheRoad(team) || !team.route || team.travel === "pending") continue;
     if (closuresAhead(team.route, fresh, shareNow(board, team)).length === 0) continue;
+    const to = team.status === "returning" ? "home" : team.status === "moving_up" ? `to cover ${team.coverStation ?? "a station"}` : `to ${team.fireId ?? "its target"}`;
+    change.units.push({ teamId: team.id, wasArriveAt: team.arriveAt, to });
     rerouteForClosure(board, team);
     rerouted.push(team.id);
   }
@@ -399,6 +447,8 @@ export function reconcileZones(board: Board, routes: ReadonlyMap<string, RouteOp
     if (zone.overrunAt !== null) continue;
     const options = routes.get(zone.id) ?? [];
     let touched = false;
+    const wasRoute = zone.orderedAt !== null ? zone.route : (zone.pendingOrder?.route ?? null);
+    const wasScheduled = zone.orderedAt === null && zone.pendingOrder !== null;
     if (zone.orderedAt !== null) {
       const held = zone.route === null;
       if (held || (usesClosure(zone.route, closures) && !options.includes(zone.route!))) {
@@ -439,6 +489,9 @@ export function reconcileZones(board: Board, routes: ReadonlyMap<string, RouteOp
     if (touched) {
       changed = true;
       zonesRerouted += 1;
+      const nowRoute = zone.orderedAt !== null ? zone.route : (zone.pendingOrder?.route ?? null);
+      const last = s.changes[s.changes.length - 1];
+      if (last && nowRoute !== wasRoute) last.zones.push({ zoneId: zone.id, scheduled: wasScheduled, from: wasRoute, to: nowRoute });
     }
   }
   if (s.pending) {

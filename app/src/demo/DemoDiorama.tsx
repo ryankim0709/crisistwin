@@ -12,7 +12,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { BurnedGlyph, FireEdgeGlyph, StationBadgeGlyph, WindGlyph } from "../diorama/ui/glyphs";
 import { useMediaQuery } from "../diorama/ui/format";
 import { FireDioramaScene } from "../fire/diorama/FireDioramaScene";
-import type { DioramaIgnition, FireDioramaSceneApi } from "../fire/diorama/types";
+import { CompositeOverlay } from "../fire/diorama/compositeOverlay";
+import type { BoardOverlay, DioramaIgnition, FireDioramaSceneApi } from "../fire/diorama/types";
 import type { LandscapeGrid } from "../fire/landscape";
 import { sceneryOf, useBoardStreets } from "../fire/useBoardStreets";
 import { CREW_COLORS, firelineCss } from "../studio/firelinePalette";
@@ -20,6 +21,7 @@ import { Button, Legend, Panel, type LegendItem } from "../ui";
 import { EXTINGUISHED_LEGEND } from "../fire/diorama/board";
 import { HOUSE_MARK_COLORS } from "../fire/diorama/cover";
 import { DEMO_3D_COLORS, DemoBoardOverlay } from "./DemoBoardOverlay";
+import { FIREFIGHTING_3D_COLORS } from "./firefightingFx3d";
 import { ALL_CLEAR_LABEL_MINUTES } from "./allClear";
 import type { Selection } from "./DemoMap";
 import { dioramaRun } from "./dioramaField";
@@ -49,6 +51,10 @@ interface Props {
   forecasts: Map<string, ZoneForecast>;
   wind: { speedMetersPerSecond: number; fromDegrees: number } | null;
   selected: Selection | null;
+  /** Opt-in: another overlay drawn with the board's (Live: drill road closures, live/roadClosure3d.ts). */
+  extraOverlay?: BoardOverlay | null;
+  /** Opt-in: a click (not a drag) on the ground, as WGS84 [lon, lat] (Live: the road closure tool). */
+  onGroundPick?: ((at: [number, number]) => void) | null;
 }
 
 function VehicleGlyph({ color, width, height }: { color: number; width: number; height: number }) {
@@ -100,6 +106,47 @@ function FirefighterGlyph() {
   );
 }
 
+/** Hose from an engine to a spray of water dots (shape and dashes, not colour alone). */
+function HoseGlyph() {
+  return (
+    <svg width="24" height="16" viewBox="0 0 24 16" aria-hidden="true">
+      <rect x="1" y="9" width="7" height="5" rx="1" fill={css(CREW_COLORS.engine)} />
+      <path d="M8 12 Q12 12 14 9" fill="none" stroke={FIREFIGHTING_3D_COLORS.hoseCasing} strokeWidth="3" />
+      <path d="M8 12 Q12 12 14 9" fill="none" stroke={FIREFIGHTING_3D_COLORS.hose} strokeWidth="1.6" strokeDasharray="2 1.4" />
+      {[
+        [16, 6.5],
+        [18.5, 5],
+        [21, 6],
+        [22.5, 8.5],
+      ].map(([x, y]) => (
+        <circle key={x} cx={x} cy={y} r="1.1" fill={FIREFIGHTING_3D_COLORS.water} stroke={FIREFIGHTING_3D_COLORS.hose} strokeWidth="0.5" />
+      ))}
+    </svg>
+  );
+}
+
+/** A dark dug line behind a figure. */
+function DugLineGlyph() {
+  return (
+    <svg width="24" height="16" viewBox="0 0 24 16" aria-hidden="true">
+      <path d="M2 13 L14 10" stroke={FIREFIGHTING_3D_COLORS.dugLine} strokeWidth="2.4" strokeLinecap="round" />
+      <rect x="15.6" y="6.5" width="2.8" height="7.5" rx="1.2" fill={css(CREW_COLORS.hand_crew)} />
+      <circle cx="17" cy="4.7" r="1.9" fill={css(DEMO_3D_COLORS.crewHelmet)} stroke="var(--ct-ink-muted)" strokeWidth="0.6" />
+    </svg>
+  );
+}
+
+/** Steam puffs over just-put-out ground. */
+function SteamGlyph() {
+  return (
+    <svg width="24" height="16" viewBox="0 0 24 16" aria-hidden="true">
+      <rect x="3" y="11" width="18" height="4" rx="1" fill={EXTINGUISHED_LEGEND.fill} />
+      <circle cx="9" cy="8" r="3" fill={FIREFIGHTING_3D_COLORS.steam} stroke="var(--ct-ink-muted)" strokeWidth="0.6" />
+      <circle cx="14" cy="5" r="3.6" fill={FIREFIGHTING_3D_COLORS.steam} stroke="var(--ct-ink-muted)" strokeWidth="0.6" />
+    </svg>
+  );
+}
+
 function FirePinGlyph() {
   return (
     <svg width="24" height="16" viewBox="0 0 24 16" aria-hidden="true">
@@ -111,7 +158,7 @@ function FirePinGlyph() {
 
 const css = (color: number | string) => (typeof color === "number" ? firelineCss(color) : color);
 
-export default function DemoDiorama({ board, version, field, landscape, regionName, forecasts, wind, selected }: Props) {
+export default function DemoDiorama({ board, version, field, landscape, regionName, forecasts, wind, selected, extraOverlay = null, onGroundPick = null }: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [scene, setScene] = useState<FireDioramaSceneApi | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -119,6 +166,15 @@ export default function DemoDiorama({ board, version, field, landscape, regionNa
   const reducedMotion = useMediaQuery(REDUCED_MOTION_QUERY);
   const reducedMotionRef = useRef(reducedMotion);
   const [overlay] = useState(() => new DemoBoardOverlay());
+  // The scene takes one overlay: the board's, plus the page's optional extra one.
+  const [composite] = useState(() => new CompositeOverlay());
+  const groundPick = useRef(onGroundPick);
+  useEffect(() => {
+    groundPick.current = onGroundPick;
+  }, [onGroundPick]);
+  useEffect(() => {
+    composite.setChildren(extraOverlay ? [overlay, extraOverlay] : [overlay]);
+  }, [composite, overlay, extraOverlay]);
   const streets = useBoardStreets(landscape);
   const streetArea = sceneryOf(streets);
 
@@ -134,14 +190,15 @@ export default function DemoDiorama({ board, version, field, landscape, regionNa
       setError(cause instanceof Error ? cause.message : "WebGL could not be initialised.");
       return;
     }
-    created.setOverlay(overlay);
+    created.setOverlay(composite);
+    created.onGroundClick((p) => groundPick.current?.([p.longitude, p.latitude]));
     setScene(created);
     setError(null);
     return () => {
       setScene(null);
       created.dispose();
     };
-  }, [overlay]);
+  }, [composite]);
 
   useEffect(() => {
     scene?.setLandscape(landscape);
@@ -251,7 +308,14 @@ export default function DemoDiorama({ board, version, field, landscape, regionNa
     { label: "Burning now (simulated): glows, with flames and smoke", color: "var(--ct-fire)", glyph: <FireEdgeGlyph /> },
     { label: "Burned out (simulated): dark scar, no glow", color: "var(--ct-burned)", glyph: <BurnedGlyph /> },
     { label: "Put out by crews (simulated): slate with a pale hatch and a dashed outline, no glow", color: EXTINGUISHED_LEGEND.fill, glyph: <ExtinguishedGlyph /> },
-    { label: "Firefighters at work (simulated): small figures in their unit's colour, yellow helmets, stepping in toward the fire", color: css(CREW_COLORS.hand_crew), glyph: <FirefighterGlyph /> },
+    { label: "Firefighters at work (simulated): figures in their unit's colour, yellow helmets, stepping in toward the fire (drawn larger than life to be seen)", color: css(CREW_COLORS.hand_crew), glyph: <FirefighterGlyph /> },
+    {
+      label: "Hose line (simulated): from an engine to its work point, dashes flowing to the nozzle, water arcing onto the burning edge (a still water-drop icon with reduced motion)",
+      color: FIREFIGHTING_3D_COLORS.hose,
+      glyph: <HoseGlyph />,
+    },
+    { label: "Crew cutting line (simulated): the dark dug line a hand crew or dozer leaves, growing as it works; dust at a working dozer", color: FIREFIGHTING_3D_COLORS.dugLine, glyph: <DugLineGlyph /> },
+    { label: "Just put out (simulated): steam rising over the ground, fading as it cools", color: FIREFIGHTING_3D_COLORS.steam, glyph: <SteamGlyph /> },
     {
       label: "Residents safe (simulated): green roof with a white check, in proportion to the zone's households that got out",
       color: css(HOUSE_MARK_COLORS.safeRoof),
@@ -283,7 +347,7 @@ export default function DemoDiorama({ board, version, field, landscape, regionNa
     },
     { label: "Fire station", color: css(DEMO_3D_COLORS.stationRoof), glyph: <StationBadgeGlyph /> },
     { label: "Leave now zone (outline)", color: css(DEMO_3D_COLORS.ordered), shape: "line" },
-    { label: "At risk zone (dashed outline)", color: css(DEMO_3D_COLORS.threatened), shape: "dashed" },
+    { label: "At risk or Be ready (evacuation warning) zone (dashed outline; label says which)", color: css(DEMO_3D_COLORS.threatened), shape: "dashed" },
     { label: "Overrun zone (thick outline)", color: css(DEMO_3D_COLORS.overrun), shape: "line" },
     { label: `All clear zone: evacuation order lifted, residents returning (thin dashed grey; label for ${ALL_CLEAR_LABEL_MINUTES} board min)`, color: css(DEMO_3D_COLORS.lifted), shape: "dashed" },
     { label: "Wind, pointing downwind", color: "var(--ct-ink)", glyph: <WindGlyph bearing={(windFrom + 180) % 360} /> },

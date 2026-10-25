@@ -194,7 +194,10 @@ def _evict(collection) -> None:
     if excess <= 0:
         return
     doomed = []
-    for doc in collection.find({}, {"length": 1}).sort("fetchedAt", 1):
+    # Project before sorting: a find().sort() sorts whole documents (tile bodies included) and
+    # exceeds the server's 32 MB in-memory sort limit, which made this eviction fail silently.
+    oldest = collection.aggregate([{"$project": {"length": 1, "fetchedAt": 1}}, {"$sort": {"fetchedAt": 1}}])
+    for doc in oldest:
         if excess <= 0:
             break
         doomed.append(doc["_id"])

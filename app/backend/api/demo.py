@@ -78,6 +78,7 @@ ORDER_TYPES = [
     "send_crew",
     "release_crew",
     "order_evacuation",
+    "warn_evacuation",
     "cancel_evacuation",
     "lift_evacuation",
     "order_resources",
@@ -210,8 +211,9 @@ share order_compliance of households with a vehicle leave, after departure_mean_
 assumption: the snapshot's carless households drive one car each). Anyone home when fire reaches \
 the zone core is caught. \
 order_slack_min = fire_core_eta_min - departure_mean_min if ordered now (negative = already \
-late). Each zone's order block gives status (none, scheduled, leaving, done, overrun, lifted), \
-start_minute, starts_in_min, destination_id and, for a scheduled order, margin_at_start_min. \
+late). Each zone's order block gives status (none, warning, scheduled, leaving, done, overrun, \
+lifted), start_minute, starts_in_min, destination_id and, for a scheduled order, margin_at_start_min. \
+A warning (warn_evacuation) tells residents to be ready to leave; nobody leaves until ordered. \
 fire_eta_min / fire_core_eta_min: minutes until a burning fire reaches the zone edge / core \
 (0 = already there, null = not within the forecast).
 - People: zones carry the drill's resource snapshot (estimated or synthetic, see \
@@ -250,14 +252,22 @@ name, since_minute, by). No crew or evacuation route uses them: zone options, cr
 ETAs already go around them, and the board rerouted units and zones that were on them. You cannot \
 close or reopen these controller closures (close_road / reopen_road below act only on the live \
 drill's road reports in incident_picture); a zone with no options has no open route.
+- Woken by a road closure or reopening (monitor.woke_because names the road, the rerouted units \
+and the zones whose route changed or has none left): act now on the new road network. Re-check \
+each affected unit's assignment (send_crew to re-task it if its new arrival is too late) and each \
+affected zone's evacuation route and destination (order_evacuation again to redirect or \
+reschedule it on its new options); a reopened road may offer faster routes.
 - Predictive attack: each burning fire lists attack_positions read from the fire model's forecast: head_30 / head_60 (where the head will be in 30 / 60 min), flank_left / flank_right, and zone_<id> (where the fire first reaches that zone). Each has fire_eta_min, the line_m to build across the fire's path there, flame_ft and crowning at that spot, protects_zone_ids, and options with arrive_min and line_done_min for the nearest free crews. send_crew with that position_id sends a crew to build that line; built line is a barrier in the fire model, so it stops or slows the fire there and the forecasts already include it, and a fire held by its line is contained. Prefer getting ahead of the head: pick a position whose line_done_min (or at least arrive_min) comes before its fire_eta_min, where flame_ft is within the crews' holds_flame_ft and crowning is false. Put line at a threatened zone's edge (zone_<id>, or a position whose protects_zone_ids lists it) when the head cannot be caught in time. Use direct attack (position_id null) for small or slow fires that the fire's own options show contained soon.
 
 - Decision aids (observation.decision_aids, computed by the simulator; never recompute them): \
 evacuation lists every zone a reported burning fire reaches within the fire model's free-burn \
-lookahead (it does not assume your containment holds), most urgent first, with eta_min, \
-latest_safe_start_minute, recommended_start_minute, action (order_now, schedule, reschedule, \
-scheduled_ok, leaving), too_late, destination_id and expected_caught_people_if_ordered_now; \
-evacuation_method says how they are computed. strategy gives, per burning fire, each strategy \
+lookahead, most urgent first, with eta_min, latest_safe_start_minute, recommended_start_minute, \
+threat (free_burn, or if_containment_fails: every fire reaching it is expected contained, with \
+margin, before it arrives, contained_by_minute), tier (order or warn: what the zone needs now, \
+also for a zone already leaving), action (order_now, schedule, reschedule, scheduled_ok, warn, \
+warned, leaving), order_by_minute (when a warned free-burn zone will need its order if nothing \
+changes), too_late, destination_id and expected_caught_people_if_ordered_now; evacuation_method \
+says how they are computed. strategy gives, per burning fire, each strategy \
 option's homes_burned_forecast and whether it is containable, recommended_strategy_id with \
 recommended_send (the containable option that burns the fewest homes), all_units when nothing \
 contains (its strategy_id, every free unit that can reach the fire, available aircraft, sized \
@@ -266,15 +276,21 @@ so far: caught people and households with caught_breakdown (no_vehicle, no_order
 stayed_despite_order, ordered_too_late), homes_burned and area_burned_ha: the score you are judged on.
 
 Goals, in order:
-1. Life safety: no zone may be reached by fire with people home. Follow decision_aids.evacuation \
-in every decision: order out now each entry whose action is order_now (too_late ones and those with \
-the most expected_caught_people_if_ordered_now first), and schedule each schedule or reschedule \
-entry with start_minute = its recommended_start_minute, to its destination_id. Order early rather \
-than late: an order costs nothing here but road load, while every minute of delay leaves more people \
-home when the fire arrives (departures are spread over hours: departure_mean_min is only the mean). \
-Never start a zone after its latest_safe_start_minute. Cancel a schedule whose zone is no \
-longer in decision_aids.evacuation; zones in neither the evacuation list nor with a fire_eta_min \
-need no order.
+1. Life safety, in proportion to the threat: no zone may be reached by fire with people home, and \
+no zone is told to leave for a fire that will not reach it. Follow decision_aids.evacuation in every \
+decision: order out now each entry whose action is order_now (too_late ones and those with the most \
+expected_caught_people_if_ordered_now first), and schedule each schedule or reschedule entry with \
+start_minute = its recommended_start_minute, to its destination_id. Never start a zone after its \
+latest_safe_start_minute, and never hold back an order_now zone. Order "leave now" only for an \
+order_now entry, or for a zone a fire is plainly outrunning its containment toward (a breached \
+line, a failing or overdue strategy, fire_eta_min close) even before the aid says so. For each warn \
+entry issue warn_evacuation(zone_id, destination_id) instead: residents get ready (phones: Be ready \
+to leave), nobody leaves, and the aid moves the zone to order_now when its latest safe start comes \
+within the decision window or the containment it counts on fails. A small fire that the units on \
+it are containing well before it reaches a zone (threat if_containment_fails) warrants a warning, \
+not an evacuation. Withdraw a warning (cancel_evacuation) once its zone is no longer in \
+decision_aids.evacuation (the fire contained or no longer reaching it); cancel a schedule whose zone \
+is no longer listed; zones in neither the evacuation list nor with a fire_eta_min need no order.
 2. Property: choose for each burning fire the strategy that protects the zones with homes: \
 decision_aids.strategy recommended_strategy_id (set_strategy, then send_crew each recommended_send \
 with its position_id). When recommended_strategy_id is null nothing contains: use all_units (set its \
@@ -304,7 +320,10 @@ station (returning); options already time returning crews. \
 order_evacuation(zone_id, destination_id, start_minute): destination_id from that zone's \
 options only; start_minute an integer board minute from clock.minute to clock.minute + \
 clock.max_schedule_ahead_min, or null for now; not for a zone already leaving with a \
-start_minute. cancel_evacuation(zone_id): only a zone whose order.status is scheduled. \
+start_minute. warn_evacuation(zone_id, destination_id): a zone whose order.status is none, \
+warning (to change the route), scheduled (the warning replaces the schedule) or lifted; \
+destination_id from its options or null for its first; an order_evacuation later supersedes it. \
+cancel_evacuation(zone_id): only a zone whose order.status is scheduled or warning (withdraws it). \
 lift_evacuation(zone_id): only a zone whose all_clear.eligible is true (see All clear). \
 order_resources(fire_id, resource, count): resource and count limits from response.orderable; \
 only burning fires. set_strategy(fire_id, strategy_id): strategy_id one of that fire's \
@@ -322,15 +341,19 @@ phones treat it as closed; reopen_road(road_id) resolves the blocked reports of 
 roads; confirm_report(report_id) / dismiss_report(report_id) triage a listed report. Confirm \
 only with corroboration (several parties, a responder, or a real phone you trust); dismiss \
 only what contradicts better evidence. Evacuation orders stay order_evacuation: on the live \
-drill each zone's order (now, or scheduled) is published to that zone's residents' phones as \
-guidance as soon as the board applies it.
+drill each zone's order (now, or scheduled) or warning is published to that zone's residents' \
+phones as guidance (Leave now / Be ready to leave) as soon as the board applies it.
 - All clear: once the fire that threatened an evacuated zone is contained, its residents may go \
 home. Each zone with an order in effect, done or overrun carries all_clear (computed by the \
 simulator, never by you): eligible is true only when every reported fire that threatened it \
 (threat_fire_ids) has been contained or out for at least hold_min and no reported burning fire is \
 forecast to reach it within window_min; reasons says why not. decision_aids.all_clear lists the \
-eligible zones. Life safety first: lift_evacuation(zone_id) only for an eligible zone, never one \
-still in decision_aids.evacuation, and when in doubt keep the order. Lifting ends the order (its \
+eligible zones (an entry whose tier is order is never eligible). Life safety first: \
+lift_evacuation(zone_id) only for an eligible zone, and when in doubt keep the order. A zone \
+lifted while decision_aids.evacuation still lists it with tier warn gets warn_evacuation in the \
+next decision (be ready, since a fire could still reach it). A contained small fire lets its zones \
+go quickly: eligibility needs only hold_min after containment, unless another fire still threatens \
+them in the order tier. Lifting ends the order (its \
 residents' phones are told the order is lifted); households that left drive back home \
 (households_returning) and those that stayed are home again. Returning residents re-enter the \
 roads (the board times their drive back at free-flow and does not load it on the traffic model), \
@@ -389,7 +412,8 @@ ISSUE_ORDERS_TOOL = {
         "response.aircraft) and fire_id, and position_id (one of that fire's attack_positions ids, "
         "or null for direct attack; always null for aircraft). release_crew needs crew_id. order_evacuation needs zone_id and "
         "destination_id, and start_minute (absolute board minute departures start, or null for "
-        "now). cancel_evacuation needs zone_id (a scheduled zone). lift_evacuation needs zone_id (a zone whose "
+        "now). warn_evacuation needs zone_id and destination_id (or null for the zone's first option): be ready "
+        "to leave, nobody leaves. cancel_evacuation needs zone_id (a scheduled or warned zone). lift_evacuation needs zone_id (a zone whose "
         "all_clear.eligible is true). order_resources needs fire_id, "
         "resource and count. set_strategy needs fire_id and strategy_id (one of that fire's "
         "strategy_options ids); send its units with send_crew. send_rescue needs help_id. "
@@ -433,7 +457,7 @@ ISSUE_ORDERS_TOOL = {
                         "destination_id": {"type": ["string", "null"]},
                         "start_minute": {
                             "type": ["integer", "null"],
-                            "description": "order_evacuation only: absolute board minute departures start "
+                            "description": "order_evacuation only (null for warn_evacuation): absolute board minute departures start "
                             "(observation clock.minute to clock.minute + clock.max_schedule_ahead_min); null = now.",
                         },
                         "resource": {
@@ -727,6 +751,9 @@ def build_index(obs: dict) -> dict:
     }
     zones: dict[str, set[str]] = {}
     scheduled: set[str] = set()
+    warned: set[str] = set()
+    # warn_evacuation: refused on a zone whose order is in effect, done or overrun (app/src/demo/evacWarning.ts).
+    unwarnable: set[str] = set()
     # lift_evacuation: zone id -> why its order cannot be lifted ([] = eligible), from the page's
     # model check (zones[].all_clear, app/src/demo/allClear.ts); a zone without the block has nothing to lift.
     all_clear: dict[str, list[str]] = {}
@@ -736,6 +763,10 @@ def build_index(obs: dict) -> dict:
         order = z.get("order")
         if isinstance(order, dict) and order.get("status") == "scheduled":
             scheduled.add(z["id"])
+        if isinstance(order, dict) and order.get("status") == "warning":
+            warned.add(z["id"])
+        if isinstance(order, dict) and order.get("status") in ("leaving", "done", "overrun"):
+            unwarnable.add(z["id"])
         clear = z.get("all_clear")
         if isinstance(clear, dict):
             reasons = [r for r in clear.get("reasons") or [] if isinstance(r, str)] if isinstance(clear.get("reasons"), list) else []
@@ -753,6 +784,8 @@ def build_index(obs: dict) -> dict:
         "strategies": strategies,
         "zones": zones,
         "scheduled_zones": scheduled,
+        "warned_zones": warned,
+        "unwarnable_zones": unwarnable,
         "all_clear": all_clear,
         "minute": minute,
         **picture_index(obs.get("incident_picture")),
@@ -879,11 +912,19 @@ def normalize_order(raw: object, index: dict) -> tuple[dict | None, str | None]:
             "start_minute": start,
             "reason": reason,
         }, None
+    if kind == "warn_evacuation":
+        if zone_id not in index["zones"]:
+            return None, f"Unknown zone_id {zone_id!r}."
+        if zone_id in index.get("unwarnable_zones", set()):
+            return None, f"Zone {zone_id} is already ordered out or overrun (an order outranks a warning)."
+        if destination_id is not None and destination_id not in index["zones"][zone_id]:
+            return None, f"destination_id {destination_id!r} is not in the options of zone {zone_id}."
+        return {"type": kind, "zone_id": zone_id, "destination_id": destination_id, "reason": reason}, None
     if kind == "cancel_evacuation":
         if zone_id not in index["zones"]:
             return None, f"Unknown zone_id {zone_id!r}."
-        if zone_id not in index.get("scheduled_zones", set()):
-            return None, f"Zone {zone_id} has no scheduled evacuation to cancel."
+        if zone_id not in index.get("scheduled_zones", set()) | index.get("warned_zones", set()):
+            return None, f"Zone {zone_id} has no scheduled evacuation or warning to cancel."
         return {"type": kind, "zone_id": zone_id, "reason": reason}, None
     if kind == "lift_evacuation":
         if zone_id not in index["zones"]:
@@ -942,7 +983,7 @@ def validate_orders(tool_input: object, index: dict) -> tuple[list[dict], list[d
         if order is None:
             rejected.append({"order": raw, "reason": why})
             continue
-        if order["type"] in ("order_evacuation", "cancel_evacuation", "lift_evacuation"):
+        if order["type"] in ("order_evacuation", "warn_evacuation", "cancel_evacuation", "lift_evacuation"):
             key = ("zone", order["zone_id"])
         elif order["type"] == "order_resources":
             key = ("order", f"{order['fire_id']}:{order['resource']}")

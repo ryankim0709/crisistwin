@@ -26,6 +26,14 @@
  * after it arrives (bursts are batched) and at most once per PICTURE_MIN_GAP_MS, so phone
  * actions reach the commander within seconds even when the board clock runs slowly. These are
  * urgent wakes (kind live_report) and go through the same single-call queue.
+ *
+ * A controller road closure or reopening (roadClosures.ts, applied by live/useRoadClosures.ts)
+ * wakes it at once on wall time too, urgent (kind road_closed), with what changed and what the
+ * board did (closureWake.ts: units rerouted with their new arrival, zones whose route changed or
+ * that have none left). It first waits for the new zone routes and unit legs (at most
+ * CLOSURE_ROUTES_WAIT_MS) so Claude decides on the new road network. A routine review in flight
+ * is aborted (its plan was made for the old roads); an urgent call in flight queues one urgent
+ * follow-up. While it waits the agent reads as deciding (urgent), so Auto speed runs 1×.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -43,6 +51,8 @@ import {
 } from "./contracts";
 import type { Board, RouteOption, ZoneForecast } from "./model";
 import { pictureWakeReasons, type PictureKeys, type PictureResult } from "./incidentPicture";
+import { closedIds, closureChangesSince, closureKey, closureSeq } from "./roadClosures";
+import { closureHeadline, closureWakeText } from "./closureWake";
 import {
   MONITOR_EVERY_MINUTES,
   REVIEW_KINDS,
@@ -65,6 +75,20 @@ const MANUAL_REASON = "Operator asked for a decision now.";
 export const PICTURE_DEBOUNCE_MS = 2_000;
 /** Wall ms between two picture-triggered calls (bounds Claude calls while phones are busy). */
 export const PICTURE_MIN_GAP_MS = 15_000;
+/** Wall ms a road-closure wake waits at most for the new routes (zones and unit legs) before calling. */
+export const CLOSURE_ROUTES_WAIT_MS = 5_000;
+/** Wall ms after the new routes answer, so the board's zone reroute (reconcileZones) lands first. */
+const CLOSURE_SETTLE_MS = 300;
+
+/** A road-closure wake waiting for the new routes. */
+interface ClosureWait {
+  /** Wall ms it started. */
+  since: number;
+  /** Zone routes when the closure set changed (the old road network). */
+  before: ReadonlyMap<string, RouteOption[]>;
+  /** Wall ms it calls once the routes are ready (null: not ready yet). */
+  readyAt: number | null;
+}
 
 type FinalDecision = Extract<DecisionEvent, { type: "orders" }>;
 
@@ -127,6 +151,8 @@ export interface DemoAgentOptions {
   /** Incident the board runs on (sent as ?incident=). */
   incidentId: string;
   routes: ReadonlyMap<string, RouteOption[]>;
+  /** Controller road closures (segment ids) `routes` avoid (useDemoRoutes closedSegmentIds); null before the first answer. */
+  routesClosed?: string[] | null;
   forecasts: Map<string, ZoneForecast>;
   /** Autopilot toggle. */
   enabled: boolean;
@@ -195,6 +221,8 @@ export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
   const [urgency, setUrgency] = useState<WakeUrgency | null>(null);
   const [queued, setQueued] = useState<WakeUrgency | null>(null);
   const [spend, setSpend] = useState<AgentSpend>(NO_SPEND);
+  /** The board a road-closure wake is waiting on (shown as deciding); null when none. */
+  const [closureWaitBoard, setClosureWaitBoard] = useState<Board | null>(null);
 
   // Latest options for callbacks that run outside render (stream events, the monitor).
   const optsRef = useRef(opts);
@@ -216,9 +244,18 @@ export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
   /** Picture items the agent has seen (at its last decision, or when monitoring started). */
   const seenPictureRef = useRef<PictureKeys | null>(null);
   const lastPictureCallRef = useRef(-Infinity);
+  /** Urgency of the call in flight (a road closure aborts a routine one). */
+  const callUrgencyRef = useRef<WakeUrgency | null>(null);
+  /** The closure set (roadClosures.closureKey, closureSeq) the agent last saw in an observation. */
+  const toldClosureRef = useRef<{ key: string; seq: number } | null>(null);
+  const closureWaitRef = useRef<ClosureWait | null>(null);
 
   // Aborting rejects the stream; its `finally` then clears the in-flight state.
   const cancel = useCallback(() => abortRef.current?.abort(), []);
+  const endClosureWait = useCallback(() => {
+    closureWaitRef.current = null;
+    setClosureWaitBoard(null);
+  }, []);
 
   const call = useCallback((current: Board, wake: Wake) => {
     if (abortRef.current) return;
@@ -233,6 +270,10 @@ export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
     const minute = observation.clock.minute;
     const controller = new AbortController();
     abortRef.current = controller;
+    callUrgencyRef.current = wake.urgency;
+    toldClosureRef.current = { key: closureKey(current), seq: closureSeq(current) };
+    closureWaitRef.current = null;
+    setClosureWaitBoard(null);
     setInFlight(true);
     setUrgency(wake.urgency);
     setQueued(null);
@@ -329,6 +370,8 @@ export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
     lastBucketRef.current = null;
     backoffUntilRef.current = -Infinity;
     seenPictureRef.current = null;
+    toldClosureRef.current = null;
+    closureWaitRef.current = null;
     calledFireIdsRef.current = new Set();
     // A new board (reset, drill switch) starts a clean log.
     setDecisions([]);
@@ -349,8 +392,11 @@ export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
   }, [incidentId]);
 
   // Turning monitoring off (or hiding the tab) cancels its call; unmounting cancels any call.
+  // (A closure wait is dropped too; it shows only while monitoring, and the closure monitor clears it.)
   useEffect(() => {
-    if (!enabled) cancel();
+    if (enabled) return;
+    cancel();
+    closureWaitRef.current = null;
   }, [enabled, cancel]);
   useEffect(() => cancel, [cancel]);
 
@@ -362,6 +408,86 @@ export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
     return { triggers, reasons: texts, urgency: "urgent" };
   }, []);
 
+  // The closure monitor (wall time): a change of the controller's road closures wakes the agent at
+  // once, urgent, after the new routes answer (or CLOSURE_ROUTES_WAIT_MS). Declared before the
+  // board monitor so it claims the change first; the board monitor stays quiet while it is pending.
+  const closures = board ? closureKey(board) : null;
+  const { routesClosed } = opts;
+  useEffect(() => {
+    if (!enabled || !board || closures === null) return;
+    const told = toldClosureRef.current;
+    // The closures present when monitoring starts are in the first observation, not a wake reason.
+    if (!told) {
+      toldClosureRef.current = { key: closures, seq: closureSeq(board) };
+      return;
+    }
+    if (closures === told.key) {
+      // Closed and reopened before the agent saw it: nothing to tell.
+      if (closureWaitRef.current || closureWaitBoard) endClosureWait();
+      return;
+    }
+    const inflight = abortRef.current;
+    if (inflight) {
+      if (callUrgencyRef.current !== "routine") {
+        // One urgent follow-up starts when the urgent call in flight finishes (this effect reruns on inFlight).
+        setQueued("urgent");
+        return;
+      }
+      // A routine review planned on the old road network: drop it before its orders land.
+      abortRef.current = null;
+      seenRef.current = null;
+      inflight.abort();
+      setInFlight(false);
+      setUrgency(null);
+      setQueued(null);
+    }
+    let wait = closureWaitRef.current;
+    if (!wait) {
+      // (Also after monitoring was off: the old wait was dropped, the change is still untold.)
+      wait = { since: Date.now(), before: optsRef.current.routes, readyAt: null };
+      closureWaitRef.current = wait;
+      setClosureWaitBoard(board);
+      setThinking("");
+      setStreamText("");
+      setLastWoke([`${closureHeadline(closureChangesSince(board, told.seq)) || "Road closures changed"}: recomputing routes before deciding.`]);
+    }
+    // Ready: a new routes answer for exactly this closure set, and every rerouted unit has its new leg.
+    const ids = closedIds(board);
+    const routesNew =
+      optsRef.current.routes !== wait.before &&
+      !!routesClosed &&
+      routesClosed.length === ids.length &&
+      ids.every((id) => routesClosed.includes(id));
+    const unitsSettled = closureChangesSince(board, told.seq).every((c) =>
+      c.units.every((u) => board.teams.find((t) => t.id === u.teamId)?.travel !== "pending"),
+    );
+    if (routesNew && unitsSettled && wait.readyAt === null) {
+      wait = { ...wait, readyAt: Date.now() + CLOSURE_SETTLE_MS };
+      closureWaitRef.current = wait;
+    }
+    const fireAt = Math.min(wait.readyAt ?? Infinity, wait.since + CLOSURE_ROUTES_WAIT_MS);
+    const timer = window.setTimeout(() => {
+      const current = optsRef.current.board;
+      const w = closureWaitRef.current;
+      const seen = toldClosureRef.current;
+      if (!current || current !== boardRef.current || !w || !seen || abortRef.current) return;
+      const text = closureWakeText({
+        board: current,
+        changes: closureChangesSince(current, seen.seq),
+        before: w.before,
+        after: optsRef.current.routes,
+        routesReady: w.readyAt !== null,
+      });
+      const base = wakeReasons(current, optsRef.current.forecasts, memoryRef.current);
+      // The board monitor's generic closure line is replaced by this one.
+      const others = base.triggers.filter((t) => t.kind !== "road_closed");
+      const closureWake: Wake = { triggers: [{ kind: "road_closed", urgency: "urgent", text }], reasons: [text], urgency: "urgent" };
+      const rest: Wake = { triggers: others, reasons: others.map((t) => t.text), urgency: base.urgency };
+      call(current, mergeWakes(mergeWakes(closureWake, rest), pictureWake()));
+    }, Math.max(0, fireAt - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [closures, board, version, enabled, inFlight, routesClosed, closureWaitBoard, call, pictureWake, endClosureWait]);
+
   // The monitor: once per MONITOR_EVERY_MINUTES of simulated time. A newly reported fire the
   // agent has not been shown yet is checked at once (on the board's next change, also inside an
   // error backoff): nothing dispatches initial attack on this board but the agent. While a call is
@@ -369,6 +495,9 @@ export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
   // saw); the follow-up starts when the call finishes (`finally` resets the bucket).
   useEffect(() => {
     if (!enabled || !board) return;
+    // A road-closure change the agent has not seen: the closure monitor above calls (or queues) for it.
+    const told = toldClosureRef.current;
+    if (closureWaitRef.current || (told && closureKey(board) !== told.key)) return;
     const memory = abortRef.current ? seenRef.current : memoryRef.current;
     const urgent = newReportedFireIds(board, memory).some((id) => !calledFireIdsRef.current.has(id));
     const bucket = Math.floor(board.minute / MONITOR_EVERY_MINUTES);
@@ -405,7 +534,7 @@ export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
     const wait = Math.max(PICTURE_DEBOUNCE_MS, lastPictureCallRef.current + PICTURE_MIN_GAP_MS - Date.now());
     const timer = window.setTimeout(() => {
       const current = optsRef.current.board;
-      if (!current || abortRef.current || current.minute < backoffUntilRef.current) return;
+      if (!current || abortRef.current || closureWaitRef.current || current.minute < backoffUntilRef.current) return;
       const live = pictureWake();
       if (live.triggers.length === 0) return;
       lastPictureCallRef.current = Date.now();
@@ -422,7 +551,9 @@ export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
     call(current, { triggers: wake.triggers, reasons: [MANUAL_REASON, ...wake.reasons], urgency: "urgent" });
   }, [call, pictureWake]);
 
-  const status: DemoAgent["status"] = inFlight
+  // Waiting for a road closure's new routes counts as deciding (urgent): the call is about to start.
+  const waiting = enabled && closureWaitBoard !== null && closureWaitBoard === board;
+  const status: DemoAgent["status"] = inFlight || waiting
     ? "thinking"
     : !opts.enabled
       ? "off"
@@ -431,6 +562,6 @@ export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
         : error
           ? "error"
           : "watching";
-  const callUrgency: WakeUrgency | null = inFlight ? (queued === "urgent" ? "urgent" : (urgency ?? "urgent")) : null;
+  const callUrgency: WakeUrgency | null = inFlight ? (queued === "urgent" ? "urgent" : (urgency ?? "urgent")) : waiting ? "urgent" : null;
   return { status, urgency: callUrgency, queued: inFlight ? queued : null, thinking, streamText, decisions, spend, error, lastWoke, decideNow };
 }

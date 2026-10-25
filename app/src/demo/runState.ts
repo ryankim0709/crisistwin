@@ -63,9 +63,13 @@ export type RunStatus = (typeof RUN_STATUSES)[number];
 export type StatusCounts = Record<RunStatus, number>;
 
 export interface RunStateOrder {
-  /** "lifted": the order was lifted (lift_evacuation, demo/allClear.ts); start_minute is then the lift minute and destination_id / route are null. */
+  /**
+   * "lifted": the order was lifted (lift_evacuation, demo/allClear.ts); start_minute is then the lift minute and destination_id / route are null.
+   * "warning": be ready to leave (warn_evacuation, demo/evacWarning.ts); nobody leaves (households stay home); start_minute is the
+   * warning minute, destination_id / route the route to be ready for.
+   */
   status: ZoneOrderStatus;
-  /** Board minute the order took effect (in effect / overrun), is scheduled to, or was lifted (lifted); null with none. */
+  /** Board minute the order took effect (in effect / overrun), is scheduled to, was lifted (lifted) or warned (warning); null with none. */
   start_minute: number | null;
   destination_id: string | null;
   /**
@@ -163,7 +167,16 @@ function orderLeavers(zone: ZoneState, departedNow: number): number {
 }
 
 /** Board event actions that set or cancel a zone's evacuation order (their actor is who ordered it). */
-const ORDER_ACTIONS = new Set(["evacuation_ordered", "evacuation_redirected", "evacuation_scheduled", "evacuation_rescheduled", "evacuation_cancelled", "evacuation_lifted"]);
+const ORDER_ACTIONS = new Set([
+  "evacuation_ordered",
+  "evacuation_redirected",
+  "evacuation_scheduled",
+  "evacuation_rescheduled",
+  "evacuation_cancelled",
+  "evacuation_lifted",
+  "evacuation_warned",
+  "evacuation_warning_withdrawn",
+]);
 
 /** Zone id -> who gave its latest evacuation order (board.events is newest first and capped, so it may be missing). */
 function orderIssuers(board: Board): Map<string, "ai_agent" | "controller"> {
@@ -243,7 +256,13 @@ function zoneRunState(zone: ZoneState, minute: number, threatened: boolean, issu
     if (persons) persons[carlessKey] += p.home! - (vp(W) - vp(D));
   }
   const lifted = status === "lifted" ? zone.lift : null;
-  const route = lifted ? null : zone.orderedAt !== null || zone.overrunAt !== null ? zone.route : (zone.pendingOrder?.route ?? null);
+  // A warning (demo/evacWarning.ts) sends the route residents are to be ready for; start_minute is when it was issued.
+  const warning = status === "warning" ? zone.warning : null;
+  const route = lifted
+    ? null
+    : zone.orderedAt !== null || zone.overrunAt !== null
+      ? zone.route
+      : (zone.pendingOrder?.route ?? warning?.route ?? null);
   const actorOf = (a: "agent" | "you") => (a === "agent" ? "ai_agent" : "controller");
   return {
     zone_id: zone.id,
@@ -251,10 +270,10 @@ function zoneRunState(zone: ZoneState, minute: number, threatened: boolean, issu
     people: persons,
     order: {
       status,
-      start_minute: lifted ? lifted.at : (zone.pendingOrder?.startMinute ?? zone.orderedAt ?? null),
+      start_minute: lifted ? lifted.at : (zone.pendingOrder?.startMinute ?? zone.orderedAt ?? warning?.at ?? null),
       destination_id: route?.destination_id ?? null,
       route: routeSummary(route),
-      issued_by: lifted ? actorOf(lifted.actor) : zone.pendingOrder ? actorOf(zone.pendingOrder.actor) : issuedBy,
+      issued_by: lifted ? actorOf(lifted.actor) : zone.pendingOrder ? actorOf(zone.pendingOrder.actor) : warning ? actorOf(warning.actor) : issuedBy,
     },
   };
 }

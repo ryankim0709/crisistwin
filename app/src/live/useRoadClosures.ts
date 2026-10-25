@@ -16,9 +16,40 @@ import { answerCovers, applyClosureSet, reconcileZones, type RoadClosure } from 
 import { LiveError, request } from "./api";
 import { usePoll } from "./usePoll";
 import { attachRoadClosureLayer, type RoadClosureLayer } from "./roadClosureLayer";
+import { RoadClosureOverlay } from "./roadClosure3d";
 import type { LonLat } from "./types";
 
 export const CLOSURE_POLL_MS = 4_000;
+/** How long the "Road closed" / "Road reopened" notice stays up, ms. */
+const NOTICE_MS = 8_000;
+/** A 3D click (not armed) this close to a closed road selects it, metres (no rendered-feature hit test in 3D). */
+const SELECT_3D_M = 60;
+
+/** The last close or reopen this console made, for a short notice. */
+export interface ClosureNotice {
+  id: number;
+  kind: "closed" | "reopened";
+  name: string;
+}
+
+/** Metres from `p` to the polyline (equirectangular, fine at road scale). */
+function distanceToLineM(p: LonLat, line: LonLat[]): number {
+  const k = Math.cos((p[1] * Math.PI) / 180) * 111_320;
+  const m = 111_320;
+  let best = Infinity;
+  for (let i = 0; i + 1 < line.length; i += 1) {
+    const ax = (line[i][0] - p[0]) * k;
+    const ay = (line[i][1] - p[1]) * m;
+    const bx = (line[i + 1][0] - p[0]) * k;
+    const by = (line[i + 1][1] - p[1]) * m;
+    const dx = bx - ax;
+    const dy = by - ay;
+    const len2 = dx * dx + dy * dy;
+    const t = len2 > 0 ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / len2)) : 0;
+    best = Math.min(best, Math.hypot(ax + t * dx, ay + t * dy));
+  }
+  return best;
+}
 
 /** The road the controller picked on the map, before confirming (or a closed one, to reopen). */
 export interface ClosureCandidate {
@@ -87,6 +118,17 @@ export function useRoadClosures({ token, incidentId, board, routes, bump }: Road
   const [candidate, setCandidate] = useState<ClosureCandidate | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<ClosureNotice | null>(null);
+  const noticeId = useRef(0);
+  const announce = useCallback((kind: ClosureNotice["kind"], name: string) => {
+    noticeId.current += 1;
+    setNotice({ id: noticeId.current, kind, name });
+  }, []);
+  useEffect(() => {
+    if (!notice) return;
+    const id = window.setTimeout(() => setNotice((n) => (n?.id === notice.id ? null : n)), NOTICE_MS);
+    return () => window.clearTimeout(id);
+  }, [notice]);
 
   // The board follows the closure list (units reroute at once; zones on the next covering routes answer).
   useEffect(() => {
@@ -144,13 +186,14 @@ export function useRoadClosures({ token, incidentId, board, routes, bump }: Road
         board_minute: board ? Math.round(board.minute) : null,
       });
       setCandidate(null);
+      announce("closed", candidate.name);
       poll.refresh();
     } catch (e) {
       setError(e instanceof LiveError ? e.message : "Could not close the road.");
     } finally {
       setBusy(false);
     }
-  }, [token, candidate, incidentId, board, poll]);
+  }, [token, candidate, incidentId, board, poll, announce]);
 
   const reopen = useCallback(
     async (segmentId: string) => {
@@ -159,6 +202,8 @@ export function useRoadClosures({ token, incidentId, board, routes, bump }: Road
       setError(null);
       try {
         await request(token, "DELETE", `${base(incidentId)}/${encodeURIComponent(segmentId)}`);
+        const name = refs.current.closures.find((c) => c.segmentId === segmentId)?.name;
+        if (name) announce("reopened", name);
         setCandidate((c) => (c?.segmentId === segmentId ? null : c));
         poll.refresh();
       } catch (e) {
@@ -167,13 +212,14 @@ export function useRoadClosures({ token, incidentId, board, routes, bump }: Road
         setBusy(false);
       }
     },
-    [token, incidentId, poll],
+    [token, incidentId, poll, announce],
   );
 
   const arm = useCallback(() => {
     setArmed(true);
     setCandidate(null);
     setError(null);
+    setNotice(null);
   }, []);
   const cancel = useCallback(() => {
     setArmed(false);
@@ -213,6 +259,25 @@ export function useRoadClosures({ token, incidentId, board, routes, bump }: Road
       layer.current = null;
     };
   }, []);
+  // ---- 3D diorama ----
+  const [overlay3d] = useState(() => new RoadClosureOverlay());
+  useEffect(() => {
+    overlay3d.update(board ? closures : [], candidate && !candidate.closed ? { line: candidate.line, name: candidate.name } : null);
+  }, [overlay3d, board, closures, candidate]);
+  /** A click on the 3D board (DemoDiorama onGroundPick): picks the road there while armed, else selects a closed road near it. */
+  const groundClick = useCallback((at: LonLat) => {
+    if (refs.current.armed) {
+      void handlers.current.pickAt(at);
+      return;
+    }
+    let best: { id: string; d: number } | null = null;
+    for (const c of refs.current.closures) {
+      const d = distanceToLineM(at, c.line);
+      if (d <= SELECT_3D_M && (!best || d < best.d)) best = { id: c.segmentId, d };
+    }
+    if (best) handlers.current.selectClosure(best.id);
+  }, []);
+
   /** CommandMap interceptClick: the click belongs to the closure tool (armed, or on a closed road). */
   const claimsClick = useCallback((e: MapMouseEvent) => layer.current?.claimsClick(e) ?? false, []);
   /** True while a click the closure tool took is being handled (the board layers then ignore it). */
@@ -226,6 +291,14 @@ export function useRoadClosures({ token, incidentId, board, routes, bump }: Road
     busy,
     error,
     canEdit: !!token && !!board,
+    /** Why the tool cannot be used now (null when it can). */
+    disabledReason: !token
+      ? "Connect with the controller token to close roads."
+      : !board
+        ? "Waiting for the simulated board to load."
+        : null,
+    notice,
+    dismissNotice: () => setNotice(null),
     arm,
     cancel,
     confirmClose,
@@ -234,6 +307,8 @@ export function useRoadClosures({ token, incidentId, board, routes, bump }: Road
     attach,
     claimsClick,
     claimedClick,
+    overlay3d,
+    groundClick,
   };
 }
 

@@ -34,7 +34,7 @@ function lengthM(a: LonLat, b: LonLat): number {
 }
 
 /** Points every MARK_SPACING_M along the line (centred), at least one. */
-function markPoints(line: LonLat[]): LonLat[] {
+export function markPoints(line: LonLat[]): LonLat[] {
   const seg = line.slice(1).map((p, i) => lengthM(line[i], p));
   const total = seg.reduce((s, l) => s + l, 0);
   const n = Math.max(1, Math.floor(total / MARK_SPACING_M));

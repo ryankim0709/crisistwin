@@ -151,6 +151,7 @@ import {
 import type { StudioFire } from "./contracts";
 import type { AccessClass } from "../studio/apparatus";
 import { endLiftForNewOrder, finishLifts, liftEvacuation, noteZoneThreats, type ZoneLift } from "./allClear";
+import { warnEvacuation, withdrawWarning, type ZoneWarning } from "./evacWarning";
 import {
   LINE_RESOLVE_CHUNK_M,
   POSITION_REPLAN_MINUTES,
@@ -479,6 +480,11 @@ export interface ZoneState {
   lift: ZoneLift | null;
   /** Reported fires whose arrival at the zone came within the all-clear window (allClear.ts noteZoneThreats); a lift waits for them. */
   threatFireIds: string[];
+  /**
+   * An evacuation warning (warn_evacuation, demo/evacWarning.ts): residents are told to be ready to
+   * leave; nobody leaves. Shown while no order is in effect, scheduled or overrun (zoneOrderStatus "warning"); null = none.
+   */
+  warning: ZoneWarning | null;
 }
 
 /** An evacuation order scheduled for a later board minute (order_evacuation with start_minute). */
@@ -659,6 +665,10 @@ export type BoardEventAction =
   | "evacuation_rescheduled"
   /** A scheduled order cancelled before it started (cancel_evacuation). */
   | "evacuation_cancelled"
+  /** warn_evacuation (demo/evacWarning.ts): be ready to leave, nobody leaves (refs.destinationId the route to be ready for). */
+  | "evacuation_warned"
+  /** A warning withdrawn (cancel_evacuation on a warned zone). */
+  | "evacuation_warning_withdrawn"
   /** A scheduled order's start minute arrived: departures begin (logged by the board). */
   | "evacuation_started"
   /** Fire first touched a zone with no order in effect (refs.startMinute when one is scheduled). Nobody leaves without an order. */
@@ -861,6 +871,13 @@ export interface ClassReach {
   reached: boolean;
   failedFrom: string[];
   reason: string | null;
+  /**
+   * Where the last road leg of this class to the target ended (where it parks), or null. The
+   * router ends every leg of one class to one target at the same road node, whatever the origin
+   * (livecore/inbound.py: the target's snapped node, or with stop-short the reachable node nearest
+   * the target), so this stands in for a unit's own leg end until that leg is known.
+   */
+  parkedAt: LonLat | null;
 }
 
 /**
@@ -1542,6 +1559,7 @@ function zoneState(z: BaseZone, snap: SnapshotZone | undefined, env: DemoEnviron
     trips: emptyTrips(),
     lift: null,
     threatFireIds: [],
+    warning: null,
   };
   if (snap) {
     const households = count(snap.households);
@@ -1848,6 +1866,7 @@ export function setRoutes(board: Board, routes: ReadonlyMap<string, RouteOption[
     const same = (r: RouteOption | null) => (r ? (options.find((o) => o.destination_id === r.destination_id) ?? r) : null);
     zone.route = same(zone.route);
     if (zone.pendingOrder) zone.pendingOrder.route = same(zone.pendingOrder.route) ?? zone.pendingOrder.route;
+    if (zone.warning) zone.warning.route = same(zone.warning.route) ?? options[0] ?? zone.warning.route;
   }
 }
 
@@ -2143,21 +2162,44 @@ export function reachKey(access: AccessClass, destKey: string, to: LonLat): stri
 }
 
 /** Records what a unit leg (travelKey `key`) says about its class reaching its target; reason null = a road route. */
-function noteReach(board: Board, key: string, reason: string | null): void {
+function noteReach(board: Board, key: string, reason: string | null, end: LonLat | null = null): void {
   const parts = key.split("|");
   if (parts.length !== 4) return;
   const [teamId, from, destKey, to] = parts;
   const team = board.teams.find((t) => t.id === teamId);
   if (!team || (reason !== null && !TARGET_SIDE_REASONS.has(reason))) return;
   const rk = `${accessClassOf(team.kind)}|${destKey}|${to}`;
-  const entry = board.classReach.get(rk) ?? { reached: false, failedFrom: [], reason: null };
-  if (reason === null) entry.reached = true;
+  const entry = board.classReach.get(rk) ?? { reached: false, failedFrom: [], reason: null, parkedAt: null };
+  if (reason === null) {
+    entry.reached = true;
+    if (end) {
+      entry.parkedAt = end;
+      // Also the class's latest park point for any target of this fire (classParkPoint's fallback).
+      const fireWide = `${accessClassOf(team.kind)}|${fireOfDest(destKey)}|*`;
+      board.classReach.set(fireWide, { ...(board.classReach.get(fireWide) ?? { reached: true, failedFrom: [], reason: null }), parkedAt: end });
+    }
+  }
   else {
     if (!entry.failedFrom.includes(from)) entry.failedFrom.push(from);
     entry.reason ??= reason;
   }
   board.classReach.set(rk, entry);
   if (board.classReach.size > MAX_CLASS_REACH) board.classReach.delete(board.classReach.keys().next().value as string);
+}
+
+/** Fire id of a trip destination: a fire id, or an attack line id (`<fire id>#<position>@...`, lineIdFor). */
+const fireOfDest = (destKey: string): string => destKey.split("#")[0];
+
+/**
+ * Where a unit of `access` would park for `to` (trip `destKey`) while its own road leg is not
+ * known: where the last leg of that class to the same target ended (ClassReach.parkedAt; the
+ * router ends every leg of one class to one target at the same road node, whatever the origin),
+ * else ESTIMATE: where the class last parked for any target of the same fire (attack positions
+ * and the fire's anchor move every replan; nearby targets of one fire mostly share their road
+ * access). Null when no leg of that class to that fire is known.
+ */
+export function classParkPoint(board: Board, access: AccessClass, destKey: string, to: LonLat): LonLat | null {
+  return board.classReach.get(reachKey(access, destKey, to))?.parkedAt ?? board.classReach.get(`${access}|${fireOfDest(destKey)}|*`)?.parkedAt ?? null;
 }
 
 /** Why units of `access` cannot drive to `to` (trip `destKey`), or null (reachable or not known yet). See REACH_CONFIRM_ORIGINS. */
@@ -2472,7 +2514,7 @@ function stepReturns(board: Board): void {
  */
 export function applyTravelLeg(board: Board, key: string, leg: TravelLeg): void {
   board.travel.set(key, leg);
-  noteReach(board, key, null);
+  noteReach(board, key, null, leg.line.length > 0 ? leg.line[leg.line.length - 1] : null);
   if (board.travel.size > 2000) board.travel.delete(board.travel.keys().next().value as string);
   for (const team of board.teams) {
     if (!onTheRoad(team) || team.travel !== "pending" || team.legKey !== key) continue;
@@ -2903,14 +2945,18 @@ function lineStart(board: Board, team: Team, plan: AttackPlan, arriveMin: number
 /** An assigned unit's start on its line (lineStart): on scene, or en route on its road leg. */
 function assignedLineStart(board: Board, team: Team, plan: AttackPlan): { startMin: number; rate: number } {
   const arrive = team.status === "on_scene" ? 0 : Math.max(0, (team.arriveAt ?? board.minute) - board.minute);
-  const parked = team.status === "en_route" && team.travel !== "pending" && team.route && team.route.length > 1 ? team.route[team.route.length - 1] : null;
-  return lineStart(board, team, plan, arrive, parked);
+  const known = team.status === "en_route" && team.travel !== "pending" && team.route && team.route.length > 1 ? team.route[team.route.length - 1] : null;
+  // Waiting for its road leg: where its access class parks for this line (ClassReach.parkedAt), when known.
+  const classPark = team.status === "en_route" && team.lineId ? classParkPoint(board, accessClassOf(team.kind), team.lineId, plan.point) : null;
+  return lineStart(board, team, plan, arrive, known ?? classPark);
 }
 
 /** Where a unit's road leg to `to` (trip `destKey`) from where it is would end (where it parks), or null while that leg is not known. */
 export function legEnd(board: Board, team: Team, destKey: string, to: LonLat): LonLat | null {
   const leg = board.travel.get(travelKey(team, tripStart(board, team).from, destKey, to));
-  return leg && leg.line.length > 0 ? leg.line[leg.line.length - 1] : null;
+  if (leg && leg.line.length > 0) return leg.line[leg.line.length - 1];
+  // Not known for this unit yet: where its access class parks there (classParkPoint).
+  return classParkPoint(board, accessClassOf(team.kind), destKey, to);
 }
 
 /** Line completion with the units already on this position (minutes), or null. */
@@ -2952,7 +2998,8 @@ export function lineWorkers(board: Board, fire: Fire, pos: AttackPosition): { te
   const destKey = positionDestKey(fire, pos);
   return reachableFree(board, destKey, pos.point)
     .flatMap((r) => {
-      const parked = r.road ? legEnd(board, r.team, destKey, pos.point) : null;
+      // Its own road leg, or (not known yet) where its access class parks for this target (legEnd).
+      const parked = legEnd(board, r.team, destKey, pos.point);
       const s = lineStart(board, r.team, pos, r.eta, parked);
       return s.rate > 0 ? [{ ...r, ...s }] : [];
     })
@@ -3090,6 +3137,8 @@ export type BoardOrder =
   | { type: "release_crew"; crew_id: string; reason?: string }
   | { type: "order_evacuation"; zone_id: string; destination_id: string; start_minute?: number | null; reason?: string }
   | { type: "cancel_evacuation"; zone_id: string; reason?: string }
+  /** Be ready to leave (demo/evacWarning.ts): nobody leaves; destination_id null = the zone's first route option. */
+  | { type: "warn_evacuation"; zone_id: string; destination_id?: string | null; reason?: string }
   /** Ends a zone's evacuation order once demo/allClear.ts allClearCheck says it is eligible; residents drive back home. */
   | { type: "lift_evacuation"; zone_id: string; reason?: string }
   | { type: "order_resources"; fire_id: string; resource: Orderable; count: number; reason?: string }
@@ -3182,6 +3231,7 @@ export function applyOrder(
   const zone = board.zones.find((z) => z.id === order.zone_id);
   if (!zone) return `Unknown zone ${order.zone_id}.`;
   if (order.type === "cancel_evacuation") return cancelEvacuation(board, zone, actor);
+  if (order.type === "warn_evacuation") return warnEvacuation(board, zone, order.destination_id ?? null, routes, actor, order.reason ?? "");
   if (order.type === "lift_evacuation") return liftEvacuation(board, zone, actor, order.reason ?? "");
   return orderEvacuation(board, zone, order, routes, actor);
 }
@@ -3212,6 +3262,8 @@ function orderEvacuation(
   const passed = asked !== null && start === null ? ` (its start ${simClock(asked)} had passed: leaving now)` : "";
   // A lifted zone ordered out again: the lift ends first (demo/allClear.ts), then this is a new order.
   if (zone.lift) endLiftForNewOrder(board, zone);
+  // An order supersedes an evacuation warning (demo/evacWarning.ts).
+  zone.warning = null;
   const refs = {
     zoneId: zone.id,
     destinationId: option.destination_id,
@@ -3254,13 +3306,14 @@ function orderEvacuation(
   return null;
 }
 
-/** cancel_evacuation: drops a scheduled order that has not started. */
+/** cancel_evacuation: drops a scheduled order that has not started, or withdraws an evacuation warning (demo/evacWarning.ts). */
 function cancelEvacuation(board: Board, zone: ZoneState, actor: "agent" | "you"): string | null {
   const pending = zone.pendingOrder;
   if (!pending) {
+    if (zone.orderedAt === null && zone.warning) return withdrawWarning(board, zone, actor);
     return zone.orderedAt !== null
-      ? `${zone.name} is already leaving (since ${simClock(zone.orderedAt)}); only a scheduled evacuation can be cancelled.`
-      : `${zone.name} has no scheduled evacuation.`;
+      ? `${zone.name} is already leaving (since ${simClock(zone.orderedAt)}); only a scheduled evacuation or a warning can be cancelled.`
+      : `${zone.name} has no scheduled evacuation or warning.`;
   }
   zone.pendingOrder = null;
   log(board, "order", actor, `Scheduled evacuation cancelled: ${zone.name} was to leave at ${simClock(pending.startMinute)} toward ${pending.route.name}.`, {
@@ -3312,20 +3365,22 @@ function nextScheduledStart(board: Board): number {
 }
 
 /**
- * Where a zone's evacuation stands: none (no order, nothing scheduled), scheduled (pendingOrder),
+ * Where a zone's evacuation stands: none (no order, nothing scheduled), warning (be ready to leave:
+ * warn_evacuation, demo/evacWarning.ts; nobody leaves), scheduled (pendingOrder),
  * leaving (order in effect, households still to depart or on the road), done (every household
  * the order sends out has left and arrived), overrun, lifted (the order was lifted with
  * lift_evacuation, demo/allClear.ts: all clear, residents returning or back home; it outranks
  * overrun, whose caught households stay counted until the fire that burned the zone is out).
  */
-export type ZoneOrderStatus = "none" | "scheduled" | "leaving" | "done" | "overrun" | "lifted";
+export type ZoneOrderStatus = "none" | "warning" | "scheduled" | "leaving" | "done" | "overrun" | "lifted";
 
 export function zoneOrderStatus(zone: ZoneState, minute: number): ZoneOrderStatus {
   // A fire overrunning the zone after its lift shows as overrun again (the lift record stays for the counts).
   if (zone.lift && !(zone.overrunAt !== null && zone.overrunAt > zone.lift.at)) return "lifted";
   if (zone.overrunAt !== null) return "overrun";
   if (zone.pendingOrder) return "scheduled";
-  if (zone.orderedAt === null) return "none";
+  // warning: be ready to leave (warn_evacuation, demo/evacWarning.ts); nobody leaves.
+  if (zone.orderedAt === null) return zone.warning ? "warning" : "none";
   return stillToLeave(zone, minute) < 1 && zoneCounts(zone, minute).enRoute === 0 ? "done" : "leaving";
 }
 
@@ -3860,6 +3915,7 @@ function reopenZones(board: Board): void {
     zone.trips = emptyTrips();
     zone.lift = null;
     zone.threatFireIds = [];
+    zone.warning = null;
     log(board, "zone", "board", `${zone.name} reopened: no fire near for ${REOPEN_MINUTES} min, households back home.`, {
       action: "zone_reopened",
       zoneId: zone.id,
@@ -4398,7 +4454,7 @@ export function nearestFree(board: Board, fire: Fire): { team: Team; eta: number
   // there, so it is left out; one that hikes in starts work after the hike (eta includes it).
   return reachableFree(board, fire.id, crewTarget(fire))
     .flatMap((r) => {
-      const access = r.road ? directAccessFromLeg(board, r.team, fire) : null;
+      const access = directAccessFromLeg(board, r.team, fire);
       if (access && (access.mode === "out_of_reach" || access.mode === "indirect")) return [];
       return [{ ...r, eta: expectedArrival(board, r.team, fire) + (access?.startDelayMinutes ?? 0) }];
     })

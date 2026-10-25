@@ -21,7 +21,7 @@ import SelectedPanel from "../demo/SelectedPanel";
 import { AI_ONLY_TEXT, useCommandBoard } from "../demo/useCommandBoard";
 import { WorldBar } from "../world/WorldBar";
 import { useRoadAccess } from "../demo/useRoadAccess";
-import RoadClosureTool from "./RoadClosureTool";
+import RoadClosureTool, { RoadClosurePrompt } from "./RoadClosureTool";
 import { useRoadClosures } from "./useRoadClosures";
 import "../demo/demo.css";
 // Explicit extension: on a case-insensitive disk "./ActivityFeed" could resolve to a sibling .ts module.
@@ -540,7 +540,7 @@ export default function LiveCommandPage() {
             />
           </div>
         ) : null}
-        {data && !showDiorama && board ? <RoadClosureTool state={roadClosures} /> : null}
+        {data && board ? <RoadClosurePrompt state={roadClosures} agentOn={cb.autopilot} /> : null}
         {data && !showDiorama ? <MapLegend record={!isPackage} board={!!board} houses={layers.houses} /> : null}
         {/* The map stays mounted under the diorama, so its view and board layers survive a switch. */}
         {showDiorama && board && landscape ? (
@@ -553,11 +553,25 @@ export default function LiveCommandPage() {
             forecasts={cb.forecasts}
             wind={cb.windNow}
             selected={cb.selection}
+            extraOverlay={roadClosures.overlay3d}
+            onGroundPick={roadClosures.groundClick}
           />
         ) : null}
         {data ? (
-          <div className="dm-view">
+          <div className="dm-view lc-view-bar">
             <SegmentedControl label="View" options={viewOptions} value={showDiorama ? "diorama" : "map"} onChange={chooseView} />
+            {board ? (
+              <Button
+                variant="secondary"
+                size="sm"
+                aria-pressed={roadClosures.armed}
+                onClick={roadClosures.armed ? roadClosures.cancel : roadClosures.arm}
+                disabled={!roadClosures.canEdit}
+                title={roadClosures.disabledReason ?? "Close a road (drill): click a road, then confirm"}
+              >
+                {roadClosures.armed ? "Cancel road closure" : "Close a road"}
+              </Button>
+            ) : null}
           </div>
         ) : null}
         {data && (selected || (board && cb.selection)) ? (
@@ -740,6 +754,8 @@ export default function LiveCommandPage() {
             <AgentControl agent={cb.agent} ready={!!board} autopilot={cb.autopilot} onAutopilot={cb.setAutopilot} />
             <BoardClock board={cb} />
             <RunStateStatus sync={runState} ready={!!cb.board} />
+            {/* Drill road closures: the same tool in the Map and 3D views (the prompt floats over the stage). */}
+            <RoadClosureTool state={roadClosures} />
             {/* Shared world (docs/shared-world.md): this tab's size, weather, seed and saved scenarios. */}
             <WorldBar
               tab="live"

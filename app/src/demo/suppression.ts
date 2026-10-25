@@ -33,9 +33,17 @@
  * Suppression, applied at whole board minutes (so a run does not depend on the clock's tick):
  * - Direct attack: a ground unit on scene for direct attack (no attack line) that is working
  *   (response/reach.ts: not out of reach, past its hike in) puts out burning EDGE cells of its
- *   fire (burning cells facing unburned ground the solver can spread into), within its reach
- *   radius of where it parked, nearest first from where it last worked, so it works along the
- *   edge. It earns line metres at its sourced production rate on the fire's tactic
+ *   fire (burning cells facing unburned ground the solver can spread into), nearest first from
+ *   where it last worked, so it works along the edge. Engines (hose, or their crew on foot)
+ *   work within their reach radius of where they parked (response/reach.ts: hose lay, crew
+ *   within ENGINE_CREW_MAX_HIKE_M of its engine). Hand crews and dozers build progressive line
+ *   (NWCG Fireline Handbook PMS 410-1, line construction: the crew or dozer advances along the
+ *   edge from its anchor, the line behind it is its access): they are not tied to where they
+ *   parked; a cell next to the last one they worked (PROGRESSIVE_STEP_CELLS) is part of building
+ *   line, a farther one is reached first by walking there (Tobler 1993, reach.ts hikeMinutes;
+ *   dozers at DOZER_WALK_KMH), at most HAND_CREW_MAX_HIKE_MINUTES / DOZER_MAX_WALK_MINUTES away,
+ *   and a dozer works no cell steeper than the PMS 465 p.140 table (DOZER_MAX_SLOPE_PCT).
+ *   It earns line metres at its sourced production rate on the fire's tactic
  *   (boardResponse.tacticLineRate: Broyles 2011 hand crews, PMS 465 p.164 engines, PMS 465 p.39
  *   engine crews on foot, PMS 465 p.140 dozers) and a cell costs the edge it secures: its open
  *   cell faces x g x pi/4 (fireField.ts LATTICE_PERIMETER_TO_SMOOTH, the board's perimeter
@@ -55,7 +63,15 @@
  * - Mop-up: on a contained fire, the units kept for mop-up put out burning cells (interior
  *   too) within their reach at their direct-attack production rate, MOPUP_CELL_WIDTHS cell
  *   widths of line per cell (ASSUMPTION: no published mop-up production rate is in the model).
- *   The rest burns out on its own.
+ *   Hand crews walk the black as above. The rest burns out on its own.
+ * - Held edge (`heldEdge`, the board's containment share for edge tactics): of the fire's open
+ *   edge (cell faces between its burned cells and unburned ground that can burn, the perimeter
+ *   measure of fireField.ts), the faces the fire will not cross: the solver's forecast (with
+ *   every attack line and knocked-down edge it has) never burns the ground beyond within its
+ *   lookahead, or the burned cell was put out since that forecast (until the next re-solve, at
+ *   most KNOCKDOWN_RESOLVE_MINUTES later). So line counts once it holds in the fire model, and
+ *   line the fire outflanks or crosses stops counting. Off the board's edge: held only where the
+ *   cell was put out.
  *
  * Units: minutes are board minutes; distances ground metres; flame feet; grid coordinates
  * column x east, row y south.
@@ -65,9 +81,10 @@ import { FUEL_MODELS, SAV_DEAD_100H, SAV_DEAD_10H } from "../fire/fuelModels";
 import { lonLatToMercator, type LandscapeGrid } from "../fire/landscape";
 import { BYRAM_FLAME_EXPONENT } from "../fire/spread";
 import type { LonLat } from "../live/types";
+import { DOZER_MAX_SLOPE_PCT, DOZER_MAX_WALK_MINUTES, HAND_CREW_MAX_HIKE_MINUTES, dozerWalkMinutes, hikeMinutes } from "../response/reach";
 import { tacticLineRate } from "./boardResponse";
 import { LATTICE_PERIMETER_TO_SMOOTH, countAtMost, type FireSolveResult } from "./fireField";
-import { logEvent, type Board, type Fire, type Team } from "./model";
+import { lineKey, logEvent, type Board, type Fire, type Team } from "./model";
 import { holdsFlameFeet } from "./realism";
 
 /** Anderson (1969) flaming residence time: t_r = 384 / sigma minutes, sigma in 1/ft (Rothermel 1972 uses it). */
@@ -84,6 +101,14 @@ export const KNOCKDOWN_REPORT_MINUTES = 15;
 export const MOPUP_CELL_WIDTHS = 1;
 /** Tactics whose line is built at the burning edge itself (response/containment.ts). */
 export const EDGE_TACTICS: ReadonlySet<string> = new Set(["direct", "flank", "structure"]);
+/**
+ * Geometry, not a fitted value: a cell within this many cell widths of the last one a
+ * progressive unit worked (its 8-neighbours: a diagonal is sqrt 2 = 1.41) is the next stretch of
+ * its line; moving along the line as it is built is part of the line production rate (Broyles
+ * 2011 and PMS 465 rates are measured on line constructed while advancing). Farther cells are
+ * walked to first (Tobler).
+ */
+export const PROGRESSIVE_STEP_CELLS = 1.5;
 /** Cells kept per unit for its work path (display only). */
 const TRAIL_CELLS = 16;
 const SQUARE_METERS_PER_HECTARE = 10_000;
@@ -104,6 +129,18 @@ export interface UnitCellWork {
   targetCostM: number;
   /** Board minute it last worked. */
   minute: number;
+  /** Progressive units: cell it is walking to (-1 = none) and the walk minutes still to go (no line is built meanwhile). */
+  walkTo?: number;
+  walkLeftMin?: number;
+}
+
+/**
+ * Whether a unit builds progressive line along the edge (not tied to where it parked): a hand
+ * crew on foot or a dozer working (response/reach.ts modes hand_line / dozer). Engines and their
+ * crews stay within reach of the engine.
+ */
+export function worksAlongEdge(team: Team): boolean {
+  return (team.kind === "hand_crew_t1" && team.workMode === "hand_line") || (team.kind === "dozer_t2" && team.workMode === "dozer");
 }
 
 export interface FireSuppressionStats {
@@ -436,7 +473,15 @@ export function suppressionTick(board: Board, minute: number): void {
         st.units.set(team.id, w);
       }
       w.minute = minute;
-      const workedMin = Math.max(0, Math.min(1, minute - Math.max(minute - 1, team.workStartAt ?? Number.NEGATIVE_INFINITY)));
+      let workedMin = Math.max(0, Math.min(1, minute - Math.max(minute - 1, team.workStartAt ?? Number.NEGATIVE_INFINITY)));
+      const progressive = worksAlongEdge(team);
+      if (progressive && (w.walkLeftMin ?? 0) > 0) {
+        // Walking to the next stretch of edge (no line built meanwhile).
+        const walked = Math.min(workedMin, w.walkLeftMin!);
+        w.walkLeftMin! -= walked;
+        workedMin -= walked;
+        if (w.walkLeftMin! > 1e-9) continue;
+      }
       const rate = tacticLineRate(board, fire, [team], tactic);
       if (rate <= 0 || workedMin <= 0) continue;
       w.budgetM += rate * workedMin;
@@ -444,8 +489,10 @@ export function suppressionTick(board: Board, minute: number): void {
       const home = gridXY(grid, team.position);
       const reachCells = team.reachM / g;
       const reach2 = reachCells * reachCells;
+      const dozer = team.kind === "dozer_t2";
       for (;;) {
-        const last = w.trail.length ? w.trail[w.trail.length - 1] : -1;
+        // Where it stands: the cell it walked to, else the last cell it put out, else where it parked.
+        const last = progressive && (w.walkTo ?? -1) >= 0 ? w.walkTo! : w.trail.length ? w.trail[w.trail.length - 1] : -1;
         const from = last >= 0 ? { x: last % grid.width, y: Math.floor(last / grid.width) } : home;
         let best = -1;
         let bestD = Infinity;
@@ -453,7 +500,10 @@ export function suppressionTick(board: Board, minute: number): void {
           const q = cand[i];
           if (st.extinguishedAt[q.c] <= minute) continue;
           if (kind === "direct" && q.flameFt > holds) continue;
-          if ((q.x - home.x) ** 2 + (q.y - home.y) ** 2 > reach2) continue;
+          // Engines work within reach of where they parked; hand crews and dozers anywhere on the edge (progressive line).
+          if (!progressive && (q.x - home.x) ** 2 + (q.y - home.y) ** 2 > reach2) continue;
+          // PMS 465 p.140: dozers work up to DOZER_MAX_SLOPE_PCT.
+          if (dozer && grid.slopeTangent[q.c] * 100 > DOZER_MAX_SLOPE_PCT) continue;
           const d = (q.x - from.x) ** 2 + (q.y - from.y) ** 2;
           if (d < bestD || (d === bestD && q.c < cand[best].c)) {
             bestD = d;
@@ -471,9 +521,30 @@ export function suppressionTick(board: Board, minute: number): void {
         const cost = kind === "direct" ? Math.max(1, openFaces(board, c, minute)) * g * LATTICE_PERIMETER_TO_SMOOTH : MOPUP_CELL_WIDTHS * g;
         w.target = c;
         w.targetCostM = cost;
+        if (progressive) {
+          // The first cell within its reach of where it parked is where its hike in ended (workStartAt); later
+          // cells beyond the next stretch of its line are walked to first.
+          const hopCells = Math.sqrt(bestD);
+          const firstInReach = last < 0 && bestD <= reach2;
+          if (!firstInReach && hopCells > PROGRESSIVE_STEP_CELLS) {
+            const fromCell = last >= 0 ? last : Math.round(home.y) * grid.width + Math.round(home.x);
+            const rise = fromCell >= 0 && fromCell < grid.elevationMeters.length ? grid.elevationMeters[c] - grid.elevationMeters[fromCell] : 0;
+            const walk = dozer ? dozerWalkMinutes(hopCells * g) : hikeMinutes(hopCells * g, rise);
+            w.budgetM = 0;
+            if (walk > (dozer ? DOZER_MAX_WALK_MINUTES : HAND_CREW_MAX_HIKE_MINUTES)) {
+              w.target = -1;
+              w.targetCostM = 0;
+            } else {
+              w.walkTo = c;
+              w.walkLeftMin = walk;
+            }
+            break;
+          }
+        }
         if (w.budgetM + 1e-9 < cost) break;
         w.budgetM -= cost;
         extinguish(board, c, minute, kind, holds);
+        w.walkTo = -1;
         w.trail.push(c);
         if (w.trail.length > TRAIL_CELLS) w.trail.shift();
         const stats = statsOf(board, fire.id);
@@ -538,6 +609,75 @@ export function extinguishFire(board: Board, fire: Fire): void {
   const s = field?.sourceIndex.get(fire.id);
   if (!field || s === undefined) return;
   for (const c of burningCellsOf(board, s, board.minute)) extinguish(board, c, board.minute, "manual", 0);
+}
+
+/** A fire's open edge and the part of it that holds (see the header, "Held edge"), metres (the perimeter measure, faces x g x pi/4). */
+export interface HeldEdge {
+  openM: number;
+  heldM: number;
+  /** heldM / openM (1 when the fire has no open edge). */
+  share: number;
+}
+
+const heldCache = new WeakMap<Board, { field: unknown; minute: number; version: number; byFire: Map<string, HeldEdge> }>();
+
+/** `fire`'s open edge at board.minute and how much of it holds (null when it is not a solver source). */
+export function heldEdge(board: Board, fire: Fire): HeldEdge | null {
+  const field = board.solver.field;
+  const s = field?.sourceIndex.get(fire.id);
+  if (!field || s === undefined) return null;
+  const st = board.suppression;
+  let cache = heldCache.get(board);
+  if (!cache || cache.field !== field || cache.minute !== board.minute || cache.version !== st.version) {
+    cache = { field, minute: board.minute, version: st.version, byFire: new Map() };
+    heldCache.set(board, cache);
+  }
+  const hit = cache.byFire.get(fire.id);
+  if (hit) return hit;
+  const { width, height } = board.env.landscape;
+  const t = board.minute;
+  const arrival = field.arrivalMinutes;
+  const passable = field.behaviour.headRateMetersPerMinute;
+  const cells = field.cellsBySource[s];
+  const n = countAtMost(field.arrivalBySource[s], t);
+  // Knocked-down cells the field does not include yet (committed every KNOCKDOWN_RESOLVE_MINUTES, then re-solved)
+  // count as held until the forecast says otherwise.
+  const stale = field.lineKey !== lineKey(board);
+  const pending = new Set(st.inert.slice(st.committedInert));
+  let open = 0;
+  let held = 0;
+  for (let i = 0; i < n; i++) {
+    const c = cells[i];
+    const put = st.extinguishedAt[c] <= t;
+    const out = put && (stale || pending.has(c));
+    const x = c % width;
+    const y = (c - x) / width;
+    for (let k = 0; k < 4; k++) {
+      const nx = k === 0 ? x + 1 : k === 1 ? x - 1 : x;
+      const ny = k === 2 ? y + 1 : k === 3 ? y - 1 : y;
+      if (nx < 0 || ny < 0 || nx >= width || ny >= height) {
+        // Off the board: open (fireField.ts counts it), held only where the cell was put out.
+        open++;
+        if (put) held++;
+        continue;
+      }
+      const m = ny * width + nx;
+      if (!(passable[m] > 0) || arrival[m] <= t) continue;
+      open++;
+      // The forecast never burns the ground beyond (within its lookahead), or knocked down and not yet in the forecast.
+      if (out || !(arrival[m] <= field.horizonMinutes)) held++;
+    }
+  }
+  const metersPerFace = board.env.landscape.groundCellSizeMeters * LATTICE_PERIMETER_TO_SMOOTH;
+  const value: HeldEdge = { openM: open * metersPerFace, heldM: held * metersPerFace, share: open > 0 ? held / open : 1 };
+  cache.byFire.set(fire.id, value);
+  return value;
+}
+
+/** Units that put out cells of `fireId` (or walked to its next stretch) in the last suppression minute, by id. */
+export function unitsWorking(board: Board, fireId: string): string[] {
+  const st = board.suppression;
+  return [...st.units.values()].filter((w) => w.fireId === fireId && w.minute === st.minute && (w.target >= 0 || (w.walkLeftMin ?? 0) > 0)).map((w) => w.teamId).sort();
 }
 
 /** Burning cells of `fire` at `minute` (0 when it is not a solver source). */

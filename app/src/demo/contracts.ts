@@ -24,7 +24,9 @@
  * Orders: send_crew, release_crew (crew_id may also be an aircraft id from response.aircraft;
  * aircraft take position_id null), order_evacuation (zone_id, destination_id, start_minute:
  * absolute whole board minute departures start, null = now, at most MAX_SCHEDULE_AHEAD_MINUTES
- * ahead), cancel_evacuation (zone_id; a scheduled order not yet started), lift_evacuation (zone_id;
+ * ahead), warn_evacuation (zone_id, destination_id or null: be ready to leave, nobody leaves;
+ * demo/evacWarning.ts), cancel_evacuation (zone_id; a scheduled order not yet started, or a
+ * warning), lift_evacuation (zone_id;
  * only a zone whose all_clear.eligible is true: demo/allClear.ts), and order_resources
  * (fire_id, resource, count; limits in response/runCards.ts ORDERABLE / MAX_ORDER_COUNT, mirrored
  * in demo.py ORDERABLE_RESOURCES), set_strategy (fire_id, strategy_id: one of the fire's
@@ -223,6 +225,15 @@ export interface CrewRoute {
   blocked_reason?: string | null;
   /** detour only: drive minutes an unrestricted vehicle would take. */
   unrestricted_drive_min?: number | null;
+  /**
+   * Road data the leg used (optional; absent from older servers). `drill`: the drill package's
+   * roads only. `drill+board_area`: the drill leg ended more than 150 m from `to` (e.g. at the
+   * drill's road-box edge), and its last stretch runs on the cached board dispatch area the
+   * diorama draws (`board_area`, its cache key), with the class's access rules on its OSM tags
+   * (app/backend/api/crew_extension.py). Road closures are not applied on that stretch.
+   */
+  road_graph?: "drill" | "drill+board_area";
+  board_area?: string;
 }
 
 export interface CrewRoutesResponse {
@@ -584,21 +595,22 @@ export interface ZoneObservation {
   id: string;
   name: string;
   households: number;
-  /** scheduled = an order with a later start_minute is pending (order.start_minute); ordered = an order is in effect; lifted = all clear (lift_evacuation). */
-  status: "no_order" | "scheduled" | "ordered" | "overrun" | "lifted";
+  /** warning = be ready to leave (warn_evacuation), nobody leaves; scheduled = an order with a later start_minute is pending (order.start_minute); ordered = an order is in effect; lifted = all clear (lift_evacuation). */
+  status: "no_order" | "warning" | "scheduled" | "ordered" | "overrun" | "lifted";
   /**
-   * The zone's evacuation order (model.ts zoneOrderStatus): none, scheduled (departures start at
+   * The zone's evacuation order (model.ts zoneOrderStatus): none, warning (be ready to leave since
+   * start_minute toward destination_id; nobody leaves; demo/evacWarning.ts), scheduled (departures start at
    * start_minute), leaving (in effect since start_minute), done (everyone it sends out has left and
    * arrived), overrun, lifted (lift_evacuation at start_minute: all clear, residents returning or
    * home). Nobody leaves a zone without an order (no self-evacuation on this board).
    */
   order: {
-    status: "none" | "scheduled" | "leaving" | "done" | "overrun" | "lifted";
-    /** Board minute departures start (scheduled) or started (leaving, done), or the lift minute (lifted); null otherwise. */
+    status: "none" | "warning" | "scheduled" | "leaving" | "done" | "overrun" | "lifted";
+    /** Board minute departures start (scheduled) or started (leaving, done), the warning minute (warning), or the lift minute (lifted); null otherwise. */
     start_minute: number | null;
     /** Scheduled only: minutes from now until start_minute. */
     starts_in_min: number | null;
-    /** Destination of the scheduled order or of the order in effect. */
+    /** Destination of the scheduled order, of the order in effect, or the route a warned zone is to be ready for. */
     destination_id: string | null;
     /**
      * Scheduled only: the scheduled destination's margin_min if departures start at start_minute
@@ -890,8 +902,15 @@ export type DemoOrder =
    * schedule; for a zone already leaving it redirects (now only).
    */
   | { type: "order_evacuation"; zone_id: string; destination_id: string; start_minute?: number | null; reason: string }
-  /** Cancels a scheduled order that has not started (order.status "scheduled"). */
+  /** Cancels a scheduled order that has not started (order.status "scheduled"), or withdraws a warning (order.status "warning"). */
   | { type: "cancel_evacuation"; zone_id: string; reason: string }
+  /**
+   * Evacuation warning (demo/evacWarning.ts): order.status "warning", residents told to be ready
+   * to leave (phones: be_ready, no start time); nobody leaves. destination_id: one of the zone's
+   * options, null = its first. Not for a zone leaving, done or overrun; replaces a schedule; an
+   * order_evacuation supersedes it; cancel_evacuation withdraws it.
+   */
+  | { type: "warn_evacuation"; zone_id: string; destination_id: string | null; reason: string }
   /**
    * Lifts the zone's evacuation order (all clear): only when the zone's all_clear.eligible is
    * true (refused otherwise, with all_clear.reasons). Households not departed stay home; those
@@ -963,13 +982,25 @@ export interface OutcomesObservation {
  * until fire reaches the core (eta_basis "core") or, with no core arrival in the lookahead, the
  * zone edge ("edge"), in the fire model's free-burn forecast (containment not assumed);
  * forecast_core_eta_min is the contained forecast (the zone's fire_core_eta_min). Absolute board
- * minutes: latest_safe_start_minute, recommended_start_minute. action: order_now (too_late or start
- * now), schedule / reschedule (order_evacuation with start_minute = recommended_start_minute),
- * scheduled_ok, leaving. expected_caught_*: expected households / persons home at that ETA.
+ * minutes: latest_safe_start_minute, recommended_start_minute. Tiers (demo/decisionAids.ts module
+ * comment): action order_now (too_late, or the latest safe start within the decision window and
+ * the roads fit now), schedule / reschedule (order_evacuation with start_minute =
+ * recommended_start_minute), scheduled_ok, warn (warn_evacuation: threat if_containment_fails, or
+ * free_burn with the latest safe start beyond the window; recommended_start_minute =
+ * order_by_minute), warned (already warned), leaving. threat: free_burn, or if_containment_fails
+ * (every fire reaching the zone is expected contained by contained_by_minute, with margin, before
+ * it arrives). expected_caught_*: expected households / persons home at that ETA.
  */
 export interface EvacuationPlanObservation {
   zone_id: string;
-  action: "order_now" | "schedule" | "leaving" | "scheduled_ok" | "reschedule";
+  action: "order_now" | "schedule" | "leaving" | "scheduled_ok" | "reschedule" | "warn" | "warned";
+  threat: "free_burn" | "if_containment_fails";
+  /** What the zone needs now, ordered or not: order (free_burn, latest safe start within the decision window) or warn. A leaving zone with tier order cannot be lifted (its all_clear says so). */
+  tier: "order" | "warn";
+  /** if_containment_fails: board minute the fires reaching the zone are expected contained by (the latest of them); null otherwise. */
+  contained_by_minute: number | null;
+  /** Board minute the aid will say order_now in free burn if nothing changes (latest_safe_start_minute - decision window, now at the earliest). */
+  order_by_minute: number;
   eta_min: number;
   eta_basis: "core" | "edge";
   forecast_core_eta_min: number | null;

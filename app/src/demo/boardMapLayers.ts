@@ -7,7 +7,8 @@ import { CREW_COLORS, firelineCss } from "../studio/firelinePalette";
 import type { AccessClassWire, RoadAccessResponse } from "./contracts";
 import { fireMapLabel, isReported } from "./boardResponse";
 import { boardFireFeatures, firePolygons } from "./fireFootprint";
-import { crewWork, fireStatePolygons, type CrewWork } from "./fireState";
+import { fireStatePolygons } from "./fireState";
+import { JUST_PUT_OUT_MINUTES, firefightingWork, justPutOut, type FirefightingWork } from "./firefightingWork";
 import { simClock } from "./format";
 import { zoneSafeShare } from "./safeHouses";
 import { allClearLabelShown } from "./allClear";
@@ -81,6 +82,15 @@ export const BOARD_COLOR = {
   extinguishedEdge: "#3E5568",
   /** Firefighters at work: dot outline (their fill is the unit family's colour). */
   crewEdge: "#FFFFFF",
+  /** Hose line from an engine to its work point (simulated): blue dashes flowing over a white casing; the water spray ring at its end. */
+  hose: "#1D7FD6",
+  hoseCasing: "#FFFFFF",
+  spray: "#BFE6FF",
+  /** Dug hand / dozer line behind a working crew: the fire line's ink. */
+  dugLine: MAP_COLOR.ink,
+  /** Ground just put out: an expanding white ring with a slate edge, fading over JUST_PUT_OUT_MINUTES. */
+  putOut: "#FFFFFF",
+  putOutEdge: "#3E5568",
 };
 
 type Feature = GeoJSON.Feature<GeoJSON.Geometry, Record<string, string | number | boolean | null>>;
@@ -135,8 +145,9 @@ function zoneMapState(zone: Board["zones"][number], forecast: ZoneForecast | und
   }
   if (zone.overrunAt !== null) return "overrun";
   if (zone.orderedAt !== null) return "ordered";
-  // A scheduled order is drawn like a threatened zone; its tag says when it leaves.
-  if ((forecast && forecast.edgeEta !== null) || zone.pendingOrder) return "threatened";
+  // A scheduled order or an evacuation warning (demo/evacWarning.ts) is drawn like a threatened
+  // zone (amber, never the orange "Leave now"); its tag says when it leaves / to be ready.
+  if ((forecast && forecast.edgeEta !== null) || zone.pendingOrder || zone.warning) return "threatened";
   return "quiet";
 }
 
@@ -151,6 +162,10 @@ function zoneTag(state: ZoneMapState, forecast: ZoneForecast | undefined, zone: 
   if (state === "threatened" && zone.pendingOrder) {
     const eta = forecast?.edgeEta ?? null;
     return `LEAVES ${simClock(zone.pendingOrder.startMinute)} (sim)${eta === null ? "" : eta <= 0 ? " · fire now" : ` · fire ${Math.round(eta)} min`}`;
+  }
+  if (state === "threatened" && zone.warning) {
+    const eta = forecast?.edgeEta ?? null;
+    return `BE READY (sim) · ${zone.id}${eta === null ? "" : eta <= 0 ? " · fire now" : ` · fire ${Math.round(eta)} min`}`;
   }
   if (state === "threatened") {
     const eta = forecast?.edgeEta ?? 0;
@@ -219,20 +234,25 @@ const CREW_TRAIL_M = 70;
 const CREW_INWARD_M = 25;
 
 /**
- * Crews at work (fireState.crewWork): a few small dots in the unit family's colour at the worked
- * point of each crew's path, stepped in toward the fire as the work progresses, and a short trail
- * of the path just worked. They move as the board advances.
+ * Crews at work (firefightingWork.ts, on fireState.crewWork): a few small dots in the unit
+ * family's colour at the point each crew works now and behind it, stepped in toward the fire as
+ * the work progresses; behind a hand crew or dozer the dug line it left (growing as it works),
+ * behind an engine crew a short trail of the edge just worked; a hose line from each engine on a
+ * hose job to its work point, with the spray there; and a ring where ground was just put out.
+ * They move as the board advances; the hose flow and rings animate (attachBoardLayers).
  */
-function buildCrews(board: Board): { dots: Feature[]; trails: Feature[] } {
+function buildCrews(board: Board): { dots: Feature[]; trails: Feature[]; hoses: Feature[]; sprays: Feature[]; putOut: Feature[] } {
   const dots: Feature[] = [];
   const trails: Feature[] = [];
-  const work: CrewWork[] = crewWork(board);
+  const hoses: Feature[] = [];
+  const sprays: Feature[] = [];
+  const work: FirefightingWork[] = firefightingWork(board);
   for (const w of work) {
-    const path = w.path as LonLat[];
+    const path = w.trail;
     if (path.length === 0) continue;
     const cum = [0];
     for (let k = 1; k < path.length; k++) cum.push(cum[k - 1] + distanceM(path[k - 1], path[k]));
-    const s = Math.min(1, Math.max(0, w.progress)) * cum[cum.length - 1];
+    const s = cum[cum.length - 1];
     const team = board.teams.find((t) => t.id === w.teamId);
     const color = firelineCss(CREW_COLORS[team ? vehicleFamily(team.kind) : "hand_crew"]);
     const len = Math.hypot(w.inward[0], w.inward[1]);
@@ -244,16 +264,22 @@ function buildCrews(board: Board): { dots: Feature[]; trails: Feature[] } {
         len > 0
           ? [at[0] + ((w.inward[0] / len) * step) / (111_320 * Math.cos(lat)), at[1] + ((w.inward[1] / len) * step) / 111_320]
           : at;
-      dots.push(point(p, { team: w.teamId, fire: w.fireId, kind: w.kind, color, lead: k === 0 }));
+      dots.push(point(p, { team: w.teamId, fire: w.fireId, kind: w.kind, tool: w.tool, color, lead: k === 0 }));
     }
-    const trail: LonLat[] = [];
-    const from = Math.max(0, s - CREW_TRAIL_M);
-    trail.push(alongPath(path, cum, from));
+    // Hand crews and dozers: the whole dug line of this assignment (an attack line's built part is drawn by bd-attack-lines).
+    const dug = (w.tool === "hand" || w.tool === "dozer") && w.kind !== "line";
+    const from = dug ? 0 : Math.max(0, s - CREW_TRAIL_M);
+    const trail: LonLat[] = [alongPath(path, cum, from)];
     for (let k = 1; k < path.length; k++) if (cum[k] > from && cum[k] < s) trail.push(path[k]);
     trail.push(alongPath(path, cum, s));
-    if (trail.length > 1 && s > 0) trails.push(lineFeature(trail, { color }));
+    if (trail.length > 1 && s > 0) trails.push(lineFeature(trail, { color, dug }));
+    if (w.tool === "hose") {
+      hoses.push(lineFeature([w.vehicle, w.lead], { team: w.teamId }));
+      sprays.push(point(w.lead, { team: w.teamId }));
+    }
   }
-  return { dots, trails };
+  const putOut = justPutOut(board).map((p) => point(p.at, { fade: Math.max(0, 1 - p.age / JUST_PUT_OUT_MINUTES) }));
+  return { dots, trails, hoses, sprays, putOut };
 }
 
 /**
@@ -431,8 +457,14 @@ function selectionCenter(sel: BoardSelection, board: Board): LonLat | null {
 const SOURCES = [
   "bd-zones", "bd-zone-labels", "bd-routes", "bd-fires", "bd-fire-labels", "bd-team-lines", "bd-teams",
   "bd-stations", "bd-dest", "bd-sel-area", "bd-sel-point", "bd-no-truck", "bd-evac", "bd-attack-lines", "bd-attack-points",
-  "bd-fire-state", "bd-crews", "bd-crew-trails",
+  "bd-fire-state", "bd-crews", "bd-crew-trails", "bd-hoses", "bd-sprays", "bd-put-out",
 ];
+/** Hose flow: the dash pattern stepped along the hose (MapLibre cannot offset dashes), and its frame rate. */
+const HOSE_DASH_STEPS: number[][] = [
+  [0, 4, 3], [0.5, 4, 2.5], [1, 4, 2], [1.5, 4, 1.5], [2, 4, 1], [2.5, 4, 0.5], [3, 4, 0],
+  [0, 0.5, 3, 3.5], [0, 1, 3, 3], [0, 1.5, 3, 2.5], [0, 2, 3, 2], [0, 2.5, 3, 1.5], [0, 3, 3, 1], [0, 3.5, 3, 0.5],
+];
+const FX_FRAME_MS = 70;
 /** Dark hatch on burned-out ground (fire states). */
 const SCAR_HATCH_IMAGE = "bd-scar-hatch";
 const FIRE_STATE_MATCH = (burning: string | number, burnedOut: string | number, extinguished: string | number) =>
@@ -519,7 +551,32 @@ function installLayers(map: MapLibreMap, beforeId: string): string[] {
   } });
   // Firefighters at work (fireState.crewWork): a short trail of the path just worked, then small dots.
   add({ id: "bd-crew-trails", type: "line", source: "bd-crew-trails", layout: { "line-cap": "round", "line-join": "round" }, paint: {
-    "line-color": ["get", "color"] as never, "line-width": 2.5, "line-opacity": 0.55,
+    "line-color": ["case", ["get", "dug"], BOARD_COLOR.dugLine, ["get", "color"]] as never,
+    "line-width": ["case", ["get", "dug"], 3, 2.5] as never,
+    "line-opacity": ["case", ["get", "dug"], 0.9, 0.55] as never,
+  } });
+  // Just put out: a ring that swells and fades as the ground cools (radius phase animated).
+  add({ id: "bd-put-out", type: "circle", source: "bd-put-out", paint: {
+    "circle-radius": 6,
+    "circle-color": BOARD_COLOR.putOut,
+    "circle-opacity": ["*", 0.35, ["get", "fade"]] as never,
+    "circle-stroke-color": BOARD_COLOR.putOutEdge,
+    "circle-stroke-width": 1.5,
+    "circle-stroke-opacity": ["*", 0.9, ["get", "fade"]] as never,
+  } });
+  // Hose line from the engine to its work point: white casing, blue dashes flowing along it.
+  add({ id: "bd-hose-casing", type: "line", source: "bd-hoses", layout: { "line-cap": "round" }, paint: {
+    "line-color": BOARD_COLOR.hoseCasing, "line-width": 5, "line-opacity": 0.9,
+  } });
+  add({ id: "bd-hose", type: "line", source: "bd-hoses", paint: {
+    "line-color": BOARD_COLOR.hose, "line-width": 2.5, "line-dasharray": HOSE_DASH_STEPS[0] as never,
+  } });
+  add({ id: "bd-spray", type: "circle", source: "bd-sprays", paint: {
+    "circle-radius": 7,
+    "circle-color": BOARD_COLOR.spray,
+    "circle-opacity": 0.55,
+    "circle-stroke-color": BOARD_COLOR.hose,
+    "circle-stroke-width": 1.5,
   } });
   add({ id: "bd-crews", type: "circle", source: "bd-crews", paint: {
     "circle-radius": ["interpolate", ["linear"], ["zoom"], 11, ["case", ["get", "lead"], 2.6, 2], 15, ["case", ["get", "lead"], 4.2, 3.4]] as never,
@@ -659,6 +716,42 @@ export function attachBoardLayers(
     schedule();
   };
   reducedQuery?.addEventListener("change", onReduced);
+
+  // Firefighting animation (simulated): hose dashes flow, the spray and the just-put-out rings
+  // pulse, at about FX_FRAME_MS per step, only while there is something to animate, the map is
+  // shown and motion is allowed (browsers pause animation frames in a hidden tab). Under reduced
+  // motion they stay still: dashed hose, steady spray dot and rings.
+  let fxActive = false;
+  let fxRaf = 0;
+  let fxLast = 0;
+  let fxStep = 0;
+  const fxStill = () => {
+    if (!map.getLayer("bd-hose")) return;
+    map.setPaintProperty("bd-hose", "line-dasharray", HOSE_DASH_STEPS[0] as never);
+    map.setPaintProperty("bd-spray", "circle-radius", 7);
+    map.setPaintProperty("bd-put-out", "circle-radius", 6);
+  };
+  const fxLoop = (now: number) => {
+    fxRaf = 0;
+    if (disposed || !fxActive || mapHidden || reducedQuery?.matches) return;
+    if (now - fxLast >= FX_FRAME_MS) {
+      fxLast = now;
+      fxStep = (fxStep + 1) % (HOSE_DASH_STEPS.length * 6);
+      if (map.getLayer("bd-hose")) {
+        map.setPaintProperty("bd-hose", "line-dasharray", HOSE_DASH_STEPS[fxStep % HOSE_DASH_STEPS.length] as never);
+        const u = (fxStep % 12) / 12;
+        map.setPaintProperty("bd-spray", "circle-radius", 5 + 5 * u);
+        const v = (fxStep % 24) / 24;
+        map.setPaintProperty("bd-put-out", "circle-radius", ["*", ["+", 4, 10 * v], ["+", 0.6, ["*", 0.4, ["get", "fade"]]]] as never);
+      }
+    }
+    fxRaf = requestAnimationFrame(fxLoop);
+  };
+  const scheduleFx = () => {
+    if (fxActive && !fxRaf && !disposed && !mapHidden && !reducedQuery?.matches) fxRaf = requestAnimationFrame(fxLoop);
+    else if (reducedQuery?.matches) fxStill();
+  };
+  reducedQuery?.addEventListener("change", scheduleFx);
   // Standing offsets are in screen pixels: redraw as the zoom changes.
   map.on("zoom", schedule);
 
@@ -687,6 +780,10 @@ export function attachBoardLayers(
       const crews = buildCrews(board);
       setData("bd-crews", crews.dots);
       setData("bd-crew-trails", crews.trails);
+      setData("bd-hoses", crews.hoses);
+      setData("bd-sprays", crews.sprays);
+      setData("bd-put-out", crews.putOut);
+      fxActive = crews.hoses.length > 0 || crews.putOut.length > 0;
       setData("bd-fire-labels", buildFireLabels(board));
       setData("bd-team-lines", buildTeamLines(board));
       setData("bd-stations", stationFeatures(board));
@@ -710,12 +807,15 @@ export function attachBoardLayers(
       mapHidden = getComputedStyle(map.getContainer()).visibility === "hidden";
       motion.sample(board, teamSubjects(board), now);
       if (renderUnits(now)) schedule();
+      scheduleFx();
     },
     dispose() {
       if (disposed) return;
       disposed = true;
       if (raf) cancelAnimationFrame(raf);
+      if (fxRaf) cancelAnimationFrame(fxRaf);
       reducedQuery?.removeEventListener("change", onReduced);
+      reducedQuery?.removeEventListener("change", scheduleFx);
       map.off("zoom", schedule);
       map.off("click", onClick);
       for (const layer of INTERACTIVE) {

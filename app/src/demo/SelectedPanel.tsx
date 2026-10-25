@@ -378,7 +378,9 @@ function ZoneDetail({
         ? "Evacuating"
         : pending
           ? `Scheduled ${simClock(pending.startMinute)}`
-          : "No order";
+          : orderStatus === "warning"
+            ? "Be ready (warning)"
+            : "No order";
   // Simulated traffic (model.ts evacuationEstimate): congested time, bottleneck and margin per option.
   const picture = trafficPicture(board);
   const estimates = new Map<string, EvacuationEstimate>(
@@ -473,6 +475,13 @@ function ZoneDetail({
         <div className="dm-options">
           <Button size="sm" variant="secondary" onClick={() => actions.cancelZoneOrder(zone.id)}>
             Cancel scheduled evacuation ({simClock(pending.startMinute)})
+          </Button>
+        </div>
+      ) : null}
+      {orderStatus === "warning" ? (
+        <div className="dm-options">
+          <Button size="sm" variant="secondary" onClick={() => actions.cancelZoneOrder(zone.id)}>
+            Withdraw evacuation warning
           </Button>
         </div>
       ) : null}

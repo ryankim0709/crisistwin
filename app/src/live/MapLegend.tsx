@@ -59,12 +59,33 @@ const FIRE_STATE_ROWS: { key: string; label: string; swatch: ReactNode }[] = [
   },
   {
     key: "bd-crews",
-    label: "Firefighters at work, with a trail of the edge just worked (sim)",
+    label: "Crew cutting line: dots at the work, the dug line behind them growing (sim)",
     swatch: (
       <svg viewBox="0 0 20 14" aria-hidden="true">
-        <line x1="1" y1="9" x2="13" y2="7" stroke={MAP_COLOR.responder} strokeOpacity="0.55" strokeWidth="2.5" strokeLinecap="round" />
+        <line x1="1" y1="9" x2="13" y2="7" stroke={BOARD_COLOR.dugLine} strokeOpacity="0.9" strokeWidth="2.5" strokeLinecap="round" />
         <circle cx="9" cy="7.5" r="2.2" fill={MAP_COLOR.responder} stroke={BOARD_COLOR.crewEdge} strokeWidth="1" />
         <circle cx="15" cy="6.5" r="2.8" fill={MAP_COLOR.responder} stroke={BOARD_COLOR.crewEdge} strokeWidth="1" />
+      </svg>
+    ),
+  },
+  {
+    key: "bd-hose",
+    label: "Hose line from an engine to its work point, dashes flowing, spray ring at the nozzle (sim)",
+    swatch: (
+      <svg viewBox="0 0 20 14" aria-hidden="true">
+        <line x1="1" y1="10" x2="13" y2="6" stroke={BOARD_COLOR.hoseCasing} strokeWidth="4" strokeLinecap="round" />
+        <line x1="1" y1="10" x2="13" y2="6" stroke={BOARD_COLOR.hose} strokeWidth="2" strokeDasharray="3 2" />
+        <circle cx="15" cy="5.5" r="3.5" fill={BOARD_COLOR.spray} fillOpacity="0.6" stroke={BOARD_COLOR.hose} strokeWidth="1.2" />
+      </svg>
+    ),
+  },
+  {
+    key: "bd-put-out",
+    label: "Just put out: pulsing ring, fading over a few board minutes (sim)",
+    swatch: (
+      <svg viewBox="0 0 20 14" aria-hidden="true">
+        <circle cx="10" cy="7" r="5" fill={BOARD_COLOR.putOut} fillOpacity="0.35" stroke={BOARD_COLOR.putOutEdge} strokeWidth="1.5" />
+        <circle cx="10" cy="7" r="1.6" fill={BOARD_COLOR.putOutEdge} />
       </svg>
     ),
   },
