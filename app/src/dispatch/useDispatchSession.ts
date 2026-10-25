@@ -120,6 +120,12 @@ export interface SessionInputs {
    * a Type 3 engine on public roads at free-flow speed.
    */
   apparatus?: DispatchApparatus | null;
+  /**
+   * Per-household minutes from the zone's order to leaving home, Infinity for a household that
+   * stays (population/householdBehavior.ts); the engine's uniform 45 min spread when omitted. It
+   * changes departures, so it changes what the agent sees and the run's outcome.
+   */
+  departureDelays?: Float32Array | null;
 }
 
 export interface DispatchSession {
@@ -491,6 +497,7 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
         inputs.closedEdges,
       );
       engine.restrictToFirePath = true;
+      if (inputs.departureDelays) engine.setDepartureDelays(inputs.departureDelays);
       if (inputs.apparatus) {
         engine.setApparatusAccess(inputs.apparatus.access, inputs.apparatus.kinds, inputs.apparatus.notes);
       }

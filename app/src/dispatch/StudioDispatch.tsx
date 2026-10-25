@@ -31,6 +31,16 @@ import { DispatchOverlay } from "./scene/DispatchOverlay";
 import { dispatchApparatus } from "./stationApparatus";
 import { useDispatchSession } from "./useDispatchSession";
 import { useSuppressionBases } from "../studio/suppressionBases";
+import { DEFAULT_FIREFIGHTING, startMsOf } from "../studio/firefighting";
+import {
+  HOUSEHOLD_BEHAVIOR_OPTIONS,
+  behaviorLabel,
+  householdBehaviorText,
+  householdDepartureDelays,
+  useZoneHouseholds,
+  type HouseholdBehaviorMode,
+} from "../population";
+import DispatchPeople from "./DispatchPeople";
 import { Button } from "../ui";
 import "./dispatch.css";
 
@@ -81,6 +91,8 @@ export default function StudioDispatch({
   showDiorama,
   setRunOverride,
   groundClickRef,
+  map,
+  dock,
 }: StudioAsideContext) {
   const [areaState, setAreaState] = useState<AreaState>({ status: "idle" });
   const [areaAttempt, setAreaAttempt] = useState(0);
@@ -157,6 +169,10 @@ export default function StudioDispatch({
       area && grid && current ? computeExposure(area, grid, current.run.arrivalMinutes) : null,
     [area, grid, current],
   );
+
+  // ---- People: snapshot households for the area, and how households respond to orders ------
+  const areaHouseholds = useZoneHouseholds(area);
+  const [behaviorMode, setBehaviorMode] = useState<HouseholdBehaviorMode>("grounded");
   // CAL FIRE-layer stations near the box (local-only file; null while loading or absent).
   const areaCentre = useMemo<[number, number] | null>(
     () => (area ? [(area.bbox[0] + area.bbox[2]) / 2, (area.bbox[1] + area.bbox[3]) / 2] : null),
@@ -396,8 +412,10 @@ export default function StudioDispatch({
       windSpeedMph: current.scenario.settings.windSpeedMph,
       closedEdges: new Set(plannedClosures.map((closure) => closure.edge)),
       apparatus: dispatchApparatus(area, current.landscape, suppressionBases),
+      departureDelays: behaviorMode === "grounded" ? householdDepartureDelays(area) : null,
     });
   }, [
+    behaviorMode,
     suppressionBases,
     plannedClosures,
     area,
@@ -513,7 +531,26 @@ export default function StudioDispatch({
         ? "No residential streets lie near these fires, so there is nobody to evacuate. Try fires closer to homes."
         : null;
 
+  const sessionEngine = sessionActive ? session.engine : null;
+  const grounded = sessionEngine ? sessionEngine.hasDepartureDelays : behaviorMode === "grounded";
   return (
+    <>
+    <DispatchPeople
+      map={map}
+      dock={dock}
+      area={area}
+      exposure={exposure}
+      horizonMinutes={horizonMinutes}
+      closedEdges={closedEdges}
+      engine={sessionEngine}
+      version={session.version}
+      status={session.status}
+      speed={session.speed}
+      startMs={startMsOf(current?.scenario.firefighting ?? DEFAULT_FIREFIGHTING)}
+      behavior={behaviorLabel(grounded)}
+      zonePeople={areaHouseholds.zones}
+      householdsLoading={areaHouseholds.status === "loading"}
+    />
     <DispatchConsole
       area={area}
       steps={steps}
@@ -537,6 +574,30 @@ export default function StudioDispatch({
       onSpeedChange={session.setSpeed}
       onCheckIntervalChange={session.setCheckInterval}
       onSelectZone={selectZone}
+      settings={
+        area && (
+          <div className="dsp-households">
+            <label className="dsp-speed">
+              Households
+              <select
+                className="ui-input"
+                value={behaviorMode}
+                disabled={sessionActive}
+                onChange={(event) => setBehaviorMode(event.target.value as HouseholdBehaviorMode)}
+              >
+                {HOUSEHOLD_BEHAVIOR_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p className="dsp-muted">
+              {householdBehaviorText(behaviorMode)} Changes what the agent sees and its outcome.
+            </p>
+          </div>
+        )
+      }
       roads={
         area && (
           <RoadClosures
@@ -577,5 +638,6 @@ export default function StudioDispatch({
         </>
       }
     />
+    </>
   );
 }

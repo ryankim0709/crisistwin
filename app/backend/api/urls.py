@@ -5,6 +5,7 @@ from .demo import demo_decide, demo_routes
 from .demo_realism import demo_crew_routes, demo_environment, demo_road_access, demo_wind
 from .dispatch import decide
 from .dispatch_area import dispatch_area
+from .dispatch_households import dispatch_households
 from .dispatch_runs import run_list, run_outcome
 from .explain import explain
 from .families import create_family, family_detail, family_meeting_points, family_member_me, join_family
@@ -42,6 +43,7 @@ urlpatterns = [
     path("replay/explain", explain, name="replay-explain"),
     path("dispatch/decide", decide, name="dispatch-decide"),
     path("dispatch/area", dispatch_area, name="dispatch-area"),
+    path("dispatch/households", dispatch_households, name="dispatch-households"),
     path("weather/scenario", scenario_weather, name="weather-scenario"),
     path("conditions", conditions, name="conditions"),
     path("conditions/presets", conditions_presets, name="conditions-presets"),

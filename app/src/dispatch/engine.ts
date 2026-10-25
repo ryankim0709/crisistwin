@@ -764,7 +764,7 @@ export class DispatchEngine {
   }
 
   /**
-   * Per-household departure behaviour (the Studio's, studio/householdBehavior.ts): `delays[h]`
+   * Per-household departure behaviour (the Studio's, population/householdBehavior.ts): `delays[h]`
    * is the minutes from home h's zone order to the household leaving home; a non-finite value
    * means it stays. While evacuation support is on scene the wait is scaled by SUPPORTED /
    * DEPARTURE spread. Call before any order; null restores the uniform spread. Households that
@@ -782,6 +782,11 @@ export class DispatchEngine {
           this.stayingAtHome[index] += 1;
       }
     });
+  }
+
+  /** True when per-household departure delays are set (`setDepartureDelays`). */
+  get hasDepartureDelays(): boolean {
+    return this.departureDelays !== null;
   }
 
   /** True when departure delays are set and home `h` will not leave. */

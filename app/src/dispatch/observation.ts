@@ -24,6 +24,7 @@ import { ENGINE_HOLDS_FLAME_FEET, ENGINE_LINE_METERS_PER_MINUTE } from "./fireAt
 import { routeTo, shortestPathTree } from "./routing";
 import { roadLabel } from "./area";
 import { GROUND_APPARATUS } from "../studio/apparatus";
+import { DELAY_MEDIAN_MINUTES, ORDER_COMPLIANCE } from "../population/householdBehavior";
 import type { NoAccess } from "./engine";
 
 const SQUARE_METERS_PER_HECTARE = 10_000;
@@ -155,6 +156,7 @@ export function buildObservation(inputs: ObservationInputs): Observation {
       order_rank: state.orderRank,
       homes_total: zone.homes,
       homes_waiting: state.status === "no_order" ? 0 : state.atHome + state.queued,
+      homes_staying: state.status === "no_order" ? 0 : engine.stayingHomes(state.index),
       homes_en_route: state.onRoad,
       homes_out: state.safe,
       homes_exposed: state.caught,
@@ -341,7 +343,9 @@ export function buildObservation(inputs: ObservationInputs): Observation {
       `impact classifies each zone from the fire model's first contact: burning (fire is there), threatened (within ${FORECAST_LOOKAHEAD_MINUTES} min), later (after that, by T+${engine.horizonMinutes}), outside (not reached by T+${engine.horizonMinutes}). Outside zones cannot be ordered or staged; the fire forecast is fixed, so a zone outside stays outside.`,
       `Fire ETAs are the fire model's forecast, shown up to ${FORECAST_LOOKAHEAD_MINUTES} min ahead; the fire spread changes only when engines put a fire out or hold it with line (it is then re-run).`,
       `Live clock: the simulation keeps running while you decide. Your orders take effect when your answer arrives, about clock.decision_delay_min simulated minutes after this observation, from wherever fire, traffic and engines are by then. Engines leaving a station need ${Math.round(TURNOUT_SECONDS)} s turnout before driving. tactic_options already account for both delays.`,
-      `After an evacuation order households leave over ${DEPARTURE_SPREAD_MINUTES} min (${SUPPORTED_DEPARTURE_SPREAD_MINUTES} min while an engine is on scene on evacuation_support), then queue at the zone's loading point for road capacity.`,
+      engine.hasDepartureDelays
+        ? `Household behaviour in this run is drawn from fire evacuation surveys and replaces the uniform departure spread: about ${Math.round(ORDER_COMPLIANCE * 100)}% of ordered households leave, each after its own delay from the order (median ${Math.round(DELAY_MEDIAN_MINUTES)} min, long tail; delays shrink by ${SUPPORTED_DEPARTURE_SPREAD_MINUTES}/${DEPARTURE_SPREAD_MINUTES} while an engine is on scene on evacuation_support); the rest stay home whatever you order (homes_staying, counted inside homes_waiting). A zone counts as cleared once everyone who will leave has left. Then they queue at the zone's loading point for road capacity. order_slack_min still assumes the uniform spread.`
+        : `After an evacuation order households leave over ${DEPARTURE_SPREAD_MINUTES} min (${SUPPORTED_DEPARTURE_SPREAD_MINUTES} min while an engine is on scene on evacuation_support), then queue at the zone's loading point for road capacity.`,
       `Routes avoid roads the fire reaches within ${ROUTE_LOOKAHEAD_MINUTES} min (roads.fire_cut_*) and roads the planner closed (roads.planner_closed, the planner's assumption; they can close or reopen a road at any minute). exit_options already avoid both. Zones whose exit becomes unreachable hold departures until given another exit.`,
       `A staged zone (stage_evacuation) gets no order yet; the simulator orders it out automatically once every household of its after_zone has left home and the loading queue, or as soon as its own order_slack_min falls to ${STAGE_RELEASE_SLACK_MINUTES}.`,
       "order_slack_min is the simulator's estimate: minutes until fire first reaches the zone minus the larger of the departure spread and the time its vehicles need to enter the route at the bottleneck. It ignores other zones sharing the road.",

@@ -1032,3 +1032,16 @@
   justify-content: space-between;
   gap: 8px;
 }
+
+/* Household behaviour choice under the console controls (before a session). */
+.dsp-households {
+  display: grid;
+  gap: 4px;
+}
+.dsp-households .dsp-speed {
+  margin-left: 0;
+}
+.dsp-households p {
+  margin: 0;
+  font-size: var(--ct-text-xs);
+}

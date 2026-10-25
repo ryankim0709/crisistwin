@@ -25,7 +25,7 @@ export interface PeopleZone extends PeopleCounts {
   population: number;
   vehicles: number;
   persons_per_vehicle: number;
-  basis: "acs" | "assumed";
+  basis: "acs" | "assumed" | "estimated";
 }
 
 /** `edges.rows`: [edge_index, moving, queued, stuck, reason, veh, speed_kph, max_wait_min, free_flow_kph, length_m, line]. */

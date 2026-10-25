@@ -217,15 +217,30 @@ PDF - 5) and the McLennan et al. 2019 author preprint (manuscript pages).
 
 ### Simulation Studio
 
-The Studio's evacuation (`app/src/studio/householdBehavior.ts`, on by default as "Like real
+The Studio's evacuation (`app/src/population/householdBehavior.ts`, on by default as "Like real
 evacuations") draws two `grounded` values per synthetic home, seeded by the road area and home index:
 order compliance 0.875 (the rest stay home) and the departure delay lognormal (median 42.8 min, sigma
 1.246, cap 1,440 min) from the zone's order. The dispatch engine applies them
 (`DispatchEngine.setDepartureDelays`); without them it keeps its uniform 45 min spread. Shadow evacuation
 and wait-and-see are not drawn there yet. The values reach TypeScript through
-`app/src/studio/behaviorParams.generated.ts`; regenerate it after editing `sim/behavior_params.json` with
-`python3 -m tools.gen_behavior_ts` (`--check` reports drift). The Studio's people strip and map layer
-convert vehicles to people at 1.38 persons per vehicle (`app/src/studio/peopleSnapshot.ts`), an estimate.
+`app/src/population/behaviorParams.generated.ts`; regenerate it after editing `sim/behavior_params.json` with
+`python3 -m tools.gen_behavior_ts` (`--check` reports drift).
+
+### Shared population module (Studio and Dispatch agent)
+
+`app/src/population/` is used identically by /simulation and /dispatch: household behaviour (above),
+the engine → people snapshot adapter, and the /live people layer and strip (`PopulationView`).
+People per zone come from the scenario resource snapshot households (MongoDB `snapshot_households`,
+estimated occupants per household) when a current snapshot covers the area:
+`GET /api/dispatch/households?bbox=w,s,e,n` (`app/backend/api/dispatch_households.py`) sums them into
+0.0015 degree cells server-side (fields `lon, lat, households, occupants, evacuating_vehicles,
+needs_transport_occupants`; lon/lat WGS84 degrees) and the page gives each cell to the zone of the
+nearest synthetic home within 400 m. The engine still moves the synthetic homes with the area's
+vehicles per home, so these counts change how many people a household stands for, not routes or
+timing. Zones no snapshot covers convert vehicles to people at 1.38 persons per vehicle, an estimate.
+On /dispatch the grounded behaviour is a visible toggle ("Households", default "Like real
+evacuations") because it changes what the AI dispatcher sees (`homes_staying`, a model note) and the
+run's outcome; the engine has no self-evacuation, so nobody leaves before a zone is ordered.
 
 ### Gaps (assumption or nothing)
 

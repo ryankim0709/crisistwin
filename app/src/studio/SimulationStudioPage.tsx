@@ -32,7 +32,11 @@ import { planCrewDispatch } from "./crewDispatch";
 import { crewHandoff, evacuationCrews } from "./crewHandoff";
 import { DEFAULT_FIREFIGHTING, ignitionReportDelayMinutes, resourceList, startMsOf } from "./firefighting";
 import StudioPeople from "./StudioPeople";
-import { householdDepartureDelays, type HouseholdBehaviorMode } from "./householdBehavior";
+import {
+  behaviorLabel,
+  householdDepartureDelays,
+  type HouseholdBehaviorMode,
+} from "../population/householdBehavior";
 import { airBasesOf, useSuppressionBases } from "./suppressionBases";
 import type { RunDispatch } from "./useStudioRun";
 import { CREW_COLORS, FIRELINE_COLORS, firelineCss } from "./firelinePalette";
@@ -127,6 +131,10 @@ export interface StudioAsideContext {
    * tool). Write it from an effect and set it back to null on cleanup.
    */
   groundClickRef: { current: ((point: GeoPoint) => boolean) | null };
+  /** The 2D map while the Map view is shown, else null (the aside's people layer). */
+  map: MapLibreMap | null;
+  /** A slot above the playback bar for the aside's strip (its people summary); portal into it. */
+  dock: HTMLElement | null;
 }
 /** Gap kept between the floating panel and the framed 3D board, CSS px. */
 const DIORAMA_PANEL_GAP_PX = 12;
@@ -231,7 +239,7 @@ export default function SimulationStudioPage({
   // indices of one road area and are dropped when the board's area changes; they never change
   // the fire run.
   const [evacuationOn, setEvacuationOn] = useState(true);
-  // How households respond to the order (studio/householdBehavior.ts).
+  // How households respond to the order (population/householdBehavior.ts).
   const [householdBehavior, setHouseholdBehavior] = useState<HouseholdBehaviorMode>("grounded");
   // Which evacuation plan the 3D view plays: the fastest-exit policy or the optimiser's best.
   const [playPlan, setPlayPlan] = useState<PlayPlan>("fastest");
@@ -308,6 +316,7 @@ export default function SimulationStudioPage({
   }, []);
   const showDiorama = useCallback(() => chooseView("diorama"), [chooseView]);
   const frameMinutes = useMemo(() => result?.frameMinutes ?? [], [result]);
+  const [asideDock, setAsideDock] = useState<HTMLDivElement | null>(null);
 
   // A new result starts at T+0, paused. Adjusted during render rather than in an effect.
   const [playbackKey, setPlaybackKey] = useState<number | null>(null);
@@ -338,6 +347,19 @@ export default function SimulationStudioPage({
     handle = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(handle);
   }, [playing, speed, frameMinutes]);
+
+  // While an aside holds the lock it drives `clockRef` (the dispatcher's session clock): follow
+  // it so the 2D map's fire and the playback bar show the same minute.
+  useEffect(() => {
+    if (!locked || frameMinutes.length === 0) return;
+    let handle = 0;
+    const tick = () => {
+      setFrameIndex(frameIndexAt(frameMinutes, clockRef.current));
+      handle = requestAnimationFrame(tick);
+    };
+    handle = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(handle);
+  }, [locked, frameMinutes]);
 
   const seek = useCallback(
     (index: number) => {
@@ -1412,9 +1434,10 @@ export default function SimulationStudioPage({
               playing={playing}
               speed={speed}
               startMs={startMsOf(result.scenario.firefighting ?? DEFAULT_FIREFIGHTING)}
-              behavior={householdBehavior === "grounded" ? "grounded (not everyone obeys)" : "everyone leaves"}
+              behavior={behaviorLabel(householdBehavior === "grounded")}
             />
           )}
+          {Aside && <div className="studio-aside-dock" ref={setAsideDock} />}
           <PlaybackBar
             enabled={!locked && result !== null && frameMinutes.length > 0}
             frameMinutes={frameMinutes}
@@ -1446,6 +1469,8 @@ export default function SimulationStudioPage({
           showDiorama={showDiorama}
           setRunOverride={setRunOverride}
           groundClickRef={asideClickRef}
+          map={view === "map" ? studioMap : null}
+          dock={asideDock}
         />
       )}
     </main>

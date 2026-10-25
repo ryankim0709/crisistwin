@@ -19,7 +19,7 @@ import {
   HOUSEHOLD_BEHAVIOR_OPTIONS,
   householdBehaviorText,
   type HouseholdBehaviorMode,
-} from "./householdBehavior";
+} from "../population/householdBehavior";
 
 /** Which plan the 3D view plays: the default policy or the optimiser's best. */
 export type PlayPlan = "fastest" | "optimized";
@@ -56,7 +56,7 @@ export interface EvacuationPanelProps {
   publish: boolean;
   onPublish: (on: boolean) => void;
   publishStatus: SimStatePublishStatus;
-  /** How households respond to the order (studio/householdBehavior.ts); hidden when absent. */
+  /** How households respond to the order (population/householdBehavior.ts); hidden when absent. */
   behavior?: HouseholdBehaviorMode;
   onBehavior?: (mode: HouseholdBehaviorMode) => void;
 }

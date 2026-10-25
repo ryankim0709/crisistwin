@@ -91,6 +91,8 @@ export interface DispatchConsoleProps {
   onSpeedChange: (speed: number) => void;
   onCheckIntervalChange: (minutes: number) => void;
   onSelectZone: (zone: number | null) => void;
+  /** Run settings shown under the controls before a session (household behaviour). */
+  settings?: ReactNode;
   /** The road-closure tool (RoadClosures), shown above the console tabs. */
   roads?: ReactNode;
   /** Extra controls under the console (the resident app share toggle). */
@@ -911,6 +913,7 @@ export default function DispatchConsole(props: DispatchConsoleProps) {
         </label>
       </div>
 
+      {!engine && props.settings}
       {!engine && (
         <ol className="dsp-steps" aria-label="Setup">
           {steps.map((step, i) => (
