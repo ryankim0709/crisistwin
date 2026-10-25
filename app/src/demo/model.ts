@@ -99,6 +99,8 @@ import { buildsOn, chooseTactic, lineNeededMeters, tacticHoldsFeet, tacticRateFa
 import { applyStrategyOrder, commanderTactic, type SetStrategyOrder } from "./strategyOptions";
 import { onRescue, stepInjuries } from "./injuries";
 import { uniform } from "../response/rng";
+import { createSimComms, stepSimComms } from "./simComms";
+import type { SimCommsState } from "./runContracts";
 import { engineCrewHandLineMPerMin, type WorkMode, type WorkPlan } from "../response/reach";
 import { AVAILABILITY_DRAW_EVERY_MINUTES, ENGINE_WATER_USE_GPM, OUT_OF_SERVICE_MINUTES, OUT_OF_SERVICE_PROBABILITY, TANK_GALLONS } from "../response/units";
 import {
@@ -832,6 +834,8 @@ export interface Board {
   response: ResponseState;
   /** Per-cell burn durations and suppression (demo/suppression.ts; read through demo/fireState.ts). */
   suppression: SuppressionState;
+  /** Simulated 911 / civilian / FD / PD / EMS messages and injuries (demo/simComms.ts; injuries: demo/injuries.ts). */
+  simComms?: SimCommsState;
 }
 
 /**
@@ -1768,6 +1772,7 @@ export function createBoard(zones: BaseZone[], seed: number, env: DemoEnvironmen
     // The board clock's T+0 is the drill's (snapshot scenario_time), else the wind series' start.
     response: createResponseState(seed, [], [], [], fleetAircraft, onBoard, snapshot?.scenario_time ?? env.spread.wind.startUtc, ""),
     suppression: createSuppressionState(grid.width * grid.height),
+    simComms: createSimComms(seed),
   };
   const skipped = buildBoardUnits(board, zones, env, snapshot);
   const teams = board.teams;
@@ -4027,6 +4032,8 @@ function stepOnce(board: Board, dt: number, landOn: number | null): void {
   if (wholeMinute) {
     evacuationTrafficStep(board, Math.floor(board.minute + 1e-9));
     reopenZones(board);
+    // Simulated communications for the minute just finished (demo/simComms.ts).
+    stepSimComms(board, Math.floor(board.minute + 1e-9));
   }
 }
 
