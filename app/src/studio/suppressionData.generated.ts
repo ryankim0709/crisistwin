@@ -436,6 +436,72 @@ export const SUPPRESSION_DATA: SuppressionDataModule = {
       "source": "broyles_2011",
       "page": "p.6 Table 2"
     },
+    "hand_crews.production_initial_attack_1996": {
+      "value": {
+        "columns": [
+          "fuel_model",
+          "chains_per_hour_per_person"
+        ],
+        "rows": [
+          [
+            1,
+            1.0
+          ],
+          [
+            2,
+            3.0
+          ],
+          [
+            3,
+            0.7
+          ],
+          [
+            4,
+            0.4
+          ],
+          [
+            5,
+            0.7
+          ],
+          [
+            6,
+            0.7
+          ],
+          [
+            7,
+            0.7
+          ],
+          [
+            8,
+            2.0
+          ],
+          [
+            9,
+            2.0
+          ],
+          [
+            10,
+            1.0
+          ],
+          [
+            11,
+            1.0
+          ],
+          [
+            12,
+            1.0
+          ],
+          [
+            13,
+            0.4
+          ]
+        ],
+        "note": "Conifer values where conifer and hardwood differ; hardwood FM8 is 10.0 and FM9 8.0 as printed."
+      },
+      "unit": "chains/hour/person",
+      "source": "pms465_tactics_1996",
+      "page": "p.39 Table 1 'Handcrew production, initial attack'"
+    },
     "hand_crews.flame_length_limits_ft": {
       "value": {
         "hand_tools_direct_attack_head_max": 4,

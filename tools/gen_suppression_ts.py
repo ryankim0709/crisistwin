@@ -26,6 +26,7 @@ OUT = ROOT / "app" / "src" / "studio" / "suppressionData.generated.ts"
 PREFIXES = (
     "hand_crews.production_sustained_2011_direct",
     "hand_crews.production_sustained_2011_indirect",
+    "hand_crews.production_initial_attack_1996",
     "hand_crews.flame_length_limits_ft",
     "hand_crews.walking_pace_m_per_min",
     "engine_production.initial_attack_by_crew_size",

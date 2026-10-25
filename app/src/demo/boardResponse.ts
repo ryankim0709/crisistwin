@@ -17,6 +17,9 @@
  */
 
 import { DEVELOPED_FUEL_CODE, cellAt } from "../fire/spread";
+import { PERSONS_PER_HOUSEHOLD, SQ_M_PER_SQ_MI, reportDelay, type ReportDelay } from "../response/report";
+import { engineCrewHandLineMPerMin, planWork, type WorkMode } from "../response/reach";
+import { countAtMost } from "./fireField";
 import type { LonLat } from "../live/types";
 import { DROP_HOLDS_FLAME_FEET, nearestWaterKm } from "../studio/aircraft";
 import { DEFAULT_START_LOCAL_ISO } from "../studio/firefighting";
@@ -100,6 +103,8 @@ import {
   teamPosition,
   travelKey,
   unitLineOn,
+  zoneAt,
+  toLocal,
   type Board,
   type BoardEvent,
   type Fire,
@@ -114,8 +119,9 @@ export interface FireResponse {
   level: DispatchLevel;
   structure: boolean;
   dispatchedAt: number;
-  /** First unit (ground or air) on scene, board minute. */
+  /** First ground unit on scene, and first engine, board minutes. */
   firstArrivalAt: number | null;
+  firstEngineAt: number | null;
   tactic: Tactic;
   tacticAt: number;
   /** Indirect line plan: the perimeter the line is built on and when the fire reaches it. */
@@ -131,7 +137,21 @@ export interface FireResponse {
   dipKm: number | null;
   /** Area when the response first knew it, ha (for the record). */
   containedHa: number | null;
+  /** Board minute the dispatch centre has the fire (ignition + report delay, response/report.ts). */
+  reportAt: number;
+  report: ReportDelay;
+  /** Whether the run card has gone out (at reportAt). */
+  dispatched: boolean;
+  /** Line built by ground units, metres (capped at the reachable share of what is needed). */
+  groundLineM: number;
+  /** Fire edge sample and the share of it within reach of the units working it, refreshed every REACH_EVERY_MINUTES. */
+  reach: { minute: number; edge: LonLat[]; fraction: number | null } | null;
 }
+
+/** How often the fire-edge sample and the reachable share are refreshed, minutes. */
+const REACH_EVERY_MINUTES = 5;
+/** Most edge points sampled per fire (bounded work). */
+const MAX_EDGE_POINTS = 400;
 
 export type AircraftStatus = "available" | "en_route" | "over_fire" | "returning" | "grounded";
 export interface Aircraft {
@@ -383,6 +403,7 @@ export function dispatchTeam(board: Board, team: Team, fire: Fire, actor: BoardE
   team.travel = leg.road ? (board.travel.get(travelKey(team, from, fire.id))?.basis ?? "road") : "straight_line";
   team.travelFactor = factor;
   team.coverStation = null;
+  team.workMode = team.workStartAt = team.parkedM = null;
   team.arriveAt = board.minute + turnout + leg.drive * factor;
   const slow = congestion.multiplier > 1.05 ? `, slowed x${congestion.multiplier.toFixed(1)} by evacuation traffic` : "";
   logEvent(
@@ -400,6 +421,7 @@ export function sendHome(board: Board, team: Team): void {
   team.fireId = null;
   team.route = null;
   team.travel = null;
+  team.workMode = team.workStartAt = team.parkedM = null;
   const home = team.coverStation ? (board.stations.find((s) => s.id === team.coverStation)?.location ?? team.home) : team.home;
   if (distanceM(at, home) <= HOME_M) {
     arriveHome(board, team);
@@ -440,6 +462,7 @@ export function respondToNewFire(board: Board, fire: Fire): void {
     structure,
     dispatchedAt: board.minute,
     firstArrivalAt: null,
+    firstEngineAt: null,
     tactic: structure ? "structure" : "direct",
     tacticAt: -Infinity,
     target: null,
@@ -451,9 +474,53 @@ export function respondToNewFire(board: Board, fire: Fire): void {
     airLineM: 0,
     dipKm: null,
     containedHa: null,
+    ...reportFor(board, fire, structure),
+    dispatched: false,
+    groundLineM: 0,
+    reach: null,
   });
   r.stats.fires += 1;
-  if (!r.autoDispatch || fire.noSpread !== null) return;
+}
+
+/** The seeded delay from ignition to dispatch for a new fire (response/report.ts). */
+function reportFor(board: Board, fire: Fire, structure: boolean): { reportAt: number; report: ReportDelay } {
+  const zone = zoneAt(board, fire.origin);
+  let peoplePerSqMi = 0;
+  if (zone) {
+    // Shoelace area of the zone ring in local metres.
+    const pts = zone.ring.map((p) => toLocal(zone.core, p));
+    let twice = 0;
+    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) twice += pts[j][0] * pts[i][1] - pts[i][0] * pts[j][1];
+    const sqMi = Math.abs(twice) / 2 / SQ_M_PER_SQ_MI;
+    peoplePerSqMi = sqMi > 0 ? (zone.households * PERSONS_PER_HOUSEHOLD) / sqMi : 0;
+  }
+  const report = reportDelay(board.response.rng, {
+    ignitionEpochMs: board.response.startEpochMs + fire.ignitedAt * 60_000,
+    location: fire.origin,
+    peoplePerSqMi,
+    developed: structure,
+    wildland: !structure,
+    alreadyReported: fire.source === "field_report",
+  });
+  return { reportAt: fire.ignitedAt + report.totalMinutes, report };
+}
+
+/** Whether the dispatch centre knows about the fire (the commander sees only reported fires). */
+export function isReported(board: Board, fire: Fire): boolean {
+  const fr = board.response.fires.get(fire.id);
+  return !fr || board.minute >= fr.reportAt;
+}
+
+/** At the report: log it and send the run card. */
+function dispatchOnReport(board: Board, fire: Fire, fr: FireResponse): void {
+  const r = board.response;
+  fr.dispatched = true;
+  fr.dispatchedAt = board.minute;
+  const how = fr.report.by === "camera" ? "AI camera alert" : fr.report.by === "field_report" ? "field report" : "911 call";
+  logEvent(board, "ignition", "board", `${fire.id} reported by ${how}, ${Math.round(board.minute - fire.ignitedAt)} min after it started${fr.report.night ? " (night)" : ""}.`);
+  if (!r.autoDispatch || fire.noSpread !== null || fire.status !== "burning") return;
+  const level = fr.level;
+  const structure = fr.structure;
   const card = runCard(level, structure);
   logEvent(board, "team", "board", `${fire.id}: ${structure ? "structure" : level} dispatch level, run card ${cardText(card)}.`);
   const short = fillCard(board, fire, card);
@@ -753,6 +820,11 @@ export function teamFromSeed(board: Board, seed: UnitSeed): Team {
     outOfServiceUntil: null,
     coverStation: null,
     demobilise: false,
+    workMode: null,
+    workStartAt: null,
+    parkedM: null,
+    reachM: 0,
+    accessKnown: false,
   };
 }
 
@@ -762,6 +834,10 @@ export function teamFromSeed(board: Board, seed: UnitSeed): Team {
 export function responseTick(board: Board, dt: number, wholeMinute: boolean): void {
   const r = board.response;
   const now = board.minute;
+  for (const fire of board.fires) {
+    const fr = r.fires.get(fire.id);
+    if (fr && !fr.dispatched && now >= fr.reportAt) dispatchOnReport(board, fire, fr);
+  }
   const removed = new Set<Team>();
   for (const team of board.teams) {
     // Work clock (travel to, work on and refilling at a fire count as work; idle time is rest at 2:1).
@@ -995,10 +1071,7 @@ function aircraftTick(board: Board): void {
     const fuel = board.env.spread.ground.fuelCodeAt(fire.origin);
     const usable = !fire.rates.crowning && (fire.rates.headFlameFeet <= DROP_HOLDS_FLAME_FEET || fr?.tactic === "parallel" || fr?.tactic === "indirect");
     const line = usable ? dropLineMeters(a.kind, fuel, windKt) : 0;
-    if (line > 0) {
-      fire.lineM += line;
-      if (fr) fr.airLineM += line;
-    }
+    if (line > 0 && fr) fr.airLineM += line;
     a.drops += 1;
     a.nextDropAt = now + cycle;
   }
@@ -1022,8 +1095,15 @@ function dipKmFor(board: Board, fire: Fire): number | null {
 // ---- containment ----
 
 /** Units on scene that build line on this fire now. */
+/** Units on scene that are working the edge now (not out of reach, not still hiking in). */
 function builders(board: Board, fire: Fire): Team[] {
-  return board.teams.filter((t) => t.fireId === fire.id && t.status === "on_scene");
+  return board.teams.filter(
+    (t) =>
+      t.fireId === fire.id &&
+      t.status === "on_scene" &&
+      t.workMode !== "out_of_reach" &&
+      (t.workStartAt === null || board.minute >= t.workStartAt),
+  );
 }
 
 function directHolds(board: Board, fire: Fire, teams: Team[]): number {
@@ -1045,6 +1125,14 @@ export function tacticLineRate(board: Board, fire: Fire, teams: Team[], tactic: 
   let rate = 0;
   for (const t of teams) {
     if (!buildsOn(t.kind, tactic)) continue;
+    // Off-road reach (response/reach.ts): nothing until it has walked in, nothing out of reach,
+    // and an engine crew on foot builds hand line at PMS 465 p.39 per-person rates.
+    if (t.workStartAt !== null && board.minute < t.workStartAt) continue;
+    if (t.workMode === "out_of_reach") continue;
+    if (t.workMode === "hand_line" && (t.kind === "engine_t3" || t.kind === "engine_t1")) {
+      rate += engineCrewHandLineMPerMin(t.kind, fuel);
+      continue;
+    }
     rate += unitLineOn(board, t, fire) * tacticRateFactor(t.kind, fuel, tactic);
   }
   return rate;
@@ -1110,8 +1198,12 @@ export function advanceContainment(board: Board, fire: Fire, dt: number): boolea
   if (teams.length === 0 && fr.airLineM <= 0) return false;
   const needed = lineNeededMeters(fr.tactic, fire.perimeterM, fr.target?.perimeterM ?? null);
   const rate = tacticLineRate(board, fire, teams, fr.tactic);
-  // Line cannot exceed what the tactic needs; flank line is outflanked as the perimeter grows.
-  fire.lineM = Math.min(needed, fire.lineM + rate * dt);
+  // Ground line covers at most the share of the edge within reach of the units working it
+  // (response/reach.ts); aircraft line can cover the rest. Line cannot exceed what the tactic
+  // needs; flank line is outflanked as the perimeter grows.
+  const reach = reachFraction(board, fire, fr);
+  fr.groundLineM = Math.min(needed * (reach ?? 1), fr.groundLineM + rate * dt);
+  fire.lineM = Math.min(needed, fr.groundLineM + fr.airLineM);
   // Aircraft lay line, but only ground resources on scene finish and hold it (retardant supports ground forces).
   if (fr.tactic === "flank" || teams.length === 0) return false;
   if (fr.tactic === "indirect" && fr.target) {
@@ -1133,6 +1225,8 @@ export function advanceContainment(board: Board, fire: Fire, dt: number): boolea
 
 function breach(board: Board, fire: Fire, fr: FireResponse, why: string): void {
   fire.lineM *= 1 - BREACH_LINE_LOSS_SHARE;
+  fr.groundLineM *= 1 - BREACH_LINE_LOSS_SHARE;
+  fr.airLineM *= 1 - BREACH_LINE_LOSS_SHARE;
   fr.breaches += 1;
   fr.retryAt = board.minute + BREACH_RETRY_MINUTES;
   fr.target = null;
@@ -1228,4 +1322,161 @@ export function departmentStatus(board: Board): { id: string; name: string; tier
         : board.response.pool.filter((s) => s.departmentId === d.id && isEngine(s.kind)).length,
     keep_engines: d.keepEngines,
   }));
+}
+
+// ---- off-road reach (response/reach.ts) ----
+
+/**
+ * A sample of the fire's open edge now: its burned cells that face unburned ground the solver
+ * can spread into, at most MAX_EDGE_POINTS, as WGS84 points.
+ */
+function edgeSample(board: Board, fire: Fire): LonLat[] {
+  const field = board.solver.field;
+  const s = field?.sourceIndex.get(fire.id);
+  if (!field || s === undefined) return [];
+  const grid = board.env.landscape;
+  const cells = field.cellsBySource[s];
+  const burned = countAtMost(field.arrivalBySource[s], board.minute);
+  const w = grid.width;
+  const open = (n: number) => n >= 0 && n < field.arrivalMinutes.length && field.arrivalMinutes[n] > board.minute && field.behaviour.headRateMetersPerMinute[n] > 0;
+  const edge: number[] = [];
+  for (let i = 0; i < burned; i += 1) {
+    const c = cells[i];
+    const x = c % w;
+    if (open(c - w) || open(c + w) || (x > 0 && open(c - 1)) || (x < w - 1 && open(c + 1))) edge.push(c);
+  }
+  const stride = Math.max(1, Math.ceil(edge.length / MAX_EDGE_POINTS));
+  const out: LonLat[] = [];
+  for (let i = 0; i < edge.length; i += stride) out.push(cellLonLat(grid, edge[i]));
+  return out;
+}
+
+/** The edge sample, refreshed every REACH_EVERY_MINUTES. */
+function edgeOf(board: Board, fire: Fire, fr: FireResponse): LonLat[] {
+  if (!fr.reach || board.minute - fr.reach.minute >= REACH_EVERY_MINUTES) {
+    fr.reach = { minute: board.minute, edge: edgeSample(board, fire), fraction: null };
+  }
+  return fr.reach.edge;
+}
+
+/**
+ * Share of the fire's edge within reach of the ground units on scene (each within its reach
+ * radius of where it parked), or null when no ground unit is on scene (unknown: not capped).
+ */
+export function reachFraction(board: Board, fire: Fire, fr: FireResponse | null = board.response.fires.get(fire.id) ?? null): number | null {
+  if (!fr) return null;
+  const units = board.teams.filter((t) => t.fireId === fire.id && (t.status === "on_scene" || t.status === "refilling") && t.workMode !== null);
+  if (units.length === 0) return null;
+  const edge = edgeOf(board, fire, fr);
+  if (fr.reach && fr.reach.fraction !== null && fr.reach.minute === board.minute) return fr.reach.fraction;
+  if (edge.length === 0) return 1;
+  let inside = 0;
+  for (const p of edge) {
+    if (units.some((t) => t.workMode !== "out_of_reach" && distanceM(t.position, p) <= t.reachM)) inside += 1;
+  }
+  const fraction = inside / edge.length;
+  if (fr.reach) {
+    fr.reach.fraction = fraction;
+    fr.reach.minute = board.minute;
+  }
+  return fraction;
+}
+
+/**
+ * A unit reaches the end of its road leg: it parks there (the leg's last point; without a road
+ * leg the access is unknown and it is taken to park at its target, labelled), and the work plan
+ * sets how it attacks: hose within reach, hike in and build hand line, walk a dozer in, or out
+ * of reach (response/reach.ts planWork).
+ */
+export function arriveOnScene(board: Board, team: Team, fire: Fire): void {
+  const road = team.route && team.route.length > 1 && team.travel !== "straight_line";
+  const parked = road ? team.route![team.route!.length - 1] : (team.target ?? crewTarget(fire));
+  team.position = parked;
+  team.status = "on_scene";
+  team.departAt = team.arriveAt = team.rollAt = null;
+  team.route = null;
+  team.accessKnown = !!road;
+  const fr = board.response.fires.get(fire.id);
+  const edge = fr ? edgeOf(board, fire, fr) : [];
+  let nearest: LonLat = fire.target;
+  let d = distanceM(parked, nearest);
+  for (const p of edge) {
+    const dp = distanceM(parked, p);
+    if (dp < d) {
+      d = dp;
+      nearest = p;
+    }
+  }
+  const ground = board.env.spread.ground;
+  const grid = board.env.landscape;
+  const elev = (p: LonLat) => {
+    const c = cellAt(grid, { longitude: p[0], latitude: p[1] });
+    return c >= 0 ? grid.elevationMeters[c] : 0;
+  };
+  let maxSlopePct = 0;
+  for (let i = 0; i <= 10; i += 1) {
+    const p: LonLat = [parked[0] + ((nearest[0] - parked[0]) * i) / 10, parked[1] + ((nearest[1] - parked[1]) * i) / 10];
+    maxSlopePct = Math.max(maxSlopePct, ground.slopeAt(p).slopeTangent * 100);
+  }
+  const plan = planWork(team.kind, d, elev(nearest) - elev(parked), maxSlopePct);
+  team.workMode = plan.mode;
+  team.workStartAt = board.minute + plan.startDelayMinutes;
+  team.parkedM = d;
+  team.reachM = plan.reachMeters;
+  if (fr) fr.reach = null; // recompute the reachable share with this unit
+  if (fr && fr.firstEngineAt === null && isEngine(team.kind)) fr.firstEngineAt = board.minute;
+  noteArrival(board, fire);
+  if (plan.mode === "hand_line" || plan.mode === "dozer" || plan.mode === "out_of_reach") {
+    logEvent(board, "team", "board", unitAccessText(board, team));
+  }
+}
+
+const MODE_TEXT: Record<WorkMode, string> = {
+  hose: "working the edge with hose",
+  hand_line: "hiking in to build hand line",
+  dozer: "walking the dozer in",
+  out_of_reach: "too far from the fire to build line",
+};
+
+function distanceText(m: number): string {
+  return m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m / 10) * 10} m`;
+}
+
+/** Plain language for a unit on scene: "E12 parked 600 m from F3 — hiking in to build hand line, ~14 min". */
+export function unitAccessText(board: Board, team: Team): string {
+  if (team.status !== "on_scene" && team.status !== "refilling") return "";
+  if (team.workMode === null || team.parkedM === null) return `${team.id} on scene.`;
+  const wait = team.workStartAt !== null ? Math.ceil(team.workStartAt - board.minute) : 0;
+  const where = team.accessKnown ? `parked ${distanceText(team.parkedM)} from ${team.fireId}` : `at ${team.fireId} (road access not known; straight-line estimate)`;
+  const mode = MODE_TEXT[team.workMode];
+  return `${team.id} ${where} — ${wait > 0 ? `${mode}, ~${wait} min` : team.workMode === "hand_line" ? "building hand line" : team.workMode === "dozer" ? "cutting dozer line" : mode}.`;
+}
+
+/** Plain language for a fire's reachable edge, or null when it is all within reach (or unknown). */
+export function reachText(board: Board, fire: Fire): string | null {
+  const f = reachFraction(board, fire);
+  if (f === null || f >= 0.995) return null;
+  return `Only ${Math.round(f * 100)}% of this fire's edge is within reach of ground crews.`;
+}
+
+/** Pacific wall-clock "14:02" for a board minute (the board's clock starts at the wind series' T+0). */
+export function wallClock(board: Board, minute: number): string {
+  return new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", hour: "2-digit", minute: "2-digit", hour12: false }).format(
+    new Date(board.response.startEpochMs + minute * 60_000),
+  );
+}
+
+/** "Started 14:02 · reported 14:11 · first engine 14:24" (only what has happened). */
+export function fireTimeline(board: Board, fire: Fire): string {
+  const fr = board.response.fires.get(fire.id);
+  const parts = [`Started ${wallClock(board, fire.ignitedAt)}`];
+  if (fr) {
+    if (board.minute >= fr.reportAt) {
+      const by = fr.report.by === "camera" ? " by AI camera" : fr.report.by === "field_report" ? " by field report" : "";
+      parts.push(`reported ${wallClock(board, fr.reportAt)}${by}`);
+    } else parts.push("not reported yet");
+    if (fr.firstEngineAt !== null) parts.push(`first engine ${wallClock(board, fr.firstEngineAt)}`);
+    else if (fr.firstArrivalAt !== null) parts.push(`first unit ${wallClock(board, fr.firstArrivalAt)}`);
+  }
+  return parts.join(" · ");
 }
