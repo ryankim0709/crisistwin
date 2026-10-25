@@ -47,7 +47,8 @@ from .scenario_weather import DEFAULT_HOURS, MAX_HOURS, _number, _parse_start, a
 logger = logging.getLogger(__name__)
 
 COLLECTION = "conditions_cache"
-CACHE_SCHEMA = "conditions/2"  # 2: ranked station choice + reanalysis fallback (sim/weather.py)
+CACHE_SCHEMA = "conditions/3"  # 2: ranked station choice + reanalysis fallback; 3: observation QC
+# and RH gap fill (sim/weather.py QC_VERSION obs-qc/1, also in the cache key)
 FORECAST_CACHE_SECONDS = 3600  # a forecast answer older than this is refetched
 SPINUP_HOURS = 48  # observed hours before the window that warm up the 10-h/100-h state
 # Assumption: a station farther than this does not represent the query point. sim/weather.py only
@@ -131,7 +132,9 @@ def _spinup(weather, result: dict, mode: str, start: datetime) -> tuple[list[dic
             return [], shift, info
         rows = _sample_dicts(series.samples)
         info.update(hours_used=len(rows), source="open_meteo_era5 (modelled, reanalysis)",
-                    window_utc=[rows[0]["t_utc"], rows[-1]["t_utc"]] if rows else None)
+                    window_utc=[rows[0]["t_utc"], rows[-1]["t_utc"]] if rows else None,
+                    obs_qc=series.provenance.get("obs_qc"),
+                    qc_warning=weather.qc_warning(series.provenance.get("obs_qc"), "the ERA5 reanalysis spin-up"))
         return rows, shift, info
     if mode == "forecast" or not result.get("station"):
         info["note"] = "No spin-up: the forecast has no earlier hours; lagged classes start from the first day."
@@ -152,7 +155,10 @@ def _spinup(weather, result: dict, mode: str, start: datetime) -> tuple[list[dic
         return [], shift, info
     rows = _sample_dicts(series.samples)
     info.update(hours_used=len(rows), source=f"{station.source} {station.id}",
-                window_utc=[rows[0]["t_utc"], rows[-1]["t_utc"]] if rows else None)
+                window_utc=[rows[0]["t_utc"], rows[-1]["t_utc"]] if rows else None,
+                obs_qc=series.provenance.get("obs_qc"),
+                qc_warning=weather.qc_warning(series.provenance.get("obs_qc"),
+                                              f"{station.id} spin-up hours (before the window)"))
     return rows, shift, info
 
 
@@ -197,6 +203,7 @@ def build_conditions(params: dict) -> dict:
             "gust_ms": s.get("gust_ms"),
             "temp_c": s.get("temp_c"),
             "rh_pct": s.get("rh_pct"),
+            "rh_from": s.get("rh_from"),
             "n_obs": s.get("n_obs"),
             "moisture": m["moisture"],
             "fine_fuel": m["fine_fuel"],
@@ -221,6 +228,7 @@ def build_conditions(params: dict) -> dict:
             "wind_from_deg": "degrees true, the bearing the wind blows FROM",
             "gust_ms": "m/s as reported, not height-converted",
             "temp_c": "degC", "rh_pct": "percent",
+            "rh_from": "station id when rh_pct was filled from that neighbour's dew point after QC, else null",
             "moisture": "fraction of oven-dry weight (0.06 = 6 %), keys as rothermel.ts FuelMoisture",
             "fine_fuel": "percent, Rothermel 1983 table lookups",
             "dead_lag_pct": "percent",
@@ -228,7 +236,7 @@ def build_conditions(params: dict) -> dict:
         "station": result.get("station"),
         "source": result.get("source"),
         "candidates": result.get("candidates", []),
-        "warnings": result.get("warnings", []),
+        "warnings": result.get("warnings", []) + ([spin_info["qc_warning"]] if spin_info.get("qc_warning") else []),
         "height_conversion": result.get("height_conversion"),
         "site": {"aspect": site.aspect, "slope_pct": site.slope_pct, "shading": site.shading,
                  "elevation_band": site.elevation_band, "night_inversion": site.night_inversion,
@@ -368,7 +376,7 @@ def _parse(q, weather, fm) -> tuple[dict | None, Response | None]:
 
 
 def _cache_key(p: dict, fm, weather) -> str:
-    parts = [fm.MODEL_VERSION, weather.SELECTION_VERSION, f"{p['lon']:.4f},{p['lat']:.4f}", _iso(p["start"]),
+    parts = [fm.MODEL_VERSION, weather.SELECTION_VERSION, weather.QC_VERSION, f"{p['lon']:.4f},{p['lat']:.4f}", _iso(p["start"]),
              str(p["hours"]), p["mode"], f"st={(p.get('station') or '').upper()}"]
     if p["mode"] == "climatology_percentile":
         parts += [f"p{p['percentile']:g}", "s{:g},{:g}".format(*p["sector"])]
