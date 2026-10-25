@@ -32,11 +32,13 @@
  *
  * Suppression, applied at whole board minutes (so a run does not depend on the clock's tick):
  * - Direct attack: a ground unit on scene for direct attack (no attack line) that is working
- *   (response/reach.ts: not out of reach, past its hike in) puts out burning EDGE cells of its
- *   fire (burning cells facing unburned ground the solver can spread into), nearest first from
- *   where it last worked, so it works along the edge. Engines (hose, or their crew on foot)
- *   work within their reach radius of where they parked (response/reach.ts: hose lay, crew
- *   within ENGINE_CREW_MAX_HIKE_M of its engine). Hand crews and dozers build progressive line
+ *   (response/reach.ts: not out of reach, past its hike in) puts out its fire's ADVANCING EDGE
+ *   (activeEdgeCells: burned cells next to unburned ground the forecast burns later, flaming or
+ *   not: the front is between the cells), nearest first from where it last worked, so it works
+ *   along the edge. Engines work within hose reach of where they parked; with nothing they hold
+ *   left there, the crew goes on foot with hand tools (reach.ts hand_line: PMS 465 p.39 rate,
+ *   hand-tool limit, within ENGINE_CREW_MAX_HIKE_M of the engine, walking at Tobler's pace), and
+ *   the pump is idle (boardResponse.usesWater). Hand crews and dozers build progressive line
  *   (NWCG Fireline Handbook PMS 410-1, line construction: the crew or dozer advances along the
  *   edge from its anchor, the line behind it is its access): they are not tied to where they
  *   parked; a cell next to the last one they worked (PROGRESSIVE_STEP_CELLS) is part of building
@@ -46,13 +48,16 @@
  *   It earns line metres at its sourced production rate on the fire's tactic
  *   (boardResponse.tacticLineRate: Broyles 2011 hand crews, PMS 465 p.164 engines, PMS 465 p.39
  *   engine crews on foot, PMS 465 p.140 dozers) and a cell costs the edge it secures: its open
- *   cell faces x g x pi/4 (fireField.ts LATTICE_PERIMETER_TO_SMOOTH, the board's perimeter
- *   measure), so the line built and the edge put out are the same metres the containment race
- *   counts. A cell is workable only where its flame is within what the unit holds: Byram (1959)
- *   L = L_head (F / R_head)^0.46 (fire/spread.ts BYRAM_FLAME_EXPONENT; intensity is proportional
- *   to the spread rate normal to the front, F above, and the solver's head flame L_head at
- *   R_head), against the Hauling chart (PMS 465 p.12: hand tools 4 ft, engines and
- *   dozers 8 ft; an engine crew on foot holds as hand tools) and the cell does not torch or crown.
+ *   faces toward that ground (at least one) x g x pi/4 (fireField.ts LATTICE_PERIMETER_TO_SMOOTH,
+ *   the board's perimeter measure). A cell is workable only where its flame is within what the
+ *   unit holds: Byram (1959) L = L_head (R / R_head)^0.46 (fire/spread.ts BYRAM_FLAME_EXPONENT;
+ *   intensity is proportional to the spread rate, R the front's rate toward each unburned
+ *   neighbour and, while the cell flames, its normal speed F above; L_head the solver's head flame
+ *   at R_head), against the Hauling chart (PMS 465 p.12: hand tools 4 ft, engines and dozers 8 ft;
+ *   an engine crew on foot holds as hand tools) and the cell does not torch or crown. On a
+ *   structure attack (head on developed ground) engines with water work developed cells with no
+ *   flame limit (the response/containment.ts structure ASSUMPTION) and crews and dozers keep to
+ *   the wildland edge at their direct-attack rate.
  *   Only the direct, flank and structure tactics work the edge (parallel and indirect line is
  *   built away from it and holds by the containment race and attack lines).
  * - What a knocked-down cell does to the fire: it spreads no further (inert in the solver,
@@ -66,12 +71,13 @@
  *   Hand crews walk the black as above. The rest burns out on its own.
  * - Held edge (`heldEdge`, the board's containment share for edge tactics): of the fire's open
  *   edge (cell faces between its burned cells and unburned ground that can burn, the perimeter
- *   measure of fireField.ts), the faces the fire will not cross: the solver's forecast (with
- *   every attack line and knocked-down edge it has) never burns the ground beyond within its
- *   lookahead, or the burned cell was put out since that forecast (until the next re-solve, at
- *   most KNOCKDOWN_RESOLVE_MINUTES later). So line counts once it holds in the fire model, and
- *   line the fire outflanks or crosses stops counting. Off the board's edge: held only where the
- *   cell was put out.
+ *   measure of fireField.ts), the faces where line holds: the burned cell was put out or the
+ *   ground beyond is built line (around knocked-down edge, or an attack line), and the solver's
+ *   forecast (which has all of it) never burns that ground within its lookahead; or the cell was
+ *   put out since that forecast (until the next re-solve, at most KNOCKDOWN_RESOLVE_MINUTES
+ *   later). So line counts once it holds in the fire model, line the fire outflanks or crosses
+ *   stops counting, and a flank that has merely stalled is not line. Off the board's edge: held
+ *   only where the cell was put out.
  *
  * Units: minutes are board minutes; distances ground metres; flame feet; grid coordinates
  * column x east, row y south.
@@ -79,9 +85,17 @@
 
 import { FUEL_MODELS, SAV_DEAD_100H, SAV_DEAD_10H } from "../fire/fuelModels";
 import { lonLatToMercator, type LandscapeGrid } from "../fire/landscape";
-import { BYRAM_FLAME_EXPONENT } from "../fire/spread";
+import { BYRAM_FLAME_EXPONENT, DEVELOPED_FUEL_CODE } from "../fire/spread";
 import type { LonLat } from "../live/types";
-import { DOZER_MAX_SLOPE_PCT, DOZER_MAX_WALK_MINUTES, HAND_CREW_MAX_HIKE_MINUTES, dozerWalkMinutes, hikeMinutes } from "../response/reach";
+import {
+  DOZER_MAX_SLOPE_PCT,
+  DOZER_MAX_WALK_MINUTES,
+  ENGINE_CREW_MAX_HIKE_M,
+  HAND_CREW_MAX_HIKE_MINUTES,
+  dozerWalkMinutes,
+  engineCrewHandLineMPerMin,
+  hikeMinutes,
+} from "../response/reach";
 import { tacticLineRate } from "./boardResponse";
 import { LATTICE_PERIMETER_TO_SMOOTH, countAtMost, type FireSolveResult } from "./fireField";
 import { lineKey, logEvent, type Board, type Fire, type Team } from "./model";
@@ -129,9 +143,11 @@ export interface UnitCellWork {
   targetCostM: number;
   /** Board minute it last worked. */
   minute: number;
-  /** Progressive units: cell it is walking to (-1 = none) and the walk minutes still to go (no line is built meanwhile). */
+  /** Units on foot: cell it is walking to (-1 = none) and the walk minutes still to go (no line is built meanwhile). */
   walkTo?: number;
   walkLeftMin?: number;
+  /** An engine whose crew works on foot this minute (nothing it holds within hose reach): its pump is idle. */
+  onFoot?: boolean;
 }
 
 /**
@@ -361,21 +377,59 @@ export function workHoldsFeet(team: Team): number {
   return holdsFlameFeet(team.kind);
 }
 
-/** Faces of `cell` toward unburned (at `minute`) ground the solver can spread into. */
-function openFaces(board: Board, cell: number, minute: number): number {
-  const field = board.solver.field!;
-  const { width, height } = board.env.landscape;
-  const x = cell % width;
-  const y = (cell - x) / width;
-  let n = 0;
-  for (let k = 0; k < 4; k++) {
-    const nx = k === 0 ? x + 1 : k === 1 ? x - 1 : x;
-    const ny = k === 2 ? y + 1 : k === 3 ? y - 1 : y;
-    if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
-    const m = ny * width + nx;
-    if (field.behaviour.headRateMetersPerMinute[m] > 0 && !(field.arrivalMinutes[m] <= minute)) n++;
+/**
+ * The fire's advancing edge at `minute` (solver source `s`): its burned cells, not put out and not
+ * torching or crowning, next to (8-neighbours) unburned ground the solver's forecast burns later
+ * (the front is between the two cells: still fire, whether or not the cell's own fuel is still
+ * flaming, which is why the burned-out cells of a creeping flank count). Per cell: its open faces
+ * toward that ground (4-neighbours, the perimeter measure; at least one is charged), and the
+ * flame the front has there, ft: Byram (1959) L = L_head (R / R_head)^0.46 (frontFlameFeet) with R
+ * the front's rate toward each such neighbour, distance / (a_m - a_c) (capped at the head rate),
+ * the largest over them, and the cell's own front flame while it burns.
+ */
+export function activeEdgeCells(board: Board, s: number, minute: number): { c: number; x: number; y: number; flameFt: number; faces: number }[] {
+  const field = board.solver.field;
+  if (!field) return [];
+  const grid = board.env.landscape;
+  const { width, height } = grid;
+  const g = grid.groundCellSizeMeters;
+  const st = board.suppression;
+  const arrival = field.arrivalMinutes;
+  const b = field.behaviour;
+  const cells = field.cellsBySource[s];
+  const end = countAtMost(field.arrivalBySource[s], minute);
+  const out: { c: number; x: number; y: number; flameFt: number; faces: number }[] = [];
+  for (let i = 0; i < end; i++) {
+    const c = cells[i];
+    if (st.extinguishedAt[c] <= minute || b.crownType[c] !== 0) continue;
+    const x = c % width;
+    const y = (c - x) / width;
+    const head = b.headRateMetersPerMinute[c];
+    let faces = 0;
+    let advancing = false;
+    let flame = 0;
+    // 8-neighbours: the solver burns into (or through a too-weak built line) from adjacent cells,
+    // diagonals included (fire/spread.ts ControlLines); its longer steps never cross a built line.
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+        const m = ny * width + nx;
+        if (!(b.headRateMetersPerMinute[m] > 0) || arrival[m] <= minute || !(arrival[m] <= field.horizonMinutes)) continue;
+        advancing = true;
+        if (dx === 0 || dy === 0) faces++;
+        const rate = (g * Math.hypot(dx, dy)) / Math.max(1e-6, arrival[m] - arrival[c]);
+        const f = head > 0 ? b.headFlameFeet[c] * Math.pow(Math.min(1, rate / head), BYRAM_FLAME_EXPONENT) : b.headFlameFeet[c];
+        if (f > flame) flame = f;
+      }
+    }
+    if (!advancing) continue;
+    if (minute < arrival[c] + st.burnMinutes[c]) flame = Math.max(flame, frontFlameFeet(field, grid, c));
+    out.push({ c, x, y, flameFt: flame, faces });
   }
-  return n;
+  return out;
 }
 
 function statsOf(board: Board, fireId: string): FireSuppressionStats {
@@ -456,15 +510,19 @@ export function suppressionTick(board: Board, minute: number): void {
     if (!kind || !fr) continue;
     const teams = workersOf(board, fire, minute);
     if (teams.length === 0) continue;
-    const burning = burningCellsOf(board, s, minute);
-    // Candidate cells: the burning edge (direct; with its outward flame and crowning), or every burning cell (mop-up).
-    const cand: { c: number; x: number; y: number; flameFt: number }[] = [];
-    for (const c of burning) {
-      if (kind === "direct" && (openFaces(board, c, minute) === 0 || field.behaviour.crownType[c] !== 0)) continue;
-      const x = c % grid.width;
-      cand.push({ c, x, y: (c - x) / grid.width, flameFt: kind === "direct" ? frontFlameFeet(field, grid, c) : 0 });
-    }
+    // Candidate cells: the advancing edge (direct; with its flame, never a torching or crowning cell), or every burning cell (mop-up).
+    const cand: { c: number; x: number; y: number; flameFt: number; faces: number }[] =
+      kind === "direct"
+        ? activeEdgeCells(board, s, minute)
+        : burningCellsOf(board, s, minute).map((c) => {
+            const x = c % grid.width;
+            return { c, x, y: (c - x) / grid.width, flameFt: 0, faces: 0 };
+          });
     const tactic = kind === "mopup" ? "direct" : fr.tactic;
+    // Structure attack (the head on developed ground): engines with water work developed cells with no
+    // Hauling-chart limit (the response/containment.ts structure ASSUMPTION); crews and dozers do not
+    // work structures (buildsOn) but keep cutting line on the wildland edge at their direct-attack rate.
+    const structureAttack = kind === "direct" && fr.tactic === "structure";
     for (const team of teams) {
       working.add(team.id);
       let w = st.units.get(team.id);
@@ -474,34 +532,20 @@ export function suppressionTick(board: Board, minute: number): void {
       }
       w.minute = minute;
       let workedMin = Math.max(0, Math.min(1, minute - Math.max(minute - 1, team.workStartAt ?? Number.NEGATIVE_INFINITY)));
-      const progressive = worksAlongEdge(team);
-      if (progressive && (w.walkLeftMin ?? 0) > 0) {
-        // Walking to the next stretch of edge (no line built meanwhile).
-        const walked = Math.min(workedMin, w.walkLeftMin!);
-        w.walkLeftMin! -= walked;
-        workedMin -= walked;
-        if (w.walkLeftMin! > 1e-9) continue;
-      }
-      const rate = tacticLineRate(board, fire, [team], tactic);
-      if (rate <= 0 || workedMin <= 0) continue;
-      w.budgetM += rate * workedMin;
-      const holds = workHoldsFeet(team);
       const home = gridXY(grid, team.position);
-      const reachCells = team.reachM / g;
-      const reach2 = reachCells * reachCells;
       const dozer = team.kind === "dozer_t2";
-      for (;;) {
-        // Where it stands: the cell it walked to, else the last cell it put out, else where it parked.
-        const last = progressive && (w.walkTo ?? -1) >= 0 ? w.walkTo! : w.trail.length ? w.trail[w.trail.length - 1] : -1;
-        const from = last >= 0 ? { x: last % grid.width, y: Math.floor(last / grid.width) } : home;
+      const engine = team.kind === "engine_t3" || team.kind === "engine_t1";
+      // Nearest workable candidate from `from` (within `bound2` cells^2 of where it parked, holding `holdsFt`), or -1.
+      const nearest = (from: { x: number; y: number }, bound2: number, holdsFt: number, water: boolean): { i: number; d2: number } => {
         let best = -1;
         let bestD = Infinity;
         for (let i = 0; i < cand.length; i++) {
           const q = cand[i];
           if (st.extinguishedAt[q.c] <= minute) continue;
-          if (kind === "direct" && q.flameFt > holds) continue;
-          // Engines work within reach of where they parked; hand crews and dozers anywhere on the edge (progressive line).
-          if (!progressive && (q.x - home.x) ** 2 + (q.y - home.y) ** 2 > reach2) continue;
+          const structure = structureAttack && grid.fuelCodes[q.c] === DEVELOPED_FUEL_CODE;
+          if (structure && !water) continue;
+          if (kind === "direct" && !structure && q.flameFt > holdsFt) continue;
+          if ((q.x - home.x) ** 2 + (q.y - home.y) ** 2 > bound2) continue;
           // PMS 465 p.140: dozers work up to DOZER_MAX_SLOPE_PCT.
           if (dozer && grid.slopeTangent[q.c] * 100 > DOZER_MAX_SLOPE_PCT) continue;
           const d = (q.x - from.x) ** 2 + (q.y - from.y) ** 2;
@@ -510,6 +554,42 @@ export function suppressionTick(board: Board, minute: number): void {
             best = i;
           }
         }
+        return { i: best, d2: bestD };
+      };
+      // How it works this minute: hand crews and dozers progressive line along the whole edge; an engine
+      // within reach of where it parked, its crew on foot (PMS 465 p.39 hand line, hand-tool limit,
+      // ENGINE_CREW_MAX_HIKE_M of its engine, response/reach.ts) once nothing it holds is left within hose reach.
+      const progressive = worksAlongEdge(team);
+      const hoseReach2 = (team.reachM / g) ** 2;
+      const onFootHoldsFt = holdsFlameFeet("hand_crew_t1");
+      const footReach2 = (ENGINE_CREW_MAX_HIKE_M / g) ** 2;
+      let onFoot = false;
+      if (engine && team.workMode === "hose" && kind === "direct") {
+        const walking = w.onFoot === true && (w.walkLeftMin ?? 0) > 0;
+        onFoot = walking || nearest(home, hoseReach2, workHoldsFeet(team), true).i < 0;
+      }
+      w.onFoot = onFoot;
+      const walks = progressive || onFoot || (engine && team.workMode === "hand_line");
+      if (walks && (w.walkLeftMin ?? 0) > 0) {
+        // Walking to the next stretch of edge (no line built meanwhile).
+        const walked = Math.min(workedMin, w.walkLeftMin!);
+        w.walkLeftMin! -= walked;
+        workedMin -= walked;
+        if (w.walkLeftMin! > 1e-9) continue;
+      }
+      const rate = onFoot
+        ? engineCrewHandLineMPerMin(team.kind, board.env.spread.ground.fuelCodeAt(fire.origin))
+        : tacticLineRate(board, fire, [team], structureAttack && !engine ? "direct" : tactic);
+      if (rate <= 0 || workedMin <= 0) continue;
+      w.budgetM += rate * workedMin;
+      const holds = onFoot ? onFootHoldsFt : workHoldsFeet(team);
+      const bound2 = progressive ? Number.POSITIVE_INFINITY : onFoot ? footReach2 : hoseReach2;
+      const reach2 = hoseReach2;
+      for (;;) {
+        // Where it stands: the cell it walked to, else the last cell it put out, else where it parked.
+        const last = walks && (w.walkTo ?? -1) >= 0 ? w.walkTo! : w.trail.length ? w.trail[w.trail.length - 1] : -1;
+        const from = last >= 0 ? { x: last % grid.width, y: Math.floor(last / grid.width) } : home;
+        const { i: best, d2: bestD } = nearest(from, bound2, holds, engine && !onFoot && team.workMode === "hose");
         if (best < 0) {
           // Nothing within reach it can work: no line is banked.
           w.target = -1;
@@ -518,14 +598,15 @@ export function suppressionTick(board: Board, minute: number): void {
           break;
         }
         const c = cand[best].c;
-        const cost = kind === "direct" ? Math.max(1, openFaces(board, c, minute)) * g * LATTICE_PERIMETER_TO_SMOOTH : MOPUP_CELL_WIDTHS * g;
+        const cost = kind === "direct" ? Math.max(1, cand[best].faces) * g * LATTICE_PERIMETER_TO_SMOOTH : MOPUP_CELL_WIDTHS * g;
         w.target = c;
         w.targetCostM = cost;
-        if (progressive) {
-          // The first cell within its reach of where it parked is where its hike in ended (workStartAt); later
-          // cells beyond the next stretch of its line are walked to first.
+        if (walks) {
+          // A hand crew's or dozer's first cell within its reach of where it parked is where its hike in ended
+          // (workStartAt); later cells beyond the next stretch of its line, and an engine crew's cells on foot,
+          // are walked to first.
           const hopCells = Math.sqrt(bestD);
-          const firstInReach = last < 0 && bestD <= reach2;
+          const firstInReach = last < 0 && !onFoot && bestD <= reach2;
           if (!firstInReach && hopCells > PROGRESSIVE_STEP_CELLS) {
             const fromCell = last >= 0 ? last : Math.round(home.y) * grid.width + Math.round(home.x);
             const rise = fromCell >= 0 && fromCell < grid.elevationMeters.length ? grid.elevationMeters[c] - grid.elevationMeters[fromCell] : 0;
@@ -644,6 +725,12 @@ export function heldEdge(board: Board, fire: Fire): HeldEdge | null {
   // count as held until the forecast says otherwise.
   const stale = field.lineKey !== lineKey(board);
   const pending = new Set(st.inert.slice(st.committedInert));
+  // Attack-line cells built by now (model.ts AttackLine raster): line the forecast already includes.
+  const lineCells = new Set<number>();
+  for (const line of board.lines) {
+    const { cells: lc } = line.raster;
+    for (let k = 0; k < lc.length; k++) if (line.builtAt[k] <= t) lineCells.add(lc[k]);
+  }
   let open = 0;
   let held = 0;
   for (let i = 0; i < n; i++) {
@@ -664,8 +751,10 @@ export function heldEdge(board: Board, fire: Fire): HeldEdge | null {
       const m = ny * width + nx;
       if (!(passable[m] > 0) || arrival[m] <= t) continue;
       open++;
-      // The forecast never burns the ground beyond (within its lookahead), or knocked down and not yet in the forecast.
-      if (out || !(arrival[m] <= field.horizonMinutes)) held++;
+      // Line there that the forecast does not cross (the cell put out, or built line beyond it), or knocked
+      // down and not yet in the forecast. A face the forecast merely never burns (a stalled flank, fuel
+      // too wet for now) is not line and does not count.
+      if (out || (!(arrival[m] <= field.horizonMinutes) && (put || st.blocked[m] || lineCells.has(m)))) held++;
     }
   }
   const metersPerFace = board.env.landscape.groundCellSizeMeters * LATTICE_PERIMETER_TO_SMOOTH;

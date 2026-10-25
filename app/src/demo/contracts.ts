@@ -328,8 +328,21 @@ export interface FireObservation {
   perimeter_m: number;
   perimeter_growth_m_per_min: number;
   line_m: number;
-  /** Line built over current perimeter, percent (0-100). */
+  /**
+   * Line built over current perimeter, percent (0-100). Direct, flank and structure attack: the
+   * share of the open edge that holds in the fire model (held_edge_m), so it is partial while
+   * crews work the flanks and drops where the fire outflanks or crosses the line. Parallel and
+   * indirect: the line built so far over the line the tactic needs.
+   */
   containment_pct: number;
+  /**
+   * Of the open edge (perimeter_m), metres held by line now: knocked-down edge and built line
+   * (around it, or attack lines) that the solver's forecast does not cross (demo/suppression.ts
+   * heldEdge). A flank that has only stalled is not counted. Any tactic. Simulated.
+   */
+  held_edge_m: number;
+  /** Units that put out edge (or mopped up), or walked to their next stretch of it, in the last board minute. */
+  crews_working: string[];
   /**
    * The fire's ground by cell state now (demo/fireState.ts), hectares; the three add up to area_ha
    * (up to rounding). burning: cells the fire is in now (cell resolution: the flaming front fills

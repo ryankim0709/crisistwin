@@ -153,9 +153,14 @@ the line, is not contained until the wind drops: send more crews early, because 
 is far cheaper to catch, and do not waste crews on a fire nobody can hold. Crews drive the road \
 network after turnout; hand crews and dozers take 30 to 60 minutes to mobilise.
 - Each fire reports burning_ha (on fire now), burned_out_ha (fuel consumed) and extinguished_ha \
-(put out by crews). Crews on direct attack put out burning edge within reach at their line rate \
-when its flame is within what they hold; that edge stops advancing. A fire is out only when \
-burning_ha reaches 0, so keep a mop-up detail until then.
+(put out by crews). Crews on direct attack put out the advancing edge at their line rate \
+when its flame is within what they hold; that edge stops advancing. Engines work within hose \
+reach of where they park (their crew goes on foot with hand tools when nothing is left in reach); \
+hand crews and dozers work progressively along the whole edge. On direct attack containment_pct \
+is held_edge_m over perimeter_m: the edge the fire model shows holding, so it rises as the \
+flanks are put out and falls where the fire gets around the line; the fire is contained when \
+none of its edge is still advancing. crews_working lists the units putting edge out now. A \
+fire is out only when burning_ha reaches 0, so keep a mop-up detail until then.
 - There is NO automatic dispatch or ordering on this board (response.auto_dispatch and \
 auto_escalate are false): no run cards, no automatic aircraft, no mutual-aid or extended-attack \
 orders, no station move-ups. Nothing is sent, ordered or evacuated unless you (or the human \

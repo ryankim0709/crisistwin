@@ -435,7 +435,7 @@ function poolAllows(board: Board, seed: UnitSeed): boolean {
  * Returns null, or why it cannot go.
  */
 export function dispatchTeam(board: Board, team: Team, fire: Fire, actor: BoardEvent["actor"], why = ""): string | null {
-  return dispatch(board, team, fire, fireDest(fire), actor, why);
+  return dispatch(board, team, fire, fireDest(fire, board, team), actor, why);
 }
 
 /**
@@ -1134,7 +1134,7 @@ export function responseTick(board: Board, dt: number, wholeMinute: boolean): vo
       sendHome(board, team);
       continue;
     }
-    if (team.waterGallons !== null && usesWater(team, now)) {
+    if (team.waterGallons !== null && usesWater(team, now, board)) {
       team.waterGallons -= ENGINE_WATER_USE_GPM * dt;
       // step() lands on the minute the tank runs dry (model.ts nextTimedEvent); allow float residue.
       if (team.waterGallons <= 1e-6) {
@@ -1719,7 +1719,8 @@ function edgeOf(board: Board, fire: Fire, fr: FireResponse): LonLat[] {
 
 /**
  * Share of the fire's edge within reach of the ground units on scene (each within its reach
- * radius of where it parked), or null when no ground unit is on scene (unknown: not capped).
+ * radius of where it parked; a hand crew or dozer building progressive line reaches all of it,
+ * suppression.ts worksAlongEdge), or null when no ground unit is on scene (unknown: not capped).
  */
 export function reachFraction(board: Board, fire: Fire, fr: FireResponse | null = board.response.fires.get(fire.id) ?? null): number | null {
   if (!fr) return null;
@@ -1851,7 +1852,9 @@ export function arriveOnScene(board: Board, team: Team, fire: Fire): void {
  * working a line (response/units.ts), so an engine whose crew is on foot building hand line, or
  * that is parked out of reach or holding its road (indirect), does not drain its tank.
  */
-export function usesWater(team: Team, at: number): boolean {
+export function usesWater(team: Team, at: number, board?: Board): boolean {
+  // Its crew on foot (suppression.ts: nothing it holds within hose reach): the pump is idle.
+  if (board?.suppression.units.get(team.id)?.onFoot) return false;
   return (
     team.status === "on_scene" &&
     team.fireId !== null &&

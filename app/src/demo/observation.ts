@@ -87,6 +87,7 @@ import {
 } from "./model";
 import { LOOKAHEAD_MINUTES } from "./fireField";
 import { fireStateAreas } from "./fireState";
+import { heldEdge, unitsWorking } from "./suppression";
 import { ORDER_COMPLIANCE, accessClassOf, holdsFlameFeet, kindLabel } from "./realism";
 import { departmentStatus, dispatchable, fireEdgeSample, idleOnSceneReason, initialAttackRecommendation, isReported, reachFraction, unitAccessText } from "./boardResponse";
 import { TANK_GALLONS } from "../response/units";
@@ -582,6 +583,8 @@ export function buildObservation(
       perimeter_growth_m_per_min: round1(perimeterGrowth(fire)),
       line_m: Math.round(fire.lineM),
       containment_pct: containmentPct(fire),
+      held_edge_m: Math.round(heldEdge(board, fire)?.heldM ?? 0),
+      crews_working: unitsWorking(board, fire.id),
       burning_ha: round1(cells.burningHa),
       burned_out_ha: round1(cells.burnedOutHa),
       extinguished_ha: round1(cells.extinguishedHa),

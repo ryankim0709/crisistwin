@@ -40,6 +40,8 @@ import {
   wallClock,
 } from "./boardResponse";
 import { TACTIC_LABEL } from "../response/containment";
+import { fireStateAreas } from "./fireState";
+import { unitsWorking } from "./suppression";
 import { computeStrategyOptions, predictionText, unitsNeededText, type StrategyOption } from "./strategyOptions";
 import { runCard } from "../response/runCards";
 import { ORDER_COMPLIANCE, holdsFlameFeet, kindLabel } from "./realism";
@@ -266,6 +268,11 @@ function FireDetail({ board, id, actions }: { board: Board; id: string; actions:
           {
             label: "Line built",
             value: `${nf(Math.min(fire.lineM, perimeter))} m (${Math.min(100, Math.round((fire.lineM / Math.max(1, perimeter)) * 100))}%)`,
+          },
+          {
+            // Simulated cell states (demo/fireState.ts) and the units that put edge out this minute (demo/suppression.ts).
+            label: "Burning now",
+            value: `${fireStateAreas(board, fire).burningHa.toFixed(1)} ha (put out ${fireStateAreas(board, fire).extinguishedHa.toFixed(1)} ha; ${unitsWorking(board, fire.id).length} units working the edge)`,
           },
           {
             label: "Contained in",

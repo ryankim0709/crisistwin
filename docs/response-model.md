@@ -339,12 +339,27 @@ unknown; it is taken to park at its target and labelled "road access not known".
   target at the same road node, whatever the origin. Failing that, the class's last park point
   for any target of the same fire is used as an estimate (positions and the fire's anchor move
   every replan).
+- **Direct-attack work points**: the first unit sent to a fire drives to its anchor (the heel);
+  each further one to its own point of the fire's open edge, the edge-sample point farthest from
+  the other direct-attack units' work points, 100 m outside the edge (`directWorkPoint`). Each
+  leg stops at the road node nearest that unit's point, so units spread over the fire's road
+  accesses instead of all parking at one node. A unit on scene with no open edge within reach
+  moves to the open-edge point nearest it when that is at least 300 m away, at most once per
+  10 min (`repositionIdleUnits`; ASSUMPTIONS, logged as a board move, the fire it works stays
+  the commander's order).
 - **Water**: an engine drains its tank (`ENGINE_WATER_USE_GPM`) only while it works with hose
   (`usesWater`); an engine whose crew is on foot, or that is holding its road, does not.
 - **Road data extent**: the drill's road graph is the package's box (fire reach plus 3 km,
-  `livecore/package.py area_box`). A later Studio fire outside that box gets road legs that stop
+  `livecore/package.py area_box`). A later Studio fire outside that box got road legs that stop
   at the box edge, however close real roads are (Berkeley Hills drill: box to 37.900° N; F2 of
-  publish sf_7a09abf8e4f0 at 37.913° N parks 1.4-1.7 km away while OSM has tracks within 150 m).
+  publish sf_7a09abf8e4f0 at 37.913° N parked every unit 1.4-1.7 km away while OSM has a track
+  143 m from it). `crew_routes` now continues such a leg (ending more than 150 m from its
+  target) on the cached board dispatch area the diorama draws (`api/crew_extension.py`): the
+  drill leg is cut at its last node shared with the area, and `reach_route` runs on the area
+  with the class's R01-R12 rules on its OSM tags. F2: Type 3 engines reach 143 m from the
+  ignition (was 1,513 m), Type 1 engines stop 658 m short at a bridge with no posted weight
+  (R09). Only areas already cached are used (no Overpass call), and road closures are not
+  applied on the area stretch (`road_graph: "drill+board_area"` marks such a leg).
 - **UI**: the fire panel shows "E12 parked 600 m from F3 — hiking in to build hand line, ~14 min"
   per unit, and "Only 40% of this fire's edge is within reach of ground crews" when below 100%.
   The observation adds `crews[].parked_m/work_mode/working_in_min`.
@@ -366,7 +381,20 @@ growth P = k·t and line rate R from arrival t_a, it reduces to t* = R·t_a / (R
 | parallel | Above that limit, at most 11 ft, and finishable | Perimeter + 2π × 20 m (Steiner offset; offset **ASSUMPTION**) | 11 ft (**ASSUMPTION**: the 8-11 ft band held only with burnout) | Crews × Broyles (2011) Table 2 indirect/direct ratio for the fuel (grass 9.5/17, chaparral 5/6.6, brush 4.9/16.5, timber 6.9/10.5); engines and dozers × 1 (**ASSUMPTION**) |
 | indirect | As parallel, but a parallel line cannot be finished | The solver perimeter 30, 60, 90 or 120 min ahead (first finishable; **ASSUMPTION** leads) | 11 ft, tested when the fire reaches the line; an unfinished line is breached | As parallel |
 | structure | Head on developed ground (91) | Perimeter now | No Hauling test (**ASSUMPTION**, as `dispatch/fireAttack.ts`) | Engines at their grass rate (Anderson model 1) |
-| flank | Above 11 ft or crowning | Flank line, capped at the perimeter | Never contains | As direct |
+| flank | Above 11 ft or crowning | Flank line, capped at the perimeter | No race; contained only when the fire model holds its whole edge (below) | As direct |
+
+**Edge tactics (direct, flank, structure): the line is the edge that holds.** Their line is not a
+tally of metres: `fire.lineM` (and `containment_pct`) is the share of the open edge that holds in
+the fire model now (`suppression.ts` `heldEdge`, see "Cell fire state and suppression") times the
+line needed. It is partial while crews take the flanks, grows as they put the edge out, and drops
+where the fire outflanks or crosses the line. Ground-only containment is the solver's rule
+(`model.ts` `heldByLine`): with the knocked-down edge and every attack line in the field, the
+forecast shows no further spread. The race and its seeded holding test still decide when
+aircraft line closes the gap (held + aircraft line ≥ needed) and for parallel and indirect line.
+Before this, direct-attack line accrued at the units' rate whether or not they had edge to work,
+capped at the share of the edge within reach of where they parked (`reachFraction`): on a 13 ha
+grass fire 24 engines sat at one park point for 90 min with that share at 0.5, and the fire was
+called contained only because of the perimeter bug below.
 
 - **Holding test** (`holdingTest`): when the line is complete, the flame it meets is the head
   flame × a lognormal factor (log-SD 0.3, **ASSUMPTION**). That is of the order of the ±35% band
@@ -380,6 +408,17 @@ growth P = k·t and line rate R from arrival t_a, it reduces to t* = R·t_a / (R
   Everything else is released, and pending orders are cancelled.
 - **Out**: a contained fire is out once none of its cells is still burning (burned out, or put out
   by mop-up), and no sooner than `MOPUP_MINUTES` (10, **ASSUMPTION**, board rule) after containment.
+- **Stopped on its own**: a fire with no line and no knocked-down edge is held (contained, then
+  out by the rule above) once the forecast shows no further spread and none of its cells is still
+  burning: its fuel ran out, or the dead fuel is wetter than the fuel model's moisture of
+  extinction (Rothermel 1972: zero spread; GR2's is 15%, which the Berkeley Hills series reaches
+  at 1-h moisture 0.15 overnight). Smouldering, which could rekindle it, is not modelled.
+- **Perimeter fix** (`fireField.ts`): the open perimeter closed an edge toward a newly burned cell
+  even when the neighbour had not opened it (it opens one only toward ground that can burn). A
+  resumed solve keeps cells burned under earlier weather, so once moisture passed extinction
+  those cells were impassable and the perimeter went negative (−6,452 m on the current publish's
+  F2 at T+240), which met every line test: F2 was "contained" at 13.8 ha by that bug. The edge is
+  now closed only where it was opened.
 
 ## Cell fire state and suppression
 
@@ -425,17 +464,54 @@ suppression put it out):
 from the edge): each whole board minute, every ground unit on scene for direct attack that is
 working (`response/reach.ts`: in reach, past its hike in) earns line metres at its sourced
 production rate (`tacticLineRate`: Broyles 2011 hand crews, PMS 465 p.164 engines, PMS 465 p.39
-engine crews on foot, PMS 465 p.140 dozers) and spends them putting out burning **edge** cells
-(burning cells facing unburned ground the solver can spread into) within its reach radius of
-where it parked, nearest first from where it last worked, so it works along the edge. A cell
-costs the edge it secures: its open faces × g × π/4 (the board's perimeter measure,
-`fireField.ts` `LATTICE_PERIMETER_TO_SMOOTH`), so the line the containment race counts and the
-edge put out are the same metres. A unit can work a cell only when the flame there is within what
-it holds: Byram (1959) L = L_head (F / R_head)^0.46, with F the normal speed above and the solver's
-head flame, against the Hauling chart (PMS 465 p.12: hand tools 4 ft, engines and dozers 8 ft; an
-engine crew on foot holds as hand tools), and never a torching or crowning cell. So with the head
-too hot, crews still take the flanks. Work is not banked: a unit with nothing workable in reach
-earns nothing that minute.
+engine crews on foot, PMS 465 p.140 dozers) and spends them putting out the fire's **advancing
+edge** (`activeEdgeCells`), nearest first from where it last worked, so it works along the edge.
+The advancing edge is every burned cell, not put out and not torching or crowning, next to
+(8-neighbours: the solver burns into a line from adjacent cells, diagonals included) unburned
+ground the forecast burns later. That includes burned-out cells: the front is between the two
+cells, so it is still fire. A first version took only cells still flaming: on a creeping grass
+flank most of the edge is between cells, so units on scene had nothing to work (24 of 30 idle on
+the current publish's F2) and even a 0.3 ha fire got away. A cell costs the edge it secures: its
+open faces toward that ground (at least one) × g × π/4 (the board's perimeter measure,
+`fireField.ts` `LATTICE_PERIMETER_TO_SMOOTH`). A unit can work a cell only when the flame there is
+within what it holds: Byram (1959) L = L_head (R / R_head)^0.46, with R the front's rate toward each
+unburned neighbour (distance / arrival difference) and, while the cell flames, its own normal
+speed F, against the Hauling chart (PMS 465 p.12: hand tools 4 ft, engines and dozers 8 ft; an
+engine crew on foot holds as hand tools). So with the head too hot, crews still take the flanks,
+and take the head once its flame drops (night, a wind drop). Work is not banked: a unit with
+nothing workable earns nothing that minute.
+
+Where a unit can work:
+
+- **Engines** work within hose reach of where they parked (`response/reach.ts`: Type 3 1,000 ft,
+  Types 1-2 500 ft of 1½-inch hose). With nothing they hold left within hose reach, the crew goes
+  on foot with hand tools (the reach model's own `hand_line` mode: PMS 465 p.39 per-person rate,
+  hand-tool flame limit, within `ENGINE_CREW_MAX_HIKE_M` of the engine), walking to cells beyond
+  the next one at Tobler's pace. The pump is idle meanwhile, so the tank does not drain
+  (`usesWater`).
+- **Hand crews and dozers** build progressive line (NWCG Fireline Handbook, PMS 410-1, line
+  construction: the crew or dozer advances along the edge from its anchor, and the line behind
+  it is its access). They are not tied to where they parked (`worksAlongEdge`; `reachFraction`
+  counts the whole edge as reachable for them). A cell next to the last one worked
+  (`PROGRESSIVE_STEP_CELLS`, 1.5 cell widths: the 8-neighbours) is part of building line (the
+  production rates are measured advancing along the line). A farther one is walked to first:
+  Tobler (1993) for crews (`hikeMinutes`), `DOZER_WALK_KMH` for dozers, at most
+  `HAND_CREW_MAX_HIKE_MINUTES` / `DOZER_MAX_WALK_MINUTES` away. A dozer works no cell steeper than
+  the PMS 465 p.140 table (55%).
+- **Structure attack** (the head on developed ground): engines with water work developed cells
+  with no flame limit (the structure **ASSUMPTION** above). Crews and dozers do not work
+  structures but keep cutting line on the wildland edge at their direct-attack rate. Before, the
+  fire-wide structure tactic stopped all crew and dozer line, on the flanks too.
+
+**Held edge** (`heldEdge`): of the fire's open edge (cell faces between its burned cells and
+unburned ground that can burn, the perimeter measure), the faces where line holds. Either the
+burned cell was put out or the ground beyond is built line (around knocked-down edge, or an
+attack line), and the forecast, which has all of it, never burns that ground within its
+lookahead; or the cell was put out since that forecast (until the next re-solve, at most
+`KNOCKDOWN_RESOLVE_MINUTES` later). A flank that has merely stalled (the forecast never burns
+the ground beyond, but there is no line) does not count. Off the board's edge a face holds only
+where the cell was put out. It is the containment share for edge tactics (`containment_pct`,
+`held_edge_m`) and, in metres, the line the race counts.
 
 A knocked-down cell spreads no further: it is inert in the solver (`fireField.ts` `inertCells`:
 the solver's own path for resumed cells that do not spread, so no spread and no embers from it)
@@ -448,8 +524,8 @@ spread past its line).
 
 **Mop-up**: on a contained fire the units kept for mop-up put out burning cells (interior too)
 within reach at their direct-attack rate, one cell width of line per cell (`MOPUP_CELL_WIDTHS`,
-**ASSUMPTION**: no published mop-up production rate is in the model). The rest burns out on its
-own.
+**ASSUMPTION**: no published mop-up production rate is in the model). Hand crews walk the black
+as on the edge. The rest burns out on its own.
 
 **Closing a fire by hand** puts its burning cells out at that minute.
 
@@ -465,7 +541,9 @@ only on whole minutes, and ground line accrues with the units as they were at ea
 (`accrueContainmentLine`), so neither the draws nor the line depend on how ticks divide a minute.
 
 Observation: `fires[].burning_ha / burned_out_ha / extinguished_ha` (they add to `area_ha`) next
-to `containment_pct`. Map and 3D: `fireCellStates` (per cell, at board.minute),
+to `containment_pct`, `held_edge_m` (edge held by line now, any tactic) and `crews_working` (units that
+put edge out, mopped up or walked to their next stretch in the last board minute). The fire panel
+shows burning and put-out hectares and the units working. Map and 3D: `fireCellStates` (per cell, at board.minute),
 `fireStatePolygons` (MultiPolygon per state), `crewWork` (each unit's work path along the edge,
 progress 0..1 and inward direction, for animation).
 
@@ -487,7 +565,32 @@ At 15 mph (head too hot for direct attack, ember spotting), 12 units from T+60 w
 caught. Cell states at T+138, T+150 and T+240 (5 mph) and T+200 (15 mph, 41 re-solves) are
 identical at clock ticks of 0.37, 1, 2.5 and 7 minutes. Cost on a 786 ha fire: burn durations
 2.9 ms per solve, `fireCellStates` 0.3 ms, `fireStatePolygons` 11.5 ms uncached (cached per field,
-minute and suppression version).
+minute and suppression version). (These figures predate the advancing-edge and progressive-line
+rules below.)
+
+**Measured: fires worn down over time** (scratch harness, offline, Berkeley Hills & Tilden, the
+drill's resource snapshot, seed 1, natural variation on). The backend was saturated, so unit road
+legs were straight lines × the fallback circuity ending at the unit's target, and there were no
+zone routes. The same harness ran the code before and after. Scripted commander: the 6 nearest
+units at the report (+ `delay`), every free unit every 60 min, and 2 engine, 2 crew and 2 dozer
+strike teams once the fire passes 4 ha (state teams arrive about 5 h later). "Held" is
+`heldEdge`.
+
+| Scenario | Before | After |
+| --- | --- | --- |
+| Small: current publish's F2 alone (GR2, observed OKSC1 series), units at its report (T+13) | contained T+25 at 0.3 ha, out T+35 | contained T+31 at 0.3 ha, out T+40 |
+| Medium: the same F2, units at T+120 (9.9 ha then) | "contained" T+241 at 13.8 ha only through the negative perimeter (−6,359 m); 1.0 ha put out | held 55% at T+150, 73% at T+180, 85% at T+210; contained T+241 at 13.1 ha (the edge all held as the series' 1-h moisture reaches GR2's extinction), out T+250; 3.3 ha put out |
+| Medium, constant: F2's point, 7 mph from 229°, dry, units at T+50 | not contained by T+720: 74.6 ha, line capped at 1.6 of 4.1 km | held 61% by T+90, about 50-67% while only engines work, rising once the crews and dozers arrive (T+370); contained T+491 at 14.0 ha, out T+500 |
+| Current publish, 3 fires, units at report + 107 min | F1 out T+127; F2 "contained" T+241 (perimeter bug); F3 out T+369 | F1 out T+135; F3 out T+195; F2 contained T+256 at 13.5 ha, out T+265 |
+| Large: GS2 point (−122.2691, 37.9251), 20 mph from 45°, dry, constant, units at T+35 | 510 ha at T+720, 2.9 ha put out, never contained | 279 ha at T+720, 46.7 ha put out, held 62%, not contained (the head is beyond what any unit holds) |
+| Large with a synthetic evening (scenario input, not a model rule): wind ramps to 5 mph and moisture to "moderate" over T+300-360 | 203 ha at T+1080, not contained | 86 ha at T+1080: held 85% by T+480; the wildland edge is all held, and what is left advancing is developed ground beyond the engines' hose reach (26 cells at T+600, 57 at T+720, all developed). Not contained; 115 ha at T+1440, after the first units are relieved at 16 h (T+995) with no replacements ordered |
+| Large: SH5 point (−122.2378, 37.8655), 15 mph, dry, same evening | 170 ha at T+1080 | 151 ha at T+1080, held about 25%: the advancing edge left is almost all developed ground (192 of 203 cells at T+600) |
+
+Cell states and containment are the same at clock ticks of 0.37, 0.5 and 1 minute (medium
+scenario, every 10 min to T+250). Two limits sit outside suppression. Engines park where their
+road leg ends, one road node per class per target, and do not move along a large fire. And there
+is no structure-fire suppression away from where engines parked. So a fire running through
+developed ground stays uncontained even when its wildland edge is all held.
 
 ## Escalation and resource ordering
 

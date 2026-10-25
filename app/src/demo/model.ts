@@ -28,7 +28,9 @@
  *   (Hauling chart: direct within 4 ft hand tools / 8 ft engines and dozers, parallel or indirect
  *   to 11 ft, flank only above). The fire is contained when the tactic's line covers the
  *   perimeter it must enclose (the solver footprint's edge facing ground that can still burn,
- *   fireField.ts) and passes a seeded holding test; failed initial attack makes an extended-attack
+ *   fireField.ts) and passes a seeded holding test; on direct, flank and structure attack the
+ *   line is the edge that holds in the fire model (suppression.ts heldEdge) and the fire is
+ *   contained when the forecast shows no further spread (heldByLine); failed initial attack makes an extended-attack
  *   stage due (logged; the commander orders mutual-aid and state resources). Units have states
  *   (returning, refilling, resting, out of service). A contained fire stops spreading in the
  *   solver from its containment minute.
@@ -114,6 +116,7 @@ import {
   escalate,
   expectedArrival,
   fireEdgeSample,
+  idleOnSceneReason,
   flowIndex,
   onContained,
   placeOrder,
@@ -2858,7 +2861,7 @@ function nextTimedEvent(board: Board): number {
     if (t.status === "out_of_service") at(t.outOfServiceUntil);
     if (t.status === "on_scene") at(t.workStartAt);
     // boardResponse.responseTick drains water while on scene on a fire.
-    if (usesWater(t, board.minute) && t.waterGallons! > 0) at(board.minute + t.waterGallons! / ENGINE_WATER_USE_GPM);
+    if (usesWater(t, board.minute, board) && t.waterGallons! > 0) at(board.minute + t.waterGallons! / ENGINE_WATER_USE_GPM);
     if (t.status === "returning") at(t.returnRetryAt);
     at(t.rerouteAt);
   }
@@ -2885,8 +2888,11 @@ function heldByLine(board: Board, fire: Fire): number | null {
   const field = board.solver.field;
   const s = field?.sourceIndex.get(fire.id);
   if (!field || s === undefined || field.lineKey !== lineKey(board)) return null;
-  // Line: attack-line cells, or the line around its knocked-down edge (demo/suppression.ts).
-  if (!board.lines.some((l) => l.fireId === fire.id && l.builtM > 0) && !hasKnockdown(board, fire.id)) return null;
+  // Line: attack-line cells, or the line around its knocked-down edge (demo/suppression.ts). With
+  // neither, a fire that has stopped on its own (fuel runs out, or dead fuel wetter than its
+  // moisture of extinction, Rothermel 1972: zero spread) is held only once nothing of it is
+  // still burning: no flaming cell is left to spread or throw embers (smouldering is not modelled).
+  if (!board.lines.some((l) => l.fireId === fire.id && l.builtM > 0) && !hasKnockdown(board, fire.id) && burningCellCount(board, fire) > 0) return null;
   const arrivals = field.arrivalBySource[s];
   const last = arrivals.length ? arrivals[arrivals.length - 1] : Number.NEGATIVE_INFINITY;
   return last <= board.minute ? Math.max(last, field.fromMinute ?? 0) : null;
@@ -3119,9 +3125,96 @@ export function dispatch(board: Board, team: Team, fire: Fire, dest: TripDest, a
   return null;
 }
 
-/** Direct attack: the trip to the fire's anchor (crewTarget). */
-export function fireDest(fire: Fire): TripDest {
-  return { key: fire.id, target: crewTarget(fire), label: fire.id, line: null };
+/**
+ * Direct attack: the trip to the fire's anchor (crewTarget), or with `board` and `team`, to that
+ * unit's own work point on the fire's edge (directWorkPoint), so units spread along the edge and
+ * each drives to the road access nearest its own part of it.
+ */
+export function fireDest(fire: Fire, board?: Board, team?: Team): TripDest {
+  return { key: fire.id, target: board && team ? directWorkPoint(board, fire, team) : crewTarget(fire), label: fire.id, line: null };
+}
+
+/**
+ * ASSUMPTION (a board mechanic, not a sourced figure): a direct-attack unit on scene with no open
+ * edge of its fire within its reach (boardResponse.idleOnSceneReason: the edge it could reach has
+ * burned out or been put out, or it parked out of reach) drives to a new work point on the same
+ * fire's open edge, at most once per this many board minutes. Which fire it works stays the
+ * commander's order; this is the crew moving along its assignment ("anchor, flank and pinch",
+ * NWCG IRPG PMS 461 direct attack), not a new assignment.
+ */
+export const REPOSITION_EVERY_MINUTES = 10;
+/** ASSUMPTION: a new work point closer than this to where the unit stands is not worth the move, metres (about Type 3 hose reach, 305 m). */
+export const REPOSITION_MIN_M = 300;
+
+/** Where each unit last repositioned to (directWorkPoint), and when; per board (not part of the wire state). */
+const repositions = new WeakMap<Board, Map<string, { at: number; to: LonLat }>>();
+
+/** An open-edge point moved ANCHOR_OFFSET_M outward from the ignition, so the work point lies on the unburned side. */
+function outsideEdge(fire: Fire, p: LonLat): LonLat {
+  const [x, y] = toLocal(fire.origin, p);
+  const d = Math.hypot(x, y);
+  return d > 1 ? fromLocal(fire.origin, [x + (x / d) * ANCHOR_OFFSET_M, y + (y / d) * ANCHOR_OFFSET_M]) : p;
+}
+
+/**
+ * A direct-attack unit's own work point on `fire`: the fire's anchor (crewTarget, the heel) for
+ * the first unit there; for each further unit, the point of the fire's open edge (the solver's
+ * edge sample, boardResponse.fireEdgeSample) farthest from the work points of the fire's other
+ * direct-attack units, moved ANCHOR_OFFSET_M outside the edge. Spreads units along the edge so
+ * each one parks at the road access nearest its own stretch (the router stops each leg at the
+ * road node nearest its target). Deterministic: ties go to the earlier sample point.
+ */
+export function directWorkPoint(board: Board, fire: Fire, team: Team): LonLat {
+  const others = board.teams.filter((t) => t !== team && t.fireId === fire.id && t.lineId === null && t.target !== null).map((t) => t.target!);
+  const edge = fireEdgeSample(board, fire);
+  if (others.length === 0 || edge.length === 0) return crewTarget(fire);
+  let best = edge[0];
+  let bestD = -1;
+  for (const p of edge) {
+    let d = Infinity;
+    for (const o of others) d = Math.min(d, distanceM(p, o));
+    if (d > bestD) {
+      bestD = d;
+      best = p;
+    }
+  }
+  return outsideEdge(fire, best);
+}
+
+/**
+ * Direct-attack units standing on scene with no open edge within reach move along their fire
+ * (REPOSITION_EVERY_MINUTES): to the open-edge point nearest where they stand, moved outside the
+ * edge, when that is at least REPOSITION_MIN_M away and not where they last moved to. Units on an
+ * attack line, refilling or hiking in are left alone. Called at whole board minutes (stepOnce).
+ */
+function repositionIdleUnits(board: Board): void {
+  let memo = repositions.get(board);
+  if (!memo) {
+    memo = new Map();
+    repositions.set(board, memo);
+  }
+  for (const team of board.teams) {
+    if (team.status !== "on_scene" || team.lineId !== null || team.fireId === null) continue;
+    if (team.workStartAt !== null && team.workStartAt > board.minute) continue;
+    const fire = board.fires.find((f) => f.id === team.fireId);
+    if (!fire || fire.status !== "burning" || idleOnSceneReason(board, team) === null) continue;
+    const last = memo.get(team.id);
+    if (last && board.minute - last.at < REPOSITION_EVERY_MINUTES) continue;
+    let near: LonLat | null = null;
+    let nearD = Infinity;
+    for (const p of fireEdgeSample(board, fire)) {
+      const d = distanceM(team.position, p);
+      if (d < nearD) {
+        nearD = d;
+        near = p;
+      }
+    }
+    if (!near || nearD < REPOSITION_MIN_M) continue;
+    const to = outsideEdge(fire, near);
+    if (last && distanceM(last.to, to) < REPOSITION_MIN_M) continue;
+    memo.set(team.id, { at: board.minute, to });
+    dispatch(board, team, fire, { key: fire.id, target: to, label: `${fire.id} (moving along its edge, ${Math.round(nearD)} m away)`, line: null }, "board", ": no edge left within its reach where it was");
+  }
 }
 
 /**
@@ -3207,7 +3300,7 @@ export function applyOrder(
     const positionId = order.position_id ?? null;
     if (positionId === null) {
       if (team.fireId === fire.id && team.lineId === null) return `${team.id} is already on ${fire.id}.`;
-      return dispatch(board, team, fire, fireDest(fire), actor);
+      return dispatch(board, team, fire, fireDest(fire, board, team), actor);
     }
     const pos = attackPositions(board, fire).find((p) => p.id === positionId);
     if (!pos) return `${positionId} is not an attack position of ${fire.id} now.`;
@@ -4019,6 +4112,8 @@ function stepOnce(board: Board, dt: number, landOn: number | null): void {
 
   // Units putting burning cells out, one whole minute at a time (demo/suppression.ts).
   if (decide) suppressionTick(board, board.minute);
+  // Direct-attack units with no edge left within reach move along their fire (repositionIdleUnits).
+  if (decide) repositionIdleUnits(board);
 
   for (const fire of board.fires) {
     refreshFire(board, fire);
@@ -4032,13 +4127,14 @@ function stepOnce(board: Board, dt: number, landOn: number | null): void {
         log(board, "contained", "board", `${fire.id} contained at ${fire.areaHa.toFixed(1)} ha.`, { action: "contained", fireId: fire.id, areaHa: fire.areaHa });
         onContained(board, fire);
       } else if (held !== null) {
-        // Indirect line at attack positions: the solver, with the line built so far, forecasts no further spread.
+        // Held: with the line at attack positions and the knocked-down edge so far (or none, once nothing
+        // burns), the solver forecasts no further spread. The edge-tactic containment route for ground units.
         fire.status = "contained";
         fire.containedAt = held;
         const built = board.lines.filter((l) => l.fireId === fire.id).reduce((sum, l) => sum + l.builtM, 0);
-        const past = built > 0 ? `its ${Math.round(built)} m of line` : "its knocked-down edge";
+        const past = built > 0 ? `past its ${Math.round(built)} m of line` : hasKnockdown(board, fire.id) ? "past its knocked-down edge" : "and nothing of it is still burning (fuel or fuel moisture stopped it)";
         reportKnockdown(board, fire.id);
-        log(board, "contained", "board", `${fire.id} contained at ${fire.areaHa.toFixed(1)} ha: the fire model forecasts no further spread past ${past}.`, {
+        log(board, "contained", "board", `${fire.id} contained at ${fire.areaHa.toFixed(1)} ha: the fire model forecasts no further spread ${past}.`, {
           action: "contained",
           fireId: fire.id,
           areaHa: fire.areaHa,
@@ -4398,7 +4494,8 @@ export function containedIn(board: Board, fire: Fire, arrivals: number[], units:
     const perimeter = perimeterIn(board, fire, t);
     // Parallel line carries the offset ring; indirect is forecast as parallel (its own plan is set when chosen).
     const needed = lineNeededMeters(tactic === "indirect" ? "parallel" : tactic, perimeter, null);
-    line = Math.min(line, needed * reach + airLine);
+    // Edge tactics: fire.lineM is edge already held in the fire model (suppression.ts heldEdge), kept even beyond the reachable share.
+    line = Math.min(line, Math.max(needed * reach + airLine, fire.lineM));
     const holdsHead = tactic === "direct" ? lineHoldsHead(fire, holds) : tacticHoldsFeet(tactic, holds) >= fire.rates.headFlameFeet;
     if (holds > 0 && line >= needed && holdsHead) return t;
   }
