@@ -19,7 +19,9 @@
  * per-fire tactic fields is docs/response-model.md.
  *
  * POST /api/demo/crew_routes: `CrewRoutesRequest` -> `CrewRoutesResponse`. Road travel for
- * firefighting units over the drill roads their apparatus class may use (livecore.inbound).
+ * firefighting units over the drill roads their apparatus class may use (livecore.inbound), with
+ * OSM surface/width/weight tags and DEM grade per road (docs/command-demo-realism.md "Road access").
+ * GET /api/demo/road_access -> `RoadAccessResponse`: drill roads closed to each class.
  * GET /api/demo/wind?mode=historical_replay|climatology_percentile -> `WindResponse`.
  * GET /api/demo/environment -> `EnvironmentResponse` (drill centre, Camp terrain grid, carless households, package fire stations).
  * Wind is searched from the incident's centre.
@@ -46,6 +48,7 @@ export const DECIDE_URL = "/api/demo/decide";
 export const CREW_ROUTES_URL = "/api/demo/crew_routes";
 export const WIND_URL = "/api/demo/wind";
 export const ENVIRONMENT_URL = "/api/demo/environment";
+export const ROAD_ACCESS_URL = "/api/demo/road_access";
 
 /** `url` for `incident`: Camp is the server default, so it is sent without the parameter. */
 export function demoUrl(url: string, incidentId: string): string {
@@ -90,6 +93,24 @@ export interface CrewRoute {
   offboard_m: number;
   reason: string | null;
   line: LonLat[];
+  /**
+   * Road access (optional; absent from older servers). `reached`: drives to the road nearest
+   * `to`. `detour`: reaches it, but a faster road is closed to the class (`blocked_*`).
+   * `stopped_short`: no road the class may use gets there; `drive_min`, `distance_m` and `line`
+   * end at `stop_point`, and the unit covers `off_road_m_to_target` on foot or by hose lay.
+   * null when there is no route (`reason`).
+   */
+  access_status?: "reached" | "detour" | "stopped_short" | null;
+  /** Where the vehicle must stop (the last accessible road point nearest `to`); stopped_short only. */
+  stop_point?: LonLat | null;
+  /** Straight-line metres from the end of `line` to `to` (the road snap distance when reached). */
+  off_road_m_to_target?: number | null;
+  /** R01-R12 rule closing the better road (detour, stopped_short, or no route), e.g. "R05". */
+  blocked_rule?: string | null;
+  /** Plain-language reason, e.g. "Paved road too steep (22%) for a Type 1 engine on Pentz Road (R05)". */
+  blocked_reason?: string | null;
+  /** detour only: drive minutes an unrestricted vehicle would take. */
+  unrestricted_drive_min?: number | null;
 }
 
 export interface CrewRoutesResponse {
@@ -97,6 +118,39 @@ export interface CrewRoutesResponse {
   /** Always "not_modelled": the demo's households are not in the traffic twin. */
   congestion: "not_modelled";
   evidence_class: "simulated";
+  /** `ready`: OSM tags + DEM grade; `grade_only`: tags still loading; `none`: highway class only. */
+  road_access?: { status: RoadAccessStatus; basis: string };
+}
+
+export type RoadAccessStatus = "ready" | "grade_only" | "none";
+
+/** Per apparatus class, drill road km closed by the road access rules (GET /api/demo/road_access). */
+export interface RoadAccessClass {
+  access_class: AccessClassWire;
+  label: string;
+  open_km: number;
+  closed_km: number;
+  top_rules: { rule: string; km: number; example: string }[];
+}
+
+export interface ClosedRoadProps {
+  segment_id: string;
+  name: string | null;
+  /** Class -> the rule (R01-R12) that closes this road to it. */
+  closed: Partial<Record<AccessClassWire, string>>;
+  /** Plain-language reason for the first class it is closed to. */
+  reason: string;
+  grade_pct: number | null;
+}
+
+export interface RoadAccessResponse {
+  status: RoadAccessStatus;
+  basis: string;
+  classes: RoadAccessClass[];
+  /** Drill road segments closed to at least one class. */
+  closed_roads: GeoJSON.FeatureCollection<GeoJSON.LineString, ClosedRoadProps>;
+  /** OSM tags are observed; grade is derived from the DEM; the access rules are assumptions. */
+  evidence_class: "derived";
 }
 
 export interface WindResponse {

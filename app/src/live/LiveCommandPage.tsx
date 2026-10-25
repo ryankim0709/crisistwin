@@ -23,6 +23,7 @@ import { ACTIVITY } from "../demo/model";
 import { CONGESTION_LABEL, TRAVEL_LABEL } from "../demo/observation";
 import SelectedPanel from "../demo/SelectedPanel";
 import { useCommandBoard } from "../demo/useCommandBoard";
+import { useRoadAccess } from "../demo/useRoadAccess";
 import "../demo/demo.css";
 import ActivityLog from "./ActivityLog";
 import { useTriageKeys } from "./useTriageKeys";
@@ -57,6 +58,7 @@ const LAYER_LABEL: Record<LayerKey, string> = {
   roads: "Roads",
   shelters: "Shelters",
   people: "People",
+  noTruck: "Roads trucks can't use",
 };
 type LeftTab = "reports" | "board";
 const LEFT_TABS: SegmentedOption<LeftTab>[] = [
@@ -222,6 +224,7 @@ export default function LiveCommandPage() {
     roads: true,
     shelters: true,
     people: true,
+    noTruck: false,
   });
   // A different incident: drop the selection and per-incident panels (the polls restart themselves).
   useEffect(() => {
@@ -323,12 +326,15 @@ export default function LiveCommandPage() {
   // The board's map layers, drawn on the live map (demo/boardMapLayers.ts). The handlers and the
   // latest input sit in refs: CommandMap calls onMapReady once, at load.
   const boardLayers = useRef<BoardLayers | null>(null);
+  const roadAccess = useRoadAccess(incidentId, !!cb.board);
   const boardInput: BoardLayerInput = {
     board: cb.board,
     forecasts: cb.forecasts,
     routes: cb.routes.routes,
     selection: cb.selection,
     igniteMode: cb.igniteMode,
+    closedRoads: roadAccess.data?.closed_roads ?? null,
+    showClosedRoads: layers.noTruck,
   };
   const boardInputRef = useRef(boardInput);
   const boardHandlers = useRef({ onSelect: selectBoard, onIgnite: cb.onIgnite });
@@ -339,7 +345,7 @@ export default function LiveCommandPage() {
     boardInputRef.current = boardInput;
     boardLayers.current?.update(boardInput);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the board is mutated in place; version marks changes
-  }, [cb.board, cb.version, cb.forecasts, cb.routes.routes, cb.selection, cb.igniteMode]);
+  }, [cb.board, cb.version, cb.forecasts, cb.routes.routes, cb.selection, cb.igniteMode, roadAccess.data, layers.noTruck]);
   const onMapReady = useCallback((map: MapLibreMap) => {
     const layers = attachBoardLayers(map, EXTRA_LAYERS_BEFORE_ID, {
       onSelect: (sel) => boardHandlers.current.onSelect(sel),

@@ -211,7 +211,7 @@ examples are in [ADR 0029](../../docs/adr/0029-mobile-data-store.md).
 
 `api/demo.py` serves the `/demo` page ([ADR 0047](../../docs/adr/0047-command-demo.md); wire
 shapes in `app/src/demo/contracts.ts`). The board follows the live active incident: every
-`/api/demo/…` endpoint (also `wind`, `environment`, `crew_routes`; see
+`/api/demo/…` endpoint (also `wind`, `environment`, `crew_routes`, `road_access`; see
 [command-demo-realism](../../docs/command-demo-realism.md)) takes an optional `?incident=<id>`.
 Absent means Camp (`camp-2018-drill`); allowed are Camp and the active incident (the live API's
 rule), anything else is 404 `not_found`. `environment` also returns `stations` and `stations_source`
