@@ -92,6 +92,7 @@ import { departmentStatus, dispatchable, fireEdgeSample, idleOnSceneReason, init
 import { TANK_GALLONS } from "../response/units";
 import { computeStrategyOptions, strategyLabel } from "./strategyOptions";
 import { closedIds, closedRoadsObservation, closureKey } from "./roadClosures";
+import { simCommsObservation } from "./simComms";
 import { simClock } from "./format";
 import { EVAC_SCHEDULE_LABEL, evacuationSchedule, strategyAid, type ZoneEvacPlan } from "./decisionAids";
 import { runScore } from "./scoring";
@@ -729,6 +730,7 @@ export function buildObservation(
     },
     incident_picture: incidentPicture,
     closed_roads: closedRoadsObservation(board),
+    sim_comms: simCommsObservation(board),
   };
 }
 
@@ -749,6 +751,9 @@ function outcomesObs(board: Board): NonNullable<DemoObservation["outcomes"]> {
     homes_reached_saved: s.homesReachedSaved,
     homes_method: s.homesMethod,
     area_burned_ha: s.areaBurnedHa,
+    injured_people: s.injuries.injuredPeople,
+    injury_deaths: s.injuries.injuryDeaths,
+    injured_open: s.injuries.openPeople,
   };
 }
 

@@ -3,7 +3,9 @@ import { ROUTES_URL, demoUrl, type RoutesRequest, type RoutesResponse } from "./
 import { fireRingsForRouting } from "./fireFootprint";
 import { activeFires, type Board, type RouteOption } from "./model";
 import { answerCovers, closureKey } from "./roadClosures";
+import { excludedDestinationIds, safeDestinationStatus, type SafeDestinationStatus } from "./safeDestinations";
 import type { RouteSegment } from "./traffic";
+import type { Destination } from "../live/types";
 
 /** Re-route at most this often (simulation minutes) while the fires keep growing. */
 export const ROUTE_REFRESH_MINUTES = 5;
@@ -42,6 +44,8 @@ export interface RoutesState {
   error: string | null;
   /** Controller road closures (segment ids) the current routes avoid (demo/roadClosures.ts); null before the first answer. */
   closedSegmentIds: string[] | null;
+  /** Open/closed safe destinations the current routes were asked for (demo/safeDestinations.ts); [] without destinations. Simulated. */
+  safeDestinations: SafeDestinationStatus[];
 }
 
 /**
@@ -49,8 +53,13 @@ export interface RoutesState {
  * of active fires changes, and every ROUTE_REFRESH_MINUTES while any fire burns. One request at
  * a time; an answer for an older board is dropped.
  */
-export function useDemoRoutes(board: Board | null, version: number, incidentId: string): RoutesState {
-  const [state, setState] = useState<RoutesState>({ routes: new Map(), asOf: null, error: null, closedSegmentIds: null });
+export function useDemoRoutes(
+  board: Board | null,
+  version: number,
+  incidentId: string,
+  destinations?: readonly Destination[] | null,
+): RoutesState {
+  const [state, setState] = useState<RoutesState>({ routes: new Map(), asOf: null, error: null, closedSegmentIds: null, safeDestinations: [] });
   const inflight = useRef(false);
   // Bumped to ask again at once when an answer missed a closure that arrived meanwhile.
   const [retry, setRetry] = useState(0);
@@ -65,15 +74,19 @@ export function useDemoRoutes(board: Board | null, version: number, incidentId: 
     if (!board) {
       // Incident switch: forget the old board so its in-flight answer is dropped.
       last.current = { board: null, key: "", minute: -Infinity, failedAt: -Infinity };
-      setState((s) => (s.asOf === null && s.routes.size === 0 && !s.error ? s : { routes: new Map(), asOf: null, error: null, closedSegmentIds: null }));
+      setState((s) => (s.asOf === null && s.routes.size === 0 && !s.error ? s : { routes: new Map(), asOf: null, error: null, closedSegmentIds: null, safeDestinations: [] }));
       return;
     }
     if (inflight.current) return;
     const fires = activeFires(board);
     // A controller road closure (or reopening) changes the key too: routes are recomputed around it.
     const closures = closureKey(board);
-    const key = `${fires.map((f) => `${f.id}:${f.status}`).join(",")}|${closures}`;
     const prev = last.current;
+    // Safe destinations (fire forecast, capacity) are re-checked on every refresh check, which runs
+    // on board updates; a destination closing or reopening changes the key and re-routes at once.
+    const safe = destinations && destinations.length > 0 ? safeDestinationStatus(board, destinations) : [];
+    const excluded = excludedDestinationIds(safe);
+    const key = `${fires.map((f) => `${f.id}:${f.status}`).join(",")}|${closures}|${excluded.join(",")}`;
     const burning = fires.some((f) => f.status === "burning");
     const due =
       prev.board !== board ||
@@ -82,7 +95,7 @@ export function useDemoRoutes(board: Board | null, version: number, incidentId: 
     if (!due || Date.now() - prev.failedAt < RETRY_WALL_MS) return;
 
     const minute = board.minute;
-    const body: RoutesRequest = { fires: fireRingsForRouting(board, RING_POINTS) };
+    const body: RoutesRequest = { fires: fireRingsForRouting(board, RING_POINTS), excluded_destination_ids: excluded };
     inflight.current = true;
     last.current = { ...prev, board, key, minute };
     let askAgain = false;
@@ -109,7 +122,7 @@ export function useDemoRoutes(board: Board | null, version: number, incidentId: 
           if (!stale) setState((s) => ({ ...s, error: "the routes ignore a controller road closure (closure store unavailable); retrying" }));
           return;
         }
-        setState({ routes: resolveRoutes(data), asOf: minute, error: null, closedSegmentIds: closed });
+        setState({ routes: resolveRoutes(data), asOf: minute, error: null, closedSegmentIds: closed, safeDestinations: safe });
       })
       .catch((error: unknown) => {
         if (last.current.board !== board) return; // an older board's (or incident's) request
@@ -121,7 +134,7 @@ export function useDemoRoutes(board: Board | null, version: number, incidentId: 
         inflight.current = false;
         if (askAgain) setRetry((n) => n + 1);
       });
-  }, [board, version, incidentId, retry]);
+  }, [board, version, incidentId, retry, destinations]);
 
   return state;
 }

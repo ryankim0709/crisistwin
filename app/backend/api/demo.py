@@ -262,7 +262,8 @@ recommended_send (the containable option that burns the fewest homes), all_units
 contains (its strategy_id, every free unit that can reach the fire, available aircraft, sized \
 order_resources) and idle_units (free units while the fire burns). observation.outcomes is the run \
 so far: caught people and households with caught_breakdown (no_vehicle, no_order, \
-stayed_despite_order, ordered_too_late), homes_burned and area_burned_ha: the score you are judged on.
+stayed_despite_order, ordered_too_late), homes_burned and area_burned_ha: the score you are judged on \
+(injured_people and injury_deaths too, when present: simulated injuries).
 
 Goals, in order:
 1. Life safety: no zone may be reached by fire with people home. Follow decision_aids.evacuation \
@@ -322,6 +323,19 @@ only with corroboration (several parties, a responder, or a real phone you trust
 only what contradicts better evidence. Evacuation orders stay order_evacuation: on the live \
 drill each zone's order (now, or scheduled) is published to that zone's residents' phones as \
 guidance as soon as the board applies it.
+- observation.sim_comms (when present) is a SIMULATED message stream generated from the board each minute: 911 calls, \
+civilian reports (social posts / walk-up), fire radio (fd_radio), police radio (pd_radio), EMS radio. recent = the \
+latest messages (at most 25 from the last 30 board minutes, most severe first), each with id, minute, channel, kind, \
+from, text, zoneId, coord, severity (info / urgent / life_threat), injuryId; open_injuries = simulated injuries still \
+waiting or with a unit on the way; counts = messages per channel so far. They are \
+unverified: callers repeat events, give vague or wrong places or road names, mistake smoke drift or a jam for a new \
+fire or blocked road, and radio lags the board. Use them to triage (trapped or hurt people, jammed roads, crew \
+reports) and corroborate against the board's own fields (fires, zones, traffic, decision_aids); never take a number \
+from a message over the model's numbers, and never quote a message as observed fact.
+- Simulated injuries (observation.sim_comms.open_injuries, ids inj-*, when present): \
+send_rescue(help_id) with an inj-* id whose status is waiting sends the closest free paramedic \
+engine that can drive there on the board; untreated critical patients die (median about an hour), \
+so send critical and serious first. Never invent injury ids or counts.
 - Use only ids from the observation. Set the fields an order does not use to null.
 - First write a 1-3 sentence assessment naming what changed, then call issue_orders exactly \
 once. Mention fire, crew and zone ids in the reasons. Be brief.
@@ -377,7 +391,7 @@ ISSUE_ORDERS_TOOL = {
         "destination_id, and start_minute (absolute board minute departures start, or null for "
         "now). cancel_evacuation needs zone_id (a scheduled zone). order_resources needs fire_id, "
         "resource and count. set_strategy needs fire_id and strategy_id (one of that fire's "
-        "strategy_options ids); send its units with send_crew. send_rescue needs help_id. "
+        "strategy_options ids); send its units with send_crew. send_rescue needs help_id (a help request or an inj-* injury id). "
         "close_road and reopen_road need road_id. confirm_report and dismiss_report need "
         "report_id. Set fields that do not apply to null."
     ),
@@ -431,7 +445,7 @@ ISSUE_ORDERS_TOOL = {
                             "description": "set_strategy only: one of the fire's strategy_options ids "
                             "(e.g. direct, parallel, indirect, structure, flank, line:flank_left).",
                         },
-                        "help_id": {"type": ["string", "null"], "description": "send_rescue only: incident_picture.help_requests id."},
+                        "help_id": {"type": ["string", "null"], "description": "send_rescue only: incident_picture.help_requests id, or a sim_comms.open_injuries id (inj-*)."},
                         "road_id": {"type": ["string", "null"], "description": "close_road / reopen_road only: road segment id."},
                         "report_id": {"type": ["string", "null"], "description": "confirm_report / dismiss_report only: report id."},
                         "reason": {"type": "string"},
@@ -585,14 +599,20 @@ def route_segments(drill, routes: list) -> tuple[dict[str, dict], list[list[str]
     return table, per_route
 
 
-def zone_routes(drill, rings: list[list[list[float]]], blocked: frozenset[str] = frozenset()) -> tuple[list[dict], dict[str, dict]]:
+MAX_EXCLUDED_DESTINATIONS = 200
+"""``excluded_destination_ids`` cap per routes request (a board has a few dozen destinations)."""
+
+
+def zone_routes(drill, rings: list[list[list[float]]], blocked: frozenset[str] = frozenset(),
+                excluded: frozenset[str] = frozenset()) -> tuple[list[dict], dict[str, dict]]:
     """Every zone's best route around the fires plus distinct alternatives, best first, and the
     road segments they use (``route_segments``); never over a ``blocked`` segment id (the
-    controller's road closures, api.live.road_closures)."""
+    controller's road closures, api.live.road_closures) and never to an ``excluded`` destination
+    (closed by the board: fire forecast to reach it or full, app/src/demo/safeDestinations.ts)."""
     geometry = to_multipolygon({"type": "MultiPolygon", "coordinates": [[r] for r in rings]}) if rings else None
-    picks = best_routes(drill, blocked, geometry)
+    picks = best_routes(drill, blocked, geometry, full_destination_ids=excluded)
     chosen = {zid: r for zid, r in picks.items() if r is not None}
-    others = alternative_routes(drill, chosen, blocked, geometry) if chosen else {}
+    others = alternative_routes(drill, chosen, blocked, geometry, full_destination_ids=excluded) if chosen else {}
     dests = {d.id: d for d in drill.destinations}
     rank = {"clear": 0, "near_fire": 1, "through_fire": 2}
     picked: list[tuple[str, list]] = []
@@ -639,6 +659,11 @@ def demo_routes(request):
     rings = parse_fire_rings(data)
     if isinstance(rings, str):
         return _error(400, "invalid_request", rings)
+    excluded = data.get("excluded_destination_ids", []) if isinstance(data, dict) else []
+    if (not isinstance(excluded, list) or len(excluded) > MAX_EXCLUDED_DESTINATIONS
+            or not all(isinstance(x, str) and 0 < len(x) <= 120 for x in excluded)):
+        return _error(400, "invalid_request",
+                      f"excluded_destination_ids must be a list of at most {MAX_EXCLUDED_DESTINATIONS} ids.")
     incident = resolve_incident(request)
     if isinstance(incident, Response):
         return incident
@@ -647,11 +672,12 @@ def demo_routes(request):
     except ApiError as exc:
         return _error(exc.status, exc.code, exc.detail)
     closed, closures_ok = closed_segment_ids(incident)
-    zones, segments = zone_routes(index.drill, rings, closed)
+    zones, segments = zone_routes(index.drill, rings, closed, frozenset(excluded))
     return Response(
         {
             "zones": zones,
             "segments": segments,
+            "excluded_destination_ids": sorted(set(excluded)),
             "closed_segment_ids": sorted(closed),
             "closures_status": "ok" if closures_ok else "unavailable",
             "evidence_class": "simulated",
@@ -733,11 +759,23 @@ def build_index(obs: dict) -> dict:
         "scheduled_zones": scheduled,
         "minute": minute,
         **picture_index(obs.get("incident_picture")),
+        "injuries": injury_index(obs.get("sim_comms")),
     }
 
 
 def _dicts(value: object) -> list[dict]:
     return [v for v in value if isinstance(v, dict)] if isinstance(value, list) else []
+
+
+def injury_index(sim_comms: object) -> dict[str, dict]:
+    """Simulated injuries send_rescue may name (inj-*): id -> {status, severity, people} from sim_comms.open_injuries."""
+    if not isinstance(sim_comms, dict):
+        return {}
+    return {
+        i["id"]: {"status": i.get("status"), "severity": i.get("severity"), "people": i.get("people")}
+        for i in _dicts(sim_comms.get("open_injuries"))
+        if isinstance(i.get("id"), str)
+    }
 
 
 def picture_index(picture: object) -> dict:
@@ -775,6 +813,14 @@ def normalize_live_order(kind: str, raw: dict, index: dict, reason: str) -> tupl
     """The live drill actions, checked against the observation's incident_picture ids."""
     if kind == "send_rescue":
         help_id = _str(raw.get("help_id"))
+        if help_id and help_id.startswith("inj-"):
+            # A simulated injury on the board (demo/injuries.ts), not a live drill help request.
+            inj = index.get("injuries", {}).get(help_id)
+            if inj is None:
+                return None, f"Unknown injury id {help_id!r} (not in sim_comms.open_injuries)."
+            if inj.get("status") != "waiting":
+                return None, f"Injury {help_id} is {inj.get('status')}; it already has a unit or is closed."
+            return {"type": kind, "help_id": help_id, "reason": reason}, None
         h = index["help"].get(help_id)
         if h is None:
             return None, f"Unknown help_id {help_id!r}."

@@ -13,6 +13,7 @@ import {
   type SegmentedOption,
 } from "../ui";
 import AgentControl from "../demo/AgentControl";
+import AgentInputsPanel from "../demo/AgentInputsPanel";
 import BoardClock from "./BoardClock";
 import { attachBoardLayers, type BoardLayerInput, type BoardLayers, type BoardSelection } from "../demo/boardMapLayers";
 import DemoDiorama from "../demo/DemoDiorama";
@@ -719,6 +720,7 @@ export default function LiveCommandPage() {
               </section>
             ) : null}
             <Outcomes board={board} version={cb.version} forecasts={cb.forecasts} />
+            <AgentInputsPanel agent={cb.agent} board={board} showSpend={false} />
           </div>
           <section className="lc-sim" aria-labelledby="lc-sim-title">
             <header className="lc-sim-head">

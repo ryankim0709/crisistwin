@@ -13,6 +13,7 @@ import { DEVELOPED_FUEL_CODE } from "../fire/spread";
 import { CELL_STATE_CODE, fireCellStates } from "./fireState";
 import { fireAreaHa, withVehicle, type Board, type ZoneState } from "./model";
 import { ORDER_COMPLIANCE } from "./realism";
+import { injuryScore, type InjuryScore } from "./injuries";
 
 /** FBFM40 non-burnable codes other than developed ground (92 snow/ice, 93 agriculture, 98 water, 99 barren). */
 const NON_BURNABLE_MIN = 92;
@@ -186,6 +187,8 @@ export interface RunScore {
   /** Burned area over every fire (removed ones included), hectares. */
   areaBurnedHa: number;
   fires: { burning: number; contained: number; out: number };
+  /** Simulated injuries (demo/injuries.ts): people injured so far, injury deaths (nobody reached them), open, treated, transported. */
+  injuries: InjuryScore;
 }
 
 const add = (a: number | null, b: number | null) => (a === null || b === null ? null : a + b);
@@ -229,5 +232,6 @@ export function runScore(board: Board): RunScore {
     homesByZone: homes.filter((z) => z.homesBurned > 0 || z.homesReachedSaved > 0).map((z) => ({ zoneId: z.zoneId, homesBurned: z.homesBurned, homesReachedSaved: z.homesReachedSaved })),
     areaBurnedHa: Math.round(area * 10) / 10,
     fires,
+    injuries: injuryScore(board),
   };
 }

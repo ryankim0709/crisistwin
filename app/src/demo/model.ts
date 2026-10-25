@@ -97,7 +97,10 @@ import { DRAWDOWN_KEEP_SHARE, buildFleet, engineTurnoutMinutes, type BaseInput, 
 import { MAX_ORDER_COUNT, ORDERABLE, type Orderable } from "../response/runCards";
 import { buildsOn, chooseTactic, lineNeededMeters, tacticHoldsFeet, tacticRateFactor, type Tactic } from "../response/containment";
 import { applyStrategyOrder, commanderTactic, type SetStrategyOrder } from "./strategyOptions";
+import { onRescue, stepInjuries } from "./injuries";
 import { uniform } from "../response/rng";
+import { createSimComms, stepSimComms } from "./simComms";
+import type { SimCommsState } from "./runContracts";
 import { engineCrewHandLineMPerMin, type WorkMode, type WorkPlan } from "../response/reach";
 import { AVAILABILITY_DRAW_EVERY_MINUTES, ENGINE_WATER_USE_GPM, OUT_OF_SERVICE_MINUTES, OUT_OF_SERVICE_PROBABILITY, TANK_GALLONS } from "../response/units";
 import {
@@ -832,6 +835,8 @@ export interface Board {
   response: ResponseState;
   /** Per-cell burn durations and suppression (demo/suppression.ts; read through demo/fireState.ts). */
   suppression: SuppressionState;
+  /** Simulated 911 / civilian / FD / PD / EMS messages and injuries (demo/simComms.ts; injuries: demo/injuries.ts). */
+  simComms?: SimCommsState;
 }
 
 /**
@@ -1769,6 +1774,7 @@ export function createBoard(zones: BaseZone[], seed: number, env: DemoEnvironmen
     // The board clock's T+0 is the drill's (snapshot scenario_time), else the wind series' start.
     response: createResponseState(seed, [], [], [], fleetAircraft, onBoard, snapshot?.scenario_time ?? env.spread.wind.startUtc, ""),
     suppression: createSuppressionState(grid.width * grid.height),
+    simComms: createSimComms(seed),
   };
   const skipped = buildBoardUnits(board, zones, env, snapshot);
   const teams = board.teams;
@@ -3834,6 +3840,8 @@ function stepOnce(board: Board, dt: number, landOn: number | null): void {
   // retries of drives home that had no road route.
   responseTick(board, dt, wholeMinute);
   stepReturns(board);
+  // Injuries and rescue trips (demo/injuries.ts): rescue arrivals land before en-route units are matched to fires below.
+  stepInjuries(board, wholeMinute);
   for (const team of board.teams) {
     // A unit waiting for its road route has not set off.
     if (team.status !== "en_route" || team.travel === "pending" || team.arriveAt === null || team.arriveAt > board.minute) continue;
@@ -4026,6 +4034,8 @@ function stepOnce(board: Board, dt: number, landOn: number | null): void {
   if (wholeMinute) {
     evacuationTrafficStep(board, Math.floor(board.minute + 1e-9));
     reopenZones(board);
+    // Simulated communications for the minute just finished (demo/simComms.ts).
+    stepSimComms(board, Math.floor(board.minute + 1e-9));
   }
 }
 
@@ -4121,7 +4131,7 @@ export function checkBoardInvariants(board: Board): string[] {
     const fires = crewOf.get(t.id) ?? [];
     if (fires.length > 1) problems.push(`${t.id} is on ${fires.length} fires (${fires.join(", ")})`);
     if (t.status === "en_route" || t.status === "on_scene" || t.status === "refilling") {
-      if (t.fireId === null) problems.push(`${t.id} is ${t.status} with no fire`);
+      if (t.fireId === null && !onRescue(board, t.id)) problems.push(`${t.id} is ${t.status} with no fire`);
     } else {
       if (t.fireId !== null || t.lineId !== null) problems.push(`${t.id} is ${t.status} but assigned (${t.fireId} ${t.lineId})`);
       if ((t.status === "returning" || t.status === "moving_up") && (t.target === null || t.travel === null)) problems.push(`${t.id} is ${t.status} with no trip`);

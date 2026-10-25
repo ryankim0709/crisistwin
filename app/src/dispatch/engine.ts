@@ -98,6 +98,7 @@ import {
 } from "./fireAttack";
 import {
   edgeSeconds,
+  evacueeTree,
   pointAlongStep,
   routeCoords,
   routeTo,
@@ -619,7 +620,7 @@ export class DispatchEngine {
     if (this.closed.size === 0) return;
     const blocked = this.blockedAt(0);
     for (const zone of this.area.zones) {
-      const tree = shortestPathTree(this.area, zone.node, blocked);
+      const tree = evacueeTree(this.area, zone.node, blocked);
       if (this.area.exits.some((exit) => routeTo(this.area, tree, exit.node))) continue;
       this.alert(
         "route_blocked",
@@ -1226,7 +1227,7 @@ export class DispatchEngine {
         return reject(
           `${order.zone_id} is outside the fire path (no fire contact forecast by T+${this.horizonMinutes}); evacuating it would only add traffic.`,
         );
-      const tree = shortestPathTree(this.area, this.area.zones[index].node, blocked);
+      const tree = evacueeTree(this.area, this.area.zones[index].node, blocked);
       const route = routeTo(this.area, tree, this.exitNode(order.exit_id));
       if (!route)
         return reject(
@@ -1471,7 +1472,7 @@ export class DispatchEngine {
     const exitId = zone.stage?.exitId ?? zone.exitId;
     if (bottleneck <= 0 && exitId) {
       const blocked = this.blockedAt(this.minute);
-      const tree = shortestPathTree(this.area, this.area.zones[index].node, blocked);
+      const tree = evacueeTree(this.area, this.area.zones[index].node, blocked);
       bottleneck = routeTo(this.area, tree, this.exitNode(exitId))?.bottleneckVph ?? 0;
     }
     const vehicles = (zone.atHome + zone.queued) * work.vehiclesPerHome;
@@ -1519,7 +1520,7 @@ export class DispatchEngine {
         const deadline = slack !== null && slack <= STAGE_RELEASE_SLACK_MINUTES;
         if (!predecessorGone && !deadline) continue;
         const wave = (this.waveOf(stage.after) ?? 1) + 1;
-        const tree = shortestPathTree(this.area, this.area.zones[zone.index].node, blocked);
+        const tree = evacueeTree(this.area, this.area.zones[zone.index].node, blocked);
         let exitId = stage.exitId;
         let route = routeTo(this.area, tree, this.exitNode(exitId));
         if (!route) {
@@ -1781,7 +1782,7 @@ export class DispatchEngine {
     for (const zone of this.zones) {
       if (zone.status === "ordered" && zone.exitId) {
         if (!zone.route || zone.route.steps.some((step) => blocked(step.edge))) {
-          const tree = shortestPathTree(this.area, this.area.zones[zone.index].node, blocked);
+          const tree = evacueeTree(this.area, this.area.zones[zone.index].node, blocked);
           const route = routeTo(this.area, tree, this.exitNode(zone.exitId));
           const id = this.area.zones[zone.index].id;
           if (route) {
@@ -1839,7 +1840,7 @@ export class DispatchEngine {
       this.refreshGroupRoutes(index, current, primary, blocked);
       return;
     }
-    const tree = shortestPathTree(this.area, this.area.zones[index].node, blocked);
+    const tree = evacueeTree(this.area, this.area.zones[index].node, blocked);
     let best: { id: string; route: Route } | null = null;
     if (current) {
       const route = routeTo(this.area, tree, this.exitNode(current));
@@ -1878,7 +1879,7 @@ export class DispatchEngine {
       group.route =
         i === 0
           ? primary
-          : routeTo(this.area, shortestPathTree(this.area, group.node, blocked), target);
+          : routeTo(this.area, evacueeTree(this.area, group.node, blocked), target);
     });
   }
 
@@ -1902,7 +1903,7 @@ export class DispatchEngine {
         !group.route.steps.some((step) => blocked(step.edge))
       )
         return;
-      group.route = routeTo(this.area, shortestPathTree(this.area, group.node, blocked), target);
+      group.route = routeTo(this.area, evacueeTree(this.area, group.node, blocked), target);
     });
   }
 
@@ -2065,7 +2066,7 @@ export class DispatchEngine {
     const current = packet.steps[packet.stepIndex];
     const head = current ? stepHead(this.area, current) : null;
     if (head === null) return;
-    const tree = shortestPathTree(this.area, head, blocked);
+    const tree = evacueeTree(this.area, head, blocked);
     let route = routeTo(this.area, tree, this.exitNode(exitId));
     let target = exitId;
     if (!route) {

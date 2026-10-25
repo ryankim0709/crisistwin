@@ -68,6 +68,7 @@
 import { DEFAULT_INCIDENT_ID } from "../live/api";
 import type { LonLat } from "../live/types";
 import type { RouteOption, TeamStatus, FireSource, FireStatus, TravelBasis } from "./model";
+import type { CommsChannel, InjuryEvent, SimCommsItem } from "./runContracts";
 import type { RouteSegment } from "./traffic";
 import type { DemoApparatusKind } from "./realism";
 import type { AccessClass } from "../studio/apparatus";
@@ -174,6 +175,8 @@ export interface RoutesResponse {
 
 export interface RoutesRequest {
   fires: LonLat[][];
+  /** Destinations closed for this incident (fire forecast to reach them, or full; demo/safeDestinations.ts): never routed to. */
+  excluded_destination_ids?: string[];
 }
 
 /** Road-access vehicle classes (docs/suppression-data.md R01-R12; studio/apparatus.ts AccessClass). */
@@ -773,6 +776,13 @@ export interface DemoObservation {
    * uses them; routes, options and ETAs already go around them. since_minute: board minute applied.
    */
   closed_roads?: { segment_id: string; name: string; since_minute: number; by: string }[];
+  /**
+   * Simulated 911 calls, civilian reports and FD / PD / EMS radio generated from the board each minute
+   * (demo/simComms.ts; evidence "simulated", unverified: may repeat, be vague or wrong). recent: at most 25
+   * from the last 30 board minutes, most severe kept first, newest first; open_injuries: waiting or with a
+   * unit on the way; counts: messages per channel over the run.
+   */
+  sim_comms?: { recent: SimCommsItem[]; open_injuries: InjuryEvent[]; counts: Record<CommsChannel, number> };
   /** The live drill's incident picture (incidentPicture.ts); absent or null when the board runs without a live drill. */
   incident_picture?: IncidentPicture | null;
 }
@@ -937,6 +947,10 @@ export interface OutcomesObservation {
   homes_reached_saved: number;
   homes_method: string;
   area_burned_ha: number;
+  /** Simulated injuries so far (demo/injuries.ts injuryScore): people injured (any status), people who died of an injury no unit reached, people still waiting or being treated. Optional on the wire. */
+  injured_people?: number;
+  injury_deaths?: number;
+  injured_open?: number;
 }
 
 /**

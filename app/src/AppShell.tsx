@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Button, IconButton } from "./ui";
-import { navigationItems } from "./navigation";
+import { BARE_PATHS, navigationItems } from "./navigation";
 import "./navigation.css";
 
 type AppShellProps = { path: string; children: ReactNode };
@@ -34,6 +34,18 @@ export default function AppShell({ path, children }: AppShellProps) {
       // Preference only; the sidebar still works without storage.
     }
   }, [collapsed]);
+
+  // Bare mode (/run): the page fills the viewport; no sidebar.
+  if (BARE_PATHS.has(path)) {
+    return (
+      <>
+        <a className="skip-link" href="#main-content">
+          Skip to content
+        </a>
+        {children}
+      </>
+    );
+  }
 
   return (
     <div className={`app-layout${collapsed ? " is-sidebar-collapsed" : ""}`}>

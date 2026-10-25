@@ -239,6 +239,9 @@ Code: pure behaviour in `app/backend/livecore/virtual_people.py`; storage, ticki
 | `GET /api/live/incidents/<id>/virtual-people` | | `200 {incident_id, label, seed, profile, epoch, count, ticked_to, twin, summary: {by_status, by_flag}, people: [Participant]}`. `twin`: `ready`, `unavailable` (warming, failed or busy: people moved at free-flow speed that tick) or `not_needed` |
 | `DELETE /api/live/incidents/<id>/virtual-people` | | `200 {removed, reports_withdrawn, reports_kept, checkins_removed, assist_tasks_cancelled}` |
 
+A phone follows one person's route and trail with `GET virtual-people/<person_id>/track`: see
+[Follow a simulated person](#follow-a-simulated-person).
+
 **DELETE removes them.** Each person's reports are withdrawn through the owner's withdraw path (status
 `withdrawn`, kept for the record, out of every queue); a report a controller or responder already acted
 on cannot be withdrawn and stays, labelled simulated (`reports_kept`). Their check-ins are deleted
@@ -386,6 +389,152 @@ intervals in code, not measurements; add request time (tens of ms locally).
    person approves on /live before any phone sees them (ADR 0012). `order_evacuation` from the
    commander moves only the simulated board. Phones poll every 3 s (`LiveStore.pollInterval`),
    so an approved change or a new assist task shows on a phone within about 3 s.
+
+## Follow a simulated person
+
+An iPhone joins the drill as a participant and follows one server-side simulated person along their route:
+it picks a person (their `id` is the `id` of a `GET homes` entry), says so with `POST me/follow`, and keeps
+reading that person's track (position, route, progress, trail, status). /live and /run poll the controller's
+list of the people phones follow and draw them on the 3D map. Following changes nothing about the person and
+sends nothing to anyone.
+
+Everything served is `evidence_class: "simulated"`: the person is a synthetic household run by the server on
+the drill clock, and every position is an estimate along the published route, never an observation.
+
+Code: `app/backend/api/live/follow.py` (the three views); `build_track`, `build_tracks` and `_track` in
+`app/backend/api/live/virtual_people.py` (block "follow: the track of one person"); the trail in
+`app/backend/livecore/virtual_people.py` (`_trail_add`, `TRAIL_MAX_POINTS`); web `app/src/live/followedPeople.ts`.
+
+### Endpoints
+
+| Method and path | Who | Body | Returns |
+| --- | --- | --- | --- |
+| `GET /api/live/incidents/<id>/virtual-people/<person_id>/track` | any authenticated role | | `200` the person's track (below). `404 unknown_person` |
+| `POST /api/live/me/follow` | civilian or responder device token (a controller gets `403`) | `{"person_id": "<id>" \| null, "incident_id"?: "<id>"}` | `200 {"following": "<id>" \| null}`. `400 invalid_request`, `404 unknown_person` |
+| `GET /api/live/incidents/<id>/followed` | controller | | `200 {incident_id, label, evidence_class, total_followers, people: [{person_id, followers, track}]}` |
+
+All three also return the live API's usual `401` (missing or invalid token) and `404 not_found` (unknown
+incident); a responder token for another incident gets `403`.
+
+**Track.** Advances the incident's simulated people to the drill clock first, like every other read of
+them (see [Ticking](#ticking)), so the track is as of the drill's current minute. `404 unknown_person` when
+the incident has no simulated person with that id.
+
+**Follow.** `person_id` is required: a simulated person's id (a string of 1-80 characters) to follow, or
+`null` to stop. A missing key, a non-string or an empty or over-long id is `400 invalid_request`; an id
+that is not a simulated person of the incident is `404 unknown_person` (so a stale id after the people were
+removed fails instead of being kept). The incident is the token's own (a responder's joined incident, else
+the active one); `incident_id` names another known incident (`404 not_found` when unknown). The device
+follows one person at a time: a new call replaces the old follow. The follow is kept on the device
+document (`live_devices.follow`) and also counts as the device being seen.
+
+**Followed.** The controller's list, most followers first (ties by `person_id`), at most 50 people. A follow
+counts for 15 minutes after the device was last seen (`FOLLOW_FRESH_FOR` in `follow.py`, ASSUMPTION: three
+of the 5 min intervals at which `auth.LAST_SEEN_WRITE_INTERVAL` refreshes a device's `last_seen_at`). The
+phone keeps calling the track endpoint while it follows, and that refreshes it; a phone that stops, goes
+offline or whose token expires drops out of the list within that time. Following someone who has been removed
+leaves them out. `total_followers` is the sum of `followers` over the listed people. The call ticks the
+people once for all tracks. `label` is the simulated-people label (as in `GET virtual-people`).
+
+### Track
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `id` | string | The person's id (also their device `party_key`) |
+| `label` | string | The synthetic street address of `GET homes` (made up from the nearest road, e.g. "8940 Lovett Lane", else "Home <n>, <zone>") |
+| `phase` | string | Where the person is in their plan, see below |
+| `status` | string | Plain-language status line as the participants list shows it ("Driving out, 35 min to go") |
+| `flags` | string[] | Flags as the participants list shows them (see [Simulated people](#simulated-people)); may be empty |
+| `position` | `[lon, lat]` | WGS84, an estimate: home until the person leaves, then along `path` |
+| `path` | `[lon, lat][]` | The stored route polyline, 5 decimals; `[]` before the person leaves (see below) |
+| `progress` | number | 0..1, fraction of `path` covered, 3 decimals; `0` without a path |
+| `trail` | `{t, coord}[]` | Where the person has been, oldest first; may be empty (see below) |
+| `drill` | object | `{now, speed, running}`: the drill clock when the track was built (`now` UTC drill time, `speed` x real time) |
+| `evidence_class` | string | Always `"simulated"` |
+| `zone` | `{id, name}` or null | The person's home zone (block group); null if unknown |
+| `total_min` | number or null | Free-flow minutes of the whole route (1 decimal); null without a path |
+| `eta_min` | number or null | Minutes to go at free flow, `(1 - progress) x total_min`; only while `en_route` or once finished driving (`0.0` when arrived), else null. The status line's "N min to go" is this rounded up |
+| `destination` | `{id, name, coord}` or null | The chosen destination (an exit or shelter of the guidance, or the nearest exit); null before the person leaves |
+| `motion` | string or null | Only while `en_route`: `driving`, `queued`, `long_queue` or `blocked` (the traffic twin's share the person falls into, see [Behaviour](#behaviour)); else null |
+
+`phase` values: `home` (at home, not yet leaving, including "waiting to see"), `packing` (decided to leave,
+getting ready or checking with neighbours), `trip` (a trip before leaving: pet, family, neighbours,
+belongings; the position stays at home), `en_route` (driving out along `path`), `out` (arrived and safely
+out), `staying` (staying home or sheltering), `help` (asked for help and waiting), `picked_up` (picked up by
+responders; `out` follows 30 min later, with the position back at home). Only `en_route` people move.
+
+`path` is the route of the destination the person chose when they left: the guidance's published route line
+(simplified to 80 points), starting at the home point. When no guidance was published when the person left it
+is a straight line from home to the nearest routable exit. It stays as it was until the person reroutes in
+congestion, when it becomes the rest of the route to the other destination (and `progress` restarts at 0).
+
+`trail` gets one point per drill minute that the person moves: the first at the door when they leave, then
+one per minute along the route. A position equal to the last point (stuck in a queue or blocked) is not
+repeated; it is capped at 120 points (`TRAIL_MAX_POINTS`, ASSUMPTION: 2 h of driving), oldest dropped; and it
+is cleared when the drill resets or restarts. `t` is UTC drill time to the minute, `coord` is `[lon, lat]`.
+
+A person who has left, on the move:
+
+```json
+{"id": "sim_ee29ddf58652b774", "label": "8940 Lovett Lane",
+ "zone": {"id": "bg:060070020001", "name": "Block Group 1, Census Tract 20"},
+ "phase": "en_route", "status": "Driving out, 35 min to go", "flags": ["In danger"],
+ "position": [-121.55653, 39.76774],
+ "path": [[-121.56611, 39.76218], [-121.39313, 39.8627]], "progress": 0.055,
+ "total_min": 36.1, "eta_min": 34.1,
+ "destination": {"id": "exit:osm-node:86441431", "name": "Exit east via Camp Creek Road", "coord": [-121.39313, 39.8627]},
+ "motion": "driving",
+ "trail": [{"t": "2018-11-08T15:47:00Z", "coord": [-121.56611, 39.76218]},
+           {"t": "2018-11-08T15:48:00Z", "coord": [-121.56132, 39.76496]},
+           {"t": "2018-11-08T15:49:00Z", "coord": [-121.55653, 39.76774]}],
+ "drill": {"now": "2018-11-08T15:49:13Z", "speed": 60.0, "running": true},
+ "evidence_class": "simulated"}
+```
+
+(Real output of a local scratch drill on the 2018-11-08 replay, with `path` shortened to its two end points.)
+A person still at home:
+
+```json
+{"id": "sim_48db3ea34b8b4add", "label": "806 Green Ridge Place",
+ "zone": {"id": "bg:060070017042", "name": "Block Group 2, Census Tract 17.04"},
+ "phase": "home", "status": "At home", "flags": [],
+ "position": [-121.59102, 39.87472], "path": [], "progress": 0.0,
+ "total_min": null, "eta_min": null, "destination": null, "motion": null,
+ "trail": [],
+ "drill": {"now": "2018-11-08T15:49:13Z", "speed": 60.0, "running": true},
+ "evidence_class": "simulated"}
+```
+
+A phone follows, then the controller lists who is followed (`$B` and `$T` as in [Tab](#tab); the controller
+token is `$C`):
+
+```sh
+curl -X POST $B/me/follow -H "Authorization: Bearer $T" -H 'Content-Type: application/json' \
+  -d '{"person_id":"sim_ee29ddf58652b774"}'
+# {"following": "sim_ee29ddf58652b774"}
+curl $B/incidents/camp-2018-drill/virtual-people/sim_ee29ddf58652b774/track -H "Authorization: Bearer $T"   # the track above
+curl -X POST $B/me/follow -H "Authorization: Bearer $T" -H 'Content-Type: application/json' -d '{"person_id":null}'
+# {"following": null}
+curl $B/incidents/camp-2018-drill/followed -H "Authorization: Bearer $C"
+```
+
+```jsonc
+{ "incident_id": "camp-2018-drill",
+  "label": "Simulated people ...",           // as GET virtual-people
+  "evidence_class": "simulated",
+  "total_followers": 2,
+  "people": [
+    { "person_id": "sim_ee29ddf58652b774",
+      "followers": 2,
+      "track": { "id": "sim_ee29ddf58652b774", "label": "8940 Lovett Lane", "phase": "en_route" /* ...the track above */ } } ] }
+```
+
+**Web.** `useFollowedPeople(incidentId, token)` in `app/src/live/followedPeople.ts` polls `GET followed`
+every 3 s (`FOLLOWED_POLL_MS`) and returns `{people: FollowedPerson[], error}`; `FollowedPerson` is the map
+shape of one entry (`personId`, `label`, `position`, `path`, `progress`, `status`, `followers`,
+`destination`, and optionally `phase`, `flags`, `etaMin`, `motion`, `trail`). `[]` without an incident or token; a
+failed poll keeps the last people and sets `error`. `FollowTrack` and `FollowedResponse` type the server's
+shapes.
 
 ## Homes
 

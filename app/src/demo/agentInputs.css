@@ -1,0 +1,374 @@
+/* "What the agent sees" (AgentInputsPanel.tsx). Layout and typography only; kit components style
+   themselves. Prefix ais-. Tokens only. Set --ais-max-height on a host (none | 100% | 60vh) to size
+   the panel; the call list scrolls inside it. */
+
+.ais-root {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ct-space-2);
+  min-height: 0;
+  max-height: var(--ais-max-height, 80vh);
+  padding: var(--ct-space-3) var(--ct-space-4);
+  border-bottom: 1px solid var(--ct-border-subtle);
+}
+.ais-head {
+  display: grid;
+  gap: var(--ct-space-1);
+}
+.ais-head-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ct-space-2);
+}
+.ais-head h2 {
+  font-size: var(--ct-text-base);
+  font-weight: var(--ct-weight-semibold);
+}
+.ais-head-note,
+.ais-meta {
+  margin: 0;
+  font-size: var(--ct-text-xs);
+  color: var(--ct-ink-muted);
+}
+.ais-head-note .ui-tag {
+  vertical-align: baseline;
+}
+
+.ais-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* The calls: newest first, the list scrolls inside the panel. */
+.ais-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  align-content: start;
+  gap: var(--ct-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ais-call {
+  border: 1px solid var(--ct-border);
+  border-radius: var(--ct-radius-md);
+  background: var(--ct-surface);
+}
+.ais-call:first-child {
+  border-color: var(--ct-brand);
+}
+.ais-call-sum,
+.ais-sec > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--ct-space-1) var(--ct-space-2);
+  cursor: pointer;
+  list-style: none;
+}
+.ais-call-sum::-webkit-details-marker,
+.ais-sec > summary::-webkit-details-marker {
+  display: none;
+}
+.ais-call-sum {
+  padding: var(--ct-space-2) var(--ct-space-3);
+}
+.ais-call-sum::before,
+.ais-sec > summary::before {
+  content: "▸";
+  color: var(--ct-ink-muted);
+}
+.ais-call > details[open] > .ais-call-sum::before,
+.ais-sec[open] > summary::before {
+  content: "▾";
+}
+.ais-call-title {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ct-space-1);
+  font-weight: var(--ct-weight-semibold);
+  font-variant-numeric: tabular-nums;
+}
+.ais-call-why {
+  flex: 1 1 12ch;
+  min-width: 0;
+  font-size: var(--ct-text-xs);
+  color: var(--ct-ink-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ais-call > details[open] .ais-call-why {
+  white-space: normal;
+}
+
+.ais-call-body {
+  display: grid;
+  gap: var(--ct-space-1);
+  padding: 0 var(--ct-space-3) var(--ct-space-3);
+}
+
+/* Sections inside a call. */
+.ais-sec {
+  border-top: 1px solid var(--ct-border-subtle);
+  padding-top: var(--ct-space-1);
+}
+.ais-sec > summary h3 {
+  font-size: var(--ct-text-sm);
+  font-weight: var(--ct-weight-semibold);
+}
+.ais-sec-sum {
+  flex: 1 1 14ch;
+  min-width: 0;
+  font-size: var(--ct-text-xs);
+  color: var(--ct-ink-muted);
+}
+.ais-sec-body {
+  display: grid;
+  gap: var(--ct-space-2);
+  padding: var(--ct-space-2) 0 var(--ct-space-2) var(--ct-space-4);
+}
+
+/* What changed since the previous call. */
+.ais-changes {
+  display: grid;
+  gap: var(--ct-space-1);
+  padding: var(--ct-space-2) var(--ct-space-3);
+  border: 1px solid var(--ct-info-border);
+  border-left-width: 4px;
+  border-radius: var(--ct-radius-sm);
+  background: var(--ct-info-soft);
+}
+.ais-changes--none {
+  border-color: var(--ct-border);
+  background: var(--ct-surface-sunken);
+}
+.ais-changes h3 {
+  font-size: var(--ct-text-sm);
+  font-weight: var(--ct-weight-semibold);
+}
+
+.ais-bullets,
+.ais-rows,
+.ais-comms,
+.ais-orders {
+  display: grid;
+  gap: var(--ct-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ais-bullets {
+  padding-left: var(--ct-space-4);
+  list-style: disc;
+  font-size: var(--ct-text-sm);
+}
+.ais-urgency {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ct-space-2);
+  margin: 0;
+}
+.ais-since {
+  margin: 0;
+  font-size: var(--ct-text-xs);
+  color: var(--ct-ink-muted);
+}
+
+/* Rows (fires, zones, roads, injuries). */
+.ais-row {
+  padding: var(--ct-space-1) var(--ct-space-2);
+  border-left: 3px solid var(--ct-border);
+  border-radius: var(--ct-radius-xs);
+}
+.ais-row--changed {
+  border-left-color: var(--ct-info);
+  background: var(--ct-info-soft);
+}
+.ais-row-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ct-space-1) var(--ct-space-2);
+  font-size: var(--ct-text-sm);
+}
+.ais-row-detail,
+.ais-summary,
+.ais-assessment,
+.ais-live,
+.ais-usage {
+  margin: 0;
+  font-size: var(--ct-text-sm);
+  line-height: var(--ct-leading-snug);
+  overflow-wrap: anywhere;
+}
+.ais-empty {
+  margin: 0;
+  font-size: var(--ct-text-sm);
+  color: var(--ct-ink-muted);
+}
+
+/* "New" / "up" / "down" / "changed" markers: a shape plus words. */
+.ais-delta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ct-space-1);
+  padding: 1px var(--ct-space-2);
+  border: 1px solid var(--ct-info-border);
+  border-radius: var(--ct-radius-pill);
+  background: var(--ct-surface);
+  color: var(--ct-info);
+  font-size: var(--ct-text-2xs);
+  font-weight: var(--ct-weight-semibold);
+  white-space: nowrap;
+}
+/* Up and down carry no good/bad tone: whether more is worse depends on the figure, so the arrow
+   and the "was ..." words say what moved and the colour stays neutral. */
+
+/* Resources table. */
+.ais-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--ct-text-sm);
+}
+.ais-table th,
+.ais-table td {
+  padding: var(--ct-space-1) var(--ct-space-2);
+  border-bottom: 1px solid var(--ct-border-subtle);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  vertical-align: top;
+}
+.ais-table thead th {
+  font-size: var(--ct-text-2xs);
+  font-weight: var(--ct-weight-semibold);
+  color: var(--ct-ink-muted);
+}
+.ais-table th[scope="row"],
+.ais-table thead th:first-child {
+  text-align: left;
+  font-weight: var(--ct-weight-medium);
+}
+.ais-table-sub {
+  display: block;
+  font-size: var(--ct-text-2xs);
+  font-weight: var(--ct-weight-regular, 400);
+  color: var(--ct-ink-muted);
+}
+
+/* Radio and calls ticker: a glyph and the channel's name, never colour alone. */
+.ais-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ct-space-1) var(--ct-space-3);
+  margin: 0;
+  font-size: var(--ct-text-xs);
+  color: var(--ct-ink-muted);
+}
+.ais-comm {
+  padding: var(--ct-space-1) var(--ct-space-2);
+  border-left: 3px solid var(--ct-border);
+}
+.ais-comm--new {
+  border-left-color: var(--ct-info);
+  background: var(--ct-info-soft);
+}
+.ais-comm-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ct-space-1) var(--ct-space-2);
+  font-size: var(--ct-text-xs);
+}
+.ais-chan {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ct-space-1);
+  font-weight: var(--ct-weight-semibold);
+  white-space: nowrap;
+}
+.ais-comm-time {
+  font-variant-numeric: tabular-nums;
+  color: var(--ct-ink-muted);
+}
+.ais-comm-from {
+  color: var(--ct-ink-muted);
+}
+.ais-comm-text {
+  margin: 0;
+  font-size: var(--ct-text-sm);
+  overflow-wrap: anywhere;
+}
+
+/* Decision. */
+.ais-decision {
+  display: grid;
+  gap: var(--ct-space-1);
+}
+.ais-live {
+  color: var(--ct-ink-muted);
+  font-style: italic;
+  white-space: pre-wrap;
+}
+.ais-more > summary {
+  cursor: pointer;
+  font-size: var(--ct-text-xs);
+  color: var(--ct-ink-muted);
+}
+.ais-assessment {
+  margin-top: var(--ct-space-1);
+  padding: var(--ct-space-2);
+  border-radius: var(--ct-radius-sm);
+  background: var(--ct-surface-sunken);
+  white-space: pre-wrap;
+}
+.ais-orders-head {
+  margin: 0;
+  font-size: var(--ct-text-xs);
+  font-weight: var(--ct-weight-semibold);
+  color: var(--ct-ink-muted);
+}
+.ais-orders {
+  font-size: var(--ct-text-sm);
+}
+.ais-orders--rejected {
+  color: var(--ct-danger);
+}
+.ais-usage {
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-xs);
+}
+
+/* Exact input. */
+.ais-exact-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ct-space-2);
+}
+.ais-json {
+  max-height: 320px;
+  margin: 0;
+  padding: var(--ct-space-2);
+  overflow: auto;
+  border: 1px solid var(--ct-border-subtle);
+  border-radius: var(--ct-radius-sm);
+  background: var(--ct-surface-sunken);
+  font-family: var(--ct-font-mono);
+  font-size: var(--ct-text-2xs);
+  line-height: var(--ct-leading-snug);
+  white-space: pre;
+}
+
+.ais-root > .lc-agent-spend {
+  margin: 0;
+}
