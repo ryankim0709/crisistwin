@@ -378,3 +378,29 @@
   height: 100%;
   background: var(--ct-brand);
 }
+
+/* Older phones: collapsed under the list. */
+.aix-older summary {
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-md);
+  cursor: pointer;
+}
+.aix-older[open] summary {
+  margin-bottom: var(--ct-space-2);
+}
+.aix-older .aix-list {
+  max-height: 320px;
+}
+/* One wide tile while the traffic model loads. */
+.aix-stats .aix-metric-wide {
+  grid-column: span 5;
+}
+.aix-stats .aix-metric-wide strong {
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-lg);
+}
+@media (max-width: 900px) {
+  .aix-stats .aix-metric-wide {
+    grid-column: 1 / -1;
+  }
+}

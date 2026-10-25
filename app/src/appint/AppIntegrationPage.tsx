@@ -47,7 +47,7 @@ export default function AppIntegrationPage() {
   const nowMs = useNow(1000);
 
   const data = command.data;
-  const participants = useMemo(() => roster.data?.participants ?? [], [roster.data]);
+  const everyone = useMemo(() => roster.data?.participants ?? [], [roster.data]);
   const [showInvite, setShowInvite] = useState(false);
   const [layers, setLayers] = useState<Record<MapLayerKey, boolean>>({ app: true, people: true, zones: true, fire: true, closures: true });
   const [busy, setBusy] = useState<string | null>(null);
@@ -59,14 +59,19 @@ export default function AppIntegrationPage() {
   const refreshCommand = command.refresh;
   const refreshRoster = roster.refresh;
 
+  // On our app = simulated people plus real phones heard from in the last hour (wall time). Older real
+  // phones (an earlier session's check-ins) sit behind "Older phones" and count for nothing else.
+  const participants = useMemo(() => everyone.filter((p) => p.kind === "simulated" || isJoinedNow(p, nowMs)), [everyone, nowMs]);
+  const older = useMemo(() => everyone.filter((p) => p.kind === "real" && !isJoinedNow(p, nowMs)), [everyone, nowMs]);
   // The chosen person while they are still listed, else the first real phone, else anyone.
   const [picked, setSelectedId] = useState<string | null>(null);
   const selectedId =
-    picked && participants.some((p) => p.id === picked)
+    picked && everyone.some((p) => p.id === picked)
       ? picked
       : ((participants.find((p) => p.kind === "real") ?? participants[0])?.id ?? null);
 
-  const joinedReal = participants.filter((p) => isJoinedNow(p, nowMs)).length;
+  const joinedReal = participants.filter((p) => p.kind === "real").length;
+  const simulatedCount = participants.length - joinedReal;
   const drill = data?.drill ?? null;
   const speedNow = drill ? (drill.started_at && drill.running ? drill.speed : 0) : 0;
 
@@ -141,9 +146,13 @@ export default function AppIntegrationPage() {
   ];
   const speedValue: Speed = speedNow <= 0 ? "0" : speedNow <= 1 ? "1" : speedNow <= 5 ? "5" : "20";
 
-  const selected = participants.find((p) => p.id === selectedId) ?? null;
+  const selected = everyone.find((p) => p.id === selectedId) ?? null;
   const rest = people.data ? everyoneElse(people.data.totals.people, participants) : null;
-  const counts = roster.data?.counts;
+  const peopleNote = people.data
+    ? null
+    : people.error && people.error.code !== "twin_warming" && people.error.code !== "twin_busy"
+      ? "Traffic model not available."
+      : "Loading the traffic model…";
   const clock = drill ? drillClock(drillNowAt(drill, command.receivedAt, nowMs)) : "—";
 
   const header = (
@@ -192,27 +201,33 @@ export default function AppIntegrationPage() {
           )}
           <section className="aix-stats" aria-label="Where people are">
             <MetricGrid>
-              <Metric label="Still at home" value={rest ? nf(rest.home) : "…"} />
-              <Metric label="Driving out" value={rest ? nf(rest.driving) : "…"} />
-              <Metric label="In traffic" value={rest ? nf(rest.queued) : "…"} />
-              <Metric label="Stuck" value={rest ? nf(rest.stuck) : "…"} />
-              <Metric label="Safely out" value={rest ? nf(rest.out) : "…"} />
+              {rest ? (
+                <>
+                  <Metric label="Still at home" value={nf(rest.home)} />
+                  <Metric label="Driving out" value={nf(rest.driving)} />
+                  <Metric label="In traffic" value={nf(rest.queued)} />
+                  <Metric label="Stuck" value={nf(rest.stuck)} />
+                  <Metric label="Safely out" value={nf(rest.out)} />
+                </>
+              ) : (
+                <Metric className="aix-metric-wide" label="Everyone else" value={peopleNote} />
+              )}
               <Metric
                 label="On our app"
-                value={counts ? `${counts.real} real` : "…"}
-                detail={counts ? `${counts.simulated} simulated` : undefined}
+                value={roster.data ? `${joinedReal} real` : "…"}
+                detail={roster.data ? `${simulatedCount} simulated` : undefined}
               />
             </MetricGrid>
             <p className="aix-note">
-              <EvidenceTag kind="simulated" /> Everyone else is an estimate from the traffic model
-              {people.error && !people.data ? ` (${people.error.code === "twin_warming" ? "still loading" : "not available"})` : ""}.
-              Our app users are counted once, as their own dots.
+              <EvidenceTag kind="simulated" /> Everyone else is an estimate from the traffic model. Our app users are counted
+              once, as their own dots.
             </p>
           </section>
 
           <div className="aix-grid">
             <ParticipantList
               participants={participants}
+              older={older}
               selectedId={selectedId}
               onSelect={setSelectedId}
               nowMs={nowMs}
@@ -309,7 +324,7 @@ export default function AppIntegrationPage() {
                   <p className="aix-dim">Pick someone on the left to see their phone.</p>
                 )}
               </div>
-              {selected ? <PhoneMirror key={selected.id} incidentId={incidentId} participantId={selected.id} /> : null}
+              {selected ? <PhoneMirror key={selected.id} incidentId={incidentId} participantId={selected.id} name={selected.name} /> : null}
             </Panel>
             <BehaviourPanel participants={participants} onAdd={() => void addSimulated()} adding={adding} />
           </div>

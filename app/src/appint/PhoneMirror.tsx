@@ -163,6 +163,8 @@ function plain(view: PhoneView, name: string): string {
 export interface PhoneMirrorProps {
   incidentId: string;
   participantId: string;
+  /** Display name from the participants list; else the view's name, else "Phone XXXX". */
+  name?: string;
 }
 
 /**
@@ -170,10 +172,11 @@ export interface PhoneMirrorProps {
  * (map strip, guidance card, check-in buttons), polled every 3 s from the controller-only
  * phone-view endpoint. Contract: docs/app-integration.md "Phone mirror".
  */
-export function PhoneMirror({ incidentId, participantId }: PhoneMirrorProps) {
+export function PhoneMirror({ incidentId, participantId, name }: PhoneMirrorProps) {
   const token = useMemo(() => readToken(), []);
   const { data, error, loading } = usePhoneView(token, incidentId, participantId);
-  const label = data?.name ?? participantId;
+  const fallback = `Phone ${participantId.slice(-4).toUpperCase()}`;
+  const label = name || (data?.name && data.name !== participantId ? data.name : fallback);
 
   let screen = null;
   if (!data && loading) {

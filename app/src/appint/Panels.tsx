@@ -5,7 +5,7 @@ import { Button, EmptyState, Notice, Panel, Tag } from "../ui";
 import { drillClock, wallClock } from "../live/format";
 import type { PeopleSnapshot } from "../live/people";
 import type { CommandResponse, HelpRequest } from "../live/types";
-import { ago, BEHAVIOURS, behaviourOf, flagTone, isJoinedNow, nf, peopleInZones, plainProposal, zoneLabel } from "./plain";
+import { ago, BEHAVIOURS, behaviourOf, flagTone, nf, peopleInZones, plainProposal, zoneLabel } from "./plain";
 import type { Participant, ParticipantMessage } from "./types";
 
 /** Solid dot = real phone, hollow = simulated; a square for a responder (shape, not only colour). */
@@ -24,8 +24,84 @@ export function PersonGlyph({ p, size = 14 }: { p: Pick<Participant, "kind" | "r
 
 // ---- On our app ----
 
+/** A selectable list of people (a listbox; arrow keys move the selection). */
+function PeopleRows({
+  people,
+  label,
+  selectedId,
+  onSelect,
+  nowMs,
+  showSeen,
+}: {
+  people: Participant[];
+  label: string;
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+  nowMs: number;
+  showSeen: boolean;
+}) {
+  const onKey = (e: KeyboardEvent<HTMLUListElement>) => {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    e.preventDefault();
+    const i = people.findIndex((p) => p.id === selectedId);
+    const next = people[Math.min(people.length - 1, Math.max(0, i + (e.key === "ArrowDown" ? 1 : -1)))];
+    if (next) {
+      onSelect(next.id);
+      document.getElementById(`aix-p-${next.id}`)?.focus();
+    }
+  };
+  const hasSelected = people.some((p) => p.id === selectedId);
+  return (
+    <ul className="aix-list" role="listbox" aria-label={label} onKeyDown={onKey}>
+      {people.map((p) => {
+        const on = p.id === selectedId;
+        return (
+          <li
+            key={p.id}
+            id={`aix-p-${p.id}`}
+            role="option"
+            aria-selected={on}
+            tabIndex={on || (!hasSelected && p === people[0]) ? 0 : -1}
+            className={`aix-row${on ? " is-selected" : ""}`}
+            onClick={() => onSelect(p.id)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onSelect(p.id);
+              }
+            }}
+          >
+            <PersonGlyph p={p} />
+            <span className="aix-row-body">
+              <span className="aix-row-name">
+                {p.name}
+                <span className="aix-visually-hidden">
+                  {p.kind === "real" ? ", real person" : ", simulated person"}
+                  {p.role === "responder" ? ", responder" : ""}
+                </span>
+              </span>
+              <span className="aix-row-status">{p.status || "No news yet"}</span>
+              {showSeen ? <span className="aix-row-status aix-dim">Last seen {ago(p.last_seen, nowMs)}</span> : null}
+            </span>
+            {p.flags.length ? (
+              <span className="aix-flags">
+                {p.flags.slice(0, 2).map((f) => (
+                  <Tag key={f} tone={flagTone(f)}>
+                    {f}
+                  </Tag>
+                ))}
+              </span>
+            ) : null}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 export function ParticipantList({
   participants,
+  older,
   selectedId,
   onSelect,
   nowMs,
@@ -36,7 +112,10 @@ export function ParticipantList({
   onAdd,
   onInvite,
 }: {
+  /** Simulated people and real phones heard from in the last hour. */
   participants: Participant[];
+  /** Real phones not heard from in the last hour: collapsed, counted nowhere else. */
+  older: Participant[];
   selectedId: string | null;
   onSelect: (id: string) => void;
   nowMs: number;
@@ -47,16 +126,6 @@ export function ParticipantList({
   onAdd: () => void;
   onInvite: () => void;
 }) {
-  const onKey = (e: KeyboardEvent<HTMLUListElement>) => {
-    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
-    e.preventDefault();
-    const i = participants.findIndex((p) => p.id === selectedId);
-    const next = participants[Math.min(participants.length - 1, Math.max(0, i + (e.key === "ArrowDown" ? 1 : -1)))];
-    if (next) {
-      onSelect(next.id);
-      document.getElementById(`aix-p-${next.id}`)?.focus();
-    }
-  };
   return (
     <Panel title="On our app" compact className="aix-people" aria-label="People on our app">
       {error ? (
@@ -64,59 +133,22 @@ export function ParticipantList({
           {error}
         </Notice>
       ) : null}
-      {loading && participants.length === 0 ? (
+      {loading && participants.length + older.length === 0 ? (
         <p className="aix-dim">Loading…</p>
       ) : participants.length === 0 ? (
         <EmptyState title="Nobody yet" symbol="○" action={<Button size="sm" variant="secondary" onClick={onInvite}>Invite phones</Button>}>
           Invite a phone or add a simulated person.
         </EmptyState>
       ) : (
-        <ul className="aix-list" role="listbox" aria-label="People on our app" onKeyDown={onKey}>
-          {participants.map((p) => {
-            const on = p.id === selectedId;
-            const stale = p.kind === "real" && !isJoinedNow(p, nowMs);
-            return (
-              <li
-                key={p.id}
-                id={`aix-p-${p.id}`}
-                role="option"
-                aria-selected={on}
-                tabIndex={on || (!selectedId && p === participants[0]) ? 0 : -1}
-                className={`aix-row${on ? " is-selected" : ""}`}
-                onClick={() => onSelect(p.id)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    onSelect(p.id);
-                  }
-                }}
-              >
-                <PersonGlyph p={p} />
-                <span className="aix-row-body">
-                  <span className="aix-row-name">
-                    {p.name}
-                    <span className="aix-visually-hidden">
-                      {p.kind === "real" ? ", real person" : ", simulated person"}
-                      {p.role === "responder" ? ", responder" : ""}
-                    </span>
-                  </span>
-                  <span className="aix-row-status">{p.status || "No news yet"}</span>
-                  {stale ? <span className="aix-row-status aix-dim">Last seen {ago(p.last_seen, nowMs)}</span> : null}
-                </span>
-                {p.flags.length ? (
-                  <span className="aix-flags">
-                    {p.flags.slice(0, 2).map((f) => (
-                      <Tag key={f} tone={flagTone(f)}>
-                        {f}
-                      </Tag>
-                    ))}
-                  </span>
-                ) : null}
-              </li>
-            );
-          })}
-        </ul>
+        <PeopleRows people={participants} label="People on our app" selectedId={selectedId} onSelect={onSelect} nowMs={nowMs} showSeen={false} />
       )}
+      {older.length ? (
+        <details className="aix-older">
+          <summary>Older phones ({older.length})</summary>
+          <p className="aix-dim">Not heard from in the last hour. Not counted or shown on the map.</p>
+          <PeopleRows people={older} label="Older phones" selectedId={selectedId} onSelect={onSelect} nowMs={nowMs} showSeen />
+        </details>
+      ) : null}
       <Button variant="secondary" size="sm" block onClick={onAdd} disabled={adding}>
         {adding ? "Adding…" : "+ Add a simulated person"}
       </Button>
