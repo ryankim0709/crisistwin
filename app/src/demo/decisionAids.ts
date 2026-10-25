@@ -138,6 +138,8 @@ export function evacuationSchedule(
   const now = board.minute;
   const picture = trafficPicture(board);
   const drafts: ZoneEvacPlan[] = [];
+  // A lifted zone (demo/allClear.ts) has no order in effect, even while its residents drive back: a fire threatening it again plans it anew.
+  const leaving = (z: ZoneState) => z.orderedAt !== null && z.lift === null;
   for (const zone of board.zones) {
     if (zone.overrunAt !== null) continue;
     const eta = freeBurnEta(board, zone, sources);
@@ -155,7 +157,7 @@ export function evacuationSchedule(
       }
     }
     // A leaving zone keeps its route (it can only be redirected).
-    if (zone.orderedAt !== null && zone.route) {
+    if (leaving(zone) && zone.route) {
       const current = options.find((o) => o.destination_id === zone.route!.destination_id) ?? zone.route;
       const e = evacuationEstimate(board, picture, zone, current, eta.etaMin);
       best = { option: current, clearance: e.clearanceMin, drive: e.congestedEtaMin, latest: coreAbs - (EVAC_DEPARTURE_LEAD_MIN + e.clearanceMin + e.congestedEtaMin) - EVAC_SAFETY_MARGIN_MIN };
@@ -174,7 +176,7 @@ export function evacuationSchedule(
       tooLate: latest <= now,
       overCapacity: false,
       action: "order_now",
-      expectedCaughtNow: zone.orderedAt !== null ? expectedCaught(zone, zone.orderedAt, coreAbs) : expectedCaught(zone, now, coreAbs),
+      expectedCaughtNow: leaving(zone) ? expectedCaught(zone, zone.orderedAt!, coreAbs) : expectedCaught(zone, now, coreAbs),
       expectedCaughtAtRecommended: { households: 0, people: null },
     });
   }
@@ -183,8 +185,8 @@ export function evacuationSchedule(
   // Departure flows already on (or committed to) the roads: zones leaving, then each planned zone in turn.
   const planned: { zone: ZoneState; start: number; segments: Set<string> }[] = [];
   for (const z of board.zones) {
-    if (z.overrunAt !== null || z.orderedAt === null || !z.route) continue;
-    planned.push({ zone: z, start: z.orderedAt, segments: new Set(z.route.segments.map((s) => s.id)) });
+    if (z.overrunAt !== null || !leaving(z) || !z.route) continue;
+    planned.push({ zone: z, start: z.orderedAt!, segments: new Set(z.route.segments.map((s) => s.id)) });
   }
   const fits = (plan: ZoneEvacPlan, t: number): boolean => {
     for (const seg of plan.option?.segments ?? []) {
@@ -197,10 +199,10 @@ export function evacuationSchedule(
   for (const plan of drafts) {
     const zone = plan.zone;
     const coreAbs = now + plan.etaMin;
-    if (zone.orderedAt !== null) {
+    if (leaving(zone)) {
       plan.action = "leaving";
-      plan.recommendedStartMinute = Math.round(zone.orderedAt);
-      plan.expectedCaughtAtRecommended = expectedCaught(zone, zone.orderedAt, coreAbs);
+      plan.recommendedStartMinute = Math.round(zone.orderedAt!);
+      plan.expectedCaughtAtRecommended = expectedCaught(zone, zone.orderedAt!, coreAbs);
       continue;
     }
     let start = Math.round(now);

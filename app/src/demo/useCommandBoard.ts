@@ -634,6 +634,8 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
     orderZone: (zoneId, destinationId) =>
       act((b) => applyOrder(b, { type: "order_evacuation", zone_id: zoneId, destination_id: destinationId }, routesRef.current, "you")),
     cancelZoneOrder: (zoneId) => act((b) => applyOrder(b, { type: "cancel_evacuation", zone_id: zoneId }, routesRef.current, "you")),
+    liftZoneOrder: (zoneId) =>
+      act((b) => applyOrder(b, { type: "lift_evacuation", zone_id: zoneId, reason: "controller: all clear" }, routesRef.current, "you")),
   };
 
   const names = useMemo(() => {

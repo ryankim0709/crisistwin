@@ -56,10 +56,10 @@ export interface UnitActivity {
   fromFireM: number | null;
 }
 
-/** Where an attack position stands relative to its fire, in words, with the unit's distance from the fire's edge (metres, or null). */
-function positionWhere(board: Board, line: AttackLine, fromFireM: number | null): string {
+/** Where an attack position stands relative to its fire, in words, with its anchor's distance from the fire's edge (metres, or null). */
+function positionWhere(board: Board, line: AttackLine, anchorFromFireM: number | null): string {
   const kind = line.plan.kind;
-  const d = fromFireM === null ? null : metresText(fromFireM);
+  const d = anchorFromFireM === null ? null : metresText(anchorFromFireM);
   if (kind === "head") return d ? `${d} ahead of the head` : "ahead of the head";
   const where =
     kind === "flank_left"
@@ -110,7 +110,8 @@ export function unitActivity(board: Board, team: Team): UnitActivity {
     case "on_scene": {
       const hiking = team.workStartAt !== null && team.workStartAt > board.minute + 1e-9;
       if (line) {
-        if (team.workMode === "out_of_reach") {
+        // Parked beyond reach of the line's anchor (out of reach, or holding its road: response/reach.ts planWork): it builds nothing there.
+        if (team.workMode === "out_of_reach" || team.workMode === "indirect") {
           return { ...base, kind: "out_of_reach", label: idleOnSceneReason(board, team) ?? `too far from its ${dest} line to build it`, workPoint: line.plan.point };
         }
         if (hiking) {
@@ -124,7 +125,8 @@ export function unitActivity(board: Board, team: Team): UnitActivity {
         return {
           ...base,
           kind: "building_line",
-          label: `building ${dest} line ${positionWhere(board, line, fromFireM)} · ${Math.round(line.builtM)}/${Math.round(line.lengthM)} m`,
+          // Where the line is relative to the fire: its anchor's distance from the open edge (not the unit's, which parks at its road's end).
+          label: `building ${dest} line ${positionWhere(board, line, nearestOf(line.plan.point, edge)?.m ?? null)} · ${Math.round(line.builtM)}/${Math.round(line.lengthM)} m`,
           workPoint: distanceM(here, line.plan.point) > 30 ? line.plan.point : null,
         };
       }

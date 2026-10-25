@@ -1133,7 +1133,7 @@ export function responseTick(board: Board, dt: number, wholeMinute: boolean): vo
       sendHome(board, team);
       continue;
     }
-    if (team.status === "on_scene" && team.waterGallons !== null && team.fireId !== null) {
+    if (team.waterGallons !== null && usesWater(team, now)) {
       team.waterGallons -= ENGINE_WATER_USE_GPM * dt;
       // step() lands on the minute the tank runs dry (model.ts nextTimedEvent); allow float residue.
       if (team.waterGallons <= 1e-6) {
@@ -1740,12 +1740,14 @@ export function idleOnSceneReason(board: Board, team: Team): string | null {
   if (team.status !== "on_scene" || team.fireId === null) return null;
   const fire = board.fires.find((f) => f.id === team.fireId);
   if (!fire || fire.status !== "burning") return null;
-  if (team.workMode === "out_of_reach") {
+  if (team.workMode === "out_of_reach" || team.workMode === "indirect") {
     const line = team.lineId ? board.lines.find((l) => l.id === team.lineId) : undefined;
     const what = line ? `its ${fire.id} ${line.plan.id} line` : fire.id;
+    // Indirect (response/reach.ts planWork): beyond the hike-in limit, it holds the road it parked on.
+    const holding = team.workMode === "indirect" ? "; holding the road it parked on" : "";
     return team.parkedM !== null && team.accessKnown
-      ? `parked ${distanceText(team.parkedM)} from ${what}, too far to build line`
-      : `too far from ${what} to build line`;
+      ? `parked ${distanceText(team.parkedM)} from ${what}, too far to build line${holding}`
+      : `too far from ${what} to build line${holding}`;
   }
   if (team.workMode === null || team.lineId !== null) return null;
   if (team.workStartAt !== null && team.workStartAt > board.minute) return null;
@@ -1822,6 +1824,22 @@ export function arriveOnScene(board: Board, team: Team, fire: Fire): void {
   if (plan.mode === "hand_line" || plan.mode === "dozer" || plan.mode === "indirect" || plan.mode === "out_of_reach") {
     logEvent(board, "team", "board", unitAccessText(board, team), { action: "unit_access", teamIds: [team.id], fireId: fire.id, workMode: plan.mode });
   }
+}
+
+/**
+ * An engine on scene flowing water now: working with hose (response/reach.ts "hose": the edge or
+ * its line within hose reach of where it parked). ENGINE_WATER_USE_GPM is the use of an engine
+ * working a line (response/units.ts), so an engine whose crew is on foot building hand line, or
+ * that is parked out of reach or holding its road (indirect), does not drain its tank.
+ */
+export function usesWater(team: Team, at: number): boolean {
+  return (
+    team.status === "on_scene" &&
+    team.fireId !== null &&
+    team.waterGallons !== null &&
+    team.workMode === "hose" &&
+    (team.workStartAt === null || team.workStartAt <= at + 1e-9)
+  );
 }
 
 /** Builds no line on the fire edge: out of reach, or holding its road as indirect line. */

@@ -13,7 +13,10 @@
  * - caught: zone.caught (home when fire reached the zone core; only while zone.overrunAt is set).
  *   An overrun zone has nobody else home: its carless households are among the caught.
  * - evacuating: zoneCounts.enRoute (departed, cohort arrival in zone.trips still ahead).
- * - safe: zoneCounts.out (cohort arrival at the route's destination at or before the minute).
+ * - safe: zoneCounts.out (cohort arrival at the route's destination at or before the minute),
+ *   plus zoneCounts.returning: after a lift (order status "lifted", demo/allClear.ts) households
+ *   driving back home stay "safe" (out of the zone, no new status key) until they are home again,
+ *   so a lifted zone's households flow safe -> home.
  * - waiting: an order in effect (zone.orderedAt set): L - D, the compliers still in their
  *   exponential departure delay (realism.departedShare). A scheduled order (zone.pendingOrder):
  *   all W, since none has left and compliance only applies once the order is in effect.
@@ -24,7 +27,9 @@
  *   in a zone with an order in effect or scheduled, or threatened (model.zoneThreatened on the
  *   commander's "reported" forecasts, as the /live outcomes use).
  * - home: households in a zone with no order in effect or scheduled (W, plus the carless ones
- *   when the zone is not threatened). A reopened zone (model.reopenZones) is all home again.
+ *   when the zone is not threatened). A reopened zone (model.reopenZones) is all home again. A
+ *   lifted zone: every household not away is home (no waiting / not_leaving / needs_transport:
+ *   the order has ended), including those back home after the lift (zoneCounts.returnedHome).
  * - unknown: always 0 for households (the model tracks every household); kept so every status
  *   key is present.
  * Persons follow their households exactly as model.zonePeople apportions them: vehiclePersons(n)
@@ -58,8 +63,9 @@ export type RunStatus = (typeof RUN_STATUSES)[number];
 export type StatusCounts = Record<RunStatus, number>;
 
 export interface RunStateOrder {
+  /** "lifted": the order was lifted (lift_evacuation, demo/allClear.ts); start_minute is then the lift minute and destination_id / route are null. */
   status: ZoneOrderStatus;
-  /** Board minute the order took effect (in effect / overrun) or is scheduled to; null with none. */
+  /** Board minute the order took effect (in effect / overrun), is scheduled to, or was lifted (lifted); null with none. */
   start_minute: number | null;
   destination_id: string | null;
   /**
@@ -157,7 +163,7 @@ function orderLeavers(zone: ZoneState, departedNow: number): number {
 }
 
 /** Board event actions that set or cancel a zone's evacuation order (their actor is who ordered it). */
-const ORDER_ACTIONS = new Set(["evacuation_ordered", "evacuation_redirected", "evacuation_scheduled", "evacuation_rescheduled", "evacuation_cancelled"]);
+const ORDER_ACTIONS = new Set(["evacuation_ordered", "evacuation_redirected", "evacuation_scheduled", "evacuation_rescheduled", "evacuation_cancelled", "evacuation_lifted"]);
 
 /** Zone id -> who gave its latest evacuation order (board.events is newest first and capped, so it may be missing). */
 function orderIssuers(board: Board): Map<string, "ai_agent" | "controller"> {
@@ -190,15 +196,25 @@ function zoneRunState(zone: ZoneState, minute: number, threatened: boolean, issu
   const h = emptyCounts();
   const persons = p.total === null ? null : emptyCounts();
   h.evacuating = c.enRoute;
-  h.safe = c.out;
+  // Driving back after a lift counts as safe until home (see the module comment).
+  h.safe = c.out + c.returning;
   if (persons) {
     persons.evacuating = p.enRoute!;
-    persons.safe = p.out!;
+    persons.safe = p.out! + p.returning!;
   }
   if (zone.overrunAt !== null) {
-    // Departures froze at the overrun: everyone not departed then is caught (home = 0).
+    // Departures froze at the overrun: everyone not departed then is caught (home = 0, unless
+    // households came back after a lift before a later overrun: zoneCounts.returnedHome).
     h.caught = c.caught;
-    if (persons) persons.caught = p.caught!;
+    h.home = c.home;
+    if (persons) {
+      persons.caught = p.caught!;
+      persons.home = p.home!;
+    }
+  } else if (status === "lifted") {
+    // The order has ended: everyone not away is home (zoneCounts.home, which includes returnedHome).
+    h.home = c.home;
+    if (persons) persons.home = p.home!;
   } else {
     const W = withVehicle(zone);
     const D = departed(zone, minute);
@@ -226,17 +242,19 @@ function zoneRunState(zone: ZoneState, minute: number, threatened: boolean, issu
     h[carlessKey] += c.noVehicleHome;
     if (persons) persons[carlessKey] += p.home! - (vp(W) - vp(D));
   }
-  const route = zone.orderedAt !== null || zone.overrunAt !== null ? zone.route : (zone.pendingOrder?.route ?? null);
+  const lifted = status === "lifted" ? zone.lift : null;
+  const route = lifted ? null : zone.orderedAt !== null || zone.overrunAt !== null ? zone.route : (zone.pendingOrder?.route ?? null);
+  const actorOf = (a: "agent" | "you") => (a === "agent" ? "ai_agent" : "controller");
   return {
     zone_id: zone.id,
     households: h,
     people: persons,
     order: {
       status,
-      start_minute: zone.pendingOrder?.startMinute ?? zone.orderedAt ?? null,
+      start_minute: lifted ? lifted.at : (zone.pendingOrder?.startMinute ?? zone.orderedAt ?? null),
       destination_id: route?.destination_id ?? null,
       route: routeSummary(route),
-      issued_by: zone.pendingOrder ? (zone.pendingOrder.actor === "agent" ? "ai_agent" : "controller") : issuedBy,
+      issued_by: lifted ? actorOf(lifted.actor) : zone.pendingOrder ? actorOf(zone.pendingOrder.actor) : issuedBy,
     },
   };
 }
@@ -268,7 +286,8 @@ const badCounts = (c: StatusCounts) => RUN_STATUSES.filter((k) => !Number.isInte
 /**
  * What must hold of a run state built from `board` at the same minute ([] = all good):
  * per zone, household statuses are non-negative integers summing to zone.households, with
- * evacuating / safe / caught equal to the model's zoneCounts and evacuating + safe = departed;
+ * evacuating / safe / caught equal to the model's zoneCounts (safe = out + returning) and
+ * evacuating + safe = departed - returnedHome (households back home after a lift);
  * persons are null exactly when zone.occupants is, and otherwise sum to it and match zonePeople;
  * totals are the zone sums (persons null when any zone's are).
  */
@@ -289,17 +308,17 @@ export function checkRunState(payload: RunStatePayload, board: Board): string[] 
     const bad = badCounts(z.households);
     if (bad.length) problems.push(`${z.zone_id}: household ${bad.join(", ")} not a non-negative integer`);
     if (sum(z.households) !== zone.households) problems.push(`${z.zone_id}: household statuses sum to ${sum(z.households)}, not ${zone.households}`);
-    if (z.households.evacuating !== c.enRoute || z.households.safe !== c.out || z.households.caught !== c.caught) {
-      problems.push(`${z.zone_id}: evacuating/safe/caught ${z.households.evacuating}/${z.households.safe}/${z.households.caught} != model ${c.enRoute}/${c.out}/${c.caught}`);
+    if (z.households.evacuating !== c.enRoute || z.households.safe !== c.out + c.returning || z.households.caught !== c.caught) {
+      problems.push(`${z.zone_id}: evacuating/safe/caught ${z.households.evacuating}/${z.households.safe}/${z.households.caught} != model ${c.enRoute}/${c.out + c.returning}/${c.caught}`);
     }
     if (z.households.unknown !== 0) problems.push(`${z.zone_id}: ${z.households.unknown} households unknown`);
-    if (z.households.evacuating + z.households.safe !== departed(zone, payload.board_minute)) problems.push(`${z.zone_id}: evacuating + safe != departed`);
+    if (z.households.evacuating + z.households.safe !== departed(zone, payload.board_minute) - c.returnedHome) problems.push(`${z.zone_id}: evacuating + safe != departed - returned home`);
     if ((z.people === null) !== (zone.occupants === null)) problems.push(`${z.zone_id}: persons ${z.people === null ? "null" : "set"} but occupants ${zone.occupants}`);
     if (z.people && zone.occupants !== null) {
       const badP = badCounts(z.people);
       if (badP.length) problems.push(`${z.zone_id}: person ${badP.join(", ")} not a non-negative integer`);
       if (sum(z.people) !== zone.occupants) problems.push(`${z.zone_id}: person statuses sum to ${sum(z.people)}, not ${zone.occupants}`);
-      if (z.people.evacuating !== p.enRoute || z.people.safe !== p.out || z.people.caught !== p.caught) problems.push(`${z.zone_id}: persons evacuating/safe/caught != zonePeople`);
+      if (z.people.evacuating !== p.enRoute || z.people.safe !== p.out! + p.returning! || z.people.caught !== p.caught) problems.push(`${z.zone_id}: persons evacuating/safe/caught != zonePeople`);
     }
     for (const k of RUN_STATUSES) households[k] += z.households[k];
     if (people && z.people) for (const k of RUN_STATUSES) people[k] += z.people[k];

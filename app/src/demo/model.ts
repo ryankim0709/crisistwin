@@ -78,9 +78,11 @@
  *   /api/demo/crew_routes) after their turnout, or a straight line x 1.3 while no road time is
  *   known; a unit parks where its road ends and works the edge as its reach allows
  *   (response/reach.ts).
- * - A zone that was ordered out or overrun reopens once no fire has touched it for
- *   REOPEN_MINUTES and none is forecast to; caught households stay in the running total.
- *   Fires that are out leave the board after OUT_KEEP_MINUTES (their burned ground stays).
+ * - An evacuation order ends only by lift_evacuation (demo/allClear.ts: the commander's order,
+ *   refused until the fire model allows it); its households drive back home. With the rule-based
+ *   response (scripts) a zone that was ordered out or overrun instead reopens once no fire has
+ *   touched it for REOPEN_MINUTES and none is forecast to; caught households stay in the running
+ *   total. Fires that are out leave the board after OUT_KEEP_MINUTES (their burned ground stays).
  *
  * Units: minutes are simulation minutes from T+0; distances metres; areas hectares on output;
  * flame lengths feet (the Hauling chart's unit).
@@ -111,6 +113,7 @@ import {
   dispatchable,
   escalate,
   expectedArrival,
+  fireEdgeSample,
   flowIndex,
   onContained,
   placeOrder,
@@ -121,6 +124,7 @@ import {
   responseTick,
   unitAccessText,
   unreportedRefusal,
+  usesWater,
   sendHome,
   tacticLineRate,
   teamFromSeed,
@@ -146,6 +150,7 @@ import {
 } from "./fireField";
 import type { StudioFire } from "./contracts";
 import type { AccessClass } from "../studio/apparatus";
+import { endLiftForNewOrder, finishLifts, liftEvacuation, noteZoneThreats, type ZoneLift } from "./allClear";
 import {
   LINE_RESOLVE_CHUNK_M,
   POSITION_REPLAN_MINUTES,
@@ -166,6 +171,7 @@ import {
   knockdownLineCells,
   suppressionTick,
   updateBurnDurations,
+  workHoldsFeet,
   type SuppressionState,
 } from "./suppression";
 import { congestionOnLeg, travelVariation } from "../response/travel";
@@ -466,6 +472,13 @@ export interface ZoneState {
   vehicles: number;
   /** Departed cohorts and their congested arrivals (traffic.ts). */
   trips: Trips;
+  /**
+   * The zone's evacuation order lifted (lift_evacuation, demo/allClear.ts): departures froze at
+   * lift.at and the households that left drive back home; null when not lifted.
+   */
+  lift: ZoneLift | null;
+  /** Reported fires whose arrival at the zone came within the all-clear window (allClear.ts noteZoneThreats); a lift waits for them. */
+  threatFireIds: string[];
 }
 
 /** An evacuation order scheduled for a later board minute (order_evacuation with start_minute). */
@@ -652,6 +665,12 @@ export type BoardEventAction =
   | "zone_reached_no_order"
   | "zone_overrun"
   | "zone_reopened"
+  /** lift_evacuation (demo/allClear.ts): the zone's order ended (refs.label cites the fire, households = away then). */
+  | "evacuation_lifted"
+  /** Logged by the board with a lift: the zone's residents drive back home (refs.households, etaMin the drive back). */
+  | "zone_all_clear"
+  /** Every household of a lifted zone that left is home again (refs.households). */
+  | "zone_back_home"
   | "contained"
   | "out"
   | "closed_by_hand"
@@ -1521,6 +1540,8 @@ function zoneState(z: BaseZone, snap: SnapshotZone | undefined, env: DemoEnviron
     lastFireAt: null,
     caught: 0,
     trips: emptyTrips(),
+    lift: null,
+    threatFireIds: [],
   };
   if (snap) {
     const households = count(snap.households);
@@ -2621,11 +2642,13 @@ export function positionEta(board: Board, plan: AttackPlan): number | null {
 /**
  * A unit's line production on a line, m/min, working it in `mode` (default: its own work mode):
  * the sourced rate at the anchor's fuel and slope (realism.ts lineMetersPerMinute); none out of
- * reach; an engine crew on foot beyond hose reach builds hand line at the PMS 465 p.39 per-person
- * rate (response/reach.ts engineCrewHandLineMPerMin), as on direct attack (boardResponse.tacticLineRate).
+ * reach, and none when it parked too far from the anchor to get there (response/reach.ts planWork
+ * "indirect": it holds the road it parked on and builds nothing at the line's anchor); an engine
+ * crew on foot beyond hose reach builds hand line at the PMS 465 p.39 per-person rate
+ * (response/reach.ts engineCrewHandLineMPerMin), as on direct attack (boardResponse.tacticLineRate).
  */
 export function unitLineRateOn(team: Team, plan: AttackPlan, mode: WorkMode | null = team.workMode): number {
-  if (mode === "out_of_reach") return 0;
+  if (mode === "out_of_reach" || mode === "indirect") return 0;
   if (mode === "hand_line" && (team.kind === "engine_t3" || team.kind === "engine_t1")) return engineCrewHandLineMPerMin(team.kind, plan.fuelCode);
   return lineMetersPerMinute(team.kind, plan.fuelCode, plan.slopePercent);
 }
@@ -2689,9 +2712,11 @@ function lineWork(board: Board, line: AttackLine, at = board.minute): { rate: nu
   let holdsFt = 0;
   for (const t of board.teams) {
     if (t.lineId !== line.id || t.status !== "on_scene") continue;
-    if (t.workMode === "out_of_reach" || (t.workStartAt !== null && t.workStartAt > at + 1e-9)) continue;
+    // Parked beyond reach of the anchor (out_of_reach, or holding its road as "indirect"): builds nothing here.
+    if (t.workMode === "out_of_reach" || t.workMode === "indirect" || (t.workStartAt !== null && t.workStartAt > at + 1e-9)) continue;
     rate += unitLineRateOn(t, line.plan);
-    holdsFt = Math.max(holdsFt, holdsFlameFeet(t.kind));
+    // An engine crew on foot (hand line) holds as hand tools (Hauling chart, PMS 465 p.12; suppression.ts workHoldsFeet).
+    holdsFt = Math.max(holdsFt, workHoldsFeet(t));
   }
   return { rate, holdsFt };
 }
@@ -2791,7 +2816,7 @@ function nextTimedEvent(board: Board): number {
     if (t.status === "out_of_service") at(t.outOfServiceUntil);
     if (t.status === "on_scene") at(t.workStartAt);
     // boardResponse.responseTick drains water while on scene on a fire.
-    if (t.status === "on_scene" && t.fireId !== null && t.waterGallons !== null && t.waterGallons > 0) at(board.minute + t.waterGallons / ENGINE_WATER_USE_GPM);
+    if (usesWater(t, board.minute) && t.waterGallons! > 0) at(board.minute + t.waterGallons! / ENGINE_WATER_USE_GPM);
     if (t.status === "returning") at(t.returnRetryAt);
     at(t.rerouteAt);
   }
@@ -3065,6 +3090,8 @@ export type BoardOrder =
   | { type: "release_crew"; crew_id: string; reason?: string }
   | { type: "order_evacuation"; zone_id: string; destination_id: string; start_minute?: number | null; reason?: string }
   | { type: "cancel_evacuation"; zone_id: string; reason?: string }
+  /** Ends a zone's evacuation order once demo/allClear.ts allClearCheck says it is eligible; residents drive back home. */
+  | { type: "lift_evacuation"; zone_id: string; reason?: string }
   | { type: "order_resources"; fire_id: string; resource: Orderable; count: number; reason?: string }
   /** The fire's containment strategy, one of its strategy options (demo/strategyOptions.ts). */
   | SetStrategyOrder;
@@ -3155,6 +3182,7 @@ export function applyOrder(
   const zone = board.zones.find((z) => z.id === order.zone_id);
   if (!zone) return `Unknown zone ${order.zone_id}.`;
   if (order.type === "cancel_evacuation") return cancelEvacuation(board, zone, actor);
+  if (order.type === "lift_evacuation") return liftEvacuation(board, zone, actor, order.reason ?? "");
   return orderEvacuation(board, zone, order, routes, actor);
 }
 
@@ -3182,6 +3210,8 @@ function orderEvacuation(
   // A start the clock has already reached leaves now.
   const start = asked !== null && asked > board.minute ? asked : null;
   const passed = asked !== null && start === null ? ` (its start ${simClock(asked)} had passed: leaving now)` : "";
+  // A lifted zone ordered out again: the lift ends first (demo/allClear.ts), then this is a new order.
+  if (zone.lift) endLiftForNewOrder(board, zone);
   const refs = {
     zoneId: zone.id,
     destinationId: option.destination_id,
@@ -3284,11 +3314,15 @@ function nextScheduledStart(board: Board): number {
 /**
  * Where a zone's evacuation stands: none (no order, nothing scheduled), scheduled (pendingOrder),
  * leaving (order in effect, households still to depart or on the road), done (every household
- * the order sends out has left and arrived), overrun.
+ * the order sends out has left and arrived), overrun, lifted (the order was lifted with
+ * lift_evacuation, demo/allClear.ts: all clear, residents returning or back home; it outranks
+ * overrun, whose caught households stay counted until the fire that burned the zone is out).
  */
-export type ZoneOrderStatus = "none" | "scheduled" | "leaving" | "done" | "overrun";
+export type ZoneOrderStatus = "none" | "scheduled" | "leaving" | "done" | "overrun" | "lifted";
 
 export function zoneOrderStatus(zone: ZoneState, minute: number): ZoneOrderStatus {
+  // A fire overrunning the zone after its lift shows as overrun again (the lift record stays for the counts).
+  if (zone.lift && !(zone.overrunAt !== null && zone.overrunAt > zone.lift.at)) return "lifted";
   if (zone.overrunAt !== null) return "overrun";
   if (zone.pendingOrder) return "scheduled";
   if (zone.orderedAt === null) return "none";
@@ -3330,15 +3364,21 @@ export function departed(zone: ZoneState, minute: number): number {
 
 /** departed() before rounding down: the departure curve itself (for traffic flows). */
 function departedExact(zone: ZoneState, minute: number): number {
-  const end = zone.overrunAt !== null ? Math.min(minute, zone.overrunAt) : minute;
+  // Departures freeze at an overrun and at a lift (demo/allClear.ts: nobody leaves once the order ends).
+  const end = Math.min(minute, zone.overrunAt ?? Infinity, zone.lift?.at ?? Infinity);
   const ordered = zone.orderedAt === null ? 0 : ORDER_COMPLIANCE * departedShare(end - zone.orderedAt);
   return withVehicle(zone) * ordered;
 }
 
 export interface ZoneCounts {
+  /** At home, including households back home after a lift (returnedHome). */
   home: number;
   enRoute: number;
   out: number;
+  /** Driving back home after the zone's order was lifted (demo/allClear.ts); 0 otherwise. */
+  returning: number;
+  /** Households of a lifted zone that left and are back home (included in `home`). */
+  returnedHome: number;
   caught: number;
   /** Carless households still home (included in `home`): need transport. */
   noVehicleHome: number;
@@ -3347,11 +3387,30 @@ export interface ZoneCounts {
 /** Out = households whose cohort's congested arrival (zone.trips) is at or before `minute`. */
 export function zoneCounts(zone: ZoneState, minute: number): ZoneCounts {
   const left = departed(zone, minute);
-  const out = Math.min(left, arrivedBy(zone.trips, minute));
+  const arrived = Math.min(left, arrivedBy(zone.trips, minute));
+  let out = arrived;
+  let returning = 0;
+  let back = 0;
+  const lift = zone.lift;
+  if (lift && minute >= lift.at) {
+    // demo/allClear.ts: from the lift each household out drives back home, starting at max(its
+    // arrival, lift.at) and home lift.returnMinutes later. Fire overrunning the zone after the
+    // lift stops the returns: those not home yet turn back and count as out again.
+    const stopped = zone.overrunAt !== null && zone.overrunAt > lift.at;
+    const end = stopped ? Math.min(minute, zone.overrunAt!) : minute;
+    back = end - lift.returnMinutes >= lift.at ? Math.min(arrived, arrivedBy(zone.trips, end - lift.returnMinutes)) : 0;
+    if (stopped && minute > zone.overrunAt!) out = arrived - back;
+    else {
+      out = 0;
+      returning = arrived - back;
+    }
+  }
   return {
-    home: Math.max(0, zone.households - left - zone.caught),
-    enRoute: left - out,
+    home: Math.max(0, zone.households - left - zone.caught) + back,
+    enRoute: left - arrived,
     out,
+    returning,
+    returnedHome: back,
     caught: zone.caught,
     noVehicleHome: zone.overrunAt !== null ? 0 : zone.noVehicle,
   };
@@ -3376,6 +3435,8 @@ export interface ZonePeople {
   home: number | null;
   enRoute: number | null;
   out: number | null;
+  /** Driving back home after a lift (demo/allClear.ts). */
+  returning: number | null;
   caught: number | null;
   /** Persons of carless households still home (included in `home`): need transport. */
   needsTransportHome: number | null;
@@ -3393,18 +3454,21 @@ export function vehiclePersons(zone: ZoneState, households: number): number {
 export function zonePeople(zone: ZoneState, minute: number): ZonePeople {
   const base = { known: zone.knownOccupants, unknownHouseholds: zone.unknownOccupantHouseholds };
   if (zone.occupants === null) {
-    return { ...base, total: null, home: null, enRoute: null, out: null, caught: null, needsTransportHome: null };
+    return { ...base, total: null, home: null, enRoute: null, out: null, returning: null, caught: null, needsTransportHome: null };
   }
   const c = zoneCounts(zone, minute);
-  const left = vehiclePersons(zone, c.enRoute + c.out);
-  const out = vehiclePersons(zone, c.out);
+  // Away = on the road, out, or driving back after a lift (vehiclePersons is monotone, so each split is >= 0).
+  const left = vehiclePersons(zone, c.enRoute + c.out + c.returning);
+  const outOrReturning = vehiclePersons(zone, c.out + c.returning);
+  const returning = vehiclePersons(zone, c.returning);
   const caught = zone.caughtPeople ?? 0;
   return {
     ...base,
     total: zone.occupants,
     home: Math.max(0, zone.occupants - left - caught),
-    enRoute: left - out,
-    out,
+    enRoute: left - outOrReturning,
+    out: outOrReturning - returning,
+    returning,
     caught,
     needsTransportHome: zone.overrunAt !== null ? 0 : (zone.needsTransportOccupants ?? 0),
   };
@@ -3413,7 +3477,8 @@ export function zonePeople(zone: ZoneState, minute: number): ZonePeople {
 /** Persons caught if the zone is overrun at `minute`: everyone not yet left (null = unknown). */
 function caughtPeopleAt(zone: ZoneState, minute: number): number | null {
   if (zone.occupants === null) return null;
-  return Math.max(0, zone.occupants - vehiclePersons(zone, departed(zone, minute)));
+  // Households away then (departed, less those back home after a lift: demo/allClear.ts).
+  return Math.max(0, zone.occupants - vehiclePersons(zone, departed(zone, minute) - zoneCounts(zone, minute).returnedHome));
 }
 
 // ---- evacuation traffic (demo/traffic.ts) ----
@@ -3438,7 +3503,7 @@ export function vehiclesPerHousehold(zone: ZoneState): number {
 
 /** Households with a vehicle the model will still send out after `minute` (0 once overrun). */
 function stillToLeave(zone: ZoneState, minute: number): number {
-  if (zone.overrunAt !== null || zone.orderedAt === null) return 0;
+  if (zone.overrunAt !== null || zone.orderedAt === null || zone.lift) return 0;
   return Math.max(0, withVehicle(zone) * ORDER_COMPLIANCE - departedExact(zone, minute));
 }
 
@@ -3738,7 +3803,10 @@ export interface EvacueeMarker {
 export function evacueeMarkers(board: Board, maxMarkers = EVACUEE_MARKERS_MAX): EvacueeMarker[] {
   const now = board.minute;
   let total = 0;
-  for (const zone of board.zones) total += zoneCounts(zone, now).enRoute * vehiclesPerHousehold(zone);
+  for (const zone of board.zones) {
+    const c = zoneCounts(zone, now);
+    total += (c.enRoute + c.returning) * vehiclesPerHousehold(zone);
+  }
   if (total <= 0) return [];
   const perMarker = Math.max(VEHICLES_PER_MARKER_MIN, Math.ceil(total / maxMarkers));
   const out: EvacueeMarker[] = [];
@@ -3748,13 +3816,22 @@ export function evacueeMarkers(board: Board, maxMarkers = EVACUEE_MARKERS_MAX): 
     const vph = vehiclesPerHousehold(zone);
     let pending = 0;
     let last: EvacueeMarker | null = null;
+    // Driving back home after a lift (demo/allClear.ts; zoneCounts): from max(arrival, lift) for returnMinutes, back along the line.
+    const lift = zone.lift && !(zone.overrunAt !== null && zone.overrunAt > zone.lift.at) && zone.lift.returnMinutes > 0 ? zone.lift : null;
     for (let k = 0; k < t.at.length && out.length < maxMarkers; k += 1) {
-      if (t.at[k] > now || t.arriveAt[k] <= now) continue;
+      let share: number;
+      let back = false;
+      if (t.at[k] <= now && t.arriveAt[k] > now) share = t.arriveAt[k] - t.at[k] > 0 ? (now - t.at[k]) / (t.arriveAt[k] - t.at[k]) : 1;
+      else if (lift && t.arriveAt[k] <= now && now >= lift.at) {
+        const start = Math.max(t.arriveAt[k], lift.at);
+        if (now >= start + lift.returnMinutes) continue;
+        share = 1 - (now - start) / lift.returnMinutes;
+        back = true;
+      } else continue;
       pending += (t.departed[k] - (k > 0 ? t.departed[k - 1] : 0)) * vph;
-      const span = t.arriveAt[k] - t.at[k];
-      const p = alongLine(t.line[k], span > 0 ? (now - t.at[k]) / span : 1);
+      const p = alongLine(t.line[k], share);
       if (!p) continue;
-      last = { zoneId: zone.id, at: p.at, bearing: p.bearing, vehicles: 0 };
+      last = { zoneId: zone.id, at: p.at, bearing: back ? (p.bearing + 180) % 360 : p.bearing, vehicles: 0 };
       while (pending >= perMarker && out.length < maxMarkers) {
         out.push({ ...last, vehicles: perMarker });
         pending -= perMarker;
@@ -3781,6 +3858,8 @@ function reopenZones(board: Board): void {
     zone.caught = 0;
     zone.caughtPeople = zone.occupants === null ? null : 0;
     zone.trips = emptyTrips();
+    zone.lift = null;
+    zone.threatFireIds = [];
     log(board, "zone", "board", `${zone.name} reopened: no fire near for ${REOPEN_MINUTES} min, households back home.`, {
       action: "zone_reopened",
       zoneId: zone.id,
@@ -3864,7 +3943,7 @@ function stepOnce(board: Board, dt: number, landOn: number | null): void {
     team.workStartAt = arrivedAt + access.startDelayMinutes;
     team.parkedM = access.distanceM;
     team.reachM = access.reachMeters;
-    if (access.mode === "hand_line" || access.mode === "dozer" || access.mode === "out_of_reach") {
+    if (access.mode !== "hose") {
       log(board, "team", "board", unitAccessText(board, team), { action: "unit_access", teamIds: [team.id], fireId: fire.id, positionId: line.plan.id, workMode: access.mode });
     }
     if (positionEta(board, line.plan) === 0) {
@@ -4000,7 +4079,8 @@ function stepOnce(board: Board, dt: number, landOn: number | null): void {
       zone.pendingOrder = null;
       zone.overrunAt = za.coreArrival;
       zone.lastFireAt = board.minute;
-      zone.caught = zone.households - departed(zone, zone.overrunAt);
+      // Home then: not departed, plus any back home after a lift (demo/allClear.ts).
+      zone.caught = zone.households - departed(zone, zone.overrunAt) + zoneCounts(zone, zone.overrunAt).returnedHome;
       zone.caughtPeople = caughtPeopleAt(zone, zone.overrunAt);
       board.caughtTotal += zone.caught;
       board.caughtPeopleTotal = board.caughtPeopleTotal === null || zone.caughtPeople === null ? null : board.caughtPeopleTotal + zone.caughtPeople;
@@ -4023,7 +4103,11 @@ function stepOnce(board: Board, dt: number, landOn: number | null): void {
 
   if (wholeMinute) {
     evacuationTrafficStep(board, Math.floor(board.minute + 1e-9));
-    reopenZones(board);
+    // Live is AI agent only: an order is lifted only by lift_evacuation (demo/allClear.ts). The
+    // automatic reopening stays for the rule-based response (scripts).
+    if (board.response.autoDispatch) reopenZones(board);
+    noteZoneThreats(board);
+    finishLifts(board);
   }
 }
 
@@ -4098,9 +4182,9 @@ function reportBoardInvariants(board: Board): void {
  *   one has exactly one fire (it is in exactly one fire's crew list, never two) and, when on a
  *   line, that line is of that fire; no unit is on a straight-line trip;
  * - a snapshot engine unit is an engine its station lists as available at T+0;
- * - households: home + on the road + out + caught = households per zone, all non-negative, and
- *   carless households home are at most the households home;
- * - persons (where known): home + on the road + out + caught = the zone's persons, all non-negative;
+ * - households: home + on the road + out + returning + caught = households per zone, all
+ *   non-negative, and carless households home are at most the households home;
+ * - persons (where known): home + on the road + out + returning + caught = the zone's persons, all non-negative;
  * - a scheduled evacuation (pendingOrder) is never held by a zone already leaving or overrun, and
  *   nobody leaves a zone with no order in effect (no self-evacuation).
  */
@@ -4138,19 +4222,20 @@ export function checkBoardInvariants(board: Board): string[] {
   }
   for (const zone of board.zones) {
     const c = zoneCounts(zone, board.minute);
-    if (c.home + c.enRoute + c.out + c.caught !== zone.households) {
-      problems.push(`${zone.id}: households ${c.home}+${c.enRoute}+${c.out}+${c.caught} != ${zone.households}`);
+    if (c.home + c.enRoute + c.out + c.returning + c.caught !== zone.households) {
+      problems.push(`${zone.id}: households ${c.home}+${c.enRoute}+${c.out}+${c.returning}+${c.caught} != ${zone.households}`);
     }
-    if (c.home < 0 || c.enRoute < 0 || c.out < 0 || c.caught < 0) problems.push(`${zone.id}: negative household count`);
-    // zoneCounts floors `home` at 0, so check the unclamped balance too.
-    const left = departed(zone, board.minute);
+    if (c.home < 0 || c.enRoute < 0 || c.out < 0 || c.returning < 0 || c.caught < 0) problems.push(`${zone.id}: negative household count`);
+    if (c.returning > 0 && !zone.lift) problems.push(`${zone.id}: ${c.returning} households returning with no lifted order`);
+    // zoneCounts floors `home` at 0, so check the unclamped balance too (households back home after a lift are home again).
+    const left = departed(zone, board.minute) - c.returnedHome;
     if (left + zone.caught > zone.households) problems.push(`${zone.id}: ${left} left + ${zone.caught} caught > ${zone.households} households`);
     if (c.noVehicleHome > c.home) problems.push(`${zone.id}: ${c.noVehicleHome} carless home > ${c.home} home`);
     if (zone.pendingOrder && (zone.orderedAt !== null || zone.overrunAt !== null)) problems.push(`${zone.id}: scheduled evacuation on a zone already leaving or overrun`);
     if (zone.orderedAt === null && left > 0) problems.push(`${zone.id}: ${left} households left with no order in effect`);
     const p = zonePeople(zone, board.minute);
     if (p.total !== null) {
-      const parts = [p.home!, p.enRoute!, p.out!, p.caught!];
+      const parts = [p.home!, p.enRoute!, p.out!, p.returning!, p.caught!];
       if (parts.reduce((a, b) => a + b, 0) !== p.total) problems.push(`${zone.id}: persons ${parts.join("+")} != ${p.total}`);
       if (parts.some((v) => v < 0)) problems.push(`${zone.id}: negative person count`);
       const leftPersons = vehiclePersons(zone, left);
@@ -4277,7 +4362,12 @@ export function workOf(board: Board, team: Team, fire: Fire): UnitWork {
   // A unit on scene works as its reach plan says (out of reach: no line; engine crew on foot: hand line).
   if (team.fireId === fire.id && team.workMode !== null) {
     const lineMPerMin = tacticLineRate(board, fire, [{ ...team, workStartAt: null }], "direct");
-    return { lineMPerMin, holdsFt: team.workMode === "out_of_reach" || team.workMode === "indirect" ? 0 : holdsFlameFeet(team.kind) };
+    return { lineMPerMin, holdsFt: team.workMode === "out_of_reach" || team.workMode === "indirect" ? 0 : workHoldsFeet(team) };
+  }
+  // Not on it yet: an engine whose known road leg ends beyond hose reach works as a crew on foot (hand line).
+  const access = team.fireId === fire.id ? null : directAccessFromLeg(board, team, fire);
+  if (access?.mode === "hand_line" && (team.kind === "engine_t3" || team.kind === "engine_t1")) {
+    return { lineMPerMin: tacticLineRate(board, fire, [{ ...team, workMode: "hand_line", workStartAt: null }], "direct"), holdsFt: workHoldsFeet({ ...team, workMode: "hand_line" }) };
   }
   return { lineMPerMin: unitLineOn(board, team, fire), holdsFt: holdsFlameFeet(team.kind), kind: team.kind };
 }
@@ -4303,8 +4393,36 @@ export interface ContainOption {
 
 /** Free units (available, returning or moving up, on no fire) that can reach this fire's crew target, nearest first (by expected arrival). */
 export function nearestFree(board: Board, fire: Fire): { team: Team; eta: number; road: boolean }[] {
-  return reachableFree(board, fire.id, crewTarget(fire)).map((r) => ({ ...r, eta: expectedArrival(board, r.team, fire) }))
+  // As lineWorkers for attack positions: a unit whose known road leg ends beyond its reach of the
+  // fire's edge (out of reach, or holding its road: response/reach.ts planWork) would build no line
+  // there, so it is left out; one that hikes in starts work after the hike (eta includes it).
+  return reachableFree(board, fire.id, crewTarget(fire))
+    .flatMap((r) => {
+      const access = r.road ? directAccessFromLeg(board, r.team, fire) : null;
+      if (access && (access.mode === "out_of_reach" || access.mode === "indirect")) return [];
+      return [{ ...r, eta: expectedArrival(board, r.team, fire) + (access?.startDelayMinutes ?? 0) }];
+    })
     .sort((a, b) => a.eta - b.eta || a.team.id.localeCompare(b.team.id));
+}
+
+/**
+ * How a unit not yet on `fire` would work it from where its known road leg to the fire's anchor
+ * ends (as boardResponse.arriveOnScene plans it on arrival: the park point to the nearest point of
+ * the fire's open edge), or null while that leg is not known.
+ */
+export function directAccessFromLeg(board: Board, team: Team, fire: Fire): (WorkPlan & { distanceM: number }) | null {
+  const parked = legEnd(board, team, fire.id, crewTarget(fire));
+  if (!parked) return null;
+  let nearest: LonLat = fire.target;
+  let d = distanceM(parked, nearest);
+  for (const p of fireEdgeSample(board, fire)) {
+    const dp = distanceM(parked, p);
+    if (dp < d) {
+      d = dp;
+      nearest = p;
+    }
+  }
+  return accessWorkPlan(board, team.kind, parked, nearest);
 }
 
 /** Direct attack: sending the n nearest free units (n = 1..max) on top of the direct-attack units already assigned. */
@@ -4398,6 +4516,8 @@ export interface Totals {
   home: number;
   enRoute: number;
   out: number;
+  /** Driving back home after a lifted order (demo/allClear.ts). */
+  returning: number;
   /** Households caught in zones still overrun now. */
   caught: number;
   /** Households caught over the whole run. */
@@ -4420,6 +4540,7 @@ export interface PeopleTotals {
   home: number | null;
   enRoute: number | null;
   out: number | null;
+  returning: number | null;
   /** Caught in zones still overrun now / over the whole run. */
   caught: number | null;
   caughtTotal: number | null;
@@ -4445,6 +4566,7 @@ export function totals(board: Board, forecasts?: Map<string, ZoneForecast>): Tot
     home: 0,
     enRoute: 0,
     out: 0,
+    returning: 0,
     caught: 0,
     caughtTotal: board.caughtTotal,
     noVehicleAtRisk: 0,
@@ -4455,6 +4577,7 @@ export function totals(board: Board, forecasts?: Map<string, ZoneForecast>): Tot
       home: 0,
       enRoute: 0,
       out: 0,
+      returning: 0,
       caught: 0,
       caughtTotal: board.caughtPeopleTotal,
       needsTransportAtRisk: 0,
@@ -4470,6 +4593,7 @@ export function totals(board: Board, forecasts?: Map<string, ZoneForecast>): Tot
     t.home += c.home;
     t.enRoute += c.enRoute;
     t.out += c.out;
+    t.returning += c.returning;
     t.caught += c.caught;
     const atRisk = zoneThreatened(zone, forecasts);
     if (atRisk) t.noVehicleAtRisk += c.noVehicleHome;
@@ -4482,6 +4606,7 @@ export function totals(board: Board, forecasts?: Map<string, ZoneForecast>): Tot
     tp.home = add(tp.home, p.home);
     tp.enRoute = add(tp.enRoute, p.enRoute);
     tp.out = add(tp.out, p.out);
+    tp.returning = add(tp.returning, p.returning);
     tp.caught = add(tp.caught, p.caught);
     if (atRisk) tp.needsTransportAtRisk = add(tp.needsTransportAtRisk, p.needsTransportHome);
   }

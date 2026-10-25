@@ -24,7 +24,8 @@
  * Orders: send_crew, release_crew (crew_id may also be an aircraft id from response.aircraft;
  * aircraft take position_id null), order_evacuation (zone_id, destination_id, start_minute:
  * absolute whole board minute departures start, null = now, at most MAX_SCHEDULE_AHEAD_MINUTES
- * ahead), cancel_evacuation (zone_id; a scheduled order not yet started), and order_resources
+ * ahead), cancel_evacuation (zone_id; a scheduled order not yet started), lift_evacuation (zone_id;
+ * only a zone whose all_clear.eligible is true: demo/allClear.ts), and order_resources
  * (fire_id, resource, count; limits in response/runCards.ts ORDERABLE / MAX_ORDER_COUNT, mirrored
  * in demo.py ORDERABLE_RESOURCES), set_strategy (fire_id, strategy_id: one of the fire's
  * strategy_options ids, e.g. "direct", "parallel", "line:flank_left"; demo/strategyOptions.ts;
@@ -583,16 +584,17 @@ export interface ZoneObservation {
   id: string;
   name: string;
   households: number;
-  /** scheduled = an order with a later start_minute is pending (order.start_minute); ordered = an order is in effect. */
-  status: "no_order" | "scheduled" | "ordered" | "overrun";
+  /** scheduled = an order with a later start_minute is pending (order.start_minute); ordered = an order is in effect; lifted = all clear (lift_evacuation). */
+  status: "no_order" | "scheduled" | "ordered" | "overrun" | "lifted";
   /**
    * The zone's evacuation order (model.ts zoneOrderStatus): none, scheduled (departures start at
    * start_minute), leaving (in effect since start_minute), done (everyone it sends out has left and
-   * arrived), overrun. Nobody leaves a zone without an order (no self-evacuation on this board).
+   * arrived), overrun, lifted (lift_evacuation at start_minute: all clear, residents returning or
+   * home). Nobody leaves a zone without an order (no self-evacuation on this board).
    */
   order: {
-    status: "none" | "scheduled" | "leaving" | "done" | "overrun";
-    /** Board minute departures start (scheduled) or started (leaving, done); null otherwise. */
+    status: "none" | "scheduled" | "leaving" | "done" | "overrun" | "lifted";
+    /** Board minute departures start (scheduled) or started (leaving, done), or the lift minute (lifted); null otherwise. */
     start_minute: number | null;
     /** Scheduled only: minutes from now until start_minute. */
     starts_in_min: number | null;
@@ -612,9 +614,19 @@ export interface ZoneObservation {
   departure_peak_veh_h: number;
   /** This zone's departure flow at the last traffic step, veh/h (0 when nobody is leaving). */
   departure_flow_now_veh_h: number;
+  /**
+   * Whether lift_evacuation may end this zone's order now (demo/allClear.ts allClearCheck): every
+   * reported fire that threatened it (arrival within window_min) contained or out for at least
+   * hold_min, and no reported burning fire forecast to reach it within window_min. reasons: why
+   * not (empty when eligible). threat_fire_ids: the fires it waits for. null for a zone with no
+   * order in effect, done or overrun (nothing to lift) and for a lifted zone.
+   */
+  all_clear: { eligible: boolean; reasons: string[]; threat_fire_ids: string[]; window_min: number; hold_min: number } | null;
   households_home: number;
   households_en_route: number;
   households_out: number;
+  /** Driving back home after the zone's order was lifted (simulated: free-flow drive back, no re-entry traffic). */
+  households_returning: number;
   households_caught: number;
   /** Carless households and how many are still home: they need transport (snapshot needs_transport_households, else ACS). */
   households_no_vehicle: number;
@@ -632,6 +644,7 @@ export interface ZoneObservation {
   people_home: number | null;
   people_en_route: number | null;
   people_out: number | null;
+  people_returning: number | null;
   people_caught: number | null;
   /** Same as households_no_vehicle (the snapshot's name); their persons, and those still home. */
   needs_transport_households: number;
@@ -879,6 +892,12 @@ export type DemoOrder =
   | { type: "order_evacuation"; zone_id: string; destination_id: string; start_minute?: number | null; reason: string }
   /** Cancels a scheduled order that has not started (order.status "scheduled"). */
   | { type: "cancel_evacuation"; zone_id: string; reason: string }
+  /**
+   * Lifts the zone's evacuation order (all clear): only when the zone's all_clear.eligible is
+   * true (refused otherwise, with all_clear.reasons). Households not departed stay home; those
+   * that left drive back home (demo/allClear.ts).
+   */
+  | { type: "lift_evacuation"; zone_id: string; reason: string }
   /** Extended-attack order through mutual aid or the state system (response/runCards.ts ORDERABLE, MAX_ORDER_COUNT). */
   | { type: "order_resources"; fire_id: string; resource: Orderable; count: number; reason: string }
   /**
@@ -991,5 +1010,11 @@ export interface DecisionAidsObservation {
   /** How the evacuation schedule is computed (assumptions named). */
   evacuation_method: string;
   evacuation: EvacuationPlanObservation[];
+  /**
+   * Zones whose evacuation order can be lifted now (all_clear.eligible, demo/allClear.ts): the
+   * fires that threatened them and the most recent settlement ("fire S1-F2 contained 45 min ago").
+   * Optional on the wire.
+   */
+  all_clear?: { zone_id: string; threat_fire_ids: string[]; basis: string; households_away: number }[];
   strategy: StrategyAidObservation[];
 }

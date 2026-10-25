@@ -543,7 +543,10 @@ export const SPREAD_MODEL = {
   // 5.1.0: control lines may expire (`ControlLines.holdUntilMinute`, for aircraft drops); a step
   // a line held is re-tried when that line cell expires, finishing the rest of the crossing from
   // then. Runs without expiring lines are unchanged.
-  version: "5.1.0",
+  // 5.1.1: a resumed run (`ResumeFrom`) credits a step in progress with the share of its earlier
+  // Finney travel time elapsed (through every crossed cell), not the origin cell's rate alone;
+  // unchanged settings again reproduce the uninterrupted run. Runs without `resume` are unchanged.
+  version: "5.1.1",
   surfaceSpread:
     "Rothermel (1972) with Albini (1976), per Andrews RMRS-GTR-371 (2018); checked against Behave (BehavePlus engine)",
   fuelModels: "Scott & Burgan (2005) 40 standard fire behavior fuel models",
@@ -1026,13 +1029,17 @@ export interface ControlLines {
  *   and `sourceIndexByCell[i]`, settles in arrival order like any other cell, and is never
  *   reburned or re-timed.
  * - Such a cell spreads on with this run's rates, progress preserved: a step from it toward a
- *   neighbour has, by `fromMinute`, covered the share (fromMinute - arrival) x earlier rate /
- *   step length (at most all of it) at the earlier run's rate in that direction
- *   (`earlierBehaviour`), and covers the rest at this run's rate from `fromMinute`. Ember flight
+ *   neighbour has, by `fromMinute`, covered the share (fromMinute - arrival) / the step's travel
+ *   time in the earlier run (at most all of it), that travel time timed through every crossed
+ *   cell at the earlier run's directional rates (`earlierBehaviour`, Finney 2002 as
+ *   `stepMinutes`), and covers the rest at this run's rate from `fromMinute`. Ember flight
  *   is credited the same way at the earlier wind (`earlierWindSpeedMph`). So with unchanged
- *   settings the resumed run reproduces the uninterrupted one exactly, after a change every
- *   step in progress finishes at the new rate (FARSITE-style continuity of the front), and no
- *   cell newly burns before `fromMinute`.
+ *   settings the resumed run reproduces the uninterrupted deterministic one exactly (to float32
+ *   storage), after a change every step in progress finishes at the new rate (FARSITE-style
+ *   continuity of the front), and no cell newly burns before `fromMinute`. On a stepped run
+ *   (wind wander or a series) a fixed cell's steps are not re-timed at later weather steps (below),
+ *   so a resumed stochastic run is close to, not equal to, the uninterrupted one (measured on
+ *   Berkeley Hills, one grass fire to T+200: -0.3% to +2% of area at 4 mph, up to +9% at 15 mph).
  * - Crown fire is decided per cell from that cell's own surface fire (SPREAD_MODEL 5.0.0), so
  *   nothing about crown state carries over from the earlier run beyond the earlier rates.
  * - A step out of a fixed cell is timed at this run's rates through every cell it crosses, and
@@ -2067,8 +2074,7 @@ function solveSpread(
     }
   });
 
-  const bearings = NEIGHBOURS.map(([dx, dy]) => Math.atan2(dx, -dy));
-  const distances = NEIGHBOURS.map(([dx, dy]) => Math.hypot(dx, dy) * groundCellSizeMeters);
+  const distances =NEIGHBOURS.map(([dx, dy]) => Math.hypot(dx, dy) * groundCellSizeMeters);
 
   // Every step's traversal (`buildStepTraversal`: the cells its line crosses, origin first and
   // destination last, with the share of its length in each) as flat relative cell indices,
@@ -2211,8 +2217,19 @@ function solveSpread(
 
   /**
    * Arrival over a step that leaves a fixed (resumed) cell, progress preserved (`ResumeFrom`):
-   * the share of the step covered by `fromMinute` at the earlier run's directional rate, the
-   * rest at this run's rate. Only called on resumed runs.
+   * the share of the step covered by `fromMinute` is the time since departure over the step's
+   * travel time in the earlier run, the rest is covered at this run's rate. The earlier travel
+   * time is timed as `stepMinutes` times it (Finney 2002 minimum travel time: length in each
+   * crossed cell over that cell's directional rate), from the earlier run's per-cell behaviour
+   * (`earlierBehaviour`, the surface ellipse `directionalRate` reads). Before 5.1.1 the share was
+   * the time since departure x the ORIGIN cell's earlier rate / step length, which is the MTT
+   * time only when every crossed cell spreads at the origin's rate; on mixed fuel and slope the
+   * minimum over 176 directions picked the over-credited steps, and a /live board re-solving
+   * every 10 minutes at unchanged weather burned 22.8 ha where one solve burned 13.1 ha by T+2 h
+   * (Berkeley Hills, GR2 grass, 4 mph). A crossed cell whose behaviour is unchanged takes this
+   * run's directional rate (exact, crown test included); a changed one is read through its earlier
+   * head, heading and ellipse, which for a crowning cell approximates `directionalRate`'s
+   * per-direction crown test. Only called on resumed runs.
    */
   const resumedStepArrival = (
     cell: number,
@@ -2221,18 +2238,36 @@ function solveSpread(
     newStepMinutes: number,
   ): number => {
     const earlier = resume!.earlierBehaviour;
-    const earlierHead = earlier.headRateMetersPerMinute[cell];
     let done = 0;
-    if (earlierHead > 0) {
-      const e = earlier.eccentricity[cell];
-      let earlierRate =
-        e > 0
-          ? (earlierHead * (1 - e)) / (1 - e * Math.cos(bearings[n] - earlier.headingRadians[cell]))
-          : earlierHead;
-      const earlierFloor = earlier.minDirectionalRateMetersPerMinute[cell];
-      if (earlierRate < earlierFloor) earlierRate = earlierFloor;
-      if (earlierRate > 0) {
-        done = ((noArrivalBefore - departedMinute) * earlierRate) / distances[n];
+    if (earlier.headRateMetersPerMinute[cell] > 0) {
+      const bearing = NEIGHBOUR_BEARINGS[n];
+      const start = traversalStart[n];
+      const end = traversalStart[n + 1];
+      let minutesPerMeter = 0;
+      for (let k = start; k < end; k++) {
+        const c = cell + traversalOffset[k];
+        const head = earlier.headRateMetersPerMinute[c];
+        const e = earlier.eccentricity[c];
+        const heading = earlier.headingRadians[c];
+        const floor = earlier.minDirectionalRateMetersPerMinute[c];
+        let rate: number;
+        if (head === headRate[c] && e === eccentricity[c] && heading === headingRadians[c] && floor === minDirectionalRate[c]) {
+          // Unchanged cell: its directional rate is this run's, which `stepMinutes` (called for
+          // this step just before) left in `pathRate`, crown test included.
+          rate = pathRate[k - start];
+        } else {
+          rate = e > 0 ? (head * (1 - e)) / (1 - e * Math.cos(bearing - heading)) : head;
+          if (rate < floor) rate = floor;
+        }
+        if (!(rate > 0)) {
+          minutesPerMeter = Number.POSITIVE_INFINITY;
+          break;
+        }
+        minutesPerMeter += traversalShare[k] / rate;
+      }
+      const earlierStepMinutes = minutesPerMeter * distances[n];
+      if (earlierStepMinutes > 0 && Number.isFinite(earlierStepMinutes)) {
+        done = (noArrivalBefore - departedMinute) / earlierStepMinutes;
       }
     }
     return noArrivalBefore + (1 - Math.min(1, Math.max(0, done))) * newStepMinutes;

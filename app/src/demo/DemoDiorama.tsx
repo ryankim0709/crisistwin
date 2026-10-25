@@ -20,6 +20,7 @@ import { Button, Legend, Panel, type LegendItem } from "../ui";
 import { EXTINGUISHED_LEGEND } from "../fire/diorama/board";
 import { HOUSE_MARK_COLORS } from "../fire/diorama/cover";
 import { DEMO_3D_COLORS, DemoBoardOverlay } from "./DemoBoardOverlay";
+import { ALL_CLEAR_LABEL_MINUTES } from "./allClear";
 import type { Selection } from "./DemoMap";
 import { dioramaRun } from "./dioramaField";
 import { fireOuterRings } from "./fireFootprint";
@@ -284,6 +285,7 @@ export default function DemoDiorama({ board, version, field, landscape, regionNa
     { label: "Leave now zone (outline)", color: css(DEMO_3D_COLORS.ordered), shape: "line" },
     { label: "At risk zone (dashed outline)", color: css(DEMO_3D_COLORS.threatened), shape: "dashed" },
     { label: "Overrun zone (thick outline)", color: css(DEMO_3D_COLORS.overrun), shape: "line" },
+    { label: `All clear zone: evacuation order lifted, residents returning (thin dashed grey; label for ${ALL_CLEAR_LABEL_MINUTES} board min)`, color: css(DEMO_3D_COLORS.lifted), shape: "dashed" },
     { label: "Wind, pointing downwind", color: "var(--ct-ink)", glyph: <WindGlyph bearing={(windFrom + 180) % 360} /> },
   ];
 

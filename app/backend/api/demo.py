@@ -79,6 +79,7 @@ ORDER_TYPES = [
     "release_crew",
     "order_evacuation",
     "cancel_evacuation",
+    "lift_evacuation",
     "order_resources",
     "set_strategy",
     # Live drill actions (observation.incident_picture ids; the page runs them through the live API).
@@ -209,7 +210,7 @@ share order_compliance of households with a vehicle leave, after departure_mean_
 assumption: the snapshot's carless households drive one car each). Anyone home when fire reaches \
 the zone core is caught. \
 order_slack_min = fire_core_eta_min - departure_mean_min if ordered now (negative = already \
-late). Each zone's order block gives status (none, scheduled, leaving, done, overrun), \
+late). Each zone's order block gives status (none, scheduled, leaving, done, overrun, lifted), \
 start_minute, starts_in_min, destination_id and, for a scheduled order, margin_at_start_min. \
 fire_eta_min / fire_core_eta_min: minutes until a burning fire reaches the zone edge / core \
 (0 = already there, null = not within the forecast).
@@ -304,6 +305,7 @@ order_evacuation(zone_id, destination_id, start_minute): destination_id from tha
 options only; start_minute an integer board minute from clock.minute to clock.minute + \
 clock.max_schedule_ahead_min, or null for now; not for a zone already leaving with a \
 start_minute. cancel_evacuation(zone_id): only a zone whose order.status is scheduled. \
+lift_evacuation(zone_id): only a zone whose all_clear.eligible is true (see All clear). \
 order_resources(fire_id, resource, count): resource and count limits from response.orderable; \
 only burning fires. set_strategy(fire_id, strategy_id): strategy_id one of that fire's \
 strategy_options ids; only burning fires; at most one per fire per decision.
@@ -322,6 +324,18 @@ only with corroboration (several parties, a responder, or a real phone you trust
 only what contradicts better evidence. Evacuation orders stay order_evacuation: on the live \
 drill each zone's order (now, or scheduled) is published to that zone's residents' phones as \
 guidance as soon as the board applies it.
+- All clear: once the fire that threatened an evacuated zone is contained, its residents may go \
+home. Each zone with an order in effect, done or overrun carries all_clear (computed by the \
+simulator, never by you): eligible is true only when every reported fire that threatened it \
+(threat_fire_ids) has been contained or out for at least hold_min and no reported burning fire is \
+forecast to reach it within window_min; reasons says why not. decision_aids.all_clear lists the \
+eligible zones. Life safety first: lift_evacuation(zone_id) only for an eligible zone, never one \
+still in decision_aids.evacuation, and when in doubt keep the order. Lifting ends the order (its \
+residents' phones are told the order is lifted); households that left drive back home \
+(households_returning) and those that stayed are home again. Returning residents re-enter the \
+roads (the board times their drive back at free-flow and does not load it on the traffic model), \
+so prefer not to lift a zone whose roads other zones are still leaving by. A lifted zone \
+(order.status lifted) can be ordered out again with order_evacuation if a fire threatens it.
 - Use only ids from the observation. Set the fields an order does not use to null.
 - First write a 1-3 sentence assessment naming what changed, then call issue_orders exactly \
 once. Mention fire, crew and zone ids in the reasons. Be brief.
@@ -375,7 +389,8 @@ ISSUE_ORDERS_TOOL = {
         "response.aircraft) and fire_id, and position_id (one of that fire's attack_positions ids, "
         "or null for direct attack; always null for aircraft). release_crew needs crew_id. order_evacuation needs zone_id and "
         "destination_id, and start_minute (absolute board minute departures start, or null for "
-        "now). cancel_evacuation needs zone_id (a scheduled zone). order_resources needs fire_id, "
+        "now). cancel_evacuation needs zone_id (a scheduled zone). lift_evacuation needs zone_id (a zone whose "
+        "all_clear.eligible is true). order_resources needs fire_id, "
         "resource and count. set_strategy needs fire_id and strategy_id (one of that fire's "
         "strategy_options ids); send its units with send_crew. send_rescue needs help_id. "
         "close_road and reopen_road need road_id. confirm_report and dismiss_report need "
@@ -712,12 +727,19 @@ def build_index(obs: dict) -> dict:
     }
     zones: dict[str, set[str]] = {}
     scheduled: set[str] = set()
+    # lift_evacuation: zone id -> why its order cannot be lifted ([] = eligible), from the page's
+    # model check (zones[].all_clear, app/src/demo/allClear.ts); a zone without the block has nothing to lift.
+    all_clear: dict[str, list[str]] = {}
     for z in obs["zones"]:
         if not isinstance(z.get("id"), str):
             continue
         order = z.get("order")
         if isinstance(order, dict) and order.get("status") == "scheduled":
             scheduled.add(z["id"])
+        clear = z.get("all_clear")
+        if isinstance(clear, dict):
+            reasons = [r for r in clear.get("reasons") or [] if isinstance(r, str)] if isinstance(clear.get("reasons"), list) else []
+            all_clear[z["id"]] = [] if clear.get("eligible") is True else (reasons or ["not eligible"])
         options = z.get("options") if isinstance(z.get("options"), list) else []
         zones[z["id"]] = {
             o["destination_id"] for o in options if isinstance(o, dict) and isinstance(o.get("destination_id"), str)
@@ -731,6 +753,7 @@ def build_index(obs: dict) -> dict:
         "strategies": strategies,
         "zones": zones,
         "scheduled_zones": scheduled,
+        "all_clear": all_clear,
         "minute": minute,
         **picture_index(obs.get("incident_picture")),
     }
@@ -862,6 +885,15 @@ def normalize_order(raw: object, index: dict) -> tuple[dict | None, str | None]:
         if zone_id not in index.get("scheduled_zones", set()):
             return None, f"Zone {zone_id} has no scheduled evacuation to cancel."
         return {"type": kind, "zone_id": zone_id, "reason": reason}, None
+    if kind == "lift_evacuation":
+        if zone_id not in index["zones"]:
+            return None, f"Unknown zone_id {zone_id!r}."
+        why = index.get("all_clear", {}).get(zone_id)
+        if why is None:
+            return None, f"Zone {zone_id} has no evacuation order to lift."
+        if why:
+            return None, f"Zone {zone_id} is not eligible for the all clear: {'; '.join(why[:4])}."
+        return {"type": kind, "zone_id": zone_id, "reason": reason}, None
     if kind == "order_resources":
         if fire_id not in index["fires"]:
             return None, f"Unknown fire_id {fire_id!r}."
@@ -910,7 +942,7 @@ def validate_orders(tool_input: object, index: dict) -> tuple[list[dict], list[d
         if order is None:
             rejected.append({"order": raw, "reason": why})
             continue
-        if order["type"] in ("order_evacuation", "cancel_evacuation"):
+        if order["type"] in ("order_evacuation", "cancel_evacuation", "lift_evacuation"):
             key = ("zone", order["zone_id"])
         elif order["type"] == "order_resources":
             key = ("order", f"{order['fire_id']}:{order['resource']}")

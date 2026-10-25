@@ -11,6 +11,10 @@
  * - Out: households whose cohort's congested arrival at its route's destination is at or before
  *   the board minute (zoneCounts.out), and their persons (zonePeople.out).
  * - On the road: departed, arrival still ahead (zoneCounts.enRoute / zonePeople.enRoute).
+ * - Returning: driving back home after an all clear (zoneCounts.returning, demo/allClear.ts), and
+ *   returned: back home after it (zoneCounts.returnedHome, households only). A lifted zone is not
+ *   a threatened zone here (its all-clear check weighed the fires), so the residents who went
+ *   back home are not counted as "still in threatened zones".
  * - Threatened zone: model.ts zoneThreatened (fire has touched it, or the forecast reaches any of
  *   its cells within FORECAST_MINUTES).
  * - Still in threatened zones: persons home in threatened zones (zonePeople.home), carless ones
@@ -36,7 +40,7 @@
  */
 
 import { isReported } from "./boardResponse";
-import { FORECAST_MINUTES, totals, vehiclePersons, zoneCounts, zonePeople, zoneThreatened, type Board, type ZoneForecast, type ZoneState } from "./model";
+import { FORECAST_MINUTES, totals, vehiclePersons, zoneCounts, zoneOrderStatus, zonePeople, zoneThreatened, type Board, type ZoneForecast, type ZoneState } from "./model";
 import { HOMES_METHOD_LABEL, zoneHomes } from "./scoring";
 
 /** ASSUMPTION: a display threshold for "close call", not a model parameter. */
@@ -63,6 +67,9 @@ export interface BoardOutcomes {
   unknownHouseholds: number;
   out: Count;
   enRoute: Count;
+  /** Driving back home after an all clear, and households back home after one (lifted zones). */
+  returning: Count;
+  returnedHomeHouseholds: number;
   threatenedZones: number;
   /** All persons of the threatened zones (the progress bar's denominator there), and those out. */
   threatenedAll: Count;
@@ -132,6 +139,8 @@ export function boardOutcomes(board: Board, forecasts: Map<string, ZoneForecast>
     unknownHouseholds: t.people.unknownHouseholds,
     out: { people: t.people.out, households: t.out },
     enRoute: { people: t.people.enRoute, households: t.enRoute },
+    returning: { people: t.people.returning, households: t.returning },
+    returnedHomeHouseholds: 0,
     threatenedZones: 0,
     threatenedAll: zero(),
     threatenedOut: zero(),
@@ -157,7 +166,8 @@ export function boardOutcomes(board: Board, forecasts: Map<string, ZoneForecast>
   for (const zone of board.zones) {
     const c = zoneCounts(zone, minute);
     const p = zonePeople(zone, minute);
-    if (zoneThreatened(zone, forecasts)) {
+    o.returnedHomeHouseholds += c.returnedHome;
+    if (zoneThreatened(zone, forecasts) && zoneOrderStatus(zone, minute) !== "lifted") {
       o.threatenedZones += 1;
       plus(o.threatenedAll, p.total, zone.households);
       plus(o.threatenedOut, p.out, c.out);

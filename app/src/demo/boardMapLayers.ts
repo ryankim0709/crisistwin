@@ -10,6 +10,7 @@ import { boardFireFeatures, firePolygons } from "./fireFootprint";
 import { crewWork, fireStatePolygons, type CrewWork } from "./fireState";
 import { simClock } from "./format";
 import { zoneSafeShare } from "./safeHouses";
+import { allClearLabelShown } from "./allClear";
 import { BoardMotion, teamSubjects } from "./unitMotion";
 import {
   activeRoute,
@@ -20,6 +21,8 @@ import {
   positionEta,
   teamPosition,
   trafficPicture,
+  zoneCounts,
+  zoneOrderStatus,
   type Board,
   type RouteOption,
   type ZoneForecast,
@@ -65,6 +68,8 @@ export const BOARD_COLOR = {
   overrun: "#B3140C",
   overrunText: "#7A0A05",
   readyText: "#7A4B00",
+  /** A zone whose evacuation order was lifted (all clear, demo/allClear.ts): neutral, thin, no fill. */
+  allClear: "#5B6470",
   /** Fire line (control line) built or planned ahead of a fire: the map's ink, drawn thin. */
   fireLine: MAP_COLOR.ink,
   /** Evacuating vehicles (simulated): small dots in the route colour, on their road route. */
@@ -118,9 +123,16 @@ function closed(ring: LonLat[]): LonLat[] {
   return a && b && (a[0] !== b[0] || a[1] !== b[1]) ? [...ring, a] : ring;
 }
 
-type ZoneMapState = "overrun" | "ordered" | "threatened" | "quiet";
+type ZoneMapState = "overrun" | "ordered" | "threatened" | "lifted" | "quiet";
 
-function zoneMapState(zone: Board["zones"][number], forecast: ZoneForecast | undefined): ZoneMapState {
+function zoneMapState(zone: Board["zones"][number], forecast: ZoneForecast | undefined, minute: number): ZoneMapState {
+  // All clear (demo/allClear.ts): no "Leave now" sign; a neutral label for ALL_CLEAR_LABEL_MINUTES,
+  // then nothing, unless a fire is forecast to reach it again (edge ETA > 0; a contained fire's
+  // burned ground at its edge reads 0).
+  if (zoneOrderStatus(zone, minute) === "lifted") {
+    if (forecast && forecast.edgeEta !== null && forecast.edgeEta > 0) return "threatened";
+    return allClearLabelShown(zone, minute) ? "lifted" : "quiet";
+  }
   if (zone.overrunAt !== null) return "overrun";
   if (zone.orderedAt !== null) return "ordered";
   // A scheduled order is drawn like a threatened zone; its tag says when it leaves.
@@ -128,7 +140,12 @@ function zoneMapState(zone: Board["zones"][number], forecast: ZoneForecast | und
   return "quiet";
 }
 
-function zoneTag(state: ZoneMapState, forecast: ZoneForecast | undefined, zone: Board["zones"][number]): string {
+function zoneTag(state: ZoneMapState, forecast: ZoneForecast | undefined, zone: Board["zones"][number], minute: number): string {
+  if (state === "lifted") {
+    const c = zoneCounts(zone, minute);
+    const away = c.returning + c.enRoute;
+    return `ALL CLEAR (sim) · ${zone.id}${away > 0 ? ` · ${away} returning` : ""}`;
+  }
   if (state === "overrun") return "OVERRUN (sim)";
   if (state === "ordered") return "LEAVE NOW (sim)";
   if (state === "threatened" && zone.pendingOrder) {
@@ -162,13 +179,13 @@ function buildZones(board: Board, forecasts: Map<string, ZoneForecast>) {
   const areas: Feature[] = [];
   const labels: Feature[] = [];
   for (const zs of board.zones) {
-    const state = zoneMapState(zs, forecasts.get(zs.id));
+    const state = zoneMapState(zs, forecasts.get(zs.id), board.minute);
     if (state === "quiet") continue; // quiet zones draw nothing
     areas.push(polygon(zs.ring, { id: zs.id, state }));
-    let tag = zoneTag(state, forecasts.get(zs.id), zs);
+    let tag = zoneTag(state, forecasts.get(zs.id), zs, board.minute);
     // Households that reached safety (zoneCounts out), as on the 3D view's green-roofed houses.
     const safe = Math.floor(zoneSafeShare(zs, board.minute) * 100);
-    if (tag && safe > 0) tag += ` · ${safe}% safe`;
+    if (tag && safe > 0 && state !== "lifted") tag += ` · ${safe}% safe`;
     if (tag) labels.push(point(zs.core, { text: tag, state }));
   }
   return { areas, labels };
@@ -412,7 +429,7 @@ const INTERACTIVE = ["bd-teams", "bd-fire-fill", "bd-fire-labels", "bd-zones-fil
 const LIVE_HIT_LAYERS = ["lc-ground", "lc-points", "lc-help", "lc-responders", "lc-queues", "lc-dest"];
 
 const STATE_MATCH = (values: Record<ZoneMapState, string | number>) =>
-  ["match", ["get", "state"], "overrun", values.overrun, "ordered", values.ordered, "threatened", values.threatened, values.quiet] as never;
+  ["match", ["get", "state"], "overrun", values.overrun, "ordered", values.ordered, "threatened", values.threatened, "lifted", values.lifted, values.quiet] as never;
 const STATUS_MATCH = (burning: string | number, contained: string | number, out: string | number) =>
   ["match", ["get", "status"], "burning", burning, "contained", contained, out] as never;
 
@@ -431,14 +448,14 @@ function installLayers(map: MapLibreMap, beforeId: string): string[] {
     "text-halo-width": halo,
   });
 
-  const zoneColor = { overrun: BOARD_COLOR.overrun, ordered: LEVEL_COLOR.evacuate_now, threatened: LEVEL_COLOR.be_ready, quiet: LEVEL_COLOR.none };
+  const zoneColor = { overrun: BOARD_COLOR.overrun, ordered: LEVEL_COLOR.evacuate_now, threatened: LEVEL_COLOR.be_ready, lifted: BOARD_COLOR.allClear, quiet: LEVEL_COLOR.none };
   add({ id: "bd-zones-fill", type: "fill", source: "bd-zones", paint: {
     "fill-color": STATE_MATCH(zoneColor),
-    "fill-opacity": STATE_MATCH({ overrun: 0.22, ordered: 0.12, threatened: 0.1, quiet: 0 }),
+    "fill-opacity": STATE_MATCH({ overrun: 0.22, ordered: 0.12, threatened: 0.1, lifted: 0, quiet: 0 }),
   } });
   add({ id: "bd-zones-line", type: "line", source: "bd-zones", paint: {
     "line-color": STATE_MATCH(zoneColor),
-    "line-width": STATE_MATCH({ overrun: 3, ordered: 2.5, threatened: 2, quiet: 0.6 }),
+    "line-width": STATE_MATCH({ overrun: 3, ordered: 2.5, threatened: 2, lifted: 1, quiet: 0.6 }),
     "line-opacity": 0.95,
   } });
   add({ id: "bd-no-truck-casing", type: "line", source: "bd-no-truck", layout: { "line-cap": "round" }, paint: {
@@ -544,7 +561,7 @@ function installLayers(map: MapLibreMap, beforeId: string): string[] {
     paint: text(MAP_COLOR.responder, 1.6) });
   add({ id: "bd-zone-labels", type: "symbol", source: "bd-zone-labels",
     layout: { "text-field": ["get", "text"], "text-font": FONT, "text-size": 12, "text-letter-spacing": 0.04 },
-    paint: text(["match", ["get", "state"], "overrun", BOARD_COLOR.overrunText, "ordered", BOARD_COLOR.overrun, BOARD_COLOR.readyText], 1.6) });
+    paint: text(["match", ["get", "state"], "overrun", BOARD_COLOR.overrunText, "ordered", BOARD_COLOR.overrun, "lifted", BOARD_COLOR.allClear, BOARD_COLOR.readyText], 1.6) });
   add({ id: "bd-fire-labels", type: "symbol", source: "bd-fire-labels",
     layout: { "text-field": ["get", "text"], "text-font": FONT, "text-size": 12, "text-letter-spacing": 0.04, "text-allow-overlap": true },
     paint: { ...text(STATUS_MATCH(MAP_COLOR.fireEdge, MAP_COLOR.fireEdge, BOARD_COLOR.scarEdge), 1.8), "text-opacity": ["case", ["get", "reported"], 1, 0.7] as never } });

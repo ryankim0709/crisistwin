@@ -71,6 +71,7 @@ export function orderText(order: CommanderOrder, name: (id: string) => string): 
   if (order.type === "release_crew") return `Release ${order.crew_id}`;
   if (order.type === "order_resources") return `Order ${order.count} ${order.resource.replace(/_/g, " ")} for ${order.fire_id}`;
   if (order.type === "cancel_evacuation") return `Cancel the scheduled evacuation of ${name(order.zone_id)}`;
+  if (order.type === "lift_evacuation") return `Lift the evacuation order for ${name(order.zone_id)} (all clear)`;
   if (order.type === "set_strategy") return `Strategy ${order.strategy_id} for ${order.fire_id}`;
   return `Evacuate ${name(order.zone_id)} to ${name(order.destination_id)}${order.start_minute != null ? ` at ${simClock(order.start_minute)}` : ""}`;
 }

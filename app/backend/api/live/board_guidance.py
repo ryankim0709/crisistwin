@@ -16,6 +16,9 @@ Order status (``model.ts`` ``zoneOrderStatus``) -> guidance:
   clock ...". A new start minute or destination is a new version.
 - ``none``: withdraws (``level: none``) whatever the zone was last told: a cancelled schedule, a
   new board run (Reset board), or guidance left over from the former proposal flow.
+- ``lifted``: the order was lifted (fire contained). A zone that had been told something gets
+  ``level: none`` with ``reason_code: "board_all_clear"`` and a reason telling residents they may
+  return; the phone view shows it as an all-clear. Never-told zones are left alone.
 - ``overrun``: fire reached the zone core on the board. A zone that had been told something gets
   ``evacuate_now`` with ``no_route`` (the phone says "No open route. Shelter in place and tap Need
   help."); a zone never told anything is left alone.
@@ -55,6 +58,8 @@ log = logging.getLogger(__name__)
 
 GUIDANCE = "live_guidance"
 SOURCE = "board"
+ALL_CLEAR = "board_all_clear"
+"""``reason_code`` of a lifted order: level ``none`` (the iOS decoder knows no other level) with this code."""
 ACTION = "board_guidance"
 """``live_decisions.action`` of a published change (the activity feed renders its note)."""
 ISSUERS = {"ai_agent": "the AI agent", "controller": "the controller"}
@@ -122,7 +127,17 @@ def target(order: dict[str, Any], route: dict[str, Any] | None, index: DrillInde
 
     ``restarted``: ``latest`` came from an earlier board run (Reset board, a reload, a new landscape)."""
     status = order["status"]
+    cleared = latest is not None and latest.get("reason_code") == ALL_CLEAR
     told = latest is not None and latest.get("level") != "none"
+    if status == "lifted":
+        if not told:
+            return None  # nothing to lift (never ordered, or already withdrawn / lifted)
+        return {"level": "none", "destination": None, "route": None, "no_route": False,
+                "reason": f"All clear: the evacuation order for your zone has been lifted by {_issuer(order)} "
+                          "on the simulated board. You may return home; drive carefully.",
+                "reason_code": ALL_CLEAR, "caveat": None, "alternatives": [], "board_start_minute": None}
+    if cleared and restarted:
+        told = True  # a new board run withdraws the former all-clear too
     if status in ("leaving", "done"):
         return _moving(order, route, index, "evacuate_now")
     if status == "scheduled":
@@ -153,7 +168,7 @@ def _key(doc: dict[str, Any]) -> tuple[Any, ...]:
             (doc.get("destination") or {}).get("id"), via, start)
 
 
-IN_PLACE = ("route", "caveat", "reason", "issued_by", "destination")
+IN_PLACE = ("route", "caveat", "reason", "reason_code", "issued_by", "destination")
 
 
 def _feed_text(zone_label: str, doc: dict[str, Any], latest: dict[str, Any] | None) -> str:
@@ -162,7 +177,9 @@ def _feed_text(zone_label: str, doc: dict[str, Any], latest: dict[str, Any] | No
     dest = dest.split(" via ")[0].strip() or dest  # "Exit west via Hedstrom Way" -> "Exit west", as the phone shows it
     where = (f" via {road}" if road else "") + (f" to {dest}" if dest else "")
     level = doc["level"]
-    if level == "none":
+    if doc.get("reason_code") == ALL_CLEAR:
+        what = "All clear, you may return"
+    elif level == "none":
         reason = doc.get("reason") or ""
         what = "No order" + (" (scheduled evacuation cancelled)" if reason.startswith("Scheduled evacuation cancelled")
                              else " (board restarted)" if reason.startswith("The simulated board restarted") else "")

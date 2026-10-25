@@ -30,7 +30,7 @@ export function baselineOrders(obs: DemoObservation): { orders: DemoOrder[]; sum
     inPlan.add(p.zone_id);
     const zone = zones.get(p.zone_id);
     if (!zone || !p.destination_id || !zone.options.some((o) => o.destination_id === p.destination_id)) continue;
-    if (p.action === "order_now" && (zone.order.status === "none" || zone.order.status === "scheduled")) {
+    if (p.action === "order_now" && (zone.order.status === "none" || zone.order.status === "scheduled" || zone.order.status === "lifted")) {
       orders.push({ type: "order_evacuation", zone_id: p.zone_id, destination_id: p.destination_id, start_minute: null, reason: `schedule: order now (eta ${p.eta_min} min, ${p.too_late ? "too late" : "start now"})` });
     } else if ((p.action === "schedule" || p.action === "reschedule") && zone.order.status !== "leaving" && zone.order.status !== "done") {
       const start = Math.min(maxStart, p.recommended_start_minute);
@@ -40,6 +40,10 @@ export function baselineOrders(obs: DemoObservation): { orders: DemoOrder[]; sum
   }
   for (const zone of obs.zones) {
     if (zone.order.status === "scheduled" && !inPlan.has(zone.id)) orders.push({ type: "cancel_evacuation", zone_id: zone.id, reason: "no longer in the evacuation schedule" });
+  }
+  // All clear (demo/allClear.ts): lift each zone the decision aid lists as eligible and no longer in the schedule.
+  for (const c of aids.all_clear ?? []) {
+    if (!inPlan.has(c.zone_id)) orders.push({ type: "lift_evacuation", zone_id: c.zone_id, reason: `all clear: ${c.basis}` });
   }
 
   // ---- fires ----

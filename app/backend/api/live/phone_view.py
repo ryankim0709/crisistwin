@@ -288,6 +288,11 @@ def _build(incident_id: str, person: dict[str, Any]) -> dict[str, Any]:
                     lines=[VERDICTS[level]] if level in VERDICTS else [])
         _attach_route(body, guidance)
         return body
+    if guidance is not None and level == "none" and guidance.get("reason_code") == "board_all_clear":
+        body.update(screen="no_order", headline=f"All clear for {zone.name}",
+                    sub="The evacuation order has been lifted. You may return home.",
+                    lines=[guidance["reason"]] if guidance.get("reason") else [], buttons=buttons)
+        return body
     if guidance is None or level == "none":
         body.update(screen="no_order", headline=f"No order for {zone.name}",
                     sub="No emergency order applies to your area.", buttons=buttons)

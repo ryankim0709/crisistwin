@@ -98,6 +98,13 @@ export default function Outcomes({
           value={people(o.enRoute.people)}
           detail={`people driving out now · ${households(o.enRoute.households)}`}
         />
+        {o.returning.households > 0 ? (
+          <Metric
+            label="Returning home"
+            value={people(o.returning.people)}
+            detail={`people driving back after an all clear (sim) · ${households(o.returning.households)}`}
+          />
+        ) : null}
         <Metric
           label="Still in threatened zones"
           value={people(o.threatenedHome.people)}

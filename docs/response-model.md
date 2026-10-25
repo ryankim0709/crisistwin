@@ -328,6 +328,18 @@ unknown; it is taken to park at its target and labelled "road access not known".
   needed. Aircraft line can cover the rest, but containment still needs a ground unit working
   the edge. A fire whose edge is mostly out of reach is not contained by ground units. Forecasts
   (`containedIn`, `contained_in_min`) apply the same cap, the hike time and the on-foot rates.
+- **Indirect (holding the road)**: a line builder that cannot reach the edge (an engine beyond
+  800 m, a crew beyond its hike limit) holds the road it parked on. It builds nothing on the
+  fire's edge and nothing on an attack line's anchor either (`unitLineRateOn` is 0); its label
+  and the agent's monitor say it is parked too far to build line. Free units whose known road leg
+  to a fire ends out of their reach are left out of the direct-attack forecasts and the all-units
+  package (`nearestFree`), as `lineWorkers` already does for attack positions.
+- **Water**: an engine drains its tank (`ENGINE_WATER_USE_GPM`) only while it works with hose
+  (`usesWater`); an engine whose crew is on foot, or that is holding its road, does not.
+- **Road data extent**: the drill's road graph is the package's box (fire reach plus 3 km,
+  `livecore/package.py area_box`). A later Studio fire outside that box gets road legs that stop
+  at the box edge, however close real roads are (Berkeley Hills drill: box to 37.900° N; F2 of
+  publish sf_7a09abf8e4f0 at 37.913° N parks 1.4-1.7 km away while OSM has tracks within 150 m).
 - **UI**: the fire panel shows "E12 parked 600 m from F3 — hiking in to build hand line, ~14 min"
   per unit, and "Only 40% of this fire's edge is within reach of ground crews" when below 100%.
   The observation adds `crews[].parked_m/work_mode/working_in_min`.

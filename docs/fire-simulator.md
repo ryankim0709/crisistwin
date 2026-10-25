@@ -207,10 +207,15 @@ has two opt-in extensions used by the `/demo` command board (`app/src/demo/fireF
 per-cell head rate, heading, ellipse eccentricity, backing floor, flame length and crown class the
 solver propagated. `resume` (`ResumeFrom`) continues from an earlier run's arrival field at
 `fromMinute`: cells burned by then keep their arrival and source, spread on at this run's rates
-with the share of each in-progress step already covered at the earlier rates credited, and no
-cell newly burns before `fromMinute`; cells of a put-out fire (or source -1) are burned but inert.
-With unchanged settings a resumed run reproduces the uninterrupted one; this is how the board
-follows an hourly wind series with a one-wind-per-run solver.
+with the share of each in-progress step already covered credited (time since departure over the
+step's earlier travel time, timed through every crossed cell as the step itself is, Finney 2002),
+and no cell newly burns before `fromMinute`; cells of a put-out fire (or source -1) are burned but
+inert. With unchanged settings a resumed deterministic run reproduces the uninterrupted one (to
+float32 storage); this is how the board follows an hourly wind series with a one-wind-per-run
+solver. Solver 5.0.0 to 5.1.0 credited the origin cell's rate over the whole step instead, which
+no longer matched the per-crossed-cell step timing: re-solving every 10 minutes at unchanged
+weather burned 22.8 ha where one solve burned 13.1 ha by T+2 h (Berkeley Hills, one GR2 grass
+fire, 4 mph); fixed in 5.1.1 (13.06 ha both, 2026-10-25).
 
 Both mechanism options are optional in `FireScenario`; omitting one applies its default,
 and the defaults have both mechanisms on. Switch them off by passing `enabled: false`.
@@ -411,10 +416,12 @@ compared on the same realisation. `gustFactorOf(sample)` turns a weather sample'
 Every draw is a pure function of (seed, stream, cell or wind step), a counter-based hash,
 not a sequential generator. So the same seed reproduces the same field whatever order
 cells settle in, and a resumed /live solve (`ResumeFrom`) makes the same draws for the
-same cells; measured: an unchanged-settings resume at minute 120 matched the uninterrupted
-stochastic run cell for cell (no membership differences, largest arrival difference 0.006
-min, from float32 storage of the earlier behaviour). Keep a board's seed fixed and include
-the options in its solve key.
+same cells. Measured before solver 5.0.0: an unchanged-settings resume at minute 120 matched
+the uninterrupted stochastic run cell for cell. Since 5.0.0 (crossings re-timed at each 10-minute
+weather step, which a resumed cell's steps are not) it is close, not equal: 5.1.1, Berkeley Hills,
+one grass fire at 4 mph, resumed at minute 120: 23.60 ha against 23.26 ha at T+200 (+1.5%), 194
+cells differ by up to 10 min; resumed every 10 minutes, 23.20 ha (-0.3%); at 15 mph resumed every
+30 minutes, +9%. Keep a board's seed fixed and include the options in its solve key.
 
 ### Model, sources and evidence
 

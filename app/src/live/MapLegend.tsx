@@ -76,6 +76,7 @@ const BOARD_ROWS: { key: string; label: string; swatch: ReactNode }[] = [
   { key: "bd-leave", label: "Board zone: leave now (sim)", swatch: zoneSw(LEVEL_COLOR.evacuate_now, 0.15) },
   { key: "bd-risk", label: "Board zone: at risk (sim)", swatch: zoneSw(LEVEL_COLOR.be_ready, 0.15) },
   { key: "bd-overrun", label: "Board zone: overrun (sim)", swatch: zoneSw(BOARD_COLOR.overrun, 0.3, 3) },
+  { key: "bd-clear", label: "Board zone: all clear, order lifted (sim)", swatch: zoneSw(BOARD_COLOR.allClear, 0, 1) },
   {
     key: "bd-unit",
     label: "Fire unit (sim)",

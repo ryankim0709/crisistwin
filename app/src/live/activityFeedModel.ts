@@ -341,9 +341,11 @@ function zoneProgress(ctx: Ctx, zoneId: string): string | null {
   const out = people ? p.out! : c.out;
   const road = people ? p.enRoute! : c.enRoute;
   const home = people ? p.home! : c.home;
+  const returning = people ? (p.returning ?? 0) : c.returning;
   const parts: string[] = [];
   if (out > 0) parts.push(`${nf(out)} ${unit} reached safety`);
   if (road > 0) parts.push(`${nf(road)} on the road`);
+  if (returning > 0) parts.push(`${nf(returning)} returning home (all clear)`);
   if (home > 0 && zone.overrunAt === null) parts.push(`${nf(home)} still home`);
   if (c.noVehicleHome > 0) parts.push(`${nf(c.noVehicleHome)} households without a vehicle need transport`);
   return parts.length ? parts.join(" · ") : null;
@@ -706,6 +708,36 @@ function renderGroup(ctx: Ctx, g: Group): Rendered {
     }
     case "zone_reopened":
       return quiet(`${r.zoneId ? zoneName(ctx, r.zoneId) : "Zone"} reopened; households back home.`, "completed", r.zoneId ? { kind: "zone", id: r.zoneId } : null);
+    case "evacuation_lifted": {
+      // demo/allClear.ts lift_evacuation: refs.label cites the fire ("fire S1-F2 contained 45 min ago").
+      const zone = r.zoneId ? zoneName(ctx, r.zoneId) : "a zone";
+      const by = first.ev.actor === "you" ? "You lifted" : first.ev.actor === "agent" ? "Claude lifted" : "Lifted";
+      return {
+        title: `${by} the evacuation order for ${zone}${r.label ? ` (${r.label})` : ""}: residents may return.`,
+        sub: null,
+        state: "completed",
+        attention: null,
+        boardRef: r.zoneId ? { kind: "zone", id: r.zoneId } : null,
+        progressZone: r.zoneId,
+      };
+    }
+    case "zone_all_clear": {
+      const zone = r.zoneId ? zoneName(ctx, r.zoneId) : "Zone";
+      const hh = r.households ?? 0;
+      return quiet(
+        hh > 0
+          ? `All clear: ${zone} residents returning home (${plural(hh, ["household", "households"])}${r.etaMin ? `, about ${nf(r.etaMin)} min drive back` : ""}).`
+          : `All clear: ${zone} (no household had left).`,
+        "in_progress",
+        r.zoneId ? { kind: "zone", id: r.zoneId } : null,
+      );
+    }
+    case "zone_back_home":
+      return quiet(
+        `${r.zoneId ? zoneName(ctx, r.zoneId) : "Zone"}: ${r.households !== undefined ? plural(r.households, ["household", "households"]) : "households"} back home after the all clear.`,
+        "completed",
+        r.zoneId ? { kind: "zone", id: r.zoneId } : null,
+      );
     case "contained":
       return quiet(`${fireLabel(ctx, fireId)} contained${r.areaHa !== undefined ? ` (${r.areaHa.toFixed(1)} ha)` : ""}.`, "completed");
     case "out":
@@ -754,6 +786,7 @@ function orderShort(ctx: Ctx, o: CommanderOrder): string {
   if (o.type === "release_crew") return `release ${unitLabel(ctx, o.crew_id)}`;
   if (o.type === "order_resources") return `order ${plural(o.count, RESOURCE[o.resource] ?? [o.resource, o.resource])} for ${fireLabel(ctx, o.fire_id)}`;
   if (o.type === "cancel_evacuation") return `cancel the scheduled evacuation of ${zoneName(ctx, o.zone_id)}`;
+  if (o.type === "lift_evacuation") return `lift the evacuation order for ${zoneName(ctx, o.zone_id)} (all clear)`;
   const at = o.start_minute != null ? ` at ${simClock(o.start_minute)}` : "";
   return `evacuate ${zoneName(ctx, o.zone_id)} → ${ctx.name(o.destination_id)}${at}`;
 }
@@ -771,7 +804,7 @@ function orderIds(o: CommanderOrder): string[] {
   if (o.type === "send_crew") return [o.crew_id, o.fire_id];
   if (o.type === "release_crew") return [o.crew_id];
   if (o.type === "order_resources" || o.type === "set_strategy") return [o.fire_id];
-  if (o.type === "cancel_evacuation") return [o.zone_id];
+  if (o.type === "cancel_evacuation" || o.type === "lift_evacuation") return [o.zone_id];
   return [o.zone_id, o.destination_id];
 }
 

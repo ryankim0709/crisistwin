@@ -443,6 +443,7 @@ console publishes nothing. Per zone, from the PUT's `order` block:
 | `leaving`, `done` | `evacuate_now` to `destination_id` on `order.route` (the board's route option); `reason` "Evacuation ordered by the AI agent on the simulated board", `reason_code: "board_order"`. `done` keeps the order in force (no new version) |
 | `scheduled` | `be_ready` on the same route; `reason` "Leave at T+01:30 on the simulated board clock (scheduled by ...)" (board minutes, not wall or drill time), `reason_code: "board_scheduled"`, `board_start_minute` |
 | `none` | withdraws what the zone was last told (`level: "none"`, `reason_code: "board_no_order"`): a cancelled schedule, a new board run, or guidance left from the former proposal flow. Nothing is written for a zone never told anything |
+| `lifted` | the order was lifted (fire contained): `level: "none"`, `reason_code: "board_all_clear"`, `reason` "All clear: the evacuation order for your zone has been lifted by the AI agent on the simulated board. You may return home; drive carefully." The phone view shows screen `no_order` with headline "All clear for <zone>" and the reason as a line; the feed line is "Residents of Z23 told: All clear, you may return". Only for a zone that had an order or guidance; `start_minute` is the board minute it was lifted |
 | `overrun` | `evacuate_now` with `no_route: true` ("Fire reached this zone on the simulated board"; the phone shows "No open route. Shelter in place and tap Need help."), `reason_code: "board_overrun"`; only for a zone that had an order or guidance |
 
 - **Versions.** A new version only when the level, destination, the road to leave by (`via[0]`),
@@ -2115,7 +2116,7 @@ Rules:
 
 - **Fields.** `run_id` is a string of at most 80 characters. `board_minute` is a number `>= 0`, in
   board minutes. Every count is a non-negative integer keyed by a status. `people` is `null` when
-  unknown. `order.status` is one of `none|scheduled|leaving|done|overrun`. `start_minute` and
+  unknown. `order.status` is one of `none|scheduled|leaving|done|overrun|lifted`. `start_minute` and
   `destination_id` may be `null`. Optional, for resident guidance
   ([Guidance from the Live board's orders](#guidance-from-the-live-boards-orders)):
   `order.route` `{via: [road names, at most 5], eta_min, distance_m, safety:

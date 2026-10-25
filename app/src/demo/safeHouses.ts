@@ -2,7 +2,7 @@
  * Which stylized 3D houses (fire/diorama cover houses, placeholders along OSM residential streets)
  * show "residents safe" on the /live diorama. The board's evacuation is per zone, not per house, so
  * each zone's houses are marked in proportion to its households that reached safety
- * (zoneCounts(...).out / zone.households), rounded down so the picture never shows more than the
+ * (zoneCounts(...).out, plus those driving back home after an all clear, / zone.households), rounded down so the picture never shows more than the
  * counts. Houses are taken in a stable hash order, so the marked set only grows as more leave.
  * An allocation of simulated counts, not per-house data.
  *
@@ -71,7 +71,9 @@ export function safeHouseMarks(index: HouseZones, board: Board): Uint8Array {
   for (const zone of board.zones) {
     const order = index.byZone.get(zone.id);
     if (!order || order.length === 0 || zone.households <= 0) continue;
-    const out = zoneCounts(zone, board.minute).out;
+    // Households driving back after an all clear (demo/allClear.ts) stay marked until they are home.
+    const c = zoneCounts(zone, board.minute);
+    const out = c.out + c.returning;
     const share = Math.min(1, Math.max(0, out / zone.households));
     const marked = Math.floor(share * order.length + 1e-9);
     for (let k = 0; k < marked; k++) marks[order[k]] = HOUSE_MARK.safe;
@@ -82,5 +84,6 @@ export function safeHouseMarks(index: HouseZones, board: Board): Uint8Array {
 /** Share of a zone's households that reached safety at board.minute (0..1), for labels. */
 export function zoneSafeShare(zone: ZoneState, minute: number): number {
   if (zone.households <= 0) return 0;
-  return Math.min(1, Math.max(0, zoneCounts(zone, minute).out / zone.households));
+  const c = zoneCounts(zone, minute);
+  return Math.min(1, Math.max(0, (c.out + c.returning) / zone.households));
 }

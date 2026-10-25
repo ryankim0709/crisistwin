@@ -17,6 +17,7 @@ import {
   evacuationEstimate,
   trafficPicture,
   vehiclesPerHousehold,
+  zoneOrderStatus,
   type Board,
   type Fire,
   type EvacuationEstimate,
@@ -24,6 +25,7 @@ import {
   type ZoneForecast,
 } from "./model";
 import type { Selection } from "./DemoMap";
+import { ALL_CLEAR_HOLD_MINUTES, ALL_CLEAR_WINDOW_MINUTES, allClearCheck } from "./allClear";
 import { zoneSnapshotItems } from "../live/ScenarioResources";
 import type { ScenarioSnapshot } from "../live/scenarioSnapshot";
 import {
@@ -57,6 +59,8 @@ export interface PanelActions {
   orderZone: (zoneId: string, destinationId: string) => void;
   /** Cancels the zone's scheduled (not yet started) evacuation order. */
   cancelZoneOrder: (zoneId: string) => void;
+  /** Lifts the zone's evacuation order (all clear; refused unless demo/allClear.ts allows it). */
+  liftZoneOrder: (zoneId: string) => void;
 }
 
 const eta = (m: number | null) => (m === null ? "Not forecast" : m === 0 ? "There now" : `${m} min`);
@@ -361,8 +365,14 @@ function ZoneDetail({
   if (!zone) return null;
   const c = zoneCounts(zone, board.minute);
   const pending = zone.pendingOrder;
-  const status =
-    zone.overrunAt !== null
+  const orderStatus = zoneOrderStatus(zone, board.minute);
+  const lift = orderStatus === "lifted" ? zone.lift : null;
+  // demo/allClear.ts: whether the order can be lifted now (only for a zone with one to lift).
+  const clear = orderStatus === "leaving" || orderStatus === "done" || orderStatus === "overrun" ? allClearCheck(board, zone) : null;
+  const ordered = zone.orderedAt !== null && !lift;
+  const status = lift
+    ? `All clear since ${simClock(lift.at)}`
+    : zone.overrunAt !== null
       ? "Overrun"
       : zone.orderedAt !== null
         ? "Evacuating"
@@ -384,8 +394,8 @@ function ZoneDetail({
   return (
     <>
       <div className="dm-tags">
-        <Tag tone={zone.overrunAt !== null ? "danger" : zone.orderedAt !== null || pending ? "warning" : "neutral"}>{status}</Tag>
-        {forecast?.edgeEta != null && zone.overrunAt === null ? <Tag tone="warning">At risk</Tag> : null}
+        <Tag tone={lift ? "neutral" : zone.overrunAt !== null ? "danger" : zone.orderedAt !== null || pending ? "warning" : "neutral"}>{status}</Tag>
+        {forecast?.edgeEta != null && zone.overrunAt === null && !lift ? <Tag tone="warning">At risk</Tag> : null}
       </div>
       {snapshotRows.length ? (
         <>
@@ -400,13 +410,16 @@ function ZoneDetail({
           { label: "At home", value: nf(c.home) },
           { label: "On the road", value: nf(c.enRoute) },
           { label: "Out", value: nf(c.out) },
+          ...(lift || c.returning > 0
+            ? [{ label: "Returning home (sim)", value: `${nf(c.returning)}${lift && lift.returnMinutes > 0 ? `, about ${Math.round(lift.returnMinutes)} min free-flow drive back` : ""}` }]
+            : []),
           { label: "Caught by fire", value: nf(c.caught) },
           zone.carlessGivenCar > 0
             ? { label: "No vehicle (data)", value: `${nf(zone.carlessGivenCar)} households, given one car each (assumption: every household drives)` }
             : { label: "No vehicle", value: `${nf(zone.noVehicle)} households, need transport` },
           { label: "Fire at edge", value: eta(forecast?.edgeEta ?? null) },
           { label: "Fire at core", value: eta(forecast?.coreEta ?? null) },
-          ...(slack !== null && zone.orderedAt === null
+          ...(slack !== null && !ordered
             ? [{ label: "Time left to order", value: slack < 0 ? `${-slack} min late` : `${slack} min` }]
             : []),
           ...(pending && zone.orderedAt === null
@@ -417,7 +430,7 @@ function ZoneDetail({
                 },
               ]
             : []),
-          ...(zone.route
+          ...(zone.route && !lift
             ? [
                 {
                   label: "Route (sim traffic)",
@@ -437,11 +450,11 @@ function ZoneDetail({
               <Button
                 key={o.destination_id}
                 size="sm"
-                variant={zone.orderedAt !== null && zone.route?.destination_id === o.destination_id ? "soft" : "secondary"}
-                disabled={zone.orderedAt !== null && zone.route?.destination_id === o.destination_id}
+                variant={ordered && zone.route?.destination_id === o.destination_id ? "soft" : "secondary"}
+                disabled={ordered && zone.route?.destination_id === o.destination_id}
                 onClick={() => actions.orderZone(zone.id, o.destination_id)}
               >
-                {zone.orderedAt === null ? (pending ? "Evacuate now via" : "Evacuate via") : "Redirect to"} {o.name} ·{" "}
+                {!ordered ? (pending ? "Evacuate now via" : lift ? "Evacuate again via" : "Evacuate via") : "Redirect to"} {o.name} ·{" "}
                 {(() => {
                   const e = estimates.get(o.destination_id);
                   return e
@@ -463,10 +476,31 @@ function ZoneDetail({
           </Button>
         </div>
       ) : null}
+      {clear ? (
+        <div className="dm-options">
+          <Button size="sm" variant="secondary" disabled={!clear.eligible} onClick={() => actions.liftZoneOrder(zone.id)}>
+            Lift evacuation order (all clear)
+          </Button>
+          {clear.eligible ? null : (
+            <p className="dm-note">
+              Not yet (fire model, simulated): {clear.reasons.join("; ")}.
+            </p>
+          )}
+        </div>
+      ) : null}
+      {lift ? (
+        <Notice compact>
+          Order lifted at {simClock(lift.at)} by {lift.actor === "agent" ? "Claude" : "you"}: households that stayed are home;{" "}
+          {c.returning > 0 || c.enRoute > 0 ? `${nf(c.returning + c.enRoute)} still on their way back.` : "everyone who left is back."}
+        </Notice>
+      ) : null}
       <p className="dm-note">
         After an order {Math.round(ORDER_COMPLIANCE * 100)}% of households with a vehicle leave, after{" "}
         {DEPARTURE_SPREAD_MINUTES} min on average from the order's start (now, or the minute it was scheduled
         for); with no order nobody leaves (this board has no self-evacuation). Households without a vehicle stay. Those still home when fire reaches the zone core are caught.
+        An order can be lifted (all clear) once every reported fire that came within {ALL_CLEAR_WINDOW_MINUTES} min of the zone has been
+        contained or out for {ALL_CLEAR_HOLD_MINUTES} min and none is forecast to reach it within {ALL_CLEAR_WINDOW_MINUTES} min (board
+        rules, assumptions); residents then drive back at the route's free-flow time.
         Travel times are simulated traffic: zones sharing a road slow each other (BPR volume-delay on assumed road
         capacities); margin = fire at core − ({DEPARTURE_SPREAD_MINUTES} min departure + bottleneck clearance + time in
         traffic).

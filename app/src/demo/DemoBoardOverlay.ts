@@ -23,7 +23,8 @@ import type { LonLat } from "../live/types";
 import { vehicleFamily, type VehicleFamily } from "../studio/apparatus";
 import { CREW_COLORS } from "../studio/firelinePalette";
 import { crewWork, type CrewWork } from "./fireState";
-import { EVACUEE_MARKERS_MAX, distanceM, evacueeMarkers, lineBuiltExtent, type Board, type ZoneForecast } from "./model";
+import { EVACUEE_MARKERS_MAX, distanceM, evacueeMarkers, lineBuiltExtent, zoneOrderStatus, type Board, type ZoneForecast } from "./model";
+import { allClearLabelShown } from "./allClear";
 import { BoardMotion, teamSubjects } from "./unitMotion";
 import { unitSpotLabel } from "./unitActivity";
 
@@ -35,6 +36,8 @@ export const DEMO_3D_COLORS = {
   ordered: LEVEL_COLOR.evacuate_now,
   threatened: LEVEL_COLOR.be_ready,
   overrun: "#b3140c",
+  /** A zone whose evacuation order was lifted (all clear, demo/allClear.ts): neutral, thin (boardMapLayers BOARD_COLOR.allClear). */
+  lifted: "#5b6470",
   /** Fire line ahead of a fire (boardMapLayers BOARD_COLOR.fireLine). */
   fireLine: "#3b2a1a",
   /** Evacuating vehicles (simulated, sampled), on their zone's road route. */
@@ -84,8 +87,8 @@ const SPOT_SPACING_WORLD = 5.5;
 /** An available unit this close to its station is shown as parked there, metres. */
 const AT_STATION_M = 60;
 
-type ZoneState = "overrun" | "ordered" | "threatened";
-const ZONE_TAG: Record<ZoneState, string> = { overrun: "Overrun", ordered: "Leave now", threatened: "At risk" };
+type ZoneState = "overrun" | "ordered" | "threatened" | "lifted";
+const ZONE_TAG: Record<ZoneState, string> = { overrun: "Overrun", ordered: "Leave now", threatened: "At risk", lifted: "All clear" };
 
 const LABEL_CSS = `
 .fdx-dmunit { font-size: 10.5px; padding: 2px 8px; background: rgba(36, 30, 64, 0.88); color: #fff; border-color: rgba(20, 16, 40, 0.6); font-weight: 700; }
@@ -94,6 +97,7 @@ const LABEL_CSS = `
 .fdx-dmzone-overrun { color: #fff; background: rgba(122, 10, 5, 0.9); }
 .fdx-dmzone-ordered { color: #7a0a05; }
 .fdx-dmzone-threatened { color: #7a4b00; }
+.fdx-dmzone-lifted { color: #3a3f45; font-weight: 600; }
 .fdx-compact .fdx-dmunit, .fdx-compact .fdx-dmstation, .fdx-compact .fdx-dmzone { font-size: 9px; padding: 1px 6px; }
 /* Station name tags are hidden: the red firehouses mark stations; names are in the panels. */
 .fdx-dmstation { display: none; }
@@ -102,7 +106,13 @@ const LABEL_CSS = `
 type Label = { obj: CSS2DObject; el: HTMLDivElement };
 type World = { x: number; y: number; z: number };
 
-function zoneState(zone: Board["zones"][number], forecast: ZoneForecast | undefined): ZoneState | null {
+function zoneState(zone: Board["zones"][number], forecast: ZoneForecast | undefined, minute: number): ZoneState | null {
+  // All clear (demo/allClear.ts): the "Leave now" sign goes; a neutral label for a while, then
+  // nothing, unless a fire is forecast to reach the zone again (as boardMapLayers zoneMapState).
+  if (zoneOrderStatus(zone, minute) === "lifted") {
+    if (forecast && forecast.edgeEta !== null && forecast.edgeEta > 0) return "threatened";
+    return allClearLabelShown(zone, minute) ? "lifted" : null;
+  }
   if (zone.overrunAt !== null) return "overrun";
   if (zone.orderedAt !== null) return "ordered";
   if (forecast && forecast.edgeEta !== null) return "threatened";
@@ -235,7 +245,7 @@ export class DemoBoardOverlay implements BoardOverlay {
       this.buildFireLines();
     }
     const zoneKey = board
-      ? board.zones.map((z) => `${z.id}:${zoneState(z, this.forecasts.get(z.id)) ?? ""}`).join("|")
+      ? board.zones.map((z) => `${z.id}:${zoneState(z, this.forecasts.get(z.id), board.minute) ?? ""}`).join("|")
       : "";
     if (zoneKey !== this.zoneKey || !this.zones) {
       this.zoneKey = zoneKey;
@@ -565,10 +575,12 @@ export class DemoBoardOverlay implements BoardOverlay {
     const zoneLabels: Label[] = [];
     this.zones = { group, labels: zoneLabels };
     for (const zone of board?.zones ?? []) {
-      const state = zoneState(zone, this.forecasts.get(zone.id));
+      const state = zoneState(zone, this.forecasts.get(zone.id), board!.minute);
       if (!state || zone.ring.length < 3) continue;
       const positions = this.drape([...zone.ring, zone.ring[0]], ZONE_LIFT);
-      if (positions.length >= 6) group.add(this.line(positions, DEMO_3D_COLORS[state], state === "overrun" ? 4 : 3, state === "threatened"));
+      if (positions.length >= 6) {
+        group.add(this.line(positions, DEMO_3D_COLORS[state], state === "overrun" ? 4 : state === "lifted" ? 1.5 : 3, state === "threatened" || state === "lifted"));
+      }
       const core = this.toWorld(zone.core);
       if (core) {
         const label = labels.add(group, `fdx-dmzone fdx-dmzone-${state}`, new THREE.Vector3(core.x, core.y + 3, core.z), new THREE.Vector2(0.5, 1));

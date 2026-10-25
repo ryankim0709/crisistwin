@@ -95,6 +95,7 @@ import { closedIds, closedRoadsObservation, closureKey } from "./roadClosures";
 import { simClock } from "./format";
 import { EVAC_SCHEDULE_LABEL, evacuationSchedule, strategyAid, type ZoneEvacPlan } from "./decisionAids";
 import { runScore } from "./scoring";
+import { ALL_CLEAR_HOLD_MINUTES, ALL_CLEAR_WINDOW_MINUTES, allClearCheck, allClearCitation } from "./allClear";
 
 /** The fire's strategy options and its chosen strategy for the wire (demo/strategyOptions.ts; model output, rounded). */
 function strategyObs(board: Board, fire: Fire): Pick<FireObservation, "strategy_options" | "strategy"> {
@@ -398,7 +399,8 @@ function knownOverrun(zone: ZoneState): boolean {
   return zone.overrunAt !== null && zone.knownTouchedAt !== null;
 }
 
-function zoneStatus(zone: ZoneState): ZoneObservation["status"] {
+function zoneStatus(zone: ZoneState, minute: number): ZoneObservation["status"] {
+  if (zoneOrderStatus(zone, minute) === "lifted") return "lifted";
   if (zone.overrunAt !== null) return "overrun";
   if (zone.pendingOrder) return "scheduled";
   return zone.orderedAt !== null ? "ordered" : "no_order";
@@ -443,6 +445,7 @@ export function buildObservation(
     return (
       planned.has(zone.id) ||
       zone.orderedAt !== null ||
+      zone.lift !== null ||
       zone.pendingOrder !== null ||
       knownOverrun(zone) ||
       f?.edgeEta != null ||
@@ -490,23 +493,30 @@ export function buildObservation(
     const startsIn = pending ? Math.max(0, Math.round(pending.startMinute - minute)) : null;
     const scheduledIdx = pending ? options.findIndex((o) => o.destination_id === pending.route.destination_id) : -1;
     const scheduledMargin = scheduledIdx >= 0 && startsIn !== null ? estimates[scheduledIdx].marginMin : null;
+    const lifted = orderStatus === "lifted";
+    // demo/allClear.ts: whether lift_evacuation may end the order now (null when there is none to lift).
+    const clear = orderStatus === "leaving" || orderStatus === "done" || orderStatus === "overrun" ? allClearCheck(board, zone) : null;
     return {
       id: zone.id,
       name: zone.name,
       households: zone.households,
-      status: zoneStatus(zone),
+      status: zoneStatus(zone, minute),
       order: {
         status: orderStatus,
-        start_minute: pending ? pending.startMinute : zone.orderedAt !== null ? Math.round(zone.orderedAt) : null,
+        start_minute: lifted ? Math.round(zone.lift!.at) : pending ? pending.startMinute : zone.orderedAt !== null ? Math.round(zone.orderedAt) : null,
         starts_in_min: startsIn,
-        destination_id: pending ? pending.route.destination_id : ordered ? (zone.route?.destination_id ?? null) : null,
+        destination_id: lifted ? null : pending ? pending.route.destination_id : ordered ? (zone.route?.destination_id ?? null) : null,
         margin_at_start_min: scheduledMargin === null || startsIn === null ? null : Math.round(scheduledMargin - startsIn),
       },
       departure_peak_veh_h: Math.round(orderPeakVehiclesPerMinute(zone) * 60),
       departure_flow_now_veh_h: Math.round(board.traffic.zoneFlow.get(zone.id) ?? 0),
+      all_clear: clear
+        ? { eligible: clear.eligible, reasons: clear.reasons, threat_fire_ids: clear.fires.map((f) => f.id), window_min: ALL_CLEAR_WINDOW_MINUTES, hold_min: ALL_CLEAR_HOLD_MINUTES }
+        : null,
       households_home: counts.home,
       households_en_route: counts.enRoute,
       households_out: counts.out,
+      households_returning: counts.returning,
       households_caught: counts.caught,
       households_no_vehicle: zone.noVehicle,
       households_no_vehicle_home: counts.noVehicleHome,
@@ -517,6 +527,7 @@ export function buildObservation(
       people_home: people.home,
       people_en_route: people.enRoute,
       people_out: people.out,
+      people_returning: people.returning,
       people_caught: people.caught,
       needs_transport_households: zone.noVehicle,
       needs_transport_occupants: zone.needsTransportOccupants,
@@ -698,6 +709,7 @@ export function buildObservation(
     decision_aids: {
       evacuation_method: EVAC_SCHEDULE_LABEL,
       evacuation: plans.map(planObs),
+      all_clear: allClearAids(board, listed),
       strategy: fires.flatMap((fire) => {
         const aid = strategyAid(board, fire);
         if (!aid) return [];
@@ -753,6 +765,22 @@ function outcomesObs(board: Board): NonNullable<DemoObservation["outcomes"]> {
 }
 
 /** One evacuation schedule entry for the wire (demo/decisionAids.ts). */
+/** Zones whose evacuation order lift_evacuation may end now (demo/allClear.ts allClearCheck). */
+function allClearEligible(board: Board, zones: readonly ZoneState[] = board.zones): ZoneState[] {
+  return zones.filter((zone) => {
+    const status = zoneOrderStatus(zone, board.minute);
+    return (status === "leaving" || status === "done" || status === "overrun") && allClearCheck(board, zone).eligible;
+  });
+}
+
+function allClearAids(board: Board, zones: readonly ZoneState[]): NonNullable<DemoObservation["decision_aids"]>["all_clear"] {
+  return allClearEligible(board, zones).map((zone) => {
+    const check = allClearCheck(board, zone);
+    const c = zoneCounts(zone, board.minute);
+    return { zone_id: zone.id, threat_fire_ids: check.fires.map((f) => f.id), basis: allClearCitation(check), households_away: c.enRoute + c.out };
+  });
+}
+
 function planObs(p: ZoneEvacPlan): NonNullable<DemoObservation["decision_aids"]>["evacuation"][number] {
   return {
     zone_id: p.zone.id,
@@ -811,6 +839,8 @@ export type WakeKind =
   | "zone_touched"
   | "zone_threatened"
   | "road_closed"
+  /** A zone's evacuation order became liftable (demo/allClear.ts): the agent may give the all clear. */
+  | "all_clear_eligible"
   | "refused"
   | "live_report"
   | "continuous_review"
@@ -877,6 +907,8 @@ export interface MonitorMemory {
   touchedZoneIds: string[];
   /** Zones threatened (threatenedZones). */
   threatenedZoneIds: string[];
+  /** Zones whose evacuation order could be lifted (allClearEligible). Optional: older memories lack it. */
+  allClearZoneIds?: string[];
   /** roadClosures.closureKey. */
   closures: string;
   /** Board minute the decision's orders were applied (the page sets it, afterDecision); reviews count from it. */
@@ -967,9 +999,18 @@ function fireMemo(board: Board, fire: Fire): FireMemo {
   };
 }
 
-/** Zones with people home, no order in effect and a reported fire forecast to reach them (edge or core). */
+/**
+ * Zones with people home, no order in effect and a reported fire forecast to reach them (edge or
+ * core). A lifted zone (demo/allClear.ts; no order in effect, even while residents drive back)
+ * counts only for a fire still to arrive (ETA > 0): a contained fire's burned ground at its edge
+ * reads ETA 0 until the fire is out, and the all-clear check already weighed it.
+ */
 function threatenedZones(board: Board, forecasts: Map<string, ZoneForecast>): ZoneState[] {
   return board.zones.filter((zone) => {
+    if (zone.lift !== null && zoneOrderStatus(zone, board.minute) === "lifted") {
+      const f = forecasts.get(zone.id);
+      return ((f?.edgeEta ?? 0) > 0 || (f?.coreEta ?? 0) > 0) && zoneCounts(zone, board.minute).home > 0;
+    }
     if (zone.orderedAt !== null || zone.pendingOrder !== null || zone.overrunAt !== null) return false;
     const f = forecasts.get(zone.id);
     return (f?.edgeEta != null || f?.coreEta != null) && zoneCounts(zone, board.minute).home > 0;
@@ -1010,6 +1051,7 @@ export function rememberDecision(board: Board, forecasts: Map<string, ZoneForeca
     finishedLineIds: reportedLines(board).filter((l) => l.completedAt !== null).map((l) => l.id),
     touchedZoneIds: board.zones.filter((z) => z.knownTouchedAt !== null).map((z) => z.id),
     threatenedZoneIds: threatenedZones(board, forecasts).map((z) => z.id),
+    allClearZoneIds: allClearEligible(board).map((z) => z.id),
     closures: closureKey(board),
     appliedAt: null,
     refused: 0,
@@ -1220,6 +1262,15 @@ export function wakeReasons(board: Board, forecasts: Map<string, ZoneForecast>, 
     }
 
     if (closureKey(board) !== memory.closures) push("road_closed", "routine", `Road closures changed: ${closedIds(board).length} closed now (closed_roads).`);
+    const clearBefore = new Set(memory.allClearZoneIds ?? []);
+    const clear = allClearEligible(board).filter((z) => !clearBefore.has(z.id));
+    if (clear.length) {
+      push(
+        "all_clear_eligible",
+        "routine",
+        `Evacuation order can be lifted (all_clear.eligible): ${listIds(clear.map((z) => `${z.id} (${allClearCitation(allClearCheck(board, z))})`))}. lift_evacuation lets residents return home.`,
+      );
+    }
     if (memory.refused > 0 && !memory.wokeOnRefusal) {
       push("refused", "routine", `${memory.refused} order${memory.refused > 1 ? "s were" : " was"} refused in the last decision (previous.rejected): re-issue a valid order if it is still needed.`);
     }
