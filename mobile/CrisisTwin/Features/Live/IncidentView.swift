@@ -17,14 +17,16 @@ struct IncidentView: View {
     /// The drawer's collapsed height, which the map camera keeps clear.
     @State private var collapsedHeight: CGFloat = 0
     @State private var legendHeight: CGFloat = 0
+    /// The "Follow a simulated person" picker.
+    @State private var pickingPerson = false
 
     init() {}
 
     private static let inset: CGFloat = 8
     private static let gap: CGFloat = 12
     private static let controlSize: CGFloat = 56
-    /// Follow, Voice and Report, stacked.
-    private static let controlsHeight: CGFloat = controlSize * 3 + gap * 2
+    /// Follow person, Follow, Voice and Report, stacked.
+    private static let controlsHeight: CGFloat = controlSize * 4 + gap * 3
 
     private var myLocation: LonLat? {
         location.lastLocation.map { LonLat(lon: $0.coordinate.longitude, lat: $0.coordinate.latitude) }
@@ -68,7 +70,10 @@ struct IncidentView: View {
             }
         }
         .overlay(alignment: .topLeading) {
-            MapLegend(situation: store.situation)
+            VStack(alignment: .leading, spacing: 8) {
+                MapLegend(situation: store.situation)
+                FollowedPersonPill()
+            }
                 .frame(maxWidth: max(0, size.width - 32), alignment: .leading)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { legendHeight = $0 }
                 .padding(.leading, 16)
@@ -87,6 +92,7 @@ struct IncidentView: View {
     private var controls: some View {
         GlassEffectContainer(spacing: Self.gap) {
             VStack(alignment: .trailing, spacing: Self.gap) {
+                followPersonButton
                 followButton
                 voiceButton
                 reportButton
@@ -94,8 +100,30 @@ struct IncidentView: View {
         }
     }
 
-    private var followButton: some View {
+    /// Opens the picker of simulated people of the drill to follow on the map.
+    private var followPersonButton: some View {
         Button {
+            pickingPerson = true
+        } label: {
+            Image(systemName: store.followedPersonId == nil ? "person.badge.plus" : "person.fill.checkmark")
+                .font(.title3.weight(.semibold))
+                .contentTransition(.symbolEffect(.replace))
+                .frame(width: Self.controlSize, height: Self.controlSize)
+                .contentShape(.circle)
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: .circle)
+        .accessibilityLabel(store.followedPersonId == nil ? "Follow a simulated person" : "Change the simulated person you follow")
+        .sheet(isPresented: $pickingPerson) {
+            FollowPersonPicker()
+                .presentationDetents([.medium, .large])
+        }
+    }
+
+    private var followButton: some View {
+        // Following a simulated person: the camera goes to them, which needs no location permission.
+        let followingPerson = store.followedPersonId != nil
+        return Button {
             router.following.toggle()
         } label: {
             Image(systemName: router.following ? "location.fill" : "location")
@@ -106,8 +134,10 @@ struct IncidentView: View {
         }
         .buttonStyle(.plain)
         .glassEffect(.regular.interactive(), in: .circle)
-        .disabled(!location.isAuthorized)
-        .accessibilityLabel(router.following ? "Stop following" : "Follow my location")
+        .disabled(!location.isAuthorized && !followingPerson)
+        .accessibilityLabel(router.following
+            ? "Stop following"
+            : followingPerson ? "Follow the simulated person" : "Follow my location")
         .sensoryFeedback(.selection, trigger: router.following)
     }
 

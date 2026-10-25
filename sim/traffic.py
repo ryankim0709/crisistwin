@@ -192,6 +192,12 @@ class TrafficParams:
     jam_density_veh_per_km_lane: float = 125.0  # storage; ~8 m per stopped vehicle
     reroute_interval_s: int = 300  # periodic route-tree rebuild with current queues
     queue_aware_routing: bool = True  # add discharge time of vehicles on an edge to its route cost
+    # Evacuee route choice by road class: OSM highway class -> factor >= 1 on an edge's route cost (free-flow +
+    # queue seconds), `*_link` taking its parent's; classes not listed get road_class_default. Empty = off
+    # (replays, fingerprints unchanged). The live drill twin sets livecore.routing.EVACUEE_ROAD_CLASS_FACTOR
+    # (api/live/twin_service.py): path choice only, travel times are not scaled.
+    road_class_factor: tuple[tuple[str, float], ...] = ()
+    road_class_default: float = 1.0
     close_edges_in_fire: bool = True
     # Fire-intensity rule: a vehicle with no route over open edges may drive out over fire-closed edges, but
     # only through at most this much burned road (m); deeper inside it is trapped. Planning assumption, about
@@ -227,6 +233,15 @@ class TrafficParams:
             raise ValueError(f"response_delay_sigma must be nonnegative, got {self.response_delay_sigma}")
         if not 0 <= self.shadow_evacuation_share <= 1:
             raise ValueError(f"shadow_evacuation_share must be in [0, 1], got {self.shadow_evacuation_share}")
+        for _, factor in (*self.road_class_factor, ("default", self.road_class_default)):
+            if not (math.isfinite(factor) and factor >= 1):
+                raise ValueError(f"road class factors must be finite and >= 1, got {factor!r}")
+
+    def road_class_factor_of(self, highway: str) -> float:
+        """Route-cost factor of an OSM highway class (1 when road_class_factor is empty)."""
+        if not self.road_class_factor:
+            return 1.0
+        return dict(self.road_class_factor).get(highway.removesuffix("_link"), self.road_class_default)
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -234,6 +249,9 @@ class TrafficParams:
             d.pop("behavior")  # replay outputs carry no agent parameters
         if not self.shadow_evacuation_share:
             d.pop("shadow_evacuation_share")  # off: fingerprints of existing runs are unchanged
+        if not self.road_class_factor:
+            d.pop("road_class_factor")  # off: fingerprints of existing runs are unchanged
+            d.pop("road_class_default")
         return d
 
 
@@ -642,6 +660,9 @@ class TrafficEngine:
         s.e_from = [node_ix[e.from_node] for e in edges]
         e_to = s.e_to = [node_ix[e.to_node] for e in edges]
         s.e_fft = [e.length_m / (e.speed_kph / 3.6) for e in edges]
+        # Route-choice factor per edge (road class); None when off. Scales route costs only, never travel.
+        s.e_route_factor = ([params.road_class_factor_of(e.highway) for e in edges]
+                            if params.road_class_factor else None)
         self.e_cap_step = [e.capacity_veh_per_hour * step / 3600 for e in edges]
         # Credit is capped so an idle edge can release at most one full packet (or one step's capacity) at once.
         self.e_credit_max = [max(c, params.packet_size_veh) for c in self.e_cap_step]
@@ -962,6 +983,7 @@ class TrafficEngine:
         closed, occ, e_cap_step = self.closed, self.occ, self.e_cap_step
         step = s.step
         queue_aware = s.params.queue_aware_routing
+        route_factor = s.e_route_factor
         exposed_edges = self.exposed_edges
         penalty = s.bp.fire_edge_penalty_s
         heappop, heappush = heapq.heappop, heapq.heappush
@@ -983,6 +1005,8 @@ class TrafficEngine:
                 cost = e_fft[e]
                 if queue_aware and occ[e]:
                     cost += occ[e] / e_cap_step[e] * step
+                if route_factor is not None:
+                    cost *= route_factor[e]
                 if penalize and e in exposed_edges:
                     cost += penalty
                 nd = d + cost

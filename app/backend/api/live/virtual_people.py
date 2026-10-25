@@ -499,6 +499,83 @@ def list_participants(incident_id: str) -> list[dict[str, Any]]:
     return _list(incident_id)
 
 
+# ---- follow: the track of one person (docs/app-integration.md "Follow a simulated person") --------------------
+
+
+def _address_labels(incident_id: str, index) -> dict[str, str]:
+    """The made-up street address of each person (the ``GET homes`` address, cached in ``homes``)."""
+    from . import homes  # local: homes imports this module
+
+    persons = list(col(PEOPLE).find({"incident_id": incident_id}, {"_id": 0, "id": 1, "n": 1, "home": 1, "zone_id": 1})
+                   .sort("n", 1))
+    return homes._addresses(incident_id, persons, index)
+
+
+def _track(p: dict[str, Any], listed: dict[str, Any], index, label: str, drill: dict[str, Any]) -> dict[str, Any]:
+    """One person's track from the raw stored ``state`` (``livecore.virtual_people.initial_state``) and the
+    participants-shape row ``listed`` (status and flags as the console shows them)."""
+    state = p["state"]
+    path = [[round(c[0], 5), round(c[1], 5)] for c in state.get("path") or []]
+    total_min = float(state["total_min"]) if path and state.get("total_min") else None
+    progress = min(1.0, max(0.0, float(state.get("progress") or 0.0))) if path else 0.0
+    driving = state["phase"] == "en_route"
+    eta_min = round(max(0.0, (1.0 - progress) * total_min), 1) if total_min is not None and (
+        driving or (state["phase"] == "out" and progress >= 1.0)) else None
+    dest = index.destinations.get(state.get("dest_id") or "")
+    coord = list(dest.coord) if dest is not None else (path[-1] if path else None)
+    destination = ({"id": state["dest_id"], "name": state.get("dest_name") or (dest.name if dest else None),
+                    "coord": [round(coord[0], 5), round(coord[1], 5)]}
+                   if state.get("dest_id") and coord is not None else None)
+    zone = index.zones.get(p["zone_id"])
+    return {
+        "id": p["id"],
+        "label": label,
+        "zone": {"id": p["zone_id"], "name": zone.name if zone is not None else None} if p.get("zone_id") else None,
+        "phase": state["phase"],
+        "status": listed["status"],
+        "flags": listed["flags"],
+        "position": listed["position"],
+        "path": path,
+        "progress": round(progress, 3),
+        "total_min": round(total_min, 1) if total_min is not None else None,
+        "eta_min": eta_min,
+        "destination": destination,
+        "motion": state.get("motion") if driving else None,
+        "trail": [{"t": iso(_aware(pt["t"])), "coord": pt["coord"]} for pt in state.get("trail") or []],
+        "drill": drill,
+        "evidence_class": "simulated",
+    }
+
+
+def build_tracks(incident_id: str, person_ids: list[str]) -> dict[str, dict[str, Any]]:
+    """Track per person id (unknown ids are left out), after advancing the people to the drill clock once. The
+    track shape is in docs/app-integration.md "Follow a simulated person". ``{}`` for no ids."""
+    ids = list(dict.fromkeys(person_ids))
+    if not ids:
+        return {}
+    tick_quietly(incident_id)
+    persons = list(col(PEOPLE).find({"incident_id": incident_id, "id": {"$in": ids}}))
+    if not persons:
+        return {}
+    run = col(RUNS).find_one({"incident_id": incident_id}) or {}
+    index = get_index(incident_id)
+    clock = clock_from(drill_doc(incident_id), index, wall_now())
+    t = _aware(run.get("ticked_to")) or _minute(clock.replay_now)
+    est = estimate_fire(index.drill, t, (), injects_mod.rules.spots_due(injects_mod.load(incident_id), t))
+    helps = _help_status(incident_id, [p["party_key"] for p in persons])
+    labels = _address_labels(incident_id, index)
+    drill = {"now": iso(clock.replay_now), "speed": clock.speed, "running": clock.running}
+    return {p["id"]: _track(p, _participant(p, t, est.geometry, helps.get(p["party_key"])), index,
+                            labels.get(p["id"]) or p["name"], drill) for p in persons}
+
+
+def build_track(incident_id: str, person_id: str) -> dict[str, Any] | None:
+    """One person's track (``build_tracks``), or None for an unknown id."""
+    if col(PEOPLE).find_one({"incident_id": incident_id, "id": person_id}, {"_id": 1}) is None:
+        return None
+    return build_tracks(incident_id, [person_id]).get(person_id)
+
+
 # ---- endpoints -----------------------------------------------------------------------------------------------
 
 
