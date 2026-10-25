@@ -5,6 +5,7 @@ import type { CommandResponse, LonLat } from "../live/types";
 import type { DemoOrder } from "./contracts";
 import type { Selection } from "./DemoMap";
 import {
+  ACTIVITY,
   activeFires,
   addReportFire,
   applyOrder,
@@ -26,7 +27,8 @@ import { windAt } from "./realism";
 import { useCrewRoutes } from "./useCrewRoutes";
 import { useDemoAgent } from "./useDemoAgent";
 import { DEFAULT_BOARD_RADIUS_METERS, boardCellMetersFor } from "../fire/boardSize";
-import { useWorld } from "../world/useWorld";
+import type { World } from "../world/contracts";
+import { useWorldSync } from "../world/useWorldSync";
 import { WEATHER_PRESETS, useDemoEnvironment, zonesCenter } from "./useDemoEnvironment";
 import { useDemoRoutes } from "./useDemoRoutes";
 import { useFireSolver } from "./useFireSolver";
@@ -66,6 +68,34 @@ function baseZones(data: CommandResponse): BaseZone[] {
   });
 }
 
+/** The board wind preset closest to the world's weather; null when none is close (assumed, forecast). */
+function closestWeatherPreset(w: World): string | null {
+  const { weather, startUtc } = w.conditions;
+  if (weather.mode === "climatology_percentile") {
+    return WEATHER_PRESETS.find((p) => p.mode === "climatology_percentile")?.value ?? null;
+  }
+  if (weather.mode !== "historical_replay") return null;
+  const t = Date.parse(startUtc);
+  let best: string | null = null;
+  let gap = Infinity;
+  for (const p of WEATHER_PRESETS) {
+    if (p.mode !== "historical_replay") continue;
+    const d = Math.abs(Date.parse(p.start) - t);
+    if (d < gap) {
+      gap = d;
+      best = p.value;
+    }
+  }
+  return best;
+}
+
+/** Ground distance between two WGS84 points, metres (equirectangular; fine at drill scale). */
+function distanceMeters(a: LonLat, b: LonLat): number {
+  const dx = (a[0] - b[0]) * 111_320 * Math.cos((((a[1] + b[1]) / 2) * Math.PI) / 180);
+  const dy = (a[1] - b[1]) * 110_540;
+  return Math.hypot(dx, dy);
+}
+
 function newSeed(): number {
   const fromUrl = Number(new URLSearchParams(window.location.search).get("seed"));
   return Number.isInteger(fromUrl) && fromUrl > 0 ? fromUrl : Math.floor(Math.random() * 2 ** 31);
@@ -94,30 +124,84 @@ export function useCommandBoard({ token, incidentId, data: commandData }: Comman
   const [igniteMode, setIgniteMode] = useState(false);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [weather, setWeather] = useState<string>(WEATHER_PRESETS[0].value);
+  const [weather, setWeatherState] = useState<string>(WEATHER_PRESETS[0].value);
   const preset = WEATHER_PRESETS.find((p) => p.value === weather) ?? WEATHER_PRESETS[0];
   const zoneCentre = useMemo(() => (data ? zonesCenter(data.zones) : null), [data]);
-  // Board size is the shared world's region radius (docs/shared-world.md); the live board never goes below 15 km.
-  const { world, update: updateWorld } = useWorld();
-  const boardRadius = Math.max(DEFAULT_BOARD_RADIUS_METERS, world.region.radiusMeters);
+  // Board size: the shared world's region radius (docs/shared-world.md); never below 15 km here.
+  const [radius, setRadius] = useState(DEFAULT_BOARD_RADIUS_METERS);
+  const boardRadius = Math.max(DEFAULT_BOARD_RADIUS_METERS, radius);
+  // The seed the next board starts from when the shared world names one.
+  const worldSeed = useRef<number | null>(null);
+
+  // Shared world: this board takes the world's size, weather (closest preset), seed and, when the
+  // world's area is this drill, its centre; it writes what its user changes here.
+  const sync = useWorldSync({
+    tab: "live",
+    local: null,
+    apply: (w, changed) => {
+      if (changed.has("region")) setRadius(w.region.radiusMeters);
+      const weatherChanged = [...changed].some((p) => p.startsWith("conditions.weather.") || p === "conditions.startUtc");
+      const closest = weatherChanged ? closestWeatherPreset(w) : null;
+      if (closest) setWeatherState(closest);
+      if (changed.has("fire.stochastic.seed")) {
+        worldSeed.current = w.fire.stochastic.seed;
+        const b = boardRef.current;
+        if (b && b.seed !== w.fire.stochastic.seed) restartRef.current(w.fire.stochastic.seed);
+      }
+    },
+  });
+  const { write: writeWorld } = sync;
+  const r = sync.world.region;
+  // The world's centre drives the board only when it is this drill's area: an incident region of
+  // this drill, or a region centred within 20 km of the drill's zones.
+  const worldCentre: LonLat | null =
+    sync.enabled && sync.loaded && sync.world.revision > 0 &&
+    ((r.kind === "incident" && r.id === incidentId) ||
+      (zoneCentre !== null && distanceMeters(zoneCentre, r.center) < 20_000))
+      ? r.center
+      : null;
   const setBoardRadius = useCallback(
     (radiusMeters: number) => {
-      void updateWorld({ region: { radiusMeters, cellMeters: boardCellMetersFor(radiusMeters) } }, "live");
+      setRadius(radiusMeters);
+      writeWorld({ region: { radiusMeters, cellMeters: boardCellMetersFor(radiusMeters) } });
     },
-    [updateWorld],
+    [writeWorld],
   );
-  const env = useDemoEnvironment(preset, incidentId, zoneCentre, boardRadius);
-
-  // A new board size loads a new landscape: rebuild the board on it once it arrives.
-  const lastRadius = useRef(boardRadius);
+  const setWeather = useCallback(
+    (value: string) => {
+      const next = WEATHER_PRESETS.find((p) => p.value === value);
+      if (!next) return;
+      setWeatherState(value);
+      writeWorld({
+        conditions: {
+          startUtc: next.start,
+          weather:
+            next.mode === "climatology_percentile" ? { mode: next.mode, percentile: 95 } : { mode: next.mode },
+        },
+      });
+    },
+    [writeWorld],
+  );
+  // A drill switch (made in any /live tab) is the world's live drill from now on.
+  const lastIncident = useRef(incidentId);
   useEffect(() => {
-    if (lastRadius.current === boardRadius) return;
-    lastRadius.current = boardRadius;
+    if (lastIncident.current === incidentId) return;
+    lastIncident.current = incidentId;
+    writeWorld({ liveIncidentId: incidentId });
+  }, [incidentId, writeWorld]);
+  const env = useDemoEnvironment(preset, incidentId, zoneCentre, boardRadius, worldCentre);
+
+  // A new board size or centre loads a new landscape: rebuild the board on it once it arrives.
+  const boardKey = `${boardRadius}|${worldCentre?.join(",") ?? ""}`;
+  const lastBoardKey = useRef(boardKey);
+  useEffect(() => {
+    if (lastBoardKey.current === boardKey) return;
+    lastBoardKey.current = boardKey;
     boardRef.current = null;
     setBoard(null);
     setSelection(null);
     bump();
-  }, [boardRadius, bump]);
+  }, [boardKey, bump]);
 
   // A different drill: drop the board and selection; the effect below rebuilds it from the new data.
   useEffect(() => {
@@ -132,7 +216,7 @@ export function useCommandBoard({ token, incidentId, data: commandData }: Comman
   // Start the board once the drill zones and the fire inputs arrive.
   useEffect(() => {
     if (!data || !env || boardRef.current) return;
-    const created = createBoard(baseZones(data), activity, newSeed(), env);
+    const created = createBoard(baseZones(data), activity, worldSeed.current ?? newSeed(), env);
     boardRef.current = created;
     setBoard(created);
   }, [data, env, activity]);
@@ -145,13 +229,34 @@ export function useCommandBoard({ token, incidentId, data: commandData }: Comman
     bump();
   }, [env, bump]);
 
-  const restart = () => {
+  const restartWith = (seed: number) => {
     if (!data || !env) return;
-    const created = createBoard(baseZones(data), activity, Math.floor(Math.random() * 2 ** 31), env);
+    const created = createBoard(baseZones(data), activity, seed, env);
     boardRef.current = created;
     setBoard(created);
     setSelection(null);
     bump();
+  };
+  const restartRef = useRef(restartWith);
+  useEffect(() => {
+    restartRef.current = restartWith;
+  });
+  /** "Restart board": a new seed, shared with the other tabs. */
+  const restart = () => {
+    if (!data || !env) return;
+    const seed = Math.floor(Math.random() * 2 ** 31);
+    restartWith(seed);
+    worldSeed.current = seed;
+    writeWorld({ fire: { stochastic: { seed } } });
+  };
+  /** The board's settings a saved scenario restores beyond the shared world. */
+  const getExtras = () => ({ speed, activity, running, weather });
+  const restoreExtras = (raw: unknown) => {
+    const extras = raw as { speed?: unknown; activity?: unknown; running?: unknown } | undefined;
+    if (!extras || typeof extras !== "object") return;
+    if (BOARD_SPEEDS.some((s) => s.value === extras.speed)) setSpeed(extras.speed as BoardSpeed);
+    if (typeof extras.running === "boolean") setRunning(extras.running);
+    if (typeof extras.activity === "string" && extras.activity in ACTIVITY) changeActivity(extras.activity as Activity);
   };
 
   // Open fire_seen field reports from the live drill become fires (each report once).
@@ -302,6 +407,10 @@ export function useCommandBoard({ token, incidentId, data: commandData }: Comman
     setBoardRadius,
     /** True while the landscape for a new board size is still loading. */
     boardLoading: env === null,
+    // Shared world (docs/shared-world.md): sync state and the board's saved-scenario extras
+    world: sync,
+    getExtras,
+    restoreExtras,
     windNow,
     // AI commander (monitoring is off by default; Claude is only called while it is on)
     autopilot,

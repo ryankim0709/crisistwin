@@ -1,5 +1,8 @@
 // Header drop-in for saving and loading shared-world scenarios (docs/shared-world.md).
 //   <ScenarioMenu tab="fire" getExtras={() => fireExtras} onLoaded={(s) => applyFire(s.extras.fire)} />
+// Every open workspace tab in this browser takes part: saving asks the other tabs for their
+// extras (BroadcastChannel "crisistwin-world-extras"), and loading tells them to restore theirs,
+// so one saved scenario restores all tabs. A tab with sync turned off neither gives nor takes.
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Button, EmptyState, Field, LoadingState, Notice, Panel, Tag, cx } from "../ui";
 import type { Scenario, ScenarioExtras, ScenarioTab, WorldWriter } from "./contracts";
@@ -8,6 +11,41 @@ import { useWorld } from "./useWorld";
 import "./world.css";
 
 const TABS: readonly ScenarioTab[] = ["fire", "simulation", "dispatch", "live"];
+const EXTRAS_CHANNEL = "crisistwin-world-extras";
+/** How long a save waits for the other tabs' extras. */
+const EXTRAS_WAIT_MS = 400;
+
+type ExtrasMessage =
+  | { type: "extras-request"; id: string }
+  | { type: "extras-reply"; id: string; tab: ScenarioTab; extras: unknown }
+  | { type: "scenario-loaded"; scenario: Scenario };
+
+const isTab = (tab: WorldWriter): tab is ScenarioTab => (TABS as readonly string[]).includes(tab);
+
+/** Ask the other tabs in this browser for their extras. */
+async function gatherExtras(): Promise<ScenarioExtras> {
+  if (typeof BroadcastChannel === "undefined") return {};
+  const channel = new BroadcastChannel(EXTRAS_CHANNEL);
+  const id = Math.random().toString(36).slice(2);
+  const extras: ScenarioExtras = {};
+  channel.onmessage = (event: MessageEvent<ExtrasMessage>) => {
+    const data = event.data;
+    if (data?.type === "extras-reply" && data.id === id && extras[data.tab] === undefined) {
+      extras[data.tab] = data.extras;
+    }
+  };
+  channel.postMessage({ type: "extras-request", id } satisfies ExtrasMessage);
+  await new Promise((resolve) => window.setTimeout(resolve, EXTRAS_WAIT_MS));
+  channel.close();
+  return extras;
+}
+
+function announceLoaded(scenario: Scenario): void {
+  if (typeof BroadcastChannel === "undefined") return;
+  const channel = new BroadcastChannel(EXTRAS_CHANNEL);
+  channel.postMessage({ type: "scenario-loaded", scenario } satisfies ExtrasMessage);
+  channel.close();
+}
 
 export interface ScenarioMenuProps {
   /** The tab saving and loading (recorded as `updatedBy`; its extras key when it is a tab). */
@@ -18,6 +56,10 @@ export interface ScenarioMenuProps {
   onLoaded?: (scenario: Scenario) => void;
   /** Open the panel to the left of the button (default) or to the right. */
   align?: "end" | "start";
+  /** Open the panel below the button (default) or above it (a control at the bottom of a stage). */
+  placement?: "down" | "up";
+  /** False when this tab is not synced: it then neither gives extras to nor takes them from other tabs. */
+  syncEnabled?: boolean;
   className?: string;
 }
 
@@ -34,6 +76,8 @@ export function ScenarioMenu({
   getExtras,
   onLoaded,
   align = "end",
+  placement = "down",
+  syncEnabled = true,
   className,
 }: ScenarioMenuProps) {
   const [open, setOpen] = useState(false);
@@ -47,6 +91,30 @@ export function ScenarioMenu({
   const root = useRef<HTMLDivElement>(null);
   const { world, loaded } = useWorld();
   const { scenarios, status, error, save, load, remove } = useScenarios(tab, open);
+
+  // Answer other tabs' extras requests and restore this tab's extras when another tab loads.
+  const latest = useRef({ getExtras, onLoaded, syncEnabled, tab });
+  useEffect(() => {
+    latest.current = { getExtras, onLoaded, syncEnabled, tab };
+  });
+  useEffect(() => {
+    if (typeof BroadcastChannel === "undefined") return;
+    const channel = new BroadcastChannel(EXTRAS_CHANNEL);
+    channel.onmessage = (event: MessageEvent<ExtrasMessage>) => {
+      const data = event.data;
+      const own = latest.current;
+      if (!own.syncEnabled || !isTab(own.tab)) return;
+      if (data?.type === "extras-request" && own.getExtras) {
+        const extras = own.getExtras();
+        if (extras !== undefined) {
+          channel.postMessage({ type: "extras-reply", id: data.id, tab: own.tab, extras } satisfies ExtrasMessage);
+        }
+      } else if (data?.type === "scenario-loaded") {
+        own.onLoaded?.(data.scenario);
+      }
+    };
+    return () => channel.close();
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -80,11 +148,9 @@ export function ScenarioMenu({
     event.preventDefault();
     if (!name.trim()) return;
     void run("save", async () => {
-      const extras: ScenarioExtras = {};
+      const extras: ScenarioExtras = syncEnabled ? await gatherExtras() : {};
       const ownExtras = getExtras?.();
-      if (ownExtras !== undefined && (TABS as readonly string[]).includes(tab)) {
-        extras[tab as ScenarioTab] = ownExtras;
-      }
+      if (ownExtras !== undefined && isTab(tab)) extras[tab] = ownExtras;
       const scenario = await save({ name: name.trim(), notes: notes.trim(), world, extras });
       setSaved(scenario.name);
       setName("");
@@ -98,6 +164,7 @@ export function ScenarioMenu({
       const scenario = await load(id);
       setOpen(false);
       onLoaded?.(scenario);
+      if (syncEnabled) announceLoaded(scenario);
     });
 
   const onDelete = (id: string) => {
@@ -132,7 +199,11 @@ export function ScenarioMenu({
           role="dialog"
           aria-label="Scenarios"
           title="Scenarios"
-          className={cx("wld-menu__panel", align === "start" && "wld-menu__panel--start")}
+          className={cx(
+            "wld-menu__panel",
+            align === "start" && "wld-menu__panel--start",
+            placement === "up" && "wld-menu__panel--up",
+          )}
           aside={
             !saving && (
               <Button size="sm" variant="soft" onClick={() => setSaving(true)} disabled={!loaded}>

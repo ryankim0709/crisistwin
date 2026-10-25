@@ -959,6 +959,18 @@
   background: transparent;
 }
 
+/* Shared-world bar (scenario menu, sync status) under the view toggle. */
+.fr-world {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: min(560px, 100%);
+  padding: 6px 10px;
+}
+.fr-world .fr-hint {
+  margin: 0;
+}
+
 /* ---------- Satellite view ---------- */
 
 .fr-satellite {

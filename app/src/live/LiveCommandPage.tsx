@@ -23,6 +23,7 @@ import { ACTIVITY } from "../demo/model";
 import { CONGESTION_LABEL, TRAVEL_LABEL } from "../demo/observation";
 import SelectedPanel from "../demo/SelectedPanel";
 import { useCommandBoard } from "../demo/useCommandBoard";
+import { WorldBar } from "../world/WorldBar";
 import { useRoadAccess } from "../demo/useRoadAccess";
 import "../demo/demo.css";
 import ActivityLog from "./ActivityLog";
@@ -472,6 +473,12 @@ export default function LiveCommandPage() {
         onSwitched={active.refresh}
       >
         {data ? <BoardControls board={cb} /> : null}
+        <WorldBar
+          tab="live"
+          sync={cb.world}
+          getExtras={cb.getExtras}
+          onLoaded={(saved) => cb.restoreExtras(saved.extras.live)}
+        />
       </WorkspaceHeader>
       {data ? (
         <div className="lc-col lc-queue lc-left">

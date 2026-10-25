@@ -75,11 +75,11 @@ import {
   loadRegionId,
   saveRegionId,
   STUDIO_BOARD_SIZES,
-  studioRadiusOverride,
   useRegionBoard,
 } from "./useRegionBoard";
 import { boardCellMetersFor } from "../fire/boardSize";
-import { useWorld } from "../world/useWorld";
+import { WorldBar } from "../world/WorldBar";
+import { useStudioWorldSync } from "./useStudioWorldSync";
 import { CALIFORNIA_REGIONS, REGION_AREAS } from "../fire/regions";
 import type { DioramaIgnition, DioramaRun, FireDioramaSceneApi } from "../fire/diorama/types";
 import "./studio.css";
@@ -286,8 +286,8 @@ export default function SimulationStudioPage({
   const [regionId, setRegionId] = useState(loadRegionId);
   const [boardAttempt, setBoardAttempt] = useState(0);
   // Area size lives in the shared world (region.radiusMeters), so other tabs follow it.
-  const { world, update: updateWorld } = useWorld();
-  const boardRadius = studioRadiusOverride(world.region.radiusMeters);
+  // Area size (null: the region's own board); shared through the world's region radius.
+  const [boardRadius, setBoardRadius] = useState<number | null>(null);
   const { catalog, board } = useRegionBoard(regionId, boardAttempt, boardRadius);
   const region = findRegion(regionId);
   // Identity of the board a run was solved on: a different size is a different board.
@@ -478,18 +478,24 @@ export default function SimulationStudioPage({
     [regionId, cancel, markStale],
   );
 
+  // The area size is part of the shared world's region (useStudioWorldSync writes it).
   const selectBoardSize = useCallback(
     (radiusMeters: number | null) => {
       if (radiusMeters === boardRadius) return;
       setPlaying(false);
       cancel();
       markStale();
-      const radius = radiusMeters ?? findRegion(regionId)?.radiusMeters ?? 7000;
-      const cellMeters =
-        radiusMeters === null ? (findRegion(regionId)?.cellMeters ?? 30) : boardCellMetersFor(radius);
-      void updateWorld({ region: { radiusMeters: radius, cellMeters } }, "simulation");
+      setBoardRadius(radiusMeters);
     },
-    [boardRadius, regionId, cancel, markStale, updateWorld],
+    [boardRadius, cancel, markStale],
+  );
+  /** Region and size together (the shared world, a restored scenario). */
+  const selectBoard = useCallback(
+    (id: string, radiusMeters: number | null) => {
+      selectRegion(id);
+      selectBoardSize(radiusMeters);
+    },
+    [selectRegion, selectBoardSize],
   );
 
   const handleLoadDemo = useCallback(() => {
@@ -592,6 +598,19 @@ export default function SimulationStudioPage({
   } | null>(null);
   const [pendingRun, setPendingRun] = useState<{ scenario: StudioScenario; waited: boolean } | null>(null);
 
+  // Shared world (docs/shared-world.md): region, size, date, weather, fires, variation and seed.
+  const worldTab = storageNamespace === "dispatch" ? "dispatch" : "simulation";
+  const world = useStudioWorldSync({
+    tab: worldTab,
+    scenario,
+    applyScenario,
+    regionId,
+    boardRadius,
+    selectBoard,
+    showNotice,
+  });
+  const { noteRandom } = world;
+
   const handleRandomScenario = useCallback(() => {
     if (randomJob) return;
     const typed = Number(seedText.trim());
@@ -642,6 +661,11 @@ export default function SimulationStudioPage({
         return;
       }
       setEvacuationOn(true);
+      noteRandom({
+        series: built.scenario.settings.weatherSeries,
+        choice: built.conditions,
+        seed: job.seed,
+      });
       applyScenario(built.scenario);
       setSelectedId(null);
       setRandomSummary(built.summary);
@@ -649,7 +673,7 @@ export default function SimulationStudioPage({
       showNotice("Random scenario built (simulated).");
       setPendingRun({ scenario: built.scenario, waited: false });
     });
-  }, [randomJob, regionId, regionGrid, streets.status, area, placement, applyScenario, showNotice]);
+  }, [randomJob, regionId, regionGrid, streets.status, area, placement, applyScenario, showNotice, noteRandom]);
 
   // Run once the first fire's crew bases are in (or after a short wait).
   useEffect(() => {
@@ -1305,6 +1329,15 @@ export default function SimulationStudioPage({
               options={VIEW_OPTIONS}
               value={view}
               onChange={chooseView}
+            />
+            <WorldBar
+              className="studio-world"
+              tab={worldTab}
+              sync={world.sync}
+              getExtras={world.getExtras}
+              onLoaded={(saved) => world.restoreExtras(saved.extras[worldTab])}
+              placement="up"
+              align="start"
             />
           </div>
 

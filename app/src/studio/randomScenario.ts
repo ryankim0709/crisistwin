@@ -28,6 +28,7 @@ import {
   type Conditions,
   type RegionConditionsPresets,
 } from "../world/conditions";
+import type { WorldWeather } from "../world/contracts";
 import { MAX_WIND_SPEED_MPH, type StudioScenario } from "./contracts";
 import { createIgnition } from "./scenario";
 
@@ -167,6 +168,8 @@ export interface RandomScenarioInput {
 export interface RandomScenarioResult {
   scenario: StudioScenario;
   summary: string;
+  /** The date and weather source it picked, as the shared world states them (docs/shared-world.md). */
+  conditions: { startUtc: string; weather: WorldWeather };
 }
 
 /** Builds the scenario, or null when the board has no ground that can burn. */
@@ -216,6 +219,7 @@ export async function buildRandomScenario(input: RandomScenarioInput): Promise<R
   const presetQuery = presets?.presets[0]?.query;
   let conditions: Conditions | null = null;
   let t0 = "";
+  let pickedWeather: WorldWeather | null = null;
   for (const attempt of ["historical", "climatology"] as const) {
     try {
       if (attempt === "historical") {
@@ -234,7 +238,13 @@ export async function buildRandomScenario(input: RandomScenarioInput): Promise<R
     } catch {
       conditions = null;
     }
-    if (conditions && weatherSeriesFromConditions(conditions, t0, { maxWindMph: MAX_WIND_SPEED_MPH })) break;
+    if (conditions && weatherSeriesFromConditions(conditions, t0, { maxWindMph: MAX_WIND_SPEED_MPH })) {
+      pickedWeather =
+        attempt === "historical"
+          ? { mode: "historical_replay" }
+          : { mode: "climatology_percentile", percentile };
+      break;
+    }
     conditions = null;
   }
   const converted = conditions ? weatherSeriesFromConditions(conditions, t0, { maxWindMph: MAX_WIND_SPEED_MPH }) : null;
@@ -272,5 +282,12 @@ export async function buildRandomScenario(input: RandomScenarioInput): Promise<R
   return {
     scenario: { ...base, name: `Random scenario, seed ${seed}`, ignitions, settings },
     summary,
+    conditions:
+      converted && pickedWeather
+        ? { startUtc: t0, weather: pickedWeather }
+        : {
+            startUtc: startOf(year),
+            weather: { mode: "assumed", windSpeedMph: fallbackSpeed, windFromDegrees: fallbackFrom },
+          },
   };
 }

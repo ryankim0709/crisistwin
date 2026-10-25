@@ -15,6 +15,7 @@ import AppMap, { type MapLayerKey } from "./AppMap";
 import { BehaviourPanel, MessagesPanel, NeedsOk, ParticipantList, type Decide } from "./Panels";
 import { PhoneMirror } from "./PhoneMirror";
 import { everyoneElse, isJoinedNow, nf, personSummary } from "./plain";
+import { WorldSummary } from "../world/WorldBar";
 import "./appint.css";
 
 const ACTIVE_POLL_MS = 30_000;
@@ -157,6 +158,7 @@ export default function AppIntegrationPage() {
 
   const header = (
     <div className="aix-header-actions">
+      <WorldSummary />
       <span className="aix-clock" aria-live="off">
         <strong>{clock}</strong> drill time
       </span>
