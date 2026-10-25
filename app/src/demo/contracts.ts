@@ -174,6 +174,11 @@ export interface FireObservation {
   escalation_stage: number;
   /** Minutes from ignition to the first unit or aircraft on scene; null before any arrives. */
   first_arrival_min: number | null;
+  /** Minutes from ignition until the dispatch centre had the fire (call-in, answer, transfer, processing; response/report.ts). */
+  reported_after_min: number | null;
+  reported_by: "911" | "camera" | "field_report" | null;
+  /** Share of the fire's edge within reach of the ground units on scene, percent; null before any is there. */
+  edge_in_reach_pct: number | null;
   /** Times a finished line failed its seeded holding test. */
   line_breaches: number;
   /** Line made by aircraft drops on this fire, metres. */
@@ -206,6 +211,12 @@ export interface CrewObservation {
   water_pct: number | null;
   /** Hours worked since its last rest (relieved at 16 h; rests half as long, work/rest 2:1). */
   work_h: number;
+  /** Off-road reach on its fire: metres from where it parked to the edge (null: not on scene or road access unknown). */
+  parked_m: number | null;
+  /** hose (within hose reach), hand_line (hiked in), dozer (walked in), out_of_reach. */
+  work_mode: "hose" | "hand_line" | "dozer" | "out_of_reach" | null;
+  /** Minutes until it starts building line (the hike or walk in). */
+  working_in_min: number | null;
 }
 
 export interface ZoneObservation {

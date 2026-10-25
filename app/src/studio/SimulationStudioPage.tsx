@@ -30,7 +30,7 @@ import { useMapFireline } from "./useMapFireline";
 import { useMapCrews } from "./useMapCrews";
 import { planCrewDispatch } from "./crewDispatch";
 import { crewHandoff, evacuationCrews } from "./crewHandoff";
-import { DEFAULT_FIREFIGHTING, resourceList, startMsOf } from "./firefighting";
+import { DEFAULT_FIREFIGHTING, ignitionReportDelayMinutes, resourceList, startMsOf } from "./firefighting";
 import StudioPeople from "./StudioPeople";
 import { householdDepartureDelays, type HouseholdBehaviorMode } from "./householdBehavior";
 import { airBasesOf, useSuppressionBases } from "./suppressionBases";
@@ -530,10 +530,11 @@ export default function SimulationStudioPage({
         airBases,
       };
     }
+    // Dispatched after the call-in and processing delay (response/report.ts), not at ignition.
     const { dispatch, note } = planCrewDispatch(
       area,
       [first.location.longitude, first.location.latitude],
-      first.startMinute,
+      first.startMinute + ignitionReportDelayMinutes(dioramaLandscape, first.location, first.startMinute, settings),
       resourceList(settings),
       (edge) => closedEdges.has(edge),
       dioramaLandscape,

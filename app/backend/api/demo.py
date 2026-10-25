@@ -113,6 +113,11 @@ system several hours (eta_min); orders can come back unable_to_fill. \
 head flame or when crowning no line holds the head (flank): containment waits for the wind. \
 A finished line can still be breached (line_breaches). Engines run out of water (water_pct) \
 and units are relieved after 16 hours of work. \
+- You only see fires once they are reported (reported_after_min after ignition: someone calls \
+911 or a camera flags it; much later at night). Units park where their road ends: engines \
+work only within hose reach, crews hike in (working_in_min, parked_m, work_mode), and the part \
+of a fire's edge out of everyone's reach (edge_in_reach_pct below 100) cannot be contained by \
+ground units. \
 - options lists, for each fire, what sending the n nearest free crews would do: \
 contained_in_min (null = the fire outruns them). contained_in_min on the fire itself is the \
 estimate with the crews already assigned.
