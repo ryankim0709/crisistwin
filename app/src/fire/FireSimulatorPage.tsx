@@ -80,7 +80,7 @@ import {
   Spinner,
   type SegmentedOption,
 } from "../ui";
-import { useBoardStreets } from "./useBoardStreets";
+import { sceneryOf, useBoardStreets } from "./useBoardStreets";
 import HistoricalFireDiorama from "../historical/HistoricalFireDiorama";
 import { useHistoricalFireIndex } from "../historical/data";
 import type { World, WorldChanges, WorldIgnition, WorldRegion } from "../world/contracts";
@@ -532,7 +532,7 @@ export default function FireSimulatorPage() {
   // OSM roads and synthetic homes along residential streets for the diorama board.
   const streets = useBoardStreets(grid);
   const streetArea = streets.status === "ready" ? streets.area : null;
-  const streetScenery = streets.status === "ready" ? streets.scenery : null;
+  const streetScenery = sceneryOf(streets);
 
   const result = useMemo<{ run: FireRun | null; error: string | null }>(() => {
     if (!grid || !deferredScenario) return { run: null, error: null };

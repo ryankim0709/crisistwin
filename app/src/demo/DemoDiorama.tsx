@@ -14,7 +14,7 @@ import { useMediaQuery } from "../diorama/ui/format";
 import { FireDioramaScene } from "../fire/diorama/FireDioramaScene";
 import type { DioramaIgnition, FireDioramaSceneApi } from "../fire/diorama/types";
 import type { LandscapeGrid } from "../fire/landscape";
-import { useBoardStreets } from "../fire/useBoardStreets";
+import { sceneryOf, useBoardStreets } from "../fire/useBoardStreets";
 import type { LonLat } from "../live/types";
 import { CREW_COLORS, firelineCss } from "../studio/firelinePalette";
 import { Button, Legend, Panel, type LegendItem } from "../ui";
@@ -76,7 +76,7 @@ export default function DemoDiorama({ board, version, field, landscape, regionNa
   const reducedMotionRef = useRef(reducedMotion);
   const [overlay] = useState(() => new DemoBoardOverlay());
   const streets = useBoardStreets(landscape);
-  const streetArea = streets.status === "ready" ? streets.scenery : null;
+  const streetArea = sceneryOf(streets);
 
   const clickRef = useRef({ igniteMode, onIgnite });
   useEffect(() => {
