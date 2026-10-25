@@ -2,8 +2,8 @@
  * "Prepare" on /run: make a Berkeley Hills & Tilden drill package the live incident, then start the
  * preset's fire on the board with `POST /api/live/studio-fires` (studio/liveFire.ts payload, built
  * straight from the preset instead of a Studio run). Mirrors studio/usePublishLiveFire.ts
- * syncAndPublish, minus building a package: that needs a full Studio fire run (arrival grid), so
- * /run only reuses a stored package and says so when there is none.
+ * syncAndPublish: a stored package is reused when one fits; otherwise the preset is solved in this
+ * page and stored as a new package first (oneview/studioPackage.ts), as Studio's "Use as live drill" does.
  *
  * Units as in studio/liveFire.ts: lon/lat WGS84 degrees, minutes from scenario T+0, wind mph FROM
  * degrees true, moisture fractions.
@@ -14,12 +14,10 @@ import { MOISTURE_PRESETS } from "../fire/spread";
 import { postLiveFire, type LiveFirePayload } from "../studio/liveFire";
 import { fetchLiveDrill, liveToken, packageRegionId } from "../studio/liveSync";
 import type { DemoSeedPreset } from "../demo/runContracts";
+import { buildPresetPackage } from "./studioPackage";
 import type { PrepareState, ScenarioDraft } from "./types";
 
 export const BERKELEY_REGION = "berkeley-hills-tilden";
-
-export const NO_PACKAGE_MESSAGE =
-  "No stored Berkeley Hills & Tilden drill package on this server. Open Simulation Studio, run Berkeley Hills & Tilden once with “Use as live drill”, then press Prepare again.";
 
 const regionOf = (boardId: string | null): string | null => (boardId ? boardId.split("@")[0] : null);
 
@@ -90,15 +88,21 @@ export async function publishScenario(
       const berkeley = packages.filter((p) => regionOf(packageRegionId(p)) === BERKELEY_REGION && covers(p, draft.ignitions));
       // Newest first (server order); prefer the preset's exact board size.
       const pick = berkeley.find((p) => packageRegionId(p) === preset.regionId) ?? berkeley[0] ?? null;
-      if (!pick) {
-        say({ status: "failed", message: NO_PACKAGE_MESSAGE, needsStudioPackage: true });
-        return;
+      if (pick) {
+        say({ status: "switching", packageName: pick.summary.name });
+        if (signal.aborted) return;
+        await activate(liveToken(), { package_id: pick.package_id });
+        regionId = packageRegionId(pick) ?? preset.regionId;
+        switchedTo = pick.summary.name;
+      } else {
+        // No stored package fits: solve the preset here and store it as one (Studio's "Use as live drill").
+        const built = await buildPresetPackage(draft, preset, signal, (step) => say({ status: "building", step }));
+        if (signal.aborted) return;
+        say({ status: "switching", packageName: built.summary.name });
+        await activate(liveToken(), { package_id: built.package_id });
+        regionId = preset.regionId;
+        switchedTo = `${built.summary.name} (built just now)`;
       }
-      say({ status: "switching", packageName: pick.summary.name });
-      if (signal.aborted) return;
-      await activate(liveToken(), { package_id: pick.package_id });
-      regionId = packageRegionId(pick) ?? preset.regionId;
-      switchedTo = pick.summary.name;
     }
   } catch (cause) {
     if (signal.aborted) return;

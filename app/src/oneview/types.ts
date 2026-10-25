@@ -42,6 +42,8 @@ export type PrepareState =
   | { status: "idle" }
   | { status: "checking" }
   | { status: "switching"; packageName: string }
+  /** No stored package fits: the preset is solved in this page and stored as one (oneview/studioPackage.ts). */
+  | { status: "building"; step: "terrain" | "simulating" | "publishing" }
   | { status: "sending" }
   | {
       status: "done";

@@ -8,8 +8,9 @@
  * (no WorldBar, no size or weather changes).
  */
 
-import { useCallback, useEffect, useRef, useState, type ComponentProps, type ComponentType } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button, EmptyState, EvidenceTag, IconButton, LoadingState, Notice, Panel, Spinner, Tag } from "../ui";
+import AgentInputsPanel from "../demo/AgentInputsPanel";
 import DemoDiorama from "../demo/DemoDiorama";
 import { BOARD_SPEED_STEPS, type BoardSpeed } from "../demo/useCommandBoard";
 import { useRunStateSync } from "../demo/useRunStateSync";
@@ -18,11 +19,12 @@ import { fetchActive } from "../live/active";
 import { DEFAULT_INCIDENT_ID, INCIDENT_GONE_EVENT, drillAction, readToken } from "../live/api";
 import { useCommand } from "../live/useCommand";
 import { usePoll } from "../live/usePoll";
+import { useFollowedPeople, type FollowedPerson } from "../live/followedPeople";
 import { useRoadClosures } from "../live/useRoadClosures";
 import "../demo/demo.css";
-import { agentInputs, boardSeed, boardTimeline, hasRunModes, restartBoard, useRunBoard } from "./boardAdapter";
+import { boardSeed, boardTimeline, hasRunModes, restartBoard, useRunBoard } from "./boardAdapter";
 import { formatClock } from "./format";
-import { AgentInputsPanel, FOLLOW_AVAILABLE, PRESETS_ARE_CURATED, RUN_PRESETS, useFollowed, type FollowedPerson } from "./optionalModules";
+import { PRESETS_ARE_CURATED, RUN_PRESETS } from "./optionalModules";
 import { BERKELEY_REGION, publishScenario } from "./publishScenario";
 import RunTimelineBar from "./RunTimelineBar";
 import SetupPanel from "./SetupPanel";
@@ -34,9 +36,6 @@ const ACTIVE_POLL_MS = 5_000;
 const BASELINE_SPEED: BoardSpeed = 120;
 /** The server drill clock's limit (app/backend/livecore/drill.py MAX_DRILL_SPEED). */
 const MAX_DRILL_SPEED = 60;
-
-/** DemoDiorama plus lead G's optional followed-people prop (ignored until G's overlay takes it). */
-const Diorama = DemoDiorama as ComponentType<ComponentProps<typeof DemoDiorama> & { followed?: FollowedPerson[] }>;
 
 const snapshotOf = (t: RunTimeline | null): RunTimeline | null => (t ? { ...t, points: t.points.slice() } : null);
 
@@ -105,7 +104,8 @@ export default function OneViewPage() {
   // As on /live: controller road closures re-route the board, and the run state is saved for the server's simulated people.
   useRoadClosures({ token: unauthorized ? null : token, incidentId, board: cb.board, routes: cb.routes, bump: cb.bump });
   useRunStateSync({ token: unauthorized ? null : token, incidentId, board: cb.board, forecasts: cb.forecasts });
-  const followed = useFollowed(unauthorized ? null : token, incidentId);
+  // Simulated people phones follow (server live_virtual_people); drawn on the 3D board and listed in the top bar.
+  const followed = useFollowedPeople(incidentId, unauthorized ? null : token).people;
   const cbRef = useRef(cb);
   useEffect(() => {
     cbRef.current = cb;
@@ -308,24 +308,12 @@ export default function OneViewPage() {
     );
   }
 
-  const agentPanel = AgentInputsPanel ? (
-    <AgentInputsPanel agent={cb.agent} board={board} />
-  ) : (
-    <div className="ov-agent-fallback">
-      <p>
-        AI agent: <strong>{cb.agent.status}</strong>
-        {cb.agent.status === "thinking" ? <Spinner /> : null}
-      </p>
-      <p className="ov-dim">{agentInputs(cb).length} observations sent so far. The full &ldquo;what the agent sees&rdquo; feed is not in this build yet.</p>
-    </div>
-  );
-
   return (
     <main className="ov-root" id="main-content" tabIndex={-1}>
       <h1 className="ov-sr">Scenario run: baseline vs AI dispatch (simulated)</h1>
       <div className="ov-stage">
         {board && cb.landscape ? (
-          <Diorama
+          <DemoDiorama
             board={board}
             version={cb.version}
             field={cb.field}
@@ -351,7 +339,7 @@ export default function OneViewPage() {
           Live drill: {drillName}
           {isBerkeley ? "" : " (not Berkeley yet)"}
         </span>
-        {FOLLOW_AVAILABLE ? <FollowedChips people={followed} /> : null}
+        <FollowedChips people={followed} />
       </div>
 
       <Panel glass compact className="ov-panel ov-left" aria-label="Run steps">
@@ -479,7 +467,7 @@ export default function OneViewPage() {
 
       <Panel glass compact className="ov-panel ov-right" title="What the agent sees" aside={<EvidenceTag kind="simulated" />}>
         {phase === "ai" ? (
-          agentPanel
+          <AgentInputsPanel agent={cb.agent} board={board} />
         ) : (
           <p className="ov-dim">
             {phase === "baseline"
