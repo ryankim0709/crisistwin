@@ -129,6 +129,16 @@ export interface StudioFire {
   horizon_minutes: number;
   /** Ignition ids more than 3 km outside the drill zones' box; the board skips them. */
   outside_drill: string[];
+  /**
+   * The run's hourly weather series, or null (one constant wind, or a fire published before the
+   * field existed). `minute` on the Studio clock (may be negative), wind mph / bearing FROM degrees
+   * true, moisture fractions (null = the publish's `moisture`). The board reads it as Studio does.
+   */
+  weather_series: {
+    source: string;
+    evidence: string;
+    samples: { minute: number; wind_speed_mph: number; wind_from_deg: number; moisture: StudioFire["moisture"]["values"] | null }[];
+  } | null;
 }
 
 export interface StudioFiresResponse {

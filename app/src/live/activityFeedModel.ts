@@ -515,6 +515,8 @@ function renderGroup(ctx: Ctx, g: Group): Rendered {
       return { title: "Fire model failed; the clock holds until it runs again.", sub: null, state: "info", attention: { tone: "danger", label: "Model error" }, boardRef: null };
     case "studio_received":
       return quiet(`Simulation Studio scenario ${r.studioTag ?? ""} received.`.replace(" .", "."), "info", null);
+    case "studio_restart":
+      return quiet(first.ev.text.replace(/ \(.*\)\.$/, "."), "info", null);
     case "ignition_started": {
       const where = r.zoneId ? ` in ${zoneName(ctx, r.zoneId)}` : "";
       const fire = r.fireId ? ctx.board?.fires.find((f) => f.id === r.fireId) : undefined;
@@ -1024,7 +1026,10 @@ export function buildActivityFeed({ board, decisions, liveDecisions, name, stamp
     }
   }
   items.push(...claudeItems(ctx, decisions, agentEvents, stamp));
-  items.push(...drillItems(liveDecisions));
+  // A Studio run starts a clean feed: drill decisions logged before it was published (the previous
+  // run's guidance, closures) stay in the audit log only.
+  const runStart = board?.conditions ? Date.parse(board.conditions.publishedAt) : NaN;
+  items.push(...drillItems(Number.isFinite(runStart) ? liveDecisions.filter((d) => !(Date.parse(d.at) < runStart)) : liveDecisions));
   // Ties (items first seen together): later board minute first, then the later-built item (newer).
   const order = new Map(items.map((it, i) => [it, i]));
   items.sort((a, b) => b.wallMs - a.wallMs || (b.minute ?? -1) - (a.minute ?? -1) || order.get(b)! - order.get(a)!);

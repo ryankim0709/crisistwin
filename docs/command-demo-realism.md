@@ -156,11 +156,17 @@ polls `GET /api/live/incidents/<id>/studio-fires` every 5 s (`app/src/demo/useSt
   landscape are skipped, with a board event saying why. Every ingest is logged
   ("Studio fire 'X' received as S1: 2 ignitions, wind 25 mph from 45° (assumed), Dry fuel
   moisture.") and shows in the audit log as source "Simulation Studio".
-- Which publishes a board takes: every publish that appears after the board first read the
-  feed, plus, at that first read, those published in the last 10 minutes (server time), the
-  newest per Studio scenario only. This covers a run published while Live command was closed or
-  while the board was still loading after Studio switched the drill. "Restart board" takes none
-  of the publishes already listed.
+- Which publish a board runs: Studio's newest run only (Studio is the source of truth). At its
+  first read of the feed a board takes the newest stored publish (the server keeps only that one:
+  a publish clears the previous run's state, [live-reports.md](live-reports.md#studio-fires)). This
+  covers a reload, a run published while Live command was closed or while the board was still
+  loading after Studio switched the drill. A publish that appears later restarts the board on
+  that run alone at T+0 (a new board: new run id, Claude's memory cleared; feed line "Simulation
+  Studio run S1 received: board restarted with its 2 fires."). "Restart board" restarts on the
+  newest publish with a new seed; "Reset board" deletes the publishes and starts empty. A new
+  shared-world seed (Studio's random scenario) no longer restarts the board. With a
+  `weather_series` the board's wind and moisture follow Studio's hourly series at the same Studio
+  minute. Map and 3D labels show Studio's ignition name with the board id: "F1 (S1-F1)".
 - With no fire on the board the stage shows "No fires. Run a simulation in Simulation Studio to
   start one here." and the AI commander's monitor has nothing to wake it.
 

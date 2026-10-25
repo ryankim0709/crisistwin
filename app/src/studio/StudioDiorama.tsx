@@ -218,13 +218,17 @@ export default function StudioDiorama(props: StudioDioramaProps) {
   const [legendOpen, setLegendOpen] = useState(false);
   const reducedMotion = useMediaQuery(REDUCED_MOTION_QUERY);
   const streetArea = streets.status === "ready" ? streets.area : null;
-  // The overlay draws its own homes (coloured by household state), so the streets layer then
-  // draws roads only.
+  // The overlay draws the routing area's homes (coloured by household state), so the streets
+  // layer then draws only the homes outside that area. With the street list given, the scene
+  // never falls back to its fuel-class house lattice, so the board looks as on /live.
   const streetScenery = sceneryOf(streets);
-  const sceneStreets = useMemo(
-    () => (streetScenery && evacuation ? { edges: streetScenery.edges, homes: [] } : streetScenery),
-    [streetScenery, evacuation],
-  );
+  const overlayArea = evacuation?.area ?? null;
+  const sceneStreets = useMemo(() => {
+    if (!streetScenery || !overlayArea) return streetScenery;
+    const drawn = new Set(overlayArea.homes.map((home) => `${home.position[0]},${home.position[1]}`));
+    const homes = streetScenery.homes.filter((home) => !drawn.has(`${home.position[0]},${home.position[1]}`));
+    return { edges: streetScenery.edges, homes };
+  }, [streetScenery, overlayArea]);
   const [overlay] = useState(() => new DispatchOverlay());
   const [lineOverlay] = useState(() => new FirelineOverlay());
   const [crewOverlay] = useState(() => new CrewOverlay());

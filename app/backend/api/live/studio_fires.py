@@ -1,27 +1,33 @@
 """Fires published by Simulation Studio for the Live command page (all simulated).
 
 ``POST /api/live/studio-fires`` (controller): Studio publishes the scenario it just ran. The
-fire is stamped with the active incident and stored in ``live_studio_fires`` (newest 20 per
-incident). ``GET /api/live/incidents/<id>/studio-fires[?after=ISO]`` (any live viewer) lists the
-newest 10. Contract: docs/live-reports.md "Studio fires".
+fire is stamped with the active incident and stored in ``live_studio_fires``. A new Studio run
+replaces the incident's drill state: the older publishes, the board's run state and household
+states (``run_state.forget``), the board's resident guidance (withdrawn) and the controller's road
+closures are cleared, so the stored state is the new run's only (``_replace_previous_run``).
+``GET /api/live/incidents/<id>/studio-fires[?after=ISO]`` (any live viewer) lists the newest 10.
+Contract: docs/live-reports.md "Studio fires".
 """
 
 from __future__ import annotations
 
+import logging
 import math
 import secrets
+from datetime import datetime
 from typing import Any
 
 from pymongo import DESCENDING
 from pymongo.errors import PyMongoError
 
-from . import incidents
+from . import board_guidance, incidents, road_closures, run_state
 from .auth import Principal, live_view
 from .common import ApiError, col, iso, json_body, ok, parse_iso, wall_now
 from .drillcache import get_index
 
+log = logging.getLogger(__name__)
+
 COLLECTION = "live_studio_fires"
-KEEP_PER_INCIDENT = 20
 LIST_LIMIT = 10
 MAX_IGNITIONS = 5
 OUTSIDE_DRILL_KM = 3.0
@@ -29,6 +35,10 @@ CODE = "invalid_studio_fire"
 # Descriptive provenance labels (wind source, weather series); Studio clamps to this (studio/liveFire.ts).
 LABEL_MAX_CHARS = 300
 MOISTURE_KEYS = ("dead1h", "dead10h", "dead100h", "liveHerb", "liveWoody")
+# Hourly weather series of the run (fire/weatherSeries.ts MAX_WEATHER_SAMPLES, MAX_SERIES_WIND_MPH).
+MAX_SERIES_SAMPLES = 433
+MAX_SERIES_WIND_MPH = 120
+SERIES_MINUTE_RANGE = (-4320, 4320)
 _index_ready = False
 
 
@@ -63,6 +73,41 @@ def _obj(value: Any, field: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ApiError(400, CODE, f"`{field}` must be an object.")
     return value
+
+
+def _moisture_values(value: Any, field: str) -> dict[str, float]:
+    values = _obj(value, field)
+    return {k: _num(values.get(k), f"{field}.{k}", 0.01, 3) for k in MOISTURE_KEYS}
+
+
+def _weather_series(value: Any) -> dict[str, Any] | None:
+    """The run's hourly series (optional): samples strictly ascending in minute, at most 433."""
+    if value is None:
+        return None
+    series = _obj(value, "weather_series")
+    raw = series.get("samples")
+    if not isinstance(raw, list) or not 1 <= len(raw) <= MAX_SERIES_SAMPLES:
+        raise ApiError(400, CODE, f"`weather_series.samples` must be a list of 1 to {MAX_SERIES_SAMPLES} items.")
+    samples, last = [], None
+    for i, item in enumerate(raw):
+        item = _obj(item, f"weather_series.samples[{i}]")
+        minute = _num(item.get("minute"), f"weather_series.samples[{i}].minute", *SERIES_MINUTE_RANGE)
+        if last is not None and minute <= last:
+            raise ApiError(400, CODE, "`weather_series.samples` must be in strictly ascending `minute`.")
+        last = minute
+        moisture = item.get("moisture")
+        samples.append({
+            "minute": minute,
+            "wind_speed_mph": _num(item.get("wind_speed_mph"), f"weather_series.samples[{i}].wind_speed_mph", 0,
+                                   MAX_SERIES_WIND_MPH),
+            "wind_from_deg": _num(item.get("wind_from_deg"), f"weather_series.samples[{i}].wind_from_deg", 0, 360),
+            "moisture": None if moisture is None else _moisture_values(moisture, f"weather_series.samples[{i}].moisture"),
+        })
+    return {
+        "source": _text(series.get("source"), "weather_series.source", 80, required=False),
+        "evidence": _text(series.get("evidence"), "weather_series.evidence", 40, required=False),
+        "samples": samples,
+    }
 
 
 def validate(body: dict[str, Any]) -> dict[str, Any]:
@@ -101,8 +146,7 @@ def validate(body: dict[str, Any]) -> dict[str, Any]:
         "label": _text(wind_in.get("label"), "wind.label", LABEL_MAX_CHARS, required=False),
     }
     moist_in = _obj(body.get("moisture"), "moisture")
-    values_in = _obj(moist_in.get("values"), "moisture.values")
-    values = {k: _num(values_in.get(k), f"moisture.values.{k}", 0.01, 3) for k in MOISTURE_KEYS}
+    values = _moisture_values(moist_in.get("values"), "moisture.values")
     return {
         "scenario_id": _text(body.get("scenario_id"), "scenario_id", 80),
         "name": _text(body.get("name"), "name", 80),
@@ -115,6 +159,7 @@ def validate(body: dict[str, Any]) -> dict[str, Any]:
             "values": values,
         },
         "horizon_minutes": horizon,
+        "weather_series": _weather_series(body.get("weather_series")),
     }
 
 
@@ -164,10 +209,7 @@ def publish(request, principal: Principal):
     }
     fires = _collection()
     fires.insert_one(doc)
-    stale = fires.find({"incident_id": incident_id}, {"_id": 1}).sort("published_at", DESCENDING).skip(KEEP_PER_INCIDENT)
-    ids = [d["_id"] for d in stale]
-    if ids:
-        fires.delete_many({"_id": {"$in": ids}})
+    cleared = _replace_previous_run(incident_id, doc["fire_id"], published_at)
     return ok(
         {
             "fire_id": doc["fire_id"],
@@ -175,9 +217,45 @@ def publish(request, principal: Principal):
             "incident_name": incidents.active_json()["name"],
             "published_at": iso(published_at),
             "outside_drill": doc["outside_drill"],
+            "cleared": cleared,
         },
         status=201,
     )
+
+
+def _replace_previous_run(incident_id: str, fire_id: str, now: datetime) -> dict[str, Any]:
+    """A new Studio run is the incident's drill from now on: clear what the previous run left.
+
+    Deletes the older publishes, the board's run state and household states (``run_state.forget``,
+    which also resets the single-writer lease, so the new board's console takes over), withdraws
+    the previous board run's resident guidance at once (new ``live_guidance`` versions with level
+    ``none``; history is kept) and reopens the controller's road closures. The audit log
+    (``live_decisions``) is kept for the AAR. Best effort per step: a failed step is logged and
+    reported as null, the publish itself stands. Returns the count per step."""
+    cleared: dict[str, Any] = {}
+    try:
+        cleared["publishes"] = _collection().delete_many(
+            {"incident_id": incident_id, "fire_id": {"$ne": fire_id}}).deleted_count
+    except PyMongoError:
+        log.warning("studio fires: cannot delete older publishes of %s", incident_id)
+        cleared["publishes"] = None
+    try:
+        run_state.forget(incident_id)
+        cleared["run_state"] = True
+    except PyMongoError:
+        log.warning("studio fires: cannot clear the run state of %s", incident_id)
+        cleared["run_state"] = None
+    try:
+        cleared["guidance_withdrawn"] = board_guidance.withdraw_board(incident_id, f"studio-{fire_id}", now)
+    except Exception:  # noqa: BLE001 - guidance must never fail the publish; logged
+        log.exception("studio fires: withdrawing board guidance failed for %s", incident_id)
+        cleared["guidance_withdrawn"] = None
+    try:
+        cleared["road_closures"] = road_closures.clear(incident_id)
+    except PyMongoError:
+        log.warning("studio fires: cannot clear road closures of %s", incident_id)
+        cleared["road_closures"] = None
+    return cleared
 
 
 def _fire_json(doc: dict[str, Any]) -> dict[str, Any]:
@@ -194,6 +272,8 @@ def _fire_json(doc: dict[str, Any]) -> dict[str, Any]:
         "moisture": doc["moisture"],
         "horizon_minutes": doc["horizon_minutes"],
         "outside_drill": doc.get("outside_drill", []),
+        # Absent on fires published before the field existed, and on runs with one constant wind.
+        "weather_series": doc.get("weather_series"),
     }
 
 

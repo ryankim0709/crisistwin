@@ -309,11 +309,21 @@ export const WIND_APPROACH_LABEL = `the wind is held constant, as Simulation Stu
 
 const pct = (v: number) => `${Math.round(v * 100)}%`;
 
+/** WIND_APPROACH_LABEL, or its hourly-series form when the Studio run used an hourly series. */
+export function windApproachLabel(board: Board): string {
+  if (!board.conditions?.series) return WIND_APPROACH_LABEL;
+  return `the wind and fuel moisture follow the Studio run's hourly weather series in 10-minute steps (interpolated as Studio does), and the fire model re-solves at each new step; each solve looks ${LOOKAHEAD_MINUTES / 60} h ahead and the fire model also re-solves on a new, contained or closed fire and as fire line is built (line is a barrier in the model), continuing from the burned ground`;
+}
+
 /** "Assumed in Simulation Studio: ..." wind line for the board (null before any Studio fire). */
 export function studioWindLabel(board: Board): string | null {
   const c = board.conditions;
   if (!c) return null;
   const speed = Math.round(c.windSpeedMph * 10) / 10;
+  if (c.series) {
+    const src = [c.series.source, c.series.evidence].filter(Boolean).join(", ");
+    return `From Simulation Studio (${c.tag}, '${c.name}'): the run's hourly weather series${src ? ` (${src})` : ""}, read at the same Studio minute; peak hour ${speed} mph from ${Math.round(c.windFromDegrees)}°`;
+  }
   return `Assumed in Simulation Studio (${c.tag}, '${c.name}'): ${speed} mph (${c.windSpeedMetersPerSecond.toFixed(1)} m/s) from ${Math.round(c.windFromDegrees)}°, ${c.windSource.replace(/_/g, " ")}${c.windLabel ? ` (${c.windLabel})` : ""}, constant`;
 }
 
@@ -341,7 +351,7 @@ export function fireModelLabel(board: Board): string {
   const conditions = c
     ? `wind and fuel moisture assumed in Simulation Studio ('${c.name}', ${c.tag}): ${Math.round(c.windSpeedMph * 10) / 10} mph from ${Math.round(c.windFromDegrees)}°, ${c.moistureLabel} fuel moisture`
     : "no fire yet: wind and fuel moisture will come from the Simulation Studio run that starts one";
-  return `the simulator's cell solver, the same as /fire and Simulation Studio (Rothermel 1972 surface spread with crown fire, ember spotting and structure-to-structure spread at their defaults), on LANDFIRE fuel, canopy and terrain of ${where}; ${conditions}; ${WIND_APPROACH_LABEL}`;
+  return `the simulator's cell solver, the same as /fire and Simulation Studio (Rothermel 1972 surface spread with crown fire, ember spotting and structure-to-structure spread at their defaults), on LANDFIRE fuel, canopy and terrain of ${where}; ${conditions}; ${windApproachLabel(board)}`;
 }
 
 /** Where the zones' households, persons and vehicles come from (observation.inputs.demand). */
@@ -632,7 +642,7 @@ export function buildObservation(
       from_deg: Math.round(wind.fromDegrees),
       speed_m_s: round1(wind.speedMetersPerSecond),
       evidence: studio ? "assumption" : spread.wind.evidence,
-      source: `${studioWindLabel(board) ?? spread.wind.label}; ${WIND_APPROACH_LABEL}`,
+      source: `${studioWindLabel(board) ?? spread.wind.label}; ${windApproachLabel(board)}`,
     },
     inputs: {
       fuel: spread.ground.fuelLabel,

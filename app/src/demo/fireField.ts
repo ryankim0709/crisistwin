@@ -15,6 +15,8 @@
  * state with the solver's progress-preserving resume (spread.ts ResumeFrom): cells already
  * burned keep their times, steps in progress finish at the new rate. New fires and containment
  * re-solve the same way, which with unchanged weather reproduces an uninterrupted run exactly.
+ * A Studio run on an hourly weather series changes the wind (and moisture) at each 10-minute
+ * weather step as Studio does (model.ts boardWind), which re-solves the same way.
  * Forecasts (zone ETAs, containment estimates) assume the current wind persists.
  *
  * Units: minutes are board minutes; distances ground metres; areas square metres here

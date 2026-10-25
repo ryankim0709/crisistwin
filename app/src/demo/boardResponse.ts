@@ -1886,10 +1886,15 @@ export function notReportedText(board: Board, fire: Fire): string | null {
   return `Not yet reported (simulated): reported to dispatch at ${simClock(fr.reportAt)} (${wallClock(board, fr.reportAt)}), ${fr.report.by === "studio" ? "set in Simulation Studio" : "modelled report delay"}. No unit can act on it before then.`;
 }
 
-/** Map / 3D label of a fire: "S1-F1", "S1-F1 · contained", or "S1-F1 · not yet reported (sim)". */
+/**
+ * Map / 3D label of a fire: Studio's ignition name with the board id the orders use, "F1 (S1-F1)",
+ * "F1 (S1-F1) · contained", or "F1 (S1-F1) · not yet reported (sim)" (just the id when the names match).
+ */
 export function fireMapLabel(board: Board, fire: Fire): string {
-  if (fire.status !== "burning") return `${fire.id} · ${fire.status}`;
-  return isReported(board, fire) ? fire.id : `${fire.id} · not yet reported (sim)`;
+  const studioName = fire.studio?.ignition?.trim();
+  const name = studioName && studioName !== fire.id ? `${studioName} (${fire.id})` : fire.id;
+  if (fire.status !== "burning") return `${name} · ${fire.status}`;
+  return isReported(board, fire) ? name : `${name} · not yet reported (sim)`;
 }
 
 /** "Started 14:02 · reported 14:11 · first engine 14:24" (only what has happened). */
