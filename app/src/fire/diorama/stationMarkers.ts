@@ -20,8 +20,9 @@ const POLE_H = 9;
 const FAR = 0.85;
 const NEAR = 0.45;
 
+// Fire-service Maltese cross (cross pattée), white on the red badge.
 const BADGE_SVG =
-  '<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M3 11 12 4l9 7v8H3z" fill="#fff"/><rect x="9" y="13" width="6" height="6" fill="#c8352a"/></svg>';
+  '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 12 8.5 2.5h7Zm0 0 9.5-3.5v7Zm0 0 3.5 9.5h-7Zm0 0L2.5 15.5v-7Z" fill="#fff"/><circle cx="12" cy="12" r="2.6" fill="#fff"/></svg>';
 
 /** "Paradise FS · CAL FIRE" -> "Paradise FS". */
 function shortName(label: string): string {
@@ -64,7 +65,7 @@ export class StationMarkers {
       group.add(g);
       const l = labels.add(g, "fdx-station", new THREE.Vector3(0, POLE_H + 1.2, 0), new THREE.Vector2(0.5, 1));
       const name = shortName(s.label);
-      l.el.innerHTML = `<span class="fdx-st-badge">${BADGE_SVG}</span><span class="fdx-st-name"></span>`;
+      l.el.innerHTML = `<span class="fdx-st-badge">${BADGE_SVG}<span class="fdx-st-kind">Fire station</span></span><span class="fdx-st-name"></span>`;
       const nameEl = l.el.querySelector(".fdx-st-name") as HTMLElement;
       nameEl.textContent = suffix ? `${name} · ${suffix}` : name;
       l.el.title = s.label + (suffix ? ` · ${suffix}` : "");

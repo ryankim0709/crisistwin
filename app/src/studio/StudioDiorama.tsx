@@ -129,15 +129,6 @@ function FlowGlyph() {
   );
 }
 
-function GlowGlyph() {
-  return (
-    <svg width="24" height="16" viewBox="0 0 24 16" aria-hidden="true">
-      <circle cx="12" cy="8" r="7" fill="#ffb347" opacity="0.35" />
-      <circle cx="12" cy="8" r="3.5" fill="#ffb347" opacity="0.7" />
-    </svg>
-  );
-}
-
 function HomeGlyph() {
   return (
     <svg width="24" height="16" viewBox="0 0 24 16" aria-hidden="true">
@@ -494,11 +485,6 @@ export default function StudioDiorama(props: StudioDioramaProps) {
                             label: "Road ribbon: thicker = more people; teal moving, amber slow, red stuck",
                             color: "#14b8a6",
                             glyph: <FlowGlyph />,
-                          },
-                          {
-                            label: "Warm glow: people still home, fades as they leave",
-                            color: "#ffb347",
-                            glyph: <GlowGlyph />,
                           },
                           {
                             label: "Closed road or bridge (labelled), your assumption",

@@ -97,6 +97,7 @@ type CarGlide = Glide & { zone: number; vehicles: number; stuck: boolean };
 type Ribbon = { key: string; base: Line2; flow: Line2; vehicles: number; state: number };
 const FLOW_COLORS = [0x14b8a6, 0xf2a33a, 0xd8432f] as const;
 const GLOW_COLOR = 0xffb347;
+const SHOW_ZONE_GLOWS = false;
 /** Ribbon width (world units) from vehicles on the edge. */
 const ribbonWidth = (vehicles: number) => Math.min(3.2, 0.5 + Math.sqrt(vehicles) * 0.32);
 /** Vehicles on one road segment above which moving traffic is drawn as slow. */
@@ -323,6 +324,10 @@ export class DispatchOverlay implements BoardOverlay {
 
   /** Soft warm disc per zone: bigger and brighter while more households are still home. */
   private updateGlows() {
+    // Off: one disc per zone centroid misplaced people (zones and homes are synthetic) and the
+    // additive blend washed out dense areas. Homes coloured by status and the flow ribbons show
+    // where people are; a draped density texture from real household data is a follow-up.
+    if (!SHOW_ZONE_GLOWS) return;
     const { group, area, frame } = this;
     if (!group || !area || !frame) return;
     if (this.glows.length === 0) {
