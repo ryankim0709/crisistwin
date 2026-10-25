@@ -79,7 +79,7 @@ import {
   type UnitState,
 } from "../dispatch/engine";
 import type { FireExposure } from "../dispatch/fireExposure";
-import { edgeSeconds, evacueeTree, routeTo, type Route } from "../dispatch/routing";
+import { edgeSeconds, routeTo, shortestPathTree, type Route } from "../dispatch/routing";
 import { lonLatToMercator } from "../fire/landscape";
 import { WAKE_UP_MINUTES, type HouseholdBehavior } from "../population/householdBehavior";
 import type { EvacuationCrew } from "./crewHandoff";
@@ -338,7 +338,7 @@ export class EvacuationPolicyRun {
   private scoreExits(zone: number): ExitChoice[] {
     const { area, fireKnowledge, horizonMinutes } = this.inputs;
     const now = this.engine.minute;
-    const tree = evacueeTree(area, area.zones[zone].node, this.engine.blockedAt(now));
+    const tree = shortestPathTree(area, area.zones[zone].node, this.engine.blockedAt(now));
     const known = this.known();
     const departMinute = now + this.clearMinutesNow();
     const nearest =
@@ -353,9 +353,7 @@ export class EvacuationPolicyRun {
         !!known?.fire &&
         !!fireKnowledge &&
         !!exit.destination &&
-        (knownArrivalAt(fireKnowledge, known.fire, exit.destination.location) <= horizonMinutes ||
-          // A safe area inside the box (dispatch-area/6): its road node, the approach, must not burn either.
-          (exit.kind === "safe-area" && knownArrivalAt(fireKnowledge, known.fire, area.nodes[exit.node]) <= horizonMinutes));
+        knownArrivalAt(fireKnowledge, known.fire, exit.destination.location) <= horizonMinutes;
       const [ex, ey] = lonLatToMercator(area.nodes[exit.node][0], area.nodes[exit.node][1]);
       const offFireDegrees = nearest
         ? bearingDifference(mercatorBearing(zx, zy, ex, ey), nearest.bearingDegrees)
@@ -397,7 +395,7 @@ export class EvacuationPolicyRun {
     const floor = new Float64Array(area.zones.length);
     const blocked = (edge: number) => closedEdges.has(edge);
     area.zones.forEach((zone, index) => {
-      const tree = evacueeTree(area, zone.node, blocked);
+      const tree = shortestPathTree(area, zone.node, blocked);
       let best = Infinity;
       for (const exit of area.exits) {
         const route = routeTo(area, tree, exit.node);

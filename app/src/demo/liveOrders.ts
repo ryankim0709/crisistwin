@@ -3,8 +3,6 @@
  * controller API, as the /live page's controller. demo.py has already checked them against the
  * observation; this re-checks them against the newest command poll, starts the requests and
  * returns a per-order error (null = sent). Request failures arrive later through `onFailure`.
- * send_rescue on a simulated injury id (inj-*) is not a live drill action: it sends a unit on the
- * command board (demo/injuries.ts sendRescue).
  *
  * Evacuation stays out of here: order_evacuation moves the simulated board only, and phones get
  * guidance only through a proposal a controller approves (docs/adr/0012-controller-guidance.md).
@@ -13,8 +11,6 @@
 import { LiveError, createTask, helpAction, triageReport } from "../live/api";
 import type { CommandResponse } from "../live/types";
 import type { LiveOrder } from "./contracts";
-import { injuryBoard, isInjuryId, sendRescue } from "./injuries";
-import type { Board } from "./model";
 
 const OPEN = new Set(["unverified", "corroborated", "responder_confirmed", "confirmed"]);
 
@@ -24,15 +20,8 @@ export function runLiveOrders(
   data: CommandResponse | null,
   orders: LiveOrder[],
   onFailure: (message: string) => void,
-  /** The command board for send_rescue on a simulated injury (inj-*, demo/injuries.ts); default: the board the clock stepped last. */
-  board?: Board | null,
 ): (string | null)[] {
   return orders.map((order) => {
-    // A simulated injury (board.simComms.injuries) is answered on the board, live drill or not.
-    if (order.type === "send_rescue" && isInjuryId(order.help_id)) {
-      const b = board ?? injuryBoard();
-      return b ? sendRescue(b, order.help_id, "agent", order.reason) : "No board.";
-    }
     if (!token || !data || data.incident_id !== incidentId) return "No live drill.";
     const send = (label: string, request: () => Promise<unknown>) => {
       request().catch((error: unknown) =>

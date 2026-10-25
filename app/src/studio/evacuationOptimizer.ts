@@ -22,7 +22,7 @@
  */
 
 import { DEPARTURE_SPREAD_MINUTES, EXIT_OPTIONS_PER_ZONE } from "../dispatch/engine";
-import { evacueeTree, routeTo } from "../dispatch/routing";
+import { routeTo, shortestPathTree } from "../dispatch/routing";
 import {
   runEvacuation,
   type EvacuationInputs,
@@ -184,7 +184,7 @@ export function optimizeEvacuation(
   const blocked = baselineRun.run.engine.blockedAt(orderMinute ?? 0);
   const exitOptions: ExitOption[][] = zones.map((zone, index) => {
     if (!baseline.initial.has(index)) return [];
-    const tree = evacueeTree(area, zone.node, blocked);
+    const tree = shortestPathTree(area, zone.node, blocked);
     const departures = zone.vehicles / DEPARTURE_SPREAD_MINUTES;
     return area.exits
       .map((exit) => ({ exit, route: routeTo(area, tree, exit.node) }))

@@ -34,8 +34,6 @@ from sim.traffic import MODEL_ID, MODEL_VERSION, REFUGE_KIND, FireTimeline, Traf
 from sim.traffic import DemandZone, Destination, RoadEdge, RoadNetwork, TrafficParams, _points_inside
 
 SNAPSHOT_SCHEMA_VERSION = "0.1.0"
-SAFE_DESTINATION_KINDS = ("exit", "shelter")
-"""Destination kinds that are a way out of the danger area (REFUGE_KIND, a temporary refuge, is not)."""
 COMMAND_SOURCE_ID = "twin-command"
 REPORT_SOURCE_ID = "drill-report"
 COMMAND_LABEL_PREFIX = "Command (simulated)"
@@ -306,9 +304,7 @@ def _derived(inputs: TwinInputs) -> dict:
     if "derived" not in inputs.cache:
         s = inputs.scenario
         net = s["network"]
-        # Exit-time corridors run toward any safe destination: a road out of the box (exit) or, since
-        # dispatch-area/6, a shelter / evacuation point inside it. Temporary refuges are not a way out.
-        exits = [d for d in s["destinations"] if d.kind in SAFE_DESTINATION_KINDS]
+        exits = [d for d in s["destinations"] if d.kind == "exit"]
         names: dict[str, list[int]] = {}
         for i, e in enumerate(net.edges):
             names.setdefault(canonical_road_name(e.name), []).append(i)
@@ -1341,7 +1337,7 @@ def demo(package, roads_package, *, start_at: str = "2018-11-08T15:30:00Z", step
                      "snapshot_bytes": len(json.dumps(snap, separators=(",", ":")))}))
     # The busiest zone is sent to the open exit with the second most arrivals so far (an alternative exit).
     zone = max(snap["zones"], key=lambda z: (z["not_departed_veh"] + z["en_route_veh"], z["id"]))
-    exits = sorted((d for d in snap["destinations"] if d["status"] == "open" and d["kind"] in SAFE_DESTINATION_KINDS),
+    exits = sorted((d for d in snap["destinations"] if d["status"] == "open" and d["kind"] == "exit"),
                    key=lambda d: (-d["arrived_veh"], d["id"]))
     target = exits[1] if len(exits) > 1 else exits[0]
     actions = [

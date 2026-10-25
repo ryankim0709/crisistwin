@@ -2,7 +2,6 @@ import * as THREE from "three";
 import { hash2, softDotTexture } from "../../diorama/scene/geometry";
 import { PALETTE } from "../../diorama/scene/palette";
 import type { BoardFrame } from "./board";
-import { CELL_CODE_MASK, isFlamingCode } from "./cellStates";
 
 /** Sprite budget: glow + smoke together stay at or under 30. */
 const GLOW_COUNT = 14;
@@ -180,7 +179,7 @@ export class FireSampler {
     if (states) {
       // Only cells burning now; a cell that has burned past the window stays a (weaker) hot spot.
       const ids: number[] = [];
-      for (let i = 0; i < states.length; i++) if (isFlamingCode(states[i] & CELL_CODE_MASK)) ids.push(i);
+      for (let i = 0; i < states.length; i++) if (states[i] === 1) ids.push(i);
       this.burningCount = ids.length;
       const step = Math.max(1, Math.floor(ids.length / SAMPLE_BUDGET));
       for (let k = 0; k < ids.length; k += step) {

@@ -12,8 +12,6 @@ planner uses for blocked roads. It does not touch the live drill's road reports 
 - ``POST .../road-closures`` (controller) ``{"segment_id", "board_minute"?}``: closes it (201; 200
   when it was already closed).
 - ``DELETE .../road-closures/<segment_id>`` (controller): reopens it (the document is deleted).
-- A new Simulation Studio run published for the incident (``studio_fires.publish``) reopens them
-  all: a new scenario is a clean drill (``clear``).
 
 Stored in ``live_road_closures``: one small document per closed segment (incident_id, segment_id,
 name, closed_at, board_minute, by), at most ``MAX_PER_INCIDENT`` per incident. The road line is
@@ -90,13 +88,6 @@ def closed_segment_ids(incident_id: str) -> tuple[frozenset[str], bool]:
 def _forget(incident_id: str) -> None:
     with _cache_lock:
         _cache.pop(incident_id, None)
-
-
-def clear(incident_id: str) -> int:
-    """New Studio run (studio_fires.publish): reopen every road of the incident; returns how many."""
-    deleted = _collection().delete_many({"incident_id": incident_id}).deleted_count
-    _forget(incident_id)
-    return deleted
 
 
 def _line(index, segment_id: str) -> list[list[float]]:

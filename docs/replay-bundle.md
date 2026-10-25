@@ -372,9 +372,8 @@ builder. The other builder turns a Simulation Studio run anywhere in California 
   already stored) with `{package_id, incident_id, summary}`; `summary` holds `name`, `place`,
   `label`, `clock`, `bbox`, `zones`, `homes` (`homes_label: "synthetic"`), `vehicles`,
   `road_segments`, `exits`, `stations`, `fronts`, `fire_area_km2` (`fire_label: "simulated"`),
-  `clipped`, `region_id` (the Studio region the run used, e.g. `"berkeley-hills-tilden"`, or
-  null) and `dispatch_builder` (the dispatch-area builder, e.g. `"dispatch-area/6"`; Studio
-  reuses a stored package only when it is `dispatch-area/6`, whose exits are safe areas). Errors: `400 invalid_run`, `413 too_large`, `422 outside_california | bad_bbox |
+  `clipped` and `region_id` (the Studio region the run used, e.g. `"berkeley-hills-tilden"`, or
+  null). Errors: `400 invalid_run`, `413 too_large`, `422 outside_california | bad_bbox |
   no_roads | no_exits | no_homes | invalid_area`, `502 upstream_unavailable`.
 - `GET /api/live/packages`: `{packages: [{package_id, incident_id, created_at, summary}]}`,
   newest first.
@@ -445,14 +444,7 @@ Same top-level shape as a replay bundle (`kind: "crisistwin_replay_bundle"`), wi
 - `zones.features`: one per dispatch-area zone, `households` = synthetic homes, `vehicles`,
   `synthetic: true`, `evidence_class: "fixture"`; geometry is the hull of the zone's synthetic
   homes (a 120 m square when the hull is degenerate).
-- `destinations.features`: the area's exits, which are safe areas since `dispatch-area/6`
-  (`livecore/package.py` `_destination`): `kind: "shelter"` for a place inside the box (shelter,
-  assembly point, temporary evacuation point), `"exit"` for a road leaving toward a place beyond
-  it or a map-edge crossing; `coord` is the exit's road node (routing snaps by it), `node_id`, and
-  `place: {key, name, kind, source, source_url, coord, capacity_people, capacity_basis,
-  capacity_source, inside}`. `capacity_veh` = people / `PERSONS_PER_VEHICLE` (1.38, ESTIMATE,
-  docs/people-data.md), and for shelters also / `PUBLIC_SHELTER_SHARE` (0.054 of evacuees stay in
-  a public shelter, Wong et al. 2020 Table 10); null for a map edge.
+- `destinations.features`: the area's exits (`kind: "exit"`, `capacity_veh: null`, `node_id`).
 - `stations.features` (new, additive): OSM fire stations `{id, name, coord, node_id,
   approach_m, units}`; units are one assumed engine each (`evidence_class: "fixture"`). Stations
   are not evacuation destinations, so they are not in `destinations`.

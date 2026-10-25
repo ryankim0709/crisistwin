@@ -11,7 +11,6 @@
 
 import type { LonLat } from "../live/types";
 import { distanceText as metresText, fireEdgeSample, idleOnSceneReason } from "./boardResponse";
-import { boardInjuries } from "./injuries";
 import { MAX_FIRE_CUT_REROUTES, distanceM, teamPosition, type AttackLine, type Board, type Fire, type Team } from "./model";
 
 export type UnitActivityKind =
@@ -32,8 +31,6 @@ export type UnitActivityKind =
   /** Direct attack, but no point of the fire's open edge is within its reach now (boardResponse.idleOnSceneReason). */
   | "no_edge_in_reach"
   | "refilling"
-  /** An ambulance on scene with its patient (demo/injuries.ts). */
-  | "treating"
   | "resting"
   | "returning"
   | "moving_up"
@@ -94,26 +91,6 @@ export function unitActivity(board: Board, team: Team): UnitActivity {
   const dest = line ? `${line.fireId} ${line.plan.id}` : (team.fireId ?? "");
   const base = { fireId, positionId: line?.plan.id ?? null, fromFireM };
   const mins = (t: number | null) => (t === null ? "" : ` · ${Math.max(0, Math.ceil(t - board.minute))} min`);
-
-  if (team.kind === "ambulance") {
-    // An ambulance only answers injuries (demo/injuries.ts); its patient is the injury assigned to it.
-    const inj = boardInjuries(board).find((i) => i.assignedUnitId === team.id && i.status === "unit_en_route");
-    const to = inj ? `${inj.id} (${inj.severity})` : "a patient";
-    switch (team.status) {
-      case "en_route":
-        return team.travel === "pending"
-          ? { ...base, kind: "awaiting_route", label: `waiting for its road route to ${to}`, workPoint: team.target }
-          : { ...base, kind: "driving", label: `driving to ${to}${mins(team.arriveAt)}`, workPoint: team.target };
-      case "on_scene":
-        return { ...base, kind: "treating", label: `treating ${to}`, workPoint: null };
-      case "out_of_service":
-        return { ...base, kind: "out_of_service", label: `at hospital (off the board)${mins(team.outOfServiceUntil)}`, workPoint: null };
-      case "returning":
-        return { ...base, kind: "returning", label: `returning to quarters${team.travel !== "pending" ? mins(team.arriveAt) : ""}`, workPoint: null };
-      default:
-        return { ...base, kind: "available", label: "free", workPoint: null };
-    }
-  }
 
   switch (team.status) {
     case "en_route": {

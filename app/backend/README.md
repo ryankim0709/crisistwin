@@ -462,55 +462,35 @@ answer 503 `apify_unavailable`, while uploading `items`, listing, review and exp
 work. `ANTHROPIC_API_KEY` enables extraction; without it, 503 `ai_unavailable`. MongoDB
 outages answer 503 `database_unavailable`.
 
-### Dispatch area exits = safe areas (`GET /api/dispatch/area`)
+### Dispatch area exits and shelters (`GET /api/dispatch/area`)
 
 The road graph, zones and stations are described in
-[ADR 0017](../../docs/adr/0017-dispatch-anywhere.md). Since builder `dispatch-area/6` (wire
-schema still 2, additive; the version bump refreshes cached areas) exits are **safe areas**:
-places people go, away from the fire, inside the box or beyond it, not where roads cross the
-box edge.
+[ADR 0017](../../docs/adr/0017-dispatch-anywhere.md). Since builder `dispatch-area/5` (wire
+schema still 2, additive) exits are real egress toward shelters, not every road crossing the
+box edge:
 
-- **Places.** Within 30 km of the box centre (more for a large box), merged from three sources;
-  listings within 300 m are one place and the better source wins (official > FEMA > OSM):
-  - officially designated places curated with citations in `api/dispatch_safe_areas.json`
-    (the City of Berkeley "Shelter Sites" layer, 13 sites, capacity from the FEMA record of the same building where one exists; the City publishes no temporary evacuation point list; `excludeListings` drops a mislocated FEMA record);
-  - registered shelter facilities from FEMA's ESF#6 Shelter System, formerly the National
-    Shelter System (public ArcGIS service `gis.fema.gov/arcgis/rest/services/NSS/FEMA_NSS/FeatureServer/5`,
-    "Shelter Locations"; US federal data, no licence stated in the service; attribution: FEMA,
-    Mass Care, American Red Cross). Most are `CLOSED` (registered, not open now); the status is
-    passed through;
-  - OSM `emergency=assembly_point`, `emergency=evacuation_centre|shelter` and
-    `social_facility=shelter` (homeless and similar shelters excluded) (© OpenStreetMap
-    contributors, ODbL).
-  FEMA and OSM are both queried (since `shelters/2`) and cached together in MongoDB
-  `dispatch_shelters` (key: `shelters/2`, centre rounded to 0.01°, radius).
-- **Capacity** (people, on the exit as `capacity` and on `destination.capacity`): the source's
-  figure (FEMA `evacuation_capacity`, OSM `capacity=*`, curated), else an ASSUMPTION per kind
-  (`ASSUMED_CAPACITY_PEOPLE`: shelter 300, evacuation centre 500, temporary evacuation point
-  1000, assembly point 500; reported in `assumptions.assumedSafeAreaCapacityPeople`), marked
-  `destination.capacityBasis: "assumption"` with `capacitySource`.
-- **`kind: "safe-area"`**: a place inside the box. `node` is the nearest public road node,
-  `approachMeters` the straight line from it. Every official place, plus the best other place
-  per 2.5 km cell (largest capacity), up to 24 (product choices, not sourced), named
-  `"<place> (<kind>)"`.
-- **`kind: "egress"`**: a place beyond the box, reached by a motorway, trunk or primary (then
-  secondary) road crossing the box edge in the direction traffic can leave, kept only when the
-  place lies within 75° of the road's outward heading (an assumption). At most 6, one per road
-  first, named `"Hwy 24 east → <place> (<kind>)"`. The distance is straight-line: roads beyond
-  the box are not routed. `destination.key` names the place, so two roads to one shelter share it.
-- **`kind: "map-edge"`**: only when no egress toward a known place exists, up to 6 deduplicated
-  major-road crossings, `"<road> (<side>) · approximate exit (map edge)"`, capacity null. They
-  stay beside the safe areas as the last resort.
-- Every exit: `{id, name, node, road, side, kind, inside, approachMeters, capacity, destination?:
-  {key, name, kind, source: "official"|"fema-nss"|"osm", sourceId, sourceUrl, city, location:
-  [lon, lat], capacity, capacityBasis, capacitySource, status, straightLineMeters}}`.
-  `sources.shelters` reports `{source: "fema-nss+osm" | "fema-nss" | "osm" | null, attribution,
-  searchRadiusMeters, found}` and `sources.safeAreas` the counts per kind.
-- **Per incident** the area does not decide which places are open: the drill package
-  (`livecore/package.py`) turns safe areas into `shelter` destinations and egress/map-edge into
-  `exit` destinations with `capacity_veh`, and the command board closes destinations the fire
-  is forecast to reach or that are full (`app/src/demo/safeDestinations.ts`, sent as
-  `excluded_destination_ids` to `POST /api/demo/routes`).
+- **Destinations.** Registered shelter facilities within 30 km of the box centre (more for a
+  large box), from FEMA's ESF#6 Shelter System, formerly the National Shelter System (public
+  ArcGIS service `gis.fema.gov/arcgis/rest/services/NSS/FEMA_NSS/FeatureServer/5`, "Shelter
+  Locations"; US federal data, no licence stated in the service; attribution as the service
+  gives it: FEMA, Mass Care, American Red Cross). If FEMA fails or returns nothing, OSM
+  `social_facility=shelter` (homeless and similar shelters excluded), `emergency=assembly_point`
+  and `emergency=evacuation_centre|shelter` are used (© OpenStreetMap contributors, ODbL).
+  Cached in MongoDB `dispatch_shelters` (key: `shelters/1`, centre rounded to 0.01°, radius).
+  Most listed facilities are `CLOSED` (registered, not open now); the status is passed through.
+- **Egress.** A motorway, trunk or primary (then secondary) road crossing the box edge in the
+  direction traffic can leave, kept only when a shelter beyond the box lies within 75° of the
+  road's outward heading (an assumption). At most 6, one per road first (then other directions),
+  ordered by class and distance. Each exit is named by road and heading with its shelter
+  (`"Hwy 24 east → Parkmead Elementary shelter"`) and carries `kind: "egress"` and
+  `destination: {name, kind, source, sourceId, city, location: [lon, lat], capacity (persons or
+  null), status, straightLineMeters}`. The distance is straight-line: roads beyond the box are not
+  routed, so the shelter is where the road leads, not a computed trip.
+- **Fallback.** With no shelter data (or none ahead of any major road), exits are the old
+  deduplicated box-edge crossings with `kind: "map-edge"`, named
+  `"<road> (<side>) · approximate exit (map edge)"`.
+- `sources.shelters` reports `{source: "fema-nss" | "osm" | null, attribution,
+  searchRadiusMeters, found}`; `assumptions.notes` gains one line saying which case applies.
 
 ## Updating dependencies
 

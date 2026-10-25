@@ -280,19 +280,6 @@ def sync(incident_id: str, run_id: str, board_minute: float, zones: list[dict[st
         return len(published)
 
 
-def withdraw_board(incident_id: str, run_id: str, now: datetime) -> int:
-    """A new Studio run replaced the board (studio_fires.publish): withdraw every zone the previous
-    board run told something, at once, so phones do not keep its orders until the new board's first
-    run-state PUT. ``run_id`` names the replacement (it differs from every board run id), so each
-    withdrawal reads "The simulated board restarted"; returns how many versions were written."""
-    latest = _latest_by_zone(incident_id)
-    zones = [{"zone_id": z, "order": {"status": "none"}} for z, d in latest.items()
-             if d.get("source") == SOURCE and d.get("level") != "none"]
-    if not zones:
-        return 0
-    return sync(incident_id, run_id, 0.0, zones, {}, now)
-
-
 def _log_feed(incident_id: str, index: DrillIndex, published: list[tuple[str, dict[str, Any], dict[str, Any] | None]],
               now: datetime, replay_at: datetime | None) -> None:
     """One ``live_decisions`` line per published change; withdrawals of non-board guidance share one."""

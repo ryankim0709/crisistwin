@@ -21,7 +21,7 @@ import {
   type OrderOutcome,
 } from "./engine";
 import { ENGINE_HOLDS_FLAME_FEET, ENGINE_LINE_METERS_PER_MINUTE } from "./fireAttack";
-import { evacueeTree, routeTo } from "./routing";
+import { routeTo, shortestPathTree } from "./routing";
 import { roadLabel } from "./area";
 import { GROUND_APPARATUS } from "../studio/apparatus";
 import { DELAY_MEDIAN_MINUTES, ORDER_COMPLIANCE } from "../population/householdBehavior";
@@ -122,7 +122,7 @@ export function buildObservation(inputs: ObservationInputs): Observation {
 
   const zones: ZoneObservation[] = engine.zones.map((state) => {
     const zone = area.zones[state.index];
-    const tree = evacueeTree(area, zone.node, blocked);
+    const tree = shortestPathTree(area, zone.node, blocked);
     const options = area.exits
       .map((exit) => ({ exit, route: routeTo(area, tree, exit.node) }))
       .filter((option) => option.route !== null)

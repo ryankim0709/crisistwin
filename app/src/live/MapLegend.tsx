@@ -1,7 +1,6 @@
 import type { ReactNode } from "react";
 import { EvidenceTag } from "../ui";
 import { BOARD_COLOR } from "../demo/boardMapLayers";
-import { MAP_FIRE_STATE_COLOR, MAP_FIRE_STATE_LABEL, type MapFireState } from "../fire/fireStates";
 import { LEVEL_COLOR, MAP_COLOR } from "./CommandMap";
 import { HouseSwatch } from "./HouseholdSummary";
 import { HOUSEHOLD_DETAIL, HOUSEHOLD_LABEL } from "./householdLayer";
@@ -13,32 +12,21 @@ const zoneSw = (color: string, opacity: number, width = 2): ReactNode => (
   </svg>
 );
 
-/** Flaming map states drawn on the board, coolest first (fire/fireStates.ts MAP_FIRE_STATE_LABEL). */
-const FLAME_STATES = ["flame_low", "flame_moderate", "flame_high", "flame_extreme", "crown"] as const satisfies readonly MapFireState[];
-
-/** A flaming-state swatch: the state's fill with the map's glow and solid edge (flaming is also marked by the edge, not colour alone). */
-const flameSw = (state: MapFireState): ReactNode => (
-  <svg viewBox="0 0 20 14" aria-hidden="true">
-    <rect x="2" y="2" width="16" height="10" rx="2" fill={MAP_FIRE_STATE_COLOR[state]} fillOpacity="0.6" stroke={MAP_COLOR.fire} strokeOpacity="0.5" strokeWidth="4" />
-    <rect x="2" y="2" width="16" height="10" rx="2" fill="none" stroke={MAP_COLOR.fireEdge} strokeWidth="2.5" />
-  </svg>
-);
-
-/** Fire rows while per-cell fire states are drawn (fire/fireStates.ts): flame bands, crown fire, smouldering, burned out, put out, contained edge. */
+/** Fire rows while per-cell fire states are drawn (demo/fireState.ts): what burns, burned out, was put out. */
 const FIRE_STATE_ROWS: { key: string; label: string; swatch: ReactNode }[] = [
-  ...FLAME_STATES.map((state) => ({ key: `bd-fs-${state}`, label: MAP_FIRE_STATE_LABEL[state], swatch: flameSw(state) })),
   {
-    key: "bd-fs-smouldering",
-    label: MAP_FIRE_STATE_LABEL.smouldering,
+    key: "bd-fs-burning",
+    label: "Burning (sim)",
     swatch: (
       <svg viewBox="0 0 20 14" aria-hidden="true">
-        <rect x="1" y="1" width="18" height="12" rx="2" fill={MAP_FIRE_STATE_COLOR.smouldering} fillOpacity="0.45" />
+        <rect x="2" y="2" width="16" height="10" rx="2" fill={MAP_COLOR.fire} fillOpacity="0.5" stroke={MAP_COLOR.fire} strokeOpacity="0.5" strokeWidth="4" />
+        <rect x="2" y="2" width="16" height="10" rx="2" fill="none" stroke={MAP_COLOR.fireEdge} strokeWidth="2.5" />
       </svg>
     ),
   },
   {
     key: "bd-fs-out",
-    label: MAP_FIRE_STATE_LABEL.burned_out,
+    label: "Burned out (sim)",
     swatch: (
       <svg viewBox="0 0 20 14" aria-hidden="true">
         <defs>
@@ -46,26 +34,26 @@ const FIRE_STATE_ROWS: { key: string; label: string; swatch: ReactNode }[] = [
             <line x1="0" y1="0" x2="0" y2="5" stroke={BOARD_COLOR.scarEdge} strokeWidth="2" />
           </pattern>
         </defs>
-        <rect x="1" y="1" width="18" height="12" rx="2" fill={MAP_FIRE_STATE_COLOR.burned_out} fillOpacity="0.4" />
+        <rect x="1" y="1" width="18" height="12" rx="2" fill={BOARD_COLOR.scar} fillOpacity="0.4" />
         <rect x="1" y="1" width="18" height="12" rx="2" fill="url(#lc-lg-bd-scar)" fillOpacity="0.75" stroke={BOARD_COLOR.scarEdge} strokeWidth="1" />
       </svg>
     ),
   },
   {
     key: "bd-fs-ext",
-    label: MAP_FIRE_STATE_LABEL.extinguished,
+    label: "Put out (sim)",
     swatch: (
       <svg viewBox="0 0 20 14" aria-hidden="true">
-        <rect x="1" y="1" width="18" height="12" rx="2" fill={MAP_FIRE_STATE_COLOR.extinguished} fillOpacity="0.4" stroke={BOARD_COLOR.extinguishedEdge} strokeWidth="2" strokeDasharray="3 2" />
+        <rect x="1" y="1" width="18" height="12" rx="2" fill={BOARD_COLOR.extinguished} fillOpacity="0.4" stroke={BOARD_COLOR.extinguishedEdge} strokeWidth="2" strokeDasharray="3 2" />
       </svg>
     ),
   },
   {
     key: "bd-fs-contained",
-    label: "Fire edge: blue once contained or out (simulated)",
+    label: "Contained (sim)",
     swatch: (
       <svg viewBox="0 0 20 14" aria-hidden="true">
-        <rect x="1" y="1" width="18" height="12" rx="2" fill="none" stroke={BOARD_COLOR.containedEdge} strokeWidth="2.5" />
+        <rect x="1" y="1" width="18" height="12" rx="2" fill="none" stroke={MAP_COLOR.fireEdge} strokeWidth="1.5" strokeDasharray="3 2" />
       </svg>
     ),
   },

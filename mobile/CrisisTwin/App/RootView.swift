@@ -190,13 +190,7 @@ struct RootView: View {
                     try? await Task.sleep(for: FamilyStore.pollInterval)
                 }
             }
-            // Following a simulated person is not this phone navigating: no road observations or stall questions.
-            .onChange(of: router.following, initial: true) { _, following in
-                liveStore.navigating = following && liveStore.followedPersonId == nil
-            }
-            .onChange(of: liveStore.followedPersonId) { _, person in
-                liveStore.navigating = router.following && person == nil
-            }
+            .onChange(of: router.following, initial: true) { _, following in liveStore.navigating = following }
             .onChange(of: location.lastLocation) { _, fix in
                 if let fix { liveStore.observeFix(fix) }
                 liveStore.updateLocation(

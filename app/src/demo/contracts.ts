@@ -68,10 +68,8 @@
 import { DEFAULT_INCIDENT_ID } from "../live/api";
 import type { LonLat } from "../live/types";
 import type { RouteOption, TeamStatus, FireSource, FireStatus, TravelBasis } from "./model";
-import type { CommsChannel, InjuryEvent, SimCommsItem } from "./runContracts";
 import type { RouteSegment } from "./traffic";
-import type { DemoApparatusKind, TeamKind } from "./realism";
-import type { EmsObservation } from "./injuries";
+import type { DemoApparatusKind } from "./realism";
 import type { AccessClass } from "../studio/apparatus";
 import type { Tactic } from "../response/containment";
 import type { Tier } from "../response/fleet";
@@ -131,16 +129,6 @@ export interface StudioFire {
   horizon_minutes: number;
   /** Ignition ids more than 3 km outside the drill zones' box; the board skips them. */
   outside_drill: string[];
-  /**
-   * The run's hourly weather series, or null (one constant wind, or a fire published before the
-   * field existed). `minute` on the Studio clock (may be negative), wind mph / bearing FROM degrees
-   * true, moisture fractions (null = the publish's `moisture`). The board reads it as Studio does.
-   */
-  weather_series: {
-    source: string;
-    evidence: string;
-    samples: { minute: number; wind_speed_mph: number; wind_from_deg: number; moisture: StudioFire["moisture"]["values"] | null }[];
-  } | null;
 }
 
 export interface StudioFiresResponse {
@@ -176,8 +164,6 @@ export interface RoutesResponse {
 
 export interface RoutesRequest {
   fires: LonLat[][];
-  /** Destinations closed for this incident (fire forecast to reach them, or full; demo/safeDestinations.ts): never routed to. */
-  excluded_destination_ids?: string[];
 }
 
 /** Road-access vehicle classes (docs/suppression-data.md R01-R12; studio/apparatus.ts AccessClass). */
@@ -523,8 +509,8 @@ export interface AttackPositionObservation {
 export interface CrewObservation {
   /** The snapshot's engine_id for a snapshot engine; C1, C2, D1 for the assumed units. */
   id: string;
-  /** Apparatus type (studio/apparatus.ts GroundKind), or "ambulance" (an ALS medic unit: sent only by send_rescue on an inj-* id, never to a fire). */
-  kind: TeamKind;
+  /** Apparatus type (studio/apparatus.ts GroundKind). */
+  kind: DemoApparatusKind;
   /** Road-access class it drives as (unreachable_classes of fires and positions name these). */
   access_class: AccessClass;
   label: string;
@@ -592,7 +578,7 @@ export interface ZoneObservation {
   /**
    * The zone's evacuation order (model.ts zoneOrderStatus): none, scheduled (departures start at
    * start_minute), leaving (in effect since start_minute), done (everyone it sends out has left and
-   * arrived), overrun. Without an order only self-evacuees leave (self_evacuated, demo/selfEvacuation.ts).
+   * arrived), overrun. Nobody leaves a zone without an order (no self-evacuation on this board).
    */
   order: {
     status: "none" | "scheduled" | "leaving" | "done" | "overrun";
@@ -657,14 +643,6 @@ export interface ZoneObservation {
    */
   margin_min: number | null;
   options: ZoneRouteObservation[];
-  /**
-   * Households with their own vehicle that have left on their own cues, no order needed
-   * (self-evacuation, demo/selfEvacuation.ts; included in households_en_route / households_out).
-   * Simulated.
-   */
-  self_evacuated: number;
-  /** Strongest self-evacuation cue so far (fire forecast within 60 min, most neighbours gone, fire in the zone, fire within 500 m of the core); null = none. */
-  self_evac_cue: "fire_approaching" | "neighbours_leaving" | "fire_in_zone" | "fire_near_core" | null;
 }
 
 /**
@@ -761,8 +739,6 @@ export interface DemoObservation {
     departments: { id: string; name: string; tier: Tier; engines: number; engines_available: number; keep_engines: number }[];
     /** Units at off-board stations that mutual-aid orders can still draw. */
     mutual_aid_pool_units: number;
-    /** ALS ambulance capacity (demo/injuries.ts emsObservation): who is free, responding, treating or at hospital; send_rescue picks from these. */
-    ems: EmsObservation;
     /** over_fire_in_min: minutes until an en-route aircraft is over its fire (null otherwise). */
     aircraft: { id: string; kind: string; base: string; status: string; fire_id: string | null; drops: number; over_fire_in_min: number | null }[];
     /** Orders not yet on the board; eta_min until they arrive (or retry, when unable_to_fill). */
@@ -782,22 +758,11 @@ export interface DemoObservation {
   outcomes?: OutcomesObservation;
   /** Model-computed decision aids the commander chooses from (demo/decisionAids.ts). Optional on the wire. */
   decision_aids?: DecisionAidsObservation;
-  /** Next-state forecast: fire reach per zone, road and destination loads if current orders proceed, dangers (demo/predict.ts). Optional on the wire. */
-  predicted?: PredictedObservation;
-  /** Joint evacuation plan balancing roads, destinations and the fire forecast (demo/evacBalance.ts). Optional on the wire. */
-  evac_balance?: EvacBalanceObservation;
   /**
    * Drill road closures set by the controller (demo/roadClosures.ts): no unit or evacuation route
    * uses them; routes, options and ETAs already go around them. since_minute: board minute applied.
    */
   closed_roads?: { segment_id: string; name: string; since_minute: number; by: string }[];
-  /**
-   * Simulated 911 calls, civilian reports and FD / PD / EMS radio generated from the board each minute
-   * (demo/simComms.ts; evidence "simulated", unverified: may repeat, be vague or wrong). recent: at most 25
-   * from the last 30 board minutes, most severe kept first, newest first; open_injuries: waiting or with a
-   * unit on the way; counts: messages per channel over the run.
-   */
-  sim_comms?: { recent: SimCommsItem[]; open_injuries: InjuryEvent[]; counts: Record<CommsChannel, number> };
   /** The live drill's incident picture (incidentPicture.ts); absent or null when the board runs without a live drill. */
   incident_picture?: IncidentPicture | null;
 }
@@ -962,10 +927,6 @@ export interface OutcomesObservation {
   homes_reached_saved: number;
   homes_method: string;
   area_burned_ha: number;
-  /** Simulated injuries so far (demo/injuries.ts injuryScore): people injured (any status), people who died of an injury no unit reached, people still waiting or being treated. Optional on the wire. */
-  injured_people?: number;
-  injury_deaths?: number;
-  injured_open?: number;
 }
 
 /**
@@ -1021,98 +982,4 @@ export interface DecisionAidsObservation {
   evacuation_method: string;
   evacuation: EvacuationPlanObservation[];
   strategy: StrategyAidObservation[];
-}
-
-/**
- * Next-state forecast (demo/predict.ts; simulated model output, never observed). Fire: the solver's
- * free-burn arrival field of the reported fires (line built so far included, containment not
- * assumed). Traffic: the zones leaving and scheduled now, on their current routes, with the
- * board's exponential departure curve, static segment loading and point queues (demo/traffic.ts).
- * Minutes are from now unless named *_minute. vc = departure demand / capacity (veh/h over veh/h).
- */
-export interface PredictedObservation {
-  method: string;
-  /** The forecast horizons, minutes from now (30, 60, 120). */
-  horizons_min: number[];
-  /** Zones a reported fire reaches within the last horizon (or already burning in), soonest first. */
-  zones: {
-    zone_id: string;
-    edge_eta_min: number | null;
-    core_eta_min: number | null;
-    /** Share of the zone's ground burned at now + each horizon, percent. */
-    burned_pct: number[];
-  }[];
-  /** Road segments of the current and scheduled orders, most loaded or endangered first (bounded). */
-  segments: {
-    segment_id: string;
-    name: string;
-    capacity_veh_h: number;
-    zone_ids: string[];
-    /** Demand / capacity at now + each horizon. */
-    vc: number[];
-    peak_vc: number;
-    peak_queue_vehicles: number;
-    /** Queue delay at now + each horizon, minutes. */
-    queue_delay_min: number[];
-    /** Minutes until the fire forecast reaches the segment; null = not within the solver's lookahead. */
-    fire_eta_min: number | null;
-    /** Minutes until 90% of the committed traffic of its zones has passed it; null = nobody committed. */
-    clears_in_min: number | null;
-    /** Fire reaches it before its traffic clears. */
-    danger: boolean;
-  }[];
-  destinations: {
-    destination_id: string;
-    name: string;
-    /** Vehicles; null = unknown (no limit known). */
-    capacity_veh: number | null;
-    /** Vehicles arrived, on the way and still to leave on current and scheduled orders. */
-    committed_vehicles: number;
-    over_capacity: boolean;
-  }[];
-  /** One line per danger (model numbers): route segments cut before clearance, destinations over capacity. */
-  dangers: string[];
-}
-
-/**
- * Joint evacuation plan (demo/evacBalance.ts; numerical optimizer, simulated): for every zone of
- * decision_aids.evacuation, a destination (one of the zone's route options) and a start minute,
- * minimising expected people caught at home + people on a route segment when the fire forecast
- * reaches it + destination overload + a small queue-time term, subject to shared segment capacity
- * (point queues), destination capacity and the free-burn fire forecast. Absolute board minutes:
- * start_minute. action: order_now / schedule / reschedule (order_evacuation with destination_id and
- * start_minute), keep (the scheduled order already matches), leaving (fixed: already ordered).
- */
-export interface EvacBalanceObservation {
-  method: string;
-  zones: {
-    zone_id: string;
-    action: "order_now" | "schedule" | "reschedule" | "keep" | "leaving";
-    destination_id: string | null;
-    start_minute: number;
-    /** Highest demand / capacity on its route over the plan window. */
-    peak_vc: number;
-    worst_segment: string | null;
-    /** Expected at home when fire reaches the core (board catch rule); people null = unknown. */
-    expected_caught_households: number;
-    expected_caught_people: number | null;
-    /** Vehicles departed but not past a route segment when the fire forecast reaches it. */
-    exposed_vehicles: number;
-    /** The fire forecast reaches a route segment before 90% of the zone's traffic has passed it. */
-    fire_cuts_route: boolean;
-    why: string;
-  }[];
-  /** The plan's totals, and the same zones all ordered now to decision_aids' destinations, for comparison. */
-  totals: EvacBalanceTotals;
-  all_now: EvacBalanceTotals;
-}
-
-export interface EvacBalanceTotals {
-  expected_caught_people: number | null;
-  expected_caught_households: number;
-  exposed_vehicles: number;
-  queue_vehicle_hours: number;
-  peak_vc: number;
-  zones_fire_cuts_route: number;
-  destinations_over_capacity: number;
 }

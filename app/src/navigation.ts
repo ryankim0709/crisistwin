@@ -62,12 +62,4 @@ export const navigationItems: readonly NavigationItem[] = [
     label: "Evacuation diorama",
     group: "Analysis",
   },
-  {
-    path: "/run",
-    label: "Scenario run",
-    group: "Analysis",
-  },
 ];
-
-/** Full-viewport pages AppShell renders bare: no sidebar, just the page (which carries id="main-content"). */
-export const BARE_PATHS: ReadonlySet<string> = new Set(["/run"]);

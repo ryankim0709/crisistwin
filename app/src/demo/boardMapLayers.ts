@@ -2,15 +2,12 @@ import type { GeoJSONSource, Map as MapLibreMap, MapMouseEvent } from "maplibre-
 import { LEVEL_COLOR, MAP_COLOR } from "../live/CommandMap";
 import { fireHatch } from "../live/mapStyle";
 import type { LonLat } from "../live/types";
-import { vehicleFamily } from "../studio/apparatus";
-import { accessClassOf, type TeamKind } from "./realism";
+import { GROUND_APPARATUS, vehicleFamily } from "../studio/apparatus";
 import { CREW_COLORS, firelineCss } from "../studio/firelinePalette";
 import type { AccessClassWire, RoadAccessResponse } from "./contracts";
 import { fireMapLabel, isReported } from "./boardResponse";
 import { boardFireFeatures, firePolygons } from "./fireFootprint";
-import { cellStatePolygons, MAP_FIRE_STATE_COLOR, type MapFireState } from "../fire/fireStates";
-import { crewWork, type CrewWork } from "./fireState";
-import { fireStatusAt, fireVisualAt, type FireVisualState } from "./fireVisualState";
+import { crewWork, fireStatePolygons, type CrewWork } from "./fireState";
 import { simClock } from "./format";
 import { zoneSafeShare } from "./safeHouses";
 import { BoardMotion, teamSubjects } from "./unitMotion";
@@ -74,11 +71,9 @@ export const BOARD_COLOR = {
   evacuee: MAP_COLOR.route,
   /** Road closed to a unit's apparatus class (dashed); unused by fire, zones, routes and units. */
   noTruck: "#8B1E3F",
-  /** Ground put out by crews (fire state "extinguished"): blue-grey fill, dashed slate outline. */
+  /** Ground put out by crews (fireState "extinguished"): blue-grey fill, dashed slate outline. */
   extinguished: "#7D8C99",
   extinguishedEdge: "#3E5568",
-  /** Edge of a fire that is contained or out (fire/diorama/cellStates.ts perimeterContained): solid blue. */
-  containedEdge: "#5aa8ff",
   /** Firefighters at work: dot outline (their fill is the unit family's colour). */
   crewEdge: "#FFFFFF",
 };
@@ -153,28 +148,14 @@ function fireFeatures(board: Board): Feature[] {
 }
 
 /**
- * One label per fire at its origin, in the same plain words as the 3D pins (fireVisualState.ts
- * fireWords): "S1-F1 · Burning hard · flames ~9 ft · 65 m/min toward W", "Out · burned out". A fire
- * not yet reported to dispatch (boardResponse.ts report rule) is still drawn for the drill
- * controller, labelled "not yet reported (sim)" in text (not by colour alone) and dimmed; its zones
- * show no threat (the forecasts are the commander's, "reported").
+ * One label per fire at its origin. A fire not yet reported to dispatch (boardResponse.ts report
+ * rule) is still drawn for the drill controller, labelled "not yet reported (sim)" in text (not by
+ * colour alone) and dimmed; its zones show no threat (the forecasts are the commander's, "reported").
  */
-function buildFireLabels(board: Board, visual: FireVisualState): Feature[] {
-  return board.fires.map((fire) => {
-    const full = fireMapLabel(board, fire);
-    const name = full.split(" · ")[0];
-    const status = fireStatusAt(fire, board.minute);
-    // A fire not yet started keeps its old label (fireMapLabel), as before.
-    const words = status === "not_started" ? undefined : visual.fires.get(fire.id)?.words;
-    // "· not yet reported (sim)" only while the fire burns (as the 3D pins do).
-    const reported = status === "burning" ? full.slice(name.length) : "";
-    return point(fire.origin, {
-      id: fire.id,
-      text: words ? `${name} · ${words}${reported}` : full,
-      status: fire.status,
-      reported: isReported(board, fire),
-    });
-  });
+function buildFireLabels(board: Board): Feature[] {
+  return board.fires.map((fire) =>
+    point(fire.origin, { id: fire.id, text: fireMapLabel(board, fire), status: fire.status, reported: isReported(board, fire) }),
+  );
 }
 
 function buildZones(board: Board, forecasts: Map<string, ZoneForecast>) {
@@ -193,13 +174,11 @@ function buildZones(board: Board, forecasts: Map<string, ZoneForecast>) {
   return { areas, labels };
 }
 
-/**
- * Per-cell fire states at board.minute (fire/fireStates.ts via fireVisualState.ts): flaming by
- * flame-length band, crown fire, smouldering, burned out and put out, contoured, one feature per state.
- */
-function fireStateFeatures(board: Board, visual: FireVisualState): Feature[] {
-  return cellStatePolygons(board.env.landscape, visual.codes).flatMap(({ state, geometry }): Feature[] =>
-    geometry.coordinates.length ? [{ type: "Feature", geometry, properties: { state } }] : [],
+/** Burning, burned-out and put-out ground at board.minute (fireState.ts), one feature per state. */
+function fireStateFeatures(board: Board): Feature[] {
+  const polygons = fireStatePolygons(board);
+  return (["burned_out", "extinguished", "burning"] as const).flatMap((state): Feature[] =>
+    polygons[state]?.coordinates.length ? [{ type: "Feature", geometry: polygons[state], properties: { state } }] : [],
   );
 }
 
@@ -238,7 +217,7 @@ function buildCrews(board: Board): { dots: Feature[]; trails: Feature[] } {
     for (let k = 1; k < path.length; k++) cum.push(cum[k - 1] + distanceM(path[k - 1], path[k]));
     const s = Math.min(1, Math.max(0, w.progress)) * cum[cum.length - 1];
     const team = board.teams.find((t) => t.id === w.teamId);
-    const color = firelineCss(CREW_COLORS[team ? team.kind === "ambulance" ? "engine" : vehicleFamily(team.kind) : "hand_crew"]);
+    const color = firelineCss(CREW_COLORS[team ? vehicleFamily(team.kind) : "hand_crew"]);
     const len = Math.hypot(w.inward[0], w.inward[1]);
     const step = CREW_INWARD_M * (0.25 + 0.75 * Math.min(1, Math.max(0, w.progress))) * (w.kind === "line" ? 0.4 : 1);
     for (let k = 0; k < CREW_DOTS; k++) {
@@ -374,7 +353,7 @@ function buildClosedRoads(board: Board, input: BoardLayerInput): Feature[] {
   const roads = input.closedRoads;
   if (!roads) return [];
   const team = input.selection?.kind === "team" ? board.teams.find((t) => t.id === input.selection?.id) : undefined;
-  const classOf = (kind: TeamKind) => accessClassOf(kind) as AccessClassWire;
+  const classOf = (kind: keyof typeof GROUND_APPARATUS) => GROUND_APPARATUS[kind].access as AccessClassWire;
   let classes: AccessClassWire[];
   if (team) classes = [classOf(team.kind)];
   else if (input.showClosedRoads) classes = [...new Set(board.teams.map((t) => classOf(t.kind)))];
@@ -423,18 +402,8 @@ const SOURCES = [
 ];
 /** Dark hatch on burned-out ground (fire states). */
 const SCAR_HATCH_IMAGE = "bd-scar-hatch";
-/** Flaming states: the four flame-length bands, crown fire and the generic burning state. */
-const FLAMING_STATES: readonly MapFireState[] = ["flame_low", "flame_moderate", "flame_high", "flame_extreme", "crown", "burning"];
-const FLAMING_FILTER = ["in", ["get", "state"], ["literal", FLAMING_STATES]] as never;
-/** Fill colour per map fire state (MapLibre cannot read CSS variables; the hex values are shared with the legend). */
-const FIRE_STATE_FILL = [
-  "match",
-  ["get", "state"],
-  ...(Object.keys(MAP_FIRE_STATE_COLOR) as MapFireState[]).flatMap((state) => [state, MAP_FIRE_STATE_COLOR[state]]),
-  MAP_FIRE_STATE_COLOR.burning,
-] as never;
-/** Fill opacity: flames strongest, smouldering moderate, burned out and put out a settled tint. */
-const FIRE_STATE_FILL_OPACITY = ["match", ["get", "state"], "smouldering", 0.45, ["burned_out", "extinguished"], 0.4, 0.6] as never;
+const FIRE_STATE_MATCH = (burning: string | number, burnedOut: string | number, extinguished: string | number) =>
+  ["match", ["get", "state"], "burning", burning, "burned_out", burnedOut, extinguished] as never;
 const FONT = ["Noto Sans Regular"];
 const FOCUS_ZOOM = 12.5;
 /** Click priority: team, then fire, then zone. */
@@ -493,29 +462,27 @@ function installLayers(map: MapLibreMap, beforeId: string): string[] {
     "circle-stroke-color": "#FFFFFF",
     "circle-stroke-width": 0.8,
   } });
-  // Fire states (fire/fireStates.ts): what flames (by flame-length band, or crown fire), smoulders,
-  // burned out, or crews put out. The per-fire footprint stays only for clicks (transparent) and
-  // the solid blue edge of a contained or out fire.
+  // Fire states (fireState.ts): what burns now, what burned out, what crews put out. The
+  // per-fire footprint stays only for clicks (transparent) and a contained fire's dashed edge.
   add({ id: "bd-fire-fill", type: "fill", source: "bd-fires", paint: { "fill-color": MAP_COLOR.fire, "fill-opacity": 0 } });
   add({ id: "bd-fs-fill", type: "fill", source: "bd-fire-state", paint: {
-    "fill-color": FIRE_STATE_FILL,
-    "fill-opacity": FIRE_STATE_FILL_OPACITY,
+    "fill-color": FIRE_STATE_MATCH(MAP_COLOR.fire, BOARD_COLOR.scar, BOARD_COLOR.extinguished),
+    "fill-opacity": FIRE_STATE_MATCH(0.5, 0.4, 0.4),
   } });
   add({ id: "bd-fs-scar-hatch", type: "fill", source: "bd-fire-state", filter: ["==", ["get", "state"], "burned_out"], paint: { "fill-pattern": SCAR_HATCH_IMAGE, "fill-opacity": 0.75 } });
   add({ id: "bd-fs-scar-line", type: "line", source: "bd-fire-state", filter: ["==", ["get", "state"], "burned_out"], paint: { "line-color": BOARD_COLOR.scarEdge, "line-width": 1 } });
   add({ id: "bd-fs-ext-line", type: "line", source: "bd-fire-state", filter: ["==", ["get", "state"], "extinguished"], paint: {
     "line-color": BOARD_COLOR.extinguishedEdge, "line-width": 2, "line-dasharray": [2, 1.5],
   } });
-  // Flaming (any band, crown fire): a soft glow under a thick solid edge, so it reads as active even without colour.
-  add({ id: "bd-fs-burn-glow", type: "line", source: "bd-fire-state", filter: FLAMING_FILTER, paint: {
+  // Burning: a soft glow under a thick solid edge, so it reads as active even without colour.
+  add({ id: "bd-fs-burn-glow", type: "line", source: "bd-fire-state", filter: ["==", ["get", "state"], "burning"], paint: {
     "line-color": MAP_COLOR.fire, "line-width": 9, "line-blur": 5, "line-opacity": 0.7,
   } });
-  add({ id: "bd-fs-burn-line", type: "line", source: "bd-fire-state", filter: FLAMING_FILTER, layout: { "line-join": "round" }, paint: {
+  add({ id: "bd-fs-burn-line", type: "line", source: "bd-fire-state", filter: ["==", ["get", "state"], "burning"], layout: { "line-join": "round" }, paint: {
     "line-color": MAP_COLOR.fireEdge, "line-width": 3.5,
   } });
-  // A contained or out fire's edge: solid blue, as the 3D board's perimeter (the legend says so in text).
-  add({ id: "bd-fire-line", type: "line", source: "bd-fires", filter: ["in", ["get", "status"], ["literal", ["contained", "out"]]] as never, layout: { "line-join": "round" }, paint: {
-    "line-color": BOARD_COLOR.containedEdge, "line-width": 2.5,
+  add({ id: "bd-fire-line", type: "line", source: "bd-fires", filter: ["==", ["get", "status"], "contained"], paint: {
+    "line-color": MAP_COLOR.fireEdge, "line-width": 1.5, "line-dasharray": [3, 2],
   } });
   // Firefighters at work (fireState.crewWork): a short trail of the path just worked, then small dots.
   add({ id: "bd-crew-trails", type: "line", source: "bd-crew-trails", layout: { "line-cap": "round", "line-join": "round" }, paint: {
@@ -624,10 +591,6 @@ export function attachBoardLayers(
 
   const setData = (id: string, features: Feature[]) =>
     (map.getSource(id) as GeoJSONSource | undefined)?.setData(collection(features));
-  // fireVisualAt returns the same object while the picture is unchanged: contour the cells only
-  // when it is a new one (or a new landscape), not on every update.
-  let stateVisual: FireVisualState | null = null;
-  let stateGrid: unknown = null;
 
   // Unit dots move smoothly between board updates (unitMotion.ts): one GeoJSON source (bd-teams,
   // dots and labels) and the selected unit's ring are redrawn per animation frame while anything
@@ -676,8 +639,6 @@ export function attachBoardLayers(
       if (!board) {
         // Between boards: do not leave the previous drill's marks on the map.
         for (const id of SOURCES) setData(id, []);
-        stateVisual = null;
-        stateGrid = null;
         motion.sample(null, []);
         lastSelKey = null;
         return;
@@ -689,16 +650,11 @@ export function attachBoardLayers(
       setData("bd-zone-labels", z.labels);
       setData("bd-routes", r.lines);
       setData("bd-fires", fireFeatures(board));
-      const visual = fireVisualAt(board);
-      if (visual !== stateVisual || board.env.landscape !== stateGrid) {
-        stateVisual = visual;
-        stateGrid = board.env.landscape;
-        setData("bd-fire-state", fireStateFeatures(board, visual));
-      }
+      setData("bd-fire-state", fireStateFeatures(board));
       const crews = buildCrews(board);
       setData("bd-crews", crews.dots);
       setData("bd-crew-trails", crews.trails);
-      setData("bd-fire-labels", buildFireLabels(board, visual));
+      setData("bd-fire-labels", buildFireLabels(board));
       setData("bd-team-lines", buildTeamLines(board));
       setData("bd-stations", stationFeatures(board));
       setData("bd-dest", r.dests);

@@ -183,22 +183,7 @@ def build_inputs(incident_id: str, seed: int = TWIN_SEED):
     return build_camp_inputs(seed) if incident_id == INCIDENT_ID else build_package_inputs(incident_id, seed)
 
 
-def _evacuee_route_choice(inputs, twinmod):
-    """``inputs`` whose twin vehicles choose paths with the planner's evacuee road-class factors
-    (``routing.EVACUEE_ROAD_CLASS_FACTOR``, docs/live-reports.md "Evacuee route choice"): route cost
-    x factor, travel times unchanged. Fresh cache, recomputed fingerprint."""
-    params = dataclasses.replace(
-        inputs.params,
-        road_class_factor=tuple(sorted(routing.EVACUEE_ROAD_CLASS_FACTOR.items())),
-        road_class_default=routing.EVACUEE_ROAD_CLASS_DEFAULT,
-    )
-    fingerprint = twinmod.inputs_fingerprint(inputs.scenario, params, inputs.start, inputs.end,
-                                             inputs.fire_model_meta)
-    return dataclasses.replace(inputs, params=params, fingerprint=fingerprint, cache={})
-
-
 def _finish_inputs(inputs, twinmod, incident_id: str):
-    inputs = _evacuee_route_choice(inputs, twinmod)
     inputs, moved = _planner_destinations(inputs, twinmod, routing._index(get_index(incident_id).drill).destination_nodes)
     if moved:
         log.info("live twin: %d destinations moved to the planner's road node: %s", len(moved),

@@ -76,24 +76,16 @@ export interface Home {
   zone: number;
 }
 
-/** The safe area an exit leads to (dispatch-area/6; a registered shelter in dispatch-area/5). */
+/** A registered shelter an egress exit leads toward (dispatch-area/5). */
 export interface ExitDestination {
   name: string;
-  /** "official" (curated designation, dispatch_safe_areas.json), "fema-nss" (FEMA ESF#6 Shelter System) or "osm". */
+  /** "fema-nss" (FEMA ESF#6 Shelter System) or "osm". */
   source: string;
   location: LonLat;
-  /** People the place takes: the source's figure, else a per-kind assumption (see capacityBasis). */
+  /** Evacuation capacity in persons, when the source gives one. */
   capacity: number | null;
-  /** Straight-line metres from the exit node to the place; roads beyond the area are not routed. */
+  /** Straight-line metres from the exit to the shelter; roads beyond the area are not routed. */
   straightLineMeters: number;
-  /** Stable id of the place ("<source>:<sourceId>"): egress roads to one shelter share its capacity (dispatch-area/6). */
-  key?: string;
-  /** "shelter", "assembly point", "evacuation centre", "temporary evacuation point" (dispatch-area/6). */
-  kind?: string;
-  /** "source": published figure; "assumption": dispatch_area.ASSUMED_CAPACITY_PEOPLE for its kind (dispatch-area/6). */
-  capacityBasis?: "source" | "assumption";
-  capacitySource?: string | null;
-  sourceUrl?: string | null;
 }
 
 export interface Exit {
@@ -101,17 +93,9 @@ export interface Exit {
   name: string;
   node: number;
   road: string;
-  /**
-   * "safe-area": a place inside the area, reached at its nearest road node (dispatch-area/6);
-   * "egress": a major road toward a place beyond the area; "map-edge": approximate, where a road
-   * crosses the box edge (last resort, no known place or capacity).
-   */
-  kind?: "safe-area" | "egress" | "map-edge";
+  /** "egress": a major road toward a real shelter; "map-edge": approximate, where a road crosses the box edge. */
+  kind?: "egress" | "map-edge";
   destination?: ExitDestination;
-  /** True when the destination lies inside the area (dispatch-area/6). */
-  inside?: boolean;
-  /** People the destination takes (destination.capacity); null for a map edge (dispatch-area/6). */
-  capacity?: number | null;
 }
 
 export interface Station {
@@ -308,10 +292,7 @@ export function parseArea(json: unknown): DispatchArea {
       name: exit.name,
       node: nodeIndex(exit.node, count, `exits[${i}].node`),
       road: String(exit.road ?? ""),
-      kind:
-        exit.kind === "safe-area" || exit.kind === "egress" || exit.kind === "map-edge"
-          ? exit.kind
-          : undefined,
+      kind: exit.kind === "egress" || exit.kind === "map-edge" ? exit.kind : undefined,
       destination:
         dest && typeof dest.name === "string"
           ? {
@@ -320,18 +301,8 @@ export function parseArea(json: unknown): DispatchArea {
               location: asLonLat(dest.location, `exits[${i}].destination.location`),
               capacity: typeof dest.capacity === "number" ? dest.capacity : null,
               straightLineMeters: Number(dest.straightLineMeters ?? 0),
-              key: typeof dest.key === "string" ? dest.key : undefined,
-              kind: typeof dest.kind === "string" ? dest.kind : undefined,
-              capacityBasis:
-                dest.capacityBasis === "source" || dest.capacityBasis === "assumption"
-                  ? dest.capacityBasis
-                  : undefined,
-              capacitySource: typeof dest.capacitySource === "string" ? dest.capacitySource : null,
-              sourceUrl: typeof dest.sourceUrl === "string" ? dest.sourceUrl : null,
             }
           : undefined,
-      inside: exit.inside === true,
-      capacity: typeof exit.capacity === "number" ? exit.capacity : null,
     };
   });
 

@@ -1,12 +1,8 @@
 """Zone-to-destination routes on the drill road network.
 
-Contract: docs/live-reports.md "Planner rules". The search cost of an evacuee edge is its
-free-flow travel time x its road-class factor (EVACUEE_ROAD_CLASS_FACTOR: residents leave their
-neighbourhood on local streets, then funnel onto arterials and collectors) x its fire weight x an
-optional congestion factor (simulated, from the traffic twin; ADR 0031-congestion-aware-planner).
-The road-class factor only chooses the path: ``Route.travel_time_s`` (and so every ETA) stays
-free-flow time on real speeds. Responder routes (``livecore.inbound``) do not use the road-class
-factor. A zone's
+Contract: docs/live-reports.md "Planner rules". The search cost of an edge is its free-flow
+travel time x its fire weight x an optional congestion factor (simulated, from the traffic
+twin; ADR 0031-congestion-aware-planner); ``Route.travel_time_s`` stays free-flow. A zone's
 incumbent route (the published one) is kept unless the new route is cheaper by a margin
 (SWITCH_MIN_GAIN_S, SWITCH_MIN_GAIN_FRACTION). Never routes over a blocked segment. Normal
 routes keep every edge outside the fire estimate and FIRE_BUFFER_M beyond it; a zone with no such route gets a
@@ -103,10 +99,6 @@ class Route:
     """Free-flow seconds on edges inside or crossing the fire estimate."""
     near_fire_time_s: float = 0.0
     """Free-flow seconds on edges outside the fire estimate but within FIRE_BUFFER_M of it."""
-    choice_cost_s: float | None = None
-    """Evacuee path-choice cost of the route: sum of ``evacuee_edge_cost_s`` (free-flow seconds x
-    road-class factor), no fire or congestion weight. Generalized seconds, not a travel time;
-    None on a Route built before the road-class factor existed."""
 
     @property
     def eta_min(self) -> int:
@@ -122,58 +114,6 @@ class Route:
 def edge_travel_time_s(edge: Edge) -> float:
     """``length_m / (speed_kph / 3.6)``, in seconds."""
     return edge.length_m / (edge.speed_kph / 3.6)
-
-
-# --- evacuee route choice: generalized cost --------------------------------------------------
-
-EVACUEE_ROAD_CLASS_FACTOR: Mapping[str, float] = {
-    "motorway": 1.0, "trunk": 1.0, "primary": 1.0,
-    "secondary": 1.1, "tertiary": 1.2,
-    "unclassified": 1.5, "residential": 1.5,
-    "living_street": 2.0, "service": 2.0, "track": 2.5,
-}
-"""Evacuee path choice: an edge's search cost is its free-flow seconds x this factor of its OSM
-``highway`` class (``*_link`` takes its parent's). Residents use local streets to leave their
-neighbourhood, then funnel onto arterials and collectors. Factors choose the path only: ETAs stay
-free-flow time on real speeds. Same table in app/src/dispatch/routing.ts and docs/live-reports.md
-"Evacuee route choice"; keep the three in step.
-
-Evidence (direction): Wong, Broader & Shaheen (2020), Review of California Wildfire Evacuations
-from 2017 to 2019, UC ITS UC-ITS-2019-19-b, doi:10.7922/G29G5K2R, Table 10: local roads were the
-primary (>50 % of the drive) road type for only 2.7-4.7 % of evacuees in three 2017-18 California
-wildfires, against 32-62 % highways and 15-27 % major roads. Dow & Cutter (2000), Natural Hazards
-Center QR #128 (Hurricane Floyd): traffic concentrated on interstates, state and county roads
-light, attributed to reluctance to use less familiar routes. Evidence (magnitude): Hess, Quddus,
-Rieser-Schuessler & Daly (2015), Transp. Res. Part E 77:29-44, doi:10.1016/j.tre.2015.01.010:
-realistic route sets from link cost = free-flow time x 1.0 (motorway, A road), 2.0 (B road), 2.5
-(other roads), calibrated to observed road-type shares, slip roads as their parent; heavy goods
-vehicles, so an upper bound for cars. No verified car-driver estimate exists.
-
-| class                        | f   | basis                                                         |
-| motorway, trunk, primary     | 1.0 | Hess motorway/A-road 1.0 (UK->OSM class mapping: judgement)   |
-| secondary                    | 1.1 | ASSUMPTION, within Hess B-road bound 2.0                      |
-| tertiary                     | 1.2 | ASSUMPTION, within Hess B-road bound 2.0                      |
-| unclassified, residential    | 1.5 | ASSUMPTION, within Hess other-road bound 2.5; Wong direction  |
-| living_street                | 2.0 | ASSUMPTION                                                    |
-| service                      | 2.0 | ASSUMPTION, below Hess other-road 2.5                         |
-| track; any other class       | 2.5 | Hess other-road 2.5 (HGV value applied to cars)               |
-| *_link                       | parent | Hess (slip roads take their road type)                     |
-"""
-EVACUEE_ROAD_CLASS_DEFAULT = 2.5
-"""Factor of a class not in EVACUEE_ROAD_CLASS_FACTOR (``road`` and other classes): Hess et al.
-(2015) other-road value, HGV evidence applied to cars."""
-
-
-def road_class_factor(highway: str) -> float:
-    """EVACUEE_ROAD_CLASS_FACTOR of an OSM ``highway`` class (``*_link`` -> its parent class)."""
-    cls = highway.removesuffix("_link")
-    return EVACUEE_ROAD_CLASS_FACTOR.get(cls, EVACUEE_ROAD_CLASS_DEFAULT)
-
-
-def evacuee_edge_cost_s(edge: Edge) -> float:
-    """Evacuee path-choice cost of an edge: ``edge_travel_time_s`` x ``road_class_factor``, in
-    generalized seconds (not a travel time)."""
-    return edge_travel_time_s(edge) * road_class_factor(edge.highway)
 
 
 @dataclass(frozen=True)
@@ -243,8 +183,6 @@ class _Index:
     main_nodes: frozenset[str]
     grid: Mapping[tuple[int, int], tuple[str, ...]]
     edge_time_s: Mapping[str, float]
-    edge_choice_s: Mapping[str, float]
-    """Edge id -> ``evacuee_edge_cost_s`` (evacuee path choice only)."""
     zone_origins: Mapping[str, str]
     destination_nodes: Mapping[str, str]
     """Destination id -> road node; destinations with no routable node within DEST_SNAP_MAX_M are absent."""
@@ -341,7 +279,6 @@ def _index(drill: Drill) -> _Index:
         main_nodes=main,
         grid=frozen_grid,
         edge_time_s={eid: edge_travel_time_s(e) for eid, e in roads.edges.items()},
-        edge_choice_s={eid: evacuee_edge_cost_s(e) for eid, e in roads.edges.items()},
         zone_origins=zone_origins,
         destination_nodes=destination_nodes,
     )
@@ -462,21 +399,15 @@ def _fire_classes(drill: Drill, avoid_polygon: MultiPolygon | None) -> Callable[
 
 
 
-def _edge_costs(drill: Drill, index: _Index, blocked: frozenset[str], fire_class: Callable[[str], int],
-                evacuee: bool = False,
+def _edge_costs(drill: Drill, index: _Index, blocked: frozenset[str], fire_class: Callable[[str], int]
                 ) -> tuple[Callable[[str], float | None], Callable[[str], float | None], Callable[[str], float | None]]:
-    """Edge cost functions of the three passes (open, near fire, through fire); None = unusable.
-
-    The base cost is free-flow seconds, or with ``evacuee`` the evacuee path-choice cost
-    (``evacuee_edge_cost_s``: x road-class factor). Responder routes (``livecore.inbound``) keep
-    the default. A blocked segment is unusable either way."""
+    """Edge cost functions of the three passes (open, near fire, through fire); None = unusable."""
     edges = drill.roads.edges
-    base = index.edge_choice_s if evacuee else index.edge_time_s
 
     def open_cost(eid: str) -> float | None:
         if edges[eid].segment_id in blocked or fire_class(eid) != _CLEAR:
             return None
-        return base[eid]
+        return index.edge_time_s[eid]
 
     def near_cost(eid: str) -> float | None:
         if edges[eid].segment_id in blocked:
@@ -484,13 +415,13 @@ def _edge_costs(drill: Drill, index: _Index, blocked: frozenset[str], fire_class
         c = fire_class(eid)
         if c == _INSIDE:
             return None
-        return base[eid] * (EXPOSED_COST_BUFFER if c == _BUFFER else 1.0)
+        return index.edge_time_s[eid] * (EXPOSED_COST_BUFFER if c == _BUFFER else 1.0)
 
     def through_cost(eid: str) -> float | None:
         if edges[eid].segment_id in blocked:
             return None
         c = fire_class(eid)
-        return base[eid] * (
+        return index.edge_time_s[eid] * (
             EXPOSED_COST_INSIDE if c == _INSIDE else EXPOSED_COST_BUFFER if c == _BUFFER else 1.0)
 
     return open_cost, near_cost, through_cost
@@ -541,8 +472,7 @@ def best_routes(
     congestion: Mapping[str, float] | None = None,
     incumbents: Mapping[str, Incumbent] | None = None,
 ) -> dict[str, Route | None]:
-    """Cheapest route from every zone to its nearest usable destination by evacuee path-choice cost
-    (free-flow time x road-class factor, ``evacuee_edge_cost_s``; ``travel_time_s`` stays free-flow).
+    """Fastest route from every zone to its nearest usable destination by travel time.
 
     Multi-source Dijkstra over the reversed graph from all usable destination nodes. Never
     uses edges whose ``segment_id`` is in ``blocked_segment_ids``; never routes to
@@ -552,8 +482,8 @@ def best_routes(
 
     1. ``kinds``, then ``FALLBACK_KINDS``, over edges entirely outside ``avoid_polygon`` and
        farther than FIRE_BUFFER_M from it;
-    2. near fire: edges within FIRE_BUFFER_M allowed at EXPOSED_COST_BUFFER times their
-       path-choice cost, edges inside the fire never;
+    2. near fire: edges within FIRE_BUFFER_M allowed at EXPOSED_COST_BUFFER times their travel
+       time, edges inside the fire never;
     3. through fire: edges inside the fire allowed too, at EXPOSED_COST_INSIDE times.
 
     Passes 2 and 3 are least-exposure passes (``exposed=True``; ``passes_fire`` on pass 3, so
@@ -574,8 +504,7 @@ def best_routes(
     fire_class = _fire_classes(drill, avoid_polygon)
     factors = validate_congestion(congestion)
     open_cost, near_cost, through_cost = (
-        _congested(c, factors)
-        for c in _edge_costs(drill, index, frozenset(blocked_segment_ids), fire_class, evacuee=True))
+        _congested(c, factors) for c in _edge_costs(drill, index, frozenset(blocked_segment_ids), fire_class))
     full = frozenset(full_destination_ids)
     held = dict(incumbents or {})
 
@@ -612,12 +541,9 @@ def best_routes(
 
 
 def weighted_time_s(route: Route) -> float:
-    """The least-exposure ranking cost of ``route``: its evacuee path-choice cost (``choice_cost_s``,
-    free-flow seconds x road-class factor; ``travel_time_s`` when unset) plus buffer time weighted by
-    EXPOSED_COST_BUFFER - 1 and time inside the fire by EXPOSED_COST_INSIDE - 1, both in free-flow
-    seconds (so it equals ``choice_cost_s`` when clear). Ranks alternatives; never an ETA."""
-    base = route.travel_time_s if route.choice_cost_s is None else route.choice_cost_s
-    return (base + (EXPOSED_COST_BUFFER - 1.0) * route.near_fire_time_s
+    """The least-exposure search cost of ``route``: free-flow seconds with buffer time weighted by
+    EXPOSED_COST_BUFFER and time inside the fire by EXPOSED_COST_INSIDE (= travel time when clear)."""
+    return (route.travel_time_s + (EXPOSED_COST_BUFFER - 1.0) * route.near_fire_time_s
             + (EXPOSED_COST_INSIDE - 1.0) * route.fire_time_s)
 
 
@@ -654,8 +580,7 @@ def alternative_routes(
     fire_class = _fire_classes(drill, avoid_polygon)
     factors = validate_congestion(congestion)
     open_cost, near_cost, through_cost = (
-        _congested(c, factors)
-        for c in _edge_costs(drill, index, frozenset(blocked_segment_ids), fire_class, evacuee=True))
+        _congested(c, factors) for c in _edge_costs(drill, index, frozenset(blocked_segment_ids), fire_class))
     full = frozenset(full_destination_ids)
     primary = set(_usable_destinations(drill, index, avoid_polygon, full, kinds))
     usable = sorted(primary | set(_usable_destinations(drill, index, avoid_polygon, full, FALLBACK_KINDS)))
@@ -839,5 +764,4 @@ def _build_route(drill: Drill, index: _Index, zone_id: str, origin: str, next_ed
         via=_via(edges),
         distance_m=sum(e.length_m for e in edges),
         travel_time_s=sum(index.edge_time_s[e.id] for e in edges),
-        choice_cost_s=sum(index.edge_choice_s[e.id] for e in edges),
     )

@@ -174,7 +174,7 @@ export default function Outcomes({
           <dd>
             Persons still home in threatened zones, those without a vehicle included. "Scheduled to leave": in zones
             whose evacuation order starts at a later board minute (they stay home until then). "With no order": in
-            zones with no order in effect or scheduled; only households leaving on their own cues (simulated self-evacuation) go.
+            zones with no order in effect or scheduled; nobody leaves those, as the board has no self-evacuation.
           </dd>
           <dt>Unable to reach safety</dt>
           <dd>

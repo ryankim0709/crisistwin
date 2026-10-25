@@ -21,7 +21,6 @@ import {
   type FireUniforms,
 } from "./board";
 import { CoverLayer } from "./cover";
-import { CELL_CODE_MASK, isFlamingCode } from "./cellStates";
 import { FireSampler, FxLayer, burnWindowMinutes } from "./fx";
 import { FuelFamily } from "./fuelStyle";
 import { LabelLayer, type ClipOptions } from "./labels";
@@ -96,25 +95,6 @@ function webglAvailable(): boolean {
   }
 }
 
-/**
- * Software WebGL (SwiftShader in headless Chrome or with the GPU blocklisted, Mesa llvmpipe in
- * VMs). There the compositor reads every drawn frame back synchronously (GLES2 ReadPixels in
- * Commit), so a regional board blocked the page's main thread about 4 s per frame and starved
- * every fetch callback and React update (measured on /run, chrome-headless-shell, 30x30 km board).
- */
-function isSoftwareWebgl(gl: WebGLRenderingContext | WebGL2RenderingContext): boolean {
-  try {
-    const info = gl.getExtension("WEBGL_debug_renderer_info");
-    const name = String(gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER) ?? "");
-    return /swiftshader|llvmpipe|softpipe|software|basic render/i.test(name);
-  } catch {
-    return false;
-  }
-}
-/** Software WebGL: wait at least this long, and this many times the last frame's cost, between frames. */
-const SOFTWARE_MIN_GAP_MS = 1000;
-const SOFTWARE_GAP_FACTOR = 3;
-
 /** Everything built for one loaded landscape (rebuilt on `setLandscape`). */
 type Board = {
   frame: BoardFrame;
@@ -184,8 +164,6 @@ export class FireDioramaScene implements FireDioramaSceneApi {
   private coverHouses = true;
   /** Opt-in per-cell fire states (setCellStates); null = the arrival field decides. */
   private cellStates: Uint8Array | null = null;
-  /** Smouldering heat per cell (0-255) alongside the states, or null. */
-  private cellHeat: Uint8Array | null = null;
   private streets: BoardStreets | null = null;
   private reducedMotion: boolean;
   private clickCallback: ((point: GeoPoint) => void) | null = null;
@@ -195,10 +173,6 @@ export class FireDioramaScene implements FireDioramaSceneApi {
   private disposed = false;
   private width = 1;
   private height = 1;
-  /** Software WebGL: frames are throttled (see isSoftwareWebgl). */
-  private readonly softwareGl: boolean;
-  private softwareDrawnAt: number | null = null;
-  private softwareNextAt = 0;
 
   constructor(container: HTMLElement, options: FireDioramaOptions) {
     if (!webglAvailable())
@@ -217,9 +191,7 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.0;
-    this.softwareGl = isSoftwareWebgl(this.renderer.getContext());
-    // Shadows cost a second geometry pass; a software renderer skips them.
-    this.renderer.shadowMap.enabled = !this.softwareGl;
+    this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     const canvas = this.renderer.domElement;
     canvas.style.display = "block";
@@ -499,19 +471,18 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     );
   }
 
-  setCellStates(states: Uint8Array | null, heat: Uint8Array | null = null): void {
+  setCellStates(states: Uint8Array | null): void {
     if (this.disposed) return;
     const prev = this.cellStates;
-    const prevHeat = this.cellHeat;
-    const sameHeat =
-      heat === prevHeat ||
-      (!!heat && !!prevHeat && heat.length === prevHeat.length && sameBytes(heat, prevHeat));
-    if (states === prev && sameHeat) return;
-    if (states && prev && states.length === prev.length && sameBytes(states, prev) && sameHeat)
+    if (states === prev) return;
+    if (
+      states &&
+      prev &&
+      states.length === prev.length &&
+      states.every((v, i) => v === prev[i])
+    )
       return;
-    // Copied into reused buffers: the caller may refill its arrays (no per-update allocation).
-    this.cellStates = states ? copyInto(prev, states) : null;
-    this.cellHeat = heat ? copyInto(prevHeat, heat) : null;
+    this.cellStates = states ? states.slice() : null;
     this.applyStates();
   }
 
@@ -554,13 +525,10 @@ export class FireDioramaScene implements FireDioramaSceneApi {
       this.cellStates && frame.grid && this.cellStates.length === frame.cols * frame.rows
         ? this.cellStates
         : null;
-    const heat = states && this.cellHeat && this.cellHeat.length === states.length ? this.cellHeat : null;
-    const old = board.fire.uState.value;
-    const next = states
-      ? buildStateTexture(frame, states, board.fireFactor, heat, old)
+    board.fire.uState.value.dispose();
+    board.fire.uState.value = states
+      ? buildStateTexture(frame, states, board.fireFactor)
       : emptyStateTexture();
-    if (next !== old) old.dispose();
-    board.fire.uState.value = next;
     board.fire.uUseState.value = states ? 1 : 0;
     board.cover.setCellStates(states);
     this.sampler.setStates(states);
@@ -902,16 +870,6 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     const dt = Math.min(0.1, (now - this.lastFrame) / 1000);
     this.lastFrame = now;
     if (document.hidden || this.width < 2 || this.height < 2) return;
-    if (this.softwareGl) {
-      // The first callback after a drawn frame comes once its readback finished: that gap is the frame's cost.
-      if (this.softwareDrawnAt !== null) {
-        const cost = now - this.softwareDrawnAt;
-        this.softwareNextAt = now + Math.max(SOFTWARE_MIN_GAP_MS, cost * SOFTWARE_GAP_FACTOR);
-        this.softwareDrawnAt = null;
-      }
-      if (now < this.softwareNextAt) return;
-      this.softwareDrawnAt = now;
-    }
     if (!this.reducedMotion) this.time += dt;
     const time = this.time;
     const reduced = this.reducedMotion;
@@ -983,7 +941,7 @@ export class FireDioramaScene implements FireDioramaSceneApi {
         for (let r = Math.max(0, r0 - 1); r <= Math.min(rows - 1, r0 + 1); r++) {
           for (let c = Math.max(0, c0 - 1); c <= Math.min(cols - 1, c0 + 1); c++) {
             if (states) {
-              if (isFlamingCode(states[r * cols + c] & CELL_CODE_MASK)) return true;
+              if (states[r * cols + c] === 1) return true;
               continue;
             }
             const a = arrival[r * cols + c];
@@ -1070,20 +1028,6 @@ export class FireDioramaScene implements FireDioramaSceneApi {
 }
 
 const NO_HOUSES: readonly GeoPoint[] = [];
-
-function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
-  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
-  return true;
-}
-
-/** `src` copied into `into` when it has the same length, else into a new array. */
-function copyInto(into: Uint8Array | null, src: Uint8Array): Uint8Array {
-  if (into && into.length === src.length && into !== src) {
-    into.set(src);
-    return into;
-  }
-  return src.slice();
-}
 
 /** Disposes geometries, materials and material textures under `root`. */
 function disposeTree(root: THREE.Object3D) {

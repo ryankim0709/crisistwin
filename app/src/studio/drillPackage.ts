@@ -158,12 +158,7 @@ export interface DrillPackageSummary {
   stations: number;
   fronts: number;
   clipped: boolean;
-  /** Dispatch-area builder of the package's roads and destinations; absent from packages stored before it was recorded. */
-  dispatch_builder?: string | null;
 }
-
-/** Builder whose exits are safe areas (app/backend/api/dispatch_area.py BUILDER_VERSION); older stored packages are rebuilt, not reused. */
-export const DISPATCH_BUILDER = "dispatch-area/6";
 
 export interface DrillPackageResponse {
   package_id: string;

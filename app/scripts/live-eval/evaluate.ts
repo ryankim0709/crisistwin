@@ -175,7 +175,6 @@ function syntheticFire(incidentId: string, regionId: string): StudioFire | null 
     moisture: { preset, label: preset, values: { dead1h: m.dead1h, dead10h: m.dead10h, dead100h: m.dead100h, liveHerb: m.liveHerb, liveWoody: m.liveWoody } },
     horizon_minutes: 360,
     outside_drill: [],
-    weather_series: null,
   };
 }
 

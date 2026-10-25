@@ -14,7 +14,7 @@
 import { useEffect, useRef, useState } from "react";
 import { activate, fetchPackages, type StoredPackage } from "../live/active";
 import type { StudioRunResult } from "./contracts";
-import { DISPATCH_BUILDER, buildRunExport, postDrillPackage } from "./drillPackage";
+import { buildRunExport, postDrillPackage } from "./drillPackage";
 import {
   buildLiveFirePayload,
   postLiveFire,
@@ -42,12 +42,8 @@ export type LiveFireState =
 const messageOf = (cause: unknown, fallback: string) =>
   cause instanceof Error && cause.message ? cause.message : fallback;
 
-/**
- * A stored package's road box (`summary.bbox`, [west, south, east, north]) holds every ignition,
- * and its destinations are the current safe areas (built by DISPATCH_BUILDER).
- */
+/** A stored package's road box (`summary.bbox`, [west, south, east, north]) holds every ignition. */
 function covers(pkg: StoredPackage, ignitions: LiveFirePayload["ignitions"]): boolean {
-  if (pkg.summary.dispatch_builder !== DISPATCH_BUILDER) return false;
   const box = pkg.summary.bbox;
   if (!Array.isArray(box) || box.length !== 4 || !box.every((v) => typeof v === "number")) {
     return false;

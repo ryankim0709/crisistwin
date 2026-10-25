@@ -2,7 +2,6 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } f
 import { useMediaQuery } from "../diorama/ui/format";
 import type { FireDioramaSceneApi, GroundClickMode } from "./diorama/types";
 import { FireDioramaScene } from "./diorama/FireDioramaScene";
-import { createRunCellStates, type RunCellStates } from "./fireStates";
 import AreaPicker from "./ui/AreaPicker";
 import { AREA_PRESETS, DEFAULT_AREA } from "./ui/areaPresets";
 import {
@@ -540,8 +539,7 @@ export default function FireSimulatorPage() {
     // The deferred scenario can lag a grid swap; never solve an ignition outside the grid.
     if (cellAt(grid, deferredScenario.origin) < 0) return { run: null, error: null };
     try {
-      // reportCellBehaviour: the per-cell flame and crown the legible fire states classify.
-      return { run: simulateFireSpread(grid, deferredScenario, { reportCellBehaviour: true }), error: null };
+      return { run: simulateFireSpread(grid, deferredScenario), error: null };
     } catch (cause) {
       return {
         run: null,
@@ -616,46 +614,7 @@ export default function FireSimulatorPage() {
   }, [view, historicalOpen]);
 
   // Continuous model time, pushed to the scene every animation frame without a React render.
-  // Legible fire states (flame band, crown, smouldering, burned out) of the simulated run, pushed
-  // to the scene only when the whole minute changes. Simulated data: never for the observed or
-  // historical perimeters (the scene does not exist while one is open).
-  const wantCellStates = scene !== null;
-  const runCellStates = useMemo<RunCellStates | null>(
-    () =>
-      run && grid && wantCellStates
-        ? createRunCellStates({
-            grid,
-            arrivalMinutes: run.arrivalMinutes,
-            behaviour: run.cellBehaviour ?? null,
-            horizonMinutes: run.scenario.horizonMinutes,
-          })
-        : null,
-    [run, grid, wantCellStates],
-  );
-  const cellStatesRef = useRef<RunCellStates | null>(null);
-  const cellStatesMinuteRef = useRef(Number.NaN);
-  const pushCellStates = useCallback((minutes: number, force: boolean) => {
-    const target = sceneRef.current;
-    if (!target) return;
-    const states = cellStatesRef.current;
-    if (!states) {
-      if (force || !Number.isNaN(cellStatesMinuteRef.current)) target.setCellStates(null);
-      cellStatesMinuteRef.current = Number.NaN;
-      return;
-    }
-    const minute = Math.max(0, Math.floor(minutes));
-    if (!force && minute === cellStatesMinuteRef.current) return;
-    cellStatesMinuteRef.current = minute;
-    const { codes, heat } = states.at(minute);
-    target.setCellStates(codes, heat);
-  }, []);
-  const onTime = useCallback(
-    (minutes: number) => {
-      sceneRef.current?.setTime(minutes);
-      pushCellStates(minutes, false);
-    },
-    [pushCellStates],
-  );
+  const onTime = useCallback((minutes: number) => sceneRef.current?.setTime(minutes), []);
   const playback = useFirePlayback(horizonMinutes, onTime);
   const { getTime, pause, restart: restartPlayback, seek: seekPlayback } = playback;
 
@@ -669,11 +628,6 @@ export default function FireSimulatorPage() {
     scene?.setRun(run);
     scene?.setTime(getTime());
   }, [scene, run, getTime]);
-  // After setLandscape / setRun above (same commit), so the cells are the scene's landscape's.
-  useEffect(() => {
-    cellStatesRef.current = runCellStates;
-    pushCellStates(getTime(), true);
-  }, [scene, runCellStates, getTime, pushCellStates]);
   useEffect(() => {
     scene?.setIgnition(origin);
   }, [scene, origin]);

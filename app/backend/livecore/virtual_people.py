@@ -91,10 +91,6 @@ STAYING_ACTIONS = frozenset({"stay_and_defend", "shelter_in_place"})
 TRIP_TEXT = {"pet": "Went back for a pet", "family": "Picking up family", "others": "Helping neighbours",
              "supplies": "Went back for belongings"}
 PHASES = ("home", "packing", "trip", "en_route", "out", "staying", "help", "picked_up")
-TRAIL_MAX_POINTS = 120
-"""Longest trail kept per person (``state["trail"]``, served by ``GET virtual-people/<id>/track``): one point per
-drill minute the person moves, newest last. ASSUMPTION: 120 points (2 h of driving) is plenty to draw where a
-phone-followed person has been; older points are dropped."""
 
 
 # ---- inputs for one drill minute ----------------------------------------------------------------------------
@@ -200,7 +196,6 @@ def initial_state(home: LonLat) -> dict[str, Any]:
         "dest_id": None, "dest_name": None, "recommended_id": None, "different_road": False, "route_safety": None,
         "path": None, "total_min": None, "progress": 0.0, "motion": None, "stuck_since": None,
         "position": [home[0], home[1]], "home_fire_m": None, "done": [], "outbox": [], "ticked_to": None,
-        "trail": [],
     }
 
 
@@ -280,7 +275,6 @@ def _depart(spec: Mapping[str, Any], state: dict[str, Any], ctx: MinuteContext) 
     home = spec["home"]
     state["phase"] = "en_route"
     state["progress"] = 0.0
-    _trail_add(state, ctx.t, home)  # the trail starts at the door
     if options:
         rec = next((o for o in options if o.recommended), options[0])
         chosen = rec
@@ -300,18 +294,6 @@ def _depart(spec: Mapping[str, Any], state: dict[str, Any], ctx: MinuteContext) 
         state.update(dest_id=dest_id, dest_name=name, recommended_id=None, different_road=False, route_safety=None)
     else:
         state["path"], state["total_min"] = [list(home)], 1.0
-
-
-def _trail_add(state: dict[str, Any], t: datetime, position: Sequence[float]) -> None:
-    """Append the person's position at drill minute ``t`` to ``state["trail"]`` (capped at ``TRAIL_MAX_POINTS``).
-    A position equal to the last point (stuck in a queue, blocked) is not repeated. People stored before the
-    trail existed have no ``trail`` key yet."""
-    trail = state.setdefault("trail", [])
-    coord = [position[0], position[1]]
-    if trail and trail[-1]["coord"] == coord:
-        return
-    trail.append({"t": t, "coord": coord})
-    del trail[:-TRAIL_MAX_POINTS]
 
 
 def _move(spec: Mapping[str, Any], state: dict[str, Any], ctx: MinuteContext) -> None:
@@ -352,7 +334,6 @@ def _move(spec: Mapping[str, Any], state: dict[str, Any], ctx: MinuteContext) ->
             return
     state["progress"] = min(1.0, state["progress"] + factor / max(1.0, state["total_min"]))
     state["position"] = point_along(state["path"], state["progress"])
-    _trail_add(state, ctx.t, state["position"])
     if state["progress"] >= 1.0:
         state.update(phase="out", arrived_at=ctx.t, motion=None, stuck_since=None)
 

@@ -64,7 +64,7 @@ import {
   type Fire,
   type Team,
 } from "./model";
-import { fireKindOf, holdsFlameFeet, type DemoApparatusKind } from "./realism";
+import { holdsFlameFeet, type DemoApparatusKind } from "./realism";
 
 /**
  * Most free units considered per option (the n nearest, n = 1..this). A bound on work and on the
@@ -199,7 +199,7 @@ export function unitsNeededText(counts: Partial<Record<DemoApparatusKind, number
 
 function countKinds(teams: readonly Team[]): Partial<Record<DemoApparatusKind, number>> {
   const out: Partial<Record<DemoApparatusKind, number>> = {};
-  for (const t of teams) if (t.kind !== "ambulance") out[t.kind] = (out[t.kind] ?? 0) + 1;
+  for (const t of teams) out[t.kind] = (out[t.kind] ?? 0) + 1;
   return out;
 }
 
@@ -260,7 +260,7 @@ function burnedHaIn(board: Board, fire: Fire, t: number): number | null {
 // ---- options ----
 
 function perimeterOption(board: Board, fire: Fire, tactic: Tactic, free: StrategyUnit[], assigned: Team[]): StrategyOption {
-  const candidates = free.filter((c) => buildsOn(fireKindOf(c.team), tactic));
+  const candidates = free.filter((c) => buildsOn(c.team.kind, tactic));
   const arrivals = assigned.map((t) => teamArrival(board, t, fire));
   const works = assigned.map((t) => workOf(board, t, fire));
   const flame = fire.rates.headFlameFeet;

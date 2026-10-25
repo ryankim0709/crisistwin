@@ -8,13 +8,9 @@
  * dispatch, set by the user (start_minute <= report_minute <= 1440), or null when not set (Live
  * then models its own report delay); `wind.speed_mph` open 20 ft wind in mph; `wind.from_deg` bearing the wind blows
  * FROM, degrees true; moisture values are fractions (0.06 = 6%); `horizon_minutes` minutes.
- * `weather_series` (present when the run used an hourly series): the series' samples, `minute` on
- * the same Studio clock (may be negative), same wind and moisture units; Live command reads it
- * exactly as Studio's solver and diorama do (fire/weatherSeries.ts weatherAtStep).
  */
 
 import { MOISTURE_PRESETS } from "../fire/spread";
-import { MAX_WEATHER_SAMPLES, seriesActive } from "../fire/weatherSeries";
 import type { StudioRunResult } from "./contracts";
 
 export interface LiveFirePayload {
@@ -42,19 +38,6 @@ export interface LiveFirePayload {
     };
   };
   horizon_minutes: number;
-  /** The run's hourly weather series, or null when it ran one constant wind. */
-  weather_series: LiveWeatherSeries | null;
-}
-
-export interface LiveWeatherSeries {
-  source: string;
-  evidence: string;
-  samples: {
-    minute: number;
-    wind_speed_mph: number;
-    wind_from_deg: number;
-    moisture: LiveFirePayload["moisture"]["values"] | null;
-  }[];
 }
 
 export interface LiveFireResponse {
@@ -113,7 +96,7 @@ function windOfRun(result: StudioRunResult): LiveFirePayload["wind"] {
       speed_mph: Math.round(peak.windSpeedMph * 10) / 10,
       from_deg: ((Math.round(peak.windFromDegrees) % 360) + 360) % 360,
       source: SERIES_SOURCE[evidence] ?? "series",
-      label: `Peak hour of the hourly weather series the run used (${series.source ?? "source not recorded"}, ${evidence}); Live command follows the same series hour by hour`,
+      label: `Peak hour of the hourly weather series the run used (${series.source ?? "source not recorded"}, ${evidence}); run on Live command as one constant wind`,
     };
   }
   if (!weather) {
@@ -131,33 +114,6 @@ function windOfRun(result: StudioRunResult): LiveFirePayload["wind"] {
     from_deg: from,
     source: kind.source,
     label: `Resolved ${kind.text} used by the run (peak hour, ${weather.source}${station})`,
-  };
-}
-
-const SERIES_MINUTE_LIMIT = 4320;
-
-/** The run's hourly series as Live command takes it (at most MAX_WEATHER_SAMPLES samples), or null. */
-function weatherSeriesOf(result: StudioRunResult): LiveWeatherSeries | null {
-  const series = result.scenario.settings.weatherSeries;
-  if (!seriesActive(series) || !series.samples.some((s) => Math.abs(s.minute) <= SERIES_MINUTE_LIMIT)) return null;
-  return {
-    source: (series.source ?? "source not recorded").slice(0, 80),
-    evidence: series.evidence ?? "unrecorded",
-    // The server accepts minutes within +/-72 h of T+0 (api/live/studio_fires.py SERIES_MINUTE_RANGE).
-    samples: series.samples.filter((s) => Math.abs(s.minute) <= SERIES_MINUTE_LIMIT).slice(0, MAX_WEATHER_SAMPLES).map((s) => ({
-      minute: s.minute,
-      wind_speed_mph: s.windSpeedMph,
-      wind_from_deg: ((s.windFromDegrees % 360) + 360) % 360,
-      moisture: s.moisture
-        ? {
-            dead1h: s.moisture.dead1h,
-            dead10h: s.moisture.dead10h,
-            dead100h: s.moisture.dead100h,
-            liveHerb: s.moisture.liveHerb,
-            liveWoody: s.moisture.liveWoody,
-          }
-        : null,
-    })),
   };
 }
 
@@ -199,7 +155,6 @@ export function buildLiveFirePayload(result: StudioRunResult, regionId: string):
       },
     },
     horizon_minutes: scenario.settings.horizonMinutes,
-    weather_series: weatherSeriesOf(result),
   };
 }
 

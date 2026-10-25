@@ -9,7 +9,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { BurnedGlyph, FireEdgeGlyph, WindGlyph } from "../diorama/ui/glyphs";
+import { BurnedGlyph, FireEdgeGlyph, StationBadgeGlyph, WindGlyph } from "../diorama/ui/glyphs";
 import { useMediaQuery } from "../diorama/ui/format";
 import { FireDioramaScene } from "../fire/diorama/FireDioramaScene";
 import type { DioramaIgnition, FireDioramaSceneApi } from "../fire/diorama/types";
@@ -19,31 +19,13 @@ import { CREW_COLORS, firelineCss } from "../studio/firelinePalette";
 import { Button, Legend, Panel, type LegendItem } from "../ui";
 import { EXTINGUISHED_LEGEND } from "../fire/diorama/board";
 import { HOUSE_MARK_COLORS } from "../fire/diorama/cover";
-import { DemoBoardOverlay, type DemoOverlayApi, type FollowedPersonLike, type PredictedFireRings } from "./DemoBoardOverlay";
-import { APPARATUS_COLORS, DEMO_3D_COLORS, DESTINATION_COLORS, FOLLOW_COLORS, hexCss } from "./board3dPalette";
-import {
-  AirAttackGlyph,
-  AirtankerGlyph,
-  AmbulanceGlyph,
-  CrewCarrierGlyph,
-  DozerGlyph,
-  DropGlyph,
-  EngineGlyph,
-  FireStationGlyph,
-  FollowedPersonGlyph,
-  ForecastRingGlyph,
-  HelicopterGlyph,
-  HikingCrewGlyph,
-  SafeAreaGlyph,
-  TenderGlyph,
-} from "./boardLegendGlyphs";
+import { DEMO_3D_COLORS, DemoBoardOverlay } from "./DemoBoardOverlay";
 import type { Selection } from "./DemoMap";
 import { dioramaRun } from "./dioramaField";
 import { fireOuterRings } from "./fireFootprint";
-import { fireVisualAt, fireStatusAt, SMOULDER_WINDOW_MINUTES } from "./fireVisualState";
-import { FIRE_STATE_COLORS } from "../fire/diorama/cellStates";
+import { fireCellStates } from "./fireState";
 import { assignHouses, safeHouseMarks, type HouseZones } from "./safeHouses";
-import { distanceM, teamPosition, type Board, type ZoneForecast } from "./model";
+import { activeFires, distanceM, teamPosition, type Board, type ZoneForecast } from "./model";
 import { fireMapLabel } from "./boardResponse";
 import type { ArrivalFieldState } from "./useArrivalField";
 
@@ -66,40 +48,6 @@ interface Props {
   forecasts: Map<string, ZoneForecast>;
   wind: { speedMetersPerSecond: number; fromDegrees: number } | null;
   selected: Selection | null;
-  /** /run: simulated people followed from phones (lead H1's FollowedPerson is structurally this). */
-  followed?: readonly FollowedPersonLike[];
-  /** /run: predicted fire perimeters at +30/+60/+120 min (dashed, labelled "forecast"). */
-  predictedFire?: readonly PredictedFireRings[];
-  /** Called with the board overlay's API once mounted (null on unmount), for pages that drive it imperatively. */
-  onOverlay?: (api: DemoOverlayApi | null) => void;
-  /**
-   * Board minute the fire is drawn at (timeline scrubbing); default the board's own minute. The
-   * fire's cells, pins and labels come from fireVisualState.fireVisualAt(board, viewMinute).
-   */
-  viewMinute?: number;
-}
-
-/** A flame of the given colour and height (px of 16), for the flame-band legend rows. */
-function FlameGlyph({ color, height }: { color: number; height: number }) {
-  const top = 15 - height;
-  return (
-    <svg width="24" height="16" viewBox="0 0 24 16" aria-hidden="true">
-      <rect x="2" y="13" width="20" height="3" rx="1" fill="#2a1a14" />
-      <path d={`M8 15 C8 ${top + height * 0.5} 11 ${top + height * 0.35} 12 ${top} C13 ${top + height * 0.35} 16 ${top + height * 0.5} 16 15Z`} fill={hexCss(color)} stroke="#5a1a0a" strokeWidth="0.6" />
-    </svg>
-  );
-}
-
-/** Dark ground with ember specks (smouldering). */
-function EmberGlyph() {
-  return (
-    <svg width="24" height="16" viewBox="0 0 24 16" aria-hidden="true">
-      <rect x="2" y="2" width="20" height="12" rx="2" fill="#1a0d0a" />
-      {[[6, 6], [11, 10], [16, 5], [18, 11], [9, 4]].map(([x, y]) => (
-        <circle key={`${x}-${y}`} cx={x} cy={y} r="1.3" fill={hexCss(FIRE_STATE_COLORS.ember)} />
-      ))}
-    </svg>
-  );
 }
 
 function VehicleGlyph({ color, width, height }: { color: number; width: number; height: number }) {
@@ -162,7 +110,7 @@ function FirePinGlyph() {
 
 const css = (color: number | string) => (typeof color === "number" ? firelineCss(color) : color);
 
-export default function DemoDiorama({ board, version, field, landscape, regionName, forecasts, wind, selected, followed, predictedFire, onOverlay, viewMinute }: Props) {
+export default function DemoDiorama({ board, version, field, landscape, regionName, forecasts, wind, selected }: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [scene, setScene] = useState<FireDioramaSceneApi | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -210,72 +158,38 @@ export default function DemoDiorama({ board, version, field, landscape, regionNa
   useEffect(() => {
     // The solver's whole field (with its lookahead); setTime(board minute) shows only what has burned.
     scene?.setRun(field ? dioramaRun(field.field) : null);
-    if (field) scene?.setTime(viewMinute ?? field.board.minute);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- viewMinute is applied by the setTime effect below
+    if (field) scene?.setTime(field.board.minute);
   }, [scene, field]);
-  const minute = viewMinute ?? board.minute;
 
   // The board is mutated in place; `version` marks each change (about 5 Hz while running).
-  // Each pin says what its fire is doing at the drawn minute, in plain words from model numbers
-  // (fireVisualState.ts fireWords): "S1-F1 · Burning hard · flames ~9 ft · 65 m/min toward W".
-  const ignitions = useMemo<DioramaIgnition[]>(() => {
-    const visual = board.env.landscape === landscape ? fireVisualAt(board, minute) : null;
-    return board.fires
-      .filter((fire) => fireStatusAt(fire, minute) !== "not_started")
-      .map((fire) => {
-        const full = fireMapLabel(board, fire);
-        const name = full.split(" · ")[0];
-        const words = visual?.fires.get(fire.id)?.words;
-        // "· not yet reported (sim)" before its report (boardResponse.ts report rule).
-        const reported = fireStatusAt(fire, minute) === "burning" ? full.slice(name.length) : "";
-        return {
-          id: fire.id,
-          point: { longitude: fire.origin[0], latitude: fire.origin[1] },
-          label: words ? `${name} · ${words}${reported}` : full,
-        };
-      });
+  const ignitions = useMemo<DioramaIgnition[]>(
+    () =>
+      activeFires(board).map((fire) => ({
+        id: fire.id,
+        point: { longitude: fire.origin[0], latitude: fire.origin[1] },
+        // "S1-F1 · not yet reported (sim)" before its report (boardResponse.ts report rule).
+        label: fireMapLabel(board, fire),
+      })),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the board is mutated in place; version marks changes
-  }, [board, version, minute, landscape, field]);
+    [board, version],
+  );
   useEffect(() => {
     scene?.setIgnitions(ignitions);
   }, [scene, ignitions]);
   useEffect(() => {
-    scene?.setTime(minute);
+    scene?.setTime(board.minute);
     overlay.setBoard(board, forecasts);
-  }, [scene, overlay, board, version, forecasts, minute]);
+  }, [scene, overlay, board, version, forecasts]);
   useEffect(() => () => overlay.setBoard(null, new Map()), [overlay]);
-  // The selected zone / unit ranks first among the 3D labels and its safe area always shows its label.
-  useEffect(() => {
-    overlay.setSelected(selected);
-  }, [overlay, selected]);
 
-  // /run: followed people and the predicted perimeters (props), and the imperative API (onOverlay).
-  // A page driving the overlay through onOverlay only leaves these props undefined (no effect then).
-  useEffect(() => {
-    if (followed !== undefined) overlay.setFollowed(followed);
-  }, [overlay, followed]);
-  useEffect(() => {
-    if (predictedFire !== undefined) overlay.setPredictedFire(predictedFire);
-  }, [overlay, predictedFire]);
-  useEffect(() => {
-    if (!onOverlay) return;
-    onOverlay(overlay);
-    return () => onOverlay(null);
-  }, [overlay, onOverlay]);
-
-  // Per-cell fire states at the drawn minute (flaming by flame band, crown, smouldering, burned
-  // out, put out; contained fires' cells flagged; fireVisualState.ts). The cells must be the
+  // Per-cell fire states (burning / burned out / put out, fireState.ts); the cells must be the
   // scene's landscape's (the board's own), else the arrival field alone decides.
   useEffect(() => {
     if (!scene) return;
-    if (board.env.landscape !== landscape) {
-      scene.setCellStates(null);
-      return;
-    }
-    const v = fireVisualAt(board, minute);
-    scene.setCellStates(v.codes, v.heat);
+    const states = board.env.landscape === landscape ? fireCellStates(board) : null;
+    scene.setCellStates(states);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the board is mutated in place; version marks changes
-  }, [scene, board, version, landscape, field, minute]);
+  }, [scene, board, version, landscape, field]);
 
   // Residents safe: each zone's houses marked in proportion to its households out (safeHouses.ts).
   // Runs after setLandscape / setStreets above, so houseLocations() is the current cover's.
@@ -333,18 +247,8 @@ export default function DemoDiorama({ board, version, field, landscape, regionNa
     ...(streetArea ? ["Roads © OpenStreetMap contributors"] : []),
   ];
   const legend: LegendItem[] = [
-    { label: "Flaming front (simulated), flames under 4 ft: deep red, dim. Hand crews can hold it (Hauling chart, PMS 465)", color: hexCss(FIRE_STATE_COLORS.flameLow), glyph: <FlameGlyph color={FIRE_STATE_COLORS.flameLow} height={4} /> },
-    { label: "Flames 4 to 8 ft: orange. Engines and dozers", color: hexCss(FIRE_STATE_COLORS.flameModerate), glyph: <FlameGlyph color={FIRE_STATE_COLORS.flameModerate} height={7} /> },
-    { label: "Flames 8 to 11 ft: amber, bright. Serious control problems; aircraft, indirect line", color: hexCss(FIRE_STATE_COLORS.flameHigh), glyph: <FlameGlyph color={FIRE_STATE_COLORS.flameHigh} height={10} /> },
-    { label: "Flames over 11 ft: pale yellow, brightest. Crowning, spotting, head not attackable", color: hexCss(FIRE_STATE_COLORS.flameExtreme), glyph: <FlameGlyph color={FIRE_STATE_COLORS.flameExtreme} height={12} /> },
-    { label: "Crown fire (the fire model has the cell torching or crowning): near-white glow", color: hexCss(FIRE_STATE_COLORS.crown), glyph: <FlameGlyph color={FIRE_STATE_COLORS.crown} height={14} /> },
-    {
-      label: `Smouldering (simulated): dark ground with an ember glow fading over ${SMOULDER_WINDOW_MINUTES} min after flaming ends (the window is an assumption); also heat left inside a contained fire`,
-      color: hexCss(FIRE_STATE_COLORS.ember),
-      glyph: <EmberGlyph />,
-    },
-    { label: "Burned out (simulated): ash-grey char, no glow", color: hexCss(FIRE_STATE_COLORS.ash), glyph: <BurnedGlyph /> },
-    { label: "Fire edge: warm line while burning; solid blue once the fire is contained or out (its label says which)", color: hexCss(FIRE_STATE_COLORS.perimeterContained), glyph: <FireEdgeGlyph /> },
+    { label: "Burning now (simulated): glows, with flames and smoke", color: "var(--ct-fire)", glyph: <FireEdgeGlyph /> },
+    { label: "Burned out (simulated): dark scar, no glow", color: "var(--ct-burned)", glyph: <BurnedGlyph /> },
     { label: "Put out by crews (simulated): slate with a pale hatch and a dashed outline, no glow", color: EXTINGUISHED_LEGEND.fill, glyph: <ExtinguishedGlyph /> },
     { label: "Firefighters at work (simulated): small figures in their unit's colour, yellow helmets, stepping in toward the fire", color: css(CREW_COLORS.hand_crew), glyph: <FirefighterGlyph /> },
     {
@@ -353,16 +257,21 @@ export default function DemoDiorama({ board, version, field, landscape, regionNa
       glyph: <SafeHouseGlyph />,
     },
     { label: "Fire origin, with its id", color: "var(--ct-fire)", glyph: <FirePinGlyph /> },
-    { label: "Engine (red truck with a white cab and light bar; drives only on roads it may use)", color: hexCss(APPARATUS_COLORS.engine), glyph: <EngineGlyph /> },
-    { label: "Water tender (dark red truck with a round tank)", color: hexCss(APPARATUS_COLORS.tender), glyph: <TenderGlyph /> },
-    { label: "Dozer (yellow, tracks and a front blade)", color: hexCss(APPARATUS_COLORS.dozer), glyph: <DozerGlyph /> },
-    { label: "Hand crew carrier (long green crew truck with windows)", color: hexCss(APPARATUS_COLORS.hand_crew), glyph: <CrewCarrierGlyph /> },
-    { label: "ALS ambulance (white box truck with a red stripe and cross; answers injuries only; out of service at hospital after a transport)", color: hexCss(APPARATUS_COLORS.ambulanceStripe), glyph: <AmbulanceGlyph /> },
-    { label: "Crew hiking in on foot from where the truck parked (simulated)", color: hexCss(APPARATUS_COLORS.hand_crew), glyph: <HikingCrewGlyph /> },
-    { label: "Helicopter (rotor; hovers low over drops and at its water dip)", color: hexCss(APPARATUS_COLORS.aircraftRed), glyph: <HelicopterGlyph /> },
-    { label: "Airtanker (fixed wing, two engines; flies straight from its air base at altitude)", color: hexCss(APPARATUS_COLORS.aircraftRed), glyph: <AirtankerGlyph /> },
-    { label: "Air attack / lead plane (small white plane with an orange band, circling high over the fire)", color: hexCss(APPARATUS_COLORS.airAttackBand), glyph: <AirAttackGlyph /> },
-    { label: "Drop: retardant (pink, airtankers) or water (blue, helicopters) curtain below the aircraft; dark disc = its ground shadow", color: hexCss(APPARATUS_COLORS.retardant), glyph: <DropGlyph /> },
+    {
+      label: "Engine (long red block)",
+      color: css(CREW_COLORS.engine),
+      glyph: <VehicleGlyph color={CREW_COLORS.engine} width={16} height={6} />,
+    },
+    {
+      label: "Hand crew (tall green block)",
+      color: css(CREW_COLORS.hand_crew),
+      glyph: <VehicleGlyph color={CREW_COLORS.hand_crew} width={12} height={9} />,
+    },
+    {
+      label: "Dozer (low wide yellow block)",
+      color: css(CREW_COLORS.dozer),
+      glyph: <VehicleGlyph color={CREW_COLORS.dozer} width={13} height={5} />,
+    },
     { label: "Unit driving to a fire", color: css(DEMO_3D_COLORS.route), shape: "dashed" },
     { label: "Unit returning to its station (thin dashed; trip lines follow road routes only)", color: css(DEMO_3D_COLORS.route), shape: "dashed" },
     { label: "Fire line ahead of a fire: planned (dashed), built (solid)", color: css(DEMO_3D_COLORS.fireLine), shape: "line" },
@@ -371,18 +280,7 @@ export default function DemoDiorama({ board, version, field, landscape, regionNa
       color: css(DEMO_3D_COLORS.evacuee),
       glyph: <VehicleGlyph color={DEMO_3D_COLORS.evacuee} width={8} height={4} />,
     },
-    { label: "Fire station (red firehouse with a white roof and a red beacon)", color: hexCss(DEMO_3D_COLORS.station), glyph: <FireStationGlyph /> },
-    {
-      label: "Safe area (green flag; gauge = cars arrived vs its capacity, grey when capacity is unknown; simulated)",
-      color: hexCss(DESTINATION_COLORS.marker),
-      glyph: <SafeAreaGlyph />,
-    },
-    ...(followed && followed.length > 0
-      ? [{ label: "Followed person (simulated): pink pin with a white ring; path dashed, travelled part solid", color: hexCss(FOLLOW_COLORS.person), glyph: <FollowedPersonGlyph /> }]
-      : []),
-    ...(predictedFire && predictedFire.length > 0
-      ? [{ label: "Fire forecast (model prediction): dashed perimeters at +30 / +60 / +120 min, darker = sooner", color: hexCss(FOLLOW_COLORS.forecast[0]), glyph: <ForecastRingGlyph /> }]
-      : []),
+    { label: "Fire station", color: css(DEMO_3D_COLORS.stationRoof), glyph: <StationBadgeGlyph /> },
     { label: "Leave now zone (outline)", color: css(DEMO_3D_COLORS.ordered), shape: "line" },
     { label: "At risk zone (dashed outline)", color: css(DEMO_3D_COLORS.threatened), shape: "dashed" },
     { label: "Overrun zone (thick outline)", color: css(DEMO_3D_COLORS.overrun), shape: "line" },
@@ -436,7 +334,7 @@ export default function DemoDiorama({ board, version, field, landscape, regionNa
               <Panel glass compact id="dm-diorama-legend" className="dm-diorama__legend-list">
                 <Legend label="3D view legend items" items={legend} />
                 <p className="dm-diorama__legend-note">
-                  Fires, units and households are simulated, not real data. Vehicles and aircraft are drawn about 20× too large to be seen, and aircraft heights are exaggerated.{" "}
+                  Fires, units and households are simulated, not real data. Vehicles are drawn about 20× too large to be seen.{" "}
                   {streetArea
                     ? "Trees symbolise LANDFIRE fuel classes; homes are placeholders along OSM residential streets, not real buildings. Relief is exaggerated."
                     : "Trees and houses symbolise LANDFIRE fuel classes; relief is exaggerated."}

@@ -37,9 +37,7 @@
  *   out. Direct-attack units put out burning edge cells within reach at their line production
  *   rate (the knocked-down edge stops advancing: inert in the solver, with line around it);
  *   mop-up units put out burning cells inside a contained fire. A contained fire is out once
- *   nothing of it still burns (and MOPUP_MINUTES after containment at the earliest). In any run
- *   mode, a burning fire with nothing still burning and no further spread in the solver's
- *   forecast burned itself out: it is out with closedBy "burned_out" (no line needed).
+ *   nothing of it still burns (and MOPUP_MINUTES after containment at the earliest).
  * - The AI commander's orders (applyOrder) act on the same units and state machine: send_crew
  *   adds a unit (or an available aircraft) to a fire or reassigns it from another;
  *   release_crew sends it home; order_resources places an order; order_evacuation orders a zone
@@ -55,10 +53,9 @@
  *   households that need transport. Without a snapshot (or a zone it does not list) the drill
  *   file's households and vehicles and the environment's carless counts are used, and persons
  *   are unknown. Carless households cannot drive out and stay home. Households
- *   with their own vehicle also leave on their own fire and social cues, with no order
- *   (self-evacuation, demo/selfEvacuation.ts: shadow evacuation, sourced shares per cue); an
- *   evacuation order sends ORDER_COMPLIANCE of the households with a vehicle in total, the rest
- *   on the order's curve. An order leaves now or is scheduled for a later
+ *   with a vehicle leave only on an evacuation order (ORDER_COMPLIANCE of them): this board has
+ *   no self-evacuation on the fire cue (a deliberate simplification, docs/command-demo-realism.md),
+ *   so who leaves when is the commander's call. An order leaves now or is scheduled for a later
  *   board minute (ZoneState.pendingOrder), so zones can be staged instead of all loading the
  *   roads at once. From the minute an order takes effect each household has an exponential departure
  *   delay of mean DEPARTURE_MEAN_MINUTES (Camp, Grajdura 2022), then drives the order's route,
@@ -93,27 +90,13 @@ import { fuelLabel } from "../fire/fuelModels";
 import { simClock } from "./format";
 import { mercatorToLonLat, type LandscapeGrid } from "../fire/landscape";
 import { DEVELOPED_FUEL_CODE, cellAt, type FuelMoisture } from "../fire/spread";
-import { weatherAtStep, weatherStepAt, type FireWeatherSeries } from "../fire/weatherSeries";
 import type { LonLat } from "../live/types";
 import type { EngineKind, EngineStatus, ScenarioSnapshot, SnapshotBasis, SnapshotTotals, SnapshotZone } from "../live/scenarioSnapshot";
 import { DRAWDOWN_KEEP_SHARE, buildFleet, engineTurnoutMinutes, type BaseInput, type Department, type Tier, type UnitSeed } from "../response/fleet";
 import { MAX_ORDER_COUNT, ORDERABLE, type Orderable } from "../response/runCards";
 import { buildsOn, chooseTactic, lineNeededMeters, tacticHoldsFeet, tacticRateFactor, type Tactic } from "../response/containment";
 import { applyStrategyOrder, commanderTactic, type SetStrategyOrder } from "./strategyOptions";
-import { onRescue, stepInjuries } from "./injuries";
 import { uniform } from "../response/rng";
-import { createSimComms, stepSimComms } from "./simComms";
-import {
-  departedHouseholds,
-  firstSelfCue,
-  householdsLeaving,
-  peakHouseholdsPerMinute,
-  selfEvacKey,
-  selfEvacuating,
-  stepSelfEvacuation,
-  type SelfEvacZone,
-} from "./selfEvacuation";
-import type { SimCommsState } from "./runContracts";
 import { engineCrewHandLineMPerMin, type WorkMode, type WorkPlan } from "../response/reach";
 import { AVAILABILITY_DRAW_EVERY_MINUTES, ENGINE_WATER_USE_GPM, OUT_OF_SERVICE_MINUTES, OUT_OF_SERVICE_PROBABILITY, TANK_GALLONS } from "../response/units";
 import {
@@ -125,7 +108,6 @@ import {
   createResponseState,
   dispatchAircraft,
   dispatchable,
-  statusFree,
   escalate,
   expectedArrival,
   flowIndex,
@@ -198,16 +180,15 @@ import {
   ORDER_COMPLIANCE,
   ROSTER,
   SNAPSHOT_ENGINE_KIND,
+  departedShare,
   accessClassOf,
   holdsFlameFeet,
   kindShort,
   lineMetersPerMinute,
-  fireKindOf,
   turnoutMinutes,
   moistureOf,
   windAt,
   type DemoApparatusKind,
-  type TeamKind,
   type MoistureId,
   type SpreadInputs,
   type WindNow,
@@ -226,7 +207,7 @@ import {
   type Trips,
 } from "./traffic";
 
-export { dispatchable, statusFree } from "./boardResponse";
+export { dispatchable } from "./boardResponse";
 
 /** Mean departure delay after the cue (Camp, sourced). The observation's departure figure. */
 export const DEPARTURE_SPREAD_MINUTES = DEPARTURE_MEAN_MINUTES;
@@ -316,8 +297,7 @@ export interface Fire {
   status: FireStatus;
   containedAt: number | null;
   outAt: number | null;
-  /** Who closed it: units (contained, then mopped up), a manual close, or the fire itself (burned out with no line holding it). */
-  closedBy: "teams" | "manual" | "burned_out" | null;
+  closedBy: "teams" | "manual" | null;
 }
 
 /**
@@ -346,8 +326,7 @@ export type TravelBasis = "road" | "road_offboard" | "straight_line" | "pending"
 export interface Team {
   /** The snapshot's engine_id for a snapshot engine (1:1); E/C/D + number for other units. */
   id: string;
-  /** Fire apparatus, or an ALS "ambulance" (never takes fire orders; demo/injuries.ts sends it). */
-  kind: TeamKind;
+  kind: DemoApparatusKind;
   /** Station.id of its home station. */
   station: string;
   /** Snapshot engine it is (`engine_id`), or null for a unit the snapshot does not list. */
@@ -486,8 +465,6 @@ export interface ZoneState {
   vehicles: number;
   /** Departed cohorts and their congested arrivals (traffic.ts). */
   trips: Trips;
-  /** Self-evacuation on the zone's own cues (demo/selfEvacuation.ts); absent until its first cue. */
-  selfEvac?: SelfEvacZone;
 }
 
 /** An evacuation order scheduled for a later board minute (order_evacuation with start_minute). */
@@ -509,10 +486,9 @@ export interface Station {
   type: string;
   /**
    * Where the station comes from: the resource snapshot (`snapshot`), the CAL FIRE facilities
-   * layer (`calfire_bases`), a drill package's OSM stations (`package_osm`), GET
-   * /api/suppression/stations OSM rows (`osm_stations`) or `synthetic`.
+   * layer (`calfire_bases`), a drill package's OSM stations (`package_osm`) or `synthetic`.
    */
-  source: "snapshot" | "calfire_bases" | "package_osm" | "osm_stations" | "synthetic";
+  source: "snapshot" | "calfire_bases" | "package_osm" | "synthetic";
   /** Basis of the station's location (snapshot), or null when not from the snapshot. */
   basis: SnapshotBasis | null;
   /** Engines the snapshot lists here (all statuses); [] for a station not from the snapshot. */
@@ -620,7 +596,6 @@ export type BoardEventAction =
   | "monitoring_started"
   | "solver_failed"
   | "studio_received"
-  | "studio_restart"
   | "ignition_skipped"
   | "ignition_not_started"
   | "ignition_started"
@@ -671,10 +646,8 @@ export type BoardEventAction =
   | "evacuation_cancelled"
   /** A scheduled order's start minute arrived: departures begin (logged by the board). */
   | "evacuation_started"
-  /** Fire first touched a zone with no order in effect (refs.startMinute when one is scheduled). Only self-evacuees leave without an order. */
+  /** Fire first touched a zone with no order in effect (refs.startMinute when one is scheduled). Nobody leaves without an order. */
   | "zone_reached_no_order"
-  /** Households of a zone with no order in effect decided to leave on their own cue (demo/selfEvacuation.ts). */
-  | "self_evacuation"
   | "zone_overrun"
   | "zone_reopened"
   | "contained"
@@ -749,17 +722,6 @@ export interface StudioConditions {
   moisture: FuelMoisture;
   moisturePreset: string;
   moistureLabel: string;
-  /** When Studio published the run (server time, ISO); the activity feed starts there. */
-  publishedAt: string;
-  /**
-   * The run's hourly weather series (Studio's own samples, Studio clock), or null: the constant wind
-   * above. With a series the board reads it exactly as Studio does at the same Studio minute
-   * (boardWind: weatherAtStep at board minute - seriesStartMinute); `windSpeedMph` etc. above are
-   * then the publish's peak-hour summary, used only in labels.
-   */
-  series: FireWeatherSeries | null;
-  /** Board minute of Studio's T+0 (the ingest minute). */
-  seriesStartMinute: number;
 }
 
 /** A Studio ignition waiting for its start minute. */
@@ -856,8 +818,6 @@ export interface Board {
   response: ResponseState;
   /** Per-cell burn durations and suppression (demo/suppression.ts; read through demo/fireState.ts). */
   suppression: SuppressionState;
-  /** Simulated 911 / civilian / FD / PD / EMS messages and injuries (demo/simComms.ts; injuries: demo/injuries.ts). */
-  simComms?: SimCommsState;
 }
 
 /**
@@ -1000,34 +960,14 @@ function stopMinute(fire: Fire): number | null {
   return fire.containedAt ?? fire.outAt;
 }
 
-/** Studio's weather step at the board minute (fire/weatherSeries.ts, 10-min steps), as Studio shows and solves it. */
-function studioStep(c: StudioConditions, minute: number) {
-  return c.series ? weatherAtStep(c.series, weatherStepAt(minute - c.seriesStartMinute)) : null;
-}
-
 /**
- * The wind the board runs on now: the newest Studio fire's (its hourly series at the same Studio
- * minute, or its constant wind), or, with no Studio fire yet (so no fire at all), the station
- * series' current hour.
+ * The wind the board runs on now: the newest Studio fire's (constant), or, with no Studio fire
+ * yet (so no fire at all), the station series' current hour.
  */
 export function boardWind(board: Board): WindNow {
   const c = board.conditions;
-  if (c) {
-    const w = studioStep(c, board.minute);
-    if (w) {
-      const hourIndex = Math.max(0, Math.floor((board.minute - c.seriesStartMinute) / 60));
-      return { speedMetersPerSecond: w.windSpeedMph * METERS_PER_SECOND_PER_MPH, fromDegrees: w.windFromDegrees, hourIndex, held: false };
-    }
-    return { speedMetersPerSecond: c.windSpeedMetersPerSecond, fromDegrees: c.windFromDegrees, hourIndex: 0, held: false };
-  }
+  if (c) return { speedMetersPerSecond: c.windSpeedMetersPerSecond, fromDegrees: c.windFromDegrees, hourIndex: 0, held: false };
   return windAt(board.env.spread.wind, board.minute);
-}
-
-/** Fuel moisture the board runs on now: the Studio series' at this minute when it carries one, else the publish's. */
-export function boardMoisture(board: Board): FuelMoisture {
-  const c = board.conditions;
-  if (!c) return moistureOf(NO_STUDIO_MOISTURE);
-  return studioStep(c, board.minute)?.moisture ?? c.moisture;
 }
 
 const MOISTURE_IDS: readonly MoistureId[] = ["critical", "dry", "moderate", "wet"];
@@ -1072,7 +1012,7 @@ function moistureKey(m: FuelMoisture): string {
 /** Wind and moisture at the board minute, as the solver takes them. */
 function weatherNow(board: Board): { speed: number; from: number; moisture: FuelMoisture; moistureKey: string; key: string } {
   const w = boardWind(board);
-  const moisture = boardMoisture(board);
+  const moisture = board.conditions?.moisture ?? moistureOf(NO_STUDIO_MOISTURE);
   const mk = moistureKey(moisture);
   return { speed: w.speedMetersPerSecond, from: w.fromDegrees, moisture, moistureKey: mk, key: `${w.speedMetersPerSecond}|${w.fromDegrees}|${mk}` };
 }
@@ -1338,7 +1278,7 @@ export function zonesCoreCentre(zones: readonly { core: LonLat }[]): LonLat | nu
 /** A board unit at `location`, free (the response model's fields at their idle values). */
 function newTeam(
   id: string,
-  kind: TeamKind,
+  kind: DemoApparatusKind,
   station: string,
   location: LonLat,
   engineId: string | null,
@@ -1372,7 +1312,7 @@ function newTeam(
     home: location,
     turnoutMinutes: turnout,
     travelFactor: 1,
-    waterGallons: kind === "ambulance" ? null : (TANK_GALLONS[kind] ?? null),
+    waterGallons: TANK_GALLONS[kind] ?? null,
     workMinutes: 0,
     restOwed: 0,
     restUntil: null,
@@ -1626,7 +1566,7 @@ export const SAME_STATION_M = 300;
 /** Resource label of a board with no snapshot whose units come from the CAL FIRE facilities layer. */
 export const NO_SNAPSHOT_FLEET_LABEL = "No resource snapshot for this drill — units from the CAL FIRE facilities layer (assumed counts per facility)";
 
-const isEngineKind = (k: TeamKind) => k === "engine_t3" || k === "engine_t1";
+const isEngineKind = (k: DemoApparatusKind) => k === "engine_t3" || k === "engine_t1";
 
 /** Centre of the board's landscape grid [lon, lat]: where the fleet measures air bases' dispatch radius (response/fleet.ts buildFleet). */
 function boardCentre(grid: LandscapeGrid): LonLat {
@@ -1659,7 +1599,6 @@ function buildBoardUnits(board: Board, zones: BaseZone[], env: DemoEnvironment, 
   const labelOf = new Map(fleet.facilities.map((f) => [f.id, f.label]));
   const stationOf = new Map(all.map((s) => [s.id, { ...s, label: labelOf.get(s.id) }] as const));
   board.response.facilities = fleet.facilities;
-  board.response.ems = fleet.ems;
   const hasFleet = all.length > 0;
   const departments: Department[] = [];
   const pool: UnitSeed[] = [...fleet.offBoardUnits];
@@ -1744,17 +1683,6 @@ function buildBoardUnits(board: Board, zones: BaseZone[], env: DemoEnvironment, 
       t.outOfServiceUntil = lo + (hi - lo) * uniform(board.response.rng);
     }
   }
-  // ALS ambulances at stations on the board (response/fleet.ts EmsSeed, sourced rosters): board units
-  // that only the rescue model sends (demo/injuries.ts). Added after the seeded draw above, which
-  // they take no part in, so the fire units' draws are the same as without them.
-  for (const e of fleet.ems) {
-    if (!onBoard(e.location) || board.teams.some((t) => t.id === e.id)) continue;
-    const team = newTeam(e.id, "ambulance", e.stationId, e.location, null, false, e.departmentId, e.turnoutMinutes);
-    team.tier = e.tier;
-    board.teams.push(team);
-    const st = stationOf.get(e.stationId);
-    if (st && !board.stations.some((s) => s.id === st.id)) board.stations.push(st);
-  }
   board.response.nextAvailabilityDraw = AVAILABILITY_DRAW_EVERY_MINUTES;
   board.response.label = hasFleet ? fleet.label : "Fixed roster (assumed): CAL FIRE facilities metadata unavailable";
   return skipped;
@@ -1806,12 +1734,11 @@ export function createBoard(zones: BaseZone[], seed: number, env: DemoEnvironmen
     // The board clock's T+0 is the drill's (snapshot scenario_time), else the wind series' start.
     response: createResponseState(seed, [], [], [], fleetAircraft, onBoard, snapshot?.scenario_time ?? env.spread.wind.startUtc, ""),
     suppression: createSuppressionState(grid.width * grid.height),
-    simComms: createSimComms(seed),
   };
   const skipped = buildBoardUnits(board, zones, env, snapshot);
   const teams = board.teams;
   const engineUnits = teams.filter((t) => t.engineId !== null).length;
-  const assumedUnits = teams.filter((t) => t.engineId === null && t.kind !== "ambulance").length;
+  const assumedUnits = teams.length - engineUnits;
   board.snapshot = snapshot ? snapshotSummary(snapshot, zoneStates) : null;
   const pool = board.response.pool.length;
   const hasFleet = (env.bases?.all?.length ?? 0) > 0;
@@ -1832,7 +1759,7 @@ export function createBoard(zones: BaseZone[], seed: number, env: DemoEnvironmen
         assumedUnits,
         assumedLabel: ASSUMED_UNIT_LABEL,
       };
-  const byKind = new Map<TeamKind, number>();
+  const byKind = new Map<DemoApparatusKind, number>();
   for (const t of teams) byKind.set(t.kind, (byKind.get(t.kind) ?? 0) + 1);
   const kinds = [...byKind].map(([k, n]) => `${n} ${kindShort(k)}${n > 1 ? "s" : ""}`).join(", ");
   const air = board.response.aircraft.length;
@@ -1925,24 +1852,6 @@ function ignite(board: Board, id: string, origin: LonLat, at: number, studio: Fi
   return fire;
 }
 
-/** A publish's hourly series in the solver's shape (fire/weatherSeries.ts), or null. */
-function seriesOf(fire: StudioFire): FireWeatherSeries | null {
-  const s = fire.weather_series;
-  if (!s || s.samples.length === 0) return null;
-  const evidence = (["observed", "forecast", "derived", "modelled", "assumed"] as const).find((e) => e === s.evidence);
-  return {
-    enabled: true,
-    samples: s.samples.map((x) => ({
-      minute: x.minute,
-      windSpeedMph: x.wind_speed_mph,
-      windFromDegrees: x.wind_from_deg,
-      ...(x.moisture ? { moisture: { ...x.moisture } } : {}),
-    })),
-    ...(s.source ? { source: s.source } : {}),
-    ...(evidence ? { evidence } : {}),
-  };
-}
-
 /** Starts the scheduled Studio ignitions whose minute has come, earliest first. */
 function startDueIgnitions(board: Board): void {
   while (board.scheduled.length > 0 && board.scheduled[0].at <= board.minute) {
@@ -1979,10 +1888,9 @@ function ignitionPart(name: string, index: number): string {
  * fire on the board. Each ignition is scheduled at the board minute now + its Studio
  * start_minute, as fire "S<n>-<ignition name>" (n counts this board's publishes). Ignitions the
  * server lists in `outside_drill`, or off the board's landscape, are skipped with an event saying
- * why. `restarted`: the board was just rebuilt for this run (a new Studio run replaced the one it
- * was running), logged first. Returns false when this publish was already ingested.
+ * why. Returns false when this publish was already ingested.
  */
-export function ingestStudioFire(board: Board, fire: StudioFire, restarted = false): boolean {
+export function ingestStudioFire(board: Board, fire: StudioFire): boolean {
   if (board.studioFireIds.includes(fire.fire_id)) return false;
   board.studioFireIds.push(fire.fire_id);
   board.studioCount += 1;
@@ -2001,17 +1909,7 @@ export function ingestStudioFire(board: Board, fire: StudioFire, restarted = fal
     moisture: { dead1h: v.dead1h, dead10h: v.dead10h, dead100h: v.dead100h, liveHerb: v.liveHerb, liveWoody: v.liveWoody },
     moisturePreset: fire.moisture.preset,
     moistureLabel: fire.moisture.label || fire.moisture.preset,
-    publishedAt: fire.published_at,
-    series: seriesOf(fire),
-    seriesStartMinute: board.minute,
   };
-  if (restarted) {
-    const n = fire.ignitions.length;
-    log(board, "studio", "studio", `Simulation Studio run ${tag} received: board restarted with its ${n} fire${n === 1 ? "" : "s"} ('${fire.name}', ${fire.fire_id}).`, {
-      action: "studio_restart",
-      studioTag: tag,
-    });
-  }
   const grid = board.env.landscape;
   const outside = new Set(fire.outside_drill);
   const taken = new Set([...board.fires.map((f) => f.id), ...board.scheduled.map((s) => s.id)]);
@@ -2185,7 +2083,7 @@ export function classBlocked(board: Board, access: AccessClass, destKey: string,
   if (!entry || entry.reached || entry.reason === null) return null;
   if (entry.failedFrom.length >= REACH_CONFIRM_ORIGINS) return entry.reason;
   const origins = new Set(
-    board.teams.filter((t) => statusFree(t) && accessClassOf(t.kind) === access).map((t) => originKey(tripStart(board, t).from)),
+    board.teams.filter((t) => dispatchable(t) && accessClassOf(t.kind) === access).map((t) => originKey(tripStart(board, t).from)),
   );
   return [...origins].every((o) => entry.failedFrom.includes(o)) ? entry.reason : null;
 }
@@ -2224,7 +2122,6 @@ export interface UnreachableClass {
 export function unreachableClasses(board: Board, destKey: string, to: LonLat): UnreachableClass[] {
   const kinds = new Map<AccessClass, DemoApparatusKind[]>();
   for (const t of board.teams) {
-    if (t.kind === "ambulance") continue; // fire access only: rescue reach is injuries.ts's
     const access = accessClassOf(t.kind);
     const list = kinds.get(access) ?? [];
     if (!list.includes(t.kind)) list.push(t.kind);
@@ -2527,7 +2424,7 @@ export function travelLegFailed(board: Board, key: string, reason: string): void
       board,
       "team",
       "board",
-      `${team.id} has no road route to ${fireId === null ? "the patient (rescue trip)" : `${fireId} ${dest}`} (${why}); ${statusOf(team) === "returning" ? "it drives back to its station" : "it stays at its station"}.`,
+      `${team.id} has no road route to ${fireId ?? "its fire"} ${dest} (${why}); ${statusOf(team) === "returning" ? "it drives back to its station" : "it stays at its station"}.`,
       { action: "no_route_fire", teamIds: [team.id], fireId: fireId ?? undefined },
     );
   }
@@ -2680,7 +2577,7 @@ export function unitLineRateOn(team: Team, plan: AttackPlan, mode: WorkMode | nu
  * drive to it stops up to 3 km short (STOP_SHORT_MAX_M), so this walk is not negligible.
  */
 export function lineAccessPlan(board: Board, team: Team, parked: LonLat, plan: AttackPlan): WorkPlan & { distanceM: number } {
-  return accessWorkPlan(board, fireKindOf(team), parked, plan.point);
+  return accessWorkPlan(board, team.kind, parked, plan.point);
 }
 
 /** Id of the line a unit would build at `plan` (also its trip key, see travelKey). */
@@ -2864,21 +2761,6 @@ function heldByLine(board: Board, fire: Fire): number | null {
   const arrivals = field.arrivalBySource[s];
   const last = arrivals.length ? arrivals[arrivals.length - 1] : Number.NEGATIVE_INFINITY;
   return last <= board.minute ? Math.max(last, field.fromMinute ?? 0) : null;
-}
-
-/**
- * The fire burned itself out: the current field (it includes the line built now) forecasts no cell
- * of this fire igniting after now, to its horizon, and none of its cells is still burning
- * (demo/suppression.ts burn durations: crossing time plus Anderson 1969 residence time).
- */
-function burnedOut(board: Board, fire: Fire): boolean {
-  const field = board.solver.field;
-  const s = field?.sourceIndex.get(fire.id);
-  if (!field || s === undefined || field.lineKey !== lineKey(board)) return false;
-  if (field.horizonMinutes < board.minute + FORECAST_MINUTES) return false;
-  const arrivals = field.arrivalBySource[s];
-  const last = arrivals.length ? arrivals[arrivals.length - 1] : Number.NEGATIVE_INFINITY;
-  return last <= board.minute && burningCellCount(board, fire) === 0;
 }
 
 /** One order option at a position: the n nearest free units that can reach it, added to those on the line. */
@@ -3162,7 +3044,6 @@ export function applyOrder(
       return dispatchAircraft(board, aircraft, fire, actor);
     }
     if (!team) return `Unknown unit ${order.crew_id}.`;
-    if (team.kind === "ambulance") return `${team.id} is an ambulance: it answers injuries only (send_rescue with an inj-* id), not fires.`;
     if (order.type === "release_crew") {
       if (team.status === "returning") return `${team.id} is already returning to its station.`;
       if (team.fireId === null) return `${team.id} is not assigned to a fire.`;
@@ -3377,10 +3258,9 @@ export function withVehicle(zone: ZoneState): number {
 }
 
 /**
- * Households with a vehicle that have left by `minute`: the self-evacuees on their own cues
- * (demo/selfEvacuation.ts) plus the order's share (ORDER_COMPLIANCE in total) on the exponential
- * departure curve since the order took effect (zone.orderedAt; a scheduled order counts from its
- * start minute). Frozen at overrun.
+ * Households with a vehicle that have left by `minute`: the ordered share (ORDER_COMPLIANCE)
+ * times the exponential departure curve since the order took effect (zone.orderedAt; a scheduled
+ * order counts from its start minute). Nobody leaves without an order. Frozen at overrun.
  */
 export function departed(zone: ZoneState, minute: number): number {
   return Math.floor(departedExact(zone, minute));
@@ -3388,7 +3268,9 @@ export function departed(zone: ZoneState, minute: number): number {
 
 /** departed() before rounding down: the departure curve itself (for traffic flows). */
 function departedExact(zone: ZoneState, minute: number): number {
-  return departedHouseholds(zone, minute);
+  const end = zone.overrunAt !== null ? Math.min(minute, zone.overrunAt) : minute;
+  const ordered = zone.orderedAt === null ? 0 : ORDER_COMPLIANCE * departedShare(end - zone.orderedAt);
+  return withVehicle(zone) * ordered;
 }
 
 export interface ZoneCounts {
@@ -3474,9 +3356,9 @@ function caughtPeopleAt(zone: ZoneState, minute: number): number | null {
 
 // ---- evacuation traffic (demo/traffic.ts) ----
 
-/** The route a zone's households are leaving on: the order in effect's or the self-evacuees' (null without either; a scheduled order's route is not in use yet). */
+/** The route a zone's households are leaving on: the order in effect's (null without one; a scheduled order's route is not in use yet). */
 export function activeRoute(zone: ZoneState): RouteOption | null {
-  return zone.orderedAt === null && !selfEvacuating(zone) ? null : zone.route;
+  return zone.orderedAt === null ? null : zone.route;
 }
 
 /**
@@ -3494,8 +3376,8 @@ export function vehiclesPerHousehold(zone: ZoneState): number {
 
 /** Households with a vehicle the model will still send out after `minute` (0 once overrun). */
 function stillToLeave(zone: ZoneState, minute: number): number {
-  if (zone.overrunAt !== null || (zone.orderedAt === null && !selfEvacuating(zone))) return 0;
-  return Math.max(0, householdsLeaving(zone) - departedExact(zone, minute));
+  if (zone.overrunAt !== null || zone.orderedAt === null) return 0;
+  return Math.max(0, withVehicle(zone) * ORDER_COMPLIANCE - departedExact(zone, minute));
 }
 
 /**
@@ -3542,7 +3424,7 @@ function evacuationTrafficStep(board: Board, m: number): void {
 
 /** Highest departure rate a zone's curve reaches (at the order's start), vehicles per minute; 0 with no order in effect. */
 function peakDepartureRate(zone: ZoneState): number {
-  return peakHouseholdsPerMinute(zone) * vehiclesPerHousehold(zone);
+  return zone.orderedAt === null ? 0 : orderPeakVehiclesPerMinute(zone);
 }
 
 /**
@@ -3576,7 +3458,7 @@ function segmentQueues(
     if (!s) continue;
     const perMinute = s.capacity_veh_h / 60;
     if (zones.reduce((sum, z) => sum + peakDepartureRate(z), 0) <= perMinute) continue;
-    const key = zones.map((z) => `${z.id}@${z.orderedAt}:${z.overrunAt}:${selfEvacKey(z)}`).join("|");
+    const key = zones.map((z) => `${z.id}@${z.orderedAt}:${z.overrunAt}`).join("|");
     const hit = board.traffic.queueCache.get(id);
     let t: number;
     let q: number;
@@ -3584,7 +3466,7 @@ function segmentQueues(
       t = hit.t;
       q = hit.q;
     } else {
-      const cues = zones.flatMap((z) => [z.orderedAt, firstSelfCue(z)].filter((c): c is number => c !== null));
+      const cues = zones.flatMap((z) => (z.orderedAt === null ? [] : [z.orderedAt]));
       t = Math.floor(Math.min(m, ...cues));
       q = 0;
     }
@@ -3834,7 +3716,6 @@ function reopenZones(board: Board): void {
     zone.orderedAt = zone.overrunAt = zone.touchedAt = zone.knownTouchedAt = zone.lastFireAt = null;
     zone.route = null;
     zone.pendingOrder = null;
-    zone.selfEvac = undefined;
     zone.caught = 0;
     zone.caughtPeople = zone.occupants === null ? null : 0;
     zone.trips = emptyTrips();
@@ -3889,8 +3770,6 @@ function stepOnce(board: Board, dt: number, landOn: number | null): void {
   // retries of drives home that had no road route.
   responseTick(board, dt, wholeMinute);
   stepReturns(board);
-  // Injuries and rescue trips (demo/injuries.ts): rescue arrivals land before en-route units are matched to fires below.
-  stepInjuries(board, wholeMinute);
   for (const team of board.teams) {
     // A unit waiting for its road route has not set off.
     if (team.status !== "en_route" || team.travel === "pending" || team.arriveAt === null || team.arriveAt > board.minute) continue;
@@ -3969,20 +3848,6 @@ function stepOnce(board: Board, dt: number, landOn: number | null): void {
           lineM: built,
         });
         onContained(board, fire);
-      } else if (decide && burnedOut(board, fire)) {
-        // Natural burn-out, in any run mode: nothing of it still burns and the solver forecasts no
-        // further spread, with or without crews (a fire with no line could otherwise never close).
-        fire.status = "out";
-        fire.outAt = board.minute;
-        fire.closedBy = "burned_out";
-        board.firesOutTotal += 1;
-        reportKnockdown(board, fire.id);
-        for (const team of board.teams) if (team.fireId === fire.id) release(board, team);
-        log(board, "out", "board", `${fire.id} burned itself out at ${fire.areaHa.toFixed(1)} ha: nothing of it is still burning and the fire model forecasts no further spread.`, {
-          action: "out",
-          fireId: fire.id,
-          areaHa: fire.areaHa,
-        });
       } else if (decide) {
         // "Cannot catch it": ground units on scene, none still coming, and no containment in the forecast.
         escalate(
@@ -4045,8 +3910,8 @@ function stepOnce(board: Board, dt: number, landOn: number | null): void {
     if (knownAt <= board.minute) {
       const firstKnown = zone.knownTouchedAt === null;
       zone.knownTouchedAt ??= knownAt;
-      // Fire at a zone with no order in effect: only self-evacuees leave (demo/selfEvacuation.ts);
-      // the log flags it for the commander, once a reported fire is there
+      // Fire at a zone with no order in effect: nobody leaves on their own on this board (no
+      // self-evacuation); the log flags it for the commander, once a reported fire is there
       // (an unreported fire touching it is not logged: report rule, boardResponse.ts).
       if (firstKnown && zone.orderedAt === null && zone.overrunAt === null) {
         const pending = zone.pendingOrder;
@@ -4056,7 +3921,7 @@ function stepOnce(board: Board, dt: number, landOn: number | null): void {
           "board",
           pending
             ? `Fire reached ${zone.name} before its scheduled evacuation (${simClock(pending.startMinute)}): households are still home.`
-            : `Fire reached ${zone.name} with no evacuation order: only households leaving on their own cues are going.`,
+            : `Fire reached ${zone.name} with no evacuation order: households stay home until ordered out.`,
           {
             action: "zone_reached_no_order",
             zoneId: zone.id,
@@ -4095,14 +3960,8 @@ function stepOnce(board: Board, dt: number, landOn: number | null): void {
   }
 
   if (wholeMinute) {
-    // Self-evacuation on fire and social cues (demo/selfEvacuation.ts), before the minute's traffic.
-    stepSelfEvacuation(board, Math.floor(board.minute + 1e-9), departedExact, (zone, text, households) =>
-      log(board, "zone", "board", text, { action: "self_evacuation", zoneId: zone.id, households }),
-    );
     evacuationTrafficStep(board, Math.floor(board.minute + 1e-9));
     reopenZones(board);
-    // Simulated communications for the minute just finished (demo/simComms.ts).
-    stepSimComms(board, Math.floor(board.minute + 1e-9));
   }
 }
 
@@ -4181,7 +4040,7 @@ function reportBoardInvariants(board: Board): void {
  *   carless households home are at most the households home;
  * - persons (where known): home + on the road + out + caught = the zone's persons, all non-negative;
  * - a scheduled evacuation (pendingOrder) is never held by a zone already leaving or overrun, and
- *   nobody leaves a zone with no order in effect unless it self-evacuates (demo/selfEvacuation.ts).
+ *   nobody leaves a zone with no order in effect (no self-evacuation).
  */
 export function checkBoardInvariants(board: Board): string[] {
   const problems: string[] = [];
@@ -4198,7 +4057,7 @@ export function checkBoardInvariants(board: Board): string[] {
     const fires = crewOf.get(t.id) ?? [];
     if (fires.length > 1) problems.push(`${t.id} is on ${fires.length} fires (${fires.join(", ")})`);
     if (t.status === "en_route" || t.status === "on_scene" || t.status === "refilling") {
-      if (t.fireId === null && !onRescue(board, t.id)) problems.push(`${t.id} is ${t.status} with no fire`);
+      if (t.fireId === null) problems.push(`${t.id} is ${t.status} with no fire`);
     } else {
       if (t.fireId !== null || t.lineId !== null) problems.push(`${t.id} is ${t.status} but assigned (${t.fireId} ${t.lineId})`);
       if ((t.status === "returning" || t.status === "moving_up") && (t.target === null || t.travel === null)) problems.push(`${t.id} is ${t.status} with no trip`);
@@ -4226,7 +4085,7 @@ export function checkBoardInvariants(board: Board): string[] {
     if (left + zone.caught > zone.households) problems.push(`${zone.id}: ${left} left + ${zone.caught} caught > ${zone.households} households`);
     if (c.noVehicleHome > c.home) problems.push(`${zone.id}: ${c.noVehicleHome} carless home > ${c.home} home`);
     if (zone.pendingOrder && (zone.orderedAt !== null || zone.overrunAt !== null)) problems.push(`${zone.id}: scheduled evacuation on a zone already leaving or overrun`);
-    if (zone.orderedAt === null && !selfEvacuating(zone) && left > 0) problems.push(`${zone.id}: ${left} households left with no order in effect`);
+    if (zone.orderedAt === null && left > 0) problems.push(`${zone.id}: ${left} households left with no order in effect`);
     const p = zonePeople(zone, board.minute);
     if (p.total !== null) {
       const parts = [p.home!, p.enRoute!, p.out!, p.caught!];
@@ -4358,7 +4217,7 @@ export function workOf(board: Board, team: Team, fire: Fire): UnitWork {
     const lineMPerMin = tacticLineRate(board, fire, [{ ...team, workStartAt: null }], "direct");
     return { lineMPerMin, holdsFt: team.workMode === "out_of_reach" || team.workMode === "indirect" ? 0 : holdsFlameFeet(team.kind) };
   }
-  return { lineMPerMin: unitLineOn(board, team, fire), holdsFt: holdsFlameFeet(team.kind), kind: team.kind === "ambulance" ? undefined : team.kind };
+  return { lineMPerMin: unitLineOn(board, team, fire), holdsFt: holdsFlameFeet(team.kind), kind: team.kind };
 }
 
 /** Containment estimate with the direct-attack units already assigned (units on attack lines work through the solver). */

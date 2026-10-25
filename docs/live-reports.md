@@ -510,11 +510,10 @@ Planner rules (`livecore.planner.plan`, constants named in code):
   back to `temporary_refuge` when neither is reachable), snapped to their nearest
   road node, excluding destinations inside the fire estimate and shelters with a
   public `shelter_full` item. Multi-source Dijkstra on free-flow travel time
-  (`length_m / speed_kph`) times the edge's road-class factor (see "Evacuee route
-  choice" below), times the simulated congestion factor of each directed
+  (`length_m / speed_kph`), times the simulated congestion factor of each directed
   edge when the twin is ready (see "Congestion-aware planning" below). Never uses an
   edge whose `segment_id` is blocked or whose midpoint lies inside the fire estimate.
-  Unreachable -> `no_route: true`. `eta_min` stays free-flow time on real speeds.
+  Unreachable -> `no_route: true`. `eta_min` stays free-flow.
 - Blocked segments for guidance are road-state items with `status: "blocked"` and
   `public: true` (this includes controller confirmations). The impact analysis
   (`POST incidents/{id}/impact`) starts from the same blocks and toggles one segment.
@@ -621,63 +620,14 @@ pending proposal is kept and `replan` returns its id again.
 An automatic replan triggered by a `situation` or `command` read runs in a background
 thread, so the read never waits for it; its proposals appear in the next `command` poll.
 
-### Evacuee route choice (road-class factor)
-
-Evacuees may drive every public road, but they leave their neighbourhood on local streets and
-then funnel onto arterials and collectors, which carry evacuations. Every evacuee path search
-therefore uses one generalized cost, `travel time x road-class factor`. Responder and apparatus
-routes do not (`livecore.inbound`, `livecore.apparatus_travel`, road access R01-R12 keep their
-own rules).
-
-    choice_s = length_m / (speed_kph / 3.6) x road_class_factor(highway)
-
-The factor only chooses the path. `eta_min`, `travel_time_s`, `distance_m`, the board's segment
-`free_flow_min` and the dispatch `Route.seconds` are free-flow time on real speeds along the chosen
-path. Blocked segments stay unusable, and the fire passes multiply `choice_s` as before.
-
-| OSM `highway` | factor | basis |
-| --- | --- | --- |
-| motorway, trunk, primary | 1.0 | Hess et al. 2015: motorway and A road x1.0. Mapping UK classes to OSM classes is judgement. |
-| secondary | 1.1 | ASSUMPTION, within the Hess B-road bound (2.0) |
-| tertiary | 1.2 | ASSUMPTION, within the Hess B-road bound (2.0) |
-| unclassified, residential | 1.5 | ASSUMPTION, within the Hess other-road bound (2.5); direction from Wong et al. 2020 |
-| living_street | 2.0 | ASSUMPTION |
-| service | 2.0 | ASSUMPTION, below the Hess other-road value (2.5) |
-| track, and any class not listed | 2.5 | Hess other-road value (2.5), an HGV value applied to cars |
-| `*_link` | parent class | Hess: slip roads take their road type |
-
-Sources:
-- Direction: Wong, Broader & Shaheen (2020), *Review of California Wildfire Evacuations from 2017
-  to 2019*, UC ITS, doi:10.7922/G29G5K2R, Table 10. Local roads were the primary road type (more
-  than 50 % of the drive) for only 2.7-4.7 % of evacuees, against 32-62 % for highways and
-  15-27 % for major roads.
-- Direction: Dow & Cutter (2000), Natural Hazards Center QR #128, Hurricane Floyd. Interstates
-  carried the traffic, state and county roads stayed light, and this was put down to evacuees'
-  reluctance to use less familiar routes.
-- Magnitude: Hess, Quddus, Rieser-Schuessler & Daly (2015), *Transp. Res. Part E* 77:29-44,
-  doi:10.1016/j.tre.2015.01.010. Realistic route sets used link cost = free-flow time x 1.0 / 2.0 /
-  2.5 by road type, calibrated to observed road-type shares. These are heavy goods vehicles, so
-  the values are an upper bound for cars.
-- No verified study estimates how car drivers value local-street time against motorway time.
-
-Where it applies:
-- `livecore.routing` (`EVACUEE_ROAD_CLASS_FACTOR`, the canonical table) covers `best_routes` and
-  `alternative_routes`. That includes the live planner, the twin plan, and the command board's
-  `POST /api/demo/routes`.
-- The live drill's traffic twin uses the same table: `sim.traffic.TrafficParams.road_class_factor`
-  is set by `api/live/twin_service.py` and scales route cost (free-flow plus queue seconds), not
-  travel. The setting is off by default in `sim/`, so replays keep their results and fingerprints.
-- The dispatch and Studio engines use `evacueeTree` in app/src/dispatch/routing.ts, a copy of the
-  table, for zones, loading groups and packets.
-
 ### Congestion-aware planning (planner-v4, ADR 0031-congestion-aware-planner)
 
 Every replan reads the traffic twin's current per-edge state once (simulated; `inputs.congestion
 = "twin@<twin clock>"`) and multiplies each directed edge's search cost by the same factor as
 responder routes: `factor = clamp(free_flow_kph / speed_kph, 1, 10)` on edges with at least
-`CONGESTION_MIN_VEH` (3) simulated vehicles (speed 0 gives 10), 1 elsewhere. So the evacuee edge cost is
+`CONGESTION_MIN_VEH` (3) simulated vehicles (speed 0 gives 10), 1 elsewhere. So the edge cost is
 
-    cost_s = length_m / (speed_kph / 3.6) x road_class_factor x fire_weight x factor
+    cost_s = length_m / (speed_kph / 3.6) x fire_weight x factor
 
 with `fire_weight` 1, `EXPOSED_COST_BUFFER` (5) or `EXPOSED_COST_INSIDE` (20) by pass, as before.
 Route selection, destination choice and alternatives use it; `eta_min` and `distance_m` do not
@@ -2049,42 +1999,22 @@ fires. Everything is simulated (`evidence_class: "simulated"`). Code: `api/live/
   "wind": { "speed_mph": 25, "from_deg": 45, "source": "assumed", "label": "Assumed 25 mph NE" },
   "moisture": { "preset": "dry", "label": "Dry fuels",
     "values": { "dead1h": 0.03, "dead10h": 0.04, "dead100h": 0.05, "liveHerb": 0.3, "liveWoody": 0.6 } },
-  "horizon_minutes": 360,
-  "weather_series": { "source": "historical_replay ONOC1", "evidence": "observed",
-    "samples": [{ "minute": 0, "wind_speed_mph": 8, "wind_from_deg": 22, "moisture": null },
-                { "minute": 60, "wind_speed_mph": 11, "wind_from_deg": 30, "moisture": null }] } }
+  "horizon_minutes": 360 }
 ```
 
 Limits: 1 to 5 ignitions with unique ids, finite WGS84 `lon`/`lat`, integer `start_minute` 0 to
 `horizon_minutes`, optional `report_minute` (the minute on the same Studio clock the fire is
 reported to dispatch, set by the Studio user: an integer from `start_minute` to 1440, or `null`
 / absent when not set, so Live models its own report delay), horizon 1 to 1440, wind speed 0 to 60 mph, `from_deg` 0 to 360, moisture values
-finite 0.01 to 3, strings capped (`name` 80). `weather_series` is optional (`null` / absent: the
-run had one constant wind): 1 to 433 samples in strictly ascending `minute` (Studio clock, -4320 to
-4320, may be fractional), wind 0 to 120 mph, `from_deg` 0 to 360, `moisture` `null` (the publish's
-`moisture` applies) or the five values as above. Errors are `400 {error: "invalid_studio_fire", detail}`.
+finite 0.01 to 3, strings capped (`name` 80). Errors are `400 {error: "invalid_studio_fire", detail}`.
 The fire is stamped with the active incident; `outside_drill` lists ignition ids more than 3 km
-outside the bounding box of the drill's zones. Stored in `live_studio_fires`. Answers `201`:
+outside the bounding box of the drill's zones. Stored in `live_studio_fires` (newest 20 per
+incident). Answers `201`:
 
 ```json
 { "fire_id": "sf_0a1b2c3d4e5f", "incident_id": "pkg-example", "incident_name": "Berkeley Hills",
-  "published_at": "2026-10-24T18:00:00Z", "outside_drill": [],
-  "cleared": { "publishes": 1, "run_state": true, "guidance_withdrawn": 3, "road_closures": 0 } }
+  "published_at": "2026-10-24T18:00:00Z", "outside_drill": [] }
 ```
-
-**A new Studio run replaces the drill state.** Studio is the source of truth for the Live board, so
-each publish clears what the previous run left for that incident (`studio_fires._replace_previous_run`):
-the older publishes (`live_studio_fires` keeps only the new one), the board's run state and household
-states (`run_state.forget`, which also frees the single-writer lease for the new board's console),
-the previous board run's resident guidance (withdrawn at once with new `live_guidance` versions at
-level `none`, reason "The simulated board restarted", so phones do not keep its orders) and the
-controller's road closures (`live_road_closures`; a new scenario is a clean drill). The audit log
-(`live_decisions`, guidance history) is kept for the AAR; the Live activity feed shows only drill
-decisions logged from the run's `published_at` on. `cleared` gives the count per step (`null` = that
-step failed and was logged; the publish still stands). The Live board then restarts on the new run
-alone at T+0 (`useCommandBoard.ts`; a console still running the old board may save it once more in the
-seconds before it polls the feed, and its next save of the new run takes over again). Generating a
-scenario in Studio, or a new shared-world seed, does not touch the Live board: only a publish does.
 
 `GET /api/live/incidents/{id}/studio-fires[?after=<ISO Z>]` (any live role) answers
 `{fires: [{fire_id, published_at, incident_id, name, scenario_id, region_id, ignitions, wind,
@@ -2092,12 +2022,9 @@ moisture, horizon_minutes, outside_drill}], evidence_class: "simulated"}`, newes
 Every ignition carries `report_minute` (`null` when not set, including fires stored before the
 field existed).
 
-`wind` is the run's constant wind (mph, bearing FROM, degrees true), or, for a run on an hourly
-series with no weather record (a random scenario), the series' peak hour within the run. With
-`weather_series` the Live board follows the series instead, read exactly as Studio's solver and
-diorama read it (`fire/weatherSeries.ts` `weatherAtStep` at the same Studio minute, 10-minute steps),
-re-solving at each new step; `wind` is then only the summary in labels. GET returns
-`weather_series` (`null` for fires published before the field existed). `source` is `assumed` (set by hand), `historical`, `forecast`,
+`wind` is the one constant wind the Live board runs (mph, bearing FROM, degrees true): the run's
+wind, or, for a run on an hourly series with no weather record (a random scenario), the series'
+peak hour within the run. `source` is `assumed` (set by hand), `historical`, `forecast`,
 `worst_case` (climatology percentile) or `climatology` (a series' climatology analog); `label`
 names it. On the board (`model.ts` `ingestStudioFire`) an ignition whose `id` is already a board
 fire on the same landscape cell (burning, contained or waiting to start) is not started again:

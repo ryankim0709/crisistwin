@@ -3,9 +3,7 @@ import { ROUTES_URL, demoUrl, type RoutesRequest, type RoutesResponse } from "./
 import { fireRingsForRouting } from "./fireFootprint";
 import { activeFires, type Board, type RouteOption } from "./model";
 import { answerCovers, closureKey } from "./roadClosures";
-import { excludedDestinationIds, safeDestinationStatus, type SafeDestinationStatus } from "./safeDestinations";
 import type { RouteSegment } from "./traffic";
-import type { Destination } from "../live/types";
 
 /** Re-route at most this often (simulation minutes) while the fires keep growing. */
 export const ROUTE_REFRESH_MINUTES = 5;
@@ -44,57 +42,15 @@ export interface RoutesState {
   error: string | null;
   /** Controller road closures (segment ids) the current routes avoid (demo/roadClosures.ts); null before the first answer. */
   closedSegmentIds: string[] | null;
-  /** Open/closed safe destinations the current routes were asked for (demo/safeDestinations.ts); [] without destinations. Simulated. */
-  safeDestinations: SafeDestinationStatus[];
-}
-
-/** What a routes refresh check reads now (useDemoRoutes; demo/fastRun.ts runs the same rule). */
-export interface RoutesPlan {
-  /** Active fires (id:status), controller closures and excluded destinations: a new key re-routes at once. */
-  key: string;
-  /** Some fire burns: routes also refresh every ROUTE_REFRESH_MINUTES. */
-  burning: boolean;
-  closures: string;
-  safe: SafeDestinationStatus[];
-  excluded: string[];
-}
-
-export function routesPlan(board: Board, destinations?: readonly Destination[] | null): RoutesPlan {
-  const fires = activeFires(board);
-  // A controller road closure (or reopening) changes the key too: routes are recomputed around it.
-  const closures = closureKey(board);
-  // Safe destinations (fire forecast, capacity) are re-checked on every refresh check, which runs
-  // on board updates; a destination closing or reopening changes the key and re-routes at once.
-  const safe = destinations && destinations.length > 0 ? safeDestinationStatus(board, destinations) : [];
-  const excluded = excludedDestinationIds(safe);
-  return {
-    key: `${fires.map((f) => `${f.id}:${f.status}`).join(",")}|${closures}|${excluded.join(",")}`,
-    burning: fires.some((f) => f.status === "burning"),
-    closures,
-    safe,
-    excluded,
-  };
-}
-
-/** The POST /api/demo/routes body for the board now. */
-export function routesBody(board: Board, excluded: string[]): RoutesRequest {
-  return { fires: fireRingsForRouting(board, RING_POINTS), excluded_destination_ids: excluded };
 }
 
 /**
  * Zone routes around the fires that are not out (POST /api/demo/routes). Refreshes when the set
  * of active fires changes, and every ROUTE_REFRESH_MINUTES while any fire burns. One request at
- * a time; an answer for an older board is dropped. `paused`: another driver owns the board's
- * routes (the /run fast baseline, demo/fastRun.ts), so no request starts meanwhile.
+ * a time; an answer for an older board is dropped.
  */
-export function useDemoRoutes(
-  board: Board | null,
-  version: number,
-  incidentId: string,
-  destinations?: readonly Destination[] | null,
-  paused = false,
-): RoutesState {
-  const [state, setState] = useState<RoutesState>({ routes: new Map(), asOf: null, error: null, closedSegmentIds: null, safeDestinations: [] });
+export function useDemoRoutes(board: Board | null, version: number, incidentId: string): RoutesState {
+  const [state, setState] = useState<RoutesState>({ routes: new Map(), asOf: null, error: null, closedSegmentIds: null });
   const inflight = useRef(false);
   // Bumped to ask again at once when an answer missed a closure that arrived meanwhile.
   const [retry, setRetry] = useState(0);
@@ -109,12 +65,16 @@ export function useDemoRoutes(
     if (!board) {
       // Incident switch: forget the old board so its in-flight answer is dropped.
       last.current = { board: null, key: "", minute: -Infinity, failedAt: -Infinity };
-      setState((s) => (s.asOf === null && s.routes.size === 0 && !s.error ? s : { routes: new Map(), asOf: null, error: null, closedSegmentIds: null, safeDestinations: [] }));
+      setState((s) => (s.asOf === null && s.routes.size === 0 && !s.error ? s : { routes: new Map(), asOf: null, error: null, closedSegmentIds: null }));
       return;
     }
-    if (inflight.current || paused) return;
+    if (inflight.current) return;
+    const fires = activeFires(board);
+    // A controller road closure (or reopening) changes the key too: routes are recomputed around it.
+    const closures = closureKey(board);
+    const key = `${fires.map((f) => `${f.id}:${f.status}`).join(",")}|${closures}`;
     const prev = last.current;
-    const { key, burning, closures, safe, excluded } = routesPlan(board, destinations);
+    const burning = fires.some((f) => f.status === "burning");
     const due =
       prev.board !== board ||
       key !== prev.key ||
@@ -122,7 +82,7 @@ export function useDemoRoutes(
     if (!due || Date.now() - prev.failedAt < RETRY_WALL_MS) return;
 
     const minute = board.minute;
-    const body = routesBody(board, excluded);
+    const body: RoutesRequest = { fires: fireRingsForRouting(board, RING_POINTS) };
     inflight.current = true;
     last.current = { ...prev, board, key, minute };
     let askAgain = false;
@@ -149,7 +109,7 @@ export function useDemoRoutes(
           if (!stale) setState((s) => ({ ...s, error: "the routes ignore a controller road closure (closure store unavailable); retrying" }));
           return;
         }
-        setState({ routes: resolveRoutes(data), asOf: minute, error: null, closedSegmentIds: closed, safeDestinations: safe });
+        setState({ routes: resolveRoutes(data), asOf: minute, error: null, closedSegmentIds: closed });
       })
       .catch((error: unknown) => {
         if (last.current.board !== board) return; // an older board's (or incident's) request
@@ -161,7 +121,7 @@ export function useDemoRoutes(
         inflight.current = false;
         if (askAgain) setRetry((n) => n + 1);
       });
-  }, [board, version, incidentId, retry, destinations, paused]);
+  }, [board, version, incidentId, retry]);
 
   return state;
 }
