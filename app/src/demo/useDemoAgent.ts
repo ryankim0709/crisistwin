@@ -55,11 +55,14 @@ import {
   type Wake,
   type WakeUrgency,
 } from "./observation";
+import type { AgentInputSnapshot } from "./runContracts";
 
 /** Simulated minutes the monitor stays quiet after a failed call. */
 export const ERROR_BACKOFF_MINUTES = 10;
 /** Decisions kept in the log (continuous reviews add many; quiet ones collapse in the feed). */
 const MAX_DECISIONS = 80;
+/** Observations kept for the "What the agent sees" panel (newest last). */
+const MAX_INPUTS = 30;
 const MANUAL_REASON = "Operator asked for a decision now.";
 /** Wall ms between a new picture item and the check that may call the agent (batches bursts). */
 export const PICTURE_DEBOUNCE_MS = 2_000;
@@ -158,6 +161,10 @@ export interface DemoAgent {
   spend: AgentSpend;
   error: string | null;
   lastWoke: string[];
+  /** What each call was shown (the exact observation posted), newest last, last MAX_INPUTS; cleared with a new board. */
+  inputs: AgentInputSnapshot[];
+  /** The newest of `inputs`, or null. */
+  lastInput: AgentInputSnapshot | null;
   /** Force a call now; works with the autopilot off (one-off call). */
   decideNow: () => void;
 }
@@ -195,6 +202,8 @@ export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
   const [urgency, setUrgency] = useState<WakeUrgency | null>(null);
   const [queued, setQueued] = useState<WakeUrgency | null>(null);
   const [spend, setSpend] = useState<AgentSpend>(NO_SPEND);
+  // Tagged with its board, so a new board never shows the old run's inputs (even for one render).
+  const [inputLog, setInputLog] = useState<{ board: Board | null; list: AgentInputSnapshot[] }>({ board: null, list: [] });
 
   // Latest options for callbacks that run outside render (stream events, the monitor).
   const optsRef = useRef(opts);
@@ -213,6 +222,8 @@ export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
   /** Reported fires already sent to the agent in an observation (each new fire triggers at most one immediate call). */
   const calledFireIdsRef = useRef(new Set<string>());
   const idRef = useRef(0);
+  /** Calls made on this page (input snapshot ids). */
+  const callCountRef = useRef(0);
   /** Picture items the agent has seen (at its last decision, or when monitoring started). */
   const seenPictureRef = useRef<PictureKeys | null>(null);
   const lastPictureCallRef = useRef(-Infinity);
@@ -226,6 +237,17 @@ export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
     const reasons = wake.reasons;
     const observation = buildObservation(current, routes, forecasts, reasons, previousRef.current, wake.urgency, picture?.picture ?? null);
     const seenPicture = picture?.keys ?? null;
+    callCountRef.current += 1;
+    const snapshot: AgentInputSnapshot = {
+      id: `${current.seed}-${observation.clock.minute}-${callCountRef.current}`,
+      minute: observation.clock.minute,
+      sentAtMs: Date.now(),
+      urgency: wake.urgency,
+      reasons,
+      observation,
+      bytes: new TextEncoder().encode(JSON.stringify(observation)).length,
+    };
+    setInputLog((log) => ({ board: current, list: [...(log.board === current ? log.list : []), snapshot].slice(-MAX_INPUTS) }));
     for (const f of observation.fires) calledFireIdsRef.current.add(f.id);
     const seen = rememberDecision(current, forecasts);
     seenRef.current = seen;
@@ -332,6 +354,7 @@ export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
     calledFireIdsRef.current = new Set();
     // A new board (reset, drill switch) starts a clean log.
     setDecisions([]);
+    setInputLog({ board, list: [] });
     setError(null);
     setThinking("");
     setStreamText("");
@@ -342,6 +365,7 @@ export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
   const { incidentId } = opts;
   useEffect(() => {
     setDecisions([]);
+    setInputLog((log) => ({ board: log.board, list: [] }));
     setError(null);
     setThinking("");
     setStreamText("");
@@ -431,6 +455,20 @@ export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
         : error
           ? "error"
           : "watching";
+  const inputs = inputLog.board === board ? inputLog.list : [];
   const callUrgency: WakeUrgency | null = inFlight ? (queued === "urgent" ? "urgent" : (urgency ?? "urgent")) : null;
-  return { status, urgency: callUrgency, queued: inFlight ? queued : null, thinking, streamText, decisions, spend, error, lastWoke, decideNow };
+  return {
+    status,
+    urgency: callUrgency,
+    queued: inFlight ? queued : null,
+    thinking,
+    streamText,
+    decisions,
+    spend,
+    error,
+    lastWoke,
+    inputs,
+    lastInput: inputs.length > 0 ? inputs[inputs.length - 1] : null,
+    decideNow,
+  };
 }
