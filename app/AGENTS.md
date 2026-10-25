@@ -20,6 +20,7 @@ app/src/
   diorama/          /diorama     scripted 3D evacuation diorama (synthetic)
   pages/            planning pages (evacuation, comparison, incidents, stress tests)
   maps/, lib/       shared basemap config and API client
+  appint/           PhoneMirror (what a phone shows; docs/app-integration.md)
   world/            shared world (docs/shared-world.md): contracts, useWorld, useScenarios, ScenarioMenu
 ```
 
@@ -29,7 +30,7 @@ app/src/
   catalogue, tokens and rules are in [`src/ui/README.md`](src/ui/README.md).
 - Use `var(--ct-*)` tokens in CSS; no new hex literals outside `ui/tokens.css`, except
   colours baked into WebGL/MapLibre code (keep those in the feature's palette module).
-- One class prefix per feature (`fr-`, `studio-`, `dsp-`, `dm-`, `rp-`, `dio-`, `ws-`, `wld-`, `ppl-`); `ui-` is
+- One class prefix per feature (`fr-`, `studio-`, `dsp-`, `dm-`, `rp-`, `dio-`, `ws-`, `wld-`, `ppl-`, `pmr-`); `ui-` is
   reserved for the kit.
 - `<button>` is unstyled by default. Use `Button`/`IconButton`, never a bare styled
   button.

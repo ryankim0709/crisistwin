@@ -248,6 +248,7 @@ def _build(incident_id: str, person: dict[str, Any]) -> dict[str, Any]:
         "participant_id": person["id"],
         "role": role,
         "kind": person.get("kind", "phone"),
+        "name": person.get("name"),
         "screen": "not_joined",
         "headline": "",
         "sub": "",
