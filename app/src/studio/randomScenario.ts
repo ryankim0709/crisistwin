@@ -11,6 +11,7 @@ import { pacificIso } from "../fire/runClock";
 import { drawRandomScenario, type IgnitionPlacement } from "../world/randomScenario";
 import type { WorldWeather } from "../world/contracts";
 import type { StudioScenario } from "./contracts";
+import { DEFAULT_FIREFIGHTING } from "./firefighting";
 import { createIgnition } from "./scenario";
 
 export {
@@ -75,10 +76,12 @@ export async function buildRandomScenario(input: RandomScenarioInput): Promise<R
   // Observed weather has a real clock: T+0 (playback clock, day and night, aircraft daylight)
   // is the weather's first hour. A climatology analog's date is statistical, so it keeps the default.
   const observedStart = draw.observed ? pacificIso(draw.startUtc) : null;
-  const firefighting =
-    observedStart && base.firefighting
-      ? { ...base.firefighting, startLocalIso: observedStart }
-      : base.firefighting;
+  // The clock lives on the firefighting settings, so an observed start is stored there even when
+  // firefighting is off (the Studio strips it: the playback clock reads startMsOf(firefighting ??
+  // DEFAULT_FIREFIGHTING) and would otherwise fall back to the August default).
+  const firefighting = observedStart
+    ? { ...(base.firefighting ?? DEFAULT_FIREFIGHTING), startLocalIso: observedStart }
+    : base.firefighting;
   return {
     scenario: {
       ...base,

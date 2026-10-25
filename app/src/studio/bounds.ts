@@ -48,15 +48,26 @@ function groundScale(minY: number, maxY: number): number {
   return Math.cos(latitude * RADIANS_PER_DEGREE);
 }
 
-/** Ground extent of the enabled ignitions' bounding box, longest side, metres. */
-export function ignitionExtentMeters(scenario: StudioScenario): number {
-  const mercator = enabledPoints(scenario).map((p) => lonLatToMercator(p.longitude, p.latitude));
+/** Ground extent of a set of points' bounding box, longest side, metres. */
+export function pointsExtentMeters(
+  points: readonly { longitude: number; latitude: number }[],
+): number {
+  const mercator = points.map((p) => lonLatToMercator(p.longitude, p.latitude));
   if (mercator.length === 0) return 0;
   const xs = mercator.map(([x]) => x);
   const ys = mercator.map(([, y]) => y);
   const scale = groundScale(Math.min(...ys), Math.max(...ys));
   return Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) * scale;
 }
+
+/** Ground extent of the enabled ignitions' bounding box, longest side, metres. */
+export function ignitionExtentMeters(scenario: StudioScenario): number {
+  return pointsExtentMeters(enabledPoints(scenario));
+}
+
+/** Widest ignition extent `spanProblem` accepts, ground metres (16 km for the 24 km cap). */
+export const MAX_IGNITION_EXTENT_METERS =
+  MAX_LANDSCAPE_SPAN_METERS - 2 * MIN_BUFFER_METERS - 2 * SNAP_METERS;
 
 /**
  * Box needed by the enabled ignitions: their bounding box plus a spread buffer. The buffer
@@ -107,7 +118,7 @@ export function spanProblem(scenario: StudioScenario): string | null {
   const requirement = landscapeRequirement(scenario);
   if (requirement.spanMeters <= MAX_LANDSCAPE_SPAN_METERS) return null;
   const extentKm = ignitionExtentMeters(scenario) / 1000;
-  const maxExtentKm = (MAX_LANDSCAPE_SPAN_METERS - 2 * MIN_BUFFER_METERS - 2 * SNAP_METERS) / 1000;
+  const maxExtentKm = MAX_IGNITION_EXTENT_METERS / 1000;
   return (
     `The enabled fires are about ${extentKm.toFixed(1)} km apart, but one run can cover ` +
     `them only within about ${Math.floor(maxExtentKm)} km. Move them closer together or ` +

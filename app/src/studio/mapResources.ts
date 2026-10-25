@@ -58,16 +58,21 @@ const MPS_PER_MPH = 0.44704;
  * Units on and near the board, or null while the board's roads (its box) or the facilities layer
  * are still loading. `bases` null = loading; `available: false` = the layer is unavailable.
  */
-export function mapResources(area: DispatchArea | null, bases: SuppressionBases | null): MapResources | null {
+export function mapResources(
+  area: DispatchArea | null,
+  bases: SuppressionBases | null,
+  focus: LonLat | null = null,
+): MapResources | null {
   if (!area || bases === null) return null;
   const [west, south, east, north] = area.bbox;
   const onBoard = (p: LonLat) => p[0] >= west && p[0] <= east && p[1] >= south && p[1] <= north;
-  const center: LonLat = [(west + east) / 2, (south + north) / 2];
+  // Ordered from the fire when given (the area can be much larger than the fire), else its centre.
+  const center: LonLat = focus ?? [(west + east) / 2, (south + north) / 2];
   const layer: BaseInput[] = bases.available
     ? bases.bases.map((b) => ({ id: b.id, name: b.name, type: b.type, location: [b.lon, b.lat], agency: b.agency, unit: b.unit, staffing: b.staffing ?? null }))
     : [];
   const osm: BaseInput[] = area.stations.map((s) => ({ id: s.id, name: s.name, type: "osm_fire_station", location: s.location }));
-  // Nearest the board's centre first (a CAL FIRE unit's engines and its dozer follow that order).
+  // Nearest that point first (a CAL FIRE unit's engines and its dozer follow that order).
   const inputs = withOsmStations(layer, osm).sort(
     (a, b) => greatCircleKm(center, a.location) - greatCircleKm(center, b.location) || a.id.localeCompare(b.id),
   );

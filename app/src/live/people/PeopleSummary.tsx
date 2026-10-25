@@ -87,7 +87,7 @@ export default function PeopleSummary({ snapshot, error, className, phonesNote =
   const chips: { key: keyof typeof PEOPLE_SWATCH; label: string; value: number; detail?: string; title: string }[] = [
     {
       key: "home",
-      label: "Still home",
+      label: "People still home",
       value: home,
       detail: [t.home_no_car ? `${nf(t.home_no_car)} no car` : "", t.staying ? `${nf(t.staying)} staying put` : ""]
         .filter(Boolean)
