@@ -9,7 +9,8 @@
   their apparatus class may use (``tools.suppression_data.road_access``, the R01-R12 table),
   routed by ``livecore.inbound.inbound_route``.
 
-Nothing is stored. Units: WGS84 [lon, lat]; metres; minutes; wind m/s, direction FROM in
+Every endpoint takes an optional ``?incident=`` (default Camp; Camp or the active incident, else
+404). The terrain package and carless households are Camp-only. Nothing is stored. Units: WGS84 [lon, lat]; metres; minutes; wind m/s, direction FROM in
 degrees true. Wire contract: app/src/demo/contracts.ts.
 """
 
@@ -39,6 +40,7 @@ from livecore.geo import haversine_m, simplify_line, to_multipolygon
 from livecore.inbound import inbound_route
 from livecore.routing import CONGESTION_MAX_FACTOR, _index
 
+from .demo import drill_center, resolve_incident
 from .live import incidents
 from .live.common import ApiError
 from .live.drillcache import get_index
@@ -87,7 +89,7 @@ cap for secondary roads (suppression_resources.json road_access.heavy_apparatus_
 ROUTE_TOLERANCE_M = 25.0
 ROUTE_MAX_POINTS = 120
 
-_access_cache: dict[tuple[int, str], tuple[frozenset[str], dict[str, float]]] = {}
+_access_cache: dict[tuple[int, str], tuple[object, tuple[frozenset[str], dict[str, float]]]] = {}
 _access_lock = threading.Lock()
 
 
@@ -145,12 +147,22 @@ def demo_wind(request):
         return _error(400, "invalid_request", "hours must be an integer.")
     if not 1 <= hours <= MAX_WIND_HOURS:
         return _error(400, "invalid_request", f"hours must be 1 to {MAX_WIND_HOURS}.")
-    key = (mode, start, hours)
+    incident = resolve_incident(request)
+    if isinstance(incident, Response):
+        return incident
+    if incident == CAMP_INCIDENT_ID:
+        point = WIND_POINT
+    else:
+        try:
+            point = tuple(drill_center(get_index(incident).drill))
+        except ApiError as exc:
+            return _error(exc.status, exc.code, exc.detail)
+    key = (mode, start, hours, point)
     with _wind_lock:
         hit = _wind_cache.get(key)
     if hit is None:
         try:
-            hit = weather.scenario_wind(WIND_POINT[0], WIND_POINT[1], start, hours, mode)
+            hit = weather.scenario_wind(point[0], point[1], start, hours, mode)
         except Exception as exc:  # network, archive gaps, parse errors: all mean "no series"
             logger.warning("demo wind unavailable: %s", exc)
             return _error(503, "weather_unavailable", "No wind series could be loaded for the drill area.")
@@ -191,7 +203,9 @@ def _terrain_package() -> Path:
     configured = os.environ.get(TERRAIN_ENV, "").strip()
     if configured:
         return Path(configured)
-    return Path(__file__).resolve().parents[3] / DEFAULT_TERRAIN_PACKAGE
+    from .live.twin_service import REPO_ROOT
+
+    return REPO_ROOT / DEFAULT_TERRAIN_PACKAGE
 
 
 def _load_terrain(bbox: list[float]) -> tuple[dict | None, str | None]:
@@ -244,12 +258,54 @@ def _carless(bundle: dict) -> tuple[dict[str, int], str | None]:
     return out, f"ACS households with no vehicle per block group (replay bundle demand table; {locator or 'ACS 5-year'})"
 
 
+_PACKAGE_STATIONS_SOURCE = "Fire stations from OpenStreetMap in the drill package"
+
+
+def _package_stations(incident: str) -> list[dict]:
+    """``[{id, name, lon, lat}]`` from the drill package's ``stations`` layer (OSM fire stations).
+
+    The loaded ``Drill`` does not keep that layer, so the stored package file is read; [] when it
+    is missing or malformed."""
+    source = incidents.source_for(incident)
+    if source is None or source.kind != "package":
+        return []
+    try:
+        features = json.loads(source.path.read_text(encoding="utf-8"))["stations"]["features"]
+        return [
+            {"id": str(f["id"]), "name": str(f.get("name") or "Fire station"),
+             "lon": float(f["coord"][0]), "lat": float(f["coord"][1])}
+            for f in features
+        ]
+    except (OSError, ValueError, KeyError, TypeError, IndexError):
+        return []
+
+
 @api_view(["GET"])
 @authentication_classes([])
 @permission_classes([AllowAny])
 @throttle_classes([DemoInputsThrottle])
 def demo_environment(request):
-    """Camp terrain grid and carless households per zone, computed once per process."""
+    """Terrain grid and carless households per zone (Camp), plus the drill ``center``."""
+    incident = resolve_incident(request)
+    if isinstance(incident, Response):
+        return incident
+    if incident != CAMP_INCIDENT_ID:
+        try:
+            center = drill_center(get_index(incident).drill)
+        except ApiError as exc:
+            return _error(exc.status, exc.code, exc.detail)
+        return Response(
+            {
+                "terrain": None,
+                "terrain_detail": "Camp-only terrain package; the page uses the region's LANDFIRE landscape",
+                "households_no_vehicle": {},
+                "households_no_vehicle_source": "Carless households unknown for this synthetic drill (counted as 0)",
+                "center": center,
+                "stations": _package_stations(incident),
+                "stations_source": _PACKAGE_STATIONS_SOURCE,
+            },
+            headers={"Cache-Control": "public, max-age=60"},
+        )
     with _env_lock:
         if "value" not in _env_cache:
             try:
@@ -264,6 +320,9 @@ def demo_environment(request):
                 "terrain_detail": detail,
                 "households_no_vehicle": carless,
                 "households_no_vehicle_source": carless_source,
+                "center": list(WIND_POINT),
+                "stations": [],
+                "stations_source": None,
             }
         value = _env_cache["value"]
     return Response(value, headers={"Cache-Control": "public, max-age=3600"})
@@ -284,8 +343,8 @@ def _class_access(drill, access_class: str) -> tuple[frozenset[str], dict[str, f
     key = (id(drill), access_class)
     with _access_lock:
         hit = _access_cache.get(key)
-        if hit is not None:
-            return hit
+        if hit is not None and hit[0] is drill:  # an evicted package drill's id can be reused
+            return hit[1]
     _repo_on_path()
     from tools.suppression_data import load_resources, road_access
 
@@ -311,7 +370,7 @@ def _class_access(drill, access_class: str) -> tuple[frozenset[str], dict[str, f
                 factors[eid] = min(CONGESTION_MAX_FACTOR, factor)
     value = (frozenset(blocked), factors)
     with _access_lock:
-        _access_cache[key] = value
+        _access_cache[key] = (drill, value)
     return value
 
 
@@ -410,8 +469,11 @@ def demo_crew_routes(request):
         if origin is None or target is None:
             return _error(400, "invalid_request", "`from` and `to` must be [lon, lat].")
         requests.append({"id": r["id"], "access_class": r["access_class"], "from": origin, "to": target})
+    incident = resolve_incident(request)
+    if isinstance(incident, Response):
+        return incident
     try:
-        drill = get_index(CAMP_INCIDENT_ID).drill  # the board is the Camp drill map (0047-command-demo.md)
+        drill = get_index(incident).drill
     except ApiError as exc:
         return _error(exc.status, exc.code, exc.detail)
     fire = to_multipolygon({"type": "MultiPolygon", "coordinates": [[r] for r in rings]}) if rings else None

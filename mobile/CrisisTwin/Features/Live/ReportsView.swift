@@ -70,8 +70,8 @@ struct ReportSteps: View {
     var body: some View {
         let reached = progress?.rawValue ?? 0
         let tone = progress?.tone ?? Color.ctInkSubtle
-        HStack(spacing: 10) {
-            HStack(spacing: 3) {
+        HStack(spacing: 8) {
+            HStack(spacing: 4) {
                 ForEach(ReportProgress.allCases, id: \.self) { step in
                     Capsule()
                         .fill(step.rawValue <= reached ? tone : Color.ctBorder)
@@ -92,7 +92,7 @@ struct ReportSteps: View {
 
 private struct StepLabelStyle: LabelStyle {
     func makeBody(configuration: Configuration) -> some View {
-        HStack(spacing: 5) {
+        HStack(spacing: 4) {
             configuration.icon.imageScale(.small)
             configuration.title
         }
@@ -165,7 +165,7 @@ struct ReportsView: View {
                     let questions = store.stillThereItems
                     let board = store.boardQuestions
                     if !questions.isEmpty || !board.isEmpty {
-                        VStack(alignment: .leading, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 8) {
                             FieldSectionTitle("Still there?")
                             VStack(spacing: 0) {
                                 ForEach(questions) { item in
@@ -183,7 +183,7 @@ struct ReportsView: View {
                     }
 
                     if store.pending.contains(where: { $0.location != nil }) || !store.myReports.isEmpty {
-                        VStack(alignment: .leading, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 8) {
                             FieldSectionTitle("Yours")
                             VStack(spacing: 0) {
                                 ForEach(store.pending.filter { $0.location != nil }) { draft in
@@ -210,9 +210,7 @@ struct ReportsView: View {
                         }
                     }
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-                .padding(.bottom, 24)
+                .ctScreenPadding()
             }
             .ctScreenBackground()
             .ctOwnHeader()
@@ -225,7 +223,7 @@ struct ReportsView: View {
     }
 
     private var rowDivider: some View {
-        Rectangle().fill(Color.ctBorderSubtle).frame(height: 1).padding(.leading, 54)
+        Rectangle().fill(Color.ctBorderSubtle).frame(height: 1).padding(.leading, 58)
     }
 
     private func panelRows<Item: Identifiable, Row: View>(_ items: [Item], @ViewBuilder row: @escaping (Item) -> Row) -> some View {
@@ -279,7 +277,7 @@ private struct ReportRow: View {
                 .accessibilityHidden(true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .contentShape(.rect)
         .accessibilityElement(children: .combine)
@@ -293,8 +291,8 @@ private struct EditedTag: View {
         Text("Edited")
             .font(.caption.weight(.semibold))
             .foregroundStyle(Color.ctInkMuted)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 2)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
             .background(Color.ctSurfaceMuted, in: .capsule)
     }
 }
@@ -341,9 +339,7 @@ private struct ReportDetailView: View {
                         .ctPanel()
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 8)
-            .padding(.bottom, 24)
+            .ctScreenPadding()
         }
         .ctScreenBackground()
         .navigationTitle(shown?.kind.title ?? "Report")
@@ -374,7 +370,7 @@ private struct ReportDetailView: View {
         let report = target.report
         let place = target.location.flatMap { store.placeWords($0.coord, road: report?.roadRef?.name) }
             ?? report?.roadRef?.name
-        return VStack(alignment: .leading, spacing: 10) {
+        return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 12) {
                 KindBadge(kind: target.kind)
                 VStack(alignment: .leading, spacing: 4) {
@@ -405,7 +401,7 @@ private struct ReportDetailView: View {
             ReportSteps(progress: report.map { store.progress(of: $0) })
                 .padding(.leading, 42)
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .ctPanel(padding: 0)
         .accessibilityElement(children: .combine)
@@ -421,14 +417,14 @@ private struct ReportDetailView: View {
                 .foregroundStyle(Color.ctInk)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .ctPanel(padding: 14)
+        .ctPanel()
         .accessibilityElement(children: .combine)
     }
 
     @ViewBuilder
     private func actions(_ target: ReportEditTarget) -> some View {
         if target.isEditable {
-            VStack(spacing: 10) {
+            VStack(spacing: 12) {
                 if let message {
                     Label(message, systemImage: message == Self.lockedLine ? "lock.fill" : "exclamationmark.triangle.fill")
                         .font(.subheadline)
@@ -466,7 +462,7 @@ private struct ReportDetailView: View {
                 .font(.subheadline)
                 .foregroundStyle(Color.ctInkMuted)
                 .fixedSize(horizontal: false, vertical: true)
-                .ctPanel(padding: 14)
+                .ctPanel()
         }
     }
 
@@ -519,7 +515,7 @@ private struct StillThereCard: View {
     @State private var tick = 0
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 12) {
                 KindBadge(kind: item.kind)
                 VStack(alignment: .leading, spacing: 2) {
@@ -541,7 +537,7 @@ private struct StillThereCard: View {
             .padding(.leading, 42)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .sensoryFeedback(.selection, trigger: tick)
         .accessibilityElement(children: .contain)
@@ -561,7 +557,7 @@ private struct BoardQuestionCard: View {
     @State private var tick = 0
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: question.symbol)
                     .font(.system(size: 15, weight: .semibold))
@@ -586,7 +582,7 @@ private struct BoardQuestionCard: View {
             .padding(.leading, 42)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .sensoryFeedback(.selection, trigger: tick)
         .accessibilityElement(children: .contain)

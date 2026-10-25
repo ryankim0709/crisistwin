@@ -117,7 +117,7 @@ struct ExitPicker: View {
                         .font(.footnote.weight(.medium))
                 }
             }
-            .padding(.vertical, 10)
+            .padding(.vertical, 12)
             .frame(minHeight: 52)
             .contentShape(.rect)
         }

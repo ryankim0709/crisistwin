@@ -349,6 +349,7 @@ export interface ProposalChange {
   zone_id: string
   kind: ChangeKind
   from: GuidanceSummary | null
+  /** In `command`, without `route.line` and `alternatives` (kept small for the 5 s poll). */
   to: ProposedGuidance
 }
 

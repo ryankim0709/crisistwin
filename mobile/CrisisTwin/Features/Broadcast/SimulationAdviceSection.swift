@@ -86,7 +86,7 @@ struct SimulationAdviceSection: View {
 
     private func adviceView(_ advice: SimAdvice) -> some View {
         let look = Self.look(for: advice)
-        return VStack(alignment: .leading, spacing: 10) {
+        return VStack(alignment: .leading, spacing: 12) {
             Label(look.headline, systemImage: look.symbol)
                 .font(.ctTitle)
                 .foregroundStyle(look.tint)

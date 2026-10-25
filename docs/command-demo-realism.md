@@ -32,13 +32,22 @@ Code: `app/src/demo/realism.ts` (physics and data), `app/src/demo/model.ts` (boa
 ## Endpoints
 
 All anonymous local-demo endpoints, 60 requests per minute per client, `Cache-Control` set,
-errors `{"error", "detail"}`.
+errors `{"error", "detail"}`. Each takes an optional `?incident=<id>`: absent is Camp
+(`camp-2018-drill`); Camp or the active incident (the live API's rule, a Studio drill package
+anywhere in California) are served, anything else is 404 `not_found`. The board follows the
+active incident, not only the Camp map.
 
 - `GET /api/demo/wind?mode=historical_replay|climatology_percentile&start=<ISO>&hours=<1-168>`:
-  `sim.weather.scenario_wind` at Paradise (-121.60, 39.76), cached per process. 503
+  `sim.weather.scenario_wind`, cached per process and point. The station search starts at Paradise (-121.60, 39.76) for Camp, else at the mean of the incident's zone centroids. 503
   `weather_unavailable` when no series loads (the IEM archive cache is cold and offline).
 - `GET /api/demo/environment`: `{terrain, terrain_detail, households_no_vehicle,
-  households_no_vehicle_source}`. Terrain needs the Camp incident package locally
+  households_no_vehicle_source, center}`; `center` is `[lon, lat]` (the wind point). For a
+  non-Camp incident `terrain` is null (Camp-only package; the page uses the region's LANDFIRE
+  landscape) and carless households are `{}`, labelled unknown (counted as 0). `stations`
+  (`[{id, name, lon, lat}]`) and `stations_source` carry the drill package's OpenStreetMap fire
+  stations (observed; Camp: `[]` and null). The board uses them only when the CAL FIRE bases
+  file is unavailable: the nearest stations fill all three base pools and the two nearest double as
+  crew camps; unit types and counts per station stay assumed, and `basesLabel` says so. Terrain needs the Camp incident package locally
   (`DEMO_TERRAIN_PACKAGE`, default `data/incidents/camp-2018-evacuation/17e67cfe5669fe50`);
   slope is sent as rise/run × 1000 integers, aspect as whole degrees.
 - `POST /api/demo/crew_routes`, body `{fires: rings, requests: [{id, access_class, from, to}]}`

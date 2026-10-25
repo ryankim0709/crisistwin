@@ -15,7 +15,7 @@ struct AboutView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
-                VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 8) {
                     Text("CrisisTwin shows the one instruction for your zone during a wildfire and lets you report what you see.")
                         .font(.ctTitle)
                         .foregroundStyle(Color.ctInk)
@@ -35,8 +35,7 @@ struct AboutView: View {
 
                 ServerSettingsCard { retry() }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
+            .ctScreenPadding()
         }
         .ctScreenBackground()
         .navigationTitle("About")

@@ -14,7 +14,7 @@ struct GuidanceDetailView: View {
         NavigationStack {
             ScrollViewReader { proxy in
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 16) {
                         if let guidance = store.myGuidance {
                             levelPanel(guidance)
                             if guidance.level != .none {
@@ -33,9 +33,7 @@ struct GuidanceDetailView: View {
                         }
                         Color.clear.frame(height: 1).id("detail-bottom")
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 4)
-                    .padding(.bottom, 24)
+                    .ctScreenPadding()
                 }
                 .task {
                     guard DebugLaunch.scrollToBottom else { return }
@@ -62,7 +60,7 @@ struct GuidanceDetailView: View {
     private func levelPanel(_ guidance: ZoneGuidance) -> some View {
         let level = guidance.level
         return VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Image(systemName: level.symbol)
                     .foregroundStyle(level.glyph)
                     .accessibilityHidden(true)
@@ -197,7 +195,7 @@ struct GuidanceDetailView: View {
                     .font(.title3.weight(.semibold))
                     .foregroundStyle(Color.ctInk)
                     .fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 10) {
+                HStack(spacing: 12) {
                     // The caveat below already says it when every way out meets the fire.
                     if store.caveatText(for: guidance) == nil, let safety = store.routeSafety(guidance) {
                         RouteSafetyLabel(safety: safety)
@@ -249,7 +247,7 @@ private struct RouteSteps: View {
         let stops = roads.map { (name: $0, isEnd: false) } + (destination.map { [(name: $0, isEnd: true)] } ?? [])
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(stops.enumerated()), id: \.offset) { index, stop in
-                HStack(alignment: .top, spacing: 14) {
+                HStack(alignment: .top, spacing: 12) {
                     VStack(spacing: 0) {
                         Circle()
                             .fill(stop.isEnd ? Color.ctRoute : Color.ctSurface)

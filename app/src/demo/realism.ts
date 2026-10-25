@@ -1,19 +1,16 @@
 /**
- * Physical inputs of the /demo board (docs/command-demo-realism.md): Rothermel spread from
- * fuel, slope and wind; sourced apparatus and line production; evacuation behaviour from
- * tools/people_behavior.json. Pure: no React, network or LLM. The page fetches the inputs
- * (wind series, Camp terrain, bases, carless counts) and hands them to the model as a
- * `DemoEnvironment`; every input says where it came from, and a missing input falls back to
- * a named, labelled ASSUMPTION constant below.
+ * Physical inputs of the /demo board (docs/command-demo-realism.md): the LANDFIRE ground and the
+ * hourly wind the fire solver runs on (demo/fireField.ts), sourced apparatus and line
+ * production, and evacuation behaviour from tools/people_behavior.json. Pure: no React, network
+ * or LLM. The page fetches the inputs (wind series, landscape, bases, carless counts) and hands
+ * them to the model as a `DemoEnvironment`; every input says where it came from, and a missing
+ * input falls back to a named, labelled ASSUMPTION constant below.
  *
- * Units. rothermel.ts is Imperial (ft/min, Btu/ft/s, feet); everything leaving this module is
- * metric (m/min, metres), except flame length, which stays in feet because the holding limits
- * it is compared with (PMS 465 Hauling chart) are published in feet. Names carry the unit.
+ * Units: metric (m/s, m/min, metres) except flame length, which stays in feet because the
+ * holding limits it is compared with (PMS 465 Hauling chart) are published in feet. Names carry
+ * the unit.
  */
 
-import { FUEL_MODELS, isBurnable, type FuelModel } from "../fire/fuelModels";
-import { windAdjustmentFactor } from "../fire/crownFire";
-import { prepareFuelBed, spreadFromBed, directionalRate, type FuelBed } from "../fire/rothermel";
 import { MOISTURE_PRESETS, type FuelMoisture } from "../fire/spread";
 import type { LonLat } from "../live/types";
 import {
@@ -25,26 +22,10 @@ import {
 
 // ---- unit conversions (exact) ----
 
-export const METERS_PER_FOOT = 0.3048;
-/** 1 mph = 0.44704 m/s (exact, international mile). */
+/** 1 mph = 0.44704 m/s (exact, international mile). The solver takes its wind in mph. */
 export const METERS_PER_SECOND_PER_MPH = 0.44704;
-/** 1 mph = 88 ft/min (exact). */
-export const FEET_PER_MINUTE_PER_MPH = 88;
 
-export function metersPerSecondToFeetPerMinute(speedMetersPerSecond: number): number {
-  return (speedMetersPerSecond / METERS_PER_SECOND_PER_MPH) * FEET_PER_MINUTE_PER_MPH;
-}
-
-// ---- fuel ----
-
-/**
- * ASSUMPTION (fallback fuel): Scott & Burgan (2005) SH5, high-load dry-climate shrub (FBFM40
- * code 145), on every cell. It is the fuel sim/fire.py (`DEFAULT_FUEL_MODEL`) uses for the
- * Camp replay for the same reason: no LANDFIRE landscape covers the drill area, and SH5 stands
- * for the chaparral and manzanita of the Feather River canyon and the brushy understory of
- * the Paradise ridge. Used only when no prebuilt landscape (GET /api/landscapes) covers it.
- */
-export const FALLBACK_FUEL_CODE = 145;
+// ---- fuel moisture ----
 
 /** Moisture scenario id from fire/spread.ts MOISTURE_PRESETS (Scott & Burgan 2005, Table 1). */
 export type MoistureId = "critical" | "dry" | "moderate" | "wet";
@@ -124,171 +105,24 @@ export function windAt(series: WindSeries, minute: number): WindNow {
   return { speedMetersPerSecond: FALLBACK_WIND_SPEED_M_PER_S, fromDegrees: FALLBACK_WIND_FROM_DEG, hourIndex, held: true };
 }
 
-// ---- terrain and fuel per point ----
+// ---- ground ----
 
-/** Camp 3DEP slope grid from GET /api/demo/environment (sim/terrain.py resampling). */
-export interface TerrainGrid {
-  originLon: number;
-  originLat: number;
-  cellMeters: number;
-  ncols: number;
-  nrows: number;
-  metersPerDegLon: number;
-  metersPerDegLat: number;
-  /** Rise over run, row 0 = south. */
-  slopeTangent: Float32Array;
-  /** Compass bearing of the upslope direction, degrees true. */
-  upslopeDegrees: Float32Array;
-  label: string;
-}
-
-/** What the board knows about the ground: fuel per point and slope per point. */
+/** What the board knows about the ground (from the landscape the solver runs on). */
 export interface Ground {
   fuelLabel: string;
-  fuelEvidence: "landfire" | "assumption";
+  fuelEvidence: "landfire";
   terrainLabel: string;
-  terrainEvidence: "observed" | "assumption";
-  /** FBFM40 fuel code at a point. */
+  terrainEvidence: "observed";
+  /** FBFM40 fuel code at a point (0 off the landscape). */
   fuelCodeAt(p: LonLat): number;
-  /** Slope at a point; `cell` is a stable key for caching (-1 off the grid). */
+  /** Slope at a point; `cell` is the landscape cell (-1 off the grid). */
   slopeAt(p: LonLat): { slopeTangent: number; upslopeDegrees: number; cell: number };
 }
 
-export function groundFrom(terrain: TerrainGrid | null): Ground {
-  return {
-    fuelLabel: "SH5 high-load dry-climate shrub on every cell (assumed: no LANDFIRE landscape covers the drill area)",
-    fuelEvidence: "assumption",
-    terrainLabel: terrain ? terrain.label : "Flat ground (assumed: Camp terrain grid unavailable)",
-    terrainEvidence: terrain ? "observed" : "assumption",
-    fuelCodeAt: () => FALLBACK_FUEL_CODE,
-    slopeAt: (p) => {
-      if (!terrain) return { slopeTangent: 0, upslopeDegrees: 0, cell: -1 };
-      const col = Math.floor(((p[0] - terrain.originLon) * terrain.metersPerDegLon) / terrain.cellMeters);
-      const row = Math.floor(((p[1] - terrain.originLat) * terrain.metersPerDegLat) / terrain.cellMeters);
-      if (col < 0 || row < 0 || col >= terrain.ncols || row >= terrain.nrows) {
-        return { slopeTangent: 0, upslopeDegrees: 0, cell: -1 };
-      }
-      const cell = row * terrain.ncols + col;
-      return { slopeTangent: terrain.slopeTangent[cell], upslopeDegrees: terrain.upslopeDegrees[cell], cell };
-    },
-  };
-}
-
-// ---- spread ----
-
-export interface SpreadRates {
-  /** Head, back and flank (semi-minor growth) rates, m/min. */
-  headMetersPerMinute: number;
-  backMetersPerMinute: number;
-  flankMetersPerMinute: number;
-  /** Anderson (1983) length-to-breadth, capped at 8 (rothermel.ts MAX_LENGTH_TO_BREADTH). */
-  lengthToBreadth: number;
-  /** Compass bearing of maximum spread (wind and slope combined as vectors), degrees true. */
-  headingDegrees: number;
-  /** Byram flame length at the head, feet. */
-  headFlameFeet: number;
-  firelineIntensityBtuPerFootPerSecond: number;
-  fuelCode: number;
-  slopePercent: number;
-  midflameWindMetersPerSecond: number;
-}
-
-const NO_SPREAD = (fuelCode: number, slopePercent: number): SpreadRates => ({
-  headMetersPerMinute: 0,
-  backMetersPerMinute: 0,
-  flankMetersPerMinute: 0,
-  lengthToBreadth: 1,
-  headingDegrees: 0,
-  headFlameFeet: 0,
-  firelineIntensityBtuPerFootPerSecond: 0,
-  fuelCode,
-  slopePercent,
-  midflameWindMetersPerSecond: 0,
-});
-
-/** Treeless cell for the Albini & Baughman unsheltered factor (no canopy data on the board). */
-const OPEN_CANOPY = { baseHeightMeters: 0, bulkDensityKgPerM3: 0, coverFraction: 0, heightMeters: 0 };
-
-const bedCache = new Map<string, FuelBed>();
-function bedFor(fuel: FuelModel, moistureId: MoistureId): FuelBed {
-  const key = `${fuel.code}|${moistureId}`;
-  let bed = bedCache.get(key);
-  if (!bed) {
-    bed = prepareFuelBed(fuel, moistureOf(moistureId));
-    bedCache.set(key, bed);
-  }
-  return bed;
-}
-
-/**
- * Rothermel (1972) surface spread at one fuel, slope and wind (fire/rothermel.ts, Andrews
- * RMRS-GTR-371 2018 formulation), as an ellipse:
- * - midflame wind = open wind x the Albini & Baughman (1979) unsheltered wind adjustment
- *   factor for the fuel bed depth (fire/crownFire.ts windAdjustmentFactor; no canopy data);
- * - length-to-breadth from the effective wind, Anderson (1983), as FARSITE uses
- *   (rothermel.ts lengthToBreadthRatio, capped at 8);
- * - backing rate = the rear-focus ellipse rate at 180 degrees from the head (Alexander 1985,
- *   rothermel.ts directionalRate), floored at the no-wind no-slope rate as BehavePlus does
- *   (fire/spread.ts SPREAD_MODEL.backingRate);
- * - flank (semi-minor) growth = (head + back) / (2 x L:B), the ellipse with that length.
- * Surface fire only: no crown fire (no canopy rasters for the area).
- */
-export function spreadRates(
-  fuelCode: number,
-  slopeTangent: number,
-  upslopeDegrees: number,
-  wind: { speedMetersPerSecond: number; fromDegrees: number },
-  moistureId: MoistureId,
-): SpreadRates {
-  const slopePercent = slopeTangent * 100;
-  const fuel = FUEL_MODELS.get(fuelCode);
-  if (!fuel || !isBurnable(fuelCode)) return NO_SPREAD(fuelCode, slopePercent);
-  const bed = bedFor(fuel, moistureId);
-  const waf = windAdjustmentFactor(OPEN_CANOPY, fuel.depthFeet);
-  const midflameFeetPerMinute = metersPerSecondToFeetPerMinute(wind.speedMetersPerSecond) * waf;
-  const towardDegrees = (wind.fromDegrees + 180) % 360;
-  const r = spreadFromBed(bed, midflameFeetPerMinute, towardDegrees, slopeTangent, upslopeDegrees);
-  const headMetersPerMinute = r.headRateFeetPerMinute * METERS_PER_FOOT;
-  if (headMetersPerMinute <= 0) return NO_SPREAD(fuelCode, slopePercent);
-  const backMetersPerMinute = Math.max(
-    directionalRate(r.headRateFeetPerMinute, r.lengthToBreadth, Math.PI),
-    r.noWindRateFeetPerMinute,
-  ) * METERS_PER_FOOT;
-  return {
-    headMetersPerMinute,
-    backMetersPerMinute,
-    flankMetersPerMinute: (headMetersPerMinute + backMetersPerMinute) / (2 * r.lengthToBreadth),
-    lengthToBreadth: r.lengthToBreadth,
-    headingDegrees: r.headingDegrees,
-    headFlameFeet: r.flameLengthFeet,
-    firelineIntensityBtuPerFootPerSecond: r.firelineIntensityBtuPerFootPerSecond,
-    fuelCode,
-    slopePercent,
-    midflameWindMetersPerSecond: (midflameFeetPerMinute / FEET_PER_MINUTE_PER_MPH) * METERS_PER_SECOND_PER_MPH,
-  };
-}
-
-/** Spread rates cached per (fuel, slope cell, wind hour, moisture): the board's hot path. */
-export class SpreadCache {
-  private cache = new Map<string, SpreadRates>();
-  constructor(
-    readonly ground: Ground,
-    readonly wind: WindSeries,
-  ) {}
-
-  at(p: LonLat, minute: number, moistureId: MoistureId): SpreadRates {
-    const fuelCode = this.ground.fuelCodeAt(p);
-    const slope = this.ground.slopeAt(p);
-    const w = windAt(this.wind, minute);
-    const key = `${fuelCode}|${slope.cell}|${w.hourIndex}|${moistureId}`;
-    let hit = this.cache.get(key);
-    if (!hit) {
-      if (this.cache.size > 50_000) this.cache.clear();
-      hit = spreadRates(fuelCode, slope.slopeTangent, slope.upslopeDegrees, w, moistureId);
-      this.cache.set(key, hit);
-    }
-    return hit;
-  }
+/** The fire solver's inputs besides the landscape grid itself: fuel and slope lookups, and the hourly wind. */
+export interface SpreadInputs {
+  readonly ground: Ground;
+  readonly wind: WindSeries;
 }
 
 // ---- apparatus ----

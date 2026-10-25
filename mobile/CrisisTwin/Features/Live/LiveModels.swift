@@ -379,6 +379,9 @@ struct ReportPrefill: Equatable {
     var kind: ReportKind?
     var coord: LonLat?
     var taskId: String?
+    /// From the voice assistant's proposal; the person still reviews and sends.
+    var severity: ReportSeverity? = nil
+    var note: String? = nil
 }
 
 // MARK: - v2: situation, guidance, check-ins (ADR 0012)

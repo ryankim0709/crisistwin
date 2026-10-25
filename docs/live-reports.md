@@ -855,7 +855,8 @@ fetches again without `zones=0`.
   "destinations": [ { "id": "exit:osm-node:86371270", "name": "Exit south via Table Mountain Boulevard",
                       "kind": "exit", "coord": [-121.569105, 39.531675], "capacity_veh": null } ],
   "guidance": [ ZoneGuidance ],            // published, current version per zone
-  "proposals": [ Proposal ],                // all pending, plus the latest 20 decided; newest first
+  "proposals": [ Proposal ],                // all pending, plus the latest 5 decided; newest first;
+                                            // changes[].to omits route.line and alternatives
   "reports": [ FieldReport ],               // newest 500
   "road_state": [ RoadStateItem ],
   "public_items": [ PublicMapItem ],        // what civilians see
@@ -1370,6 +1371,119 @@ corroborate `road_passable` and `slow` states. Public items and road state add `
                "passive": 2, "total": 4, "last_at": "2026-10-24T18:07:00Z" } } ]
 ```
 
+## Voice mode
+
+`POST incidents/{id}/voice` is one turn of the phone's voice mode: the person speaks (or the phone
+sends typed `text`), the server transcribes it, Claude turns it into a short spoken reply and at
+most one proposed phone action, and the server speaks the reply back. Code:
+`app/backend/api/live/voice.py` (endpoint, validation, prompt) and `app/backend/api/cartesia.py`
+(Cartesia speech adapter). Auth is any live bearer token (civilian, responder or controller; the
+usual incident check applies). The limit is 12 turns per minute per device (`voice:{party_key}`,
+fixed window, counted per server process), after the body has been checked, so an invalid request
+does not use a turn; over it, `429 { "error": "rate_limited" }`.
+
+Responsibilities are split the same way as the rest of the live API. The model only interprets
+what was said and answers from the guidance text the phone already shows; it computes no route,
+time, distance or hazard, and the prompt forbids inventing them. The server validates every
+parameter the model returns (below). The phone proposes the action out loud, waits for a yes, and
+only then sends the report or check-in through the ordinary `POST incidents/{id}/reports` and
+`POST incidents/{id}/checkins` calls. The voice endpoint itself writes no report and no check-in.
+The reply is labeled `evidence_class: "ai_interpretation"` and is never observed data.
+
+Limits: request body 1,500,000 bytes (else `413 too_large`), decoded WAV 1,000,000 bytes (about
+30 s of 16 kHz 16-bit mono), `text` 500 characters. Send exactly one of `audio_b64` and `text`.
+The recording must be base64 of a WAV file (`RIFF` header, at least 64 bytes); other containers
+are refused. Cartesia reads the audio as English (`ink-whisper`, language `en`).
+
+Request:
+
+```jsonc
+{ "audio_b64": "<base64 WAV>",          // OR "text": "pentz road is completely blocked" (exactly one)
+  "speak": true,                         // optional boolean, default true; false skips speech synthesis
+  "context": {                           // optional; everything in it is data, not instructions
+    "zone": "Paradise Zone 4",           // the phone's on-device zone name; optional, 120 chars
+    "role": "civilian",                  // civilian | responder; anything else is read as civilian
+    "guidance": {                        // the text the phone shows for its zone; null when none
+      "level": "evacuate_now", "headline": "Leave now via Pentz Road",
+      "spoken": "Leave now, 12 minutes to Exit south",
+      "reason": "Fire estimate within 3 km", "caveat": null, "source": "Approved by incident command" },
+    "pending": { "type": "report", "kind": "road_blocked", "severity": "full", "note": null },  // or null
+    "history": [ { "user": "is the road open", "agent": "I have no road report for your area." } ] } }
+```
+
+`guidance` is passed on as the string fields the phone sends (each trimmed to 300 characters, empty
+ones dropped); the server does not check it against the published guidance, so the model sees what
+the phone saw. `pending` is the proposal the phone is waiting on, in the action shape below, or
+`null`; an invalid one is read as `null`. `history` keeps the last 6 turns (`user` up to 500
+characters, `agent` up to 400).
+
+Response `200`:
+
+```jsonc
+{ "transcript": "pentz road is completely blocked",   // what was heard; the `text` sent, for text turns
+  "reply": "Report a fully blocked road here. Send it?",
+  "action": { "type": "report", "kind": "road_blocked", "severity": "full", "note": null },  // or null
+  "audio_b64": "<base64 24 kHz 16-bit mono WAV>",    // null when no audio was produced
+  "audio_format": "wav",                              // null with audio_b64
+  "tts": "cartesia",                                  // cartesia | failed | skipped
+  "model": "claude-opus-5-5",                         // null when nothing was heard
+  "evidence_class": "ai_interpretation" }
+```
+
+`action` is `null` or one of the following; `severity` is set only for `road_blocked` and
+`heavy_traffic`, `note` is at most 280 characters:
+
+| `type` | Fields | Phone behaviour |
+| --- | --- | --- |
+| `report` | `kind` (a [report kind](#report-kinds)), `severity` (`full`, `partial`, `slow` or `null`), `note` (string or `null`) | Asks, then submits a report with the phone's own location attached |
+| `check_in` | `status`: `out`, `need_help` or `staying` | Asks, then calls `POST incidents/{id}/checkins` |
+| `open` | `screen`: `home`, `map`, `route` (starts directions on the published route), `reports` or `plan` | Shows that screen |
+| `confirm`, `cancel` | none | Answers the `pending` proposal; the server returns them only when `pending` was sent |
+
+`report` and `check_in` are proposals. Nothing is sent until the person says yes, so the phone
+holds the proposal as `pending` and sends it back on the next turn; "yes" then comes back as
+`confirm`. A correction comes back as a new proposal. A model answer that does not validate
+becomes `action: null` and its spoken reply is kept. If the person says nothing audible, the reply
+is "Sorry, I didn't catch that. Try again.", `action` is `null` and `model` is `null`. A refusal by
+the model returns a fixed apology that includes the 911 line, with `action: null`.
+
+Help actions. When the action is a `help_needed` report or a `need_help` check-in, or a `confirm`
+of one, the server appends "If you are in danger, call 911." to the reply unless it already says
+911. This is a drill and the voice reply never says that anyone has been alerted.
+
+Speech. The reply is spoken by Cartesia `sonic-3.6` (the first 600 characters), as a 24 kHz WAV.
+`tts` is `skipped` when `speak` is false or `CARTESIA_API_KEY` is unset, and `failed` when Cartesia
+errored; both still return `200` with the text, and the phone then speaks the reply on the device.
+
+Errors, always `{ "error": code, "detail": "..." }`:
+
+| Status | `error` | When |
+| --- | --- | --- |
+| 400 | `invalid_voice` | Not JSON, both or neither of `audio_b64` and `text`, bad base64, not a WAV, a recording or `text` over its limit, or a malformed `context`/`speak` |
+| 401 | `unauthorized` | Missing or invalid bearer token |
+| 403 | `forbidden` | A responder token for another incident |
+| 404 | `not_found` | Unknown incident |
+| 413 | `too_large` | Body over 1,500,000 bytes |
+| 429 | `rate_limited` | More than 12 turns in a minute |
+| 429 | `upstream_rate_limited` | Anthropic is rate limiting |
+| 502 | `stt_failed` | Cartesia transcription failed (rejected, unreachable or a bad answer) |
+| 502 | `upstream_error`, `upstream_unreachable` | Anthropic returned an error status, or could not be reached |
+| 503 | `voice_unavailable` | `ANTHROPIC_API_KEY` is unset, or `CARTESIA_API_KEY` is unset for an audio turn, or a provider rejected its key |
+| 504 | `upstream_timeout` | Anthropic did not answer in 30 s (one retry) |
+
+What leaves the phone. For a spoken turn, the recording goes through this server to Cartesia for
+transcription. The transcript and the context (zone name, the guidance text above, the pending
+proposal, the last 6 turns) go to Anthropic, and the reply text goes to Cartesia for speech.
+Coordinates are not part of the request: the location of a report is attached on the phone when
+the report is sent, after the person agrees, and a `need_help` check-in carries its coordinates as
+described under [Check-ins](#check-ins). The server stores no audio, transcript, reply or context
+from a turn and logs only provider error codes. This document does not state how long Cartesia or
+Anthropic keep what they receive; that was not checked.
+
+Configuration (server environment, never `VITE_*`): `ANTHROPIC_API_KEY` and `CARTESIA_API_KEY`
+(both paid), optional `CARTESIA_VOICE_ID`, `CARTESIA_TTS_MODEL` (default `sonic-3.6`) and
+`VOICE_MODEL` (default `claude-opus-5-5`). See [`app/backend/README.md`](../app/backend/README.md).
+
 ## Endpoint summary (v2 additions)
 
 | Method and path | Role |
@@ -1395,12 +1509,13 @@ corroborate `road_passable` and `slow` states. Public items and road state add `
 | `POST incidents/{id}/impact` | controller ([Impact analysis](#impact-analysis)) |
 | `GET incidents/{id}/aar` | controller ([After-action report](#after-action-report)) |
 | `GET incidents/{id}/board` | any ([Task board](#task-board-passive-observations-and-information-priority-adr-0041)) |
+| `POST incidents/{id}/voice` | any ([Voice mode](#voice-mode)) |
 
 ## Location (v2)
 
 Unchanged for civilians: the zone is found on the device; position leaves the
 phone only inside a report, a prompts query, a route request, or a `need_help`
-check-in. Board questions (ADR 0041) are picked on the device; a board answer carries the
+check-in. Voice mode ([above](#voice-mode)) sends no position. Board questions (ADR 0041) are picked on the device; a board answer carries the
 question's place, and a passive report carries no position at all. Responders who turn on sharing send their latest position while the app
 is in the foreground; the server keeps only that one position, for 15 minutes.
 

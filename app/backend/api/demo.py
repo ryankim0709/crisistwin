@@ -1,8 +1,9 @@
 """Command demo (/demo): road routes around the game's fires and an AI incident commander.
 
-The /demo page plays a fire game on the Camp drill map (docs/adr/0047-command-demo.md). The
+The /demo page plays a fire game on the active incident's drill map (Camp by default; docs/adr/0047-command-demo.md). The
 browser owns the game: fire growth, crews, containment and household counts. This module
-adds two endpoints:
+adds two endpoints, each taking an optional ``?incident=`` (default Camp; Camp or the active
+incident, else 404):
 
 - ``POST /api/demo/routes``: for the posted fire areas, every drill zone's best route and up
   to ALTERNATIVES_MAX alternatives over the drill road graph, from the live planner's router
@@ -33,7 +34,7 @@ from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
 
 from livecore.drill import INCIDENT_ID as CAMP_INCIDENT_ID
-from livecore.geo import haversine_m, simplify_line, to_multipolygon
+from livecore.geo import centroid, haversine_m, simplify_line, to_multipolygon
 from livecore.planner import ALTERNATIVE_MIN_SEPARATION_M, ALTERNATIVES_MAX, SAFETY_BY_EXPOSURE
 from livecore.routing import alternative_routes, best_routes
 
@@ -50,6 +51,7 @@ from .dispatch import (
     canonical_json,
     stream_decision,
 )
+from .live import incidents
 from .live.common import ApiError
 from .live.drillcache import get_index
 
@@ -66,8 +68,8 @@ SENDABLE_FIRE_STATUS = "burning"
 
 SYSTEM_PROMPT = """\
 You are the AI incident commander in CrisisTwin's command demo: a wildfire GAME played on the \
-2018 Camp Fire drill map (real roads and census block-group zones; the fires, crews and \
-households are simulated). It is a planning experiment, not operational guidance.
+{incident_name} drill map (roads and census block-group zones from the drill; the fires, crews \
+and households are simulated). It is a planning experiment, not operational guidance.
 
 New fires keep starting: scheduled ignitions, spot fires thrown downwind by large fires, fires \
 from field reports and fires a person adds by hand. You command a small pool of firefighting \
@@ -120,6 +122,12 @@ order_evacuation(zone_id, destination_id): destination_id from that zone's optio
 once. Mention fire, crew and zone ids in the reasons. Be brief.
 """
 
+
+
+def system_prompt(incident_name: str) -> str:
+    return SYSTEM_PROMPT.replace("{incident_name}", incident_name)
+
+
 ISSUE_ORDERS_TOOL = {
     "name": "issue_orders",
     "description": (
@@ -167,6 +175,27 @@ class DemoDecideThrottle(AnonRateThrottle):
 
 def _error(status: int, code: str, detail: str) -> Response:
     return Response({"error": code, "detail": detail}, status=status, headers={"Cache-Control": "no-store"})
+
+
+def resolve_incident(request) -> str | Response:
+    """The ``?incident=`` of a demo request: absent is Camp; else Camp or the active incident
+    (``incidents.is_known``, the live API's rule). Anything else is a 404 response."""
+    raw = request.query_params.get("incident")
+    if raw is None or raw == "":
+        return CAMP_INCIDENT_ID
+    try:
+        known = incidents.is_known(raw)
+    except Exception:  # active record unreadable: only Camp is safe to serve
+        known = raw == CAMP_INCIDENT_ID
+    if not known:
+        return _error(404, "not_found", "Unknown incident.")
+    return raw
+
+
+def drill_center(drill) -> list[float]:
+    """[lon, lat] mean of the drill zones' centroids (WGS84)."""
+    pts = [centroid(z.geometry) for z in drill.zones]
+    return [sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts)]
 
 
 # ---- routes ----
@@ -246,7 +275,7 @@ def zone_routes(drill, rings: list[list[list[float]]]) -> list[dict]:
 @permission_classes([AllowAny])
 @throttle_classes([DemoRoutesThrottle])
 def demo_routes(request):
-    """Routes for every drill zone around the posted fire rings. Local demo endpoint."""
+    """Routes for every drill zone around the posted fire rings (``?incident=``, default Camp)."""
     if len(request.body) > MAX_ROUTES_BODY_BYTES:
         return _error(413, "too_large", f"Request body exceeds {MAX_ROUTES_BODY_BYTES} bytes.")
     try:
@@ -256,8 +285,11 @@ def demo_routes(request):
     rings = parse_fire_rings(data)
     if isinstance(rings, str):
         return _error(400, "invalid_request", rings)
+    incident = resolve_incident(request)
+    if isinstance(incident, Response):
+        return incident
     try:
-        index = get_index(CAMP_INCIDENT_ID)  # the board is the Camp drill map (0047-command-demo.md)
+        index = get_index(incident)
     except ApiError as exc:
         return _error(exc.status, exc.code, exc.detail)
     return Response(
@@ -387,6 +419,13 @@ def demo_decide(request):
     obs = validate_request(data)
     if isinstance(obs, str):
         return _error(400, "invalid_request", obs)
+    incident = resolve_incident(request)
+    if isinstance(incident, Response):
+        return incident
+    try:
+        incident_name = get_index(incident).drill.name
+    except ApiError as exc:
+        return _error(exc.status, exc.code, exc.detail)
 
     api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if not api_key:
@@ -404,7 +443,7 @@ def demo_decide(request):
             effort,
             build_user_message(obs),
             build_index(obs),
-            system=SYSTEM_PROMPT,
+            system=system_prompt(incident_name),
             tool=ISSUE_ORDERS_TOOL,
             validate=validate_orders,
         ),

@@ -93,7 +93,7 @@ struct GuidanceSheet: View {
     }
 
     private var headerContent: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             if let guidance, store.choiceWithdrawn(for: guidance.zoneId) {
                 Label("Your pick is no longer offered. Showing the recommended route.",
                       systemImage: "arrow.uturn.backward")
@@ -146,7 +146,7 @@ struct GuidanceSheet: View {
     /// The destination and ETA. With a choice on offer it opens the exit list in the drawer.
     @ViewBuilder private func destinationRow(_ guidance: ZoneGuidance) -> some View {
         let canChoose = !(store.publishedGuidance(for: guidance.zoneId)?.exitOptions ?? []).isEmpty
-        let row = HStack(spacing: 10) {
+        let row = HStack(spacing: 8) {
             Text(guidance.destination?.shortName ?? "Destination")
                 .foregroundStyle(Color.ctInk)
                 .multilineTextAlignment(.leading)
@@ -189,7 +189,7 @@ struct GuidanceSheet: View {
         Capsule()
             .fill(Color.ctInkSubtle.opacity(0.5))
             .frame(width: 36, height: 5)
-            .padding(.top, 9)
+            .padding(.top, 8)
             .frame(maxWidth: .infinity, minHeight: 30, alignment: .top)
             .contentShape(.rect)
             .onTapGesture { setExpanded(!expanded) }
@@ -247,7 +247,7 @@ struct GuidanceSheet: View {
                 section("Near you") {
                     TimelineView(.periodic(from: .now, by: 30)) { context in
                         let now = store.situation?.incidentNow(at: context.date) ?? context.date
-                        VStack(alignment: .leading, spacing: 14) {
+                        VStack(alignment: .leading, spacing: 12) {
                             ForEach(facts) { fact in factRow(fact, now: now) }
                         }
                     }
@@ -264,7 +264,7 @@ struct GuidanceSheet: View {
     }
 
     private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             Text(title)
                 .font(.ctTitle)
                 .foregroundStyle(Color.ctInk)
@@ -327,7 +327,7 @@ struct GuidanceSheet: View {
                 .foregroundStyle(fact.color)
                 .frame(width: 28)
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(fact.title)
                         .foregroundStyle(Color.ctInk)
@@ -388,7 +388,7 @@ struct GuidanceSheet: View {
                 .foregroundStyle(kind.symbolColor)
                 .frame(width: 28)
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text([kind.title, road].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: ", "))
                     .foregroundStyle(Color.ctInk)
                     .fixedSize(horizontal: false, vertical: true)

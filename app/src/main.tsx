@@ -8,7 +8,6 @@ import AppShell from "./AppShell";
 import FireSimulatorPage from "./fire/FireSimulatorPage";
 import SimulationStudioPage from "./studio/SimulationStudioPage";
 import DispatchAgentPage from "./dispatch/DispatchAgentPage";
-import EvacuationPage from "./pages/EvacuationPage";
 import ComparisonPage from "./pages/ComparisonPage";
 import IntelPage from "./pages/IntelPage";
 import StressTestsPage from "./pages/StressTestsPage";
@@ -18,7 +17,6 @@ import { SIMULATION_VIEW } from "./replay/loadBundle";
 import ReplayView from "./replay/ReplayView";
 import ReplayRoute from "./replay/IncidentPicker";
 import LiveCommandPage from "./live/LiveCommandPage";
-import DemoPage from "./demo/DemoPage";
 import AarPage from "./live/report/AarPage";
 
 // The workspace has no landing page; the root opens the fire spread model.
@@ -27,9 +25,12 @@ if (window.location.pathname === "/")
 // /incidents was merged into /intel; keep old links working.
 if (/^\/incidents\/*$/.test(window.location.pathname))
   window.history.replaceState(null, "", "/intel" + window.location.search + window.location.hash);
-// /scenarios was a planning scaffold; saved scenarios live in Simulation Studio.
-if (/^\/scenarios\/*$/.test(window.location.pathname))
+// /scenarios and /evacuation were planning scaffolds; both live in Simulation Studio now.
+if (/^\/(scenarios|evacuation)\/*$/.test(window.location.pathname))
   window.history.replaceState(null, "", "/simulation" + window.location.search + window.location.hash);
+// /demo (the simulated command board and AI commander) was merged into /live.
+if (/^\/demo\/*$/.test(window.location.pathname))
+  window.history.replaceState(null, "", "/live" + window.location.search + window.location.hash);
 const path = window.location.pathname.replace(/\/+$/, "") || "/";
 const page =
   path === "/fire" ? (
@@ -38,8 +39,6 @@ const page =
     <SimulationStudioPage />
   ) : path === "/dispatch" ? (
     <DispatchAgentPage />
-  ) : path === "/evacuation" ? (
-    <EvacuationPage />
   ) : path === "/comparison" ? (
     <ComparisonPage />
   ) : path === "/intel" ? (
@@ -52,8 +51,6 @@ const page =
     <ReplayView config={SIMULATION_VIEW} />
   ) : path === "/live" ? (
     <LiveCommandPage />
-  ) : path === "/demo" ? (
-    <DemoPage />
   ) : path === "/live/report" ? (
     <AarPage />
   ) : path === "/diorama" ? (

@@ -1,6 +1,6 @@
 # Workspace pages reference
 
-Moved from the root README. `/overview` and `/maps` no longer exist ([ADR 0015](adr/0015-remove-overview-and-maps.md)). `/scenarios` was removed and redirects to `/simulation` ([ADR 0028](adr/0028-remove-scenarios-page.md)).
+Moved from the root README. `/overview` and `/maps` no longer exist ([ADR 0015](adr/0015-remove-overview-and-maps.md)). `/scenarios` was removed and redirects to `/simulation` ([ADR 0028](adr/0028-remove-scenarios-page.md)); so does `/evacuation`, whose scaffold was superseded by the Studio's evacuation and closures. `/demo` (the command demo board and AI commander) was merged into `/live` and redirects there; `app/src/demo/` remains as the board engine (`useCommandBoard`) that `/live` runs.
 
 ## Workspace navigation
 
@@ -14,8 +14,6 @@ expands the navigation. The current page is marked with an arrow and
 content. Each page has its own URL and document title:
 
 - `/`: redirects to `/fire`.
-- `/evacuation`: synthetic population/vehicle inputs, departure strategy and
-  timings, shelter capacity, a sample road-closure toggle, and pending results.
 - `/comparison`: baseline/candidate strategy controls, a metric comparison
   layout, compatibility requirements, and an explanation empty state.
 - `/intel` (Incident intelligence): the historical incident library from the
@@ -33,7 +31,7 @@ they do not transfer between pages or modify map inputs. No scenario saving,
 traffic execution, comparison results, incident ingestion, or stress-test jobs
 are connected. Unsupported execution buttons are disabled with explanations.
 Sample inputs are synthetic user assumptions, and unavailable results use empty
-states or dashes rather than fabricated metrics. `/incidents` (formerly a scaffold with a synthetic review example) redirects to `/intel`, and `/scenarios` redirects to `/simulation`. Unknown paths show a not-found page. Trailing slashes are
+states or dashes rather than fabricated metrics. `/incidents` (formerly a scaffold with a synthetic review example) redirects to `/intel`, and `/scenarios` and `/evacuation` redirect to `/simulation`, and `/demo` redirects to `/live`. Unknown paths show a not-found page. Trailing slashes are
 accepted. Navigation uses normal links and the existing Vite/Nginx HTML fallback,
 so direct links, refresh, and browser history use document navigation. Temporary
 map state resets when leaving or reloading the page; no scenario is saved.

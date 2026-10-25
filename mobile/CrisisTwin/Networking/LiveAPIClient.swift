@@ -62,6 +62,15 @@ struct LiveAPIClient {
         return URLSession(configuration: configuration)
     }()
 
+    /// Voice turns upload audio and wait on transcription, a model and speech synthesis.
+    private static let voiceSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 45
+        configuration.timeoutIntervalForResource = 45
+        configuration.urlCache = nil
+        return URLSession(configuration: configuration)
+    }()
+
     /// The incident this server runs; no credential needed. `baseURL` may be a not-yet-saved server.
     func activeIncident() async throws -> ActiveIncident {
         try await get(ActiveIncident.self, ["active"])
@@ -150,6 +159,36 @@ struct LiveAPIClient {
                       token: token, body: request).checkin
     }
 
+    /// One voice turn. 401 throws `unauthorized`; any other non-2xx throws `VoiceTurnError` with the
+    /// server's `detail`, since voice failures are worded for the person at the microphone.
+    func voiceTurn(incidentId: String, request: VoiceTurnRequest, token: String) async throws -> VoiceTurnResponse {
+        let (data, status) = try await perform(
+            ["incidents", incidentId, "voice"], method: "POST", token: token, body: request,
+            session: Self.voiceSession)
+        switch status {
+        case 200..<300: break
+        case 401: throw LiveAPIError.unauthorized
+        default:
+            let detail = (try? LiveJSON.decoder.decode(ErrorBody.self, from: data))?.detail
+            throw VoiceTurnError(message: detail ?? Self.voiceFallback(status))
+        }
+        do {
+            return try LiveJSON.decoder.decode(VoiceTurnResponse.self, from: data)
+        } catch {
+            throw LiveAPIError.invalidResponse
+        }
+    }
+
+    private static func voiceFallback(_ status: Int) -> String {
+        switch status {
+        case 400: return "I couldn't use that audio. Try again."
+        case 429: return "Too many voice requests. Try again in a minute."
+        case 503: return "Voice mode isn't set up on this server."
+        case 504: return "Voice mode took too long. Try again."
+        default: return "Voice mode had a problem (HTTP \(status)). Try again."
+        }
+    }
+
     func updateLocation(_ update: ResponderLocationUpdate, token: String) async throws {
         _ = try await send(["me", "location"], method: "POST", token: token, body: update)
     }
@@ -232,7 +271,7 @@ struct LiveAPIClient {
 
     private func perform(
         _ path: [String], method: String, query: [URLQueryItem] = [], token: String? = nil,
-        body: (any Encodable)? = nil
+        body: (any Encodable)? = nil, session: URLSession = LiveAPIClient.session
     ) async throws -> (Data, Int) {
         var url = baseURL.appendingPathComponent("api").appendingPathComponent("live")
         for part in path { url.appendPathComponent(part) }
@@ -254,7 +293,7 @@ struct LiveAPIClient {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await Self.session.data(for: request)
+            (data, response) = try await session.data(for: request)
         } catch let error as URLError where error.code == .cancelled {
             throw CancellationError()
         } catch {

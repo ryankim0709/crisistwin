@@ -3,7 +3,8 @@ import SwiftUI
 /// Debug builds accept launch arguments so every tab and state can be screenshotted:
 /// - `-screen <name>`: a tab (`home`, `map`, `reports`, `plan`, `tasks`), or a screen opened on
 ///   top of one: `report` (the report sheet over Map), `newreport` (over Reports), and `family`,
-///   `meeting`, `broadcast`, `responder`, `about` (pushed in Plan). Anything else opens Home.
+///   `meeting`, `broadcast`, `responder`, `about` (pushed in Plan), and `voice` (the voice sheet
+///   over Home). Anything else opens Home.
 /// - `-join <code>`: joins as a responder on launch, so the Tasks tab appears.
 /// - `-start 1`: taps Start shortly after launch (Map, following).
 /// - `detail` opens the guidance detail over Home (`detailexit` with the exits listed),
@@ -64,6 +65,8 @@ final class AppRouter {
     var focus: LonLat?
     /// The guidance detail sheet (the Slab and the bottom accessory open it).
     var detail = false
+    /// The voice assistant sheet.
+    var voice = DebugLaunch.screen == "voice"
 
     /// Home's Start: Map, pitched, following the device.
     func start() {
@@ -73,6 +76,10 @@ final class AppRouter {
 
     func openDetail() {
         detail = true
+    }
+
+    func openVoice() {
+        voice = true
     }
 
     func openReport(_ prefill: ReportPrefill? = nil, from sourceID: String) {
@@ -136,6 +143,15 @@ struct RootView: View {
                     .navigationTransition(.zoom(sourceID: request.sourceID, in: reportZoom))
                     .environment(liveStore)
                     .environment(location)
+            }
+            .sheet(isPresented: $router.voice) {
+                VoiceView()
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
+                    .environment(liveStore)
+                    .environment(location)
+                    .environment(router)
+                    .tint(.primary)
             }
             .sheet(isPresented: $router.detail) {
                 GuidanceDetailView()

@@ -15,7 +15,7 @@ struct JoinResponderView: View {
     var body: some View {
         @Bindable var store = store
         ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 16) {
                 if store.role == .civilian {
                     VStack(alignment: .leading, spacing: 12) {
                         TextField("Invite code", text: $inviteCode)
@@ -44,7 +44,7 @@ struct JoinResponderView: View {
                         .disabled(joining || trimmedCode.isEmpty)
                         .opacity(trimmedCode.isEmpty ? 0.5 : 1)
                     }
-                    .ctPanel(padding: 14)
+                    .ctPanel()
                 } else {
                     Toggle(isOn: $store.shareResponderLocation) {
                         Label("Share my location", systemImage: "location")
@@ -52,7 +52,7 @@ struct JoinResponderView: View {
                     }
                     .tint(Color.ctBrand)
                     .frame(minHeight: 44)
-                    .ctPanel(padding: 14)
+                    .ctPanel()
                     Button("Leave responder mode", role: .destructive) { store.leaveResponderRole() }
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Color.ctDanger)
@@ -61,7 +61,7 @@ struct JoinResponderView: View {
                         .buttonStyle(.plain)
                 }
             }
-            .padding(16)
+            .ctScreenPadding()
         }
         .ctScreenBackground()
         .navigationTitle("Responder")
@@ -101,7 +101,7 @@ struct TasksView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 16) {
                     if let errorMessage {
                         Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
                             .font(.subheadline)
@@ -118,9 +118,7 @@ struct TasksView: View {
                         ForEach(store.tasks) { task in card(task) }
                     }
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-                .padding(.bottom, 24)
+                .ctScreenPadding()
             }
             .ctScreenBackground()
             .navigationTitle("Tasks")
@@ -211,7 +209,7 @@ struct TasksView: View {
             }
             .padding(.leading, 42)
         }
-        .ctPanel(padding: 14)
+        .ctPanel()
     }
 
     @ViewBuilder private func primaryAction(_ task: CheckTask, accepted: Bool) -> some View {
@@ -380,7 +378,7 @@ private struct AcceptedTag: View {
             .font(.caption.weight(.semibold))
             .foregroundStyle(Color.ctSuccess)
             .padding(.horizontal, 8)
-            .padding(.vertical, 3)
+            .padding(.vertical, 4)
             .background(Color.ctSuccessSoft, in: .capsule)
             .overlay(Capsule().strokeBorder(Color.ctSuccess.opacity(0.3)))
     }

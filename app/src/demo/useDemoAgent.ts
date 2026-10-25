@@ -5,11 +5,13 @@
  * at the board's minute when they arrive (the page's `apply`, which validates through
  * model.applyOrder). Disabling the autopilot or unmounting aborts the call so a late response
  * cannot apply. After a failed call the monitor waits ERROR_BACKOFF_MINUTES (or decideNow).
+ * Monitoring also pauses while the browser tab is hidden, so a forgotten tab does not keep
+ * calling Claude; it resumes when the tab is shown again.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { DecisionError, streamNdjson } from "../dispatch/agentClient";
-import { DECIDE_URL, type DecisionEvent, type DemoObservation, type DemoOrder } from "./contracts";
+import { DECIDE_URL, demoUrl, type DecisionEvent, type DemoObservation, type DemoOrder } from "./contracts";
 import type { Board, RouteOption, ZoneForecast } from "./model";
 import {
   MONITOR_EVERY_MINUTES,
@@ -45,6 +47,8 @@ export interface DemoAgentOptions {
   /** Mutated in place; `version` bumps on every change. */
   board: Board | null;
   version: number;
+  /** Incident the board runs on (sent as ?incident=). */
+  incidentId: string;
   routes: ReadonlyMap<string, RouteOption[]>;
   forecasts: Map<string, ZoneForecast>;
   /** Autopilot toggle. */
@@ -54,7 +58,8 @@ export interface DemoAgentOptions {
 }
 
 export interface DemoAgent {
-  status: "off" | "watching" | "thinking" | "error";
+  /** paused: monitoring is on but the tab is hidden. */
+  status: "off" | "paused" | "watching" | "thinking" | "error";
   /** Live streamed thinking summary for the current call (cleared per call). */
   thinking: string;
   /** Live streamed assessment text for the current call. */
@@ -67,8 +72,20 @@ export interface DemoAgent {
   decideNow: () => void;
 }
 
+function usePageVisible(): boolean {
+  const [visible, setVisible] = useState(() => document.visibilityState !== "hidden");
+  useEffect(() => {
+    const onChange = () => setVisible(document.visibilityState !== "hidden");
+    document.addEventListener("visibilitychange", onChange);
+    return () => document.removeEventListener("visibilitychange", onChange);
+  }, []);
+  return visible;
+}
+
 export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
-  const { board, version, enabled } = opts;
+  const { board, version } = opts;
+  const visible = usePageVisible();
+  const enabled = opts.enabled && visible;
   const [inFlight, setInFlight] = useState(false);
   const [thinking, setThinking] = useState("");
   const [streamText, setStreamText] = useState("");
@@ -108,7 +125,7 @@ export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
     let assessment = "";
 
     streamNdjson<FinalDecision>(
-      DECIDE_URL,
+      demoUrl(DECIDE_URL, optsRef.current.incidentId),
       { observation },
       (event) => event.type === "orders",
       (event) => {
@@ -173,7 +190,17 @@ export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
     backoffUntilRef.current = -Infinity;
   }, [board, cancel]);
 
-  // Turning the autopilot off cancels its call; unmounting cancels any call.
+  // A different incident: the log and error name the old drill's zones, fires and units.
+  const { incidentId } = opts;
+  useEffect(() => {
+    setDecisions([]);
+    setError(null);
+    setThinking("");
+    setStreamText("");
+    setLastWoke([]);
+  }, [incidentId]);
+
+  // Turning monitoring off (or hiding the tab) cancels its call; unmounting cancels any call.
   useEffect(() => {
     if (!enabled) cancel();
   }, [enabled, cancel]);
@@ -198,6 +225,14 @@ export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
     call(current, [MANUAL_REASON, ...reasons]);
   }, [call]);
 
-  const status: DemoAgent["status"] = inFlight ? "thinking" : !enabled ? "off" : error ? "error" : "watching";
+  const status: DemoAgent["status"] = inFlight
+    ? "thinking"
+    : !opts.enabled
+      ? "off"
+      : !visible
+        ? "paused"
+        : error
+          ? "error"
+          : "watching";
   return { status, thinking, streamText, decisions, error, lastWoke, decideNow };
 }

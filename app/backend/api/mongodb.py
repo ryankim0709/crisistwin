@@ -11,6 +11,10 @@ from pymongo.database import Database
 _client: MongoClient[dict[str, Any]] | None = None
 _client_lock = Lock()
 MONGODB_TIMEOUT_MS = 3000
+"""Fail fast when the cluster is unreachable (server selection and connect)."""
+MONGODB_OPERATION_TIMEOUT_MS = 15000
+"""Whole-operation budget: multi-MB reads (a drill document, a stored Studio landscape) take
+more than 3 s from Atlas."""
 
 
 def get_database() -> Database[dict[str, Any]]:
@@ -25,8 +29,8 @@ def get_database() -> Database[dict[str, Any]]:
                 tz_aware=True,
                 serverSelectionTimeoutMS=MONGODB_TIMEOUT_MS,
                 connectTimeoutMS=MONGODB_TIMEOUT_MS,
-                socketTimeoutMS=MONGODB_TIMEOUT_MS,
-                timeoutMS=MONGODB_TIMEOUT_MS,
+                socketTimeoutMS=MONGODB_OPERATION_TIMEOUT_MS,
+                timeoutMS=MONGODB_OPERATION_TIMEOUT_MS,
             )
             atexit.register(_client.close)
     return _client[settings.MONGODB_DATABASE]

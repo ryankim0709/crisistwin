@@ -29,7 +29,7 @@ struct PlanPillStyle: ButtonStyle {
                 .labelStyle(.titleAndIcon)
                 .lineLimit(1)
                 .foregroundStyle(kind == .primary ? Color.planOnBrand : Color.ctBrand)
-                .padding(.horizontal, 18)
+                .padding(.horizontal, 16)
                 .frame(maxWidth: fullWidth ? .infinity : nil, minHeight: 44)
                 .background(kind == .primary ? Color.ctBrand : Color.ctBrandSoft, in: Capsule())
                 .contentShape(Capsule())
@@ -187,7 +187,7 @@ struct MeetingPointCard: View {
                 }
             }
             .padding(.horizontal, 16)
-            .padding(.vertical, 14)
+            .padding(.vertical, 12)
 
             map
                 .frame(height: mapHeight)
@@ -466,7 +466,7 @@ struct FamilyCard: View {
                     }
                 }
 
-                HStack(spacing: 10) {
+                HStack(spacing: 8) {
                     if let me = family.members.first(where: \.isMe) {
                         statusMenu(me)
                     }
@@ -481,7 +481,7 @@ struct FamilyCard: View {
                     ProgressView()
                         .frame(maxWidth: .infinity, minHeight: 44)
                 } else {
-                    HStack(spacing: 10) {
+                    HStack(spacing: 8) {
                         Button { openFamily(.create) } label: {
                             Label("Create", systemImage: "person.3.fill")
                         }
@@ -579,7 +579,7 @@ struct TrustedContactsCard: View {
     private func contactRow(_ contact: TrustedContact) -> some View {
         HStack(spacing: 12) {
             PlanAvatar(name: contact.name)
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(contact.name)
                     .foregroundStyle(Color.ctInk)
                 Text(contact.phone ?? "No phone number")
