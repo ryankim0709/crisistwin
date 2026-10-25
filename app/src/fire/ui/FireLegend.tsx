@@ -1,23 +1,10 @@
 import { useId, useState, type ReactNode } from "react";
-import { BurnedGlyph, FireEdgeGlyph, StationBadgeGlyph, WindGlyph } from "../../diorama/ui/glyphs";
+import { FireEdgeGlyph, StationBadgeGlyph, WindGlyph } from "../../diorama/ui/glyphs";
 import { Button } from "../../ui";
 import { ARRIVAL_COLORS, CURRENT_PERIMETER_COLOR, FUEL_COLORS } from "../fuelPalette";
+import { fireStateLegendItems } from "./fireStateLegend";
 
 const SIZE = { width: 24, height: 16, viewBox: "0 0 24 16" } as const;
-
-function FlameGlyph() {
-  return (
-    <svg {...SIZE} aria-hidden="true">
-      <path
-        d="M12 14.5c-3.6 0-5.4-2.4-4.6-5.2.5-1.6 1.8-2.6 2.2-4.6 1.6 1 2.2 2.2 2.4 3.4.6-.6.9-1.5.8-2.6 2.2 1.8 3.4 3.6 3.2 5.2-.2 2.2-1.8 3.8-4 3.8z"
-        fill={"var(--ct-ember)"}
-        stroke={"var(--ct-fire)"}
-        strokeWidth="1"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
 
 function IgnitionGlyph() {
   return (
@@ -77,6 +64,11 @@ function familyCode(label: string): string {
   return /\(([A-Z]{2})\)/.exec(label)?.[1] ?? "NB";
 }
 
+const FIRE_STATE_ITEMS: { glyph: ReactNode; label: string }[] = fireStateLegendItems({
+  flameBands: true,
+  containment: false,
+}).map(({ glyph, label }) => ({ glyph, label: String(label) }));
+
 type FireLegendProps = {
   view: "diorama" | "satellite";
   windTowardDegrees: number;
@@ -104,9 +96,10 @@ export default function FireLegend({
           { glyph: <CurrentPerimeterGlyph />, label: "Current fire perimeter (pale line)" },
         ]
       : [
-          { glyph: <FlameGlyph />, label: "Burning (active front glows)" },
+          // The simulated run's legible states (flame band, crown, smouldering, burned out): the
+          // same rows as the command board's 3D legend. Never for observed or historical fires.
+          ...FIRE_STATE_ITEMS,
           { glyph: <FireEdgeGlyph />, label: "Fire front (current perimeter)" },
-          { glyph: <BurnedGlyph />, label: "Burned (charred ground)" },
           { glyph: <StationBadgeGlyph />, label: "Fire station" },
         ];
   items.push(
