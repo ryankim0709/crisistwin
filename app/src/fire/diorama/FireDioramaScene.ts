@@ -22,6 +22,8 @@ import { CoverLayer } from "./cover";
 import { FireSampler, FxLayer, burnWindowMinutes } from "./fx";
 import { FuelFamily } from "./fuelStyle";
 import { LabelLayer, type ClipOptions } from "./labels";
+import { fetchStations, type MapStation } from "../../maps/stations";
+import { StationMarkers } from "./stationMarkers";
 import { REFERENCE_PLACES } from "./places";
 import { ProjectedStreets, buildStreetMesh } from "./streets";
 import { FireCameraRig, type Framing } from "./rig";
@@ -147,6 +149,12 @@ export class FireDioramaScene implements FireDioramaSceneApi {
   private overlay = false;
   private clickMode: GroundClickMode = "origin";
   private overlayContent: BoardOverlay | null = null;
+  private readonly stationMarkers = new StationMarkers();
+  /** "auto" fetches the CAL FIRE stations around the board; "manual" draws what `setStations` was given. */
+  private stationMode: "auto" | "manual" = "auto";
+  private stationList: readonly MapStation[] = [];
+  private stationSuffix = "";
+  private stationAbort: AbortController | null = null;
   private coverHouses = true;
   private streets: BoardStreets | null = null;
   private reducedMotion: boolean;
@@ -264,6 +272,8 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     this.setFuelOverlay(this.overlay, true);
     this.applyCoverHouses();
     this.overlayContent?.attach(this.board.frame, this.board.group, this.labels);
+    if (this.stationMode === "auto") this.loadStations();
+    else this.rebuildStations();
     this.lastBuildMs = performance.now() - start;
   }
 
@@ -356,6 +366,48 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     if (this.board) overlay?.attach(this.board.frame, this.board.group, this.labels);
   }
 
+  /** Draw these stations (instead of fetching them). `null` returns to the automatic fetch. */
+  setStations(stations: readonly MapStation[] | null, suffix?: string): void {
+    if (this.disposed) return;
+    if (suffix !== undefined) this.stationSuffix = suffix;
+    this.stationMode = stations ? "manual" : "auto";
+    if (stations) {
+      this.stationAbort?.abort();
+      this.stationList = stations;
+      this.rebuildStations();
+    } else this.loadStations();
+  }
+
+  /** Text after each station name ("today's station" in the historical replay). */
+  setStationSuffix(suffix: string): void {
+    this.stationSuffix = suffix;
+    this.rebuildStations();
+  }
+
+  private rebuildStations(): void {
+    if (!this.board) return;
+    this.stationMarkers.build(this.board.frame, this.board.group, this.labels, this.stationList, this.stationSuffix);
+  }
+
+  private loadStations(): void {
+    this.stationAbort?.abort();
+    this.stationList = [];
+    this.rebuildStations();
+    const grid = this.board?.frame.grid;
+    if (this.stationMode !== "auto" || !grid) return;
+    const ac = new AbortController();
+    this.stationAbort = ac;
+    const [lon, lat] = mercatorToLonLat(
+      grid.originX + (this.board!.frame.cols * grid.cellSizeX) / 2,
+      grid.originY + (this.board!.frame.rows * grid.cellSizeY) / 2,
+    );
+    void fetchStations(lon, lat, ac.signal).then((list) => {
+      if (ac.signal.aborted || this.disposed || this.stationMode !== "auto") return;
+      this.stationList = list;
+      this.rebuildStations();
+    });
+  }
+
   setStreets(streets: BoardStreets | null): void {
     if (this.disposed || streets === this.streets) return;
     this.streets = streets;
@@ -420,6 +472,7 @@ export class FireDioramaScene implements FireDioramaSceneApi {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.stationAbort?.abort();
     this.renderer.setAnimationLoop(null);
     this.resizeObserver.disconnect();
     const canvas = this.renderer.domElement;
@@ -593,6 +646,7 @@ export class FireDioramaScene implements FireDioramaSceneApi {
   }
 
   private disposeBoard(board: Board) {
+    this.stationMarkers.dispose();
     this.overlayContent?.detach();
     for (const l of board.labels) this.labels.remove(l);
     board.group.removeFromParent();
@@ -785,6 +839,7 @@ export class FireDioramaScene implements FireDioramaSceneApi {
       fit: this.rig.fitDistance,
     });
     this.windLabel.obj.position.copy(this.fx.windAnchor);
+    this.stationMarkers.tick(d, this.rig.fitDistance);
     this.renderer.render(this.scene, this.rig.camera);
     this.labels.render(this.scene, this.rig.camera);
     this.labels.clip(

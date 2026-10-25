@@ -15,7 +15,7 @@ import type { DispatchArea } from "../dispatch/area";
 import { HomeStatus } from "../dispatch/engine";
 import type { FireExposure } from "../dispatch/fireExposure";
 import { DispatchOverlay, HOME_COLORS, cssColor } from "../dispatch/scene/DispatchOverlay";
-import { BurnedGlyph, FireEdgeGlyph, WindGlyph } from "../diorama/ui/glyphs";
+import { BurnedGlyph, FireEdgeGlyph, StationBadgeGlyph, WindGlyph } from "../diorama/ui/glyphs";
 import { useMediaQuery } from "../diorama/ui/format";
 import { FireDioramaScene } from "../fire/diorama/FireDioramaScene";
 import type {
@@ -468,6 +468,7 @@ export default function StudioDiorama(props: StudioDioramaProps) {
                       glyph: <FireEdgeGlyph />,
                     },
                     { label: "Burned ground", color: "var(--ct-burned)", glyph: <BurnedGlyph /> },
+                    { label: "Fire station", color: "#c8352a", glyph: <StationBadgeGlyph /> },
                     ...(streetArea
                       ? [
                           {

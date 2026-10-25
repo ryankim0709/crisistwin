@@ -7,7 +7,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMediaQuery } from "../diorama/ui/format";
-import { BurnedGlyph, FireEdgeGlyph } from "../diorama/ui/glyphs";
+import { BurnedGlyph, FireEdgeGlyph, StationBadgeGlyph } from "../diorama/ui/glyphs";
 import { FireDioramaScene } from "../fire/diorama/FireDioramaScene";
 import type { BoardStreets, DioramaRun, FireDioramaSceneApi } from "../fire/diorama/types";
 import { OBSERVED_ARRIVAL_LABEL } from "../historical/arrivalFromPerimeters";
@@ -98,6 +98,7 @@ export default function ReplayDiorama({
       setSceneError(errorMessage(cause, "WebGL could not be initialised."));
       return;
     }
+    created.setStationSuffix("today's station");
     created.setOverlay(overlay);
     setScene(created);
     return () => {
@@ -253,6 +254,7 @@ export default function ReplayDiorama({
           items={[
             { label: "Fire front", color: "var(--ct-fire)", glyph: <FireEdgeGlyph /> },
             { label: "Burned", color: "var(--ct-burned)", glyph: <BurnedGlyph /> },
+            { label: "Fire station (today's station)", color: "#c8352a", glyph: <StationBadgeGlyph /> },
             ...(hasZones
               ? [
                   { label: "Evacuation order", color: REPLAY_3D_COLORS.ordered, shape: "line" as const },
