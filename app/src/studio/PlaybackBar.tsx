@@ -42,6 +42,7 @@ function formatArea(value: number): string {
 export default function PlaybackBar(props: PlaybackBarProps) {
   const {
     enabled,
+    speedLocked = false,
     frameMinutes,
     frameIndex,
     horizonMinutes,
@@ -199,8 +200,12 @@ export default function PlaybackBar(props: PlaybackBarProps) {
           <Field label="Viewing speed">
             <select
               value={speed}
-              disabled={!enabled}
-              title="Changes how fast you watch the playback, not how fast the fire spreads."
+              disabled={speedLocked}
+              title={
+                speedLocked
+                  ? "The AI dispatcher session sets the pace; use Speed in the dispatch console."
+                  : "Changes how fast you watch the playback, not how fast the fire spreads."
+              }
               onChange={(event) => onSpeedChange(Number(event.target.value))}
             >
               {speedChoices.map((choice) => (

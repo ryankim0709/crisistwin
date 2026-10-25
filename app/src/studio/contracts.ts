@@ -310,6 +310,8 @@ export interface ConfigPanelProps {
 export interface PlaybackBarProps {
   /** Disabled when there is no playable result. */
   enabled: boolean;
+  /** The speed menu is locked while something else drives the clock (an AI dispatcher session). */
+  speedLocked?: boolean;
   frameMinutes: number[];
   frameIndex: number;
   horizonMinutes: number;

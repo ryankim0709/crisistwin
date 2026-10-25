@@ -72,6 +72,7 @@ import {
   parseScenario,
   solverInputChanged,
   validateScenario,
+  withFirefightingOff,
   withFirefightingOn,
 } from "./scenario";
 import { Button, LoadingState, Notice, Panel, SegmentedControl, type SegmentedOption } from "../ui";
@@ -198,7 +199,8 @@ export default function SimulationStudioPage({
   // on, the first-alarm package from real stations.
   const studioDefaults = !Aside;
   const freshScenario = useCallback(
-    (base: StudioScenario) => (studioDefaults ? withFirefightingOn(base) : base),
+    // Studio: the fire spreads unchecked. Dispatch agent (aside): fire departments respond.
+    (base: StudioScenario) => (studioDefaults ? withFirefightingOff(base) : withFirefightingOn(base)),
     [studioDefaults],
   );
   const [scenario, setScenario] = useState<StudioScenario>(() => {
@@ -214,7 +216,7 @@ export default function SimulationStudioPage({
     if (initialDraft.defaultsVersion < HORIZON_24H_DEFAULTS_VERSION && next.settings.horizonMinutes === 180) {
       next = { ...next, settings: { ...next.settings, horizonMinutes: DEFAULT_HORIZON_MINUTES } };
     }
-    return next;
+    return studioDefaults ? withFirefightingOff(next) : next;
   });
   const [savedAt, setSavedAt] = useState<Date | null>(initialDraft?.savedAt ?? null);
   const [saveFailed, setSaveFailed] = useState(false);
@@ -651,7 +653,7 @@ export default function SimulationStudioPage({
 
   const handleRun = useCallback(() => {
     setPlaying(false);
-    run(scenario, { id: boardId, grid: regionGrid }, planCrews());
+    run(studioDefaults ? withFirefightingOff(scenario) : scenario, { id: boardId, grid: regionGrid }, planCrews());
   }, [run, scenario, boardId, regionGrid, planCrews]);
   // "Random scenario" (studio/randomScenario.ts): one seed picks the region, date, ignitions,
   // weather source and natural variation. Stages: switch board, wait for it and its roads, build
@@ -723,7 +725,7 @@ export default function SimulationStudioPage({
       region: target,
       grid: regionGrid,
       area,
-      base: withFirefightingOn(emptyScenario()),
+      base: freshScenario(emptyScenario()),
       placement,
     }).then((built) => {
       setRandomJob(null);
@@ -1596,7 +1598,7 @@ export default function SimulationStudioPage({
               onLoadDemo={handleLoadDemo}
               liveDrill={<LiveDrillAction result={result} stale={stale} />}
               firefighting={
-                <FirefightingFields
+                studioDefaults ? undefined : <FirefightingFields
                   scenario={scenario}
                   onScenarioChange={applyScenario}
                   idPrefix="studio"
@@ -1642,6 +1644,7 @@ export default function SimulationStudioPage({
           {Aside && <div className="studio-aside-dock" ref={setAsideDock} />}
           <PlaybackBar
             enabled={!locked && result !== null && frameMinutes.length > 0}
+            speedLocked={locked}
             frameMinutes={frameMinutes}
             frameIndex={safeFrameIndex}
             horizonMinutes={playbackHorizon}

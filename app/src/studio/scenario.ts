@@ -84,6 +84,12 @@ export function emptyScenario(): StudioScenario {
  * The scenario with firefighting on (the Studio's default). Its units come from the facilities
  * on the map at run time (studio/mapResources.ts), not from the scenario.
  */
+/** Simulation Studio shows the fire spreading unchecked; firefighting runs on the Dispatch agent page. */
+export function withFirefightingOff(scenario: StudioScenario): StudioScenario {
+  if (!scenario.firefighting?.enabled) return scenario;
+  return { ...scenario, firefighting: { ...scenario.firefighting, enabled: false } };
+}
+
 export function withFirefightingOn(scenario: StudioScenario): StudioScenario {
   const settings = scenario.firefighting ?? DEFAULT_FIREFIGHTING;
   return { ...scenario, firefighting: { ...settings, enabled: true } };
