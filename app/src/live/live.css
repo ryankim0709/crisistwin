@@ -16,6 +16,7 @@
   --lc-plate-ready: #f5a623;
   --lc-plate-ready-ink: #1f1300;
   --lc-shelter: #2e7d5b;
+  --lc-no-truck: #8b1e3f;
 
   /* Fills the shell's content column, like the other full-height tools. */
   position: relative;
@@ -418,6 +419,13 @@
   height: 4px;
   border-radius: 2px;
   background: linear-gradient(90deg, var(--lc-route) 0 60%, var(--lc-hazard) 60% 100%);
+  box-shadow: 0 0 0 1px #fff;
+}
+/* Mirrors BOARD_COLOR.noTruck (demo/boardMapLayers.ts): a dashed road. */
+.lc-sw--noTruck {
+  width: 16px;
+  height: 3px;
+  background: repeating-linear-gradient(90deg, var(--lc-no-truck) 0 3px, transparent 3px 6px);
   box-shadow: 0 0 0 1px #fff;
 }
 /* Legend: what every mark on the map means. Light, like the basemap it sits on. */

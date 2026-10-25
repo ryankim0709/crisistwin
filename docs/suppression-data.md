@@ -126,7 +126,12 @@ it too ("How responders use it" below).
   (ASSUMPTION: no elevation per edge) and no R10 (no turning-circle data). Every camp-2018 road
   is then open to every class (R11): the class sets the speed only. Bundle edges that carry an
   OSM `tags` object get the full rules. `lanes` is not passed, because the bundle counts lanes
-  per direction and R11 reads OSM `lanes=1` as a single-lane road.
+  per direction and R11 reads OSM `lanes=1` as a single-lane road. The /live board's crew
+  routes (`POST /api/demo/crew_routes`) add each way's OSM tags (by way id) and a 3DEP grade per
+  road (`livecore/road_attrs.py`, `api/drill_road_attrs.py`), which closes 4% to 20% of Camp
+  drill road km depending on the class
+  ([command-demo-realism.md](command-demo-realism.md#road-access)); the live drill's responder
+  routes below still use the highway class alone.
 - **Responder routes** (`GET /api/live/tasks/{id}/route?class=`, default `engine_t3`): the same
   per-class routing; `reason: "no_access"` with the rule when only the class rules block
   ([live-reports.md](live-reports.md#responder-route-to-a-task)).

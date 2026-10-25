@@ -81,9 +81,12 @@ but not wired, unmarked = not started. Items are in dependency order within each
       (6,144). The TS code weights each category's reaction term by its area share, the Python does
       not; they agree for dead-only fuels. Check both against Andrews (2018), RMRS-GTR-371, and fix
       the wrong one.
-- [ ] Drill roads carry no surface, track, width, weight or grade tags, so access rules R01-R12
-      never block on Camp (every class can use every edge). Enrich the drill road graph with OSM
-      tags (as `dispatch_area.py` does) and grade from terrain.
+- [x] Drill roads enriched with OSM tags (by way id) and 3DEP grade for the /live board's crew
+      routing; units stop short of fires no allowed road reaches
+      ([command-demo-realism.md](command-demo-realism.md#road-access)). Left: grade for non-Camp
+      drills (no DEM wired), R10 dead ends, a walk-in/hose-lay time for `off_road_m_to_target` in
+      the response model, and the live drill's simulated responders (`responders_sim`) still route
+      on highway class only.
 - [ ] Time-varying wind in the Studio/`/fire` solver: it takes one wind per run, so "Historical"
       uses the peak hour (a worst-hour run, not a replay). Weather humidity and temperature are not
       yet fed into fuel moisture.

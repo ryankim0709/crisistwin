@@ -54,8 +54,8 @@ export const MAP_COLOR = {
   ink: "#0F1720",
 };
 
-export type LayerKey = "zones" | "fire" | "reports" | "roads" | "shelters" | "people";
-export const LAYER_KEYS: LayerKey[] = ["zones", "fire", "reports", "roads", "shelters", "people"];
+export type LayerKey = "zones" | "fire" | "reports" | "roads" | "shelters" | "people" | "noTruck";
+export const LAYER_KEYS: LayerKey[] = ["zones", "fire", "reports", "roads", "shelters", "people", "noTruck"];
 const LAYER_IDS: Record<LayerKey, string[]> = {
   zones: ["lc-zones-fill", "lc-zones-line", "lc-zone-labels"],
   fire: ["lc-fire-fill", "lc-fire-hatch", "lc-fire-casing", "lc-fire-line", "lc-fire-obs", "lc-fire-label"],
@@ -66,6 +66,8 @@ const LAYER_IDS: Record<LayerKey, string[]> = {
   shelters: ["lc-dest", "lc-dest-labels"],
   /** Drawn and toggled by the people layer itself (./people). */
   people: [],
+  /** Roads closed to the board's trucks: drawn by demo/boardMapLayers.ts (also shown for a selected unit). */
+  noTruck: [],
 };
 
 export interface MapFocus {
