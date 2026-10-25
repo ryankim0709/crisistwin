@@ -1,11 +1,16 @@
 import { Button, EvidenceTag, Eyebrow, Notice, Spinner, Tag } from "../ui";
-import type { DemoOrder } from "./contracts";
+import type { CommanderOrder } from "./contracts";
 import { simClock } from "./format";
 import type { useDemoAgent } from "./useDemoAgent";
 
 type Agent = ReturnType<typeof useDemoAgent>;
 
-function orderText(order: DemoOrder, name: (id: string) => string): string {
+function orderText(order: CommanderOrder, name: (id: string) => string): string {
+  if (order.type === "send_rescue") return `Send a responder to help request ${order.help_id}`;
+  if (order.type === "close_road") return `Close road ${order.road_id}`;
+  if (order.type === "reopen_road") return `Reopen road ${order.road_id}`;
+  if (order.type === "confirm_report") return `Confirm report ${order.report_id}`;
+  if (order.type === "dismiss_report") return `Dismiss report ${order.report_id}`;
   if (order.type === "send_crew") return `Send ${order.crew_id} to ${order.fire_id}`;
   if (order.type === "release_crew") return `Release ${order.crew_id}`;
   if (order.type === "order_resources") return `Order ${order.count} ${order.resource.replace(/_/g, " ")} for ${order.fire_id}`;
