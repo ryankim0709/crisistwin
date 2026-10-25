@@ -337,6 +337,7 @@ export default function StudioMap({
   onMapReady,
   legendExtra,
   legendMode = "full",
+  recenterKey,
 }: StudioMapProps) {
   const compactLegend = legendMode === "compact";
   const [legendOpen, setLegendOpen] = useState(!compactLegend);
@@ -349,6 +350,19 @@ export default function StudioMap({
   const locatorMarkers = useRef(new Map<string, Marker>());
   // Bumped when the camera moves so screen-size checks are recomputed.
   const [viewTick, setViewTick] = useState(0);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!recenterKey || !map || !ready) return;
+    const bounds = new LngLatBounds();
+    let any = false;
+    for (const { location, enabled } of ignitionsRef.current) {
+      if (!enabled) continue;
+      bounds.extend([location.longitude, location.latitude]);
+      any = true;
+    }
+    if (any) map.fitBounds(bounds, { padding: FIT_PADDING, maxZoom: FIT_MAX_ZOOM, duration: 0 });
+  }, [recenterKey, ready]);
 
   // Handlers and mode are read through refs so the map is created once.
   const clickRef = useRef(onMapClick);

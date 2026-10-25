@@ -2,9 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType }
 import type { GeoPoint } from "../fire/spread";
 import type { ScheduledFireRun } from "../fire/scheduledTypes";
 import { formatElapsed, cellAt } from "../fire/spread";
-import { carriesFire } from "../demo/fireField";
-import { fetchScenarioWind, weatherSeriesFromRecord } from "../fire/scenarioWeather";
-import { observedGustFactor } from "../fire/ui/NaturalVariationControl";
+import {
+  buildRandomScenario,
+  PLACEMENT_LABELS,
+  randomRegionId,
+  type IgnitionPlacement,
+} from "./randomScenario";
 import ConfigPanel from "./ConfigPanel";
 import LiveDrillAction from "./LiveDrillAction";
 import PlaybackBar from "./PlaybackBar";
@@ -549,10 +552,82 @@ export default function SimulationStudioPage({
     setPlaying(false);
     run(scenario, { id: regionId, grid: regionGrid }, planCrews());
   }, [run, scenario, regionId, regionGrid, planCrews]);
-  // "Random scenario": one seed rebuilds the same ignitions, season, wind and variation. The run
-  // starts once crew bases for the new first fire have loaded (or after a short wait).
+  // "Random scenario" (studio/randomScenario.ts): one seed picks the region, date, ignitions,
+  // weather source and natural variation. Stages: switch board, wait for it and its roads, build
+  // (weather fetch), apply, then run once the first fire's crew bases have loaded.
+  const [keepArea, setKeepArea] = useState(false);
+  const [placement, setPlacement] = useState<IgnitionPlacement>("away");
+  const [seedText, setSeedText] = useState("");
+  const [randomSummary, setRandomSummary] = useState<string | null>(null);
+  const [recenterKey, setRecenterKey] = useState<string | null>(null);
+  const [randomJob, setRandomJob] = useState<{
+    seed: number;
+    regionId: string;
+    building: boolean;
+    waited: boolean;
+  } | null>(null);
   const [pendingRun, setPendingRun] = useState<{ scenario: StudioScenario; waited: boolean } | null>(null);
-  const [randomBusy, setRandomBusy] = useState(false);
+
+  const handleRandomScenario = useCallback(() => {
+    if (randomJob) return;
+    const typed = Number(seedText.trim());
+    const seed =
+      seedText.trim() !== "" && Number.isInteger(typed) && typed > 0 && typed <= 2_147_483_647
+        ? typed
+        : Math.floor(Math.random() * 2_147_483_646) + 1;
+    setSeedText(String(seed));
+    const target = keepArea ? regionId : randomRegionId(seed);
+    setRandomSummary(null);
+    if (target !== regionId) selectRegion(target);
+    setRandomJob({ seed, regionId: target, building: false, waited: false });
+  }, [randomJob, seedText, keepArea, regionId, selectRegion]);
+
+  // Give up waiting for roads after a while; a board that failed to load ends the job.
+  useEffect(() => {
+    if (!randomJob || randomJob.building) return;
+    if (board.status === "error" && regionId === randomJob.regionId) {
+      setRandomJob(null);
+      showNotice("The region board did not load, so no random scenario was built.");
+      return;
+    }
+    const handle = window.setTimeout(() => setRandomJob((j) => (j ? { ...j, waited: true } : j)), 15000);
+    return () => window.clearTimeout(handle);
+  }, [randomJob, board.status, regionId, showNotice]);
+
+  useEffect(() => {
+    if (!randomJob || randomJob.building) return;
+    const target = findRegion(randomJob.regionId);
+    if (!target || regionId !== randomJob.regionId || !regionGrid) return;
+    // The board of the previous region stays in state for a render after the switch.
+    if (cellAt(regionGrid, { longitude: target.center.longitude, latitude: target.center.latitude }) < 0) return;
+    const roadsSettled = streets.status !== "idle" && streets.status !== "loading";
+    if (!roadsSettled && !randomJob.waited) return;
+    const job = randomJob;
+    setRandomJob({ ...job, building: true });
+    void buildRandomScenario({
+      seed: job.seed,
+      region: target,
+      grid: regionGrid,
+      area,
+      base: withFirefightingOn(emptyScenario()),
+      placement,
+    }).then((built) => {
+      setRandomJob(null);
+      if (!built) {
+        showNotice("No burnable ground found on this board.");
+        return;
+      }
+      setEvacuationOn(true);
+      applyScenario(built.scenario);
+      setSelectedId(null);
+      setRandomSummary(built.summary);
+      setRecenterKey(built.scenario.id);
+      showNotice("Random scenario built (simulated).");
+      setPendingRun({ scenario: built.scenario, waited: false });
+    });
+  }, [randomJob, regionId, regionGrid, streets.status, area, placement, applyScenario, showNotice]);
+
+  // Run once the first fire's crew bases are in (or after a short wait).
   useEffect(() => {
     if (!pendingRun) return;
     if (pendingRun.scenario === scenario && (suppressionBases || pendingRun.waited)) {
@@ -565,113 +640,51 @@ export default function SimulationStudioPage({
     return () => window.clearTimeout(handle);
   }, [pendingRun, scenario, suppressionBases, handleRun]);
 
-  const handleRandomScenario = useCallback(async () => {
-    if (!regionGrid || randomBusy) return;
-    setRandomBusy(true);
-    const seed = Math.floor(Math.random() * 2_147_483_647) + 1;
-    let state = seed >>> 0;
-    const rand = () => {
-      state = (state + 0x6d2b79f5) >>> 0;
-      let t = state;
-      t = Math.imul(t ^ (t >>> 15), t | 1);
-      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-    };
-    const grid = regionGrid;
-    // Assumption: most ignitions are human-caused near roads, so fires start on burnable ground
-    // within ~1 km of a road node when roads are loaded, else anywhere burnable on the board.
-    const pickCell = (): GeoPoint | null => {
-      const tryPoint = (lon: number, lat: number) => {
-        const cell = cellAt(grid, { longitude: lon, latitude: lat });
-        return cell >= 0 && carriesFire(grid.fuelCodes[cell]) ? { longitude: lon, latitude: lat } : null;
-      };
-      if (area && area.nodes.length > 0) {
-        for (let i = 0; i < 400; i++) {
-          const [lon, lat] = area.nodes[Math.floor(rand() * area.nodes.length)];
-          const r = 1000 * Math.sqrt(rand());
-          const a = rand() * 2 * Math.PI;
-          const p = tryPoint(
-            lon + (r * Math.sin(a)) / (111_320 * Math.cos((lat * Math.PI) / 180)),
-            lat + (r * Math.cos(a)) / 110_540,
-          );
-          if (p) return p;
-        }
-      }
-      for (let i = 0; i < 2000; i++) {
-        const cell = Math.floor(rand() * grid.width * grid.height);
-        if (!carriesFire(grid.fuelCodes[cell])) continue;
-        const col = cell % grid.width;
-        const row = (cell - col) / grid.width;
-        const x = grid.originX + col * grid.cellSizeX;
-        const y = grid.originY + row * grid.cellSizeY;
-        const lon = (x / 20037508.342789244) * 180;
-        const lat = (Math.atan(Math.exp((y / 20037508.342789244) * Math.PI)) * 360) / Math.PI - 90;
-        const p = tryPoint(lon, lat);
-        if (p) return p;
-      }
-      return null;
-    };
-    const count = rand() < 0.25 ? 2 : 1;
-    let ignitions: StudioScenario["ignitions"] = [];
-    for (let i = 0; i < count; i++) {
-      const point = pickCell();
-      if (point) ignitions = [...ignitions, createIgnition(ignitions, point, i === 0 ? 0 : 15 + Math.floor(rand() * 30))];
-    }
-    if (ignitions.length === 0) {
-      setRandomBusy(false);
-      showNotice("No burnable ground found on this board.");
-      return;
-    }
-    const month = 6 + Math.floor(rand() * 6); // Jun-Nov, assumed fire season
-    const percentile = [90, 95, 97][Math.floor(rand() * 3)];
-    const fallbackSpeed = 10 + Math.round(rand() * 25);
-    const fallbackFrom = Math.round(rand() * 8) * 45 % 360; // assumed: any compass octant
-    const base = withFirefightingOn(emptyScenario());
-    let next: StudioScenario = {
-      ...base,
-      name: `Random scenario, seed ${seed}`,
-      ignitions,
-      settings: {
-        ...base.settings,
-        windSpeedMph: fallbackSpeed,
-        windFromDegrees: fallbackFrom,
-        stochastic: { enabled: true, seed },
-      },
-    };
-    const first = ignitions[0].location;
-    let weatherNote = `assumed wind ${fallbackSpeed} mph (weather unavailable)`;
-    try {
-      const record = await fetchScenarioWind({
-        mode: "climatology_percentile",
-        lon: first.longitude,
-        lat: first.latitude,
-        startUtc: `2025-${String(month).padStart(2, "0")}-01T00:00:00Z`,
-        hours: Math.max(1, Math.ceil(base.settings.horizonMinutes / 60)),
-        percentile,
-      });
-      const converted = weatherSeriesFromRecord(record);
-      next = {
-        ...next,
-        weather: record,
-        settings: {
-          ...next.settings,
-          ...(converted ? { weatherSeries: converted.series } : {}),
-          stochastic: { enabled: true, seed, gustFactor: observedGustFactor(record) },
-          windSpeedMph: record.applied.speed20ftMph,
-          windFromDegrees: record.applied.fromDeg,
-        },
-      };
-      weatherNote = `climatology p${percentile}, month ${month}`;
-    } catch {
-      // The assumed wind above stands.
-    }
-    setRandomBusy(false);
-    setEvacuationOn(true);
-    applyScenario(next);
-    setSelectedId(null);
-    showNotice(`Random scenario (simulated), seed ${seed}: ${ignitions.length} fire(s), ${weatherNote}.`);
-    setPendingRun({ scenario: next, waited: false });
-  }, [regionGrid, randomBusy, area, applyScenario, showNotice]);
+  const randomControls = !Aside ? (
+    <div className="studio-random">
+      <div className="studio-row">
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={handleRandomScenario}
+          disabled={state.phase === "loading-landscape" || state.phase === "computing" || randomJob !== null}
+          title="Pick a seeded random place, date and fire, then run it. Simulated; ignition placement near roads is an assumption."
+        >
+          {randomJob ? "Building…" : "Random scenario"}
+        </Button>
+        <label className="studio-hint">
+          <input type="checkbox" checked={keepArea} onChange={(e) => setKeepArea(e.target.checked)} /> Keep this area
+        </label>
+      </div>
+      <label className="studio-hint">
+        Fire starts{" "}
+        <select
+          value={placement}
+          onChange={(e) => setPlacement(e.target.value as IgnitionPlacement)}
+          aria-label="Where random fires start"
+        >
+          {(Object.keys(PLACEMENT_LABELS) as IgnitionPlacement[]).map((key) => (
+            <option key={key} value={key}>
+              {PLACEMENT_LABELS[key]}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="studio-hint">
+        Seed{" "}
+        <input
+          type="text"
+          inputMode="numeric"
+          value={seedText}
+          placeholder="new each time"
+          onChange={(e) => setSeedText(e.target.value)}
+          aria-label="Random scenario seed"
+          style={{ width: "9em" }}
+        />
+      </label>
+      {randomSummary && <p className="studio-hint">{randomSummary} (simulated)</p>}
+    </div>
+  ) : null;
 
   const toggleClosure = useCallback(
     (edge: number) => {
@@ -1147,6 +1160,7 @@ export default function SimulationStudioPage({
               />
             ) : (
               <StudioMap
+                recenterKey={recenterKey}
                 ignitions={scenario.ignitions}
                 ignitionStates={ignitionStates}
                 selectedId={selectedId}
@@ -1294,7 +1308,7 @@ export default function SimulationStudioPage({
               onSelectIgnition={handleSelect}
               onScenarioChange={applyScenario}
               onRun={handleRun}
-              onRandomScenario={regionGrid && !running ? handleRandomScenario : undefined}
+              randomScenario={randomControls}
               onCancel={cancel}
               onClear={handleClear}
               onExport={handleExport}
