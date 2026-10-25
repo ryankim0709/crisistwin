@@ -492,7 +492,7 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
     [data, peopleData, participantsData],
   );
 
-  const routes = useDemoRoutes(board, version, incidentId);
+  const routes = useDemoRoutes(board, version, incidentId, data?.destinations);
   const routesRef = useRef(routes.routes);
   useEffect(() => {
     routesRef.current = routes.routes;

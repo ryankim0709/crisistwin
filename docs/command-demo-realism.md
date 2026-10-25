@@ -292,7 +292,10 @@ twin, so the board runs this small deterministic model on the same drill roads i
   count and name, so two zones on the same stretch list the same id. Ids are per answer; on each
   new answer the board moves every leaving zone onto the newest route to its destination
   (`setRoutes`), so loads keep matching. Option `destination_capacity_veh` is the bundle's
-  destination capacity (null for exits, unknown).
+  destination capacity (from the safe area's capacity since dispatch-area/6; null for a map-edge
+  exit). The request may carry `excluded_destination_ids`: destinations the board closed
+  (`demo/safeDestinations.ts`: the fire is forecast to reach the road node or within 300 m of it
+  within FORECAST_MINUTES, or vehicles sent reach `capacity_veh`); no route goes to them.
 - **Capacity** (veh/h, one direction, all lanes) is the bundle edge's `capacity_veh_per_hour`:
   lanes x an assumed per-lane capacity by OSM class. Camp: `sim/traffic.py` `_HIGHWAY_DEFAULTS`
   (motorway 2,000, trunk 1,800, primary 1,600, secondary 1,200, tertiary 1,000, unclassified
@@ -1040,7 +1043,8 @@ the AI agent see them (each console polls every 4 s).
   capacities; a zone redirected mid-evacuation moves its past departures to the new route in the
   queue history. Fire units read these households' zone flows (`board.traffic.zoneFlow`) but are slowed by a BPR factor
   at a fixed 1,700 veh/h per direction on route lines near leaving zones, not by the per-segment capacities or queues ([response-model.md](response-model.md)). Destination
-  capacity is reported, not enforced (exits have none). Carless households have no pickup model.
+  capacity is enforced only at routing: a full destination is left out of new routes
+  (`demo/safeDestinations.ts`); zones already going there keep going (map-edge exits have none). Carless households have no pickup model.
 - Fires that leave the board keep their burned ground in the field (no reburn) until restart.
 - `fire/rothermel.ts` used to give SH5 half the replay's head rate (85 against 173 m/min) by
   weighting each category's reaction term by its surface-area share. Since `SPREAD_MODEL`
