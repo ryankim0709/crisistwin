@@ -779,7 +779,11 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     const worldPerPixel =
       (2 * d * Math.tan(THREE.MathUtils.degToRad(this.rig.camera.fov / 2))) / this.height;
     this.fx.tick(time, reduced, worldPerPixel);
-    this.overlayContent?.tick(time, dt, reduced, this.width, this.height);
+    this.overlayContent?.tick(time, dt, reduced, this.width, this.height, {
+      camera: this.rig.camera,
+      distance: d,
+      fit: this.rig.fitDistance,
+    });
     this.windLabel.obj.position.copy(this.fx.windAnchor);
     this.renderer.render(this.scene, this.rig.camera);
     this.labels.render(this.scene, this.rig.camera);

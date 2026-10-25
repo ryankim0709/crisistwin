@@ -14,7 +14,7 @@ import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
 import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import type { BoardFrame } from "../../fire/diorama/board";
 import type { LabelLayer } from "../../fire/diorama/labels";
-import type { BoardOverlay } from "../../fire/diorama/types";
+import type { BoardOverlay, OverlayView } from "../../fire/diorama/types";
 import { lonLatToMercator } from "../../fire/landscape";
 import type { DispatchArea, LonLat } from "../area";
 import { HomeStatus, type DispatchEngine, type UnitState } from "../engine";
@@ -81,6 +81,7 @@ const LABEL_CSS = `
 .fdx-dsp-zone--cleared { background: rgba(232, 247, 238, 0.95); border-color: rgba(46, 159, 98, 0.55); color: #1d5e3c; }
 .fdx-dsp-zone--staged { background: rgba(232, 240, 252, 0.95); border-color: rgba(47, 111, 222, 0.5); color: #1d3f7a; }
 .fdx-dsp-zone--overrun { background: rgba(253, 236, 233, 0.95); border-color: rgba(216, 67, 47, 0.55); color: #8f2414; }
+.fdx-dsp-chip { font-size: 10px; font-weight: 750; padding: 1px 6px; }
 .fdx-dsp-zone--selected { outline: 2px solid #142b27; outline-offset: 1px; }
 .fdx-dsp-swatch { width: 9px; height: 9px; border-radius: 2px; flex: none; }
 .fdx-dsp-unit { font-size: 10.5px; padding: 2px 7px; background: #b3362b; color: #fff; border-color: #7f2018; }
@@ -97,6 +98,12 @@ type RouteLine = { key: string; base: Line2; flow: Line2; color: number };
 
 export class DispatchOverlay implements BoardOverlay {
   private frame: BoardFrame | null = null;
+  private lod: "far" | "mid" | "near" = "far";
+  private cands = new Map<CSS2DObject, { prio: number; el: HTMLElement; shown: boolean; near: boolean }>();
+  private overrunLabel: { obj: CSS2DObject; el: HTMLDivElement } | null = null;
+  private lastLayout = 0;
+  private lastDist = -1;
+  private readonly lastCam = new THREE.Vector3(NaN, 0, 0);
   private labels: LabelLayer | null = null;
   private group: THREE.Group | null = null;
   private style: HTMLStyleElement | null = null;
@@ -179,8 +186,9 @@ export class DispatchOverlay implements BoardOverlay {
     this.labels = null;
   }
 
-  tick(_time: number, dt: number, reducedMotion: boolean, width: number, height: number): void {
+  tick(_time: number, dt: number, reducedMotion: boolean, width: number, height: number, view?: OverlayView): void {
     if (!this.frame) return;
+    if (view) this.layoutLabels(view, width, height, performance.now());
     for (const material of this.lineMaterials) {
       material.resolution.set(width, height);
       if (material.dashed && !reducedMotion) material.dashOffset -= dt * FLOW_SPEED_UNITS_PER_S;
@@ -562,25 +570,53 @@ export class DispatchOverlay implements BoardOverlay {
     const { group, area, labels, frame } = this;
     if (!group || !area || !labels || !frame) return;
     const engine = this.engine;
-    const wanted = new Map<number, { cls: string; html: string }>();
+    const lod = this.lod;
+    const wanted = new Map<number, { cls: string; html: string; prio: number }>();
     // Plain-language labels: "Zone 12 · leaving by Exit 3 · 25 of 32 homes out".
-    const zoneName = (id: string) => `Zone ${id.replace(/^Z0*/, "") || id}`;
+    const zoneNum = (id: string) => id.replace(/^Z0*/, "") || id;
+    const zoneName = (id: string) => `Zone ${zoneNum(id)}`;
     const exitName = (id: string) => `Exit ${id.replace(/^X0*/, "") || id}`;
+    let overrun = 0;
+    let ox = 0;
+    let oz = 0;
     area.zones.forEach((zone, index) => {
       const state = engine?.zones[index];
       const selected = index === this.selectedZone;
       const sel = selected ? " fdx-dsp-zone--selected" : "";
-      // Status is shown by colour (homes, routes); a zone is labelled only when selected.
-      if (!selected) return;
+      if (state?.status === "overrun") {
+        const p = this.toWorld(zone.centroid);
+        if (p) {
+          overrun++;
+          ox += p.x;
+          oz += p.z;
+        }
+      }
+      // Far: no zone labels. Middle: short chips. Near: full sentences. Selected: always full.
+      if (!selected && lod === "far") return;
+      const chip = !selected && lod === "mid";
+      const status = state?.status === "cleared" ? "cleared" : state?.status === "overrun" ? "overrun"
+        : state?.status === "ordered" ? "ordered" : state?.stage ? "staged" : "";
+      if (chip) {
+        wanted.set(index, {
+          cls: `fdx-dsp-zone fdx-dsp-chip${status ? ` fdx-dsp-zone--${status}` : ""}`,
+          html: `Z${zoneNum(zone.id)}`,
+          prio: 1,
+        });
+        return;
+      }
+      if (!selected && !status) return;
+      const prio = selected ? 100 : status === "overrun" ? 3 : 2;
       if (state?.status === "cleared") {
         wanted.set(index, {
           cls: `fdx-dsp-zone fdx-dsp-zone--cleared${sel}`,
           html: `✓ <b>${zoneName(zone.id)}</b> · everyone who left is safe · ${state.safe} of ${zone.homes} homes`,
+          prio,
         });
       } else if (state?.status === "overrun") {
         wanted.set(index, {
           cls: `fdx-dsp-zone fdx-dsp-zone--overrun${sel}`,
           html: `✕ <b>${zoneName(zone.id)}</b> · fire reached it · ${state.safe} of ${zone.homes} homes got out`,
+          prio,
         });
       } else if (state?.status === "ordered") {
         const swatch = state.exitId
@@ -589,16 +625,19 @@ export class DispatchOverlay implements BoardOverlay {
         wanted.set(index, {
           cls: `fdx-dsp-zone fdx-dsp-zone--ordered${sel}`,
           html: `<b>${zoneName(zone.id)}</b> · leaving by ${swatch}${state.exitId ? exitName(state.exitId) : "an exit"}${state.routeBlocked ? " · ⚠ route blocked" : ""} · ${state.safe} of ${zone.homes} homes out`,
+          prio,
         });
       } else if (state?.stage && engine) {
         wanted.set(index, {
           cls: `fdx-dsp-zone fdx-dsp-zone--staged${sel}`,
           html: `⏳ <b>${zoneName(zone.id)}</b> · waiting to leave after ${zoneName(area.zones[state.stage.after].id)} (wave ${engine.waveOf(index) ?? "?"})`,
+          prio,
         });
       } else if (selected) {
         wanted.set(index, {
           cls: `fdx-dsp-zone${sel}`,
           html: `<b>${zoneName(zone.id)}</b> · no evacuation order yet · ${zone.homes} homes`,
+          prio,
         });
       }
     });
@@ -607,7 +646,7 @@ export class DispatchOverlay implements BoardOverlay {
       labels.remove(label.obj);
       this.zoneLabels.delete(index);
     }
-    for (const [index, { cls, html }] of wanted) {
+    for (const [index, { cls, html, prio }] of wanted) {
       const key = `${cls}|${html}`;
       let label = this.zoneLabels.get(index);
       if (!label) {
@@ -627,6 +666,66 @@ export class DispatchOverlay implements BoardOverlay {
         label.el.innerHTML = html;
         label.key = key;
       }
+      this.cands.set(label.obj, { prio, el: label.el, shown: true, near: lod === "near" && index !== this.selectedZone });
+    }
+    for (const [obj] of this.cands) if (!obj.parent) this.cands.delete(obj);
+    // Far view: all overrun zones as one label at their centroid.
+    if (lod === "far" && overrun > 0) {
+      if (!this.overrunLabel) {
+        this.overrunLabel = labels.add(group, "fdx-dsp-zone fdx-dsp-zone--overrun", new THREE.Vector3(), new THREE.Vector2(0.5, 1));
+      }
+      const o = this.overrunLabel;
+      const cx = ox / overrun;
+      const cz = oz / overrun;
+      o.obj.position.set(cx, frame.surfaceAt(cx, cz) + 3, cz);
+      o.obj.visible = true;
+      const text = `✕ Fire reached ${overrun} zone${overrun === 1 ? "" : "s"}`;
+      if (o.el.textContent !== text) o.el.textContent = text;
+      this.cands.set(o.obj, { prio: 5, el: o.el, shown: true, near: false });
+    } else if (this.overrunLabel) {
+      this.overrunLabel.obj.visible = false;
+      this.cands.delete(this.overrunLabel.obj);
+    }
+  }
+
+  /** Detail level from camera distance relative to the fit-the-board distance. */
+  private levelFor(view: OverlayView): "far" | "mid" | "near" {
+    const r = view.distance / Math.max(1, view.fit);
+    return r > 0.75 ? "far" : r > 0.35 ? "mid" : "near";
+  }
+
+  /** Throttled: switch detail level, then hide lower-priority labels that overlap a higher one. */
+  private layoutLabels(view: OverlayView, width: number, height: number, now: number) {
+    const moved =
+      view.camera.position.distanceToSquared(this.lastCam) > 1e-3 || Math.abs(view.distance - this.lastDist) > 1e-3;
+    if (!moved && now - this.lastLayout < 1000) return;
+    if (now - this.lastLayout < 150) return;
+    this.lastLayout = now;
+    this.lastCam.copy(view.camera.position);
+    this.lastDist = view.distance;
+    const lod = this.levelFor(view);
+    if (lod !== this.lod) {
+      this.lod = lod;
+      this.refresh();
+    }
+    const items: { obj: CSS2DObject; prio: number; w: number; h: number; x: number; y: number }[] = [];
+    for (const [obj, c] of this.cands) {
+      if (!obj.visible && !c.shown) continue;
+      obj.getWorldPosition(this.tmpPos);
+      this.tmpPos.project(view.camera);
+      const x = (this.tmpPos.x * 0.5 + 0.5) * width;
+      const y = (-this.tmpPos.y * 0.5 + 0.5) * height;
+      const onScreen = this.tmpPos.z < 1 && x > -20 && x < width + 20 && y > -20 && y < height + 20;
+      items.push({ obj, prio: c.prio, w: c.el.offsetWidth || 80, h: c.el.offsetHeight || 22, x, y: onScreen ? y : -1e6 });
+    }
+    items.sort((a, b) => b.prio - a.prio);
+    const placed: { l: number; t: number; r: number; b: number }[] = [];
+    for (const it of items) {
+      const box = { l: it.x - it.w / 2, r: it.x + it.w / 2, t: it.y - it.h, b: it.y };
+      const c = this.cands.get(it.obj)!;
+      const hide = it.y < -1e5 || placed.some((p) => box.l < p.r && box.r > p.l && box.t < p.b && box.b > p.t);
+      c.el.style.visibility = hide ? "hidden" : "";
+      if (!hide) placed.push(box);
     }
   }
 
@@ -649,22 +748,35 @@ export class DispatchOverlay implements BoardOverlay {
       }
     }
     const nf = (n: number) => Math.round(n).toLocaleString("en-US");
-    const busiest = new Set(
-      [...heading.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([id]) => id),
-    );
+    const lod = this.lod;
+    const leaving = new Map<string, number>();
+    engine?.zones.forEach((state) => {
+      if (state.exitId && state.status !== "cleared") leaving.set(state.exitId, (leaving.get(state.exitId) ?? 0) + 1);
+    });
+    const ranked = [...heading.entries()].sort((a, b) => b[1] - a[1]).map(([id]) => id);
+    const top = new Set(ranked.slice(0, lod === "far" ? 4 : 3));
     area.exits.forEach((exit, i) => {
       const marker = this.exitMarkers[i];
       if (!marker) return;
       const live = inUse.has(exit.id) || (arrived.get(exit.id) ?? 0) > 0;
-      marker.label.visible = live;
-      if (!live) return;
+      const isTop = top.has(exit.id);
+      // Far: only the busiest exits, one combined label each.
+      marker.label.visible = live && (lod !== "far" || isTop);
+      if (!marker.label.visible) {
+        this.cands.delete(marker.label);
+        return;
+      }
       const name = `Exit ${exit.id.replace(/^X0*/, "") || exit.id}`;
-      const top = busiest.has(exit.id);
-      const text = top
-        ? `${name} · ${nf(heading.get(exit.id) ?? 0)} heading here · ${nf(arrived.get(exit.id) ?? 0)} arrived`
-        : name;
+      const h = nf(heading.get(exit.id) ?? 0);
+      const text =
+        lod === "far"
+          ? `${name} · ${leaving.get(exit.id) ?? 0} zones leaving · ${h} people on the way · ${nf(arrived.get(exit.id) ?? 0)} arrived`
+          : lod === "mid"
+            ? `${name} · ${h} heading here`
+            : `${name} · ${h} heading here · ${nf(arrived.get(exit.id) ?? 0)} arrived`;
       if (marker.el.textContent !== text) marker.el.textContent = text;
-      marker.el.classList.toggle("fdx-dsp-exit--faded", !top);
+      marker.el.classList.toggle("fdx-dsp-exit--faded", lod === "near" && !isTop);
+      this.cands.set(marker.label, { prio: 50 - ranked.indexOf(exit.id) * 0.01, el: marker.el, shown: true, near: false });
     });
   }
 

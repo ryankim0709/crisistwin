@@ -54,11 +54,14 @@ export type FireDioramaOptions = { reducedMotion: boolean };
  * vehicles). `attach` runs every time the board is rebuilt; the overlay adds its objects
  * under `parent` and must remove and dispose them in `detach`.
  */
+/** Camera state handed to overlays each frame so labels can adapt their detail to the zoom. */
+export type OverlayView = { camera: THREE.PerspectiveCamera; distance: number; fit: number };
+
 export interface BoardOverlay {
   attach(frame: BoardFrame, parent: THREE.Group, labels: LabelLayer): void;
   detach(): void;
   /** Every animation frame: seconds since start (frozen under reduced motion), frame delta, viewport px. */
-  tick(time: number, dt: number, reducedMotion: boolean, width: number, height: number): void;
+  tick(time: number, dt: number, reducedMotion: boolean, width: number, height: number, view?: OverlayView): void;
 }
 
 /**
