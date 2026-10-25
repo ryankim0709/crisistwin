@@ -25,6 +25,8 @@ import type { PanelActions } from "./SelectedPanel";
 import { windAt } from "./realism";
 import { useCrewRoutes } from "./useCrewRoutes";
 import { useDemoAgent } from "./useDemoAgent";
+import { DEFAULT_BOARD_RADIUS_METERS, boardCellMetersFor } from "../fire/boardSize";
+import { useWorld } from "../world/useWorld";
 import { WEATHER_PRESETS, useDemoEnvironment, zonesCenter } from "./useDemoEnvironment";
 import { useDemoRoutes } from "./useDemoRoutes";
 import { useFireSolver } from "./useFireSolver";
@@ -95,7 +97,27 @@ export function useCommandBoard({ token, incidentId, data: commandData }: Comman
   const [weather, setWeather] = useState<string>(WEATHER_PRESETS[0].value);
   const preset = WEATHER_PRESETS.find((p) => p.value === weather) ?? WEATHER_PRESETS[0];
   const zoneCentre = useMemo(() => (data ? zonesCenter(data.zones) : null), [data]);
-  const env = useDemoEnvironment(preset, incidentId, zoneCentre);
+  // Board size is the shared world's region radius (docs/shared-world.md); the live board never goes below 15 km.
+  const { world, update: updateWorld } = useWorld();
+  const boardRadius = Math.max(DEFAULT_BOARD_RADIUS_METERS, world.region.radiusMeters);
+  const setBoardRadius = useCallback(
+    (radiusMeters: number) => {
+      void updateWorld({ region: { radiusMeters, cellMeters: boardCellMetersFor(radiusMeters) } }, "live");
+    },
+    [updateWorld],
+  );
+  const env = useDemoEnvironment(preset, incidentId, zoneCentre, boardRadius);
+
+  // A new board size loads a new landscape: rebuild the board on it once it arrives.
+  const lastRadius = useRef(boardRadius);
+  useEffect(() => {
+    if (lastRadius.current === boardRadius) return;
+    lastRadius.current = boardRadius;
+    boardRef.current = null;
+    setBoard(null);
+    setSelection(null);
+    bump();
+  }, [boardRadius, bump]);
 
   // A different drill: drop the board and selection; the effect below rebuilds it from the new data.
   useEffect(() => {
@@ -276,6 +298,10 @@ export function useCommandBoard({ token, incidentId, data: commandData }: Comman
     changeActivity,
     weather,
     setWeather,
+    boardRadius,
+    setBoardRadius,
+    /** True while the landscape for a new board size is still loading. */
+    boardLoading: env === null,
     windNow,
     // AI commander (monitoring is off by default; Claude is only called while it is on)
     autopilot,

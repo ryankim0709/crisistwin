@@ -74,8 +74,12 @@ import {
   findRegion,
   loadRegionId,
   saveRegionId,
+  STUDIO_BOARD_SIZES,
+  studioRadiusOverride,
   useRegionBoard,
 } from "./useRegionBoard";
+import { boardCellMetersFor } from "../fire/boardSize";
+import { useWorld } from "../world/useWorld";
 import { CALIFORNIA_REGIONS, REGION_AREAS } from "../fire/regions";
 import type { DioramaIgnition, DioramaRun, FireDioramaSceneApi } from "../fire/diorama/types";
 import "./studio.css";
@@ -281,8 +285,13 @@ export default function SimulationStudioPage({
   // Prebuilt region board (MongoDB), drawn in 3D before any run and used to solve fires on it.
   const [regionId, setRegionId] = useState(loadRegionId);
   const [boardAttempt, setBoardAttempt] = useState(0);
-  const { catalog, board } = useRegionBoard(regionId, boardAttempt);
+  // Area size lives in the shared world (region.radiusMeters), so other tabs follow it.
+  const { world, update: updateWorld } = useWorld();
+  const boardRadius = studioRadiusOverride(world.region.radiusMeters);
+  const { catalog, board } = useRegionBoard(regionId, boardAttempt, boardRadius);
   const region = findRegion(regionId);
+  // Identity of the board a run was solved on: a different size is a different board.
+  const boardId = boardRadius === null ? regionId : `${regionId}@${boardRadius / 1000}km`;
   const regionGrid = board.status === "ready" ? board.grid : null;
 
   // Playback. `clockRef` is the smooth simulation clock; React state only changes when the
@@ -469,6 +478,20 @@ export default function SimulationStudioPage({
     [regionId, cancel, markStale],
   );
 
+  const selectBoardSize = useCallback(
+    (radiusMeters: number | null) => {
+      if (radiusMeters === boardRadius) return;
+      setPlaying(false);
+      cancel();
+      markStale();
+      const radius = radiusMeters ?? findRegion(regionId)?.radiusMeters ?? 7000;
+      const cellMeters =
+        radiusMeters === null ? (findRegion(regionId)?.cellMeters ?? 30) : boardCellMetersFor(radius);
+      void updateWorld({ region: { radiusMeters: radius, cellMeters } }, "simulation");
+    },
+    [boardRadius, regionId, cancel, markStale, updateWorld],
+  );
+
   const handleLoadDemo = useCallback(() => {
     applyScenario(freshScenario(demoScenario()));
     setMode("select");
@@ -477,7 +500,7 @@ export default function SimulationStudioPage({
   }, [applyScenario, selectRegion, freshScenario]);
 
   // The 3D view shows the run only while the board it was started on is still selected.
-  const dioramaShowsRun = result !== null && result.boardId === regionId;
+  const dioramaShowsRun = result !== null && result.boardId === boardId;
   const dioramaLandscape = dioramaShowsRun ? result.landscape : regionGrid;
   // Without a board to click in 3D, placing a fire goes to the map.
   const dioramaHasBoard = dioramaLandscape !== null;
@@ -551,8 +574,8 @@ export default function SimulationStudioPage({
 
   const handleRun = useCallback(() => {
     setPlaying(false);
-    run(scenario, { id: regionId, grid: regionGrid }, planCrews());
-  }, [run, scenario, regionId, regionGrid, planCrews]);
+    run(scenario, { id: boardId, grid: regionGrid }, planCrews());
+  }, [run, scenario, boardId, regionGrid, planCrews]);
   // "Random scenario" (studio/randomScenario.ts): one seed picks the region, date, ignitions,
   // weather source and natural variation. Stages: switch board, wait for it and its roads, build
   // (weather fetch), apply, then run once the first fire's crew bases have loaded.
@@ -1081,17 +1104,48 @@ export default function SimulationStudioPage({
                         ))}
                       </select>
                     </div>
+                    <div className="studio-region__row">
+                      <label htmlFor="studio-area-size">Area size</label>
+                      <select
+                        id="studio-area-size"
+                        className="ui-input"
+                        value={boardRadius ?? ""}
+                        onChange={(event) =>
+                          selectBoardSize(event.target.value === "" ? null : Number(event.target.value))
+                        }
+                      >
+                        {STUDIO_BOARD_SIZES.map((size) => (
+                          <option key={size.label} value={size.radiusMeters ?? ""}>
+                            {size.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    {boardRadius !== null && (
+                      <p className="studio-region__note">
+                        {boardCellMetersFor(boardRadius)} m cells
+                        {boardCellMetersFor(boardRadius) > 30 ? " (coarser than the 30 m region boards)" : ""}.
+                        The first load of a new size can take a minute or more; later loads are cached.
+                        {boardRadius > 13_000
+                          ? " Evacuation and roads cover the centre of the board only."
+                          : ""}
+                      </p>
+                    )}
                     <p className="studio-region__note">
                       {board.status === "ready"
                         ? board.source === "stored"
                           ? "Stored board: LANDFIRE fuels and terrain, prebuilt."
                           : board.source === "cached"
                             ? "Cached board: LANDFIRE fuels and terrain from an earlier live load."
-                            : "Stored board unavailable; loaded live from LANDFIRE."
+                            : boardRadius !== null
+                              ? "LANDFIRE fuels and terrain at the chosen size."
+                              : "Stored board unavailable; loaded live from LANDFIRE."
                         : board.status === "loading"
                           ? board.storedUnavailable
                             ? "Stored board unavailable; loading live from LANDFIRE…"
-                            : "Loading stored board…"
+                            : boardRadius !== null
+                              ? "Loading the larger board from LANDFIRE…"
+                              : "Loading stored board…"
                           : "Board could not be loaded."}{" "}
                       Fires on the board run on it; others download their own area.
                     </p>
@@ -1100,7 +1154,9 @@ export default function SimulationStudioPage({
                 emptyState={
                   board.status === "loading" ? (
                     <LoadingState>
-                      {board.storedUnavailable
+                      {boardRadius !== null
+                        ? `Loading a ${boardRadius / 500} km wide board around ${region?.name ?? "the region"}. A new size takes a while the first time; later loads are cached.`
+                        : board.storedUnavailable
                         ? `Stored board unavailable; loading ${region?.name ?? "the region"} live from LANDFIRE. This takes longer…`
                         : `Loading the ${region?.name ?? "region"} board…`}
                     </LoadingState>
