@@ -13,9 +13,10 @@
  * POST /api/demo/decide: `{ observation: DemoObservation }` (at most 200 kB) ->
  * application/x-ndjson, `DecisionEvent` lines ending with one "orders" or "error" line, as
  * /api/dispatch/decide (dispatch/contracts.ts). Non-2xx responses carry `{ error, detail }`.
- * Orders: send_crew, release_crew, order_evacuation, and order_resources (fire_id, resource,
+ * Orders: send_crew, release_crew, order_evacuation, order_resources (fire_id, resource,
  * count; limits in response/runCards.ts ORDERABLE / MAX_ORDER_COUNT, mirrored in demo.py
- * ORDERABLE_RESOURCES). The response model behind the observation's `response` block and the
+ * ORDERABLE_RESOURCES), and the live drill actions of `LiveOrder` (ids from the observation's
+ * `incident_picture`, the live drill's bounded picture: incidentPicture.ts). The response model behind the observation's `response` block and the
  * per-fire tactic fields is docs/response-model.md.
  *
  * POST /api/demo/crew_routes: `CrewRoutesRequest` -> `CrewRoutesResponse`. Road travel for
@@ -343,6 +344,94 @@ export interface DemoObservation {
   };
   monitor: { woke_because: string[] };
   previous: { minute: number; summary: string; rejected: string[] } | null;
+  /** The live drill's incident picture (incidentPicture.ts); absent or null when the board runs without a live drill. */
+  incident_picture?: IncidentPicture | null;
+}
+
+/** Where a picture line came from. real_phone / simulated_phone: an app participant; phone: a phone not in the participants list. */
+export type PictureSource = "real_phone" | "simulated_phone" | "phone" | "historical_record" | "drill_fixture";
+
+export interface PictureMessage {
+  /** Live report id (confirm_report / dismiss_report take it). */
+  id: string;
+  kind: string;
+  /** Drill minutes before `as_of_drill`. */
+  min_ago: number | null;
+  line: string;
+  source: PictureSource;
+  evidence_class: string;
+  /** Live verification status (unverified, corroborated, responder_confirmed, confirmed). */
+  status: string;
+  road_id: string | null;
+  zone_id: string | null;
+}
+
+/**
+ * Bounded summary of the live drill (incidentPicture.ts, at most PICTURE_MAX_BYTES of JSON). Every
+ * number is a count of live API records; nothing is modelled here except `stuck` and
+ * `destinations_near_capacity`, which are traffic-twin estimates labelled simulated.
+ */
+export interface IncidentPicture {
+  /** Drill (replay) time of the command poll, ISO UTC. */
+  as_of_drill: string | null;
+  evidence: string;
+  /** 2018 911 / radio / rescue record (historical_record, de-identified) replayed to drill time. */
+  calls: {
+    window_min: number | null;
+    in_window: { "911": number; radio: number; rescue: number };
+    total_so_far: { "911": number; radio: number; rescue: number };
+    by_zone: { zone_id: string; "911": number; radio: number; rescue: number; help: number; fire: number }[];
+  };
+  reports_open: { total: number; by_kind: Record<string, number>; by_status: Record<string, number> };
+  /** Open need_help check-ins (type checkin, send_rescue target) and open help_needed reports. */
+  help_requests: {
+    open_total: number;
+    items: {
+      id: string;
+      type: "checkin" | "report";
+      zone_id: string | null;
+      min_ago: number | null;
+      source: PictureSource;
+      status: string;
+      assignee: string | null;
+      task_id: string | null;
+      note: string | null;
+    }[];
+  };
+  messages: PictureMessage[];
+  /** Open road_blocked / heavy_traffic reports, newest first. */
+  road_reports: {
+    id: string;
+    kind: "road_blocked" | "heavy_traffic";
+    road_id: string | null;
+    road_name: string | null;
+    severity: string | null;
+    status: string;
+    source: PictureSource;
+    min_ago: number | null;
+  }[];
+  /** Live road state (blocked / slow); decided_by "controller" = closed by a controller. */
+  roads: { road_id: string; name: string | null; status: string; decided_by: string | null; public: boolean; independent_parties: number; responder_reports: number }[];
+  /** Phone check-ins per zone. */
+  checkins: { zone_id: string; out: number; staying: number; need_help: number }[];
+  /** Traffic twin people snapshot (simulated estimates); null when not loaded. */
+  stuck: {
+    evidence_class: "simulated";
+    people_stuck: number;
+    by_reason: Record<string, number>;
+    groups: { id: string; people: number; vehicles: number; road: string | null; reason: string; wait_min: number }[];
+  } | null;
+  /** Destinations whose simulated arrivals are at or over 80% of their vehicle capacity. */
+  destinations_near_capacity: { id: string; name: string; kind: string; capacity_veh: number; arrived_veh: number; full: boolean; evidence_class: "simulated" }[];
+  /** Zones with no phone signal (comms_outage inject). */
+  comms: { no_signal_zone_ids: string[] };
+  /** App participants; null when not loaded. */
+  participants: {
+    real: { count: number; by_role: Record<string, number> };
+    simulated: { count: number; evidence_class: "simulated" };
+    real_phone_reports: (PictureMessage & { from_real_phone: true })[];
+    flagged: { id: string; kind: string; role: string; zone_id: string | null; status: string; flags: string[] }[];
+  } | null;
 }
 
 export type DemoOrder =
@@ -352,12 +441,32 @@ export type DemoOrder =
   /** Extended-attack order through mutual aid or the state system (response/runCards.ts ORDERABLE, MAX_ORDER_COUNT). */
   | { type: "order_resources"; fire_id: string; resource: Orderable; count: number; reason: string };
 
+/**
+ * Live drill actions on ids from `incident_picture` (demo.py normalize_live_order). The page runs
+ * them through the live API as the controller (liveOrders.ts): send_rescue -> the help request's
+ * assist task (POST checkins/{id}/help assign, or POST incidents/{id}/tasks kind assist for a
+ * help_needed report); close_road -> confirm the road's open road_blocked report; reopen_road ->
+ * resolve its blocked reports; confirm_report / dismiss_report -> POST reports/{id}/triage.
+ */
+export type LiveOrder =
+  | { type: "send_rescue"; help_id: string; reason: string }
+  | { type: "close_road"; road_id: string; reason: string }
+  | { type: "reopen_road"; road_id: string; reason: string }
+  | { type: "confirm_report"; report_id: string; reason: string }
+  | { type: "dismiss_report"; report_id: string; reason: string };
+
+export type CommanderOrder = DemoOrder | LiveOrder;
+
+export const LIVE_ORDER_TYPES: ReadonlySet<string> = new Set(["send_rescue", "close_road", "reopen_road", "confirm_report", "dismiss_report"]);
+
+export const isLiveOrder = (order: CommanderOrder): order is LiveOrder => LIVE_ORDER_TYPES.has(order.type);
+
 export type DecisionEvent =
   | { type: "thinking"; text: string }
   | { type: "text"; text: string }
   | {
       type: "orders";
-      orders: DemoOrder[];
+      orders: CommanderOrder[];
       rejected: { order: unknown; reason: string }[];
       summary: string;
       model: string;

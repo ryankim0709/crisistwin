@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LiveError, triageReport } from "../live/api";
 import { labelPoint } from "../live/format";
 import type { CommandResponse, LonLat } from "../live/types";
-import type { DemoOrder } from "./contracts";
+import type { DemoOrder, LiveOrder } from "./contracts";
+import { runLiveOrders } from "./liveOrders";
 import type { Selection } from "./DemoMap";
 import {
   activeFires,
@@ -31,13 +32,18 @@ import { WEATHER_PRESETS, useDemoEnvironment, zonesCenter } from "./useDemoEnvir
 import { useDemoRoutes } from "./useDemoRoutes";
 import { useFireSolver } from "./useFireSolver";
 import { useArrivalField } from "./useArrivalField";
+import { buildIncidentPicture } from "./incidentPicture";
+import { usePeople } from "../live/people";
+import { useParticipants } from "../appint/api";
 
 /**
  * The simulated command board (fires, firefighting units, households) and the AI incident
  * commander, as one hook, so /live can run it beside the live drill. The logic is copied from
  * DemoPage.tsx and kept in the same order and with the same names, so the two diff cleanly.
- * Everything here is simulated in the browser on the drill's zones and roads; only open
- * fire_seen field reports flow in from the live drill (and resolving a fire resolves them).
+ * Everything here is simulated in the browser on the drill's zones and roads; open fire_seen
+ * field reports flow in from the live drill as fires (and resolving a fire resolves them), and
+ * the commander also reads the drill's incident picture (incidentPicture.ts: calls, help
+ * requests, roads, check-ins, stuck people, participants), refreshed by the 3 s polls.
  */
 
 const TICK_MS = 200;
@@ -168,6 +174,17 @@ export function useCommandBoard({ token, incidentId, data: commandData }: Comman
     if (changed) bump();
   }, [data, board, bump]);
 
+  // The live incident picture for the commander: the command poll plus the people snapshot and the
+  // participants list (each polled every 3 s while a controller token is present).
+  const people = usePeople(data ? token : null, incidentId);
+  const participants = useParticipants(data ? token : null, incidentId);
+  const peopleData = people.data?.incident_id === incidentId ? people.data : null;
+  const participantsData = participants.data?.incident_id === incidentId ? participants.data : null;
+  const picture = useMemo(
+    () => (data ? buildIncidentPicture(data, peopleData, participantsData) : null),
+    [data, peopleData, participantsData],
+  );
+
   const routes = useDemoRoutes(board, version, incidentId);
   const routesRef = useRef(routes.routes);
   useEffect(() => {
@@ -188,9 +205,18 @@ export function useCommandBoard({ token, incidentId, data: commandData }: Comman
     },
     [bump],
   );
+  // The commander's live drill actions run as the controller on the newest command poll.
+  const liveRef = useRef({ token, incidentId, data });
+  useEffect(() => {
+    liveRef.current = { token, incidentId, data };
+  }, [token, incidentId, data]);
+  const applyLive = useCallback((orders: LiveOrder[]) => {
+    const { token: t, incidentId: id, data: d } = liveRef.current;
+    return runLiveOrders(t, id, d, orders, setNotice);
+  }, []);
   // Keeps the fire field solved in a worker; the board clock holds while a needed solve runs.
   const solver = useFireSolver(board, version, bump);
-  const agent = useDemoAgent({ board, version, incidentId, routes: routes.routes, forecasts, enabled: autopilot, apply });
+  const agent = useDemoAgent({ board, version, incidentId, routes: routes.routes, forecasts, enabled: autopilot, apply, applyLive, picture });
 
   // The simulation clock. Holds while Claude decides, if asked to.
   const clock = useRef({ running, speed, hold, thinking: false });
@@ -304,6 +330,7 @@ export function useCommandBoard({ token, incidentId, data: commandData }: Comman
     boardLoading: env === null,
     windNow,
     // AI commander (monitoring is off by default; Claude is only called while it is on)
+    picture,
     autopilot,
     setAutopilot,
     hold,

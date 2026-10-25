@@ -8,10 +8,11 @@
  *   MONITOR_EVERY_MINUTES simulated minutes and calls the agent only when this returns a
  *   reason. It compares the board with a MonitorMemory taken when the agent last decided, so a
  *   standing situation the agent has already seen does not wake it again (until the periodic
- *   review).
+ *   review). The live drill's picture has its own wake reasons (incidentPicture.ts
+ *   pictureWakeReasons: new help request, road-blocked report, real-phone report, confirmation).
  */
 
-import type { CrewObservation, DemoObservation, FireObservation, ZoneObservation } from "./contracts";
+import type { CrewObservation, DemoObservation, FireObservation, IncidentPicture, ZoneObservation } from "./contracts";
 import {
   ACTIVITY,
   DEPARTURE_SPREAD_MINUTES,
@@ -158,6 +159,8 @@ export function buildObservation(
   forecasts: Map<string, ZoneForecast>,
   wokeBecause: string[],
   previous: DemoObservation["previous"],
+  /** The live drill's incident picture (incidentPicture.ts), when the board runs beside one. */
+  picture: IncidentPicture | null = null,
 ): DemoObservation {
   const minute = board.minute;
   // The commander sees only fires the dispatch centre knows about (response/report.ts).
@@ -306,6 +309,7 @@ export function buildObservation(
     response: responseObservation(board),
     monitor: { woke_because: wokeBecause },
     previous,
+    incident_picture: picture,
   };
 }
 
