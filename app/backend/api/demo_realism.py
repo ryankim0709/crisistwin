@@ -430,6 +430,7 @@ def crew_route(drill, fire, request: dict, offboard_kmh: float, access=None) -> 
     stop = drill.roads.node_coords[stop_node] if stop_node else None
     return {
         **out,
+        "travel_breakdown": _travel_breakdown(drill, access, result.route.edge_ids),
         "drive_min": round(offboard_min + result.travel_time_s / 60, 1),
         "distance_m": round(offboard_m * OFFBOARD_CIRCUITY + result.route.distance_m),
         "basis": "road_offboard" if offboard_m > 0 else "road",
@@ -440,6 +441,27 @@ def crew_route(drill, fire, request: dict, offboard_kmh: float, access=None) -> 
         "off_road_m_to_target": round(off_road_m) if off_road_m is not None else None,
         "unrestricted_drive_min": round(offboard_min + free_s / 60, 1) if free_s is not None and status == "detour" else None,
     }
+
+
+def _travel_breakdown(drill, access, edge_ids) -> dict | None:
+    """Road-leg minutes by cause (livecore.apparatus_travel; congestion not included) and the car
+    time at the OSM/posted edge speeds on the same roads, for comparison."""
+    if access is None:
+        return None
+    parts = {"free_flow_min": 0.0, "curve_min": 0.0, "grade_min": 0.0, "junction_min": 0.0, "car_posted_speed_min": 0.0}
+    stops = 0
+    for eid in edge_ids:
+        edge = drill.roads.edges[eid]
+        parts["car_posted_speed_min"] += edge.length_m / (edge.speed_kph / 3.6) / 60
+        t = access.edges[eid].travel if eid in access.edges else None
+        if t is None:
+            continue
+        parts["free_flow_min"] += t.free_s / 60
+        parts["curve_min"] += t.curve_s / 60
+        parts["grade_min"] += t.grade_s / 60
+        parts["junction_min"] += t.junction_s / 60
+        stops += t.junction == "stop"
+    return {**{k: round(v, 2) for k, v in parts.items()}, "junction_stops": stops}
 
 
 @api_view(["POST"])

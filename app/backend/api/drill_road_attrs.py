@@ -61,7 +61,7 @@ RETRY_AFTER_FAILURE_S = 600
 _lock = threading.Lock()
 _attrs: dict[str, tuple[object, RoadAttrs]] = {}
 """incident -> (drill, attrs); the drill object identifies the cached graph."""
-_grades: dict[str, tuple[object, dict[str, float], str]] = {}
+_grades: dict[str, tuple[object, dict[str, float], str, object]] = {}
 _building: set[str] = set()
 _failed_at: dict[str, float] = {}
 
@@ -173,14 +173,25 @@ def _grades_for(incident: str, drill) -> tuple[dict[str, float], str]:
         hit = _grades.get(incident)
         if hit is not None and hit[0] is drill:
             return hit[1], hit[2]
+    elevation = None
     if incident == CAMP_INCIDENT_ID:
         elevation, source = _camp_elevation()
         grades = segment_grades(drill, elevation) if elevation is not None else {}
     else:
         grades, source = {}, "no grade: no DEM is wired for this incident; 0% assumed"
     with _lock:
-        _grades[incident] = (drill, grades, source)
+        _grades[incident] = (drill, grades, source, elevation)
     return grades, source
+
+
+def _elevation_for(incident: str):
+    with _lock:
+        hit = _grades.get(incident)
+    return hit[3] if hit is not None else None
+
+
+def drill_incident(drill) -> str:
+    return str(getattr(drill, "incident_id", "") or "")
 
 
 def _compose(drill, tags_doc: dict | None, grades: dict[str, float], grade_source: str, way_count: int) -> RoadAttrs:
@@ -201,7 +212,7 @@ def _compose(drill, tags_doc: dict | None, grades: dict[str, float], grade_sourc
                       "no OSM way ids on this drill's roads; tags from the drill package where present")
         status = "grade_only" if grades else "none"
     basis = f"road access R01-R12: {tag_source}; {grade_source}; dead-end rule R10 not applied"
-    return RoadAttrs(tags=tags, grade_pct=grades, basis=basis, status=status)
+    return RoadAttrs(tags=tags, grade_pct=grades, basis=basis, status=status, elevation=_elevation_for(drill_incident(drill)))
 
 
 def _build_tags(incident: str, drill, key: str, way_ids: list[int]) -> None:
