@@ -31,9 +31,9 @@ import FirefightingResults, { type FireShown } from "./FirefightingResults";
 import type { FirelineView } from "./FirelineOverlay";
 import { useMapFireline } from "./useMapFireline";
 import { useMapCrews } from "./useMapCrews";
-import { planCrewDispatch } from "./crewDispatch";
-import { crewHandoff, evacuationCrews } from "./crewHandoff";
-import { DEFAULT_FIREFIGHTING, ignitionReportDelayMinutes, startMsOf } from "./firefighting";
+import { planIncidents } from "./incidents";
+import { crewHandoff, evacuationCrews, evacuationTaskFromMinute } from "./crewHandoff";
+import { DEFAULT_FIREFIGHTING, startMsOf } from "./firefighting";
 import StudioPeople from "./StudioPeople";
 import {
   behaviorLabel,
@@ -41,7 +41,7 @@ import {
   type HouseholdBehaviorMode,
 } from "../population/householdBehavior";
 import { useSuppressionBases } from "./suppressionBases";
-import { mapResources, planMapDispatch } from "./mapResources";
+import { mapResources } from "./mapResources";
 import { useMapStations } from "./useMapStations";
 import type { RunDispatch } from "./useStudioRun";
 import { CREW_COLORS, FIRELINE_COLORS, firelineCss } from "./firelinePalette";
@@ -306,17 +306,6 @@ export default function SimulationStudioPage({
       ),
     [result],
   );
-  const handoff = useMemo(
-    () =>
-      result?.crewDispatch && firefighting?.initialAttack
-        ? crewHandoff(result.crewDispatch, firefighting.initialAttack.estimate, fireNames)
-        : null,
-    [result, firefighting, fireNames],
-  );
-  const shownHandoff =
-    handoff && firefighting?.initialAttack && shownRun === firefighting.initialAttack.run
-      ? handoff
-      : null;
 
   // Prebuilt region board (MongoDB), drawn in 3D before any run and used to solve fires on it.
   const [regionId, setRegionId] = useState(loadRegionId);
@@ -636,37 +625,26 @@ export default function SimulationStudioPage({
         resources: {},
       };
     }
-    const fire: [number, number] = [first.location.longitude, first.location.latitude];
-    const plan = planMapDispatch(fromMap, area, fire, scenario.settings, dioramaLandscape);
-    // Dispatched after the call-in and processing delay (response/report.ts), not at ignition.
-    const { dispatch, note } =
-      plan.units.length > 0
-        ? planCrewDispatch(
-            area,
-            fire,
-            first.startMinute + ignitionReportDelayMinutes(dioramaLandscape, first.location, first.startMinute, settings),
-            plan.units,
-            (edge) => closedEdges.has(edge),
-            dioramaLandscape,
-            suppressionBases,
-          )
-        : { dispatch: null, note: null };
-    dispatch?.notes.unshift(plan.text);
-    return {
-      dispatch,
-      note: note
-        ? `${note} Crews were assumed on site after ${settings.responseMinutes} min.`
-        : plan.units.length === 0
-          ? plan.text
-          : null,
-      airBases: plan.airBases,
-      resources: plan.counts,
-    };
+    // One incident per fire, each dispatched after its own call-in delay (studio/incidents.ts).
+    return planIncidents({
+      resources: fromMap,
+      area,
+      ignitions: scenario.ignitions
+        .filter((ignition) => ignition.enabled)
+        .map((ignition) => ({ id: ignition.id, name: ignition.name || ignition.id, location: ignition.location, startMinute: ignition.startMinute })),
+      settings: scenario.settings,
+      firefighting: settings,
+      grid: dioramaLandscape,
+      blocked: (edge) => closedEdges.has(edge),
+      bases: suppressionBases,
+    });
   }, [scenario, area, closedEdges, dioramaLandscape, suppressionBases, fromMap]);
 
   const handleRun = useCallback(() => {
     setPlaying(false);
-    run(studioDefaults ? withFirefightingOff(scenario) : scenario, { id: boardId, grid: regionGrid }, planCrews());
+    // Studio (firefighting off) sends no crews: plan them only for the scenario actually run.
+    const toRun = studioDefaults ? withFirefightingOff(scenario) : scenario;
+    run(toRun, { id: boardId, grid: regionGrid }, toRun.firefighting?.enabled ? planCrews() : undefined);
   }, [run, scenario, boardId, regionGrid, planCrews]);
   // "Random scenario" (studio/randomScenario.ts): one seed picks the region, date, ignitions,
   // weather source and natural variation. Stages: switch board, wait for it and its roads, build
@@ -935,6 +913,22 @@ export default function SimulationStudioPage({
         : null,
     [area, dioramaShowsRun, result, shownRun],
   );
+  // Units leave a fire they cannot hold for the evacuation only when there is an evacuation task,
+  // and withdraw when the fire reaches where they parked (studio/crewHandoff.ts). Only with the
+  // direct-attack fire shown: on the line plan every unit keeps building line, so none is counted
+  // twice.
+  const handoff = useMemo(
+    () =>
+      result?.crewDispatch && firefighting?.initialAttack && shownRun === firefighting.initialAttack.run
+        ? crewHandoff(result.crewDispatch, firefighting.initialAttack.estimate, fireNames, {
+            evacuationFromMinute: evacuationTaskFromMinute(orderMinute, exposure),
+            grid: result.landscape,
+            arrival: shownRun.arrivalMinutes,
+          })
+        : null,
+    [result, firefighting, fireNames, shownRun, orderMinute, exposure],
+  );
+  const shownHandoff = handoff;
   // Which part of the board has roads and evacuation, and what the fires do outside it.
   const coverage = useMemo(
     () =>

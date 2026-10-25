@@ -50,7 +50,9 @@ import {
 import type { CrewArrival } from "./firefighting";
 import { RULE_TEXT, edgeAccessTable, type EdgeAccess, type RoadRule } from "./roadAccess";
 import { CREW_TYPES, STATION_TYPES, type SuppressionBases } from "./suppressionBases";
-import { DOZER_MAX_WALK_MINUTES, HAND_CREW_MAX_HIKE_MINUTES, formatDuration } from "../response/reach";
+import { DOZER_MAX_WALK_MINUTES, ENGINE_CREW_MAX_HIKE_M, HAND_CREW_MAX_HIKE_MINUTES, formatDuration } from "../response/reach";
+import { aviationWindows } from "./aircraft";
+import { nextInWindow } from "./daylight";
 import { engineTurnoutMinutes } from "../response/fleet";
 
 /** NFPA 1710 turnout time for fire calls: 80 s (data: response_times.turnout_s, unverified). */
@@ -128,6 +130,8 @@ export interface CrewTrip {
   path: LonLat[];
   /** Minutes after departure at each path vertex (same length as `path`). */
   pathMinutes: number[];
+  /** Run source id of the incident (fire) the unit was sent to (studio/incidents.ts); absent on older plans. */
+  sourceId?: string;
 }
 
 export interface NoAccess {
@@ -152,9 +156,38 @@ export interface CrewDispatch {
   notes: string[];
   /** Helitack crew from the nearest helitack base (reported, not a line builder), or null. */
   helitack: HelitackPlan | null;
+  /**
+   * One incident per ignition (studio/incidents.ts), in report order. When present, `trips` holds
+   * every incident's units (each tagged with `sourceId`), `reportMinute`, `fire`, `roadPoint` and
+   * `helitack` are the first-reported incident's.
+   */
+  incidents?: IncidentDispatch[];
+}
+
+/** One fire's dispatch: its own report delay, run card and units (studio/incidents.ts). */
+export interface IncidentDispatch {
+  sourceId: string;
+  name: string;
+  fire: LonLat;
+  ignitionMinute: number;
+  /** Minute the dispatch centre has it (ignition + response/report.ts delay). */
+  reportMinute: number;
+  level: string;
+  structure: boolean;
+  /** Plain account of the run card and how it was filled. */
+  text: string;
+  /** Labels of the ground trips sent to it (in `CrewDispatch.trips`). */
+  tripLabels: string[];
+  /** Aircraft sent to it, each from its own base (the solver flies them; studio/aircraft.ts). */
+  aircraft: { kind: string; baseId: string; baseName: string; location: LonLat }[];
+  helitack: HelitackPlan | null;
+  noAccess: NoAccess[];
+  /** Why no ground unit was planned, when none was. */
+  note: string | null;
 }
 
 export interface HelitackPlan {
+  baseId?: string;
   baseName: string;
   baseKm: number;
   /** Minute the helicopter lands at its landing zone. */
@@ -164,11 +197,22 @@ export interface HelitackPlan {
   arriveMinute: number;
 }
 
-/** Start minute per line-building resource, for the firefighting model. */
+/**
+ * Start minute per line-building resource on a fire edge, for the firefighting model. Units
+ * holding a road (indirect) build no line on the edge and are left out; an empty list means no
+ * line builder, never "assume everyone on site" (studio/firefighting.ts `crewArrivals`).
+ */
 export function arrivalsOf(dispatch: CrewDispatch): CrewArrival[] {
   return dispatch.trips
     .filter((trip) => GROUND_APPARATUS[trip.kind].line !== null && trip.tactic === "direct")
-    .map((trip) => ({ kind: trip.kind, minute: trip.arriveMinute }));
+    .map((trip) => ({
+      kind: trip.kind,
+      minute: trip.arriveMinute,
+      label: trip.label,
+      sourceId: trip.sourceId,
+      roadPoint: trip.roadPoint,
+      hikeMeters: trip.hikeMeters,
+    }));
 }
 
 interface Origin {
@@ -488,7 +532,9 @@ export function planCrewDispatch(
       candidates
         .map(({ origin, offBoard: off }) => ({ origin, leg: cachedLeg(cls, origin, off, maxGap) }))
         .filter((o): o is { origin: Origin; leg: Leg } => o.leg !== null);
-    let options = optionsWithin(walksIn ? Infinity : MAX_ROAD_GAP_METERS);
+    // An engine's crew leaves its engine for the edge only within ENGINE_CREW_MAX_HIKE_M
+    // (response/reach.ts planWork); tenders and chiefs keep the board's road-gap limit.
+    let options = optionsWithin(walksIn ? Infinity : family === "engine" ? ENGINE_CREW_MAX_HIKE_M : MAX_ROAD_GAP_METERS);
     // A line builder too far to attack directly holds the nearest road it can reach (indirect).
     let indirect = walksIn && options.length > 0 && options.every((o) => o.leg.hikeMeters / HIKE_METERS_PER_MINUTE > maxWalkMinutes);
     if (options.length === 0 && family !== null && !walksIn) {
@@ -633,18 +679,48 @@ function roadNameAt(area: DispatchArea, node: number): string | null {
   return null;
 }
 
-/** Helitack from the nearest helitack base (HB) in the facility layer, or null without one. */
-export function helitackPlan(bases: SuppressionBases | null, fire: LonLat, reportMinute: number): HelitackPlan | null {
+/**
+ * Helitack from the nearest helitack base (HB) in the facility layer, or null without one. With
+ * `daylight` (T+0 and the horizon) the flight keeps the helicopter's daylight window, 30 min
+ * before sunrise to 30 min after sunset (IASG p.42; PMS 508 p.46; studio/aircraft.ts
+ * `aviationWindows`), as the helicopter drops do: a crew reported at night lands after first
+ * light, or not at all within the run (null). `exclude` holds bases whose crew is already
+ * committed to another incident.
+ */
+export function helitackPlan(
+  bases: SuppressionBases | null,
+  fire: LonLat,
+  reportMinute: number,
+  daylight: { startMs: number; horizonMinutes: number } | null = null,
+  exclude: ReadonlySet<string> | null = null,
+): HelitackPlan | null {
   if (!bases?.available) return null;
-  let best: { name: string; km: number } | null = null;
+  let best: { id: string; name: string; km: number } | null = null;
   for (const b of bases.bases) {
-    if (b.type !== "HB") continue;
+    if (b.type !== "HB" || exclude?.has(b.id)) continue;
     const km = groundMeters([b.lon, b.lat], fire) / 1000;
-    if (!best || km < best.km) best = { name: b.name, km };
+    if (!best || km < best.km) best = { id: b.id, name: b.name, km };
   }
   if (!best) return null;
-  const landMinute = reportMinute + HELI_TAKEOFF_MIN + (best.km / (HELI_CRUISE_KT * KMH_PER_KNOT)) * 60;
+  const flightMinutes = (best.km / (HELI_CRUISE_KT * KMH_PER_KNOT)) * 60;
+  let takeoffMinute = reportMinute + HELI_TAKEOFF_MIN;
+  if (daylight) {
+    const windows = aviationWindows(daylight.startMs, daylight.horizonMinutes, fire).helicopter;
+    const toMs = (minute: number) => daylight.startMs + minute * 60_000;
+    // Takeoff and landing both inside one window.
+    for (;;) {
+      const next = nextInWindow(windows, toMs(takeoffMinute));
+      if (next === null) return null;
+      takeoffMinute = (next - daylight.startMs) / 60_000;
+      const window = windows.find((w) => next >= w.startMs && next <= w.endMs);
+      if (!window || toMs(takeoffMinute + flightMinutes) <= window.endMs) break;
+      takeoffMinute = (window.endMs - daylight.startMs) / 60_000 + 1;
+    }
+    if (takeoffMinute + flightMinutes > daylight.horizonMinutes) return null;
+  }
+  const landMinute = takeoffMinute + flightMinutes;
   return {
+    baseId: best.id,
     baseName: best.name,
     baseKm: Math.round(best.km * 10) / 10,
     landMinute,

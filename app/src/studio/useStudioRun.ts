@@ -19,7 +19,7 @@ import type {
 import type { IgnitionProblem } from "../fire/scheduledTypes";
 import { toSolverInput, validateScenario } from "./scenario";
 import { gridBox, gridCoversScenario } from "./useRegionBoard";
-import { arrivalsOf, type CrewDispatch } from "./crewDispatch";
+import { arrivalsOf, type CrewDispatch, type IncidentDispatch } from "./crewDispatch";
 import type { AirBase } from "./aircraft";
 import type { ApparatusCounts } from "./apparatus";
 
@@ -34,6 +34,8 @@ export interface RunDispatch {
    * They replace any counts in the scenario: Studio has no hand-set unit counts.
    */
   resources?: ApparatusCounts;
+  /** One incident per ignition (studio/incidents.ts), in report order. */
+  incidents?: IncidentDispatch[];
 }
 
 /** A prebuilt region board offered for a run; `grid` is null while it is still loading. */
@@ -174,8 +176,10 @@ export function useStudioRun(): StudioRunController {
         firefighting: snapshot.firefighting
           ? { ...snapshot.firefighting, fromStations: true, nightHelicopters: false, resources: crews?.resources ?? {} }
           : null,
-        crewArrivals: crews?.dispatch ? arrivalsOf(crews.dispatch) : null,
+        // A dispatch was planned: only its units on a fire edge build line (none: none do).
+        crewArrivals: crews ? (crews.dispatch ? arrivalsOf(crews.dispatch) : []) : null,
         airBases: crews?.airBases ?? null,
+        incidents: crews?.incidents ?? null,
       };
       workerRef.current.postMessage(request);
     },

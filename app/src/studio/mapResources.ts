@@ -36,8 +36,9 @@ import {
   type GroundResponseKind,
   type UnitSeed,
 } from "../response/fleet";
-import { airKindFor, dispatchLevel, groundFamilyOf, runCard, type DispatchLevel, type ResourceCounts } from "../response/runCards";
+import { STRUCTURE_RUN_CARD, airKindFor, dispatchLevel, groundFamilyOf, runCard, type DispatchLevel, type ResourceCounts } from "../response/runCards";
 import { stateGroundLeadMinutes } from "../response/orders";
+import { nearestDeveloped } from "../response/report";
 import type { AirBase } from "./aircraft";
 import type { ApparatusCounts } from "./apparatus";
 import { OFFBOARD_CIRCUITY, OFFBOARD_SPEED_KMH, type DispatchUnit, type TripOrigin } from "./crewDispatch";
@@ -103,9 +104,35 @@ export function moistureClass(moisture: FuelMoisture): string {
   return best.id;
 }
 
+/**
+ * A wildland fire this close to developed ground (FBFM40 91) threatens homes: its card adds the
+ * structure first alarm's engines. 200 ft (61 m) is the outer edge of the home ignition zone, the
+ * ground that decides whether a house ignites (Cohen 2000, "Preventing disaster: home
+ * ignitability in the wildland-urban interface", J. Forestry 98(3):15-21: 100-200 ft; as
+ * recalled, not re-fetched). Its use as a dispatch trigger is an ASSUMPTION.
+ */
+export const HOME_IGNITION_ZONE_M = 200 * 0.3048;
+
+/** What the dispatcher knows when the fire is reported: the weather then (and its next hour). */
+export interface DispatchWeather {
+  windSpeedMph: number;
+  moisture: FuelMoisture;
+  /** Plain account, e.g. "at report T+12, worst of the next hour". */
+  label?: string;
+}
+
+/** Units and aircraft already committed to earlier incidents (`MapDispatch.unitKeys`, `aircraftKeys`). */
+export interface DispatchCommitments {
+  units: ReadonlySet<string>;
+  aircraft: ReadonlySet<string>;
+}
+
 export interface MapDispatch {
   level: DispatchLevel;
+  /** Fire starts on developed ground (structure card) or within HOME_IGNITION_ZONE_M of it (WUI). */
   structure: boolean;
+  /** Metres from the origin to the nearest developed cell (0 on it), or null when none within 2 km / no grid. */
+  developedMeters: number | null;
   card: ResourceCounts;
   /** Ground units sent, each from its own base. */
   units: DispatchUnit[];
@@ -115,6 +142,11 @@ export interface MapDispatch {
   airBases: AirBase[];
   /** Plain account of the card and how it was filled. */
   text: string;
+  /** Keys of the map units and aircraft sent, to commit them against later incidents. */
+  unitKeys: string[];
+  aircraftKeys: string[];
+  /** The aircraft sent, each from its own base. */
+  aircraft: AircraftSeed[];
 }
 
 const KIND_ORIGIN: Record<GroundResponseKind, TripOrigin> = {
@@ -144,27 +176,47 @@ export function planMapDispatch(
   resources: MapResources,
   area: DispatchArea,
   fire: LonLat,
-  scenario: { windSpeedMph: number; moisture: FuelMoisture },
+  scenario: DispatchWeather,
   grid: LandscapeGrid | null,
+  committed: DispatchCommitments | null = null,
 ): MapDispatch {
   const moisture = moistureClass(scenario.moisture);
   const level = dispatchLevel(moisture, scenario.windSpeedMph * MPS_PER_MPH);
   const cell = grid ? cellAt(grid, { longitude: fire[0], latitude: fire[1] }) : -1;
-  const structure = cell >= 0 && grid!.fuelCodes[cell] === DEVELOPED_FUEL_CODE;
-  const card = runCard(level, structure);
+  const onDeveloped = cell >= 0 && grid!.fuelCodes[cell] === DEVELOPED_FUEL_CODE;
+  const nearHome = grid && !onDeveloped ? nearestDeveloped(grid, fire, 2_000) : null;
+  const developedMeters = onDeveloped ? 0 : (nearHome?.meters ?? null);
+  const wui = !onDeveloped && developedMeters !== null && developedMeters <= HOME_IGNITION_ZONE_M;
+  const structure = onDeveloped || wui;
+  // A WUI fire: the wildland card with at least the structure alarm's engines (ASSUMPTION).
+  const wildland = runCard(level, false);
+  const card = onDeveloped
+    ? runCard(level, true)
+    : wui
+      ? { ...wildland, engines: Math.max(wildland.engines, STRUCTURE_RUN_CARD.engines) }
+      : wildland;
   const { fleet } = resources;
   const nameOf = new Map(fleet.facilities.map((f) => [f.id, f.name]));
   const eta = (u: UnitSeed) => u.turnoutMinutes + ((greatCircleKm(u.location, fire) * OFFBOARD_CIRCUITY) / OFFBOARD_SPEED_KMH) * 60;
-  const candidates = [...fleet.units, ...fleet.offBoardUnits].sort((a, b) => eta(a) - eta(b) || a.stationId.localeCompare(b.stationId));
+  // Stable keys (index in the fleet's on-board and off-board lists), so a unit committed to an
+  // earlier incident is not sent again.
+  const candidates = [
+    ...fleet.units.map((u, i) => ({ u, key: `c${i}` })),
+    ...fleet.offBoardUnits.map((u, i) => ({ u, key: `m${i}` })),
+  ]
+    .filter(({ key }) => !committed?.units.has(key))
+    .sort((a, b) => eta(a.u) - eta(b.u) || a.u.stationId.localeCompare(b.u.stationId) || a.key.localeCompare(b.key));
   const units: DispatchUnit[] = [];
+  const unitKeys: string[] = [];
   const counts: ApparatusCounts = {};
   const short: Partial<Record<"engines" | "hand_crews" | "dozers", number>> = {};
   const need = { engines: card.engines, hand_crews: card.hand_crews, dozers: card.dozers };
-  for (const u of candidates) {
+  for (const { u, key } of candidates) {
     const family = groundFamilyOf(u.kind);
     if (need[family] <= 0) continue;
     need[family] -= 1;
     counts[u.kind] = (counts[u.kind] ?? 0) + 1;
+    unitKeys.push(key);
     units.push({
       kind: u.kind,
       baseName: nameOf.get(u.stationId) ?? u.stationId,
@@ -189,18 +241,26 @@ export function planMapDispatch(
 
   // Aircraft: the nearest of each kind within its dispatch radius of the fire.
   const air: AircraftSeed[] = [];
+  const aircraftKeys: string[] = [];
   const airShort: string[] = [];
   for (const family of ["air_attack", "airtankers", "helicopters"] as const) {
     const kind = airKindFor(family);
     const wanted = card[family];
     if (wanted <= 0) continue;
-    const near = fleet.aircraft
-      .filter((a) => a.kind === kind && greatCircleKm(a.location, fire) <= airDispatchRadiusKm(kind))
-      .sort((a, b) => greatCircleKm(a.location, fire) - greatCircleKm(b.location, fire) || a.baseId.localeCompare(b.baseId))
+    const inReach = fleet.aircraft
+      .map((a, i) => ({ a, key: `a${i}` }))
+      .filter(({ a, key }) => a.kind === kind && !committed?.aircraft.has(key) && greatCircleKm(a.location, fire) <= airDispatchRadiusKm(kind))
+      .sort(
+        (p, q) =>
+          greatCircleKm(p.a.location, fire) - greatCircleKm(q.a.location, fire) ||
+          p.a.baseId.localeCompare(q.a.baseId) ||
+          p.key.localeCompare(q.key),
+      )
       .slice(0, wanted);
-    air.push(...near);
-    counts[kind] = (counts[kind] ?? 0) + near.length;
-    if (near.length < wanted) airShort.push(unitsText({ [kind]: wanted - near.length }));
+    air.push(...inReach.map(({ a }) => a));
+    aircraftKeys.push(...inReach.map(({ key }) => key));
+    counts[kind] = (counts[kind] ?? 0) + inReach.length;
+    if (inReach.length < wanted) airShort.push(unitsText({ [kind]: wanted - inReach.length }));
   }
   const airBases: AirBase[] = [];
   for (const a of air) {
@@ -217,7 +277,12 @@ export function planMapDispatch(
     airtanker_s2t: card.airtankers,
     helicopter_t2: card.helicopters,
   });
-  const why = structure ? "structure fire (developed ground)" : `${level} dispatch level (${moisture} fuel moisture, ${Math.round(scenario.windSpeedMph)} mph wind)`;
+  const weatherText = `${moisture} fuel moisture, ${Math.round(scenario.windSpeedMph)} mph wind${scenario.label ? `, ${scenario.label}` : ""}`;
+  const why = onDeveloped
+    ? "structure fire (developed ground)"
+    : wui
+      ? `wildland fire ${Math.round(developedMeters!)} m from homes (${level} dispatch level, ${weatherText}; structure engines added)`
+      : `${level} dispatch level (${weatherText})`;
   const shortText = unitsText({ engine_t3: short.engines ?? 0, hand_crew_t1: short.hand_crews ?? 0, dozer_t2: short.dozers ?? 0 });
   const text = [
     `Run card for a ${why}: ${cardText || "no units"}.`,
@@ -226,5 +291,5 @@ export function planMapDispatch(
   ]
     .filter(Boolean)
     .join(" ");
-  return { level, structure, card, units, counts, airBases, text };
+  return { level, structure, developedMeters, card, units, counts, airBases, text, unitKeys, aircraftKeys, aircraft: air };
 }

@@ -47,7 +47,19 @@
  */
 
 import { groundMeters, roadLabel, type DispatchArea, type LonLat } from "./area";
-import { HAND_CREW_MAX_HIKE_MINUTES, hikeMinutes, toblerKmh } from "../response/reach";
+import {
+  DOZER_MAX_WALK_MINUTES,
+  DOZER_WALK_KMH,
+  ENGINE_CREW_MAX_HIKE_M,
+  HAND_CREW_MAX_HIKE_MINUTES,
+  HOSE_1_5_INCH_FEET,
+  dozerWalkMinutes,
+  engineCrewHandLineMPerMin,
+  hikeMinutes,
+  hoseReachMeters,
+  toblerKmh,
+} from "../response/reach";
+import type { GroundResponseKind } from "../response/fleet";
 import { IA_SUCCESS_MAX_ACRES, IA_SUCCESS_MAX_HA, WILDLAND_RUN_CARDS } from "../response/runCards";
 import type { FireExposure } from "./fireExposure";
 import { tacticBlocked, type FireTactic } from "./fireTactics";
@@ -108,16 +120,30 @@ export const TURNOUT_SECONDS = 80;
  */
 export const MAX_ROAD_GAP_METERS = 1500;
 /**
- * Fire attack: a unit stages at the nearest reachable road node and its crew walks the rest
- * (response/reach.ts: Tobler off-path pace, flat ground assumed here), attacking only if the
- * walk takes at most HAND_CREW_MAX_HIKE_MINUTES (labelled assumption there).
+ * Fire attack: a unit stages at the nearest reachable road node and walks the rest, within its
+ * own kind's reach (response/reach.ts planWork, flat ground assumed here): an engine crew at most
+ * ENGINE_CREW_MAX_HIKE_M from its engine, a hand crew a hike of at most HAND_CREW_MAX_HIKE_MINUTES
+ * at Tobler's off-path pace, a dozer at most DOZER_MAX_WALK_MINUTES at DOZER_WALK_KMH (all
+ * labelled assumptions there).
  */
-const MAX_ATTACK_WALK_METERS = (HAND_CREW_MAX_HIKE_MINUTES / 60) * toblerKmh(0) * 1000;
+const HAND_CREW_MAX_WALK_METERS = (HAND_CREW_MAX_HIKE_MINUTES / 60) * toblerKmh(0) * 1000;
+const DOZER_MAX_WALK_METERS = (DOZER_MAX_WALK_MINUTES / 60) * DOZER_WALK_KMH * 1000;
+/** Farthest a unit of this kind walks from its staging node to attack, metres. */
+export function attackWalkLimitMeters(kind: GroundKind): number {
+  const family = GROUND_APPARATUS[kind]?.line?.kind;
+  return family === "hand_crew" ? HAND_CREW_MAX_WALK_METERS : family === "dozer" ? DOZER_MAX_WALK_METERS : ENGINE_CREW_MAX_HIKE_M;
+}
+/** Minutes to walk in: Tobler for crews (flat), the dozer's walking speed for dozers. */
+function attackWalkMinutes(kind: GroundKind, meters: number): number {
+  return GROUND_APPARATUS[kind]?.line?.kind === "dozer" ? dozerWalkMinutes(meters) : hikeMinutes(meters, 0);
+}
 /**
  * Initial attack cap per fire: CAL FIRE's high dispatch-level run card's ground units
  * (response/runCards.ts WILDLAND_RUN_CARDS.high). ASSUMPTION: the high card is used as the cap
  * whatever the day's level; more units only once the fire passes the IA success size.
  */
+/** LANDFIRE GR1 (Anderson model 1): the grass reference of grass-equivalent line. */
+const GRASS_FUEL_CODE_FOR_LINE = 101;
 const IA_GROUND_CAP =
   WILDLAND_RUN_CARDS.high.engines + WILDLAND_RUN_CARDS.high.hand_crews + WILDLAND_RUN_CARDS.high.dozers;
 export const EXIT_OPTIONS_PER_ZONE = 3;
@@ -254,6 +280,8 @@ export interface UnitState {
   arrivedMinute: number | null;
   /** Minutes the crew walks from its staging node to the fire before it can build line. */
   walkMinutes?: number;
+  /** Metres from its staging node to the fire (sets an engine's work: hose or crew on foot). */
+  walkMeters?: number;
 }
 
 export type AlertType =
@@ -693,18 +721,19 @@ export class DispatchEngine {
   attackRoute(
     unit: UnitState,
     index: number,
-  ): { node: number; route: Route; seconds: number; walkMinutes: number } | null {
+  ): { node: number; route: Route; seconds: number; walkMinutes: number; walkMeters: number } | null {
     if (unit.status === "stranded") return null;
     const from = this.unitNextNode(unit);
     const tree = this.unitTree(unit, from, this.blockedAt(this.minute));
     const { node: best, meters: bestMeters } = this.nearestReached(tree, this.fires[index].target.location);
-    if (bestMeters > MAX_ATTACK_WALK_METERS) return null;
+    if (bestMeters > attackWalkLimitMeters(unit.kind)) return null;
     const route = best < 0 ? null : routeTo(this.area, tree, best);
     if (!route) return null;
     const approach = unit.status === "available" ? this.approachSeconds(unit) : 0;
-    const walkMinutes = hikeMinutes(Math.max(0, bestMeters), 0);
+    const walkMeters = Math.max(0, bestMeters);
+    const walkMinutes = attackWalkMinutes(unit.kind, walkMeters);
     // `seconds` is when line work can start: drive, station approach and the walk in.
-    return { node: best, route, seconds: route.seconds + approach + walkMinutes * SECONDS_PER_MINUTE, walkMinutes };
+    return { node: best, route, seconds: route.seconds + approach + walkMinutes * SECONDS_PER_MINUTE, walkMinutes, walkMeters };
   }
 
   /**
@@ -937,8 +966,9 @@ export class DispatchEngine {
     });
     const node = this.nearestReached(tree, this.fires[index].target.location);
     const open = node.node < 0 ? null : routeTo(this.area, tree, node.node);
-    const km = Math.round(MAX_ATTACK_WALK_METERS / 100) / 10;
-    if (!open || node.meters > MAX_ATTACK_WALK_METERS)
+    const limit = attackWalkLimitMeters(unit.kind);
+    const km = Math.round(limit / 100) / 10;
+    if (!open || node.meters > limit)
       return { rule: null, why: `no open road within ${km} km of the fire (fire or closures)`, road: null };
     return (
       this.firstClosedToClass(unit, open.steps) ?? {
@@ -963,9 +993,18 @@ export class DispatchEngine {
     return { node: best, meters: bestMeters };
   }
 
-  /** Grass-equivalent line one unit builds per minute (studio/apparatus.ts rates; 0 if none). */
+  /**
+   * Grass-equivalent line one unit builds per minute (studio/apparatus.ts rates; 0 if none). An
+   * engine staged beyond its hose reach works as an engine crew on foot (response/reach.ts
+   * planWork: persons x the PMS 465 p.39 hand-line rate, in grass), not at the engine's rate.
+   */
   unitLineMetersPerMinute(unit: UnitState): number {
-    return GROUND_APPARATUS[unit.kind].line ? grassRateMetersPerHour(unit.kind) / 60 : 0;
+    const line = GROUND_APPARATUS[unit.kind].line;
+    if (!line) return 0;
+    if (line.kind === "engine" && unit.kind in HOSE_1_5_INCH_FEET && (unit.walkMeters ?? 0) > hoseReachMeters(unit.kind as GroundResponseKind)) {
+      return engineCrewHandLineMPerMin(unit.kind as GroundResponseKind, GRASS_FUEL_CODE_FOR_LINE);
+    }
+    return grassRateMetersPerHour(unit.kind) / 60;
   }
 
   private noAccessText(reason: NoAccess | null): string {
@@ -1142,6 +1181,7 @@ export class DispatchEngine {
         this.sendUnit(unit, from, plan.route, "en_route", "fire_attack", null, plan.node);
         unit.fire = index;
         unit.walkMinutes = plan.walkMinutes;
+        unit.walkMeters = plan.walkMeters;
         if (fromStation) this.holdAtStation(unit);
         seconds = plan.seconds;
       }

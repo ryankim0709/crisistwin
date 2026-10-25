@@ -14,6 +14,7 @@ planning experiments, not operational dispatch guidance.
 | `app/src/response/rng.ts` | Seeded stream (mulberry32, as the board), derived from the board seed with a salt, so response draws do not move the ignition sequence |
 | `app/src/response/fleet.ts` | Departments, tiers, units and aircraft from the facilities on and near the board (`buildFleet`), the one units-per-facility table (`FACILITY_INVENTORY`), the plain summary (`summarizeFleet`), turnout by staffing (`engineTurnoutMinutes`) |
 | `app/src/studio/mapResources.ts` | Studio: the fleet from the facilities around the board (`mapResources`) and the run card filled from it (`planMapDispatch`) |
+| `app/src/studio/incidents.ts` | Studio and /dispatch: one incident per fire (`planIncidents`), each with its own report minute, run card from the weather after that report, units drawn down across incidents, and its own crew trips and helitack |
 | `app/src/studio/useMapStations.ts` | Studio map: a labelled marker for every facility that can respond |
 | `app/src/response/runCards.ts` | Dispatch level from fire danger, run cards, initial-attack (IA) size, escalation stages and orders, the Operations Bulletin #1 caps, `ORDERABLE` |
 | `app/src/response/containment.ts` | Tactic by flame length, production per tactic, line needed, seeded holding test, Fried & Fried check |
@@ -335,6 +336,65 @@ R01-R12, avoiding fire at request time. Until a leg arrives the fallback is a st
   except the last 300 m. A burned cell stops the unit, which reroutes on a straight line × 1.5
   (**ASSUMPTION**) until a new road leg arrives.
 
+## Studio: one incident per fire
+
+The Studio firefighting run (the run /dispatch uses) plans every enabled ignition as its own
+incident (`studio/incidents.ts` `planIncidents`). Before this, all trips went to the first
+fire and the other fires had no units.
+
+- **Report and card.** Each incident is reported at its start plus its own
+  `ignitionReportDelayMinutes`. Its card is sized on the worst wind and lowest 1-h moisture in
+  the `DISPATCH_FORECAST_MINUTES` (60, ASSUMPTION) after that report (`dispatchWeatherAt`).
+  `dispatchLevel` gives "medium" only for dry fuel, or moderate fuel with wind of at least
+  15 mph, as its docstring says. Before, wet fuel with 15 mph wind also gave "medium".
+- **Units are drawn down.** Incidents are filled in report order. A unit or aircraft that one
+  incident takes is not used again (`planMapDispatch` `committed`). Release, move-up and cover
+  are not modelled. A helitack base used by one incident is excluded for the others, and the
+  helicopter keeps its daylight window (`aviationWindows`).
+- **Structure flag.** A fire within `HOME_IGNITION_ZONE_M` (61 m, 200 ft; Cohen 2000, J. For.
+  98(3):15-21) of developed cells gets the wildland card with at least the structure card's
+  engines (ASSUMPTION).
+- **Initial attack per fire** (`studio/initialAttack.ts`). This is a 1-minute Fried & Fried
+  race that uses only the incident's own units. A unit sent to one fire works whichever fire
+  reaches it first. There is no fallback: a fire with no units is never out (the old T+30
+  default is gone).
+  - The head flame at minute t is the largest cell flame among the cells that ignited in the
+    previous `HEAD_FLAME_WINDOW_MINUTES` (one weather step, 10 min; ASSUMPTION). Any crown fire counts as infinite.
+  - A unit attacks only when that flame is within its Hauling-chart limit (PMS 465; Andrews &
+    Rothermel 1982, GTR INT-131).
+  - An engine beyond hose reach works as an engine crew on foot (4 ft limit, PMS 465 hand-line
+    rate).
+- **Withdrawal (LCES).** A unit that cannot hold the fire withdraws when the fire will reach
+  the cells around its road point within its hike-back time plus
+  `UNIT_WITHDRAW_MARGIN_MINUTES` (5, ASSUMPTION). Its line stops at that minute.
+- **Leaving for evacuation** happens only when an evacuation task exists
+  (`crewHandoff.ts` `evacuationTaskFromMinute`). The task starts at the order minute, or at the
+  earliest zone contact minus `FORECAST_LOOKAHEAD_MINUTES`.
+- **Aircraft** (`studio/aircraft.ts`) are planned per incident.
+  - Each is released when initial attack puts its fire out.
+  - Drops go only on that fire's own ring, and only where the facing flame is within
+    `DROP_HOLDS_FLAME_FEET`. The wind at the drop is the weather series' wind at that minute.
+  - Pilot duty: `PILOT_MAX_FLIGHT_MINUTES_PER_DAY` 480, `PILOT_MAX_DUTY_DAY_MINUTES` 840,
+    `PILOT_MIN_REST_MINUTES` 600 (Interagency Standards for Fire and Aviation Operations, NFES
+    2724, ch. 16; IHOG PMS 510; values as recalled, to check against the current edition).
+  - A drop counts as held line only if ground line ties in within `WATER_TIE_IN_MINUTES` (30)
+    or `RETARDANT_TIE_IN_MINUTES` (120), both ASSUMPTIONs. Untied drops are flown and logged
+    but do not hold.
+  - The per-aircraft summary is counted from the drop log, so the two cannot disagree. Fuel
+    cycles are not modelled.
+- **Best line per incident.** Line is planned for each incident on that fire's own arrival
+  field, starting from the group's first arrival, and the results are merged. Line for units
+  sent to fire 1 no longer appears around fire 3.
+- **dispatch agent** (`dispatch/engine.ts`). The walk limit depends on the kind of unit: an
+  engine crew `ENGINE_CREW_MAX_HIKE_M` (800 m), a hand crew `HAND_CREW_MAX_HIKE_MINUTES` at
+  Tobler pace, a dozer `DOZER_MAX_WALK_MINUTES` at `DOZER_WALK_KMH`. An engine beyond hose
+  reach builds hand line at the engine-crew rate.
+- **Studio with firefighting off** sends no crews.
+
+Turnout: stations whose layer gives staffing P already get 80 s (NFPA 1710 4.1.2.1). OSM
+stations have unknown staffing and keep 120 s (ASSUMPTION), because no career status is
+invented for them.
+
 ## Measured
 
 Scratch script (not committed): seeded boards run headlessly through `solveFireField`, real
@@ -444,7 +504,16 @@ cases have their nearest homes 7.9 km away and every road ending 1.5 km short of
 - **Escalation lead times, fill probabilities and state caps** are assumptions.
 - **Line**: no burnout timing, no loss of an already contained line on a wind shift, no line
   degradation over time.
-- **Units**: pilot duty limits are not modelled; water tenders are not units.
+- **Units**: pilot duty limits are modelled in Studio only (`studio/aircraft.ts`), not on the
+  board. Water tenders are not units.
+- **Studio incidents**: there is no release and re-dispatch of a unit after its fire is out,
+  no move-up or cover, no escalation or extended-attack orders, and no aircraft fuel cycle.
+  The best-line search has no initial-attack candidate, so the IA view and the best line can
+  disagree.
+- **Retardant that expires**: the solver has no hold-until minute on a control line, so an
+  untied drop is left out of the line rather than holding for a while and then expiring. The
+  solver change is an optional `holdUntilMinute` on `ControlLines`, plus re-queueing blocked
+  steps at that minute, as weather-delayed arrivals are re-queued.
 - **Report delays**: the 3 min doorstep median, the 250 m scale, the anchor distances, the
   camera coverage of 60% and the camera and satellite times are assumptions. There is no camera
   or road-traffic map, Studio has no road lines, and the 911 load of a large fire (queued
