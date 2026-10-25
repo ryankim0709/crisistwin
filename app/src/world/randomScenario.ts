@@ -40,6 +40,11 @@ const COMPASS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
 const MAX_SEED = 2_147_483_647;
 
 /** Small seeded generator (mulberry32); uniform in [0, 1). */
+/** Most fires a random scenario starts (Studio holds at most 5). */
+const MAX_RANDOM_FIRES = 5;
+/** Chance of each extra fire; see the ignition draw. ASSUMPTION, a test-scenario knob. */
+const EXTRA_FIRE_CHANCE = 0.4;
+
 export function seededRandom(seed: number): () => number {
   let state = seed >>> 0;
   return () => {
@@ -236,19 +241,23 @@ export async function drawRandomScenario(input: RandomDrawInput): Promise<Random
   const dateLabel = `${day.getUTCDate()} ${MONTHS[day.getUTCMonth()]}`;
   const startOf = (y: number) => `${y}-${pad(day.getUTCMonth() + 1)}-${pad(day.getUTCDate())}T${pad(hourUtc)}:00:00Z`;
 
-  // Ignitions: placed by the chosen mode, one or two, the second sometimes later.
+  // Ignitions: placed by the chosen mode. How many is random too: 1 + the number of draws in a
+  // row that hit EXTRA_FIRE_CHANCE, up to MAX_RANDOM_FIRES (60% one fire, 24% two, ~10% three…).
+  // ASSUMPTION (no source for multi-ignition shares): a test-scenario knob, not a fire statistic.
+  // Every fire after the first starts later half the time (20-90 min), like a second ignition.
   const candidates = ignitionCandidates(grid, roadNodes, rand);
   if (candidates.length === 0) return null;
-  const count = rand() < 0.35 ? 2 : 1;
-  const laterSecond = rand() < 0.5;
-  const laterMinute = 20 + Math.floor(rand() * 70);
+  let count = 1;
+  while (count < MAX_RANDOM_FIRES && rand() < EXTRA_FIRE_CHANCE) count++;
   const ignitions: RandomIgnition[] = [];
   const picked: Candidate[] = [];
   for (let i = 0; i < count; i++) {
     const pool = picked.length ? candidates.filter((c) => !picked.some((p) => p.cell === c.cell)) : candidates;
+    if (pool.length === 0) break;
     const choice = choose(pool, placement, rand);
     picked.push(choice);
-    ignitions.push({ at: choice.point, startMinute: i === 1 && laterSecond ? laterMinute : 0 });
+    const later = i > 0 && rand() < 0.5;
+    ignitions.push({ at: choice.point, startMinute: later ? 20 + Math.floor(rand() * 70) : 0 });
   }
 
   const km = picked[0].nearRoadMeters === null ? null : (picked[0].nearRoadMeters / 1000).toFixed(1);
