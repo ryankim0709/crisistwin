@@ -21,7 +21,7 @@ import type {
   ScheduledFireRun,
 } from "../fire/scheduledTypes";
 import type { CrewArrival, FirefightingResult, FirefightingSettings } from "./firefighting";
-import type { CrewDispatch } from "./crewDispatch";
+import type { CrewDispatch, IncidentDispatch } from "./crewDispatch";
 import type { EvacuationInputs } from "./evacuation";
 import type { EvacuationOptimization } from "./evacuationOptimizer";
 
@@ -184,6 +184,11 @@ export type SolverRequest = {
   crewArrivals: CrewArrival[] | null;
   /** Helitack and air attack bases near the fire (null without the local bases file). */
   airBases: AirBase[] | null;
+  /**
+   * One incident per ignition (studio/incidents.ts): report minute and the aircraft sent to it.
+   * Null or absent: one incident, the first fire, with the counts in `firefighting.resources`.
+   */
+  incidents?: IncidentDispatch[] | null;
 };
 
 export type SolverResponse =

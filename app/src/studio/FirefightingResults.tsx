@@ -32,6 +32,9 @@ function change(value: number, base: number): string {
 
 function attackLine(fire: FireAttack, name: string, holds: number): string {
   if (fire.ignitedMinute === null) return `${name}: reached by another fire before it started.`;
+  if (fire.outMinute === null && fire.reason) {
+    return `${name}: still burning at the horizon (about ${ha(fire.areaSquareMeters)} ha); ${fire.reason}.`;
+  }
   if (!fire.attackable) {
     return Number.isFinite(fire.headFlameFeet)
       ? `${name}: not attacked directly; head flames about ${fire.headFlameFeet.toFixed(0)} ft are longer than the ${holds} ft the crews can hold.`
@@ -291,10 +294,17 @@ export default function FirefightingResults({
             Once on site <Tag>Rough estimate</Tag>
           </h4>
           <p className="studio-hint">
-            {dispatch ? "As each crew arrives (first at " : "From "}
-            {formatElapsed(Math.round(estimate.onSiteMinute))}
-            {dispatch ? ") it" : " the crews"} starts building line around each fire&rsquo;s edge;
-            together they build up to about{" "}
+            {Number.isFinite(estimate.onSiteMinute) ? (
+              <>
+                {dispatch ? "As each crew arrives (first at " : "From "}
+                {formatElapsed(Math.round(estimate.onSiteMinute))}
+                {dispatch ? ") it" : " each crew"}
+              </>
+            ) : (
+              "No crew reaches a fire edge, so direct attack puts no fire out. A crew on an edge"
+            )}{" "}
+            builds line around its own fire&rsquo;s edge while the head flame then is within what
+            it can hold; together they build up to about{" "}
             {Math.round(estimate.lineMetersPerMinute * 60).toLocaleString()} m an hour in grass
             (less in brush and timber). A fire is out when the line built covers its edge, estimated
             from its size as an ellipse.

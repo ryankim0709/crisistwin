@@ -32,7 +32,9 @@ import {
   type ControlLines,
 } from "../fire/spread";
 import type { ScheduledFireInput, ScheduledFireRun } from "../fire/scheduledTypes";
-import type { InitialAttackResult } from "./initialAttack";
+import type { InitialAttackEstimate, InitialAttackResult } from "./initialAttack";
+import type { IncidentDispatch } from "./crewDispatch";
+import { seriesActive, weatherAtMinute } from "../fire/weatherSeries";
 import {
   AIR_KINDS,
   GROUND_APPARATUS,
@@ -41,7 +43,7 @@ import {
   type ApparatusCounts,
   type GroundKind,
 } from "./apparatus";
-import { DROP_HOLDS_FLAME_FEET, planAircraft, type AircraftPlan, type AirBase } from "./aircraft";
+import { DROP_HOLDS_FLAME_FEET, planAircraft, type AircraftPlan, type AirBase, type AirGroundState } from "./aircraft";
 import { lineOfSight, nearestDeveloped, reportDelay } from "../response/report";
 import { deriveStream } from "../response/rng";
 import { cellAt as gridCellAt } from "../fire/spread";
@@ -248,22 +250,38 @@ const KIND_CODE = Object.fromEntries(GROUND_KINDS.map((k, i) => [k, i])) as Reco
 export interface CrewArrival {
   kind: ResourceKind;
   minute: number;
+  /** Trip label ("T3 engine 2"), when it came from a dispatch. */
+  label?: string;
+  /**
+   * Run source id of the incident the unit was sent to (studio/incidents.ts). Absent (older
+   * callers): the unit works the first fire to ignite.
+   */
+  sourceId?: string;
+  /** Where it parked [lon, lat], and the walk from there to the fire edge, metres. */
+  roadPoint?: [number, number];
+  hikeMeters?: number;
+  /** Minute it stops work (withdrew for safety), when it does. */
+  untilMinute?: number;
 }
 
 /**
- * When each resource starts work: the dispatched arrival minutes when crews drive in from fire
- * stations (studio/crewDispatch.ts), else everyone at the first ignition plus the response time.
+ * When each resource starts work. A dispatch (`dispatched` not null, even empty) is the answer:
+ * only its units on a fire edge build line, and an empty list means no line builder. Only
+ * without any dispatch (older callers, no road board) are the settings' counts put on the first
+ * fire to ignite at its start plus `responseMinutes`.
  */
 export function crewArrivals(
   settings: FirefightingSettings,
   input: ScheduledFireInput,
   dispatched: readonly CrewArrival[] | null,
 ): CrewArrival[] {
-  if (dispatched && dispatched.length > 0) {
+  if (dispatched) {
     return dispatched.filter(({ kind }) => GROUND_APPARATUS[kind].line !== null);
   }
-  const minute = Math.min(...input.sources.map((s) => s.startMinute)) + settings.responseMinutes;
-  return lineBuilders(settings).map((kind) => ({ kind, minute }));
+  const first = [...input.sources].sort((a, b) => a.startMinute - b.startMinute)[0];
+  if (!first) return [];
+  const minute = first.startMinute + settings.responseMinutes;
+  return lineBuilders(settings).map((kind) => ({ kind, minute, sourceId: first.id }));
 }
 
 /** Resources, strongest line first so the anchor chunks get the best holding line. */
@@ -506,7 +524,7 @@ export function planLine(
     for (const d of [cw, ccw]) for (const s of d.steps) plannedMeters += s;
     if (mine.length === 0) return;
     // Each resource keeps its own clock; a lone resource does one flank, then the other.
-    const crews = mine.map(({ kind, minute }) => ({ kind, clock: minute }));
+    const crews = mine.map(({ kind, minute, untilMinute }) => ({ kind, clock: minute, until: untilMinute ?? Infinity }));
     const teams =
       crews.length === 1
         ? [crews, crews]
@@ -550,7 +568,8 @@ export function planLine(
         }
         // Infinite rate: non-burnable ground needs no line work.
         if (Number.isFinite(rate)) crew.clock += direction.steps[k] / (rate / 60);
-        hold.push(crew.clock);
+        // Work after the crew withdrew for safety is never built.
+        hold.push(crew.clock <= crew.until ? crew.clock : Number.POSITIVE_INFINITY);
         kinds.push(KIND_CODE[crew.kind]);
       }
     });
@@ -661,6 +680,25 @@ export function dropStatusMeters(
   return out;
 }
 
+/** Several incidents' line plans as one (cells in order, planned metres summed). */
+function mergeLines(parts: readonly LinePlan[]): LinePlan {
+  if (parts.length === 1) return parts[0];
+  const n = parts.reduce((sum, p) => sum + p.cells.length, 0);
+  const cells = new Int32Array(n);
+  const holdFromMinute = new Float32Array(n);
+  const kind = new Uint8Array(n);
+  let k = 0;
+  let plannedMeters = 0;
+  for (const p of parts) {
+    cells.set(p.cells, k);
+    holdFromMinute.set(p.holdFromMinute, k);
+    kind.set(p.kind, k);
+    k += p.cells.length;
+    plannedMeters += p.plannedMeters;
+  }
+  return { cells, holdFromMinute, kind, plannedMeters };
+}
+
 const EMPTY_LINE: LinePlan = {
   cells: new Int32Array(0),
   holdFromMinute: new Float32Array(0),
@@ -681,14 +719,37 @@ export function planFirefighting(
   onProgress?: (done: number, total: number) => void,
   dispatched: readonly CrewArrival[] | null = null,
   air: AirInputs | null = null,
+  initialAttack: InitialAttackEstimate | null = null,
+  incidents: readonly IncidentDispatch[] | null = null,
 ): FirefightingResult {
   const horizon = input.settings.horizonMinutes;
-  const resources = crewArrivals(settings, input, dispatched);
-  // The first fire reaches dispatch after its call-in and processing delay (response/report.ts).
+  // A unit that withdrew for safety in the initial attack (studio/initialAttack.ts) builds no
+  // line after it left.
+  const withdrawn = new Map<string, number>();
+  for (const fire of initialAttack?.fires ?? []) {
+    for (const unit of fire.units ?? []) if (unit.label && unit.withdrawMinute !== null) withdrawn.set(unit.label, unit.withdrawMinute);
+  }
+  const resources = crewArrivals(settings, input, dispatched).map((r) =>
+    r.label && withdrawn.has(r.label) ? { ...r, untilMinute: withdrawn.get(r.label)! } : r,
+  );
+  // Each fire reaches dispatch after its own call-in and processing delay (response/report.ts).
   const first = [...input.sources].sort((a, b) => a.startMinute - b.startMinute)[0];
-  const reportMinute = first ? first.startMinute + ignitionReportDelayMinutes(grid, first.location, first.startMinute, settings) : 0;
+  const reportMinute =
+    incidents && incidents.length > 0
+      ? Math.min(...incidents.map((i) => i.reportMinute))
+      : first
+        ? first.startMinute + ignitionReportDelayMinutes(grid, first.location, first.startMinute, settings)
+        : 0;
   const counts = apparatusCounts(settings);
-  const anyAir = AIR_KINDS.some((kind) => (counts[kind] ?? 0) > 0);
+  const anyAir = incidents ? incidents.some((i) => i.aircraft.length > 0) : AIR_KINDS.some((kind) => (counts[kind] ?? 0) > 0);
+  const ground: Record<string, AirGroundState> | null = initialAttack
+    ? Object.fromEntries(
+        initialAttack.fires.map((fire) => {
+          const starts = (fire.units ?? []).map((u) => u.firstWorkMinute).filter((m): m is number => m !== null);
+          return [fire.sourceId, { outMinute: fire.outMinute, groundLineFromMinute: starts.length > 0 ? Math.min(...starts) : null }];
+        }),
+      )
+    : null;
   const aircraft = anyAir
     ? planAircraft({
         grid,
@@ -699,6 +760,8 @@ export function planFirefighting(
         reportMinute,
         startMs: startMsOf(settings),
         nightHelicopters: settings.nightHelicopters === true,
+        incidents: incidents?.map((i) => ({ sourceId: i.sourceId, location: i.fire, reportMinute: i.reportMinute, aircraft: i.aircraft })) ?? null,
+        ground,
       })
     : null;
   const firstDrop = aircraft && aircraft.drops.length > 0 ? aircraft.drops[0].minute : Infinity;
@@ -722,18 +785,45 @@ export function planFirefighting(
   });
   const hasDrops = aircraft !== null && aircraft.cells.length > 0;
   if (resources.length === 0 && !hasDrops) {
-    return empty(anyAir ? "No aircraft drop reached the fire (see aircraft)." : "No resources assigned.");
+    return empty(anyAir ? "No aircraft drop held line on a fire (see aircraft)." : "No unit reached a fire edge.");
   }
   if (startMinute >= horizon) return empty("Resources arrive after the horizon.");
 
-  const windFrom = input.settings.windFromDegrees;
-  const anchors: [Strategy, number][] = [
-    ["heel", windFrom],
-    ["head", (windFrom + 180) % 360],
-  ];
-  const minutes = ISOCHRONE_OFFSETS_MINUTES.map((m) => startMinute + m).filter((m) => m <= horizon);
-  if (minutes.length === 0) minutes.push(horizon);
-  const total = resources.length > 0 ? anchors.length * minutes.length : 1;
+  // Each incident's units build line around their own fire only (its cells in the free run),
+  // from their own first arrival plus the outline offset; the anchor follows the wind then.
+  const sourceIndex = new Map(input.sources.map((src, i) => [src.id, i]));
+  const firstIgnited = baseline.ignitions
+    .map((ig, i) => ({ i, minute: ig.outcome.status === "ignited" ? ig.outcome.ignitedMinute : Infinity }))
+    .sort((a, b) => a.minute - b.minute)[0]?.i ?? 0;
+  const effectiveSource = (sourceId: string | undefined) => {
+    let idx = sourceId !== undefined ? (sourceIndex.get(sourceId) ?? firstIgnited) : firstIgnited;
+    for (let guard = 0; guard < input.sources.length; guard += 1) {
+      const outcome = baseline.ignitions[idx].outcome;
+      if (outcome.status === "ignited") break;
+      const next = sourceIndex.get(outcome.reachedBySourceId);
+      if (next === undefined) break;
+      idx = next;
+    }
+    return idx;
+  };
+  const groups = new Map<number, CrewArrival[]>();
+  for (const r of resources) {
+    const idx = effectiveSource(r.sourceId);
+    groups.set(idx, [...(groups.get(idx) ?? []), r]);
+  }
+  const ownArrival = new Map<number, Float32Array>();
+  for (const idx of groups.keys()) {
+    const own = new Float32Array(baseline.arrivalMinutes.length).fill(Number.POSITIVE_INFINITY);
+    for (let i = 0; i < own.length; i += 1) if (baseline.sourceIndexByCell[i] === idx) own[i] = baseline.arrivalMinutes[i];
+    ownArrival.set(idx, own);
+  }
+  const groupStart = new Map([...groups].map(([idx, list]) => [idx, Math.min(...list.map((r) => r.minute))]));
+  const series = seriesActive(input.settings.weatherSeries) ? input.settings.weatherSeries : null;
+  const windFromAt = (minute: number) => (series ? weatherAtMinute(series, minute).windFromDegrees : input.settings.windFromDegrees);
+  const strategies: Strategy[] = ["heel", "head"];
+  const offsets = ISOCHRONE_OFFSETS_MINUTES.filter((m) => [...groupStart.values()].some((t0) => t0 + m <= horizon));
+  const offsetList: number[] = offsets.length > 0 ? [...offsets] : [Math.max(0, horizon - startMinute)];
+  const total = resources.length > 0 ? strategies.length * offsetList.length : 1;
   let done = 0;
   // Only the best plan so far keeps its run: on a long horizon each run's frames are tens of MB.
   type Tried = { score: PlanScore; run: ScheduledFireRun | null; line: LinePlan };
@@ -769,13 +859,22 @@ export function planFirefighting(
     solve("head", startMinute, EMPTY_LINE);
     onProgress?.(1, 1);
   }
-  for (const [strategy, bearing] of resources.length > 0 ? anchors : []) {
-    for (const isochroneMinute of minutes) {
-      const line = planLine(grid, baseline.arrivalMinutes, isochroneMinute, bearing, resources);
+  for (const strategy of resources.length > 0 ? strategies : []) {
+    for (const offset of offsetList) {
+      const parts: LinePlan[] = [];
+      let shownMinute = Infinity;
+      for (const [idx, list] of groups) {
+        const isochroneMinute = Math.min(horizon, groupStart.get(idx)! + offset);
+        shownMinute = Math.min(shownMinute, isochroneMinute);
+        const windFrom = windFromAt(isochroneMinute);
+        const bearing = strategy === "heel" ? windFrom : (windFrom + 180) % 360;
+        const part = planLine(grid, ownArrival.get(idx)!, isochroneMinute, bearing, list);
+        if (part) parts.push(part);
+      }
       done += 1;
       onProgress?.(done, total);
-      if (!line) continue;
-      solve(strategy, isochroneMinute, line);
+      if (parts.length === 0) continue;
+      solve(strategy, shownMinute, mergeLines(parts));
     }
   }
   if (tried.length === 0) {

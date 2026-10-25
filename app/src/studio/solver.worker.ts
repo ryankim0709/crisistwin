@@ -3,6 +3,11 @@
  * Stochastic spread rides on `request.input.settings.stochastic` (fire/stochastic.ts; off when
  * absent), so the firefighting and initial-attack re-solves below use the same seed: every
  * tactic is compared on the same realisation of the fire.
+ *
+ * Order: the free run (with the solver's per-cell behaviour, so attack and drops are judged on
+ * the flame at the time), then the ground initial attack per incident (studio/initialAttack.ts),
+ * then the control-line plan with aircraft (studio/firefighting.ts), which releases each
+ * incident's aircraft when the initial attack puts its fire out.
  */
 
 import { simulateScheduledFireSpread } from "../fire/spread";
@@ -21,33 +26,38 @@ scope.onmessage = (event: MessageEvent<SolverRequest>) => {
   if (request.type !== "solve") return;
   let response: SolverResponse;
   try {
-    const run = simulateScheduledFireSpread(request.landscape, request.input);
-    const firefighting = request.firefighting?.enabled
-      ? planFirefighting(
-          request.landscape,
-          request.input,
-          run,
-          request.firefighting,
-          (done, total) =>
-            scope.postMessage({
-              type: "progress",
-              requestId: request.requestId,
-              done,
-              total,
-            } satisfies SolverResponse),
-          request.crewArrivals,
-          { bases: request.airBases },
-        )
-      : null;
-    if (firefighting && request.firefighting) {
-      firefighting.initialAttack = runInitialAttack(
-        request.landscape,
-        request.input,
-        run,
-        request.firefighting,
-        request.crewArrivals,
-      );
-    }
+    const firefightingOn = request.firefighting?.enabled === true;
+    // Per-cell behaviour only when firefighting needs it; same arrivals either way.
+    const run = simulateScheduledFireSpread(request.landscape, request.input, null, null, {
+      reportCellBehaviour: firefightingOn,
+    });
+    const initialAttack =
+      firefightingOn && request.firefighting
+        ? runInitialAttack(request.landscape, request.input, run, request.firefighting, request.crewArrivals)
+        : null;
+    const firefighting =
+      firefightingOn && request.firefighting
+        ? planFirefighting(
+            request.landscape,
+            request.input,
+            run,
+            request.firefighting,
+            (done, total) =>
+              scope.postMessage({
+                type: "progress",
+                requestId: request.requestId,
+                done,
+                total,
+              } satisfies SolverResponse),
+            request.crewArrivals,
+            { bases: request.airBases },
+            initialAttack?.estimate ?? null,
+            request.incidents ?? null,
+          )
+        : null;
+    if (firefighting && initialAttack) firefighting.initialAttack = initialAttack;
+    // The page does not use the per-cell behaviour; keep the message as before.
+    delete run.cellBehaviour;
     response = { type: "result", requestId: request.requestId, run, firefighting };
   } catch (cause) {
     response = {
