@@ -2609,3 +2609,49 @@
   font-size: var(--ct-text-xs);
   color: var(--rp-dim);
 }
+
+/* 3D diorama view (ReplayDiorama): fills the stage under the HUD and dock. */
+.rd-wrap,
+.rd-scene {
+  position: absolute;
+  inset: 0;
+}
+.rd-card,
+.rd-legend {
+  position: absolute;
+  z-index: var(--ct-z-overlay);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ct-space-2);
+  padding: var(--ct-space-3);
+  max-width: 300px;
+}
+.rd-card {
+  top: 60px;
+  right: 60px;
+}
+.rd-legend {
+  left: 14px;
+  bottom: 176px;
+}
+.rd-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ct-space-2);
+  margin: 0;
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-xs);
+}
+@media (max-width: 720px) {
+  .rd-card {
+    top: auto;
+    right: 14px;
+    left: 14px;
+    bottom: 190px;
+    max-width: none;
+  }
+  .rd-legend {
+    display: none;
+  }
+}

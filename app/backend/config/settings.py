@@ -66,6 +66,9 @@ if not re.fullmatch(r"[A-Za-z0-9_-]{1,63}", CACHE_MONGODB_DATABASE):
 # Live drill (docs/live-reports.md, ADR 0011/0012). Secrets come from the environment only.
 # Unset LIVE_CONTROLLER_TOKEN: requests without a token are the controller (no token needed).
 # Set it to lock controller endpoints behind that bearer token. Unset LIVE_INVITE_CODE disables join (403).
+# Most finished-board files the landscape cache keeps before evicting the oldest.
+LANDSCAPE_CACHE_MAX_FILES = int(os.environ.get("LANDSCAPE_CACHE_MAX_FILES", "2000"))
+
 LIVE_CONTROLLER_TOKEN = os.environ.get("LIVE_CONTROLLER_TOKEN", "").strip()
 # Open live feeds (docs/adr/0032-open-live-feeds.md). No keys; the contact goes in the User-Agent.
 INTEL_FEEDS_CONTACT = os.environ.get("INTEL_FEEDS_CONTACT", "").strip()

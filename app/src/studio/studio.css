@@ -189,7 +189,19 @@
 }
 .studio-diorama__buttons {
   display: flex;
+  align-items: center;
   gap: var(--ct-space-1);
+}
+.studio-diorama__zoom-label {
+  font-size: var(--ct-text-sm, 13px);
+  font-weight: 600;
+  color: var(--ct-ink);
+  background: var(--ct-surface-glass-strong);
+  backdrop-filter: var(--ct-glass-filter);
+  -webkit-backdrop-filter: var(--ct-glass-filter);
+  border-radius: var(--ct-radius-pill);
+  box-shadow: var(--ct-shadow-sm);
+  padding: 4px 10px;
 }
 .studio-region.ui-panel {
   display: grid;

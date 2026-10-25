@@ -77,6 +77,7 @@ import {
   STUDIO_BOARD_SIZES,
   useRegionBoard,
 } from "./useRegionBoard";
+import { firstLoadSeconds, readinessLabel, useCachedBoards } from "../fire/useCachedBoards";
 import { boardCellMetersFor } from "../fire/boardSize";
 import { WorldBar } from "../world/WorldBar";
 import { useStudioWorldSync } from "./useStudioWorldSync";
@@ -290,6 +291,16 @@ export default function SimulationStudioPage({
   const [boardRadius, setBoardRadius] = useState<number | null>(null);
   const { catalog, board } = useRegionBoard(regionId, boardAttempt, boardRadius);
   const region = findRegion(regionId);
+  const sizeReady = useCachedBoards(
+    region
+      ? STUDIO_BOARD_SIZES.flatMap((size) =>
+          size.radiusMeters === null
+            ? []
+            : [{ longitude: region.center.longitude, latitude: region.center.latitude, radiusMeters: size.radiusMeters, cellMeters: boardCellMetersFor(size.radiusMeters) }],
+        )
+      : [],
+    board.status,
+  );
   // Identity of the board a run was solved on: a different size is a different board.
   const boardId = boardRadius === null ? regionId : `${regionId}@${boardRadius / 1000}km`;
   const regionGrid = board.status === "ready" ? board.grid : null;
@@ -1141,6 +1152,13 @@ export default function SimulationStudioPage({
                         {STUDIO_BOARD_SIZES.map((size) => (
                           <option key={size.label} value={size.radiusMeters ?? ""}>
                             {size.label}
+                            {size.radiusMeters !== null && region
+                              ? ` \u2014 ${readinessLabel(
+                                  sizeReady({ longitude: region.center.longitude, latitude: region.center.latitude, radiusMeters: size.radiusMeters, cellMeters: boardCellMetersFor(size.radiusMeters) }),
+                                  size.radiusMeters,
+                                  boardCellMetersFor(size.radiusMeters),
+                                )}`
+                              : ""}
                           </option>
                         ))}
                       </select>
@@ -1149,7 +1167,10 @@ export default function SimulationStudioPage({
                       <p className="studio-region__note">
                         {boardCellMetersFor(boardRadius)} m cells
                         {boardCellMetersFor(boardRadius) > 30 ? " (coarser than the 30 m region boards)" : ""}.
-                        The first load of a new size can take a minute or more; later loads are cached.
+                        {region &&
+                        sizeReady({ longitude: region.center.longitude, latitude: region.center.latitude, radiusMeters: boardRadius, cellMeters: boardCellMetersFor(boardRadius) })
+                          ? "This size is cached and loads right away."
+                          : `The first load of this size takes about ${firstLoadSeconds(boardRadius, boardCellMetersFor(boardRadius))} s; later loads are cached.`}
                         {boardRadius > 13_000
                           ? " Evacuation and roads cover the centre of the board only."
                           : ""}

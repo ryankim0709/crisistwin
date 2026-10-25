@@ -190,7 +190,13 @@ def demo_wind(request):
             "samples": [
                 {"t_utc": s["t_utc"], "speed_ms": s["speed_ms"], "from_deg": s["from_deg"]} for s in hit["samples"]
             ],
-            "provenance": {k: v for k, v in (hit.get("provenance") or {}).items() if k in ("analog", "candidates", "terms")},
+            "evidence_label": hit.get("evidence_label", hit["evidence_class"]),
+            "warnings": hit.get("warnings", []),
+            "provenance": {
+                k: v
+                for k, v in (hit.get("provenance") or {}).items()
+                if k in ("analog", "candidates", "terms", "station_selection", "grid")
+            },
             "summary": hit.get("summary"),
         },
         headers={"Cache-Control": "public, max-age=3600"},
