@@ -447,7 +447,10 @@ i.e. scripts.)
   45 min before it reaches the zone's core. On /live the observation adds (4): the evacuation
   schedule (with each route's traffic) does not still give the zone tier `order`.
   "Threatened" (`zone.threatFireIds`, recorded every whole minute by `noteZoneThreats`) = a
-  reported fire that put the zone in the order tier at some minute. Until 2026-10-25 rule (3)
+  reported fire that put the zone in the order tier at some minute, or, while the zone has an
+  order in effect or scheduled, reached it within the window without being held by its units'
+  containment (so an order is not lifted the moment the forecast moves, only once that fire is
+  contained or out). Until 2026-10-25 rule (3)
   blocked a lift for any reported burning fire arriving within 360 min in free burn, and any such
   fire was recorded as threatening: a zone ordered for a small fire stayed ordered while another
   fire, under control or hours away, burned anywhere within six hours of it. Unreported fires neither block
@@ -874,6 +877,20 @@ not sourced), named in `evacThreat.ts`:
 - **Baseline policy**: `order_now` -> ordered, `schedule` -> scheduled, `warn` -> warned; scheduled
   or warned zones off the list are cancelled / withdrawn; eligible zones lifted (never tier
   `order`), then warned next call if still listed as `warn`.
+
+Measured (2026-10-25, evaluation harness, baseline policy, `--fast`, Berkeley Hills & Tilden;
+"old" = the same tree with the decision window and the held-before rule switched off in a scratch
+copy, so the only difference is this change). Studio publish `sf_7a09abf8e4f0` (seed 1439539660,
+7 mph, 3 fires; 120 min): old ordered Z16 (210 households) at T+3 for S1-F1 (0.1 ha, contained
+T+14) and lifted it at T+50; new warned Z16 at T+3 and withdrew the warning at T+21, no order.
+Synthetic 25 mph from 45°, critical moisture, at the same urban ignition (contained T+12 at 0.1
+ha): old ordered 5 zones (1,762 households) at T+4-7; new warned the same 5 and withdrew them at
+T+25-26. Synthetic 25 mph wildland ignition in Tilden (-122.21439, 37.91337; 240 min, 15.9 ha,
+never contained, no zone reached): old ordered Z09 at T+49 and Z16 at T+82 (458 households); new
+warned both, withdrew at T+111, ordered Z09 at T+155 (248 households). Synthetic 25 mph WUI
+ignition (-122.2405, 37.8790; 240 min, 63 ha, 21 homes burned in Z16 and Z23): both ordered the
+same 9 zones (3,558 households), the same minutes except Z24 (old T+4; new warned T+4, ordered
+T+65). Casualties 0 people in every run, old and new; homes burned equal.
 
 ### Evaluation harness (`app/scripts/live-eval/`)
 

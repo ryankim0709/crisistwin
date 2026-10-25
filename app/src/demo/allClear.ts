@@ -12,7 +12,8 @@
  *    done, overrun), and is not already lifted.
  * 2. Every reported fire that threatened the zone (zone.threatFireIds, noteZoneThreats: a reported
  *    fire that put the zone in the evacuation order tier at some minute, demo/evacThreat.ts
- *    orderTierThreat, kept until the zone is back to normal) is contained or out, and has been
+ *    orderTierThreat, or reached it within the window, not held by its units' containment, while
+ *    the zone had an order; kept until the zone is back to normal) is contained or out, and has been
  *    for at least ALL_CLEAR_HOLD_MINUTES (containedAt, else outAt for a fire closed by hand).
  * 3. No other reported burning fire puts the zone in the order tier now (orderTierThreat: not
  *    expected contained, with margin, before it reaches the zone's core, and arriving within the
@@ -39,7 +40,7 @@
 
 import { simClock } from "./format";
 import { isReported } from "./boardResponse";
-import { orderTierThreat } from "./evacThreat";
+import { fireHeldBeforeZone, orderTierThreat } from "./evacThreat";
 import { activeFires, departed, logEvent, zoneCounts, zoneOrderStatus, type Board, type Fire, type ZoneState } from "./model";
 import { emptyTrips } from "./traffic";
 
@@ -111,16 +112,20 @@ function arrivalsAt(board: Board, zone: ZoneState): Map<Fire, number> {
 }
 
 /**
- * Records, for every zone, the reported fires that put it in the evacuation order tier now
- * (demo/evacThreat.ts orderTierThreat; arrival within ALL_CLEAR_WINDOW_MINUTES): the fires a lift
- * waits for. Called by model.step on every whole minute; cleared when a lifted zone is back to
- * normal (finishLifts).
+ * Records, for every zone, the reported fires a lift waits for (arrival within
+ * ALL_CLEAR_WINDOW_MINUTES): those that put it in the evacuation order tier now (demo/evacThreat.ts
+ * orderTierThreat), and, while the zone has an order in effect or scheduled, every one not held
+ * before it by its units' containment (as the former rule did for all fires): an order given on
+ * the schedule's traffic-aware tier is not lifted the moment the forecast moves, only once that
+ * fire is contained or out. Called by model.step on every whole minute; cleared when a lifted zone
+ * is back to normal (finishLifts).
  */
 export function noteZoneThreats(board: Board): void {
   for (const zone of board.zones) {
+    const ordered = (zone.orderedAt !== null && zone.lift === null) || zone.pendingOrder !== null;
     for (const [fire, at] of arrivalsAt(board, zone)) {
       if (zone.threatFireIds.includes(fire.id) || at > board.minute + ALL_CLEAR_WINDOW_MINUTES) continue;
-      if (orderTierThreat(board, zone, fire)) zone.threatFireIds.push(fire.id);
+      if (orderTierThreat(board, zone, fire) || (ordered && fire.status === "burning" && !fireHeldBeforeZone(board, zone, fire))) zone.threatFireIds.push(fire.id);
     }
   }
 }

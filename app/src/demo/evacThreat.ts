@@ -104,6 +104,13 @@ export function coreArrivalOf(board: Board, zone: ZoneState, s: number): number 
   return s === za.coreSource ? za.coreArrival : Math.max(za.earliestBySource[s], za.coreArrival);
 }
 
+/** Whether a burning reported fire is held before the zone's core by its units' expected containment (module comment; no recommendation basis). */
+export function fireHeldBeforeZone(board: Board, zone: ZoneState, fire: Fire): boolean {
+  const s = board.solver.field?.sourceIndex.get(fire.id);
+  if (s === undefined) return false;
+  return heldBefore(expectedContainmentMinute(board, fire), coreArrivalOf(board, zone, s));
+}
+
 /**
  * Whether `fire` alone puts the zone in the evacuation order tier now (module comment): not held
  * before the zone's core and arriving within the latest safe start (zone route's free-flow drive,
