@@ -121,8 +121,9 @@ def questions(has_pending: bool) -> dict[str, dict[str, Any]]:
             "hypothetical, or something heard from someone else?"
         ),
         "here": jev.noul(
-            "Is what `said` describes at or right next to where the person is now, rather than at "
-            "another place they name?"
+            "Is what `said` describes on the road the person is on or within their sight right now? "
+            "Naming the road they are on, or something they can see, counts as yes. Only a place "
+            "clearly away from them, or one they heard about, counts as no."
         ),
     }
     if has_pending:
@@ -167,6 +168,8 @@ def policy(
             return Decision("Sending it now.", {"type": "confirm"}, False, conf, model)
         if reply == "no" and conf >= ANSWER_CONFIDENCE:
             return Decision("Okay, I won't send it.", {"type": "cancel"}, False, conf, model)
+        if reply == "change" and conf >= ANSWER_CONFIDENCE and pending.get("type") == "report":
+            return _corrected(answers, transcript, pending, conf, model, note_limit)
 
     intent, intent_conf = _choice(answers, "intent")
     if intent is None or intent_conf < PROPOSE_CONFIDENCE or intent in ("question", "other"):
@@ -213,6 +216,29 @@ def policy(
             f"Reported {phrase} at your location. Say undo to take it back.", action, True, confidence, model
         )
     return Decision(f"Report {phrase} at your location? Say yes to send it.", action, False, confidence, model)
+
+
+def _corrected(
+    answers: dict[str, Any], transcript: str, pending: dict[str, Any], conf: float, model: str, note_limit: int
+) -> Decision | None:
+    """A correction to the proposed report ("actually it's just one lane"): keep its kind unless
+    Jev is sure of another, take a confident new severity, and ask again (never filed on its own)."""
+    kind, kind_conf = _choice(answers, "kind")
+    if kind not in KINDS or kind_conf < AUTO_CONFIDENCE:
+        kind = pending.get("kind")
+    if kind not in KINDS:
+        return None
+    severity = pending.get("severity") if kind == pending.get("kind") else None
+    if kind in ("road_blocked", "heavy_traffic"):
+        sev, sev_conf = _choice(answers, "severity")
+        if sev in ("full", "partial", "slow") and sev_conf >= SEVERITY_CONFIDENCE:
+            severity = sev
+    else:
+        severity = None
+    note = " ".join(f"{pending.get('note') or ''} {transcript}".split())[:note_limit] or None
+    action = {"type": "report", "kind": kind, "severity": severity, "note": note}
+    phrase = SEVERITY_PHRASE.get((kind, severity), PHRASE[kind])
+    return Decision(f"Report {phrase} at your location instead? Say yes to send it.", action, False, conf, model)
 
 
 def decide(transcript: str, context: dict[str, Any], note_limit: int) -> Decision | None:

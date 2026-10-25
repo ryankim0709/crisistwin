@@ -252,7 +252,9 @@ browser; nothing here is stored.
   `livecore.routing` over the drill road graph. Distances are metres, `eta_min` minutes.
 - `POST /api/demo/decide[?incident=]` `{observation}` (at most 200 kB; 40/min) streams `application/x-ndjson`
   like `/api/dispatch/decide`: `thinking`/`text` lines, then one `orders` or `error` line. Claude
-  can `send_crew`, `release_crew`, `order_evacuation` or `order_resources` (`fire_id`, `resource`
+  can `send_crew`, `release_crew`, `order_evacuation` (`zone_id`, `destination_id`, `start_minute`:
+  absolute board minute departures start, `null` = now, at most 240 min ahead), `cancel_evacuation`
+  (`zone_id` of a scheduled zone) or `order_resources` (`fire_id`, `resource`
   one of `engine_strike_team`, `crew_strike_team`, `dozer_strike_team`, `airtanker`, `helicopter`,
   integer `count` up to 5/5/2/4/2; burning fires only); each order is validated against the ids
   in the observation (at most 20 per decision). See [docs/response-model.md](../../docs/response-model.md). Needs `ANTHROPIC_API_KEY` (else 503
@@ -306,7 +308,8 @@ Skyway in Paradise (`evidence_class: "drill_fixture"`, note says synthetic).
 `python manage.py live_smoke` (same env, server running) checks the whole phone ↔ `/live` loop
 over HTTP in about 5 s, with no simulator or browser: report, triage, replan and approve,
 guidance on the phone, destination choice, check-ins, responder position and a check task. It
-writes synthetic drill data; run `live_drill --reset` afterwards.
+writes synthetic drill data; run `live_drill --reset` afterwards. Its replan/approve step needs
+`LIVE_PROPOSALS=true` on the server (off by default: `/live` follows the AI agent).
 
 `python manage.py live_compare_record --confirm-delay-min 5 --out /tmp/record-compare` (same env;
 no server, no database writes, about 1-2 min) is a simulated planning experiment: the live twin

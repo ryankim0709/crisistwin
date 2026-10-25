@@ -33,7 +33,7 @@ import {
   type AccessClass,
   type GroundKind,
 } from "./apparatus";
-import type { CrewArrival } from "./firefighting";
+import type { CrewArrival, ReportSource } from "./firefighting";
 import { RULE_TEXT, edgeAccessTable, type EdgeAccess, type RoadRule } from "./roadAccess";
 import { CREW_TYPES, STATION_TYPES, type SuppressionBases } from "./suppressionBases";
 import { engineTurnoutMinutes } from "../response/fleet";
@@ -95,6 +95,12 @@ export interface NoAccess {
 
 export interface CrewDispatch {
   reportMinute: number;
+  /**
+   * Set by the Studio page: whether `reportMinute` was set by the user or modelled, and the
+   * name of the fire reported. Absent = modelled.
+   */
+  reportSource?: ReportSource;
+  reportedFire?: string;
   fire: LonLat;
   /** Nearest road point any trip parks at (used for crews joining the evacuation). */
   roadPoint: LonLat;

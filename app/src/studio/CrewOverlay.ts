@@ -16,6 +16,7 @@ import type { BoardFrame } from "../fire/diorama/board";
 import type { LabelLayer } from "../fire/diorama/labels";
 import type { BoardOverlay } from "../fire/diorama/types";
 import { lonLatToMercator } from "../fire/landscape";
+import { formatElapsed } from "../fire/spread";
 import { tripPosition, type CrewDispatch } from "./crewDispatch";
 import { CREW_COLORS } from "./firelinePalette";
 import { vehicleFamily, type VehicleFamily } from "./apparatus";
@@ -302,7 +303,9 @@ export class CrewOverlay implements BoardOverlay {
       ).length;
       this.label.el.textContent =
         minute < dispatch.reportMinute
-          ? "Not yet reported"
+          ? `Not yet reported · reported ${formatElapsed(Math.round(dispatch.reportMinute))}${
+              dispatch.reportSource === "set" ? " (set)" : " (modelled)"
+            }`
           : `🚒 ${onScene}/${total} at the fire${hiking > 0 ? ` · ${hiking} walking in` : ""}${left > 0 ? ` · ${left} overwhelmed, helping evacuate` : ""}`;
     }
   }

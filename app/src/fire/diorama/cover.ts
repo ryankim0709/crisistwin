@@ -38,6 +38,45 @@ const STREET_HOUSE_METERS = 26;
 const STREET_HOUSE_UNITS = { min: 0.5, max: 2.2 } as const;
 const HOUSE_ROOFS = [0xc27a5a, 0x6f7b86, 0x8fa182] as const;
 
+/** House mark codes for `CoverLayer.setHouseMarks` / `FireDioramaSceneApi.setHouseMarks`. */
+export const HOUSE_MARK = { none: 0, safe: 1 } as const;
+/**
+ * Colours of a marked house (WebGL cannot read CSS tokens). The safe roof mirrors the Houses
+ * map layer's "Safe" fill (live/householdLayer.ts, --ct-success); the badge is white.
+ */
+export const HOUSE_MARK_COLORS = { safeRoof: 0x22c55e, check: 0xffffff } as const;
+/** Check badge size (fraction of the house's longer side) and its height above the ridge (fraction of its size). */
+const HOUSE_CHECK = { scale: 0.95, lift: 0.3 } as const;
+
+/** A flat check mark ~1 unit wide, lying on the ground plane (reads north-up), 0.14 thick. */
+function checkShape() {
+  const hw = 0.13;
+  const arm = (ax: number, ay: number, bx: number, by: number) => {
+    const dx = bx - ax;
+    const dy = by - ay;
+    const len = Math.hypot(dx, dy);
+    const nx = (-dy / len) * hw;
+    const ny = (dx / len) * hw;
+    // Run a little past the joint so the two arms overlap cleanly.
+    const ex = (dx / len) * hw * 0.7;
+    const ey = (dy / len) * hw * 0.7;
+    const s = new THREE.Shape();
+    s.moveTo(ax + nx, ay + ny);
+    s.lineTo(bx + ex + nx, by + ey + ny);
+    s.lineTo(bx + ex - nx, by + ey - ny);
+    s.lineTo(ax - nx, ay - ny);
+    s.closePath();
+    return s;
+  };
+  const geo = new THREE.ExtrudeGeometry(
+    [arm(-0.46, 0.04, -0.12, -0.3), arm(0.5, 0.38, -0.12, -0.3)],
+    { depth: 0.14, bevelEnabled: false },
+  );
+  // Shape y → north (−z), extrusion → up.
+  geo.rotateX(-Math.PI / 2);
+  return geo;
+}
+
 /**
  * Regional-scale tuning (see `BoardFrame.blockMix`): at tens of km per board a house or tree
  * is a sub-pixel speck, so trees become larger soft clumps (value-noise masses of
@@ -97,6 +136,8 @@ class FireInstances {
   private readonly matrices: Float32Array;
   private readonly parts: Part[];
   private arrival: Float32Array;
+  /** Opt-in per-cell state codes (board.ts CELL_STATE); null = arrival field and burn window. */
+  private cellStates: Uint8Array | null = null;
   private readonly state: Uint8Array;
   private burning: number[] = [];
   private window = 20;
@@ -138,15 +179,52 @@ class FireInstances {
     this.t = Number.NaN;
   }
 
+  /** Per-cell states that replace the arrival-window rule (burning 1, burned out 2 or put out 3 → burned). */
+  setCellStates(states: Uint8Array | null) {
+    this.cellStates = states;
+    this.t = Number.NaN;
+  }
+
+  /** Replaces part `k`'s unburned colours (rgb per instance) and repaints the unburned instances. */
+  setPartBase(k: number, base: Float32Array) {
+    const p = this.parts[k];
+    if (!p || base.length !== p.base.length) return;
+    p.base = base;
+    for (let i = 0; i < this.count; i++) {
+      if (this.state[i] === State.Burned || (this.state[i] === State.Burning && p.glows)) continue;
+      this.c.fromArray(base, i * 3);
+      if (this.state[i] === State.Burning) this.c.lerp(CHAR, 0.55);
+      p.mesh.setColorAt(i, this.c);
+    }
+    if (p.mesh.instanceColor) p.mesh.instanceColor.needsUpdate = true;
+  }
+
+  /** Whether instance `i` is drawn burned (charred) at the last update. */
+  isBurned(i: number) {
+    return this.state[i] === State.Burned;
+  }
+
   update(t: number) {
     if (t === this.t) return;
     this.t = t;
     this.burning = [];
     let matrixDirty = false;
     let colorDirty = false;
+    const states = this.cellStates;
     for (let i = 0; i < this.count; i++) {
       const age = t - this.arrival[i];
-      const state = !(age >= 0) ? State.Unburned : age < this.window ? State.Burning : State.Burned;
+      const code = states ? states[this.cells[i]] : -1;
+      const state = states
+        ? code === 1
+          ? State.Burning
+          : code === 2 || code === 3
+            ? State.Burned
+            : State.Unburned
+        : !(age >= 0)
+          ? State.Unburned
+          : age < this.window
+            ? State.Burning
+            : State.Burned;
       if (state === State.Burning) this.burning.push(i);
       const prev = this.state[i];
       if (state === prev) continue;
@@ -180,8 +258,10 @@ class FireInstances {
     const c = this.c;
     for (const p of this.parts) {
       if (!p.glows) continue;
+      // With cell states a cell burns until its state changes, so it never cools all the way to char.
+      const maxCool = this.cellStates ? 0.55 : 1;
       for (const i of this.burning) {
-        const f = Math.min(1, Math.max(0, (this.t - this.arrival[i]) / this.window));
+        const f = Math.min(maxCool, Math.max(0, (this.t - this.arrival[i]) / this.window));
         const wobble = reducedMotion
           ? 0.5
           : 0.5 + 0.5 * Math.sin(time * 9 + i * 1.7) * Math.sin(time * 5.3 + i * 0.6);
@@ -273,6 +353,16 @@ export class CoverLayer {
   readonly counts = { trees: 0, bushes: 0, houses: 0 };
   /** Whether instances cast shadows (off on regional boards where they are sub-pixel). */
   private shadows = true;
+  /** The houses' roofs, positions and check badges, for setHouseMarks; null without houses. */
+  private houses: {
+    roof: FireInstances;
+    /** Unmarked roof colours (rgb per house). */
+    roofBase: Float32Array;
+    xz: Float32Array;
+    checkM: Float32Array;
+    checks: THREE.InstancedMesh;
+    marks: Uint8Array | null;
+  } | null = null;
 
   /** With `streets`, trees keep off the roads and houses stand along residential streets. */
   constructor(frame: BoardFrame, streets: ProjectedStreets | null = null) {
@@ -673,6 +763,13 @@ export class CoverLayer {
     }
     const cells = Int32Array.from(p.cells);
     const burnedWall = new THREE.Color(0x4f4842);
+    const roofBase = Float32Array.from(p.colorsB);
+    const roofSet = new FireInstances(
+      cells,
+      roofM,
+      [{ mesh: roofs, base: roofBase.slice(), burned: CHAR, glows: true }],
+      new THREE.Vector3(1, 0.5, 1),
+    );
     this.sets.push(
       new FireInstances(
         cells,
@@ -680,13 +777,74 @@ export class CoverLayer {
         [{ mesh: bodies, base: Float32Array.from(p.colorsA), burned: burnedWall, glows: false }],
         new THREE.Vector3(1, 1, 1),
       ),
-      new FireInstances(
-        cells,
-        roofM,
-        [{ mesh: roofs, base: Float32Array.from(p.colorsB), burned: CHAR, glows: true }],
-        new THREE.Vector3(1, 0.5, 1),
-      ),
+      roofSet,
     );
+
+    // Check-mark badges for houses marked safe (setHouseMarks): flat, above each ridge.
+    const n = p.cells.length;
+    const xz = new Float32Array(n * 2);
+    const checkM = new Float32Array(n * 16);
+    for (let i = 0; i < n; i++) {
+      tmpMat.fromArray(p.m, i * 16).decompose(pos, quat, scl);
+      xz[i * 2] = pos.x;
+      xz[i * 2 + 1] = pos.z;
+      const ridge = roofTops[i * 2] + roofTops[i * 2 + 1];
+      const s = Math.max(scl.x, scl.z) * HOUSE_CHECK.scale;
+      tmpPos.set(pos.x, ridge + s * HOUSE_CHECK.lift, pos.z);
+      tmpScale.set(s, s, s);
+      // Badges keep a north-up reading (the default camera looks north) rather than the house's yaw.
+      tmpMat.compose(tmpPos, tmpQuat.identity(), tmpScale).toArray(checkM, i * 16);
+    }
+    const checks = new THREE.InstancedMesh(
+      checkShape(),
+      new THREE.MeshBasicMaterial({ color: HOUSE_MARK_COLORS.check, toneMapped: false }),
+      n,
+    );
+    checks.name = "house-checks";
+    checks.count = 0;
+    checks.frustumCulled = false;
+    this.group.add(checks);
+    this.houses = { roof: roofSet, roofBase, xz, checkM, checks, marks: null };
+  }
+
+  /** World (x, z) of each cover house, in instance order (empty without houses). */
+  housePositions(): Float32Array {
+    return this.houses?.xz ?? new Float32Array(0);
+  }
+
+  /**
+   * Per-house marks parallel to `housePositions` (HOUSE_MARK: 1 = residents safe → green roof
+   * and a white check badge). A burned roof keeps its char (burned wins); the badge stays, as
+   * it is about the people, not the house. `null` or a length mismatch clears every mark.
+   */
+  setHouseMarks(marks: Uint8Array | null) {
+    const h = this.houses;
+    if (!h) return;
+    const n = h.xz.length / 2;
+    const use = marks && marks.length === n ? marks : null;
+    if (use === h.marks) return;
+    if (use && h.marks && use.length === h.marks.length && use.every((v, i) => v === h.marks![i])) return;
+    h.marks = use ? use.slice() : null;
+    const base = h.roofBase.slice();
+    let k = 0;
+    if (use) {
+      for (let i = 0; i < n; i++) {
+        if (use[i] !== HOUSE_MARK.safe) continue;
+        tmpColor.set(HOUSE_MARK_COLORS.safeRoof).multiplyScalar(0.94 + 0.12 * hash2(i * 0.37, 2.1));
+        base[i * 3] = tmpColor.r;
+        base[i * 3 + 1] = tmpColor.g;
+        base[i * 3 + 2] = tmpColor.b;
+        tmpMat.fromArray(h.checkM, i * 16);
+        h.checks.setMatrixAt(k++, tmpMat);
+      }
+    }
+    h.checks.count = k;
+    h.checks.instanceMatrix.needsUpdate = true;
+    h.roof.setPartBase(0, base);
+  }
+
+  setCellStates(states: Uint8Array | null) {
+    for (const s of this.sets) s.setCellStates(states);
   }
 
   private instanced(geo: THREE.BufferGeometry, mat: THREE.Material, count: number, name: string) {

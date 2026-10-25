@@ -1,5 +1,5 @@
 /**
- * Build prebuilt Southern California landscape packages (ADR 0013) with the page's own
+ * Build prebuilt California landscape packages (ADR 0013) with the page's own
  * loader and encoder. Run through `node tools/build_landscape_regions/run.mjs`, which
  * bundles this file with esbuild; see tools/build_landscape_regions/README.md.
  *

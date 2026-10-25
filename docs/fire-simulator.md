@@ -24,7 +24,7 @@ docker compose restart frontend
 Open **http://localhost:5173/fire**. The page opens on a three.js miniature of the loaded
 landscape (see [ADR 0011](adr/0011-fire-diorama-view.md)), built from LANDFIRE fuels,
 terrain elevation, and canopy. It opens on a prebuilt California region (Altadena & Eaton
-Canyon by default; _Region_ lists the 41 station-scale boards in `app/src/fire/regions.ts`, each
+Canyon by default; _Region_ lists the 13 station-scale boards (11 Bay Area, 2 Los Angeles) in `app/src/fire/regions.ts`, each
 framed around one fire station at 30 m, grouped by area and marked _not built_ when missing
 from `GET /api/landscapes`), pulled from MongoDB through the backend
 ([ADR 0013](adr/0013-prebuilt-socal-landscapes.md)). The area readout says whether the

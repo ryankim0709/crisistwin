@@ -97,6 +97,9 @@ struct VoiceContext: Codable, Equatable {
     var pending: VoiceAction?
     /// The last few turns, oldest first.
     var history: [VoiceHistoryTurn]
+    /// The phone's zone id (zone-level, public), so the server can answer from that zone's facts.
+    /// Sent as `zone_id`. No coordinates.
+    var zoneId: String? = nil
 }
 
 /// Body of `POST incidents/{id}/voice`: exactly one of `audioB64` (base64 WAV) or `text`.
@@ -134,10 +137,13 @@ struct VoiceTurnResponse: Decodable, Equatable {
     var auto: Bool = false
     /// 0 to 1, Jev only. A model's confidence, not an observation.
     var confidence: Double? = nil
+    /// Which server facts a Claude reply used: `guidance`, `guidance_history`, `hazards`,
+    /// `shelters`, `fire`. Empty for Jev or when none.
+    var sources: [String] = []
 
     private enum CodingKeys: String, CodingKey {
         case transcript, reply, action, audioB64, audioFormat, tts, model, evidenceClass, streamed, spokenExtra
-        case decidedBy, auto, confidence
+        case decidedBy, auto, confidence, sources
     }
 }
 
@@ -159,6 +165,7 @@ extension VoiceTurnResponse {
         decidedBy = try? container.decodeIfPresent(String.self, forKey: .decidedBy)
         auto = (try? container.decodeIfPresent(Bool.self, forKey: .auto)) ?? false
         confidence = try? container.decodeIfPresent(Double.self, forKey: .confidence)
+        sources = (try? container.decodeIfPresent([String].self, forKey: .sources)) ?? []
     }
 }
 

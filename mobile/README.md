@@ -139,6 +139,11 @@ and **Need help** check-ins. Responders see their assigned checks in **Tasks**. 
 is per zone and is approved by a controller on the web (`/live`), or published
 automatically for a pure reroute around a confirmed block or fire.
 
+People see the street address nearest them ("Near 21 Miramonte Rd, Orinda"), never a planning
+zone id: `LocationProvider.placeName` looks it up with MapKit's `MKReverseGeocodingRequest`, which
+sends the coordinate to Apple (as Apple Maps search already does for the meeting point); it is not
+sent to the CrisisTwin server. A new lookup runs after moving 75 m, at most every 15 s.
+
 The phone polls `GET /api/live/incidents/camp-2018-drill/situation` and finds
 its zone on the device, so a civilian's location leaves the phone only inside a
 report or a **Need help** check-in. Responders can opt in to sharing their latest
@@ -157,7 +162,10 @@ the guidance text the screen shows, the pending proposal and the last 6 turns) t
 `POST /api/live/incidents/{id}/voice`, where Claude picks at most one proposed action and writes a
 short spoken reply. Contract, limits and errors:
 [live-reports.md "Voice mode"](../docs/live-reports.md#voice-mode). Coordinates are not sent to the
-voice endpoint.
+voice endpoint. The phone does send its zone id (`context.zone_id`), so the server can build the
+facts a question is answered from, and under a Claude reply it shows which facts were used, for
+example "From: published guidance · reported hazards · fire estimate" (nothing for a Jev reply or
+when none were used); see [Grounded answers](../docs/live-reports.md#grounded-answers).
 
 Streaming path (voice v2). The phone asks the server for a short-lived Cartesia token
 (`POST .../voice/token`, 300 s, speech-to-text and text-to-speech only, so the Cartesia key stays on

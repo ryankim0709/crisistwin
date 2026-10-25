@@ -1,20 +1,29 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useId, useRef, type ReactNode } from "react";
 import { IconButton, Panel } from "../ui";
 
 /**
- * A slide-over over the map's right edge for the panels that left the sidebar. Non-modal (the
- * map and sidebar stay usable); Escape or the close button shuts it and focus returns to where
- * it was when the drawer opened (the Details button).
+ * A slide-over over one edge of the map: "Details" (the panels that left the sidebar, right
+ * edge) and the full audit log (left edge, beside the activity feed). Non-modal (the map and
+ * columns stay usable); Escape or the close button shuts it and focus returns to where it was
+ * when the drawer opened (its opening button).
  */
 export default function DetailsDrawer({
   open,
   onClose,
   children,
+  title = "Details",
+  side = "right",
+  fill = false,
 }: {
   open: boolean;
   onClose: () => void;
   children: ReactNode;
+  title?: string;
+  side?: "left" | "right";
+  /** The child fills the body and scrolls itself (the audit log) instead of the body scrolling. */
+  fill?: boolean;
 }) {
+  const titleId = useId();
   const panelRef = useRef<HTMLElement>(null);
   const onCloseRef = useRef(onClose);
   useEffect(() => {
@@ -44,18 +53,18 @@ export default function DetailsDrawer({
       ref={panelRef}
       glass
       compact
-      className="lc-drawer"
+      className={`lc-drawer lc-drawer--${side}`}
       role="dialog"
       aria-modal="false"
-      aria-labelledby="lc-drawer-title"
+      aria-labelledby={titleId}
     >
       <header className="lc-drawer-head">
-        <h2 id="lc-drawer-title">Details</h2>
-        <IconButton label="Close details" size="sm" onClick={onClose}>
+        <h2 id={titleId}>{title}</h2>
+        <IconButton label={`Close ${title.toLowerCase()}`} size="sm" onClick={onClose}>
           ×
         </IconButton>
       </header>
-      <div className="lc-drawer-body">{children}</div>
+      <div className={`lc-drawer-body${fill ? " lc-drawer-body--fill" : ""}`}>{children}</div>
     </Panel>
   );
 }

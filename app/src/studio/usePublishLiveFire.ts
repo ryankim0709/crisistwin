@@ -22,7 +22,7 @@ import {
   type LiveFireResponse,
 } from "./liveFire";
 import { fetchLiveDrill, liveToken, packageRegionId } from "./liveSync";
-import { findRegion } from "./useRegionBoard";
+import { parseStudioBoardId } from "./useRegionBoard";
 
 export type LiveFireState =
   | { status: "idle" }
@@ -68,7 +68,7 @@ async function syncAndPublish(
     return;
   }
 
-  const regionName = findRegion(regionId)?.name ?? regionId;
+  const regionName = parseStudioBoardId(regionId)?.region.name ?? regionId;
   let switchedTo: string | null = null;
   let phase = "read the Live command drill";
   try {

@@ -281,7 +281,7 @@ API serves `camp-2018-drill` (always) and the active incident; any other id is
   "source": "package",                        // "bundle" (Camp) | "package" (Studio drill package)
   "package_id": "pkg_1a2b3c4d5e6f",           // null for Camp
   "activated_at": "2026-10-24T20:01:00Z",     // null until a controller switches
-  "region_id": "berkeley-hills-tilden",        // Studio region of the package (summary.region_id); null for Camp
+  "region_id": "berkeley-hills-tilden@10km",   // Studio board of the package (summary.region_id): region id, plus "@<N>km" for a chosen half-width; null for Camp
   "join": { "invite_required": true } }
 ```
 
@@ -430,6 +430,40 @@ Additive fields (D1 destination choice, D2 fire caveat); clients must accept the
   in place on the zone's current version **without a version bump**. Clients re-check, on
   every poll, that a chosen destination is still in `alternatives`.
 
+### Guidance from the Live board's orders
+
+Resident guidance now comes from the evacuation orders on the /live simulated command board: what
+the AI agent (or the controller) orders there is what the phones are told. Each run-state PUT
+([Run state](#run-state)) that holds the single-writer lease publishes it
+(`api/live/board_guidance.py`), so one console publishes and a refused (`409 run_state_owned`)
+console publishes nothing. Per zone, from the PUT's `order` block:
+
+| `order.status` | Published guidance |
+|---|---|
+| `leaving`, `done` | `evacuate_now` to `destination_id` on `order.route` (the board's route option); `reason` "Evacuation ordered by the AI agent on the simulated board", `reason_code: "board_order"`. `done` keeps the order in force (no new version) |
+| `scheduled` | `be_ready` on the same route; `reason` "Leave at T+01:30 on the simulated board clock (scheduled by ...)" (board minutes, not wall or drill time), `reason_code: "board_scheduled"`, `board_start_minute` |
+| `none` | withdraws what the zone was last told (`level: "none"`, `reason_code: "board_no_order"`): a cancelled schedule, a new board run, or guidance left from the former proposal flow. Nothing is written for a zone never told anything |
+| `overrun` | `evacuate_now` with `no_route: true` ("Fire reached this zone on the simulated board"; the phone shows "No open route. Shelter in place and tap Need help."), `reason_code: "board_overrun"`; only for a zone that had an order or guidance |
+
+- **Versions.** A new version only when the level, destination, the road to leave by (`via[0]`),
+  the scheduled start or the source changes. A refreshed route line, ETA, safety or wording for
+  the same destination and road updates the current version in place. A PUT whose orders did not
+  change writes nothing.
+- **Labels.** Board documents add `source: "board"`, `issued_by` (`ai_agent` or `controller`: the
+  actor of the zone's latest board order; null when unknown), `board_run_id`, `board_minute` and
+  `evidence_class: "simulated"`. `approved_by` stays `"controller"` and `proposal_id` is
+  `"board:<run_id>"` (the collection validator and the iOS decoder accept only those shapes, so
+  the iOS app still words the source "Approved by incident command"). `replay_at` is the drill
+  time when a drill is running, else absent. `alternatives` is `[]`; `caveat` follows
+  `route.safety` as above.
+- **Activity feed.** Each published change logs one `live_decisions` entry,
+  `{action: "board_guidance", actor: "ai_agent"|"controller"|"board", note}`, whose note is the
+  feed line, e.g. "Residents of Z35 told: Leave now via Sports Lane to CA 13 (south)". Three or more
+  withdrawals of non-board guidance in one PUT share one line.
+- No route or level is computed here: destination, road, ETA and line are the board's route option
+  (`POST /api/demo/routes`). A moving order whose PUT has no `order.route`, or whose destination
+  the drill does not know, changes nothing.
+
 Alternatives (`livecore.planner.with_alternatives`, `livecore.routing.alternative_routes`)
 are reachable exits and open refuges for that zone, computed by the same router with the
 same closed-edge rules: one forward Dijkstra from the zone's origin, with the edge cost of
@@ -485,6 +519,15 @@ Planner rules (`livecore.planner.plan`, constants named in code):
   (`POST incidents/{id}/impact`) starts from the same blocks and toggles one segment.
 
 ## Proposals and the approval policy
+
+**Off by default (`LIVE_PROPOSALS=false`).** `/live` follows the AI agent on the simulated
+board (Claude orders evacuations and dispatch there), so the twin-controller proposal flow
+below does not run: no automatic replan on `situation`/`command` reads, no replan after a
+`confirm`, `command.proposals` is `[]`, and `POST incidents/{id}/replan` and
+`POST proposals/{id}/approve` answer `410 { "error": "proposals_off" }`. Reject still works.
+The planner modules stay; `LIVE_PROPOSALS=true` turns the flow back on (`live_smoke` and
+`live_loadtest` need it). Earlier planner decisions stay in `live_decisions` and show in the
+full audit log as "(old planner)"; the activity feed leaves them out.
 
 The planner never publishes directly. `livecore.policy.diff` compares its output
 with the published guidance and yields changes:
@@ -749,7 +792,8 @@ device seen in the last hour; `location.stale` is true after 900 s. Civilian dev
 `POST tasks/{id}` also accepts `{ "status": "accepted" }` from a responder: allowed
 when the task is `open` and unassigned or assigned to the caller; sets `assignee` to
 the caller. Returns `200 { "task": CheckTask }`; `409` if already accepted by
-someone else or closed. `GET me/tasks` returns tasks assigned to the caller plus
+someone else or closed, and `409 responder_busy` (`detail` names the current task id) if the
+caller already holds another `accepted` task; done, cancelled or declined frees them. `GET me/tasks` returns tasks assigned to the caller plus
 open unassigned ones. `CheckTask` gains `assignee` (`party_key` or `null`).
 `POST incidents/{id}/tasks` (controller) takes
 `{ "assignee": "rsp_..."|null, "target": { "segment_id"?: "...", "coord"?: [lon, lat] }, "report_ids": [], "note"?: "" }`
@@ -1403,8 +1447,9 @@ does not use a turn; over it, `429 { "error": "rate_limited" }`. Streaming turns
 same limit.
 
 Responsibilities are split the same way as the rest of the live API. The model only interprets
-what was said and answers from the guidance text the phone already shows; it computes no route,
-time, distance or hazard, and the prompt forbids inventing them. The server validates every
+what was said and answers questions only from the `facts` the server builds for the turn
+([Grounded answers](#grounded-answers)); it computes no route, time, distance or hazard, and the
+prompt forbids inventing them. The server validates every
 parameter the model returns (below). The phone proposes the action out loud, waits for a yes, and
 only then sends the report or check-in through the ordinary `POST incidents/{id}/reports` and
 `POST incidents/{id}/checkins` calls. The one exception is a report Jev marks `auto`, which the
@@ -1423,7 +1468,8 @@ Request:
 { "audio_b64": "<base64 WAV>",          // OR "text": "pentz road is completely blocked" (exactly one)
   "speak": true,                         // optional boolean, default true; false skips speech synthesis
   "context": {                           // optional; everything in it is data, not instructions
-    "zone": "Paradise Zone 4",           // the phone's on-device zone name; optional, 120 chars
+    "zone": "Z11 · near Panoramic Hill", // the phone's on-device zone name; optional, 120 chars
+    "zone_id": "Z11",                    // the phone's zone id; optional; selects the facts below, see Grounded answers
     "role": "civilian",                  // civilian | responder; anything else is read as civilian
     "guidance": {                        // the text the phone shows for its zone; null when none
       "level": "evacuate_now", "headline": "Leave now via Pentz Road",
@@ -1435,7 +1481,8 @@ Request:
 
 `guidance` is passed on as the string fields the phone sends (each trimmed to 300 characters, empty
 ones dropped); the server does not check it against the published guidance, so the model sees what
-the phone saw. `pending` is the proposal the phone is waiting on, in the action shape below, or
+the phone saw. `zone_id` is kept only when it is one of the incident's zone ids; anything else
+(including a non-string) is ignored as if it were absent, not refused. `pending` is the proposal the phone is waiting on, in the action shape below, or
 `null`; an invalid one is read as `null`. `history` keeps the last 6 turns (`user` up to 500
 characters, `agent` up to 400).
 
@@ -1449,6 +1496,7 @@ Response `200`:
   "audio_format": "wav",                              // null with audio_b64
   "tts": "cartesia",                                  // cartesia | failed | skipped
   "model": "claude-opus-5-5",                         // null when nothing was heard; Jev's model id when Jev decided
+  "sources": [],                                      // the facts sections the reply used; see Grounded answers
   "decided_by": "claude",                             // jev | claude | null (null when nothing was heard)
   "auto": false,                                      // true only for a report the phone may file without asking
   "confidence": null,                                 // Jev's probability (0-1, 3 decimals) when decided_by is jev; else null
@@ -1500,11 +1548,14 @@ Errors, always `{ "error": code, "detail": "..." }`:
 
 What leaves the phone on the batch path. For a spoken turn, the recording goes through this server
 to Cartesia for transcription. The transcript and the context (zone name, the guidance text above, the pending
-proposal, the last 6 turns) go to Anthropic, and the reply text goes to Cartesia for speech.
+proposal, the last 6 turns) go to Anthropic, together with the server-built `facts`
+([Grounded answers](#grounded-answers)), and the reply text goes to Cartesia for speech. The one
+field added for the facts is `context.zone_id`, a zone id with no position.
 Coordinates are not part of the request: the location of a report is attached on the phone when
 the report is sent, after the person agrees, and a `need_help` check-in carries its coordinates as
 described under [Check-ins](#check-ins). The server stores no audio, transcript, reply or context
-from a turn and logs only provider error codes. When `TYPESAFE_API_KEY` is set, a smaller state also
+from a turn and logs only provider error codes, how long the facts took to build and, when they
+fail, the exception (the log lines carry the incident and zone ids, not the transcript). When `TYPESAFE_API_KEY` is set, a smaller state also
 goes to TypeSafe on every turn (see [Decisions (Jev)](#decisions-jev)). This document does not state
 how long Cartesia, Anthropic or TypeSafe keep what they receive; that was not checked.
 
@@ -1512,6 +1563,142 @@ Configuration (server environment, never `VITE_*`): `ANTHROPIC_API_KEY` and `CAR
 (both paid), optional `CARTESIA_VOICE_ID`, `CARTESIA_TTS_MODEL` (default `sonic-3.6`) and
 `VOICE_MODEL` (default `claude-opus-5-5`), and optional `TYPESAFE_API_KEY` (paid) with `JEV_MODEL`
 (default `jev-latest`). See [`app/backend/README.md`](../app/backend/README.md).
+
+### Grounded answers
+
+Questions such as "Is Pentz Road blocked?", "Where is the nearest shelter, is it full?", "How close
+is the fire?", "Which way, and how long?" and "Has my order changed?" are answered only from
+`facts`, a compact object the server builds for the turn and puts in the model's user message in a
+`<facts>` block, next to the phone's `<context>`. Code: `app/backend/api/live/voice_facts.py`
+(building the facts) and `voice.py` (the request field, the prompt and the `sources` check). The
+facts are copies and direct measures of data the server already holds: the same snapshot as
+`situation` (public items, fire estimate, drill clock), the zone's guidance as the phone receives
+it, the guidance version history, and the drill's zones and destinations. No model estimates
+anything in them.
+
+It is a single model call. There is no tool loop in which the model could look something up, so
+everything it may state is in `facts`, and a question the facts do not cover is answered with "I
+don't have that information". That keeps latency to one call; it was chosen over a tool loop, and the
+extra time the facts add to a turn was not measured for this document (the server logs the build time
+of each as `voice: facts for ... in N ms`).
+
+**When facts are built.** Only for a turn that goes to Claude: a turn with a transcript that Jev
+did not decide ([Decisions (Jev)](#decisions-jev)). Jev's fixed replies, a turn with nothing
+heard and a refusal carry no facts and `sources: []`. Batch and streaming turns are the same.
+
+**The request field.** `context.zone_id` is the zone id the phone already knows (the one it sends
+with check-ins). The server keeps it only if it is one of the incident's zones (the drill index);
+an unknown or non-string value is ignored and the turn is built as if no zone had been sent. No
+coordinates are added.
+
+**The `facts` object.** Illustrative values; the shape is what the code builds:
+
+```jsonc
+{ "as_of": "2018-11-08T16:05:00Z",        // drill clock (replay time); null if the drill has none
+  "drill": "Camp Fire drill, 2018-11-08", // the drill's label, 200 chars
+  "zone": { "id": "bg:060070009011", "name": "Block Group 1, Census Tract 9" },   // null without a valid zone_id
+  "guidance": {                           // the zone's published guidance; null with no zone or none published
+    "level": "evacuate_now",              // evacuate_now | be_ready | none
+    "headline": "Leave now via Skyway",   // as the phone titles it
+    "destination": "Exit south", "route_via": ["Skyway", "Clark Road"],   // up to 4 road names
+    "eta_min": 26, "route_km": 14.2,      // drive time and length of the published route
+    "no_route": false,
+    "reason": "Fire estimate within 3 km", "caveat": null,   // 200 chars each
+    "options": [ { "destination": "Exit south", "via": ["Skyway"], "eta_min": 26, "recommended": true } ],   // up to 3
+    "source": "Approved by incident command",   // or "Official order" or "Model estimate"
+    "version": 3, "as_of": "2018-11-08T16:00:00Z" },
+  "guidance_history": [ { "version": 2, "level": "be_ready", "headline": "Be ready to leave",
+                          "reason": "Fire estimate within 8 km", "as_of": "2018-11-08T15:40:00Z" } ],   // up to 3 earlier versions, newest first; [] without any
+  "hazards": [ { "kind": "road_blocked", "severity": "full", "road": "Pentz Road", "place": null,
+                 "status": "confirmed",   // confirmed | responder_corroborated | corroborated
+                 "reports": 3, "people": 3,
+                 "first_reported_at": "2026-10-24T17:40:12Z", "last_reported_at": "2026-10-24T17:52:40Z",
+                 "minutes_ago": 14, "km_from_zone": 1.2 } ],      // up to 8
+  "hazards_total": 5,                     // how many public items there are in all
+  "shelters": [ { "name": "Paradise Alliance Church", "kind": "shelter", "km_from_zone": 4.1,
+                  "reported_full": false, "full_reported_at": null, "full_minutes_ago": null } ],   // up to 5
+  "fire": { "method": "model_nowcast", "label": "Model estimate, 16:00 drill time",
+            "evidence_class": "simulated", "as_of": "2018-11-08T16:00:00Z", "age_min": 5,
+            "km_from_zone": 2.3, "zone_inside": false } }          // null with no fire estimate yet
+```
+
+Lists can be empty and are never padded. `truncated: true` appears only when the facts were cut to
+fit (below).
+
+- Guidance. `guidance` is the zone's published guidance as the phone gets it, with `source` worded as
+  the phone words it. `guidance_history` reads the zone's earlier versions from `live_guidance`,
+  which is append-only until a drill reset, so it holds what was published before, not a log of why
+  it changed. The phone's own `context.guidance` is still sent and still not checked against the
+  server's.
+- Hazards. These are the incident's public items of any kind, by the publication rule in
+  [Rules](#rules-deterministic-constants-named-in-code): not stale or contradicted, and three
+  independent civilians, or a responder and a civilian, or confirmation by incident command
+  (`help_needed` is never public). `status` says
+  which: `confirmed`, `responder_corroborated` or `corroborated`. Order: items on a road the person
+  named come first (the road's full name or its name without "Road", "Drive" and similar, at least
+  4 letters, as whole words in the transcript), then nearest, then newest. The model is told to say
+  "no public reports" for a road with no entry, never "clear".
+- Shelters. The nearest 5 destinations of kind `shelter` or `temporary_refuge`. `reported_full` is
+  true only when a public `shelter_full` item names the destination (`full_reported_at` is its
+  first report). False means no public report, not that there is room.
+- Fire. The current fire estimate with its own `method`, `label` and drill time, as in
+  [Fire estimate](#fire-estimate-current-best-estimate-never-a-forecast). It is an estimate, not a
+  forecast and not an observation of the fire's edge. `zone_inside` is true when the estimate
+  overlaps or touches the zone.
+
+**Distances.** `km_from_zone` is kilometres to one decimal, from the nearest edge of the person's
+zone polygon to the hazard's or shelter's point, `0.0` when the point is inside the zone. For the
+fire it is the gap between the zone and the estimate's polygon, `0.0` when they overlap or touch.
+The method is the planar one used elsewhere for areas (`livecore.geo`: an equirectangular projection
+at the zone's latitude), not haversine and not driving distance, and it is measured from the zone's
+edge, not from the person. The module's comment says the result differs from great-circle distance by
+well under 1 percent over an incident; that was not measured here. Coordinates are `[lon, lat]`
+internally and none are sent. Without a valid `zone_id` every `km_from_zone` is `null`, and the
+prompt tells the model that nothing is then "nearest" or "near" the person. A nearest shelter is
+nearest in a straight line from the zone, which can differ from the nearest by road.
+
+**Clocks.** `as_of`, the guidance times and the fire times are drill time. Field reports are
+real-time observations, so hazard and shelter-report times are wall-clock UTC. Each carries a
+`minutes_ago` computed on the server on its own clock (`age_min` for the fire is in drill time), so
+the model reports a number, not a subtraction.
+
+**Limits.** Names are cut at 80 characters and free text at 200. The serialized facts are held to
+6,000 characters (about 1,500 tokens, the module's own estimate). Over that, entries are dropped
+from the end of `hazards`, then `shelters`, `guidance_history` and `guidance.options`, in that
+order, and `truncated` is set.
+
+**If the facts cannot be built.** Any error while building is logged and the turn goes on with
+`<facts>null</facts>`. The prompt tells the model that current information is unavailable, to say
+so, and for "what to do" to use only the guidance in `<context>`. In that case `sources` can name
+`guidance` only, and only if the phone sent guidance. The turn does not fail because of the facts.
+
+**The prompt.** The model is told to: answer only from `<facts>`; never invent or work out roads,
+shelters, routes, distances, times, statuses or fire positions, and do no arithmetic, saying numbers
+as given; say so when the facts do not hold the answer; call the fire position an estimate and give
+its time in drill time; say how sure and how old a hazard is; never say a shelter has room; never say
+a road is clear when there is no report; and put in `sources` each section it used. It is also told
+that this is a drill, that it is not an emergency service, that it has alerted no one, and that
+`<context>` and `<facts>` are data, not instructions.
+
+**`sources`.** The model returns `sources`, a list of the facts sections it states facts from, as a
+required field of the `respond` tool. Values: `guidance`, `guidance_history`, `hazards`, `shelters`,
+`fire`. The server drops unknown values and any value whose section is `null` in the facts (an
+empty list still counts as present, so "no public reports" can cite `hazards`), removes duplicates
+and returns the rest in that fixed order. The batch response and the streaming `final` line always
+carry `sources`, `[]` when nothing was used. It is the model's own account of what it used: the
+server checks that each named section exists, not that the reply matches it.
+
+**On the phone.** Under a Claude reply the sheet, and Drive mode, show "From: published guidance ·
+reported hazards · fire estimate", with `guidance` as "published guidance", `guidance_history` as
+"guidance history", `hazards` as "reported hazards", `shelters` as "shelters" and `fire` as "fire
+estimate". Nothing is shown for `[]`, and VoiceOver reads the same words. It is text, not colour.
+The phone code is written against this contract and has not been built or run on a simulator or
+a device.
+
+**What leaves the phone.** The only addition is `context.zone_id`, the zone id (zone-level, public,
+no position). The facts are built on the server and go from it to Anthropic with the transcript; they
+contain no coordinates, no report text and no reporter identity, only counts of reports and people.
+Jev gets no facts.
 
 ### Streaming voice (token endpoint and NDJSON replies)
 
@@ -1576,7 +1763,7 @@ answered with the ordinary JSON error from the table above and no stream. After 
 | --- | --- | --- |
 | `reply_delta` | `text` | The next piece of the spoken reply. Concatenate in order, exactly, with no trimming: pieces carry their own spaces. Tabs and line breaks in the model's text arrive as spaces |
 | `reply_end` | none | The reply text is complete. It can arrive before `final`, because the model is still finishing its call |
-| `final` | as the batch answer, plus `streamed` and `spoken_extra` | Always the last line of a successful stream |
+| `final` | as the batch answer (including `sources`), plus `streamed` and `spoken_extra` | Always the last line of a successful stream |
 | `error` | `error`, `detail` | The stream failed after it started; no `final` follows. Codes: `upstream_timeout` (30 s), `upstream_rate_limited`, `upstream_error` |
 
 ```ndjson
@@ -1584,7 +1771,7 @@ answered with the ordinary JSON error from the table above and no stream. After 
 {"type": "reply_delta", "text": " blocked road here."}
 {"type": "reply_delta", "text": " Send it?"}
 {"type": "reply_end"}
-{"type": "final", "transcript": "pentz road is completely blocked", "reply": "Report a fully blocked road here. Send it?", "streamed": true, "spoken_extra": null, "action": {"type": "report", "kind": "road_blocked", "severity": "full", "note": null}, "audio_b64": null, "audio_format": null, "tts": "client", "model": "claude-opus-5-5", "decided_by": "claude", "auto": false, "confidence": null, "evidence_class": "ai_interpretation"}
+{"type": "final", "transcript": "pentz road is completely blocked", "reply": "Report a fully blocked road here. Send it?", "streamed": true, "spoken_extra": null, "action": {"type": "report", "kind": "road_blocked", "severity": "full", "note": null}, "audio_b64": null, "audio_format": null, "tts": "client", "model": "claude-opus-5-5", "sources": [], "decided_by": "claude", "auto": false, "confidence": null, "evidence_class": "ai_interpretation"}
 ```
 
 How the piece boundaries fall depends on the model's output, so the example is illustrative. In
@@ -1634,7 +1821,7 @@ What goes where, on this path:
 | Destination | What it receives |
 | --- | --- |
 | Cartesia, directly from the phone | Microphone audio while the phone is listening; the reply text, and any announcement text, to be spoken; the access token. Cartesia sees the phone's network address |
-| This server (and from it, Anthropic) | The transcript, the zone name, the guidance text, the pending proposal and the last 6 turns, as in `context` above |
+| This server (and from it, Anthropic) | The transcript, the zone name and id, the guidance text, the pending proposal and the last 6 turns, as in `context` above. The server adds `facts` (public data, no coordinates) before the model call |
 | TypeSafe, from this server, when `TYPESAFE_API_KEY` is set | The transcript, the pending proposal, the last reply and the guidance headline ([Decisions (Jev)](#decisions-jev)) |
 | Not sent anywhere | Coordinates, as before. Microphone audio does not reach this server on the streaming path |
 
@@ -1687,8 +1874,8 @@ with the whole reply, `reply_end`, then `final`.
 | `status` | `out`, `staying`, `need_help` |
 | `screen` | `home`, `map`, `route`, `reports`, `plan`, `none` |
 | `firsthand` | `noul`: the probability that the person is describing something happening now, first-hand, not asking, speculating or repeating hearsay |
-| `here` | `noul`: the probability that what they describe is at or next to where they are, not at a place they name elsewhere |
-| `pending_reply` | `yes`, `no`, `change`, `other`; asked only when the phone sent a `pending` proposal |
+| `here` | `noul`: the probability that what they describe is on the road they are on or within sight; a place clearly away from them, or one they heard about, counts as no |
+| `pending_reply` | `yes`, `no`, `change`, `other`; asked only when the phone sent a `pending` proposal. A confident `change` to a proposed report keeps its kind (unless `kind` reaches 0.85), takes a confident new severity, appends the words to the note, and asks again; it is never filed automatically |
 
 The state Jev sees has four fields: the transcript (`said`), the pending proposal, the last reply
 (`last_reply`, the `agent` text of the newest history turn) and the guidance headline. It holds no
@@ -1775,6 +1962,18 @@ own report](#edit-or-withdraw-your-own-report)). Under a reply the sheet shows "
 automatically" for an automatic report, and "Claude" for a Claude answer. The server returns `undo` without knowing whether there is
 anything to take back and keeps no record of the report. None of this has been run on a device.
 
+**Measured (2026-10-24, `jev-1.14.0`, 19 hand-written phrases, one run each).** Jev answered in
+0.11-0.26 s per call, and a streamed Jev turn reached its first reply text 0.22 s after posting
+(a Claude turn on the same stack: 1.6-3.0 s). Intent was right on all 19: reports, check-ins,
+questions (to Claude), screens, `undo`, and yes / no / a correction to a pending proposal. Filed
+automatically: "I can see flames on the ridge to my left", "traffic's at a total standstill here on
+Skyway", "the smoke is so thick I can barely see". Proposed instead: "Pentz Road is completely
+blocked by a fallen tree" and "Clark Road is open" (`here` about 0.5: naming a road does not say the
+person is on it), "there's a tree down across the road" (`kind` 0.7, blocked road or tree down),
+hearsay ("my neighbor said the gym shelter is full", `firsthand` 0.05), help and check-ins. The
+first wording of `here` ("at or right next to where the person is") scored "flames on the ridge to
+my left" 0.35; the current wording files it. This is a smoke test, not a calibration.
+
 **Limits and assumptions.** The thresholds are uncalibrated (above). An automatic report is pinned
 at the phone's own position, so a place the person names is not located (`here` lowers the chance,
 and does not remove it). A report is filed on the strength of a speech-to-text transcript, which can
@@ -1791,7 +1990,8 @@ fires. Everything is simulated (`evidence_class: "simulated"`). Code: `api/live/
 
 ```json
 { "scenario_id": "berkeley-hills", "name": "Berkeley Hills, NE wind", "region_id": "berkeley",
-  "ignitions": [{ "id": "F1", "name": "F1", "lon": -122.24, "lat": 37.88, "start_minute": 0 }],
+  "ignitions": [{ "id": "F1", "name": "F1", "lon": -122.24, "lat": 37.88, "start_minute": 0,
+                  "report_minute": 12 }],
   "wind": { "speed_mph": 25, "from_deg": 45, "source": "assumed", "label": "Assumed 25 mph NE" },
   "moisture": { "preset": "dry", "label": "Dry fuels",
     "values": { "dead1h": 0.03, "dead10h": 0.04, "dead100h": 0.05, "liveHerb": 0.3, "liveWoody": 0.6 } },
@@ -1799,7 +1999,9 @@ fires. Everything is simulated (`evidence_class: "simulated"`). Code: `api/live/
 ```
 
 Limits: 1 to 5 ignitions with unique ids, finite WGS84 `lon`/`lat`, integer `start_minute` 0 to
-`horizon_minutes`, horizon 1 to 1440, wind speed 0 to 60 mph, `from_deg` 0 to 360, moisture values
+`horizon_minutes`, optional `report_minute` (the minute on the same Studio clock the fire is
+reported to dispatch, set by the Studio user: an integer from `start_minute` to 1440, or `null`
+/ absent when not set, so Live models its own report delay), horizon 1 to 1440, wind speed 0 to 60 mph, `from_deg` 0 to 360, moisture values
 finite 0.01 to 3, strings capped (`name` 80). Errors are `400 {error: "invalid_studio_fire", detail}`.
 The fire is stamped with the active incident; `outside_drill` lists ignition ids more than 3 km
 outside the bounding box of the drill's zones. Stored in `live_studio_fires` (newest 20 per
@@ -1813,6 +2015,202 @@ incident). Answers `201`:
 `GET /api/live/incidents/{id}/studio-fires[?after=<ISO Z>]` (any live role) answers
 `{fires: [{fire_id, published_at, incident_id, name, scenario_id, region_id, ignitions, wind,
 moisture, horizon_minutes, outside_drill}], evidence_class: "simulated"}`, newest first, at most 10.
+Every ignition carries `report_minute` (`null` when not set, including fires stored before the
+field existed).
+
+## Road closures
+
+The controller closes drill roads on the Live map for the simulated command board (a drill
+action, labelled "Closed (drill)"). Every router of the board then avoids them: zone routes
+(`POST /api/demo/routes`) and unit legs (`POST /api/demo/crew_routes`) pass the closed segments to
+`livecore.routing` / `livecore.inbound` as blocked segments (both directions) and echo the set
+they used as `closed_segment_ids` plus `closures_status` (`ok`, or `unavailable` when MongoDB did
+not answer). It does not touch the live drill's road reports, road state or phone guidance.
+Code: `api/live/road_closures.py`; board side `app/src/demo/roadClosures.ts`
+([command-demo-realism.md, Road closures](command-demo-realism.md#road-closures)).
+
+- `GET incidents/{id}/road-closures` (any live role): `{closures: [{segment_id, name, line,
+  closed_at, board_minute, by, evidence_class: "drill"}], evidence_class: "drill"}`, oldest
+  first. `line` is the drill segment, WGS84 `[lon, lat]`; `board_minute` the closing console's
+  board minute (or `null`); `by` is `controller` or the `agent:<name>` of
+  [Actor attribution](#actor-attribution).
+- `GET incidents/{id}/road-closures?near=<lon>,<lat>` (any live role): the drill segment nearest
+  the point within 75 m, `{segment: {segment_id, name, line, distance_m, closed}}` or
+  `{segment: null}`. Nothing stored (the confirm panel's preview).
+- `POST incidents/{id}/road-closures` (controller) `{"segment_id": "s22", "board_minute": 12}`:
+  `201 {closure, created: true}`, or `200 {closure, created: false}` when already closed.
+  `400 invalid_road_closure` for a segment not in the drill; `409 too_many_closures` past 20.
+- `DELETE incidents/{id}/road-closures/{segment_id}` (controller): reopens it,
+  `{reopened: segment_id}`; `404` when it is not closed.
+
+Stored in `live_road_closures`: one small document per closed segment `{incident_id, segment_id,
+name, closed_at, board_minute, by}` (unique on incident and segment; deleted on reopen). The
+routers re-read it at most every 2 s per process.
+
+## Run state
+
+The Live board simulation runs in the controller's browser (`app/src/demo/model.ts`). It is zone and
+cohort based, and while it runs it saves the current state of its run to MongoDB, so the map can
+show which houses are safe. Everything here is simulated (`evidence_class: "simulated"`). The
+per-household states are a **deterministic stand-in allocation** of the board's zone counts to the
+resource snapshot's households (see [scenario-snapshots.md](scenario-snapshots.md)). The board knows
+how many households of a zone are safe, not which ones, so any single house's status is an
+allocation, not an observation. Label it that way in the UI. Code: `api/live/run_state.py` (storage,
+endpoints) and `livecore/household_states.py` (pure allocation).
+
+Household statuses: `home` (no order in effect), `waiting` (ordered or scheduled, not left yet),
+`evacuating` (on the road), `safe` (arrived), `needs_transport` (no vehicle, still home in an
+ordered or threatened zone), `not_leaving` (ordered, did not comply), `caught` (home when fire
+overran the zone), `unknown`.
+
+**`PUT incidents/{id}/run-state`** (controller). The body can be up to 1 MB, with at most 2000 zones:
+
+```json
+{ "run_id": "board-6mxw7w-c7f48805", "previous_run_id": null, "board_minute": 42.5,
+  "zones": [{ "zone_id": "Z01",
+              "households": { "home": 60, "waiting": 20, "evacuating": 15, "safe": 12, "needs_transport": 9 },
+              "people": { "home": 150, "waiting": 50, "evacuating": 37, "safe": 30, "needs_transport": 25 },
+              "order": { "status": "leaving", "start_minute": 30, "destination_id": "dest-1" } }],
+  "totals": { "households": { "home": 60, "waiting": 20, "evacuating": 15, "safe": 12, "needs_transport": 9 },
+              "people": null } }
+```
+
+Rules:
+
+- **Fields.** `run_id` is a string of at most 80 characters. `board_minute` is a number `>= 0`, in
+  board minutes. Every count is a non-negative integer keyed by a status. `people` is `null` when
+  unknown. `order.status` is one of `none|scheduled|leaving|done|overrun`. `start_minute` and
+  `destination_id` may be `null`. Optional, for resident guidance
+  ([Guidance from the Live board's orders](#guidance-from-the-live-boards-orders)):
+  `order.route` `{via: [road names, at most 5], eta_min, distance_m, safety:
+  clear|passes_near_fire|passes_fire, line: [[lon, lat], ...] (2..400 points)}` or `null`, and
+  `order.issued_by` `ai_agent|controller|null`. `route` is not stored in the run document.
+- **Errors.** A bad field returns `400 invalid_run_state` with a `detail`.
+- **Storage.** The body is stored as the incident's one `live_run_state` document:
+  `{_id: incident_id, incident_id, run_id, board_minute, zones, totals, updated_at, evidence_class}`.
+- **Single writer.** Every open console runs its own board. A PUT with a different `run_id` from the
+  stored one is accepted only in two cases. The first is when `previous_run_id` equals the stored
+  `run_id` (the same console after a reset or restart). The second is when the stored document
+  has not been updated for `STALE_WRITER_S` = 30 s. **ASSUMPTION:** a console that has not saved for
+  30 s is closed or idle. Otherwise the PUT returns `409 {error: "run_state_owned", detail, run_id,
+  board_minute, updated_at}`, describing the owner. PUTs for the same run are always accepted.
+- **New run.** When an accepted PUT starts a different run, the previous run's household states are
+  deleted first. Run and household state of incidents the live API no longer serves (anything but
+  Camp and the active incident) is deleted too.
+- **Response.** The answer is `{run_id, board_minute, households_written, households_changed,
+  households_pending, materialization, snapshot, guidance_published}` (`guidance_published`: guidance
+  versions this PUT published from the board's orders; `null` when publishing failed, which never
+  fails the PUT). Writing to Atlas is slow (about 400 household
+  documents a second on the free tier, measured 2026-10-25; a run's first 20k take about 50 s), so a
+  background thread does it for each incident.
+  It always applies the newest PUT. The PUT waits up to 5 s for it. `materialization` is one of:
+  - `done`: everything is written.
+  - `writing`: `households_pending` documents are still to write.
+  - `loading`: the snapshot households or the stored states are still being read, which takes about
+    40 s after a backend restart. `households_changed` and `households_pending` are `null` while
+    loading.
+  - `no_snapshot`: only the summary is stored.
+
+  Don't overlap PUTs; one every few seconds is fine. A PUT whose counts did not change (the console's
+  20 s heartbeat) only replaces the run document: no household is rewritten. The writer lives in the
+  backend process, so after a restart the next PUT reloads the stored states and finishes the writes.
+
+**Materialization** (`livecore.household_states.assign_zone`, one zone at a time):
+
+1. **Scale.** If the board's zone total differs from the snapshot zone's household count, the
+   status counts are scaled to the snapshot count with largest-remainder rounding (ties go in
+   status-enum order). The assigned total always equals the snapshot zone's households. A zone with
+   a board total of 0, or a snapshot zone missing from the PUT, is all `unknown`. A zone in the PUT
+   but not in the snapshot is ignored.
+2. **Side statuses.** `needs_transport`, `not_leaving`, `caught` and `unknown` are sticky: holders
+   keep them while the count allows, and surplus holders are released first in, first out.
+   `needs_transport` is filled with carless households (snapshot `vehicles == 0`) first and releases
+   households with a vehicle first. `caught` takes households just released from
+   `needs_transport` or `not_leaving` first, then the least advanced.
+3. **Chain.** The remaining households are sorted most advanced first along
+   `home → waiting → evacuating → safe`. Within a status the order is first in, first out: the
+   board minute the household entered the status, then a stable hash of `(run_id, household_id)`,
+   so each run shuffles differently and the same run is stable. The sorted list is then sliced by
+   the counts. When the board's counts only move forward, each household moves forward or stays,
+   never back. Exactly the board's flows change, which is the fewest changes such a slicing allows:
+   a household changes when a cumulative boundary (at least waiting, at least evacuating, safe)
+   passes it. In the verification PUT, 5,615 of 19,913 Camp households changed, which equals the
+   boundary shifts, and none moved backward.
+
+One `live_household_state` document per snapshot household, with short keys to fit the free tier
+(the API maps them back to the names below):
+
+```
+{_id: "<incident_id>:<household_id>", z: zone_id, x: lon, y: lat, o: occupants, v: vehicles,
+ s: status, m: since_minute, u: updated_at}
+```
+
+- `m` (`since_minute`) is the board minute the household entered its status.
+- `z`, `x`, `y`, `o` and `v` are copied from the snapshot when the document is created, so reads
+  need no join.
+- There is no run id per document: the documents are the run of the incident's `live_run_state`
+  (a new run deletes the previous run's documents before writing its own). The incident and the
+  household id are the two halves of `_id`.
+- Only changed documents are written, in unordered batches of 1000.
+- One index besides `_id`: `u` (for `changed_since`), created best effort. Incident, status and zone
+  filters run on the `_id` prefix range (at most one snapshot's households). The writer deletes
+  documents of the older long-keyed format when it reloads an incident and rewrites them.
+
+**`GET incidents/{id}/run-state`** (any role) returns the stored document (`updated_at` in ISO Z),
+or `404 not_found` "No run state yet."
+
+**`GET incidents/{id}/household-state`** (any role) takes optional query parameters:
+`after=<household_id>`, `limit=1..5000` (default 5000), `status=<status>`, `zone_id=<zone>` and
+`changed_since=<ISO Z>`. The response:
+
+```json
+{ "incident_id": "camp-2018-drill", "run_id": "board-…", "board_minute": 42.5, "snapshot": true,
+  "households": [{ "household_id": "hh_0004e58c8537500e", "zone_id": "bg:060070018001",
+                   "lon": -121.592496, "lat": 39.791378, "status": "needs_transport",
+                   "since_minute": 30.0, "occupants": 1, "vehicles": 0 }],
+  "next": "hh_0004e58c8537500e", "as_of": "2026-10-25T06:02:44Z", "households_pending": 0,
+  "evidence_class": "simulated" }
+```
+
+- **Paging.** Results are ordered by `household_id`; pass `next` as `after` until it is `null`. For a
+  moment after a new run starts the previous run's documents can still be listed under the new
+  `run_id`, until the writer has deleted them.
+- **Incremental polling.** Pass the previous response's `as_of` as `changed_since`. `as_of` lags the
+  server clock by 30 s so a batch in flight is not missed, so expect a few repeats and treat them as
+  idempotent.
+- **`households_pending`.** The number of documents this backend process still has to write, or
+  `null` when it does not know. While it is above 0, the map is mid-update.
+- **No snapshot.** Without a snapshot the response has `snapshot: false`, `households: []` and a
+  `reason`. Households are never invented. A full 20k read takes about 4 pages, each up to around
+  10 s on the free tier.
+
+**`DELETE incidents/{id}/run-state?run_id=<run>`** (controller, called by "Reset board") deletes the
+run document and all of the incident's household states, then returns `{deleted_households: n}`.
+
+- `run_id` is required (`400` without it).
+- A different, fresh owner gets `409 run_state_owned`, as for PUT.
+- A drill reset (`POST incidents/{id}/drill` `reset`) also deletes the current run's state, in the
+  background.
+
+**Storage budget.** Measured on Atlas (2026-10-25) for Camp, 19,913 households, before and after
+the short-key change. Index sizes are what `collStats` reports (file sizes), scaled to 20k from the
+collection totals, which also held the active incident's households:
+
+| Item | Long keys, 3 extra indexes (before) | Short keys, `u` index only (now) |
+| --- | --- | --- |
+| Average household document | 293 B | 138 B |
+| Data per 20k households | 5.8 MB | 2.8 MB |
+| `_id` index per 20k | 2.4 MB | about 2.4 MB (4.4 MB after the test churn below) |
+| Other indexes per 20k | 8.7 MB (`updated_at`, `zone_id`, `status`) | 0.2 MB (`u`, freshly built) |
+| Data plus indexes per 20k | about 17 MB | about 5.4 MB |
+| Run document (43 zones) | 8.9 KB | 8.9 KB |
+
+Index and collection files keep their high-water size: every status change rewrites a `u` key, and
+after six full test runs the `u` index reported 10.5 MB until it was rebuilt (0.18 MB). WiredTiger
+reuses freed pages, so this should level off rather than grow per run, but that was not measured
+over a long drill; dropping and recreating `u_1` is cheap if it does grow (Atlas M0 refuses
+`compact`). Only the current run of at most two incidents (Camp and the active incident) is kept.
+Nothing keeps history.
 
 ## Endpoint summary (v2 additions)
 
@@ -1842,6 +2240,10 @@ moisture, horizon_minutes, outside_drill}], evidence_class: "simulated"}`, newes
 | `GET incidents/{id}/aar` | controller ([After-action report](#after-action-report)) |
 | `POST /api/live/studio-fires` | controller ([Studio fires](#studio-fires)) |
 | `GET incidents/{id}/studio-fires[?after=]` | any |
+| `PUT`, `DELETE incidents/{id}/run-state` | controller ([Run state](#run-state)) |
+| `GET incidents/{id}/run-state`, `GET incidents/{id}/household-state` | any |
+| `GET incidents/{id}/road-closures[?near=]` | any ([Road closures](#road-closures)) |
+| `POST incidents/{id}/road-closures`, `DELETE incidents/{id}/road-closures/{segment_id}` | controller |
 | `GET incidents/{id}/board` | any ([Task board](#task-board-passive-observations-and-information-priority-adr-0041)) |
 | `POST incidents/{id}/voice` | any ([Voice mode](#voice-mode)); with `"stream": true` it answers NDJSON ([Streaming voice](#streaming-voice-token-endpoint-and-ndjson-replies)) |
 | `POST incidents/{id}/voice/token` | any (a 300 s Cartesia token with `stt` and `tts` grants; 6 per minute per device) |

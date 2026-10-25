@@ -17,9 +17,20 @@
  * POST /api/demo/decide: `{ observation: DemoObservation }` (at most 200 kB) ->
  * application/x-ndjson, `DecisionEvent` lines ending with one "orders" or "error" line, as
  * /api/dispatch/decide (dispatch/contracts.ts). Non-2xx responses carry `{ error, detail }`.
- * Orders: send_crew, release_crew, order_evacuation, and order_resources (fire_id, resource,
- * count; limits in response/runCards.ts ORDERABLE / MAX_ORDER_COUNT, mirrored in demo.py
- * ORDERABLE_RESOURCES). The response model behind the observation's `response` block and the
+ * The /live board is AI agent only: nothing is dispatched or ordered unless an order says so
+ * (response.auto_dispatch / auto_escalate are false); per-fire recommended_initial_attack and
+ * extended_attack_due are the simulator's recommendations, not orders.
+ * Orders: send_crew, release_crew (crew_id may also be an aircraft id from response.aircraft;
+ * aircraft take position_id null), order_evacuation (zone_id, destination_id, start_minute:
+ * absolute whole board minute departures start, null = now, at most MAX_SCHEDULE_AHEAD_MINUTES
+ * ahead), cancel_evacuation (zone_id; a scheduled order not yet started), and order_resources
+ * (fire_id, resource, count; limits in response/runCards.ts ORDERABLE / MAX_ORDER_COUNT, mirrored
+ * in demo.py ORDERABLE_RESOURCES), and set_strategy (fire_id, strategy_id: one of the fire's
+ * strategy_options ids, e.g. "direct", "parallel", "line:flank_left"; demo/strategyOptions.ts;
+ * units then go with send_crew, position_id = the option's position_id). Example staging decision at minute 40:
+ * `[{type:"order_evacuation",zone_id:"Z1",destination_id:"D2",start_minute:null},
+ *   {type:"order_evacuation",zone_id:"Z2",destination_id:"D1",start_minute:60},
+ *   {type:"order_evacuation",zone_id:"Z3",destination_id:"D2",start_minute:75}]`. The response model behind the observation's `response` block and the
  * per-fire tactic fields is docs/response-model.md.
  *
  * POST /api/demo/crew_routes: `CrewRoutesRequest` -> `CrewRoutesResponse`. Road travel for
@@ -96,7 +107,12 @@ export interface StudioFire {
   name: string;
   scenario_id: string;
   region_id: string;
-  ignitions: { id: string; name: string; lon: number; lat: number; start_minute: number }[];
+  /**
+   * `start_minute`: integer minutes from Studio T+0. `report_minute`: minute on the same clock the
+   * fire is reported to dispatch, set by the Studio user (start_minute <= report_minute <= 1440);
+   * null = not set, so the board models its own report delay.
+   */
+  ignitions: { id: string; name: string; lon: number; lat: number; start_minute: number; report_minute: number | null }[];
   /** source: assumed | historical | worst_case | forecast (Studio's wind origin). */
   wind: { speed_mph: number; from_deg: number; source: string; label: string };
   moisture: {
@@ -134,6 +150,9 @@ export interface RoutesResponse {
   zones: { zone_id: string; options: RouteOptionWire[] }[];
   /** Road segments by id, for every option of this answer. Units: m, veh/h (one direction, all lanes), min. */
   segments: Record<string, Omit<RouteSegment, "id">>;
+  /** Controller drill road closures the routes avoid (segment ids; live/useRoadClosures.ts), and whether the closure store answered. */
+  closed_segment_ids?: string[];
+  closures_status?: "ok" | "unavailable";
   evidence_class: "simulated";
 }
 
@@ -196,6 +215,9 @@ export interface CrewRoutesResponse {
   evidence_class: "simulated";
   /** `ready`: OSM tags + DEM grade; `grade_only`: tags still loading; `none`: highway class only. */
   road_access?: { status: RoadAccessStatus; basis: string };
+  /** Controller drill road closures every leg avoids (segment ids), and whether the closure store answered. */
+  closed_segment_ids?: string[];
+  closures_status?: "ok" | "unavailable";
 }
 
 export type RoadAccessStatus = "ready" | "grade_only" | "none";
@@ -280,6 +302,15 @@ export interface FireObservation {
   line_m: number;
   /** Line built over current perimeter, percent (0-100). */
   containment_pct: number;
+  /**
+   * The fire's ground by cell state now (demo/fireState.ts), hectares; the three add up to area_ha
+   * (up to rounding). burning: cells the fire is in now (cell resolution: the flaming front fills
+   * part of each); burned_out: its modelled fuel has finished flaming; extinguished: put out by
+   * crews (direct attack on the edge, mop-up inside the line). Simulated.
+   */
+  burning_ha: number;
+  burned_out_ha: number;
+  extinguished_ha: number;
   crews_on_scene: string[];
   crews_en_route: string[];
   /** Estimate with the crews already assigned; null = they never catch it within the forecast. */
@@ -319,7 +350,8 @@ export interface FireObservation {
   first_arrival_min: number | null;
   /** Minutes from ignition until the dispatch centre had the fire (call-in, answer, transfer, processing; response/report.ts). */
   reported_after_min: number | null;
-  reported_by: "911" | "camera" | "satellite" | "field_report" | null;
+  /** "studio" = the report minute was set in Simulation Studio (an assumption), not modelled. */
+  reported_by: "911" | "camera" | "satellite" | "field_report" | "studio" | null;
   /** Why it took that long, plain language ("4 km from the nearest home, at night, found by an AI camera"). */
   reported_reason: string | null;
   /** Share of the fire's edge within reach of the ground units on scene, percent; null before any is there. */
@@ -330,6 +362,97 @@ export interface FireObservation {
   air_line_m: number;
   /** Aircraft assigned to this fire. */
   aircraft: string[];
+  /**
+   * Recommendation only (boardResponse.ts initialAttackRecommendation; nothing is sent): the run
+   * card for dispatch_level less what is already assigned or on order (still_needed), filled by
+   * the closest free board units by expected arrival and the nearest available aircraft; unfilled
+   * is what only order_resources can bring. null unless the fire is burning and reported.
+   */
+  recommended_initial_attack: InitialAttackObservation | null;
+  /** Extended-attack stage due (initial attack failed or the fire grew past the stage size) and its sized orders; recommendation only, null before any. */
+  extended_attack_due: { stage: number; orders: { resource: Orderable; count: number }[] } | null;
+  /**
+   * Containment strategies for this fire with the model's consequences (demo/strategyOptions.ts);
+   * choose one with set_strategy and assign units with send_crew. [] unless burning and reported.
+   */
+  strategy_options: StrategyOptionObservation[];
+  /** The strategy chosen for this fire (set_strategy), or null: none chosen yet (send_crew without a position is then direct attack). */
+  strategy: ChosenStrategyObservation | null;
+}
+
+/**
+ * One containment strategy for a fire (demo/strategyOptions.ts StrategyOption). Model output:
+ * perimeter tactics forecast by the line race (model.ts containedIn with that tactic) for the
+ * fewest of the nearest free units that contain the fire; line strategies (an attack position)
+ * by line production against the forecast fire arrival. Minutes from now; metres; hectares; feet.
+ */
+export interface StrategyOptionObservation {
+  /** set_strategy strategy_id: a tactic ("direct", "parallel", "indirect", "structure", "flank") or "line:<attack position id>". */
+  id: string;
+  name: string;
+  kind: "perimeter" | "line";
+  tactic: Tactic | null;
+  /** send_crew position_id for its units (null = direct attack at the fire). */
+  position_id: string | null;
+  works: string;
+  line_m: number;
+  /** Flame the line faces, ft, and what the finished line holds, ft (null: no flame test, or no units). */
+  flame_ft: number;
+  holds_flame_ft: number | null;
+  /** Units by kind it takes: already assigned plus `send`. */
+  units_needed: Partial<Record<DemoApparatusKind, number>>;
+  /** Free units to send for it now (send_crew with position_id), nearest first, each with its arrival in minutes. */
+  send: { crew_id: string; kind: DemoApparatusKind; eta_min: number; route: OptionRoute }[];
+  already_assigned: string[];
+  /** contained: forecast to contain (contained_in_min); not_containable: not with the available units (not_containable_because); line_ahead: a line whose effect the fire model computes once built. */
+  outcome: "contained" | "not_containable" | "line_ahead";
+  contained_in_min: number | null;
+  line_done_min: number | null;
+  fire_reaches_line_min: number | null;
+  line_ready_before_fire: boolean | null;
+  /** Burned area at `burned_ha_at` (the solver's free-burn forecast to that minute: an upper bound). */
+  burned_ha: number | null;
+  burned_ha_at: string;
+  /** Zones the fire reaches before containment (within the forecast when not contained), with their households still home. */
+  zones_reached: string[];
+  households_home_in_zones_reached: number;
+  protects_zone_ids: string[];
+  not_containable_because: string | null;
+  /** Safety notes from the model: flame-length bands (PMS 465 Hauling chart), crown fire, fire at a line first, reach. */
+  safety: string[];
+}
+
+/** The strategy chosen for a fire, with what the model predicted when it was chosen. */
+export interface ChosenStrategyObservation {
+  id: string;
+  name: string;
+  chosen_at_minute: number;
+  by: "agent" | "you" | "board" | "studio";
+  reason: string;
+  /** The option's consequences at that minute, one line (model output). */
+  predicted: string;
+  /** Whether it is still among strategy_options now (an attack position can be replanned away). */
+  still_offered: boolean;
+}
+
+/** Resource families of a run card (response/runCards.ts ResourceCounts). */
+export interface ResourceCountsObservation {
+  engines: number;
+  hand_crews: number;
+  dozers: number;
+  air_attack: number;
+  airtankers: number;
+  helicopters: number;
+}
+
+export interface InitialAttackObservation {
+  run_card: ResourceCountsObservation;
+  still_needed: ResourceCountsObservation;
+  /** Closest free board units for the card, by expected arrival (minutes; route "estimate" = straight-line assumption). */
+  units: { crew_id: string; kind: string; eta_min: number; route: "road" | "estimate" }[];
+  /** Nearest available aircraft (send with send_crew, position_id null): minutes until over the fire. */
+  aircraft: { aircraft_id: string; kind: string; over_fire_min: number }[];
+  unfilled: ResourceCountsObservation;
 }
 
 /**
@@ -421,13 +544,52 @@ export interface CrewObservation {
   work_mode: "hose" | "hand_line" | "dozer" | "out_of_reach" | null;
   /** Minutes until it starts building line (the hike or walk in). */
   working_in_min: number | null;
+  /**
+   * While en route: times fire has cut its road on this trip (model.ts rerouteTeam; each cut
+   * stops it for a new road leg). The cut after MAX_FIRE_CUT_REROUTES (3) gives the trip up.
+   */
+  road_cuts: number;
+  /**
+   * Its last trip was given up because fire kept cutting its road: the fire, the attack position
+   * (null = direct attack), the board minute and the number of cuts. The unit is free where it
+   * stopped (status available, away from its station) until it is sent again; null otherwise.
+   */
+  blocked_by_fire: { fire_id: string; position_id: string | null; at_minute: number; cuts: number } | null;
 }
 
 export interface ZoneObservation {
   id: string;
   name: string;
   households: number;
-  status: "no_order" | "ordered" | "overrun";
+  /** scheduled = an order with a later start_minute is pending (order.start_minute); ordered = an order is in effect. */
+  status: "no_order" | "scheduled" | "ordered" | "overrun";
+  /**
+   * The zone's evacuation order (model.ts zoneOrderStatus): none, scheduled (departures start at
+   * start_minute), leaving (in effect since start_minute), done (everyone it sends out has left and
+   * arrived), overrun. Nobody leaves a zone without an order (no self-evacuation on this board).
+   */
+  order: {
+    status: "none" | "scheduled" | "leaving" | "done" | "overrun";
+    /** Board minute departures start (scheduled) or started (leaving, done); null otherwise. */
+    start_minute: number | null;
+    /** Scheduled only: minutes from now until start_minute. */
+    starts_in_min: number | null;
+    /** Destination of the scheduled order or of the order in effect. */
+    destination_id: string | null;
+    /**
+     * Scheduled only: the scheduled destination's margin_min if departures start at start_minute
+     * (its option's margin_min - starts_in_min; traffic as now). null without a core ETA.
+     */
+    margin_at_start_min: number | null;
+  };
+  /**
+   * Departure flow an order puts on the road at its start, veh/h (order_compliance x households
+   * with a vehicle / departure_mean_min x vehicles per household; it decays from there, to half in
+   * about 64 min). Compare with the bottleneck capacity_veh_h of the zone's options. Simulated.
+   */
+  departure_peak_veh_h: number;
+  /** This zone's departure flow at the last traffic step, veh/h (0 when nobody is leaving). */
+  departure_flow_now_veh_h: number;
   households_home: number;
   households_en_route: number;
   households_out: number;
@@ -453,12 +615,11 @@ export interface ZoneObservation {
   needs_transport_households: number;
   needs_transport_occupants: number | null;
   needs_transport_occupants_home: number | null;
-  /** Households leaving with no order, on the fire cue. */
-  shadow_evacuating: boolean;
   fire_eta_min: number | null;
   fire_core_eta_min: number | null;
-  /** fire_core_eta_min - departure_mean_min; null without a core ETA. */
+  /** fire_core_eta_min - departure_mean_min (as if ordered now); null without a core ETA. */
   order_slack_min: number | null;
+  /** Destination of the order in effect; null when none is (a scheduled one is in `order`). */
   destination_id: string | null;
   /** Vehicles the zone evacuates with (snapshot evacuating_vehicles, else the drill file's) and how many are on the road now. */
   vehicles: number;
@@ -493,6 +654,13 @@ export interface ZoneRouteObservation {
   /** committed_vehicles / capacity, minutes. */
   clearance_min: number;
   margin_min: number | null;
+  /** Latest board minute an order on this option can start with margin_min >= 0: minute + margin_min (traffic as now); null without a core ETA. */
+  latest_start_minute: number | null;
+  /**
+   * Other zones with a scheduled order whose route shares a road segment with this option: start
+   * minute and the vehicles that order will put on the road. Not counted in clearance_min.
+   */
+  scheduled_on_route: { zone_id: string; start_minute: number; vehicles: number }[];
   /** Vehicles already sent to this destination by all zones; capacity null = unknown (exits). */
   destination_load_vehicles: number;
   destination_capacity_veh: number | null;
@@ -504,18 +672,19 @@ export interface DemoObservation {
     /** Mean departure delay after the cue, minutes (Camp, sourced). */
     departure_mean_min: number;
     order_compliance: number;
-    shadow_share: number;
     forecast_min: number;
+    /** order_evacuation start_minute may be at most minute + this (model.ts MAX_SCHEDULE_AHEAD_MINUTES). */
+    max_schedule_ahead_min: number;
   };
   /** Where the board's fires come from (Simulation Studio only) and the run setting the conditions. */
   activity: string;
   /** The current hourly wind; `source` is its provenance plus how the fire model uses it. */
   wind: { from_deg: number; speed_m_s: number; evidence: string; source: string };
   /** Provenance labels of the model inputs. */
-  inputs: { fuel: string; moisture: string; terrain: string; stations: string; travel: string; congestion: string; demand: string; response: string };
+  inputs: { fuel: string; moisture: string; terrain: string; stations: string; travel: string; congestion: string; demand: string; response: string; strategy: string };
   fires: FireObservation[];
   crews: CrewObservation[];
-  /** Zones that are threatened (fire ETA within the forecast) or already ordered/overrun. */
+  /** Zones that are threatened (fire ETA within the forecast) or already ordered, scheduled or overrun. */
   zones: ZoneObservation[];
   /** Evacuation traffic now (simulated): vehicles on the road and the busiest road segment. */
   traffic: {
@@ -558,7 +727,8 @@ export interface DemoObservation {
     departments: { id: string; name: string; tier: Tier; engines: number; engines_available: number; keep_engines: number }[];
     /** Units at off-board stations that mutual-aid orders can still draw. */
     mutual_aid_pool_units: number;
-    aircraft: { id: string; kind: string; base: string; status: string; fire_id: string | null; drops: number }[];
+    /** over_fire_in_min: minutes until an en-route aircraft is over its fire (null otherwise). */
+    aircraft: { id: string; kind: string; base: string; status: string; fire_id: string | null; drops: number; over_fire_in_min: number | null }[];
     /** Orders not yet on the board; eta_min until they arrive (or retry, when unable_to_fill). */
     orders: { id: string; fire_id: string; resource: Orderable; tier: "mutual_aid" | "state"; status: "pending" | "unable_to_fill"; eta_min: number }[];
     /** What order_resources accepts. */
@@ -567,6 +737,11 @@ export interface DemoObservation {
   };
   monitor: { woke_because: string[] };
   previous: { minute: number; summary: string; rejected: string[] } | null;
+  /**
+   * Drill road closures set by the controller (demo/roadClosures.ts): no unit or evacuation route
+   * uses them; routes, options and ETAs already go around them. since_minute: board minute applied.
+   */
+  closed_roads?: { segment_id: string; name: string; since_minute: number; by: string }[];
 }
 
 export type DemoOrder =
@@ -577,9 +752,22 @@ export type DemoOrder =
    */
   | { type: "send_crew"; crew_id: string; fire_id: string; position_id?: string | null; reason: string }
   | { type: "release_crew"; crew_id: string; reason: string }
-  | { type: "order_evacuation"; zone_id: string; destination_id: string; reason: string }
+  /**
+   * start_minute: absolute whole board minute departures start (clock.minute .. clock.minute +
+   * max_schedule_ahead_min); null / absent = now. Re-issuing for a scheduled zone replaces its
+   * schedule; for a zone already leaving it redirects (now only).
+   */
+  | { type: "order_evacuation"; zone_id: string; destination_id: string; start_minute?: number | null; reason: string }
+  /** Cancels a scheduled order that has not started (order.status "scheduled"). */
+  | { type: "cancel_evacuation"; zone_id: string; reason: string }
   /** Extended-attack order through mutual aid or the state system (response/runCards.ts ORDERABLE, MAX_ORDER_COUNT). */
-  | { type: "order_resources"; fire_id: string; resource: Orderable; count: number; reason: string };
+  | { type: "order_resources"; fire_id: string; resource: Orderable; count: number; reason: string }
+  /**
+   * The fire's containment strategy: strategy_id one of its strategy_options ids. A perimeter
+   * strategy sets the tactic the board works the fire with; a line strategy names the attack
+   * position its units build. Units go with send_crew (the option's position_id).
+   */
+  | { type: "set_strategy"; fire_id: string; strategy_id: string; reason: string };
 
 export type DecisionEvent =
   | { type: "thinking"; text: string }

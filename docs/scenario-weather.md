@@ -471,8 +471,7 @@ curl "http://127.0.0.1:8000/api/conditions?lon=-122.23&lat=37.895&start=2025-10-
 
 Per catalogue region (`app/src/fire/regions.ts`) and historical fire (`camp-2018`, `kincade-2019`,
 `woolsey-2018`, `marshall-2021`): `phenology_class`, `typical_season_date` (assumed `MM-DD`:
-Bay Area and Central Coast 10-15, Central Sierra and Kern 09-15, Southern California 11-01, the
-three SoCal mountain regions 10-25, Marshall 12-15), `weather_coverage`, and `presets[]` of ready
+Bay Area 10-15, Southern California 11-01, Marshall 12-15), `weather_coverage`, and `presets[]` of ready
 `/api/conditions` queries: `peak-season-p95` and `peak-season-p50` (climatology at the season
 date, label year 2025) and, for the fires, `actual-ignition` (historical replay around the
 ignition time, with the time's source). Without `region`: `{regions: [...]}`. 404 for an unknown id.

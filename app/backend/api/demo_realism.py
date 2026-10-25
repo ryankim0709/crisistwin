@@ -47,6 +47,7 @@ from .demo import drill_center, resolve_incident
 from .live import incidents
 from .live.common import ApiError
 from .live.drillcache import get_index
+from .live.road_closures import closed_segment_ids
 
 logger = logging.getLogger(__name__)
 
@@ -393,7 +394,7 @@ def _blocked_fields(drill, access, edge_id: str | None) -> dict:
     return {"blocked_rule": acc.rule, "blocked_reason": plain_reason(access.vehicle, acc, edge.name)}
 
 
-def crew_route(drill, fire, request: dict, offboard_kmh: float, access=None) -> dict:
+def crew_route(drill, fire, request: dict, offboard_kmh: float, access=None, blocked: frozenset[str] = frozenset()) -> dict:
     """One unit's drive: optional off-board leg to the network, the class's road route, then an
     optional off-board leg from the network to a target off it (both straight line x
     OFFBOARD_CIRCUITY at the off-board speed, summed in ``offboard_m``).
@@ -407,9 +408,9 @@ def crew_route(drill, fire, request: dict, offboard_kmh: float, access=None) -> 
 
     def drive(start, goal):
         if access is None:
-            res = inbound_route(drill, start, tuple(goal), frozenset(), fire)
+            res = inbound_route(drill, start, tuple(goal), blocked, fire)
             return res, ("reached" if res.route is not None else None), None, res.target_snap_m if res.route else None, None, None
-        r = reach_route(drill, start, tuple(goal), frozenset(), fire, access)
+        r = reach_route(drill, start, tuple(goal), blocked, fire, access)
         return r.result, r.status, r.stop_node, r.off_road_m, r.blocked_edge, r.unrestricted_s
 
     result, status, stop_node, off_road_m, blocked_edge, free_s = drive(tuple(origin), tuple(target))
@@ -501,6 +502,8 @@ def demo_crew_routes(request):
     except ApiError as exc:
         return _error(exc.status, exc.code, exc.detail)
     fire = to_multipolygon({"type": "MultiPolygon", "coordinates": [[r] for r in rings]}) if rings else None
+    # The controller's road closures (api.live.road_closures): never driven, as blocked segments.
+    closed, closures_ok = closed_segment_ids(incident)
     offboard_kmh = _offboard_kmh()
     profiles: dict[str, object] = {}
     attrs = None
@@ -510,7 +513,9 @@ def demo_crew_routes(request):
              else "road access rules unavailable (tools/suppression_resources.json missing): every road open at its own speed")
     return Response(
         {
-            "routes": [crew_route(drill, fire, r, offboard_kmh, profiles.get(r["access_class"])) for r in requests],
+            "routes": [crew_route(drill, fire, r, offboard_kmh, profiles.get(r["access_class"]), closed) for r in requests],
+            "closed_segment_ids": sorted(closed),
+            "closures_status": "ok" if closures_ok else "unavailable",
             "congestion": "not_modelled",
             "evidence_class": "simulated",
             "road_access": {"status": attrs.status if attrs is not None else "none", "basis": basis},

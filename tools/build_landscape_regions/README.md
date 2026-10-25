@@ -1,6 +1,6 @@
 # Prebuilt landscape regions
 
-Builds the California regions (San Francisco Bay Area to San Diego) in `app/src/fire/regions.ts` (`CALIFORNIA_REGIONS`)
+Builds the California regions (11 in the San Francisco Bay Area, 2 in Los Angeles) in `app/src/fire/regions.ts` (`CALIFORNIA_REGIONS`)
 into landscape packages (format in `docs/adr/0013-prebuilt-socal-landscapes.md`) and
 uploads them to MongoDB GridFS bucket `landscape_packages` for `GET /api/landscapes`.
 

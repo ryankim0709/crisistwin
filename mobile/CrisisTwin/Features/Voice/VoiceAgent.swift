@@ -20,6 +20,8 @@ struct VoiceTurnLog: Identifiable, Equatable {
     var decidedBy: String?
     /// Jev's confidence, 0 to 1. A model's number, not an observation.
     var confidence: Double?
+    /// Which server facts the reply used (`guidance`, `hazards`, ...). Empty when none.
+    var sources: [String] = []
     /// `ReportDraft.clientId` of the report the phone filed on its own this turn, if it did.
     var autoReportId: UUID?
     /// The auto-filed report was taken back.
@@ -40,6 +42,30 @@ struct VoiceTurnLog: Identifiable, Equatable {
             return nil
         }
     }
+
+    /// "From: published guidance \u{00B7} reported hazards \u{00B7} fire estimate". Nil when the reply
+    /// used no facts. Unknown source values are ignored.
+    var sourcesCaption: String? {
+        let words = Self.sourceWords
+        let names = sources.compactMap { words[$0] }
+        guard !names.isEmpty else { return nil }
+        return "From: " + names.joined(separator: " \u{00B7} ")
+    }
+
+    /// The sources spelled out for VoiceOver.
+    var sourcesSpoken: String? {
+        let names = sources.compactMap { Self.sourceWords[$0] }
+        guard !names.isEmpty else { return nil }
+        return "From " + names.joined(separator: ", ")
+    }
+
+    private static let sourceWords = [
+        "guidance": "published guidance",
+        "guidance_history": "guidance history",
+        "hazards": "reported hazards",
+        "shelters": "shelters",
+        "fire": "fire estimate",
+    ]
 
     /// The caption spelled out for VoiceOver.
     var attributionSpoken: String? {
@@ -598,6 +624,7 @@ final class VoiceAgent {
         if let index = turns.firstIndex(where: { $0.id == id }) {
             turns[index].decidedBy = response.decidedBy
             turns[index].confidence = response.confidence
+            turns[index].sources = response.sources
         }
 
         var outcome = Outcome()
@@ -728,7 +755,8 @@ final class VoiceAgent {
             role: store.role == .civilian ? "civilian" : "responder",
             guidance: guidance,
             pending: pending,
-            history: history)
+            history: history,
+            zoneId: store.myZone?.id)
     }
 
     /// The phone's own checks on what the model proposed: severity only where it applies, the note

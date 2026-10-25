@@ -3,7 +3,10 @@
  * `DemoEnvironment`: wind (GET /api/demo/wind), the drill centre and carless households (GET
  * /api/demo/environment; every call carries `incident` for a non-Camp drill), CAL FIRE bases (GET
  * /api/suppression/bases), and the LANDFIRE landscape the fire solver runs on (also the 3D
- * diorama's board, DemoDiorama.tsx): the prebuilt region covering the drill (GET /api/landscapes)
+ * diorama's board, DemoDiorama.tsx). A Studio drill names the Studio board it was run on
+ * (`region_id`, "<region>@<N>km"; `studioBoard`): that exact landscape is loaded, as Studio
+ * loads it (same centre, radius and cell size, so the same MongoDB cache entry). Otherwise it is
+ * the prebuilt region covering the drill (GET /api/landscapes)
  * or, when none covers it or the store is unavailable, the same fuel, canopy and terrain loaded
  * live from LANDFIRE and 3DEP, as Simulation Studio does (studio/useRegionBoard.ts), read back
  * from the MongoDB landscape cache when an identical board was loaded before. With no covering
@@ -11,7 +14,9 @@
  * DEFAULT_BOARD_RADIUS_METERS; the shared world's region), widened when the drill's zones need
  * more room. Inputs other than the landscape fall back to labelled assumptions in realism.ts /
  * model.ts; without a landscape there is no fire model, so a landscape failure is an error
- * state, not a fallback. The board starts once everything has answered. Units, stations and
+ * state, not a fallback. The board starts once everything has answered; the inputs other than
+ * the landscape give up after INPUT_TIMEOUT_MS (their labelled fallbacks), so they never hold
+ * the board longer than the landscape does. Units, stations and
  * household counts come from the drill's resource snapshot (useCommandBoard loads it); the bases
  * and carless counts here are the fallback when there is none.
  */
@@ -21,10 +26,12 @@ import { cellAt } from "../fire/spread";
 import { CALIFORNIA_REGIONS } from "../fire/regions";
 import { RegionUnavailableError, fetchRegionCatalog, fetchRegionLandscape } from "../fire/landscapePackage";
 import type { LandscapeGrid } from "../fire/landscape";
+import type { LandscapeRegion } from "../fire/regions";
 import { DEFAULT_BOARD_RADIUS_METERS, boardCellMetersFor, clampBoardRadiusMeters } from "../fire/boardSize";
 import { loadLandscapeCached, type CachedLandscapeResult } from "../fire/landscapeCache";
 import type { LonLat } from "../live/types";
 import { CREW_TYPES, STATION_TYPES, SUPPRESSION_BASES_URL, parseBases, type SuppressionBases } from "../studio/suppressionBases";
+import { studioBoardId } from "../studio/useRegionBoard";
 import { ENVIRONMENT_URL, WIND_URL, demoUrl, type EnvironmentResponse, type WindResponse } from "./contracts";
 import { IGNITION_OUTSIDE_MAX_M, type DemoEnvironment, type Station } from "./model";
 import { FALLBACK_WIND, type Ground, type WindSeries } from "./realism";
@@ -90,10 +97,28 @@ const METERS_PER_DEG = 111_320;
  * a few kilometres before it reaches the edge of the modelled area (the solver stops there).
  */
 export const LIVE_LANDSCAPE_MARGIN_M = 3000;
+/**
+ * ASSUMPTION: how long the board waits for an input other than the landscape (wind, drill
+ * environment, bases) before using its labelled fallback. They answer in well under a second
+ * normally (a climatology wind series in about 6 s); only the fire needs the landscape.
+ */
+export const INPUT_TIMEOUT_MS = 12_000;
 
-async function getJson<T>(url: string, signal: AbortSignal): Promise<T | null> {
+/**
+ * The Studio board a drill was run on (`GET /api/live/active` `region_id`, parsed by
+ * studio/useRegionBoard.ts parseStudioBoardId): its region and half-width (ground metres; null =
+ * the region's own prebuilt board).
+ */
+export interface StudioBoard {
+  region: LandscapeRegion;
+  radiusMeters: number | null;
+}
+
+/** The JSON body, or null on an error status, a network failure or after `timeoutMs`. */
+async function getJson<T>(url: string, signal: AbortSignal, timeoutMs = INPUT_TIMEOUT_MS): Promise<T | null> {
+  const timeout = AbortSignal.timeout(timeoutMs);
   try {
-    const response = await fetch(url, { signal, headers: { Accept: "application/json" } });
+    const response = await fetch(url, { signal: AbortSignal.any([signal, timeout]), headers: { Accept: "application/json" } });
     return response.ok ? ((await response.json()) as T) : null;
   } catch {
     return null;
@@ -162,6 +187,56 @@ function cached(key: string, load: () => Promise<LoadedLandscape>, signal: Abort
 }
 
 /**
+ * A prebuilt region's own board, as Studio loads it (studio/useRegionBoard.ts): read from the
+ * store; if the store or API is unavailable, the same box loaded live (MongoDB cache first).
+ */
+function loadRegionBoard(
+  region: Pick<LandscapeRegion, "id" | "name" | "center" | "radiusMeters" | "cellMeters">,
+  onLive: () => void,
+  signal: AbortSignal,
+): Promise<LoadedLandscape> {
+  const independent = new AbortController().signal;
+  return cached(
+    `region:${region.id}`,
+    () =>
+      fetchRegionLandscape(region.id, independent).then(
+        ({ grid }): LoadedLandscape => ({ grid, region: { id: region.id, name: region.name }, source: "stored" }),
+        (cause: unknown) => {
+          if (!(cause instanceof RegionUnavailableError) && !(cause instanceof TypeError)) throw cause;
+          onLive();
+          return loadLandscapeCached(region.center.longitude, region.center.latitude, region.radiusMeters, independent, {
+            cellMeters: region.cellMeters,
+          }).then((loaded) => fromCached(loaded, { id: region.id, name: region.name }));
+        },
+      ),
+    signal,
+  );
+}
+
+/**
+ * The landscape of a Studio board, loaded exactly as Studio loads it (studio/useRegionBoard.ts):
+ * a chosen half-width is a live load around the region centre at boardCellMetersFor(radius),
+ * which reads the MongoDB landscape cache entry Studio's own load wrote (same key); the
+ * region's own board is the prebuilt package (`onLive` when that falls back to a live load).
+ */
+function loadStudioBoard(board: StudioBoard, onLive: () => void, signal: AbortSignal): Promise<LoadedLandscape> {
+  const { region, radiusMeters } = board;
+  if (radiusMeters === null) return loadRegionBoard(region, onLive, signal);
+  const id = studioBoardId(region.id, radiusMeters);
+  const cellMeters = boardCellMetersFor(radiusMeters);
+  const name = `${region.name} (Studio board, ${(radiusMeters / 1000).toFixed(0)} km around its centre, ${cellMeters} m cells)`;
+  const independent = new AbortController().signal;
+  return cached(
+    `studio:${id}`,
+    () =>
+      loadLandscapeCached(region.center.longitude, region.center.latitude, radiusMeters, independent, { cellMeters }).then((loaded) =>
+        fromCached(loaded, { id, name }),
+      ),
+    signal,
+  );
+}
+
+/**
  * The landscape the fire solver runs on. A prebuilt region whose centre is within 80% of its
  * radius of the drill centre is read from the store; if the store or API is unavailable that
  * region's box is loaded live (as studio/useRegionBoard.ts). With no covering region, a square
@@ -191,23 +266,7 @@ async function loadDrillLandscape(
     return Math.hypot(dx, dy) < r.radiusMeters * 0.8;
   });
   const independent = new AbortController().signal;
-  if (region) {
-    return cached(
-      `region:${region.id}`,
-      () =>
-        fetchRegionLandscape(region.id, independent).then(
-          ({ grid }): LoadedLandscape => ({ grid, region: { id: region.id, name: region.name }, source: "stored" }),
-          (cause: unknown) => {
-            if (!(cause instanceof RegionUnavailableError) && !(cause instanceof TypeError)) throw cause;
-            onLive();
-            return loadLandscapeCached(region.center.longitude, region.center.latitude, region.radiusMeters, independent, {
-              cellMeters: region.cellMeters,
-            }).then((loaded) => fromCached(loaded, { id: region.id, name: region.name }));
-          },
-        ),
-      signal,
-    );
-  }
+  if (region) return loadRegionBoard(region, onLive, signal);
   const boardRadius = clampBoardRadiusMeters(radiusMeters);
   const zonesRadius = zonesHalfWidthMeters === null ? 0 : zonesHalfWidthMeters + IGNITION_OUTSIDE_MAX_M + LIVE_LANDSCAPE_MARGIN_M;
   const radius = clampBoardRadiusMeters(Math.round(Math.max(boardRadius, zonesRadius)));
@@ -319,18 +378,24 @@ export async function loadEnvironment(
   zonesHalfWidthMeters: number | null = null,
   onLiveLandscape: () => void = () => {},
   radiusMeters: number = DEFAULT_BOARD_RADIUS_METERS,
+  studioBoard: StudioBoard | null = null,
 ): Promise<DemoEnvironment> {
   // The wind and the environment answer independently; the centre (environment `center`, else the
-  // zones' centroid) is needed for the bases and landscape lookups.
+  // zones' centroid, else the Studio board's centre) is needed for the bases lookup, and for the
+  // landscape unless the drill names its Studio board (that load starts at once).
+  const studioLandscape = studioBoard ? loadStudioBoard(studioBoard, onLiveLandscape, signal) : null;
+  // Keep a rejection from surfacing as unhandled while the other inputs are still loading.
+  studioLandscape?.catch(() => undefined);
   const envPromise = getJson<EnvironmentResponse>(demoUrl(ENVIRONMENT_URL, incidentId), signal);
   const windPromise = loadWind(preset, incidentId, signal);
   const envData = await envPromise;
-  const center: LonLat | null = envData?.center ?? fallbackCenter;
+  const studioCenter: LonLat | null = studioBoard ? [studioBoard.region.center.longitude, studioBoard.region.center.latitude] : null;
+  const center: LonLat | null = envData?.center ?? fallbackCenter ?? studioCenter;
   if (!center) throw new Error("The drill has no centre to load its landscape around.");
   const [wind, basesJson, landscape] = await Promise.all([
     windPromise,
     getJson<unknown>(`${SUPPRESSION_BASES_URL}?lon=${center[0]}&lat=${center[1]}&radius_km=${BASE_RADIUS_KM}`, signal),
-    loadDrillLandscape(center, zonesHalfWidthMeters, radiusMeters, onLiveLandscape, signal),
+    studioLandscape ?? loadDrillLandscape(center, zonesHalfWidthMeters, radiusMeters, onLiveLandscape, signal),
   ]);
   const parsed = basesJson ? parseBases(basesJson) : null;
   const calfire = stationsFrom(parsed);
@@ -351,6 +416,7 @@ export async function loadEnvironment(
     landscape: landscape.grid,
     landscapeRegion: landscape.region,
     landscapeSource: landscape.source,
+    ...(landscape.source === "cached" && landscape.cachedAt ? { landscapeCachedAt: landscape.cachedAt } : {}),
   };
 }
 
@@ -368,7 +434,9 @@ export interface DemoEnvironmentState {
  * for the zones (their centre and half-width choose the landscape when no prebuilt region
  * covers the drill); both are read when the load starts. `attempt` retries a failed load.
  * `radiusMeters` is the board radius (the shared world's region, docs/shared-world.md); a new
- * radius reloads the environment.
+ * radius reloads the environment. `studioBoard` is the Studio board the drill was run on: its
+ * landscape is loaded as Studio loads it, without waiting for the zones (a different board
+ * reloads the environment).
  */
 export function useDemoEnvironmentState(
   preset: WeatherPreset,
@@ -377,17 +445,19 @@ export function useDemoEnvironmentState(
   zonesHalfWidthMeters: number | null = null,
   attempt = 0,
   radiusMeters: number = DEFAULT_BOARD_RADIUS_METERS,
+  studioBoard: StudioBoard | null = null,
 ): DemoEnvironmentState {
   const radius = clampBoardRadiusMeters(radiusMeters);
   const [state, setState] = useState<{ key: string } & DemoEnvironmentState>({ key: "", env: null, liveLandscape: false, error: null });
-  const key = `${incidentId}|${preset.value}|${radius}|${attempt}`;
-  const zones = useRef({ fallbackCenter, zonesHalfWidthMeters });
-  zones.current = { fallbackCenter, zonesHalfWidthMeters };
-  const ready = fallbackCenter !== null;
+  const studioId = studioBoard ? studioBoardId(studioBoard.region.id, studioBoard.radiusMeters) : "";
+  const key = `${incidentId}|${preset.value}|${radius}|${studioId}|${attempt}`;
+  const zones = useRef({ fallbackCenter, zonesHalfWidthMeters, studioBoard });
+  zones.current = { fallbackCenter, zonesHalfWidthMeters, studioBoard };
+  const ready = fallbackCenter !== null || studioBoard !== null;
   useEffect(() => {
     if (!ready) return;
     const controller = new AbortController();
-    const { fallbackCenter: center, zonesHalfWidthMeters: half } = zones.current;
+    const { fallbackCenter: center, zonesHalfWidthMeters: half, studioBoard: board } = zones.current;
     setState({ key, env: null, liveLandscape: false, error: null });
     loadEnvironment(
       preset,
@@ -399,6 +469,7 @@ export function useDemoEnvironmentState(
         if (!controller.signal.aborted) setState((s) => (s.key === key ? { ...s, liveLandscape: true } : s));
       },
       radius,
+      board,
     ).then(
       (env) => {
         if (!controller.signal.aborted) setState({ key, env, liveLandscape: env.landscapeSource === "live", error: null });

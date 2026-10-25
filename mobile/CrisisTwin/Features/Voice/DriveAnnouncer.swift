@@ -57,7 +57,7 @@ enum DriveAnnouncer {
 
     /// One instruction from the published guidance. "Leave now via Skyway, 26 minutes to Exit
     /// south." / "Leave now, no open route." / "Be ready to leave. Pack and keep your phone
-    /// charged..." / "No order for Paradise Zone 4."
+    /// charged..." / "No order for your area."
     static func instruction(_ g: ZoneGuidance, zone: String?) -> String {
         switch g.level {
         case .none:

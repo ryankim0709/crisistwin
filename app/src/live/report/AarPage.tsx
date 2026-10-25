@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button, EmptyState, EvidenceTag, LinkButton, LoadingState, Notice, Page, Panel, Tag } from "../../ui";
 import { drillClock, drillDate, shortZoneName, wallClock } from "../format";
+import { SERVER_TOKEN, readToken } from "../api";
+import { fetchActive } from "../active";
 import { fetchAar } from "./api";
 import type { AarComponent, AarResponse, AarZone } from "./types";
 import "./report.css";
@@ -61,12 +63,12 @@ function ScoreCard({ data }: { data: AarResponse }) {
 }
 
 type SortKey = "name" | "vehicles" | "arrived_veh" | "first_leave_now_at" | "leave_now_vs_2018_min" | "guidance_changes" | "triage_median_min" | "help_to_assign_median_min";
-const COLUMNS: { key: SortKey; label: string; num?: boolean }[] = [
+const COLUMNS: { key: SortKey; label: string; num?: boolean; camp?: boolean }[] = [
   { key: "name", label: "Zone" },
   { key: "vehicles", label: "Vehicles", num: true },
   { key: "arrived_veh", label: "Arrived", num: true },
   { key: "first_leave_now_at", label: "Leave now" },
-  { key: "leave_now_vs_2018_min", label: "vs 2018 (min)", num: true },
+  { key: "leave_now_vs_2018_min", label: "vs 2018 (min)", num: true, camp: true },
   { key: "guidance_changes", label: "Changes", num: true },
   { key: "triage_median_min", label: "Triage (min)", num: true },
   { key: "help_to_assign_median_min", label: "Help to assign (min)", num: true },
@@ -88,7 +90,9 @@ function vs2018(z: AarZone): string {
   return `${m > 0 ? "+" : ""}${m.toFixed(1)} ${m < 0 ? "earlier" : m > 0 ? "later" : "same"}`;
 }
 
-function ZoneTable({ zones }: { zones: AarZone[] }) {
+function ZoneTable({ zones, isPackage }: { zones: AarZone[]; isPackage: boolean }) {
+  // A Studio package has no 2018 record to compare against.
+  const columns = isPackage ? COLUMNS.filter((c) => !c.camp) : COLUMNS;
   const [key, setKey] = useState<SortKey>("name");
   const [dir, setDir] = useState<1 | -1>(1);
   const rows = useMemo(() => [...zones].sort((a, b) => compare(a, b, key, dir)), [zones, key, dir]);
@@ -105,7 +109,7 @@ function ZoneTable({ zones }: { zones: AarZone[] }) {
         <table className="ui-table">
           <thead>
             <tr>
-              {COLUMNS.map((c) => (
+              {columns.map((c) => (
                 <th
                   key={c.key}
                   scope="col"
@@ -127,7 +131,7 @@ function ZoneTable({ zones }: { zones: AarZone[] }) {
                 <td className="num">{z.vehicles}</td>
                 <td className="num">{z.arrived_veh ?? "–"}</td>
                 <td>{z.first_leave_now_at ? `${drillClock(z.first_leave_now_at)} UTC` : "–"}</td>
-                <td className="num">{vs2018(z)}</td>
+                {isPackage ? null : <td className="num">{vs2018(z)}</td>}
                 <td className="num">{z.guidance_changes}</td>
                 <td className="num">{fmt(z.triage_median_min)}</td>
                 <td className="num">{fmt(z.help_to_assign_median_min)}</td>
@@ -178,7 +182,16 @@ export default function AarPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [tick, setTick] = useState(0);
+  const [isPackage, setIsPackage] = useState(false);
   const refresh = useCallback(() => setTick((t) => t + 1), []);
+
+  useEffect(() => {
+    const ctl = new AbortController();
+    fetchActive(readToken() ?? SERVER_TOKEN, ctl.signal)
+      .then((a) => setIsPackage(a.source === "package"))
+      .catch(() => {});
+    return () => ctl.abort();
+  }, [tick]);
 
   useEffect(() => {
     const ctl = new AbortController();
@@ -223,7 +236,7 @@ export default function AarPage() {
             Drill time {drillClock(data.drill.replay_now, true)} UTC {drillDate(data.drill.replay_now)}
           </p>
           <ScoreCard data={data} />
-          <ZoneTable zones={data.zones} />
+          <ZoneTable zones={data.zones} isPackage={isPackage} />
           <Timeline entries={data.timeline} />
         </div>
       ) : null}

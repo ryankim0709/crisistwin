@@ -52,7 +52,7 @@ struct DriveView: View {
             await agent.prepare()
             guard !Task.isCancelled else { return }
             agent.announce(DriveAnnouncer.entry(
-                store.myGuidance, zone: store.myZone?.name,
+                store.myGuidance, zone: nil,
                 isDrill: store.situation?.incident?.isExercise ?? true))
         }
         // A new published version for this zone: read it out, over whatever is playing.
@@ -182,9 +182,11 @@ struct DriveView: View {
         let zone = store.myZone?.name
         return VStack(alignment: .leading, spacing: 8) {
             Label {
-                Text(zone == nil
-                    ? (store.situation == nil ? "Waiting for guidance" : "Finding your area")
-                    : GuidanceLevel.none.verdict(zone: zone))
+                Text(zone != nil
+                    ? GuidanceLevel.none.verdict(zone: nil)
+                    : store.situation == nil ? "Waiting for guidance"
+                    : location.lastLocation == nil ? "Finding your area"
+                    : "No emergency near you")
                     .font(.system(.title, weight: .bold))
                     .fixedSize(horizontal: false, vertical: true)
             } icon: {
@@ -194,6 +196,12 @@ struct DriveView: View {
             .foregroundStyle(Color.ctInk)
             if zone != nil {
                 Text(GuidanceLevel.none.meaning)
+                    .font(.title3)
+                    .foregroundStyle(Color.ctInkMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let place = location.placeName {
+                Label("Near \(place)", systemImage: "location.fill")
                     .font(.title3)
                     .foregroundStyle(Color.ctInkMuted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -267,10 +275,16 @@ struct DriveView: View {
                             .foregroundStyle(Color.ctInkMuted)
                             .fixedSize(horizontal: false, vertical: true)
                     }
+                    if let sources = turn.sourcesCaption {
+                        Text(sources)
+                            .font(.footnote)
+                            .foregroundStyle(Color.ctInkMuted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel(
-                    ["AI assistant says: \(turn.reply)", turn.attributionSpoken].compactMap { $0 }.joined(separator: ". "))
+                    ["AI assistant says: \(turn.reply)", turn.attributionSpoken, turn.sourcesSpoken].compactMap { $0 }.joined(separator: ". "))
             }
             if let result = turn.result {
                 Label(result, systemImage: turn.failed ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")

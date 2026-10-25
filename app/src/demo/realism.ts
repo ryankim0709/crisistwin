@@ -238,7 +238,7 @@ export const FALLBACK_SPEED_KMH = dataValue<Record<string, number>>("road_access
 export const DEPARTURE_MEAN_MINUTES = 93;
 /**
  * ASSUMPTION (shape): departure delays are exponential with that mean, so the cumulative share
- * gone t minutes after the cue is 1 - exp(-t / 93). Right-skewed, as the published mean
+ * gone t minutes after the cue (on the command board: the evacuation order taking effect) is 1 - exp(-t / 93). Right-skewed, as the published mean
  * departure (09:33) after the median (09:00) suggests; no distribution was published.
  */
 export function departedShare(minutesSinceCue: number): number {
@@ -250,9 +250,7 @@ export function departedShare(minutesSinceCue: number): number {
  * et al. 2020 Table 11). The rest stay (wait and see, stay and defend).
  */
 export const ORDER_COMPLIANCE = 0.92;
-/**
- * ASSUMPTION inside a sourced range: 30% of households in a zone with no order leave on the
- * fire cue (people_behavior.json shadow_evacuation_share suggested value; sourced range
- * 0.291-0.75, Wong et al. 2020 Table 11). The cue is fire touching the zone.
- */
-export const SHADOW_SHARE = 0.3;
+// No shadow (self-) evacuation on the command board: households leave only on an order (agent
+// or person), so the commander's staging decides who is on the road when. Sourced data say
+// otherwise (0.291-0.75 of non-recipients leave anyway, Wong et al. 2020 Table 11; the live
+// scenario runner keeps it, docs/live-scenario-runner.md); docs/command-demo-realism.md lists this simplification.

@@ -1,0 +1,105 @@
+/* Houses layer: summary strip (HouseholdSummary.tsx), its toggle swatch and popup note. Prefix: lc-house(s)-. */
+.lc-houses {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  max-width: 100%;
+  align-items: center;
+  gap: var(--ct-space-1) var(--ct-space-3);
+  min-height: var(--ct-control-height-sm);
+  padding: var(--ct-space-1) var(--ct-space-3);
+  border: 1px solid var(--ct-border-subtle);
+  border-radius: var(--ct-radius-lg);
+  background: var(--ct-surface-glass-strong);
+  box-shadow: var(--ct-shadow-md);
+  backdrop-filter: var(--ct-glass-filter);
+  -webkit-backdrop-filter: var(--ct-glass-filter);
+  color: var(--ct-ink);
+  font-size: var(--ct-text-sm);
+}
+.lc-houses-msg {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ct-space-2);
+  color: var(--ct-ink-muted);
+}
+.lc-houses-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ct-space-1) var(--ct-space-3);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.lc-houses-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ct-space-1);
+  white-space: nowrap;
+}
+.lc-houses-chip-label {
+  color: var(--ct-ink-muted);
+}
+.lc-houses-chip-value,
+.lc-houses-meta {
+  font-variant-numeric: tabular-nums;
+}
+.lc-houses-chip-value {
+  font-weight: var(--ct-weight-semibold);
+}
+.lc-houses-meta {
+  color: var(--ct-ink-subtle);
+  font-size: var(--ct-text-xs);
+  white-space: nowrap;
+}
+.lc-houses-stale {
+  color: var(--ct-warning);
+  font-size: var(--ct-text-xs);
+  white-space: nowrap;
+}
+.lc-house-sw {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+.lc-houses-key {
+  position: relative;
+  margin-left: auto;
+}
+.lc-houses-key summary {
+  cursor: pointer;
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-xs);
+  font-weight: var(--ct-weight-semibold);
+}
+.lc-houses-pop {
+  position: absolute;
+  top: calc(100% + var(--ct-space-2));
+  right: 0;
+  width: 280px;
+  margin: 0;
+  padding: var(--ct-space-2) var(--ct-space-3);
+  border: 1px solid var(--ct-border-subtle);
+  border-radius: var(--ct-radius-md);
+  background: var(--ct-surface-glass-strong);
+  box-shadow: var(--ct-shadow-md);
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-xs);
+}
+/* Layer toggle swatch: a small filled square with a grey edge, like a house mark. */
+.lc-sw--houses {
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--ct-ink-muted);
+  border-radius: 2px;
+  background: var(--ct-success);
+}
+.lc-house-note {
+  display: inline-block;
+  margin-top: var(--ct-space-1);
+  color: var(--ct-ink-subtle);
+  font-size: var(--ct-text-xs);
+  line-height: var(--ct-leading-snug, 1.35);
+}

@@ -75,13 +75,20 @@ def validate(body: dict[str, Any]) -> dict[str, Any]:
         if ign_id in seen:
             raise ApiError(400, CODE, f"Duplicate ignition id `{ign_id}`.")
         seen.add(ign_id)
+        start = _int(item.get("start_minute"), f"ignitions[{i}].start_minute", 0, horizon)
+        # Minute (same Studio clock) the fire is reported to dispatch, set by the user; null or
+        # absent = not set, and Live models its own report delay.
+        report = item.get("report_minute")
+        if report is not None:
+            report = _int(report, f"ignitions[{i}].report_minute", start, 1440)
         ignitions.append(
             {
                 "id": ign_id,
                 "name": _text(item.get("name", ign_id), f"ignitions[{i}].name", 80),
                 "lon": _num(item.get("lon"), f"ignitions[{i}].lon", -180, 180),
                 "lat": _num(item.get("lat"), f"ignitions[{i}].lat", -90, 90),
-                "start_minute": _int(item.get("start_minute"), f"ignitions[{i}].start_minute", 0, horizon),
+                "start_minute": start,
+                "report_minute": report,
             }
         )
     wind_in = _obj(body.get("wind"), "wind")
@@ -130,8 +137,13 @@ def _collection():
     global _index_ready
     fires = col(COLLECTION)
     if not _index_ready:
-        fires.create_index([("incident_id", 1), ("published_at", DESCENDING)])
-        _index_ready = True
+        # Best effort: the index only speeds the listing. A write-blocked cluster (e.g. Atlas over
+        # its storage quota) must not take the read-only feed down with it; retried next call.
+        try:
+            fires.create_index([("incident_id", 1), ("published_at", DESCENDING)])
+            _index_ready = True
+        except PyMongoError:
+            pass
     return fires
 
 
@@ -174,7 +186,8 @@ def _fire_json(doc: dict[str, Any]) -> dict[str, Any]:
         "name": doc["name"],
         "scenario_id": doc["scenario_id"],
         "region_id": doc["region_id"],
-        "ignitions": doc["ignitions"],
+        # Fires stored before `report_minute` existed read back as not set (null).
+        "ignitions": [{**ign, "report_minute": ign.get("report_minute")} for ign in doc["ignitions"]],
         "wind": doc["wind"],
         "moisture": doc["moisture"],
         "horizon_minutes": doc["horizon_minutes"],

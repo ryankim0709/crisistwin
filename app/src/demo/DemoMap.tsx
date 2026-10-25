@@ -108,14 +108,11 @@ function buildTeams(board: Board) {
   const teams: Feature[] = [];
   const lines: Feature[] = [];
   for (const team of board.teams) {
-    const pos = teamPosition(board, team);
-    teams.push(point(pos, { id: team.id, status: team.status }));
-    // En route: the road line when known (whole route), else the straight line to its target.
-    if (team.status === "en_route" && team.target) {
-      lines.push(lineFeature(team.route && team.route.length > 1 ? team.route : [pos, team.target], { id: team.id }));
-    }
-    // Returning to its station: its road line home, once known.
-    if (team.status === "returning" && team.route && team.route.length > 1) lines.push(lineFeature(team.route, { id: team.id }));
+    teams.push(point(teamPosition(board, team), { id: team.id, status: team.status }));
+    // Units follow roads: only a known road route is drawn (en route, returning, moving up),
+    // never a straight line to the target.
+    const driving = team.status === "en_route" || team.status === "returning" || team.status === "moving_up";
+    if (driving && team.route && team.route.length > 1) lines.push(lineFeature(team.route, { id: team.id, status: team.status }));
   }
   return { teams, lines };
 }
@@ -254,7 +251,12 @@ function installLayers(map: MapLibreMap): void {
     id: "dm-team-lines",
     type: "line",
     source: "dm-team-lines",
-    paint: { "line-color": MAP_COLOR.responder, "line-width": 1.5, "line-dasharray": [1.5, 1.5] },
+    paint: {
+      "line-color": MAP_COLOR.responder,
+      "line-width": 1.5,
+      "line-opacity": ["match", ["get", "status"], ["returning", "moving_up"], 0.6, 1] as never,
+      "line-dasharray": ["match", ["get", "status"], ["returning", "moving_up"], ["literal", [0.5, 2]], ["literal", [1.5, 1.5]]] as never,
+    },
   });
   map.addLayer({
     id: "dm-stations",
@@ -303,8 +305,8 @@ function installLayers(map: MapLibreMap): void {
       "circle-radius": 6,
       "circle-color": MAP_COLOR.responder,
       "circle-stroke-color": "#FFFFFF",
-      "circle-stroke-width": ["match", ["get", "status"], ["en_route", "returning"], 1, 2] as never,
-      "circle-opacity": ["match", ["get", "status"], "en_route", 0.75, "returning", 0.55, 1] as never,
+      "circle-stroke-width": ["match", ["get", "status"], ["en_route", "returning", "moving_up"], 1, 2] as never,
+      "circle-opacity": ["match", ["get", "status"], "en_route", 0.75, ["returning", "moving_up"], 0.55, 1] as never,
     },
   });
   map.addLayer({

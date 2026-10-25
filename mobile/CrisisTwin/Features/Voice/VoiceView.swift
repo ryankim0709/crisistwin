@@ -505,6 +505,12 @@ private struct TurnView: View {
                             .foregroundStyle(Color.ctInkMuted)
                             .fixedSize(horizontal: false, vertical: true)
                     }
+                    if let sources = turn.sourcesCaption {
+                        Text(sources)
+                            .font(.caption)
+                            .foregroundStyle(Color.ctInkMuted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
@@ -513,7 +519,7 @@ private struct TurnView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel(
-                    ["AI assistant says: \(turn.reply)", turn.attributionSpoken].compactMap { $0 }.joined(separator: ". "))
+                    ["AI assistant says: \(turn.reply)", turn.attributionSpoken, turn.sourcesSpoken].compactMap { $0 }.joined(separator: ". "))
             }
             if let result = turn.result {
                 Label(result, systemImage: turn.failed ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")

@@ -9,9 +9,11 @@ import {
   crewTarget,
   dispatchable,
   distanceM,
+  legAwaited,
   legStatus,
   positionDestKey,
   reachableFree,
+  roadLegsAwaited,
   travelKey,
   travelLegFailed,
   tripStart,
@@ -19,6 +21,7 @@ import {
   type Team,
 } from "./model";
 import { accessClassOf } from "./realism";
+import { answerCovers } from "./roadClosures";
 
 /** Free units per burning fire whose road time is fetched ahead: those its options list (model.containOptions, 4). */
 export const PREFETCH_UNITS_PER_FIRE = 4;
@@ -88,10 +91,9 @@ export function crewRouteRequests(
     requests.push({ id: key, access_class: accessClassOf(kind), from, to });
   };
   for (const team of board.teams) {
-    // Dispatched units waiting to set off, and released units waiting for their road home.
-    if ((team.status === "en_route" || team.status === "returning") && team.travel === "pending" && team.legKey && team.target) {
-      want(team.legKey, team.kind, team.position, team.target);
-    }
+    // Dispatched units waiting to set off (not while backing off after a fire cut), released
+    // units waiting for their road home, and units moving up to cover a station (model.legAwaited).
+    if (legAwaited(board, team)) want(team.legKey!, team.kind, team.position, team.target!);
   }
   // Free and returning units; a returning unit's trips start from its tripStart point (model.tripStart).
   const free = board.teams.filter(dispatchable);
@@ -157,6 +159,8 @@ export function useCrewRoutes(board: Board | null, version: number, incidentId: 
   const [state, setState] = useState<CrewRoutesState>({ fetched: 0, noRoute: 0, error: null });
   const inflight = useRef(false);
   const asked = useRef<{ board: Board | null; keys: Set<string>; failedAt: number }>({ board: null, keys: new Set(), failedAt: -Infinity });
+  // Bumped to ask again at once for legs dropped because a road closure arrived while they were in flight.
+  const [retry, setRetry] = useState(0);
 
   useEffect(() => {
     if (!board || inflight.current) return;
@@ -169,6 +173,7 @@ export function useCrewRoutes(board: Board | null, version: number, incidentId: 
     const body: CrewRoutesRequest = { fires: fireRingsForRouting(board, RING_POINTS), requests };
     for (const r of requests) seen.add(r.id);
     inflight.current = true;
+    let askAgain = false;
     fetch(demoUrl(CREW_ROUTES_URL, incidentId), {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
@@ -180,7 +185,19 @@ export function useCrewRoutes(board: Board | null, version: number, incidentId: 
           throw new Error(data?.detail ?? `The crew routes service returned HTTP ${response.status}.`);
         }
         if (asked.current.board !== board) return;
+        if (!answerCovers(board, data.closed_segment_ids)) {
+          // Legs planned without a controller road closure the board knows of (demo/roadClosures.ts): never used.
+          for (const r of requests) seen.delete(r.id);
+          if (data.closures_status === "unavailable") {
+            asked.current.failedAt = Date.now();
+            setState((s) => ({ ...s, error: "road legs ignore a controller road closure (closure store unavailable); retrying" }));
+          } else askAgain = true;
+          return;
+        }
         const { fetched, noRoute } = applyCrewRoutes(board, data.routes);
+        // Answered legs are now in board.travel / board.noRoute (crewRouteRequests skips those);
+        // forget them here so a leg the board drops later (a fire cut, model.rerouteTeam) is asked again.
+        for (const route of data.routes) seen.delete(route.id);
         setState((s) => ({ fetched: s.fetched + fetched, noRoute: s.noRoute + noRoute, error: null }));
       })
       .catch((error: unknown) => {
@@ -191,8 +208,66 @@ export function useCrewRoutes(board: Board | null, version: number, incidentId: 
       })
       .finally(() => {
         inflight.current = false;
+        if (askAgain) setRetry((n) => n + 1);
       });
-  }, [board, version, incidentId]);
+  }, [board, version, incidentId, retry]);
 
   return state;
+}
+
+/**
+ * Real-time cap on holding the board clock for one road leg, ms. **ASSUMPTION** (no source): a
+ * crew_routes round trip takes about 2-3 s, so 10 s covers a slow answer and the request after a
+ * busy one (one request at a time) without freezing the board when the router is down.
+ */
+export const ROAD_LEG_HOLD_MAX_MS = 10_000;
+
+/** The board clock's road-leg hold: model.step's `holdForLegs`. */
+export interface RoadLegHold {
+  /** True while some leg the board waits on (model.roadLegsAwaited) has waited less than the cap. */
+  holds(board: Board): boolean;
+  /** Legs whose hold ran out while still pending, on the current board (the clock moved on without them). */
+  expired(): string[];
+}
+
+/**
+ * Holds the board clock while a dispatched, returning or moving-up unit waits for its road leg
+ * (as model.step holds while a fire solve is due), so the unit sets off at the board minute it was
+ * sent and response times do not depend on the router's latency or the playback speed. Each leg
+ * is held for at most `maxMs` of real time (`now`, ms) from when the hold first saw it; after that
+ * the clock runs on and the unit waits where it stands as before (console.warn once per leg).
+ * Results are then machine-dependent, which the warning says. State is per board.
+ */
+export function createRoadLegHold(maxMs: number = ROAD_LEG_HOLD_MAX_MS, now: () => number = () => performance.now()): RoadLegHold {
+  let current: Board | null = null;
+  const since = new Map<string, number>();
+  const expired = new Set<string>();
+  return {
+    holds(board) {
+      if (board !== current) {
+        current = board;
+        since.clear();
+        expired.clear();
+      }
+      const keys = roadLegsAwaited(board);
+      const live = new Set(keys);
+      for (const k of [...since.keys()]) if (!live.has(k)) since.delete(k);
+      for (const k of [...expired]) if (!live.has(k)) expired.delete(k);
+      const t = now();
+      let hold = false;
+      for (const k of keys) {
+        const start = since.get(k) ?? t;
+        since.set(k, start);
+        if (t - start < maxMs) hold = true;
+        else if (!expired.has(k)) {
+          expired.add(k);
+          console.warn(
+            `Board clock no longer held for road leg ${k} at board minute ${board.minute.toFixed(2)}: no answer from crew_routes within ${maxMs / 1000} s; the unit waits where it stands and this run's timing now depends on the router's latency.`,
+          );
+        }
+      }
+      return hold;
+    },
+    expired: () => [...expired],
+  };
 }

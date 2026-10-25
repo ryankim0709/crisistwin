@@ -2,8 +2,9 @@
 
 Date: 2026-10-24. A shared, pure TypeScript model of how fire agencies respond to a fire and
 manage their resources: initial attack by run card, containment tactics, escalation and resource
-orders, departments and mutual aid, and unit states. It runs the `/live` command board's
-rule-based response today. Simulation Studio reads its run card and staffing turnout. Every
+orders, departments and mutual aid, and unit states. On the `/live` command board it runs the
+mechanics only: the board is **AI agent only** and decides nothing itself (see "Decisions and
+mechanics on the Live board"). Simulation Studio reads its run card and staffing turnout. Every
 number below is sourced, derived from sourced numbers, or a named **ASSUMPTION**. Outputs are
 planning experiments, not operational dispatch guidance.
 
@@ -20,17 +21,137 @@ planning experiments, not operational dispatch guidance.
 | `app/src/response/units.ts` | Work/rest, water, availability, move-up, mop-up release, aircraft cycles and flight gating |
 | `app/src/response/report.ts` | Time from ignition to dispatch by remoteness (nearest home in sight, nearest road, night), AI camera and satellite detection, 911 answering, transfer and processing (`reportDelay`) |
 | `app/src/response/reach.ts` | Off-road reach from where a unit parks: hose reach, hiking in (Tobler), engine crews on foot, dozers walking in (`planWork`) |
-| `app/src/demo/boardResponse.ts` | The board adapter: applies the model each board step (`respondToNewFire`, `responseTick`, `advanceContainment`, `escalate`, `placeOrder`) |
+| `app/src/demo/boardResponse.ts` | The board adapter: applies the model each board step (`respondToNewFire`, `responseTick`, `accrueContainmentLine`, `advanceContainment`, `escalate`, `placeOrder`) |
+| `app/src/demo/suppression.ts` | Cell burn durations and suppression on the solver's cells: direct-attack knockdown of the burning edge, mop-up, what the solver takes from it (`suppressionTick`) |
+| `app/src/demo/fireState.ts` | Read API of the cell fire state: `fireCellStates`, `fireStatePolygons`, `fireStateAreas`, `crewWork` |
 
 Wiring: `demo/model.ts` calls the adapter from `ignite` and `stepOnce`. `send_crew` uses the
 same dispatch path (`dispatchTeam`), and the new `order_resources` order calls `placeOrder`.
 `demo/observation.ts` adds `fires[].tactic/dispatch_level/ia_status/escalation_stage/first_arrival_min/line_breaches/air_line_m/aircraft`,
 `crews[].department/tier/water_pct/work_h`, and a `response` block (departments, aircraft,
 orders, `orderable`, IA record). The shapes are in `demo/contracts.ts`.
-`useCommandBoard` exposes `ruleResponse` and `setRuleResponse`; both are on by default and the
-page has no toggle yet. In Studio, `firefighting.ts` takes `FIRST_ALARM` from the shared medium run
+`useCommandBoard` creates every board with the rule-based response off (`autoDispatch` and
+`autoEscalate` false; `boardResponse.ts` `RULE_RESPONSE_DEFAULT` is false too). In Studio, `firefighting.ts` takes `FIRST_ALARM` from the shared medium run
 card, with the same numbers as before. `crewDispatch.ts` gives off-board engines the staffing
 turnout. The server validates `order_resources` in `app/backend/api/demo.py`.
+
+## Decisions and mechanics on the Live board
+
+The `/live` board is AI agent only. Every **decision** comes from an order through
+`model.ts` `applyOrder`: the AI commander's (`POST /api/demo/decide`) or the drill controller's
+panel buttons. With no order, a reported fire gets no units, no aircraft, no resource orders
+and no move-ups; it just burns. The simulator runs the **mechanics**.
+
+| Decision (only by order) | Order | Was automatic before (now off) |
+| --- | --- | --- |
+| Initial attack: which units and aircraft go to a new fire | `send_crew` (a crew id, or an aircraft id from `response.aircraft`) | Run card at the report (`boardResponse.ts` `dispatchOnReport` → `fillCard`, `dispatchAircraft`), off by `autoDispatch` |
+| Mutual-aid and state orders for a run-card shortfall | `order_resources` | `dispatchOnReport` → `placeOrder`, off by `autoDispatch` and `autoEscalate` |
+| Extended attack when initial attack fails | `order_resources` | `escalate` → `placeOrder`, off by `autoEscalate`; the due stage is still logged and shown (`extended_attack_due`) |
+| Station move-up and cover | none (not offered) | `moveUpAndCover`, now runs only with `autoDispatch` |
+| Containment strategy (tactic, or a line ahead) per fire | `set_strategy`, then `send_crew` | `reviewTactic` chose the tactic by flame length every 10 min (`chooseTactic`); now only with `autoDispatch` (scripts). See "Strategy chosen by the AI agent" |
+| Reassigning or releasing a unit early | `send_crew` on a busy unit, `release_crew` | never automatic |
+| Evacuation orders and their start | `order_evacuation`, `cancel_evacuation` | never automatic (no self-evacuation) |
+
+What the commander gets instead of the rule: per burning fire, `recommended_initial_attack`
+(`initialAttackRecommendation`: the run card for its dispatch level less what is assigned or on
+order, filled by the closest free board units by expected arrival within each department's
+drawdown, the nearest available aircraft with minutes to over the fire, and what only
+`order_resources` can bring) and `extended_attack_due` (the due stage's `ESCALATION_ORDERS`).
+Both are model output, labelled recommendations, not orders. A newly reported fire wakes the
+agent at once (`observation.ts` `newReportedFireIds`, `useDemoAgent`), not on the 2-minute
+monitor tick. Off-board pool units no longer answer initial attack directly (that was the run
+card's closest-resource pass); they come only by `order_resources`.
+
+Mechanics (the simulator, no choice involved): the report itself (a seeded delay, an event);
+driving the road legs, fire-cut reroutes, arrival and parking; how a unit on scene works the
+edge (hose, hike in, dozer; `planWork`); the commander's tactic (the Hauling chart decides
+whether its line holds); line building, the holding test, breaches and containment;
+water use and refilling; relief after 16 h of work (work/rest 2:1); seeded out-of-service
+draws; ordered resources arriving and driving to their fire; aircraft cycles and flight
+gating; at containment the mop-up detail staying and every other unit and aircraft on that fire
+returning to its station, and pending orders for it cancelled; units going home when the fire is
+out, their attack line is finished, or they are released; evacuees after an order (departure
+delays, compliance, traffic); zones reopening after 2 h with no fire near.
+
+## Strategy chosen by the AI agent
+
+The containment strategy is the commander's decision on `/live`, like dispatch. Code:
+`app/src/demo/strategyOptions.ts` (options, the order, `commanderTactic`); wiring in
+`model.ts` `applyOrder` and `containedIn` (an optional forced tactic), `boardResponse.ts`
+`reviewTactic` and `FireResponse.strategy`, `observation.ts` (`fires[].strategy_options`,
+`fires[].strategy`, `inputs.strategy`), the server's `set_strategy` validation in
+`app/backend/api/demo.py`, the activity feed and the fire panel's strategy table.
+
+**Strategies offered** (all existing response code, none new):
+
+| Id | Name | Worked by | Where it comes from |
+| --- | --- | --- | --- |
+| `direct` | Direct attack | Perimeter race, line on the edge from the heel | `response/containment.ts` tactic |
+| `parallel` | Parallel attack with burnout | Perimeter + 2π × 20 m (offset **ASSUMPTION**), holds 11 ft | same |
+| `indirect` | Indirect line ahead of the fire | The perimeter 30-120 min ahead (first the units can finish) | same |
+| `structure` | Structure fire attack (developed ground only, instead of the four above) | Engines, no flame test (**ASSUMPTION**) | same |
+| `flank` | Flank and protect (head not attackable) | Flank line; never contains | same |
+| `line:<position>` | Line across the head (+30 / +60 min), on the left / right flank, protection line at a zone | A control line in the fire solver, re-solved as it grows | `demo/attack.ts` attack positions |
+
+Studio's two anchor strategies (`studio/firefighting.ts` `Strategy`: anchor at the heel and
+flank, or anchor at the head and cut across) need a full re-simulation per candidate in a
+worker, so the board does not run them; their board counterparts are `direct` (units anchor at
+the heel) and `line:head_*`. The `/comparison` page compares precomputed historical-replay what-if
+variants (`VARIANTS_URL`) and has no containment strategies.
+
+**Consequences per option** (model output; the agent compares, never computes):
+- *Perimeter*: the fewest of the `MAX_STRATEGY_UNITS` (8, a work and size bound, **ASSUMPTION**)
+  nearest free units that build that tactic's line, on top of those already in direct attack,
+  for which `containedIn` with that tactic forecasts containment within 120 min: `contained_in_min`,
+  `units_needed` by kind, `send` (units with `eta_min`), `burned_ha` at containment, `zones_reached`
+  before it with their households home. Otherwise `not_containable` with the model's reason:
+  crown fire, head flame above what the line holds (Hauling chart: hand tools 4 ft, engines and
+  dozers 8 ft, parallel and indirect 11 ft), or the line outrun (line rate against the forecast
+  perimeter growth over 10 min).
+- *Line*: `positionOptions` for 1-4 nearest units; the first set whose `line_done_min` comes
+  before `fire_reaches_line_min`, else the largest. `outcome: "line_ahead"`: the line's effect
+  is computed by the fire model once built, so no containment minute is forecast.
+- `burned_ha` is the solver's free-burn forecast at that minute (**ASSUMPTION**: it ignores the
+  line's own slowing of the fire, an upper bound). Aircraft count only through line already dropped.
+- `safety`: flame bands, crown fire, a line the fire reaches first, a reachable edge below 100%.
+- Cost: computed per fire, cached per whole board minute, solver field and unit assignments;
+  measured 1.6-8.4 ms for 5-9 options on the synthetic check board, 0.01 ms cached.
+
+**Order**: `{type: "set_strategy", fire_id, strategy_id, reason}`, `strategy_id` one of the
+fire's `strategy_options` ids. Units go with `send_crew` in the same decision, `position_id`
+= the option's `position_id` (null for a perimeter strategy). Refusals, server and board:
+an unknown or unreported fire ("Unknown fire S1-F1: no reported fire has that id." for the
+agent; a person is told when it reports), a fire not burning, a strategy not offered now
+(the board lists the current ids), the same strategy again, and a second `set_strategy` for one
+fire in a decision (server).
+
+**On the board**: a perimeter strategy sets `FireResponse.tactic` and replans an indirect line;
+a line strategy leaves the tactic and names the position its units build. The board never
+switches the strategy itself. Without a strategy, a unit sent with `position_id` null does
+direct attack, which on developed ground is the structure attack (`commanderTactic`; this
+follows the fuel at the head and is what the order means, not a choice). Units already sent to
+a position keep building it. No ground line holds a crowning head (`advanceContainment` and
+`containedIn` refuse it for every tactic but structure; before, only `chooseTactic`'s flank
+choice guaranteed that). `fires[].strategy` shows the choice with the prediction then and
+`still_offered`; the prompt tells the agent to reconsider when the option turns
+`not_containable`, is no longer offered, or the head flame, crowning or units change.
+
+**Feed and panel**: "Claude chose direct attack on S1-F1 (model: contained in ~28 min with 1
+Type 3 engine)"; the fire panel shows the options table (outcome, units, burned ha, zones) and
+the chosen one.
+
+**Checked** (scratch script, synthetic flat grid, stub router at 40 km/h, Camp snapshot units):
+GR2 grass, 5 mph: `direct` forecast "contained in ~28 min with 1 Type 3 engine, 0.4 ha" at T+20;
+chosen and sent, the board contained it at T+48 at 0.4 ha (as forecast). SH5 brush, 25 mph,
+10.6 ft head: every perimeter option `not_containable` (direct: above the 8 ft engines hold;
+parallel and indirect: 8 units outrun, 22.9 m/min of line against 37.7 m/min of perimeter
+growth); a unit sent with no strategy kept direct attack for 30 min with no board tactic
+switch; `line:head_30` chosen, 4 engines built 165 of 750 m in 40 min. Refusals as listed above.
+
+**Remaining automatic choices on `/live`** (mechanics, not strategy): the indirect line's lead
+(first of 30/60/90/120 min the units can finish); the mop-up detail kept at containment and the
+release of the rest; crews released when their line is finished; relief after 16 h; which
+attack positions are offered (the solver's forecast).
 
 ## Before: three response models disagreed
 
@@ -72,20 +193,61 @@ full model. The dispatch agent still has its own engine (not changed; see Gaps).
   cited in data leaf `response_times.turnout_s`, not re-verified. Other staffing takes 120 s
   (data **ASSUMPTION** `wildland_turnout_s`, as `livecore/apparatus.py`). Crews mobilise in
   30 min and dozers in 60 min (data ASSUMPTIONS).
-- **Dispatch waits for the report**: the run card goes out when the dispatch centre has the
+- **Dispatch waits for the report**: nothing can be sent before the dispatch centre has the
   fire. See "From ignition to dispatch" below.
+- **On `/live` the run card is a recommendation** (`recommended_initial_attack`), not a dispatch:
+  the AI commander decides. `fillCard` runs only with `autoDispatch` (scripts).
 
 ## From ignition to dispatch
 
 `reportDelay` (`response/report.ts`) draws, per fire and seeded, the minutes from ignition until
-the dispatch centre has it, as a function of how remote the fire's origin is. The board sends
-the run card then. The commander sees only reported fires, with `reported_after_min`,
+the dispatch centre has it, as a function of how remote the fire's origin is. From then on the
+AI commander sees it and is called at once to dispatch initial attack (nothing goes
+automatically). The commander sees only reported fires, with `reported_after_min`,
 `reported_by` and `reported_reason`. The fire list reads "Started 14:02 · reported 14:11 ·
 first engine 14:24" (Pacific time; the board clock starts at the wind series' T+0). The fire
 panel adds the reason, for example "Reported after 53 min — 7.9 km from the nearest home, at
 night, found by satellite". Studio (`firefighting.ignitionReportDelayMinutes`) uses the same
 model, seeded by the ignition's place and minute, for crew dispatch and aircraft. Studio has no
-road lines, so there it uses homes only.
+road lines, so there it uses homes only. In Studio each fire's report time can instead be set
+by the user (Fires panel: "Reported: set by you", minutes after its start, stored as the
+absolute `reportMinute`; a user assumption, labelled as such in the results). Crews and
+aircraft go to the first fire reported (earliest report minute), at that minute; a fixed
+response time counts from a set report time instead of the start. The set time is published to
+Live as `report_minute` ([live-reports.md](live-reports.md#studio-fires)).
+
+**On the Live board** (`demo/boardResponse.ts` `reportFor`): a fire whose ignition has a
+`report_minute` is reported at ignition + (`report_minute` − `start_minute`), the same offset
+convention as its start (`model.ts` `studioReportAfterMin`), with `reported_by: "studio"` and the
+reason "report time set in Simulation Studio (S1, 15 min after ignition), not modelled". The
+modelled delay is still drawn (and discarded), so the seeded stream is the same either way.
+`report_minute: null` keeps the modelled delay. A `fire_seen` field report pulls a modelled report
+forward to its own minute, but never a Studio-set one: the set time wins, and the field report is
+not joined to that fire until it is reported (it is checked again on later polls).
+
+**Nothing acts on a fire before its report** (by board state, not only the UI):
+- no run card, aircraft, escalation stage or initial-attack record (`escalate` waits for
+  `reportAt`; a fire already past a stage's size at its report escalates on the next step), no
+  resource order (`placeOrder`), no move-up it would trigger (no unit is committed to it);
+- `model.ts` `dispatch` (every unit trip to a fire or an attack position), `applyOrder`
+  (`send_crew`, `order_resources`) and `closeFire` refuse it (`unreportedRefusal`): the AI
+  commander is told "Unknown fire S1-F1: no reported fire has that id." (it never sees the fire); a
+  person is told "S1-F1 has not been reported to dispatch yet (reported at T+00:15, set in
+  Simulation Studio); no unit can act on it before then.";
+- the observation (what Claude sees) has no entry, id, ETA, forecast, threat, slack, wake reason or
+  initial-attack count from it: zone forecasts for the commander are `zoneForecasts(board,
+  "reported")`, and a zone counts as touched for the commander only from `zone.knownTouchedAt`
+  (first touch by a reported fire, from its report minute). A zone it overran stays out of the
+  observation, with its caught households, until a reported fire has touched it;
+- the activity feed logs no dispatch or zone threat for it; its Studio ignition line reads "(simulated;
+  not yet reported to dispatch, nobody can act on it yet)" and the report is one line, "S1-F1
+  reported (T+00:15, set in Studio)" or "(T+00:05, 911 call, 5 min after ignition)". The outcomes'
+  threatened zones and fire counts leave it out. The fire panel shows "Not yet reported (simulated)"
+  with the report time and no actions.
+The fire's physics still runs: it spreads, and households in its path can be caught (the feed and
+the outcomes' caught counts show the loss, noting the fire was not yet reported). The drill
+controller's map and 3D view still draw it, labelled "S1-F1 · not yet reported (sim)" (dimmed on
+the 2D map), with no attack positions and no zone threat tags from it.
 
 **Remoteness** d = min(distance to the nearest occupied home × 2 when terrain hides the smoke
 from it, distance to the nearest road).
@@ -195,6 +357,116 @@ growth P = k·t and line rate R from arrival t_a, it reduces to t* = R·t_a / (R
   8 ft or less, no crown fire, or a parallel or indirect tactic. Containment needs ground units on scene.
 - **Mop-up release** (**ASSUMPTION**): at containment the nearest engine and crew stay for mop-up.
   Everything else is released, and pending orders are cancelled.
+- **Out**: a contained fire is out once none of its cells is still burning (burned out, or put out
+  by mop-up), and no sooner than `MOPUP_MINUTES` (10, **ASSUMPTION**, board rule) after containment.
+
+## Cell fire state and suppression
+
+What is on fire now, per landscape cell, and crews putting it out (`demo/suppression.ts`, read
+through `demo/fireState.ts`). The solver's arrival field says when each cell ignites; this adds
+how long it burns and what suppression does to it. Simulated throughout.
+
+**States** (at board minute t; a = the cell's arrival, D = its burn duration, e = the minute
+suppression put it out):
+
+| State | Rule | Code (`CELL_STATE_CODE`) |
+| --- | --- | --- |
+| unburned | a > t | 0 |
+| burning | a ≤ t < a + D, not put out | 1 |
+| burned_out | t ≥ a + D: its modelled fuel has finished flaming | 2 |
+| extinguished | e ≤ t: put out by suppression before it burned out | 3 |
+
+**Burn duration** D = g / (2F) + t_r:
+
+- g / (2F): the front, which reaches the cell centre at its arrival, leaves the cell half a cell
+  (g, the landscape's ground cell size) later at F, the front's speed normal to itself there.
+  F = 1 / |∇t| of the solver's arrival field t (the eikonal relation), with ∇t from upwind
+  differences (only the 4-neighbours that burned earlier: the Godunov scheme of fast marching,
+  Sethian 1996, *PNAS* 93:1591), so a neighbour that burned much later behind a line does not
+  stretch it. This is the normal speed, not the ellipse's ray rate R(θ) toward the gradient: for
+  an elliptical (Huygens) front the normal speed is the ellipse's support function, several
+  times R(θ) on the flanks of a wind-driven fire. A first version used R(θ) and measured a median
+  D of 24 min and a "burning" band 19 cells thick at 15 mph; with F the band is half a cell plus
+  F·t_r, as the geometry requires. A cell with no earlier neighbour (an ignition or an
+  ember-started cell) uses the solver's head rate.
+- t_r: Anderson (1969, USDA FS Res. Pap. INT-69) flaming residence time t_r = 384 / σ minutes
+  (σ in 1/ft), the relation Rothermel (1972) uses with the bed's characteristic σ
+  (`fire/rothermel.ts` `residenceTimeMinutes`). **ASSUMPTION**: applied per size class of the
+  Scott & Burgan (2005) fuel model; a cell flames until its coarsest loaded class has finished.
+  GR2 (grass): 0.21 min; GS2, SH5 (10-h, σ = 109): 3.5 min; TL3, TU5 (100-h, σ = 30): 12.8 min.
+- **Not modelled**: smouldering and glowing combustion of logs and duff after flaming. The fuel
+  models carry no 1000-h or duff load, so FOFEM / Burnup burnout cannot be computed from them.
+  Developed ground (structure spread) has no fuel-model σ: crossing term only.
+- A re-solve never relights or puts out a cell: cells burned before the resume minute keep the
+  duration they had.
+
+**Direct attack** (direct, flank and structure tactics; parallel and indirect line is built away
+from the edge): each whole board minute, every ground unit on scene for direct attack that is
+working (`response/reach.ts`: in reach, past its hike in) earns line metres at its sourced
+production rate (`tacticLineRate`: Broyles 2011 hand crews, PMS 465 p.164 engines, PMS 465 p.39
+engine crews on foot, PMS 465 p.140 dozers) and spends them putting out burning **edge** cells
+(burning cells facing unburned ground the solver can spread into) within its reach radius of
+where it parked, nearest first from where it last worked, so it works along the edge. A cell
+costs the edge it secures: its open faces × g × π/4 (the board's perimeter measure,
+`fireField.ts` `LATTICE_PERIMETER_TO_SMOOTH`), so the line the containment race counts and the
+edge put out are the same metres. A unit can work a cell only when the flame there is within what
+it holds: Byram (1959) L = L_head (F / R_head)^0.46, with F the normal speed above and the solver's
+head flame, against the Hauling chart (PMS 465 p.12: hand tools 4 ft, engines and dozers 8 ft; an
+engine crew on foot holds as hand tools), and never a torching or crowning cell. So with the head
+too hot, crews still take the flanks. Work is not banked: a unit with nothing workable in reach
+earns nothing that minute.
+
+A knocked-down cell spreads no further: it is inert in the solver (`fireField.ts` `inertCells`:
+the solver's own path for resumed cells that do not spread, so no spread and no embers from it)
+and the unburned ground around it (8-neighbours) becomes built line holding the unit's flame
+limit (solver control lines), so the edge there stops advancing. The solver takes the
+knocked-down edge every `KNOCKDOWN_RESOLVE_MINUTES` (5, **ASSUMPTION**, as
+`LINE_RESOLVE_CHUNK_M`: one re-solve each, resuming from the burned ground). A fire whose whole
+active edge is knocked down is contained by the solver rule (the forecast shows no further
+spread past its line).
+
+**Mop-up**: on a contained fire the units kept for mop-up put out burning cells (interior too)
+within reach at their direct-attack rate, one cell width of line per cell (`MOPUP_CELL_WIDTHS`,
+**ASSUMPTION**: no published mop-up production rate is in the model). The rest burns out on its
+own.
+
+**Closing a fire by hand** puts its burning cells out at that minute.
+
+**Feed**: every `KNOCKDOWN_REPORT_MINUTES` (15, display cadence) and when a fire is contained or
+goes out, the board logs `knocked_down` / `mopped_up` with the hectares put out and the units
+(`S1-F1: crews knocked down 0.4 ha of burning edge (E1, E2, ...)`).
+
+**Same answer at any playback speed**: `step()` lands on every whole minute and every timed unit,
+aircraft, order and report event (arrivals, end of rest, refilling and out of service, start of
+work, an engine's tank running dry, aircraft cycles, orders, reports). Board decisions (tactic
+review, the reach cap, the holding test, containment and out calls, escalation, suppression) run
+only on whole minutes, and ground line accrues with the units as they were at each step's start
+(`accrueContainmentLine`), so neither the draws nor the line depend on how ticks divide a minute.
+
+Observation: `fires[].burning_ha / burned_out_ha / extinguished_ha` (they add to `area_ha`) next
+to `containment_pct`. Map and 3D: `fireCellStates` (per cell, at board.minute),
+`fireStatePolygons` (MultiPolygon per state), `crewWork` (each unit's work path along the edge,
+progress 0..1 and inward direction, for animation).
+
+**Measured** (scratch script on the Berkeley Hills & Tilden landscape, 507 × 507 cells of 23.7 m,
+one Studio ignition in GR2, dry moisture, seeded natural variation on, assumed roster; burning /
+burned out / extinguished hectares):
+
+| T+ | No suppression, 5 mph | 11 units sent at T+120, 5 mph |
+| --- | --- | --- |
+| 120 | 4.0 ha: 0.78 / 3.19 / 0 | 4.0 ha: 0.78 / 3.19 / 0 (units sent) |
+| 150 | 6.0: 1.18 / 4.82 / 0 | 5.7: 0.56 / 4.48 / 0.67 |
+| 170 | 7.3: 1.29 / 6.00 / 0 | 6.3: 0.39 / 5.10 / 0.84; contained at T+171 (6.4 ha) |
+| 180 | 8.3: 1.63 / 6.67 / 0 | 6.4: 0.06 / 5.32 / 1.06 |
+| 190 | 9.1: 1.68 / 7.40 / 0 | out at T+184: 0 / 5.38 / 1.06 |
+| 420 | 26.2: 2.13 / 24.10 / 0 | (left the board) |
+
+At 15 mph (head too hot for direct attack, ember spotting), 12 units from T+60 work the flanks:
+15.4 ha put out by T+360 and 1,043 ha burned against 1,069 ha without them; the head is not
+caught. Cell states at T+138, T+150 and T+240 (5 mph) and T+200 (15 mph, 41 re-solves) are
+identical at clock ticks of 0.37, 1, 2.5 and 7 minutes. Cost on a 786 ha fire: burn durations
+2.9 ms per solve, `fireCellStates` 0.3 ms, `fireStatePolygons` 11.5 ms uncached (cached per field,
+minute and suppression version).
 
 ## Escalation and resource ordering
 
@@ -262,7 +534,7 @@ department per station.
 | Work/rest | Relieved after 16 h of work or travel; rests worked/2; idle time counts as rest at 2:1 | Interagency Standards for Fire and Fire Aviation Operations (NFES 2724) ch. 7: 2:1 work to rest; shifts over 16 h the exception (as found, edition not confirmed) |
 | Water | Tank 500 gal (Type 3), 300 gal (Type 1); 20 gal/min while working; 20 min off the line to refill | Tanks: PMS 200 minimums. Use and refill: ASSUMPTION; refill inside the PMS 200 support-tender 15-30 min range, as a proxy |
 | Out of service | 8% of idle units, redrawn every 8 h, for 1-8 h | ASSUMPTION, seeded |
-| Move-up and cover | A station empty for 30 min gets a free engine from a station with 2 or more; the engine returns home when the station's own engines are back | ASSUMPTION (data leaf `deployment.move_up_and_cover`) |
+| Move-up and cover | Off on `/live` (a dispatch decision; runs only with `autoDispatch`). With it: a station empty for 30 min gets a free engine from a station with 2 or more; the engine returns home when the station's own engines are back | ASSUMPTION (data leaf `deployment.move_up_and_cover`) |
 | Demobilisation | Off-board and state units leave the board on release; mutual-aid units return to the pool | Model |
 | Aircraft | Daylight windows by role (IASG pp.37, 42; PMS 508 p.46), hard wind stop 35 kt (ASSUMPTION), drop line × wind effect (15-25 kt, IASG p.100), airtanker cycle = round trip + 10 min reload (ASSUMPTION), helicopter turnaround by dip distance (ASSUMPTION formula); air attack makes airtankers "supervised" | `studio/aircraft.ts`, reused |
 | Bounds | At most 160 units on the board; 60 orders kept; observation lists at most 24 aircraft and orders | Performance |
@@ -286,10 +558,21 @@ R01-R12, avoiding fire at request time. Until a leg arrives the fallback is a st
 - **Seeded variation**: a lognormal multiplier per trip (log-SD 0.2, **ASSUMPTION**). The shape
   follows Budge, Ingolfsson & Zerom (2010), *Management Science* 56(4); the spread is not fitted.
 - **Fire-cut roads**: each minute an en-route unit's remaining road line is sampled every 100 m,
-  except the last 300 m. A burned cell stops the unit, which reroutes on a straight line × 1.5
-  (**ASSUMPTION**) until a new road leg arrives.
+  except the last 300 m. A burned cell stops the unit where it is (`model.ts` `rerouteTeam`); it
+  waits there for a new road leg from that point (`pending`, never a straight line), fetched
+  afresh. At most `MAX_FIRE_CUT_REROUTES` (3, **ASSUMPTION**) reroutes per trip; the k-th new leg
+  is asked for (k − 1) × `REROUTE_BACKOFF_MINUTES` (3 board min, **ASSUMPTION**) after its cut,
+  and the unit sets off from then. The next cut gives the trip up: the unit leaves its fire and
+  stays free where it stopped (status `available`, `Team.blockedByFire`), logged as a board
+  event ("trip blocked by fire", refs action `road_blocked`) and given to the commander as
+  `crews[].blocked_by_fire`; the commander or a person can send it again (a new trip starts
+  with no cuts). En-route units show `crews[].road_cuts`.
 
 ## Measured
+
+All runs below predate the AI-only Live board: they were measured with the rule-based response
+on (`autoDispatch`, `autoEscalate`), so they describe the run card dispatching every fire at
+its report. On `/live` today, first arrival and IA success depend on the AI commander's orders.
 
 Scratch script (not committed): seeded boards run headlessly through `solveFireField`, real
 facilities from the local `tools/ca_fire_bases.json`, and a **synthetic flat landscape** (the

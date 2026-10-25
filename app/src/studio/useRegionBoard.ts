@@ -1,5 +1,5 @@
 /**
- * Prebuilt region board for the Studio 3D view: the same station-scale California regions the
+ * Prebuilt region board for the Studio 3D view: the same 13 station-scale regions (Bay Area plus two Los Angeles boards) the
  * /fire page offers (docs/adr/0013-prebuilt-socal-landscapes.md), read from MongoDB GridFS via
  * `GET /api/landscapes/<id>`. When the store or API is unavailable it falls back to loading
  * the same box live from LANDFIRE, as /fire does. A run whose enabled fires all sit on the
@@ -39,6 +39,28 @@ export const STUDIO_CUSTOM_RADIUS_METERS = 10_000;
 
 export function studioRadiusOverride(worldRadiusMeters: number): number | null {
   return worldRadiusMeters >= STUDIO_CUSTOM_RADIUS_METERS ? worldRadiusMeters : null;
+}
+
+/**
+ * Identity of a Studio board: the region id alone for the region's own board, else
+ * "<region id>@<N>km" for a chosen half-width (`radiusMeters`, N = km). Runs, drill packages
+ * (`summary.region_id`), `GET /api/live/active` `region_id` and published Studio fires carry it,
+ * so Live command can load the same landscape (`parseStudioBoardId`).
+ */
+export function studioBoardId(regionId: string, radiusMeters: number | null): string {
+  return radiusMeters === null ? regionId : `${regionId}@${radiusMeters / 1000}km`;
+}
+
+/**
+ * A Studio board id back to its region and chosen half-width (ground metres; null = the
+ * region's own board), or null when the id names no known region.
+ */
+export function parseStudioBoardId(boardId: string): { region: LandscapeRegion; radiusMeters: number | null } | null {
+  const match = /^([a-z0-9-]+)(?:@(\d+(?:\.\d+)?)km)?$/.exec(boardId);
+  const region = match ? findRegion(match[1]) : null;
+  if (!match || !region) return null;
+  const km = match[2] === undefined ? null : Number(match[2]);
+  return { region, radiusMeters: km !== null && km > 0 ? km * 1000 : null };
 }
 
 export type RegionCatalogState =

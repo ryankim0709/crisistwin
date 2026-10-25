@@ -107,12 +107,14 @@ extension GuidanceLevel {
         }
     }
 
-    /// "Leave now", "Be ready to leave", "No order for {zone}".
+    /// "Leave now", "Be ready to leave", "No order for {zone}". Callers pass `zone: nil` for
+    /// residents: a planning zone id ("Z11") means nothing to them; the street address is shown
+    /// separately (`LocationProvider.placeName`).
     func verdict(zone: String?) -> String {
         switch self {
         case .evacuateNow: return "Leave now"
         case .beReady: return "Be ready to leave"
-        case .none: return zone.map { "No order for \($0)" } ?? "No order"
+        case .none: return zone.map { "No order for \($0)" } ?? "No order for your area"
         }
     }
 }

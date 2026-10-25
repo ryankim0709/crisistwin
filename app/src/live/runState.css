@@ -1,0 +1,6 @@
+/* RunStateStatus: one muted line in the Simulation block (meaning is in the text, not the colour). */
+.lc-runstate {
+  margin: 0;
+  font-size: var(--ct-text-xs);
+  color: var(--ct-ink-muted);
+}

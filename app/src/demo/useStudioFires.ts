@@ -6,10 +6,11 @@
  *
  * Ingest rule, per board (each publish is ingested at most once per board, by fire_id):
  * - every publish that appears after the board first read the feed is ingested when it appears;
- * - when a board first reads the feed, publishes from the last STUDIO_RECENT_MINUTES (server
- *   time) are ingested too, the newest per Studio scenario only (re-running one scenario
- *   supersedes its earlier runs). This covers a Studio run published while Live command was
- *   closed, or while the board was still loading its landscape after Studio switched the drill;
+ * - when a board first reads the feed, the publishes already stored for the incident are
+ *   ingested too, the newest per Studio scenario only (re-running one scenario supersedes its
+ *   earlier runs). The stored feed is the drill's fire: a reload, a Studio run published while
+ *   Live command was closed, or one published while the board was still loading its landscape
+ *   all show it. "Reset board" deletes the stored publishes;
  * - "Restart board" ingests none of the publishes already listed: a restart starts empty.
  */
 
@@ -19,9 +20,6 @@ import { usePoll, type PollState } from "../live/usePoll";
 import type { StudioFire, StudioFiresResponse } from "./contracts";
 
 export const STUDIO_POLL_MS = 5_000;
-/** A board's first read of the feed also ingests publishes this recent (minutes, server clock). */
-export const STUDIO_RECENT_MINUTES = 10;
-
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 const isStr = (v: unknown): v is string => typeof v === "string";
 const MOISTURE_KEYS = ["dead1h", "dead10h", "dead100h", "liveHerb", "liveWoody"] as const;
@@ -39,9 +37,10 @@ function parseFire(raw: unknown): StudioFire | null {
   if (!Array.isArray(f.ignitions)) return null;
   const ignitions = f.ignitions.flatMap((i: unknown) => {
     const g = (typeof i === "object" && i !== null ? i : {}) as Record<string, unknown>;
-    return isStr(g.id) && isNum(g.lon) && isNum(g.lat) && isNum(g.start_minute)
-      ? [{ id: g.id, name: isStr(g.name) ? g.name : g.id, lon: g.lon, lat: g.lat, start_minute: g.start_minute }]
-      : [];
+    if (!(isStr(g.id) && isNum(g.lon) && isNum(g.lat) && isNum(g.start_minute))) return [];
+    // A set report time before the start (or not a number) is treated as not set: modelled.
+    const report = isNum(g.report_minute) && g.report_minute >= g.start_minute ? g.report_minute : null;
+    return [{ id: g.id, name: isStr(g.name) ? g.name : g.id, lon: g.lon, lat: g.lat, start_minute: g.start_minute, report_minute: report }];
   });
   if (ignitions.length === 0) return null;
   return {
@@ -103,16 +102,13 @@ export function useStudioFires(token: string | null, incidentId: string): PollSt
 
 /**
  * The publishes a board ignores, fixed at its first read of the feed: everything listed except,
- * when `recent` is true, the newest publish per scenario from the last STUDIO_RECENT_MINUTES
- * before `serverNowMs`.
+ * when `recent` is true, the newest publish per scenario.
  */
-export function studioBaseline(fires: readonly StudioFire[], serverNowMs: number, recent: boolean): string[] {
+export function studioBaseline(fires: readonly StudioFire[], recent: boolean): string[] {
   const keep = new Set<string>();
   if (recent) {
     const newestByScenario = new Map<string, StudioFire>();
     for (const f of fires) {
-      const age = serverNowMs - Date.parse(f.published_at);
-      if (age > STUDIO_RECENT_MINUTES * 60_000) continue;
       const cur = newestByScenario.get(f.scenario_id);
       if (!cur || Date.parse(f.published_at) > Date.parse(cur.published_at)) newestByScenario.set(f.scenario_id, f);
     }

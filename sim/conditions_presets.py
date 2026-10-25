@@ -26,8 +26,6 @@ FRONT_RANGE_DOWNSLOPE_SECTOR_DEG = (225.0, 315.0)
 # Assumed peak-season month-day per region group (see module docstring).
 TYPICAL_SEASON_DATE = {
     "San Francisco Bay Area": "10-15",
-    "Central Coast": "10-15",
-    "Central Sierra & Kern": "09-15",
     "Southern California": "11-01",
     "montane": "10-25",
 }
@@ -35,7 +33,8 @@ CLIMATOLOGY_PRESET_YEAR = 2025  # label year only: the climatology pools 2012-20
 CLIMATOLOGY_PRESET_HOUR_UTC = 20  # about noon Pacific standard time; the analog is relabelled to it
 CLIMATOLOGY_PRESET_HOURS = 24
 
-MONTANE_REGIONS = {"lake-arrowhead", "big-bear-valley", "idyllwild-pine-cove"}
+# No montane region remains in the 13-region catalogue; kept so a future one needs only an id here.
+MONTANE_REGIONS: frozenset[str] = frozenset()
 
 # (id, name, area, lat, lon) from app/src/fire/regions.ts CALIFORNIA_REGIONS (centre).
 CATALOGUE_REGIONS = (
@@ -50,36 +49,8 @@ CATALOGUE_REGIONS = (
     ("boulder-creek-big-basin", "Boulder Creek & Big Basin", "San Francisco Bay Area", 37.15, -122.17),
     ("los-gatos-sierra-azul", "Los Gatos & Sierra Azul", "San Francisco Bay Area", 37.205, -121.96),
     ("alum-rock-diablo-range", "Alum Rock & Diablo Range", "San Francisco Bay Area", 37.38, -121.79),
-    ("carmel-valley-village", "Carmel Valley Village", "Central Coast", 36.47, -121.74),
-    ("big-sur-pfeiffer", "Big Sur & Pfeiffer Ridge", "Central Coast", 36.25, -121.76),
-    ("slo-cuesta-grade", "San Luis Obispo & Cuesta Grade", "Central Coast", 35.32, -120.65),
-    ("atascadero-pine-mountain", "Atascadero & Pine Mountain", "Central Coast", 35.495, -120.67),
-    ("santa-barbara-mission-canyon", "Mission Canyon & Rattlesnake Canyon", "Central Coast", 34.47, -119.7),
-    ("montecito-san-ysidro", "Montecito & San Ysidro Canyon", "Central Coast", 34.46, -119.63),
-    ("goleta-santa-ynez-foothills", "Goleta & Santa Ynez Foothills", "Central Coast", 34.48, -119.81),
-    ("mariposa-sierra-foothills", "Mariposa & Sierra Foothills", "Central Sierra & Kern", 37.51, -119.95),
-    ("oakhurst-fresno-river-foothills", "Oakhurst & Southern Yosemite Foothills", "Central Sierra & Kern", 37.35, -119.64),
-    ("kernville-kern-river-canyon", "Kernville & Kern River Canyon", "Central Sierra & Kern", 35.76, -118.44),
-    ("lake-isabella-bodfish", "Lake Isabella & Bodfish", "Central Sierra & Kern", 35.57, -118.48),
-    ("tehachapi-mountain-park", "Tehachapi & Tehachapi Mountain Park", "Central Sierra & Kern", 35.1, -118.47),
-    ("frazier-park-lebec-tejon-pass", "Frazier Park, Lebec & Tejon Pass", "Central Sierra & Kern", 34.835, -118.92),
     ("altadena-eaton-canyon", "Altadena & Eaton Canyon", "Southern California", 34.2005, -118.125),
-    ("sierra-madre-foothills", "Sierra Madre & Monrovia Canyon", "Southern California", 34.185, -118.06),
-    ("la-canada-flintridge", "La Cañada Flintridge & Angeles Crest", "Southern California", 34.23, -118.21),
-    ("sunland-tujunga", "Sunland-Tujunga & Verdugo Hills", "Southern California", 34.28, -118.3),
-    ("topanga-canyon", "Topanga & Fernwood", "Southern California", 34.09, -118.6),
-    ("malibu-canyon-saddle-peak", "Malibu Canyon & Saddle Peak", "Southern California", 34.065, -118.66),
-    ("western-malibu-zuma", "Western Malibu & Zuma Canyon", "Southern California", 34.05, -118.8),
     ("pacific-palisades", "Pacific Palisades & Santa Monica Mountains", "Southern California", 34.06, -118.54),
-    ("castaic-hasley", "Castaic & Hasley Canyon", "Southern California", 34.51, -118.6),
-    ("ojai-valley", "Ojai & Sulphur Mountain", "Southern California", 34.47, -119.23),
-    ("lake-arrowhead", "Lake Arrowhead & Blue Jay", "Southern California", 34.255, -117.2),
-    ("big-bear-valley", "Big Bear Lake & Fawnskin", "Southern California", 34.25, -116.9),
-    ("idyllwild-pine-cove", "Idyllwild & Pine Cove", "Southern California", 33.75, -116.71),
-    ("silverado-modjeska", "Silverado & Modjeska Canyons", "Southern California", 33.74, -117.63),
-    ("corona-bedford-canyon", "Corona & Bedford Canyon", "Southern California", 33.81, -117.5),
-    ("julian-cuyamaca", "Julian & Wynola", "Southern California", 33.07, -116.59),
-    ("fallbrook-red-mountain", "Fallbrook & Red Mountain", "Southern California", 33.38, -117.23),
 )
 
 # Historical fires (region.kind = "historical_fire" in docs/shared-world.md).
@@ -137,8 +108,6 @@ NEAREST_REGION_MAX_KM = 60.0  # beyond this a point gets the default phenology c
 def _phenology_for(region_id: str, area: str) -> str:
     if region_id in MONTANE_REGIONS:
         return "ca_montane"
-    if area == "Central Sierra & Kern":
-        return "ca_interior_foothill"
     return "ca_coastal"
 
 

@@ -4,7 +4,9 @@
  * proxy (vite.config.ts), like `postDrillPackage`.
  *
  * Units at this boundary: `lon`/`lat` WGS84 degrees; `start_minute` integer minutes from
- * scenario T+0; `wind.speed_mph` open 20 ft wind in mph; `wind.from_deg` bearing the wind blows
+ * scenario T+0; `report_minute` the integer minute on that clock the fire is reported to
+ * dispatch, set by the user (start_minute <= report_minute <= 1440), or null when not set (Live
+ * then models its own report delay); `wind.speed_mph` open 20 ft wind in mph; `wind.from_deg` bearing the wind blows
  * FROM, degrees true; moisture values are fractions (0.06 = 6%); `horizon_minutes` minutes.
  */
 
@@ -15,7 +17,14 @@ export interface LiveFirePayload {
   scenario_id: string;
   name: string;
   region_id: string;
-  ignitions: { id: string; name: string; lon: number; lat: number; start_minute: number }[];
+  ignitions: {
+    id: string;
+    name: string;
+    lon: number;
+    lat: number;
+    start_minute: number;
+    report_minute: number | null;
+  }[];
   wind: { speed_mph: number; from_deg: number; source: string; label: string };
   moisture: {
     preset: string;
@@ -91,6 +100,10 @@ export function buildLiveFirePayload(result: StudioRunResult, regionId: string):
         lon: ignition.location.longitude,
         lat: ignition.location.latitude,
         start_minute: Math.round(ignition.startMinute),
+        report_minute:
+          typeof ignition.reportMinute === "number" && Number.isFinite(ignition.reportMinute)
+            ? Math.max(Math.round(ignition.reportMinute), Math.round(ignition.startMinute))
+            : null,
       })),
     wind: windOf(result),
     moisture: {

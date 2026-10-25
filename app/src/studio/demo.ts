@@ -36,6 +36,7 @@ export function demoScenario(): StudioScenario {
         name: "F1",
         location: { latitude: 37.87509, longitude: -122.19607 },
         startMinute: 0,
+        reportMinute: null,
         enabled: true,
       },
       {
@@ -43,6 +44,7 @@ export function demoScenario(): StudioScenario {
         name: "F2",
         location: { latitude: 37.85722, longitude: -122.20361 },
         startMinute: 20,
+        reportMinute: null,
         enabled: true,
       },
       {
@@ -50,6 +52,7 @@ export function demoScenario(): StudioScenario {
         name: "F3",
         location: { latitude: 37.86616, longitude: -122.21116 },
         startMinute: 45,
+        reportMinute: null,
         enabled: true,
       },
     ],

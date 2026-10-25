@@ -95,17 +95,19 @@ export function freeFlowMinutes(segments: readonly RouteSegment[], fallbackMin: 
 /**
  * Departed households of one zone, sampled at each whole minute their count grew. Index k is a
  * cohort: departed[k] - departed[k-1] households reached the road at `at[k]` on `route[k]`'s
- * line and arrive at `arriveAt[k]` (non-decreasing).
+ * line, toward destination `dest[k]` (the route's destination_id when they left), and arrive at
+ * `arriveAt[k]` (non-decreasing).
  */
 export interface Trips {
   at: number[];
   departed: number[];
   arriveAt: number[];
   line: LonLat[][];
+  dest: string[];
 }
 
 export function emptyTrips(): Trips {
-  return { at: [], departed: [], arriveAt: [], line: [] };
+  return { at: [], departed: [], arriveAt: [], line: [], dest: [] };
 }
 
 /** Households of `trips` that have arrived by `minute`. */
@@ -120,13 +122,21 @@ export function arrivedBy(trips: Trips, minute: number): number {
   return lo === 0 ? 0 : trips.departed[lo - 1];
 }
 
-/** Records a cohort; FIFO: it arrives no earlier than the cohort before it. */
-export function recordCohort(trips: Trips, at: number, departedTotal: number, travelMin: number, line: LonLat[]): void {
+/** Records a cohort heading to `dest`; FIFO: it arrives no earlier than the cohort before it. */
+export function recordCohort(
+  trips: Trips,
+  at: number,
+  departedTotal: number,
+  travelMin: number,
+  line: LonLat[],
+  dest: string,
+): void {
   const last = trips.arriveAt.length ? trips.arriveAt[trips.arriveAt.length - 1] : -Infinity;
   trips.at.push(at);
   trips.departed.push(departedTotal);
   trips.arriveAt.push(Math.max(last, at + travelMin));
   trips.line.push(line);
+  trips.dest.push(dest);
 }
 
 // ---- positions along a road line (vehicle markers) ----

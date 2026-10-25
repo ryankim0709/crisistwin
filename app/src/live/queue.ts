@@ -322,16 +322,3 @@ export function matches(item: QueueItem, filter: QueueFilter): boolean {
   if (filter === "stale") return item.stale;
   return item.high;
 }
-
-/** The pending proposal an item caused or feeds, if any. */
-export function proposalFor(item: QueueItem, data: CommandResponse): string | null {
-  const ids = new Set(item.reports.map((r) => r.id));
-  for (const p of data.proposals) {
-    if (p.status !== "pending") continue;
-    if (item.segmentId && (p.cause_segment_ids ?? []).includes(item.segmentId)) return p.id;
-    if (item.segmentId && p.inputs.blocked_segment_ids.includes(item.segmentId) && item.confirmed)
-      return p.id;
-    if (p.tasks.some((t) => t.report_ids.some((id) => ids.has(id)))) return p.id;
-  }
-  return null;
-}

@@ -114,6 +114,14 @@ export interface FireSolveRequest {
   controlLines: BuiltLineCells | null;
   /** Which built line this solve includes (model.ts lineKey); echoed in the result. */
   lineKey: string;
+  /**
+   * Cells put out by suppression (demo/suppression.ts) by the resume minute: burned ground that
+   * spreads no further and throws no embers. The solver's own inert path for resumed cells
+   * (fire/spread.ts ResumeFrom: a fixed cell with source -1 does not spread); the result keeps
+   * each cell's fire (sourceIndexByCell), so the fire's area and perimeter still count it.
+   * Only cells already burned at `fromMinute` are affected. Null or absent = none.
+   */
+  inertCells?: Int32Array | null;
   /** The earlier field, remapped to `sources` (-1 = burned by a fire no longer listed). */
   resume: {
     arrivalMinutes: Float32Array;
@@ -186,6 +194,17 @@ export function solveFireField(grid: LandscapeGrid, request: FireSolveRequest): 
     location: { longitude: s.location[0], latitude: s.location[1] },
     startMinute: s.startMinute,
   }));
+  // Put-out cells: fixed with source -1 in the resume (inert), their fire restored afterwards.
+  const inert: { cell: number; owner: number }[] = [];
+  let resumeOwners = request.resume?.sourceIndexByCell ?? null;
+  if (request.resume && request.fromMinute !== null && request.inertCells && request.inertCells.length > 0) {
+    resumeOwners = request.resume.sourceIndexByCell.slice();
+    for (const c of request.inertCells) {
+      if (c < 0 || c >= resumeOwners.length || !(request.resume.arrivalMinutes[c] <= request.fromMinute)) continue;
+      inert.push({ cell: c, owner: resumeOwners[c] });
+      resumeOwners[c] = -1;
+    }
+  }
   const run = simulateScheduledFireSpread(
     grid,
     {
@@ -210,12 +229,14 @@ export function solveFireField(grid: LandscapeGrid, request: FireSolveRequest): 
       reportCellBehaviour: true,
       resume:
         request.resume && request.fromMinute !== null
-          ? { fromMinute: request.fromMinute, ...request.resume }
+          ? { fromMinute: request.fromMinute, ...request.resume, sourceIndexByCell: resumeOwners ?? request.resume.sourceIndexByCell }
           : null,
     },
   );
   const arrival = run.arrivalMinutes;
   const owner = run.sourceIndexByCell;
+  // Fixed cells keep their resumed arrival, so an inert cell is still burned: give it back its fire.
+  for (const { cell, owner: s } of inert) if (arrival[cell] <= request.horizonMinutes) owner[cell] = s;
   const behaviour = run.cellBehaviour!;
 
   // Burned cells in arrival order (all sources), then split per source.

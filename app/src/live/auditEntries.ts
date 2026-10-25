@@ -1,4 +1,5 @@
 import type { DemoOrder } from "../demo/contracts";
+import { simClock } from "../demo/format";
 import type { BoardEvent } from "../demo/model";
 import type { AgentDecision } from "../demo/useDemoAgent";
 import type { Decision } from "./types";
@@ -39,9 +40,11 @@ const DRILL_VERBS: Record<string, string> = {
   resolve: "Resolved report",
   task_create: "Requested field check",
   task_cancel: "Cancelled field check",
-  approve: "Approved guidance",
-  reject: "Rejected guidance",
-  auto_approve: "Auto-approved reroute",
+  // The old twin-controller planner (off on Live; LIVE_PROPOSALS): kept readable in the full audit log.
+  approve: "Approved guidance (old planner)",
+  reject: "Rejected guidance (old planner)",
+  auto_approve: "Auto-approved reroute (old planner)",
+  replan: "Replan (old planner)",
   drill_start: "Drill started",
   drill_pause: "Drill paused",
   drill_resume: "Drill resumed",
@@ -49,6 +52,7 @@ const DRILL_VERBS: Record<string, string> = {
   help_acknowledge: "Acknowledged help request",
   help_assign: "Assigned responder to help request",
   help_resolve: "Resolved help request",
+  board_guidance: "Resident guidance from the board",
 };
 
 export function drillVerb(action: string): string {
@@ -61,13 +65,15 @@ export function orderText(order: DemoOrder, name: (id: string) => string): strin
   if (order.type === "send_crew") return `Send ${order.crew_id} to ${order.fire_id}`;
   if (order.type === "release_crew") return `Release ${order.crew_id}`;
   if (order.type === "order_resources") return `Order ${order.count} ${order.resource.replace(/_/g, " ")} for ${order.fire_id}`;
-  return `Evacuate ${name(order.zone_id)} to ${name(order.destination_id)}`;
+  if (order.type === "cancel_evacuation") return `Cancel the scheduled evacuation of ${name(order.zone_id)}`;
+  if (order.type === "set_strategy") return `Strategy ${order.strategy_id} for ${order.fire_id}`;
+  return `Evacuate ${name(order.zone_id)} to ${name(order.destination_id)}${order.start_minute != null ? ` at ${simClock(order.start_minute)}` : ""}`;
 }
 
 function orderRef(order: DemoOrder): AuditEntry["boardRef"] {
   if (order.type === "send_crew") return { kind: "fire", id: order.fire_id };
   if (order.type === "release_crew") return { kind: "team", id: order.crew_id };
-  if (order.type === "order_resources") return { kind: "fire", id: order.fire_id };
+  if (order.type === "order_resources" || order.type === "set_strategy") return { kind: "fire", id: order.fire_id };
   return { kind: "zone", id: order.zone_id };
 }
 

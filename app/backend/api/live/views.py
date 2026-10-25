@@ -32,6 +32,7 @@ from .common import (
 )
 from .drillcache import get_index, response_record_until, snap_to_segment
 from . import groundrecord
+from . import run_state as run_state_mod
 from . import injects as injects_mod
 from .groundrecord import ground_record_json
 from .state import (
@@ -599,7 +600,7 @@ def triage(request, report_id: str, principal: Principal):
     controller.log_decision(report["incident_id"], "controller", action, now, report_ids=report_ids, note=note)
     response: dict[str, Any] = {"report": report_json(stored)}
     cause = REPLAN_CAUSE_ON_CONFIRM.get(report["kind"]) if action == "confirm" else None
-    if cause:
+    if cause and controller.proposals_enabled():  # off on Live: the AI agent on the board decides
         pending, auto = controller.replan(load_snapshot(report["incident_id"], now), [cause])
         response["replan"] = {
             "proposal": proposal_json(pending) if pending else None,
@@ -700,6 +701,14 @@ def controller_incident() -> str:
     return incidents.active_incident_id()
 
 
+def _responder_busy(current: dict[str, Any]) -> Response:
+    return error(
+        409,
+        "responder_busy",
+        f"You already have an active task ({current['id']}). Finish or cancel it before accepting another.",
+    )
+
+
 @live_view(["POST"], roles=["responder", "controller"])
 def update_task(request, task_id: str, principal: Principal):
     body = json_body(request)
@@ -713,6 +722,10 @@ def update_task(request, task_id: str, principal: Principal):
     if status == "accepted":
         if principal.role != "responder":
             return error(403, "forbidden", "Only responders accept tasks.")
+        # One active task per responder. A retried accept of the task they already hold is fine.
+        busy = tasks.find_one({"status": "accepted", "assignee": principal.party_key, "id": {"$ne": task_id}})
+        if busy is not None:
+            return _responder_busy(busy)
         updated = tasks.find_one_and_update(
             {"id": task_id, "status": "open", "assignee": {"$in": [None, principal.party_key]}},
             {"$set": {"status": "accepted", "assignee": principal.party_key, "accepted_at": now}},
@@ -723,6 +736,16 @@ def update_task(request, task_id: str, principal: Principal):
             if current and current["status"] == "accepted" and current.get("assignee") == principal.party_key:
                 return ok({"task": task_json(current)})  # a retried accept by the same responder
             return error(409, "conflict", "The task was taken by someone else or is closed.")
+        # Two accepts racing past the check above both land; the earlier (accepted_at, id) keeps the
+        # responder and the later one is put back as it was, so exactly one wins.
+        mine = list(tasks.find({"status": "accepted", "assignee": principal.party_key}, {"id": 1, "accepted_at": 1}))
+        winner = min(mine, key=lambda t: (t["accepted_at"], t["id"]))
+        if winner["id"] != task_id:
+            tasks.update_one(
+                {"id": task_id, "status": "accepted", "assignee": principal.party_key},
+                {"$set": {"status": "open", "assignee": task.get("assignee")}, "$unset": {"accepted_at": ""}},
+            )
+            return _responder_busy(winner)
     elif status == "cancelled":
         query: dict[str, Any] = {"id": task_id, "status": {"$in": ["open", "accepted"]}}
         if principal.role == "responder":
@@ -1111,7 +1134,10 @@ def command(request, incident_id: str, principal: Principal):
             "zones": index.command_zones_json,
             "destinations": index.destinations_json,
             "guidance": rendered_guidance(incident_id, index),
-            "proposals": [proposal_json(p) for p in _proposals_for_command(incident_id)],
+            # Empty while the proposal flow is off (controller.proposals_enabled): Live follows the AI agent.
+            "proposals": [proposal_json(p) for p in _proposals_for_command(incident_id)]
+            if controller.proposals_enabled()
+            else [],
             "reports": [report_json(d) for d in snapshot.report_docs[:COMMAND_REPORTS_LIMIT]],
             "road_state": [road_status_json(s) for s in snapshot.road_state],
             "public_items": [public_item_json(i, controller=True) for i in snapshot.items],
@@ -1149,6 +1175,8 @@ def _recent_decisions(incident_id: str) -> list[dict[str, Any]]:
 @live_view(["POST"], roles=["controller"])
 def replan(request, incident_id: str, principal: Principal):
     json_body(request)
+    if not controller.proposals_enabled():
+        return error(410, "proposals_off", controller.PROPOSALS_OFF_MESSAGE)
     snapshot = load_snapshot(incident_id, wall_now())
     pending, auto = controller.replan(snapshot, ["manual"])
     controller.log_decision(
@@ -1165,6 +1193,8 @@ def replan(request, incident_id: str, principal: Principal):
 @live_view(["POST"], roles=["controller"])
 def approve_proposal(request, proposal_id: str, principal: Principal):
     body = json_body(request)
+    if not controller.proposals_enabled():  # nothing the old planner proposed publishes any more
+        return error(410, "proposals_off", controller.PROPOSALS_OFF_MESSAGE)
     note = optional_str(body, "note", "invalid_request", NOTE_MAX_CHARS)
     zone_ids = body.get("zone_ids")
     if zone_ids is None:
@@ -1229,6 +1259,7 @@ def set_drill(incident_id: str, action: str, replay_start_raw: Any = None, speed
         # Generated comms items too: live_run_scenario re-enters them (same client_ids) as the clock passes them.
         col("live_reports").delete_many({"incident_id": incident_id, "comms": {"$exists": True}})
         groundrecord.forget(incident_id)
+        run_state_mod.forget(incident_id)  # the board's run state belongs to the run being reset
         # Board questions belong to the drill moment that ranked them.
         col("live_tasks").update_many(
             {"incident_id": incident_id, "created_by": "priority", "status": "open"},

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode, type RefObject } from "rea
 import { Button, EvidenceTag, IconButton, Notice, SegmentedControl, Tag, buttonClass } from "../ui";
 import { simClock } from "../demo/format";
 import { MONITORING, type CommandBoard } from "../demo/useCommandBoard";
-import { BoardSizeControl, BoardSpeedSlider } from "./BoardClock";
+import { BoardSizeControl, BoardSpeedSlider, ClockState, PauseButton } from "./BoardClock";
 import { drillAction } from "./api";
 import { drillClock, drillDate, drillNowAt, elapsed } from "./format";
 import type { ActiveIncident } from "./active";
@@ -161,6 +161,8 @@ function useDismiss(ref: RefObject<HTMLDetailsElement | null>) {
  * The simulated board's controls: AI monitoring, the board clock (its own simulated time, not
  * the drill clock), and a "Conditions" popover showing the wind, with board size and restart.
  * Fires and their wind and moisture come from Simulation Studio; the board starts none itself.
+ * AI agent only: nothing is dispatched or ordered unless the AI agent (or you) orders it, and the
+ * clock runs only while AI monitoring is on.
  */
 export function BoardControls({ board: cb }: { board: CommandBoard }) {
   const ref = useRef<HTMLDetailsElement>(null);
@@ -185,9 +187,8 @@ export function BoardControls({ board: cb }: { board: CommandBoard }) {
           <span className="lc-clock" aria-label={`Simulated board clock ${simClock(board.minute)}`} title="Simulated board clock">
             <span className="lc-num">{simClock(board.minute)}</span>
           </span>
-          <Button size="sm" variant="secondary" onClick={() => cb.setRunning((r) => !r)} aria-pressed={!cb.running}>
-            {cb.running ? "Pause" : "Resume"}
-          </Button>
+          <ClockState board={cb} />
+          <PauseButton board={cb} />
           <BoardSpeedSlider board={cb} />
           <details ref={ref} className="lc-board-more">
             <summary className={buttonClass({ variant: "ghost", size: "sm" })}>Conditions</summary>
