@@ -130,6 +130,32 @@ export interface SpreadInputs {
 
 export type DemoApparatusKind = Extract<GroundKind, "engine_t3" | "engine_t1" | "hand_crew_t1" | "dozer_t2">;
 
+/**
+ * A board unit's kind: the fire apparatus above, or an ALS ambulance (response/fleet.ts EmsSeed,
+ * demo/injuries.ts). Ambulances are board units (observation, map, 3D) but never take fire
+ * orders: boardResponse.dispatchable is false for them and only the rescue model sends them.
+ */
+export type TeamKind = DemoApparatusKind | "ambulance";
+/** The fire apparatus kinds (everything on the board that is not an ambulance). */
+export const isFireKind = (k: TeamKind): k is DemoApparatusKind => k !== "ambulance";
+/**
+ * The fire-apparatus kind of a unit that is on a fire or free for one. Ambulances are neither
+ * (boardResponse.dispatchable is false for them, send_crew refuses them, they never hold a
+ * fireId), so this is a type narrowing for fire logic that reads the board's unit list.
+ */
+export const fireKindOf = (t: { kind: TeamKind }): DemoApparatusKind => t.kind as DemoApparatusKind;
+
+/**
+ * ASSUMPTION (access class): an ALS ambulance (Type III van or truck chassis, 2WD, roughly 14,000
+ * to 19,500 lb GVWR; not looked up for a particular unit) is not a class in the road-access table
+ * (docs/suppression-data.md R01-R12), whose lightest class is the Type 4-7 AWD wildland engine
+ * (engine_t4_t7, GVWR 37,000 lb). It is routed as that class: the lightest road vehicle there is.
+ * This is optimistic where the class's four-wheel drive matters (steep or unpaved access).
+ */
+export const AMBULANCE_ACCESS: AccessClass = "engine_t4_t7";
+export const AMBULANCE_LABEL = "ALS ambulance (medic unit)";
+export const AMBULANCE_SHORT = "Ambulance";
+
 /** Id prefix per kind on the board: E = engine, C = hand crew, D = dozer. */
 export const KIND_PREFIX: Record<DemoApparatusKind, string> = {
   engine_t3: "E",
@@ -190,7 +216,8 @@ export const NO_SNAPSHOT_LABEL = "No resource snapshot for this drill — using 
  * lineRateMetersPerHour (hand crews Broyles 2011 Table 2; engines PMS 465 p.164 Table 4 by
  * crew size; dozers PMS 465 p.140 Table 2 by slope class, uphill column, none above 55%).
  */
-export function lineMetersPerMinute(kind: DemoApparatusKind, fuelCode: number, slopePercent: number): number {
+export function lineMetersPerMinute(kind: TeamKind, fuelCode: number, slopePercent: number): number {
+  if (kind === "ambulance") return 0;
   const builder = GROUND_APPARATUS[kind].line;
   if (!builder) return 0;
   const perHour = lineRateMetersPerHour(builder, fuelCode, slopePercent, true);
@@ -198,24 +225,30 @@ export function lineMetersPerMinute(kind: DemoApparatusKind, fuelCode: number, s
 }
 
 /** Longest head flame, feet, the unit's line holds (PMS 465 p.12, Hauling chart). */
-export function holdsFlameFeet(kind: DemoApparatusKind): number {
+export function holdsFlameFeet(kind: TeamKind): number {
+  if (kind === "ambulance") return 0;
   return GROUND_APPARATUS[kind].holdsFlameLengthFeet;
 }
 
 /** Minutes from dispatch to rolling (turnout, or mobilisation for crews and dozers). */
-export function turnoutMinutes(kind: DemoApparatusKind): number {
+export function turnoutMinutes(kind: TeamKind): number {
+  // An ambulance's own turnout comes from its EmsSeed (fleet.ts EMS_TURNOUT_MINUTES, NFPA 1710 60 s); this is the same value as a default.
+  if (kind === "ambulance") return 1;
   return GROUND_APPARATUS[kind].turnoutMinutes;
 }
 
 /** Road-access class the unit is routed as (docs/suppression-data.md R01-R12; studio/apparatus.ts). */
-export function accessClassOf(kind: DemoApparatusKind): AccessClass {
+export function accessClassOf(kind: TeamKind): AccessClass {
+  if (kind === "ambulance") return AMBULANCE_ACCESS;
   return GROUND_APPARATUS[kind].access;
 }
 
-export function kindLabel(kind: DemoApparatusKind): string {
+export function kindLabel(kind: TeamKind): string {
+  if (kind === "ambulance") return AMBULANCE_LABEL;
   return GROUND_APPARATUS[kind].label;
 }
-export function kindShort(kind: DemoApparatusKind): string {
+export function kindShort(kind: TeamKind): string {
+  if (kind === "ambulance") return AMBULANCE_SHORT;
   return GROUND_APPARATUS[kind].short;
 }
 

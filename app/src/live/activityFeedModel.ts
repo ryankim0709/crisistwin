@@ -106,6 +106,7 @@ const UNIT_KIND: Record<string, [string, string]> = {
   engine_t1: ["Engine", "engines"],
   hand_crew_t1: ["Hand crew", "hand crews"],
   dozer_t2: ["Dozer", "dozers"],
+  ambulance: ["Ambulance", "ambulances"],
   air_attack: ["Air attack", "air attack aircraft"],
   airtanker_s2t: ["Airtanker", "airtankers"],
   helicopter_t2: ["Helicopter", "helicopters"],

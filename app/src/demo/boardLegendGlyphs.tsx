@@ -61,6 +61,22 @@ export function DozerGlyph() {
   );
 }
 
+/** Side view: white box body and cab, a red stripe and cross, a red roof light bar, two wheels. */
+export function AmbulanceGlyph() {
+  return (
+    <Glyph>
+      <rect x="1.5" y="3.5" width="13.5" height="9" fill={hexCss(C.ambulanceBody)} stroke={INK} strokeWidth="0.6" />
+      <path d="M15 6h4.5l3 3.5v3H15Z" fill={hexCss(C.ambulanceBody)} stroke={INK} strokeWidth="0.6" strokeLinejoin="round" />
+      <path d="M16.6 7h2.2l1.6 2h-3.8Z" fill={hexCss(C.glass)} />
+      <rect x="1.5" y="9.3" width="21" height="1.5" fill={hexCss(C.ambulanceStripe)} />
+      <path d="M8 4.8v3.6M6.2 6.6h3.6" stroke={hexCss(C.ambulanceStripe)} strokeWidth="1.3" />
+      <rect x="17" y="4.6" width="2.4" height="1.2" fill={hexCss(C.ambulanceStripe)} stroke={INK} strokeWidth="0.4" />
+      <circle cx="6" cy="12.8" r="2" fill={hexCss(C.steel)} stroke="var(--ct-surface)" strokeWidth="0.6" />
+      <circle cx="18" cy="12.8" r="2" fill={hexCss(C.steel)} stroke="var(--ct-surface)" strokeWidth="0.6" />
+    </Glyph>
+  );
+}
+
 /** Side view: a long green box with a row of dark windows and two wheels. */
 export function CrewCarrierGlyph() {
   return (

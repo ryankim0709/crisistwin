@@ -294,6 +294,7 @@ function nearestZone(board: Board, p: LonLat): ZoneState | null {
 
 function unitLabel(team: Team): string {
   const k = team.kind as string;
+  if (k === "ambulance") return team.id; // already "Berkeley FD Medic 1"
   const word = k.includes("dozer") ? "Dozer" : k.includes("crew") ? "Crew" : "Engine";
   return `${word} ${team.id}`;
 }

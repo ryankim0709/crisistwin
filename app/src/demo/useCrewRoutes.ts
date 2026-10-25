@@ -20,6 +20,7 @@ import {
   type Board,
   type Team,
 } from "./model";
+import { rescueLegWants } from "./injuries";
 import { accessClassOf } from "./realism";
 import { answerCovers } from "./roadClosures";
 
@@ -123,6 +124,8 @@ export function crewRouteRequests(
   targets.forEach((t) => {
     for (const r of reachableFree(board, t.destKey, t.to).slice(0, t.extra)) if (!r.road) ask(r.team, t);
   });
+  // Waiting injuries: the nearest free ambulances' road legs, so a send_rescue knows their road time (or that they cannot reach).
+  for (const w of rescueLegWants(board)) want(travelKey(w.team, w.from, w.destKey, w.to), w.team.kind, w.from, w.to);
   return requests;
 }
 

@@ -24,6 +24,7 @@ import { APPARATUS_COLORS, DEMO_3D_COLORS, DESTINATION_COLORS, FOLLOW_COLORS, he
 import {
   AirAttackGlyph,
   AirtankerGlyph,
+  AmbulanceGlyph,
   CrewCarrierGlyph,
   DozerGlyph,
   DropGlyph,
@@ -297,6 +298,7 @@ export default function DemoDiorama({ board, version, field, landscape, regionNa
     { label: "Water tender (dark red truck with a round tank)", color: hexCss(APPARATUS_COLORS.tender), glyph: <TenderGlyph /> },
     { label: "Dozer (yellow, tracks and a front blade)", color: hexCss(APPARATUS_COLORS.dozer), glyph: <DozerGlyph /> },
     { label: "Hand crew carrier (long green crew truck with windows)", color: hexCss(APPARATUS_COLORS.hand_crew), glyph: <CrewCarrierGlyph /> },
+    { label: "ALS ambulance (white box truck with a red stripe and cross; answers injuries only; out of service at hospital after a transport)", color: hexCss(APPARATUS_COLORS.ambulanceStripe), glyph: <AmbulanceGlyph /> },
     { label: "Crew hiking in on foot from where the truck parked (simulated)", color: hexCss(APPARATUS_COLORS.hand_crew), glyph: <HikingCrewGlyph /> },
     { label: "Helicopter (rotor; hovers low over drops and at its water dip)", color: hexCss(APPARATUS_COLORS.aircraftRed), glyph: <HelicopterGlyph /> },
     { label: "Airtanker (fixed wing, two engines; flies straight from its air base at altitude)", color: hexCss(APPARATUS_COLORS.aircraftRed), glyph: <AirtankerGlyph /> },

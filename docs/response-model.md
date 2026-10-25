@@ -544,6 +544,21 @@ clock, which sets aviation daylight), and the /live board has no fixed roster.
   the county exclusive operating area (Albany, Berkeley, Piedmont and Alameda fire departments
   transport themselves), whose units are not station-based, so none are placed. They are not fire
   units; the injury/rescue model dispatches them.
+  On the board (`demo/model.ts` buildBoardUnits) those at stations inside the board are units of
+  kind `"ambulance"` (id e.g. `Berkeley FD Medic 1`): in the observation's `crews[]`, drawn in 3D
+  (white box truck, red stripe) and listed in `response.ems` (`demo/injuries.ts` `emsObservation`:
+  counts available / responding / treating / at_hospital, per-unit state and minutes until free).
+  They never take fire orders (`dispatchable` is false; `send_crew` refuses them).
+  `send_rescue` on an `inj-*` id sends the closest free ambulance that can reach the patient by
+  road (road legs fetched ahead for the two nearest, `rescueLegWants`), else the closest free
+  engine. **ASSUMPTION** (access class): no ambulance class exists in the road-access table, so an
+  ambulance is routed as the lightest class, `engine_t4_t7` (Type 4-7 AWD engine), optimistic on
+  steep or unpaved access. After 15 min on scene (`EMS_ON_SCENE_MIN`) a transporting ambulance
+  (injury status `transported`) goes to a hospital that is not on the board and is out of service
+  `AMBULANCE_TURNAROUND_MIN` = 50 min (**ASSUMPTION**: 20 min transport out and back, no hospital
+  layer, plus 30 min offload = the California AB 40 (2023) ambulance patient offload time ceiling,
+  Health and Safety Code 1797.120.6, 30 min at the 90th percentile, used as the value for every
+  transport), drawn at its quarters meanwhile, then available.
 - **Tiers**: facilities inside the board answer initial attack (closest resource). The rest of
   the list (the endpoint returns the nearest 40 stations and 10 camps) is the mutual-aid pool.
   Beyond that, orders go to the state system ("Escalation and resource ordering").

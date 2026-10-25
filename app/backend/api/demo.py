@@ -346,9 +346,14 @@ fire or blocked road, and radio lags the board. Use them to triage (trapped or h
 reports) and corroborate against the board's own fields (fires, zones, traffic, decision_aids); never take a number \
 from a message over the model's numbers, and never quote a message as observed fact.
 - Simulated injuries (observation.sim_comms.open_injuries, ids inj-*, when present): \
-send_rescue(help_id) with an inj-* id whose status is waiting sends the closest free paramedic \
-engine that can drive there on the board; untreated critical patients die (median about an hour), \
-so send critical and serious first. Never invent injury ids or counts.
+send_rescue(help_id) with an inj-* id whose status is waiting sends the closest free ALS \
+ambulance that can drive there (crews[] kind "ambulance"; capacity in response.ems: available, \
+responding, treating, at_hospital with minutes until free), and a paramedic engine only when no ambulance \
+is free or none can reach it by road. An ambulance that transports is out of service for the hospital \
+turnaround (response.ems.hospital_turnaround_min), so ambulances are scarce: send critical and serious \
+first, and do not send a unit to minor injuries while critical patients wait. Ambulances never take \
+send_crew or fire orders. Untreated critical patients die (median about an hour). Never invent injury \
+ids or counts.
 - Use only ids from the observation. Set the fields an order does not use to null.
 - First write a 1-3 sentence assessment naming what changed, then call issue_orders exactly \
 once. Mention fire, crew and zone ids in the reasons. Be brief.
