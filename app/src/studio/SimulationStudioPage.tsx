@@ -310,7 +310,8 @@ export default function SimulationStudioPage({
   const [boardAttempt, setBoardAttempt] = useState(0);
   // Area size lives in the shared world (region.radiusMeters), so other tabs follow it.
   // Area size (null: the region's own board); shared through the world's region radius.
-  const [boardRadius, setBoardRadius] = useState<number | null>(null);
+  // Default board: about 30 × 30 km (15 km half-width).
+  const [boardRadius, setBoardRadius] = useState<number | null>(15_000);
   const { catalog, board } = useRegionBoard(regionId, boardAttempt, boardRadius);
   const region = findRegion(regionId);
   const sizeReady = useCachedBoards(

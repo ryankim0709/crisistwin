@@ -29,7 +29,7 @@ import {
   fetchRegionCatalog,
   fetchRegionLandscape,
 } from "./landscapePackage";
-import { DEFAULT_REGION_ID, CALIFORNIA_REGIONS, REGION_AREAS } from "./regions";
+import { CALIFORNIA_REGIONS, REGION_AREAS } from "./regions";
 import { boardCellMetersFor } from "./boardSize";
 import { type LandscapeGrid } from "./landscape";
 import { loadLandscapeCached } from "./landscapeCache";
@@ -290,7 +290,8 @@ export default function FireSimulatorPage() {
   const [view, setView] = useState<ViewMode>(readStoredView);
   const [fitSignal, setFitSignal] = useState(0);
   const [outsideHint, setOutsideHint] = useState(false);
-  const [selection, setSelection] = useState<string>(DEFAULT_REGION_ID);
+  // Default: a 30 × 30 km board centred on Berkeley Hills & Tilden (DEFAULT_AREA, DEFAULT_AREA_SIZE).
+  const [selection, setSelection] = useState<string>(CUSTOM_SELECTION);
   const [catalog, setCatalog] = useState<CatalogState>({ status: "loading" });
   const [areaSize, setAreaSize] = useState<AreaSizeId>(DEFAULT_AREA_SIZE);
   const [areaPickerOpen, setAreaPickerOpen] = useState(false);

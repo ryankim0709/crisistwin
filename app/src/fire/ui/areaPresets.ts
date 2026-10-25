@@ -3,9 +3,9 @@ import type { GeoPoint } from "../spread";
 export type AreaPreset = { id: string; label: string; point: GeoPoint };
 
 export const DEFAULT_AREA: AreaPreset = {
-  id: "malibu",
-  label: "Malibu / Woolsey, CA",
-  point: { latitude: 34.08, longitude: -118.79 },
+  id: "berkeley-hills",
+  label: "Berkeley Hills & Tilden, CA",
+  point: { latitude: 37.895, longitude: -122.23 },
 };
 
 /** California starting points (Bay Area to San Diego) for a custom area; any CONUS click also works. */
