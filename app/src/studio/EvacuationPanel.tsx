@@ -105,7 +105,10 @@ function rows(summary: EvacuationSummary) {
   const { final } = summary;
   return {
     safe: final.safe,
-    caught: final.caught,
+    // "Still home when the fire arrived": not a casualty count. Staying by choice apart.
+    caught: final.caught - (final.caughtByChoice ?? 0) - (final.caughtOnRoad ?? 0),
+    caughtByChoice: final.caughtByChoice ?? 0,
+    caughtOnRoad: final.caughtOnRoad ?? 0,
     out: final.waiting - (final.staying ?? 0) + final.onRoad,
     staying: final.staying ?? 0,
     cutOff: summary.cutOffHomes,
@@ -117,7 +120,7 @@ function rows(summary: EvacuationSummary) {
 function liveLine(totals: Totals | undefined, minute: number): string | null {
   if (!totals) return null;
   const staying = totals.staying ?? 0;
-  return `At ${formatElapsed(minute)}: ${totals.waiting - staying} waiting, ${totals.onRoad} on the road, ${totals.safe} out, ${totals.caught} caught${staying ? `, ${staying} staying home` : ""}.`;
+  return `At ${formatElapsed(minute)}: ${totals.waiting - staying} waiting, ${totals.onRoad} on the road, ${totals.safe} out, ${totals.caught - (totals.caughtByChoice ?? 0)} reached by fire before getting out (${totals.caughtByChoice ?? 0} more staying by choice)${staying ? `, ${staying} staying home` : ""}.`;
 }
 
 function OptimizedPlan({
@@ -239,8 +242,8 @@ function StrategyTable({ result }: { result: EvacuationOptimization }) {
             <th scope="col" className="num" title="Households that reached an exit">
               Out
             </th>
-            <th scope="col" className="num" title="Households caught by the fire">
-              Caught
+            <th scope="col" className="num" title="Households the modelled fire reached before they got out, staying-by-choice excluded (a model count, not casualties)">
+              Reached by fire
             </th>
             <th scope="col" className="num" title="Household-hours evacuating">
               HH-hours
@@ -265,7 +268,7 @@ function StrategyTable({ result }: { result: EvacuationOptimization }) {
                   )}
                 </th>
                 <td className="num">{final.safe}</td>
-                <td className="num">{final.caught}</td>
+                <td className="num">{final.caught - (final.caughtByChoice ?? 0)}</td>
                 <td className="num">{candidate.summary.householdHoursEvacuating.toFixed(1)}</td>
                 <td className="num">{clearText(candidate.summary)}</td>
               </tr>
@@ -454,7 +457,9 @@ export default function EvacuationPanel(props: EvacuationPanelProps) {
                     {(
                       [
                         ["Reached an exit", "safe", 0],
-                        ["Caught by the fire", "caught", 0],
+                        ["Still home when the fire arrived", "caught", 0],
+                        ["Reached by fire after leaving home", "caughtOnRoad", 0],
+                        ["Fire reached, staying by choice", "caughtByChoice", 0],
                         ["Still evacuating", "out", 0],
                         ["Stayed home (did not leave)", "staying", 0],
                         ["Cut off (no open exit)", "cutOff", 0],

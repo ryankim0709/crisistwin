@@ -47,8 +47,10 @@ from .scenario_weather import DEFAULT_HOURS, MAX_HOURS, _number, _parse_start, a
 logger = logging.getLogger(__name__)
 
 COLLECTION = "conditions_cache"
-CACHE_SCHEMA = "conditions/3"  # 2: ranked station choice + reanalysis fallback; 3: observation QC
-# and RH gap fill (sim/weather.py QC_VERSION obs-qc/1, also in the cache key)
+CACHE_SCHEMA = "conditions/5"  # 2: ranked station choice + reanalysis fallback; 3: observation QC
+# and RH gap fill (sim/weather.py QC_VERSION obs-qc/1, also in the cache key); 4: live moisture from
+# the NFDRS 2016 Growing Season Index (sim/live_moisture.py MODEL_VERSION, also in the cache key);
+# 5: hourly precipitation (obs-qc/2) and rain-adjusted dead fuel moisture (fuel-moisture/2)
 FORECAST_CACHE_SECONDS = 3600  # a forecast answer older than this is refetched
 SPINUP_HOURS = 48  # observed hours before the window that warm up the 10-h/100-h state
 # Assumption: a station farther than this does not represent the query point. sim/weather.py only
@@ -75,6 +77,13 @@ def _sim():
     from sim import conditions_presets, fuel_moisture, weather
 
     return weather, fuel_moisture, conditions_presets
+
+
+def _live_model():
+    _sim()  # puts the repo root on sys.path
+    from sim import live_moisture
+
+    return live_moisture
 
 
 def _iso(t: datetime) -> str:
@@ -115,7 +124,31 @@ def _cache_put(key: str, body: dict, forecast: bool) -> None:
 
 
 def _sample_dicts(series_samples) -> list[dict]:
-    return [{"t_utc": s.t_utc, "temp_c": s.temp_c, "rh_pct": s.rh_pct} for s in series_samples]
+    return [{"t_utc": s.t_utc, "temp_c": s.temp_c, "rh_pct": s.rh_pct, "precip_mm": s.precip_mm}
+            for s in series_samples]
+
+
+def _rain_warnings(rain: dict, evidence_label: str) -> list[str]:
+    """Say when rain changed the dead fuel moisture, and when no precipitation was reported."""
+    out = []
+    if rain["adjusted_hours"]:
+        out.append(
+            f"Rain adjusted dead fuel moisture in {rain['adjusted_hours']} h "
+            f"({rain['adjusted_from_utc'][:13]}Z to {rain['adjusted_to_utc'][:13]}Z): "
+            f"{rain['rain_hours']} rain hour(s), {rain['precip_total_mm']:g} mm in the window and "
+            f"{rain['rain_hours_spinup']} rain hour(s), {rain['precip_total_spinup_mm']:g} mm in the "
+            f"{rain.get('spinup_hours', SPINUP_HOURS)} h before it ({evidence_label} precipitation). "
+            "Method: 1978 NFDRS rain-duration boundary conditions (Bradshaw et al. 1984, GTR INT-169 "
+            "eq. 32/33/36), adapted to hourly steps (assumption); dead1h can exceed the Rothermel "
+            "1983 tables' 25 % cap. fine_fuel is still the table value; rain.no_rain_pct is the hour "
+            "without rain."
+        )
+    if rain["precip_missing_hours"]:
+        out.append(
+            f"No precipitation reported for {rain['precip_missing_hours']} of the window's hours: those "
+            "hours are treated as dry, so dead fuel moisture is too low if it rained then."
+        )
+    return out
 
 
 def _spinup(weather, result: dict, mode: str, start: datetime) -> tuple[list[dict], timedelta, dict]:
@@ -162,6 +195,42 @@ def _spinup(weather, result: dict, mode: str, start: datetime) -> tuple[list[dic
     return rows, shift, info
 
 
+def _apply_live_gsi(fm, hours: list[dict], lon: float, lat: float, table_start: datetime, phen: str) -> dict:
+    """Replace the calendar live moisture of every hour with the NFDRS 2016 GSI value when it can be
+    computed (sim/live_moisture.py); otherwise keep the calendar values and say why.
+
+    ``table_start`` is the start on the clock the weather was really observed at (a climatology
+    analog's own date). The value is the model state after the day before that local day, held over
+    the window (NFDRS updates live moisture once per day). Never raises.
+    """
+    lm = _live_model()
+    local_day = fm.local_mean_solar_time(table_start, lon).date()
+    try:
+        res = lm.gsi_live_moisture(lon, lat, local_day, phen)
+    except Exception as exc:  # noqa: BLE001 - the calendar fallback must survive any GSI failure
+        logger.exception("GSI live moisture failed")
+        res = {"ok": False, "reason": f"{type(exc).__name__}: {exc}", "model_version": lm.MODEL_VERSION}
+    res["scenario_local_day"] = local_day.isoformat()
+    res["method"] = "nfdrs2016_gsi" if res["ok"] else "assumed_calendar"
+    if not res["ok"]:
+        for h in hours:
+            h["live"]["method"] = "assumed_calendar"
+        return res
+    herb, woody = res["herb_pct"], res["woody_pct"]
+    for h in hours:
+        h["moisture"]["liveHerb"] = round(herb / 100.0, 4)
+        h["moisture"]["liveWoody"] = round(woody / 100.0, 4)
+        h["live"] = {
+            "herb_pct": herb, "woody_pct": woody,
+            # NFDRS4: below the green-up GSI the layer sits at its minimum (cured herb, dormant woody).
+            "herb_stage": "cured" if herb <= lm.HERB_LFM_MIN_PCT else "green",
+            "woody_stage": "dormant" if woody <= lm.WOODY_LFM_MIN_PCT else "green",
+            "herb_between": None, "woody_between": None,  # calendar stages; not used by the GSI method
+            "method": "nfdrs2016_gsi", "gsi": res["gsi"],
+        }
+    return res
+
+
 def build_conditions(params: dict) -> dict:
     """Weather plus derived moisture for validated ``params``. Raises sim.weather errors."""
     weather, fm, presets = _sim()
@@ -189,9 +258,12 @@ def build_conditions(params: dict) -> dict:
         phen, phen_how = presets.phenology_for_point(lon, lat, params.get("region"))
     spin_rows, shift, spin_info = _spinup(weather, result, mode, start)
     ms = fm.moisture_series(
-        [{"t_utc": s["t_utc"], "temp_c": s["temp_c"], "rh_pct": s["rh_pct"]} for s in result["samples"]],
+        [{"t_utc": s["t_utc"], "temp_c": s["temp_c"], "rh_pct": s["rh_pct"], "precip_mm": s.get("precip_mm")}
+         for s in result["samples"]],
         lon, site, phen, spinup_samples=spin_rows, clock_shift=shift,
     )
+    live_gsi = _apply_live_gsi(fm, ms["hours"], lon, lat, start + shift, phen)
+    rain = {**ms["rain"], "spinup_hours": ms["spinup_hours_used"]}
     hours_out = []
     for s, m in zip(result["samples"], ms["hours"], strict=True):
         hours_out.append({
@@ -204,16 +276,18 @@ def build_conditions(params: dict) -> dict:
             "temp_c": s.get("temp_c"),
             "rh_pct": s.get("rh_pct"),
             "rh_from": s.get("rh_from"),
+            "precip_mm": s.get("precip_mm"),
             "n_obs": s.get("n_obs"),
             "moisture": m["moisture"],
             "fine_fuel": m["fine_fuel"],
             "dead_lag_pct": m["dead_lag_pct"],
+            "rain": m["rain"],
             "live": m["live"],
             "met_filled": m["met_filled"],
         })
     return {
         "schema": "crisistwin.conditions/1",
-        "model_version": fm.MODEL_VERSION,
+        "model_version": f"{fm.MODEL_VERSION}+{_live_model().MODEL_VERSION}",
         "query": {**{k: params[k] for k in ("lon", "lat", "hours", "mode")}, "start": _iso(start),
                   **({"station": params["station"]} if params.get("station") else {}),
                   **({"percentile": params["percentile"], "sector": params["sector"]}
@@ -229,14 +303,20 @@ def build_conditions(params: dict) -> dict:
             "gust_ms": "m/s as reported, not height-converted",
             "temp_c": "degC", "rh_pct": "percent",
             "rh_from": "station id when rh_pct was filled from that neighbour's dew point after QC, else null",
+            "precip_mm": "mm, precipitation in the hour ending near t_utc (null = not reported)",
             "moisture": "fraction of oven-dry weight (0.06 = 6 %), keys as rothermel.ts FuelMoisture",
-            "fine_fuel": "percent, Rothermel 1983 table lookups",
+            "fine_fuel": "percent, Rothermel 1983 table lookups (no rain)",
             "dead_lag_pct": "percent",
+            "rain": "precip_mm in mm; rain_hours_24h, pd_used_h in hours; wet_boundary_pct, "
+                    "dead1h_excess_pct, no_rain_pct in percent",
         },
         "station": result.get("station"),
         "source": result.get("source"),
         "candidates": result.get("candidates", []),
-        "warnings": result.get("warnings", []) + ([spin_info["qc_warning"]] if spin_info.get("qc_warning") else []),
+        "warnings": (result.get("warnings", []) + ([spin_info["qc_warning"]] if spin_info.get("qc_warning") else [])
+                     + ([] if live_gsi["ok"] else [f"Live fuel moisture fell back to the assumed phenology "
+                                                   f"calendar: {live_gsi['reason']}."])
+                     + _rain_warnings(rain, result.get("evidence_label", result["evidence_class"]))),
         "height_conversion": result.get("height_conversion"),
         "site": {"aspect": site.aspect, "slope_pct": site.slope_pct, "shading": site.shading,
                  "elevation_band": site.elevation_band, "night_inversion": site.night_inversion,
@@ -248,7 +328,12 @@ def build_conditions(params: dict) -> dict:
             "dead1h": "derived (Rothermel 1983 / Fosberg & Deeming tables from the hour's temperature and RH)",
             "dead10h_dead100h": ("derived (first-order timelag, tau 10 h and 100 h); forcing by the 1-h "
                                  "value and the starting state are assumed"),
-            "live": "assumed (Rothermel 1983 Table II-2 stage values on an assumed regional calendar)",
+            "rain": ("derived from the source's hourly precipitation (1978 NFDRS rain-duration boundary "
+                     "conditions); the hourly adaptation is assumed"),
+            "live": ("derived (NFDRS 2016 Growing Season Index from the ERA5 daily lead-in, modelled weather)"
+                     if live_gsi["ok"] else
+                     "assumed (Rothermel 1983 Table II-2 stage values on an assumed regional calendar; the "
+                     "GSI lead-in was unavailable)"),
             "site": "user" if params["site_given"] else "assumed defaults (aspect S, slope 0, exposed, level)",
         },
         "hours_series": hours_out,
@@ -258,6 +343,8 @@ def build_conditions(params: dict) -> dict:
             "weather_summary": result.get("summary"),
             "spinup": spin_info,
             "lag_initial_pct": ms["lag_initial_pct"],
+            "live_gsi": live_gsi,
+            "rain": rain,
             "table_clock": {
                 "basis": "local mean solar time, UTC + lon/15 h",
                 "shift_hours": shift.total_seconds() / 3600.0,
@@ -269,9 +356,18 @@ def build_conditions(params: dict) -> dict:
                            "fires. USDA FS GTR INT-143, Exhibit II-2 Tables A-F (Fosberg & Deeming tables; "
                            "same as the NWCG IRPG)."),
                 "dead10h_dead100h": "Timelag definition dm/dt = (E - m)/tau (Byram 1963; Fosberg 1970).",
-                "live": "Rothermel 1983 Table II-2 stage values; phenology calendar assumed (sim/fuel_moisture.py).",
-                "not_modelled": ("Precipitation and dew (the tables assume no recent rain: values are too dry "
-                                 "after rain), cloud cover (use shading=shaded), wetting/drying hysteresis."),
+                "live": (("Growing Season Index (Jolly, Nemani & Running 2005, Global Change Biology 11:619-632), "
+                          "21-day mean, mapped to herb 30-250 % and woody 60-200 % above a green-up GSI of 0.5 as "
+                          "in the NFDRS 2016 reference code (github.com/firelab/NFDRS4, livefuelmoisture.cpp); "
+                          "sim/live_moisture.py.") if live_gsi["ok"] else
+                         "Rothermel 1983 Table II-2 stage values; phenology calendar assumed (sim/fuel_moisture.py)."),
+                "rain": ("Bradshaw, L.S., Deeming, J.E., Burgan, R.E., Cohen, J.D. 1984. The 1978 National "
+                         "Fire-Danger Rating System: technical documentation. USDA FS GTR INT-169: wet "
+                         "boundary 2.7 pd + 76 (eq. 32/33, Fosberg 1972) for 1-h and 10-h, 0.5 pd + 41 "
+                         "(eq. 36) for 100-h, diffusion eq. 25; pd capped at 8 h (eq. 39). Hourly "
+                         "adaptation, rain-hour threshold 0.254 mm and 24 h pd window are assumptions."),
+                "not_modelled": ("Dew, cloud cover (use shading=shaded), wetting/drying hysteresis; hours "
+                                 "without a precipitation report are treated as dry."),
             },
         },
     }
@@ -376,7 +472,7 @@ def _parse(q, weather, fm) -> tuple[dict | None, Response | None]:
 
 
 def _cache_key(p: dict, fm, weather) -> str:
-    parts = [fm.MODEL_VERSION, weather.SELECTION_VERSION, weather.QC_VERSION, f"{p['lon']:.4f},{p['lat']:.4f}", _iso(p["start"]),
+    parts = [fm.MODEL_VERSION, _live_model().MODEL_VERSION, weather.SELECTION_VERSION, weather.QC_VERSION, f"{p['lon']:.4f},{p['lat']:.4f}", _iso(p["start"]),
              str(p["hours"]), p["mode"], f"st={(p.get('station') or '').upper()}"]
     if p["mode"] == "climatology_percentile":
         parts += [f"p{p['percentile']:g}", "s{:g},{:g}".format(*p["sector"])]

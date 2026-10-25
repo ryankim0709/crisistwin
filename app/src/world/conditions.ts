@@ -12,7 +12,9 @@
  *
  * Evidence stays separate: weather is observed / derived (climatology) / forecast; dead 1-h
  * moisture is derived; 10-h and 100-h are derived with an assumed forcing and starting state;
- * live moisture is assumed (phenology calendar). Nothing here invents a missing value: an hour
+ * live moisture is derived from the NFDRS 2016 Growing Season Index over an ERA5 lead-in, or
+ * assumed (phenology calendar) when that lead-in is unavailable (`evidence.live` says which).
+ * Nothing here invents a missing value: an hour
  * without temperature/RH or wind cannot be applied, and `applyConditionsHour` says why.
  */
 
@@ -178,7 +180,19 @@ interface ApiHour {
   gust_ms: number | null;
   temp_c: number | null;
   rh_pct: number | null;
+  /** Millimetres in the hour ending near t_utc; null when the source did not report it. */
+  precip_mm?: number | null;
   moisture: NullableFuelMoisture;
+  /** Rain adjustment of the dead classes (sim/fuel_moisture.py, fuel-moisture/2); percent unless named. */
+  rain?: {
+    precip_mm: number | null;
+    rain_hour: boolean;
+    rain_hours_24h: number;
+    pd_used_h: number;
+    adjusted: boolean;
+    no_rain_pct: { dead1h: number | null; dead10h: number | null; dead100h: number | null } | null;
+  };
+  /** Always the plain Rothermel 1983 table lookup, before any rain adjustment. */
   fine_fuel: {
     moisture_pct: number;
     period: "day" | "night";
