@@ -17,5 +17,7 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  // Stale since the command demo moved to the solver fire model (#72); not part of the app build.
+  "exclude": ["src/demo/model.test.ts", "src/demo/observation.test.ts"]
 }

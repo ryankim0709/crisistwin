@@ -37,7 +37,7 @@ import {
   householdDepartureDelays,
   type HouseholdBehaviorMode,
 } from "../population/householdBehavior";
-import { airBasesOf, useSuppressionBases } from "./suppressionBases";
+import { useSuppressionBases } from "./suppressionBases";
 import { mapResources, planMapDispatch } from "./mapResources";
 import { useMapStations } from "./useMapStations";
 import type { RunDispatch } from "./useStudioRun";

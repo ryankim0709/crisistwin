@@ -21,7 +21,7 @@ import {
   hasHandSetCounts,
   type FirefightingSettings,
 } from "./firefighting";
-import { APPARATUS_KINDS, type ApparatusCounts } from "./apparatus";
+import { APPARATUS_KINDS } from "./apparatus";
 import { MAX_HORIZON_MINUTES, MIN_HORIZON_MINUTES, isValidHorizonMinutes } from "../fire/horizon";
 import {
   DISPLAY_STEP_MINUTES,
