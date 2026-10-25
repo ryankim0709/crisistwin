@@ -88,6 +88,7 @@ export default function ConfigPanel(props: ConfigPanelProps) {
     onScenarioChange,
     onRun,
     randomScenario,
+    quickSetup,
     onCancel,
     onClear,
     onExport,
@@ -98,6 +99,22 @@ export default function ConfigPanel(props: ConfigPanelProps) {
   } = props;
 
   const uid = useId();
+  const modeKey = `crisistwin.studio.setupMode.${typeof window === "undefined" ? "" : window.location.pathname}`;
+  const [custom, setCustomState] = useState(() => {
+    try {
+      return window.localStorage.getItem(modeKey) === "custom";
+    } catch {
+      return false;
+    }
+  });
+  function setCustom(next: boolean) {
+    setCustomState(next);
+    try {
+      window.localStorage.setItem(modeKey, next ? "custom" : "quick");
+    } catch {
+      /* the choice just is not remembered */
+    }
+  }
   const [importText, setImportText] = useState("");
   const [importIssues, setImportIssues] = useState<ScenarioIssue[]>([]);
 
@@ -255,6 +272,31 @@ export default function ConfigPanel(props: ConfigPanelProps) {
     >
       <div className="studio-panel-body">
         <p className="studio-hint">User assumptions, not observed data or a forecast.</p>
+
+        <div className="studio-row" role="group" aria-label="Setup style">
+          <Button size="sm" variant={custom ? "secondary" : "primary"} aria-pressed={!custom} onClick={() => setCustom(false)}>
+            Quick setup
+          </Button>
+          <Button size="sm" variant={custom ? "primary" : "secondary"} aria-pressed={custom} onClick={() => setCustom(true)}>
+            Custom
+          </Button>
+        </div>
+
+        {!custom && (
+          <>
+            {quickSetup}
+            <div className="studio-field">
+              <HorizonControl
+                value={horizon}
+                onChange={(minutes) => setSettings({ horizonMinutes: minutes })}
+                frameStepMinutes={studioDisplayStepMinutes(horizon)}
+              />
+            </div>
+          </>
+        )}
+
+        {custom && (
+        <>
 
         <section className="studio-section" aria-labelledby={`${uid}-ign`}>
           <div className="studio-section-head">
@@ -738,6 +780,8 @@ export default function ConfigPanel(props: ConfigPanelProps) {
             A scenario file does not guarantee identical results later; source data can change.
           </p>
         </details>
+        </>
+        )}
       </div>
 
       <section className="studio-panel-foot" aria-label="Run">
@@ -761,7 +805,7 @@ export default function ConfigPanel(props: ConfigPanelProps) {
             </Button>
           )}
         </div>
-        {randomScenario}
+        {custom && randomScenario}
         <p className="studio-status" role="status">
           {statusLine}
         </p>

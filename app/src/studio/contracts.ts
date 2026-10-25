@@ -293,6 +293,8 @@ export interface ConfigPanelProps {
   onRun: () => void;
   /** The "Random scenario" button, "Keep this area" box and seed field (the page owns them). */
   randomScenario?: ReactNode;
+  /** Quick-setup controls (location, size, fire starts, generate); shown unless Custom is on. */
+  quickSetup?: ReactNode;
   onCancel: () => void;
   onClear: () => void;
   onExport: () => void;

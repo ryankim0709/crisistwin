@@ -673,7 +673,7 @@ export default function SimulationStudioPage({
   });
   const { noteRandom } = world;
 
-  const handleRandomScenario = useCallback(() => {
+  const handleRandomScenario = useCallback((forceKeepArea?: boolean) => {
     if (randomJob) return;
     const typed = Number(seedText.trim());
     const seed =
@@ -681,7 +681,7 @@ export default function SimulationStudioPage({
         ? typed
         : Math.floor(Math.random() * 2_147_483_646) + 1;
     setSeedText(String(seed));
-    const target = keepArea ? regionId : randomRegionId(seed);
+    const target = keepArea || forceKeepArea === true ? regionId : randomRegionId(seed);
     setRandomSummary(null);
     if (target !== regionId) selectRegion(target);
     setRandomJob({ seed, regionId: target, building: false, waited: false });
@@ -757,7 +757,7 @@ export default function SimulationStudioPage({
         <Button
           variant="secondary"
           size="sm"
-          onClick={handleRandomScenario}
+          onClick={() => handleRandomScenario()}
           disabled={state.phase === "loading-landscape" || state.phase === "computing" || randomJob !== null}
           title="Pick a seeded random place, date and fire, then run it. Simulated; ignition placement near roads is an assumption."
         >
@@ -793,6 +793,83 @@ export default function SimulationStudioPage({
           style={{ width: "9em" }}
         />
       </label>
+      {randomSummary && <p className="studio-hint">{randomSummary} (simulated)</p>}
+    </div>
+  );
+
+  const quickSetup = (
+    <div className="studio-random">
+      <div className="studio-field">
+        <label htmlFor="studio-quick-region">Location</label>
+        <select
+          id="studio-quick-region"
+          className="ui-input"
+          value={regionId}
+          onChange={(event) => selectRegion(event.target.value)}
+        >
+          {REGION_AREAS.map((areaName) => (
+            <optgroup key={areaName} label={areaName}>
+              {CALIFORNIA_REGIONS.filter((entry) => entry.area === areaName).map((entry) => (
+                <option key={entry.id} value={entry.id}>
+                  {entry.name}
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+      </div>
+      <div className="studio-field">
+        <label htmlFor="studio-quick-size">Map size</label>
+        <select
+          id="studio-quick-size"
+          className="ui-input"
+          value={boardRadius ?? ""}
+          onChange={(event) => selectBoardSize(event.target.value === "" ? null : Number(event.target.value))}
+        >
+          {STUDIO_BOARD_SIZES.map((size) => (
+            <option key={size.label} value={size.radiusMeters ?? ""}>
+              {size.label}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="studio-field">
+        <label htmlFor="studio-quick-placement">Fire starts</label>
+        <select
+          id="studio-quick-placement"
+          className="ui-input"
+          value={placement}
+          onChange={(e) => setPlacement(e.target.value as IgnitionPlacement)}
+        >
+          {(Object.keys(PLACEMENT_LABELS) as IgnitionPlacement[]).map((key) => (
+            <option key={key} value={key}>
+              {PLACEMENT_LABELS[key]}
+            </option>
+          ))}
+        </select>
+      </div>
+      <Button
+        onClick={() => handleRandomScenario(true)}
+        disabled={state.phase === "loading-landscape" || state.phase === "computing" || randomJob !== null}
+        title="Build a seeded random fire in this area and run it. Simulated."
+      >
+        {randomJob ? "Building…" : "Generate random scenario"}
+      </Button>
+      <details>
+        <summary className="studio-hint">Seed {seedText || "(new each time)"}</summary>
+        <label className="studio-hint">
+          Use seed…{" "}
+          <input
+            type="text"
+            inputMode="numeric"
+            value={seedText}
+            placeholder="new each time"
+            onChange={(e) => setSeedText(e.target.value)}
+            aria-label="Random scenario seed"
+            style={{ width: "9em" }}
+          />
+        </label>
+      </details>
       {randomSummary && <p className="studio-hint">{randomSummary} (simulated)</p>}
     </div>
   );
@@ -1501,6 +1578,7 @@ export default function SimulationStudioPage({
               onScenarioChange={applyScenario}
               onRun={handleRun}
               randomScenario={randomControls}
+              quickSetup={quickSetup}
               onCancel={cancel}
               onClear={handleClear}
               onExport={handleExport}
