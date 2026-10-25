@@ -214,12 +214,12 @@ export function readSimComms(observation: DemoObservation): ObservationSimComms 
 
 const COMPASS = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
 /** 16-point compass name of a bearing in degrees true. */
-function compass(deg: number): string {
+export function compass(deg: number): string {
   return COMPASS[Math.round((((deg % 360) + 360) % 360) / 22.5) % 16];
 }
 
 /** 1 m/s in mph (exact: 3600 / 1609.344). */
-const MPH_PER_M_S = 3600 / 1609.344;
+export const MPH_PER_M_S = 3600 / 1609.344;
 
 const ha = (n: number) => `${n < 10 ? n.toFixed(1) : nf(n)} ha`;
 const plural = (n: number, one: string, many = `${one}s`) => `${nf(n)} ${n === 1 ? one : many}`;
