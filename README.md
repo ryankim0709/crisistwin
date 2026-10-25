@@ -119,7 +119,10 @@ docker compose down         # stop the stack
 ```
 
 For the dispatch agent, set `ANTHROPIC_API_KEY` (optionally `DISPATCH_AGENT_MODEL`,
-`DISPATCH_AGENT_EFFORT`) in the backend environment; without it the endpoint returns 503.
+`DISPATCH_AGENT_EFFORT`, and `DISPATCH_AGENT_ROUTINE_EFFORT` / `DISPATCH_AGENT_ROUTINE_MODEL`
+for the live board's routine continuous reviews) in the backend environment; without it the
+endpoint returns 503. Per-call token usage and cost print in `docker compose logs backend`
+(`Decision usage: …`) and on /live under the AI agent switch.
 The dispatch area endpoint needs internet the first time a box is used (results are cached).
 
 Scenario resource snapshots (households, fire stations and engines at T+0 of each live drill,

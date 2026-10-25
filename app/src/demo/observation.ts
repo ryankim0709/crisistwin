@@ -27,6 +27,7 @@ import type {
   AttackPositionObservation,
   CrewObservation,
   DemoObservation,
+  DemoOrder,
   FireObservation,
   ResourceCountsObservation,
   UnreachableClassObservation,
@@ -38,6 +39,8 @@ import {
   MAX_FIRE_CUT_REROUTES,
   REROUTE_BACKOFF_MINUTES,
   boardWind,
+  distanceM,
+  teamPosition,
   FORECAST_MINUTES,
   activeFires,
   attackPositions,
@@ -67,20 +70,28 @@ import {
   MAX_SCHEDULE_AHEAD_MINUTES,
   orderPeakVehiclesPerMinute,
   zoneOrderStatus,
+  EVERY_HOUSEHOLD_DRIVES,
+  EVERY_HOUSEHOLD_DRIVES_LABEL,
   type EvacuationEstimate,
   type Board,
   type Fire,
+  type FireStatus,
   type RouteOption,
+  type Team,
+  type TeamStatus,
   type ZoneForecast,
   type ZoneState,
 } from "./model";
 import { LOOKAHEAD_MINUTES } from "./fireField";
 import { fireStateAreas } from "./fireState";
 import { ORDER_COMPLIANCE, accessClassOf, holdsFlameFeet, kindLabel } from "./realism";
-import { departmentStatus, dispatchable, initialAttackRecommendation, isReported, reachFraction } from "./boardResponse";
+import { departmentStatus, dispatchable, fireEdgeSample, idleOnSceneReason, initialAttackRecommendation, isReported, reachFraction, unitAccessText } from "./boardResponse";
 import { TANK_GALLONS } from "../response/units";
 import { computeStrategyOptions, strategyLabel } from "./strategyOptions";
-import { closedRoadsObservation } from "./roadClosures";
+import { closedIds, closedRoadsObservation, closureKey } from "./roadClosures";
+import { simClock } from "./format";
+import { EVAC_SCHEDULE_LABEL, evacuationSchedule, strategyAid, type ZoneEvacPlan } from "./decisionAids";
+import { runScore } from "./scoring";
 
 /** The fire's strategy options and its chosen strategy for the wire (demo/strategyOptions.ts; model output, rounded). */
 function strategyObs(board: Board, fire: Fire): Pick<FireObservation, "strategy_options" | "strategy"> {
@@ -136,15 +147,24 @@ function unreachableObs(board: Board, destKey: string, to: LonLat): UnreachableC
   return unreachableClasses(board, destKey, to).map((u) => ({ access_class: u.access, kinds: u.kinds, reason: u.reason }));
 }
 
+/** Ground metres from the nearest point of a fire's open-edge sample to `p`, rounded to 10 m; null for an empty sample. */
+function edgeDistanceM(edge: readonly LonLat[], p: LonLat): number | null {
+  let best = Number.POSITIVE_INFINITY;
+  for (const q of edge) best = Math.min(best, distanceM(p, q));
+  return Number.isFinite(best) ? Math.round(best / 10) * 10 : null;
+}
+
 /** Attack positions of a burning fire for the wire (model.attackPositions; numbers from the solver and the travel model). */
 function attackPositionObs(board: Board, fire: Fire): AttackPositionObservation[] {
   const minutes = (v: number | null) => (v === null ? null : Math.round(v));
+  const edge = fireEdgeSample(board, fire);
   return attackPositions(board, fire).map((p) => ({
     id: p.id,
     kind: p.kind,
     lon: Math.round(p.point[0] * 1e5) / 1e5,
     lat: Math.round(p.point[1] * 1e5) / 1e5,
     fire_eta_min: minutes(positionEta(board, p)),
+    from_fire_m: edgeDistanceM(edge, p.point),
     protects_zone_ids: p.protectsZoneIds,
     fuel: fuelLabel(p.fuelCode),
     spread_m_per_min: round1(p.spreadMPerMin),
@@ -158,6 +178,7 @@ function attackPositionObs(board: Board, fire: Fire): AttackPositionObservation[
     options: positionOptions(board, fire, p).map((o) => ({
       crews: o.teams,
       arrive_min: Math.round(o.arriveMin),
+      work_starts_min: Math.round(o.startMin),
       line_done_min: minutes(o.lineDoneMin),
       route: o.route,
     })),
@@ -324,15 +345,21 @@ export function fireModelLabel(board: Board): string {
 export function demandLabel(board: Board): string {
   const s = board.snapshot;
   if (!s) {
-    return "Drill file households and vehicles; carless households from the drill environment; persons unknown (no resource snapshot)";
+    return `Drill file households and vehicles; carless households from the drill environment; persons unknown (no resource snapshot)${EVERY_HOUSEHOLD_DRIVES ? `. ${EVERY_HOUSEHOLD_DRIVES_LABEL}` : ""}`;
   }
   const unmatched = s.zones_unmatched.length;
-  return `Resource snapshot ${s.snapshot_id} (T+0 ${s.scenario_time}; households synthetic, occupants and vehicles ${[...new Set([s.basis.occupants, s.basis.vehicles].flat())].join("/")}; see docs/scenario-snapshots.md): ${s.zones_matched} zones${unmatched ? `, ${unmatched} zones not in the snapshot keep the drill file's households with persons unknown` : ""}. Households with a vehicle take the zone's evacuating vehicles; carless households (needs transport) stay home`;
+  return `Resource snapshot ${s.snapshot_id} (T+0 ${s.scenario_time}; households synthetic, occupants and vehicles ${[...new Set([s.basis.occupants, s.basis.vehicles].flat())].join("/")}; see docs/scenario-snapshots.md): ${s.zones_matched} zones${unmatched ? `, ${unmatched} zones not in the snapshot keep the drill file's households with persons unknown` : ""}. Households with a vehicle take the zone's evacuating vehicles; ${EVERY_HOUSEHOLD_DRIVES ? EVERY_HOUSEHOLD_DRIVES_LABEL : "carless households (needs transport) stay home"}`;
 }
 
-/** How often (simulated minutes) the page runs the monitor. */
-export const MONITOR_EVERY_MINUTES = 2;
-/** With fires on the board, the agent reviews at least this often (simulated minutes). */
+/** How often (simulated minutes) the page runs the monitor between decisions (a new reported fire is checked on every board change). */
+export const MONITOR_EVERY_MINUTES = 1;
+/**
+ * UI/ops choice: while the incident is hot (a reported fire burning, or a zone threatened with
+ * people home and no order), the page calls the agent again this many board minutes after each
+ * decision's orders land (a continuous review), even when no event fired. Events wake it at once.
+ */
+export const CONTINUOUS_GAP_MINUTES = 3;
+/** With only contained fires or leaving zones on the board, the agent reviews at least this often (simulated minutes). */
 export const REVIEW_EVERY_MINUTES = 30;
 /** A zone with no order in effect and this much order slack or less (from its scheduled start, when it has one) wakes the agent. */
 export const SLACK_ALERT_MINUTES = 10;
@@ -387,14 +414,19 @@ export function buildObservation(
   forecasts: Map<string, ZoneForecast>,
   wokeBecause: string[],
   previous: DemoObservation["previous"],
+  urgency: WakeUrgency = "urgent",
 ): DemoObservation {
   const minute = board.minute;
   // The commander sees only fires the dispatch centre knows about (response/report.ts).
   const fires = activeFires(board).filter((f) => isReported(board, f));
+  // Decision aids (demo/decisionAids.ts): zones in the free-burn evacuation schedule are listed too, so they can be ordered.
+  const plans = evacuationSchedule(board, routes, (id) => forecasts.get(id)?.coreEta ?? null);
+  const planned = new Set(plans.map((p) => p.zone.id));
 
   const listed = board.zones.filter((zone) => {
     const f = forecasts.get(zone.id);
     return (
+      planned.has(zone.id) ||
       zone.orderedAt !== null ||
       zone.pendingOrder !== null ||
       knownOverrun(zone) ||
@@ -500,8 +532,7 @@ export function buildObservation(
       perimeter_m: Math.round(perimeter),
       perimeter_growth_m_per_min: round1(perimeterGrowth(fire)),
       line_m: Math.round(fire.lineM),
-      containment_pct:
-        fire.status !== "burning" ? 100 : perimeter > 0 ? Math.min(100, Math.round((fire.lineM / perimeter) * 100)) : 0,
+      containment_pct: containmentPct(fire),
       burning_ha: round1(cells.burningHa),
       burned_out_ha: round1(cells.burnedOutHa),
       extinguished_ha: round1(cells.extinguishedHa),
@@ -555,6 +586,7 @@ export function buildObservation(
       water_pct: team.waterGallons === null ? null : Math.round((team.waterGallons / (TANK_GALLONS[team.kind] ?? team.waterGallons)) * 100),
       work_h: round1(team.workMinutes / 60),
       parked_m: team.parkedM === null || !team.accessKnown ? null : Math.round(team.parkedM),
+      from_fire_m: fire && fire.status === "burning" ? edgeDistanceM(fireEdgeSample(board, fire), teamPosition(board, team)) : null,
       work_mode: team.workMode,
       working_in_min: team.workStartAt === null ? null : Math.max(0, Math.ceil(team.workStartAt - minute)),
       road_cuts: team.status === "en_route" ? team.fireCuts : 0,
@@ -645,16 +677,164 @@ export function buildObservation(
       crews_returning: board.teams.filter((t) => t.status === "returning").length,
     },
     response: responseObservation(board),
-    monitor: { woke_because: wokeBecause },
+    monitor: { woke_because: wokeBecause, urgency },
     previous,
+    outcomes: outcomesObs(board),
+    decision_aids: {
+      evacuation_method: EVAC_SCHEDULE_LABEL,
+      evacuation: plans.map(planObs),
+      strategy: fires.flatMap((fire) => {
+        const aid = strategyAid(board, fire);
+        if (!aid) return [];
+        return [
+          {
+            fire_id: fire.id,
+            recommended_strategy_id: aid.recommended?.option.id ?? null,
+            recommended_send: aid.recommended ? aid.recommended.option.send.map((u) => ({ crew_id: u.team.id, position_id: aid.recommended!.option.positionId })) : [],
+            options: aid.options.map((o) => ({
+              id: o.option.id,
+              containable: o.containable,
+              homes_burned_forecast: o.homesBurned,
+              by_min: o.homesByMin,
+              households_in_zones_reached: o.householdsInZonesReached,
+            })),
+            all_units: aid.allUnits
+              ? {
+                  strategy_id: aid.allUnits.option.option.id,
+                  send: aid.allUnits.send.map((u) => ({ crew_id: u.crewId, position_id: u.positionId, eta_min: u.etaMin })),
+                  aircraft: aid.allUnits.aircraft.map((a) => ({ aircraft_id: a.aircraftId, over_fire_min: a.overFireMin })),
+                  order_resources: aid.allUnits.orders,
+                }
+              : null,
+            idle_units: aid.idleUnits,
+          },
+        ];
+      }),
+    },
     closed_roads: closedRoadsObservation(board),
+  };
+}
+
+/** The run's outcome metrics for the wire (demo/scoring.ts). */
+function outcomesObs(board: Board): NonNullable<DemoObservation["outcomes"]> {
+  const s = runScore(board);
+  const b = s.casualties.breakdown;
+  return {
+    caught_people: board.caughtPeopleTotal,
+    caught_households: board.caughtTotal,
+    caught_breakdown: {
+      no_vehicle: b.noVehicle.households,
+      no_order: b.noOrder.households,
+      stayed_despite_order: b.stayedDespiteOrder.households,
+      ordered_too_late: b.tooLate.households,
+    },
+    homes_burned: s.homesBurned,
+    homes_reached_saved: s.homesReachedSaved,
+    homes_method: s.homesMethod,
+    area_burned_ha: s.areaBurnedHa,
+  };
+}
+
+/** One evacuation schedule entry for the wire (demo/decisionAids.ts). */
+function planObs(p: ZoneEvacPlan): NonNullable<DemoObservation["decision_aids"]>["evacuation"][number] {
+  return {
+    zone_id: p.zone.id,
+    action: p.action,
+    eta_min: p.etaMin,
+    eta_basis: p.etaBasis,
+    forecast_core_eta_min: p.forecastCoreEtaMin,
+    destination_id: p.option?.destination_id ?? null,
+    clearance_min: p.clearanceMin,
+    congested_eta_min: p.congestedEtaMin,
+    latest_safe_start_minute: p.latestSafeStartMinute,
+    recommended_start_minute: p.recommendedStartMinute,
+    too_late: p.tooLate,
+    over_capacity: p.overCapacity,
+    households: p.zone.households,
+    people: p.zone.occupants,
+    expected_caught_households_if_ordered_now: p.expectedCaughtNow.households,
+    expected_caught_people_if_ordered_now: p.expectedCaughtNow.people,
+    expected_caught_people_at_recommended: p.expectedCaughtAtRecommended.people,
   };
 }
 
 // ---- monitor ----
 
+/** Containment share of a fire's perimeter covered by line (100 once contained or out), as in the observation. */
+export function containmentPct(fire: Fire): number {
+  if (fire.status !== "burning") return 100;
+  const perimeter = firePerimeterM(fire);
+  return perimeter > 0 ? Math.min(100, Math.round((fire.lineM / perimeter) * 100)) : 0;
+}
+
 /** 1 = order slack at or under SLACK_ALERT_MINUTES, 2 = already late (slack <= 0). */
 type SlackTier = 1 | 2;
+
+/**
+ * How pressing a wake is. Urgent (a new fire, a zone short of time or reached by fire with people
+ * home, a fire outrunning its crews or breaching a line, a failing strategy, a unit standing at a
+ * fire with no work, an extended-attack stage due, the operator's "Ask Claude now") runs the board
+ * at 1× while Claude decides (autoSpeed.ts) and at the configured effort; routine (continuous and
+ * periodic reviews, arrivals, finished lines, freed crews, newly threatened zones, road closures,
+ * refused orders) runs at the reviewing speed and the routine effort (api/demo.py decision_effort).
+ */
+export type WakeUrgency = "urgent" | "routine";
+
+export type WakeKind =
+  | "new_fire"
+  | "escalation"
+  | "outrun"
+  | "freed"
+  | "zone_slack"
+  | "arrived"
+  | "idle_on_scene"
+  | "line_finished"
+  | "line_breached"
+  | "strategy_failing"
+  | "zone_touched"
+  | "zone_threatened"
+  | "road_closed"
+  | "refused"
+  | "continuous_review"
+  | "periodic_review"
+  | "changes";
+
+export interface WakeTrigger {
+  kind: WakeKind;
+  urgency: WakeUrgency;
+  text: string;
+}
+
+/** The monitor's answer: why to call the agent now (triggers [] = stay quiet). */
+export interface Wake {
+  triggers: WakeTrigger[];
+  /** The trigger texts, for observation.monitor.woke_because. */
+  reasons: string[];
+  urgency: WakeUrgency;
+}
+
+/** Review triggers (the gap- or period-based calls), as opposed to events that wake the agent at once. */
+export const REVIEW_KINDS: ReadonlySet<WakeKind> = new Set(["continuous_review", "periodic_review", "changes"]);
+
+interface FireMemo {
+  areaHa: number;
+  reachM: number;
+  containmentPct: number;
+  status: FireStatus;
+  breaches: number;
+  strategyId: string | null;
+  /** The chosen strategy was not containable or no longer offered. */
+  strategyFailing: boolean;
+}
+
+interface TeamMemo {
+  status: TeamStatus;
+  fireId: string | null;
+  /** On scene and doing work (past any hike in, not idle). */
+  working: boolean;
+  /** On scene at a burning fire with no work (idleOnSceneReason). */
+  idle: boolean;
+}
 
 /** What the agent saw at its last decision; the monitor wakes it on changes since. */
 export interface MonitorMemory {
@@ -669,6 +849,24 @@ export interface MonitorMemory {
   slackTiers: Record<string, SlackTier>;
   /** Extended-attack stage due per reported burning fire (boardResponse.ts FireResponse.stage). */
   escalationStages: Record<string, number>;
+  /** Per reported fire (not out): size, reach, containment, breaches and the chosen strategy's state. */
+  fires: Record<string, FireMemo>;
+  /** Per unit: status, fire and whether it works or stands idle on scene. */
+  teams: Record<string, TeamMemo>;
+  /** Attack lines finished on reported fires. */
+  finishedLineIds: string[];
+  /** Zones a reported fire has reached (zone.knownTouchedAt). */
+  touchedZoneIds: string[];
+  /** Zones threatened (threatenedZones). */
+  threatenedZoneIds: string[];
+  /** roadClosures.closureKey. */
+  closures: string;
+  /** Board minute the decision's orders were applied (the page sets it, afterDecision); reviews count from it. */
+  appliedAt: number | null;
+  /** Orders refused (server or page) in that decision. */
+  refused: number;
+  /** That decision was itself woken by refused orders (a refusal re-wakes the agent at most once in a row). */
+  wokeOnRefusal: boolean;
 }
 
 function escalationStages(board: Board): Record<string, number> {
@@ -719,28 +917,175 @@ function slackTiers(board: Board, forecasts: Map<string, ZoneForecast>): Record<
   return out;
 }
 
+/** Whether the fire's chosen strategy is not containable now or no longer offered (strategyOptions.ts). */
+function strategyFailing(board: Board, fire: Fire): boolean {
+  const chosen = board.response.fires.get(fire.id)?.strategy;
+  if (!chosen || fire.status !== "burning") return false;
+  const option = computeStrategyOptions(board, fire).find((o) => o.id === chosen.id);
+  return !option || option.outcome === "not_containable";
+}
+
+function teamMemo(board: Board, team: Team): TeamMemo {
+  const idle = idleOnSceneReason(board, team) !== null;
+  const working =
+    !idle &&
+    team.status === "on_scene" &&
+    team.fireId !== null &&
+    team.workMode !== null &&
+    team.workMode !== "out_of_reach" &&
+    (team.workStartAt === null || team.workStartAt <= board.minute);
+  return { status: team.status, fireId: team.fireId, working, idle };
+}
+
+function fireMemo(board: Board, fire: Fire): FireMemo {
+  return {
+    areaHa: fireAreaHa(fire),
+    reachM: fire.reachM,
+    containmentPct: containmentPct(fire),
+    status: fire.status,
+    breaches: board.response.fires.get(fire.id)?.breaches ?? 0,
+    strategyId: board.response.fires.get(fire.id)?.strategy?.id ?? null,
+    strategyFailing: strategyFailing(board, fire),
+  };
+}
+
+/** Zones with people home, no order in effect and a reported fire forecast to reach them (edge or core). */
+function threatenedZones(board: Board, forecasts: Map<string, ZoneForecast>): ZoneState[] {
+  return board.zones.filter((zone) => {
+    if (zone.orderedAt !== null || zone.pendingOrder !== null || zone.overrunAt !== null) return false;
+    const f = forecasts.get(zone.id);
+    return (f?.edgeEta != null || f?.coreEta != null) && zoneCounts(zone, board.minute).home > 0;
+  });
+}
+
+/** Hot: a reported fire burning or a zone threatened; the agent then reviews every CONTINUOUS_GAP_MINUTES. */
+function incidentHot(board: Board, forecasts: Map<string, ZoneForecast>): boolean {
+  return board.fires.some((f) => f.status === "burning" && isReported(board, f)) || threatenedZones(board, forecasts).length > 0;
+}
+
+/** Warm: a reported fire not out (contained, mop-up) or a zone still leaving; reviewed every REVIEW_EVERY_MINUTES. */
+function incidentWarm(board: Board): boolean {
+  return activeFires(board).some((f) => isReported(board, f)) || board.zones.some((z) => zoneOrderStatus(z, board.minute) === "leaving");
+}
+
+const reportedLines = (board: Board) =>
+  board.lines.filter((l) => {
+    const fire = board.fires.find((f) => f.id === l.fireId);
+    return fire !== undefined && isReported(board, fire);
+  });
+
 /** Snapshot of the board as the agent sees it in this call's observation. */
 export function rememberDecision(board: Board, forecasts: Map<string, ZoneForecast> = zoneForecasts(board, "reported")): MonitorMemory {
+  const fires: Record<string, FireMemo> = {};
+  for (const f of activeFires(board)) if (isReported(board, f)) fires[f.id] = fireMemo(board, f);
+  const teams: Record<string, TeamMemo> = {};
+  for (const t of board.teams) teams[t.id] = teamMemo(board, t);
   return {
     minute: board.minute,
-    fireIds: activeFires(board).filter((f) => isReported(board, f)).map((f) => f.id),
+    fireIds: Object.keys(fires),
     busyCrewIds: board.teams.filter((t) => !dispatchable(t)).map((t) => t.id),
     outrunFireIds: outrunFires(board).map((f) => f.id),
     slackTiers: slackTiers(board, forecasts),
     escalationStages: escalationStages(board),
+    fires,
+    teams,
+    finishedLineIds: reportedLines(board).filter((l) => l.completedAt !== null).map((l) => l.id),
+    touchedZoneIds: board.zones.filter((z) => z.knownTouchedAt !== null).map((z) => z.id),
+    threatenedZoneIds: threatenedZones(board, forecasts).map((z) => z.id),
+    closures: closureKey(board),
+    appliedAt: null,
+    refused: 0,
+    wokeOnRefusal: false,
   };
 }
 
 /**
- * Why the agent should decide now, or [] when nothing changed enough since `memory` (null =
- * it has not decided yet).
+ * The memory after a decision's orders were applied: `seen` (the board when the call started, so
+ * events while Claude thought still wake it), with the units and fires the orders touched taken
+ * from the board now, so the decision's own effects (a released crew free again, a newly chosen
+ * strategy) do not wake it again.
  */
-export function wakeReasons(
+export function afterDecision(
+  seen: MonitorMemory,
   board: Board,
-  forecasts: Map<string, ZoneForecast>,
-  memory: MonitorMemory | null,
-): string[] {
-  const reasons: string[] = [];
+  orders: DemoOrder[],
+  refused: number,
+  wokeOnRefusal: boolean,
+): MonitorMemory {
+  const teams = { ...seen.teams };
+  const busy = new Set(seen.busyCrewIds);
+  const fires = { ...seen.fires };
+  for (const order of orders) {
+    if (order.type === "send_crew" || order.type === "release_crew") {
+      const team = board.teams.find((t) => t.id === order.crew_id);
+      if (!team) continue;
+      teams[team.id] = teamMemo(board, team);
+      if (dispatchable(team)) busy.delete(team.id);
+      else busy.add(team.id);
+    } else if (order.type === "set_strategy") {
+      const fire = board.fires.find((f) => f.id === order.fire_id);
+      if (fire && fires[fire.id]) fires[fire.id] = { ...fires[fire.id], strategyId: board.response.fires.get(fire.id)?.strategy?.id ?? null, strategyFailing: strategyFailing(board, fire) };
+    }
+  }
+  return { ...seen, teams, fires, busyCrewIds: [...busy], appliedAt: board.minute, refused, wokeOnRefusal };
+}
+
+const signed = (v: number, unit: string, digits = 0) => `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(digits)} ${unit}`;
+
+/**
+ * What changed since the last decision, in one line (all numbers from the board's models): per
+ * reported fire its area and growth, reach from ignition, containment and status, and its units
+ * (working, en route, idle on scene); fires gone out; orders refused last time. Events (arrivals,
+ * lines, zones, closures) wake the agent on their own and are listed in their own reasons.
+ */
+function changesSince(board: Board, memory: MonitorMemory): string {
+  const since = Math.round(board.minute - (memory.appliedAt ?? memory.minute));
+  const parts: string[] = [];
+  for (const fire of activeFires(board)) {
+    const before = memory.fires[fire.id];
+    if (!before || !isReported(board, fire)) continue;
+    const area = fireAreaHa(fire);
+    const bits = [
+      fire.status !== before.status ? `${before.status} → ${fire.status}` : null,
+      `${round1(area)} ha (${signed(area - before.areaHa, "ha", 1)})`,
+      `reach ${Math.round(fire.reachM)} m from ignition (${signed(fire.reachM - before.reachM, "m")})`,
+      `containment ${before.containmentPct}% → ${containmentPct(fire)}%`,
+    ];
+    const units = board.teams.filter((t) => t.fireId === fire.id);
+    const memo = units.map((t) => ({ t, m: teamMemo(board, t) }));
+    const working = memo.filter((x) => x.m.working).map((x) => x.t.id);
+    const enRoute = units.filter((t) => t.status === "en_route").map((t) => t.id);
+    const idle = memo.filter((x) => x.m.idle).map((x) => x.t.id);
+    const hiking = units.filter((t) => t.status === "on_scene" && t.workStartAt !== null && t.workStartAt > board.minute).map((t) => t.id);
+    bits.push(
+      units.length === 0
+        ? "no units assigned"
+        : [
+            working.length ? `working ${listIds(working)}` : null,
+            hiking.length ? `walking in ${listIds(hiking)}` : null,
+            enRoute.length ? `en route ${listIds(enRoute)}` : null,
+            idle.length ? `idle on scene ${listIds(idle)}` : null,
+          ]
+            .filter(Boolean)
+            .join(", ") || `units ${listIds(units.map((t) => t.id))}`,
+    );
+    parts.push(`${fire.id}: ${bits.filter(Boolean).join(", ")}`);
+  }
+  const out = memory.fireIds.filter((id) => !activeFires(board).some((f) => f.id === id));
+  if (out.length) parts.push(`out: ${listIds(out)}`);
+  if (memory.refused > 0) parts.push(`${memory.refused} order${memory.refused > 1 ? "s" : ""} refused last time (previous.rejected)`);
+  return `Since the last decision (${simClock(memory.appliedAt ?? memory.minute)}, ${since} min ago): ${parts.length ? parts.join("; ") : "no reported fire on the board"}.`;
+}
+
+/**
+ * Why the agent should decide now (`triggers` [] = stay quiet), compared with `memory` (null =
+ * it has not decided yet). Events wake it at once; with none, a continuous review once the board
+ * is CONTINUOUS_GAP_MINUTES past the last decision while the incident is hot (REVIEW_EVERY_MINUTES
+ * while only warm). Any wake after a first decision ends with the "Since the last decision" line.
+ */
+export function wakeReasons(board: Board, forecasts: Map<string, ZoneForecast>, memory: MonitorMemory | null): Wake {
+  const triggers: WakeTrigger[] = [];
+  const push = (kind: WakeKind, urgency: WakeUrgency, text: string) => triggers.push({ kind, urgency, text });
   const active = activeFires(board).filter((f) => isReported(board, f));
   const known = new Set(memory?.fireIds ?? []);
 
@@ -753,7 +1098,9 @@ export function wakeReasons(
         !board.teams.some((t) => t.fireId === f.id) &&
         !board.response.aircraft.some((a) => a.fireId === f.id),
     );
-    reasons.push(
+    push(
+      "new_fire",
+      "urgent",
       `New reported fire${fresh.length > 1 ? "s" : ""} since the last decision: ${listIds(fresh.map((f) => `${f.id} (${f.source})`))}.` +
         (unattacked.length
           ? ` No unit is assigned to ${listIds(unattacked.map((f) => f.id))} and nothing is dispatched automatically: send initial attack now (recommended_initial_attack).`
@@ -765,7 +1112,7 @@ export function wakeReasons(
   for (const [fireId, stage] of Object.entries(stages)) {
     if (!known.has(fireId) || stage <= (memory?.escalationStages?.[fireId] ?? 0)) continue;
     const why = stage === 1 ? "initial attack failed" : `the fire passed ${ESCALATION_STAGE_ACRES[stage - 1]} acres`;
-    reasons.push(`${fireId}: extended attack stage ${stage} due (${why}); nothing is ordered automatically: see extended_attack_due.`);
+    push("escalation", "urgent", `${fireId}: extended attack stage ${stage} due (${why}); nothing is ordered automatically: see extended_attack_due.`);
   }
 
   // Free at their station or returning to it: both can be sent.
@@ -775,15 +1122,13 @@ export function wakeReasons(
     for (const fire of outrunFires(board)) {
       if (seenOutrun.has(fire.id) || !known.has(fire.id)) continue;
       const assigned = board.teams.filter((t) => t.fireId === fire.id).map((t) => t.id);
-      reasons.push(
-        `${fire.id} is no longer containable by its crews (${assigned.length ? assigned.join(", ") : "none assigned"}); free: ${listIds(free)}.`,
-      );
+      push("outrun", "urgent", `${fire.id} is no longer containable by its crews (${assigned.length ? assigned.join(", ") : "none assigned"}); free: ${listIds(free)}.`);
     }
   }
 
   const wasBusy = new Set(memory?.busyCrewIds ?? []);
   const freed = free.filter((id) => wasBusy.has(id));
-  if (freed.length > 0) reasons.push(`Crew${freed.length > 1 ? "s" : ""} freed: ${listIds(freed)}.`);
+  if (freed.length > 0) push("freed", "routine", `Crew${freed.length > 1 ? "s" : ""} freed: ${listIds(freed)}.`);
 
   const tiers = slackTiers(board, forecasts);
   for (const zone of board.zones) {
@@ -791,23 +1136,96 @@ export function wakeReasons(
     if (tier === undefined || tier <= (memory?.slackTiers[zone.id] ?? 0)) continue;
     const slack = zoneSlack(board, zone, forecasts.get(zone.id));
     const pending = zone.pendingOrder;
-    const what = pending
-      ? `is scheduled to leave at minute ${pending.startMinute}`
-      : "has no evacuation order";
-    reasons.push(
+    const what = pending ? `is scheduled to leave at minute ${pending.startMinute}` : "has no evacuation order";
+    push(
+      "zone_slack",
+      "urgent",
       tier === 2
         ? `${zone.id} (${zone.name}) ${what} and is already late: ${slack} min of order slack${pending ? " from its start" : ""}.`
         : `${zone.id} (${zone.name}) ${what} and ${slack} min of order slack${pending ? " from its start" : ""}.`,
     );
   }
 
-  const since = memory === null ? Infinity : board.minute - memory.minute;
-  if (reasons.length === 0 && active.length > 0 && since >= REVIEW_EVERY_MINUTES) {
-    reasons.push(
-      memory === null
-        ? `Periodic review: ${active.length} fire${active.length > 1 ? "s" : ""} on the board.`
-        : `Periodic review: ${Math.round(since)} min since the last decision, ${active.length} fire${active.length > 1 ? "s" : ""} on the board.`,
-    );
+  if (memory) {
+    // Units: arrived on scene, or standing at a burning fire with no work.
+    const arrived: string[] = [];
+    const idle: string[] = [];
+    for (const team of board.teams) {
+      const before = memory.teams[team.id];
+      const sameFire = before?.fireId === team.fireId;
+      if (team.status === "on_scene" && team.fireId !== null && !(before?.status === "on_scene" && sameFire)) {
+        arrived.push(unitAccessText(board, team).replace(/\.$/, "") || team.id);
+      }
+      const why = idleOnSceneReason(board, team);
+      if (why !== null && !(before?.idle && sameFire)) idle.push(`${team.id} (${why})`);
+    }
+    if (arrived.length) push("arrived", "routine", `Arrived on scene: ${listIds(arrived)}.`);
+    if (idle.length) {
+      push("idle_on_scene", "urgent", `Standing at a fire with no work: ${listIds(idle)}. Reposition them (another attack position or fire) or release them.`);
+    }
+
+    const lines = reportedLines(board);
+    const finished = new Set(memory.finishedLineIds);
+    const done = lines.filter((l) => l.completedAt !== null && !finished.has(l.id));
+    if (done.length) push("line_finished", "routine", `Line finished: ${listIds(done.map((l) => `${l.fireId} ${l.plan.id} (${Math.round(l.lengthM)} m)`))}.`);
+
+    for (const fire of active) {
+      const before = memory.fires[fire.id];
+      if (!before) continue;
+      const breaches = board.response.fires.get(fire.id)?.breaches ?? 0;
+      if (breaches > before.breaches) push("line_breached", "urgent", `${fire.id}: the fire breached its line (${breaches} breach${breaches > 1 ? "es" : ""} so far).`);
+      const chosen = board.response.fires.get(fire.id)?.strategy ?? null;
+      if (chosen && strategyFailing(board, fire) && !(before.strategyId === chosen.id && before.strategyFailing)) {
+        const offered = computeStrategyOptions(board, fire).some((o) => o.id === chosen.id);
+        push(
+          "strategy_failing",
+          "urgent",
+          `${fire.id}: the chosen strategy ${chosen.id} is ${offered ? "no longer containable with the units available (outcome not_containable)" : "no longer offered (still_offered false)"}: choose another.`,
+        );
+      }
+    }
+
+    const touchedBefore = new Set(memory.touchedZoneIds);
+    for (const zone of board.zones) {
+      if (zone.knownTouchedAt === null || touchedBefore.has(zone.id)) continue;
+      const home = zoneCounts(zone, board.minute).home;
+      push("zone_touched", home > 0 ? "urgent" : "routine", `Fire reached ${zone.id} (${zone.name}): ${home} household${home === 1 ? "" : "s"} home.`);
+    }
+    const threatenedBefore = new Set(memory.threatenedZoneIds);
+    const threatened = threatenedZones(board, forecasts).filter((z) => !threatenedBefore.has(z.id));
+    if (threatened.length) {
+      push(
+        "zone_threatened",
+        "routine",
+        `Newly threatened, no order: ${listIds(threatened.map((z) => `${z.id} (fire ETA ${forecasts.get(z.id)?.edgeEta ?? forecasts.get(z.id)?.coreEta} min)`))}.`,
+      );
+    }
+
+    if (closureKey(board) !== memory.closures) push("road_closed", "routine", `Road closures changed: ${closedIds(board).length} closed now (closed_roads).`);
+    if (memory.refused > 0 && !memory.wokeOnRefusal) {
+      push("refused", "routine", `${memory.refused} order${memory.refused > 1 ? "s were" : " was"} refused in the last decision (previous.rejected): re-issue a valid order if it is still needed.`);
+    }
   }
-  return reasons;
+
+  if (triggers.length === 0 && active.length > 0) {
+    const since = memory === null ? Infinity : board.minute - (memory.appliedAt ?? memory.minute);
+    const burning = active.filter((f) => f.status === "burning").length;
+    const zones = threatenedZones(board, forecasts).length;
+    const picture = `${burning} fire${burning === 1 ? "" : "s"} burning, ${active.length - burning} contained${zones ? `, ${zones} zone${zones > 1 ? "s" : ""} threatened with no order` : ""}`;
+    if (incidentHot(board, forecasts) && since >= CONTINUOUS_GAP_MINUTES) {
+      push("continuous_review", "routine", `Continuous review: ${Number.isFinite(since) ? `${Math.round(since)} min since the last decision` : "first look"}; ${picture}.`);
+    } else if (since >= REVIEW_EVERY_MINUTES) {
+      push("periodic_review", "routine", `Periodic review: ${Number.isFinite(since) ? `${Math.round(since)} min since the last decision` : "first look"}; ${picture}.`);
+    }
+  } else if (triggers.length === 0 && memory !== null && incidentWarm(board)) {
+    const since = board.minute - (memory.appliedAt ?? memory.minute);
+    if (since >= REVIEW_EVERY_MINUTES) push("periodic_review", "routine", `Periodic review: ${Math.round(since)} min since the last decision; zones still leaving.`);
+  }
+
+  if (triggers.length > 0 && memory !== null) push("changes", "routine", changesSince(board, memory));
+  return {
+    triggers,
+    reasons: triggers.map((t) => t.text),
+    urgency: triggers.some((t) => t.urgency === "urgent") ? "urgent" : "routine",
+  };
 }

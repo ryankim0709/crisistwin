@@ -23,7 +23,9 @@ import type { LonLat } from "../live/types";
 import { vehicleFamily, type VehicleFamily } from "../studio/apparatus";
 import { CREW_COLORS } from "../studio/firelinePalette";
 import { crewWork, type CrewWork } from "./fireState";
-import { EVACUEE_MARKERS_MAX, distanceM, evacueeMarkers, lineBuiltExtent, teamPosition, type Board, type ZoneForecast } from "./model";
+import { EVACUEE_MARKERS_MAX, distanceM, evacueeMarkers, lineBuiltExtent, type Board, type ZoneForecast } from "./model";
+import { BoardMotion, teamSubjects } from "./unitMotion";
+import { unitSpotLabel } from "./unitActivity";
 
 /** Colours baked into the 3D board (CSS cannot reach WebGL); the legend mirrors them. */
 export const DEMO_3D_COLORS = {
@@ -77,10 +79,8 @@ const FAMILIES: readonly VehicleFamily[] = ["engine", "hand_crew", "dozer"];
 const LIFT = 0.9;
 const ZONE_LIFT = 0.6;
 const DRAPE_STEP = 1.5;
-/** Units at one spot fan out on a ring of this radius, world units. */
-const PARK_RADIUS = 5;
-/** Units closer than this share a spot (and a label), world units. */
-const CLUSTER_WORLD = 3;
+/** Spacing of units fanned out at one spot (unitMotion slot units), world units. */
+const SPOT_SPACING_WORLD = 5.5;
 /** An available unit this close to its station is shown as parked there, metres. */
 const AT_STATION_M = 60;
 const STATION_SIZE = { width: 4, height: 2.6, depth: 3 };
@@ -149,7 +149,13 @@ export class DemoBoardOverlay implements BoardOverlay {
   /** Firefighter figures (body + helmet) for the crews at work, and what they walk along. */
   private crewMeshes: { body: THREE.InstancedMesh; helmet: THREE.InstancedMesh } | null = null;
   private crewPaths = new Map<string, CrewPath>();
-  private unitLabels: Label[] = [];
+  /** Unit labels by group lead (or unit) id, kept per id so a label never jumps to another unit. */
+  private unitLabels = new Map<string, Label>();
+  /** What each unit label says and how high it floats; rebuilt on board updates. */
+  private labelPlan: { lead: string; text: string; lift: number }[] = [];
+  /** Units drawn smoothly between board updates (unitMotion.ts); `moving` while frames still change them. */
+  private readonly motion = new BoardMotion();
+  private unitsMoving = false;
   private readonly matrix = new THREE.Matrix4();
   private readonly quat = new THREE.Quaternion();
   private readonly up = new THREE.Vector3(0, 1, 0);
@@ -188,6 +194,8 @@ export class DemoBoardOverlay implements BoardOverlay {
 
   tick(time: number, dt: number, reducedMotion: boolean, width: number, height: number): void {
     for (const material of this.materials) material.resolution.set(width, height);
+    this.motion.setReducedMotion(reducedMotion);
+    if (this.unitsMoving) this.unitsMoving = this.placeUnits(performance.now());
     this.placeCrews(time, dt, reducedMotion);
   }
 
@@ -234,7 +242,12 @@ export class DemoBoardOverlay implements BoardOverlay {
       this.zoneKey = zoneKey;
       this.buildZones();
     }
-    this.placeUnits();
+    const now = performance.now();
+    this.motion.sample(board, board ? teamSubjects(board) : [], now);
+    this.motion.frame(now);
+    this.planUnitLabels();
+    this.unitsMoving = this.placeUnits(now);
+    this.labels?.invalidate();
     this.placeEvacuees();
     this.updateCrews();
   }
@@ -355,8 +368,8 @@ export class DemoBoardOverlay implements BoardOverlay {
   // ---- units ----
 
   private clearUnits(): void {
-    for (const label of this.unitLabels) this.labels?.remove(label.obj);
-    this.unitLabels = [];
+    for (const label of this.unitLabels.values()) this.labels?.remove(label.obj);
+    this.unitLabels.clear();
     if (!this.units) return;
     for (const mesh of this.units.meshes.values()) {
       mesh.removeFromParent();
@@ -395,62 +408,35 @@ export class DemoBoardOverlay implements BoardOverlay {
     this.units = { meshes, slot };
   }
 
-  private unitLabel(index: number): Label | null {
+  private unitLabel(id: string): Label | null {
     const { labels, group } = this;
     if (!labels || !group) return null;
-    while (this.unitLabels.length <= index) {
-      this.unitLabels.push(labels.add(group, "fdx-dmunit", new THREE.Vector3(), new THREE.Vector2(0.5, 1)));
+    let label = this.unitLabels.get(id);
+    if (!label) {
+      label = labels.add(group, "fdx-dmunit", new THREE.Vector3(), new THREE.Vector2(0.5, 1));
+      this.unitLabels.set(id, label);
     }
-    return this.unitLabels[index];
+    return label;
   }
 
-  /** Positions every unit for the board's current minute and labels each spot. */
-  private placeUnits(): void {
-    const { board, units, frame } = this;
-    if (!units || !frame) return;
+  /**
+   * Label texts for the board update: one per group of units at one spot (unitMotion groups) at
+   * its lead, one per lone unit; free units parked at their station join the station's label.
+   */
+  private planUnitLabels(): void {
+    const { board, motion } = this;
     const teams = board?.teams ?? [];
-    // Group units by spot so parked units fan out and share one label.
-    const spots: { at: World; members: number[] }[] = [];
-    const where = teams.map((team, index) => {
-      const at = board ? this.toWorld(teamPosition(board, team)) : null;
-      if (!at) return null;
-      const spot = spots.find((s) => Math.hypot(s.at.x - at.x, s.at.z - at.z) < CLUSTER_WORLD);
-      if (spot) spot.members.push(index);
-      else spots.push({ at, members: [index] });
-      return at;
-    });
-    teams.forEach((team, index) => {
-      const mesh = units.meshes.get(vehicleFamily(team.kind));
-      if (!mesh) return;
-      const at = where[index];
-      if (!at) {
-        mesh.setMatrixAt(units.slot[index], this.matrix.makeScale(0, 0, 0));
-        return;
-      }
-      const spot = spots.find((s) => s.members.includes(index))!;
-      let x = at.x;
-      let z = at.z;
-      let yaw = 0;
-      if (spot.members.length > 1) {
-        const angle = (spot.members.indexOf(index) / spot.members.length) * Math.PI * 2;
-        x = spot.at.x + Math.cos(angle) * PARK_RADIUS;
-        z = spot.at.z + Math.sin(angle) * PARK_RADIUS;
-        yaw = -angle;
-      } else if ((team.status === "en_route" || team.status === "returning") && team.target) {
-        const ahead = this.toWorld(team.target);
-        if (ahead) yaw = Math.atan2(-(ahead.z - at.z), ahead.x - at.x);
-      }
-      this.quat.setFromAxisAngle(this.up, yaw);
-      this.matrix.compose(new THREE.Vector3(x, frame.surfaceAt(x, z), z), this.quat, this.one);
-      mesh.setMatrixAt(units.slot[index], this.matrix);
-    });
-    for (const mesh of units.meshes.values()) mesh.instanceMatrix.needsUpdate = true;
-
-    // Labels: free units parked at their station join the station's label; every other spot gets its own.
+    const byId = new Map(teams.map((t) => [t.id, t]));
+    const plan: { lead: string; text: string; lift: number }[] = [];
+    const done = new Set<string>();
     const freeAt = new Map<string, string[]>();
-    let used = 0;
-    for (const spot of spots) {
-      const members = spot.members.map((i) => teams[i]);
+    for (const team of teams) {
+      const d = motion.get(team.id);
+      if (!d) continue;
+      const lead = d.group?.lead ?? team.id;
+      if (done.has(lead)) continue;
+      done.add(lead);
+      const members = (d.group?.ids ?? [team.id]).map((id) => byId.get(id)!).filter(Boolean);
       const parked = board
         ? members.every((t) => {
             const station = board.stations.find((s) => s.id === t.station);
@@ -461,23 +447,30 @@ export class DemoBoardOverlay implements BoardOverlay {
         for (const t of members) freeAt.set(t.station, [...(freeAt.get(t.station) ?? []), t.id]);
         continue;
       }
-      const label = this.unitLabel(used);
-      if (!label) continue;
-      used += 1;
       const ids = members.map((t) => t.id).join(" ");
       const first = members[0];
-      setText(
-        label,
-        first.status === "on_scene" && first.fireId
+      // What the units here are doing and how far from their fire (unitActivity.ts), so a unit
+      // standing away from the fire says why ("building S1-F1 head_60 line 830 m ahead of the head").
+      const text = board
+        ? unitSpotLabel(board, members)
+        : first.status === "on_scene" && first.fireId
           ? `${first.fireId} · ${ids}`
           : first.status === "en_route" && first.fireId && members.length === 1
             ? `${ids} → ${first.fireId}`
-            : `${ids}${members.every((t) => t.status === "available") ? " · free" : ""}`,
-      );
-      label.obj.position.set(spot.at.x, spot.at.y + (members.length > 1 ? 5 : 4), spot.at.z);
-      label.obj.visible = true;
+            : `${ids}${members.every((t) => t.status === "available") ? " · free" : ""}`;
+      plan.push({ lead, text, lift: members.length > 1 ? 5 : 4 });
     }
-    for (const label of this.unitLabels.slice(used)) label.obj.visible = false;
+    this.labelPlan = plan;
+    const keep = new Set(plan.map((p) => p.lead));
+    for (const [id, label] of this.unitLabels) {
+      if (keep.has(id)) continue;
+      this.labels?.remove(label.obj);
+      this.unitLabels.delete(id);
+    }
+    for (const p of plan) {
+      const label = this.unitLabel(p.lead);
+      if (label) setText(label, p.text);
+    }
     if (this.stations && board) {
       for (const station of board.stations) {
         const label = this.stations.labels.get(station.id);
@@ -486,7 +479,46 @@ export class DemoBoardOverlay implements BoardOverlay {
         setText(label, free ? `${station.name} · ${free.join(" ")} free` : station.name);
       }
     }
-    this.labels?.invalidate();
+  }
+
+  /**
+   * Positions every unit where unitMotion draws it now (along its road between board updates,
+   * facing along the road, fanned out from others at its spot) and moves the labels with them.
+   * Returns whether anything is still moving.
+   */
+  private placeUnits(now: number): boolean {
+    const { board, units, frame, motion } = this;
+    if (!units || !frame) return false;
+    const changing = motion.frame(now);
+    const teams = board?.teams ?? [];
+    teams.forEach((team, index) => {
+      const mesh = units.meshes.get(vehicleFamily(team.kind));
+      if (!mesh) return;
+      const d = motion.get(team.id);
+      const at = d ? this.toWorld(d.at) : null;
+      if (!d || !at) {
+        mesh.setMatrixAt(units.slot[index], this.matrix.makeScale(0, 0, 0));
+        return;
+      }
+      // Slots are [east, north]; the board's x runs east and z south.
+      const x = at.x + d.offset[0] * SPOT_SPACING_WORLD;
+      const z = at.z - d.offset[1] * SPOT_SPACING_WORLD;
+      // Heading is degrees true; the box's length lies along x.
+      const yaw = d.heading === null ? 0 : Math.PI / 2 - (d.heading * Math.PI) / 180;
+      this.quat.setFromAxisAngle(this.up, yaw);
+      this.matrix.compose(new THREE.Vector3(x, frame.surfaceAt(x, z), z), this.quat, this.one);
+      mesh.setMatrixAt(units.slot[index], this.matrix);
+    });
+    for (const mesh of units.meshes.values()) mesh.instanceMatrix.needsUpdate = true;
+    for (const p of this.labelPlan) {
+      const label = this.unitLabels.get(p.lead);
+      const d = motion.get(p.lead);
+      const at = d ? this.toWorld(d.at) : null;
+      if (!label) continue;
+      label.obj.visible = at !== null;
+      if (at) label.obj.position.set(at.x, at.y + p.lift, at.z);
+    }
+    return changing;
   }
 
   // ---- en-route lines ----

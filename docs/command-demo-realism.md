@@ -23,8 +23,11 @@ board minute and the clock stays paused. Simulation Studio publishes are still i
 paused (their ignitions are scheduled from the board minute).
 
 **Auto speed** (`app/src/demo/autoSpeed.ts`, on by default, remembered per browser): the speed
-follows the board. While Claude is deciding (a call in flight, also "Ask Claude now") it is 1×, so
-the board barely moves before the orders land; while nothing is going on (`boardIsIdle`: no
+follows the board. While Claude is deciding on an **urgent** wake (below; also "Ask Claude now",
+or an urgent event queued behind a routine call) it is 1×, so the board barely moves before the
+orders land; while it is on a **routine** wake (a continuous review, an arrival, a finished line)
+it is 5× (`AUTO_SPEED_REVIEWING`), because reviews run almost back to back while a fire burns and
+1× would pin the board at real time; while nothing is going on (`boardIsIdle`: no
 reported fire burning or contained — an unreported or scheduled fire does not count — no unit
 moving or working, no zone leaving or scheduled, no aircraft flying, no resource order due within
 30 min) it is 60×; otherwise 20×. It drops to 20× (or 1×) at once and goes back up to 60× only
@@ -32,7 +35,100 @@ after the board has been idle for 5 board minutes, also after each Claude call. 
 UI choices; only the board minutes per real second change, and `step` lands on the same minutes
 and events at any rate, so results do not depend on them. Moving the speed slider turns Auto off
 and keeps that speed; the "Auto" button turns it back on. The speed reads "60× · idle",
-"1× · Claude thinking", "20× · active" or "· manual". With the agent Off it shows what Auto would pick.
+"1× · Claude deciding (urgent)", "5× · Claude reviewing", "20× · active" or "· manual". With the
+agent Off it shows what Auto would pick.
+
+### AI agent cadence: near-continuous while a fire burns
+
+The monitor (`app/src/demo/observation.ts` `wakeReasons`, run by `useDemoAgent.ts`) compares the
+board with what Claude saw at its last decision and calls `POST /api/demo/decide`:
+
+- **At once on events** (checked every board minute, a new reported fire on every board change):
+  a new reported fire, an extended-attack stage due, a fire outrunning its crews (with free crews),
+  a line breached, the chosen strategy turning `not_containable` or no longer offered, a unit on
+  scene at a burning fire with no work ("standing there": parked out of reach, or on direct
+  attack with no open edge within its reach radius, `boardResponse.ts` `idleOnSceneReason`), a
+  zone reached by fire (urgent with people home), a zone short of order slack — all **urgent** —
+  and units arrived on scene, a line finished, crews freed, a zone newly threatened with people
+  home and no order, a road closure, or orders refused in the last decision (at most one
+  follow-up in a row) — **routine**.
+- **Continuous review**: while a reported fire burns or a zone is threatened, Claude is called
+  again `CONTINUOUS_GAP_MINUTES` = 3 board minutes (a UI/ops choice) after each decision's orders
+  land, even with no event; with only contained fires or leaving zones, every 30 board minutes
+  (`REVIEW_EVERY_MINUTES`). Nothing on the board: no calls.
+- Every wake after the first ends with "Since the last decision (T+…, n min ago): …": per fire its
+  area and growth (ha), reach from ignition (m), containment % before → now, and which units are
+  working, walking in, en route or idle on scene; fires gone out; orders refused. All numbers come
+  from the board's models; Claude only reads them (`observation.monitor`, `previous`).
+- **One call in flight.** Events while Claude thinks are compared with what that call saw, so they
+  start exactly one follow-up call as soon as it finishes (the feed's pending row says "follow-up
+  queued"). A decision's own orders (a released crew, a new strategy) do not wake it again.
+- The feed's pending row reads "Claude is deciding (urgent)…" or "Claude is reviewing the
+  board…" with the wake reasons; reviews that issue no orders collapse into "Claude reviewed the
+  board n times: no change." The decision log keeps the last 80 decisions.
+
+**Cost and effort.** The request carries `urgency` (`urgent` | `routine`, validated in
+`api/demo.py`): urgent runs at `DISPATCH_AGENT_EFFORT` (default `low`), routine at
+`DISPATCH_AGENT_ROUTINE_EFFORT` (default `low`, never above the urgent effort), and on
+`DISPATCH_AGENT_ROUTINE_MODEL` when set (default: the urgent model). Keep both efforts equal: an
+effort or model change gives the other kind of call its own cache entries (effort can invalidate
+the system cache on this model; caches are per model). Expected load with Auto speed, from a
+timing model of the cadence (3-minute gap at 20×, routine calls at 5×, urgent at 1×; scratch
+model, not measured): **about 10–20 calls per hot board hour** and about 75–170 calls per real hour
+while a fire burns (measured on 2026-10-25: calls 6–18 s apart). Turn the agent Off between
+demos; hiding the tab pauses it.
+
+**Prompt caching** (`api/demo.py` `system_blocks`, `split_observation`, `build_user_content`).
+Render order is tools → system → messages; two breakpoints:
+
+1. Tools + system prompt (~6.3k tokens, constant per incident), **1-hour TTL**. While the board
+   runs, calls are seconds apart and any TTL stays warm; the 1-hour write ($8 vs $5 per MTok)
+   pays off on the first Off/tab-hidden pause of 5–60 minutes, which demos have.
+2. `<observation_static>` (~7.1k tokens on Berkeley Hills: clock constants, `activity`, `inputs`,
+   wind provenance, each crew's identity fields — kind, class, label, base, station, department,
+   tier, `holds_flame_ft` — the departments' fixed fields, `response.orderable` and the auto flags),
+   **5-minute TTL**. The server splits the posted observation (the wire contract is unchanged) and
+   serializes it with sorted keys, so it is byte-identical for a whole run: one digest
+   (`static=` in the `Demo decide` log line) across every call, even across consoles. It changes
+   only when the board does (new run, a Studio fire setting moisture, units added): one write.
+   The rest (`<observation>`, the minute, fires, unit status, zones, forecasts, wake reasons) follows
+   uncached. The system prompt tells Claude to read both parts as one observation, by id.
+
+Measured (count_tokens on a captured observation, 1 fire, 29 units, 8 listed zones, 59 kB, then
+real calls on 2026-10-25; Claude Opus 5.5 list prices: $4 input, $20 output, $0.20 cache read,
+$5 / $8 cache write 5 min / 1 h per MTok):
+
+| per call | before (tools + system cached) | after (+ static observation cached) |
+|---|---|---|
+| cached prefix (read) | 6.2k | 13.5k |
+| uncached input | 27.8k (whole observation) | 21.5k (dynamic part) |
+| input cost, warm | $0.113 | $0.089 |
+| real warm calls, early board (9.8–13.1k uncached, 13.5k read, 290–1,300 output) | ≈ $0.074–0.105 (same calls, old shape, estimated) | **$0.050–0.081** (measured) |
+| first call of a run (cold: 6.3k 1-h write, 7.2k 5-min write) | — | $0.155 (measured) |
+
+Output (thinking plus the assessment and the tool call) was 290–1,300 tokens per call at `low`
+effort ($0.006–0.026). Per real hour of a burning fire (75–170 calls): **about $4–14** on an early
+board (before: $5.5–18), and **about $8–19** with mid-fire observations around 28k tokens (before:
+$10–23), more as the observation grows. Every call's usage and cost are logged
+(`Decision usage: … cost_usd=…` from `api.dispatch`, INFO) and returned as `usage` on the final
+NDJSON line; /live shows "Claude spend this session: $X.XX (N calls, cache hit Y%)" under the AI
+agent switch (`demo/AgentSpend.tsx`; list-price estimate since page load).
+
+Not done, and why:
+- **Dynamic part as a diff in a multi-turn session** (previous turns cached, only changes sent):
+  nearly every number in the dynamic part (ETAs, margins, forecasts, strategy options, line
+  progress) moves every 3 board minutes, so a diff stays a large share of it, while the model would
+  have to apply patches to read exact values it must not invent (a stale ETA sends a crew to the
+  wrong place), each turn's tool call needs a tool result, preserved thinking ties history to the
+  conversation, and history grows the cached read and latency every turn. The saving (at most the
+  ~$0.086 dynamic input, realistically well under half of it) is not worth that risk here.
+- **Pre-warm with `max_tokens: 0` when the agent is switched On**: the first real call follows
+  within seconds and writes the same prefix; a pre-warm only moves that write earlier (about a
+  second of prefill on 13k tokens) and is a pure extra write when no call follows.
+- **Biggest remaining lever** is the dynamic observation itself: dropping `null` values and empty
+  lists cut the captured observation from 27.8k to 22.9k tokens (−18%, count_tokens) but needs a
+  prompt rule ("absent = null"); `DISPATCH_AGENT_ROUTINE_MODEL=claude-sonnet-5-5` would halve
+  routine calls ($2 / $10, cache read $0.10) at a quality cost not yet measured.
 
 ## Fires come from Simulation Studio
 
@@ -485,6 +581,100 @@ selected-fire panel) can send them to build line where the fire is forecast to g
     A zone_Z24 line cuts T+150 from 27.1 to 12.6 ha.
   - Solves on the board with line: about one per 100 m of line (16 for the four lines above),
     about 50 ms each with one fire.
+
+## Run metrics, decision aids and the evaluation harness
+
+### Run metrics (`app/src/demo/scoring.ts`)
+
+Pure functions over the board; the /live outcomes panel shows "Homes burned", the commander's
+observation carries them as `outcomes`, and the harness reports all of them.
+
+- **Casualties (caught)**: households and persons still home when fire reaches their zone's core
+  (the board's catch rule, `model.ts`). `caughtBreakdown` splits a zone's caught households by why
+  they were home: `no_vehicle` (carless; the board has no pickup), `no_order` (never ordered: no
+  self-evacuation), `stayed_despite_order` (the 8% of ordered households with a vehicle that do
+  not comply, `ORDER_COMPLIANCE` 0.92) and `ordered_too_late` (complying households still inside
+  their departure delay). Only the last two depend on the commander's timing, and only the last
+  can be driven to zero by ordering earlier. Persons apportion vehicle persons evenly per
+  household with a vehicle (rounded per part).
+- **Unable to reach safety**: `outcomes.ts` `unable` (caught in zones still overrun plus carless
+  persons home in threatened zones).
+- **Homes burned**: the board carries no household points, so each zone's households are spread
+  evenly over its developed cells (FBFM40 91; a zone without any: its burnable cells), and
+  homes burned = households x the share of those cells burning or burned out. Cells crews put
+  out before they burned out count as "reached, saved". **ASSUMPTION**: homes uniform over
+  those cells.
+- **Area burned** (all fires, removed ones included), **containment and out minutes** (the
+  harness records each fire's report, containment and out minute).
+
+### Decision aids (`app/src/demo/decisionAids.ts`, observation `decision_aids`)
+
+Model output the commander chooses from; Claude never computes these numbers.
+
+- **Evacuation schedule** (`evacuationSchedule`): every zone a reported burning fire reaches
+  within the solver's lookahead (360 min) in the free-burn field (line already built is in the
+  field; a containment that has not happened is not assumed: plan for the strategy failing).
+  `latest_safe_start_minute` = now + core ETA - (departure lead + clearance_min + congested
+  drive) - `EVAC_SAFETY_MARGIN_MIN` (30 min). The departure lead is the time for
+  `EVAC_TARGET_DEPARTED_SHARE` (90%) of complying households to leave under the exponential
+  departure curve (mean 93 min): 93 x ln 10 = 214 min. Both are **ASSUMPTIONS** (planning
+  targets). `recommended_start_minute` is now when that is already past (`too_late`, "order now")
+  and otherwise the earliest minute (5-min steps) the zone's departure peak fits every road
+  segment of its route beside the decaying departure flows of zones already leaving or planned,
+  never after the latest safe start (`over_capacity` when it cannot). Each entry gives the
+  expected caught persons if ordered now and at the recommended start. With the 214-min lead,
+  almost every zone within reach of a fast fire is "order now"; staging only applies to zones
+  four or more hours out. Zones on the schedule are listed in `observation.zones` so they can be
+  ordered.
+- **Strategy recommendation** (`strategyAid`): per reported burning fire, every strategy option
+  with the homes the solver's forecast burns by its containment minute (or by the fire reaching a
+  finished line, or by the 120-min forecast horizon when it does not contain), whether it is
+  containable (contained, or a line finished before the fire with no breach or crown warning),
+  and `recommended_strategy_id` = the containable option burning the fewest homes (ties: sooner,
+  fewer units). When nothing contains, `all_units`: the option burning the fewest homes (flank
+  last), every free unit that can reach the fire, the available aircraft, and the cumulative
+  sized extended-attack orders of the stages due (at least stage 1, `ESCALATION_ORDERS`, capped by
+  `MAX_ORDER_COUNT`) less what was already ordered. `idle_units` lists free units while it burns.
+- The decide prompt (`app/backend/api/demo.py`) ranks life safety (follow the schedule; order
+  early rather than late), then property (the recommended strategy, or all units), then
+  containment (a strategy and initial attack on every new fire, never idle units while a fire
+  grows), and tells it to use `monitor.urgency`.
+
+### Evaluation harness (`app/scripts/live-eval/`)
+
+`evaluate.ts` runs one scenario headless and prints the metrics. It loads the board as /live
+does (the active drill's command zones, resource snapshot and Studio fires from the live API;
+landscape and inputs through `useDemoEnvironment.loadEnvironment`; zone routes from
+`POST /api/demo/routes` and road legs from `POST /api/demo/crew_routes`), runs the fire solver
+in-process, steps the clock deterministically (every solve, route refresh and awaited road leg
+is awaited before the clock moves, as the page's holds do) and calls the commander at
+useDemoAgent's cadence (monitor every board minute, a new reported fire at once, one call in
+flight). It is board-local: no run-state PUTs, guidance, Studio publishes or report triage.
+
+- `--policy claude`: the real `POST /api/demo/decide` (costs money: at most a few full runs).
+  While Claude thinks, the board advances latency x Auto speed (1 board min per real min urgent,
+  5 routine), then the orders apply. Cost per run comes from the orders line's `usage`
+  (`dispatch.decision_usage`), or from matching the backend's "Decision usage" log lines to the
+  run's call windows.
+- `--policy baseline`: `baselinePolicy.ts`, a scripted commander that reads only the
+  observation and follows the decision aids (free). `--policy none`: no orders.
+- Scenario: the drill's newest Studio publish per scenario (as a fresh /live board takes it),
+  `--fire-id sf_...` for one listed publish, or a synthetic, never published fire for scenario
+  search: `--ign lon,lat --start 0 --report 4 --wind 10 --from 45 --moisture dry`.
+- `--fast` (search only): routes every 15 board min and one prefetch request per minute (the
+  routes call takes about 4 s on the dev backend). `--seed`, `--minutes`, `--out file.json`,
+  `--base URL`.
+
+```sh
+cd app && npx esbuild scripts/live-eval/evaluate.ts --bundle --platform=node --format=esm \
+  --outfile=/tmp/live-eval.mjs --log-level=error
+node /tmp/live-eval.mjs --policy baseline --fire-id sf_48d1e76013b7 --out /tmp/base.json
+```
+
+A run takes 10-40 min of wall time, almost all of it in the routes and crew_routes calls; the
+backend's single runserver process is the bottleneck, so parallel runs need their own backend
+processes (e.g. extra `runserver --noreload` ports in the backend container, with the harness run
+in the frontend container against `--base http://backend:<port>`).
 
 ## Endpoints
 

@@ -43,6 +43,14 @@ MAX_PROVIDER_MESSAGE_CHARS = 400
 
 logger = logging.getLogger(__name__)
 
+# USD per million tokens, Claude API list prices (first-party; Bedrock/Vertex differ). 5m / 1h are
+# the cache-write prices of the two TTLs; cache_read is a cache hit. Models not listed get cost
+# None (the page then says the spend is unpriced). Keep in sync with the claude-api price table.
+MODEL_PRICES_USD_PER_MTOK: dict[str, dict[str, float]] = {
+    "claude-opus-5-5": {"input": 4.0, "output": 20.0, "cache_write_5m": 5.0, "cache_write_1h": 8.0, "cache_read": 0.20},
+    "claude-sonnet-5-5": {"input": 2.0, "output": 10.0, "cache_write_5m": 2.5, "cache_write_1h": 4.0, "cache_read": 0.10},
+}
+
 # Zone impact the server refuses to evacuate (contracts.ts ZoneObservation.impact).
 OUTSIDE_IMPACT = "outside"
 REQUIRED_OBSERVATION_KEYS = ("clock", "zones", "exits", "units", "totals")
@@ -475,24 +483,73 @@ def validate_orders(tool_input: object, index: dict) -> tuple[list[dict], list[d
     return orders, rejected, summary
 
 
+def decision_usage(model: str, usage: object) -> dict:
+    """Token usage of one call and its cost in USD (None when the model has no listed price).
+
+    Prompt size = input_tokens (uncached) + cache_read_input_tokens + cache_creation_input_tokens;
+    cache writes split by TTL (cache_write_5m / cache_write_1h). Output includes thinking tokens.
+    A refusal rerouted by the server-side fallback is priced at the final model's rates (an
+    approximation; such calls are rare).
+    """
+    def tokens(name: str, src: object = usage) -> int:
+        value = getattr(src, name, None)
+        return value if isinstance(value, int) else 0
+
+    created = tokens("cache_creation_input_tokens")
+    split = getattr(usage, "cache_creation", None)
+    write_1h = tokens("ephemeral_1h_input_tokens", split) if split is not None else 0
+    write_5m = tokens("ephemeral_5m_input_tokens", split) if split is not None else created
+    out = {
+        "model": model,
+        "input_tokens": tokens("input_tokens"),
+        "cache_read_input_tokens": tokens("cache_read_input_tokens"),
+        "cache_creation_input_tokens": created,
+        "cache_write_5m": write_5m,
+        "cache_write_1h": write_1h,
+        "output_tokens": tokens("output_tokens"),
+    }
+    price = MODEL_PRICES_USD_PER_MTOK.get(model) or next(
+        (p for key, p in MODEL_PRICES_USD_PER_MTOK.items() if model.startswith(key)), None
+    )
+    out["cost_usd"] = (
+        None
+        if price is None
+        else round(
+            (
+                out["input_tokens"] * price["input"]
+                + out["cache_read_input_tokens"] * price["cache_read"]
+                + write_5m * price["cache_write_5m"]
+                + write_1h * price["cache_write_1h"]
+                + out["output_tokens"] * price["output"]
+            )
+            / 1_000_000,
+            6,
+        )
+    )
+    return out
+
+
 def _line(event: dict) -> str:
     return json.dumps(event, ensure_ascii=False) + "\n"
 
 
-def _err_line(code: str, detail: str) -> str:
-    return _line({"type": "error", "error": code, "detail": detail})
+def _err_line(code: str, detail: str, usage: dict | None = None) -> str:
+    event = {"type": "error", "error": code, "detail": detail}
+    if usage is not None:
+        event["usage"] = usage
+    return _line(event)
 
 
 def stream_decision(
     client,
     model: str,
     effort: str,
-    user_message: str,
+    user_message: str | list[dict],
     index: dict,
     recalled_runs: int = 0,
     on_orders: Callable[[list[dict], int, str, str], None] | None = None,
     *,
-    system: str = SYSTEM_PROMPT,
+    system: str | list[dict] = SYSTEM_PROMPT,
     tool: dict = ISSUE_ORDERS_TOOL,
     validate: Callable[[object, dict], tuple[list[dict], list[dict], str]] = validate_orders,
 ) -> Iterator[str]:
@@ -500,8 +557,12 @@ def stream_decision(
 
     `on_orders(orders, rejected_count, summary, model)` runs after the final line (the run
     journal); `recalled_runs` is how many past runs the user message carries. `system`, `tool`
-    and `validate` default to this dispatcher; the /demo agent (api/demo.py) passes its own.
-    The tool must be named `issue_orders`.
+    and `validate` default to this dispatcher; the /demo agent (api/demo.py) passes its own
+    (`system` may be a list of text blocks, e.g. with a `cache_control` breakpoint).
+    The tool must be named `issue_orders`. `user_message` is a string or a list of content
+    blocks (the /demo agent splits it for the prompt cache). Token usage with prompt-cache reads
+    and writes and its cost (decision_usage) is logged at INFO and sent as `usage` on the final
+    line (orders, or an error after the model answered); nothing of the prompt is logged.
     """
     try:
         # Server-side fallback reroutes a safety-classifier refusal to another model.
@@ -550,11 +611,26 @@ def stream_decision(
         yield _err_line("upstream_error", "Unexpected error while contacting the AI provider.")
         return
 
+    raw_usage = getattr(final, "usage", None)
+    usage = decision_usage(getattr(final, "model", None) or model, raw_usage) if raw_usage is not None else None
+    if usage is not None:
+        logger.info(
+            "Decision usage: model=%s effort=%s input=%s cache_read=%s cache_write_5m=%s cache_write_1h=%s output=%s cost_usd=%s",
+            usage["model"],
+            effort,
+            usage["input_tokens"],
+            usage["cache_read_input_tokens"],
+            usage["cache_write_5m"],
+            usage["cache_write_1h"],
+            usage["output_tokens"],
+            usage["cost_usd"],
+        )
+
     if final.stop_reason == "refusal":
-        yield _err_line("upstream_refusal", "The model declined to decide.")
+        yield _err_line("upstream_refusal", "The model declined to decide.", usage)
         return
     if final.stop_reason == "max_tokens":
-        yield _err_line("upstream_truncated", "The agent's output was cut off before it issued orders.")
+        yield _err_line("upstream_truncated", "The agent's output was cut off before it issued orders.", usage)
         return
     call = next(
         (
@@ -565,7 +641,7 @@ def stream_decision(
         None,
     )
     if call is None:
-        yield _err_line("no_orders", "The agent did not issue orders.")
+        yield _err_line("no_orders", "The agent did not issue orders.", usage)
         return
 
     orders, rejected, summary = validate(call.input, index)
@@ -578,6 +654,7 @@ def stream_decision(
             "model": final.model,
             "recalled_runs": recalled_runs,
             "evidence_class": "ai_decision",
+            "usage": usage,
         }
     )
     # After the final line, so a slow database never delays the orders on the live clock.

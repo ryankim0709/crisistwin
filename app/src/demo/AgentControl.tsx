@@ -1,5 +1,6 @@
 import { Button, LoadingState, Notice, SegmentedControl, Spinner, Tag, type SegmentedOption } from "../ui";
 import { STATUS, STATUS_TONE } from "./agentStatus";
+import AgentSpend from "./AgentSpend";
 import type { useDemoAgent } from "./useDemoAgent";
 
 type Agent = ReturnType<typeof useDemoAgent>;
@@ -68,6 +69,7 @@ export default function AgentControl({
           Ask Claude now
         </Button>
       </div>
+      <AgentSpend spend={agent.spend} />
       {agent.error ? (
         <Notice tone="danger" compact>
           {agent.error}

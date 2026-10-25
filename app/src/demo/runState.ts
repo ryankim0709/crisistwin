@@ -19,7 +19,8 @@
  *   all W, since none has left and compliance only applies once the order is in effect.
  * - not_leaving: an order in effect: W - L, the households with a vehicle that do not comply
  *   (1 - ORDER_COMPLIANCE of W, as the model's floor-rounded departure curve leaves them).
- * - needs_transport: zone.noVehicle (carless households, always home: the board has no pickup)
+ * - needs_transport: zone.noVehicle (carless households, always home: the board has no pickup;
+ *   0 with model.EVERY_HOUSEHOLD_DRIVES, which gives the data's carless households one car each)
  *   in a zone with an order in effect or scheduled, or threatened (model.zoneThreatened on the
  *   commander's "reported" forecasts, as the /live outcomes use).
  * - home: households in a zone with no order in effect or scheduled (W, plus the carless ones

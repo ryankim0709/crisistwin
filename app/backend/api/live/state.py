@@ -6,6 +6,7 @@ livecore values and renders livecore results in the wire shapes of docs/live-rep
 
 from __future__ import annotations
 
+import copy
 import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
@@ -406,8 +407,7 @@ def load_snapshot(incident_id: str, now: datetime) -> Snapshot:
     )
 
 
-def current_guidance(incident_id: str, index: DrillIndex | None = None) -> list[dict[str, Any]]:
-    """Latest published version per zone, in drill zone order when the index is given."""
+def _latest_guidance(incident_id: str) -> list[dict[str, Any]]:
     rows = col("live_guidance").aggregate(
         [
             {"$match": {"incident_id": incident_id}},
@@ -415,7 +415,39 @@ def current_guidance(incident_id: str, index: DrillIndex | None = None) -> list[
             {"$group": {"_id": "$zone_id", "doc": {"$first": "$$ROOT"}}},
         ]
     )
-    docs = [row["doc"] for row in rows]
+    return [row["doc"] for row in rows]
+
+
+_latest_cache: dict[str, tuple[float, int, list[dict[str, Any]]]] = {}
+_latest_flights: dict[str, Lock] = {}
+_guidance_generation = 0
+"""Bumped by ``invalidate_guidance``: a read that overlapped a write is not cached."""
+
+
+def current_guidance(incident_id: str, index: DrillIndex | None = None) -> list[dict[str, Any]]:
+    """Latest published version per zone, in drill zone order when the index is given.
+
+    The aggregate is cached per process like ``rendered_guidance`` (``LIVE_GUIDANCE_CACHE_TTL_S``):
+    one ``twin`` poll read it three times, about 30 KB each, and the Atlas free tier moves about
+    100 KB/s. Concurrent misses share one read. Each caller gets its own copy."""
+    ttl = float(getattr(settings, "LIVE_GUIDANCE_CACHE_TTL_S", 1.0))
+    if ttl <= 0:
+        docs = _latest_guidance(incident_id)
+    else:
+        with _guidance_lock:
+            flight = _latest_flights.setdefault(incident_id, Lock())
+        with flight:
+            with _guidance_lock:
+                hit = _latest_cache.get(incident_id)
+                generation = _guidance_generation
+            if hit is not None and hit[0] > time.monotonic() and hit[1] == generation:
+                cached = hit[2]
+            else:
+                cached = _latest_guidance(incident_id)
+                with _guidance_lock:
+                    if _guidance_generation == generation:
+                        _latest_cache[incident_id] = (time.monotonic() + ttl, generation, cached)
+        docs = copy.deepcopy(cached)
     if index is not None:
         order = {z.id: i for i, z in enumerate(index.drill.zones)}
         docs.sort(key=lambda d: order.get(d["zone_id"], len(order)))
@@ -450,11 +482,15 @@ def rendered_guidance(incident_id: str, index: DrillIndex) -> list[dict[str, Any
 
 def invalidate_guidance(incident_id: str | None = None) -> None:
     """Drop the cached guidance after a write to ``live_guidance`` (publish, annotate, reset)."""
+    global _guidance_generation
     with _guidance_lock:
+        _guidance_generation += 1
         if incident_id is None:
             _guidance_cache.clear()
+            _latest_cache.clear()
         else:
             _guidance_cache.pop(incident_id, None)
+            _latest_cache.pop(incident_id, None)
 
 
 def destination_preferences(incident_id: str, now: datetime) -> list[dict[str, Any]]:

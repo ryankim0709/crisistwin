@@ -12,7 +12,7 @@ const RING_POINTS = 48;
 const RETRY_WALL_MS = 10_000;
 
 /** The answer's options with their segment ids resolved (one shared object per segment id). */
-function resolveRoutes(data: RoutesResponse): Map<string, RouteOption[]> {
+export function resolveRoutes(data: RoutesResponse): Map<string, RouteOption[]> {
   const table = new Map<string, RouteSegment>();
   const segment = (id: string): RouteSegment | null => {
     const hit = table.get(id);

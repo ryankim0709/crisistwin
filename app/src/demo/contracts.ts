@@ -14,7 +14,8 @@
  * only comparable within one answer. Example segment:
  * `"e7166f": { "name": "San Pablo Avenue", "length_m": 111, "lanes": 2, "capacity_veh_h": 2400, "free_flow_min": 0.119 }`.
  *
- * POST /api/demo/decide: `{ observation: DemoObservation }` (at most 200 kB) ->
+ * POST /api/demo/decide: `{ observation: DemoObservation, urgency?: "urgent" | "routine" }` (at
+ * most 200 kB; urgency picks the effort, api/demo.py decision_effort; default urgent) ->
  * application/x-ndjson, `DecisionEvent` lines ending with one "orders" or "error" line, as
  * /api/dispatch/decide (dispatch/contracts.ts). Non-2xx responses carry `{ error, detail }`.
  * The /live board is AI agent only: nothing is dispatched or ordered unless an order says so
@@ -71,6 +72,9 @@ import type { AccessClass } from "../studio/apparatus";
 import type { Tactic } from "../response/containment";
 import type { Tier } from "../response/fleet";
 import type { DispatchLevel, Orderable } from "../response/runCards";
+import type { DecisionUsage } from "../dispatch/contracts";
+
+export type { DecisionUsage };
 
 /**
  * How an option's arrival times were found: "road" = every crew's time is turnout plus its road
@@ -471,6 +475,8 @@ export interface AttackPositionObservation {
   lat: number;
   /** Minutes until fire reaches the point in the forecast (0 = there now; null = not within the lookahead). */
   fire_eta_min: number | null;
+  /** Ground metres from the fire's open edge now to the point (how far ahead of the fire the line is); null without a solve. */
+  from_fire_m: number | null;
   /** Zones the line stands in front of (geometric reading of the forecast). */
   protects_zone_ids: string[];
   /** LANDFIRE fuel model at the point. */
@@ -488,10 +494,12 @@ export interface AttackPositionObservation {
   /** Minutes until the line is finished with the crews assigned; null = none or not within 6 h. */
   line_done_min: number | null;
   /**
-   * Sending the n nearest free crews that can reach the point by road (on top of those
-   * assigned): last arrival (turnout + drive) and when the line would be done.
+   * Sending the n free crews that start building first (on top of those assigned): last arrival
+   * at the end of its road leg (turnout + drive), last start of work (arrival + the walk from
+   * where it parks to the point, response/reach.ts; crews that would park out of reach of the
+   * point are left out) and when the line would be done.
    */
-  options: { crews: string[]; arrive_min: number; line_done_min: number | null; route: OptionRoute }[];
+  options: { crews: string[]; arrive_min: number; work_starts_min: number; line_done_min: number | null; route: OptionRoute }[];
   /** Access classes with no road route to the point; their crews are not in `options`. */
   unreachable_classes: UnreachableClassObservation[];
 }
@@ -538,8 +546,10 @@ export interface CrewObservation {
   water_pct: number | null;
   /** Hours worked since its last rest (relieved at 16 h; rests half as long, work/rest 2:1). */
   work_h: number;
-  /** Off-road reach on its fire: metres from where it parked to the edge (null: not on scene or road access unknown). */
+  /** Off-road reach on its fire: metres from where it parked to the edge, or to its line's anchor when position_id is set (null: not on scene or road access unknown). */
   parked_m: number | null;
+  /** Ground metres from where it is now to its fire's open edge (null: not assigned to a burning fire, or no solve). */
+  from_fire_m: number | null;
   /** hose (within hose reach), hand_line (hiked in), dozer (walked in), out_of_reach. */
   work_mode: "hose" | "hand_line" | "dozer" | "out_of_reach" | null;
   /** Minutes until it starts building line (the hike or walk in). */
@@ -735,8 +745,17 @@ export interface DemoObservation {
     orderable: { resource: Orderable; max_count: number }[];
     initial_attack: { fires: number; contained_in_ia: number; failed_ia: number; line_breaches: number; median_first_arrival_min: number | null };
   };
-  monitor: { woke_because: string[] };
+  /**
+   * Why the page called (observation.ts wakeReasons): event reasons, a continuous or periodic
+   * review, and last a "Since the last decision" line of what changed (model numbers). urgency:
+   * urgent (board at 1× while deciding) or routine (continuous review; reviewing speed).
+   */
+  monitor: { woke_because: string[]; urgency: "urgent" | "routine" };
   previous: { minute: number; summary: string; rejected: string[] } | null;
+  /** Run outcome metrics so far (demo/scoring.ts; model counts). Optional on the wire. */
+  outcomes?: OutcomesObservation;
+  /** Model-computed decision aids the commander chooses from (demo/decisionAids.ts). Optional on the wire. */
+  decision_aids?: DecisionAidsObservation;
   /**
    * Drill road closures set by the controller (demo/roadClosures.ts): no unit or evacuation route
    * uses them; routes, options and ETAs already go around them. since_minute: board minute applied.
@@ -779,5 +798,75 @@ export type DecisionEvent =
       summary: string;
       model: string;
       evidence_class: "ai_decision";
+      /** Tokens and cost of this call (dispatch/contracts.ts DecisionUsage; api/dispatch.py decision_usage). */
+      usage?: DecisionUsage | null;
     }
-  | { type: "error"; error: string; detail: string };
+  | { type: "error"; error: string; detail: string; usage?: DecisionUsage | null };
+
+/**
+ * Run outcome metrics so far (demo/scoring.ts runScore), for the commander to optimise. Caught =
+ * still home when fire reached the zone core; caught_breakdown splits it by why (no vehicle, no
+ * order, did not comply, ordered too late). homes_burned: households x the zone's share of
+ * developed cells burned (homes_method). Persons null = unknown.
+ */
+export interface OutcomesObservation {
+  caught_people: number | null;
+  caught_households: number;
+  caught_breakdown: { no_vehicle: number; no_order: number; stayed_despite_order: number; ordered_too_late: number };
+  homes_burned: number;
+  homes_reached_saved: number;
+  homes_method: string;
+  area_burned_ha: number;
+}
+
+/**
+ * One zone of the evacuation schedule (demo/decisionAids.ts evacuationSchedule). eta_min: minutes
+ * until fire reaches the core (eta_basis "core") or, with no core arrival in the lookahead, the
+ * zone edge ("edge"), in the fire model's free-burn forecast (containment not assumed);
+ * forecast_core_eta_min is the contained forecast (the zone's fire_core_eta_min). Absolute board
+ * minutes: latest_safe_start_minute, recommended_start_minute. action: order_now (too_late or start
+ * now), schedule / reschedule (order_evacuation with start_minute = recommended_start_minute),
+ * scheduled_ok, leaving. expected_caught_*: expected households / persons home at that ETA.
+ */
+export interface EvacuationPlanObservation {
+  zone_id: string;
+  action: "order_now" | "schedule" | "leaving" | "scheduled_ok" | "reschedule";
+  eta_min: number;
+  eta_basis: "core" | "edge";
+  forecast_core_eta_min: number | null;
+  destination_id: string | null;
+  clearance_min: number;
+  congested_eta_min: number;
+  latest_safe_start_minute: number;
+  recommended_start_minute: number;
+  too_late: boolean;
+  over_capacity: boolean;
+  households: number;
+  people: number | null;
+  expected_caught_households_if_ordered_now: number;
+  expected_caught_people_if_ordered_now: number | null;
+  expected_caught_people_at_recommended: number | null;
+}
+
+/** Per reported burning fire (demo/decisionAids.ts strategyAid): homes each strategy option burns, the recommendation, and the all-units package when nothing contains. */
+export interface StrategyAidObservation {
+  fire_id: string;
+  /** Containable option burning the fewest homes; null when none contains (see all_units). */
+  recommended_strategy_id: string | null;
+  recommended_send: { crew_id: string; position_id: string | null }[];
+  options: { id: string; containable: boolean; homes_burned_forecast: number; by_min: number; households_in_zones_reached: number }[];
+  all_units: {
+    strategy_id: string;
+    send: { crew_id: string; position_id: string | null; eta_min: number }[];
+    aircraft: { aircraft_id: string; over_fire_min: number }[];
+    order_resources: { resource: Orderable; count: number }[];
+  } | null;
+  idle_units: string[];
+}
+
+export interface DecisionAidsObservation {
+  /** How the evacuation schedule is computed (assumptions named). */
+  evacuation_method: string;
+  evacuation: EvacuationPlanObservation[];
+  strategy: StrategyAidObservation[];
+}
