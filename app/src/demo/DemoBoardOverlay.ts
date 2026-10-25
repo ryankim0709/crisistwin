@@ -48,7 +48,6 @@ const PARK_RADIUS = 5;
 const CLUSTER_WORLD = 3;
 /** An available unit this close to its station is shown as parked there, metres. */
 const AT_STATION_M = 60;
-const STATION_SIZE = { width: 4, height: 2.6, depth: 3 };
 
 type ZoneState = "overrun" | "ordered" | "threatened";
 const ZONE_TAG: Record<ZoneState, string> = { overrun: "Overrun", ordered: "Leave now", threatened: "At risk" };
@@ -266,34 +265,7 @@ export class DemoBoardOverlay implements BoardOverlay {
     parent.add(group);
     const map = new Map<string, Label>();
     this.stations = { group, labels: map };
-    const places = (board?.stations ?? []).flatMap((s) => {
-      const at = this.toWorld(s.location);
-      return at ? [{ station: s, at }] : [];
-    });
-    if (places.length === 0) return;
-    const { width, height, depth } = STATION_SIZE;
-    const walls = new THREE.InstancedMesh(
-      new THREE.BoxGeometry(width, height, depth).translate(0, height / 2, 0),
-      new THREE.MeshStandardMaterial({ color: DEMO_3D_COLORS.stationWall, roughness: 0.7 }),
-      places.length,
-    );
-    const roofs = new THREE.InstancedMesh(
-      new THREE.BoxGeometry(width + 0.4, 0.6, depth + 0.4).translate(0, height + 0.3, 0),
-      new THREE.MeshStandardMaterial({ color: DEMO_3D_COLORS.stationRoof, roughness: 0.6 }),
-      places.length,
-    );
-    walls.castShadow = roofs.castShadow = true;
-    places.forEach(({ station, at }, i) => {
-      this.matrix.makeTranslation(at.x, at.y, at.z);
-      walls.setMatrixAt(i, this.matrix);
-      roofs.setMatrixAt(i, this.matrix);
-      const label = labels.add(group, "fdx-dmstation", new THREE.Vector3(at.x, at.y + height + 2.2, at.z), new THREE.Vector2(0.5, 1));
-      label.el.textContent = station.name;
-      label.el.title = station.name;
-      map.set(station.id, label);
-    });
-    walls.instanceMatrix.needsUpdate = roofs.instanceMatrix.needsUpdate = true;
-    group.add(walls, roofs);
+    void board; // station markers are the scene's shared marker (setStations), not drawn here
   }
 
   // ---- units ----

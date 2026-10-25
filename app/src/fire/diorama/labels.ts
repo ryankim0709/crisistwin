@@ -35,6 +35,11 @@ const LABEL_CSS = `
 .fdx-place::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: #8a8f94; flex: none; }
 .fdx-place-peak::before { border-radius: 0; background: none; width: 0; height: 0; border-left: 3.5px solid transparent; border-right: 3.5px solid transparent; border-bottom: 6px solid #8a5a3c; }
 .fdx-compact .fdx-place { font-size: 9.5px; padding: 1px 6px; }
+.fdx-station { padding: 0; gap: 0; background: none; border: none; box-shadow: none; flex-direction: column; font-weight: 700; }
+.fdx-st-badge { display: inline-flex; width: 26px; height: 26px; border-radius: 50%; align-items: center; justify-content: center; background: #c8352a; border: 2.5px solid #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.5), 0 0 0 1px rgba(120,20,10,0.5); }
+.fdx-st-name { margin-top: 2px; font-size: 11px; padding: 1px 7px; border-radius: 999px; color: #7a1a10; background: rgba(255,255,255,0.94); border: 1px solid rgba(200,53,42,0.5); }
+.fdx-st-far .fdx-st-name { display: none; }
+.fdx-compact .fdx-st-badge { width: 22px; height: 22px; }
 .fdx-clipped { visibility: hidden; }
 .fdx-compact .fdx-label { font-size: 10px; padding: 2px 7px; }
 .fdx-compact .fdx-north { width: 22px; height: 22px; padding: 0; }

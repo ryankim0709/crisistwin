@@ -1,5 +1,5 @@
 import { useId, useState, type ReactNode } from "react";
-import { BurnedGlyph, FireEdgeGlyph, WindGlyph } from "../../diorama/ui/glyphs";
+import { BurnedGlyph, FireEdgeGlyph, StationBadgeGlyph, WindGlyph } from "../../diorama/ui/glyphs";
 import { Button } from "../../ui";
 import { ARRIVAL_COLORS, CURRENT_PERIMETER_COLOR, FUEL_COLORS } from "../fuelPalette";
 
@@ -107,6 +107,7 @@ export default function FireLegend({
           { glyph: <FlameGlyph />, label: "Burning (active front glows)" },
           { glyph: <FireEdgeGlyph />, label: "Fire front (current perimeter)" },
           { glyph: <BurnedGlyph />, label: "Burned (charred ground)" },
+          { glyph: <StationBadgeGlyph />, label: "Fire station" },
         ];
   items.push(
     { glyph: <IgnitionGlyph />, label: "Ignition point" },

@@ -1,3 +1,4 @@
+import type { MapStation } from "../../maps/stations";
 /**
  * Contract between the fire spread page (`FireSimulatorPage.tsx`) and the three.js diorama
  * renderer in this folder (see docs/adr/0011-fire-diorama-view.md).
@@ -102,5 +103,8 @@ export interface FireDioramaSceneApi {
   setCoverHouses(visible: boolean): void;
   /** Animate to a view of the ground within `radiusMeters` of `point`. */
   focusOn(point: GeoPoint, radiusMeters: number): void;
+  /** Fire-station markers: a list draws exactly those, `null` the automatic CAL FIRE fetch around the board. */
+  setStations(stations: readonly MapStation[] | null, suffix?: string): void;
+  setStationSuffix(suffix: string): void;
   dispose(): void;
 }

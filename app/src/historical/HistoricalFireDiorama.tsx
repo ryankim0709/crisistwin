@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useMediaQuery } from "../diorama/ui/format";
-import { BurnedGlyph, FireEdgeGlyph } from "../diorama/ui/glyphs";
+import { BurnedGlyph, FireEdgeGlyph, StationBadgeGlyph } from "../diorama/ui/glyphs";
 import { FireDioramaScene } from "../fire/diorama/FireDioramaScene";
 import type { DioramaRun, FireDioramaSceneApi } from "../fire/diorama/types";
 import { formatDuration } from "../fire/ui/format";
@@ -150,6 +150,7 @@ export default function HistoricalFireDiorama({ fireId, onSelectFire, onExit }: 
       setSceneError(errorMessage(cause, "WebGL could not be initialised."));
       return;
     }
+    created.setStationSuffix("today's station");
     sceneRef.current = created;
     setScene(created);
     return () => {
@@ -507,6 +508,7 @@ export default function HistoricalFireDiorama({ fireId, onSelectFire, onExit }: 
               { label: "Fire front at this time", color: "var(--ct-fire)", glyph: <FireEdgeGlyph /> },
               { label: "Burned by this time", color: "var(--ct-burned)", glyph: <BurnedGlyph /> },
               { label: "Ignition pin", color: "var(--ct-ink)", shape: "dot" },
+              { label: "Fire station (today's station)", color: "#c8352a", glyph: <StationBadgeGlyph /> },
             ]}
           />
         </section>
