@@ -266,6 +266,23 @@ route for that home's zone, plus the household and its simulated story. A fresh 
 a zone with an order; About → Address → My location goes back to GPS. Code: `Features/Home/HomeHero.swift`
 (`HomeAddressPanel`, `HomeAddressCard`, `HomeAddressPicker`) and `LiveStore.home`.
 
+**Follow a simulated person (Map, Home):** a person who joined the drill can follow one of the drill's
+simulated people (`live_virtual_people`, the same households as the address list) as they leave. Map's
+top button (person with a plus) opens a searchable list; Home's address panel has "Follow this simulated
+person on Map". The Map then draws the person's whole way out dashed, the part driven so far solid, a
+marker with their status (a car on the road, red when stuck or blocked) and their destination, and the
+location button puts the camera on them instead of the GPS fix. A pill under the legend reads "Following
+Simulated person ... , status, ETA" with **Stop**. The phone polls
+`GET /api/live/incidents/<id>/virtual-people/<pid>/track` with its 3 s refresh (a 404 ends the follow) and
+tells the server with `POST /api/live/me/follow {person_id|null}` (advisory). The server moves a person
+once per drill minute, so between polls the marker glides along `path` by the drill speed and the route's
+own rate (`total_min`, slowed by `motion`; presentation only, replaced by each poll). Everything shown is
+a model estimate, labelled "Simulated person". The followed id is kept per incident. Code:
+`LiveStore.startFollowing/stopFollowing/followedSample`, `DrillTrack`/`TrackPath` in `LiveModels.swift`,
+the layer in `IncidentMap`, and `FollowPersonPicker`/`FollowedPersonPill`/`FollowOnMapButton` in
+`Features/Home/HomeHero.swift`. Built (simulator target) but not yet run against the server's track and
+follow endpoints, or on a simulator or device.
+
 A **Your home** section at the top of the screen shows the per-home advice from Simulation
 Studio's published evacuation run (`GET /api/sim-state/advice?lon=&lat=`, see
 [`docs/sim-state-api.md`](../docs/sim-state-api.md)): leave now, leave at T+h:mm (in N min),
