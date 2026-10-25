@@ -242,28 +242,32 @@ A "Wind source" selector (`app/src/fire/ui/WindSourcePicker.tsx`, `app/src/fire/
 | Worst | `climatology_percentile` for a month and P90/P95/P99 (derived, offshore sector) |
 | Forecast | `forecast` from the current hour (NWS) |
 
-The solver takes one wind per run: spread rates are computed once per cell for a fixed wind
-(`app/src/fire/spread.ts`), and the run is not stepped through weather. So the hourly series is
-**reduced to its peak 20 ft hour with a valid direction inside the run window** (`hours` =
-horizon in hours, 6 at most in the Studio, 24 on `/fire`) and that speed and direction drive the
-whole run, capped at the 60 mph slider maximum. This overstates the wind in the hours around
-it, so a run on a "Historical" series is a worst-hour run, not a replay. The wind panel shows the
+The run follows the **whole hourly series** inside one solve (`weatherSeriesFromRecord` →
+`FireScenario.weatherSeries`, [fire simulator](fire-simulator.md#time-varying-weather-inside-one-solve)):
+a cell spreads with the wind of the 10-minute step it ignites in. The record still names the
+**peak 20 ft hour with a valid direction inside the run window** (`hours` = horizon in hours, 6
+at most in the Studio, 24 on `/fire`), which the wind controls show, capped at the 60 mph slider
+maximum (series hours are capped the same way). On `/fire`, _Peak hour_ holds that one wind for
+the whole run instead: a worst-hour run, not a replay. The wind panel shows the
 evidence class (Observed, Forecast, Derived), the station name and id, its distance in km, the
 peak hour, the conversion, and "How this wind is used". Editing the speed or direction by hand
-returns the source to Assumed. Fuel moisture is not taken from the series' RH and temperature;
-it stays on the preset.
+returns the source to Assumed and drops the series. Fuel moisture is not taken from this series
+(the endpoint has no moisture); it stays on the preset. `/api/conditions` does carry moisture:
+`weatherSeriesFromConditions` builds a series with it.
 
 The Studio keeps the record in `StudioScenario.weather` (saved in the draft and the scenario
 JSON, dropped on import if the wind no longer equals the applied value). Drill packages carry it
 in `assumptions.wind_source`: `{kind: "assumed"}`, or `{kind: "scenario_weather", mode,
-evidence_class, station, source, query, analog, height_conversion, applied, units, series,
-raw_sha256}` where `series` is every hourly sample (UTC time, `speed_ms`, `speed_20ft_mph`,
-`from_deg`, `gust_ms`) and `applied` is the value the solver ran on. `wind_20ft_mph` and
-`wind_from_deg` still hold that applied value. The backend package builder ignores the extra key.
+evidence_class, station, source, query, analog, height_conversion, applied, run_wind, units,
+series, raw_sha256}` where `series` is every hourly sample (UTC time, `speed_ms`,
+`speed_20ft_mph`, `from_deg`, `gust_ms`), `applied` is the peak hour and `run_wind` says what the
+solver ran on: `"hourly_series"` (the whole series, the Studio default) or `"peak_hour"`.
+`wind_20ft_mph` and `wind_from_deg` still hold the peak-hour value. The backend package builder ignores the extra key.
 
-Still open: a time-varying solver (step the wind through the series, interpolating direction
-through the shortest arc), wiring moisture from the series into the pages (the endpoint exists:
-see "Fuel moisture from the date's weather" below), and the wind-shift inject for live drills
+Done: the time-varying solver (`FireScenario.weatherSeries`, 10-minute steps, direction through
+the shortest arc; [fire simulator](fire-simulator.md#time-varying-weather-inside-one-solve)).
+Still open: wiring moisture from `/api/conditions` into the pages (`weatherSeriesFromConditions`
+builds the series; no page calls it yet), and the wind-shift inject for live drills
 (ADR 0030), recorded as `evidence_class: "simulated"`. Keep observed, forecast, derived and
 assumed series separate wherever they are stored.
 
@@ -397,8 +401,10 @@ airport, whose wind is far below the ridge-top winds of that night.
 and `applyConditionsHour(hour, {maxWindMph?})`, which returns `{ok: true, inputs: {windSpeedMph,
 windFromDegrees, moisture}, calm, clampedFromMph}` (the `FireScenario` fields) or `{ok: false,
 missing: [...]}`: it never fills a missing wind or moisture. A zero wind is applied with direction 0
-and `calm: true`. The solver still takes one wind and one moisture per run, so a page choosing an
-hour (start, peak wind, driest hour) must say which.
+and `calm: true`. A page that applies one hour (start, peak wind, driest hour) must say which;
+`weatherSeriesFromConditions(conditions, t0Utc, {maxWindMph?})` instead turns every applicable hour
+into the solver's time-varying `weatherSeries` (wind, moisture, air temperature; refused hours
+skipped, a calm hour's unobserved direction carried from the hour before).
 
 ## Fixtures
 

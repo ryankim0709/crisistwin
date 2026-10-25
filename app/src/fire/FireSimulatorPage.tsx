@@ -49,8 +49,9 @@ import {
   type GeoPoint,
 } from "./spread";
 import { fetchNwsWind, type NwsWindReading } from "./weather";
-import type { ScenarioWindRecord } from "./scenarioWeather";
+import { weatherSeriesFromRecord, type ScenarioWindRecord } from "./scenarioWeather";
 import WindSourcePicker from "./ui/WindSourcePicker";
+import WindStrip from "./ui/WindStrip";
 import NaturalVariationControl, {
   DEFAULT_VARIATION_SEED,
   observedGustFactor,
@@ -268,6 +269,10 @@ export default function FireSimulatorPage() {
   const [windSource, setWindSource] = useState<WindSourceState>({ status: "idle" });
   // Scenario weather (historical, worst case, forecast series) behind the current wind, if any.
   const [scenarioWind, setScenarioWind] = useState<ScenarioWindRecord | null>(null);
+  // With scenario weather: follow the hourly series inside the run (default) or hold the peak hour.
+  const [windOverTime, setWindOverTime] = useState<"series" | "peak">("series");
+  // Simplified fire-induced wind (fireInducedWind.ts). Off unless the user turns it on.
+  const [fireInducedWindOn, setFireInducedWindOn] = useState(false);
 
   const [scene, setScene] = useState<FireDioramaSceneApi | null>(null);
   const [sceneStatus, setSceneStatus] = useState<SceneStatus>({ kind: "loading" });
@@ -381,6 +386,12 @@ export default function FireSimulatorPage() {
     () => (variation?.enabled ? { ...variation, gustFactor } : undefined),
     [variation, gustFactor],
   );
+  // The whole hourly series of the scenario weather, as the solver's weather series.
+  const recordSeries = useMemo(
+    () => (scenarioWind ? weatherSeriesFromRecord(scenarioWind) : null),
+    [scenarioWind],
+  );
+  const weatherSeries = recordSeries && windOverTime === "series" ? recordSeries.series : null;
 
   const scenario = useMemo(
     () =>
@@ -402,6 +413,8 @@ export default function FireSimulatorPage() {
               rateMetersPerMinute: structureSpreadRate,
             },
             ...(stochastic ? { stochastic } : {}),
+            ...(weatherSeries ? { weatherSeries } : {}),
+            ...(fireInducedWindOn ? { fireInducedWind: { enabled: true } } : {}),
           }
         : null,
     [
@@ -416,6 +429,8 @@ export default function FireSimulatorPage() {
       structureSpreadEnabled,
       structureSpreadRate,
       stochastic,
+      weatherSeries,
+      fireInducedWindOn,
     ],
   );
   // Solving takes ~100 ms, so let the controls stay responsive while dragging.
@@ -1156,7 +1171,34 @@ export default function FireSimulatorPage() {
                 horizonHours={horizonMinutes / 60}
                 record={scenarioWind}
                 onApply={applyScenarioWind}
+                usesSeries={weatherSeries !== null}
               />
+
+              {recordSeries && (
+                <div className="fr-field">
+                  <span className="fr-field-title">Wind over the run</span>
+                  <SegmentedControl
+                    label="Wind over the run"
+                    options={[
+                      { value: "series", label: "Hour by hour" },
+                      { value: "peak", label: "Peak hour" },
+                    ]}
+                    value={windOverTime}
+                    onChange={setWindOverTime}
+                  />
+                  <p className="fr-hint">
+                    {windOverTime === "series"
+                      ? `The run follows all ${recordSeries.series.samples.length} hourly winds; the controls below show the peak hour.`
+                      : "The peak hour's wind is held for the whole run (a worst-hour run, not a replay)."}
+                    {recordSeries.notes.cappedHours > 0
+                      ? ` ${recordSeries.notes.cappedHours} h capped at ${MAX_WIND_SPEED_MPH} mph.`
+                      : ""}
+                    {recordSeries.notes.skippedHours > 0
+                      ? ` ${recordSeries.notes.skippedHours} h without wind skipped.`
+                      : ""}
+                  </p>
+                </div>
+              )}
 
               <div className="fr-field">
                 <label htmlFor="wind-speed">
@@ -1254,6 +1296,21 @@ export default function FireSimulatorPage() {
                   />
                   <label htmlFor="structure-spread-enabled">Structure-to-structure spread</label>
                 </div>
+                <div className="fr-toggle-row">
+                  <input
+                    id="fire-induced-wind-enabled"
+                    type="checkbox"
+                    checked={fireInducedWindOn}
+                    onChange={(event) => setFireInducedWindOn(event.target.checked)}
+                  />
+                  <label htmlFor="fire-induced-wind-enabled">Fire-induced wind (simplified)</label>
+                </div>
+                {fireInducedWindOn && (
+                  <p className="fr-hint">
+                    Where the fire is plume-dominated (Byram&rsquo;s convective number), it draws wind
+                    toward itself and spreads more erratically. Assumed effect sizes.
+                  </p>
+                )}
               </div>
 
               <div className="fr-field">
@@ -1489,6 +1546,32 @@ export default function FireSimulatorPage() {
                     </svg>
                   </Button>
                   <div id="fr-details" className="fr-details" hidden={!detailsOpen}>
+                    {(run.weatherSeries || run.fireInducedWind) && (
+                      <div className="fr-card">
+                        <Facts
+                          items={[
+                            ...(run.weatherSeries
+                              ? [
+                                  {
+                                    label: "Wind over the run (input)",
+                                    value: `${run.weatherSeries.samples} hourly values, ${run.weatherSeries.windSpeedRangeMph[0].toFixed(0)} to ${run.weatherSeries.windSpeedRangeMph[1].toFixed(0)} mph, read every ${run.weatherSeries.stepMinutes} min${
+                                      run.weatherSeries.evidence ? ` (${run.weatherSeries.evidence})` : ""
+                                    }`,
+                                  },
+                                ]
+                              : []),
+                            ...(run.fireInducedWind
+                              ? [
+                                  {
+                                    label: "Fire-induced wind (simulated)",
+                                    value: `${run.fireInducedWind.cellsPlumeDominated} plume-dominated and ${run.fireInducedWind.cellsMixed} mixed cells of ${run.fireInducedWind.cellsEvaluated}; indraft changed ${run.fireInducedWind.cellsWithIndraft}, at most ${run.fireInducedWind.maxIndraftMetersPerSecond.toFixed(1)} m/s`,
+                                  },
+                                ]
+                              : []),
+                          ]}
+                        />
+                      </div>
+                    )}
                     {run.stochastic && (
                       <div className="fr-card">
                         <Facts
@@ -1783,6 +1866,15 @@ export default function FireSimulatorPage() {
             sceneReady={sceneReady || view === "satellite"}
             onResetView={resetView}
             onFocusFire={focusFire}
+            windStrip={
+              run?.scenario.weatherSeries?.enabled ? (
+                <WindStrip
+                  series={run.scenario.weatherSeries}
+                  horizonMinutes={horizonMinutes}
+                  t={playback.t}
+                />
+              ) : undefined
+            }
           />
         </div>
 

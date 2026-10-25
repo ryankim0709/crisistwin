@@ -17,6 +17,7 @@
  */
 
 import type { FuelMoisture } from "../fire/rothermel";
+import { fahrenheitOfCelsius, type FireWeatherSample, type FireWeatherSeries } from "../fire/weatherSeries";
 
 export type ConditionsMode = "historical_replay" | "climatology_percentile" | "forecast";
 export type ConditionsWeatherEvidence = "observed" | "derived" | "forecast";
@@ -350,7 +351,8 @@ function toPresets(r: ApiRegionPresets): RegionConditionsPresets {
   };
 }
 
-function toConditions(d: ApiConditions): Conditions {
+/** The API body (snake_case) as `Conditions`; exported for Node scripts that read a saved response. */
+export function toConditions(d: ApiConditions): Conditions {
   return {
     schema: d.schema,
     modelVersion: d.model_version,
@@ -527,5 +529,52 @@ export function applyConditionsHour(
     },
     calm,
     clampedFromMph: windSpeedMph === raw ? null : raw,
+  };
+}
+
+/**
+ * The conditions hours as the solver's time-varying weather (`FireScenario.weatherSeries`,
+ * fire/weatherSeries.ts): wind, direction, all five moisture classes and air temperature per
+ * hour. `t0Utc` is the run's T+0 (sample minutes are counted from it, and may be negative for
+ * hours before it). Hours `applyConditionsHour` refuses (a missing wind, direction or moisture)
+ * are skipped, never filled; the solver interpolates across them. Null when no hour applies.
+ */
+export function weatherSeriesFromConditions(
+  conditions: Conditions,
+  t0Utc: string,
+  options: { maxWindMph?: number } = {},
+): { series: FireWeatherSeries; skippedHours: string[] } | null {
+  const t0 = Date.parse(t0Utc);
+  if (!Number.isFinite(t0)) return null;
+  const samples: FireWeatherSample[] = [];
+  const skippedHours: string[] = [];
+  for (const hour of conditions.hours) {
+    const applied = applyConditionsHour(hour, options);
+    const minute = (Date.parse(hour.tUtc) - t0) / 60_000;
+    if (!applied.ok || !Number.isFinite(minute)) {
+      skippedHours.push(hour.tUtc);
+      continue;
+    }
+    if (samples.length > 0 && !(minute > samples[samples.length - 1].minute)) continue;
+    samples.push({
+      minute,
+      windSpeedMph: applied.inputs.windSpeedMph,
+      // A calm hour's direction is not observed (set to 0); carry the previous one so it does
+      // not swing the interpolation either side of it.
+      windFromDegrees:
+        applied.calm && samples.length > 0 ? samples[samples.length - 1].windFromDegrees : applied.inputs.windFromDegrees,
+      moisture: applied.inputs.moisture,
+      ...(hour.tempC !== null && Number.isFinite(hour.tempC) ? { airTemperatureF: fahrenheitOfCelsius(hour.tempC) } : {}),
+    });
+  }
+  if (samples.length === 0) return null;
+  return {
+    series: {
+      enabled: true,
+      samples,
+      source: `${conditions.mode}${conditions.station ? ` ${conditions.station.id}` : ""}`,
+      evidence: conditions.evidence.weather,
+    },
+    skippedHours,
   };
 }

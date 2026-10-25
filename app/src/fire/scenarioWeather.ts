@@ -6,10 +6,13 @@
  * `speed20ftMph` miles per hour after the server's 10 m to 20 ft height conversion; `fromDeg`
  * degrees true, the bearing the wind blows FROM (same contract as `FireScenario`).
  *
- * The fire solver takes ONE wind for the whole run (precomputed spread rates, see
- * docs/fire-simulator.md), so a series is reduced to its peak hour, and the record keeps the
- * whole series plus that choice so nothing is hidden.
+ * The record keeps the whole series. Its peak hour is `applied` (the page's wind controls show
+ * it, and a run can still take that one wind for the whole horizon); `weatherSeriesFromRecord`
+ * turns the whole series into the solver's `FireScenario.weatherSeries` (weatherSeries.ts), so
+ * the wind can change hour by hour inside one solve (docs/fire-simulator.md).
  */
+
+import type { FireWeatherSample, FireWeatherSeries } from "./weatherSeries";
 
 export type WindSourceMode = "assumed" | "historical" | "worst_case" | "forecast";
 export type ApiWeatherMode = "historical_replay" | "climatology_percentile" | "forecast";
@@ -224,4 +227,68 @@ export function recordMatchesWind(
     Math.abs(record.applied.speed20ftMph - speedMph) < 0.05 &&
     Math.abs(record.applied.fromDeg - fromDegrees) < 0.5
   );
+}
+
+/** Minutes from `fromUtc` to `toUtc`, both ISO 8601 UTC strings; NaN when either fails to parse. */
+function minutesBetween(fromUtc: string, toUtc: string): number {
+  return (Date.parse(toUtc) - Date.parse(fromUtc)) / 60_000;
+}
+
+/** What `weatherSeriesFromRecord` dropped or capped, so the page can say so. */
+export interface SeriesConversionNotes {
+  /** Hours with no speed (never filled in). */
+  skippedHours: number;
+  /** Hours whose 20 ft wind was above `MAX_APPLIED_WIND_MPH` and were capped to it. */
+  cappedHours: number;
+  /** Calm hours with no reported direction: the previous hour's direction is carried (speed 0 makes it moot). */
+  calmHoursWithoutDirection: number;
+}
+
+/**
+ * The record's hourly series as the solver's weather series. T+0 is the query start
+ * (`record.query.startUtc`), so the sample at the start hour is minute 0. Hours with no speed
+ * are skipped, not filled; a calm hour with no direction carries the previous direction; a
+ * speed above the slider cap (`MAX_APPLIED_WIND_MPH`) is capped as the applied peak is. Wind
+ * only: moisture is not in this API, so the scenario's moisture holds (samples carry none).
+ * Null when no hour has both speed and direction.
+ */
+export function weatherSeriesFromRecord(
+  record: ScenarioWindRecord,
+): { series: FireWeatherSeries; notes: SeriesConversionNotes } | null {
+  const samples: FireWeatherSample[] = [];
+  const notes: SeriesConversionNotes = { skippedHours: 0, cappedHours: 0, calmHoursWithoutDirection: 0 };
+  let lastFrom: number | null = null;
+  for (const s of record.series) {
+    const minute = minutesBetween(record.query.startUtc, s.tUtc);
+    const speed = s.speed20ftMph;
+    if (!Number.isFinite(minute) || speed === null || !Number.isFinite(speed) || speed < 0) {
+      notes.skippedHours++;
+      continue;
+    }
+    let from: number | null = s.fromDeg;
+    if (from === null || !Number.isFinite(from)) {
+      if (speed > 0 || lastFrom === null) {
+        notes.skippedHours++;
+        continue;
+      }
+      from = lastFrom;
+      notes.calmHoursWithoutDirection++;
+    }
+    if (samples.length > 0 && !(minute > samples[samples.length - 1].minute)) continue;
+    const capped = Math.min(speed, MAX_APPLIED_WIND_MPH);
+    if (capped < speed) notes.cappedHours++;
+    const fromDegrees: number = ((from % 360) + 360) % 360;
+    samples.push({ minute, windSpeedMph: capped, windFromDegrees: fromDegrees });
+    lastFrom = fromDegrees;
+  }
+  if (samples.length === 0) return null;
+  return {
+    series: {
+      enabled: true,
+      samples,
+      source: `${record.mode}${record.station ? ` ${record.station.id}` : ""}`,
+      evidence: record.evidenceClass,
+    },
+    notes,
+  };
 }

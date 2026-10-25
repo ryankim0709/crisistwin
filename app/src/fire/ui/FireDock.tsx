@@ -1,4 +1,4 @@
-import type { KeyboardEvent } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
 import { FIRE_STEP_MINUTES } from "../spread";
 import {
   PLAYBACK_SPEEDS,
@@ -35,6 +35,8 @@ type FireDockProps = {
   sceneReady: boolean;
   onResetView: () => void;
   onFocusFire: () => void;
+  /** Optional row under the scrubber on the same time axis (the wind-over-time strip). */
+  windStrip?: ReactNode;
 };
 
 export default function FireDock({
@@ -45,6 +47,7 @@ export default function FireDock({
   sceneReady,
   onResetView,
   onFocusFire,
+  windStrip,
 }: FireDockProps) {
   const { t, playing, speed } = playback;
   const ended = t >= horizonMinutes;
@@ -78,7 +81,7 @@ export default function FireDock({
   };
 
   return (
-    <section className="fr-dock fr-panel" aria-label="Fire playback">
+    <section className={`fr-dock fr-panel${windStrip ? " fr-dock--wind" : ""}`} aria-label="Fire playback">
       <div className="fr-dock-buttons">
         <IconButton
           variant="primary"
@@ -252,6 +255,7 @@ export default function FireDock({
           <span>Focus fire</span>
         </Button>
       </div>
+      {windStrip}
       <p className="fr-speed-note">1× = {Math.round(minutesPerSecond)} model minutes per second</p>
     </section>
   );
