@@ -512,10 +512,11 @@ Planner rules (`livecore.planner.plan`, constants named in code):
   back to `temporary_refuge` when neither is reachable), snapped to their nearest
   road node, excluding destinations inside the fire estimate and shelters with a
   public `shelter_full` item. Multi-source Dijkstra on free-flow travel time
-  (`length_m / speed_kph`), times the simulated congestion factor of each directed
+  (`length_m / speed_kph`) times the edge's road-class factor (see "Evacuee route
+  choice" below), times the simulated congestion factor of each directed
   edge when the twin is ready (see "Congestion-aware planning" below). Never uses an
   edge whose `segment_id` is blocked or whose midpoint lies inside the fire estimate.
-  Unreachable -> `no_route: true`. `eta_min` stays free-flow.
+  Unreachable -> `no_route: true`. `eta_min` stays free-flow time on real speeds.
 - Blocked segments for guidance are road-state items with `status: "blocked"` and
   `public: true` (this includes controller confirmations). The impact analysis
   (`POST incidents/{id}/impact`) starts from the same blocks and toggles one segment.
@@ -622,14 +623,63 @@ pending proposal is kept and `replan` returns its id again.
 An automatic replan triggered by a `situation` or `command` read runs in a background
 thread, so the read never waits for it; its proposals appear in the next `command` poll.
 
+### Evacuee route choice (road-class factor)
+
+Evacuees may drive every public road, but they leave their neighbourhood on local streets and
+then funnel onto arterials and collectors, which carry evacuations. Every evacuee path search
+therefore uses one generalized cost, `travel time x road-class factor`. Responder and apparatus
+routes do not (`livecore.inbound`, `livecore.apparatus_travel`, road access R01-R12 keep their
+own rules).
+
+    choice_s = length_m / (speed_kph / 3.6) x road_class_factor(highway)
+
+The factor only chooses the path. `eta_min`, `travel_time_s`, `distance_m`, the board's segment
+`free_flow_min` and the dispatch `Route.seconds` are free-flow time on real speeds along the chosen
+path. Blocked segments stay unusable, and the fire passes multiply `choice_s` as before.
+
+| OSM `highway` | factor | basis |
+| --- | --- | --- |
+| motorway, trunk, primary | 1.0 | Hess et al. 2015: motorway and A road x1.0. Mapping UK classes to OSM classes is judgement. |
+| secondary | 1.1 | ASSUMPTION, within the Hess B-road bound (2.0) |
+| tertiary | 1.2 | ASSUMPTION, within the Hess B-road bound (2.0) |
+| unclassified, residential | 1.5 | ASSUMPTION, within the Hess other-road bound (2.5); direction from Wong et al. 2020 |
+| living_street | 2.0 | ASSUMPTION |
+| service | 2.0 | ASSUMPTION, below the Hess other-road value (2.5) |
+| track, and any class not listed | 2.5 | Hess other-road value (2.5), an HGV value applied to cars |
+| `*_link` | parent class | Hess: slip roads take their road type |
+
+Sources:
+- Direction: Wong, Broader & Shaheen (2020), *Review of California Wildfire Evacuations from 2017
+  to 2019*, UC ITS, doi:10.7922/G29G5K2R, Table 10. Local roads were the primary road type (more
+  than 50 % of the drive) for only 2.7-4.7 % of evacuees, against 32-62 % for highways and
+  15-27 % for major roads.
+- Direction: Dow & Cutter (2000), Natural Hazards Center QR #128, Hurricane Floyd. Interstates
+  carried the traffic, state and county roads stayed light, and this was put down to evacuees'
+  reluctance to use less familiar routes.
+- Magnitude: Hess, Quddus, Rieser-Schuessler & Daly (2015), *Transp. Res. Part E* 77:29-44,
+  doi:10.1016/j.tre.2015.01.010. Realistic route sets used link cost = free-flow time x 1.0 / 2.0 /
+  2.5 by road type, calibrated to observed road-type shares. These are heavy goods vehicles, so
+  the values are an upper bound for cars.
+- No verified study estimates how car drivers value local-street time against motorway time.
+
+Where it applies:
+- `livecore.routing` (`EVACUEE_ROAD_CLASS_FACTOR`, the canonical table) covers `best_routes` and
+  `alternative_routes`. That includes the live planner, the twin plan, and the command board's
+  `POST /api/demo/routes`.
+- The live drill's traffic twin uses the same table: `sim.traffic.TrafficParams.road_class_factor`
+  is set by `api/live/twin_service.py` and scales route cost (free-flow plus queue seconds), not
+  travel. The setting is off by default in `sim/`, so replays keep their results and fingerprints.
+- The dispatch and Studio engines use `evacueeTree` in app/src/dispatch/routing.ts, a copy of the
+  table, for zones, loading groups and packets.
+
 ### Congestion-aware planning (planner-v4, ADR 0031-congestion-aware-planner)
 
 Every replan reads the traffic twin's current per-edge state once (simulated; `inputs.congestion
 = "twin@<twin clock>"`) and multiplies each directed edge's search cost by the same factor as
 responder routes: `factor = clamp(free_flow_kph / speed_kph, 1, 10)` on edges with at least
-`CONGESTION_MIN_VEH` (3) simulated vehicles (speed 0 gives 10), 1 elsewhere. So the edge cost is
+`CONGESTION_MIN_VEH` (3) simulated vehicles (speed 0 gives 10), 1 elsewhere. So the evacuee edge cost is
 
-    cost_s = length_m / (speed_kph / 3.6) x fire_weight x factor
+    cost_s = length_m / (speed_kph / 3.6) x road_class_factor x fire_weight x factor
 
 with `fire_weight` 1, `EXPOSED_COST_BUFFER` (5) or `EXPOSED_COST_INSIDE` (20) by pass, as before.
 Route selection, destination choice and alternatives use it; `eta_min` and `distance_m` do not

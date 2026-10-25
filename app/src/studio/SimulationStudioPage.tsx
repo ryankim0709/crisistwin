@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType }
 import type { GeoPoint } from "../fire/spread";
 import type { ScheduledFireRun } from "../fire/scheduledTypes";
 import { formatElapsed, cellAt } from "../fire/spread";
+import { cellStateCounts, createRunCellStates, unattendedFireState } from "../fire/fireStates";
 import {
   buildRandomScenario,
   PLACEMENT_LABELS,
@@ -903,28 +904,26 @@ export default function SimulationStudioPage({
           ))}
         </select>
       </div>
+      <div className="studio-field">
+        <label htmlFor="studio-quick-seed">Seed</label>
+        <input
+          id="studio-quick-seed"
+          className="ui-input"
+          type="text"
+          inputMode="numeric"
+          value={seedText}
+          placeholder="Random"
+          onChange={(e) => setSeedText(e.target.value)}
+        />
+      </div>
       <Button
+        block
         onClick={() => handleRandomScenario(true)}
         disabled={state.phase === "loading-landscape" || state.phase === "computing" || randomJob !== null}
         title="Build a seeded random fire in this area and run it. Simulated."
       >
         {randomJob ? "Building…" : "Generate random scenario"}
       </Button>
-      <details>
-        <summary className="studio-hint">Seed {seedText || "(new each time)"}</summary>
-        <label className="studio-hint">
-          Use seed…{" "}
-          <input
-            type="text"
-            inputMode="numeric"
-            value={seedText}
-            placeholder="new each time"
-            onChange={(e) => setSeedText(e.target.value)}
-            aria-label="Random scenario seed"
-            style={{ width: "9em" }}
-          />
-        </label>
-      </details>
       {randomSummary && <p className="studio-hint">{randomSummary} (simulated)</p>}
     </div>
   );
@@ -1245,6 +1244,59 @@ export default function SimulationStudioPage({
         : null,
     [result, shownRun],
   );
+  // Legible fire states of the run the diorama and map show (fire/fireStates.ts): flame bands and
+  // crown fire from the solver's per-cell behaviour (the free run's when the shown run, such as
+  // direct attack, was re-solved without it: same landscape and weather), blue edge once crews
+  // put a fire out. Studio puts no individual cell out, so extinguishedAt stays null.
+  const runStates = useMemo(() => {
+    if (!result || !shownRun) return null;
+    const attack = firefighting?.initialAttack ?? null;
+    const planIsAttack = firefighting?.best?.score.strategy === "initial_attack";
+    const attackShown =
+      attack !== null &&
+      (shownRun === attack.run || (planIsAttack && shownRun === firefighting?.best?.run));
+    return createRunCellStates({
+      grid: result.landscape,
+      arrivalMinutes: shownRun.arrivalMinutes,
+      behaviour: shownRun.cellBehaviour ?? result.run.cellBehaviour ?? null,
+      owner: shownRun.sourceIndexByCell,
+      owners: shownRun.input.sources.length,
+      outFrom: attackShown ? attack.estimate.outFromMinuteBySource : null,
+      horizonMinutes: result.scenario.settings.horizonMinutes,
+    });
+  }, [result, shownRun, firefighting]);
+  const fireStateLegend = useMemo(
+    () => ({
+      flameBands: !!(shownRun?.cellBehaviour ?? result?.run.cellBehaviour),
+      containment: firefighting !== null,
+    }),
+    [shownRun, result, firefighting],
+  );
+  // Fires no unit attacked that the free run leaves with nothing flaming or smouldering at the
+  // horizon: the results say they burned out on their own instead of "still burning".
+  const burnedOutOnItsOwn = useMemo<ReadonlySet<string>>(() => {
+    const ids = new Set<string>();
+    const base = result?.run;
+    const fires = firefighting?.initialAttack?.estimate.fires;
+    if (!result || !base || !fires) return ids;
+    const pending = fires.filter((f) => f.ignitedMinute !== null && f.outMinute === null && !f.attackable);
+    if (pending.length === 0) return ids;
+    const states = createRunCellStates({
+      grid: result.landscape,
+      arrivalMinutes: base.arrivalMinutes,
+      behaviour: base.cellBehaviour ?? null,
+      owner: base.sourceIndexByCell,
+      owners: base.input.sources.length,
+      horizonMinutes: result.scenario.settings.horizonMinutes,
+    });
+    const counts = cellStateCounts(base.input.sources.length);
+    states.at(result.scenario.settings.horizonMinutes, counts);
+    for (const fire of pending) {
+      const index = base.input.sources.findIndex((source) => source.id === fire.sourceId);
+      if (index >= 0 && unattendedFireState(counts.flaming[index], counts.smouldering[index]) === "burned_out") ids.add(fire.sourceId);
+    }
+    return ids;
+  }, [result, firefighting]);
   const dioramaIgnitions = useMemo<DioramaIgnition[]>(
     () =>
       scenario.ignitions
@@ -1332,6 +1384,9 @@ export default function SimulationStudioPage({
                 startMs={startMsOf(result?.scenario.firefighting ?? DEFAULT_FIREFIGHTING)}
                 landscape={dioramaLandscape}
                 run={dioramaShowsRun ? dioramaRun : null}
+                fireStates={dioramaShowsRun ? runStates : null}
+                fireStatesGrid={dioramaShowsRun ? (result?.landscape ?? null) : null}
+                fireStateLegend={fireStateLegend}
                 ignitions={dioramaIgnitions}
                 windFromDegrees={displayWind.fromDegrees}
                 windSpeedMph={displayWind.speedMph}
@@ -1552,6 +1607,8 @@ export default function SimulationStudioPage({
                 selectedId={selectedId}
                 mode={mode}
                 visibleFrames={visibleFrames}
+                fireStates={dioramaShowsRun ? runStates : null}
+                fireStatesGrid={dioramaShowsRun ? (result?.landscape ?? null) : null}
                 currentMinute={currentMinute}
                 horizonMinutes={playbackHorizon}
                 windSpeedMph={displayWind.speedMph}
@@ -1726,6 +1783,7 @@ export default function SimulationStudioPage({
                         names={fireNames}
                         stale={stale}
                         handoff={handoff}
+                        burnedOutOnItsOwn={burnedOutOnItsOwn}
                         dispatch={result?.crewDispatch ?? null}
                         dispatchNote={result?.crewDispatchNote ?? null}
                         shown={fireShown}

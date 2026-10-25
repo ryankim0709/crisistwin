@@ -1,0 +1,659 @@
+/* The right-hand panel of /run and /live (AgentInputsPanel.tsx): incident status, what Claude knows
+   now, what Claude did. Layout and typography only; kit components style themselves. Prefix ais-.
+   Tokens only. Set --ais-max-height on a host (none | 100% | 60vh) to size the panel; it scrolls
+   vertically only (nothing inside may push it wider: min-width 0 on every child, long ids wrap,
+   one-line rows end in an ellipsis). */
+
+.ais-root {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ct-space-3);
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 0;
+  max-width: 100%;
+  max-height: var(--ais-max-height, 80vh);
+  padding: var(--ct-space-3) var(--ct-space-4);
+  border-bottom: 1px solid var(--ct-border-subtle);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+.ais-root--embedded {
+  padding: 0;
+  border-bottom: 0;
+}
+.ais-root * {
+  min-width: 0;
+  box-sizing: border-box;
+}
+/* Glyphs and chip marks keep their own width (a squeezed glyph spills over its neighbour). */
+.ais-root .ui-tag,
+.ais-root .ui-tag > *,
+.ais-root .ais-delta > [aria-hidden],
+.ais-root .ais-chan > [aria-hidden] {
+  flex: none;
+  min-width: auto;
+}
+.ais-head {
+  display: grid;
+  gap: var(--ct-space-1);
+}
+.ais-head-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ct-space-2);
+}
+.ais-head h2 {
+  font-size: var(--ct-text-base);
+  font-weight: var(--ct-weight-semibold);
+}
+.ais-head-note,
+.ais-meta {
+  margin: 0;
+  font-size: var(--ct-text-xs);
+  color: var(--ct-ink-muted);
+}
+.ais-head-note .ui-tag {
+  vertical-align: baseline;
+}
+
+.ais-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ---- the three blocks: incident status, what Claude knows now, what Claude did ---- */
+
+.ais-block {
+  display: grid;
+  gap: var(--ct-space-2);
+  align-content: start;
+  padding-top: var(--ct-space-3);
+  border-top: 1px solid var(--ct-border-subtle);
+}
+.ais-incident {
+  padding-top: 0;
+  border-top: 0;
+}
+.ais-block-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ct-space-1) var(--ct-space-2);
+}
+.ais-block-head h3 {
+  flex: 0 1 auto;
+  font-size: var(--ct-text-base);
+  font-weight: var(--ct-weight-semibold);
+}
+.ais-block-time {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.ais-block p,
+.ais-block ul,
+.ais-block ol {
+  margin: 0;
+}
+.ais-sub {
+  display: grid;
+  gap: 2px;
+  font-size: var(--ct-text-sm);
+}
+.ais-sub .ui-eyebrow {
+  margin: 0 0 2px;
+}
+.ais-sub p,
+.ais-sub li {
+  margin: 0;
+  line-height: var(--ct-leading-snug);
+}
+
+/* One line with an ellipsis (the full text is the tooltip); two lines for the "why" lines. */
+.ais-ellip {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ais-ellip2 {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+.ais-lines {
+  display: grid;
+  gap: var(--ct-space-1);
+  padding: 0;
+  list-style: none;
+}
+
+/* Fires: id and status on one line, size and spread under it. */
+.ais-fire {
+  padding: 2px var(--ct-space-2);
+  border-left: 3px solid var(--ct-border);
+}
+.ais-fire-head {
+  display: flex;
+  align-items: center;
+  gap: var(--ct-space-1);
+}
+.ais-fire-head > strong {
+  flex: 1 1 auto;
+  font-size: var(--ct-text-sm);
+}
+.ais-fire-head > .ui-tag {
+  flex: none;
+}
+.ais-fire-line {
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-xs);
+}
+.ais-fire-line strong {
+  color: var(--ct-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Incident totals: two columns of label over value. */
+.ais-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--ct-space-1);
+  margin: 0;
+}
+.ais-stat {
+  display: grid;
+  gap: 0;
+  padding: var(--ct-space-1) var(--ct-space-2);
+  border: 1px solid var(--ct-border-subtle);
+  border-radius: var(--ct-radius-sm);
+  background: var(--ct-surface);
+}
+.ais-stat dt {
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-2xs);
+}
+.ais-stat dd {
+  display: flex;
+  align-items: baseline;
+  gap: var(--ct-space-1);
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+.ais-stat dd strong {
+  flex: none;
+  font-size: var(--ct-text-base);
+  font-weight: var(--ct-weight-semibold);
+}
+.ais-stat dd small,
+.ais-unit small {
+  flex: 1 1 auto;
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-2xs);
+  font-weight: 400;
+}
+.ais-units {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--ct-space-1);
+}
+.ais-unit {
+  display: grid;
+  gap: 0;
+  padding: var(--ct-space-1) var(--ct-space-2);
+  border: 1px solid var(--ct-border-subtle);
+  border-radius: var(--ct-radius-sm);
+  background: var(--ct-surface);
+  font-variant-numeric: tabular-nums;
+}
+.ais-unit > span {
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-2xs);
+}
+.ais-unit strong {
+  font-size: var(--ct-text-sm);
+  font-weight: var(--ct-weight-semibold);
+}
+
+/* Why it was last called. */
+.ais-why {
+  display: grid;
+  gap: 2px;
+  padding: var(--ct-space-1) var(--ct-space-2);
+  border-left: 3px solid var(--ct-info);
+  border-radius: var(--ct-radius-xs);
+  background: var(--ct-info-soft);
+}
+.ais-why p {
+  font-size: var(--ct-text-sm);
+  line-height: var(--ct-leading-snug);
+}
+.ais-why .ais-meta {
+  font-size: var(--ct-text-xs);
+}
+
+/* Zones at risk and units: small grids, never wider than the panel. */
+.ais-zt,
+.ais-ut {
+  display: grid;
+  gap: 0;
+  font-size: var(--ct-text-xs);
+  font-variant-numeric: tabular-nums;
+}
+.ais-zt-row,
+.ais-ut-row {
+  display: grid;
+  align-items: center;
+  column-gap: var(--ct-space-2);
+}
+.ais-zt-row {
+  grid-template-columns: minmax(0, 1fr) repeat(3, 3.2em) minmax(0, 6.6em);
+}
+.ais-ut-row {
+  grid-template-columns: minmax(0, 1fr) repeat(3, 4.4em);
+}
+.ais-zt-head {
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-2xs);
+  font-weight: var(--ct-weight-semibold);
+}
+.ais-zt-num {
+  text-align: right;
+}
+.ais-zt-name {
+  display: grid;
+}
+.ais-zt-name > .ais-ellip:first-child {
+  font-size: var(--ct-text-sm);
+  font-weight: var(--ct-weight-medium);
+}
+.ais-zt-name small,
+.ais-ut-row small {
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-2xs);
+}
+.ais-zt-order {
+  display: flex;
+  justify-content: flex-end;
+}
+.ais-zt-order .ui-tag {
+  padding-inline: 6px;
+}
+.ais-zt-row:not(.ais-zt-head),
+.ais-ut-row:not(.ais-zt-head) {
+  padding-block: 2px;
+  border-top: 1px solid var(--ct-border-subtle);
+}
+
+/* Radio and calls: one line each. */
+.ais-comm-time {
+  color: var(--ct-ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+.ais-comm-from {
+  font-weight: var(--ct-weight-medium);
+}
+.ais-sev {
+  color: var(--ct-danger);
+}
+
+/* What Claude did: one card per decision, newest first. */
+.ais-feed {
+  display: grid;
+  gap: var(--ct-space-2);
+  padding: 0;
+  list-style: none;
+}
+.ais-act {
+  display: grid;
+  gap: var(--ct-space-1);
+  padding: var(--ct-space-2) var(--ct-space-3);
+  border: 1px solid var(--ct-border);
+  border-radius: var(--ct-radius-md);
+  background: var(--ct-surface);
+}
+.ais-act--latest,
+.ais-act--live {
+  border-color: var(--ct-brand);
+}
+.ais-act-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ct-space-1) var(--ct-space-2);
+}
+.ais-act-time {
+  font-size: var(--ct-text-sm);
+  font-variant-numeric: tabular-nums;
+}
+.ais-act-took {
+  margin-left: auto;
+  text-align: right;
+}
+.ais-acts {
+  display: grid;
+  gap: 2px;
+  padding: 0;
+  list-style: none;
+}
+.ais-ac {
+  display: grid;
+  grid-template-columns: 1.2em minmax(0, 1fr);
+  gap: var(--ct-space-1);
+  font-size: var(--ct-text-sm);
+  line-height: var(--ct-leading-snug);
+}
+.ais-ac-mark {
+  color: var(--ct-success);
+  font-weight: var(--ct-weight-bold);
+  text-align: center;
+}
+.ais-ac--no,
+.ais-ac--no .ais-ac-mark {
+  color: var(--ct-danger);
+}
+.ais-ac-text {
+  overflow-wrap: anywhere;
+}
+.ais-ac-err {
+  display: block;
+  font-size: var(--ct-text-xs);
+}
+.ais-act-none {
+  margin: 0;
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-sm);
+}
+.ais-act-why {
+  margin: 0;
+  padding: var(--ct-space-1) var(--ct-space-2);
+  border-left: 3px solid var(--ct-info-border);
+  border-radius: var(--ct-radius-xs);
+  background: var(--ct-surface-sunken);
+  font-size: var(--ct-text-sm);
+  line-height: var(--ct-leading-snug);
+  overflow-wrap: anywhere;
+}
+.ais-act-why .ui-tag {
+  vertical-align: baseline;
+}
+.ais-call-details {
+  padding-top: var(--ct-space-1);
+  border-top: 1px solid var(--ct-border-subtle);
+}
+.ais-call-details > summary {
+  font-weight: var(--ct-weight-semibold);
+}
+.ais-call-details > .ais-call-body {
+  padding-top: var(--ct-space-1);
+}
+
+/* The call's own sections (inside the details): a caret and a title row that wraps. */
+.ais-call-body {
+  display: grid;
+  gap: var(--ct-space-1);
+}
+.ais-sec {
+  border-top: 1px solid var(--ct-border-subtle);
+  padding-top: var(--ct-space-1);
+}
+.ais-sec > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--ct-space-1) var(--ct-space-2);
+  cursor: pointer;
+  list-style: none;
+}
+.ais-sec > summary::-webkit-details-marker {
+  display: none;
+}
+.ais-sec > summary::before {
+  content: "▸";
+  color: var(--ct-ink-muted);
+}
+.ais-sec[open] > summary::before {
+  content: "▾";
+}
+.ais-sec > summary h3 {
+  font-size: var(--ct-text-sm);
+  font-weight: var(--ct-weight-semibold);
+}
+.ais-sec-sum {
+  flex: 1 1 14ch;
+  font-size: var(--ct-text-xs);
+  color: var(--ct-ink-muted);
+}
+.ais-sec-body {
+  display: grid;
+  gap: var(--ct-space-2);
+  padding: var(--ct-space-2) 0 var(--ct-space-2) var(--ct-space-2);
+}
+
+/* What changed since the previous call. */
+.ais-changes {
+  display: grid;
+  gap: var(--ct-space-1);
+  padding: var(--ct-space-2) var(--ct-space-3);
+  border: 1px solid var(--ct-info-border);
+  border-left-width: 4px;
+  border-radius: var(--ct-radius-sm);
+  background: var(--ct-info-soft);
+}
+.ais-changes--none {
+  border-color: var(--ct-border);
+  background: var(--ct-surface-sunken);
+}
+.ais-changes h3 {
+  font-size: var(--ct-text-sm);
+  font-weight: var(--ct-weight-semibold);
+}
+
+.ais-bullets,
+.ais-rows,
+.ais-comms,
+.ais-orders {
+  display: grid;
+  gap: var(--ct-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ais-bullets {
+  padding-left: var(--ct-space-4);
+  list-style: disc;
+  font-size: var(--ct-text-sm);
+}
+.ais-urgency {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ct-space-2);
+  margin: 0;
+}
+.ais-since {
+  margin: 0;
+  font-size: var(--ct-text-xs);
+  color: var(--ct-ink-muted);
+}
+
+/* Rows (fires, zones, roads, injuries) inside a call's details. */
+.ais-row {
+  padding: var(--ct-space-1) var(--ct-space-2);
+  border-left: 3px solid var(--ct-border);
+  border-radius: var(--ct-radius-xs);
+}
+.ais-row--changed {
+  border-left-color: var(--ct-info);
+  background: var(--ct-info-soft);
+}
+.ais-row-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ct-space-1) var(--ct-space-2);
+  font-size: var(--ct-text-sm);
+}
+.ais-row-detail,
+.ais-summary,
+.ais-assessment,
+.ais-live,
+.ais-usage {
+  margin: 0;
+  font-size: var(--ct-text-sm);
+  line-height: var(--ct-leading-snug);
+  overflow-wrap: anywhere;
+}
+.ais-empty {
+  margin: 0;
+  font-size: var(--ct-text-sm);
+  color: var(--ct-ink-muted);
+}
+
+/* "New" / "up" / "down" / "changed" markers: a shape plus words. */
+.ais-delta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ct-space-1);
+  max-width: 100%;
+  padding: 1px var(--ct-space-2);
+  border: 1px solid var(--ct-info-border);
+  border-radius: var(--ct-radius-pill);
+  background: var(--ct-surface);
+  color: var(--ct-info);
+  font-size: var(--ct-text-2xs);
+  font-weight: var(--ct-weight-semibold);
+}
+/* Up and down carry no good/bad tone: whether more is worse depends on the figure, so the arrow
+   and the "was ..." words say what moved and the colour stays neutral. */
+
+/* Resources table (inside a call's details). */
+.ais-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: var(--ct-text-sm);
+}
+.ais-table th,
+.ais-table td {
+  padding: var(--ct-space-1) var(--ct-space-1);
+  border-bottom: 1px solid var(--ct-border-subtle);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+.ais-table thead th {
+  font-size: var(--ct-text-2xs);
+  font-weight: var(--ct-weight-semibold);
+  color: var(--ct-ink-muted);
+}
+.ais-table th[scope="row"],
+.ais-table thead th:first-child {
+  width: 34%;
+  text-align: left;
+  font-weight: var(--ct-weight-medium);
+}
+.ais-table-sub {
+  display: block;
+  font-size: var(--ct-text-2xs);
+  font-weight: 400;
+  color: var(--ct-ink-muted);
+}
+
+/* Radio and calls ticker in a call's details: a glyph and the channel's name, never colour alone. */
+.ais-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ct-space-1) var(--ct-space-3);
+  margin: 0;
+  font-size: var(--ct-text-xs);
+  color: var(--ct-ink-muted);
+}
+.ais-comm {
+  padding: var(--ct-space-1) var(--ct-space-2);
+  border-left: 3px solid var(--ct-border);
+}
+.ais-comm--new {
+  border-left-color: var(--ct-info);
+  background: var(--ct-info-soft);
+}
+.ais-comm-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ct-space-1) var(--ct-space-2);
+  font-size: var(--ct-text-xs);
+}
+.ais-chan {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ct-space-1);
+  font-weight: var(--ct-weight-semibold);
+}
+.ais-comm-text {
+  margin: 0;
+  font-size: var(--ct-text-sm);
+  overflow-wrap: anywhere;
+}
+
+/* Claude's streamed text, reasons and assessment. */
+.ais-live {
+  color: var(--ct-ink-muted);
+  font-style: italic;
+  white-space: pre-wrap;
+}
+.ais-more > summary {
+  cursor: pointer;
+  font-size: var(--ct-text-xs);
+  color: var(--ct-ink-muted);
+}
+.ais-assessment {
+  margin-top: var(--ct-space-1);
+  padding: var(--ct-space-2);
+  border-radius: var(--ct-radius-sm);
+  background: var(--ct-surface-sunken);
+  white-space: pre-wrap;
+}
+.ais-usage {
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-xs);
+}
+
+/* Exact input. */
+.ais-exact-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ct-space-2);
+}
+.ais-json {
+  max-height: 320px;
+  margin: 0;
+  padding: var(--ct-space-2);
+  overflow-x: hidden;
+  overflow-y: auto;
+  border: 1px solid var(--ct-border-subtle);
+  border-radius: var(--ct-radius-sm);
+  background: var(--ct-surface-sunken);
+  font-family: var(--ct-font-mono);
+  font-size: var(--ct-text-2xs);
+  line-height: var(--ct-leading-snug);
+  /* Wrapped, never scrolled sideways. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ais-root > .lc-agent-spend {
+  margin: 0;
+}

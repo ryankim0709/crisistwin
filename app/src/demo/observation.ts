@@ -25,6 +25,7 @@
  * fire has touched it (zone.knownTouchedAt); the board still counts them (outcomes, audit log).
  */
 
+import { selfEvacuated, selfEvacuating } from "./selfEvacuation";
 import type {
   AttackPositionObservation,
   CrewObservation,
@@ -88,13 +89,17 @@ import {
 import { LOOKAHEAD_MINUTES } from "./fireField";
 import { fireStateAreas } from "./fireState";
 import { heldEdge, unitsWorking } from "./suppression";
-import { ORDER_COMPLIANCE, accessClassOf, holdsFlameFeet, kindLabel } from "./realism";
+import { ORDER_COMPLIANCE, accessClassOf, fireKindOf, holdsFlameFeet, kindLabel } from "./realism";
 import { departmentStatus, dispatchable, fireEdgeSample, idleOnSceneReason, initialAttackRecommendation, isReported, reachFraction, unitAccessText } from "./boardResponse";
 import { TANK_GALLONS } from "../response/units";
 import { computeStrategyOptions, strategyLabel } from "./strategyOptions";
 import { closedIds, closedRoadsObservation, closureKey } from "./roadClosures";
+import { simCommsObservation } from "./simComms";
+import { emsObservation } from "./injuries";
 import { simClock } from "./format";
 import { EVAC_SCHEDULE_LABEL, evacuationSchedule, strategyAid, type ZoneEvacPlan } from "./decisionAids";
+import { predictedObservation } from "./predict";
+import { evacBalanceObservation } from "./evacBalance";
 import { runScore } from "./scoring";
 import { ALL_CLEAR_HOLD_MINUTES, ALL_CLEAR_WINDOW_MINUTES, allClearCheck, allClearCitation } from "./allClear";
 
@@ -115,7 +120,7 @@ function strategyObs(board: Board, fire: Fire): Pick<FireObservation, "strategy_
       flame_ft: Math.round(o.flameFt * 10) / 10,
       holds_flame_ft: o.holdsFlameFt,
       units_needed: o.unitsNeeded,
-      send: o.send.map((s) => ({ crew_id: s.team.id, kind: s.team.kind, eta_min: Math.round(s.etaMin), route: s.road ? "road" : "estimate" })),
+      send: o.send.map((s) => ({ crew_id: s.team.id, kind: fireKindOf(s.team), eta_min: Math.round(s.etaMin), route: s.road ? "road" : "estimate" })),
       already_assigned: o.assigned.map((t) => t.id),
       outcome: o.outcome,
       contained_in_min: minutes(o.containedInMin),
@@ -273,6 +278,7 @@ function responseObservation(board: Board): DemoObservation["response"] {
     dispatch_level_now: dispatchLevel(boardMoistureClass(board), wind.speedMetersPerSecond),
     departments: departmentStatus(board),
     mutual_aid_pool_units: r.pool.length,
+    ems: emsObservation(board),
     // Bounded for the 200 kB decide body: assigned aircraft first, at most MAX_LISTED.
     aircraft: [...r.aircraft]
       .sort((a, b) => Number(a.fireId === null) - Number(b.fireId === null))
@@ -464,6 +470,7 @@ export function buildObservation(
       zone.lift !== null ||
       zone.pendingOrder !== null ||
       zone.warning !== null ||
+      selfEvacuating(zone) ||
       knownOverrun(zone) ||
       f?.edgeEta != null ||
       f?.coreEta != null ||
@@ -570,6 +577,8 @@ export function buildObservation(
       margin_min: margin === null ? null : Math.round(margin),
       destination_id: ordered ? (zone.route?.destination_id ?? null) : null,
       options: options.map((o, i) => routeObs(o, estimates[i])),
+      self_evacuated: selfEvacuated(zone, minute),
+      self_evac_cue: zone.selfEvac?.cue ?? null,
     };
   });
 
@@ -641,7 +650,10 @@ export function buildObservation(
       position_id: team.lineId ? (board.lines.find((l) => l.id === team.lineId)?.plan.id ?? null) : null,
       department: board.response.departments.find((d) => d.id === team.department)?.name ?? team.department,
       tier: team.tier,
-      water_pct: team.waterGallons === null ? null : Math.round((team.waterGallons / (TANK_GALLONS[team.kind] ?? team.waterGallons)) * 100),
+      water_pct:
+        team.waterGallons === null || team.kind === "ambulance"
+          ? null
+          : Math.round((team.waterGallons / (TANK_GALLONS[team.kind] ?? team.waterGallons)) * 100),
       work_h: round1(team.workMinutes / 60),
       parked_m: team.parkedM === null || !team.accessKnown ? null : Math.round(team.parkedM),
       from_fire_m: fire && fire.status === "burning" ? edgeDistanceM(fireEdgeSample(board, fire), teamPosition(board, team)) : null,
@@ -771,8 +783,11 @@ export function buildObservation(
         ];
       }),
     },
+    predicted: predictedObservation(board, routes),
+    evac_balance: evacBalanceObservation(board, routes, plans),
     incident_picture: incidentPicture,
     closed_roads: closedRoadsObservation(board),
+    sim_comms: simCommsObservation(board),
   };
 }
 
@@ -793,6 +808,9 @@ function outcomesObs(board: Board): NonNullable<DemoObservation["outcomes"]> {
     homes_reached_saved: s.homesReachedSaved,
     homes_method: s.homesMethod,
     area_burned_ha: s.areaBurnedHa,
+    injured_people: s.injuries.injuredPeople,
+    injury_deaths: s.injuries.injuryDeaths,
+    injured_open: s.injuries.openPeople,
   };
 }
 
@@ -879,6 +897,8 @@ export type WakeKind =
   | "all_clear_eligible"
   | "refused"
   | "live_report"
+  /** A new simulated life-threat call (trapped party, critical injury; simComms.ts), used by useDemoAgent's realtime pacing. */
+  | "life_threat_call"
   | "continuous_review"
   | "periodic_review"
   | "changes";
@@ -1001,6 +1021,12 @@ function slackTiers(board: Board, forecasts: Map<string, ZoneForecast>): Record<
     out[zone.id] = slack <= 0 ? 2 : 1;
   }
   return out;
+}
+
+/** Zones with no order in effect whose order slack is spent (the zone_slack wake's "already late" tier); useDemoAgent's realtime pacing calls the agent at once for a new one. */
+export function lateZoneIds(board: Board, forecasts: Map<string, ZoneForecast>): string[] {
+  const tiers = slackTiers(board, forecasts);
+  return Object.keys(tiers).filter((id) => tiers[id] === 2);
 }
 
 /** Whether the fire's chosen strategy is not containable now or no longer offered (strategyOptions.ts). */

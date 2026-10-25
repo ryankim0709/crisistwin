@@ -224,7 +224,12 @@ Live as `report_minute` ([live-reports.md](live-reports.md#studio-fires)).
 `report_minute` is reported at ignition + (`report_minute` − `start_minute`), the same offset
 convention as its start (`model.ts` `studioReportAfterMin`), with `reported_by: "studio"` and the
 reason "report time set in Simulation Studio (S1, 15 min after ignition), not modelled". The
-modelled delay is still drawn (and discarded), so the seeded stream is the same either way.
+modelled delay is still drawn (and discarded). The response draws have keyed streams from the
+board seed (`boardResponse.ts` `keyedStream`: report delay per fire, keyed by its origin and
+ignition minute; out-of-service per unit and draw time; each order; each holding test), so a
+baseline run and an AI run of one seed get the same report delays and availability draws. Only
+the T+0 out-of-service draws (same in every run) and per-trip travel variation (trips happen only
+when someone acts) still use the shared response stream.
 `report_minute: null` keeps the modelled delay. A `fire_seen` field report pulls a modelled report
 forward to its own minute, but never a Studio-set one: the set time wins, and the field report is
 not joined to that fire until it is reported (it is checked again on later polls).
@@ -258,7 +263,10 @@ from it, distance to the nearest road).
 - *Homes*: the nearest developed landscape cell (FBFM40 91), or 0 inside a drill zone dense
   enough to be NFPA 1720 "suburban" (500 people/mi² or more, at 2.5 persons per household).
 - *Line of sight*: 12 elevation samples between smoke 30 m up and an eye 2 m up.
-- *Roads*: the board's evacuation route lines (drill roads; a partial network).
+- *Roads*: not used separately on the Live board (`nearestRoadM` null). The board's route lines
+  load asynchronously, so using them made a later fire's delay depend on load timing. LANDFIRE's
+  developed fuel class (NB1) includes its mapped roads, so the nearest developed cell already
+  covers a road beside the fire.
 - *Assumptions*: the ×2, the 30 m and 2 m heights, and the household size. The NFPA 1720 bands
   are labels only.
 
@@ -643,8 +651,43 @@ clock, which sets aviation daylight), and the /live board has no fixed roster.
   the OpenStreetMap fire stations the layer does not list (`withOsmStations`: an OSM station within
   500 m of a layer facility is that facility, **ASSUMPTION** as `crewDispatch.ts`). The layer covers
   wildland protection, so city departments (San Francisco, Oakland) are often only in OSM. OSM
-  stations come from the drill package (/live) or the board's roads (`DispatchArea.stations`,
-  Studio). Without the layer, OSM stations alone. Neither path invents crew camps or air bases.
+  stations come from `GET /api/suppression/stations` on /live (the same stations every map and
+  the 3D board draw: every OSM station on the board, plus the nearest 40 off it as the mutual-aid
+  pool; the drill package's stations only when that endpoint has none) or the board's roads
+  (`DispatchArea.stations`, Studio). Without the layer, OSM stations alone. Neither path invents
+  crew camps or air bases.
+- **Local departments** (`response/departments.ts`): an OSM station whose name or operator tag
+  names a known department around Berkeley (Berkeley FD, Oakland FD, EBRPD, Albany, Piedmont,
+  Kensington, El Cerrito, Moraga-Orinda, Con Fire, Richmond, Alameda County FD, Alameda FD,
+  Emeryville, SFFD; three untagged OSM elements are aliased by id) joins that department, so
+  drawdown works on the whole department. Its units come from the department's published
+  per-station roster where one was found (Berkeley FD, El Cerrito FD, Piedmont FD, Alameda FD,
+  EBRPD Station 1 from their own pages; Oakland FD from the Wikipedia station table, secondary),
+  else one Type 1 engine (**ASSUMPTION**, as a layer local station). Units are staffed crews: a
+  station housing a Type I and a cross-staffed Type III fields one crew, on the Type III
+  (**ASSUMPTION** that it takes the wildland engine). Career departments (BFD, OFD) turn out at
+  the paid 80 s.
+- **Ambulances** (`Fleet.ems`, `board.response.ems`): ALS medic units from published rosters
+  only: Berkeley FD Medic 1, 2, 3 and 5, Piedmont Medic 1, Alameda FD Medic 1-4. Turnout 60 s (NFPA 1710
+  4.1.2.1.2 EMS turnout, as cited). Oakland and most of Alameda County are served by Falck under
+  the county exclusive operating area (Albany, Berkeley, Piedmont and Alameda fire departments
+  transport themselves), whose units are not station-based, so none are placed. They are not fire
+  units; the injury/rescue model dispatches them.
+  On the board (`demo/model.ts` buildBoardUnits) those at stations inside the board are units of
+  kind `"ambulance"` (id e.g. `Berkeley FD Medic 1`): in the observation's `crews[]`, drawn in 3D
+  (white box truck, red stripe) and listed in `response.ems` (`demo/injuries.ts` `emsObservation`:
+  counts available / responding / treating / at_hospital, per-unit state and minutes until free).
+  They never take fire orders (`dispatchable` is false; `send_crew` refuses them).
+  `send_rescue` on an `inj-*` id sends the closest free ambulance that can reach the patient by
+  road (road legs fetched ahead for the two nearest, `rescueLegWants`), else the closest free
+  engine. **ASSUMPTION** (access class): no ambulance class exists in the road-access table, so an
+  ambulance is routed as the lightest class, `engine_t4_t7` (Type 4-7 AWD engine), optimistic on
+  steep or unpaved access. After 15 min on scene (`EMS_ON_SCENE_MIN`) a transporting ambulance
+  (injury status `transported`) goes to a hospital that is not on the board and is out of service
+  `AMBULANCE_TURNAROUND_MIN` = 50 min (**ASSUMPTION**: 20 min transport out and back, no hospital
+  layer, plus 30 min offload = the California AB 40 (2023) ambulance patient offload time ceiling,
+  Health and Safety Code 1797.120.6, 30 min at the 90th percentile, used as the value for every
+  transport), drawn at its quarters meanwhile, then available.
 - **Tiers**: facilities inside the board answer initial attack (closest resource). The rest of
   the list (the endpoint returns the nearest 40 stations and 10 camps) is the mutual-aid pool.
   Beyond that, orders go to the state system ("Escalation and resource ordering").
@@ -688,7 +731,14 @@ no source ties counts to staffing.
 | CAL FIRE unit | 1 Type 2 dozer at its first (nearest) station | ASSUMPTION |
 | Local, Schedule A or contract county station | 1 Type 1 engine | ASSUMPTION, as `livecore/apparatus.py` |
 | Federal station | 1 Type 3 engine | ASSUMPTION |
-| OSM station (CAL FIRE layer unavailable) | 1 Type 3 engine | ASSUMPTION, as `dispatch/stationApparatus.ts` |
+| OSM station, Berkeley FD | 1 Type 1 engine each; Station 5's crew on its Type III (Type 3) engine; Medic 1/2/3/5 ambulances | City of Berkeley Fire Stations page and Fire Department page ("seven Type I fire engines, two aerial ladder trucks, four ALS ambulances"), fetched 2026-10-25; the Type III is cross-staffed (not in the staffed list), the crew taking it is an ASSUMPTION |
+| OSM station, Oakland FD | 1 engine each (Type 1, type not stated: ASSUMPTION); at Stations 6, 7, 23, 24, 25 the crew on its wildland unit, as a Type 3 (ASSUMPTION on type and cross-staffing); Station 22 (airport) none | Wikipedia "Oakland Fire Department" station table (secondary; 25 engines, 7 trucks, 8 wildland) |
+| OSM station, El Cerrito FD (incl. Kensington's Station 55) | Station 51: 1 Type 1; Stations 52 and 55: the crew on the Type III | elcerrito.gov Stations & Apparatus; OES 413 not counted; cross-staffing ASSUMPTION |
+| OSM station, Piedmont FD | 1 Type 1 engine, Medic 1 | piedmont.ca.gov Apparatus ("We staff 3 apparatus at all times") |
+| OSM station, Alameda FD | Stations 1-4: 1 engine (Type 1 ASSUMPTION), 1 medic unit each | alamedaca.gov station pages |
+| OSM station, EBRPD | Station 1 (Tilden): 1 Type 3 (two housed, staffing not published: one crew ASSUMPTION); others the generic OSM row | ebparks.org Equipment and Stations |
+| OSM station of another named department (`response/departments.ts`) | 1 Type 1 engine | ASSUMPTION, no verified roster (Moraga-Orinda, Con Fire, Albany, Richmond: sources blocked or not per station) |
+| OSM station, department unknown | 1 Type 3 engine | ASSUMPTION, as `dispatch/stationApparatus.ts` |
 | Conservation camp or crew fire centre (CC, FCFFC) | 2 Type 1 crews | ASSUMPTION |
 | Air attack base (AAB) | 1 air attack + 2 S-2T | Derived: 12 air tactical and 22 airtankers at 13 bases (calfire_house_2019) |
 | Helitack base (HB) | 1 Type 2 helicopter | ASSUMPTION (10 staffed helicopters, 17 bases in the layer) |
@@ -743,6 +793,37 @@ R01-R12, avoiding fire at request time. Until a leg arrives the fallback is a st
   event ("trip blocked by fire", refs action `road_blocked`) and given to the commander as
   `crews[].blocked_by_fire`; the commander or a person can send it again (a new trip starts
   with no cuts). En-route units show `crews[].road_cuts`.
+
+## Evacuation destinations (safe areas)
+
+People evacuate to places away from the fire, not to the edge of the map (dispatch-area/6,
+details in [app/backend/README.md](../app/backend/README.md) "Dispatch area exits = safe areas").
+
+- **Where from.** `GET /api/dispatch/area` lists officially designated places (curated with
+  citations in `app/backend/api/dispatch_safe_areas.json`: the City of Berkeley "Shelter Sites"
+  layer, 13 sites; the City publishes no temporary evacuation point list), FEMA ESF#6 registered
+  shelters and OSM assembly points / evacuation centres. A place inside the board is a
+  `safe-area` exit at its nearest road node; a place beyond it is reached by an `egress` road
+  leaving toward it; `map-edge` crossings remain only as a last resort. For a Berkeley Hills box
+  (built 2026-10-25, -122.34..-122.12, 37.81..37.98) 24 inside places were kept, 13 of them the
+  City's flatland sites (Berkeley High, Live Oak, James Kenney, Willard, ...), plus 6 egress
+  roads (Hwy 24, I-80, Hwy 13, I-580, I-880, I-980): hill zones have flatland destinations
+  downhill to the west, and the board closes the ones the fire threatens.
+- **Capacity.** People, from the source (FEMA `evacuation_capacity`, OSM `capacity`, curated),
+  else ASSUMPTION per kind (`ASSUMED_CAPACITY_PEOPLE`: shelter 300, evacuation centre 500,
+  temporary evacuation point 1000, assembly point 500). The drill package converts it to
+  vehicles: / `PERSONS_PER_VEHICLE` 1.38 (ESTIMATE, docs/people-data.md) and, for shelters,
+  / `PUBLIC_SHELTER_SHARE` 0.054 (Wong et al. 2020 Table 10: share of evacuees who stay in a
+  public shelter; the rest go on to family, friends or hotels).
+- **Per incident** (`app/src/demo/safeDestinations.ts`, board-side, simulated): a destination
+  is closed while the board's fire solver forecasts fire at its road node or within 300 m of it
+  (`APPROACH_BUFFER_M` = routing's `FIRE_BUFFER_M`) within `FORECAST_MINUTES` (120), or while the
+  vehicles sent there reach its `capacity_veh`. Closed ids go with every `POST /api/demo/routes`
+  as `excluded_destination_ids`, so every route option the AI or a person sees is open. If every
+  destination would close, the ones the fire reaches last stay open (`kept_last_resort`).
+- **Product choices, not sourced:** at most 24 inside places (every official one, then the
+  largest per 2.5 km cell), 6 egress roads, 300 m merge distance between listings, 75° "ahead
+  of the road" for egress, 30 km search radius.
 
 ## Studio: one incident per fire
 

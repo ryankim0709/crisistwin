@@ -235,6 +235,7 @@ export function endLiftForNewOrder(board: Board, zone: ZoneState): void {
 }
 
 function resetOrder(zone: ZoneState): void {
+  zone.selfEvac = undefined;
   zone.orderedAt = null;
   zone.route = null;
   zone.pendingOrder = null;

@@ -4,7 +4,6 @@ import {
   Button,
   EvidenceTag,
   Field,
-  IconButton,
   Kbd,
   LoadingState,
   Notice,
@@ -13,12 +12,14 @@ import {
   type SegmentedOption,
 } from "../ui";
 import AgentControl from "../demo/AgentControl";
+import AgentInputsPanel from "../demo/AgentInputsPanel";
 import BoardClock from "./BoardClock";
 import { attachBoardLayers, type BoardLayerInput, type BoardLayers, type BoardSelection } from "../demo/boardMapLayers";
 import DemoDiorama from "../demo/DemoDiorama";
 import { CONGESTION_LABEL, TRAVEL_LABEL, fireModelLabel, studioMoistureLabel, studioWindLabel } from "../demo/observation";
 import SelectedPanel from "../demo/SelectedPanel";
 import { AI_ONLY_TEXT, useCommandBoard } from "../demo/useCommandBoard";
+import { usePredictedFire } from "../demo/usePredictedFire";
 import { WorldBar } from "../world/WorldBar";
 import { useRoadAccess } from "../demo/useRoadAccess";
 import RoadClosureTool, { RoadClosurePrompt } from "./RoadClosureTool";
@@ -32,8 +33,6 @@ import ScenarioResources, { snapshotInputsLine } from "./ScenarioResources";
 import { useScenarioSnapshot } from "./scenarioSnapshot";
 import { useAuditLog } from "./useAuditLog";
 import { useTriageKeys } from "./useTriageKeys";
-// The keyboard shortcut popover's styles (lc-keys).
-import "./activity.css";
 import { useTaskRoute } from "./useTaskRoute";
 import { fetchActive } from "./active";
 import { DEFAULT_INCIDENT_ID, INCIDENT_GONE_EVENT, LiveError, readToken, runImpact, writeToken } from "./api";
@@ -70,6 +69,11 @@ const LAYER_LABEL: Record<LayerKey, string> = {
   shelters: "Shelters",
   people: "People",
   houses: "Houses",
+  noTruck: "No-truck roads",
+  stations: "Stations",
+};
+/** Full names for the shortened chips. */
+const LAYER_TITLE: Partial<Record<LayerKey, string>> = {
   noTruck: "Roads trucks can't use",
   stations: "Fire stations",
 };
@@ -133,6 +137,7 @@ function LayerToggles({
           key={key}
           type="button"
           className="lc-layer"
+          title={LAYER_TITLE[key]}
           aria-pressed={layers[key]}
           onClick={() => onToggle(key)}
         >
@@ -152,48 +157,24 @@ const KEY_HINTS: [string, string][] = [
   ["Esc", "Clear selection"],
 ];
 
-function ShortcutHint() {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const close = (e: Event) => {
-      if (
-        e instanceof KeyboardEvent ? e.key === "Escape" : !ref.current?.contains(e.target as Node)
-      )
-        setOpen(false);
-    };
-    document.addEventListener("pointerdown", close);
-    document.addEventListener("keydown", close);
-    return () => {
-      document.removeEventListener("pointerdown", close);
-      document.removeEventListener("keydown", close);
-    };
-  }, [open]);
+/** Keyboard shortcuts, in the Details drawer. */
+function ShortcutList() {
   return (
-    <div className="lc-keys" ref={ref}>
-      <IconButton
-        label="Help and keyboard shortcuts"
-        size="sm"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-      >
-        ?
-      </IconButton>
-      {open ? (
-        <div className="lc-keys-pop" role="dialog" aria-label="Help and keyboard shortcuts">
-          <p className="lc-keys-note">{AI_ONLY_TEXT}</p>
-          {KEY_HINTS.map(([k, v]) => (
-            <div key={k} style={{ display: "contents" }}>
-              <span>
-                <Kbd>{k}</Kbd>
-              </span>
-              <span>{v}</span>
-            </div>
-          ))}
-        </div>
-      ) : null}
-    </div>
+    <details className="dm-section lc-board-sec">
+      <summary>
+        <h2>Keyboard shortcuts</h2>
+      </summary>
+      <dl className="lc-keys-list">
+        {KEY_HINTS.map(([k, v]) => (
+          <div key={k}>
+            <dt>
+              <Kbd>{k}</Kbd>
+            </dt>
+            <dd>{v}</dd>
+          </div>
+        ))}
+      </dl>
+    </details>
   );
 }
 
@@ -291,6 +272,7 @@ export default function LiveCommandPage() {
   const households = useHouseholdState(data && layers.houses ? incidentToken : null, incidentId);
   // The simulated board (fires, units, households) and the AI commander, on the drill's zones.
   const cb = useCommandBoard({ token, incidentId, data, studioBoardId: active.data?.region_id ?? null });
+  const predictedFire = usePredictedFire(cb.board);
   // Controller drill road closures (close / reopen on the map); the board's units and zones route around them.
   const roadClosures = useRoadClosures({ token: unauthorized ? null : token, incidentId, board: cb.board, routes: cb.routes, bump: cb.bump });
   const { attach: attachClosures, claimsClick: claimsClosureClick, claimedClick: closureClaimed } = roadClosures;
@@ -555,6 +537,7 @@ export default function LiveCommandPage() {
             selected={cb.selection}
             extraOverlay={roadClosures.overlay3d}
             onGroundPick={roadClosures.groundClick}
+            predictedFire={predictedFire}
           />
         ) : null}
         {data ? (
@@ -675,10 +658,13 @@ export default function LiveCommandPage() {
                     <li>Congestion: {CONGESTION_LABEL}.</li>
                   </ul>
                 </details>
+                <ShortcutList />
+                <div className="dm-section">
+                  <RunStateStatus sync={runState} ready />
+                </div>
                 <p className="dm-note dm-footnote">
-                  Simulated board: fires, units and households are simulated in this browser on the {drillName} zones and
-                  roads. Fires start only from Simulation Studio runs; drill fire reports only join a fire already there.
-                  {" "}{AI_ONLY_TEXT} The board clock runs only while the AI agent is on. Not operational guidance.
+                  Simulated board on the {drillName} zones and roads, run in this browser. Fires start only from
+                  Simulation Studio. {AI_ONLY_TEXT} Not operational guidance.
                 </p>
               </>
             ) : null}
@@ -733,12 +719,12 @@ export default function LiveCommandPage() {
               </section>
             ) : null}
             <Outcomes board={board} version={cb.version} forecasts={cb.forecasts} />
+            <AgentInputsPanel agent={cb.agent} board={board} forecasts={cb.forecasts} showSpend={false} />
           </div>
           <section className="lc-sim" aria-labelledby="lc-sim-title">
             <header className="lc-sim-head">
               <h2 id="lc-sim-title">Controls</h2>
               <span className="lc-sim-aside">
-                <ShortcutHint />
                 <Button
                   variant="secondary"
                   size="sm"
@@ -753,7 +739,7 @@ export default function LiveCommandPage() {
             {/* The AI agent first: it drives the clock (AI agent only, useCommandBoard clockPause). */}
             <AgentControl agent={cb.agent} ready={!!board} autopilot={cb.autopilot} onAutopilot={cb.setAutopilot} />
             <BoardClock board={cb} />
-            <RunStateStatus sync={runState} ready={!!cb.board} />
+            <RunStateStatus sync={runState} ready={!!cb.board} problemsOnly />
             {/* Drill road closures: the same tool in the Map and 3D views (the prompt floats over the stage). */}
             <RoadClosureTool state={roadClosures} />
             {/* Shared world (docs/shared-world.md): this tab's size, weather, seed and saved scenarios. */}

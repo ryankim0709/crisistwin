@@ -5,7 +5,8 @@
  * bumps its version). The board clock holds meanwhile (model.step), so results do not depend on
  * how long a solve takes. One solve at a time; an answer for another board or minute is dropped
  * and the solve asked again. A failed solve is recorded on the board (shown by the page) and
- * retried after RETRY_WALL_MS.
+ * retried after RETRY_WALL_MS. `paused`: another driver solves for the board (the /run fast
+ * baseline, demo/fastRun.ts), so no solve starts meanwhile (one already in flight still lands).
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -34,7 +35,7 @@ function gridId(grid: LandscapeGrid): number {
   return id;
 }
 
-export function useFireSolver(board: Board | null, version: number, onApplied: () => void): FireSolverState {
+export function useFireSolver(board: Board | null, version: number, onApplied: () => void, paused = false): FireSolverState {
   const [state, setState] = useState<FireSolverState>({ solving: null, lastSolveMs: null, error: null });
   const workerRef = useRef<Worker | null>(null);
   const sentGrid = useRef<number | null>(null);
@@ -61,7 +62,7 @@ export function useFireSolver(board: Board | null, version: number, onApplied: (
   );
 
   useEffect(() => {
-    if (!board) return;
+    if (!board || paused) return;
     if (inflight.current) return;
     const due = fireSolveDue(board);
     if (due === null) {
@@ -132,7 +133,7 @@ export function useFireSolver(board: Board | null, version: number, onApplied: (
     inflight.current = { requestId, board, minute: board.minute };
     setState((s) => ({ ...s, solving: due }));
     worker.postMessage({ type: "solve", requestId, gridId: id, request } satisfies FireSolverMessage);
-  }, [board, version, retryTick]);
+  }, [board, version, retryTick, paused]);
 
   return state;
 }

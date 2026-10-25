@@ -113,8 +113,7 @@ export function RoadClosurePrompt({ state, agentOn }: { state: RoadClosuresState
           ) : (
             <>
               <p>
-                Close <strong>{candidate.name}</strong>? Drill closure: no fire unit or evacuating household will use it, and
-                routes are recomputed around it (simulated board).
+                Close <strong>{candidate.name}</strong>? Drill closure: units and evacuees route around it (simulated).
               </p>
               <div className="lc-rc-actions">
                 <Button variant="danger" size="sm" onClick={() => void state.confirmClose()} disabled={busy}>

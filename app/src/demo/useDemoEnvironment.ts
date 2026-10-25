@@ -2,7 +2,9 @@
  * Loads the /demo board's physical inputs (docs/command-demo-realism.md) and builds a
  * `DemoEnvironment`: wind (GET /api/demo/wind), the drill centre and carless households (GET
  * /api/demo/environment; every call carries `incident` for a non-Camp drill), fire facilities (GET
- * /api/suppression/bases plus the package's OSM stations the layer does not list; with no
+ * /api/suppression/bases for the CAL FIRE layer with its metadata, crew camps and air bases, plus
+ * the OpenStreetMap stations of GET /api/suppression/stations it does not list: the same stations
+ * every map draws; the drill package's OSM stations only when that endpoint has none; with no
  * snapshot they decide every local unit), and the LANDFIRE landscape the fire solver runs on (also the 3D
  * diorama's board, DemoDiorama.tsx). A Studio drill names the Studio board it was run on
  * (`region_id`, "<region>@<N>km"; `studioBoard`): that exact landscape is loaded, as Studio
@@ -344,6 +346,60 @@ export function stationsFrom(bases: SuppressionBases | null): DemoEnvironment["b
 const OSM_STATION_TYPE = "osm_fire_station";
 /** Most OSM stations the response fleet staffs (the CAL FIRE path is capped at 40 by the bases endpoint). */
 const OSM_FLEET_STATIONS = 40;
+/** GET /api/suppression/stations: CAL FIRE bases plus OpenStreetMap fire stations (app/backend/api/suppression_stations.py; OSM within 80 km). */
+export const SUPPRESSION_STATIONS_URL = "/api/suppression/stations";
+
+/** One OSM row of GET /api/suppression/stations (`source: "osm"`): observed name, operator tag and location. */
+interface OsmStationRow {
+  id: string;
+  name: string;
+  /** OSM operator tag ("" when untagged). */
+  agency: string;
+  lon: number;
+  lat: number;
+  distanceKm: number;
+}
+
+/** The OpenStreetMap rows of a /stations response (the CAL FIRE rows come from /bases with their metadata). */
+export function osmRowsFrom(json: unknown): OsmStationRow[] {
+  const rows = (json as { stations?: unknown } | null)?.stations;
+  if (!Array.isArray(rows)) return [];
+  return rows.flatMap((v) => {
+    const s = v as Record<string, unknown>;
+    if (s.source !== "osm" || s.air === true || typeof s.lon !== "number" || typeof s.lat !== "number") return [];
+    return [{
+      id: String(s.id),
+      name: typeof s.name === "string" && s.name ? s.name : "Fire station",
+      agency: typeof s.agency === "string" ? s.agency : "",
+      lon: s.lon,
+      lat: s.lat,
+      distanceKm: typeof s.distanceKm === "number" ? s.distanceKm : Number.POSITIVE_INFINITY,
+    }];
+  });
+}
+
+/**
+ * Facilities from the /stations endpoint's OpenStreetMap rows: every station on the board (they
+ * answer initial attack) plus the nearest OSM_FLEET_STATIONS off it (the mutual-aid pool), nearest
+ * the drill first. The operator tag rides in `agency`, so response/departments.ts can group a
+ * station into its department (Berkeley FD, Oakland FD, ...). Null when there are none.
+ */
+export function stationsFromOsmRows(rows: readonly OsmStationRow[], onBoard: (p: LonLat) => boolean): Station[] | null {
+  if (rows.length === 0) return null;
+  const near = [...rows].sort((a, b) => a.distanceKm - b.distanceKm || a.id.localeCompare(b.id));
+  let off = 0;
+  const kept = near.filter((r) => onBoard([r.lon, r.lat]) || off++ < OSM_FLEET_STATIONS);
+  return kept.map((r) => ({
+    id: r.id,
+    name: r.name,
+    location: [r.lon, r.lat],
+    type: OSM_STATION_TYPE,
+    source: "osm_stations",
+    basis: null,
+    engines: [],
+    ...(r.agency ? { agency: r.agency } : {}),
+  }));
+}
 
 /**
  * Facilities from a drill package's OpenStreetMap fire stations, nearest first: the fleet when the
@@ -398,32 +454,40 @@ export async function loadEnvironment(
   const studioCenter: LonLat | null = studioBoard ? [studioBoard.region.center.longitude, studioBoard.region.center.latitude] : null;
   const center: LonLat | null = centerOverride ?? envData?.center ?? fallbackCenter ?? studioCenter;
   if (!center) throw new Error("The drill has no centre to load its landscape around.");
-  const [wind, basesJson, landscape] = await Promise.all([
+  const [wind, basesJson, stationsJson, landscape] = await Promise.all([
     windPromise,
     getJson<unknown>(`${SUPPRESSION_BASES_URL}?lon=${center[0]}&lat=${center[1]}&radius_km=${BASE_RADIUS_KM}`, signal),
+    getJson<unknown>(`${SUPPRESSION_STATIONS_URL}?lon=${center[0].toFixed(3)}&lat=${center[1].toFixed(3)}&radius_km=${BASE_RADIUS_KM}`, signal),
     studioLandscape ?? loadDrillLandscape(center, zonesHalfWidthMeters, radiusMeters, onLiveLandscape, signal),
   ]);
   const parsed = basesJson ? parseBases(basesJson) : null;
   const calfire = stationsFrom(parsed);
+  // OpenStreetMap stations: the /stations endpoint's (the stations the maps draw, with their
+  // operator tag), else the drill package's.
+  const grid = landscape.grid;
+  const onBoard = (p: LonLat) => cellAt(grid, { longitude: p[0], latitude: p[1] }) >= 0;
+  const endpointOsm = stationsFromOsmRows(osmRowsFrom(stationsJson), onBoard);
   const packageBases = stationsFromPackage(envData?.stations, center);
-  // The CAL FIRE layer plus the package's OSM stations it does not list (city departments are
-  // often missing from the layer), nearest the drill centre first.
-  const merged = calfire
-    ? withOsmStations(calfire.all, packageBases?.all ?? []).sort((a, b) =>
-        center ? greatCircleKm(center, a.location) - greatCircleKm(center, b.location) || a.id.localeCompare(b.id) : 0,
-      )
-    : null;
-  const bases = merged && calfire ? { ...calfire, all: merged } : packageBases;
+  const osmStations = endpointOsm ?? packageBases?.all ?? [];
+  const osmFrom = endpointOsm ? "GET /api/suppression/stations, OpenStreetMap" : envData?.stations_source ?? "OpenStreetMap (drill package)";
+  const byDistance = (a: Station, b: Station) => greatCircleKm(center, a.location) - greatCircleKm(center, b.location) || a.id.localeCompare(b.id);
+  // The CAL FIRE layer plus the OSM stations it does not list (city departments are often
+  // missing from the layer), nearest the drill centre first.
+  const merged = calfire ? withOsmStations(calfire.all, osmStations).sort(byDistance) : null;
+  const osmOnly: DemoEnvironment["bases"] =
+    !calfire && osmStations.length > 0 ? { calfireStations: osmStations, localStations: osmStations, crewCamps: [], all: [...osmStations].sort(byDistance) } : null;
+  const bases = merged && calfire ? { ...calfire, all: merged } : osmOnly;
   const osmAdded = merged && calfire ? merged.length - calfire.all.length : 0;
+  const unitsNote = "units per facility from published department rosters where found (response/departments.ts: Berkeley FD, Oakland FD), else the labelled inventory table (response/fleet.ts)";
   const noVehicle = new Map(Object.entries(envData?.households_no_vehicle ?? {}));
   return {
     spread: { ground: groundOf(landscape), wind },
     bases,
-    basesSource: calfire ? "calfire" : packageBases ? "package" : null,
-    basesLabel: !calfire && packageBases
-      ? `${envData?.stations_source ?? "Fire stations from OpenStreetMap (drill package)"}; CAL FIRE layer unavailable, so each is one assumed Type 3 engine and there are no crew camps or air bases`
+    basesSource: calfire ? "calfire" : osmOnly ? "package" : null,
+    basesLabel: !calfire && osmOnly
+      ? `${osmStations.length} fire stations from ${osmFrom}; CAL FIRE layer unavailable, so there are no crew camps or air bases; ${unitsNote}`
       : bases
-        ? `CAL FIRE facilities layer (${parsed?.attribution ?? "CAL FIRE"})${osmAdded > 0 ? ` plus ${osmAdded} OpenStreetMap stations it does not list (one assumed Type 3 engine each)` : ""}; units per facility from the labelled inventory table (response/fleet.ts)`
+        ? `CAL FIRE facilities layer (${parsed?.attribution ?? "CAL FIRE"})${osmAdded > 0 ? ` plus ${osmAdded} stations it does not list from ${osmFrom}` : ""}; ${unitsNote}`
         : "No fire stations found on this map: no local units; resources come only from out of the area, through the state system",
     noVehicle,
     noVehicleLabel: envData?.households_no_vehicle_source ?? "Carless households unknown (counted as 0)",

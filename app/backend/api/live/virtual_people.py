@@ -39,7 +39,7 @@ from livecore import drill as drillmod
 from livecore import routing
 from livecore import virtual_people as vp
 from livecore.fire import estimate_fire
-from livecore.geo import haversine_m, simplify_line
+from livecore.geo import haversine_m, point_in_multipolygon, simplify_line
 
 from . import injects as injects_mod
 from . import twin_service
@@ -255,14 +255,27 @@ def _zone_motion(snapshot) -> dict[str, vp.ZoneMotion] | None:
         raise
 
 
-def _nearest_exit(index, home: list[float]) -> tuple[str, str, tuple[float, float]] | None:
-    """The nearest exit the planner can route to (``routing`` keeps destinations with a road node nearby)."""
+def _nearest_exit(index, home: list[float], fire_geometry=None, full: frozenset[str] = frozenset(),
+                  load: dict[str, int] | None = None) -> tuple[str, str, tuple[float, float]] | None:
+    """The nearest OPEN safe destination of any kind (shelter, evacuation point or exit) the planner can route
+    to (``routing`` keeps destinations with a road node nearby). Open = not reported full, not inside the fire
+    estimate, and, where the bundle records a capacity (``capacity_veh``), not already holding that many of the
+    virtual people (``load`` counts one vehicle per person). With none open, the nearest routable one."""
     routable = routing._index(index.drill).destination_nodes
     dests = [d for d in index.destinations.values() if d.id in routable] or list(index.destinations.values())
-    exits = [d for d in dests if d.kind == "exit"] or dests
-    if not exits:
+    safe = [d for d in dests if d.kind in ("exit", "shelter")] or dests
+
+    def is_open(d) -> bool:
+        if d.id in full:
+            return False
+        if fire_geometry and point_in_multipolygon(d.coord, fire_geometry):
+            return False
+        return d.capacity_veh is None or (load or {}).get(d.id, 0) < d.capacity_veh
+
+    pool = [d for d in safe if is_open(d)] or safe
+    if not pool:
         return None
-    d = min(exits, key=lambda d: (haversine_m(tuple(home), d.coord), d.id))
+    d = min(pool, key=lambda d: (haversine_m(tuple(home), d.coord), d.id))
     return d.id, d.name, d.coord
 
 
@@ -373,6 +386,20 @@ def _tick_locked(incident_id, run, index, clock, target, restart, snapshot, now)
             motion_cache["m"] = _zone_motion(snap)
         return motion_cache["m"]
 
+    open_cache: dict[str, Any] = {}
+
+    def open_state() -> tuple[Any, frozenset[str], dict[str, int]]:
+        """(fire estimate geometry at the target minute, destinations reported full, persons per destination),
+        read once per tick for the people who leave with no route offered."""
+        if "o" not in open_cache:
+            snap = snapshot if snapshot is not None else load_snapshot(incident_id, wall_now())
+            load: dict[str, int] = defaultdict(int)
+            for q in persons:
+                if q["state"].get("dest_id"):
+                    load[q["state"]["dest_id"]] += 1
+            open_cache["o"] = (fire.at(target)[1], snap.full_destinations, dict(load))
+        return open_cache["o"]
+
     fallbacks: dict[str, Any] = {}
     stepped = 0
     minutes: dict[datetime, tuple] = {}
@@ -386,12 +413,12 @@ def _tick_locked(incident_id, run, index, clock, target, restart, snapshot, now)
                 minutes[t] = fire.at(t)
             fkey, geometry = minutes[t]
             moving = state["phase"] in ("packing", "trip", "en_route")
-            if p["id"] not in fallbacks:
-                fallbacks[p["id"]] = _nearest_exit(index, p["home"])
+            if p["id"] not in fallbacks and not state.get("dest_id"):  # only a person with no destination yet
+                fallbacks[p["id"]] = _nearest_exit(index, p["home"], *open_state())
             ctx = vp.MinuteContext(
                 t=t, guidance=timeline.at(p["zone_id"], t), home_fire_m=fire.home_distance(fkey, geometry, p),
                 motion=(motion() or {}).get(p["zone_id"]) if moving else None,
-                help_status=help_status.get(p["party_key"]), fallback=fallbacks[p["id"]])
+                help_status=help_status.get(p["party_key"]), fallback=fallbacks.get(p["id"]))
             vp.step(p, state, ctx)
             stepped += 1
             t += timedelta(minutes=1)
@@ -497,6 +524,83 @@ def list_participants(incident_id: str) -> list[dict[str, Any]]:
     after advancing them to the drill clock. ``[]`` when there are none."""
     tick_quietly(incident_id)
     return _list(incident_id)
+
+
+# ---- follow: the track of one person (docs/app-integration.md "Follow a simulated person") --------------------
+
+
+def _address_labels(incident_id: str, index) -> dict[str, str]:
+    """The made-up street address of each person (the ``GET homes`` address, cached in ``homes``)."""
+    from . import homes  # local: homes imports this module
+
+    persons = list(col(PEOPLE).find({"incident_id": incident_id}, {"_id": 0, "id": 1, "n": 1, "home": 1, "zone_id": 1})
+                   .sort("n", 1))
+    return homes._addresses(incident_id, persons, index)
+
+
+def _track(p: dict[str, Any], listed: dict[str, Any], index, label: str, drill: dict[str, Any]) -> dict[str, Any]:
+    """One person's track from the raw stored ``state`` (``livecore.virtual_people.initial_state``) and the
+    participants-shape row ``listed`` (status and flags as the console shows them)."""
+    state = p["state"]
+    path = [[round(c[0], 5), round(c[1], 5)] for c in state.get("path") or []]
+    total_min = float(state["total_min"]) if path and state.get("total_min") else None
+    progress = min(1.0, max(0.0, float(state.get("progress") or 0.0))) if path else 0.0
+    driving = state["phase"] == "en_route"
+    eta_min = round(max(0.0, (1.0 - progress) * total_min), 1) if total_min is not None and (
+        driving or (state["phase"] == "out" and progress >= 1.0)) else None
+    dest = index.destinations.get(state.get("dest_id") or "")
+    coord = list(dest.coord) if dest is not None else (path[-1] if path else None)
+    destination = ({"id": state["dest_id"], "name": state.get("dest_name") or (dest.name if dest else None),
+                    "coord": [round(coord[0], 5), round(coord[1], 5)]}
+                   if state.get("dest_id") and coord is not None else None)
+    zone = index.zones.get(p["zone_id"])
+    return {
+        "id": p["id"],
+        "label": label,
+        "zone": {"id": p["zone_id"], "name": zone.name if zone is not None else None} if p.get("zone_id") else None,
+        "phase": state["phase"],
+        "status": listed["status"],
+        "flags": listed["flags"],
+        "position": listed["position"],
+        "path": path,
+        "progress": round(progress, 3),
+        "total_min": round(total_min, 1) if total_min is not None else None,
+        "eta_min": eta_min,
+        "destination": destination,
+        "motion": state.get("motion") if driving else None,
+        "trail": [{"t": iso(_aware(pt["t"])), "coord": pt["coord"]} for pt in state.get("trail") or []],
+        "drill": drill,
+        "evidence_class": "simulated",
+    }
+
+
+def build_tracks(incident_id: str, person_ids: list[str]) -> dict[str, dict[str, Any]]:
+    """Track per person id (unknown ids are left out), after advancing the people to the drill clock once. The
+    track shape is in docs/app-integration.md "Follow a simulated person". ``{}`` for no ids."""
+    ids = list(dict.fromkeys(person_ids))
+    if not ids:
+        return {}
+    tick_quietly(incident_id)
+    persons = list(col(PEOPLE).find({"incident_id": incident_id, "id": {"$in": ids}}))
+    if not persons:
+        return {}
+    run = col(RUNS).find_one({"incident_id": incident_id}) or {}
+    index = get_index(incident_id)
+    clock = clock_from(drill_doc(incident_id), index, wall_now())
+    t = _aware(run.get("ticked_to")) or _minute(clock.replay_now)
+    est = estimate_fire(index.drill, t, (), injects_mod.rules.spots_due(injects_mod.load(incident_id), t))
+    helps = _help_status(incident_id, [p["party_key"] for p in persons])
+    labels = _address_labels(incident_id, index)
+    drill = {"now": iso(clock.replay_now), "speed": clock.speed, "running": clock.running}
+    return {p["id"]: _track(p, _participant(p, t, est.geometry, helps.get(p["party_key"])), index,
+                            labels.get(p["id"]) or p["name"], drill) for p in persons}
+
+
+def build_track(incident_id: str, person_id: str) -> dict[str, Any] | None:
+    """One person's track (``build_tracks``), or None for an unknown id."""
+    if col(PEOPLE).find_one({"incident_id": incident_id, "id": person_id}, {"_id": 1}) is None:
+        return None
+    return build_tracks(incident_id, [person_id]).get(person_id)
 
 
 # ---- endpoints -----------------------------------------------------------------------------------------------

@@ -157,6 +157,30 @@ struct LiveAPIClient {
         return try await get(DrillHomes.self, ["incidents", incidentId, "homes"], query: query, token: token)
     }
 
+    /// A simulated person of the drill and its way out (`GET incidents/<id>/virtual-people/<pid>/track`).
+    /// 404 (`unknown_person`) throws `notFound`.
+    func track(incidentId: String, personId: String, token: String) async throws -> DrillTrack {
+        try await get(DrillTrack.self, ["incidents", incidentId, "virtual-people", personId, "track"], token: token)
+    }
+
+    /// Tells the server which simulated person this phone follows (`POST me/follow`), so the web
+    /// console can show who is being followed; nil stops. The body always carries `person_id`
+    /// (null to stop). Advisory: the phone works without it.
+    func follow(personId: String?, token: String) async throws {
+        _ = try await send(["me", "follow"], method: "POST", token: token, body: FollowBody(personId: personId))
+    }
+
+    private struct FollowBody: Encodable {
+        let personId: String?
+
+        private enum CodingKeys: String, CodingKey { case personId }
+
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(personId, forKey: .personId)
+        }
+    }
+
     /// The public task board (ADR 0041): questions only, the same for everyone. The phone picks
     /// its own on the device, so nothing about the person is sent.
     func board(incidentId: String, token: String) async throws -> BoardResponse {

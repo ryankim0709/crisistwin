@@ -20,7 +20,7 @@
  * - Still in threatened zones: persons home in threatened zones (zonePeople.home), carless ones
  *   included. An overrun zone has nobody home (they are caught). Of them: in zones with an order
  *   scheduled for a later minute (zone.pendingOrder; they leave then), and in zones with neither
- *   an order in effect nor one scheduled (nobody leaves those: the board has no self-evacuation).
+ *   an order in effect nor one scheduled (only self-evacuees leave those, demo/selfEvacuation.ts).
  * - Unable to reach safety: caught (home when fire reached the zone core, zones still overrun)
  *   plus carless persons still home in threatened zones (the board has no pickup model, so they
  *   cannot leave). The two never overlap: an overrun zone's carless persons are caught. With

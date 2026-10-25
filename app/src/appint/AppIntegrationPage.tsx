@@ -2,7 +2,7 @@
 // Real phones and simulated people on one map and one list, what waits for the controller's OK,
 // the message timeline, and what a chosen person's phone shows. Separate from /live's simulated board.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Button, EvidenceTag, LoadingState, Metric, MetricGrid, Notice, Page, Panel, SegmentedControl, type SegmentedOption } from "../ui";
+import { Button, EvidenceTag, Legend, LoadingState, Metric, MetricGrid, Notice, Page, Panel, SegmentedControl, type SegmentedOption } from "../ui";
 import { fetchActive } from "../live/active";
 import { approveProposal, DEFAULT_INCIDENT_ID, drillAction, helpAction, readToken, rejectProposal } from "../live/api";
 import { drillClock, drillNowAt } from "../live/format";
@@ -12,21 +12,21 @@ import { useCommand } from "../live/useCommand";
 import { usePoll } from "../live/usePoll";
 import { addVirtualPeople, useParticipants } from "./api";
 import AppMap, { type MapLayerKey } from "./AppMap";
-import { BehaviourPanel, MessagesPanel, NeedsOk, ParticipantList, type Decide } from "./Panels";
+import { BehaviourPanel, MessagesPanel, NeedsOk, ParticipantList, PersonGlyph, type Decide } from "./Panels";
 import { PhoneMirror } from "./PhoneMirror";
-import { everyoneElse, isJoinedNow, nf, personSummary } from "./plain";
+import { everyoneElse, isJoinedNow, nf } from "./plain";
 import { WorldSummary } from "../world/WorldBar";
 import "./appint.css";
 
 const ACTIVE_POLL_MS = 30_000;
 type Speed = "0" | "1" | "5" | "20";
 const LAYER_LABEL: Record<MapLayerKey, string> = {
-  app: "Our app users",
+  app: "App users",
   people: "Everyone else",
   zones: "Zones",
   fire: "Fire",
-  closures: "Closed roads",
-  stations: "Fire stations",
+  closures: "Closures",
+  stations: "Stations",
 };
 
 function useNow(ms: number): number {
@@ -157,13 +157,31 @@ export default function AppIntegrationPage() {
       : "Loading the traffic model…";
   const clock = drill ? drillClock(drillNowAt(drill, command.receivedAt, nowMs)) : "—";
 
-  const header = (
-    <div className="aix-header-actions">
-      <WorldSummary />
-      <span className="aix-clock" aria-live="off">
-        <strong>{clock}</strong> drill time
-      </span>
-      {drill ? <SegmentedControl label="Drill speed" options={speedOptions} value={speedValue} onChange={setSpeed} /> : null}
+  const description = active.data ? `${active.data.name} · practice run` : "Practice run";
+  const fireLabel =
+    data?.fire.method === "satellite_perimeter" ? "satellite outline" : data?.fire.method === "model_nowcast" ? "model estimate" : "none yet";
+  const mapKey = [
+    { label: "Real phone", color: "var(--ct-app-user)", glyph: <PersonGlyph p={{ kind: "real", role: "resident" }} size={14} /> },
+    { label: "Simulated person", color: "var(--ct-app-user)", glyph: <PersonGlyph p={{ kind: "simulated", role: "resident" }} size={14} /> },
+    { label: "Leave now", color: "var(--ct-danger)", glyph: <span className="aix-key aix-key--leave" /> },
+    { label: "Get ready", color: "var(--ct-warning)", glyph: <span className="aix-key aix-key--ready" /> },
+    { label: `Fire (${fireLabel})`, color: "var(--ct-fire)", glyph: <span className="aix-key aix-key--fire" /> },
+    { label: "Road closed", color: "var(--ct-closure)", glyph: <span className="aix-key aix-key--closed" /> },
+  ];
+
+  const toolbar = (
+    <div className="aix-toolbar">
+      <div className="aix-toolbar-group">
+        <WorldSummary />
+        <span className="aix-clock" aria-live="off">
+          <strong>{clock}</strong> drill time
+        </span>
+        {drill ? (
+          <span title={joinedReal === 0 ? "No real phones yet, so you can speed up for practice." : undefined}>
+            <SegmentedControl label="Drill speed" options={speedOptions} value={speedValue} onChange={setSpeed} />
+          </span>
+        ) : null}
+      </div>
       <Button variant="secondary" onClick={() => setShowInvite(true)}>
         Invite phones
       </Button>
@@ -172,11 +190,8 @@ export default function AppIntegrationPage() {
 
   const unauthorized = command.error?.unauthorized;
   return (
-    <Page
-      title="App integration"
-      description={active.data ? `${active.data.name} · practice run` : "Practice run"}
-      action={header}
-    >
+    <Page title="App integration" description={description}>
+      {toolbar}
       {showInvite ? <InvitePhones onClose={() => setShowInvite(false)} /> : null}
       {unauthorized ? (
         <Notice tone="danger" title="Not signed in as the controller.">
@@ -195,13 +210,11 @@ export default function AppIntegrationPage() {
       {data ? (
         <>
           {joinedReal > 0 ? (
-            <Notice tone="info" compact>
+            <Notice tone="info" compact className="aix-banner">
               {joinedReal === 1 ? "A real phone is" : `${joinedReal} real phones are`} joined, so the drill runs in real time.
               {forcedRealTime ? " It was sped up, so it went back to real time." : ""}
             </Notice>
-          ) : (
-            <p className="aix-note">No real phones yet, so you can speed up for practice.</p>
-          )}
+          ) : null}
           <section className="aix-stats" aria-label="Where people are">
             <MetricGrid>
               {rest ? (
@@ -222,8 +235,7 @@ export default function AppIntegrationPage() {
               />
             </MetricGrid>
             <p className="aix-note">
-              <EvidenceTag kind="simulated" /> Everyone else is an estimate from the traffic model. Our app users are counted
-              once, as their own dots.
+              <EvidenceTag kind="simulated" /> Everyone else is a traffic-model estimate; app users are counted separately.
             </p>
           </section>
 
@@ -257,35 +269,9 @@ export default function AppIntegrationPage() {
                 ))}
               </div>
               <AppMap data={data} people={people.data} participants={participants} selectedId={selectedId} layers={layers} onSelect={setSelectedId} />
-              <ul className="aix-legend" aria-label="Map key">
-                <li>
-                  <span className="aix-key aix-key--real" aria-hidden="true" />
-                  Real phone
-                </li>
-                <li>
-                  <span className="aix-key aix-key--sim" aria-hidden="true" />
-                  Simulated person
-                </li>
-                <li>
-                  <span className="aix-key aix-key--leave" aria-hidden="true" />
-                  Leave now
-                </li>
-                <li>
-                  <span className="aix-key aix-key--ready" aria-hidden="true" />
-                  Get ready
-                </li>
-                <li>
-                  <span className="aix-key aix-key--fire" aria-hidden="true" />
-                  Fire ({data.fire.method === "satellite_perimeter" ? "satellite outline" : data.fire.method === "model_nowcast" ? "model estimate" : "none yet"})
-                </li>
-                <li>
-                  <span className="aix-key aix-key--closed" aria-hidden="true" />
-                  Road closed
-                </li>
-              </ul>
+              <Legend className="aix-legend" label="Map key" items={mapKey} />
               <p className="aix-note">
-                Practice data. The fire and everyone not on our app are estimates; the dotted roads are where they drive. A
-                simulated person's position is approximate.
+                <EvidenceTag kind="simulated" /> Fire and everyone else are estimates.
               </p>
             </Panel>
 
@@ -308,26 +294,25 @@ export default function AppIntegrationPage() {
           </div>
 
           <div className="aix-bottom">
-            <Panel compact className="aix-sees" aria-label="What their phone shows">
-              <div className="aix-sees-text">
-                <h2>{selected ? `What ${selected.name} sees` : "What their phone shows"}</h2>
-                {selected ? (
-                  <>
-                    <p className="aix-dim">Their screen right now. Pick someone on the left to switch.</p>
-                    <p>{personSummary(selected, data)}</p>
-                    {selected.behaviour?.narrative?.length ? (
-                      <ul className="aix-story" aria-label="What they did">
-                        {selected.behaviour.narrative.map((line, i) => (
-                          <li key={i}>{line}</li>
-                        ))}
-                      </ul>
-                    ) : null}
-                  </>
-                ) : (
-                  <p className="aix-dim">Pick someone on the left to see their phone.</p>
-                )}
-              </div>
-              {selected ? <PhoneMirror key={selected.id} incidentId={incidentId} participantId={selected.id} name={selected.name} /> : null}
+            <Panel
+              compact
+              title={selected ? `What ${selected.name} sees` : "What their phone shows"}
+              className="aix-sees"
+              aria-label="What their phone shows"
+            >
+              {selected ? (
+                <PhoneMirror key={selected.id} incidentId={incidentId} participantId={selected.id} name={selected.name}>
+                  {selected.behaviour?.narrative?.length ? (
+                    <ul className="aix-story" aria-label="What they did">
+                      {selected.behaviour.narrative.map((line, i) => (
+                        <li key={i}>{line}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </PhoneMirror>
+              ) : (
+                <p className="aix-dim">Pick someone on the left to see their phone.</p>
+              )}
             </Panel>
             <BehaviourPanel participants={participants} onAdd={() => void addSimulated()} adding={adding} />
           </div>

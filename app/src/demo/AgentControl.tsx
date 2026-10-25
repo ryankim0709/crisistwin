@@ -19,7 +19,7 @@ const OPTIONS: SegmentedOption<OnOff>[] = [
 /**
  * The AI commander's switch, status and one-shot ask, as the first row of the /live "Controls"
  * block (its decisions are in the activity feed and the full audit log, labelled AI-generated
- * there). The live board is AI agent only (AI_ONLY_TEXT, in the block's "?" help popover): the
+ * there). The live board is AI agent only (AI_ONLY_TEXT, in the block's Details drawer): the
  * switch also runs the board clock (useCommandBoard), and "Ask Claude now" while it is off is one
  * decision on the paused board.
  */
@@ -54,6 +54,8 @@ export default function AgentControl({
             {agent.status === "thinking" ? <Spinner /> : null} {status}
           </Tag>
         </span>
+      </div>
+      <div className="lc-agent-row lc-agent-row--sub">
         <Button
           variant="secondary"
           size="sm"
@@ -68,8 +70,8 @@ export default function AgentControl({
         >
           Ask Claude now
         </Button>
+        <AgentSpend spend={agent.spend} />
       </div>
-      <AgentSpend spend={agent.spend} />
       {agent.error ? (
         <Notice tone="danger" compact>
           {agent.error}

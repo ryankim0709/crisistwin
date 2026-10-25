@@ -106,6 +106,7 @@ const UNIT_KIND: Record<string, [string, string]> = {
   engine_t1: ["Engine", "engines"],
   hand_crew_t1: ["Hand crew", "hand crews"],
   dozer_t2: ["Dozer", "dozers"],
+  ambulance: ["Ambulance", "ambulances"],
   air_attack: ["Air attack", "air attack aircraft"],
   airtanker_s2t: ["Airtanker", "airtankers"],
   helicopter_t2: ["Helicopter", "helicopters"],
@@ -524,8 +525,8 @@ function renderGroup(ctx: Ctx, g: Group): Rendered {
       const fire = r.fireId ? ctx.board?.fires.find((f) => f.id === r.fireId) : undefined;
       const unreported = !!(ctx.board && fire && fire.status === "burning" && !isReported(ctx.board, fire));
       return {
-        title: `New fire ${r.fireId ?? ""}${where}${unreported ? " (simulated; not yet reported to dispatch, nobody can act on it yet)" : ""}.`,
-        sub: null,
+        title: `New fire ${r.fireId ?? ""}${where}.`,
+        sub: unreported ? "Simulated; dispatch not told yet" : null,
         state: "info",
         attention: unreported ? { tone: "warning", label: "Not yet reported" } : null,
         boardRef: fireRef,
@@ -547,7 +548,7 @@ function renderGroup(ctx: Ctx, g: Group): Rendered {
       const waits = first.ev.text.includes("No automatic dispatch");
       return {
         ...quiet(`${fireLabel(ctx, fireId)} reported (${simClock(first.ev.minute)}${how ? `, ${how}` : ""}).`),
-        sub: waits ? "No automatic dispatch: units go only when the AI agent (or you) orders them." : null,
+        sub: waits ? "No auto-dispatch; units go on order" : null,
       };
     }
     case "strategy_set":
@@ -703,7 +704,7 @@ function renderGroup(ctx: Ctx, g: Group): Rendered {
       return {
         title: scheduled
           ? `Fire reached ${zone} before its scheduled evacuation (${simClock(r.startMinute!)}); households are still home.`
-          : `Fire reached ${zone} with no evacuation order; households stay home until ordered out.`,
+          : `Fire reached ${zone} with no evacuation order; only households leaving on their own cues are going.`,
         sub: null,
         state: "info",
         attention: { tone: "warning", label: scheduled ? "Not started" : "No order" },
@@ -724,7 +725,7 @@ function renderGroup(ctx: Ctx, g: Group): Rendered {
       const hidden = !!z && z.overrunAt !== null && z.knownTouchedAt === null;
       return {
         title: `Fire overran ${zone}: ${caught}.`,
-        sub: hidden ? "The fire is not yet reported to dispatch (simulated); nobody could act on it" : null,
+        sub: hidden ? "Simulated; fire not reported to dispatch" : null,
         state: "info",
         attention: hh > 0 ? { tone: "danger", label: "People caught" } : { tone: "warning", label: "Zone overrun" },
         boardRef: r.zoneId ? { kind: "zone", id: r.zoneId } : null,
@@ -987,7 +988,7 @@ function drillItems(decisions: readonly Decision[]): FeedItem[] {
         state: "completed",
         attention: null,
         title: d.note,
-        sub: d.actor === "ai_agent" ? "From the AI agent's order on the simulated board" : d.actor === "controller" ? "From your order on the simulated board" : "From the simulated board",
+        sub: d.actor === "ai_agent" ? "AI agent order (simulated)" : d.actor === "controller" ? "Your order (simulated)" : "Simulated board",
         minute: null,
         wallMs: at,
         count: 1,

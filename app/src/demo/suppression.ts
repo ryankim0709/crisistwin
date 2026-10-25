@@ -83,7 +83,13 @@
  * column x east, row y south.
  */
 
-import { FUEL_MODELS, SAV_DEAD_100H, SAV_DEAD_10H } from "../fire/fuelModels";
+import {
+  ANDERSON_RESIDENCE_MINUTES_PER_FOOT,
+  frontFlameFeetAt,
+  frontSpeedAt,
+  particleResidenceMinutes,
+  upwindGradient,
+} from "../fire/fireStates";
 import { lonLatToMercator, type LandscapeGrid } from "../fire/landscape";
 import { BYRAM_FLAME_EXPONENT, DEVELOPED_FUEL_CODE } from "../fire/spread";
 import type { LonLat } from "../live/types";
@@ -101,8 +107,9 @@ import { LATTICE_PERIMETER_TO_SMOOTH, countAtMost, type FireSolveResult } from "
 import { lineKey, logEvent, type Board, type Fire, type Team } from "./model";
 import { holdsFlameFeet } from "./realism";
 
-/** Anderson (1969) flaming residence time: t_r = 384 / sigma minutes, sigma in 1/ft (Rothermel 1972 uses it). */
-export const ANDERSON_RESIDENCE_MINUTES_PER_FOOT = 384;
+// Moved to fire/fireStates.ts (pure, shared with Studio and /fire); re-exported for existing callers.
+export { ANDERSON_RESIDENCE_MINUTES_PER_FOOT, particleResidenceMinutes, upwindGradient };
+
 /**
  * ASSUMPTION (as attack.ts LINE_RESOLVE_CHUNK_M): the solver sees newly knocked-down edge every
  * this many board minutes (one re-solve each, resuming from the burned ground). A trade between
@@ -221,62 +228,6 @@ export function createSuppressionState(cellCount: number): SuppressionState {
 
 // ---- burn duration ----
 
-const residenceCache = new Map<number, number>();
-
-/**
- * Anderson (1969) flaming residence of a fuel model's coarsest loaded class, minutes (see the
- * header: ASSUMPTION per class). 0 for codes with no fuel model (developed, non-burnable).
- */
-export function particleResidenceMinutes(fuelCode: number): number {
-  const hit = residenceCache.get(fuelCode);
-  if (hit !== undefined) return hit;
-  const m = FUEL_MODELS.get(fuelCode);
-  let t = 0;
-  if (m) {
-    const classes: [number, number][] = [
-      [m.load.dead1h, m.savDead1hPerFoot],
-      [m.load.dead10h, SAV_DEAD_10H],
-      [m.load.dead100h, SAV_DEAD_100H],
-      [m.load.liveHerb, m.savLiveHerbPerFoot],
-      [m.load.liveWoody, m.savLiveWoodyPerFoot],
-    ];
-    for (const [load, sav] of classes) if (load > 0 && sav > 0) t = Math.max(t, ANDERSON_RESIDENCE_MINUTES_PER_FOOT / sav);
-  }
-  residenceCache.set(fuelCode, t);
-  return t;
-}
-
-/**
- * Upwind gradient of the arrival field at `cell`, minutes per cell (x east, y south): per axis,
- * the difference to the earlier of its two 4-neighbours when that one burned before the cell
- * (the Godunov upwind scheme of fast marching, Sethian 1996), else 0 on that axis. Null when no
- * 4-neighbour burned earlier (an ignition or ember-started cell).
- */
-export function upwindGradient(grid: LandscapeGrid, arrival: Float32Array, cell: number): { x: number; y: number } | null {
-  const { width, height } = grid;
-  const x = cell % width;
-  const y = (cell - x) / width;
-  const a0 = arrival[cell];
-  if (!Number.isFinite(a0)) return null;
-  const at = (nx: number, ny: number) => (nx < 0 || ny < 0 || nx >= width || ny >= height ? Number.POSITIVE_INFINITY : arrival[ny * width + nx]);
-  const w = at(x - 1, y);
-  const e = at(x + 1, y);
-  const n = at(x, y - 1);
-  const s = at(x, y + 1);
-  let any = false;
-  let gx = 0;
-  let gy = 0;
-  if (Math.min(w, e) < a0) {
-    any = true;
-    gx = w <= e ? a0 - w : -(a0 - e);
-  }
-  if (Math.min(n, s) < a0) {
-    any = true;
-    gy = n <= s ? a0 - n : -(a0 - s);
-  }
-  return any ? { x: gx, y: gy } : null;
-}
-
 /** Unit direction of increasing arrival at `cell` (the local outward spread direction), grid coordinates, or null. */
 export function outwardDirection(grid: LandscapeGrid, arrival: Float32Array, cell: number): { x: number; y: number } | null {
   const d = upwindGradient(grid, arrival, cell);
@@ -289,9 +240,7 @@ export function outwardDirection(grid: LandscapeGrid, arrival: Float32Array, cel
  * solver's head rate where the upwind gradient is undefined or zero (cells ignited together).
  */
 export function frontSpeed(field: FireSolveResult, grid: LandscapeGrid, cell: number): number {
-  const d = upwindGradient(grid, field.arrivalMinutes, cell);
-  const n = d ? Math.hypot(d.x, d.y) : 0;
-  return n > 1e-9 ? grid.groundCellSizeMeters / n : field.behaviour.headRateMetersPerMinute[cell];
+  return frontSpeedAt(grid, field.arrivalMinutes, field.behaviour.headRateMetersPerMinute, cell);
 }
 
 /**
@@ -299,10 +248,7 @@ export function frontSpeed(field: FireSolveResult, grid: LandscapeGrid, cell: nu
  * the front's normal speed there (capped at the head rate) and the solver's head flame L_head.
  */
 export function frontFlameFeet(field: FireSolveResult, grid: LandscapeGrid, cell: number): number {
-  const head = field.behaviour.headRateMetersPerMinute[cell];
-  const flame = field.behaviour.headFlameFeet[cell];
-  if (!(head > 0)) return flame;
-  return flame * Math.pow(Math.min(1, frontSpeed(field, grid, cell) / head), BYRAM_FLAME_EXPONENT);
+  return frontFlameFeetAt(grid, field.arrivalMinutes, field.behaviour, cell);
 }
 
 /**
@@ -524,6 +470,7 @@ export function suppressionTick(board: Board, minute: number): void {
     // work structures (buildsOn) but keep cutting line on the wildland edge at their direct-attack rate.
     const structureAttack = kind === "direct" && fr.tactic === "structure";
     for (const team of teams) {
+      if (team.kind === "ambulance") continue;
       working.add(team.id);
       let w = st.units.get(team.id);
       if (!w || w.fireId !== fire.id || w.kind !== kind) {

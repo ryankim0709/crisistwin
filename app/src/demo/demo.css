@@ -227,7 +227,7 @@
 }
 .dm-orders {
   display: grid;
-  gap: 2px;
+  gap: var(--ct-space-1);
 }
 .dm-log {
   display: grid;

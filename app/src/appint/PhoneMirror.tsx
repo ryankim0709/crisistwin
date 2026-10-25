@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import { EmptyState, EvidenceTag, LoadingState, Notice } from "../ui";
 import { readToken } from "../live/api";
 import { usePhoneView, type PhoneButton, type PhoneView } from "./phoneView";
@@ -165,6 +165,8 @@ export interface PhoneMirrorProps {
   participantId: string;
   /** Display name from the participants list; else the view's name, else "Phone XXXX". */
   name?: string;
+  /** Extra notes shown beside the phone, under the plain-language reading. */
+  children?: ReactNode;
 }
 
 /**
@@ -172,7 +174,7 @@ export interface PhoneMirrorProps {
  * (map strip, guidance card, check-in buttons), polled every 3 s from the controller-only
  * phone-view endpoint. Contract: docs/app-integration.md "Phone mirror".
  */
-export function PhoneMirror({ incidentId, participantId, name }: PhoneMirrorProps) {
+export function PhoneMirror({ incidentId, participantId, name, children }: PhoneMirrorProps) {
   const token = useMemo(() => readToken(), []);
   const { data, error, loading } = usePhoneView(token, incidentId, participantId);
   const fallback = `Phone ${participantId.slice(-4).toUpperCase()}`;
@@ -242,6 +244,7 @@ export function PhoneMirror({ incidentId, participantId, name }: PhoneMirrorProp
             )}
           </>
         )}
+        {children}
       </figcaption>
     </figure>
   );

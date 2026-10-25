@@ -51,7 +51,7 @@ export const JUST_PUT_OUT_MINUTES = 8;
 export const JUST_PUT_OUT_MAX = 64;
 
 function toolOf(team: Team | undefined): WorkTool {
-  if (!team) return "hand";
+  if (!team || team.kind === "ambulance") return "hand";
   if (team.workMode === "hose") return "hose";
   if (team.workMode === "dozer") return "dozer";
   if (team.workMode === "hand_line") return "hand";

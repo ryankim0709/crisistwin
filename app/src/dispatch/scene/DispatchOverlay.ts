@@ -65,6 +65,12 @@ export const EXIT_COLORS: readonly number[] = [
   0x2f6fde, 0x7b4fd6, 0x139aa8, 0xc2408f, 0x3f51b5, 0x8d5a2b, 0x55606e, 0x0f7c8c,
 ];
 
+/** "Safe area 3" for a place inside the area (dispatch-area/6 kind "safe-area"), else "Exit 3". */
+export function exitTag(area: DispatchArea, exitId: string): string {
+  const n = exitId.replace(/^X0*/, "") || exitId;
+  return area.exits.find((exit) => exit.id === exitId)?.kind === "safe-area" ? `Safe area ${n}` : `Exit ${n}`;
+}
+
 export function exitColor(area: DispatchArea, exitId: string): number {
   const index = area.exits.findIndex((exit) => exit.id === exitId);
   return EXIT_COLORS[(index < 0 ? 0 : index) % EXIT_COLORS.length];
@@ -613,7 +619,7 @@ export class DispatchOverlay implements BoardOverlay {
       );
       label.el.style.borderColor = cssColor(colour);
       label.el.style.borderWidth = "2px";
-      label.el.textContent = `Exit ${exit.id.replace(/^X0*/, "") || exit.id}`;
+      label.el.textContent = exitTag(area, exit.id);
       label.obj.visible = false;
       this.exitMarkers.push({ group: marker, label: label.obj, el: label.el });
     }
@@ -793,7 +799,7 @@ export class DispatchOverlay implements BoardOverlay {
     // Plain-language labels: "Zone 12 · leaving by Exit 3 · 25 of 32 homes out".
     const zoneNum = (id: string) => id.replace(/^Z0*/, "") || id;
     const zoneName = (id: string) => `Zone ${zoneNum(id)}`;
-    const exitName = (id: string) => `Exit ${id.replace(/^X0*/, "") || id}`;
+    const exitName = (id: string) => exitTag(area, id);
     let overrun = 0;
     let ox = 0;
     let oz = 0;
@@ -984,7 +990,7 @@ export class DispatchOverlay implements BoardOverlay {
         this.cands.delete(marker.label);
         return;
       }
-      const name = `Exit ${exit.id.replace(/^X0*/, "") || exit.id}`;
+      const name = exitTag(area, exit.id);
       const h = nf(heading.get(exit.id) ?? 0);
       // exit.name carries the road and the shelter it leads to ("Hwy 24 east → … shelter").
       const where = exit.name && exit.name !== exit.id ? ` · ${exit.name}` : "";

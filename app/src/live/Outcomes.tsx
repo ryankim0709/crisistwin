@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { EmptyState, EvidenceTag, Metric, MetricGrid, ProgressBar } from "../ui";
+import { EvidenceTag, LoadingState, Metric, MetricGrid, ProgressBar } from "../ui";
 import { nf, simClock } from "../demo/format";
 import type { Board, ZoneForecast } from "../demo/model";
 import { boardOutcomes, CLOSE_CALL_MINUTES, FORECAST_MINUTES, type Count } from "../demo/outcomes";
@@ -44,9 +44,7 @@ export default function Outcomes({
           <h2 id="lc-out-title">Evacuation</h2>
           <EvidenceTag kind="simulated" />
         </header>
-        <EmptyState title="Outcomes not available yet" symbol="…">
-          The evacuation numbers appear once the simulated board has loaded.
-        </EmptyState>
+        <LoadingState>Waiting for the simulated board…</LoadingState>
       </section>
     );
   }
@@ -89,16 +87,18 @@ export default function Outcomes({
           {o.unknownHouseholds > 0 ? ` · ${households(o.unknownHouseholds)} with unknown occupants` : ""}
         </p>
         <ProgressBar value={bar.value} label={`Evacuation progress: ${barText}`} />
-        <p className="lc-out-sub">
-          <strong className="lc-num">{pct(bar.value, 1)}%</strong> {barText}
-        </p>
+        {threatened ? (
+          <p className="lc-out-sub">
+            <strong className="lc-num">{pct(bar.value, 1)}%</strong> {barText}
+          </p>
+        ) : null}
       </div>
 
       <MetricGrid>
         <Metric
           label="On the road"
           value={people(o.enRoute.people)}
-          detail={`people driving out now · ${households(o.enRoute.households)}`}
+          detail={households(o.enRoute.households)}
         />
         {o.returning.households > 0 ? (
           <Metric
@@ -108,20 +108,20 @@ export default function Outcomes({
           />
         ) : null}
         <Metric
-          label="Still in threatened zones"
+          label="In threatened zones"
           value={people(o.threatenedHome.people)}
           detail={
             threatened
-              ? `home in ${nf(o.threatenedZones)} zone${o.threatenedZones === 1 ? "" : "s"}${
+              ? `${nf(o.threatenedZones)} zone${o.threatenedZones === 1 ? "" : "s"}${
                   o.threatenedHomeScheduled.households > 0
-                    ? ` · ${people(o.threatenedHomeScheduled.people)} scheduled to leave`
+                    ? ` · ${people(o.threatenedHomeScheduled.people)} scheduled`
                     : ""
                 }${
                   o.threatenedHomeNoOrder.households > 0
-                    ? ` · ${people(o.threatenedHomeNoOrder.people)} with no order`
+                    ? ` · ${people(o.threatenedHomeNoOrder.people)} no order`
                     : ""
                 }`
-              : "no zone threatened"
+              : "None threatened"
           }
         />
         <Metric
@@ -132,12 +132,12 @@ export default function Outcomes({
         <Metric
           label="Homes burned"
           value={nf(o.homes.burned)}
-          detail={`in ${nf(o.homes.zones)} zone${o.homes.zones === 1 ? "" : "s"} · ${nf(o.homes.reachedSaved)} reached by fire, saved by crews`}
+          detail={`${nf(o.homes.zones)} zone${o.homes.zones === 1 ? "" : "s"} · ${nf(o.homes.reachedSaved)} saved`}
         />
         <Metric
           label="Close calls"
           value={people(o.closeCalls.people)}
-          detail={`left under ${CLOSE_CALL_MINUTES} min before fire · ${households(o.closeCalls.households)}`}
+          detail={`under ${CLOSE_CALL_MINUTES} min · ${households(o.closeCalls.households)}`}
         />
       </MetricGrid>
 
@@ -203,7 +203,7 @@ export default function Outcomes({
           <dd>
             Persons still home in threatened zones, those without a vehicle included. "Scheduled to leave": in zones
             whose evacuation order starts at a later board minute (they stay home until then). "With no order": in
-            zones with no order in effect or scheduled; nobody leaves those, as the board has no self-evacuation.
+            zones with no order in effect or scheduled; only households leaving on their own cues (simulated self-evacuation) go.
           </dd>
           <dt>Unable to reach safety</dt>
           <dd>

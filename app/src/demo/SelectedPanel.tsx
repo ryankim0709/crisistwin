@@ -516,7 +516,7 @@ function ZoneDetail({
       <p className="dm-note">
         After an order {Math.round(ORDER_COMPLIANCE * 100)}% of households with a vehicle leave, after{" "}
         {DEPARTURE_SPREAD_MINUTES} min on average from the order's start (now, or the minute it was scheduled
-        for); with no order nobody leaves (this board has no self-evacuation). Households without a vehicle stay. Those still home when fire reaches the zone core are caught.
+        for); with no order only households with their own vehicle leave, on their own fire and social cues (simulated self-evacuation). Households without a vehicle stay. Those still home when fire reaches the zone core are caught.
         An order can be lifted (all clear) once every reported fire that came within {ALL_CLEAR_WINDOW_MINUTES} min of the zone has been
         contained or out for {ALL_CLEAR_HOLD_MINUTES} min and none is forecast to reach it within {ALL_CLEAR_WINDOW_MINUTES} min (board
         rules, assumptions); residents then drive back at the route's free-flow time.

@@ -1,0 +1,524 @@
+/* /run (oneview): one full-bleed 3D scene with floating, frosted-glass panels. Layout only; every
+   button, panel, tag, notice and field keeps its kit (ui-) look. Tokens come from ui/tokens.css.
+   Layers: stage (base) < side panels and bottom band (map-controls) < topbar (overlay). */
+
+.ov-root {
+  --ov-gap: var(--ct-space-3);
+  --ov-top: calc(var(--ov-gap) + 44px);
+  --ov-bottom-h: 250px;
+  --ov-left-w: 340px;
+  --ov-right-w: 360px;
+
+  position: fixed;
+  inset: 0;
+  height: 100dvh;
+  overflow: hidden;
+  background: var(--ct-bg);
+  color: var(--ct-ink);
+  font-family: var(--ct-font-sans);
+  font-size: var(--ct-text-md);
+  line-height: var(--ct-leading-snug);
+}
+.ov-root:focus {
+  outline: none;
+}
+@media (max-width: 1180px) {
+  .ov-root {
+    --ov-left-w: 300px;
+    --ov-right-w: 300px;
+  }
+}
+/* Room for the 3D view even at 1440 wide (1440 - 340 - 410 - 4 gaps leaves about 640 px). */
+@media (min-width: 1400px) {
+  .ov-root {
+    --ov-right-w: 410px;
+  }
+}
+
+/* Visually hidden, still read by screen readers. */
+.ov-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------- stage */
+
+.ov-stage {
+  position: absolute;
+  inset: 0;
+  z-index: var(--ct-z-base);
+  overflow: hidden;
+}
+.ov-stage > .dm-diorama {
+  position: absolute;
+  inset: 0;
+}
+.ov-stage-msg {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: var(--ov-top) calc(var(--ov-right-w) + 2 * var(--ov-gap)) calc(var(--ov-bottom-h) + 2 * var(--ov-gap)) calc(var(--ov-left-w) + 2 * var(--ov-gap));
+}
+.ov-stage-msg > * {
+  width: min(460px, 100%);
+  max-width: 100%;
+  text-align: left;
+}
+
+/* ---------------------------------------------------------------- topbar */
+
+.ov-topbar {
+  position: absolute;
+  top: var(--ov-gap);
+  left: 50%;
+  z-index: var(--ct-z-overlay);
+  display: flex;
+  align-items: center;
+  gap: var(--ct-space-3);
+  width: max-content;
+  max-width: calc(100% - 2 * var(--ov-gap));
+  height: 40px;
+  padding: 0 var(--ct-space-4);
+  overflow: hidden;
+  border: 1px solid var(--ct-border);
+  border-radius: var(--ct-radius-pill);
+  background: var(--ct-surface-glass);
+  box-shadow: var(--ct-shadow-md);
+  backdrop-filter: var(--ct-glass-filter);
+  -webkit-backdrop-filter: var(--ct-glass-filter);
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .ov-topbar {
+    background: var(--ct-surface-glass-strong);
+  }
+}
+.ov-topbar > * {
+  flex: none;
+  min-width: 0;
+}
+.ov-home {
+  color: var(--ct-ink);
+  font-size: var(--ct-text-base);
+  font-weight: var(--ct-weight-bold);
+  letter-spacing: -0.2px;
+  text-decoration: none;
+}
+.ov-home:hover {
+  text-decoration: underline;
+}
+.ov-title {
+  padding-left: var(--ct-space-3);
+  border-left: 1px solid var(--ct-border);
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-sm);
+  font-weight: var(--ct-weight-semibold);
+}
+.ov-topbar .ov-drill {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Simulated people whose phones follow them (lead G's overlay). One line; the chip list scrolls sideways. */
+.ov-follow {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: var(--ct-space-2);
+  padding-left: var(--ct-space-3);
+  border-left: 1px solid var(--ct-border);
+}
+.ov-follow-title {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--ct-space-1);
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-xs);
+  font-weight: var(--ct-weight-semibold);
+}
+.ov-follow > ul {
+  display: flex;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  gap: var(--ct-space-1);
+  overflow-x: auto;
+  list-style: none;
+  scrollbar-width: none;
+}
+.ov-follow > ul::-webkit-scrollbar {
+  display: none;
+}
+.ov-chip {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--ct-space-2);
+  padding: 2px var(--ct-space-2);
+  border: 1px solid var(--ct-border-subtle);
+  border-radius: var(--ct-radius-pill);
+  background: var(--ct-brand-soft);
+  font-size: var(--ct-text-xs);
+  font-variant-numeric: tabular-nums;
+}
+.ov-chip strong {
+  font-weight: var(--ct-weight-semibold);
+}
+.ov-chip span {
+  color: var(--ct-ink-muted);
+}
+
+/* ---------------------------------------------------------------- panels */
+
+.ov-panel {
+  position: absolute;
+  z-index: var(--ct-z-map-controls);
+  box-sizing: border-box;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  overscroll-behavior: contain;
+}
+.ov-left,
+.ov-right {
+  top: var(--ov-top);
+  max-height: calc(100dvh - var(--ov-top) - var(--ov-bottom-h) - 2 * var(--ov-gap));
+}
+.ov-left {
+  left: var(--ov-gap);
+  width: var(--ov-left-w);
+}
+.ov-right {
+  /* This panel is the one scroll area (vertical only); AgentInputsPanel does not scroll itself. */
+  --ais-max-height: none;
+
+  right: var(--ov-gap);
+  width: var(--ov-right-w);
+}
+.ov-bottom {
+  right: var(--ov-gap);
+  bottom: var(--ov-gap);
+  left: var(--ov-gap);
+  max-height: var(--ov-bottom-h);
+  overflow: auto;
+}
+
+/* The 3D view's own controls stay clear of the panels. */
+@media (min-width: 900px) {
+  .ov-root .dm-diorama__tools {
+    top: calc(var(--ov-top, 56px));
+    right: calc(var(--ov-right-w) + 2 * var(--ov-gap));
+  }
+  .ov-root .dm-diorama__legend {
+    right: calc(var(--ov-right-w) + 2 * var(--ov-gap));
+    bottom: calc(var(--ov-bottom-h) + 2 * var(--ov-gap));
+  }
+  .ov-root .dm-diorama__credit {
+    bottom: calc(var(--ov-bottom-h) + 2 * var(--ov-gap));
+    left: calc(var(--ov-left-w) + 2 * var(--ov-gap));
+  }
+}
+
+/* ---------------------------------------------------------------- steps */
+
+.ov-steps {
+  --ov-badge: 20px;
+
+  display: grid;
+  gap: var(--ct-space-2);
+  margin: 0 0 var(--ct-space-3);
+  padding: 0;
+  list-style: none;
+}
+.ov-step {
+  padding: var(--ct-space-2) var(--ct-space-3);
+  border-left: 3px solid transparent;
+  border-radius: var(--ct-radius-md);
+}
+.ov-step--todo {
+  opacity: 0.68;
+}
+.ov-step--active {
+  border-left-color: var(--ct-brand);
+  background: var(--ct-brand-soft);
+}
+.ov-step--done {
+  border-left-color: var(--ct-success-border);
+}
+.ov-step-head {
+  display: flex;
+  align-items: center;
+  gap: var(--ct-space-2);
+}
+.ov-panel .ov-step-head h3 {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--ct-text-md);
+  font-weight: var(--ct-weight-semibold);
+  letter-spacing: -0.1px;
+  line-height: var(--ct-leading-tight);
+}
+.ov-step-n {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: var(--ov-badge);
+  height: var(--ov-badge);
+  border: 1px solid var(--ct-border-strong);
+  border-radius: var(--ct-radius-pill);
+  background: var(--ct-surface-muted);
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-xs);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--ct-weight-bold);
+  line-height: 1;
+}
+.ov-step--active .ov-step-n {
+  border-color: var(--ct-brand);
+  background: var(--ct-brand);
+  color: var(--ct-ink-inverse);
+}
+.ov-step--done .ov-step-n {
+  border-color: var(--ct-success-border);
+  background: var(--ct-success-soft);
+  color: var(--ct-success);
+}
+.ov-step-body {
+  display: grid;
+  gap: var(--ct-space-2);
+  margin-top: var(--ct-space-2);
+  padding-left: calc(var(--ov-badge) + var(--ct-space-2));
+  justify-items: start;
+}
+.ov-step-body > * {
+  min-width: 0;
+  max-width: 100%;
+  margin: 0;
+}
+.ov-step-body > .ov-setup,
+.ov-step-body > .ui-notice {
+  justify-self: stretch;
+}
+
+/* ---------------------------------------------------------------- shared bits */
+
+.ov-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ct-space-2);
+  margin: 0;
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-sm);
+  font-variant-numeric: tabular-nums;
+}
+.ov-dim {
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-sm);
+  line-height: var(--ct-leading-snug);
+}
+p.ov-dim {
+  margin: 0;
+}
+.ov-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ct-space-2) var(--ct-space-3);
+}
+.ov-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--ct-space-2);
+  margin-top: var(--ct-space-2);
+}
+.ov-notice > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+.ov-foot {
+  margin: var(--ct-space-3) 0 0;
+  color: var(--ct-ink-subtle);
+  font-size: var(--ct-text-2xs);
+  line-height: var(--ct-leading-snug);
+}
+.ov-agent-fallback {
+  display: grid;
+  gap: var(--ct-space-2);
+  font-size: var(--ct-text-sm);
+}
+.ov-agent-fallback p {
+  margin: 0;
+}
+
+/* ---------------------------------------------------------------- setup (step 1) */
+
+.ov-setup {
+  display: grid;
+  gap: var(--ct-space-3);
+  container-type: inline-size;
+}
+.ov-setup > * {
+  min-width: 0;
+  margin: 0;
+}
+.ov-setup .ui-field {
+  margin-bottom: 0;
+}
+.ov-blurb {
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-sm);
+  line-height: var(--ct-leading-snug);
+}
+.ov-tweaks {
+  border: 1px solid var(--ct-border-subtle);
+  border-radius: var(--ct-radius-md);
+  background: var(--ct-surface-sunken);
+}
+.ov-tweaks > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--ct-space-2);
+  padding: var(--ct-space-2) var(--ct-space-3);
+  border-radius: var(--ct-radius-md);
+  color: var(--ct-ink);
+  cursor: pointer;
+  font-size: var(--ct-text-sm);
+  font-weight: var(--ct-weight-semibold);
+  list-style: none;
+  user-select: none;
+}
+.ov-tweaks > summary::-webkit-details-marker {
+  display: none;
+}
+.ov-tweaks > summary::before {
+  content: "\203A";
+  flex: none;
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-lg);
+  line-height: 1;
+  transition: transform var(--ct-duration-fast) var(--ct-ease);
+}
+.ov-tweaks[open] > summary::before {
+  transform: rotate(90deg);
+}
+.ov-tweaks[open] > summary {
+  border-bottom: 1px solid var(--ct-border-subtle);
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.ov-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--ct-space-3);
+  padding: var(--ct-space-3);
+}
+@container (max-width: 250px) {
+  .ov-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.ov-ignition {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--ct-space-3);
+  min-width: 0;
+  margin: 0;
+  padding: var(--ct-space-2) var(--ct-space-3) var(--ct-space-3);
+  border: 1px solid var(--ct-border);
+  border-radius: var(--ct-radius-md);
+}
+.ov-ignition > legend {
+  padding: 0 var(--ct-space-1);
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-xs);
+  font-weight: var(--ct-weight-semibold);
+}
+.ov-ignition .ui-field {
+  margin-bottom: 0;
+}
+@container (max-width: 290px) {
+  .ov-ignition {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ---------------------------------------------------------------- narrow screens: one scrolling column */
+
+@media (max-width: 899px) {
+  .ov-root {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ov-gap);
+    padding-bottom: var(--ov-gap);
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+  /* The scene stays pinned at the top while the panels scroll over it. */
+  .ov-stage {
+    position: sticky;
+    inset: auto;
+    top: 0;
+    flex: none;
+    width: 100%;
+    height: 42dvh;
+    order: 0;
+  }
+  .ov-stage-msg {
+    padding: var(--ct-space-4);
+  }
+  .ov-topbar {
+    position: relative;
+    top: auto;
+    left: auto;
+    z-index: var(--ct-z-map-controls);
+    flex-wrap: wrap;
+    gap: var(--ct-space-1) var(--ct-space-3);
+    width: auto;
+    max-width: none;
+    height: auto;
+    min-height: 40px;
+    margin: 0 var(--ov-gap);
+    padding: var(--ct-space-2) var(--ct-space-4);
+    border-radius: var(--ct-radius-xl);
+    transform: none;
+    white-space: normal;
+    order: 1;
+  }
+  .ov-follow {
+    flex: 1 1 100%;
+    padding-left: 0;
+    border-left: 0;
+  }
+  .ov-panel {
+    position: relative;
+    inset: auto;
+    flex: none;
+    width: auto;
+    max-height: none;
+    margin: 0 var(--ov-gap);
+    overflow: visible;
+  }
+  .ov-bottom {
+    order: 2;
+  }
+  .ov-left {
+    order: 3;
+  }
+  .ov-right {
+    order: 4;
+  }
+}

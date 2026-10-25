@@ -13,6 +13,8 @@ import { DEVELOPED_FUEL_CODE } from "../fire/spread";
 import { CELL_STATE_CODE, fireCellStates } from "./fireState";
 import { fireAreaHa, withVehicle, type Board, type ZoneState } from "./model";
 import { ORDER_COMPLIANCE } from "./realism";
+import { injuryScore, type InjuryScore } from "./injuries";
+import { selfEvacuated } from "./selfEvacuation";
 
 /** FBFM40 non-burnable codes other than developed ground (92 snow/ice, 93 agriculture, 98 water, 99 barren). */
 const NON_BURNABLE_MIN = 92;
@@ -34,13 +36,20 @@ export interface Count {
   households: number;
 }
 
-/** Why the households caught at a zone's overrun were still home (model.ts departed: only ordered households with a vehicle leave). */
+/**
+ * Why the households caught at a zone's overrun were still home (model.ts departed: households with
+ * a vehicle leave on an order, or on their own cues, demo/selfEvacuation.ts).
+ */
 export interface CaughtBreakdown {
   /** Carless households (need transport; the board has no pickup). */
   noVehicle: Count;
-  /** Households with a vehicle in a zone never ordered out (no self-evacuation on this board). */
+  /**
+   * Households with a vehicle in a zone with no order in effect by the overrun that had not left on
+   * their own cues by then (never decided to self-evacuate, or still getting ready, or a drill-given
+   * car that waits for an order): an earlier order saves (most of) these.
+   */
   noOrder: Count;
-  /** Ordered households with a vehicle that do not comply (1 - ORDER_COMPLIANCE; stay and defend / wait and see). */
+  /** Ordered households with a vehicle that do not comply (1 - ORDER_COMPLIANCE; stay and defend / wait and see). Self-evacuees count toward the compliers. */
   stayedDespiteOrder: Count;
   /** Ordered, complying households with a vehicle that had not left yet (departure delay): an earlier order saves these. */
   tooLate: Count;
@@ -186,6 +195,10 @@ export interface RunScore {
   /** Burned area over every fire (removed ones included), hectares. */
   areaBurnedHa: number;
   fires: { burning: number; contained: number; out: number };
+  /** Simulated injuries (demo/injuries.ts): people injured so far, injury deaths (nobody reached them), open, treated, transported. */
+  injuries: InjuryScore;
+  /** Households gone on their own cues with no order so far (self-evacuation, demo/selfEvacuation.ts), all zones. Simulated. */
+  selfEvacuatedHouseholds: number;
 }
 
 const add = (a: number | null, b: number | null) => (a === null || b === null ? null : a + b);
@@ -229,5 +242,7 @@ export function runScore(board: Board): RunScore {
     homesByZone: homes.filter((z) => z.homesBurned > 0 || z.homesReachedSaved > 0).map((z) => ({ zoneId: z.zoneId, homesBurned: z.homesBurned, homesReachedSaved: z.homesReachedSaved })),
     areaBurnedHa: Math.round(area * 10) / 10,
     fires,
+    injuries: injuryScore(board),
+    selfEvacuatedHouseholds: board.zones.reduce((s, z) => s + selfEvacuated(z, board.minute), 0),
   };
 }

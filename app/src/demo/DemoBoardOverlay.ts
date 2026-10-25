@@ -1,13 +1,25 @@
 /**
- * The /demo command board's units, stations and zones on the 3D diorama (a `BoardOverlay`,
- * fire/diorama/types.ts): stations as small firehouses with their names, each unit as a vehicle
- * block in its family's colour (as the Studio's CrewOverlay draws them) at its current board
- * position, with a dashed line along an en-route (or, thinner, a returning) unit's road route
- * (only a road route: never a straight line to its target), each fire line ahead of a fire
- * (planned dashed, built solid), small cars for the sampled evacuating vehicles on their road
- * routes, and the outline of each ordered, threatened or overrun zone draped on the ground with
- * its tag; crews at work as firefighter figures (screen-size minimum) with their hoses, water,
- * dug line, dust and steam (firefightingFx3d.ts). Draws the simulated board only; it never changes it.
+ * The /live command board's units, aircraft, safe areas and zones on the 3D diorama (a
+ * `BoardOverlay`, fire/diorama/types.ts). Draws the simulated board only; it never changes it.
+ *
+ * - Ground units: a low-poly glyph per apparatus type (engine, water tender, dozer, crew carrier;
+ *   apparatusGlyphs.ts) at its current board position. Trucks move only along their road legs
+ *   (model.teamPosition along `team.route`, the per-access-class road route from
+ *   POST /api/demo/crew_routes; unitMotion.ts smooths between board updates), with a dashed line
+ *   along an en-route (or, thinner, a returning) unit's road route, never a straight line.
+ * - Crews hiking in (unitActivity "hiking_in"): figures on foot from the parked vehicle to their
+ *   work point (off-road walking, response/reach.ts), then the figures at work (fireState.crewWork).
+ * - Aircraft (board.response.aircraft): helicopters with a spinning rotor, airtankers and the air
+ *   attack / lead plane as fixed-wing glyphs, at altitude with a ground shadow, flying straight
+ *   from their base (unitMotion.aircraftPoses); drop curtains on drop runs (retardant pink for
+ *   airtankers, water blue for helicopters).
+ * - Fire stations are the scene's shared red firehouse (fire/diorama/stationMarkers.ts via
+ *   DemoDiorama setStations); this overlay draws no station hall of its own (no double halls).
+ * - Safe areas (zone route destinations): flag, short label, fill gauge vs capacity (destinationMarkers.ts).
+ * - Fire lines (planned dashed, built solid), evacuating vehicles on their road routes, the
+ *   outline of each ordered, threatened or overrun zone with its tag.
+ * - /run additions: `setFollowed` (a followed simulated person, their path and the part travelled)
+ *   and `setPredictedFire` (dashed forecast perimeters at +30/+60/+120 min, labelled "forecast").
  */
 
 import * as THREE from "three";
@@ -18,37 +30,67 @@ import type { CSS2DObject } from "three/examples/jsm/renderers/CSS2DRenderer.js"
 import type { BoardFrame } from "../fire/diorama/board";
 import type { LabelLayer } from "../fire/diorama/labels";
 import type { BoardOverlay, OverlayView } from "../fire/diorama/types";
-import { lonLatToMercator } from "../fire/landscape";
-import { LEVEL_COLOR } from "../live/CommandMap";
+import { lonLatToMercator, mercatorToLonLat } from "../fire/landscape";
 import type { LonLat } from "../live/types";
-import { vehicleFamily, type VehicleFamily } from "../studio/apparatus";
+import { OPEN_WATER_FUEL_CODE } from "../studio/aircraft";
+import { vehicleFamily } from "../studio/apparatus";
 import { CREW_COLORS } from "../studio/firelinePalette";
 import { FirefightingFx } from "./firefightingFx3d";
 import { firefightingWork, justPutOut, type FirefightingWork } from "./firefightingWork";
-import { EVACUEE_MARKERS_MAX, distanceM, evacueeMarkers, lineBuiltExtent, zoneOrderStatus, type Board, type ZoneForecast } from "./model";
 import { allClearLabelShown } from "./allClear";
-import { BoardMotion, teamSubjects } from "./unitMotion";
-import { unitSpotLabel } from "./unitActivity";
+import {
+  ROTOR_MAST_HEIGHT,
+  airGlyphGeometry,
+  airGlyphOf,
+  dropCurtainGeometry,
+  groundGlyphGeometry,
+  groundGlyphOf,
+  rotorGeometry,
+  shadowGeometry,
+  walkerGeometry,
+  type AirGlyph,
+  type GroundGlyph,
+} from "./apparatusGlyphs";
+import { APPARATUS_COLORS, DEMO_3D_COLORS, FOLLOW_COLORS } from "./board3dPalette";
+import { DestinationMarkers, destinationMarks } from "./destinationMarkers";
+import type { Selection } from "./DemoMap";
+import { fireOuterRings } from "./fireFootprint";
+import { EVACUEE_MARKERS_MAX, activeRoute, zoneOrderStatus, distanceM, evacueeMarkers, lineBuiltExtent, type Board, type ZoneForecast } from "./model";
+import { BoardMotion, aircraftPoses, offsetKm, teamSubjects, type AirPose } from "./unitMotion";
+import { unitActivity, unitSpotLabel } from "./unitActivity";
 
-/** Colours baked into the 3D board (CSS cannot reach WebGL); the legend mirrors them. */
-export const DEMO_3D_COLORS = {
-  stationWall: 0xefe4d6,
-  stationRoof: CREW_COLORS.engine,
-  route: 0x6b5bd2,
-  ordered: LEVEL_COLOR.evacuate_now,
-  threatened: LEVEL_COLOR.be_ready,
-  /** A zone with an evacuation warning (be ready to leave, demo/evacWarning.ts): the be-ready amber, dashed. */
-  warning: LEVEL_COLOR.be_ready,
-  overrun: "#b3140c",
-  /** A zone whose evacuation order was lifted (all clear, demo/allClear.ts): neutral, thin (boardMapLayers BOARD_COLOR.allClear). */
-  lifted: "#5b6470",
-  /** Fire line ahead of a fire (boardMapLayers BOARD_COLOR.fireLine). */
-  fireLine: "#3b2a1a",
-  /** Evacuating vehicles (simulated, sampled), on their zone's road route. */
-  evacuee: 0x1f6feb,
-  /** Helmet of a firefighter figure (its body is in its unit's family colour). */
-  crewHelmet: 0xffd23f,
-} as const;
+export { DEMO_3D_COLORS } from "./board3dPalette";
+
+/**
+ * A simulated person followed from a phone (lead H1's app/src/live/followedPeople.ts defines the
+ * canonical type; this is the structural shape the overlay reads). Coordinates [lon, lat].
+ */
+export interface FollowedPersonLike {
+  personId: string;
+  label: string;
+  position: [number, number] | null;
+  path: [number, number][];
+  /** Share of `path` travelled, 0..1; null = unknown (the nearest path point to `position` is used). */
+  progress: number | null;
+  status: string;
+  followers: number;
+  destination: { name: string; coord: [number, number] } | null;
+}
+
+/** Predicted fire perimeters `minutes` ahead of the board clock (lead E's predict.ts), [lon, lat] rings. */
+export interface PredictedFireRings {
+  minutes: number;
+  rings: [number, number][][];
+}
+
+/** What the page can call on the board's 3D view (DemoDiorama onOverlay / props). */
+export interface DemoOverlayApi {
+  setFollowed(people: readonly FollowedPersonLike[]): void;
+  setPredictedFire(rings: readonly PredictedFireRings[]): void;
+}
+
+/** How often the label layer redoes its collision culling while labels move, ms. */
+const LABEL_POKE_MS = 300;
 
 /** Firefighter figures per crew at work (fireState.crewWork), the cap on all of them, and their spacing along the work path. */
 const CREW_FIGURES = 4;
@@ -65,6 +107,10 @@ const FIGURE = { bodyRadius: 0.34, bodyHeight: 1.25, headRadius: 0.32 } as const
  */
 const FIGURE_MIN_PX = 11;
 const FIGURE_SCALE_MAX = 5;
+/** Figures drawn walking per crew hiking in, their spacing (world units) and the cap on all of them. */
+const HIKERS_PER_CREW = 4;
+const HIKER_SPACING_WORLD = 1.6;
+const HIKERS_MAX = 160;
 
 type CrewPath = {
   points: { x: number; z: number }[];
@@ -82,13 +128,11 @@ type CrewPath = {
   progress: number;
 };
 
-/** Vehicle sizes, world units (exaggerated about 20x so they read on a 600-unit board, as CrewOverlay). */
-const SIZES: Record<VehicleFamily, { length: number; height: number; width: number }> = {
-  engine: { length: 4.8, height: 2.0, width: 2.1 },
-  hand_crew: { length: 3.8, height: 2.6, width: 1.9 },
-  dozer: { length: 3.2, height: 1.5, width: 3.2 },
-};
-const FAMILIES: readonly VehicleFamily[] = ["engine", "hand_crew", "dozer"];
+/** A crew walking in from its parked vehicle to its work point between two board minutes. */
+type Hike = { teamId: string; from: LonLat; to: LonLat; t0: number; t1: number };
+
+const GROUND_GLYPHS: readonly GroundGlyph[] = ["engine", "tender", "dozer", "crew_carrier", "ambulance"];
+const AIR_GLYPHS: readonly AirGlyph[] = ["helicopter", "airtanker", "air_attack"];
 const LIFT = 0.9;
 const ZONE_LIFT = 0.6;
 const DRAPE_STEP = 1.5;
@@ -96,25 +140,59 @@ const DRAPE_STEP = 1.5;
 const SPOT_SPACING_WORLD = 5.5;
 /** An available unit this close to its station is shown as parked there, metres. */
 const AT_STATION_M = 60;
+/**
+ * Aircraft height on the board: metres above ground x the board's scale x its relief
+ * exaggeration x AIR_HEIGHT_EXAGGERATION, plus a clearance so a glyph drawn ~20x too large never
+ * sinks into the ground. Display scale only (like the vehicle sizes).
+ */
+const AIR_HEIGHT_EXAGGERATION = 2.5;
+const AIR_CLEARANCE_WORLD = 3;
+/** Rotor turn rate, radians per second of animation (display only; frozen under reduced motion). */
+const ROTOR_RAD_PER_S = 18;
+/** A fire's drop point and a helicopter's dip site are re-read this often, board minutes. */
+const DROP_POINT_EVERY_MIN = 5;
+/** Forecast perimeter dash pattern and line widths (px), soonest first. */
+const FORECAST_WIDTHS = [2.5, 2, 1.6];
 
 type ZoneState = "overrun" | "ordered" | "warning" | "threatened" | "lifted";
 const ZONE_TAG: Record<ZoneState, string> = { overrun: "Overrun", ordered: "Leave now", warning: "Be ready", threatened: "At risk", lifted: "All clear" };
 
+const AIR_PHASE_TEXT: Record<AirPose["phase"], string> = {
+  parked: "at base",
+  taking_off: "taking off",
+  transit: "flying",
+  drop_run: "drop run",
+  dropping: "dropping",
+  orbit: "over the fire",
+  dip: "filling bucket",
+  reloading: "reloading at base",
+  returning: "flying back to base",
+  holding: "holding over the fire",
+};
+
 const LABEL_CSS = `
-.fdx-dmunit { font-size: 10.5px; padding: 2px 8px; background: rgba(36, 30, 64, 0.88); color: #fff; border-color: rgba(20, 16, 40, 0.6); font-weight: 700; }
-.fdx-dmstation { font-size: 10px; padding: 2px 7px; font-weight: 600; color: #3a3f45; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+.fdx-dmunit { display: block; font-size: 10.5px; padding: 2px 8px; background: rgba(36, 30, 64, 0.88); color: #fff; border-color: rgba(20, 16, 40, 0.6); font-weight: 700; max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
+.fdx-dmair { font-size: 10px; padding: 1px 7px; background: rgba(255, 255, 255, 0.92); color: #3a3f45; font-weight: 700; }
 .fdx-dmzone { font-size: 10px; padding: 2px 7px; font-weight: 700; letter-spacing: 0.02em; }
 .fdx-dmzone-overrun { color: #fff; background: rgba(122, 10, 5, 0.9); }
 .fdx-dmzone-ordered { color: #7a0a05; }
 .fdx-dmzone-threatened { color: #7a4b00; }
 .fdx-dmzone-warning { color: #7a4b00; }
 .fdx-dmzone-lifted { color: #3a3f45; font-weight: 600; }
-.fdx-compact .fdx-dmunit, .fdx-compact .fdx-dmstation, .fdx-compact .fdx-dmzone { font-size: 9px; padding: 1px 6px; }
-/* Station name tags are hidden: the red firehouses mark stations; names are in the panels. */
-.fdx-dmstation { display: none; }
+.fdx-dmfollow { font-size: 10.5px; padding: 2px 8px; background: rgba(150, 20, 110, 0.92); color: #fff; font-weight: 700; }
+.fdx-dmforecast { font-size: 9.5px; padding: 1px 6px; font-weight: 700; color: #7a0a05; border-style: dashed; }
+.fdx-compact .fdx-dmunit, .fdx-compact .fdx-dmzone, .fdx-compact .fdx-dmair, .fdx-compact .fdx-dmfollow, .fdx-compact .fdx-dmforecast { font-size: 9px; padding: 1px 6px; }
 `;
 
 type Label = { obj: CSS2DObject; el: HTMLDivElement };
+
+/**
+ * Label ranks for LabelLayer.setPriority (a label that overlaps a higher-ranked one is hidden):
+ * fires (the layer's own ignition pills, never culled) > selected > leave-now / overrun zones >
+ * followed people > units en route > other working units, aircraft > used safe areas (50,
+ * destinationMarkers.ts) > at-risk zones > forecast labels > idle safe areas.
+ */
+const RANK = { selected: 100, zone: 80, followed: 65, unitEnRoute: 60, unit: 55, air: 55, atRisk: 35, forecast: 20 } as const;
 type World = { x: number; y: number; z: number };
 
 function zoneState(zone: Board["zones"][number], forecast: ZoneForecast | undefined, minute: number): ZoneState | null {
@@ -147,7 +225,49 @@ function disposeObject(object: THREE.Object3D): void {
   });
 }
 
-export class DemoBoardOverlay implements BoardOverlay {
+/** The part of `path` up to share `k` (0..1) of its length. */
+function pathUpTo(path: readonly LonLat[], k: number): LonLat[] {
+  if (path.length < 2) return [...path];
+  const legs = path.slice(1).map((p, i) => distanceM(path[i], p));
+  const total = legs.reduce((a, b) => a + b, 0);
+  const goal = Math.min(1, Math.max(0, k)) * total;
+  const out: LonLat[] = [path[0]];
+  let acc = 0;
+  for (let i = 0; i < legs.length; i++) {
+    if (acc + legs[i] >= goal) {
+      const f = legs[i] > 0 ? (goal - acc) / legs[i] : 0;
+      out.push([path[i][0] + (path[i + 1][0] - path[i][0]) * f, path[i][1] + (path[i + 1][1] - path[i][1]) * f]);
+      return out;
+    }
+    acc += legs[i];
+    out.push(path[i + 1]);
+  }
+  return out;
+}
+
+/** Share of `path` up to its point nearest to `p` (by vertex). */
+function shareAtNearest(path: readonly LonLat[], p: LonLat): number {
+  if (path.length < 2) return 0;
+  let best = 0;
+  let bestM = Infinity;
+  path.forEach((q, i) => {
+    const m = distanceM(p, q);
+    if (m < bestM) {
+      bestM = m;
+      best = i;
+    }
+  });
+  let total = 0;
+  let upTo = 0;
+  for (let i = 1; i < path.length; i++) {
+    const m = distanceM(path[i - 1], path[i]);
+    total += m;
+    if (i <= best) upTo += m;
+  }
+  return total > 0 ? upTo / total : 0;
+}
+
+export class DemoBoardOverlay implements BoardOverlay, DemoOverlayApi {
   private frame: BoardFrame | null = null;
   private labels: LabelLayer | null = null;
   private group: THREE.Group | null = null;
@@ -156,15 +276,13 @@ export class DemoBoardOverlay implements BoardOverlay {
   private forecasts: ReadonlyMap<string, ZoneForecast> = new Map();
   private readonly materials = new Set<LineMaterial>();
   /** Built parts, each rebuilt when its key changes. */
-  private stations: { group: THREE.Group; labels: Map<string, Label> } | null = null;
-  private stationKey = "";
-  private units: { meshes: Map<VehicleFamily, THREE.InstancedMesh>; slot: number[] } | null = null;
+  private units: { meshes: Map<GroundGlyph, THREE.InstancedMesh>; slot: number[] } | null = null;
   private unitKey = "";
   private routes: THREE.Group | null = null;
   private routeKey = "";
   private fireLines: THREE.Group | null = null;
   private fireLineKey = "";
-  private zones: { group: THREE.Group; labels: Label[] } | null = null;
+  private zones: { group: THREE.Group; labels: Label[]; meta: { id: string; state: ZoneState }[] } | null = null;
   private zoneKey = "";
   /** Evacuating vehicles: one instanced car per marker (model.evacueeMarkers). */
   private evacuees: THREE.InstancedMesh | null = null;
@@ -173,10 +291,34 @@ export class DemoBoardOverlay implements BoardOverlay {
   private crewPaths = new Map<string, CrewPath>();
   /** Hoses, water spray, dug line, dust and steam of the crews at work (firefightingFx3d.ts). */
   private fx: FirefightingFx | null = null;
+  /** Crews on foot walking in to their work (unitActivity hiking_in). */
+  private hikes: Hike[] = [];
+  private hikers: THREE.InstancedMesh | null = null;
+  /** Aircraft glyphs, rotors, ground shadows and drop curtains. */
+  private air: {
+    meshes: Map<AirGlyph, THREE.InstancedMesh>;
+    rotor: THREE.InstancedMesh;
+    shadow: THREE.InstancedMesh;
+    curtain: THREE.InstancedMesh;
+  } | null = null;
+  private airLabels = new Map<string, Label>();
+  private readonly airSeen = new Map<string, LonLat>();
+  private readonly dropPoints = new Map<string, { minute: number; at: LonLat | null }>();
+  private readonly dipPoints = new Map<string, LonLat>();
+  /** Safe-area destinations (flag, label, fill gauge). */
+  private readonly destinations = new DestinationMarkers();
+  /** Followed people and predicted perimeters (/run). */
+  private followedPeople: readonly FollowedPersonLike[] = [];
+  private followed: { group: THREE.Group; labels: Label[] } | null = null;
+  private predicted: readonly PredictedFireRings[] = [];
+  private forecast: { group: THREE.Group; labels: Label[] } | null = null;
   /** Unit labels by group lead (or unit) id, kept per id so a label never jumps to another unit. */
   private unitLabels = new Map<string, Label>();
   /** What each unit label says and how high it floats; rebuilt on board updates. */
-  private labelPlan: { lead: string; text: string; lift: number }[] = [];
+  private labelPlan: { lead: string; ids: string[]; text: string; lift: number; rank: number }[] = [];
+  /** What the page has selected (zone / team / fire), to rank its labels first and show its safe area. */
+  private selected: Selection | null = null;
+  private lastLabelPoke = 0;
   /** Units drawn smoothly between board updates (unitMotion.ts); `moving` while frames still change them. */
   private readonly motion = new BoardMotion();
   private unitsMoving = false;
@@ -185,6 +327,9 @@ export class DemoBoardOverlay implements BoardOverlay {
   private readonly up = new THREE.Vector3(0, 1, 0);
   private readonly one = new THREE.Vector3(1, 1, 1);
   private readonly scaleVec = new THREE.Vector3(1, 1, 1);
+  private readonly scaleV = new THREE.Vector3();
+  private readonly posV = new THREE.Vector3();
+  private readonly colorTmp = new THREE.Color();
 
   attach(frame: BoardFrame, parent: THREE.Group, labels: LabelLayer): void {
     this.detach();
@@ -199,12 +344,15 @@ export class DemoBoardOverlay implements BoardOverlay {
     labels.renderer.domElement.appendChild(this.style);
     this.fx = new FirefightingFx();
     this.group.add(this.fx.group);
+    this.dipPoints.clear();
+    this.dropPoints.clear();
     this.update();
+    this.buildFollowed();
+    this.buildForecast();
   }
 
   detach(): void {
     if (!this.group) return;
-    this.clearStations();
     this.clearUnits();
     this.clearRoutes();
     this.clearFireLines();
@@ -213,6 +361,11 @@ export class DemoBoardOverlay implements BoardOverlay {
     this.clearCrews();
     this.fx?.dispose();
     this.fx = null;
+    this.clearHikers();
+    this.clearAir();
+    this.clearFollowed();
+    this.clearForecast();
+    this.destinations.dispose();
     this.group.removeFromParent();
     this.group = null;
     this.style?.remove();
@@ -224,28 +377,81 @@ export class DemoBoardOverlay implements BoardOverlay {
   tick(time: number, dt: number, reducedMotion: boolean, width: number, height: number, view?: OverlayView): void {
     for (const material of this.materials) material.resolution.set(width, height);
     this.motion.setReducedMotion(reducedMotion);
-    if (this.unitsMoving) this.unitsMoving = this.placeUnits(performance.now());
+    const flying = (this.board?.response.aircraft.length ?? 0) > 0 || this.hikes.length > 0;
+    if (this.unitsMoving || flying) this.unitsMoving = this.placeUnits(performance.now());
     // World units per CSS px at the orbit target (as FireDioramaScene hands the fx layer).
     const wpp = view ? (2 * view.distance * Math.tan(THREE.MathUtils.degToRad(view.camera.fov / 2))) / Math.max(1, height) : 0;
     this.placeCrews(time, dt, reducedMotion, wpp);
     this.fx?.tick(time, reducedMotion, wpp, width, height);
+    this.placeHikers(time, reducedMotion);
+    this.placeAircraft(time);
+    if (view) this.destinations.tick(view.distance, view.fit);
+    // Labels ride moving units and aircraft: redo the layer's collision culling a few times a second, not each frame.
+    if ((this.unitsMoving || flying) && this.labels) {
+      const now = performance.now();
+      if (now - this.lastLabelPoke > LABEL_POKE_MS) {
+        this.lastLabelPoke = now;
+        this.labels.invalidate();
+      }
+    }
+  }
+
+  /** What the page has selected: its labels rank first and the safe area its zone is sent to always shows its label. */
+  setSelected(selected: Selection | null): void {
+    if (this.selected?.kind === selected?.kind && this.selected?.id === selected?.id) return;
+    this.selected = selected;
+    this.planUnitLabels();
+    this.rankZoneLabels();
+    this.updateDestinations();
+  }
+
+  private rankZoneLabels(): void {
+    const zones = this.zones;
+    if (!zones || !this.labels) return;
+    zones.labels.forEach((label, i) => {
+      const m = zones.meta[i];
+      const selected = this.selected?.kind === "zone" && this.selected.id === m.id;
+      this.labels?.setPriority(label.obj, selected ? RANK.selected : m.state === "threatened" ? RANK.atRisk : RANK.zone);
+    });
+  }
+
+  private updateDestinations(): void {
+    const { board, frame, group, labels } = this;
+    if (!frame || !group || !labels) return;
+    const emphasis = new Set<string>();
+    const zone = this.selected?.kind === "zone" ? board?.zones.find((z) => z.id === this.selected?.id) : undefined;
+    const route = zone ? activeRoute(zone) : undefined;
+    if (route) emphasis.add(route.destination_id);
+    this.destinations.update(frame, group, labels, board ? destinationMarks(board) : [], emphasis);
   }
 
   /** The board as it is now (mutated in place by the page; call again after every change). */
   setBoard(board: Board | null, forecasts: ReadonlyMap<string, ZoneForecast>): void {
+    if (board !== this.board) {
+      this.airSeen.clear();
+      this.dropPoints.clear();
+      this.dipPoints.clear();
+    }
     this.board = board;
     this.forecasts = forecasts;
     this.update();
   }
 
+  /** People followed from phones (/run): a highlighted marker, their whole path (dashed) and the part travelled (solid). */
+  setFollowed(people: readonly FollowedPersonLike[]): void {
+    this.followedPeople = people;
+    this.buildFollowed();
+  }
+
+  /** Predicted fire perimeters ahead of the board clock (/run): dashed, labelled "forecast +N min". */
+  setPredictedFire(rings: readonly PredictedFireRings[]): void {
+    this.predicted = rings;
+    this.buildForecast();
+  }
+
   private update(): void {
     if (!this.group) return;
     const board = this.board;
-    const stationKey = board ? board.stations.map((s) => `${s.id}@${s.location.join(",")}`).join("|") : "";
-    if (stationKey !== this.stationKey || !this.stations) {
-      this.stationKey = stationKey;
-      this.buildStations();
-    }
     const unitKey = board ? board.teams.map((t) => `${t.id}:${t.kind}`).join("|") : "";
     if (unitKey !== this.unitKey || !this.units) {
       this.unitKey = unitKey;
@@ -278,11 +484,13 @@ export class DemoBoardOverlay implements BoardOverlay {
     this.motion.sample(board, board ? teamSubjects(board) : [], now);
     this.motion.frame(now);
     this.planUnitLabels();
+    this.planHikes();
     this.unitsMoving = this.placeUnits(now);
     this.labels?.invalidate();
     this.placeEvacuees();
     this.updateFirefighting();
     this.updateCrews();
+    this.updateDestinations();
   }
 
   // ---- geometry helpers ----
@@ -349,26 +557,13 @@ export class DemoBoardOverlay implements BoardOverlay {
     disposeObject(group);
   }
 
-  // ---- stations ----
-
-  private clearStations(): void {
-    if (!this.stations) return;
-    for (const label of this.stations.labels.values()) this.labels?.remove(label.obj);
-    this.stations.group.removeFromParent();
-    disposeObject(this.stations.group);
-    this.stations = null;
-  }
-
-  private buildStations(): void {
-    this.clearStations();
-    const { group: parent, labels, board } = this;
-    if (!parent || !labels) return;
-    const group = new THREE.Group();
-    group.name = "demo-stations";
-    parent.add(group);
-    const map = new Map<string, Label>();
-    this.stations = { group, labels: map };
-    void board; // station markers are the scene's shared marker (setStations), not drawn here
+  private instanced(geometry: THREE.BufferGeometry, material: THREE.Material, count: number, name: string): THREE.InstancedMesh {
+    const mesh = new THREE.InstancedMesh(geometry, material, Math.max(1, count));
+    mesh.name = name;
+    mesh.count = 0;
+    mesh.frustumCulled = false;
+    this.group!.add(mesh);
+    return mesh;
   }
 
   // ---- units ----
@@ -384,32 +579,28 @@ export class DemoBoardOverlay implements BoardOverlay {
     this.units = null;
   }
 
+  /** One instanced glyph per apparatus type (engine, water tender, dozer, crew carrier). */
   private buildUnits(): void {
     this.clearUnits();
     const { group, board } = this;
     if (!group) return;
-    const counts = new Map<VehicleFamily, number>();
+    const counts = new Map<GroundGlyph, number>();
     const teams = board?.teams ?? [];
     const slot = teams.map((team) => {
-      const family = vehicleFamily(team.kind);
-      const index = counts.get(family) ?? 0;
-      counts.set(family, index + 1);
+      const glyph = groundGlyphOf(team.kind);
+      const index = counts.get(glyph) ?? 0;
+      counts.set(glyph, index + 1);
       return index;
     });
-    const meshes = new Map<VehicleFamily, THREE.InstancedMesh>();
-    for (const family of FAMILIES) {
-      const count = counts.get(family) ?? 0;
+    const meshes = new Map<GroundGlyph, THREE.InstancedMesh>();
+    for (const glyph of GROUND_GLYPHS) {
+      const count = counts.get(glyph) ?? 0;
       if (count === 0) continue;
-      const size = SIZES[family];
-      const mesh = new THREE.InstancedMesh(
-        new THREE.BoxGeometry(size.length, size.height, size.width).translate(0, size.height / 2, 0),
-        new THREE.MeshStandardMaterial({ color: CREW_COLORS[family], roughness: 0.5 }),
-        count,
-      );
+      const mesh = new THREE.InstancedMesh(groundGlyphGeometry(glyph), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.5 }), count);
       mesh.castShadow = true;
-      mesh.name = `demo-unit-${family}`;
+      mesh.name = `demo-unit-${glyph}`;
       group.add(mesh);
-      meshes.set(family, mesh);
+      meshes.set(glyph, mesh);
     }
     this.units = { meshes, slot };
   }
@@ -427,15 +618,15 @@ export class DemoBoardOverlay implements BoardOverlay {
 
   /**
    * Label texts for the board update: one per group of units at one spot (unitMotion groups) at
-   * its lead, one per lone unit; free units parked at their station join the station's label.
+   * its lead, one per lone unit; free units parked at their station carry no label (the red
+   * firehouse marks the station; names are in the panels).
    */
   private planUnitLabels(): void {
     const { board, motion } = this;
     const teams = board?.teams ?? [];
     const byId = new Map(teams.map((t) => [t.id, t]));
-    const plan: { lead: string; text: string; lift: number }[] = [];
+    const plan: { lead: string; ids: string[]; text: string; lift: number; rank: number }[] = [];
     const done = new Set<string>();
-    const freeAt = new Map<string, string[]>();
     for (const team of teams) {
       const d = motion.get(team.id);
       if (!d) continue;
@@ -449,22 +640,13 @@ export class DemoBoardOverlay implements BoardOverlay {
             return t.status === "available" && station && distanceM(t.position, station.location) < AT_STATION_M;
           })
         : false;
-      if (parked) {
-        for (const t of members) freeAt.set(t.station, [...(freeAt.get(t.station) ?? []), t.id]);
-        continue;
-      }
-      const ids = members.map((t) => t.id).join(" ");
-      const first = members[0];
+      if (parked) continue;
       // What the units here are doing and how far from their fire (unitActivity.ts), so a unit
       // standing away from the fire says why ("building S1-F1 head_60 line 830 m ahead of the head").
-      const text = board
-        ? unitSpotLabel(board, members)
-        : first.status === "on_scene" && first.fireId
-          ? `${first.fireId} · ${ids}`
-          : first.status === "en_route" && first.fireId && members.length === 1
-            ? `${ids} → ${first.fireId}`
-            : `${ids}${members.every((t) => t.status === "available") ? " · free" : ""}`;
-      plan.push({ lead, text, lift: members.length > 1 ? 5 : 4 });
+      const text = board ? unitSpotLabel(board, members) : members.map((t) => t.id).join(" ");
+      const selected = this.selected?.kind === "team" && members.some((t) => t.id === this.selected?.id);
+      const enRoute = members.some((t) => t.status === "en_route");
+      plan.push({ lead, ids: members.map((t) => t.id), text, lift: members.length > 1 ? 5 : 4, rank: selected ? RANK.selected : enRoute ? RANK.unitEnRoute : RANK.unit });
     }
     this.labelPlan = plan;
     const keep = new Set(plan.map((p) => p.lead));
@@ -475,15 +657,9 @@ export class DemoBoardOverlay implements BoardOverlay {
     }
     for (const p of plan) {
       const label = this.unitLabel(p.lead);
-      if (label) setText(label, p.text);
-    }
-    if (this.stations && board) {
-      for (const station of board.stations) {
-        const label = this.stations.labels.get(station.id);
-        if (!label) continue;
-        const free = freeAt.get(station.id);
-        setText(label, free ? `${station.name} · ${free.join(" ")} free` : station.name);
-      }
+      if (!label) continue;
+      setText(label, p.text);
+      this.labels?.setPriority(label.obj, p.rank);
     }
   }
 
@@ -498,7 +674,7 @@ export class DemoBoardOverlay implements BoardOverlay {
     const changing = motion.frame(now);
     const teams = board?.teams ?? [];
     teams.forEach((team, index) => {
-      const mesh = units.meshes.get(vehicleFamily(team.kind));
+      const mesh = units.meshes.get(groundGlyphOf(team.kind));
       if (!mesh) return;
       const d = motion.get(team.id);
       const at = d ? this.toWorld(d.at) : null;
@@ -509,10 +685,10 @@ export class DemoBoardOverlay implements BoardOverlay {
       // Slots are [east, north]; the board's x runs east and z south.
       const x = at.x + d.offset[0] * SPOT_SPACING_WORLD;
       const z = at.z - d.offset[1] * SPOT_SPACING_WORLD;
-      // Heading is degrees true; the box's length lies along x.
+      // Heading is degrees true; the glyph's length lies along +x.
       const yaw = d.heading === null ? 0 : Math.PI / 2 - (d.heading * Math.PI) / 180;
       this.quat.setFromAxisAngle(this.up, yaw);
-      this.matrix.compose(new THREE.Vector3(x, frame.surfaceAt(x, z), z), this.quat, this.one);
+      this.matrix.compose(this.posV.set(x, frame.surfaceAt(x, z), z), this.quat, this.one);
       mesh.setMatrixAt(units.slot[index], this.matrix);
     });
     for (const mesh of units.meshes.values()) mesh.instanceMatrix.needsUpdate = true;
@@ -525,6 +701,258 @@ export class DemoBoardOverlay implements BoardOverlay {
       if (at) label.obj.position.set(at.x, at.y + p.lift, at.z);
     }
     return changing;
+  }
+
+  // ---- crews hiking in on foot ----
+
+  private clearHikers(): void {
+    this.hikes = [];
+    if (!this.hikers) return;
+    this.hikers.removeFromParent();
+    disposeObject(this.hikers);
+    this.hikers = null;
+  }
+
+  /** Crews parked at the end of their road leg and walking to their work (not dozers: they walk in on their own tracks, drawn parked). */
+  private planHikes(): void {
+    const board = this.board;
+    const hikes: Hike[] = [];
+    for (const team of board?.teams ?? []) {
+      if (team.status !== "on_scene" || team.workStartAt === null || team.workStartAt <= board!.minute) continue;
+      if (team.kind === "ambulance" || vehicleFamily(team.kind) === "dozer") continue;
+      const activity = unitActivity(board!, team);
+      if (activity.kind !== "hiking_in" || !activity.workPoint) continue;
+      const t0 = Math.min(team.arriveAt ?? board!.minute, board!.minute);
+      hikes.push({ teamId: team.id, from: team.position, to: activity.workPoint, t0, t1: team.workStartAt });
+    }
+    this.hikes = hikes;
+    if (hikes.length > 0 && !this.hikers && this.group) {
+      this.hikers = this.instanced(walkerGeometry(), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6 }), HIKERS_MAX, "demo-hikers");
+    }
+  }
+
+  /** Figures strung out along the walk from the parked vehicle toward the work point, by the share of the hike done. */
+  private placeHikers(time: number, reducedMotion: boolean): void {
+    const mesh = this.hikers;
+    const frame = this.frame;
+    if (!mesh || !frame) return;
+    const minute = this.motion.minute;
+    let n = 0;
+    for (const h of this.hikes) {
+      const a = this.toWorld(h.from);
+      const b = this.toWorld(h.to);
+      if (!a || !b) continue;
+      const k = h.t1 > h.t0 ? Math.min(1, Math.max(0, (minute - h.t0) / (h.t1 - h.t0))) : 1;
+      const dx = b.x - a.x;
+      const dz = b.z - a.z;
+      const len = Math.hypot(dx, dz);
+      if (len < 1e-6) continue;
+      const yaw = Math.atan2(-dz, dx);
+      this.quat.setFromAxisAngle(this.up, yaw);
+      for (let i = 0; i < HIKERS_PER_CREW && n < HIKERS_MAX; i++) {
+        const s = Math.max(0, k * len - i * HIKER_SPACING_WORLD);
+        const x = a.x + (dx / len) * s + (i % 2 ? 0.5 : -0.5) * (dz / len);
+        const z = a.z + (dz / len) * s - (i % 2 ? 0.5 : -0.5) * (dx / len);
+        const hop = reducedMotion ? 0 : Math.abs(Math.sin(time * 6 + i * 1.3)) * 0.15;
+        this.matrix.compose(this.posV.set(x, frame.surfaceAt(x, z) + hop, z), this.quat, this.one);
+        mesh.setMatrixAt(n, this.matrix);
+        n += 1;
+      }
+    }
+    mesh.count = n;
+    mesh.instanceMatrix.needsUpdate = true;
+  }
+
+  // ---- aircraft ----
+
+  private clearAir(): void {
+    for (const label of this.airLabels.values()) this.labels?.remove(label.obj);
+    this.airLabels.clear();
+    if (!this.air) return;
+    for (const mesh of [...this.air.meshes.values(), this.air.rotor, this.air.shadow, this.air.curtain]) {
+      mesh.removeFromParent();
+      disposeObject(mesh);
+    }
+    this.air = null;
+  }
+
+  private ensureAir(count: number): NonNullable<DemoBoardOverlay["air"]> | null {
+    if (!this.group) return null;
+    if (this.air && this.air.rotor.instanceMatrix.count >= count) return this.air;
+    this.clearAir();
+    const cap = Math.max(8, count);
+    const meshes = new Map<AirGlyph, THREE.InstancedMesh>();
+    for (const glyph of AIR_GLYPHS) {
+      const mesh = this.instanced(airGlyphGeometry(glyph), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.45 }), cap, `demo-air-${glyph}`);
+      mesh.castShadow = true;
+      meshes.set(glyph, mesh);
+    }
+    const rotor = this.instanced(rotorGeometry(), new THREE.MeshStandardMaterial({ vertexColors: true, transparent: true, opacity: 0.55, depthWrite: false }), cap, "demo-air-rotor");
+    const shadow = this.instanced(
+      shadowGeometry(2.6),
+      new THREE.MeshBasicMaterial({ color: APPARATUS_COLORS.shadow, transparent: true, opacity: 0.28, depthWrite: false }),
+      cap,
+      "demo-air-shadow",
+    );
+    const curtain = this.instanced(
+      dropCurtainGeometry(),
+      new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6, depthWrite: false, side: THREE.DoubleSide }),
+      cap,
+      "demo-air-drop",
+    );
+    this.air = { meshes, rotor, shadow, curtain };
+    return this.air;
+  }
+
+  /** The fire's drop target: the perimeter point farthest from its origin (the head), re-read every few board minutes. */
+  private dropPoint(fireId: string): LonLat | null {
+    const board = this.board;
+    if (!board) return null;
+    const cached = this.dropPoints.get(fireId);
+    const bucket = Math.floor(board.minute / DROP_POINT_EVERY_MIN);
+    if (cached && cached.minute === bucket) return cached.at;
+    const fire = board.fires.find((f) => f.id === fireId);
+    let at: LonLat | null = fire ? fire.origin : null;
+    if (fire) {
+      let best = -1;
+      for (const ring of fireOuterRings(board, fire)) {
+        for (const p of ring) {
+          const m = distanceM(fire.origin, p);
+          if (m > best) {
+            best = m;
+            at = p;
+          }
+        }
+      }
+    }
+    this.dropPoints.set(fireId, { minute: bucket, at });
+    return at;
+  }
+
+  /**
+   * A helicopter's dip site: the nearest open-water cell (LANDFIRE FBFM40 98) on the board's
+   * landscape to the drop point, as boardResponse's dipKm measures; without one, a point `dipKm`
+   * behind the fire (away from the head; ASSUMPTION, display only: the model then uses its
+   * assumed dip distance and has no site).
+   */
+  private dipPoint(fireId: string, drop: LonLat, dipKm: number): LonLat {
+    const cached = this.dipPoints.get(fireId);
+    if (cached) return cached;
+    const board = this.board;
+    const grid = board?.env.landscape;
+    let at: LonLat | null = null;
+    if (grid) {
+      const [x, y] = lonLatToMercator(drop[0], drop[1]);
+      const cx = (x - grid.originX) / grid.cellSizeX;
+      const cy = (y - grid.originY) / grid.cellSizeY;
+      let best = Infinity;
+      let bi = -1;
+      for (let i = 0; i < grid.fuelCodes.length; i += 1) {
+        if (grid.fuelCodes[i] !== OPEN_WATER_FUEL_CODE) continue;
+        const c = i % grid.width;
+        const r = (i - c) / grid.width;
+        const d = Math.hypot(c - cx, r - cy);
+        if (d < best) {
+          best = d;
+          bi = i;
+        }
+      }
+      if (bi >= 0) {
+        const c = bi % grid.width;
+        const r = (bi - c) / grid.width;
+        at = mercatorToLonLat(grid.originX + (c + 0.5) * grid.cellSizeX, grid.originY + (r + 0.5) * grid.cellSizeY);
+      }
+    }
+    if (!at) {
+      const fire = board?.fires.find((f) => f.id === fireId);
+      const away = fire ? (Math.atan2(fire.origin[0] - drop[0], fire.origin[1] - drop[1]) * 180) / Math.PI : 180;
+      at = offsetKm(drop, (away + 360) % 360, dipKm);
+    }
+    this.dipPoints.set(fireId, at);
+    return at;
+  }
+
+  /** Every frame: aircraft at the smoothed display minute (straight lines; rotors spin unless reduced motion froze `time`). */
+  private placeAircraft(time: number): void {
+    const { board, frame } = this;
+    if (!frame) return;
+    const poses = board
+      ? aircraftPoses(
+          board,
+          this.motion.minute,
+          (id) => this.dropPoint(id),
+          (id, drop, km) => this.dipPoint(id, drop, km),
+          this.airSeen,
+        )
+      : [];
+    if (poses.length === 0 && !this.air) return;
+    const air = this.ensureAir(poses.length);
+    if (!air) return;
+    const counts = new Map<AirGlyph, number>();
+    let rotors = 0;
+    let shadows = 0;
+    let curtains = 0;
+    const heightScale = frame.unitsPerMeter * Math.max(1, frame.verticalExaggeration) * AIR_HEIGHT_EXAGGERATION;
+    const keep = new Set<string>();
+    for (const p of poses) {
+      const ground = this.toWorld(p.at);
+      if (!ground) continue;
+      const glyph = airGlyphOf(p.kind);
+      const mesh = air.meshes.get(glyph)!;
+      const i = counts.get(glyph) ?? 0;
+      counts.set(glyph, i + 1);
+      const y = ground.y + (p.airborne ? AIR_CLEARANCE_WORLD + p.altitudeM * heightScale : 0);
+      const yaw = p.heading === null ? 0 : Math.PI / 2 - (p.heading * Math.PI) / 180;
+      this.quat.setFromAxisAngle(this.up, yaw);
+      this.matrix.compose(this.posV.set(ground.x, y, ground.z), this.quat, this.one);
+      mesh.setMatrixAt(i, this.matrix);
+      if (glyph === "helicopter" && p.airborne) {
+        // Rotor on the mast (x 0.4 along the body), spinning about y.
+        const mast = new THREE.Vector3(0.4, ROTOR_MAST_HEIGHT, 0).applyQuaternion(this.quat);
+        this.quat.setFromAxisAngle(this.up, yaw + time * ROTOR_RAD_PER_S);
+        this.matrix.compose(this.posV.set(ground.x + mast.x, y + mast.y, ground.z + mast.z), this.quat, this.one);
+        air.rotor.setMatrixAt(rotors++, this.matrix);
+      }
+      if (p.airborne) {
+        this.matrix.compose(this.posV.set(ground.x, ground.y + 0.15, ground.z), this.quat.identity(), this.one);
+        air.shadow.setMatrixAt(shadows++, this.matrix);
+      }
+      if (p.phase === "dropping" && p.airborne) {
+        // Curtain from the aircraft's belly to the ground (geometry hangs 8 units below y = 0).
+        const h = Math.max(1, y - ground.y);
+        this.matrix.compose(this.posV.set(ground.x, y, ground.z), this.quat.identity(), this.scaleV.set(1, h / 8, 1));
+        air.curtain.setMatrixAt(curtains, this.matrix);
+        air.curtain.setColorAt(curtains, this.colorTmp.set(glyph === "helicopter" ? APPARATUS_COLORS.water : APPARATUS_COLORS.retardant));
+        curtains += 1;
+      }
+      // A label for aircraft in the air: id, type and what it is doing.
+      if (p.airborne && this.labels && this.group) {
+        keep.add(p.id);
+        let label = this.airLabels.get(p.id);
+        if (!label) {
+          label = this.labels.add(this.group, "fdx-dmair", new THREE.Vector3(), new THREE.Vector2(0.5, 1));
+          this.labels.setPriority(label.obj, RANK.air);
+          this.airLabels.set(p.id, label);
+        }
+        setText(label, `${p.id} · ${AIR_PHASE_TEXT[p.phase]}${p.fireId && p.phase !== "returning" ? ` ${p.fireId}` : ""}`);
+        label.obj.position.set(ground.x, y + 3.5, ground.z);
+      }
+    }
+    for (const glyph of AIR_GLYPHS) {
+      const mesh = air.meshes.get(glyph)!;
+      mesh.count = counts.get(glyph) ?? 0;
+      mesh.instanceMatrix.needsUpdate = true;
+    }
+    air.rotor.count = rotors;
+    air.shadow.count = shadows;
+    air.curtain.count = curtains;
+    air.rotor.instanceMatrix.needsUpdate = air.shadow.instanceMatrix.needsUpdate = air.curtain.instanceMatrix.needsUpdate = true;
+    if (air.curtain.instanceColor) air.curtain.instanceColor.needsUpdate = true;
+    for (const [id, label] of this.airLabels) {
+      if (keep.has(id)) continue;
+      this.labels?.remove(label.obj);
+      this.airLabels.delete(id);
+    }
   }
 
   // ---- en-route lines ----
@@ -597,7 +1025,8 @@ export class DemoBoardOverlay implements BoardOverlay {
     group.name = "demo-zones";
     parent.add(group);
     const zoneLabels: Label[] = [];
-    this.zones = { group, labels: zoneLabels };
+    const zoneMeta: { id: string; state: ZoneState }[] = [];
+    this.zones = { group, labels: zoneLabels, meta: zoneMeta };
     for (const zone of board?.zones ?? []) {
       const state = zoneState(zone, this.forecasts.get(zone.id), board!.minute);
       if (!state || zone.ring.length < 3) continue;
@@ -610,8 +1039,101 @@ export class DemoBoardOverlay implements BoardOverlay {
         const label = labels.add(group, `fdx-dmzone fdx-dmzone-${state}`, new THREE.Vector3(core.x, core.y + 3, core.z), new THREE.Vector2(0.5, 1));
         label.el.textContent = `${ZONE_TAG[state]} · ${zone.name}`;
         zoneLabels.push(label);
+        zoneMeta.push({ id: zone.id, state });
       }
     }
+    this.rankZoneLabels();
+  }
+
+  // ---- followed people (/run) ----
+
+  private clearFollowed(): void {
+    if (!this.followed) return;
+    for (const label of this.followed.labels) this.labels?.remove(label.obj);
+    this.dropLines(this.followed.group);
+    this.followed = null;
+  }
+
+  /** Each followed person: whole path dashed, travelled part solid and darker, a pin with a white ground ring, and a label. */
+  private buildFollowed(): void {
+    this.clearFollowed();
+    const { group: parent, labels } = this;
+    if (!parent || !labels || this.followedPeople.length === 0) return;
+    const group = new THREE.Group();
+    group.name = "demo-followed";
+    parent.add(group);
+    const followLabels: Label[] = [];
+    this.followed = { group, labels: followLabels };
+    const pinMat = new THREE.MeshStandardMaterial({ color: FOLLOW_COLORS.person, roughness: 0.4, emissive: FOLLOW_COLORS.person, emissiveIntensity: 0.25 });
+    const ringMat = new THREE.MeshBasicMaterial({ color: FOLLOW_COLORS.personRing, transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthWrite: false });
+    for (const person of this.followedPeople) {
+      const path = person.path.map((p) => [p[0], p[1]] as LonLat);
+      if (path.length >= 2) {
+        const whole = this.drape(path, LIFT + 0.3);
+        if (whole.length >= 6) group.add(this.line(whole, FOLLOW_COLORS.path, 2, true));
+        const share = person.progress ?? (person.position ? shareAtNearest(path, person.position) : 0);
+        const done = this.drape(pathUpTo(path, share), LIFT + 0.4);
+        if (done.length >= 6) group.add(this.line(done, FOLLOW_COLORS.travelled, 4, false));
+      }
+      const at = person.position ? this.toWorld(person.position) : null;
+      if (!at) continue;
+      const pin = new THREE.Group();
+      pin.position.set(at.x, at.y, at.z);
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 4, 6).translate(0, 2, 0), pinMat);
+      const head = new THREE.Mesh(new THREE.SphereGeometry(1.1, 14, 10).translate(0, 4.6, 0), pinMat);
+      const ring = new THREE.Mesh(new THREE.RingGeometry(1.6, 2.3, 24).rotateX(-Math.PI / 2).translate(0, 0.25, 0), ringMat);
+      pin.add(pole, head, ring);
+      group.add(pin);
+      const label = labels.add(group, "fdx-dmfollow", new THREE.Vector3(at.x, at.y + 6.5, at.z), new THREE.Vector2(0.5, 1));
+      const who = person.followers > 0 ? ` · ${person.followers} following` : "";
+      const to = person.destination ? ` → ${person.destination.name}` : "";
+      label.el.textContent = `${person.label} (simulated) · ${person.status}${to}${who}`;
+      labels.setPriority(label.obj, RANK.followed);
+      followLabels.push(label);
+    }
+    labels.invalidate();
+  }
+
+  // ---- predicted fire perimeters (/run) ----
+
+  private clearForecast(): void {
+    if (!this.forecast) return;
+    for (const label of this.forecast.labels) this.labels?.remove(label.obj);
+    this.dropLines(this.forecast.group);
+    this.forecast = null;
+  }
+
+  /** Dashed perimeters per forecast horizon (soonest darkest and widest), labelled "forecast +N min" at the ring's northernmost point. */
+  private buildForecast(): void {
+    this.clearForecast();
+    const { group: parent, labels } = this;
+    if (!parent || !labels || this.predicted.length === 0) return;
+    const group = new THREE.Group();
+    group.name = "demo-forecast";
+    parent.add(group);
+    const forecastLabels: Label[] = [];
+    this.forecast = { group, labels: forecastLabels };
+    const sorted = [...this.predicted].sort((a, b) => a.minutes - b.minutes);
+    sorted.forEach((horizon, index) => {
+      const color = FOLLOW_COLORS.forecast[Math.min(index, FOLLOW_COLORS.forecast.length - 1)];
+      const width = FORECAST_WIDTHS[Math.min(index, FORECAST_WIDTHS.length - 1)];
+      let top: LonLat | null = null;
+      for (const ring of horizon.rings) {
+        if (ring.length < 3) continue;
+        const closed = ring.map((p) => [p[0], p[1]] as LonLat);
+        const positions = this.drape([...closed, closed[0]], ZONE_LIFT + 0.4 + index * 0.1);
+        if (positions.length >= 6) group.add(this.line(positions, color, width, true));
+        for (const p of closed) if (!top || p[1] > top[1]) top = p;
+      }
+      const at = top ? this.toWorld(top) : null;
+      if (at) {
+        const label = labels.add(group, "fdx-dmforecast", new THREE.Vector3(at.x, at.y + 2, at.z), new THREE.Vector2(0.5, 1));
+        label.el.textContent = `forecast +${Math.round(horizon.minutes)} min`;
+        labels.setPriority(label.obj, RANK.forecast);
+        forecastLabels.push(label);
+      }
+    });
+    labels.invalidate();
   }
 
   // ---- evacuating vehicles (simulated traffic) ----
@@ -649,7 +1171,7 @@ export class DemoBoardOverlay implements BoardOverlay {
       if (!p || n >= EVACUEE_MARKERS_MAX) continue;
       // Bearing is degrees true; the board's x runs east and z south, the box's length along x.
       this.quat.setFromAxisAngle(this.up, Math.PI / 2 - (m.bearing * Math.PI) / 180);
-      this.matrix.compose(new THREE.Vector3(p.x, p.y + 0.2, p.z), this.quat, this.one);
+      this.matrix.compose(this.posV.set(p.x, p.y + 0.2, p.z), this.quat, this.one);
       mesh.setMatrixAt(n, this.matrix);
       n += 1;
     }
@@ -711,7 +1233,7 @@ export class DemoBoardOverlay implements BoardOverlay {
         // inward is [east, north]; the board's z runs south.
         inward: len > 0 ? { x: w.inward[0] / len, z: -w.inward[1] / len } : { x: 0, z: 0 },
         kind: w.kind,
-        color: new THREE.Color(CREW_COLORS[team ? vehicleFamily(team.kind) : "hand_crew"]),
+        color: new THREE.Color(CREW_COLORS[team && team.kind !== "ambulance" ? vehicleFamily(team.kind) : "hand_crew"]),
         phase: previous?.phase ?? (hashString(key) % 628) / 100,
         progress,
       });
@@ -801,7 +1323,7 @@ export class DemoBoardOverlay implements BoardOverlay {
         const z = at.z + path.inward.z * step;
         const hop = reducedMotion ? 0 : Math.abs(Math.sin(time * 5 + path.phase + k)) * 0.18;
         this.quat.setFromAxisAngle(this.up, Math.atan2(path.inward.x, path.inward.z));
-        this.matrix.compose(new THREE.Vector3(x, frame.surfaceAt(x, z) + hop * scale, z), this.quat, this.scaleVec);
+        this.matrix.compose(this.posV.set(x, frame.surfaceAt(x, z) + hop * scale, z), this.quat, this.scaleVec);
         meshes.body.setMatrixAt(n, this.matrix);
         meshes.helmet.setMatrixAt(n, this.matrix);
         meshes.body.setColorAt(n, path.color);

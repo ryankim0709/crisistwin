@@ -2,6 +2,7 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } f
 import { useMediaQuery } from "../diorama/ui/format";
 import type { FireDioramaSceneApi, GroundClickMode } from "./diorama/types";
 import { FireDioramaScene } from "./diorama/FireDioramaScene";
+import { createRunCellStates, type RunCellStates } from "./fireStates";
 import AreaPicker from "./ui/AreaPicker";
 import { AREA_PRESETS, DEFAULT_AREA } from "./ui/areaPresets";
 import {
@@ -481,7 +482,7 @@ export default function FireSimulatorPage() {
       clock: { startMs, latitude: scenarioWind.query.lat, longitude: scenarioWind.query.lon },
       note: analogStart
         ? "Clock of the real hours replayed (date chosen statistically)"
-        : "Local time from the weather's start",
+        : "",
     };
   }, [scenarioWind, windOverTime]);
 
@@ -539,7 +540,8 @@ export default function FireSimulatorPage() {
     // The deferred scenario can lag a grid swap; never solve an ignition outside the grid.
     if (cellAt(grid, deferredScenario.origin) < 0) return { run: null, error: null };
     try {
-      return { run: simulateFireSpread(grid, deferredScenario), error: null };
+      // reportCellBehaviour: the per-cell flame and crown the legible fire states classify.
+      return { run: simulateFireSpread(grid, deferredScenario, { reportCellBehaviour: true }), error: null };
     } catch (cause) {
       return {
         run: null,
@@ -614,7 +616,46 @@ export default function FireSimulatorPage() {
   }, [view, historicalOpen]);
 
   // Continuous model time, pushed to the scene every animation frame without a React render.
-  const onTime = useCallback((minutes: number) => sceneRef.current?.setTime(minutes), []);
+  // Legible fire states (flame band, crown, smouldering, burned out) of the simulated run, pushed
+  // to the scene only when the whole minute changes. Simulated data: never for the observed or
+  // historical perimeters (the scene does not exist while one is open).
+  const wantCellStates = scene !== null;
+  const runCellStates = useMemo<RunCellStates | null>(
+    () =>
+      run && grid && wantCellStates
+        ? createRunCellStates({
+            grid,
+            arrivalMinutes: run.arrivalMinutes,
+            behaviour: run.cellBehaviour ?? null,
+            horizonMinutes: run.scenario.horizonMinutes,
+          })
+        : null,
+    [run, grid, wantCellStates],
+  );
+  const cellStatesRef = useRef<RunCellStates | null>(null);
+  const cellStatesMinuteRef = useRef(Number.NaN);
+  const pushCellStates = useCallback((minutes: number, force: boolean) => {
+    const target = sceneRef.current;
+    if (!target) return;
+    const states = cellStatesRef.current;
+    if (!states) {
+      if (force || !Number.isNaN(cellStatesMinuteRef.current)) target.setCellStates(null);
+      cellStatesMinuteRef.current = Number.NaN;
+      return;
+    }
+    const minute = Math.max(0, Math.floor(minutes));
+    if (!force && minute === cellStatesMinuteRef.current) return;
+    cellStatesMinuteRef.current = minute;
+    const { codes, heat } = states.at(minute);
+    target.setCellStates(codes, heat);
+  }, []);
+  const onTime = useCallback(
+    (minutes: number) => {
+      sceneRef.current?.setTime(minutes);
+      pushCellStates(minutes, false);
+    },
+    [pushCellStates],
+  );
   const playback = useFirePlayback(horizonMinutes, onTime);
   const { getTime, pause, restart: restartPlayback, seek: seekPlayback } = playback;
 
@@ -628,6 +669,11 @@ export default function FireSimulatorPage() {
     scene?.setRun(run);
     scene?.setTime(getTime());
   }, [scene, run, getTime]);
+  // After setLandscape / setRun above (same commit), so the cells are the scene's landscape's.
+  useEffect(() => {
+    cellStatesRef.current = runCellStates;
+    pushCellStates(getTime(), true);
+  }, [scene, runCellStates, getTime, pushCellStates]);
   useEffect(() => {
     scene?.setIgnition(origin);
   }, [scene, origin]);
@@ -1398,10 +1444,9 @@ export default function FireSimulatorPage() {
           <div className="fr-veil" role="status">
             <Spinner size="lg" />
             <div>
-              <p>Sculpting terrain from LANDFIRE fuels and elevation…</p>
+              <p>Loading terrain and fuels…</p>
               <p className="fr-veil-note">
-                {formatKm(radiusMeters)} km radius · {requestedCellMeters} m cells. Large areas take
-                longer.
+                {formatKm(radiusMeters)} km radius · {requestedCellMeters} m cells
               </p>
               {storedUnavailable && (
                 <p className="fr-veil-note">
@@ -1455,8 +1500,8 @@ export default function FireSimulatorPage() {
 
             <div className="fr-scenario-body" id="fr-scenario-body" hidden={!scenarioOpen}>
               <div className="fr-field">
+                <label htmlFor="region">{panelCustom ? "Region" : "Location"}</label>
                 <div className="fr-region-row">
-                  <label htmlFor="region">{panelCustom ? "Region" : "Location"}</label>
                   <select
                     id="region"
                     className="ui-input"
@@ -1494,47 +1539,46 @@ export default function FireSimulatorPage() {
                   <Button
                     id="fr-change-area"
                     variant="secondary"
-                    size="sm"
                     onClick={() => setAreaPickerOpen(true)}
                     aria-haspopup="dialog"
                   >
                     Custom…
                   </Button>
                 </div>
-                {(!region || !panelCustom) && (
-                  <div className="fr-field-inline fr-area-size">
-                    <label htmlFor="area-size">{panelCustom ? "Area size" : "Map size"}</label>
-                    <select
-                      id="area-size"
-                      className="ui-input"
-                      value={areaSize}
-                      onChange={(event) => {
-                        if (region) {
-                          setAreaCenter({ longitude: region.center.longitude, latitude: region.center.latitude });
-                          setSelection(CUSTOM_SELECTION);
-                        }
-                        setAreaSize(event.target.value as AreaSizeId);
-                      }}
-                    >
-                      {AREA_SIZES.map((size) => {
-                        const radius = effectiveRadiusMeters(horizonMinutes, size.id);
-                        const cell = boardCellMetersFor(radius);
-                        const ready = areaReady({ longitude: centerLongitude, latitude: centerLatitude, radiusMeters: radius, cellMeters: cell });
-                        return (
-                          <option key={size.id} value={size.id}>
-                            {size.label} {"\u2014"} {readinessLabel(ready, radius, cell)}
-                          </option>
-                        );
-                      })}
-                    </select>
-                  </div>
-                )}
-                {storedUnavailable && (
-                  <Notice className="fr-compact-notice">
-                    Stored region unavailable — loading live from LANDFIRE instead.
-                  </Notice>
-                )}
               </div>
+              {(!region || !panelCustom) && (
+                <div className="fr-field">
+                  <label htmlFor="area-size">{panelCustom ? "Area size" : "Map size"}</label>
+                  <select
+                    id="area-size"
+                    className="ui-input"
+                    value={areaSize}
+                    onChange={(event) => {
+                      if (region) {
+                        setAreaCenter({ longitude: region.center.longitude, latitude: region.center.latitude });
+                        setSelection(CUSTOM_SELECTION);
+                      }
+                      setAreaSize(event.target.value as AreaSizeId);
+                    }}
+                  >
+                    {AREA_SIZES.map((size) => {
+                      const radius = effectiveRadiusMeters(horizonMinutes, size.id);
+                      const cell = boardCellMetersFor(radius);
+                      const ready = areaReady({ longitude: centerLongitude, latitude: centerLatitude, radiusMeters: radius, cellMeters: cell });
+                      return (
+                        <option key={size.id} value={size.id}>
+                          {size.label} {"\u2014"} {readinessLabel(ready, radius, cell)}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+              )}
+              {storedUnavailable && (
+                <Notice className="fr-compact-notice">
+                  Stored region unavailable — loading live from LANDFIRE instead.
+                </Notice>
+              )}
 
               <div className="fr-field">
                 <SegmentedControl
@@ -1589,20 +1633,22 @@ export default function FireSimulatorPage() {
                       </option>
                     ))}
                   </select>
+                </div>
+              )}
+              {!panelCustom && (
+                <div className="fr-field">
+                  <label htmlFor="quick-seed">Seed</label>
+                  <input
+                    id="quick-seed"
+                    className="ui-input"
+                    inputMode="numeric"
+                    placeholder="Random"
+                    value={quickSeedText}
+                    onChange={(event) => setQuickSeedText(event.target.value)}
+                  />
                   <Button block onClick={() => void generateRandom()} disabled={!grid || quickBusy}>
                     {quickBusy ? "Generating…" : "Generate random scenario"}
                   </Button>
-                  <div className="fr-field-inline">
-                    <label htmlFor="quick-seed">Use seed…</label>
-                    <input
-                      id="quick-seed"
-                      className="ui-input"
-                      inputMode="numeric"
-                      placeholder="random"
-                      value={quickSeedText}
-                      onChange={(event) => setQuickSeedText(event.target.value)}
-                    />
-                  </div>
                   {quickError && <Notice tone="danger" className="fr-compact-notice">{quickError}</Notice>}
                   {quickResult && (
                     <p className="fr-hint">
@@ -1637,8 +1683,8 @@ export default function FireSimulatorPage() {
                   />
                   <p className="fr-hint">
                     {windOverTime === "series"
-                      ? `The run follows all ${recordSeries.series.samples.length} hourly winds; the controls below show the peak hour.`
-                      : "The peak hour's wind is held for the whole run (a worst-hour run, not a replay)."}
+                      ? `Follows ${recordSeries.series.samples.length} hourly winds; the controls below show the peak hour.`
+                      : "Holds the peak hour's wind for the whole run (worst hour, not a replay)."}
                     {recordSeries.notes.cappedHours > 0
                       ? ` ${recordSeries.notes.cappedHours} h capped at ${MAX_WIND_SPEED_MPH} mph.`
                       : ""}
@@ -1926,8 +1972,7 @@ export default function FireSimulatorPage() {
               {worldBar}
               {worldSync.enabled && worldFires.others.length > 0 && origin && (
                 <p className="fr-hint">
-                  The shared world has {worldFires.others.length + 1} fires; this page runs the
-                  first one.
+                  Running fire 1 of {worldFires.others.length + 1} in the shared world
                 </p>
               )}
               {worldSync.enabled && worldNote && (
@@ -1953,11 +1998,10 @@ export default function FireSimulatorPage() {
                 <>
                   <div className="fr-results-tag">
                     <EvidenceTag kind="simulated" />
-                    <span>Model output, not an observed fire</span>
                   </div>
                   {run.stochastic && (
                     <p className="fr-nv-help fr-nv-summary" data-testid="fire-stochastic-summary">
-                      Natural variation, seed {run.scenario.stochastic?.seed ?? run.stochastic.applied.seed} ·{" "}
+                      Seed {run.scenario.stochastic?.seed ?? run.stochastic.applied.seed} ·{" "}
                       {run.stochastic.spotIgnitions} spot fire
                       {run.stochastic.spotIgnitions === 1 ? "" : "s"} started
                       {run.stochastic.applied.spotting ? "" : " (spotting off)"}
@@ -1965,7 +2009,7 @@ export default function FireSimulatorPage() {
                   )}
                   <dl className="fr-metrics">
                     <div>
-                      <dt>Burned area (simulated)</dt>
+                      <dt>Burned area</dt>
                       <dd>{frame ? formatArea(frame.burnedAreaSquareMeters) : "0 ha · 0 acres"}</dd>
                     </div>
                     <div>

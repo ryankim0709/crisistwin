@@ -1,14 +1,13 @@
 /* Phone mirror (PhoneMirror.tsx). Prefix: pmr-. Mirrors the iOS app's Map drawer; colours are kit tokens. */
 .pmr {
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--ct-space-3);
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--ct-space-6);
   margin: 0;
-  width: 264px;
-  max-width: 100%;
 }
 .pmr-phone {
+  flex: none;
   position: relative;
   box-sizing: border-box;
   width: 240px;
@@ -119,7 +118,7 @@
 }
 .pmr-exercise {
   flex: none;
-  padding: 2px 7px;
+  padding: var(--ct-space-1) var(--ct-space-2);
   border: 1px solid var(--ct-warning-border);
   border-radius: var(--ct-radius-pill);
   background: var(--ct-warning-soft);
@@ -184,8 +183,9 @@
 .pmr-caption {
   display: flex;
   flex-direction: column;
-  gap: var(--ct-space-2);
-  width: 100%;
+  flex: 1 1 220px;
+  gap: var(--ct-space-3);
+  min-width: 0;
   font-size: var(--ct-text-sm);
 }
 .pmr-plain {

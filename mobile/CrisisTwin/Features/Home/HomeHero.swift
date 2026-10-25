@@ -231,6 +231,7 @@ struct HomeAddressPanel: View {
                     Text("Simulated household, made-up address.")
                         .font(.caption)
                         .foregroundStyle(Color.ctInkMuted)
+                    FollowOnMapButton(personId: home.id)
                 }
             } accessory: {
                 Button("Change") { picking = true }
@@ -360,6 +361,204 @@ struct HomeAddressPicker: View {
                 Image(systemName: "checkmark")
                     .foregroundStyle(Color.ctBrand)
                     .accessibilityLabel("Selected")
+            }
+        }
+        .frame(minHeight: 44)
+        .contentShape(Rectangle())
+    }
+}
+
+// MARK: - Follow a simulated person
+
+/// Starts following a simulated person of the drill and shows them on Map, the camera on them.
+@MainActor
+private func followOnMap(_ personId: String, store: LiveStore, router: AppRouter) {
+    store.startFollowing(personId)
+    router.following = true
+    router.tab = .map
+}
+
+/// Home's "Follow on Map" for the simulated person whose address is shown: starts following them,
+/// or says they are followed and stops.
+struct FollowOnMapButton: View {
+    let personId: String
+    @Environment(LiveStore.self) private var store
+    @Environment(AppRouter.self) private var router
+
+    var body: some View {
+        let followed = store.followedPersonId == personId
+        Button {
+            if followed {
+                store.stopFollowing()
+                router.following = false
+            } else {
+                followOnMap(personId, store: store, router: router)
+            }
+        } label: {
+            Label(followed ? "Stop following on Map" : "Follow this simulated person on Map",
+                  systemImage: followed ? "xmark.circle" : "location.viewfinder")
+                .font(.subheadline.weight(.semibold))
+                .frame(maxWidth: .infinity, minHeight: 44)
+        }
+        .buttonStyle(.bordered)
+        .tint(Color.ctBrand)
+        .accessibilityHint("Watch this simulated household leave on the map")
+    }
+}
+
+/// Map's "Following ..." pill: who is followed (always labelled as a simulated person), what they
+/// are doing now, the minutes to go and Stop. Tap the text to put the camera back on them.
+struct FollowedPersonPill: View {
+    @Environment(LiveStore.self) private var store
+    @Environment(AppRouter.self) private var router
+
+    var body: some View {
+        if store.followedPersonId != nil {
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                HStack(spacing: 8) {
+                    Button { router.following = true } label: {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Following \(title)")
+                                .font(.subheadline.weight(.semibold))
+                                .lineLimit(1)
+                            Text(detail(at: context.date))
+                                .font(.caption)
+                                .foregroundStyle(Color.ctInkMuted)
+                                .lineLimit(2)
+                        }
+                        .foregroundStyle(Color.ctInk)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    Button("Stop") {
+                        store.stopFollowing()
+                        router.following = false
+                    }
+                    .buttonStyle(.glass)
+                    .accessibilityLabel("Stop following")
+                }
+                .padding(.leading, 16)
+                .padding(.trailing, 8)
+                .padding(.vertical, 8)
+                .glassEffect(.regular, in: .rect(cornerRadius: 22))
+                .accessibilityElement(children: .contain)
+            }
+        }
+    }
+
+    /// The server's label, always read as a simulated person.
+    private var title: String {
+        guard let label = store.followedTrack?.label, !label.isEmpty else { return "Simulated person" }
+        return label.localizedCaseInsensitiveContains("simulated") ? label : "Simulated person \(label)"
+    }
+
+    /// "Driving out, 7 min to go · ETA 7 min": the status the server words, then the minutes to go
+    /// counted down between polls (left out when the status already says them).
+    private func detail(at date: Date) -> String {
+        guard let track = store.followedTrack else { return store.followError ?? "Finding them…" }
+        var parts = [track.status.isEmpty ? track.phase : track.status]
+        if track.isEnRoute, !track.status.contains("to go"), let eta = store.followedEtaMinutes(at: date) {
+            parts.append(eta == 0 ? "arriving" : "ETA \(eta) min")
+        }
+        if let error = store.followError { parts.append(error) }
+        return parts.joined(separator: " · ")
+    }
+}
+
+/// Pick a simulated person of the drill to follow on Map: the drill's simulated households (the
+/// same list as the address picker), with their made-up address, zone, household and status.
+struct FollowPersonPicker: View {
+    @Environment(LiveStore.self) private var store
+    @Environment(AppRouter.self) private var router
+    @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+    @State private var homes: [DrillHome] = []
+    @State private var total = 0
+    @State private var failed = false
+    @State private var loading = true
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if store.followedPersonId != nil {
+                    Section {
+                        Button(role: .destructive) {
+                            store.stopFollowing()
+                            router.following = false
+                            dismiss()
+                        } label: {
+                            Label("Stop following", systemImage: "xmark.circle")
+                                .frame(minHeight: 44)
+                        }
+                    }
+                } else if let error = store.followError {
+                    Section { Text(error).foregroundStyle(Color.ctInkMuted) }
+                }
+                Section {
+                    if loading && homes.isEmpty {
+                        ProgressView().frame(maxWidth: .infinity)
+                    } else if failed {
+                        Text("Can't load people right now.").foregroundStyle(Color.ctInkMuted)
+                    } else if homes.isEmpty {
+                        Text(query.isEmpty ? "This drill has no simulated people." : "No one matches.")
+                            .foregroundStyle(Color.ctInkMuted)
+                    }
+                    ForEach(homes) { home in
+                        Button {
+                            followOnMap(home.id, store: store, router: router)
+                            dismiss()
+                        } label: {
+                            row(home)
+                        }
+                    }
+                } footer: {
+                    Text(total > homes.count
+                         ? "Simulated people of the drill, made-up addresses; routes are model estimates. \(homes.count) of \(total) shown."
+                         : "Simulated people of the drill, made-up addresses; routes are model estimates.")
+                }
+            }
+            .searchable(text: $query, prompt: "Street")
+            .navigationTitle("Follow a simulated person")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+            }
+            .task(id: query) {
+                if !query.isEmpty { try? await Task.sleep(for: .milliseconds(250)) }
+                guard !Task.isCancelled else { return }
+                loading = true
+                do {
+                    let result = try await store.homes(q: query, limit: 100)
+                    guard !Task.isCancelled else { return }
+                    homes = result.homes
+                    total = result.total
+                    failed = false
+                } catch {
+                    if !Task.isCancelled { failed = true }
+                }
+                loading = false
+            }
+        }
+    }
+
+    private func row(_ home: DrillHome) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(home.address).foregroundStyle(Color.ctInk)
+                Text([home.zone.name, home.householdLine, home.status].compactMap { $0 }
+                        .filter { !$0.isEmpty }.joined(separator: " · "))
+                    .font(.caption)
+                    .foregroundStyle(Color.ctInkMuted)
+                Text("Simulated person")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(Color.ctBrand)
+            }
+            Spacer(minLength: 8)
+            if store.followedPersonId == home.id {
+                Image(systemName: "checkmark")
+                    .foregroundStyle(Color.ctBrand)
+                    .accessibilityLabel("Following")
             }
         }
         .frame(minHeight: 44)

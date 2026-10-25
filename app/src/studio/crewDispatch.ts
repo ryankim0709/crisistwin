@@ -411,7 +411,8 @@ export function planCrewDispatch(
   const entryNodes = [
     ...new Set([
       ...(area.boundaryNodes ?? []).filter((node) => publicNode[node]),
-      ...area.exits.map((exit) => exit.node),
+      // A safe-area exit (dispatch-area/6) is a place inside the box, not a box-edge crossing.
+      ...area.exits.filter((exit) => exit.kind !== "safe-area").map((exit) => exit.node),
     ]),
   ].sort((a, b) => a - b);
   const entryExits = entryNodes.map((node) => ({ node }));
