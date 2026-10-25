@@ -168,12 +168,38 @@ down the request is still proxied, just not stored. Errors: 400 `invalid_request
 - `POST /api/landscapes/cache?key=<key>`: body is the gzip package bytes (`Content-Length`
   required, at most 48 MB; must start with the `CTLS1` package magic). `204`; `400
   invalid_key|not_a_landscape_package`, `413 too_large`, `503 unavailable`. One file per
-  key (newest wins), at most 200 files (oldest evicted).
+  key (newest wins), at most `LANDSCAPE_CACHE_MAX_FILES` files (default 2000, oldest evicted).
 - `GET|HEAD /api/landscapes/cache?key=<key>`: `200` gzip bytes with `ETag` and `Cache-Control:
   public, max-age=3600`, or `404 {"error": "not_found"}`.
 - `key` matches `^[a-z0-9][a-z0-9._-]{7,127}$`. The browser's keys look like
   `ls1-c-n122271-37873-r15000-m30` (centre in thousandths of a degree, `n` = negative;
   radius and cell size in metres) or `ls1-b-<minX>-<minY>-<maxX>-<maxY>` (box in 150 m units).
+
+- `GET /api/landscapes/cache/status?keys=k1,k2,...` (up to 200 keys): `{"cached": {key:
+  {"bytes", "storedAt"}}, "files": N, "maxFiles": cap}`; metadata only, so pickers can show
+  which boards are ready (`app/src/fire/useCachedBoards.ts`).
+
+#### Pre-warming the landscape cache
+
+`tools/prewarm_landscapes/` fills the cache (and the OSM street areas in `dispatch_areas`) for
+every board the app can request, so they load instantly: Studio region defaults plus 10, 15, 20,
+30, 45 and 60 km half-widths for every catalogue region, Live 15/30/45/60 km at the drill centre
+(`/api/demo/environment`) and the historical-fire boards. Needs Node 22, `npm ci` in `app/`,
+and the backend on `:8000`. Run from the repo root:
+
+```sh
+node tools/prewarm_landscapes/run.mjs --dry-run                     # list boards, what is cached, size estimate
+node tools/prewarm_landscapes/run.mjs --state prewarm-state.json    # build missing boards, then streets
+node tools/prewarm_landscapes/run.mjs --only live --no-streets      # a subset
+```
+
+Boards load through `/api/geo/landfire/wcs` and `/api/geo/terrarium` (raw tiles cached too), two
+at a time, then are POSTed to `/api/landscapes/cache`. Street boxes (up to 3x3 per board, same
+boxes as `useBoardStreets`) are requested one at a time, backing off on 429 and 5xx. Boards
+already cached are skipped (`HEAD`) and finished street boxes are recorded in the state file, so
+re-running the same command resumes. With a server cap lower than the board count the script
+builds only what fits and warns; raise `LANDSCAPE_CACHE_MAX_FILES` and re-run. Measured: about
+1.3 MB for a region default, 2 MB for a 60 km board.
 
 ### Shared world (`/api/world/…`)
 

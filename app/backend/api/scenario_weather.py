@@ -3,10 +3,12 @@
 Query: ``lon``, ``lat`` (WGS84 degrees), ``start`` (ISO 8601 UTC with Z; optional and defaulting to
 the current UTC hour for ``forecast``), ``hours`` (1-72, default 24), ``mode``
 (``historical_replay`` | ``climatology_percentile`` | ``forecast``), ``percentile`` (50-99.9,
-``climatology_percentile`` only, default 95).
+``climatology_percentile`` only, default 95), ``station`` (``historical_replay`` only: an IEM
+station id such as ``OAK``/``KOAK`` or ``JBGC1``, or ``reanalysis``; default: the best-ranked
+station, see docs/scenario-weather.md "Station selection").
 
-The body is `sim.weather.scenario_wind` unchanged (m/s, degrees FROM, hourly UTC; evidence class,
-station, distance, provenance), plus:
+The body is `sim.weather.scenario_wind` unchanged (m/s, degrees FROM, hourly UTC; evidence class
+and label, station, distance, ranked ``candidates``, ``warnings``, provenance), plus:
 
 * ``samples[].speed_20ft_ms`` and ``speed_20ft_mph``: the station wind scaled to the open 20 ft
   height the Rothermel model expects (see ``height_conversion``). ``speed_ms`` stays as reported.
@@ -18,6 +20,7 @@ Errors: 400 bad query, 502 no data or upstream error, 503 upstream unreachable.
 
 import logging
 import math
+import re
 import sys
 from datetime import datetime, timezone
 
@@ -79,6 +82,21 @@ def _number(raw, low, high):
     return value if math.isfinite(value) and low <= value <= high else None
 
 
+_STATION_ID = re.compile(r"^[A-Za-z0-9_-]{2,16}$")
+
+
+def parse_station(raw):
+    """``station`` query value: an IEM station id (``OAK``/``KOAK``, ``JBGC1``) or ``reanalysis``.
+
+    Returns ``(value_or_None, error_message_or_None)``.
+    """
+    if raw is None or raw == "":
+        return None, None
+    if not _STATION_ID.match(raw):
+        return None, "station must be an IEM station id (letters, digits, - or _) or 'reanalysis'."
+    return raw, None
+
+
 def _parse_start(raw):
     if not raw or not raw.endswith("Z"):
         return None
@@ -99,6 +117,14 @@ def height_conversion(result: dict) -> dict:
             "factor": 1.0,
             "method": "none: RAWS winds are already measured at 20 ft",
             "note": "Station exposure is not corrected.",
+        }
+    if source == "open_meteo_era5":
+        return {
+            "from_height": "10 m (ERA5 reanalysis, 0.25 deg grid cell)",
+            "to_height": "20 ft open wind",
+            "factor": FACTOR_10M_TO_20FT,
+            "method": CONVERSION_METHOD,
+            "note": CONVERSION_NOTE + " A reanalysis cell wind is already smoothed over the terrain.",
         }
     return {
         "from_height": "10 m (ASOS/AWOS or NWS gridpoint)",
@@ -167,6 +193,11 @@ def scenario_weather(request):
         if percentile is None:
             return _error(400, "bad_percentile", "percentile must be a number from 50 to 99.9.")
         kwargs["percentile"] = percentile
+    station, station_err = parse_station(q.get("station"))
+    if station_err:
+        return _error(400, "bad_station", station_err)
+    if station and mode == "historical_replay":
+        kwargs["station"] = station
     try:
         result = weather.scenario_wind(lon, lat, start, int(hours), mode, **kwargs)
     except ValueError as exc:

@@ -9,7 +9,8 @@ docs/scenario-weather.md ("Fuel moisture from the date's weather").
 Query: ``lon``, ``lat`` (WGS84 degrees); ``start`` (ISO 8601 UTC ending in Z; optional for
 ``forecast``); ``hours`` (1-72, default 24); ``mode`` (``historical_replay`` | ``climatology_percentile``
 | ``forecast``); ``percentile`` (50-99.9, climatology only, default 95); ``sector`` (``from,to``
-degrees, climatology only, default the offshore 315,90). Site (Rothermel 1983 Exhibit II-2):
+degrees, climatology only, default the offshore 315,90); ``station`` (historical_replay only: an IEM
+station id or ``reanalysis``; default the best-ranked station). Site (Rothermel 1983 Exhibit II-2):
 ``aspect`` (N|E|S|W or degrees, default S), ``slope_pct`` (default 0), ``shading``
 (exposed|shaded, default exposed), ``elevation`` (B|L|A relative to the weather station, default L),
 ``night_inversion`` (0|1, default 0) and ``station_aspect`` (Table F only, default S). Live
@@ -41,17 +42,18 @@ from rest_framework.throttling import AnonRateThrottle
 from .dispatch_area import _error
 from .live.twin_service import REPO_ROOT
 from .mongodb import get_cache_database
-from .scenario_weather import DEFAULT_HOURS, MAX_HOURS, _number, _parse_start, add_20ft_wind
+from .scenario_weather import DEFAULT_HOURS, MAX_HOURS, _number, _parse_start, add_20ft_wind, parse_station
 
 logger = logging.getLogger(__name__)
 
 COLLECTION = "conditions_cache"
-CACHE_SCHEMA = "conditions/1"
+CACHE_SCHEMA = "conditions/2"  # 2: ranked station choice + reanalysis fallback (sim/weather.py)
 FORECAST_CACHE_SECONDS = 3600  # a forecast answer older than this is refetched
 SPINUP_HOURS = 48  # observed hours before the window that warm up the 10-h/100-h state
-# Assumption: a station farther than this does not represent the query point. sim/weather.py
-# catalogues California stations only (IEM CA_ASOS, CA_DCP), so a point outside California (e.g.
-# the Marshall Fire, Colorado) would otherwise silently get a California station.
+# Assumption: a station farther than this does not represent the query point. sim/weather.py only
+# ranks stations within 60 km for historical_replay (beyond that it uses the ERA5 reanalysis), so
+# this guards the climatology fallback (nearest long-record ASOS) and points outside the
+# catalogued states.
 MAX_STATION_DISTANCE_KM = 100.0
 _MONGO_ERRORS = (PyMongoError, ValueError, ImproperlyConfigured, AttributeError, TypeError)
 
@@ -116,13 +118,24 @@ def _sample_dicts(series_samples) -> list[dict]:
 
 
 def _spinup(weather, result: dict, mode: str, start: datetime) -> tuple[list[dict], timedelta, dict]:
-    """Observed hours before the window from the same station, and the table clock shift."""
+    """Hours before the window from the same source (station or reanalysis), and the table clock shift."""
     shift = timedelta(0)
     info = {"hours_requested": SPINUP_HOURS, "hours_used": 0, "source": None, "note": None}
+    anchor = start.replace(minute=0, second=0, microsecond=0)
+    if mode != "forecast" and result.get("source") == "open_meteo_era5":
+        try:
+            series = weather.fetch_reanalysis(result["lon"], result["lat"], anchor - timedelta(hours=SPINUP_HOURS),
+                                              anchor - timedelta(hours=1))
+        except (weather.WeatherError, ValueError, OSError) as exc:
+            info["note"] = f"Spin-up fetch failed ({exc}); lagged classes start from the first day."
+            return [], shift, info
+        rows = _sample_dicts(series.samples)
+        info.update(hours_used=len(rows), source="open_meteo_era5 (modelled, reanalysis)",
+                    window_utc=[rows[0]["t_utc"], rows[-1]["t_utc"]] if rows else None)
+        return rows, shift, info
     if mode == "forecast" or not result.get("station"):
         info["note"] = "No spin-up: the forecast has no earlier hours; lagged classes start from the first day."
         return [], shift, info
-    anchor = start.replace(minute=0, second=0, microsecond=0)
     if mode == "climatology_percentile":
         analog = (result.get("provenance") or {}).get("analog") or {}
         src = analog.get("source_start_utc")
@@ -150,13 +163,16 @@ def build_conditions(params: dict) -> dict:
     kwargs = {}
     if mode == "climatology_percentile":
         kwargs = {"percentile": params["percentile"], "sector": tuple(params["sector"])}
+    if mode == "historical_replay" and params.get("station"):
+        kwargs["station"] = params["station"]
     result = weather.scenario_wind(lon, lat, start, hours, mode, **kwargs)
     distance_km = (result.get("station") or {}).get("distance_km")
     if distance_km is not None and distance_km > MAX_STATION_DISTANCE_KM:
         st = result["station"]
         raise NoStationCoverage(
             f"Nearest station with data is {st['id']} ({st['name']}), {distance_km:.0f} km away "
-            f"(limit {MAX_STATION_DISTANCE_KM:.0f} km). sim/weather.py covers California stations only."
+            f"(limit {MAX_STATION_DISTANCE_KM:.0f} km). Use mode=historical_replay (it falls back to the "
+            f"ERA5 reanalysis) or pick a nearer station."
         )
     add_20ft_wind(result)
     site = fm.Site(params["aspect"], params["slope_pct"], params["shading"], params["elevation"],
@@ -192,6 +208,7 @@ def build_conditions(params: dict) -> dict:
         "schema": "crisistwin.conditions/1",
         "model_version": fm.MODEL_VERSION,
         "query": {**{k: params[k] for k in ("lon", "lat", "hours", "mode")}, "start": _iso(start),
+                  **({"station": params["station"]} if params.get("station") else {}),
                   **({"percentile": params["percentile"], "sector": params["sector"]}
                      if mode == "climatology_percentile" else {})},
         "mode": mode,
@@ -200,7 +217,7 @@ def build_conditions(params: dict) -> dict:
             "time": "UTC ISO 8601, hourly bin centre",
             "wind_speed_20ft_ms": "m/s, open 20 ft (6.1 m) wind after height_conversion",
             "wind_speed_20ft_mph": "miles per hour, same wind",
-            "wind_speed_reported_ms": "m/s at the station's reporting height",
+            "wind_speed_reported_ms": "m/s at the source's reporting height (height_conversion.from_height)",
             "wind_from_deg": "degrees true, the bearing the wind blows FROM",
             "gust_ms": "m/s as reported, not height-converted",
             "temp_c": "degC", "rh_pct": "percent",
@@ -210,14 +227,16 @@ def build_conditions(params: dict) -> dict:
         },
         "station": result.get("station"),
         "source": result.get("source"),
+        "candidates": result.get("candidates", []),
+        "warnings": result.get("warnings", []),
         "height_conversion": result.get("height_conversion"),
         "site": {"aspect": site.aspect, "slope_pct": site.slope_pct, "shading": site.shading,
                  "elevation_band": site.elevation_band, "night_inversion": site.night_inversion,
                  "station_aspect": site.station_aspect, "given": params["site_given"]},
         "phenology": {"class": phen, "label": fm.PHENOLOGY_CALENDARS[phen]["label"], "chosen_by": phen_how},
         "evidence": {
-            "weather": result["evidence_class"],
-            "wind_20ft": "derived (station wind times the height_conversion factor)",
+            "weather": result.get("evidence_label", result["evidence_class"]),
+            "wind_20ft": "derived (station or reanalysis wind times the height_conversion factor)",
             "dead1h": "derived (Rothermel 1983 / Fosberg & Deeming tables from the hour's temperature and RH)",
             "dead10h_dead100h": ("derived (first-order timelag, tau 10 h and 100 h); forcing by the 1-h "
                                  "value and the starting state are assumed"),
@@ -341,11 +360,16 @@ def _parse(q, weather, fm) -> tuple[dict | None, Response | None]:
     p["phenology"] = q.get("phenology") or None
     if p["phenology"] and p["phenology"] not in fm.PHENOLOGY_CALENDARS:
         return None, _error(400, "bad_phenology", f"phenology must be one of {', '.join(fm.PHENOLOGY_CALENDARS)}.")
+    station, station_err = parse_station(q.get("station"))
+    if station_err:
+        return None, _error(400, "bad_station", station_err)
+    p["station"] = station if mode == "historical_replay" else None
     return p, None
 
 
-def _cache_key(p: dict, fm) -> str:
-    parts = [fm.MODEL_VERSION, f"{p['lon']:.4f},{p['lat']:.4f}", _iso(p["start"]), str(p["hours"]), p["mode"]]
+def _cache_key(p: dict, fm, weather) -> str:
+    parts = [fm.MODEL_VERSION, weather.SELECTION_VERSION, f"{p['lon']:.4f},{p['lat']:.4f}", _iso(p["start"]),
+             str(p["hours"]), p["mode"], f"st={(p.get('station') or '').upper()}"]
     if p["mode"] == "climatology_percentile":
         parts += [f"p{p['percentile']:g}", "s{:g},{:g}".format(*p["sector"])]
     parts += [p["aspect"], f"{p['slope_pct']:g}", p["shading"], p["elevation"],
@@ -369,7 +393,7 @@ def conditions(request):
         return err
     if params["region"] and presets.region_presets(params["region"]) is None:
         return _error(400, "bad_region", "region must be a catalogue region or historical fire id.")
-    key = _cache_key(params, fm)
+    key = _cache_key(params, fm, weather)
     forecast = params["mode"] == "forecast"
     cache_header = "no-store" if forecast else "public, max-age=3600"
     if (hit := _cache_get(key)) is not None:
