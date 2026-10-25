@@ -53,6 +53,16 @@ final class LiveStore {
     /// guidance and route are the live situation's for that address. It is never sent as the
     /// device's location. Persisted per incident.
     private(set) var home: DrillHome?
+    /// The simulated person (a `live_virtual_people` household of the drill, never a real resident)
+    /// this phone follows on the map, by id. Persisted per incident; nil when nobody is followed.
+    private(set) var followedPersonId: String?
+    /// The latest `GET virtual-people/<id>/track` for `followedPersonId`; nil until the first answer.
+    /// Simulated: every position is a model estimate on the drill clock.
+    private(set) var followedTrack: DrillTrack?
+    /// Where the followed person has been seen on this phone (positions from each poll), oldest first.
+    private(set) var followedTrail: [LonLat] = []
+    /// Words for the person when the followed person cannot be updated (offline, or gone from the drill).
+    private(set) var followError: String?
     /// Guidance for `myZone` as this phone follows it: the published guidance with the person's
     /// destination choice (D1) applied, so the route line and "Via ..." headline follow the pick
     /// everywhere. Nil when the zone has none. `publishedGuidance` is the controller's version.
@@ -163,6 +173,9 @@ final class LiveStore {
     @ObservationIgnored private var deviceCoord: LonLat?
     @ObservationIgnored private var deviceAccuracyM: Double?
     @ObservationIgnored private var pickingHome = false
+    @ObservationIgnored private var followAnchor: FollowAnchor?
+    /// The progress last drawn for the followed person on the current path (for a monotone glide).
+    @ObservationIgnored private var followLastShown: Double?
     @ObservationIgnored private var locationWasShared = false
     @ObservationIgnored private var lastSentCoord: LonLat?
     @ObservationIgnored private var profileSynced = false
@@ -191,6 +204,7 @@ final class LiveStore {
         credential = CredentialStore.load(.responder) ?? CredentialStore.load(.device)
         destinationChoices = Self.loadChoices(incidentId: incidentId)
         home = Self.loadHome(incidentId: incidentId)
+        followedPersonId = Self.loadFollowed(incidentId: incidentId)
         lastCoord = home?.coord
         pending = outbox.drafts
         // The last situation, so a relaunch without signal still shows the last instruction.
@@ -348,6 +362,7 @@ final class LiveStore {
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.refresh()
+                await self?.refreshFollowedTrack()
                 await self?.followActiveIncidentIfDue()
                 try? await Task.sleep(for: Self.pollInterval)
             }
@@ -447,6 +462,8 @@ final class LiveStore {
         incidentId = id
         destinationChoices = Self.loadChoices(incidentId: id)
         home = Self.loadHome(incidentId: id)
+        followedPersonId = Self.loadFollowed(incidentId: id)
+        resetFollowedState()
         lastCoord = home?.coord ?? deviceCoord
         situation = nil
         zonesCache = nil
@@ -632,6 +649,162 @@ final class LiveStore {
 
     private static func loadHome(incidentId: String) -> DrillHome? {
         UserDefaults.standard.data(forKey: homeKey(incidentId)).flatMap { try? JSONDecoder().decode(DrillHome.self, from: $0) }
+    }
+
+    // MARK: Follow a simulated person
+
+    /// Presentation only: how long (wall seconds) the marker keeps gliding without a fresh track, so a
+    /// failed poll does not send it down the road forever. A few polls (3 s each).
+    private static let followExtrapolateMaxS: TimeInterval = 8
+    /// A newly received position that is ahead of the marker is caught up over this long.
+    private static let followCatchUpS: TimeInterval = 1.5
+    private static let followTrailMax = 800
+
+    /// The last applied track with when it arrived and what the glide needs from its path.
+    private struct FollowAnchor {
+        var track: DrillTrack
+        var receivedAt: Date
+        var cumulative: [Double]
+        /// The progress drawn when this track arrived, when it continues the same path.
+        var blendFrom: Double?
+    }
+
+    /// Follows this simulated person: the map shows them and their way out, and the server is told
+    /// (`POST me/follow`, advisory). Replaces anyone followed before.
+    func startFollowing(_ personId: String) {
+        followedPersonId = personId
+        UserDefaults.standard.set(personId, forKey: Self.followedKey(incidentId))
+        resetFollowedState()
+        Task { try? await authorized { try await $0.follow(personId: personId, token: $1) } }
+        Task { await refreshFollowedTrack() }
+    }
+
+    func stopFollowing() {
+        guard followedPersonId != nil else { return }
+        followedPersonId = nil
+        UserDefaults.standard.removeObject(forKey: Self.followedKey(incidentId))
+        resetFollowedState()
+        Task { try? await authorized { try await $0.follow(personId: nil, token: $1) } }
+    }
+
+    /// One `GET track` for the followed person; rides the 3 s poll. A 404 means the drill no longer
+    /// has them, so following stops with a message; other failures keep the last track.
+    func refreshFollowedTrack() async {
+        guard let personId = followedPersonId else { return }
+        let incidentId = incidentId
+        do {
+            let track = try await authorized { try await $0.track(incidentId: incidentId, personId: personId, token: $1) }
+            guard followedPersonId == personId, self.incidentId == incidentId else { return }
+            applyTrack(track)
+            followError = nil
+        } catch is CancellationError {
+            return
+        } catch LiveAPIError.notFound {
+            guard followedPersonId == personId else { return }
+            stopFollowing()
+            followError = "That simulated person is no longer in the drill."
+        } catch {
+            guard followedPersonId == personId else { return }
+            followError = "Can't update this person right now."
+        }
+    }
+
+    private func resetFollowedState() {
+        followedTrack = nil
+        followedTrail = []
+        followError = nil
+        followAnchor = nil
+        followLastShown = nil
+    }
+
+    private func applyTrack(_ track: DrillTrack) {
+        let previous = followAnchor
+        let continues = previous.map { Self.samePath($0.track, track) } ?? false
+        if !continues { followLastShown = nil }
+        followAnchor = FollowAnchor(
+            track: track, receivedAt: Date(),
+            cumulative: continues ? (previous?.cumulative ?? []) : TrackPath.cumulative(track.path),
+            blendFrom: continues ? followLastShown : nil)
+        followedTrack = track
+        // Local trail: the track's own history first, then each new position that moved.
+        if followedTrail.isEmpty {
+            followedTrail = Array(track.trail.map(\.coord).filter(\.isValid).suffix(Self.followTrailMax))
+        }
+        if let position = track.position, position.isValid,
+           followedTrail.last.map({ TrackPath.meters($0, position) > 5 }) ?? true {
+            followedTrail.append(position)
+            if followedTrail.count > Self.followTrailMax {
+                followedTrail.removeFirst(followedTrail.count - Self.followTrailMax)
+            }
+        }
+    }
+
+    private static func samePath(_ a: DrillTrack, _ b: DrillTrack) -> Bool {
+        a.id == b.id && a.path.count == b.path.count && a.path.first == b.path.first && a.path.last == b.path.last
+    }
+
+    /// Drill seconds since the track arrived, from the drill clock's speed, capped (see above).
+    private func followElapsedDrillSeconds(_ anchor: FollowAnchor, at date: Date) -> Double {
+        let drill = anchor.track.drill
+        let rate = drill?.running == false ? 0 : (drill?.speed ?? 1)
+        return min(Self.followExtrapolateMaxS, max(0, date.timeIntervalSince(anchor.receivedAt))) * rate
+    }
+
+    /// The followed person's progress along the path at `date`, between server ticks (the server
+    /// moves a person once per drill minute). Presentation only: the step is the server's own model
+    /// (`livecore/virtual_people.py`: 1 of the route per `total_min` while driving, times 0.5 in slow
+    /// traffic, 0.1 in a long queue, 0 blocked); the next track replaces it.
+    private func followProgress(_ anchor: FollowAnchor, at date: Date) -> Double? {
+        let track = anchor.track
+        guard track.path.count > 1, let p0 = track.progress else { return nil }
+        var rate = 0.0
+        if track.isEnRoute, let total = track.totalMin, total > 0 {
+            switch track.motion {
+            case "queued": rate = 0.5 / (total * 60)
+            case "long_queue": rate = 0.1 / (total * 60)
+            case "blocked": rate = 0
+            default: rate = 1 / (total * 60)
+            }
+        }
+        let extrapolated = min(1, max(0, p0) + rate * followElapsedDrillSeconds(anchor, at: date))
+        guard let from = anchor.blendFrom else { return extrapolated }
+        if from >= extrapolated { return from }  // never backwards on a fresh poll
+        let k = min(1, max(0, date.timeIntervalSince(anchor.receivedAt) / Self.followCatchUpS))
+        return from + (extrapolated - from) * (1 - (1 - k) * (1 - k))
+    }
+
+    /// Where to draw the followed person at `date`: interpolated along the path, the solid part of
+    /// the route up to there, and the progress. Nil until the first track has a position.
+    func followedSample(at date: Date) -> FollowedSample? {
+        guard let track = followedTrack, let anchor = followAnchor, anchor.track.id == track.id else { return nil }
+        if let progress = followProgress(anchor, at: date) {
+            followLastShown = progress
+            let path = track.path
+            guard let coord = TrackPath.point(on: path, fraction: progress, cumulative: anchor.cumulative) else { return nil }
+            return FollowedSample(
+                coord: coord, progress: progress,
+                travelled: TrackPath.prefix(of: path, fraction: progress, cumulative: anchor.cumulative))
+        }
+        guard let position = track.position, position.isValid else { return nil }
+        return FollowedSample(coord: position, progress: nil, travelled: [])
+    }
+
+    /// Minutes to go for the followed person: the server's `eta_min`, counted down between polls
+    /// only while they are driving freely.
+    func followedEtaMinutes(at date: Date) -> Int? {
+        guard let track = followedTrack, let anchor = followAnchor, anchor.track.id == track.id,
+              let eta = track.etaMin else { return nil }
+        var minutes = eta
+        if track.isEnRoute, track.motion == nil || track.motion == "driving" {
+            minutes -= followElapsedDrillSeconds(anchor, at: date) / 60
+        }
+        return max(0, Int(minutes.rounded(.up)))
+    }
+
+    private static func followedKey(_ incidentId: String) -> String { "live.followed.\(incidentId)" }
+
+    private static func loadFollowed(incidentId: String) -> String? {
+        UserDefaults.standard.string(forKey: followedKey(incidentId))
     }
 
     func publishedGuidance(for zoneId: String) -> ZoneGuidance? {

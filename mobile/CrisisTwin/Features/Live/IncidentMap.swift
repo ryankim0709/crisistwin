@@ -105,12 +105,20 @@ struct IncidentMap: View {
     }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30, paused: drawStart == nil)) { context in
+        // Read here so a new track re-evaluates this body, not only the timeline's closure.
+        let followedTrack = store.followedTrack
+        // The followed simulated person glides between server ticks, so the timeline keeps running
+        // while they are on the road (10 frames a second; the route draw-on keeps 30).
+        let gliding = followedTrack?.isEnRoute == true
+        return TimelineView(.animation(minimumInterval: drawStart == nil ? 1 / 10 : 1 / 30, paused: drawStart == nil && !gliding)) { context in
             let progress = drawStart.map { min(1, context.date.timeIntervalSince($0) / Self.drawSeconds) } ?? 1
-            map(drawn: progress, now: context.date)
+            let followed = followedTrack.flatMap { _ in store.followedSample(at: context.date) }
+            map(drawn: progress, now: context.date, followedTrack: followedTrack, followed: followed)
+                .onChange(of: followed?.coord) { _, coord in followedMoved(coord) }
         }
         .onChange(of: routeKey, initial: true) { _, key in routeChanged(key) }
         .onChange(of: router.following, initial: true) { _, following in follow(following) }
+        .onChange(of: store.followedPersonId) { _, _ in if router.following { follow(true) } }
         .onChange(of: router.focus, initial: true) { _, target in focus(target) }
         .onChange(of: myLocation) { _, _ in followMoved() }
         .onChange(of: camera.positionedByUser) { _, byUser in
@@ -119,7 +127,7 @@ struct IncidentMap: View {
         .onChange(of: frameKey, initial: true) { _, _ in frame(force: false) }
     }
 
-    private func map(drawn: Double, now: Date) -> some View {
+    private func map(drawn: Double, now: Date, followedTrack: DrillTrack?, followed: FollowedSample?) -> some View {
         let fire = situation?.fire
         let firePolygons = fire?.geometry.map(Self.mkPolygons) ?? []
         let blocks = (situation?.hazards ?? []).filter { $0.kind == .roadBlocked && $0.coord.isValid }
@@ -241,6 +249,39 @@ struct IncidentMap: View {
                     taskMarker(task)
                 }
                 .annotationTitles(.hidden)
+            }
+
+            // A simulated person of the drill, followed from Home or Map: their whole way out dashed,
+            // the part driven so far solid, where they are going, and where they are now.
+            if let track = followedTrack {
+                if track.path.count > 1 {
+                    MapPolyline(coordinates: track.path.map(\.clCoordinate))
+                        .stroke(Color.ctBrand.opacity(0.8), style: Self.roundStroke(5, dash: [2, 8]))
+                }
+                if let followed, followed.travelled.count > 1 {
+                    let driven = followed.travelled.map(\.clCoordinate)
+                    MapPolyline(coordinates: driven)
+                        .stroke(Color.ctCasing, style: Self.roundStroke(10))
+                    MapPolyline(coordinates: driven)
+                        .stroke(Color.ctBrand, style: Self.roundStroke(6))
+                } else if track.path.count < 2, store.followedTrail.count > 1 {
+                    // No route yet (still at home, or going back for something): where they have been.
+                    let trail = store.followedTrail.map(\.clCoordinate)
+                    MapPolyline(coordinates: trail)
+                        .stroke(Color.ctBrand, style: Self.roundStroke(4))
+                }
+                if let destination = track.destination, destination.coord.isValid {
+                    Annotation(destination.name ?? "Destination", coordinate: destination.coord.clCoordinate, anchor: .center) {
+                        followedDestinationMarker(destination)
+                    }
+                    .annotationTitles(.hidden)
+                }
+                if let followed {
+                    Annotation(track.label, coordinate: followed.coord.clCoordinate, anchor: .center) {
+                        followedMarker(track)
+                    }
+                    .annotationTitles(.hidden)
+                }
             }
 
             if location.isAuthorized { UserAnnotation() }
@@ -400,6 +441,11 @@ struct IncidentMap: View {
     /// Start: the camera pitches to 45 degrees over the person and follows each fix.
     private func follow(_ following: Bool) {
         guard following else { return frame(force: true) }
+        // Following a simulated person: the camera goes to them, not to the GPS fix.
+        if store.followedPersonId != nil {
+            if let person = store.followedSample(at: Date()) { moveCamera(to: person.coord, animation: .smooth(duration: 0.8)) }
+            return
+        }
         if let me = myLocation {
             withAnimation(reduceMotion ? nil : .smooth(duration: 0.8)) {
                 camera = .camera(MapCamera(centerCoordinate: me.clCoordinate, distance: 1_400, heading: 0, pitch: 45))
@@ -409,9 +455,23 @@ struct IncidentMap: View {
 
     /// While following, the pitched camera stays centred on each new fix.
     private func followMoved() {
-        guard router.following, let me = myLocation else { return }
+        guard router.following, store.followedPersonId == nil, let me = myLocation else { return }
         withAnimation(reduceMotion ? nil : .smooth(duration: 0.5)) {
             camera = .camera(MapCamera(centerCoordinate: me.clCoordinate, distance: 1_400, heading: 0, pitch: 45))
+        }
+    }
+
+    /// The followed person moved (a glide step or a new track): the pitched camera stays on them. A
+    /// short linear animation per step reads as one continuous move at the glide's 10 frames a second.
+    private func followedMoved(_ coord: LonLat?) {
+        guard router.following, store.followedPersonId != nil, let coord else { return }
+        moveCamera(to: coord, animation: .linear(duration: 0.12))
+    }
+
+    private func moveCamera(to coord: LonLat, animation: Animation) {
+        guard coord.isValid else { return }
+        withAnimation(reduceMotion ? nil : animation) {
+            camera = .camera(MapCamera(centerCoordinate: coord.clCoordinate, distance: 2_000, heading: 0, pitch: 45))
         }
     }
 
@@ -526,6 +586,51 @@ struct IncidentMap: View {
             .background(Color.ctRoute, in: Circle())
             .overlay(Circle().strokeBorder(Color.ctCasing, lineWidth: 2))
             .accessibilityLabel("Destination: \(destination.shortName)")
+    }
+
+    /// The followed simulated person: a disc with what they are doing (a car on the road, red when
+    /// stuck), and the status above it. The hidden copy of the label below keeps the disc centred on
+    /// the coordinate. Simulated: said in the label for VoiceOver.
+    private func followedMarker(_ track: DrillTrack) -> some View {
+        let symbol: String
+        switch track.phase {
+        case "en_route": symbol = "car.fill"
+        case "out": symbol = "checkmark"
+        case "help": symbol = "exclamationmark"
+        case "picked_up": symbol = "figure.wave"
+        case "home", "packing", "trip", "staying": symbol = "house.fill"
+        default: symbol = "person.fill"
+        }
+        let text = track.status.isEmpty ? track.label : track.status
+        let tag = Text(text)
+            .font(.ctMapLabel)
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+        return VStack(spacing: 4) {
+            tag.glassEffect(.regular, in: .capsule)
+            Image(systemName: symbol)
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(Color.white)
+                .frame(width: 34, height: 34)
+                .background(track.isStuck ? Color.ctHazard : Color.ctBrand, in: Circle())
+                .overlay(Circle().strokeBorder(Color.white, lineWidth: 2.5))
+            tag.hidden()
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Simulated person \(track.label): \(text)")
+    }
+
+    /// Where the followed simulated person is heading.
+    private func followedDestinationMarker(_ destination: DrillTrack.Destination) -> some View {
+        Image(systemName: "flag.checkered")
+            .font(.system(size: 14, weight: .bold))
+            .foregroundStyle(Color.white)
+            .frame(width: 32, height: 32)
+            .background(Color.ctBrand, in: Circle())
+            .overlay(Circle().strokeBorder(Color.ctCasing, lineWidth: 2))
+            .accessibilityLabel("Simulated person's destination: \(destination.name ?? "exit")")
     }
 
     /// The responder's task target: a magnifying glass on glass.
