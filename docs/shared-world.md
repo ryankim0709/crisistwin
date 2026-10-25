@@ -134,6 +134,10 @@ kept as a JSON string, `extrasJson`). Implementation: `app/backend/api/world.py`
   revision 0 (nobody has written one) each tab keeps its own defaults.
 - `<WorldBar>` (`WorldBar.tsx`): the scenario menu, "Synced with other tabs · changed by Studio
   2 s ago" and the "Don't sync this tab" switch; `<WorldSummary>` is the read-only line.
+- `randomScenario.ts`: the page-agnostic "Random scenario" draw (seed + region + landscape grid +
+  road nodes → date, weather source, 1–2 ignitions, summary), used by Studio and /dispatch. The
+  tab that draws one notes `{by, seed}` in `localStorage` (`crisistwin.world.random`); other tabs'
+  sync line then reads "Random scenario from Studio · seed N" while the world's `seed` is that seed.
 - `weather.ts`: a page's scenario-weather record (`fire/scenarioWeather.ts`) to and from the world's
   `conditions` (`choiceOfRecord`, `recordMatchesWorld`, `fetchWorldWind`).
 
