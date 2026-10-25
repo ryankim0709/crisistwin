@@ -1,8 +1,8 @@
-.lc-audit { display: flex; flex-direction: column; gap: var(--ct-space-2); min-height: 0; height: 100%; padding: var(--ct-space-3); }
+.lc-audit { display: flex; flex-direction: column; gap: var(--ct-space-2); min-height: 0; height: 100%; padding: var(--ct-space-4); }
 .lc-audit-head { display: flex; align-items: center; justify-content: space-between; gap: var(--ct-space-2); }
-.lc-audit-head h2 { margin: 0; font-size: var(--ct-text-md); display: inline-flex; align-items: center; gap: var(--ct-space-2); }
+.lc-audit-head h2 { margin: 0; font-size: var(--ct-text-base); font-weight: var(--ct-weight-semibold); display: inline-flex; align-items: center; gap: var(--ct-space-2); }
 .lc-audit-live { font-size: var(--ct-text-xs); color: var(--ct-ink-muted); }
-.lc-audit-dot { width: 8px; height: 8px; border-radius: var(--ct-radius-pill); background: var(--ct-success); animation: lc-audit-pulse 2s var(--ct-ease) infinite; }
+.lc-audit-dot { width: var(--ct-space-2); height: var(--ct-space-2); border-radius: var(--ct-radius-pill); background: var(--ct-success); animation: lc-audit-pulse 2s var(--ct-ease) infinite; }
 @keyframes lc-audit-pulse { 50% { opacity: 0.35; } }
 .lc-audit-filter { flex: none; max-width: 100%; }
 .lc-audit-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: var(--ct-space-2); }

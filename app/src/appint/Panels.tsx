@@ -83,8 +83,9 @@ function PeopleRows({
               <span className="aix-row-status">{p.status || "No news yet"}</span>
               {showSeen ? <span className="aix-row-status aix-dim">Last seen {ago(p.last_seen, nowMs)}</span> : null}
             </span>
-            {p.flags.length ? (
+            {p.flags.length || p.role === "responder" ? (
               <span className="aix-flags">
+                {p.role === "responder" ? <Tag>Responder</Tag> : null}
                 {p.flags.slice(0, 2).map((f) => (
                   <Tag key={f} tone={flagTone(f)}>
                     {f}
@@ -145,7 +146,7 @@ export function ParticipantList({
       {older.length ? (
         <details className="aix-older">
           <summary>Older phones ({older.length})</summary>
-          <p className="aix-dim">Not heard from in the last hour. Not counted or shown on the map.</p>
+          <p className="aix-dim">Not heard from in the last hour; not on the map.</p>
           <PeopleRows people={older} label="Older phones" selectedId={selectedId} onSelect={onSelect} nowMs={nowMs} showSeen />
         </details>
       ) : null}
@@ -157,17 +158,6 @@ export function ParticipantList({
           {addError}
         </Notice>
       ) : null}
-      <ul className="aix-key-list" aria-label="Key">
-        <li>
-          <PersonGlyph p={{ kind: "real", role: "resident" }} size={12} /> Real person
-        </li>
-        <li>
-          <PersonGlyph p={{ kind: "simulated", role: "resident" }} size={12} /> Simulated, makes their own choices
-        </li>
-        <li>
-          <PersonGlyph p={{ kind: "real", role: "responder" }} size={12} /> Responder
-        </li>
-      </ul>
     </Panel>
   );
 }
@@ -217,7 +207,7 @@ export function NeedsOk({
           {error}
         </Notice>
       ) : null}
-      {pending.length === 0 && help.length === 0 ? <p className="aix-dim">Nothing waiting. New messages to phones show here first.</p> : null}
+      {pending.length === 0 && help.length === 0 ? <p className="aix-dim">Nothing waiting.</p> : null}
       {pending.map((p) => {
         const plain = plainProposal(p, data);
         const n = peopleInZones(plain.zoneIds, people, data);
@@ -279,9 +269,9 @@ export function MessagesPanel({ messages, loading }: { messages: ParticipantMess
   const [all, setAll] = useState(false);
   const shown = all ? messages : messages.slice(0, 12);
   return (
-    <Panel title="Messages" compact className="aix-messages" aria-label="Messages">
+    <Panel title="Messages" aside={<span className="aix-dim">Drill time, UTC</span>} compact className="aix-messages" aria-label="Messages">
       {loading && messages.length === 0 ? <p className="aix-dim">Loading…</p> : null}
-      {!loading && messages.length === 0 ? <p className="aix-dim">Nothing sent or received yet.</p> : null}
+      {!loading && messages.length === 0 ? <p className="aix-dim">No messages yet.</p> : null}
       <ol className="aix-timeline">
         {shown.map((m, i) => (
           <li key={`${m.at}-${i}`} className={`aix-msg aix-msg--${m.direction}`}>
@@ -301,7 +291,6 @@ export function MessagesPanel({ messages, loading }: { messages: ParticipantMess
           {all ? "Show fewer" : `Show all ${messages.length}`}
         </Button>
       ) : null}
-      <p className="aix-note">Times are drill time (UTC).</p>
     </Panel>
   );
 }
@@ -324,11 +313,9 @@ export function BehaviourPanel({ participants, onAdd, adding }: { participants: 
             </Button>
           }
         >
-          Like real people, they don't always do what they're told.
         </EmptyState>
       ) : (
         <>
-          <p className="aix-dim">Like real people, they don't always do what they're told.</p>
           <ul className="aix-bars">
             {BEHAVIOURS.map((b) => {
               const n = counts.get(b) ?? 0;

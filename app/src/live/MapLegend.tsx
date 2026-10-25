@@ -16,7 +16,7 @@ const zoneSw = (color: string, opacity: number, width = 2): ReactNode => (
 const FIRE_STATE_ROWS: { key: string; label: string; swatch: ReactNode }[] = [
   {
     key: "bd-fs-burning",
-    label: "Burning now: bright fill, thick glowing edge (sim)",
+    label: "Burning (sim)",
     swatch: (
       <svg viewBox="0 0 20 14" aria-hidden="true">
         <rect x="2" y="2" width="16" height="10" rx="2" fill={MAP_COLOR.fire} fillOpacity="0.5" stroke={MAP_COLOR.fire} strokeOpacity="0.5" strokeWidth="4" />
@@ -26,7 +26,7 @@ const FIRE_STATE_ROWS: { key: string; label: string; swatch: ReactNode }[] = [
   },
   {
     key: "bd-fs-out",
-    label: "Burned out: dark hatch (sim)",
+    label: "Burned out (sim)",
     swatch: (
       <svg viewBox="0 0 20 14" aria-hidden="true">
         <defs>
@@ -41,7 +41,7 @@ const FIRE_STATE_ROWS: { key: string; label: string; swatch: ReactNode }[] = [
   },
   {
     key: "bd-fs-ext",
-    label: "Put out by crews: blue-grey, dashed outline (sim)",
+    label: "Put out (sim)",
     swatch: (
       <svg viewBox="0 0 20 14" aria-hidden="true">
         <rect x="1" y="1" width="18" height="12" rx="2" fill={BOARD_COLOR.extinguished} fillOpacity="0.4" stroke={BOARD_COLOR.extinguishedEdge} strokeWidth="2" strokeDasharray="3 2" />
@@ -50,7 +50,7 @@ const FIRE_STATE_ROWS: { key: string; label: string; swatch: ReactNode }[] = [
   },
   {
     key: "bd-fs-contained",
-    label: "Contained fire, thin dashed edge (sim)",
+    label: "Contained (sim)",
     swatch: (
       <svg viewBox="0 0 20 14" aria-hidden="true">
         <rect x="1" y="1" width="18" height="12" rx="2" fill="none" stroke={MAP_COLOR.fireEdge} strokeWidth="1.5" strokeDasharray="3 2" />
@@ -59,7 +59,7 @@ const FIRE_STATE_ROWS: { key: string; label: string; swatch: ReactNode }[] = [
   },
   {
     key: "bd-crews",
-    label: "Firefighters at work, with a trail of the edge just worked (sim)",
+    label: "Crews at work (sim)",
     swatch: (
       <svg viewBox="0 0 20 14" aria-hidden="true">
         <line x1="1" y1="9" x2="13" y2="7" stroke={MAP_COLOR.responder} strokeOpacity="0.55" strokeWidth="2.5" strokeLinecap="round" />
@@ -73,9 +73,9 @@ const FIRE_STATE_ROWS: { key: string; label: string; swatch: ReactNode }[] = [
 /** The simulated board's marks (drawn by demo/boardMapLayers.ts). All simulation output. */
 const BOARD_ROWS: { key: string; label: string; swatch: ReactNode }[] = [
   ...FIRE_STATE_ROWS,
-  { key: "bd-leave", label: "Board zone: leave now (sim)", swatch: zoneSw(LEVEL_COLOR.evacuate_now, 0.15) },
-  { key: "bd-risk", label: "Board zone: at risk (sim)", swatch: zoneSw(LEVEL_COLOR.be_ready, 0.15) },
-  { key: "bd-overrun", label: "Board zone: overrun (sim)", swatch: zoneSw(BOARD_COLOR.overrun, 0.3, 3) },
+  { key: "bd-leave", label: "Leave now zone (sim)", swatch: zoneSw(LEVEL_COLOR.evacuate_now, 0.15) },
+  { key: "bd-risk", label: "At-risk zone (sim)", swatch: zoneSw(LEVEL_COLOR.be_ready, 0.15) },
+  { key: "bd-overrun", label: "Overrun zone (sim)", swatch: zoneSw(BOARD_COLOR.overrun, 0.3, 3) },
   {
     key: "bd-unit",
     label: "Fire unit (sim)",
@@ -97,7 +97,7 @@ const BOARD_ROWS: { key: string; label: string; swatch: ReactNode }[] = [
   },
   {
     key: "bd-returning",
-    label: "Unit returning or moving up to cover a station; unit lines follow roads (sim)",
+    label: "Unit repositioning (sim)",
     swatch: (
       <svg viewBox="0 0 20 14" aria-hidden="true">
         <line x1="1" y1="7" x2="19" y2="7" stroke={MAP_COLOR.responder} strokeOpacity="0.6" strokeWidth="1.5" strokeDasharray="0.5 2" />
@@ -107,7 +107,7 @@ const BOARD_ROWS: { key: string; label: string; swatch: ReactNode }[] = [
   },
   {
     key: "bd-fireline",
-    label: "Fire line ahead of a fire: built solid, planned dashed (sim)",
+    label: "Fire line: built / planned (sim)",
     swatch: (
       <svg viewBox="0 0 20 14" aria-hidden="true">
         <line x1="1" y1="7" x2="10" y2="7" stroke={BOARD_COLOR.fireLine} strokeOpacity="0.85" strokeWidth="2.5" />
@@ -117,7 +117,7 @@ const BOARD_ROWS: { key: string; label: string; swatch: ReactNode }[] = [
   },
   {
     key: "bd-evac",
-    label: "Evacuating vehicles on their route (sim)",
+    label: "Evacuating vehicles (sim)",
     swatch: (
       <svg viewBox="0 0 20 14" aria-hidden="true">
         <line x1="1" y1="7" x2="19" y2="7" stroke={MAP_COLOR.route} strokeOpacity="0.55" strokeWidth="1.8" strokeDasharray="3 2" />
@@ -128,7 +128,7 @@ const BOARD_ROWS: { key: string; label: string; swatch: ReactNode }[] = [
   },
   {
     key: "bd-no-truck",
-    label: "Road the unit's truck can't use (rules R01-R12)",
+    label: "Truck-restricted road (R01-R12)",
     swatch: (
       <svg viewBox="0 0 20 14" aria-hidden="true">
         <line x1="1" y1="7" x2="19" y2="7" stroke="#fff" strokeWidth="5" />
@@ -203,7 +203,7 @@ const ROWS: { key: string; label: string; swatch: ReactNode }[] = [
   },
   {
     key: "traffic",
-    label: "Cars on the road (simulated)",
+    label: "Cars (simulated)",
     swatch: (
       <svg viewBox="0 0 20 14" aria-hidden="true">
         <line x1="1" y1="7" x2="19" y2="7" stroke="#fff" strokeWidth="8" strokeLinecap="round" />
@@ -235,7 +235,7 @@ const ROWS: { key: string; label: string; swatch: ReactNode }[] = [
   {
     // Controller drill road closures (live/roadClosureLayer.ts): dark line, white X marks.
     key: "closed-drill",
-    label: "Closed road (drill, controller): no unit or evacuee uses it",
+    label: "Closed road (drill)",
     swatch: (
       <svg viewBox="0 0 20 14" aria-hidden="true">
         <line x1="2" y1="7" x2="18" y2="7" stroke={MAP_COLOR.casing} strokeWidth="9" strokeLinecap="round" />
@@ -246,7 +246,7 @@ const ROWS: { key: string; label: string; swatch: ReactNode }[] = [
   },
   {
     key: "queue",
-    label: "Traffic queue (simulated)",
+    label: "Queue (simulated)",
     swatch: (
       <svg viewBox="0 0 20 14" aria-hidden="true">
         <circle cx="10" cy="7" r="5" fill="none" stroke={MAP_COLOR.queue} strokeWidth="1.5" />
@@ -265,7 +265,7 @@ const ROWS: { key: string; label: string; swatch: ReactNode }[] = [
   },
   {
     key: "ground",
-    label: "2018 calls and radio, last 30 min",
+    label: "2018 calls and radio (30 min)",
     swatch: (
       <svg viewBox="0 0 20 14" aria-hidden="true">
         <circle cx="10" cy="7" r="6" fill={MAP_COLOR.ground} stroke="#fff" strokeWidth="1.5" />
@@ -292,7 +292,7 @@ const ROWS: { key: string; label: string; swatch: ReactNode }[] = [
   },
   {
     key: "shelter",
-    label: "Shelter or refuge",
+    label: "Shelter / refuge",
     swatch: (
       <svg viewBox="0 0 20 14" aria-hidden="true">
         <circle cx="10" cy="7" r="4" fill="#fff" stroke={MAP_COLOR.shelter} strokeWidth="2" />
@@ -312,7 +312,7 @@ export default function MapLegend({
   houses?: boolean;
 }) {
   return (
-    <details className="lc-legend" open>
+    <details className="lc-legend">
       <summary>Legend</summary>
       <ul>
         {ROWS.filter((r) => record || r.key !== "ground").map((r) => (

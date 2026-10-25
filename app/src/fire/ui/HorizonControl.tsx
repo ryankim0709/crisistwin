@@ -54,7 +54,8 @@ export default function HorizonControl({
     if (minutes !== value) onChange(minutes);
   }
 
-  const notes = [`Frames every ${frameStepMinutes} min`];
+  const notes: string[] = [];
+  if (custom) notes.push(`${formatHorizon(value)} (1 to ${MAX_HORIZON_MINUTES / HOUR / 24} days)`);
   if (value >= SLOW_SOLVE_HORIZON_MINUTES) notes.push("solving can take a few seconds");
   return (
     <div className="fr-hz">
@@ -67,7 +68,8 @@ export default function HorizonControl({
           className="ui-input"
           value={custom ? CUSTOM : String(value)}
           disabled={disabled}
-          aria-describedby={`${uid}-note`}
+          title={`Frames every ${frameStepMinutes} min`}
+          aria-describedby={notes.length > 0 ? `${uid}-note` : undefined}
           onChange={(event) => {
             if (event.target.value === CUSTOM) {
               setCustomOpen(true);
@@ -109,12 +111,11 @@ export default function HorizonControl({
           </label>
         )}
       </div>
-      <p className="fr-hz-note" id={`${uid}-note`}>
-        {custom
-          ? `${formatHorizon(value)} (1 to ${MAX_HORIZON_MINUTES / HOUR / 24} days). `
-          : ""}
-        {notes.join(" · ")}.
-      </p>
+      {notes.length > 0 && (
+        <p className="fr-hz-note" id={`${uid}-note`}>
+          {notes.join(" · ")}.
+        </p>
+      )}
     </div>
   );
 }

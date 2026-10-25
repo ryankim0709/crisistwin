@@ -48,7 +48,7 @@
   bottom: 36px;
   z-index: var(--ct-z-map-controls);
   width: 220px;
-  max-height: calc(100% - 120px);
+  max-height: calc(100% - 160px);
   overflow-y: auto;
   font-size: var(--ct-text-sm);
   line-height: var(--ct-leading-snug);
