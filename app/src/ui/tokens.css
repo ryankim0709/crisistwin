@@ -58,6 +58,7 @@
   --ct-responder: #c7a6ff;
   --ct-shelter: #22c55e;
   --ct-closure: #dc2626;
+  --ct-app-user: #2563eb; /* our app users on the App integration map (appint/palette.ts) */
   --ct-vegetation: #8fa98a;
 
   /* ---- Typography ---- */

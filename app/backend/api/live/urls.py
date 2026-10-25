@@ -27,6 +27,7 @@ urlpatterns = [
     path("incidents/<str:incident_id>/twin", views.twin, name="live-twin"),
     path("incidents/<str:incident_id>/twin/whatif", views.twin_whatif, name="live-twin-whatif"),
     path("incidents/<str:incident_id>/people", views.twin_people, name="live-people"),
+    path("incidents/<str:incident_id>/participants", participants.incident_participants, name="live-incident-participants"),
     path(
         "incidents/<str:incident_id>/participants/<str:participant_id>/phone-view",
         phone_view.phone_view,
