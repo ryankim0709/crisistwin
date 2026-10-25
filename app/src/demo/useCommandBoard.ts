@@ -37,6 +37,8 @@ import { useDemoRoutes } from "./useDemoRoutes";
 import { useArrivalField } from "./useArrivalField";
 import { useFireSolver } from "./useFireSolver";
 import { clearStudioFires, studioBaseline, studioFiresToIngest, useStudioFires } from "./useStudioFires";
+import type { BoardRunMode, RunTimeline, ScorePoint } from "./runContracts";
+import { scorePoint } from "./scorePoint";
 import { buildIncidentPicture } from "./incidentPicture";
 import { usePeople } from "../live/people";
 import { useParticipants } from "../appint/api";
@@ -53,9 +55,27 @@ import { useParticipants } from "../appint/api";
  * refreshed by the 3 s polls, and its live drill actions run through the live API (liveOrders.ts).
  * The live board is AI agent only: no rule-based dispatch (aiOnly below), and the clock runs only
  * while the AI agent is on, so a fresh board waits at T+00:00 until it is turned on.
+ *
+ * Run modes (runContracts.ts BoardRunMode; the /run page): "ai" (default) is the /live behaviour
+ * above. "baseline" is the no-action run: the clock runs without the AI agent (no agent_off
+ * pause), the agent is never called, nothing is dispatched (aiOnly) and no orders are taken (the
+ * panel actions refuse). Households never leave without an order on this board (model.ts
+ * departedExact is 0 while zone.orderedAt is null: no self-evacuation on fire cues, a deliberate
+ * model simplification), so a baseline run is a pure fire race: nobody moves, every household is
+ * still home when the fire reaches its zone, and fires burn uncontained. `restart(seed)` replays a
+ * run from T+0 on a given seed with the incident's current Studio fire; the /run page starts each
+ * run (baseline and AI) with it so both start identically. `timeline` samples scorePoint.ts once
+ * per board minute (at most 2 minutes apart: a baseline or fixed-speed clock advances at most
+ * RUN_TICK_MAX_MINUTES per tick) so a baseline and an AI run can be compared minute by minute.
  */
 
 const TICK_MS = 200;
+/**
+ * Board minutes a baseline or fixed-speed (/run) clock advances per tick at most, so the score
+ * timeline gets a point at least every 2 board minutes (600x is 2 minutes per 200 ms tick; a
+ * stalled tab would otherwise jump up to 10). UI choice. /live (ai mode, no fixed speed) is uncapped.
+ */
+const RUN_TICK_MAX_MINUTES = 2;
 /** Playback speed stops for the slider: simulated minutes per real minute (1 = real time). */
 export const BOARD_SPEED_STEPS = [1, 2, 5, 10, 20, 30, 60, 120, 240, 600] as const;
 export type BoardSpeed = (typeof BOARD_SPEED_STEPS)[number];
@@ -73,6 +93,8 @@ export type ClockPause = "agent_off" | "tab_hidden" | "operator";
 export const AGENT_OFF_PAUSE = "Simulation paused \u2014 turn on the AI agent to run it.";
 /** The live board's rule: no run cards or automatic escalation; Claude or a person orders everything. */
 export const AI_ONLY_TEXT = "AI agent only: nothing is dispatched or ordered unless the AI agent (or you) orders it.";
+/** Shown when a panel order is tried on a baseline run. */
+export const BASELINE_NO_ORDERS = "Baseline run: nobody acts, so no orders are taken.";
 const OPEN_REPORT = new Set(["unverified", "corroborated", "responder_confirmed", "confirmed"]);
 
 function baseZones(data: CommandResponse): BaseZone[] {
@@ -204,9 +226,24 @@ export interface CommandBoardOptions {
    * or null. The board then runs on exactly that landscape (Studio's centre, radius and cells).
    */
   studioBoardId?: string | null;
+  /** "ai" (default): today's /live board. "baseline": the clock runs with nobody acting (see the top comment). */
+  runMode?: BoardRunMode;
+  /**
+   * A fixed clock speed (board minutes per real minute) that overrides Auto and the manual speed
+   * without touching the browser's saved Auto choice (the /run page's fast baseline). Omit: /live behaviour.
+   */
+  speed?: BoardSpeed | null;
 }
 
-export function useCommandBoard({ token, incidentId, data: commandData, studioBoardId = null }: CommandBoardOptions) {
+export function useCommandBoard({
+  token,
+  incidentId,
+  data: commandData,
+  studioBoardId = null,
+  runMode = "ai",
+  speed: fixedSpeed = null,
+}: CommandBoardOptions) {
+  const baseline = runMode === "baseline";
   // The poll keeps the previous incident's data until the new answer lands; ignore it meanwhile.
   const data = commandData?.incident_id === incidentId ? commandData : null;
   const boardRef = useRef<Board | null>(null);
@@ -344,8 +381,11 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
   }, [hasData, token, incidentId, snapshotAttempt]);
   const snapshot = snapshotLoad?.incidentId === incidentId && snapshotLoad.attempt === snapshotAttempt ? snapshotLoad : null;
 
+  // The seed restart(seed) asked for (/run): a later Studio publish or rebuilt board keeps it (not the world's).
+  const pinnedSeed = useRef<number | null>(null);
   // A different drill: drop the board and selection; the effect below rebuilds it from the new data.
   useEffect(() => {
+    pinnedSeed.current = null;
     boardRef.current = null;
     setBoard(null);
     setSelection(null);
@@ -356,7 +396,7 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
   // Start the board once the drill zones, the fire inputs and the snapshot answer arrive.
   useEffect(() => {
     if (!data || !env || !snapshot || boardRef.current) return;
-    const created = aiOnly(createBoard(baseZones(data), worldSeed.current ?? newSeed(), env, resourceInput(snapshot)));
+    const created = aiOnly(createBoard(baseZones(data), pinnedSeed.current ?? worldSeed.current ?? newSeed(), env, resourceInput(snapshot)));
     boardRef.current = created;
     setBoard(created);
     // One notice per board built without a snapshot (the label also stays in resourceNotice).
@@ -409,13 +449,49 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
     restartRef.current = restartWith;
   });
   /** "Restart board": a new seed (written to the shared world); `load` and `studio` as restartWith. */
-  const restart = (load: SnapshotLoad | null = snapshot, studio: "newest" | "none" = "newest") => {
+  const restartNewSeed = (load: SnapshotLoad | null = snapshot, studio: "newest" | "none" = "newest") => {
     if (!data || !env || !load) return;
     const seed = Math.floor(Math.random() * 2 ** 31);
+    pinnedSeed.current = null;
     restartWith(seed, load, studio);
     worldSeed.current = seed;
     writeWorld({ fire: { stochastic: { seed } } });
   };
+  /**
+   * Replays the run from T+0 on `seed` (default: the current board's seed) with the incident's
+   * current Studio fire, ingested at once so the clock cannot run a fire-less minute first. A new
+   * Board: the agent's memory, decisions and inputs and the timeline start over. The seed is not
+   * written to the shared world (it would change Studio's stochastic seed). Returns the new board,
+   * or null while the drill data, landscape or snapshot answer is still loading (the seed stays
+   * pinned, so the board built when they arrive uses it).
+   */
+  const restartRun = (seed?: number): Board | null => {
+    const s =
+      typeof seed === "number" && Number.isInteger(seed) && seed > 0
+        ? seed
+        : (boardRef.current?.seed ?? worldSeed.current ?? newSeed());
+    pinnedSeed.current = s;
+    const created = restartWith(s);
+    if (!created) return null;
+    const listed = studioRef.current;
+    if (listed) {
+      const fresh = studioFiresToIngest(listed, created.studioBaseline ?? [], created.studioFireIds);
+      const newest = fresh[fresh.length - 1];
+      if (newest) {
+        created.studioBaseline = listed.filter((f) => f.fire_id !== newest.fire_id).map((f) => f.fire_id);
+        ingestStudioFire(created, newest);
+      }
+    }
+    return created;
+  };
+
+  // Stable callbacks for the page (they run the newest closures).
+  const runRestarts = useRef({ restartRun, restartNewSeed });
+  useEffect(() => {
+    runRestarts.current = { restartRun, restartNewSeed };
+  });
+  const restart = useCallback((seed?: number) => runRestarts.current.restartRun(seed), []);
+  const restartFresh = useCallback(() => runRestarts.current.restartNewSeed(), []);
 
   // "Reset board": clear the incident's published Studio fires on the server (so no console or
   // reload starts them again), then start an empty board; the agent's log clears with it.
@@ -433,7 +509,7 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
         setSnapshotLoad(load);
         setSnapshotAttempt(attempt);
       }
-      restart(load ?? snapshot, "none");
+      restartNewSeed(load ?? snapshot, "none");
     } catch (error) {
       setNotice(`Reset failed: ${error instanceof Error ? error.message : "Live API error."}`);
     } finally {
@@ -461,7 +537,7 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
       return;
     }
     const replaced = b.studioFireIds.length > 0;
-    const created = restartRef.current(worldSeed.current ?? b.seed);
+    const created = restartRef.current(pinnedSeed.current ?? worldSeed.current ?? b.seed);
     if (!created) return;
     created.studioBaseline = older;
     ingestStudioFire(created, newest, replaced);
@@ -526,7 +602,9 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
     const { token: t, incidentId: id, data: d } = liveRef.current;
     return runLiveOrders(t, id, d, orders, setNotice);
   }, []);
-  const agent = useDemoAgent({ board, version, incidentId, routes: routes.routes, forecasts, enabled: autopilot, apply, applyLive, picture });
+  const agentRun = useDemoAgent({ board, version, incidentId, routes: routes.routes, forecasts, enabled: autopilot && !baseline, apply, applyLive, picture });
+  // A baseline run never calls the agent ("Ask Claude now" included).
+  const agent = baseline ? { ...agentRun, decideNow: () => {} } : agentRun;
   // Turning the AI agent on starts the clock (clearing an earlier Pause); off stops it (below).
   const turnAgent = useCallback((on: boolean) => {
     setAutopilot(on);
@@ -537,7 +615,12 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
   // monitoring (on, tab shown) and not paused; nothing advances otherwise (fire, traffic, units).
   // It keeps running while Claude decides; orders apply when they arrive. Studio publishes are
   // still ingested while it waits: they are scheduled from the board minute (model.ingestStudioFire).
-  const clockPause: ClockPause | null = !autopilot
+  // A baseline run has no agent to wait for: only the Pause button stops it.
+  const clockPause: ClockPause | null = baseline
+    ? !running
+      ? "operator"
+      : null
+    : !autopilot
     ? "agent_off"
     : agent.status === "paused"
       ? "tab_hidden"
@@ -559,7 +642,7 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
     autoState.current = { board, state: next };
     setAutoReason(next.reason);
   }, [board, version, thinking]);
-  const speed: BoardSpeed = autoSpeedOn ? (AUTO_SPEED[autoReason] as BoardSpeed) : manualSpeed;
+  const speed: BoardSpeed = fixedSpeed ?? (autoSpeedOn ? (AUTO_SPEED[autoReason] as BoardSpeed) : manualSpeed);
   // Picking a speed by hand turns Auto off and keeps that speed; turning Auto off keeps the current one.
   const setSpeed = useCallback((s: BoardSpeed) => {
     setManualSpeed(s);
@@ -583,10 +666,11 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
     if (typeof extras.autoSpeed === "boolean") setAutoSpeed(extras.autoSpeed);
     if (typeof extras.running === "boolean") setRunning(extras.running);
   };
-  const clock = useRef({ running: clockRunning, speed });
+  const maxTick = baseline || fixedSpeed !== null ? RUN_TICK_MAX_MINUTES : Infinity;
+  const clock = useRef({ running: clockRunning, speed, maxTick });
   useEffect(() => {
-    clock.current = { running: clockRunning, speed };
-  }, [clockRunning, speed]);
+    clock.current = { running: clockRunning, speed, maxTick };
+  }, [clockRunning, speed, maxTick]);
   // The clock also holds while a unit on the road waits for its road leg (at most
   // ROAD_LEG_HOLD_MAX_MS per leg), as it does while a fire solve is due (useCrewRoutes.ts).
   const [legHold] = useState(() => createRoadLegHold());
@@ -600,7 +684,7 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
       const b = boardRef.current;
       const c = clock.current;
       if (!b || !c.running) return;
-      step(b, (seconds * c.speed) / 60, holdForLegs);
+      step(b, Math.min(c.maxTick, (seconds * c.speed) / 60), holdForLegs);
       bump();
     }, TICK_MS);
     return () => window.clearInterval(id);
@@ -609,6 +693,10 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
   const act = (fn: (b: Board) => string | null) => {
     const b = boardRef.current;
     if (!b) return;
+    if (baseline) {
+      setNotice(BASELINE_NO_ORDERS);
+      return;
+    }
     const error = fn(b);
     setNotice(error);
     bump();
@@ -616,6 +704,10 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
 
   const actions: PanelActions = {
     closeFire: (fireId) => {
+      if (baseline) {
+        setNotice(BASELINE_NO_ORDERS);
+        return;
+      }
       const b = boardRef.current;
       const reports = b?.fires.find((f) => f.id === fireId)?.reportIds ?? [];
       let refused: string | null = null;
@@ -659,6 +751,30 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
       }, 0)
     : 0;
 
+  // The run's score timeline: one scorePoint per board minute the clock lands on (a fast clock
+  // can step 2 minutes per tick, so points may be 2 minutes apart). A new board starts a new one.
+  // The state names its board, so a new board never shows the old run's points (even for one render).
+  const timelineRef = useRef<{ board: Board | null; points: ScorePoint[] }>({ board: null, points: [] });
+  const [sampled, setSampled] = useState<{ board: Board | null; timeline: RunTimeline } | null>(null);
+  useEffect(() => {
+    if (timelineRef.current.board !== board) timelineRef.current = { board, points: [] };
+    const points = timelineRef.current.points;
+    if (board) {
+      const minute = Math.floor(board.minute);
+      if (points.length === 0 || minute > points[points.length - 1].minute) points.push(scorePoint(board, forecasts));
+    }
+    const seed = board?.seed ?? 0;
+    setSampled((prev) =>
+      prev && prev.board === board && prev.timeline.mode === runMode && prev.timeline.points.length === points.length
+        ? prev
+        : { board, timeline: { mode: runMode, seed, points: [...points] } },
+    );
+  }, [board, version, forecasts, runMode]);
+  const timeline: RunTimeline =
+    sampled && sampled.board === board && sampled.timeline.mode === runMode
+      ? sampled.timeline
+      : { mode: runMode, seed: board?.seed ?? 0, points: [] };
+
   return {
     /** The board, mutated in place; `version` changes whenever it does. Null until zones and inputs load. */
     board,
@@ -697,9 +813,15 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
     // board clock runs only then). setAutopilot(true) also starts the clock.
     /** The live drill's incident picture the commander reads (incidentPicture.ts), or null. */
     picture,
-    autopilot,
+    autopilot: autopilot && !baseline,
     setAutopilot: turnAgent,
     agent,
+    /** How this board runs (runContracts.ts BoardRunMode). */
+    runMode,
+    /** The current board's seed; null before the first board. */
+    seed: board?.seed ?? null,
+    /** Score samples of the current board's run (scorePoint.ts), oldest first; reset by every new board. */
+    timeline,
     /** The Simulation Studio feed: its last error (404 until the server has the endpoint), whether it has answered. */
     studio: { error: studio.error, loaded: studio.data !== null },
     /** Alias of fireSolver (one solver hook; why a solve is running, last solve time, last error). */
@@ -714,7 +836,10 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
     crewRoutes,
     forecasts,
     actions,
+    /** Replays the run from T+0 on `seed` (default: the current seed) with the current Studio fire. */
     restart,
+    /** /live "Restart board": a new random seed, written to the shared world. */
+    restartNewSeed: restartFresh,
     reset,
     resetting,
     name,

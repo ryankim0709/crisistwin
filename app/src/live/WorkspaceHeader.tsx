@@ -209,7 +209,7 @@ export function BoardControls({ board: cb }: { board: CommandBoard }) {
                 title={`Seed ${board.seed}`}
                 onClick={() => {
                   if (ref.current) ref.current.open = false;
-                  cb.restart();
+                  cb.restartNewSeed();
                 }}
               >
                 Restart board
