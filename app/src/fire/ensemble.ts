@@ -26,6 +26,8 @@ export interface BurnProbabilityOptions {
    * to `input.settings.stochastic`, else every mechanism at its default.
    */
   stochastic?: Omit<StochasticSpreadOptions, "enabled" | "seed">;
+  /** Called after each member with (members done, members total); a worker relays it to the UI. */
+  onProgress?: (done: number, total: number) => void;
 }
 
 export interface BurnProbabilityRaster {
@@ -88,6 +90,7 @@ export function burnProbabilityEnsemble(
       }
     }
     memberBurnedAreaSquareMeters.push(burned * cellArea);
+    options.onProgress?.(k + 1, members);
   }
   const burnProbability = new Float32Array(counts.length);
   for (let i = 0; i < counts.length; i++) burnProbability[i] = counts[i] / members;
