@@ -1,7 +1,7 @@
 /**
  * "Random scenario", page-agnostic: one seed (plus the region catalogue, a landscape grid, the
  * board's road nodes and the weather service's answer) picks the region, date, weather source
- * and 1–5 ignitions (MAX_RANDOM_FIRES). Same seed, same board: same draw. Used by Simulation Studio and /dispatch
+ * and 1–3 ignitions (RANDOM_FIRE_COUNT_WEIGHTS: 65% one, 25% two, 10% three; users can still place up to 5 by hand). Same seed, same board: same draw. Used by Simulation Studio and /dispatch
  * (studio/randomScenario.ts), /fire and the /live board, through RandomScenarioButton. All of
  * it is a simulated planning draw, not a forecast.
  *
@@ -49,10 +49,24 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 const COMPASS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
 const MAX_SEED = 2_147_483_647;
 
-/** Most fires a random scenario starts (Studio holds at most 5). */
-const MAX_RANDOM_FIRES = 5;
-/** Chance of each extra fire; see the ignition draw. ASSUMPTION, a test-scenario knob. */
-const EXTRA_FIRE_CHANCE = 0.4;
+/**
+ * Fires a random scenario starts: [count, share] pairs, never more than 3 (Studio still lets
+ * users place up to MAX_ENABLED_IGNITIONS = 5 by hand). ASSUMPTION (no source; a test-scenario
+ * knob, not a fire statistic): most wildfires start from a single ignition; 2-3 simultaneous
+ * fires occur in wind-event power-line clusters (e.g. the 2017 North Bay fires); many fires at
+ * once is a lightning-siege case, left for users to build by hand. Shares sum to 1.
+ */
+const RANDOM_FIRE_COUNT_WEIGHTS: readonly (readonly [number, number])[] = [[1, 0.65], [2, 0.25], [3, 0.10]];
+
+/** Fire count for one uniform draw u in [0, 1): walks the cumulative weights. */
+function fireCountFor(u: number): number {
+  let acc = 0;
+  for (const [count, share] of RANDOM_FIRE_COUNT_WEIGHTS) {
+    acc += share;
+    if (u < acc) return count;
+  }
+  return RANDOM_FIRE_COUNT_WEIGHTS[RANDOM_FIRE_COUNT_WEIGHTS.length - 1][0];
+}
 
 /**
  * ASSUMPTION (no source; a test-scenario knob): the longest stretch of unobserved weather a
@@ -318,14 +332,12 @@ export async function drawRandomScenario(input: RandomDrawInput): Promise<Random
   const dateLabel = `${day.getUTCDate()} ${MONTHS[day.getUTCMonth()]}`;
   const startOf = (y: number) => `${y}-${pad(day.getUTCMonth() + 1)}-${pad(day.getUTCDate())}T${pad(hourUtc)}:00:00Z`;
 
-  // Ignitions: placed by the chosen mode. How many is random too: 1 + the number of draws in a
-  // row that hit EXTRA_FIRE_CHANCE, up to MAX_RANDOM_FIRES (60% one fire, 24% two, ~10% three…).
-  // ASSUMPTION (no source for multi-ignition shares): a test-scenario knob, not a fire statistic.
+  // Ignitions: placed by the chosen mode. How many is random too: one weighted draw,
+  // 1 fire 65%, 2 fires 25%, 3 fires 10%, never more (RANDOM_FIRE_COUNT_WEIGHTS, an ASSUMPTION).
   // Every fire after the first starts later half the time (20-90 min), like a second ignition.
   const candidates = ignitionCandidates(grid, roadNodes, rand);
   if (candidates.length === 0) return null;
-  let count = 1;
-  while (count < MAX_RANDOM_FIRES && rand() < EXTRA_FIRE_CHANCE) count++;
+  const count = fireCountFor(rand());
   const ignitions: RandomIgnition[] = [];
   const picked: Candidate[] = [];
   for (let i = 0; i < count; i++) {
