@@ -128,6 +128,62 @@
    "access": "fetched 2026-10-24",
    "licence": "US Government work (public domain)",
    "page_note": "Web page; guidelines list."
+  },
+  "svi_plano_1901_spec": {
+   "title": "SVI Trucks, Plano TX Fire Dept Production Specification #1120 (restates NFPA 1901 road performance)",
+   "url": "https://www.svitrucks.com/wp-content/uploads/2021/01/Plano_TX_cm_1138_ProductionSpecification.pdf",
+   "access": "fetched 2026-10-24 (secondary: NFPA 1901 itself not retrievable; one other RFP cites different caps, so the 68/60 mph caps are not settled)",
+   "licence": "Public procurement document; cited as fact only",
+   "page_note": "Section 'Highway Performance'."
+  },
+  "lucic_2001": {
+   "title": "Lucic, I. (2001), Truck Modeling Along Grade Sections, MS thesis, Virginia Tech (the Rakha, Lucic et al. 2001 J. Transp. Eng. 127(5) vehicle dynamics model)",
+   "url": "https://vtechworks.lib.vt.edu/bitstreams/7aec2ae4-67f7-473a-91e7-ceab5dc82a7a/download",
+   "access": "fetched 2026-10-24",
+   "licence": "Thesis, open repository; only cited constants used",
+   "page_note": "Chapter 4 equation and table numbers."
+  },
+  "iowa_dot_2b": {
+   "title": "Iowa DOT Design Manual 2B Superelevation, Table 2B.1 adapted from AASHTO Green Book 7th ed. (2018) Table 3-7",
+   "url": "https://iowadot.gov/design-manual/chapter-2-alignments/2b-superelevation",
+   "access": "fetched 2026-10-24 (secondary for AASHTO)",
+   "licence": "State government web page",
+   "page_note": "Table 2B.1 and the curve formula R = V^2 / 15(0.01e + f)."
+  },
+  "ced_c04034": {
+   "title": "CED Engineering course C04-034, Roadway Horizontal Alignment (Taylor 2023), from the AASHTO Green Book 2011",
+   "url": "https://www.cedengineering.com/userfiles/C04-034%20-%20Roadway%20Horizontal%20Alignment%20-%20US.pdf",
+   "access": "fetched 2026-10-24 (secondary for AASHTO)",
+   "licence": "Course notes; cited as fact only",
+   "page_note": "pp.7-8 superelevation rates."
+  },
+  "bme_calfire_model34": {
+   "title": "BME Fire Trucks, CAL FIRE contract (Model 34 Type 3) and delivery pages",
+   "url": "https://www.bmefire.com/cal-fire-contract",
+   "access": "fetched 2026-10-24",
+   "licence": "Manufacturer web page; cited as fact only",
+   "page_note": "Chassis and engine lines; GVWR 35,000 lb from https://www.bmefire.com/?p=32958."
+  },
+  "pierce_enforcer_puc": {
+   "title": "Pierce Manufacturing, Enforcer Top Mount PUC Pumper spec sheet (FDIC 2025)",
+   "url": "https://piercemfg.com/hubfs/FDIC%202025/Spec%20Sheets/Pumpers/43051/EnforcerTM%20Top%20Mount%20PUCTM%20Pumper.pdf",
+   "access": "fetched 2026-10-24",
+   "licence": "Manufacturer spec sheet; cited as fact only",
+   "page_note": "Engine and GVW rating lines."
+  },
+  "mtas_rand_travel": {
+   "title": "UT MTAS, Estimating the Travel Time of Fire Apparatus (RAND relation used by ISO)",
+   "url": "https://mtas.tennessee.edu/reference/estimating-travel-time-fire-apparatus",
+   "access": "fetched 2026-10-24 (secondary; Kolesar et al. 1975 Operations Research 23(4) not read)",
+   "licence": "University reference page; cited as fact only",
+   "page_note": "Equation T = 0.65 + 1.7 D."
+  },
+  "vfis_intersections": {
+   "title": "VFIS, Intersection Practices (citing NFPA 1500, 2021 ed.)",
+   "url": "https://education.vfis.com/Portals/0/Documents/vehicle-operations/Intersection-Practices-VFIS.pdf",
+   "access": "fetched 2026-10-24 (secondary for NFPA 1500)",
+   "licence": "Insurer training document; cited as fact only",
+   "page_note": "p.2 complete-stop list."
   }
  },
  "engines": {
@@ -2384,6 +2440,18 @@
      "unit": "lb",
      "source_id": "wheg_2013",
      "page": "PDF pp.25-52 (upper GVWR of the listed reference apparatus for this class)"
+    },
+    "engine_hp": {
+     "value": 450,
+     "unit": "hp (rated)",
+     "source_id": "pierce_enforcer_puc",
+     "page": "'Engine Cummins L9, 450 hp' (GVW rating 45,000 lb, close to the class's 46,500 lb)"
+    },
+    "frontal_area_m2": {
+     "value": 7.0,
+     "unit": "m2",
+     "source_id": "lucic_2001",
+     "page": "Table 4.4: tanker/flatbed, conventional cab 7.0 m2 (a tractor-trailer value applied to fire apparatus: about 2.5 m wide x 2.8 m)"
     }
    },
    "engine_t3": {
@@ -2394,6 +2462,18 @@
      "unit": "lb",
      "source_id": "wheg_2013",
      "page": "PDF pp.25-52 (upper GVWR of the listed reference apparatus for this class)"
+    },
+    "engine_hp": {
+     "value": 350,
+     "unit": "hp (rated)",
+     "source_id": "bme_calfire_model34",
+     "page": "'Cummins ISL 350-HP engine' (CAL FIRE contract page; 2024 deliveries Cummins L9 350 hp)"
+    },
+    "frontal_area_m2": {
+     "value": 7.0,
+     "unit": "m2",
+     "source_id": "lucic_2001",
+     "page": "Table 4.4: tanker/flatbed, conventional cab 7.0 m2 (a tractor-trailer value applied to fire apparatus: about 2.5 m wide x 2.8 m)"
     }
    },
    "engine_t4_t7": {
@@ -2404,6 +2484,18 @@
      "unit": "lb",
      "source_id": "wheg_2013",
      "page": "PDF pp.25-52 (upper GVWR of the listed reference apparatus for this class)"
+    },
+    "engine_hp": {
+     "value": 350,
+     "unit": "hp (rated)",
+     "assumption": true,
+     "reason": "Not retrieved. The class uses the Type 4 upper GVWR (37,000 lb); taken as the Type 3 chassis power (350 hp) of the same International 4x4 family. A Type 6 on an F-550 (about 330 hp, 19,500 lb, search-summary only) is much faster; conservative."
+    },
+    "frontal_area_m2": {
+     "value": 7.0,
+     "unit": "m2",
+     "source_id": "lucic_2001",
+     "page": "Table 4.4: tanker/flatbed, conventional cab 7.0 m2 (a tractor-trailer value applied to fire apparatus: about 2.5 m wide x 2.8 m)"
     }
    },
    "tender_support": {
@@ -2414,6 +2506,18 @@
      "unit": "lb",
      "source_id": "wheg_2013",
      "page": "PDF pp.25-52 (upper GVWR of the listed reference apparatus for this class)"
+    },
+    "engine_hp": {
+     "value": 350,
+     "unit": "hp (rated)",
+     "assumption": true,
+     "reason": "Not retrieved for a fire tender. A 4,000 gal International 7400 water truck lists Cummins L9 350 hp at 58,000 lb (dealer listing, search-summary only); 350 hp taken."
+    },
+    "frontal_area_m2": {
+     "value": 7.0,
+     "unit": "m2",
+     "source_id": "lucic_2001",
+     "page": "Table 4.4: tanker/flatbed, conventional cab 7.0 m2 (a tractor-trailer value applied to fire apparatus: about 2.5 m wide x 2.8 m)"
     }
    },
    "tender_tactical": {
@@ -2424,6 +2528,18 @@
      "unit": "lb",
      "source_id": "wheg_2013",
      "page": "PDF pp.25-52 (upper GVWR of the listed reference apparatus for this class)"
+    },
+    "engine_hp": {
+     "value": 350,
+     "unit": "hp (rated)",
+     "assumption": true,
+     "reason": "Not retrieved; taken as the support tender's 350 hp (same chassis family)."
+    },
+    "frontal_area_m2": {
+     "value": 7.0,
+     "unit": "m2",
+     "source_id": "lucic_2001",
+     "page": "Table 4.4: tanker/flatbed, conventional cab 7.0 m2 (a tractor-trailer value applied to fire apparatus: about 2.5 m wide x 2.8 m)"
     }
    }
   },
@@ -2750,7 +2866,7 @@
    },
    "unit": "km/h",
    "assumption": true,
-   "reason": "No retrieved source for emergency-driving speeds of heavy apparatus; ADR 0023 uses free-flow OSM speeds. These cap them. Calibrate with CAD AVL data when available."
+   "reason": "No retrieved source for emergency-driving speeds of heavy apparatus; ADR 0023 uses free-flow OSM speeds. These cap them. Calibrate with CAD AVL data when available. Applied as the level-road cap of the travel model (road_access.travel). Before 2026-10-24 the backend never applied it (it read speed_kph from road_access, which returns speed_kmh), so trucks drove at the OSM speed."
   },
   "grade_speed_penalty": {
    "value": {
@@ -2760,7 +2876,139 @@
    },
    "unit": "factor",
    "assumption": true,
-   "reason": "Loaded engines slow on grades; no retrieved source."
+   "reason": "Loaded engines slow on grades; no retrieved source. Superseded in backend drive times by the grade model of road_access.travel (level speed taken at grade 0); the Studio port still uses it."
+  },
+  "travel": {
+   "nfpa1901_max_top_speed_mph": {
+    "value": {
+     "gvwr_over_26000_lb": 68,
+     "gvwr_over_50000_lb": 60
+    },
+    "unit": "mph",
+    "source_id": "svi_plano_1901_spec",
+    "page": "Highway Performance: max top speed GVWR over 26,000 lb 68 mph; tanks over 1,250 gal or GVWR over 50,000 lb 60 mph (NFPA 1901 as restated)"
+   },
+   "nfpa1901_acceleration": {
+    "value": {
+     "to_mph": 35,
+     "within_s": 25
+    },
+    "unit": "mph, s",
+    "source_id": "svi_plano_1901_spec",
+    "page": "Highway Performance: 0 to 35 mph within 25 s on 0% grade (a minimum; used as the acceleration rate, conservative)"
+   },
+   "nfpa1901_min_grade_speed": {
+    "value": {
+     "grade_pct": 6,
+     "mph": 20
+    },
+    "unit": "%, mph",
+    "source_id": "svi_plano_1901_spec",
+    "page": "Highway Performance: at least 20 mph on any grade up to 6% (check only)"
+   },
+   "rolling_resistance": {
+    "value": {
+     "c_r": 1.25,
+     "c2": 0.0328,
+     "c3": 4.575
+    },
+    "unit": "Cr (asphalt good), c2 1/(km/h), c3",
+    "source_id": "lucic_2001",
+    "page": "Eq 4.7; Table 4.6 (asphalt good Cr 1.25); Table 4.7 (radial c2 0.0328, c3 4.575)"
+   },
+   "aero_c1": {
+    "value": 0.047285,
+    "unit": "N/(m2 (km/h)^2)",
+    "source_id": "lucic_2001",
+    "page": "Eq 4.5, Table 4.1 c1 = 0.047285"
+   },
+   "altitude_factor_per_m": {
+    "value": 8.5e-05,
+    "unit": "1/m",
+    "source_id": "lucic_2001",
+    "page": "Eq 4.6 Ch = 1 - 8.5e-5 H"
+   },
+   "drivetrain_efficiency": {
+    "value": 0.94,
+    "unit": "fraction",
+    "source_id": "lucic_2001",
+    "page": "Table 4.2 (SAE J2188) single drive, direct 0.94"
+   },
+   "drag_coefficient": {
+    "value": 0.7,
+    "unit": "dimensionless",
+    "source_id": "lucic_2001",
+    "page": "Table 4.5 truck single unit 0.70 (Fitch 1994)"
+   },
+   "side_friction_by_design_speed_kmh": {
+    "value": {
+     "24.1": 0.32,
+     "32.2": 0.27,
+     "40.2": 0.23,
+     "48.3": 0.2,
+     "56.3": 0.18,
+     "64.4": 0.16,
+     "72.4": 0.15,
+     "80.5": 0.14,
+     "88.5": 0.13,
+     "96.6": 0.12,
+     "104.6": 0.11,
+     "112.7": 0.1,
+     "120.7": 0.09,
+     "128.7": 0.08
+    },
+    "unit": "f by design speed km/h (converted from mph)",
+    "source_id": "iowa_dot_2b",
+    "page": "Table 2B.1 (AASHTO 2018 Table 3-7), mph rows converted to km/h"
+   },
+   "superelevation": {
+    "value": {
+     "highway": 0.06,
+     "local": 0.04
+    },
+    "unit": "fraction",
+    "assumption": true,
+    "reason": "Actual superelevation unknown. The Green Book allows 4-6% in urban areas and up to 8% as a reasonable maximum (CED C04-034 pp.7-8); 6% on highways (snow on the Paradise ridge) and 4% on local roads taken for every curve."
+   },
+   "braking_decel_ms2": {
+    "value": 3.4,
+    "unit": "m/s2",
+    "assumption": true,
+    "reason": "The AASHTO stopping-sight-distance deceleration (3.4 m/s2), not retrieved in this change; used for braking into curves and junctions."
+   },
+   "curve_min_half_chord_m": {
+    "value": 25,
+    "unit": "m",
+    "assumption": true,
+    "reason": "Three-point circumradius uses neighbour vertices at least this far either side, so 1-2 m digitizing jitter on densely drawn OSM lines does not read as a tight curve. Not calibrated."
+   },
+   "profile_step_m": {
+    "value": 20,
+    "unit": "m",
+    "assumption": true,
+    "reason": "Sample spacing of the per-edge speed profile; the DEM is about 30 m, so finer adds no grade detail. Not calibrated."
+   },
+   "junction_stop_dwell_s": {
+    "value": 2,
+    "unit": "s",
+    "assumption": true,
+    "reason": "NFPA 1500 (2021, via VFIS p.2) requires a complete stop at stop signs and negative right-of-way intersections during emergency response; the time stopped is not sourced."
+   },
+   "junction_caution_speed_kmh": {
+    "value": 25,
+    "unit": "km/h",
+    "assumption": true,
+    "reason": "Speed an apparatus slows to where it meets a road of its own class (control unknown; due regard, CVC 21056). Not sourced."
+   },
+   "rand_travel_time": {
+    "value": {
+     "intercept_min": 0.65,
+     "min_per_mile": 1.7
+    },
+    "unit": "min, min/mile",
+    "source_id": "mtas_rand_travel",
+    "page": "T = 0.65 + 1.7 D (RAND, urban NYC; used by ISO); cross-check only"
+   }
   }
  },
  "aviation_constraints": {

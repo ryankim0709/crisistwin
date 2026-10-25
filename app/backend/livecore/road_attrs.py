@@ -59,6 +59,9 @@ class RoadAttrs:
     """One line: where the tags and grades come from, and what is assumed."""
     status: str = "none"
     """``ready`` (tags and grade), ``grade_only`` (tags still loading or unavailable), ``none``."""
+    elevation: "Elevation | None" = field(default=None, compare=False)
+    """(lon, lat) -> metres, the DEM the grades came from; the travel-time model
+    (``livecore.apparatus_travel``) samples signed profiles from it. None: no DEM (flat assumed)."""
 
 
 def way_id(edge_id: str) -> int | None:
