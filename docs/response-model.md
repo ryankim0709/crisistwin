@@ -385,6 +385,19 @@ fire and the other fires had no units.
 - **Best line per incident.** Line is planned for each incident on that fire's own arrival
   field, starting from the group's first arrival, and the results are merged. Line for units
   sent to fire 1 no longer appears around fire 3.
+- **Air-supported initial attack, and IA as a best-line candidate** (`planFirefighting`).
+  Before this, the initial attack was ground only while the best line counted held drops, so
+  the two could disagree badly. On seed 1356197356 (before the crown-fire solver change) the
+  best line was 2.5 ha and the IA 28,175 ha.
+  - The same ground race (same units, arrivals, hold limits and withdrawal) now also runs
+    against the fire as its tied-in drops slow it.
+  - A fire's drops count as held line only if that race puts the fire out. Otherwise no ground
+    line ties in, and none of its drops hold. This repeats until the set of fires is stable.
+  - The aircraft are then released at the air-supported out minute. This race becomes the IA
+    the page shows.
+  - The IA run is added to the best-line candidates as `initial_attack`, so the best line never
+    burns more than the IA.
+  - Tie-in still uses the first-line minute from the ground-only race. This is conservative.
 - **dispatch agent** (`dispatch/engine.ts`). The walk limit depends on the kind of unit: an
   engine crew `ENGINE_CREW_MAX_HIKE_M` (800 m), a hand crew `HAND_CREW_MAX_HIKE_MINUTES` at
   Tobler pace, a dozer `DOZER_MAX_WALK_MINUTES` at `DOZER_WALK_KMH`. An engine beyond hose
@@ -508,8 +521,8 @@ cases have their nearest homes 7.9 km away and every road ending 1.5 km short of
   board. Water tenders are not units.
 - **Studio incidents**: there is no release and re-dispatch of a unit after its fire is out,
   no move-up or cover, no escalation or extended-attack orders, and no aircraft fuel cycle.
-  The best-line search has no initial-attack candidate, so the IA view and the best line can
-  disagree.
+  Held drops never expire in the solver, so an air-supported fire stays held until its ground
+  units catch it, provided they tie in within the window.
 - **Retardant that expires**: the solver has no hold-until minute on a control line, so an
   untied drop is left out of the line rather than holding for a while and then expiring. The
   solver change is an optional `holdUntilMinute` on `ControlLines`, plus re-queueing blocked
