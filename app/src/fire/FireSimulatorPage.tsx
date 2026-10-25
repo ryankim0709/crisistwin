@@ -7,11 +7,16 @@ import { AREA_PRESETS, DEFAULT_AREA } from "./ui/areaPresets";
 import {
   AREA_SIZES,
   DEFAULT_AREA_SIZE,
+  MAX_RADIUS_METERS,
   effectiveRadiusMeters,
   type AreaSizeId,
 } from "./ui/areaSize";
 import SatelliteFireMap from "./SatelliteFireMap";
 import FireDock from "./ui/FireDock";
+import HorizonControl from "./ui/HorizonControl";
+import DayNightBand from "./ui/DayNightBand";
+import { frameStepMinutes } from "./horizon";
+import type { RunClock } from "./runClock";
 import FireLegend from "./ui/FireLegend";
 import { formatDuration } from "./ui/format";
 import { useFirePlayback } from "./useFirePlayback";
@@ -24,7 +29,7 @@ import {
   fetchRegionCatalog,
   fetchRegionLandscape,
 } from "./landscapePackage";
-import { DEFAULT_REGION_ID, CALIFORNIA_REGIONS, REGION_AREAS } from "./regions";
+import { CALIFORNIA_REGIONS, REGION_AREAS } from "./regions";
 import { boardCellMetersFor } from "./boardSize";
 import { type LandscapeGrid } from "./landscape";
 import { loadLandscapeCached } from "./landscapeCache";
@@ -75,9 +80,28 @@ import {
   Spinner,
   type SegmentedOption,
 } from "../ui";
-import { useBoardStreets } from "./useBoardStreets";
+import { sceneryOf, useBoardStreets } from "./useBoardStreets";
 import HistoricalFireDiorama from "../historical/HistoricalFireDiorama";
 import { useHistoricalFireIndex } from "../historical/data";
+import type { World, WorldChanges, WorldIgnition, WorldRegion } from "../world/contracts";
+import {
+  PLACEMENT_LABELS,
+  drawRandomScenario,
+  resolveSeed,
+  type IgnitionPlacement,
+} from "../world/randomScenario";
+import { useWorldSync, type WorldPath } from "../world/useWorldSync";
+import { WorldBar } from "../world/WorldBar";
+import {
+  assumedChoice,
+  choiceOf,
+  fetchWorldWind,
+  recordMatchesWorld,
+  worldChoice,
+  type PinnedRecord,
+  type WorldWeatherChoice,
+} from "../world/weather";
+import { STUDIO_CUSTOM_RADIUS_METERS } from "../studio/useRegionBoard";
 import "./fire.css";
 
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
@@ -231,6 +255,33 @@ function areaLabel(center: GeoPoint): string {
   return preset ? preset.label : `${center.latitude.toFixed(2)}, ${center.longitude.toFixed(2)}`;
 }
 
+/** The shared world's fires beyond the one this page models (it runs a single ignition). */
+interface WorldFires {
+  id: string;
+  startMinute: number;
+  others: WorldIgnition[];
+}
+const DEFAULT_WORLD_FIRES: WorldFires = { id: "F1", startMinute: 0, others: [] };
+
+/** The page's settings a saved scenario restores beyond the shared world (ScenarioMenu extras). */
+interface FireExtras {
+  spottingEnabled: boolean;
+  structureSpreadEnabled: boolean;
+  fireInducedWindOn: boolean;
+  windOverTime: "series" | "peak";
+  ensembleMembers: number;
+}
+
+/** The area-size choice whose custom board is closest to a world radius. */
+function closestAreaSize(horizonMinutes: number, radiusMeters: number): AreaSizeId {
+  let best = AREA_SIZES[0].id;
+  for (const size of AREA_SIZES) {
+    const gap = Math.abs(effectiveRadiusMeters(horizonMinutes, size.id) - radiusMeters);
+    if (gap < Math.abs(effectiveRadiusMeters(horizonMinutes, best) - radiusMeters)) best = size.id;
+  }
+  return best;
+}
+
 export default function FireSimulatorPage() {
   const reducedMotion = useMediaQuery(REDUCED_MOTION_QUERY);
   const wide = useMediaQuery(WIDE_QUERY);
@@ -239,7 +290,8 @@ export default function FireSimulatorPage() {
   const [view, setView] = useState<ViewMode>(readStoredView);
   const [fitSignal, setFitSignal] = useState(0);
   const [outsideHint, setOutsideHint] = useState(false);
-  const [selection, setSelection] = useState<string>(DEFAULT_REGION_ID);
+  // Default: a 30 × 30 km board centred on Berkeley Hills & Tilden (DEFAULT_AREA, DEFAULT_AREA_SIZE).
+  const [selection, setSelection] = useState<string>(CUSTOM_SELECTION);
   const [catalog, setCatalog] = useState<CatalogState>({ status: "loading" });
   const [areaSize, setAreaSize] = useState<AreaSizeId>(DEFAULT_AREA_SIZE);
   const [areaPickerOpen, setAreaPickerOpen] = useState(false);
@@ -262,7 +314,9 @@ export default function FireSimulatorPage() {
   const burn = useBurnProbability();
   const [structureSpreadEnabled, setStructureSpreadEnabled] = useState(true);
   const structureSpreadRate = DEFAULT_STRUCTURE_SPREAD.rateMetersPerMinute;
-  const horizonMinutes = FIRE_HORIZON_MINUTES;
+  // How long to simulate (fire/horizon.ts); frames spread out on long runs to stay bounded.
+  const [horizonMinutes, setHorizonMinutes] = useState(FIRE_HORIZON_MINUTES);
+  const stepMinutes = frameStepMinutes(horizonMinutes, FIRE_STEP_MINUTES);
   const [clickMode, setClickMode] = useState<GroundClickMode>("origin");
   const [showFuel, setShowFuel] = useState(false);
   const [landscape, setLandscape] = useState<LandscapeState>({ status: "idle" });
@@ -274,6 +328,16 @@ export default function FireSimulatorPage() {
   const [windOverTime, setWindOverTime] = useState<"series" | "peak">("series");
   // Simplified fire-induced wind (fireInducedWind.ts). Off unless the user turns it on.
   const [fireInducedWindOn, setFireInducedWindOn] = useState(false);
+  // Shared world (docs/shared-world.md): the other fires it holds, the weather record fetched
+  // for it, and a note when its weather could not be loaded here.
+  const [worldFires, setWorldFires] = useState<WorldFires>(DEFAULT_WORLD_FIRES);
+  const [pinned, setPinned] = useState<PinnedRecord | null>(null);
+  const [worldNote, setWorldNote] = useState<string | null>(null);
+  const [firesCleared, setFiresCleared] = useState(false);
+  const worldWindAbortRef = useRef<AbortController | null>(null);
+  const loadWorldWeatherRef = useRef<(choice: WorldWeatherChoice, at: GeoPoint) => void>(
+    () => undefined,
+  );
 
   const [scene, setScene] = useState<FireDioramaSceneApi | null>(null);
   const [sceneStatus, setSceneStatus] = useState<SceneStatus>({ kind: "loading" });
@@ -402,6 +466,24 @@ export default function FireSimulatorPage() {
     [scenarioWind],
   );
   const weatherSeries = recordSeries && windOverTime === "series" ? recordSeries.series : null;
+  // Local clock and day/night for the playback bar, only while the run follows hourly weather
+  // with a real clock (a constant wind has no day or night in it). A worst-case run replays real
+  // hours on a statistically chosen date: its clock is the clock those hours were observed at.
+  const runClock = useMemo<{ clock: RunClock; note: string } | null>(() => {
+    if (!scenarioWind || windOverTime !== "series") return null;
+    const analogStart =
+      scenarioWind.mode === "climatology_percentile"
+        ? (scenarioWind.analog as { source_start_utc?: string } | null)?.source_start_utc
+        : undefined;
+    const startMs = Date.parse(analogStart ?? scenarioWind.query.startUtc);
+    if (!Number.isFinite(startMs)) return null;
+    return {
+      clock: { startMs, latitude: scenarioWind.query.lat, longitude: scenarioWind.query.lon },
+      note: analogStart
+        ? "Clock of the real hours replayed (date chosen statistically)"
+        : "Local time from the weather's start",
+    };
+  }, [scenarioWind, windOverTime]);
 
   const scenario = useMemo(
     () =>
@@ -412,7 +494,7 @@ export default function FireSimulatorPage() {
             windFromDegrees,
             moisture,
             midflameAdjustment,
-            stepMinutes: FIRE_STEP_MINUTES,
+            stepMinutes,
             horizonMinutes,
             spotting: {
               enabled: spottingEnabled,
@@ -433,6 +515,7 @@ export default function FireSimulatorPage() {
       windFromDegrees,
       moisture,
       midflameAdjustment,
+      stepMinutes,
       horizonMinutes,
       spottingEnabled,
       spottingDistanceMeters,
@@ -449,7 +532,7 @@ export default function FireSimulatorPage() {
   // OSM roads and synthetic homes along residential streets for the diorama board.
   const streets = useBoardStreets(grid);
   const streetArea = streets.status === "ready" ? streets.area : null;
-  const streetScenery = streets.status === "ready" ? streets.scenery : null;
+  const streetScenery = sceneryOf(streets);
 
   const result = useMemo<{ run: FireRun | null; error: string | null }>(() => {
     if (!grid || !deferredScenario) return { run: null, error: null };
@@ -586,6 +669,7 @@ export default function FireSimulatorPage() {
     windRequestRef.current++;
     windAbortRef.current?.abort();
     windAbortRef.current = null;
+    worldWindAbortRef.current?.abort();
     setWindSource((current) => (current.status === "idle" ? current : { status: "idle" }));
     setScenarioWind(null);
   }, []);
@@ -673,11 +757,18 @@ export default function FireSimulatorPage() {
         setOutsideHint(true);
         return;
       }
-      // A reading belongs to one ignition point, so moving the point drops it.
+      // A reading belongs to one ignition point, so moving the point drops it. Scenario weather
+      // (a date, a percentile) is a choice, not a point reading: it is refetched for the new point.
       setOrigin(point);
-      dropWindProvenance();
+      setFiresCleared(false);
+      if (scenarioWind) {
+        windRequestRef.current++;
+        windAbortRef.current?.abort();
+        setWindSource({ status: "idle" });
+        loadWorldWeatherRef.current(choiceOf(scenarioWind, pinned), point);
+      } else dropWindProvenance();
     },
-    [clickMode, origin, editWindDirection, dropWindProvenance, grid],
+    [clickMode, origin, editWindDirection, dropWindProvenance, grid, scenarioWind, pinned],
   );
   useEffect(() => {
     if (!outsideHint) return;
@@ -717,7 +808,13 @@ export default function FireSimulatorPage() {
     seekPlayback(0);
     setClickMode("origin");
     setDetailsOpen(false);
-    dropWindProvenance();
+    // An NWS reading belongs to the cleared point; scenario weather (a date, a percentile) is the
+    // shared world's choice and stays, refetched for the new board below.
+    if (scenarioWind) {
+      windRequestRef.current++;
+      windAbortRef.current?.abort();
+      setWindSource({ status: "idle" });
+    } else dropWindProvenance();
   }
   // The load effect runs outside render, so it reaches the latest reset through a ref.
   useEffect(() => {
@@ -738,6 +835,269 @@ export default function FireSimulatorPage() {
     setSelection(id);
   }
 
+  // ---- Shared world (docs/shared-world.md) --------------------------------------------------
+  // This page's area, wind choice, moisture preset, ignition and natural-variation seed, in world
+  // shape. useWorldSync writes what the user changes and calls applyWorld for other tabs' changes.
+  const historicalEntry =
+    historicalFireId && historicalIndex.status === "ready"
+      ? (historicalIndex.index.fires.find((entry) => entry.id === historicalFireId) ?? null)
+      : null;
+  const worldRegion: WorldRegion | undefined = historicalFireId
+    ? historicalEntry
+      ? {
+          kind: "historical_fire",
+          id: historicalEntry.id,
+          name: historicalEntry.name,
+          center: historicalEntry.board.center,
+          radiusMeters: historicalEntry.board.radius_m,
+          cellMeters: historicalEntry.board.cell_m,
+        }
+      : undefined
+    : {
+        kind: region ? "catalogue" : "custom",
+        id: region ? region.id : null,
+        name: region ? region.name : areaLabel(areaCenter),
+        center: [centerLongitude, centerLatitude],
+        radiusMeters,
+        cellMeters: requestedCellMeters,
+      };
+  const weatherChoice = scenarioWind
+    ? choiceOf(scenarioWind, pinned)
+    : assumedChoice(windSpeedMph, windFromDegrees);
+  const worldLocal: WorldChanges = {
+    region: worldRegion,
+    conditions: {
+      ...(weatherChoice.startUtc ? { startUtc: weatherChoice.startUtc } : {}),
+      weather: weatherChoice.weather,
+      moisture: { mode: "preset", preset: presetId as "critical" | "dry" | "moderate" | "wet" },
+    },
+    fire: {
+      ignitions: origin
+        ? [
+            {
+              id: worldFires.id,
+              at: [origin.longitude, origin.latitude],
+              startMinute: worldFires.startMinute,
+            },
+            ...worldFires.others,
+          ]
+        : // No ignition here: only "Clear scenario" clears the world's fires. A region change or a
+          // board that does not cover them leaves them to the other tabs.
+          firesCleared
+          ? []
+          : undefined,
+      stochastic: {
+        enabled: variation?.enabled === true,
+        seed: Math.max(0, Math.round(variation?.seed ?? DEFAULT_VARIATION_SEED)) >>> 0,
+      },
+    },
+  };
+
+  // Scenario weather the world names, fetched for a point on this page's board.
+  const loadWorldWeather = (choice: WorldWeatherChoice, at: GeoPoint) => {
+    worldWindAbortRef.current?.abort();
+    const controller = new AbortController();
+    worldWindAbortRef.current = controller;
+    setWorldNote(null);
+    fetchWorldWind(choice, at.longitude, at.latitude, horizonMinutes / 60, controller.signal)
+      .then((loaded) => {
+        if (controller.signal.aborted || !loaded) return;
+        applyScenarioWind(loaded.record);
+        setPinned(loaded);
+      })
+      .catch((cause: unknown) => {
+        if (controller.signal.aborted) return;
+        setWorldNote(
+          `The shared world's weather could not be loaded here: ${
+            cause instanceof Error ? cause.message.split("; tried")[0] : "weather service error"
+          }`,
+        );
+      });
+  };
+  useEffect(() => {
+    loadWorldWeatherRef.current = loadWorldWeather;
+  });
+  // Scenario weather fetched for a point off the current board (the area changed): the same
+  // choice again, for the board's centre or the ignition.
+  const recordOffBoard =
+    grid !== null &&
+    scenarioWind !== null &&
+    cellAt(grid, { longitude: scenarioWind.query.lon, latitude: scenarioWind.query.lat }) < 0;
+  useEffect(() => {
+    if (!recordOffBoard || !grid || !scenarioWind) return;
+    loadWorldWeatherRef.current(
+      choiceOf(scenarioWind, pinned),
+      origin ?? { longitude: centerLongitude, latitude: centerLatitude },
+    );
+    // Once per board: the fetch replaces the record, which then lies on the board.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recordOffBoard, grid]);
+  useEffect(() => () => worldWindAbortRef.current?.abort(), []);
+
+  // Quick setup (default) vs Custom: Custom shows every control. The choice is remembered.
+  const [panelCustom, setPanelCustomState] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem("crisistwin.fire.panelCustom") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const setPanelCustom = (custom: boolean) => {
+    setPanelCustomState(custom);
+    try {
+      window.localStorage.setItem("crisistwin.fire.panelCustom", custom ? "1" : "0");
+    } catch {
+      // Storage blocked: the choice just is not remembered.
+    }
+  };
+  const [quickPlacement, setQuickPlacement] = useState<IgnitionPlacement>("away");
+  const [quickSeedText, setQuickSeedText] = useState("");
+  const [quickBusy, setQuickBusy] = useState(false);
+  const [quickResult, setQuickResult] = useState<{ seed: number; summary: string } | null>(null);
+  const [quickError, setQuickError] = useState<string | null>(null);
+
+  async function generateRandom() {
+    if (!grid) return;
+    const seed = resolveSeed(quickSeedText);
+    setQuickBusy(true);
+    setQuickError(null);
+    try {
+      const draw = await drawRandomScenario({
+        seed,
+        regionId: region ? region.id : null,
+        regionName: region ? region.name : areaLabel(areaCenter),
+        grid,
+        roadNodes: streetArea ? streetArea.nodes : null,
+        placement: quickPlacement,
+        horizonMinutes,
+      });
+      if (!draw) {
+        setQuickError("This area has no ground that can burn. Pick another location.");
+        return;
+      }
+      const [first, ...rest] = draw.ignitions;
+      const at = { longitude: first.at.longitude, latitude: first.at.latitude };
+      setOrigin(at);
+      setFiresCleared(false);
+      setWorldFires({
+        id: "F1",
+        startMinute: first.startMinute,
+        others: rest.map((ignition, index) => ({
+          id: `F${index + 2}`,
+          at: [ignition.at.longitude, ignition.at.latitude] as [number, number],
+          startMinute: ignition.startMinute,
+        })),
+      });
+      if (draw.weather.mode === "assumed") {
+        worldWindAbortRef.current?.abort();
+        dropWindProvenance();
+        setPinned(null);
+        setWindSpeedMph(clamp(Math.round(draw.windSpeedMph), 0, MAX_WIND_SPEED_MPH));
+        setWindFromDegrees(Math.round(draw.windFromDegrees) % 360);
+      } else {
+        loadWorldWeather({ startUtc: draw.startUtc, weather: draw.weather }, at);
+      }
+      setVariation((current) => ({ ...(current ?? {}), enabled: true, seed }));
+      setQuickSeedText(String(seed));
+      setQuickResult({ seed, summary: draw.summary });
+    } catch (cause) {
+      setQuickError(cause instanceof Error ? cause.message : "Could not generate a scenario.");
+    } finally {
+      setQuickBusy(false);
+    }
+  }
+
+  function applyWorld(w: World, changed: ReadonlySet<WorldPath>) {
+    const r = w.region;
+    if (changed.has("region")) {
+      if (r.kind === "historical_fire" && r.id) {
+        setHistoricalFireId(r.id);
+      } else {
+        setHistoricalFireId(null);
+        const stored =
+          r.kind === "catalogue" && r.id && r.radiusMeters < STUDIO_CUSTOM_RADIUS_METERS
+            ? CALIFORNIA_REGIONS.find((entry) => entry.id === r.id)
+            : undefined;
+        if (stored) setSelection(stored.id);
+        else {
+          // A custom area, a drill area or a region at a chosen size: a custom board at its centre.
+          setSelection(CUSTOM_SELECTION);
+          setAreaCenter({ longitude: r.center[0], latitude: r.center[1] });
+          setAreaSize(closestAreaSize(horizonMinutes, r.radiusMeters));
+        }
+      }
+    }
+    const first = [...w.fire.ignitions].sort((a, b) => a.startMinute - b.startMinute)[0] ?? null;
+    if (changed.has("fire.ignitions")) {
+      if (first) {
+        setOrigin({ longitude: first.at[0], latitude: first.at[1] });
+        setFiresCleared(false);
+        setWorldFires({
+          id: first.id,
+          startMinute: first.startMinute,
+          others: w.fire.ignitions.filter((ignition) => ignition !== first),
+        });
+      } else {
+        setOrigin(null);
+        setWorldFires(DEFAULT_WORLD_FIRES);
+      }
+    }
+    if ([...changed].some((p) => p.startsWith("conditions.weather.") || p === "conditions.startUtc")) {
+      const weather = w.conditions.weather;
+      if (weather.mode === "assumed") {
+        worldWindAbortRef.current?.abort();
+        dropWindProvenance();
+        setPinned(null);
+        setWindSpeedMph(clamp(Math.round(weather.windSpeedMph ?? windSpeedMph), 0, MAX_WIND_SPEED_MPH));
+        setWindFromDegrees(Math.round(weather.windFromDegrees ?? windFromDegrees) % 360);
+      } else if (!recordMatchesWorld(scenarioWind, w, pinned)) {
+        const at = first
+          ? { longitude: first.at[0], latitude: first.at[1] }
+          : (origin ?? { longitude: r.center[0], latitude: r.center[1] });
+        loadWorldWeather(worldChoice(w), at);
+      }
+    }
+    const moisture = w.conditions.moisture;
+    if (changed.has("conditions.moisture.preset") || changed.has("conditions.moisture.mode")) {
+      if (moisture.mode === "preset" && moisture.preset) applyPreset(moisture.preset);
+    }
+    if (changed.has("fire.stochastic.enabled") || changed.has("fire.stochastic.seed")) {
+      const { enabled, seed } = w.fire.stochastic;
+      setVariation((current) =>
+        enabled || current ? { ...(current ?? {}), enabled, seed } : { enabled: false, seed },
+      );
+    }
+  }
+
+  const worldSync = useWorldSync({ tab: "fire", local: worldLocal, apply: applyWorld });
+  const fireExtras = (): FireExtras => ({
+    spottingEnabled,
+    structureSpreadEnabled,
+    fireInducedWindOn,
+    windOverTime,
+    ensembleMembers,
+  });
+  const restoreExtras = (scenarioExtras: unknown) => {
+    const extras = scenarioExtras as Partial<FireExtras> | undefined;
+    if (!extras || typeof extras !== "object") return;
+    worldSync.hold();
+    if (typeof extras.spottingEnabled === "boolean") setSpottingEnabled(extras.spottingEnabled);
+    if (typeof extras.structureSpreadEnabled === "boolean") setStructureSpreadEnabled(extras.structureSpreadEnabled);
+    if (typeof extras.fireInducedWindOn === "boolean") setFireInducedWindOn(extras.fireInducedWindOn);
+    if (extras.windOverTime === "series" || extras.windOverTime === "peak") setWindOverTime(extras.windOverTime);
+    if (typeof extras.ensembleMembers === "number") {
+      setEnsembleMembers(clamp(Math.round(extras.ensembleMembers), MIN_ENSEMBLE_MEMBERS, MAX_UI_ENSEMBLE_MEMBERS));
+    }
+  };
+  const worldBar = (
+    <WorldBar
+      tab="fire"
+      sync={worldSync}
+      getExtras={fireExtras}
+      onLoaded={(scenario) => restoreExtras(scenario.extras.fire)}
+    />
+  );
+
   // Track the stage width for the phone layout, independent of whether WebGL started.
   useEffect(() => {
     const stage = stageRef.current;
@@ -753,7 +1113,7 @@ export default function FireSimulatorPage() {
   // Frame the board inside the part of the stage the floating overlay leaves uncovered.
   const hasRun = run !== null;
 
-  // Resident app broadcast: the footprint of the latest 15-minute frame at the playback time.
+  // Resident app broadcast: the footprint of the latest frame at the playback time.
   const liveSessionId = useMemo(() => (run ? newSessionId() : null), [run]);
   const liveMinute = Math.floor(playback.t);
   const playing = playback.playing;
@@ -936,18 +1296,26 @@ export default function FireSimulatorPage() {
               "wildland-urban edge."),
       });
     }
-    if (run.scenario.horizonMinutes >= LONG_HORIZON_MINUTES) {
+    if (
+      run.scenario.horizonMinutes >= LONG_HORIZON_MINUTES &&
+      !run.scenario.weatherSeries?.enabled
+    ) {
       warnings.push({
         key: "constant-weather",
-        text: "Wind and fuel moisture are held constant for the whole run; no day–night change is modelled.",
+        text:
+          "Wind and fuel moisture are held constant for the whole run; no day–night change is " +
+          "modelled. For a long run, pick Historical, Worst or Forecast wind and Hour by hour.",
       });
     }
     if (run.reachedEdge) {
+      const bigger = region
+        ? "This region's board is fixed: for a run this long, choose Custom… and a larger Area size, or shorten the run."
+        : radiusMeters < MAX_RADIUS_METERS
+          ? `Choose a larger Area size (now ${formatKm(radiusMeters)} km radius) or shorten the run.`
+          : "This is already the largest board: shorten the run to stay inside it.";
       warnings.push({
         key: "edge",
-        text:
-          "The fire reached the edge of the modelled area. Results past that point are " +
-          "truncated; try a larger area size or a longer horizon for a wider grid.",
+        text: `The fire reached the edge of the board before ${formatDuration(run.scenario.horizonMinutes)}, so the footprint after that is cut off. ${bigger}`,
       });
     }
   }
@@ -1088,7 +1456,7 @@ export default function FireSimulatorPage() {
             <div className="fr-scenario-body" id="fr-scenario-body" hidden={!scenarioOpen}>
               <div className="fr-field">
                 <div className="fr-region-row">
-                  <label htmlFor="region">Region</label>
+                  <label htmlFor="region">{panelCustom ? "Region" : "Location"}</label>
                   <select
                     id="region"
                     className="ui-input"
@@ -1133,14 +1501,20 @@ export default function FireSimulatorPage() {
                     Custom…
                   </Button>
                 </div>
-                {!region && (
+                {(!region || !panelCustom) && (
                   <div className="fr-field-inline fr-area-size">
-                    <label htmlFor="area-size">Area size</label>
+                    <label htmlFor="area-size">{panelCustom ? "Area size" : "Map size"}</label>
                     <select
                       id="area-size"
                       className="ui-input"
                       value={areaSize}
-                      onChange={(event) => setAreaSize(event.target.value as AreaSizeId)}
+                      onChange={(event) => {
+                        if (region) {
+                          setAreaCenter({ longitude: region.center.longitude, latitude: region.center.latitude });
+                          setSelection(CUSTOM_SELECTION);
+                        }
+                        setAreaSize(event.target.value as AreaSizeId);
+                      }}
                     >
                       {AREA_SIZES.map((size) => {
                         const radius = effectiveRadiusMeters(horizonMinutes, size.id);
@@ -1163,6 +1537,19 @@ export default function FireSimulatorPage() {
               </div>
 
               <div className="fr-field">
+                <SegmentedControl
+                  label="Scenario setup"
+                  options={[
+                    { value: "quick", label: "Quick setup" },
+                    { value: "custom", label: "Custom" },
+                  ]}
+                  value={panelCustom ? "custom" : "quick"}
+                  onChange={(value) => setPanelCustom(value === "custom")}
+                />
+              </div>
+
+              {panelCustom && (
+              <div className="fr-field">
                 <span className="fr-field-title">Clicking the landscape sets</span>
                 <SegmentedControl
                   className="fr-click-mode"
@@ -1179,7 +1566,54 @@ export default function FireSimulatorPage() {
                   </p>
                 )}
               </div>
+              )}
 
+              <HorizonControl
+                value={horizonMinutes}
+                onChange={setHorizonMinutes}
+                frameStepMinutes={stepMinutes}
+              />
+
+              {!panelCustom && (
+                <div className="fr-field">
+                  <label htmlFor="quick-placement">Fire starts</label>
+                  <select
+                    id="quick-placement"
+                    className="ui-input"
+                    value={quickPlacement}
+                    onChange={(event) => setQuickPlacement(event.target.value as IgnitionPlacement)}
+                  >
+                    {(Object.keys(PLACEMENT_LABELS) as IgnitionPlacement[]).map((key) => (
+                      <option key={key} value={key}>
+                        {PLACEMENT_LABELS[key]}
+                      </option>
+                    ))}
+                  </select>
+                  <Button block onClick={() => void generateRandom()} disabled={!grid || quickBusy}>
+                    {quickBusy ? "Generating…" : "Generate random scenario"}
+                  </Button>
+                  <div className="fr-field-inline">
+                    <label htmlFor="quick-seed">Use seed…</label>
+                    <input
+                      id="quick-seed"
+                      className="ui-input"
+                      inputMode="numeric"
+                      placeholder="random"
+                      value={quickSeedText}
+                      onChange={(event) => setQuickSeedText(event.target.value)}
+                    />
+                  </div>
+                  {quickError && <Notice tone="danger" className="fr-compact-notice">{quickError}</Notice>}
+                  {quickResult && (
+                    <p className="fr-hint">
+                      {quickResult.summary} (simulated) · seed {quickResult.seed}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {panelCustom && (
+              <>
               <WindSourcePicker
                 lon={origin?.longitude ?? null}
                 lat={origin?.latitude ?? null}
@@ -1448,11 +1882,17 @@ export default function FireSimulatorPage() {
                 variant="secondary"
                 size="sm"
                 block
-                onClick={clearScenario}
+                onClick={() => {
+                  clearScenario();
+                  setWorldFires(DEFAULT_WORLD_FIRES);
+                  setFiresCleared(true);
+                }}
                 disabled={!origin}
               >
                 Clear scenario
               </Button>
+              </>
+              )}
             </div>
           </section>
 
@@ -1481,6 +1921,20 @@ export default function FireSimulatorPage() {
                 value={view}
                 onChange={chooseView}
               />
+            </Panel>
+            <Panel glass compact className="fr-world" aria-label="Shared world">
+              {worldBar}
+              {worldSync.enabled && worldFires.others.length > 0 && origin && (
+                <p className="fr-hint">
+                  The shared world has {worldFires.others.length + 1} fires; this page runs the
+                  first one.
+                </p>
+              )}
+              {worldSync.enabled && worldNote && (
+                <Notice tone="danger" className="fr-compact-notice">
+                  {worldNote}
+                </Notice>
+              )}
             </Panel>
           </div>
 
@@ -1876,6 +2330,7 @@ export default function FireSimulatorPage() {
           <FireDock
             playback={playback}
             horizonMinutes={horizonMinutes}
+            stepMinutes={stepMinutes}
             hasRun={hasRun}
             canFocusFire={hasRun}
             sceneReady={sceneReady || view === "satellite"}
@@ -1887,6 +2342,16 @@ export default function FireSimulatorPage() {
                   series={run.scenario.weatherSeries}
                   horizonMinutes={horizonMinutes}
                   t={playback.t}
+                />
+              ) : undefined
+            }
+            dayNight={
+              run?.scenario.weatherSeries?.enabled && runClock ? (
+                <DayNightBand
+                  clock={runClock.clock}
+                  horizonMinutes={horizonMinutes}
+                  t={playback.t}
+                  note={runClock.note}
                 />
               ) : undefined
             }

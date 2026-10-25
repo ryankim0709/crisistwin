@@ -48,6 +48,8 @@ export class CrewOverlay implements BoardOverlay {
   private dispatch: CrewDispatch | null = null;
   /** Minute each trip leaves the fire to help the evacuation (studio/crewHandoff.ts). */
   private leaveMinutes: readonly (number | null)[] = [];
+  /** Minute each trip is released because its fire is out (studio/crewHandoff.ts). */
+  private releaseMinutes: readonly (number | null)[] = [];
   private meshes = new Map<ResourceKind, THREE.InstancedMesh>();
   /** Instance index of each trip within its kind's mesh. */
   private slot: number[] = [];
@@ -105,9 +107,10 @@ export class CrewOverlay implements BoardOverlay {
     this.build();
   }
 
-  /** When each crew leaves the fire; it is no longer drawn here after that. */
-  setLeaveMinutes(leaveMinutes: readonly (number | null)[]): void {
+  /** When each crew leaves the fire, or is released from it; it is no longer drawn here after that. */
+  setLeaveMinutes(leaveMinutes: readonly (number | null)[], releaseMinutes: readonly (number | null)[] = []): void {
     this.leaveMinutes = leaveMinutes;
+    this.releaseMinutes = releaseMinutes;
     this.place();
   }
 
@@ -253,12 +256,19 @@ export class CrewOverlay implements BoardOverlay {
     const road = this.toWorld(dispatch.roadPoint);
     let onScene = 0;
     let left = 0;
+    let released = 0;
     dispatch.trips.forEach((trip, index) => {
       const mesh = this.meshes.get(vehicleFamily(trip.kind));
       if (!mesh) return;
       let at: { x: number; y: number; z: number } | null;
       let yaw = 0;
       const leave = this.leaveMinutes[index] ?? null;
+      const release = this.releaseMinutes[index] ?? null;
+      if (release !== null && minute >= release && (leave === null || release <= leave)) {
+        released += 1;
+        mesh.setMatrixAt(this.slot[index], this.matrix.makeScale(0, 0, 0));
+        return;
+      }
       if (leave !== null && minute >= leave) {
         left += 1;
         mesh.setMatrixAt(this.slot[index], this.matrix.makeScale(0, 0, 0));
@@ -306,7 +316,7 @@ export class CrewOverlay implements BoardOverlay {
           ? `Not yet reported · reported ${formatElapsed(Math.round(dispatch.reportMinute))}${
               dispatch.reportSource === "set" ? " (set)" : " (modelled)"
             }`
-          : `🚒 ${onScene}/${total} at the fire${hiking > 0 ? ` · ${hiking} walking in` : ""}${left > 0 ? ` · ${left} overwhelmed, helping evacuate` : ""}`;
+          : `🚒 ${onScene}/${total} at the fire${hiking > 0 ? ` · ${hiking} walking in` : ""}${left > 0 ? ` · ${left} overwhelmed, helping evacuate` : ""}${released > 0 ? ` · ${released} released (fire out)` : ""}`;
     }
   }
 }

@@ -37,10 +37,12 @@ resize it and a long run may reach its edge. Cells coarsen from LANDFIRE's nativ
 large boards to keep the grid at most 900 cells a side; the page states radius and cell size
 (fuels resampled by majority; Details has a resolution card) because coarser cells smooth narrow fuel breaks and small neighbourhoods. Click the landscape to place an ignition (in the 3D view, drag to pan, right-drag or Ctrl-drag to rotate, scroll to zoom; arrow keys pan)
 point, set the 20-foot wind speed and the direction it blows from, pick a fuel-moisture
-preset, then play the fire forward over a fixed 24 hour horizon. Playback is
-continuous (1× is 10 model minutes per second, rising to horizon ÷ 18 for horizons past
-3 h, so 80 model minutes per second at 24 h; 0.5×, 2×, and 4× are available) while the results use
-the model's **15-minute** frames. The presets are the standard dead and live moisture
+preset, then play the fire forward over _How long to simulate_ (24 hours by default; 3 h to
+3 days in one click, or a custom 1 h to 7 days, see [How long to simulate](#how-long-to-simulate)).
+Playback is continuous (1× is 10 model minutes per second, rising to horizon ÷ 18 for horizons
+past 3 h, so 80 model minutes per second at 24 h and 4 model hours per second at 72 h; 0.5×, 2×,
+and 4× are available) while the results use the model's **15-minute** frames (30 min past 60 h).
+The presets are the standard dead and live moisture
 scenarios that go with the Scott & Burgan fuel models. The midflame wind factor, maximum
 spotting distance, and structure-to-structure spread rate stay at their defaults (midflame
 0.5, the share of the open wind that reaches flame height). When canopy data loaded for
@@ -87,11 +89,34 @@ the ground, torches individual trees, or runs through the crowns, where forest f
 most of their speed. The panel reports whether crown fire was modelled for the run (it
 needs canopy data; a run without it says so rather than reading as treeless ground), the
 burned area split by surface, passive (torching), and active crown fire, and the
-length-to-breadth applied to actively crowning cells at the run's wind. Crown fire can
-also carry from an already-crowning cell into a neighbour whose own canopy can sustain it,
-not only where a cell's own surface fire is intense enough to start crowning on its own.
-See [the crown fire decision](adr/0008-crown-fire.md) for the sources, the
-constants, and where it is least trustworthy.
+length-to-breadth applied to actively crowning cells at the run's wind. See
+[the crown fire decision](adr/0008-crown-fire.md) for the sources, the constants, and where
+it is least trustworthy. `SPREAD_MODEL` 5.0.0 changes four things in that record:
+
+- **No crown-to-crown carry.** A cell crowns only where its own surface fire reaches Van
+  Wagner's (1977) critical intensity. A canopy that could carry an active crown fire but
+  whose surface fire cannot ignite it (Scott & Reinhardt's "conditional" crown fire) burns as
+  surface fire, as in FlamMap and FARSITE (Scott 2006, RMRS-RP-58 p. 18; Finney 1998, revised
+  2004, RMRS-RP-4 pp. 10, 20). ADR 0008's "crown fire carries into a neighbour whose canopy can
+  sustain it" (the NEXUS treatment) no longer applies.
+- **Per direction.** As FARSITE does per perimeter vertex, each direction out of a cell is
+  classified on that direction's surface intensity (Byram: proportional to its rate), so the
+  flanks and back of a crowning cell burn as surface fire and crown fire no longer backs.
+- **Crown direction.** The active crown head is aimed along FARSITE's wind-slope vector at 0.4
+  of the open wind (Finney 1998 p. 6), not the sheltered surface heading, which under closed
+  canopy is slope-dominated. The cell's own fuel bed stands in for FARSITE's fuel model 10.
+- **Broadleaf canopy torches only.** Cruz et al. (2005) is fitted to conifer stands. Cells
+  whose surface fuel is a Scott & Burgan broadleaf litter (TL2, TL6, TL9) may torch but never
+  go active, and their passive fire spreads at the surface rate (FARSITE's rule for passive
+  crown fire). ASSUMPTION: canopy type from the fuel model, because LANDFIRE EVT is not loaded.
+
+The 100 m/min crown cap now applies after the stochastic rate field, which could previously
+push crown cells to 237 m/min.
+
+Each stencil step is timed through every cell it crosses (Finney 2002): the length in each cell
+over that cell's own rate in the step's direction. Previously a step of up to 8 cells ran at the
+origin cell's rate, so a grass cell lit houses 380 m away at grass speed and litter next to
+grass burned at grass speed.
 
 **Use current NWS wind** replaces the wind speed and direction with the US National
 Weather Service hourly forecast for the ignition point, labelled as **observed** data with
@@ -104,7 +129,7 @@ to show peak fire weather; they are **explicitly unvalidated**, and the page say
 The page loads the real landscape around an area centre when it opens (default Berkeley
 Hills, 37.88, -122.24): a LANDFIRE FBFM40 fuel raster, four more LANDFIRE layers for canopy
 base height, bulk density, cover, and height that the crown fire model needs, and terrain
-elevation tiles, over a radius scaled to the 24 hour horizon. Clicking the landscape places
+elevation tiles, over a radius scaled to the horizon. Clicking the landscape places
 the ignition point without refetching. **Change area** picks a new centre from the presets (Berkeley Hills, Paradise,
 Malibu / Woolsey) or a small locator map, and clears the ignition point and run. The canopy
 layers cost a real extra download — five coverages' worth of sub-requests instead of one —
@@ -126,7 +151,7 @@ area. A fire started on developed ground reports its Rothermel quantities as zer
 they are undefined for a burning subdivision rather than measured to be nothing.
 
 Keyboard: `Space` plays or pauses the run once one exists, unless a focused control owns the
-key. On the timeline slider, arrow keys step one 15-minute frame, Shift+arrow, `PageUp` and
+key. On the timeline slider, arrow keys step one frame (15 min, 30 min past 60 h), Shift+arrow, `PageUp` and
 `PageDown` step an hour, and `Home` and `End` jump to ignition and the horizon. The fire
 stage and the locator map need WebGL; without it the page shows a notice instead of the
 diorama. No API key, backend call, or persistence is involved; terrain tiles and the
@@ -236,6 +261,118 @@ operational evacuation instructions. See the
 [solver direction set decision](adr/0009-solver-direction-set.md) for the constants,
 their sources, and where they are least trustworthy.
 
+### Surface model: equations and reference check
+
+`app/src/fire/rothermel.ts` (and `sim/fire.py`'s `rothermel_fuel`, same equations) follow
+Rothermel (1972) with the Albini (1976) multi-class corrections as Andrews (2018,
+RMRS-GTR-371) gives them. Within each category (dead, live) the particle weights f_ij are
+surface-area shares; the category shares f_i weight the characteristic SAV and the heat sink.
+Reaction intensity is the **sum** of the dead and live terms,
+I_R = Γ' Σ_i w_n,i h η_M,i η_s, with no f_i factor. Net load w_n,i weights each particle by
+g_ij, the summed f_ij of its SAV subclass (≥1200, 192-1200, 96-192, 48-96, 16-48 1/ft;
+`NET_LOAD_SIZE_CLASS_MIN_SAV_PER_FOOT`), so a 1-h class and a cured-herb class of similar
+fineness count in full. Live moisture of extinction is Albini's 2.9 W' (1 − M_f,dead/M_x,dead)
+− 0.226, never below M_x,dead. Dynamic models move (1.2 − M_herb)/0.9 of the herb load
+(clamped 0-1) to a dead herb class at the 1-h moisture (Scott & Burgan 2005).
+
+Before `SPREAD_MODEL` 4.4.0 the TypeScript code multiplied each category's reaction term by
+f_i and weighted net load by f_ij. That roughly halved I_R, spread and intensity in every model
+with live fuel, and cut dynamic grass models (GR2, GS4) further. `sim/fire.py` before
+`rothermel-mtt` 0.2.0 had only the f_ij net-load error, so SH5, the Camp replay's fuel, was
+already right there and its calibrated parameters still stand.
+
+Reference: the BehavePlus engine (firelab/behave, `surfaceFuelbedIntermediates.cpp` and
+`surfaceFireReactionIntensity.cpp`, commit 7e3d7a4), compiled and run on Scott & Burgan
+parameters. Rows 1-6 use 6/7/8/60/90 % moisture, 5 mph midflame wind, flat ground. "Spot"
+is BehavePlus's spotting worked example (GS4, same moisture, 5 mph 20-ft wind at WAF 1.0, 30 %
+upslope). "Camp" is SH5 at 3/4/5/30/60 % and an 18 m/s 20-ft wind at WAF 0.55 (22.1 mph
+midflame). ROS is in ft/min, I_R in Btu/ft²/min and flame length in ft.
+
+| Case | Behave ROS / I_R / flame | TS before | TS 4.4.0 | Python before → 0.2.0 (ROS / I_R) |
+| --- | --- | --- | --- | --- |
+| GR2 | 38.26 / 1,149 / 4.57 | 17.15 / 515 / 2.19 | 38.25 / 1,149 / 4.57 | 32.54 / 978 → 38.25 / 1,149 |
+| GS4 | 32.71 / 15,618 / 14.86 | 11.92 / 5,694 / 5.87 | 32.69 / 15,614 / 14.86 | 21.44 / 10,239 → 32.70 / 15,616 |
+| SH5 | 63.01 / 5,142 / 13.62 | 30.96 / 2,526 / 7.08 | 63.02 / 5,141 / 13.62 | 63.01 / 5,142, unchanged |
+| TU5 | 10.19 / 8,178 / 7.37 | 5.25 / 4,210 / 4.00 | 10.19 / 8,179 / 7.37 | 10.19 / 8,178, unchanged |
+| TL3 (dead only) | 1.915 / 785 / 1.05 | 1.915 / 785 / 1.05 | 1.915 / 785 / 1.05 | 1.915 / 785, unchanged |
+| FM4 (Anderson) | 89.71 / 12,000 / 20.33 | 44.79 / 5,992 / 10.73 | 89.71 / 12,000 / 20.33 | 89.71 / 12,000, unchanged |
+| Spot (GS4, 30 % slope) | 37.41 / 15,618 / 15.81 | 13.64 / 5,694 / 6.25 | 37.40 / 15,614 / 15.81 | n/a |
+| Camp (SH5) | 568.3 / 6,144 / 40.6 | 280.3 / 3,030 / 21.2 | 568.3 / 6,143 / 40.6 | 568.3 / 6,144, unchanged |
+
+Residuals after the fix are under 0.05 %: the TypeScript table stores loads rounded to 4
+decimals in lb/ft², and Behave cures herb with 1.333 − 1.11 M instead of (1.2 − M)/0.9. With
+the corrected flame length, BehavePlus's spotting example reproduces end to end:
+`albiniSurfaceSpotDistanceMeters` gives 0.22000 mi against BehavePlus's 0.22005 mi (0.102 mi
+before). The Camp SH5 head rate is now 173 m/min in both codes, up from 85 m/min in the
+TypeScript one. One difference remains: `sim/fire.py` caps the wind coefficient at
+Rothermel's 0.9 I_R wind limit, while the TypeScript code and BehavePlus only report it. The
+cap does not bind for any fuel at the Camp inputs.
+
+Effect on a `/fire`-style run (synthetic flat 300 × 300 board at 30 m: GR2, then SH5, then TU5
+west to east, a road column and a pond; ignition in the GR2, wind from the west, default
+spotting and structure spread, 6 h):
+
+| Moisture, 20-ft wind | 4.3.0 burned area | 4.4.0 burned area |
+| --- | --- | --- |
+| Critical, 10 mph | 940 ha | 1,462 ha |
+| Critical, 20 mph | 882 ha | 1,251 ha |
+| Dry, 10 mph | 91 ha | 610 ha |
+| Dry, 20 mph | 281 ha | 745 ha |
+
+Fireline intensity in live-fuel models roughly doubles, so crown fire initiation, spotting
+reach and the `/live` board (SH5 everywhere) all respond. Nothing in them was retuned.
+
+## How long to simulate
+
+`/fire` and Simulation Studio share one _How long to simulate_ control
+(`app/src/fire/ui/HorizonControl.tsx`, limits in `app/src/fire/horizon.ts`): 3, 6, 12, 24 hours,
+2 days or 3 days in one click, or _Custom…_ for any whole number of hours from 1 to 168 (7 days).
+`/fire` starts at 24 h, Studio at 3 h. Everything that depends on the horizon follows it:
+
+- Frames. Frames are contours of one continuous arrival field, so only their spacing changes:
+  `frameStepMinutes` keeps a run at 240 frames or fewer. `/fire` keeps 15 min up to 60 h, then
+  30 min (72 h: 145 frames), 60 min past 120 h. Studio keeps 5 min up to 20 h, then 10, 15 or
+  30 min (72 h: 145 frames, plus ignition minutes).
+- Weather. The Historical, Worst and Forecast wind fetch the whole run (`hours` up to 169 on
+  `/api/weather/scenario` and `/api/conditions`). A record fetched for a shorter run says so and
+  asks to apply the wind again; past its last hour the solver holds that hour. A Worst run longer
+  than its offshore episode says how long the episode lasted: the hours after it are the real
+  hours that followed, so the wind usually eases. NWS forecasts end after about 7 days.
+- Day and night. While a run follows hourly weather, the diurnal cycle is in the weather itself.
+  The `/fire` playback bar then shows the local (Pacific) clock and shades night (sunrise and
+  sunset from NOAA's equations, `studio/daylight.ts`; `fire/runClock.ts`). The clock is the
+  weather's start, or for Worst the clock the replayed hours were observed at. With an assumed
+  constant wind there is no clock and no shading, and long runs warn that weather is constant.
+  Studio always shows the clock: its T+0 is _T+0 local time_ under Firefighting (it also sets the
+  aircraft daylight windows), with a note when the weather series starts at another time.
+- Board. A custom `/fire` area on _Local_ already grows with the horizon (40 m/min of assumed
+  fast spread, up to 60 km radius past 6 h). The "reached the edge" warning names the fix: a
+  larger Area size, Custom… for a fixed region board, or a shorter run once the board is the
+  largest.
+- Playback. `/fire` scales 1× with the horizon (72 h plays in 18 s). Studio's speeds go to ×240
+  (4 simulated hours per second) and a new long run starts at the slowest speed that shows it in
+  about 40 s (×120 at 72 h).
+- Firefighting. Candidate control-line runs keep only the best plan's run in memory.
+
+Solve time (`simulateFireSpread`, Node, synthetic mixed grass/shrub/timber board with roads and
+water lines, hourly diurnal wind, 30 km radius = 667 x 667 cells of 90 m):
+
+| Run | Frames | Burned | Solve |
+| --- | --- | --- | --- |
+| 72 h, dry, 20 mph peak | 145 | 2,962 ha | 0.19 s |
+| 24 h, critical, 40 mph peak | 97 | 6,924 ha | 0.21 s |
+| 48 h, critical, 40 mph peak | 193 | 70,753 ha (edge) | 0.91 s |
+| 72 h, critical, 40 mph peak | 145 | 159,328 ha (edge) | 1.8 s |
+| 72 h, critical, 40 mph, 13.5 km radius at 30 m (900 x 900) | 145 | 40,054 ha (edge) | 4.0 s |
+| 7 days, critical, 40 mph, 60 km radius at 150 m | 169 | 1.1 Mha (edge) | 4.1 s |
+
+Cost grows with burned cells, so the worst case is a fire that fills the board. `/fire` solves on
+the main thread, so a long worst-case run freezes the page for those seconds on every edit; the
+control says "solving can take a few seconds" from 48 h. Studio solves in a worker. Frame memory is
+the perimeter contours: about 50 MB for the worst 72 h run above with 30-minute frames (twice that
+with 15-minute frames), which is why frames spread out. The 7-day cap keeps the worst case near
+5 s; nothing longer is offered.
+
 ## Stochastic spread (opt-in, seeded)
 
 The solver (`app/src/fire/spread.ts`) can run as one realisation of a seeded random fire
@@ -284,14 +421,15 @@ the options in its solve key.
 | Mechanism | What it does | Source | Evidence |
 | --- | --- | --- | --- |
 | ROS field | Per-cell multiplier exp(sigma z), z a unit-variance Gaussian field (white noise blurred by a separable Gaussian, rescaled to unit variance at every cell, edges included). Scales head, flank/backing floor and sustained-crown rates of vegetated cells; intensity scales with it and flame length with its 0.46 power (Byram 1959). Crown classification stays on the unperturbed fire. | sigma = ln(1.35): Cruz & Alexander (2013) propose a 35% error interval as about one standard deviation of heading-ROS prediction error with accurate inputs (49 datasets, 1278 fires; most datasets had 51-75% mean absolute error, so this is the narrow end). | Sigma sourced; applying a whole-fire error as cell-scale variability, the 90 m correlation length and median 1 (their under-prediction bias not applied) are assumptions. |
-| Wind wander | Each 10-minute step draws a speed factor exp(s z - s^2/2) capped at the gust factor, and a direction offset 0.8 s z' radians, independent per step. A cell spreads out at the wind of the step it ignites in (rate, heading, ellipse, crown state recomputed). | s = (G - 1) x 0.117 / 1.267: 0.117 is Durst's (1960) ratio of 10-minute to 3-second gust excess over the hourly mean (ASCE 7-05 form), 1.267 the expected maximum of six independent normals; 0.8 = sigma_v / sigma_u (Kaimal & Finnigan 1994). Default G = Durst's 3-second gust, 1.52; an observed gust replaces it. At the default s = 0.048 (speed) and 2.2 degrees (direction). | Formulas sourced; independent steps, reading the sample's speed as the hourly mean, and the 10-minute step are assumptions. |
+| Wind wander | Each 10-minute step draws a speed factor exp(s z - s^2/2) capped at the gust factor, and a direction offset 0.8 s z' radians, independent per step. A cell starts spreading at the wind of the step it ignites in (rate, heading, ellipse, crown state recomputed); since 5.0.0 a crossing still under way is re-timed at each later step. | s = (G - 1) x 0.117 / 1.267: 0.117 is Durst's (1960) ratio of 10-minute to 3-second gust excess over the hourly mean (ASCE 7-05 form), 1.267 the expected maximum of six independent normals; 0.8 = sigma_v / sigma_u (Kaimal & Finnigan 1994). Default G = Durst's 3-second gust, 1.52; an observed gust replaces it. At the default s = 0.048 (speed) and 2.2 degrees (direction). | Formulas sourced; independent steps, reading the sample's speed as the hourly mean, and the 10-minute step are assumptions. |
 | Stochastic spotting | A cell above 100 Btu/ft/s launches one firebrand with probability 1 - exp(-0.001 per m x cell width) (2.9% at 30 m), at most 5000 per solve. Distance is lognormal with median a quarter of the maximum and the maximum at the 99th percentile; draws past it or past the scenario's spotting ceiling start nothing. Direction is downwind plus the direction sigma. Only vegetated, unburned fuel outside built line can ignite. Arrival = flight at half the wind + the existing 10-minute delay. | Maximum distance: Albini (1979, 1983) surface-fire spotting as implemented in BehavePlus (`firelab/behave` `spot.cpp`), flat terrain. Ignition: Schroeder (1969) probability of ignition as in BehavePlus `ignite.cpp`, fuel temperature = air + 25 F - 20 F x shade, shade = landing cell's canopy cover. Lognormal shape: Sardoy et al. (2008), Himoto & Tanaka (2005). | Albini and Schroeder sourced (ignition reproduces BehavePlus's worked examples to 8 decimals); launch rate, median fraction, air temperature, closed-canopy cut-off (cover >= 0.5) are assumptions. |
 
 The deterministic gap-crossing spotting (above) still runs alongside; stochastic spots are
 the only mechanism that lands embers in continuous fuel ahead of the front.
 
 What was measured (synthetic 300 x 300 grid of GR2 / SH5 / TU5 with a road and a pond,
-20 mph, 6-hour /fire run, 229.8 ha deterministic; 20 seeds each):
+20 mph, 6-hour /fire run, 229.8 ha deterministic; 20 seeds each; `SPREAD_MODEL` 4.2.0,
+before the live-fuel fix, so absolute areas are now larger):
 
 | Configuration | Burned area, ha: min / median / max |
 | --- | --- |
@@ -309,11 +447,11 @@ up to about 12 minutes, so a one-minute gust direction persisted for the whole s
 was rejected as a lattice artifact, and the 10-minute step matches how long a solver step
 lasts.
 
-Not verified: BehavePlus's spotting worked example (GS4, 5 mph, 30 ft closed cover, 0.22005
-mi) needs a 15.8 ft flame; this solver's own GS4 surface run at those inputs gives 5.5 to 6.2
-ft, the live-fuel discrepancy of [integration-todo](integration-todo.md) section 4, so the
-example could not be reproduced end to end. The spotting formulas were checked term by term
-against `spot.cpp` instead. That discrepancy is unchanged here.
+BehavePlus's spotting worked example (GS4, 5 mph, 30 ft closed cover, 0.22005 mi) needs a
+15.8 ft flame. Since `SPREAD_MODEL` 4.4.0 this solver's GS4 surface run at those inputs gives
+15.807 ft and the flat-terrain distance comes out at 0.22000 mi (see
+[the reference check](#surface-model-equations-and-reference-check)). Before 4.4.0 the flame
+was 6.2 ft, from the live-fuel weighting error.
 
 Cost (507 x 507 grid, two fires, 6 hours, about 24,000 burned cells): 201 ms deterministic,
 243 ms all on with a cached field, 262 ms with a new seed (the rate field takes 30 ms and is
@@ -361,10 +499,17 @@ interface FireWeatherSeries {
 ```
 
 How the solver uses it. It extends the stochastic wind wander's machinery rather than adding a
-second one: the run is read in the same 10-minute steps (`WIND_STEP_MINUTES`), and a cell spreads
-out at the weather of the step it ignites in (rate, heading, ellipse, crown state and ember reach
-recomputed), so fire that ignited before a wind shift keeps its old heading and fire that ignites
-after it takes the new one. A step reads the series at its start minute: speed and each moisture
+second one: the run is read in the same 10-minute steps (`WIND_STEP_MINUTES`), and a cell starts
+spreading out at the weather of the step it ignites in (rate, heading, ellipse, crown state and
+ember reach recomputed). Since `SPREAD_MODEL` 5.0.0 a crossing that is still under way at a step
+boundary is re-timed at the next step's weather: the share already covered is kept and the rest
+runs at the new rate, so a crossing whose origin or destination fuel passes its moisture of
+extinction stops, and resumes when the fuel can spread again. Simplification: after the first step
+the remaining time is rescaled by the change in the origin cell's rate in that direction, and is
+re-timed through every crossed cell only when the crossing resumes after waiting. Fire no longer
+reaches cells too wet to burn and waits there, so the many cells that used to ignite in the same
+minute when the moisture fell back below extinction now arrive at their own travel times. A step
+reads the series at its start minute: speed and each moisture
 fraction linear in time, direction along the shorter arc of the compass (350 to 10 degrees passes
 north; an exact reversal turns clockwise), the first sample held before it and the last after it.
 With wind wander on, the wander's anomaly is applied around each step's series wind. With
@@ -451,7 +596,8 @@ Under a strong wind it does nothing: at 25 mph on the synthetic grid the largest
 
 ## Validation: Eaton Fire, 7-8 January 2025
 
-Scratch run, not committed. Ignition 18:18 PST 7 Jan 2025 (02:18Z 8 Jan), CAL FIRE incident page
+Run before `SPREAD_MODEL` 4.4.0 (the live-fuel reaction intensity fix), so the burned areas below
+are low for the same inputs; not re-run. Scratch run, not committed. Ignition 18:18 PST 7 Jan 2025 (02:18Z 8 Jan), CAL FIRE incident page
 (`[34.203483, -118.069155]`, "Near Altadena Drive and Midwick Drive"); that point is at 1,210 m in
 TL6 broadleaf litter under 65% canopy, which looks high for the street address, so the task's
 approximate point (-118.084, 34.204; SH2, 882 m) was run as well. Landscape: `loadLandscape`

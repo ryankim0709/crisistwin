@@ -50,13 +50,15 @@ interface Props {
   className?: string;
   /** Mention that app users' phones are a separate layer (true on /live). */
   phonesNote?: boolean;
+  /** A short plain-language line shown after the counts (for example why nobody is moving). */
+  note?: ReactNode;
 }
 
 /**
  * Plain-language summary of the simulated people picture (Still home / Driving out / In traffic /
  * Stuck / Out) with a key to the map marks. Reusable beside any map that hosts `attachPeopleLayer`.
  */
-export default function PeopleSummary({ snapshot, error, className, phonesNote = true }: Props) {
+export default function PeopleSummary({ snapshot, error, className, phonesNote = true, note }: Props) {
   const cls = `ppl-strip${className ? ` ${className}` : ""}`;
   if (!snapshot) {
     return (
@@ -85,7 +87,7 @@ export default function PeopleSummary({ snapshot, error, className, phonesNote =
   const chips: { key: keyof typeof PEOPLE_SWATCH; label: string; value: number; detail?: string; title: string }[] = [
     {
       key: "home",
-      label: "Still home",
+      label: "People still home",
       value: home,
       detail: [t.home_no_car ? `${nf(t.home_no_car)} no car` : "", t.staying ? `${nf(t.staying)} staying put` : ""]
         .filter(Boolean)
@@ -117,6 +119,7 @@ export default function PeopleSummary({ snapshot, error, className, phonesNote =
           </li>
         ))}
       </ul>
+      {note ? <span className="ppl-note">{note}</span> : null}
       {error ? <span className="ppl-stale">Not updating</span> : null}
       <details className="ppl-key">
         <summary>Key</summary>

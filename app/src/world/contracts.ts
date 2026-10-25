@@ -157,8 +157,8 @@ export const DEFAULT_WORLD: World = {
     id: "berkeley-hills-tilden",
     name: "Berkeley Hills & Tilden",
     center: [-122.23, 37.895],
-    radiusMeters: 6000,
-    cellMeters: 30,
+    radiusMeters: 15000,
+    cellMeters: 60,
   },
   conditions: {
     startUtc: "2025-08-15T20:00:00Z",

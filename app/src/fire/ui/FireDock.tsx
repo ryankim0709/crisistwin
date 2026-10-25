@@ -1,5 +1,4 @@
 import type { KeyboardEvent, ReactNode } from "react";
-import { FIRE_STEP_MINUTES } from "../spread";
 import {
   PLAYBACK_SPEEDS,
   modelMinutesPerSecond,
@@ -10,8 +9,8 @@ import { Button, IconButton, SegmentedControl, type SegmentedOption } from "../.
 import { formatDuration } from "./format";
 
 const HOUR_MINUTES = 60;
-const SEEK_STEP_MINUTES = FIRE_STEP_MINUTES;
 const SEEK_BIG_STEP_MINUTES = HOUR_MINUTES;
+const DAY_MINUTES = 24 * HOUR_MINUTES;
 /** Per-frame minor ticks crowd the rail beyond this many frames. */
 const MAX_MINOR_TICK_FRAMES = 30;
 
@@ -20,16 +19,28 @@ const SPEED_OPTIONS: readonly SegmentedOption<string>[] = PLAYBACK_SPEEDS.map((v
   label: `${value}×`,
 }));
 
-/** Spacing of labelled hour marks: every 1 h up to 6 h, every 3 h for 12 h, every 6 h beyond. */
+/**
+ * Spacing of labelled marks: every 1 h up to 6 h, 3 h to 12 h, 6 h to 36 h, then a day, so the
+ * narrow rail keeps 8 labels or fewer.
+ */
 function labelIntervalMinutes(horizonMinutes: number): number {
   if (horizonMinutes <= 6 * HOUR_MINUTES) return HOUR_MINUTES;
   if (horizonMinutes <= 12 * HOUR_MINUTES) return 3 * HOUR_MINUTES;
-  return 6 * HOUR_MINUTES;
+  if (horizonMinutes <= 36 * HOUR_MINUTES) return 6 * HOUR_MINUTES;
+  return DAY_MINUTES;
+}
+
+/** "80 model minutes per second", or hours once that reads better. */
+function rateText(minutesPerSecond: number): string {
+  if (minutesPerSecond < 120) return `${Math.round(minutesPerSecond)} model minutes per second`;
+  return `${Number((minutesPerSecond / HOUR_MINUTES).toFixed(1))} model hours per second`;
 }
 
 type FireDockProps = {
   playback: FirePlayback;
   horizonMinutes: number;
+  /** Minutes between the run's frames; the step buttons and arrow keys move by this. */
+  stepMinutes: number;
   hasRun: boolean;
   canFocusFire: boolean;
   sceneReady: boolean;
@@ -37,24 +48,28 @@ type FireDockProps = {
   onFocusFire: () => void;
   /** Optional row under the scrubber on the same time axis (the wind-over-time strip). */
   windStrip?: ReactNode;
+  /** Optional row on the same time axis: local clock with day and night (DayNightBand). */
+  dayNight?: ReactNode;
 };
 
 export default function FireDock({
   playback,
   horizonMinutes,
+  stepMinutes,
   hasRun,
   canFocusFire,
   sceneReady,
   onResetView,
   onFocusFire,
   windStrip,
+  dayNight,
 }: FireDockProps) {
   const { t, playing, speed } = playback;
   const ended = t >= horizonMinutes;
   const progress = horizonMinutes > 0 ? (t / horizonMinutes) * 100 : 0;
   const labelInterval = labelIntervalMinutes(horizonMinutes);
-  const frameCount = Math.floor(horizonMinutes / FIRE_STEP_MINUTES);
-  const tickStep = frameCount <= MAX_MINOR_TICK_FRAMES ? FIRE_STEP_MINUTES : labelInterval;
+  const frameCount = Math.floor(horizonMinutes / stepMinutes);
+  const tickStep = frameCount <= MAX_MINOR_TICK_FRAMES ? stepMinutes : labelInterval;
   const ticks = Array.from(
     { length: Math.floor(horizonMinutes / tickStep) + 1 },
     (_, index) => index * tickStep,
@@ -66,7 +81,7 @@ export default function FireDock({
   const minutesPerSecond = modelMinutesPerSecond(horizonMinutes);
 
   const onSliderKey = (event: KeyboardEvent<HTMLInputElement>) => {
-    const step = event.shiftKey ? SEEK_BIG_STEP_MINUTES : SEEK_STEP_MINUTES;
+    const step = event.shiftKey ? SEEK_BIG_STEP_MINUTES : stepMinutes;
     const now = playback.getTime();
     let next: number | null = null;
     if (event.key === "ArrowLeft" || event.key === "ArrowDown") next = now - step;
@@ -81,7 +96,10 @@ export default function FireDock({
   };
 
   return (
-    <section className={`fr-dock fr-panel${windStrip ? " fr-dock--wind" : ""}`} aria-label="Fire playback">
+    <section
+      className={`fr-dock fr-panel${windStrip || dayNight ? " fr-dock--wind" : ""}`}
+      aria-label="Fire playback"
+    >
       <div className="fr-dock-buttons">
         <IconButton
           variant="primary"
@@ -127,11 +145,11 @@ export default function FireDock({
         <IconButton
           variant="secondary"
           className="fr-dock-step"
-          label={`Back ${FIRE_STEP_MINUTES} minutes`}
+          label={`Back ${stepMinutes} minutes`}
           onClick={() => {
             if (!hasRun || t <= 0) return;
             playback.pause();
-            playback.seek(Math.max(0, playback.getTime() - FIRE_STEP_MINUTES));
+            playback.seek(Math.max(0, playback.getTime() - stepMinutes));
           }}
           aria-disabled={!hasRun || t <= 0}
         >
@@ -140,11 +158,11 @@ export default function FireDock({
         <IconButton
           variant="secondary"
           className="fr-dock-step"
-          label={`Forward ${FIRE_STEP_MINUTES} minutes`}
+          label={`Forward ${stepMinutes} minutes`}
           onClick={() => {
             if (!hasRun || ended) return;
             playback.pause();
-            playback.seek(Math.min(horizonMinutes, playback.getTime() + FIRE_STEP_MINUTES));
+            playback.seek(Math.min(horizonMinutes, playback.getTime() + stepMinutes));
           }}
           aria-disabled={!hasRun || ended}
         >
@@ -192,7 +210,11 @@ export default function FireDock({
                 }}
                 aria-label={`Jump to ${formatDuration(minutes)}`}
               >
-                {minutes === 0 ? "0" : `${minutes / HOUR_MINUTES} h`}
+                {minutes === 0
+                  ? "0"
+                  : horizonMinutes > 4 * DAY_MINUTES
+                    ? `${minutes / DAY_MINUTES} d`
+                    : `${minutes / HOUR_MINUTES} h`}
               </button>
             </li>
           ))}
@@ -203,7 +225,7 @@ export default function FireDock({
         <span className="fr-time-now">{formatDuration(t)}</span>
         <span className="fr-time-total">
           of {formatDuration(horizonMinutes)}
-          <span className="fr-time-frames"> · frames every {FIRE_STEP_MINUTES} min</span>
+          <span className="fr-time-frames"> · frames every {stepMinutes} min</span>
         </span>
       </p>
 
@@ -255,8 +277,13 @@ export default function FireDock({
           <span>Focus fire</span>
         </Button>
       </div>
-      {windStrip}
-      <p className="fr-speed-note">1× = {Math.round(minutesPerSecond)} model minutes per second</p>
+      {(windStrip || dayNight) && (
+        <div className="fr-dock-axis">
+          {dayNight}
+          {windStrip}
+        </div>
+      )}
+      <p className="fr-speed-note">1× = {rateText(minutesPerSecond)}</p>
     </section>
   );
 }

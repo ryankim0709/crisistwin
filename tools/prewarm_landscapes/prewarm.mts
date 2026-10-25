@@ -12,7 +12,8 @@
  *
  * Phase 1 loads missing boards through the backend's geo cache proxies (so raw LANDFIRE and
  * terrain tiles are cached too) and POSTs the encoded package to /api/landscapes/cache.
- * Phase 2 requests the OSM street boxes the 3D diorama asks for (useBoardStreets.ts), one at a
+ * Phase 2 requests the OSM street boxes the app asks for (useBoardStreets.ts: drawn tiles and
+ * every routing-area candidate, `allStreetBoxesFor`), one at a
  * time, backing off on 429/5xx, so /api/dispatch/area caches them in Mongo `dispatch_areas`.
  * State (board extents, finished street boxes) lives in a JSON file so a re-run resumes.
  */
@@ -33,7 +34,7 @@ import { landscapeCacheKey } from "../../app/src/fire/landscapeCache";
 import { boardCellMetersFor } from "../../app/src/fire/boardSize";
 import { decodeLandscapePackage, encodeLandscapePackage } from "../../app/src/fire/landscapePackage";
 import { CALIFORNIA_REGIONS } from "../../app/src/fire/regions";
-import { streetsBoxesFor } from "../../app/src/fire/useBoardStreets";
+import { allStreetBoxesFor } from "../../app/src/fire/useBoardStreets";
 import { politeFetch } from "../build_landscape_regions/politeFetch.mts";
 
 const { values: args } = parseArgs({
@@ -155,13 +156,13 @@ async function enumerateBoards(): Promise<Board[]> {
 // ---- State ------------------------------------------------------------------------------
 
 interface State {
-  /** Board extents ([w,s,e,n] street boxes) per cache key. */
-  boxes: Record<string, [number, number, number, number][]>;
+  /** Street boxes ([w,s,e,n]: drawn tiles plus routing-area candidates) per cache key; replaces `boxes`. */
+  streetBoxes: Record<string, [number, number, number, number][]>;
   /** Snapped street box -> "ok" | "no_roads". */
   areas: Record<string, string>;
   failures: Record<string, string>;
 }
-let state: State = { boxes: {}, areas: {}, failures: {} };
+let state: State = { streetBoxes: {}, areas: {}, failures: {} };
 try {
   state = { ...state, ...(JSON.parse(await readFile(statePath, "utf8")) as State) };
 } catch {
@@ -207,7 +208,7 @@ async function boxesFromCache(key: string): Promise<[number, number, number, num
   const response = await fetch(`${BASE}/api/landscapes/cache?key=${encodeURIComponent(key)}`, { signal });
   if (!response.ok) throw new Error(`GET ${key}: HTTP ${response.status}`);
   const { grid } = await decodeLandscapePackage(await response.arrayBuffer());
-  return streetsBoxesFor(grid);
+  return allStreetBoxesFor(grid);
 }
 
 // ---- Phase 1: boards --------------------------------------------------------------------
@@ -252,7 +253,7 @@ async function buildBoard(b: Board): Promise<void> {
   if (response.status !== 204) throw new Error(`POST HTTP ${response.status} (${bytes.length} bytes)`);
   storedBytes += bytes.length;
   storedCount++;
-  state.boxes[b.key] = streetsBoxesFor(grid);
+  state.streetBoxes[b.key] = allStreetBoxesFor(grid);
   delete state.failures[b.key];
   await saveState();
   log(`  stored ${b.label} ${grid.width}x${grid.height} ${(bytes.length / 1e6).toFixed(2)} MB in ${((Date.now() - began) / 1000).toFixed(0)}s`);
@@ -285,10 +286,10 @@ async function streetsPhase(list: Board[]): Promise<void> {
   const pending = new Map<string, number[]>();
   for (const b of list) {
     if (signal.aborted) return;
-    let boxes = state.boxes[b.key];
+    let boxes = state.streetBoxes[b.key];
     if (!boxes) {
       try {
-        boxes = state.boxes[b.key] = await boxesFromCache(b.key);
+        boxes = state.streetBoxes[b.key] = await boxesFromCache(b.key);
         await saveState();
       } catch (cause) {
         log(`  streets: no extent for ${b.label} (${(cause as Error).message}); skipped`);

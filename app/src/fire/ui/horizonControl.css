@@ -1,0 +1,43 @@
+.fr-hz {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.fr-hz-title {
+  color: var(--ct-ink);
+  font-size: var(--ct-text-sm);
+  font-weight: var(--ct-weight-semibold);
+}
+
+.fr-hz-row {
+  display: flex;
+  gap: var(--ct-space-2);
+  align-items: center;
+  min-width: 0;
+}
+
+.fr-hz-row > select {
+  flex: 1;
+  min-width: 0;
+}
+
+.fr-hz-custom {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-sm);
+}
+
+.fr-hz-custom input {
+  width: 5.5em;
+}
+
+.fr-hz-note {
+  margin: 0;
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-sm);
+  line-height: var(--ct-leading-snug);
+}

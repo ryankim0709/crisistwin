@@ -1,0 +1,53 @@
+.fr-dn {
+  min-width: 0;
+}
+
+.fr-dn-band {
+  position: relative;
+  height: 14px;
+  overflow: hidden;
+  border-radius: var(--ct-radius-xs);
+  background: var(--ct-warning-soft);
+}
+
+.fr-dn-night {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  overflow: hidden;
+  background: var(--ct-ink);
+  color: var(--ct-ink-inverse);
+  font-size: 10px;
+  line-height: 14px;
+  text-align: center;
+  white-space: nowrap;
+  opacity: 0.72;
+}
+
+/* Playback time on the band, matching the wind strip's marker. */
+.fr-dn-now {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--ct-fire);
+}
+
+.fr-dn-readout {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 2px var(--ct-space-3);
+  margin: 2px 0 0;
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-xs);
+}
+
+.fr-dn-readout strong {
+  color: var(--ct-ink);
+}
+
+.fr-dn-note {
+  color: var(--ct-ink-subtle);
+}

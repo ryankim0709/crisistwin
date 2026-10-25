@@ -4,7 +4,7 @@ Date: 2026-10-24. A shared, pure TypeScript model of how fire agencies respond t
 manage their resources: initial attack by run card, containment tactics, escalation and resource
 orders, departments and mutual aid, and unit states. On the `/live` command board it runs the
 mechanics only: the board is **AI agent only** and decides nothing itself (see "Decisions and
-mechanics on the Live board"). Simulation Studio reads its run card and staffing turnout. Every
+mechanics on the Live board"). Simulation Studio sends its run card from the same fleet. Every
 number below is sourced, derived from sourced numbers, or a named **ASSUMPTION**. Outputs are
 planning experiments, not operational dispatch guidance.
 
@@ -13,7 +13,10 @@ planning experiments, not operational dispatch guidance.
 | File | What |
 | --- | --- |
 | `app/src/response/rng.ts` | Seeded stream (mulberry32, as the board), derived from the board seed with a salt, so response draws do not move the ignition sequence |
-| `app/src/response/fleet.ts` | Departments, tiers and units from the CAL FIRE facilities layer (`buildFleet`), turnout by staffing (`engineTurnoutMinutes`) |
+| `app/src/response/fleet.ts` | Departments, tiers, units and aircraft from the facilities on and near the board (`buildFleet`), the one units-per-facility table (`FACILITY_INVENTORY`), the plain summary (`summarizeFleet`), turnout by staffing (`engineTurnoutMinutes`) |
+| `app/src/studio/mapResources.ts` | Studio: the fleet from the facilities around the board (`mapResources`) and the run card filled from it (`planMapDispatch`) |
+| `app/src/studio/incidents.ts` | Studio and /dispatch: one incident per fire (`planIncidents`), each with its own report minute, run card from the weather after that report, units drawn down across incidents, and its own crew trips and helitack |
+| `app/src/studio/useMapStations.ts` | Studio map: a labelled marker for every facility that can respond |
 | `app/src/response/runCards.ts` | Dispatch level from fire danger, run cards, initial-attack (IA) size, escalation stages and orders, the Operations Bulletin #1 caps, `ORDERABLE` |
 | `app/src/response/containment.ts` | Tactic by flame length, production per tactic, line needed, seeded holding test, Fried & Fried check |
 | `app/src/response/orders.ts` | Mutual aid and state tiers, fill draws, lead times, state caps |
@@ -31,9 +34,10 @@ same dispatch path (`dispatchTeam`), and the new `order_resources` order calls `
 `crews[].department/tier/water_pct/work_h`, and a `response` block (departments, aircraft,
 orders, `orderable`, IA record). The shapes are in `demo/contracts.ts`.
 `useCommandBoard` creates every board with the rule-based response off (`autoDispatch` and
-`autoEscalate` false; `boardResponse.ts` `RULE_RESPONSE_DEFAULT` is false too). In Studio, `firefighting.ts` takes `FIRST_ALARM` from the shared medium run
-card, with the same numbers as before. `crewDispatch.ts` gives off-board engines the staffing
-turnout. The server validates `order_resources` in `app/backend/api/demo.py`.
+`autoEscalate` false; `boardResponse.ts` `RULE_RESPONSE_DEFAULT` is false too). In Studio, `studio/mapResources.ts` builds the same fleet from the
+facilities around the board and sends the run card from it (see "Resources come from the map");
+`crewDispatch.ts` routes each chosen unit from its own base. The server validates
+`order_resources` in `app/backend/api/demo.py`.
 
 ## Decisions and mechanics on the Live board
 
@@ -499,32 +503,75 @@ minute and suppression version).
   The count is capped at 5/5/2/4/2 (the bulletin's caps; airtankers 4 is an **ASSUMPTION**).
   It is validated by the server (`normalize_order`) and again by the board (`applyOrder`).
 
+## Resources come from the map
+
+The units that can respond are a pure function of the fire facilities on and near the current
+board. Nothing is set by hand: Studio has no unit counts (only Firefighting on/off and the T+0
+clock, which sets aviation daylight), and the /live board has no fixed roster.
+
+- **Facilities** (`GET /api/suppression/bases`): the CAL FIRE Facilities for Wildland Fire
+  Protection layer, with observed location, facility type, agency, unit code and staffing, plus
+  the OpenStreetMap fire stations the layer does not list (`withOsmStations`: an OSM station within
+  500 m of a layer facility is that facility, **ASSUMPTION** as `crewDispatch.ts`). The layer covers
+  wildland protection, so city departments (San Francisco, Oakland) are often only in OSM. OSM
+  stations come from the drill package (/live) or the board's roads (`DispatchArea.stations`,
+  Studio). Without the layer, OSM stations alone. Neither path invents crew camps or air bases.
+- **Tiers**: facilities inside the board answer initial attack (closest resource). The rest of
+  the list (the endpoint returns the nearest 40 stations and 10 camps) is the mutual-aid pool.
+  Beyond that, orders go to the state system ("Escalation and resource ordering").
+- **Aircraft** come only from air attack bases (AAB) and helitack bases (HB) in the layer, within
+  a dispatch radius of a 20-minute flight at the aircraft's cruise (`AIR_DISPATCH_FLIGHT_MINUTES`,
+  **ASSUMPTION** after CAL FIRE's commonly quoted goal of reaching most fires within 20 minutes,
+  not re-fetched): about 142 km for an S-2T (230 kt, IASG Table 3) and 62 km for a helicopter
+  (100 kt, assumed). Time over the fire and the airtanker cycle follow from the distance
+  (`studio/aircraft.ts`). /live fetches facilities within 150 km of the drill centre so the
+  airtanker radius is covered; Studio uses the endpoint default of 250 km around the board centre.
+- **No facilities at all**: no local units. /live says "No fire stations found on this map" and
+  every run card goes short, so its ground shortfall is ordered from out of the area through the
+  state tier (about 4.5 h to the board edge). Studio sends the shortfall the same way.
+- **On the map**: every contributing facility is drawn with a plain label, for example
+  "Paradise FS · CAL FIRE · 2 engines, 1 dozer" (Studio map: `studio/useMapStations.ts`;
+  /live board: `demo/boardMapLayers.ts`). Mutual aid is drawn fainter and labelled
+  "mutual aid"; air bases are squares in Studio. So what is on the map is what can respond.
+- **Studio summary**: one line, for example "From the map: 9 stations · 11 engines, 2 crews,
+  1 dozer · air from Chico AAB, ~10 min", with the per-station list, counts per type and their
+  line rates, the inventory table and the T+0 clock under a collapsed "Details".
+- **Studio dispatch** (`planMapDispatch`): the run card for the dispatch level from the scenario's
+  fuel moisture (nearest `MOISTURE_PRESETS` entry by 1-h moisture, **ASSUMPTION**) and wind, or the
+  structure card when the fire starts on developed ground; filled by the closest units on or off
+  the board by estimated arrival (turnout + straight line × 1.3 at the heavy-apparatus secondary
+  road speed), then routed on the board's roads. Aircraft: the nearest of each kind within its
+  radius of the fire; an aircraft the map cannot supply is reported, not flown. Studio sends the
+  initial-attack card only; escalation needs the board's minute loop (/live).
+- **Old Studio drafts and files** with hand-set counts: the counts are dropped on load
+  (`parseScenario`, draft defaults version 3) and the panel says "Units now come from the stations
+  on the map".
+
+### Units per facility (`FACILITY_INVENTORY`, `response/fleet.ts`)
+
+The layer has no apparatus, so what each facility fields is the one remaining assumption, kept in
+a single table. Staffing sets turnout (80 s paid, 120 s otherwise; "Initial attack"), not counts:
+no source ties counts to staffing.
+
+| Facility (type, agency) | Units | Evidence |
+| --- | --- | --- |
+| CAL FIRE station (FSA, FSB, FSAB, FSL, FSCC, FSO; agency CAL FIRE) | 1.6 Type 3 engines (k-th station of a unit: floor(1.6k) − floor(1.6(k−1))) | Derived: 343 engines / 220 stations, 2019 (calfire_house_2019; data leaf), as `livecore/apparatus.py` |
+| CAL FIRE unit | 1 Type 2 dozer at its first (nearest) station | ASSUMPTION |
+| Local, Schedule A or contract county station | 1 Type 1 engine | ASSUMPTION, as `livecore/apparatus.py` |
+| Federal station | 1 Type 3 engine | ASSUMPTION |
+| OSM station (CAL FIRE layer unavailable) | 1 Type 3 engine | ASSUMPTION, as `dispatch/stationApparatus.ts` |
+| Conservation camp or crew fire centre (CC, FCFFC) | 2 Type 1 crews | ASSUMPTION |
+| Air attack base (AAB) | 1 air attack + 2 S-2T | Derived: 12 air tactical and 22 airtankers at 13 bases (calfire_house_2019) |
+| Helitack base (HB) | 1 Type 2 helicopter | ASSUMPTION (10 staffed helicopters, 17 bases in the layer) |
+
 ## Departments and mutual aid
 
-`buildFleet` groups the CAL FIRE facilities layer (`GET /api/suppression/bases`, which now
-returns `staffing`) into departments by agency class and unit code. Examples near Paradise: CAL
-FIRE BTU unit, Paradise FD (PRA, Schedule A), Butte County Fire (BTC, Schedule A), and the
-volunteer companies of the BTU area. The layer has no apparatus, so the counts per facility are
-assumptions:
-
-| Facility | Units | Evidence |
-| --- | --- | --- |
-| CAL FIRE station | 1.6 Type 3 engines (k-th station: floor(1.6k) − floor(1.6(k−1))) | Derived: 343 engines / 220 stations, 2019 (data leaf) |
-| CAL FIRE unit | 1 Type 2 dozer at its first station | ASSUMPTION |
-| Other station (local, Schedule A, contract county) | 1 Type 1 engine | ASSUMPTION, as `livecore/apparatus.py` |
-| Federal station | 1 Type 3 engine | ASSUMPTION |
-| Conservation camp or crew fire centre | 2 Type 1 crews | ASSUMPTION |
-| Air attack base | 1 air attack + 2 S-2T | Derived: 12 air tactical and 22 airtankers at 13 bases (calfire_house_2019) |
-| Helitack base | 1 Type 2 helicopter | ASSUMPTION |
-| OSM-only package station | 1 Type 3 engine; the 2 nearest also as crew bases | ASSUMPTION |
-
-Facilities inside the board's landscape answer IA. The rest (the bases endpoint returns up to 40
-stations and 10 camps within 60 km, and every air base) form the mutual-aid pool. On a 60 km board
-(`fire/boardSize.ts` on `feat/shared-world`) most of them are on the board. **Drawdown**: a
-department keeps floor(25% of its engines) uncommitted (**ASSUMPTION**), so a department with
-fewer than 4 engines keeps none. It always answers fires within 5 km of one of its stations
-(**ASSUMPTION**). Without layer metadata the board falls back to the fixed roster, one
-department per station.
+`buildFleet` groups the facilities into departments by agency class and unit code. Examples near
+Paradise: CAL FIRE BTU unit, Paradise FD (PRA, Schedule A), Butte County Fire (BTC, Schedule A),
+and the volunteer companies of the BTU area. On a 60 km board (`fire/boardSize.ts`) most of the
+listed stations are on the board. **Drawdown**: a department keeps floor(25% of its engines)
+uncommitted (**ASSUMPTION**), so a department with fewer than 4 engines keeps none. It always
+answers fires within 5 km of one of its stations (**ASSUMPTION**).
 
 ## Resource management
 
@@ -567,6 +614,78 @@ R01-R12, avoiding fire at request time. Until a leg arrives the fallback is a st
   event ("trip blocked by fire", refs action `road_blocked`) and given to the commander as
   `crews[].blocked_by_fire`; the commander or a person can send it again (a new trip starts
   with no cuts). En-route units show `crews[].road_cuts`.
+
+## Studio: one incident per fire
+
+The Studio firefighting run (the run /dispatch uses) plans every enabled ignition as its own
+incident (`studio/incidents.ts` `planIncidents`). Before this, all trips went to the first
+fire and the other fires had no units.
+
+- **Report and card.** Each incident is reported at its start plus its own
+  `ignitionReportDelayMinutes`. Its card is sized on the worst wind and lowest 1-h moisture in
+  the `DISPATCH_FORECAST_MINUTES` (60, ASSUMPTION) after that report (`dispatchWeatherAt`).
+  `dispatchLevel` gives "medium" only for dry fuel, or moderate fuel with wind of at least
+  15 mph, as its docstring says. Before, wet fuel with 15 mph wind also gave "medium".
+- **Units are drawn down.** Incidents are filled in report order. A unit or aircraft that one
+  incident takes is not used again (`planMapDispatch` `committed`). Release, move-up and cover
+  are not modelled. A helitack base used by one incident is excluded for the others, and the
+  helicopter keeps its daylight window (`aviationWindows`).
+- **Structure flag.** A fire within `HOME_IGNITION_ZONE_M` (61 m, 200 ft; Cohen 2000, J. For.
+  98(3):15-21) of developed cells gets the wildland card with at least the structure card's
+  engines (ASSUMPTION).
+- **Initial attack per fire** (`studio/initialAttack.ts`). This is a 1-minute Fried & Fried
+  race that uses only the incident's own units. A unit sent to one fire works whichever fire
+  reaches it first. There is no fallback: a fire with no units is never out (the old T+30
+  default is gone).
+  - The head flame at minute t is the largest cell flame among the cells that ignited in the
+    previous `HEAD_FLAME_WINDOW_MINUTES` (one weather step, 10 min; ASSUMPTION). Any crown fire counts as infinite.
+  - A unit attacks only when that flame is within its Hauling-chart limit (PMS 465; Andrews &
+    Rothermel 1982, GTR INT-131).
+  - An engine beyond hose reach works as an engine crew on foot (4 ft limit, PMS 465 hand-line
+    rate).
+- **Withdrawal (LCES).** A unit that cannot hold the fire withdraws when the fire will reach
+  the cells around its road point within its hike-back time plus
+  `UNIT_WITHDRAW_MARGIN_MINUTES` (5, ASSUMPTION). Its line stops at that minute.
+- **Leaving for evacuation** happens only when an evacuation task exists
+  (`crewHandoff.ts` `evacuationTaskFromMinute`). The task starts at the order minute, or at the
+  earliest zone contact minus `FORECAST_LOOKAHEAD_MINUTES`.
+- **Aircraft** (`studio/aircraft.ts`) are planned per incident.
+  - Each is released when initial attack puts its fire out.
+  - Drops go only on that fire's own ring, and only where the facing flame is within
+    `DROP_HOLDS_FLAME_FEET`. The wind at the drop is the weather series' wind at that minute.
+  - Pilot duty: `PILOT_MAX_FLIGHT_MINUTES_PER_DAY` 480, `PILOT_MAX_DUTY_DAY_MINUTES` 840,
+    `PILOT_MIN_REST_MINUTES` 600 (Interagency Standards for Fire and Aviation Operations, NFES
+    2724, ch. 16; IHOG PMS 510; values as recalled, to check against the current edition).
+  - A drop counts as held line only if ground line ties in within `WATER_TIE_IN_MINUTES` (30)
+    or `RETARDANT_TIE_IN_MINUTES` (120), both ASSUMPTIONs. Untied drops are flown and logged
+    but do not hold.
+  - The per-aircraft summary is counted from the drop log, so the two cannot disagree. Fuel
+    cycles are not modelled.
+- **Best line per incident.** Line is planned for each incident on that fire's own arrival
+  field, starting from the group's first arrival, and the results are merged. Line for units
+  sent to fire 1 no longer appears around fire 3.
+- **Air-supported initial attack, and IA as a best-line candidate** (`planFirefighting`).
+  Before this, the initial attack was ground only while the best line counted held drops, so
+  the two could disagree badly. On seed 1356197356 (before the crown-fire solver change) the
+  best line was 2.5 ha and the IA 28,175 ha.
+  - The same ground race (same units, arrivals, hold limits and withdrawal) now also runs
+    against the fire as its tied-in drops slow it.
+  - A fire's drops count as held line only if that race puts the fire out. Otherwise no ground
+    line ties in, and none of its drops hold. This repeats until the set of fires is stable.
+  - The aircraft are then released at the air-supported out minute. This race becomes the IA
+    the page shows.
+  - The IA run is added to the best-line candidates as `initial_attack`, so the best line never
+    burns more than the IA.
+  - Tie-in still uses the first-line minute from the ground-only race. This is conservative.
+- **dispatch agent** (`dispatch/engine.ts`). The walk limit depends on the kind of unit: an
+  engine crew `ENGINE_CREW_MAX_HIKE_M` (800 m), a hand crew `HAND_CREW_MAX_HIKE_MINUTES` at
+  Tobler pace, a dozer `DOZER_MAX_WALK_MINUTES` at `DOZER_WALK_KMH`. An engine beyond hose
+  reach builds hand line at the engine-crew rate.
+- **Studio with firefighting off** sends no crews.
+
+Turnout: stations whose layer gives staffing P already get 80 s (NFPA 1710 4.1.2.1). OSM
+stations have unknown staffing and keep 120 s (ASSUMPTION), because no career status is
+invented for them.
 
 ## Measured
 
@@ -681,7 +800,20 @@ cases have their nearest homes 7.9 km away and every road ending 1.5 km short of
 - **Escalation lead times, fill probabilities and state caps** are assumptions.
 - **Line**: no burnout timing, no loss of an already contained line on a wind shift, no line
   degradation over time.
-- **Units**: pilot duty limits are not modelled; water tenders are not units.
+- **Units**: pilot duty limits are modelled in Studio only (`studio/aircraft.ts`), not on the
+  board. Water tenders are not units.
+- **Studio incidents**: there is no release and re-dispatch of a unit after its fire is out,
+  no move-up or cover, no escalation or extended-attack orders, and no aircraft fuel cycle.
+- **Drops expire** (solver 5.1.0, `ControlLines.holdUntilMinute`).
+  - A held drop stops holding `DROP_HOLD_MINUTES` after it lands: water 30 min, retardant
+    120 min. These are the tie-in windows, an ASSUMPTION with no published effective-life
+    figure.
+  - A step the drop held is re-tried at expiry, as weather-delayed arrivals are.
+  - Untied drops still do not hold at all.
+  - Check on a synthetic grass ring (GR2, dry, 6 mph): the free run reaches outside the ring at
+    T+48.7. A ring that never expires holds the fire to 10.7 ha. A ring expiring at T+120 lets
+    the fire out at T+120.2, for 136.1 ha against 141.9 ha free.
+  - A drop and ground line on the same cell count as one hold window (ASSUMPTION).
 - **Report delays**: the 3 min doorstep median, the 250 m scale, the anchor distances, the
   camera coverage of 60% and the camera and satellite times are assumptions. There is no camera
   or road-traffic map, Studio has no road lines, and the 911 load of a large fire (queued

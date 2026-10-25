@@ -5,12 +5,13 @@
  * live/people/types.ts), so the same map layer and summary strip draw it. Pure; no network.
  *
  * Households to people: each household carries its zone's vehicles per home (the dispatch
- * area's synthetic estimate) times PERSONS_PER_VEHICLE. Every count is an estimate from the
- * model, never an observation.
+ * area's synthetic estimate) times PERSONS_PER_VEHICLE, or, with `zonePeople` (the /dispatch
+ * page's scenario-snapshot households, population/households.ts), its zone's snapshot occupants
+ * shared over the zone's homes. Every count is an estimate from the model, never an observation.
  *
  * States (each household is in exactly one, so people are conserved per zone and in total):
  * - home: not left yet (no order, or ordered and getting ready);
- * - staying: ordered, but chose not to leave (studio/householdBehavior.ts);
+ * - staying: ordered, but chose not to leave (population/householdBehavior.ts);
  * - queued: left home, waiting under LONG_QUEUE_MINUTES at the zone's loading point for room on
  *   the road (the engine's only queue: once on the road a group drives at free-flow speed);
  * - driving: on a road edge toward an exit;
@@ -24,6 +25,8 @@
 import type { DispatchArea, LonLat } from "../dispatch/area";
 import { groundMeters, roadLabel } from "../dispatch/area";
 import { HomeStatus, type DispatchEngine } from "../dispatch/engine";
+import { cssColor, exitColor } from "../dispatch/scene/DispatchOverlay";
+import type { ZoneHouseholds } from "./households";
 import type {
   PeopleCounts,
   PeopleEdgeRow,
@@ -66,6 +69,11 @@ export interface StudioPeopleOptions {
   playbackSpeed: number;
   /** `basis.people_behavior`: the household behaviour applied. */
   behavior: string;
+  /**
+   * Snapshot occupants per zone (estimated). Zones it matched count these people; other zones
+   * keep vehicles per home × PERSONS_PER_VEHICLE.
+   */
+  zonePeople?: ZoneHouseholds | null;
 }
 
 type Counts = Record<keyof PeopleCounts, number>;
@@ -151,7 +159,17 @@ export function studioPeopleSnapshot(
   const minute = engine.minute;
   const zoneCounts: Counts[] = area.zones.map(() => zeroCounts());
   const zoneStuckByReason = area.zones.map(() => ({ fire: 0, no_route: 0 }));
-  const perHome = area.zones.map((_, z) => engine.vehiclesPerHome(z) * PERSONS_PER_VEHICLE);
+  const snapshotPeople = options.zonePeople ?? null;
+  const fromSnapshot = (z: number) => snapshotPeople !== null && snapshotPeople.matched[z] === true;
+  const perHome = area.zones.map((zone, z) =>
+    fromSnapshot(z)
+      ? snapshotPeople!.people[z] / Math.max(1, zone.homes)
+      : engine.vehiclesPerHome(z) * PERSONS_PER_VEHICLE,
+  );
+  /** Engine vehicles per person in each zone (the engine moves vehicles, not people). */
+  const vehiclesPerPerson = area.zones.map((_, z) =>
+    perHome[z] > 0 ? engine.vehiclesPerHome(z) / perHome[z] : 0,
+  );
   const points: PeoplePoint[] = [];
   const stuckItems: StuckItem[] = [];
   const stuckByReason: Record<StuckReason, number> = {
@@ -172,6 +190,7 @@ export function studioPeopleSnapshot(
     let longWait = 0;
     let held = 0;
     let longest = 0;
+    const loadingHeld = engine.loadingHeld(z);
     for (let h = zone.firstHome; h < zone.firstHome + zone.homes; h += 1) {
       const status = engine.homeStatus[h];
       if (status === HomeStatus.idle || status === HomeStatus.ordered) {
@@ -180,7 +199,7 @@ export function studioPeopleSnapshot(
         else counts.home += pph;
       } else if (status === HomeStatus.queued) {
         const wait = minute - Math.max(0, engine.queuedSince(h));
-        if (state.routeBlocked) held += pph;
+        if (loadingHeld) held += pph;
         else if (wait >= LONG_QUEUE_MINUTES) {
           longWait += pph;
           longest = Math.max(longest, wait);
@@ -195,7 +214,7 @@ export function studioPeopleSnapshot(
     stuckByReason.long_queue += longWait;
     stuckByReason.no_route += held + zoneStuckByReason[z].no_route;
     stuckByReason.fire += zoneStuckByReason[z].fire;
-    const vehicles = (people: number) => people / PERSONS_PER_VEHICLE;
+    const vehicles = (people: number) => people * vehiclesPerPerson[z];
     if (waiting > 0)
       points.push({
         coord: loading,
@@ -262,7 +281,10 @@ export function studioPeopleSnapshot(
   });
 
   // Groups on the road: moving along an edge, or held with no exit left.
-  const edgeRows = new Map<string, { edge: number; forward: boolean; moving: number; stuck: number }>();
+  const edgeRows = new Map<
+    string,
+    { edge: number; forward: boolean; moving: number; stuck: number; vehicles: number }
+  >();
   for (const packet of engine.packetStates()) {
     const people = packet.homes * perHome[packet.zone];
     const counts = zoneCounts[packet.zone];
@@ -272,9 +294,16 @@ export function studioPeopleSnapshot(
     } else counts.driving += people;
     if (packet.edge === null) continue;
     const key = `${packet.edge}:${packet.forward ? 1 : 0}`;
-    const row = edgeRows.get(key) ?? { edge: packet.edge, forward: packet.forward, moving: 0, stuck: 0 };
+    const row = edgeRows.get(key) ?? {
+      edge: packet.edge,
+      forward: packet.forward,
+      moving: 0,
+      stuck: 0,
+      vehicles: 0,
+    };
     if (packet.stuck) row.stuck += people;
     else row.moving += people;
+    row.vehicles += packet.vehicles;
     edgeRows.set(key, row);
     if (packet.stuck) {
       const road = area.edges[packet.edge];
@@ -297,14 +326,13 @@ export function studioPeopleSnapshot(
     .map((row) => {
       const road = area.edges[row.edge];
       const line = row.forward ? road.coords : [...road.coords].reverse();
-      const people = row.moving + row.stuck;
       return [
         row.edge,
         shown(row.moving),
         0,
         shown(row.stuck),
         row.stuck > 0 ? "no_route" : null,
-        shown(people / PERSONS_PER_VEHICLE),
+        shown(row.vehicles),
         row.moving > 0 ? road.speedKph : 0,
         0,
         road.speedKph,
@@ -314,24 +342,33 @@ export function studioPeopleSnapshot(
     });
 
   // Arrivals per exit.
-  const arrivals = new Map<string, { people: number; recent: number }>();
+  const arrivals = new Map<string, { people: number; recent: number; vehicles: number }>();
   for (const arrival of engine.exitArrivals) {
-    const entry = arrivals.get(arrival.exitId) ?? { people: 0, recent: 0 };
+    const entry = arrivals.get(arrival.exitId) ?? { people: 0, recent: 0, vehicles: 0 };
     const people = arrival.homes * perHome[arrival.zone];
     entry.people += people;
+    entry.vehicles += arrival.homes * engine.vehiclesPerHome(arrival.zone);
     if (arrival.minute > minute - ARRIVAL_WINDOW_MINUTES) entry.recent += people;
     arrivals.set(arrival.exitId, entry);
   }
+  const heading = new Map<string, number>();
+  engine.zones.forEach((state, z) => {
+    if (!state.exitId || state.status === "cleared") return;
+    const homes = state.atHome + state.queued + state.onRoad;
+    heading.set(state.exitId, (heading.get(state.exitId) ?? 0) + homes * perHome[z]);
+  });
   const destinations = area.exits.map((exit) => {
-    const entry = arrivals.get(exit.id) ?? { people: 0, recent: 0 };
+    const entry = arrivals.get(exit.id) ?? { people: 0, recent: 0, vehicles: 0 };
     return {
       id: exit.id,
       name: exit.name,
       kind: "exit",
       coord: area.nodes[exit.node],
       people: Math.round(entry.people),
-      veh: Math.round(entry.people / PERSONS_PER_VEHICLE),
+      veh: Math.round(entry.vehicles),
       last_10_min_people: Math.round(entry.recent),
+      heading_people: Math.round(heading.get(exit.id) ?? 0),
+      color: cssColor(exitColor(area, exit.id)),
     };
   });
 
@@ -343,8 +380,10 @@ export function studioPeopleSnapshot(
       coord: zone.centroid,
       population: KEYS.reduce((sum, key) => sum + rounded[key], 0),
       vehicles: Math.round(zone.vehicles),
-      persons_per_vehicle: PERSONS_PER_VEHICLE,
-      basis: "assumed",
+      persons_per_vehicle: fromSnapshot(z)
+        ? Math.round((perHome[z] / Math.max(1e-9, engine.vehiclesPerHome(z))) * 100) / 100
+        : PERSONS_PER_VEHICLE,
+      basis: fromSnapshot(z) ? "estimated" : "assumed",
       ...rounded,
     };
   });
@@ -353,13 +392,20 @@ export function studioPeopleSnapshot(
   for (const counts of zoneCounts) for (const key of KEYS) totalFloat[key] += counts[key];
   const people = roundToTotal(totalFloat, KEYS);
   const population = KEYS.reduce((sum, key) => sum + people[key], 0);
-  const vehicleFloat = {
-    home: (totalFloat.home + totalFloat.staying) / PERSONS_PER_VEHICLE,
-    driving: totalFloat.driving / PERSONS_PER_VEHICLE,
-    queued: totalFloat.queued / PERSONS_PER_VEHICLE,
-    stuck: totalFloat.stuck / PERSONS_PER_VEHICLE,
-    out: totalFloat.out / PERSONS_PER_VEHICLE,
-  };
+  const vehicleFloat = { home: 0, driving: 0, queued: 0, stuck: 0, out: 0 };
+  zoneCounts.forEach((counts, z) => {
+    const v = vehiclesPerPerson[z];
+    vehicleFloat.home += (counts.home + counts.staying) * v;
+    vehicleFloat.driving += counts.driving * v;
+    vehicleFloat.queued += counts.queued * v;
+    vehicleFloat.stuck += counts.stuck * v;
+    vehicleFloat.out += counts.out * v;
+  });
+  const snapshotZones = area.zones.filter((_, z) => fromSnapshot(z)).length;
+  const totalVehicles = area.zones.reduce((sum, zone) => sum + zone.vehicles, 0);
+  const transport = snapshotPeople
+    ? Math.round(snapshotPeople.needsTransport.reduce((sum, n) => sum + n, 0))
+    : 0;
   const vehicleKeys = ["home", "driving", "queued", "stuck", "out"] as const;
   const vehicles = roundToTotal(vehicleFloat, vehicleKeys);
   const roundedReasons = roundToTotal(stuckByReason, Object.keys(stuckByReason) as StuckReason[]);
@@ -406,20 +452,43 @@ export function studioPeopleSnapshot(
     points,
     stuck: clusters(stuckItems),
     destinations,
-    basis: {
-      population: "synthetic homes on OSM residential streets",
-      persons_per_vehicle: PERSONS_PER_VEHICLE,
-      persons_per_vehicle_basis:
-        "estimate: 1.38 derived from Camp household size over vehicles per household (docs/people-data.md)",
-      persons_per_vehicle_check: "within NIST TN 2252 bounds of 1.0 to 2.5 (p. 155)",
-      zones_census: 0,
-      zones_assumed: area.zones.length,
-      people_behavior: options.behavior,
-    },
-    limitations: [
-      "Homes, zones and vehicles are synthetic; people = vehicles x 1.38 (an estimate).",
-      "Once on the road a group drives at free-flow speed: only the wait to get onto the road is modelled as traffic.",
-      "Households without a car are not modelled.",
-    ],
+    basis: snapshotPeople
+      ? {
+          population: `estimated occupants of ${Math.round(snapshotPeople.matchedHouseholds).toLocaleString("en-US")} scenario-snapshot households (${snapshotPeople.incidents.join(", ")}) in ${snapshotZones} of ${area.zones.length} zones, moved with the synthetic homes nearest them${snapshotZones < area.zones.length ? "; other zones: synthetic homes × 1.38 per vehicle" : ""}`,
+          persons_per_vehicle:
+            totalVehicles > 0 ? Math.round((population / totalVehicles) * 100) / 100 : PERSONS_PER_VEHICLE,
+          persons_per_vehicle_basis:
+            "people from the snapshot's estimated occupants per zone over the engine's vehicles",
+          persons_per_vehicle_check: "occupants are estimates (scenario resource snapshot)",
+          zones_census: snapshotZones,
+          zones_assumed: area.zones.length - snapshotZones,
+          people_behavior: options.behavior,
+        }
+      : {
+          population: "synthetic homes on OSM residential streets",
+          persons_per_vehicle: PERSONS_PER_VEHICLE,
+          persons_per_vehicle_basis:
+            "estimate: 1.38 derived from Camp household size over vehicles per household (docs/people-data.md)",
+          persons_per_vehicle_check: "within NIST TN 2252 bounds of 1.0 to 2.5 (p. 155)",
+          zones_census: 0,
+          zones_assumed: area.zones.length,
+          people_behavior: options.behavior,
+        },
+    limitations: snapshotPeople
+      ? [
+          "Occupants are the scenario snapshot's estimates; homes, zones and vehicles moving them are synthetic.",
+          "Once on the road a group drives at free-flow speed: only the wait to get onto the road is modelled as traffic.",
+          `${transport.toLocaleString("en-US")} people in households that need transport move with their zone; transport is not modelled.`,
+          ...(snapshotPeople.unmatchedHouseholds > 0
+            ? [
+                `${Math.round(snapshotPeople.unmatchedHouseholds).toLocaleString("en-US")} snapshot households lie farther than 400 m from any modelled home and are not counted.`,
+              ]
+            : []),
+        ]
+      : [
+          "Homes, zones and vehicles are synthetic; people = vehicles x 1.38 (an estimate).",
+          "Once on the road a group drives at free-flow speed: only the wait to get onto the road is modelled as traffic.",
+          "Households without a car are not modelled.",
+        ],
   };
 }

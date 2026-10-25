@@ -12,7 +12,9 @@
  *
  * Evidence stays separate: weather is observed / derived (climatology) / forecast; dead 1-h
  * moisture is derived; 10-h and 100-h are derived with an assumed forcing and starting state;
- * live moisture is assumed (phenology calendar). Nothing here invents a missing value: an hour
+ * live moisture is derived from the NFDRS 2016 Growing Season Index over an ERA5 lead-in, or
+ * assumed (phenology calendar) when that lead-in is unavailable (`evidence.live` says which).
+ * Nothing here invents a missing value: an hour
  * without temperature/RH or wind cannot be applied, and `applyConditionsHour` says why.
  */
 
@@ -44,7 +46,7 @@ export interface ConditionsQuery {
   lat: number;
   /** ISO UTC with Z. Optional for `forecast` (the server uses the current UTC hour). */
   startUtc?: string;
-  /** 1 to 72; the answer has hours + 1 samples. Server default 24. */
+  /** 1 to 169; the answer has hours + 1 samples. Server default 24. */
   hours?: number;
   mode: ConditionsMode;
   /** 50 to 99.9, climatology only. Server default 95. */
@@ -138,6 +140,8 @@ export interface Conditions {
   };
   /** Server provenance (weather records, spin-up, table clock, model citations), kept opaque. */
   provenance: unknown;
+  /** Plain-language caveats from the server (station, QC, live moisture), to show the user. */
+  warnings: string[];
   cache: { hit: boolean; storedUtc: string | null; key: string } | null;
 }
 
@@ -178,7 +182,19 @@ interface ApiHour {
   gust_ms: number | null;
   temp_c: number | null;
   rh_pct: number | null;
+  /** Millimetres in the hour ending near t_utc; null when the source did not report it. */
+  precip_mm?: number | null;
   moisture: NullableFuelMoisture;
+  /** Rain adjustment of the dead classes (sim/fuel_moisture.py, fuel-moisture/2); percent unless named. */
+  rain?: {
+    precip_mm: number | null;
+    rain_hour: boolean;
+    rain_hours_24h: number;
+    pd_used_h: number;
+    adjusted: boolean;
+    no_rain_pct: { dead1h: number | null; dead10h: number | null; dead100h: number | null } | null;
+  };
+  /** Always the plain Rothermel 1983 table lookup, before any rain adjustment. */
   fine_fuel: {
     moisture_pct: number;
     period: "day" | "night";
@@ -231,6 +247,7 @@ interface ApiConditions {
     max_temp_c: number | null;
   };
   provenance: unknown;
+  warnings?: string[];
   cache?: { hit: boolean; stored_utc: string | null; key: string };
 }
 
@@ -441,6 +458,7 @@ export function toConditions(d: ApiConditions): Conditions {
       maxTempC: d.summary.max_temp_c,
     },
     provenance: d.provenance,
+    warnings: Array.isArray(d.warnings) ? d.warnings.filter((w): w is string => typeof w === "string") : [],
     cache: d.cache ? { hit: d.cache.hit, storedUtc: d.cache.stored_utc, key: d.cache.key } : null,
   };
 }
@@ -568,12 +586,27 @@ export function weatherSeriesFromConditions(
     });
   }
   if (samples.length === 0) return null;
+  // Longest stretch with no kept sample: between samples, from T+0 to the first, and from the
+  // last to the final hour the service returned.
+  const lastHourMinute = conditions.hours.reduce((m, h) => {
+    const minute = (Date.parse(h.tUtc) - t0) / 60_000;
+    return Number.isFinite(minute) && minute > m ? minute : m;
+  }, samples[samples.length - 1].minute);
+  let longestGapMinutes = Math.max(0, samples[0].minute, lastHourMinute - samples[samples.length - 1].minute);
+  for (let i = 1; i < samples.length; i++) {
+    longestGapMinutes = Math.max(longestGapMinutes, samples[i].minute - samples[i - 1].minute);
+  }
   return {
     series: {
       enabled: true,
       samples,
       source: `${conditions.mode}${conditions.station ? ` ${conditions.station.id}` : ""}`,
       evidence: conditions.evidence.weather,
+      missing: {
+        hours: skippedHours.length,
+        longestGapHours: Math.round((longestGapMinutes / 60) * 10) / 10,
+        startMissing: samples[0].minute > 0,
+      },
     },
     skippedHours,
   };

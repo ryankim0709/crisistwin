@@ -14,7 +14,7 @@ function firstLeave(handoff: CrewHandoff): number | null {
   const minutes = handoff.leaveMinutes.filter((m): m is number => m !== null);
   return minutes.length > 0 ? Math.min(...minutes) : null;
 }
-import type { CrewDispatch, CrewTrip } from "./crewDispatch";
+import { MAX_ROAD_GAP_METERS, remoteFireText, type CrewDispatch, type CrewTrip } from "./crewDispatch";
 
 /** Which fire the page shows: direct attack, the best line plan, or no crews. */
 export type FireShown = "attack" | "line" | "none";
@@ -32,6 +32,9 @@ function change(value: number, base: number): string {
 
 function attackLine(fire: FireAttack, name: string, holds: number): string {
   if (fire.ignitedMinute === null) return `${name}: reached by another fire before it started.`;
+  if (fire.outMinute === null && fire.reason) {
+    return `${name}: still burning at the horizon (about ${ha(fire.areaSquareMeters)} ha); ${fire.reason}.`;
+  }
   if (!fire.attackable) {
     return Number.isFinite(fire.headFlameFeet)
       ? `${name}: not attacked directly; head flames about ${fire.headFlameFeet.toFixed(0)} ft are longer than the ${holds} ft the crews can hold.`
@@ -48,6 +51,7 @@ const ORIGIN_NOTE: Record<CrewTrip["origin"], string> = {
   crew_camp: " (crew camp)",
   dozer_base: " (dozer base)",
   fallback: " (assumed from a board station)",
+  state: " (out of the area, state order)",
 };
 
 function NoAccessList({ dispatch }: { dispatch: CrewDispatch }) {
@@ -159,6 +163,7 @@ function DispatchSummary({ dispatch }: { dispatch: CrewDispatch }) {
               {ORIGIN_NOTE[trip.origin]}: {formatElapsed(Math.round(trip.arriveMinute))} (
               {Math.round(trip.atRoadMinute - trip.departMinute)} min drive
               {trip.hikeMeters >= 50 ? `, ${(trip.hikeMeters / 1000).toFixed(1)} km walk` : ""})
+              {trip.tactic === "indirect" ? ` — indirect: holding ${trip.holdingRoad ?? "the nearest road"}` : ""}
             </li>
           ))}
         </ol>
@@ -276,6 +281,9 @@ export default function FirefightingResults({
         </table>
       </div>
 
+      {dispatch && (dispatch.hikeMeters > MAX_ROAD_GAP_METERS || dispatch.trips.some((t) => t.tactic === "indirect")) && (
+        <p className="studio-hint">{remoteFireText(dispatch, result.aircraft?.aircraft ?? [])}</p>
+      )}
       {dispatch && <DispatchSummary dispatch={dispatch} />}
       <AircraftSummary result={result} />
       {dispatchNote && (
@@ -290,10 +298,17 @@ export default function FirefightingResults({
             Once on site <Tag>Rough estimate</Tag>
           </h4>
           <p className="studio-hint">
-            {dispatch ? "As each crew arrives (first at " : "From "}
-            {formatElapsed(Math.round(estimate.onSiteMinute))}
-            {dispatch ? ") it" : " the crews"} starts building line around each fire&rsquo;s edge;
-            together they build up to about{" "}
+            {Number.isFinite(estimate.onSiteMinute) ? (
+              <>
+                {dispatch ? "As each crew arrives (first at " : "From "}
+                {formatElapsed(Math.round(estimate.onSiteMinute))}
+                {dispatch ? ") it" : " each crew"}
+              </>
+            ) : (
+              "No crew reaches a fire edge, so direct attack puts no fire out. A crew on an edge"
+            )}{" "}
+            builds line around its own fire&rsquo;s edge while the head flame then is within what
+            it can hold; together they build up to about{" "}
             {Math.round(estimate.lineMetersPerMinute * 60).toLocaleString()} m an hour in grass
             (less in brush and timber). A fire is out when the line built covers its edge, estimated
             from its size as an ellipse.
@@ -324,9 +339,11 @@ export default function FirefightingResults({
         <details className="studio-advanced">
           <summary>Best control-line plan</summary>
           <p className="studio-hint">
-            <strong>Plan:</strong> {STRATEGY_LABELS[best.score.strategy]}, building around where the
-            unchecked fire would be at {formatElapsed(best.score.isochroneMinute)}; crews start at{" "}
-            {formatElapsed(result.startMinute)}.
+            <strong>Plan:</strong> {STRATEGY_LABELS[best.score.strategy]}
+            {best.score.strategy === "initial_attack"
+              ? ": no planned line does better than the units attacking each fire's edge"
+              : `, building around where the unchecked fire would be at ${formatElapsed(best.score.isochroneMinute)}`}
+            ; crews start at {formatElapsed(result.startMinute)}.
           </p>
           <ul className="studio-ff-line" aria-label="Control line outcome">
             <li>
@@ -359,9 +376,15 @@ export default function FirefightingResults({
           <ol className="studio-ff-candidates">
             {result.candidates.map((candidate) => (
               <li key={`${candidate.strategy}-${candidate.isochroneMinute}`}>
-                {candidate.strategy === "heel" ? "Heel" : "Head"} anchor, outline at{" "}
-                {formatElapsed(candidate.isochroneMinute)}: {ha(candidate.burnedSquareMeters)} ha
-                burned, {km(candidate.plannedMeters)} km line ({km(candidate.builtMeters)} km built)
+                {candidate.strategy === "initial_attack" ? (
+                  <>Initial attack on each fire&apos;s edge: {ha(candidate.burnedSquareMeters)} ha burned</>
+                ) : (
+                  <>
+                    {candidate.strategy === "heel" ? "Heel" : "Head"} anchor, outline at{" "}
+                    {formatElapsed(candidate.isochroneMinute)}: {ha(candidate.burnedSquareMeters)} ha
+                    burned, {km(candidate.plannedMeters)} km line ({km(candidate.builtMeters)} km built)
+                  </>
+                )}
               </li>
             ))}
           </ol>

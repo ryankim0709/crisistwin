@@ -389,6 +389,8 @@ function workersOf(board: Board, fire: Fire, minute: number): Team[] {
         t.status === "on_scene" &&
         t.workMode !== null &&
         t.workMode !== "out_of_reach" &&
+        // Indirect: holding the road it parked on, not working the fire's cells (response/reach.ts).
+        t.workMode !== "indirect" &&
         (t.workStartAt === null || t.workStartAt < minute),
     )
     .sort((a, b) => a.id.localeCompare(b.id));

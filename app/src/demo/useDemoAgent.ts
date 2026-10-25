@@ -20,12 +20,29 @@
  * or unmounting aborts the call so a late response cannot apply. After a failed call the monitor
  * waits ERROR_BACKOFF_MINUTES (or decideNow). Monitoring also pauses while the browser tab is
  * hidden, so a forgotten tab does not keep calling Claude; it resumes when the tab is shown again.
+ *
+ * The live drill's incident picture (incidentPicture.ts) also wakes it, on wall time: a new help
+ * request, road-blocked report, real-phone report or confirmation is checked PICTURE_DEBOUNCE_MS
+ * after it arrives (bursts are batched) and at most once per PICTURE_MIN_GAP_MS, so phone
+ * actions reach the commander within seconds even when the board clock runs slowly. These are
+ * urgent wakes (kind live_report) and go through the same single-call queue.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { DecisionError, streamNdjson } from "../dispatch/agentClient";
-import { DECIDE_URL, demoUrl, type DecisionEvent, type DecisionUsage, type DemoObservation, type DemoOrder } from "./contracts";
+import {
+  DECIDE_URL,
+  demoUrl,
+  isLiveOrder,
+  type CommanderOrder,
+  type DecisionEvent,
+  type DecisionUsage,
+  type DemoObservation,
+  type DemoOrder,
+  type LiveOrder,
+} from "./contracts";
 import type { Board, RouteOption, ZoneForecast } from "./model";
+import { pictureWakeReasons, type PictureKeys, type PictureResult } from "./incidentPicture";
 import {
   MONITOR_EVERY_MINUTES,
   REVIEW_KINDS,
@@ -44,6 +61,10 @@ export const ERROR_BACKOFF_MINUTES = 10;
 /** Decisions kept in the log (continuous reviews add many; quiet ones collapse in the feed). */
 const MAX_DECISIONS = 80;
 const MANUAL_REASON = "Operator asked for a decision now.";
+/** Wall ms between a new picture item and the check that may call the agent (batches bursts). */
+export const PICTURE_DEBOUNCE_MS = 2_000;
+/** Wall ms between two picture-triggered calls (bounds Claude calls while phones are busy). */
+export const PICTURE_MIN_GAP_MS = 15_000;
 
 type FinalDecision = Extract<DecisionEvent, { type: "orders" }>;
 
@@ -94,7 +115,7 @@ export interface AgentDecision {
   summary: string;
   model: string;
   /** Page-side application result per order. */
-  applied: { order: DemoOrder; error: string | null }[];
+  applied: { order: CommanderOrder; error: string | null }[];
   /** Server-side rejections. */
   rejected: { reason: string }[];
 }
@@ -111,6 +132,10 @@ export interface DemoAgentOptions {
   enabled: boolean;
   /** Applies orders (model.applyOrder, actor "agent"); returns a per-order error or null. */
   apply: (orders: DemoOrder[]) => (string | null)[];
+  /** Runs live drill actions (liveOrders.ts); absent: they are refused. Returns a per-order error or null. */
+  applyLive?: (orders: LiveOrder[]) => (string | null)[];
+  /** The live drill's incident picture and its monitor keys; null without a live drill. */
+  picture?: PictureResult | null;
 }
 
 export interface DemoAgent {
@@ -147,6 +172,16 @@ function usePageVisible(): boolean {
   return visible;
 }
 
+/** Two wakes as one call: triggers and reasons joined, urgent if either is. */
+function mergeWakes(a: Wake, b: Wake): Wake {
+  const triggers = [...a.triggers, ...b.triggers];
+  return {
+    triggers,
+    reasons: [...a.reasons, ...b.reasons],
+    urgency: triggers.some((t) => t.urgency === "urgent") ? "urgent" : a.triggers.length ? a.urgency : b.urgency,
+  };
+}
+
 export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
   const { board, version } = opts;
   const visible = usePageVisible();
@@ -178,15 +213,19 @@ export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
   /** Reported fires already sent to the agent in an observation (each new fire triggers at most one immediate call). */
   const calledFireIdsRef = useRef(new Set<string>());
   const idRef = useRef(0);
+  /** Picture items the agent has seen (at its last decision, or when monitoring started). */
+  const seenPictureRef = useRef<PictureKeys | null>(null);
+  const lastPictureCallRef = useRef(-Infinity);
 
   // Aborting rejects the stream; its `finally` then clears the in-flight state.
   const cancel = useCallback(() => abortRef.current?.abort(), []);
 
   const call = useCallback((current: Board, wake: Wake) => {
     if (abortRef.current) return;
-    const { routes, forecasts } = optsRef.current;
+    const { routes, forecasts, picture } = optsRef.current;
     const reasons = wake.reasons;
-    const observation = buildObservation(current, routes, forecasts, reasons, previousRef.current, wake.urgency);
+    const observation = buildObservation(current, routes, forecasts, reasons, previousRef.current, wake.urgency, picture?.picture ?? null);
+    const seenPicture = picture?.keys ?? null;
     for (const f of observation.fires) calledFireIdsRef.current.add(f.id);
     const seen = rememberDecision(current, forecasts);
     seenRef.current = seen;
@@ -221,8 +260,14 @@ export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
         const usage = decision.usage;
         if (usage) setSpend((s) => addUsage(s, usage));
         if (controller.signal.aborted || boardRef.current !== current) return;
-        const errors = optsRef.current.apply(decision.orders);
-        const applied = decision.orders.map((order, i) => ({ order, error: errors[i] ?? null }));
+        const boardOrders = decision.orders.filter((o): o is DemoOrder => !isLiveOrder(o));
+        const live = decision.orders.filter(isLiveOrder);
+        const boardErrors = optsRef.current.apply(boardOrders);
+        const liveErrors = optsRef.current.applyLive?.(live) ?? live.map(() => "No live drill.");
+        const applied = [
+          ...boardOrders.map((order, i) => ({ order: order as CommanderOrder, error: boardErrors[i] ?? null })),
+          ...live.map((order, i) => ({ order: order as CommanderOrder, error: liveErrors[i] ?? null })),
+        ];
         const refused = [
           ...decision.rejected.map((r) => r.reason),
           ...applied.filter((a) => a.error !== null).map((a) => `Not applied: ${a.error}`),
@@ -230,10 +275,11 @@ export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
         memoryRef.current = afterDecision(
           seen,
           current,
-          applied.filter((a) => a.error === null).map((a) => a.order),
+          boardOrders.filter((_, i) => (boardErrors[i] ?? null) === null),
           refused.length,
           wokeOnRefusal,
         );
+        if (seenPicture) seenPictureRef.current = seenPicture;
         previousRef.current = { minute, summary: decision.summary, rejected: refused };
         idRef.current += 1;
         const entry: AgentDecision = {
@@ -282,6 +328,7 @@ export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
     previousRef.current = null;
     lastBucketRef.current = null;
     backoffUntilRef.current = -Infinity;
+    seenPictureRef.current = null;
     calledFireIdsRef.current = new Set();
     // A new board (reset, drill switch) starts a clean log.
     setDecisions([]);
@@ -307,6 +354,14 @@ export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
   }, [enabled, cancel]);
   useEffect(() => cancel, [cancel]);
 
+  /** New live-drill items since the agent last saw the picture, as urgent wake triggers. */
+  const pictureWake = useCallback((): Wake => {
+    const p = optsRef.current.picture;
+    const texts = pictureWakeReasons(p?.keys ?? null, seenPictureRef.current, p?.picture ?? null);
+    const triggers = texts.map((text) => ({ kind: "live_report" as const, urgency: "urgent" as const, text }));
+    return { triggers, reasons: texts, urgency: "urgent" };
+  }, []);
+
   // The monitor: once per MONITOR_EVERY_MINUTES of simulated time. A newly reported fire the
   // agent has not been shown yet is checked at once (on the board's next change, also inside an
   // error backoff): nothing dispatches initial attack on this board but the agent. While a call is
@@ -327,16 +382,45 @@ export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
       return;
     }
     if (board.minute < backoffUntilRef.current && !urgent) return;
-    if (wake.triggers.length > 0) call(board, wake);
-  }, [board, version, enabled, call]);
+    const live = pictureWake();
+    const merged = mergeWakes(wake, live);
+    if (merged.triggers.length > 0) call(board, merged);
+  }, [board, version, enabled, call, pictureWake]);
+
+  // The picture monitor (wall time): new live items wake the agent within seconds.
+  const pictureKeys = opts.picture?.keys ?? null;
+  useEffect(() => {
+    if (!enabled || !pictureKeys) return;
+    // The backlog present when monitoring starts is in the first observation, not a wake reason.
+    if (!seenPictureRef.current) {
+      seenPictureRef.current = pictureKeys;
+      return;
+    }
+    if (pictureWake().triggers.length === 0) return;
+    if (abortRef.current) {
+      // One urgent follow-up starts when the call in flight finishes.
+      setQueued("urgent");
+      return;
+    }
+    const wait = Math.max(PICTURE_DEBOUNCE_MS, lastPictureCallRef.current + PICTURE_MIN_GAP_MS - Date.now());
+    const timer = window.setTimeout(() => {
+      const current = optsRef.current.board;
+      if (!current || abortRef.current || current.minute < backoffUntilRef.current) return;
+      const live = pictureWake();
+      if (live.triggers.length === 0) return;
+      lastPictureCallRef.current = Date.now();
+      call(current, mergeWakes(live, wakeReasons(current, optsRef.current.forecasts, memoryRef.current)));
+    }, wait);
+    return () => window.clearTimeout(timer);
+  }, [pictureKeys, enabled, inFlight, call, pictureWake]);
 
   const decideNow = useCallback(() => {
     const current = optsRef.current.board;
     if (!current || abortRef.current) return;
     backoffUntilRef.current = -Infinity;
-    const wake = wakeReasons(current, optsRef.current.forecasts, memoryRef.current);
+    const wake = mergeWakes(wakeReasons(current, optsRef.current.forecasts, memoryRef.current), pictureWake());
     call(current, { triggers: wake.triggers, reasons: [MANUAL_REASON, ...wake.reasons], urgency: "urgent" });
-  }, [call]);
+  }, [call, pictureWake]);
 
   const status: DemoAgent["status"] = inFlight
     ? "thinking"

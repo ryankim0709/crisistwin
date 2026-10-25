@@ -215,3 +215,14 @@ export function WindGlyph({ bearing }: { bearing: number }) {
     </svg>
   );
 }
+
+/** The 3D fire-station marker's badge: a round red disc with a white firehouse. */
+export function StationBadgeGlyph() {
+  return (
+    <svg {...SIZE} aria-hidden="true">
+      <circle cx="12" cy="8" r="7" fill="#c8352a" stroke="#fff" strokeWidth="1.5" />
+      <path d="M6.5 8.5 12 4l5.5 4.5V12h-11z" fill="#fff" />
+      <rect x="10" y="9" width="4" height="3" fill="#c8352a" />
+    </svg>
+  );
+}

@@ -10,6 +10,7 @@ import {
 } from "maplibre-gl";
 import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import "maplibre-gl/dist/maplibre-gl.css";
+import { attachStations } from "../maps/stations";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   BASEMAP_STYLE_URL,
@@ -460,6 +461,7 @@ export default function ReplayMap({
       m.on("load", () => {
         if (cancelled) return;
         installLayers(m, model);
+        attachStations(m, { center: [(model.bbox[0] + model.bbox[2]) / 2, (model.bbox[1] + model.bbox[3]) / 2], labelSuffix: "today's stations" });
         // The simulated-area label sits at the bbox corner, among exit markers: keep it on top.
         if (m.getLayer("sim-area-label")) m.moveLayer("sim-area-label");
         setReady(true);

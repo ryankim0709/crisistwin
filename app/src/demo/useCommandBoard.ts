@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LiveError, triageReport } from "../live/api";
 import { labelPoint } from "../live/format";
-import type { CommandResponse } from "../live/types";
+import type { CommandResponse, LonLat } from "../live/types";
 import { fetchSnapshot, type ScenarioSnapshot } from "../live/scenarioSnapshot";
-import type { DemoOrder } from "./contracts";
+import type { DemoOrder, LiveOrder } from "./contracts";
+import { runLiveOrders } from "./liveOrders";
 import type { Selection } from "./DemoMap";
 import {
   activeFires,
@@ -29,12 +30,16 @@ import { createRoadLegHold, useCrewRoutes } from "./useCrewRoutes";
 import { useDemoAgent } from "./useDemoAgent";
 import { DEFAULT_BOARD_RADIUS_METERS, boardCellMetersFor } from "../fire/boardSize";
 import { parseStudioBoardId } from "../studio/useRegionBoard";
-import { useWorld } from "../world/useWorld";
+import type { World } from "../world/contracts";
+import { useWorldSync } from "../world/useWorldSync";
 import { WEATHER_PRESETS, useDemoEnvironmentState, zonesCenter, zonesExtent } from "./useDemoEnvironment";
 import { useDemoRoutes } from "./useDemoRoutes";
 import { useArrivalField } from "./useArrivalField";
 import { useFireSolver } from "./useFireSolver";
 import { clearStudioFires, studioBaseline, studioFiresToIngest, useStudioFires } from "./useStudioFires";
+import { buildIncidentPicture } from "./incidentPicture";
+import { usePeople } from "../live/people";
+import { useParticipants } from "../appint/api";
 
 /**
  * The simulated command board (fires, firefighting units, households) and the AI incident
@@ -43,7 +48,9 @@ import { clearStudioFires, studioBaseline, studioFiresToIngest, useStudioFires }
  * Everything here is simulated in the browser on the drill's zones and roads. The board starts
  * no fires itself: they come from Simulation Studio publishes (useStudioFires.ts, ingest rule
  * there). Open fire_seen field reports from the live drill only join a fire already there, so
- * closing that fire resolves them.
+ * closing that fire resolves them. The commander also reads the drill's incident picture
+ * (incidentPicture.ts: calls, help requests, roads, check-ins, stuck people, participants),
+ * refreshed by the 3 s polls, and its live drill actions run through the live API (liveOrders.ts).
  * The live board is AI agent only: no rule-based dispatch (aiOnly below), and the clock runs only
  * while the AI agent is on, so a fresh board waits at T+00:00 until it is turned on.
  */
@@ -77,6 +84,34 @@ function baseZones(data: CommandResponse): BaseZone[] {
       ? [{ id: z.id, name: z.name, households: z.households, vehicles: z.vehicles, ring, core }]
       : [];
   });
+}
+
+/** The board wind preset closest to the world's weather; null when none is close (assumed, forecast). */
+function closestWeatherPreset(w: World): string | null {
+  const { weather, startUtc } = w.conditions;
+  if (weather.mode === "climatology_percentile") {
+    return WEATHER_PRESETS.find((p) => p.mode === "climatology_percentile")?.value ?? null;
+  }
+  if (weather.mode !== "historical_replay") return null;
+  const t = Date.parse(startUtc);
+  let best: string | null = null;
+  let gap = Infinity;
+  for (const p of WEATHER_PRESETS) {
+    if (p.mode !== "historical_replay") continue;
+    const d = Math.abs(Date.parse(p.start) - t);
+    if (d < gap) {
+      gap = d;
+      best = p.value;
+    }
+  }
+  return best;
+}
+
+/** Ground distance between two WGS84 points, metres (equirectangular; fine at drill scale). */
+function distanceMeters(a: LonLat, b: LonLat): number {
+  const dx = (a[0] - b[0]) * 111_320 * Math.cos((((a[1] + b[1]) / 2) * Math.PI) / 180);
+  const dy = (a[1] - b[1]) * 110_540;
+  return Math.hypot(dx, dy);
 }
 
 /** The resource snapshot answer for one incident: the snapshot, or why there is none. */
@@ -187,48 +222,104 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
   const [autopilot, setAutopilot] = useState(false);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [weather, setWeather] = useState<string>(WEATHER_PRESETS[0].value);
+  const [weather, setWeatherState] = useState<string>(WEATHER_PRESETS[0].value);
   const preset = WEATHER_PRESETS.find((p) => p.value === weather) ?? WEATHER_PRESETS[0];
   const zoneCentre = useMemo(() => (data ? zonesCenter(data.zones) : null), [data]);
-  // Board size is the shared world's region radius (docs/shared-world.md); the live board never goes below 15 km.
+  // Board size: the shared world's region radius (docs/shared-world.md); the live board never goes below 15 km.
   // A Studio drill instead starts on the board Studio ran it on (its region centre, radius and cells),
   // so the landscape is the one Studio loaded and cached; a size picked here then keeps that centre.
   // ASSUMPTION: a Studio board smaller than 15 km is still big enough, since the Studio fire was solved on it.
-  const { world, update: updateWorld } = useWorld();
+  const [radius, setRadius] = useState(DEFAULT_BOARD_RADIUS_METERS);
+  // The seed the next board starts from when the shared world names one.
+  const worldSeed = useRef<number | null>(null);
+
+  // Shared world: this board takes the world's size, weather (closest preset), seed and, when the
+  // world's area is this drill, its centre; it writes what its user changes here.
+  const sync = useWorldSync({
+    tab: "live",
+    local: null,
+    apply: (w, changed) => {
+      if (changed.has("region")) setRadius(w.region.radiusMeters);
+      const weatherChanged = [...changed].some((p) => p.startsWith("conditions.weather.") || p === "conditions.startUtc");
+      const closest = weatherChanged ? closestWeatherPreset(w) : null;
+      if (closest) setWeatherState(closest);
+      if (changed.has("fire.stochastic.seed")) {
+        worldSeed.current = w.fire.stochastic.seed;
+        const b = boardRef.current;
+        if (b && b.seed !== w.fire.stochastic.seed) restartRef.current(w.fire.stochastic.seed);
+      }
+    },
+  });
+  const { write: writeWorld } = sync;
   const drillBoard = useMemo(() => (studioBoardId ? parseStudioBoardId(studioBoardId) : null), [studioBoardId]);
   const [picked, setPicked] = useState<{ incidentId: string; radiusMeters: number } | null>(null);
   const pickedRadius = picked?.incidentId === incidentId ? picked.radiusMeters : null;
   const studioRadius = drillBoard ? (pickedRadius ?? drillBoard.radiusMeters) : null;
   const boardRadius = drillBoard
     ? (studioRadius ?? drillBoard.region.radiusMeters)
-    : Math.max(DEFAULT_BOARD_RADIUS_METERS, world.region.radiusMeters);
+    : Math.max(DEFAULT_BOARD_RADIUS_METERS, radius);
   const studioBoard = useMemo(
     () => (drillBoard ? { region: drillBoard.region, radiusMeters: studioRadius } : null),
     [drillBoard, studioRadius],
   );
+  const r = sync.world.region;
+  // The world's centre drives the board only when it is this drill's area (an incident region of
+  // this drill, or a region centred within 20 km of the drill's zones) and the drill names no
+  // Studio board (that board fixes the centre).
+  const worldCentre: LonLat | null =
+    !drillBoard &&
+    sync.enabled && sync.loaded && sync.world.revision > 0 &&
+    ((r.kind === "incident" && r.id === incidentId) ||
+      (zoneCentre !== null && distanceMeters(zoneCentre, r.center) < 20_000))
+      ? r.center
+      : null;
   const setBoardRadius = useCallback(
     (radiusMeters: number) => {
       setPicked({ incidentId, radiusMeters });
-      void updateWorld({ region: { radiusMeters, cellMeters: boardCellMetersFor(radiusMeters) } }, "live");
+      setRadius(radiusMeters);
+      writeWorld({ region: { radiusMeters, cellMeters: boardCellMetersFor(radiusMeters) } });
     },
-    [updateWorld, incidentId],
+    [writeWorld, incidentId],
   );
+  const setWeather = useCallback(
+    (value: string) => {
+      const next = WEATHER_PRESETS.find((p) => p.value === value);
+      if (!next) return;
+      setWeatherState(value);
+      writeWorld({
+        conditions: {
+          startUtc: next.start,
+          weather:
+            next.mode === "climatology_percentile" ? { mode: next.mode, percentile: 95 } : { mode: next.mode },
+        },
+      });
+    },
+    [writeWorld],
+  );
+  // A drill switch (made in any /live tab) is the world's live drill from now on.
+  const lastIncident = useRef(incidentId);
+  useEffect(() => {
+    if (lastIncident.current === incidentId) return;
+    lastIncident.current = incidentId;
+    writeWorld({ liveIncidentId: incidentId });
+  }, [incidentId, writeWorld]);
   // The zones' half-width sizes the live LANDFIRE landscape when no prebuilt region covers the drill.
   const zonesHalfWidth = useMemo(() => (data ? (zonesExtent(data.zones)?.halfWidthMeters ?? null) : null), [data]);
   const [envAttempt, setEnvAttempt] = useState(0);
-  const environment = useDemoEnvironmentState(preset, incidentId, zoneCentre, zonesHalfWidth, envAttempt, boardRadius, studioBoard);
+  const environment = useDemoEnvironmentState(preset, incidentId, zoneCentre, zonesHalfWidth, envAttempt, boardRadius, studioBoard, worldCentre);
   const env = environment.env;
 
-  // A new board size loads a new landscape: rebuild the board on it once it arrives.
-  const lastRadius = useRef(boardRadius);
+  // A new board size or centre loads a new landscape: rebuild the board on it once it arrives.
+  const boardKey = `${boardRadius}|${worldCentre?.join(",") ?? ""}`;
+  const lastBoardKey = useRef(boardKey);
   useEffect(() => {
-    if (lastRadius.current === boardRadius) return;
-    lastRadius.current = boardRadius;
+    if (lastBoardKey.current === boardKey) return;
+    lastBoardKey.current = boardKey;
     boardRef.current = null;
     setBoard(null);
     setSelection(null);
     bump();
-  }, [boardRadius, bump]);
+  }, [boardKey, bump]);
 
   // Simulation Studio's published runs for this incident: the board's only fire source.
   const studio = useStudioFires(data ? token : null, incidentId);
@@ -267,7 +358,7 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
   // Start the board once the drill zones, the fire inputs and the snapshot answer arrive.
   useEffect(() => {
     if (!data || !env || !snapshot || boardRef.current) return;
-    const created = aiOnly(createBoard(baseZones(data), newSeed(), env, resourceInput(snapshot)));
+    const created = aiOnly(createBoard(baseZones(data), worldSeed.current ?? newSeed(), env, resourceInput(snapshot)));
     boardRef.current = created;
     setBoard(created);
     // One notice per board built without a snapshot (the label also stays in resourceNotice).
@@ -297,9 +388,9 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
 
   // A restart rebuilds from the snapshot (clean unit states, every household home); `load` is a
   // freshly read snapshot (Reset board), else the one already loaded.
-  const restart = (load: SnapshotLoad | null = snapshot) => {
+  const restartWith = (seed: number, load: SnapshotLoad | null = snapshot) => {
     if (!data || !env || !load) return;
-    const created = aiOnly(createBoard(baseZones(data), Math.floor(Math.random() * 2 ** 31), env, resourceInput(load)));
+    const created = aiOnly(createBoard(baseZones(data), seed, env, resourceInput(load)));
     // A restart starts empty: the publishes listed now are never ingested by this board.
     const listed = studioRef.current;
     if (listed) created.studioBaseline = listed.map((f) => f.fire_id);
@@ -309,6 +400,18 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
     setSelection(null);
     if (created.resources.source !== "snapshot") setNotice(resourceNoticeOf(created));
     bump();
+  };
+  const restartRef = useRef(restartWith);
+  useEffect(() => {
+    restartRef.current = restartWith;
+  });
+  /** "Restart board": a new seed, shared with the other tabs; `load` as restartWith. */
+  const restart = (load: SnapshotLoad | null = snapshot) => {
+    if (!data || !env || !load) return;
+    const seed = Math.floor(Math.random() * 2 ** 31);
+    restartWith(seed, load);
+    worldSeed.current = seed;
+    writeWorld({ fire: { stochastic: { seed } } });
   };
 
   // "Reset board": clear the incident's published Studio fires on the server (so no console or
@@ -359,6 +462,17 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
     if (changed) bump();
   }, [data, board, bump]);
 
+  // The live incident picture for the commander: the command poll plus the people snapshot and the
+  // participants list (each polled every 3 s while a controller token is present).
+  const people = usePeople(data ? token : null, incidentId);
+  const participants = useParticipants(data ? token : null, incidentId);
+  const peopleData = people.data?.incident_id === incidentId ? people.data : null;
+  const participantsData = participants.data?.incident_id === incidentId ? participants.data : null;
+  const picture = useMemo(
+    () => (data ? buildIncidentPicture(data, peopleData, participantsData) : null),
+    [data, peopleData, participantsData],
+  );
+
   const routes = useDemoRoutes(board, version, incidentId);
   const routesRef = useRef(routes.routes);
   useEffect(() => {
@@ -384,7 +498,16 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
     },
     [bump],
   );
-  const agent = useDemoAgent({ board, version, incidentId, routes: routes.routes, forecasts, enabled: autopilot, apply });
+  // The commander's live drill actions run as the controller on the newest command poll.
+  const liveRef = useRef({ token, incidentId, data });
+  useEffect(() => {
+    liveRef.current = { token, incidentId, data };
+  }, [token, incidentId, data]);
+  const applyLive = useCallback((orders: LiveOrder[]) => {
+    const { token: t, incidentId: id, data: d } = liveRef.current;
+    return runLiveOrders(t, id, d, orders, setNotice);
+  }, []);
+  const agent = useDemoAgent({ board, version, incidentId, routes: routes.routes, forecasts, enabled: autopilot, apply, applyLive, picture });
   // Turning the AI agent on starts the clock (clearing an earlier Pause); off stops it (below).
   const turnAgent = useCallback((on: boolean) => {
     setAutopilot(on);
@@ -432,6 +555,15 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
     },
     [speed],
   );
+  /** The board's settings a saved scenario restores beyond the shared world. */
+  const getExtras = () => ({ speed: manualSpeed, autoSpeed: autoSpeedOn, running, weather });
+  const restoreExtras = (raw: unknown) => {
+    const extras = raw as { speed?: unknown; autoSpeed?: unknown; running?: unknown } | undefined;
+    if (!extras || typeof extras !== "object") return;
+    if (BOARD_SPEED_STEPS.some((v) => v === extras.speed)) setSpeed(extras.speed as BoardSpeed);
+    if (typeof extras.autoSpeed === "boolean") setAutoSpeed(extras.autoSpeed);
+    if (typeof extras.running === "boolean") setRunning(extras.running);
+  };
   const clock = useRef({ running: clockRunning, speed });
   useEffect(() => {
     clock.current = { running: clockRunning, speed };
@@ -537,9 +669,15 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
     boardCentre: drillBoard ? ([drillBoard.region.center.longitude, drillBoard.region.center.latitude] as [number, number]) : null,
     /** True while the landscape for a new board size is still loading. */
     boardLoading: env === null,
+    // Shared world (docs/shared-world.md): sync state and the board's saved-scenario extras
+    world: sync,
+    getExtras,
+    restoreExtras,
     windNow,
     // AI commander (monitoring is off by default; Claude is only called while it is on, and the
     // board clock runs only then). setAutopilot(true) also starts the clock.
+    /** The live drill's incident picture the commander reads (incidentPicture.ts), or null. */
+    picture,
     autopilot,
     setAutopilot: turnAgent,
     agent,

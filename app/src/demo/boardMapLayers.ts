@@ -85,6 +85,23 @@ const point = (coord: LonLat, properties: Feature["properties"]): Feature => ({
   geometry: { type: "Point", coordinates: coord },
   properties,
 });
+/**
+ * Every facility that fields a unit (response/fleet.ts buildFleet): stations on the board, mutual
+ * aid outside it and air bases in range, labelled "Paradise FS · CAL FIRE · 2 engines, 1 dozer",
+ * so what is on the map is what can respond. Stations a unit was sent from later stay drawn.
+ */
+function stationFeatures(board: Board): Feature[] {
+  const seen = new Set<string>();
+  const out: Feature[] = [];
+  for (const f of board.response.facilities) {
+    seen.add(f.id);
+    out.push(point(f.location, { name: f.name, tier: f.tier, label: f.tier === "mutual_aid" ? `${f.label} · mutual aid` : f.label }));
+  }
+  for (const s of board.stations) {
+    if (!seen.has(s.id)) out.push(point(s.location, { name: s.name, tier: "closest", label: s.label ?? s.name }));
+  }
+  return out;
+}
 const lineFeature = (coords: LonLat[], properties: Feature["properties"] = {}): Feature => ({
   type: "Feature",
   geometry: { type: "LineString", coordinates: coords },
@@ -494,8 +511,16 @@ function installLayers(map: MapLibreMap, beforeId: string): string[] {
     "line-opacity": ["match", ["get", "status"], ["returning", "moving_up"], 0.6, 1] as never,
     "line-dasharray": ["match", ["get", "status"], ["returning", "moving_up"], ["literal", [0.5, 2]], ["literal", [1.5, 1.5]]] as never,
   } });
-  add({ id: "bd-stations", type: "circle", source: "bd-stations", paint: { "circle-radius": 5, "circle-color": "#FFFFFF", "circle-stroke-color": MAP_COLOR.ink, "circle-stroke-width": 3 } });
-  // No station name labels (as on the 3D view): the marker alone marks a station.
+  add({ id: "bd-stations", type: "circle", source: "bd-stations", paint: {
+    "circle-radius": 5, "circle-color": "#FFFFFF", "circle-stroke-color": MAP_COLOR.ink, "circle-stroke-width": 3,
+    // Mutual aid from outside the area is drawn fainter; its label says so (never colour alone).
+    "circle-opacity": ["case", ["==", ["get", "tier"], "mutual_aid"], 0.6, 1],
+    "circle-stroke-opacity": ["case", ["==", ["get", "tier"], "mutual_aid"], 0.6, 1],
+  } });
+  // Station labels say what each station fields and mark mutual aid in text (the fainter marker is not the only cue).
+  add({ id: "bd-station-labels", type: "symbol", source: "bd-stations", minzoom: 10,
+    layout: { "text-field": ["get", "label"], "text-font": FONT, "text-size": 11, "text-offset": [0, 1.1], "text-anchor": "top", "text-optional": true },
+    paint: text(MAP_COLOR.ink, 1.4) });
   add({ id: "bd-dest", type: "circle", source: "bd-dest", paint: { "circle-radius": 4.5, "circle-color": "#FFFFFF", "circle-stroke-color": MAP_COLOR.shelter, "circle-stroke-width": 2 } });
   add({ id: "bd-dest-labels", type: "symbol", source: "bd-dest", minzoom: 12.5,
     layout: { "text-field": ["get", "name"], "text-font": FONT, "text-size": 11, "text-offset": [0, 1.1], "text-anchor": "top", "text-optional": true },
@@ -631,7 +656,7 @@ export function attachBoardLayers(
       setData("bd-crew-trails", crews.trails);
       setData("bd-fire-labels", buildFireLabels(board));
       setData("bd-team-lines", buildTeamLines(board));
-      setData("bd-stations", board.stations.map((s) => point(s.location, { name: s.name })));
+      setData("bd-stations", stationFeatures(board));
       setData("bd-dest", r.dests);
       setData("bd-sel-area", sel.areas);
       selectedTeam = input.selection?.kind === "team" ? input.selection.id : null;

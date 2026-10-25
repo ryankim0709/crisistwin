@@ -15,6 +15,7 @@ import AppMap, { type MapLayerKey } from "./AppMap";
 import { BehaviourPanel, MessagesPanel, NeedsOk, ParticipantList, type Decide } from "./Panels";
 import { PhoneMirror } from "./PhoneMirror";
 import { everyoneElse, isJoinedNow, nf, personSummary } from "./plain";
+import { WorldSummary } from "../world/WorldBar";
 import "./appint.css";
 
 const ACTIVE_POLL_MS = 30_000;
@@ -25,6 +26,7 @@ const LAYER_LABEL: Record<MapLayerKey, string> = {
   zones: "Zones",
   fire: "Fire",
   closures: "Closed roads",
+  stations: "Fire stations",
 };
 
 function useNow(ms: number): number {
@@ -49,7 +51,7 @@ export default function AppIntegrationPage() {
   const data = command.data;
   const everyone = useMemo(() => roster.data?.participants ?? [], [roster.data]);
   const [showInvite, setShowInvite] = useState(false);
-  const [layers, setLayers] = useState<Record<MapLayerKey, boolean>>({ app: true, people: true, zones: true, fire: true, closures: true });
+  const [layers, setLayers] = useState<Record<MapLayerKey, boolean>>({ app: true, people: true, zones: true, fire: true, closures: true, stations: true });
   const [busy, setBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -157,6 +159,7 @@ export default function AppIntegrationPage() {
 
   const header = (
     <div className="aix-header-actions">
+      <WorldSummary />
       <span className="aix-clock" aria-live="off">
         <strong>{clock}</strong> drill time
       </span>

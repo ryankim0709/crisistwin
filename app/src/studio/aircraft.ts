@@ -16,17 +16,19 @@
  * - Helicopter and air attack cruise speeds, helicopter call to takeoff, airtanker reload
  *   ground time, the helicopter turnaround formula, the hard flight-stop wind (data leaves).
  * - WIND_EFFECT: between 15 and 25 kt the line a load makes falls linearly to zero.
- * - The scenario's 20-ft open wind stands in for the wind at drop height (understates it).
+ * - The 20-ft open wind (the run's weather series at the drop minute, else its single wind)
+ *   stands in for the wind at drop height (understates it).
  * - Dip site: the nearest LANDFIRE open-water cell (FBFM40 98) on the board, depth unknown;
  *   with none, the dip is at the 8 km effective limit (data assumption).
  * - Water is treated like retardant: from the drop on it holds flames up to 8 ft, and does
  *   not evaporate. That overstates water; real bucket drops cool an edge for minutes.
  * - Loads below the table's 800 gal row scale linearly from it; a load above 3,000 gal is
  *   dropped as 3,000 gal segments.
- * - Drops go on the unsuppressed fire's edge at the drop minute (one cell outside it), from
- *   the head when the ignition's head flame is within 8 ft, else from the heel (flanks), and
- *   extend alternately along both flanks. No smoke, visibility, density altitude, duty
- *   limits, fuel cycles or competing fires.
+ * - Drops go on the attacked fire's own edge at the drop minute (one cell outside it), only
+ *   where the flame facing that edge is within 8 ft, from the head when the head is within it,
+ *   else from the heel (flanks), and extend alternately along both flanks. Each aircraft flies
+ *   for one incident and is released when that fire is out; pilot duty limits are below. No
+ *   smoke, visibility, density altitude or fuel cycles; a released aircraft is not re-sent.
  */
 
 import type { LonLat } from "../dispatch/area";
@@ -47,6 +49,7 @@ import {
 } from "./apparatus";
 import { flightWindows, inWindow, nextInWindow, type Window } from "./daylight";
 import { outerRing } from "./firefighting";
+import { WEATHER_STEP_MINUTES, seriesActive, weatherAtMinute } from "../fire/weatherSeries";
 
 /** A CAL FIRE helitack base (HB) or air attack base (AAB), from tools/ca_fire_bases.json. */
 export interface AirBase {
@@ -304,16 +307,58 @@ export function aviationWindows(
   };
 }
 
+// ---- duty limits ------------------------------------------------------------------------
+
+/**
+ * Pilot flight and duty limits, Interagency Standards for Fire and Fire Aviation Operations
+ * (NFES 2724, "Red Book") ch. 16, aviation pilot flight and duty limitations, which the
+ * Interagency Helicopter Operations Guide (NWCG PMS 510) and the airtanker contracts follow: at
+ * most 8 h of flight time and a 14 h duty day, then at least 10 h of rest. As recalled, not
+ * re-fetched (edition not confirmed). One pilot crew per aircraft (ASSUMPTION: no relief crew).
+ */
+export const PILOT_MAX_FLIGHT_MINUTES_PER_DAY = 8 * 60;
+export const PILOT_MAX_DUTY_DAY_MINUTES = 14 * 60;
+export const PILOT_MIN_REST_MINUTES = 10 * 60;
+/**
+ * ASSUMPTION: drop line with no ground line tied in on that fire by this long after the drop does
+ * not count as held line. Water from a bucket cools an edge for minutes; long-term retardant keeps
+ * working after it dries but is laid to be tied into by ground forces (IASG 2017 ch. 7 tactics:
+ * aerial retardant "slows" the fire for ground forces). An untied drop is not held line.
+ */
+export const WATER_TIE_IN_MINUTES = 30;
+export const RETARDANT_TIE_IN_MINUTES = 120;
+/**
+ * ASSUMPTION: how long a held drop holds in the solver before it expires
+ * (`ControlLines.holdUntilMinute`, fire/spread.ts 5.1.0), minutes after the drop: the same
+ * windows as the tie-in, by which ground line must have taken over. No published effective-life
+ * figure is used: water holds only while the fuel is wet; long-term retardant is credited for
+ * the tie-in window, not for the hours it may stay on the fuel.
+ */
+export const DROP_HOLD_MINUTES: Record<"water" | "retardant", number> = {
+  water: WATER_TIE_IN_MINUTES,
+  retardant: RETARDANT_TIE_IN_MINUTES,
+};
+
 // ---- plan -------------------------------------------------------------------------------
 
 export interface Drop {
   aircraft: number;
   minute: number;
   gallons: number;
-  /** Ground metres of line this load made (after the wind effect). */
+  /** Ground metres of line this load made (after the wind effect at the drop minute). */
   lineMeters: number;
   /** "retardant" for airtankers, "water" for helicopters. */
   agent: "retardant" | "water";
+  /** Run source id of the incident (fire) it was dropped on. */
+  sourceId?: string;
+  /** Open wind at the drop minute (weather series when the run has one), knots, and its effect. */
+  windKnots?: number;
+  windEffect?: number;
+  /**
+   * True when ground units work this fire's edge within WATER_/RETARDANT_TIE_IN_MINUTES of the
+   * drop: only then does its line count as held line in the solver.
+   */
+  tiedIn?: boolean;
 }
 
 export interface AircraftSorties {
@@ -326,26 +371,57 @@ export interface AircraftSorties {
   overFireMinute: number | null;
   /** Minutes per load cycle (turnaround or reload round trip). */
   cycleMinutes: number | null;
+  /** Counted from `AircraftPlan.drops` (one source of truth). */
   drops: number;
   gallons: number;
   lineMeters: number;
-  /** Why it made no or fewer drops (night, wind, no base data), or null. */
+  /** Why it made no or fewer drops (night, wind, duty, released, no base data), or null. */
   limitedBy: string | null;
+  /** Incident it flew for, and the minute it was released (fire out), when it was. */
+  sourceId?: string;
+  releasedMinute?: number | null;
+  /** Flight minutes flown over the run (duty limit bookkeeping). */
+  flightMinutes?: number;
 }
 
 export interface AircraftPlan {
   aircraft: AircraftSorties[];
   drops: Drop[];
-  /** Line cells with the minute each is laid, and the aircraft that laid it. */
+  /** Held line cells (tied-in drops only) with the minute each is laid, and the aircraft that laid it. */
   cells: Int32Array;
   holdFromMinute: Float32Array;
+  /** Minute each cell stops holding (laid + DROP_HOLD_MINUTES for its agent). */
+  holdUntilMinute: Float32Array;
   aircraftIndex: Int16Array;
+  /** Base open wind (the run's `windSpeedMph`), knots, and its effect; per-drop values are on `drops`. */
   windKnots: number;
   windEffect: number;
-  /** Dip distance used, km, and whether it was measured on the board. */
+  /** Dip distance used, km, and whether it was measured on the board (first incident). */
   dipKm: number;
   dipMeasured: boolean;
   notes: string[];
+}
+
+/** One incident's air order (studio/incidents.ts). */
+export interface AirIncident {
+  sourceId: string;
+  location: LonLat;
+  reportMinute: number;
+  aircraft: { kind: string; baseId: string; baseName: string; location: LonLat }[];
+}
+
+/** What the ground initial attack did on each fire (studio/initialAttack.ts), by source id. */
+export interface AirGroundState {
+  /** Minute the fire is out (aircraft released), or null. */
+  outMinute: number | null;
+  /** First minute a ground unit built line on its edge, or null. */
+  groundLineFromMinute: number | null;
+  /**
+   * False when the ground units cannot catch this fire even with its drops holding
+   * (studio/firefighting.ts, air-supported initial attack): no ground line ties in, so none of
+   * its drops count as held line. Absent: true.
+   */
+  holdsDrops?: boolean;
 }
 
 export interface AircraftInputs {
@@ -354,13 +430,17 @@ export interface AircraftInputs {
   baseline: ScheduledFireRun;
   counts: ApparatusCounts;
   bases: readonly AirBase[] | null;
-  /** Minute the fire is reported (the first fire reported). */
+  /** Minute the first fire is reported (`fire`, else the first ignition); used when `incidents` is absent. */
   reportMinute: number;
   /** The fire reported first, where the aircraft fly; absent = the first ignition. */
   fire?: GeoPoint;
   /** T+0 as UTC epoch ms (from the scenario clock). */
   startMs: number;
   nightHelicopters: boolean;
+  /** One incident per ignition with its own aircraft; absent: the first fire gets `counts`. */
+  incidents?: readonly AirIncident[] | null;
+  /** Ground initial attack per source id; absent: aircraft fly to the horizon, drops all held. */
+  ground?: Readonly<Record<string, AirGroundState>> | null;
 }
 
 function nearestBase(bases: readonly AirBase[], type: "HB" | "AAB", point: LonLat) {
@@ -374,7 +454,7 @@ function nearestBase(bases: readonly AirBase[], type: "HB" | "AAB", point: LonLa
 }
 
 /** Ring cells on each side of the anchor bearing, ordered by angle away from it. */
-function ringSides(grid: LandscapeGrid, ring: Uint8Array, anchorDegrees: number) {
+function ringSides(grid: LandscapeGrid, ring: Uint8Array, anchorDegrees: number, allowed: (cell: number) => boolean) {
   const { width } = grid;
   const cells: number[] = [];
   let sx = 0;
@@ -390,6 +470,7 @@ function ringSides(grid: LandscapeGrid, ring: Uint8Array, anchorDegrees: number)
   const anchor = (anchorDegrees * Math.PI) / 180;
   const sides: [number, number][][] = [[], []];
   for (const c of cells) {
+    if (!allowed(c)) continue;
     let d = Math.atan2((c % width) - cx, -(Math.floor(c / width) - cy)) - anchor;
     while (d <= -Math.PI) d += 2 * Math.PI;
     while (d > Math.PI) d -= 2 * Math.PI;
@@ -400,196 +481,389 @@ function ringSides(grid: LandscapeGrid, ring: Uint8Array, anchorDegrees: number)
   return sides;
 }
 
-/** Plan every aircraft's sorties and the line its drops make. Deterministic. */
+/**
+ * Plan every aircraft's sorties and the line its drops make, per incident. Deterministic.
+ *
+ * - Each aircraft flies for the incident it was sent to, from its own base, after that fire's
+ *   report; it is released when the ground initial attack puts that fire out (no more sorties).
+ * - Pilot duty: at most PILOT_MAX_FLIGHT_MINUTES_PER_DAY of flight and PILOT_MAX_DUTY_DAY_MINUTES
+ *   on duty, then PILOT_MIN_REST_MINUTES of rest before it flies again. Helicopter turnaround and
+ *   the airtanker's round trip count as flight; the reload ground time does not. Fuel cycles are
+ *   not modelled (no sourced endurance in the data).
+ * - Wind at each drop is the run's weather series at that minute (fire/weatherSeries.ts), else the
+ *   run's single wind: no flight at or above HARD_FLIGHT_WIND_KT, and the line per load scaled
+ *   by `windEffect`.
+ * - Line goes on the attacked fire's own edge at the drop minute (one cell outside it), only next
+ *   to burning cells whose head flame (the solver's per-cell value, when the baseline carries
+ *   `cellBehaviour`) is within DROP_HOLDS_FLAME_FEET and that do not crown: retardant is not laid
+ *   where it cannot hold. From the head when the head is within that limit, else from the heel.
+ */
 export function planAircraft(inputs: AircraftInputs): AircraftPlan {
-  const { grid, input, baseline, counts, bases, reportMinute, startMs, nightHelicopters } = inputs;
+  const { grid, input, baseline, counts, bases, startMs, nightHelicopters } = inputs;
   const horizon = input.settings.horizonMinutes;
-  const target = inputs.fire ?? [...input.sources].sort((a, b) => a.startMinute - b.startMinute)[0].location;
-  const fire: LonLat = [target.longitude, target.latitude];
-  const windKnots = input.settings.windSpeedMph / MPH_PER_KNOT;
-  const effect = windEffect(windKnots);
+  const series = seriesActive(input.settings.weatherSeries) ? input.settings.weatherSeries : null;
+  const windKnotsAt = (minute: number) =>
+    (series ? weatherAtMinute(series, minute).windSpeedMph : input.settings.windSpeedMph) / MPH_PER_KNOT;
+  const windFromAt = (minute: number) =>
+    series ? weatherAtMinute(series, minute).windFromDegrees : input.settings.windFromDegrees;
+  const baseKnots = input.settings.windSpeedMph / MPH_PER_KNOT;
   const notes: string[] = [];
-  const waterKm = nearestWaterKm(grid, fire);
-  const dipKm = waterKm ?? ASSUMED_DIP_KM;
-  const windows = aviationWindows(startMs, horizon, fire);
   const toMinute = (ms: number) => (ms - startMs) / 60_000;
   const toMs = (minute: number) => startMs + minute * 60_000;
+  const sourceIndex = new Map(input.sources.map((s, i) => [s.id, i]));
 
-  const kinds: AirKind[] = [];
-  for (const kind of AIR_KINDS) {
-    for (let i = 0; i < Math.max(0, Math.floor(counts[kind] ?? 0)); i += 1) kinds.push(kind);
-  }
+  // Incidents: as given, or the first fire with the run's counts (older callers).
+  const earliest = [...input.sources].sort((a, b) => a.startMinute - b.startMinute)[0];
+  const target = inputs.fire;
+  const first = target
+    ? (input.sources.find(
+        (s) => s.location.latitude === target.latitude && s.location.longitude === target.longitude,
+      ) ?? earliest)
+    : earliest;
+  const incidents: AirIncident[] = inputs.incidents
+    ? [...inputs.incidents]
+    : first
+      ? [
+          {
+            sourceId: first.id,
+            location: [first.location.longitude, first.location.latitude],
+            reportMinute: inputs.reportMinute,
+            aircraft: AIR_KINDS.flatMap((kind) =>
+              Array.from({ length: Math.max(0, Math.floor(counts[kind] ?? 0)) }, () => ({
+                kind,
+                baseId: "",
+                baseName: "",
+                location: [Number.NaN, Number.NaN] as LonLat,
+              })),
+            ),
+          },
+        ]
+      : [];
+  const firstFire: LonLat = incidents[0]?.location ?? [0, 0];
+  const firstWater = nearestWaterKm(grid, firstFire);
   const empty = (): AircraftPlan => ({
     aircraft: [],
     drops: [],
     cells: new Int32Array(0),
     holdFromMinute: new Float32Array(0),
+    holdUntilMinute: new Float32Array(0),
     aircraftIndex: new Int16Array(0),
-    windKnots,
-    windEffect: effect,
-    dipKm,
-    dipMeasured: waterKm !== null,
+    windKnots: baseKnots,
+    windEffect: windEffect(baseKnots),
+    dipKm: firstWater ?? ASSUMED_DIP_KM,
+    dipMeasured: firstWater !== null,
     notes,
   });
-  if (kinds.length === 0) return empty();
+  if (incidents.every((i) => i.aircraft.length === 0)) return empty();
 
-  // Air attack on scene from the earliest air-attack arrival; it widens the fixed-wing window.
   const sortiesOut: AircraftSorties[] = [];
   const drops: Drop[] = [];
-  let supervisedFrom = Infinity;
   const ordinal: Partial<Record<AirKind, number>> = {};
-  const specs = kinds.map((kind) => {
-    ordinal[kind] = (ordinal[kind] ?? 0) + 1;
-    const spec = AIRCRAFT[kind];
-    const found = bases ? nearestBase(bases, spec.base, fire) : null;
-    return { kind, spec, found, label: `${AIR_LABELS[kind]} ${ordinal[kind]}` };
-  });
-  for (const { spec, found } of specs) {
-    if (spec.role !== "air_attack" || !found) continue;
-    const over =
-      reportMinute + spec.callToTakeoffMinutes + (found.km / (spec.cruiseKnots * KMH_PER_KNOT)) * 60;
-    supervisedFrom = Math.min(supervisedFrom, over);
-  }
+  const behaviour = baseline.cellBehaviour ?? null;
+  const flameOf = (cell: number) =>
+    behaviour ? (behaviour.crownType[cell] !== 0 ? Number.POSITIVE_INFINITY : behaviour.headFlameFeet[cell]) : Number.NaN;
+  let anyHelicopterNoWater = false;
 
-  specs.forEach(({ kind, spec, found, label }, index) => {
-    const row: AircraftSorties = {
-      kind,
-      label,
-      baseName: found?.base.name ?? null,
-      baseKm: found ? Math.round(found.km * 10) / 10 : null,
-      overFireMinute: null,
-      cycleMinutes: null,
-      drops: 0,
-      gallons: 0,
-      lineMeters: 0,
-      limitedBy: null,
-    };
-    sortiesOut.push(row);
-    if (!found) {
-      row.limitedBy = bases
-        ? `no ${spec.base === "HB" ? "helitack" : "air attack"} base in range`
-        : "no base data (tools/ca_fire_bases.json is local-only)";
-      return;
+  for (const incident of incidents) {
+    const s = sourceIndex.get(incident.sourceId);
+    const outcome = s !== undefined ? baseline.ignitions[s].outcome : null;
+    const fire = incident.location;
+    const ground = inputs.ground?.[incident.sourceId] ?? null;
+    const release = ground?.outMinute ?? Number.POSITIVE_INFINITY;
+    const waterKm = nearestWaterKm(grid, fire);
+    const dipKm = waterKm ?? ASSUMED_DIP_KM;
+    const windows = aviationWindows(startMs, horizon, fire);
+    const specs = incident.aircraft
+      .filter((a): a is typeof a & { kind: AirKind } => (AIR_KINDS as readonly string[]).includes(a.kind))
+      .map((a) => {
+        const kind = a.kind;
+        ordinal[kind] = (ordinal[kind] ?? 0) + 1;
+        const spec = AIRCRAFT[kind];
+        const given = Number.isFinite(a.location[0]) && Number.isFinite(a.location[1]);
+        const found = given
+          ? {
+              base: { id: a.baseId, name: a.baseName, type: spec.base, lon: a.location[0], lat: a.location[1] } as AirBase,
+              km: groundMeters(a.location, fire) / 1000,
+            }
+          : bases
+            ? nearestBase(bases, spec.base, fire)
+            : null;
+        return { kind, spec, found, label: `${AIR_LABELS[kind]} ${ordinal[kind]}`, missingData: !given && !bases };
+      });
+    // Air attack over this fire from its earliest air-attack arrival widens the fixed-wing window.
+    let supervisedFrom = Infinity;
+    for (const { spec, found } of specs) {
+      if (spec.role !== "air_attack" || !found) continue;
+      const over = incident.reportMinute + spec.callToTakeoffMinutes + (found.km / (spec.cruiseKnots * KMH_PER_KNOT)) * 60;
+      supervisedFrom = Math.min(supervisedFrom, over);
     }
-    if (windKnots >= HARD_FLIGHT_WIND_KT) {
-      row.limitedBy = `wind ${windKnots.toFixed(0)} kt at or above the ${HARD_FLIGHT_WIND_KT} kt flight limit (assumed)`;
-      return;
-    }
-    const cruiseKmh = spec.cruiseKnots * KMH_PER_KNOT;
-    const flightMinutes = (found.km / cruiseKmh) * 60;
-    const helicopter = spec.role === "helicopter";
-    // Takeoff waits for the flight window; over the fire after the flight.
-    const windowsFor = (minute: number) =>
-      helicopter
-        ? nightHelicopters
-          ? null
-          : windows.helicopter
-        : minute >= supervisedFrom
-          ? windows.supervised
-          : windows.unsupervised;
-    const takeoffMinute = reportMinute + spec.callToTakeoffMinutes;
-    const takeoffWindows = windowsFor(takeoffMinute);
-    const takeoffMs = takeoffWindows ? nextInWindow(takeoffWindows, toMs(takeoffMinute)) : toMs(takeoffMinute);
-    if (takeoffMs === null || toMinute(takeoffMs) > horizon) {
-      row.limitedBy = "night: outside the flight window for the whole run";
-      return;
-    }
-    row.overFireMinute = toMinute(takeoffMs) + flightMinutes;
-    if (spec.role === "air_attack") return;
-    if (effect <= 0) {
-      row.limitedBy = `wind ${windKnots.toFixed(0)} kt: drops generally not effective at ${WIND_INEFFECTIVE_KT} kt or more`;
-      return;
-    }
-    // Helicopters fill at the dip before the first drop; airtankers arrive loaded.
-    const cycle = helicopter
-      ? helicopterTurnaroundMinutes(dipKm, spec.cruiseKnots)
-      : airtankerCycleMinutes(found.km, spec.cruiseKnots);
-    row.cycleMinutes = Math.round(cycle * 10) / 10;
-    let minute = row.overFireMinute + (helicopter ? cycle : 0);
-    let stoppedByNight = false;
-    while (minute <= horizon) {
-      const w = windowsFor(minute);
-      if (w && !inWindow(w, toMs(minute))) {
-        // Grounded until the next window; the next load leaves then (cycle again).
-        const next = nextInWindow(w, toMs(minute));
-        stoppedByNight = true;
-        if (next === null) break;
-        minute = toMinute(next) + cycle;
+
+    for (const { kind, spec, found, label, missingData } of specs) {
+      const index = sortiesOut.length;
+      const row: AircraftSorties = {
+        kind,
+        label,
+        baseName: found?.base.name ?? null,
+        baseKm: found ? Math.round(found.km * 10) / 10 : null,
+        overFireMinute: null,
+        cycleMinutes: null,
+        drops: 0,
+        gallons: 0,
+        lineMeters: 0,
+        limitedBy: null,
+        sourceId: incident.sourceId,
+        releasedMinute: null,
+        flightMinutes: 0,
+      };
+      sortiesOut.push(row);
+      if (!found) {
+        row.limitedBy = missingData
+          ? "no base data (tools/ca_fire_bases.json is local-only)"
+          : `no ${spec.base === "HB" ? "helitack" : "air attack"} base in range`;
         continue;
       }
-      drops.push({
-        aircraft: index,
-        minute,
-        gallons: spec.gallons,
-        lineMeters: 0,
-        agent: helicopter ? "water" : "retardant",
-      });
-      minute += cycle;
-    }
-    if (stoppedByNight) row.limitedBy = "night: grounded outside the flight window";
-  });
+      if (outcome && outcome.status !== "ignited") {
+        row.limitedBy = "its fire was reached by another fire before it started";
+        continue;
+      }
+      const cruiseKmh = spec.cruiseKnots * KMH_PER_KNOT;
+      const flightMinutes = (found.km / cruiseKmh) * 60;
+      const helicopter = spec.role === "helicopter";
+      const windowsFor = (minute: number) =>
+        helicopter
+          ? nightHelicopters
+            ? null
+            : windows.helicopter
+          : minute >= supervisedFrom
+            ? windows.supervised
+            : windows.unsupervised;
+      // Helicopters fill at the dip before the first drop; airtankers arrive loaded.
+      const cycle = helicopter
+        ? helicopterTurnaroundMinutes(dipKm, spec.cruiseKnots)
+        : airtankerCycleMinutes(found.km, spec.cruiseKnots);
+      const cycleFlight = helicopter ? cycle : cycle - AIRTANKER_RELOAD_MINUTES;
+      if (spec.role !== "air_attack") row.cycleMinutes = Math.round(cycle * 10) / 10;
+      if (helicopter && waterKm === null) anyHelicopterNoWater = true;
 
-  // Lay the line: drops in time order, alternating flanks from the anchor.
+      /** Takeoff at or after `minute` inside a flight window and below the hard wind limit; null if none. */
+      const takeoffFrom = (minute: number): number | null => {
+        let m = minute;
+        for (let guard = 0; guard < 1000 && m <= horizon; guard += 1) {
+          const w = windowsFor(m);
+          const ms = w ? nextInWindow(w, toMs(m)) : toMs(m);
+          if (ms === null) return null;
+          m = toMinute(ms);
+          if (m > horizon) return null;
+          if (windKnotsAt(m) < HARD_FLIGHT_WIND_KT) return m;
+          m += WEATHER_STEP_MINUTES;
+        }
+        return null;
+      };
+      let limited: string[] = [];
+      const limit = (why: string) => {
+        if (!limited.includes(why)) limited.push(why);
+      };
+      let takeoff = takeoffFrom(incident.reportMinute + spec.callToTakeoffMinutes);
+      if (takeoff === null) {
+        row.limitedBy =
+          windKnotsAt(incident.reportMinute) >= HARD_FLIGHT_WIND_KT
+            ? `wind at or above the ${HARD_FLIGHT_WIND_KT} kt flight limit (assumed)`
+            : "night: outside the flight window for the whole run";
+        continue;
+      }
+      if (takeoff >= release) {
+        row.limitedBy = "released: the fire was out before it took off";
+        row.releasedMinute = release;
+        continue;
+      }
+      row.overFireMinute = takeoff + flightMinutes;
+      if (spec.role === "air_attack") continue;
+
+      let dutyStart = takeoff;
+      let flown = flightMinutes;
+      let minute = row.overFireMinute + (helicopter ? cycle : 0);
+      while (minute <= horizon) {
+        if (minute > release) {
+          row.releasedMinute = release;
+          limit("released when its fire was out");
+          break;
+        }
+        const w = windowsFor(minute);
+        if (w && !inWindow(w, toMs(minute))) {
+          // Grounded at the base until the next window; the night counts as rest.
+          limit("night: grounded outside the flight window");
+          const next = takeoffFrom(minute);
+          if (next === null) break;
+          if (next - minute >= PILOT_MIN_REST_MINUTES) {
+            dutyStart = next;
+            flown = 0;
+          }
+          flown += flightMinutes;
+          minute = next + flightMinutes + (helicopter ? cycle : 0);
+          continue;
+        }
+        const knots = windKnotsAt(minute);
+        const effect = windEffect(knots);
+        if (knots >= HARD_FLIGHT_WIND_KT || effect <= 0) {
+          limit(
+            knots >= HARD_FLIGHT_WIND_KT
+              ? `wind at or above the ${HARD_FLIGHT_WIND_KT} kt flight limit (assumed)`
+              : `wind: drops generally not effective at ${WIND_INEFFECTIVE_KT} kt or more`,
+          );
+          minute += WEATHER_STEP_MINUTES;
+          continue;
+        }
+        // Duty: this load and the flight home must fit the day's flight time and duty day.
+        if (flown + cycleFlight + flightMinutes > PILOT_MAX_FLIGHT_MINUTES_PER_DAY || minute + flightMinutes - dutyStart > PILOT_MAX_DUTY_DAY_MINUTES) {
+          limit("pilot duty limit (8 h flight, 14 h duty day; then 10 h rest)");
+          const back = takeoffFrom(Math.max(minute + flightMinutes, dutyStart) + PILOT_MIN_REST_MINUTES);
+          if (back === null) break;
+          dutyStart = back;
+          flown = flightMinutes;
+          minute = back + flightMinutes + (helicopter ? cycle : 0);
+          continue;
+        }
+        drops.push({
+          aircraft: index,
+          minute,
+          gallons: spec.gallons,
+          lineMeters: 0,
+          agent: helicopter ? "water" : "retardant",
+          sourceId: incident.sourceId,
+          windKnots: Math.round(knots * 10) / 10,
+          windEffect: effect,
+          tiedIn: false,
+        });
+        flown += cycleFlight;
+        minute += cycle;
+      }
+      row.flightMinutes = Math.round(flown);
+      row.limitedBy = limited.length > 0 ? limited.join("; ") : null;
+      limited = [];
+    }
+  }
+
+  // Lay the line, incident by incident: drops in time order on that fire's own edge.
   drops.sort((a, b) => a.minute - b.minute || a.aircraft - b.aircraft);
-  const ignition = baseline.ignitions.find((i) => i.outcome.status === "ignited") ?? baseline.ignitions[0];
-  const crowning = ignition?.conditions.crown != null && ignition.conditions.crown.type !== "surface";
-  const headFlame = ignition ? ignition.conditions.spread.flameLengthFeet : Infinity;
-  const fromHead = !crowning && headFlame <= DROP_HOLDS_FLAME_FEET;
-  const windFrom = input.settings.windFromDegrees;
-  const anchor = fromHead ? (windFrom + 180) % 360 : windFrom;
-  notes.push(
-    fromHead
-      ? "Drops start at the head (head flame within 8 ft) and extend along both flanks."
-      : `Drops work the flanks from the heel: head flame ${Number.isFinite(headFlame) ? `${headFlame.toFixed(0)} ft` : "crowning"} is beyond the 8 ft retardant limit.`,
-  );
   const cellSize = grid.groundCellSizeMeters;
-  const covered = [0, 0];
-  const rings = new Map<number, [number, number][][]>();
   const cells: number[] = [];
   const holds: number[] = [];
+  const untils: number[] = [];
   const owners: number[] = [];
   const taken = new Set<number>();
-  drops.forEach((drop, k) => {
-    const ringMinute = Math.floor(drop.minute);
-    let sides = rings.get(ringMinute);
-    if (!sides) {
-      sides = ringSides(grid, outerRing(grid, baseline.arrivalMinutes, ringMinute), anchor);
-      rings.set(ringMinute, sides);
-    }
-    const side = k % 2;
-    const list = sides[side];
-    let start = list.findIndex(([angle, c]) => angle >= covered[side] && !taken.has(c));
-    if (start < 0) start = list.findIndex(([, c]) => !taken.has(c));
-    if (start < 0) return;
-    const model = andersonModel(grid.fuelCodes[list[start][1]]) ?? 1;
-    const target = lineFeetPerLoad(drop.gallons, coverageLevel(model)) * METERS_PER_FOOT * effect;
-    let laid = 0;
-    let previous: number | null = null;
-    for (let j = start; j < list.length && laid < target; j += 1) {
-      const c = list[j][1];
-      if (taken.has(c)) continue;
-      const step =
-        previous === null
-          ? cellSize
-          : Math.min(
-              Math.SQRT2 * cellSize,
-              Math.hypot((c % grid.width) - (previous % grid.width), Math.floor(c / grid.width) - Math.floor(previous / grid.width)) * cellSize,
-            );
-      laid += step;
-      previous = c;
-      taken.add(c);
-      cells.push(c);
-      holds.push(drop.minute);
-      owners.push(drop.aircraft);
-      covered[side] = list[j][0];
-    }
-    drop.lineMeters = laid;
+  const { width, height } = grid;
+  for (const incident of incidents) {
+    const s = sourceIndex.get(incident.sourceId);
+    if (s === undefined) continue;
+    const mine = drops.filter((d) => d.sourceId === incident.sourceId);
+    if (mine.length === 0) continue;
+    // This fire's cells only: another fire's edge is not this incident's line.
+    const own = new Float32Array(baseline.arrivalMinutes.length).fill(Number.POSITIVE_INFINITY);
+    for (let i = 0; i < own.length; i += 1) if (baseline.sourceIndexByCell[i] === s) own[i] = baseline.arrivalMinutes[i];
+    const ground = inputs.ground?.[incident.sourceId] ?? null;
+    const ignition = baseline.ignitions[s];
+    const crowning = ignition.conditions.crown != null && ignition.conditions.crown.type !== "surface";
+    const ignitionFlame = crowning ? Infinity : ignition.conditions.spread.flameLengthFeet;
+    /** Longest flame facing ring cell `c` from this fire's burning neighbours at `minute`. */
+    const facing = (c: number, minute: number) => {
+      if (!behaviour) return ignitionFlame;
+      const x0 = c % width;
+      const y0 = (c - x0) / width;
+      let max = 0;
+      for (let dy = -1; dy <= 1; dy += 1) {
+        for (let dx = -1; dx <= 1; dx += 1) {
+          const x = x0 + dx;
+          const y = y0 + dy;
+          if ((dx === 0 && dy === 0) || x < 0 || y < 0 || x >= width || y >= height) continue;
+          const n = y * width + x;
+          if (own[n] <= minute) max = Math.max(max, flameOf(n));
+        }
+      }
+      return max;
+    };
+    const rings = new Map<number, [number, number][][]>();
+    const covered = [0, 0];
+    let heldNote = false;
+    mine.forEach((drop, k) => {
+      const ringMinute = Math.floor(drop.minute);
+      let sides = rings.get(ringMinute);
+      if (!sides) {
+        const ring = outerRing(grid, own, ringMinute);
+        // Head flame now: the longest flame facing any ring cell.
+        let head = 0;
+        for (let i = 0; i < ring.length; i += 1) if (ring[i]) head = Math.max(head, facing(i, ringMinute));
+        const fromHead = head <= DROP_HOLDS_FLAME_FEET;
+        const windFrom = windFromAt(ringMinute);
+        const anchor = fromHead ? (windFrom + 180) % 360 : windFrom;
+        sides = ringSides(grid, ring, anchor, (c) => facing(c, ringMinute) <= DROP_HOLDS_FLAME_FEET);
+        rings.set(ringMinute, sides);
+        if (!heldNote && !fromHead) {
+          heldNote = true;
+          notes.push(
+            `${incident.sourceId}: head flame ${Number.isFinite(head) ? `${head.toFixed(0)} ft` : "crowning"} at T+${ringMinute} is beyond the ${DROP_HOLDS_FLAME_FEET} ft retardant limit; drops go only where the flame facing the edge is within it.`,
+          );
+        }
+      }
+      const side = k % 2;
+      const list = sides[side];
+      let start = list.findIndex(([angle, c]) => angle >= covered[side] && !taken.has(c));
+      if (start < 0) start = list.findIndex(([, c]) => !taken.has(c));
+      if (start < 0) return;
+      const model = andersonModel(grid.fuelCodes[list[start][1]]) ?? 1;
+      const target = lineFeetPerLoad(drop.gallons, coverageLevel(model)) * METERS_PER_FOOT * (drop.windEffect ?? 1);
+      const tieIn = drop.agent === "water" ? WATER_TIE_IN_MINUTES : RETARDANT_TIE_IN_MINUTES;
+      drop.tiedIn = inputs.ground
+        ? ground !== null &&
+          ground.holdsDrops !== false &&
+          ground.groundLineFromMinute !== null &&
+          ground.groundLineFromMinute <= drop.minute + tieIn
+        : true;
+      let laid = 0;
+      let previous: number | null = null;
+      for (let j = start; j < list.length && laid < target; j += 1) {
+        const c = list[j][1];
+        if (taken.has(c)) continue;
+        const step =
+          previous === null
+            ? cellSize
+            : Math.min(
+                Math.SQRT2 * cellSize,
+                Math.hypot((c % width) - (previous % width), Math.floor(c / width) - Math.floor(previous / width)) * cellSize,
+              );
+        laid += step;
+        previous = c;
+        taken.add(c);
+        if (drop.tiedIn) {
+          cells.push(c);
+          holds.push(drop.minute);
+          untils.push(drop.minute + DROP_HOLD_MINUTES[drop.agent]);
+          owners.push(drop.aircraft);
+        }
+        covered[side] = list[j][0];
+      }
+      drop.lineMeters = laid;
+    });
+  }
+  // One source of truth: each aircraft's row is counted from the drops it made.
+  for (const drop of drops) {
     const row = sortiesOut[drop.aircraft];
     row.drops += 1;
     row.gallons += drop.gallons;
-    row.lineMeters += laid;
-  });
-  if (waterKm === null && specs.some((s) => s.spec.role === "helicopter")) {
+    row.lineMeters += drop.lineMeters;
+  }
+  const untied = drops.filter((d) => d.tiedIn === false && d.lineMeters > 0).length;
+  if (untied > 0) {
+    notes.push(
+      `${untied} of ${drops.length} drops had no ground line tied in within ${WATER_TIE_IN_MINUTES} min (water) or ${RETARDANT_TIE_IN_MINUTES} min (retardant): flown, not counted as held line (assumption).`,
+    );
+  }
+  const unlaid = drops.filter((d) => d.lineMeters <= 0).length;
+  if (unlaid > 0) {
+    notes.push(
+      `${unlaid} of ${drops.length} drops found no edge cell left within the ${DROP_HOLDS_FLAME_FEET} ft limit on their fire's ring: flown, no line laid.`,
+    );
+  }
+  if (anyHelicopterNoWater) {
     notes.push(`No open water on the board; helicopter dip assumed ${ASSUMED_DIP_KM} km away.`);
   }
   return {
@@ -597,11 +871,12 @@ export function planAircraft(inputs: AircraftInputs): AircraftPlan {
     drops,
     cells: Int32Array.from(cells),
     holdFromMinute: Float32Array.from(holds),
+    holdUntilMinute: Float32Array.from(untils),
     aircraftIndex: Int16Array.from(owners),
-    windKnots,
-    windEffect: effect,
-    dipKm,
-    dipMeasured: waterKm !== null,
+    windKnots: baseKnots,
+    windEffect: windEffect(baseKnots),
+    dipKm: firstWater ?? ASSUMED_DIP_KM,
+    dipMeasured: firstWater !== null,
     notes,
   };
 }

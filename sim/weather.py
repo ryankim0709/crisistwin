@@ -21,6 +21,8 @@ Conventions at every boundary of this module:
 * Every series carries an evidence class: ``observed`` (station data), ``forecast`` (NWS
   gridpoint forecast), ``derived`` (chosen statistically from observations, see
   ``climatology_percentile``) or ``modelled`` (ERA5 reanalysis, ``fetch_reanalysis``).
+* Every source's reports pass ``qc_observations`` (cited range, step and persistence checks)
+  before hourly binning; failed values become ``None`` and are listed in ``provenance.obs_qc``.
 * Station choice (``rank_stations``, ``score_station``) uses weights that are CrisisTwin
   assumptions, named as constants below and documented in docs/scenario-weather.md.
 """
@@ -38,7 +40,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Optional, Sequence
@@ -90,6 +92,55 @@ MIN_STATION_COVERAGE = 0.5
 used; the hourly reanalysis is used instead (the stations stay listed)."""
 REANALYSIS_ID = "reanalysis"
 """``station=`` value that forces the reanalysis."""
+
+# ---- observation quality control (``qc_observations``), applied to every source at ingestion.
+# A flagged value becomes missing (None); it is never replaced by a plausible-looking number.
+QC_VERSION = "obs-qc/2"
+"""Version of the QC and RH-gap fill below; API caches key on it so old answers are not served.
+2: adds the hourly precipitation range check (``PRECIP_1H_RANGE_*``)."""
+RH_RANGE_MIN_PCT = 0.01
+RH_RANGE_MAX_PCT = 103.0
+"""Synoptic Data QC range check (``sl_range_check``), Relative Humidity minimum 0.01 %, maximum
+103 % (https://docs.synopticdata.com/services/mesonet-data-qc, read 2026-10-24). An RH of exactly
+0 % fails it: the air would hold no water vapour (dew point minus infinity)."""
+DEW_POINT_RANGE_MIN_C = -59.44
+"""Synoptic Data QC range check (``sl_range_check``), Dew Point minimum -59.44 degC (-75 degF),
+same page. Applied to the dew point implied by the report's temperature and RH."""
+RH_STEP_MAX_PCT_PER_H = 50.0
+"""NOAA MADIS surface QC, level 1 validity checks: "Relative humidity 1hr chng -50 - 50 %"
+(https://madis.ncep.noaa.gov/madis_sfc_qc_notes.shtml, read 2026-10-24)."""
+DEW_POINT_STEP_MAX_C_PER_H = 35.0 * 5.0 / 9.0
+"""NOAA MADIS surface QC, level 2 temporal consistency checks: "Dewpoint temperature 35 F/hour"
+(same page), i.e. 19.44 degC per hour."""
+STEP_MAX_SEPARATION = timedelta(minutes=75)
+"""ASSUMPTION: the hourly step limits above compare a report with the previous accepted report at
+most this long before it (one hour plus 15 min for report-time jitter). Farther apart, no step test."""
+PERSIST_WINDOW = timedelta(hours=24)
+PERSIST_MIN_OBS = 24
+RH_PERSIST_MIN_RANGE_PCT = 0.5
+WIND_PERSIST_MIN_RANGE_MS = 0.25
+"""Synoptic Data QC persistence check (``sl_pers_check``): over a 24 h evaluation period with at
+least 24 observations, Relative Humidity must vary by 0.5 % and Wind Speed by 0.25 m/s (same page).
+Synoptic's secondary persistence check also flags the gust when the speed persists. Shorter calm or
+saturated runs stay valid."""
+MAGNUS_A = 17.625
+MAGNUS_B_C = 243.04
+"""Magnus form of saturation vapour pressure over water, coefficients of Alduchov, O.A. and
+Eskridge, R.E. 1996, Improved Magnus form approximation of saturation vapor pressure, J. Appl.
+Meteor. 35, 601-609 (eq. 21; stated range -40 to 50 degC, extrapolated below for the range test)."""
+PRECIP_1H_RANGE_MIN_MM = 0.0
+PRECIP_1H_RANGE_MAX_MM = 254.0
+"""Synoptic Data QC range check (``sl_range_check``), "Precipitation 1hr", minimum 0 mm, maximum
+254 mm (https://docs.synopticdata.com/services/mesonet-data-qc, read 2026-10-25). Applied to every
+hourly precipitation amount. (MADIS's validity range for accumulated precipitation, 0-44 in, is
+wider; the stricter Synoptic limit is used.) Synoptic and MADIS list no step or persistence check
+for precipitation, so none is applied."""
+MM_PER_INCH = 25.4  # exact: 1 in = 25.4 mm
+RH_GAP_FILL_MIN_HOURS = 4
+"""RH gaps (after QC) at least this long are filled from a neighbouring station (``_fill_rh_gaps``);
+shorter ones are interpolated by sim/fuel_moisture.py (``MAX_FILL_GAP_HOURS`` = 3, an assumption)."""
+RH_DONOR_MAX_STATIONS = 3
+"""ASSUMPTION: at most this many next-ranked stations are fetched as RH donors (bounds network use)."""
 
 MODES = ("historical_replay", "climatology_percentile", "forecast")
 
@@ -162,6 +213,8 @@ HADS_WIND_DIR = "UDIRGZ"  # degrees true, from
 HADS_WIND_PEAK = "UPHRGZ"  # mph, peak (gust)
 HADS_TEMP = "TAIRGZ"  # deg F
 HADS_RH = "XRIRGZ"  # percent
+HADS_PRECIP_1H = "PPHRGZ"  # inches, precipitation increment over the hour ending at the report (SHEF PP, duration H)
+HADS_PRECIP_ACCUM = "PCIRGZ"  # inches, precipitation accumulator (SHEF PC), used only when PPHRGZ is absent
 
 
 class WeatherError(Exception):
@@ -483,6 +536,7 @@ class RawObs:
     gust_ms: Optional[float]
     rh_pct: Optional[float]
     temp_c: Optional[float]
+    precip_mm: Optional[float] = None  # precipitation in the hour ending at ``t`` (see each parser), mm
 
 
 def _direction(deg: Optional[float], speed_ms: Optional[float]) -> Optional[float]:
@@ -498,8 +552,17 @@ def _direction(deg: Optional[float], speed_ms: Optional[float]) -> Optional[floa
     return norm_deg(deg)
 
 
+def _inches_to_mm(value: Optional[float]) -> Optional[float]:
+    return None if value is None else value * MM_PER_INCH
+
+
 def parse_asos_csv(text: str) -> list[RawObs]:
-    """IEM asos.py ``format=onlycomma`` with ``tz=Etc/UTC``; speeds in knots, temp deg F."""
+    """IEM asos.py ``format=onlycomma`` with ``tz=Etc/UTC``; speeds in knots, temp deg F.
+
+    ``p01i`` (inches) is IEM's "one hour precipitation for the period from the observation time to
+    the time of the previous hourly precipitation reset" (asos.py help); it becomes ``precip_mm``.
+    A trace (``T``) reads as 0.0 mm: below the gauge's 0.01 in resolution. ``M`` stays missing.
+    """
     rows = [ln for ln in text.splitlines() if ln and not ln.startswith("#")]
     out: list[RawObs] = []
     for r in csv.DictReader(rows):
@@ -517,6 +580,7 @@ def parse_asos_csv(text: str) -> list[RawObs]:
                 gust_ms=None if gk is None else gk * KNOT_MS,
                 rh_pct=_num(r.get("relh")),
                 temp_c=None if tf is None else f_to_c(tf),
+                precip_mm=0.0 if (r.get("p01i") or "").strip() == "T" else _inches_to_mm(_num(r.get("p01i"))),
             )
         )
     out.sort(key=lambda o: o.t)
@@ -544,20 +608,38 @@ def _shef6(row: dict) -> dict:
 def parse_hads_csv(text: str) -> list[RawObs]:
     """IEM hads.py CSV (``what=txt``): SHEF columns in English units (mph, deg F).
 
-    Several SHEF codes arrive on separate rows with different minutes; only rows carrying a
-    wind speed or direction become observations. Accepts both the 6- and the 7-character SHEF
-    column names (see ``_shef6``).
+    Several SHEF codes arrive on separate rows with different minutes; rows carrying a wind speed
+    or direction become observations, and a row with only precipitation becomes a
+    precipitation-only report (wind, RH and temperature ``None``, so it changes nothing else).
+    Accepts both the 6- and the 7-character SHEF column names (see ``_shef6``).
+
+    Precipitation (inches -> ``precip_mm``): ``PPHRGZ``, the increment over the hour ending at the
+    report. Without it, the ``PCIRGZ`` accumulator difference from the previous accumulator report
+    when that report is 45-75 min earlier (an hourly increment; ASSUMPTION: the same tolerance as
+    ``STEP_MAX_SEPARATION``); a negative difference (accumulator reset) or another spacing is missing.
     """
     rows = [ln for ln in text.splitlines() if ln and not ln.startswith("#")]
     out: list[RawObs] = []
+    prev_acc: Optional[tuple[datetime, float]] = None
     for raw in csv.DictReader(rows):
         r = _shef6(raw)
         if "utc_valid" not in r:
             raise WeatherError("HADS CSV missing 'utc_valid' column")
+        t = datetime.strptime(r["utc_valid"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        pp, acc = _num(r.get(HADS_PRECIP_1H)), _num(r.get(HADS_PRECIP_ACCUM))
+        precip_in = pp
+        if precip_in is None and acc is not None and prev_acc is not None:
+            dt = t - prev_acc[0]
+            if timedelta(minutes=45) <= dt <= STEP_MAX_SEPARATION and acc >= prev_acc[1]:
+                precip_in = acc - prev_acc[1]
+        if acc is not None:
+            prev_acc = (t, acc)
         spd, dr = _num(r.get(HADS_WIND_SPEED)), _num(r.get(HADS_WIND_DIR))
         if spd is None and dr is None:
+            if precip_in is not None:
+                out.append(RawObs(t=t, speed_ms=None, from_deg=None, gust_ms=None, rh_pct=None,
+                                  temp_c=None, precip_mm=_inches_to_mm(precip_in)))
             continue
-        t = datetime.strptime(r["utc_valid"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
         sp = None if spd is None else spd * MPH_MS
         pk, tf = _num(r.get(HADS_WIND_PEAK)), _num(r.get(HADS_TEMP))
         out.append(
@@ -568,10 +650,210 @@ def parse_hads_csv(text: str) -> list[RawObs]:
                 gust_ms=None if pk is None else pk * MPH_MS,
                 rh_pct=_num(r.get(HADS_RH)),
                 temp_c=None if tf is None else f_to_c(tf),
+                precip_mm=_inches_to_mm(precip_in),
             )
         )
     out.sort(key=lambda o: o.t)
     return out
+
+
+# --------------------------------------------------------------------------- quality control
+
+
+def dew_point_c(temp_c: float, rh_pct: float) -> float:
+    """Dew point, degC, from air temperature (degC) and RH (percent, > 0): Magnus form inverted
+    (Alduchov and Eskridge 1996 coefficients ``MAGNUS_A``, ``MAGNUS_B_C``)."""
+    gamma = math.log(rh_pct / 100.0) + MAGNUS_A * temp_c / (MAGNUS_B_C + temp_c)
+    return MAGNUS_B_C * gamma / (MAGNUS_A - gamma)
+
+
+def rh_from_dew_point_pct(temp_c: float, dew_point_c_: float) -> float:
+    """RH, percent, from air temperature and dew point (degC): e_s(Td) / e_s(T), same Magnus form."""
+    return 100.0 * math.exp(MAGNUS_A * dew_point_c_ / (MAGNUS_B_C + dew_point_c_)
+                            - MAGNUS_A * temp_c / (MAGNUS_B_C + temp_c))
+
+
+def _persisting(values: list[tuple[datetime, float]], min_range: float) -> set[int]:
+    """Indexes of values inside a ``PERSIST_WINDOW`` holding >= ``PERSIST_MIN_OBS`` values whose
+    range (max - min) is below ``min_range`` (Synoptic ``sl_pers_check``)."""
+    flagged: set[int] = set()
+    j = 0
+    for i, (t, _) in enumerate(values):
+        while values[j][0] < t - PERSIST_WINDOW:
+            j += 1
+        window = [v for _, v in values[j:i + 1]]
+        if len(window) >= PERSIST_MIN_OBS and max(window) - min(window) < min_range:
+            flagged.update(range(j, i + 1))
+    return flagged
+
+
+def qc_observations(obs: Sequence[RawObs]) -> tuple[list[RawObs], dict]:
+    """Quality-control RH and wind speed of time-ordered reports; failed values become ``None``.
+
+    RH, in order (the range test gates the others, as Synoptic's does):
+
+    1. range: ``RH_RANGE_MIN_PCT`` <= RH <= ``RH_RANGE_MAX_PCT`` (Synoptic ``sl_range_check``),
+       and the implied dew point >= ``DEW_POINT_RANGE_MIN_C`` (same check, dew point row);
+    2. step: against the previous accepted RH report at most ``STEP_MAX_SEPARATION`` earlier,
+       |dRH| <= ``RH_STEP_MAX_PCT_PER_H`` and |dTd| <= ``DEW_POINT_STEP_MAX_C_PER_H`` (MADIS);
+    3. persistence: RH varying by less than ``RH_PERSIST_MIN_RANGE_PCT`` over 24 h (Synoptic).
+
+    Wind: speed varying by less than ``WIND_PERSIST_MIN_RANGE_MS`` over 24 h (Synoptic
+    ``sl_pers_check``) removes speed, direction and gust (secondary persistence check).
+
+    Precipitation: ``PRECIP_1H_RANGE_MIN_MM`` <= amount <= ``PRECIP_1H_RANGE_MAX_MM`` (Synoptic
+    ``sl_range_check``, "Precipitation 1hr").
+
+    Returns ``(reports, record)``; ``record`` lists every removed value with its check.
+    """
+    removed: list[dict] = []
+    rh_ok: list[Optional[float]] = []
+    for o in obs:
+        rh = o.rh_pct
+        if rh is not None:
+            why = None
+            if not (RH_RANGE_MIN_PCT <= rh <= RH_RANGE_MAX_PCT):
+                why = "rh_range"
+            elif o.temp_c is not None and dew_point_c(o.temp_c, rh) < DEW_POINT_RANGE_MIN_C:
+                why = "dew_point_range"
+            if why:
+                removed.append({"t_utc": iso_z(o.t), "variable": "rh_pct", "value": rh,
+                                "temp_c": o.temp_c, "check": why})
+                rh = None
+        rh_ok.append(rh)
+    # Step tests against the last accepted report (a flagged value never becomes the reference).
+    ref: Optional[int] = None
+    step_flag: set[int] = set()
+    for i, o in enumerate(obs):
+        rh = rh_ok[i]
+        if rh is None:
+            continue
+        if ref is not None and o.t - obs[ref].t <= STEP_MAX_SEPARATION:
+            r_rh, r_t = rh_ok[ref], obs[ref].temp_c
+            why = None
+            if abs(rh - r_rh) > RH_STEP_MAX_PCT_PER_H:
+                why = "rh_step"
+            elif (o.temp_c is not None and r_t is not None
+                  and abs(dew_point_c(o.temp_c, rh) - dew_point_c(r_t, r_rh)) > DEW_POINT_STEP_MAX_C_PER_H):
+                why = "dew_point_step"
+            if why:
+                step_flag.add(i)
+                removed.append({"t_utc": iso_z(o.t), "variable": "rh_pct", "value": rh,
+                                "temp_c": o.temp_c, "check": why,
+                                "reference": {"t_utc": iso_z(obs[ref].t), "rh_pct": r_rh, "temp_c": r_t}})
+                continue
+        ref = i
+    for i in step_flag:
+        rh_ok[i] = None
+    rh_vals = [(obs[i].t, rh_ok[i], i) for i in range(len(obs)) if rh_ok[i] is not None]
+    for k in _persisting([(t, v) for t, v, _ in rh_vals], RH_PERSIST_MIN_RANGE_PCT):
+        i = rh_vals[k][2]
+        removed.append({"t_utc": iso_z(obs[i].t), "variable": "rh_pct", "value": rh_ok[i],
+                        "temp_c": obs[i].temp_c, "check": "rh_persistence"})
+        rh_ok[i] = None
+    sp_vals = [(o.t, o.speed_ms, i) for i, o in enumerate(obs) if o.speed_ms is not None]
+    wind_bad = {sp_vals[k][2] for k in _persisting([(t, v) for t, v, _ in sp_vals], WIND_PERSIST_MIN_RANGE_MS)}
+    for i in sorted(wind_bad):
+        removed.append({"t_utc": iso_z(obs[i].t), "variable": "speed_ms", "value": obs[i].speed_ms,
+                        "check": "wind_persistence"})
+    precip_bad: set[int] = set()
+    for i, o in enumerate(obs):
+        if o.precip_mm is not None and not (PRECIP_1H_RANGE_MIN_MM <= o.precip_mm <= PRECIP_1H_RANGE_MAX_MM):
+            precip_bad.add(i)
+            removed.append({"t_utc": iso_z(o.t), "variable": "precip_mm", "value": o.precip_mm,
+                            "check": "precip_range"})
+    out = []
+    for i, o in enumerate(obs):
+        if i in wind_bad:
+            o = replace(o, speed_ms=None, from_deg=None, gust_ms=None)
+        if rh_ok[i] != o.rh_pct:
+            o = replace(o, rh_pct=rh_ok[i])
+        if i in precip_bad:
+            o = replace(o, precip_mm=None)
+        out.append(o)
+    removed.sort(key=lambda r: (r["t_utc"], r["variable"]))
+    counts: dict[str, int] = {}
+    for r in removed:
+        counts[r["check"]] = counts.get(r["check"], 0) + 1
+    record = {
+        "version": QC_VERSION,
+        "n_reports": len(obs),
+        "n_rh_reports": sum(1 for o in obs if o.rh_pct is not None),
+        "n_removed": len(removed),
+        "counts": counts,
+        "removed": removed,
+        "checks": {
+            "rh_range": {"min_pct": RH_RANGE_MIN_PCT, "max_pct": RH_RANGE_MAX_PCT,
+                         "source": "Synoptic Data QC sl_range_check"},
+            "dew_point_range": {"min_c": DEW_POINT_RANGE_MIN_C, "source": "Synoptic Data QC sl_range_check",
+                                "dew_point": "Magnus form, Alduchov and Eskridge 1996"},
+            "rh_step": {"max_pct_per_h": RH_STEP_MAX_PCT_PER_H,
+                        "source": "NOAA MADIS surface QC validity check 'Relative humidity 1hr chng'"},
+            "dew_point_step": {"max_c_per_h": round(DEW_POINT_STEP_MAX_C_PER_H, 2),
+                               "source": "NOAA MADIS surface QC temporal consistency, dewpoint 35 F/hour"},
+            "step_max_separation_min": STEP_MAX_SEPARATION.total_seconds() / 60.0,
+            "step_reference": "previous accepted report (assumption: separation limit)",
+            "rh_persistence": {"window_h": PERSIST_WINDOW.total_seconds() / 3600.0, "min_obs": PERSIST_MIN_OBS,
+                               "min_range_pct": RH_PERSIST_MIN_RANGE_PCT, "source": "Synoptic Data QC sl_pers_check"},
+            "wind_persistence": {"window_h": PERSIST_WINDOW.total_seconds() / 3600.0, "min_obs": PERSIST_MIN_OBS,
+                                 "min_range_ms": WIND_PERSIST_MIN_RANGE_MS,
+                                 "source": "Synoptic Data QC sl_pers_check (+ secondary check on gust)"},
+            "precip_range": {"min_mm": PRECIP_1H_RANGE_MIN_MM, "max_mm": PRECIP_1H_RANGE_MAX_MM,
+                             "source": "Synoptic Data QC sl_range_check, Precipitation 1hr"},
+        },
+    }
+    return out, record
+
+
+def _qc_samples(samples: list) -> tuple[list, dict]:
+    """``qc_observations`` for already-hourly samples (forecast): same checks, same record."""
+    obs = [RawObs(t=require_utc(s.t_utc, "t"),
+                  speed_ms=s.speed_ms, from_deg=s.from_deg, gust_ms=s.gust_ms, rh_pct=s.rh_pct,
+                  temp_c=s.temp_c, precip_mm=s.precip_mm) for s in samples]
+    clean, record = qc_observations(obs)
+    out = [replace(s, speed_ms=o.speed_ms, from_deg=o.from_deg, gust_ms=o.gust_ms, rh_pct=o.rh_pct,
+                   precip_mm=o.precip_mm)
+           for s, o in zip(samples, clean)]
+    return out, record
+
+
+def _time_runs(times: list[str]) -> list[tuple[str, str, int]]:
+    """Group ISO-Z times into runs no more than ``STEP_MAX_SEPARATION`` apart: (first, last, n)."""
+    runs: list[list] = []
+    for ts in sorted(times):
+        t = require_utc(ts, "t")
+        if runs and t - runs[-1][3] <= STEP_MAX_SEPARATION:
+            runs[-1][1], runs[-1][2], runs[-1][3] = ts, runs[-1][2] + 1, t
+        else:
+            runs.append([ts, ts, 1, t])
+    return [(a, b, n) for a, b, n, _ in runs]
+
+
+_QC_LABELS = {
+    "rh_range": "RH outside 0.01-103 % (Synoptic range check)",
+    "dew_point_range": "implied dew point below -59.44 degC (Synoptic range check)",
+    "rh_step": "RH step over 50 % in an hour (MADIS)",
+    "dew_point_step": "dew point step over 35 degF in an hour (MADIS)",
+    "rh_persistence": "RH unchanging for 24 h (Synoptic persistence check)",
+    "wind_persistence": "wind speed unchanging for 24 h (Synoptic persistence check)",
+    "precip_range": "hourly precipitation outside 0-254 mm (Synoptic range check)",
+}
+
+
+def qc_warning(record: Optional[dict], label: str) -> Optional[str]:
+    """One warning sentence for a ``qc_observations`` record, or None when nothing was removed."""
+    if not record or not record.get("n_removed"):
+        return None
+    parts = []
+    for check, n in sorted(record["counts"].items()):
+        runs = _time_runs([r["t_utc"] for r in record["removed"] if r["check"] == check])
+        when = ", ".join(a[:16] + "Z" if a == b else f"{a[:16]}Z-{b[11:16]}Z" for a, b, _ in runs[:4])
+        more = f" and {len(runs) - 4} more runs" if len(runs) > 4 else ""
+        values = sorted({r["value"] for r in record["removed"] if r["check"] == check})
+        shown = ", ".join(f"{v:g}" for v in values[:4]) + (", ..." if len(values) > 4 else "")
+        parts.append(f"{n} x {_QC_LABELS.get(check, check)} [values {shown}] at {when}{more}")
+    return (f"Quality control removed {record['n_removed']} observation value(s) from {label}: "
+            + "; ".join(parts) + ". Removed values are treated as missing, not replaced.")
 
 
 # --------------------------------------------------------------------------- hourly series
@@ -586,6 +868,8 @@ class HourlySample:
     rh_pct: Optional[float]
     temp_c: Optional[float]
     n_obs: int = 0
+    rh_from: Optional[str] = None  # station id when rh_pct was filled from a neighbour (_fill_rh_gaps)
+    precip_mm: Optional[float] = None  # precipitation in the hour ending near t_utc, mm (hourly_series)
 
 
 @dataclass
@@ -602,6 +886,8 @@ class WeatherSeries:
             "direction": "degrees true, wind blows FROM, clockwise from north",
             "temperature": "degC",
             "relative_humidity": "percent",
+            "precipitation": "mm, amount in the hour ending near the bin time (largest hourly amount "
+                             "reported in the bin); null = not reported",
             "time": "UTC, hourly bin centre",
         }
     )
@@ -629,6 +915,13 @@ def hourly_series(
     the reports; direction is the speed-weighted vector mean (calm reports excluded); gust is
     the maximum reported gust, never synthesised. Hours with no report stay in the series
     with ``None`` values so gaps are visible.
+
+    ``precip_mm`` is the largest hourly amount reported in the bin, not a sum. ASSUMPTION: every
+    source's value is already an amount for the hour ending at the report (HADS ``PPHRGZ``; ASOS
+    ``p01i`` accumulates since the last hourly reset, so the routine report carries the hour's
+    total and specials carry part of it; ERA5 is the preceding hour's sum), so summing would count
+    the same rain twice. ``n_obs`` counts reports with wind, RH or temperature, not
+    precipitation-only rows.
     """
     start, end = require_utc(start, "start"), require_utc(end, "end")
     h0 = start.replace(minute=0, second=0, microsecond=0)
@@ -667,7 +960,9 @@ def hourly_series(
                 gust_ms=max(gusts) if gusts else None,
                 rh_pct=_mean([o.rh_pct for o in group if o.rh_pct is not None]),
                 temp_c=_mean([o.temp_c for o in group if o.temp_c is not None]),
-                n_obs=len(group),
+                n_obs=sum(1 for o in group if (o.speed_ms, o.from_deg, o.gust_ms, o.rh_pct, o.temp_c)
+                          != (None, None, None, None, None)),
+                precip_mm=max((o.precip_mm for o in group if o.precip_mm is not None), default=None),
             )
         )
         t += timedelta(hours=1)
@@ -685,6 +980,7 @@ def history_url(station: Station, start: datetime, end: datetime) -> str:
             ("data", "drct"),
             ("data", "sknt"),
             ("data", "gust"),
+            ("data", "p01i"),
             ("sts", s),
             ("ets", e),
             ("tz", "Etc/UTC"),
@@ -739,7 +1035,9 @@ def fetch_history(
 def series_from_obs(
     station: Station, obs: Sequence[RawObs], start: datetime, end: datetime, rec: Optional[dict]
 ) -> WeatherSeries:
-    samples = hourly_series(obs, start, end)
+    """Hourly series from parsed reports, after ``qc_observations`` (record in ``provenance.obs_qc``)."""
+    clean, qc = qc_observations(obs)
+    samples = hourly_series(clean, start, end)
     return WeatherSeries(
         evidence_class=OBSERVED,
         source=station.source,
@@ -750,6 +1048,7 @@ def series_from_obs(
             "raw": rec,
             "n_raw_reports": len(obs),
             "hour_binning": "nearest HH:00 (+/-30 min); speed mean, direction vector mean, gust max",
+            "obs_qc": qc,
         },
     )
 
@@ -788,6 +1087,29 @@ def _expand_layer(layer: dict, convert: Callable[[float], float]) -> dict[dateti
     return out
 
 
+def _expand_amount_layer(layer: dict) -> dict[datetime, float]:
+    """An accumulation layer (``quantitativePrecipitation``) spread over its hours, mm per hour.
+
+    Each value is the amount over its ``validTime`` period (often 6 h); every hour of the period gets
+    amount / hours. ASSUMPTION: uniform within the period (the forecast does not say when in it the
+    rain falls). Each share is keyed by the END of its hour (``t0 + i + 1``), the station convention
+    (amount in the hour ending at t).
+    """
+    uom = layer.get("uom", "wmoUnit:mm")
+    if uom != "wmoUnit:mm":
+        raise WeatherError(f"unsupported unit {uom!r} for quantitativePrecipitation")
+    out: dict[datetime, float] = {}
+    for item in layer.get("values", []):
+        if item.get("value") is None:
+            continue
+        start_s, dur_s = item["validTime"].split("/")
+        t0 = require_utc(start_s, "validTime")
+        n = max(int(parse_iso_duration(dur_s).total_seconds() // 3600), 1)
+        for i in range(n):
+            out[t0 + timedelta(hours=i + 1)] = float(item["value"]) / n
+    return out
+
+
 def parse_gridpoint(doc: dict, start: datetime, hours: int) -> list[HourlySample]:
     """Hourly samples from an api.weather.gov ``/gridpoints/{wfo}/{x},{y}`` document.
 
@@ -809,6 +1131,7 @@ def parse_gridpoint(doc: dict, start: datetime, hours: int) -> list[HourlySample
     direction = _expand_layer(props.get("windDirection") or {}, norm_deg)
     rh = _expand_layer(props.get("relativeHumidity") or {}, float)
     temp = _expand_layer(props.get("temperature") or {}, float)
+    precip = _expand_amount_layer(props.get("quantitativePrecipitation") or {})
     t0 = require_utc(start, "start").replace(minute=0, second=0, microsecond=0)
     out = []
     for i in range(hours + 1):
@@ -823,6 +1146,7 @@ def parse_gridpoint(doc: dict, start: datetime, hours: int) -> list[HourlySample
                 rh_pct=rh.get(t),
                 temp_c=temp.get(t),
                 n_obs=0,
+                precip_mm=precip.get(t),
             )
         )
     return out
@@ -839,7 +1163,7 @@ def fetch_forecast(
     grid_url = points["properties"]["forecastGridData"]
     raw = get(grid_url, headers)
     doc = json.loads(raw)
-    samples = parse_gridpoint(doc, start, hours)
+    samples, qc = _qc_samples(parse_gridpoint(doc, start, hours))
     return WeatherSeries(
         evidence_class=FORECAST,
         source="nws_gridpoint",
@@ -853,6 +1177,7 @@ def fetch_forecast(
             "bytes": len(raw),
             "sha256": hashlib.sha256(raw).hexdigest(),
             "height_note": "10 m sustained wind, no conversion to 20 ft",
+            "obs_qc": qc,
         },
     )
 
@@ -988,7 +1313,7 @@ def climatology_percentile(
         )
         raw_records.append(series.provenance["raw"])
         yi = len(pool)
-        pool.append((year, series.samples, series.provenance["raw"]))
+        pool.append((year, series.samples, series.provenance.get("obs_qc")))
         n_month = int((m1 - m0).total_seconds() // 3600)
         for first, n, peak in find_episodes(series.samples[:n_month], sector):
             all_eps.append((yi, first, n, peak))
@@ -997,9 +1322,20 @@ def climatology_percentile(
     peaks = [e[3] for e in all_eps]
     target = percentile_nearest_rank(peaks, percentile)
     yi, first, n, peak = min((e for e in all_eps if e[3] == target), key=lambda e: (e[0], e[1]))
-    year, samples, _ = pool[yi]
+    year, samples, year_qc = pool[yi]
     window = samples[first : first + hours + 1]
     t0 = require_utc(window[0].t_utc, "analog")
+    analog_qc = None
+    if year_qc:
+        # Only removals inside the analog window (+/-30 min bins) concern this answer.
+        lo = t0 - timedelta(minutes=30)
+        hi = require_utc(window[-1].t_utc, "analog") + timedelta(minutes=30)
+        kept = [r for r in year_qc["removed"] if lo <= require_utc(r["t_utc"], "qc") < hi]
+        counts: dict[str, int] = {}
+        for r in kept:
+            counts[r["check"]] = counts.get(r["check"], 0) + 1
+        analog_qc = {**year_qc, "removed": kept, "n_removed": len(kept), "counts": counts,
+                     "note": "removals within the analog window, at the hours really observed"}
     shift = start.replace(minute=0, second=0, microsecond=0) - t0
     relabelled = [
         HourlySample(**{**asdict(s), "t_utc": iso_z(require_utc(s.t_utc, "s") + shift)})
@@ -1042,6 +1378,7 @@ def climatology_percentile(
                 "warnings": sel_warnings,
             },
             "raw": raw_records,
+            "obs_qc": analog_qc,
         },
     )
 
@@ -1240,7 +1577,9 @@ def reanalysis_url(lon: float, lat: float, start: datetime, end: datetime) -> st
         "longitude": f"{lon:.4f}",
         "start_date": start.astimezone(timezone.utc).strftime("%Y-%m-%d"),
         "end_date": end.astimezone(timezone.utc).strftime("%Y-%m-%d"),
-        "hourly": "wind_speed_10m,wind_direction_10m,wind_gusts_10m,temperature_2m,relative_humidity_2m",
+        "hourly": "wind_speed_10m,wind_direction_10m,wind_gusts_10m,temperature_2m,relative_humidity_2m,"
+                  "precipitation",
+        "precipitation_unit": "mm",
         "models": REANALYSIS_MODEL,
         "wind_speed_unit": "ms",
         "temperature_unit": "celsius",
@@ -1254,6 +1593,8 @@ def parse_open_meteo(doc: dict) -> list[RawObs]:
 
     Times are HH:00 UTC. Wind, temperature and RH are the model's instantaneous values at that
     time; the gust is the maximum over the preceding hour (ERA5 'since previous post-processing').
+    ``precipitation`` is "total precipitation (rain, showers, snow) sum of the preceding hour", mm
+    (Open-Meteo Historical Weather API docs): modelled, not gauged.
     Direction is where the wind blows FROM (0 = north is valid here, unlike METAR).
     """
     h = doc.get("hourly") or {}
@@ -1272,6 +1613,7 @@ def parse_open_meteo(doc: dict) -> list[RawObs]:
             gust_ms=None if col("wind_gusts_10m") is None else float(col("wind_gusts_10m")),
             rh_pct=None if col("relative_humidity_2m") is None else float(col("relative_humidity_2m")),
             temp_c=None if col("temperature_2m") is None else float(col("temperature_2m")),
+            precip_mm=None if col("precipitation") is None else float(col("precipitation")),
         ))
     return out
 
@@ -1309,7 +1651,7 @@ def fetch_reanalysis(
         raise WeatherError(f"reanalysis: unparseable answer: {exc}") from exc
     if doc.get("error"):
         raise WeatherError(f"reanalysis: {doc.get('reason') or doc}")
-    obs = parse_open_meteo(doc)
+    obs, qc = qc_observations(parse_open_meteo(doc))
     samples = hourly_series(obs, start, end)
     g_lat, g_lon = doc.get("latitude"), doc.get("longitude")
     return WeatherSeries(
@@ -1333,9 +1675,10 @@ def fetch_reanalysis(
             },
             "heights": "wind and gust 10 m above ground; temperature and RH 2 m",
             "time_basis": "instantaneous model value at HH:00 UTC (wind, temperature, RH); gust = "
-                          "maximum over the preceding hour",
+                          "maximum over the preceding hour; precipitation = sum over the preceding hour",
             "limits": "A 0.25 deg grid cell smooths terrain: canyon, gap and downslope winds "
                       "(Santa Ana, Diablo, Front Range) are usually under-read.",
+            "obs_qc": qc,
         },
     )
 
@@ -1362,6 +1705,95 @@ def _reanalysis_option(lon: float, lat: float) -> dict:
     return {"station": REANALYSIS_ID, "id": REANALYSIS_ID, "name": "ERA5 reanalysis (Open-Meteo)",
             "source": "open_meteo_era5", "distance_km": None, "elevation_m": None,
             "exposure": "model grid cell, " + REANALYSIS_GRID, "evidence_class": MODELLED}
+
+
+def _rh_gap_runs(samples: Sequence[HourlySample]) -> list[tuple[int, int]]:
+    """Index ranges ``[i, j)`` of consecutive hours without RH, at least ``RH_GAP_FILL_MIN_HOURS`` long."""
+    runs, i = [], 0
+    while i < len(samples):
+        if samples[i].rh_pct is not None:
+            i += 1
+            continue
+        j = i
+        while j < len(samples) and samples[j].rh_pct is None:
+            j += 1
+        if j - i >= RH_GAP_FILL_MIN_HOURS:
+            runs.append((i, j))
+        i = j
+    return runs
+
+
+def _fill_rh_gaps(
+    ser: WeatherSeries, chosen: Station, ranked: Sequence[tuple[Station, dict]], start, end,
+    *, http_get, cache_dir,
+) -> tuple[Optional[dict], list[str]]:
+    """Fill long RH gaps of the chosen station's series from the next-ranked stations.
+
+    For each hour of a gap of at least ``RH_GAP_FILL_MIN_HOURS`` hours, the donor's dew point
+    (from its QC-passed temperature and RH) is combined with the chosen station's own temperature:
+    ``RH = e_s(Td_donor) / e_s(T_station)``, at most 100 %. ASSUMPTION: dew point carries across
+    neighbouring stations better than RH (RH follows each site's temperature; Synoptic's spatial
+    check likewise compares humidity through derived dew point). Donors: up to
+    ``RH_DONOR_MAX_STATIONS`` next-ranked stations within ``WARN_DISTANCE_KM`` and
+    ``WARN_ELEV_DIFF_M`` of the site (the existing warning limits, assumptions), in rank order.
+    Hours with no station temperature or no donor stay missing. Mutates ``ser.samples``.
+    """
+    runs = _rh_gap_runs(ser.samples)
+    if not runs:
+        return None, []
+    gap_idx = [i for a, b in runs for i in range(a, b)]
+    filled: dict[int, dict] = {}
+    donors_used: list[dict] = []
+    tried = 0
+    for st, info in ranked:
+        if st.id == chosen.id or tried >= RH_DONOR_MAX_STATIONS:
+            continue
+        if (st.distance_km or 0.0) > WARN_DISTANCE_KM or abs(info.get("elevation_diff_m") or 0.0) > WARN_ELEV_DIFF_M:
+            continue
+        tried += 1
+        try:
+            donor = fetch_history(st, start, end, http_get=http_get, cache_dir=cache_dir)
+        except WeatherError:
+            continue
+        by_t = {s.t_utc: s for s in donor.samples}
+        n = 0
+        for i in gap_idx:
+            s = ser.samples[i]
+            d = by_t.get(s.t_utc)
+            if i in filled or s.temp_c is None or d is None or d.rh_pct is None or d.temp_c is None:
+                continue
+            td = dew_point_c(d.temp_c, d.rh_pct)
+            rh = min(100.0, rh_from_dew_point_pct(s.temp_c, td))
+            filled[i] = {"t_utc": s.t_utc, "donor": st.id, "donor_rh_pct": d.rh_pct,
+                         "donor_temp_c": d.temp_c, "donor_dew_point_c": round(td, 2), "rh_pct": round(rh, 2)}
+            ser.samples[i] = replace(s, rh_pct=rh, rh_from=st.id)
+            n += 1
+        if n:
+            donors_used.append({"id": st.id, "name": st.name, "distance_km": st.distance_km,
+                                "elevation_diff_m": info.get("elevation_diff_m"), "hours": n})
+        if len(filled) == len(gap_idx):
+            break
+    left = [ser.samples[i].t_utc for i in gap_idx if i not in filled]
+    record = {
+        "rule": ("RH gaps >= %d h after QC: donor dew point with the station's temperature; donors are the "
+                 "next-ranked stations within %g km and %g m (assumption)"
+                 % (RH_GAP_FILL_MIN_HOURS, WARN_DISTANCE_KM, WARN_ELEV_DIFF_M)),
+        "gaps": [{"from_utc": ser.samples[a].t_utc, "to_utc": ser.samples[b - 1].t_utc, "hours": b - a}
+                 for a, b in runs],
+        "donors": donors_used,
+        "filled": [filled[i] for i in sorted(filled)],
+        "still_missing_utc": left,
+    }
+    gaps = ", ".join(f"{g['from_utc'][:13]}Z-{g['to_utc'][11:13]}Z" for g in record["gaps"])
+    msg = f"{chosen.id} has no usable RH for {len(gap_idx)} h ({gaps}) after quality control"
+    if donors_used:
+        msg += "; filled %d h from %s (neighbour dew point with %s temperature, assumption)" % (
+            len(filled), ", ".join(f"{d['id']} {d['distance_km']:.1f} km ({d['hours']} h)" for d in donors_used),
+            chosen.id)
+    if left:
+        msg += (f"; {len(left)} h stay missing (the moisture model interpolates gaps of up to 3 h; longer "
+                "ones get no moisture and the fire run skips them)")
+    return record, [msg + "."]
 
 
 def _historical(
@@ -1420,7 +1852,12 @@ def _historical(
         except (WeatherError, ValueError, KeyError) as exc:
             selection["reanalysis_error"] = str(exc)
             return None
-        return ser if ser.coverage() > 0 else None
+        if ser.coverage() == 0:
+            return None
+        w = qc_warning(ser.provenance.get("obs_qc"), "the ERA5 reanalysis")
+        if w:
+            warnings.append(w)
+        return ser
 
     def finish_station(st, info, ser):
         info["status"] = "chosen"
@@ -1429,6 +1866,13 @@ def _historical(
             "id", "name", "source", "distance_km", "elevation_m", "elevation_diff_m", "exposure",
             "score", "score_terms", "rank", "coverage")}
         warnings.extend(station_warnings(info))
+        w = qc_warning(ser.provenance.get("obs_qc"), f"{st.id} ({st.name}, {st.source})")
+        if w:
+            warnings.append(w)
+        fill, fill_warnings = _fill_rh_gaps(ser, st, ranked, start, end, http_get=http_get, cache_dir=cache_dir)
+        if fill is not None:
+            ser.provenance["rh_gap_fill"] = fill
+        warnings.extend(fill_warnings)
         return ser
 
     # Forced choice.
@@ -1519,7 +1963,7 @@ def scenario_wind(
     * ``forecast``: NWS gridpoint forecast (evidence class ``forecast``).
 
     Returns a JSON-serialisable dict: ``{mode, evidence_class, evidence_label, lon, lat,
-    start_utc, hours, units, samples:[{t_utc, speed_ms, from_deg, gust_ms, rh_pct, temp_c,
+    start_utc, hours, units, samples:[{t_utc, speed_ms, from_deg, gust_ms, rh_pct, temp_c, precip_mm,
     n_obs}], station, source, candidates, warnings, provenance, summary}``. Gaps are ``None``
     samples and are counted in ``summary``. ``candidates`` lists every ranked station with its
     score, terms, status (chosen / tried / not_tried / error / no_wind_sensor), coverage and
@@ -1536,6 +1980,9 @@ def scenario_wind(
     warnings: list[str] = []
     if mode == "forecast":
         series = fetch_forecast(lon, lat, start, hours, http_get=http_get)
+        w = qc_warning(series.provenance.get("obs_qc"), "the NWS gridpoint forecast")
+        if w:
+            warnings.append(w)
     elif mode == "climatology_percentile":
         series = climatology_percentile(
             lon, lat, start, hours, percentile=percentile, sector=sector,
@@ -1544,6 +1991,10 @@ def scenario_wind(
         sel = series.provenance.get("station_selection") or {}
         candidates = sel.pop("candidates", [])
         warnings = sel.pop("warnings", [])
+        st_id = (series.station or {}).get("id")
+        w = qc_warning(series.provenance.get("obs_qc"), f"{st_id} (analog hours, times as observed)")
+        if w:
+            warnings.append(w)
     else:
         series, candidates, selection, warnings = _historical(
             lon, lat, start, end, k=k, min_coverage=min_coverage, forced=station,

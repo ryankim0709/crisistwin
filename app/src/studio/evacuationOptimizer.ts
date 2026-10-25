@@ -7,7 +7,8 @@
  * See docs/adr/0027-evacuation-optimizer.md.
  *
  * Search, bounded by `maxEvaluations` engine runs (the baseline included):
- * 1. Baseline: the default policy (every zone to its fastest open exit at the order minute).
+ * 1. Baseline: the default policy (each zone to its fastest open exit at its order: its
+ *    evacuation trigger, or the manual order minute).
  * 2. Exit rebalancing, greedy coordinate descent. Candidate zones are those whose route at
  *    order time crosses an over-subscribed edge (zones' departure flows into it exceed its
  *    capacity, so they would split it) or an edge the fire reaches by the horizon, and that
@@ -177,8 +178,10 @@ export function optimizeEvacuation(
   cache.set(planKey(emptyPlan), baseline);
   options.onProgress?.(evaluations, total);
 
-  // Exit options at the order minute, fastest first: the same routing the policy uses.
-  const blocked = baselineRun.run.engine.blockedAt(orderMinute);
+  // Exit options at the order minute, fastest first: the same routing the policy uses. With
+  // threat-based triggers (no single order minute) they are taken at T+0; the policy still falls
+  // back to the fastest open exit when a planned one is unreachable at the zone's trigger.
+  const blocked = baselineRun.run.engine.blockedAt(orderMinute ?? 0);
   const exitOptions: ExitOption[][] = zones.map((zone, index) => {
     if (!baseline.initial.has(index)) return [];
     const tree = shortestPathTree(area, zone.node, blocked);
@@ -350,7 +353,9 @@ export function optimizeEvacuation(
   const baselineCandidate = strategy(
     "baseline",
     "Fastest exit (current policy)",
-    `Every zone ordered at T+${orderMinute} to its fastest open exit, avoiding closures and fire.`,
+    orderMinute === null
+      ? "Each threatened zone ordered at its evacuation trigger to its fastest open exit, avoiding closures and fire."
+      : `Every zone ordered at T+${orderMinute} to its fastest open exit, avoiding closures and fire.`,
     baseline,
   );
   const tried: StrategyCandidate[] = [baselineCandidate];

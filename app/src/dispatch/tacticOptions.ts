@@ -131,7 +131,7 @@ export function evaluateTacticOptions(
   let budget = MAX_OPTION_SOLVES;
   const burning = engine.fires
     .map((_, index) => index)
-    .filter((index) => engine.fireBurning(index))
+    .filter((index) => engine.fireReported(index))
     .sort((a, b) => engine.fireAreaSquareMeters(b) - engine.fireAreaSquareMeters(a));
   const currentLines = engine.fires.map((fire) => fire.line);
   for (const index of burning) {

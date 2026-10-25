@@ -63,6 +63,11 @@ export interface ZoneObservation {
   homes_total: number;
   /** Ordered households still at home or queued at the loading point. */
   homes_waiting: number;
+  /**
+   * Of homes_waiting, households that will not leave (grounded household behaviour, the
+   * dispatch page's default; always 0 with the uniform departure spread).
+   */
+  homes_staying: number;
   homes_en_route: number;
   homes_out: number;
   /** Households the modelled fire reached before they got out. */

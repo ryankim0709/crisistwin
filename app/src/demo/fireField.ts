@@ -180,7 +180,7 @@ export function noSpreadReason(grid: LandscapeGrid, arrival: Float32Array | null
   const cell = cellAt(grid, { longitude: p[0], latitude: p[1] });
   if (cell < 0) return "outside the modelled area, so it cannot spread";
   const code = grid.fuelCodes[cell];
-  if (!carriesFire(code)) return new NonBurnableIgnitionError(code).message.replace(" Place it on vegetated ground.", "");
+  if (!carriesFire(code)) return new NonBurnableIgnitionError(code).reason;
   if (arrival && arrival[cell] <= minute) return "on ground that has already burned";
   return null;
 }

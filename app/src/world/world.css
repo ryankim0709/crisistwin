@@ -76,3 +76,31 @@
   gap: var(--ct-space-1);
   margin-top: var(--ct-space-1);
 }
+.wld-menu__panel--up {
+  top: auto;
+  bottom: calc(100% + var(--ct-space-2));
+}
+
+/* Sync status beside the scenario menu (WorldBar.tsx). */
+.wld-bar {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ct-space-1) var(--ct-space-3);
+  min-width: 0;
+  font-size: var(--ct-text-xs);
+  color: var(--ct-ink-muted);
+}
+.wld-bar__status {
+  font-variant-numeric: tabular-nums;
+}
+.wld-bar__status[data-state="error"] {
+  color: var(--ct-danger);
+}
+.wld-bar__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ct-space-1);
+  white-space: nowrap;
+  cursor: pointer;
+}

@@ -20,7 +20,8 @@ import { fireRings, hectares, liveZones } from "../live/snapshot";
 import { newSessionId, useLiveBroadcast } from "../live/useLiveBroadcast";
 import type { StudioAsideContext } from "../studio/SimulationStudioPage";
 import DispatchConsole, { type SetupStep } from "./DispatchConsole";
-import { AreaRequestError, dispatchBoxFor, loadArea, type Bbox, type DispatchArea } from "./area";
+import { AreaRequestError, loadArea, type DispatchArea } from "./area";
+import { areaBoxFor } from "../fire/useBoardStreets";
 import { noActionBaseline, type IgnitionEvent, type RoadClosure } from "./engine";
 import { fireAreaFrames, fireTargets } from "./fireAttack";
 import { computeExposure } from "./fireExposure";
@@ -31,13 +32,23 @@ import { DispatchOverlay } from "./scene/DispatchOverlay";
 import { dispatchApparatus } from "./stationApparatus";
 import { useDispatchSession } from "./useDispatchSession";
 import { useSuppressionBases } from "../studio/suppressionBases";
+import { DEFAULT_FIREFIGHTING, ignitionReportDelayMinutes, startMsOf } from "../studio/firefighting";
+import {
+  HOUSEHOLD_BEHAVIOR_OPTIONS,
+  behaviorLabel,
+  householdBehaviorText,
+  householdBehavior as drawHouseholdBehavior,
+  useZoneHouseholds,
+  type HouseholdBehaviorMode,
+} from "../population";
+import DispatchPeople from "./DispatchPeople";
+import { areaCoverage } from "../studio/areaCoverage";
+import AreaCoverageNotice from "../studio/AreaCoverageNotice";
 import { Button } from "../ui";
 import "./dispatch.css";
 
 /** Wait this long after the run changes before asking for the road network. */
 const AREA_DEBOUNCE_MS = 500;
-/** Road boxes are snapped to this grid (degrees), like the backend cache. */
-const AREA_SNAP_DEGREES = 0.01;
 const ZONE_FOCUS_METERS = 900;
 const ROAD_NOTICE_MS = 4000;
 
@@ -66,12 +77,6 @@ function outcomeOf(
   return { burnedHectares: (last?.reachedAreaSquareMeters ?? 0) / 10_000, homesReached };
 }
 
-function snapBox([w, s, e, n]: Bbox): Bbox {
-  const snap = (value: number, round: (v: number) => number) =>
-    Number((round(value / AREA_SNAP_DEGREES) * AREA_SNAP_DEGREES).toFixed(2));
-  return [snap(w, Math.floor), snap(s, Math.floor), snap(e, Math.ceil), snap(n, Math.ceil)];
-}
-
 export default function StudioDispatch({
   result,
   stale,
@@ -81,6 +86,10 @@ export default function StudioDispatch({
   showDiorama,
   setRunOverride,
   groundClickRef,
+  map,
+  dock,
+  householdBehavior: behaviorMode,
+  setHouseholdBehavior: setBehaviorMode,
 }: StudioAsideContext) {
   const [areaState, setAreaState] = useState<AreaState>({ status: "idle" });
   const [areaAttempt, setAreaAttempt] = useState(0);
@@ -114,12 +123,16 @@ export default function StudioDispatch({
   }, [current]);
 
   // ---- Road network, homes and stations for the box the fires threaten ------------------
-  const box = useMemo(
-    () =>
-      grid && current ? dispatchBoxFor(grid, current.run.arrivalMinutes, horizonMinutes) : null,
-    [grid, current, horizonMinutes],
-  );
-  const snapped = useMemo(() => (box ? snapBox(box) : null), [box]);
+  // The same box the Studio picks (areaBoxFor, enabled fires by start minute), so both pages
+  // model the same roads, zones and people for one scenario.
+  const snapped = useMemo(() => {
+    if (!grid || !current) return null;
+    const focus = current.scenario.ignitions
+      .filter((ignition) => ignition.enabled)
+      .sort((a, b) => a.startMinute - b.startMinute)
+      .map((ignition): [number, number] => [ignition.location.longitude, ignition.location.latitude]);
+    return areaBoxFor(grid, focus);
+  }, [grid, current]);
   const boxKey = snapped ? snapped.join(",") : null;
   useEffect(() => {
     if (!boxKey || !snapped) {
@@ -157,6 +170,28 @@ export default function StudioDispatch({
       area && grid && current ? computeExposure(area, grid, current.run.arrivalMinutes) : null,
     [area, grid, current],
   );
+
+  // Which part of the board the road box covers, and what the fires do outside it.
+  const coverage = useMemo(
+    () =>
+      area && grid && current
+        ? areaCoverage({
+            grid,
+            area,
+            fires: current.scenario.ignitions
+              .filter((ignition) => ignition.enabled)
+              .map((ignition) => ({
+                name: ignition.name || ignition.id,
+                at: [ignition.location.longitude, ignition.location.latitude],
+              })),
+            run: { arrivalMinutes: current.run.arrivalMinutes, horizonMinutes },
+          })
+        : null,
+    [area, grid, current, horizonMinutes],
+  );
+
+  // ---- People: snapshot households for the area, and how households respond to orders ------
+  const areaHouseholds = useZoneHouseholds(area);
   // CAL FIRE-layer stations near the box (local-only file; null while loading or absent).
   const areaCentre = useMemo<[number, number] | null>(
     () => (area ? [(area.bbox[0] + area.bbox[2]) / 2, (area.bbox[1] + area.bbox[3]) / 2] : null),
@@ -288,6 +323,10 @@ export default function StudioDispatch({
   useEffect(() => {
     overlay.setEngine(sessionActive ? session.engine : null);
   }, [overlay, sessionActive, session.engine, session.version]);
+  const startMsValue = startMsOf(current?.scenario.firefighting ?? DEFAULT_FIREFIGHTING);
+  useEffect(() => {
+    overlay.setStartMs(startMsValue);
+  }, [overlay, startMsValue]);
   useEffect(() => {
     overlay.setSelectedZone(selectedZone);
   }, [overlay, selectedZone]);
@@ -380,11 +419,21 @@ export default function StudioDispatch({
     const names = Object.fromEntries(
       current.scenario.ignitions.map((ignition) => [ignition.id, ignition.name || ignition.id]),
     );
+    const targets = fireTargets(current.run, names);
+    const firefightingSettings = current.scenario.firefighting ?? DEFAULT_FIREFIGHTING;
     session.start({
       area,
       exposure,
       frames,
-      fireTargets: fireTargets(current.run, names),
+      fireTargets: targets,
+      // Same seeded per-fire report delay as Studio's firefighting (response/report.ts).
+      reportDelaysMinutes: targets.map((target) =>
+        target.ignitedMinute === null
+          ? 0
+          : ignitionReportDelayMinutes(current.landscape,
+              { longitude: target.location[0], latitude: target.location[1] },
+              target.ignitedMinute, firefightingSettings),
+      ),
       fireFrames: fireAreaFrames(current.run),
       solver,
       showFire,
@@ -396,8 +445,11 @@ export default function StudioDispatch({
       windSpeedMph: current.scenario.settings.windSpeedMph,
       closedEdges: new Set(plannedClosures.map((closure) => closure.edge)),
       apparatus: dispatchApparatus(area, current.landscape, suppressionBases),
+      departureDelays: behaviorMode === "grounded" ? drawHouseholdBehavior(area) : null,
+      startEpochMs: startMsOf(firefightingSettings),
     });
   }, [
+    behaviorMode,
     suppressionBases,
     plannedClosures,
     area,
@@ -513,7 +565,26 @@ export default function StudioDispatch({
         ? "No residential streets lie near these fires, so there is nobody to evacuate. Try fires closer to homes."
         : null;
 
+  const sessionEngine = sessionActive ? session.engine : null;
+  const grounded = sessionEngine ? sessionEngine.hasDepartureDelays : behaviorMode === "grounded";
   return (
+    <>
+    <DispatchPeople
+      map={map}
+      dock={dock}
+      area={area}
+      exposure={exposure}
+      horizonMinutes={horizonMinutes}
+      closedEdges={closedEdges}
+      engine={sessionEngine}
+      version={session.version}
+      status={session.status}
+      speed={session.speed}
+      startMs={startMsOf(current?.scenario.firefighting ?? DEFAULT_FIREFIGHTING)}
+      behavior={behaviorLabel(grounded)}
+      zonePeople={areaHouseholds.zones}
+      householdsLoading={areaHouseholds.status === "loading"}
+    />
     <DispatchConsole
       area={area}
       steps={steps}
@@ -537,6 +608,30 @@ export default function StudioDispatch({
       onSpeedChange={session.setSpeed}
       onCheckIntervalChange={session.setCheckInterval}
       onSelectZone={selectZone}
+      settings={
+        area && (
+          <div className="dsp-households">
+            <label className="dsp-speed">
+              Households
+              <select
+                className="ui-input"
+                value={behaviorMode}
+                disabled={sessionActive}
+                onChange={(event) => setBehaviorMode(event.target.value as HouseholdBehaviorMode)}
+              >
+                {HOUSEHOLD_BEHAVIOR_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p className="dsp-muted">
+              {householdBehaviorText(behaviorMode)} Changes what the agent sees and its outcome.
+            </p>
+          </div>
+        )
+      }
       roads={
         area && (
           <RoadClosures
@@ -557,6 +652,7 @@ export default function StudioDispatch({
       }
       footer={
         <>
+          <AreaCoverageNotice coverage={coverage} />
           {areaState.status === "error" && (
             <p className="dsp-note">
               <Button variant="secondary" size="sm" onClick={() => setAreaAttempt((v) => v + 1)}>
@@ -577,5 +673,6 @@ export default function StudioDispatch({
         </>
       }
     />
+    </>
   );
 }

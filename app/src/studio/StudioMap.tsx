@@ -9,6 +9,7 @@ import {
   type MapOptions,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import { attachStations } from "../maps/stations";
 import { AERIAL_STYLE } from "../maps/basemap";
 import type { Feature, FeatureCollection, Polygon, Position } from "geojson";
 import { ARRIVAL_COLORS, CURRENT_PERIMETER_COLOR } from "../fire/FireMap";
@@ -433,7 +434,9 @@ export default function StudioMap({
     map.addControl(new NavigationControl({ visualizePitch: true }), "top-right");
     map.addControl(new ScaleControl({ unit: "metric" }), "bottom-left");
 
+    let stations: ReturnType<typeof attachStations> | null = null;
     map.on("load", () => {
+      stations = attachStations(map);
       map.addSource(BOX_SOURCE, { type: "geojson", data: EMPTY_BOX });
       map.addLayer({
         id: "studio-box-line",
@@ -523,6 +526,7 @@ export default function StudioMap({
       boxLabel.current = null;
       setReady(false);
       mapReadyRef.current?.(null);
+      stations?.dispose();
       map.remove();
       mapRef.current = null;
     };

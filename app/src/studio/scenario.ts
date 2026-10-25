@@ -16,20 +16,20 @@ import { weatherSeriesProblems, type FireWeatherSample } from "../fire/weatherSe
 import { spanProblem } from "./bounds";
 import {
   DEFAULT_FIREFIGHTING,
-  FIRST_ALARM,
   MAX_RESOURCES_PER_KIND,
   RESPONSE_MINUTE_CHOICES,
-  apparatusCounts,
+  hasHandSetCounts,
   type FirefightingSettings,
 } from "./firefighting";
-import { APPARATUS_KINDS, type ApparatusCounts } from "./apparatus";
+import { APPARATUS_KINDS } from "./apparatus";
+import { MAX_HORIZON_MINUTES, MIN_HORIZON_MINUTES, isValidHorizonMinutes } from "../fire/horizon";
 import {
   DISPLAY_STEP_MINUTES,
   MAX_ENABLED_IGNITIONS,
   MAX_REPORT_MINUTE,
   MAX_WIND_SPEED_MPH,
   MIN_WIND_SPEED_MPH,
-  STUDIO_HORIZON_CHOICES,
+  studioDisplayStepMinutes,
   STUDIO_SCHEMA_VERSION,
   type ScenarioIssue,
   type ScheduledIgnition,
@@ -37,7 +37,7 @@ import {
   type ValidateScenario,
 } from "./contracts";
 
-export const DEFAULT_HORIZON_MINUTES = 180;
+export const DEFAULT_HORIZON_MINUTES = 24 * 60;
 export const DEFAULT_WIND_SPEED_MPH = 20;
 export const DEFAULT_WIND_FROM_DEGREES = 45;
 const MAX_MOISTURE_FRACTION = 3;
@@ -45,8 +45,17 @@ const MAX_SPOTTING_DISTANCE_METERS = 2000;
 const MAX_STRUCTURE_RATE_METERS_PER_MINUTE = 1000;
 const MAX_NAME_LENGTH = 80;
 
-const CRITICAL_MOISTURE: FuelMoisture = (
-  MOISTURE_PRESETS.find((preset) => preset.id === "critical") ?? MOISTURE_PRESETS[0]
+/**
+ * Fuel moisture of a new scenario until a weather day loads (the Historical wind source, on by
+ * default, replaces it with that date's hourly moisture from /api/conditions) and under Custom.
+ * Scott & Burgan (2005) scenario D2L2 ("Dry", spread.ts MOISTURE_PRESETS). ASSUMPTION: which
+ * standard scenario is the default is a choice, not a measurement; D1L1 "Critical — Red Flag"
+ * is the extreme end and stays an explicit pick. With it the default 20 mph wind ran SH5 at
+ * 75 m/min (7,300 ha in 6 h), Camp Fire growth on any day.
+ */
+export const DEFAULT_MOISTURE_PRESET_ID = "dry";
+const DEFAULT_MOISTURE: FuelMoisture = (
+  MOISTURE_PRESETS.find((preset) => preset.id === DEFAULT_MOISTURE_PRESET_ID) ?? MOISTURE_PRESETS[0]
 ).moisture;
 
 export const MOISTURE_KEYS = ["dead1h", "dead10h", "dead100h", "liveHerb", "liveWoody"] as const;
@@ -64,7 +73,7 @@ export function emptyScenario(): StudioScenario {
     settings: {
       windSpeedMph: DEFAULT_WIND_SPEED_MPH,
       windFromDegrees: DEFAULT_WIND_FROM_DEGREES,
-      moisture: { ...CRITICAL_MOISTURE },
+      moisture: { ...DEFAULT_MOISTURE },
       midflameAdjustment: DEFAULT_MIDFLAME_ADJUSTMENT,
       stepMinutes: DISPLAY_STEP_MINUTES,
       horizonMinutes: DEFAULT_HORIZON_MINUTES,
@@ -73,21 +82,18 @@ export function emptyScenario(): StudioScenario {
 }
 
 /**
- * The scenario with firefighting on (the Studio's default): its own resource counts when it has
- * any, else the first-alarm package (studio/firefighting.ts FIRST_ALARM, from the shared
- * response model's run card), sent from real stations.
+ * The scenario with firefighting on (the Studio's default). Its units come from the facilities
+ * on the map at run time (studio/mapResources.ts), not from the scenario.
  */
+/** Simulation Studio shows the fire spreading unchecked; firefighting runs on the Dispatch agent page. */
+export function withFirefightingOff(scenario: StudioScenario): StudioScenario {
+  if (!scenario.firefighting?.enabled) return scenario;
+  return { ...scenario, firefighting: { ...scenario.firefighting, enabled: false } };
+}
+
 export function withFirefightingOn(scenario: StudioScenario): StudioScenario {
   const settings = scenario.firefighting ?? DEFAULT_FIREFIGHTING;
-  const empty = Object.values(apparatusCounts(settings)).every((count) => !count);
-  return {
-    ...scenario,
-    firefighting: {
-      ...settings,
-      enabled: true,
-      ...(empty ? { resources: { ...FIRST_ALARM } } : {}),
-    },
-  };
+  return { ...scenario, firefighting: { ...settings, enabled: true } };
 }
 
 /** New ignition named with the lowest unused F-number and a stable unique id. */
@@ -139,8 +145,10 @@ function validateSettings(settings: FireSettings): ScenarioIssue[] {
   ) {
     add("Midflame wind adjustment must be between 0.01 and 1.");
   }
-  if (!(STUDIO_HORIZON_CHOICES as readonly number[]).includes(settings.horizonMinutes)) {
-    add(`Horizon must be one of ${STUDIO_HORIZON_CHOICES.join(", ")} minutes.`);
+  if (!isValidHorizonMinutes(settings.horizonMinutes)) {
+    add(
+      `How long to simulate must be a whole number of minutes from ${MIN_HORIZON_MINUTES / 60} h to ${MAX_HORIZON_MINUTES / 60 / 24} days.`,
+    );
   }
   const { spotting, structureSpread } = settings;
   if (
@@ -221,12 +229,6 @@ function validateFirefighting(firefighting: FirefightingSettings): ScenarioIssue
   }
   if (!(RESPONSE_MINUTE_CHOICES as readonly number[]).includes(firefighting.responseMinutes)) {
     add(`Response time must be one of ${RESPONSE_MINUTE_CHOICES.join(", ")} minutes.`);
-  }
-  if (
-    firefighting.enabled &&
-    Object.values(apparatusCounts(firefighting)).every((count) => !count)
-  ) {
-    add("Firefighting is on but no resources are assigned.");
   }
   return issues;
 }
@@ -323,11 +325,16 @@ export function toSolverInput(scenario: StudioScenario): ScheduledFireInput {
   };
 }
 
-/** T+0, every display step, every enabled ignition minute and the horizon: sorted, unique. */
+/**
+ * T+0, every display step (`studioDisplayStepMinutes`: 5 min on short runs, wider on long ones so
+ * a run keeps at most about 240 frames), every enabled ignition minute and the horizon: sorted,
+ * unique.
+ */
 export function frameMinutesFor(scenario: StudioScenario): number[] {
   const horizon = scenario.settings.horizonMinutes;
+  const step = studioDisplayStepMinutes(horizon);
   const minutes = new Set<number>([0, horizon]);
-  for (let minute = DISPLAY_STEP_MINUTES; minute < horizon; minute += DISPLAY_STEP_MINUTES) {
+  for (let minute = step; minute < horizon; minute += step) {
     minutes.add(minute);
   }
   for (const ignition of scenario.ignitions) {
@@ -434,18 +441,26 @@ export function parseScenario(json: unknown): {
         "settings",
       );
     } else {
+      // Units come from the facilities on the map: hand-set counts (and the old "start after N
+      // min" and night-helicopter choices) from older drafts and files are dropped, and the
+      // panel says so once (`countsDropped`).
+      const dropped =
+        raw.countsDropped === true ||
+        hasHandSetCounts({
+          handCrews: Number(raw.handCrews),
+          engines: Number(raw.engines),
+          dozers: Number(raw.dozers),
+          resources: isRecord(raw.resources) ? (raw.resources as FirefightingSettings["resources"]) : undefined,
+        });
       firefighting = {
         enabled: raw.enabled,
-        handCrews: raw.handCrews as number,
-        engines: raw.engines as number,
-        dozers: raw.dozers as number,
+        handCrews: 0,
+        engines: 0,
+        dozers: 0,
         responseMinutes: raw.responseMinutes as number,
-        ...(typeof raw.fromStations === "boolean" ? { fromStations: raw.fromStations } : {}),
-        ...(isRecord(raw.resources) ? { resources: raw.resources as ApparatusCounts } : {}),
+        fromStations: true,
         ...(typeof raw.startLocalIso === "string" ? { startLocalIso: raw.startLocalIso } : {}),
-        ...(typeof raw.nightHelicopters === "boolean"
-          ? { nightHelicopters: raw.nightHelicopters }
-          : {}),
+        ...(dropped ? { countsDropped: true } : {}),
       };
     }
   }

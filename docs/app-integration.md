@@ -355,6 +355,38 @@ for help is still a departing vehicle in the twin: at most 200 households agains
 `GET /api/live/participants` (devices seen in the last hour) also lists their devices, with
 `simulated: true`, `name: "Simulated N"` and no location; merge by `party_key` = `id`.
 
+## Live demo data flow
+
+What a phone does reaches the /live AI incident commander, and its decisions reach phones, through
+the ordinary live endpoints. Nothing is pushed; every hop is a poll. Latencies are the poll
+intervals in code, not measurements; add request time (tens of ms locally).
+
+1. Phone → server. A report (`POST incidents/{id}/reports`, including a Voice-mode report the
+   person confirms: `api/live/voice.py` only proposes the action, the phone sends it through the
+   same endpoint), a check-in or need_help, or a responder task answer is stored at once.
+2. Server → board. /live polls `GET incidents/{id}/command` every 3 s after the previous answer
+   (`live/useCommand.ts`); the board (`demo/useCommandBoard.ts`) also polls `.../people` and
+   `.../participants` every 3 s. Worst case ≈ 3 s plus request time.
+3. Board → commander. `demo/incidentPicture.ts` turns the three polls into
+   `observation.incident_picture` (bounded to 14 kB: calls per zone, help requests, recent
+   messages with evidence class and status, road reports and road state, check-ins, simulated
+   stuck groups and destinations near capacity, no-signal zones, participants with real-phone
+   reports flagged). With monitoring on, a new help request, road_blocked report, real-phone
+   report or confirmation wakes the commander after a 2 s debounce, at most once per 15 s
+   (`demo/useDemoAgent.ts` PICTURE_DEBOUNCE_MS, PICTURE_MIN_GAP_MS). So a phone report reaches
+   Claude within about 5 s (up to 15 s right after another picture-triggered call), plus the
+   model's own decision time.
+4. Commander → live drill. `POST /api/demo/decide` validates every order against the
+   observation's ids (`api/demo.py`); the page then runs live actions as the controller
+   (`demo/liveOrders.ts`): `send_rescue` assigns the help request's assist task
+   (`POST checkins/{id}/help` or `POST incidents/{id}/tasks` kind assist), `close_road` confirms
+   the road's open road_blocked report, `reopen_road` resolves its blocked reports,
+   `confirm_report` / `dismiss_report` triage (`POST reports/{id}/triage`).
+5. Approval → phones. Confirming a road report replans; guidance changes become a proposal a
+   person approves on /live before any phone sees them (ADR 0012). `order_evacuation` from the
+   commander moves only the simulated board. Phones poll every 3 s (`LiveStore.pollInterval`),
+   so an approved change or a new assist task shows on a phone within about 3 s.
+
 ## Homes
 
 `GET /api/live/incidents/<id>/homes?q=&id=&limit=` (any role; a phone's civilian token is enough) lists

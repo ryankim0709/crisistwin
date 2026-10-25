@@ -19,6 +19,7 @@ import DemoDiorama from "../demo/DemoDiorama";
 import { CONGESTION_LABEL, TRAVEL_LABEL, fireModelLabel, studioMoistureLabel, studioWindLabel } from "../demo/observation";
 import SelectedPanel from "../demo/SelectedPanel";
 import { AI_ONLY_TEXT, useCommandBoard } from "../demo/useCommandBoard";
+import { WorldBar } from "../world/WorldBar";
 import { useRoadAccess } from "../demo/useRoadAccess";
 import RoadClosureTool from "./RoadClosureTool";
 import { useRoadClosures } from "./useRoadClosures";
@@ -70,6 +71,7 @@ const LAYER_LABEL: Record<LayerKey, string> = {
   people: "People",
   houses: "Houses",
   noTruck: "Roads trucks can't use",
+  stations: "Fire stations",
 };
 type StageView = "map" | "diorama";
 const VIEW_STORAGE_KEY = "crisistwin.live.view";
@@ -247,6 +249,7 @@ export default function LiveCommandPage() {
     // Off by default: ~20k simulated houses are a heavy load and a busy map; fetched only while on.
     houses: false,
     noTruck: false,
+    stations: true,
   });
   // A different incident: drop the selection and per-incident panels (the polls restart themselves).
   useEffect(() => {
@@ -737,6 +740,15 @@ export default function LiveCommandPage() {
             <AgentControl agent={cb.agent} ready={!!board} autopilot={cb.autopilot} onAutopilot={cb.setAutopilot} />
             <BoardClock board={cb} />
             <RunStateStatus sync={runState} ready={!!cb.board} />
+            {/* Shared world (docs/shared-world.md): this tab's size, weather, seed and saved scenarios. */}
+            <WorldBar
+              tab="live"
+              sync={cb.world}
+              getExtras={cb.getExtras}
+              onLoaded={(saved) => cb.restoreExtras(saved.extras.live)}
+              placement="up"
+              align="end"
+            />
           </section>
         </aside>
       ) : null}

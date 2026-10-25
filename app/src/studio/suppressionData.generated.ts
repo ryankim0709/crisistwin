@@ -19,6 +19,10 @@ export interface SuppressionDataModule {
 export const SUPPRESSION_DATA: SuppressionDataModule = {
   "generated": "2026-10-24",
   "sources": {
+    "bme_calfire_model34": {
+      "title": "BME Fire Trucks, CAL FIRE contract (Model 34 Type 3) and delivery pages",
+      "url": "https://www.bmefire.com/cal-fire-contract"
+    },
     "broyles_2011": {
       "title": "Fireline Production Rates, USDA Forest Service NTDP 1151-1805-SDTDC (G. Broyles, April 2011)",
       "url": "https://www.fs.usda.gov/t-d/pubs/pdf/11511805.pdf"
@@ -39,6 +43,18 @@ export const SUPPRESSION_DATA: SuppressionDataModule = {
       "title": "Interagency Aerial Supervision Guide, NFES 002544 (April 2017)",
       "url": "https://gacc.nifc.gov/swcc/dc/nmsdc/documents/Dispatch/Reference/Aerial_Supervision_Guide_4-17.pdf"
     },
+    "iowa_dot_2b": {
+      "title": "Iowa DOT Design Manual 2B Superelevation, Table 2B.1 adapted from AASHTO Green Book 7th ed. (2018) Table 3-7",
+      "url": "https://iowadot.gov/design-manual/chapter-2-alignments/2b-superelevation"
+    },
+    "lucic_2001": {
+      "title": "Lucic, I. (2001), Truck Modeling Along Grade Sections, MS thesis, Virginia Tech (the Rakha, Lucic et al. 2001 J. Transp. Eng. 127(5) vehicle dynamics model)",
+      "url": "https://vtechworks.lib.vt.edu/bitstreams/7aec2ae4-67f7-473a-91e7-ceab5dc82a7a/download"
+    },
+    "mtas_rand_travel": {
+      "title": "UT MTAS, Estimating the Travel Time of Fire Apparatus (RAND relation used by ISO)",
+      "url": "https://mtas.tennessee.edu/reference/estimating-travel-time-fire-apparatus"
+    },
     "nfpa_1710": {
       "title": "NFPA 1710 (career fire departments) turnout and travel time objectives, as cited by docs/adr/0023-studio-crew-dispatch.md",
       "url": "https://www.nfpa.org/codes-and-standards/nfpa-1710-standard-development/1710",
@@ -56,6 +72,10 @@ export const SUPPRESSION_DATA: SuppressionDataModule = {
       "title": "OpenStreetMap Wiki, Key:tracktype",
       "url": "https://wiki.openstreetmap.org/wiki/Key:tracktype"
     },
+    "pierce_enforcer_puc": {
+      "title": "Pierce Manufacturing, Enforcer Top Mount PUC Pumper spec sheet (FDIC 2025)",
+      "url": "https://piercemfg.com/hubfs/FDIC%202025/Spec%20Sheets/Pumpers/43051/EnforcerTM%20Top%20Mount%20PUCTM%20Pumper.pdf"
+    },
     "pms465_tactics_1996": {
       "title": "Wildland Fire Suppression Tactics Reference Guide, PMS 465 / NFES 1256 (NWCG, April 1996); production tables derive from the Fireline Handbook (PMS 410-1)",
       "url": "https://coloradofirecamp.com/suppression-tactics/suppression-tactics-guide.pdf"
@@ -63,6 +83,10 @@ export const SUPPRESSION_DATA: SuppressionDataModule = {
     "pms508_iabog_2015": {
       "title": "Interagency Airtanker Base Operations Guide, NWCG PMS 508 (May 2015)",
       "url": "https://gacc.nifc.gov/oncc/docs/PMS%20508_IABOG_2015_%20merge.pdf"
+    },
+    "svi_plano_1901_spec": {
+      "title": "SVI Trucks, Plano TX Fire Dept Production Specification #1120 (restates NFPA 1901 road performance)",
+      "url": "https://www.svitrucks.com/wp-content/uploads/2021/01/Plano_TX_cm_1138_ProductionSpecification.pdf"
     },
     "wheg_2013": {
       "title": "Water Handling Equipment Guide, NWCG PMS 447-1, sixth edition, June 2013 (NFES 001275)",
@@ -955,11 +979,35 @@ export const SUPPRESSION_DATA: SuppressionDataModule = {
       "source": "wheg_2013",
       "page": "PDF pp.25-52 (upper GVWR of the listed reference apparatus for this class)"
     },
+    "road_access.vehicle_classes.engine_t1_t2.engine_hp": {
+      "value": 450,
+      "unit": "hp (rated)",
+      "source": "pierce_enforcer_puc",
+      "page": "'Engine Cummins L9, 450 hp' (GVW rating 45,000 lb, close to the class's 46,500 lb)"
+    },
+    "road_access.vehicle_classes.engine_t1_t2.frontal_area_m2": {
+      "value": 7.0,
+      "unit": "m2",
+      "source": "lucic_2001",
+      "page": "Table 4.4: tanker/flatbed, conventional cab 7.0 m2 (a tractor-trailer value applied to fire apparatus: about 2.5 m wide x 2.8 m)"
+    },
     "road_access.vehicle_classes.engine_t3.gvwr_lb": {
       "value": 35000,
       "unit": "lb",
       "source": "wheg_2013",
       "page": "PDF pp.25-52 (upper GVWR of the listed reference apparatus for this class)"
+    },
+    "road_access.vehicle_classes.engine_t3.engine_hp": {
+      "value": 350,
+      "unit": "hp (rated)",
+      "source": "bme_calfire_model34",
+      "page": "'Cummins ISL 350-HP engine' (CAL FIRE contract page; 2024 deliveries Cummins L9 350 hp)"
+    },
+    "road_access.vehicle_classes.engine_t3.frontal_area_m2": {
+      "value": 7.0,
+      "unit": "m2",
+      "source": "lucic_2001",
+      "page": "Table 4.4: tanker/flatbed, conventional cab 7.0 m2 (a tractor-trailer value applied to fire apparatus: about 2.5 m wide x 2.8 m)"
     },
     "road_access.vehicle_classes.engine_t4_t7.gvwr_lb": {
       "value": 37000,
@@ -967,17 +1015,53 @@ export const SUPPRESSION_DATA: SuppressionDataModule = {
       "source": "wheg_2013",
       "page": "PDF pp.25-52 (upper GVWR of the listed reference apparatus for this class)"
     },
+    "road_access.vehicle_classes.engine_t4_t7.engine_hp": {
+      "value": 350,
+      "unit": "hp (rated)",
+      "assumption": true,
+      "reason": "Not retrieved. The class uses the Type 4 upper GVWR (37,000 lb); taken as the Type 3 chassis power (350 hp) of the same International 4x4 family. A Type 6 on an F-550 (about 330 hp, 19,500 lb, search-summary only) is much faster; conservative."
+    },
+    "road_access.vehicle_classes.engine_t4_t7.frontal_area_m2": {
+      "value": 7.0,
+      "unit": "m2",
+      "source": "lucic_2001",
+      "page": "Table 4.4: tanker/flatbed, conventional cab 7.0 m2 (a tractor-trailer value applied to fire apparatus: about 2.5 m wide x 2.8 m)"
+    },
     "road_access.vehicle_classes.tender_support.gvwr_lb": {
       "value": 60000,
       "unit": "lb",
       "source": "wheg_2013",
       "page": "PDF pp.25-52 (upper GVWR of the listed reference apparatus for this class)"
     },
+    "road_access.vehicle_classes.tender_support.engine_hp": {
+      "value": 350,
+      "unit": "hp (rated)",
+      "assumption": true,
+      "reason": "Not retrieved for a fire tender. A 4,000 gal International 7400 water truck lists Cummins L9 350 hp at 58,000 lb (dealer listing, search-summary only); 350 hp taken."
+    },
+    "road_access.vehicle_classes.tender_support.frontal_area_m2": {
+      "value": 7.0,
+      "unit": "m2",
+      "source": "lucic_2001",
+      "page": "Table 4.4: tanker/flatbed, conventional cab 7.0 m2 (a tractor-trailer value applied to fire apparatus: about 2.5 m wide x 2.8 m)"
+    },
     "road_access.vehicle_classes.tender_tactical.gvwr_lb": {
       "value": 57320,
       "unit": "lb",
       "source": "wheg_2013",
       "page": "PDF pp.25-52 (upper GVWR of the listed reference apparatus for this class)"
+    },
+    "road_access.vehicle_classes.tender_tactical.engine_hp": {
+      "value": 350,
+      "unit": "hp (rated)",
+      "assumption": true,
+      "reason": "Not retrieved; taken as the support tender's 350 hp (same chassis family)."
+    },
+    "road_access.vehicle_classes.tender_tactical.frontal_area_m2": {
+      "value": 7.0,
+      "unit": "m2",
+      "source": "lucic_2001",
+      "page": "Table 4.4: tanker/flatbed, conventional cab 7.0 m2 (a tractor-trailer value applied to fire apparatus: about 2.5 m wide x 2.8 m)"
     },
     "road_access.paved_surfaces": {
       "value": [
@@ -1294,7 +1378,7 @@ export const SUPPRESSION_DATA: SuppressionDataModule = {
       },
       "unit": "km/h",
       "assumption": true,
-      "reason": "No retrieved source for emergency-driving speeds of heavy apparatus; ADR 0023 uses free-flow OSM speeds. These cap them. Calibrate with CAD AVL data when available."
+      "reason": "No retrieved source for emergency-driving speeds of heavy apparatus; ADR 0023 uses free-flow OSM speeds. These cap them. Calibrate with CAD AVL data when available. Applied as the level-road cap of the travel model (road_access.travel). Before 2026-10-24 the backend never applied it (it read speed_kph from road_access, which returns speed_kmh), so trucks drove at the OSM speed."
     },
     "road_access.grade_speed_penalty": {
       "value": {
@@ -1304,7 +1388,137 @@ export const SUPPRESSION_DATA: SuppressionDataModule = {
       },
       "unit": "factor",
       "assumption": true,
-      "reason": "Loaded engines slow on grades; no retrieved source."
+      "reason": "Loaded engines slow on grades; no retrieved source. Superseded in backend drive times by the grade model of road_access.travel (level speed taken at grade 0); the Studio port still uses it."
+    },
+    "road_access.travel.nfpa1901_max_top_speed_mph": {
+      "value": {
+        "gvwr_over_26000_lb": 68,
+        "gvwr_over_50000_lb": 60
+      },
+      "unit": "mph",
+      "source": "svi_plano_1901_spec",
+      "page": "Highway Performance: max top speed GVWR over 26,000 lb 68 mph; tanks over 1,250 gal or GVWR over 50,000 lb 60 mph (NFPA 1901 as restated)"
+    },
+    "road_access.travel.nfpa1901_acceleration": {
+      "value": {
+        "to_mph": 35,
+        "within_s": 25
+      },
+      "unit": "mph, s",
+      "source": "svi_plano_1901_spec",
+      "page": "Highway Performance: 0 to 35 mph within 25 s on 0% grade (a minimum; used as the acceleration rate, conservative)"
+    },
+    "road_access.travel.nfpa1901_min_grade_speed": {
+      "value": {
+        "grade_pct": 6,
+        "mph": 20
+      },
+      "unit": "%, mph",
+      "source": "svi_plano_1901_spec",
+      "page": "Highway Performance: at least 20 mph on any grade up to 6% (check only)"
+    },
+    "road_access.travel.rolling_resistance": {
+      "value": {
+        "c_r": 1.25,
+        "c2": 0.0328,
+        "c3": 4.575
+      },
+      "unit": "Cr (asphalt good), c2 1/(km/h), c3",
+      "source": "lucic_2001",
+      "page": "Eq 4.7; Table 4.6 (asphalt good Cr 1.25); Table 4.7 (radial c2 0.0328, c3 4.575)"
+    },
+    "road_access.travel.aero_c1": {
+      "value": 0.047285,
+      "unit": "N/(m2 (km/h)^2)",
+      "source": "lucic_2001",
+      "page": "Eq 4.5, Table 4.1 c1 = 0.047285"
+    },
+    "road_access.travel.altitude_factor_per_m": {
+      "value": 8.5e-05,
+      "unit": "1/m",
+      "source": "lucic_2001",
+      "page": "Eq 4.6 Ch = 1 - 8.5e-5 H"
+    },
+    "road_access.travel.drivetrain_efficiency": {
+      "value": 0.94,
+      "unit": "fraction",
+      "source": "lucic_2001",
+      "page": "Table 4.2 (SAE J2188) single drive, direct 0.94"
+    },
+    "road_access.travel.drag_coefficient": {
+      "value": 0.7,
+      "unit": "dimensionless",
+      "source": "lucic_2001",
+      "page": "Table 4.5 truck single unit 0.70 (Fitch 1994)"
+    },
+    "road_access.travel.side_friction_by_design_speed_kmh": {
+      "value": {
+        "24.1": 0.32,
+        "32.2": 0.27,
+        "40.2": 0.23,
+        "48.3": 0.2,
+        "56.3": 0.18,
+        "64.4": 0.16,
+        "72.4": 0.15,
+        "80.5": 0.14,
+        "88.5": 0.13,
+        "96.6": 0.12,
+        "104.6": 0.11,
+        "112.7": 0.1,
+        "120.7": 0.09,
+        "128.7": 0.08
+      },
+      "unit": "f by design speed km/h (converted from mph)",
+      "source": "iowa_dot_2b",
+      "page": "Table 2B.1 (AASHTO 2018 Table 3-7), mph rows converted to km/h"
+    },
+    "road_access.travel.superelevation": {
+      "value": {
+        "highway": 0.06,
+        "local": 0.04
+      },
+      "unit": "fraction",
+      "assumption": true,
+      "reason": "Actual superelevation unknown. The Green Book allows 4-6% in urban areas and up to 8% as a reasonable maximum (CED C04-034 pp.7-8); 6% on highways (snow on the Paradise ridge) and 4% on local roads taken for every curve."
+    },
+    "road_access.travel.braking_decel_ms2": {
+      "value": 3.4,
+      "unit": "m/s2",
+      "assumption": true,
+      "reason": "The AASHTO stopping-sight-distance deceleration (3.4 m/s2), not retrieved in this change; used for braking into curves and junctions."
+    },
+    "road_access.travel.curve_min_half_chord_m": {
+      "value": 25,
+      "unit": "m",
+      "assumption": true,
+      "reason": "Three-point circumradius uses neighbour vertices at least this far either side, so 1-2 m digitizing jitter on densely drawn OSM lines does not read as a tight curve. Not calibrated."
+    },
+    "road_access.travel.profile_step_m": {
+      "value": 20,
+      "unit": "m",
+      "assumption": true,
+      "reason": "Sample spacing of the per-edge speed profile; the DEM is about 30 m, so finer adds no grade detail. Not calibrated."
+    },
+    "road_access.travel.junction_stop_dwell_s": {
+      "value": 2,
+      "unit": "s",
+      "assumption": true,
+      "reason": "NFPA 1500 (2021, via VFIS p.2) requires a complete stop at stop signs and negative right-of-way intersections during emergency response; the time stopped is not sourced."
+    },
+    "road_access.travel.junction_caution_speed_kmh": {
+      "value": 25,
+      "unit": "km/h",
+      "assumption": true,
+      "reason": "Speed an apparatus slows to where it meets a road of its own class (control unknown; due regard, CVC 21056). Not sourced."
+    },
+    "road_access.travel.rand_travel_time": {
+      "value": {
+        "intercept_min": 0.65,
+        "min_per_mile": 1.7
+      },
+      "unit": "min, min/mile",
+      "source": "mtas_rand_travel",
+      "page": "T = 0.65 + 1.7 D (RAND, urban NYC; used by ISO); cross-check only"
     },
     "aviation_constraints.daylight_flight_limit_single_engine_fixed_wing_min": {
       "value": {

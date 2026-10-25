@@ -72,7 +72,9 @@ export function parseBases(json: unknown): SuppressionBases {
   };
 }
 
-/** Bases around `point` ([lon, lat]); null while loading or when the request failed. */
+const UNAVAILABLE: SuppressionBases = { available: false, bases: [], attribution: null, detail: "The bases request failed." };
+
+/** Bases around `point` ([lon, lat]); null while loading, `available: false` when the request failed. */
 export function useSuppressionBases(point: [number, number] | null): SuppressionBases | null {
   const key = point ? `${point[0].toFixed(3)},${point[1].toFixed(3)}` : null;
   const [state, setState] = useState<{ key: string | null; value: SuppressionBases | null }>({
@@ -88,9 +90,9 @@ export function useSuppressionBases(point: [number, number] | null): Suppression
       headers: { Accept: "application/json" },
     })
       .then((response) => (response.ok ? response.json() : null))
-      .then((json) => setState({ key, value: json ? parseBases(json) : null }))
+      .then((json) => setState({ key, value: json ? parseBases(json) : UNAVAILABLE }))
       .catch(() => {
-        if (!controller.signal.aborted) setState({ key, value: null });
+        if (!controller.signal.aborted) setState({ key, value: UNAVAILABLE });
       });
     return () => controller.abort();
   }, [key]);

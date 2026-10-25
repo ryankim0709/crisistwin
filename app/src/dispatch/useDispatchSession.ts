@@ -16,6 +16,7 @@
  * See docs/adr/0026-live-dispatch-clock.md.
  */
 
+import type { HouseholdBehavior } from "../population/householdBehavior";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { DispatchArea } from "./area";
 import { DecisionError, reportOutcome, requestDecision } from "./agentClient";
@@ -94,6 +95,8 @@ export interface SessionInputs {
   frames: readonly FrameSummary[];
   /** Fires engines can attack, and their burned area per frame. */
   fireTargets: readonly FireTarget[];
+  /** Per fire (index as fireTargets), minutes from ignition to report (response/report.ts). */
+  reportDelaysMinutes?: readonly number[];
   fireFrames: readonly FireAreaFrame[];
   /**
    * Re-solves the fire with fires put out and control lines built (tacticOptions.ts), for the
@@ -120,6 +123,14 @@ export interface SessionInputs {
    * a Type 3 engine on public roads at free-flow speed.
    */
   apparatus?: DispatchApparatus | null;
+  /**
+   * Per-household behaviour (population/householdBehavior.ts: order and fire-cue delays,
+   * staying by choice); the engine's uniform 45 min spread when omitted. It changes
+   * departures, so it changes what the agent sees and the run's outcome.
+   */
+  departureDelays?: HouseholdBehavior | null;
+  /** T+0 as UTC epoch ms: households asleep at their first trigger wake first. */
+  startEpochMs?: number | null;
 }
 
 export interface DispatchSession {
@@ -491,10 +502,12 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
         inputs.closedEdges,
       );
       engine.restrictToFirePath = true;
+      if (inputs.departureDelays) engine.setHouseholdBehavior(inputs.departureDelays);
+      engine.setClock(inputs.startEpochMs ?? null);
       if (inputs.apparatus) {
         engine.setApparatusAccess(inputs.apparatus.access, inputs.apparatus.kinds, inputs.apparatus.notes);
       }
-      engine.setFires(inputs.fireTargets, inputs.fireFrames);
+      engine.setFires(inputs.fireTargets, inputs.fireFrames, inputs.reportDelaysMinutes ?? []);
       engineRef.current = engine;
       inputsRef.current = inputs;
       outcomeRef.current = inputs.initialOutcome;

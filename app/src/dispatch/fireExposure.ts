@@ -5,9 +5,23 @@
  * landscape cell (30 m on stored boards); points off the board are never reached.
  */
 
-import type { LandscapeGrid } from "../fire/landscape";
+import { lonLatToMercator, type LandscapeGrid } from "../fire/landscape";
 import { cellAt } from "../fire/spread";
 import type { DispatchArea, LonLat } from "./area";
+
+/**
+ * Near fire cue (population/householdBehavior.ts): a household sees flames or embers close to
+ * its house once the modelled fire is within this many ground metres. ASSUMPTION (no published
+ * distance found): 500 m, a few blocks; NIST TN 2103 (Gatlinburg 2016) found that seeing flames or
+ * embers, not smoke, raised residents' risk perception, without a distance. Sensitivity 250 and
+ * 1,000 m in docs/people-data.md.
+ */
+export const FIRE_CUE_NEAR_METERS = 500;
+/**
+ * The near-cue search pools the arrival grid into blocks of about this many ground metres (min
+ * arrival per block), so the cue is resolved to about one block. Numerical, not behavioural.
+ */
+export const NEAR_CUE_BLOCK_METERS = 120;
 
 export interface FireExposure {
   /** Modelled arrival minute per graph node; Infinity when not reached. */
@@ -18,8 +32,14 @@ export interface FireExposure {
   homeArrival: Float64Array;
   /** First fire contact in each zone: its first home, hull vertex, centroid or loading node. */
   zoneContact: Float64Array;
-  /** Fire reaches the zone's core (loading node or centroid): everyone still there is caught. */
+  /** Fire reaches the zone's core (loading node or centroid): the zone is overrun. */
   zoneCore: Float64Array;
+  /**
+   * Per home, the first minute the fire is within FIRE_CUE_NEAR_METERS of it (the near fire
+   * cue); Infinity when never. Resolved to NEAR_CUE_BLOCK_METERS. Always set by
+   * `computeExposure`; absent only on hand-built exposures (then there is no near cue).
+   */
+  homeNear?: Float64Array;
 }
 
 export function arrivalAt(
@@ -61,5 +81,53 @@ export function computeExposure(
     zoneCore[i] = core;
   });
 
-  return { nodeArrival, edgeArrival, homeArrival, zoneContact, zoneCore };
+  const homeNear = nearArrival(area, grid, arrivalMinutes, FIRE_CUE_NEAR_METERS);
+  return { nodeArrival, edgeArrival, homeArrival, zoneContact, zoneCore, homeNear };
+}
+
+/**
+ * Per home, the earliest arrival within `meters` of it: the arrival grid min-pooled into blocks
+ * of about NEAR_CUE_BLOCK_METERS, then the blocks whose centre is within `meters` (plus half a
+ * block diagonal) of the home. Homes off the grid get Infinity.
+ */
+export function nearArrival(
+  area: DispatchArea,
+  grid: LandscapeGrid,
+  arrivalMinutes: Float32Array,
+  meters: number,
+): Float64Array {
+  const block = Math.max(1, Math.round(NEAR_CUE_BLOCK_METERS / grid.groundCellSizeMeters));
+  const bw = Math.ceil(grid.width / block);
+  const bh = Math.ceil(grid.height / block);
+  const pooled = new Float64Array(bw * bh).fill(Infinity);
+  for (let row = 0; row < grid.height; row += 1) {
+    const br = Math.floor(row / block) * bw;
+    for (let col = 0; col < grid.width; col += 1) {
+      const minute = arrivalMinutes[row * grid.width + col];
+      const b = br + Math.floor(col / block);
+      if (minute < pooled[b]) pooled[b] = minute;
+    }
+  }
+  const blockMeters = block * grid.groundCellSizeMeters;
+  const reach = meters + (blockMeters * Math.SQRT2) / 2;
+  const radius = Math.ceil(reach / blockMeters);
+  return Float64Array.from(area.homes, (home) => {
+    const [x, y] = lonLatToMercator(home.position[0], home.position[1]);
+    const col = (x - grid.originX) / grid.cellSizeX;
+    const row = (y - grid.originY) / grid.cellSizeY;
+    if (col < -0.5 || row < -0.5 || col > grid.width - 0.5 || row > grid.height - 0.5) return Infinity;
+    // Block coordinates of the home, fractional; a block's centre is at index + 0.5.
+    const bc = (col + 0.5) / block;
+    const brow = (row + 0.5) / block;
+    let best = Infinity;
+    for (let r = Math.floor(brow) - radius; r <= Math.floor(brow) + radius; r += 1) {
+      if (r < 0 || r >= bh) continue;
+      for (let c = Math.floor(bc) - radius; c <= Math.floor(bc) + radius; c += 1) {
+        if (c < 0 || c >= bw) continue;
+        const d = Math.hypot(c + 0.5 - bc, r + 0.5 - brow) * blockMeters;
+        if (d <= reach && pooled[r * bw + c] < best) best = pooled[r * bw + c];
+      }
+    }
+    return best;
+  });
 }
