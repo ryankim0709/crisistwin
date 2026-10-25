@@ -1,7 +1,7 @@
 /* /run bottom band: board clock and baseline-vs-AI scoreboard (RunTimelineBar.tsx). Layout only; tokens only. */
 .ov-timeline {
   display: grid;
-  grid-template-columns: 240px minmax(0, 1fr);
+  grid-template-columns: 290px minmax(0, 1fr);
   gap: var(--ct-space-5);
   align-items: start;
   font-variant-numeric: tabular-nums;
