@@ -387,7 +387,10 @@ export default function StudioDiorama(props: StudioDioramaProps) {
         <div className="studio-diorama__tools">
           {boardControl}
           {landscape && (
-            <div className="studio-diorama__buttons">
+            <div className="studio-diorama__buttons" role="group" aria-labelledby="studio-diorama-zoom">
+              <span id="studio-diorama-zoom" className="studio-diorama__zoom-label">
+                Zoom
+              </span>
               <Button variant="secondary" size="sm" onClick={() => scene?.resetView(false)}>
                 Whole board
               </Button>
@@ -397,7 +400,7 @@ export default function StudioDiorama(props: StudioDioramaProps) {
                 onClick={() => scene?.resetView(true)}
                 disabled={!run}
               >
-                Frame fire
+                Zoom to fire
               </Button>
             </div>
           )}
