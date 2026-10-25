@@ -335,9 +335,11 @@ export default function FirefightingResults({
         <details className="studio-advanced">
           <summary>Best control-line plan</summary>
           <p className="studio-hint">
-            <strong>Plan:</strong> {STRATEGY_LABELS[best.score.strategy]}, building around where the
-            unchecked fire would be at {formatElapsed(best.score.isochroneMinute)}; crews start at{" "}
-            {formatElapsed(result.startMinute)}.
+            <strong>Plan:</strong> {STRATEGY_LABELS[best.score.strategy]}
+            {best.score.strategy === "initial_attack"
+              ? ": no planned line does better than the units attacking each fire's edge"
+              : `, building around where the unchecked fire would be at ${formatElapsed(best.score.isochroneMinute)}`}
+            ; crews start at {formatElapsed(result.startMinute)}.
           </p>
           <ul className="studio-ff-line" aria-label="Control line outcome">
             <li>
@@ -370,9 +372,15 @@ export default function FirefightingResults({
           <ol className="studio-ff-candidates">
             {result.candidates.map((candidate) => (
               <li key={`${candidate.strategy}-${candidate.isochroneMinute}`}>
-                {candidate.strategy === "heel" ? "Heel" : "Head"} anchor, outline at{" "}
-                {formatElapsed(candidate.isochroneMinute)}: {ha(candidate.burnedSquareMeters)} ha
-                burned, {km(candidate.plannedMeters)} km line ({km(candidate.builtMeters)} km built)
+                {candidate.strategy === "initial_attack" ? (
+                  <>Initial attack on each fire&apos;s edge: {ha(candidate.burnedSquareMeters)} ha burned</>
+                ) : (
+                  <>
+                    {candidate.strategy === "heel" ? "Heel" : "Head"} anchor, outline at{" "}
+                    {formatElapsed(candidate.isochroneMinute)}: {ha(candidate.burnedSquareMeters)} ha
+                    burned, {km(candidate.plannedMeters)} km line ({km(candidate.builtMeters)} km built)
+                  </>
+                )}
               </li>
             ))}
           </ol>

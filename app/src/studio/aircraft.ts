@@ -403,6 +403,12 @@ export interface AirGroundState {
   outMinute: number | null;
   /** First minute a ground unit built line on its edge, or null. */
   groundLineFromMinute: number | null;
+  /**
+   * False when the ground units cannot catch this fire even with its drops holding
+   * (studio/firefighting.ts, air-supported initial attack): no ground line ties in, so none of
+   * its drops count as held line. Absent: true.
+   */
+  holdsDrops?: boolean;
 }
 
 export interface AircraftInputs {
@@ -784,7 +790,10 @@ export function planAircraft(inputs: AircraftInputs): AircraftPlan {
       const target = lineFeetPerLoad(drop.gallons, coverageLevel(model)) * METERS_PER_FOOT * (drop.windEffect ?? 1);
       const tieIn = drop.agent === "water" ? WATER_TIE_IN_MINUTES : RETARDANT_TIE_IN_MINUTES;
       drop.tiedIn = inputs.ground
-        ? ground !== null && ground.groundLineFromMinute !== null && ground.groundLineFromMinute <= drop.minute + tieIn
+        ? ground !== null &&
+          ground.holdsDrops !== false &&
+          ground.groundLineFromMinute !== null &&
+          ground.groundLineFromMinute <= drop.minute + tieIn
         : true;
       let laid = 0;
       let previous: number | null = null;
@@ -818,10 +827,16 @@ export function planAircraft(inputs: AircraftInputs): AircraftPlan {
     row.gallons += drop.gallons;
     row.lineMeters += drop.lineMeters;
   }
-  const untied = drops.filter((d) => d.tiedIn === false).length;
+  const untied = drops.filter((d) => d.tiedIn === false && d.lineMeters > 0).length;
   if (untied > 0) {
     notes.push(
       `${untied} of ${drops.length} drops had no ground line tied in within ${WATER_TIE_IN_MINUTES} min (water) or ${RETARDANT_TIE_IN_MINUTES} min (retardant): flown, not counted as held line (assumption).`,
+    );
+  }
+  const unlaid = drops.filter((d) => d.lineMeters <= 0).length;
+  if (unlaid > 0) {
+    notes.push(
+      `${unlaid} of ${drops.length} drops found no edge cell left within the ${DROP_HOLDS_FLAME_FEET} ft limit on their fire's ring: flown, no line laid.`,
     );
   }
   if (anyHelicopterNoWater) {

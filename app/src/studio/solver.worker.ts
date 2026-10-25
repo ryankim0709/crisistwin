@@ -53,9 +53,12 @@ scope.onmessage = (event: MessageEvent<SolverRequest>) => {
             { bases: request.airBases },
             initialAttack?.estimate ?? null,
             request.incidents ?? null,
+            initialAttack?.run ?? null,
           )
         : null;
-    if (firefighting && initialAttack) firefighting.initialAttack = initialAttack;
+    // The air-supported initial attack (planFirefighting) when drops hold on a fire, else the
+    // ground-only one.
+    if (firefighting && initialAttack) firefighting.initialAttack = firefighting.initialAttack ?? initialAttack;
     // The page does not use the per-cell behaviour; keep the message as before.
     delete run.cellBehaviour;
     response = { type: "result", requestId: request.requestId, run, firefighting };

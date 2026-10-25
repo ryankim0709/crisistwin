@@ -32,7 +32,7 @@ import {
   type ControlLines,
 } from "../fire/spread";
 import type { ScheduledFireInput, ScheduledFireRun } from "../fire/scheduledTypes";
-import type { InitialAttackEstimate, InitialAttackResult } from "./initialAttack";
+import { estimateInitialAttack, type InitialAttackEstimate, type InitialAttackResult } from "./initialAttack";
 import type { IncidentDispatch } from "./crewDispatch";
 import { seriesActive, weatherAtMinute } from "../fire/weatherSeries";
 import {
@@ -178,10 +178,11 @@ export function productionFactor(fuelCode: number, kind: GroundKind = "engine_t3
   return here / lineRateMetersPerHour(line, 101);
 }
 
-export type Strategy = "heel" | "head";
+export type Strategy = "heel" | "head" | "initial_attack";
 export const STRATEGY_LABELS: Record<Strategy, string> = {
   heel: "Anchor at the heel, flank both sides",
   head: "Anchor at the head, cut across the front",
+  initial_attack: "Direct initial attack on each fire's edge (no planned line)",
 };
 
 /** Line cell outcome against the run it was tested in. */
@@ -721,17 +722,9 @@ export function planFirefighting(
   air: AirInputs | null = null,
   initialAttack: InitialAttackEstimate | null = null,
   incidents: readonly IncidentDispatch[] | null = null,
+  initialAttackRun: ScheduledFireRun | null = null,
 ): FirefightingResult {
   const horizon = input.settings.horizonMinutes;
-  // A unit that withdrew for safety in the initial attack (studio/initialAttack.ts) builds no
-  // line after it left.
-  const withdrawn = new Map<string, number>();
-  for (const fire of initialAttack?.fires ?? []) {
-    for (const unit of fire.units ?? []) if (unit.label && unit.withdrawMinute !== null) withdrawn.set(unit.label, unit.withdrawMinute);
-  }
-  const resources = crewArrivals(settings, input, dispatched).map((r) =>
-    r.label && withdrawn.has(r.label) ? { ...r, untilMinute: withdrawn.get(r.label)! } : r,
-  );
   // Each fire reaches dispatch after its own call-in and processing delay (response/report.ts).
   const first = [...input.sources].sort((a, b) => a.startMinute - b.startMinute)[0];
   const reportMinute =
@@ -742,28 +735,89 @@ export function planFirefighting(
         : 0;
   const counts = apparatusCounts(settings);
   const anyAir = incidents ? incidents.some((i) => i.aircraft.length > 0) : AIR_KINDS.some((kind) => (counts[kind] ?? 0) > 0);
-  const ground: Record<string, AirGroundState> | null = initialAttack
-    ? Object.fromEntries(
-        initialAttack.fires.map((fire) => {
-          const starts = (fire.units ?? []).map((u) => u.firstWorkMinute).filter((m): m is number => m !== null);
-          return [fire.sourceId, { outMinute: fire.outMinute, groundLineFromMinute: starts.length > 0 ? Math.min(...starts) : null }];
-        }),
-      )
-    : null;
-  const aircraft = anyAir
-    ? planAircraft({
+  // Ground state per fire from the ground-only initial attack: tie-in from its units' first line.
+  const firstLineOf = new Map(
+    (initialAttack?.fires ?? []).map((fire) => {
+      const starts = (fire.units ?? []).map((u) => u.firstWorkMinute).filter((m): m is number => m !== null);
+      return [fire.sourceId, starts.length > 0 ? Math.min(...starts) : null] as const;
+    }),
+  );
+  const groundState = (
+    out: InitialAttackEstimate,
+    noHold: ReadonlySet<string>,
+  ): Record<string, AirGroundState> =>
+    Object.fromEntries(
+      out.fires.map((fire) => [
+        fire.sourceId,
+        { outMinute: fire.outMinute, groundLineFromMinute: firstLineOf.get(fire.sourceId) ?? null, holdsDrops: !noHold.has(fire.sourceId) },
+      ]),
+    );
+  const flyAircraft = (ground: Record<string, AirGroundState> | null) =>
+    planAircraft({
+      grid,
+      input,
+      baseline,
+      counts,
+      bases: air?.bases ?? null,
+      reportMinute,
+      startMs: startMsOf(settings),
+      nightHelicopters: settings.nightHelicopters === true,
+      incidents: incidents?.map((i) => ({ sourceId: i.sourceId, location: i.fire, reportMinute: i.reportMinute, aircraft: i.aircraft })) ?? null,
+      ground,
+    });
+  let aircraft = anyAir ? flyAircraft(initialAttack ? groundState(initialAttack, new Set()) : null) : null;
+
+  // Air-supported initial attack: the same ground race (studio/initialAttack.ts: same units,
+  // arrivals, hold limits and withdrawal) against the fire as its held drops slow it. A drop
+  // counts as held line only on a fire this race puts out: where the ground units cannot catch the
+  // fire even with the drops holding, no ground line ties in and none of that fire's drops hold
+  // (the solver cannot let a drop expire, fire/spread.ts). Fires are dropped from the held set
+  // until the set is stable (at most one pass per fire).
+  let supported: InitialAttackResult | null = null;
+  const noHold = new Set<string>();
+  if (initialAttack && aircraft && aircraft.cells.length > 0) {
+    let estimate: InitialAttackEstimate | null = null;
+    for (let pass = 0; pass <= input.sources.length && aircraft.cells.length > 0; pass += 1) {
+      const airRun = simulateScheduledFireSpread(grid, input, controlLinesFor(grid, null, aircraft), null, {
+        reportCellBehaviour: true,
+      });
+      estimate = estimateInitialAttack(airRun, settings, dispatched, grid);
+      const credited = new Set(aircraft.drops.filter((d) => d.tiedIn && d.sourceId).map((d) => d.sourceId!));
+      const failing = estimate.fires.filter((f) => credited.has(f.sourceId) && f.outMinute === null).map((f) => f.sourceId);
+      if (failing.length === 0) break;
+      for (const id of failing) noHold.add(id);
+      aircraft = flyAircraft(groundState(initialAttack, noHold));
+      estimate = null;
+    }
+    if (estimate && aircraft.cells.length > 0) {
+      // Release the aircraft when the air-supported attack puts their fire out; drops after that
+      // do not change the fire before it.
+      aircraft = flyAircraft(groundState(estimate, noHold));
+      const anyOut = estimate.outFromMinuteBySource.some(Number.isFinite);
+      const run = simulateScheduledFireSpread(
         grid,
         input,
-        baseline,
-        counts,
-        bases: air?.bases ?? null,
-        reportMinute,
-        startMs: startMsOf(settings),
-        nightHelicopters: settings.nightHelicopters === true,
-        incidents: incidents?.map((i) => ({ sourceId: i.sourceId, location: i.fire, reportMinute: i.reportMinute, aircraft: i.aircraft })) ?? null,
-        ground,
-      })
-    : null;
+        controlLinesFor(grid, null, aircraft),
+        anyOut ? estimate.outFromMinuteBySource : null,
+      );
+      supported = { estimate, areas: burnedAreas(grid, run.arrivalMinutes, horizon), run };
+    }
+    if (noHold.size > 0) {
+      aircraft.notes.push(
+        `${[...noHold].join(", ")}: the ground units cannot catch the fire even with its drops holding, so no ground line ties in and none of its drops count as held line.`,
+      );
+    }
+  }
+  const attack = supported?.estimate ?? initialAttack;
+  // A unit that withdrew for safety in the initial attack (studio/initialAttack.ts) builds no
+  // line after it left.
+  const withdrawn = new Map<string, number>();
+  for (const fire of attack?.fires ?? []) {
+    for (const unit of fire.units ?? []) if (unit.label && unit.withdrawMinute !== null) withdrawn.set(unit.label, unit.withdrawMinute);
+  }
+  const resources = crewArrivals(settings, input, dispatched).map((r) =>
+    r.label && withdrawn.has(r.label) ? { ...r, untilMinute: withdrawn.get(r.label)! } : r,
+  );
   const firstDrop = aircraft && aircraft.drops.length > 0 ? aircraft.drops[0].minute : Infinity;
   const startMinute = Math.min(
     resources.length > 0
@@ -779,7 +833,7 @@ export function planFirefighting(
     candidates: [],
     best: null,
     note,
-    initialAttack: null,
+    initialAttack: supported,
     aircraft,
     dropStatusMeters: null,
   });
@@ -859,6 +913,27 @@ export function planFirefighting(
     solve("head", startMinute, EMPTY_LINE);
     onProgress?.(1, 1);
   }
+  // The initial attack itself is a candidate, so the best plan never burns more than it: the
+  // air-supported attack when its drops hold, else the ground-only attack (the free run when it
+  // puts no fire out).
+  const attackRun =
+    supported?.run ??
+    (initialAttack
+      ? (initialAttackRun ??
+        (initialAttack.outFromMinuteBySource.some(Number.isFinite)
+          ? simulateScheduledFireSpread(grid, input, null, initialAttack.outFromMinuteBySource)
+          : baseline))
+      : null);
+  if (attack && attackRun) {
+    const areas = burnedAreas(grid, attackRun.arrivalMinutes, horizon);
+    const entry: Tried = {
+      score: { strategy: "initial_attack", isochroneMinute: startMinute, ...areas, plannedMeters: 0, builtMeters: 0 },
+      run: attackRun,
+      line: EMPTY_LINE,
+    };
+    tried.push(entry);
+    keepBest(entry);
+  }
   for (const strategy of resources.length > 0 ? strategies : []) {
     for (const offset of offsetList) {
       const parts: LinePlan[] = [];
@@ -898,7 +973,7 @@ export function planFirefighting(
       statusMeters: metersByStatus(winner.line, status),
     },
     note: null,
-    initialAttack: null,
+    initialAttack: supported,
     aircraft,
     dropStatusMeters: aircraft
       ? dropStatusMeters(grid, aircraft, winnerRun.arrivalMinutes, horizon)
