@@ -36,7 +36,7 @@ import {
   type ValidateScenario,
 } from "./contracts";
 
-export const DEFAULT_HORIZON_MINUTES = 180;
+export const DEFAULT_HORIZON_MINUTES = 24 * 60;
 export const DEFAULT_WIND_SPEED_MPH = 20;
 export const DEFAULT_WIND_FROM_DEGREES = 45;
 const MAX_MOISTURE_FRACTION = 3;
