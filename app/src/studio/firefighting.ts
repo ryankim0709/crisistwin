@@ -43,6 +43,7 @@ import {
   type GroundKind,
 } from "./apparatus";
 import { DROP_HOLDS_FLAME_FEET, planAircraft, type AircraftPlan, type AirBase } from "./aircraft";
+import { WILDLAND_RUN_CARDS } from "../response/runCards";
 
 /** A ground resource kind (studio/apparatus.ts). Kept as an alias for older imports. */
 export type ResourceKind = GroundKind;
@@ -93,9 +94,8 @@ const GROUND_FIRST_ALARM = dataValue<{
   hand_crews: number;
   chief_officers: number;
 }>("deployment.initial_attack_ground_first_alarm_sra_high");
-const AIR_FIRST_ALARM = dataValue<{ air_attack: number; airtankers: number; helicopters: number }>(
-  "deployment.calfire_initial_aircraft_response",
-);
+/** The shared response model's medium-level wildland run card (response/runCards.ts), the /live board's too. */
+const RUN_CARD = WILDLAND_RUN_CARDS.medium;
 
 /**
  * First-alarm package. Ground (ASSUMPTION in the data: no public CAL FIRE dispatch matrix):
@@ -104,13 +104,13 @@ const AIR_FIRST_ALARM = dataValue<{ air_attack: number; airtankers: number; heli
  * airtankers (CAL FIRE's S-2T) and one helicopter (Type 2 here; ASSUMPTION on the type).
  */
 export const FIRST_ALARM: ApparatusCounts = {
-  engine_t3: GROUND_FIRST_ALARM.engines,
-  dozer_t2: GROUND_FIRST_ALARM.dozers,
-  hand_crew_t2: GROUND_FIRST_ALARM.hand_crews,
+  engine_t3: RUN_CARD.engines,
+  dozer_t2: RUN_CARD.dozers,
+  hand_crew_t2: RUN_CARD.hand_crews,
   chief: GROUND_FIRST_ALARM.chief_officers,
-  air_attack: AIR_FIRST_ALARM.air_attack,
-  airtanker_s2t: AIR_FIRST_ALARM.airtankers,
-  helicopter_t2: AIR_FIRST_ALARM.helicopters,
+  air_attack: RUN_CARD.air_attack,
+  airtanker_s2t: RUN_CARD.airtankers,
+  helicopter_t2: RUN_CARD.helicopters,
 };
 
 export const DEFAULT_FIREFIGHTING: FirefightingSettings = {

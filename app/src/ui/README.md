@@ -37,7 +37,7 @@ imports components from `../ui` (or `../../ui`), never from an individual file.
    (`--fr-ink: var(--ct-ink)`) but must not redefine what a button or panel looks like.
 4. **Prefix feature classes.** One prefix per feature so selectors never collide:
    `fr-` fire, `fdx-` fire diorama scene labels, `studio-` simulation studio, `dsp-`
-   dispatch, `dm-` demo, `rp-` replay, `dio-` diorama, `nav-`/`sidebar-` shell, `ws-` planning pages.
+   dispatch, `dm-` demo, `rp-` replay, `dio-` diorama, `wld-` shared-world menu, `ppl-` live people layer, `nav-`/`sidebar-` shell, `ws-` planning pages.
    `ui-` is reserved for this kit.
 5. **Every async view has three states:** loading (`LoadingState`), empty (`EmptyState`),
    error (`Notice tone="danger"`). Never a blank panel.

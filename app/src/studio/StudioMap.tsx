@@ -9,6 +9,7 @@ import {
   type MapOptions,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import { AERIAL_STYLE } from "../maps/basemap";
 import type { Feature, FeatureCollection, Polygon, Position } from "geojson";
 import { ARRIVAL_COLORS, CURRENT_PERIMETER_COLOR } from "../fire/FireMap";
 import { mercatorToLonLat, type MercatorBox } from "../fire/landscape";
@@ -40,23 +41,7 @@ const STALE_DIM = 0.4;
 const LEGEND_BAND_COUNT = 4;
 const MARKER_CLASS = "studio-marker";
 
-// Same imagery as /fire (FireMap keeps its style private, so it is repeated here).
-const SATELLITE_STYLE: MapOptions["style"] = {
-  version: 8,
-  sources: {
-    imagery: {
-      type: "raster",
-      tiles: [
-        "https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}",
-      ],
-      tileSize: 256,
-      maxzoom: 16,
-      attribution:
-        '<a href="https://www.usgs.gov/programs/national-geospatial-program/national-map">USDA / USGS The National Map</a> · Aerial imagery',
-    },
-  },
-  layers: [{ id: "imagery", type: "raster", source: "imagery" }],
-};
+const SATELLITE_STYLE: MapOptions["style"] = AERIAL_STYLE;
 
 const ARRIVAL_EXPRESSION = [
   "interpolate",

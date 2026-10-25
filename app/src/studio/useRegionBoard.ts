@@ -12,7 +12,8 @@ import {
   fetchRegionCatalog,
   fetchRegionLandscape,
 } from "../fire/landscapePackage";
-import { loadLandscape, type LandscapeGrid, type MercatorBox } from "../fire/landscape";
+import { type LandscapeGrid, type MercatorBox } from "../fire/landscape";
+import { loadLandscapeCached } from "../fire/landscapeCache";
 import { CALIFORNIA_REGIONS, type LandscapeRegion } from "../fire/regions";
 import { cellAt } from "../fire/spread";
 import type { StudioScenario } from "./contracts";
@@ -26,7 +27,7 @@ export type RegionCatalogState =
 
 export type RegionBoardState =
   | { status: "loading"; storedUnavailable: boolean }
-  | { status: "ready"; grid: LandscapeGrid; source: "stored" | "live" }
+  | { status: "ready"; grid: LandscapeGrid; source: "stored" | "cached" | "live" }
   | { status: "error"; message: string };
 
 export function findRegion(id: string): LandscapeRegion | null {
@@ -111,14 +112,14 @@ export function useRegionBoard(regionId: string, attempt: number) {
             throw cause;
           }
           setBoard({ status: "loading", storedUnavailable: true });
-          return loadLandscape(
+          return loadLandscapeCached(
             region.center.longitude,
             region.center.latitude,
             region.radiusMeters,
             controller.signal,
             { cellMeters: region.cellMeters },
-          ).then((grid) => {
-            if (!stale()) setBoard({ status: "ready", grid, source: "live" });
+          ).then(({ grid, source }) => {
+            if (!stale()) setBoard({ status: "ready", grid, source: source === "cache" ? "cached" : "live" });
           });
         },
       )
