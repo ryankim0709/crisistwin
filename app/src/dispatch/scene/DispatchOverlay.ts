@@ -101,6 +101,20 @@ const GLOW_COLOR = 0xffb347;
 const ribbonWidth = (vehicles: number) => Math.min(3.2, 0.5 + Math.sqrt(vehicles) * 0.32);
 /** Vehicles on one road segment above which moving traffic is drawn as slow. */
 const SLOW_VEHICLES = 14;
+/**
+ * Traffic speed for the flow dashes: Greenshields (1935) linear speed-density, v = vf (1 - k/kj),
+ * with jam density kj = 190 passenger cars per mile per lane (HCM 2010, ~118 veh/km/lane) and lanes
+ * from the edge's saturation flow at 1,900 veh/h/lane (HCM base saturation flow). Dash speed is
+ * proportional to v; 50 km/h moves at FLOW_SPEED_UNITS_PER_S.
+ */
+const JAM_DENSITY_VEH_PER_KM_LANE = 118;
+const SATURATION_VPH_PER_LANE = 1900;
+const DASH_REFERENCE_KPH = 50;
+function trafficSpeedKph(edge: { speedKph: number; capacityVph: number; lengthMeters: number }, vehicles: number): number {
+  const lanes = Math.max(1, Math.round(edge.capacityVph / SATURATION_VPH_PER_LANE));
+  const density = vehicles / Math.max(0.05, edge.lengthMeters / 1000) / lanes;
+  return edge.speedKph * Math.max(0.05, 1 - density / JAM_DENSITY_VEH_PER_KM_LANE);
+}
 const READOUT_CSS = `
 .fdx-dsp-readout { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); pointer-events: none; z-index: 5;
   background: rgba(20,43,39,0.9); color: #fff; font: 600 12.5px/1.3 system-ui, sans-serif; padding: 6px 12px; border-radius: 999px;
@@ -236,7 +250,8 @@ export class DispatchOverlay implements BoardOverlay {
     if (view) this.layoutLabels(view, width, height, performance.now());
     for (const material of this.lineMaterials) {
       material.resolution.set(width, height);
-      if (material.dashed && !reducedMotion) material.dashOffset -= dt * FLOW_SPEED_UNITS_PER_S;
+      const speed = (material.userData as { flowSpeed?: number }).flowSpeed ?? 1;
+      if (material.dashed && !reducedMotion) material.dashOffset -= dt * FLOW_SPEED_UNITS_PER_S * speed;
     }
     const k = reducedMotion ? 1 : 1 - Math.exp(-dt * GLIDE_RATE);
     this.drawCars(k);
@@ -289,6 +304,11 @@ export class DispatchOverlay implements BoardOverlay {
         ribbon.base.material.linewidth = ribbonWidth(vehicles);
         ribbon.base.material.color.setHex(FLOW_COLORS[state]);
         ribbon.flow.visible = state !== 2;
+        // Dashes move at the road's current traffic speed (see trafficSpeedKph).
+        const edge = area.edges[row.edge];
+        (ribbon.flow.material.userData as { flowSpeed?: number }).flowSpeed = edge
+          ? trafficSpeedKph(edge, row.moving) / DASH_REFERENCE_KPH
+          : 1;
         ribbon.vehicles = vehicles;
         ribbon.state = state;
       }
