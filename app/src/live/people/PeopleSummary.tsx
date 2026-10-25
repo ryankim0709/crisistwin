@@ -85,9 +85,11 @@ export default function PeopleSummary({ snapshot, error, className }: Props) {
       key: "home",
       label: "Still home",
       value: home,
-      detail: t.home_no_car ? `${nf(t.home_no_car)} no car` : undefined,
+      detail: [t.home_no_car ? `${nf(t.home_no_car)} no car` : "", t.staying ? `${nf(t.staying)} staying put` : ""]
+        .filter(Boolean)
+        .join(", ") || undefined,
       title: `${nf(t.home)} have not left yet; ${nf(t.home_no_car)} live in a household without a car` +
-        (t.staying ? `; ${nf(t.staying)} are not leaving in the model` : ""),
+        (t.staying ? `; ${nf(t.staying)} are staying put on purpose (or have no road nearby)` : ""),
     },
     { key: "driving", label: "Driving out", value: t.driving, title: "Moving on the road toward an exit or shelter" },
     {
@@ -138,7 +140,8 @@ export default function PeopleSummary({ snapshot, error, className }: Props) {
         </ul>
         <p>
           Estimates from the traffic simulation: {nf(t.population)} residents ({snapshot.basis.population}), about{" "}
-          {snapshot.basis.persons_per_vehicle} per car. App users' phones are the separate dots.
+          {snapshot.basis.persons_per_vehicle} per car; behaviour: {snapshot.basis.people_behavior}. App users' phones are the
+          separate dots.
         </p>
         </div>
       </details>

@@ -9,7 +9,7 @@ export interface PeopleCounts {
   home: number;
   /** Residents of households with no vehicle; the model does not move them. */
   home_no_car: number;
-  /** Residents the model never moves for other reasons (no road nearby, did not comply). */
+  /** Residents staying put on purpose in the model (did not comply with the order), or with no road nearby. */
   staying: number;
   driving: number;
   /** Waiting in traffic for less than the long-queue threshold, or waiting to get on the road. */
@@ -92,8 +92,11 @@ export interface PeopleSnapshot {
     population: string;
     persons_per_vehicle: number;
     persons_per_vehicle_basis: string;
+    persons_per_vehicle_check: string;
     zones_census: number;
     zones_assumed: number;
+    /** sim.behavior preset the twin's demand uses (`historical`: everyone ordered leaves), or `custom`. */
+    people_behavior: string;
   };
   limitations: string[];
 }

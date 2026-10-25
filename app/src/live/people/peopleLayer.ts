@@ -378,7 +378,7 @@ export function attachPeopleLayer(map: MapLibreMap, beforeId?: string): PeopleLa
               const n = z.home + z.home_no_car + z.staying;
               const parts = [`${nf(z.home)} have not left yet`];
               if (z.home_no_car) parts.push(`${nf(z.home_no_car)} without a car`);
-              if (z.staying) parts.push(`${nf(z.staying)} not leaving in the model`);
+              if (z.staying) parts.push(`${nf(z.staying)} staying put`);
               return pt(z.coord, {
                 people: n,
                 text: `${nf(n)} home`,

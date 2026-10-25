@@ -34,6 +34,9 @@ ASSUMED_PERSONS_PER_HOUSEHOLD = 2.41
 """Residents per home for a package without census data. Camp's ACS 2014-2018 block groups in the
 road extract hold 48,088 residents in 19,913 households (camp-2018 bundle `demand.totals`), 2.41 per
 household; applying it elsewhere is an assumption."""
+PPV_CHECK = ("within NIST TN 2252 bounds of 1.0 to 2.5 persons per vehicle (p. 155); docs/people-data.md "
+             "'Behaviour evidence' derives 1.38 for Camp (weak: two samples joined)")
+"""How the derived persons per vehicle compares with published values (none measures it directly)."""
 CLUSTER_RADIUS_M = 800.0
 """Stuck road edges (or points) of the same reason within this distance form one stuck cluster."""
 MAX_CLUSTERS = 40
@@ -123,6 +126,22 @@ def zone_people(inputs) -> dict[str, ZonePeople]:
         out[z.id] = ZonePeople(z.id, population, no_car, per_vehicle, reference, basis)
     inputs.cache["zone_people"] = out
     return out
+
+
+def behavior_preset(inputs) -> str:
+    """Name of the people behaviour the twin's demand uses: a `sim.behavior.PEOPLE_PRESETS` key, `custom`, or
+    `historical` (every household leaves when ordered) when none was applied (`sim.twin.with_people_behavior`)."""
+    applied = inputs.scenario.get("people_behavior")
+    if not applied:
+        return "historical"
+    import dataclasses
+
+    from sim.behavior import PEOPLE_PRESETS
+
+    for name, preset in sorted(PEOPLE_PRESETS.items()):
+        if dataclasses.asdict(preset) == applied:
+            return name
+    return "custom"
 
 
 def _round_parts(parts: dict[str, float], total: int) -> dict[str, int]:
@@ -343,7 +362,9 @@ def people_snapshot(twin, *, edge_name: Callable[[int], str | None] | None = Non
                 "derived per zone: (population - residents of carless households) / evacuating vehicles; "
                 "carless residents = ACS B25044 no-vehicle households x mean household size" if acs else
                 "derived per zone: residents / package vehicles (carless residents not modelled)"),
+            "persons_per_vehicle_check": PPV_CHECK,
             "zones_census": acs, "zones_assumed": len(zp) - acs,
+            "people_behavior": behavior_preset(twin.inputs),
         },
         "limitations": list(LIMITATIONS),
     }

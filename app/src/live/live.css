@@ -358,6 +358,7 @@
 }
 .lc-map-top .lc-layers {
   position: static;
+  z-index: auto; /* flex items honour z-index; the strip's key must open over the toggles */
 }
 .lc-sw--people {
   width: 10px;
