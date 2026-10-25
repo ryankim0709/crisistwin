@@ -76,11 +76,26 @@ export interface Home {
   zone: number;
 }
 
+/** A registered shelter an egress exit leads toward (dispatch-area/5). */
+export interface ExitDestination {
+  name: string;
+  /** "fema-nss" (FEMA ESF#6 Shelter System) or "osm". */
+  source: string;
+  location: LonLat;
+  /** Evacuation capacity in persons, when the source gives one. */
+  capacity: number | null;
+  /** Straight-line metres from the exit to the shelter; roads beyond the area are not routed. */
+  straightLineMeters: number;
+}
+
 export interface Exit {
   id: string;
   name: string;
   node: number;
   road: string;
+  /** "egress": a major road toward a real shelter; "map-edge": approximate, where a road crosses the box edge. */
+  kind?: "egress" | "map-edge";
+  destination?: ExitDestination;
 }
 
 export interface Station {
@@ -271,11 +286,23 @@ export function parseArea(json: unknown): DispatchArea {
     if (typeof exit.id !== "string" || typeof exit.name !== "string") {
       throw new AreaFormatError(`exits[${i}] needs an id and name.`);
     }
+    const dest = exit.destination as Record<string, unknown> | undefined;
     return {
       id: exit.id,
       name: exit.name,
       node: nodeIndex(exit.node, count, `exits[${i}].node`),
       road: String(exit.road ?? ""),
+      kind: exit.kind === "egress" || exit.kind === "map-edge" ? exit.kind : undefined,
+      destination:
+        dest && typeof dest.name === "string"
+          ? {
+              name: dest.name,
+              source: String(dest.source ?? ""),
+              location: asLonLat(dest.location, `exits[${i}].destination.location`),
+              capacity: typeof dest.capacity === "number" ? dest.capacity : null,
+              straightLineMeters: Number(dest.straightLineMeters ?? 0),
+            }
+          : undefined,
     };
   });
 
@@ -300,14 +327,22 @@ export function parseArea(json: unknown): DispatchArea {
 
   const bbox = asArray(raw.bbox, "bbox") as number[];
   if (bbox.length !== 4) throw new AreaFormatError("bbox must be [west, south, east, north].");
-  const sources = (raw.sources ?? {}) as { osm?: { attribution?: string; timestamp?: string } };
+  const sources = (raw.sources ?? {}) as {
+    osm?: { attribution?: string; timestamp?: string };
+    shelters?: { source?: string; attribution?: string | null };
+  };
   const assumptions = (raw.assumptions ?? {}) as { notes?: unknown };
 
   return {
     id: String(raw.id),
     name: String(raw.name),
     bbox: [bbox[0], bbox[1], bbox[2], bbox[3]],
-    attribution: sources.osm?.attribution ?? "© OpenStreetMap contributors",
+    attribution: [
+      sources.osm?.attribution ?? "© OpenStreetMap contributors",
+      sources.shelters?.source === "fema-nss" ? sources.shelters.attribution : null,
+    ]
+      .filter(Boolean)
+      .join(" · "),
     osmTimestamp: typeof sources.osm?.timestamp === "string" ? sources.osm.timestamp : null,
     notes: Array.isArray(assumptions.notes) ? assumptions.notes.map(String) : [],
     nodes,

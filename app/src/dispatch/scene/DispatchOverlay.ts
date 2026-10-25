@@ -768,12 +768,14 @@ export class DispatchOverlay implements BoardOverlay {
       }
       const name = `Exit ${exit.id.replace(/^X0*/, "") || exit.id}`;
       const h = nf(heading.get(exit.id) ?? 0);
+      // exit.name carries the road and the shelter it leads to ("Hwy 24 east → … shelter").
+      const where = exit.name && exit.name !== exit.id ? ` · ${exit.name}` : "";
       const text =
         lod === "far"
-          ? `${name} · ${leaving.get(exit.id) ?? 0} zones leaving · ${h} people on the way · ${nf(arrived.get(exit.id) ?? 0)} arrived`
+          ? `${name}${where} · ${leaving.get(exit.id) ?? 0} zones leaving · ${h} people on the way · ${nf(arrived.get(exit.id) ?? 0)} arrived`
           : lod === "mid"
             ? `${name} · ${h} heading here`
-            : `${name} · ${h} heading here · ${nf(arrived.get(exit.id) ?? 0)} arrived`;
+            : `${name}${where} · ${h} heading here · ${nf(arrived.get(exit.id) ?? 0)} arrived`;
       if (marker.el.textContent !== text) marker.el.textContent = text;
       marker.el.classList.toggle("fdx-dsp-exit--faded", lod === "near" && !isTop);
       this.cands.set(marker.label, { prio: 50 - ranked.indexOf(exit.id) * 0.01, el: marker.el, shown: true, near: false });
