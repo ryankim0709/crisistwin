@@ -265,9 +265,14 @@ export function prepareFuelBed(fuel: FuelModel, moisture: FuelMoisture): FuelBed
         )
       : fuel.deadMoistureOfExtinction;
 
+  // Rothermel (1972) moisture damping, eta_M = 1 - 2.59 r + 5.11 r^2 - 3.52 r^3 with r = m / Mx,
+  // and no fire at or above the moisture of extinction. The cubic is 0 at r = 1 only in exact
+  // arithmetic: in doubles it leaves 4.4e-16, a 4e-15 ft/min "spread" that put arrivals of
+  // 1e17 minutes on a wet-day run. So r >= 1 returns exactly 0.
   const dampingOf = (m: number, mx: number) => {
     if (mx <= 0) return 0;
-    const r = Math.min(m / mx, 1);
+    const r = m / mx;
+    if (r >= 1) return 0;
     return Math.max(1 - 2.59 * r + 5.11 * r * r - 3.52 * r * r * r, 0);
   };
   const dampingDead = dampingOf(deadMoisture, fuel.deadMoistureOfExtinction);
