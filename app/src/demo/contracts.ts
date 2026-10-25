@@ -270,8 +270,8 @@ export interface CrewObservation {
   work_h: number;
   /** Off-road reach on its fire: metres from where it parked to the edge (null: not on scene or road access unknown). */
   parked_m: number | null;
-  /** hose (within hose reach), hand_line (hiked in), dozer (walked in), out_of_reach. */
-  work_mode: "hose" | "hand_line" | "dozer" | "out_of_reach" | null;
+  /** hose (within hose reach), hand_line (hiked in), dozer (walked in), indirect (holds its road), out_of_reach. */
+  work_mode: "hose" | "hand_line" | "dozer" | "indirect" | "out_of_reach" | null;
   /** Minutes until it starts building line (the hike or walk in). */
   working_in_min: number | null;
 }
