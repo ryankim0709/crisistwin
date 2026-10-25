@@ -721,6 +721,12 @@ export interface FireRun {
    * the horizon are kept so renderers can clamp them consistently with the frames.
    */
   arrivalMinutes: Float32Array;
+  /**
+   * The solver's per-cell fire behaviour (rate, flame length, crown type). Only when asked
+   * (`simulateFireSpread`'s `reportCellBehaviour` extension): it is large, so cached and
+   * transferred runs leave it out.
+   */
+  cellBehaviour?: CellBehaviour;
 }
 
 export interface FireRunResolution {
@@ -1151,7 +1157,11 @@ interface FrameTally {
  * horizon. A thin wrapper over the same core as `simulateScheduledFireSpread`, with the
  * refusals /fire has always thrown.
  */
-export function simulateFireSpread(landscape: LandscapeGrid, scenario: FireScenario): FireRun {
+export function simulateFireSpread(
+  landscape: LandscapeGrid,
+  scenario: FireScenario,
+  extensions?: { reportCellBehaviour?: boolean } | null,
+): FireRun {
   const startedAt = performance.now();
   const solution = solveSpread(
     landscape,
@@ -1195,6 +1205,7 @@ export function simulateFireSpread(landscape: LandscapeGrid, scenario: FireScena
     resolution: solution.resolution,
     computeMilliseconds: performance.now() - startedAt,
     arrivalMinutes: Float32Array.from(solution.arrival),
+    ...(extensions?.reportCellBehaviour ? { cellBehaviour: solution.cells } : {}),
   };
 }
 

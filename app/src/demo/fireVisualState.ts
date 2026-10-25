@@ -37,28 +37,23 @@
  * Units: minutes are board minutes; flame feet; rates metres per minute; bearings degrees true.
  */
 
-import { CELL_CONTAINED_BIT, CELL_STATE } from "../fire/diorama/cellStates";
+import {
+  CREEPING_MAX_RATE_M_PER_MIN,
+  SMOULDER_WINDOW_MINUTES,
+  cellStateCounts,
+  classifyCellStates,
+  flamingCode,
+  flamingFireWords,
+} from "../fire/fireStates";
 import type { LandscapeGrid } from "../fire/landscape";
-import { compassPoint } from "../fire/spread";
-import { haulingBand } from "../response/containment";
 import { builtExtent } from "./attack";
 import { NO_FRONT, fireGeometry, type FrontBehaviour } from "./fireField";
 import type { AttackLine, Board, Fire, FireField } from "./model";
-import { frontFlameFeet, type SuppressionState } from "./suppression";
+import type { SuppressionState } from "./suppression";
 
-/**
- * ASSUMPTION (display only, no source): minutes a cell glows as smouldering embers after its
- * modelled fuel has finished flaming. The fuel models carry no 1000-h or duff load, so post-frontal
- * smouldering cannot be computed (demo/suppression.ts header, "Not modelled"); this window only
- * shows recently burned ground apart from long-cold ground.
- */
-export const SMOULDER_WINDOW_MINUTES = 60;
-/**
- * ASSUMPTION (label wording only): a fire with low flames (< 4 ft) whose head spreads at most this
- * fast is called "creeping" (NWCG Glossary: "burning with a low flame and spreading slowly"; the
- * glossary gives no number).
- */
-export const CREEPING_MAX_RATE_M_PER_MIN = 2;
+// The per-cell rules, constants and wording live in fire/fireStates.ts (pure, shared with Studio
+// and /fire); re-exported so existing imports keep working.
+export { CREEPING_MAX_RATE_M_PER_MIN, SMOULDER_WINDOW_MINUTES, flamingCode };
 
 export type FireStatusAt = "not_started" | "burning" | "contained" | "out";
 
@@ -163,11 +158,6 @@ function outWords(closedBy: string | null): string {
   return `Out · ${closedBy.replace(/_/g, " ")}`;
 }
 
-/** "~9 ft" (whole feet; under 1 ft "under 1 ft"). */
-function feet(ft: number): string {
-  return ft < 1 ? "under 1 ft" : `~${Math.round(ft)} ft`;
-}
-
 /** Label words for a fire at the minute, from model numbers only. */
 export function fireWords(v: Omit<FireVisual, "words">): string {
   if (v.status === "out") return outWords(v.closedBy);
@@ -175,41 +165,7 @@ export function fireWords(v: Omit<FireVisual, "words">): string {
   if (v.status === "not_started") return "Not started";
   if (v.flamingCells === 0) return v.smoulderingCells > 0 ? "Smouldering · no open flame" : "No open flame";
   // The head of the fire decides the words, as the board's tactics do (containment.ts).
-  const rate = v.front.headMetersPerMinute;
-  const flame = Math.max(0, v.front.headFlameFeet);
-  const crown = v.front.crowning || v.crownCells > 0;
-  let head: string;
-  if (crown) head = "Crown fire";
-  else {
-    const band = haulingBand(flame);
-    head =
-      band === "hand_tools"
-        ? rate <= CREEPING_MAX_RATE_M_PER_MIN
-          ? "Creeping"
-          : "Low flames"
-        : band === "machines"
-          ? "Burning moderately"
-          : band === "indirect_only"
-            ? "Burning hard"
-            : "Burning extremely hard";
-  }
-  const parts = [head, crown ? `surface flames ${feet(flame)}` : `flames ${feet(flame)}`];
-  if (rate > 0) parts.push(`${rate < 10 ? rate.toFixed(1) : Math.round(rate)} m/min toward ${compassPoint(v.front.headingDegrees)}`);
-  return parts.join(" · ");
-}
-
-/** Code of a flaming cell from its front flame and crown type (Hauling chart band). */
-function flamingCode(flameFeet: number, crownType: number): number {
-  if (crownType !== 0) return CELL_STATE.crown;
-  if (!(flameFeet >= 0)) return CELL_STATE.burning;
-  const band = haulingBand(flameFeet);
-  return band === "hand_tools"
-    ? CELL_STATE.flameLow
-    : band === "machines"
-      ? CELL_STATE.flameModerate
-      : band === "indirect_only"
-        ? CELL_STATE.flameHigh
-        : CELL_STATE.flameExtreme;
+  return flamingFireWords(v.front.headFlameFeet, v.front.headMetersPerMinute, v.front.crowning || v.crownCells > 0, v.front.headingDegrees);
 }
 
 /** Line state at `minute` (pure; see LineVisual). */
@@ -288,57 +244,26 @@ export function fireVisualFrom(input: FireVisualInput, minute: number): FireVisu
       containedFrom[s] = Math.min(fire.containedAt ?? Number.POSITIVE_INFINITY, fire.outAt ?? Number.POSITIVE_INFINITY);
     }
   }
-  const flaming = new Int32Array(sourceCount);
-  const crowning = new Int32Array(sourceCount);
-  const smouldering = new Int32Array(sourceCount);
-  const maxFlame = new Float64Array(sourceCount);
-
+  const counts = cellStateCounts(sourceCount);
   if (field && field.arrivalMinutes.length === n) {
-    const arrival = field.arrivalMinutes;
-    const owner = field.sourceIndexByCell;
-    const ext = st.extinguishedAt;
-    const D = st.burnMinutes;
-    const crown = field.behaviour.crownType;
-    for (let c = 0; c < n; c++) {
-      const a = arrival[c];
-      if (!(a <= minute)) continue;
-      const s = owner[c];
-      const contained = s >= 0 && containedFrom[s] <= minute;
-      const out = s >= 0 && outFrom[s] <= minute;
-      const bit = contained ? CELL_CONTAINED_BIT : 0;
-      if (ext[c] <= minute) {
-        codes[c] = CELL_STATE.extinguished | bit;
-        continue;
-      }
-      const flameEnd = a + (D[c] >= 0 ? D[c] : 0);
-      if (minute < flameEnd && !out) {
-        if (contained) {
-          // Contained: no flames drawn; the model's remaining burning cells show as residual heat.
-          codes[c] = CELL_STATE.smouldering | bit;
-          heat[c] = 255;
-          if (s >= 0) smouldering[s]++;
-          continue;
-        }
-        const flame = frontFlameFeet(field, grid, c);
-        const code = flamingCode(flame, crown[c]);
-        codes[c] = code;
-        if (s >= 0) {
-          flaming[s]++;
-          if (code === CELL_STATE.crown) crowning[s]++;
-          if (flame > maxFlame[s]) maxFlame[s] = flame;
-        }
-        continue;
-      }
-      const since = minute - flameEnd;
-      if (!out && since < SMOULDER_WINDOW_MINUTES) {
-        codes[c] = CELL_STATE.smouldering | bit;
-        heat[c] = Math.max(1, Math.round(255 * (1 - since / SMOULDER_WINDOW_MINUTES)));
-        if (s >= 0) smouldering[s]++;
-        continue;
-      }
-      codes[c] = CELL_STATE.burnedOut | bit;
-    }
+    classifyCellStates(
+      {
+        grid,
+        arrivalMinutes: field.arrivalMinutes,
+        burnMinutes: st.burnMinutes,
+        behaviour: field.behaviour,
+        extinguishedAt: st.extinguishedAt,
+        owner: field.sourceIndexByCell,
+        containedFrom,
+        outFrom,
+      },
+      minute,
+      codes,
+      heat,
+      counts,
+    );
   }
+  const { flaming, crowning, smouldering, maxFlameFeet: maxFlame } = counts;
 
   const fires = new Map<string, FireVisual>();
   for (const fire of input.fires) {

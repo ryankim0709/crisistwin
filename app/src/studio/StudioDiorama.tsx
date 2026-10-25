@@ -15,7 +15,7 @@ import type { DispatchArea } from "../dispatch/area";
 import { HomeStatus } from "../dispatch/engine";
 import type { FireExposure } from "../dispatch/fireExposure";
 import { DispatchOverlay, HOME_COLORS, cssColor } from "../dispatch/scene/DispatchOverlay";
-import { BurnedGlyph, FireEdgeGlyph, StationBadgeGlyph, WindGlyph } from "../diorama/ui/glyphs";
+import { StationBadgeGlyph, WindGlyph } from "../diorama/ui/glyphs";
 import { useMediaQuery } from "../diorama/ui/format";
 import { FireDioramaScene } from "../fire/diorama/FireDioramaScene";
 import type {
@@ -25,6 +25,8 @@ import type {
   ViewInsets,
 } from "../fire/diorama/types";
 import type { LandscapeGrid } from "../fire/landscape";
+import type { RunCellStates } from "../fire/fireStates";
+import { fireStateLegendItems } from "../fire/ui/fireStateLegend";
 import type { GeoPoint } from "../fire/spread";
 import { sceneryOf, type BoardStreetsState } from "../fire/useBoardStreets";
 import { Button, Legend, Panel, type LegendItem } from "../ui";
@@ -142,6 +144,14 @@ export interface StudioDioramaProps {
   /** Landscape of the latest result; null before the first run. */
   landscape: LandscapeGrid | null;
   run: DioramaRun | null;
+  /**
+   * The run's legible fire states (fire/fireStates.ts createRunCellStates) and the landscape they
+   * were built on; drawn only while that landscape is the one shown. Null: the arrival field alone.
+   */
+  fireStates?: RunCellStates | null;
+  fireStatesGrid?: LandscapeGrid | null;
+  /** What the fire-state legend rows explain: flame bands (the run has the solver's behaviour), and contained or put-out fires (firefighting on). */
+  fireStateLegend?: { flameBands: boolean; containment: boolean };
   ignitions: DioramaIgnition[];
   windFromDegrees: number;
   windSpeedMph: number;
@@ -191,6 +201,9 @@ export default function StudioDiorama(props: StudioDioramaProps) {
   const {
     landscape,
     run,
+    fireStates,
+    fireStatesGrid,
+    fireStateLegend,
     ignitions,
     windFromDegrees,
     windSpeedMph,
@@ -244,6 +257,11 @@ export default function StudioDiorama(props: StudioDioramaProps) {
     [streetArea, closures],
   );
   const reducedMotionRef = useRef(reducedMotion);
+  // The run's cell states, drawn once per whole minute of the playback clock (the clock itself
+  // changes every animation frame).
+  const cellStates = run && fireStates && fireStatesGrid && fireStatesGrid === landscape ? fireStates : null;
+  const cellStatesRef = useRef<RunCellStates | null>(null);
+  const cellMinuteRef = useRef(Number.NaN);
   const clickRef = useRef(onGroundClick);
   useEffect(() => {
     clickRef.current = onGroundClick;
@@ -285,6 +303,15 @@ export default function StudioDiorama(props: StudioDioramaProps) {
     const tick = () => {
       const time = timeRef.current;
       scene.setTime(time);
+      const states = cellStatesRef.current;
+      if (states) {
+        const minute = Math.floor(time);
+        if (minute !== cellMinuteRef.current) {
+          cellMinuteRef.current = minute;
+          const at = states.at(minute);
+          scene.setCellStates(at.codes, at.heat);
+        }
+      }
       lineOverlay.setMinute(time);
       crewOverlay.setMinute(time);
       if (player) {
@@ -361,6 +388,19 @@ export default function StudioDiorama(props: StudioDioramaProps) {
   useEffect(() => {
     scene?.setRun(run);
   }, [scene, run]);
+  useEffect(() => {
+    cellStatesRef.current = cellStates;
+    cellMinuteRef.current = Number.NaN;
+    if (!scene) return;
+    if (!cellStates) {
+      scene.setCellStates(null);
+      return;
+    }
+    const minute = Math.floor(timeRef.current);
+    cellMinuteRef.current = minute;
+    const at = cellStates.at(minute);
+    scene.setCellStates(at.codes, at.heat);
+  }, [scene, cellStates, timeRef]);
   useEffect(() => {
     scene?.setIgnitions(ignitions);
   }, [scene, ignitions]);
@@ -460,12 +500,11 @@ export default function StudioDiorama(props: StudioDioramaProps) {
                 <Legend
                   label="3D view legend items"
                   items={[
-                    {
-                      label: "Burning front (glows)",
-                      color: "var(--ct-fire)",
-                      glyph: <FireEdgeGlyph />,
-                    },
-                    { label: "Burned ground", color: "var(--ct-burned)", glyph: <BurnedGlyph /> },
+                    ...fireStateLegendItems({
+                      flameBands: fireStateLegend?.flameBands ?? false,
+                      containment: fireStateLegend?.containment ?? false,
+                      putOutCells: false,
+                    }),
                     { label: "Fire station", color: "#c8352a", glyph: <StationBadgeGlyph /> },
                     ...(streetArea
                       ? [

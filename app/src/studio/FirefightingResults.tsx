@@ -5,6 +5,7 @@
  */
 
 import { formatElapsed } from "../fire/spread";
+import { UNATTENDED_FIRE_WORDS } from "../fire/fireStates";
 import { Notice, SegmentedControl, Tag, type SegmentedOption } from "../ui";
 import { STRATEGY_LABELS, type FirefightingResult } from "./firefighting";
 import type { FireAttack } from "./initialAttack";
@@ -30,8 +31,13 @@ function change(value: number, base: number): string {
   return `${pct > 0 ? "+" : "−"}${Math.abs(pct).toFixed(0)}%`;
 }
 
-function attackLine(fire: FireAttack, name: string, holds: number): string {
+function attackLine(fire: FireAttack, name: string, holds: number, burnedOut: boolean): string {
   if (fire.ignitedMinute === null) return `${name}: reached by another fire before it started.`;
+  // No unit ever attacked it and, in the free run, nothing is flaming or smouldering at the
+  // horizon: it ended on its own, so do not say it is still burning.
+  if (fire.outMinute === null && !fire.attackable && burnedOut) {
+    return `${name}: ${UNATTENDED_FIRE_WORDS.burned_out} (simulated; about ${ha(fire.areaSquareMeters)} ha burned)${fire.reason ? `; ${fire.reason}` : ""}.`;
+  }
   if (fire.outMinute === null && fire.reason) {
     return `${name}: still burning at the horizon (about ${ha(fire.areaSquareMeters)} ha); ${fire.reason}.`;
   }
@@ -187,6 +193,8 @@ export interface FirefightingResultsProps {
   dispatchNote: string | null;
   /** When the crews cannot put the fire out and leave to help the evacuation, or null. */
   handoff: CrewHandoff | null;
+  /** Source ids of fires that no unit attacked and that, in the free run, have burned out by the horizon (nothing flaming or smouldering). */
+  burnedOutOnItsOwn?: ReadonlySet<string>;
 }
 
 export default function FirefightingResults({
@@ -198,6 +206,7 @@ export default function FirefightingResults({
   stale,
   shown,
   onShownChange,
+  burnedOutOnItsOwn,
 }: FirefightingResultsProps) {
   const { best, baseline, initialAttack } = result;
   const someWorse = result.candidates.some(
@@ -320,6 +329,7 @@ export default function FirefightingResults({
                   fire,
                   names[fire.sourceId] ?? fire.sourceId,
                   estimate.holdsFlameLengthFeet,
+                  burnedOutOnItsOwn?.has(fire.sourceId) ?? false,
                 )}
               </li>
             ))}
