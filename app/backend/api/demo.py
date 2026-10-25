@@ -264,6 +264,19 @@ order_resources) and idle_units (free units while the fire burns). observation.o
 so far: caught people and households with caught_breakdown (no_vehicle, no_order, \
 stayed_despite_order, ordered_too_late), homes_burned and area_burned_ha: the score you are judged on \
 (injured_people and injury_deaths too, when present: simulated injuries).
+- Prediction and evacuation balance (observation.predicted and observation.evac_balance, computed \
+by the simulator; never recompute them). predicted is the next-state forecast: per zone the fire's \
+edge and core ETA and burned % at +30/+60/+120 min; per road segment of the current and scheduled \
+orders the demand/capacity (vc) at those horizons, peak queue, fire_eta_min against clears_in_min \
+and a danger flag; per destination committed vehicles against capacity; and dangers lines. \
+evac_balance refines decision_aids.evacuation with the destination choice and the balancing of \
+roads and destinations: when it is present, for each entry whose action is order_now, schedule or \
+reschedule issue order_evacuation(zone_id, destination_id, start_minute) with ITS destination_id \
+and start_minute (start_minute null is fine for order_now); keep entries need nothing; a leaving \
+zone can only be redirected. Still never start a zone after decision_aids' latest_safe_start_minute. \
+When predicted.dangers, a segment with danger true or a destination over_capacity show a problem, \
+redirect a leaving zone or re-plan the schedule. Mention the balance briefly in reasons (peak_vc, \
+totals against all_now); the numbers are the simulator's, quote them, do not compute your own.
 
 Goals, in order:
 1. Life safety: no zone may be reached by fire with people home. Follow decision_aids.evacuation \

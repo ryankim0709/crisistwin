@@ -95,6 +95,8 @@ import { closedIds, closedRoadsObservation, closureKey } from "./roadClosures";
 import { simCommsObservation } from "./simComms";
 import { simClock } from "./format";
 import { EVAC_SCHEDULE_LABEL, evacuationSchedule, strategyAid, type ZoneEvacPlan } from "./decisionAids";
+import { predictedObservation } from "./predict";
+import { evacBalanceObservation } from "./evacBalance";
 import { runScore } from "./scoring";
 
 /** The fire's strategy options and its chosen strategy for the wire (demo/strategyOptions.ts; model output, rounded). */
@@ -728,6 +730,8 @@ export function buildObservation(
         ];
       }),
     },
+    predicted: predictedObservation(board, routes),
+    evac_balance: evacBalanceObservation(board, routes, plans),
     incident_picture: incidentPicture,
     closed_roads: closedRoadsObservation(board),
     sim_comms: simCommsObservation(board),

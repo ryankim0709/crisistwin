@@ -735,6 +735,48 @@ Model output the commander chooses from; Claude never computes these numbers.
   containment (a strategy and initial attack on every new fire, never idle units while a fire
   grows), and tells it to use `monitor.urgency`.
 
+### Next-state prediction and evacuation balance (`app/src/demo/predict.ts`, `app/src/demo/evacBalance.ts`; observation `predicted`, `evac_balance`)
+
+Simulated model output, never observed; Claude quotes it and never recomputes it. Types in
+`app/src/demo/contracts.ts` (`PredictedObservation`, `EvacBalanceObservation`).
+
+- **`predicted`** (horizons 30 / 60 / 120 min from now). `zones`: `edge_eta_min`, `core_eta_min`
+  (minutes) and `burned_pct` (percent of the zone's ground, one value per horizon). `segments` (of
+  the current and scheduled orders): `vc` (demand / capacity, veh/h over veh/h, per horizon),
+  `peak_vc`, `peak_queue_vehicles`, `queue_delay_min`, `fire_eta_min`, `clears_in_min` (until 90%
+  of the committed traffic has passed) and `danger` (fire before clearance). `destinations`:
+  `committed_vehicles` against `capacity_veh` and `over_capacity`. `dangers`: one line per problem.
+- **`evac_balance`**: per zone of `decision_aids.evacuation`, `action` (order_now / schedule /
+  reschedule / keep / leaving), `destination_id`, `start_minute` (absolute board minute), `peak_vc`,
+  `worst_segment`, `expected_caught_*`, `exposed_vehicles`, `fire_cuts_route`, `why`; `totals` of
+  the plan against `all_now` (every listed zone ordered now to decision_aids' destinations).
+- **Fire.** The solver's free-burn arrival field of the reported fires (line built so far in the
+  field, containment not assumed) gives each zone's edge / core ETA and burned share. A segment's
+  fire arrival samples its route line, split over the segments by length share.
+  `predictedFireRings(board, minutes[])` (minutes AHEAD of the board minute, e.g. `[30, 60, 120]`)
+  returns, per horizon, the closed `[lon, lat]` outer rings of the reported fires' predicted
+  footprint for the 3D overlay (largest first, at most 40 rings of 240 points).
+- **Traffic.** The board's exponential departure curve, static loading of segments by zone, and a
+  Lindley point queue per segment at `PREDICT_STEP_MIN` = 5-min steps over the solver's 360-min
+  lookahead (`PREDICT_WINDOW_MIN`), starting from the board's current queues. Moving time is free
+  flow (BPR adds at most 15% on the flow that passes, `traffic.ts`).
+- **Optimizer.** Picks a destination (one of the zone's route options) and a start minute jointly
+  across zones, minimising expected people caught at home + people on a segment when the fire
+  reaches it + destination overload + a small queue-time term. Greedy by latest safe start, then
+  local improvement passes; deterministic, target under 50 ms. A zone is never routed through a
+  segment the fire reaches before 90% of its traffic has passed, unless every option is cut
+  (`fire_cuts_route` true).
+- **Parameters.** Start offsets 0-240 min in 5-min steps (board rule, the schedule's
+  `EVAC_SCHEDULE_STEP_MIN` and `MAX_SCHEDULE_AHEAD_MINUTES`). `QUEUE_WEIGHT_PERSON_PER_VEH_MIN` =
+  1/600 (**ASSUMPTION**: 10 vehicle-hours of queueing weigh as one person at risk).
+  `FIRE_CUT_PENALTY` = 10000 person-equivalents per zone (**ASSUMPTION**: makes the fire-cut rule
+  effectively hard). Destination overload counted as persons at risk (**ASSUMPTION**). Clearance =
+  90% of complying vehicles past the segment (`EVAC_TARGET_DEPARTED_SHARE` in `decisionAids.ts`,
+  **ASSUMPTION**). `MAX_IMPROVE_PASSES` = 3.
+- The decide prompt (`app/backend/api/demo.py`) tells the commander to issue
+  `order_evacuation(zone_id, destination_id, start_minute)` with the plan's own destination and
+  start for order_now / schedule / reschedule entries, never after `latest_safe_start_minute`.
+
 ### Evaluation harness (`app/scripts/live-eval/`)
 
 `evaluate.ts` runs one scenario headless and prints the metrics. It loads the board as /live
