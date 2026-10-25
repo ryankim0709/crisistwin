@@ -225,6 +225,67 @@ operational evacuation instructions. See the
 [solver direction set decision](adr/0009-solver-direction-set.md) for the constants,
 their sources, and where they are least trustworthy.
 
+### Surface model: equations and reference check
+
+`app/src/fire/rothermel.ts` (and `sim/fire.py`'s `rothermel_fuel`, same equations) follow
+Rothermel (1972) with the Albini (1976) multi-class corrections as Andrews (2018,
+RMRS-GTR-371) gives them. Within each category (dead, live) the particle weights f_ij are
+surface-area shares; the category shares f_i weight the characteristic SAV and the heat sink.
+Reaction intensity is the **sum** of the dead and live terms,
+I_R = Γ' Σ_i w_n,i h η_M,i η_s, with no f_i factor. Net load w_n,i weights each particle by
+g_ij, the summed f_ij of its SAV subclass (≥1200, 192-1200, 96-192, 48-96, 16-48 1/ft;
+`NET_LOAD_SIZE_CLASS_MIN_SAV_PER_FOOT`), so a 1-h class and a cured-herb class of similar
+fineness count in full. Live moisture of extinction is Albini's 2.9 W' (1 − M_f,dead/M_x,dead)
+− 0.226, never below M_x,dead. Dynamic models move (1.2 − M_herb)/0.9 of the herb load
+(clamped 0-1) to a dead herb class at the 1-h moisture (Scott & Burgan 2005).
+
+Before `SPREAD_MODEL` 4.4.0 the TypeScript code multiplied each category's reaction term by
+f_i and weighted net load by f_ij. That roughly halved I_R, spread and intensity in every model
+with live fuel, and cut dynamic grass models (GR2, GS4) further. `sim/fire.py` before
+`rothermel-mtt` 0.2.0 had only the f_ij net-load error, so SH5, the Camp replay's fuel, was
+already right there and its calibrated parameters still stand.
+
+Reference: the BehavePlus engine (firelab/behave, `surfaceFuelbedIntermediates.cpp` and
+`surfaceFireReactionIntensity.cpp`, commit 7e3d7a4), compiled and run on Scott & Burgan
+parameters. Rows 1-6 use 6/7/8/60/90 % moisture, 5 mph midflame wind, flat ground. "Spot"
+is BehavePlus's spotting worked example (GS4, same moisture, 5 mph 20-ft wind at WAF 1.0, 30 %
+upslope). "Camp" is SH5 at 3/4/5/30/60 % and an 18 m/s 20-ft wind at WAF 0.55 (22.1 mph
+midflame). ROS is in ft/min, I_R in Btu/ft²/min and flame length in ft.
+
+| Case | Behave ROS / I_R / flame | TS before | TS 4.4.0 | Python before → 0.2.0 (ROS / I_R) |
+| --- | --- | --- | --- | --- |
+| GR2 | 38.26 / 1,149 / 4.57 | 17.15 / 515 / 2.19 | 38.25 / 1,149 / 4.57 | 32.54 / 978 → 38.25 / 1,149 |
+| GS4 | 32.71 / 15,618 / 14.86 | 11.92 / 5,694 / 5.87 | 32.69 / 15,614 / 14.86 | 21.44 / 10,239 → 32.70 / 15,616 |
+| SH5 | 63.01 / 5,142 / 13.62 | 30.96 / 2,526 / 7.08 | 63.02 / 5,141 / 13.62 | 63.01 / 5,142, unchanged |
+| TU5 | 10.19 / 8,178 / 7.37 | 5.25 / 4,210 / 4.00 | 10.19 / 8,179 / 7.37 | 10.19 / 8,178, unchanged |
+| TL3 (dead only) | 1.915 / 785 / 1.05 | 1.915 / 785 / 1.05 | 1.915 / 785 / 1.05 | 1.915 / 785, unchanged |
+| FM4 (Anderson) | 89.71 / 12,000 / 20.33 | 44.79 / 5,992 / 10.73 | 89.71 / 12,000 / 20.33 | 89.71 / 12,000, unchanged |
+| Spot (GS4, 30 % slope) | 37.41 / 15,618 / 15.81 | 13.64 / 5,694 / 6.25 | 37.40 / 15,614 / 15.81 | n/a |
+| Camp (SH5) | 568.3 / 6,144 / 40.6 | 280.3 / 3,030 / 21.2 | 568.3 / 6,143 / 40.6 | 568.3 / 6,144, unchanged |
+
+Residuals after the fix are under 0.05 %: the TypeScript table stores loads rounded to 4
+decimals in lb/ft², and Behave cures herb with 1.333 − 1.11 M instead of (1.2 − M)/0.9. With
+the corrected flame length, BehavePlus's spotting example reproduces end to end:
+`albiniSurfaceSpotDistanceMeters` gives 0.22000 mi against BehavePlus's 0.22005 mi (0.102 mi
+before). The Camp SH5 head rate is now 173 m/min in both codes, up from 85 m/min in the
+TypeScript one. One difference remains: `sim/fire.py` caps the wind coefficient at
+Rothermel's 0.9 I_R wind limit, while the TypeScript code and BehavePlus only report it. The
+cap does not bind for any fuel at the Camp inputs.
+
+Effect on a `/fire`-style run (synthetic flat 300 × 300 board at 30 m: GR2, then SH5, then TU5
+west to east, a road column and a pond; ignition in the GR2, wind from the west, default
+spotting and structure spread, 6 h):
+
+| Moisture, 20-ft wind | 4.3.0 burned area | 4.4.0 burned area |
+| --- | --- | --- |
+| Critical, 10 mph | 940 ha | 1,462 ha |
+| Critical, 20 mph | 882 ha | 1,251 ha |
+| Dry, 10 mph | 91 ha | 610 ha |
+| Dry, 20 mph | 281 ha | 745 ha |
+
+Fireline intensity in live-fuel models roughly doubles, so crown fire initiation, spotting
+reach and the `/live` board (SH5 everywhere) all respond. Nothing in them was retuned.
+
 ## Stochastic spread (opt-in, seeded)
 
 The solver (`app/src/fire/spread.ts`) can run as one realisation of a seeded random fire
@@ -280,7 +341,8 @@ The deterministic gap-crossing spotting (above) still runs alongside; stochastic
 the only mechanism that lands embers in continuous fuel ahead of the front.
 
 What was measured (synthetic 300 x 300 grid of GR2 / SH5 / TU5 with a road and a pond,
-20 mph, 6-hour /fire run, 229.8 ha deterministic; 20 seeds each):
+20 mph, 6-hour /fire run, 229.8 ha deterministic; 20 seeds each; `SPREAD_MODEL` 4.2.0,
+before the live-fuel fix, so absolute areas are now larger):
 
 | Configuration | Burned area, ha: min / median / max |
 | --- | --- |
@@ -298,11 +360,11 @@ up to about 12 minutes, so a one-minute gust direction persisted for the whole s
 was rejected as a lattice artifact, and the 10-minute step matches how long a solver step
 lasts.
 
-Not verified: BehavePlus's spotting worked example (GS4, 5 mph, 30 ft closed cover, 0.22005
-mi) needs a 15.8 ft flame; this solver's own GS4 surface run at those inputs gives 5.5 to 6.2
-ft, the live-fuel discrepancy of [integration-todo](integration-todo.md) section 4, so the
-example could not be reproduced end to end. The spotting formulas were checked term by term
-against `spot.cpp` instead. That discrepancy is unchanged here.
+BehavePlus's spotting worked example (GS4, 5 mph, 30 ft closed cover, 0.22005 mi) needs a
+15.8 ft flame. Since `SPREAD_MODEL` 4.4.0 this solver's GS4 surface run at those inputs gives
+15.807 ft and the flat-terrain distance comes out at 0.22000 mi (see
+[the reference check](#surface-model-equations-and-reference-check)). Before 4.4.0 the flame
+was 6.2 ft, from the live-fuel weighting error.
 
 Cost (507 x 507 grid, two fires, 6 hours, about 24,000 burned cells): 201 ms deterministic,
 243 ms all on with a cached field, 262 ms with a new seed (the rate field takes 30 ms and is
@@ -440,7 +502,8 @@ Under a strong wind it does nothing: at 25 mph on the synthetic grid the largest
 
 ## Validation: Eaton Fire, 7-8 January 2025
 
-Scratch run, not committed. Ignition 18:18 PST 7 Jan 2025 (02:18Z 8 Jan), CAL FIRE incident page
+Run before `SPREAD_MODEL` 4.4.0 (the live-fuel reaction intensity fix), so the burned areas below
+are low for the same inputs; not re-run. Scratch run, not committed. Ignition 18:18 PST 7 Jan 2025 (02:18Z 8 Jan), CAL FIRE incident page
 (`[34.203483, -118.069155]`, "Near Altadena Drive and Midwick Drive"); that point is at 1,210 m in
 TL6 broadleaf litter under 65% canopy, which looks high for the street address, so the task's
 approximate point (-118.084, 34.204; SH2, 882 m) was run as well. Landscape: `loadLandscape`

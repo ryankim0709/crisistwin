@@ -133,7 +133,9 @@ def burned_mask(arrival: list[float], t_s: float) -> bytearray:
 # cell's rate and half at the target's. Optional spotting is a simple seeded rule, below.
 
 ROTHERMEL_MODEL_ID = "rothermel-mtt"
-ROTHERMEL_MODEL_VERSION = "0.1.0"
+# 0.2.0: net fuel load weighted by size subclass g_ij (Andrews 2018), changes dynamic grass/grass-shrub models
+# (GS2 here); SH5, SH7, TU5 and TL8 are unchanged.
+ROTHERMEL_MODEL_VERSION = "0.2.0"
 
 _TONS_PER_ACRE_TO_LB_PER_FT2 = 2000 / 43560
 _FT_PER_MIN_TO_M_PER_MIN = 0.3048
@@ -144,6 +146,9 @@ _TOTAL_MINERAL = 0.0555
 _EFFECTIVE_MINERAL = 0.010
 _SAV_10H, _SAV_100H = 109.0, 30.0  # 1/ft, standard for all Scott & Burgan models
 MAX_LENGTH_TO_BREADTH_ANDERSON = 8.0  # cap on Anderson (1983) elongation, as in FARSITE practice
+# Lower SAV bounds (1/ft) of the subclasses that weight net fuel load (g_ij), largest first; below 16 the
+# weight is 0. Andrews (2018) RMRS-GTR-371; bounds as in Behave surfaceFuelbedIntermediates.cpp.
+NET_LOAD_SIZE_CLASS_MIN_SAV_PER_FT = (1200.0, 192.0, 96.0, 48.0, 16.0)
 
 
 @dataclass(frozen=True)
@@ -248,6 +253,19 @@ class RothermelParams:
         }
 
 
+def _size_class_weights(fractions_and_sav: list[tuple[float, float]]) -> list[float]:
+    """g_ij for net fuel load: each particle gets the summed area share f_ij of its SAV subclass."""
+    def subclass(sav: float) -> int | None:
+        return next((k for k, bound in enumerate(NET_LOAD_SIZE_CLASS_MIN_SAV_PER_FT) if sav >= bound), None)
+
+    summed = [0.0] * len(NET_LOAD_SIZE_CLASS_MIN_SAV_PER_FT)
+    classes = [subclass(s) for _, s in fractions_and_sav]
+    for k, (f, _) in zip(classes, fractions_and_sav):
+        if k is not None:
+            summed[k] += f
+    return [summed[k] if k is not None else 0.0 for k in classes]
+
+
 def rothermel_fuel(params: RothermelParams) -> dict:
     """Rothermel (1972) no-wind, no-slope spread rate and wind/slope coefficients for the fuel and moisture.
 
@@ -298,10 +316,14 @@ def rothermel_fuel(params: RothermelParams) -> dict:
     ir = 0.0
     heat_sink = 0.0
     for f_cat, cls, mx in categories:
-        net_load = sum(f * w for f, w, _, _ in cls) * (1 - _TOTAL_MINERAL)
+        # w_n,i = sum_j g_ij w_o,ij (1 - S_T): g_ij is the summed f_ij of the particle's SAV subclass
+        # (Andrews 2018, RMRS-GTR-371; Behave surfaceFuelbedIntermediates.cpp), not f_ij itself.
+        g = _size_class_weights([(f, s) for f, _, s, _ in cls])
+        net_load = sum(g_ij * w for g_ij, (_, w, _, _) in zip(g, cls)) * (1 - _TOTAL_MINERAL)
         moisture = sum(f * mo for f, _, _, mo in cls)
         rm = min(1.0, moisture / mx)
         eta_m = max(0.0, 1 - 2.59 * rm + 5.11 * rm ** 2 - 3.52 * rm ** 3)
+        # I_R = Gamma' sum_i w_n,i h eta_M,i eta_s (Rothermel 1972 eq. 27): category terms summed, not f_i-weighted.
         ir += gamma * net_load * fm.heat_btu_lb * eta_m * eta_s
         heat_sink += f_cat * sum(f * math.exp(-138 / s) * (250 + 1116 * mo) for f, _, s, mo in cls)
     heat_sink *= bulk_density

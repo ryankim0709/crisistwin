@@ -531,8 +531,11 @@ export const EXTINCT_RATE_FEET_PER_MINUTE = 1e-9;
 
 export const SPREAD_MODEL = {
   id: "rothermel-1972-mtt",
-  version: "4.3.0",
-  surfaceSpread: "Rothermel (1972), per Andrews RMRS-GTR-371 (2018)",
+  // 4.4.0: reaction intensity sums the dead and live terms (no f_i area-share weighting) and net
+  // load uses size-subclass weights g_ij; live-fuel models now match Behave (BehavePlus engine).
+  version: "4.4.0",
+  surfaceSpread:
+    "Rothermel (1972) with Albini (1976), per Andrews RMRS-GTR-371 (2018); checked against Behave (BehavePlus engine)",
   fuelModels: "Scott & Burgan (2005) 40 standard fire behavior fuel models",
   ellipse:
     "Anderson (1983) length-to-breadth; Alexander (1985) elliptical spread; Alexander (1985) / Canadian FBP System conifer length-to-breadth for actively crowning cells",

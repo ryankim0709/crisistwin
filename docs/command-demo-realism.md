@@ -149,8 +149,8 @@ not cars).
   its 25-fire cap. That is the model's answer, not a defect to tune away; a labelled
   escaped-fire handoff rule would be the next step for long 24/7 runs.
 - Congestion is not modelled. Carless households have no pickup model.
-- `fire/rothermel.ts` and `sim/fire.py` disagree on SH5 at the replay's inputs (85 against
-  173 m/min head, reaction intensity 3,030 against 6,144 Btu/ft²/min): the TypeScript code
-  weights each category's reaction term by its surface-area share, the Python code does not.
-  The two agree for dead-only fuels; which matches Andrews (2018) for live-fuel models needs
-  checking. The board uses the TypeScript model.
+- `fire/rothermel.ts` used to give SH5 half the replay's head rate (85 against 173 m/min) by
+  weighting each category's reaction term by its surface-area share. Since `SPREAD_MODEL`
+  4.4.0 both codes match Behave (173 m/min, 6,144 Btu/ft²/min), so board fires in SH5 now
+  spread about twice as fast and burn about twice as hot as the figures measured before it
+  ([fire-simulator.md](fire-simulator.md#surface-model-equations-and-reference-check)).
