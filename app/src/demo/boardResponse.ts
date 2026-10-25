@@ -65,7 +65,7 @@ import {
   TACTIC_LABEL,
   type Tactic,
 } from "../response/containment";
-import { OWN_AREA_RADIUS_M, type AirResponseKind, type Department, type FacilityContribution, type GroundResponseKind, type Tier, type UnitSeed, type AircraftSeed } from "../response/fleet";
+import { OWN_AREA_RADIUS_M, type AirResponseKind, type Department, type FacilityContribution, type GroundResponseKind, type Tier, type UnitSeed, type AircraftSeed, type EmsSeed } from "../response/fleet";
 import {
   MUTUAL_AID_ASSEMBLY_MINUTES,
   STATE_AIR_DISTANCE_KM,
@@ -267,6 +267,12 @@ export interface ResponseState {
   label: string;
   /** Every facility that fields a unit (on the board, mutual aid, air bases in range), for the map. */
   facilities: FacilityContribution[];
+  /**
+   * ALS ambulances at stations with a published roster (response/fleet.ts buildFleet `ems`;
+   * Berkeley FD Medic 1, 2, 3, 5 around Berkeley). Not fire units: the injury/rescue model
+   * (demo/injuries.ts) dispatches them. [] when no roster lists any.
+   */
+  ems: EmsSeed[];
 }
 
 /**
@@ -336,6 +342,7 @@ export function createResponseState(
     startEpochMs: Number.isFinite(parsed) ? parsed : Date.parse(DEFAULT_START_LOCAL_ISO),
     label,
     facilities: [],
+    ems: [],
   };
 }
 

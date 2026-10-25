@@ -514,8 +514,25 @@ clock, which sets aviation daylight), and the /live board has no fixed roster.
   the OpenStreetMap fire stations the layer does not list (`withOsmStations`: an OSM station within
   500 m of a layer facility is that facility, **ASSUMPTION** as `crewDispatch.ts`). The layer covers
   wildland protection, so city departments (San Francisco, Oakland) are often only in OSM. OSM
-  stations come from the drill package (/live) or the board's roads (`DispatchArea.stations`,
-  Studio). Without the layer, OSM stations alone. Neither path invents crew camps or air bases.
+  stations come from `GET /api/suppression/stations` on /live (the same stations every map and
+  the 3D board draw: every OSM station on the board, plus the nearest 40 off it as the mutual-aid
+  pool; the drill package's stations only when that endpoint has none) or the board's roads
+  (`DispatchArea.stations`, Studio). Without the layer, OSM stations alone. Neither path invents
+  crew camps or air bases.
+- **Local departments** (`response/departments.ts`): an OSM station whose name or operator tag
+  names a known department around Berkeley (Berkeley FD, Oakland FD, EBRPD, Albany, Piedmont,
+  Kensington, El Cerrito, Moraga-Orinda, Con Fire, Richmond, Alameda County FD, Alameda FD,
+  Emeryville, SFFD; three untagged OSM elements are aliased by id) joins that department, so
+  drawdown works on the whole department. Its units come from the department's published
+  per-station roster where one was found (Berkeley FD: berkeleyca.gov Fire Stations page;
+  Oakland FD: Wikipedia station table, secondary), else one Type 1 engine (**ASSUMPTION**, as a
+  layer local station). Career departments (BFD, OFD) turn out at the paid 80 s.
+- **Ambulances** (`Fleet.ems`, `board.response.ems`): ALS medic units from published rosters
+  only: Berkeley FD Medic 1, 2, 3 and 5 at Stations 1, 2, 3 and 5. Turnout 60 s (NFPA 1710
+  4.1.2.1.2 EMS turnout, as cited). Oakland and most of Alameda County are served by Falck under
+  the county exclusive operating area (Albany, Berkeley, Piedmont and Alameda fire departments
+  transport themselves), whose units are not station-based, so none are placed. They are not fire
+  units; the injury/rescue model dispatches them.
 - **Tiers**: facilities inside the board answer initial attack (closest resource). The rest of
   the list (the endpoint returns the nearest 40 stations and 10 camps) is the mutual-aid pool.
   Beyond that, orders go to the state system ("Escalation and resource ordering").
@@ -559,7 +576,10 @@ no source ties counts to staffing.
 | CAL FIRE unit | 1 Type 2 dozer at its first (nearest) station | ASSUMPTION |
 | Local, Schedule A or contract county station | 1 Type 1 engine | ASSUMPTION, as `livecore/apparatus.py` |
 | Federal station | 1 Type 3 engine | ASSUMPTION |
-| OSM station (CAL FIRE layer unavailable) | 1 Type 3 engine | ASSUMPTION, as `dispatch/stationApparatus.ts` |
+| OSM station, Berkeley FD | Its listed engines: 1 Type 1 engine each; Station 5 also its Type III (Type 3) engine; Medic 1/2/3/5 ambulances | City of Berkeley Fire Stations page and Fire Department page ("seven Type I fire engines, two aerial ladder trucks, four ALS ambulances"), fetched 2026-10-25 |
+| OSM station, Oakland FD | 1 engine each (Type 1, type not stated: ASSUMPTION); wildland units 306/307/323/324/325 as Type 3 engines (ASSUMPTION on type); Station 22 (airport) none | Wikipedia "Oakland Fire Department" station table (secondary; 25 engines, 7 trucks, 8 wildland) |
+| OSM station of another named department (`response/departments.ts`) | 1 Type 1 engine (EBRPD: 1 Type 3) | ASSUMPTION, no roster retrieved |
+| OSM station, department unknown | 1 Type 3 engine | ASSUMPTION, as `dispatch/stationApparatus.ts` |
 | Conservation camp or crew fire centre (CC, FCFFC) | 2 Type 1 crews | ASSUMPTION |
 | Air attack base (AAB) | 1 air attack + 2 S-2T | Derived: 12 air tactical and 22 airtankers at 13 bases (calfire_house_2019) |
 | Helitack base (HB) | 1 Type 2 helicopter | ASSUMPTION (10 staffed helicopters, 17 bases in the layer) |
