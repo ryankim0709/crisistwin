@@ -99,6 +99,30 @@ function weighted(particles: Particle[], values: number[], weights: number[]): n
 }
 
 /**
+ * Lower SAV bounds (1/ft) of the size subclasses used to weight net fuel load, largest first.
+ * Andrews (2018) RMRS-GTR-371 weights each category's net load by g_ij, the summed surface-area
+ * share f_ij of every particle in the same SAV subclass, rather than by f_ij alone (the change
+ * made for the BEHAVE system so that adding fine fuel cannot lower the reaction intensity).
+ * Bounds as in Behave `surfaceFuelbedIntermediates.cpp` (sumFractionOfTotalSurfaceAreaBySizeClass):
+ * >= 1200, 192-1200, 96-192, 48-96, 16-48; a particle below 16 1/ft gets weight 0.
+ */
+export const NET_LOAD_SIZE_CLASS_MIN_SAV_PER_FOOT = [1200, 192, 96, 48, 16] as const;
+
+function sizeClassOf(savPerFoot: number): number {
+  return NET_LOAD_SIZE_CLASS_MIN_SAV_PER_FOOT.findIndex((bound) => savPerFoot >= bound);
+}
+
+/** g_ij: each particle's weight is the summed f_ij of its SAV subclass within the category. */
+function sizeClassWeights(particles: Particle[], areaFractions: number[]): number[] {
+  const summed = NET_LOAD_SIZE_CLASS_MIN_SAV_PER_FOOT.map(() => 0);
+  const classes = particles.map((p) => sizeClassOf(p.sav));
+  classes.forEach((k, i) => {
+    if (k >= 0) summed[k] += areaFractions[i];
+  });
+  return classes.map((k) => (k >= 0 ? summed[k] : 0));
+}
+
+/**
  * Everything about a fuel bed that does not depend on wind or slope. Computing it once
  * per fuel model instead of once per grid cell is what makes a landscape run tractable.
  */
@@ -174,19 +198,20 @@ export function prepareFuelBed(fuel: FuelModel, moisture: FuelMoisture): FuelBed
   const sigma = categoryDead * savDead + categoryLive * savLive;
   if (sigma <= MIN_SAV) return INERT_FUEL_BED;
 
-  // Net (mineral-free) load carried into the reaction, by category.
+  // Net (mineral-free) load carried into the reaction, by category: w_n,i = sum_j g_ij w_o,ij
+  // (1 - S_T) (Rothermel 1972 eq. 24, size-subclass weighting g_ij per Andrews 2018).
   const netLoadDead =
     weighted(
       dead,
       dead.map((p) => p.load),
-      fDead,
+      sizeClassWeights(dead, fDead),
     ) *
     (1 - TOTAL_MINERAL_CONTENT);
   const netLoadLive =
     weighted(
       live,
       live.map((p) => p.load),
-      fLive,
+      sizeClassWeights(live, fLive),
     ) *
     (1 - TOTAL_MINERAL_CONTENT);
 
@@ -249,11 +274,15 @@ export function prepareFuelBed(fuel: FuelModel, moisture: FuelMoisture): FuelBed
   const dampingLive = liveArea > 0 ? dampingOf(liveMoisture, liveExtinction) : 0;
   const mineralDamping = Math.min(0.174 * Math.pow(EFFECTIVE_MINERAL_CONTENT, -0.19), 1);
 
+  // I_R = Gamma' * sum_i (w_n,i h_i eta_M,i eta_s,i) over the dead and live categories
+  // (Rothermel 1972 eq. 27 with Albini 1976; Andrews 2018). The category terms are summed, not
+  // weighted by the area shares f_i: f_i enters sigma, the heat sink and nothing else here.
+  // Behave `surfaceFireReactionIntensity.cpp` does the same.
   const reactionIntensity =
     reactionVelocity *
     fuel.heatContentBtuPerLb *
     mineralDamping *
-    (netLoadDead * dampingDead * categoryDead + netLoadLive * dampingLive * categoryLive);
+    (netLoadDead * dampingDead + netLoadLive * dampingLive);
 
   // Propagating flux ratio: the share of reaction heat that reaches unburned fuel.
   const propagatingFlux =
