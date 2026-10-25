@@ -25,14 +25,27 @@ access-only way joins it (needed to attach the access edge), so a public edge ca
 `turningNodes` and `boundaryNodes` are node indices (boundaryNodes: a way continues outside the
 box, so the node is not a dead end).
 
-Exits (since dispatch-area/5): real egress, not every road that crosses the box edge. Destinations
-are registered shelter facilities from FEMA's ESF#6 Shelter System (the former National Shelter
-System, public ArcGIS service), or OSM shelters/assembly points when FEMA gives nothing, within
-SHELTER_SEARCH_RADIUS_M of the box centre. An exit is a motorway/trunk/primary (then secondary)
-crossing of the box edge whose outward heading has a shelter beyond the box ahead of it; at most
-MAX_EGRESS, one per road and direction, each carrying the nearest such shelter as `destination`
-(straight-line distance: roads beyond the box are not routed). With no shelter data the old box-edge
-crossings are used, `kind: "map-edge"`, named "approximate exit (map edge)".
+Exits are SAFE AREAS (since dispatch-area/6): places people go, away from the fire, not the box
+edge. Candidates within SHELTER_SEARCH_RADIUS_M of the box centre come from three sources, merged
+(listings within SAFE_AREA_DEDUPE_M are one place; the better source wins): officially designated
+places curated with citations in dispatch_safe_areas.json (the City of Berkeley "Shelter Sites"
+layer; the City publishes no temporary evacuation point list), registered shelters from FEMA's
+ESF#6 Shelter System (the former National Shelter System, public ArcGIS service) and OSM
+emergency assembly points / evacuation centres / shelters. Every exit carries `destination` (name, kind, source, location, capacity) and a capacity
+in people: the source's figure (FEMA evacuation_capacity, OSM capacity=*, curated) or, without one,
+ASSUMED_CAPACITY_PEOPLE for its kind (labelled `capacityBasis: "assumption"`).
+- `kind: "safe-area"`: the place is inside the box; `node` is the nearest public road node
+  (`approachMeters` straight-line from it). At most MAX_INSIDE_SAFE_AREAS, official first.
+- `kind: "egress"`: the place is beyond the box; `node` is a motorway/trunk/primary (then
+  secondary) crossing of the box edge whose outward heading has the place ahead of it, as in
+  dispatch-area/5 (straight-line distance beyond the box: those roads are not routed). At most
+  MAX_EGRESS, one per road and direction. `destination.key` names the place, so two egress roads
+  leading to one shelter share its capacity.
+- `kind: "map-edge"`: when no egress toward a known place exists, deduplicated major-road crossings
+  of the box edge, "approximate exit (map edge)", capacity null (leaving the area). They stay a
+  last resort beside the safe areas so a board can still evacuate when the fire threatens them all.
+Which destinations are open for an incident (not reached by the forecast fire, capacity left) is
+decided board-side (app/src/demo/safeDestinations.ts), not here.
 
 Caching: in-process LRU, then MongoDB `dispatch_areas`, then a fresh build. The cache key
 is the builder version plus the bbox snapped outward to a 0.01 degree grid. MongoDB being
@@ -51,6 +64,7 @@ import urllib.request
 from collections import OrderedDict, defaultdict
 from datetime import UTC, datetime
 from http.client import HTTPException
+from pathlib import Path
 
 from bson import Binary
 from django.core.exceptions import ImproperlyConfigured
@@ -70,10 +84,11 @@ from .mongodb import get_database
 
 logger = logging.getLogger(__name__)
 
-BUILDER_VERSION = "dispatch-area/5"
+BUILDER_VERSION = "dispatch-area/6"
 COLLECTION = "dispatch_areas"
 SHELTER_COLLECTION = "dispatch_shelters"
-SHELTER_CACHE_VERSION = "shelters/1"
+SHELTER_CACHE_VERSION = "shelters/2"
+CURATED_SAFE_AREAS_PATH = Path(__file__).with_name("dispatch_safe_areas.json")
 MAX_STORED_BYTES = 15 * 1024 * 1024
 LRU_ENTRIES = 8
 CACHE_CONTROL = "public, max-age=86400"
@@ -144,6 +159,22 @@ EGRESS_CLASS_RANK = {"motorway": 0, "trunk": 1, "primary": 2, "secondary": 3}
 # 75 degrees of the road's outward heading (measured over up to EGRESS_LOOKAHEAD_M of the way).
 EGRESS_AHEAD_MAX_DEG = 75
 EGRESS_LOOKAHEAD_M = 3000
+# Safe areas inside the box (dispatch-area/6). Product choices, not sourced values: how many inside
+# destinations a dispatcher can hold in mind, and how close two listings must be to be one place.
+MAX_INSIDE_SAFE_AREAS = 24
+SAFE_AREA_DEDUPE_M = 300
+SAFE_AREA_SPREAD_CELL_M = 2500  # at most one inside place per cell of this size, so they spread out
+# Source preference when listings merge or the inside cap bites: official designation first.
+SAFE_AREA_SOURCE_RANK = {"official": 0, "fema-nss": 1, "osm": 2}
+# ASSUMPTION (no published per-site figure): people a place can take when its source gives no
+# capacity. Planning placeholders per kind, labelled `capacityBasis: "assumption"` on the wire.
+ASSUMED_CAPACITY_PEOPLE = {
+    "shelter": 300,
+    "evacuation centre": 500,
+    "temporary evacuation point": 1000,
+    "assembly point": 500,
+}
+ASSUMED_CAPACITY_DEFAULT_PEOPLE = 300
 FEMA_NSS_URL = "https://gis.fema.gov/arcgis/rest/services/NSS/FEMA_NSS/FeatureServer/5/query"
 FEMA_NSS_ATTRIBUTION = (
     "Shelters: FEMA ESF#6 Shelter System (formerly National Shelter System); FEMA, Mass Care, American Red Cross"
@@ -309,6 +340,8 @@ def _fetch_fema_shelters(lon: float, lat: float, radius_m: float) -> list[dict]:
             "location": [round(geom["x"], 6), round(geom["y"], 6)],
             "capacity": int(capacity) if isinstance(capacity, (int, float)) and capacity > 0 else None,
             "status": attrs.get("shelter_status_code"),
+            "kind": "shelter",
+            "sourceUrl": FEMA_NSS_URL.removesuffix("/query"),
         })
     return out
 
@@ -334,9 +367,12 @@ def _fetch_osm_shelters(lon: float, lat: float, radius_m: float) -> list[dict]:
             capacity = int(str(tags.get("capacity", "")).split(";")[0])
         except ValueError:
             capacity = None
-        kind = "assembly point" if tags.get("emergency") == "assembly_point" else "shelter"
+        kind = {"assembly_point": "assembly point", "evacuation_centre": "evacuation centre"}.get(
+            tags.get("emergency", ""), "shelter"
+        )
         out.append({
             "name": tags["name"], "source": "osm", "sourceId": f"{element['type']}/{element['id']}",
+            "sourceUrl": f"https://www.openstreetmap.org/{element['type']}/{element['id']}",
             "city": tags.get("addr:city", ""), "location": [round(e_lon, 6), round(e_lat, 6)],
             "capacity": capacity if capacity and capacity > 0 else None, "status": None, "kind": kind,
         })
@@ -344,7 +380,8 @@ def _fetch_osm_shelters(lon: float, lat: float, radius_m: float) -> list[dict]:
 
 
 def load_shelters(lon: float, lat: float, radius_m: float) -> tuple[list[dict], str | None]:
-    """Shelters near (lon, lat): FEMA first, OSM if FEMA fails or is empty. Cached in MongoDB."""
+    """FEMA shelters and OSM assembly points / evacuation centres near (lon, lat), both sources
+    (since shelters/2: OSM is no longer only a fallback). Cached in MongoDB when both answered."""
     key = f"{SHELTER_CACHE_VERSION}:{lon:.2f},{lat:.2f},{round(radius_m)}"
     try:
         doc = get_database()[SHELTER_COLLECTION].find_one({"_id": key})
@@ -352,28 +389,97 @@ def load_shelters(lon: float, lat: float, radius_m: float) -> tuple[list[dict], 
             return doc["shelters"], doc.get("source")
     except _MONGO_ERRORS:
         logger.warning("shelter cache read failed; fetching without it")
-    shelters: list[dict] = []
-    source = None
+    fema: list[dict] | None = None
+    osm: list[dict] | None = None
     try:
-        shelters, source = _fetch_fema_shelters(lon, lat, radius_m), "fema-nss"
+        fema = _fetch_fema_shelters(lon, lat, radius_m)
     except (OSError, ValueError, HTTPException) as exc:
         logger.warning("FEMA shelter service failed (%s)", type(exc).__name__)
-    if not shelters:
-        try:
-            shelters, source = _fetch_osm_shelters(lon, lat, radius_m), "osm"
-        except UpstreamUnavailable:
-            shelters, source = [], None
-        if not shelters:
-            return [], None  # nothing to cache: a later build may reach the services
     try:
-        get_database()[SHELTER_COLLECTION].replace_one(
-            {"_id": key},
-            {"_id": key, "source": source, "fetchedAt": datetime.now(UTC), "shelters": shelters},
-            upsert=True,
-        )
-    except _MONGO_ERRORS:
-        logger.warning("shelter cache write failed; continuing without it")
+        osm = _fetch_osm_shelters(lon, lat, radius_m)
+    except UpstreamUnavailable:
+        logger.warning("OSM safe-area query failed")
+    shelters = (fema or []) + (osm or [])
+    source = "+".join(name for name, got in (("fema-nss", fema), ("osm", osm)) if got) or None
+    if not shelters:
+        return [], None  # nothing to cache: a later build may reach the services
+    if fema is not None and osm is not None:  # cache only a complete answer
+        try:
+            get_database()[SHELTER_COLLECTION].replace_one(
+                {"_id": key},
+                {"_id": key, "source": source, "fetchedAt": datetime.now(UTC), "shelters": shelters},
+                upsert=True,
+            )
+        except _MONGO_ERRORS:
+            logger.warning("shelter cache write failed; continuing without it")
     return shelters, source
+
+
+def _curated_file() -> dict:
+    try:
+        with open(CURATED_SAFE_AREAS_PATH, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        logger.warning("curated safe areas unreadable; continuing without them")
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def curated_exclusions() -> frozenset[str]:
+    """`<source>:<sourceId>` of FEMA/OSM listings the curated file drops (e.g. a mislocated record
+    whose place the curated list already has), each with a stated reason in the file."""
+    return frozenset(
+        str(x["key"]) for x in _curated_file().get("excludeListings") or [] if isinstance(x, dict) and x.get("key")
+    )
+
+
+def load_curated_safe_areas() -> list[dict]:
+    """Officially designated places curated with citations (dispatch_safe_areas.json), e.g. the City
+    of Berkeley's shelter sites. Each keeps its source URL; capacity only when published."""
+    data = _curated_file()
+    sources = {s.get("id"): s for s in data.get("sources") or [] if isinstance(s, dict)}
+    out = []
+    for place in data.get("places") or []:
+        try:
+            lon, lat = float(place["lon"]), float(place["lat"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not place.get("name"):
+            continue
+        capacity = place.get("capacity")
+        src = sources.get(place.get("sourceId")) or {}
+        out.append({
+            "name": str(place["name"]).strip(), "source": "official", "sourceId": str(place.get("sourceId") or ""),
+            "sourceUrl": place.get("sourceRef") or src.get("url"), "publisher": src.get("publisher"),
+            "city": place.get("jurisdiction") or "", "location": [round(lon, 6), round(lat, 6)],
+            "capacity": int(capacity) if isinstance(capacity, (int, float)) and capacity > 0 else None,
+            "capacitySource": place.get("capacitySource"), "status": None,
+            "kind": str(place.get("kind") or "assembly point").replace("_", " "),
+        })
+    return out
+
+
+def _safe_area_capacity(place: dict) -> tuple[int, str]:
+    """People the place can take and the basis: the source's figure, else the per-kind ASSUMPTION."""
+    if isinstance(place.get("capacity"), int) and place["capacity"] > 0:
+        return place["capacity"], "source"
+    return ASSUMED_CAPACITY_PEOPLE.get(place.get("kind", ""), ASSUMED_CAPACITY_DEFAULT_PEOPLE), "assumption"
+
+
+def merge_safe_areas(places: list[dict]) -> list[dict]:
+    """One entry per place: listings within SAFE_AREA_DEDUPE_M merge, the better-ranked source wins
+    (official > FEMA > OSM) and a missing capacity is filled from the other listing."""
+    ranked = sorted(places, key=lambda p: (SAFE_AREA_SOURCE_RANK.get(p["source"], 9), p["name"]))
+    kept: list[dict] = []
+    for place in ranked:
+        loc = tuple(place["location"])
+        twin = next((k for k in kept if haversine_m(loc, tuple(k["location"])) < SAFE_AREA_DEDUPE_M), None)
+        if twin is None:
+            kept.append(dict(place))
+        elif twin.get("capacity") is None and place.get("capacity"):
+            twin["capacity"] = place["capacity"]
+            twin["capacitySource"] = f"{place['source']} listing of the same place"
+    return kept
 
 
 # --- Overpass ---------------------------------------------------------------------------
@@ -678,11 +784,90 @@ def build_area(box: Box) -> dict:
     turning_nodes = sorted({ref_to_node[r] for r in turning_refs if r in ref_to_node})
     boundary_nodes = sorted({ref_to_node[r] for r in boundary_refs if r in ref_to_node})
 
-    # Exits, preferred: major roads leaving the box toward a real shelter beyond it.
+    # Exits = safe areas (dispatch-area/6): places people go. Inside the box: the place itself,
+    # reached at its nearest public road node. Beyond it: the major road leaving toward it.
     half_diagonal = haversine_m((w, s), (e, n)) / 2
     shelter_radius = max(SHELTER_SEARCH_RADIUS_M, half_diagonal + 10_000)
     shelters, shelter_source = load_shelters(round(lon0, 2), round(lat0, 2), shelter_radius)
-    beyond = [sh for sh in shelters if not inside(*sh["location"])]
+    curated = [
+        p for p in load_curated_safe_areas() if haversine_m((lon0, lat0), tuple(p["location"])) <= shelter_radius
+    ]
+    dropped = curated_exclusions()
+    places = merge_safe_areas(curated + [p for p in shelters if f"{p['source']}:{p.get('sourceId', '')}" not in dropped])
+    for place in places:
+        place.setdefault("kind", "shelter")
+        place["key"] = f"{place['source']}:{place.get('sourceId') or place['name']}"
+    within = [p for p in places if inside(*p["location"])]
+    beyond = [p for p in places if not inside(*p["location"])]
+
+    def destination(place: dict, metres: float) -> dict:
+        capacity, basis = _safe_area_capacity(place)
+        if place.get("capacitySource"):
+            capacity_source = place["capacitySource"]
+        elif basis == "assumption":
+            capacity_source = f"ASSUMPTION: dispatch_area.ASSUMED_CAPACITY_PEOPLE[{place['kind']!r}]"
+        else:
+            capacity_source = {"fema-nss": "FEMA ESF#6 evacuation_capacity", "osm": "OSM capacity=*"}.get(
+                place["source"], place["source"]
+            )
+        return {
+            "key": place["key"], "name": place["name"], "kind": place["kind"], "source": place["source"],
+            "sourceId": place.get("sourceId", ""), "sourceUrl": place.get("sourceUrl"),
+            "city": place.get("city", ""), "location": place["location"], "capacity": capacity,
+            "capacityBasis": basis, "capacitySource": capacity_source,
+            "status": place.get("status"), "straightLineMeters": round(metres),
+        }
+
+    def place_label(place: dict) -> str:
+        kind = place["kind"]
+        return place["name"] if kind in place["name"].lower() else f"{place['name']} ({kind})"
+
+    node_road: dict[int, str] = {}
+    for ed in edges:
+        if not ed[11] and ed[7] >= 0:
+            node_road.setdefault(ed[0], names[ed[7]])
+            node_road.setdefault(ed[1], names[ed[7]])
+
+    def nearest_public_node(loc: tuple[float, float]) -> int:
+        x0, y0 = loc
+        best, best_d = 0, math.inf
+        for j in range(n_public):
+            dx = (nodes[j][0] - x0) * m_lon
+            dy = (nodes[j][1] - y0) * M_PER_DEG_LAT
+            d = dx * dx + dy * dy
+            if d < best_d:
+                best, best_d = j, d
+        return best
+
+    def preference(place: dict) -> tuple:
+        # Official designation first, then the largest published capacity, then name (stable).
+        return (SAFE_AREA_SOURCE_RANK.get(place["source"], 9), -(place.get("capacity") or 0), place["name"])
+
+    # Spread over the area: every officially designated place, plus the best other place per
+    # SAFE_AREA_SPREAD_CELL_M cell without one; then the most preferred, up to the cap.
+    def cell_of(place: dict) -> tuple[int, int]:
+        lon, lat = place["location"]
+        return int((lon - w) * m_lon // SAFE_AREA_SPREAD_CELL_M), int((lat - s) * M_PER_DEG_LAT // SAFE_AREA_SPREAD_CELL_M)
+
+    official = [p for p in within if p["source"] == "official"]
+    taken = {cell_of(p) for p in official}
+    by_cell: dict[tuple[int, int], dict] = {}
+    for place in within:
+        cell = cell_of(place)
+        if place["source"] == "official" or cell in taken:
+            continue
+        if cell not in by_cell or preference(place) < preference(by_cell[cell]):
+            by_cell[cell] = place
+    exits: list[dict] = []
+    for place in sorted([*official, *by_cell.values()], key=preference)[:MAX_INSIDE_SAFE_AREAS]:
+        loc = tuple(place["location"])
+        node = nearest_public_node(loc)
+        metres = haversine_m(loc, tuple(nodes[node]))
+        exits.append({
+            "node": node, "road": node_road.get(node, ""), "side": side_of_box(box, *nodes[node]),
+            "kind": "safe-area", "inside": True, "approachMeters": round(metres),
+            "label": place_label(place), "destination": destination(place, metres),
+        })
 
     def egress_options() -> list[dict]:
         options = []
@@ -724,27 +909,20 @@ def build_area(box: Box) -> dict:
                 found.append(opt)
         return found
 
-    exits: list[dict] = []
-    for opt in pick_egress(egress_options()):
-        shelter = opt["shelter"]
-        kind = shelter.get("kind", "shelter")
-        place = shelter["name"] if kind in shelter["name"].lower() else f"{shelter['name']} {kind}"
+    egress = pick_egress(egress_options())
+    for opt in egress:
         exits.append({
             "node": opt["node"], "road": opt["road"], "side": side_of_box(box, *opt["point"]),
-            "kind": "egress", "label": f"{opt['road']} {opt['heading']} → {place}",
-            "destination": {
-                "name": shelter["name"], "kind": kind, "source": shelter["source"],
-                "sourceId": shelter.get("sourceId", ""), "city": shelter.get("city", ""),
-                "location": shelter["location"], "capacity": shelter.get("capacity"),
-                "status": shelter.get("status"), "straightLineMeters": round(opt["metres"]),
-            },
+            "kind": "egress", "inside": False, "approachMeters": round(opt["metres"]),
+            "label": f"{opt['road']} {opt['heading']} → {place_label(opt['shelter'])}",
+            "destination": destination(opt["shelter"], opt["metres"]),
         })
 
     # Fallback: deduplicated boundary crossings of major roads (any road class as a last resort).
     def pick_exits(candidates: list[tuple], rank: dict[str, int]) -> list[dict]:
         found: list[dict] = []
         for ref, cls, label, *_ in sorted(candidates, key=lambda c: rank[c[1]]):
-            if ref not in ref_to_node:
+            if ref not in ref_to_node or len(found) >= MAX_EGRESS:
                 continue
             node = ref_to_node[ref]
             point = tuple(nodes[node])
@@ -752,24 +930,30 @@ def build_area(box: Box) -> dict:
                 continue
             side = side_of_box(box, *point)
             found.append({
-                "node": node, "road": label, "side": side, "kind": "map-edge",
+                "node": node, "road": label, "side": side, "kind": "map-edge", "inside": False,
                 "label": f"{label} ({side}) · approximate exit (map edge)",
             })
         return found
 
-    if not exits:
-        exits = pick_exits(
+    # Without an egress toward a known place, keep map-edge crossings as the last resort beside
+    # the safe areas: a board needs somewhere to send people when the fire threatens them all.
+    if not egress:
+        fallback = pick_exits(
             [c for c in exit_candidates if c[1] in EXIT_CLASSES],
             {c: i for i, c in enumerate(("motorway", "trunk", "primary", "secondary"))},
         )
-    if not exits:
-        exits = pick_exits(exit_candidates, {c: i for i, c in enumerate(ROAD_CLASSES)})
+        if not fallback:
+            fallback = pick_exits(exit_candidates, {c: i for i, c in enumerate(ROAD_CLASSES)})
+        exits.extend(fallback)
     if not exits:
         raise NoExits
-    exits.sort(key=lambda x: (x["side"], x["road"]))
+    kind_order = {"safe-area": 0, "egress": 1, "map-edge": 2}
+    exits.sort(key=lambda x: (kind_order[x["kind"]], x["side"], x["road"], x["label"]))
     for i, item in enumerate(exits, start=1):
         item["id"] = f"X{i:02d}"
         item["name"] = item.pop("label")
+        # People the destination takes; null for a map edge (leaving the area, no known place).
+        item["capacity"] = item["destination"]["capacity"] if "destination" in item else None
 
     # Places and fire stations.
     place_points: list[tuple[str, tuple[float, float]]] = []
@@ -878,10 +1062,19 @@ def build_area(box: Box) -> dict:
             "osm": {"timestamp": osm_timestamp, "attribution": ATTRIBUTION},
             "shelters": {
                 "source": shelter_source,
-                "attribution": FEMA_NSS_ATTRIBUTION if shelter_source == "fema-nss"
-                else ATTRIBUTION if shelter_source == "osm" else None,
+                "attribution": "; ".join(
+                    a for key, a in (("fema-nss", FEMA_NSS_ATTRIBUTION), ("osm", ATTRIBUTION)) if key in (shelter_source or "")
+                ) or None,
                 "searchRadiusMeters": round(shelter_radius),
                 "found": len(shelters),
+            },
+            "safeAreas": {
+                "curated": len(curated),
+                "curatedFile": CURATED_SAFE_AREAS_PATH.name,
+                "candidates": len(places),
+                "inside": sum(1 for x in exits if x["kind"] == "safe-area"),
+                "egress": sum(1 for x in exits if x["kind"] == "egress"),
+                "mapEdge": sum(1 for x in exits if x["kind"] == "map-edge"),
             },
         },
         "assumptions": {
@@ -893,15 +1086,17 @@ def build_area(box: Box) -> dict:
             "capacityPerLaneVph": {**CAPACITY_PER_LANE_VPH, "other": DEFAULT_CAPACITY_PER_LANE_VPH},
             "speedDefaultKph": SPEED_DEFAULT_KPH,
             "enginesPerStation": ENGINES_PER_STATION,
-            "notes": NOTES + (
-                [
-                    "Exits are major roads leaving the area toward a registered shelter "
-                    f"({'FEMA ESF#6 Shelter System' if shelter_source == 'fema-nss' else 'OpenStreetMap'}); "
-                    "the shelter is the nearest one ahead of the road beyond the area, by straight-line "
-                    "distance, not a routed trip. Listed facilities are not necessarily open for this incident.",
-                ]
-                if exits[0]["kind"] == "egress"
-                else ["No shelter data loaded: exits are approximate, where major roads cross the map edge."]
+            "assumedSafeAreaCapacityPeople": {**ASSUMED_CAPACITY_PEOPLE, "other": ASSUMED_CAPACITY_DEFAULT_PEOPLE},
+            "notes": NOTES + [
+                "Exits are safe areas: officially designated evacuation points, registered shelters (FEMA "
+                "ESF#6 Shelter System) and OpenStreetMap assembly points, inside the area (reached at the "
+                "nearest road node) or beyond it (reached by the major road leaving toward them, straight-line "
+                "beyond the area, not a routed trip). Listed facilities are not necessarily open for this "
+                "incident; a capacity without a published figure is an assumption per kind.",
+            ] + (
+                ["No egress toward a known place: approximate exits where major roads cross the map edge are kept "
+                 "as a last resort."]
+                if any(x["kind"] == "map-edge" for x in exits) else []
             ),
         },
         "classes": class_list,

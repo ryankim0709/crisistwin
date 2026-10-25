@@ -353,7 +353,9 @@ export class EvacuationPolicyRun {
         !!known?.fire &&
         !!fireKnowledge &&
         !!exit.destination &&
-        knownArrivalAt(fireKnowledge, known.fire, exit.destination.location) <= horizonMinutes;
+        (knownArrivalAt(fireKnowledge, known.fire, exit.destination.location) <= horizonMinutes ||
+          // A safe area inside the box (dispatch-area/6): its road node, the approach, must not burn either.
+          (exit.kind === "safe-area" && knownArrivalAt(fireKnowledge, known.fire, area.nodes[exit.node]) <= horizonMinutes));
       const [ex, ey] = lonLatToMercator(area.nodes[exit.node][0], area.nodes[exit.node][1]);
       const offFireDegrees = nearest
         ? bearingDifference(mercatorBearing(zx, zy, ex, ey), nearest.bearingDegrees)

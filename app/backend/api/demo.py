@@ -599,14 +599,20 @@ def route_segments(drill, routes: list) -> tuple[dict[str, dict], list[list[str]
     return table, per_route
 
 
-def zone_routes(drill, rings: list[list[list[float]]], blocked: frozenset[str] = frozenset()) -> tuple[list[dict], dict[str, dict]]:
+MAX_EXCLUDED_DESTINATIONS = 200
+"""``excluded_destination_ids`` cap per routes request (a board has a few dozen destinations)."""
+
+
+def zone_routes(drill, rings: list[list[list[float]]], blocked: frozenset[str] = frozenset(),
+                excluded: frozenset[str] = frozenset()) -> tuple[list[dict], dict[str, dict]]:
     """Every zone's best route around the fires plus distinct alternatives, best first, and the
     road segments they use (``route_segments``); never over a ``blocked`` segment id (the
-    controller's road closures, api.live.road_closures)."""
+    controller's road closures, api.live.road_closures) and never to an ``excluded`` destination
+    (closed by the board: fire forecast to reach it or full, app/src/demo/safeDestinations.ts)."""
     geometry = to_multipolygon({"type": "MultiPolygon", "coordinates": [[r] for r in rings]}) if rings else None
-    picks = best_routes(drill, blocked, geometry)
+    picks = best_routes(drill, blocked, geometry, full_destination_ids=excluded)
     chosen = {zid: r for zid, r in picks.items() if r is not None}
-    others = alternative_routes(drill, chosen, blocked, geometry) if chosen else {}
+    others = alternative_routes(drill, chosen, blocked, geometry, full_destination_ids=excluded) if chosen else {}
     dests = {d.id: d for d in drill.destinations}
     rank = {"clear": 0, "near_fire": 1, "through_fire": 2}
     picked: list[tuple[str, list]] = []
@@ -653,6 +659,11 @@ def demo_routes(request):
     rings = parse_fire_rings(data)
     if isinstance(rings, str):
         return _error(400, "invalid_request", rings)
+    excluded = data.get("excluded_destination_ids", []) if isinstance(data, dict) else []
+    if (not isinstance(excluded, list) or len(excluded) > MAX_EXCLUDED_DESTINATIONS
+            or not all(isinstance(x, str) and 0 < len(x) <= 120 for x in excluded)):
+        return _error(400, "invalid_request",
+                      f"excluded_destination_ids must be a list of at most {MAX_EXCLUDED_DESTINATIONS} ids.")
     incident = resolve_incident(request)
     if isinstance(incident, Response):
         return incident
@@ -661,11 +672,12 @@ def demo_routes(request):
     except ApiError as exc:
         return _error(exc.status, exc.code, exc.detail)
     closed, closures_ok = closed_segment_ids(incident)
-    zones, segments = zone_routes(index.drill, rings, closed)
+    zones, segments = zone_routes(index.drill, rings, closed, frozenset(excluded))
     return Response(
         {
             "zones": zones,
             "segments": segments,
+            "excluded_destination_ids": sorted(set(excluded)),
             "closed_segment_ids": sorted(closed),
             "closures_status": "ok" if closures_ok else "unavailable",
             "evidence_class": "simulated",

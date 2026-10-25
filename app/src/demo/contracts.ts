@@ -175,6 +175,8 @@ export interface RoutesResponse {
 
 export interface RoutesRequest {
   fires: LonLat[][];
+  /** Destinations closed for this incident (fire forecast to reach them, or full; demo/safeDestinations.ts): never routed to. */
+  excluded_destination_ids?: string[];
 }
 
 /** Road-access vehicle classes (docs/suppression-data.md R01-R12; studio/apparatus.ts AccessClass). */

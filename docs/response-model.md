@@ -615,6 +615,37 @@ R01-R12, avoiding fire at request time. Until a leg arrives the fallback is a st
   `crews[].blocked_by_fire`; the commander or a person can send it again (a new trip starts
   with no cuts). En-route units show `crews[].road_cuts`.
 
+## Evacuation destinations (safe areas)
+
+People evacuate to places away from the fire, not to the edge of the map (dispatch-area/6,
+details in [app/backend/README.md](../app/backend/README.md) "Dispatch area exits = safe areas").
+
+- **Where from.** `GET /api/dispatch/area` lists officially designated places (curated with
+  citations in `app/backend/api/dispatch_safe_areas.json`: the City of Berkeley "Shelter Sites"
+  layer, 13 sites; the City publishes no temporary evacuation point list), FEMA ESF#6 registered
+  shelters and OSM assembly points / evacuation centres. A place inside the board is a
+  `safe-area` exit at its nearest road node; a place beyond it is reached by an `egress` road
+  leaving toward it; `map-edge` crossings remain only as a last resort. For a Berkeley Hills box
+  (built 2026-10-25, -122.34..-122.12, 37.81..37.98) 24 inside places were kept, 13 of them the
+  City's flatland sites (Berkeley High, Live Oak, James Kenney, Willard, ...), plus 6 egress
+  roads (Hwy 24, I-80, Hwy 13, I-580, I-880, I-980): hill zones have flatland destinations
+  downhill to the west, and the board closes the ones the fire threatens.
+- **Capacity.** People, from the source (FEMA `evacuation_capacity`, OSM `capacity`, curated),
+  else ASSUMPTION per kind (`ASSUMED_CAPACITY_PEOPLE`: shelter 300, evacuation centre 500,
+  temporary evacuation point 1000, assembly point 500). The drill package converts it to
+  vehicles: / `PERSONS_PER_VEHICLE` 1.38 (ESTIMATE, docs/people-data.md) and, for shelters,
+  / `PUBLIC_SHELTER_SHARE` 0.054 (Wong et al. 2020 Table 10: share of evacuees who stay in a
+  public shelter; the rest go on to family, friends or hotels).
+- **Per incident** (`app/src/demo/safeDestinations.ts`, board-side, simulated): a destination
+  is closed while the board's fire solver forecasts fire at its road node or within 300 m of it
+  (`APPROACH_BUFFER_M` = routing's `FIRE_BUFFER_M`) within `FORECAST_MINUTES` (120), or while the
+  vehicles sent there reach its `capacity_veh`. Closed ids go with every `POST /api/demo/routes`
+  as `excluded_destination_ids`, so every route option the AI or a person sees is open. If every
+  destination would close, the ones the fire reaches last stay open (`kept_last_resort`).
+- **Product choices, not sourced:** at most 24 inside places (every official one, then the
+  largest per 2.5 km cell), 6 egress roads, 300 m merge distance between listings, 75° "ahead
+  of the road" for egress, 30 km search radius.
+
 ## Studio: one incident per fire
 
 The Studio firefighting run (the run /dispatch uses) plans every enabled ignition as its own

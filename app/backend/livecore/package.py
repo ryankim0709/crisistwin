@@ -76,6 +76,16 @@ MIN_ZONE_HALF_M = 60.0
 """A zone whose synthetic homes span fewer than three hull points becomes a square this half-size."""
 TIMEZONE = "America/Los_Angeles"
 
+# Destinations = the dispatch area's safe areas (dispatch-area/6), capacity people -> vehicles.
+PERSONS_PER_VEHICLE = 1.38
+"""ESTIMATE, as ``app/src/population/peopleSnapshot.ts``: docs/people-data.md "Behaviour evidence"
+(Camp household size 2.37 over 1.72 vehicles per household; Grajdura 2022, Wong et al. 2020)."""
+PUBLIC_SHELTER_SHARE = 0.054
+"""Share of evacuees who stay in a public shelter: Wong et al. 2020 Table 10 p. 37 (docs/people-data.md
+"Destination type"). A shelter's beds fill at this share of the people sent its way; the others go on
+to friends, family or hotels. Temporary evacuation points and assembly points hold everyone sent."""
+GATHERING_KINDS = frozenset({"temporary evacuation point", "assembly point"})
+
 M_PER_DEG_LAT = 111_195.08
 """Mean metres per degree of latitude (sphere R = 6,371,008.8 m), as ``geo.haversine_m``."""
 
@@ -483,6 +493,37 @@ def _check_area(area: Any) -> Mapping[str, Any]:
     return area
 
 
+def _destination(x: Mapping[str, Any], nodes: Sequence[Sequence[float]]) -> dict[str, Any]:
+    """A dispatch-area exit (a safe area since dispatch-area/6) -> a bundle destination.
+
+    ``coord`` is the exit's road node (routing snaps a destination by its coord); the place itself
+    is ``place``. Kind: a safe area inside the box is a ``shelter``, a road toward a place beyond the
+    box (or a map-edge crossing) an ``exit``. ``capacity_veh`` = people / PERSONS_PER_VEHICLE, and
+    for shelters / PUBLIC_SHELTER_SHARE (only that share stays); None without a capacity (map edge)."""
+    lon, lat = nodes[x["node"]]
+    dest = x.get("destination") if isinstance(x.get("destination"), Mapping) else None
+    people = x.get("capacity", dest.get("capacity") if dest else None)
+    capacity_veh = None
+    if isinstance(people, (int, float)) and people > 0:
+        share = 1.0 if dest and dest.get("kind") in GATHERING_KINDS else PUBLIC_SHELTER_SHARE
+        capacity_veh = max(1, int(people / share / PERSONS_PER_VEHICLE))
+    out: dict[str, Any] = {
+        "id": str(x["id"]), "name": str(x.get("name") or x["id"]),
+        "kind": "shelter" if x.get("kind") == "safe-area" else "exit",
+        "coord": [float(lon), float(lat)], "capacity_veh": capacity_veh, "node_id": f"n{x['node']}",
+        "evidence_class": "derived",
+    }
+    if dest:
+        out["place"] = {
+            "key": dest.get("key"), "name": dest.get("name"), "kind": dest.get("kind"),
+            "source": dest.get("source"), "source_url": dest.get("sourceUrl"),
+            "coord": [float(v) for v in dest.get("location") or (lon, lat)],
+            "capacity_people": people, "capacity_basis": dest.get("capacityBasis"),
+            "capacity_source": dest.get("capacitySource"), "inside": bool(x.get("inside")),
+        }
+    return out
+
+
 def _roads(area: Mapping[str, Any]) -> list[dict[str, Any]]:
     """v2 edge rows -> bundle directed edges. A two-way row becomes ``e{i}f`` and ``e{i}r``
     sharing ``segment_id`` ``s{i}``; node ids are ``n{index}``."""
@@ -604,14 +645,7 @@ def build_package(run_raw: Mapping[str, Any], area_raw: Any, box: AreaBox | None
             "geometry": _zone_geometry(z),
         })
 
-    destinations = []
-    for x in area["exits"]:
-        lon, lat = nodes[x["node"]]
-        destinations.append({
-            "id": str(x["id"]), "name": str(x.get("name") or x["id"]), "kind": "exit",
-            "coord": [float(lon), float(lat)], "capacity_veh": None, "node_id": f"n{x['node']}",
-            "evidence_class": "derived",
-        })
+    destinations = [_destination(x, nodes) for x in area["exits"]]
 
     stations = []
     for st in area["stations"]:
@@ -692,7 +726,7 @@ def build_package(run_raw: Mapping[str, Any], area_raw: Any, box: AreaBox | None
         "layer_status": {
             "roads": {"status": "present", "evidence_class": "derived", "reason": "OpenStreetMap, assumed capacity"},
             "zones": {"status": "fixture", "evidence_class": "fixture", "reason": "synthetic homes"},
-            "destinations": {"status": "present", "evidence_class": "derived", "reason": "road exits from the box"},
+            "destinations": {"status": "present", "evidence_class": "derived", "reason": "safe areas: shelters and evacuation points in the box, roads toward places beyond it"},
             "stations": {"status": "present", "evidence_class": "observed", "reason": "OSM fire stations"},
             "fire_perimeters": {**missing, "reason": "simulated scenario: no observed perimeters"},
             "fire_simulated": {"status": "present", "evidence_class": "simulated", "reason": None},
@@ -754,6 +788,9 @@ def package_summary(package: Mapping[str, Any]) -> dict[str, Any]:
         "clipped": meta["dispatch_area"]["clipped"],
         # The Studio region (prebuilt board id, e.g. "berkeley-hills-tilden") the run used, or None.
         "region_id": (meta.get("studio") or {}).get("region_id"),
+        # Dispatch-area builder of the roads and destinations ("dispatch-area/6": safe areas); a
+        # client reusing a stored package skips one built before that (old box-edge exits).
+        "dispatch_builder": (meta.get("dispatch_area") or {}).get("builder"),
     }
 
 
