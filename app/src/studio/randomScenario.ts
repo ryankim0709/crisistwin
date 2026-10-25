@@ -27,6 +27,11 @@ export interface RandomScenarioInput {
   area: DispatchArea | null;
   base: StudioScenario;
   placement: IgnitionPlacement;
+  /**
+   * Road vertices over the whole board (every streets tile), for "Away from roads". `area` is
+   * only the centre tile on a large board; absent: `area.nodes`.
+   */
+  roadNodes?: readonly (readonly [number, number])[] | null;
 }
 
 export interface RandomScenarioResult {
@@ -39,12 +44,13 @@ export interface RandomScenarioResult {
 /** Builds the scenario, or null when the board has no ground that can burn. */
 export async function buildRandomScenario(input: RandomScenarioInput): Promise<RandomScenarioResult | null> {
   const { seed, region, grid, area, base, placement } = input;
+  const roadNodes = input.roadNodes && input.roadNodes.length > 0 ? input.roadNodes : (area?.nodes ?? null);
   const draw = await drawRandomScenario({
     seed,
     regionId: region.id,
     regionName: region.name,
     grid,
-    roadNodes: area?.nodes ?? null,
+    roadNodes,
     placement,
     horizonMinutes: base.settings.horizonMinutes,
   });

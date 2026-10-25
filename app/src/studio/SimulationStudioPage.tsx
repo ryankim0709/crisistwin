@@ -725,6 +725,8 @@ export default function SimulationStudioPage({
       region: target,
       grid: regionGrid,
       area,
+      // Every streets tile's road vertices: `area` is only the centre tile of a large board.
+      roadNodes: streets.status === "ready" ? streets.scenery.edges.flatMap((edge) => edge.coords) : null,
       base: freshScenario(emptyScenario()),
       placement,
     }).then((built) => {
@@ -747,7 +749,7 @@ export default function SimulationStudioPage({
       showNotice("Random scenario built (simulated).");
       setPendingRun({ scenario: built.scenario, waited: false });
     });
-  }, [randomJob, regionId, regionGrid, streets.status, area, placement, applyScenario, showNotice, noteRandom, worldTab]);
+  }, [randomJob, regionId, regionGrid, streets, area, placement, applyScenario, showNotice, noteRandom, worldTab]);
 
   // Run once the first fire's crew bases are in (or after a short wait).
   useEffect(() => {

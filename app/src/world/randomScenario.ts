@@ -31,7 +31,7 @@ import {
   type Conditions,
   type RegionConditionsPresets,
 } from "./conditions";
-import type { LonLat, WorldWeather, WorldWriter } from "./contracts";
+import type { WorldWeather, WorldWriter } from "./contracts";
 
 const MERCATOR_HALF = 20037508.342789244;
 const HISTORICAL_YEARS = [2018, 2019, 2020, 2021, 2022, 2023, 2024];
@@ -98,13 +98,24 @@ interface Candidate {
 
 function ignitionCandidates(
   grid: LandscapeGrid,
-  roadNodes: readonly LonLat[] | null,
+  roadNodes: readonly (readonly [number, number])[] | null,
   rand: () => number,
 ): Candidate[] {
   const out: Candidate[] = [];
   const cells = grid.width * grid.height;
   const reach = Math.max(1, Math.round(200 / grid.groundCellSizeMeters));
   const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1], [1, -1], [-1, 1]];
+  // Road distance is known only inside the extent the road data covers (plus AWAY_METERS): a cell
+  // beyond it may sit next to a road that was not loaded, so its distance stays unknown (null)
+  // rather than "far" (the Studio once passed one road tile of a 2 x 2 board and called a fire
+  // 246 m from a road "12 km away").
+  let ext: [number, number, number, number] | null = null;
+  if (roadNodes && roadNodes.length > 0) {
+    ext = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const [lon, lat] of roadNodes) {
+      ext = [Math.min(ext[0], lon), Math.min(ext[1], lat), Math.max(ext[2], lon), Math.max(ext[3], lat)];
+    }
+  }
   for (let tries = 0; tries < 4000 && out.length < 400; tries++) {
     const cell = Math.floor(rand() * cells);
     const code = grid.fuelCodes[cell];
@@ -121,7 +132,13 @@ function ignitionCandidates(
     }
     const point = lonLatOfCell(grid, cell);
     let nearRoadMeters: number | null = null;
-    if (roadNodes && roadNodes.length > 0) {
+    const padLat = AWAY_METERS / 110_540;
+    const padLon = AWAY_METERS / (111_320 * Math.cos((point.latitude * Math.PI) / 180));
+    const inExtent =
+      ext !== null &&
+      point.longitude >= ext[0] - padLon && point.longitude <= ext[2] + padLon &&
+      point.latitude >= ext[1] - padLat && point.latitude <= ext[3] + padLat;
+    if (roadNodes && roadNodes.length > 0 && inExtent) {
       const mPerLon = 111_320 * Math.cos((point.latitude * Math.PI) / 180);
       let best = Infinity;
       for (const [lon, lat] of roadNodes) {
@@ -178,7 +195,7 @@ export interface RandomDrawInput {
   regionName: string;
   grid: LandscapeGrid;
   /** WGS84 road nodes on the board, for "Away from roads"; null or empty: placed anywhere. */
-  roadNodes: readonly LonLat[] | null;
+  roadNodes: readonly (readonly [number, number])[] | null;
   placement: IgnitionPlacement;
   /** Run length, minutes: how many weather hours to fetch. */
   horizonMinutes: number;
