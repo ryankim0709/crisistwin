@@ -57,23 +57,66 @@ Rules:
 - Evidence labels stay distinct: observed weather, derived (climatology), assumed (user
   sliders), simulated (model output).
 
+## Validation
+
+The server checks the whole merged world on every write and answers `400 {error: "invalid_world",
+detail}` naming the first bad field. Unknown keys are refused.
+
+- Numbers are finite (bodies with `NaN`/`Infinity` are refused). `region.center` and ignition `at`
+  are `[lon, lat]` in range. `region.radiusMeters` 1 000–60 000. `region.cellMeters` an integer
+  multiple of 30 from 30 to 300. `region.id` is an id (`[A-Za-z0-9][A-Za-z0-9._:-]{0,63}`), null
+  only for `kind: "custom"`.
+- `conditions.startUtc` is ISO-8601 with a zone (stored normalised to `YYYY-MM-DDTHH:MM:SSZ`),
+  1900–2100. `weather.percentile` 0–100 (required for `climatology_percentile`);
+  `windSpeedMph` 0–150 and `windFromDegrees` 0–360 (both required for `assumed`); `moisture.preset`
+  required for `preset`. Mode-specific fields may stay when the mode changes (switching back
+  restores them); `null` clears one.
+- `fire.ignitions`: at most 50, unique ids, `startMinute` 0–10 080. Seeds are integers 0–2³²−1.
+- `liveIncidentId` is an id or null. `updatedBy` is one of the writers above (default `api`).
+
+Default world (revision 0, `updatedAt`/`updatedBy` null, never stored): the catalogue region
+`berkeley-hills-tilden` (centre `[-122.23, 37.895]`, radius 6 000 m, 30 m cells), `startUtc`
+`2025-08-15T20:00:00Z`, `historical_replay` weather, `derived` moisture, no ignitions,
+`stochastic {enabled: false, seed: 1}`, `liveIncidentId` null, `seed` 1.
+
 ## API
 
 | Method | Path | Body / answer |
 | --- | --- | --- |
 | `GET` | `/api/world/active` | the active world (a default world until one is written) |
-| `PATCH` | `/api/world/active` | `{baseRevision, updatedBy, changes: <partial world>}` → the new world; `409 {world}` when `baseRevision` is stale |
-| `GET` | `/api/world/scenarios` | `{scenarios: [{id, name, notes, createdAt, updatedBy, region, startUtc, tags}]}` newest first |
-| `POST` | `/api/world/scenarios` | `{name, notes?, tags?, world, extras?}` → `{id, ...}`; `extras` is per tab: `{fire?, simulation?, dispatch?, live?}` (e.g. the Studio `StudioScenario`, dispatch orders, the board seed and speed), opaque JSON ≤ 2 MB |
-| `GET` | `/api/world/scenarios/<id>` | the full saved scenario |
-| `POST` | `/api/world/scenarios/<id>/load` | makes its world the active world (new revision) and returns it |
-| `DELETE` | `/api/world/scenarios/<id>` | removes a saved scenario |
+| `PATCH` | `/api/world/active` | `{baseRevision, updatedBy, changes: <partial world>}` → the new world; nested objects merge, arrays (`fire.ignitions`, coordinates) and scalars replace, server fields in `changes` are ignored; `409 {error: "revision_conflict", detail, world}` when `baseRevision` is stale (the default world is revision 0) |
+| `GET` | `/api/world/scenarios` | `{scenarios: [{id, name, notes, tags, createdAt, updatedBy, region, startUtc, extrasKeys}]}` newest first, at most 200 |
+| `POST` | `/api/world/scenarios` | `{name, notes?, tags?, updatedBy?, world, extras?}` → `201` the full scenario; `name` ≤ 120 chars, `notes` ≤ 4 000, `tags` ≤ 20 × 40 chars; `world` is a complete world (validated as above); `extras` is per tab: `{fire?, simulation?, dispatch?, live?}` (e.g. the Studio `StudioScenario`, dispatch orders, the board seed and speed), opaque JSON ≤ 2 MB (`413` above) |
+| `GET` | `/api/world/scenarios/<id>` | the full saved scenario: the summary fields plus `world` and `extras` |
+| `POST` | `/api/world/scenarios/<id>/load` | `{updatedBy?, baseRevision?}` → `{world, scenario}`: its world becomes the active world as a new revision; with `baseRevision` a stale revision is a `409` as for `PATCH`, without it the load replaces whatever is active |
+| `DELETE` | `/api/world/scenarios/<id>` | `{deleted: id}`; `404` when unknown |
 
-When `LIVE_CONTROLLER_TOKEN` is set, writes need the controller token (as `/api/live/active`).
-Stored in MongoDB: `world_active` (one document) and `world_scenarios`.
+Scenario ids look like `scn_<22 hex>`. Errors are `{error, detail}`.
+
+Reads are open. When `LIVE_CONTROLLER_TOKEN` is set, writes need the controller token (as
+`/api/live/active`; the Vite dev proxy signs local `/api/world/` calls like `/api/live/`).
+Stored in MongoDB: `world_active` (one document, `_id: "active"`) and `world_scenarios` (extras
+kept as a JSON string, `extrasJson`). Implementation: `app/backend/api/world.py`.
 
 ## Frontend
 
-`app/src/world/`: `contracts.ts` (these types), `api.ts` (fetch helpers), `useWorld()` (polls
-`GET /api/world/active` every 2 s and listens on a `BroadcastChannel("crisistwin-world")` so
-tabs in the same browser update at once; returns `{world, update(changes), status}`).
+`app/src/world/`:
+
+- `contracts.ts`: these types (`World`, `WorldChanges`, `Scenario`, …) and `DEFAULT_WORLD`.
+- `api.ts`: fetch helpers (`fetchWorld`, `patchWorld`, `listScenarios`, `fetchScenario`,
+  `createScenario`, `loadScenario`, `deleteScenario`); errors are `WorldApiError` (`.conflict`,
+  `.world` on a 409). Writes send the `/live` console's controller token when one is stored.
+- `useWorld()`: one store per browser tab shared by every caller. Polls `GET /api/world/active`
+  every 2 s while mounted (paused when the page is hidden) and listens on
+  `BroadcastChannel("crisistwin-world")` so tabs in the same browser update at once. Returns
+  `{world, loaded, status, error, update(changes, updatedBy), refresh()}`; `status` is
+  `loading | ready | saving | error`. `update` applies the change locally at once, then PATCHes
+  it; writes are serialised. On a 409 the change is re-applied to the newer world only if that
+  revision left the same fields unchanged; otherwise the newer world wins, the change is
+  dropped and `error` says so.
+- `useScenarios(updatedBy)`: `{scenarios, status, error, refresh, save, load, get, remove}`;
+  `load` makes the scenario active, pushes the new world into `useWorld` and resolves to the
+  full scenario (with extras).
+- `<ScenarioMenu tab getExtras? onLoaded? align? />`: header button with a popover to save the
+  current world (name, notes, plus `getExtras()` under the tab's key) and to list, load or
+  delete scenarios.

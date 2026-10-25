@@ -1,0 +1,78 @@
+/* Shared-world scenario menu (ScenarioMenu.tsx). Layout only; primitives come from the kit. */
+.wld-menu {
+  position: relative;
+  display: inline-flex;
+}
+.wld-menu__panel {
+  position: absolute;
+  top: calc(100% + var(--ct-space-2));
+  right: 0;
+  z-index: var(--ct-z-popover);
+  width: min(380px, calc(100vw - 2 * var(--ct-space-4)));
+  max-height: min(70vh, 560px);
+  overflow-y: auto;
+  box-shadow: var(--ct-shadow-lg);
+  color: var(--ct-ink);
+  text-align: left;
+}
+.wld-menu__panel--start {
+  right: auto;
+  left: 0;
+}
+.wld-menu__form {
+  margin-bottom: var(--ct-space-3);
+  padding-bottom: var(--ct-space-3);
+  border-bottom: 1px solid var(--ct-border-subtle);
+}
+.wld-menu__form .ui-field {
+  margin-bottom: var(--ct-space-3);
+}
+.wld-menu__form textarea {
+  resize: vertical;
+}
+.wld-menu__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ct-space-2);
+}
+.wld-menu__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ct-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.wld-menu__item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ct-space-2);
+  padding: var(--ct-space-3);
+  border: 1px solid var(--ct-border-subtle);
+  border-radius: var(--ct-radius-md);
+  background: var(--ct-surface-raised);
+}
+.wld-menu__meta {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--ct-text-sm);
+  color: var(--ct-ink-muted);
+}
+.wld-menu__meta strong {
+  overflow-wrap: anywhere;
+  color: var(--ct-ink);
+  font-size: var(--ct-text-md);
+}
+.wld-menu__notes {
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+  color: var(--ct-ink-subtle);
+}
+.wld-menu__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ct-space-1);
+  margin-top: var(--ct-space-1);
+}

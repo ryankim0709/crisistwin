@@ -175,6 +175,22 @@ down the request is still proxied, just not stored. Errors: 400 `invalid_request
   `ls1-c-n122271-37873-r15000-m30` (centre in thousandths of a degree, `n` = negative;
   radius and cell size in metres) or `ls1-b-<minX>-<minY>-<maxX>-<maxY>` (box in 150 m units).
 
+### Shared world (`/api/world/…`)
+
+The one active world the workspace tabs read and control, and saved scenarios
+([contract](../../docs/shared-world.md), `api/world.py`). Reads are open; writes need the
+controller token only when `LIVE_CONTROLLER_TOKEN` is set.
+
+| Endpoint | Purpose |
+| -------- | ------- |
+| `GET /api/world/active` | The active world (the default world, revision 0, until one is written) |
+| `PATCH /api/world/active` | `{baseRevision, updatedBy, changes}`; objects merge, arrays replace; 409 `{world}` on a stale revision |
+| `GET /api/world/scenarios` | Saved scenarios, newest first (summaries) |
+| `POST /api/world/scenarios` | Save `{name, notes?, tags?, world, extras?}` (extras ≤ 2 MB) |
+| `GET /api/world/scenarios/<id>` | One saved scenario with its world and extras |
+| `POST /api/world/scenarios/<id>/load` | Make its world active (new revision); returns `{world, scenario}` |
+| `DELETE /api/world/scenarios/<id>` | Remove a saved scenario |
+
 ### Live broadcast and families
 
 `GET /api/live`, `POST /api/live/broadcast` (`api/live_broadcast.py`) and `/api/families…`

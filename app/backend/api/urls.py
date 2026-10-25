@@ -29,7 +29,9 @@ from .sim_state import latest as sim_latest
 from .sim_state import publish_run, tick_run
 from .suppression_bases import suppression_bases
 from .views import health
+from .world import load_scenario, world_active, world_scenario, world_scenarios
 
+SCENARIO_ID = r"(?P<scenario_id>scn_[0-9a-f]{8,40})"
 FAMILY_ID = r"(?P<family_id>[0-9a-f]{24})"
 MOBILE_COLLECTION = r"(?P<collection>[a-z][a-z0-9_]{0,47})"
 MOBILE_DOCUMENT_ID = r"(?P<document_id>[0-9a-f]{24})"
@@ -93,6 +95,10 @@ urlpatterns = [
     re_path(r"^geo/terrarium/(?P<z>\d{1,2})/(?P<x>\d{1,8})/(?P<y>\d{1,8})\.png$", terrarium_tile, name="geo-terrarium"),
     re_path(r"^geo/imagery/(?P<z>\d{1,2})/(?P<y>\d{1,8})/(?P<x>\d{1,8})$", imagery_tile, name="geo-imagery"),
     path("landscapes/cache", landscape_cache, name="landscape-cache"),
+    path("world/active", world_active, name="world-active"),
+    path("world/scenarios", world_scenarios, name="world-scenarios"),
+    re_path(rf"^world/scenarios/{SCENARIO_ID}$", world_scenario, name="world-scenario"),
+    re_path(rf"^world/scenarios/{SCENARIO_ID}/load$", load_scenario, name="world-scenario-load"),
     re_path(r"^landscapes/?$", landscape_list, name="landscape-list"),
     re_path(r"^landscapes/(?P<region_id>[^/]{1,64})/?$", landscape_package, name="landscape-package"),
 ]
