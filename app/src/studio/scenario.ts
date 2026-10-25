@@ -14,6 +14,8 @@ import { recordMatchesWind, type ScenarioWindRecord } from "../fire/scenarioWeat
 import { MAX_ROS_LOG_SIGMA } from "../fire/stochastic";
 import { spanProblem } from "./bounds";
 import {
+  DEFAULT_FIREFIGHTING,
+  FIRST_ALARM,
   MAX_RESOURCES_PER_KIND,
   RESPONSE_MINUTE_CHOICES,
   apparatusCounts,
@@ -64,6 +66,24 @@ export function emptyScenario(): StudioScenario {
       midflameAdjustment: DEFAULT_MIDFLAME_ADJUSTMENT,
       stepMinutes: DISPLAY_STEP_MINUTES,
       horizonMinutes: DEFAULT_HORIZON_MINUTES,
+    },
+  };
+}
+
+/**
+ * The scenario with firefighting on (the Studio's default): its own resource counts when it has
+ * any, else the first-alarm package (studio/firefighting.ts FIRST_ALARM, from the shared
+ * response model's run card), sent from real stations.
+ */
+export function withFirefightingOn(scenario: StudioScenario): StudioScenario {
+  const settings = scenario.firefighting ?? DEFAULT_FIREFIGHTING;
+  const empty = Object.values(apparatusCounts(settings)).every((count) => !count);
+  return {
+    ...scenario,
+    firefighting: {
+      ...settings,
+      enabled: true,
+      ...(empty ? { resources: { ...FIRST_ALARM } } : {}),
     },
   };
 }

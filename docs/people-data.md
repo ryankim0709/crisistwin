@@ -215,6 +215,18 @@ PDF - 5) and the McLennan et al. 2019 author preprint (manuscript pages).
 | Persons per vehicle | 1.38 derived (Camp household size 2.37 / 1.72 vehicles); NIST bounds 1.0 to 2.5, 2.0 "conservative" | Grajdura Table 1; Wong Table 10; NIST p. 155, p. xxvi | two samples joined; no survey measures it |
 | Camp outcome checks | 66 of 85 deaths not evacuating; 3 of 881 Paradise EA/R civilians refused to leave; at least 1,222 civilians in temporary refuge areas; 235 abandoned vehicles; 198 EA/R events (64 assistance requests, 38 pick-ups) | NIST pp. 218, 193, 155, 116-117, xxvii | outcomes to compare against, not inputs |
 
+### Simulation Studio
+
+The Studio's evacuation (`app/src/studio/householdBehavior.ts`, on by default as "Like real
+evacuations") draws two `grounded` values per synthetic home, seeded by the road area and home index:
+order compliance 0.875 (the rest stay home) and the departure delay lognormal (median 42.8 min, sigma
+1.246, cap 1,440 min) from the zone's order. The dispatch engine applies them
+(`DispatchEngine.setDepartureDelays`); without them it keeps its uniform 45 min spread. Shadow evacuation
+and wait-and-see are not drawn there yet. The values reach TypeScript through
+`app/src/studio/behaviorParams.generated.ts`; regenerate it after editing `sim/behavior_params.json` with
+`python3 -m tools.gen_behavior_ts` (`--check` reports drift). The Studio's people strip and map layer
+convert vehicles to people at 1.38 persons per vehicle (`app/src/studio/peopleSnapshot.ts`), an estimate.
+
 ### Gaps (assumption or nothing)
 
 - Direction of family pickup trips (toward the fire or away): no count. NIST TN 2252 p. 65 mentions parents

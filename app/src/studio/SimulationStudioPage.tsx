@@ -24,7 +24,9 @@ import { useMapFireline } from "./useMapFireline";
 import { useMapCrews } from "./useMapCrews";
 import { planCrewDispatch } from "./crewDispatch";
 import { crewHandoff, evacuationCrews } from "./crewHandoff";
-import { resourceList } from "./firefighting";
+import { DEFAULT_FIREFIGHTING, resourceList, startMsOf } from "./firefighting";
+import StudioPeople from "./StudioPeople";
+import { householdDepartureDelays, type HouseholdBehaviorMode } from "./householdBehavior";
 import { airBasesOf, useSuppressionBases } from "./suppressionBases";
 import type { RunDispatch } from "./useStudioRun";
 import { CREW_COLORS, FIRELINE_COLORS, firelineCss } from "./firelinePalette";
@@ -42,6 +44,7 @@ import {
 } from "./contracts";
 import { demoScenario } from "./demo";
 import {
+  DRAFT_DEFAULTS_VERSION,
   DRAFT_STORAGE_KEY,
   clearDraft,
   draftStatusText,
@@ -55,6 +58,7 @@ import {
   parseScenario,
   solverInputChanged,
   validateScenario,
+  withFirefightingOn,
 } from "./scenario";
 import { Button, LoadingState, Notice, Panel, SegmentedControl, type SegmentedOption } from "../ui";
 import { downloadJson, frameIndexAt } from "./playbackUtils";
@@ -156,9 +160,21 @@ export default function SimulationStudioPage({
     : DRAFT_STORAGE_KEY;
   const viewKey = storageNamespace ? `${VIEW_STORAGE_KEY}.${storageNamespace}` : VIEW_STORAGE_KEY;
   const [initialDraft] = useState(() => loadDraft(draftKey));
-  const [scenario, setScenario] = useState<StudioScenario>(
-    () => initialDraft?.scenario ?? emptyScenario(),
+  // The Studio's defaults (not /dispatch's, which reuses this page with an aside): firefighting
+  // on, the first-alarm package from real stations.
+  const studioDefaults = !Aside;
+  const freshScenario = useCallback(
+    (base: StudioScenario) => (studioDefaults ? withFirefightingOn(base) : base),
+    [studioDefaults],
   );
+  const [scenario, setScenario] = useState<StudioScenario>(() => {
+    if (!initialDraft) return freshScenario(emptyScenario());
+    // A draft saved before firefighting was on by default picks it up once; the autosave then
+    // records the new defaults version, so turning it off later sticks.
+    return initialDraft.defaultsVersion < DRAFT_DEFAULTS_VERSION
+      ? freshScenario(initialDraft.scenario)
+      : initialDraft.scenario;
+  });
   const [savedAt, setSavedAt] = useState<Date | null>(initialDraft?.savedAt ?? null);
   const [saveFailed, setSaveFailed] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -201,9 +217,12 @@ export default function SimulationStudioPage({
     return () => observer.disconnect();
   }, [panelCollapsed]);
 
-  // Evacuation and road closures (3D view only). Closures are edge indices of one road area and
-  // are dropped when the board's area changes; they never change the fire run.
-  const [evacuationOn, setEvacuationOn] = useState(false);
+  // Evacuation and road closures, shown on both views (closures are set in 3D). Closures are edge
+  // indices of one road area and are dropped when the board's area changes; they never change
+  // the fire run.
+  const [evacuationOn, setEvacuationOn] = useState(true);
+  // How households respond to the order (studio/householdBehavior.ts).
+  const [householdBehavior, setHouseholdBehavior] = useState<HouseholdBehaviorMode>("grounded");
   // Which evacuation plan the 3D view plays: the fastest-exit policy or the optimiser's best.
   const [playPlan, setPlayPlan] = useState<PlayPlan>("fastest");
   const [roadTool, setRoadTool] = useState(false);
@@ -413,9 +432,9 @@ export default function SimulationStudioPage({
   const handleClear = useCallback(() => {
     clearDraft(draftKey);
     setSavedAt(null);
-    applyScenario(emptyScenario());
+    applyScenario(freshScenario(emptyScenario()));
     setMode("select");
-  }, [applyScenario, draftKey]);
+  }, [applyScenario, draftKey, freshScenario]);
 
   const handleSelect = useCallback((id: string | null) => {
     setSelectedId(id);
@@ -445,11 +464,11 @@ export default function SimulationStudioPage({
   );
 
   const handleLoadDemo = useCallback(() => {
-    applyScenario(demoScenario());
+    applyScenario(freshScenario(demoScenario()));
     setMode("select");
     // The demo's fires sit on the default board.
     selectRegion(STUDIO_DEFAULT_REGION_ID);
-  }, [applyScenario, selectRegion]);
+  }, [applyScenario, selectRegion, freshScenario]);
 
   // The 3D view shows the run only while the board it was started on is still selected.
   const dioramaShowsRun = result !== null && result.boardId === regionId;
@@ -573,28 +592,34 @@ export default function SimulationStudioPage({
               shownHandoff && result.crewDispatch
                 ? evacuationCrews(area, result.crewDispatch, shownHandoff)
                 : undefined,
+            ...(studioDefaults && householdBehavior === "grounded"
+              ? { departureDelays: householdDepartureDelays(area) }
+              : {}),
           }
         : null,
-    [area, exposure, result, closedEdges, orderMinute, shownHandoff],
+    [area, exposure, result, closedEdges, orderMinute, shownHandoff, studioDefaults, householdBehavior],
   );
   const [publishOn, setPublishOn] = useState(false);
-  const showEvacuation = evacuationOn && view === "diorama" && !Aside;
+  // The evacuation plays on both views; the /dispatch page draws its own.
+  const showEvacuation = evacuationOn && !Aside;
+  // The summaries feed the 3D view's evacuation panel only.
+  const panelShown = showEvacuation && view === "diorama";
 
   const baselineSummary = useMemo(
     () =>
-      showEvacuation && evacuationInputs
+      panelShown && evacuationInputs
         ? simulateEvacuation({ ...evacuationInputs, closedEdges: new Set() })
         : null,
     // Not rerun when only the closures change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [showEvacuation, area, exposure, result, orderMinute, shownHandoff],
+    [panelShown, area, exposure, result, orderMinute, shownHandoff, householdBehavior],
   );
   const closuresSummary = useMemo(
     () =>
-      showEvacuation && evacuationInputs && closedEdges.size > 0
+      panelShown && evacuationInputs && closedEdges.size > 0
         ? simulateEvacuation(evacuationInputs)
         : null,
-    [showEvacuation, evacuationInputs, closedEdges],
+    [panelShown, evacuationInputs, closedEdges],
   );
   // Re-optimised whenever the closures, order minute, run or crews change (debounced).
   const optimizer = useEvacuationOptimizer(evacuationInputs, showEvacuation && dioramaShowsRun);
@@ -610,8 +635,8 @@ export default function SimulationStudioPage({
     [evacuationInputs, optimizedPlan],
   );
   const evacuationView = useMemo<StudioEvacuationView | null>(
-    () => (showEvacuation && area ? { area, exposure, closedEdges, inputs: playedInputs } : null),
-    [showEvacuation, area, exposure, closedEdges, playedInputs],
+    () => (panelShown && area ? { area, exposure, closedEdges, inputs: playedInputs } : null),
+    [panelShown, area, exposure, closedEdges, playedInputs],
   );
   const closedRoadList = useMemo(
     () => (area ? [...closedEdges].map((edge) => area.edges[edge]).filter(Boolean) : []),
@@ -884,6 +909,8 @@ export default function SimulationStudioPage({
                       publish={publishOn}
                       onPublish={setPublishOn}
                       publishStatus={publishStatus}
+                      behavior={householdBehavior}
+                      onBehavior={setHouseholdBehavior}
                     />
                   )
                 }
@@ -1176,6 +1203,18 @@ export default function SimulationStudioPage({
             <Notice className="studio-previous">
               Playing the previous run; run again to include your edits.
             </Notice>
+          )}
+          {showEvacuation && dioramaShowsRun && (
+            <StudioPeople
+              map={view === "map" ? studioMap : null}
+              inputs={playedInputs}
+              pending={!playedInputs && streets.status === "loading"}
+              clockRef={clockRef}
+              playing={playing}
+              speed={speed}
+              startMs={startMsOf(result.scenario.firefighting ?? DEFAULT_FIREFIGHTING)}
+              behavior={householdBehavior === "grounded" ? "grounded (not everyone obeys)" : "everyone leaves"}
+            />
           )}
           <PlaybackBar
             enabled={!locked && result !== null && frameMinutes.length > 0}

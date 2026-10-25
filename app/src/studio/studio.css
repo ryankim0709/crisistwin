@@ -358,6 +358,23 @@
   border-width: 0 0 1px;
   border-radius: 0;
 }
+/* The people strip (live/people PeopleSummary) as a dock row above the playback bar. */
+.studio-people.ppl-strip {
+  /* Above the stage's floating panels, so the key's popover is not hidden behind the legend. */
+  z-index: var(--ct-z-popover);
+  border-width: 0 0 1px;
+  border-radius: 0;
+  box-shadow: none;
+  background: var(--ct-surface);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  padding: var(--ct-space-1) var(--ct-space-4);
+}
+/* The key opens upward, over the stage, not over the playback controls. */
+.studio-people .ppl-key-pop {
+  top: auto;
+  bottom: calc(100% + var(--ct-space-2));
+}
 
 @media (max-width: 900px) {
   .studio-page-status {

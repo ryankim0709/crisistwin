@@ -48,13 +48,15 @@ interface Props {
   snapshot: PeopleSnapshot | null;
   error: LiveError | null;
   className?: string;
+  /** Mention that app users' phones are a separate layer (true on /live). */
+  phonesNote?: boolean;
 }
 
 /**
  * Plain-language summary of the simulated people picture (Still home / Driving out / In traffic /
  * Stuck / Out) with a key to the map marks. Reusable beside any map that hosts `attachPeopleLayer`.
  */
-export default function PeopleSummary({ snapshot, error, className }: Props) {
+export default function PeopleSummary({ snapshot, error, className, phonesNote = true }: Props) {
   const cls = `ppl-strip${className ? ` ${className}` : ""}`;
   if (!snapshot) {
     return (
@@ -140,8 +142,8 @@ export default function PeopleSummary({ snapshot, error, className }: Props) {
         </ul>
         <p>
           Estimates from the traffic simulation: {nf(t.population)} residents ({snapshot.basis.population}), about{" "}
-          {snapshot.basis.persons_per_vehicle} per car; behaviour: {snapshot.basis.people_behavior}. App users' phones are the
-          separate dots.
+          {snapshot.basis.persons_per_vehicle} per car; behaviour: {snapshot.basis.people_behavior}.
+          {phonesNote ? " App users' phones are the separate dots." : null}
         </p>
         </div>
       </details>

@@ -41,7 +41,11 @@ const STALE_DIM = 0.4;
 const LEGEND_BAND_COUNT = 4;
 const MARKER_CLASS = "studio-marker";
 
-const SATELLITE_STYLE: MapOptions["style"] = AERIAL_STYLE;
+/** Aerial imagery plus the OpenFreeMap glyphs the people layer's labels need (as on /live). */
+const SATELLITE_STYLE: MapOptions["style"] = {
+  ...AERIAL_STYLE,
+  glyphs: "https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf",
+};
 
 const ARRIVAL_EXPRESSION = [
   "interpolate",
