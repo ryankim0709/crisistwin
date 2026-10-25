@@ -937,6 +937,10 @@ export interface OutcomesObservation {
   homes_reached_saved: number;
   homes_method: string;
   area_burned_ha: number;
+  /** Simulated injuries so far (demo/injuries.ts injuryScore): people injured (any status), people who died of an injury no unit reached, people still waiting or being treated. Optional on the wire. */
+  injured_people?: number;
+  injury_deaths?: number;
+  injured_open?: number;
 }
 
 /**
