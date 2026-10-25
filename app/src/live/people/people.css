@@ -63,7 +63,7 @@
 .ppl-note {
   color: var(--ct-ink);
   font-size: var(--ct-text-sm);
-  font-weight: 600;
+  font-weight: var(--ct-weight-semibold);
 }
 .ppl-stale {
   color: var(--ct-warning);
@@ -113,38 +113,38 @@
 /* On-map time readout and legend (created by attachPeopleLayer inside the map container). */
 .ppl-readout {
   position: absolute;
-  top: var(--ct-space-3, 12px);
+  top: var(--ct-space-3);
   left: 50%;
   transform: translateX(-50%);
   z-index: 2;
-  max-width: calc(100% - 24px);
-  padding: 6px 14px;
+  max-width: calc(100% - 2 * var(--ct-space-3));
+  padding: var(--ct-space-2) var(--ct-space-4);
   border: 1px solid var(--ct-border-subtle, #d4d4d8);
-  border-radius: 999px;
+  border-radius: var(--ct-radius-pill);
   background: var(--ct-surface-glass-strong, rgba(255, 255, 255, 0.92));
   box-shadow: var(--ct-shadow-md, 0 2px 8px rgba(0, 0, 0, 0.2));
   color: var(--ct-ink, #0f1720);
-  font-size: 13px;
-  font-weight: 600;
+  font-size: var(--ct-text-md);
+  font-weight: var(--ct-weight-semibold);
   text-align: center;
   pointer-events: none;
 }
 .ppl-legend {
   position: absolute;
-  left: 12px;
-  bottom: 28px;
+  left: var(--ct-space-3);
+  bottom: var(--ct-space-7);
   z-index: 2;
   display: grid;
-  gap: 4px;
-  padding: 6px 10px;
+  gap: var(--ct-space-1);
+  padding: var(--ct-space-2) var(--ct-space-3);
   border: 1px solid var(--ct-border-subtle, #d4d4d8);
-  border-radius: 10px;
+  border-radius: var(--ct-radius-md);
   background: var(--ct-surface-glass-strong, rgba(255, 255, 255, 0.92));
   color: var(--ct-ink, #0f1720);
-  font-size: 11px;
+  font-size: var(--ct-text-xs);
   pointer-events: none;
 }
-.ppl-legend-row { display: flex; align-items: center; gap: 6px; }
+.ppl-legend-row { display: flex; align-items: center; gap: var(--ct-space-2); }
 .ppl-legend i { display: inline-block; }
 .ppl-lg-heat { width: 28px; height: 8px; border-radius: 4px; background: linear-gradient(90deg, #c7d2fe, #6366f1, #312e81); }
 .ppl-lg-line { width: 18px; height: 4px; border-radius: 2px; margin-left: 6px; }

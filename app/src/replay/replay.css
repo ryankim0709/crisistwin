@@ -99,7 +99,7 @@
   font-weight: var(--ct-weight-semibold);
 }
 .rp-state-msg {
-  margin: 10px 0;
+  margin: var(--ct-space-3) 0;
   line-height: 1.6;
   color: var(--ct-ink);
   display: flex;
@@ -108,13 +108,13 @@
 }
 .rp-state-msg code {
   display: block;
-  padding: 10px var(--ct-space-3);
+  padding: var(--ct-space-2) var(--ct-space-3);
   border-radius: var(--ct-radius-md);
   background: var(--ct-surface-sunken);
   border: 1px solid var(--rp-line);
   font-family: var(--rp-mono);
   font-size: var(--ct-text-sm);
-  color: var(--rp-ember-core);
+  color: var(--ct-ink);
   overflow-x: auto;
   white-space: nowrap;
 }

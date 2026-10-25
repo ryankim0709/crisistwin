@@ -929,7 +929,10 @@ export default function DispatchConsole(props: DispatchConsoleProps) {
           ))}
         </ol>
       )}
-      {!engine && startBlocker && <p className="dsp-note">{startBlocker}</p>}
+      {/* While a setup step is open, the checklist already says what is missing. */}
+      {!engine && startBlocker && steps.every((step) => step.state === "done") && (
+        <p className="dsp-note">{startBlocker}</p>
+      )}
       {!engine && !startBlocker && baseline && (
         <p className="dsp-callout">
           With nobody told to leave, the fire model reaches{" "}
@@ -940,16 +943,14 @@ export default function DispatchConsole(props: DispatchConsoleProps) {
 
       {engine && <Tiles totals={engine.totals()} baseline={baseline} />}
       {engine && (status === "running" || status === "thinking") && (
-        <p className="dsp-note">
-          {hhmm(engine.minute)} · the monitor checks the simulation every {checkInterval} min
-          {nextCheckMinute !== null &&
-            status === "running" &&
-            ` (next ${hhmm(nextCheckMinute)})`}{" "}
-          and calls the AI only when something changed: fire growth, a zone running out of time, a
-          wave finishing, an urgent alert, or 30 min without a review. The clock keeps running while
-          it decides: its orders take effect when its answer arrives.{" "}
+        <p
+          className="dsp-note"
+          title="The AI is called only when something changed: fire growth, a zone running out of time, a wave finishing, an urgent alert, or 30 min without a review. Orders take effect when its answer arrives."
+        >
+          {hhmm(engine.minute)} · checking every {checkInterval} min
+          {nextCheckMinute !== null && status === "running" && ` · next ${hhmm(nextCheckMinute)}`}
           {checks.length > 0 &&
-            `${checks.filter((c) => c.reasons.length === 0).length} of ${checks.length} checks so far were quiet.`}
+            ` · ${checks.filter((c) => c.reasons.length === 0).length} of ${checks.length} checks quiet`}
         </p>
       )}
       {engine && latest && area && <LatestOrders entry={latest} area={area} />}
@@ -996,8 +997,8 @@ export default function DispatchConsole(props: DispatchConsoleProps) {
       {props.footer}
 
       <p className="dsp-disclaimer">
-        Planning experiment. The AI picks among options the simulator computes; it does not change
-        the fire. Homes and zones are synthetic; roads and stations © OpenStreetMap contributors.
+        Planning experiment. Homes and zones are synthetic; roads and stations © OpenStreetMap
+        contributors.
       </p>
     </section>
   );

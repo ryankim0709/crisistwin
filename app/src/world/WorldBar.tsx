@@ -1,5 +1,5 @@
-// A tab's shared-world controls: the scenario menu, a plain sync status ("Synced with other tabs ·
-// changed by Studio 2 s ago") and the per-tab "Don't sync this tab" switch (docs/shared-world.md).
+// A tab's shared-world controls: the scenario menu, a short sync status ("Synced", with "changed by
+// Studio 2 s ago" in its tooltip) and the per-tab "Don't sync" switch (docs/shared-world.md).
 import { useEffect, useState } from "react";
 import { cx } from "../ui";
 import type { Scenario, WorldWriter } from "./contracts";
@@ -20,14 +20,20 @@ function ago(iso: string | null, now: number): string {
   return h < 48 ? `${h} h ago` : `${Math.round(h / 24)} d ago`;
 }
 
-function syncStatusText(sync: WorldSync, now: number, random: string | null): string {
-  if (!sync.enabled) return "Not synced: changes here stay in this tab";
-  if (!sync.loaded) return sync.status === "error" ? "Shared world unavailable" : "Connecting to the shared world…";
-  if (sync.status === "saving") return "Synced with other tabs · saving…";
-  if (sync.error) return sync.error;
+/** Short visible status, plus the longer detail for its tooltip. */
+function syncStatus(sync: WorldSync, now: number, random: string | null): { text: string; detail: string } {
+  if (!sync.enabled) return { text: "Not synced", detail: "Changes here stay in this tab" };
+  if (!sync.loaded) {
+    const text = sync.status === "error" ? "Shared world unavailable" : "Connecting…";
+    return { text, detail: text };
+  }
+  if (sync.status === "saving") return { text: "Saving…", detail: "Saving to the shared world" };
+  if (sync.error) return { text: sync.error, detail: sync.error };
   const { updatedBy, updatedAt, revision } = sync.world;
-  if (revision === 0 || !updatedBy) return "Synced with other tabs";
-  return `Synced with other tabs${random ? ` · ${random}` : ""} · changed by ${WRITER_LABEL[updatedBy]} ${ago(updatedAt, now)}`;
+  const parts = ["Synced with other tabs"];
+  if (random) parts.push(random);
+  if (revision > 0 && updatedBy) parts.push(`changed by ${WRITER_LABEL[updatedBy]} ${ago(updatedAt, now)}`);
+  return { text: "Synced", detail: parts.join(" · ") };
 }
 
 const utcDay = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeZone: "UTC" });
@@ -46,16 +52,22 @@ export function WorldSummary({ className }: { className?: string }) {
       ? "Shared world unavailable"
       : "Loading the shared world…"
     : [
-        `World: ${world.region.name}`,
+        world.region.name,
         Number.isFinite(day) ? `${utcDay.format(day)} UTC` : null,
-        world.liveIncidentId ? `drill ${world.liveIncidentId}` : null,
-        world.updatedBy ? `changed by ${WRITER_LABEL[world.updatedBy]} ${ago(world.updatedAt, now)}` : null,
       ]
         .filter(Boolean)
         .join(" · ");
+  const detail = [
+    world.liveIncidentId ? `Drill ${world.liveIncidentId}` : null,
+    world.updatedBy ? `changed by ${WRITER_LABEL[world.updatedBy]} ${ago(world.updatedAt, now)}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
     <span className={cx("wld-bar", className)}>
-      <span className="wld-bar__status">{text}</span>
+      <span className="wld-bar__status" title={detail || undefined}>
+        {text}
+      </span>
     </span>
   );
 }
@@ -91,6 +103,7 @@ export function WorldBar({ tab, sync, getExtras, onLoaded, placement, align, cla
       ? `Random scenario from ${WRITER_LABEL[note.by]} · seed ${note.seed}`
       : null;
   const failing = sync.enabled && (sync.status === "error" || !!sync.error);
+  const status = syncStatus(sync, now, random);
   return (
     <div className={cx("wld-bar", className)}>
       <ScenarioMenu
@@ -101,12 +114,12 @@ export function WorldBar({ tab, sync, getExtras, onLoaded, placement, align, cla
         align={align}
         syncEnabled={sync.enabled}
       />
-      <span className="wld-bar__status" data-state={failing ? "error" : undefined}>
-        {syncStatusText(sync, now, random)}
+      <span className="wld-bar__status" data-state={failing ? "error" : undefined} title={status.detail}>
+        {status.text}
       </span>
-      <label className="wld-bar__toggle">
+      <label className="wld-bar__toggle" title="Keep changes in this tab only">
         <input type="checkbox" checked={!sync.enabled} onChange={(e) => sync.setEnabled(!e.target.checked)} />
-        Don&rsquo;t sync this tab
+        Don&rsquo;t sync
       </label>
     </div>
   );

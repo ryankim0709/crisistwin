@@ -532,7 +532,7 @@ export default function StudioDispatch({
         ? `${horizonMinutes / 60} h of simulated spread from ${ignitions.length} fire${ignitions.length === 1 ? "" : "s"}`
         : result && stale
           ? "The scenario changed since the last run. Run it again to dispatch it."
-          : "Place fires (or load the demo) in the panel, then run the simulation.",
+          : "Place fires, then run the simulation.",
       state: current ? "done" : "active",
     },
     {
@@ -543,7 +543,7 @@ export default function StudioDispatch({
           ? areaState.message
           : current
             ? "Building the evacuation network from OpenStreetMap…"
-            : "Built from OpenStreetMap around the fire.",
+            : "From OpenStreetMap, once the fire has run.",
       state: area
         ? "done"
         : areaState.status === "error"

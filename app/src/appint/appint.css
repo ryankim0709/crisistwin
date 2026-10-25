@@ -1,22 +1,32 @@
 /* App integration tab (AppIntegrationPage.tsx). Prefix: aix-. Layout only; primitives come from the kit. */
 
-.aix-header-actions {
+/* Controls row under the page header, so the title keeps one line. */
+.aix-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ct-space-3) var(--ct-space-4);
+  margin: calc(-1 * var(--ct-space-4)) 0 var(--ct-space-4);
+}
+.aix-toolbar-group {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--ct-space-3);
+  min-width: 0;
 }
 .aix-clock {
-  padding: var(--ct-space-2) var(--ct-space-3);
+  padding: var(--ct-space-1) var(--ct-space-3);
   border-radius: var(--ct-radius-md);
   background: var(--ct-surface-muted);
   color: var(--ct-ink-muted);
-  font-size: var(--ct-text-md);
+  font-size: var(--ct-text-sm);
   font-variant-numeric: tabular-nums;
 }
 .aix-clock strong {
   color: var(--ct-ink);
-  font-size: var(--ct-text-lg);
+  font-size: var(--ct-text-base);
 }
 
 .aix-note,
@@ -45,11 +55,12 @@
   display: flex;
   flex-direction: column;
   gap: var(--ct-space-2);
-  margin-block: var(--ct-space-3);
+  margin-bottom: var(--ct-space-4);
 }
 .aix-stats .ui-metrics {
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: var(--ct-space-2);
+  margin-bottom: 0;
 }
 .aix-stats .ui-metric {
   gap: var(--ct-space-1);
@@ -59,12 +70,17 @@
   font-size: var(--ct-text-2xl);
 }
 
+/* The "phones joined" banner above the metrics. */
+.aix-banner.ui-notice {
+  margin: 0 0 var(--ct-space-3);
+}
+
 /* Three columns: list | map | OK + messages. Narrower: the right column drops below. */
 .aix-grid {
   display: grid;
   grid-template-columns: minmax(240px, 300px) minmax(0, 1fr) minmax(280px, 340px);
   gap: var(--ct-space-4);
-  align-items: start;
+  align-items: stretch;
 }
 @media (max-width: 1280px) {
   .aix-grid {
@@ -95,12 +111,21 @@
   gap: var(--ct-space-3);
   min-width: 0;
 }
+/* The kit heading carries its own bottom margin; the panels' flex gap already spaces it. */
+:is(.aix-grid, .aix-side, .aix-bottom) > .ui-panel > .ui-panel-heading {
+  margin-bottom: 0;
+}
+:is(.aix-people, .aix-behaviour) .ui-empty {
+  padding: var(--ct-space-4) var(--ct-space-3);
+}
 
 /* On our app */
 .aix-list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  flex: 0 1 auto;
+  gap: var(--ct-space-1);
+  min-height: 0;
   max-height: 560px;
   margin: 0;
   padding: 0;
@@ -128,22 +153,7 @@
 }
 .aix-glyph {
   flex: none;
-  margin-top: 3px;
-}
-.aix-key-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--ct-space-1) var(--ct-space-3);
-  margin: 0;
-  padding: 0;
-  color: var(--ct-ink-muted);
-  font-size: var(--ct-text-sm);
-  list-style: none;
-}
-.aix-key-list li {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--ct-space-1);
+  margin-top: var(--ct-space-1);
 }
 .aix-row-body {
   display: flex;
@@ -164,7 +174,7 @@
   flex: none;
   flex-direction: column;
   align-items: flex-end;
-  gap: 2px;
+  gap: var(--ct-space-1);
 }
 
 /* Map */
@@ -184,21 +194,12 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--ct-space-1) var(--ct-space-4);
-  margin: 0;
-  padding: 0;
   color: var(--ct-ink-muted);
-  font-size: var(--ct-text-sm);
-  list-style: none;
-}
-.aix-legend li {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--ct-space-1);
 }
 .aix-key {
   display: inline-block;
-  width: 14px;
-  height: 14px;
+  width: var(--ct-space-3);
+  height: var(--ct-space-3);
   border-radius: 50%;
 }
 .aix-key--real {
@@ -225,7 +226,7 @@
   background: repeating-linear-gradient(135deg, var(--ct-fire) 0 2px, transparent 2px 5px);
 }
 .aix-key--closed {
-  width: 20px;
+  width: var(--ct-space-5);
   height: 0;
   border-radius: 0;
   border-top: 4px dashed var(--ct-closure);
@@ -246,7 +247,7 @@
   background: var(--ct-danger-soft);
 }
 .aix-card-title {
-  font-size: var(--ct-text-lg);
+  font-size: var(--ct-text-base);
 }
 .aix-card-line,
 .aix-card-detail {
@@ -263,6 +264,8 @@
 /* Messages */
 .aix-timeline {
   display: flex;
+  max-height: 320px;
+  overflow-y: auto;
   flex-direction: column;
   gap: var(--ct-space-1);
   margin: 0;
@@ -304,49 +307,12 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
-.aix-sees {
-  flex-direction: row !important;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  gap: var(--ct-space-6) !important;
-}
-.aix-sees-text {
-  display: flex;
-  flex: 1 1 220px;
-  flex-direction: column;
-  gap: var(--ct-space-2);
-  min-width: 0;
-}
-.aix-sees-text h2 {
-  margin: 0;
-  font-size: var(--ct-text-xl);
-}
-.aix-sees-text p {
-  margin: 0;
-}
 .aix-story {
   margin: 0;
   padding-left: var(--ct-space-5);
   color: var(--ct-ink-muted);
-  font-size: var(--ct-text-md);
+  font-size: var(--ct-text-sm);
 }
-/* Placeholder frame until the phone mirror lands (PhoneMirror.tsx). */
-.aix-phone {
-  flex: none;
-  width: 240px;
-  padding: 10px;
-  border-radius: 32px;
-  background: var(--ct-ink);
-}
-.aix-phone-screen {
-  display: flex;
-  flex-direction: column;
-  min-height: 420px;
-  overflow: hidden;
-  border-radius: 24px;
-  background: var(--ct-bg);
-}
-
 .aix-bars {
   display: flex;
   flex-direction: column;
@@ -357,7 +323,7 @@
 }
 .aix-bars li {
   display: grid;
-  grid-template-columns: minmax(150px, 180px) minmax(0, 1fr) 28px;
+  grid-template-columns: minmax(150px, 180px) minmax(0, 1fr) var(--ct-space-7);
   align-items: center;
   gap: var(--ct-space-3);
   font-size: var(--ct-text-md);
@@ -368,7 +334,7 @@
 }
 .aix-bar {
   display: block;
-  height: 10px;
+  height: var(--ct-space-2);
   overflow: hidden;
   border-radius: var(--ct-radius-pill);
   background: var(--ct-surface-muted);
@@ -382,7 +348,7 @@
 /* Older phones: collapsed under the list. */
 .aix-older summary {
   color: var(--ct-ink-muted);
-  font-size: var(--ct-text-md);
+  font-size: var(--ct-text-sm);
   cursor: pointer;
 }
 .aix-older[open] summary {

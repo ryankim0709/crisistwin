@@ -69,7 +69,7 @@ export default function WindStrip({
           Wind now <strong>{Math.round(now.windSpeedMph)} mph</strong> from {nowFrom}° {compassPoint(nowFrom)}
         </span>
         <span className="fr-wind-strip-range">
-          {Math.round(minMph)}–{Math.round(maxMph)} mph over the run · hourly weather input
+          {Math.round(minMph)}–{Math.round(maxMph)} mph over the run
         </span>
       </p>
     </div>

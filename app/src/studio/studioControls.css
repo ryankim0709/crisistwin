@@ -166,7 +166,19 @@
 .studio-field {
   display: flex;
   flex-direction: column;
-  gap: var(--ct-space-1);
+  gap: var(--ct-space-2);
+}
+/* Quick setup and random scenario controls: a column of fields. */
+.studio-random {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ct-space-3);
+}
+/* Bare labels match the kit's Field label. */
+.studio-field > label:not(.ui-check) {
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-sm);
+  font-weight: var(--ct-weight-semibold);
 }
 .studio-ignitions {
   display: flex;

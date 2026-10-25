@@ -15,7 +15,7 @@ import { weatherSeriesFromRecord, type ScenarioWindRecord } from "../fire/scenar
 import { weatherAtMinute, withMoistureFromSeries } from "../fire/weatherSeries";
 import { weatherSeriesFromConditions, type Conditions } from "../world/conditions";
 import type { FireSettings, IgnitionProblem } from "../fire/scheduledTypes";
-import { Button, EmptyState, Field, IconButton, Notice, Panel } from "../ui";
+import { Button, EmptyState, Field, IconButton, Notice, Panel, SegmentedControl } from "../ui";
 import {
   MAX_ENABLED_IGNITIONS,
   MAX_REPORT_MINUTE,
@@ -288,16 +288,15 @@ export default function ConfigPanel(props: ConfigPanelProps) {
       }
     >
       <div className="studio-panel-body">
-        <p className="studio-hint">User assumptions, not observed data or a forecast.</p>
-
-        <div className="studio-row" role="group" aria-label="Setup style">
-          <Button size="sm" variant={custom ? "secondary" : "primary"} aria-pressed={!custom} onClick={() => setCustom(false)}>
-            Quick setup
-          </Button>
-          <Button size="sm" variant={custom ? "primary" : "secondary"} aria-pressed={custom} onClick={() => setCustom(true)}>
-            Custom
-          </Button>
-        </div>
+        <SegmentedControl
+          label="Setup style"
+          options={[
+            { value: "quick", label: "Quick setup" },
+            { value: "custom", label: "Custom" },
+          ]}
+          value={custom ? "custom" : "quick"}
+          onChange={(value) => setCustom(value === "custom")}
+        />
 
         {!custom && (
           <>
