@@ -170,6 +170,8 @@ export interface StudioDioramaProps {
   startMs?: number;
   /** Minute each crew leaves the fire to help the evacuation (null = stays); empty = none. */
   crewLeaveMinutes?: readonly (number | null)[];
+  /** Minute each crew is released because its fire is out (null = stays); empty = none. */
+  crewReleaseMinutes?: readonly (number | null)[];
   /** Shown under the board control. */
   evacuationPanel?: ReactNode;
   /** The live scene once created, and null once disposed (for a page overlay such as dispatch). */
@@ -208,6 +210,7 @@ export default function StudioDiorama(props: StudioDioramaProps) {
     crews,
     startMs,
     crewLeaveMinutes,
+    crewReleaseMinutes,
   } = props;
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [scene, setScene] = useState<FireDioramaSceneApi | null>(null);
@@ -324,8 +327,8 @@ export default function StudioDiorama(props: StudioDioramaProps) {
     crewOverlay.setDispatch(crews);
   }, [crewOverlay, crews]);
   useEffect(() => {
-    crewOverlay.setLeaveMinutes(crewLeaveMinutes ?? NO_LEAVES);
-  }, [crewOverlay, crewLeaveMinutes]);
+    crewOverlay.setLeaveMinutes(crewLeaveMinutes ?? NO_LEAVES, crewReleaseMinutes ?? NO_LEAVES);
+  }, [crewOverlay, crewLeaveMinutes, crewReleaseMinutes]);
   useEffect(() => {
     lineOverlay.setView(fireline);
   }, [lineOverlay, fireline]);
