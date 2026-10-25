@@ -30,6 +30,7 @@ from .sim_state import homes as sim_homes
 from .sim_state import latest as sim_latest
 from .sim_state import publish_run, tick_run
 from .suppression_bases import suppression_bases
+from .suppression_stations import suppression_stations
 from .views import health
 from .world import load_scenario, world_active, world_scenario, world_scenarios
 
@@ -48,6 +49,7 @@ urlpatterns = [
     path("conditions", conditions, name="conditions"),
     path("conditions/presets", conditions_presets, name="conditions-presets"),
     path("suppression/bases", suppression_bases, name="suppression-bases"),
+    path("suppression/stations", suppression_stations, name="suppression-stations"),
     path("demo/routes", demo_routes, name="demo-routes"),
     path("demo/decide", demo_decide, name="demo-decide"),
     path("demo/crew_routes", demo_crew_routes, name="demo-crew-routes"),

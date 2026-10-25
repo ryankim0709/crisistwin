@@ -1,9 +1,8 @@
 /**
  * Fire stations on every 2D map, one look: a red-roofed firehouse pin with a white halo (an
  * icon, so shape and not only colour marks it), air bases as a square-roofed variant, and the
- * station name at closer zooms. Data is the CAL FIRE facilities layer, `GET /api/suppression/bases`
- * (studio/suppressionBases.ts), the same stations the response fleet is built from
- * (response/fleet.ts). Observed, current locations: the replay labels them "today's stations".
+ * station name at closer zooms. Data is `GET /api/suppression/stations`: the CAL FIRE facilities layer
+ * plus OpenStreetMap city and county stations (the fleet in response/fleet.ts uses the CAL FIRE part). Observed, current locations: the replay labels them "today's stations".
  *
  * Quiet by design: while loading, when the layer is unavailable or when nothing is near, no
  * layer is added and nothing is reported.
@@ -12,7 +11,7 @@
  */
 
 import type { GeoJSONSource, Map as MapLibreMap } from "maplibre-gl";
-import { STATION_TYPES, parseBases, type SuppressionBase } from "../studio/suppressionBases";
+import { STATION_TYPES, type SuppressionBase } from "../studio/suppressionBases";
 
 export interface MapStation {
   id: string;
@@ -27,7 +26,7 @@ export interface MapStation {
 /** Colours baked into MapLibre / three.js (kept here, not in CSS). */
 export const STATION_STYLE = { roof: "#c8352a", wall: "#fff8ef", halo: "#ffffff", ink: "#1f2a24" } as const;
 
-export const STATIONS_LEGEND = "Fire station (CAL FIRE facilities, current locations)";
+export const STATIONS_LEGEND = "Fire station (CAL FIRE and OpenStreetMap, current locations)";
 export const STATIONS_LAYER_LABEL = "Fire stations";
 
 const SOURCE = "ct-stations";
@@ -56,19 +55,29 @@ export function stationsFrom(bases: SuppressionBase[]): MapStation[] {
   });
 }
 
+/** Rows of `GET /api/suppression/stations` (CAL FIRE bases plus OpenStreetMap fire stations). */
+export function parseStations(json: unknown): MapStation[] {
+  const rows = (json as { stations?: unknown })?.stations;
+  if (!Array.isArray(rows)) return [];
+  return rows.flatMap((v) => {
+    const s = v as Record<string, unknown>;
+    if (typeof s.lon !== "number" || typeof s.lat !== "number") return [];
+    return [{ id: String(s.id), label: String(s.label ?? s.name ?? "Fire station"), lon: s.lon, lat: s.lat, air: s.air === true }];
+  });
+}
+
 /** Stations within `radiusKm` of a point; [] on any failure (callers draw nothing). */
 export async function fetchStations(lon: number, lat: number, signal?: AbortSignal, radiusKm = RADIUS_KM): Promise<MapStation[]> {
   const key = `${lon.toFixed(1)},${lat.toFixed(1)},${radiusKm}`;
   const hit = cache.get(key);
   if (hit) return hit;
   try {
-    const r = await fetch(`/api/suppression/bases?lon=${lon.toFixed(3)}&lat=${lat.toFixed(3)}&radius_km=${radiusKm}`, {
+    const r = await fetch(`/api/suppression/stations?lon=${lon.toFixed(3)}&lat=${lat.toFixed(3)}&radius_km=${radiusKm}`, {
       signal,
       headers: { Accept: "application/json" },
     });
     if (!r.ok) return [];
-    const parsed = parseBases(await r.json());
-    const list = parsed.available ? stationsFrom(parsed.bases) : [];
+    const list = parseStations(await r.json());
     cache.set(key, list);
     return list;
   } catch {
