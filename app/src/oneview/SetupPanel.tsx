@@ -18,6 +18,13 @@ function num(value: string, fallback: number): number {
   return value.trim() !== "" && Number.isFinite(n) ? n : fallback;
 }
 
+/** Progress while no stored package fits and the preset is solved and stored here (oneview/studioPackage.ts). */
+const BUILD_STEP_TEXT = {
+  terrain: "No stored Berkeley drill yet. Loading Berkeley terrain…",
+  simulating: "Simulating the fire on the Berkeley board (Studio fire model, no firefighting)…",
+  publishing: "Publishing the drill package (roads, zones and homes)…",
+} as const;
+
 function PrepareStatus({ prepare }: { prepare: PrepareState }) {
   switch (prepare.status) {
     case "idle":
@@ -25,21 +32,24 @@ function PrepareStatus({ prepare }: { prepare: PrepareState }) {
     case "checking":
     case "switching":
     case "sending":
+    case "building":
       return (
         <p className="ov-status" role="status">
           <Spinner />
           {prepare.status === "checking"
             ? "Checking the live drill…"
-            : prepare.status === "switching"
-              ? `Switching the live drill to ${prepare.packageName}…`
-              : "Starting the fire on the board…"}
+            : prepare.status === "building"
+              ? BUILD_STEP_TEXT[prepare.step]
+              : prepare.status === "switching"
+                ? `Switching the live drill to ${prepare.packageName}…`
+                : "Starting the fire on the board…"}
         </p>
       );
     case "done":
       return (
         <Notice tone="success" compact>
           The fire is on the {prepare.incidentName} board
-          {prepare.switchedTo ? ` (switched the live drill to the stored package “${prepare.switchedTo}”)` : " (already the live drill)"}.
+          {prepare.switchedTo ? ` (switched the live drill to the package “${prepare.switchedTo}”)` : " (already the live drill)"}.
           {prepare.outsideDrill.length > 0 ? ` ${prepare.outsideDrill.length} ignition(s) fall outside the drill area and will not burn.` : ""}
         </Notice>
       );
@@ -74,7 +84,7 @@ export default function SetupPanel({
 }) {
   if (presets.length === 0 || !draft) return <p className="ov-dim">No demo presets are available.</p>;
   const preset = presets.find((p) => p.id === draft.presetId) ?? presets[0];
-  const busy = prepare.status === "checking" || prepare.status === "switching" || prepare.status === "sending";
+  const busy = prepare.status === "checking" || prepare.status === "switching" || prepare.status === "sending" || prepare.status === "building";
   const lengths = [...new Set([...RUN_LENGTHS, preset.horizonMinutes, draft.horizonMinutes])].sort((a, b) => a - b);
   const set = (patch: Partial<ScenarioDraft>) => onChange({ ...draft, ...patch });
   const setIgnition = (n: number, patch: Partial<ScenarioDraft["ignitions"][number]>) =>
