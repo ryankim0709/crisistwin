@@ -72,6 +72,32 @@ The Practice view was removed from the phone. It showed the web app's `/fire` pa
 `WKWebView` with the sidebar hidden (see [ADR 0007](../docs/adr/0007-mobile-web-map.md)).
 `WEB_BASE_URL` is still validated like `API_BASE_URL`; Debug uses `http://localhost:5173`.
 
+### Home layout
+
+Light mode uses the resident app's own "mint and cream" palette (`App/Theme.swift`): a pastel
+mint page, cream cards and deep green actions; dark mode keeps the web kit's dark theme. Home,
+Reports and Plan share one compact header (`CTPageHeader`): the logo with the page name right
+under it, with no navigation bar above. The tab bar stays full size while scrolling.
+
+Home is titled **Home** under the CrisisTwin logo. A status hero answers "is there an emergency
+near me?" with an icon, a line of words and, where it applies, its next step: **Location is
+off** (turn it on), **Can't check right now** (try again), **Checking your area**, **No
+emergency near you**, **No order for {zone}**, or the order's verdict ("Leave now", "Be ready to
+leave") with **See what to do**. It never claims all clear without data. Below it, while the
+phone knows its zone, come the guidance, way out, check-ins and nearby facts; four tiles at the
+end show the meeting point, family, emergency contacts and alerts, and open Plan.
+
+### Evacuate button
+
+The **Evacuate** button sits inside the status hero: outlined on a quiet day, solid red while
+the zone has an evacuate-now order. Three taps within 1.5 s arm it
+(a dot fills per tap and the count resets if you pause), then a confirmation asks
+"Start evacuating?". VoiceOver gets a single activation, still confirmed. **Start does nothing
+yet.** The planned flow: post **On the way** to the family, open Messages to the emergency
+contacts with the destination (the person taps Send), then show the backend's
+fire-checked destinations (shelters and exits) and follow the chosen route on Map. Meeting
+points join that list once the backend rates them; the app does not check safety itself.
+
 ### Meeting point
 
 Plan > Meeting point holds a household meeting plan: a primary meeting point, an
