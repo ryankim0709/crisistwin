@@ -1258,6 +1258,15 @@ def twin(request, incident_id: str, principal: Principal):
         return _twin_unavailable(exc)
 
 
+@live_view(["GET"], roles=["controller"])
+def twin_people(request, incident_id: str, principal: Principal):
+    """Estimated people of the simulated twin (docs/twin-api.md "People snapshot")."""
+    try:
+        return ok(twin_service.people(load_snapshot(incident_id, wall_now())))
+    except twin_service.TwinUnavailable as exc:
+        return _twin_unavailable(exc)
+
+
 @live_view(["POST"], roles=["controller"])
 def twin_whatif(request, incident_id: str, principal: Principal):
     body = json_body(request, "invalid_whatif")

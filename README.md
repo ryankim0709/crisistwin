@@ -53,6 +53,8 @@ Also in the repository:
   [ADR 0016](docs/adr/0016-resident-live-and-family.md).
 - **Live twin** (`app/backend/livecore/`, `sim/`): the planner and a steppable traffic engine behind `/live`'s what-if
   ([ADR 0013](docs/adr/0013-realtime-twin.md), [twin API](docs/twin-api.md)).
+  `GET /api/live/incidents/{id}/people` turns the twin into estimated people (still home, driving, in traffic,
+  stuck, out) for the `/live` map's People layer ([contract](docs/twin-api.md#people-snapshot), simulated).
 
 - **Incident intelligence** (`/intel`, API `/api/intel/…`): the page lists the historical incidents from the
   replay index (pick one to scope the review; `/incidents` redirects here). An Apify Actor fetches public agency

@@ -44,6 +44,7 @@ import SelectedItem, { type ImpactState, type RunAction } from "./SelectedItem";
 import { useCommand } from "./useCommand";
 import { usePoll } from "./usePoll";
 import { useTwin } from "./useTwin";
+import { PeopleSummary, usePeople } from "./people";
 import WorkspaceHeader, { BoardControls } from "./WorkspaceHeader";
 import "./live.css";
 
@@ -55,6 +56,7 @@ const LAYER_LABEL: Record<LayerKey, string> = {
   reports: "Reports",
   roads: "Roads",
   shelters: "Shelters",
+  people: "People",
 };
 type LeftTab = "reports" | "board";
 const LEFT_TABS: SegmentedOption<LeftTab>[] = [
@@ -219,6 +221,7 @@ export default function LiveCommandPage() {
     reports: true,
     roads: true,
     shelters: true,
+    people: true,
   });
   // A different incident: drop the selection and per-incident panels (the polls restart themselves).
   useEffect(() => {
@@ -254,6 +257,9 @@ export default function LiveCommandPage() {
   const unauthorized = command.error?.unauthorized ?? false;
   const data = unauthorized ? null : command.data;
   const twinData = data ? twin.data : null;
+  // The simulated people picture polls only while its layer is on.
+  const people = usePeople(data && layers.people ? incidentToken : null, incidentId);
+  const peopleData = data && layers.people ? people.data : null;
   // The simulated board (fires, units, households) and the AI commander, on the drill's zones.
   const cb = useCommandBoard({ token, incidentId, data });
   const setBoardSelection = cb.setSelection;
@@ -485,6 +491,7 @@ export default function LiveCommandPage() {
         <CommandMap
           data={data}
           twin={twinData}
+          people={peopleData}
           items={items}
           selected={selected}
           focus={focus}
@@ -496,10 +503,13 @@ export default function LiveCommandPage() {
           interceptClick={interceptClick}
         />
         {data && !showDiorama ? (
-          <LayerToggles
-            layers={layers}
-            onToggle={(k) => setLayers((l) => ({ ...l, [k]: !l[k] }))}
-          />
+          <div className="lc-map-top">
+            {layers.people ? <PeopleSummary snapshot={peopleData} error={people.error} /> : null}
+            <LayerToggles
+              layers={layers}
+              onToggle={(k) => setLayers((l) => ({ ...l, [k]: !l[k] }))}
+            />
+          </div>
         ) : null}
         {data && !showDiorama ? <MapLegend record={!isPackage} board={!!board} /> : null}
         {/* The map stays mounted under the diorama, so its view and board layers survive a switch. */}

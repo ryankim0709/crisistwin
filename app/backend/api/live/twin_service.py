@@ -601,6 +601,60 @@ def edge_speed_rows(twin) -> dict[str, tuple[int, float, float]]:
     return {edges[i].id: (n, speed, edges[i].speed_kph) for i, n, speed, _ in engine.edge_rows(engine.now_s or 0)}
 
 
+PEOPLE_MAX_EDGES = 1500
+"""``people`` lists at most this many occupied edges (most people first); the rest are summed in
+``edges_omitted``."""
+PEOPLE_LOCK_TIMEOUT_S = 5.0
+"""A people read waits at most this long for the twin (what-ifs can hold it longer), then ``busy``;
+the page keeps its last picture and polls again."""
+PEOPLE_LINE_TOLERANCE_M = 12.0
+PEOPLE_LINE_MAX_POINTS = 12
+
+
+def _road_name(index, edge) -> str | None:
+    name = index.segment_names.get(edge.segment_id) or edge.name or None
+    return None if not name or name.startswith("unnamed ") else name
+
+
+def people(snapshot: Snapshot) -> dict[str, Any]:
+    """Estimated people of the synced twin (``sim.twin_people``, docs/twin-api.md "People snapshot"):
+    still home, driving, queued, stuck and out, per zone, road edge, stuck cluster and destination. Simulated."""
+
+    def run(sess, twin, twinmod):
+        from sim import twin_people
+
+        index = snapshot.index
+        edges = twin.engine.s.edges
+        body = twin_people.people_snapshot(twin, edge_name=lambda i: _road_name(index, edges[i]))
+        rows = sorted(body["edges"]["rows"], key=lambda r: (-(r[1] + r[2] + r[3]), r[0]))
+        kept, omitted = rows[:PEOPLE_MAX_EDGES], rows[PEOPLE_MAX_EDGES:]
+        kept.sort(key=lambda r: r[0])
+        out_rows = []
+        for r in kept:
+            e = edges[r[0]]
+            line = [[round(x, 5), round(y, 5)] for x, y in simplify_line(e.coords, PEOPLE_LINE_TOLERANCE_M,
+                                                                          PEOPLE_LINE_MAX_POINTS)]
+            out_rows.append([*r, round(e.speed_kph, 1), round(e.length_m), line])
+        for d in body["destinations"]:
+            dest = index.destinations.get(d["id"])
+            if dest is not None:
+                d["coord"] = [round(dest.coord[0], 5), round(dest.coord[1], 5)]
+        clock = snapshot.clock
+        return {
+            "kind": "crisistwin_live_people",
+            "incident_id": snapshot.incident_id,
+            "label": "Simulated people picture of the exercise from the traffic twin. Estimates, not observations; "
+                     "phones are shown separately.",
+            **body,
+            "drill_replay_now": iso(clock.replay_now),
+            "drill_speed": clock.speed if clock.running else 0.0,
+            "edges": {"fields": [*body["edges"]["fields"], "free_flow_kph", "length_m", "line"], "rows": out_rows},
+            "edges_omitted": {"edges": len(omitted), "people": sum(r[1] + r[2] + r[3] for r in omitted)},
+        }
+
+    return _with_twin(snapshot, run, PEOPLE_LOCK_TIMEOUT_S)
+
+
 def monitor(snapshot: Snapshot) -> dict[str, Any]:
     """Compact snapshot for the monitoring page (docs/twin-api.md "HTTP adapter")."""
 

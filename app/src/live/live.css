@@ -340,6 +340,33 @@
 }
 /* Layer toggles stay neutral: brand teal is reserved for the
    selection's primary action (design spec). */
+/* Top of the map: the people summary strip (./people), then the layer toggles, in one column. */
+.lc-map-top {
+  position: absolute;
+  top: var(--ct-space-3);
+  left: var(--ct-space-3);
+  right: 56px;
+  z-index: var(--ct-z-map-controls);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--ct-space-2);
+  pointer-events: none;
+}
+.lc-map-top > * {
+  pointer-events: auto;
+}
+.lc-map-top .lc-layers {
+  position: static;
+  z-index: auto; /* flex items honour z-index; the strip's key must open over the toggles */
+}
+.lc-sw--people {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--ct-evacuee);
+  box-shadow: 0 0 0 1.5px var(--lc-route);
+}
 .lc-layer {
   display: inline-flex;
   align-items: center;
