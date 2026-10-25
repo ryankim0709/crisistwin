@@ -18,9 +18,11 @@
  * firefighting units over the drill roads their apparatus class may use (livecore.inbound).
  * GET /api/demo/wind?mode=historical_replay|climatology_percentile -> `WindResponse`.
  * GET /api/demo/environment -> `EnvironmentResponse` (drill centre, Camp terrain grid, carless households, package fire stations).
+ * The page no longer uses `terrain`: slope comes from the LANDFIRE landscape the fire solver runs on.
  * Wind is searched from the incident's centre.
  *
- * Every number in an observation is simulator output (demo/model.ts), sourced data
+ * Every number in an observation is simulator output (demo/model.ts; fire numbers from the
+ * fire solver, demo/fireField.ts), sourced data
  * (demo/realism.ts) or a labelled assumption; the agent only chooses among the ids it lists.
  * The server validates orders against the observation; the page validates again when it
  * applies them.
@@ -151,7 +153,14 @@ export interface FireObservation {
   options: { crews: string[]; contained_in_min: number | null }[];
   /** Zones this fire is forecast to reach (edge) within the forecast window. */
   threatens_zone_ids: string[];
-  /** Rothermel at the head now: rate m/min, flame length ft, heading degrees true, L:B. */
+  /**
+   * Area, perimeter and growth are the fire solver's footprint for this fire (demo/fireField.ts):
+   * perimeter is its edge facing ground that can still burn. The head fields are the solver's
+   * Rothermel behaviour at the fire's leading front cell (its burned cell farthest from the
+   * ignition that still faces unburned fuel): rate m/min, surface flame length ft, heading
+   * degrees true, L:B, slope. When that cell torches or crowns no line holds it, so
+   * contained_in_min is null whatever head_flame_ft says.
+   */
   head_m_per_min: number;
   head_flame_ft: number;
   heading_deg: number;
@@ -210,6 +219,7 @@ export interface DemoObservation {
     forecast_min: number;
   };
   activity: string;
+  /** The current hourly wind; `source` is its provenance plus how the fire model uses it. */
   wind: { from_deg: number; speed_m_s: number; evidence: string; source: string };
   /** Provenance labels of the model inputs. */
   inputs: { fuel: string; moisture: string; terrain: string; stations: string; travel: string; congestion: string };

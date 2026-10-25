@@ -1147,30 +1147,28 @@ function stepOnce(board: Board, dt: number, landOn: number | null): void {
   for (const zone of board.zones) {
     const za = field?.zones.get(zone.id);
     if (!za) continue;
-    let touched = false;
-    for (const s of active.keys()) {
-      if (za.earliestBySource[s] <= board.minute) {
-        touched = true;
-        break;
-      }
-    }
-    if (touched) {
-      zone.touchedAt ??= board.minute;
+    // Times are the solver's arrival minutes, not the step that noticed them, so they do not
+    // depend on the clock's tick size.
+    let touchedAt = Number.POSITIVE_INFINITY;
+    for (const s of active.keys()) touchedAt = Math.min(touchedAt, za.earliestBySource[s]);
+    if (touchedAt <= board.minute) {
+      zone.touchedAt ??= touchedAt;
       zone.lastFireAt = board.minute;
       // Fire cue with no order: the shadow share leaves on the zone's best route, if any.
       if (zone.orderedAt === null && zone.shadowAt === null && zone.overrunAt === null) {
         const best = board.routes.get(zone.id)?.[0] ?? null;
         if (best) {
-          zone.shadowAt = board.minute;
+          // The cue is the arrival when it fell in this step; later (routes arrived late), now.
+          zone.shadowAt = touchedAt > board.minute - dt ? touchedAt : board.minute;
           zone.shadowRoute = best;
           log(board, "zone", "board", `Fire reached ${zone.name} with no order: some households leave on their own, toward ${best.name}.`);
         }
       }
     }
     if (zone.overrunAt === null && za.coreArrival <= board.minute && active.has(za.coreSource)) {
-      zone.overrunAt = board.minute;
+      zone.overrunAt = za.coreArrival;
       zone.lastFireAt = board.minute;
-      zone.caught = zone.households - departed(zone, board.minute);
+      zone.caught = zone.households - departed(zone, zone.overrunAt);
       board.caughtTotal += zone.caught;
       log(
         board,

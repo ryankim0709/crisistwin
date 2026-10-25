@@ -2,8 +2,9 @@
  * What the /demo AI commander sees, and when it is called. Pure: no React, network or LLM.
  *
  * - buildObservation turns the board (demo/model.ts) into the wire DemoObservation
- *   (demo/contracts.ts). Every number is simulator output, rounded for the wire: minutes to
- *   integers, hectares to 0.1, metres to integers.
+ *   (demo/contracts.ts). Every number is simulator output (the fire numbers from the fire
+ *   solver's footprint, demo/fireField.ts), rounded for the wire: minutes to integers, hectares
+ *   to 0.1, metres to integers.
  * - wakeReasons is the monitor: between decisions the page checks the board every
  *   MONITOR_EVERY_MINUTES simulated minutes and calls the agent only when this returns a
  *   reason. It compares the board with a MonitorMemory taken when the agent last decided, so a
@@ -24,7 +25,7 @@ import {
   perimeterGrowth,
   pointInRing,
   unitLineOn,
-  waitMinutes,
+  fireReachesZone,
   totals,
   zoneCounts,
   zoneForecasts,
@@ -34,12 +35,22 @@ import {
   type ZoneForecast,
   type ZoneState,
 } from "./model";
+import { LOOKAHEAD_MINUTES } from "./fireField";
 import { ORDER_COMPLIANCE, SHADOW_SHARE, holdsFlameFeet, kindLabel, windAt } from "./realism";
 
 /** Shown to the agent as inputs.travel and inputs.congestion. */
 export const TRAVEL_LABEL =
   "Road network per apparatus class (POST /api/demo/crew_routes); straight line x 1.3 at 60 km/h until a road time is known (assumption)";
 export const CONGESTION_LABEL = "Not modelled: evacuation and unit travel times are free-flow";
+/** How the board's wind reaches the fire model; appended to observation.wind.source. */
+export const WIND_APPROACH_LABEL = `the fire model re-solves when the hourly wind changes, continuing from the burned ground, and each solve holds that hour's wind for its ${LOOKAHEAD_MINUTES / 60} h lookahead, so forecasts assume the current wind persists`;
+
+/** "Model inputs" line for fire spread: the simulator's solver on the board's landscape, with the wind approach. */
+export function fireModelLabel(board: Board): string {
+  const r = board.env.landscapeRegion;
+  const where = board.env.landscapeSource === "stored" ? `the prebuilt landscape "${r.name}"` : `${r.name}, loaded live from LANDFIRE`;
+  return `the simulator's cell solver, the same as /fire and Simulation Studio (Rothermel 1972 surface spread with crown fire, ember spotting and structure-to-structure spread at their defaults), on LANDFIRE fuel, canopy and terrain of ${where}; ${WIND_APPROACH_LABEL}`;
+}
 
 /** How often (simulated minutes) the page runs the monitor. */
 export const MONITOR_EVERY_MINUTES = 2;
@@ -67,11 +78,6 @@ function spreadLimit(board: Board, fire: Fire): number {
   return Math.min(currentContainment(board, fire) ?? FORECAST_MINUTES, FORECAST_MINUTES);
 }
 
-/** Whether `fire` reaches the zone (an edge vertex or its core) within `limit` minutes. */
-function fireReaches(fire: Fire, zone: ZoneState, limit: number): boolean {
-  const reaches = (p: (typeof zone.ring)[number]): boolean => waitMinutes(fire, p, limit) !== null;
-  return pointInRing(fire.origin, zone.ring) || reaches(zone.core) || zone.ring.some(reaches);
-}
 
 function listIds(ids: string[]): string {
   if (ids.length <= MAX_IDS_IN_REASON) return ids.join(", ");
@@ -160,7 +166,7 @@ export function buildObservation(
         crews: o.teams,
         contained_in_min: o.contained_in_min === null ? null : Math.round(o.contained_in_min),
       })),
-      threatens_zone_ids: listed.filter((zone) => fireReaches(fire, zone, limit)).map((zone) => zone.id),
+      threatens_zone_ids: listed.filter((zone) => fireReachesZone(board, fire, zone, limit)).map((zone) => zone.id),
       head_m_per_min: round1(fire.rates.headMetersPerMinute),
       head_flame_ft: round1(fire.rates.headFlameFeet),
       heading_deg: Math.round(fire.rates.headingDegrees),
@@ -201,7 +207,7 @@ export function buildObservation(
       from_deg: Math.round(wind.fromDegrees),
       speed_m_s: round1(wind.speedMetersPerSecond),
       evidence: spread.wind.evidence,
-      source: spread.wind.label,
+      source: `${spread.wind.label}; ${WIND_APPROACH_LABEL}`,
     },
     inputs: {
       fuel: spread.ground.fuelLabel,

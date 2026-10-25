@@ -173,6 +173,17 @@ run.arrivalBreakdown; // burned area by surface, spotting, and structure spread
 run.appliedOptions; // the two mechanisms as actually applied, for reproducibility
 ```
 
+`simulateScheduledFireSpread(landscape, input, controlLines?, outFromMinuteBySource?, extensions?)`
+has two opt-in extensions used by the `/demo` command board (`app/src/demo/fireField.ts`); with
+`extensions` omitted the solver is unchanged. `reportCellBehaviour` adds `run.cellBehaviour`, the
+per-cell head rate, heading, ellipse eccentricity, backing floor, flame length and crown class the
+solver propagated. `resume` (`ResumeFrom`) continues from an earlier run's arrival field at
+`fromMinute`: cells burned by then keep their arrival and source, spread on at this run's rates
+with the share of each in-progress step already covered at the earlier rates credited, and no
+cell newly burns before `fromMinute`; cells of a put-out fire (or source -1) are burned but inert.
+With unchanged settings a resumed run reproduces the uninterrupted one; this is how the board
+follows an hourly wind series with a one-wind-per-run solver.
+
 Both mechanism options are optional in `FireScenario`; omitting one applies its default,
 and the defaults have both mechanisms on. Switch them off by passing `enabled: false`.
 

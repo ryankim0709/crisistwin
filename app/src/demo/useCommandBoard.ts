@@ -25,14 +25,15 @@ import type { PanelActions } from "./SelectedPanel";
 import { windAt } from "./realism";
 import { useCrewRoutes } from "./useCrewRoutes";
 import { useDemoAgent } from "./useDemoAgent";
-import { WEATHER_PRESETS, useDemoEnvironment, zonesCenter } from "./useDemoEnvironment";
+import { WEATHER_PRESETS, useDemoEnvironmentState, zonesCenter, zonesExtent } from "./useDemoEnvironment";
 import { useDemoRoutes } from "./useDemoRoutes";
 import { useArrivalField } from "./useArrivalField";
+import { useFireSolver } from "./useFireSolver";
 
 /**
  * The simulated command board (fires, firefighting units, households) and the AI incident
  * commander, as one hook, so /live can run it beside the live drill. The logic is copied from
- * DemoPage.tsx and kept in the same order and with the same names, so the two diff cleanly.
+ * the former DemoPage.tsx and kept in the same order and with the same names.
  * Everything here is simulated in the browser on the drill's zones and roads; only open
  * fire_seen field reports flow in from the live drill (and resolving a fire resolves them).
  */
@@ -94,7 +95,11 @@ export function useCommandBoard({ token, incidentId, data: commandData }: Comman
   const [weather, setWeather] = useState<string>(WEATHER_PRESETS[0].value);
   const preset = WEATHER_PRESETS.find((p) => p.value === weather) ?? WEATHER_PRESETS[0];
   const zoneCentre = useMemo(() => (data ? zonesCenter(data.zones) : null), [data]);
-  const env = useDemoEnvironment(preset, incidentId, zoneCentre);
+  // The zones' half-width sizes the live LANDFIRE landscape when no prebuilt region covers the drill.
+  const zonesHalfWidth = useMemo(() => (data ? (zonesExtent(data.zones)?.halfWidthMeters ?? null) : null), [data]);
+  const [envAttempt, setEnvAttempt] = useState(0);
+  const environment = useDemoEnvironmentState(preset, incidentId, zoneCentre, zonesHalfWidth, envAttempt);
+  const env = environment.env;
 
   // A different drill: drop the board and selection; the effect below rebuilds it from the new data.
   useEffect(() => {
@@ -114,11 +119,16 @@ export function useCommandBoard({ token, incidentId, data: commandData }: Comman
     setBoard(created);
   }, [data, env, activity]);
 
-  // A new weather choice swaps the inputs under the running board (fires keep their shape).
+  // A new weather choice swaps the inputs under the running board; the landscape (and with it the
+  // fire field) stays, since loads are cached per region. A different landscape starts a new board.
   useEffect(() => {
     const b = boardRef.current;
     if (!b || !env || b.env === env) return;
-    b.env = env;
+    if (b.env.landscape !== env.landscape) {
+      const created = createBoard(b.zones.map((z) => ({ id: z.id, name: z.name, households: z.households, ring: z.ring, core: z.core })), b.activity, b.seed, env);
+      boardRef.current = created;
+      setBoard(created);
+    } else b.env = env;
     bump();
   }, [env, bump]);
 
@@ -152,6 +162,8 @@ export function useCommandBoard({ token, incidentId, data: commandData }: Comman
     if (boardRef.current) setRoutes(boardRef.current, routes.routes);
   }, [routes.routes, board]);
   const crewRoutes = useCrewRoutes(board, version, incidentId);
+  // Fire spread: the simulator's cell solver in a worker. model.step holds the clock while a solve is due.
+  const fireSolver = useFireSolver(board, version, bump);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps -- the board is mutated in place; version marks changes
   const forecasts = useMemo(() => (board ? zoneForecasts(board) : new Map()), [board, version]);
@@ -236,7 +248,7 @@ export function useCommandBoard({ token, incidentId, data: commandData }: Comman
 
   const t = board ? totals(board, forecasts) : null;
   const windNow = board ? windAt(board.env.spread.wind, board.minute) : null;
-  // The 3D view draws the prebuilt LANDFIRE region covering the drill; without one only the map shows.
+  // The 3D view draws the LANDFIRE landscape the fire solver runs on.
   const landscape = board?.env.landscape ?? null;
   const field = useArrivalField(board, version, landscape);
   const fires = board
@@ -290,6 +302,11 @@ export function useCommandBoard({ token, incidentId, data: commandData }: Comman
     fires,
     landscape,
     field,
+    /** Fire solver status: why a solve is running (the clock holds meanwhile), its last time, a failure. */
+    fireSolver,
+    /** Board inputs loading state: live LANDFIRE load in progress, or why the landscape failed (no board then). */
+    environment,
+    retryEnvironment: () => setEnvAttempt((a) => a + 1),
   };
 }
 

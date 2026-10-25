@@ -2,7 +2,7 @@
  * 3D diorama view of the /demo command board: the fire page's three.js miniature
  * (fire/diorama/FireDioramaScene.ts, ADR 0011) drawing the drill's prebuilt LANDFIRE region
  * with OSM roads and synthetic homes (fire/useBoardStreets.ts, as the Studio's 3D view), the
- * board's simulated fires as an arrival field (dioramaField.ts) with a labelled pin per active
+ * board's simulated fires as the fire solver's arrival field (dioramaField.ts) with a labelled pin per active
  * fire, and its units, stations and alerted zones (DemoBoardOverlay.ts). Presentation only:
  * the board's fires, units and households are simulated; trees, homes and relief are stylized.
  * Clicking the board starts a fire while "Add fire" is on; other selection stays in the panels.
@@ -21,7 +21,7 @@ import { Button, Legend, Panel, type LegendItem } from "../ui";
 import { DEMO_3D_COLORS, DemoBoardOverlay } from "./DemoBoardOverlay";
 import type { Selection } from "./DemoMap";
 import { dioramaRun } from "./dioramaField";
-import { activeFires, fireEllipse, teamPosition, type Board, type ZoneForecast } from "./model";
+import { activeFires, teamPosition, type Board, type ZoneForecast } from "./model";
 import type { ArrivalFieldState } from "./useArrivalField";
 
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
@@ -113,7 +113,8 @@ export default function DemoDiorama({ board, version, field, landscape, regionNa
     scene?.setStreets(streetArea);
   }, [scene, streetArea]);
   useEffect(() => {
-    scene?.setRun(field ? dioramaRun(field.field, field.board.minute) : null);
+    // The solver's whole field (with its lookahead); setTime(board minute) shows only what has burned.
+    scene?.setRun(field ? dioramaRun(field.field) : null);
     if (field) scene?.setTime(field.board.minute);
   }, [scene, field]);
 
@@ -158,8 +159,7 @@ export default function DemoDiorama({ board, version, field, landscape, regionNa
     if (selectedKind === "fire") {
       const fire = board.fires.find((f) => f.id === selectedId);
       if (!fire) return;
-      const { head, back, flank } = fireEllipse(fire);
-      scene.focusOn({ longitude: fire.origin[0], latitude: fire.origin[1] }, Math.max(MIN_FIRE_FOCUS_M, 1.5 * Math.max(head, back, flank)));
+      scene.focusOn({ longitude: fire.origin[0], latitude: fire.origin[1] }, Math.max(MIN_FIRE_FOCUS_M, 1.5 * fire.reachM));
     } else if (selectedKind === "team") {
       const team = board.teams.find((t) => t.id === selectedId);
       if (!team) return;

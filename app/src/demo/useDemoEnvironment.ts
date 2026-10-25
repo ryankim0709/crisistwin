@@ -1,23 +1,26 @@
 /**
  * Loads the /demo board's physical inputs (docs/command-demo-realism.md) and builds a
- * `DemoEnvironment`: wind (GET /api/demo/wind), the drill centre, Camp terrain and carless households (GET
- * /api/demo/environment; every call carries `incident` for a non-Camp drill), CAL FIRE bases (GET /api/suppression/bases), and a LANDFIRE
- * landscape when a prebuilt one covers the drill area (GET /api/landscapes; its grid is also the
- * 3D diorama's board, DemoDiorama.tsx). Every input that
- * fails falls back to the labelled assumption in realism.ts / model.ts, and the board starts
- * once all have answered or failed.
+ * `DemoEnvironment`: wind (GET /api/demo/wind), the drill centre and carless households (GET
+ * /api/demo/environment; every call carries `incident` for a non-Camp drill), CAL FIRE bases (GET
+ * /api/suppression/bases), and the LANDFIRE landscape the fire solver runs on (also the 3D
+ * diorama's board, DemoDiorama.tsx): the prebuilt region covering the drill (GET /api/landscapes)
+ * or, when none covers it or the store is unavailable, the same fuel, canopy and terrain loaded
+ * live from LANDFIRE, as Simulation Studio does (studio/useRegionBoard.ts). Inputs other than the
+ * landscape fall back to labelled assumptions in realism.ts / model.ts; without a landscape there
+ * is no fire model, so a landscape failure is an error state, not a fallback. The board starts
+ * once everything has answered.
  */
 
 import { useEffect, useRef, useState } from "react";
-import { DEFAULT_INCIDENT_ID } from "../live/api";
 import { cellAt } from "../fire/spread";
-import { fetchRegionCatalog, fetchRegionLandscape } from "../fire/landscapePackage";
-import type { LandscapeGrid } from "../fire/landscape";
+import { CALIFORNIA_REGIONS } from "../fire/regions";
+import { RegionUnavailableError, fetchRegionCatalog, fetchRegionLandscape } from "../fire/landscapePackage";
+import { landscapeCellMetersFor, loadLandscape, type LandscapeGrid } from "../fire/landscape";
 import type { LonLat } from "../live/types";
 import { CREW_TYPES, STATION_TYPES, SUPPRESSION_BASES_URL, parseBases, type SuppressionBases } from "../studio/suppressionBases";
 import { ENVIRONMENT_URL, WIND_URL, demoUrl, type EnvironmentResponse, type WindResponse } from "./contracts";
-import type { DemoEnvironment, Station } from "./model";
-import { FALLBACK_WIND, SpreadCache, groundFrom, type Ground, type TerrainGrid, type WindSeries } from "./realism";
+import { IGNITION_OUTSIDE_MAX_M, type DemoEnvironment, type Station } from "./model";
+import { FALLBACK_WIND, type Ground, type WindSeries } from "./realism";
 
 /** Mean of the zones' vertex bounding box, WGS84 [lon, lat]; the fallback when the server gives no centre. */
 export function zonesCenter(zones: readonly { geometry: { type: string; coordinates: unknown } }[]): LonLat | null {
@@ -31,6 +34,23 @@ export function zonesCenter(zones: readonly { geometry: { type: string; coordina
   };
   for (const z of zones) walk(z.geometry.coordinates);
   return Number.isFinite(minLon) ? [(minLon + maxLon) / 2, (minLat + maxLat) / 2] : null;
+}
+
+/** Centre of the zones' bounding box and its larger half-width in ground metres, or null. */
+export function zonesExtent(zones: readonly { geometry: { type: string; coordinates: unknown } }[]): { center: LonLat; halfWidthMeters: number } | null {
+  let minLon = Infinity, minLat = Infinity, maxLon = -Infinity, maxLat = -Infinity;
+  const walk = (c: unknown): void => {
+    if (!Array.isArray(c)) return;
+    if (typeof c[0] === "number" && typeof c[1] === "number") {
+      minLon = Math.min(minLon, c[0]); maxLon = Math.max(maxLon, c[0]);
+      minLat = Math.min(minLat, c[1]); maxLat = Math.max(maxLat, c[1]);
+    } else c.forEach(walk);
+  };
+  for (const z of zones) walk(z.geometry.coordinates);
+  if (!Number.isFinite(minLon)) return null;
+  const center: LonLat = [(minLon + maxLon) / 2, (minLat + maxLat) / 2];
+  const kx = METERS_PER_DEG * Math.cos((center[1] * Math.PI) / 180);
+  return { center, halfWidthMeters: Math.max(((maxLon - minLon) * kx) / 2, ((maxLat - minLat) * METERS_PER_DEG) / 2) };
 }
 
 export interface WeatherPreset {
@@ -56,6 +76,13 @@ export const WEATHER_PRESETS: readonly WeatherPreset[] = [
 ];
 
 const BASE_RADIUS_KM = 60;
+const METERS_PER_DEG = 111_320;
+/**
+ * ASSUMPTION: ground loaded beyond the outermost possible scheduled ignition (zones' half-width
+ * plus model.ts IGNITION_OUTSIDE_MAX_M) when the drill has no prebuilt region, so a fire can run
+ * a few kilometres before it reaches the edge of the modelled area (the solver stops there).
+ */
+export const LIVE_LANDSCAPE_MARGIN_M = 3000;
 
 async function getJson<T>(url: string, signal: AbortSignal): Promise<T | null> {
   try {
@@ -90,72 +117,104 @@ export async function loadWind(preset: WeatherPreset, incidentId: string, signal
   };
 }
 
-export function terrainGrid(data: EnvironmentResponse["terrain"]): TerrainGrid | null {
-  if (!data || data.slope_milli.length !== data.ncols * data.nrows) return null;
-  return {
-    originLon: data.origin_lon,
-    originLat: data.origin_lat,
-    cellMeters: data.cell_m,
-    ncols: data.ncols,
-    nrows: data.nrows,
-    metersPerDegLon: data.m_per_deg_lon,
-    metersPerDegLat: data.m_per_deg_lat,
-    slopeTangent: Float32Array.from(data.slope_milli, (v) => v / 1000),
-    upslopeDegrees: Float32Array.from(data.upslope_deg),
-    label: `Observed terrain: ${data.source}`,
-  };
+interface LoadedLandscape {
+  grid: LandscapeGrid;
+  region: { id: string; name: string };
+  source: "stored" | "live";
 }
 
 /**
- * Decoded region landscapes by region id, so a weather change (which reloads the environment)
- * keeps the same grid object and the 3D board is not rebuilt. A failed fetch is not kept.
+ * Landscapes by key, so a weather change (which reloads the environment) keeps the same grid
+ * object: the running board, its fire field and the 3D board stay on it. A failed load is not kept.
  */
-const regionGrids = new Map<string, Promise<LandscapeGrid>>();
+const landscapes = new Map<string, Promise<LoadedLandscape>>();
 
-function regionGrid(regionId: string, signal: AbortSignal): Promise<LandscapeGrid> {
-  let cached = regionGrids.get(regionId);
-  if (!cached) {
-    // Not tied to this caller's signal: an aborted load must not poison the cache.
-    cached = fetchRegionLandscape(regionId, new AbortController().signal).then((r) => r.grid);
-    regionGrids.set(regionId, cached);
-    cached.catch(() => regionGrids.delete(regionId));
+function cached(key: string, load: () => Promise<LoadedLandscape>, signal: AbortSignal): Promise<LoadedLandscape> {
+  let pending = landscapes.get(key);
+  if (!pending) {
+    pending = load();
+    landscapes.set(key, pending);
+    pending.catch(() => landscapes.delete(key));
   }
-  const pending = cached;
+  const shared = pending;
   return new Promise((resolve, reject) => {
     if (signal.aborted) reject(signal.reason);
     signal.addEventListener("abort", () => reject(signal.reason), { once: true });
-    pending.then(resolve, reject);
+    shared.then(resolve, reject);
   });
 }
 
-/** A prebuilt landscape that covers `p`: its LANDFIRE fuel and terrain lookup, and the grid itself (the 3D board), or null. */
-async function landscapeGround(
-  p: LonLat,
+/**
+ * The landscape the fire solver runs on. A prebuilt region whose centre is within 80% of its
+ * radius of the drill centre is read from the store; if the store or API is unavailable that
+ * region's box is loaded live (as studio/useRegionBoard.ts). With no covering region, a square
+ * around the drill's zones (half-width + IGNITION_OUTSIDE_MAX_M + LIVE_LANDSCAPE_MARGIN_M) is
+ * loaded live from LANDFIRE at the cell size /fire uses for that radius (landscapeCellMetersFor).
+ * Not tied to the caller's signal: an aborted load must not poison the cache.
+ */
+async function loadDrillLandscape(
+  center: LonLat,
+  zonesHalfWidthMeters: number | null,
+  onLive: () => void,
   signal: AbortSignal,
-): Promise<{ ground: Ground; grid: LandscapeGrid; region: { id: string; name: string } } | null> {
-  let catalog;
+): Promise<LoadedLandscape> {
+  let catalog: Awaited<ReturnType<typeof fetchRegionCatalog>> = [];
   try {
     catalog = await fetchRegionCatalog(signal);
   } catch {
-    return null;
+    // Store or API unavailable: the regions are still known statically.
   }
-  const region = catalog.find((r) => {
-    const dx = (p[0] - r.center.longitude) * 111_320 * Math.cos((p[1] * Math.PI) / 180);
-    const dy = (p[1] - r.center.latitude) * 111_320;
+  const known = [...catalog.map((r) => ({ id: r.id, name: r.name, center: r.center, radiusMeters: r.radiusMeters, cellMeters: r.cellMeters })), ...CALIFORNIA_REGIONS];
+  const region = known.find((r) => {
+    const dx = (center[0] - r.center.longitude) * METERS_PER_DEG * Math.cos((center[1] * Math.PI) / 180);
+    const dy = (center[1] - r.center.latitude) * METERS_PER_DEG;
     return Math.hypot(dx, dy) < r.radiusMeters * 0.8;
   });
-  if (!region) return null;
-  let grid: LandscapeGrid;
-  try {
-    grid = await regionGrid(region.id, signal);
-  } catch {
-    return null;
+  const independent = new AbortController().signal;
+  if (region) {
+    return cached(
+      `region:${region.id}`,
+      () =>
+        fetchRegionLandscape(region.id, independent).then(
+          ({ grid }): LoadedLandscape => ({ grid, region: { id: region.id, name: region.name }, source: "stored" }),
+          (cause: unknown) => {
+            if (!(cause instanceof RegionUnavailableError) && !(cause instanceof TypeError)) throw cause;
+            onLive();
+            return loadLandscape(region.center.longitude, region.center.latitude, region.radiusMeters, independent, {
+              cellMeters: region.cellMeters,
+            }).then((grid): LoadedLandscape => ({ grid, region: { id: region.id, name: region.name }, source: "live" }));
+          },
+        ),
+      signal,
+    );
   }
+  if (zonesHalfWidthMeters === null) throw new Error("The drill zones are needed to choose the landscape area.");
+  const radius = Math.round(zonesHalfWidthMeters + IGNITION_OUTSIDE_MAX_M + LIVE_LANDSCAPE_MARGIN_M);
+  const cellMeters = landscapeCellMetersFor(radius);
+  const key = `live:${center[0].toFixed(4)},${center[1].toFixed(4)},${radius}`;
+  onLive();
+  return cached(
+    key,
+    () =>
+      loadLandscape(center[0], center[1], radius, independent, { cellMeters }).then(
+        (grid): LoadedLandscape => ({
+          grid,
+          region: { id: key, name: `the drill area (${(radius / 1000).toFixed(1)} km around its centre, ${cellMeters} m cells)` },
+          source: "live",
+        }),
+      ),
+    signal,
+  );
+}
+
+function groundOf(loaded: LoadedLandscape): Ground {
+  const { grid, region, source } = loaded;
   const index = (q: LonLat) => cellAt(grid, { longitude: q[0], latitude: q[1] });
-  const ground: Ground = {
-    fuelLabel: `LANDFIRE FBFM40 from the prebuilt landscape "${region.name}"`,
+  const where = source === "stored" ? `the prebuilt landscape "${region.name}"` : `${region.name}, loaded live from LANDFIRE`;
+  return {
+    fuelLabel: `LANDFIRE FBFM40 fuel and canopy from ${where}`,
     fuelEvidence: "landfire",
-    terrainLabel: `Terrain from the prebuilt landscape "${region.name}"`,
+    terrainLabel: `Terrain from ${where} (${grid.attribution.terrain})`,
     terrainEvidence: "observed",
     fuelCodeAt: (q) => {
       const i = index(q);
@@ -166,7 +225,6 @@ async function landscapeGround(
       return i < 0 ? { slopeTangent: 0, upslopeDegrees: 0, cell: -1 } : { slopeTangent: grid.slopeTangent[i], upslopeDegrees: grid.upslopeDegrees[i], cell: i };
     },
   };
-  return { ground, grid, region: { id: region.id, name: region.name } };
 }
 
 export function stationsFrom(bases: SuppressionBases | null): DemoEnvironment["bases"] {
@@ -202,6 +260,8 @@ export async function loadEnvironment(
   incidentId: string,
   fallbackCenter: LonLat | null,
   signal: AbortSignal,
+  zonesHalfWidthMeters: number | null = null,
+  onLiveLandscape: () => void = () => {},
 ): Promise<DemoEnvironment> {
   // The wind and the environment answer independently; the centre (environment `center`, else the
   // zones' centroid) is needed for the bases and landscape lookups.
@@ -209,21 +269,19 @@ export async function loadEnvironment(
   const windPromise = loadWind(preset, incidentId, signal);
   const envData = await envPromise;
   const center: LonLat | null = envData?.center ?? fallbackCenter;
+  if (!center) throw new Error("The drill has no centre to load its landscape around.");
   const [wind, basesJson, landscape] = await Promise.all([
     windPromise,
-    center
-      ? getJson<unknown>(`${SUPPRESSION_BASES_URL}?lon=${center[0]}&lat=${center[1]}&radius_km=${BASE_RADIUS_KM}`, signal)
-      : Promise.resolve(null),
-    center ? landscapeGround(center, signal) : Promise.resolve(null),
+    getJson<unknown>(`${SUPPRESSION_BASES_URL}?lon=${center[0]}&lat=${center[1]}&radius_km=${BASE_RADIUS_KM}`, signal),
+    loadDrillLandscape(center, zonesHalfWidthMeters, onLiveLandscape, signal),
   ]);
-  const ground = landscape?.ground ?? groundFrom(terrainGrid(envData?.terrain ?? null));
   const parsed = basesJson ? parseBases(basesJson) : null;
   const calfire = stationsFrom(parsed);
   const packageBases = calfire ? null : stationsFromPackage(envData?.stations, center);
   const bases = calfire ?? packageBases;
   const noVehicle = new Map(Object.entries(envData?.households_no_vehicle ?? {}));
   return {
-    spread: new SpreadCache(ground, wind),
+    spread: { ground: groundOf(landscape), wind },
     bases,
     basesLabel: packageBases
       ? `${envData?.stations_source ?? "Fire stations from OpenStreetMap (drill package)"}; CAL FIRE bases unavailable, so unit types and counts per station are assumed, and crew camps reuse the nearest ${OSM_CREW_CAMPS} stations`
@@ -232,29 +290,66 @@ export async function loadEnvironment(
       : "Synthetic stations (assumed: CAL FIRE bases file unavailable)",
     noVehicle,
     noVehicleLabel: envData?.households_no_vehicle_source ?? "Carless households unknown (counted as 0)",
-    landscape: landscape?.grid ?? null,
-    landscapeRegion: landscape?.region ?? null,
+    landscape: landscape.grid,
+    landscapeRegion: landscape.region,
+    landscapeSource: landscape.source,
   };
 }
 
+export interface DemoEnvironmentState {
+  /** The environment, or null while loading or after a failure. */
+  env: DemoEnvironment | null;
+  /** True while loading the landscape live from LANDFIRE (slower than the store). */
+  liveLandscape: boolean;
+  /** Why the environment could not be built (no landscape means no fire model), or null. */
+  error: string | null;
+}
+
 /**
- * The environment for a weather preset on an incident; null while loading (and right after the
- * incident or preset changes). `fallbackCenter` (zones centroid) is read when the load starts.
+ * The environment for a weather preset on an incident, with its loading and error state. Waits
+ * for the zones (their centre and half-width choose the landscape when no prebuilt region
+ * covers the drill); both are read when the load starts. `attempt` retries a failed load.
  */
-export function useDemoEnvironment(preset: WeatherPreset, incidentId: string, fallbackCenter: LonLat | null): DemoEnvironment | null {
-  const [state, setState] = useState<{ key: string; env: DemoEnvironment } | null>(null);
-  const key = `${incidentId}|${preset.value}`;
-  const fallback = useRef(fallbackCenter);
-  fallback.current = fallbackCenter;
-  // Wait for the zones centroid on a non-Camp incident only until the command data arrives.
-  const ready = incidentId === DEFAULT_INCIDENT_ID || fallbackCenter !== null;
+export function useDemoEnvironmentState(
+  preset: WeatherPreset,
+  incidentId: string,
+  fallbackCenter: LonLat | null,
+  zonesHalfWidthMeters: number | null = null,
+  attempt = 0,
+): DemoEnvironmentState {
+  const [state, setState] = useState<{ key: string } & DemoEnvironmentState>({ key: "", env: null, liveLandscape: false, error: null });
+  const key = `${incidentId}|${preset.value}|${attempt}`;
+  const zones = useRef({ fallbackCenter, zonesHalfWidthMeters });
+  zones.current = { fallbackCenter, zonesHalfWidthMeters };
+  const ready = fallbackCenter !== null;
   useEffect(() => {
     if (!ready) return;
     const controller = new AbortController();
-    loadEnvironment(preset, incidentId, fallback.current, controller.signal).then((env) => {
-      if (!controller.signal.aborted) setState({ key, env });
-    });
+    const { fallbackCenter: center, zonesHalfWidthMeters: half } = zones.current;
+    setState({ key, env: null, liveLandscape: false, error: null });
+    loadEnvironment(preset, incidentId, center, controller.signal, half, () => {
+      if (!controller.signal.aborted) setState((s) => (s.key === key ? { ...s, liveLandscape: true } : s));
+    }).then(
+      (env) => {
+        if (!controller.signal.aborted) setState({ key, env, liveLandscape: env.landscapeSource === "live", error: null });
+      },
+      (cause: unknown) => {
+        if (controller.signal.aborted) return;
+        const detail = cause instanceof Error ? cause.message : "unknown error";
+        setState({ key, env: null, liveLandscape: false, error: `Could not load the LANDFIRE landscape for this drill (${detail}). The fire model needs it, so the board cannot start.` });
+      },
+    );
     return () => controller.abort();
   }, [preset, incidentId, key, ready]);
-  return state?.key === key ? state.env : null;
+  return state.key === key ? state : { env: null, liveLandscape: false, error: null };
+}
+
+/** The environment only (null while loading or failed); see useDemoEnvironmentState. */
+export function useDemoEnvironment(
+  preset: WeatherPreset,
+  incidentId: string,
+  fallbackCenter: LonLat | null,
+  zonesHalfWidthMeters: number | null = null,
+): DemoEnvironment | null {
+  return useDemoEnvironmentState(preset, incidentId, fallbackCenter, zonesHalfWidthMeters).env;
 }

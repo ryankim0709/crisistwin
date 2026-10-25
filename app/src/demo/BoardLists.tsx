@@ -1,7 +1,7 @@
-import { EvidenceTag, LoadingState, Tag } from "../ui";
+import { Button, EvidenceTag, LoadingState, Notice, Tag } from "../ui";
 import type { Selection } from "./DemoMap";
 import { FIRE_STATUS, SOURCE_LABEL, TEAM_STATUS, simClock } from "./format";
-import { currentContainment, fireAreaHa, headOnWildlandFuel } from "./model";
+import { currentContainment, fireAreaHa } from "./model";
 import { kindShort } from "./realism";
 import type { CommandBoard } from "./useCommandBoard";
 
@@ -17,7 +17,20 @@ export default function BoardLists({
   if (!board || !t) {
     return (
       <section className="lc-col lc-board" aria-label="Simulated fires and firefighting units">
-        <LoadingState>Loading wind, terrain and fire stations…</LoadingState>
+        {cb.environment.error ? (
+          <Notice tone="danger" compact>
+            {cb.environment.error}{" "}
+            <Button size="sm" variant="secondary" onClick={cb.retryEnvironment}>
+              Retry
+            </Button>
+          </Notice>
+        ) : (
+          <LoadingState>
+            {cb.environment.liveLandscape
+              ? "No stored landscape covers this drill: loading its fuel, canopy and terrain live from LANDFIRE (this takes longer)…"
+              : "Loading wind, landscape and fire stations…"}
+          </LoadingState>
+        )}
       </section>
     );
   }
@@ -32,6 +45,13 @@ export default function BoardLists({
       <p className="lc-board-note">
         <EvidenceTag kind="simulated" /> Board fires and units run in this browser; fire reports from the drill start fires here.
       </p>
+      {cb.fireSolver.error ? (
+        <Notice tone="danger" compact>
+          Fire model failed, clock held (retrying): {cb.fireSolver.error}
+        </Notice>
+      ) : cb.fireSolver.solving ? (
+        <p className="lc-board-note lc-dim">Fire model updating ({cb.fireSolver.solving}); clock held…</p>
+      ) : null}
       <div className="lc-col-scroll">
         {fires.length === 0 ? (
           <p className="dm-empty">No active fires. Watching for ignitions and field reports.</p>
@@ -65,7 +85,7 @@ export default function BoardLists({
                     </span>
                     <span className="lc-q-meta lc-num">
                       {fireAreaHa(f).toFixed(1)} ha · {f.headRate} m/min · flame {Math.round(f.rates.headFlameFeet)} ft
-                      {f.status === "burning" && !headOnWildlandFuel(f) ? " · no wildland fuel at head" : ""} · started{" "}
+                      {f.noSpread ? ` · ${f.noSpread}` : f.status === "burning" && f.rates.crowning ? " · crown fire at head" : ""} · started{" "}
                       {simClock(f.ignitedAt)}
                     </span>
                     <span className={`lc-q-meta${f.status === "burning" && (crews.length === 0 || eta === null) ? " lc-error" : ""}`}>

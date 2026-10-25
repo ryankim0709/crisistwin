@@ -52,7 +52,7 @@ function FireDetail({ board, id, actions }: { board: Board; id: string; actions:
           { label: "Started", value: simClock(fire.ignitedAt) },
           { label: "Area", value: `${fireAreaHa(fire).toFixed(1)} ha` },
           { label: "Head spread", value: `${fire.headRate} m/min toward ${Math.round(fire.rates.headingDegrees)}°` },
-          { label: "Head flame", value: `${fire.rates.headFlameFeet.toFixed(1)} ft` },
+          { label: "Head flame", value: `${fire.rates.headFlameFeet.toFixed(1)} ft${fire.rates.crowning ? ", crown fire" : ""}` },
           { label: "Length to breadth", value: fire.rates.lengthToBreadth.toFixed(1) },
           { label: "Slope at head", value: `${Math.round(fire.rates.slopePercent)}%` },
           {
@@ -117,9 +117,10 @@ function FireDetail({ board, id, actions }: { board: Board; id: string; actions:
         </p>
       ) : null}
       <p className="dm-note">
-        Rothermel spread from the fuel, slope and wind at the head. Units build line at their sourced rate for this fuel;
-        the fire is contained when the line reaches its perimeter and the head flame is within what their line holds
-        {holds > 0 ? ` (${holds} ft now)` : ""}.
+        Spread from the simulator's cell solver (as /fire and Simulation Studio); head figures are its Rothermel values at the
+        fire's leading front cell{fire.noSpread ? `. This fire cannot spread: ${fire.noSpread}` : ""}. Units build line at their sourced rate for this
+        fuel; the fire is contained when the line reaches its perimeter (the footprint's edge facing unburned fuel) and the head
+        flame is within what their line holds{holds > 0 ? ` (${holds} ft now)` : ""}{fire.rates.crowning ? "; the head is crowning, so no line holds it" : ""}.
       </p>
     </>
   );
