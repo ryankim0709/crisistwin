@@ -518,8 +518,8 @@ def drill_center(drill) -> list[float]:
 
 def parse_fire_rings(data: object) -> list[list[list[float]]] | str:
     """The posted fire rings, closed, or a reason the body is invalid."""
-    if not isinstance(data, dict) or set(data) != {"fires"}:
-        return "Body must be a JSON object with exactly `fires`."
+    if not isinstance(data, dict) or "fires" not in data or not set(data) <= {"fires", "excluded_destination_ids"}:
+        return "Body must be a JSON object with `fires` and optionally `excluded_destination_ids`."
     fires = data["fires"]
     if not isinstance(fires, list) or len(fires) > MAX_FIRE_RINGS:
         return f"`fires` must be a list of at most {MAX_FIRE_RINGS} rings."
