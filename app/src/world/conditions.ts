@@ -12,7 +12,9 @@
  *
  * Evidence stays separate: weather is observed / derived (climatology) / forecast; dead 1-h
  * moisture is derived; 10-h and 100-h are derived with an assumed forcing and starting state;
- * live moisture is assumed (phenology calendar). Nothing here invents a missing value: an hour
+ * live moisture is derived from the NFDRS 2016 Growing Season Index over an ERA5 lead-in, or
+ * assumed (phenology calendar) when that lead-in is unavailable (`evidence.live` says which).
+ * Nothing here invents a missing value: an hour
  * without temperature/RH or wind cannot be applied, and `applyConditionsHour` says why.
  */
 

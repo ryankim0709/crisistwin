@@ -28,7 +28,9 @@ tables print it, and as a fraction, as ``app/src/fire/rothermel.ts`` ``FuelMoist
   entering dormancy 50 %, completely cured < 30 % "treat as a dead fuel", used here as 30 %). Which
   stage applies on a date is an ASSUMED regional phenology calendar (``PHENOLOGY_CALENDARS``),
   interpolated linearly between mid-month anchors (the report's own example interpolates between
-  stages, p. 13). Not observed: replace with measured live fuel moisture when available.
+  stages, p. 13). Not observed: replace with measured live fuel moisture when available. Since
+  ``live-gsi/1`` this calendar is only the fallback: ``/api/conditions`` overwrites live moisture with
+  the NFDRS 2016 Growing Season Index value of ``sim/live_moisture.py`` when its ERA5 lead-in loads.
 
 Not modelled (stated, not hidden): precipitation and dew (the report's CAUTION, p. 13: the tables
 "assume that there has not been recent precipitation"; after rain these values are too dry),
