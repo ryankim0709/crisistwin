@@ -41,8 +41,6 @@ interface FireMapProps {
   fitSignal: number;
   clickMode: ClickMode;
   onMapClick: (point: GeoPoint) => void;
-  /** Fraction of ensemble runs in which each landscape cell burned (0 to 1, row-major); null hides the layer. */
-  burnProbability?: Float32Array | null;
 }
 
 const DEFAULT_CENTER: GeoPoint = { latitude: 37.88, longitude: -122.24 };
@@ -56,8 +54,6 @@ const LABEL_AVERAGE_PASSES = 3;
 // Spot fires and slivers are too small to carry the edge label.
 const MIN_LABEL_RING_VERTICES = 12;
 const FUEL_SOURCE = "fire-fuel";
-const PROBABILITY_SOURCE = "fire-burn-probability";
-const PROBABILITY_LAYER = "fire-burn-probability-layer";
 // Fire older than this behind the current front is drawn as burned char (replay: last ~30 min glow).
 const BURNING_WINDOW_MINUTES = 30;
 const SMOOTHING_ITERATIONS = 2;
@@ -313,56 +309,6 @@ function fuelImage(landscape: LandscapeGrid): { url: string; corners: ImageCorne
   };
 }
 
-/**
- * Burn-probability raster: transparent at 0, then pale yellow to orange to dark red as the share
- * of runs that burned the cell rises. Mirrored by the `.fr-bp-ramp` legend in fire/ui/naturalVariation.css.
- */
-function probabilityColor(p: number): [number, number, number, number] {
-  if (!(p > 0)) return [0, 0, 0, 0];
-  const t = Math.min(1, p);
-  const lerp = (a: number, b: number, u: number) => Math.round(a + (b - a) * u);
-  const [r, g, b] =
-    t < 0.5
-      ? [lerp(255, 250, t * 2), lerp(214, 140, t * 2), lerp(90, 30, t * 2)]
-      : [lerp(250, 190, (t - 0.5) * 2), lerp(140, 30, (t - 0.5) * 2), lerp(30, 20, (t - 0.5) * 2)];
-  return [r, g, b, Math.round(60 + 160 * t)];
-}
-
-function probabilityImage(
-  landscape: LandscapeGrid,
-  values: Float32Array,
-): { url: string; corners: ImageCorners } | null {
-  const { width, height, originX, originY, cellSizeX, cellSizeY } = landscape;
-  if (values.length !== width * height) return null;
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const context = canvas.getContext("2d");
-  if (!context) return null;
-  const image = context.createImageData(width, height);
-  for (let i = 0; i < values.length; i++) {
-    const [r, g, b, a] = probabilityColor(values[i]);
-    image.data[i * 4] = r;
-    image.data[i * 4 + 1] = g;
-    image.data[i * 4 + 2] = b;
-    image.data[i * 4 + 3] = a;
-  }
-  context.putImageData(image, 0, 0);
-  const left = originX - cellSizeX / 2;
-  const top = originY - cellSizeY / 2;
-  const right = left + width * cellSizeX;
-  const bottom = top + height * cellSizeY;
-  return {
-    url: canvas.toDataURL(),
-    corners: [
-      mercatorToLonLat(left, top),
-      mercatorToLonLat(right, top),
-      mercatorToLonLat(right, bottom),
-      mercatorToLonLat(left, bottom),
-    ],
-  };
-}
-
 /** Satellite (USGS aerial imagery) view of the same run, switchable with the diorama. */
 export default function SatelliteFireMap({
   origin,
@@ -374,7 +320,6 @@ export default function SatelliteFireMap({
   fitSignal,
   clickMode,
   onMapClick,
-  burnProbability = null,
 }: FireMapProps) {
   const container = useRef<HTMLDivElement>(null);
   const mapRef = useRef<Map | null>(null);
@@ -510,25 +455,6 @@ export default function SatelliteFireMap({
             id: "fire-fuel-layer",
             type: "raster",
             source: FUEL_SOURCE,
-            paint: { "raster-opacity": 0, "raster-resampling": "nearest" },
-          },
-          beforeId,
-        );
-        map.addSource(PROBABILITY_SOURCE, {
-          type: "image",
-          url: TRANSPARENT_PIXEL,
-          coordinates: [
-            [-0.001, 0.001],
-            [0.001, 0.001],
-            [0.001, -0.001],
-            [-0.001, -0.001],
-          ],
-        });
-        map.addLayer(
-          {
-            id: PROBABILITY_LAYER,
-            type: "raster",
-            source: PROBABILITY_SOURCE,
             paint: { "raster-opacity": 0, "raster-resampling": "nearest" },
           },
           beforeId,
@@ -704,22 +630,6 @@ export default function SatelliteFireMap({
     }
     map.setPaintProperty("fire-fuel-layer", "raster-opacity", showFuel && fuelOverlay ? 0.85 : 0);
   }, [ready, fuelOverlay, showFuel]);
-
-  const probabilityOverlay = useMemo(
-    () => (landscape && burnProbability ? probabilityImage(landscape, burnProbability) : null),
-    [landscape, burnProbability],
-  );
-
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !ready) return;
-    const source = map.getSource(PROBABILITY_SOURCE) as ImageSource | undefined;
-    if (!source) return;
-    if (probabilityOverlay) {
-      source.updateImage({ url: probabilityOverlay.url, coordinates: probabilityOverlay.corners });
-    }
-    map.setPaintProperty(PROBABILITY_LAYER, "raster-opacity", probabilityOverlay ? 0.9 : 0);
-  }, [ready, probabilityOverlay]);
 
   // Frame the loaded region so the ignition can be placed on it (default view is the Bay Area).
   // Padding follows the page's floating panels (--fr-inset-* on the stage); refit when they or the

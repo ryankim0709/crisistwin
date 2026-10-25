@@ -308,17 +308,3 @@ per-cell fraction burned by the horizon, `evidence: "simulated"`: 20 members of 
 
 Every output of a stochastic run is simulated. A burn-probability raster is a fraction of
 model runs, not a calibrated probability, and must be labelled that way in any UI.
-
-### In the UI
-
-`/fire` and the Simulation Studio (`/simulation`, `/dispatch`) share one "Natural variation"
-control (`app/src/fire/ui/NaturalVariationControl.tsx`): off by default; on adds a seed, a
-"New seed" button and, under "What varies", the Uneven spread (`rosSigma` 0 when off), Wind
-gusts and shifts (`windWander`) and Ember spot fires (`spotting`) switches. On `/fire` the
-observed gust factor comes from `gustFactorOf` on the weather sample the run's wind was taken
-from. The results card shows the seed and spot fires started, labelled simulated.
-
-`/fire` also has "Run N times" (10 to 50 members): `burnProbabilityEnsemble` runs in a worker
-(`burnProbability.worker.ts`, progress per member) and the per-cell fraction burned is drawn on
-the satellite map as "Chance this spot burns", labelled simulated. The 3D diorama does not draw
-it yet. The layer hides when the scenario changes after the run.

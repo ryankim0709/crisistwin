@@ -46,7 +46,7 @@ python manage.py live_run_scenario --spec api/live/specs/camp-2018-live-typical.
   // ... the batch spec (docs/batch-runner.md) ...
   "comms": {"enabled": true, "bursts": true},       // within-zone bursts (sim/gen_comms.py, docs/ground-data-calibration.md)
   "residents": {"enabled": true},                    // any ResidentParams field, e.g. "no_vehicle_share"
-  "twin": {"enabled": true, "people": "camp_2018_sourced"},  // or "grounded", "historical" (default), or fields
+  "twin": {"enabled": true, "people": "camp_2018_sourced"},  // or "historical" (default), or fields
   "live": {"noise_profile": "typical",
            "comms_towers": {"enabled": true, "scenario_date": "2018-11-08"}}
 }
@@ -150,18 +150,8 @@ Camp twin from 14:30Z, measured (vehicles):
 | shadow only | 31,638 | 1,082 | 9,432 | 58 |
 | delay only | 31,638 | 406 | 7,461 | 0 |
 | camp_2018_sourced | 27,680 | 376 | 7,445 | 10 |
-| grounded (measured 2026-10-24, TrafficParams seed 7) | 27,680 | 906 | 8,409 | not measured |
 
 All Camp zones are ordered by 18:00 in the record, so shadow evacuation matters only early.
-
-**`grounded`** (`twin.people: "grounded"`): the same compliance and shadow share, with the departure delay
-of the per-household `grounded` profile (lognormal median 42.8 min, sigma 1.246: Camp's 93 min mean with
-Marshall's spread; `sim/behavior_params.json`). The batch runner then also sets
-`residents.behavior_profile: "grounded"`: every simulated household draws its own choices (warning reach,
-stay or go, wait and see, leaving before any warning, delay, trips before leaving, route strategy,
-destination type, pets, vehicles, help) from its own random stream, and the generator uses them to pick
-which households stay, which leave first and which ask for transport. Values, sources and transferability:
-[people data, Behaviour evidence](people-data.md#behaviour-evidence).
 
 ### Comms
 

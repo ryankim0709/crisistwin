@@ -8,7 +8,6 @@ import {
   compassPoint,
 } from "../fire/spread";
 import WindSourcePicker from "../fire/ui/WindSourcePicker";
-import NaturalVariationControl, { observedGustFactor } from "../fire/ui/NaturalVariationControl";
 import type { ScenarioWindRecord } from "../fire/scenarioWeather";
 import type { FireSettings, IgnitionProblem } from "../fire/scheduledTypes";
 import { Button, EmptyState, Field, IconButton, Notice, Panel } from "../ui";
@@ -139,13 +138,11 @@ export default function ConfigPanel(props: ConfigPanelProps) {
       onScenarioChange(withoutWeather);
       return;
     }
-    const gust = observedGustFactor(record);
     onScenarioChange({
       ...scenario,
       weather: record,
       settings: {
         ...settings,
-        ...(settings.stochastic ? { stochastic: { ...settings.stochastic, gustFactor: gust } } : {}),
         windSpeedMph: record.applied.speed20ftMph,
         windFromDegrees: record.applied.fromDeg,
       },
@@ -521,16 +518,6 @@ export default function ConfigPanel(props: ConfigPanelProps) {
           <p id={`${uid}-moisture-note`} className="studio-hint">
             {matchedPreset ? matchedPreset.description : "Moisture values differ from every preset."}
           </p>
-
-          <div className="studio-field">
-            <NaturalVariationControl
-              idPrefix={`${uid}-variation`}
-              value={settings.stochastic}
-              onChange={(next) => setSettings({ stochastic: next })}
-              gustFactor={observedGustFactor(scenario.weather)}
-              spottingAvailable={spotting.enabled}
-            />
-          </div>
 
           <details className="studio-advanced">
             <summary>Advanced model settings</summary>
