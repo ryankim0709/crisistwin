@@ -319,22 +319,35 @@ function TeamDetail({ board, id, actions }: { board: Board; id: string; actions:
           { label: "Home base", value: station ? `${station.name}${station.type === "synthetic" ? " (synthetic)" : ""}` : "None" },
           { label: "Line", value: `${unitLineOn(board, team, fire).toFixed(1)} m/min here` },
           { label: "Holds flames up to", value: `${holdsFlameFeet(team.kind)} ft` },
-          ...(team.status === "en_route"
+          ...(team.status === "en_route" || team.status === "returning"
             ? [
                 {
                   label: "Travel",
                   value:
                     team.travel === "pending"
-                      ? "Waiting at base for its road route"
+                      ? team.status === "returning"
+                        ? "Waiting where it is for its road route home"
+                        : "Waiting for its road route"
                       : team.travel === "road_offboard"
                         ? "Road network, with an off-road leg"
                         : "Road network",
                 },
               ]
             : []),
+          ...(team.status === "returning"
+            ? [
+                {
+                  label: "Back at station",
+                  value:
+                    team.travel === "pending" || team.arriveAt === null
+                      ? "Not known yet (no road route yet)"
+                      : `in ${Math.max(0, Math.ceil(team.arriveAt - board.minute))} min`,
+                },
+              ]
+            : []),
         ]}
       />
-      {team.status !== "available" ? (
+      {team.status === "en_route" || team.status === "on_scene" ? (
         <div className="dm-actions">
           <Button size="sm" variant="secondary" onClick={() => actions.releaseTeam(team.id)}>
             Release {team.id}

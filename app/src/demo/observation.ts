@@ -28,6 +28,7 @@ import {
   activeFires,
   attackPositions,
   crewTarget,
+  dispatchable,
   positionDestKey,
   unreachableClasses,
   positionEta,
@@ -319,7 +320,11 @@ export function buildObservation(
         team.status === "en_route" && team.arriveAt !== null ? Math.max(0, Math.ceil(team.arriveAt - minute)) : null,
       line_m_per_min: round1(unitLineOn(board, team, fire)),
       holds_flame_ft: holdsFlameFeet(team.kind),
-      travel: team.status === "en_route" ? team.travel : null,
+      travel: team.status === "en_route" || team.status === "returning" ? team.travel : null,
+      eta_home_min:
+        team.status === "returning" && team.travel !== "pending" && team.arriveAt !== null
+          ? Math.max(0, Math.ceil(team.arriveAt - minute))
+          : null,
       position_id: team.lineId ? (board.lines.find((l) => l.id === team.lineId)?.plan.id ?? null) : null,
     };
   });
@@ -387,6 +392,7 @@ export function buildObservation(
       fires_burning: fires.filter((f) => f.status === "burning").length,
       fires_out_total: board.firesOutTotal,
       crews_available: board.teams.filter((t) => t.status === "available").length,
+      crews_returning: board.teams.filter((t) => t.status === "returning").length,
     },
     monitor: { woke_because: wokeBecause },
     previous,
@@ -403,7 +409,7 @@ export interface MonitorMemory {
   minute: number;
   /** Fires on the board (not out). */
   fireIds: string[];
-  /** Crews en route or on scene. */
+  /** Crews en route or on scene (not returning: a returning crew can be sent). */
   busyCrewIds: string[];
   /** Burning fires their assigned crews could not contain. */
   outrunFireIds: string[];
@@ -434,7 +440,7 @@ export function rememberDecision(board: Board, forecasts: Map<string, ZoneForeca
   return {
     minute: board.minute,
     fireIds: activeFires(board).map((f) => f.id),
-    busyCrewIds: board.teams.filter((t) => t.status !== "available").map((t) => t.id),
+    busyCrewIds: board.teams.filter((t) => t.status === "en_route" || t.status === "on_scene").map((t) => t.id),
     outrunFireIds: outrunFires(board).map((f) => f.id),
     slackTiers: slackTiers(board, forecasts),
   };
@@ -458,7 +464,8 @@ export function wakeReasons(
     reasons.push(`New fire${fresh.length > 1 ? "s" : ""} since the last decision: ${listIds(fresh.map((f) => `${f.id} (${f.source})`))}.`);
   }
 
-  const free = board.teams.filter((t) => t.status === "available").map((t) => t.id);
+  // Free at their station or returning to it: both can be sent.
+  const free = board.teams.filter(dispatchable).map((t) => t.id);
   if (free.length > 0) {
     const seenOutrun = new Set(memory?.outrunFireIds ?? []);
     for (const fire of outrunFires(board)) {

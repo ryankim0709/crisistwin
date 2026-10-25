@@ -7,19 +7,22 @@ import {
   applyTravelLeg,
   attackPositions,
   crewTarget,
+  dispatchable,
   distanceM,
   legStatus,
   positionDestKey,
+  reachableFree,
   travelKey,
   travelLegFailed,
+  tripStart,
   type Board,
   type Team,
 } from "./model";
 import { accessClassOf } from "./realism";
 
-/** Free units per burning fire whose road time is fetched ahead (nearest by straight line). */
+/** Free units per burning fire whose road time is fetched ahead: those its options list (model.containOptions, 4). */
 export const PREFETCH_UNITS_PER_FIRE = 4;
-/** Free units per attack position whose road time is fetched ahead. */
+/** Free units per attack position whose road time is fetched ahead: those its options list (model.positionOptions, 2). */
 export const PREFETCH_UNITS_PER_POSITION = 2;
 /**
  * Reachability probes: per target (each burning fire's crew target and each of its attack
@@ -46,7 +49,7 @@ export interface RouteTarget {
   to: LonLat;
   /** Where "nearest" is measured from (the fire's origin for direct attack). */
   near: LonLat;
-  /** Nearest units overall to fetch after the per-class probes. */
+  /** How many units its options list (fetched after the per-class probes, in option order). */
   extra: number;
 }
 
@@ -65,10 +68,11 @@ export function routeTargets(board: Board): RouteTarget[] {
 
 /**
  * The next batch of road legs to ask for (at most `max`), in priority order: trips of dispatched
- * units waiting at base for their road route; per target, the PROBES_PER_CLASS nearest free
- * units of each access class (straight line, ties by id); then the target's nearest free units
- * overall. Units known unable to reach a target (model.legStatus "none") and legs already known
- * or in `seen` are skipped. Pure and deterministic for a board.
+ * units waiting for their road route and of released units waiting for their road home; per target, the PROBES_PER_CLASS nearest free
+ * units of each access class (straight line, ties by id); then the units the target's options
+ * would list now (model.reachableFree, by arrival) that are still on the estimate. Units known
+ * unable to reach a target (model.legStatus "none") and legs already known or in `seen` are
+ * skipped. Pure and deterministic for a board.
  */
 export function crewRouteRequests(
   board: Board,
@@ -84,17 +88,23 @@ export function crewRouteRequests(
     requests.push({ id: key, access_class: accessClassOf(kind), from, to });
   };
   for (const team of board.teams) {
-    if (team.status === "en_route" && team.travel === "pending" && team.legKey && team.target) {
+    // Dispatched units waiting to set off, and released units waiting for their road home.
+    if ((team.status === "en_route" || team.status === "returning") && team.travel === "pending" && team.legKey && team.target) {
       want(team.legKey, team.kind, team.position, team.target);
     }
   }
-  const free = board.teams.filter((t) => t.status === "available");
+  // Free and returning units; a returning unit's trips start from its tripStart point (model.tripStart).
+  const free = board.teams.filter(dispatchable);
+  const origin = new Map(free.map((t) => [t.id, tripStart(board, t).from] as const));
   const lists = targets.map((t) =>
     free
       .filter((team) => legStatus(board, team, t.destKey, t.to).route !== "none")
-      .sort((a, b) => distanceM(a.position, t.near) - distanceM(b.position, t.near) || a.id.localeCompare(b.id)),
+      .sort((a, b) => distanceM(origin.get(a.id)!, t.near) - distanceM(origin.get(b.id)!, t.near) || a.id.localeCompare(b.id)),
   );
-  const ask = (team: Team, t: RouteTarget) => want(travelKey(team, team.position, t.destKey, t.to), team.kind, team.position, t.to);
+  const ask = (team: Team, t: RouteTarget) => {
+    const from = origin.get(team.id) ?? team.position;
+    want(travelKey(team, from, t.destKey, t.to), team.kind, from, t.to);
+  };
   targets.forEach((t, i) => {
     const perClass = new Map<string, number>();
     for (const team of lists[i]) {
@@ -105,8 +115,11 @@ export function crewRouteRequests(
       ask(team, t);
     }
   });
-  targets.forEach((t, i) => {
-    for (const team of lists[i].slice(0, t.extra)) ask(team, t);
+  // The units the options would list now (by arrival, estimates included): fetch those still on
+  // the estimate. Their road times replace the (usually shorter) estimate, so the next batch
+  // fetches the units that move up, until the listed ones all have road times.
+  targets.forEach((t) => {
+    for (const r of reachableFree(board, t.destKey, t.to).slice(0, t.extra)) if (!r.road) ask(r.team, t);
   });
   return requests;
 }
@@ -133,8 +146,8 @@ export function applyCrewRoutes(board: Board, routes: CrewRoutesResponse["routes
  * route (keyed by the trip they are on, `team.legKey`, to their actual destination: the fire's
  * anchor or their attack line); then, for each burning fire's crew target and each of its attack
  * positions (re-planned positions are new targets), the PROBES_PER_CLASS nearest free units of
- * each access class, so each class's reachability is known (model.classReach); then the nearest
- * free units overall, so the commander's options use road times. Units already known unable to
+ * each access class, so each class's reachability is known (model.classReach); then the units
+ * its options list while they are still on the estimate, so the commander's options use road times. Units already known unable to
  * reach a target (own leg failed, or their class cannot) are skipped. A trip with no road route
  * is recorded with the router's reason (model.travelLegFailed releases units waiting on it, and
  * notes the class). At most MAX_REQUESTS legs per request, one request at a time (the effect

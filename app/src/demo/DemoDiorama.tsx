@@ -113,7 +113,7 @@ export default function DemoDiorama({ board, version, field, landscape, regionNa
       activeFires(board).map((fire) => ({
         id: fire.id,
         point: { longitude: fire.origin[0], latitude: fire.origin[1] },
-        label: fire.status === "burning" ? fire.id : `${fire.id} · ${fire.status}`,
+        label: fire.status === "burning" ? fire.id : `✓ ${fire.id} ${fire.status}`,
       })),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the board is mutated in place; version marks changes
     [board, version],

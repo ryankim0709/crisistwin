@@ -48,6 +48,16 @@ const BOARD_ROWS: { key: string; label: string; swatch: ReactNode }[] = [
     ),
   },
   {
+    key: "bd-returning",
+    label: "Unit returning to station (sim)",
+    swatch: (
+      <svg viewBox="0 0 20 14" aria-hidden="true">
+        <line x1="1" y1="7" x2="19" y2="7" stroke={MAP_COLOR.responder} strokeOpacity="0.6" strokeWidth="1.5" strokeDasharray="0.5 2" />
+        <circle cx="14" cy="7" r="4.5" fill={MAP_COLOR.responder} fillOpacity="0.55" stroke="#fff" strokeWidth="1" />
+      </svg>
+    ),
+  },
+  {
     key: "bd-enroute",
     label: "Unit en route (sim)",
     swatch: (
@@ -91,10 +101,11 @@ const BOARD_ROWS: { key: string; label: string; swatch: ReactNode }[] = [
   },
   {
     key: "bd-station",
-    label: "Fire station (sim)",
+    label: "Fire station; the number is units parked there (sim)",
     swatch: (
       <svg viewBox="0 0 20 14" aria-hidden="true">
-        <circle cx="10" cy="7" r="4" fill="#fff" stroke={MAP_COLOR.ink} strokeWidth="3" />
+        <circle cx="10" cy="7" r="6" fill="#C62828" stroke="#fff" strokeWidth="1.5" />
+        <text x="10" y="9.6" textAnchor="middle" fontSize="7.5" fill="#fff" fontWeight="700">3</text>
       </svg>
     ),
   },
@@ -244,7 +255,7 @@ const ROWS: { key: string; label: string; swatch: ReactNode }[] = [
 
 export default function MapLegend({ record = true, board = false }: { record?: boolean; board?: boolean }) {
   return (
-    <details className="lc-legend" open>
+    <details className="lc-legend">
       <summary>Legend</summary>
       <ul>
         {ROWS.filter((r) => record || r.key !== "ground").map((r) => (

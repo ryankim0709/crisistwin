@@ -92,7 +92,7 @@ its perimeter grows by perimeter_growth_m_per_min while it burns.
 - Crews on scene build fire line at their line_m_per_min. A fire is contained when the line \
 reaches its perimeter AND head_flame_ft is at most the largest holds_flame_ft of its crews on \
 scene (hand crews hold 4 ft, engines and dozers 8 ft); then it is mopped up, goes out, and its \
-crews are free again. A fire whose head flame is too long, or whose perimeter grows faster than \
+crews drive back to their stations (sendable again). A fire whose head flame is too long, or whose perimeter grows faster than \
 the line, is not contained until the wind drops: send more crews early, because a young fire \
 is far cheaper to catch, and do not waste crews on a fire nobody can hold. Crews drive the road \
 network after turnout; hand crews and dozers take 30 to 60 minutes to mobilise.
@@ -141,7 +141,9 @@ another fire or position is reassigned. Only crews listed in a position's (or, f
 attack, the fire's) options can reach it; unreachable_classes explains which apparatus can't \
 use the roads there (match crews by access_class), and an option with route "estimate" uses a \
 straight-line time because that crew's road time is not known yet. \
-release_crew(crew_id) frees a crew. \
+release_crew(crew_id) frees a crew. A released crew (line done, fire out, release_crew) \
+drives back to its station as status returning (eta_home_min) and can be sent again from \
+where it is; options already time it. \
 order_evacuation(zone_id, destination_id): destination_id from that zone's options only.
 - Use only ids from the observation. Set the fields an order does not use to null.
 - First write a 1-3 sentence assessment naming what changed, then call issue_orders exactly \

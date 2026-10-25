@@ -13,14 +13,15 @@ export const SOURCE_LABEL: Record<FireSource, string> = {
 
 export const FIRE_STATUS: Record<FireStatus, { label: string; tone: TagTone }> = {
   burning: { label: "Burning", tone: "danger" },
-  contained: { label: "Contained", tone: "warning" },
-  out: { label: "Out", tone: "success" },
+  contained: { label: "✓ Contained", tone: "success" },
+  out: { label: "✓ Out", tone: "success" },
 };
 
 export const TEAM_STATUS: Record<TeamStatus, string> = {
   available: "Available",
   en_route: "En route",
   on_scene: "On scene",
+  returning: "Returning to station",
 };
 
 export const nf = (n: number) => Math.round(n).toLocaleString("en-US");

@@ -66,6 +66,8 @@ const LABEL_CSS = `
 .fdx-dmzone-ordered { color: #7a0a05; }
 .fdx-dmzone-threatened { color: #7a4b00; }
 .fdx-compact .fdx-dmunit, .fdx-compact .fdx-dmstation, .fdx-compact .fdx-dmzone { font-size: 9px; padding: 1px 6px; }
+/* Station and unit tags are hidden: red firehouses and the vehicles read on their own; ids live in the panels. */
+.fdx-dmunit, .fdx-dmstation { display: none; }
 `;
 
 type Label = { obj: CSS2DObject; el: HTMLDivElement };
@@ -176,8 +178,8 @@ export class DemoBoardOverlay implements BoardOverlay {
     }
     const routeKey = board
       ? board.teams
-          .filter((t) => t.status === "en_route" && t.target)
-          .map((t) => `${t.id}>${t.fireId}:${t.route?.length ?? 0}:${t.target!.join(",")}`)
+          .filter((t) => (t.status === "en_route" || t.status === "returning") && t.target)
+          .map((t) => `${t.id}>${t.fireId ?? "home"}:${t.route?.length ?? 0}:${t.target!.join(",")}`)
           .join("|")
       : "";
     if (routeKey !== this.routeKey || !this.routes) {
@@ -398,7 +400,7 @@ export class DemoBoardOverlay implements BoardOverlay {
         x = spot.at.x + Math.cos(angle) * PARK_RADIUS;
         z = spot.at.z + Math.sin(angle) * PARK_RADIUS;
         yaw = -angle;
-      } else if (team.status === "en_route" && team.target) {
+      } else if ((team.status === "en_route" || team.status === "returning") && team.target) {
         const ahead = this.toWorld(team.target);
         if (ahead) yaw = Math.atan2(-(ahead.z - at.z), ahead.x - at.x);
       }
@@ -434,7 +436,9 @@ export class DemoBoardOverlay implements BoardOverlay {
           ? `${first.fireId} · ${ids}`
           : first.status === "en_route" && first.fireId && members.length === 1
             ? `${ids} → ${first.fireId}`
-            : `${ids}${members.every((t) => t.status === "available") ? " · free" : ""}`,
+            : members.every((t) => t.status === "returning")
+              ? `${ids} · returning to station`
+              : `${ids}${members.every((t) => t.status === "available") ? " · free" : ""}`,
       );
       label.obj.position.set(spot.at.x, spot.at.y + (members.length > 1 ? 5 : 4), spot.at.z);
       label.obj.visible = true;
@@ -469,10 +473,10 @@ export class DemoBoardOverlay implements BoardOverlay {
     parent.add(group);
     this.routes = group;
     for (const team of board?.teams ?? []) {
-      // Only road lines: a unit waiting for its road route has none yet.
-      if (team.status !== "en_route" || !team.route || team.route.length < 2) continue;
+      // Only road lines: a unit waiting for its road route has none yet. Returning units too (their road home).
+      if ((team.status !== "en_route" && team.status !== "returning") || !team.route || team.route.length < 2) continue;
       const positions = this.drape(team.route, LIFT);
-      if (positions.length >= 6) group.add(this.line(positions, DEMO_3D_COLORS.route, 2, true));
+      if (positions.length >= 6) group.add(this.line(positions, DEMO_3D_COLORS.route, team.status === "returning" ? 1 : 2, true));
     }
   }
 

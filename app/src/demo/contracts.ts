@@ -309,11 +309,18 @@ export interface CrewObservation {
   fire_id: string | null;
   /** Minutes until on scene, while en route. */
   eta_min: number | null;
+  /**
+   * While `status` is "returning" (released: line finished, fire out, release_crew; driving
+   * back to its home station on a road leg): minutes until it is back and available there;
+   * null while its road home is not known yet. A returning crew can be sent again: options
+   * time it from where it is.
+   */
+  eta_home_min: number | null;
   /** On its fire's fuel and slope (or where it stands, when free). */
   line_m_per_min: number;
   /** Longest head flame its line holds, ft (PMS 465 Hauling chart). */
   holds_flame_ft: number;
-  /** How its current travel time was found, while en route. */
+  /** How its current travel time was found, while en route or returning. */
   travel: TravelBasis | null;
   /** Attack position (FireObservation.attack_positions id) it is building line at; null = direct attack or free. */
   position_id: string | null;
@@ -441,7 +448,9 @@ export interface DemoObservation {
     needs_transport_people_at_risk: number | null;
     fires_burning: number;
     fires_out_total: number;
+    /** Crews free at their station / driving back to it (both can be sent). */
     crews_available: number;
+    crews_returning: number;
   };
   monitor: { woke_because: string[] };
   previous: { minute: number; summary: string; rejected: string[] } | null;

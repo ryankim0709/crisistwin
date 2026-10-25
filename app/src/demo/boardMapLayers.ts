@@ -197,9 +197,17 @@ function metresBetween(a: LonLat, b: LonLat): number {
  * station, are spread on a ring of FAN_RADIUS_M around it, in unit-id order starting from north, so
  * each stays visible and clickable. Deterministic; a lone unit stays at its true position.
  */
+/** An available unit standing at its home station: drawn as part of the station's marker, not as its own dot. */
+function isParked(board: Board, team: Board["teams"][number]): boolean {
+  if (team.status !== "available") return false;
+  const home = board.stations.find((s) => s.id === team.station);
+  return !!home && metresBetween(team.position, home.location) < PARKED_M;
+}
+
 export function fanOutTeams(board: Board): Map<string, LonLat> {
   const spots: { at: LonLat; members: { id: string; pos: LonLat }[] }[] = [];
   for (const team of board.teams) {
+    if (isParked(board, team)) continue;
     const pos = teamPosition(board, team);
     const spot = spots.find((s) => metresBetween(s.at, pos) < SPOT_M);
     if (spot) spot.members.push({ id: team.id, pos });
@@ -224,10 +232,15 @@ function buildTeams(board: Board, fanned: Map<string, LonLat>) {
   const teams: Feature[] = [];
   const lines: Feature[] = [];
   for (const team of board.teams) {
+    // Units parked at their station are counted on the station marker instead (buildStations).
+    if (isParked(board, team)) continue;
     const pos = fanned.get(team.id) ?? teamPosition(board, team);
     teams.push(point(pos, { id: team.id, status: team.status }));
-    // Only road lines are drawn: a unit waiting for its road route stays at its base, with no line.
-    if (team.status === "en_route" && team.route && team.route.length > 1) lines.push(lineFeature(team.route, { id: team.id }));
+    // Only road lines are drawn: a unit waiting for its road route stays where it is, with no line.
+    // Returning units (driving back to their station) draw their road home dotted.
+    if ((team.status === "en_route" || team.status === "returning") && team.route && team.route.length > 1) {
+      lines.push(lineFeature(team.route, { id: team.id, status: team.status }));
+    }
   }
   return { teams, lines };
 }
@@ -255,11 +268,18 @@ function buildStations(board: Board, snapshot: ScenarioSnapshot | null | undefin
     const snap = snapshotStationAt(snapshot, s.location);
     const name = shortStationName(s.name);
     const parked = board.teams
-      .filter((t) => metresBetween(t.position, s.location) < 100 && t.status !== "en_route")
+      .filter((t) => t.station === s.id && isParked(board, t))
       .map((t) => t.id)
       .sort();
     const head = snap ? `${name} · ${snap.engines_available}/${snap.engines_total}` : name;
-    return point(s.location, { name: head, text: parked.length ? `${head}\n${parked.join(" ")}` : head });
+    // One marker per station: the number of units parked there; clicking it selects the first of them.
+    return point(s.location, {
+      name: head,
+      text: parked.length ? `${head}\n${parked.join(" ")}` : head,
+      count: parked.length,
+      label: parked.length ? String(parked.length) : "",
+      ...(parked.length ? { id: parked[0] } : {}),
+    });
   });
 }
 
@@ -325,10 +345,43 @@ const SOURCES = [
   "bd-stations", "bd-dest", "bd-sel-area", "bd-sel-point", "bd-evac", "bd-attack-lines", "bd-attack-points",
 ];
 const HATCH_IMAGE = "bd-fire-hatch";
+/** Fire station marker, the red of the 3D firehouses. */
+const STATION_RED = "#C62828";
+/** A unit within this distance of its home station, and available, counts as parked there. */
+const PARKED_M = 100;
+const CHECK_IMAGE = "bd-fire-check";
+/** Contained / out badge colour (a green check on a white ring), mirrors --ct-success. */
+const CHECK_COLOR = "#1F7A4A";
+
+/** A round green badge with a white check mark, drawn once (map glyph fonts may lack U+2713). */
+function checkBadge(): ImageData {
+  const size = 28;
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext("2d")!;
+  ctx.fillStyle = "#FFFFFF";
+  ctx.beginPath();
+  ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = CHECK_COLOR;
+  ctx.beginPath();
+  ctx.arc(size / 2, size / 2, size / 2 - 2.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "#FFFFFF";
+  ctx.lineWidth = 3.2;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  ctx.moveTo(size * 0.29, size * 0.52);
+  ctx.lineTo(size * 0.44, size * 0.67);
+  ctx.lineTo(size * 0.72, size * 0.36);
+  ctx.stroke();
+  return ctx.getImageData(0, 0, size, size);
+}
 const FONT = ["Noto Sans Regular"];
 const FOCUS_ZOOM = 12.5;
 /** Click priority: team, then fire, then zone. */
-const INTERACTIVE = ["bd-teams", "bd-fire-fill", "bd-fire-labels", "bd-zones-fill"];
+const INTERACTIVE = ["bd-teams", "bd-stations", "bd-fire-fill", "bd-fire-labels", "bd-zones-fill"];
 /** Live point layers: a click that hits one of these is not an "empty map" click. */
 const LIVE_HIT_LAYERS = ["lc-ground", "lc-points", "lc-help", "lc-responders", "lc-queues", "lc-dest"];
 
@@ -341,6 +394,7 @@ function installLayers(map: MapLibreMap, beforeId: string): string[] {
   const empty = collection([]);
   for (const id of SOURCES) map.addSource(id, { type: "geojson", data: empty });
   map.addImage(HATCH_IMAGE, fireHatch(MAP_COLOR.fireEdge));
+  if (!map.hasImage(CHECK_IMAGE)) map.addImage(CHECK_IMAGE, checkBadge(), { pixelRatio: 2 });
   const layers: string[] = [];
   const add = (layer: Parameters<MapLibreMap["addLayer"]>[0] & { id: string }) => {
     map.addLayer(layer, beforeId);
@@ -402,10 +456,25 @@ function installLayers(map: MapLibreMap, beforeId: string): string[] {
   add({ id: "bd-attack-points", type: "symbol", source: "bd-attack-points", minzoom: 12,
     layout: { "text-field": ["get", "text"], "text-font": FONT, "text-size": 11, "text-offset": [0, 1.2], "text-anchor": "top", "text-optional": true },
     paint: text(BOARD_COLOR.fireLine, 1.6) });
-  add({ id: "bd-team-lines", type: "line", source: "bd-team-lines", paint: { "line-color": MAP_COLOR.responder, "line-width": 1.5, "line-dasharray": [1.5, 1.5] } });
-  add({ id: "bd-stations", type: "circle", source: "bd-stations", paint: { "circle-radius": 5, "circle-color": "#FFFFFF", "circle-stroke-color": MAP_COLOR.ink, "circle-stroke-width": 3 } });
+  add({ id: "bd-team-lines", type: "line", source: "bd-team-lines", paint: {
+    "line-color": MAP_COLOR.responder,
+    "line-width": 1.5,
+    "line-opacity": ["match", ["get", "status"], "returning", 0.6, 1] as never,
+    "line-dasharray": ["match", ["get", "status"], "returning", ["literal", [0.5, 2]], ["literal", [1.5, 1.5]]] as never,
+  } });
+  // A station is one marker: red with the number of units parked there, or a small ring when none are.
+  add({ id: "bd-stations", type: "circle", source: "bd-stations", paint: {
+    "circle-radius": ["case", [">", ["get", "count"], 0], 9, 5] as never,
+    "circle-color": ["case", [">", ["get", "count"], 0], STATION_RED, "#FFFFFF"] as never,
+    "circle-stroke-color": ["case", [">", ["get", "count"], 0], "#FFFFFF", STATION_RED] as never,
+    "circle-stroke-width": 2.5,
+  } });
+  add({ id: "bd-station-count", type: "symbol", source: "bd-stations", filter: [">", ["get", "count"], 0],
+    layout: { "text-field": ["get", "label"], "text-font": FONT, "text-size": 11, "text-allow-overlap": true, "text-ignore-placement": true },
+    paint: { "text-color": "#FFFFFF" } });
   add({ id: "bd-station-labels", type: "symbol", source: "bd-stations", minzoom: 11,
-    layout: { "text-field": ["get", "text"], "text-font": FONT, "text-size": 11, "text-offset": [0, 2.2], "text-anchor": "top", "text-optional": true },
+    // Hidden: the station marks speak for themselves; unit and station ids are in the panels.
+    layout: { visibility: "none", "text-field": ["get", "text"], "text-font": FONT, "text-size": 11, "text-offset": [0, 2.2], "text-anchor": "top", "text-optional": true },
     paint: text(MAP_COLOR.ink, 1.4) });
   add({ id: "bd-dest", type: "circle", source: "bd-dest", paint: { "circle-radius": 4.5, "circle-color": "#FFFFFF", "circle-stroke-color": MAP_COLOR.shelter, "circle-stroke-width": 2 } });
   add({ id: "bd-dest-labels", type: "symbol", source: "bd-dest", minzoom: 12.5,
@@ -421,11 +490,11 @@ function installLayers(map: MapLibreMap, beforeId: string): string[] {
     "circle-radius": 6,
     "circle-color": MAP_COLOR.responder,
     "circle-stroke-color": "#FFFFFF",
-    "circle-stroke-width": ["match", ["get", "status"], "en_route", 1, 2] as never,
-    "circle-opacity": ["match", ["get", "status"], "en_route", 0.75, 1] as never,
+    "circle-stroke-width": ["match", ["get", "status"], ["en_route", "returning"], 1, 2] as never,
+    "circle-opacity": ["match", ["get", "status"], "en_route", 0.75, "returning", 0.55, 1] as never,
   } });
   add({ id: "bd-team-labels", type: "symbol", source: "bd-teams",
-    layout: { "text-field": ["get", "id"], "text-font": FONT, "text-size": 11, "text-offset": [0, -1], "text-anchor": "bottom", "text-allow-overlap": true },
+    layout: { visibility: "none", "text-field": ["get", "id"], "text-font": FONT, "text-size": 11, "text-offset": [0, -1], "text-anchor": "bottom", "text-allow-overlap": true },
     paint: text(MAP_COLOR.responder, 1.6) });
   add({ id: "bd-zone-labels", type: "symbol", source: "bd-zone-labels",
     layout: { "text-field": ["get", "text"], "text-font": FONT, "text-size": 12, "text-letter-spacing": 0.04 },
@@ -433,6 +502,9 @@ function installLayers(map: MapLibreMap, beforeId: string): string[] {
   add({ id: "bd-fire-labels", type: "symbol", source: "bd-fire-labels",
     layout: { "text-field": ["get", "text"], "text-font": FONT, "text-size": 12, "text-letter-spacing": 0.04, "text-allow-overlap": true },
     paint: text(STATUS_MATCH(MAP_COLOR.fireEdge, MAP_COLOR.fireEdge, BOARD_COLOR.scarEdge), 1.8) });
+  // Contained or out: a green check badge above the fire's label.
+  add({ id: "bd-fire-check", type: "symbol", source: "bd-fire-labels", filter: ["!=", ["get", "status"], "burning"],
+    layout: { "icon-image": CHECK_IMAGE, "icon-anchor": "bottom", "icon-offset": [0, -16], "icon-allow-overlap": true } });
   return layers;
 }
 
@@ -452,7 +524,7 @@ export function attachBoardLayers(
     for (const layer of INTERACTIVE) {
       const id = hit.find((h) => h.layer.id === layer)?.properties?.id;
       if (typeof id !== "string") continue;
-      return { kind: layer === "bd-teams" ? "team" : layer === "bd-zones-fill" ? "zone" : "fire", id };
+      return { kind: layer === "bd-teams" || layer === "bd-stations" ? "team" : layer === "bd-zones-fill" ? "zone" : "fire", id };
     }
     return null;
   };
@@ -530,6 +602,7 @@ export function attachBoardLayers(
       for (const id of [...layerIds].reverse()) if (map.getLayer(id)) map.removeLayer(id);
       for (const id of SOURCES) if (map.getSource(id)) map.removeSource(id);
       if (map.hasImage(HATCH_IMAGE)) map.removeImage(HATCH_IMAGE);
+      if (map.hasImage(CHECK_IMAGE)) map.removeImage(CHECK_IMAGE);
     },
   };
 }

@@ -26,6 +26,8 @@ export interface AuditEntry {
   /** Drill entries that point at reports. */
   reportIds?: string[];
   boardRef?: { kind: "fire" | "zone" | "team"; id: string } | null;
+  /** A board fire outcome worth a check mark in the log. */
+  outcome?: "contained" | "out";
 }
 
 export const AUDIT_CAP = 300;
@@ -122,6 +124,7 @@ export function boardEntry(e: BoardEvent, id: string, wallMs: number): AuditEntr
     wallMs,
     simMinute: e.minute,
     title: e.text,
+    outcome: e.kind === "contained" ? "contained" : e.kind === "out" ? "out" : undefined,
   };
 }
 

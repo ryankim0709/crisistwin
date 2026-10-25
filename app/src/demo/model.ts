@@ -220,10 +220,19 @@ export interface Fire {
   closedBy: "teams" | "manual" | null;
 }
 
-export type TeamStatus = "available" | "en_route" | "on_scene";
+/**
+ * `returning`: released (line finished, fire out, release_crew, its trip refused on the road),
+ * driving back to its home station on a road leg; on no fire, and dispatchable from where it is.
+ * It becomes `available` at the station on arrival.
+ */
+export type TeamStatus = "available" | "en_route" | "on_scene" | "returning";
+/** A unit that can take an order to a fire now: free at its station, or driving back to it. */
+export function dispatchable(team: Team): boolean {
+  return team.status === "available" || team.status === "returning";
+}
 /**
  * How a unit's drive is timed: on the drill roads (`road`), with an off-network leg at one end
- * (`road_offboard`), or `pending`: dispatched, waiting at its base for its road route
+ * (`road_offboard`), or `pending`: dispatched (or released), waiting where it stands for its road route
  * (POST /api/demo/crew_routes). Units only ever move along a road line.
  */
 export type TravelBasis = "road" | "road_offboard" | "pending";
@@ -243,7 +252,11 @@ export interface Team {
   status: TeamStatus;
   fireId: string | null;
   departAt: number | null;
+  /** Board minute it starts moving along `route` (after turnout; at once on a return or a turnaround). */
+  rollAt: number | null;
   arriveAt: number | null;
+  /** Returning with no road route home yet: board minute it asks for one again (RETURN_RETRY_MINUTES). */
+  returnRetryAt: number | null;
   /** Where it is driving to (the fire's heel when dispatched, or its attack line's anchor point). */
   target: LonLat | null;
   /** Road line while en route (null while its road route is pending). */
@@ -926,7 +939,9 @@ function newTeam(id: string, kind: DemoApparatusKind, station: string, location:
     status: "available",
     fireId: null,
     departAt: null,
+    rollAt: null,
     arriveAt: null,
+    returnRetryAt: null,
     target: null,
     route: null,
     travel: null,
@@ -1466,7 +1481,7 @@ export function classBlocked(board: Board, access: AccessClass, destKey: string,
   if (!entry || entry.reached || entry.reason === null) return null;
   if (entry.failedFrom.length >= REACH_CONFIRM_ORIGINS) return entry.reason;
   const origins = new Set(
-    board.teams.filter((t) => t.status === "available" && accessClassOf(t.kind) === access).map((t) => originKey(t.position)),
+    board.teams.filter((t) => dispatchable(t) && accessClassOf(t.kind) === access).map((t) => originKey(tripStart(board, t).from)),
   );
   return [...origins].every((o) => entry.failedFrom.includes(o)) ? entry.reason : null;
 }
@@ -1481,15 +1496,17 @@ export type LegStatus =
   | { route: "none"; reason: string; classWide: boolean };
 
 export function legStatus(board: Board, team: Team, destKey: string, to: LonLat): LegStatus {
-  const from = teamPosition(board, team);
+  const start = tripStart(board, team);
+  const from = start.from;
+  const lead = start.turnoutMin + start.leadMin;
   const key = travelKey(team, from, destKey, to);
   const leg = board.travel.get(key);
-  if (leg) return { route: "road", minutes: turnoutMinutes(team.kind) + leg.driveMinutes };
+  if (leg) return { route: "road", minutes: lead + leg.driveMinutes };
   const own = board.noRoute.get(key);
   if (own) return { route: "none", reason: own, classWide: false };
   const blocked = classBlocked(board, accessClassOf(team.kind), destKey, to);
   if (blocked) return { route: "none", reason: blocked, classWide: true };
-  return { route: "estimate", minutes: turnoutMinutes(team.kind) + fallbackDriveMinutes(from, to) };
+  return { route: "estimate", minutes: lead + fallbackDriveMinutes(from, to) };
 }
 
 /** An access class on the board that cannot reach a target, with the unit kinds it covers and the router's reason. */
@@ -1527,9 +1544,9 @@ export function fallbackDriveMinutes(from: LonLat, to: LonLat): number {
 
 /** Minutes from dispatch to arrival at `to`: turnout plus the road leg, or the estimate. */
 export function travelMinutesTo(board: Board, team: Team, destKey: string, to: LonLat): number {
-  const from = teamPosition(board, team);
+  const { from, leadMin, turnoutMin } = tripStart(board, team);
   const leg = board.travel.get(travelKey(team, from, destKey, to));
-  return turnoutMinutes(team.kind) + (leg ? leg.driveMinutes : fallbackDriveMinutes(from, to));
+  return turnoutMin + leadMin + (leg ? leg.driveMinutes : fallbackDriveMinutes(from, to));
 }
 
 /** Minutes from dispatch to on scene for direct attack: turnout plus the road leg, or the estimate. */
@@ -1552,18 +1569,79 @@ function along(line: LonLat[], u: number): LonLat {
   return line[line.length - 1];
 }
 
+/** Share of its road line a moving unit has covered at board minute `minute` (0..1). */
+function routeShare(team: Team, minute: number): number {
+  if (team.rollAt === null || team.arriveAt === null) return 0;
+  const span = team.arriveAt - team.rollAt;
+  return span > 0 ? Math.min(1, Math.max(0, (minute - team.rollAt) / span)) : minute >= team.rollAt ? 1 : 0;
+}
+
+function moving(team: Team): boolean {
+  return (
+    (team.status === "en_route" || team.status === "returning") &&
+    team.rollAt !== null &&
+    team.arriveAt !== null &&
+    team.route !== null &&
+    team.route.length >= 2
+  );
+}
+
 /**
- * Where a unit is now: en route on a road line, along it after turnout (by time); waiting for
- * its road route, or otherwise, where it stands.
+ * Where a unit is now: en route or returning on a road line, along it after turnout (by time);
+ * waiting for its road route, or otherwise, where it stands.
  */
 export function teamPosition(board: Board, team: Team): LonLat {
-  if (team.status !== "en_route" || team.departAt === null || team.arriveAt === null || !team.route || team.route.length < 2) {
-    return team.position;
+  if (!moving(team)) return team.position;
+  return along(team.route!, routeShare(team, board.minute));
+}
+
+/** The part of `line` between shares u0 <= u1 (by length), as a polyline. */
+function subLine(line: LonLat[], u0: number, u1: number): LonLat[] {
+  const lengths = line.slice(1).map((p, i) => distanceM(line[i], p));
+  const total = lengths.reduce((a, b) => a + b, 0);
+  const out: LonLat[] = [along(line, u0)];
+  let acc = 0;
+  for (let i = 0; i < lengths.length; i++) {
+    acc += lengths[i];
+    const u = total > 0 ? acc / total : 1;
+    if (u > u0 && u < u1) out.push(line[i + 1]);
   }
-  const rolling = team.departAt + turnoutMinutes(team.kind);
-  const span = team.arriveAt - rolling;
-  const u = span > 0 ? Math.min(1, Math.max(0, (board.minute - rolling) / span)) : board.minute >= rolling ? 1 : 0;
-  return along(team.route, u);
+  out.push(along(line, u1));
+  return out;
+}
+
+/** A returning unit's trips are keyed from where it was at the start of this many board minutes (so its road legs are reused). */
+export const RETURN_KEY_MINUTES = 5;
+/** A unit with no road route home asks again after this many board minutes (the fire may have moved off the road). */
+export const RETURN_RETRY_MINUTES = 10;
+/** A released unit this close to its station is back (metres). */
+const AT_STATION_M = 50;
+
+/**
+ * Where a unit's next trip starts, for its road leg key: `from` (rounded into travelKey), the
+ * minutes and road line from where it is now back to `from` (`leadMin`, `lead`: a returning unit
+ * turns around and drives back along its return road to where it was at the start of the
+ * current RETURN_KEY_MINUTES bucket), and its turnout (none for a unit already on the road
+ * home). A unit en route or on scene starts from where it is, after turnout, as before.
+ */
+export interface TripStart {
+  from: LonLat;
+  leadMin: number;
+  lead: LonLat[];
+  turnoutMin: number;
+}
+
+/** `withLead`: also build the `lead` line (only dispatch needs it; otherwise []). */
+export function tripStart(board: Board, team: Team, withLead = false): TripStart {
+  const here = teamPosition(board, team);
+  if (team.status !== "returning") return { from: here, leadMin: 0, lead: [], turnoutMin: turnoutMinutes(team.kind) };
+  if (!moving(team) || board.minute <= team.rollAt!) return { from: here, leadMin: 0, lead: [], turnoutMin: 0 };
+  const bucket = Math.max(team.rollAt!, Math.floor((board.minute + 1e-6) / RETURN_KEY_MINUTES) * RETURN_KEY_MINUTES);
+  const u0 = routeShare(team, bucket);
+  const u1 = routeShare(team, board.minute);
+  if (u1 <= u0) return { from: here, leadMin: 0, lead: [], turnoutMin: 0 };
+  const lead = withLead ? subLine(team.route!, u0, u1).reverse() : [];
+  return { from: along(team.route!, u0), leadMin: board.minute - bucket, lead, turnoutMin: 0 };
 }
 
 /** The drawn and driven line of a leg: its road line, then the short walk-in from the road end to the target. */
@@ -1572,45 +1650,138 @@ function roadLine(leg: TravelLeg, target: LonLat): LonLat[] {
   return end && distanceM(end, target) > 1 ? [...leg.line, target] : leg.line;
 }
 
-function release(board: Board, team: Team): void {
+/** Takes a unit off its assignment and trip, free where it stands (dispatch reassigns from there). */
+function detach(board: Board, team: Team): void {
   team.position = teamPosition(board, team);
   team.status = "available";
   team.fireId = null;
   team.lineId = null;
   team.legKey = null;
-  team.departAt = team.arriveAt = null;
+  team.departAt = team.rollAt = team.arriveAt = team.returnRetryAt = null;
   team.target = team.route = null;
   team.travel = null;
 }
 
+/** A unit's status read afresh (after a call that changed it, which TypeScript's narrowing does not see). */
+const statusOf = (team: Team): TeamStatus => team.status;
+
+function homeStation(board: Board, team: Team): Station | undefined {
+  return board.stations.find((s) => s.id === team.station);
+}
+
 /**
- * A road leg arrived for `key`. Units dispatched on that trip and waiting for it set off along
- * the road line, timed from their dispatch: departure + turnout + road minutes.
+ * Releases a unit (line finished, fire out, release_crew, a trip with no road route): it leaves
+ * its assignment and drives back to its home station on a road leg (status `returning`), or is
+ * `available` at once when already there.
+ */
+function release(board: Board, team: Team): void {
+  detach(board, team);
+  const home = homeStation(board, team);
+  if (!home || distanceM(team.position, home.location) <= AT_STATION_M) {
+    if (home) team.position = home.location;
+    return;
+  }
+  startReturnTrip(board, team, `home:${home.id}`);
+}
+
+/**
+ * Starts (or retries) the drive home from where the unit stands, trip `destKey`: on its road leg
+ * when known (crew_routes, class-aware, an off-network end as road_offboard), else it waits there
+ * (`pending`) until the page fetches it. Never a straight-line drive.
+ */
+function startReturnTrip(board: Board, team: Team, destKey: string): void {
+  const home = homeStation(board, team)!;
+  const key = travelKey(team, team.position, destKey, home.location);
+  const leg = board.travel.get(key);
+  team.status = "returning";
+  team.fireId = null;
+  team.lineId = null;
+  team.target = home.location;
+  team.legKey = key;
+  team.departAt = team.rollAt = board.minute;
+  team.returnRetryAt = null;
+  team.route = leg ? roadLine(leg, home.location) : null;
+  team.travel = leg ? leg.basis : "pending";
+  // While pending, arriveAt is only the ASSUMPTION estimate shown; the unit does not move on it.
+  team.arriveAt = board.minute + (leg ? leg.driveMinutes : fallbackDriveMinutes(team.position, home.location));
+  const why = board.noRoute.get(key);
+  if (why) returnFailed(board, team, why);
+}
+
+/** No road route home (`reason`): the unit waits where it is, still returning, and asks again after RETURN_RETRY_MINUTES. */
+function returnFailed(board: Board, team: Team, reason: string): void {
+  team.legKey = null;
+  team.route = null;
+  team.travel = "pending";
+  team.arriveAt = null;
+  team.returnRetryAt = board.minute + RETURN_RETRY_MINUTES;
+  log(
+    board,
+    "team",
+    "board",
+    `${team.id} has no road route back to ${homeStation(board, team)?.name ?? team.station} (${reason.replace(/_/g, " ")}); it waits where it is and tries again in ${RETURN_RETRY_MINUTES} min.`,
+  );
+}
+
+/** Returning units: arrival at the station, and retries of a drive home that had no road route. */
+function stepReturns(board: Board): void {
+  for (const team of board.teams) {
+    if (team.status !== "returning") continue;
+    if (team.returnRetryAt !== null) {
+      if (team.returnRetryAt <= board.minute + 1e-6) startReturnTrip(board, team, `home:${team.station}@${Math.round(board.minute)}`);
+      continue;
+    }
+    if (team.travel === "pending" || team.arriveAt === null || team.arriveAt > board.minute) continue;
+    const home = homeStation(board, team);
+    detach(board, team);
+    if (home) team.position = home.location;
+    log(board, "team", "board", `${team.id} is back at ${home?.name ?? team.station} and available.`);
+  }
+}
+
+/**
+ * A road leg arrived for `key`. Units dispatched (or released) on that trip and waiting for it
+ * set off along the road line, timed from their dispatch: rollAt (departure + turnout; the
+ * release itself for a drive home) + road minutes.
  */
 export function applyTravelLeg(board: Board, key: string, leg: TravelLeg): void {
   board.travel.set(key, leg);
   noteReach(board, key, null);
   if (board.travel.size > 2000) board.travel.delete(board.travel.keys().next().value as string);
   for (const team of board.teams) {
-    if (team.status !== "en_route" || team.travel !== "pending" || team.legKey !== key || team.departAt === null || !team.target) continue;
-    team.arriveAt = team.departAt + turnoutMinutes(team.kind) + leg.driveMinutes;
+    if ((team.status !== "en_route" && team.status !== "returning") || team.travel !== "pending" || team.legKey !== key) continue;
+    if (team.rollAt === null || !team.target) continue;
+    team.arriveAt = team.rollAt + leg.driveMinutes;
     team.route = roadLine(leg, team.target);
     team.travel = leg.basis;
   }
 }
 
-/** The road router found no route for trip `key` (`reason`): units waiting on it are released at base. */
+/**
+ * The road router found no route for trip `key` (`reason`): units waiting to set off on it are
+ * released (they drive home, or stay free at their station); a unit waiting for its drive home
+ * waits and retries (returnFailed).
+ */
 export function travelLegFailed(board: Board, key: string, reason: string): void {
   board.noRoute.set(key, reason);
   if (board.noRoute.size > 2000) board.noRoute.delete(board.noRoute.keys().next().value as string);
   noteReach(board, key, reason);
   const why = reason.replace(/_/g, " ");
   for (const team of board.teams) {
+    if (team.status === "returning" && team.travel === "pending" && team.legKey === key) {
+      returnFailed(board, team, reason);
+      continue;
+    }
     if (team.status !== "en_route" || team.travel !== "pending" || team.legKey !== key) continue;
     const dest = team.lineId ? (board.lines.find((l) => l.id === team.lineId)?.plan.id ?? "its position") : "the fire";
     const fireId = team.fireId;
     release(board, team);
-    log(board, "team", "board", `${team.id} has no road route to ${fireId ?? "its fire"} ${dest} (${why}); it stays at its base.`);
+    log(
+      board,
+      "team",
+      "board",
+      `${team.id} has no road route to ${fireId ?? "its fire"} ${dest} (${why}); ${statusOf(team) === "returning" ? "it drives back to its station" : "it stays at its station"}.`,
+    );
   }
 }
 
@@ -1686,7 +1857,7 @@ function createLine(board: Board, fire: Fire, plan: AttackPlan): AttackLine {
   if (board.lines.length > MAX_LINES) {
     const drop = board.lines.findIndex((l) => l.completedAt !== null);
     const [gone] = board.lines.splice(drop >= 0 ? drop : 0, 1);
-    // An unfinished line dropped for room: its units are freed (no unit points at a missing line).
+    // An unfinished line dropped for room: its units are released (no unit points at a missing line).
     for (const t of board.teams) if (gone && t.lineId === gone.id) release(board, t);
   }
   return line;
@@ -1741,7 +1912,7 @@ function buildLines(board: Board, from: number, dt: number): void {
         board,
         "team",
         "board",
-        `${line.fireId} ${line.plan.id}: ${Math.round(line.lengthM)} m of line finished${crew.length ? `; ${crew.map((t) => t.id).join(", ")} free` : ""}. The line stays in the fire model.`,
+        `${line.fireId} ${line.plan.id}: ${Math.round(line.lengthM)} m of line finished${crew.length ? `; ${crew.map((t) => t.id).join(", ")} head back to their stations` : ""}. The line stays in the fire model.`,
       );
     }
   }
@@ -1830,10 +2001,13 @@ export function positionDestKey(fire: Fire, pos: AttackPosition): string {
   return pos.line?.id ?? lineIdFor(fire, pos);
 }
 
-/** Free units that can reach `to` (trip `destKey`), nearest by arrival first; units with no road route there are left out. */
+/**
+ * Dispatchable units (free, or returning to their station: timed from where they are) that can
+ * reach `to` (trip `destKey`), nearest by arrival first; units with no road route there are left out.
+ */
 export function reachableFree(board: Board, destKey: string, to: LonLat): { team: Team; eta: number; road: boolean }[] {
   return board.teams
-    .filter((t) => t.status === "available")
+    .filter(dispatchable)
     .flatMap((team) => {
       const leg = legStatus(board, team, destKey, to);
       return leg.route === "none" ? [] : [{ team, eta: leg.minutes, road: leg.route === "road" }];
@@ -1883,8 +2057,8 @@ function dispatch(
   dest: { key: string; target: LonLat; label: string; line: (() => AttackLine) | null },
   actor: "agent" | "you",
 ): string | null {
-  const from = teamPosition(board, team);
-  const key = travelKey(team, from, dest.key, dest.target);
+  const start = tripStart(board, team, true);
+  const here = teamPosition(board, team);
   const status = legStatus(board, team, dest.key, dest.target);
   if (status.route === "none") {
     const why = status.reason.replace(/_/g, " ");
@@ -1892,31 +2066,44 @@ function dispatch(
       ? `${team.id} (${kindShort(team.kind)}, road access ${accessClassOf(team.kind)}) cannot reach ${dest.label}: no road route for its apparatus class there (${why}).`
       : `${team.id} has no road route to ${dest.label} (${why}).`;
   }
-  if (team.status !== "available") {
+  const returning = team.status === "returning";
+  if (team.status === "en_route" || team.status === "on_scene") {
     const previous = assignmentLabel(board, team);
-    release(board, team);
+    detach(board, team);
     log(board, "team", actor, `${team.id} released from ${previous} to be reassigned.`);
-  }
+  } else if (returning) detach(board, team);
   const line = dest.line ? dest.line() : null;
+  const key = travelKey(team, start.from, dest.key, dest.target);
   const leg = board.travel.get(key);
-  team.position = from;
+  team.position = here;
   team.status = "en_route";
   team.fireId = fire.id;
   team.lineId = line?.id ?? null;
   team.departAt = board.minute;
+  team.rollAt = board.minute + start.turnoutMin;
   team.target = dest.target;
-  team.legKey = key;
-  team.route = leg ? roadLine(leg, dest.target) : null;
-  team.travel = leg ? leg.basis : "pending";
-  team.arriveAt = board.minute + turnoutMinutes(team.kind) + (leg ? leg.driveMinutes : fallbackDriveMinutes(from, dest.target));
+  if (leg) {
+    // A returning unit turns around: back along its road home to the trip's start, then the leg.
+    team.legKey = key;
+    team.route = [...start.lead, ...roadLine(leg, dest.target)];
+    team.travel = leg.basis;
+    team.arriveAt = team.rollAt + start.leadMin + leg.driveMinutes;
+  } else {
+    // Waits where it stands for the road leg from here (the page fetches it); the time shown is the estimate.
+    team.legKey = travelKey(team, here, dest.key, dest.target);
+    team.route = null;
+    team.travel = "pending";
+    team.arriveAt = team.rollAt + fallbackDriveMinutes(here, dest.target);
+  }
   const eta = Math.ceil(team.arriveAt - board.minute);
+  const turned = returning ? " (turned back from its return to station)" : "";
   log(
     board,
     "team",
     actor,
     leg
-      ? `${team.id} (${kindShort(team.kind)}) sent to ${dest.label}, on scene in ${eta} min.`
-      : `${team.id} (${kindShort(team.kind)}) sent to ${dest.label}; waiting at its base for its road route (about ${eta} min estimated).`,
+      ? `${team.id} (${kindShort(team.kind)}) sent to ${dest.label}${turned}, on scene in ${eta} min.`
+      : `${team.id} (${kindShort(team.kind)}) sent to ${dest.label}${turned}; waiting ${returning ? "where it is" : "at its station"} for its road route (about ${eta} min estimated).`,
   );
   return null;
 }
@@ -1942,8 +2129,14 @@ export function applyOrder(
     if (!team) return `Unknown unit ${order.crew_id}.`;
     if (order.type === "release_crew") {
       if (team.status === "available") return `${team.id} is already free.`;
+      if (team.status === "returning") return `${team.id} is already returning to its station.`;
       release(board, team);
-      log(board, "team", actor, `${team.id} released.`);
+      log(
+        board,
+        "team",
+        actor,
+        statusOf(team) === "returning" ? `${team.id} released; driving back to its station.` : `${team.id} released.`,
+      );
       return null;
     }
     const fire = board.fires.find((f) => f.id === order.fire_id);
@@ -1985,7 +2178,7 @@ export function applyOrder(
   return null;
 }
 
-/** Puts a fire out by hand; its units are freed. It stops spreading in the solver from now. */
+/** Puts a fire out by hand; its units are released (they drive back to their stations). It stops spreading in the solver from now. */
 export function closeFire(board: Board, fireId: string): string | null {
   const fire = board.fires.find((f) => f.id === fireId);
   if (!fire || fire.status === "out") return `${fireId} is already out.`;
@@ -2492,6 +2685,7 @@ function stepOnce(board: Board, dt: number, landOn: number | null): void {
 
   startDueIgnitions(board);
 
+  stepReturns(board);
   for (const team of board.teams) {
     // A unit waiting for its road route has not set off.
     if (team.status !== "en_route" || team.travel === "pending" || team.arriveAt === null || team.arriveAt > board.minute) continue;
@@ -2499,7 +2693,7 @@ function stepOnce(board: Board, dt: number, landOn: number | null): void {
     if (fire && fire.status === "burning") {
       team.position = team.target ?? crewTarget(fire);
       team.status = "on_scene";
-      team.departAt = team.arriveAt = null;
+      team.departAt = team.rollAt = team.arriveAt = null;
       team.route = null;
       team.legKey = null;
       const line = team.lineId ? board.lines.find((l) => l.id === team.lineId) : undefined;
@@ -2533,7 +2727,7 @@ function stepOnce(board: Board, dt: number, landOn: number | null): void {
       fire.closedBy = "teams";
       board.firesOutTotal += 1;
       for (const team of board.teams) if (team.fireId === fire.id) release(board, team);
-      log(board, "out", "board", `${fire.id} is out; its units are free.`);
+      log(board, "out", "board", `${fire.id} is out; its units head back to their stations.`);
     }
   }
 
@@ -2671,8 +2865,9 @@ export function checkBoardInvariants(board: Board): string[] {
     ids.add(t.id);
     const fires = crewOf.get(t.id) ?? [];
     if (fires.length > 1) problems.push(`${t.id} is on ${fires.length} fires (${fires.join(", ")})`);
-    if (t.status === "available") {
-      if (t.fireId !== null || t.lineId !== null) problems.push(`${t.id} is free but assigned (${t.fireId} ${t.lineId})`);
+    if (t.status === "available" || t.status === "returning") {
+      if (t.fireId !== null || t.lineId !== null) problems.push(`${t.id} is ${t.status} but assigned (${t.fireId} ${t.lineId})`);
+      if (t.status === "returning" && (t.target === null || t.travel === null)) problems.push(`${t.id} is returning with no trip home`);
     } else if (t.fireId === null) problems.push(`${t.id} is ${t.status} with no fire`);
     if (t.lineId !== null) {
       const line = board.lines.find((l) => l.id === t.lineId);

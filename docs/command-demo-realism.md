@@ -95,7 +95,23 @@ snapshot re-seeded while a board runs is picked up at the next Reset board.
 - **One assignment per unit.** A unit is on at most one fire and one line. `send_crew` on a unit
   en route or on scene reassigns it: it is released from its fire or line first (logged "released
   from ... to be reassigned"), then sent; a trip with no road route changes nothing. Sending it
-  where it already is is refused. `checkBoardInvariants` (run after every step in dev builds,
+  where it already is is refused.
+- **Return to station** (continuous board: units cycle station, fire, station with no end
+  state). A unit released for any reason (its line finished, its fire out after mop-up or closed
+  by hand, `release_crew`, a dispatched trip with no road route, its unfinished line dropped)
+  drives back to its home station on a road leg from `POST /api/demo/crew_routes` (its class's
+  roads; an end off the network as `road_offboard`; never a straight line), status `returning`,
+  on no fire, and is `available` at the station on arrival (logged "back at ... and
+  available"). While its road home is not known it waits where it stands (`travel: "pending"`);
+  with no road route home it waits and asks again every 10 board min (`RETURN_RETRY_MINUTES`).
+  A returning unit can be sent again, with no turnout: its trip is keyed from where it was at
+  the start of the current 5 board min (`RETURN_KEY_MINUTES`, `model.ts` `tripStart`, so road
+  legs are reused), and it turns back along its road home to that point (the minutes since,
+  `leadMin`) and then drives the leg; options list it with that time. Releasing a returning unit
+  is refused ("already returning"). The observation gives `crews[].status: "returning"`,
+  `eta_home_min` (null while its road home is not known) and `totals.crews_returning`; the wake
+  monitor treats a unit leaving its assignment as freed. `checkBoardInvariants`: a returning
+  unit is on no fire or line and has a trip home. `checkBoardInvariants` (run after every step in dev builds,
   `console.error` once per message) checks that no unit is in two fires' crew lists, a line's
   units are on its fire, engine units are available snapshot engines, and households and
   persons balance (home + on the road + out + caught = total, nothing negative).
@@ -213,8 +229,10 @@ selected-fire panel) can send them to build line where the fire is forecast to g
   free; the line stays. Options per position give `arrive_min` and `line_done_min` for the
   nearest free units that can reach it by road.
 - **Reachability per apparatus class**: road access differs by class (`access_class`, rules
-  R01-R12 of [suppression-data.md](suppression-data.md); in the Berkeley hills a Type 1 engine,
-  `engine_t1_t2`, can get `no_open_road` where a Type 3, `engine_t3`, drives in 23 min).
+  R01-R12 of [suppression-data.md](suppression-data.md); measured 2026-10-24 on drill
+  `studio-f5caaabd2a1e`, scratch script: to -122.19607, 37.87509 in the Berkeley hills every
+  Type 1 engine tried, `engine_t1_t2`, gets `no_open_road`, while the nearest Type 3s,
+  `engine_t3`, S04-E2/E3, drive 19.2 min).
   `useCrewRoutes.ts` asks `POST /api/demo/crew_routes` (at most 40 legs a request, one request
   at a time) for each burning fire's crew target and each attack position (re-planned positions
   are new targets) from the 2 nearest free units of each access class (`PROBES_PER_CLASS`),

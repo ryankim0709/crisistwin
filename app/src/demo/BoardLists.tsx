@@ -103,7 +103,12 @@ export default function BoardLists({
         )}
         <div className="lc-col-head">
           <h2>Units</h2>
-          <span className="lc-dim lc-num">{board.teams.filter((tm) => tm.status === "available").length} free</span>
+          <span className="lc-dim lc-num">
+            {board.teams.filter((tm) => tm.status === "available").length} free
+            {board.teams.some((tm) => tm.status === "returning")
+              ? `, ${board.teams.filter((tm) => tm.status === "returning").length} returning`
+              : ""}
+          </span>
         </div>
         <ul className="dm-teams">
           {board.teams.map((tm) => (
@@ -120,6 +125,11 @@ export default function BoardLists({
                 <span className="lc-dim">
                   {tm.fireId ?? board.stations.find((s) => s.id === tm.station)?.name}
                   {tm.status === "en_route" && tm.arriveAt !== null ? `, ${Math.ceil(tm.arriveAt - board.minute)} min` : ""}
+                  {tm.status === "returning"
+                    ? tm.travel === "pending" || tm.arriveAt === null
+                      ? ", waiting for its road home"
+                      : `, home in ${Math.max(0, Math.ceil(tm.arriveAt - board.minute))} min`
+                    : ""}
                 </span>
               </button>
             </li>

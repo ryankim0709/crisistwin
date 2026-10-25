@@ -116,6 +116,7 @@ export default function AuditLog({
                     {e.simMinute !== null ? <span className="lc-audit-time">{simClock(e.simMinute)}</span> : null}
                     <span className="lc-audit-rel">{age}</span>
                     <SourceTag entry={e} />
+                    {e.outcome ? <Tag tone="success">{e.outcome === "contained" ? "✓ Contained" : "✓ Out"}</Tag> : null}
                   </span>
                   <span className="lc-audit-title">{e.title}</span>
                   {e.detail ? <span className="lc-audit-detail">{e.detail}</span> : null}

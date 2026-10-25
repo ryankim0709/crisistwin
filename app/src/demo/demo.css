@@ -185,6 +185,9 @@
 .dm-team-status--on_scene {
   color: var(--ct-fire);
 }
+.dm-team-status--returning {
+  color: var(--ct-info);
+}
 
 .dm-stream {
   display: grid;
