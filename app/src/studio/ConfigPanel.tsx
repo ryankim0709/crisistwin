@@ -11,6 +11,8 @@ import WindSourcePicker from "../fire/ui/WindSourcePicker";
 import HorizonControl from "../fire/ui/HorizonControl";
 import NaturalVariationControl, { observedGustFactor } from "../fire/ui/NaturalVariationControl";
 import { weatherSeriesFromRecord, type ScenarioWindRecord } from "../fire/scenarioWeather";
+import { weatherAtMinute, withMoistureFromSeries } from "../fire/weatherSeries";
+import { weatherSeriesFromConditions, type Conditions } from "../world/conditions";
 import type { FireSettings, IgnitionProblem } from "../fire/scheduledTypes";
 import { Button, EmptyState, Field, IconButton, Notice, Panel } from "../ui";
 import {
@@ -142,6 +144,8 @@ export default function ConfigPanel(props: ConfigPanelProps) {
   const midflameIsDefault =
     Math.abs(settings.midflameAdjustment - DEFAULT_MIDFLAME_ADJUSTMENT) < MIDFLAME_DEFAULT_EPSILON;
 
+  const moistureFromWeather =
+    settings.weatherSeries?.enabled === true && settings.weatherSeries.samples.some((s) => s.moisture);
   const matchedPreset = MOISTURE_PRESETS.find((preset) =>
     MOISTURE_KEYS.every(
       (key) => Math.abs(preset.moisture[key] - settings.moisture[key]) < MOISTURE_MATCH_EPSILON,
@@ -160,7 +164,7 @@ export default function ConfigPanel(props: ConfigPanelProps) {
   }
 
   const firstFire = ignitions.find((ignition) => ignition.enabled) ?? ignitions[0] ?? null;
-  function applyWeather(record: ScenarioWindRecord | null) {
+  function applyWeather(record: ScenarioWindRecord | null, conditions?: Conditions | null) {
     const withoutSeries = settingsWithoutSeries(settings);
     if (record === null) {
       const { weather: _dropped, ...withoutWeather } = scenario;
@@ -170,12 +174,21 @@ export default function ConfigPanel(props: ConfigPanelProps) {
     const gust = observedGustFactor(record);
     // The whole hourly series runs inside the solve; the wind fields hold its peak hour.
     const converted = weatherSeriesFromRecord(record);
+    // Fuel moisture from the same date's weather (/api/conditions), hour by hour, instead of
+    // whatever preset was set: a historical day runs at that day's moisture, not Red Flag.
+    const moistureSeries = conditions
+      ? weatherSeriesFromConditions(conditions, record.query.startUtc)?.series ?? null
+      : null;
+    const series =
+      converted && moistureSeries ? withMoistureFromSeries(converted.series, moistureSeries) : converted?.series;
+    const startMoisture = moistureSeries ? weatherAtMinute(moistureSeries, 0).moisture : null;
     onScenarioChange({
       ...scenario,
       weather: record,
       settings: {
         ...withoutSeries,
-        ...(converted ? { weatherSeries: converted.series } : {}),
+        ...(series ? { weatherSeries: series } : {}),
+        ...(startMoisture ? { moisture: startMoisture } : {}),
         ...(settings.stochastic ? { stochastic: { ...settings.stochastic, gustFactor: gust } } : {}),
         windSpeedMph: record.applied.speed20ftMph,
         windFromDegrees: record.applied.fromDeg,
@@ -495,6 +508,7 @@ export default function ConfigPanel(props: ConfigPanelProps) {
             record={scenario.weather ?? null}
             onApply={applyWeather}
             usesSeries={settings.weatherSeries?.enabled === true}
+            moistureFromWeather={moistureFromWeather}
           />
 
           <Field label="Wind speed, mph (20-ft)">
@@ -562,10 +576,22 @@ export default function ConfigPanel(props: ConfigPanelProps) {
               aria-describedby={`${uid}-moisture-note`}
               onChange={(event) => {
                 const preset = MOISTURE_PRESETS.find((item) => item.id === event.target.value);
-                if (preset) setSettings({ moisture: { ...preset.moisture } });
+                if (!preset) return;
+                // A preset holds for the whole run: drop the weather day's hourly moisture.
+                const series = settings.weatherSeries;
+                setSettings({
+                  moisture: { ...preset.moisture },
+                  ...(series
+                    ? { weatherSeries: { ...series, samples: series.samples.map(({ moisture: _m, ...rest }) => rest) } }
+                    : {}),
+                });
               }}
             >
-              {!matchedPreset && <option value={CUSTOM_MOISTURE_VALUE}>Custom</option>}
+              {!matchedPreset && (
+                <option value={CUSTOM_MOISTURE_VALUE}>
+                  {moistureFromWeather ? "From the day's weather" : "Custom"}
+                </option>
+              )}
               {MOISTURE_PRESETS.map((preset) => (
                 <option key={preset.id} value={preset.id}>
                   {preset.label}
@@ -574,7 +600,11 @@ export default function ConfigPanel(props: ConfigPanelProps) {
             </select>
           </Field>
           <p id={`${uid}-moisture-note`} className="studio-hint">
-            {matchedPreset ? matchedPreset.description : "Moisture values differ from every preset."}
+            {moistureFromWeather
+              ? "Changes hour by hour with the weather day. Picking a preset holds it fixed instead."
+              : matchedPreset
+                ? matchedPreset.description
+                : "Moisture values differ from every preset."}
           </p>
 
           <div className="studio-field">

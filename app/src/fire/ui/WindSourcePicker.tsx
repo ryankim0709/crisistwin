@@ -10,7 +10,12 @@ import {
   type WindCandidate,
 } from "../scenarioWeather";
 import { MAX_WEATHER_HOURS } from "../horizon";
-import { fetchAllConditionPresets, type RegionConditionsPresets } from "../../world/conditions";
+import {
+  fetchAllConditionPresets,
+  fetchConditions,
+  type Conditions,
+  type RegionConditionsPresets,
+} from "../../world/conditions";
 import "./windPicker.css";
 
 const OPTIONS = [
@@ -126,6 +131,7 @@ export default function WindSourcePicker({
   record,
   onApply,
   usesSeries = false,
+  moistureFromWeather = false,
 }: {
   /** Ignition point, WGS84. Null until one is placed. */
   lon: number | null;
@@ -134,9 +140,15 @@ export default function WindSourcePicker({
   horizonHours: number;
   /** The weather behind the current wind, or null when it is the user's assumption. */
   record: ScenarioWindRecord | null;
-  onApply: (record: ScenarioWindRecord | null) => void;
+  /**
+   * `conditions`: the same window from /api/conditions (per-hour fuel moisture), or null when
+   * that call failed. Pages that ignore it keep their own moisture.
+   */
+  onApply: (record: ScenarioWindRecord | null, conditions?: Conditions | null) => void;
   /** True when the run follows the whole hourly series rather than the peak hour. */
   usesSeries?: boolean;
+  /** True when the page took fuel moisture from the date's weather too. */
+  moistureFromWeather?: boolean;
 }) {
   const uid = useId();
   const [mode, setMode] = useState<PickerMode>("historical");
@@ -250,12 +262,26 @@ export default function WindSourcePicker({
     const controller = new AbortController();
     abortRef.current = controller;
     setStatus({ kind: "loading" });
-    fetchScenarioWind(query, controller.signal)
-      .then((next) => {
+    // The same window's fuel moisture from the date's weather (/api/conditions). Wind still
+    // comes from /api/weather/scenario (station choice, height conversion); a failed
+    // conditions call leaves moisture as set rather than blocking the wind.
+    const conditions = fetchConditions(
+      {
+        lon: query.lon,
+        lat: query.lat,
+        mode: query.mode,
+        hours: query.hours,
+        ...(query.startUtc ? { startUtc: query.startUtc } : {}),
+        ...(query.percentile !== undefined ? { percentile: query.percentile } : {}),
+      },
+      controller.signal,
+    ).catch(() => null);
+    Promise.all([fetchScenarioWind(query, controller.signal), conditions])
+      .then(([next, cond]) => {
         if (controller.signal.aborted) return;
         setStatus({ kind: "idle" });
         setFallback(null);
-        onApplyRef.current(next);
+        onApplyRef.current(next, cond);
       })
       .catch((cause: unknown) => {
         if (controller.signal.aborted) return;
@@ -373,7 +399,10 @@ export default function WindSourcePicker({
               Height:{" "}
               {record.heightConversion.fromHeight} to open 20 ft, {record.heightConversion.method}.
               The midflame factor then cuts the 20 ft wind to flame height (default 0.5, or per
-              cell from canopy). Fuel moisture stays as set.
+              cell from canopy).{" "}
+              {moistureFromWeather
+                ? "Fuel moisture follows the same hours: dead fuel from that day's temperature and humidity, live fuel from the season."
+                : "Fuel moisture stays as set."}
             </p>
           </details>
         </div>

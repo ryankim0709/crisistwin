@@ -44,8 +44,17 @@ const MAX_SPOTTING_DISTANCE_METERS = 2000;
 const MAX_STRUCTURE_RATE_METERS_PER_MINUTE = 1000;
 const MAX_NAME_LENGTH = 80;
 
-const CRITICAL_MOISTURE: FuelMoisture = (
-  MOISTURE_PRESETS.find((preset) => preset.id === "critical") ?? MOISTURE_PRESETS[0]
+/**
+ * Fuel moisture of a new scenario until a weather day loads (the Historical wind source, on by
+ * default, replaces it with that date's hourly moisture from /api/conditions) and under Custom.
+ * Scott & Burgan (2005) scenario D2L2 ("Dry", spread.ts MOISTURE_PRESETS). ASSUMPTION: which
+ * standard scenario is the default is a choice, not a measurement; D1L1 "Critical — Red Flag"
+ * is the extreme end and stays an explicit pick. With it the default 20 mph wind ran SH5 at
+ * 75 m/min (7,300 ha in 6 h), Camp Fire growth on any day.
+ */
+export const DEFAULT_MOISTURE_PRESET_ID = "dry";
+const DEFAULT_MOISTURE: FuelMoisture = (
+  MOISTURE_PRESETS.find((preset) => preset.id === DEFAULT_MOISTURE_PRESET_ID) ?? MOISTURE_PRESETS[0]
 ).moisture;
 
 export const MOISTURE_KEYS = ["dead1h", "dead10h", "dead100h", "liveHerb", "liveWoody"] as const;
@@ -63,7 +72,7 @@ export function emptyScenario(): StudioScenario {
     settings: {
       windSpeedMph: DEFAULT_WIND_SPEED_MPH,
       windFromDegrees: DEFAULT_WIND_FROM_DEGREES,
-      moisture: { ...CRITICAL_MOISTURE },
+      moisture: { ...DEFAULT_MOISTURE },
       midflameAdjustment: DEFAULT_MIDFLAME_ADJUSTMENT,
       stepMinutes: DISPLAY_STEP_MINUTES,
       horizonMinutes: DEFAULT_HORIZON_MINUTES,
