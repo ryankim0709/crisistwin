@@ -13,6 +13,8 @@
  *   start; assumed 20x weight, not a fitted model). Real human-caused ignitions cluster near
  *   roads (Syphard et al. 2007; Syphard & Keeley 2015), which is why "away" is a deliberate
  *   test choice, not a claim about typical starts.
+ *   No ignition lies within EDGE_MARGIN_METERS of the board edge (roads beyond the edge are not
+ *   loaded, so "away" cannot be checked there either).
  * - Date: the region's typical peak-season date (from /api/conditions/presets) plus or minus three
  *   weeks.
  */
@@ -88,6 +90,15 @@ export const PLACEMENT_LABELS: Record<IgnitionPlacement, string> = {
   homes: "Near homes",
 };
 const AWAY_METERS = 1000;
+/**
+ * ASSUMPTION: no ignition within this distance of the board edge. The wind is not known when the
+ * ignition is drawn (the weather is fetched at the drawn site), so one fixed margin covers all
+ * directions: a fire 120 m from the edge hit it within 80 min and truncated its 24 h area
+ * (seed 1356197356). 3 km leaves room for a few hours of spread in any direction; a
+ * test-scenario choice, not a fitted value. Dropped (all candidates kept)
+ * on boards too small to leave any ground inside it.
+ */
+const EDGE_MARGIN_METERS = 3000;
 
 interface Candidate {
   cell: number;
@@ -116,12 +127,16 @@ function ignitionCandidates(
       ext = [Math.min(ext[0], lon), Math.min(ext[1], lat), Math.max(ext[2], lon), Math.max(ext[3], lat)];
     }
   }
+  const margin = Math.ceil(EDGE_MARGIN_METERS / grid.groundCellSizeMeters);
+  // A board too small to have ground inside the margin keeps the whole board.
+  const inset = 2 * margin < Math.min(grid.width, grid.height) ? margin : 0;
   for (let tries = 0; tries < 4000 && out.length < 400; tries++) {
     const cell = Math.floor(rand() * cells);
     const code = grid.fuelCodes[cell];
     if (!carriesFire(code) || code === DEVELOPED_FUEL_CODE) continue;
     const col = cell % grid.width;
     const row = (cell - col) / grid.width;
+    if (col < inset || row < inset || col >= grid.width - inset || row >= grid.height - inset) continue;
     let edge = false;
     for (const [dx, dy] of dirs) {
       for (const k of [Math.ceil(reach / 2), reach]) {
