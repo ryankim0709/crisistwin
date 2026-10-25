@@ -6,9 +6,13 @@
  * it is a simulated planning draw, not a forecast.
  *
  * Choices, labelled as assumptions in the UI:
- * - Ignition placement. Default "Away from roads": burnable ground at least 1 km from any road
- *   node (else the farthest sampled burnable ground, said so in the summary), so a fire has room and time to spread
- *   and the simulation can be checked against it. "Anywhere" is uniform over burnable ground.
+ * - Ignition placement, drawn uniformly over every eligible cell of the board (not a sample), so
+ *   the seed moves the fire across the whole board: burnable, not developed, inside the edge
+ *   margin, and with enough burnable ground around it to spread (MIN_BURNABLE_SHARE).
+ *   Default "Away from roads": ground at least 1 km from any road node (when that is under a
+ *   quarter of the ground, the farthest quarter instead, said so in the summary: AWAY_MIN_SHARE),
+ *   so a fire has room and time to spread and the simulation can be checked against it.
+ *   "Anywhere" is uniform over that ground. The seed is hashed first (mixSeed).
  *   "Near homes" favours burnable ground within ~200 m of developed fuel (a wildland-urban-edge
  *   start; assumed 20x weight, not a fitted model). Real human-caused ignitions cluster near
  *   roads (Syphard et al. 2007; Syphard & Keeley 2015), which is why "away" is a deliberate
@@ -29,7 +33,7 @@
 import { carriesFire } from "../demo/fireField";
 import type { LandscapeGrid } from "../fire/landscape";
 import { CALIFORNIA_REGIONS } from "../fire/regions";
-import { DEVELOPED_FUEL_CODE, type GeoPoint } from "../fire/spread";
+import { DEVELOPED_FUEL_CODE, cellAt, type GeoPoint } from "../fire/spread";
 import { HOLD_DIRECTION_GAP_MINUTES, weatherAtMinute, type FireWeatherSeries } from "../fire/weatherSeries";
 import { MAX_WEATHER_HOURS } from "../fire/horizon";
 import { MAX_IGNITION_EXTENT_METERS, pointsExtentMeters } from "../studio/bounds";
@@ -87,9 +91,26 @@ export function seededRandom(seed: number): () => number {
   };
 }
 
+/**
+ * The seed hashed (murmur3's 32-bit finaliser, a bijection) before it seeds the scenario stream,
+ * so neighbouring seeds (1, 2, 3 ...) start unrelated streams. Seeds drawn before this mixing
+ * was added give different scenarios now.
+ */
+export function mixSeed(seed: number): number {
+  let h = (seed ^ 0x9e3779b9) >>> 0;
+  h = Math.imul(h ^ (h >>> 16), 0x85ebca6b);
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
+  return (h ^ (h >>> 16)) >>> 0;
+}
+
+/** The random stream of one scenario seed. */
+function scenarioRandom(seed: number): () => number {
+  return seededRandom(mixSeed(seed));
+}
+
 /** The region a seed picks from the catalogue. The first draw of the seed's sequence. */
 export function randomRegionId(seed: number): string {
-  const rand = seededRandom(seed);
+  const rand = scenarioRandom(seed);
   return CALIFORNIA_REGIONS[Math.floor(rand() * CALIFORNIA_REGIONS.length)].id;
 }
 
@@ -136,103 +157,233 @@ const EDGE_MARGIN_METERS = 3000;
  */
 const SPACING_SLACK_METERS = 300;
 
-interface Candidate {
-  cell: number;
-  point: GeoPoint;
-  edge: boolean;
-  nearRoadMeters: number | null;
-}
+/** Ground within this distance of developed fuel counts as "near homes". */
+const NEAR_HOMES_METERS = 200;
+/** "Near homes" weight of other burnable ground against 1 for ground near homes (the 20x above). */
+const AWAY_FROM_HOMES_WEIGHT = 0.05;
+/**
+ * ASSUMPTION (a demo-quality filter, not a fitted value): an ignition cell needs at least this
+ * share of fire-carrying cells within SPREAD_WINDOW_METERS (a square window), so a draw does not
+ * land on a burnable speck in a lake, a quarry or a paved block where the fire dies at once.
+ * Dropped when no ground on the board passes it.
+ */
+const SPREAD_WINDOW_METERS = 150;
+const MIN_BURNABLE_SHARE = 0.6;
 
-function ignitionCandidates(
-  grid: LandscapeGrid,
-  roadNodes: readonly (readonly [number, number])[] | null,
-  rand: () => number,
-): Candidate[] {
-  const out: Candidate[] = [];
-  const cells = grid.width * grid.height;
-  const reach = Math.max(1, Math.round(200 / grid.groundCellSizeMeters));
-  const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1], [1, -1], [-1, 1]];
-  // Road distance is known only inside the extent the road data covers (plus AWAY_METERS): a cell
-  // beyond it may sit next to a road that was not loaded, so its distance stays unknown (null)
-  // rather than "far" (the Studio once passed one road tile of a 2 x 2 board and called a fire
-  // 246 m from a road "12 km away").
-  let ext: [number, number, number, number] | null = null;
-  if (roadNodes && roadNodes.length > 0) {
-    ext = [Infinity, Infinity, -Infinity, -Infinity];
-    for (const [lon, lat] of roadNodes) {
-      ext = [Math.min(ext[0], lon), Math.min(ext[1], lat), Math.max(ext[2], lon), Math.max(ext[3], lat)];
-    }
+/**
+ * Ground metres from every cell to the nearest seed cell (Infinity on a board without seeds):
+ * nearest-seed vector propagation in two 8-neighbour sweeps (8SSEDT; Danielsson 1980), within a
+ * fraction of a cell of the exact Euclidean distance.
+ */
+function distanceToSeeds(grid: LandscapeGrid, seeds: Uint8Array): Float32Array {
+  const { width: w, height: h } = grid;
+  const n = w * h;
+  const sx = new Int32Array(n).fill(-1);
+  const sy = new Int32Array(n);
+  const d2 = new Float64Array(n).fill(Infinity);
+  for (let i = 0; i < n; i++) {
+    if (!seeds[i]) continue;
+    sx[i] = i % w;
+    sy[i] = (i - sx[i]) / w;
+    d2[i] = 0;
   }
-  const margin = Math.ceil(EDGE_MARGIN_METERS / grid.groundCellSizeMeters);
-  // A board too small to have ground inside the margin keeps the whole board.
-  const inset = 2 * margin < Math.min(grid.width, grid.height) ? margin : 0;
-  for (let tries = 0; tries < 4000 && out.length < 400; tries++) {
-    const cell = Math.floor(rand() * cells);
-    const code = grid.fuelCodes[cell];
-    if (!carriesFire(code) || code === DEVELOPED_FUEL_CODE) continue;
-    const col = cell % grid.width;
-    const row = (cell - col) / grid.width;
-    if (col < inset || row < inset || col >= grid.width - inset || row >= grid.height - inset) continue;
-    let edge = false;
-    for (const [dx, dy] of dirs) {
-      for (const k of [Math.ceil(reach / 2), reach]) {
-        const c = col + dx * k;
-        const r = row + dy * k;
-        if (c >= 0 && r >= 0 && c < grid.width && r < grid.height && grid.fuelCodes[r * grid.width + c] === DEVELOPED_FUEL_CODE) edge = true;
-      }
+  const relax = (col: number, row: number, nc: number, nr: number) => {
+    if (nc < 0 || nr < 0 || nc >= w || nr >= h) return;
+    const from = nr * w + nc;
+    if (sx[from] < 0) return;
+    const dx = sx[from] - col;
+    const dy = sy[from] - row;
+    const cand = dx * dx + dy * dy;
+    const at = row * w + col;
+    if (cand < d2[at]) {
+      d2[at] = cand;
+      sx[at] = sx[from];
+      sy[at] = sy[from];
     }
-    const point = lonLatOfCell(grid, cell);
-    let nearRoadMeters: number | null = null;
-    const padLat = AWAY_METERS / 110_540;
-    const padLon = AWAY_METERS / (111_320 * Math.cos((point.latitude * Math.PI) / 180));
-    const inExtent =
-      ext !== null &&
-      point.longitude >= ext[0] - padLon && point.longitude <= ext[2] + padLon &&
-      point.latitude >= ext[1] - padLat && point.latitude <= ext[3] + padLat;
-    if (roadNodes && roadNodes.length > 0 && inExtent) {
-      const mPerLon = 111_320 * Math.cos((point.latitude * Math.PI) / 180);
-      let best = Infinity;
-      for (const [lon, lat] of roadNodes) {
-        const dx = (lon - point.longitude) * mPerLon;
-        const dy = (lat - point.latitude) * 110_540;
-        const d2 = dx * dx + dy * dy;
-        if (d2 < best) best = d2;
-      }
-      nearRoadMeters = Math.sqrt(best);
+  };
+  for (let row = 0; row < h; row++) {
+    for (let col = 0; col < w; col++) {
+      relax(col, row, col - 1, row);
+      relax(col, row, col - 1, row - 1);
+      relax(col, row, col, row - 1);
+      relax(col, row, col + 1, row - 1);
     }
-    out.push({ cell, point, edge, nearRoadMeters });
+    for (let col = w - 1; col >= 0; col--) relax(col, row, col + 1, row);
   }
+  for (let row = h - 1; row >= 0; row--) {
+    for (let col = w - 1; col >= 0; col--) {
+      relax(col, row, col + 1, row);
+      relax(col, row, col + 1, row + 1);
+      relax(col, row, col, row + 1);
+      relax(col, row, col - 1, row + 1);
+    }
+    for (let col = 0; col < w; col++) relax(col, row, col - 1, row);
+  }
+  const out = new Float32Array(n);
+  for (let i = 0; i < n; i++) out[i] = Math.sqrt(d2[i]) * grid.groundCellSizeMeters;
   return out;
 }
 
-function choose(items: Candidate[], placement: IgnitionPlacement, rand: () => number, first: boolean): Candidate {
-  let pool = items;
-  if (placement === "away" && items.some((c) => c.nearRoadMeters !== null)) {
-    const far = items.filter((c) => (c.nearRoadMeters ?? 0) >= AWAY_METERS);
-    if (far.length > 0) pool = far;
-    else if (first) {
-      // No sampled ground 1 km from a road: the farthest one (lowest cell on a tie), no draw.
-      // The summary says so (whereText).
-      return items.reduce((best, c) => {
-        const d = c.nearRoadMeters ?? -1;
-        const b = best.nearRoadMeters ?? -1;
-        return d > b || (d === b && c.cell < best.cell) ? c : best;
-      });
-    } else {
-      // Extra fires of the same draw: one of the farthest quarter, so they do not stack.
-      const sorted = [...items].sort((x, y) => (y.nearRoadMeters ?? 0) - (x.nearRoadMeters ?? 0));
-      pool = sorted.slice(0, Math.max(1, Math.ceil(sorted.length / 4)));
+/** Exact ground metres from a point to the nearest road node (equirectangular, as before). */
+function nearestRoadMeters(point: GeoPoint, roadNodes: readonly (readonly [number, number])[]): number {
+  const mPerLon = 111_320 * Math.cos((point.latitude * Math.PI) / 180);
+  let best = Infinity;
+  for (const [lon, lat] of roadNodes) {
+    const dx = (lon - point.longitude) * mPerLon;
+    const dy = (lat - point.latitude) * 110_540;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < best) best = d2;
+  }
+  return Math.sqrt(best);
+}
+
+/**
+ * Every cell an ignition may start on, with what the placement modes need. Every eligible cell
+ * of the board is in `cells` (not a sample), so a draw is uniform over the whole valid ground.
+ */
+interface IgnitionGround {
+  cells: Int32Array;
+  /** Per board cell: ground metres to the nearest road node; NaN where roads are not known. */
+  roadMeters: Float32Array | null;
+  /** Per board cell: ground metres to developed fuel. */
+  homesMeters: Float32Array;
+}
+
+function ignitionGround(
+  grid: LandscapeGrid,
+  roadNodes: readonly (readonly [number, number])[] | null,
+): IgnitionGround {
+  const { width: w, height: h } = grid;
+  const n = w * h;
+  const carries = new Uint8Array(n);
+  const developed = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    const code = grid.fuelCodes[i];
+    carries[i] = carriesFire(code) ? 1 : 0;
+    developed[i] = code === DEVELOPED_FUEL_CODE ? 1 : 0;
+  }
+  const homesMeters = distanceToSeeds(grid, developed);
+
+  // Road distance is known only inside the extent the road data covers (plus AWAY_METERS): a cell
+  // beyond it may sit next to a road that was not loaded, so its distance stays unknown (NaN)
+  // rather than "far" (the Studio once passed one road tile of a 2 x 2 board and called a fire
+  // 246 m from a road "12 km away"). Nodes off the board are left out of the field: they are
+  // farther than EDGE_MARGIN_METERS from any inset cell, and the picked cell's distance in the
+  // summary is measured to every node.
+  let roadMeters: Float32Array | null = null;
+  if (roadNodes && roadNodes.length > 0) {
+    let [west, south, east, north] = [Infinity, Infinity, -Infinity, -Infinity];
+    const seeds = new Uint8Array(n);
+    for (const [lon, lat] of roadNodes) {
+      west = Math.min(west, lon);
+      south = Math.min(south, lat);
+      east = Math.max(east, lon);
+      north = Math.max(north, lat);
+      const cell = cellAt(grid, { longitude: lon, latitude: lat });
+      if (cell >= 0) seeds[cell] = 1;
+    }
+    const padLat = AWAY_METERS / 110_540;
+    const padLon = AWAY_METERS / (111_320 * Math.cos((((south + north) / 2) * Math.PI) / 180));
+    roadMeters = distanceToSeeds(grid, seeds);
+    for (let i = 0; i < n; i++) {
+      const p = lonLatOfCell(grid, i);
+      const inExtent =
+        p.longitude >= west - padLon && p.longitude <= east + padLon &&
+        p.latitude >= south - padLat && p.latitude <= north + padLat;
+      if (!inExtent) roadMeters[i] = NaN;
+    }
+  }
+
+  // Share of fire-carrying cells in a square window (summed-area table).
+  const k = Math.max(1, Math.round(SPREAD_WINDOW_METERS / grid.groundCellSizeMeters));
+  const sum = new Int32Array((w + 1) * (h + 1));
+  for (let row = 0; row < h; row++) {
+    for (let col = 0; col < w; col++) {
+      sum[(row + 1) * (w + 1) + col + 1] =
+        carries[row * w + col] + sum[row * (w + 1) + col + 1] + sum[(row + 1) * (w + 1) + col] - sum[row * (w + 1) + col];
+    }
+  }
+  const share = (col: number, row: number) => {
+    const c0 = Math.max(0, col - k), r0 = Math.max(0, row - k);
+    const c1 = Math.min(w, col + k + 1), r1 = Math.min(h, row + k + 1);
+    const total = sum[r1 * (w + 1) + c1] - sum[r0 * (w + 1) + c1] - sum[r1 * (w + 1) + c0] + sum[r0 * (w + 1) + c0];
+    return total / ((c1 - c0) * (r1 - r0));
+  };
+
+  const margin = Math.ceil(EDGE_MARGIN_METERS / grid.groundCellSizeMeters);
+  // A board too small to have ground inside the margin keeps the whole board.
+  const inset = 2 * margin < Math.min(w, h) ? margin : 0;
+  const burnable: number[] = [];
+  const spreadable: number[] = [];
+  for (let row = inset; row < h - inset; row++) {
+    for (let col = inset; col < w - inset; col++) {
+      const cell = row * w + col;
+      if (!carries[cell] || developed[cell]) continue;
+      burnable.push(cell);
+      if (share(col, row) >= MIN_BURNABLE_SHARE) spreadable.push(cell);
+    }
+  }
+  return { cells: Int32Array.from(spreadable.length > 0 ? spreadable : burnable), roadMeters, homesMeters };
+}
+
+/**
+ * ASSUMPTION (a test-scenario knob, not a fitted value): "Away from roads" draws from the ground
+ * at least AWAY_METERS from a road, unless that is under this share of the ground; then from the
+ * farthest share instead. Mapped roads, service roads and tracks are dense in the Bay Area hills:
+ * on the Berkeley Hills boards 0.0-0.03% of the burnable ground is 1 km from a road vertex and
+ * the farthest quarter starts at about 150 m, so a strict 1 km rule put every seed's fire on the
+ * same few cells.
+ */
+const AWAY_MIN_SHARE = 0.25;
+
+interface Pick {
+  cell: number;
+  /**
+   * "Away from roads" fell back to the farthest AWAY_MIN_SHARE of the ground: "none" when no
+   * ground is AWAY_METERS from a road, "little" when some is but under that share.
+   */
+  fallback: "none" | "little" | null;
+}
+
+function choose(
+  ground: IgnitionGround,
+  pool: ArrayLike<number>,
+  placement: IgnitionPlacement,
+  rand: () => number,
+  cellMeters: number,
+): Pick {
+  const uniform = (cells: ArrayLike<number>) => cells[Math.min(cells.length - 1, Math.floor(rand() * cells.length))];
+  const roads = ground.roadMeters;
+  if (placement === "away" && roads) {
+    const known: number[] = [];
+    const far: number[] = [];
+    for (let i = 0; i < pool.length; i++) {
+      const d = roads[pool[i]];
+      if (Number.isNaN(d)) continue;
+      known.push(pool[i]);
+      // One cell of slack: the field is quantised to cells, the summary's distance is exact.
+      if (d >= AWAY_METERS + cellMeters) far.push(pool[i]);
+    }
+    const share = Math.max(1, Math.ceil(known.length * AWAY_MIN_SHARE));
+    if (far.length > 0 && far.length >= share) return { cell: uniform(far), fallback: null };
+    if (known.length > 0) {
+      // Too little ground 1 km from a road: one of the farthest quarter (the summary says so),
+      // drawn uniformly so the seed still moves the fire across the board.
+      known.sort((a, b) => roads[b] - roads[a] || a - b);
+      return { cell: uniform(known.slice(0, share)), fallback: far.length > 0 ? "little" : "none" };
     }
   } else if (placement === "homes") {
-    const total = items.reduce((sum, c) => sum + (c.edge ? 1 : 0.05), 0);
+    const weight = (cell: number) => (ground.homesMeters[cell] <= NEAR_HOMES_METERS ? 1 : AWAY_FROM_HOMES_WEIGHT);
+    let total = 0;
+    for (let i = 0; i < pool.length; i++) total += weight(pool[i]);
     let x = rand() * total;
-    for (const c of items) {
-      x -= c.edge ? 1 : 0.05;
-      if (x <= 0) return c;
+    for (let i = 0; i < pool.length; i++) {
+      x -= weight(pool[i]);
+      if (x <= 0) return { cell: pool[i], fallback: null };
     }
-    return items[items.length - 1];
+    return { cell: pool[pool.length - 1], fallback: null };
   }
-  return pool[Math.floor(rand() * pool.length)];
+  return { cell: uniform(pool), fallback: null };
 }
 
 const pad = (n: number) => String(n).padStart(2, "0");
@@ -309,7 +460,7 @@ export interface RandomDraw {
 /** Draws the scenario, or null when the board has no ground that can burn. */
 export async function drawRandomScenario(input: RandomDrawInput): Promise<RandomDraw | null> {
   const { seed, regionId, regionName, grid, roadNodes, placement, horizonMinutes } = input;
-  const rand = seededRandom(seed);
+  const rand = scenarioRandom(seed);
   rand(); // the region draw (randomRegionId)
 
   // Date: typical peak-season date plus or minus three weeks, a seeded year and afternoon hour.
@@ -335,37 +486,49 @@ export async function drawRandomScenario(input: RandomDrawInput): Promise<Random
   // Ignitions: placed by the chosen mode. How many is random too: one weighted draw,
   // 1 fire 65%, 2 fires 25%, 3 fires 10%, never more (RANDOM_FIRE_COUNT_WEIGHTS, an ASSUMPTION).
   // Every fire after the first starts later half the time (20-90 min), like a second ignition.
-  const candidates = ignitionCandidates(grid, roadNodes, rand);
-  if (candidates.length === 0) return null;
+  const ground = ignitionGround(grid, roadNodes);
+  if (ground.cells.length === 0) return null;
   const count = fireCountFor(rand());
   const ignitions: RandomIgnition[] = [];
-  const picked: Candidate[] = [];
+  const picked: (Pick & { point: GeoPoint })[] = [];
+  const spacing = MAX_IGNITION_EXTENT_METERS - SPACING_SLACK_METERS;
+  const reachCells = Math.ceil(spacing / grid.groundCellSizeMeters) + 1;
   for (let i = 0; i < count; i++) {
-    const pool = picked.length
-      ? candidates.filter(
-          (c) =>
-            !picked.some((p) => p.cell === c.cell) &&
-            pointsExtentMeters([...picked.map((p) => p.point), c.point]) <=
-              MAX_IGNITION_EXTENT_METERS - SPACING_SLACK_METERS,
-        )
-      : candidates;
+    let pool: ArrayLike<number> = ground.cells;
+    if (picked.length > 0) {
+      // Within the spacing of the fires so far: a cheap row/column box first, then the exact test.
+      const cols = picked.map((p) => p.cell % grid.width);
+      const rows = picked.map((p) => Math.floor(p.cell / grid.width));
+      const [c0, c1] = [Math.max(...cols) - reachCells, Math.min(...cols) + reachCells];
+      const [r0, r1] = [Math.max(...rows) - reachCells, Math.min(...rows) + reachCells];
+      const near: number[] = [];
+      for (const cell of ground.cells) {
+        const col = cell % grid.width;
+        const row = (cell - col) / grid.width;
+        if (col < c0 || col > c1 || row < r0 || row > r1 || picked.some((p) => p.cell === cell)) continue;
+        if (pointsExtentMeters([...picked.map((p) => p.point), lonLatOfCell(grid, cell)]) <= spacing) near.push(cell);
+      }
+      pool = near;
+    }
     if (pool.length === 0) break;
-    const choice = choose(pool, placement, rand, picked.length === 0);
-    picked.push(choice);
+    const choice = choose(ground, pool, placement, rand, grid.groundCellSizeMeters);
+    const point = lonLatOfCell(grid, choice.cell);
+    picked.push({ ...choice, point });
     const later = i > 0 && rand() < 0.5;
-    ignitions.push({ at: choice.point, startMinute: later ? 20 + Math.floor(rand() * 70) : 0 });
+    ignitions.push({ at: point, startMinute: later ? 20 + Math.floor(rand() * 70) : 0 });
   }
   // Named F1, F2... in this order by the pages: order by start time, not by draw (stable, so the
   // first fire at T+0 stays first).
   ignitions.sort((a, b) => a.startMinute - b.startMinute);
 
-  const km = picked[0].nearRoadMeters === null ? null : (picked[0].nearRoadMeters / 1000).toFixed(1);
+  const roadKnown = roadNodes !== null && ground.roadMeters !== null && !Number.isNaN(ground.roadMeters[picked[0].cell]);
+  const km = roadKnown ? (nearestRoadMeters(picked[0].point, roadNodes!) / 1000).toFixed(1) : null;
   const whereText =
     placement === "away"
       ? km === null
         ? ", placed anywhere (roads unavailable)"
-        : picked[0].nearRoadMeters! < AWAY_METERS
-          ? `, no ground ${AWAY_METERS / 1000} km from a road; farthest found ${km} km`
+        : picked[0].fallback
+          ? `, ${picked[0].fallback === "none" ? "no" : "little"} ground ${AWAY_METERS / 1000} km from a road; in the farthest quarter (${km} km)`
           : `, away from roads (${km} km)`
       : placement === "homes"
         ? ", near homes"
