@@ -76,7 +76,7 @@ export default function DemoDiorama({ board, version, field, landscape, regionNa
   const reducedMotionRef = useRef(reducedMotion);
   const [overlay] = useState(() => new DemoBoardOverlay());
   const streets = useBoardStreets(landscape);
-  const streetArea = streets.status === "ready" ? streets.area : null;
+  const streetArea = streets.status === "ready" ? streets.scenery : null;
 
   const clickRef = useRef({ igniteMode, onIgnite });
   useEffect(() => {

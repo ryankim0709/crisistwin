@@ -7,14 +7,17 @@
  * fails falls back to the labelled assumption in realism.ts / model.ts, and the board starts
  * once all have answered or failed. The landscape is required (the fire solver runs on it): with
  * no stored region covering the drill, it is loaded live from LANDFIRE and 3DEP around the drill
- * centre (BOARD_RADIUS_M); if that fails too the board does not start and the error is returned.
+ * centre (`radiusMeters`, default DEFAULT_BOARD_RADIUS_METERS; read back from the MongoDB landscape
+ * cache when an identical board was loaded before); if that fails too the board does not start and the error is returned.
  */
 
 import { useEffect, useRef, useState } from "react";
 import { DEFAULT_INCIDENT_ID } from "../live/api";
 import { cellAt } from "../fire/spread";
 import { fetchRegionCatalog, fetchRegionLandscape } from "../fire/landscapePackage";
-import { landscapeCellMetersFor, loadLandscape, type LandscapeGrid } from "../fire/landscape";
+import type { LandscapeGrid } from "../fire/landscape";
+import { DEFAULT_BOARD_RADIUS_METERS, boardCellMetersFor, clampBoardRadiusMeters } from "../fire/boardSize";
+import { loadLandscapeCached, type CachedLandscapeResult } from "../fire/landscapeCache";
 import type { LonLat } from "../live/types";
 import { CREW_TYPES, STATION_TYPES, SUPPRESSION_BASES_URL, parseBases, type SuppressionBases } from "../studio/suppressionBases";
 import { ENVIRONMENT_URL, WIND_URL, demoUrl, type EnvironmentResponse, type WindResponse } from "./contracts";
@@ -58,12 +61,6 @@ export const WEATHER_PRESETS: readonly WeatherPreset[] = [
 ];
 
 const BASE_RADIUS_KM = 60;
-/**
- * Half-width of the live-loaded board landscape around the drill centre, ground metres. An
- * assumption: it covers Paradise, Magalia and Concow on the Camp drill at a 60 m cell
- * (landscapeCellMetersFor); zones beyond it have no fuel on the board, so no fire reaches them.
- */
-const BOARD_RADIUS_M = 15_000;
 
 async function getJson<T>(url: string, signal: AbortSignal): Promise<T | null> {
   try {
@@ -139,14 +136,14 @@ function groundOf(grid: LandscapeGrid, name: string): Ground {
   };
 }
 
-/** Live-loaded landscapes by centre, kept like regionGrids so a weather change keeps the same grid. */
-const liveGrids = new Map<string, Promise<LandscapeGrid>>();
+/** Live-loaded landscapes by centre and radius, kept like regionGrids so a weather change keeps the same grid. */
+const liveGrids = new Map<string, Promise<CachedLandscapeResult>>();
 
-function liveGrid(p: LonLat, signal: AbortSignal): Promise<LandscapeGrid> {
-  const key = `${p[0].toFixed(4)},${p[1].toFixed(4)}`;
+function liveGrid(p: LonLat, radiusMeters: number, signal: AbortSignal): Promise<CachedLandscapeResult> {
+  const key = `${p[0].toFixed(4)},${p[1].toFixed(4)},${radiusMeters}`;
   let cached = liveGrids.get(key);
   if (!cached) {
-    cached = loadLandscape(p[0], p[1], BOARD_RADIUS_M, new AbortController().signal, { cellMeters: landscapeCellMetersFor(BOARD_RADIUS_M) });
+    cached = loadLandscapeCached(p[0], p[1], radiusMeters, new AbortController().signal, { cellMeters: boardCellMetersFor(radiusMeters) });
     liveGrids.set(key, cached);
     cached.catch(() => liveGrids.delete(key));
   }
@@ -158,10 +155,10 @@ function liveGrid(p: LonLat, signal: AbortSignal): Promise<LandscapeGrid> {
   });
 }
 
-type BoardLandscape = { ground: Ground; grid: LandscapeGrid; region: { id: string; name: string }; source: "stored" | "live" };
+type BoardLandscape = { ground: Ground; grid: LandscapeGrid; region: { id: string; name: string }; source: "stored" | "cached" | "live" };
 
 /** A prebuilt landscape that covers `p`, else one loaded live around `p`; throws when neither loads. */
-async function landscapeGround(p: LonLat, signal: AbortSignal): Promise<BoardLandscape> {
+async function landscapeGround(p: LonLat, radiusMeters: number, signal: AbortSignal): Promise<BoardLandscape> {
   const catalog = await fetchRegionCatalog(signal).catch(() => []);
   const region = catalog.find((r) => {
     const dx = (p[0] - r.center.longitude) * 111_320 * Math.cos((p[1] * Math.PI) / 180);
@@ -172,9 +169,10 @@ async function landscapeGround(p: LonLat, signal: AbortSignal): Promise<BoardLan
     const grid = await regionGrid(region.id, signal).catch(() => null);
     if (grid) return { ground: groundOf(grid, `the prebuilt landscape "${region.name}"`), grid, region: { id: region.id, name: region.name }, source: "stored" };
   }
-  const grid = await liveGrid(p, signal);
-  const name = `the drill area (${BOARD_RADIUS_M / 1000} km around the drill centre)`;
-  return { ground: groundOf(grid, `${name}, loaded live`), grid, region: { id: "live", name }, source: "live" };
+  const loaded = await liveGrid(p, radiusMeters, signal);
+  const name = `the drill area (${radiusMeters / 1000} km around the drill centre)`;
+  const how = loaded.source === "cache" ? `cached copy stored ${loaded.cachedAt?.slice(0, 10) ?? "earlier"}` : "loaded live";
+  return { ground: groundOf(loaded.grid, `${name}, ${how}`), grid: loaded.grid, region: { id: "live", name }, source: loaded.source === "cache" ? "cached" : "live" };
 }
 
 export function stationsFrom(bases: SuppressionBases | null): DemoEnvironment["bases"] {
@@ -210,6 +208,7 @@ export async function loadEnvironment(
   incidentId: string,
   fallbackCenter: LonLat | null,
   signal: AbortSignal,
+  radiusMeters: number = DEFAULT_BOARD_RADIUS_METERS,
 ): Promise<DemoEnvironment> {
   // The wind and the environment answer independently; the centre (environment `center`, else the
   // zones' centroid) is needed for the bases and landscape lookups.
@@ -222,7 +221,7 @@ export async function loadEnvironment(
     center
       ? getJson<unknown>(`${SUPPRESSION_BASES_URL}?lon=${center[0]}&lat=${center[1]}&radius_km=${BASE_RADIUS_KM}`, signal)
       : Promise.resolve(null),
-    center ? landscapeGround(center, signal) : Promise.reject(new Error("The drill has no centre to load a landscape around.")),
+    center ? landscapeGround(center, radiusMeters, signal) : Promise.reject(new Error("The drill has no centre to load a landscape around.")),
   ]);
   const parsed = basesJson ? parseBases(basesJson) : null;
   const calfire = stationsFrom(parsed);
@@ -249,9 +248,15 @@ export async function loadEnvironment(
  * The environment for a weather preset on an incident; null while loading (and right after the
  * incident or preset changes). `fallbackCenter` (zones centroid) is read when the load starts.
  */
-export function useDemoEnvironment(preset: WeatherPreset, incidentId: string, fallbackCenter: LonLat | null): DemoEnvironment | null {
+export function useDemoEnvironment(
+  preset: WeatherPreset,
+  incidentId: string,
+  fallbackCenter: LonLat | null,
+  radiusMeters: number = DEFAULT_BOARD_RADIUS_METERS,
+): DemoEnvironment | null {
+  const radius = clampBoardRadiusMeters(radiusMeters);
   const [state, setState] = useState<{ key: string; env: DemoEnvironment } | null>(null);
-  const key = `${incidentId}|${preset.value}`;
+  const key = `${incidentId}|${preset.value}|${radius}`;
   const fallback = useRef(fallbackCenter);
   fallback.current = fallbackCenter;
   // Wait for the zones centroid on a non-Camp incident only until the command data arrives.
@@ -259,7 +264,7 @@ export function useDemoEnvironment(preset: WeatherPreset, incidentId: string, fa
   useEffect(() => {
     if (!ready) return;
     const controller = new AbortController();
-    loadEnvironment(preset, incidentId, fallback.current, controller.signal).then(
+    loadEnvironment(preset, incidentId, fallback.current, controller.signal, radius).then(
       (env) => {
         if (!controller.signal.aborted) setState({ key, env });
       },
@@ -268,6 +273,6 @@ export function useDemoEnvironment(preset: WeatherPreset, incidentId: string, fa
       },
     );
     return () => controller.abort();
-  }, [preset, incidentId, key, ready]);
+  }, [preset, incidentId, key, ready, radius]);
   return state?.key === key ? state.env : null;
 }

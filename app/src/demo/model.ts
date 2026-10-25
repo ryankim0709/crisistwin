@@ -246,7 +246,7 @@ export interface DemoEnvironment {
   landscape: LandscapeGrid;
   /** The prebuilt region it came from, or the drill area loaded live from LANDFIRE. */
   landscapeRegion: { id: string; name: string };
-  landscapeSource: "stored" | "live";
+  landscapeSource: "stored" | "cached" | "live";
 }
 
 export type EventKind = "ignition" | "contained" | "out" | "overrun" | "order" | "team" | "closed" | "zone" | "board";
