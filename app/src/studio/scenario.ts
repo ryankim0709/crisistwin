@@ -23,12 +23,13 @@ import {
   type FirefightingSettings,
 } from "./firefighting";
 import { APPARATUS_KINDS, type ApparatusCounts } from "./apparatus";
+import { MAX_HORIZON_MINUTES, MIN_HORIZON_MINUTES, isValidHorizonMinutes } from "../fire/horizon";
 import {
   DISPLAY_STEP_MINUTES,
   MAX_ENABLED_IGNITIONS,
   MAX_WIND_SPEED_MPH,
   MIN_WIND_SPEED_MPH,
-  STUDIO_HORIZON_CHOICES,
+  studioDisplayStepMinutes,
   STUDIO_SCHEMA_VERSION,
   type ScenarioIssue,
   type ScheduledIgnition,
@@ -133,8 +134,10 @@ function validateSettings(settings: FireSettings): ScenarioIssue[] {
   ) {
     add("Midflame wind adjustment must be between 0.01 and 1.");
   }
-  if (!(STUDIO_HORIZON_CHOICES as readonly number[]).includes(settings.horizonMinutes)) {
-    add(`Horizon must be one of ${STUDIO_HORIZON_CHOICES.join(", ")} minutes.`);
+  if (!isValidHorizonMinutes(settings.horizonMinutes)) {
+    add(
+      `How long to simulate must be a whole number of minutes from ${MIN_HORIZON_MINUTES / 60} h to ${MAX_HORIZON_MINUTES / 60 / 24} days.`,
+    );
   }
   const { spotting, structureSpread } = settings;
   if (
@@ -305,11 +308,16 @@ export function toSolverInput(scenario: StudioScenario): ScheduledFireInput {
   };
 }
 
-/** T+0, every display step, every enabled ignition minute and the horizon: sorted, unique. */
+/**
+ * T+0, every display step (`studioDisplayStepMinutes`: 5 min on short runs, wider on long ones so
+ * a run keeps at most about 240 frames), every enabled ignition minute and the horizon: sorted,
+ * unique.
+ */
 export function frameMinutesFor(scenario: StudioScenario): number[] {
   const horizon = scenario.settings.horizonMinutes;
+  const step = studioDisplayStepMinutes(horizon);
   const minutes = new Set<number>([0, horizon]);
-  for (let minute = DISPLAY_STEP_MINUTES; minute < horizon; minute += DISPLAY_STEP_MINUTES) {
+  for (let minute = step; minute < horizon; minute += step) {
     minutes.add(minute);
   }
   for (const ignition of scenario.ignitions) {

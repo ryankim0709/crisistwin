@@ -7,7 +7,7 @@ fraction shape of `app/src/fire/rothermel.ts` ``FuelMoisture``. Contract, units 
 docs/scenario-weather.md ("Fuel moisture from the date's weather").
 
 Query: ``lon``, ``lat`` (WGS84 degrees); ``start`` (ISO 8601 UTC ending in Z; optional for
-``forecast``); ``hours`` (1-72, default 24); ``mode`` (``historical_replay`` | ``climatology_percentile``
+``forecast``); ``hours`` (1-169, default 24); ``mode`` (``historical_replay`` | ``climatology_percentile``
 | ``forecast``); ``percentile`` (50-99.9, climatology only, default 95); ``sector`` (``from,to``
 degrees, climatology only, default the offshore 315,90). Site (Rothermel 1983 Exhibit II-2):
 ``aspect`` (N|E|S|W or degrees, default S), ``slope_pct`` (default 0), ``shading``

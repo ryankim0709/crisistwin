@@ -194,7 +194,7 @@ still does no height conversion; the endpoint adds it.
 | --- | --- |
 | `lon`, `lat` | WGS84 degrees, the ignition point |
 | `start` | ISO 8601 UTC with `Z`. Required except for `forecast`, which defaults to the current UTC hour |
-| `hours` | Integer 1 to 72, default 24. The series has `hours + 1` hourly samples |
+| `hours` | Integer 1 to 169 (a 7-day run plus one hour), default 24. The series has `hours + 1` hourly samples. NWS forecasts end after about 7 days; later hours come back empty |
 | `mode` | `historical_replay` (default), `climatology_percentile`, `forecast` |
 | `percentile` | 50 to 99.9, default 95, `climatology_percentile` only |
 
@@ -316,7 +316,7 @@ answers of the two worked examples on p. 20 (6, 4, 7, 10, 9, 22 %).
 
 Public, throttled 30/min per client, cached in MongoDB `conditions_cache` by the normalized query
 and `model_version` (forecast entries expire after 1 h). Same weather limits as
-`/api/weather/scenario`: `hours` 1-72, archive coverage per station, California stations only. A
+`/api/weather/scenario`: `hours` 1-169, archive coverage per station, California stations only. A
 nearest station more than 100 km away (`MAX_STATION_DISTANCE_KM`, assumption) is refused with
 `502 no_station_coverage` rather than used (the Marshall Fire, Colorado, gets this answer).
 

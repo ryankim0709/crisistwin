@@ -7,11 +7,16 @@ import { AREA_PRESETS, DEFAULT_AREA } from "./ui/areaPresets";
 import {
   AREA_SIZES,
   DEFAULT_AREA_SIZE,
+  MAX_RADIUS_METERS,
   effectiveRadiusMeters,
   type AreaSizeId,
 } from "./ui/areaSize";
 import SatelliteFireMap from "./SatelliteFireMap";
 import FireDock from "./ui/FireDock";
+import HorizonControl from "./ui/HorizonControl";
+import DayNightBand from "./ui/DayNightBand";
+import { frameStepMinutes } from "./horizon";
+import type { RunClock } from "./runClock";
 import FireLegend from "./ui/FireLegend";
 import { formatDuration } from "./ui/format";
 import { useFirePlayback } from "./useFirePlayback";
@@ -261,7 +266,9 @@ export default function FireSimulatorPage() {
   const burn = useBurnProbability();
   const [structureSpreadEnabled, setStructureSpreadEnabled] = useState(true);
   const structureSpreadRate = DEFAULT_STRUCTURE_SPREAD.rateMetersPerMinute;
-  const horizonMinutes = FIRE_HORIZON_MINUTES;
+  // How long to simulate (fire/horizon.ts); frames spread out on long runs to stay bounded.
+  const [horizonMinutes, setHorizonMinutes] = useState(FIRE_HORIZON_MINUTES);
+  const stepMinutes = frameStepMinutes(horizonMinutes, FIRE_STEP_MINUTES);
   const [clickMode, setClickMode] = useState<GroundClickMode>("origin");
   const [showFuel, setShowFuel] = useState(false);
   const [landscape, setLandscape] = useState<LandscapeState>({ status: "idle" });
@@ -392,6 +399,24 @@ export default function FireSimulatorPage() {
     [scenarioWind],
   );
   const weatherSeries = recordSeries && windOverTime === "series" ? recordSeries.series : null;
+  // Local clock and day/night for the playback bar, only while the run follows hourly weather
+  // with a real clock (a constant wind has no day or night in it). A worst-case run replays real
+  // hours on a statistically chosen date: its clock is the clock those hours were observed at.
+  const runClock = useMemo<{ clock: RunClock; note: string } | null>(() => {
+    if (!scenarioWind || windOverTime !== "series") return null;
+    const analogStart =
+      scenarioWind.mode === "climatology_percentile"
+        ? (scenarioWind.analog as { source_start_utc?: string } | null)?.source_start_utc
+        : undefined;
+    const startMs = Date.parse(analogStart ?? scenarioWind.query.startUtc);
+    if (!Number.isFinite(startMs)) return null;
+    return {
+      clock: { startMs, latitude: scenarioWind.query.lat, longitude: scenarioWind.query.lon },
+      note: analogStart
+        ? "Clock of the real hours replayed (date chosen statistically)"
+        : "Local time from the weather's start",
+    };
+  }, [scenarioWind, windOverTime]);
 
   const scenario = useMemo(
     () =>
@@ -402,7 +427,7 @@ export default function FireSimulatorPage() {
             windFromDegrees,
             moisture,
             midflameAdjustment,
-            stepMinutes: FIRE_STEP_MINUTES,
+            stepMinutes,
             horizonMinutes,
             spotting: {
               enabled: spottingEnabled,
@@ -423,6 +448,7 @@ export default function FireSimulatorPage() {
       windFromDegrees,
       moisture,
       midflameAdjustment,
+      stepMinutes,
       horizonMinutes,
       spottingEnabled,
       spottingDistanceMeters,
@@ -743,7 +769,7 @@ export default function FireSimulatorPage() {
   // Frame the board inside the part of the stage the floating overlay leaves uncovered.
   const hasRun = run !== null;
 
-  // Resident app broadcast: the footprint of the latest 15-minute frame at the playback time.
+  // Resident app broadcast: the footprint of the latest frame at the playback time.
   const liveSessionId = useMemo(() => (run ? newSessionId() : null), [run]);
   const liveMinute = Math.floor(playback.t);
   const playing = playback.playing;
@@ -926,18 +952,26 @@ export default function FireSimulatorPage() {
               "wildland-urban edge."),
       });
     }
-    if (run.scenario.horizonMinutes >= LONG_HORIZON_MINUTES) {
+    if (
+      run.scenario.horizonMinutes >= LONG_HORIZON_MINUTES &&
+      !run.scenario.weatherSeries?.enabled
+    ) {
       warnings.push({
         key: "constant-weather",
-        text: "Wind and fuel moisture are held constant for the whole run; no day–night change is modelled.",
+        text:
+          "Wind and fuel moisture are held constant for the whole run; no day–night change is " +
+          "modelled. For a long run, pick Historical, Worst or Forecast wind and Hour by hour.",
       });
     }
     if (run.reachedEdge) {
+      const bigger = region
+        ? "This region's board is fixed: for a run this long, choose Custom… and a larger Area size, or shorten the run."
+        : radiusMeters < MAX_RADIUS_METERS
+          ? `Choose a larger Area size (now ${formatKm(radiusMeters)} km radius) or shorten the run.`
+          : "This is already the largest board: shorten the run to stay inside it.";
       warnings.push({
         key: "edge",
-        text:
-          "The fire reached the edge of the modelled area. Results past that point are " +
-          "truncated; try a larger area size or a longer horizon for a wider grid.",
+        text: `The fire reached the edge of the board before ${formatDuration(run.scenario.horizonMinutes)}, so the footprint after that is cut off. ${bigger}`,
       });
     }
   }
@@ -1164,6 +1198,12 @@ export default function FireSimulatorPage() {
                   </p>
                 )}
               </div>
+
+              <HorizonControl
+                value={horizonMinutes}
+                onChange={setHorizonMinutes}
+                frameStepMinutes={stepMinutes}
+              />
 
               <WindSourcePicker
                 lon={origin?.longitude ?? null}
@@ -1861,6 +1901,7 @@ export default function FireSimulatorPage() {
           <FireDock
             playback={playback}
             horizonMinutes={horizonMinutes}
+            stepMinutes={stepMinutes}
             hasRun={hasRun}
             canFocusFire={hasRun}
             sceneReady={sceneReady || view === "satellite"}
@@ -1872,6 +1913,16 @@ export default function FireSimulatorPage() {
                   series={run.scenario.weatherSeries}
                   horizonMinutes={horizonMinutes}
                   t={playback.t}
+                />
+              ) : undefined
+            }
+            dayNight={
+              run?.scenario.weatherSeries?.enabled && runClock ? (
+                <DayNightBand
+                  clock={runClock.clock}
+                  horizonMinutes={horizonMinutes}
+                  t={playback.t}
+                  note={runClock.note}
                 />
               ) : undefined
             }

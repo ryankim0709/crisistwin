@@ -8,6 +8,7 @@ import {
   compassPoint,
 } from "../fire/spread";
 import WindSourcePicker from "../fire/ui/WindSourcePicker";
+import HorizonControl from "../fire/ui/HorizonControl";
 import NaturalVariationControl, { observedGustFactor } from "../fire/ui/NaturalVariationControl";
 import { weatherSeriesFromRecord, type ScenarioWindRecord } from "../fire/scenarioWeather";
 import type { FireSettings, IgnitionProblem } from "../fire/scheduledTypes";
@@ -16,7 +17,7 @@ import {
   MAX_ENABLED_IGNITIONS,
   MAX_WIND_SPEED_MPH,
   MIN_WIND_SPEED_MPH,
-  STUDIO_HORIZON_CHOICES,
+  studioDisplayStepMinutes,
   type ConfigPanelProps,
   type MapMode,
   type RunPhase,
@@ -432,6 +433,14 @@ export default function ConfigPanel(props: ConfigPanelProps) {
             </span>
           </h3>
 
+          <div className="studio-field">
+            <HorizonControl
+              value={horizon}
+              onChange={(minutes) => setSettings({ horizonMinutes: minutes })}
+              frameStepMinutes={studioDisplayStepMinutes(horizon)}
+            />
+          </div>
+
           <WindSourcePicker
             lon={firstFire?.location.longitude ?? null}
             lat={firstFire?.location.latitude ?? null}
@@ -499,42 +508,24 @@ export default function ConfigPanel(props: ConfigPanelProps) {
             </p>
           </div>
 
-          <div className="studio-grid-2">
-            <Field label="Fuel moisture">
-              <select
-                id={`${uid}-moisture`}
-                value={matchedPreset?.id ?? CUSTOM_MOISTURE_VALUE}
-                aria-describedby={`${uid}-moisture-note`}
-                onChange={(event) => {
-                  const preset = MOISTURE_PRESETS.find((item) => item.id === event.target.value);
-                  if (preset) setSettings({ moisture: { ...preset.moisture } });
-                }}
-              >
-                {!matchedPreset && <option value={CUSTOM_MOISTURE_VALUE}>Custom</option>}
-                {MOISTURE_PRESETS.map((preset) => (
-                  <option key={preset.id} value={preset.id}>
-                    {preset.label}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Horizon">
-              <select
-                id={`${uid}-horizon`}
-                value={horizon}
-                onChange={(event) => setSettings({ horizonMinutes: Number(event.target.value) })}
-              >
-                {!(STUDIO_HORIZON_CHOICES as readonly number[]).includes(horizon) && (
-                  <option value={horizon}>{horizon} min</option>
-                )}
-                {STUDIO_HORIZON_CHOICES.map((minutes) => (
-                  <option key={minutes} value={minutes}>
-                    {minutes / 60} h
-                  </option>
-                ))}
-              </select>
-            </Field>
-          </div>
+          <Field label="Fuel moisture">
+            <select
+              id={`${uid}-moisture`}
+              value={matchedPreset?.id ?? CUSTOM_MOISTURE_VALUE}
+              aria-describedby={`${uid}-moisture-note`}
+              onChange={(event) => {
+                const preset = MOISTURE_PRESETS.find((item) => item.id === event.target.value);
+                if (preset) setSettings({ moisture: { ...preset.moisture } });
+              }}
+            >
+              {!matchedPreset && <option value={CUSTOM_MOISTURE_VALUE}>Custom</option>}
+              {MOISTURE_PRESETS.map((preset) => (
+                <option key={preset.id} value={preset.id}>
+                  {preset.label}
+                </option>
+              ))}
+            </select>
+          </Field>
           <p id={`${uid}-moisture-note`} className="studio-hint">
             {matchedPreset ? matchedPreset.description : "Moisture values differ from every preset."}
           </p>

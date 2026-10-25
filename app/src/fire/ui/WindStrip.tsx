@@ -3,9 +3,12 @@ import { weatherAtMinute, type FireWeatherSeries } from "../weatherSeries";
 import { formatDuration } from "./format";
 
 const HOUR_MINUTES = 60;
-/** Direction arrows every this many hours, so a 24 h strip shows 13 and a 6 h strip 7. */
+/** Direction arrows every this many hours, so a 24 h strip shows 13, a 6 h strip 7, 72 h 13. */
 function arrowIntervalMinutes(horizonMinutes: number): number {
-  return horizonMinutes <= 6 * HOUR_MINUTES ? HOUR_MINUTES : 2 * HOUR_MINUTES;
+  if (horizonMinutes <= 6 * HOUR_MINUTES) return HOUR_MINUTES;
+  if (horizonMinutes <= 24 * HOUR_MINUTES) return 2 * HOUR_MINUTES;
+  if (horizonMinutes <= 72 * HOUR_MINUTES) return 6 * HOUR_MINUTES;
+  return 12 * HOUR_MINUTES;
 }
 
 /**

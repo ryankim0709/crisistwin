@@ -44,7 +44,7 @@ export interface ConditionsQuery {
   lat: number;
   /** ISO UTC with Z. Optional for `forecast` (the server uses the current UTC hour). */
   startUtc?: string;
-  /** 1 to 72; the answer has hours + 1 samples. Server default 24. */
+  /** 1 to 169; the answer has hours + 1 samples. Server default 24. */
   hours?: number;
   mode: ConditionsMode;
   /** 50 to 99.9, climatology only. Server default 95. */

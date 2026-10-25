@@ -753,19 +753,35 @@ export function planFirefighting(
   if (minutes.length === 0) minutes.push(horizon);
   const total = resources.length > 0 ? anchors.length * minutes.length : 1;
   let done = 0;
-  type Tried = { score: PlanScore; run: ScheduledFireRun; line: LinePlan };
+  // Only the best plan so far keeps its run: on a long horizon each run's frames are tens of MB.
+  type Tried = { score: PlanScore; run: ScheduledFireRun | null; line: LinePlan };
   const tried: Tried[] = [];
+  const order = (a: Tried, b: Tried) =>
+    a.score.burnedSquareMeters - b.score.burnedSquareMeters ||
+    a.score.developedBurnedSquareMeters - b.score.developedBurnedSquareMeters ||
+    a.score.plannedMeters - b.score.plannedMeters;
+  let leader: Tried | null = null;
+  const keepBest = (entry: Tried) => {
+    if (leader === null || order(entry, leader) < 0) {
+      if (leader) leader.run = null;
+      leader = entry;
+    } else {
+      entry.run = null;
+    }
+  };
   const solve = (strategy: Strategy, isochroneMinute: number, line: LinePlan) => {
     const run = simulateScheduledFireSpread(grid, input, controlLinesFor(grid, line, aircraft));
     const areas = burnedAreas(grid, run.arrivalMinutes, horizon);
     let builtMeters = 0;
     const perCell = line.cells.length > 0 ? line.plannedMeters / line.cells.length : 0;
     for (const t of line.holdFromMinute) if (t <= horizon) builtMeters += perCell;
-    tried.push({
+    const entry: Tried = {
       score: { strategy, isochroneMinute, ...areas, plannedMeters: line.plannedMeters, builtMeters },
       run,
       line,
-    });
+    };
+    tried.push(entry);
+    keepBest(entry);
   };
   if (resources.length === 0) {
     solve("head", startMinute, EMPTY_LINE);
@@ -783,14 +799,11 @@ export function planFirefighting(
   if (tried.length === 0) {
     return empty("The fire has no outline to build line along before the horizon.");
   }
-  tried.sort(
-    (a, b) =>
-      a.score.burnedSquareMeters - b.score.burnedSquareMeters ||
-      a.score.developedBurnedSquareMeters - b.score.developedBurnedSquareMeters ||
-      a.score.plannedMeters - b.score.plannedMeters,
-  );
+  // Stable sort: the first of equal plans wins, the same one `keepBest` kept the run of.
+  tried.sort(order);
   const winner = tried[0];
-  const status = lineStatus(winner.line, winner.run.arrivalMinutes, horizon);
+  const winnerRun = winner.run!;
+  const status = lineStatus(winner.line, winnerRun.arrivalMinutes, horizon);
   return {
     settings,
     startMinute,
@@ -798,7 +811,7 @@ export function planFirefighting(
     candidates: tried.map((t) => t.score),
     best: {
       score: winner.score,
-      run: winner.run,
+      run: winnerRun,
       line: winner.line,
       status,
       statusMeters: metersByStatus(winner.line, status),
@@ -807,7 +820,7 @@ export function planFirefighting(
     initialAttack: null,
     aircraft,
     dropStatusMeters: aircraft
-      ? dropStatusMeters(grid, aircraft, winner.run.arrivalMinutes, horizon)
+      ? dropStatusMeters(grid, aircraft, winnerRun.arrivalMinutes, horizon)
       : null,
   };
 }

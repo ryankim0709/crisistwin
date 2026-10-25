@@ -238,17 +238,19 @@ export const MOISTURE_PRESETS: readonly MoisturePreset[] = [
 ] as const;
 
 /**
- * Simulation-clock minutes between output frames. It is an output sampling interval, not
- * a solver time step: arrival times are continuous, and the frames are contours of the
- * same arrival field at multiples of this interval. It stays 15 minutes at every horizon
- * (a 24-hour run has 97 frames), so frame k is always at k x 15 minutes.
+ * Simulation-clock minutes between output frames on /fire, at most. It is an output sampling
+ * interval, not a solver time step: arrival times are continuous, and the frames are contours
+ * of the same arrival field at multiples of the interval. Runs longer than 60 hours space
+ * their frames further apart (`frameStepMinutes` in horizon.ts, 30 min at 72 h) so a run
+ * keeps at most 240 frames; `FireScenario.stepMinutes` carries the spacing used.
  */
 export const FIRE_STEP_MINUTES = 15;
 /**
- * Fixed horizon of every page run, minutes (24 hours). Wind, wind direction and fuel
- * moisture stay constant for the whole horizon — no diurnal cycle, no overnight humidity
- * recovery, no wind shift — so a run is a constant-weather stress test rather than a
- * forecast of a day's growth (docs/adr/0012-fire-large-areas.md).
+ * Default horizon of a /fire run, minutes (24 hours); the page offers 1 hour to 7 days
+ * (horizon.ts). Without a weather series, wind, wind direction and fuel moisture stay
+ * constant for the whole horizon — no diurnal cycle, no overnight humidity recovery, no wind
+ * shift — so such a run is a constant-weather stress test rather than a forecast of a day's
+ * growth (docs/adr/0012-fire-large-areas.md).
  */
 export const FIRE_HORIZON_MINUTES = 1440;
 /**
