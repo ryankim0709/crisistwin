@@ -568,12 +568,27 @@ export function weatherSeriesFromConditions(
     });
   }
   if (samples.length === 0) return null;
+  // Longest stretch with no kept sample: between samples, from T+0 to the first, and from the
+  // last to the final hour the service returned.
+  const lastHourMinute = conditions.hours.reduce((m, h) => {
+    const minute = (Date.parse(h.tUtc) - t0) / 60_000;
+    return Number.isFinite(minute) && minute > m ? minute : m;
+  }, samples[samples.length - 1].minute);
+  let longestGapMinutes = Math.max(0, samples[0].minute, lastHourMinute - samples[samples.length - 1].minute);
+  for (let i = 1; i < samples.length; i++) {
+    longestGapMinutes = Math.max(longestGapMinutes, samples[i].minute - samples[i - 1].minute);
+  }
   return {
     series: {
       enabled: true,
       samples,
       source: `${conditions.mode}${conditions.station ? ` ${conditions.station.id}` : ""}`,
       evidence: conditions.evidence.weather,
+      missing: {
+        hours: skippedHours.length,
+        longestGapHours: Math.round((longestGapMinutes / 60) * 10) / 10,
+        startMissing: samples[0].minute > 0,
+      },
     },
     skippedHours,
   };
