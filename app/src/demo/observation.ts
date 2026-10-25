@@ -749,6 +749,9 @@ function outcomesObs(board: Board): NonNullable<DemoObservation["outcomes"]> {
     homes_reached_saved: s.homesReachedSaved,
     homes_method: s.homesMethod,
     area_burned_ha: s.areaBurnedHa,
+    injured_people: s.injuries.injuredPeople,
+    injury_deaths: s.injuries.injuryDeaths,
+    injured_open: s.injuries.openPeople,
   };
 }
 
