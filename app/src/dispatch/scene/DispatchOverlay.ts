@@ -85,6 +85,7 @@ const LABEL_CSS = `
 .fdx-dsp-swatch { width: 9px; height: 9px; border-radius: 2px; flex: none; }
 .fdx-dsp-unit { font-size: 10.5px; padding: 2px 7px; background: #b3362b; color: #fff; border-color: #7f2018; }
 .fdx-dsp-exit { font-size: 13px; font-weight: 700; padding: 4px 9px; gap: 5px; background: rgba(20, 43, 39, 0.88); color: #fff; border-color: rgba(0,0,0,0.2); }
+.fdx-dsp-exit--faded { opacity: 0.55; font-size: 11px; font-weight: 600; padding: 2px 7px; }
 .fdx-dsp-closed { font-size: 10.5px; padding: 2px 7px; background: #1a1a1a; color: #fff; border-color: #000; font-weight: 700; }
 .fdx-compact .fdx-dsp-zone { font-size: 9.5px; padding: 2px 6px; }
 `;
@@ -569,9 +570,9 @@ export class DispatchOverlay implements BoardOverlay {
       const state = engine?.zones[index];
       const selected = index === this.selectedZone;
       const sel = selected ? " fdx-dsp-zone--selected" : "";
+      // Status is shown by colour (homes, routes); a zone is labelled only when selected.
+      if (!selected) return;
       if (state?.status === "cleared") {
-        // Finished zones only label when selected, to keep the board readable.
-        if (!selected) return;
         wanted.set(index, {
           cls: `fdx-dsp-zone fdx-dsp-zone--cleared${sel}`,
           html: `✓ <b>${zoneName(zone.id)}</b> · everyone who left is safe · ${state.safe} of ${zone.homes} homes`,
@@ -648,6 +649,9 @@ export class DispatchOverlay implements BoardOverlay {
       }
     }
     const nf = (n: number) => Math.round(n).toLocaleString("en-US");
+    const busiest = new Set(
+      [...heading.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([id]) => id),
+    );
     area.exits.forEach((exit, i) => {
       const marker = this.exitMarkers[i];
       if (!marker) return;
@@ -655,8 +659,12 @@ export class DispatchOverlay implements BoardOverlay {
       marker.label.visible = live;
       if (!live) return;
       const name = `Exit ${exit.id.replace(/^X0*/, "") || exit.id}`;
-      const text = `${name} · ${nf(heading.get(exit.id) ?? 0)} people heading here · ${nf(arrived.get(exit.id) ?? 0)} arrived`;
+      const top = busiest.has(exit.id);
+      const text = top
+        ? `${name} · ${nf(heading.get(exit.id) ?? 0)} heading here · ${nf(arrived.get(exit.id) ?? 0)} arrived`
+        : name;
       if (marker.el.textContent !== text) marker.el.textContent = text;
+      marker.el.classList.toggle("fdx-dsp-exit--faded", !top);
     });
   }
 
