@@ -490,9 +490,10 @@ export interface Station {
   type: string;
   /**
    * Where the station comes from: the resource snapshot (`snapshot`), the CAL FIRE facilities
-   * layer (`calfire_bases`), a drill package's OSM stations (`package_osm`) or `synthetic`.
+   * layer (`calfire_bases`), a drill package's OSM stations (`package_osm`), GET
+   * /api/suppression/stations OSM rows (`osm_stations`) or `synthetic`.
    */
-  source: "snapshot" | "calfire_bases" | "package_osm" | "synthetic";
+  source: "snapshot" | "calfire_bases" | "package_osm" | "osm_stations" | "synthetic";
   /** Basis of the station's location (snapshot), or null when not from the snapshot. */
   basis: SnapshotBasis | null;
   /** Engines the snapshot lists here (all statuses); [] for a station not from the snapshot. */
@@ -1637,6 +1638,7 @@ function buildBoardUnits(board: Board, zones: BaseZone[], env: DemoEnvironment, 
   const labelOf = new Map(fleet.facilities.map((f) => [f.id, f.label]));
   const stationOf = new Map(all.map((s) => [s.id, { ...s, label: labelOf.get(s.id) }] as const));
   board.response.facilities = fleet.facilities;
+  board.response.ems = fleet.ems;
   const hasFleet = all.length > 0;
   const departments: Department[] = [];
   const pool: UnitSeed[] = [...fleet.offBoardUnits];

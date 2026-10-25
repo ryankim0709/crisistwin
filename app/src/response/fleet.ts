@@ -1,6 +1,9 @@
 /**
  * Departments and their apparatus, built from real fire facilities (CAL FIRE Facilities for
- * Wildland Fire Protection via GET /api/suppression/bases; OSM stations as a fallback). Pure.
+ * Wildland Fire Protection via GET /api/suppression/bases; OSM fire stations the layer does not
+ * list, GET /api/suppression/stations or the drill package). Pure. OSM stations of a known local
+ * department (response/departments.ts) are grouped into that department and take its published
+ * per-station roster where one was found (Berkeley FD, Oakland FD), including ALS ambulances.
  * See docs/response-model.md, "Resources come from the map" and "Departments and mutual aid".
  *
  * The resources that can respond are a pure function of the facilities on and near the board:
@@ -21,6 +24,7 @@
 import type { LonLat } from "../live/types";
 import { GROUND_APPARATUS, dataValue, type GroundKind } from "../studio/apparatus";
 import { AIRCRAFT } from "../studio/aircraft";
+import { matchLocalStation, type LocalStationMatch } from "./departments";
 
 /** Ground kinds the response model dispatches (the /live board's kinds). */
 export type GroundResponseKind = Extract<GroundKind, "engine_t3" | "engine_t1" | "hand_crew_t1" | "dozer_t2">;
@@ -82,6 +86,29 @@ export interface UnitSeed {
   turnoutMinutes: number;
   tier: Tier;
 }
+
+/**
+ * An ALS ambulance (medic unit) housed at a station, from a department's published roster
+ * (response/departments.ts). Not a board fire unit: the response model has no medical mechanics;
+ * the injury/rescue model (demo/injuries.ts) can dispatch these.
+ */
+export interface EmsSeed {
+  /** "Berkeley FD Medic 1" style id, unique per fleet. */
+  id: string;
+  kind: "ambulance_als";
+  stationId: string;
+  stationName: string;
+  departmentId: string;
+  departmentName: string;
+  location: LonLat;
+  tier: Tier;
+  /** Report to rolling, minutes (EMS_TURNOUT_MINUTES). */
+  turnoutMinutes: number;
+  evidence: string;
+}
+
+/** NFPA 1710 (2020) 4.1.2.1.2: turnout 60 s for EMS responses (80 s for fire), as cited, not re-fetched. */
+export const EMS_TURNOUT_MINUTES = 1;
 
 export interface AircraftSeed {
   kind: AirResponseKind;
@@ -313,6 +340,10 @@ export interface FacilityContribution {
   km: number | null;
   /** "Paradise FS · CAL FIRE · 2 engines, 1 dozer". */
   label: string;
+  /** ALS ambulances housed here (published roster only; response/departments.ts). */
+  ambulances?: number;
+  /** Where the units come from (published roster, sourced average or ASSUMPTION). */
+  evidence?: string;
 }
 
 export interface Fleet {
@@ -322,6 +353,8 @@ export interface Fleet {
   /** Units at stations in the bases list but off the board (mutual aid; ordered only). */
   offBoardUnits: UnitSeed[];
   aircraft: AircraftSeed[];
+  /** ALS ambulances at stations with a published roster (on and off the board); [] when none is known. */
+  ems: EmsSeed[];
   /** Every facility that fields a unit (on the board, mutual aid, air bases in range). */
   facilities: FacilityContribution[];
   /** What the counts rest on, for the observation's inputs. */
@@ -341,20 +374,41 @@ export function buildFleet(bases: readonly BaseInput[], onBoard: (p: LonLat) => 
   const offBoardUnits: UnitSeed[] = [];
   const aircraft: AircraftSeed[] = [];
   const facilities: FacilityContribution[] = [];
+  const ems: EmsSeed[] = [];
   const calfireStationIndex = new Map<string, number>();
   const dozerUnits = new Map<string, number>();
+  const localStationsUsed = new Map<string, Set<string>>();
+  let rostered = 0;
 
   for (const base of bases) {
     const facility = facilityClassOf(base);
     if (!facility) continue;
-    const cls = agencyClassOf(base);
+    const local: LocalStationMatch | null = facility === "osm_station" ? matchLocalStation(base, localStationsUsed) : null;
+    // An OSM station of a known city or district department is that local department.
+    const cls: AgencyClass = local ? "local" : agencyClassOf(base);
     const tier: Tier = onBoard(base.location) ? "closest" : "mutual_aid";
     const km = center ? greatCircleKm(center, base.location) : null;
     const fielded: Partial<Record<ResponseKind, number>> = {};
+    const ambulances = local?.ambulances ?? 0;
+    if (local?.roster) rostered += 1;
     const contribute = () => {
-      const text = unitsText(fielded);
+      const text = [unitsText(fielded), ambulances > 0 ? `${ambulances} ${ambulances === 1 ? "ambulance" : "ambulances"}` : ""].filter(Boolean).join(", ");
       if (!text) return;
-      facilities.push({ id: base.id, name: base.name, type: base.type, facility, agencyClass: cls, location: base.location, tier, units: fielded, km, label: `${base.name} · ${AGENCY_SHORT[cls]} · ${text}` });
+      const who = local ? local.department.short : AGENCY_SHORT[cls];
+      facilities.push({
+        id: base.id,
+        name: base.name,
+        type: base.type,
+        facility,
+        agencyClass: cls,
+        location: base.location,
+        tier,
+        units: fielded,
+        km,
+        label: `${base.name} · ${who} · ${text}`,
+        ...(ambulances > 0 ? { ambulances } : {}),
+        evidence: local?.evidence ?? FACILITY_INVENTORY[facility].evidence,
+      });
     };
 
     if (facility === "air_attack_base" || facility === "helitack_base") {
@@ -367,10 +421,10 @@ export function buildFleet(bases: readonly BaseInput[], onBoard: (p: LonLat) => 
       continue;
     }
 
-    const key = departmentKey(base, cls);
+    const key = local ? `local:${local.department.id}` : departmentKey(base, cls);
     let dept = departments.get(key);
     if (!dept) {
-      dept = { id: key, name: departmentName(base, cls), agencyClass: cls, tier, stationIds: [], engines: 0, keepEngines: 0 };
+      dept = { id: key, name: local ? local.department.name : departmentName(base, cls), agencyClass: cls, tier, stationIds: [], engines: 0, keepEngines: 0 };
       departments.set(key, dept);
     }
     // A department with any station on the board answers initial attack.
@@ -386,7 +440,8 @@ export function buildFleet(bases: readonly BaseInput[], onBoard: (p: LonLat) => 
       if (kind === "engine_t3" || kind === "engine_t1") dept!.engines += n;
     };
     const row = FACILITY_INVENTORY[facility];
-    const turnout = engineTurnoutMinutes(base.staffing);
+    // A career department (departments.ts `paid`) turns out as paid staffing.
+    const turnout = engineTurnoutMinutes(local?.department.paid ? "P" : base.staffing);
     if (facility === "crew_camp") {
       add("hand_crew_t1", row.units.hand_crew_t1 ?? 0, GROUND_APPARATUS.hand_crew_t1.turnoutMinutes);
     } else if (facility === "calfire_station") {
@@ -400,7 +455,25 @@ export function buildFleet(bases: readonly BaseInput[], onBoard: (p: LonLat) => 
         dozerUnits.set(key, dozers + 1);
       }
     } else {
-      for (const [kind, n] of Object.entries(row.units) as [GroundResponseKind, number][]) add(kind, n, turnout);
+      const units = local?.units ?? row.units;
+      for (const [kind, n] of Object.entries(units) as [GroundResponseKind, number][]) add(kind, n, turnout);
+    }
+    if (local && ambulances > 0) {
+      for (let i = 0; i < ambulances; i += 1) {
+        const n = ems.filter((e) => e.departmentId === key).length + 1;
+        ems.push({
+          id: `${local.department.short} Medic ${local.station ?? n}${ambulances > 1 ? `-${i + 1}` : ""}`,
+          kind: "ambulance_als",
+          stationId: base.id,
+          stationName: base.name,
+          departmentId: key,
+          departmentName: local.department.name,
+          location: base.location,
+          tier,
+          turnoutMinutes: EMS_TURNOUT_MINUTES,
+          evidence: local.evidence,
+        });
+      }
     }
     contribute();
   }
@@ -408,17 +481,25 @@ export function buildFleet(bases: readonly BaseInput[], onBoard: (p: LonLat) => 
   // one-engine volunteer company answers its area's fires rather than holding its only engine).
   for (const dept of departments.values()) dept.keepEngines = Math.floor(DRAWDOWN_KEEP_SHARE * dept.engines);
   const osm = bases.some((b) => b.type === "osm_fire_station");
+  const layer = bases.some((b) => b.type !== "osm_fire_station");
+  const sources = [
+    layer ? "CAL FIRE facilities layer: observed locations, agency, staffing" : null,
+    osm ? `OpenStreetMap fire stations${layer ? " the layer does not list" : " (CAL FIRE layer unavailable)"}` : null,
+  ]
+    .filter(Boolean)
+    .join("; ");
   return {
     departments: [...departments.values()],
     units,
     offBoardUnits,
     aircraft,
+    ems,
     facilities,
     label:
       facilities.length === 0
         ? "No fire stations found on this map: only out-of-area resources ordered through the state system"
-        : `Units from the facilities on the map (${osm ? "OpenStreetMap fire stations; CAL FIRE layer unavailable" : "CAL FIRE facilities layer: observed locations, agency, staffing"}); ` +
-          "units per facility from FACILITY_INVENTORY (response/fleet.ts: sourced averages and named assumptions)",
+        : `Units from the facilities on the map (${sources}); ` +
+          `${rostered > 0 ? `${rostered} stations from their department's published roster (response/departments.ts), the rest ` : ""}units per facility from FACILITY_INVENTORY (response/fleet.ts: sourced averages and named assumptions)`,
   };
 }
 
