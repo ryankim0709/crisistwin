@@ -84,7 +84,7 @@ const LABEL_CSS = `
 .fdx-dsp-zone--selected { outline: 2px solid #142b27; outline-offset: 1px; }
 .fdx-dsp-swatch { width: 9px; height: 9px; border-radius: 2px; flex: none; }
 .fdx-dsp-unit { font-size: 10.5px; padding: 2px 7px; background: #b3362b; color: #fff; border-color: #7f2018; }
-.fdx-dsp-exit { font-size: 10.5px; padding: 2px 7px; gap: 4px; background: rgba(20, 43, 39, 0.88); color: #fff; border-color: rgba(0,0,0,0.2); }
+.fdx-dsp-exit { font-size: 13px; font-weight: 700; padding: 4px 9px; gap: 5px; background: rgba(20, 43, 39, 0.88); color: #fff; border-color: rgba(0,0,0,0.2); }
 .fdx-dsp-closed { font-size: 10.5px; padding: 2px 7px; background: #1a1a1a; color: #fff; border-color: #000; font-weight: 700; }
 .fdx-compact .fdx-dsp-zone { font-size: 9.5px; padding: 2px 6px; }
 `;
