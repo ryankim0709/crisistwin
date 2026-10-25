@@ -137,6 +137,44 @@ chunks with `Content-Type: application/gzip` (no `Content-Encoding`), `Content-L
 returns 304. Errors are JSON: 404 `{"error": "not_found"}` for unknown/unbuilt regions,
 503 `{"error": "unavailable"}` on MongoDB/GridFS errors (no driver text).
 
+### Geodata cache (`/api/geo/…`) and landscape cache (`/api/landscapes/cache`)
+
+Read-through caches so a board load stops re-downloading public data. Anonymous, no auth.
+
+`api/geo_cache.py`: GET-only proxies with a fixed upstream, a parameter whitelist and
+numeric range checks (not an open proxy). Bytes are stored in MongoDB collection `geo_cache`
+(`_id` = SHA-256 of the normalised request, `body`, `contentType`, `fetchedAt`), never
+expired (drop the collection to refresh). Responses carry `Cache-Control: public,
+max-age=604800, immutable`, an `ETag` (304 on match) and `X-Geo-Cache: HIT|MISS`. Upstream
+calls time out at 40 s and retry 3 times on network errors, 5xx and 429. If MongoDB is
+down the request is still proxied, just not stored. Errors: 400 `invalid_request`, 404
+`not_found`, 502 `upstream_<status>`.
+
+- `GET /api/geo/landfire/wcs?service=WCS&version=2.0.1&request=GetCoverage&coverageId=<id>&subset=X(min,max)&subset=Y(min,max)[&scalesize=i(n),j(n)&interpolation=<nearest-neighbor URI>]&format=image/tiff`:
+  LANDFIRE LF2025 GeoServer WCS (`edcintl.cr.usgs.gov`), the same query the browser sent to
+  the Vite `/landfire/wcs` proxy. `coverageId` is one of the five LF2025 FBFM40/CBH/CBD/CC/CH
+  CONUS coverages; subsets are EPSG:3857 metres, at most 400 km wide; `scalesize` at most
+  2048 per side. Same upstream semantics as `app/vite.config.ts` (browser headers dropped,
+  app User-Agent, IPv4 only, last good address reused when DNS fails). Body cap 12 MB.
+- `GET /api/geo/terrarium/<z>/<x>/<y>.png`: AWS terrarium elevation tile, z 0-15, 1 MB cap.
+- `GET /api/geo/imagery/<z>/<y>/<x>`: USGS `USGSImageryOnly` tile (row before column, as the
+  upstream), z 0-17, 2 MB cap.
+
+`api/landscape_cache.py`: write-back cache of finished landscape grids in GridFS bucket
+`landscape_cache`, so the next load of the same area is instant. Used by `loadLandscapeCached`
+(`app/src/fire/landscapeCache.ts`), which builds the key and the gzip package
+(`landscapePackage.ts`, ADR 0013 format).
+
+- `POST /api/landscapes/cache?key=<key>`: body is the gzip package bytes (`Content-Length`
+  required, at most 48 MB; must start with the `CTLS1` package magic). `204`; `400
+  invalid_key|not_a_landscape_package`, `413 too_large`, `503 unavailable`. One file per
+  key (newest wins), at most 200 files (oldest evicted).
+- `GET|HEAD /api/landscapes/cache?key=<key>`: `200` gzip bytes with `ETag` and `Cache-Control:
+  public, max-age=3600`, or `404 {"error": "not_found"}`.
+- `key` matches `^[a-z0-9][a-z0-9._-]{7,127}$`. The browser's keys look like
+  `ls1-c-n122271-37873-r15000-m30` (centre in thousandths of a degree, `n` = negative;
+  radius and cell size in metres) or `ls1-b-<minX>-<minY>-<maxX>-<maxY>` (box in 150 m units).
+
 ### Live broadcast and families
 
 `GET /api/live`, `POST /api/live/broadcast` (`api/live_broadcast.py`) and `/api/families…`

@@ -1,3 +1,5 @@
+import { MAX_BOARD_RADIUS_METERS } from "../boardSize";
+
 /** How wide a square of ground the board covers, chosen independently of the horizon. */
 export type AreaSizeId = "local" | "city" | "region" | "bay";
 
@@ -10,13 +12,13 @@ export const AREA_SIZES: readonly {
   { id: "local", label: "Local (fits the horizon)", radiusMeters: null },
   { id: "city", label: "10 km radius", radiusMeters: 10_000 },
   { id: "region", label: "25 km radius", radiusMeters: 25_000 },
-  { id: "bay", label: "Largest (50 km radius)", radiusMeters: 50_000 },
+  { id: "bay", label: "Largest (60 km radius)", radiusMeters: MAX_BOARD_RADIUS_METERS },
 ];
 
 export const DEFAULT_AREA_SIZE: AreaSizeId = "local";
 
 /** Largest grid half-width the page will request. */
-export const MAX_RADIUS_METERS = 50_000;
+export const MAX_RADIUS_METERS = MAX_BOARD_RADIUS_METERS;
 const MIN_AUTO_RADIUS_METERS = 3000;
 /** Horizons up to this keep the original 12 km cap; longer ones may grow the box further. */
 const LOCAL_CAP_HORIZON_MINUTES = 360;

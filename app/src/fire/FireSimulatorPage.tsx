@@ -25,7 +25,9 @@ import {
   fetchRegionLandscape,
 } from "./landscapePackage";
 import { DEFAULT_REGION_ID, CALIFORNIA_REGIONS, REGION_AREAS } from "./regions";
-import { landscapeCellMetersFor, loadLandscape, type LandscapeGrid } from "./landscape";
+import { boardCellMetersFor } from "./boardSize";
+import { type LandscapeGrid } from "./landscape";
+import { loadLandscapeCached } from "./landscapeCache";
 import type { FuelMoisture } from "./rothermel";
 import {
   DEFAULT_MIDFLAME_ADJUSTMENT,
@@ -144,6 +146,7 @@ function formatDistance(meters: number): string {
 /** Where the board's data came from, shown next to the area. */
 type Provenance =
   | { kind: "stored"; builtAt: string; cellMeters: number }
+  | { kind: "cached"; builtAt: string; cellMeters: number }
   | { kind: "live"; storedUnavailable: boolean };
 
 /** A stored SoCal region, or a custom area loaded live. */
@@ -270,7 +273,7 @@ export default function FireSimulatorPage() {
   const radiusMeters = region
     ? region.radiusMeters
     : effectiveRadiusMeters(horizonMinutes, areaSize);
-  const requestedCellMeters = region ? region.cellMeters : landscapeCellMetersFor(radiusMeters);
+  const requestedCellMeters = region ? region.cellMeters : boardCellMetersFor(radiusMeters);
   const centerLatitude = region ? region.center.latitude : areaCenter.latitude;
   const centerLongitude = region ? region.center.longitude : areaCenter.longitude;
 
@@ -303,10 +306,16 @@ export default function FireSimulatorPage() {
       setLandscape({ status: "ready", grid, provenance });
     };
     const live = (storedUnavailable: boolean) =>
-      loadLandscape(centerLongitude, centerLatitude, radiusMeters, controller.signal, {
+      loadLandscapeCached(centerLongitude, centerLatitude, radiusMeters, controller.signal, {
         cellMeters: requestedCellMeters,
-      }).then((grid) => {
-        if (!stale()) finish(grid, { kind: "live", storedUnavailable });
+      }).then(({ grid, source, cachedAt }) => {
+        if (stale()) return;
+        finish(
+          grid,
+          source === "cache"
+            ? { kind: "cached", builtAt: cachedAt ?? "", cellMeters: grid.cellMeters }
+            : { kind: "live", storedUnavailable },
+        );
       });
 
     const work = region
@@ -382,6 +391,7 @@ export default function FireSimulatorPage() {
   // OSM roads and synthetic homes along residential streets for the diorama board.
   const streets = useBoardStreets(grid);
   const streetArea = streets.status === "ready" ? streets.area : null;
+  const streetScenery = streets.status === "ready" ? streets.scenery : null;
 
   const result = useMemo<{ run: FireRun | null; error: string | null }>(() => {
     if (!grid || !deferredScenario) return { run: null, error: null };
@@ -441,8 +451,8 @@ export default function FireSimulatorPage() {
     scene?.setLandscape(grid);
   }, [scene, grid]);
   useEffect(() => {
-    scene?.setStreets(streetArea);
-  }, [scene, streetArea]);
+    scene?.setStreets(streetScenery);
+  }, [scene, streetScenery]);
   useEffect(() => {
     scene?.setRun(run);
     scene?.setTime(getTime());
