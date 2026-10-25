@@ -661,7 +661,7 @@ export class DispatchOverlay implements BoardOverlay {
       const name = `Exit ${exit.id.replace(/^X0*/, "") || exit.id}`;
       const top = busiest.has(exit.id);
       const text = top
-        ? `${name} · ${nf(heading.get(exit.id) ?? 0)} heading here · ${nf(arrived.get(exit.id) ?? 0)} arrived`
+        ? `${name} · ${exit.name} · ${nf(heading.get(exit.id) ?? 0)} heading here · ${nf(arrived.get(exit.id) ?? 0)} arrived`
         : name;
       if (marker.el.textContent !== text) marker.el.textContent = text;
       marker.el.classList.toggle("fdx-dsp-exit--faded", !top);

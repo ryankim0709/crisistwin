@@ -393,6 +393,36 @@ answer 503 `apify_unavailable`, while uploading `items`, listing, review and exp
 work. `ANTHROPIC_API_KEY` enables extraction; without it, 503 `ai_unavailable`. MongoDB
 outages answer 503 `database_unavailable`.
 
+### Dispatch area exits and shelters (`GET /api/dispatch/area`)
+
+The road graph, zones and stations are described in
+[ADR 0017](../../docs/adr/0017-dispatch-anywhere.md). Since builder `dispatch-area/5` (wire
+schema still 2, additive) exits are real egress toward shelters, not every road crossing the
+box edge:
+
+- **Destinations.** Registered shelter facilities within 30 km of the box centre (more for a
+  large box), from FEMA's ESF#6 Shelter System, formerly the National Shelter System (public
+  ArcGIS service `gis.fema.gov/arcgis/rest/services/NSS/FEMA_NSS/FeatureServer/5`, "Shelter
+  Locations"; US federal data, no licence stated in the service; attribution as the service
+  gives it: FEMA, Mass Care, American Red Cross). If FEMA fails or returns nothing, OSM
+  `social_facility=shelter` (homeless and similar shelters excluded), `emergency=assembly_point`
+  and `emergency=evacuation_centre|shelter` are used (© OpenStreetMap contributors, ODbL).
+  Cached in MongoDB `dispatch_shelters` (key: `shelters/1`, centre rounded to 0.01°, radius).
+  Most listed facilities are `CLOSED` (registered, not open now); the status is passed through.
+- **Egress.** A motorway, trunk or primary (then secondary) road crossing the box edge in the
+  direction traffic can leave, kept only when a shelter beyond the box lies within 75° of the
+  road's outward heading (an assumption). At most 6, one per road first (then other directions),
+  ordered by class and distance. Each exit is named by road and heading with its shelter
+  (`"Hwy 24 east → Parkmead Elementary shelter"`) and carries `kind: "egress"` and
+  `destination: {name, kind, source, sourceId, city, location: [lon, lat], capacity (persons or
+  null), status, straightLineMeters}`. The distance is straight-line: roads beyond the box are not
+  routed, so the shelter is where the road leads, not a computed trip.
+- **Fallback.** With no shelter data (or none ahead of any major road), exits are the old
+  deduplicated box-edge crossings with `kind: "map-edge"`, named
+  `"<road> (<side>) · approximate exit (map edge)"`.
+- `sources.shelters` reports `{source: "fema-nss" | "osm" | null, attribution,
+  searchRadiusMeters, found}`; `assumptions.notes` gains one line saying which case applies.
+
 ## Updating dependencies
 
 Edit the `.in` files, then resolve with [uv](https://docs.astral.sh/uv/pip/compile/):
