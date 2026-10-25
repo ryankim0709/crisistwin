@@ -33,6 +33,11 @@ export const navigationItems: readonly NavigationItem[] = [
     group: "Workspace",
   },
   {
+    path: "/replay",
+    label: "Historical replay",
+    group: "Workspace",
+  },
+  {
     path: "/comparison",
     label: "Strategy comparison",
     group: "Analysis",
@@ -40,11 +45,6 @@ export const navigationItems: readonly NavigationItem[] = [
   {
     path: "/intel",
     label: "Incident intelligence",
-    group: "Analysis",
-  },
-  {
-    path: "/replay",
-    label: "Historical replay",
     group: "Analysis",
   },
   {

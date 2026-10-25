@@ -126,9 +126,8 @@ HISTORICAL_FIRES = {
         "phenology_class": "front_range_grassland",
         "sector_deg": FRONT_RANGE_DOWNSLOPE_SECTOR_DEG,
         "typical_season_date": "12-15",
-        "weather_coverage": ("not covered: sim/weather.py catalogues California stations only, so "
-                             "GET /api/conditions answers 502 no_station_coverage here until Colorado "
-                             "networks (IEM CO_ASOS / CO_DCP) are added"),
+        "weather_coverage": ("Colorado station catalogue (IEM CO_ASOS / CO_DCP; Boulder BDU and "
+                             "Broomfield/Jeffco BJC within 10 km), ERA5 reanalysis as fallback"),
     },
 }
 
@@ -187,7 +186,7 @@ def region_presets(region_id: str) -> dict | None:
         }] + _climatology_presets(f["lon"], f["lat"], month_day, f["sector_deg"])
         return {"region": {"id": region_id, "kind": "historical_fire", "name": f["name"],
                            "center": [f["lon"], f["lat"]]},
-                "weather_coverage": f.get("weather_coverage", "California station catalogue"),
+                "weather_coverage": f.get("weather_coverage", "California station catalogue, ERA5 reanalysis as fallback"),
                 "phenology_class": f["phenology_class"], "typical_season_date": month_day,
                 "presets": presets}
     for rid, name, area, lat, lon in CATALOGUE_REGIONS:
@@ -195,7 +194,7 @@ def region_presets(region_id: str) -> dict | None:
             md = _season_date_for(rid, area)
             return {"region": {"id": rid, "kind": "catalogue", "name": name, "area": area,
                                "center": [lon, lat]},
-                    "weather_coverage": "California station catalogue",
+                    "weather_coverage": "California station catalogue, ERA5 reanalysis as fallback",
                     "phenology_class": _phenology_for(rid, area), "typical_season_date": md,
                     "presets": _climatology_presets(lon, lat, md, OFFSHORE_SECTOR_DEG)}
     return None

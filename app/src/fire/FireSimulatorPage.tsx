@@ -33,6 +33,7 @@ import { DEFAULT_REGION_ID, CALIFORNIA_REGIONS, REGION_AREAS } from "./regions";
 import { boardCellMetersFor } from "./boardSize";
 import { type LandscapeGrid } from "./landscape";
 import { loadLandscapeCached } from "./landscapeCache";
+import { readinessLabel, useCachedBoards } from "./useCachedBoards";
 import type { FuelMoisture } from "./rothermel";
 import {
   DEFAULT_MIDFLAME_ADJUSTMENT,
@@ -313,6 +314,15 @@ export default function FireSimulatorPage() {
   const centerLatitude = region ? region.center.latitude : areaCenter.latitude;
   const centerLongitude = region ? region.center.longitude : areaCenter.longitude;
 
+  const areaReady = useCachedBoards(
+    region
+      ? []
+      : AREA_SIZES.map((size) => {
+          const radius = effectiveRadiusMeters(horizonMinutes, size.id);
+          return { longitude: centerLongitude, latitude: centerLatitude, radiusMeters: radius, cellMeters: boardCellMetersFor(radius) };
+        }),
+    landscape.status,
+  );
   // Which regions are stored is advisory: a load still tries the store directly.
   useEffect(() => {
     const controller = new AbortController();
@@ -1166,11 +1176,16 @@ export default function FireSimulatorPage() {
                       value={areaSize}
                       onChange={(event) => setAreaSize(event.target.value as AreaSizeId)}
                     >
-                      {AREA_SIZES.map((size) => (
-                        <option key={size.id} value={size.id}>
-                          {size.label}
-                        </option>
-                      ))}
+                      {AREA_SIZES.map((size) => {
+                        const radius = effectiveRadiusMeters(horizonMinutes, size.id);
+                        const cell = boardCellMetersFor(radius);
+                        const ready = areaReady({ longitude: centerLongitude, latitude: centerLatitude, radiusMeters: radius, cellMeters: cell });
+                        return (
+                          <option key={size.id} value={size.id}>
+                            {size.label} {"\u2014"} {readinessLabel(ready, radius, cell)}
+                          </option>
+                        );
+                      })}
                     </select>
                   </div>
                 )}

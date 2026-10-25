@@ -67,6 +67,11 @@ for lack of reasoning, not for a transient tool error.
 - Computed numbers (routes, capacities, metrics, confidence) come from numerical models.
   An LLM may interpret intent or explain results; it must not invent computed values.
   Validate LLM-produced parameters before running them.
+- Model parameters (road and vehicle speeds, access limits, response times, line rates,
+  behaviour rates) come from real sources: standards, agency data, published studies or
+  measured data, cited next to the value. Do not invent plausible numbers. A value with no
+  source is a last resort: label it an assumption in code and docs, and say so in your
+  handoff. Check new travel or response models against real routes or events.
 - Make units, coordinate order, time zones and time steps explicit at boundaries.
   Use a simulation clock, not wall-clock time, and seed any randomness.
 - Preserve invariants: non-negative counts and capacities, population conservation, no

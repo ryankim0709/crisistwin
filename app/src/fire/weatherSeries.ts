@@ -59,7 +59,7 @@ export interface FireWeatherSeries {
   /** Where the samples came from, for the run record (e.g. "historical_replay KBUR"). */
   source?: string;
   /** Evidence class of the weather (the wind source's), kept with the run. */
-  evidence?: "observed" | "forecast" | "derived" | "assumed";
+  evidence?: "observed" | "forecast" | "derived" | "modelled" | "assumed";
 }
 
 /** Weather step length, simulation minutes: the stochastic wind step (stochastic.ts). */

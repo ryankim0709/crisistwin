@@ -1,7 +1,8 @@
 # Scenario weather
 
 Historical, climatological and forecast wind and moisture for a scenario anywhere in
-California, so a Studio fire (and later a live drill) stops relying on an assumed wind. Code:
+California, the other western states and Hawaii (station networks), or anywhere else from the
+ERA5 reanalysis, so a Studio fire (and later a live drill) stops relying on an assumed wind. Code:
 `sim/weather.py` (inputs), `sim/weather_forecast_error.py` (forecast-versus-observed error).
 Decision record: [ADR 0045](adr/0045-scenario-weather.md). Tests: `tests/test_weather.py`
 (no network).
@@ -13,6 +14,10 @@ Decision record: [ADR 0045](adr/0045-scenario-weather.md). Tests: `tests/test_we
 | IEM ASOS/AWOS archive (Iowa State) | Airport hourly METAR: wind speed, direction, gust, RH, temperature | `mesonet.agron.iastate.edu/cgi-bin/request/asos.py`; station list `/geojson/network/CA_ASOS.geojson` | Public domain, free for any lawful purpose, attribution appreciated ([disclaimer](https://mesonet.agron.iastate.edu/disclaimer.php)). Per-IP rate limit and a 1,000 station-year cap per request. |
 | IEM DCP/HADS archive | RAWS fire-weather stations relayed through NWS HADS (for example Jarbo Gap, Pike County Lookout, Santa Rosa, Hawkeye): wind, peak wind, RH, temperature | `cgi-bin/request/hads.py?network=CA_DCP&stations=ID`; station list `CA_DCP.geojson` (filtered to names containing "RAWS") | Same IEM terms. Serial per-IP throttle (HTTP 429; the client backs off and retries). English units (mph, deg F). |
 | NWS `api.weather.gov` gridpoint forecast | "Now" scenarios | `/points/{lat},{lon}` then `forecastGridData` | Open data, no fee, public domain ([API docs](https://www.weather.gov/documentation/services-web-api)). Identifying `User-Agent` required, undisclosed rate limit. Do not present modified content as official NWS product. |
+| IEM DCP variable list | Whether a RAWS relays a wind-speed variable (SHEF `USIRG*`), checked before it is ranked | `json/dcp_vars.php?station=ID` | Same IEM terms. Cached on disk per station. |
+| Open-Meteo Historical Weather API, ECMWF ERA5 | Fallback hourly 10 m wind, gust, 2 m temperature and RH when no representative station has data, or forced with `station=reanalysis` | `archive-api.open-meteo.com/v1/archive?...&models=era5&wind_speed_unit=ms&timezone=GMT` | Free, no key, **non-commercial use only**, under 10,000 calls/day, 5,000/hour, 600/minute; data CC BY 4.0, attribute "Weather data by Open-Meteo.com" and Copernicus/ECMWF ERA5 (Hersbach et al. 2020) ([terms](https://open-meteo.com/en/terms), checked 2026-10-24). |
+| USGS 3DEP Elevation Point Query Service | Site elevation for the station ranking | `epqs.nationalmap.gov/v1/json?x=&y=&wkid=4326&units=Meters` | US Government public domain, no key. |
+| Open-Meteo Elevation API (Copernicus GLO-90) | Site elevation when EPQS fails or the point is outside the US | `api.open-meteo.com/v1/elevation` | Open-Meteo terms above. |
 | IEM NWS text-product archive | Archived Fire Weather Planning Forecasts (`FWFSTO`, `FWFMTR`) for the forecast-error study | `cgi-bin/afos/retrieve.py`, `api/1/nws/afos/list.json` | NWS products are public domain; IEM terms as above. |
 
 Checked and not used:
@@ -26,8 +31,15 @@ Checked and not used:
 
 RAWS through HADS is whatever the stations transmitted over GOES: coverage varies by
 station and year (Cohasset RAWS returned nothing for November 2018). `scenario_wind` therefore
-checks coverage and falls back to the next-nearest station, and lists every candidate it
-tried.
+checks coverage and falls back to the next-ranked station, and lists every candidate it
+ranked.
+
+The HADS CSV names its columns with the 6-character SHEF code (`USIRGZ`) up to 2020 and with
+the full 7-character code (`USIRGZZ`, probability letter included) from 2021 on (checked
+2026-10-24 on JBGC1, 2020-11-08 against 2021-11-08). Until `station-rank/1` the parser read only
+the 6-character names, so **every RAWS from 2021 on looked windless** (coverage 0.0): that, not
+missing sensors, is why Berkeley 2023 skipped Oakland North RAWS and failed. The parser now reads
+both.
 
 ## `sim/weather.py`
 
@@ -51,7 +63,7 @@ W.scenario_wind(lon, lat, start, hours, mode)                # dict, see below
   degrees.
 - Gust is the maximum reported in the hour; it is never synthesised from sustained speed.
 - Gaps stay as `None` samples (`summary.missing_speed_samples`). Nothing is interpolated.
-- No height conversion in the module: ASOS and gridpoint winds are 10 m, RAWS 20 ft, the Rothermel
+- No height conversion in the module: ASOS, gridpoint and ERA5 winds are 10 m, RAWS 20 ft, the Rothermel
   input is the open 20 ft wind. `GET /api/weather/scenario` converts (see "Consumed by").
 
 ### Evidence classes
@@ -61,6 +73,7 @@ W.scenario_wind(lon, lat, start, hours, mode)                # dict, see below
 | `observed` | Station data, as reported (`historical_replay`). |
 | `forecast` | NWS gridpoint forecast (`forecast`). Never cached. |
 | `derived` | Real observed hours chosen statistically (`climatology_percentile`). Not a named event. |
+| `modelled` | ERA5 reanalysis via Open-Meteo (`historical_replay` fallback or `station=reanalysis`). `evidence_label` is `"modelled (reanalysis)"`. A model's reconstruction, not a measurement. |
 
 ### Return shape of `scenario_wind`
 
@@ -73,23 +86,37 @@ W.scenario_wind(lon, lat, start, hours, mode)                # dict, see below
   "samples": [{"t_utc": "2018-11-08T00:00:00Z", "speed_ms": 1.8, "from_deg": 236.0,
                "gust_ms": 3.1, "rh_pct": 21.0, "temp_c": 16.7, "n_obs": 1}],
   "provenance": {"terms": {}, "raw": {"url": "...", "bytes": 5657, "sha256": "...", "from_cache": true},
-                 "candidates": [{"station": "JBGC1", "distance_km": 12.579, "coverage": 1.0}]},
+                 "candidates": [{"station": "JBGC1", "distance_km": 12.579, "coverage": 1.0}],
+                 "station_selection": {"version": "station-rank/1", "rule": "...", "weights": {},
+                                       "site": {"elevation_m": 604.4, "source": "usgs_epqs"},
+                                       "chosen": {"id": "JBGC1", "score": 13.91}}},
+  "evidence_label": "observed",
+  "candidates": [{"id": "JBGC1", "name": "JARBO GAP RAWS", "source": "iem_hads", "distance_km": 9.783,
+                  "elevation_m": 747.0, "elevation_diff_m": 142.6, "exposure": "RAWS (fire-weather station, 20 ft wind)",
+                  "score": 13.91, "score_terms": {"distance": 9.78, "elevation": 7.13, "exposure": 0.0, "type": -3.0},
+                  "rank": 1, "status": "chosen", "coverage": 1.0, "reason": "score 13.91 = 9.8 km, ..."},
+                 {"id": "reanalysis", "source": "open_meteo_era5", "status": "not_tried", "...": "..."}],
+  "warnings": [],
   "summary": {"max_speed_ms": 14.3, "max_gust_ms": 23.2, "missing_speed_samples": 0}
 }
 ```
 
 `samples` has `hours + 1` entries (both end hours). For `forecast`, `station` is `null` and
-`provenance` has the grid URL, `forecast_update_time` and the SHA-256 of the document.
+`provenance` has the grid URL, `forecast_update_time` and the SHA-256 of the document. For the
+reanalysis, `station` is `null`, `source` is `open_meteo_era5` and `provenance.grid` gives the
+grid point Open-Meteo used, its distance and elevation. New keys (`evidence_label`,
+`candidates`, `warnings`, `provenance.station_selection`, `station.elevation_m`) are additions;
+nothing was renamed. `provenance.candidates` keeps `station`, `distance_km`, `coverage`/`error`.
 
 ### Modes
 
-- **`historical_replay`**: the nearest of the `k` (default 4) nearest stations whose archive covers
-  `start` and which has at least `min_coverage` (0.75) of the window's hours; otherwise the
-  best-covered. ASOS and RAWS compete on distance only. For a ridge fire, prefer a RAWS
-  explicitly (`sources=["iem_hads"]` via `nearest_stations`): valley ASOS winds under-read ridge
-  winds (see Camp below).
+- **`historical_replay`**: the ranked station choice below ("Station selection"); ERA5
+  reanalysis when no representative station has data. `station=<id>` forces a station or
+  `reanalysis`.
 - **`climatology_percentile`** (default 95th, offshore sector 315-90 degrees from): for the calendar
-  month of `start`, take the nearest long-record ASOS, find offshore-wind episodes in 2012-2025
+  month of `start`, take the best-scored long-record ASOS (same score as below, ASOS only, RAWS
+  records are too patchy for a 14-year pool; the nearest long-record ASOS if none is within
+  60 km), find offshore-wind episodes in 2012-2025
   (runs of at least 6 h with sustained wind at least 5 m/s from the sector), take the episode whose
   peak is the nearest-rank percentile of all episode peaks, and replay that episode's real hours,
   relabelled to begin at `start`. The source episode is in `provenance.analog`. For Camp's
@@ -97,6 +124,77 @@ W.scenario_wind(lon, lat, start, hours, mode)                # dict, see below
   Not a prediction and not a named event; the tail is thin (9 samples).
 - **`forecast`**: NWS gridpoint forecast, `hours + 1` hourly samples from `start` (UTC hour). Hours
   outside the forecast horizon are `None`. Use for "now" scenarios only.
+
+### Station selection (`historical_replay`, version `station-rank/1`)
+
+1. **Networks.** IEM `<ST>_ASOS` and `<ST>_DCP` (RAWS only: names containing "RAWS") of every state
+   whose bounding box, grown by 60 km, holds the site (`STATE_BBOXES`: the 11 western states and
+   Hawaii; rough rectangles, an assumption). Marshall gets CO; a point near Lake Tahoe gets CA and
+   NV; a point elsewhere gets no stations and goes to the reanalysis.
+2. **Candidates.** Stations within 60 km (`MAX_CANDIDATE_DISTANCE_KM`) whose archive covers the
+   start. A RAWS is dropped when IEM's DCP variable list for it has variables but no wind speed
+   (`hads_wind_listed`; cached per station). Up to 12 (`MAX_CANDIDATES`) are kept, best score first.
+3. **Score** (lower is better, unit km-equivalent; `score_station`):
+
+   `score = 1.0 x distance_km + 5.0 x |station elevation - site elevation| / 100 m + 15 (summit/ridge) - 3 (RAWS)`
+
+   | Term | Value | Status and reason |
+   | --- | --- | --- |
+   | distance | 1 point per km | assumption |
+   | elevation difference | 5 points per 100 m (500 m = 25 km); 5 points flat if either elevation is unknown | **assumption**: in complex terrain wind changes faster with height (ridge, canyon, valley floor) than with distance |
+   | summit/ridge | +15, when the name says MOUNT/MT/PEAK/SUMMIT/LOOKOUT/RIDGE/BALDY/TOP **and** the station is at least 300 m above the site (or the site elevation is unknown) | **assumption**: a summit measures the free-air flow over the terrain, not the canyon or foothill wind |
+   | RAWS | -3 | **assumption**: RAWS are sited for fire weather and measure the 20 ft wind the model takes; CrisisTwin sites are wildland or WUI fires |
+
+   Station elevation is the IEM metadata (`elevation`, m). Site elevation is the USGS 3DEP point
+   query (EPQS), else the Open-Meteo elevation API (Copernicus GLO-90); unknown is reported, never
+   guessed.
+4. **Fetch in rank order.** The first station with wind in at least 75 % of the hours wins. If none
+   reaches that, the best-covered one if it covers at least 50 % (`MIN_STATION_COVERAGE`,
+   assumption), else the **ERA5 reanalysis**, else (reanalysis down) any station with some data,
+   else `502 weather_no_data` listing what was tried.
+5. **Report.** `candidates` (top level and `provenance.candidates`) lists every ranked station with
+   `score`, `score_terms`, `elevation_diff_m`, `exposure`, `rank`, `status` (`chosen`, `tried`,
+   `not_tried`, `error`, `no_wind_sensor`), `coverage` and a one-line `reason`, then the
+   `reanalysis` option. `warnings` says when the chosen station is more than 500 m above or below
+   the site, more than 30 km away, a summit, or when the site elevation is unknown or the
+   reanalysis was used.
+6. **Override.** `station=<IEM id>` (`OAK` or `KOAK`, `JBGC1`) uses that station if it is in the
+   site's networks (any distance; 400 if unknown, 502 if it has no wind for the window);
+   `station=reanalysis` uses ERA5. The UI's station dropdown offers exactly `candidates`.
+
+Everything here is a ranking heuristic, not a downscaling model: a station across a ridge can
+still score well (see Eaton climatology below).
+
+### Reanalysis fallback (`modelled`)
+
+`fetch_reanalysis`: Open-Meteo archive, `models=era5` (0.25 deg grid, about 28 km N-S; Open-Meteo's
+ERA5-Land, 0.1 deg, returns null for 10 m wind and gusts, checked 2026-10-24). Hourly, UTC: wind and
+temperature/RH are instantaneous values at HH:00, the gust is the maximum over the preceding hour;
+wind 10 m, temperature and RH 2 m. The 10 m wind gets the same 0.87 factor to 20 ft as an ASOS.
+ERA5 lags real time by about 5 days; windows ending within 6 days are not disk-cached. Covers
+1940 to about a week ago, anywhere. A grid cell smooths terrain: canyon and downslope winds
+are under-read (measured below).
+
+### Measured (2026-10-24, `station-rank/1`, 24 h unless noted, winds as reported)
+
+| Case | Before | Chosen now | Site / station elevation | Wind (max sustained, max gust) | Warnings |
+| --- | --- | --- | --- | --- | --- |
+| Berkeley hills (-122.23, 37.895), 2023-10-15T00Z | 502 `weather_no_data` (RAWS parsed as windless) | Oakland North RAWS ONOC1, 3.4 km, score 2.0 | 376 / 409 m | 5.4 m/s (12 mph) from 51 deg at 16Z, gust 9.4 m/s (21 mph) | none |
+| Berkeley hills, 2021-10-15T00Z | same | ONOC1 | 376 / 409 m | 5.4 m/s (12 mph) from 38 deg at 15Z, gust 9.4 m/s (21 mph) (checked against the raw archive: both days really peak at 12/21 mph) | none |
+| Eaton (-118.084, 34.204), 2025-01-08T02Z | Mount Wilson MWS (3.6 km, summit) | Clear Creek RAWS CEKC1, 9.8 km, score 20.9 | 885 / 1168 m | 8.5 m/s (19 mph) from 349 deg at 10Z, gust 18.3 m/s (41 mph) | none |
+| Eaton, `station=MWS` | | Mount Wilson | 885 / 1739 m | 4.1 m/s (9 mph), gust 8.8 m/s (20 mph) | 854 m above; summit |
+| Eaton, `station=reanalysis` | | ERA5 cell at 34.25, -118.0 (9.3 km) | 885 / 891 m | 6.5 m/s (15 mph) from 24 deg at 06Z, gust 20.5 m/s (46 mph) | reanalysis smooths terrain |
+| Camp (-121.434, 39.813), 2018-11-08T12Z | Jarbo Gap RAWS JBGC1 | JBGC1, 9.8 km, score 13.9 | 604 / 747 m | 14.3 m/s (32 mph) from 38 deg at 12Z, gust 23.2 m/s (52 mph) | none |
+| Marshall (-105.175, 39.965), 2021-12-30T17Z, 12 h | 502 `no_station_coverage` (CA networks only) | Boulder BDU, 9.3 km (BJC ranked first but had wind in 69 % of hours) | 1693 / 1612 m | 21.3 m/s (48 mph) from 250 deg at 21Z, gust 33.4 m/s (75 mph) | none |
+| Marshall, `station=reanalysis` | | ERA5 cell at 40.0, -105.25 (7.5 km) | 1693 / 1698 m | 8.0 m/s (18 mph), gust 21.4 m/s (48 mph) | reanalysis smooths terrain |
+
+The reanalysis under-reads both windstorms (Marshall: 8.0 against BDU's 21.3 m/s sustained),
+which is why it is the last resort, not a peer of the stations. Eaton: Clear Creek RAWS sits
+behind the front range of the San Gabriels; no independent observation of the foothill wind was
+compared here, so whether 19 mph sustained / 41 mph gusts represents Altadena that night is not
+established. Climatology for the same Eaton point now picks Palmdale (PMD, 47 km, high desert
+across the range, warned as more than 30 km) over El Monte (EMT, 14 km, 795 m lower): the
+elevation term does not know about the ridge between.
 
 ### Cache
 
@@ -197,6 +295,7 @@ still does no height conversion; the endpoint adds it.
 | `hours` | Integer 1 to 169 (a 7-day run plus one hour), default 24. The series has `hours + 1` hourly samples. NWS forecasts end after about 7 days; later hours come back empty |
 | `mode` | `historical_replay` (default), `climatology_percentile`, `forecast` |
 | `percentile` | 50 to 99.9, default 95, `climatology_percentile` only |
+| `station` | `historical_replay` only: an IEM station id (`OAK`, `KOAK`, `JBGC1`) or `reanalysis`; default the best-ranked station ("Station selection"). 400 `bad_station` if malformed, 400 `bad_request` if not in the site's networks |
 
 The body is `scenario_wind` unchanged (m/s, degrees FROM, hourly UTC, `evidence_class`, `station`
 with `distance_km`, `provenance`, `summary`) plus per sample `speed_20ft_ms` and `speed_20ft_mph`
@@ -222,6 +321,7 @@ report there:
   commonly quoted for 10 m to 20 ft; we did not find a primary table to cite for it, so treat the
   derivation above as the source and the factor as an assumption about terrain.
 - RAWS (via HADS) are already 20 ft: factor 1.0, no conversion.
+- ERA5 reanalysis is a 10 m wind: factor 0.87, as an ASOS.
 
 `speed_ms` stays as reported; only `speed_20ft_*` is converted. Gusts are not converted. Station
 exposure (a valley airport against a ridge) is not corrected: that error is larger than the height
@@ -249,7 +349,7 @@ a cell spreads with the wind of the 10-minute step it ignites in. The record sti
 at most in the Studio, 24 on `/fire`), which the wind controls show, capped at the 60 mph slider
 maximum (series hours are capped the same way). On `/fire`, _Peak hour_ holds that one wind for
 the whole run instead: a worst-hour run, not a replay. The wind panel shows the
-evidence class (Observed, Forecast, Derived), the station name and id, its distance in km, the
+evidence class (Observed, Forecast, Derived, Modelled (reanalysis)), the station name and id, its distance in km, the station warnings, a Station dropdown of the ranked `candidates` (historical only; it refetches with `station=`), the
 peak hour, the conversion, and "How this wind is used". Editing the speed or direction by hand
 returns the source to Assumed and drops the series. Fuel moisture is not taken from this series
 (the endpoint has no moisture); it stays on the preset. `/api/conditions` does carry moisture:
@@ -316,9 +416,14 @@ answers of the two worked examples on p. 20 (6, 4, 7, 10, 9, 22 %).
 
 Public, throttled 30/min per client, cached in MongoDB `conditions_cache` by the normalized query
 and `model_version` (forecast entries expire after 1 h). Same weather limits as
-`/api/weather/scenario`: `hours` 1-169, archive coverage per station, California stations only. A
-nearest station more than 100 km away (`MAX_STATION_DISTANCE_KM`, assumption) is refused with
-`502 no_station_coverage` rather than used (the Marshall Fire, Colorado, gets this answer).
+`/api/weather/scenario`: `hours` 1-169, the ranked station choice and reanalysis fallback, and the
+same `station` override. The answer carries `candidates` and `warnings`; `evidence.weather` is the
+`evidence_label` (`observed`, `derived`, `forecast` or `modelled (reanalysis)`); a reanalysis
+answer spins up from the 48 reanalysis hours before `start`. A station more than 100 km away
+(`MAX_STATION_DISTANCE_KM`, assumption; only reachable through the climatology fallback or a
+forced station) is refused with `502 no_station_coverage`. The cache key includes the selection
+version and `station` (`CACHE_SCHEMA` `conditions/2`), so answers from before `station-rank/1` are
+not served.
 
 | Query | Meaning |
 | --- | --- |
@@ -377,7 +482,7 @@ ignition time, with the time's source). Without `region`: `{regions: [...]}`. 40
 | Camp 2018 | -121.434, 39.813 (`sim/firefront.py`, assumed approximate origin) | 2018-11-08T14:20Z (NIST TN 2252 via `sim/ground_rates.py`) |
 | Kincade 2019 | -122.85, 38.585 (package bbox centre, not the origin) | 2019-10-24T04:27Z (package, CAL FIRE) |
 | Woolsey 2018 | -118.70128, 34.235 (package, CAL FIRE published point) | 2018-11-08T22:24Z first report (package) |
-| Marshall 2021 | -105.175, 39.965 (package bbox centre) | 2021-12-30T18:05Z, latest bound (package events table); weather not covered |
+| Marshall 2021 | -105.175, 39.965 (package bbox centre) | 2021-12-30T18:05Z, latest bound (package events table); Colorado stations (Boulder BDU) since station-rank/1 |
 
 ### Measured on real dates (2026-10-24 run)
 

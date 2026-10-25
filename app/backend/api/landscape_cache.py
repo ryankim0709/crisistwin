@@ -6,16 +6,18 @@ GET  /api/landscapes/cache?key=<key>   200 gzip bytes, or 404
 The key is chosen by the browser (app/src/fire/landscapeCache.ts: centre rounded, radius, cell
 size, data version). The server checks the key shape, the gzip and package magic and a size cap,
 stores the bytes in the GridFS bucket `landscape_cache` (one file per key, newest wins), and
-keeps at most MAX_ENTRIES files. These are cached copies of live LANDFIRE and terrain reads,
+keeps at most settings.LANDSCAPE_CACHE_MAX_FILES files (oldest evicted). These are cached copies of live LANDFIRE and terrain reads,
 not the prebuilt regions in `landscape_packages`.
 """
 
 import hashlib
+import json
 import re
 import zlib
 from datetime import UTC, datetime
 
 import gridfs
+from django.conf import settings
 from django.http import HttpResponse, StreamingHttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
@@ -29,7 +31,6 @@ FILES = f"{BUCKET}.files"
 KEY_PATTERN = re.compile(r"[a-z0-9][a-z0-9._-]{7,127}")
 MAGIC = b"CTLS1\n"
 MAX_BYTES = 48 * 1024 * 1024
-MAX_ENTRIES = 200
 CACHE_CONTROL = "public, max-age=3600"
 
 
@@ -68,7 +69,7 @@ def _store(db, bucket, key: str, data: bytes) -> None:
     )
     for old in old_ids:
         bucket.delete(old)
-    surplus = db[FILES].count_documents({}) - MAX_ENTRIES
+    surplus = db[FILES].count_documents({}) - settings.LANDSCAPE_CACHE_MAX_FILES
     if surplus > 0:
         for doc in db[FILES].find({}, projection={"_id": 1}).sort("uploadDate", 1).limit(surplus):
             bucket.delete(doc["_id"])
@@ -112,3 +113,34 @@ def landscape_cache(request):
         return response
     except (PyMongoError, GridFSError, ValueError):
         return _json(503, "unavailable")
+
+
+@require_http_methods(["GET"])
+def landscape_cache_status(request):
+    """GET /api/landscapes/cache/status?keys=k1,k2,...
+    -> {"cached": {key: {"bytes", "storedAt"}}, "files": total files, "maxFiles": cap}.
+
+    Metadata only (no grid bytes), so the UI can show which boards are already cached.
+    At most 200 keys per call; unknown or malformed keys are simply absent from the result.
+    """
+    keys = [k for k in request.GET.get("keys", "").split(",") if KEY_PATTERN.fullmatch(k)][:200]
+    found = {}
+    total = 0
+    try:
+        db = get_cache_database()
+        total = db[FILES].count_documents({})
+        if keys:
+            for doc in db[FILES].find(
+                {"filename": {"$in": keys}}, projection={"filename": 1, "length": 1, "uploadDate": 1}
+            ):
+                found[doc["filename"]] = {
+                    "bytes": doc["length"],
+                    "storedAt": doc["uploadDate"].replace(tzinfo=UTC).isoformat(),
+                }
+    except (PyMongoError, ValueError):
+        return _json(503, "unavailable")
+    return HttpResponse(
+        json.dumps({"cached": found, "files": total, "maxFiles": settings.LANDSCAPE_CACHE_MAX_FILES}),
+        content_type="application/json",
+        headers={"Cache-Control": "no-store"},
+    )
