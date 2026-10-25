@@ -21,6 +21,11 @@
  *     not through south); an exact 180-degree reversal turns clockwise. ASSUMPTION: speed and
  *     direction are interpolated separately, so a reversal keeps its speed through the turn
  *     instead of passing through calm as vector-component interpolation would.
+ *   - direction across a long gap: between two samples more than `HOLD_DIRECTION_GAP_MINUTES`
+ *     apart (a hole in hourly data) the nearer sample's direction is held, not rotated: the
+ *     wind in an unobserved stretch is not known to have swung through the shorter arc. Speed
+ *     and moisture still interpolate linearly. ASSUMPTION (no source), a labelling-honesty
+ *     choice: it avoids inventing a sweep the data never showed.
  *   - before the first sample the first is held, after the last the last is held.
  * The step's weather is the series read at the step's START minute, so step 0 is the sample
  * at minute 0 exactly and a constant series reproduces a constant-weather run.
@@ -60,7 +65,23 @@ export interface FireWeatherSeries {
   source?: string;
   /** Evidence class of the weather (the wind source's), kept with the run. */
   evidence?: "observed" | "forecast" | "derived" | "modelled" | "assumed";
+  /**
+   * Hours the source had no usable weather for (a missing wind, direction or moisture), which
+   * the solver fills by interpolation. Absent: not recorded (not "none missing"). Set by
+   * `weatherSeriesFromConditions`; the solver ignores it, labels read it.
+   */
+  missing?: {
+    /** Count of hourly conditions entries skipped. */
+    hours: number;
+    /** Longest stretch between two kept samples (or from T+0 / to the last hour), hours. */
+    longestGapHours: number;
+    /** True when no sample at or before T+0 exists: minutes before the first sample hold it. */
+    startMissing: boolean;
+  };
 }
+
+/** Gap between samples above which the wind direction is held, not rotated, minutes. */
+export const HOLD_DIRECTION_GAP_MINUTES = 120;
 
 /** Weather step length, simulation minutes: the stochastic wind step (stochastic.ts). */
 export const WEATHER_STEP_MINUTES = WIND_STEP_MINUTES;
@@ -136,7 +157,10 @@ export function weatherAtMinute(series: FireWeatherSeries, minute: number): Step
   const tb = b.airTemperatureF;
   return {
     windSpeedMph: a.windSpeedMph + f * (b.windSpeedMph - a.windSpeedMph),
-    windFromDegrees: interpolateBearingDegrees(a.windFromDegrees, b.windFromDegrees, f),
+    windFromDegrees:
+      b.minute - a.minute > HOLD_DIRECTION_GAP_MINUTES
+        ? ((((f < 0.5 ? a : b).windFromDegrees % 360) + 360) % 360)
+        : interpolateBearingDegrees(a.windFromDegrees, b.windFromDegrees, f),
     moisture,
     airTemperatureF:
       ta !== undefined && tb !== undefined ? ta + f * (tb - ta) : (f < 0.5 ? ta : tb) ?? null,
