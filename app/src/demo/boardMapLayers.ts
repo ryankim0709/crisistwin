@@ -316,18 +316,34 @@ const metresPerPixel = (zoom: number, lat: number) => (78271.517 * Math.cos((lat
  * Unit dots at their smoothed positions (unitMotion.ts): units at one spot fanned out by
  * a few pixels, labelled once at the group's lead with every id; a driving unit labelled with its id.
  */
+/** Statuses of a unit idle at a station (the station marker stands for it on the map). */
+const IDLE_AT_STATION = new Set(["available", "resting", "refilling", "out_of_service"]);
+/** A unit this close to its home station counts as there (metres). */
+const AT_STATION_M = 150;
+
 function buildTeamPoints(board: Board, motion: BoardMotion, zoom: number): Feature[] {
   const teams: Feature[] = [];
+  // Units idle at their own station are not drawn: the station marker shows where they are.
+  const hidden = new Set(
+    board.teams
+      .filter((t) => {
+        const d = motion.get(t.id);
+        return d && IDLE_AT_STATION.has(t.status) && distanceM(d.at, t.home) <= AT_STATION_M;
+      })
+      .map((t) => t.id),
+  );
   for (const team of board.teams) {
     const d = motion.get(team.id);
-    if (!d) continue;
+    if (!d || hidden.has(team.id)) continue;
     let at = d.at;
     if (d.offset[0] !== 0 || d.offset[1] !== 0) {
       const m = metresPerPixel(zoom, at[1]) * SPOT_SPACING_PX;
       const lat = (at[1] * Math.PI) / 180;
       at = [at[0] + (d.offset[0] * m) / (111_320 * Math.cos(lat)), at[1] + (d.offset[1] * m) / 111_320];
     }
-    const label = !d.group ? team.id : d.group.lead === team.id ? d.group.ids.join(" ") : "";
+    // A group's label sits on its first visible member and lists the visible ids only.
+    const shown = d.group ? d.group.ids.filter((id) => !hidden.has(id)) : [];
+    const label = !d.group ? team.id : shown[0] === team.id ? shown.join(" ") : "";
     teams.push(point(at, { id: team.id, status: team.status, label }));
   }
   return teams;
