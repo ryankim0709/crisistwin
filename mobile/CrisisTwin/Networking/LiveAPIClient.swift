@@ -148,6 +148,15 @@ struct LiveAPIClient {
         return try await get(Situation.self, ["incidents", incidentId, "situation"], query: query, token: token)
     }
 
+    /// The drill's simulated homes (`GET incidents/<id>/homes`, docs/app-integration.md "Homes"):
+    /// `q` filters by address, `id` returns one home (404 when it is gone).
+    func homes(incidentId: String, q: String = "", id: String? = nil, limit: Int = 50, token: String) async throws -> DrillHomes {
+        var query = [URLQueryItem(name: "limit", value: String(limit))]
+        if !q.isEmpty { query.append(URLQueryItem(name: "q", value: q)) }
+        if let id { query.append(URLQueryItem(name: "id", value: id)) }
+        return try await get(DrillHomes.self, ["incidents", incidentId, "homes"], query: query, token: token)
+    }
+
     /// The public task board (ADR 0041): questions only, the same for everyone. The phone picks
     /// its own on the device, so nothing about the person is sent.
     func board(incidentId: String, token: String) async throws -> BoardResponse {
