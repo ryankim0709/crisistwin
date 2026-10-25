@@ -26,6 +26,7 @@ const LAYER_LABEL: Record<MapLayerKey, string> = {
   zones: "Zones",
   fire: "Fire",
   closures: "Closed roads",
+  stations: "Fire stations",
 };
 
 function useNow(ms: number): number {
@@ -50,7 +51,7 @@ export default function AppIntegrationPage() {
   const data = command.data;
   const everyone = useMemo(() => roster.data?.participants ?? [], [roster.data]);
   const [showInvite, setShowInvite] = useState(false);
-  const [layers, setLayers] = useState<Record<MapLayerKey, boolean>>({ app: true, people: true, zones: true, fire: true, closures: true });
+  const [layers, setLayers] = useState<Record<MapLayerKey, boolean>>({ app: true, people: true, zones: true, fire: true, closures: true, stations: true });
   const [busy, setBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
