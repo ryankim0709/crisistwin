@@ -212,8 +212,10 @@ straight-line fallback, which is optimistic for residential streets.
 
   NFPA 1710 (first engine within 80 s turnout + 240 s travel, about 5.3 min) is met in the
   residential case, but on straight-line travel. NFPA 1720's rural 14 min is met by the rural
-  first engines. The expected direction holds: the residential fire spreads slowly (the solver's
-  structure spread, 4 m/min at 20 mph scaled by wind) and is caught small, while rural brush
+  first engines. The board's solver path enables structure-to-structure spread
+  (`demo/fireField.ts` passes `DEFAULT_STRUCTURE_SPREAD`), so developed ground (FBFM40 91)
+  burns; these runs used it. The expected direction holds: the residential fire spreads slowly
+  (the solver's structure spread, 4 m/min at 20 mph scaled by wind) and is caught small, while rural brush
   escapes and does more damage. The residential result depends on two assumptions: the structure
   tactic has no flame-length test, and 60 m cells make 0.36 ha the smallest fire.
 - **Evacuation traffic**: an evacuation was ordered at T+0 with routes converging on one
@@ -255,6 +257,9 @@ straight-line fallback, which is optimistic for residential streets.
   degradation over time.
 - **Units**: pilot duty limits are not modelled; water tenders are not units.
 - **Response time**: detection and call processing are not modelled.
+- **Stochastic spread**: the board's solves are deterministic. `fire/stochastic.ts`
+  (`FireSolveRequest.stochastic`, merged from `feat/shared-world`) is not passed by
+  `model.ts` `buildFireSolveRequest`, so the measurements above use deterministic spread.
 - **Reproducibility**: the browser steps the clock in variable fractions of a minute and road
   legs arrive asynchronously. A browser run is reproducible in its seeded draws but not
   minute-exact; a headless run with the same steps is exact.
