@@ -188,6 +188,12 @@ export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
     previousRef.current = null;
     lastBucketRef.current = null;
     backoffUntilRef.current = -Infinity;
+    // A new board (reset, drill switch) starts a clean log.
+    setDecisions([]);
+    setError(null);
+    setThinking("");
+    setStreamText("");
+    setLastWoke([]);
   }, [board, cancel]);
 
   // A different incident: the log and error name the old drill's zones, fires and units.

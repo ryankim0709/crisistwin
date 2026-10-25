@@ -285,6 +285,8 @@ export interface ConfigPanelProps {
   onLoadDemo: () => void;
   /** Rendered under the export buttons (the "Use as live drill" action). */
   liveDrill?: ReactNode;
+  /** Rendered under the run status line (status of sending the run to Live command). */
+  liveFire?: ReactNode;
   /** Firefighting inputs and last result, rendered after the conditions. */
   firefighting?: ReactNode;
 }

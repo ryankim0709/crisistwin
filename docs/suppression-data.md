@@ -119,7 +119,8 @@ it too ("How responders use it" below).
   (`wildland_turnout_s`, ASSUMPTION). Each unit routes on the roads `road_access()` opens to its
   class, at the class's speed; a task only its class rules keep it from is cancelled with the
   rule in the note. Without the bases file the units fall back to approximate Chico points,
-  labelled.
+  labelled. When the incident has a scenario resource snapshot, the units are instead its engines
+  available at T+0, one per engine ([scenario-snapshots.md](scenario-snapshots.md#consumers)).
 - **Drill roads lack the tags.** The camp-2018 bundle keeps only `highway`, `lanes` (per
   direction), `bridge` and speed per edge, so the rules run on the highway class alone with the
   documented defaults (paved, width by class), the edge speed as `maxspeed`, grade 0%

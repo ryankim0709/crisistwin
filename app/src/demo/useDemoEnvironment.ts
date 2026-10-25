@@ -8,7 +8,9 @@
  * live from LANDFIRE, as Simulation Studio does (studio/useRegionBoard.ts). Inputs other than the
  * landscape fall back to labelled assumptions in realism.ts / model.ts; without a landscape there
  * is no fire model, so a landscape failure is an error state, not a fallback. The board starts
- * once everything has answered.
+ * once everything has answered. Units, stations and household counts come from the drill's
+ * resource snapshot (useCommandBoard loads it); the bases and carless counts here are the
+ * fallback when there is none.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -227,9 +229,23 @@ function groundOf(loaded: LoadedLandscape): Ground {
   };
 }
 
+/**
+ * CAL FIRE bases by roster pool, nearest the drill first. With a resource snapshot the board's
+ * engines and stations come from the snapshot (model.ts createBoard); these bases then only
+ * place the assumed hand crews (crew camps) and dozer (state stations). Without a snapshot they
+ * hold the whole assumed ROSTER.
+ */
 export function stationsFrom(bases: SuppressionBases | null): DemoEnvironment["bases"] {
   if (!bases?.available || bases.bases.length === 0) return null;
-  const toStation = (b: SuppressionBases["bases"][number]): Station => ({ id: b.id, name: b.name, location: [b.lon, b.lat], type: b.type });
+  const toStation = (b: SuppressionBases["bases"][number]): Station => ({
+    id: b.id,
+    name: b.name,
+    location: [b.lon, b.lat],
+    type: b.type,
+    source: "calfire_bases",
+    basis: null,
+    engines: [],
+  });
   const near = [...bases.bases].sort((a, b) => a.distanceKm - b.distanceKm || a.id.localeCompare(b.id));
   const calfireStations = near.filter((b) => STATION_TYPES.has(b.type) && b.agency.startsWith("CAL FIRE")).map(toStation);
   const localStations = near.filter((b) => b.type === "FSA").map(toStation);
@@ -243,6 +259,8 @@ const OSM_CREW_CAMPS = 2;
 
 /**
  * Bases from a drill package's OpenStreetMap fire stations when the CAL FIRE bases are unavailable.
+ * Only used for the fallback roster (no resource snapshot): the snapshot already lists these
+ * OSM stations with their engines.
  * OSM carries no agency or facility type, so the nearest-first stations fill all three pools
  * (the board's unit types and counts per station stay assumed); crew camps reuse the nearest ones.
  */
@@ -251,7 +269,15 @@ export function stationsFromPackage(stations: EnvironmentResponse["stations"], c
   const cos = center ? Math.cos((center[1] * Math.PI) / 180) : 1;
   const d2 = (s: { lon: number; lat: number }) => (center ? ((s.lon - center[0]) * cos) ** 2 + (s.lat - center[1]) ** 2 : 0);
   const near = [...stations].sort((a, b) => d2(a) - d2(b) || a.id.localeCompare(b.id));
-  const all: Station[] = near.map((s) => ({ id: s.id, name: s.name, location: [s.lon, s.lat], type: OSM_STATION_TYPE }));
+  const all: Station[] = near.map((s) => ({
+    id: s.id,
+    name: s.name,
+    location: [s.lon, s.lat],
+    type: OSM_STATION_TYPE,
+    source: "package_osm",
+    basis: null,
+    engines: [],
+  }));
   return { calfireStations: all, localStations: all, crewCamps: all.slice(0, OSM_CREW_CAMPS) };
 }
 
@@ -283,6 +309,7 @@ export async function loadEnvironment(
   return {
     spread: { ground: groundOf(landscape), wind },
     bases,
+    basesSource: calfire ? "calfire" : packageBases ? "package" : null,
     basesLabel: packageBases
       ? `${envData?.stations_source ?? "Fire stations from OpenStreetMap (drill package)"}; CAL FIRE bases unavailable, so unit types and counts per station are assumed, and crew camps reuse the nearest ${OSM_CREW_CAMPS} stations`
       : bases

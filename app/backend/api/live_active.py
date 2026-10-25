@@ -14,7 +14,7 @@ phones never pick one.
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
-from .live import incidents, twin_service
+from .live import incidents, snapshots, twin_service
 from .live.auth import Principal, live_view
 from .live.common import ApiError, json_body, ok, wall_now
 from .live.controller import log_decision
@@ -50,6 +50,7 @@ def switch_active(request, principal: Principal):
     if changed:
         log_decision(source.incident_id, "controller", "incident_activated", now, note=f"Was {previous}")
     twin_service.warm(source.incident_id)
+    snapshots.ensure_background(source.incident_id)  # resource snapshot, if the incident has none yet
     return ok({"active": incidents.active_json(), "changed": changed})
 
 

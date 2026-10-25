@@ -1,10 +1,12 @@
 from django.urls import path
 
-from . import events, injects, packages, responder_routing, views, voice
+from . import events, injects, packages, responder_routing, snapshots, studio_fires, views, voice
 
 urlpatterns = [
     path("devices", views.devices, name="live-devices"),
     path("packages", packages.packages, name="live-packages"),
+    path("studio-fires", studio_fires.publish, name="live-studio-fires"),
+    path("incidents/<str:incident_id>/studio-fires", studio_fires.list_fires, name="live-studio-fires-list"),
     path("incidents/<str:incident_id>/join", views.join, name="live-join"),
     path("incidents/<str:incident_id>/reports", views.incident_reports, name="live-reports"),
     path("incidents/<str:incident_id>/road-state", views.road_state, name="live-road-state"),
@@ -24,6 +26,9 @@ urlpatterns = [
     path("incidents/<str:incident_id>/aar", views.incident_aar, name="live-aar"),
     path("incidents/<str:incident_id>/injects", injects.incident_injects, name="live-injects"),
     path("incidents/<str:incident_id>/injects/<str:inject_id>", injects.delete_inject, name="live-inject"),
+    path("incidents/<str:incident_id>/snapshot", snapshots.incident_snapshot, name="live-snapshot"),
+    path("incidents/<str:incident_id>/snapshot/households", snapshots.snapshot_households,
+         name="live-snapshot-households"),
     path("incidents/<str:incident_id>/twin", views.twin, name="live-twin"),
     path("incidents/<str:incident_id>/twin/whatif", views.twin_whatif, name="live-twin-whatif"),
     path("me/reports", views.my_reports, name="live-my-reports"),

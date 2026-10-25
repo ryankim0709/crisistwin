@@ -185,6 +185,7 @@ per-zone guidance with controller proposals, check-ins and responder location. C
 Everything is a labeled drill of the 2018 Camp Fire; nothing is a real incident. It shares
 the `/api/live` prefix with the broadcast above but no code or collections (`live_*`).
 
+- Studio fires: `POST /api/live/studio-fires` (controller) publishes a simulated fire scenario for the active incident; `GET /api/live/incidents/<id>/studio-fires[?after=]` lists the newest 10 (`api/live/studio_fires.py`; [contract](../../docs/live-reports.md#studio-fires)).
 - Auth: `Authorization: Bearer <token>`. `POST /api/live/devices` issues civilian tokens;
   `POST /api/live/incidents/camp-2018-drill/join {"invite_code"}` issues responder tokens
   (`LIVE_INVITE_CODE`, unset -> 403). The controller needs no token while
@@ -199,6 +200,10 @@ the `/api/live` prefix with the broadcast above but no code or collections (`liv
   (simulated, about 1-3 s) gives the vehicles at risk and window metrics (`api/live/impact.py`).
 - `GET incidents/{id}/aar` (controller) returns the after-action report and drill score
   (`api/live/aar.py`; [contract](../../docs/live-reports.md#after-action-report)).
+- `GET incidents/{id}/snapshot` and `GET incidents/{id}/snapshot/households?zone_id=&limit=&after=` (any
+  live token): the scenario resource snapshot (households, stations, engines at T+0; `404 no_snapshot`
+  until `python manage.py live_seed_snapshots`; `api/live/snapshots.py`,
+  [contract](../../docs/scenario-snapshots.md)).
 - Not implemented yet: `POST incidents/{id}/route` returns 501.
 
 Local run (Docker MongoDB on 127.0.0.1:27017):

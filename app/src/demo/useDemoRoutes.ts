@@ -2,12 +2,37 @@ import { useEffect, useRef, useState } from "react";
 import { ROUTES_URL, demoUrl, type RoutesRequest, type RoutesResponse } from "./contracts";
 import { fireRingsForRouting } from "./fireFootprint";
 import { activeFires, type Board, type RouteOption } from "./model";
+import type { RouteSegment } from "./traffic";
 
 /** Re-route at most this often (simulation minutes) while the fires keep growing. */
 export const ROUTE_REFRESH_MINUTES = 5;
 /** Vertices per fire ring sent to the routing endpoints (their limit is 200). */
 const RING_POINTS = 48;
 const RETRY_WALL_MS = 10_000;
+
+/** The answer's options with their segment ids resolved (one shared object per segment id). */
+function resolveRoutes(data: RoutesResponse): Map<string, RouteOption[]> {
+  const table = new Map<string, RouteSegment>();
+  const segment = (id: string): RouteSegment | null => {
+    const hit = table.get(id);
+    if (hit) return hit;
+    const raw = data.segments?.[id];
+    if (!raw) return null;
+    const s: RouteSegment = { id, ...raw };
+    table.set(id, s);
+    return s;
+  };
+  return new Map(
+    data.zones.map((z) => [
+      z.zone_id,
+      z.options.map(({ segment_ids, ...o }) => ({
+        ...o,
+        destination_capacity_veh: o.destination_capacity_veh ?? null,
+        segments: (segment_ids ?? []).flatMap((id) => segment(id) ?? []),
+      })),
+    ]),
+  );
+}
 
 export interface RoutesState {
   routes: ReadonlyMap<string, RouteOption[]>;
@@ -65,7 +90,7 @@ export function useDemoRoutes(board: Board | null, version: number, incidentId: 
           throw new Error(data?.detail ?? `The routes service returned HTTP ${response.status}.`);
         }
         if (last.current.board !== board) return;
-        setState({ routes: new Map(data.zones.map((z) => [z.zone_id, z.options])), asOf: minute, error: null });
+        setState({ routes: resolveRoutes(data), asOf: minute, error: null });
       })
       .catch((error: unknown) => {
         if (last.current.board !== board) return; // an older board's (or incident's) request

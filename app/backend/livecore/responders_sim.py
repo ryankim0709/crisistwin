@@ -13,9 +13,11 @@ below, and a verify answer is the simulation's ground truth (``World``), not an 
 Apparatus (``Fleet(apparatus=...)``, ``livecore.apparatus.station_apparatus``): units start at
 the real CAL FIRE-layer stations nearest the incident as engines of a road-access class (Type 3
 at CAL FIRE stations, Type 1 at local ones; counts from the documented estimate, labelled).
-Each waits out its turnout (response-time data) before leaving its station, routes only on
-roads its class may use (rules R01-R12 via ``inbound_route(access=...)``) and drives at the
-class's speed on each edge. Without stations (no bases file) the units start at
+With a scenario resource snapshot (``apparatus.snapshot_apparatus``) the fleet is instead one
+unit per engine available at T+0, the snapshot's ``engine_id`` as the unit id; a unit holds at
+most one task at a time. Each waits out its turnout (response-time data) before leaving its
+station, routes only on roads its class may use (rules R01-R12 via ``inbound_route(access=...)``)
+and drives at the class's speed on each edge. Without stations (no bases file) the units start at
 ``DEFAULT_STATIONS`` (or shelters) with the ``TYPE_ORDER`` table, labelled as a fallback.
 
 Rules:
@@ -200,7 +202,8 @@ class Fleet:
         if apparatus:
             for i, app in enumerate(list(apparatus)[:n_units]):
                 home = _snap_home(drill, app.coord)
-                self.units.append(Unit(f"sim-{i + 1}", UNIT_TYPES["engine"], home, home, apparatus=app,
+                uid = app.unit_id or f"sim-{i + 1}"
+                self.units.append(Unit(uid, UNIT_TYPES["engine"], home, home, apparatus=app,
                                        access=access_profile(drill, app.vehicle)))
             self.notes.extend(sorted({u.access.basis for u in self.units if u.access is not None}))
             if any(u.access is None for u in self.units):

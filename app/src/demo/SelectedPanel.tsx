@@ -2,19 +2,30 @@ import { Button, Facts, IconButton, Notice, Tag } from "../ui";
 import { FIRE_STATUS, SOURCE_LABEL, TEAM_STATUS, nf, simClock } from "./format";
 import {
   DEPARTURE_SPREAD_MINUTES,
-  containOptions,
+  attackPositions,
+  positionEta,
+  positionOptions,
+  nearestFree,
   currentContainment,
   fireAreaHa,
   firePerimeterM,
   perimeterGrowth,
-  travelMinutes,
+  positionDestKey,
   unitLineOn,
+  unreachableClasses,
   zoneCounts,
+  evacuationEstimate,
+  trafficPicture,
+  vehiclesPerHousehold,
   type Board,
+  type Fire,
+  type EvacuationEstimate,
   type RouteOption,
   type ZoneForecast,
 } from "./model";
 import type { Selection } from "./DemoMap";
+import { zoneSnapshotItems } from "../live/ScenarioResources";
+import type { ScenarioSnapshot } from "../live/scenarioSnapshot";
 import { ORDER_COMPLIANCE, SHADOW_SHARE, holdsFlameFeet, kindLabel } from "./realism";
 
 const SAFETY: Record<RouteOption["safety"], string> = {
@@ -25,12 +36,64 @@ const SAFETY: Record<RouteOption["safety"], string> = {
 
 export interface PanelActions {
   closeFire: (fireId: string) => void;
-  sendTeam: (teamId: string, fireId: string) => void;
+  /** positionId: one of the fire's attack positions (line ahead of it), or omitted for direct attack. */
+  sendTeam: (teamId: string, fireId: string, positionId?: string) => void;
   releaseTeam: (teamId: string) => void;
   orderZone: (zoneId: string, destinationId: string) => void;
 }
 
 const eta = (m: number | null) => (m === null ? "Not forecast" : m === 0 ? "There now" : `${m} min`);
+
+const POSITION_NAME: Record<string, string> = {
+  head: "Head",
+  flank_left: "Left flank",
+  flank_right: "Right flank",
+  zone: "Zone edge",
+};
+
+/** The fire's attack positions from the solver's forecast, each with the nearest free unit to send. */
+function AttackPositions({ board, fire, actions }: { board: Board; fire: Fire; actions: PanelActions }) {
+  const positions = attackPositions(board, fire);
+  if (positions.length === 0) return null;
+  return (
+    <>
+      <p className="dm-subhead">Line ahead of the fire (forecast)</p>
+      <ul className="dm-mini-list">
+        {positions.map((p) => {
+          const fireEta = positionEta(board, p);
+          // Nearest free unit that can reach the anchor by road (units whose class has no road route there are left out).
+          const next = positionOptions(board, fire, p, 1)[0];
+          const blocked = unreachableClasses(board, positionDestKey(fire, p), p.point);
+          const crew = p.line ? board.teams.filter((t) => t.lineId === p.line!.id).map((t) => t.id) : [];
+          const where = p.kind === "head" ? `${POSITION_NAME.head} +${p.id.slice(5)} min` : p.kind === "zone" ? `${POSITION_NAME.zone} ${p.protectsZoneIds[0] ?? ""}` : POSITION_NAME[p.kind];
+          return (
+            <li key={p.id}>
+              <span>
+                <strong>{where}</strong>: fire {fireEta === null ? "not forecast" : fireEta === 0 ? "there now" : `in ${Math.round(fireEta)} min`},{" "}
+                {nf(p.aM + p.bM)} m line{p.line ? ` (${nf(p.line.builtM)} m built${crew.length ? `, ${crew.join(" ")}` : ""})` : ""}, flame{" "}
+                {p.flameFt.toFixed(1)} ft{p.crowning ? ", crown fire" : ""}
+                {blocked.length ? `; no road route for ${blocked.map((b) => b.kinds.map(kindLabel).join(", ")).join(", ")}` : ""}
+              </span>
+              {next ? (
+                <Button size="sm" variant="ghost" disabled={fireEta === 0} onClick={() => actions.sendTeam(next.teams[0], fire.id, p.id)}>
+                  Send {next.teams[0]} ({next.route === "estimate" ? "about " : ""}
+                  {Math.ceil(next.arriveMin)} min)
+                </Button>
+              ) : (
+                <span className="lc-dim">{board.teams.some((t) => t.status === "available") ? "No free unit can reach it" : "No free unit"}</span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      <p className="dm-note">
+        Read from the fire model's forecast: where the head will be in 30 and 60 min, the flanks, and where the fire first reaches a
+        zone. A unit builds the line across the fire's path there; built line is a barrier in the fire model, which re-solves as it
+        grows, and a fire the model shows held by its line is contained.
+      </p>
+    </>
+  );
+}
 
 function FireDetail({ board, id, actions }: { board: Board; id: string; actions: PanelActions }) {
   const fire = board.fires.find((f) => f.id === id);
@@ -39,8 +102,9 @@ function FireDetail({ board, id, actions }: { board: Board; id: string; actions:
   const teams = board.teams.filter((t) => t.fireId === fire.id);
   const holds = Math.max(0, ...teams.filter((t) => t.status === "on_scene").map((t) => holdsFlameFeet(t.kind)));
   const containIn = currentContainment(board, fire);
-  const next = containOptions(board, fire, 1)[0];
-  const nextTeam = next ? board.teams.find((t) => t.id === next.teams[0]) : undefined;
+  // Nearest free unit that can reach the fire by road.
+  const nearest = fire.status === "burning" ? nearestFree(board, fire)[0] : undefined;
+  const nextTeam = nearest?.team;
   return (
     <>
       <div className="dm-tags">
@@ -50,6 +114,7 @@ function FireDetail({ board, id, actions }: { board: Board; id: string; actions:
       <Facts
         items={[
           { label: "Started", value: simClock(fire.ignitedAt) },
+          { label: "Studio run", value: `${fire.studio.tag} '${fire.studio.name}', ignition ${fire.studio.ignition}` },
           { label: "Area", value: `${fireAreaHa(fire).toFixed(1)} ha` },
           { label: "Head spread", value: `${fire.headRate} m/min toward ${Math.round(fire.rates.headingDegrees)}°` },
           { label: "Head flame", value: `${fire.rates.headFlameFeet.toFixed(1)} ft${fire.rates.crowning ? ", crown fire" : ""}` },
@@ -82,6 +147,8 @@ function FireDetail({ board, id, actions }: { board: Board; id: string; actions:
             <li key={t.id}>
               <span>
                 <strong>{t.id}</strong> {kindLabel(t.kind)}, {TEAM_STATUS[t.status].toLowerCase()}
+                {t.lineId ? `, line at ${board.lines.find((l) => l.id === t.lineId)?.plan.id ?? "a position"}` : ""}
+                {t.travel === "pending" ? ", waiting for its road route" : ""}
                 {t.status === "en_route" && t.arriveAt !== null ? `, ${Math.ceil(t.arriveAt - board.minute)} min` : ""}
               </span>
               <Button size="sm" variant="ghost" onClick={() => actions.releaseTeam(t.id)}>
@@ -99,9 +166,11 @@ function FireDetail({ board, id, actions }: { board: Board; id: string; actions:
             disabled={!nextTeam}
             onClick={() => nextTeam && actions.sendTeam(nextTeam.id, fire.id)}
           >
-            {nextTeam
-              ? `Send ${nextTeam.id} (${Math.ceil(travelMinutes(board, nextTeam, fire))} min away)`
-              : "No free unit"}
+            {nearest
+              ? `Send ${nearest.team.id} (${nearest.road ? "" : "about "}${Math.ceil(nearest.eta)} min away)`
+              : board.teams.some((t) => t.status === "available")
+                ? "No free unit can reach it"
+                : "No free unit"}
           </Button>
         ) : null}
         {fire.status !== "out" ? (
@@ -110,9 +179,10 @@ function FireDetail({ board, id, actions }: { board: Board; id: string; actions:
           </Button>
         ) : null}
       </div>
+      {fire.status === "burning" ? <AttackPositions board={board} fire={fire} actions={actions} /> : null}
       {fire.reportIds.length ? (
         <p className="dm-note">
-          From {fire.reportIds.length === 1 ? "a field report" : `${fire.reportIds.length} field reports`}. Closing the
+          {fire.reportIds.length === 1 ? "A field report" : `${fire.reportIds.length} field reports`} joined this fire. Closing the
           fire out resolves {fire.reportIds.length === 1 ? "it" : "them"} on Live command.
         </p>
       ) : null}
@@ -132,17 +202,30 @@ function ZoneDetail({
   forecast,
   options,
   actions,
+  snapshot,
 }: {
   board: Board;
   id: string;
   forecast: ZoneForecast | undefined;
   options: RouteOption[];
   actions: PanelActions;
+  snapshot?: ScenarioSnapshot | null;
 }) {
   const zone = board.zones.find((z) => z.id === id);
   if (!zone) return null;
   const c = zoneCounts(zone, board.minute);
   const status = zone.overrunAt !== null ? "Overrun" : zone.orderedAt !== null ? "Evacuating" : "No order";
+  // Simulated traffic (model.ts evacuationEstimate): congested time, bottleneck and margin per option.
+  const picture = trafficPicture(board);
+  const estimates = new Map<string, EvacuationEstimate>(
+    options.map((o) => [o.destination_id, evacuationEstimate(board, picture, zone, o, forecast?.coreEta ?? null)]),
+  );
+  const current = zone.route ? estimates.get(zone.route.destination_id) : undefined;
+  const margin = (e: EvacuationEstimate) =>
+    e.marginMin === null ? "margin n/a" : e.marginMin < 0 ? `${-Math.round(e.marginMin)} min short` : `${Math.round(e.marginMin)} min margin`;
+  const via = (e: EvacuationEstimate) =>
+    e.bottleneck ? `bottleneck ${e.bottleneck.segment.name} (${nf(e.bottleneck.segment.capacity_veh_h)} veh/h, ${Math.round(e.clearanceMin)} min to clear)` : "";
+  const snapshotRows = zoneSnapshotItems(snapshot?.zones.find((z) => z.zone_id === id), snapshot);
   const slack = forecast?.coreEta != null ? forecast.coreEta - DEPARTURE_SPREAD_MINUTES : null;
   return (
     <>
@@ -150,9 +233,16 @@ function ZoneDetail({
         <Tag tone={zone.overrunAt !== null ? "danger" : zone.orderedAt !== null ? "warning" : "neutral"}>{status}</Tag>
         {forecast?.edgeEta != null && zone.overrunAt === null ? <Tag tone="warning">At risk</Tag> : null}
       </div>
+      {snapshotRows.length ? (
+        <>
+          <p className="dm-note dm-snap-note">Resource snapshot for this zone (planning simulation):</p>
+          <Facts items={snapshotRows} />
+        </>
+      ) : null}
       <Facts
         items={[
           { label: "Households", value: nf(zone.households) },
+          { label: "Vehicles (sim)", value: `${nf(zone.vehicles)}, ${nf(Math.round(c.enRoute * vehiclesPerHousehold(zone)))} on the road` },
           { label: "At home", value: nf(c.home) },
           { label: "On the road", value: nf(c.enRoute) },
           { label: "Out", value: nf(c.out) },
@@ -163,7 +253,17 @@ function ZoneDetail({
           ...(slack !== null && zone.orderedAt === null
             ? [{ label: "Time left to order", value: slack < 0 ? `${-slack} min late` : `${slack} min` }]
             : []),
-          ...(zone.route ? [{ label: "Route", value: `${zone.route.name}, ${zone.route.eta_min} min drive` }] : []),
+          ...(zone.route
+            ? [
+                {
+                  label: "Route (sim traffic)",
+                  value: current
+                    ? `${zone.route.name}, ${Math.round(current.congestedEtaMin)} min in traffic (${Math.round(current.freeFlowMin)} free-flow), ${margin(current)}`
+                    : `${zone.route.name}, ${zone.route.eta_min} min free-flow`,
+                },
+                ...(current?.bottleneck ? [{ label: "Bottleneck", value: via(current) }] : []),
+              ]
+            : []),
         ]}
       />
       {zone.overrunAt === null ? (
@@ -177,7 +277,14 @@ function ZoneDetail({
                 disabled={zone.route?.destination_id === o.destination_id}
                 onClick={() => actions.orderZone(zone.id, o.destination_id)}
               >
-                {zone.orderedAt === null ? "Evacuate via" : "Redirect to"} {o.name} · {o.eta_min} min · {SAFETY[o.safety]}
+                {zone.orderedAt === null ? "Evacuate via" : "Redirect to"} {o.name} ·{" "}
+                {(() => {
+                  const e = estimates.get(o.destination_id);
+                  return e
+                    ? `${Math.round(e.congestedEtaMin)} min in traffic (${Math.round(e.freeFlowMin)} free) · ${margin(e)}${e.bottleneck ? ` · via ${e.bottleneck.segment.name}` : ""}`
+                    : `${o.eta_min} min`;
+                })()}{" "}
+                · {SAFETY[o.safety]}
               </Button>
             ))}
           </div>
@@ -189,6 +296,9 @@ function ZoneDetail({
         After an order {Math.round(ORDER_COMPLIANCE * 100)}% of households with a vehicle leave, after{" "}
         {DEPARTURE_SPREAD_MINUTES} min on average; with no order, {Math.round(SHADOW_SHARE * 100)}% leave once fire
         reaches the zone. Households without a vehicle stay. Those still home when fire reaches the zone core are caught.
+        Travel times are simulated traffic: zones sharing a road slow each other (BPR volume-delay on assumed road
+        capacities); margin = fire at core − ({DEPARTURE_SPREAD_MINUTES} min departure + bottleneck clearance + time in
+        traffic).
       </p>
     </>
   );
@@ -210,7 +320,17 @@ function TeamDetail({ board, id, actions }: { board: Board; id: string; actions:
           { label: "Line", value: `${unitLineOn(board, team, fire).toFixed(1)} m/min here` },
           { label: "Holds flames up to", value: `${holdsFlameFeet(team.kind)} ft` },
           ...(team.status === "en_route"
-            ? [{ label: "Travel time", value: team.travel === "straight_line" ? "Straight-line estimate" : "Road network" }]
+            ? [
+                {
+                  label: "Travel",
+                  value:
+                    team.travel === "pending"
+                      ? "Waiting at base for its road route"
+                      : team.travel === "road_offboard"
+                        ? "Road network, with an off-road leg"
+                        : "Road network",
+                },
+              ]
             : []),
         ]}
       />
@@ -231,6 +351,7 @@ export default function SelectedPanel({
   forecasts,
   routes,
   actions,
+  snapshot,
   onClose,
 }: {
   board: Board;
@@ -238,6 +359,8 @@ export default function SelectedPanel({
   forecasts: Map<string, ZoneForecast>;
   routes: ReadonlyMap<string, RouteOption[]>;
   actions: PanelActions;
+  /** Drill resource snapshot, for the zone's household and vehicle figures. */
+  snapshot?: ScenarioSnapshot | null;
   onClose: () => void;
 }) {
   const title =
@@ -262,6 +385,7 @@ export default function SelectedPanel({
           forecast={forecasts.get(selection.id)}
           options={routes.get(selection.id) ?? []}
           actions={actions}
+          snapshot={snapshot}
         />
       ) : null}
       {selection.kind === "team" ? <TeamDetail board={board} id={selection.id} actions={actions} /> : null}

@@ -118,6 +118,15 @@ For the dispatch agent, set `ANTHROPIC_API_KEY` (optionally `DISPATCH_AGENT_MODE
 `DISPATCH_AGENT_EFFORT`) in the backend environment; without it the endpoint returns 503.
 The dispatch area endpoint needs internet the first time a box is used (results are cached).
 
+Scenario resource snapshots (households, fire stations and engines at T+0 of each live drill,
+[docs/scenario-snapshots.md](docs/scenario-snapshots.md)), once per database and again after
+changing `tools/snapshot_assumptions.json` (a few minutes on a rate-limited Atlas tier):
+
+```sh
+docker exec crisistwin-backend-1 python manage.py live_init_db          # collections + validators
+docker exec crisistwin-backend-1 python manage.py live_seed_snapshots   # Camp, Berkeley Hills, Palisades
+```
+
 For the phone's voice mode (`POST /api/live/incidents/{id}/voice`), Cartesia is the speech
 provider (speech-to-text and text-to-speech; paid, server-side only). Set `CARTESIA_API_KEY`
 alongside `ANTHROPIC_API_KEY` (optionally `CARTESIA_VOICE_ID`, `CARTESIA_TTS_MODEL`,

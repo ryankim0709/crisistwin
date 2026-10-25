@@ -9,14 +9,13 @@
  * Time. Solver minutes are board minutes (the board's T+0 is the solver's T+0), so the
  * arrival field reads directly against `board.minute`.
  *
- * Wind. The solver takes one wind per run; the board's wind is an hourly series. Each solve
- * uses the wind of the hour it starts in, for its whole lookahead. When the hourly sample (or
- * the fuel moisture) changes, the board re-solves from that minute, continuing from the burned
+ * Wind. The solver takes one wind per run. The board's wind and fuel moisture are the newest
+ * Simulation Studio fire's (constant, as Studio runs them). When they change (a newer Studio
+ * fire with other conditions), the board re-solves from that minute, continuing from the burned
  * state with the solver's progress-preserving resume (spread.ts ResumeFrom): cells already
  * burned keep their times, steps in progress finish at the new rate. New fires and containment
  * re-solve the same way, which with unchanged weather reproduces an uninterrupted run exactly.
- * So the burned footprint follows the hourly wind; forecasts (zone ETAs, containment
- * estimates) assume the current hour's wind persists.
+ * Forecasts (zone ETAs, containment estimates) assume the current wind persists.
  *
  * Units: minutes are board minutes; distances ground metres; areas square metres here
  * (hectares on the board); wind mph at the solver boundary (FireSettings), m/s on the board;
@@ -35,10 +34,12 @@ import {
   cellAt,
   simulateScheduledFireSpread,
   type CellBehaviour,
+  type ControlLines,
 } from "../fire/spread";
 import type { IgnitionSource } from "../fire/scheduledTypes";
 import type { LonLat } from "../live/types";
-import { METERS_PER_SECOND_PER_MPH, moistureOf, type MoistureId } from "./realism";
+import type { FuelMoisture } from "../fire/spread";
+import { METERS_PER_SECOND_PER_MPH } from "./realism";
 
 /**
  * How far past the solve minute each solve looks, minutes. Six hours: three times the board's
@@ -59,6 +60,28 @@ export const MAX_SOLVER_SOURCES = 120;
  */
 export const LATTICE_PERIMETER_TO_SMOOTH = Math.PI / 4;
 
+/** Built line cells for the solver (sparse): cell, minute it was finished, longest flame it holds. */
+export interface BuiltLineCells {
+  cells: Int32Array;
+  holdFromMinute: Float32Array;
+  holdsFeet: Float32Array;
+}
+
+/** Dense solver control lines from sparse built cells; a cell built twice keeps its earlier build. */
+export function denseControlLines(grid: LandscapeGrid, built: BuiltLineCells): ControlLines {
+  const count = grid.width * grid.height;
+  const holdFromMinute = new Float32Array(count).fill(Number.POSITIVE_INFINITY);
+  const holdsFlameLengthFeet = new Float32Array(count);
+  for (let k = 0; k < built.cells.length; k++) {
+    const c = built.cells[k];
+    if (built.holdFromMinute[k] < holdFromMinute[c]) {
+      holdFromMinute[c] = built.holdFromMinute[k];
+      holdsFlameLengthFeet[c] = built.holdsFeet[k];
+    }
+  }
+  return { holdFromMinute, holdsFlameLengthFeet };
+}
+
 /** One board fire as a solver source. */
 export interface SolveSource {
   fireId: string;
@@ -78,8 +101,18 @@ export interface FireSolveRequest {
   /** Open 20-ft wind, m/s, and the bearing it blows FROM, degrees true. */
   windSpeedMetersPerSecond: number;
   windFromDegrees: number;
-  moisture: MoistureId;
+  /** Fuel moisture fractions (0.06 = 6%) and a key that identifies them. */
+  moisture: FuelMoisture;
+  moistureKey: string;
   sources: SolveSource[];
+  /**
+   * Fire line built on the board so far (demo/attack.ts), as the solver's control lines: fire
+   * does not cross a cell built by the minute it would arrive unless the flame facing it is
+   * longer than the cell holds (fire/spread.ts ControlLines). Null = none.
+   */
+  controlLines: BuiltLineCells | null;
+  /** Which built line this solve includes (model.ts lineKey); echoed in the result. */
+  lineKey: string;
   /** The earlier field, remapped to `sources` (-1 = burned by a fire no longer listed). */
   resume: {
     arrivalMinutes: Float32Array;
@@ -96,8 +129,11 @@ export interface FireSolveResult {
   windSpeedMetersPerSecond: number;
   windFromDegrees: number;
   windSpeedMph: number;
-  moisture: MoistureId;
+  moisture: FuelMoisture;
+  moistureKey: string;
   sources: SolveSource[];
+  /** The request's lineKey: the built line this field respects. */
+  lineKey: string;
   /** Arrival per cell, board minutes; Infinity where no fire arrives within the horizon. */
   arrivalMinutes: Float32Array;
   /** Index into `sources` of the fire that reached each cell first, -1 where none (or burned ground of a fire no longer listed). */
@@ -147,7 +183,7 @@ export function solveFireField(grid: LandscapeGrid, request: FireSolveRequest): 
       settings: {
         windSpeedMph,
         windFromDegrees: request.windFromDegrees,
-        moisture: moistureOf(request.moisture),
+        moisture: request.moisture,
         midflameAdjustment: DEFAULT_MIDFLAME_ADJUSTMENT,
         stepMinutes: FIRE_STEP_MINUTES,
         horizonMinutes: request.horizonMinutes,
@@ -158,7 +194,7 @@ export function solveFireField(grid: LandscapeGrid, request: FireSolveRequest): 
       // No frames: the board reads the arrival field, and the map contours per fire.
       frameMinutes: [],
     },
-    null,
+    request.controlLines && request.controlLines.cells.length > 0 ? denseControlLines(grid, request.controlLines) : null,
     request.sources.map((s) => s.stopMinute ?? Number.POSITIVE_INFINITY),
     {
       reportCellBehaviour: true,
@@ -236,7 +272,9 @@ export function solveFireField(grid: LandscapeGrid, request: FireSolveRequest): 
     windFromDegrees: request.windFromDegrees,
     windSpeedMph,
     moisture: request.moisture,
+    moistureKey: request.moistureKey,
     sources: request.sources,
+    lineKey: request.lineKey,
     arrivalMinutes: arrival,
     sourceIndexByCell: owner,
     behaviour,

@@ -408,13 +408,16 @@ def _point(value) -> list[float] | None:
 
 
 def crew_route(drill, fire, request: dict, offboard_kmh: float) -> dict:
-    """One unit's drive: optional off-board leg to the network, then the class's road route."""
+    """One unit's drive: optional off-board leg to the network, the class's road route, then an
+    optional off-board leg from the network to a target off it (both straight line x
+    OFFBOARD_CIRCUITY at the off-board speed, summed in ``offboard_m``)."""
     blocked, factors = _class_access(drill, request["access_class"])
     origin, target = request["from"], request["to"]
     result = inbound_route(drill, tuple(origin), tuple(target), blocked, fire, factors)
     offboard_m = 0.0
     offboard_min = 0.0
     line_head: list[list[float]] = []
+    start = tuple(origin)
     if result.reason == "origin_off_network":
         node, metres = _nearest_main_node(drill, tuple(origin))
         if node is not None:
@@ -422,11 +425,27 @@ def crew_route(drill, fire, request: dict, offboard_kmh: float) -> dict:
             offboard_m = metres
             offboard_min = metres * OFFBOARD_CIRCUITY / (offboard_kmh * 1000 / 60)
             line_head = [list(origin)]
+            start = entry
             result = inbound_route(drill, entry, tuple(target), blocked, fire, factors)
+    line_tail: list[list[float]] = []
+    if result.reason == "target_off_network":
+        # A target off the network (an attack position in the wildland): drive to the main-road
+        # node nearest it, then the same straight-line x OFFBOARD_CIRCUITY leg to the target.
+        node, metres = _nearest_main_node(drill, tuple(target))
+        if node is not None:
+            exit_node = drill.roads.node_coords[node]
+            offboard_m += metres
+            offboard_min += metres * OFFBOARD_CIRCUITY / (offboard_kmh * 1000 / 60)
+            line_tail = [list(target)]
+            result = inbound_route(drill, start, exit_node, blocked, fire, factors)
     out = {"id": request["id"], "offboard_m": round(offboard_m)}
     if result.route is None or result.travel_time_s is None:
         return {**out, "drive_min": None, "distance_m": None, "basis": None, "reason": result.reason, "line": []}
-    line = line_head + [list(p) for p in simplify_line(result.route.line, ROUTE_TOLERANCE_M, ROUTE_MAX_POINTS)]
+    line = (
+        line_head
+        + [list(p) for p in simplify_line(result.route.line, ROUTE_TOLERANCE_M, ROUTE_MAX_POINTS)]
+        + line_tail
+    )
     return {
         **out,
         "drive_min": round(offboard_min + result.travel_time_s / 60, 1),

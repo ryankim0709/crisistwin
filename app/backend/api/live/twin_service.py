@@ -153,7 +153,30 @@ def build_package_inputs(incident_id: str, seed: int = TWIN_SEED):
     if source is None or source.kind != "package":
         raise ValueError(f"no twin source for incident {incident_id}")
     twinmod = _import_sim()
-    return _finish_inputs(twinmod.package_inputs(source.path, seed), twinmod, incident_id)
+    zone_vehicles = _snapshot_zone_vehicles(incident_id)
+    return _finish_inputs(twinmod.package_inputs(source.path, seed, zone_vehicles), twinmod, incident_id)
+
+
+def _snapshot_zone_vehicles(incident_id: str) -> dict[str, int] | None:
+    """Evacuating vehicles per zone of the incident's scenario resource snapshot (docs/scenario-snapshots.md):
+    the stored one, else built now with the default assumptions (deterministic, so it equals what
+    ``live_seed_snapshots`` or activation stores). None (package demand) when neither works."""
+    from . import snapshots  # local: snapshots imports this module's REPO_ROOT
+
+    stored = snapshots.zone_evacuating_vehicles(incident_id)
+    if stored is not None:
+        log.info("live twin: %s demand from the stored resource snapshot (%d vehicles)", incident_id,
+                 sum(stored.values()))
+        return stored
+    try:
+        zones = snapshots.build(incident_id)["snapshot"]["zones"]
+    except Exception:  # noqa: BLE001 - any failure keeps the package's own demand
+        log.exception("live twin: %s resource snapshot unavailable; package demand", incident_id)
+        return None
+    built = {str(z["zone_id"]): int(z["evacuating_vehicles"]) for z in zones}
+    log.info("live twin: %s demand from a freshly built resource snapshot (%d vehicles)", incident_id,
+             sum(built.values()))
+    return built
 
 
 def build_inputs(incident_id: str, seed: int = TWIN_SEED):

@@ -204,6 +204,14 @@
   font-size: var(--ct-text-xs);
   line-height: var(--ct-leading-snug);
 }
+.studio-region__sync {
+  margin: 0;
+  padding-top: var(--ct-space-1);
+  border-top: 1px solid var(--ct-border-subtle);
+  font-size: var(--ct-text-xs);
+  font-weight: var(--ct-weight-semibold);
+  line-height: var(--ct-leading-snug);
+}
 .studio-evac.ui-panel {
   display: grid;
   gap: var(--ct-space-2);

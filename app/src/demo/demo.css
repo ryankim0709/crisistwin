@@ -1,7 +1,7 @@
 /* /demo command demo: reuses the /live workspace grid (live.css, lc-*); this sheet adds the
    demo's own panels. Tokens only; map colours live in DemoMap.tsx. */
 
-/* The demo header carries the clock, speed, activity and wind controls: let it wrap onto a
+/* The demo header carries the clock, speed and conditions controls: let it wrap onto a
    second row instead of clipping them. */
 .dm-root {
   grid-template-rows: auto minmax(0, 1fr);
@@ -340,4 +340,15 @@
   .dm-diorama__credit {
     display: none;
   }
+}
+
+/* Section label inside the selected item panel (attack positions). */
+.dm-subhead {
+  margin: var(--ct-space-2) 0 var(--ct-space-1);
+  font-size: var(--ct-text-sm);
+  font-weight: 600;
+}
+
+.dm-snap-note {
+  margin: var(--ct-space-2) 0 var(--ct-space-1);
 }

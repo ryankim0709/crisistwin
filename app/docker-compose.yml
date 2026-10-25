@@ -24,6 +24,7 @@ services:
       LIVE_ACTIVE_INCIDENT_ID: ${LIVE_ACTIVE_INCIDENT_ID:-}
       # /live's twin and drill read the repo outside app/backend; mounted read-only below.
       CRISISTWIN_REPO_ROOT: /repo
+      SCENARIO_SNAPSHOT_ASSUMPTIONS: ${SCENARIO_SNAPSHOT_ASSUMPTIONS:-}
       LIVE_DRILL_BUNDLE: /repo/app/public/replays/camp-2018.json
     ports:
       - "${CT_BIND_ADDR:-127.0.0.1}:8000:8000"

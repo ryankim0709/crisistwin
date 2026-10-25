@@ -15,7 +15,6 @@ import { FireDioramaScene } from "../fire/diorama/FireDioramaScene";
 import type { DioramaIgnition, FireDioramaSceneApi } from "../fire/diorama/types";
 import type { LandscapeGrid } from "../fire/landscape";
 import { useBoardStreets } from "../fire/useBoardStreets";
-import type { LonLat } from "../live/types";
 import { CREW_COLORS, firelineCss } from "../studio/firelinePalette";
 import { Button, Legend, Panel, type LegendItem } from "../ui";
 import { DEMO_3D_COLORS, DemoBoardOverlay } from "./DemoBoardOverlay";
@@ -43,8 +42,6 @@ interface Props {
   forecasts: Map<string, ZoneForecast>;
   wind: { speedMetersPerSecond: number; fromDegrees: number } | null;
   selected: Selection | null;
-  igniteMode: boolean;
-  onIgnite: (coord: LonLat) => void;
 }
 
 function VehicleGlyph({ color, width, height }: { color: number; width: number; height: number }) {
@@ -66,7 +63,7 @@ function FirePinGlyph() {
 
 const css = (color: number | string) => (typeof color === "number" ? firelineCss(color) : color);
 
-export default function DemoDiorama({ board, version, field, landscape, regionName, forecasts, wind, selected, igniteMode, onIgnite }: Props) {
+export default function DemoDiorama({ board, version, field, landscape, regionName, forecasts, wind, selected }: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [scene, setScene] = useState<FireDioramaSceneApi | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -76,11 +73,6 @@ export default function DemoDiorama({ board, version, field, landscape, regionNa
   const [overlay] = useState(() => new DemoBoardOverlay());
   const streets = useBoardStreets(landscape);
   const streetArea = streets.status === "ready" ? streets.area : null;
-
-  const clickRef = useRef({ igniteMode, onIgnite });
-  useEffect(() => {
-    clickRef.current = { igniteMode, onIgnite };
-  }, [igniteMode, onIgnite]);
 
   // StrictMode-safe: the cleanup disposes, the re-run builds a fresh scene.
   useEffect(() => {
@@ -94,9 +86,6 @@ export default function DemoDiorama({ board, version, field, landscape, regionNa
       setError(cause instanceof Error ? cause.message : "WebGL could not be initialised.");
       return;
     }
-    created.onGroundClick((point) => {
-      if (clickRef.current.igniteMode) clickRef.current.onIgnite([point.longitude, point.latitude]);
-    });
     created.setOverlay(overlay);
     setScene(created);
     setError(null);
@@ -194,7 +183,13 @@ export default function DemoDiorama({ board, version, field, landscape, regionNa
       color: css(CREW_COLORS.dozer),
       glyph: <VehicleGlyph color={CREW_COLORS.dozer} width={13} height={5} />,
     },
-    { label: "Unit driving to a fire", color: css(DEMO_3D_COLORS.route), shape: "dashed" },
+    { label: "Unit driving to a fire, on its road route", color: css(DEMO_3D_COLORS.route), shape: "dashed" },
+    { label: "Fire line ahead of a fire: planned (dashed), built (solid); a barrier in the fire model", color: css(DEMO_3D_COLORS.fireLine), shape: "line" },
+    {
+      label: "Evacuating vehicles on their road route (simulated traffic; one car per 10+ vehicles)",
+      color: css(DEMO_3D_COLORS.evacuee),
+      glyph: <VehicleGlyph color={DEMO_3D_COLORS.evacuee} width={10} height={5} />,
+    },
     { label: "Station (free units listed by its name)", color: css(DEMO_3D_COLORS.stationRoof), glyph: <StationGlyph /> },
     { label: "Leave now zone (outline)", color: css(DEMO_3D_COLORS.ordered), shape: "line" },
     { label: "At risk zone (dashed outline)", color: css(DEMO_3D_COLORS.threatened), shape: "dashed" },

@@ -20,7 +20,8 @@ import { LEVEL_COLOR } from "../live/CommandMap";
 import type { LonLat } from "../live/types";
 import { vehicleFamily, type VehicleFamily } from "../studio/apparatus";
 import { CREW_COLORS } from "../studio/firelinePalette";
-import { distanceM, teamPosition, type Board, type ZoneForecast } from "./model";
+import { shortStationName } from "./format";
+import { EVACUEE_MARKERS_MAX, distanceM, evacueeMarkers, lineBuiltExtent, teamPosition, type Board, type ZoneForecast } from "./model";
 
 /** Colours baked into the 3D board (CSS cannot reach WebGL); the legend mirrors them. */
 export const DEMO_3D_COLORS = {
@@ -30,6 +31,10 @@ export const DEMO_3D_COLORS = {
   ordered: LEVEL_COLOR.evacuate_now,
   threatened: LEVEL_COLOR.be_ready,
   overrun: "#b3140c",
+  /** Fire line ahead of a fire (boardMapLayers BOARD_COLOR.fireLine). */
+  fireLine: "#3b2a1a",
+  /** Evacuating vehicles (simulated, sampled), on their zone's road route. */
+  evacuee: 0x1f6feb,
 } as const;
 
 /** Vehicle sizes, world units (exaggerated about 20x so they read on a 600-unit board, as CrewOverlay). */
@@ -43,7 +48,7 @@ const LIFT = 0.9;
 const ZONE_LIFT = 0.6;
 const DRAPE_STEP = 1.5;
 /** Units at one spot fan out on a ring of this radius, world units. */
-const PARK_RADIUS = 5;
+const PARK_RADIUS = 7;
 /** Units closer than this share a spot (and a label), world units. */
 const CLUSTER_WORLD = 3;
 /** An available unit this close to its station is shown as parked there, metres. */
@@ -103,8 +108,12 @@ export class DemoBoardOverlay implements BoardOverlay {
   private unitKey = "";
   private routes: THREE.Group | null = null;
   private routeKey = "";
+  private fireLines: THREE.Group | null = null;
+  private fireLineKey = "";
   private zones: { group: THREE.Group; labels: Label[] } | null = null;
   private zoneKey = "";
+  /** Evacuating vehicles: one instanced car per marker (model.evacueeMarkers). */
+  private evacuees: THREE.InstancedMesh | null = null;
   private unitLabels: Label[] = [];
   private readonly matrix = new THREE.Matrix4();
   private readonly quat = new THREE.Quaternion();
@@ -130,7 +139,9 @@ export class DemoBoardOverlay implements BoardOverlay {
     this.clearStations();
     this.clearUnits();
     this.clearRoutes();
+    this.clearFireLines();
     this.clearZones();
+    this.clearEvacuees();
     this.group.removeFromParent();
     this.group = null;
     this.style?.remove();
@@ -173,6 +184,12 @@ export class DemoBoardOverlay implements BoardOverlay {
       this.routeKey = routeKey;
       this.buildRoutes();
     }
+    // Rebuilt as line is built (10 m steps), not every frame.
+    const fireLineKey = board ? board.lines.map((l) => `${l.id}:${Math.round(l.builtM / 10)}`).join("|") : "";
+    if (fireLineKey !== this.fireLineKey || !this.fireLines) {
+      this.fireLineKey = fireLineKey;
+      this.buildFireLines();
+    }
     const zoneKey = board
       ? board.zones.map((z) => `${z.id}:${zoneState(z, this.forecasts.get(z.id)) ?? ""}`).join("|")
       : "";
@@ -181,6 +198,7 @@ export class DemoBoardOverlay implements BoardOverlay {
       this.buildZones();
     }
     this.placeUnits();
+    this.placeEvacuees();
   }
 
   // ---- geometry helpers ----
@@ -288,7 +306,7 @@ export class DemoBoardOverlay implements BoardOverlay {
       walls.setMatrixAt(i, this.matrix);
       roofs.setMatrixAt(i, this.matrix);
       const label = labels.add(group, "fdx-dmstation", new THREE.Vector3(at.x, at.y + height + 2.2, at.z), new THREE.Vector2(0.5, 1));
-      label.el.textContent = station.name;
+      label.el.textContent = shortStationName(station.name);
       label.el.title = station.name;
       map.set(station.id, label);
     });
@@ -427,7 +445,8 @@ export class DemoBoardOverlay implements BoardOverlay {
         const label = this.stations.labels.get(station.id);
         if (!label) continue;
         const free = freeAt.get(station.id);
-        setText(label, free ? `${station.name} · ${free.join(" ")} free` : station.name);
+        const short = shortStationName(station.name);
+        setText(label, free ? `${short} · ${free.join(" ")}` : short);
       }
     }
     this.labels?.invalidate();
@@ -450,10 +469,39 @@ export class DemoBoardOverlay implements BoardOverlay {
     parent.add(group);
     this.routes = group;
     for (const team of board?.teams ?? []) {
-      if (team.status !== "en_route" || !team.target) continue;
-      const path = team.route && team.route.length > 1 ? team.route : [team.position, team.target];
-      const positions = this.drape(path, LIFT);
+      // Only road lines: a unit waiting for its road route has none yet.
+      if (team.status !== "en_route" || !team.route || team.route.length < 2) continue;
+      const positions = this.drape(team.route, LIFT);
       if (positions.length >= 6) group.add(this.line(positions, DEMO_3D_COLORS.route, 2, true));
+    }
+  }
+
+  // ---- fire line at attack positions ----
+
+  private clearFireLines(): void {
+    if (!this.fireLines) return;
+    this.dropLines(this.fireLines);
+    this.fireLines = null;
+  }
+
+  /** Each attack line draped on the ground: planned dashed, built part solid and wider. */
+  private buildFireLines(): void {
+    this.clearFireLines();
+    const { group: parent, board } = this;
+    if (!parent) return;
+    const group = new THREE.Group();
+    group.name = "demo-fire-lines";
+    parent.add(group);
+    this.fireLines = group;
+    for (const line of board?.lines ?? []) {
+      const { point: p, a, b, aM, bM } = line.plan;
+      const planned = this.drape([a, p, b], ZONE_LIFT);
+      if (planned.length >= 6) group.add(this.line(planned, DEMO_3D_COLORS.fireLine, 2, true));
+      if (line.builtM <= 0) continue;
+      const ext = lineBuiltExtent(line);
+      const at = (q: LonLat, f: number): LonLat => [p[0] + (q[0] - p[0]) * f, p[1] + (q[1] - p[1]) * f];
+      const built = this.drape([at(a, aM > 0 ? ext.a / aM : 0), p, at(b, bM > 0 ? ext.b / bM : 0)], ZONE_LIFT + 0.2);
+      if (built.length >= 6) group.add(this.line(built, DEMO_3D_COLORS.fireLine, 4, false));
     }
   }
 
@@ -487,5 +535,47 @@ export class DemoBoardOverlay implements BoardOverlay {
         zoneLabels.push(label);
       }
     }
+  }
+
+  // ---- evacuating vehicles (simulated traffic) ----
+
+  private clearEvacuees(): void {
+    if (!this.evacuees) return;
+    this.evacuees.removeFromParent();
+    disposeObject(this.evacuees);
+    this.evacuees = null;
+  }
+
+  /**
+   * Places one small car per evacuee marker on its zone's road line (the routes' road geometry,
+   * sampled by model.evacueeMarkers), pointing along the road. Never a straight line between points.
+   */
+  private placeEvacuees(): void {
+    const { group, board } = this;
+    if (!group) return;
+    if (!this.evacuees) {
+      const mesh = new THREE.InstancedMesh(
+        new THREE.BoxGeometry(2.4, 1.2, 1.3).translate(0, 0.6, 0),
+        new THREE.MeshStandardMaterial({ color: DEMO_3D_COLORS.evacuee, roughness: 0.5 }),
+        EVACUEE_MARKERS_MAX,
+      );
+      mesh.name = "demo-evacuees";
+      mesh.count = 0;
+      group.add(mesh);
+      this.evacuees = mesh;
+    }
+    const mesh = this.evacuees;
+    let n = 0;
+    for (const m of board ? evacueeMarkers(board) : []) {
+      const p = this.toWorld(m.at);
+      if (!p || n >= EVACUEE_MARKERS_MAX) continue;
+      // Bearing is degrees true; the board's x runs east and z south, the box's length along x.
+      this.quat.setFromAxisAngle(this.up, Math.PI / 2 - (m.bearing * Math.PI) / 180);
+      this.matrix.compose(new THREE.Vector3(p.x, p.y + 0.2, p.z), this.quat, this.one);
+      mesh.setMatrixAt(n, this.matrix);
+      n += 1;
+    }
+    mesh.count = n;
+    mesh.instanceMatrix.needsUpdate = true;
   }
 }

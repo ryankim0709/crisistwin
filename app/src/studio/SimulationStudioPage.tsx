@@ -4,6 +4,9 @@ import type { ScheduledFireRun } from "../fire/scheduledTypes";
 import { formatElapsed } from "../fire/spread";
 import ConfigPanel from "./ConfigPanel";
 import LiveDrillAction from "./LiveDrillAction";
+import LiveFireStatus from "./LiveFireStatus";
+import { usePublishLiveFire } from "./usePublishLiveFire";
+import { useLiveRegionSync } from "./useLiveRegionSync";
 import PlaybackBar from "./PlaybackBar";
 import StudioDiorama, { type StudioEvacuationView } from "./StudioDiorama";
 import EvacuationPanel, { type PlayPlan } from "./EvacuationPanel";
@@ -91,6 +94,11 @@ export interface SimulationStudioPageProps {
    * and disabled.
    */
   aside?: ComponentType<StudioAsideContext>;
+  /**
+   * Send each finished run's fires to Live command (POST /api/live/studio-fires). Only the
+   * Simulation Studio page opts in; /dispatch reuses this page without publishing.
+   */
+  publishLiveFire?: boolean;
 }
 
 /** What a side panel gets from the studio. */
@@ -150,6 +158,7 @@ export default function SimulationStudioPage({
   label = "Simulation Studio",
   storageNamespace,
   aside: Aside,
+  publishLiveFire = false,
 }: SimulationStudioPageProps = {}) {
   const draftKey = storageNamespace
     ? `${DRAFT_STORAGE_KEY}.${storageNamespace}`
@@ -258,6 +267,7 @@ export default function SimulationStudioPage({
   const [boardAttempt, setBoardAttempt] = useState(0);
   const { catalog, board } = useRegionBoard(regionId, boardAttempt);
   const region = findRegion(regionId);
+  const liveFire = usePublishLiveFire(result, regionId, publishLiveFire);
   const regionGrid = board.status === "ready" ? board.grid : null;
 
   // Playback. `clockRef` is the smooth simulation clock; React state only changes when the
@@ -443,6 +453,13 @@ export default function SimulationStudioPage({
     },
     [regionId, cancel, markStale],
   );
+  const liveSync = useLiveRegionSync({
+    enabled: publishLiveFire,
+    regionId,
+    liveFire,
+    blocked: result !== null || state.phase === "loading-landscape" || state.phase === "computing",
+    select: selectRegion,
+  });
 
   const handleLoadDemo = useCallback(() => {
     applyScenario(demoScenario());
@@ -895,7 +912,10 @@ export default function SimulationStudioPage({
                         id="studio-region"
                         className="ui-input"
                         value={regionId}
-                        onChange={(event) => selectRegion(event.target.value)}
+                        onChange={(event) => {
+                          liveSync.userPicked();
+                          selectRegion(event.target.value);
+                        }}
                       >
                         {REGION_AREAS.map((area) => (
                           <optgroup key={area} label={area}>
@@ -925,6 +945,11 @@ export default function SimulationStudioPage({
                           : "Board could not be loaded."}{" "}
                       Fires on the board run on it; others download their own area.
                     </p>
+                    {liveSync.note && (
+                      <p className="studio-region__sync" role="status">
+                        {liveSync.note}
+                      </p>
+                    )}
                   </Panel>
                 }
                 emptyState={
@@ -1143,6 +1168,7 @@ export default function SimulationStudioPage({
               onExport={handleExport}
               onImport={handleImport}
               onLoadDemo={handleLoadDemo}
+              liveFire={publishLiveFire ? <LiveFireStatus state={liveFire} /> : undefined}
               liveDrill={<LiveDrillAction result={result} stale={stale} />}
               firefighting={
                 <FirefightingFields

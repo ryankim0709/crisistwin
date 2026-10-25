@@ -10,26 +10,31 @@ import {
   Metric,
   MetricGrid,
   Notice,
+  Panel,
   SegmentedControl,
   Tag,
   type SegmentedOption,
 } from "../ui";
-import AgentConsole from "../demo/AgentConsole";
-import BoardLists from "../demo/BoardLists";
+import AgentControl from "../demo/AgentControl";
+import BoardClock from "./BoardClock";
 import { attachBoardLayers, type BoardLayerInput, type BoardLayers, type BoardSelection } from "../demo/boardMapLayers";
 import DemoDiorama from "../demo/DemoDiorama";
-import { nf, simClock } from "../demo/format";
-import { ACTIVITY } from "../demo/model";
-import { CONGESTION_LABEL, TRAVEL_LABEL } from "../demo/observation";
+import { nf } from "../demo/format";
+import { CONGESTION_LABEL, TRAVEL_LABEL, fireModelLabel, studioMoistureLabel, studioWindLabel } from "../demo/observation";
 import SelectedPanel from "../demo/SelectedPanel";
 import { useCommandBoard } from "../demo/useCommandBoard";
 import "../demo/demo.css";
-import ActivityLog from "./ActivityLog";
+import AuditLog from "./AuditLog";
+import DetailsDrawer from "./DetailsDrawer";
+import ScenarioResources, { snapshotInputsLine } from "./ScenarioResources";
+import { useScenarioSnapshot } from "./scenarioSnapshot";
+import { useAuditLog } from "./useAuditLog";
 import { useTriageKeys } from "./useTriageKeys";
+// The keyboard shortcut popover's styles (lc-keys).
 import "./activity.css";
 import { useTaskRoute } from "./useTaskRoute";
 import { fetchActive } from "./active";
-import { DEFAULT_INCIDENT_ID, LiveError, readToken, runImpact, SERVER_TOKEN, writeToken } from "./api";
+import { DEFAULT_INCIDENT_ID, LiveError, readToken, runImpact, writeToken } from "./api";
 import CommandMap, { EXTRA_LAYERS_BEFORE_ID, LAYER_KEYS, type LayerKey, type MapFocus } from "./CommandMap";
 import EvacuationPicture from "./EvacuationPicture";
 import MapLegend from "./MapLegend";
@@ -39,16 +44,18 @@ import ResponseRecord from "./ResponseRecord";
 import GroundRecord from "./GroundRecord";
 import { labelPoint } from "./format";
 import StalePanel from "./StalePanel";
-import ReviewQueue from "./ReviewQueue";
 import SelectedItem, { type ImpactState, type RunAction } from "./SelectedItem";
 import { useCommand } from "./useCommand";
 import { usePoll } from "./usePoll";
+import type { Decision } from "./types";
 import { useTwin } from "./useTwin";
-import WorkspaceHeader, { BoardControls } from "./WorkspaceHeader";
+import { LiveBadge } from "./WorkspaceHeader";
 import "./live.css";
 
 const HIGHLIGHT_MS = 2_500;
-const ACTIVE_POLL_MS = 30_000;
+const NO_DECISIONS: Decision[] = [];
+// Fast, so the page follows Simulation Studio switching the live drill to its region quickly.
+const ACTIVE_POLL_MS = 5_000;
 const LAYER_LABEL: Record<LayerKey, string> = {
   zones: "Zones",
   fire: "Fire",
@@ -56,11 +63,6 @@ const LAYER_LABEL: Record<LayerKey, string> = {
   roads: "Roads",
   shelters: "Shelters",
 };
-type LeftTab = "reports" | "board";
-const LEFT_TABS: SegmentedOption<LeftTab>[] = [
-  { value: "reports", label: "Reports", title: "Field reports from the live drill" },
-  { value: "board", label: "Fires & units", title: "Simulated fires and firefighting units" },
-];
 type StageView = "map" | "diorama";
 const VIEW_STORAGE_KEY = "crisistwin.live.view";
 
@@ -196,7 +198,7 @@ function useNow(ms: number): number {
 
 export default function LiveCommandPage() {
   const [token, setToken] = useState<string | null>(() => readToken());
-  // The hosted instance's one active incident; re-read every 30 s and right after a switch. If it
+  // The hosted instance's one active incident; re-read every 5 s and right after a switch. If it
   // cannot be read, the console falls back to the default incident rather than staying blank.
   const active = usePoll(token, fetchActive, ACTIVE_POLL_MS, "Live API");
   // A Studio package has no 2018 ground or response record (docs/adr/0047-active-incident.md).
@@ -207,12 +209,14 @@ export default function LiveCommandPage() {
   const twin = useTwin(incidentToken, incidentId);
   const [busy, setBusy] = useState<string | null>(null);
   const [focus, setFocus] = useState<MapFocus | null>(null);
-  const [filter, setFilter] = useState<QueueFilter>("new");
+  // No queue list on the page: keyboard triage walks the new items, 2018 record ones included.
+  const filter: QueueFilter = "new";
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [showRecord, setShowRecord] = useState(true);
+  const showRecord = true;
   const [actionError, setActionError] = useState<string | null>(null);
   const [impact, setImpact] = useState<ImpactState | null>(null);
   const [highlight, setHighlight] = useState<string | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [layers, setLayers] = useState<Record<LayerKey, boolean>>({
     zones: true,
     fire: true,
@@ -256,8 +260,10 @@ export default function LiveCommandPage() {
   const twinData = data ? twin.data : null;
   // The simulated board (fires, units, households) and the AI commander, on the drill's zones.
   const cb = useCommandBoard({ token, incidentId, data });
+  // The drill's resource snapshot (households, engines): drawer, zone panel, station labels.
+  const snapshotState = useScenarioSnapshot(incidentToken, incidentId);
+  const snapshot = snapshotState.data;
   const setBoardSelection = cb.setSelection;
-  const [leftTab, setLeftTab] = useState<LeftTab>("reports");
   const [view, setView] = useState<StageView>(loadView);
   const chooseView = useCallback((next: StageView) => {
     setView(next);
@@ -271,6 +277,15 @@ export default function LiveCommandPage() {
     data && command.receivedAt !== null
       ? new Date(data.generated_at).getTime() + (now - command.receivedAt)
       : now;
+  // One newest-first record of Claude's decisions, board events and live drill decisions.
+  const audit = useAuditLog({
+    agent: cb.agent,
+    board: cb.board,
+    version: cb.version,
+    liveDecisions: data?.decisions ?? NO_DECISIONS,
+    serverNow,
+    name: cb.name,
+  });
   // The queue re-sorts on each poll only, so rows do not jump while ages tick.
   const items = useMemo(
     () => (data ? buildQueue(data, new Date(data.generated_at).getTime()) : []),
@@ -296,20 +311,14 @@ export default function LiveCommandPage() {
       setActionError(null);
       setFocus(null);
       setImpact((cur) => (cur && cur.itemId === id ? cur : null));
-      if (id !== null) {
-        setBoardSelection(null);
-        setLeftTab("reports");
-      }
+      if (id !== null) setBoardSelection(null);
     },
     [setBoardSelection],
   );
   const selectBoard = useCallback(
     (sel: BoardSelection | null) => {
       setBoardSelection(sel);
-      if (sel) {
-        select(null);
-        if (sel.kind !== "zone") setLeftTab("board");
-      }
+      if (sel) select(null);
     },
     [setBoardSelection, select],
   );
@@ -322,22 +331,21 @@ export default function LiveCommandPage() {
     forecasts: cb.forecasts,
     routes: cb.routes.routes,
     selection: cb.selection,
-    igniteMode: cb.igniteMode,
+    snapshot,
   };
   const boardInputRef = useRef(boardInput);
-  const boardHandlers = useRef({ onSelect: selectBoard, onIgnite: cb.onIgnite });
+  const boardHandlers = useRef({ onSelect: selectBoard });
   useEffect(() => {
-    boardHandlers.current = { onSelect: selectBoard, onIgnite: cb.onIgnite };
+    boardHandlers.current = { onSelect: selectBoard };
   });
   useEffect(() => {
     boardInputRef.current = boardInput;
     boardLayers.current?.update(boardInput);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the board is mutated in place; version marks changes
-  }, [cb.board, cb.version, cb.forecasts, cb.routes.routes, cb.selection, cb.igniteMode]);
+  }, [cb.board, cb.version, cb.forecasts, cb.routes.routes, cb.selection, snapshot]);
   const onMapReady = useCallback((map: MapLibreMap) => {
     const layers = attachBoardLayers(map, EXTRA_LAYERS_BEFORE_ID, {
       onSelect: (sel) => boardHandlers.current.onSelect(sel),
-      onIgnite: (coord) => boardHandlers.current.onIgnite(coord),
     });
     boardLayers.current = layers;
     layers.update(boardInputRef.current);
@@ -397,10 +405,6 @@ export default function LiveCommandPage() {
     if (value === token) refresh();
     else setToken(value);
   };
-  const signOut = () => {
-    writeToken(null);
-    setToken(null);
-  };
 
   let gate = null;
   if (!token || unauthorized) {
@@ -443,45 +447,27 @@ export default function LiveCommandPage() {
     },
   ];
   const drillName = data?.incident?.name ?? active.data?.name ?? "this drill";
+  const pendingProposals = data ? data.proposals.filter((p) => p.status === "pending") : [];
+  // Fires come only from Simulation Studio; a broken feed shows under "Needs you".
+  const studioError = cb.studio.error
+    ? cb.studio.error.status === 404
+      ? "The Studio fire feed is not available on this server yet."
+      : `Studio fire feed: ${cb.studio.error.message}`
+    : null;
+  const needsYou =
+    pendingProposals.length > 0 || !!cb.notice || !!cb.routes.error || !!studioError || (!!actionError && !selected);
 
   return (
     <div className={`lc-root dm-root${data ? "" : " lc-root--gate"}`}>
-      <WorkspaceHeader
-        data={data}
-        twin={twinData}
-        receivedAt={command.receivedAt}
-        now={now}
-        connectionError={data && command.error ? command.error.message : null}
-        run={run}
-        busy={busy}
-        onSignOut={token && token !== SERVER_TOKEN ? signOut : null}
-        token={token}
-        active={active.data}
-        onSwitched={active.refresh}
-      >
-        {data ? <BoardControls board={cb} /> : null}
-      </WorkspaceHeader>
-      {data ? (
-        <div className="lc-col lc-queue lc-left">
-          <SegmentedControl label="Left column" options={LEFT_TABS} value={leftTab} onChange={setLeftTab} className="lc-left-tabs" />
-          {leftTab === "reports" ? (
-            <ReviewQueue
-              items={listed}
-              showRecord={showRecord}
-              onShowRecord={setShowRecord}
-              hasRecord={!isPackage}
-              filter={filter}
-              onFilter={setFilter}
-              selectedId={selectedId}
-              onSelect={select}
-              serverNow={serverNow}
-            />
-          ) : (
-            <BoardLists board={cb} onSelect={selectBoard} />
-          )}
-        </div>
-      ) : null}
       <main className={`lc-stage${showDiorama ? " lc-stage--diorama" : ""}`}>
+        {data ? (
+          <LiveBadge
+            data={data}
+            receivedAt={command.receivedAt}
+            now={now}
+            connectionError={command.error ? command.error.message : null}
+          />
+        ) : null}
         <CommandMap
           data={data}
           twin={twinData}
@@ -513,8 +499,6 @@ export default function LiveCommandPage() {
             forecasts={cb.forecasts}
             wind={cb.windNow}
             selected={cb.selection}
-            igniteMode={cb.igniteMode}
-            onIgnite={cb.onIgnite}
           />
         ) : null}
         {data ? (
@@ -522,86 +506,52 @@ export default function LiveCommandPage() {
             <SegmentedControl label="View" options={viewOptions} value={showDiorama ? "diorama" : "map"} onChange={chooseView} />
           </div>
         ) : null}
-        {gate}
-      </main>
-      {data ? (
-        <aside className="lc-col lc-right" aria-label="Decisions and evacuation picture">
-          <div className="lc-col-scroll">
-            <div style={{ display: "flex", justifyContent: "flex-end", padding: "4px 8px 0" }}>
-              <ShortcutHint />
-            </div>
-            {board ? (
-              <AgentConsole
-                agent={cb.agent}
-                autopilot={cb.autopilot}
-                onAutopilot={cb.setAutopilot}
-                hold={cb.hold}
-                onHold={cb.setHold}
-                name={cb.name}
-              />
-            ) : (
-              <section className="dm-section" aria-label="AI incident commander">
-                <LoadingState>Loading the simulated board…</LoadingState>
-              </section>
-            )}
-            {cb.notice ? (
-              <div className="dm-section">
-                <Notice tone="warning" compact>
-                  {cb.notice}
-                </Notice>
-              </div>
-            ) : null}
-            {cb.routes.error ? (
-              <div className="dm-section">
-                <Notice tone="danger" compact>
-                  Board routes unavailable: {cb.routes.error}
-                </Notice>
-              </div>
-            ) : null}
-            {board && cb.selection ? (
-              <p className="lc-board-note lc-board-sel-note">
-                <EvidenceTag kind="simulated" /> Selected on the simulated board
-              </p>
-            ) : null}
-            {board && cb.selection ? (
-              <SelectedPanel
-                board={board}
-                selection={cb.selection}
-                forecasts={cb.forecasts}
-                routes={cb.routes.routes}
-                actions={cb.actions}
-                onClose={() => selectBoard(null)}
-              />
-            ) : null}
-            <ProposalPanel
-              data={data}
-              twin={twinData}
-              run={run}
-              busy={busy}
-              serverNow={serverNow}
-              highlightId={highlight}
-            />
-            {actionError ? (
-              <Notice tone="danger" compact>
-                {actionError}
-              </Notice>
-            ) : null}
+        {data && (selected || (board && cb.selection)) ? (
+          <Panel glass compact className="lc-float" aria-label="Selection">
             {selected ? (
-              <SelectedItem
-                key={selected.id}
-                item={selected}
-                data={data}
-                serverNow={serverNow}
-                run={run}
-                busy={busy}
-                impact={impact}
-                route={taskRoute}
-                proposalId={proposalFor(selected, data)}
-                onRunImpact={() => void onRunImpact()}
-                onReviewProposal={reviewProposal}
-                onClose={() => select(null)}
-              />
+              <>
+                {actionError ? (
+                  <Notice tone="danger" compact>
+                    {actionError}
+                  </Notice>
+                ) : null}
+                <SelectedItem
+                  key={selected.id}
+                  item={selected}
+                  data={data}
+                  serverNow={serverNow}
+                  run={run}
+                  busy={busy}
+                  impact={impact}
+                  route={taskRoute}
+                  proposalId={proposalFor(selected, data)}
+                  onRunImpact={() => void onRunImpact()}
+                  onReviewProposal={reviewProposal}
+                  onClose={() => select(null)}
+                />
+              </>
             ) : null}
+            {board && cb.selection ? (
+              <>
+                <p className="lc-board-note lc-board-sel-note">
+                  <EvidenceTag kind="simulated" /> Selected on the simulated board
+                </p>
+                <SelectedPanel
+                  board={board}
+                  selection={cb.selection}
+                  forecasts={cb.forecasts}
+                  routes={cb.routes.routes}
+                  actions={cb.actions}
+                  snapshot={snapshot}
+                  onClose={() => selectBoard(null)}
+                />
+              </>
+            ) : null}
+          </Panel>
+        ) : null}
+        {data ? (
+          <DetailsDrawer open={detailsOpen} onClose={() => setDetailsOpen(false)}>
+            <ScenarioResources state={snapshotState} />
             <StalePanel
               items={data.stale_critical}
               tasks={data.tasks}
@@ -614,6 +564,17 @@ export default function LiveCommandPage() {
               twinError={twin.error}
               onFocus={setFocus}
             />
+            {/* With a proposal pending it sits under "Needs you"; otherwise Replan and the last decision live here. */}
+            {pendingProposals.length === 0 ? (
+              <ProposalPanel
+                data={data}
+                twin={twinData}
+                run={run}
+                busy={busy}
+                serverNow={serverNow}
+                highlightId={highlight}
+              />
+            ) : null}
             <GroundRecord
               record={data.ground_record}
               zones={data.zones}
@@ -624,11 +585,6 @@ export default function LiveCommandPage() {
               }}
             />
             {isPackage ? null : <ResponseRecord items={data.response_record ?? []} />}
-            <ActivityLog
-              decisions={data.decisions ?? []}
-              serverNow={serverNow}
-              onSelect={selectFromLog}
-            />
             {board && t ? (
               <>
                 <details className="dm-section lc-board-sec" open>
@@ -646,30 +602,17 @@ export default function LiveCommandPage() {
                 </details>
                 <details className="dm-section lc-board-sec">
                   <summary>
-                    <h2>Board activity</h2>
-                    <EvidenceTag kind="simulated" />
-                  </summary>
-                  <ol className="dm-log">
-                    {board.events.slice(0, 60).map((e, i) => (
-                      <li key={`${e.minute}-${i}-${e.text}`}>
-                        <span className="lc-num lc-dim">{simClock(e.minute)}</span>
-                        <span>
-                          {e.actor !== "board" ? (
-                            <Tag tone={e.actor === "agent" ? "info" : "brand"}>{e.actor === "agent" ? "Claude" : "You"}</Tag>
-                          ) : null}{" "}
-                          {e.text}
-                        </span>
-                      </li>
-                    ))}
-                  </ol>
-                </details>
-                <details className="dm-section lc-board-sec">
-                  <summary>
                     <h2>Board model inputs</h2>
                   </summary>
                   <ul className="dm-note dm-inputs">
-                    <li>Wind: {board.env.spread.wind.label}; {board.env.spread.wind.heightNote}.</li>
-                    <li>Fuel: {board.env.spread.ground.fuelLabel}; moisture {ACTIVITY[cb.activity].moisture} (Scott &amp; Burgan 2005).</li>
+                    <li>Fire spread: {fireModelLabel(board)}.</li>
+                    <li>
+                      Wind: {studioWindLabel(board) ?? "none yet; it comes from the Simulation Studio run that starts a fire"}.
+                    </li>
+                    <li>
+                      Fuel: {board.env.spread.ground.fuelLabel}; moisture{" "}
+                      {studioMoistureLabel(board) ?? "none yet; it comes from the Simulation Studio run that starts a fire"}.
+                    </li>
                     <li>Terrain: {board.env.spread.ground.terrainLabel}.</li>
                     <li>Stations: {board.env.basesLabel}.</li>
                     <li>
@@ -677,15 +620,102 @@ export default function LiveCommandPage() {
                       {cb.crewRoutes.error ? ` (road times unavailable: ${cb.crewRoutes.error})` : ""}.
                     </li>
                     <li>Carless households: {board.env.noVehicleLabel}.</li>
+                    <li>
+                      Households and engines:{" "}
+                      {snapshot ? snapshotInputsLine(snapshot) : "no resource snapshot loaded (see Scenario resources)"}.
+                    </li>
                     <li>Congestion: {CONGESTION_LABEL}.</li>
                   </ul>
                 </details>
                 <p className="dm-note dm-footnote">
                   Simulated board: fires, units and households are simulated in this browser on the {drillName} zones and
-                  roads; only fire reports come from the drill. Not operational guidance.
+                  roads. Fires start only from Simulation Studio runs; drill fire reports only join a fire already there.
+                  Not operational guidance.
                 </p>
               </>
             ) : null}
+          </DetailsDrawer>
+        ) : null}
+        {gate}
+      </main>
+      {data ? (
+        <aside className="lc-col lc-right" aria-label="AI agent, items needing you and audit log">
+          <AgentControl
+            agent={cb.agent}
+            ready={!!board}
+            autopilot={cb.autopilot}
+            onAutopilot={cb.setAutopilot}
+            aside={
+              <>
+                <ShortcutHint />
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  aria-expanded={detailsOpen}
+                  aria-haspopup="dialog"
+                  onClick={() => setDetailsOpen((v) => !v)}
+                >
+                  Details
+                </Button>
+              </>
+            }
+          />
+          <BoardClock board={cb} />
+          {needsYou ? (
+            <section className="lc-needs" aria-labelledby="lc-needs-title">
+              <header className="lc-needs-head">
+                <h2 id="lc-needs-title">Needs you</h2>
+                {pendingProposals.length ? (
+                  <Tag tone="warning">
+                    {pendingProposals.length} proposal{pendingProposals.length === 1 ? "" : "s"}
+                  </Tag>
+                ) : null}
+              </header>
+              {studioError ? (
+                <Notice tone="warning" compact>
+                  {studioError}
+                </Notice>
+              ) : null}
+              {cb.notice ? (
+                <div className="lc-needs-notice">
+                  <Notice tone="warning" compact>
+                    {cb.notice}
+                  </Notice>
+                  <Button variant="ghost" size="sm" onClick={() => cb.setNotice(null)}>
+                    Dismiss
+                  </Button>
+                </div>
+              ) : null}
+              {cb.routes.error ? (
+                <Notice tone="danger" compact>
+                  Board routes unavailable: {cb.routes.error}
+                </Notice>
+              ) : null}
+              {actionError && !selected ? (
+                <Notice tone="danger" compact>
+                  {actionError}
+                </Notice>
+              ) : null}
+              {pendingProposals.length ? (
+                <ProposalPanel
+                  data={data}
+                  twin={twinData}
+                  run={run}
+                  busy={busy}
+                  serverNow={serverNow}
+                  highlightId={highlight}
+                />
+              ) : null}
+            </section>
+          ) : null}
+          <div className="lc-audit-wrap">
+            <AuditLog
+              entries={audit.entries}
+              pending={audit.pending}
+              now={serverNow}
+              onSelectReports={selectFromLog}
+              onSelectBoard={selectBoard}
+            />
           </div>
         </aside>
       ) : null}

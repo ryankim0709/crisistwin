@@ -281,6 +281,7 @@ API serves `camp-2018-drill` (always) and the active incident; any other id is
   "source": "package",                        // "bundle" (Camp) | "package" (Studio drill package)
   "package_id": "pkg_1a2b3c4d5e6f",           // null for Camp
   "activated_at": "2026-10-24T20:01:00Z",     // null until a controller switches
+  "region_id": "berkeley-hills-tilden",        // Studio region of the package (summary.region_id); null for Camp
   "join": { "invite_required": true } }
 ```
 
@@ -1484,6 +1485,38 @@ Configuration (server environment, never `VITE_*`): `ANTHROPIC_API_KEY` and `CAR
 (both paid), optional `CARTESIA_VOICE_ID`, `CARTESIA_TTS_MODEL` (default `sonic-3.6`) and
 `VOICE_MODEL` (default `claude-opus-5-5`). See [`app/backend/README.md`](../app/backend/README.md).
 
+## Studio fires
+
+Simulation Studio publishes the fire it just ran so the Live command page can start the same
+fires. Everything is simulated (`evidence_class: "simulated"`). Code: `api/live/studio_fires.py`.
+
+`POST /api/live/studio-fires` (controller) with:
+
+```json
+{ "scenario_id": "berkeley-hills", "name": "Berkeley Hills, NE wind", "region_id": "berkeley",
+  "ignitions": [{ "id": "F1", "name": "F1", "lon": -122.24, "lat": 37.88, "start_minute": 0 }],
+  "wind": { "speed_mph": 25, "from_deg": 45, "source": "assumed", "label": "Assumed 25 mph NE" },
+  "moisture": { "preset": "dry", "label": "Dry fuels",
+    "values": { "dead1h": 0.03, "dead10h": 0.04, "dead100h": 0.05, "liveHerb": 0.3, "liveWoody": 0.6 } },
+  "horizon_minutes": 360 }
+```
+
+Limits: 1 to 5 ignitions with unique ids, finite WGS84 `lon`/`lat`, integer `start_minute` 0 to
+`horizon_minutes`, horizon 1 to 1440, wind speed 0 to 60 mph, `from_deg` 0 to 360, moisture values
+finite 0.01 to 3, strings capped (`name` 80). Errors are `400 {error: "invalid_studio_fire", detail}`.
+The fire is stamped with the active incident; `outside_drill` lists ignition ids more than 3 km
+outside the bounding box of the drill's zones. Stored in `live_studio_fires` (newest 20 per
+incident). Answers `201`:
+
+```json
+{ "fire_id": "sf_0a1b2c3d4e5f", "incident_id": "pkg-example", "incident_name": "Berkeley Hills",
+  "published_at": "2026-10-24T18:00:00Z", "outside_drill": [] }
+```
+
+`GET /api/live/incidents/{id}/studio-fires[?after=<ISO Z>]` (any live role) answers
+`{fires: [{fire_id, published_at, incident_id, name, scenario_id, region_id, ignitions, wind,
+moisture, horizon_minutes, outside_drill}], evidence_class: "simulated"}`, newest first, at most 10.
+
 ## Endpoint summary (v2 additions)
 
 | Method and path | Role |
@@ -1583,3 +1616,5 @@ change; the API never creates indexes on request paths.
    Moving real (non-drill) data later would need its own plan.
 5. Atlas user: read/write on that one database only; network access as the team
    already configured.
+| `POST /api/live/studio-fires` | controller ([Studio fires](#studio-fires)) |
+| `GET incidents/{id}/studio-fires[?after=]` | any |

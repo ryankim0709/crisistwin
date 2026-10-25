@@ -175,8 +175,15 @@ def _ring_centroid(geometry: dict) -> tuple[float, float]:
     return sum(p[0] for p in ring) / len(ring), sum(p[1] for p in ring) / len(ring)
 
 
+SNAPSHOT_DEMAND_NOTE = (
+    "Demand is the scenario resource snapshot's evacuating vehicles per zone (docs/scenario-snapshots.md: "
+    "synthetic households, each taking min(vehicles, 2) cars; households without a vehicle need transport and "
+    "add none), replacing homes x vehicles per home; every evacuating vehicle leaves once its zone is ordered."
+)
+
+
 @functools.lru_cache(maxsize=4)
-def _package_inputs(path: str, seed: int) -> TwinInputs:
+def _package_inputs(path: str, seed: int, zone_vehicles: tuple[tuple[str, int], ...] | None = None) -> TwinInputs:
     with open(path, encoding="utf-8") as fh:
         bundle = json.load(fh)
     meta = bundle.get("drill_package") or {}
@@ -197,13 +204,19 @@ def _package_inputs(path: str, seed: int) -> TwinInputs:
     network = RoadNetwork(nodes=nodes, edges=tuple(edges))
     departing = sorted({e.from_node for e in edges})
     points = [nodes[n] for n in departing]
+    snapshot = dict(zone_vehicles) if zone_vehicles is not None else None
     zones = []
     for feat in bundle["zones"]["features"]:
         geometry = feat["geometry"]
         inside = sorted(departing[i] for i in _points_inside(geometry, points, range(len(points))))
         origins = tuple(inside) or (_nearest_node(nodes, departing, *_ring_centroid(geometry)),)
+        vehicles = int(feat.get("vehicles") or 0)
+        if snapshot is not None:
+            vehicles = int(snapshot.get(str(feat["id"]), 0))
+        if vehicles < 0:
+            raise ValueError(f"zone {feat['id']}: negative vehicles")
         zones.append(DemandZone(id=str(feat["id"]), name=str(feat.get("name") or feat["id"]),
-                                households=int(feat.get("households") or 0), vehicles=int(feat.get("vehicles") or 0),
+                                households=int(feat.get("households") or 0), vehicles=vehicles,
                                 origin_nodes=origins, geometry=geometry))
     destinations = []
     for feat in bundle["destinations"]["features"]:
@@ -227,7 +240,7 @@ def _package_inputs(path: str, seed: int) -> TwinInputs:
     scenario = {
         "network": network, "zones": tuple(zones), "destinations": tuple(destinations), "events": (),
         "evidence_class": "fixture", "roads_evidence_class": "derived", "destinations_evidence_class": "derived",
-        "notes": list(PACKAGE_ASSUMPTIONS),
+        "notes": list(PACKAGE_ASSUMPTIONS) if snapshot is None else [SNAPSHOT_DEMAND_NOTE, *PACKAGE_ASSUMPTIONS[1:]],
     }
     params = TrafficParams(seed=seed)
     model = simulated.get("model") or {}
@@ -240,10 +253,14 @@ def _package_inputs(path: str, seed: int) -> TwinInputs:
                       roads_package=str(meta.get("package_id") or Path(path).name))
 
 
-def package_inputs(path, seed: int = TrafficParams.seed) -> TwinInputs:
+def package_inputs(path, seed: int = TrafficParams.seed, zone_vehicles=None) -> TwinInputs:
     """Twin inputs from a Studio drill package (a replay bundle with `drill_package`): its roads, synthetic
-    zones, exits and simulated fire fronts; assumptions in `PACKAGE_ASSUMPTIONS`. Cached per process."""
-    return _package_inputs(str(Path(path).resolve()), int(seed))
+    zones, exits and simulated fire fronts; assumptions in `PACKAGE_ASSUMPTIONS`. Cached per process.
+
+    `zone_vehicles` ({zone id: evacuating vehicles}, from the scenario resource snapshot) replaces each zone's
+    package vehicles (a zone missing from it gets 0); the twin's total demand is then the snapshot's total."""
+    key = None if zone_vehicles is None else tuple(sorted((str(k), int(v)) for k, v in zone_vehicles.items()))
+    return _package_inputs(str(Path(path).resolve()), int(seed), key)
 
 
 def with_people_behavior(inputs: TwinInputs, people) -> TwinInputs:

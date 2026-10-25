@@ -58,6 +58,38 @@ const BOARD_ROWS: { key: string; label: string; swatch: ReactNode }[] = [
     ),
   },
   {
+    key: "bd-fireline",
+    label: "Fire line ahead of a fire: built solid, planned dashed (sim; a barrier in the fire model)",
+    swatch: (
+      <svg viewBox="0 0 20 14" aria-hidden="true">
+        <line x1="1" y1="7" x2="10" y2="7" stroke={BOARD_COLOR.fireLine} strokeWidth="3" />
+        <line x1="10" y1="7" x2="19" y2="7" stroke={BOARD_COLOR.fireLine} strokeWidth="2" strokeDasharray="3 2" />
+      </svg>
+    ),
+  },
+  {
+    key: "bd-evac",
+    label: "Evacuating vehicles on their road route, one dot per 10+ vehicles (sim)",
+    swatch: (
+      <svg viewBox="0 0 20 14" aria-hidden="true">
+        <line x1="1" y1="7" x2="19" y2="7" stroke={MAP_COLOR.route} strokeWidth="2" strokeDasharray="3 2" />
+        <circle cx="7" cy="7" r="3" fill={BOARD_COLOR.evacuee} stroke="#fff" strokeWidth="1" />
+        <circle cx="14" cy="7" r="3" fill={BOARD_COLOR.evacuee} stroke="#fff" strokeWidth="1" />
+      </svg>
+    ),
+  },
+  {
+    key: "bd-traffic",
+    label: "Evacuation route: free / labelled Slow (x1.25+) / Jammed (x2+) in traffic, wider = more cars (sim)",
+    swatch: (
+      <svg viewBox="0 0 20 14" aria-hidden="true">
+        <line x1="1" y1="3" x2="19" y2="3" stroke={MAP_COLOR.route} strokeWidth="2" strokeDasharray="3 2" />
+        <line x1="1" y1="7" x2="19" y2="7" stroke={BOARD_COLOR.trafficSlow} strokeWidth="2.5" strokeDasharray="3 2" />
+        <line x1="1" y1="11.5" x2="19" y2="11.5" stroke={BOARD_COLOR.trafficJam} strokeWidth="3" strokeDasharray="3 2" />
+      </svg>
+    ),
+  },
+  {
     key: "bd-station",
     label: "Fire station (sim)",
     swatch: (

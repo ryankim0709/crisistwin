@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Button, EvidenceTag, IconButton, Notice, SegmentedControl, Tag, buttonClass } from "../ui";
 import { simClock } from "../demo/format";
-import { ACTIVITIES, ACTIVITY } from "../demo/model";
-import { BOARD_SPEEDS, MONITORING, type CommandBoard } from "../demo/useCommandBoard";
-import { WEATHER_PRESETS } from "../demo/useDemoEnvironment";
+import { MONITORING, type CommandBoard } from "../demo/useCommandBoard";
+import { BoardSpeedSlider } from "./BoardClock";
 import { drillAction } from "./api";
 import { drillClock, drillDate, drillNowAt, elapsed } from "./format";
 import type { ActiveIncident } from "./active";
@@ -160,7 +159,8 @@ function useDismiss(ref: RefObject<HTMLDetailsElement | null>) {
 
 /**
  * The simulated board's controls: AI monitoring, the board clock (its own simulated time, not
- * the drill clock), and a "Conditions" popover for fire activity, wind and restart.
+ * the drill clock), and a "Conditions" popover showing the wind, with restart. Fires and their
+ * wind and moisture come from Simulation Studio; the board starts none itself.
  */
 export function BoardControls({ board: cb }: { board: CommandBoard }) {
   const ref = useRef<HTMLDetailsElement>(null);
@@ -188,37 +188,19 @@ export function BoardControls({ board: cb }: { board: CommandBoard }) {
           <Button size="sm" variant="secondary" onClick={() => cb.setRunning((r) => !r)} aria-pressed={!cb.running}>
             {cb.running ? "Pause" : "Resume"}
           </Button>
-          <SegmentedControl label="Board clock speed" options={BOARD_SPEEDS} value={cb.speed} onChange={cb.setSpeed} />
-          <Button
-            size="sm"
-            variant={cb.igniteMode ? "primary" : "secondary"}
-            aria-pressed={cb.igniteMode}
-            onClick={() => cb.setIgniteMode((m) => !m)}
-          >
-            {cb.igniteMode ? "Click the map to start a fire" : "Add fire"}
-          </Button>
+          <BoardSpeedSlider board={cb} />
           <details ref={ref} className="lc-board-more">
             <summary className={buttonClass({ variant: "ghost", size: "sm" })}>Conditions</summary>
             <div className="lc-menu-pop lc-board-pop" role="group" aria-label="Simulated board conditions">
-              <span className="lc-board-label">Fire activity</span>
-              <SegmentedControl
-                label="Fire activity"
-                options={ACTIVITIES.map((a) => ({ value: a, label: ACTIVITY[a].label, title: `${ACTIVITY[a].label} fire activity` }))}
-                value={cb.activity}
-                onChange={cb.changeActivity}
-              />
-              <span className="lc-board-label">Wind</span>
-              <SegmentedControl
-                label="Wind"
-                options={WEATHER_PRESETS.map((p) => ({ value: p.value, label: p.label, title: p.title }))}
-                value={cb.weather}
-                onChange={cb.setWeather}
-              />
-              {windNow ? (
-                <span className="lc-dim lc-num" title={board.env.spread.wind.label}>
-                  Wind now {windNow.speedMetersPerSecond.toFixed(1)} m/s from {Math.round(windNow.fromDegrees)}°
+              <span className="lc-board-label">Wind and fuel moisture</span>
+              {board.conditions && windNow ? (
+                <span className="lc-dim lc-num">
+                  Assumed in Simulation Studio ({board.conditions.tag}): {windNow.speedMetersPerSecond.toFixed(1)} m/s from{" "}
+                  {Math.round(windNow.fromDegrees)}°, {board.conditions.moistureLabel} fuel moisture
                 </span>
-              ) : null}
+              ) : (
+                <span className="lc-dim">From the Simulation Studio run that starts a fire; no fire yet.</span>
+              )}
               <Button
                 size="sm"
                 variant="ghost"
@@ -236,6 +218,47 @@ export function BoardControls({ board: cb }: { board: CommandBoard }) {
       ) : (
         <span className="lc-dim">Board loading…</span>
       )}
+    </div>
+  );
+}
+
+/** The page's only chrome: a pulsing "Live" pill over the map with the incident name and drill
+ *  clock. A drill still says "exercise", so it never reads as a real incident; once the command
+ *  data stops updating the pulse stops and it says "Offline" or "Stale" with the age instead. */
+export function LiveBadge({
+  data,
+  receivedAt,
+  now,
+  connectionError,
+}: {
+  data: CommandResponse;
+  receivedAt: number | null;
+  now: number;
+  connectionError: string | null;
+}) {
+  const age = receivedAt === null ? 0 : now - receivedAt;
+  const stale = connectionError !== null || age > STALE_AFTER_MS;
+  const name = data.incident?.name ?? "Live command";
+  const exercise = (data.incident?.mode ?? "exercise") !== "live";
+  const title = exercise ? name.replace(/\s+exercise$/i, "") : name;
+  const drill = data.drill;
+  const t = drill && drill.started_at !== null ? drillNowAt(drill, receivedAt, now) : null;
+  return (
+    <div
+      className={`lc-live${stale ? " lc-live--stale" : ""}`}
+      role="status"
+      title={connectionError ?? undefined}
+    >
+      <span className="lc-live-dot" aria-hidden="true" />
+      <span className="lc-live-word">
+        {stale ? `${connectionError ? "Offline" : "Stale"}, ${elapsed(age)}` : exercise ? "Live exercise" : "Live"}
+      </span>
+      <span className="lc-live-name">{title}</span>
+      {t ? (
+        <span className="lc-live-clock lc-num" aria-label={`Drill time ${drillClock(t, true)} UTC, ${drillDate(t)}`}>
+          {drillClock(t, true)} UTC
+        </span>
+      ) : null}
     </div>
   );
 }

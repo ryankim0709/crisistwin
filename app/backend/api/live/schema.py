@@ -18,6 +18,20 @@ NULLABLE_STR = {"bsonType": ["string", "null"]}
 COORD = {"bsonType": "array", "minItems": 2, "maxItems": 2, "items": NUM}
 NULLABLE_COORD = {"bsonType": ["array", "null"], "minItems": 2, "maxItems": 2, "items": NUM}
 NULLABLE_DATE = {"bsonType": ["date", "null"]}
+COUNT = {"bsonType": ["int", "long"], "minimum": 0}
+NULLABLE_COUNT = {"bsonType": ["int", "long", "null"], "minimum": 0}
+POINT = {
+    "bsonType": "object",
+    "required": ["type", "coordinates"],
+    "properties": {"type": {"enum": ["Point"]}, "coordinates": COORD},
+}
+"""GeoJSON Point, WGS84 ``[lon, lat]``."""
+BASED_COUNT = {
+    "bsonType": "object",
+    "required": ["value", "basis"],
+    "properties": {"value": NULLABLE_COUNT, "basis": {"enum": ["observed", "estimated", "synthetic", "unknown"]}},
+}
+"""A count with its evidence: ``value`` null only with ``basis: "unknown"`` (never 0 for unknown)."""
 
 
 def _enum(*values: Any) -> dict[str, Any]:
@@ -209,6 +223,78 @@ VALIDATORS: dict[str, dict[str, Any]] = {
             "expires_at": DATE,
         },
     ),
+    # Scenario resource snapshots (docs/scenario-snapshots.md): one current snapshot per incident.
+    "scenario_snapshots": _schema(
+        ["snapshot_id", "incident_id", "scenario_time", "created_at", "version", "sources", "assumptions", "totals"],
+        {
+            "snapshot_id": STR,
+            "incident_id": STR,
+            "scenario_time": DATE,
+            "created_at": DATE,
+            "version": STR,
+            "content_hash": STR,
+            "sources": {
+                "bsonType": "array",
+                "items": {"bsonType": "object", "required": ["id", "name"],
+                          "properties": {"id": STR, "name": STR, "url": NULLABLE_STR, "license": NULLABLE_STR}},
+            },
+            "assumptions": {"bsonType": "object"},
+            "totals": {
+                "bsonType": "object",
+                "required": ["households", "occupants", "vehicles", "evacuating_vehicles", "no_vehicle_households",
+                             "stations", "engines_total", "engines_available"],
+                "properties": {
+                    "households": COUNT, "occupants": NULLABLE_COUNT, "vehicles": NULLABLE_COUNT,
+                    "evacuating_vehicles": COUNT, "no_vehicle_households": COUNT, "stations": COUNT,
+                    "engines_total": COUNT, "engines_available": COUNT,
+                },
+            },
+            "zones": {"bsonType": "array"},
+        },
+    ),
+    "snapshot_households": _schema(
+        ["snapshot_id", "incident_id", "household_id", "zone_id", "location", "occupants", "vehicles",
+         "evacuating_vehicles", "needs_transport"],
+        {
+            "snapshot_id": STR,
+            "incident_id": STR,
+            "household_id": STR,
+            "zone_id": STR,
+            "location": POINT,
+            "occupants": BASED_COUNT,
+            "vehicles": BASED_COUNT,
+            "evacuating_vehicles": BASED_COUNT,
+            "needs_transport": {"bsonType": "bool"},
+        },
+    ),
+    "snapshot_stations": _schema(
+        ["snapshot_id", "incident_id", "station_id", "name", "location", "basis", "engines", "engines_total",
+         "engines_available"],
+        {
+            "snapshot_id": STR,
+            "incident_id": STR,
+            "station_id": STR,
+            "name": STR,
+            "location": POINT,
+            "basis": _enum("observed", "synthetic"),
+            "engines": {
+                "bsonType": "array",
+                "minItems": 1,
+                "items": {
+                    "bsonType": "object",
+                    "required": ["engine_id", "kind", "status_at_start", "basis"],
+                    "properties": {
+                        "engine_id": STR,
+                        "kind": _enum("type1_engine", "type3_engine"),
+                        "status_at_start": _enum("available", "committed", "out_of_service"),
+                        "basis": _enum("observed", "estimated", "synthetic"),
+                    },
+                },
+            },
+            "engines_total": COUNT,
+            "engines_available": COUNT,
+        },
+    ),
     # Hidden ground truth of generated reports (ADR 0042). Never served: see api/live/simtruth.py.
     "sim_truth": _schema(
         ["incident_id", "event_id", "true", "entry", "written_at"],
@@ -277,6 +363,20 @@ INDEXES: dict[str, list[IndexModel]] = {
         IndexModel([("expires_at", ASCENDING)], expireAfterSeconds=0),
     ],
     "sim_truth": [IndexModel([("incident_id", ASCENDING), ("event_id", ASCENDING)], unique=True)],
+    "scenario_snapshots": [
+        IndexModel([("incident_id", ASCENDING)], unique=True),
+        IndexModel([("snapshot_id", ASCENDING)], unique=True),
+    ],
+    "snapshot_households": [
+        IndexModel([("snapshot_id", ASCENDING), ("household_id", ASCENDING)], unique=True),
+        IndexModel([("snapshot_id", ASCENDING), ("zone_id", ASCENDING), ("household_id", ASCENDING)]),
+        IndexModel([("incident_id", ASCENDING), ("snapshot_id", ASCENDING)]),
+        IndexModel([("location", "2dsphere")]),
+    ],
+    "snapshot_stations": [
+        IndexModel([("snapshot_id", ASCENDING), ("station_id", ASCENDING)], unique=True),
+        IndexModel([("incident_id", ASCENDING), ("snapshot_id", ASCENDING)]),
+    ],
 }
 
 DRILL_DATA_COLLECTIONS = (
@@ -297,6 +397,10 @@ DRILL_DATA_COLLECTIONS = (
 """Dropped by ``live_init_db --drop-drill-data`` (devices are kept so tokens stay valid)."""
 
 
+UNAUTHORIZED_CODES = (13, 8000)
+"""MongoDB ``Unauthorized`` and Atlas ``AtlasError`` (action not allowed for the user)."""
+
+
 def apply(db: Database, drop_drill_data: bool = False) -> list[str]:
     """Create or update collections, validators and indexes. Returns log lines."""
     lines = []
@@ -307,8 +411,15 @@ def apply(db: Database, drop_drill_data: bool = False) -> list[str]:
     existing = set(db.list_collection_names())
     for name, validator in VALIDATORS.items():
         if name in existing:
-            db.command("collMod", name, validator=validator, validationLevel="strict", validationAction="error")
-            lines.append(f"updated validator {name}")
+            try:
+                db.command("collMod", name, validator=validator, validationLevel="strict", validationAction="error")
+                lines.append(f"updated validator {name}")
+            except OperationFailure as exc:
+                if exc.code not in UNAUTHORIZED_CODES:
+                    raise
+                # A database user without collMod (e.g. an Atlas readWrite role) keeps the existing
+                # validator; new collections still get theirs at creation.
+                lines.append(f"kept validator {name} (collMod not allowed for this database user)")
         else:
             try:
                 db.create_collection(name, validator=validator, validationLevel="strict", validationAction="error")

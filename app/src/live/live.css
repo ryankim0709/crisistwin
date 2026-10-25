@@ -21,11 +21,9 @@
   position: relative;
   height: 100dvh;
   display: grid;
-  grid-template-columns: 320px minmax(0, 1fr) 380px;
-  grid-template-rows: minmax(48px, auto) minmax(0, 1fr);
-  grid-template-areas:
-    "head head head"
-    "queue map right";
+  grid-template-columns: minmax(0, 1fr) 380px;
+  grid-template-rows: minmax(0, 1fr);
+  grid-template-areas: "map right";
   background: var(--ct-bg);
   color: var(--ct-ink);
   font-family: var(--ct-font-sans);
@@ -34,9 +32,7 @@
 }
 .lc-root--gate {
   grid-template-columns: minmax(0, 1fr);
-  grid-template-areas:
-    "head"
-    "map";
+  grid-template-areas: "map";
 }
 .lc-root h1,
 .lc-root h2,
@@ -111,6 +107,82 @@
   font-weight: var(--ct-weight-semibold);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+/* The page's only chrome: a "Live" pill over the top of the map (below the layer toggles), with a
+   pulsing dot while the command data is fresh. Stale or offline: a still amber dot and the age. */
+.lc-live {
+  position: absolute;
+  top: 52px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - 32px);
+  padding: 6px 14px 6px 12px;
+  border: 1px solid var(--ct-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ct-surface) 92%, transparent);
+  backdrop-filter: blur(8px);
+  box-shadow: var(--ct-shadow-sm, 0 1px 2px rgb(0 0 0 / 0.12));
+  font-size: var(--ct-text-sm);
+  white-space: nowrap;
+}
+.lc-live-dot {
+  position: relative;
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--lc-evacuate);
+}
+.lc-live-dot::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--lc-evacuate);
+  animation: lc-live-pulse 1.6s ease-out infinite;
+}
+@keyframes lc-live-pulse {
+  from {
+    transform: scale(1);
+    opacity: 0.7;
+  }
+  to {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+}
+.lc-live-word {
+  font-weight: var(--ct-weight-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: var(--ct-text-xs, 11px);
+}
+.lc-live-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: var(--ct-weight-semibold);
+}
+.lc-live-clock {
+  color: var(--ct-ink-muted);
+}
+.lc-live--stale .lc-live-dot {
+  background: var(--ct-warning);
+}
+.lc-live--stale .lc-live-dot::after {
+  display: none;
+}
+.lc-live--stale .lc-live-word {
+  color: var(--ct-warning);
+}
+@media (prefers-reduced-motion: reduce) {
+  .lc-live-dot::after {
+    animation: none;
+    display: none;
+  }
 }
 
 .lc-menu {
@@ -1069,7 +1141,7 @@
 
 @media (max-width: 1200px) {
   .lc-root {
-    grid-template-columns: 300px minmax(0, 1fr) 360px;
+    grid-template-columns: minmax(0, 1fr) 360px;
   }
   .lc-zone {
     grid-template-columns: 160px minmax(0, 1fr);
@@ -1203,9 +1275,154 @@
   background: var(--ct-surface-raised);
 }
 
-/* Right column: the commander's decision list scrolls on its own so the live panels stay near. */
-.lc-right .dm-decisions {
-  max-height: 360px;
+/* Right column, top to bottom: the AI agent switch, "Needs you" (only while something awaits the
+   operator) and the audit log, which takes the rest of the height and scrolls on its own. */
+.lc-agent {
+  flex: none;
+  display: grid;
+  gap: var(--ct-space-2);
+  padding: var(--ct-space-3) var(--ct-space-4);
+  border-bottom: 1px solid var(--ct-border);
+}
+.lc-agent-head {
+  display: flex;
+  align-items: center;
+  gap: var(--ct-space-2);
+  min-width: 0;
+}
+.lc-agent-head h2 {
+  font-size: var(--ct-text-base);
+  font-weight: var(--ct-weight-semibold);
+}
+.lc-agent-aside {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ct-space-1);
+  margin-left: auto;
+}
+.lc-agent-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ct-space-2);
+}
+.lc-agent-ask {
+  margin-left: auto;
+}
+.lc-agent .ui-loading {
+  padding: 0;
+}
+.lc-needs {
+  flex: none;
+  max-height: 45%;
+  overflow-y: auto;
+  display: grid;
+  gap: var(--ct-space-2);
+  padding-top: var(--ct-space-3);
+  border-bottom: 1px solid var(--ct-border);
+  background: var(--ct-warning-soft);
+}
+.lc-needs-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ct-space-2);
+  padding: 0 var(--ct-space-4);
+}
+.lc-needs-head h2 {
+  font-size: var(--ct-text-base);
+  font-weight: var(--ct-weight-semibold);
+}
+.lc-needs > .ui-notice,
+.lc-needs-notice {
+  margin: 0 var(--ct-space-4);
+}
+.lc-needs-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--ct-space-2);
+}
+.lc-needs-notice > .ui-notice {
+  flex: 1;
+  min-width: 0;
+}
+.lc-needs > :last-child:not(.lc-props) {
+  margin-bottom: var(--ct-space-3);
+}
+/* The last decision is already in the audit log; keep the pending proposal compact. */
+.lc-needs .lc-last {
+  display: none;
+}
+.lc-needs .lc-prop {
+  border-bottom: 0;
+}
+.lc-audit-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Selection card: the selected live report or board item, floating over the map's top left,
+   under the layer toggles. */
+.lc-float.ui-panel {
+  position: absolute;
+  top: 64px;
+  left: var(--ct-space-3);
+  z-index: var(--ct-z-overlay);
+  width: min(380px, calc(100% - 2 * var(--ct-space-3)));
+  max-height: calc(100% - 64px - 88px);
+  overflow-y: auto;
+  padding: 0;
+}
+.lc-float .lc-sel,
+.lc-float .dm-section {
+  border-bottom: 0;
+}
+.lc-float .lc-board-sel-note,
+.lc-float .dm-selected {
+  background: transparent;
+}
+.lc-float > .ui-notice {
+  margin: var(--ct-space-3) var(--ct-space-3) 0;
+}
+
+/* Details drawer: everything that left the sidebar, sliding over the map's right edge. */
+.lc-drawer.ui-panel {
+  position: absolute;
+  top: var(--ct-space-3);
+  right: var(--ct-space-3);
+  bottom: var(--ct-space-3);
+  z-index: var(--ct-z-sheet);
+  display: flex;
+  flex-direction: column;
+  width: min(520px, calc(100% - 2 * var(--ct-space-3)));
+  padding: 0;
+  overflow: hidden;
+  animation: lc-drawer-in var(--ct-duration) var(--ct-ease);
+}
+@keyframes lc-drawer-in {
+  from {
+    transform: translateX(16px);
+    opacity: 0;
+  }
+}
+.lc-drawer-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ct-space-2);
+  padding: var(--ct-space-3) var(--ct-space-3) var(--ct-space-3) var(--ct-space-4);
+  border-bottom: 1px solid var(--ct-border);
+}
+.lc-drawer-head h2 {
+  font-size: var(--ct-text-base);
+  font-weight: var(--ct-weight-semibold);
+}
+.lc-drawer-body {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
 }
 .lc-board-sec > summary {
@@ -1228,4 +1445,100 @@
 .lc-board-sec > summary h2 {
   font-size: var(--ct-text-base);
   font-weight: var(--ct-weight-semibold);
+}
+
+/* Board clock in the sidebar: board time, pause, speed-up slider. */
+.lc-board-clock {
+  flex: none;
+  display: grid;
+  gap: var(--ct-space-2);
+  padding: var(--ct-space-3) var(--ct-space-4);
+  border-bottom: 1px solid var(--ct-border);
+}
+.lc-board-clock-head {
+  display: flex;
+  align-items: center;
+  gap: var(--ct-space-2);
+}
+.lc-board-clock-head h2 {
+  font-size: var(--ct-text-sm);
+  font-weight: var(--ct-weight-semibold);
+}
+.lc-board-clock-time {
+  margin-left: auto;
+  font-weight: var(--ct-weight-semibold);
+}
+.lc-speed {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--ct-space-2);
+  font-size: var(--ct-text-sm);
+}
+.lc-speed-label {
+  color: var(--ct-ink-muted);
+}
+.lc-speed-value {
+  min-width: 11ch;
+  text-align: right;
+  color: var(--ct-ink-muted);
+}
+.lc-range {
+  width: 100%;
+  accent-color: var(--ct-brand);
+}
+.lc-board-reset-open {
+  justify-self: start;
+  margin-left: calc(-1 * var(--ct-space-2));
+}
+.lc-board-reset {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ct-space-2);
+  padding: var(--ct-space-2);
+  border: 1px solid var(--ct-danger-border);
+  border-radius: var(--ct-radius-md);
+  background: var(--ct-danger-soft);
+}
+.lc-board-reset-text {
+  flex-basis: 100%;
+  font-size: var(--ct-text-sm);
+}
+
+/* Scenario resources section of the details drawer (ScenarioResources.tsx). */
+.lc-snap-detail {
+  color: var(--ct-ink-muted);
+}
+.lc-snap-note {
+  margin: var(--ct-space-2) 0;
+}
+.lc-snap-sub {
+  margin: var(--ct-space-3) 0 var(--ct-space-1);
+  font-size: var(--ct-text-sm);
+  font-weight: var(--ct-weight-semibold);
+}
+.lc-snap-engines {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ct-space-1);
+}
+.lc-snap-json pre {
+  margin: var(--ct-space-1) 0 0;
+  max-height: 14rem;
+  overflow: auto;
+  padding: var(--ct-space-2);
+  background: var(--ct-surface-sunken);
+  border-radius: var(--ct-radius-sm);
+  font-family: var(--ct-font-mono);
+  font-size: var(--ct-text-2xs);
+}
+
+/* Snapshot facts: long values wrap instead of running past the drawer edge. */
+.lc-drawer .ui-facts dd {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }

@@ -26,9 +26,7 @@ interface Props {
   version: number;
   forecasts: Map<string, ZoneForecast>;
   selected: Selection | null;
-  igniteMode: boolean;
   onSelect: (sel: Selection | null) => void;
-  onIgnite: (coord: LonLat) => void;
 }
 
 /** MapLibre paint cannot read CSS variables; these mirror the greys and inks of the --ct-* tokens. */
@@ -344,17 +342,17 @@ const CLEARED_SOURCES = [
 ];
 
 export default function DemoMap({
-  zones, destinations, board, version, forecasts, selected, igniteMode, onSelect, onIgnite,
+  zones, destinations, board, version, forecasts, selected, onSelect,
 }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const fitted = useRef(false);
   const [ready, setReady] = useState(false);
-  const live = useRef({ board, zones, igniteMode, onSelect, onIgnite });
+  const live = useRef({ board, zones, onSelect });
 
   useEffect(() => {
-    live.current = { board, zones, igniteMode, onSelect, onIgnite };
-  }, [board, zones, igniteMode, onSelect, onIgnite]);
+    live.current = { board, zones, onSelect };
+  }, [board, zones, onSelect]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -380,10 +378,6 @@ export default function DemoMap({
       map.on("click", (e: MapMouseEvent) => {
         if (!map) return;
         const cur = live.current;
-        if (cur.igniteMode) {
-          cur.onIgnite([e.lngLat.lng, e.lngLat.lat]);
-          return;
-        }
         const layers = INTERACTIVE.filter((l) => map?.getLayer(l));
         const hit = map.queryRenderedFeatures(e.point, { layers });
         // Layer order of INTERACTIVE is the priority: team, then fire, then zone.
@@ -409,11 +403,6 @@ export default function DemoMap({
       setReady(false);
     };
   }, []);
-
-  // Crosshair in ignite mode; a class toggle, since React must not rewrite the classes MapLibre sets.
-  useEffect(() => {
-    container.current?.classList.toggle("dm-map--ignite", igniteMode);
-  }, [igniteMode]);
 
   // A different drill: frame its zones again once the new board is drawn.
   const zonesKey = zones.map((z) => z.id).join("|");

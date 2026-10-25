@@ -84,6 +84,7 @@ export default function ConfigPanel(props: ConfigPanelProps) {
     onImport,
     onLoadDemo,
     liveDrill,
+    liveFire,
     firefighting,
   } = props;
 
@@ -721,6 +722,7 @@ export default function ConfigPanel(props: ConfigPanelProps) {
         <p className="studio-status" role="status">
           {statusLine}
         </p>
+        {liveFire}
       </section>
     </Panel>
   );

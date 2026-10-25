@@ -1,9 +1,23 @@
 import type { GeoJSONSource, Map as MapLibreMap, MapMouseEvent } from "maplibre-gl";
 import { LEVEL_COLOR, MAP_COLOR } from "../live/CommandMap";
 import { fireHatch } from "../live/mapStyle";
+import type { ScenarioSnapshot, SnapshotStation } from "../live/scenarioSnapshot";
 import type { LonLat } from "../live/types";
+import { shortStationName } from "./format";
 import { boardFireFeatures, firePolygons } from "./fireFootprint";
-import { teamPosition, type Board, type RouteOption, type ZoneForecast } from "./model";
+import {
+  activeRoute,
+  attackPositions,
+  lineBuiltExtent,
+  positionEta,
+  evacueeMarkers,
+  routeDelayFactor,
+  teamPosition,
+  trafficPicture,
+  type Board,
+  type RouteOption,
+  type ZoneForecast,
+} from "./model";
 
 /**
  * The simulated fire board drawn on top of the live command map (a framework-free port of
@@ -18,14 +32,15 @@ export interface BoardLayerInput {
   forecasts: Map<string, ZoneForecast>;
   routes: ReadonlyMap<string, RouteOption[]>;
   selection: BoardSelection | null;
-  igniteMode: boolean;
+  /** The drill's resource snapshot (live/scenarioSnapshot.ts); station labels show its engine counts. */
+  snapshot?: ScenarioSnapshot | null;
 }
 
 export interface BoardLayers {
   update(input: BoardLayerInput): void;
   /**
    * True when a click at this event should be handled by the board and not by the live map:
-   * ignite mode is on, or a board feature (team, fire, non-quiet zone) is under the pointer.
+   * a board feature (team, fire, non-quiet zone) is under the pointer.
    * Pass as CommandMap's `interceptClick`.
    */
   claimsClick(e: MapMouseEvent): boolean;
@@ -40,6 +55,12 @@ export const BOARD_COLOR = {
   overrun: "#B3140C",
   overrunText: "#7A0A05",
   readyText: "#7A4B00",
+  /** Fire line (control line) built or planned ahead of a fire. */
+  fireLine: "#3B2A1A",
+  /** Evacuation traffic (simulated): route delay bands and the evacuee vehicle markers. */
+  trafficSlow: "#C26A00",
+  trafficJam: "#B3140C",
+  evacuee: "#1F6FEB",
 };
 
 type Feature = GeoJSON.Feature<GeoJSON.Geometry, Record<string, string | number | boolean | null>>;
@@ -108,8 +129,28 @@ function buildZones(board: Board, forecasts: Map<string, ZoneForecast>) {
   return { areas, labels };
 }
 
-/** Options of the selected zone (chosen one emphasised); other ordered zones show their chosen route thin. */
+/** Route delay bands (route time / free-flow time under the board's simulated traffic). */
+export const TRAFFIC_SLOW_FACTOR = 1.25;
+export const TRAFFIC_JAM_FACTOR = 2;
+
+/** Line properties of a route in use: delay band, label and width by the zone's vehicles on the road. */
+function trafficProps(board: Board, r: RouteOption, onRoad: number): Feature["properties"] {
+  const delay = routeDelayFactor(board, r);
+  const load = delay >= TRAFFIC_JAM_FACTOR ? "jammed" : delay >= TRAFFIC_SLOW_FACTOR ? "slow" : "free";
+  return {
+    load,
+    width: 2 + Math.min(5, onRoad / 150),
+    label: load === "free" ? "" : `${load === "jammed" ? "Jammed" : "Slow"} x${delay.toFixed(1)} (sim)`,
+  };
+}
+
+/**
+ * Options of the selected zone (chosen one emphasised); every other zone with households leaving
+ * (ordered or on the fire cue) shows its route. Routes in use are coloured and labelled by their
+ * simulated delay and thickened by the zone's vehicles on the road.
+ */
 function buildRoutes(board: Board, routes: ReadonlyMap<string, RouteOption[]>, selection: BoardSelection | null) {
+  const picture = trafficPicture(board);
   const lines: Feature[] = [];
   const dests = new Map<string, Feature>();
   const addDest = (r: RouteOption) => {
@@ -123,31 +164,137 @@ function buildRoutes(board: Board, routes: ReadonlyMap<string, RouteOption[]>, s
       const options = routes.get(zs.id) ?? (zs.route ? [zs.route] : []);
       for (const r of options) {
         if (r.line.length < 2) continue;
-        lines.push(lineFeature(r.line, { zone_id: zs.id, chosen: r.destination_id === chosen }));
+        const inUse = r.destination_id === activeRoute(zs)?.destination_id;
+        const traffic = trafficProps(board, r, inUse ? (picture.zones.get(zs.id)?.onRoad ?? 0) : 0);
+        lines.push(lineFeature(r.line, { zone_id: zs.id, chosen: r.destination_id === chosen, ...traffic, width: r.destination_id === chosen ? Math.max(3, Number(traffic.width)) : 1.8 }));
         addDest(r);
       }
-    } else if (zs.orderedAt !== null && zs.route && zs.route.line.length > 1) {
-      lines.push(lineFeature(zs.route.line, { zone_id: zs.id, chosen: false }));
-      addDest(zs.route);
+    } else {
+      const r = activeRoute(zs);
+      if (r && r.line.length > 1 && (zs.orderedAt !== null || (picture.zones.get(zs.id)?.committed ?? 0) > 0)) {
+        lines.push(lineFeature(r.line, { zone_id: zs.id, chosen: false, ...trafficProps(board, r, picture.zones.get(zs.id)?.onRoad ?? 0) }));
+        addDest(r);
+      }
     }
   }
   return { lines, dests: [...dests.values()] };
 }
 
-function buildTeams(board: Board) {
+/** Units within this distance share a spot and fan out, metres. */
+const SPOT_M = 15;
+/** Radius of the ring co-located units are drawn on, metres (a visible gap at city zoom 15 to 16). */
+const FAN_RADIUS_M = 30;
+const M_PER_DEG_LAT = 111_320;
+
+function metresBetween(a: LonLat, b: LonLat): number {
+  const dy = (b[1] - a[1]) * M_PER_DEG_LAT;
+  const dx = (b[0] - a[0]) * M_PER_DEG_LAT * Math.cos((a[1] * Math.PI) / 180);
+  return Math.hypot(dx, dy);
+}
+
+/**
+ * Where each unit is drawn. Units at (nearly) the same point, such as engines parked at one
+ * station, are spread on a ring of FAN_RADIUS_M around it, in unit-id order starting from north, so
+ * each stays visible and clickable. Deterministic; a lone unit stays at its true position.
+ */
+export function fanOutTeams(board: Board): Map<string, LonLat> {
+  const spots: { at: LonLat; members: { id: string; pos: LonLat }[] }[] = [];
+  for (const team of board.teams) {
+    const pos = teamPosition(board, team);
+    const spot = spots.find((s) => metresBetween(s.at, pos) < SPOT_M);
+    if (spot) spot.members.push({ id: team.id, pos });
+    else spots.push({ at: pos, members: [{ id: team.id, pos }] });
+  }
+  const out = new Map<string, LonLat>();
+  for (const spot of spots) {
+    const members = [...spot.members].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    const n = members.length;
+    members.forEach((m, i) => {
+      if (n === 1) return void out.set(m.id, m.pos);
+      const angle = -Math.PI / 2 + (i / n) * Math.PI * 2;
+      const dLat = (Math.sin(angle) * -FAN_RADIUS_M) / M_PER_DEG_LAT;
+      const dLon = (Math.cos(angle) * FAN_RADIUS_M) / (M_PER_DEG_LAT * Math.cos((spot.at[1] * Math.PI) / 180));
+      out.set(m.id, [spot.at[0] + dLon, spot.at[1] + dLat]);
+    });
+  }
+  return out;
+}
+
+function buildTeams(board: Board, fanned: Map<string, LonLat>) {
   const teams: Feature[] = [];
   const lines: Feature[] = [];
   for (const team of board.teams) {
-    const pos = teamPosition(board, team);
+    const pos = fanned.get(team.id) ?? teamPosition(board, team);
     teams.push(point(pos, { id: team.id, status: team.status }));
-    if (team.status === "en_route" && team.target) {
-      lines.push(lineFeature(team.route && team.route.length > 1 ? team.route : [pos, team.target], { id: team.id }));
-    }
+    // Only road lines are drawn: a unit waiting for its road route stays at its base, with no line.
+    if (team.status === "en_route" && team.route && team.route.length > 1) lines.push(lineFeature(team.route, { id: team.id }));
   }
   return { teams, lines };
 }
 
-function buildSelection(sel: BoardSelection | null, board: Board): { areas: Feature[]; points: Feature[] } {
+/** The snapshot station at a board station's place (within 100 m), if any. */
+function snapshotStationAt(snapshot: ScenarioSnapshot | null | undefined, at: LonLat): SnapshotStation | null {
+  let best: SnapshotStation | null = null;
+  let bestM = 100;
+  for (const s of snapshot?.stations ?? []) {
+    const m = metresBetween(at, s.location);
+    if (m < bestM) {
+      best = s;
+      bestM = m;
+    }
+  }
+  return best;
+}
+
+/**
+ * Station labels: "BFD 5 · 2/3" (engines available at the drill's start / total, from the snapshot;
+ * synthetic engines), then the units drawn at the station. Without a snapshot match only the name.
+ */
+function buildStations(board: Board, snapshot: ScenarioSnapshot | null | undefined) {
+  return board.stations.map((s) => {
+    const snap = snapshotStationAt(snapshot, s.location);
+    const name = shortStationName(s.name);
+    const parked = board.teams
+      .filter((t) => metresBetween(t.position, s.location) < 100 && t.status !== "en_route")
+      .map((t) => t.id)
+      .sort();
+    const head = snap ? `${name} · ${snap.engines_available}/${snap.engines_total}` : name;
+    return point(s.location, { name: head, text: parked.length ? `${head}\n${parked.join(" ")}` : head });
+  });
+}
+
+/** A point `f` of the way from `p` to `q` (straight, a few hundred metres at most). */
+function toward(p: LonLat, q: LonLat, f: number): LonLat {
+  return [p[0] + (q[0] - p[0]) * f, p[1] + (q[1] - p[1]) * f];
+}
+
+/**
+ * Fire line at attack positions (model.AttackLine): the planned line dashed, the part built so
+ * far solid. For the selected fire, also its candidate positions (attack.ts), thin dashed with a label.
+ */
+function buildAttackLines(board: Board, selection: BoardSelection | null) {
+  const lines: Feature[] = [];
+  const points: Feature[] = [];
+  for (const line of board.lines) {
+    const { point: p, a, b, aM, bM, id } = line.plan;
+    lines.push(lineFeature([a, p, b], { state: "planned" }));
+    const ext = lineBuiltExtent(line);
+    if (line.builtM > 0) lines.push(lineFeature([toward(p, a, aM > 0 ? ext.a / aM : 0), p, toward(p, b, bM > 0 ? ext.b / bM : 0)], { state: "built" }));
+    if (line.completedAt === null) points.push(point(p, { text: `${line.fireId} ${id}`, state: "line" }));
+  }
+  const fire = selection?.kind === "fire" ? board.fires.find((f) => f.id === selection.id) : undefined;
+  if (fire) {
+    for (const pos of attackPositions(board, fire)) {
+      if (pos.line) continue;
+      lines.push(lineFeature([pos.a, pos.point, pos.b], { state: "candidate" }));
+      const eta = positionEta(board, pos);
+      points.push(point(pos.point, { text: `${pos.id}${eta === null ? "" : ` · fire ${Math.round(eta)} min`} (forecast)`, state: "candidate" }));
+    }
+  }
+  return { lines, points };
+}
+
+function buildSelection(sel: BoardSelection | null, board: Board, fanned: Map<string, LonLat>): { areas: Feature[]; points: Feature[] } {
   const none = { areas: [], points: [] };
   if (!sel) return none;
   if (sel.kind === "fire") {
@@ -161,7 +308,7 @@ function buildSelection(sel: BoardSelection | null, board: Board): { areas: Feat
     return zone ? { areas: [polygon(zone.ring, { id: zone.id })], points: [] } : none;
   }
   const team = board.teams.find((t) => t.id === sel.id);
-  return team ? { areas: [], points: [point(teamPosition(board, team), { id: team.id })] } : none;
+  return team ? { areas: [], points: [point(fanned.get(team.id) ?? teamPosition(board, team), { id: team.id })] } : none;
 }
 
 function selectionCenter(sel: BoardSelection, board: Board): LonLat | null {
@@ -175,7 +322,7 @@ function selectionCenter(sel: BoardSelection, board: Board): LonLat | null {
 
 const SOURCES = [
   "bd-zones", "bd-zone-labels", "bd-routes", "bd-fires", "bd-fire-labels", "bd-team-lines", "bd-teams",
-  "bd-stations", "bd-dest", "bd-sel-area", "bd-sel-point",
+  "bd-stations", "bd-dest", "bd-sel-area", "bd-sel-point", "bd-evac", "bd-attack-lines", "bd-attack-points",
 ];
 const HATCH_IMAGE = "bd-fire-hatch";
 const FONT = ["Noto Sans Regular"];
@@ -216,11 +363,22 @@ function installLayers(map: MapLibreMap, beforeId: string): string[] {
     "line-opacity": 0.95,
   } });
   add({ id: "bd-sel-area", type: "line", source: "bd-sel-area", layout: { "line-join": "round" }, paint: { "line-color": MAP_COLOR.selection, "line-width": 4.5 } });
+  // Evacuation routes: colour and label by simulated delay band, width by the zone's vehicles on the road.
   add({ id: "bd-routes", type: "line", source: "bd-routes", layout: { "line-join": "round" }, paint: {
-    "line-color": MAP_COLOR.route,
-    "line-width": ["case", ["get", "chosen"], 3, 1.8] as never,
-    "line-opacity": ["case", ["get", "chosen"], 0.85, 0.55] as never,
+    "line-color": ["match", ["get", "load"], "jammed", BOARD_COLOR.trafficJam, "slow", BOARD_COLOR.trafficSlow, MAP_COLOR.route] as never,
+    "line-width": ["coalesce", ["get", "width"], 1.8] as never,
+    "line-opacity": ["case", ["get", "chosen"], 0.9, 0.7] as never,
     "line-dasharray": [2, 1.5],
+  } });
+  add({ id: "bd-route-labels", type: "symbol", source: "bd-routes", filter: ["!=", ["coalesce", ["get", "label"], ""], ""], minzoom: 11,
+    layout: { "symbol-placement": "line", "text-field": ["get", "label"], "text-font": FONT, "text-size": 11, "text-optional": true },
+    paint: { "text-color": ["match", ["get", "load"], "jammed", BOARD_COLOR.trafficJam, BOARD_COLOR.trafficSlow] as never, "text-halo-color": BOARD_COLOR.halo, "text-halo-width": 1.6 } });
+  // Evacuating vehicles (simulated), sampled: one dot per few vehicles, on the route's road line.
+  add({ id: "bd-evac", type: "circle", source: "bd-evac", paint: {
+    "circle-radius": ["interpolate", ["linear"], ["zoom"], 10, 2.2, 14, 4] as never,
+    "circle-color": BOARD_COLOR.evacuee,
+    "circle-stroke-color": "#FFFFFF",
+    "circle-stroke-width": 1,
   } });
   // Fires: burning is hatched with a solid edge, contained is lighter with a dashed edge, out is a grey scar.
   add({ id: "bd-fire-fill", type: "fill", source: "bd-fires", paint: {
@@ -234,10 +392,20 @@ function installLayers(map: MapLibreMap, beforeId: string): string[] {
     "line-dasharray": ["case", ["==", ["get", "status"], "contained"], ["literal", [3, 2]], ["literal", [1, 0]]] as never,
   } });
   add({ id: "bd-fire-scar", type: "line", source: "bd-fires", filter: ["==", ["get", "status"], "out"], paint: { "line-color": BOARD_COLOR.scarEdge, "line-width": 1 } });
+  // Fire line ahead of fires: built solid, planned dashed, a selected fire's candidates thin dashed.
+  add({ id: "bd-attack-lines", type: "line", source: "bd-attack-lines", layout: { "line-cap": "round" }, paint: {
+    "line-color": BOARD_COLOR.fireLine,
+    "line-width": ["match", ["get", "state"], "built", 4, "planned", 2.5, 1.6] as never,
+    "line-opacity": ["match", ["get", "state"], "candidate", 0.7, 1] as never,
+    "line-dasharray": ["match", ["get", "state"], "built", ["literal", [1, 0]], ["literal", [2, 1.5]]] as never,
+  } });
+  add({ id: "bd-attack-points", type: "symbol", source: "bd-attack-points", minzoom: 12,
+    layout: { "text-field": ["get", "text"], "text-font": FONT, "text-size": 11, "text-offset": [0, 1.2], "text-anchor": "top", "text-optional": true },
+    paint: text(BOARD_COLOR.fireLine, 1.6) });
   add({ id: "bd-team-lines", type: "line", source: "bd-team-lines", paint: { "line-color": MAP_COLOR.responder, "line-width": 1.5, "line-dasharray": [1.5, 1.5] } });
   add({ id: "bd-stations", type: "circle", source: "bd-stations", paint: { "circle-radius": 5, "circle-color": "#FFFFFF", "circle-stroke-color": MAP_COLOR.ink, "circle-stroke-width": 3 } });
   add({ id: "bd-station-labels", type: "symbol", source: "bd-stations", minzoom: 11,
-    layout: { "text-field": ["get", "name"], "text-font": FONT, "text-size": 11, "text-offset": [0, 1.1], "text-anchor": "top", "text-optional": true },
+    layout: { "text-field": ["get", "text"], "text-font": FONT, "text-size": 11, "text-offset": [0, 2.2], "text-anchor": "top", "text-optional": true },
     paint: text(MAP_COLOR.ink, 1.4) });
   add({ id: "bd-dest", type: "circle", source: "bd-dest", paint: { "circle-radius": 4.5, "circle-color": "#FFFFFF", "circle-stroke-color": MAP_COLOR.shelter, "circle-stroke-width": 2 } });
   add({ id: "bd-dest-labels", type: "symbol", source: "bd-dest", minzoom: 12.5,
@@ -271,10 +439,9 @@ function installLayers(map: MapLibreMap, beforeId: string): string[] {
 export function attachBoardLayers(
   map: MapLibreMap,
   beforeId: string,
-  handlers: { onSelect(sel: BoardSelection | null): void; onIgnite(coord: LonLat): void },
+  handlers: { onSelect(sel: BoardSelection | null): void },
 ): BoardLayers {
   const layerIds = installLayers(map, beforeId);
-  let igniteMode = false;
   let board: Board | null = null;
   let lastSelKey: string | null = null;
   let disposed = false;
@@ -291,10 +458,6 @@ export function attachBoardLayers(
   };
 
   const onClick = (e: MapMouseEvent) => {
-    if (igniteMode) {
-      handlers.onIgnite([e.lngLat.lng, e.lngLat.lat]);
-      return;
-    }
     const sel = hitBoard(e);
     if (sel) {
       handlers.onSelect(sel);
@@ -304,7 +467,7 @@ export function attachBoardLayers(
     if (!map.queryRenderedFeatures(e.point, { layers: live }).length) handlers.onSelect(null);
   };
   const pointer = () => { map.getCanvas().style.cursor = "pointer"; };
-  const reset = () => { map.getCanvas().style.cursor = igniteMode ? "crosshair" : ""; };
+  const reset = () => { map.getCanvas().style.cursor = ""; };
   map.on("click", onClick);
   for (const layer of INTERACTIVE) {
     map.on("mouseenter", layer, pointer);
@@ -316,12 +479,10 @@ export function attachBoardLayers(
 
   return {
     claimsClick(e) {
-      return !disposed && (igniteMode || hitBoard(e) !== null);
+      return !disposed && hitBoard(e) !== null;
     },
     update(input) {
       if (disposed) return;
-      igniteMode = input.igniteMode;
-      map.getCanvas().style.cursor = igniteMode ? "crosshair" : "";
       board = input.board;
       if (!board) {
         // Between boards: do not leave the previous drill's marks on the map.
@@ -331,16 +492,21 @@ export function attachBoardLayers(
       }
       const z = buildZones(board, input.forecasts);
       const r = buildRoutes(board, input.routes, input.selection);
-      const t = buildTeams(board);
-      const sel = buildSelection(input.selection, board);
+      const fanned = fanOutTeams(board);
+      const t = buildTeams(board, fanned);
+      const sel = buildSelection(input.selection, board, fanned);
       setData("bd-zones", z.areas);
       setData("bd-zone-labels", z.labels);
       setData("bd-routes", r.lines);
+      setData("bd-evac", evacueeMarkers(board).map((m) => point(m.at, { zone_id: m.zoneId, vehicles: m.vehicles })));
       setData("bd-fires", fireFeatures(board));
       setData("bd-fire-labels", buildFireLabels(board));
       setData("bd-team-lines", t.lines);
+      const al = buildAttackLines(board, input.selection);
+      setData("bd-attack-lines", al.lines);
+      setData("bd-attack-points", al.points);
       setData("bd-teams", t.teams);
-      setData("bd-stations", board.stations.map((s) => point(s.location, { name: s.name })));
+      setData("bd-stations", buildStations(board, input.snapshot));
       setData("bd-dest", r.dests);
       setData("bd-sel-area", sel.areas);
       setData("bd-sel-point", sel.points);
