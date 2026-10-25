@@ -6,7 +6,21 @@ import type { BoardHome, ProjectedStreets } from "./streets";
 import { BUSH_DENSITY, FALLBACK_CANOPY, FuelFamily, PINE_SHARE } from "./fuelStyle";
 
 /** Instance caps (totals across kinds); dense or large grids are thinned uniformly. */
-export const COVER_CAPS = { trees: 18_000, bushes: 7_000, houses: 6_000 } as const;
+export const COVER_CAPS = { trees: 46_000, bushes: 12_000, houses: 6_000 } as const;
+/**
+ * Tree slots per cell: a jittered 2x2 sub-grid, each slot filled with probability
+ * `cover * TREE_SLOTS_FILL`, so dense canopy reads as even forest without sampling gaps.
+ */
+const TREE_SLOTS = 2;
+const TREE_SLOTS_FILL = 1.0;
+/** Minimum cover (0..1) for timber/shrub fuel classes so mapped forest never reads bare. */
+const FUEL_COVER_FLOOR: Partial<Record<FuelFamily, number>> = {
+  [FuelFamily.TimberUnderstory]: 0.3,
+  [FuelFamily.TimberLitter]: 0.4,
+  [FuelFamily.Slash]: 0.15,
+  [FuelFamily.Shrub]: 0.1,
+  [FuelFamily.GrassShrub]: 0.06,
+};
 /**
  * Miniature scale of the /diorama tree shapes (≈9.7 units tall at scale 1). Trees are drawn
  * at a constant stylized size on the 600-unit board, loosely varied by canopy height.
@@ -33,9 +47,9 @@ const HOUSE_ROOFS = [0xc27a5a, 0x6f7b86, 0x8fa182] as const;
 const CLUMP_UNITS = 16;
 const REGIONAL = {
   treeScale: 1.5,
-  treeCapCut: 0.4,
+  treeCapCut: 0.2,
   bushScale: 1.2,
-  bushCapCut: 0.6,
+  bushCapCut: 0.4,
   houseSize: 1.0,
   houseJitter: 0.5,
   houseDrop: 0.2,
@@ -181,7 +195,8 @@ class FireInstances {
   }
 }
 
-function pineCanopy() {
+function pineCanopy(cheap = false) {
+  if (cheap) return place(paint(new THREE.ConeGeometry(2.6, 8, 5), 0xffffff), 0, 5.2, 0);
   return mergeAll([
     place(paint(new THREE.ConeGeometry(2.8, 4.4, 7), 0xffffff), 0, 4.4, 0),
     place(paint(new THREE.ConeGeometry(2.2, 3.6, 7), 0xffffff), 0, 6.5, 0),
@@ -189,7 +204,8 @@ function pineCanopy() {
   ]);
 }
 
-function roundCanopy() {
+function roundCanopy(cheap = false) {
+  if (cheap) return place(paint(new THREE.IcosahedronGeometry(3, 0), 0xffffff), 0, 5.4, 0);
   return mergeAll([
     place(paint(new THREE.IcosahedronGeometry(2.9, 0), 0xffffff), 0, 5.4, 0),
     place(paint(new THREE.IcosahedronGeometry(2.0, 0), 0xffffff), 1.3, 4.5, 0.9),
@@ -284,7 +300,7 @@ export class CoverLayer {
       const fam = families[i] as FuelFamily;
       if (fam === FuelFamily.Water || fam === FuelFamily.None) continue;
       const cc = useCanopy ? cover[i] || 0 : FALLBACK_CANOPY[fam];
-      let t = Math.min(1, cc) * (fam === FuelFamily.Urban ? 0.4 : 1);
+      let t = Math.min(1, Math.max(cc, FUEL_COVER_FLOOR[fam] ?? 0)) * (fam === FuelFamily.Urban ? 0.4 : 1);
       if (blend > 0 && t > 0) {
         // Forest masses: modulate density by smooth noise so trees gather into soft clumps.
         const c = i % cols;
@@ -295,7 +311,7 @@ export class CoverLayer {
         t = Math.min(1, t * THREE.MathUtils.lerp(1, clump, blend));
       }
       treeP[i] = t;
-      treeSum += t;
+      treeSum += t * TREE_SLOTS * TREE_SLOTS * TREE_SLOTS_FILL;
       const b = BUSH_DENSITY[fam] * (1 - Math.min(1, cc) * 0.5);
       bushP[i] = b;
       bushSum += b;
@@ -309,22 +325,28 @@ export class CoverLayer {
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
         const i = r * cols + c;
-        tree: if (
-          treeP[i] > 0 &&
-          pines.cells.length + rounds.cells.length < treeCap &&
-          hash2(c * 0.913, r * 1.171) < treeP[i] * treeThin
-        ) {
+        for (let slot = 0; slot < TREE_SLOTS * TREE_SLOTS; slot++) {
+          if (
+            !(treeP[i] > 0) ||
+            pines.cells.length + rounds.cells.length >= treeCap * 1.1 ||
+            hash2(c * 0.913 + slot * 3.7, r * 1.171 + slot * 0.53) >=
+              Math.min(1, treeP[i] * TREE_SLOTS_FILL) * treeThin
+          )
+            continue;
           const fam = families[i] as FuelFamily;
           frame.cellCentre(c, r, centre);
-          const spread = cellWorld * 0.8 + blend * REGIONAL.treeSpread;
-          const x = centre.x + (hash2(c, r * 1.3) - 0.5) * spread;
-          const z = centre.z + (hash2(r * 0.7, c * 1.9) - 0.5) * spread;
-          if (blend > 0 && !frame.inside(x, z)) break tree;
+          const sub = cellWorld / TREE_SLOTS;
+          const sx = (slot % TREE_SLOTS) - (TREE_SLOTS - 1) / 2;
+          const sz = Math.floor(slot / TREE_SLOTS) - (TREE_SLOTS - 1) / 2;
+          const spread = sub * 0.85 + blend * REGIONAL.treeSpread;
+          const x = centre.x + sx * sub + (hash2(c + slot, r * 1.3) - 0.5) * spread;
+          const z = centre.z + sz * sub + (hash2(r * 0.7 + slot, c * 1.9) - 0.5) * spread;
+          if (blend > 0 && !frame.inside(x, z)) continue;
           if (blend > 0) {
             const at = frame.cellAt(x, z);
-            if (at < 0 || families[at] === FuelFamily.Water) break tree;
+            if (at < 0 || families[at] === FuelFamily.Water) continue;
           }
-          if (streets?.onRoad(x, z)) break tree;
+          if (streets?.onRoad(x, z)) continue;
           // Stands: conifer share varies smoothly by block so pines cluster.
           const stand =
             blend < 0.01
@@ -332,7 +354,8 @@ export class CoverLayer {
               : hash2(Math.floor(x / 24) * 3.1, Math.floor(z / 24) * 1.7);
           const tall = useCanopy ? THREE.MathUtils.clamp((heightM[i] || 0) / 30, 0, 1.2) : 0.5;
           const pine =
-            hash2(c * 2.3, r * 0.37) < PINE_SHARE[fam] * (0.5 + stand) + (tall > 0.8 ? 0.15 : 0);
+            hash2(c * 2.3 + slot, r * 0.37) <
+            PINE_SHARE[fam] * (0.5 + stand) + (tall > 0.8 ? 0.15 : 0);
           const jitter = hash2(x, z);
           const s =
             TREE_SCALE *
@@ -379,9 +402,11 @@ export class CoverLayer {
       flatShading: true,
     });
     const trunkChar = new THREE.Color(0x221d1a);
+    // Regional boards: sub-pixel trees get single-solid shapes and no trunk meshes.
+    const cheap = blend > 0.6;
     const kinds: [Placement, THREE.BufferGeometry, THREE.BufferGeometry, string][] = [
-      [pines, pineCanopy(), trunk(2.6), "pine"],
-      [rounds, roundCanopy(), trunk(3.6), "round"],
+      [pines, pineCanopy(cheap), trunk(2.6), "pine"],
+      [rounds, roundCanopy(cheap), trunk(3.6), "round"],
     ];
     for (const [p, canopyGeo, trunkGeo, name] of kinds) {
       if (p.cells.length === 0) {
@@ -390,19 +415,26 @@ export class CoverLayer {
         continue;
       }
       const canopy = this.instanced(canopyGeo, canopyMat, p.cells.length, `${name}-canopies`);
-      const trunkMesh = this.instanced(trunkGeo, trunkMat, p.cells.length, `${name}-trunks`);
+      const trunkMesh = cheap
+        ? null
+        : this.instanced(trunkGeo, trunkMat, p.cells.length, `${name}-trunks`);
+      if (!trunkMesh) trunkGeo.dispose();
       this.sets.push(
         new FireInstances(
           Int32Array.from(p.cells),
           Float32Array.from(p.m),
           [
             { mesh: canopy, base: Float32Array.from(p.colorsA), burned: CHAR, glows: true },
-            {
-              mesh: trunkMesh,
-              base: Float32Array.from(p.colorsB),
-              burned: trunkChar,
-              glows: false,
-            },
+            ...(trunkMesh
+              ? [
+                  {
+                    mesh: trunkMesh,
+                    base: Float32Array.from(p.colorsB),
+                    burned: trunkChar,
+                    glows: false,
+                  },
+                ]
+              : []),
           ],
           new THREE.Vector3(0.72, 0.78, 0.72),
         ),
