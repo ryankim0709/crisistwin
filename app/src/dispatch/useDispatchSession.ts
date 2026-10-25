@@ -94,6 +94,8 @@ export interface SessionInputs {
   frames: readonly FrameSummary[];
   /** Fires engines can attack, and their burned area per frame. */
   fireTargets: readonly FireTarget[];
+  /** Per fire (index as fireTargets), minutes from ignition to report (response/report.ts). */
+  reportDelaysMinutes?: readonly number[];
   fireFrames: readonly FireAreaFrame[];
   /**
    * Re-solves the fire with fires put out and control lines built (tacticOptions.ts), for the
@@ -501,7 +503,7 @@ export function useDispatchSession(onTime?: (minutes: number) => void): Dispatch
       if (inputs.apparatus) {
         engine.setApparatusAccess(inputs.apparatus.access, inputs.apparatus.kinds, inputs.apparatus.notes);
       }
-      engine.setFires(inputs.fireTargets, inputs.fireFrames);
+      engine.setFires(inputs.fireTargets, inputs.fireFrames, inputs.reportDelaysMinutes ?? []);
       engineRef.current = engine;
       inputsRef.current = inputs;
       outcomeRef.current = inputs.initialOutcome;

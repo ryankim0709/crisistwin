@@ -199,7 +199,7 @@ export function buildObservation(inputs: ObservationInputs): Observation {
     }
     if (unit.status !== "stranded" && engine.apparatusAccess) {
       engine.fires.forEach((fire, index) => {
-        if (!engine.fireBurning(index) || (unit.task === "fire_attack" && unit.fire === index)) return;
+        if (!engine.fireReported(index) || (unit.task === "fire_attack" && unit.fire === index)) return;
         if (engine.attackRoute(unit, index)) return;
         const reason = engine.attackNoAccess(unit, index);
         if (reason) noAccess[fire.target.id] = noAccessText(reason);
@@ -223,7 +223,9 @@ export function buildObservation(inputs: ObservationInputs): Observation {
     };
   });
 
-  const fires: FireObservation[] = engine.fires.map((fire, index) => {
+  // A fire that has ignited but not been reported (response/report.ts) is not visible yet.
+  const fires: FireObservation[] = engine.fires.flatMap((fire, index) => {
+    if (engine.fireBurning(index) && !engine.fireReported(index)) return [];
     const { target } = fire;
     const started = target.ignitedMinute !== null && target.ignitedMinute <= minute;
     const status: FireObservation["status"] =

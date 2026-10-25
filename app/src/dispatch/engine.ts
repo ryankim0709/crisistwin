@@ -331,6 +331,13 @@ export interface FireAttackState {
   heldMinute: number | null;
   /** The held alert was raised and its crews released. */
   heldAnnounced: boolean;
+  /**
+   * Minute the fire reaches dispatch (ignition + call-in/processing delay, response/report.ts),
+   * or null while it has not ignited. Until then the dispatcher cannot see or order on it.
+   */
+  reportedMinute: number | null;
+  /** The "reported" alert was raised. */
+  reportAnnounced: boolean;
 }
 
 export interface IgnitionEvent {
@@ -521,8 +528,15 @@ export class DispatchEngine {
   }
 
   /** The fires engines can attack, and their burned area over time (from the current run). */
-  setFires(targets: readonly FireTarget[], frames: readonly FireAreaFrame[]): void {
-    this.fires = targets.map((target) => ({
+  setFires(
+    targets: readonly FireTarget[],
+    frames: readonly FireAreaFrame[],
+    reportDelaysMinutes: readonly number[] = [],
+  ): void {
+    this.fires = targets.map((target, index) => ({
+      reportedMinute:
+        target.ignitedMinute === null ? null : target.ignitedMinute + (reportDelaysMinutes[index] ?? 0),
+      reportAnnounced: false,
       target,
       lineMeters: 0,
       outMinute: null,
@@ -588,6 +602,12 @@ export class DispatchEngine {
       fire.target.ignitedMinute !== null &&
       fire.target.ignitedMinute <= this.minute
     );
+  }
+
+  /** Fire is burning and has been reported to dispatch (orderable, visible). */
+  fireReported(index: number): boolean {
+    const at = this.fires[index].reportedMinute;
+    return this.fireBurning(index) && at !== null && at <= this.minute;
   }
 
   /** Set when a line tactic gained or lost crews: the session re-plans lines and re-solves. */
@@ -705,7 +725,7 @@ export class DispatchEngine {
    */
   attackOptions(index: number, max: number): { unitIds: string[]; outMinute: number | null }[] {
     const fire = this.fires[index];
-    if (!this.fireBurning(index) || fire.target.directBlocked) return [];
+    if (!this.fireReported(index) || fire.target.directBlocked) return [];
     const candidates = this.units
       .filter((unit) => !(unit.task === "fire_attack" && unit.fire === index))
       .flatMap((unit) => {
@@ -998,10 +1018,22 @@ export class DispatchEngine {
   }
 
   private emitIgnitions(after: number, upTo: number): void {
-    for (const ignition of this.ignitions) {
-      if (ignition.minute > after && ignition.minute <= upTo) {
-        this.alert("ignition", `Fire ${ignition.name} starts.`, true);
+    // With fires set, the dispatcher learns of a fire when it is reported, not when it ignites.
+    if (this.fires.length === 0) {
+      for (const ignition of this.ignitions) {
+        if (ignition.minute > after && ignition.minute <= upTo) {
+          this.alert("ignition", `Fire ${ignition.name} starts.`, true);
+        }
       }
+    }
+    for (const fire of this.fires) {
+      if (fire.reportAnnounced || fire.reportedMinute === null || fire.reportedMinute > upTo) continue;
+      fire.reportAnnounced = true;
+      this.alert(
+        "ignition",
+        `Fire ${fire.target.name} reported at T+${Math.round(fire.reportedMinute)} (ignited T+${Math.round(fire.target.ignitedMinute ?? 0)}).`,
+        true,
+      );
     }
   }
 
@@ -1063,6 +1095,7 @@ export class DispatchEngine {
       const fire = this.fires[index];
       if (fire.outMinute !== null) return reject(`${fire.target.name} is already out.`);
       if (!this.fireBurning(index)) return reject(`${fire.target.name} has not started.`);
+      if (!this.fireReported(index)) return reject(`${fire.target.name} has not been reported yet.`);
       const tactic = order.tactic ?? "direct";
       const blockedTactic = tacticBlocked(fire.target, tactic);
       if (blockedTactic)

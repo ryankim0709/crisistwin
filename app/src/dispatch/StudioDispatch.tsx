@@ -31,7 +31,7 @@ import { DispatchOverlay } from "./scene/DispatchOverlay";
 import { dispatchApparatus } from "./stationApparatus";
 import { useDispatchSession } from "./useDispatchSession";
 import { useSuppressionBases } from "../studio/suppressionBases";
-import { DEFAULT_FIREFIGHTING, startMsOf } from "../studio/firefighting";
+import { DEFAULT_FIREFIGHTING, ignitionReportDelayMinutes, startMsOf } from "../studio/firefighting";
 import {
   HOUSEHOLD_BEHAVIOR_OPTIONS,
   behaviorLabel,
@@ -400,11 +400,21 @@ export default function StudioDispatch({
     const names = Object.fromEntries(
       current.scenario.ignitions.map((ignition) => [ignition.id, ignition.name || ignition.id]),
     );
+    const targets = fireTargets(current.run, names);
+    const firefightingSettings = current.scenario.firefighting ?? DEFAULT_FIREFIGHTING;
     session.start({
       area,
       exposure,
       frames,
-      fireTargets: fireTargets(current.run, names),
+      fireTargets: targets,
+      // Same seeded per-fire report delay as Studio's firefighting (response/report.ts).
+      reportDelaysMinutes: targets.map((target) =>
+        target.ignitedMinute === null
+          ? 0
+          : ignitionReportDelayMinutes(current.landscape,
+              { longitude: target.location[0], latitude: target.location[1] },
+              target.ignitedMinute, firefightingSettings),
+      ),
       fireFrames: fireAreaFrames(current.run),
       solver,
       showFire,
