@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Button, EvidenceTag, LoadingState, Metric, MetricGrid, Notice, SegmentedControl, Tag } from "../ui";
+import { Button, EvidenceTag, LoadingState, Metric, MetricGrid, Notice, SegmentedControl, Tag, type SegmentedOption } from "../ui";
 import { fetchActive } from "../live/active";
 import { DEFAULT_INCIDENT_ID, LiveError, readToken, triageReport } from "../live/api";
 import DrillPicker from "../live/DrillPicker";
@@ -10,6 +10,7 @@ import { usePoll } from "../live/usePoll";
 import "../live/live.css";
 import AgentConsole from "./AgentConsole";
 import type { DemoOrder } from "./contracts";
+import DemoDiorama from "./DemoDiorama";
 import DemoLegend from "./DemoLegend";
 import DemoMap, { type Selection } from "./DemoMap";
 import { FIRE_STATUS, SOURCE_LABEL, TEAM_STATUS, nf, simClock } from "./format";
@@ -40,6 +41,7 @@ import { useCrewRoutes } from "./useCrewRoutes";
 import { useDemoAgent } from "./useDemoAgent";
 import { WEATHER_PRESETS, useDemoEnvironment, zonesCenter } from "./useDemoEnvironment";
 import { useDemoRoutes } from "./useDemoRoutes";
+import { useArrivalField } from "./useArrivalField";
 import { CONGESTION_LABEL, TRAVEL_LABEL } from "./observation";
 import "./demo.css";
 
@@ -59,6 +61,16 @@ const MONITORING = [
   { value: "off", label: "Off", title: "Claude is not called" },
   { value: "on", label: "On", title: "Claude watches the board and acts when something changes" },
 ] as const;
+type StageView = "map" | "diorama";
+const VIEW_STORAGE_KEY = "crisistwin.demo.view";
+
+function loadView(): StageView {
+  try {
+    return window.localStorage.getItem(VIEW_STORAGE_KEY) === "diorama" ? "diorama" : "map";
+  } catch {
+    return "map";
+  }
+}
 const OPEN_REPORT = new Set(["unverified", "corroborated", "responder_confirmed", "confirmed"]);
 
 function baseZones(data: CommandResponse): BaseZone[] {
@@ -101,6 +113,15 @@ export default function DemoPage() {
   const preset = WEATHER_PRESETS.find((p) => p.value === weather) ?? WEATHER_PRESETS[0];
   const zoneCentre = useMemo(() => (data ? zonesCenter(data.zones) : null), [data]);
   const env = useDemoEnvironment(preset, incidentId, zoneCentre);
+  const [view, setView] = useState<StageView>(loadView);
+  const chooseView = useCallback((next: StageView) => {
+    setView(next);
+    try {
+      window.localStorage.setItem(VIEW_STORAGE_KEY, next);
+    } catch {
+      // Storage can be unavailable (private mode); the choice then lasts for this visit only.
+    }
+  }, []);
 
   // A different drill: drop the board and selection; the effect below rebuilds it from the new data.
   useEffect(() => {
@@ -242,6 +263,23 @@ export default function DemoPage() {
 
   const t = board ? totals(board, forecasts) : null;
   const windNow = board ? windAt(board.env.spread.wind, board.minute) : null;
+  // The 3D view draws the prebuilt LANDFIRE region covering the drill; without one only the map shows.
+  const landscape = board?.env.landscape ?? null;
+  const field = useArrivalField(board, version, landscape);
+  const showDiorama = view === "diorama" && board !== null && landscape !== null;
+  const viewOptions: SegmentedOption<StageView>[] = [
+    { value: "map", label: "Map" },
+    {
+      value: "diorama",
+      label: "3D diorama",
+      disabled: !landscape,
+      title: landscape
+        ? `Stylized 3D miniature of ${board?.env.landscapeRegion?.name ?? "the drill region"}`
+        : board
+          ? "No prebuilt 3D landscape covers this drill, so only the map is available"
+          : "Waiting for the board to load",
+    },
+  ];
   const fires = board
     ? activeFires(board).sort((a, b) => (a.status === b.status ? fireAreaHa(b) - fireAreaHa(a) : a.status === "burning" ? -1 : 1))
     : [];
@@ -419,18 +457,38 @@ export default function DemoPage() {
       ) : null}
 
       <main className="lc-stage">
-        <DemoMap
-          zones={data?.zones ?? []}
-          destinations={data?.destinations ?? []}
-          board={board}
-          version={version}
-          forecasts={forecasts}
-          selected={selection}
-          igniteMode={igniteMode}
-          onSelect={setSelection}
-          onIgnite={onIgnite}
-        />
-        {board ? <DemoLegend /> : null}
+        {showDiorama ? (
+          <DemoDiorama
+            board={board}
+            version={version}
+            field={field}
+            landscape={landscape}
+            regionName={board.env.landscapeRegion?.name ?? null}
+            forecasts={forecasts}
+            wind={windNow}
+            selected={selection}
+            igniteMode={igniteMode}
+            onIgnite={onIgnite}
+          />
+        ) : (
+          <DemoMap
+            zones={data?.zones ?? []}
+            destinations={data?.destinations ?? []}
+            board={board}
+            version={version}
+            forecasts={forecasts}
+            selected={selection}
+            igniteMode={igniteMode}
+            onSelect={setSelection}
+            onIgnite={onIgnite}
+          />
+        )}
+        {board && !showDiorama ? <DemoLegend /> : null}
+        {board ? (
+          <div className="dm-view">
+            <SegmentedControl label="View" options={viewOptions} value={showDiorama ? "diorama" : "map"} onChange={chooseView} />
+          </div>
+        ) : null}
         {gate}
       </main>
 

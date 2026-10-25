@@ -8,7 +8,7 @@ import {
 } from "maplibre-gl";
 import { useEffect, useRef, useState } from "react";
 import { LEVEL_COLOR, MAP_COLOR } from "../live/CommandMap";
-import { fireHatch, loadStyle } from "../live/mapStyle";
+import { SATELLITE_STYLE, fireHatch } from "../live/mapStyle";
 import { labelPoint } from "../live/format";
 import type { CommandZone, Destination, LonLat } from "../live/types";
 import { fireRing, teamPosition, type Board, type ZoneForecast } from "./model";
@@ -187,7 +187,7 @@ function installLayers(map: MapLibreMap): void {
     source: "dm-zones",
     paint: {
       "fill-color": STATE_MATCH(zoneColor) as never,
-      "fill-opacity": STATE_MATCH({ overrun: 0.22, ordered: 0.12, threatened: 0.1, quiet: 0.02 }) as never,
+      "fill-opacity": STATE_MATCH({ overrun: 0.22, ordered: 0.12, threatened: 0.1, quiet: 0 }) as never,
     },
   });
   map.addLayer({
@@ -197,7 +197,7 @@ function installLayers(map: MapLibreMap): void {
     paint: {
       "line-color": STATE_MATCH(zoneColor) as never,
       "line-width": STATE_MATCH({ overrun: 3, ordered: 2.5, threatened: 2, quiet: 0.6 }) as never,
-      "line-opacity": STATE_MATCH({ overrun: 1, ordered: 0.9, threatened: 0.9, quiet: 0.5 }) as never,
+      "line-opacity": STATE_MATCH({ overrun: 1, ordered: 0.9, threatened: 0.9, quiet: 0 }) as never,
     },
   });
   map.addLayer({
@@ -358,7 +358,8 @@ export default function DemoMap({
   useEffect(() => {
     const controller = new AbortController();
     let map: MapLibreMap | null = null;
-    loadStyle(controller.signal).then((style) => {
+    // Satellite imagery, as the Studio map view; the style is local, so this resolves at once.
+    Promise.resolve(SATELLITE_STYLE).then((style) => {
       if (controller.signal.aborted || !container.current) return;
       map = new MapLibreMap({
         container: container.current,

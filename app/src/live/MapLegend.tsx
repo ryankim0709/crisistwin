@@ -1,5 +1,72 @@
 import type { ReactNode } from "react";
+import { EvidenceTag } from "../ui";
+import { BOARD_COLOR } from "../demo/boardMapLayers";
 import { LEVEL_COLOR, MAP_COLOR } from "./CommandMap";
+
+const zoneSw = (color: string, opacity: number, width = 2): ReactNode => (
+  <svg viewBox="0 0 20 14" aria-hidden="true">
+    <rect x="1" y="1" width="18" height="12" rx="2" fill={color} fillOpacity={opacity} stroke={color} strokeWidth={width} />
+  </svg>
+);
+
+const boardFireSw = (id: string, dashed: boolean): ReactNode => (
+  <svg viewBox="0 0 20 14" aria-hidden="true">
+    <defs>
+      <pattern id={id} width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+        <line x1="0" y1="0" x2="0" y2="5" stroke={MAP_COLOR.fireEdge} strokeWidth="2" />
+      </pattern>
+    </defs>
+    <rect x="1" y="1" width="18" height="12" rx="2" fill={MAP_COLOR.fire} fillOpacity={dashed ? 0.18 : 0.35} />
+    {!dashed && <rect x="1" y="1" width="18" height="12" rx="2" fill={`url(#${id})`} fillOpacity="0.6" />}
+    <rect x="1" y="1" width="18" height="12" rx="2" fill="none" stroke={MAP_COLOR.fireEdge} strokeWidth="2" strokeDasharray={dashed ? "3 2" : undefined} />
+  </svg>
+);
+
+/** The simulated board's marks (drawn by demo/boardMapLayers.ts). All simulation output. */
+const BOARD_ROWS: { key: string; label: string; swatch: ReactNode }[] = [
+  { key: "bd-burning", label: "Burning fire (sim)", swatch: boardFireSw("lc-lg-bd-hatch", false) },
+  { key: "bd-contained", label: "Contained fire, dashed edge (sim)", swatch: boardFireSw("lc-lg-bd-hatch-c", true) },
+  {
+    key: "bd-out",
+    label: "Burned-out fire (sim)",
+    swatch: (
+      <svg viewBox="0 0 20 14" aria-hidden="true">
+        <rect x="1" y="1" width="18" height="12" rx="2" fill={BOARD_COLOR.scar} fillOpacity="0.25" stroke={BOARD_COLOR.scarEdge} strokeWidth="1" />
+      </svg>
+    ),
+  },
+  { key: "bd-leave", label: "Board zone: leave now (sim)", swatch: zoneSw(LEVEL_COLOR.evacuate_now, 0.15) },
+  { key: "bd-risk", label: "Board zone: at risk (sim)", swatch: zoneSw(LEVEL_COLOR.be_ready, 0.15) },
+  { key: "bd-overrun", label: "Board zone: overrun (sim)", swatch: zoneSw(BOARD_COLOR.overrun, 0.3, 3) },
+  {
+    key: "bd-unit",
+    label: "Fire unit (sim)",
+    swatch: (
+      <svg viewBox="0 0 20 14" aria-hidden="true">
+        <circle cx="10" cy="7" r="5" fill={MAP_COLOR.responder} stroke="#fff" strokeWidth="2" />
+      </svg>
+    ),
+  },
+  {
+    key: "bd-enroute",
+    label: "Unit en route (sim)",
+    swatch: (
+      <svg viewBox="0 0 20 14" aria-hidden="true">
+        <line x1="1" y1="7" x2="19" y2="7" stroke={MAP_COLOR.responder} strokeWidth="1.5" strokeDasharray="2 2" />
+        <circle cx="6" cy="7" r="4.5" fill={MAP_COLOR.responder} fillOpacity="0.75" stroke="#fff" strokeWidth="1" />
+      </svg>
+    ),
+  },
+  {
+    key: "bd-station",
+    label: "Fire station (sim)",
+    swatch: (
+      <svg viewBox="0 0 20 14" aria-hidden="true">
+        <circle cx="10" cy="7" r="4" fill="#fff" stroke={MAP_COLOR.ink} strokeWidth="3" />
+      </svg>
+    ),
+  },
+];
 
 /** What each map mark means; swatches are drawn with the map's own colours. */
 const ROWS: { key: string; label: string; swatch: ReactNode }[] = [
@@ -143,7 +210,7 @@ const ROWS: { key: string; label: string; swatch: ReactNode }[] = [
   },
 ];
 
-export default function MapLegend({ record = true }: { record?: boolean }) {
+export default function MapLegend({ record = true, board = false }: { record?: boolean; board?: boolean }) {
   return (
     <details className="lc-legend" open>
       <summary>Legend</summary>
@@ -154,6 +221,19 @@ export default function MapLegend({ record = true }: { record?: boolean }) {
             {r.label}
           </li>
         ))}
+        {board && (
+          <>
+            <li className="lc-legend-group">
+              Simulated board <EvidenceTag kind="simulated" />
+            </li>
+            {BOARD_ROWS.map((r) => (
+              <li key={r.key}>
+                <span className="lc-legend-sw">{r.swatch}</span>
+                {r.label}
+              </li>
+            ))}
+          </>
+        )}
       </ul>
     </details>
   );

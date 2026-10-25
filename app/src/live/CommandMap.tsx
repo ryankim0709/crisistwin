@@ -8,11 +8,12 @@ import {
   setWorkerUrl,
   type GeoJSONSource,
   type MapLayerMouseEvent,
+  type MapMouseEvent,
 } from "maplibre-gl";
 import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useEffect, useRef, useState } from "react";
-import { fireHatch, loadStyle } from "./mapStyle";
+import { SATELLITE_STYLE, fireHatch } from "./mapStyle";
 import { VERDICT, labelPoint, nf, plural, responderName, shortZoneName, wallClock } from "./format";
 import { installInjectLayers } from "./injectMap";
 import { buildInjectSources } from "./injects";
@@ -56,10 +57,10 @@ export type LayerKey = "zones" | "fire" | "reports" | "roads" | "shelters";
 export const LAYER_KEYS: LayerKey[] = ["zones", "fire", "reports", "roads", "shelters"];
 const LAYER_IDS: Record<LayerKey, string[]> = {
   zones: ["lc-zones-fill", "lc-zones-line", "lc-zone-labels"],
-  fire: ["lc-fire-fill", "lc-fire-hatch", "lc-fire-line", "lc-fire-obs", "lc-fire-label"],
-  reports: ["lc-ground", "lc-ground-count", "lc-points", "lc-help", "lc-responders"],
+  fire: ["lc-fire-fill", "lc-fire-hatch", "lc-fire-casing", "lc-fire-line", "lc-fire-obs", "lc-fire-label"],
+  reports: ["lc-ground", "lc-ground-count", "lc-points", "lc-help-casing", "lc-help", "lc-responders"],
   roads: [
-    "lc-routes", "lc-traffic-casing", "lc-traffic", "lc-traffic-flow", "lc-hazard-casing", "lc-hazard-lines", "lc-queues",
+    "lc-routes-casing", "lc-routes", "lc-traffic-casing", "lc-traffic", "lc-traffic-flow", "lc-hazard-casing", "lc-hazard-lines", "lc-queues-casing", "lc-queues",
   ],
   shelters: ["lc-dest", "lc-dest-labels"],
 };
@@ -237,12 +238,14 @@ function installLayers(map: MapLibreMap): void {
   const empty = collection([]);
   for (const id of SOURCES) map.addSource(id, { type: "geojson", data: empty });
   map.addLayer({
+    // Zones with no guidance ("none") draw nothing, so a Studio package's grid of synthetic
+    // squares is not a mesh on the imagery; the opacity-0 fill is still clickable.
     id: "lc-zones-fill",
     type: "fill",
     source: "lc-zones",
     paint: {
       "fill-color": LEVEL_MATCH("level", LEVEL_COLOR) as never,
-      "fill-opacity": LEVEL_MATCH("level", { evacuate_now: 0.1, be_ready: 0.08, none: 0.02 }) as never,
+      "fill-opacity": LEVEL_MATCH("level", { evacuate_now: 0.1, be_ready: 0.08, none: 0 }) as never,
     },
   });
   map.addLayer({
@@ -251,14 +254,21 @@ function installLayers(map: MapLibreMap): void {
     source: "lc-zones",
     paint: {
       "line-color": LEVEL_MATCH("level", LEVEL_COLOR) as never,
-      "line-width": LEVEL_MATCH("level", { evacuate_now: 2.5, be_ready: 2, none: 0.6 }) as never,
-      "line-opacity": LEVEL_MATCH("level", { evacuate_now: 0.9, be_ready: 0.9, none: 0.5 }) as never,
+      "line-width": LEVEL_MATCH("level", { evacuate_now: 2.5, be_ready: 2, none: 0 }) as never,
+      "line-opacity": LEVEL_MATCH("level", { evacuate_now: 0.9, be_ready: 0.9, none: 0 }) as never,
     },
   });
   map.addLayer({ id: "lc-imp-zones", type: "fill", source: "lc-imp-zones", paint: { "fill-color": MAP_COLOR.selection, "fill-opacity": 0.15 } });
   map.addImage("lc-fire-hatch", fireHatch(MAP_COLOR.fireEdge));
   map.addLayer({ id: "lc-fire-fill", type: "fill", source: "lc-fire", paint: { "fill-color": MAP_COLOR.fire, "fill-opacity": 0.35 } });
   map.addLayer({ id: "lc-fire-hatch", type: "fill", source: "lc-fire", paint: { "fill-pattern": "lc-fire-hatch", "fill-opacity": 0.6 } });
+  map.addLayer({
+    id: "lc-fire-casing",
+    type: "line",
+    source: "lc-fire",
+    layout: { "line-join": "round" },
+    paint: { "line-color": MAP_COLOR.casing, "line-width": 5, "line-opacity": 0.85 },
+  });
   map.addLayer({
     id: "lc-fire-line",
     type: "line",
@@ -271,6 +281,17 @@ function installLayers(map: MapLibreMap): void {
   });
   // The approved route: a thin dashed plan line. The cars on it are the traffic layers below.
   map.addLayer({
+    id: "lc-routes-casing",
+    type: "line",
+    source: "lc-routes",
+    layout: { "line-join": "round" },
+    paint: {
+      "line-color": MAP_COLOR.casing,
+      "line-width": LEVEL_MATCH("level", { evacuate_now: 4.5, be_ready: 4, none: 0 }) as never,
+      "line-opacity": LEVEL_MATCH("level", { evacuate_now: 0.8, be_ready: 0.6, none: 0 }) as never,
+    },
+  });
+  map.addLayer({
     id: "lc-routes",
     type: "line",
     source: "lc-routes",
@@ -278,7 +299,7 @@ function installLayers(map: MapLibreMap): void {
     paint: {
       "line-color": MAP_COLOR.route,
       "line-width": LEVEL_MATCH("level", { evacuate_now: 2, be_ready: 1.5, none: 0 }) as never,
-      "line-opacity": LEVEL_MATCH("level", { evacuate_now: 0.75, be_ready: 0.55, none: 0 }) as never,
+      "line-opacity": LEVEL_MATCH("level", { evacuate_now: 0.9, be_ready: 0.75, none: 0 }) as never,
       "line-dasharray": [2, 1.5],
     },
   });
@@ -316,11 +337,25 @@ function installLayers(map: MapLibreMap): void {
     },
   });
   map.addLayer({
+    id: "lc-imp-alt-casing",
+    type: "line",
+    source: "lc-imp-alt",
+    layout: { "line-cap": "round", "line-join": "round" },
+    paint: { "line-color": MAP_COLOR.casing, "line-width": 5, "line-opacity": 0.85 },
+  });
+  map.addLayer({
     id: "lc-imp-alt",
     type: "line",
     source: "lc-imp-alt",
     layout: { "line-cap": "round", "line-join": "round" },
     paint: { "line-color": MAP_COLOR.ink, "line-width": 2.5, "line-dasharray": [2, 1.5] },
+  });
+  map.addLayer({
+    id: "lc-imp-now-casing",
+    type: "line",
+    source: "lc-imp-now",
+    layout: { "line-cap": "round", "line-join": "round" },
+    paint: { "line-color": MAP_COLOR.casing, "line-width": 7 },
   });
   map.addLayer({
     id: "lc-imp-now",
@@ -366,13 +401,24 @@ function installLayers(map: MapLibreMap): void {
     type: "line",
     source: "lc-imp-road",
     layout: { "line-cap": "round" },
-    paint: { "line-color": MAP_COLOR.ink, "line-width": 2, "line-gap-width": 6 },
+    paint: { "line-color": MAP_COLOR.casing, "line-width": 2.5, "line-gap-width": 6 },
   });
   map.addLayer({
     id: "lc-fire-obs",
     type: "circle",
     source: "lc-fire-obs",
-    paint: { "circle-radius": 2.5, "circle-color": MAP_COLOR.fire, "circle-stroke-color": "#3A1600", "circle-stroke-width": 0.5 },
+    paint: { "circle-radius": 2.5, "circle-color": MAP_COLOR.fire, "circle-stroke-color": MAP_COLOR.casing, "circle-stroke-width": 0.8 },
+  });
+  map.addLayer({
+    id: "lc-queues-casing",
+    type: "circle",
+    source: "lc-queues",
+    paint: {
+      "circle-radius": ["interpolate", ["linear"], ["sqrt", ["get", "queued"]], 0, 4, 3, 7, 8, 13] as never,
+      "circle-color": "rgba(0,0,0,0)",
+      "circle-stroke-color": MAP_COLOR.casing,
+      "circle-stroke-width": 4,
+    },
   });
   map.addLayer({
     id: "lc-queues",
@@ -442,6 +488,12 @@ function installLayers(map: MapLibreMap): void {
     paint: { "text-color": "#FFFFFF" },
   });
   map.addLayer({
+    id: "lc-help-casing",
+    type: "circle",
+    source: "lc-help",
+    paint: { "circle-radius": 7, "circle-color": "rgba(0,0,0,0)", "circle-stroke-color": MAP_COLOR.casing, "circle-stroke-width": 6 },
+  });
+  map.addLayer({
     id: "lc-help",
     type: "circle",
     source: "lc-help",
@@ -485,7 +537,7 @@ function installLayers(map: MapLibreMap): void {
     paint: {
       "text-color": ["match", ["get", "level"], "evacuate_now", "#B3140C", "be_ready", "#7A4B00", MAP_COLOR.ink] as never,
       "text-halo-color": "#FFFFFF",
-      "text-halo-width": 1.6,
+      "text-halo-width": 2,
     },
   });
   map.addLayer({
@@ -522,13 +574,36 @@ interface Props {
   impact: ImpactResponse | null;
   taskRoute: LonLat[] | null;
   onSelect: (itemId: string | null) => void;
+  /**
+   * Extension point for extra layers (the simulated board). Called once, after the satellite
+   * style and every live layer and source are installed. Add layers with
+   * `map.addLayer(layer, EXTRA_LAYERS_BEFORE_ID)` so they sit under the live labels, markers,
+   * routes and selection. May return a cleanup, run before the map is removed on unmount.
+   * Held in a ref: pass any function, it is read once at load time.
+   */
+  onMapReady?: (map: MapLibreMap) => void | (() => void);
+  /**
+   * Checked first by the live click handlers (select, popups); return true when the click
+   * belongs to something else (the simulated board), so the live handlers skip it.
+   */
+  interceptClick?: (e: MapMouseEvent) => boolean;
 }
 
-export default function CommandMap({ data, twin, items, selected, focus, layers, impact, taskRoute, onSelect }: Props) {
+/**
+ * Insert extra layers with this `beforeId`: above the zone fills/lines, fire and impact
+ * overlays, routes and traffic, but under the report/inject/zone-label marks and text
+ * (`lc-ground` is the first of those; `lc-focus` and `lc-dest` sit just below it).
+ */
+export const EXTRA_LAYERS_BEFORE_ID = "lc-dest";
+
+export default function CommandMap({ data, twin, items, selected, focus, layers, impact, taskRoute, onSelect, onMapReady, interceptClick }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const dataRef = useRef<CommandResponse | null>(data);
   const onSelectRef = useRef(onSelect);
+  const onMapReadyRef = useRef(onMapReady);
+  const interceptRef = useRef(interceptClick);
+  const readyCleanup = useRef<(() => void) | null>(null);
   const labelRef = useRef<Marker | null>(null);
   const fitted = useRef(false);
   const [ready, setReady] = useState(false);
@@ -536,12 +611,15 @@ export default function CommandMap({ data, twin, items, selected, focus, layers,
   useEffect(() => {
     dataRef.current = data;
     onSelectRef.current = onSelect;
-  }, [data, onSelect]);
+    onMapReadyRef.current = onMapReady;
+    interceptRef.current = interceptClick;
+  }, [data, onSelect, onMapReady, interceptClick]);
 
   useEffect(() => {
     const controller = new AbortController();
     let map: MapLibreMap | null = null;
-    loadStyle(controller.signal).then((style) => {
+    // Satellite imagery, as Studio and /demo; the style is local, so this resolves at once.
+    Promise.resolve(SATELLITE_STYLE).then((style) => {
       if (controller.signal.aborted || !container.current) return;
       map = new MapLibreMap({
         container: container.current,
@@ -556,23 +634,26 @@ export default function CommandMap({ data, twin, items, selected, focus, layers,
       map.on("load", () => {
         if (!map) return;
         installLayers(map);
+        const cleanup = onMapReadyRef.current?.(map);
+        if (typeof cleanup === "function") readyCleanup.current = cleanup;
         setReady(true);
       });
       const popup = new Popup({ closeButton: false, maxWidth: "260px", className: "lc-popup" });
       map.on("click", "lc-points", (e: MapLayerMouseEvent) => {
+        if (interceptRef.current?.(e)) return;
         const id = e.features?.[0]?.properties.item;
         if (typeof id === "string") onSelectRef.current(id);
       });
       for (const layer of ["lc-ground", "lc-help", "lc-responders", "lc-queues", "lc-dest", "lc-inject-marks"]) {
         map.on("click", layer, (e: MapLayerMouseEvent) => {
           const f = e.features?.[0];
-          if (!f || !map) return;
+          if (!f || !map || interceptRef.current?.(e)) return;
           popup.setLngLat(e.lngLat).setHTML(escapeHtml(String(f.properties.label ?? ""))).addTo(map);
         });
       }
       map.on("click", "lc-zones-fill", (e: MapLayerMouseEvent) => {
         const interactive = ["lc-ground", "lc-points", "lc-help", "lc-responders", "lc-queues", "lc-dest"].filter((l) => map?.getLayer(l));
-        if (!map || map.queryRenderedFeatures(e.point, { layers: interactive }).length) return;
+        if (!map || interceptRef.current?.(e) || map.queryRenderedFeatures(e.point, { layers: interactive }).length) return;
         const id = e.features?.[0]?.properties.id;
         const d = dataRef.current;
         const zone = d?.zones.find((z) => z.id === id);
@@ -597,6 +678,8 @@ export default function CommandMap({ data, twin, items, selected, focus, layers,
     });
     return () => {
       controller.abort();
+      readyCleanup.current?.();
+      readyCleanup.current = null;
       labelRef.current?.remove();
       map?.remove();
       mapRef.current = null;

@@ -2,7 +2,8 @@
  * Loads the /demo board's physical inputs (docs/command-demo-realism.md) and builds a
  * `DemoEnvironment`: wind (GET /api/demo/wind), the drill centre, Camp terrain and carless households (GET
  * /api/demo/environment; every call carries `incident` for a non-Camp drill), CAL FIRE bases (GET /api/suppression/bases), and a LANDFIRE
- * landscape when a prebuilt one covers the drill area (GET /api/landscapes). Every input that
+ * landscape when a prebuilt one covers the drill area (GET /api/landscapes; its grid is also the
+ * 3D diorama's board, DemoDiorama.tsx). Every input that
  * fails falls back to the labelled assumption in realism.ts / model.ts, and the board starts
  * once all have answered or failed.
  */
@@ -105,8 +106,33 @@ export function terrainGrid(data: EnvironmentResponse["terrain"]): TerrainGrid |
   };
 }
 
-/** LANDFIRE fuel and terrain from a prebuilt landscape that covers `p`, or null. */
-async function landscapeGround(p: LonLat, signal: AbortSignal): Promise<Ground | null> {
+/**
+ * Decoded region landscapes by region id, so a weather change (which reloads the environment)
+ * keeps the same grid object and the 3D board is not rebuilt. A failed fetch is not kept.
+ */
+const regionGrids = new Map<string, Promise<LandscapeGrid>>();
+
+function regionGrid(regionId: string, signal: AbortSignal): Promise<LandscapeGrid> {
+  let cached = regionGrids.get(regionId);
+  if (!cached) {
+    // Not tied to this caller's signal: an aborted load must not poison the cache.
+    cached = fetchRegionLandscape(regionId, new AbortController().signal).then((r) => r.grid);
+    regionGrids.set(regionId, cached);
+    cached.catch(() => regionGrids.delete(regionId));
+  }
+  const pending = cached;
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) reject(signal.reason);
+    signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    pending.then(resolve, reject);
+  });
+}
+
+/** A prebuilt landscape that covers `p`: its LANDFIRE fuel and terrain lookup, and the grid itself (the 3D board), or null. */
+async function landscapeGround(
+  p: LonLat,
+  signal: AbortSignal,
+): Promise<{ ground: Ground; grid: LandscapeGrid; region: { id: string; name: string } } | null> {
   let catalog;
   try {
     catalog = await fetchRegionCatalog(signal);
@@ -121,12 +147,12 @@ async function landscapeGround(p: LonLat, signal: AbortSignal): Promise<Ground |
   if (!region) return null;
   let grid: LandscapeGrid;
   try {
-    grid = (await fetchRegionLandscape(region.id, signal)).grid;
+    grid = await regionGrid(region.id, signal);
   } catch {
     return null;
   }
   const index = (q: LonLat) => cellAt(grid, { longitude: q[0], latitude: q[1] });
-  return {
+  const ground: Ground = {
     fuelLabel: `LANDFIRE FBFM40 from the prebuilt landscape "${region.name}"`,
     fuelEvidence: "landfire",
     terrainLabel: `Terrain from the prebuilt landscape "${region.name}"`,
@@ -140,6 +166,7 @@ async function landscapeGround(p: LonLat, signal: AbortSignal): Promise<Ground |
       return i < 0 ? { slopeTangent: 0, upslopeDegrees: 0, cell: -1 } : { slopeTangent: grid.slopeTangent[i], upslopeDegrees: grid.upslopeDegrees[i], cell: i };
     },
   };
+  return { ground, grid, region: { id: region.id, name: region.name } };
 }
 
 export function stationsFrom(bases: SuppressionBases | null): DemoEnvironment["bases"] {
@@ -189,7 +216,7 @@ export async function loadEnvironment(
       : Promise.resolve(null),
     center ? landscapeGround(center, signal) : Promise.resolve(null),
   ]);
-  const ground = landscape ?? groundFrom(terrainGrid(envData?.terrain ?? null));
+  const ground = landscape?.ground ?? groundFrom(terrainGrid(envData?.terrain ?? null));
   const parsed = basesJson ? parseBases(basesJson) : null;
   const calfire = stationsFrom(parsed);
   const packageBases = calfire ? null : stationsFromPackage(envData?.stations, center);
@@ -205,6 +232,8 @@ export async function loadEnvironment(
       : "Synthetic stations (assumed: CAL FIRE bases file unavailable)",
     noVehicle,
     noVehicleLabel: envData?.households_no_vehicle_source ?? "Carless households unknown (counted as 0)",
+    landscape: landscape?.grid ?? null,
+    landscapeRegion: landscape?.region ?? null,
   };
 }
 

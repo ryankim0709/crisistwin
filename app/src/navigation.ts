@@ -28,11 +28,6 @@ export const navigationItems: readonly NavigationItem[] = [
     group: "Workspace",
   },
   {
-    path: "/demo",
-    label: "Command demo",
-    group: "Workspace",
-  },
-  {
     path: "/comparison",
     label: "Strategy comparison",
     group: "Analysis",

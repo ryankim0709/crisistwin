@@ -1,5 +1,5 @@
 /* /live planner workspace (D7, design spec section 2): one dense workspace in three columns
-   under a 48px header, in the shell's sage paper theme. This sheet owns layout,
+   under a 48px header (it wraps onto a second row when the simulated board's controls need it), in the shell's sage paper theme. This sheet owns layout,
    the mini plates (the Slab on the web) and the map overlays. Status hues are the --lc-* tokens
    of the spec; MapLibre mirrors them in CommandMap.tsx. */
 
@@ -22,7 +22,7 @@
   height: 100dvh;
   display: grid;
   grid-template-columns: 320px minmax(0, 1fr) 380px;
-  grid-template-rows: 48px minmax(0, 1fr);
+  grid-template-rows: minmax(48px, auto) minmax(0, 1fr);
   grid-template-areas:
     "head head head"
     "queue map right";
@@ -64,9 +64,10 @@
 .lc-head {
   grid-area: head;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--ct-space-5);
-  padding: 0 var(--ct-space-4);
+  gap: var(--ct-space-2) var(--ct-space-5);
+  padding: var(--ct-space-2) var(--ct-space-4);
   border-bottom: 1px solid var(--ct-border);
   background: var(--ct-surface);
   min-width: 0;
@@ -422,6 +423,12 @@
   display: flex;
   align-items: center;
   gap: var(--ct-space-2);
+}
+.lc-legend .lc-legend-group {
+  margin-top: var(--ct-space-2);
+  padding-top: var(--ct-space-2);
+  border-top: 1px solid rgba(15, 23, 32, 0.12);
+  font-weight: var(--ct-weight-semibold);
 }
 .lc-legend-sw {
   display: inline-flex;
@@ -1121,4 +1128,104 @@
   align-items: center;
   gap: var(--ct-space-2);
   margin: 0 var(--ct-space-4) var(--ct-space-3);
+}
+
+/* ---- Simulated board (demo/useCommandBoard.ts) inside the live workspace ---- */
+
+/* Header group: AI monitoring, the board's own clock and speed, Add fire, Conditions. */
+.lc-board-ctl {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ct-space-2) var(--ct-space-3);
+  padding-left: var(--ct-space-4);
+  border-left: 1px solid var(--ct-border);
+  min-width: 0;
+}
+.lc-board-monitor {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ct-space-2);
+}
+.lc-board-label {
+  font-size: var(--ct-text-sm);
+  font-weight: var(--ct-weight-semibold);
+  white-space: nowrap;
+}
+.lc-board-more {
+  position: relative;
+}
+.lc-board-more > summary {
+  list-style: none;
+}
+.lc-board-more > summary::-webkit-details-marker {
+  display: none;
+}
+.lc-board-pop {
+  gap: var(--ct-space-2);
+  min-width: 300px;
+  padding: var(--ct-space-3);
+  justify-items: start;
+}
+
+/* 3D diorama view: the map stays mounted (keeping its view and board layers) but hidden, so its
+   controls do not show through the scene. */
+.lc-stage--diorama .lc-map {
+  visibility: hidden;
+}
+
+/* Left column: Reports | Fires & units tabs above the review queue or the board lists. */
+.lc-left > .lc-col {
+  flex: 1;
+  min-height: 0;
+  border-right: 0;
+}
+.lc-left-tabs {
+  display: flex;
+  margin: var(--ct-space-3) var(--ct-space-4) 0;
+}
+.lc-left-tabs button {
+  flex: 1;
+}
+.lc-board-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ct-space-2);
+  padding: 0 var(--ct-space-4) var(--ct-space-2);
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-sm);
+}
+
+.lc-board-sel-note {
+  padding-top: var(--ct-space-3);
+  margin-bottom: calc(-1 * var(--ct-space-2));
+  background: var(--ct-surface-raised);
+}
+
+/* Right column: the commander's decision list scrolls on its own so the live panels stay near. */
+.lc-right .dm-decisions {
+  max-height: 360px;
+  overflow-y: auto;
+}
+.lc-board-sec > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--ct-space-2);
+  cursor: pointer;
+  list-style: none;
+}
+.lc-board-sec > summary::-webkit-details-marker {
+  display: none;
+}
+.lc-board-sec > summary::before {
+  content: "▸";
+  color: var(--ct-ink-muted);
+}
+.lc-board-sec[open] > summary::before {
+  content: "▾";
+}
+.lc-board-sec > summary h2 {
+  font-size: var(--ct-text-base);
+  font-weight: var(--ct-weight-semibold);
 }
