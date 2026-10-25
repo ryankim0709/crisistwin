@@ -5,7 +5,9 @@ import {
   fetchScenarioWind,
   stationLabel,
   windSummary,
+  type ScenarioWeatherQuery,
   type ScenarioWindRecord,
+  type WindCandidate,
   type WindSourceMode,
 } from "../scenarioWeather";
 import "./windPicker.css";
@@ -41,7 +43,18 @@ const TONE: Record<ScenarioWindRecord["evidenceClass"], TagTone> = {
   observed: "success",
   forecast: "info",
   derived: "warning",
+  modelled: "neutral",
 };
+
+/** "OAKLAND NORTH RAWS (ONOC1), 3.4 km, +33 m, 100% of hours" for the station dropdown. */
+function candidateLabel(c: WindCandidate): string {
+  if (c.id === "reanalysis") return "ERA5 reanalysis (modelled)";
+  const parts = [`${c.name} (${c.id})`];
+  if (c.distanceKm !== null) parts.push(`${c.distanceKm.toFixed(1)} km`);
+  if (c.elevationDiffM !== null) parts.push(`${c.elevationDiffM >= 0 ? "+" : ""}${Math.round(c.elevationDiffM)} m`);
+  if (c.coverage !== null) parts.push(`${Math.round(c.coverage * 100)}% of hours`);
+  return parts.join(", ");
+}
 
 function modeFromRecord(record: ScenarioWindRecord | null): WindSourceMode {
   if (!record) return "assumed";
@@ -105,12 +118,8 @@ export default function WindSourcePicker({
 
   function apply() {
     if (lon === null || lat === null || mode === "assumed") return;
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-    setStatus({ kind: "loading" });
     const common = { lon, lat, hours };
-    const query =
+    const query: ScenarioWeatherQuery =
       mode === "historical"
         ? { ...common, mode: "historical_replay" as const, startUtc: `${historical}:00Z` }
         : mode === "worst_case"
@@ -121,6 +130,21 @@ export default function WindSourcePicker({
               percentile,
             }
           : { ...common, mode: "forecast" as const };
+    load(query);
+  }
+
+  /** Same window as the shown record, another station (or the reanalysis). */
+  function pickStation(id: string) {
+    if (!record || record.mode !== "historical_replay") return;
+    const q = record.query;
+    load({ mode: "historical_replay", lon: q.lon, lat: q.lat, startUtc: q.startUtc, hours: q.hours, station: id });
+  }
+
+  function load(query: ScenarioWeatherQuery) {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setStatus({ kind: "loading" });
     fetchScenarioWind(query, controller.signal)
       .then((next) => {
         if (controller.signal.aborted) return;
@@ -137,6 +161,10 @@ export default function WindSourcePicker({
   }
 
   const showMode = record ? modeFromRecord(record) : mode;
+  // Ranked alternatives, best first (sim/weather.py); stations without a wind sensor are left out.
+  const pickable = (record?.candidates ?? []).filter((c) => c.status !== "no_wind_sensor");
+  const chosenId =
+    pickable.find((c) => c.status === "chosen")?.id ?? record?.station?.id ?? "reanalysis";
   return (
     <div className="fr-wp">
       <span className="fr-wp-title" id={`${uid}-title`}>
@@ -216,6 +244,26 @@ export default function WindSourcePicker({
             <Tag>{stationLabel(record)}</Tag>
           </div>
           <p className="fr-wp-note">{windSummary(record)}</p>
+          {(record.warnings ?? []).length > 0 && (
+            <Notice tone="warning">{(record.warnings ?? []).join(" ")}</Notice>
+          )}
+          {record.mode === "historical_replay" && pickable.length > 1 && (
+            <label className="fr-wp-field" htmlFor={`${uid}-station`}>
+              <span>Station</span>
+              <select
+                id={`${uid}-station`}
+                value={chosenId}
+                disabled={status.kind === "loading"}
+                onChange={(event) => pickStation(event.target.value)}
+              >
+                {pickable.map((c) => (
+                  <option key={c.id} value={c.id} title={c.reason}>
+                    {candidateLabel(c)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <details className="fr-wp-details">
             <summary>How this wind is used</summary>
             <p className="fr-wp-note">

@@ -16,7 +16,8 @@ import type { FireWeatherSample, FireWeatherSeries } from "./weatherSeries";
 
 export type WindSourceMode = "assumed" | "historical" | "worst_case" | "forecast";
 export type ApiWeatherMode = "historical_replay" | "climatology_percentile" | "forecast";
-export type WeatherEvidenceClass = "observed" | "forecast" | "derived";
+/** `modelled` = ERA5 reanalysis (Open-Meteo), used when no representative station has data. */
+export type WeatherEvidenceClass = "observed" | "forecast" | "derived" | "modelled";
 
 export interface WindSample {
   tUtc: string;
@@ -34,6 +35,24 @@ export interface WindStation {
   distanceKm: number;
 }
 
+/** One ranked weather source the server considered (`candidates` in the API answer). */
+export interface WindCandidate {
+  /** IEM station id, or "reanalysis". */
+  id: string;
+  name: string;
+  /** iem_asos (airport, 10 m), iem_hads (RAWS, 20 ft) or open_meteo_era5. */
+  source: string;
+  distanceKm: number | null;
+  /** Station minus site elevation, metres; null when unknown. */
+  elevationDiffM: number | null;
+  /** Lower is more representative (sim/weather.py score_station). */
+  score: number | null;
+  status: "chosen" | "tried" | "not_tried" | "error" | "no_wind_sensor";
+  /** Fraction of the window's hours with wind, when fetched. */
+  coverage: number | null;
+  reason: string;
+}
+
 /** JSON-safe record of the weather a scenario's wind came from. Stored in the scenario. */
 export interface ScenarioWindRecord {
   mode: ApiWeatherMode;
@@ -48,6 +67,10 @@ export interface ScenarioWindRecord {
   heightConversion: { fromHeight: string; factor: number; method: string };
   /** The hourly series returned (hours + 1 samples). */
   series: WindSample[];
+  /** Ranked sources the server considered (historical only; absent on older saved records). */
+  candidates?: WindCandidate[];
+  /** Why the chosen source may not represent the site. */
+  warnings?: string[];
   /** What the run used: the series reduced to one value. */
   applied: {
     basis: "peak hour of the run window";
@@ -82,6 +105,18 @@ interface ApiResponse {
   samples: ApiSample[];
   height_conversion: { from_height: string; factor: number; method: string };
   provenance: { analog?: unknown; raw?: { sha256?: string } };
+  candidates?: {
+    id: string;
+    name: string;
+    source: string;
+    distance_km: number | null;
+    elevation_diff_m?: number | null;
+    score?: number | null;
+    status?: WindCandidate["status"];
+    coverage?: number | null;
+    reason?: string;
+  }[];
+  warnings?: string[];
 }
 
 export interface ScenarioWeatherQuery {
@@ -92,6 +127,8 @@ export interface ScenarioWeatherQuery {
   startUtc?: string;
   hours: number;
   percentile?: number;
+  /** historical_replay only: force an IEM station id or "reanalysis". */
+  station?: string;
 }
 
 /** Fetches and reduces a series to the one wind the solver can take. Throws a readable Error. */
@@ -107,6 +144,7 @@ export async function fetchScenarioWind(
   });
   if (query.startUtc) params.set("start", query.startUtc);
   if (query.percentile !== undefined) params.set("percentile", String(query.percentile));
+  if (query.station) params.set("station", query.station);
   let response: Response;
   try {
     response = await fetch(`/api/weather/scenario?${params}`, {
@@ -169,6 +207,18 @@ function toRecord(data: ApiResponse, query: ScenarioWeatherQuery): ScenarioWindR
       method: data.height_conversion.method,
     },
     series,
+    candidates: (data.candidates ?? []).map((c) => ({
+      id: c.id,
+      name: c.name,
+      source: c.source,
+      distanceKm: c.distance_km ?? null,
+      elevationDiffM: c.elevation_diff_m ?? null,
+      score: c.score ?? null,
+      status: c.status ?? "not_tried",
+      coverage: c.coverage ?? null,
+      reason: c.reason ?? "",
+    })),
+    warnings: data.warnings ?? [],
     applied: {
       basis: "peak hour of the run window",
       tUtc: peak.tUtc,
@@ -184,6 +234,7 @@ const EVIDENCE_WORD: Record<WeatherEvidenceClass, string> = {
   observed: "Observed",
   forecast: "Forecast",
   derived: "Derived",
+  modelled: "Modelled (reanalysis)",
 };
 
 export function evidenceWord(record: ScenarioWindRecord): string {
@@ -195,6 +246,7 @@ export function stationLabel(record: ScenarioWindRecord): string {
   if (record.station) {
     return `${record.station.name} (${record.station.id}), ${record.station.distanceKm.toFixed(1)} km away`;
   }
+  if (record.evidenceClass === "modelled") return "ERA5 reanalysis grid cell (0.25°)";
   return "NWS gridpoint forecast at the ignition";
 }
 
