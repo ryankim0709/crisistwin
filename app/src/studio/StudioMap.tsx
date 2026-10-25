@@ -209,12 +209,12 @@ const STATE_KEY_ORDER: IgnitionDisplayState[] = [
   "invalid",
 ];
 const STATE_KEY_NOTE: Record<IgnitionDisplayState, string> = {
-  draft: "Draft (no current result)",
-  scheduled: "Scheduled (hollow ring)",
-  triggered: "Ignited (flame)",
-  "reached-before-start": "Already reached (double ring)",
-  disabled: "Disabled (dashed)",
-  invalid: "Invalid (square, !)",
+  draft: "Draft",
+  scheduled: "Scheduled",
+  triggered: "Ignited",
+  "reached-before-start": "Already reached",
+  disabled: "Disabled",
+  invalid: "Invalid",
 };
 
 const FLAME_SVG =
@@ -832,7 +832,7 @@ export default function StudioMap({
               {!compactLegend && (
                 <li>
                   <span className="studio-map__swatch studio-map__swatch--locator" />
-                  Locator ring: footprint too small to see at this zoom (dashed, not burned area)
+                  Locator ring (fire too small to see)
                 </li>
               )}
             </ul>

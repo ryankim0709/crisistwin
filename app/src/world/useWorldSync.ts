@@ -7,7 +7,7 @@
 // - tab → remote: when `local` changes a field (a user edit), the change is written ~500 ms later
 //   (debounced, only the changed groups), never a value the tab just received from another tab;
 // - a field the tab is editing (written-but-not-yet-sent) is never overwritten by a remote change;
-// - "Don't sync this tab" (per tab, localStorage) turns both directions off for experiments.
+// - "Don't sync" (per tab, localStorage) turns both directions off for experiments.
 //
 // Values a tab cannot represent exactly (a custom region on a catalogue-only page, a percentile
 // the board has no preset for) are absorbed: the tab's nearest local value is not written back.

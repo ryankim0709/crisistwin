@@ -14,10 +14,6 @@ const DAY_MINUTES = 24 * HOUR_MINUTES;
 /** Per-frame minor ticks crowd the rail beyond this many frames. */
 const MAX_MINOR_TICK_FRAMES = 30;
 
-const SPEED_OPTIONS: readonly SegmentedOption<string>[] = PLAYBACK_SPEEDS.map((value) => ({
-  value: String(value),
-  label: `${value}×`,
-}));
 
 /**
  * Spacing of labelled marks: every 1 h up to 6 h, 3 h to 12 h, 6 h to 36 h, then a day, so the
@@ -34,6 +30,15 @@ function labelIntervalMinutes(horizonMinutes: number): number {
 function rateText(minutesPerSecond: number): string {
   if (minutesPerSecond < 120) return `${Math.round(minutesPerSecond)} model minutes per second`;
   return `${Number((minutesPerSecond / HOUR_MINUTES).toFixed(1))} model hours per second`;
+}
+
+/** Speed choices; each one's tooltip says how much model time it plays per second. */
+function speedOptions(minutesPerSecond: number): SegmentedOption<string>[] {
+  return PLAYBACK_SPEEDS.map((value) => ({
+    value: String(value),
+    label: `${value}×`,
+    title: `${value}× = ${rateText(minutesPerSecond * value)}`,
+  }));
 }
 
 type FireDockProps = {
@@ -223,17 +228,14 @@ export default function FireDock({
 
       <p className="fr-time">
         <span className="fr-time-now">{formatDuration(t)}</span>
-        <span className="fr-time-total">
-          of {formatDuration(horizonMinutes)}
-          <span className="fr-time-frames"> · frames every {stepMinutes} min</span>
-        </span>
+        <span className="fr-time-total">of {formatDuration(horizonMinutes)}</span>
       </p>
 
       <div className="fr-dock-end">
         <SegmentedControl
           className="fr-speed"
           label="Playback speed"
-          options={SPEED_OPTIONS}
+          options={speedOptions(minutesPerSecond)}
           value={String(speed)}
           onChange={(value) => playback.setSpeed(Number(value) as PlaybackSpeed)}
         />
@@ -243,7 +245,6 @@ export default function FireDock({
           onClick={onResetView}
           disabled={!sceneReady}
           title="Return the camera to the view of the whole board"
-
           icon={
             <svg viewBox="0 0 16 16" aria-hidden="true">
               <path
@@ -264,7 +265,6 @@ export default function FireDock({
           onClick={onFocusFire}
           disabled={!sceneReady || !canFocusFire}
           title="Frame the burned area"
-
           icon={
             <svg viewBox="0 0 16 16" aria-hidden="true">
               <path
@@ -283,7 +283,6 @@ export default function FireDock({
           {windStrip}
         </div>
       )}
-      <p className="fr-speed-note">1× = {rateText(minutesPerSecond)}</p>
     </section>
   );
 }

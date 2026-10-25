@@ -1,12 +1,12 @@
 .fr-hz {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--ct-space-2);
   min-width: 0;
 }
 
 .fr-hz-title {
-  color: var(--ct-ink);
+  color: var(--ct-ink-muted);
   font-size: var(--ct-text-sm);
   font-weight: var(--ct-weight-semibold);
 }
@@ -25,7 +25,7 @@
 
 .fr-hz-custom {
   display: flex;
-  gap: 6px;
+  gap: var(--ct-space-2);
   align-items: center;
   color: var(--ct-ink-muted);
   font-size: var(--ct-text-sm);

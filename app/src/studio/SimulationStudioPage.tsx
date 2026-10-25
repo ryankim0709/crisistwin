@@ -903,28 +903,26 @@ export default function SimulationStudioPage({
           ))}
         </select>
       </div>
+      <div className="studio-field">
+        <label htmlFor="studio-quick-seed">Seed</label>
+        <input
+          id="studio-quick-seed"
+          className="ui-input"
+          type="text"
+          inputMode="numeric"
+          value={seedText}
+          placeholder="Random"
+          onChange={(e) => setSeedText(e.target.value)}
+        />
+      </div>
       <Button
+        block
         onClick={() => handleRandomScenario(true)}
         disabled={state.phase === "loading-landscape" || state.phase === "computing" || randomJob !== null}
         title="Build a seeded random fire in this area and run it. Simulated."
       >
         {randomJob ? "Building…" : "Generate random scenario"}
       </Button>
-      <details>
-        <summary className="studio-hint">Seed {seedText || "(new each time)"}</summary>
-        <label className="studio-hint">
-          Use seed…{" "}
-          <input
-            type="text"
-            inputMode="numeric"
-            value={seedText}
-            placeholder="new each time"
-            onChange={(e) => setSeedText(e.target.value)}
-            aria-label="Random scenario seed"
-            style={{ width: "9em" }}
-          />
-        </label>
-      </details>
       {randomSummary && <p className="studio-hint">{randomSummary} (simulated)</p>}
     </div>
   );

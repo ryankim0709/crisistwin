@@ -41,7 +41,7 @@ function Provenance({ item }: { item: FeedItem }) {
       <span className="lc-feed-prov">
         <Tag tone="info">Claude</Tag>
         <EvidenceTag kind="ai_explanation" />
-        <span>Orders apply to the simulated board; the reasoning is Claude's explanation.</span>
+        <span>Orders run on the simulated board.</span>
       </span>
     );
   }
@@ -56,7 +56,7 @@ function Provenance({ item }: { item: FeedItem }) {
   return (
     <span className="lc-feed-prov">
       <EvidenceTag kind="simulated" />
-      <span>{item.source === "studio" ? "Fire from Simulation Studio, run on the simulated board." : item.source === "you" ? "Your order on the simulated board." : "Simulated command board."}</span>
+      <span>{item.source === "studio" ? "Studio fire, simulated board." : item.source === "you" ? "Your order, simulated board." : "Simulated board."}</span>
     </span>
   );
 }
@@ -169,7 +169,6 @@ export default function ActivityFeed({
     <section className="lc-feed" aria-label="Activity">
       <header className="lc-feed-head">
         <h2>Activity</h2>
-        <span className="lc-feed-head-note">Newest first</span>
       </header>
       <div className="lc-feed-scroll">
         {thinking ? (
@@ -231,7 +230,7 @@ export default function ActivityFeed({
             </EmptyState>
           ) : (
             <EmptyState title="Simulated board unavailable" symbol="•">
-              The command board has not loaded. Drill actions appear here once they happen.
+              Drill actions appear here once they happen.
             </EmptyState>
           )
         ) : (

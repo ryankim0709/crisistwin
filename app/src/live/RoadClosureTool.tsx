@@ -25,7 +25,7 @@ export default function RoadClosureTool({ state }: { state: RoadClosuresState })
           </Button>
         )}
       </div>
-      {armed ? <p className="lc-rc-hint">Click a road on the map to close it. Esc cancels.</p> : null}
+      {armed ? <p className="lc-rc-hint">Click a road to close it. Esc cancels.</p> : null}
       {candidate ? (
         <div className="lc-rc-confirm" role="group" aria-label={candidate.closed ? "Closed road" : "Confirm road closure"}>
           {candidate.closed ? (
@@ -47,8 +47,7 @@ export default function RoadClosureTool({ state }: { state: RoadClosuresState })
           ) : (
             <>
               <p>
-                Close <strong>{candidate.name}</strong>? Drill closure: no fire unit or evacuating household will use it, and
-                routes are recomputed around it (simulated board).
+                Close <strong>{candidate.name}</strong>? Drill closure: units and evacuees route around it (simulated).
               </p>
               <div className="lc-rc-actions">
                 <Button variant="danger" size="sm" onClick={() => void state.confirmClose()} disabled={busy}>
