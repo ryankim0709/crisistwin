@@ -48,6 +48,11 @@ final class LiveStore {
     /// The zone containing the device's last known position, computed on the device with
     /// `ZoneLocator`. Nil without a position or outside every zone.
     private(set) var myZone: LiveZone?
+    /// The simulated home picked for this incident (Settings, or on a fresh install the first home
+    /// whose zone has an order). While set, its point stands in for the GPS fix, so the zone,
+    /// guidance and route are the live situation's for that address. It is never sent as the
+    /// device's location. Persisted per incident.
+    private(set) var home: DrillHome?
     /// Guidance for `myZone` as this phone follows it: the published guidance with the person's
     /// destination choice (D1) applied, so the route line and "Via ..." headline follow the pick
     /// everywhere. Nil when the zone has none. `publishedGuidance` is the controller's version.
@@ -154,6 +159,10 @@ final class LiveStore {
     @ObservationIgnored private var zonesCache: (version: String, zones: [LiveZone])?
     @ObservationIgnored private var lastLocationSend: Date?
     @ObservationIgnored private(set) var lastCoord: LonLat?
+    /// The GPS fix, kept so clearing `home` goes straight back to it.
+    @ObservationIgnored private var deviceCoord: LonLat?
+    @ObservationIgnored private var deviceAccuracyM: Double?
+    @ObservationIgnored private var pickingHome = false
     @ObservationIgnored private var locationWasShared = false
     @ObservationIgnored private var lastSentCoord: LonLat?
     @ObservationIgnored private var profileSynced = false
@@ -181,6 +190,8 @@ final class LiveStore {
         self.incidentId = incidentId
         credential = CredentialStore.load(.responder) ?? CredentialStore.load(.device)
         destinationChoices = Self.loadChoices(incidentId: incidentId)
+        home = Self.loadHome(incidentId: incidentId)
+        lastCoord = home?.coord
         pending = outbox.drafts
         // The last situation, so a relaunch without signal still shows the last instruction.
         if let cached = SituationCache.load(incidentId: incidentId) { applySituation(cached, save: false) }
@@ -328,6 +339,7 @@ final class LiveStore {
         if let failure { return finishRefresh(generation, failure: failure) }
         connection = .online
         lastRefreshed = Date()
+        await pickHomeIfUnset()
     }
 
     /// Refreshes while the Live tab is visible and the app is in the foreground.
@@ -434,6 +446,8 @@ final class LiveStore {
         }
         incidentId = id
         destinationChoices = Self.loadChoices(incidentId: id)
+        home = Self.loadHome(incidentId: id)
+        lastCoord = home?.coord ?? deviceCoord
         situation = nil
         zonesCache = nil
         myZone = nil
@@ -469,12 +483,15 @@ final class LiveStore {
     /// `shareResponderLocation` on, posts `me/location`: every 45 s, or after moving 150 m (never
     /// more than every 10 s). Only the latest fix is sent; a failed post is not queued.
     func updateLocation(_ coord: LonLat?, accuracyM: Double? = nil) {
+        deviceCoord = coord
+        deviceAccuracyM = accuracyM
+        let coord = home?.coord ?? coord
         lastCoord = coord
         if let coord, let last = boardComputedAt, BoardGeo.distance(last, coord) > 50 { recomputeBoard() }
         if coord != nil, boardComputedAt == nil { recomputeBoard() }
         let zone = coord.flatMap { c in situation?.zones.flatMap { ZoneLocator.zone(containing: c, in: $0) } }
         setZone(zone)
-        guard let coord, shareResponderLocation else { return }
+        guard let coord, shareResponderLocation, home == nil else { return }
         let now = Date()
         if let last = lastLocationSend {
             let age = now.timeIntervalSince(last)
@@ -559,6 +576,64 @@ final class LiveStore {
     // MARK: D1 destination choice
 
     /// The guidance published for `zoneId`, without any choice applied.
+    // MARK: Home address
+
+    /// Uses `home` in place of GPS; nil goes back to GPS. Either way the choice sticks (no auto-pick).
+    func setHome(_ home: DrillHome?) {
+        UserDefaults.standard.set(true, forKey: Self.homeChosenKey(incidentId))
+        applyHome(home)
+    }
+
+    func homes(q: String = "", id: String? = nil, limit: Int = 50) async throws -> DrillHomes {
+        let incidentId = incidentId
+        return try await authorized {
+            try await $0.homes(incidentId: incidentId, q: q, id: id, limit: limit, token: $1)
+        }
+    }
+
+    /// Re-reads the picked home (its simulated status moves with the drill clock). A home the drill
+    /// no longer has is dropped, and the next refresh picks another.
+    func refreshHome() async {
+        guard let id = home?.id else { return }
+        do {
+            guard let fresh = try await homes(id: id, limit: 1).homes.first, fresh.id == home?.id else { return }
+            if fresh != home { applyHome(fresh) }
+        } catch LiveAPIError.notFound {
+            UserDefaults.standard.removeObject(forKey: Self.homeChosenKey(incidentId))
+            applyHome(nil)
+        } catch {}
+    }
+
+    /// A fresh install shows a real address: the first simulated home whose zone has an order, else
+    /// the first home. Only until the person chooses (a home, or GPS) in Settings.
+    private func pickHomeIfUnset() async {
+        guard home == nil, !pickingHome, situation != nil,
+              !UserDefaults.standard.bool(forKey: Self.homeChosenKey(incidentId)) else { return }
+        pickingHome = true
+        defer { pickingHome = false }
+        guard let homes = try? await homes(limit: 200).homes, let first = homes.first, home == nil else { return }
+        let ordered = homes.first { (publishedGuidance(for: $0.zone.id)?.level ?? .none) != .none }
+        applyHome(ordered ?? first)
+    }
+
+    private func applyHome(_ home: DrillHome?) {
+        self.home = home
+        let key = Self.homeKey(incidentId)
+        if let home, let data = try? JSONEncoder().encode(home) {
+            UserDefaults.standard.set(data, forKey: key)
+        } else {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+        updateLocation(deviceCoord, accuracyM: deviceAccuracyM)
+    }
+
+    private static func homeKey(_ incidentId: String) -> String { "live.home.\(incidentId)" }
+    private static func homeChosenKey(_ incidentId: String) -> String { "live.homeChosen.\(incidentId)" }
+
+    private static func loadHome(incidentId: String) -> DrillHome? {
+        UserDefaults.standard.data(forKey: homeKey(incidentId)).flatMap { try? JSONDecoder().decode(DrillHome.self, from: $0) }
+    }
+
     func publishedGuidance(for zoneId: String) -> ZoneGuidance? {
         situation?.guidance.first { $0.zoneId == zoneId }
     }
@@ -662,6 +737,24 @@ final class LiveStore {
         let incidentId = incidentId
         return try await authorized {
             try await $0.voiceTurn(incidentId: incidentId, request: request, token: $1)
+        }
+    }
+
+    /// A short-lived Cartesia token for the phone's own speech WebSockets (`POST voice/token`).
+    /// Throws `VoiceTurnError` with `status` 503 when the server has no Cartesia/Anthropic key.
+    func voiceToken() async throws -> VoiceToken {
+        let incidentId = incidentId
+        return try await authorized {
+            try await $0.voiceToken(incidentId: incidentId, token: $1)
+        }
+    }
+
+    /// A streamed voice turn (`stream: true`, typed or transcribed `text`): reply pieces as the
+    /// model writes them, then the final turn. HTTP errors throw before the stream starts.
+    func voiceTurnStream(_ request: VoiceTurnRequest) async throws -> AsyncThrowingStream<VoiceStreamEvent, Error> {
+        let incidentId = incidentId
+        return try await authorized {
+            try await $0.voiceTurnStream(incidentId: incidentId, request: request, token: $1)
         }
     }
 

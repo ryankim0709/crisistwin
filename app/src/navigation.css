@@ -1,7 +1,7 @@
 /* Sidebar shell. Classes: app-layout, sidebar-*, nav-*. Primitives come from ./ui. */
 .app-layout {
   display: grid;
-  grid-template-columns: 248px minmax(0, 1fr);
+  grid-template-columns: 224px minmax(0, 1fr);
   min-height: 100dvh;
 }
 
@@ -28,23 +28,26 @@
   flex-direction: column;
   height: 100dvh;
   overflow-y: auto;
-  padding: var(--ct-space-7) var(--ct-space-5) var(--ct-space-5);
+  padding: var(--ct-space-4) var(--ct-space-3) var(--ct-space-5);
   border-right: 1px solid var(--ct-border);
   background: var(--ct-surface-muted);
 }
 
+/* Header row: logo left, collapse button right, on one line. */
 .sidebar-brand {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--ct-space-4);
+  gap: var(--ct-space-2);
+  min-height: 40px;
+  padding: 0 0 0 var(--ct-space-3);
 }
 
 .sidebar-logo {
   display: block;
-  flex: 0 1 204px;
+  flex: 0 1 148px;
   min-width: 0;
-  height: 44px;
+  height: 32px;
 }
 
 .sidebar-logo img {
@@ -55,8 +58,12 @@
   object-fit: cover;
 }
 
+.sidebar-logo .sidebar-logo-mark {
+  display: none;
+}
+
 .sidebar-nav {
-  padding: var(--ct-space-10) 0 var(--ct-space-6);
+  padding: var(--ct-space-6) 0 var(--ct-space-6);
 }
 
 .nav-group + .nav-group {
@@ -81,14 +88,13 @@
 .nav-group a {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: var(--ct-space-2);
-  min-height: 44px;
-  margin: var(--ct-space-1) 0;
-  padding: 10px var(--ct-space-3);
+  min-height: 40px;
+  margin: 2px 0;
+  padding: var(--ct-space-2) var(--ct-space-3);
   border-radius: var(--ct-radius-sm);
   color: var(--ct-ink);
-  font-size: var(--ct-text-md);
+  font-size: var(--ct-text-base);
   text-decoration: none;
 }
 
@@ -111,22 +117,35 @@
   min-width: 0;
 }
 
-/* Desktop-only collapse: the sidebar shrinks to a rail holding just the expand button. */
 .sidebar .sidebar-collapse {
-  align-self: flex-end;
-  margin: -16px -8px 8px 0;
+  flex: none;
+  color: var(--ct-ink-muted);
 }
+
+/* Desktop-only collapse: a narrow rail with the mark and the expand button, stacked. */
 .app-layout.is-sidebar-collapsed {
-  grid-template-columns: 52px minmax(0, 1fr);
+  grid-template-columns: 56px minmax(0, 1fr);
 }
 .is-sidebar-collapsed .sidebar {
-  padding: var(--ct-space-7) 10px;
+  padding: var(--ct-space-4) var(--ct-space-2);
 }
-.is-sidebar-collapsed .sidebar .sidebar-collapse {
-  align-self: center;
-  margin: -16px 0 0;
+.is-sidebar-collapsed .sidebar-brand {
+  flex-direction: column;
+  gap: var(--ct-space-3);
+  padding: 0;
 }
-.is-sidebar-collapsed .sidebar-brand,
+.is-sidebar-collapsed .sidebar-logo {
+  flex: none;
+  width: 32px;
+  height: 32px;
+}
+.is-sidebar-collapsed .sidebar-logo .sidebar-logo-full {
+  display: none;
+}
+.is-sidebar-collapsed .sidebar-logo .sidebar-logo-mark {
+  display: block;
+  object-fit: contain;
+}
 .is-sidebar-collapsed .sidebar-nav {
   display: none;
 }
@@ -159,7 +178,18 @@
     padding: var(--ct-space-4) var(--ct-space-5);
   }
   .is-sidebar-collapsed .sidebar-brand {
-    display: flex;
+    flex-direction: row;
+    padding: 0;
+  }
+  .is-sidebar-collapsed .sidebar-logo {
+    flex: 0 1 148px;
+    width: auto;
+  }
+  .is-sidebar-collapsed .sidebar-logo .sidebar-logo-full {
+    display: block;
+  }
+  .is-sidebar-collapsed .sidebar-logo .sidebar-logo-mark {
+    display: none;
   }
   .is-sidebar-collapsed .sidebar-nav.is-open {
     display: block;

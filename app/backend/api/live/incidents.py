@@ -53,6 +53,8 @@ class Source:
     package_id: str | None = None
     name: str | None = None
     label: str | None = None
+    region_id: str | None = None
+    """Studio region the package was built on (``summary.region_id``); None for Camp."""
 
 
 def bundle_path() -> Path:
@@ -84,7 +86,9 @@ def package_source(package_id: str) -> Source | None:
     except (OSError, ValueError, KeyError, TypeError):
         log.warning("live: unreadable package meta %s", meta_path.name)
         return None
-    return Source(incident_id, "package", path, package_id, summary.get("name"), summary.get("label"))
+    region_id = summary.get("region_id")
+    return Source(incident_id, "package", path, package_id, summary.get("name"), summary.get("label"),
+                  region_id if isinstance(region_id, str) else None)
 
 
 def source_for(incident_id: str) -> Source | None:
@@ -159,7 +163,11 @@ def active_json() -> dict[str, Any]:
             "source": doc.get("source") or "bundle",
             "package_id": doc.get("package_id"),
             "activated_at": iso(doc.get("activated_at")),
+            "region_id": None,
         }
+        if body["source"] == "package" and body["package_id"]:
+            source = package_source(str(body["package_id"]))
+            body["region_id"] = source.region_id if source is not None else None
     else:
         body = {
             "incident_id": default_incident_id(),
@@ -168,6 +176,7 @@ def active_json() -> dict[str, Any]:
             "source": "bundle",
             "package_id": None,
             "activated_at": None,
+            "region_id": None,
         }
     return {
         **body,

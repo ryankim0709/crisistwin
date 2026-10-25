@@ -3,14 +3,34 @@
  * (app/src/response/) applied to the board (demo/model.ts). Pure: no React, network or LLM;
  * every draw comes from the board's seeded response stream. See docs/response-model.md.
  *
+ * The /live board is AI agent only (docs/response-model.md "Decisions and mechanics"): the
+ * response DECIDES nothing on its own. autoDispatch and autoEscalate are false (createResponseState;
+ * useCommandBoard.ts also forces them off), so no run card, aircraft, resource order, extended
+ * attack or station move-up happens unless the AI commander (or the drill controller) orders it
+ * through model.ts applyOrder. The run card is still computed, as a recommendation for the
+ * commander (initialAttackRecommendation, observation recommended_initial_attack). With the
+ * flags on (scripts only) the former rule-based response runs as described below.
+ *
  * What it does each board step (model.ts stepOnce calls in this order):
- * - respondToNewFire (from ignite): the run card for the fire's dispatch level, filled by the
- *   closest units by expected arrival (turnout + road time x congestion), within each
- *   department's drawdown; a shortfall is ordered as immediate-need mutual aid.
- * - responseTick: unit lifecycle (returning, refilling, resting, out of service, move-up and
- *   cover), work/rest and water, fire-cut roads, aircraft cycles, and orders reaching the board.
- * - advanceContainment: tactic by flame length, line per tactic, the seeded holding test.
- * - escalate: initial-attack failure and the extended-attack orders.
+ * - respondToNewFire (from ignite): the fire's record and its seeded report delay. At the report
+ *   (dispatchOnReport), only with autoDispatch: the run card for the fire's dispatch level, filled
+ *   by the closest units by expected arrival (turnout + road time x congestion), within each
+ *   department's drawdown; a shortfall is ordered as immediate-need mutual aid (with autoEscalate).
+ * - responseTick (mechanics): unit lifecycle (returning, refilling, resting, out of service),
+ *   work/rest and water, fire-cut roads, aircraft cycles, and placed orders reaching the board;
+ *   move-up and cover only with autoDispatch.
+ * - advanceContainment (mechanics): line per tactic, the seeded holding test. The tactic is the
+ *   commander's (set_strategy, demo/strategyOptions.ts commanderTactic); only with autoDispatch
+ *   (scripts) does the board pick it by flame length (reviewTactic, chooseTactic).
+ * - escalate: initial-attack failure (the IA record) and, only with autoEscalate, the
+ *   extended-attack orders; without it the due stage is logged for the commander.
+ *
+ * Report rule (docs/response-model.md "From ignition to dispatch"): a fire is known to dispatch
+ * from FireResponse.reportAt on: ignition + the Simulation Studio user's report time when set
+ * (fire.studio.reportAfterMin), else + the seeded modelled delay (response/report.ts). Nothing
+ * acts on a fire before then: no run card, aircraft, escalation, resource order, send_crew or
+ * attack position (model.ts dispatch / applyOrder / closeFire refuse with unreportedRefusal),
+ * and the commander's observation and panels leave it out. Its physics still runs.
  *
  * Coupling: this module imports model.ts functions and model.ts imports this module; neither
  * uses the other at module load (only inside functions), so the cycle is safe.
@@ -29,6 +49,7 @@ import {
 import { engineCrewHandLineMPerMin, formatDuration, planWork, type WorkMode } from "../response/reach";
 import { countAtMost } from "./fireField";
 import type { LonLat } from "../live/types";
+import { commanderTactic, type ChosenStrategy } from "./strategyOptions";
 import { DROP_HOLDS_FLAME_FEET, nearestWaterKm } from "../studio/aircraft";
 import { DEFAULT_START_LOCAL_ISO } from "../studio/firefighting";
 import {
@@ -73,12 +94,9 @@ import {
   type ResourceCounts,
 } from "../response/runCards";
 import {
-  REROUTE_DETOUR_FACTOR,
-  VEHICLES_PER_HOUSEHOLD,
   buildFlowIndex,
   congestionOnLeg,
   routeCutAt,
-  travelVariation,
   type FlowIndex,
 } from "../response/travel";
 import {
@@ -100,16 +118,24 @@ import {
   restMinutesAfter,
 } from "../response/units";
 import {
-  ACTIVITY,
+  activeRoute,
+  boardActivity,
+  boardMoistureClass,
+  boardWind,
   cellLonLat,
   crewTarget,
-  departed,
+  dispatch,
   distanceM,
+  driveHome,
   fallbackDriveMinutes,
+  fireDest,
+  legStatus,
   logEvent,
+  MAX_FIRE_CUT_REROUTES,
   perimeterIn,
-  teamPosition,
-  travelKey,
+  rerouteTeam,
+  startRoadTrip,
+  travelMinutesTo,
   unitLineOn,
   zoneAt,
   toLocal,
@@ -119,7 +145,8 @@ import {
   type Station,
   type Team,
 } from "./model";
-import { KIND_PREFIX, holdsFlameFeet, kindShort, windAt } from "./realism";
+import { KIND_PREFIX, holdsFlameFeet } from "./realism";
+import { simClock } from "./format";
 
 // ---- state ----
 
@@ -145,15 +172,21 @@ export interface FireResponse {
   dipKm: number | null;
   /** Area when the response first knew it, ha (for the record). */
   containedHa: number | null;
-  /** Board minute the dispatch centre has the fire (ignition + report delay, response/report.ts). */
+  /**
+   * Board minute the dispatch centre has the fire: ignition + the Studio-set report time
+   * (report.by "studio") or + the modelled report delay (response/report.ts). Nothing acts on the
+   * fire before it (see the report rule above).
+   */
   reportAt: number;
   report: ReportDelay;
   /** Whether the run card has gone out (at reportAt). */
   dispatched: boolean;
   /** Line built by ground units, metres (capped at the reachable share of what is needed). */
   groundLineM: number;
-  /** Fire edge sample and the share of it within reach of the units working it, refreshed every REACH_EVERY_MINUTES. */
-  reach: { minute: number; edge: LonLat[]; fraction: number | null } | null;
+  /** Fire edge sample (at whole REACH_EVERY_MINUTES minutes) and the share of it within reach of the units working it (for unitsKey). */
+  reach: { minute: number; edge: LonLat[]; fraction: number | null; unitsKey?: string } | null;
+  /** The commander's containment strategy (set_strategy, demo/strategyOptions.ts); absent / null = none chosen yet. */
+  strategy?: ChosenStrategy | null;
 }
 
 /** How often the fire-edge sample and the reachable share are refreshed, minutes. */
@@ -207,9 +240,12 @@ export interface ResponseStats {
 
 export interface ResponseState {
   rng: RngStream;
-  /** Rule-based initial attack on every new fire (CAD run cards). */
+  /**
+   * Rule-based dispatch decisions: the run card at each fire's report (units and aircraft) and
+   * station move-up and cover. False on the /live board (AI agent only; RULE_RESPONSE_DEFAULT).
+   */
   autoDispatch: boolean;
-  /** Rule-based escalation (extended attack orders) when initial attack fails. */
+  /** Rule-based ordering: run-card shortfall orders and extended-attack orders when initial attack fails. False on /live. */
   autoEscalate: boolean;
   departments: Department[];
   /** Off-board units not yet ordered (mutual-aid pool). */
@@ -232,6 +268,13 @@ export interface ResponseState {
   /** Every facility that fields a unit (on the board, mutual aid, air bases in range), for the map. */
   facilities: FacilityContribution[];
 }
+
+/**
+ * Board rule (not sourced; the user's requirement for /live): the response makes no decision on
+ * its own. Every dispatch, order, release and move-up comes from model.ts applyOrder (the AI
+ * commander or the drill controller); the simulator runs only the mechanics.
+ */
+export const RULE_RESPONSE_DEFAULT = false;
 
 const MAX_TEAMS = 160;
 const MAX_ORDERS_KEPT = 60;
@@ -275,8 +318,8 @@ export function createResponseState(
   }
   return {
     rng: deriveStream(seed, "response"),
-    autoDispatch: true,
-    autoEscalate: true,
+    autoDispatch: RULE_RESPONSE_DEFAULT,
+    autoEscalate: RULE_RESPONSE_DEFAULT,
     departments,
     pool,
     offBoardStations: new Map(offBoardStations.map((s) => [s.id, s])),
@@ -321,19 +364,22 @@ function nextId(board: Board, prefix: string): string {
   return `${prefix}${c[prefix]}`;
 }
 
-/** Outbound evacuation flows on the board's routes now, indexed for congestion lookups (cached per minute). */
+/**
+ * Outbound evacuation flows on the board's routes now, indexed for congestion lookups (cached per
+ * minute). One traffic state with the evacuees: each leaving zone's departure flow, veh/h, from
+ * the board's evacuation traffic step (model.ts evacuationTrafficStep, board.traffic.zoneFlow:
+ * the departure curve x the snapshot's vehicles per household), on its current route line.
+ */
 export function flowIndex(board: Board): FlowIndex | null {
   const minute = Math.floor(board.minute);
   const cached = board.response.flows;
   if (cached && cached.minute === minute) return cached.index;
   const flows = [];
-  const WINDOW = 10;
   for (const zone of board.zones) {
-    const route = zone.route ?? zone.shadowRoute;
-    if (!route || route.line.length < 2) continue;
-    const households = departed(zone, minute) - departed(zone, minute - WINDOW);
-    if (households <= 0) continue;
-    flows.push({ line: route.line, vehiclesPerHour: (households / WINDOW) * 60 * VEHICLES_PER_HOUSEHOLD });
+    const route = activeRoute(zone);
+    const vehiclesPerHour = board.traffic.zoneFlow.get(zone.id) ?? 0;
+    if (!route || route.line.length < 2 || vehiclesPerHour <= 0) continue;
+    flows.push({ line: route.line, vehiclesPerHour });
   }
   const lat0 = board.zones[0]?.core[1] ?? 0;
   const index = flows.length > 0 ? buildFlowIndex(flows, lat0) : null;
@@ -341,27 +387,15 @@ export function flowIndex(board: Board): FlowIndex | null {
   return index;
 }
 
-/** Free-flow drive minutes and the line for a unit going from `from` to `fire` (road leg if known). */
-function legFor(board: Board, team: Team, from: LonLat, fire: Fire): { drive: number; line: LonLat[]; road: boolean } {
-  const leg = board.travel.get(travelKey(team, from, fire.id));
-  const target = crewTarget(fire);
-  if (leg) return { drive: leg.driveMinutes, line: leg.line, road: true };
-  return { drive: fallbackDriveMinutes(from, target), line: [from, target], road: false };
-}
-
-/** Turnout applies only to a unit starting from rest (not one already rolling). */
-function turnoutFor(team: Team): number {
-  return team.status === "available" ? team.turnoutMinutes : 0;
-}
-
-/** Expected minutes to on scene (no seeded variation): turnout + drive x congestion. */
+/**
+ * Expected minutes to on scene (no seeded variation): turnout (from rest only) + the road leg (or
+ * the straight-line estimate while it is not known) x congestion (model.ts travelMinutesTo).
+ */
 export function expectedArrival(board: Board, team: Team, fire: Fire): number {
   if (team.fireId === fire.id) {
     return team.status === "on_scene" || team.status === "refilling" ? 0 : Math.max(0, (team.arriveAt ?? board.minute) - board.minute);
   }
-  const from = teamPosition(board, team);
-  const leg = legFor(board, team, from, fire);
-  return turnoutFor(team) + leg.drive * congestionOnLeg(flowIndex(board), leg.line).multiplier;
+  return travelMinutesTo(board, team, fire.id, crewTarget(fire));
 }
 
 /** Whether the unit's department lets it go (drawdown), unless the fire is in the department's own area. */
@@ -394,58 +428,35 @@ function poolAllows(board: Board, seed: UnitSeed): boolean {
 }
 
 /**
- * Sends `team` to `fire` (the send_crew order and the run card both use this). Arrival = now +
- * turnout (from rest) + free-flow drive x congestion x a seeded variation; the factor is kept so
- * a road leg that arrives later re-times the unit consistently.
+ * Sends `team` to `fire` for direct attack (the run card, orders and send_crew all use this):
+ * model.ts dispatch, which times it as turnout (from rest) + road leg x congestion x a seeded
+ * variation and moves it only along its road line (waiting for the leg when not known yet).
+ * Returns null, or why it cannot go.
  */
-export function dispatchTeam(board: Board, team: Team, fire: Fire, actor: BoardEvent["actor"], why = ""): void {
-  const from = teamPosition(board, team);
-  const leg = legFor(board, team, from, fire);
-  const congestion = congestionOnLeg(flowIndex(board), leg.line);
-  const factor = congestion.multiplier * travelVariation(board.response.rng);
-  const turnout = turnoutFor(team);
-  team.position = from;
-  team.status = "en_route";
-  team.fireId = fire.id;
-  team.departAt = board.minute;
-  team.rollAt = board.minute + turnout;
-  team.target = crewTarget(fire);
-  team.route = leg.road ? leg.line : null;
-  team.travel = leg.road ? (board.travel.get(travelKey(team, from, fire.id))?.basis ?? "road") : "straight_line";
-  team.travelFactor = factor;
-  team.coverStation = null;
-  team.workMode = team.workStartAt = team.parkedM = null;
-  team.arriveAt = board.minute + turnout + leg.drive * factor;
-  const slow = congestion.multiplier > 1.05 ? `, slowed x${congestion.multiplier.toFixed(1)} by evacuation traffic` : "";
+export function dispatchTeam(board: Board, team: Team, fire: Fire, actor: BoardEvent["actor"], why = ""): string | null {
+  return dispatch(board, team, fire, fireDest(fire), actor, why);
+}
+
+/**
+ * Sends a unit home (or to the station it covers, or its demobilisation point) on a road leg
+ * (model.ts driveHome); it can be redispatched while returning.
+ */
+export function sendHome(board: Board, team: Team): void {
+  const cover = team.coverStation ? board.stations.find((s) => s.id === team.coverStation) : undefined;
+  driveHome(board, team, cover?.location ?? team.home, cover?.id ?? team.station);
+}
+
+/** At its station: rest owed (work/rest 2:1), else available. */
+export function arriveHome(board: Board, team: Team): void {
+  const stationId = team.coverStation ?? team.station;
+  const station = board.stations.find((s) => s.id === stationId);
   logEvent(
     board,
     "team",
-    actor,
-    `${team.id} (${kindShort(team.kind)}) sent to ${fire.id}${why}, on scene in ${Math.ceil(team.arriveAt - board.minute)} min${leg.road ? "" : " (straight-line estimate)"}${slow}.`,
+    "board",
+    team.coverStation ? `${team.id} in position covering ${station?.name ?? stationId}.` : `${team.id} back at ${station?.name ?? stationId}.`,
+    { action: team.coverStation ? "covering_station" : "back_at_station", teamIds: [team.id], stationId },
   );
-}
-
-/** Sends a unit home (or to its demobilisation point); it can be redispatched while returning. */
-export function sendHome(board: Board, team: Team): void {
-  const at = teamPosition(board, team);
-  team.position = at;
-  team.fireId = null;
-  team.route = null;
-  team.travel = null;
-  team.workMode = team.workStartAt = team.parkedM = null;
-  const home = team.coverStation ? (board.stations.find((s) => s.id === team.coverStation)?.location ?? team.home) : team.home;
-  if (distanceM(at, home) <= HOME_M) {
-    arriveHome(board, team);
-    return;
-  }
-  team.status = "returning";
-  team.target = home;
-  team.departAt = board.minute;
-  team.rollAt = board.minute;
-  team.arriveAt = board.minute + fallbackDriveMinutes(at, home);
-}
-
-function arriveHome(board: Board, team: Team): void {
   team.position = team.target ?? team.home;
   team.target = null;
   team.departAt = team.arriveAt = team.rollAt = null;
@@ -466,8 +477,8 @@ export function respondToNewFire(board: Board, fire: Fire): void {
   const r = board.response;
   const ground = board.env.spread.ground;
   const structure = ground.fuelCodeAt(fire.origin) === DEVELOPED_FUEL_CODE;
-  const wind = windAt(board.env.spread.wind, board.minute);
-  const level = dispatchLevel(ACTIVITY[board.activity].moisture, wind.speedMetersPerSecond);
+  // Fire danger from the Studio run's fuel moisture (its Scott & Burgan class) and wind.
+  const level = dispatchLevel(boardMoistureClass(board), boardWind(board).speedMetersPerSecond);
   r.fires.set(fire.id, {
     level,
     structure,
@@ -490,7 +501,6 @@ export function respondToNewFire(board: Board, fire: Fire): void {
     groundLineM: 0,
     reach: null,
   });
-  r.stats.fires += 1;
 }
 
 /** The seeded delay from ignition to dispatch for a new fire (response/report.ts). */
@@ -539,7 +549,7 @@ function reportFor(board: Board, fire: Fire, structure: boolean): { reportAt: nu
   for (const z of board.zones) {
     if (z.households > 0 && distanceM(z.core, fire.origin) <= VIEW_RADIUS_M && lineOfSight(grid, fire.origin, z.core)) householdsInView += z.households;
   }
-  const report = reportDelay(board.response.rng, {
+  const modelled = reportDelay(board.response.rng, {
     ignitionEpochMs: board.response.startEpochMs + fire.ignitedAt * 60_000,
     location: fire.origin,
     nearestHomeM: home?.meters ?? null,
@@ -548,9 +558,52 @@ function reportFor(board: Board, fire: Fire, structure: boolean): { reportAt: nu
     householdsInView,
     developed: structure,
     wildland: !structure,
-    alreadyReported: fire.source === "field_report",
+    // Studio ignitions are not reported at ignition; a field report that joins the fire reports it then (model.ts joinFieldReport).
+    alreadyReported: false,
   });
-  return { reportAt: fire.ignitedAt + report.totalMinutes, report };
+  // The modelled delay is drawn even when Studio set the report time, so the seeded stream (and
+  // with it every later draw) is the same whether or not a report time is set.
+  const set = fire.studio.reportAfterMin;
+  if (set === null) return { reportAt: fire.ignitedAt + modelled.totalMinutes, report: modelled };
+  // Studio-set: a scenario assumption, not modelled; the whole delay is the set time.
+  const report: ReportDelay = {
+    ...modelled,
+    by: "studio",
+    totalMinutes: set,
+    callMinutes: set,
+    answerMinutes: 0,
+    transferMinutes: 0,
+    processingMinutes: 0,
+    reason: `report time set in Simulation Studio (${fire.studio.tag}, ${set} min after ignition), not modelled`,
+  };
+  return { reportAt: fire.ignitedAt + set, report };
+}
+
+/** Whether the fire's report time was set in Simulation Studio (it then wins over field reports). */
+export function reportSetInStudio(board: Board, fire: Fire): boolean {
+  return board.response.fires.get(fire.id)?.report.by === "studio";
+}
+
+/** "911 call", "AI camera alert", "satellite detection", "field report" or "report time set in Simulation Studio". */
+export const REPORT_BY_LABEL: Record<ReportDelay["by"], string> = {
+  "911": "911 call",
+  camera: "AI camera alert",
+  satellite: "satellite detection",
+  field_report: "field report",
+  studio: "report time set in Simulation Studio",
+};
+
+/**
+ * Why nobody can act on `fire` yet, or null once it is reported (the report rule above). The AI
+ * commander never sees an unreported fire, so it is told no reported fire has that id; a person
+ * (the drill controller, who sees it on the map labelled "not yet reported") is told when it reports.
+ */
+export function unreportedRefusal(board: Board, fire: Fire, actor: BoardEvent["actor"]): string | null {
+  const fr = board.response.fires.get(fire.id);
+  if (!fr || board.minute >= fr.reportAt) return null;
+  if (actor === "agent") return `Unknown fire ${fire.id}: no reported fire has that id.`;
+  const when = `${simClock(fr.reportAt)}${fr.report.by === "studio" ? ", set in Simulation Studio" : ", modelled report delay"}`;
+  return `${fire.id} has not been reported to dispatch yet (reported at ${when}); no unit can act on it before then.`;
 }
 
 /** Whether the dispatch centre knows about the fire (the commander sees only reported fires). */
@@ -564,13 +617,25 @@ function dispatchOnReport(board: Board, fire: Fire, fr: FireResponse): void {
   const r = board.response;
   fr.dispatched = true;
   fr.dispatchedAt = board.minute;
-  const how = fr.report.by === "camera" ? "AI camera alert" : fr.report.by === "field_report" ? "field report" : "911 call";
-  logEvent(board, "ignition", "board", `${fire.id} reported by ${how}, ${Math.round(board.minute - fire.ignitedAt)} min after it started${fr.report.night ? " (night)" : ""}.`);
+  // Counted at the report, so the initial-attack record (observation response.initial_attack) holds known fires only.
+  r.stats.fires += 1;
+  const after = Math.round(board.minute - fire.ignitedAt);
+  const text =
+    fr.report.by === "studio"
+      ? `${fire.id} reported to dispatch at ${simClock(board.minute)}, ${after} min after it started (report time set in Simulation Studio).`
+      : `${fire.id} reported by ${REPORT_BY_LABEL[fr.report.by]}, ${after} min after it started${fr.report.night ? " (night)" : ""}: ${fr.report.reason}.`;
+  const decide = r.autoDispatch ? "" : " No automatic dispatch: units go only when the AI agent (or you) orders them.";
+  logEvent(board, "ignition", "board", text + decide, {
+    action: "fire_reported",
+    fireId: fire.id,
+    reportedBy: fr.report.by,
+    reportAfterMin: after,
+  });
   if (!r.autoDispatch || fire.noSpread !== null || fire.status !== "burning") return;
   const level = fr.level;
   const structure = fr.structure;
   const card = runCard(level, structure);
-  logEvent(board, "team", "board", `${fire.id}: ${structure ? "structure" : level} dispatch level, run card ${cardText(card)}.`);
+  logEvent(board, "team", "board", `${fire.id}: ${structure ? "structure" : level} dispatch level, run card ${cardText(card)}.`, { action: "run_card", fireId: fire.id });
   const short = fillCard(board, fire, card);
   const shortGround = short.engines + short.hand_crews + short.dozers;
   if (shortGround > 0 && r.autoEscalate) {
@@ -612,7 +677,7 @@ function fillCard(board: Board, fire: Fire, card: ResourceCounts): ResourceCount
   const r = board.response;
   type Candidate = { t: Team | null; seed: UnitSeed | null; kind: GroundResponseKind; eta: number; id: string };
   const candidates: Candidate[] = board.teams
-    .filter((t) => dispatchable(t) && t.fireId === null)
+    .filter((t) => dispatchable(t) && t.fireId === null && legStatus(board, t, fire.id, crewTarget(fire)).route !== "none")
     .map((t) => ({ t, seed: null, kind: t.kind, eta: expectedArrival(board, t, fire), id: t.id }));
   const flows = flowIndex(board);
   const byDistance = [...r.pool].sort((a, b) => distanceM(a.location, fire.origin) - distanceM(b.location, fire.origin));
@@ -648,7 +713,14 @@ function fillCard(board: Board, fire: Fire, card: ResourceCounts): ResourceCount
       }
       if (!team) continue;
       used.add(c);
-      dispatchTeam(board, team, fire, "board", c.seed ? " (run card, closest resource from off the board)" : " (run card)");
+      if (dispatchTeam(board, team, fire, "board", c.seed ? " (run card, closest resource from off the board)" : " (run card)") !== null) {
+        if (c.seed) {
+          // No road there for it: back to the pool.
+          board.teams = board.teams.filter((t) => t !== team);
+          r.pool.push(c.seed);
+        }
+        continue;
+      }
       short[family] -= 1;
     }
   }
@@ -658,22 +730,158 @@ function fillCard(board: Board, fire: Fire, card: ResourceCounts): ResourceCount
       .filter((a) => a.kind === kind && a.status === "available")
       .sort((a, b) => distanceM(a.base, fire.origin) - distanceM(b.base, fire.origin));
     for (const a of free.slice(0, short[family])) {
-      dispatchAircraft(board, a, fire);
+      dispatchAircraft(board, a, fire, "board");
       short[family] -= 1;
     }
   }
   return short;
 }
 
-function dispatchAircraft(board: Board, a: Aircraft, fire: Fire): void {
-  const km = a.tier === "state" ? STATE_AIR_DISTANCE_KM : distanceM(a.base, fire.origin) / 1000;
+/** Straight-line km from an aircraft's base to the fire (the cycle distance; STATE_AIR_DISTANCE_KM for state aircraft). */
+function aircraftKm(a: Aircraft, fire: Fire): number {
+  return a.tier === "state" ? STATE_AIR_DISTANCE_KM : distanceM(a.base, fire.origin) / 1000;
+}
+
+/** Minutes until an available aircraft sent now is over `fire` (response/units.ts firstOverFireMinutes). */
+export function aircraftOverFireMinutes(a: Aircraft, fire: Fire): number {
+  return firstOverFireMinutes(a.kind, aircraftKm(a, fire));
+}
+
+/**
+ * Sends an available aircraft from its base to `fire` (the run card with autoDispatch, or a
+ * send_crew order naming the aircraft: model.ts applyOrder). Returns null, or why it cannot go.
+ */
+export function dispatchAircraft(board: Board, a: Aircraft, fire: Fire, actor: BoardEvent["actor"]): string | null {
+  const unreported = unreportedRefusal(board, fire, actor); // report rule
+  if (unreported) return unreported;
+  if (fire.status !== "burning") return `${fire.id} is not burning.`;
+  if (a.status !== "available") {
+    return a.fireId === fire.id ? `${a.id} is already on ${fire.id}.` : `${a.id} is ${a.status.replace(/_/g, " ")}${a.fireId ? ` (${a.fireId})` : ""} and cannot be sent; release it first or send an available aircraft.`;
+  }
+  const km = aircraftKm(a, fire);
   a.baseKm = km;
   a.status = "en_route";
   a.fireId = fire.id;
   a.overFireAt = board.minute + firstOverFireMinutes(a.kind, km);
   a.nextDropAt = null;
   a.returnAt = null;
-  logEvent(board, "team", "board", `${a.id} (${a.kind.replace("_", " ")}) from ${a.baseName} to ${fire.id}, over the fire in ${Math.ceil(a.overFireAt - board.minute)} min.`);
+  logEvent(board, "team", actor, `${a.id} (${a.kind.replace("_", " ")}) from ${a.baseName} to ${fire.id}, over the fire in ${Math.ceil(a.overFireAt - board.minute)} min.`, {
+    action: "aircraft_dispatched",
+    teamIds: [a.id],
+    fireId: fire.id,
+    etaMin: Math.ceil(a.overFireAt - board.minute),
+  });
+  return null;
+}
+
+/** release_crew naming an aircraft: it flies back to its base (state aircraft leave the board). Returns null or why not. */
+export function releaseAircraftOrder(board: Board, a: Aircraft, actor: BoardEvent["actor"]): string | null {
+  if (a.fireId === null || a.status === "returning") return `${a.id} is not assigned to a fire.`;
+  const fromFire = a.fireId;
+  releaseAircraft(board, a);
+  logEvent(board, "team", actor, `${a.id} released from ${fromFire}; flying back to ${a.tier === "state" ? "its out-of-region base" : a.baseName}.`, {
+    action: "released",
+    teamIds: [a.id],
+    fireId: fromFire,
+  });
+  return null;
+}
+
+/**
+ * The run card for a reported, burning fire as a RECOMMENDATION for the commander (nothing is
+ * sent): the card for its dispatch level (response/runCards.ts runCard), less what is already
+ * assigned, filled the way the former rule-based dispatcher would (fillCard): the closest free
+ * board units by expected arrival (turnout + road time x congestion, no seeded variation), within
+ * each department's drawdown first, then without it; the nearest available aircraft by base
+ * distance. `unfilled` is what the board's own units and aircraft cannot cover (order_resources
+ * mutual aid / state). Off-board pool units are not listed: they come only by order_resources.
+ * Pure: no state change, no random draw.
+ */
+export interface InitialAttackRecommendation {
+  level: DispatchLevel;
+  structure: boolean;
+  card: ResourceCounts;
+  /** Card less the units and aircraft already assigned to (or ordered for) the fire. */
+  stillNeeded: ResourceCounts;
+  units: { team: Team; etaMin: number; road: boolean }[];
+  aircraft: { aircraft: Aircraft; overFireMin: number }[];
+  unfilled: ResourceCounts;
+}
+
+const AIR_FAMILY_KIND = { air_attack: "air_attack", airtankers: "airtanker_s2t", helicopters: "helicopter_t2" } as const;
+
+export function initialAttackRecommendation(board: Board, fire: Fire): InitialAttackRecommendation | null {
+  const r = board.response;
+  const fr = r.fires.get(fire.id);
+  if (!fr || fire.status !== "burning" || !isReported(board, fire)) return null;
+  const card = runCard(fr.level, fr.structure);
+  const need: ResourceCounts = { ...card };
+  for (const t of board.teams) if (t.fireId === fire.id) need[groundFamilyOf(t.kind)] -= 1;
+  for (const a of r.aircraft) {
+    if (a.fireId !== fire.id) continue;
+    if (a.kind === "air_attack") need.air_attack -= 1;
+    else if (a.kind === "helicopter_t2") need.helicopters -= 1;
+    else need.airtankers -= 1;
+  }
+  // Ground strike teams already on order for this fire count against the card (by family).
+  for (const o of r.orders) {
+    if (o.fireId !== fire.id || (o.status !== "pending" && o.status !== "unable_to_fill")) continue;
+    if (o.air === "helicopter_t2") need.helicopters -= 1;
+    else if (o.air) need.airtankers -= 1;
+    else for (const seed of o.seeds) need[groundFamilyOf(seed.kind)] -= 1;
+  }
+  for (const k of Object.keys(need) as (keyof ResourceCounts)[]) need[k] = Math.max(0, need[k]);
+  const stillNeeded: ResourceCounts = { ...need };
+  const candidates = board.teams
+    .filter((t) => dispatchable(t) && t.fireId === null)
+    .flatMap((t) => {
+      const leg = legStatus(board, t, fire.id, crewTarget(fire));
+      return leg.route === "none" ? [] : [{ team: t, etaMin: expectedArrival(board, t, fire), road: leg.route === "road" }];
+    })
+    .sort((a, b) => a.etaMin - b.etaMin || a.team.id.localeCompare(b.team.id));
+  const picked = new Set<Team>();
+  const pickedEngines = new Map<string, number>();
+  const keepsReserve = (t: Team): boolean => {
+    if (!isEngine(t.kind)) return true;
+    const dept = r.departments.find((d) => d.id === t.department);
+    if (!dept || dept.keepEngines <= 0) return true;
+    const own = dept.stationIds.some((id) => {
+      const st = board.stations.find((x) => x.id === id);
+      return st ? distanceM(st.location, fire.origin) <= OWN_AREA_RADIUS_M : false;
+    });
+    return own || freeEngines(board, dept.id) - (pickedEngines.get(dept.id) ?? 0) - 1 >= dept.keepEngines;
+  };
+  const units: InitialAttackRecommendation["units"] = [];
+  for (const pass of [0, 1]) {
+    for (const c of candidates) {
+      if (picked.has(c.team)) continue;
+      const family = groundFamilyOf(c.team.kind);
+      if (need[family] <= 0) continue;
+      if (pass === 0 && !keepsReserve(c.team)) continue;
+      picked.add(c.team);
+      if (isEngine(c.team.kind)) pickedEngines.set(c.team.department, (pickedEngines.get(c.team.department) ?? 0) + 1);
+      units.push(c);
+      need[family] -= 1;
+    }
+  }
+  units.sort((a, b) => a.etaMin - b.etaMin || a.team.id.localeCompare(b.team.id));
+  const aircraft: InitialAttackRecommendation["aircraft"] = [];
+  for (const family of ["air_attack", "airtankers", "helicopters"] as const) {
+    const free = r.aircraft
+      .filter((a) => a.kind === AIR_FAMILY_KIND[family] && a.status === "available")
+      .map((a) => ({ aircraft: a, overFireMin: aircraftOverFireMinutes(a, fire) }))
+      .sort((a, b) => a.overFireMin - b.overFireMin || a.aircraft.id.localeCompare(b.aircraft.id));
+    for (const a of free.slice(0, need[family])) {
+      aircraft.push(a);
+      need[family] -= 1;
+    }
+  }
+  return { level: fr.level, structure: fr.structure, card, stillNeeded, units, aircraft, unfilled: need };
+}
+
+/** "3 engines, 1 crew, 1 airtanker" for a set of resource counts ("none" when all zero). */
+export function resourceCountsText(c: ResourceCounts): string {
+  return cardText(c) || "none";
 }
 
 // ---- orders ----
@@ -691,16 +899,21 @@ const RESOURCE_UNITS: Record<Exclude<Orderable, "airtanker" | "helicopter">, { k
  * cannot fill it, from the state system (arriving at the board edge). Aircraft: from the state
  * system. Returns a short description of what was placed.
  */
-export function placeOrder(board: Board, fire: Fire, resource: Orderable, count: number, by: BoardEvent["actor"], why: string): string {
+export function placeOrder(board: Board, fire: Fire, resource: Orderable, count: number, by: BoardEvent["actor"], why: string, stage?: number): string {
+  // Report rule: nothing is ordered for a fire dispatch does not have yet (callers check first; this guards the state).
+  const refused = unreportedRefusal(board, fire, by);
+  if (refused) return refused;
   const r = board.response;
   const fr = r.fires.get(fire.id);
   const placed: string[] = [];
+  const ids: string[] = [];
   for (let i = 0; i < count; i += 1) {
     r.stats.ordersPlaced += 1;
     const id = `O${r.stats.ordersPlaced}`;
+    ids.push(id);
     if (resource === "airtanker" || resource === "helicopter") {
       const air: AirResponseKind = resource === "airtanker" ? "airtanker_s2t" : "helicopter_t2";
-      const ok = stateHasRoom(board, true, 1) && fills(r.rng, "state", board.activity);
+      const ok = stateHasRoom(board, true, 1) && fills(r.rng, "state", boardActivity(board));
       const lead = firstOverFireMinutes(air, STATE_AIR_DISTANCE_KM);
       pushOrder(board, { id, fireId: fire.id, resource, tier: "state", placedAt: board.minute, readyAt: board.minute + (ok ? variedLead(r.rng, lead) : UNABLE_TO_FILL_RETRY_MINUTES), status: ok ? "pending" : "unable_to_fill", seeds: [], air, by });
       if (!ok) r.stats.ordersUnableToFill += 1;
@@ -723,7 +936,7 @@ export function placeOrder(board: Board, fire: Fire, resource: Orderable, count:
         picked.push(s);
         r.pool = r.pool.filter((x) => x !== s); // so the next pick sees the reduced reserve
       }
-      if (picked.length >= spec.per && fills(r.rng, "mutual_aid", board.activity)) {
+      if (picked.length >= spec.per && fills(r.rng, "mutual_aid", boardActivity(board))) {
         seeds = picked;
       } else {
         r.pool.push(...picked);
@@ -731,7 +944,7 @@ export function placeOrder(board: Board, fire: Fire, resource: Orderable, count:
       }
     }
     if (tier === "state") {
-      const ok = stateHasRoom(board, false, spec.per) && fills(r.rng, "state", board.activity);
+      const ok = stateHasRoom(board, false, spec.per) && fills(r.rng, "state", boardActivity(board));
       const entry = boardEntry(board, fire.origin);
       seeds = Array.from({ length: spec.per }, () => ({
         kind: spec.kind,
@@ -752,7 +965,8 @@ export function placeOrder(board: Board, fire: Fire, resource: Orderable, count:
   }
   if (fr && placed.length > 0) fr.immediateNeedUsed = fr.immediateNeedUsed || r.orders.some((o) => o.fireId === fire.id && o.tier === "mutual_aid");
   const text = `${fire.id}: ordered ${placed.join("; ")}${why ? ` (${why})` : ""}.`;
-  logEvent(board, "team", by, text);
+  const unfilled = r.orders.filter((o) => ids.includes(o.id) && o.status === "unable_to_fill").length;
+  logEvent(board, "team", by, text, { action: "resources_ordered", fireId: fire.id, orderIds: ids, resource, count, unfilled, stage });
   return text;
 }
 
@@ -797,7 +1011,7 @@ function materialiseOrder(board: Board, order: PendingOrder): void {
     order.status = "cancelled";
     // Unused mutual-aid units go back to their pool.
     if (order.tier === "mutual_aid") board.response.pool.push(...order.seeds);
-    logEvent(board, "team", "board", `Order ${order.id} cancelled: ${order.fireId} no longer needs it.`);
+    logEvent(board, "team", "board", `Order ${order.id} cancelled: ${order.fireId} no longer needs it.`, { action: "order_cancelled", fireId: order.fireId, orderIds: [order.id] });
     return;
   }
   order.status = "arrived";
@@ -818,7 +1032,12 @@ function materialiseOrder(board: Board, order: PendingOrder): void {
       tier: "state",
     };
     board.response.aircraft.push(a);
-    logEvent(board, "team", "board", `${a.id} (state airtanker or helicopter) over ${fire.id} (order ${order.id}).`);
+    logEvent(board, "team", "board", `${a.id} (state airtanker or helicopter) over ${fire.id} (order ${order.id}).`, {
+      action: "aircraft_over_fire",
+      teamIds: [a.id],
+      fireId: fire.id,
+      orderIds: [order.id],
+    });
     return;
   }
   for (const seed of order.seeds) {
@@ -847,6 +1066,15 @@ export function teamFromSeed(board: Board, seed: UnitSeed): Team {
     id: nextId(board, KIND_PREFIX[seed.kind]),
     kind: seed.kind,
     station: seed.stationId,
+    engineId: null,
+    // Counts per facility are assumptions (response/fleet.ts), and the snapshot does not list it.
+    assumed: true,
+    returnRetryAt: null,
+    fireCuts: 0,
+    rerouteAt: null,
+    blockedByFire: null,
+    legKey: null,
+    lineId: null,
     position: seed.location,
     status: "available",
     fireId: null,
@@ -896,14 +1124,19 @@ export function responseTick(board: Board, dt: number, wholeMinute: boolean): vo
     }
     if (team.fireId !== null && team.workMinutes >= MAX_SHIFT_MINUTES) {
       team.restOwed = restMinutesAfter(team.workMinutes);
-      logEvent(board, "team", "board", `${team.id} relieved from ${team.fireId} after ${Math.round(team.workMinutes / 60)} h (work/rest 2:1): rests ${Math.round(team.restOwed / 60)} h.`);
+      logEvent(board, "team", "board", `${team.id} relieved from ${team.fireId} after ${Math.round(team.workMinutes / 60)} h (work/rest 2:1): rests ${Math.round(team.restOwed / 60)} h.`, {
+        action: "relieved",
+        teamIds: [team.id],
+        fireId: team.fireId,
+      });
       if (team.demobilise) team.restOwed = 0;
       sendHome(board, team);
       continue;
     }
     if (team.status === "on_scene" && team.waterGallons !== null && team.fireId !== null) {
       team.waterGallons -= ENGINE_WATER_USE_GPM * dt;
-      if (team.waterGallons <= 0) {
+      // step() lands on the minute the tank runs dry (model.ts nextTimedEvent); allow float residue.
+      if (team.waterGallons <= 1e-6) {
         team.waterGallons = 0;
         team.status = "refilling";
         team.restUntil = now + ENGINE_REFILL_MINUTES;
@@ -914,7 +1147,7 @@ export function responseTick(board: Board, dt: number, wholeMinute: boolean): vo
       const fire = board.fires.find((f) => f.id === team.fireId);
       if (fire && fire.status !== "out") team.status = "on_scene";
       else sendHome(board, team);
-    } else if ((team.status === "returning" || team.status === "moving_up") && team.arriveAt !== null && now >= team.arriveAt) {
+    } else if ((team.status === "returning" || team.status === "moving_up") && team.travel !== "pending" && team.arriveAt !== null && now >= team.arriveAt) {
       if (team.demobilise && team.status === "returning") {
         removed.add(team);
         if (team.tier === "mutual_aid") r.pool.push({ kind: team.kind, stationId: team.station, departmentId: team.department, location: team.home, turnoutMinutes: team.turnoutMinutes, tier: "mutual_aid" });
@@ -954,7 +1187,7 @@ export function responseTick(board: Board, dt: number, wholeMinute: boolean): vo
         continue;
       }
       // Retry with the state system.
-      const ok = stateHasRoom(board, order.air !== null, Math.max(1, order.seeds.length)) && fills(r.rng, "state", board.activity);
+      const ok = stateHasRoom(board, order.air !== null, Math.max(1, order.seeds.length)) && fills(r.rng, "state", boardActivity(board));
       order.tier = "state";
       if (ok) {
         order.status = "pending";
@@ -971,7 +1204,8 @@ export function responseTick(board: Board, dt: number, wholeMinute: boolean): vo
     cutRoads(board);
     if (now >= r.nextMoveUpCheck) {
       r.nextMoveUpCheck = now + MOVE_UP_CHECK_EVERY_MINUTES;
-      moveUpAndCover(board);
+      // Moving an engine to cover another station is a dispatch decision: rule-based only (autoDispatch).
+      if (r.autoDispatch) moveUpAndCover(board);
     }
   }
 }
@@ -997,7 +1231,11 @@ function burnedAt(board: Board): (p: LonLat) => boolean {
   };
 }
 
-/** En-route units whose road ahead has burned stop where they are and reroute (straight line x detour until a new road leg). */
+/**
+ * En-route units whose road ahead has burned stop where they are and wait for a new road leg
+ * (model.ts rerouteTeam: at most MAX_FIRE_CUT_REROUTES per trip, with a backoff; the cut after
+ * that gives the trip up as blocked by fire and leaves the unit free where it stands).
+ */
 function cutRoads(board: Board): void {
   const burned = burnedAt(board);
   for (const team of board.teams) {
@@ -1006,19 +1244,30 @@ function cutRoads(board: Board): void {
     const u = span > 0 ? Math.max(0, Math.min(1, (board.minute - team.rollAt) / span)) : 1;
     const cut = routeCutAt(team.route, u, burned);
     if (!cut) continue;
-    const fire = board.fires.find((f) => f.id === team.fireId);
-    const here = teamPosition(board, team);
-    const key = travelKey(team, team.position, team.fireId);
-    board.travel.delete(key);
-    team.position = here;
-    team.departAt = board.minute;
-    team.rollAt = board.minute;
-    team.route = null;
-    team.travel = "straight_line";
-    const target = team.target ?? (fire ? crewTarget(fire) : here);
-    team.arriveAt = board.minute + fallbackDriveMinutes(here, target) * REROUTE_DETOUR_FACTOR * team.travelFactor;
+    const fireId = team.fireId;
+    // Units only drive roads: it stops where it is and waits for a new road leg from there, or gives the trip up.
+    const outcome = rerouteTeam(board, team);
+    if (outcome === null) continue;
     board.response.stats.routeCuts += 1;
-    logEvent(board, "team", "board", `${team.id}: road to ${team.fireId} cut by fire; rerouting, now ${Math.ceil(team.arriveAt - board.minute)} min.`);
+    if (outcome === "blocked") {
+      const cuts = team.blockedByFire?.cuts ?? MAX_FIRE_CUT_REROUTES + 1;
+      logEvent(
+        board,
+        "team",
+        "board",
+        `${team.id}: road to ${fireId} cut by fire ${cuts} times on this trip (after ${MAX_FIRE_CUT_REROUTES} reroutes); trip blocked by fire. It stops where it is, off ${fireId} and free to be re-tasked.`,
+        { action: "road_blocked", teamIds: [team.id], fireId },
+      );
+      continue;
+    }
+    const wait = team.rerouteAt !== null ? Math.round(team.rerouteAt - board.minute) : 0;
+    logEvent(
+      board,
+      "team",
+      "board",
+      `${team.id}: road to ${fireId} cut by fire (reroute ${team.fireCuts} of ${MAX_FIRE_CUT_REROUTES}); stopped, ${wait > 0 ? `asking for a new road route in ${wait} min` : "waiting for a new road route"}.`,
+      { action: "road_cut", teamIds: [team.id], fireId },
+    );
   }
 }
 
@@ -1066,14 +1315,16 @@ function moveUpAndCover(board: Board): void {
       }
     }
     if (!best) continue;
-    best.status = "moving_up";
     best.coverStation = stationId;
-    best.target = station.location;
-    best.departAt = board.minute;
-    best.rollAt = board.minute + best.turnoutMinutes;
-    best.arriveAt = best.rollAt + fallbackDriveMinutes(best.position, station.location);
+    // A road trip (model.ts startRoadTrip), after turnout; no road route there drops the move-up.
+    startRoadTrip(board, best, `cover:${stationId}`, station.location, "moving_up");
+    if (best.status !== "moving_up") continue;
     r.stats.moveUps += 1;
-    logEvent(board, "team", "board", `${best.id} moves up to cover ${station.name} (its engines committed for ${Math.round(board.minute - since)} min).`);
+    logEvent(board, "team", "board", `${best.id} moves up to cover ${station.name} (its engines committed for ${Math.round(board.minute - since)} min).`, {
+      action: "move_up",
+      teamIds: [best.id],
+      stationId,
+    });
   }
 }
 
@@ -1081,7 +1332,7 @@ function moveUpAndCover(board: Board): void {
 
 function aircraftTick(board: Board): void {
   const now = board.minute;
-  const wind = windAt(board.env.spread.wind, now);
+  const wind = boardWind(board);
   const windKt = wind.speedMetersPerSecond * KNOTS_PER_METER_PER_SECOND;
   const epochMs = board.response.startEpochMs + now * 60_000;
   for (const a of board.response.aircraft) {
@@ -1144,13 +1395,14 @@ function dipKmFor(board: Board, fire: Fire): number | null {
 
 /** Units on scene that build line on this fire now. */
 /** Units on scene that are working the edge now (not out of reach, not still hiking in). */
-function builders(board: Board, fire: Fire): Team[] {
+function builders(board: Board, fire: Fire, at = board.minute): Team[] {
   return board.teams.filter(
     (t) =>
       t.fireId === fire.id &&
+      t.lineId === null &&
       t.status === "on_scene" &&
       !offEdge(t.workMode) &&
-      (t.workStartAt === null || board.minute >= t.workStartAt),
+      (t.workStartAt === null || at >= t.workStartAt),
   );
 }
 
@@ -1167,15 +1419,15 @@ function structureFront(board: Board, fire: Fire): boolean {
   return board.env.spread.ground.fuelCodeAt(fire.origin) === DEVELOPED_FUEL_CODE;
 }
 
-/** Line per minute these units build on this fire with this tactic. */
-export function tacticLineRate(board: Board, fire: Fire, teams: Team[], tactic: Tactic): number {
+/** Line per minute these units build on this fire with this tactic (working from `at`: past any hike in). */
+export function tacticLineRate(board: Board, fire: Fire, teams: Team[], tactic: Tactic, at = board.minute): number {
   const fuel = board.env.spread.ground.fuelCodeAt(fire.origin);
   let rate = 0;
   for (const t of teams) {
     if (!buildsOn(t.kind, tactic)) continue;
     // Off-road reach (response/reach.ts): nothing until it has walked in, nothing out of reach,
     // and an engine crew on foot builds hand line at PMS 465 p.39 per-person rates.
-    if (t.workStartAt !== null && board.minute < t.workStartAt) continue;
+    if (t.workStartAt !== null && at < t.workStartAt) continue;
     if (offEdge(t.workMode)) continue;
     if (t.workMode === "hand_line" && (t.kind === "engine_t3" || t.kind === "engine_t1")) {
       rate += engineCrewHandLineMPerMin(t.kind, fuel);
@@ -1193,7 +1445,7 @@ export function tacticLineRate(board: Board, fire: Fire, teams: Team[], tactic: 
 function projectedLine(board: Board, fire: Fire, tactic: Tactic, t: number): number {
   let line = fire.lineM;
   for (const team of board.teams) {
-    if (team.fireId !== fire.id) continue;
+    if (team.fireId !== fire.id || team.lineId !== null) continue;
     const eta = expectedArrival(board, team, fire);
     if (eta >= t || !buildsOn(team.kind, tactic)) continue;
     line += tacticLineRate(board, fire, [team], tactic) * (t - eta);
@@ -1205,19 +1457,35 @@ function reviewTactic(board: Board, fire: Fire, fr: FireResponse, teams: Team[])
   const assigned = board.teams.filter((t) => t.fireId === fire.id);
   const droppers = board.response.aircraft.some((a) => a.fireId === fire.id && a.kind !== "air_attack");
   if (assigned.length === 0 && !droppers) return; // nothing to choose a tactic for yet
-  const holds = directHolds(board, fire, teams);
-  const assignedHolds = Math.max(holds, droppers ? DROP_HOLDS_FLAME_FEET : 0, ...assigned.map((t) => holdsFlameFeet(t.kind)));
-  const parallelNeed = (t: number) => lineNeededMeters("parallel", perimeterIn(board, fire, t), null);
-  const parallelFeasible = [30, 60, 120].some((t) => projectedLine(board, fire, "parallel", t) >= parallelNeed(t));
-  const tactic = chooseTactic({
-    structure: structureFront(board, fire),
-    crowning: fire.rates.crowning,
-    headFlameFeet: fire.rates.headFlameFeet,
-    directHoldsFeet: assignedHolds,
-    parallelFeasible,
-  });
-  if (tactic !== fr.tactic) {
-    logEvent(board, "team", "board", `${fire.id}: ${TACTIC_LABEL[tactic].toLowerCase()} (head flame ${fire.rates.headFlameFeet.toFixed(1)} ft${fire.rates.crowning ? ", crowning" : ""}).`);
+  // AI agent only: the tactic is the commander's (set_strategy; without one, direct attack, the
+  // structure attack on developed ground: demo/strategyOptions.ts commanderTactic). The board
+  // switches tactics by flame length only in the rule-based response (autoDispatch, scripts).
+  const commanded = commanderTactic(board, fire);
+  const tactic =
+    commanded ??
+    (() => {
+      const holds = directHolds(board, fire, teams);
+      const assignedHolds = Math.max(holds, droppers ? DROP_HOLDS_FLAME_FEET : 0, ...assigned.map((t) => holdsFlameFeet(t.kind)));
+      const parallelNeed = (t: number) => lineNeededMeters("parallel", perimeterIn(board, fire, t), null);
+      const parallelFeasible = [30, 60, 120].some((t) => projectedLine(board, fire, "parallel", t) >= parallelNeed(t));
+      return chooseTactic({
+        structure: structureFront(board, fire),
+        crowning: fire.rates.crowning,
+        headFlameFeet: fire.rates.headFlameFeet,
+        directHoldsFeet: assignedHolds,
+        parallelFeasible,
+      });
+    })();
+  if (tactic !== fr.tactic && commanded !== undefined) {
+    // What the commander's order means changed with the fuel at the head (direct <-> structure); not a choice.
+    fr.tactic = tactic;
+    fr.target = null;
+  } else if (tactic !== fr.tactic) {
+    logEvent(board, "team", "board", `${fire.id}: ${TACTIC_LABEL[tactic].toLowerCase()} (head flame ${fire.rates.headFlameFeet.toFixed(1)} ft${fire.rates.crowning ? ", crowning" : ""}).`, {
+      action: "tactic",
+      fireId: fire.id,
+      label: TACTIC_LABEL[tactic],
+    });
     fr.tactic = tactic;
     fr.target = null;
   }
@@ -1235,23 +1503,38 @@ function reviewTactic(board: Board, fire: Fire, fr: FireResponse, teams: Team[])
 }
 
 /**
- * One step of the containment race on a burning fire. Returns true when the fire is contained
- * this step (the caller marks it contained).
+ * Ground line the fire's direct-attack units build over the step (from, from + dt], with the
+ * units as they were at the step's start (model.ts stepOnce calls it before anything else in the
+ * step changes them; step() lands on every arrival, start of work and empty tank), so the line
+ * is the same however the clock's ticks divide the time.
  */
-export function advanceContainment(board: Board, fire: Fire, dt: number): boolean {
+export function accrueContainmentLine(board: Board, fire: Fire, from: number, dt: number): void {
+  const fr = board.response.fires.get(fire.id);
+  if (!fr || dt <= 0 || fire.status !== "burning") return;
+  const teams = builders(board, fire, from);
+  if (teams.length > 0) fr.groundLineM += tacticLineRate(board, fire, teams, fr.tactic, from) * dt;
+}
+
+/**
+ * The containment race on a burning fire after a step (ground line accrues in
+ * accrueContainmentLine). Returns true when the fire is contained this step (the caller marks it
+ * contained). The tactic review, the cap to the reachable edge and the seeded holding test run
+ * only when `decide` (model.ts stepOnce: the clock is on a whole minute), so the line, the number
+ * of draws and the minute they happen do not depend on the tick size.
+ */
+export function advanceContainment(board: Board, fire: Fire, decide = true): boolean {
   const fr = board.response.fires.get(fire.id);
   if (!fr) return false;
   const teams = builders(board, fire);
-  if (board.minute - fr.tacticAt >= TACTIC_REVIEW_MINUTES) reviewTactic(board, fire, fr, teams);
+  if (decide && board.minute - fr.tacticAt >= TACTIC_REVIEW_MINUTES) reviewTactic(board, fire, fr, teams);
   if (teams.length === 0 && fr.airLineM <= 0) return false;
   const needed = lineNeededMeters(fr.tactic, fire.perimeterM, fr.target?.perimeterM ?? null);
-  const rate = tacticLineRate(board, fire, teams, fr.tactic);
   // Ground line covers at most the share of the edge within reach of the units working it
   // (response/reach.ts); aircraft line can cover the rest. Line cannot exceed what the tactic
   // needs; flank line is outflanked as the perimeter grows.
-  const reach = reachFraction(board, fire, fr);
-  fr.groundLineM = Math.min(needed * (reach ?? 1), fr.groundLineM + rate * dt);
+  if (decide) fr.groundLineM = Math.min(needed * (reachFraction(board, fire, fr) ?? 1), fr.groundLineM);
   fire.lineM = Math.min(needed, fr.groundLineM + fr.airLineM);
+  if (!decide) return false;
   // Aircraft lay line, but only ground resources on scene finish and hold it (retardant supports ground forces).
   if (fr.tactic === "flank" || teams.length === 0) return false;
   if (fr.tactic === "indirect" && fr.target) {
@@ -1262,6 +1545,8 @@ export function advanceContainment(board: Board, fire: Fire, dt: number): boolea
     }
   } else if (fire.lineM < needed - 1e-6) return false;
   if (board.minute < fr.retryAt) return false;
+  // No ground line holds a crowning head (only reachable with a commanded tactic: the rule-based choice is flank then).
+  if (fire.rates.crowning && fr.tactic !== "structure") return false;
   // Direct attack waits for a unit whose line holds the head (crews alone at 4-8 ft do not test it).
   if (fr.tactic === "direct" && directHolds(board, fire, teams) < fire.rates.headFlameFeet) return false;
   const holds = tacticHoldsFeet(fr.tactic, directHolds(board, fire, teams));
@@ -1280,7 +1565,7 @@ function breach(board: Board, fire: Fire, fr: FireResponse, why: string): void {
   fr.target = null;
   fr.tacticAt = -Infinity;
   board.response.stats.breaches += 1;
-  logEvent(board, "team", "board", `${fire.id}: line breached, ${why}; ${Math.round(BREACH_LINE_LOSS_SHARE * 100)}% of the line lost.`);
+  logEvent(board, "team", "board", `${fire.id}: line breached, ${why}; ${Math.round(BREACH_LINE_LOSS_SHARE * 100)}% of the line lost.`, { action: "line_breached", fireId: fire.id });
 }
 
 /** At containment: the IA record, and every unit beyond the mop-up detail is released. */
@@ -1328,7 +1613,9 @@ export function onContained(board: Board, fire: Fire): void {
 export function escalate(board: Board, fire: Fire, iaCannotCatch: () => boolean): void {
   const r = board.response;
   const fr = r.fires.get(fire.id);
-  if (!fr || fire.status !== "burning") return;
+  // Report rule: no escalation (nor IA record) for a fire dispatch does not have yet; at the
+  // report a fire already past a stage's size escalates on the next step.
+  if (!fr || fire.status !== "burning" || board.minute < fr.reportAt) return;
   // Initial attack has failed once a burning fire is past the IA size (CAL FIRE goal metric).
   if (fr.ia === "in_progress" && fire.areaHa > IA_SUCCESS_MAX_HA) {
     fr.ia = "failed";
@@ -1344,7 +1631,11 @@ export function escalate(board: Board, fire: Fire, iaCannotCatch: () => boolean)
   const order = ESCALATION_ORDERS[fr.stage];
   fr.stage += 1;
   if (!r.autoEscalate) {
-    logEvent(board, "team", "board", `${fire.id}: escalation stage ${fr.stage} due (${why}); automatic ordering is off.`);
+    logEvent(board, "team", "board", `${fire.id}: extended attack stage ${fr.stage} due (${why}); nothing is ordered unless the AI agent (or you) orders it.`, {
+      action: "escalation_due",
+      fireId: fire.id,
+      stage: fr.stage,
+    });
     return;
   }
   const parts: [Orderable, number][] = [
@@ -1354,7 +1645,7 @@ export function escalate(board: Board, fire: Fire, iaCannotCatch: () => boolean)
     ["airtanker", order.airtankers],
     ["helicopter", order.helicopters],
   ];
-  for (const [res, n] of parts) if (n > 0) placeOrder(board, fire, res, n, "board", `stage ${fr.stage}: ${why}`);
+  for (const [res, n] of parts) if (n > 0) placeOrder(board, fire, res, n, "board", `stage ${fr.stage}: ${why}`, fr.stage);
 }
 
 /** Departments with their engine counts (for the observation). */
@@ -1378,15 +1669,15 @@ export function departmentStatus(board: Board): { id: string; name: string; tier
  * A sample of the fire's open edge now: its burned cells that face unburned ground the solver
  * can spread into, at most MAX_EDGE_POINTS, as WGS84 points.
  */
-function edgeSample(board: Board, fire: Fire): LonLat[] {
+function edgeSample(board: Board, fire: Fire, minute: number): LonLat[] {
   const field = board.solver.field;
   const s = field?.sourceIndex.get(fire.id);
   if (!field || s === undefined) return [];
   const grid = board.env.landscape;
   const cells = field.cellsBySource[s];
-  const burned = countAtMost(field.arrivalBySource[s], board.minute);
+  const burned = countAtMost(field.arrivalBySource[s], minute);
   const w = grid.width;
-  const open = (n: number) => n >= 0 && n < field.arrivalMinutes.length && field.arrivalMinutes[n] > board.minute && field.behaviour.headRateMetersPerMinute[n] > 0;
+  const open = (n: number) => n >= 0 && n < field.arrivalMinutes.length && field.arrivalMinutes[n] > minute && field.behaviour.headRateMetersPerMinute[n] > 0;
   const edge: number[] = [];
   for (let i = 0; i < burned; i += 1) {
     const c = cells[i];
@@ -1399,10 +1690,14 @@ function edgeSample(board: Board, fire: Fire): LonLat[] {
   return out;
 }
 
-/** The edge sample, refreshed every REACH_EVERY_MINUTES. */
+/**
+ * The edge sample, taken at the latest whole REACH_EVERY_MINUTES board minute (so it does not
+ * depend on when a step happened to ask).
+ */
 function edgeOf(board: Board, fire: Fire, fr: FireResponse): LonLat[] {
-  if (!fr.reach || board.minute - fr.reach.minute >= REACH_EVERY_MINUTES) {
-    fr.reach = { minute: board.minute, edge: edgeSample(board, fire), fraction: null };
+  const bucket = Math.floor((board.minute + 1e-6) / REACH_EVERY_MINUTES) * REACH_EVERY_MINUTES;
+  if (!fr.reach || fr.reach.minute !== bucket) {
+    fr.reach = { minute: bucket, edge: edgeSample(board, fire, bucket), fraction: null };
   }
   return fr.reach.edge;
 }
@@ -1416,8 +1711,10 @@ export function reachFraction(board: Board, fire: Fire, fr: FireResponse | null 
   const units = board.teams.filter((t) => t.fireId === fire.id && (t.status === "on_scene" || t.status === "refilling") && t.workMode !== null);
   if (units.length === 0) return null;
   const edge = edgeOf(board, fire, fr);
-  if (fr.reach && fr.reach.fraction !== null && fr.reach.minute === board.minute) return fr.reach.fraction;
   if (edge.length === 0) return 1;
+  // Cached for the sample and the units working it (who is on scene changes between samples).
+  const key = units.map((t) => `${t.id}:${t.workMode}:${t.reachM}`).join(",");
+  if (fr.reach && fr.reach.fraction !== null && fr.reach.unitsKey === key) return fr.reach.fraction;
   let inside = 0;
   for (const p of edge) {
     if (units.some((t) => !offEdge(t.workMode) && distanceM(t.position, p) <= t.reachM)) inside += 1;
@@ -1425,7 +1722,7 @@ export function reachFraction(board: Board, fire: Fire, fr: FireResponse | null 
   const fraction = inside / edge.length;
   if (fr.reach) {
     fr.reach.fraction = fraction;
-    fr.reach.minute = board.minute;
+    fr.reach.unitsKey = key;
   }
   return fraction;
 }
@@ -1439,6 +1736,8 @@ export function reachFraction(board: Board, fire: Fire, fr: FireResponse | null 
 export function arriveOnScene(board: Board, team: Team, fire: Fire): void {
   const road = team.route && team.route.length > 1 && team.travel !== "straight_line";
   const parked = road ? team.route![team.route!.length - 1] : (team.target ?? crewTarget(fire));
+  // Work starts from its arrival minute (step() lands on it), not from the step that noticed it.
+  const arrivedAt = Math.min(board.minute, team.arriveAt ?? board.minute);
   team.position = parked;
   team.status = "on_scene";
   team.departAt = team.arriveAt = team.rollAt = null;
@@ -1468,14 +1767,14 @@ export function arriveOnScene(board: Board, team: Team, fire: Fire): void {
   }
   const plan = planWork(team.kind, d, elev(nearest) - elev(parked), maxSlopePct);
   team.workMode = plan.mode;
-  team.workStartAt = board.minute + plan.startDelayMinutes;
+  team.workStartAt = arrivedAt + plan.startDelayMinutes;
   team.parkedM = d;
   team.reachM = plan.reachMeters;
   if (fr) fr.reach = null; // recompute the reachable share with this unit
   if (fr && fr.firstEngineAt === null && isEngine(team.kind)) fr.firstEngineAt = board.minute;
   noteArrival(board, fire);
   if (plan.mode === "hand_line" || plan.mode === "dozer" || plan.mode === "indirect" || plan.mode === "out_of_reach") {
-    logEvent(board, "team", "board", unitAccessText(board, team));
+    logEvent(board, "team", "board", unitAccessText(board, team), { action: "unit_access", teamIds: [team.id], fireId: fire.id, workMode: plan.mode });
   }
 }
 
@@ -1520,11 +1819,27 @@ export function wallClock(board: Board, minute: number): string {
   );
 }
 
-/** "Reported after 34 min — 4 km from the nearest home, at night", or null before the report. */
+/**
+ * "Reported after 34 min — 4 km from the nearest home, at night" / "Reported after 15 min —
+ * report time set in Simulation Studio (S1, 15 min after ignition), not modelled", or null before the report.
+ */
 export function reportText(board: Board, fire: Fire): string | null {
   const fr = board.response.fires.get(fire.id);
   if (!fr || board.minute < fr.reportAt) return null;
   return `Reported after ${Math.round(fr.reportAt - fire.ignitedAt)} min — ${fr.report.reason}.`;
+}
+
+/** For the drill controller's views: "Not yet reported (simulated): reported at T+00:15, set in Simulation Studio", or null once reported. */
+export function notReportedText(board: Board, fire: Fire): string | null {
+  const fr = board.response.fires.get(fire.id);
+  if (!fr || board.minute >= fr.reportAt || fire.status === "out") return null;
+  return `Not yet reported (simulated): reported to dispatch at ${simClock(fr.reportAt)} (${wallClock(board, fr.reportAt)}), ${fr.report.by === "studio" ? "set in Simulation Studio" : "modelled report delay"}. No unit can act on it before then.`;
+}
+
+/** Map / 3D label of a fire: "S1-F1", "S1-F1 · contained", or "S1-F1 · not yet reported (sim)". */
+export function fireMapLabel(board: Board, fire: Fire): string {
+  if (fire.status !== "burning") return `${fire.id} · ${fire.status}`;
+  return isReported(board, fire) ? fire.id : `${fire.id} · not yet reported (sim)`;
 }
 
 /** "Started 14:02 · reported 14:11 · first engine 14:24" (only what has happened). */
@@ -1533,8 +1848,8 @@ export function fireTimeline(board: Board, fire: Fire): string {
   const parts = [`Started ${wallClock(board, fire.ignitedAt)}`];
   if (fr) {
     if (board.minute >= fr.reportAt) {
-      parts.push(`reported ${wallClock(board, fr.reportAt)}`);
-    } else parts.push("not reported yet");
+      parts.push(`reported ${wallClock(board, fr.reportAt)}${fr.report.by === "studio" ? " (set in Studio)" : ""}`);
+    } else parts.push(`not yet reported (simulated; reports ${wallClock(board, fr.reportAt)}${fr.report.by === "studio" ? ", set in Studio" : ", modelled"})`);
     if (fr.firstEngineAt !== null) parts.push(`first engine ${wallClock(board, fr.firstEngineAt)}`);
     else if (fr.firstArrivalAt !== null) parts.push(`first unit ${wallClock(board, fr.firstArrivalAt)}`);
   }

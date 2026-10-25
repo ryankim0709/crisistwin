@@ -1,7 +1,7 @@
-import { EvidenceTag, LoadingState, Tag } from "../ui";
+import { Button, EvidenceTag, LoadingState, Notice, Tag } from "../ui";
 import type { Selection } from "./DemoMap";
 import { FIRE_STATUS, SOURCE_LABEL, TEAM_STATUS } from "./format";
-import { currentContainment, fireAreaHa, headOnWildlandFuel } from "./model";
+import { currentContainment, fireAreaHa } from "./model";
 import { fireTimeline } from "./boardResponse";
 import { kindShort } from "./realism";
 import type { CommandBoard } from "./useCommandBoard";
@@ -18,7 +18,20 @@ export default function BoardLists({
   if (!board || !t) {
     return (
       <section className="lc-col lc-board" aria-label="Simulated fires and firefighting units">
-        <LoadingState>Loading wind, terrain and fire stations…</LoadingState>
+        {cb.environment.error ? (
+          <Notice tone="danger" compact>
+            {cb.environment.error}{" "}
+            <Button size="sm" variant="secondary" onClick={cb.retryEnvironment}>
+              Retry
+            </Button>
+          </Notice>
+        ) : (
+          <LoadingState>
+            {cb.environment.liveLandscape
+              ? "No stored landscape covers this drill: loading its fuel, canopy and terrain live from LANDFIRE (this takes longer)…"
+              : "Loading wind, landscape and fire stations…"}
+          </LoadingState>
+        )}
       </section>
     );
   }
@@ -33,6 +46,13 @@ export default function BoardLists({
       <p className="lc-board-note">
         <EvidenceTag kind="simulated" /> Board fires and units run in this browser; fire reports from the drill start fires here.
       </p>
+      {cb.fireSolver.error ? (
+        <Notice tone="danger" compact>
+          Fire model failed, clock held (retrying): {cb.fireSolver.error}
+        </Notice>
+      ) : cb.fireSolver.solving ? (
+        <p className="lc-board-note lc-dim">Fire model updating ({cb.fireSolver.solving}); clock held…</p>
+      ) : null}
       <div className="lc-col-scroll">
         {fires.length === 0 ? (
           <p className="dm-empty">No active fires. Watching for ignitions and field reports.</p>
@@ -66,7 +86,7 @@ export default function BoardLists({
                     </span>
                     <span className="lc-q-meta lc-num">
                       {fireAreaHa(f).toFixed(1)} ha · {f.headRate} m/min · flame {Math.round(f.rates.headFlameFeet)} ft
-                      {f.status === "burning" && !headOnWildlandFuel(f) ? " · no wildland fuel at head" : ""}
+                      {f.noSpread ? ` · ${f.noSpread}` : f.status === "burning" && f.rates.crowning ? " · crown fire at head" : ""}
                     </span>
                     <span className="lc-q-meta lc-num">{fireTimeline(board, f)}</span>
                     <span className={`lc-q-meta${f.status === "burning" && (crews.length === 0 || eta === null) ? " lc-error" : ""}`}>
@@ -84,7 +104,12 @@ export default function BoardLists({
         )}
         <div className="lc-col-head">
           <h2>Units</h2>
-          <span className="lc-dim lc-num">{board.teams.filter((tm) => tm.status === "available").length} free</span>
+          <span className="lc-dim lc-num">
+            {board.teams.filter((tm) => tm.status === "available").length} free
+            {board.teams.some((tm) => tm.status === "returning")
+              ? `, ${board.teams.filter((tm) => tm.status === "returning").length} returning`
+              : ""}
+          </span>
         </div>
         <ul className="dm-teams">
           {board.teams.map((tm) => (
@@ -101,6 +126,11 @@ export default function BoardLists({
                 <span className="lc-dim">
                   {tm.fireId ?? board.stations.find((s) => s.id === tm.station)?.name}
                   {tm.status === "en_route" && tm.arriveAt !== null ? `, ${Math.ceil(tm.arriveAt - board.minute)} min` : ""}
+                  {tm.status === "returning"
+                    ? tm.travel === "pending" || tm.arriveAt === null
+                      ? ", waiting for its road home"
+                      : `, home in ${Math.max(0, Math.ceil(tm.arriveAt - board.minute))} min`
+                    : ""}
                 </span>
               </button>
             </li>

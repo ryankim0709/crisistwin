@@ -26,9 +26,7 @@ interface Props {
   version: number;
   forecasts: Map<string, ZoneForecast>;
   selected: Selection | null;
-  igniteMode: boolean;
   onSelect: (sel: Selection | null) => void;
-  onIgnite: (coord: LonLat) => void;
 }
 
 /** MapLibre paint cannot read CSS variables; these mirror the greys and inks of the --ct-* tokens. */
@@ -96,8 +94,9 @@ function buildZones(zones: CommandZone[], board: Board, forecasts: Map<string, Z
   return { areas, labels, routes };
 }
 
+/** Each fire's solver footprint at the board minute (fireFootprint.ts), and a label at its origin. */
 function buildFires(board: Board) {
-  const rings = boardFireFeatures(board).features.map((f): Feature => ({ ...f, properties: { ...f.properties } }));
+  const rings = boardFireFeatures(board).features.map((f): Feature => ({ type: "Feature", geometry: f.geometry, properties: { ...f.properties } }));
   const labels: Feature[] = [];
   for (const fire of board.fires) {
     labels.push(point(fire.origin, { id: fire.id, text: fire.status === "burning" ? fire.id : `${fire.id} · ${fire.status}`, status: fire.status }));
@@ -109,12 +108,11 @@ function buildTeams(board: Board) {
   const teams: Feature[] = [];
   const lines: Feature[] = [];
   for (const team of board.teams) {
-    const pos = teamPosition(board, team);
-    teams.push(point(pos, { id: team.id, status: team.status }));
-    // En route: the road line when known (whole route), else the straight line to its target.
-    if (team.status === "en_route" && team.target) {
-      lines.push(lineFeature(team.route && team.route.length > 1 ? team.route : [pos, team.target], { id: team.id }));
-    }
+    teams.push(point(teamPosition(board, team), { id: team.id, status: team.status }));
+    // Units follow roads: only a known road route is drawn (en route, returning, moving up),
+    // never a straight line to the target.
+    const driving = team.status === "en_route" || team.status === "returning" || team.status === "moving_up";
+    if (driving && team.route && team.route.length > 1) lines.push(lineFeature(team.route, { id: team.id, status: team.status }));
   }
   return { teams, lines };
 }
@@ -253,7 +251,12 @@ function installLayers(map: MapLibreMap): void {
     id: "dm-team-lines",
     type: "line",
     source: "dm-team-lines",
-    paint: { "line-color": MAP_COLOR.responder, "line-width": 1.5, "line-dasharray": [1.5, 1.5] },
+    paint: {
+      "line-color": MAP_COLOR.responder,
+      "line-width": 1.5,
+      "line-opacity": ["match", ["get", "status"], ["returning", "moving_up"], 0.6, 1] as never,
+      "line-dasharray": ["match", ["get", "status"], ["returning", "moving_up"], ["literal", [0.5, 2]], ["literal", [1.5, 1.5]]] as never,
+    },
   });
   map.addLayer({
     id: "dm-stations",
@@ -302,8 +305,8 @@ function installLayers(map: MapLibreMap): void {
       "circle-radius": 6,
       "circle-color": MAP_COLOR.responder,
       "circle-stroke-color": "#FFFFFF",
-      "circle-stroke-width": ["match", ["get", "status"], "en_route", 1, 2] as never,
-      "circle-opacity": ["match", ["get", "status"], "en_route", 0.75, 1] as never,
+      "circle-stroke-width": ["match", ["get", "status"], ["en_route", "returning", "moving_up"], 1, 2] as never,
+      "circle-opacity": ["match", ["get", "status"], "en_route", 0.75, ["returning", "moving_up"], 0.55, 1] as never,
     },
   });
   map.addLayer({
@@ -343,17 +346,17 @@ const CLEARED_SOURCES = [
 ];
 
 export default function DemoMap({
-  zones, destinations, board, version, forecasts, selected, igniteMode, onSelect, onIgnite,
+  zones, destinations, board, version, forecasts, selected, onSelect,
 }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const fitted = useRef(false);
   const [ready, setReady] = useState(false);
-  const live = useRef({ board, zones, igniteMode, onSelect, onIgnite });
+  const live = useRef({ board, zones, onSelect });
 
   useEffect(() => {
-    live.current = { board, zones, igniteMode, onSelect, onIgnite };
-  }, [board, zones, igniteMode, onSelect, onIgnite]);
+    live.current = { board, zones, onSelect };
+  }, [board, zones, onSelect]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -379,10 +382,6 @@ export default function DemoMap({
       map.on("click", (e: MapMouseEvent) => {
         if (!map) return;
         const cur = live.current;
-        if (cur.igniteMode) {
-          cur.onIgnite([e.lngLat.lng, e.lngLat.lat]);
-          return;
-        }
         const layers = INTERACTIVE.filter((l) => map?.getLayer(l));
         const hit = map.queryRenderedFeatures(e.point, { layers });
         // Layer order of INTERACTIVE is the priority: team, then fire, then zone.
@@ -408,11 +407,6 @@ export default function DemoMap({
       setReady(false);
     };
   }, []);
-
-  // Crosshair in ignite mode; a class toggle, since React must not rewrite the classes MapLibre sets.
-  useEffect(() => {
-    container.current?.classList.toggle("dm-map--ignite", igniteMode);
-  }, [igniteMode]);
 
   // A different drill: frame its zones again once the new board is drawn.
   const zonesKey = zones.map((z) => z.id).join("|");

@@ -1,13 +1,36 @@
 from django.urls import path
 
-from . import events, injects, packages, participants, phone_view, responder_routing, views, virtual_people, voice
+from . import (
+    events,
+    homes,
+    injects,
+    packages,
+    participants,
+    phone_view,
+    responder_routing,
+    road_closures,
+    run_state,
+    snapshots,
+    studio_fires,
+    views,
+    virtual_people,
+    voice,
+)
 
 urlpatterns = [
     path("devices", views.devices, name="live-devices"),
     path("packages", packages.packages, name="live-packages"),
+    path("studio-fires", studio_fires.publish, name="live-studio-fires"),
+    path("incidents/<str:incident_id>/studio-fires", studio_fires.list_fires, name="live-studio-fires-list"),
     path("incidents/<str:incident_id>/join", views.join, name="live-join"),
     path("incidents/<str:incident_id>/reports", views.incident_reports, name="live-reports"),
     path("incidents/<str:incident_id>/road-state", views.road_state, name="live-road-state"),
+    path("incidents/<str:incident_id>/road-closures", road_closures.road_closures, name="live-road-closures"),
+    path(
+        "incidents/<str:incident_id>/road-closures/<str:segment_id>",
+        road_closures.reopen_road,
+        name="live-road-closure",
+    ),
     path("incidents/<str:incident_id>/public-map", views.public_map, name="live-public-map"),
     path("incidents/<str:incident_id>/prompts", views.prompts, name="live-prompts"),
     path("incidents/<str:incident_id>/tasks", views.create_task, name="live-create-task"),
@@ -17,6 +40,7 @@ urlpatterns = [
     path("incidents/<str:incident_id>/situation", views.situation, name="live-situation"),
     path("incidents/<str:incident_id>/checkins", views.checkins, name="live-checkins"),
     path("incidents/<str:incident_id>/voice", voice.voice_turn, name="live-voice"),
+    path("incidents/<str:incident_id>/voice/token", voice.voice_token, name="live-voice-token"),
     path("incidents/<str:incident_id>/command", views.command, name="live-command"),
     path("incidents/<str:incident_id>/events", events.incident_events, name="live-events"),
     path("incidents/<str:incident_id>/replan", views.replan, name="live-replan"),
@@ -24,11 +48,17 @@ urlpatterns = [
     path("incidents/<str:incident_id>/aar", views.incident_aar, name="live-aar"),
     path("incidents/<str:incident_id>/injects", injects.incident_injects, name="live-injects"),
     path("incidents/<str:incident_id>/injects/<str:inject_id>", injects.delete_inject, name="live-inject"),
+    path("incidents/<str:incident_id>/snapshot", snapshots.incident_snapshot, name="live-snapshot"),
+    path("incidents/<str:incident_id>/snapshot/households", snapshots.snapshot_households,
+         name="live-snapshot-households"),
+    path("incidents/<str:incident_id>/run-state", run_state.run_state, name="live-run-state"),
+    path("incidents/<str:incident_id>/household-state", run_state.household_state, name="live-household-state"),
     path("incidents/<str:incident_id>/twin", views.twin, name="live-twin"),
     path("incidents/<str:incident_id>/twin/whatif", views.twin_whatif, name="live-twin-whatif"),
     path("incidents/<str:incident_id>/people", views.twin_people, name="live-people"),
     path("incidents/<str:incident_id>/participants", participants.incident_participants, name="live-incident-participants"),
     path("incidents/<str:incident_id>/virtual-people", virtual_people.virtual_people, name="live-virtual-people"),
+    path("incidents/<str:incident_id>/homes", homes.homes, name="live-homes"),
     path(
         "incidents/<str:incident_id>/participants/<str:participant_id>/phone-view",
         phone_view.phone_view,

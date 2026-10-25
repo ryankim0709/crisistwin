@@ -20,6 +20,8 @@ import { installInjectLayers } from "./injectMap";
 import { buildInjectSources } from "./injects";
 import { attachPeopleLayer, PEOPLE_INTERACTIVE_LAYERS, type PeopleLayer, type PeopleSnapshot } from "./people";
 import { PERSONS_PER_VEHICLE } from "../population/peopleSnapshot";
+import { attachHouseholdLayer, HOUSEHOLD_INTERACTIVE_LAYERS, type HouseholdLayer } from "./householdLayer";
+import type { HouseholdState } from "./useHouseholdState";
 import type { QueueItem } from "./queue";
 import type { CommandResponse, GuidanceLevel, ImpactResponse, LonLat, TwinMonitor } from "./types";
 
@@ -56,8 +58,8 @@ export const MAP_COLOR = {
   ink: "#0F1720",
 };
 
-export type LayerKey = "zones" | "fire" | "reports" | "roads" | "shelters" | "people" | "noTruck" | "stations";
-export const LAYER_KEYS: LayerKey[] = ["zones", "fire", "reports", "roads", "shelters", "people", "noTruck", "stations"];
+export type LayerKey = "zones" | "fire" | "reports" | "roads" | "shelters" | "people" | "houses" | "noTruck" | "stations";
+export const LAYER_KEYS: LayerKey[] = ["zones", "fire", "reports", "roads", "shelters", "people", "houses", "noTruck", "stations"];
 const LAYER_IDS: Record<LayerKey, string[]> = {
   stations: [],
   zones: ["lc-zones-fill", "lc-zones-line", "lc-zone-labels"],
@@ -69,6 +71,8 @@ const LAYER_IDS: Record<LayerKey, string[]> = {
   shelters: ["lc-dest", "lc-dest-labels"],
   /** Drawn and toggled by the people layer itself (./people). */
   people: [],
+  /** Drawn and toggled by the household layer itself (./householdLayer). */
+  houses: [],
   /** Roads closed to the board's trucks: drawn by demo/boardMapLayers.ts (also shown for a selected unit). */
   noTruck: [],
 };
@@ -593,6 +597,8 @@ interface Props {
   twin: TwinMonitor | null;
   /** Simulated people picture (./people); drawn when `layers.people` is on. */
   people?: PeopleSnapshot | null;
+  /** Simulated household state (./useHouseholdState); drawn when `layers.houses` is on. */
+  households?: HouseholdState | null;
   items: QueueItem[];
   selected: QueueItem | null;
   focus: MapFocus | null;
@@ -622,7 +628,7 @@ interface Props {
  */
 export const EXTRA_LAYERS_BEFORE_ID = "lc-dest";
 
-export default function CommandMap({ data, twin, people = null, items, selected, focus, layers, impact, taskRoute, onSelect, onMapReady, interceptClick }: Props) {
+export default function CommandMap({ data, twin, people = null, households = null, items, selected, focus, layers, impact, taskRoute, onSelect, onMapReady, interceptClick }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const stationsRef = useRef<ReturnType<typeof attachStations> | null>(null);
@@ -632,6 +638,7 @@ export default function CommandMap({ data, twin, people = null, items, selected,
   const interceptRef = useRef(interceptClick);
   const readyCleanup = useRef<(() => void) | null>(null);
   const peopleLayer = useRef<PeopleLayer | null>(null);
+  const houseLayer = useRef<HouseholdLayer | null>(null);
   const labelRef = useRef<Marker | null>(null);
   const fitted = useRef(false);
   const [ready, setReady] = useState(false);
@@ -665,6 +672,11 @@ export default function CommandMap({ data, twin, people = null, items, selected,
         stationsRef.current = attachStations(map);
         // People sit above roads and traffic but under extra (board) layers, labels and markers.
         peopleLayer.current = attachPeopleLayer(map, EXTRA_LAYERS_BEFORE_ID);
+        // Houses sit with the people marks, under board layers, labels and markers.
+        houseLayer.current = attachHouseholdLayer(map, EXTRA_LAYERS_BEFORE_ID, (zoneId) => {
+          const zone = dataRef.current?.zones.find((z) => z.id === zoneId);
+          return zone ? shortZoneName(zone.name) : zoneId || "unknown";
+        });
         const cleanup = onMapReadyRef.current?.(map);
         if (typeof cleanup === "function") readyCleanup.current = cleanup;
         setReady(true);
@@ -683,7 +695,7 @@ export default function CommandMap({ data, twin, people = null, items, selected,
         });
       }
       map.on("click", "lc-zones-fill", (e: MapLayerMouseEvent) => {
-        const interactive = ["lc-ground", "lc-points", "lc-help", "lc-responders", "lc-queues", "lc-dest", ...PEOPLE_INTERACTIVE_LAYERS].filter(
+        const interactive = ["lc-ground", "lc-points", "lc-help", "lc-responders", "lc-queues", "lc-dest", ...PEOPLE_INTERACTIVE_LAYERS, ...HOUSEHOLD_INTERACTIVE_LAYERS].filter(
           (l) => map?.getLayer(l) && map.getLayoutProperty(l, "visibility") !== "none",
         );
         if (!map || interceptRef.current?.(e) || map.queryRenderedFeatures(e.point, { layers: interactive }).length) return;
@@ -717,6 +729,8 @@ export default function CommandMap({ data, twin, people = null, items, selected,
       peopleLayer.current = null;
       stationsRef.current?.dispose();
       stationsRef.current = null;
+      houseLayer.current?.dispose();
+      houseLayer.current = null;
       labelRef.current?.remove();
       map?.remove();
       mapRef.current = null;
@@ -771,11 +785,19 @@ export default function CommandMap({ data, twin, people = null, items, selected,
     peopleLayer.current?.update(layers.people ? people : null);
   }, [ready, people, layers.people]);
 
+  const houseSet = layers.houses && households?.snapshot ? households.households : null;
+  const houseRun = households?.runId ?? null;
+  useEffect(() => {
+    if (!ready) return;
+    houseLayer.current?.update(houseSet, houseRun);
+  }, [ready, houseSet, houseRun]);
+
   useEffect(() => {
     const map = mapRef.current;
     if (!ready || !map) return;
     peopleLayer.current?.setVisible(layers.people);
     stationsRef.current?.setVisible(layers.stations);
+    houseLayer.current?.setVisible(layers.houses);
     for (const key of LAYER_KEYS) {
       for (const id of LAYER_IDS[key]) {
         if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", layers[key] ? "visible" : "none");

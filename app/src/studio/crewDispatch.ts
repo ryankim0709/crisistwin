@@ -47,7 +47,7 @@ import {
   type AccessClass,
   type GroundKind,
 } from "./apparatus";
-import type { CrewArrival } from "./firefighting";
+import type { CrewArrival, ReportSource } from "./firefighting";
 import { RULE_TEXT, edgeAccessTable, type EdgeAccess, type RoadRule } from "./roadAccess";
 import { CREW_TYPES, STATION_TYPES, type SuppressionBases } from "./suppressionBases";
 import { DOZER_MAX_WALK_MINUTES, ENGINE_CREW_MAX_HIKE_M, HAND_CREW_MAX_HIKE_MINUTES, formatDuration } from "../response/reach";
@@ -144,6 +144,12 @@ export interface NoAccess {
 
 export interface CrewDispatch {
   reportMinute: number;
+  /**
+   * Set by the Studio page: whether `reportMinute` was set by the user or modelled, and the
+   * name of the fire reported. Absent = modelled.
+   */
+  reportSource?: ReportSource;
+  reportedFire?: string;
   fire: LonLat;
   /** Nearest road point any trip parks at (used for crews joining the evacuation). */
   roadPoint: LonLat;
@@ -170,8 +176,10 @@ export interface IncidentDispatch {
   name: string;
   fire: LonLat;
   ignitionMinute: number;
-  /** Minute the dispatch centre has it (ignition + response/report.ts delay). */
+  /** Minute the dispatch centre has it (user-set, else ignition + response/report.ts delay). */
   reportMinute: number;
+  /** Whether `reportMinute` was set by the user or modelled. */
+  reportSource: ReportSource;
   level: string;
   structure: boolean;
   /** Plain account of the run card and how it was filled. */

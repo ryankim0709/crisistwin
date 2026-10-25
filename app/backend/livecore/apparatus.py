@@ -305,6 +305,8 @@ class Apparatus:
     turnout_s: float
     basis: str
     """Where its type, count and turnout come from (sourced or ASSUMPTION)."""
+    unit_id: str | None = None
+    """The engine's own id (a scenario snapshot ``engine_id``); None: the fleet numbers its units."""
 
 
 def turnout_s(staffing: str | None) -> tuple[float, str]:
@@ -370,3 +372,37 @@ def station_apparatus(bases: Iterable[Mapping[str, Any]], incident: LonLat, n_un
             out.append(Apparatus(sid, str(base.get("name") or sid), str(base.get("agency") or ""), coord,
                                  round(meters / 1000, 1), kind, vehicle, label, turnout, basis))
     return out
+
+
+SNAPSHOT_KINDS: dict[str, tuple[str, str, str]] = {
+    "type3_engine": ("engine_t3", "engine_t3", "Type 3 engine"),
+    "type1_engine": ("engine_t1", "engine_t1_t2", "Type 1 structure engine"),
+}
+"""Scenario snapshot engine kind -> (Studio apparatus kind, road-access class, label)."""
+
+
+def snapshot_apparatus(stations: Iterable[Mapping[str, Any]], incident: LonLat | None) -> list[Apparatus]:
+    """One unit per engine that is ``available`` at T+0 in a scenario resource snapshot
+    (docs/scenario-snapshots.md): ``engine_id`` is the unit id, the station point its home.
+
+    Committed and out-of-service engines never become units, so an engine can hold only the one
+    task its unit holds. Ordered by distance from ``incident`` (station id when None), then
+    engine id. Counts and availability are the snapshot's (synthetic); turnout is the
+    unknown-staffing value (``turnout_s(None)``)."""
+    turnout, turnout_basis = turnout_s(None)
+    out: list[tuple[float, str, Apparatus]] = []
+    for st in stations:
+        lon, lat = (float(v) for v in st["location"]["coordinates"])
+        meters = haversine_m(incident, (lon, lat)) if incident is not None else 0.0
+        for engine in st.get("engines") or []:
+            if engine.get("status_at_start") != "available":
+                continue
+            kind, vehicle, label = SNAPSHOT_KINDS.get(str(engine.get("kind")), SNAPSHOT_KINDS["type3_engine"])
+            basis = (f"scenario snapshot engine {engine['engine_id']} ({engine.get('basis', 'synthetic')}: count, kind "
+                     f"and availability are snapshot assumptions); station location {st.get('basis')}; {turnout_basis}")
+            app = Apparatus(str(st["station_id"]), str(st.get("name") or st["station_id"]), "scenario snapshot",
+                            (lon, lat), round(meters / 1000, 1), kind, vehicle, label, turnout, basis,
+                            unit_id=str(engine["engine_id"]))
+            out.append((meters, app.unit_id or "", app))
+    out.sort(key=lambda r: (r[0], r[1]))
+    return [a for _, _, a in out]

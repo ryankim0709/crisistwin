@@ -66,8 +66,11 @@ if not re.fullmatch(r"[A-Za-z0-9_-]{1,63}", CACHE_MONGODB_DATABASE):
 # Live drill (docs/live-reports.md, ADR 0011/0012). Secrets come from the environment only.
 # Unset LIVE_CONTROLLER_TOKEN: requests without a token are the controller (no token needed).
 # Set it to lock controller endpoints behind that bearer token. Unset LIVE_INVITE_CODE disables join (403).
-# Most finished-board files the landscape cache keeps before evicting the oldest.
-LANDSCAPE_CACHE_MAX_FILES = int(os.environ.get("LANDSCAPE_CACHE_MAX_FILES", "2000"))
+# Most finished-board files the landscape cache keeps before evicting the oldest. Small by default:
+# a board is ~3-6 MB and the MongoDB Atlas free tier holds 512 MB in all.
+LANDSCAPE_CACHE_MAX_FILES = int(os.environ.get("LANDSCAPE_CACHE_MAX_FILES", "6"))
+# Most bytes of upstream tiles (LANDFIRE, terrain, imagery) the geo cache keeps; oldest evicted.
+GEO_CACHE_MAX_BYTES = int(os.environ.get("GEO_CACHE_MAX_BYTES", str(40 * 1024 * 1024)))
 
 LIVE_CONTROLLER_TOKEN = os.environ.get("LIVE_CONTROLLER_TOKEN", "").strip()
 # Open live feeds (docs/adr/0032-open-live-feeds.md). No keys; the contact goes in the User-Agent.
@@ -91,6 +94,9 @@ LIVE_GUIDANCE_CACHE_TTL_S = float(os.environ.get("LIVE_GUIDANCE_CACHE_TTL_S", "1
 LIVE_RATIONALE_MODEL = os.environ.get("LIVE_RATIONALE_MODEL", "claude-opus-5-5").strip()
 # Controller plug-in: rule | twin; empty = twin while the traffic twin builds, else rule.
 LIVE_CONTROLLER = os.environ.get("LIVE_CONTROLLER", "").strip()
+# The twin-controller proposal flow (replan -> pending proposal -> approve). Off: /live follows the
+# AI agent on the board, so no automatic or manual replans run and approve/replan answer 410.
+LIVE_PROPOSALS = env_bool("LIVE_PROPOSALS", "false")
 # Twin input packages (repo-relative or absolute); empty = the packages the Camp bundle was built from.
 LIVE_TWIN_PACKAGE = os.environ.get("LIVE_TWIN_PACKAGE", "").strip()
 LIVE_TWIN_ROADS_PACKAGE = os.environ.get("LIVE_TWIN_ROADS_PACKAGE", "").strip()
@@ -100,6 +106,10 @@ LIVE_PACKAGES_DIR = os.environ.get("LIVE_PACKAGES_DIR", "").strip()
 # and the source-diversity corroboration check. Both off unless set to true.
 LIVE_TRUTH_SCORING = env_bool("LIVE_TRUTH_SCORING", "false")
 LIVE_SOURCE_DIVERSITY = env_bool("LIVE_SOURCE_DIVERSITY", "false")
+# Per-client request throttles on the anonymous endpoints (paid model calls, upstream fetches).
+# Off by default in local development (DJANGO_DEBUG=true), where every request shares the dev
+# proxy's IP; on by default otherwise. API_THROTTLES=true/false overrides. Applied in api/apps.py.
+API_THROTTLES = env_bool("API_THROTTLES", "false" if DEBUG else "true")
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [],
     "UNAUTHENTICATED_USER": None,

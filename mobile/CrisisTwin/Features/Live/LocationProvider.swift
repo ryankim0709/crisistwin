@@ -1,4 +1,5 @@
 import CoreLocation
+import MapKit
 import Observation
 
 enum LocationError: LocalizedError {
@@ -23,6 +24,10 @@ final class LocationProvider {
     private(set) var authorization: CLAuthorizationStatus = .notDetermined
     /// Latest valid fix from continuous updates or a one-shot request; nil before the first fix.
     private(set) var lastLocation: CLLocation?
+    /// The street address nearest the latest fix ("2412 Tunnel Rd, Berkeley"), for people to read
+    /// instead of a planning zone id. Looked up with Apple's reverse geocoder (MapKit), which sees
+    /// the coordinate; CrisisTwin's server never does. Nil until the first lookup succeeds.
+    private(set) var placeName: String?
 
     var isAuthorized: Bool {
         authorization == .authorizedWhenInUse || authorization == .authorizedAlways
@@ -36,6 +41,15 @@ final class LocationProvider {
     @ObservationIgnored private let relay = Relay()
     @ObservationIgnored private var fixWaiters: [UUID: CheckedContinuation<CLLocation, Error>] = [:]
     @ObservationIgnored private var authWaiters: [CheckedContinuation<Void, Never>] = []
+    /// Where the last address lookup was made, when, and whether one is running.
+    @ObservationIgnored private var placeFix: CLLocation?
+    @ObservationIgnored private var placeAt: Date?
+    @ObservationIgnored private var placeLookup: Task<Void, Never>?
+
+    /// A new lookup once the person has moved this far, and no sooner than `placeInterval` after
+    /// the last one (Apple throttles reverse geocoding).
+    private static let placeDistanceM: CLLocationDistance = 75
+    private static let placeInterval: TimeInterval = 15
 
     init() {
         relay.owner = self
@@ -128,6 +142,35 @@ final class LocationProvider {
         }
         lastLocation = fix
         finishAll(.success(fix))
+        updatePlaceName(for: fix)
+    }
+
+    /// Looks up the street address for `fix` when it has moved enough since the last lookup.
+    /// A failed lookup keeps the previous address.
+    private func updatePlaceName(for fix: CLLocation) {
+        guard placeLookup == nil else { return }
+        if let placeAt, Date().timeIntervalSince(placeAt) < Self.placeInterval { return }
+        if placeName != nil, let placeFix, fix.distance(from: placeFix) < Self.placeDistanceM { return }
+        guard let request = MKReverseGeocodingRequest(location: fix) else { return }
+        placeFix = fix
+        placeAt = Date()
+        placeLookup = Task { [weak self] in
+            let items = try? await request.mapItems
+            guard let self else { return }
+            self.placeLookup = nil
+            if let name = items?.first.flatMap(Self.label(for:)) { self.placeName = name }
+        }
+    }
+
+    /// "2412 Tunnel Rd, Berkeley": the short address on one line, else the place's name.
+    private static func label(for item: MKMapItem) -> String? {
+        let raw = item.address?.shortAddress ?? item.address?.fullAddress ?? item.name
+        let line = raw?
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .joined(separator: ", ")
+        return line?.isEmpty == false ? line : nil
     }
 
     private func failed(denied: Bool) {

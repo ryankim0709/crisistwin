@@ -65,6 +65,10 @@ export class FireSampler {
   private window = 20;
   private toward = { x: 0, z: 1 };
   private lastT = Number.NaN;
+  /** Arrival per cell of the current run (freshness of a burning cell). */
+  private arrival: Float32Array | null = null;
+  /** Opt-in per-cell states (board.ts CELL_STATE): hot spots then come from the burning cells only. */
+  private states: Uint8Array | null = null;
   hotSpots: HotSpot[] = [];
   readonly headRange = { min: 0, max: 1 };
   /** Bounding box (world x/z) of everything the run burns by its horizon, or null. */
@@ -83,6 +87,7 @@ export class FireSampler {
     this.hotSpots = [];
     this.burningCount = 0;
     this.burnBox = null;
+    this.arrival = arrival;
     if (!arrival) {
       this.order = new Int32Array(0);
       this.sorted = new Float32Array(0);
@@ -134,6 +139,12 @@ export class FireSampler {
     this.lastT = Number.NaN;
   }
 
+  /** Per-cell states (null = the arrival band decides what burns); forces a resample. */
+  setStates(states: Uint8Array | null) {
+    this.states = states;
+    this.lastT = Number.NaN;
+  }
+
   /** First index whose arrival is greater than `v`. */
   private upper(v: number) {
     let lo = 0;
@@ -152,26 +163,40 @@ export class FireSampler {
     if (!f) return false;
     if (Math.abs(t - this.lastT) < RESAMPLE_MINUTES) return false;
     this.lastT = t;
-    const a = this.upper(t - this.window);
-    const b = this.upper(t);
-    this.burningCount = Math.max(0, b - a);
-    if (b <= a) {
-      this.hotSpots = [];
-      return true;
-    }
-    const step = Math.max(1, Math.floor((b - a) / SAMPLE_BUDGET));
     const cells: { i: number; x: number; z: number; age: number; p: number }[] = [];
     let minP = Infinity;
     let maxP = -Infinity;
     const centre = { x: 0, z: 0 };
-    for (let k = a; k < b; k += step) {
-      const i = this.order[k];
+    const push = (i: number, age: number) => {
       const c = i % f.cols;
       f.cellCentre(c, (i - c) / f.cols, centre);
       const p = centre.x * this.toward.x + centre.z * this.toward.z;
       minP = Math.min(minP, p);
       maxP = Math.max(maxP, p);
-      cells.push({ i, x: centre.x, z: centre.z, age: t - this.sorted[k], p });
+      cells.push({ i, x: centre.x, z: centre.z, age, p });
+    };
+    const states = this.states && this.states.length === f.cols * f.rows ? this.states : null;
+    if (states) {
+      // Only cells burning now; a cell that has burned past the window stays a (weaker) hot spot.
+      const ids: number[] = [];
+      for (let i = 0; i < states.length; i++) if (states[i] === 1) ids.push(i);
+      this.burningCount = ids.length;
+      const step = Math.max(1, Math.floor(ids.length / SAMPLE_BUDGET));
+      for (let k = 0; k < ids.length; k += step) {
+        const i = ids[k];
+        const age = this.arrival ? t - this.arrival[i] : 0;
+        push(i, Number.isFinite(age) ? Math.min(Math.max(0, age), this.window * 0.8) : 0);
+      }
+    } else {
+      const a = this.upper(t - this.window);
+      const b = this.upper(t);
+      this.burningCount = Math.max(0, b - a);
+      const step = Math.max(1, Math.floor((b - a) / SAMPLE_BUDGET));
+      for (let k = a; k < b; k += step) push(this.order[k], t - this.sorted[k]);
+    }
+    if (cells.length === 0) {
+      this.hotSpots = [];
+      return true;
     }
     this.headRange.min = minP;
     this.headRange.max = maxP;

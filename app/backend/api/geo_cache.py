@@ -8,8 +8,11 @@ Each is a fixed-upstream proxy, not an open one: GET only, a whitelist of query 
 coverage ids, numeric ranges checked, and the upstream host never taken from the request. The
 response bytes are stored in the MongoDB collection `geo_cache`, keyed by a SHA-256 of the
 normalised request, and served with a long Cache-Control. These sources are versioned or slow
-moving (LANDFIRE LF2025, terrarium, USGS imagery), so entries are not expired; drop the
-collection to refresh. A MongoDB failure only costs the cache: the request is still proxied.
+moving (LANDFIRE LF2025, terrarium, USGS imagery), so entries are not expired by age; the
+oldest are evicted once the cache holds more than settings.GEO_CACHE_MAX_BYTES (the Atlas free
+tier is 512 MB in all). Drop the collection to refresh. A MongoDB failure only costs the cache: the request is still proxied.
+The write happens after the response, on a small background pool, so a slow or failing cache
+write (an Atlas write can run into the 15 s operation timeout) never delays the bytes.
 
 LANDFIRE keeps the semantics of the Vite dev proxy (app/vite.config.ts): browser-only headers
 are never forwarded, the request identifies itself as this application, only IPv4 is used, and
@@ -26,9 +29,11 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
 from bson import Binary
+from django.conf import settings
 from django.http import HttpResponse
 from django.views.decorators.http import require_GET
 from pymongo.errors import PyMongoError
@@ -45,6 +50,10 @@ UPSTREAM_TIMEOUT_S = 40
 ATTEMPTS = 3
 RETRY_BASE_S = 0.5
 MIN_COVERAGE_BYTES = 1024
+# Background cache writes: a few at a time, and at most this many waiting (bodies held in
+# memory); past that a write is skipped, which only costs the cache.
+WRITE_WORKERS = 2
+MAX_PENDING_WRITES = 32
 
 LANDFIRE_HOST = "edcintl.cr.usgs.gov"
 LANDFIRE_PATH = "/geoserver/landfire/wcs"
@@ -153,6 +162,56 @@ def _plain_get(url: str, limit: int) -> tuple[int, bytes, str]:
 
 # --- cache and retry -------------------------------------------------------------------------
 
+_writer = ThreadPoolExecutor(max_workers=WRITE_WORKERS, thread_name_prefix="geo-cache-write")
+_pending = threading.BoundedSemaphore(MAX_PENDING_WRITES)
+
+
+def _write(collection, key: str, kind: str, body: bytes, content_type: str) -> None:
+    try:
+        collection.replace_one(
+            {"_id": key},
+            {
+                "_id": key,
+                "kind": kind,
+                "body": Binary(body),
+                "contentType": content_type,
+                "length": len(body),
+                "fetchedAt": datetime.now(UTC),
+            },
+            upsert=True,
+        )
+        _evict(collection)
+    except (PyMongoError, ValueError):
+        logger.warning("geo cache write failed", exc_info=True)
+    finally:
+        _pending.release()
+
+
+def _evict(collection) -> None:
+    """Drop the oldest entries while the cache holds more than settings.GEO_CACHE_MAX_BYTES."""
+    total = next(collection.aggregate([{"$group": {"_id": None, "bytes": {"$sum": "$length"}}}]), {}).get("bytes", 0)
+    excess = total - settings.GEO_CACHE_MAX_BYTES
+    if excess <= 0:
+        return
+    doomed = []
+    for doc in collection.find({}, {"length": 1}).sort("fetchedAt", 1):
+        if excess <= 0:
+            break
+        doomed.append(doc["_id"])
+        excess -= doc.get("length", 0)
+    if doomed:
+        collection.delete_many({"_id": {"$in": doomed}})
+
+
+def _write_later(collection, key: str, kind: str, body: bytes, content_type: str) -> None:
+    """Store the entry in the background; skipped when too many writes are already waiting."""
+    if not _pending.acquire(blocking=False):
+        return
+    try:
+        _writer.submit(_write, collection, key, kind, body, content_type)
+    except RuntimeError:  # interpreter shutting down
+        _pending.release()
+
 
 def _fetch_with_retry(kind: str, fetch, accept) -> tuple[int, bytes, str]:
     """Run `fetch` up to ATTEMPTS times on network errors, 5xx and 429. Returns (status, body, type)."""
@@ -208,21 +267,7 @@ def _serve(request, kind: str, key: str, fetch, accept, default_type: str) -> Ht
         return _error(404, "not_found") if status == 404 else _error(502, f"upstream_{status}")
     content_type = content_type.split(";")[0].strip() or default_type
     if collection is not None:
-        try:
-            collection.replace_one(
-                {"_id": key},
-                {
-                    "_id": key,
-                    "kind": kind,
-                    "body": Binary(body),
-                    "contentType": content_type,
-                    "length": len(body),
-                    "fetchedAt": datetime.now(UTC),
-                },
-                upsert=True,
-            )
-        except (PyMongoError, ValueError):
-            logger.warning("geo cache write failed", exc_info=True)
+        _write_later(collection, key, kind, body, content_type)
     return _binary(body, content_type, etag, "MISS")
 
 

@@ -6,6 +6,7 @@ import {
   MOISTURE_PRESETS,
   STRUCTURE_SPREAD_REFERENCE_WIND_MPH,
   compassPoint,
+  formatElapsed,
 } from "../fire/spread";
 import WindSourcePicker from "../fire/ui/WindSourcePicker";
 import HorizonControl from "../fire/ui/HorizonControl";
@@ -17,6 +18,7 @@ import type { FireSettings, IgnitionProblem } from "../fire/scheduledTypes";
 import { Button, EmptyState, Field, IconButton, Notice, Panel } from "../ui";
 import {
   MAX_ENABLED_IGNITIONS,
+  MAX_REPORT_MINUTE,
   MAX_WIND_SPEED_MPH,
   MIN_WIND_SPEED_MPH,
   studioDisplayStepMinutes,
@@ -97,7 +99,9 @@ export default function ConfigPanel(props: ConfigPanelProps) {
     onImport,
     onLoadDemo,
     liveDrill,
+    liveFire,
     firefighting,
+    modelledReportDelays,
   } = props;
 
   const uid = useId();
@@ -427,8 +431,20 @@ export default function ConfigPanel(props: ConfigPanelProps) {
                           onChange={(event) => {
                             const value = numberFrom(event);
                             if (value === null) return;
+                            const startMinute = clamp(Math.round(value), 0, Math.max(horizon - 1, 0));
+                            // A set report time keeps its delay after the start when the start moves.
+                            const reported = ignition.reportMinute;
                             updateIgnition(ignition.id, {
-                              startMinute: clamp(Math.round(value), 0, Math.max(horizon - 1, 0)),
+                              startMinute,
+                              ...(typeof reported === "number"
+                                ? {
+                                    reportMinute: clamp(
+                                      startMinute + reported - ignition.startMinute,
+                                      startMinute,
+                                      MAX_REPORT_MINUTE,
+                                    ),
+                                  }
+                                : {}),
                             });
                           }}
                         />
@@ -445,6 +461,14 @@ export default function ConfigPanel(props: ConfigPanelProps) {
                         ×
                       </IconButton>
                     </div>
+                    <ReportTimeRow
+                      ignition={ignition}
+                      base={base}
+                      modelledDelay={modelledReportDelays?.[ignition.id] ?? null}
+                      invalid={hasField("reportMinute")}
+                      describedBy={hasMessages ? messageId : undefined}
+                      onChange={(reportMinute) => updateIgnition(ignition.id, { reportMinute })}
+                    />
                     {(isSelected || hasField("location")) && (
                       <p
                         className={`studio-coords${hasField("location") ? " has-issue" : ""}`}
@@ -839,7 +863,80 @@ export default function ConfigPanel(props: ConfigPanelProps) {
         <p className="studio-status" role="status">
           {statusLine}
         </p>
+        {liveFire}
       </section>
     </Panel>
+  );
+}
+
+/**
+ * When this fire is reported to dispatch: modelled (the call-in and processing delay of
+ * response/report.ts) or set by the user as minutes after its start, stored as the absolute
+ * report minute. Crews and aircraft are not sent before it.
+ */
+function ReportTimeRow({
+  ignition,
+  base,
+  modelledDelay,
+  invalid,
+  describedBy,
+  onChange,
+}: {
+  ignition: ScheduledIgnition;
+  base: string;
+  modelledDelay: number | null;
+  invalid: boolean;
+  describedBy?: string;
+  onChange: (reportMinute: number | null) => void;
+}) {
+  const set = typeof ignition.reportMinute === "number";
+  const delay = set ? (ignition.reportMinute as number) - ignition.startMinute : null;
+  const maxDelay = Math.max(MAX_REPORT_MINUTE - ignition.startMinute, 0);
+  const modelledText =
+    modelledDelay === null ? "modelled" : `modelled (≈${Math.round(modelledDelay)} min after start)`;
+  return (
+    <div className="studio-report">
+      <label htmlFor={`${base}-report`}>Reported</label>
+      <select
+        id={`${base}-report`}
+        className="ui-input studio-input-report"
+        value={set ? "set" : "modelled"}
+        aria-describedby={describedBy}
+        onChange={(event) =>
+          onChange(
+            event.target.value === "set"
+              ? ignition.startMinute + clamp(Math.round(modelledDelay ?? 15), 0, maxDelay)
+              : null,
+          )
+        }
+      >
+        <option value="modelled">{modelledText}</option>
+        <option value="set">set by you</option>
+      </select>
+      {set && delay !== null && (
+        <span className="studio-report-set">
+          <input
+            id={`${base}-report-delay`}
+            type="number"
+            className="ui-input studio-input-minute"
+            aria-label={`${ignition.name || "Fire"} reported, minutes after it starts`}
+            min={0}
+            max={maxDelay}
+            step={1}
+            value={delay}
+            aria-invalid={invalid || undefined}
+            aria-describedby={describedBy}
+            onChange={(event) => {
+              const value = numberFrom(event);
+              if (value === null) return;
+              onChange(ignition.startMinute + clamp(Math.round(value), 0, maxDelay));
+            }}
+          />
+          <span>
+            min after start · {formatElapsed(ignition.reportMinute as number)}
+          </span>
+        </span>
+      )}
+    </div>
   );
 }

@@ -10,6 +10,9 @@ import {
 } from "./randomScenario";
 import ConfigPanel from "./ConfigPanel";
 import LiveDrillAction from "./LiveDrillAction";
+import LiveFireStatus from "./LiveFireStatus";
+import { usePublishLiveFire } from "./usePublishLiveFire";
+import { useLiveRegionSync } from "./useLiveRegionSync";
 import PlaybackBar from "./PlaybackBar";
 import StudioDiorama, { type StudioEvacuationView } from "./StudioDiorama";
 import EvacuationPanel, { type PlayPlan } from "./EvacuationPanel";
@@ -33,7 +36,7 @@ import { useMapFireline } from "./useMapFireline";
 import { useMapCrews } from "./useMapCrews";
 import { planIncidents } from "./incidents";
 import { crewHandoff, evacuationCrews, evacuationTaskFromMinute } from "./crewHandoff";
-import { DEFAULT_FIREFIGHTING, startMsOf } from "./firefighting";
+import { DEFAULT_FIREFIGHTING, ignitionReportDelayMinutes, startMsOf } from "./firefighting";
 import StudioPeople from "./StudioPeople";
 import {
   behaviorLabel,
@@ -88,6 +91,7 @@ import {
   loadRegionId,
   saveRegionId,
   STUDIO_BOARD_SIZES,
+  studioBoardId,
   useRegionBoard,
 } from "./useRegionBoard";
 import { firstLoadSeconds, readinessLabel, useCachedBoards } from "../fire/useCachedBoards";
@@ -120,6 +124,11 @@ export interface SimulationStudioPageProps {
    * and disabled.
    */
   aside?: ComponentType<StudioAsideContext>;
+  /**
+   * Send each finished run's fires to Live command (POST /api/live/studio-fires). Only the
+   * Simulation Studio page opts in; /dispatch reuses this page without publishing.
+   */
+  publishLiveFire?: boolean;
 }
 
 /** What a side panel gets from the studio. */
@@ -199,6 +208,7 @@ export default function SimulationStudioPage({
   label = "Simulation Studio",
   storageNamespace,
   aside: Aside,
+  publishLiveFire = false,
 }: SimulationStudioPageProps = {}) {
   const draftKey = storageNamespace
     ? `${DRAFT_STORAGE_KEY}.${storageNamespace}`
@@ -323,6 +333,7 @@ export default function SimulationStudioPage({
   const [boardRadius, setBoardRadius] = useState<number | null>(15_000);
   const { catalog, board } = useRegionBoard(regionId, boardAttempt, boardRadius);
   const region = findRegion(regionId);
+  const liveFire = usePublishLiveFire(result, regionId, publishLiveFire);
   const sizeReady = useCachedBoards(
     region
       ? STUDIO_BOARD_SIZES.flatMap((size) =>
@@ -334,7 +345,7 @@ export default function SimulationStudioPage({
     board.status,
   );
   // Identity of the board a run was solved on: a different size is a different board.
-  const boardId = boardRadius === null ? regionId : `${regionId}@${boardRadius / 1000}km`;
+  const boardId = studioBoardId(regionId, boardRadius);
   const regionGrid = board.status === "ready" ? board.grid : null;
 
   // Playback. `clockRef` is the smooth simulation clock; React state only changes when the
@@ -538,6 +549,13 @@ export default function SimulationStudioPage({
     },
     [regionId, cancel, markStale],
   );
+  const liveSync = useLiveRegionSync({
+    enabled: publishLiveFire,
+    boardId,
+    liveFire,
+    blocked: result !== null || state.phase === "loading-landscape" || state.phase === "computing",
+    select: selectRegion,
+  });
 
   // The area size is part of the shared world's region (useStudioWorldSync writes it).
   const selectBoardSize = useCallback(
@@ -611,11 +629,22 @@ export default function SimulationStudioPage({
     () => mapResources(area, suppressionBases, firstFire),
     [area, suppressionBases, firstFire],
   );
+  // Modelled report delay per ignition, shown beside the report-time choice in the panel.
+  const modelledReportDelays = useMemo(() => {
+    const settings = scenario.firefighting ?? DEFAULT_FIREFIGHTING;
+    return Object.fromEntries(
+      scenario.ignitions.map((ignition) => [
+        ignition.id,
+        ignitionReportDelayMinutes(dioramaLandscape, ignition.location, ignition.startMinute, settings),
+      ]),
+    );
+  }, [scenario.ignitions, scenario.firefighting, dioramaLandscape]);
 
   /**
    * The run card from the units on the map (studio/mapResources.ts), each ground unit driven from
-   * its own base over the board's roads on its access class's graph to the first fire, reported
-   * after its call-in delay (studio/crewDispatch.ts); aircraft fly from the air bases in reach.
+   * its own base over the board's roads on its access class's graph to each fire, at that fire's
+   * report time (set by the user under Fires, else the modelled call-in delay;
+   * studio/crewDispatch.ts); aircraft fly from the air bases in reach.
    */
   const planCrews = useCallback((): RunDispatch | undefined => {
     const settings = scenario.firefighting;
@@ -632,13 +661,19 @@ export default function SimulationStudioPage({
         resources: {},
       };
     }
-    // One incident per fire, each dispatched after its own call-in delay (studio/incidents.ts).
+    // One incident per fire, each dispatched at its own report time (studio/incidents.ts).
     return planIncidents({
       resources: fromMap,
       area,
       ignitions: scenario.ignitions
         .filter((ignition) => ignition.enabled)
-        .map((ignition) => ({ id: ignition.id, name: ignition.name || ignition.id, location: ignition.location, startMinute: ignition.startMinute })),
+        .map((ignition) => ({
+          id: ignition.id,
+          name: ignition.name || ignition.id,
+          location: ignition.location,
+          startMinute: ignition.startMinute,
+          reportMinute: ignition.reportMinute ?? null,
+        })),
       settings: scenario.settings,
       firefighting: settings,
       grid: dioramaLandscape,
@@ -1350,7 +1385,10 @@ export default function SimulationStudioPage({
                         id="studio-region"
                         className="ui-input"
                         value={regionId}
-                        onChange={(event) => selectRegion(event.target.value)}
+                        onChange={(event) => {
+                          liveSync.userPicked();
+                          selectRegion(event.target.value);
+                        }}
                       >
                         {REGION_AREAS.map((area) => (
                           <optgroup key={area} label={area}>
@@ -1424,6 +1462,11 @@ export default function SimulationStudioPage({
                           : "Board could not be loaded."}{" "}
                       Fires on the board run on it; others download their own area.
                     </p>
+                    {liveSync.note && (
+                      <p className="studio-region__sync" role="status">
+                        {liveSync.note}
+                      </p>
+                    )}
                   </Panel>
                 }
                 emptyState={
@@ -1656,6 +1699,8 @@ export default function SimulationStudioPage({
               onExport={handleExport}
               onImport={handleImport}
               onLoadDemo={handleLoadDemo}
+              modelledReportDelays={modelledReportDelays}
+              liveFire={publishLiveFire ? <LiveFireStatus state={liveFire} /> : undefined}
               liveDrill={<LiveDrillAction result={result} stale={stale} />}
               firefighting={
                 studioDefaults ? undefined : <FirefightingFields

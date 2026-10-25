@@ -1,7 +1,8 @@
 """Cartesia speech adapter: batch speech-to-text (ink-whisper) and text-to-speech (sonic).
 
 Pure transport, stdlib ``urllib`` only, like ``intel_feeds``. The key stays server-side
-(``CARTESIA_API_KEY``); the phone never talks to Cartesia directly. Paid usage.
+(``CARTESIA_API_KEY``). The phone either posts audio for the batch calls here, or streams to
+Cartesia's WebSockets itself with a short-lived ``stt``/``tts`` access token minted here. Paid usage.
 API reference: https://docs.cartesia.ai/api-reference (version header below).
 """
 
@@ -20,8 +21,10 @@ DEFAULT_TTS_MODEL = "sonic-3.6"
 # Cartesia's documented example voice; override with CARTESIA_VOICE_ID.
 DEFAULT_VOICE_ID = "db6b0ed5-d5d3-463d-ae85-518a07d3c2b4"
 TTS_SAMPLE_RATE = 24_000
+STT_SAMPLE_RATE = 16_000
 HTTP_TIMEOUT_S = 20.0
 MAX_TTS_CHARS = 600
+ACCESS_TOKEN_TTL_S = 300
 
 
 class CartesiaError(Exception):
@@ -94,9 +97,9 @@ def transcribe(audio: bytes, filename: str = "speech.wav", language: str = "en")
 def synthesize(text: str, language: str = "en") -> bytes:
     """``text`` spoken as a 24 kHz 16-bit mono WAV."""
     body = {
-        "model_id": os.environ.get("CARTESIA_TTS_MODEL", "").strip() or DEFAULT_TTS_MODEL,
+        "model_id": tts_model(),
         "transcript": text[:MAX_TTS_CHARS],
-        "voice": {"id": os.environ.get("CARTESIA_VOICE_ID", "").strip() or DEFAULT_VOICE_ID},
+        "voice": {"id": voice_id()},
         "language": language,
         "output_format": {"container": "wav", "encoding": "pcm_s16le", "sample_rate": TTS_SAMPLE_RATE},
     }
@@ -104,3 +107,28 @@ def synthesize(text: str, language: str = "en") -> bytes:
     if not audio.startswith(b"RIFF"):
         raise CartesiaError("upstream", "Cartesia sent audio in an unexpected format.")
     return audio
+
+
+def tts_model() -> str:
+    return os.environ.get("CARTESIA_TTS_MODEL", "").strip() or DEFAULT_TTS_MODEL
+
+
+def voice_id() -> str:
+    return os.environ.get("CARTESIA_VOICE_ID", "").strip() or DEFAULT_VOICE_ID
+
+
+def mint_access_token(expires_in: int = ACCESS_TOKEN_TTL_S) -> str:
+    """A short-lived token with only the ``stt`` and ``tts`` grants, for the phone's WebSockets.
+
+    The phone streams to Cartesia directly with it (``access_token`` query parameter), so the
+    API key never leaves the server and a leaked token stops working within minutes.
+    """
+    body = {"grants": {"stt": True, "tts": True, "agent": False}, "expires_in": expires_in}
+    raw = _post("/access-token", json.dumps(body).encode(), "application/json")
+    try:
+        token = json.loads(raw).get("token")
+    except (ValueError, AttributeError) as exc:
+        raise CartesiaError("upstream", "Cartesia sent an unreadable access token.") from exc
+    if not isinstance(token, str) or not token:
+        raise CartesiaError("upstream", "Cartesia sent no access token.")
+    return token

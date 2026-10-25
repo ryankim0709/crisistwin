@@ -10,6 +10,11 @@ export interface ActiveIncident {
   source: "bundle" | "package";
   package_id: string | null;
   activated_at: string | null;
+  /**
+   * Studio board the drill package was run on ("<region>@<N>km" or a region id,
+   * studio/useRegionBoard.ts studioBoardId); null for Camp, a package without one, or an older server.
+   */
+  region_id: string | null;
 }
 
 export interface StoredPackage {
@@ -34,6 +39,7 @@ export function parseActive(data: unknown): ActiveIncident | null {
     source: data.source === "package" ? "package" : "bundle",
     package_id: typeof data.package_id === "string" ? data.package_id : null,
     activated_at: typeof data.activated_at === "string" ? data.activated_at : null,
+    region_id: typeof data.region_id === "string" && data.region_id ? data.region_id : null,
   };
 }
 

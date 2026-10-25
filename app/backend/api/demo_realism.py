@@ -47,6 +47,7 @@ from .demo import drill_center, resolve_incident
 from .live import incidents
 from .live.common import ApiError
 from .live.drillcache import get_index
+from .live.road_closures import closed_segment_ids
 
 logger = logging.getLogger(__name__)
 
@@ -393,8 +394,10 @@ def _blocked_fields(drill, access, edge_id: str | None) -> dict:
     return {"blocked_rule": acc.rule, "blocked_reason": plain_reason(access.vehicle, acc, edge.name)}
 
 
-def crew_route(drill, fire, request: dict, offboard_kmh: float, access=None) -> dict:
-    """One unit's drive: optional off-board leg to the network, then the class's road route.
+def crew_route(drill, fire, request: dict, offboard_kmh: float, access=None, blocked: frozenset[str] = frozenset()) -> dict:
+    """One unit's drive: optional off-board leg to the network, the class's road route, then an
+    optional off-board leg from the network to a target off it (both straight line x
+    OFFBOARD_CIRCUITY at the off-board speed, summed in ``offboard_m``).
 
     With ``access`` (the class's ``AccessProfile``) the leg may stop short of the target at the
     nearest road node the class can reach (``livecore.inbound.reach_route``); without it every
@@ -403,17 +406,18 @@ def crew_route(drill, fire, request: dict, offboard_kmh: float, access=None) -> 
 
     origin, target = request["from"], request["to"]
 
-    def drive(start):
+    def drive(start, goal):
         if access is None:
-            res = inbound_route(drill, start, tuple(target), frozenset(), fire)
+            res = inbound_route(drill, start, tuple(goal), blocked, fire)
             return res, ("reached" if res.route is not None else None), None, res.target_snap_m if res.route else None, None, None
-        r = reach_route(drill, start, tuple(target), frozenset(), fire, access)
+        r = reach_route(drill, start, tuple(goal), blocked, fire, access)
         return r.result, r.status, r.stop_node, r.off_road_m, r.blocked_edge, r.unrestricted_s
 
-    result, status, stop_node, off_road_m, blocked_edge, free_s = drive(tuple(origin))
+    result, status, stop_node, off_road_m, blocked_edge, free_s = drive(tuple(origin), tuple(target))
     offboard_m = 0.0
     offboard_min = 0.0
     line_head: list[list[float]] = []
+    start = tuple(origin)
     if result.reason == "origin_off_network":
         node, metres = _nearest_main_node(drill, tuple(origin))
         if node is not None:
@@ -421,12 +425,28 @@ def crew_route(drill, fire, request: dict, offboard_kmh: float, access=None) -> 
             offboard_m = metres
             offboard_min = metres * OFFBOARD_CIRCUITY / (offboard_kmh * 1000 / 60)
             line_head = [list(origin)]
-            result, status, stop_node, off_road_m, blocked_edge, free_s = drive(entry)
+            start = entry
+            result, status, stop_node, off_road_m, blocked_edge, free_s = drive(entry, tuple(target))
+    line_tail: list[list[float]] = []
+    if result.reason == "target_off_network":
+        # A target off the network (an attack position in the wildland): drive to the main-road
+        # node nearest it, then the same straight-line x OFFBOARD_CIRCUITY leg to the target.
+        node, metres = _nearest_main_node(drill, tuple(target))
+        if node is not None:
+            exit_node = drill.roads.node_coords[node]
+            offboard_m += metres
+            offboard_min += metres * OFFBOARD_CIRCUITY / (offboard_kmh * 1000 / 60)
+            line_tail = [list(target)]
+            result, status, stop_node, off_road_m, blocked_edge, free_s = drive(start, exit_node)
     out = {"id": request["id"], "offboard_m": round(offboard_m), **_blocked_fields(drill, access, blocked_edge)}
     if result.route is None or result.travel_time_s is None:
         return {**out, "drive_min": None, "distance_m": None, "basis": None, "reason": result.reason, "line": [],
                 "access_status": None, "stop_point": None, "off_road_m_to_target": None, "unrestricted_drive_min": None}
-    line = line_head + [list(p) for p in simplify_line(result.route.line, ROUTE_TOLERANCE_M, ROUTE_MAX_POINTS)]
+    line = (
+        line_head
+        + [list(p) for p in simplify_line(result.route.line, ROUTE_TOLERANCE_M, ROUTE_MAX_POINTS)]
+        + line_tail
+    )
     stop = drill.roads.node_coords[stop_node] if stop_node else None
     return {
         **out,
@@ -504,6 +524,8 @@ def demo_crew_routes(request):
     except ApiError as exc:
         return _error(exc.status, exc.code, exc.detail)
     fire = to_multipolygon({"type": "MultiPolygon", "coordinates": [[r] for r in rings]}) if rings else None
+    # The controller's road closures (api.live.road_closures): never driven, as blocked segments.
+    closed, closures_ok = closed_segment_ids(incident)
     offboard_kmh = _offboard_kmh()
     profiles: dict[str, object] = {}
     attrs = None
@@ -513,7 +535,9 @@ def demo_crew_routes(request):
              else "road access rules unavailable (tools/suppression_resources.json missing): every road open at its own speed")
     return Response(
         {
-            "routes": [crew_route(drill, fire, r, offboard_kmh, profiles.get(r["access_class"])) for r in requests],
+            "routes": [crew_route(drill, fire, r, offboard_kmh, profiles.get(r["access_class"]), closed) for r in requests],
+            "closed_segment_ids": sorted(closed),
+            "closures_status": "ok" if closures_ok else "unavailable",
             "congestion": "not_modelled",
             "evidence_class": "simulated",
             "road_access": {"status": attrs.status if attrs is not None else "none", "basis": basis},

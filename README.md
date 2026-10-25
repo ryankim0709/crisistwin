@@ -18,10 +18,10 @@ Routes of the web app (`app/src/main.tsx`, `app/src/navigation.ts`); `/` redirec
 
 | Route | Page | What it does |
 | ----- | ---- | ------------ |
-| `/fire` | Fire spread model | Rothermel surface spread with crown fire, ember spotting and structure-to-structure spread on LANDFIRE fuels, canopy and terrain; 3D diorama or USGS imagery view; 41 prebuilt California regions or a live custom area; optional NWS wind. [Reference](docs/fire-simulator.md). |
+| `/fire` | Fire spread model | Rothermel surface spread with crown fire, ember spotting and structure-to-structure spread on LANDFIRE fuels, canopy and terrain; 3D diorama or USGS imagery view; 13 prebuilt regions (11 in the San Francisco Bay Area, 2 in Los Angeles) or a live custom area; optional NWS wind. [Reference](docs/fire-simulator.md). |
 | `/simulation` | Simulation Studio | Up to five scheduled ignitions in one solver pass on a shared landscape, Web Worker solve, JSON export/import, plus a 3D diorama view of the last run. In 3D, **Evacuation & closures** evacuates the board's synthetic households against the run and lets you close roads or bridges, comparing results with and without them (closures change traffic, not the fire). An **optimizer** re-runs on every closure change, searching other exits and staged waves per zone, and shows its best plan against the fastest-exit policy; the 3D view can play either. **Firefighters** in the config panel send hand crews, engines, dozers and aircraft, driving in over the roads each vehicle class can use (rules in `docs/suppression-data.md`) or flying from the nearest CAL FIRE bases, to build control line; the run estimates whether they put each fire out by direct attack once on site, searches anchor points and line distances for the best control line, and compares both with no crews. Crews the fire overwhelms leave it after a size-up and help the evacuation in the most threatened zones. [ADR 0011](docs/adr/0011-simulation-studio.md), [ADR 0016](docs/adr/0016-studio-diorama-view.md), [ADR 0018](docs/adr/0018-road-closures.md), [ADR 0020](docs/adr/0020-studio-firefighting.md), [ADR 0023](docs/adr/0023-studio-crew-dispatch.md), [ADR 0048](docs/adr/0048-suppression-engine.md), [ADR 0024](docs/adr/0024-studio-crews-assist-evacuation.md), [ADR 0029](docs/adr/0027-evacuation-optimizer.md). |
 | `/dispatch` | Dispatch agent | The Simulation Studio UI (scheduled fires, map and 3D diorama) with its own saved draft, plus a live Claude dispatcher beside it (needs `ANTHROPIC_API_KEY`). After a run it builds OSM roads, stations and synthetic homes. A monitor checks the simulation every few simulated minutes and calls Claude only when something changes. Claude orders zones out or stages them in waves, and sends engines either to fight a fire or to support an evacuation. For each fire Claude picks a tactic (direct attack, flanking from the heel, or indirect line ahead) from options the simulator has solved (homes reached, area burned, time to contain); the fire model decides where a line holds; the console shows each zone's simulated resident notice (nothing is sent). [ADR 0014](docs/adr/0014-dispatch-agent.md), [ADR 0017](docs/adr/0017-dispatch-anywhere.md), [ADR 0019](docs/adr/0019-live-dispatch-monitor.md), [ADR 0022](docs/adr/0022-dispatch-fire-attack.md), [ADR 0025](docs/adr/0025-dispatch-fire-tactics.md). **Road closures**: click roads closed or open on the 3D board before or during a run; traffic re-routes, roads the fire cuts are avoided, and the agent is woken to respond ([ADR 0030](docs/adr/0030-live-road-closures.md)). Each run's decisions and outcome are journalled in MongoDB Atlas, and the agent is shown earlier runs on the same roads as lessons ([ADR 0031](docs/adr/0031-dispatch-run-memory.md)). |
-| `/live` | Live command | Controller workspace for the active live drill: field-report triage, per-zone guidance approval, the drill clock and the real-time twin, plus a simulated command board with an AI incident commander on the same drill zones (the former `/demo`, which now redirects here). The left column switches between **Reports** (the review queue) and **Fires & units** (the board); the centre switches between the map and a **3D diorama** of the board. The board runs a 24/7 simulation clock in the browser with its own speed, fire activity (Quiet, Active, Severe) and wind preset: fires come from seeded ignitions, spot fires, `fire_seen` field reports from the drill and fires you add on the map; engine strike teams race each fire and households leave on an order. The Claude commander (needs `ANTHROPIC_API_KEY`) is **off by default** and is only called while **AI monitoring** is on (or by **Ask Claude now**). Board content is labelled simulated and kept apart from live drill data; closing a board fire resolves its field reports. Not operational guidance. [Contract](docs/live-reports.md), [ADR 0012](docs/adr/0012-controller-guidance.md), [ADR 0047](docs/adr/0047-command-demo.md). |
+| `/live` | Live command | Controller workspace for the active live drill: field-report triage, the drill clock and the real-time twin, plus a simulated command board with an AI incident commander on the same drill zones. Live follows the AI agent: its board orders are what the drill follows, and the twin-controller proposal flow (replan, pending proposals, approve) is off (`LIVE_PROPOSALS=false`, [contract](docs/live-reports.md#proposals-and-the-approval-policy)). It is the former `/demo`, which now redirects here. The left column switches between **Reports** (the review queue) and **Fires & units** (the board); the centre switches between the map and a **3D diorama** of the board. The board runs a 24/7 simulation clock in the browser with its own speed, fire activity (Quiet, Active, Severe) and wind preset: fires come from seeded ignitions, spot fires, `fire_seen` field reports from the drill and fires you add on the map; engine strike teams race each fire and households leave on an order. The Claude commander (needs `ANTHROPIC_API_KEY`) is **off by default** and is only called while **AI monitoring** is on (or by **Ask Claude now**). Board content is labelled simulated and kept apart from live drill data; closing a board fire resolves its field reports. Not operational guidance. [Contract](docs/live-reports.md), [ADR 0012](docs/adr/0012-controller-guidance.md), [ADR 0047](docs/adr/0047-command-demo.md). |
 | `/app-integration` | App integration | The phone app inside the server-side live drill (the incident of `GET /api/live/active`), in real time: every joined phone (solid dot) and every simulated person (hollow dot, acting through the same live API with their own, not always obedient, choices) on one map over the estimated population, fire, zone guidance and traffic; what waits for the controller's OK (Send / Don't send), one message timeline to and from phones, what a chosen person's phone shows, and what the simulated people did. Practice speed-ups only while no real phone is joined. [Doc](docs/app-integration.md). |
 | `/live/report` | After-action report | Drill score with its component breakdown, per-zone leave-now vs 2018, triage and help times, and the decision timeline; Export JSON. Opened from the `/live` header menu. [Contract](docs/live-reports.md#after-action-report). |
 | `/replay` | Historical replay | Replay of past fires (Camp 2018, plus Marshall and Kincade packages) with perimeters, evacuation traffic and responder/evacuee views, driven by generated replay bundles. [Bundle contract](docs/replay-bundle.md). |
@@ -122,14 +122,16 @@ For the dispatch agent, set `ANTHROPIC_API_KEY` (optionally `DISPATCH_AGENT_MODE
 `DISPATCH_AGENT_EFFORT`) in the backend environment; without it the endpoint returns 503.
 The dispatch area endpoint needs internet the first time a box is used (results are cached).
 
-For the phone's voice mode (`POST /api/live/incidents/{id}/voice`), Cartesia is the speech
-provider (speech-to-text and text-to-speech; paid, server-side only). Set `CARTESIA_API_KEY`
-alongside `ANTHROPIC_API_KEY` (optionally `CARTESIA_VOICE_ID`, `CARTESIA_TTS_MODEL`,
-`VOICE_MODEL`) in the backend environment, for example
-`export CARTESIA_API_KEY=... ANTHROPIC_API_KEY=...` before `docker compose up`. Without
-`CARTESIA_API_KEY` recorded audio answers 503 and typed `text` turns work without speech. Contract:
-[docs/live-reports.md](docs/live-reports.md#voice-mode); a curl example is in
-[`app/backend/README.md`](app/backend/README.md#voice-mode-post-apiliveincidentsidvoice).
+Scenario resource snapshots (households, fire stations and engines at T+0 of each live drill,
+[docs/scenario-snapshots.md](docs/scenario-snapshots.md)), once per database and again after
+changing `tools/snapshot_assumptions.json` (a few minutes on a rate-limited Atlas tier):
+
+```sh
+docker exec crisistwin-backend-1 python manage.py live_init_db          # collections + validators
+docker exec crisistwin-backend-1 python manage.py live_seed_snapshots   # Camp, Berkeley Hills, Palisades
+```
+
+For the phone's voice mode, see [Voice mode (Cartesia)](#voice-mode-cartesia) below.
 The `/fire` page needs internet access (LANDFIRE, terrain tiles, NWS) and works in the contiguous US only.
 
 Stack: Node 22.12+ with npm, Python 3.12, React 19, TypeScript 5.8, Vite 7, Tailwind CSS 4, Django 5.2,
@@ -163,6 +165,72 @@ Select the **CrisisTwin** scheme and an iOS 26 simulator (Xcode 26), then Produc
 `http://localhost:8000/api/health`, so start the Docker stack for the readiness card. Details:
 [mobile/README.md](mobile/README.md). Mobile builds and tests have not been run in this repository's
 checks.
+
+### Voice mode (Cartesia)
+
+The phone can be talked to: a person reports a blocked road or checks in by voice, asks what to do
+from the published guidance, and in Drive mode hears guidance changes read aloud. Claude only
+interprets what was said and proposes one action; the phone asks before it sends anything, and the
+model computes no route, time or hazard. When it answers a question, Claude uses only incident facts
+the server builds for that turn (the zone's published guidance and its recent versions, reported
+hazards, nearby shelters and the fire estimate), says when they do not cover the question, and the
+phone shows which it used ("From: published guidance · fire estimate"); the phone sends its zone id for
+this and no coordinates ([Grounded answers](docs/live-reports.md#grounded-answers)). Cartesia
+supplies the speech:
+
+- Speech-to-text: `ink-2` streamed over a WebSocket, so the screen shows live captions while the
+  person talks. Up to 10 `keyterm` boosts come from the incident's own road and exit names, so
+  "Pentz Road" is not heard as "Pence Road".
+- Text-to-speech: Sonic (`sonic-3.6`) streamed over a WebSocket. Reply text is sent in continuations
+  as the model writes it, so audio starts before the reply is finished. Guidance announcements in
+  Drive mode use the `calm` emotion and a slightly lower speed.
+- Short-lived access tokens: the server mints a 300 s token with only speech-to-text and
+  text-to-speech grants (`POST /api/live/incidents/{id}/voice/token`), so the phone talks to Cartesia
+  directly and the `CARTESIA_API_KEY` stays on the server.
+- The batch `/stt` and `/tts/bytes` endpoints remain as the non-streaming path (a recorded WAV in,
+  a WAV reply out).
+
+Jev makes the agent act on its own. For each utterance the server first asks TypeSafe's Jev model
+typed questions (what kind of request, which report kind, is it first-hand and here) and gets
+calibrated probabilities back. A confident first-hand hazard report (a blocked road, fire, smoke,
+traffic, a downed line, a full shelter) is filed by the phone without asking, and the person can say
+"undo" or tap Undo within 5 minutes. Everything else is confirmed first: `help_needed` reports and
+every check-in are never filed automatically, and questions and uncertain turns go to Claude, which
+also handles every turn when `TYPESAFE_API_KEY` is unset. Jev's replies are fixed templates. Jev is
+optional and paid; the thresholds and the contract are in
+[docs/live-reports.md](docs/live-reports.md#decisions-jev). This path has not been run on a device.
+
+Measured on the local stack, the first reply text arrives about 3.2 s after the transcript is posted
+and the whole reply about 3.7 s, against about 6.8 s without streaming. Those figures cover the model
+call only; they were not timed on a phone.
+
+Setup. Put `CARTESIA_API_KEY` (and `ANTHROPIC_API_KEY`) in the ignored `app/.env`, optionally
+`CARTESIA_VOICE_ID`, `CARTESIA_TTS_MODEL`, `VOICE_MODEL`, `TYPESAFE_API_KEY` and `JEV_MODEL`, then:
+
+```sh
+cd app && docker compose up -d backend
+```
+
+Both services are paid usage. Without the keys the token endpoint answers 503 `voice_unavailable`
+and the phone falls back to typed input and on-device speech. The wire contract is in
+[docs/live-reports.md](docs/live-reports.md#voice-mode) and
+[streaming voice](docs/live-reports.md#streaming-voice-token-endpoint-and-ndjson-replies); curl
+examples are in [`app/backend/README.md`](app/backend/README.md#voice-mode-post-apiliveincidentsidvoice);
+the phone side is in [mobile/README.md](mobile/README.md#voice).
+
+Known limitations:
+
+- English only.
+- A report's location is the phone's GPS position, even when the person names another place.
+  Reports Jev files automatically are pinned the same way, and the person only learns of a wrong
+  place by looking at the report or saying undo.
+- The Jev confidence thresholds are not calibrated on labelled data, so how often it files wrongly
+  or asks needlessly is unknown.
+- Speech-to-text and text-to-speech need a network signal. Typed input and on-device speech are
+  the fallback.
+- Barge-in (talking over a reply) on the speakerphone depends on Apple's echo cancellation.
+- The backend streaming path was timed on the local stack. The iOS voice and Drive mode have not been built or run
+  on a simulator or a physical device yet.
 
 ### Multi-phone drill
 

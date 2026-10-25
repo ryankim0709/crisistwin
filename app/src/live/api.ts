@@ -13,7 +13,6 @@ import type {
   ImpactResponse,
   LiveApiError,
   RejectProposalResponse,
-  ReplanResponse,
   TaskRoute,
   TriageAction,
   TwinMonitor,
@@ -50,13 +49,21 @@ export function writeToken(token: string | null): void {
   }
 }
 
+/** The server's answer for an incident that is not (or no longer) the active one. */
+const UNKNOWN_INCIDENT_DETAIL = "Unknown incident.";
+/** Window event fired when a request named an incident the server no longer knows. */
+export const INCIDENT_GONE_EVENT = "crisistwin:live-incident-gone";
+
 export class LiveError extends Error {
   readonly status: number;
   readonly code: string | null;
-  constructor(status: number, code: string | null, message: string) {
+  /** The parsed JSON error body, when there was one (extra fields such as a 409's owner details). */
+  readonly body: Record<string, unknown> | null;
+  constructor(status: number, code: string | null, message: string, body: Record<string, unknown> | null = null) {
     super(message);
     this.status = status;
     this.code = code;
+    this.body = body;
   }
   get unauthorized(): boolean {
     return this.status === 401 || this.status === 403;
@@ -73,7 +80,7 @@ function describe(status: number, body: Partial<LiveApiError> | null): string {
 
 export async function request<T>(
   token: string,
-  method: "GET" | "POST" | "DELETE",
+  method: "GET" | "POST" | "PUT" | "DELETE",
   path: string,
   body?: unknown,
   signal?: AbortSignal,
@@ -105,7 +112,11 @@ export async function request<T>(
   }
   if (!response.ok) {
     const err = (typeof data === "object" && data !== null ? data : null) as Partial<LiveApiError> | null;
-    throw new LiveError(response.status, err?.error ?? err?.reason ?? null, describe(response.status, err));
+    if (response.status === 404 && err?.detail === UNKNOWN_INCIDENT_DETAIL) {
+      // The active drill changed under this page (e.g. a Studio run switched it): let the page re-read it now.
+      window.dispatchEvent(new Event(INCIDENT_GONE_EVENT));
+    }
+    throw new LiveError(response.status, err?.error ?? err?.reason ?? null, describe(response.status, err), err as Record<string, unknown> | null);
   }
   if (data === null && response.status !== 204) {
     throw new LiveError(response.status, "bad_response", "The live API returned an unexpected response.");
@@ -174,8 +185,8 @@ export const helpAction = (token: string, checkinId: string, action: HelpAction,
 export const createTask = (token: string, incidentId: string, body: CreateTaskRequest) =>
   request<unknown>(token, "POST", `incidents/${encodeURIComponent(incidentId)}/tasks`, body);
 
-export const replan = (token: string, incidentId: string) => request<ReplanResponse>(token, "POST", `incidents/${encodeURIComponent(incidentId)}/replan`, {});
-
+// The twin-controller proposal flow is off on Live (LIVE_PROPOSALS, the AI agent decides); approve answers
+// 410 then. Kept for /app-integration, which shows pending proposals when the flow is on.
 export const approveProposal = (token: string, id: string, zoneIds?: string[]) => {
   const body: ApproveProposalRequest = zoneIds ? { zone_ids: zoneIds } : {};
   return request<ApproveProposalResponse>(token, "POST", `proposals/${encodeURIComponent(id)}/approve`, body);

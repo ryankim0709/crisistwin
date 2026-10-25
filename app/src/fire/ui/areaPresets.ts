@@ -8,7 +8,7 @@ export const DEFAULT_AREA: AreaPreset = {
   point: { latitude: 37.895, longitude: -122.23 },
 };
 
-/** California starting points (Bay Area to San Diego) for a custom area; any CONUS click also works. */
+/** California starting points for a custom area; any CONUS click also works. */
 export const AREA_PRESETS: readonly AreaPreset[] = [
   DEFAULT_AREA,
   { id: "altadena", label: "Altadena / Eaton, CA", point: { latitude: 34.19, longitude: -118.13 } },

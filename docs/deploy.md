@@ -63,6 +63,7 @@ Required (compose refuses to start without them): `SITE_ADDRESS`, `DJANGO_SECRET
 | `LIVE_CONTROLLER_TOKEN` | Required for multi-phone. Empty means every client is the controller. Typed into the /live console once (kept in sessionStorage); never in a bundle. |
 | `LIVE_INVITE_CODE` | Responder join code; unset means phone joins get 403. |
 | `ANTHROPIC_API_KEY`, `CARTESIA_*`, `VOICE_MODEL`, `APIFY_*` | Optional, server-side only; the web bundle never contains them. Paid usage. |
+| `API_THROTTLES` | Per-client request throttles on the anonymous endpoints (paid model calls, upstream fetches). Default on when `DJANGO_DEBUG=false` (this deployment), off in local development. |
 
 `DJANGO_BEHIND_PROXY=true` (set by compose) makes Django trust Caddy's `X-Forwarded-Proto`.
 The API port is not published on the host; only Caddy is reachable.

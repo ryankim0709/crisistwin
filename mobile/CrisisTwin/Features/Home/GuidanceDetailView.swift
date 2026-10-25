@@ -6,6 +6,7 @@ import SwiftUI
 /// distance; and the recent versions with why they changed.
 struct GuidanceDetailView: View {
     @Environment(LiveStore.self) private var store
+    @Environment(LocationProvider.self) private var location
     @Environment(AppRouter.self) private var router
     @Environment(\.dismiss) private var dismiss
     @State private var choosingExit = DebugLaunch.screen == "detailexit"
@@ -43,7 +44,7 @@ struct GuidanceDetailView: View {
             }
             .scrollEdgeEffectStyle(.hard, for: .top)
             .ctScreenBackground()
-            .navigationTitle(store.myZone?.name ?? "Guidance")
+            .navigationTitle(location.placeName.map { "Near \($0)" } ?? "Your area")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -68,7 +69,7 @@ struct GuidanceDetailView: View {
                     Text(level.verdict(zone: nil))
                         .foregroundStyle(level == .beReady ? Color.ctInk : fill)
                 } else {
-                    Text(level.verdict(zone: store.myZone?.name))
+                    Text(level.verdict(zone: nil))
                         .foregroundStyle(Color.ctInk)
                 }
             }

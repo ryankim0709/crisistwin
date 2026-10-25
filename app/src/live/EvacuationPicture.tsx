@@ -2,11 +2,10 @@ import { useMemo } from "react";
 import { EvidenceTag, LoadingState, Notice, Tag } from "../ui";
 import type { LiveError } from "./api";
 import type { MapFocus } from "./CommandMap";
-import { isClosedStatus, labelPoint, nf, plural, shortZoneName } from "./format";
+import { isClosedStatus, labelPoint, nf, plural, shortZoneName, wayOut } from "./format";
 import { routeUsesSegment } from "./geo";
 import Plate from "./Plate";
 import { destinationLoad, NEAR_FULL, type DestLoad } from "./load";
-import { wayOut } from "./ProposalPanel";
 import type {
   CommandResponse,
   CommandZone,
@@ -78,7 +77,7 @@ function TwinDetails({
   if (!twin) {
     return error && error.code !== "twin_warming" ? (
       <Notice tone="danger" compact>
-        {error.code === "twin_failed" ? "Twin unavailable; proposals use the rule planner." : error.message}
+        {error.code === "twin_failed" ? "Twin unavailable." : error.message}
       </Notice>
     ) : (
       <LoadingState>Loading the twin…</LoadingState>

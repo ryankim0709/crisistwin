@@ -8,6 +8,11 @@ size, data version). The server checks the key shape, the gzip and package magic
 stores the bytes in the GridFS bucket `landscape_cache` (one file per key, newest wins), and
 keeps at most settings.LANDSCAPE_CACHE_MAX_FILES files (oldest evicted). These are cached copies of live LANDFIRE and terrain reads,
 not the prebuilt regions in `landscape_packages`.
+
+A store gets its own operation budget (STORE_TIMEOUT_S, pymongo.timeout) instead of the client's
+15 s: GridFS counts the whole multi-MB upload as one operation, and from a slow uplink to Atlas
+that never fit in 15 s, so nothing was ever cached. The browser posts fire and forget, so the
+longer budget never delays a board.
 """
 
 import hashlib
@@ -17,6 +22,7 @@ import zlib
 from datetime import UTC, datetime
 
 import gridfs
+import pymongo
 from django.conf import settings
 from django.http import HttpResponse, StreamingHttpResponse
 from django.views.decorators.csrf import csrf_exempt
@@ -31,6 +37,8 @@ FILES = f"{BUCKET}.files"
 KEY_PATTERN = re.compile(r"[a-z0-9][a-z0-9._-]{7,127}")
 MAGIC = b"CTLS1\n"
 MAX_BYTES = 48 * 1024 * 1024
+# ASSUMPTION: enough for a 48 MB package at about 0.5 MB/s up to Atlas.
+STORE_TIMEOUT_S = 120
 CACHE_CONTROL = "public, max-age=3600"
 
 
@@ -93,7 +101,8 @@ def landscape_cache(request):
                 return _json(413, "too_large")
             if not _is_package(data):
                 return _json(400, "not_a_landscape_package")
-            _store(db, bucket, key, data)
+            with pymongo.timeout(STORE_TIMEOUT_S):
+                _store(db, bucket, key, data)
             return HttpResponse(status=204)
         doc = db[FILES].find_one({"filename": key}, sort=[("uploadDate", -1)])
         if doc is None:

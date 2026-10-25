@@ -10,11 +10,13 @@ import {
   BoardFrame,
   buildArrivalTexture,
   buildGroundTextures,
+  buildStateTexture,
   buildPlinth,
   buildTerrain,
   buildWater,
   createFireUniforms,
   emptyArrivalTexture,
+  emptyStateTexture,
   setFireXform,
   type FireUniforms,
 } from "./board";
@@ -107,6 +109,10 @@ type Board = {
   streets: THREE.Mesh | null;
   framing: Framing;
   labels: CSS2DObject[];
+  /** Arrival texture reduction (texels per cell side) the state texture must match. */
+  fireFactor: number;
+  /** Cover house positions as WGS84, built on first ask (null until then / after a cover rebuild). */
+  houseGeo: GeoPoint[] | null;
 };
 
 /**
@@ -156,6 +162,8 @@ export class FireDioramaScene implements FireDioramaSceneApi {
   private stationSuffix = "";
   private stationAbort: AbortController | null = null;
   private coverHouses = true;
+  /** Opt-in per-cell fire states (setCellStates); null = the arrival field decides. */
+  private cellStates: Uint8Array | null = null;
   private streets: BoardStreets | null = null;
   private reducedMotion: boolean;
   private clickCallback: ((point: GeoPoint) => void) | null = null;
@@ -423,6 +431,7 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     const { cover, streets: mesh } = this.buildStreetLayers(board.frame, board.fire);
     board.cover = cover;
     board.streets = mesh;
+    board.houseGeo = null;
     board.group.add(cover.group);
     if (mesh) board.group.add(mesh);
     this.applyCoverHouses();
@@ -462,11 +471,70 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     );
   }
 
+  setCellStates(states: Uint8Array | null): void {
+    if (this.disposed) return;
+    const prev = this.cellStates;
+    if (states === prev) return;
+    if (
+      states &&
+      prev &&
+      states.length === prev.length &&
+      states.every((v, i) => v === prev[i])
+    )
+      return;
+    this.cellStates = states ? states.slice() : null;
+    this.applyStates();
+  }
+
+  houseLocations(): readonly GeoPoint[] {
+    const board = this.board;
+    if (!board || !board.frame.grid) return NO_HOUSES;
+    if (!board.houseGeo) {
+      const xz = board.cover.housePositions();
+      const out: GeoPoint[] = [];
+      for (let i = 0; i < xz.length; i += 2) {
+        const merc = board.frame.toMercator(xz[i], xz[i + 1]);
+        if (!merc) continue;
+        const [longitude, latitude] = mercatorToLonLat(merc[0], merc[1]);
+        out.push({ longitude, latitude });
+      }
+      board.houseGeo = out;
+    }
+    return board.houseGeo;
+  }
+
+  setHouseMarks(marks: Uint8Array | null): void {
+    if (this.disposed) return;
+    this.board?.cover.setHouseMarks(marks);
+  }
+
   /** The cover layer names its house bodies and roofs; a page drawing its own homes hides them. */
   private applyCoverHouses() {
     for (const child of this.board?.cover.group.children ?? []) {
-      if (child.name === "houses" || child.name === "roofs") child.visible = this.coverHouses;
+      if (child.name === "houses" || child.name === "roofs" || child.name === "house-checks")
+        child.visible = this.coverHouses;
     }
+  }
+
+  /** Pushes the opt-in cell states (or their absence) to the ground shader, cover and flames. */
+  private applyStates() {
+    const board = this.board;
+    if (!board) return;
+    const frame = board.frame;
+    const states =
+      this.cellStates && frame.grid && this.cellStates.length === frame.cols * frame.rows
+        ? this.cellStates
+        : null;
+    board.fire.uState.value.dispose();
+    board.fire.uState.value = states
+      ? buildStateTexture(frame, states, board.fireFactor)
+      : emptyStateTexture();
+    board.fire.uUseState.value = states ? 1 : 0;
+    board.cover.setCellStates(states);
+    this.sampler.setStates(states);
+    this.labelStamp++;
+    this.renderedT = Number.NaN;
+    this.applyTime();
   }
 
   dispose(): void {
@@ -543,6 +611,8 @@ export class FireDioramaScene implements FireDioramaSceneApi {
       streets,
       framing,
       labels,
+      fireFactor: 1,
+      houseGeo: null,
     };
   }
 
@@ -554,8 +624,9 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     return { cover: new CoverLayer(frame, projected), streets };
   }
 
-  /** North arrow and scale bar on the base board rim, each with a small label. */
+  /** Scale bar on the base board rim, with a small label. */
   private buildMapFurniture(frame: BoardFrame, group: THREE.Group, labels: CSS2DObject[]) {
+    if (!frame.grid) return;
     const ivory = new THREE.MeshStandardMaterial({
       color: PALETTE.ivory,
       roughness: 0.6,
@@ -564,26 +635,6 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     });
     const rimY = BASE_Y + 0.05;
     const rimZ = frame.halfD + BOARD_MARGIN / 2;
-
-    const arrow = new THREE.Shape();
-    arrow.moveTo(0, 3.4);
-    arrow.lineTo(2.4, -2.4);
-    arrow.lineTo(0, -1.2);
-    arrow.lineTo(-2.4, -2.4);
-    arrow.closePath();
-    const north = new THREE.Mesh(new THREE.ShapeGeometry(arrow).rotateX(-Math.PI / 2), ivory);
-    north.position.set(0, rimY + 0.02, -frame.halfD - BOARD_MARGIN / 2);
-    group.add(north);
-    const n = this.labels.add(
-      group,
-      "fdx-north",
-      new THREE.Vector3(0, rimY + 1, -frame.halfD - BOARD_MARGIN / 2 - 3.5),
-      new THREE.Vector2(0.5, 1),
-    );
-    n.el.textContent = "N";
-    labels.push(n.obj);
-
-    if (!frame.grid) return;
     const groundWidth = frame.cols * frame.grid.groundCellSizeMeters;
     const target = groundWidth * 0.18;
     const meters = SCALE_STEPS.reduce((best, s) => (s <= target ? s : best), SCALE_STEPS[0]);
@@ -653,6 +704,7 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     disposeTree(board.group);
     for (const t of board.textures) t.dispose();
     board.fire.uArrival.value.dispose();
+    board.fire.uState.value.dispose();
   }
 
   private applyRun() {
@@ -682,16 +734,18 @@ export class FireDioramaScene implements FireDioramaSceneApi {
       board.fire.uWindow.value = window;
       this.burnWindow = window;
       setFireXform(board.fire, frame, factor);
+      board.fireFactor = factor;
       board.cover.setArrival(run.arrivalMinutes, horizon, window);
       this.sampler.setRun(frame, run.arrivalMinutes, horizon, window);
     } else {
       board.fire.uArrival.value = emptyArrivalTexture();
       setFireXform(board.fire, frame, 1);
+      board.fireFactor = 1;
       board.cover.setArrival(null, 0, MIN_BURN_WINDOW_MINUTES);
       this.sampler.setRun(frame, null, 0, MIN_BURN_WINDOW_MINUTES);
     }
-    this.renderedT = Number.NaN;
-    this.applyTime();
+    // Re-applies the opt-in states on the new texel layout, then the time.
+    this.applyStates();
   }
 
   private applyTime() {
@@ -877,13 +931,19 @@ export class FireDioramaScene implements FireDioramaSceneApi {
       const { cols, rows } = board.frame;
       const window = this.burnWindow;
       const t = this.t;
-      // A cell counts as burning from its arrival until it has burned for `window` minutes; a
-      // 3x3 neighbourhood keeps a label clear of the front's edge.
+      const states =
+        this.cellStates && this.cellStates.length === cols * rows ? this.cellStates : null;
+      // A cell counts as burning from its arrival until it has burned for `window` minutes (or
+      // while its opt-in state is burning); a 3x3 neighbourhood keeps a label clear of the front's edge.
       opts.isBurning = (cell) => {
         const c0 = cell % cols;
         const r0 = Math.floor(cell / cols);
         for (let r = Math.max(0, r0 - 1); r <= Math.min(rows - 1, r0 + 1); r++) {
           for (let c = Math.max(0, c0 - 1); c <= Math.min(cols - 1, c0 + 1); c++) {
+            if (states) {
+              if (states[r * cols + c] === 1) return true;
+              continue;
+            }
             const a = arrival[r * cols + c];
             if (a <= t && t - a < window) return true;
           }
@@ -966,6 +1026,8 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     this.clickCallback({ latitude, longitude });
   }
 }
+
+const NO_HOUSES: readonly GeoPoint[] = [];
 
 /** Disposes geometries, materials and material textures under `root`. */
 function disposeTree(root: THREE.Object3D) {

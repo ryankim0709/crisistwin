@@ -29,7 +29,7 @@ import {
   type IncidentDispatch,
   type NoAccess,
 } from "./crewDispatch";
-import { ignitionReportDelayMinutes, startMsOf, type FirefightingSettings } from "./firefighting";
+import { ignitionReportMinute, startMsOf, type FirefightingSettings } from "./firefighting";
 import { planMapDispatch, type DispatchWeather, type MapResources } from "./mapResources";
 import type { SuppressionBases } from "./suppressionBases";
 
@@ -47,6 +47,8 @@ export interface IncidentIgnition {
   name: string;
   location: { longitude: number; latitude: number };
   startMinute: number;
+  /** User-set report minute (studio/contracts.ts `ScheduledIgnition.reportMinute`); absent/null = modelled. */
+  reportMinute?: number | null;
 }
 
 export interface IncidentPlanInputs {
@@ -101,12 +103,10 @@ export function planIncidents(inputs: IncidentPlanInputs): IncidentPlan {
   const startMs = startMsOf(firefighting);
   const horizon = settings.horizonMinutes;
   const reported = inputs.ignitions
-    .map((ignition) => ({
-      ignition,
-      reportMinute:
-        ignition.startMinute +
-        ignitionReportDelayMinutes(grid, ignition.location, ignition.startMinute, firefighting),
-    }))
+    .map((ignition) => {
+      const report = ignitionReportMinute(grid, ignition, firefighting);
+      return { ignition, reportMinute: report.minute, reportSource: report.source };
+    })
     .sort((a, b) => a.reportMinute - b.reportMinute || a.ignition.id.localeCompare(b.ignition.id));
 
   const committedUnits = new Set<string>();
@@ -125,7 +125,7 @@ export function planIncidents(inputs: IncidentPlanInputs): IncidentPlan {
   const notes: string[] = [];
   let lead: CrewDispatch | null = null;
 
-  for (const { ignition, reportMinute } of reported) {
+  for (const { ignition, reportMinute, reportSource } of reported) {
     const fire: LonLat = [ignition.location.longitude, ignition.location.latitude];
     const weather = dispatchWeatherAt(settings, reportMinute);
     const plan = planMapDispatch(resources, area, fire, weather, grid, {
@@ -158,6 +158,7 @@ export function planIncidents(inputs: IncidentPlanInputs): IncidentPlan {
       fire,
       ignitionMinute: ignition.startMinute,
       reportMinute,
+      reportSource,
       level: plan.level,
       structure: plan.structure,
       text: plan.text,
@@ -179,6 +180,8 @@ export function planIncidents(inputs: IncidentPlanInputs): IncidentPlan {
         ...lead,
         // The first-reported incident's report minute, fire and road point; every incident's trips.
         reportMinute: incidents[0].reportMinute,
+        reportSource: incidents[0].reportSource,
+        reportedFire: incidents[0].name,
         trips,
         noAccess,
         notes,

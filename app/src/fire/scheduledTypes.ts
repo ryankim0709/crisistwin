@@ -35,6 +35,11 @@ export interface IgnitionSource {
   location: GeoPoint;
   /** Integer elapsed minute at which this source may first spread fire. 0 <= x < horizon. */
   startMinute: number;
+  /**
+   * Ignored by the solver. Simulation Studio's user-set minute the fire is reported to dispatch
+   * (>= startMinute); absent or null means the report delay is modelled (studio/firefighting.ts).
+   */
+  reportMinute?: number | null;
 }
 
 export interface ScheduledFireInput {

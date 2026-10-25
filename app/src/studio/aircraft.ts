@@ -35,6 +35,7 @@ import type { LonLat } from "../dispatch/area";
 import { groundMeters } from "../dispatch/area";
 import { lonLatToMercator, type LandscapeGrid } from "../fire/landscape";
 import type { ScheduledFireInput, ScheduledFireRun } from "../fire/scheduledTypes";
+import type { GeoPoint } from "../fire/spread";
 import {
   AIR_KINDS,
   AIR_LABELS,
@@ -417,8 +418,10 @@ export interface AircraftInputs {
   baseline: ScheduledFireRun;
   counts: ApparatusCounts;
   bases: readonly AirBase[] | null;
-  /** Minute the fire is reported (the first ignition); used when `incidents` is absent. */
+  /** Minute the first fire is reported (`fire`, else the first ignition); used when `incidents` is absent. */
   reportMinute: number;
+  /** The fire reported first, where the aircraft fly; absent = the first ignition. */
+  fire?: GeoPoint;
   /** T+0 as UTC epoch ms (from the scenario clock). */
   startMs: number;
   nightHelicopters: boolean;
@@ -498,7 +501,13 @@ export function planAircraft(inputs: AircraftInputs): AircraftPlan {
   const sourceIndex = new Map(input.sources.map((s, i) => [s.id, i]));
 
   // Incidents: as given, or the first fire with the run's counts (older callers).
-  const first = [...input.sources].sort((a, b) => a.startMinute - b.startMinute)[0];
+  const earliest = [...input.sources].sort((a, b) => a.startMinute - b.startMinute)[0];
+  const target = inputs.fire;
+  const first = target
+    ? (input.sources.find(
+        (s) => s.location.latitude === target.latitude && s.location.longitude === target.longitude,
+      ) ?? earliest)
+    : earliest;
   const incidents: AirIncident[] = inputs.incidents
     ? [...inputs.incidents]
     : first

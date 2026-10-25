@@ -28,7 +28,8 @@ export type GroundResponseKind = Extract<GroundKind, "engine_t3" | "engine_t1" |
 export type AirResponseKind = "air_attack" | "airtanker_s2t" | "helicopter_t2";
 export type ResponseKind = GroundResponseKind | AirResponseKind;
 
-export type AgencyClass = "calfire" | "local_schedule_a" | "local" | "contract_county" | "federal" | "osm";
+/** synthetic: the /live board's assumed roster when it has no facilities and no snapshot (demo/model.ts rosterTeams). */
+export type AgencyClass = "calfire" | "local_schedule_a" | "local" | "contract_county" | "federal" | "osm" | "synthetic";
 /** closest: answers initial attack; mutual_aid: off the board, answers orders only; state: ordered through the state system. */
 export type Tier = "closest" | "mutual_aid" | "state";
 
@@ -39,6 +40,7 @@ export const AGENCY_LABEL: Record<AgencyClass, string> = {
   contract_county: "Contract county",
   federal: "Federal",
   osm: "Fire station (OSM, agency unknown)",
+  synthetic: "Synthetic station",
 };
 
 /** A facility as the board knows it (demo/model.ts Station plus layer metadata when present). */
@@ -294,6 +296,7 @@ const AGENCY_SHORT: Record<AgencyClass, string> = {
   contract_county: "Contract county",
   federal: "Federal",
   osm: "OSM, agency unknown",
+  synthetic: "Synthetic station",
 };
 
 /** A facility that fields units, with what it fields: drawn on the map as "what can respond". */

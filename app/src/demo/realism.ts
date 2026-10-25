@@ -17,6 +17,7 @@ import {
   GROUND_APPARATUS,
   dataValue,
   lineRateMetersPerHour,
+  type AccessClass,
   type GroundKind,
 } from "../studio/apparatus";
 
@@ -138,6 +139,53 @@ export const KIND_PREFIX: Record<DemoApparatusKind, string> = {
 };
 
 /**
+ * ASSUMPTION (roster): the units on the board and the bases they start from. Counts are a
+ * scenario choice: the CAL FIRE layer has no apparatus per base (docs/suppression-data.md,
+ * Gaps). One unit of a kind per base, as studio/crewDispatch.ts UNITS_PER_KIND_PER_STATION.
+ * - Type 3 engines (the default CAL FIRE state engine, docs/suppression-data.md item 1) at the
+ *   nearest CAL FIRE state-owned stations;
+ * - Type 1 structure engines at the nearest local-government stations under a Schedule A
+ *   agreement (Paradise Fire Department);
+ * - Type 1 hand crews from the nearest conservation camp or crew fire centre;
+ * - a Type 2 dozer from the nearest CAL FIRE station (dozer bases as studio/crewDispatch.ts).
+ */
+export const ROSTER: { kind: DemoApparatusKind; count: number; base: "calfire_station" | "local_station" | "crew_camp" }[] = [
+  { kind: "engine_t3", count: 6, base: "calfire_station" },
+  { kind: "engine_t1", count: 3, base: "local_station" },
+  { kind: "hand_crew_t1", count: 2, base: "crew_camp" },
+  { kind: "dozer_t2", count: 1, base: "calfire_station" },
+];
+
+// ---- units from the scenario resource snapshot (docs/scenario-snapshots.md) ----
+
+/**
+ * Snapshot engine kind -> board apparatus kind (sourced rates in studio/apparatus.ts). The
+ * snapshot's `type3_engine` is the NWCG Type 3 wildland engine, `type1_engine` the Type 1
+ * structure engine (docs/suppression-data.md); livecore/apparatus.py maps them the same way for
+ * the simulated responders (type1 drives the engine_t1_t2 road-access class, as engine_t1 here).
+ */
+export const SNAPSHOT_ENGINE_KIND: Record<"type1_engine" | "type3_engine", DemoApparatusKind> = {
+  type3_engine: "engine_t3",
+  type1_engine: "engine_t1",
+};
+
+/**
+ * ASSUMPTION (not in the snapshot): the snapshot lists engines only, so the board keeps the
+ * fallback ROSTER's hand crews and dozer as extra units, labelled ASSUMED_UNIT_LABEL. They start
+ * at the CAL FIRE crew camp / state station nearest the drill when the CAL FIRE bases layer is
+ * available, else at the snapshot station nearest the drill centre.
+ */
+export const ASSUMED_EXTRA_UNITS: { kind: DemoApparatusKind; count: number; base: "crew_camp" | "calfire_station" }[] = ROSTER.filter(
+  (r) => r.kind === "hand_crew_t1" || r.kind === "dozer_t2",
+).map((r) => ({ kind: r.kind, count: r.count, base: r.base === "crew_camp" ? "crew_camp" : "calfire_station" }));
+
+/** User-visible label of a unit the snapshot does not list (ASSUMED_EXTRA_UNITS). */
+export const ASSUMED_UNIT_LABEL = "assumed (not in the snapshot)";
+
+/** Resource label of a board built without a snapshot (fixed ROSTER, drill-file counts). */
+export const NO_SNAPSHOT_LABEL = "No resource snapshot for this drill — using assumed roster";
+
+/**
  * Line one unit builds per minute on this fuel and slope, metres: studio/apparatus.ts
  * lineRateMetersPerHour (hand crews Broyles 2011 Table 2; engines PMS 465 p.164 Table 4 by
  * crew size; dozers PMS 465 p.140 Table 2 by slope class, uphill column, none above 55%).
@@ -157,6 +205,11 @@ export function holdsFlameFeet(kind: DemoApparatusKind): number {
 /** Minutes from dispatch to rolling (turnout, or mobilisation for crews and dozers). */
 export function turnoutMinutes(kind: DemoApparatusKind): number {
   return GROUND_APPARATUS[kind].turnoutMinutes;
+}
+
+/** Road-access class the unit is routed as (docs/suppression-data.md R01-R12; studio/apparatus.ts). */
+export function accessClassOf(kind: DemoApparatusKind): AccessClass {
+  return GROUND_APPARATUS[kind].access;
 }
 
 export function kindLabel(kind: DemoApparatusKind): string {
@@ -185,7 +238,7 @@ export const FALLBACK_SPEED_KMH = dataValue<Record<string, number>>("road_access
 export const DEPARTURE_MEAN_MINUTES = 93;
 /**
  * ASSUMPTION (shape): departure delays are exponential with that mean, so the cumulative share
- * gone t minutes after the cue is 1 - exp(-t / 93). Right-skewed, as the published mean
+ * gone t minutes after the cue (on the command board: the evacuation order taking effect) is 1 - exp(-t / 93). Right-skewed, as the published mean
  * departure (09:33) after the median (09:00) suggests; no distribution was published.
  */
 export function departedShare(minutesSinceCue: number): number {
@@ -197,9 +250,7 @@ export function departedShare(minutesSinceCue: number): number {
  * et al. 2020 Table 11). The rest stay (wait and see, stay and defend).
  */
 export const ORDER_COMPLIANCE = 0.92;
-/**
- * ASSUMPTION inside a sourced range: 30% of households in a zone with no order leave on the
- * fire cue (people_behavior.json shadow_evacuation_share suggested value; sourced range
- * 0.291-0.75, Wong et al. 2020 Table 11). The cue is fire touching the zone.
- */
-export const SHADOW_SHARE = 0.3;
+// No shadow (self-) evacuation on the command board: households leave only on an order (agent
+// or person), so the commander's staging decides who is on the road when. Sourced data say
+// otherwise (0.291-0.75 of non-recipients leave anyway, Wong et al. 2020 Table 11; the live
+// scenario runner keeps it, docs/live-scenario-runner.md); docs/command-demo-realism.md lists this simplification.

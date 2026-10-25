@@ -20,12 +20,6 @@ const LABEL_CSS = `
 .fdx-ignition { font-weight: 700; color: #7a2a18; padding: 2px 8px; }
 .fdx-wind { font-weight: 500; color: #3a3f45; background: rgba(251, 248, 241, 0.84); }
 .fdx-wind-glyph { font-size: 12px; line-height: 1; display: inline-block; color: #8a5a3c; }
-.fdx-north {
-  width: 26px; height: 26px; padding: 0; justify-content: center; border-radius: 50%;
-  font: 700 11px/1 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; color: #2a2e33;
-  flex-direction: column; gap: 0;
-}
-.fdx-north::before { content: ""; width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent; border-bottom: 6px solid #d65a40; margin-bottom: 1px; }
 .fdx-scale { font-size: 10.5px; padding: 2px 8px; gap: 5px; }
 .fdx-scale-bar { display: inline-block; width: 14px; height: 4px; border: 1.5px solid #3a3f45; border-top: none; }
 .fdx-place {
@@ -42,7 +36,6 @@ const LABEL_CSS = `
 .fdx-compact .fdx-st-badge { height: 22px; font-size: 10.5px; }
 .fdx-clipped { visibility: hidden; }
 .fdx-compact .fdx-label { font-size: 10px; padding: 2px 7px; }
-.fdx-compact .fdx-north { width: 22px; height: 22px; padding: 0; }
 .fdx-compact .fdx-scale { font-size: 9.5px; padding: 1px 6px; }
 `;
 
@@ -160,7 +153,7 @@ export class LabelLayer {
    * Hides labels whose anchor projects outside `free` (CSS px rectangle not covered by the
    * page's floating panels). Place labels are then hidden when their screen rect (padded by
    * `LABEL_MARGIN_PX`) meets a higher-priority rect: the ignition pin and wind pill first, then
-   * the north/scale pills, then earlier-added (more important) places. Places on burning cells
+   * the scale pill, then earlier-added (more important) places. Places on burning cells
    * are hidden too. The pass reruns only when the camera, time bucket or inputs change.
    */
   clip(camera: THREE.Camera, w: number, h: number, free: ScreenRect, opts: ClipOptions = {}) {
@@ -217,7 +210,7 @@ export class LabelLayer {
       if (!o.visible || this.places.has(o)) continue;
       (o.element.classList.contains("fdx-wind") ? wind : furniture).push(o);
     }
-    // Priority: pin (fixed) and wind label, then north/scale, then places.
+    // Priority: pin (fixed) and wind label, then scale, then places.
     for (const o of [...wind, ...furniture]) {
       const { inside, rect } = project(o);
       pills.push({ o, inside });

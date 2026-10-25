@@ -106,5 +106,24 @@ export interface FireDioramaSceneApi {
   /** Fire-station markers: a list draws exactly those, `null` the automatic CAL FIRE fetch around the board. */
   setStations(stations: readonly MapStation[] | null, suffix?: string): void;
   setStationSuffix(suffix: string): void;
+  /**
+   * Opt-in fire states per landscape cell (row-major, the grid's cells): 0 unburned, 1 burning
+   * (glow, flames, smoke), 2 burned out (char), 3 extinguished (wet slate with a pale hatch and a
+   * dashed cool outline, no glow). While set they replace the arrival-window rule for the ground,
+   * trees, houses and flames; the arrival still freshens the front. `null` (the default, and any
+   * array of the wrong length) goes back to the arrival field alone.
+   */
+  setCellStates(states: Uint8Array | null): void;
+  /**
+   * Geographic position of every stylized cover house, in instance order. The array keeps its
+   * identity until the cover is rebuilt (new landscape or streets), so a page can cache work on it.
+   */
+  houseLocations(): readonly GeoPoint[];
+  /**
+   * Marks parallel to `houseLocations()` (cover.ts HOUSE_MARK: 0 none, 1 residents safe → green
+   * roof and a white check badge; a burned roof keeps its char). `null`, or a length that does not
+   * match the current houses, clears every mark. Cleared when the cover is rebuilt.
+   */
+  setHouseMarks(marks: Uint8Array | null): void;
   dispose(): void;
 }

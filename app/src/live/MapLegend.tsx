@@ -2,6 +2,9 @@ import type { ReactNode } from "react";
 import { EvidenceTag } from "../ui";
 import { BOARD_COLOR } from "../demo/boardMapLayers";
 import { LEVEL_COLOR, MAP_COLOR } from "./CommandMap";
+import { HouseSwatch } from "./HouseholdSummary";
+import { HOUSEHOLD_DETAIL, HOUSEHOLD_LABEL } from "./householdLayer";
+import { HOUSEHOLD_STATUSES } from "./useHouseholdState";
 
 const zoneSw = (color: string, opacity: number, width = 2): ReactNode => (
   <svg viewBox="0 0 20 14" aria-hidden="true">
@@ -9,32 +12,67 @@ const zoneSw = (color: string, opacity: number, width = 2): ReactNode => (
   </svg>
 );
 
-const boardFireSw = (id: string, dashed: boolean): ReactNode => (
-  <svg viewBox="0 0 20 14" aria-hidden="true">
-    <defs>
-      <pattern id={id} width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-        <line x1="0" y1="0" x2="0" y2="5" stroke={MAP_COLOR.fireEdge} strokeWidth="2" />
-      </pattern>
-    </defs>
-    <rect x="1" y="1" width="18" height="12" rx="2" fill={MAP_COLOR.fire} fillOpacity={dashed ? 0.18 : 0.35} />
-    {!dashed && <rect x="1" y="1" width="18" height="12" rx="2" fill={`url(#${id})`} fillOpacity="0.6" />}
-    <rect x="1" y="1" width="18" height="12" rx="2" fill="none" stroke={MAP_COLOR.fireEdge} strokeWidth="2" strokeDasharray={dashed ? "3 2" : undefined} />
-  </svg>
-);
-
-/** The simulated board's marks (drawn by demo/boardMapLayers.ts). All simulation output. */
-const BOARD_ROWS: { key: string; label: string; swatch: ReactNode }[] = [
-  { key: "bd-burning", label: "Burning fire (sim)", swatch: boardFireSw("lc-lg-bd-hatch", false) },
-  { key: "bd-contained", label: "Contained fire, dashed edge (sim)", swatch: boardFireSw("lc-lg-bd-hatch-c", true) },
+/** Fire rows while per-cell fire states are drawn (demo/fireState.ts): what burns, burned out, was put out. */
+const FIRE_STATE_ROWS: { key: string; label: string; swatch: ReactNode }[] = [
   {
-    key: "bd-out",
-    label: "Burned-out fire (sim)",
+    key: "bd-fs-burning",
+    label: "Burning now: bright fill, thick glowing edge (sim)",
     swatch: (
       <svg viewBox="0 0 20 14" aria-hidden="true">
-        <rect x="1" y="1" width="18" height="12" rx="2" fill={BOARD_COLOR.scar} fillOpacity="0.25" stroke={BOARD_COLOR.scarEdge} strokeWidth="1" />
+        <rect x="2" y="2" width="16" height="10" rx="2" fill={MAP_COLOR.fire} fillOpacity="0.5" stroke={MAP_COLOR.fire} strokeOpacity="0.5" strokeWidth="4" />
+        <rect x="2" y="2" width="16" height="10" rx="2" fill="none" stroke={MAP_COLOR.fireEdge} strokeWidth="2.5" />
       </svg>
     ),
   },
+  {
+    key: "bd-fs-out",
+    label: "Burned out: dark hatch (sim)",
+    swatch: (
+      <svg viewBox="0 0 20 14" aria-hidden="true">
+        <defs>
+          <pattern id="lc-lg-bd-scar" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+            <line x1="0" y1="0" x2="0" y2="5" stroke={BOARD_COLOR.scarEdge} strokeWidth="2" />
+          </pattern>
+        </defs>
+        <rect x="1" y="1" width="18" height="12" rx="2" fill={BOARD_COLOR.scar} fillOpacity="0.4" />
+        <rect x="1" y="1" width="18" height="12" rx="2" fill="url(#lc-lg-bd-scar)" fillOpacity="0.75" stroke={BOARD_COLOR.scarEdge} strokeWidth="1" />
+      </svg>
+    ),
+  },
+  {
+    key: "bd-fs-ext",
+    label: "Put out by crews: blue-grey, dashed outline (sim)",
+    swatch: (
+      <svg viewBox="0 0 20 14" aria-hidden="true">
+        <rect x="1" y="1" width="18" height="12" rx="2" fill={BOARD_COLOR.extinguished} fillOpacity="0.4" stroke={BOARD_COLOR.extinguishedEdge} strokeWidth="2" strokeDasharray="3 2" />
+      </svg>
+    ),
+  },
+  {
+    key: "bd-fs-contained",
+    label: "Contained fire, thin dashed edge (sim)",
+    swatch: (
+      <svg viewBox="0 0 20 14" aria-hidden="true">
+        <rect x="1" y="1" width="18" height="12" rx="2" fill="none" stroke={MAP_COLOR.fireEdge} strokeWidth="1.5" strokeDasharray="3 2" />
+      </svg>
+    ),
+  },
+  {
+    key: "bd-crews",
+    label: "Firefighters at work, with a trail of the edge just worked (sim)",
+    swatch: (
+      <svg viewBox="0 0 20 14" aria-hidden="true">
+        <line x1="1" y1="9" x2="13" y2="7" stroke={MAP_COLOR.responder} strokeOpacity="0.55" strokeWidth="2.5" strokeLinecap="round" />
+        <circle cx="9" cy="7.5" r="2.2" fill={MAP_COLOR.responder} stroke={BOARD_COLOR.crewEdge} strokeWidth="1" />
+        <circle cx="15" cy="6.5" r="2.8" fill={MAP_COLOR.responder} stroke={BOARD_COLOR.crewEdge} strokeWidth="1" />
+      </svg>
+    ),
+  },
+];
+
+/** The simulated board's marks (drawn by demo/boardMapLayers.ts). All simulation output. */
+const BOARD_ROWS: { key: string; label: string; swatch: ReactNode }[] = [
+  ...FIRE_STATE_ROWS,
   { key: "bd-leave", label: "Board zone: leave now (sim)", swatch: zoneSw(LEVEL_COLOR.evacuate_now, 0.15) },
   { key: "bd-risk", label: "Board zone: at risk (sim)", swatch: zoneSw(LEVEL_COLOR.be_ready, 0.15) },
   { key: "bd-overrun", label: "Board zone: overrun (sim)", swatch: zoneSw(BOARD_COLOR.overrun, 0.3, 3) },
@@ -54,6 +92,37 @@ const BOARD_ROWS: { key: string; label: string; swatch: ReactNode }[] = [
       <svg viewBox="0 0 20 14" aria-hidden="true">
         <line x1="1" y1="7" x2="19" y2="7" stroke={MAP_COLOR.responder} strokeWidth="1.5" strokeDasharray="2 2" />
         <circle cx="6" cy="7" r="4.5" fill={MAP_COLOR.responder} fillOpacity="0.75" stroke="#fff" strokeWidth="1" />
+      </svg>
+    ),
+  },
+  {
+    key: "bd-returning",
+    label: "Unit returning or moving up to cover a station; unit lines follow roads (sim)",
+    swatch: (
+      <svg viewBox="0 0 20 14" aria-hidden="true">
+        <line x1="1" y1="7" x2="19" y2="7" stroke={MAP_COLOR.responder} strokeOpacity="0.6" strokeWidth="1.5" strokeDasharray="0.5 2" />
+        <circle cx="14" cy="7" r="4.5" fill={MAP_COLOR.responder} fillOpacity="0.55" stroke="#fff" strokeWidth="1" />
+      </svg>
+    ),
+  },
+  {
+    key: "bd-fireline",
+    label: "Fire line ahead of a fire: built solid, planned dashed (sim)",
+    swatch: (
+      <svg viewBox="0 0 20 14" aria-hidden="true">
+        <line x1="1" y1="7" x2="10" y2="7" stroke={BOARD_COLOR.fireLine} strokeOpacity="0.85" strokeWidth="2.5" />
+        <line x1="10" y1="7" x2="19" y2="7" stroke={BOARD_COLOR.fireLine} strokeOpacity="0.7" strokeWidth="1.5" strokeDasharray="3 2" />
+      </svg>
+    ),
+  },
+  {
+    key: "bd-evac",
+    label: "Evacuating vehicles on their route (sim)",
+    swatch: (
+      <svg viewBox="0 0 20 14" aria-hidden="true">
+        <line x1="1" y1="7" x2="19" y2="7" stroke={MAP_COLOR.route} strokeOpacity="0.55" strokeWidth="1.8" strokeDasharray="3 2" />
+        <circle cx="7" cy="7" r="2.5" fill={BOARD_COLOR.evacuee} fillOpacity="0.8" stroke="#fff" strokeWidth="0.8" />
+        <circle cx="14" cy="7" r="2.5" fill={BOARD_COLOR.evacuee} fillOpacity="0.8" stroke="#fff" strokeWidth="0.8" />
       </svg>
     ),
   },
@@ -164,6 +233,18 @@ const ROWS: { key: string; label: string; swatch: ReactNode }[] = [
     ),
   },
   {
+    // Controller drill road closures (live/roadClosureLayer.ts): dark line, white X marks.
+    key: "closed-drill",
+    label: "Closed road (drill, controller): no unit or evacuee uses it",
+    swatch: (
+      <svg viewBox="0 0 20 14" aria-hidden="true">
+        <line x1="2" y1="7" x2="18" y2="7" stroke={MAP_COLOR.casing} strokeWidth="9" strokeLinecap="round" />
+        <line x1="2" y1="7" x2="18" y2="7" stroke={MAP_COLOR.ink} strokeWidth="6" strokeLinecap="round" />
+        <path d="M7.5 4.5 L12.5 9.5 M12.5 4.5 L7.5 9.5" stroke={MAP_COLOR.casing} strokeWidth="1.6" strokeLinecap="round" />
+      </svg>
+    ),
+  },
+  {
     key: "queue",
     label: "Traffic queue (simulated)",
     swatch: (
@@ -220,7 +301,16 @@ const ROWS: { key: string; label: string; swatch: ReactNode }[] = [
   },
 ];
 
-export default function MapLegend({ record = true, board = false }: { record?: boolean; board?: boolean }) {
+export default function MapLegend({
+  record = true,
+  board = false,
+  houses = false,
+}: {
+  record?: boolean;
+  board?: boolean;
+  /** The Houses layer is on: add its status rows. */
+  houses?: boolean;
+}) {
   return (
     <details className="lc-legend" open>
       <summary>Legend</summary>
@@ -231,6 +321,21 @@ export default function MapLegend({ record = true, board = false }: { record?: b
             {r.label}
           </li>
         ))}
+        {houses && (
+          <>
+            <li className="lc-legend-group">
+              Houses <EvidenceTag kind="simulated" />
+            </li>
+            {HOUSEHOLD_STATUSES.map((s) => (
+              <li key={`house-${s}`} title={HOUSEHOLD_DETAIL[s]}>
+                <span className="lc-legend-sw">
+                  <HouseSwatch status={s} />
+                </span>
+                {HOUSEHOLD_LABEL[s]}
+              </li>
+            ))}
+          </>
+        )}
         {board && (
           <>
             <li className="lc-legend-group">

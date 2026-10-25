@@ -391,10 +391,69 @@ export type FireUniforms = {
   /** Slope shading strength (0..1) and board max height (world units). */
   uRelief: { value: number };
   uMaxH: { value: number };
+  /**
+   * Opt-in per-cell fire states (`FireDioramaSceneApi.setCellStates`): codes 0 unburned,
+   * 1 burning, 2 burned out, 3 extinguished, same texel layout as `uArrival`. Used only while
+   * `uUseState` is 1; otherwise the arrival field and burn window decide (the default).
+   */
+  uState: { value: THREE.DataTexture };
+  uUseState: { value: number };
 };
+
+/** Cell fire state codes understood by the terrain shader and the cover (setCellStates). */
+export const CELL_STATE = { unburned: 0, burning: 1, burnedOut: 2, extinguished: 3 } as const;
+/**
+ * Approximate on-screen colours of put-out (extinguished) ground in the terrain shader (lit,
+ * sRGB), for legend swatches: the slate fill, its pale hatch and the dashed cool outline.
+ */
+export const EXTINGUISHED_LEGEND = { fill: "#7d8c99", hatch: "#d0dde8", edge: "#cce6ff" } as const;
+/** When several cells share a texel, the most telling state wins: burning, then put out, then burned out. */
+const STATE_RANK = [0, 3, 1, 2] as const;
 
 export function emptyArrivalTexture(): THREE.DataTexture {
   return arrivalTexture(new Float32Array([NEVER]), 1, 1);
+}
+
+function stateTexture(data: Uint8Array, w: number, h: number) {
+  const tex = new THREE.DataTexture(data, w, h, THREE.RedFormat, THREE.UnsignedByteType);
+  tex.minFilter = THREE.NearestFilter;
+  tex.magFilter = THREE.NearestFilter;
+  tex.generateMipmaps = false;
+  tex.unpackAlignment = 1;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+export function emptyStateTexture(): THREE.DataTexture {
+  return stateTexture(new Uint8Array([0]), 1, 1);
+}
+
+/**
+ * Packs per-cell state codes (row-major, CELL_STATE) into a texture laid out like the
+ * arrival texture reduced by `factor`; the most telling state of a texel's cells wins.
+ */
+export function buildStateTexture(
+  frame: BoardFrame,
+  states: Uint8Array,
+  factor: number,
+): THREE.DataTexture {
+  const w = Math.ceil(frame.cols / factor);
+  const h = Math.ceil(frame.rows / factor);
+  const data = new Uint8Array(w * h);
+  if (factor === 1) {
+    for (let i = 0; i < data.length; i++) data[i] = states[i] <= 3 ? states[i] : 0;
+  } else {
+    for (let r = 0; r < frame.rows; r++) {
+      const tr = Math.floor(r / factor);
+      for (let c = 0; c < frame.cols; c++) {
+        const s = states[r * frame.cols + c];
+        if (!s || s > 3) continue;
+        const ti = tr * w + Math.floor(c / factor);
+        if (STATE_RANK[s] > STATE_RANK[data[ti]]) data[ti] = s;
+      }
+    }
+  }
+  return stateTexture(data, w, h);
 }
 
 function arrivalTexture(data: Float32Array, w: number, h: number) {
@@ -449,6 +508,8 @@ export function createFireUniforms(frame: BoardFrame, overlay: THREE.Texture): F
     uUnitsPerMeter: { value: frame.unitsPerMeter },
     uRelief: { value: frame.grid ? 0.35 + 0.65 * frame.regionalMix : 0 },
     uMaxH: { value: Math.max(1, frame.maxHeight) },
+    uState: { value: emptyStateTexture() },
+    uUseState: { value: 0 },
   };
   setFireXform(u, frame, 1);
   return u;
@@ -485,8 +546,18 @@ uniform float uStreets;
 uniform float uUnitsPerMeter;
 uniform float uRelief;
 uniform float uMaxH;
+uniform sampler2D uState;
+uniform float uUseState;
 varying vec2 vFireXZ;
 varying float vFireY;
+
+// Opt-in cell state code (0 unburned, 1 burning, 2 burned out, 3 extinguished; see uState).
+float stateCode(ivec2 c) { return floor(texelFetch(uState, c, 0).r * 255.0 + 0.5); }
+bool inField(ivec2 c) { return c.x >= 0 && c.y >= 0 && c.x < int(uArrivalSize.x) && c.y < int(uArrivalSize.y); }
+float extCell(ivec2 c) {
+  if (uUseState < 0.5 || !inField(c)) return 0.0;
+  return stateCode(c) > 2.5 ? 1.0 : 0.0;
+}
 
 float fHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float fNoise(vec2 p) {
@@ -547,6 +618,15 @@ vec4 fireCell(ivec2 c) {
   if (c.x < 0 || c.y < 0 || c.x >= int(uArrivalSize.x) || c.y >= int(uArrivalSize.y)) return vec4(0.0);
   float arr = texelFetch(uArrival, c, 0).r;
   float age = uSimT - arr;
+  if (uUseState > 0.5) {
+    // States decide; the arrival only freshens the front (fresh = arrived within the window).
+    float s = stateCode(c);
+    if (s < 0.5) return vec4(0.0);
+    float lit = s < 1.5 ? 1.0 : 0.0;
+    float hot = lit * (1.0 - smoothstep(0.0, 0.22 * uWindow, max(age, 0.0)));
+    float glowing = (s > 1.5 && s < 2.5) ? 1.0 - smoothstep(uWindow, uWindow * 3.0, age) : 0.0;
+    return vec4(1.0, lit, hot, glowing);
+  }
   if (age < 0.0) return vec4(0.0);
   float burning = age < uWindow ? 1.0 : 0.0;
   float fresh = burning * (1.0 - smoothstep(0.0, 0.22 * uWindow, age));
@@ -568,6 +648,7 @@ float ageAt(vec2 g) {
 
 float arrivedCell(ivec2 c) {
   if (c.x < 0 || c.y < 0 || c.x >= int(uArrivalSize.x) || c.y >= int(uArrivalSize.y)) return 0.0;
+  if (uUseState > 0.5) return stateCode(c) > 0.5 ? 1.0 : 0.0;
   return texelFetch(uArrival, c, 0).r <= uSimT ? 1.0 : 0.0;
 }
 float arrivedAt(vec2 g) {
@@ -595,7 +676,8 @@ vec3 applyFire(inout vec3 base) {
   float arrived = smoothstep(0.3, 0.7, a.x);
   float burning = smoothstep(0.3, 0.6, a.y);
   float front = smoothstep(0.15, 0.6, a.z);
-  if (px <= 0.45) {
+  bool byState = uUseState > 0.5;
+  if (px <= 0.45 && !byState) {
     float onset = smoothstep(-ageW, ageW, age);
     arrived = onset;
     burning = onset * (1.0 - smoothstep(0.82, 1.0, age));
@@ -606,6 +688,27 @@ vec3 applyFire(inout vec3 base) {
   float n2 = fNoise(q * 1.3 + vec2(uTime * 0.4, 3.0));
   vec3 charC = mix(vec3(0.022, 0.018, 0.016), vec3(0.085, 0.075, 0.068), fNoise(q * 0.35));
   base = mix(base, charC, arrived * 0.94);
+
+  // Extinguished (put out) ground, opt-in states only: cool wet slate with pale diagonal hatch,
+  // no glow, no embers, and a dashed cool outline below; burned-out ground stays plain char.
+  float extRaw = 0.0;
+  float hatchPeriod = 1.0;
+  if (byState) {
+    extRaw = mix(mix(extCell(c), extCell(c + ivec2(1, 0)), f.x), mix(extCell(c + ivec2(0, 1)), extCell(c + ivec2(1, 1)), f.x), f.y);
+    float ext = smoothstep(0.3, 0.7, extRaw);
+    vec2 pxW = fwidth(vFireXZ);
+    float pw = max(pxW.x, pxW.y);
+    hatchPeriod = max(uCell * 1.6, pw * 7.0);
+    float d = abs(fract((vFireXZ.x + vFireXZ.y) / hatchPeriod) - 0.5) * hatchPeriod;
+    float hw = hatchPeriod * 0.16;
+    float hatch = 1.0 - smoothstep(hw - pw, hw + pw, d);
+    vec3 wet = vec3(0.24, 0.30, 0.36);
+    vec3 stripeC = vec3(0.66, 0.76, 0.84);
+    base = mix(base, mix(wet, stripeC, hatch * 0.85), ext * 0.95);
+    burning *= 1.0 - ext;
+    front *= 1.0 - ext;
+    a.w *= 1.0 - ext;
+  }
 
   float head = clamp((dot(vFireXZ, uWindDir) - uHeadRange.x) / max(uHeadRange.y - uHeadRange.x, 1.0), 0.0, 1.0);
   float headGain = 0.35 + 0.65 * smoothstep(0.3, 1.0, head);
@@ -624,7 +727,7 @@ vec3 applyFire(inout vec3 base) {
   // traces the fire's outline instead of aliasing into a wash over every small gap.
   float field = a.x;
   float line;
-  if (px > 0.45) {
+  if (px > 0.45 || byState) {
     float o = px * 0.9;
     field = (a.x + arrivedAt(g + vec2(o, 0.0)) + arrivedAt(g - vec2(o, 0.0)) + arrivedAt(g + vec2(0.0, o)) + arrivedAt(g - vec2(0.0, o))) * 0.2;
     float d = abs(field - 0.5);
@@ -637,8 +740,16 @@ vec3 applyFire(inout vec3 base) {
   }
   line *= 1.0 - smoothstep(2.5, 5.0, px);
   vec3 lineC = vec3(1.0, 0.82, 0.55);
+  float cool = 0.0;
+  if (byState) {
+    // The edge of put-out ground: a cool, dashed, unlit outline instead of the warm perimeter.
+    cool = smoothstep(0.05, 0.35, extRaw);
+    float dash = step(0.45, fract((vFireXZ.x - vFireXZ.y) / (hatchPeriod * 1.3)));
+    line *= mix(1.0, dash, cool);
+    lineC = mix(lineC, vec3(0.80, 0.90, 1.0), cool);
+  }
   base = mix(base, lineC, line * 0.85);
-  em += lineC * line * 0.55;
+  em += lineC * line * 0.55 * (1.0 - cool);
   return em;
 }
 `;

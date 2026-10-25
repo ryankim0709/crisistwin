@@ -2,10 +2,27 @@ import type { GeoJSONSource, Map as MapLibreMap, MapMouseEvent } from "maplibre-
 import { LEVEL_COLOR, MAP_COLOR } from "../live/CommandMap";
 import { fireHatch } from "../live/mapStyle";
 import type { LonLat } from "../live/types";
-import { GROUND_APPARATUS } from "../studio/apparatus";
+import { GROUND_APPARATUS, vehicleFamily } from "../studio/apparatus";
+import { CREW_COLORS, firelineCss } from "../studio/firelinePalette";
 import type { AccessClassWire, RoadAccessResponse } from "./contracts";
+import { fireMapLabel, isReported } from "./boardResponse";
 import { boardFireFeatures, firePolygons } from "./fireFootprint";
-import { teamPosition, type Board, type RouteOption, type ZoneForecast } from "./model";
+import { crewWork, fireStatePolygons, type CrewWork } from "./fireState";
+import { simClock } from "./format";
+import { zoneSafeShare } from "./safeHouses";
+import {
+  activeRoute,
+  attackPositions,
+  distanceM,
+  evacueeMarkers,
+  lineBuiltExtent,
+  positionEta,
+  teamPosition,
+  trafficPicture,
+  type Board,
+  type RouteOption,
+  type ZoneForecast,
+} from "./model";
 
 /**
  * The simulated fire board drawn on top of the live command map (a framework-free port of
@@ -20,7 +37,6 @@ export interface BoardLayerInput {
   forecasts: Map<string, ZoneForecast>;
   routes: ReadonlyMap<string, RouteOption[]>;
   selection: BoardSelection | null;
-  igniteMode: boolean;
   /**
    * Drill roads closed by the road access rules (GET /api/demo/road_access). Drawn dashed for the
    * selected unit's class, or, with `showClosedRoads`, for every class on the board.
@@ -33,7 +49,7 @@ export interface BoardLayers {
   update(input: BoardLayerInput): void;
   /**
    * True when a click at this event should be handled by the board and not by the live map:
-   * ignite mode is on, or a board feature (team, fire, non-quiet zone) is under the pointer.
+   * a board feature (team, fire, non-quiet zone) is under the pointer.
    * Pass as CommandMap's `interceptClick`.
    */
   claimsClick(e: MapMouseEvent): boolean;
@@ -48,8 +64,17 @@ export const BOARD_COLOR = {
   overrun: "#B3140C",
   overrunText: "#7A0A05",
   readyText: "#7A4B00",
+  /** Fire line (control line) built or planned ahead of a fire: the map's ink, drawn thin. */
+  fireLine: MAP_COLOR.ink,
+  /** Evacuating vehicles (simulated): small dots in the route colour, on their road route. */
+  evacuee: MAP_COLOR.route,
   /** Road closed to a unit's apparatus class (dashed); unused by fire, zones, routes and units. */
   noTruck: "#8B1E3F",
+  /** Ground put out by crews (fireState "extinguished"): blue-grey fill, dashed slate outline. */
+  extinguished: "#7D8C99",
+  extinguishedEdge: "#3E5568",
+  /** Firefighters at work: dot outline (their fill is the unit family's colour). */
+  crewEdge: "#FFFFFF",
 };
 
 type Feature = GeoJSON.Feature<GeoJSON.Geometry, Record<string, string | number | boolean | null>>;
@@ -97,13 +122,18 @@ type ZoneMapState = "overrun" | "ordered" | "threatened" | "quiet";
 function zoneMapState(zone: Board["zones"][number], forecast: ZoneForecast | undefined): ZoneMapState {
   if (zone.overrunAt !== null) return "overrun";
   if (zone.orderedAt !== null) return "ordered";
-  if (forecast && forecast.edgeEta !== null) return "threatened";
+  // A scheduled order is drawn like a threatened zone; its tag says when it leaves.
+  if ((forecast && forecast.edgeEta !== null) || zone.pendingOrder) return "threatened";
   return "quiet";
 }
 
-function zoneTag(state: ZoneMapState, forecast: ZoneForecast | undefined): string {
+function zoneTag(state: ZoneMapState, forecast: ZoneForecast | undefined, zone: Board["zones"][number]): string {
   if (state === "overrun") return "OVERRUN (sim)";
   if (state === "ordered") return "LEAVE NOW (sim)";
+  if (state === "threatened" && zone.pendingOrder) {
+    const eta = forecast?.edgeEta ?? null;
+    return `LEAVES ${simClock(zone.pendingOrder.startMinute)} (sim)${eta === null ? "" : eta <= 0 ? " · fire now" : ` · fire ${Math.round(eta)} min`}`;
+  }
   if (state === "threatened") {
     const eta = forecast?.edgeEta ?? 0;
     return eta <= 0 ? "AT RISK (sim) · now" : `AT RISK (sim) · ${Math.round(eta)} min`;
@@ -116,9 +146,14 @@ function fireFeatures(board: Board): Feature[] {
   return boardFireFeatures(board).features.map((f): Feature => ({ ...f, properties: { ...f.properties } }));
 }
 
+/**
+ * One label per fire at its origin. A fire not yet reported to dispatch (boardResponse.ts report
+ * rule) is still drawn for the drill controller, labelled "not yet reported (sim)" in text (not by
+ * colour alone) and dimmed; its zones show no threat (the forecasts are the commander's, "reported").
+ */
 function buildFireLabels(board: Board): Feature[] {
   return board.fires.map((fire) =>
-    point(fire.origin, { id: fire.id, text: fire.status === "burning" ? fire.id : `${fire.id} · ${fire.status}`, status: fire.status }),
+    point(fire.origin, { id: fire.id, text: fireMapLabel(board, fire), status: fire.status, reported: isReported(board, fire) }),
   );
 }
 
@@ -129,14 +164,87 @@ function buildZones(board: Board, forecasts: Map<string, ZoneForecast>) {
     const state = zoneMapState(zs, forecasts.get(zs.id));
     if (state === "quiet") continue; // quiet zones draw nothing
     areas.push(polygon(zs.ring, { id: zs.id, state }));
-    const tag = zoneTag(state, forecasts.get(zs.id));
+    let tag = zoneTag(state, forecasts.get(zs.id), zs);
+    // Households that reached safety (zoneCounts out), as on the 3D view's green-roofed houses.
+    const safe = Math.floor(zoneSafeShare(zs, board.minute) * 100);
+    if (tag && safe > 0) tag += ` · ${safe}% safe`;
     if (tag) labels.push(point(zs.core, { text: tag, state }));
   }
   return { areas, labels };
 }
 
-/** Options of the selected zone (chosen one emphasised); other ordered zones show their chosen route thin. */
+/** Burning, burned-out and put-out ground at board.minute (fireState.ts), one feature per state. */
+function fireStateFeatures(board: Board): Feature[] {
+  const polygons = fireStatePolygons(board);
+  return (["burned_out", "extinguished", "burning"] as const).flatMap((state): Feature[] =>
+    polygons[state]?.coordinates.length ? [{ type: "Feature", geometry: polygons[state], properties: { state } }] : [],
+  );
+}
+
+/** Point `s` metres along `path` (clamped to its ends), and the path's lengths so far. */
+function alongPath(path: readonly LonLat[], cum: readonly number[], s: number): LonLat {
+  if (path.length === 1 || s <= 0) return path[0];
+  for (let k = 1; k < path.length; k++) {
+    if (cum[k] >= s) {
+      const f = (s - cum[k - 1]) / Math.max(1e-6, cum[k] - cum[k - 1]);
+      return toward(path[k - 1], path[k], f);
+    }
+  }
+  return path[path.length - 1];
+}
+
+/** Firefighters at work: dots per crew, CREW_DOT_SPACING_M apart behind its worked point. */
+const CREW_DOTS = 3;
+const CREW_DOT_SPACING_M = 20;
+const CREW_TRAIL_M = 70;
+/** How far dots step in toward the fire over the work, metres (drawn, not modelled). */
+const CREW_INWARD_M = 25;
+
+/**
+ * Crews at work (fireState.crewWork): a few small dots in the unit family's colour at the worked
+ * point of each crew's path, stepped in toward the fire as the work progresses, and a short trail
+ * of the path just worked. They move as the board advances.
+ */
+function buildCrews(board: Board): { dots: Feature[]; trails: Feature[] } {
+  const dots: Feature[] = [];
+  const trails: Feature[] = [];
+  const work: CrewWork[] = crewWork(board);
+  for (const w of work) {
+    const path = w.path as LonLat[];
+    if (path.length === 0) continue;
+    const cum = [0];
+    for (let k = 1; k < path.length; k++) cum.push(cum[k - 1] + distanceM(path[k - 1], path[k]));
+    const s = Math.min(1, Math.max(0, w.progress)) * cum[cum.length - 1];
+    const team = board.teams.find((t) => t.id === w.teamId);
+    const color = firelineCss(CREW_COLORS[team ? vehicleFamily(team.kind) : "hand_crew"]);
+    const len = Math.hypot(w.inward[0], w.inward[1]);
+    const step = CREW_INWARD_M * (0.25 + 0.75 * Math.min(1, Math.max(0, w.progress))) * (w.kind === "line" ? 0.4 : 1);
+    for (let k = 0; k < CREW_DOTS; k++) {
+      const at = alongPath(path, cum, s - k * CREW_DOT_SPACING_M);
+      const lat = (at[1] * Math.PI) / 180;
+      const p: LonLat =
+        len > 0
+          ? [at[0] + ((w.inward[0] / len) * step) / (111_320 * Math.cos(lat)), at[1] + ((w.inward[1] / len) * step) / 111_320]
+          : at;
+      dots.push(point(p, { team: w.teamId, fire: w.fireId, kind: w.kind, color, lead: k === 0 }));
+    }
+    const trail: LonLat[] = [];
+    const from = Math.max(0, s - CREW_TRAIL_M);
+    trail.push(alongPath(path, cum, from));
+    for (let k = 1; k < path.length; k++) if (cum[k] > from && cum[k] < s) trail.push(path[k]);
+    trail.push(alongPath(path, cum, s));
+    if (trail.length > 1 && s > 0) trails.push(lineFeature(trail, { color }));
+  }
+  return { dots, trails };
+}
+
+/**
+ * Options of the selected zone (chosen one emphasised); every other zone with households leaving
+ * (an order in effect) shows the route they leave on thin, so the evacuating vehicles
+ * (bd-evac) always sit on a drawn route.
+ */
 function buildRoutes(board: Board, routes: ReadonlyMap<string, RouteOption[]>, selection: BoardSelection | null) {
+  const picture = trafficPicture(board);
   const lines: Feature[] = [];
   const dests = new Map<string, Feature>();
   const addDest = (r: RouteOption) => {
@@ -145,7 +253,7 @@ function buildRoutes(board: Board, routes: ReadonlyMap<string, RouteOption[]>, s
   };
   const selectedId = selection?.kind === "zone" ? selection.id : null;
   for (const zs of board.zones) {
-    const chosen = zs.route?.destination_id ?? null;
+    const chosen = zs.route?.destination_id ?? zs.pendingOrder?.route.destination_id ?? null;
     if (zs.id === selectedId) {
       const options = routes.get(zs.id) ?? (zs.route ? [zs.route] : []);
       for (const r of options) {
@@ -153,25 +261,65 @@ function buildRoutes(board: Board, routes: ReadonlyMap<string, RouteOption[]>, s
         lines.push(lineFeature(r.line, { zone_id: zs.id, chosen: r.destination_id === chosen }));
         addDest(r);
       }
-    } else if (zs.orderedAt !== null && zs.route && zs.route.line.length > 1) {
-      lines.push(lineFeature(zs.route.line, { zone_id: zs.id, chosen: false }));
-      addDest(zs.route);
+    } else {
+      const r = activeRoute(zs);
+      const leaving = zs.orderedAt !== null || (picture.zones.get(zs.id)?.committed ?? 0) > 0;
+      if (r && r.line.length > 1 && leaving) {
+        lines.push(lineFeature(r.line, { zone_id: zs.id, chosen: false }));
+        addDest(r);
+      }
     }
   }
   return { lines, dests: [...dests.values()] };
 }
 
+/** Driving on a road line: to a fire, home to its station, or to cover another station. */
+const DRIVING: ReadonlySet<Board["teams"][number]["status"]> = new Set(["en_route", "returning", "moving_up"]);
+
 function buildTeams(board: Board) {
   const teams: Feature[] = [];
   const lines: Feature[] = [];
   for (const team of board.teams) {
-    const pos = teamPosition(board, team);
-    teams.push(point(pos, { id: team.id, status: team.status }));
-    if (team.status === "en_route" && team.target) {
-      lines.push(lineFeature(team.route && team.route.length > 1 ? team.route : [pos, team.target], { id: team.id }));
+    teams.push(point(teamPosition(board, team), { id: team.id, status: team.status }));
+    // Units follow roads: only a known road route is drawn, never a straight line to the target.
+    // A unit still waiting for its road route draws no line.
+    if (DRIVING.has(team.status) && team.route && team.route.length > 1) {
+      lines.push(lineFeature(team.route, { id: team.id, status: team.status }));
     }
   }
   return { teams, lines };
+}
+
+/** A point `f` of the way from `p` to `q` (straight, a few hundred metres at most). */
+function toward(p: LonLat, q: LonLat, f: number): LonLat {
+  return [p[0] + (q[0] - p[0]) * f, p[1] + (q[1] - p[1]) * f];
+}
+
+/**
+ * Fire line at attack positions (model.AttackLine): the planned line dashed, the part built so
+ * far solid. For the selected fire, also its candidate positions (attack.ts), faint, with a label.
+ */
+function buildAttackLines(board: Board, selection: BoardSelection | null) {
+  const lines: Feature[] = [];
+  const points: Feature[] = [];
+  for (const line of board.lines) {
+    const { point: p, a, b, aM, bM, id } = line.plan;
+    lines.push(lineFeature([a, p, b], { state: "planned" }));
+    const ext = lineBuiltExtent(line);
+    if (line.builtM > 0) lines.push(lineFeature([toward(p, a, aM > 0 ? ext.a / aM : 0), p, toward(p, b, bM > 0 ? ext.b / bM : 0)], { state: "built" }));
+    if (line.completedAt === null) points.push(point(p, { text: `${line.fireId} ${id}` }));
+  }
+  const fire = selection?.kind === "fire" ? board.fires.find((f) => f.id === selection.id) : undefined;
+  // Candidate attack positions only for a reported fire (report rule: none can be taken before).
+  if (fire && isReported(board, fire)) {
+    for (const pos of attackPositions(board, fire)) {
+      if (pos.line) continue;
+      lines.push(lineFeature([pos.a, pos.point, pos.b], { state: "candidate" }));
+      const eta = positionEta(board, pos);
+      points.push(point(pos.point, { text: `${pos.id}${eta === null ? "" : ` · fire ${Math.round(eta)} min`} (forecast)` }));
+    }
+  }
+  return { lines, points };
 }
 
 /** Roads closed to the selected unit's class, or (toggle) to any class on the board. */
@@ -223,9 +371,13 @@ function selectionCenter(sel: BoardSelection, board: Board): LonLat | null {
 
 const SOURCES = [
   "bd-zones", "bd-zone-labels", "bd-routes", "bd-fires", "bd-fire-labels", "bd-team-lines", "bd-teams",
-  "bd-stations", "bd-dest", "bd-sel-area", "bd-sel-point", "bd-no-truck",
+  "bd-stations", "bd-dest", "bd-sel-area", "bd-sel-point", "bd-no-truck", "bd-evac", "bd-attack-lines", "bd-attack-points",
+  "bd-fire-state", "bd-crews", "bd-crew-trails",
 ];
-const HATCH_IMAGE = "bd-fire-hatch";
+/** Dark hatch on burned-out ground (fire states). */
+const SCAR_HATCH_IMAGE = "bd-scar-hatch";
+const FIRE_STATE_MATCH = (burning: string | number, burnedOut: string | number, extinguished: string | number) =>
+  ["match", ["get", "state"], "burning", burning, "burned_out", burnedOut, extinguished] as never;
 const FONT = ["Noto Sans Regular"];
 const FOCUS_ZOOM = 12.5;
 /** Click priority: team, then fire, then zone. */
@@ -241,7 +393,7 @@ const STATUS_MATCH = (burning: string | number, contained: string | number, out:
 function installLayers(map: MapLibreMap, beforeId: string): string[] {
   const empty = collection([]);
   for (const id of SOURCES) map.addSource(id, { type: "geojson", data: empty });
-  map.addImage(HATCH_IMAGE, fireHatch(MAP_COLOR.fireEdge));
+  map.addImage(SCAR_HATCH_IMAGE, fireHatch(BOARD_COLOR.scarEdge));
   const layers: string[] = [];
   const add = (layer: Parameters<MapLibreMap["addLayer"]>[0] & { id: string }) => {
     map.addLayer(layer, beforeId);
@@ -276,25 +428,70 @@ function installLayers(map: MapLibreMap, beforeId: string): string[] {
     "line-opacity": ["case", ["get", "chosen"], 0.85, 0.55] as never,
     "line-dasharray": [2, 1.5],
   } });
-  // Fires: burning is hatched with a solid edge, contained is lighter with a dashed edge, out is a grey scar.
-  add({ id: "bd-fire-fill", type: "fill", source: "bd-fires", paint: {
-    "fill-color": STATUS_MATCH(MAP_COLOR.fire, MAP_COLOR.fire, BOARD_COLOR.scar),
-    "fill-opacity": STATUS_MATCH(0.35, 0.18, 0.25),
+  // Evacuating vehicles (simulated), sampled: small dots on their zone's road route.
+  add({ id: "bd-evac", type: "circle", source: "bd-evac", paint: {
+    "circle-radius": ["interpolate", ["linear"], ["zoom"], 10, 1.6, 14, 3] as never,
+    "circle-color": BOARD_COLOR.evacuee,
+    "circle-opacity": 0.8,
+    "circle-stroke-color": "#FFFFFF",
+    "circle-stroke-width": 0.8,
   } });
-  add({ id: "bd-fire-hatch", type: "fill", source: "bd-fires", filter: ["==", ["get", "status"], "burning"], paint: { "fill-pattern": HATCH_IMAGE, "fill-opacity": 0.6 } });
-  add({ id: "bd-fire-line", type: "line", source: "bd-fires", filter: ["!=", ["get", "status"], "out"], paint: {
-    "line-color": MAP_COLOR.fireEdge,
-    "line-width": 2.5,
-    "line-dasharray": ["case", ["==", ["get", "status"], "contained"], ["literal", [3, 2]], ["literal", [1, 0]]] as never,
+  // Fire states (fireState.ts): what burns now, what burned out, what crews put out. The
+  // per-fire footprint stays only for clicks (transparent) and a contained fire's dashed edge.
+  add({ id: "bd-fire-fill", type: "fill", source: "bd-fires", paint: { "fill-color": MAP_COLOR.fire, "fill-opacity": 0 } });
+  add({ id: "bd-fs-fill", type: "fill", source: "bd-fire-state", paint: {
+    "fill-color": FIRE_STATE_MATCH(MAP_COLOR.fire, BOARD_COLOR.scar, BOARD_COLOR.extinguished),
+    "fill-opacity": FIRE_STATE_MATCH(0.5, 0.4, 0.4),
   } });
-  add({ id: "bd-fire-scar", type: "line", source: "bd-fires", filter: ["==", ["get", "status"], "out"], paint: { "line-color": BOARD_COLOR.scarEdge, "line-width": 1 } });
-  add({ id: "bd-team-lines", type: "line", source: "bd-team-lines", paint: { "line-color": MAP_COLOR.responder, "line-width": 1.5, "line-dasharray": [1.5, 1.5] } });
+  add({ id: "bd-fs-scar-hatch", type: "fill", source: "bd-fire-state", filter: ["==", ["get", "state"], "burned_out"], paint: { "fill-pattern": SCAR_HATCH_IMAGE, "fill-opacity": 0.75 } });
+  add({ id: "bd-fs-scar-line", type: "line", source: "bd-fire-state", filter: ["==", ["get", "state"], "burned_out"], paint: { "line-color": BOARD_COLOR.scarEdge, "line-width": 1 } });
+  add({ id: "bd-fs-ext-line", type: "line", source: "bd-fire-state", filter: ["==", ["get", "state"], "extinguished"], paint: {
+    "line-color": BOARD_COLOR.extinguishedEdge, "line-width": 2, "line-dasharray": [2, 1.5],
+  } });
+  // Burning: a soft glow under a thick solid edge, so it reads as active even without colour.
+  add({ id: "bd-fs-burn-glow", type: "line", source: "bd-fire-state", filter: ["==", ["get", "state"], "burning"], paint: {
+    "line-color": MAP_COLOR.fire, "line-width": 9, "line-blur": 5, "line-opacity": 0.7,
+  } });
+  add({ id: "bd-fs-burn-line", type: "line", source: "bd-fire-state", filter: ["==", ["get", "state"], "burning"], layout: { "line-join": "round" }, paint: {
+    "line-color": MAP_COLOR.fireEdge, "line-width": 3.5,
+  } });
+  add({ id: "bd-fire-line", type: "line", source: "bd-fires", filter: ["==", ["get", "status"], "contained"], paint: {
+    "line-color": MAP_COLOR.fireEdge, "line-width": 1.5, "line-dasharray": [3, 2],
+  } });
+  // Firefighters at work (fireState.crewWork): a short trail of the path just worked, then small dots.
+  add({ id: "bd-crew-trails", type: "line", source: "bd-crew-trails", layout: { "line-cap": "round", "line-join": "round" }, paint: {
+    "line-color": ["get", "color"] as never, "line-width": 2.5, "line-opacity": 0.55,
+  } });
+  add({ id: "bd-crews", type: "circle", source: "bd-crews", paint: {
+    "circle-radius": ["interpolate", ["linear"], ["zoom"], 11, ["case", ["get", "lead"], 2.6, 2], 15, ["case", ["get", "lead"], 4.2, 3.4]] as never,
+    "circle-color": ["get", "color"] as never,
+    "circle-stroke-color": BOARD_COLOR.crewEdge,
+    "circle-stroke-width": 1,
+  } });
+  // Fire line ahead of fires, thin in the map's ink: built solid, planned dashed, a selected fire's candidates faint.
+  add({ id: "bd-attack-lines", type: "line", source: "bd-attack-lines", layout: { "line-cap": "round" }, paint: {
+    "line-color": BOARD_COLOR.fireLine,
+    "line-width": ["match", ["get", "state"], "built", 2.5, "planned", 1.5, 1] as never,
+    "line-opacity": ["match", ["get", "state"], "built", 0.85, "planned", 0.7, 0.45] as never,
+    "line-dasharray": ["match", ["get", "state"], "built", ["literal", [1, 0]], ["literal", [2, 1.5]]] as never,
+  } });
+  add({ id: "bd-attack-points", type: "symbol", source: "bd-attack-points", minzoom: 13,
+    layout: { "text-field": ["get", "text"], "text-font": FONT, "text-size": 10, "text-offset": [0, 1.1], "text-anchor": "top", "text-optional": true },
+    paint: text(BOARD_COLOR.scarEdge, 1.4) });
+  // En route: dashed; returning home or moving up to cover a station: dotted and fainter.
+  add({ id: "bd-team-lines", type: "line", source: "bd-team-lines", paint: {
+    "line-color": MAP_COLOR.responder,
+    "line-width": 1.5,
+    "line-opacity": ["match", ["get", "status"], ["returning", "moving_up"], 0.6, 1] as never,
+    "line-dasharray": ["match", ["get", "status"], ["returning", "moving_up"], ["literal", [0.5, 2]], ["literal", [1.5, 1.5]]] as never,
+  } });
   add({ id: "bd-stations", type: "circle", source: "bd-stations", paint: {
     "circle-radius": 5, "circle-color": "#FFFFFF", "circle-stroke-color": MAP_COLOR.ink, "circle-stroke-width": 3,
     // Mutual aid from outside the area is drawn fainter; its label says so (never colour alone).
     "circle-opacity": ["case", ["==", ["get", "tier"], "mutual_aid"], 0.6, 1],
     "circle-stroke-opacity": ["case", ["==", ["get", "tier"], "mutual_aid"], 0.6, 1],
   } });
+  // Station labels say what each station fields and mark mutual aid in text (the fainter marker is not the only cue).
   add({ id: "bd-station-labels", type: "symbol", source: "bd-stations", minzoom: 10,
     layout: { "text-field": ["get", "label"], "text-font": FONT, "text-size": 11, "text-offset": [0, 1.1], "text-anchor": "top", "text-optional": true },
     paint: text(MAP_COLOR.ink, 1.4) });
@@ -312,8 +509,9 @@ function installLayers(map: MapLibreMap, beforeId: string): string[] {
     "circle-radius": 6,
     "circle-color": MAP_COLOR.responder,
     "circle-stroke-color": "#FFFFFF",
-    "circle-stroke-width": ["match", ["get", "status"], "en_route", 1, 2] as never,
-    "circle-opacity": ["match", ["get", "status"], "en_route", 0.75, 1] as never,
+    // Driving units are lighter (thin stroke, faded); returning and moving-up fainter than en route.
+    "circle-stroke-width": ["match", ["get", "status"], ["en_route", "returning", "moving_up"], 1, 2] as never,
+    "circle-opacity": ["match", ["get", "status"], "en_route", 0.75, ["returning", "moving_up"], 0.55, 1] as never,
   } });
   add({ id: "bd-team-labels", type: "symbol", source: "bd-teams",
     layout: { "text-field": ["get", "id"], "text-font": FONT, "text-size": 11, "text-offset": [0, -1], "text-anchor": "bottom", "text-allow-overlap": true },
@@ -323,17 +521,16 @@ function installLayers(map: MapLibreMap, beforeId: string): string[] {
     paint: text(["match", ["get", "state"], "overrun", BOARD_COLOR.overrunText, "ordered", BOARD_COLOR.overrun, BOARD_COLOR.readyText], 1.6) });
   add({ id: "bd-fire-labels", type: "symbol", source: "bd-fire-labels",
     layout: { "text-field": ["get", "text"], "text-font": FONT, "text-size": 12, "text-letter-spacing": 0.04, "text-allow-overlap": true },
-    paint: text(STATUS_MATCH(MAP_COLOR.fireEdge, MAP_COLOR.fireEdge, BOARD_COLOR.scarEdge), 1.8) });
+    paint: { ...text(STATUS_MATCH(MAP_COLOR.fireEdge, MAP_COLOR.fireEdge, BOARD_COLOR.scarEdge), 1.8), "text-opacity": ["case", ["get", "reported"], 1, 0.7] as never } });
   return layers;
 }
 
 export function attachBoardLayers(
   map: MapLibreMap,
   beforeId: string,
-  handlers: { onSelect(sel: BoardSelection | null): void; onIgnite(coord: LonLat): void },
+  handlers: { onSelect(sel: BoardSelection | null): void },
 ): BoardLayers {
   const layerIds = installLayers(map, beforeId);
-  let igniteMode = false;
   let board: Board | null = null;
   let lastSelKey: string | null = null;
   let disposed = false;
@@ -350,10 +547,6 @@ export function attachBoardLayers(
   };
 
   const onClick = (e: MapMouseEvent) => {
-    if (igniteMode) {
-      handlers.onIgnite([e.lngLat.lng, e.lngLat.lat]);
-      return;
-    }
     const sel = hitBoard(e);
     if (sel) {
       handlers.onSelect(sel);
@@ -363,7 +556,7 @@ export function attachBoardLayers(
     if (!map.queryRenderedFeatures(e.point, { layers: live }).length) handlers.onSelect(null);
   };
   const pointer = () => { map.getCanvas().style.cursor = "pointer"; };
-  const reset = () => { map.getCanvas().style.cursor = igniteMode ? "crosshair" : ""; };
+  const reset = () => { map.getCanvas().style.cursor = ""; };
   map.on("click", onClick);
   for (const layer of INTERACTIVE) {
     map.on("mouseenter", layer, pointer);
@@ -375,12 +568,10 @@ export function attachBoardLayers(
 
   return {
     claimsClick(e) {
-      return !disposed && (igniteMode || hitBoard(e) !== null);
+      return !disposed && hitBoard(e) !== null;
     },
     update(input) {
       if (disposed) return;
-      igniteMode = input.igniteMode;
-      map.getCanvas().style.cursor = igniteMode ? "crosshair" : "";
       board = input.board;
       if (!board) {
         // Between boards: do not leave the previous drill's marks on the map.
@@ -396,6 +587,10 @@ export function attachBoardLayers(
       setData("bd-zone-labels", z.labels);
       setData("bd-routes", r.lines);
       setData("bd-fires", fireFeatures(board));
+      setData("bd-fire-state", fireStateFeatures(board));
+      const crews = buildCrews(board);
+      setData("bd-crews", crews.dots);
+      setData("bd-crew-trails", crews.trails);
       setData("bd-fire-labels", buildFireLabels(board));
       setData("bd-team-lines", t.lines);
       setData("bd-teams", t.teams);
@@ -404,6 +599,10 @@ export function attachBoardLayers(
       setData("bd-sel-area", sel.areas);
       setData("bd-sel-point", sel.points);
       setData("bd-no-truck", buildClosedRoads(board, input));
+      setData("bd-evac", evacueeMarkers(board).map((m) => point(m.at, { zone_id: m.zoneId, vehicles: m.vehicles })));
+      const al = buildAttackLines(board, input.selection);
+      setData("bd-attack-lines", al.lines);
+      setData("bd-attack-points", al.points);
       // Move the camera only when the selection changes, not on each board update.
       const key = input.selection ? `${input.selection.kind}:${input.selection.id}` : null;
       if (key !== lastSelKey && input.selection) {
@@ -423,7 +622,7 @@ export function attachBoardLayers(
       if (!map.getStyle()) return;
       for (const id of [...layerIds].reverse()) if (map.getLayer(id)) map.removeLayer(id);
       for (const id of SOURCES) if (map.getSource(id)) map.removeSource(id);
-      if (map.hasImage(HATCH_IMAGE)) map.removeImage(HATCH_IMAGE);
+      if (map.hasImage(SCAR_HATCH_IMAGE)) map.removeImage(SCAR_HATCH_IMAGE);
     },
   };
 }

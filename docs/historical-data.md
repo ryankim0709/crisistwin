@@ -19,7 +19,7 @@ After building a new package locally, run `python3 -m tools.mongo_data push` and
 that differs from the committed `app/data-manifest.json`, and with `MONGODB_URI` set, any listed
 artifact missing from Atlas. If it reports drift after you pulled, the author has not yet run `record`, `push` and committed the manifest.
 
-Prebuilt California fire landscapes from the San Francisco Bay Area to San Diego (ADR 0013) are built and uploaded with
+Prebuilt California fire landscapes (11 Bay Area regions and 2 Los Angeles ones; ADR 0013) are built and uploaded with
 [`tools/build_landscape_regions`](../tools/build_landscape_regions/README.md):
 `node tools/build_landscape_regions/run.mjs` then
 `python3 -m tools.build_landscape_regions upload`.
