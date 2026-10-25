@@ -138,24 +138,6 @@ export const KIND_PREFIX: Record<DemoApparatusKind, string> = {
 };
 
 /**
- * ASSUMPTION (roster): the units on the board and the bases they start from. Counts are a
- * scenario choice: the CAL FIRE layer has no apparatus per base (docs/suppression-data.md,
- * Gaps). One unit of a kind per base, as studio/crewDispatch.ts UNITS_PER_KIND_PER_STATION.
- * - Type 3 engines (the default CAL FIRE state engine, docs/suppression-data.md item 1) at the
- *   nearest CAL FIRE state-owned stations;
- * - Type 1 structure engines at the nearest local-government stations under a Schedule A
- *   agreement (Paradise Fire Department);
- * - Type 1 hand crews from the nearest conservation camp or crew fire centre;
- * - a Type 2 dozer from the nearest CAL FIRE station (dozer bases as studio/crewDispatch.ts).
- */
-export const ROSTER: { kind: DemoApparatusKind; count: number; base: "calfire_station" | "local_station" | "crew_camp" }[] = [
-  { kind: "engine_t3", count: 6, base: "calfire_station" },
-  { kind: "engine_t1", count: 3, base: "local_station" },
-  { kind: "hand_crew_t1", count: 2, base: "crew_camp" },
-  { kind: "dozer_t2", count: 1, base: "calfire_station" },
-];
-
-/**
  * Line one unit builds per minute on this fuel and slope, metres: studio/apparatus.ts
  * lineRateMetersPerHour (hand crews Broyles 2011 Table 2; engines PMS 465 p.164 Table 4 by
  * crew size; dozers PMS 465 p.140 Table 2 by slope class, uphill column, none above 55%).

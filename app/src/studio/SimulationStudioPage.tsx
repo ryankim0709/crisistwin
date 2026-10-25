@@ -30,10 +30,12 @@ import { useMapFireline } from "./useMapFireline";
 import { useMapCrews } from "./useMapCrews";
 import { planCrewDispatch } from "./crewDispatch";
 import { crewHandoff, evacuationCrews } from "./crewHandoff";
-import { DEFAULT_FIREFIGHTING, ignitionReportDelayMinutes, resourceList, startMsOf } from "./firefighting";
+import { DEFAULT_FIREFIGHTING, ignitionReportDelayMinutes, startMsOf } from "./firefighting";
 import StudioPeople from "./StudioPeople";
 import { householdDepartureDelays, type HouseholdBehaviorMode } from "./householdBehavior";
-import { airBasesOf, useSuppressionBases } from "./suppressionBases";
+import { useSuppressionBases } from "./suppressionBases";
+import { mapResources, planMapDispatch } from "./mapResources";
+import { useMapStations } from "./useMapStations";
 import type { RunDispatch } from "./useStudioRun";
 import { CREW_COLORS, FIRELINE_COLORS, firelineCss } from "./firelinePalette";
 import type { Map as MapLibreMap } from "maplibre-gl";
@@ -50,7 +52,7 @@ import {
 } from "./contracts";
 import { demoScenario } from "./demo";
 import {
-  DRAFT_DEFAULTS_VERSION,
+  FIREFIGHTING_ON_DEFAULTS_VERSION,
   DRAFT_STORAGE_KEY,
   clearDraft,
   draftStatusText,
@@ -181,7 +183,8 @@ export default function SimulationStudioPage({
     if (!initialDraft) return freshScenario(emptyScenario());
     // A draft saved before firefighting was on by default picks it up once; the autosave then
     // records the new defaults version, so turning it off later sticks.
-    return initialDraft.defaultsVersion < DRAFT_DEFAULTS_VERSION
+    // (Version 3, units from the map, needs nothing here: parseScenario already dropped counts.)
+    return initialDraft.defaultsVersion < FIREFIGHTING_ON_DEFAULTS_VERSION
       ? freshScenario(initialDraft.scenario)
       : initialDraft.scenario;
   });
@@ -522,55 +525,66 @@ export default function SimulationStudioPage({
     [area, closures],
   );
 
-  // CAL FIRE stations, camps and air bases near the first fire (local-only data; may be absent).
-  const firstFire = useMemo(() => {
+  // Fire facilities around the board (CAL FIRE layer; local-only data, may be absent): the
+  // firefighting resources are a pure function of them (studio/mapResources.ts).
+  const basesPoint = useMemo((): [number, number] | null => {
     if (!scenario.firefighting?.enabled) return null;
+    if (area) return [(area.bbox[0] + area.bbox[2]) / 2, (area.bbox[1] + area.bbox[3]) / 2];
     const first = scenario.ignitions
       .filter((ignition) => ignition.enabled)
       .sort((a, b) => a.startMinute - b.startMinute)[0];
-    return first ? ([first.location.longitude, first.location.latitude] as [number, number]) : null;
-  }, [scenario]);
-  const suppressionBases = useSuppressionBases(firstFire);
+    return first ? [first.location.longitude, first.location.latitude] : null;
+  }, [scenario, area]);
+  const suppressionBases = useSuppressionBases(basesPoint);
+  const fromMap = useMemo(() => mapResources(area, suppressionBases), [area, suppressionBases]);
 
   /**
-   * With firefighting from stations, each ground resource is sent from its base over the
-   * board's roads on its own access class's graph to the first fire, reported when it ignites
-   * (studio/crewDispatch.ts); aircraft fly from the nearest helitack and air attack bases.
+   * The run card from the units on the map (studio/mapResources.ts), each ground unit driven from
+   * its own base over the board's roads on its access class's graph to the first fire, reported
+   * after its call-in delay (studio/crewDispatch.ts); aircraft fly from the air bases in reach.
    */
   const planCrews = useCallback((): RunDispatch | undefined => {
     const settings = scenario.firefighting;
     if (!settings?.enabled) return undefined;
-    const airBases = airBasesOf(suppressionBases);
-    if (settings.fromStations === false) return { dispatch: null, note: null, airBases };
     const first = scenario.ignitions
       .filter((ignition) => ignition.enabled)
       .sort((a, b) => a.startMinute - b.startMinute)[0];
     if (!first) return undefined;
-    if (!area) {
+    if (!area || !fromMap) {
       return {
         dispatch: null,
-        note: `The board's roads and fire stations were not loaded, so crews were assumed on site after ${settings.responseMinutes} min.`,
-        airBases,
+        note: "The board's roads and fire stations were not loaded, so no units were sent.",
+        airBases: null,
+        resources: {},
       };
     }
+    const fire: [number, number] = [first.location.longitude, first.location.latitude];
+    const plan = planMapDispatch(fromMap, area, fire, scenario.settings, dioramaLandscape);
     // Dispatched after the call-in and processing delay (response/report.ts), not at ignition.
-    const { dispatch, note } = planCrewDispatch(
-      area,
-      [first.location.longitude, first.location.latitude],
-      first.startMinute + ignitionReportDelayMinutes(dioramaLandscape, first.location, first.startMinute, settings),
-      resourceList(settings),
-      (edge) => closedEdges.has(edge),
-      dioramaLandscape,
-      suppressionBases,
-    );
+    const { dispatch, note } =
+      plan.units.length > 0
+        ? planCrewDispatch(
+            area,
+            fire,
+            first.startMinute + ignitionReportDelayMinutes(dioramaLandscape, first.location, first.startMinute, settings),
+            plan.units,
+            (edge) => closedEdges.has(edge),
+            dioramaLandscape,
+            suppressionBases,
+          )
+        : { dispatch: null, note: null };
+    dispatch?.notes.unshift(plan.text);
     return {
       dispatch,
       note: note
         ? `${note} Crews were assumed on site after ${settings.responseMinutes} min.`
-        : null,
-      airBases,
+        : plan.units.length === 0
+          ? plan.text
+          : null,
+      airBases: plan.airBases,
+      resources: plan.counts,
     };
-  }, [scenario, area, closedEdges, dioramaLandscape, suppressionBases]);
+  }, [scenario, area, closedEdges, dioramaLandscape, suppressionBases, fromMap]);
 
   const handleRun = useCallback(() => {
     setPlaying(false);
@@ -997,6 +1011,8 @@ export default function SimulationStudioPage({
   const [studioMap, setStudioMap] = useState<MapLibreMap | null>(null);
   useMapFireline(view === "map" ? studioMap : null, firelineView, currentMinute);
   useMapCrews(view === "map" ? studioMap : null, result?.crewDispatch ?? null, clockRef);
+  // Every facility that can respond, labelled: what is on the map is what can respond.
+  useMapStations(view === "map" ? studioMap : null, scenario.firefighting?.enabled ? (fromMap?.fleet.facilities ?? null) : null);
 
   const handlePlayPause = useCallback(() => {
     if (frameMinutes.length === 0 || locked) return;
@@ -1377,6 +1393,7 @@ export default function SimulationStudioPage({
                   scenario={scenario}
                   onScenarioChange={applyScenario}
                   idPrefix="studio"
+                  resources={fromMap}
                   result={
                     firefighting ? (
                       <FirefightingResults

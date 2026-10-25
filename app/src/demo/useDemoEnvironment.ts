@@ -1,7 +1,7 @@
 /**
  * Loads the /demo board's physical inputs (docs/command-demo-realism.md) and builds a
  * `DemoEnvironment`: wind (GET /api/demo/wind), the drill centre, Camp terrain and carless households (GET
- * /api/demo/environment; every call carries `incident` for a non-Camp drill), CAL FIRE bases (GET /api/suppression/bases), and a LANDFIRE
+ * /api/demo/environment; every call carries `incident` for a non-Camp drill), fire facilities (GET /api/suppression/bases, else the package's OSM stations; they decide every local unit), and a LANDFIRE
  * landscape when a prebuilt one covers the drill area (GET /api/landscapes; its grid is also the
  * 3D diorama's board, DemoDiorama.tsx). Every input that
  * fails falls back to the labelled assumption in realism.ts / model.ts, and the board starts
@@ -19,7 +19,8 @@ import type { LandscapeGrid } from "../fire/landscape";
 import { DEFAULT_BOARD_RADIUS_METERS, boardCellMetersFor, clampBoardRadiusMeters } from "../fire/boardSize";
 import { loadLandscapeCached, type CachedLandscapeResult } from "../fire/landscapeCache";
 import type { LonLat } from "../live/types";
-import { CREW_TYPES, STATION_TYPES, SUPPRESSION_BASES_URL, parseBases, type SuppressionBases } from "../studio/suppressionBases";
+import { SUPPRESSION_BASES_URL, parseBases, type SuppressionBases } from "../studio/suppressionBases";
+import { greatCircleKm, withOsmStations } from "../response/fleet";
 import { ENVIRONMENT_URL, WIND_URL, demoUrl, type EnvironmentResponse, type WindResponse } from "./contracts";
 import type { DemoEnvironment, Station } from "./model";
 import { FALLBACK_WIND, type Ground, type WindSeries } from "./realism";
@@ -60,7 +61,8 @@ export const WEATHER_PRESETS: readonly WeatherPreset[] = [
   { value: "p95", label: "Nov P95", title: "95th-percentile November offshore episode (derived from observed hours)", mode: "climatology_percentile", start: "2018-11-08T12:00:00Z", hours: 72 },
 ];
 
-const BASE_RADIUS_KM = 60;
+/** Facilities fetched within this distance of the drill centre: covers the airtanker dispatch radius (response/fleet.ts, about 142 km); stations stay capped at the nearest 40. */
+const BASE_RADIUS_KM = 150;
 
 async function getJson<T>(url: string, signal: AbortSignal): Promise<T | null> {
   try {
@@ -175,6 +177,11 @@ async function landscapeGround(p: LonLat, radiusMeters: number, signal: AbortSig
   return { ground: groundOf(loaded.grid, `${name}, ${how}`), grid: loaded.grid, region: { id: "live", name }, source: loaded.source === "cache" ? "cached" : "live" };
 }
 
+/**
+ * Every facility the CAL FIRE layer lists near the board (stations, camps, helitack and air attack
+ * bases), nearest first, with its metadata: the response fleet's input (response/fleet.ts). Null
+ * when the layer is unavailable or lists nothing.
+ */
 export function stationsFrom(bases: SuppressionBases | null): DemoEnvironment["bases"] {
   if (!bases?.available || bases.bases.length === 0) return null;
   const toStation = (b: SuppressionBases["bases"][number]): Station => ({
@@ -187,23 +194,17 @@ export function stationsFrom(bases: SuppressionBases | null): DemoEnvironment["b
     staffing: b.staffing ?? null,
   });
   const near = [...bases.bases].sort((a, b) => a.distanceKm - b.distanceKm || a.id.localeCompare(b.id));
-  const calfireStations = near.filter((b) => STATION_TYPES.has(b.type) && b.agency.startsWith("CAL FIRE")).map(toStation);
-  const localStations = near.filter((b) => b.type === "FSA").map(toStation);
-  const crewCamps = near.filter((b) => CREW_TYPES.has(b.type)).map(toStation);
-  if (calfireStations.length === 0 || localStations.length === 0 || crewCamps.length === 0) return null;
-  // Every facility with its metadata (stations, camps, helitack and air attack bases): the response fleet (response/fleet.ts).
-  return { calfireStations, localStations, crewCamps, all: near.map(toStation) };
+  return { all: near.map(toStation) };
 }
 
 const OSM_STATION_TYPE = "osm_fire_station";
-const OSM_CREW_CAMPS = 2;
 /** Most OSM stations the response fleet staffs (the CAL FIRE path is capped at 40 by the bases endpoint). */
 const OSM_FLEET_STATIONS = 40;
 
 /**
- * Bases from a drill package's OpenStreetMap fire stations when the CAL FIRE bases are unavailable.
- * OSM carries no agency or facility type, so the nearest-first stations fill all three pools
- * (the board's unit types and counts per station stay assumed); crew camps reuse the nearest ones.
+ * Facilities from a drill package's OpenStreetMap fire stations when the CAL FIRE layer is
+ * unavailable, nearest first. OSM carries no agency, facility type or camps, so each is one
+ * station (FACILITY_INVENTORY osm_station); no crew camps or air bases are invented.
  */
 export function stationsFromPackage(stations: EnvironmentResponse["stations"], center: LonLat | null): DemoEnvironment["bases"] {
   if (!stations || stations.length === 0) return null;
@@ -211,10 +212,7 @@ export function stationsFromPackage(stations: EnvironmentResponse["stations"], c
   const d2 = (s: { lon: number; lat: number }) => (center ? ((s.lon - center[0]) * cos) ** 2 + (s.lat - center[1]) ** 2 : 0);
   const near = [...stations].sort((a, b) => d2(a) - d2(b) || a.id.localeCompare(b.id));
   const all: Station[] = near.map((s) => ({ id: s.id, name: s.name, location: [s.lon, s.lat], type: OSM_STATION_TYPE }));
-  // Response fleet input: the stations (one Type 3 engine each, ASSUMPTION) and, as crew bases, the
-  // nearest OSM_CREW_CAMPS stations again (ASSUMPTION; OSM has no conservation camps).
-  const camps: Station[] = all.slice(0, OSM_CREW_CAMPS).map((s) => ({ ...s, id: `${s.id}-crew`, name: `${s.name} (crew base, assumed)`, type: "CC", agency: "Unknown" }));
-  return { calfireStations: all, localStations: all, crewCamps: all.slice(0, OSM_CREW_CAMPS), all: [...all.slice(0, OSM_FLEET_STATIONS), ...camps] };
+  return { all: all.slice(0, OSM_FLEET_STATIONS) };
 }
 
 export async function loadEnvironment(
@@ -239,17 +237,25 @@ export async function loadEnvironment(
   ]);
   const parsed = basesJson ? parseBases(basesJson) : null;
   const calfire = stationsFrom(parsed);
-  const packageBases = calfire ? null : stationsFromPackage(envData?.stations, center);
-  const bases = calfire ?? packageBases;
+  const packageBases = stationsFromPackage(envData?.stations, center);
+  // The CAL FIRE layer plus the package's OSM stations it does not list (city departments are
+  // often missing from the layer), nearest the drill centre first.
+  const merged = calfire
+    ? withOsmStations(calfire.all, packageBases?.all ?? []).sort((a, b) =>
+        center ? greatCircleKm(center, a.location) - greatCircleKm(center, b.location) || a.id.localeCompare(b.id) : 0,
+      )
+    : null;
+  const bases = merged ? { all: merged } : packageBases;
+  const osmAdded = merged && calfire ? merged.length - calfire.all.length : 0;
   const noVehicle = new Map(Object.entries(envData?.households_no_vehicle ?? {}));
   return {
     spread: { ground: landscape.ground, wind },
     bases,
-    basesLabel: packageBases
-      ? `${envData?.stations_source ?? "Fire stations from OpenStreetMap (drill package)"}; CAL FIRE bases unavailable, so unit types and counts per station are assumed, and crew camps reuse the nearest ${OSM_CREW_CAMPS} stations`
+    basesLabel: !calfire && packageBases
+      ? `${envData?.stations_source ?? "Fire stations from OpenStreetMap (drill package)"}; CAL FIRE layer unavailable, so each is one assumed Type 3 engine and there are no crew camps or air bases`
       : bases
-      ? `CAL FIRE facilities layer (${parsed?.attribution ?? "CAL FIRE"}); unit counts per base are assumed`
-      : "Synthetic stations (assumed: CAL FIRE bases file unavailable)",
+        ? `CAL FIRE facilities layer (${parsed?.attribution ?? "CAL FIRE"})${osmAdded > 0 ? ` plus ${osmAdded} OpenStreetMap stations it does not list (one assumed Type 3 engine each)` : ""}; units per facility from the labelled inventory table (response/fleet.ts)`
+        : "No fire stations found on this map: no local units; resources come only from out of the area, through the state system",
     noVehicle,
     noVehicleLabel: envData?.households_no_vehicle_source ?? "Carless households unknown (counted as 0)",
     landscape: landscape.grid,
