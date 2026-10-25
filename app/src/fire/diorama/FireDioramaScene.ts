@@ -143,6 +143,7 @@ export class FireDioramaScene implements FireDioramaSceneApi {
   /** Name pills, one per labelled ignition, parented to that ignition's pin. */
   private readonly ignitionLabels: { obj: CSS2DObject; el: HTMLDivElement }[] = [];
   private wind = { from: 0, speed: 0 };
+  private windVisible = true;
   private overlay = false;
   private clickMode: GroundClickMode = "origin";
   private overlayContent: BoardOverlay | null = null;
@@ -310,6 +311,12 @@ export class FireDioramaScene implements FireDioramaSceneApi {
       return;
     this.wind = { from: fromDegrees, speed: speedMph };
     this.windLabel.el.textContent = `Wind ${Math.round(speedMph)} mph from ${compassPoint(fromDegrees)}`;
+    this.placeMarkers();
+  }
+
+  setWindVisible(visible: boolean): void {
+    if (this.disposed || visible === this.windVisible) return;
+    this.windVisible = visible;
     this.placeMarkers();
   }
 
@@ -668,7 +675,7 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     this.sampler.setWind(tx, tz);
     board.fire.uWindDir.value.set(tx, tz);
     this.fx.placeWind(frame, tx, tz, p && frame.inside(p.x, p.z) ? p : null);
-    const show = !!frame.grid;
+    const show = !!frame.grid && this.windVisible;
     this.fx.windObject.visible = show;
     this.windLabel.obj.visible = show;
     this.windLabel.obj.position.copy(this.fx.windAnchor);

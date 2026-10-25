@@ -62,6 +62,8 @@ import {
   type SegmentedOption,
 } from "../ui";
 import { useBoardStreets } from "./useBoardStreets";
+import HistoricalFireDiorama from "../historical/HistoricalFireDiorama";
+import { useHistoricalFireIndex } from "../historical/data";
 import "./fire.css";
 
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
@@ -223,6 +225,10 @@ export default function FireSimulatorPage() {
   const [catalog, setCatalog] = useState<CatalogState>({ status: "loading" });
   const [areaSize, setAreaSize] = useState<AreaSizeId>(DEFAULT_AREA_SIZE);
   const [areaPickerOpen, setAreaPickerOpen] = useState(false);
+  // A real fire opened from the region picker replaces the stage (app/src/historical).
+  const [historicalFireId, setHistoricalFireId] = useState<string | null>(null);
+  const historicalOpen = historicalFireId !== null;
+  const historicalIndex = useHistoricalFireIndex();
   const [origin, setOrigin] = useState<GeoPoint | null>(null);
   const [windSpeedMph, setWindSpeedMph] = useState(DEFAULT_WIND_SPEED_MPH);
   const [windFromDegrees, setWindFromDegrees] = useState(45);
@@ -410,7 +416,7 @@ export default function FireSimulatorPage() {
     // The diorama host only exists in the diorama view; the scene is rebuilt on return and the
     // effects below re-push every piece of state because `scene` changes.
     const host = sceneHostRef.current;
-    if (view !== "diorama" || !host) return;
+    if (view !== "diorama" || !host || historicalOpen) return;
     let created: FireDioramaSceneApi;
     try {
       created = new FireDioramaScene(host, { reducedMotion: reducedMotionRef.current });
@@ -430,7 +436,7 @@ export default function FireSimulatorPage() {
       setScene(null);
       created.dispose();
     };
-  }, [view]);
+  }, [view, historicalOpen]);
 
   // Continuous model time, pushed to the scene every animation frame without a React render.
   const onTime = useCallback((minutes: number) => sceneRef.current?.setTime(minutes), []);
@@ -736,13 +742,13 @@ export default function FireSimulatorPage() {
       if (!(event.key === " " || event.code === "Space")) return;
       const target = event.target instanceof Element ? event.target : null;
       if (target?.closest(SPACE_OWNERS) || target?.closest("[role='dialog']")) return;
-      if (!hasRun) return;
+      if (!hasRun || historicalOpen) return;
       event.preventDefault();
       togglePlayback();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [togglePlayback, hasRun]);
+  }, [togglePlayback, hasRun, historicalOpen]);
 
   const resetView = useCallback(() => {
     if (view === "satellite") setFitSignal((value) => value + 1);
@@ -861,6 +867,24 @@ export default function FireSimulatorPage() {
       ? landscape.storedUnavailable
       : provenance?.kind === "live" && provenance.storedUnavailable;
 
+  if (historicalFireId) {
+    return (
+      <main
+        id="main-content"
+        tabIndex={-1}
+        className="fr-page"
+        data-reduced-motion={reducedMotion ? "true" : undefined}
+        aria-label="Historical fire diorama"
+      >
+        <HistoricalFireDiorama
+          fireId={historicalFireId}
+          onSelectFire={setHistoricalFireId}
+          onExit={() => setHistoricalFireId(null)}
+        />
+      </main>
+    );
+  }
+
   return (
     <main
       id="main-content"
@@ -978,7 +1002,9 @@ export default function FireSimulatorPage() {
                     value={region ? region.id : ""}
                     onChange={(event) => {
                       const id = event.target.value;
-                      if (id) selectRegion(id);
+                      if (id.startsWith("historical:")) {
+                        setHistoricalFireId(id.slice("historical:".length));
+                      } else if (id) selectRegion(id);
                     }}
                   >
                     {!region && <option value="">Custom: {areaLabel(areaCenter)}</option>}
@@ -994,6 +1020,15 @@ export default function FireSimulatorPage() {
                         ))}
                       </optgroup>
                     ))}
+                    {historicalIndex.status === "ready" && (
+                      <optgroup label="Historical fires (observed perimeters)">
+                        {historicalIndex.index.fires.map((entry) => (
+                          <option key={entry.id} value={`historical:${entry.id}`}>
+                            {entry.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
                   </select>
                   <Button
                     id="fr-change-area"
