@@ -396,8 +396,10 @@ export default function OneViewPage() {
         <span className="ov-title">Scenario run</span>
         <EvidenceTag kind="simulated" />
         <span className="ov-dim ov-drill">
-          Live drill: {drillName}
-          {isBerkeley ? "" : " (not Berkeley yet)"}
+          {/* A stored package is reused for any preset on its board, so its name can belong to another preset. */}
+          {isBerkeley
+            ? `Berkeley Hills & Tilden board${fireId !== null ? ` · ${preset.label}` : ""}`
+            : `Live drill: ${drillName} (not Berkeley yet)`}
         </span>
         <FollowedChips people={followed} />
       </div>
