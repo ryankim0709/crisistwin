@@ -5,7 +5,14 @@
  * change it. See docs/adr/0018-road-closures.md.
  *
  * Households leave on the engine's uniform departure spread, or, with `departureDelays`
- * (population/householdBehavior.ts, seeded per home), each after its own delay; some stay home.
+ * (population/householdBehavior.ts, seeded per home), on their own triggers: the order, the fire
+ * reaching their zone, or the fire coming close to the house; some stay home by choice.
+ *
+ * What the policy knows (`fireKnowledge`, studio/fireKnowledge.ts): only fires that have been
+ * reported (ignition + the response/report.ts call-in delay), each with its predicted spread
+ * from the run's arrival field. Before the first report it orders nobody (trigger mode). Without
+ * `fireKnowledge` (hand-built inputs) it reads the full field: perfect foresight, not used by
+ * the pages.
  *
  * Policy (deterministic; the only randomness is the seeded household draw). Two order modes.
  *
@@ -17,13 +24,14 @@
  * strategic wildfire scenarios", Natural Hazards 41:181-199): order a population when the fire
  * is no farther away, in time, than the time it needs to get out plus a safety buffer. The
  * papers find that point by reverse fire spread from the community; here the fire's time to a
- * zone is read forward from the studio run's arrival field (`exposure.zoneContact`):
+ * zone is read forward from the known fire's arrival field (`zoneContact` of the reported fires):
  * - "Leave now" (`order_evacuation`) once zoneContact − now ≤ time to clear = departure delay
- *   (`clearDepartureMinutes`) + free-flow drive to the zone's chosen exit (dispatch
- *   routing) + TRIGGER_SAFETY_BUFFER_MINUTES.
+ *   (`clearDepartureMinutes`, + WAKE_UP_MINUTES when the order would go out in sleeping hours)
+ *   + free-flow drive to the zone's chosen exit (dispatch routing) + TRIGGER_SAFETY_BUFFER_MINUTES.
  * - "Get ready" (a warning; households stay home) once zoneContact − now ≤ time to clear +
  *   GET_READY_LEAD_MINUTES.
- * - A zone the fire never reaches within the run gets no order and stays home (not threatened).
+ * - A zone the known fire never reaches within the run gets no order and stays home (not
+ *   threatened). Households there may still leave on their own fire cues (engine).
  * - Triggers are re-checked every TRIGGER_REVIEW_MINUTES; orders only escalate (none → get
  *   ready → leave now).
  *
@@ -31,20 +39,26 @@
  * `orderMinute` every zone the fire has not overrun is ordered at once.
  *
  * Both modes:
- * - An ordered zone goes away from the fire: among the exits it can reach (routes avoid closed
- *   edges and edges the fire reaches within the engine's routing lookahead), it takes the
- *   fastest at free flow whose position is farther from the fire (road nodes burning by its
- *   expected departure, else the ignition) than the zone's centroid. Only when none is away
- *   does it take the fastest open exit, and its reason text says so. Re-orders use the same rule.
+ * - Exit choice. Among the exits a zone can reach (routes avoid closed edges and edges the fire
+ *   reaches within the engine's routing lookahead), each is scored on the known fire:
+ *   (1) safe: the route's time margin, the smallest (known fire arrival on an edge − time the
+ *   zone's last leaving household clears that edge, departing after its time to clear and
+ *   driving at free flow), is at least TRIGGER_SAFETY_BUFFER_MINUTES, and the known fire never
+ *   reaches the exit's shelter within the run; (2) away: the exit's bearing from the zone is at
+ *   least EXIT_AWAY_MIN_DEGREES off the bearing to the nearest burning known cell; then (3) the
+ *   fastest. With no safe exit, the one with the largest margin. The reason text says which.
+ *   Every TRIGGER_REVIEW_MINUTES an ordered zone with households still to leave is redirected
+ *   when its exit is no longer safe and a safe one is reachable (a newly reported fire, or the
+ *   fire heading for its shelter).
  * - An optional plan (`EvacuationPlan`, built by studio/evacuationOptimizer.ts) changes only a
- *   zone's first order: a planned zone goes to its planned exit when it is reachable then (else
- *   its fastest), and a zone planned to wait is staged behind its predecessor (the engine's
- *   staged waves) instead of being ordered at once. Everything after is the same policy.
+ *   zone's first order: a planned zone goes to its planned exit when it is reachable and safe
+ *   then (else the scored choice), and a zone planned to wait is staged behind its predecessor
+ *   (the engine's staged waves) instead of being ordered at once. Everything after is the same.
  * - A zone with no reachable exit when its order would go out (the order minute, or its leave
- *   trigger) is "cut off": it is never ordered and its households stay home. Closures last the
- *   whole run and fire only blocks more edges over time, so it cannot become reachable again.
- * - When an ordered zone's route is cut by fire, it is re-ordered the same minute to its
- *   fastest reachable exit; with none left its departures stay held (engine behaviour).
+ *   trigger) is "cut off": it is never ordered. Closures last the whole run and fire only
+ *   blocks more edges over time, so it cannot become reachable again.
+ * - When an ordered zone's route is cut by fire, it is re-ordered the same minute to its best
+ *   reachable exit; with none left its departures stay held (engine behaviour).
  * - Firefighters overwhelmed by the fire (studio/crewHandoff.ts) join at their leave minute and
  *   go on evacuation support, which shortens a zone's departure spread while they are on scene.
  *   A crew whose road point the fire has already cut off from every zone still evacuating pulls
@@ -65,9 +79,19 @@ import {
   type UnitState,
 } from "../dispatch/engine";
 import type { FireExposure } from "../dispatch/fireExposure";
-import { routeTo, shortestPathTree } from "../dispatch/routing";
+import { edgeSeconds, routeTo, shortestPathTree, type Route } from "../dispatch/routing";
 import { lonLatToMercator } from "../fire/landscape";
+import { WAKE_UP_MINUTES, type HouseholdBehavior } from "../population/householdBehavior";
 import type { EvacuationCrew } from "./crewHandoff";
+import {
+  bearingDifference,
+  knownArrivalAt,
+  knownFireAt,
+  mercatorBearing,
+  nearestKnownFire,
+  type FireKnowledge,
+  type KnownFire,
+} from "./fireKnowledge";
 
 /** Manual override: minutes after T+0 at which every zone is ordered ("Order everyone at"). */
 export const ORDER_MINUTE_CHOICES = [0, 15, 30, 60] as const;
@@ -80,9 +104,10 @@ export const DEFAULT_ORDER_MINUTE: number | null = null;
  */
 export const TRIGGER_REVIEW_MINUTES = DEFAULT_CHECK_INTERVAL_MINUTES;
 /**
- * Safety buffer added to a zone's time to clear, minutes. ASSUMPTION: Cova et al. (2005) and
- * Dennison et al. (2007) add a safety margin to the evacuation time when setting a trigger but
- * leave its size to the incident; 15 min is a placeholder, not a published value.
+ * Safety buffer added to a zone's time to clear, minutes; also the smallest route time margin
+ * that counts an exit as safe. ASSUMPTION: Cova et al. (2005) and Dennison et al. (2007) add a
+ * safety margin to the evacuation time when setting a trigger but leave its size to the
+ * incident; 15 min is a placeholder, not a published value.
  */
 export const TRIGGER_SAFETY_BUFFER_MINUTES = 15;
 /**
@@ -93,11 +118,18 @@ export const TRIGGER_SAFETY_BUFFER_MINUTES = 15;
  */
 export const GET_READY_LEAD_MINUTES = FORECAST_LOOKAHEAD_MINUTES;
 /**
- * Share of a zone's leaving households that must be gone for it to count as clear, used to read
- * the departure delay off the household delays. ASSUMPTION (no source): 0.9. The delays
- * themselves are sourced (population/householdBehavior.ts).
+ * Share of a zone's households leaving on the order that must be gone for it to count as
+ * clear, used to read the departure delay off the household delays. ASSUMPTION (no source):
+ * 0.9. The slowest 10% are not planned for by the trigger; they leave on their fire cues
+ * (population/householdBehavior.ts). The delays themselves are sourced.
  */
 export const CLEAR_DELAY_QUANTILE = 0.9;
+/**
+ * An exit counts as "away from the fire" when its bearing from the zone is at least this far
+ * off the bearing to the nearest burning (known) cell. ASSUMPTION: 90 degrees, the half-plane
+ * facing away from the fire; a geometric rule, not a published value.
+ */
+export const EXIT_AWAY_MIN_DEGREES = 90;
 /** Idle crews are given a zone this often, simulated minutes. */
 export const CREW_REVIEW_MINUTES = 5;
 /** Crews are not sent to a zone whose core the fire reaches within this many minutes. */
@@ -113,7 +145,7 @@ const CREW_ZONE_TRIES = 3;
 export interface EvacuationPlan {
   /**
    * Exit each listed zone is ordered to. Unlisted zones, and a listed exit that is unreachable
-   * at order time, get their fastest open exit.
+   * or unsafe at order time, get the scored choice.
    */
   exits: Readonly<Record<string, string>>;
   /**
@@ -125,6 +157,7 @@ export interface EvacuationPlan {
 
 export interface EvacuationInputs {
   area: DispatchArea;
+  /** The full modelled fire: what residents see and what catches them. */
   exposure: FireExposure;
   horizonMinutes: number;
   /** Edge indices closed to traffic for the whole run. */
@@ -139,10 +172,17 @@ export interface EvacuationInputs {
   /** Planned exits and waves; the default policy when omitted. */
   plan?: EvacuationPlan;
   /**
-   * Minutes from a zone's order to each home leaving, Infinity for a household that stays
-   * (population/householdBehavior.ts); the engine's uniform departure spread when omitted.
+   * Per-household behaviour (population/householdBehavior.ts: order and cue delays, staying
+   * by choice); the engine's uniform departure spread when omitted.
    */
-  departureDelays?: Float32Array;
+  departureDelays?: HouseholdBehavior;
+  /**
+   * The run's fires and their report minutes: the policy acts only on reported fires. Omitted:
+   * perfect foresight of the full field (hand-built inputs only).
+   */
+  fireKnowledge?: FireKnowledge;
+  /** T+0 as UTC epoch ms, for sleeping hours (households and night orders); none: always day. */
+  startEpochMs?: number;
 }
 
 export interface EvacuationSummary {
@@ -170,16 +210,19 @@ export interface EvacuationSummary {
   /** Zones (and their homes) never warned, ordered nor cut off over the run: not threatened. */
   unthreatenedZones: number;
   unthreatenedHomes: number;
+  /** Minute the first fire was reported to the policy, or null (none, or no fire knowledge). */
+  firstReportMinute?: number | null;
 }
 
 /**
- * Minutes from a zone's order until CLEAR_DELAY_QUANTILE of its leaving households have left:
- * that quantile of the finite per-household delays (population/householdBehavior.ts), or of the
- * engine's uniform 0..DEPARTURE_SPREAD_MINUTES spread without them.
+ * Minutes from a zone's order until CLEAR_DELAY_QUANTILE of its households leaving on the order
+ * have left: that quantile of the finite per-household order delays
+ * (population/householdBehavior.ts), or of the engine's uniform 0..DEPARTURE_SPREAD_MINUTES
+ * spread without them.
  */
-export function clearDepartureMinutes(departureDelays?: Float32Array): number {
+export function clearDepartureMinutes(departureDelays?: HouseholdBehavior): number {
   if (!departureDelays) return DEPARTURE_SPREAD_MINUTES * CLEAR_DELAY_QUANTILE;
-  const finite = Array.from(departureDelays)
+  const finite = Array.from(departureDelays.orderDelayMinutes)
     .filter(Number.isFinite)
     .sort((a, b) => a - b);
   if (finite.length === 0) return 0;
@@ -192,6 +235,21 @@ export interface InitialOrder {
   exitId: string;
   /** Zone index it was staged behind, or null when ordered directly. */
   after: number | null;
+}
+
+/** One reachable exit as the policy scored it. */
+interface ExitChoice {
+  id: string;
+  /** Free-flow drive from the zone's loading node, seconds. */
+  seconds: number;
+  /** Smallest known-fire time margin along the route, minutes (Infinity: none reaches it). */
+  marginMinutes: number;
+  /** The known fire reaches the exit's shelter within the run. */
+  shelterBurns: boolean;
+  safe: boolean;
+  /** Degrees between the exit's bearing and the fire's, or null when no fire burns yet. */
+  offFireDegrees: number | null;
+  away: boolean;
 }
 
 export class EvacuationPolicyRun {
@@ -208,12 +266,13 @@ export class EvacuationPolicyRun {
    * does not threaten them. Emptied in "order everyone" mode once the order is out.
    */
   readonly quiet = new Set<number>();
-  /** Departure part of every zone's time to clear, minutes. */
+  /** Departure part of every zone's time to clear, minutes (day; see `clearMinutesAt`). */
   readonly clearDepartMinutes: number;
+  /** Minute the first fire was reported to the policy, or null so far. */
+  firstReportMinute: number | null = null;
   /** Per zone, free-flow drive to its fastest exit avoiding closures only, minutes. */
   private driveFloorMinutes: Float64Array | null = null;
   private ordered = false;
-  private fireCache: { key: number; nodes: number[] } | null = null;
   /** Ordered zones whose route was cut and that have no exit left; not searched again. */
   private stranded = new Set<number>();
   /** Crew units by id once they have left the fire. */
@@ -228,7 +287,8 @@ export class EvacuationPolicyRun {
       [],
       inputs.closedEdges,
     );
-    if (inputs.departureDelays) this.engine.setDepartureDelays(inputs.departureDelays);
+    if (inputs.departureDelays) this.engine.setHouseholdBehavior(inputs.departureDelays);
+    this.engine.setClock(inputs.startEpochMs ?? null);
     this.clearDepartMinutes = clearDepartureMinutes(inputs.departureDelays);
     for (const zone of this.engine.zones) this.quiet.add(zone.index);
     this.applyPolicy();
@@ -248,67 +308,81 @@ export class EvacuationPolicyRun {
   }
 
   /**
-   * `preferred` when it is reachable from the zone's loading node right now, else the fastest
-   * exit reachable now, or null.
+   * The fire the policy knows now: reported fires only (studio/fireKnowledge.ts), or the full
+   * field without fire knowledge; null while nothing has been reported.
+   */
+  private known(): { exposure: FireExposure; fire: KnownFire | null } | null {
+    const { fireKnowledge, area, exposure } = this.inputs;
+    if (!fireKnowledge) return { exposure, fire: null };
+    const fire = knownFireAt(fireKnowledge, area, this.engine.minute);
+    if (!fire) return null;
+    if (this.firstReportMinute === null) this.firstReportMinute = this.engine.minute;
+    return { exposure: fire.exposure, fire };
+  }
+
+  /** Departure part of the time to clear for an order going out now (+ wake-up at night). */
+  private clearMinutesNow(): number {
+    const night = this.inputs.departureDelays && this.engine.asleepAt(this.engine.minute);
+    return this.clearDepartMinutes + (night ? WAKE_UP_MINUTES : 0);
+  }
+
+  /**
+   * `preferred` when it is reachable and safe from the zone's loading node right now, else the
+   * scored best reachable exit (see the module comment), or null.
    */
   private bestExit(zone: number, preferred?: string): string | null {
     return this.bestRoute(zone, preferred)?.id ?? null;
   }
 
-  /** As `bestExit`, with the chosen route's free-flow drive time, seconds. */
-  private bestRoute(zone: number, preferred?: string): { id: string; seconds: number } | null {
-    const { area } = this.inputs;
-    const tree = shortestPathTree(
-      area,
-      area.zones[zone].node,
-      this.engine.blockedAt(this.engine.minute),
-    );
-    if (preferred !== undefined) {
-      const exit = area.exits.find((candidate) => candidate.id === preferred);
-      const route = exit ? routeTo(area, tree, exit.node) : null;
-      if (route) return { id: preferred, seconds: route.seconds };
-    }
-    // Away from the fire: among reachable exits, the fastest one farther from the fire than the
-    // zone is; the fastest reachable exit only when none is away.
-    const fire = this.fireNodes(this.engine.minute + this.clearDepartMinutes);
-    const zoneMeters = fireMeters(area, fire, area.zones[zone].centroid);
-    let best: { id: string; seconds: number; away: boolean } | null = null;
+  /** Every exit reachable from the zone now, scored on the known fire. */
+  private scoreExits(zone: number): ExitChoice[] {
+    const { area, fireKnowledge, horizonMinutes } = this.inputs;
+    const now = this.engine.minute;
+    const tree = shortestPathTree(area, area.zones[zone].node, this.engine.blockedAt(now));
+    const known = this.known();
+    const departMinute = now + this.clearMinutesNow();
+    const nearest =
+      known?.fire ? nearestKnownFire(known.fire, area.zones[zone].centroid, now) : null;
+    const [zx, zy] = lonLatToMercator(area.zones[zone].centroid[0], area.zones[zone].centroid[1]);
+    const choices: ExitChoice[] = [];
     for (const exit of area.exits) {
       const route = routeTo(area, tree, exit.node);
       if (!route) continue;
-      const away = fireMeters(area, fire, area.nodes[exit.node]) > zoneMeters;
-      if (!best || (away && !best.away) || (away === best.away && route.seconds < best.seconds))
-        best = { id: exit.id, seconds: route.seconds, away };
+      const marginMinutes = known ? routeMarginMinutes(area, route, known.exposure, departMinute) : Infinity;
+      const shelterBurns =
+        !!known?.fire &&
+        !!fireKnowledge &&
+        !!exit.destination &&
+        knownArrivalAt(fireKnowledge, known.fire, exit.destination.location) <= horizonMinutes;
+      const [ex, ey] = lonLatToMercator(area.nodes[exit.node][0], area.nodes[exit.node][1]);
+      const offFireDegrees = nearest
+        ? bearingDifference(mercatorBearing(zx, zy, ex, ey), nearest.bearingDegrees)
+        : null;
+      choices.push({
+        id: exit.id,
+        seconds: route.seconds,
+        marginMinutes,
+        shelterBurns,
+        safe: marginMinutes >= TRIGGER_SAFETY_BUFFER_MINUTES && !shelterBurns,
+        offFireDegrees,
+        away: offFireDegrees === null || offFireDegrees >= EXIT_AWAY_MIN_DEGREES,
+      });
     }
-    return best;
+    return choices;
   }
 
-  /** Reason suffix: why this exit (called after `bestRoute` picked it). */
-  private awayNote(zone: number, exitId: string): string {
-    const { area } = this.inputs;
-    const exit = area.exits.find((candidate) => candidate.id === exitId);
-    if (!exit) return "";
-    const fire = this.fireNodes(this.engine.minute + this.clearDepartMinutes);
-    const away =
-      fireMeters(area, fire, area.nodes[exit.node]) >
-      fireMeters(area, fire, area.zones[zone].centroid);
-    return away ? "away from the fire" : "no exit leads away from the fire; fastest open exit";
-  }
-
-  /** Road nodes the fire has reached by `minute` (else the first node it ignites), cached. */
-  private fireNodes(minute: number): number[] {
-    const key = Math.floor(minute);
-    if (this.fireCache?.key === key) return this.fireCache.nodes;
-    const { nodeArrival } = this.inputs.exposure;
-    const nodes: number[] = [];
-    let first = -1;
-    nodeArrival.forEach((arrival, node) => {
-      if (arrival <= minute) nodes.push(node);
-      if (Number.isFinite(arrival) && (first < 0 || arrival < nodeArrival[first])) first = node;
-    });
-    if (nodes.length === 0 && first >= 0) nodes.push(first);
-    this.fireCache = { key, nodes };
-    return nodes;
+  /** As `bestExit`, with the chosen route's free-flow drive time (seconds) and a reason. */
+  private bestRoute(
+    zone: number,
+    preferred?: string,
+  ): { id: string; seconds: number; note: string } | null {
+    const choices = this.scoreExits(zone);
+    if (preferred !== undefined) {
+      const planned = choices.find((choice) => choice.id === preferred);
+      if (planned && planned.safe) return { ...planned, note: "planned exit" };
+    }
+    const best = pickExit(choices);
+    return best ? { id: best.id, seconds: best.seconds, note: exitNote(best) } : null;
   }
 
   /**
@@ -334,23 +408,26 @@ export class EvacuationPolicyRun {
   }
 
   /**
-   * Trigger mode (Cova et al. 2005): warn or order each zone whose modelled fire arrival is
-   * within its time to clear (+ the get-ready lead). Orders only escalate.
+   * Trigger mode (Cova et al. 2005): warn or order each zone whose known fire arrival is within
+   * its time to clear (+ the get-ready lead). Orders only escalate. Nothing before the first
+   * fire is reported.
    */
   private applyTriggers(): void {
     const { engine } = this;
-    const { area, exposure, plan } = this.inputs;
+    const { area, plan } = this.inputs;
+    const known = this.known();
+    if (!known) return;
     const minute = engine.minute;
     const floor = this.driveFloor();
     const zoneIndex = plan ? new Map(area.zones.map((zone, index) => [zone.id, index])) : null;
-    const fixedMinutes = this.clearDepartMinutes + TRIGGER_SAFETY_BUFFER_MINUTES;
+    const fixedMinutes = this.clearMinutesNow() + TRIGGER_SAFETY_BUFFER_MINUTES;
     for (const zone of engine.zones) {
       if (zone.status !== "no_order" || zone.stage !== null || this.cutOff.has(zone.index)) {
         this.quiet.delete(zone.index);
         continue;
       }
-      const leadMinutes = exposure.zoneContact[zone.index] - minute;
-      if (!Number.isFinite(leadMinutes)) continue; // the fire never reaches it in this run
+      const leadMinutes = known.exposure.zoneContact[zone.index] - minute;
+      if (!Number.isFinite(leadMinutes)) continue; // the known fire never reaches it in this run
       if (leadMinutes > fixedMinutes + floor[zone.index] + GET_READY_LEAD_MINUTES) continue;
       const id = area.zones[zone.index].id;
       const route = this.bestRoute(zone.index, plan?.exits[id]);
@@ -379,20 +456,20 @@ export class EvacuationPolicyRun {
         zone.index,
         route.id,
         plan
-          ? "Studio plan: planned exit, fire within the zone's evacuation trigger."
-          : `Studio policy: fire within the zone's evacuation trigger; ${this.awayNote(zone.index, route.id)}.`,
+          ? `Studio plan: fire within the zone's evacuation trigger; ${route.note}.`
+          : `Studio policy: fire within the zone's evacuation trigger; ${route.note}.`,
       );
       this.initialOrders.set(zone.index, { exitId: route.id, after: null });
     }
   }
 
-  private order(zone: number, exitId: string, reason = ""): void {
+  private order(zone: number, exitId: string, reason: string): void {
     this.engine.applyOrders([
       {
         type: "order_evacuation",
         zone_id: this.inputs.area.zones[zone].id,
         exit_id: exitId,
-        reason: reason || `Studio policy: ${this.awayNote(zone, exitId)}.`,
+        reason,
       },
     ]);
   }
@@ -586,7 +663,10 @@ export class EvacuationPolicyRun {
     const { engine } = this;
     const { orderMinute } = this.inputs;
     if (orderMinute === null) {
-      if (engine.minute % TRIGGER_REVIEW_MINUTES === 0) this.applyTriggers();
+      if (engine.minute % TRIGGER_REVIEW_MINUTES === 0) {
+        this.applyTriggers();
+        this.redirectUnsafe();
+      }
       this.reroute();
       return;
     }
@@ -600,42 +680,117 @@ export class EvacuationPolicyRun {
       }
       for (const zone of engine.zones) {
         if (zone.status !== "no_order") continue;
-        const exitId = this.bestExit(zone.index);
-        if (exitId) {
-          this.order(zone.index, exitId);
-          this.initialOrders.set(zone.index, { exitId, after: null });
+        const best = this.bestRoute(zone.index);
+        if (best) {
+          this.order(zone.index, best.id, `Studio policy: ${best.note}.`);
+          this.initialOrders.set(zone.index, { exitId: best.id, after: null });
         } else this.cutOff.add(zone.index);
       }
       return;
     }
+    if (engine.minute % TRIGGER_REVIEW_MINUTES === 0) this.redirectUnsafe();
     this.reroute();
   }
 
-  /** Re-order each ordered zone whose route the fire cut to its fastest exit still open. */
+  /** Re-order each ordered zone whose route the fire cut to its best exit still open. */
   private reroute(): void {
     const { engine } = this;
     for (const zone of engine.zones) {
       if (zone.status !== "ordered" || !zone.routeBlocked || this.stranded.has(zone.index))
         continue;
-      const exitId = this.bestExit(zone.index);
-      if (exitId)
-        this.order(
-          zone.index,
-          exitId,
-          `Studio policy: route cut; ${this.awayNote(zone.index, exitId)}.`,
-        );
+      const best = this.bestRoute(zone.index);
+      if (best) this.order(zone.index, best.id, `Studio policy: route cut; ${best.note}.`);
       else this.stranded.add(zone.index);
+    }
+  }
+
+  /**
+   * Redirect ordered zones with households still to leave whose exit is no longer safe on the
+   * known fire (its route margin or its shelter), when a safe exit is reachable.
+   */
+  private redirectUnsafe(): void {
+    const { engine } = this;
+    for (const zone of engine.zones) {
+      if (zone.status !== "ordered" || zone.routeBlocked || !zone.exitId) continue;
+      if (leavingAtHome(engine, zone.index) + zone.queued === 0) continue;
+      const choices = this.scoreExits(zone.index);
+      const current = choices.find((choice) => choice.id === zone.exitId);
+      if (!current || current.safe) continue;
+      const best = pickExit(choices);
+      if (!best || !best.safe || best.id === zone.exitId) continue;
+      this.order(
+        zone.index,
+        best.id,
+        `Studio policy: ${zone.exitId} is no longer safe (${exitNote(current)}); ${exitNote(best)}.`,
+      );
     }
   }
 }
 
-/** Ground metres from `point` to the nearest of the fire's road nodes (Infinity when none). */
-function fireMeters(area: DispatchArea, fire: readonly number[], point: LonLat): number {
-  let best = Infinity;
-  for (const node of fire) best = Math.min(best, groundMeters(area.nodes[node], point));
+/**
+ * The smallest time margin along a route, minutes: per edge, the known fire's arrival on it
+ * minus the minute a household leaving at `departMinute` has driven it at free flow.
+ */
+export function routeMarginMinutes(
+  area: DispatchArea,
+  route: Route,
+  exposure: FireExposure,
+  departMinute: number,
+): number {
+  let clock = departMinute;
+  let margin = Infinity;
+  for (const step of route.steps) {
+    clock += edgeSeconds(area, step.edge) / 60;
+    margin = Math.min(margin, exposure.edgeArrival[step.edge] - clock);
+  }
+  return margin;
+}
+
+/** Safe first, then away from the fire, then fastest; with no safe exit, the largest margin. */
+function pickExit(choices: readonly ExitChoice[]): ExitChoice | null {
+  let best: ExitChoice | null = null;
+  for (const choice of choices) {
+    if (!best) {
+      best = choice;
+      continue;
+    }
+    if (choice.safe !== best.safe) {
+      if (choice.safe) best = choice;
+      continue;
+    }
+    if (!choice.safe) {
+      if (choice.marginMinutes > best.marginMinutes) best = choice;
+      continue;
+    }
+    if (choice.away !== best.away) {
+      if (choice.away) best = choice;
+      continue;
+    }
+    if (choice.seconds < best.seconds) best = choice;
+  }
   return best;
 }
 
+/** Plain-language reason for an exit choice. */
+function exitNote(choice: ExitChoice): string {
+  const minutes = Math.round(choice.seconds / 60);
+  if (!choice.safe) {
+    if (choice.shelterBurns) return `the fire is forecast to reach its shelter (${minutes} min drive)`;
+    return Number.isFinite(choice.marginMinutes)
+      ? `no exit is safe; ${choice.id} keeps the most time ahead of the fire (${Math.round(choice.marginMinutes)} min)`
+      : `no exit is safe; ${choice.id}`;
+  }
+  const dir =
+    choice.offFireDegrees === null
+      ? "no fire burning yet"
+      : choice.away
+        ? `away from the fire (${Math.round(choice.offFireDegrees)}° off its bearing)`
+        : `no safe exit leads away from the fire (${Math.round(choice.offFireDegrees)}° off its bearing)`;
+  const margin = Number.isFinite(choice.marginMinutes)
+    ? `${Math.round(choice.marginMinutes)} min ahead of the fire on the route`
+    : "fire not forecast on the route";
+  return `${dir}, ${margin}, ${minutes} min drive`;
+}
 /** Households of a zone still at home that will leave (those staying home excluded). */
 function leavingAtHome(engine: DispatchEngine, zone: number): number {
   return engine.zones[zone].atHome - engine.stayingHomes(zone);
@@ -713,6 +868,7 @@ export function runEvacuation(inputs: EvacuationInputs): {
       zoneWarnMinutes: zones.map((zone) => run.warned.get(zone.index) ?? null),
       unthreatenedZones: run.quiet.size,
       unthreatenedHomes,
+      firstReportMinute: run.firstReportMinute,
     },
   };
 }
