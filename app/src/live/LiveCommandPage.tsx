@@ -20,6 +20,7 @@ import DemoDiorama from "../demo/DemoDiorama";
 import { CONGESTION_LABEL, TRAVEL_LABEL, fireModelLabel, studioMoistureLabel, studioWindLabel } from "../demo/observation";
 import SelectedPanel from "../demo/SelectedPanel";
 import { AI_ONLY_TEXT, useCommandBoard } from "../demo/useCommandBoard";
+import { usePredictedFire } from "../demo/usePredictedFire";
 import { WorldBar } from "../world/WorldBar";
 import { useRoadAccess } from "../demo/useRoadAccess";
 import RoadClosureTool from "./RoadClosureTool";
@@ -292,6 +293,7 @@ export default function LiveCommandPage() {
   const households = useHouseholdState(data && layers.houses ? incidentToken : null, incidentId);
   // The simulated board (fires, units, households) and the AI commander, on the drill's zones.
   const cb = useCommandBoard({ token, incidentId, data, studioBoardId: active.data?.region_id ?? null });
+  const predictedFire = usePredictedFire(cb.board);
   // Controller drill road closures (close / reopen on the map); the board's units and zones route around them.
   const roadClosures = useRoadClosures({ token: unauthorized ? null : token, incidentId, board: cb.board, routes: cb.routes, bump: cb.bump });
   const { attach: attachClosures, claimsClick: claimsClosureClick, claimedClick: closureClaimed } = roadClosures;
@@ -554,6 +556,7 @@ export default function LiveCommandPage() {
             forecasts={cb.forecasts}
             wind={cb.windNow}
             selected={cb.selection}
+            predictedFire={predictedFire}
           />
         ) : null}
         {data ? (

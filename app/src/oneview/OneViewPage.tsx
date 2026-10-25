@@ -13,6 +13,7 @@ import { Button, EmptyState, EvidenceTag, IconButton, LoadingState, Notice, Pane
 import AgentInputsPanel from "../demo/AgentInputsPanel";
 import DemoDiorama from "../demo/DemoDiorama";
 import { BOARD_SPEED_STEPS, type BoardSpeed } from "../demo/useCommandBoard";
+import { usePredictedFire } from "../demo/usePredictedFire";
 import { useRunStateSync } from "../demo/useRunStateSync";
 import type { RunTimeline } from "../demo/runContracts";
 import { fetchActive } from "../live/active";
@@ -111,6 +112,7 @@ export default function OneViewPage() {
     cbRef.current = cb;
   });
   const board = cb.board;
+  const predictedFire = usePredictedFire(board);
   const runModes = hasRunModes(cb);
 
   // ---- 1 Setup -------------------------------------------------------------------------------
@@ -323,6 +325,7 @@ export default function OneViewPage() {
             wind={cb.windNow}
             selected={cb.selection}
             followed={followed}
+            predictedFire={predictedFire}
           />
         ) : (
           <div className="ov-stage-msg">{stage}</div>
