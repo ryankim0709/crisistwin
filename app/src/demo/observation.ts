@@ -52,6 +52,7 @@ function fireResponseObservation(board: Board, fire: Fire): Pick<
   | "aircraft"
   | "reported_after_min"
   | "reported_by"
+  | "reported_reason"
   | "edge_in_reach_pct"
 > {
   const fr = board.response.fires.get(fire.id);
@@ -66,6 +67,7 @@ function fireResponseObservation(board: Board, fire: Fire): Pick<
     aircraft: board.response.aircraft.filter((a) => a.fireId === fire.id).map((a) => a.id),
     reported_after_min: fr ? Math.round(fr.reportAt - fire.ignitedAt) : null,
     reported_by: fr?.report.by ?? null,
+    reported_reason: fr?.report.reason ?? null,
     edge_in_reach_pct: (() => {
       const f = reachFraction(board, fire);
       return f === null ? null : Math.round(f * 100);

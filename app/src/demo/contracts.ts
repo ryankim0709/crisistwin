@@ -176,7 +176,9 @@ export interface FireObservation {
   first_arrival_min: number | null;
   /** Minutes from ignition until the dispatch centre had the fire (call-in, answer, transfer, processing; response/report.ts). */
   reported_after_min: number | null;
-  reported_by: "911" | "camera" | "field_report" | null;
+  reported_by: "911" | "camera" | "satellite" | "field_report" | null;
+  /** Why it took that long, plain language ("4 km from the nearest home, at night, found by an AI camera"). */
+  reported_reason: string | null;
   /** Share of the fire's edge within reach of the ground units on scene, percent; null before any is there. */
   edge_in_reach_pct: number | null;
   /** Times a finished line failed its seeded holding test. */

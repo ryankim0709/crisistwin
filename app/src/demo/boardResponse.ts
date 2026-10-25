@@ -17,7 +17,15 @@
  */
 
 import { DEVELOPED_FUEL_CODE, cellAt } from "../fire/spread";
-import { PERSONS_PER_HOUSEHOLD, SQ_M_PER_SQ_MI, reportDelay, type ReportDelay } from "../response/report";
+import {
+  PERSONS_PER_HOUSEHOLD,
+  SQ_M_PER_SQ_MI,
+  SUBURBAN_MIN_PEOPLE_PER_SQ_MI,
+  lineOfSight,
+  nearestDeveloped,
+  reportDelay,
+  type ReportDelay,
+} from "../response/report";
 import { engineCrewHandLineMPerMin, planWork, type WorkMode } from "../response/reach";
 import { countAtMost } from "./fireField";
 import type { LonLat } from "../live/types";
@@ -483,21 +491,58 @@ export function respondToNewFire(board: Board, fire: Fire): void {
 }
 
 /** The seeded delay from ignition to dispatch for a new fire (response/report.ts). */
+/** ASSUMPTION: households within this distance (in sight of the smoke) could see the fire; reported only. */
+const VIEW_RADIUS_M = 3000;
+
+/** Metres from `p` to the nearest point of a polyline. */
+function toPolylineM(p: LonLat, line: readonly LonLat[]): number {
+  let best = Infinity;
+  for (let i = 1; i < line.length; i += 1) {
+    const [ax, ay] = toLocal(p, line[i - 1]);
+    const [bx, by] = toLocal(p, line[i]);
+    const vx = bx - ax;
+    const vy = by - ay;
+    const len2 = vx * vx + vy * vy;
+    const t = len2 > 0 ? Math.max(0, Math.min(1, -(ax * vx + ay * vy) / len2)) : 0;
+    best = Math.min(best, Math.hypot(ax + t * vx, ay + t * vy));
+  }
+  return best;
+}
+
+/**
+ * The seeded delay from ignition to dispatch for a new fire (response/report.ts), from how
+ * remote its origin is: the nearest occupied home (a developed cell of the landscape, or a
+ * zone dense enough to be suburban that contains it), whether terrain hides the fire from it,
+ * the nearest known road (the board's evacuation route lines: drill roads, a partial network),
+ * and the time of day.
+ */
 function reportFor(board: Board, fire: Fire, structure: boolean): { reportAt: number; report: ReportDelay } {
+  const grid = board.env.landscape;
   const zone = zoneAt(board, fire.origin);
-  let peoplePerSqMi = 0;
+  let denseZone = false;
   if (zone) {
     // Shoelace area of the zone ring in local metres.
     const pts = zone.ring.map((p) => toLocal(zone.core, p));
     let twice = 0;
     for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) twice += pts[j][0] * pts[i][1] - pts[i][0] * pts[j][1];
     const sqMi = Math.abs(twice) / 2 / SQ_M_PER_SQ_MI;
-    peoplePerSqMi = sqMi > 0 ? (zone.households * PERSONS_PER_HOUSEHOLD) / sqMi : 0;
+    denseZone = sqMi > 0 && (zone.households * PERSONS_PER_HOUSEHOLD) / sqMi >= SUBURBAN_MIN_PEOPLE_PER_SQ_MI;
+  }
+  const home = denseZone ? { meters: 0, at: fire.origin } : nearestDeveloped(grid, fire.origin);
+  const homeInSight = home ? lineOfSight(grid, fire.origin, home.at) : true;
+  let road = Infinity;
+  for (const options of board.routes.values()) for (const o of options) if (o.line.length > 1) road = Math.min(road, toPolylineM(fire.origin, o.line));
+  let householdsInView = 0;
+  for (const z of board.zones) {
+    if (z.households > 0 && distanceM(z.core, fire.origin) <= VIEW_RADIUS_M && lineOfSight(grid, fire.origin, z.core)) householdsInView += z.households;
   }
   const report = reportDelay(board.response.rng, {
     ignitionEpochMs: board.response.startEpochMs + fire.ignitedAt * 60_000,
     location: fire.origin,
-    peoplePerSqMi,
+    nearestHomeM: home?.meters ?? null,
+    homeInSight,
+    nearestRoadM: Number.isFinite(road) ? road : null,
+    householdsInView,
     developed: structure,
     wildland: !structure,
     alreadyReported: fire.source === "field_report",
@@ -1466,14 +1511,20 @@ export function wallClock(board: Board, minute: number): string {
   );
 }
 
+/** "Reported after 34 min — 4 km from the nearest home, at night", or null before the report. */
+export function reportText(board: Board, fire: Fire): string | null {
+  const fr = board.response.fires.get(fire.id);
+  if (!fr || board.minute < fr.reportAt) return null;
+  return `Reported after ${Math.round(fr.reportAt - fire.ignitedAt)} min — ${fr.report.reason}.`;
+}
+
 /** "Started 14:02 · reported 14:11 · first engine 14:24" (only what has happened). */
 export function fireTimeline(board: Board, fire: Fire): string {
   const fr = board.response.fires.get(fire.id);
   const parts = [`Started ${wallClock(board, fire.ignitedAt)}`];
   if (fr) {
     if (board.minute >= fr.reportAt) {
-      const by = fr.report.by === "camera" ? " by AI camera" : fr.report.by === "field_report" ? " by field report" : "";
-      parts.push(`reported ${wallClock(board, fr.reportAt)}${by}`);
+      parts.push(`reported ${wallClock(board, fr.reportAt)}`);
     } else parts.push("not reported yet");
     if (fr.firstEngineAt !== null) parts.push(`first engine ${wallClock(board, fr.firstEngineAt)}`);
     else if (fr.firstArrivalAt !== null) parts.push(`first unit ${wallClock(board, fr.firstArrivalAt)}`);
