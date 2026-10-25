@@ -60,6 +60,7 @@ const LAYER_LABEL: Record<LayerKey, string> = {
   shelters: "Shelters",
   people: "People",
   noTruck: "Roads trucks can't use",
+  stations: "Fire stations",
 };
 type LeftTab = "reports" | "board";
 const LEFT_TABS: SegmentedOption<LeftTab>[] = [
@@ -226,6 +227,7 @@ export default function LiveCommandPage() {
     shelters: true,
     people: true,
     noTruck: false,
+    stations: true,
   });
   // A different incident: drop the selection and per-incident panels (the polls restart themselves).
   useEffect(() => {

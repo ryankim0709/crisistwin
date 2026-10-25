@@ -1,3 +1,4 @@
+import { attachStations } from "../maps/stations";
 import {
   LngLatBounds,
   Map as MapLibreMap,
@@ -54,9 +55,10 @@ export const MAP_COLOR = {
   ink: "#0F1720",
 };
 
-export type LayerKey = "zones" | "fire" | "reports" | "roads" | "shelters" | "people" | "noTruck";
-export const LAYER_KEYS: LayerKey[] = ["zones", "fire", "reports", "roads", "shelters", "people", "noTruck"];
+export type LayerKey = "zones" | "fire" | "reports" | "roads" | "shelters" | "people" | "noTruck" | "stations";
+export const LAYER_KEYS: LayerKey[] = ["zones", "fire", "reports", "roads", "shelters", "people", "noTruck", "stations"];
 const LAYER_IDS: Record<LayerKey, string[]> = {
+  stations: [],
   zones: ["lc-zones-fill", "lc-zones-line", "lc-zone-labels"],
   fire: ["lc-fire-fill", "lc-fire-hatch", "lc-fire-casing", "lc-fire-line", "lc-fire-obs", "lc-fire-label"],
   reports: ["lc-ground", "lc-ground-count", "lc-points", "lc-help-casing", "lc-help", "lc-responders"],
@@ -606,6 +608,7 @@ export const EXTRA_LAYERS_BEFORE_ID = "lc-dest";
 export default function CommandMap({ data, twin, people = null, items, selected, focus, layers, impact, taskRoute, onSelect, onMapReady, interceptClick }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
+  const stationsRef = useRef<ReturnType<typeof attachStations> | null>(null);
   const dataRef = useRef<CommandResponse | null>(data);
   const onSelectRef = useRef(onSelect);
   const onMapReadyRef = useRef(onMapReady);
@@ -642,6 +645,7 @@ export default function CommandMap({ data, twin, people = null, items, selected,
       map.on("load", () => {
         if (!map) return;
         installLayers(map);
+        stationsRef.current = attachStations(map);
         // People sit above roads and traffic but under extra (board) layers, labels and markers.
         peopleLayer.current = attachPeopleLayer(map, EXTRA_LAYERS_BEFORE_ID);
         const cleanup = onMapReadyRef.current?.(map);
@@ -694,6 +698,8 @@ export default function CommandMap({ data, twin, people = null, items, selected,
       readyCleanup.current = null;
       peopleLayer.current?.dispose();
       peopleLayer.current = null;
+      stationsRef.current?.dispose();
+      stationsRef.current = null;
       labelRef.current?.remove();
       map?.remove();
       mapRef.current = null;
@@ -752,6 +758,7 @@ export default function CommandMap({ data, twin, people = null, items, selected,
     const map = mapRef.current;
     if (!ready || !map) return;
     peopleLayer.current?.setVisible(layers.people);
+    stationsRef.current?.setVisible(layers.stations);
     for (const key of LAYER_KEYS) {
       for (const id of LAYER_IDS[key]) {
         if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", layers[key] ? "visible" : "none");
