@@ -19,6 +19,7 @@ struct HomeView: View {
                     VStack(alignment: .leading, spacing: 16) {
                         header
                         HomeStatusHero()
+                        HomeAddressPanel()
                         content
                         HomePlanTiles()
                         Color.clear.frame(height: 1).id("home-bottom")
@@ -88,7 +89,8 @@ struct HomeView: View {
     /// Under the hero, only while the phone knows its zone: the order and its way out, check-ins,
     /// pending questions, nearby facts, changes and the family. The hero covers every other state.
     @ViewBuilder private var content: some View {
-        if location.isAuthorized, store.situation != nil, location.lastLocation != nil, store.myZone != nil {
+        if store.home != nil || (location.isAuthorized && location.lastLocation != nil),
+           store.situation != nil, store.myZone != nil {
             if let guidance = store.activeGuidance {
                 Slab(
                     guidance: guidance,
