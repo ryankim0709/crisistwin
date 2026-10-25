@@ -33,7 +33,8 @@ from typing import Any
 
 from .drill import Drill
 from .geo import LonLat, haversine_m
-from .road_attrs import RoadAttrs
+from . import apparatus_travel as travel
+from .road_attrs import GRADE_MEDIAN_HALF_M, GRADE_WINDOW_M, RoadAttrs
 
 log = logging.getLogger(__name__)
 
@@ -108,6 +109,9 @@ class EdgeAccess:
     """Grade the rules used (None: unknown, 0% assumed)."""
     unpaved: bool = False
     """The way's surface (tag or class default) is unpaved."""
+    travel: travel.EdgeTravel | None = None
+    """Drive-time breakdown of the edge for the class (``livecore.apparatus_travel``); ``speed_kph``
+    is then the effective speed ``length / travel.seconds``. None when not passable."""
 
 
 @dataclass(frozen=True)
@@ -160,6 +164,13 @@ def access_profile(drill: Drill, vehicle: str = DEFAULT_CLASS, attrs: RoadAttrs 
     if loaded is None:
         return None
     data, road_access = loaded
+    elevation = attrs.elevation if attrs is not None else None
+    geoms, junctions = _drill_geometry(drill, data, elevation)
+    perf = travel.performance(data, vehicle)
+    curves = travel.curve_params(data)
+    tv = data["road_access"]["travel"]
+    caution_kmh = float(tv["junction_caution_speed_kmh"]["value"])
+    dwell_s = float(tv["junction_stop_dwell_s"]["value"])
     edges: dict[str, EdgeAccess] = {}
     tagged = False
     seg_tags = attrs.tags if attrs is not None else {}
@@ -178,18 +189,77 @@ def access_profile(drill: Drill, vehicle: str = DEFAULT_CLASS, attrs: RoadAttrs 
         grade = seg_grade.get(edge.segment_id)
         result = road_access(data, tags, grade or 0.0, vehicle)
         notes = result.get("notes") or []
-        edges[eid] = EdgeAccess(bool(result["passable"]), result.get("speed_kph"), str(result["rule"]),
+        speed = None
+        edge_travel = None
+        if result["passable"]:
+            # Level speed: the rules at grade 0 (posted/OSM speed, class cap, unpaved and single-lane
+            # factors); the grade model below replaces the rules' step grade penalty. road_access
+            # returns ``speed_kmh`` (before 2026-10-24 this read ``speed_kph`` and never applied it).
+            level_kmh = float(road_access(data, tags, 0.0, vehicle)["speed_kmh"])
+            edge_travel = travel.edge_travel(perf, curves, geoms[eid], level_kmh, tags["highway"],
+                                             junctions.get(eid, "none"), caution_kmh, dwell_s)
+            speed = (edge.length_m / edge_travel.seconds * travel.KMH_PER_MS if edge_travel.seconds > 0
+                     else level_kmh)
+        edges[eid] = EdgeAccess(bool(result["passable"]), speed, str(result["rule"]),
                                 str(notes[-1]) if notes else str(result["rule"]), grade,
-                                _surface_unpaved(data, tags))
+                                _surface_unpaved(data, tags), edge_travel)
     if attrs is not None and attrs.basis:
         basis = attrs.basis
     else:
         basis = BASIS_TAGGED if tagged else BASIS_HIGHWAY_ONLY
+    basis += "; " + (TRAVEL_BASIS if elevation is not None else TRAVEL_BASIS_FLAT)
     profile = AccessProfile(vehicle, class_label(vehicle), edges, basis)
     if len(_profiles) > 16:
         _profiles.clear()
     _profiles[key] = (drill, profile, attrs)
     return profile
+
+
+TRAVEL_BASIS = (
+    "drive time: level speed (OSM/posted speed under the class cap, NFPA 1901 top speed) slowed by "
+    "AASHTO curve speeds from the road geometry, a point-mass truck model on the signed DEM grade "
+    "(Rakha et al. 2001 constants, class power and GVWR) and junction stops/slow-downs "
+    "(livecore.apparatus_travel)"
+)
+TRAVEL_BASIS_FLAT = TRAVEL_BASIS.replace("on the signed DEM grade", "on flat ground (no DEM here: grade 0% ASSUMED)")
+
+_geometry_cache: dict[tuple[int, int], tuple[Drill, object, dict, dict]] = {}
+
+
+def _drill_geometry(drill: Drill, data: dict, elevation) -> tuple[dict[str, travel.EdgeGeometry], dict[str, str]]:
+    """Class-independent per-edge samples and junction kinds, cached per drill and DEM."""
+    key = (id(drill), id(elevation))
+    hit = _geometry_cache.get(key)
+    if hit is not None and hit[0] is drill and hit[1] is elevation:
+        return hit[2], hit[3]
+    tv = data["road_access"]["travel"]
+    step_m = float(tv["profile_step_m"]["value"])
+    half_chord_m = float(tv["curve_min_half_chord_m"]["value"])
+    roads = drill.roads
+    geoms: dict[str, travel.EdgeGeometry] = {}
+    for seg, eids in roads.segment_edges.items():
+        first = roads.edges[eids[0]]
+        g = travel.edge_geometry(first.coords, step_m, half_chord_m, elevation, GRADE_MEDIAN_HALF_M, GRADE_WINDOW_M)
+        geoms[first.id] = g
+        for other in eids[1:]:
+            oc = roads.edges[other].coords
+            same = oc[0] == first.coords[0] and oc[-1] == first.coords[-1]
+            geoms[other] = g if same else travel.reversed_geometry(g)
+    # Junction kind at each edge's end node: the other road segments meeting there.
+    at_node: dict[str, dict[str, tuple[str, str, str | None, float]]] = {}
+    for e in roads.edges.values():
+        hw = normalise_highway(e.highway)
+        at_node.setdefault(e.from_node, {})[e.segment_id] = (
+            e.segment_id, hw, e.name, travel.heading_deg(e.coords[0], e.coords[1]))
+    junctions: dict[str, str] = {}
+    for e in roads.edges.values():
+        others = list(at_node.get(e.to_node, {}).values())
+        heading = travel.heading_deg(e.coords[-2], e.coords[-1])
+        junctions[e.id] = travel.junction_kind(normalise_highway(e.highway), e.name, e.segment_id, heading, others)
+    if len(_geometry_cache) > 4:
+        _geometry_cache.clear()
+    _geometry_cache[key] = (drill, elevation, geoms, junctions)
+    return geoms, junctions
 
 
 def plain_reason(vehicle: str, acc: EdgeAccess, road: str | None = None) -> str:

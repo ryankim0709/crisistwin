@@ -485,7 +485,7 @@ function TeamDetail({ board, id, actions }: { board: Board; id: string; actions:
           { label: "Status", value: TEAM_STATUS[team.status] },
           { label: "Fire", value: team.fireId ?? "None" },
           { label: "Type", value: kindLabel(team.kind) },
-          { label: "Home base", value: station ? `${station.name}${station.type === "synthetic" ? " (synthetic)" : ""}` : "None" },
+          { label: "Home base", value: station ? (station.label ?? `${station.name}${station.type === "synthetic" ? " (synthetic)" : ""}`) : "None" },
           { label: "Department", value: `${board.response.departments.find((d) => d.id === team.department)?.name ?? team.department} (${TIER_LABEL[team.tier] ?? team.tier})` },
           ...(team.coverStation
             ? [{ label: "Covering", value: board.stations.find((s) => s.id === team.coverStation)?.name ?? team.coverStation }]

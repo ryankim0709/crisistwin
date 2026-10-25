@@ -146,6 +146,20 @@ export const MAX_ACTIVE_CROWN_RATE_METERS_PER_MINUTE = 100;
  */
 export const TEN_METER_WIND_PER_TWENTY_FOOT_WIND = 1.15;
 
+/**
+ * Share of the 20-foot open wind FARSITE vectors with slope to get the DIRECTION of an
+ * active crown fire, dimensionless. Finney (1998, revised 2004, RMRS-RP-4 p. 6): the surface
+ * fire's wind and slope components "are highly dependent on characteristics of the surface
+ * fuel bed and thus not necessarily applicable to determining the spread direction of active
+ * crown fires", so FARSITE resolves the crown direction from "the wind-slope vector ...
+ * calculated from these slope and wind coefficients (wind reduction factor of 0.4)", i.e.
+ * the Rothermel wind and slope factors at 0.4 of the open wind instead of the sheltered
+ * midflame wind. FARSITE evaluates those factors on fuel model 10, the bed its crown rate is
+ * built on; this model's crown rate (Cruz et al. 2005) uses no surface bed, so SUBSTITUTION:
+ * the cell's own fuel bed supplies the factors.
+ */
+export const CROWN_DIRECTION_WIND_REDUCTION_FACTOR = 0.4;
+
 /** A stand shorter than this does not shelter the fuel bed beneath it, feet. */
 export const MIN_SHELTERING_CANOPY_HEIGHT_FEET = 6;
 /** Albini & Baughman's sheltered branch applies above this canopy cover (FARSITE's rule). */
@@ -289,46 +303,66 @@ export function windAdjustmentFactor(canopy: CanopyCell, fuelBedDepthFeet: numbe
 }
 
 /**
+ * What kind of canopy a cell's crowns are, for the one place it matters: whether the Cruz,
+ * Alexander & Wakimoto (2005) active crown rate may be applied at all.
+ *
+ * "conifer": the canopy Cruz et al. (2005) were fitted to. The paper is "Development and
+ * testing of models for predicting crown fire rate of spread in conifer forest stands", and
+ * its crown fires were all in conifer stands. Van Wagner's (1977) initiation and critical
+ * mass flow criteria were also derived for conifers.
+ *
+ * "broadleaf": oak, bay, madrone, eucalyptus and other hardwood crowns. No crown fire rate
+ * model in this module was fitted to them, and the operational system that types fuels by
+ * overstory runs no active crown fire through them either: the Canadian Forest Fire
+ * Behavior Prediction System (Forestry Canada Fire Danger Group 1992, ST-X-3) has no
+ * crowning deciduous fuel type (D-1, leafless aspen, is a surface fuel type, and the
+ * mixedwoods M-1/M-2 spread their hardwood share at the D-1 rate). So a broadleaf canopy may
+ * still torch, a passive crown fire that ignites from the cell's own surface fire exactly as
+ * for conifers and still counts for control-line breaching, intensity and the plume, but it
+ * never goes active, and its passive fire spreads at the surface rate. That is FARSITE's rule
+ * for every passive crown fire: "The spread rate of a passive crown fire is assumed equal to
+ * that of the surface fire" (Finney 1998, revised 2004, RMRS-RP-4 p. 10).
+ *
+ * ASSUMPTION, LEFT VISIBLE. The canopy layers this model loads (LANDFIRE CBH, CBD, cover,
+ * height) carry no species, and LANDFIRE's existing vegetation type (EVT) is not loaded, so
+ * the canopy type is read off the surface fuel model beneath it. Scott & Burgan (2005,
+ * RMRS-GTR-153) name three timber-litter models as broadleaf: TL2 (182) "low load broadleaf
+ * litter", TL6 (186) "moderate load broadleaf litter" and TL9 (189) "very high load
+ * broadleaf litter". Every other fuel model under a canopy is treated as conifer, as before,
+ * including the timber-understory TU models, whose descriptions do not name the overstory.
+ * The proxy misclassifies a conifer stand over broadleaf litter and the reverse, and it holds
+ * eucalyptus, which crowns more readily than other hardwoods, to torching.
+ */
+export type CanopyType = "conifer" | "broadleaf";
+
+/** FBFM40 codes whose Scott & Burgan (2005) name is a broadleaf litter: TL2, TL6, TL9. */
+export const BROADLEAF_LITTER_FUEL_CODES: ReadonlySet<number> = new Set([182, 186, 189]);
+
+/** The canopy type assumed above a cell of this fuel model (see `CanopyType`). */
+export function canopyTypeForFuel(fuelCode: number): CanopyType {
+  return BROADLEAF_LITTER_FUEL_CODES.has(fuelCode) ? "broadleaf" : "conifer";
+}
+
+/**
  * Decide the fire type for one cell and return the rate to propagate with.
  *
  * `surfaceFirelineIntensityKwPerM` must already be metric; `rothermel.ts` reports
  * Btu/ft/s and `spread.ts` multiplies by 3.4613 at the call. `openWindSpeedMph` is the
  * 20-foot open wind. `fineFuelMoistureFraction` is the dead 1-hour moisture as a fraction
  * (0.06 is 6 percent).
- */
-/**
- * Whether this canopy can carry an active crown fire that is already burning into it.
  *
- * This is Van Wagner's critical mass flow criterion on its own, with no reference to the
- * cell's own surface fireline intensity. It answers a different question from
- * `criticalSurfaceIntensityKwPerM`: that one asks whether a SURFACE fire here is intense
- * enough to climb into the crowns, while this asks whether the canopy is dense enough to
- * sustain a crown fire that started somewhere else. An established crown fire carries
- * itself through continuous canopy, so requiring every cell to re-initiate from its own
- * sheltered surface fire understates forest spread badly — the under-prediction Cruz &
- * Alexander (2010) identify in linked Rothermel/Van Wagner models.
+ * Crown fire comes only from THIS cell's own surface fire. Below Van Wagner's (1977)
+ * critical intensity the cell is a surface fire, however dense its canopy and whatever is
+ * burning next to it. A canopy that could carry an active crown fire but whose surface fire
+ * cannot ignite it is Scott & Reinhardt's (2001) "conditional" crown fire, and here it burns
+ * as a surface fire. FlamMap and FARSITE do the same: Scott (2006, RMRS-RP-58 p. 18) says "All
+ * other systems [other than NEXUS] classify that situation as a surface fire", and FARSITE
+ * evaluates crown fire at a perimeter vertex only "if (actual surface intensity >= Io)"
+ * (Finney 1998, revised 2004, RMRS-RP-4 pp. 10 and 20). Only NEXUS lets a conditional crown
+ * fire run as active when fire "enters the stand as a passive or active crown fire" (Scott
+ * 2006 p. 14). This model used to do that, and it let a crown run started in one stand carry
+ * on through kilometres of oak and bay whose own surface fire was a fifth of I_0.
  */
-export function canSustainActiveCrown(
-  canopy: CanopyCell,
-  openWindSpeedMph: number,
-  fineFuelMoistureFraction: number,
-): boolean {
-  if (
-    canopy.heightMeters <= 0 ||
-    canopy.coverFraction < MIN_CROWN_COVER_FRACTION ||
-    canopy.bulkDensityKgPerM3 < MIN_CROWN_BULK_DENSITY_KG_PER_M3
-  ) {
-    return false;
-  }
-  const activeRate = activeCrownRateMetersPerMinute(
-    openWindSpeedMph,
-    canopy.bulkDensityKgPerM3,
-    fineFuelMoistureFraction,
-  );
-  const criticalRate = criticalActiveCrownRateMetersPerMinute(canopy.bulkDensityKgPerM3);
-  return criticalRate > 0 && activeRate / criticalRate >= ACTIVE_CROWN_RATIO_THRESHOLD;
-}
-
 export function crownFireBehaviour(
   surfaceRateMetersPerMinute: number,
   surfaceFirelineIntensityKwPerM: number,
@@ -336,6 +370,7 @@ export function crownFireBehaviour(
   openWindSpeedMph: number,
   fineFuelMoistureFraction: number,
   foliarMoistureFraction: number = DEFAULT_FOLIAR_MOISTURE_FRACTION,
+  canopyType: CanopyType = "conifer",
 ): CrownFireResult {
   const surfaceRate = Math.max(surfaceRateMetersPerMinute, 0);
   const surfaceIntensity = Math.max(surfaceFirelineIntensityKwPerM, 0);
@@ -379,6 +414,28 @@ export function crownFireBehaviour(
   // Below it the canopy never ignites, however dense it is.
   if (surfaceIntensity < criticalIntensity) return noCrown(criticalIntensity, activeRatio);
 
+  // Where this fire sits between torching onset and the critical crown rate (see the
+  // passive branch below for the construction and its sources).
+  const initiationRateMetersPerMinute = (surfaceRate * criticalIntensity) / surfaceIntensity;
+  const span = criticalCrownRate - initiationRateMetersPerMinute;
+  const rampFraction =
+    Number.isFinite(span) && span > 0
+      ? clamp((surfaceRate - initiationRateMetersPerMinute) / span, 0, 1)
+      : 1;
+
+  // Broadleaf canopy (see `CanopyType`): torching at most, spreading at the surface rate.
+  if (canopyType === "broadleaf") {
+    return {
+      type: "passive",
+      rateMetersPerMinute: surfaceRate,
+      surfaceRateMetersPerMinute: surfaceRate,
+      criticalSurfaceIntensityKwPerM: criticalIntensity,
+      surfaceIntensityKwPerM: surfaceIntensity,
+      activeRatio,
+      crownFractionBurned: rampFraction,
+    };
+  }
+
   // Scott & Reinhardt classify on the two ratios and nothing else. Once the canopy has
   // ignited and the mass flow criterion is met the fire is active and the crown fraction
   // burned is 1 by definition — it is NOT gated on the surface fire also being fast,
@@ -408,12 +465,7 @@ export function crownFireBehaviour(
   // quantity the active test uses. The linear ramp is Scott & Reinhardt's own stated
   // assumption rather than a measured relationship, and torching fires really are only
   // modestly faster than the surface fire beneath them, which is what this produces.
-  const initiationRateMetersPerMinute = (surfaceRate * criticalIntensity) / surfaceIntensity;
-  const span = criticalCrownRate - initiationRateMetersPerMinute;
-  const crownFractionBurned =
-    Number.isFinite(span) && span > 0
-      ? clamp((surfaceRate - initiationRateMetersPerMinute) / span, 0, 1)
-      : 1;
+  const crownFractionBurned = rampFraction;
   const blendedRate = surfaceRate + crownFractionBurned * (activeRate - surfaceRate);
 
   return {

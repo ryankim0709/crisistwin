@@ -23,7 +23,7 @@
  * yet reported (simulated), and the report itself is one line with the time and how it came in.
  */
 
-import type { DemoOrder } from "../demo/contracts";
+import { isLiveOrder, type CommanderOrder, type DemoOrder } from "../demo/contracts";
 import { nf, simClock } from "../demo/format";
 import { zoneCounts, zoneOrderStatus, zonePeople, type Board, type BoardEvent, type BoardEventRefs } from "../demo/model";
 import { REPORT_BY_LABEL, isReported } from "../demo/boardResponse";
@@ -447,6 +447,9 @@ function renderGroup(ctx: Ctx, g: Group): Rendered {
           boardRef: teamRef ?? fireRef,
         };
       }
+      if (mode === "indirect") {
+        return quiet(`${units} holding the road they parked on as indirect line: too far to reach ${fireLabel(ctx, fireId)}'s edge in time.`, "in_progress", teamRef ?? fireRef);
+      }
       const verb = mode === "dozer" ? "walking the dozer in to" : "parked, hiking in to build line at";
       return quiet(`${units} ${verb} ${fireLabel(ctx, fireId)}.`, "in_progress", teamRef ?? fireRef);
     }
@@ -730,7 +733,12 @@ function strategyShort(ctx: Ctx, o: Extract<DemoOrder, { type: "set_strategy" }>
   return `chose ${where}${same ? ` (model: ${same.predictionText})` : ""}`;
 }
 
-function orderShort(ctx: Ctx, o: DemoOrder): string {
+function orderShort(ctx: Ctx, o: CommanderOrder): string {
+  if (o.type === "send_rescue") return `send a responder to help request ${o.help_id}`;
+  if (o.type === "close_road") return `close road ${o.road_id} (live drill)`;
+  if (o.type === "reopen_road") return `reopen road ${o.road_id} (live drill)`;
+  if (o.type === "confirm_report") return `confirm report ${o.report_id}`;
+  if (o.type === "dismiss_report") return `dismiss report ${o.report_id}`;
   if (o.type === "set_strategy") return strategyShort(ctx, o);
   if (o.type === "send_crew") return `send ${unitLabel(ctx, o.crew_id)} → ${fireLabel(ctx, o.fire_id)}${o.position_id ? ` ${o.position_id}` : ""}`;
   if (o.type === "release_crew") return `release ${unitLabel(ctx, o.crew_id)}`;
@@ -740,13 +748,16 @@ function orderShort(ctx: Ctx, o: DemoOrder): string {
   return `evacuate ${zoneName(ctx, o.zone_id)} → ${ctx.name(o.destination_id)}${at}`;
 }
 
-function orderRef(o: DemoOrder): FeedBoardRef {
+function orderRef(o: CommanderOrder): FeedBoardRef | null {
+  // Live drill actions name live records (help requests, roads, reports), not board items.
+  if (isLiveOrder(o)) return null;
   if (o.type === "send_crew" || o.type === "order_resources" || o.type === "set_strategy") return { kind: "fire", id: o.fire_id };
   if (o.type === "release_crew") return { kind: "team", id: o.crew_id };
   return { kind: "zone", id: o.zone_id };
 }
 
-function orderIds(o: DemoOrder): string[] {
+function orderIds(o: CommanderOrder): string[] {
+  if (isLiveOrder(o)) return [];
   if (o.type === "send_crew") return [o.crew_id, o.fire_id];
   if (o.type === "release_crew") return [o.crew_id];
   if (o.type === "order_resources" || o.type === "set_strategy") return [o.fire_id];

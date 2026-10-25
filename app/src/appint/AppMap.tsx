@@ -12,6 +12,7 @@ import {
 } from "maplibre-gl";
 import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import "maplibre-gl/dist/maplibre-gl.css";
+import { attachStations } from "../maps/stations";
 import { useEffect, useRef, useState } from "react";
 import { labelPoint, shortZoneName } from "../live/format";
 import { SATELLITE_STYLE, fireHatch } from "../live/mapStyle";
@@ -22,13 +23,14 @@ import type { Participant } from "./types";
 
 setWorkerUrl(workerUrl);
 
-export type MapLayerKey = "app" | "people" | "zones" | "fire" | "closures";
+export type MapLayerKey = "app" | "people" | "zones" | "fire" | "closures" | "stations";
 
 const LAYERS: Record<Exclude<MapLayerKey, "people">, string[]> = {
   app: ["aix-app", "aix-app-label"],
   zones: ["aix-zones-fill", "aix-zones-line", "aix-zone-labels", "aix-route-casing", "aix-route"],
   fire: ["aix-fire-fill", "aix-fire-hatch", "aix-fire-line", "aix-fire-label"],
   closures: ["aix-closures-casing", "aix-closures"],
+  stations: [],
 };
 const SOURCES = ["aix-zones", "aix-zone-labels", "aix-fire", "aix-fire-label", "aix-route", "aix-closures", "aix-app"];
 
@@ -191,6 +193,7 @@ interface MapProps {
 export default function AppMap({ data, people, participants, selectedId, layers, onSelect }: MapProps) {
   const container = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
+  const stationsRef = useRef<ReturnType<typeof attachStations> | null>(null);
   const peopleLayer = useRef<PeopleLayer | null>(null);
   const onSelectRef = useRef(onSelect);
   const fitted = useRef(false);
@@ -213,6 +216,7 @@ export default function AppMap({ data, people, participants, selectedId, layers,
     map.addControl(new NavigationControl({ showCompass: false }), "top-right");
     map.addControl(new ScaleControl({ unit: "metric" }), "bottom-right");
     map.on("load", () => {
+      stationsRef.current = attachStations(map);
       installLayers(map);
       // Everyone else sits under the closures, labels and our dots.
       peopleLayer.current = attachPeopleLayer(map, "aix-closures-casing");
@@ -232,6 +236,8 @@ export default function AppMap({ data, people, participants, selectedId, layers,
       peopleLayer.current?.dispose();
       peopleLayer.current = null;
       popup.remove();
+      stationsRef.current?.dispose();
+      stationsRef.current = null;
       map.remove();
       mapRef.current = null;
       setReady(false);
@@ -266,6 +272,7 @@ export default function AppMap({ data, people, participants, selectedId, layers,
       for (const id of ids) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", layers[key] ? "visible" : "none");
     }
     peopleLayer.current?.setVisible(layers.people);
+    stationsRef.current?.setVisible(layers.stations);
   }, [ready, layers]);
 
   // Pan to a selected person who is off screen.

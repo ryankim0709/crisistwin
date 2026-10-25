@@ -9,8 +9,11 @@ import {
   formatElapsed,
 } from "../fire/spread";
 import WindSourcePicker from "../fire/ui/WindSourcePicker";
+import HorizonControl from "../fire/ui/HorizonControl";
 import NaturalVariationControl, { observedGustFactor } from "../fire/ui/NaturalVariationControl";
 import { weatherSeriesFromRecord, type ScenarioWindRecord } from "../fire/scenarioWeather";
+import { weatherAtMinute, withMoistureFromSeries } from "../fire/weatherSeries";
+import { weatherSeriesFromConditions, type Conditions } from "../world/conditions";
 import type { FireSettings, IgnitionProblem } from "../fire/scheduledTypes";
 import { Button, EmptyState, Field, IconButton, Notice, Panel } from "../ui";
 import {
@@ -18,7 +21,7 @@ import {
   MAX_REPORT_MINUTE,
   MAX_WIND_SPEED_MPH,
   MIN_WIND_SPEED_MPH,
-  STUDIO_HORIZON_CHOICES,
+  studioDisplayStepMinutes,
   type ConfigPanelProps,
   type MapMode,
   type RunPhase,
@@ -89,6 +92,7 @@ export default function ConfigPanel(props: ConfigPanelProps) {
     onScenarioChange,
     onRun,
     randomScenario,
+    quickSetup,
     onCancel,
     onClear,
     onExport,
@@ -101,6 +105,22 @@ export default function ConfigPanel(props: ConfigPanelProps) {
   } = props;
 
   const uid = useId();
+  const modeKey = `crisistwin.studio.setupMode.${typeof window === "undefined" ? "" : window.location.pathname}`;
+  const [custom, setCustomState] = useState(() => {
+    try {
+      return window.localStorage.getItem(modeKey) === "custom";
+    } catch {
+      return false;
+    }
+  });
+  function setCustom(next: boolean) {
+    setCustomState(next);
+    try {
+      window.localStorage.setItem(modeKey, next ? "custom" : "quick");
+    } catch {
+      /* the choice just is not remembered */
+    }
+  }
   const [importText, setImportText] = useState("");
   const [importIssues, setImportIssues] = useState<ScenarioIssue[]>([]);
 
@@ -128,6 +148,8 @@ export default function ConfigPanel(props: ConfigPanelProps) {
   const midflameIsDefault =
     Math.abs(settings.midflameAdjustment - DEFAULT_MIDFLAME_ADJUSTMENT) < MIDFLAME_DEFAULT_EPSILON;
 
+  const moistureFromWeather =
+    settings.weatherSeries?.enabled === true && settings.weatherSeries.samples.some((s) => s.moisture);
   const matchedPreset = MOISTURE_PRESETS.find((preset) =>
     MOISTURE_KEYS.every(
       (key) => Math.abs(preset.moisture[key] - settings.moisture[key]) < MOISTURE_MATCH_EPSILON,
@@ -146,7 +168,7 @@ export default function ConfigPanel(props: ConfigPanelProps) {
   }
 
   const firstFire = ignitions.find((ignition) => ignition.enabled) ?? ignitions[0] ?? null;
-  function applyWeather(record: ScenarioWindRecord | null) {
+  function applyWeather(record: ScenarioWindRecord | null, conditions?: Conditions | null) {
     const withoutSeries = settingsWithoutSeries(settings);
     if (record === null) {
       const { weather: _dropped, ...withoutWeather } = scenario;
@@ -156,12 +178,21 @@ export default function ConfigPanel(props: ConfigPanelProps) {
     const gust = observedGustFactor(record);
     // The whole hourly series runs inside the solve; the wind fields hold its peak hour.
     const converted = weatherSeriesFromRecord(record);
+    // Fuel moisture from the same date's weather (/api/conditions), hour by hour, instead of
+    // whatever preset was set: a historical day runs at that day's moisture, not Red Flag.
+    const moistureSeries = conditions
+      ? weatherSeriesFromConditions(conditions, record.query.startUtc)?.series ?? null
+      : null;
+    const series =
+      converted && moistureSeries ? withMoistureFromSeries(converted.series, moistureSeries) : converted?.series;
+    const startMoisture = moistureSeries ? weatherAtMinute(moistureSeries, 0).moisture : null;
     onScenarioChange({
       ...scenario,
       weather: record,
       settings: {
         ...withoutSeries,
-        ...(converted ? { weatherSeries: converted.series } : {}),
+        ...(series ? { weatherSeries: series } : {}),
+        ...(startMoisture ? { moisture: startMoisture } : {}),
         ...(settings.stochastic ? { stochastic: { ...settings.stochastic, gustFactor: gust } } : {}),
         windSpeedMph: record.applied.speed20ftMph,
         windFromDegrees: record.applied.fromDeg,
@@ -258,6 +289,31 @@ export default function ConfigPanel(props: ConfigPanelProps) {
     >
       <div className="studio-panel-body">
         <p className="studio-hint">User assumptions, not observed data or a forecast.</p>
+
+        <div className="studio-row" role="group" aria-label="Setup style">
+          <Button size="sm" variant={custom ? "secondary" : "primary"} aria-pressed={!custom} onClick={() => setCustom(false)}>
+            Quick setup
+          </Button>
+          <Button size="sm" variant={custom ? "primary" : "secondary"} aria-pressed={custom} onClick={() => setCustom(true)}>
+            Custom
+          </Button>
+        </div>
+
+        {!custom && (
+          <>
+            {quickSetup}
+            <div className="studio-field">
+              <HorizonControl
+                value={horizon}
+                onChange={(minutes) => setSettings({ horizonMinutes: minutes })}
+                frameStepMinutes={studioDisplayStepMinutes(horizon)}
+              />
+            </div>
+          </>
+        )}
+
+        {custom && (
+        <>
 
         <section className="studio-section" aria-labelledby={`${uid}-ign`}>
           <div className="studio-section-head">
@@ -452,9 +508,22 @@ export default function ConfigPanel(props: ConfigPanelProps) {
           <h3 id={`${uid}-wx`} className="studio-subtitle">
             Conditions{" "}
             <span className="studio-subtitle-note">
-              {settings.weatherSeries?.enabled ? "wind hour by hour" : "constant for the run"}
+              {settings.weatherSeries?.enabled ? "wind changes hour by hour" : "one wind for the whole run"}
             </span>
           </h3>
+          <p className="studio-hint">
+            {settings.weatherSeries?.enabled
+              ? "The run follows real hourly weather: wind speed and direction change as it plays (see the wind strip on the playback bar). Moving the sliders switches back to one fixed wind."
+              : "Custom keeps the wind below fixed for the whole run. For wind that changes hour by hour, choose Historical and a weather day."}
+          </p>
+
+          <div className="studio-field">
+            <HorizonControl
+              value={horizon}
+              onChange={(minutes) => setSettings({ horizonMinutes: minutes })}
+              frameStepMinutes={studioDisplayStepMinutes(horizon)}
+            />
+          </div>
 
           <WindSourcePicker
             lon={firstFire?.location.longitude ?? null}
@@ -463,6 +532,7 @@ export default function ConfigPanel(props: ConfigPanelProps) {
             record={scenario.weather ?? null}
             onApply={applyWeather}
             usesSeries={settings.weatherSeries?.enabled === true}
+            moistureFromWeather={moistureFromWeather}
           />
 
           <Field label="Wind speed, mph (20-ft)">
@@ -523,44 +593,42 @@ export default function ConfigPanel(props: ConfigPanelProps) {
             </p>
           </div>
 
-          <div className="studio-grid-2">
-            <Field label="Fuel moisture">
-              <select
-                id={`${uid}-moisture`}
-                value={matchedPreset?.id ?? CUSTOM_MOISTURE_VALUE}
-                aria-describedby={`${uid}-moisture-note`}
-                onChange={(event) => {
-                  const preset = MOISTURE_PRESETS.find((item) => item.id === event.target.value);
-                  if (preset) setSettings({ moisture: { ...preset.moisture } });
-                }}
-              >
-                {!matchedPreset && <option value={CUSTOM_MOISTURE_VALUE}>Custom</option>}
-                {MOISTURE_PRESETS.map((preset) => (
-                  <option key={preset.id} value={preset.id}>
-                    {preset.label}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Horizon">
-              <select
-                id={`${uid}-horizon`}
-                value={horizon}
-                onChange={(event) => setSettings({ horizonMinutes: Number(event.target.value) })}
-              >
-                {!(STUDIO_HORIZON_CHOICES as readonly number[]).includes(horizon) && (
-                  <option value={horizon}>{horizon} min</option>
-                )}
-                {STUDIO_HORIZON_CHOICES.map((minutes) => (
-                  <option key={minutes} value={minutes}>
-                    {minutes / 60} h
-                  </option>
-                ))}
-              </select>
-            </Field>
-          </div>
+          <Field label="Fuel moisture">
+            <select
+              id={`${uid}-moisture`}
+              value={matchedPreset?.id ?? CUSTOM_MOISTURE_VALUE}
+              aria-describedby={`${uid}-moisture-note`}
+              onChange={(event) => {
+                const preset = MOISTURE_PRESETS.find((item) => item.id === event.target.value);
+                if (!preset) return;
+                // A preset holds for the whole run: drop the weather day's hourly moisture.
+                const series = settings.weatherSeries;
+                setSettings({
+                  moisture: { ...preset.moisture },
+                  ...(series
+                    ? { weatherSeries: { ...series, samples: series.samples.map(({ moisture: _m, ...rest }) => rest) } }
+                    : {}),
+                });
+              }}
+            >
+              {!matchedPreset && (
+                <option value={CUSTOM_MOISTURE_VALUE}>
+                  {moistureFromWeather ? "From the day's weather" : "Custom"}
+                </option>
+              )}
+              {MOISTURE_PRESETS.map((preset) => (
+                <option key={preset.id} value={preset.id}>
+                  {preset.label}
+                </option>
+              ))}
+            </select>
+          </Field>
           <p id={`${uid}-moisture-note`} className="studio-hint">
-            {matchedPreset ? matchedPreset.description : "Moisture values differ from every preset."}
+            {moistureFromWeather
+              ? "Changes hour by hour with the weather day. Picking a preset holds it fixed instead."
+              : matchedPreset
+                ? matchedPreset.description
+                : "Moisture values differ from every preset."}
           </p>
 
           <div className="studio-field">
@@ -766,6 +834,8 @@ export default function ConfigPanel(props: ConfigPanelProps) {
             A scenario file does not guarantee identical results later; source data can change.
           </p>
         </details>
+        </>
+        )}
       </div>
 
       <section className="studio-panel-foot" aria-label="Run">
@@ -789,7 +859,7 @@ export default function ConfigPanel(props: ConfigPanelProps) {
             </Button>
           )}
         </div>
-        {randomScenario}
+        {custom && randomScenario}
         <p className="studio-status" role="status">
           {statusLine}
         </p>

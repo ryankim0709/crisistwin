@@ -25,7 +25,7 @@ export interface PeopleZone extends PeopleCounts {
   population: number;
   vehicles: number;
   persons_per_vehicle: number;
-  basis: "acs" | "assumed";
+  basis: "acs" | "assumed" | "estimated";
 }
 
 /** `edges.rows`: [edge_index, moving, queued, stuck, reason, veh, speed_kph, max_wait_min, free_flow_kph, length_m, line]. */
@@ -62,6 +62,10 @@ export interface PeopleDestination {
   people: number;
   veh: number;
   last_10_min_people: number;
+  /** Studio only: people in zones ordered to this exit who have not yet arrived. */
+  heading_people?: number;
+  /** Studio only: the exit's route colour, as #rrggbb. */
+  color?: string;
 }
 
 /** GET /api/live/incidents/{id}/people (docs/twin-api.md "People snapshot"). Every value is simulated. */

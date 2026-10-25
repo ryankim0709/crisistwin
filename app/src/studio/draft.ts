@@ -9,10 +9,16 @@ import { parseScenario } from "./scenario";
 export const DRAFT_STORAGE_KEY = "crisistwin.simulationStudio.draft.v1";
 /**
  * Version of the Studio's defaults a draft was saved under. 2: firefighting (the first-alarm
- * package from real stations) is on by default. A draft saved before (no version) is migrated
- * once by the page; after that the user's own choice is kept.
+ * package from real stations) is on by default. 3: units come from the facilities on the map;
+ * a draft's hand-set unit counts are dropped on load (parseScenario sets `countsDropped`). A
+ * draft saved before version 2 gets firefighting turned on once by the page; after that the
+ * user's own choice is kept.
  */
-export const DRAFT_DEFAULTS_VERSION = 2;
+export const DRAFT_DEFAULTS_VERSION = 4;
+/** Version 4: default run length went from 3 h to 24 h; older drafts still on 3 h move up once. */
+export const HORIZON_24H_DEFAULTS_VERSION = 4;
+/** Drafts saved before this version get firefighting turned on once (the page's migration). */
+export const FIREFIGHTING_ON_DEFAULTS_VERSION = 2;
 
 interface StoredDraft {
   savedAtIso: string;

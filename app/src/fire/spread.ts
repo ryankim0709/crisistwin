@@ -30,24 +30,18 @@
  * `LandscapeGrid.canopyComplete` says the canopy rasters actually loaded — missing canopy
  * runs surface-only and says so on the run rather than reading as treeless ground.
  *
- * A cell burns as crown fire for either of two reasons, and the distinction is the whole
- * reason crown state has to reach the relaxation loop:
- *
- *   - Its own surface fire initiates crowning. That is Van Wagner's (1977) intensity test
- *     against the cell's own surface fireline intensity, it depends on nothing outside the
- *     cell, and it is evaluated once per cell in the precompute.
- *   - An active crown fire is burning INTO it from the cell the fire arrives from, and its
- *     own canopy can carry an active crown fire (Van Wagner's critical mass flow criterion
- *     alone, `canSustainActiveCrown`). An established crown fire sustains itself through
- *     continuous canopy; requiring every cell to re-initiate from its own sheltered surface
- *     fire is exactly the under-prediction Cruz & Alexander (2010) identify in linked
- *     Rothermel/Van Wagner models, and with the midflame factor under a closed stand near
- *     0.10 it stopped every crown run dead at the edge of the timber. This half depends on
- *     which neighbour the fire arrives from, so it is decided during propagation.
- *
- * The precompute still evaluates no crown fire inside the loop: it stores both answers per
- * cell, and the loop only selects between them. A cell whose canopy cannot sustain crown
- * fire falls back to its surface rate, and a cell with no canopy is never touched.
+ * A cell crowns only where its own surface fire initiates crowning: Van Wagner's (1977)
+ * intensity test against the cell's own surface fireline intensity (`crownFireBehaviour`).
+ * A canopy that could carry an active crown fire but whose surface fire cannot ignite it
+ * (Scott & Reinhardt's "conditional" crown fire) burns as surface fire, as in FlamMap and
+ * FARSITE (Scott 2006, RMRS-RP-58 p. 18). And it does so per direction, as FARSITE does per
+ * perimeter vertex (Finney 1998, revised 2004, RMRS-RP-4 p. 10): Byram's intensity is linear
+ * in spread rate, so the cell's surface fire reaches I_0 only in directions whose surface
+ * rate reaches the initiation rate R_0 = R_head I_0 / I_head. The flanks and back of a
+ * crowning cell burn as surface fire (`directionalRate`). Before SPREAD_MODEL 5.0.0 a fire
+ * arriving from an actively crowning neighbour kept crowning in any canopy dense enough to
+ * sustain it, in every direction, and that ran crown fire through kilometres of oak and bay
+ * litter whose own surface fire was far below I_0.
  *
  * Randomness is opt-in (`FireScenario.stochastic`, stochastic.ts). Without it nothing here
  * uses randomness, so a scenario plus a landscape reproduces a run exactly and no seed has to
@@ -73,10 +67,13 @@ import { mercatorToLonLat, type LandscapeGrid, type LandscapeResampling } from "
 // Re-exported because scenario builders (Simulation Studio) type moisture against this module.
 export type { FuelMoisture } from "./rothermel";
 import {
+  CROWN_DIRECTION_WIND_REDUCTION_FACTOR,
   DEFAULT_FOLIAR_MOISTURE_FRACTION,
+  MAX_ACTIVE_CROWN_RATE_METERS_PER_MINUTE,
   TEN_METER_WIND_PER_TWENTY_FOOT_WIND,
   activeCrownRateMetersPerMinute,
-  canSustainActiveCrown,
+  canopyTypeForFuel,
+  criticalActiveCrownRateMetersPerMinute,
   crownFireBehaviour,
   windAdjustmentFactor,
   type CanopyCell,
@@ -183,8 +180,9 @@ export interface FireScenario {
   stochastic?: StochasticSpreadOptions;
   /**
    * Time-varying weather inside the solve (weatherSeries.ts): hourly or sub-hourly open wind,
-   * direction and optionally fuel moisture and air temperature; a cell spreads out at the
-   * weather of the 10-minute step it ignites in. When enabled, `windSpeedMph`,
+   * direction and optionally fuel moisture and air temperature; a cell starts spreading out at
+   * the weather of the 10-minute step it ignites in, and a crossing still under way at a step
+   * boundary is re-timed at the next step's weather. When enabled, `windSpeedMph`,
    * `windFromDegrees` and `moisture` are not used for spread (moisture still fills samples
    * that carry none); pages keep them at the series' peak hour for display. Absent or
    * `enabled: false`: one wind and one moisture for the whole run, output unchanged bit for bit.
@@ -238,17 +236,19 @@ export const MOISTURE_PRESETS: readonly MoisturePreset[] = [
 ] as const;
 
 /**
- * Simulation-clock minutes between output frames. It is an output sampling interval, not
- * a solver time step: arrival times are continuous, and the frames are contours of the
- * same arrival field at multiples of this interval. It stays 15 minutes at every horizon
- * (a 24-hour run has 97 frames), so frame k is always at k x 15 minutes.
+ * Simulation-clock minutes between output frames on /fire, at most. It is an output sampling
+ * interval, not a solver time step: arrival times are continuous, and the frames are contours
+ * of the same arrival field at multiples of the interval. Runs longer than 60 hours space
+ * their frames further apart (`frameStepMinutes` in horizon.ts, 30 min at 72 h) so a run
+ * keeps at most 240 frames; `FireScenario.stepMinutes` carries the spacing used.
  */
 export const FIRE_STEP_MINUTES = 15;
 /**
- * Fixed horizon of every page run, minutes (24 hours). Wind, wind direction and fuel
- * moisture stay constant for the whole horizon — no diurnal cycle, no overnight humidity
- * recovery, no wind shift — so a run is a constant-weather stress test rather than a
- * forecast of a day's growth (docs/adr/0012-fire-large-areas.md).
+ * Default horizon of a /fire run, minutes (24 hours); the page offers 1 hour to 7 days
+ * (horizon.ts). Without a weather series, wind, wind direction and fuel moisture stay
+ * constant for the whole horizon — no diurnal cycle, no overnight humidity recovery, no wind
+ * shift — so such a run is a constant-weather stress test rather than a forecast of a day's
+ * growth (docs/adr/0012-fire-large-areas.md).
  */
 export const FIRE_HORIZON_MINUTES = 1440;
 /**
@@ -531,17 +531,30 @@ export const EXTINCT_RATE_FEET_PER_MINUTE = 1e-9;
 
 export const SPREAD_MODEL = {
   id: "rothermel-1972-mtt",
-  version: "4.3.0",
-  surfaceSpread: "Rothermel (1972), per Andrews RMRS-GTR-371 (2018)",
+  // 4.4.0: reaction intensity sums the dead and live terms (no f_i area-share weighting) and net
+  // load uses size-subclass weights g_ij; live-fuel models now match Behave (BehavePlus engine).
+  // 5.0.0: crown fire only where the cell's own surface fire reaches I_0, per direction (no
+  // crown-to-crown carry; flanks and back of a crowning cell burn as surface fire); active crown
+  // aimed along FARSITE's 0.4-open-wind wind-slope vector; Cruz (2005) active rate only under
+  // conifer canopy, broadleaf litter (TL2/TL6/TL9) torches at most; crown cap applied after the
+  // stochastic ROS multiplier; each stencil step timed through every cell it crosses (Finney
+  // 2002); a crossing re-timed at each later 10-minute weather step; moisture damping exactly 0
+  // at extinction; arrivals past the horizon reported as Infinity.
+  // 5.1.0: control lines may expire (`ControlLines.holdUntilMinute`, for aircraft drops); a step
+  // a line held is re-tried when that line cell expires, finishing the rest of the crossing from
+  // then. Runs without expiring lines are unchanged.
+  version: "5.1.0",
+  surfaceSpread:
+    "Rothermel (1972) with Albini (1976), per Andrews RMRS-GTR-371 (2018); checked against Behave (BehavePlus engine)",
   fuelModels: "Scott & Burgan (2005) 40 standard fire behavior fuel models",
   ellipse:
     "Anderson (1983) length-to-breadth; Alexander (1985) elliptical spread; Alexander (1985) / Canadian FBP System conifer length-to-breadth for actively crowning cells",
   crownFire:
-    "Van Wagner (1977) crown initiation and critical mass flow rate, Cruz, Alexander & Wakimoto (2005) active crown rate of spread, Scott & Reinhardt (2001) crown fraction burned and surface/passive/active classification",
+    "Van Wagner (1977) crown initiation from the cell's own surface intensity, per direction as FARSITE does per vertex (Finney 1998), and critical mass flow rate; conditional crown fire burns as surface fire (Scott 2006); Cruz, Alexander & Wakimoto (2005) active crown rate of spread under conifer canopy only, aimed along the wind-slope vector at 0.4 of the open wind (Finney 1998); broadleaf-litter canopy torches at the surface rate (assumption: canopy type from the fuel model); Scott & Reinhardt (2001) crown fraction burned and surface/passive/active classification",
   midflameWind:
     "Albini & Baughman (1979) wind adjustment factor per cell from canopy cover, canopy height and fuel bed depth; a scenario midflame factor moved off its default overrides it everywhere",
   propagation:
-    "Minimum travel time over the landscape grid (LANDFIRE 30 m, or a coarser mode-resampled lattice for large areas) (after Finney 2002), stepped along every integer offset within 8 cells with no common factor (176 directions)",
+    "Minimum travel time over the landscape grid (LANDFIRE 30 m, or a coarser mode-resampled lattice for large areas) (after Finney 2002), stepped along every integer offset within 8 cells with no common factor (176 directions), each step timed as the sum of its length in every cell it crosses over that cell's own directional rate",
   backingRate:
     "Directional rate floored at the no-wind, no-slope rate, as BehavePlus computes backing spread (Andrews RMRS-GTR-371, 2018)",
   spotting:
@@ -551,7 +564,7 @@ export const SPREAD_MODEL = {
   stochastic:
     "Opt-in, seeded: lognormal ROS field (sigma after Cruz & Alexander 2013, correlation length assumed); 10-minute wind wander sized from the gust factor (Durst 1960 gust curve, Kaimal & Finnigan 1994 sigma_v/sigma_u); ember spotting below the Albini (1979, 1983) BehavePlus maximum distance with the Schroeder (1969) BehavePlus ignition probability; launch rate and landing-distance shape assumed",
   weatherSeries:
-    "Opt-in: hourly (or sub-hourly) wind, direction and fuel moisture inside one solve, read at 10-minute steps (speed and moisture linear, direction along the shorter arc); a cell spreads with the weather of the step it ignites in",
+    "Opt-in: hourly (or sub-hourly) wind, direction and fuel moisture inside one solve, read at 10-minute steps (speed and moisture linear, direction along the shorter arc); a crossing proceeds at the weather of each step it spans, re-timed at every step boundary",
   fireInducedWind:
     "Opt-in, simplified: Byram (1959) convective number (Nelson 1993; form of Hassan et al. 2026) with Nelson (2015) regime thresholds 2 and 10; indraft toward the active fire scaled by Byram's buoyant velocity, extra direction variability and firebrand launches where plume-dominated are assumptions",
 } as const;
@@ -724,10 +737,21 @@ export interface FireRunResolution {
 }
 
 export class NonBurnableIgnitionError extends Error {
+  /** Why the point cannot burn, without the advice that ends `message`. */
+  readonly reason: string;
   constructor(readonly fuelCode: number) {
-    super(
-      `The ignition point is on ${(NON_BURNABLE_CODES.get(fuelCode) ?? "unmapped ground").toLowerCase()}, which carries no fire. Place it on vegetated ground.`,
-    );
+    const ground = (NON_BURNABLE_CODES.get(fuelCode) ?? "unmapped ground").toLowerCase();
+    // Developed ground is refused only when structure-to-structure spread is off or has a
+    // zero rate (see the origin check in simulateScheduledFireSpread), so it gets its own advice.
+    const developed = fuelCode === DEVELOPED_FUEL_CODE;
+    const reason = developed
+      ? `The ignition point is on ${ground} ground, which carries no fire while structure-to-structure spread is off.`
+      : `The ignition point is on ${ground}, which carries no fire.`;
+    const advice = developed
+      ? "Turn on structure spread, or place it on vegetated ground."
+      : "Place it on vegetated ground, or on developed ground with structure spread on.";
+    super(`${reason} ${advice}`);
+    this.reason = reason;
     this.name = "NonBurnableIgnitionError";
   }
 }
@@ -755,34 +779,55 @@ function buildStencil(radius: number): readonly (readonly [number, number])[] {
 }
 
 const NEIGHBOURS = buildStencil(NEIGHBOUR_STENCIL_RADIUS);
+/** Bearing of each stencil step, radians clockwise from north (+x east, +y south). */
+const NEIGHBOUR_BEARINGS = Float64Array.from(NEIGHBOURS, ([dx, dy]) => Math.atan2(dx, -dy));
 
 /**
- * Cells a step passes over, as offsets from its origin: the nearest cell to the straight
- * line at each intermediate position, `round(dx * s / steps), round(dy * s / steps)` for
- * s from 1 to steps - 1 with steps the Chebyshev length of the offset.
+ * Every cell the straight line from the origin cell's centre to the destination cell's centre
+ * passes through, in order from the origin, with the share of the line's length inside each
+ * (shares sum to 1). Cells the line only touches at a corner are left out.
  *
- * Every one of them has to be passable, not just one of them. The radius-2 stencil's
+ * This is how Finney's (2002, Can. J. For. Res. 32:1420-1424) minimum travel time method times
+ * a path: travel time along a straight segment is the sum over the cells it crosses of the
+ * length inside each cell divided by that cell's rate of spread in the segment's direction. The
+ * solver used to time a whole step of up to `NEIGHBOUR_STENCIL_RADIUS` cells at the origin's
+ * rate, so one grass cell next to a city block lit houses 380 m away at grass speed.
+ *
+ * Every crossed cell also has to be passable, not just one of them. The radius-2 stencil's
  * guard accepted a two-cell step when *either* candidate midpoint was passable, and
- * generalising that to long offsets leaks badly: at radius 8 a one-cell water barrier let
- * 417 cells ignite behind it, which is fire crossing up to 190 m of road, river or
- * firebreak in a single hop. Requiring the whole line was re-tested at radius 2, 6 and 8
- * against 1, 2, 4, 8 and 9-cell walls with nothing beyond the wall in any case.
- *
- * "Passable" is a positive head rate, not a vegetated fuel model, so developed ground
- * carries a step through exactly when structure spread has given it a rate. Ember
- * spotting is unaffected: it is a separate mechanism with its own rules and it is the
- * only thing in this model that may cross a barrier.
+ * generalising that to long offsets leaks badly: at radius 8 a one-cell water barrier let 417
+ * cells ignite behind it, fire crossing up to 190 m of road, river or firebreak in one hop.
+ * Requiring the whole line was tested at radius 2, 6 and 8 against 1, 2, 4, 8 and 9-cell
+ * walls with nothing beyond the wall in any case. This traversal contains every cell the
+ * earlier nearest-cell path (`round(dx s / steps), round(dy s / steps)`) named, checked for
+ * all 176 offsets, so it is at least as strict. "Passable" is a positive head rate, not a
+ * vegetated fuel model, so developed ground carries a step through exactly when structure
+ * spread has given it a rate. Ember spotting is a separate mechanism with its own rules and
+ * the only thing in this model that may cross a barrier.
  */
-function buildBarrierPath(
+function buildStepTraversal(
   offset: readonly [number, number],
-): readonly (readonly [number, number])[] {
+): readonly (readonly [number, number, number])[] {
   const [dx, dy] = offset;
-  const steps = Math.max(Math.abs(dx), Math.abs(dy));
-  const path: (readonly [number, number])[] = [];
-  for (let s = 1; s < steps; s++) {
-    path.push([Math.round((dx * s) / steps), Math.round((dy * s) / steps)]);
+  // Parameters t in (0, 1) at which the line crosses a cell edge (x or y = k + 0.5).
+  const crossings: number[] = [0, 1];
+  for (const d of [dx, dy]) {
+    const n = Math.abs(d);
+    for (let k = 0; k < n; k++) crossings.push((k + 0.5) / n);
   }
-  return path;
+  crossings.sort((a, b) => a - b);
+  const cells: [number, number, number][] = [];
+  for (let i = 1; i < crossings.length; i++) {
+    const share = crossings[i] - crossings[i - 1];
+    if (share <= 1e-12) continue;
+    const mid = (crossings[i] + crossings[i - 1]) / 2;
+    const cx = Math.round(dx * mid);
+    const cy = Math.round(dy * mid);
+    const last = cells[cells.length - 1];
+    if (last && last[0] === cx && last[1] === cy) last[2] += share;
+    else cells.push([cx, cy, share]);
+  }
+  return cells;
 }
 
 /** Binary min-heap over (time, cell index) pairs. */
@@ -867,6 +912,9 @@ const FIXED_INERT = 2;
 const CROWN_SURFACE = 0;
 const CROWN_PASSIVE = 1;
 const CROWN_ACTIVE = 2;
+/** `crownMode` per cell: the head reaches I_0 under conifer canopy, or under broadleaf. */
+const CROWN_MODE_CONIFER = 1;
+const CROWN_MODE_BROADLEAF = 2;
 
 /** Said verbatim on a run whose landscape could not supply canopy data. */
 export const CROWN_FIRE_UNAVAILABLE_REASON =
@@ -953,10 +1001,18 @@ type SpreadRunTotals = Pick<
  * Judging breaches on adjacent steps only keeps a fire running along a line from cutting
  * across it at a shallow angle with head-fire intensity. Embers do not land in a built
  * line cell but still fly over it.
+ *
+ * A cell with `holdUntilMinute[i] <= t` no longer holds at time t (a drop that dried out or
+ * was diluted). A step a line cell held is re-tried at that cell's expiry minute, the same way a
+ * weather-delayed arrival goes back on the heap: the fire waits at the line's edge and crosses
+ * the rest of the step (from the expired cell on) at the rates of then. The origin cell keeps
+ * the behaviour it ignited with (ASSUMPTION; its own state is not recomputed for the retry).
  */
 export interface ControlLines {
   /** Minute from which the cell is built line; `Infinity` where there is no line. */
   holdFromMinute: Float32Array;
+  /** Minute the cell stops holding; absent or `Infinity`: holds for the rest of the run. */
+  holdUntilMinute?: Float32Array;
   /** Longest flame, feet, the crew that built this cell can hold (direct-attack limit). */
   holdsFlameLengthFeet: Float32Array;
 }
@@ -977,9 +1033,10 @@ export interface ControlLines {
  *   settings the resumed run reproduces the uninterrupted one exactly, after a change every
  *   step in progress finishes at the new rate (FARSITE-style continuity of the front), and no
  *   cell newly burns before `fromMinute`.
- * - A fixed cell that spread as an active crown fire in the earlier run (`earlierBehaviour`
- *   crownType 2) carries an active crown fire on into neighbours whose canopy can sustain it
- *   at this run's weather, as an uninterrupted run would.
+ * - Crown fire is decided per cell from that cell's own surface fire (SPREAD_MODEL 5.0.0), so
+ *   nothing about crown state carries over from the earlier run beyond the earlier rates.
+ * - A step out of a fixed cell is timed at this run's rates through every cell it crosses, and
+ *   is not re-timed at later weather steps (`continueCrossings` is for cells this run ignites).
  * - It does not spread when its source index is -1 (burned by a fire that is no longer a
  *   source: burned ground only) or its source's `outFromMinuteBySource` is at or before
  *   `fromMinute` (put out). Such cells still count as reached.
@@ -1570,19 +1627,28 @@ function solveSpread(
   /** Fire type per cell, one of `CROWN_SURFACE`, `CROWN_PASSIVE`, `CROWN_ACTIVE`. */
   const crownType = new Uint8Array(cellCount).fill(CROWN_SURFACE);
   /**
-   * Whether this cell's own canopy can sustain an active crown fire arriving from
-   * outside (Van Wagner's critical mass flow criterion alone, independent of this cell's
-   * own surface intensity). Set once per cell in this precompute, same as `crownType`;
-   * the relaxation loop only reads it, it never calls `canSustainActiveCrown` itself.
+   * Directional crown fire (`directionalRate`). `crownMode` is 0 where the cell's surface fire
+   * does not reach I_0 even at its head; there `headRate`, `headingRadians`, `eccentricity` and
+   * `minDirectionalRate` describe the whole ellipse. Where it is 1 (conifer canopy) or 2
+   * (broadleaf, torching only) the arrays below hold the surface ellipse and the crown
+   * thresholds, all UNPERTURBED by the stochastic ROS field (`rosMultiplier` applies it at
+   * the end), so the crown classification stays on the unperturbed fire as before, and the
+   * head arrays become the reported head of the combined fire.
    */
-  const canSustainCrown = new Uint8Array(cellCount);
-  /**
-   * The rate this cell would run at if reason (b) applies — fire arrives already
-   * actively crowning and this canopy can carry it onward. Floored at the surface rate,
-   * same construction as the self-initiated active rate, so the two are directly
-   * comparable. 0 where `canSustainCrown` is 0.
-   */
-  const sustainedCrownRateMetersPerMinute = new Float32Array(cellCount);
+  const crownMode = new Uint8Array(cellCount);
+  /** Surface head rate before crown fire and before the ROS field, m/min. */
+  const surfaceHeadRate = new Float32Array(cellCount);
+  const surfaceHeadingRadians = new Float32Array(cellCount);
+  const surfaceEccentricity = new Float32Array(cellCount);
+  /** Surface rate at which the fire's intensity reaches I_0: R_head I_0 / I_head, m/min. */
+  const crownInitiationRate = new Float32Array(cellCount);
+  /** Van Wagner's critical active crown rate, 3.0 / CBD, m/min. */
+  const crownCriticalRate = new Float32Array(cellCount);
+  /** Cruz et al. (2005) active crown rate at the head (already capped at 100 m/min), m/min. */
+  const crownActiveRate = new Float32Array(cellCount);
+  /** Direction of the active crown head (FARSITE wind-slope vector), radians from north. */
+  const crownHeadingRadians = new Float32Array(cellCount);
+  const crownEccentricity = new Float32Array(cellCount);
   const structureEccentricity = eccentricityOf(STRUCTURE_LENGTH_TO_BREADTH);
   /**
    * Fire-induced wind only: per cell, the heat released per unit area by the surface fire
@@ -1610,6 +1676,105 @@ function solveSpread(
   const sourceSpread = new Map<number, SpreadResult>();
   const sourceCrown = new Map<number, CrownFireResult>();
   const sourceMidflameAdjustment = new Map<number, number>();
+
+  /** Fire type of the last `directionalRate` call: CROWN_SURFACE, CROWN_PASSIVE or CROWN_ACTIVE. */
+  let directionalFireType = CROWN_SURFACE;
+  /**
+   * Rate of spread out of cell c toward `bearing` (radians clockwise from north), m/min, the
+   * ellipse and floor included. Sets `directionalFireType`.
+   *
+   * A cell whose head fire does not reach I_0 (`crownMode` 0) is its ellipse, as before: the
+   * rear-focus ellipse (Alexander 1985) floored at the no-wind rate. A cell whose head does
+   * reach it is classified direction by direction, the way FARSITE classifies each perimeter
+   * vertex (Finney 1998, revised 2004, RMRS-RP-4 p. 10: "Transition to some form of crown fire
+   * occurs at the ith vertex if the surface fire intensity ... meets or exceeds Io"). Byram's
+   * intensity is the heat per unit area times the rate (FARSITE eq. 20), so in each direction
+   * the surface fire reaches I_0 exactly where its surface rate r_s reaches the initiation rate
+   * R_0 = R_head I_0 / I_head. Below it that direction is surface fire. At or above it:
+   *
+   *   - Active where the crown ellipse's rate in this direction, R_active times the ellipse
+   *     factor (FARSITE eq. 24's E_i), meets Van Wagner's critical rate 3.0 / CBD (FARSITE
+   *     eq. 22 and its per-vertex RC_actual >= RAC test). The crown ellipse is Alexander's
+   *     (1985) conifer length-to-breadth from the open wind, aimed along the crown heading.
+   *   - Otherwise passive. Broadleaf canopy spreads a passive fire at the surface rate, which
+   *     is FARSITE's rule. Conifer canopy keeps Scott & Reinhardt's (2001) linear blend, with
+   *     the crown fraction burned taken from this direction's surface rate,
+   *     CFB = (r_s - R_0) / (R'_active - R_0), and the crown rate scaled by the surface ellipse
+   *     factor (FARSITE eq. 23, R + CFB (RC_max E_i - R)). At the head this is exactly
+   *     `crownFireBehaviour`'s passive rate, and it falls continuously to r_s where r_s = R_0.
+   *
+   * Every crown rate is floored at the surface rate it rides on and capped at
+   * `MAX_ACTIVE_CROWN_RATE_METERS_PER_MINUTE` AFTER the stochastic ROS field, so the field can
+   * no longer push a crown rate past the cap (it took 1,890 cells to 237 m/min). The
+   * classification compares the unperturbed rates, as the head classification always did.
+   */
+  const directionalRate = (c: number, bearing: number): number => {
+    const mode = crownMode[c];
+    if (mode === 0) {
+      directionalFireType = CROWN_SURFACE;
+      const e = eccentricity[c];
+      const head = headRate[c];
+      const r = e > 0 ? (head * (1 - e)) / (1 - e * Math.cos(bearing - headingRadians[c])) : head;
+      const floor = minDirectionalRate[c];
+      return r < floor ? floor : r;
+    }
+    const m = rosField ? rosField[c] : 1;
+    const es = surfaceEccentricity[c];
+    const surfaceHead = surfaceHeadRate[c];
+    const surfaceToward =
+      es > 0
+        ? (surfaceHead * (1 - es)) / (1 - es * Math.cos(bearing - surfaceHeadingRadians[c]))
+        : surfaceHead;
+    const surface = Math.max(surfaceToward * m, minDirectionalRate[c]);
+    const initiation = crownInitiationRate[c];
+    if (surfaceToward < initiation) {
+      directionalFireType = CROWN_SURFACE;
+      return surface;
+    }
+    directionalFireType = CROWN_PASSIVE;
+    if (mode === CROWN_MODE_BROADLEAF) return surface;
+    const critical = crownCriticalRate[c];
+    const active = crownActiveRate[c];
+    const ec = crownEccentricity[c];
+    const crownToward =
+      ec > 0 ? (active * (1 - ec)) / (1 - ec * Math.cos(bearing - crownHeadingRadians[c])) : active;
+    if (crownToward >= critical) {
+      directionalFireType = CROWN_ACTIVE;
+      return Math.max(Math.min(crownToward * m, MAX_ACTIVE_CROWN_RATE_METERS_PER_MINUTE), surface);
+    }
+    const span = critical - initiation;
+    const crownFraction =
+      Number.isFinite(span) && span > 0
+        ? Math.min(Math.max((surfaceToward - initiation) / span, 0), 1)
+        : 1;
+    const blended =
+      surfaceHead > 0 ? surfaceToward * (1 + crownFraction * (active / surfaceHead - 1)) : surfaceToward;
+    return Math.max(Math.min(blended * m, MAX_ACTIVE_CROWN_RATE_METERS_PER_MINUTE), surface);
+  };
+  /**
+   * For a cell whose head reaches I_0: set its reported head (rate, direction, ellipse) to the
+   * fastest of its stencil directions, and its fire type to the most severe any direction
+   * reaches. Reporting only; `directionalRate` does not read these for such a cell.
+   */
+  const reportCrownHead = (c: number): void => {
+    let best = -1;
+    let bestBearing = 0;
+    let bestType = CROWN_SURFACE;
+    let worstType = CROWN_SURFACE;
+    for (let n = 0; n < NEIGHBOUR_BEARINGS.length; n++) {
+      const r = directionalRate(c, NEIGHBOUR_BEARINGS[n]);
+      if (directionalFireType > worstType) worstType = directionalFireType;
+      if (r > best) {
+        best = r;
+        bestBearing = NEIGHBOUR_BEARINGS[n];
+        bestType = directionalFireType;
+      }
+    }
+    headRate[c] = best;
+    headingRadians[c] = bestBearing;
+    eccentricity[c] = bestType === CROWN_ACTIVE ? crownEccentricity[c] : surfaceEccentricity[c];
+    crownType[c] = worstType === CROWN_ACTIVE ? CROWN_ACTIVE : CROWN_PASSIVE;
+  };
 
   let burnableCells = 0;
   let developedCells = 0;
@@ -1649,8 +1814,7 @@ function solveSpread(
     } else {
       // A recompute starts from a clean crown state; the precompute's arrays start zeroed.
       crownType[i] = CROWN_SURFACE;
-      canSustainCrown[i] = 0;
-      sustainedCrownRateMetersPerMinute[i] = 0;
+      crownMode[i] = 0;
     }
 
     canopy.baseHeightMeters = landscape.canopyBaseHeightMeters[i];
@@ -1681,40 +1845,59 @@ function solveSpread(
     // Crown fire. Evaluated here, once per cell, and never in the relaxation loop: the
     // loop reads only the rate, heading and eccentricity this block writes.
     if (canopyModelled) {
+      const canopyType = canopyTypeForFuel(code);
+      const surfaceIntensityKwPerM =
+        spread.firelineIntensityBtuPerFootPerSecond * KW_PER_METER_PER_BTU_PER_FOOT_PER_SECOND;
       const crown = crownFireBehaviour(
         surfaceRateMetersPerMinute,
-        spread.firelineIntensityBtuPerFootPerSecond * KW_PER_METER_PER_BTU_PER_FOOT_PER_SECOND,
+        surfaceIntensityKwPerM,
         canopy,
         w.speedMph,
         w.moisture.dead1h,
+        DEFAULT_FOLIAR_MOISTURE_FRACTION,
+        canopyType,
       );
       if (initial && isSourceCell[i]) sourceCrown.set(i, crown);
       if (plumeCrownFraction) {
         plumeCrownFraction[i] =
           crown.type === "active" ? 1 : crown.type === "passive" ? crown.crownFractionBurned : 0;
       }
-      if (crown.type !== "surface") {
+      if (crown.type !== "surface" && surfaceIntensityKwPerM > 0) {
         crownType[i] = crown.type === "active" ? CROWN_ACTIVE : CROWN_PASSIVE;
-        // A crown fire is driven by the surface fire beneath it, so it cannot be slower
-        // than that surface fire. Enforced rather than assumed; a non-finite rate is a
-        // contract violation in crownFire.ts and falls back to the surface rate instead
-        // of poisoning the cell with NaN, which would silently make it unburnable.
-        rateMetersPerMinute = Number.isFinite(crown.rateMetersPerMinute)
-          ? Math.max(surfaceRateMetersPerMinute, crown.rateMetersPerMinute)
-          : surfaceRateMetersPerMinute;
-        if (crown.type === "active") cellEccentricity = w.activeCrownEccentricity;
-      }
-
-      // Reason (b), stored but not selected here. This is a property of the canopy and
-      // the weather alone (Van Wagner's critical mass flow criterion), independent of
-      // whether THIS cell's own surface fire is intense enough to initiate crowning, so
-      // it is computed unconditionally rather than only when `crown.type !== "surface"`.
-      if (canSustainActiveCrown(canopy, w.speedMph, w.moisture.dead1h)) {
-        canSustainCrown[i] = 1;
-        sustainedCrownRateMetersPerMinute[i] = Math.max(
-          surfaceRateMetersPerMinute,
-          activeCrownRateMetersPerMinute(w.speedMph, canopy.bulkDensityKgPerM3, w.moisture.dead1h),
+        // The head says the canopy ignites; `directionalRate` decides it direction by
+        // direction from what is stored here. A non-finite crown rate is a contract violation
+        // in crownFire.ts and leaves the cell a surface fire instead of poisoning it with NaN.
+        const activeRate = activeCrownRateMetersPerMinute(
+          w.speedMph,
+          canopy.bulkDensityKgPerM3,
+          w.moisture.dead1h,
         );
+        if (Number.isFinite(activeRate) && Number.isFinite(crown.rateMetersPerMinute)) {
+          crownMode[i] = canopyType === "broadleaf" ? CROWN_MODE_BROADLEAF : CROWN_MODE_CONIFER;
+          surfaceHeadRate[i] = surfaceRateMetersPerMinute;
+          surfaceHeadingRadians[i] = spread.headingDegrees * RADIANS_PER_DEGREE;
+          surfaceEccentricity[i] = cellEccentricity;
+          crownInitiationRate[i] =
+            (surfaceRateMetersPerMinute * crown.criticalSurfaceIntensityKwPerM) / surfaceIntensityKwPerM;
+          crownCriticalRate[i] = criticalActiveCrownRateMetersPerMinute(canopy.bulkDensityKgPerM3);
+          crownActiveRate[i] = activeRate;
+          // Direction of the crown head: FARSITE's wind-slope vector with the Rothermel factors
+          // at 0.4 of the open wind rather than the sheltered midflame wind (Finney 1998, revised
+          // 2004, RMRS-RP-4 p. 6; `CROWN_DIRECTION_WIND_REDUCTION_FACTOR`). Under a closed stand
+          // the midflame factor is near 0.1, which hands the surface heading to the slope; a
+          // crown fire runs on the wind above the canopy.
+          crownHeadingRadians[i] =
+            spreadFromBed(
+              bed,
+              w.speedMph * FEET_PER_MINUTE_PER_MPH * CROWN_DIRECTION_WIND_REDUCTION_FACTOR,
+              w.windToward,
+              slopeTangent[i],
+              upslopeDegrees[i],
+            ).headingDegrees * RADIANS_PER_DEGREE;
+          crownEccentricity[i] = w.activeCrownEccentricity;
+        } else {
+          crownType[i] = CROWN_SURFACE;
+        }
       }
     }
 
@@ -1769,12 +1952,12 @@ function solveSpread(
       const m = rosField[i];
       headRate[i] *= m;
       minDirectionalRate[i] *= m;
-      sustainedCrownRateMetersPerMinute[i] *= m;
       surfaceIntensity *= m;
       headFlameFeet[i] *= Math.pow(m, BYRAM_FLAME_EXPONENT);
     }
     spotReach[i] = spotReachFor(surfaceIntensity, w.speedMph);
     if (spotIntensity) spotIntensity[i] = surfaceIntensity;
+    if (crownMode[i] !== 0) reportCrownHead(i);
   };
   for (let i = 0; i < cellCount; i++) computeCell(i, baseWind, true);
 
@@ -1824,18 +2007,6 @@ function solveSpread(
   const arrival = new Float64Array(cellCount).fill(Number.POSITIVE_INFINITY);
   const arrivalMechanism = new Uint8Array(cellCount);
   const firstSource = new Int32Array(cellCount).fill(-1);
-  /**
-   * Whether the edge that currently holds each cell's best-known (possibly still
-   * provisional) arrival time came from a source that was itself spreading as an active
-   * crown fire. Updated in lockstep with `arrival` and `arrivalMechanism` every time a
-   * candidate improves on the stored arrival time, so it always describes the same edge
-   * `arrival` does. Because Dijkstra over nonnegative edge weights pops each cell for the
-   * first time at its final minimal arrival time, the value read back when a cell is
-   * popped is the value belonging to the path that actually won — never a later, losing
-   * update — which is what lets the relaxation loop select this cell's outgoing crown
-   * state once, at settle time, and never revisit it.
-   */
-  const arrivedFromActiveCrown = new Uint8Array(cellCount);
   const settled = new Uint8Array(cellCount);
   const settledOrder = new Int32Array(cellCount);
   let settledCount = 0;
@@ -1873,7 +2044,6 @@ function solveSpread(
       arrival[i] = at;
       firstSource[i] = source;
       fixedState[i] = out <= resume.fromMinute ? FIXED_INERT : FIXED_SPREADS;
-      arrivedFromActiveCrown[i] = resume.earlierBehaviour.crownType[i] === CROWN_ACTIVE ? 1 : 0;
       heap.push(at, i);
     }
   }
@@ -1893,9 +2063,6 @@ function solveSpread(
     if (startMinute < arrival[originCell]) {
       arrival[originCell] = startMinute;
       firstSource[originCell] = sourceIndex;
-      // An ignition starts as a surface fire; only an arrival from an already actively
-      // crowning neighbour may carry crown state into the cell (see the settle step).
-      arrivedFromActiveCrown[originCell] = 0;
       heap.push(startMinute, originCell);
     }
   });
@@ -1903,49 +2070,122 @@ function solveSpread(
   const bearings = NEIGHBOURS.map(([dx, dy]) => Math.atan2(dx, -dy));
   const distances = NEIGHBOURS.map(([dx, dy]) => Math.hypot(dx, dy) * groundCellSizeMeters);
 
-  // Barrier paths as flat relative cell indices, built once for this grid width. The
-  // intermediate cells of an offset always lie inside its bounding box, so once the
-  // destination is known to be on the grid these indices need no further bounds check.
-  const barrierStart = new Int32Array(NEIGHBOURS.length + 1);
-  const barrierOffsets: number[] = [];
+  // Every step's traversal (`buildStepTraversal`: the cells its line crosses, origin first and
+  // destination last, with the share of its length in each) as flat relative cell indices,
+  // built once for this grid width. The cells of an offset lie inside its bounding box, so
+  // once the destination is known to be on the grid they need no further bounds check. Every
+  // crossed cell has to be passable, not just one of them (`buildBarrierPath` explains why);
+  // the traversal includes every cell `buildBarrierPath` names.
+  const traversalStart = new Int32Array(NEIGHBOURS.length + 1);
+  const traversalOffsets: number[] = [];
+  const traversalShares: number[] = [];
   for (let n = 0; n < NEIGHBOURS.length; n++) {
-    barrierStart[n] = barrierOffsets.length;
-    for (const [dx, dy] of buildBarrierPath(NEIGHBOURS[n])) barrierOffsets.push(dy * width + dx);
+    traversalStart[n] = traversalOffsets.length;
+    for (const [dx, dy, share] of buildStepTraversal(NEIGHBOURS[n])) {
+      traversalOffsets.push(dy * width + dx);
+      traversalShares.push(share);
+    }
   }
-  barrierStart[NEIGHBOURS.length] = barrierOffsets.length;
-  const barrierPath = Int32Array.from(barrierOffsets);
+  traversalStart[NEIGHBOURS.length] = traversalOffsets.length;
+  const traversalOffset = Int32Array.from(traversalOffsets);
+  const traversalShare = Float64Array.from(traversalShares);
+  let longestTraversal = 0;
+  for (let n = 0; n < NEIGHBOURS.length; n++) {
+    longestTraversal = Math.max(longestTraversal, traversalStart[n + 1] - traversalStart[n]);
+  }
+  /** Rate (m/min) and fire type in each crossed cell of the step last timed by `stepMinutes`. */
+  const pathRate = new Float64Array(longestTraversal);
+  const pathFireType = new Uint8Array(longestTraversal);
+  /**
+   * Stepped runs: the weather step unsettled crossed cells are brought to before their rate is
+   * read (`stepMinutes`), and the step each cell was last computed at (-1: the precompute).
+   */
+  let travelStep = -1;
+  let travelWind = baseWind;
+  const computedStep = stepped ? new Int32Array(cellCount).fill(-1) : null;
+  /** Returned by `stepMinutes` when a crossed cell carries no fire at all (a barrier). */
+  const STEP_BLOCKED = -1;
+  /**
+   * Minutes for fire to travel step n out of `cell`: Finney's (2002) minimum travel time, the
+   * sum over the cells the step crosses of (length in the cell) / (that cell's rate toward the
+   * step's bearing), each from `directionalRate`. Leaves each crossed cell's rate and fire type
+   * in `pathRate` / `pathFireType` for the control-line test. Returns `STEP_BLOCKED` when a
+   * crossed cell is impassable, and Infinity when the origin cannot spread at all.
+   *
+   * On a stepped run a crossed cell that has not ignited is first brought to the current
+   * weather step (`travelStep`), once per step, so its rate is the weather's of now, not the
+   * precompute's. A crossed cell that is passable at some step but cannot spread at this one
+   * (a weather series above its moisture of extinction) makes the step Infinity for now: the
+   * crossing waits (`continueCrossings`) and resumes at the first step the fuel can spread,
+   * arriving after the remaining travel time at that step's rate. It used to be crossed at the
+   * origin's rate and the destination parked until its fuel dried, which released every
+   * parked cell within the stencil's 480 m at the same minute (2,209 cells at minute 1050.0 in
+   * one seeded run).
+   */
+  const stepMinutes = (cell: number, n: number): number => {
+    const start = traversalStart[n];
+    const end = traversalStart[n + 1];
+    const bearing = NEIGHBOUR_BEARINGS[n];
+    let minutesPerMeter = 0;
+    for (let k = start; k < end; k++) {
+      const c = cell + traversalOffset[k];
+      if (k > start) {
+        if (gate[c] <= 0) return STEP_BLOCKED;
+        if (computedStep && settled[c] === 0 && computedStep[c] !== travelStep) {
+          computeCell(c, travelWind, false);
+          computedStep[c] = travelStep;
+        }
+      }
+      const r = directionalRate(c, bearing);
+      if (!(r > 0)) return Number.POSITIVE_INFINITY;
+      pathRate[k - start] = r;
+      pathFireType[k - start] = directionalFireType;
+      minutesPerMeter += traversalShare[k] / r;
+    }
+    return minutesPerMeter * distances[n];
+  };
 
   const holdFrom = controlLines?.holdFromMinute ?? null;
-  const adjacentStep = NEIGHBOURS.map(([dx, dy]) => Math.max(Math.abs(dx), Math.abs(dy)) === 1);
   const holdsFeet = controlLines?.holdsFlameLengthFeet ?? null;
-  /** True when a built line cell (at `time`) is the destination or on the step's path. */
-  const lineCrossed = (
-    cell: number,
-    destination: number,
-    pathStart: number,
-    pathEnd: number,
-    time: number,
-  ): boolean => {
-    if (holdFrom![destination] <= time) return true;
-    for (let b = pathStart; b < pathEnd; b++)
-      if (holdFrom![cell + barrierPath[b]] <= time) return true;
-    return false;
-  };
-  /** True when some built line cell on the step holds against `flame` feet. */
-  const lineHolds = (
-    destination: number,
-    pathStart: number,
-    pathEnd: number,
-    cell: number,
-    time: number,
-    flame: number,
-  ): boolean => {
-    if (holdFrom![destination] <= time && flame <= holdsFeet![destination]) return true;
-    for (let b = pathStart; b < pathEnd; b++) {
-      const c = cell + barrierPath[b];
-      if (holdFrom![c] <= time && flame <= holdsFeet![c]) return true;
+  const holdUntil = controlLines?.holdUntilMinute ?? null;
+  /** True when cell c is line that holds at minute t (built, and not yet expired). */
+  const lineAt = (c: number, t: number): boolean => holdFrom![c] <= t && (holdUntil === null || t < holdUntil[c]);
+  /** Surface head rate the cell's head flame length belongs to, m/min. */
+  const surfaceHeadOf = (c: number): number =>
+    crownMode[c] !== 0 ? surfaceHeadRate[c] * (rosField ? rosField[c] : 1) : headRate[c];
+  /**
+   * True when a control line built by `time` holds step n out of `cell`, as last timed by
+   * `stepMinutes`. Per crossed cell: a line cell holds when the flame of the fire coming at it,
+   * that of the last crossed cell before it that is not line, facing this step's direction, is
+   * no longer than the line holds against (`ControlLines`). That flame is the cell's head flame
+   * scaled to this direction's rate by Byram's L proportional to I^0.46, or unbounded where
+   * that cell burns as crown fire in this direction (crown fire, passive or active, breaches
+   * any line). A breached line cell is crossed and the next one is tested against the same
+   * approaching flame. For an adjacent step this is exactly the earlier rule; longer steps
+   * used to be refused outright at any line cell, which pinned fires inside a ring of
+   * retardant drops whatever their flame length. Returns the crossed-cell index (from the
+   * step's start) of the line cell that holds, or -1 when none does.
+   */
+  const stepLineHeldAt = (cell: number, n: number, time: number): number => {
+    const start = traversalStart[n];
+    const end = traversalStart[n + 1];
+    let flame = 0;
+    for (let k = start; k < end; k++) {
+      const c = cell + traversalOffset[k];
+      const j = k - start;
+      if (k > start && lineAt(c, time)) {
+        if (flame <= holdsFeet![c]) return j;
+        continue;
+      }
+      const head = surfaceHeadOf(c);
+      flame =
+        pathFireType[j] !== CROWN_SURFACE
+          ? Number.POSITIVE_INFINITY
+          : head > 0
+            ? headFlameFeet[c] * Math.pow(Math.min(1, pathRate[j] / head), BYRAM_FLAME_EXPONENT)
+            : 0;
     }
-    return false;
+    return -1;
   };
 
   // Ember directions and speed live on the wind state (`windStateFor`): the scenario's on a
@@ -2078,12 +2318,11 @@ function solveSpread(
     const spotMinutes = distance / w.emberSpeedMetersPerMinute + SPOTTING_IGNITION_DELAY_MINUTES;
     const candidate =
       fixed === 0 ? time + spotMinutes : resumedSpotArrival(time, spotMinutes, distance);
-    if (holdFrom && holdFrom[target] <= candidate) return;
+    if (holdFrom && lineAt(target, candidate)) return;
     if (candidate < arrival[target]) {
       arrival[target] = candidate;
       arrivalMechanism[target] = ARRIVAL_SPOTTING;
       firstSource[target] = firstSource[cell];
-      arrivedFromActiveCrown[target] = 0;
       heap.push(candidate, target);
       spotIgnitions++;
     }
@@ -2228,11 +2467,6 @@ function solveSpread(
             ambient.airTemperatureF,
           );
           computeCell(cell, w, false);
-          if (canSustainCrown[cell] === 1 && arrivedFromActiveCrown[cell] === 1) {
-            headRate[cell] = Math.max(headRate[cell], sustainedCrownRateMetersPerMinute[cell]);
-            eccentricity[cell] = w.activeCrownEccentricity;
-            crownType[cell] = CROWN_ACTIVE;
-          }
         }
       }
       // Enter the cell (at its final rate) into its fire's active window.
@@ -2249,8 +2483,174 @@ function solveSpread(
     return { w, weight };
   };
 
+  /**
+   * Stepped runs: crossings still under way, per burning cell: the share of each stencil step
+   * already covered (NaN: not pending), then each step's effective length. See
+   * `continueCrossings`.
+   */
+  const pendingProgress = new Map<number, Float32Array>();
+  /**
+   * Settled cells whose arrays `continueCrossings` recomputed at a later step, with the values
+   * they had when they ignited: restored after the solve, so the run reports (and `ResumeFrom`
+   * reads) each cell's behaviour at ignition, as before.
+   */
+  const ignitionBehaviour = new Map<number, [number, number, number, number, number, number]>();
+  /**
+   * Steps a control line held that it will stop holding (`ControlLines.holdUntilMinute`): heap
+   * entries at `2 * cellCount + index`, re-tried at the holding cell's expiry minute.
+   */
+  const lineRetries: { cell: number; n: number; neighbour: number; mechanism: number; crossed: number }[] = [];
+  /** Relax step n out of `cell` to `candidate`, unless a built control line holds it. */
+  const relax = (cell: number, n: number, neighbour: number, candidate: number, mechanism: number): void => {
+    if (holdFrom) {
+      const crossed = stepLineHeldAt(cell, n, candidate);
+      if (crossed >= 0) {
+        const until = holdUntil ? holdUntil[cell + traversalOffset[traversalStart[n] + crossed]] : Number.POSITIVE_INFINITY;
+        if (until <= scenario.horizonMinutes && !settled[neighbour]) {
+          lineRetries.push({ cell, n, neighbour, mechanism, crossed });
+          heap.push(until, 2 * cellCount + lineRetries.length - 1);
+        }
+        return;
+      }
+    }
+    if (candidate < arrival[neighbour]) {
+      arrival[neighbour] = candidate;
+      arrivalMechanism[neighbour] = mechanism;
+      firstSource[neighbour] = firstSource[cell];
+      heap.push(candidate, neighbour);
+    }
+  };
+  /**
+   * A crossing re-timed at a weather step boundary (stepped runs only).
+   *
+   * A cell used to spread out at the weather of the step it ignited in for as long as each
+   * crossing took, so a litter cell lit at 8 % fine fuel moisture and 4 mph finished a 60 m
+   * crossing at 02:42 after its moisture had passed TL3's 20 % extinction moisture at about
+   * 21:30. FARSITE and minimum-travel-time implementations re-evaluate spread at every time step
+   * from the current weather (Finney 1998, revised 2004, RMRS-RP-4; Finney 2002). Here, a
+   * crossing that does not finish inside the step it starts in is carried as the share of the
+   * step covered so far; at each boundary the cell is recomputed at the new step's weather and
+   * the remainder is timed at that rate. A crossing whose origin or destination cannot spread
+   * at a step (fuel too wet) makes no progress in it. SIMPLIFICATION, for cost: the crossing's
+   * time through all its cells is rescaled by the change in the ORIGIN's rate toward it
+   * (minutes x origin rate is carried as an effective length), and is re-timed through every
+   * crossed cell only when it resumes after waiting; timing every crossed cell at every
+   * boundary made a 24 h run six times slower (directional rates were 85 % of its time). The
+   * candidate
+   * arrival goes on the heap only when the crossing completes, so no arrival ever has to be
+   * withdrawn, and every candidate is at or after the boundary that produced it, which keeps
+   * the heap's order valid. SIMPLIFICATION: a cell's fire-induced wind is applied when it
+   * ignites, not again at later boundaries.
+   */
+  const continueCrossings = (cell: number, boundaryMinute: number): void => {
+    const progress = pendingProgress.get(cell);
+    if (!progress) return;
+    if (outFromMinuteBySource) {
+      const out = outFromMinuteBySource[firstSource[cell]] ?? Number.POSITIVE_INFINITY;
+      if (boundaryMinute > out) {
+        pendingProgress.delete(cell);
+        return;
+      }
+    }
+    if (!ignitionBehaviour.has(cell)) {
+      ignitionBehaviour.set(cell, [
+        headRate[cell],
+        headingRadians[cell],
+        eccentricity[cell],
+        minDirectionalRate[cell],
+        headFlameFeet[cell],
+        crownType[cell],
+      ]);
+    }
+    const step = weatherStepAt(boundaryMinute);
+    const w = windStateAtStep(step);
+    computeCell(cell, w, false);
+    travelStep = step;
+    travelWind = w;
+    const nextBoundary = (step + 1) * WEATHER_STEP_MINUTES;
+    const mechanism = fuelCodes[cell] === DEVELOPED_FUEL_CODE ? ARRIVAL_STRUCTURE : ARRIVAL_SURFACE;
+    const stride = NEIGHBOURS.length;
+    let open = false;
+    for (let n = 0; n < stride; n++) {
+      const covered = progress[n];
+      if (Number.isNaN(covered)) continue;
+      const neighbour = cell + NEIGHBOURS[n][1] * width + NEIGHBOURS[n][0];
+      if (settled[neighbour] || arrival[neighbour] <= boundaryMinute) {
+        progress[n] = Number.NaN;
+        continue;
+      }
+      // Destination fuel too wet to spread at this step: the crossing waits, and is timed
+      // through every crossed cell again once it can go on.
+      const destinationBed = series ? w.beds.get(fuelCodes[neighbour]) : undefined;
+      if (destinationBed && destinationBed.noWindRateFeetPerMinute <= EXTINCT_RATE_FEET_PER_MINUTE) {
+        progress[stride + n] = Number.NaN;
+        open = true;
+        continue;
+      }
+      const originRate = directionalRate(cell, NEIGHBOUR_BEARINGS[n]);
+      if (!(originRate > 0)) {
+        open = true;
+        continue;
+      }
+      let minutes: number;
+      const effectiveLength = progress[stride + n];
+      if (Number.isNaN(effectiveLength)) {
+        minutes = stepMinutes(cell, n);
+        if (minutes === STEP_BLOCKED) {
+          progress[n] = Number.NaN;
+          continue;
+        }
+        if (!Number.isFinite(minutes)) {
+          open = true;
+          continue;
+        }
+        progress[stride + n] = minutes * originRate;
+      } else {
+        minutes = effectiveLength / originRate;
+      }
+      const finish = boundaryMinute + (1 - covered) * minutes;
+      if (finish <= nextBoundary) {
+        progress[n] = Number.NaN;
+        // The line test reads the crossed cells' rates and fire types at this step.
+        if (holdFrom && stepMinutes(cell, n) === STEP_BLOCKED) continue;
+        relax(cell, n, neighbour, finish, mechanism);
+      } else {
+        progress[n] = covered + (nextBoundary - boundaryMinute) / minutes;
+        open = true;
+      }
+    }
+    if (open && nextBoundary <= scenario.horizonMinutes) heap.push(nextBoundary, cell + cellCount);
+    else pendingProgress.delete(cell);
+  };
+
   while (heap.length > 0) {
-    const { time, cell } = heap.pop();
+    const { time, cell: entry } = heap.pop();
+    // Entries at or past `2 * cellCount` are steps re-tried where a line expired (`relax`).
+    if (entry >= 2 * cellCount) {
+      if (time > scenario.horizonMinutes) break;
+      const retry = lineRetries[entry - 2 * cellCount];
+      if (settled[retry.neighbour]) continue;
+      if (stepped) {
+        travelStep = weatherStepAt(time);
+        travelWind = windStateAtStep(travelStep);
+      }
+      // Refills `pathRate` for the line test and the rest of the crossing.
+      const minutes = stepMinutes(retry.cell, retry.n);
+      if (minutes === STEP_BLOCKED || !Number.isFinite(minutes)) continue;
+      const start = traversalStart[retry.n];
+      const end = traversalStart[retry.n + 1];
+      let minutesPerMeter = 0;
+      for (let k = start + retry.crossed; k < end; k++) minutesPerMeter += traversalShare[k] / pathRate[k - start];
+      relax(retry.cell, retry.n, retry.neighbour, time + minutesPerMeter * distances[retry.n], retry.mechanism);
+      continue;
+    }
+    // Entries at or past `cellCount` are crossing continuations, not arrivals.
+    if (entry >= cellCount) {
+      if (time > scenario.horizonMinutes) break;
+      continueCrossings(entry - cellCount, time);
+      continue;
+    }
+    const cell = entry;
     if (settled[cell]) continue;
     const fixed = fixedState ? fixedState[cell] : 0;
     // A fire put out at minute m spreads no further: a cell it would reach after m is
@@ -2271,15 +2671,17 @@ function solveSpread(
     if (series && time !== arrival[cell]) continue;
     if (time > scenario.horizonMinutes) break;
 
-    // Weather steps (wind wander and/or a weather series): a cell spreads out at the weather of
-    // the 10-minute step it ignites in, so its rate, heading, shape and crown state are
-    // recomputed here at that weather. Only the cell's outgoing behaviour changes; its arrival
-    // is final. Dijkstra stays exact for the field it builds, because every step still costs a
-    // non-negative time from the moment its source cell settles.
+    // Weather steps (wind wander and/or a weather series): a cell starts spreading out at the
+    // weather of the 10-minute step it ignites in, so its rate, heading, shape and crown state
+    // are recomputed here at that weather; crossings that outlast the step are re-timed at each
+    // later one (`continueCrossings`). Its arrival is final. Dijkstra stays exact for the field
+    // it builds, because every step still costs a non-negative time from the moment its source
+    // cell settles.
     let w = baseWind;
     if (stepped && fixed !== FIXED_INERT) {
       w = windStateAtStep(weatherStepAt(time));
       computeCell(cell, w, false);
+      computedStep![cell] = weatherStepAt(time);
       // With a series a fuel can be above its moisture of extinction at this step and not at
       // others (`gate`). Fire does not spread into it now. ASSUMPTION: the fire holds at the
       // cell's edge (smouldering in heavier fuel, no burnout modelled) and enters it at the
@@ -2309,19 +2711,8 @@ function solveSpread(
     settledOrder[settledCount++] = cell;
     if (fixed === FIXED_INERT) continue;
 
-    // Select this cell's outgoing crown state exactly once, right here at settle time:
-    // self-initiated (already in `headRate`/`eccentricity`/`crownType` from the
-    // precompute) unless an active crown fire arrived from outside AND this cell's own
-    // canopy can sustain it, in which case it continues as active. `arrival[cell]` itself
-    // is never touched by this; only the rate it goes on to spread OUT at is decided
-    // here, and because this code runs once per cell (guarded by `settled`), nothing
-    // after this point can change that cell's outgoing rate again.
-    if (canSustainCrown[cell] === 1 && arrivedFromActiveCrown[cell] === 1) {
-      headRate[cell] = Math.max(headRate[cell], sustainedCrownRateMetersPerMinute[cell]);
-      eccentricity[cell] = w.activeCrownEccentricity;
-      crownType[cell] = CROWN_ACTIVE;
-    }
-
+    // Crossed cells are timed at the ambient weather of this step (`stepMinutes`).
+    const ambientWind = w;
     // Fire-induced wind (fireInducedWind.ts): may replace `w` with the cell's own wind and
     // recompute the cell at it. 0 when the option is off.
     let cellPlumeWeight = 0;
@@ -2342,8 +2733,15 @@ function solveSpread(
     }
     const sourceMechanism =
       fuelCodes[cell] === DEVELOPED_FUEL_CODE ? ARRIVAL_STRUCTURE : ARRIVAL_SURFACE;
-    const sourceIsActiveCrown = crownType[cell] === CROWN_ACTIVE;
-    const floor = minDirectionalRate[cell];
+    // Crossings that outlast this weather step are carried on (`continueCrossings`); only a
+    // stepped run's own (not resumed) cells have later steps to carry them into.
+    const carriesOn = stepped && fixed === 0;
+    if (stepped) {
+      travelStep = weatherStepAt(time);
+      travelWind = ambientWind;
+    }
+    const nextBoundary = (weatherStepAt(time) + 1) * WEATHER_STEP_MINUTES;
+    let progress: Float32Array | null = null;
 
     for (let n = 0; n < NEIGHBOURS.length; n++) {
       const [dx, dy] = NEIGHBOURS[n];
@@ -2351,55 +2749,39 @@ function solveSpread(
       const ny = y + dy;
       if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
       const neighbour = ny * width + nx;
-      if (settled[neighbour] || gate[neighbour] <= 0) continue;
-      // A multi-cell step must not hop a barrier, so every cell the step passes over has
-      // to be passable. See `buildBarrierPath`: one passable cell somewhere along the
-      // line is not enough once steps are eight cells long.
-      const barrierEnd = barrierStart[n + 1];
-      let blocked = false;
-      for (let b = barrierStart[n]; b < barrierEnd; b++) {
-        if (gate[cell + barrierPath[b]] <= 0) {
-          blocked = true;
-          break;
+      if (settled[neighbour] || gate[neighbour] <= 0 || arrival[neighbour] <= time) continue;
+      // Finney (2002) travel time through every crossed cell; a barrier anywhere on the line
+      // closes the step (`stepMinutes`).
+      const minutes = stepMinutes(cell, n);
+      if (minutes === STEP_BLOCKED) continue;
+      if (carriesOn && !(time + minutes <= nextBoundary)) {
+        // Unfinished at the step boundary, or waiting for fuel that cannot spread now. Second
+        // half of `progress`: the effective length (minutes x origin rate), NaN to re-time.
+        if (!progress) progress = new Float32Array(2 * NEIGHBOURS.length).fill(Number.NaN);
+        if (Number.isFinite(minutes)) {
+          progress[n] = (nextBoundary - time) / minutes;
+          progress[NEIGHBOURS.length + n] = minutes * pathRate[0];
+        } else {
+          progress[n] = 0;
         }
+        continue;
       }
-      if (blocked) continue;
-      // Elliptical spread from the cell's heading, inlined: this is the hot loop.
-      const e = eccentricity[cell];
-      let rateToward =
-        e > 0 ? (rate * (1 - e)) / (1 - e * Math.cos(bearings[n] - headingRadians[cell])) : rate;
-      if (rateToward < floor) rateToward = floor;
-      if (rateToward <= 0) continue;
+      if (!Number.isFinite(minutes)) continue;
       const candidate =
-        fixed === 0
-          ? time + distances[n] / rateToward
-          : resumedStepArrival(cell, n, time, distances[n] / rateToward);
-      // Built control line on the step (destination or any cell stepped over) stops it. An
-      // adjacent step may still burn into the line when the flame facing it in this
-      // direction is longer than the line holds (see `ControlLines`). Crown fire (passive or
-      // active) is taken to breach any line. A line counts as built when it is finished by
-      // the time the fire would arrive (`candidate`), not when the cell behind it caught:
-      // across a 30 m cell a flank or backing fire takes an hour or more. Blocking only gets
-      // stricter for later arrivals, so arriving later is never faster and the
-      // minimum-travel-time order stays valid.
-      if (
-        holdFrom &&
-        lineCrossed(cell, neighbour, barrierStart[n], barrierStart[n + 1], candidate)
-      ) {
-        if (!adjacentStep[n]) continue;
-        const flame =
-          crownType[cell] !== CROWN_SURFACE
-            ? Number.POSITIVE_INFINITY
-            : headFlameFeet[cell] * Math.pow(Math.min(1, rateToward / rate), BYRAM_FLAME_EXPONENT);
-        if (lineHolds(neighbour, barrierStart[n], barrierStart[n + 1], cell, candidate, flame))
-          continue;
-      }
-      if (candidate < arrival[neighbour]) {
-        arrival[neighbour] = candidate;
-        arrivalMechanism[neighbour] = sourceMechanism;
-        firstSource[neighbour] = firstSource[cell];
-        arrivedFromActiveCrown[neighbour] = sourceIsActiveCrown ? 1 : 0;
-        heap.push(candidate, neighbour);
+        fixed === 0 ? time + minutes : resumedStepArrival(cell, n, time, minutes);
+      // Built control line on the step stops it unless the flame facing it is longer than
+      // the line holds, tested per crossed line cell (`stepLineHeldAt`). A line counts as
+      // built when it is finished by the time the fire would arrive (`candidate`), not when
+      // the cell behind it caught: across a 30 m cell a flank or backing fire takes an hour
+      // or more. Without expiry blocking only gets stricter for later arrivals, so arriving later
+      // is never faster and the minimum-travel-time order stays valid; a step held by a line that
+      // expires is re-tried at the expiry minute (`relax`), never earlier than now.
+      relax(cell, n, neighbour, candidate, sourceMechanism);
+    }
+    if (progress) {
+      if (nextBoundary <= scenario.horizonMinutes) {
+        pendingProgress.set(cell, progress);
+        heap.push(nextBoundary, cell + cellCount);
       }
     }
 
@@ -2451,19 +2833,34 @@ function solveSpread(
             ? time + spotMinutes
             : resumedSpotArrival(time, spotMinutes, flightMeters);
         // Embers do not take hold in line built by the time they would ignite.
-        if (holdFrom && holdFrom[target] <= candidate) break;
+        if (holdFrom && lineAt(target, candidate)) break;
         if (candidate < arrival[target]) {
           arrival[target] = candidate;
           arrivalMechanism[target] = ARRIVAL_SPOTTING;
           firstSource[target] = firstSource[cell];
-          // An ember crossing a gap breaks canopy continuity by construction (the gap is
-          // unvegetated ground), so a spot ignition is never a continuation of an active
-          // crown fire, regardless of what a losing surface-neighbour relaxation set.
-          arrivedFromActiveCrown[target] = 0;
           heap.push(candidate, target);
         }
         break;
       }
+    }
+  }
+
+  // Cells whose crossings were re-timed at later steps report their behaviour at ignition.
+  for (const [c, saved] of ignitionBehaviour) {
+    headRate[c] = saved[0];
+    headingRadians[c] = saved[1];
+    eccentricity[c] = saved[2];
+    minDirectionalRate[c] = saved[3];
+    headFlameFeet[c] = saved[4];
+    crownType[c] = saved[5];
+  }
+  // A cell the fire had not reached by the horizon was not reached: its provisional candidate
+  // (which can be any later time, up to the 1e18 minutes a bed a hair under its extinction
+  // moisture once produced) is not an arrival.
+  for (let i = 0; i < cellCount; i++) {
+    if (arrival[i] > scenario.horizonMinutes) {
+      arrival[i] = Number.POSITIVE_INFINITY;
+      firstSource[i] = -1;
     }
   }
 

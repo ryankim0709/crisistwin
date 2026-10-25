@@ -91,6 +91,8 @@ export interface DispatchConsoleProps {
   onSpeedChange: (speed: number) => void;
   onCheckIntervalChange: (minutes: number) => void;
   onSelectZone: (zone: number | null) => void;
+  /** Run settings shown under the controls before a session (household behaviour). */
+  settings?: ReactNode;
   /** The road-closure tool (RoadClosures), shown above the console tabs. */
   roads?: ReactNode;
   /** Extra controls under the console (the resident app share toggle). */
@@ -108,7 +110,7 @@ function Tiles({ totals, baseline }: { totals: Totals; baseline: Totals | null }
     ["Safe", totals.safe, HOME_COLORS[4]],
     ["Driving out", totals.onRoad, HOME_COLORS[3]],
     ["Ordered, still home", totals.waiting, HOME_COLORS[1]],
-    ["Caught by fire", totals.caught, HOME_COLORS[5]],
+    ["Reached by fire (not by choice)", totals.caught - (totals.caughtByChoice ?? 0), HOME_COLORS[5]],
   ];
   const segments: [number, number][] = [
     [totals.safe, HOME_COLORS[4]],
@@ -911,6 +913,7 @@ export default function DispatchConsole(props: DispatchConsoleProps) {
         </label>
       </div>
 
+      {!engine && props.settings}
       {!engine && (
         <ol className="dsp-steps" aria-label="Setup">
           {steps.map((step, i) => (

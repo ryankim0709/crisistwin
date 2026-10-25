@@ -9,12 +9,12 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { BurnedGlyph, FireEdgeGlyph, StationGlyph, WindGlyph } from "../diorama/ui/glyphs";
+import { BurnedGlyph, FireEdgeGlyph, StationBadgeGlyph, WindGlyph } from "../diorama/ui/glyphs";
 import { useMediaQuery } from "../diorama/ui/format";
 import { FireDioramaScene } from "../fire/diorama/FireDioramaScene";
 import type { DioramaIgnition, FireDioramaSceneApi } from "../fire/diorama/types";
 import type { LandscapeGrid } from "../fire/landscape";
-import { useBoardStreets } from "../fire/useBoardStreets";
+import { sceneryOf, useBoardStreets } from "../fire/useBoardStreets";
 import { CREW_COLORS, firelineCss } from "../studio/firelinePalette";
 import { Button, Legend, Panel, type LegendItem } from "../ui";
 import { EXTINGUISHED_LEGEND } from "../fire/diorama/board";
@@ -119,7 +119,7 @@ export default function DemoDiorama({ board, version, field, landscape, regionNa
   const reducedMotionRef = useRef(reducedMotion);
   const [overlay] = useState(() => new DemoBoardOverlay());
   const streets = useBoardStreets(landscape);
-  const streetArea = streets.status === "ready" ? streets.scenery : null;
+  const streetArea = sceneryOf(streets);
 
   // StrictMode-safe: the cleanup disposes, the re-run builds a fresh scene.
   useEffect(() => {
@@ -145,6 +145,13 @@ export default function DemoDiorama({ board, version, field, landscape, regionNa
   useEffect(() => {
     scene?.setLandscape(landscape);
   }, [scene, landscape]);
+  const stationKey = board.stations.map((st) => `${st.id}@${st.location.join(",")}`).join("|");
+  useEffect(() => {
+    scene?.setStations(
+      board.stations.map((st) => ({ id: st.id, label: st.name, lon: st.location[0], lat: st.location[1], air: false })),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the board is mutated in place; stationKey marks changes
+  }, [scene, stationKey]);
   useEffect(() => {
     scene?.setStreets(streetArea);
   }, [scene, streetArea]);
@@ -273,7 +280,7 @@ export default function DemoDiorama({ board, version, field, landscape, regionNa
       color: css(DEMO_3D_COLORS.evacuee),
       glyph: <VehicleGlyph color={DEMO_3D_COLORS.evacuee} width={8} height={4} />,
     },
-    { label: "Station (free units listed by its name)", color: css(DEMO_3D_COLORS.stationRoof), glyph: <StationGlyph /> },
+    { label: "Fire station", color: css(DEMO_3D_COLORS.stationRoof), glyph: <StationBadgeGlyph /> },
     { label: "Leave now zone (outline)", color: css(DEMO_3D_COLORS.ordered), shape: "line" },
     { label: "At risk zone (dashed outline)", color: css(DEMO_3D_COLORS.threatened), shape: "dashed" },
     { label: "Overrun zone (thick outline)", color: css(DEMO_3D_COLORS.overrun), shape: "line" },

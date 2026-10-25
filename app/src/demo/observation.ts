@@ -9,7 +9,9 @@
  *   MONITOR_EVERY_MINUTES simulated minutes and calls the agent only when this returns a
  *   reason. It compares the board with a MonitorMemory taken when the agent last decided, so a
  *   standing situation the agent has already seen does not wake it again (until the periodic
- *   review). A newly reported fire wakes it at once (newReportedFireIds, useDemoAgent), because
+ *   review). The live drill's picture has its own wake reasons (incidentPicture.ts
+ *   pictureWakeReasons: new help request, road-blocked report, real-phone report, confirmation).
+ *   A newly reported fire wakes it at once (newReportedFireIds, useDemoAgent), because
  *   the /live board is AI agent only: nothing attacks a fire until the agent dispatches units.
  * - Recommendations are model output, not orders: each burning fire's recommended_initial_attack
  *   (the run card filled by the closest free units, boardResponse.initialAttackRecommendation)
@@ -28,6 +30,7 @@ import type {
   CrewObservation,
   DemoObservation,
   FireObservation,
+  IncidentPicture,
   ResourceCountsObservation,
   UnreachableClassObservation,
   ZoneObservation,
@@ -387,6 +390,8 @@ export function buildObservation(
   forecasts: Map<string, ZoneForecast>,
   wokeBecause: string[],
   previous: DemoObservation["previous"],
+  /** The live drill's incident picture (incidentPicture.ts), when the board runs beside one. */
+  incidentPicture: IncidentPicture | null = null,
 ): DemoObservation {
   const minute = board.minute;
   // The commander sees only fires the dispatch centre knows about (response/report.ts).
@@ -647,6 +652,7 @@ export function buildObservation(
     response: responseObservation(board),
     monitor: { woke_because: wokeBecause },
     previous,
+    incident_picture: incidentPicture,
     closed_roads: closedRoadsObservation(board),
   };
 }

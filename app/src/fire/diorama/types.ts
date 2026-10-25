@@ -1,3 +1,4 @@
+import type { MapStation } from "../../maps/stations";
 /**
  * Contract between the fire spread page (`FireSimulatorPage.tsx`) and the three.js diorama
  * renderer in this folder (see docs/adr/0011-fire-diorama-view.md).
@@ -54,11 +55,14 @@ export type FireDioramaOptions = { reducedMotion: boolean };
  * vehicles). `attach` runs every time the board is rebuilt; the overlay adds its objects
  * under `parent` and must remove and dispose them in `detach`.
  */
+/** Camera state handed to overlays each frame so labels can adapt their detail to the zoom. */
+export type OverlayView = { camera: THREE.PerspectiveCamera; distance: number; fit: number };
+
 export interface BoardOverlay {
   attach(frame: BoardFrame, parent: THREE.Group, labels: LabelLayer): void;
   detach(): void;
   /** Every animation frame: seconds since start (frozen under reduced motion), frame delta, viewport px. */
-  tick(time: number, dt: number, reducedMotion: boolean, width: number, height: number): void;
+  tick(time: number, dt: number, reducedMotion: boolean, width: number, height: number, view?: OverlayView): void;
 }
 
 /**
@@ -99,6 +103,9 @@ export interface FireDioramaSceneApi {
   setCoverHouses(visible: boolean): void;
   /** Animate to a view of the ground within `radiusMeters` of `point`. */
   focusOn(point: GeoPoint, radiusMeters: number): void;
+  /** Fire-station markers: a list draws exactly those, `null` the automatic CAL FIRE fetch around the board. */
+  setStations(stations: readonly MapStation[] | null, suffix?: string): void;
+  setStationSuffix(suffix: string): void;
   /**
    * Opt-in fire states per landscape cell (row-major, the grid's cells): 0 unburned, 1 burning
    * (glow, flames, smoke), 2 burned out (char), 3 extinguished (wet slate with a pale hatch and a

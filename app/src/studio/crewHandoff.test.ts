@@ -11,7 +11,7 @@ function trip(label: string, arriveMinute: number): CrewTrip {
     origin: "station",
     roadPoint: [0, 0],
     hikeMeters: 0,
-    stoppedShortBy: null,
+    tactic: "direct", holdingRoad: null, stoppedShortBy: null,
     departMinute: 1,
     atRoadMinute: arriveMinute,
     arriveMinute,
@@ -30,7 +30,7 @@ const DISPATCH: CrewDispatch = {
   hikeMeters: 0,
   hikeMinutes: 0,
   trips: [trip("Engine 1", 12), trip("Engine 2", 20)],
-  noAccess: [],
+  noAccess: [], helitack: null,
   notes: [],
 };
 

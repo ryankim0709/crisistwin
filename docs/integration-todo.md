@@ -76,11 +76,11 @@ but not wired, unmarked = not started. Items are in dependency order within each
 
 ## 4. Firefighting
 
-- [ ] **Rothermel implementations disagree** for live-fuel models: at Camp inputs for SH5,
-      `app/src/fire/rothermel.ts` gives 85 m/min (reaction intensity 3,030) and `sim/fire.py` 173 m/min
-      (6,144). The TS code weights each category's reaction term by its area share, the Python does
-      not; they agree for dead-only fuels. Check both against Andrews (2018), RMRS-GTR-371, and fix
-      the wrong one.
+- [x] Rothermel implementations agree with Behave (BehavePlus engine) to within 0.05%: the TS code
+      wrongly weighted each category's reaction term by f_i, and both used f_ij instead of the
+      size-subclass g_ij for net load; SH5 at Camp is now 173 m/min in both, and the BehavePlus GS4
+      spotting example reproduces (SPREAD_MODEL 4.4.0, rothermel-mtt 0.2.0;
+      [fire-simulator.md](fire-simulator.md#surface-model-equations-and-reference-check)).
 - [x] Drill roads enriched with OSM tags (by way id) and 3DEP grade for the /live board's crew
       routing; units stop short of fires no allowed road reaches
       ([command-demo-realism.md](command-demo-realism.md#road-access)). Left: grade for non-Camp

@@ -13,6 +13,7 @@ import type { Map as MapLibreMap } from "maplibre-gl";
 import type { LandscapeGrid, MercatorBox } from "../fire/landscape";
 import type { ScenarioWindRecord } from "../fire/scenarioWeather";
 import type { GeoPoint } from "../fire/spread";
+import { HORIZON_PRESET_HOURS, frameStepMinutes } from "../fire/horizon";
 import type {
   FireSettings,
   IgnitionProblem,
@@ -20,7 +21,7 @@ import type {
   ScheduledFireRun,
 } from "../fire/scheduledTypes";
 import type { CrewArrival, FirefightingResult, FirefightingSettings } from "./firefighting";
-import type { CrewDispatch } from "./crewDispatch";
+import type { CrewDispatch, IncidentDispatch } from "./crewDispatch";
 import type { EvacuationInputs } from "./evacuation";
 import type { EvacuationOptimization } from "./evacuationOptimizer";
 
@@ -66,10 +67,21 @@ export interface StudioScenario {
 export const MAX_REPORT_MINUTE = 1440;
 /** Configurable cap on enabled ignitions, bounding solve cost and map clutter. */
 export const MAX_ENABLED_IGNITIONS = 5;
-/** Horizons offered, minutes. */
-export const STUDIO_HORIZON_CHOICES = [60, 120, 180, 360] as const;
-/** Regular playback frames, in addition to T+0, every ignition minute and the horizon. */
+/**
+ * One-click horizons, minutes (3 h to 3 days, fire/horizon.ts). Any whole number of minutes
+ * from `MIN_HORIZON_MINUTES` (1 h) to `MAX_HORIZON_MINUTES` (7 days) is valid.
+ */
+export const STUDIO_HORIZON_CHOICES = HORIZON_PRESET_HOURS.map((hours) => hours * 60);
+/**
+ * Regular playback frames on short runs, in addition to T+0, every ignition minute and the
+ * horizon. Longer runs space them further apart (`studioDisplayStepMinutes`).
+ */
 export const DISPLAY_STEP_MINUTES = 5;
+
+/** Spacing of the regular frames for a horizon: 5 min up to 20 h, 10 min to 40 h, 30 min at 72 h. */
+export function studioDisplayStepMinutes(horizonMinutes: number): number {
+  return frameStepMinutes(horizonMinutes, DISPLAY_STEP_MINUTES);
+}
 /** Wind slider range, open 20-foot mph; matches the /fire page. */
 export const MIN_WIND_SPEED_MPH = 0;
 export const MAX_WIND_SPEED_MPH = 60;
@@ -180,6 +192,11 @@ export type SolverRequest = {
   crewArrivals: CrewArrival[] | null;
   /** Helitack and air attack bases near the fire (null without the local bases file). */
   airBases: AirBase[] | null;
+  /**
+   * One incident per ignition (studio/incidents.ts): report minute and the aircraft sent to it.
+   * Null or absent: one incident, the first fire, with the counts in `firefighting.resources`.
+   */
+  incidents?: IncidentDispatch[] | null;
 };
 
 export type SolverResponse =
@@ -289,6 +306,8 @@ export interface ConfigPanelProps {
   onRun: () => void;
   /** The "Random scenario" button, "Keep this area" box and seed field (the page owns them). */
   randomScenario?: ReactNode;
+  /** Quick-setup controls (location, size, fire starts, generate); shown unless Custom is on. */
+  quickSetup?: ReactNode;
   onCancel: () => void;
   onClear: () => void;
   onExport: () => void;
@@ -311,6 +330,8 @@ export interface ConfigPanelProps {
 export interface PlaybackBarProps {
   /** Disabled when there is no playable result. */
   enabled: boolean;
+  /** The speed menu is locked while something else drives the clock (an AI dispatcher session). */
+  speedLocked?: boolean;
   frameMinutes: number[];
   frameIndex: number;
   horizonMinutes: number;
@@ -333,4 +354,9 @@ export interface PlaybackBarProps {
   onSpeedChange: (speed: number) => void;
   /** Scrub to a frame index. */
   onSeek: (frameIndex: number) => void;
+  /**
+   * The scenario's clock (T+0 as UTC ms) and where to compute sunrise and sunset; when set the
+   * bar shows local time with day and night. Absent: elapsed time only.
+   */
+  clock?: { startMs: number; latitude: number; longitude: number; note?: string };
 }

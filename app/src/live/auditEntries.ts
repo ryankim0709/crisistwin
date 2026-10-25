@@ -1,4 +1,4 @@
-import type { DemoOrder } from "../demo/contracts";
+import { isLiveOrder, type CommanderOrder } from "../demo/contracts";
 import { simClock } from "../demo/format";
 import type { BoardEvent } from "../demo/model";
 import type { AgentDecision } from "../demo/useDemoAgent";
@@ -61,7 +61,12 @@ export function drillVerb(action: string): string {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-export function orderText(order: DemoOrder, name: (id: string) => string): string {
+export function orderText(order: CommanderOrder, name: (id: string) => string): string {
+  if (order.type === "send_rescue") return `Send a responder to help request ${order.help_id}`;
+  if (order.type === "close_road") return `Close road ${order.road_id}`;
+  if (order.type === "reopen_road") return `Reopen road ${order.road_id}`;
+  if (order.type === "confirm_report") return `Confirm report ${order.report_id}`;
+  if (order.type === "dismiss_report") return `Dismiss report ${order.report_id}`;
   if (order.type === "send_crew") return `Send ${order.crew_id} to ${order.fire_id}`;
   if (order.type === "release_crew") return `Release ${order.crew_id}`;
   if (order.type === "order_resources") return `Order ${order.count} ${order.resource.replace(/_/g, " ")} for ${order.fire_id}`;
@@ -70,7 +75,9 @@ export function orderText(order: DemoOrder, name: (id: string) => string): strin
   return `Evacuate ${name(order.zone_id)} to ${name(order.destination_id)}${order.start_minute != null ? ` at ${simClock(order.start_minute)}` : ""}`;
 }
 
-function orderRef(order: DemoOrder): AuditEntry["boardRef"] {
+function orderRef(order: CommanderOrder): AuditEntry["boardRef"] {
+  // Live drill actions name live records (help requests, roads, reports), not board items.
+  if (isLiveOrder(order)) return null;
   if (order.type === "send_crew") return { kind: "fire", id: order.fire_id };
   if (order.type === "release_crew") return { kind: "team", id: order.crew_id };
   if (order.type === "order_resources" || order.type === "set_strategy") return { kind: "fire", id: order.fire_id };

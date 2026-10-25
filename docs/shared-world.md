@@ -117,6 +117,39 @@ kept as a JSON string, `extrasJson`). Implementation: `app/backend/api/world.py`
 - `useScenarios(updatedBy)`: `{scenarios, status, error, refresh, save, load, get, remove}`;
   `load` makes the scenario active, pushes the new world into `useWorld` and resolves to the
   full scenario (with extras).
-- `<ScenarioMenu tab getExtras? onLoaded? align? />`: header button with a popover to save the
-  current world (name, notes, plus `getExtras()` under the tab's key) and to list, load or
-  delete scenarios.
+- `<ScenarioMenu tab getExtras? onLoaded? align? placement? syncEnabled? />`: header button with a
+  popover to save the current world (name, notes, plus `getExtras()` under the tab's key) and to
+  list, load or delete scenarios. Saving also asks every other synced workspace tab open in the
+  same browser for its extras (`BroadcastChannel("crisistwin-world-extras")`, 400 ms), and loading
+  tells them to restore theirs, so one saved scenario restores all tabs.
+- `useWorldSync({tab, local, apply})` (`useWorldSync.ts`): binds one tab's own state to the world.
+  `local` is the tab's state in world shape (only the fields it owns; a field left undefined is not
+  its to write); `apply(world, changed)` takes another tab's change. A user edit is written ~500 ms
+  later (only the changed groups; a weather or moisture mode always goes with its fields); a field
+  the tab is still editing is not overwritten by a remote change; a value just received is never
+  written back, and a value the tab can only approximate (a percentile the board has no preset for,
+  a custom area on a catalogue-only page) is absorbed rather than written back. `write(changes)`
+  writes a one-off action instead (the /live board). "Don't sync this tab" (`localStorage`
+  `crisistwin.world.sync.<tab>`) turns both directions off for experiments. While the world is at
+  revision 0 (nobody has written one) each tab keeps its own defaults.
+- `<WorldBar>` (`WorldBar.tsx`): the scenario menu, "Synced with other tabs · changed by Studio
+  2 s ago" and the "Don't sync this tab" switch; `<WorldSummary>` is the read-only line.
+- `randomScenario.ts`: the page-agnostic "Random scenario" draw (seed + region + landscape grid +
+  road nodes → date, weather source, 1–2 ignitions, summary), used by Studio and /dispatch. The
+  tab that draws one notes `{by, seed}` in `localStorage` (`crisistwin.world.random`); other tabs'
+  sync line then reads "Random scenario from Studio · seed N" while the world's `seed` is that seed.
+- `weather.ts`: a page's scenario-weather record (`fire/scenarioWeather.ts`) to and from the world's
+  `conditions` (`choiceOfRecord`, `recordMatchesWorld`, `fetchWorldWind`).
+
+## What each tab syncs
+
+| Field | /fire | /simulation, /dispatch (Studio) | /live board | /app-integration |
+| --- | --- | --- | --- | --- |
+| `region` | region select, custom area (centre + area size); a catalogue region at ≥ 10 km opens as a custom area there; `historical_fire` opens the historical diorama | region select + Area size (≥ 10 km is a chosen size); a non-catalogue area selects the catalogue board it sits on, else keeps the board and says so | board size (`radiusMeters`, floored at 15 km); the board's centre when the region is this drill's (`kind: "incident"` with its id, or centred within 20 km of the drill's zones) | shown |
+| `conditions.startUtc`, `weather` | wind source picker (record refetched at the ignition, hour-by-hour series); assumed = the wind sliders | wind source picker / the Random scenario's date and weather; assumed = the wind fields | the closest wind preset (`climatology_percentile` → Nov P95; `historical_replay` → the nearest preset start; assumed and forecast leave it) | shown (date) |
+| `moisture` | preset buttons (`derived` leaves the preset) | moisture preset; `derived` when the Random scenario's series sets it | — | — |
+| `fire.ignitions` | the earliest ignition is the page's one origin; the others are kept and noted | the enabled fires (disabled ones stay local) | — (board fires are its own simulation) | — |
+| `fire.stochastic` | natural variation on/off + seed | natural variation on/off + seed | `seed` is the board seed ("Restart board" writes a new one; a new seed restarts the board) | — |
+| `seed` | — | the Random scenario seed (pre-fills the seed box) | — | — |
+| `liveIncidentId` | — | — | written when the active drill switches | shown |
+| extras | spotting, structure spread, fire-induced wind, wind over the run, ensemble runs | the full `StudioScenario`, region and area size | speed, activity, running, wind preset | — |

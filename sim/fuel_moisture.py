@@ -28,11 +28,29 @@ tables print it, and as a fraction, as ``app/src/fire/rothermel.ts`` ``FuelMoist
   entering dormancy 50 %, completely cured < 30 % "treat as a dead fuel", used here as 30 %). Which
   stage applies on a date is an ASSUMED regional phenology calendar (``PHENOLOGY_CALENDARS``),
   interpolated linearly between mid-month anchors (the report's own example interpolates between
-  stages, p. 13). Not observed: replace with measured live fuel moisture when available.
+  stages, p. 13). Not observed: replace with measured live fuel moisture when available. Since
+  ``live-gsi/1`` this calendar is only the fallback: ``/api/conditions`` overwrites live moisture with
+  the NFDRS 2016 Growing Season Index value of ``sim/live_moisture.py`` when its ERA5 lead-in loads.
 
-Not modelled (stated, not hidden): precipitation and dew (the report's CAUTION, p. 13: the tables
-"assume that there has not been recent precipitation"; after rain these values are too dry),
-cloud cover (pass ``shading="shaded"`` for overcast hours), and wetting/drying hysteresis.
+* **Rain: derived from measured (or modelled/forecast) hourly precipitation, hourly adaptation
+  ASSUMED.** The 1978 NFDRS rain-duration boundary conditions (Bradshaw, L.S., Deeming, J.E.,
+  Burgan, R.E. and Cohen, J.D. 1984, *The 1978 National Fire-Danger Rating System: technical
+  documentation*, USDA FS GTR INT-169, pp. 13-14): a period's boundary condition is the
+  time-weighted mean of the EMC over its dry hours and a wet value over its ``pd`` hours of rain,
+  ``D = [(T - pd) EMC + W(pd) pd] / T``, with ``W = 2.7 pd + 76`` for the 10-h (eq. 32 and 33, from
+  Fosberg 1972; the same function is the 1,000-h eq. 41) and ``W = 0.5 pd + 41`` for the 100-h
+  (eq. 36). Hourly, as here, that mean becomes a boundary of ``W(pd)`` in each rain hour and the
+  usual ``E`` otherwise, integrated with the basic diffusion equation (eq. 25, similarity
+  coefficient 1, as eq. 26 uses) over each hour. ASSUMPTIONS: ``pd`` = rain hours in the trailing
+  24 h (eq. 36's period), at most 8 h (eq. 39's limit); a rain hour has at least one gauge tip
+  (0.01 in); the 1-h class takes the 10-h wet value (the report gives no rain rule for the 1-h);
+  the 1-h class keeps its table value plus a rain excess that decays with its 1 h timelag. Hours
+  with no rain in their history give exactly the table path above (``rain.adjusted`` false).
+
+Not modelled (stated, not hidden): dew (the report's CAUTION, p. 13: the tables "assume that there
+has not been recent precipitation"; rain is handled as above, dew is not), cloud cover (pass
+``shading="shaded"`` for overcast hours), wetting/drying hysteresis, and a missing precipitation
+report (treated as no rain, counted in ``rain.precip_missing_hours``).
 """
 
 from __future__ import annotations
@@ -42,7 +60,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 
-MODEL_VERSION = "fuel-moisture/1"
+MODEL_VERSION = "fuel-moisture/2"  # 2: rain-duration boundary conditions (NFDRS 1978)
 
 # --------------------------------------------------------------------------- Rothermel 1983 tables
 
@@ -162,6 +180,41 @@ TIMELAG_10H_HOURS = 10.0  # timelag class definition (Byram 1963; Fosberg 1970)
 TIMELAG_100H_HOURS = 100.0
 LAG_INIT_WINDOW_HOURS = 24  # assumption: lagged classes start at the mean forcing of the first day
 MAX_FILL_GAP_HOURS = 3  # assumption: temperature/RH gaps up to this long are filled linearly
+TIMELAG_1H_HOURS = 1.0  # timelag class definition; used only for the rain excess of the 1-h class
+
+# --------------------------------------------------------------------------- rain (NFDRS 1978)
+
+RAIN_MODEL = ("1978 NFDRS rain-duration boundary conditions (Bradshaw et al. 1984, GTR INT-169, "
+              "eq. 32/33 10-h, eq. 36 100-h, eq. 25 diffusion), adapted hourly (assumption)")
+RAIN_HOUR_MIN_MM = 0.254
+"""ASSUMPTION: an hour is a rain hour (counts toward the precipitation duration ``pd``) when its
+precipitation is at least 0.01 in = 0.254 mm, one tip of the 0.01 in tipping-bucket gauge RAWS and
+ASOS report in (and the smallest amount they report; an ASOS trace reads as 0). The report's ``pd``
+is an observed duration in hours (GTR INT-169 p. 14), not an amount."""
+RAIN_DURATION_WINDOW_HOURS = 24
+"""ASSUMPTION: ``pd`` at an hour counts the rain hours in the trailing 24 h, the period of the 100-h
+boundary condition (GTR INT-169 eq. 36, "the precipitation duration for the 24-hour period")."""
+RAIN_DURATION_MAX_HOURS = 8
+"""GTR INT-169 eq. 39: an estimated precipitation duration is "limited to a maximum of 8 hours".
+ASSUMPTION: the same cap applies to the counted ``pd`` here (bounds the wet values at 97.6 % for
+the 1-h/10-h and 45 % for the 100-h)."""
+RAIN_EXCESS_CUTOFF_PCT = 0.5
+"""ASSUMPTION: a 1-h rain excess below half of the tables' 1 % resolution is dropped, so the hour
+returns to the plain table value."""
+
+
+def wet_boundary_10h_pct(rain_duration_h: float) -> float:
+    """Wet boundary value, percent, of the 10-h class for ``pd`` hours of rain: ``2.7 pd + 76``.
+
+    GTR INT-169 eq. 32 and 33 ("The precipitation duration effect function (2.7 pd + 76) is from
+    Fosberg (1972)"), also the 1,000-h eq. 41. Used for the 1-h class too (ASSUMPTION).
+    """
+    return 2.7 * rain_duration_h + 76.0
+
+
+def wet_boundary_100h_pct(rain_duration_h: float) -> float:
+    """Wet boundary value, percent, of the 100-h class: ``0.5 pd + 41`` (GTR INT-169 eq. 36)."""
+    return 0.5 * rain_duration_h + 41.0
 
 # --------------------------------------------------------------------------- live moisture
 
@@ -430,7 +483,12 @@ def moisture_series(
     spinup_samples: Sequence[dict] = (),
     clock_shift: timedelta = timedelta(0),
 ) -> dict:
-    """Per-hour dead and live moisture for hourly samples ``{t_utc, temp_c, rh_pct}``.
+    """Per-hour dead and live moisture for hourly samples ``{t_utc, temp_c, rh_pct, precip_mm}``.
+
+    ``precip_mm`` (optional; mm in the hour ending at ``t_utc``; missing counts as no rain) drives
+    the rain boundary conditions of the module docstring. ``fine_fuel`` is always the plain table
+    lookup; ``rain.no_rain_pct`` is the hour without any rain and ``rain.adjusted`` says whether
+    rain changed it.
 
     ``spinup_samples``: earlier hours (same station) that only warm up the 10-h/100-h state.
     ``clock_shift``: added to each ``t_utc`` before the clock-dependent table lookups and the live
@@ -438,8 +496,9 @@ def moisture_series(
     so the tables see the hours the temperature and humidity were really observed at.
 
     Returns ``{hours: [{t_utc, moisture{dead1h, dead10h, dead100h, liveHerb, liveWoody},
-    fine_fuel{...}, live{...}, met_filled}], spinup_hours_used, lag_initial_pct}``; fractions are
-    of oven-dry weight, ``None`` where the hour has no temperature or humidity.
+    fine_fuel{...}, dead_lag_pct{...}, rain{...}, live{...}, met_filled}], spinup_hours_used,
+    lag_initial_pct, rain{...}}``; fractions are of oven-dry weight, ``None`` where the hour has no
+    temperature or humidity.
     """
     site = site.validated()
     allrows = list(spinup_samples) + list(samples)
@@ -460,52 +519,131 @@ def moisture_series(
     if not first:
         first = [f for f in forcing if f is not None][:LAG_INIT_WINDOW_HOURS]
     init = sum(first) / len(first) if first else None
-    m10 = m100 = init
+
+    # Rain hours and the precipitation duration pd (trailing window, capped): see RAIN_* above.
+    precip = [s.get("precip_mm") for s in allrows]
+    wet = [p is not None and p >= RAIN_HOUR_MIN_MM for p in precip]
+    pd_count = [sum(wet[max(0, i - RAIN_DURATION_WINDOW_HOURS + 1):i + 1]) for i in range(len(wet))]
+    pd_used = [min(n, RAIN_DURATION_MAX_HOURS) for n in pd_count]
+
+    k1 = math.exp(-1.0 / TIMELAG_1H_HOURS)
     k10 = math.exp(-1.0 / TIMELAG_10H_HOURS)
     k100 = math.exp(-1.0 / TIMELAG_100H_HOURS)
+    # *_dry: the same integration with no rain, kept so each hour can say what rain changed.
+    m10 = m100 = m10_dry = m100_dry = init
+    excess1 = 0.0  # 1-h moisture above the hour's table value left by rain, percent
+    one_out: list[float | None] = []
     lag10: list[float | None] = []
     lag100: list[float | None] = []
+    lag10_dry: list[float | None] = []
+    lag100_dry: list[float | None] = []
     held: list[bool] = []
     prev_e: float | None = None
+    prev_m1: float | None = None
     for i, e in enumerate(forcing):
         if i > 0 and m10 is not None:
             if prev_e is not None:
                 # Exact solution of dm/dt = (E - m)/tau over one hour with E held at the
-                # previous hour's value.
+                # previous hour's value (GTR INT-169 eq. 25, similarity coefficient 1).
+                m10_dry = prev_e + (m10_dry - prev_e) * k10
+                m100_dry = prev_e + (m100_dry - prev_e) * k100
+            if wet[i]:
+                # Rain in the hour ending at i: the boundary is the wet value for pd hours of rain
+                # (eq. 32/33 for the 10-h, eq. 36 for the 100-h); hourly adaptation (assumption).
+                b10, b100 = wet_boundary_10h_pct(pd_used[i]), wet_boundary_100h_pct(pd_used[i])
+                m10 = b10 + (m10 - b10) * k10
+                m100 = b100 + (m100 - b100) * k100
+            elif prev_e is not None:
                 m10 = prev_e + (m10 - prev_e) * k10
                 m100 = prev_e + (m100 - prev_e) * k100
+        # 1-h class: table value E plus a rain excess (assumption, see the module docstring).
+        if wet[i]:
+            start_m1 = prev_m1 if prev_m1 is not None else e
+            if start_m1 is not None and e is not None:
+                b1 = wet_boundary_10h_pct(pd_used[i])
+                excess1 = max(0.0, b1 + (start_m1 - b1) * k1 - e)
+        elif excess1:
+            excess1 *= k1  # dries with the 1 h timelag (eq. 25) relative to the table value
+            if excess1 < RAIN_EXCESS_CUTOFF_PCT:
+                excess1 = 0.0
+        m1 = None if e is None else e + excess1
+        one_out.append(m1)
+        if m1 is not None:
+            prev_m1 = m1
         lag10.append(m10)
         lag100.append(m100)
-        held.append(i > 0 and prev_e is None)
+        lag10_dry.append(m10_dry)
+        lag100_dry.append(m100_dry)
+        held.append(i > 0 and prev_e is None and not wet[i])
         prev_e = e
+
+    def r2(x):
+        return None if x is None else round(x, 2)
+
     hours = []
+    adjusted_utc: list[str] = []
     for i in range(n_spin, len(allrows)):
         s = allrows[i]
         d = one_h[i]
         t = datetime.fromisoformat(s["t_utc"].replace("Z", "+00:00")) + clock_shift
         live = live_fuel_moisture(local_mean_solar_time(t, lon_deg).date(), phenology_class)
+        m1 = one_out[i]
         moisture = {
-            "dead1h": round(d["moisture_pct"] / 100.0, 4) if d else None,
+            "dead1h": round(m1 / 100.0, 4) if (d and m1 is not None) else None,
             "dead10h": round(lag10[i] / 100.0, 4) if (d and lag10[i] is not None) else None,
             "dead100h": round(lag100[i] / 100.0, 4) if (d and lag100[i] is not None) else None,
             "liveHerb": live["liveHerb"],
             "liveWoody": live["liveWoody"],
         }
+        with_rain = {"dead1h": r2(m1), "dead10h": r2(lag10[i]), "dead100h": r2(lag100[i])} if d else {}
+        no_rain = ({"dead1h": r2(d["moisture_pct"]), "dead10h": r2(lag10_dry[i]),
+                    "dead100h": r2(lag100_dry[i])} if d else None)
+        adjusted = bool(d) and any(with_rain[k] != no_rain[k] for k in with_rain)
+        if adjusted:
+            adjusted_utc.append(s["t_utc"])
         hours.append({
             "t_utc": s["t_utc"],
             "moisture": moisture,
             "fine_fuel": d,
             "dead_lag_pct": {
-                "dead10h": None if lag10[i] is None else round(lag10[i], 2),
-                "dead100h": None if lag100[i] is None else round(lag100[i], 2),
+                "dead10h": r2(lag10[i]),
+                "dead100h": r2(lag100[i]),
                 "held_through_gap": held[i],
+            },
+            "rain": {
+                "precip_mm": precip[i],
+                "rain_hour": wet[i],
+                "rain_hours_24h": pd_count[i],
+                "pd_used_h": pd_used[i],
+                "wet_boundary_pct": ({"dead1h_dead10h": round(wet_boundary_10h_pct(pd_used[i]), 2),
+                                      "dead100h": round(wet_boundary_100h_pct(pd_used[i]), 2)}
+                                     if wet[i] else None),
+                "dead1h_excess_pct": round(m1 - d["moisture_pct"], 2) if (d and m1 is not None) else None,
+                "adjusted": adjusted,
+                "no_rain_pct": no_rain,
             },
             "live": {k: live[k] for k in ("herb_pct", "woody_pct", "herb_stage", "woody_stage",
                                           "herb_between", "woody_between")},
             "met_filled": tfill[i] or hfill[i],
         })
+    win, spin = range(n_spin, len(allrows)), range(n_spin)
     return {
         "hours": hours,
         "spinup_hours_used": n_spin,
         "lag_initial_pct": None if init is None else round(init, 2),
+        "rain": {
+            "model": RAIN_MODEL,
+            "rain_hour_min_mm": RAIN_HOUR_MIN_MM,
+            "duration_window_h": RAIN_DURATION_WINDOW_HOURS,
+            "duration_max_h": RAIN_DURATION_MAX_HOURS,
+            "rain_hours": sum(wet[i] for i in win),
+            "rain_hours_spinup": sum(wet[i] for i in spin),
+            "precip_total_mm": round(sum(precip[i] or 0.0 for i in win), 2),
+            "precip_total_spinup_mm": round(sum(precip[i] or 0.0 for i in spin), 2),
+            "precip_missing_hours": sum(precip[i] is None for i in win),
+            "precip_missing_hours_spinup": sum(precip[i] is None for i in spin),
+            "adjusted_hours": len(adjusted_utc),
+            "adjusted_from_utc": adjusted_utc[0] if adjusted_utc else None,
+            "adjusted_to_utc": adjusted_utc[-1] if adjusted_utc else None,
+        },
     }

@@ -30,6 +30,7 @@ const MIN_SPEED_MS = 1.5;
 
 const SRC = {
   homes: "ppl-homes",
+  chevrons: "ppl-chevrons",
   roads: "ppl-roads",
   dots: "ppl-dots",
   points: "ppl-points",
@@ -38,16 +39,20 @@ const SRC = {
 } as const;
 
 export const PEOPLE_LAYER_IDS = [
+  "ppl-density",
   "ppl-homes",
   "ppl-homes-label",
   "ppl-roads-casing",
   "ppl-roads",
+  "ppl-chevrons",
   "ppl-points",
   "ppl-dots",
   "ppl-out",
   "ppl-out-label",
+  "ppl-out-label-all",
   "ppl-stuck",
   "ppl-stuck-label",
+  "ppl-stuck-label-all",
 ];
 /** Layers with a popup; a host map should skip its own click handling on these. */
 export const PEOPLE_INTERACTIVE_LAYERS = ["ppl-homes", "ppl-roads", "ppl-points", "ppl-out", "ppl-stuck"];
@@ -104,6 +109,33 @@ function along(g: EdgeGeom, f: number): LonLat {
 /** Stable pseudo-random phase per edge, so dots on neighbouring edges do not line up. */
 const phaseOf = (i: number) => (Math.imul(i + 1, 2654435761) >>> 0) / 4294967296;
 
+/** Rotation (deg clockwise, for a ">" glyph that points east) of the line direction at fraction f. */
+function rotationAt(g: EdgeGeom, f: number): number {
+  const a = along(g, f - 0.01);
+  const b = along(g, f + 0.01);
+  const kx = Math.cos((a[1] * Math.PI) / 180);
+  const bearing = (Math.atan2((b[0] - a[0]) * kx, b[1] - a[1]) * 180) / Math.PI;
+  return bearing - 90;
+}
+
+interface FlowEdge {
+  g: EdgeGeom;
+  /** Chevrons along the edge. */
+  n: number;
+  /** Fraction of the edge per second the chevrons advance (0 for slow or stuck roads). */
+  rate: number;
+  phase: number;
+}
+
+const MAX_CHEVRONS = 1800;
+
+/** Clock time like "2:40 pm" in the incident's time zone. */
+function clock(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/Los_Angeles" }).toLowerCase();
+}
+
 interface MovingEdge {
   g: EdgeGeom;
   n: number;
@@ -140,19 +172,40 @@ export function attachPeopleLayer(map: MapLibreMap, beforeId?: string): PeopleLa
   const before = beforeId && map.getLayer(beforeId) ? beforeId : undefined;
   for (const id of Object.values(SRC)) map.addSource(id, { type: "geojson", data: fc([]) });
   const add = (layer: Parameters<MapLibreMap["addLayer"]>[0]) => map.addLayer(layer, before);
+  /** Line width grows with the square root of people on the road (people, px). */
+  const WIDTH = (min: number, mid: number, max: number, _z: number) =>
+    ["interpolate", ["linear"], ["sqrt", ["get", "people"]], 1, min, 20, mid, 60, max] as never;
   const byPeople = (min: number, max: number) =>
     ["interpolate", ["linear"], ["sqrt", ["get", "people"]], 1, min, 30, (min + max) / 2, 80, max] as never;
 
+  // Smooth density surface of people still home; weight = share of the busiest zone, so it fades as they leave.
+  add({
+    id: "ppl-density",
+    type: "heatmap",
+    source: SRC.homes,
+    paint: {
+      "heatmap-weight": ["get", "w"] as never,
+      "heatmap-intensity": 1,
+      "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 8, 30, 11, 60, 13, 100, 16, 180] as never,
+      "heatmap-opacity": ["interpolate", ["linear"], ["zoom"], 13, 0.85, 16, 0.45] as never,
+      "heatmap-color": [
+        "interpolate", ["linear"], ["heatmap-density"],
+        0, "rgba(99,102,241,0)", 0.1, "rgba(165,180,252,0.30)", 0.35, "rgba(129,140,248,0.55)",
+        0.65, "rgba(79,70,229,0.75)", 1, "rgba(49,46,129,0.9)",
+      ] as never,
+    },
+  });
   add({
     id: "ppl-homes",
     type: "circle",
     source: SRC.homes,
+    minzoom: 12.5,
     paint: {
-      "circle-radius": byPeople(4, 26),
+      "circle-radius": byPeople(3, 16),
       "circle-color": C.home,
-      "circle-opacity": 0.38,
+      "circle-opacity": 0.2,
       "circle-stroke-color": C.homeEdge,
-      "circle-stroke-width": 1.5,
+      "circle-stroke-width": 1,
     },
   });
   add({
@@ -163,7 +216,7 @@ export function attachPeopleLayer(map: MapLibreMap, beforeId?: string): PeopleLa
     paint: {
       "line-color": C.halo,
       "line-opacity": 0.7,
-      "line-width": ["interpolate", ["linear"], ["get", "people"], 1, 5, 50, 8, 400, 13] as never,
+      "line-width": WIDTH(2, 7, 22, 3),
     },
   });
   add({
@@ -172,15 +225,32 @@ export function attachPeopleLayer(map: MapLibreMap, beforeId?: string): PeopleLa
     source: SRC.roads,
     layout: { "line-cap": "round", "line-join": "round" },
     paint: {
-      "line-color": ["match", ["get", "state"], "stuck", C.stuck, C.queued] as never,
-      "line-opacity": 0.85,
-      "line-width": ["interpolate", ["linear"], ["get", "people"], 1, 3, 50, 5.5, 400, 10] as never,
+      "line-color": ["match", ["get", "state"], "stuck", C.stuck, "queued", C.flowSlow, C.flowMoving] as never,
+      "line-opacity": 0.92,
+      "line-width": WIDTH(1, 4.5, 18, 0),
     },
+  });
+  add({
+    id: "ppl-chevrons",
+    type: "symbol",
+    source: SRC.chevrons,
+    layout: {
+      "text-field": ">",
+      "text-font": ["Noto Sans Regular"],
+      "text-size": ["interpolate", ["linear"], ["zoom"], 9, 9, 14, 14] as never,
+      "text-rotate": ["get", "rot"],
+      "text-rotation-alignment": "map",
+      "text-pitch-alignment": "map",
+      "text-allow-overlap": true,
+      "text-ignore-placement": true,
+    } as never,
+    paint: { "text-color": "#FFFFFF", "text-halo-color": "rgba(15,23,32,0.55)", "text-halo-width": 0.8 },
   });
   add({
     id: "ppl-points",
     type: "circle",
     source: SRC.points,
+    minzoom: 13.5,
     paint: {
       "circle-radius": byPeople(3, 9),
       "circle-color": ["match", ["get", "state"], "stuck", C.stuck, C.queued] as never,
@@ -192,6 +262,7 @@ export function attachPeopleLayer(map: MapLibreMap, beforeId?: string): PeopleLa
     id: "ppl-dots",
     type: "circle",
     source: SRC.dots,
+    minzoom: 13.5,
     paint: {
       "circle-radius": ["interpolate", ["linear"], ["zoom"], 10, 1.8, 13, 3, 16, 4.5] as never,
       "circle-color": ["match", ["get", "s"], 2, C.stuck, 1, C.queued, C.driving] as never,
@@ -204,11 +275,11 @@ export function attachPeopleLayer(map: MapLibreMap, beforeId?: string): PeopleLa
     type: "circle",
     source: SRC.out,
     paint: {
-      "circle-radius": byPeople(5, 20),
-      "circle-color": C.out,
-      "circle-opacity": 0.75,
+      "circle-radius": byPeople(9, 24),
+      "circle-color": ["coalesce", ["get", "color"], C.out] as never,
+      "circle-opacity": 0.85,
       "circle-stroke-color": C.halo,
-      "circle-stroke-width": 2,
+      "circle-stroke-width": 3,
     },
   });
   add({
@@ -241,8 +312,17 @@ export function attachPeopleLayer(map: MapLibreMap, beforeId?: string): PeopleLa
       paint: { "text-color": color, "text-halo-color": C.halo, "text-halo-width": 1.8 },
     });
   label("ppl-homes-label", SRC.homes, C.homeEdge, { "text-size": 11, "text-offset": [0, 0], "text-anchor": "center" });
-  label("ppl-out-label", SRC.out, C.outEdge);
+  // Regional zoom: only the top 3 stuck groups and top 3 exits are named; closer in, all of them.
+  const top3 = ["<=", ["get", "rank"], 3] as never;
+  label("ppl-out-label", SRC.out, C.outEdge, { "text-size": 13, "text-offset": [0, 1.6], "text-max-width": 18 });
   label("ppl-stuck-label", SRC.stuck, C.stuckInk, { "text-size": 12.5 });
+  for (const id of ["ppl-out-label", "ppl-stuck-label"]) {
+    map.setFilter(id, top3);
+    const src = id === "ppl-out-label" ? SRC.out : SRC.stuck;
+    label(`${id}-all`, src, id === "ppl-out-label" ? C.outEdge : C.stuckInk, { "text-size": 12 });
+    map.setLayerZoomRange(id, 0, 13);
+    map.setLayerZoomRange(`${id}-all`, 13, 24);
+  }
   map.setLayerZoomRange("ppl-homes-label", 11.5, 24);
 
   // Popups for the people marks.
@@ -260,8 +340,27 @@ export function attachPeopleLayer(map: MapLibreMap, beforeId?: string): PeopleLa
     map.on("mouseleave", id, leave);
   }
 
+  // On-map time readout and legend (DOM, so they follow the playback clock and read at a glance).
+  const host = map.getContainer();
+  const readout = document.createElement("div");
+  readout.className = "ppl-readout";
+  readout.setAttribute("aria-live", "polite");
+  readout.hidden = true;
+  const legend = document.createElement("div");
+  legend.className = "ppl-legend";
+  legend.hidden = true;
+  legend.innerHTML =
+    `<div class="ppl-legend-row"><i class="ppl-lg-heat"></i>People still home (darker = more)</div>` +
+    `<div class="ppl-legend-row"><i class="ppl-lg-line" style="background:${C.flowMoving}"></i>Moving` +
+    `<i class="ppl-lg-line" style="background:${C.flowSlow}"></i>Slow` +
+    `<i class="ppl-lg-line" style="background:${C.stuck}"></i>Stuck</div>` +
+    `<div class="ppl-legend-row"><span class="ppl-lg-widths"><i style="height:2px"></i><i style="height:5px"></i><i style="height:10px"></i></span>` +
+    `Thicker road = more people</div>`;
+  host.append(readout, legend);
+
   // State held between polls; the animation reads it every frame.
   let moving: MovingEdge[] = [];
+  let flow: FlowEdge[] = [];
   let staticDots: Feature[] = [];
   let running = false;
   let visible = true;
@@ -283,6 +382,17 @@ export function attachPeopleLayer(map: MapLibreMap, beforeId?: string): PeopleLa
     (map.getSource(SRC.dots) as GeoJSONSource | undefined)?.setData(fc(feats));
   };
 
+  const drawChevrons = () => {
+    const feats: Feature[] = [];
+    for (const e of flow) {
+      for (let k = 0; k < e.n; k++) {
+        const f = (e.phase + k / e.n + simT * e.rate) % 1;
+        feats.push(pt(along(e.g, f), { rot: Math.round(rotationAt(e.g, f)) }));
+      }
+    }
+    (map.getSource(SRC.chevrons) as GeoJSONSource | undefined)?.setData(fc(feats));
+  };
+
   const tick = (now: number) => {
     frame = requestAnimationFrame(tick);
     const dt = (now - lastWall) / 1000;
@@ -291,6 +401,7 @@ export function attachPeopleLayer(map: MapLibreMap, beforeId?: string): PeopleLa
     if (!visible || !moving.length || !running || now - lastFrame < FRAME_MS) return;
     lastFrame = now;
     drawDots();
+    drawChevrons();
   };
   if (!reduced) frame = requestAnimationFrame(tick);
 
@@ -300,7 +411,10 @@ export function attachPeopleLayer(map: MapLibreMap, beforeId?: string): PeopleLa
     update(snapshot) {
       if (!snapshot) {
         moving = [];
+        flow = [];
         staticDots = [];
+        readout.hidden = true;
+        legend.hidden = true;
         for (const id of Object.values(SRC)) set(id, fc([]));
         return;
       }
@@ -318,6 +432,8 @@ export function attachPeopleLayer(map: MapLibreMap, beforeId?: string): PeopleLa
         line: col(fields, "line", 10),
       };
       const nextMoving: MovingEdge[] = [];
+      const nextFlow: FlowEdge[] = [];
+      let chevCount = 0;
       const dots: Feature[] = [];
       const roads: Feature[] = [];
       for (const row of snapshot.edges.rows as PeopleEdgeRow[]) {
@@ -338,37 +454,40 @@ export function attachPeopleLayer(map: MapLibreMap, beforeId?: string): PeopleLa
             phase: phaseOf(edge),
           });
         }
-        if (stk > 0) {
-          packed(g, Math.max(1, Math.round(stk / ppd)), DOT_STATE.stuck, dots);
-          roads.push({
-            type: "Feature",
-            geometry: { type: "LineString", coordinates: line },
-            properties: {
-              state: "stuck",
-              people: stk,
-              label: `Simulated: ${nf(stk)} stuck here, ${REASON_SHORT[reason ?? "long_queue"] ?? "stuck"}` +
-                `${row[I.wait] ? `; longest wait ${nf(row[I.wait] as number)} min` : ""}`,
-            },
+        if (stk > 0) packed(g, Math.max(1, Math.round(stk / ppd)), DOT_STATE.stuck, dots);
+        if (que > 0) packed(g, Math.max(1, Math.round(que / ppd)), DOT_STATE.queued, dots);
+        const total = mov + que + stk;
+        if (total <= 0) continue;
+        const freeFlow = row[8] as number;
+        const slow = que > 0 || (freeFlow > 0 && speed < freeFlow * 0.5);
+        const state = stk > 0 ? "stuck" : slow ? "queued" : "moving";
+        const where = [
+          mov ? `${nf(mov)} moving at ${Math.round(speed)} km/h` : "",
+          que ? `${nf(que)} waiting in traffic` : "",
+          stk ? `${nf(stk)} stuck, ${REASON_SHORT[reason ?? "long_queue"] ?? "stuck"}${row[I.wait] ? `; longest wait ${nf(row[I.wait] as number)} min` : ""}` : "",
+        ].filter(Boolean);
+        roads.push({
+          type: "Feature",
+          geometry: { type: "LineString", coordinates: line },
+          properties: { state, people: total, label: `Simulated: ${where.join("; ")} on this road` },
+        });
+        const n = Math.min(12, Math.max(1, Math.floor(g.len / 160)));
+        if (chevCount + n <= MAX_CHEVRONS) {
+          chevCount += n;
+          nextFlow.push({
+            g,
+            n,
+            // Display speed of the flow, capped so fast roads do not blur; slow and stuck roads barely creep.
+            rate: state === "moving" && g.len > 0 ? Math.min(0.08, (Math.max(MIN_SPEED_MS, speed / 3.6) * MOTION_SCALE * 0.25) / g.len) : 0,
+            phase: phaseOf(edge),
           });
-        }
-        if (que > 0) {
-          packed(g, Math.max(1, Math.round(que / ppd)), DOT_STATE.queued, dots);
-          if (!stk) {
-            roads.push({
-              type: "Feature",
-              geometry: { type: "LineString", coordinates: line },
-              properties: {
-                state: "queued",
-                people: que,
-                label: `Simulated: ${nf(que)} waiting in traffic here, ${Math.round(speed)} km/h`,
-              },
-            });
-          }
         }
       }
       moving = nextMoving;
+      flow = nextFlow;
       staticDots = dots;
 
+      const maxHome = Math.max(1, ...snapshot.zones.map((z) => z.home + z.home_no_car + z.staying));
       set(
         SRC.homes,
         fc(
@@ -381,6 +500,7 @@ export function attachPeopleLayer(map: MapLibreMap, beforeId?: string): PeopleLa
               if (z.staying) parts.push(`${nf(z.staying)} staying put`);
               return pt(z.coord, {
                 people: n,
+                w: n / maxHome,
                 text: `${nf(n)} home`,
                 label: `Simulated: ${nf(n)} of ${nf(z.population)} residents still home (${parts.join(", ")})`,
               });
@@ -400,11 +520,17 @@ export function attachPeopleLayer(map: MapLibreMap, beforeId?: string): PeopleLa
         SRC.out,
         fc(
           snapshot.destinations
-            .filter((d) => d.people > 0)
-            .map((d) =>
+            .filter((d) => d.people > 0 || (d.heading_people ?? 0) > 0)
+            .sort((a, b) => b.people + (b.heading_people ?? 0) - (a.people + (a.heading_people ?? 0)))
+            .map((d, i) =>
               pt(d.coord, {
-                people: d.people,
-                text: `${nf(d.people)} out via ${d.name}`,
+                rank: i + 1,
+                people: d.people + (d.heading_people ?? 0),
+                color: d.color ?? C.out,
+                text:
+                  d.heading_people !== undefined
+                    ? `${d.name} · ${nf(d.heading_people)} heading here · ${nf(d.people)} arrived`
+                    : `${nf(d.people)} out via ${d.name}`,
                 label: `Simulated: ${nf(d.people)} people reached ${d.name}; ${nf(d.last_10_min_people)} in the last 10 min`,
               }),
             ),
@@ -413,8 +539,11 @@ export function attachPeopleLayer(map: MapLibreMap, beforeId?: string): PeopleLa
       set(
         SRC.stuck,
         fc(
-          snapshot.stuck.map((c) =>
+          [...snapshot.stuck]
+            .sort((a, b) => b.people - a.people)
+            .map((c, i) =>
             pt(c.coord, {
+              rank: i + 1,
               people: c.people,
               text: `${nf(c.people)} stuck${c.road ? ` on ${c.road}` : ""}\n${c.reason_text}`,
               label: `Simulated: ${c.label}${c.longest_wait_min ? `; longest wait ${nf(c.longest_wait_min)} min` : ""}`,
@@ -423,9 +552,19 @@ export function attachPeopleLayer(map: MapLibreMap, beforeId?: string): PeopleLa
         ),
       );
       drawDots();
+      drawChevrons();
+      const t = snapshot.totals.people;
+      const at = clock(snapshot.drill_replay_now);
+      readout.textContent =
+        `${at ? `At ${at}: ` : ""}${nf(t.home + t.home_no_car + t.staying)} home · ${nf(t.driving + t.queued)} on the road · ` +
+        `${nf(t.stuck)} stuck · ${nf(t.out)} out`;
+      readout.hidden = !visible;
+      legend.hidden = !visible;
     },
     setVisible(v) {
       visible = v;
+      readout.hidden = !v || !readout.textContent;
+      legend.hidden = readout.hidden;
       for (const id of PEOPLE_LAYER_IDS) {
         if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", v ? "visible" : "none");
       }
@@ -433,6 +572,8 @@ export function attachPeopleLayer(map: MapLibreMap, beforeId?: string): PeopleLa
     },
     dispose() {
       cancelAnimationFrame(frame);
+      readout.remove();
+      legend.remove();
       popup.remove();
       for (const id of PEOPLE_INTERACTIVE_LAYERS) {
         map.off("click", id, onClick);

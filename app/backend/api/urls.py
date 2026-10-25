@@ -5,6 +5,7 @@ from .demo import demo_decide, demo_routes
 from .demo_realism import demo_crew_routes, demo_environment, demo_road_access, demo_wind
 from .dispatch import decide
 from .dispatch_area import dispatch_area
+from .dispatch_households import dispatch_households
 from .dispatch_runs import run_list, run_outcome
 from .explain import explain
 from .families import create_family, family_detail, family_meeting_points, family_member_me, join_family
@@ -29,6 +30,7 @@ from .sim_state import homes as sim_homes
 from .sim_state import latest as sim_latest
 from .sim_state import publish_run, tick_run
 from .suppression_bases import suppression_bases
+from .suppression_stations import suppression_stations
 from .views import health
 from .world import load_scenario, world_active, world_scenario, world_scenarios
 
@@ -42,10 +44,12 @@ urlpatterns = [
     path("replay/explain", explain, name="replay-explain"),
     path("dispatch/decide", decide, name="dispatch-decide"),
     path("dispatch/area", dispatch_area, name="dispatch-area"),
+    path("dispatch/households", dispatch_households, name="dispatch-households"),
     path("weather/scenario", scenario_weather, name="weather-scenario"),
     path("conditions", conditions, name="conditions"),
     path("conditions/presets", conditions_presets, name="conditions-presets"),
     path("suppression/bases", suppression_bases, name="suppression-bases"),
+    path("suppression/stations", suppression_stations, name="suppression-stations"),
     path("demo/routes", demo_routes, name="demo-routes"),
     path("demo/decide", demo_decide, name="demo-decide"),
     path("demo/crew_routes", demo_crew_routes, name="demo-crew-routes"),

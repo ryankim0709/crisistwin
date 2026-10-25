@@ -89,7 +89,9 @@ export const ELEVATED_WIND_MPH = 15;
 export function dispatchLevel(moisture: string, windMetersPerSecond: number): DispatchLevel {
   const mph = windMetersPerSecond / MPS_PER_MPH;
   if (moisture === "critical" || (moisture === "dry" && mph >= RED_FLAG_WIND_MPH)) return "high";
-  if (moisture === "dry" || mph >= ELEVATED_WIND_MPH) return "medium";
+  // As documented: elevated wind raises only a moderate day (wet fuel stays low; it may not
+  // carry fire at all).
+  if (moisture === "dry" || (moisture === "moderate" && mph >= ELEVATED_WIND_MPH)) return "medium";
   return "low";
 }
 

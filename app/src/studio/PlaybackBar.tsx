@@ -1,6 +1,7 @@
 import type { KeyboardEvent } from "react";
 import { SQUARE_METERS_PER_ACRE, SQUARE_METERS_PER_HECTARE } from "../fire/spread";
 import { Field, IconButton } from "../ui";
+import DayNightBand from "../fire/ui/DayNightBand";
 import type { IgnitionDisplayState, PlaybackBarProps } from "./contracts";
 import "./studioControls.css";
 
@@ -22,6 +23,13 @@ function hhmm(minutes: number): string {
   return `${pad2(minutes / 60)}:${pad2(minutes % 60)}`;
 }
 
+/** "10 sim-min/s", or "4 sim-h/s" from an hour per second up. */
+function speedText(minutesPerSecond: number): string {
+  return minutesPerSecond >= 60
+    ? `${Number((minutesPerSecond / 60).toFixed(1))} sim-h/s`
+    : `${minutesPerSecond} sim-min/s`;
+}
+
 const NUMBER_FORMAT = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 /** Under 10 of a unit, whole numbers would read a small but real footprint as 0. */
 const SMALL_NUMBER_FORMAT = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
@@ -34,6 +42,7 @@ function formatArea(value: number): string {
 export default function PlaybackBar(props: PlaybackBarProps) {
   const {
     enabled,
+    speedLocked = false,
     frameMinutes,
     frameIndex,
     horizonMinutes,
@@ -47,6 +56,7 @@ export default function PlaybackBar(props: PlaybackBarProps) {
     onRestart,
     onSpeedChange,
     onSeek,
+    clock,
   } = props;
 
   const lastIndex = Math.max(frameMinutes.length - 1, 0);
@@ -65,6 +75,18 @@ export default function PlaybackBar(props: PlaybackBarProps) {
     const frame = frameMinutes.indexOf(minute);
     if (frame >= 0 && lastIndex > 0) return frame / lastIndex;
     return horizonMinutes > 0 ? Math.min(Math.max(minute / horizonMinutes, 0), 1) : 0;
+  }
+
+  /** Slider position of any minute, interpolated between the frames around it. */
+  function sliderFraction(minute: number): number {
+    if (lastIndex <= 0) return 0;
+    if (minute <= frameMinutes[0]) return 0;
+    if (minute >= frameMinutes[lastIndex]) return 1;
+    let i = 0;
+    while (i < lastIndex - 1 && frameMinutes[i + 1] <= minute) i += 1;
+    const span = frameMinutes[i + 1] - frameMinutes[i];
+    const within = span > 0 ? (minute - frameMinutes[i]) / span : 0;
+    return (i + within) / lastIndex;
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
@@ -152,6 +174,15 @@ export default function PlaybackBar(props: PlaybackBarProps) {
             disabled={!enabled}
             onChange={(event) => onSeek(Number(event.target.value))}
           />
+          {clock && enabled && (
+            <DayNightBand
+              clock={clock}
+              horizonMinutes={horizonMinutes}
+              t={currentMinute}
+              fraction={sliderFraction}
+              note={clock.note}
+            />
+          )}
           <ul className="studio-visually-hidden" aria-label="Ignition events">
             {events.map((event) => (
               <li key={event.id}>
@@ -169,13 +200,17 @@ export default function PlaybackBar(props: PlaybackBarProps) {
           <Field label="Viewing speed">
             <select
               value={speed}
-              disabled={!enabled}
-              title="Changes how fast you watch the playback, not how fast the fire spreads."
+              disabled={speedLocked}
+              title={
+                speedLocked
+                  ? "The AI dispatcher session sets the pace; use Speed in the dispatch console."
+                  : "Changes how fast you watch the playback, not how fast the fire spreads."
+              }
               onChange={(event) => onSpeedChange(Number(event.target.value))}
             >
               {speedChoices.map((choice) => (
                 <option key={choice} value={choice}>
-                  ×{choice} = {choice} sim-min/s
+                  ×{choice} = {speedText(choice)}
                 </option>
               ))}
             </select>

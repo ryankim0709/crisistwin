@@ -10,7 +10,13 @@ import { formatElapsed } from "../fire/spread";
 import type { BoardStreetsState } from "../fire/useBoardStreets";
 import "../live/live-share.css";
 import { Button, Field, LoadingState, Notice, Panel, SegmentedControl, Tag } from "../ui";
-import { ORDER_MINUTE_CHOICES, type EvacuationSummary } from "./evacuation";
+import {
+  ORDER_MINUTE_CHOICES,
+  TRIGGER_SAFETY_BUFFER_MINUTES,
+  type EvacuationSummary,
+} from "./evacuation";
+import type { AreaCoverage } from "./areaCoverage";
+import AreaCoverageNotice from "./AreaCoverageNotice";
 import { describeImprovement } from "./evacuationAdvice";
 import type { EvacuationOptimization } from "./evacuationOptimizer";
 import type { EvacuationOptimizerState } from "./useEvacuationOptimizer";
@@ -19,13 +25,17 @@ import {
   HOUSEHOLD_BEHAVIOR_OPTIONS,
   householdBehaviorText,
   type HouseholdBehaviorMode,
-} from "./householdBehavior";
+} from "../population/householdBehavior";
 
 /** Which plan the 3D view plays: the default policy or the optimiser's best. */
 export type PlayPlan = "fastest" | "optimized";
 
 const PLAY_OPTIONS = [
-  { value: "fastest", label: "Fastest exit", title: "Every zone to its fastest open exit" },
+  {
+    value: "fastest",
+    label: "Away from fire",
+    title: "Every zone to its fastest exit leading away from the fire",
+  },
   { value: "optimized", label: "Optimized plan", title: "The best plan the search found" },
 ] as const;
 
@@ -39,8 +49,9 @@ export interface EvacuationPanelProps {
   onToggle: () => void;
   roadTool: boolean;
   onRoadTool: () => void;
-  orderMinute: number;
-  onOrderMinute: (minute: number) => void;
+  /** Null: threat-based trigger orders; a number: order everyone at that minute. */
+  orderMinute: number | null;
+  onOrderMinute: (minute: number | null) => void;
   closedEdges: readonly RoadEdge[];
   onReopen: (edge: number) => void;
   onReopenAll: () => void;
@@ -49,6 +60,8 @@ export interface EvacuationPanelProps {
   currentMinute: number;
   /** Road graph, for exit and zone names in the optimised plan. */
   area: DispatchArea | null;
+  /** Which part of the board the area covers, and what the fires do outside it. */
+  coverage?: AreaCoverage | null;
   optimizer: EvacuationOptimizerState;
   playPlan: PlayPlan;
   onPlayPlan: (plan: PlayPlan) => void;
@@ -56,7 +69,7 @@ export interface EvacuationPanelProps {
   publish: boolean;
   onPublish: (on: boolean) => void;
   publishStatus: SimStatePublishStatus;
-  /** How households respond to the order (studio/householdBehavior.ts); hidden when absent. */
+  /** How households respond to the order (population/householdBehavior.ts); hidden when absent. */
   behavior?: HouseholdBehaviorMode;
   onBehavior?: (mode: HouseholdBehaviorMode) => void;
 }
@@ -92,10 +105,14 @@ function rows(summary: EvacuationSummary) {
   const { final } = summary;
   return {
     safe: final.safe,
-    caught: final.caught,
+    // "Still home when the fire arrived": not a casualty count. Staying by choice apart.
+    caught: final.caught - (final.caughtByChoice ?? 0) - (final.caughtOnRoad ?? 0),
+    caughtByChoice: final.caughtByChoice ?? 0,
+    caughtOnRoad: final.caughtOnRoad ?? 0,
     out: final.waiting - (final.staying ?? 0) + final.onRoad,
     staying: final.staying ?? 0,
     cutOff: summary.cutOffHomes,
+    unthreatened: summary.unthreatenedHomes,
     hours: summary.householdHoursEvacuating,
   };
 }
@@ -103,7 +120,7 @@ function rows(summary: EvacuationSummary) {
 function liveLine(totals: Totals | undefined, minute: number): string | null {
   if (!totals) return null;
   const staying = totals.staying ?? 0;
-  return `At ${formatElapsed(minute)}: ${totals.waiting - staying} waiting, ${totals.onRoad} on the road, ${totals.safe} out, ${totals.caught} caught${staying ? `, ${staying} staying home` : ""}.`;
+  return `At ${formatElapsed(minute)}: ${totals.waiting - staying} waiting, ${totals.onRoad} on the road, ${totals.safe} out, ${totals.caught - (totals.caughtByChoice ?? 0)} reached by fire before getting out (${totals.caughtByChoice ?? 0} more staying by choice)${staying ? `, ${staying} staying home` : ""}.`;
 }
 
 function OptimizedPlan({
@@ -225,8 +242,8 @@ function StrategyTable({ result }: { result: EvacuationOptimization }) {
             <th scope="col" className="num" title="Households that reached an exit">
               Out
             </th>
-            <th scope="col" className="num" title="Households caught by the fire">
-              Caught
+            <th scope="col" className="num" title="Households the modelled fire reached before they got out, staying-by-choice excluded (a model count, not casualties)">
+              Reached by fire
             </th>
             <th scope="col" className="num" title="Household-hours evacuating">
               HH-hours
@@ -251,7 +268,7 @@ function StrategyTable({ result }: { result: EvacuationOptimization }) {
                   )}
                 </th>
                 <td className="num">{final.safe}</td>
-                <td className="num">{final.caught}</td>
+                <td className="num">{final.caught - (final.caughtByChoice ?? 0)}</td>
                 <td className="num">{candidate.summary.householdHoursEvacuating.toFixed(1)}</td>
                 <td className="num">{clearText(candidate.summary)}</td>
               </tr>
@@ -281,6 +298,7 @@ export default function EvacuationPanel(props: EvacuationPanelProps) {
     withClosures,
     currentMinute,
     area,
+    coverage,
     optimizer,
     playPlan,
     onPlayPlan,
@@ -316,8 +334,9 @@ export default function EvacuationPanel(props: EvacuationPanelProps) {
       {streets.status === "loading" && <LoadingState>Loading roads…</LoadingState>}
       {streets.status === "idle" && <p className="studio-evac__note">Load a board first.</p>}
       {streets.status === "empty" && (
-        <p className="studio-evac__note">This board has no drivable roads to evacuate on.</p>
+        <p className="studio-evac__note">No drivable roads around these fires to evacuate on.</p>
       )}
+      {ready && <AreaCoverageNotice coverage={coverage ?? null} />}
       {streets.status === "error" && (
         <p className="studio-evac__note">Roads could not be loaded: {streets.message}</p>
       )}
@@ -331,15 +350,18 @@ export default function EvacuationPanel(props: EvacuationPanelProps) {
 
       {ready && enabled && (
         <>
-          <Field label="Evacuation order goes out at">
+          <Field label="Evacuation orders">
             <select
               className="ui-input"
-              value={orderMinute}
-              onChange={(event) => onOrderMinute(Number(event.target.value))}
+              value={orderMinute === null ? "threat" : String(orderMinute)}
+              onChange={(event) =>
+                onOrderMinute(event.target.value === "threat" ? null : Number(event.target.value))
+              }
             >
+              <option value="threat">When the fire threatens a zone</option>
               {ORDER_MINUTE_CHOICES.map((choice) => (
                 <option key={choice} value={choice}>
-                  {formatElapsed(choice)}
+                  Order everyone at {formatElapsed(choice)}
                 </option>
               ))}
             </select>
@@ -435,39 +457,42 @@ export default function EvacuationPanel(props: EvacuationPanelProps) {
                     {(
                       [
                         ["Reached an exit", "safe", 0],
-                        ["Caught by the fire", "caught", 0],
+                        ["Still home when the fire arrived", "caught", 0],
+                        ["Reached by fire after leaving home", "caughtOnRoad", 0],
+                        ["Fire reached, staying by choice", "caughtByChoice", 0],
                         ["Still evacuating", "out", 0],
                         ["Stayed home (did not leave)", "staying", 0],
                         ["Cut off (no open exit)", "cutOff", 0],
+                        ["Still home (not threatened)", "unthreatened", 0],
                         ["Household-hours evacuating", "hours", 1],
                       ] as const
                     )
                       .filter(
                         ([, key]) =>
-                          key !== "staying" ||
-                          rows(baseline).staying > 0 ||
-                          (withClosures !== null && rows(withClosures).staying > 0),
+                          (key !== "staying" && key !== "unthreatened") ||
+                          rows(baseline)[key] > 0 ||
+                          (withClosures !== null && rows(withClosures)[key] > 0),
                       )
                       .map(([label, key, digits]) => {
-                      const base = rows(baseline)[key];
-                      const change = withClosures
-                        ? delta(rows(withClosures)[key], base, digits)
-                        : "";
-                      return (
-                        <tr key={key}>
-                          <th scope="row">{label}</th>
-                          <td className="num">{base.toFixed(digits)}</td>
-                          {withClosures && (
-                            <td className="num">
-                              {rows(withClosures)[key].toFixed(digits)}
-                              {change && (
-                                <small className="studio-evac__delta">{change} vs open</small>
-                              )}
-                            </td>
-                          )}
-                        </tr>
-                      );
-                    })}
+                        const base = rows(baseline)[key];
+                        const change = withClosures
+                          ? delta(rows(withClosures)[key], base, digits)
+                          : "";
+                        return (
+                          <tr key={key}>
+                            <th scope="row">{label}</th>
+                            <td className="num">{base.toFixed(digits)}</td>
+                            {withClosures && (
+                              <td className="num">
+                                {rows(withClosures)[key].toFixed(digits)}
+                                {change && (
+                                  <small className="studio-evac__delta">{change} vs open</small>
+                                )}
+                              </td>
+                            )}
+                          </tr>
+                        );
+                      })}
                     <tr>
                       <th scope="row">Everyone ordered is out by</th>
                       <td className="num">{clearText(baseline)}</td>
@@ -519,8 +544,11 @@ export default function EvacuationPanel(props: EvacuationPanelProps) {
           )}
 
           <p className="studio-evac__note">
-            Unless you play the optimized plan, every zone is ordered at{" "}
-            {formatElapsed(orderMinute)} to its fastest open exit and re-routed when fire cuts its
+            {orderMinute === null
+              ? `A zone is told to get ready, then to leave, once the modelled fire is within its time to clear (departure + drive + ${TRIGGER_SAFETY_BUFFER_MINUTES} min assumed buffer; Cova et al. 2005 triggers). Zones the fire does not threaten stay home.`
+              : `Every zone is ordered at ${formatElapsed(orderMinute)}.`}{" "}
+            Unless you play the optimized plan, people head away from the fire, to the fastest exit
+            that leads away (else the fastest open one), and are re-routed when fire cuts their
             route. Closures change traffic only, not the fire. Homes and zones are synthetic; counts
             are model output, not casualty estimates.
           </p>

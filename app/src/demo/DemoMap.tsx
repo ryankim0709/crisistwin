@@ -118,7 +118,7 @@ function buildTeams(board: Board) {
 }
 
 function buildStations(board: Board): Feature[] {
-  return board.stations.map((s) => point(s.location, { name: s.name }));
+  return board.stations.map((s) => point(s.location, { name: s.label ?? s.name }));
 }
 
 function buildDestinations(destinations: Destination[]): Feature[] {

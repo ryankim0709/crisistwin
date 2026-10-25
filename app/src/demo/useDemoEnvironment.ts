@@ -1,8 +1,9 @@
 /**
  * Loads the /demo board's physical inputs (docs/command-demo-realism.md) and builds a
  * `DemoEnvironment`: wind (GET /api/demo/wind), the drill centre and carless households (GET
- * /api/demo/environment; every call carries `incident` for a non-Camp drill), CAL FIRE bases (GET
- * /api/suppression/bases), and the LANDFIRE landscape the fire solver runs on (also the 3D
+ * /api/demo/environment; every call carries `incident` for a non-Camp drill), fire facilities (GET
+ * /api/suppression/bases plus the package's OSM stations the layer does not list; with no
+ * snapshot they decide every local unit), and the LANDFIRE landscape the fire solver runs on (also the 3D
  * diorama's board, DemoDiorama.tsx). A Studio drill names the Studio board it was run on
  * (`region_id`, "<region>@<N>km"; `studioBoard`): that exact landscape is loaded, as Studio
  * loads it (same centre, radius and cell size, so the same MongoDB cache entry). Otherwise it is
@@ -18,7 +19,8 @@
  * the landscape give up after INPUT_TIMEOUT_MS (their labelled fallbacks), so they never hold
  * the board longer than the landscape does. Units, stations and
  * household counts come from the drill's resource snapshot (useCommandBoard loads it); the bases
- * and carless counts here are the fallback when there is none.
+ * and carless counts here are the fallback when there is none. When the shared world's area is
+ * this drill (useCommandBoard), its centre replaces the drill's for the bases and drill landscape.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -32,6 +34,7 @@ import { loadLandscapeCached, type CachedLandscapeResult } from "../fire/landsca
 import type { LonLat } from "../live/types";
 import { CREW_TYPES, STATION_TYPES, SUPPRESSION_BASES_URL, parseBases, type SuppressionBases } from "../studio/suppressionBases";
 import { studioBoardId } from "../studio/useRegionBoard";
+import { greatCircleKm, withOsmStations } from "../response/fleet";
 import { ENVIRONMENT_URL, WIND_URL, demoUrl, type EnvironmentResponse, type WindResponse } from "./contracts";
 import { IGNITION_OUTSIDE_MAX_M, type DemoEnvironment, type Station } from "./model";
 import { FALLBACK_WIND, type Ground, type WindSeries } from "./realism";
@@ -89,7 +92,8 @@ export const WEATHER_PRESETS: readonly WeatherPreset[] = [
   { value: "p95", label: "Nov P95", title: "95th-percentile November offshore episode (derived from observed hours)", mode: "climatology_percentile", start: "2018-11-08T12:00:00Z", hours: 72 },
 ];
 
-const BASE_RADIUS_KM = 60;
+/** Facilities fetched within this distance of the drill centre: covers the airtanker dispatch radius (response/fleet.ts, about 142 km); stations stay capped at the nearest 40. */
+const BASE_RADIUS_KM = 150;
 const METERS_PER_DEG = 111_320;
 /**
  * ASSUMPTION: ground loaded beyond the outermost possible scheduled ignition (zones' half-width
@@ -310,10 +314,11 @@ function groundOf(loaded: LoadedLandscape): Ground {
 }
 
 /**
- * CAL FIRE bases by roster pool, nearest the drill first. With a resource snapshot the board's
- * engines and stations come from the snapshot (model.ts createBoard); these bases then only
- * place the assumed hand crews (crew camps) and dozer (state stations). Without a snapshot they
- * hold the whole assumed ROSTER.
+ * Every facility the CAL FIRE layer lists near the board (stations, camps, helitack and air attack
+ * bases), nearest the drill first, with its metadata: the response fleet's input (response/fleet.ts),
+ * and the roster pools. With a resource snapshot the board's engines and stations come from the
+ * snapshot (model.ts createBoard); these bases then supply the hand crews, dozers, aircraft and
+ * mutual-aid pool. Null when the layer is unavailable or lists nothing (a pool may be empty).
  */
 export function stationsFrom(bases: SuppressionBases | null): DemoEnvironment["bases"] {
   if (!bases?.available || bases.bases.length === 0) return null;
@@ -333,29 +338,26 @@ export function stationsFrom(bases: SuppressionBases | null): DemoEnvironment["b
   const calfireStations = near.filter((b) => STATION_TYPES.has(b.type) && b.agency.startsWith("CAL FIRE")).map(toStation);
   const localStations = near.filter((b) => b.type === "FSA").map(toStation);
   const crewCamps = near.filter((b) => CREW_TYPES.has(b.type)).map(toStation);
-  if (calfireStations.length === 0 || localStations.length === 0 || crewCamps.length === 0) return null;
-  // Every facility with its metadata (stations, camps, helitack and air attack bases): the response fleet (response/fleet.ts).
   return { calfireStations, localStations, crewCamps, all: near.map(toStation) };
 }
 
 const OSM_STATION_TYPE = "osm_fire_station";
-const OSM_CREW_CAMPS = 2;
 /** Most OSM stations the response fleet staffs (the CAL FIRE path is capped at 40 by the bases endpoint). */
 const OSM_FLEET_STATIONS = 40;
 
 /**
- * Bases from a drill package's OpenStreetMap fire stations when the CAL FIRE bases are unavailable.
- * Only used for the fallback roster (no resource snapshot): the snapshot already lists these
- * OSM stations with their engines.
- * OSM carries no agency or facility type, so the nearest-first stations fill all three pools
- * (the board's unit types and counts per station stay assumed); crew camps reuse the nearest ones.
+ * Facilities from a drill package's OpenStreetMap fire stations, nearest first: the fleet when the
+ * CAL FIRE layer is unavailable, else the stations the layer does not list (loadEnvironment). The
+ * snapshot, when there is one, already lists these OSM stations with their engines. OSM carries no
+ * agency, facility type or camps, so each is one station (FACILITY_INVENTORY osm_station); no crew
+ * camps or air bases are invented (the crew-camp pool stays empty).
  */
 export function stationsFromPackage(stations: EnvironmentResponse["stations"], center: LonLat | null): DemoEnvironment["bases"] {
   if (!stations || stations.length === 0) return null;
   const cos = center ? Math.cos((center[1] * Math.PI) / 180) : 1;
   const d2 = (s: { lon: number; lat: number }) => (center ? ((s.lon - center[0]) * cos) ** 2 + (s.lat - center[1]) ** 2 : 0);
   const near = [...stations].sort((a, b) => d2(a) - d2(b) || a.id.localeCompare(b.id));
-  const all: Station[] = near.map((s) => ({
+  const all: Station[] = near.slice(0, OSM_FLEET_STATIONS).map((s) => ({
     id: s.id,
     name: s.name,
     location: [s.lon, s.lat],
@@ -364,10 +366,7 @@ export function stationsFromPackage(stations: EnvironmentResponse["stations"], c
     basis: null,
     engines: [],
   }));
-  // Response fleet input: the stations (one Type 3 engine each, ASSUMPTION) and, as crew bases, the
-  // nearest OSM_CREW_CAMPS stations again (ASSUMPTION; OSM has no conservation camps).
-  const camps: Station[] = all.slice(0, OSM_CREW_CAMPS).map((s) => ({ ...s, id: `${s.id}-crew`, name: `${s.name} (crew base, assumed)`, type: "CC", agency: "Unknown" }));
-  return { calfireStations: all, localStations: all, crewCamps: all.slice(0, OSM_CREW_CAMPS), all: [...all.slice(0, OSM_FLEET_STATIONS), ...camps] };
+  return { calfireStations: all, localStations: all, crewCamps: [], all };
 }
 
 export async function loadEnvironment(
@@ -379,9 +378,12 @@ export async function loadEnvironment(
   onLiveLandscape: () => void = () => {},
   radiusMeters: number = DEFAULT_BOARD_RADIUS_METERS,
   studioBoard: StudioBoard | null = null,
+  /** The shared world's centre when its area is this drill (useCommandBoard); null: the drill's own. */
+  centerOverride: LonLat | null = null,
 ): Promise<DemoEnvironment> {
-  // The wind and the environment answer independently; the centre (environment `center`, else the
-  // zones' centroid, else the Studio board's centre) is needed for the bases lookup, and for the
+  // The wind and the environment answer independently; the centre (the shared world's area when
+  // it is this drill, else the environment `center`, else the zones' centroid, else the Studio
+  // board's centre) is needed for the bases lookup, and for the
   // landscape unless the drill names its Studio board (that load starts at once).
   const studioLandscape = studioBoard ? loadStudioBoard(studioBoard, onLiveLandscape, signal) : null;
   // Keep a rejection from surfacing as unhandled while the other inputs are still loading.
@@ -390,7 +392,7 @@ export async function loadEnvironment(
   const windPromise = loadWind(preset, incidentId, signal);
   const envData = await envPromise;
   const studioCenter: LonLat | null = studioBoard ? [studioBoard.region.center.longitude, studioBoard.region.center.latitude] : null;
-  const center: LonLat | null = envData?.center ?? fallbackCenter ?? studioCenter;
+  const center: LonLat | null = centerOverride ?? envData?.center ?? fallbackCenter ?? studioCenter;
   if (!center) throw new Error("The drill has no centre to load its landscape around.");
   const [wind, basesJson, landscape] = await Promise.all([
     windPromise,
@@ -399,18 +401,26 @@ export async function loadEnvironment(
   ]);
   const parsed = basesJson ? parseBases(basesJson) : null;
   const calfire = stationsFrom(parsed);
-  const packageBases = calfire ? null : stationsFromPackage(envData?.stations, center);
-  const bases = calfire ?? packageBases;
+  const packageBases = stationsFromPackage(envData?.stations, center);
+  // The CAL FIRE layer plus the package's OSM stations it does not list (city departments are
+  // often missing from the layer), nearest the drill centre first.
+  const merged = calfire
+    ? withOsmStations(calfire.all, packageBases?.all ?? []).sort((a, b) =>
+        center ? greatCircleKm(center, a.location) - greatCircleKm(center, b.location) || a.id.localeCompare(b.id) : 0,
+      )
+    : null;
+  const bases = merged && calfire ? { ...calfire, all: merged } : packageBases;
+  const osmAdded = merged && calfire ? merged.length - calfire.all.length : 0;
   const noVehicle = new Map(Object.entries(envData?.households_no_vehicle ?? {}));
   return {
     spread: { ground: groundOf(landscape), wind },
     bases,
     basesSource: calfire ? "calfire" : packageBases ? "package" : null,
-    basesLabel: packageBases
-      ? `${envData?.stations_source ?? "Fire stations from OpenStreetMap (drill package)"}; CAL FIRE bases unavailable, so unit types and counts per station are assumed, and crew camps reuse the nearest ${OSM_CREW_CAMPS} stations`
+    basesLabel: !calfire && packageBases
+      ? `${envData?.stations_source ?? "Fire stations from OpenStreetMap (drill package)"}; CAL FIRE layer unavailable, so each is one assumed Type 3 engine and there are no crew camps or air bases`
       : bases
-      ? `CAL FIRE facilities layer (${parsed?.attribution ?? "CAL FIRE"}); unit counts per base are assumed`
-      : "Synthetic stations (assumed: CAL FIRE bases file unavailable)",
+        ? `CAL FIRE facilities layer (${parsed?.attribution ?? "CAL FIRE"})${osmAdded > 0 ? ` plus ${osmAdded} OpenStreetMap stations it does not list (one assumed Type 3 engine each)` : ""}; units per facility from the labelled inventory table (response/fleet.ts)`
+        : "No fire stations found on this map: no local units; resources come only from out of the area, through the state system",
     noVehicle,
     noVehicleLabel: envData?.households_no_vehicle_source ?? "Carless households unknown (counted as 0)",
     landscape: landscape.grid,
@@ -446,18 +456,21 @@ export function useDemoEnvironmentState(
   attempt = 0,
   radiusMeters: number = DEFAULT_BOARD_RADIUS_METERS,
   studioBoard: StudioBoard | null = null,
+  /** The shared world's centre when its area is this drill (useCommandBoard); null: the drill's own. */
+  centerOverride: LonLat | null = null,
 ): DemoEnvironmentState {
   const radius = clampBoardRadiusMeters(radiusMeters);
   const [state, setState] = useState<{ key: string } & DemoEnvironmentState>({ key: "", env: null, liveLandscape: false, error: null });
   const studioId = studioBoard ? studioBoardId(studioBoard.region.id, studioBoard.radiusMeters) : "";
-  const key = `${incidentId}|${preset.value}|${radius}|${studioId}|${attempt}`;
-  const zones = useRef({ fallbackCenter, zonesHalfWidthMeters, studioBoard });
-  zones.current = { fallbackCenter, zonesHalfWidthMeters, studioBoard };
+  const centreKey = centerOverride ? `${centerOverride[0].toFixed(4)},${centerOverride[1].toFixed(4)}` : "";
+  const key = `${incidentId}|${preset.value}|${radius}|${studioId}|${centreKey}|${attempt}`;
+  const zones = useRef({ fallbackCenter, zonesHalfWidthMeters, studioBoard, centerOverride });
+  zones.current = { fallbackCenter, zonesHalfWidthMeters, studioBoard, centerOverride };
   const ready = fallbackCenter !== null || studioBoard !== null;
   useEffect(() => {
     if (!ready) return;
     const controller = new AbortController();
-    const { fallbackCenter: center, zonesHalfWidthMeters: half, studioBoard: board } = zones.current;
+    const { fallbackCenter: center, zonesHalfWidthMeters: half, studioBoard: board, centerOverride: override } = zones.current;
     setState({ key, env: null, liveLandscape: false, error: null });
     loadEnvironment(
       preset,
@@ -470,6 +483,7 @@ export function useDemoEnvironmentState(
       },
       radius,
       board,
+      override,
     ).then(
       (env) => {
         if (!controller.signal.aborted) setState({ key, env, liveLandscape: env.landscapeSource === "live", error: null });

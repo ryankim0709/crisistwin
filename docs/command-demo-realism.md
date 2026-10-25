@@ -526,9 +526,12 @@ active incident, not only the Camp map.
   - Top level `road_access: {status, basis}`: `ready` (OSM tags and grade), `grade_only` (tags
     still loading), `none` (highway class only); `basis` says what was used.
 
-  A stop short is taken only within 3 km of `to` (`livecore.inbound.STOP_SHORT_MAX_M`,
-  **ASSUMPTION**); farther, the leg has no route and keeps its `reason` (`no_access`,
-  `target_in_fire`, `no_open_road`, `target_off_network`). A target inside the fire also stops
+  A stop short is taken however far the nearest reachable road is from `to`
+  (`livecore.inbound.STOP_SHORT_MAX_M` is infinite; the former 3 km cutoff left remote fires
+  with no ground response). `off_road_m_to_target` then says how far is left, and the off-road
+  reach rules (`app/src/response/reach.ts` `planWork`) decide what the unit does: hose, hike
+  in, walk a dozer in, or hold the road as indirect line. A leg with no reachable road at all
+  keeps its `reason` (`no_access`, `target_in_fire`, `no_open_road`). A target inside the fire also stops
   short, at the nearest reachable road outside it. Consumers (the response model) should read
   `access_status`, `stop_point`, `off_road_m_to_target` and `blocked_reason`; an older server
   omits them, which means `reached`.
@@ -575,6 +578,75 @@ Most closures are short canyon-side roads: from Paradise, Chico, Magalia or Orov
 engine still reaches 96% of the main road nodes, a support tender 90%, a Type 3 engine 99%.
 The evacuation planner and `POST /api/demo/routes` are unchanged (the rules are for apparatus,
 not cars).
+
+## Travel time
+
+Per edge and per apparatus class, `livecore/apparatus_travel.py`, applied in
+`livecore.apparatus.access_profile`. Every consumer of a class profile uses it: `POST
+/api/demo/crew_routes`, task routes (`api/live/responder_routing.py`) and the simulated responders
+(`livecore/responders_sim.py`). Parameters live in `tools/suppression_resources.json`
+(`road_access.travel`, and `engine_hp` and `frontal_area_m2` per vehicle class), each with a source
+or an ASSUMPTION flag.
+
+1. **Level speed**: the R11/R12 speed at grade 0. That is the OSM or posted speed, capped by
+   `heavy_apparatus_speed_kmh_by_highway` (still an ASSUMPTION) and by the unpaved and single-lane
+   factors, then by the NFPA 1901 top speed (68 mph; 60 mph above 50,000 lb GVWR).
+   - **Bug fixed**: before this change the backend read `speed_kph` from `road_access`, which
+     returns `speed_kmh`. No class cap ever applied, so trucks drove at the OSM speed, e.g. 105 km/h
+     on Highway 32.
+2. **Curves**: the radius is the three-point circumradius of the OSM vertices, with neighbours at
+   least 25 m apart (ASSUMPTION). The speed cap is AASHTO `V² = 127 R (e + f)`.
+   - `f` is from Green Book Table 3-7 (via Iowa DOT Table 2B.1).
+   - `e` is 6% on highways and 4% on local roads (ASSUMPTION).
+   - The truck brakes into each curve at 3.4 m/s² (the AASHTO value, not retrieved here).
+3. **Grade**: a point-mass truck model on the signed 3DEP profile, integrated along the edge, so
+   momentum carries a truck over short pitches. Constants are from Rakha et al. (2001), as given in
+   Lucic (2001): `F = 3600 η P / v`, plus rolling, aerodynamic and grade resistance.
+   - Mass is the class's GVWR.
+   - Power is 350 hp for the Type 3 (BME CAL FIRE Model 34) and 450 hp for the Type 1 (Pierce
+     spec). The other classes are ASSUMED at 350 hp.
+   - Acceleration is capped at the NFPA 1901 minimum, 0 to 35 mph in 25 s.
+   - Downhill, the truck goes no faster than it climbs the same 150 m grade (CDL gear rule,
+     ASSUMPTION as applied).
+   - Steady climbing speeds, Type 3 (km/h): 92 at 4%, 74 at 6%, 51 at 10%, 34 at 16%. For the
+     support tender: 64, 48, 31 and 20. Both meet NFPA's 20 mph (32 km/h) on 6%.
+   - Camp only, where the DEM is wired. Elsewhere the ground is flat, labelled in `basis`.
+4. **Junctions**: at the end of an edge, the arriving road is compared with the other roads that
+   meet there.
+   - A higher OSM class means a complete stop: NFPA 1500 requires stops at stop signs and at
+     negative right-of-way junctions. The stop costs 2 s plus the speed-change loss.
+   - The same class means a slow-down to 25 km/h (ASSUMPTION).
+   - A lower class means no delay.
+   - Turns onto a road with priority and traffic signals are not modelled.
+5. The twin congestion factor and the R01-R12 access rules still apply on top.
+
+`crew_routes` adds `travel_breakdown` per road leg: `free_flow_min`, `curve_min`, `grade_min`,
+`junction_min`, `junction_stops`, and `car_posted_speed_min` (the same roads at the OSM speed).
+
+Measured on Camp (`POST /api/demo/crew_routes`, no fire, Type 3). The car time is at the
+OSM/posted speed on the same roads. RAND is `T = 0.65 + 1.7 D`, an urban cross-check (MTAS).
+
+| Route | Before (min, km/h) | After (min, km/h) | Free / curve / grade / junction (min) | Car (min) | RAND (min) |
+| --- | --- | --- | --- | --- | --- |
+| Chico → Paradise, 22.5 km | 18.5, 73 | 21.8, 62 | 19.8 / 0.0 / 0.0 / 1.9 (5 stops) | 18.5 | 24.4 |
+| Paradise → Chico | 18.3, 73 | 21.4, 66 | 19.8 / 0.1 / 0.1 / 1.5 | 18.4 | 25.5 |
+| Paradise → Concow, 26 km | 35.8, 44 | 45.7, 34 | 44.7 / 0.0 / 0.3 / 0.7 | 35.8 | 28.2 |
+| Oroville → Paradise | 30.9, 64 | 34.7, 57 | 31.2 / 0.1 / 0.2 / 0.3 | 27.9 | 35.6 |
+| Paradise → Magalia, 8.3 km | 9.4, 53 | 10.1, 49 | 9.6 / 0.0 / 0.0 / 0.6 | 9.4 | 9.4 |
+| Magalia → Stirling City | 21.1, 51 | 21.6, 55 | 21.2 / 0.1 / 0.2 / 0.2 | 21.1 | 21.6 |
+| Chico → Forest Ranch (Hwy 32) | 17.1, 89 | 24.6, 62 | 23.0 / 0.0 / 0.1 / 1.4 | 17.1 | 27.5 |
+
+- **No class beats the car time on any route.** The support tender loses 0.8 to 2.1 min to grade
+  on the Skyway climbs.
+- **Most of the change is the level-speed cap**, now applied (the bug above), plus junction stops.
+- **Curves add under 0.1 min**: where roads wind, the level speed is already low (35-45 km/h,
+  ×0.6 on single-lane roads).
+- **Grade costs little for engines**: about 15-20 kW/t holds 74 km/h on 6%.
+- **Paradise → Concow is slower than RAND**: canyon roads on single-lane speed factors. RAND is
+  urban, so this is expected.
+- **Not modelled**: momentum across edge boundaries (each edge starts at its capped or crawl
+  speed), turn slow-downs, and signals. The Studio dispatch engine (`studio/roadAccess.ts`) still
+  uses the step grade penalty, and the same model is not yet ported there.
 
 ## Road closures
 
@@ -666,6 +738,9 @@ the AI agent see them (each console polls every 4 s).
 - Engine counts and availability per station are the snapshot's assumptions (synthetic) when a snapshot is used, and the snapshot has no hand crews or dozers (the facilities layer supplies them, at assumed counts, or the assumed extras without it); committed engines never become available during a run. The same-station match between layer and snapshot (`SAME_STATION_M`) is an assumption. Otherwise unit counts per facility are assumed. Aircraft, water, work/rest, move-up and escalation are modelled by the response model ([response-model.md](response-model.md), with its own list of gaps).
 - Persons are spread evenly over a zone's vehicle households (the snapshot's per-household
   occupants are not used household by household).
+- Under observed November winds, fires routinely escape initial attack and the board fills to
+  its 25-fire cap. That is the model's answer, not a defect to tune away; a labelled
+  escaped-fire handoff rule would be the next step for long 24/7 runs.
 - Under strong Studio winds, fires routinely escape initial attack. That is the model's answer,
   not a defect to tune away. The Studio run's `horizon_minutes` is not applied: board fires burn
   until contained or closed.
@@ -682,8 +757,8 @@ the AI agent see them (each console polls every 4 s).
   at a fixed 1,700 veh/h per direction on route lines near leaving zones, not by the per-segment capacities or queues ([response-model.md](response-model.md)). Destination
   capacity is reported, not enforced (exits have none). Carless households have no pickup model.
 - Fires that leave the board keep their burned ground in the field (no reburn) until restart.
-- `fire/rothermel.ts` and `sim/fire.py` disagree on SH5 at the replay's inputs (85 against
-  173 m/min head, reaction intensity 3,030 against 6,144 Btu/ft²/min): the TypeScript code
-  weights each category's reaction term by its surface-area share, the Python code does not.
-  The two agree for dead-only fuels; which matches Andrews (2018) for live-fuel models needs
-  checking. The board uses the TypeScript model (through the solver).
+- `fire/rothermel.ts` used to give SH5 half the replay's head rate (85 against 173 m/min) by
+  weighting each category's reaction term by its surface-area share. Since `SPREAD_MODEL`
+  4.4.0 both codes match Behave (173 m/min, 6,144 Btu/ft²/min), so board fires in SH5 now
+  spread about twice as fast and burn about twice as hot as the figures measured before it
+  ([fire-simulator.md](fire-simulator.md#surface-model-equations-and-reference-check)).

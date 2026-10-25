@@ -15,7 +15,7 @@ import type { DispatchArea } from "../dispatch/area";
 import { HomeStatus } from "../dispatch/engine";
 import type { FireExposure } from "../dispatch/fireExposure";
 import { DispatchOverlay, HOME_COLORS, cssColor } from "../dispatch/scene/DispatchOverlay";
-import { BurnedGlyph, FireEdgeGlyph, WindGlyph } from "../diorama/ui/glyphs";
+import { BurnedGlyph, FireEdgeGlyph, StationBadgeGlyph, WindGlyph } from "../diorama/ui/glyphs";
 import { useMediaQuery } from "../diorama/ui/format";
 import { FireDioramaScene } from "../fire/diorama/FireDioramaScene";
 import type {
@@ -26,7 +26,7 @@ import type {
 } from "../fire/diorama/types";
 import type { LandscapeGrid } from "../fire/landscape";
 import type { GeoPoint } from "../fire/spread";
-import type { BoardStreetsState } from "../fire/useBoardStreets";
+import { sceneryOf, type BoardStreetsState } from "../fire/useBoardStreets";
 import { Button, Legend, Panel, type LegendItem } from "../ui";
 import { EvacuationPlayer, type EvacuationInputs } from "./evacuation";
 import { CompositeOverlay } from "../fire/diorama/compositeOverlay";
@@ -120,6 +120,15 @@ function FirelineGlyph({ kind }: { kind: "held" | "breached" | "outrun" }) {
   );
 }
 
+function FlowGlyph() {
+  return (
+    <svg width="24" height="16" viewBox="0 0 24 16" aria-hidden="true">
+      <rect x="1" y="9" width="22" height="5" rx="2" fill="#14b8a6" />
+      <rect x="1" y="3" width="22" height="2" rx="1" fill="#f2a33a" />
+    </svg>
+  );
+}
+
 function HomeGlyph() {
   return (
     <svg width="24" height="16" viewBox="0 0 24 16" aria-hidden="true">
@@ -157,8 +166,12 @@ export interface StudioDioramaProps {
   fireline: FirelineView | null;
   /** Firefighters driving in from fire stations, or null. */
   crews: CrewDispatch | null;
+  /** Wall-clock time of T+0 (epoch ms), for the 3D time readout. */
+  startMs?: number;
   /** Minute each crew leaves the fire to help the evacuation (null = stays); empty = none. */
   crewLeaveMinutes?: readonly (number | null)[];
+  /** Minute each crew is released because its fire is out (null = stays); empty = none. */
+  crewReleaseMinutes?: readonly (number | null)[];
   /** Shown under the board control. */
   evacuationPanel?: ReactNode;
   /** The live scene once created, and null once disposed (for a page overlay such as dispatch). */
@@ -195,7 +208,9 @@ export default function StudioDiorama(props: StudioDioramaProps) {
     onSceneChange,
     fireline,
     crews,
+    startMs,
     crewLeaveMinutes,
+    crewReleaseMinutes,
   } = props;
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [scene, setScene] = useState<FireDioramaSceneApi | null>(null);
@@ -205,7 +220,7 @@ export default function StudioDiorama(props: StudioDioramaProps) {
   const streetArea = streets.status === "ready" ? streets.area : null;
   // The overlay draws its own homes (coloured by household state), so the streets layer then
   // draws roads only.
-  const streetScenery = streets.status === "ready" ? streets.scenery : null;
+  const streetScenery = sceneryOf(streets);
   const sceneStreets = useMemo(
     () => (streetScenery && evacuation ? { edges: streetScenery.edges, homes: [] } : streetScenery),
     [streetScenery, evacuation],
@@ -312,8 +327,8 @@ export default function StudioDiorama(props: StudioDioramaProps) {
     crewOverlay.setDispatch(crews);
   }, [crewOverlay, crews]);
   useEffect(() => {
-    crewOverlay.setLeaveMinutes(crewLeaveMinutes ?? NO_LEAVES);
-  }, [crewOverlay, crewLeaveMinutes]);
+    crewOverlay.setLeaveMinutes(crewLeaveMinutes ?? NO_LEAVES, crewReleaseMinutes ?? NO_LEAVES);
+  }, [crewOverlay, crewLeaveMinutes, crewReleaseMinutes]);
   useEffect(() => {
     lineOverlay.setView(fireline);
   }, [lineOverlay, fireline]);
@@ -326,6 +341,9 @@ export default function StudioDiorama(props: StudioDioramaProps) {
   useEffect(() => {
     if (closedEdges) overlay.setClosedEdges(closedEdges);
   }, [overlay, closedEdges]);
+  useEffect(() => {
+    overlay.setStartMs(startMs ?? null);
+  }, [overlay, startMs]);
   useEffect(() => {
     overlay.setEngine(player?.engine ?? null);
   }, [overlay, player, evacArea]);
@@ -444,6 +462,7 @@ export default function StudioDiorama(props: StudioDioramaProps) {
                       glyph: <FireEdgeGlyph />,
                     },
                     { label: "Burned ground", color: "var(--ct-burned)", glyph: <BurnedGlyph /> },
+                    { label: "Fire station", color: "#c8352a", glyph: <StationBadgeGlyph /> },
                     ...(streetArea
                       ? [
                           {
@@ -465,6 +484,11 @@ export default function StudioDiorama(props: StudioDioramaProps) {
                             color: cssColor(HOME_COLORS[status]),
                             glyph: <RoofGlyph color={cssColor(HOME_COLORS[status])} />,
                           })),
+                          {
+                            label: "Road ribbon: thicker = more people; teal moving, amber slow, red stuck",
+                            color: "#14b8a6",
+                            glyph: <FlowGlyph />,
+                          },
                           {
                             label: "Closed road or bridge (labelled), your assumption",
                             color: "var(--ct-ink)",

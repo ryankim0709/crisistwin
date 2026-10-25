@@ -10,6 +10,7 @@ import {
   type ImageSource,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import { attachStations } from "../maps/stations";
 import type { Feature, FeatureCollection, LineString, Polygon, Position } from "geojson";
 import { FUEL_MODELS, NON_BURNABLE_CODES } from "./fuelModels";
 import { mercatorToLonLat, type LandscapeGrid } from "./landscape";
@@ -402,6 +403,7 @@ export default function SatelliteFireMap({
     loadBasemapStyle(controller.signal).then((style) => {
       if (cancelled) return;
       let map: Map;
+      let stations: ReturnType<typeof attachStations> | null = null;
       try {
         map = new Map({
           container: element,
@@ -468,6 +470,7 @@ export default function SatelliteFireMap({
       }, IMAGERY_TIMEOUT_MS);
 
       map.on("load", () => {
+        stations = attachStations(map!);
         const imagerySrc = imagerySource();
         const layers = map.getStyle().layers;
         // As in the replay: imagery under the place labels (so it sits above the hillshade and
@@ -663,6 +666,7 @@ export default function SatelliteFireMap({
         windMarker.current = null;
         headMarker.current = null;
         setReady(false);
+        stations?.dispose();
         map.remove();
         mapRef.current = null;
       };

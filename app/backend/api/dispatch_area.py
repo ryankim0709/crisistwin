@@ -25,6 +25,15 @@ access-only way joins it (needed to attach the access edge), so a public edge ca
 `turningNodes` and `boundaryNodes` are node indices (boundaryNodes: a way continues outside the
 box, so the node is not a dead end).
 
+Exits (since dispatch-area/5): real egress, not every road that crosses the box edge. Destinations
+are registered shelter facilities from FEMA's ESF#6 Shelter System (the former National Shelter
+System, public ArcGIS service), or OSM shelters/assembly points when FEMA gives nothing, within
+SHELTER_SEARCH_RADIUS_M of the box centre. An exit is a motorway/trunk/primary (then secondary)
+crossing of the box edge whose outward heading has a shelter beyond the box ahead of it; at most
+MAX_EGRESS, one per road and direction, each carrying the nearest such shelter as `destination`
+(straight-line distance: roads beyond the box are not routed). With no shelter data the old box-edge
+crossings are used, `kind: "map-edge"`, named "approximate exit (map edge)".
+
 Caching: in-process LRU, then MongoDB `dispatch_areas`, then a fresh build. The cache key
 is the builder version plus the bbox snapped outward to a 0.01 degree grid. MongoDB being
 unavailable only costs the shared cache; the endpoint still works.
@@ -35,6 +44,7 @@ import hashlib
 import json
 import logging
 import math
+import re
 import threading
 import urllib.parse
 import urllib.request
@@ -60,8 +70,10 @@ from .mongodb import get_database
 
 logger = logging.getLogger(__name__)
 
-BUILDER_VERSION = "dispatch-area/4"
+BUILDER_VERSION = "dispatch-area/5"
 COLLECTION = "dispatch_areas"
+SHELTER_COLLECTION = "dispatch_shelters"
+SHELTER_CACHE_VERSION = "shelters/1"
 MAX_STORED_BYTES = 15 * 1024 * 1024
 LRU_ENTRIES = 8
 CACHE_CONTROL = "public, max-age=86400"
@@ -123,6 +135,25 @@ ZONE_CELL_GROWTH_M = 200
 MIN_ZONE_STREET_KM = 0.6
 MAX_ZONES = 60
 EXIT_DEDUPE_METERS = 400
+# Egress toward real shelters. The 30 km radius and the cap of 6 are product choices (how far an
+# evacuee is sent, how many exits a dispatcher can hold in mind), not sourced values.
+SHELTER_SEARCH_RADIUS_M = 30_000
+MAX_EGRESS = 6
+EGRESS_CLASS_RANK = {"motorway": 0, "trunk": 1, "primary": 2, "secondary": 3}
+# Assumption: a shelter is "ahead" of an egress road when its bearing from the crossing is within
+# 75 degrees of the road's outward heading (measured over up to EGRESS_LOOKAHEAD_M of the way).
+EGRESS_AHEAD_MAX_DEG = 75
+EGRESS_LOOKAHEAD_M = 3000
+FEMA_NSS_URL = "https://gis.fema.gov/arcgis/rest/services/NSS/FEMA_NSS/FeatureServer/5/query"
+FEMA_NSS_ATTRIBUTION = (
+    "Shelters: FEMA ESF#6 Shelter System (formerly National Shelter System); FEMA, Mass Care, American Red Cross"
+)
+FEMA_HTTP_TIMEOUT_S = 40
+OSM_SHELTER_EXCLUDED_FOR = ("homeless", "abused", "drug_addicted", "migrant", "victim", "juvenile", "child")
+US_STATE_CODES = frozenset(
+    "AL AK AZ AR CA CO CT DE FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY "
+    "NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY SR".split()
+)
 ENGINES_PER_STATION = 1
 STATION_SEARCH_BUFFER_M = 3000
 MAX_STATIONS = 16
@@ -211,6 +242,138 @@ def side_of_box(box: Box, lon: float, lat: float) -> str:
     w, s, e, n = box
     distances = {"south": lat - s, "north": n - lat, "west": lon - w, "east": e - lon}
     return min(distances, key=distances.get)
+
+
+def bearing_deg(a: tuple[float, float], b: tuple[float, float]) -> float:
+    """Initial great-circle bearing from a to b (lon, lat), degrees clockwise from north."""
+    lon1, lat1, lon2, lat2 = map(math.radians, (a[0], a[1], b[0], b[1]))
+    y = math.sin(lon2 - lon1) * math.cos(lat2)
+    x = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(lon2 - lon1)
+    return math.degrees(math.atan2(y, x)) % 360
+
+
+def compass(bearing: float) -> str:
+    return ("north", "east", "south", "west")[int(((bearing + 45) % 360) // 90)]
+
+
+def road_label(tags: dict, cls: str) -> str:
+    """Readable road name: "I-580", "US 101", "Hwy 24", else the OSM name."""
+    ref = str(tags.get("ref") or "").split(";")[0].strip()
+    match = re.fullmatch(r"([A-Z]{1,2})[ -]?(\d+[A-Z]?)", ref)
+    if match:
+        prefix, number = match.groups()
+        if prefix == "I":
+            return f"I-{number}"
+        if prefix == "US":
+            return f"US {number}"
+        if prefix in US_STATE_CODES:
+            return f"Hwy {number}"
+    return ref or tags.get("name") or cls
+
+
+def ahead_point(start: tuple[float, float], onward: list[tuple[float, float]]) -> tuple[float, float] | None:
+    """The farthest point of the way beyond the crossing, up to EGRESS_LOOKAHEAD_M away."""
+    best = None
+    for point in onward:
+        if haversine_m(start, point) > EGRESS_LOOKAHEAD_M:
+            return point if best is None else best
+        best = point
+    return best
+
+
+# --- shelters (destinations) -------------------------------------------------------------
+
+
+def _fetch_fema_shelters(lon: float, lat: float, radius_m: float) -> list[dict]:
+    """Registered shelter facilities from FEMA's ESF#6 Shelter System ("Shelter Locations" layer)."""
+    params = urllib.parse.urlencode({
+        "where": "1=1", "geometry": f"{lon},{lat}", "geometryType": "esriGeometryPoint", "inSR": 4326,
+        "distance": round(radius_m), "units": "esriSRUnit_Meter", "returnGeometry": "true", "outSR": 4326,
+        "outFields": "shelter_id,shelter_name,city,evacuation_capacity,shelter_status_code",
+        "resultRecordCount": 4000, "f": "json",
+    })
+    request = urllib.request.Request(f"{FEMA_NSS_URL}?{params}", headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(request, timeout=FEMA_HTTP_TIMEOUT_S) as response:
+        data = json.load(response)
+    out = []
+    for feature in data.get("features") or []:
+        attrs, geom = feature.get("attributes") or {}, feature.get("geometry") or {}
+        if not attrs.get("shelter_name") or geom.get("x") is None or geom.get("y") is None:
+            continue
+        capacity = attrs.get("evacuation_capacity")
+        out.append({
+            "name": str(attrs["shelter_name"]).strip(),
+            "source": "fema-nss",
+            "sourceId": str(attrs.get("shelter_id") or ""),
+            "city": str(attrs.get("city") or "").strip().title(),
+            "location": [round(geom["x"], 6), round(geom["y"], 6)],
+            "capacity": int(capacity) if isinstance(capacity, (int, float)) and capacity > 0 else None,
+            "status": attrs.get("shelter_status_code"),
+        })
+    return out
+
+
+def _fetch_osm_shelters(lon: float, lat: float, radius_m: float) -> list[dict]:
+    """OSM emergency shelters and assembly points (homeless and similar shelters excluded)."""
+    around = f"(around:{round(radius_m)},{lat:.6f},{lon:.6f})"
+    data = overpass(
+        f"[out:json][timeout:{OVERPASS_QUERY_TIMEOUT_S}];"
+        f"(nwr[social_facility=shelter]{around};nwr[emergency=assembly_point]{around};"
+        f'nwr[emergency~"^(evacuation_centre|shelter)$"]{around};);out center tags;'
+    )
+    out = []
+    for element in data["elements"]:
+        tags = element.get("tags", {})
+        if any(f in str(tags.get("social_facility:for", "")) for f in OSM_SHELTER_EXCLUDED_FOR):
+            continue
+        center = element.get("center", {})
+        e_lat, e_lon = element.get("lat", center.get("lat")), element.get("lon", center.get("lon"))
+        if e_lat is None or e_lon is None or not tags.get("name"):
+            continue
+        try:
+            capacity = int(str(tags.get("capacity", "")).split(";")[0])
+        except ValueError:
+            capacity = None
+        kind = "assembly point" if tags.get("emergency") == "assembly_point" else "shelter"
+        out.append({
+            "name": tags["name"], "source": "osm", "sourceId": f"{element['type']}/{element['id']}",
+            "city": tags.get("addr:city", ""), "location": [round(e_lon, 6), round(e_lat, 6)],
+            "capacity": capacity if capacity and capacity > 0 else None, "status": None, "kind": kind,
+        })
+    return out
+
+
+def load_shelters(lon: float, lat: float, radius_m: float) -> tuple[list[dict], str | None]:
+    """Shelters near (lon, lat): FEMA first, OSM if FEMA fails or is empty. Cached in MongoDB."""
+    key = f"{SHELTER_CACHE_VERSION}:{lon:.2f},{lat:.2f},{round(radius_m)}"
+    try:
+        doc = get_database()[SHELTER_COLLECTION].find_one({"_id": key})
+        if doc:
+            return doc["shelters"], doc.get("source")
+    except _MONGO_ERRORS:
+        logger.warning("shelter cache read failed; fetching without it")
+    shelters: list[dict] = []
+    source = None
+    try:
+        shelters, source = _fetch_fema_shelters(lon, lat, radius_m), "fema-nss"
+    except (OSError, ValueError, HTTPException) as exc:
+        logger.warning("FEMA shelter service failed (%s)", type(exc).__name__)
+    if not shelters:
+        try:
+            shelters, source = _fetch_osm_shelters(lon, lat, radius_m), "osm"
+        except UpstreamUnavailable:
+            shelters, source = [], None
+        if not shelters:
+            return [], None  # nothing to cache: a later build may reach the services
+    try:
+        get_database()[SHELTER_COLLECTION].replace_one(
+            {"_id": key},
+            {"_id": key, "source": source, "fetchedAt": datetime.now(UTC), "shelters": shelters},
+            upsert=True,
+        )
+    except _MONGO_ERRORS:
+        logger.warning("shelter cache write failed; continuing without it")
+    return shelters, source
 
 
 # --- Overpass ---------------------------------------------------------------------------
@@ -378,7 +541,11 @@ def build_area(box: Box) -> dict:
                 if leaves_forward or leaves_backward:
                     boundary_refs.add(ref)
                     if public:
-                        exit_candidates.append((ref, cls, tags.get("ref") or tags.get("name") or cls))
+                        onward = refs[i + 1 :] if leaves_forward else refs[i - 1 :: -1]
+                        ahead = ahead_point(coords[ref], [coords[r] for r in onward if r in coords])
+                        exit_candidates.append(
+                            (ref, cls, tags.get("ref") or tags.get("name") or cls, road_label(tags, cls), ahead)
+                        )
             else:
                 if len(run) >= 2:
                     runs.append((run, tags, cls, oneway))
@@ -392,7 +559,7 @@ def build_area(box: Box) -> dict:
             usage[ref] += 1
         usage[run[0]] += 1
         usage[run[-1]] += 1
-    forced = {ref for ref, cls, _ in exit_candidates if cls in EXIT_CLASSES}
+    forced = {c[0] for c in exit_candidates if c[1] in EXIT_CLASSES}
 
     node_index: dict[int, int] = {}
     nodes: list[list[float]] = []
@@ -511,23 +678,90 @@ def build_area(box: Box) -> dict:
     turning_nodes = sorted({ref_to_node[r] for r in turning_refs if r in ref_to_node})
     boundary_nodes = sorted({ref_to_node[r] for r in boundary_refs if r in ref_to_node})
 
-    # Exits: deduplicated boundary crossings of major roads (any road class as a fallback).
-    def pick_exits(candidates: list[tuple[int, str, str]], rank: dict[str, int]) -> list[dict]:
+    # Exits, preferred: major roads leaving the box toward a real shelter beyond it.
+    half_diagonal = haversine_m((w, s), (e, n)) / 2
+    shelter_radius = max(SHELTER_SEARCH_RADIUS_M, half_diagonal + 10_000)
+    shelters, shelter_source = load_shelters(round(lon0, 2), round(lat0, 2), shelter_radius)
+    beyond = [sh for sh in shelters if not inside(*sh["location"])]
+
+    def egress_options() -> list[dict]:
+        options = []
+        for ref, cls, _label, road, ahead in exit_candidates:
+            if cls not in EGRESS_CLASS_RANK or ref not in ref_to_node or ahead is None:
+                continue
+            node = ref_to_node[ref]
+            point = tuple(nodes[node])
+            heading = bearing_deg(point, ahead)
+            best, best_m = None, math.inf
+            for shelter in beyond:
+                loc = tuple(shelter["location"])
+                off = abs((bearing_deg(point, loc) - heading + 180) % 360 - 180)
+                metres = haversine_m(point, loc)
+                if off <= EGRESS_AHEAD_MAX_DEG and metres < best_m:
+                    best, best_m = shelter, metres
+            if best is not None:
+                options.append({
+                    "node": node, "point": point, "road": road, "cls": cls, "heading": compass(heading),
+                    "shelter": best, "metres": best_m,
+                })
+        return sorted(options, key=lambda o: (EGRESS_CLASS_RANK[o["cls"]], o["metres"]))
+
+    def pick_egress(options: list[dict]) -> list[dict]:
         found: list[dict] = []
-        for ref, cls, label in sorted(candidates, key=lambda c: rank[c[1]]):
+        seen_roads: set[str] = set()
+        seen: set[tuple[str, str]] = set()
+        for one_per_road in (True, False):  # first one exit per road, then other directions
+            for opt in options:
+                if len(found) >= MAX_EGRESS:
+                    return found
+                key = (opt["road"], opt["heading"])
+                if key in seen or (one_per_road and opt["road"] in seen_roads):
+                    continue
+                if any(haversine_m(opt["point"], f["point"]) < EXIT_DEDUPE_METERS for f in found):
+                    continue
+                seen.add(key)
+                seen_roads.add(opt["road"])
+                found.append(opt)
+        return found
+
+    exits: list[dict] = []
+    for opt in pick_egress(egress_options()):
+        shelter = opt["shelter"]
+        kind = shelter.get("kind", "shelter")
+        place = shelter["name"] if kind in shelter["name"].lower() else f"{shelter['name']} {kind}"
+        exits.append({
+            "node": opt["node"], "road": opt["road"], "side": side_of_box(box, *opt["point"]),
+            "kind": "egress", "label": f"{opt['road']} {opt['heading']} → {place}",
+            "destination": {
+                "name": shelter["name"], "kind": kind, "source": shelter["source"],
+                "sourceId": shelter.get("sourceId", ""), "city": shelter.get("city", ""),
+                "location": shelter["location"], "capacity": shelter.get("capacity"),
+                "status": shelter.get("status"), "straightLineMeters": round(opt["metres"]),
+            },
+        })
+
+    # Fallback: deduplicated boundary crossings of major roads (any road class as a last resort).
+    def pick_exits(candidates: list[tuple], rank: dict[str, int]) -> list[dict]:
+        found: list[dict] = []
+        for ref, cls, label, *_ in sorted(candidates, key=lambda c: rank[c[1]]):
             if ref not in ref_to_node:
                 continue
             node = ref_to_node[ref]
             point = tuple(nodes[node])
             if any(haversine_m(point, tuple(nodes[x["node"]])) < EXIT_DEDUPE_METERS for x in found):
                 continue
-            found.append({"node": node, "road": label, "side": side_of_box(box, *point)})
+            side = side_of_box(box, *point)
+            found.append({
+                "node": node, "road": label, "side": side, "kind": "map-edge",
+                "label": f"{label} ({side}) · approximate exit (map edge)",
+            })
         return found
 
-    exits = pick_exits(
-        [c for c in exit_candidates if c[1] in EXIT_CLASSES],
-        {c: i for i, c in enumerate(("motorway", "trunk", "primary", "secondary"))},
-    )
+    if not exits:
+        exits = pick_exits(
+            [c for c in exit_candidates if c[1] in EXIT_CLASSES],
+            {c: i for i, c in enumerate(("motorway", "trunk", "primary", "secondary"))},
+        )
     if not exits:
         exits = pick_exits(exit_candidates, {c: i for i, c in enumerate(ROAD_CLASSES)})
     if not exits:
@@ -535,7 +769,7 @@ def build_area(box: Box) -> dict:
     exits.sort(key=lambda x: (x["side"], x["road"]))
     for i, item in enumerate(exits, start=1):
         item["id"] = f"X{i:02d}"
-        item["name"] = f"{item['road']} ({item['side']})"
+        item["name"] = item.pop("label")
 
     # Places and fire stations.
     place_points: list[tuple[str, tuple[float, float]]] = []
@@ -640,7 +874,16 @@ def build_area(box: Box) -> dict:
         "bbox": [w, s, e, n],
         "generatedAt": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "builder": BUILDER_VERSION,
-        "sources": {"osm": {"timestamp": osm_timestamp, "attribution": ATTRIBUTION}},
+        "sources": {
+            "osm": {"timestamp": osm_timestamp, "attribution": ATTRIBUTION},
+            "shelters": {
+                "source": shelter_source,
+                "attribution": FEMA_NSS_ATTRIBUTION if shelter_source == "fema-nss"
+                else ATTRIBUTION if shelter_source == "osm" else None,
+                "searchRadiusMeters": round(shelter_radius),
+                "found": len(shelters),
+            },
+        },
         "assumptions": {
             "homesPerKm": HOMES_PER_KM,
             "homesPerKmApplied": homes_applied,
@@ -650,7 +893,16 @@ def build_area(box: Box) -> dict:
             "capacityPerLaneVph": {**CAPACITY_PER_LANE_VPH, "other": DEFAULT_CAPACITY_PER_LANE_VPH},
             "speedDefaultKph": SPEED_DEFAULT_KPH,
             "enginesPerStation": ENGINES_PER_STATION,
-            "notes": NOTES,
+            "notes": NOTES + (
+                [
+                    "Exits are major roads leaving the area toward a registered shelter "
+                    f"({'FEMA ESF#6 Shelter System' if shelter_source == 'fema-nss' else 'OpenStreetMap'}); "
+                    "the shelter is the nearest one ahead of the road beyond the area, by straight-line "
+                    "distance, not a routed trip. Listed facilities are not necessarily open for this incident.",
+                ]
+                if exits[0]["kind"] == "egress"
+                else ["No shelter data loaded: exits are approximate, where major roads cross the map edge."]
+            ),
         },
         "classes": class_list,
         "names": names,

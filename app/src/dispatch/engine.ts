@@ -9,11 +9,18 @@
  * - Every synthetic home is one household with the zone's average vehicles per home. Homes
  *   leave only on an evacuation order for their zone, one at a time in the area's departure
  *   order, spread uniformly over DEPARTURE_SPREAD_MINUTES (shorter while an engine supports
- *   the zone). Optionally (`setDepartureDelays`, the Studio's household behaviour) each home
- *   instead leaves its own drawn delay after the order, and a home with no finite delay stays.
- * - Households that have left queue at the zone's loading node and enter their route at most
- *   at the route's bottleneck capacity; zones whose routes share an edge split its capacity.
- *   Downstream queues are not modelled: once released, a group drives at free-flow speed.
+ *   the zone). Optionally (`setHouseholdBehavior`, population/householdBehavior.ts) each home
+ *   instead leaves on its own triggers: its drawn delay after the order, its drawn delay after
+ *   the fire reaches its zone (the neighbourhood cue; with no order only shadow and
+ *   wait-and-see households), or at once when the fire comes within FIRE_CUE_NEAR_METERS of
+ *   the house (the near cue), whichever is first; a household asleep at its first trigger
+ *   (`setClock`) first takes WAKE_UP_MINUTES. Households staying by choice never leave.
+ *   Households that leave with no order for their zone take the fastest exit they can reach.
+ * - Households that have left queue at one of their zone's loading points (up to
+ *   LOADING_POINTS_PER_ZONE road nodes spread over the zone; each home uses the nearest) and
+ *   enter that point's route at most at its bottleneck capacity; routes that share an edge
+ *   split its capacity. Downstream queues are not modelled: once released, a group drives at
+ *   free-flow speed.
  * - Routing avoids every edge the fire model reaches within ROUTE_LOOKAHEAD_MINUTES, and every
  *   edge the planner has closed (a road closure, a failed bridge, or a planner-confirmed
  *   reported closure from src/intel/closures.ts). Closures passed at start hold for the whole
@@ -21,9 +28,12 @@
  *   (docs/adr/0030-live-road-closures.md). Drivers already on the road re-route around such edges by themselves; a zone whose ordered exit becomes
  *   unreachable holds departures until it is given another exit, and a zone that can reach
  *   no exit at start is alerted.
- * - A household is "caught" when the modelled fire reaches its home before it leaves, when
- *   fire reaches its zone's core (loading node or centroid) while it is still in the zone, or
- *   when fire reaches the road it is on. This is a model count, not a casualty estimate.
+ * - A household is "caught" (reported as "still home when the fire arrived", or "reached by
+ *   fire after leaving home") when the modelled fire reaches its home before it leaves, its
+ *   loading point while it queues there, or the road it is on. Households staying by choice
+ *   are counted apart (`caughtByChoice`). Fire reaching a zone's core (loading node or
+ *   centroid) marks the zone overrun: no more orders, but households still home there can
+ *   still leave on a cue. This is a model count, not a casualty estimate.
  * - Engines drive at the same free-flow speeds, ignoring congestion; a station outside the
  *   road box first covers its straight-line approach at APPROACH_SPEED_KPH. With apparatus
  *   access on (`setApparatusAccess`, the agent's session) each unit is a ground apparatus kind
@@ -47,7 +57,27 @@
  */
 
 import { groundMeters, roadLabel, type DispatchArea, type LonLat } from "./area";
+import {
+  DOZER_MAX_WALK_MINUTES,
+  DOZER_WALK_KMH,
+  ENGINE_CREW_MAX_HIKE_M,
+  HAND_CREW_MAX_HIKE_MINUTES,
+  HOSE_1_5_INCH_FEET,
+  dozerWalkMinutes,
+  engineCrewHandLineMPerMin,
+  hikeMinutes,
+  hoseReachMeters,
+  toblerKmh,
+} from "../response/reach";
+import type { GroundResponseKind } from "../response/fleet";
+import { IA_SUCCESS_MAX_ACRES, IA_SUCCESS_MAX_HA, WILDLAND_RUN_CARDS } from "../response/runCards";
 import type { FireExposure } from "./fireExposure";
+import {
+  NEAR_CUE_EXTRA_MINUTES,
+  WAKE_UP_MINUTES,
+  sleepingAt,
+  type HouseholdBehavior,
+} from "../population/householdBehavior";
 import { tacticBlocked, type FireTactic } from "./fireTactics";
 import type { LinePlan } from "../studio/firefighting";
 import {
@@ -105,7 +135,41 @@ export const TURNOUT_SECONDS = 80;
  * out of that unit's reach (the Studio crew dispatch's limit, studio/crewDispatch.ts).
  */
 export const MAX_ROAD_GAP_METERS = 1500;
+/**
+ * Fire attack: a unit stages at the nearest reachable road node and walks the rest, within its
+ * own kind's reach (response/reach.ts planWork, flat ground assumed here): an engine crew at most
+ * ENGINE_CREW_MAX_HIKE_M from its engine, a hand crew a hike of at most HAND_CREW_MAX_HIKE_MINUTES
+ * at Tobler's off-path pace, a dozer at most DOZER_MAX_WALK_MINUTES at DOZER_WALK_KMH (all
+ * labelled assumptions there).
+ */
+const HAND_CREW_MAX_WALK_METERS = (HAND_CREW_MAX_HIKE_MINUTES / 60) * toblerKmh(0) * 1000;
+const DOZER_MAX_WALK_METERS = (DOZER_MAX_WALK_MINUTES / 60) * DOZER_WALK_KMH * 1000;
+/** Farthest a unit of this kind walks from its staging node to attack, metres. */
+export function attackWalkLimitMeters(kind: GroundKind): number {
+  const family = GROUND_APPARATUS[kind]?.line?.kind;
+  return family === "hand_crew" ? HAND_CREW_MAX_WALK_METERS : family === "dozer" ? DOZER_MAX_WALK_METERS : ENGINE_CREW_MAX_HIKE_M;
+}
+/** Minutes to walk in: Tobler for crews (flat), the dozer's walking speed for dozers. */
+function attackWalkMinutes(kind: GroundKind, meters: number): number {
+  return GROUND_APPARATUS[kind]?.line?.kind === "dozer" ? dozerWalkMinutes(meters) : hikeMinutes(meters, 0);
+}
+/**
+ * Initial attack cap per fire: CAL FIRE's high dispatch-level run card's ground units
+ * (response/runCards.ts WILDLAND_RUN_CARDS.high). ASSUMPTION: the high card is used as the cap
+ * whatever the day's level; more units only once the fire passes the IA success size.
+ */
+/** LANDFIRE GR1 (Anderson model 1): the grass reference of grass-equivalent line. */
+const GRASS_FUEL_CODE_FOR_LINE = 101;
+const IA_GROUND_CAP =
+  WILDLAND_RUN_CARDS.high.engines + WILDLAND_RUN_CARDS.high.hand_crews + WILDLAND_RUN_CARDS.high.dozers;
 export const EXIT_OPTIONS_PER_ZONE = 3;
+/**
+ * Road nodes a zone's households load through. ASSUMPTION (no source): 4, spread over the zone
+ * by farthest-point sampling of the nodes nearest its homes, starting from its main loading
+ * node; each household enters at the nearest of them, i.e. it drives out of the neighbourhood
+ * by the nearest of a few streets rather than all through one node.
+ */
+export const LOADING_POINTS_PER_ZONE = 4;
 const SECONDS_PER_MINUTE = 60;
 const VEHICLE_EPSILON = 0.01;
 const MAX_ALERTS = 200;
@@ -152,7 +216,17 @@ export interface ZoneState {
   queued: number;
   onRoad: number;
   safe: number;
+  /** Households reached by the fire before getting out (all kinds below). */
   caught: number;
+  /** Of `caught`: households staying home by choice. */
+  caughtByChoice: number;
+  /** Of `caught`: households that had left home (queued at a loading point or driving). */
+  caughtOnRoad: number;
+  /**
+   * Exit households take when they leave on a fire cue with no order for the zone (the fastest
+   * reachable), or when the zone is overrun and its ordered route is cut; null when none yet.
+   */
+  selfExitId: string | null;
   fireContact: boolean;
   /** Set while the zone waits for its wave: no order yet, released by the engine. */
   stage: ZoneStage | null;
@@ -181,13 +255,22 @@ export interface ResidentNotice {
   text: string;
 }
 
+/** One of a zone's loading points: households queue there for room on its route. */
+interface LoadGroup {
+  node: number;
+  /** Home indices waiting here, first in first out. */
+  queue: number[];
+  releaseBudget: number;
+  /** Route from `node` to the zone's current exit, or null when cut or not yet set. */
+  route: Route | null;
+}
+
 interface ZoneWork {
   /** Offset (within the zone's homes) of the next household to leave. */
   nextDeparture: number;
   departBudget: number;
-  /** Home indices waiting at the loading point, first in first out. */
-  queue: number[];
-  releaseBudget: number;
+  /** Loading points; group 0 is the zone's main loading node (its route is `zone.route`). */
+  groups: LoadGroup[];
   /** Home indices the fire reaches, by arrival; `fireNext` is the first not yet reached. */
   fireOrder: number[];
   fireNext: number;
@@ -237,6 +320,10 @@ export interface UnitState {
   holdSeconds: number;
   /** Minute the unit arrived on scene, for the crews panel. */
   arrivedMinute: number | null;
+  /** Minutes the crew walks from its staging node to the fire before it can build line. */
+  walkMinutes?: number;
+  /** Metres from its staging node to the fire (sets an engine's work: hose or crew on foot). */
+  walkMeters?: number;
 }
 
 export type AlertType =
@@ -255,7 +342,8 @@ export type AlertType =
   | "fire_out"
   | "fire_held"
   | "road_closed"
-  | "road_reopened";
+  | "road_reopened"
+  | "self_evacuation";
 
 /** A road closed by the planner: at start (minute 0) or mid-run. */
 export interface RoadClosure {
@@ -304,7 +392,10 @@ export interface Totals {
   vehicles: number;
   /** In zones with no order yet. */
   notOrdered: number;
-  /** Ordered, at home or queued at the loading point. */
+  /**
+   * Ordered, at home or queued at a loading point; plus households of unordered zones that
+   * left on a fire cue and are queued.
+   */
   waiting: number;
   /**
    * Of `waiting`, households at home that will not leave (only with per-household departure
@@ -313,7 +404,12 @@ export interface Totals {
   staying?: number;
   onRoad: number;
   safe: number;
+  /** Reached by the fire before getting out; of these, the two below. */
   caught: number;
+  /** Of `caught`, households staying home by choice (only with household behaviour). */
+  caughtByChoice?: number;
+  /** Of `caught`, households that had left home (at a loading point or on the road). */
+  caughtOnRoad?: number;
 }
 
 /** A fire engines can be sent to, and their progress against it. */
@@ -331,6 +427,13 @@ export interface FireAttackState {
   heldMinute: number | null;
   /** The held alert was raised and its crews released. */
   heldAnnounced: boolean;
+  /**
+   * Minute the fire reaches dispatch (ignition + call-in/processing delay, response/report.ts),
+   * or null while it has not ignited. Until then the dispatcher cannot see or order on it.
+   */
+  reportedMinute: number | null;
+  /** The "reported" alert was raised. */
+  reportAnnounced: boolean;
 }
 
 export interface IgnitionEvent {
@@ -391,12 +494,23 @@ export class DispatchEngine {
   /** Households that reached each exit, oldest first. Bookkeeping only; never read by the model. */
   readonly exitArrivals: ExitArrival[] = [];
   /**
-   * Per home, minutes from its zone's order to leaving home (non-finite: it stays), or null for
-   * the uniform DEPARTURE_SPREAD_MINUTES model. Set by `setDepartureDelays`.
+   * Per-household behaviour (population/householdBehavior.ts), or null for the uniform
+   * DEPARTURE_SPREAD_MINUTES model. Set by `setHouseholdBehavior`.
    */
-  private departureDelays: Float32Array | null = null;
-  /** Per zone, households still at home that will not leave (only with departure delays). */
+  private behavior: HouseholdBehavior | null = null;
+  /** Per zone, households still at home that stay by choice (only with household behaviour). */
   private stayingAtHome: Int32Array;
+  /**
+   * Per home, the minute it can act on its triggers: its first trigger, plus WAKE_UP_MINUTES
+   * when that fell in sleeping hours; NaN before any trigger.
+   */
+  private awakeAt: Float64Array;
+  /** Per zone, the earliest near-cue minute of its homes (skips zones the fire is far from). */
+  private zoneNearMin: Float64Array;
+  /** Per home, its loading point (index into its zone's `groups`). */
+  private readonly homeGroup: Uint8Array;
+  /** UTC epoch ms of T+0, for sleeping hours; null: never asleep. Set by `setClock`. */
+  private startEpochMs: number | null = null;
   alerts: Alert[] = [];
   notices: ResidentNotice[] = [];
   private nextNoticeId = 1;
@@ -443,6 +557,10 @@ export class DispatchEngine {
     this.homeStatus = new Uint8Array(area.homes.length);
     this.queuedMinute = new Int32Array(area.homes.length).fill(-1);
     this.stayingAtHome = new Int32Array(area.zones.length);
+    this.awakeAt = new Float64Array(area.homes.length).fill(NaN);
+    this.zoneNearMin = this.zoneNearMinutes(exposure);
+    const loading = loadingPoints(area);
+    this.homeGroup = loading.homeGroup;
     this.zones = area.zones.map((zone, index) => ({
       index,
       status: "no_order",
@@ -457,6 +575,9 @@ export class DispatchEngine {
       onRoad: 0,
       safe: 0,
       caught: 0,
+      caughtByChoice: 0,
+      caughtOnRoad: 0,
+      selfExitId: null,
       fireContact: false,
       stage: null,
       wave: null,
@@ -464,8 +585,7 @@ export class DispatchEngine {
     this.work = area.zones.map((zone, index) => ({
       nextDeparture: 0,
       departBudget: 0,
-      queue: [],
-      releaseBudget: 0,
+      groups: loading.nodes[index].map((node) => ({ node, queue: [], releaseBudget: 0, route: null })),
       fireOrder: this.fireOrderOf(index),
       fireNext: 0,
       vehiclesPerHome: zone.homes > 0 ? zone.vehicles / zone.homes : 0,
@@ -521,8 +641,15 @@ export class DispatchEngine {
   }
 
   /** The fires engines can attack, and their burned area over time (from the current run). */
-  setFires(targets: readonly FireTarget[], frames: readonly FireAreaFrame[]): void {
-    this.fires = targets.map((target) => ({
+  setFires(
+    targets: readonly FireTarget[],
+    frames: readonly FireAreaFrame[],
+    reportDelaysMinutes: readonly number[] = [],
+  ): void {
+    this.fires = targets.map((target, index) => ({
+      reportedMinute:
+        target.ignitedMinute === null ? null : target.ignitedMinute + (reportDelaysMinutes[index] ?? 0),
+      reportAnnounced: false,
       target,
       lineMeters: 0,
       outMinute: null,
@@ -545,6 +672,7 @@ export class DispatchEngine {
     heldMinutes: readonly (number | null)[] | null = null,
   ): void {
     this.exposure = exposure;
+    this.zoneNearMin = this.zoneNearMinutes(exposure);
     this.fireFrames = [...frames];
     if (heldMinutes) {
       this.fires.forEach((fire, index) => {
@@ -590,15 +718,22 @@ export class DispatchEngine {
     );
   }
 
+  /** Fire is burning and has been reported to dispatch (orderable, visible). */
+  fireReported(index: number): boolean {
+    const at = this.fires[index].reportedMinute;
+    return this.fireBurning(index) && at !== null && at <= this.minute;
+  }
+
   /** Set when a line tactic gained or lost crews: the session re-plans lines and re-solves. */
   linesDirty = false;
 
   /** Start minute of each engine on a fire: arrival on scene, or now plus its drive. */
   crewMinutes(index: number): number[] {
-    return this.fireAttackers(index).map((unit) =>
-      unit.status === "on_scene"
-        ? (unit.arrivedMinute ?? this.minute)
-        : this.minute + (this.unitEtaMinutes(unit) ?? 0),
+    return this.fireAttackers(index).map(
+      (unit) =>
+        (unit.status === "on_scene"
+          ? (unit.arrivedMinute ?? this.minute)
+          : this.minute + (this.unitEtaMinutes(unit) ?? 0)) + (unit.walkMinutes ?? 0),
     );
   }
 
@@ -655,16 +790,19 @@ export class DispatchEngine {
   attackRoute(
     unit: UnitState,
     index: number,
-  ): { node: number; route: Route; seconds: number } | null {
+  ): { node: number; route: Route; seconds: number; walkMinutes: number; walkMeters: number } | null {
     if (unit.status === "stranded") return null;
     const from = this.unitNextNode(unit);
     const tree = this.unitTree(unit, from, this.blockedAt(this.minute));
     const { node: best, meters: bestMeters } = this.nearestReached(tree, this.fires[index].target.location);
-    if (this.access && bestMeters > MAX_ROAD_GAP_METERS) return null;
+    if (bestMeters > attackWalkLimitMeters(unit.kind)) return null;
     const route = best < 0 ? null : routeTo(this.area, tree, best);
     if (!route) return null;
     const approach = unit.status === "available" ? this.approachSeconds(unit) : 0;
-    return { node: best, route, seconds: route.seconds + approach };
+    const walkMeters = Math.max(0, bestMeters);
+    const walkMinutes = attackWalkMinutes(unit.kind, walkMeters);
+    // `seconds` is when line work can start: drive, station approach and the walk in.
+    return { node: best, route, seconds: route.seconds + approach + walkMinutes * SECONDS_PER_MINUTE, walkMinutes, walkMeters };
   }
 
   /**
@@ -705,7 +843,7 @@ export class DispatchEngine {
    */
   attackOptions(index: number, max: number): { unitIds: string[]; outMinute: number | null }[] {
     const fire = this.fires[index];
-    if (!this.fireBurning(index) || fire.target.directBlocked) return [];
+    if (!this.fireReported(index) || fire.target.directBlocked) return [];
     const candidates = this.units
       .filter((unit) => !(unit.task === "fire_attack" && unit.fire === index))
       .flatMap((unit) => {
@@ -764,34 +902,75 @@ export class DispatchEngine {
   }
 
   /**
-   * Per-household departure behaviour (the Studio's, studio/householdBehavior.ts): `delays[h]`
-   * is the minutes from home h's zone order to the household leaving home; a non-finite value
-   * means it stays. While evacuation support is on scene the wait is scaled by SUPPORTED /
-   * DEPARTURE spread. Call before any order; null restores the uniform spread. Households that
-   * stay do not hold up a zone's clearing or a staged wave's release.
+   * Per-household behaviour (population/householdBehavior.ts): order and fire-cue delays,
+   * shadow and wait-and-see households, and those staying by choice. While evacuation support
+   * is on scene the order and cue delays are scaled by SUPPORTED / DEPARTURE spread. Call before
+   * any order; null restores the uniform spread (no cues). Households staying by choice do not
+   * hold up a zone's clearing or a staged wave's release.
    */
-  setDepartureDelays(delays: Float32Array | null): void {
-    this.departureDelays = delays && delays.length === this.area.homes.length ? delays : null;
+  setHouseholdBehavior(behavior: HouseholdBehavior | null): void {
+    this.behavior =
+      behavior && behavior.orderDelayMinutes.length === this.area.homes.length ? behavior : null;
     this.stayingAtHome.fill(0);
-    const set = this.departureDelays;
+    const set = this.behavior;
     if (!set) return;
     this.area.zones.forEach((zone, index) => {
       for (let h = zone.firstHome; h < zone.firstHome + zone.homes; h += 1) {
         const status = this.homeStatus[h];
-        if ((status === HomeStatus.idle || status === HomeStatus.ordered) && !Number.isFinite(set[h]))
+        if ((status === HomeStatus.idle || status === HomeStatus.ordered) && set.staysByChoice[h])
           this.stayingAtHome[index] += 1;
       }
     });
   }
 
-  /** True when departure delays are set and home `h` will not leave. */
-  staysHome(home: number): boolean {
-    return this.departureDelays !== null && !Number.isFinite(this.departureDelays[home]);
+  /** T+0 as UTC epoch ms, so households asleep at their first trigger take WAKE_UP_MINUTES. */
+  setClock(startEpochMs: number | null): void {
+    this.startEpochMs = startEpochMs !== null && Number.isFinite(startEpochMs) ? startEpochMs : null;
   }
 
-  /** Households of a zone still at home that will not leave (0 without departure delays). */
+  /** True during sleeping hours at simulation minute `minute` (false without a clock). */
+  asleepAt(minute: number): boolean {
+    return this.startEpochMs !== null && sleepingAt(this.startEpochMs + minute * 60_000);
+  }
+
+  /** True when per-household behaviour is set (`setHouseholdBehavior`). */
+  get hasDepartureDelays(): boolean {
+    return this.behavior !== null;
+  }
+
+  /** True when household behaviour is set and home `h` stays home by choice. */
+  staysHome(home: number): boolean {
+    return this.behavior !== null && this.behavior.staysByChoice[home] === 1;
+  }
+
+  /** Households of a zone still at home that stay by choice (0 without household behaviour). */
   stayingHomes(zone: number): number {
     return this.stayingAtHome[zone];
+  }
+
+  /**
+   * True when a zone's queued households cannot get onto any road: its ordered route is cut,
+   * or (no order, or overrun) none of its loading points has a route to any exit.
+   */
+  loadingHeld(zone: number): boolean {
+    const state = this.zones[zone];
+    if (state.status === "ordered") return state.routeBlocked || !state.route;
+    return !this.work[zone].groups.some((group) => group.route);
+  }
+
+  /** Road node home `h` loads through (its zone's nearest loading point). */
+  loadingNodeOf(home: number): number {
+    const zone = this.area.homes[home].zone;
+    return this.work[zone].groups[this.homeGroup[home]]?.node ?? this.area.zones[zone].node;
+  }
+
+  private zoneNearMinutes(exposure: FireExposure): Float64Array {
+    return Float64Array.from(this.area.zones, (zone) => {
+      let first = Infinity;
+      for (let h = zone.firstHome; h < zone.firstHome + zone.homes; h += 1)
+        first = Math.min(first, exposure.homeNear?.[h] ?? Infinity);
+      return first;
+    });
   }
 
   /** Minute home `h` joined its loading queue, or -1 if it never has. */
@@ -892,8 +1071,9 @@ export class DispatchEngine {
     });
     const node = this.nearestReached(tree, this.fires[index].target.location);
     const open = node.node < 0 ? null : routeTo(this.area, tree, node.node);
-    const km = MAX_ROAD_GAP_METERS / 1000;
-    if (!open || node.meters > MAX_ROAD_GAP_METERS)
+    const limit = attackWalkLimitMeters(unit.kind);
+    const km = Math.round(limit / 100) / 10;
+    if (!open || node.meters > limit)
       return { rule: null, why: `no open road within ${km} km of the fire (fire or closures)`, road: null };
     return (
       this.firstClosedToClass(unit, open.steps) ?? {
@@ -918,9 +1098,18 @@ export class DispatchEngine {
     return { node: best, meters: bestMeters };
   }
 
-  /** Grass-equivalent line one unit builds per minute (studio/apparatus.ts rates; 0 if none). */
+  /**
+   * Grass-equivalent line one unit builds per minute (studio/apparatus.ts rates; 0 if none). An
+   * engine staged beyond its hose reach works as an engine crew on foot (response/reach.ts
+   * planWork: persons x the PMS 465 p.39 hand-line rate, in grass), not at the engine's rate.
+   */
   unitLineMetersPerMinute(unit: UnitState): number {
-    return GROUND_APPARATUS[unit.kind].line ? grassRateMetersPerHour(unit.kind) / 60 : 0;
+    const line = GROUND_APPARATUS[unit.kind].line;
+    if (!line) return 0;
+    if (line.kind === "engine" && unit.kind in HOSE_1_5_INCH_FEET && (unit.walkMeters ?? 0) > hoseReachMeters(unit.kind as GroundResponseKind)) {
+      return engineCrewHandLineMPerMin(unit.kind as GroundResponseKind, GRASS_FUEL_CODE_FOR_LINE);
+    }
+    return grassRateMetersPerHour(unit.kind) / 60;
   }
 
   private noAccessText(reason: NoAccess | null): string {
@@ -993,10 +1182,22 @@ export class DispatchEngine {
   }
 
   private emitIgnitions(after: number, upTo: number): void {
-    for (const ignition of this.ignitions) {
-      if (ignition.minute > after && ignition.minute <= upTo) {
-        this.alert("ignition", `Fire ${ignition.name} starts.`, true);
+    // With fires set, the dispatcher learns of a fire when it is reported, not when it ignites.
+    if (this.fires.length === 0) {
+      for (const ignition of this.ignitions) {
+        if (ignition.minute > after && ignition.minute <= upTo) {
+          this.alert("ignition", `Fire ${ignition.name} starts.`, true);
+        }
       }
+    }
+    for (const fire of this.fires) {
+      if (fire.reportAnnounced || fire.reportedMinute === null || fire.reportedMinute > upTo) continue;
+      fire.reportAnnounced = true;
+      this.alert(
+        "ignition",
+        `Fire ${fire.target.name} reported at T+${Math.round(fire.reportedMinute)} (ignited T+${Math.round(fire.target.ignitedMinute ?? 0)}).`,
+        true,
+      );
     }
   }
 
@@ -1058,6 +1259,7 @@ export class DispatchEngine {
       const fire = this.fires[index];
       if (fire.outMinute !== null) return reject(`${fire.target.name} is already out.`);
       if (!this.fireBurning(index)) return reject(`${fire.target.name} has not started.`);
+      if (!this.fireReported(index)) return reject(`${fire.target.name} has not been reported yet.`);
       const tactic = order.tactic ?? "direct";
       const blockedTactic = tacticBlocked(fire.target, tactic);
       if (blockedTactic)
@@ -1070,6 +1272,11 @@ export class DispatchEngine {
         return reject(`${unit.id} is already on ${fire.target.name}.`);
       let seconds = 0;
       if (!(unit.task === "fire_attack" && unit.fire === index)) {
+        const attackers = this.fireAttackers(index).length;
+        if (attackers >= IA_GROUND_CAP && this.fireAreaSquareMeters(index) / 10_000 <= IA_SUCCESS_MAX_HA)
+          return reject(
+            `${fire.target.name} already has its initial attack package (${attackers} ground units, the high run card). Send more once it grows past ${IA_SUCCESS_MAX_ACRES} acres.`,
+          );
         const plan = this.attackRoute(unit, index);
         if (!plan)
           return reject(
@@ -1078,6 +1285,8 @@ export class DispatchEngine {
         const fromStation = unit.status === "available";
         this.sendUnit(unit, from, plan.route, "en_route", "fire_attack", null, plan.node);
         unit.fire = index;
+        unit.walkMinutes = plan.walkMinutes;
+        unit.walkMeters = plan.walkMeters;
         if (fromStation) this.holdAtStation(unit);
         seconds = plan.seconds;
       }
@@ -1151,6 +1360,7 @@ export class DispatchEngine {
     zone.exitId = exitId;
     zone.route = route;
     zone.routeBlocked = false;
+    this.setGroupRoutes(index, exitId, route, this.blockedAt(this.minute));
     if (redirect) {
       const blocked = this.blockedAt(this.minute);
       for (const packet of this.packets) {
@@ -1460,7 +1670,7 @@ export class DispatchEngine {
           unit.status === "on_scene" &&
           unit.task === "fire_attack" &&
           unit.fire === index &&
-          (unit.arrivedMinute ?? 0) < this.minute,
+          (unit.arrivedMinute ?? 0) + (unit.walkMinutes ?? 0) < this.minute,
       );
       if (working.length === 0) return;
       fire.lineMeters += working.reduce((sum, unit) => sum + this.unitLineMetersPerMinute(unit), 0);
@@ -1494,15 +1704,20 @@ export class DispatchEngine {
     const status = this.homeStatus[home];
     if (status === HomeStatus.idle || status === HomeStatus.ordered) {
       zone.atHome -= 1;
-      if (this.staysHome(home)) this.stayingAtHome[zone.index] -= 1;
-    } else if (status === HomeStatus.queued) zone.queued -= 1;
-    else return;
+      if (this.staysHome(home)) {
+        this.stayingAtHome[zone.index] -= 1;
+        zone.caughtByChoice += 1;
+      }
+    } else if (status === HomeStatus.queued) {
+      zone.queued -= 1;
+      zone.caughtOnRoad += 1;
+    } else return;
     this.homeStatus[home] = HomeStatus.caught;
     zone.caught += 1;
   }
 
   private checkFire(now: number): void {
-    const { zoneContact, zoneCore, homeArrival } = this.exposure;
+    const { zoneContact, zoneCore, homeArrival, nodeArrival } = this.exposure;
     for (const zone of this.zones) {
       const name = this.zoneName(zone.index);
       const work = this.work[zone.index];
@@ -1535,16 +1750,27 @@ export class DispatchEngine {
           true,
         );
       }
+      // Households queued at a loading point the fire has reached.
+      let caughtQueued = 0;
+      for (const group of work.groups) {
+        if (group.queue.length === 0 || !(nodeArrival[group.node] <= now)) continue;
+        for (const home of group.queue) this.catchHome(zone, home);
+        caughtQueued += group.queue.length;
+        group.queue = [];
+      }
+      if (caughtQueued > 0)
+        this.alert(
+          "vehicles_exposed",
+          `Fire reached a loading point of ${name}: ${caughtQueued} households waiting there to get onto the road are caught.`,
+          true,
+        );
       if (zone.status !== "overrun" && zone.status !== "cleared" && zoneCore[zone.index] <= now) {
-        const before = zone.caught;
-        const { firstHome, homes } = this.area.zones[zone.index];
-        for (let h = firstHome; h < firstHome + homes; h += 1) this.catchHome(zone, h);
-        work.queue = [];
         zone.status = "overrun";
         zone.stage = null;
+        const home = zone.atHome - this.stayingAtHome[zone.index];
         this.alert(
           "zone_overrun",
-          `Fire reaches the core of ${name}: ${zone.caught - before} homes still there are caught.`,
+          `Fire reaches the core of ${name}: ${home} households still home (not counting ${this.stayingAtHome[zone.index]} staying by choice) and ${zone.queued} queued; no more orders here.`,
           true,
         );
       }
@@ -1553,36 +1779,131 @@ export class DispatchEngine {
 
   private updateZoneRoutes(blocked: (edge: number) => boolean): void {
     for (const zone of this.zones) {
-      if (zone.status !== "ordered" || !zone.exitId) continue;
-      if (zone.route && !zone.route.steps.some((step) => blocked(step.edge))) continue;
-      const tree = shortestPathTree(this.area, this.area.zones[zone.index].node, blocked);
-      const route = routeTo(this.area, tree, this.exitNode(zone.exitId));
-      const id = this.area.zones[zone.index].id;
-      if (route) {
-        zone.route = route;
-        if (zone.routeBlocked) zone.routeBlocked = false;
-        else
-          this.alert(
-            "route_changed",
-            `Route from ${id} to ${zone.exitId} re-planned around fire and closed roads.`,
-            false,
-          );
-      } else if (!zone.routeBlocked) {
-        zone.route = null;
-        zone.routeBlocked = true;
-        this.notice(
-          zone.index,
-          "hold",
-          zone.exitId,
-          `Your route to ${this.exitLabel(zone.exitId)} is cut off by fire or a road closure. If you have not left, wait for a new route.`,
-        );
-        this.alert(
-          "route_blocked",
-          `${this.zoneName(zone.index)} cannot reach ${zone.exitId} without crossing fire or a closed road; departures are held until it gets another exit.`,
-          true,
-        );
+      if (zone.status === "ordered" && zone.exitId) {
+        if (!zone.route || zone.route.steps.some((step) => blocked(step.edge))) {
+          const tree = shortestPathTree(this.area, this.area.zones[zone.index].node, blocked);
+          const route = routeTo(this.area, tree, this.exitNode(zone.exitId));
+          const id = this.area.zones[zone.index].id;
+          if (route) {
+            zone.route = route;
+            if (zone.routeBlocked) zone.routeBlocked = false;
+            else
+              this.alert(
+                "route_changed",
+                `Route from ${id} to ${zone.exitId} re-planned around fire and closed roads.`,
+                false,
+              );
+          } else if (!zone.routeBlocked) {
+            zone.route = null;
+            zone.routeBlocked = true;
+            this.notice(
+              zone.index,
+              "hold",
+              zone.exitId,
+              `Your route to ${this.exitLabel(zone.exitId)} is cut off by fire or a road closure. If you have not left, wait for a new route.`,
+            );
+            this.alert(
+              "route_blocked",
+              `${this.zoneName(zone.index)} cannot reach ${zone.exitId} without crossing fire or a closed road; departures are held until it gets another exit.`,
+              true,
+            );
+          }
+        }
+        this.refreshGroupRoutes(zone.index, zone.exitId, zone.route, blocked);
+        continue;
+      }
+      // Households on their own (no order, or the zone is overrun): keep a route to the exit
+      // they took, else to the fastest one they can still reach.
+      if (zone.status === "no_order" || zone.status === "overrun") {
+        if (zone.queued === 0) continue;
+        this.selfRoute(zone.index, blocked);
       }
     }
+  }
+
+  /**
+   * Route for households leaving with no order (or from an overrun zone): the exit they already
+   * took if still reachable from the main loading node, else the fastest reachable exit.
+   */
+  private selfRoute(index: number, blocked: (edge: number) => boolean): void {
+    const zone = this.zones[index];
+    const work = this.work[index];
+    const current = zone.selfExitId ?? (zone.status === "overrun" ? zone.exitId : null);
+    const primary = work.groups[0].route;
+    if (
+      current &&
+      primary &&
+      primary.target === this.exitNode(current) &&
+      !primary.steps.some((step) => blocked(step.edge))
+    ) {
+      this.refreshGroupRoutes(index, current, primary, blocked);
+      return;
+    }
+    const tree = shortestPathTree(this.area, this.area.zones[index].node, blocked);
+    let best: { id: string; route: Route } | null = null;
+    if (current) {
+      const route = routeTo(this.area, tree, this.exitNode(current));
+      if (route) best = { id: current, route };
+    }
+    if (!best) {
+      for (const exit of this.area.exits) {
+        const route = routeTo(this.area, tree, exit.node);
+        if (route && (!best || route.seconds < best.route.seconds)) best = { id: exit.id, route };
+      }
+    }
+    if (!best) {
+      for (const group of work.groups) group.route = null;
+      return;
+    }
+    if (zone.selfExitId === null && zone.status === "no_order")
+      this.alert(
+        "self_evacuation",
+        `Households in ${this.zoneName(index)} leave on their own as the fire reaches them (no order), via ${best.id}.`,
+        false,
+      );
+    zone.selfExitId = best.id;
+    this.setGroupRoutes(index, best.id, best.route, blocked);
+  }
+
+  /** Every loading point's route to `exitId`; group 0 takes `primary` (the main node's route). */
+  private setGroupRoutes(
+    index: number,
+    exitId: string,
+    primary: Route | null,
+    blocked: (edge: number) => boolean,
+  ): void {
+    const groups = this.work[index].groups;
+    const target = this.exitNode(exitId);
+    groups.forEach((group, i) => {
+      group.route =
+        i === 0
+          ? primary
+          : routeTo(this.area, shortestPathTree(this.area, group.node, blocked), target);
+    });
+  }
+
+  /** Re-plan loading-point routes that cross a blocked edge (group 0 follows `primary`). */
+  private refreshGroupRoutes(
+    index: number,
+    exitId: string,
+    primary: Route | null,
+    blocked: (edge: number) => boolean,
+  ): void {
+    const groups = this.work[index].groups;
+    const target = this.exitNode(exitId);
+    groups.forEach((group, i) => {
+      if (i === 0) {
+        group.route = primary;
+        return;
+      }
+      if (
+        group.route &&
+        group.route.target === target &&
+        !group.route.steps.some((step) => blocked(step.edge))
+      )
+        return;
+      group.route = routeTo(this.area, shortestPathTree(this.area, group.node, blocked), target);
+    });
   }
 
   private departures(): void {
@@ -1595,85 +1916,132 @@ export class DispatchEngine {
         .map((unit) => unit.zone as number),
     );
     for (const zone of this.zones) {
-      if (zone.status !== "ordered" || zone.atHome <= 0) continue;
-      const { firstHome, homes } = this.area.zones[zone.index];
-      const work = this.work[zone.index];
+      if (zone.atHome <= 0) continue;
       const spread = supported.has(zone.index)
         ? SUPPORTED_DEPARTURE_SPREAD_MINUTES
         : DEPARTURE_SPREAD_MINUTES;
-      if (this.departureDelays) {
-        this.delayedDepartures(zone, spread / DEPARTURE_SPREAD_MINUTES);
+      if (this.behavior) {
+        if (zone.status !== "cleared")
+          this.behaviorDepartures(zone, spread / DEPARTURE_SPREAD_MINUTES);
         continue;
       }
+      // Uniform spread: ordered zones (and overrun zones that were ordered) only.
+      if (zone.orderedMinute === null || (zone.status !== "ordered" && zone.status !== "overrun"))
+        continue;
+      const { firstHome, homes } = this.area.zones[zone.index];
+      const work = this.work[zone.index];
       work.departBudget += homes / spread;
       while (work.departBudget >= 1 && work.nextDeparture < homes) {
         const home = firstHome + work.nextDeparture++;
         if (this.homeStatus[home] !== HomeStatus.ordered) continue;
-        this.homeStatus[home] = HomeStatus.queued;
-        this.queuedMinute[home] = this.minute;
-        work.queue.push(home);
-        zone.atHome -= 1;
-        zone.queued += 1;
+        this.leaveHome(zone, home);
         work.departBudget -= 1;
       }
       if (work.nextDeparture >= homes) work.departBudget = 0;
     }
   }
 
-  /** Departures with per-household delays: every home whose (scaled) delay has passed leaves. */
-  private delayedDepartures(zone: ZoneState, scale: number): void {
-    const delays = this.departureDelays!;
-    const elapsed = this.minute - (zone.orderedMinute ?? this.minute);
+  /** A household leaves home and queues at its loading point. */
+  private leaveHome(zone: ZoneState, home: number): void {
+    this.homeStatus[home] = HomeStatus.queued;
+    this.queuedMinute[home] = this.minute;
+    this.work[zone.index].groups[this.homeGroup[home]].queue.push(home);
+    zone.atHome -= 1;
+    zone.queued += 1;
+  }
+
+  /**
+   * Departures with household behaviour (population/householdBehavior.ts): a household leaves
+   * at the first of its order delay after the zone's order, its cue delay after the fire
+   * reached its zone (with no order only shadow and wait-and-see households), and the near cue
+   * (fire within FIRE_CUE_NEAR_METERS of the house) + NEAR_CUE_EXTRA_MINUTES. A household
+   * asleep at its first trigger acts WAKE_UP_MINUTES later. Order and cue delays are scaled by
+   * `scale` (evacuation support on scene). Staying by choice: never.
+   */
+  private behaviorDepartures(zone: ZoneState, scale: number): void {
+    const behavior = this.behavior!;
+    const now = this.minute;
+    const contact = this.exposure.zoneContact[zone.index];
+    const contactSeen = contact <= now;
+    const ordered = zone.orderedMinute;
+    if (ordered === null && !contactSeen && !(this.zoneNearMin[zone.index] <= now)) return;
+    const near = this.exposure.homeNear;
     const { firstHome, homes } = this.area.zones[zone.index];
-    const work = this.work[zone.index];
     for (let home = firstHome; home < firstHome + homes; home += 1) {
-      if (this.homeStatus[home] !== HomeStatus.ordered) continue;
-      // Non-finite delays (households that stay) never pass this test.
-      if (!(delays[home] * scale <= elapsed)) continue;
-      this.homeStatus[home] = HomeStatus.queued;
-      this.queuedMinute[home] = this.minute;
-      work.queue.push(home);
-      zone.atHome -= 1;
-      zone.queued += 1;
+      const status = this.homeStatus[home];
+      if (status !== HomeStatus.idle && status !== HomeStatus.ordered) continue;
+      if (behavior.staysByChoice[home]) continue;
+      const orderStart = ordered !== null && status === HomeStatus.ordered ? ordered : Infinity;
+      const cueStart =
+        contactSeen && (ordered !== null || behavior.leavesWithoutOrder[home]) ? contact : Infinity;
+      const nearStart = near && near[home] <= now ? near[home] : Infinity;
+      const first = Math.min(orderStart, cueStart, nearStart);
+      if (!(first <= now)) continue;
+      if (Number.isNaN(this.awakeAt[home]))
+        this.awakeAt[home] = first + (this.asleepAt(first) ? WAKE_UP_MINUTES : 0);
+      const awake = this.awakeAt[home];
+      const due = Math.min(
+        Math.max(orderStart, awake) + behavior.orderDelayMinutes[home] * scale,
+        Math.max(cueStart, awake) + behavior.cueDelayMinutes[home] * scale,
+        Math.max(nearStart, awake) + NEAR_CUE_EXTRA_MINUTES,
+      );
+      if (!(due <= now)) continue;
+      this.leaveHome(zone, home);
     }
   }
 
-  /** Release queued households onto their routes, sharing each edge's capacity between zones. */
+  /** Release queued households onto their routes, sharing each edge's capacity between routes. */
   private release(): void {
-    const desired = new Map<number, number>();
+    const desired: { zone: number; group: LoadGroup; route: Route; want: number }[] = [];
     const load = new Map<number, number>();
     for (const zone of this.zones) {
       const work = this.work[zone.index];
-      if (zone.status !== "ordered" || !zone.route || zone.routeBlocked || work.queue.length === 0)
-        continue;
-      const want = Math.min(
-        work.queue.length * work.vehiclesPerHome,
-        zone.route.bottleneckVph / SECONDS_PER_MINUTE,
-      );
-      desired.set(zone.index, want);
-      for (const step of zone.route.steps) load.set(step.edge, (load.get(step.edge) ?? 0) + want);
+      if (zone.queued === 0 || zone.status === "cleared") continue;
+      // An ordered zone whose route is cut holds its departures until it gets another exit.
+      if (zone.status === "ordered" && (!zone.route || zone.routeBlocked)) continue;
+      const main = work.groups[0];
+      for (let i = 1; i < work.groups.length; i += 1) {
+        // A loading point with no route of its own: its households drive on to the main one.
+        const group = work.groups[i];
+        if (!group.route && main.route && group.queue.length > 0) {
+          main.queue.push(...group.queue);
+          group.queue = [];
+        }
+      }
+      for (const group of work.groups) {
+        if (!group.route || group.queue.length === 0) continue;
+        const want = Math.min(
+          group.queue.length * work.vehiclesPerHome,
+          group.route.bottleneckVph / SECONDS_PER_MINUTE,
+        );
+        desired.push({ zone: zone.index, group, route: group.route, want });
+        for (const step of group.route.steps)
+          load.set(step.edge, (load.get(step.edge) ?? 0) + want);
+      }
     }
-    for (const [index, want] of desired) {
+    for (const { zone: index, group, route, want } of desired) {
       const zone = this.zones[index];
       const work = this.work[index];
+      const exitId =
+        zone.status === "ordered" ? zone.exitId! : (zone.selfExitId ?? zone.exitId ?? "");
       let factor = 1;
-      for (const step of zone.route!.steps) {
+      for (const step of route.steps) {
         const capacityPerMinute = this.area.edges[step.edge].capacityVph / SECONDS_PER_MINUTE;
         factor = Math.min(factor, capacityPerMinute / (load.get(step.edge) ?? capacityPerMinute));
       }
       const vehicles = want * factor;
       if (vehicles <= VEHICLE_EPSILON || work.vehiclesPerHome <= 0) continue;
-      work.releaseBudget += vehicles / work.vehiclesPerHome;
-      const count = Math.min(work.queue.length, Math.floor(work.releaseBudget + 1e-9));
-      work.releaseBudget -= count;
-      if (work.queue.length === count) work.releaseBudget = Math.min(work.releaseBudget, 1);
+      group.releaseBudget += vehicles / work.vehiclesPerHome;
+      const count = Math.min(group.queue.length, Math.floor(group.releaseBudget + 1e-9));
+      group.releaseBudget -= count;
+      if (group.queue.length === count) group.releaseBudget = Math.min(group.releaseBudget, 1);
       if (count === 0) continue;
-      const homes = work.queue.splice(0, count);
+      const homes = group.queue.splice(0, count);
       zone.queued -= count;
-      if (zone.route!.steps.length === 0) {
+      if (route.steps.length === 0) {
         for (const home of homes) this.homeStatus[home] = HomeStatus.safe;
         zone.safe += count;
-        this.exitArrivals.push({ minute: this.minute, exitId: zone.exitId!, zone: index, homes: count });
+        this.exitArrivals.push({ minute: this.minute, exitId, zone: index, homes: count });
         continue;
       }
       for (const home of homes) this.homeStatus[home] = HomeStatus.driving;
@@ -1683,8 +2051,8 @@ export class DispatchEngine {
         zone: index,
         homes,
         vehicles: count * work.vehiclesPerHome,
-        exitId: zone.exitId!,
-        steps: zone.route!.steps,
+        exitId,
+        steps: route.steps,
         stepIndex: 0,
         stepElapsedSeconds: 0,
         stuck: false,
@@ -1733,6 +2101,7 @@ export class DispatchEngine {
         for (const home of packet.homes) this.homeStatus[home] = HomeStatus.caught;
         zone.onRoad -= packet.homes.length;
         zone.caught += packet.homes.length;
+        zone.caughtOnRoad += packet.homes.length;
         caughtByZone.set(packet.zone, (caughtByZone.get(packet.zone) ?? 0) + packet.homes.length);
         continue;
       }
@@ -1901,22 +2270,32 @@ export class DispatchEngine {
       onRoad: 0,
       safe: 0,
       caught: 0,
+      caughtByChoice: 0,
+      caughtOnRoad: 0,
     };
+    let caughtByChoice = 0;
+    let caughtOnRoad = 0;
     let staying = 0;
     for (const zone of this.zones) {
       const area = this.area.zones[zone.index];
       totals.homes += area.homes;
       totals.vehicles += area.vehicles;
-      if (zone.status === "no_order") totals.notOrdered += zone.atHome;
-      else {
+      if (zone.status === "no_order") {
+        totals.notOrdered += zone.atHome;
+        totals.waiting += zone.queued;
+      } else {
         totals.waiting += zone.atHome + zone.queued;
         staying += this.stayingAtHome[zone.index];
       }
       totals.onRoad += zone.onRoad;
       totals.safe += zone.safe;
       totals.caught += zone.caught;
+      caughtByChoice += zone.caughtByChoice;
+      caughtOnRoad += zone.caughtOnRoad;
     }
     totals.staying = staying;
+    totals.caughtByChoice = caughtByChoice;
+    totals.caughtOnRoad = caughtOnRoad;
     return totals;
   }
 
@@ -2006,6 +2385,101 @@ export class DispatchEngine {
       )
       .map((zone) => ({ zone: zone.index, exitId: zone.exitId!, route: zone.route! }));
   }
+}
+
+interface LoadingPoints {
+  /** Per zone, its loading nodes; the first is the zone's main loading node. */
+  nodes: number[][];
+  /** Per home, the index of its loading node in its zone's list. */
+  homeGroup: Uint8Array;
+}
+
+const loadingCache = new WeakMap<DispatchArea, LoadingPoints>();
+/** Spatial hash cell for the nearest-road-node search, ground metres (numerical only). */
+const NODE_HASH_METERS = 250;
+
+/**
+ * Each zone's loading points (LOADING_POINTS_PER_ZONE, labelled assumption): the nodes nearest
+ * its homes (over nodes with a public-road arc), then farthest-point sampling from the zone's
+ * main loading node; every home loads at the nearest chosen node. Cached per area.
+ */
+export function loadingPoints(area: DispatchArea): LoadingPoints {
+  const cached = loadingCache.get(area);
+  if (cached) return cached;
+  const lat0 = (area.bbox[1] + area.bbox[3]) / 2;
+  const mPerDegLat = 111_320;
+  const mPerDegLon = 111_320 * Math.cos((lat0 * Math.PI) / 180);
+  const key = (x: number, y: number) => `${x},${y}`;
+  const cellOf = (p: LonLat): [number, number] => [
+    Math.floor((p[0] * mPerDegLon) / NODE_HASH_METERS),
+    Math.floor((p[1] * mPerDegLat) / NODE_HASH_METERS),
+  ];
+  const hash = new Map<string, number[]>();
+  area.nodes.forEach((point, node) => {
+    if ((area.outgoing[node]?.length ?? 0) === 0) return;
+    const [x, y] = cellOf(point);
+    const list = hash.get(key(x, y));
+    if (list) list.push(node);
+    else hash.set(key(x, y), [node]);
+  });
+  const nearestNode = (p: LonLat, fallback: number): number => {
+    const [x, y] = cellOf(p);
+    let best = fallback;
+    let bestMeters = Infinity;
+    for (let ring = 0; ring <= 4; ring += 1) {
+      for (let dx = -ring; dx <= ring; dx += 1) {
+        for (let dy = -ring; dy <= ring; dy += 1) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue;
+          for (const node of hash.get(key(x + dx, y + dy)) ?? []) {
+            const meters = groundMeters(area.nodes[node], p);
+            if (meters < bestMeters) {
+              bestMeters = meters;
+              best = node;
+            }
+          }
+        }
+      }
+      // A node within this ring's inner radius cannot be beaten by a farther ring.
+      if (bestMeters <= ring * NODE_HASH_METERS) break;
+    }
+    return best;
+  };
+  const homeGroup = new Uint8Array(area.homes.length);
+  const nodes = area.zones.map((zone) => {
+    const homeNodes: number[] = [];
+    for (let h = zone.firstHome; h < zone.firstHome + zone.homes; h += 1)
+      homeNodes.push(nearestNode(area.homes[h].position, zone.node));
+    const candidates = [...new Set(homeNodes)];
+    const chosen = [zone.node];
+    const distance = candidates.map((node) => groundMeters(area.nodes[node], area.nodes[zone.node]));
+    while (chosen.length < LOADING_POINTS_PER_ZONE) {
+      let pick = -1;
+      for (let i = 0; i < candidates.length; i += 1)
+        if (distance[i] > 0 && (pick < 0 || distance[i] > distance[pick])) pick = i;
+      if (pick < 0) break;
+      const node = candidates[pick];
+      chosen.push(node);
+      candidates.forEach((candidate, i) => {
+        distance[i] = Math.min(distance[i], groundMeters(area.nodes[candidate], area.nodes[node]));
+      });
+    }
+    homeNodes.forEach((homeNode, i) => {
+      let best = 0;
+      let bestMeters = Infinity;
+      chosen.forEach((node, g) => {
+        const meters = groundMeters(area.nodes[node], area.nodes[homeNode]);
+        if (meters < bestMeters) {
+          bestMeters = meters;
+          best = g;
+        }
+      });
+      homeGroup[zone.firstHome + i] = best;
+    });
+    return chosen;
+  });
+  const result = { nodes, homeGroup };
+  loadingCache.set(area, result);
+  return result;
 }
 
 /** Run with no orders to the horizon: what the model shows if nobody is told to leave. */

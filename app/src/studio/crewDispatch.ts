@@ -8,12 +8,24 @@
  *
  * Road access: every vehicle is routed on its own class's graph (studio/roadAccess.ts, rules
  * R01-R12 of docs/suppression-data.md), with the class's speed on each edge (heavy-apparatus
- * caps, grade and single-lane factors). A resource whose class reaches no road point within
- * MAX_ROAD_GAP_METERS of the fire is reported as "no access", with the rule that stopped it on
- * the route an unrestricted vehicle would take. Service roads and tracks are open to apparatus
+ * caps, grade and single-lane factors). Engines, tenders and chiefs park within
+ * MAX_ROAD_GAP_METERS of the fire; hand crews and dozers park at the road point their class
+ * reaches nearest the fire however far it is, and hike or walk in (response/reach.ts limits).
+ * A line builder that cannot reach the edge in time (an engine with no road within
+ * MAX_ROAD_GAP_METERS, a crew hike over HAND_CREW_MAX_HIKE_MINUTES, a dozer walk over
+ * DOZER_MAX_WALK_MINUTES) holds its road as indirect line ("indirect: holding <road>") and is not
+ * an arrival on the fire edge. Only a resource with no road route at all is "no access", with
+ * the rule that stopped it on the route an unrestricted vehicle would take.
+ *
+ * Helitack: with a CAL FIRE helitack base (HB) in the facility layer, the crew flown from the
+ * nearest one is reported (flight at the helicopter cruise assumption, landing
+ * HELITACK_LZ_WALK_M from the fire). Reported only; it is not a line builder in the solver. Service roads and tracks are open to apparatus
  * but not to evacuation traffic.
  *
- * Bases (ASSUMPTIONS, named below): engines, tenders and chief officers come from the board's
+ * The Studio passes units already chosen from the facilities on the map (`DispatchUnit`,
+ * studio/mapResources.ts); each drives from its own base and nothing below picks bases for it.
+ *
+ * Bases for bare kinds (older callers; ASSUMPTIONS, named below): engines, tenders and chief officers come from the board's
  * OSM fire stations, at most one unit of each kind per station; further units are mutual aid
  * from CAL FIRE-layer stations off the board (tools/ca_fire_bases.json via the bases endpoint),
  * driven at OFFBOARD_SPEED_KMH over the straight-line distance x OFFBOARD_CIRCUITY to the
@@ -24,18 +36,23 @@
  */
 
 import { groundMeters, type DispatchArea, type LonLat } from "../dispatch/area";
-import { APPROACH_SPEED_KPH, MAX_ROAD_GAP_METERS as ENGINE_MAX_ROAD_GAP_METERS } from "../dispatch/engine";
+import { APPROACH_SPEED_KPH, MAX_ROAD_GAP_METERS } from "../dispatch/engine";
 import { routeTo, shortestPathTree, type ShortestPathTree } from "../dispatch/routing";
 import type { LandscapeGrid } from "../fire/landscape";
 import {
   GROUND_APPARATUS,
+  KMH_PER_KNOT,
   dataValue,
+  vehicleFamily,
   type AccessClass,
   type GroundKind,
 } from "./apparatus";
 import type { CrewArrival, ReportSource } from "./firefighting";
 import { RULE_TEXT, edgeAccessTable, type EdgeAccess, type RoadRule } from "./roadAccess";
 import { CREW_TYPES, STATION_TYPES, type SuppressionBases } from "./suppressionBases";
+import { DOZER_MAX_WALK_MINUTES, ENGINE_CREW_MAX_HIKE_M, HAND_CREW_MAX_HIKE_MINUTES, formatDuration } from "../response/reach";
+import { aviationWindows } from "./aircraft";
+import { nextInWindow } from "./daylight";
 import { engineTurnoutMinutes } from "../response/fleet";
 
 /** NFPA 1710 turnout time for fire calls: 80 s (data: response_times.turnout_s, unverified). */
@@ -46,8 +63,13 @@ const MAX_STATIONS = 12;
 const MAX_ENTRY_EXITS = 4;
 /** ASSUMPTION (data: hand_crews.walking_pace_m_per_min): walking pace with tools, 50 m/min. */
 export const HIKE_METERS_PER_MINUTE = dataValue<number>("hand_crews.walking_pace_m_per_min");
-/** A fire farther than this from any road a class can use is out of that class's reach. */
-export const MAX_ROAD_GAP_METERS = ENGINE_MAX_ROAD_GAP_METERS;
+/**
+ * A fire farther than this from any road a class can use is out of that class's reach. Re-exported
+ * as a live binding, not copied into a const: dispatch/engine -> fireTactics -> firefighting ->
+ * initialAttack -> this module is an import cycle, and a const copy read engine's value before it
+ * was initialised.
+ */
+export { MAX_ROAD_GAP_METERS };
 /**
  * ASSUMPTION: road distance over straight-line distance for off-board travel. Of the order of
  * published road circuity factors (about 1.2 for the US in Ballou et al. 2002; not re-checked);
@@ -58,10 +80,36 @@ export const OFFBOARD_CIRCUITY = 1.3;
 export const OFFBOARD_SPEED_KMH = dataValue<Record<string, number>>(
   "road_access.heavy_apparatus_speed_kmh_by_highway",
 ).secondary;
+/** ASSUMPTION (data leaf helicopters.cruise_speed_typical_kt): helicopter cruise, knots. */
+export const HELI_CRUISE_KT = dataValue<number>("helicopters.cruise_speed_typical_kt");
+/** ASSUMPTION (data leaf response_times.helicopter_call_to_takeoff_min): call to takeoff, minutes. */
+export const HELI_TAKEOFF_MIN = dataValue<number>("response_times.helicopter_call_to_takeoff_min");
+/**
+ * ASSUMPTION (labelled; no landing-zone layer): a helitack crew lands this far from the fire and
+ * walks in. A Type 2 helicopter carries 9-14 passengers (NWCG PMS 200 helicopter typing,
+ * data leaf helicopters.type2.passenger_seats); the crew size is not modelled.
+ */
+export const HELITACK_LZ_WALK_M = 500;
+
 /** ASSUMPTION: at most this many units of one kind from one board station. */
 export const UNITS_PER_KIND_PER_STATION = 1;
 
-export type TripOrigin = "station" | "mutual_aid" | "crew_camp" | "dozer_base" | "fallback";
+export type TripOrigin = "station" | "mutual_aid" | "crew_camp" | "dozer_base" | "fallback" | "state";
+
+/**
+ * One unit already chosen from the facilities on the map (studio/mapResources.ts): it drives from
+ * its own base. Units are a pure function of the map, so the planner only routes them.
+ */
+export interface DispatchUnit {
+  kind: GroundKind;
+  baseName: string;
+  location: LonLat;
+  origin: TripOrigin;
+  /** Report to rolling: turnout by staffing, or the kind's mobilisation time. */
+  turnoutMinutes: number;
+  /** Further minutes before it reaches its starting point (a state order's lead time), else 0. */
+  leadMinutes: number;
+}
 
 export interface CrewTrip {
   kind: GroundKind;
@@ -77,12 +125,18 @@ export interface CrewTrip {
   /** Where it parks, and the walk from there to the fire. */
   roadPoint: LonLat;
   hikeMeters: number;
+  /** direct: works the fire edge; indirect: too far to reach the edge in time, holds its road. */
+  tactic: "direct" | "indirect";
+  /** indirect only: the road it holds ("Grizzly Peak Blvd"), or null when unnamed. */
+  holdingRoad: string | null;
   /** Rule that kept it from a nearer road point, when one did. */
   stoppedShortBy: { rule: RoadRule; why: string; road: string | null } | null;
   /** Origin, then the road path to the road point (off-board legs are a straight line). */
   path: LonLat[];
   /** Minutes after departure at each path vertex (same length as `path`). */
   pathMinutes: number[];
+  /** Run source id of the incident (fire) the unit was sent to (studio/incidents.ts); absent on older plans. */
+  sourceId?: string;
 }
 
 export interface NoAccess {
@@ -111,13 +165,67 @@ export interface CrewDispatch {
   noAccess: NoAccess[];
   /** Assumptions that decided this dispatch (fallbacks, unknown tags, off-board travel). */
   notes: string[];
+  /** Helitack crew from the nearest helitack base (reported, not a line builder), or null. */
+  helitack: HelitackPlan | null;
+  /**
+   * One incident per ignition (studio/incidents.ts), in report order. When present, `trips` holds
+   * every incident's units (each tagged with `sourceId`), `reportMinute`, `fire`, `roadPoint` and
+   * `helitack` are the first-reported incident's.
+   */
+  incidents?: IncidentDispatch[];
 }
 
-/** Start minute per line-building resource, for the firefighting model. */
+/** One fire's dispatch: its own report delay, run card and units (studio/incidents.ts). */
+export interface IncidentDispatch {
+  sourceId: string;
+  name: string;
+  fire: LonLat;
+  ignitionMinute: number;
+  /** Minute the dispatch centre has it (user-set, else ignition + response/report.ts delay). */
+  reportMinute: number;
+  /** Whether `reportMinute` was set by the user or modelled. */
+  reportSource: ReportSource;
+  level: string;
+  structure: boolean;
+  /** Plain account of the run card and how it was filled. */
+  text: string;
+  /** Labels of the ground trips sent to it (in `CrewDispatch.trips`). */
+  tripLabels: string[];
+  /** Aircraft sent to it, each from its own base (the solver flies them; studio/aircraft.ts). */
+  aircraft: { kind: string; baseId: string; baseName: string; location: LonLat }[];
+  helitack: HelitackPlan | null;
+  noAccess: NoAccess[];
+  /** Why no ground unit was planned, when none was. */
+  note: string | null;
+}
+
+export interface HelitackPlan {
+  baseId?: string;
+  baseName: string;
+  baseKm: number;
+  /** Minute the helicopter lands at its landing zone. */
+  landMinute: number;
+  walkMeters: number;
+  /** Minute the crew reaches the fire on foot. */
+  arriveMinute: number;
+}
+
+/**
+ * Start minute per line-building resource on a fire edge, for the firefighting model. Units
+ * holding a road (indirect) build no line on the edge and are left out; an empty list means no
+ * line builder, never "assume everyone on site" (studio/firefighting.ts `crewArrivals`).
+ */
 export function arrivalsOf(dispatch: CrewDispatch): CrewArrival[] {
   return dispatch.trips
-    .filter((trip) => GROUND_APPARATUS[trip.kind].line !== null)
-    .map((trip) => ({ kind: trip.kind, minute: trip.arriveMinute }));
+    .filter((trip) => GROUND_APPARATUS[trip.kind].line !== null && trip.tactic === "direct")
+    .map((trip) => ({
+      kind: trip.kind,
+      minute: trip.arriveMinute,
+      label: trip.label,
+      sourceId: trip.sourceId,
+      roadPoint: trip.roadPoint,
+      hikeMeters: trip.hikeMeters,
+    }));
 }
 
 interface Origin {
@@ -160,32 +268,42 @@ export function accessTableFor(area: DispatchArea, grid: LandscapeGrid | null): 
 }
 
 /**
- * Plan every ground resource's trip, or explain why there is none. `blocked` marks edges
- * closed to traffic (the Studio's road closures). `grid` gives road grades (null: 0% assumed,
- * labelled). `bases` are the off-board CAL FIRE-layer facilities, or null.
+ * Plan every ground resource's trip, or explain why there is none. A `DispatchUnit` (the Studio:
+ * units chosen from the facilities on the map, studio/mapResources.ts) drives from its own base;
+ * a bare kind (older callers) gets a base by the rules above. `blocked` marks edges closed to
+ * traffic (the Studio's road closures). `grid` gives road grades (null: 0% assumed, labelled).
+ * `bases` are the off-board CAL FIRE-layer facilities, or null.
  */
 export function planCrewDispatch(
   area: DispatchArea,
   fire: LonLat,
   reportMinute: number,
-  resources: readonly GroundKind[],
+  resources: readonly (GroundKind | DispatchUnit)[],
   blocked: (edge: number) => boolean = () => false,
   grid: LandscapeGrid | null = null,
   bases: SuppressionBases | null = null,
 ): { dispatch: CrewDispatch | null; note: string | null } {
   if (resources.length === 0) return { dispatch: null, note: "No resources assigned." };
-  if (area.stations.length === 0 && !bases?.available) {
+  // Outside the area's box the roads are unknown: snapping to its nearest node would stage units
+  // at the box edge, kilometres from the fire (fire/useBoardStreets.ts picks the box).
+  const box = area.bbox;
+  if (fire[0] < box[0] || fire[0] > box[2] || fire[1] < box[1] || fire[1] > box[3]) {
+    return { dispatch: null, note: "The fire is outside the modelled road area, so no units were routed to it." };
+  }
+  const kindsOnly = resources.some((r) => typeof r === "string");
+  if (kindsOnly && area.stations.length === 0 && !bases?.available) {
     return { dispatch: null, note: "No fire stations on or near this board's roads." };
   }
+  // Every road node (crews and dozers park however far from the fire); engines filter by gap.
   const near: { node: number; meters: number }[] = [];
   let nearest: { node: number; meters: number } | null = null;
   area.nodes.forEach((node, index) => {
     const meters = groundMeters(node, fire);
-    if (meters <= MAX_ROAD_GAP_METERS) near.push({ node: index, meters });
+    near.push({ node: index, meters });
     if (!nearest || meters < nearest.meters) nearest = { node: index, meters };
   });
   if (near.length === 0 || !nearest) {
-    return { dispatch: null, note: "The fire is too far from the board's roads to drive to." };
+    return { dispatch: null, note: "The board has no roads to drive on." };
   }
   const fireNode = (nearest as { node: number; meters: number }).node;
   const notes: string[] = [];
@@ -220,10 +338,11 @@ export function planCrewDispatch(
   };
 
   /** Best road point for `cls` from `source`: drive minutes + walk minutes, smallest. */
-  const legFrom = (cls: AccessClass, origin: Origin, source: number, offsetMinutes: number, lead: LonLat[]): Leg | null => {
+  const legFrom = (cls: AccessClass, origin: Origin, source: number, offsetMinutes: number, lead: LonLat[], maxGap: number): Leg | null => {
     const tree = treeFor(cls, source);
     let best: { node: number; total: number; meters: number } | null = null;
     for (const { node, meters } of near) {
+      if (meters > maxGap) continue;
       const seconds = tree.seconds[node];
       if (!Number.isFinite(seconds)) continue;
       const total = seconds / 60 + meters / HIKE_METERS_PER_MINUTE;
@@ -266,9 +385,9 @@ export function planCrewDispatch(
       location: station.location,
       approachMeters: station.approachMeters,
     }));
-  const legFromBoard = (cls: AccessClass, origin: Origin): Leg | null => {
+  const legFromBoard = (cls: AccessClass, origin: Origin, maxGap: number): Leg | null => {
     const approach = origin.approachMeters * approachMinutesPerMeter;
-    return legFrom(cls, origin, origin.node!, approach, [origin.location]);
+    return legFrom(cls, origin, origin.node!, approach, [origin.location], maxGap);
   };
 
   const [west, south, east, north] = area.bbox;
@@ -301,16 +420,16 @@ export function planCrewDispatch(
       .sort((a, b) => groundMeters(area.nodes[a.node], point) - groundMeters(area.nodes[b.node], point) || a.node - b.node)
       .slice(0, MAX_ENTRY_EXITS);
   /** Off-board base: straight line x circuity at OFFBOARD_SPEED_KMH to an exit, then the board. */
-  const legFromOffBoard = (cls: AccessClass, origin: Origin): Leg | null => {
+  const legFromOffBoard = (cls: AccessClass, origin: Origin, maxGap: number): Leg | null => {
     if (inBox(origin.location)) {
       const snap = nearestNode(origin.location);
-      return legFrom(cls, origin, snap.node, snap.meters * approachMinutesPerMeter, [origin.location]);
+      return legFrom(cls, origin, snap.node, snap.meters * approachMinutesPerMeter, [origin.location], maxGap);
     }
     let best: Leg | null = null;
     for (const exit of entriesNear(origin.location)) {
       const km = groundMeters(origin.location, area.nodes[exit.node]) / 1000;
       const minutes = ((km * OFFBOARD_CIRCUITY) / OFFBOARD_SPEED_KMH) * 60;
-      const leg = legFrom(cls, origin, exit.node, minutes, [origin.location]);
+      const leg = legFrom(cls, origin, exit.node, minutes, [origin.location], maxGap);
       if (leg && (!best || leg.minutes + leg.hikeMeters / HIKE_METERS_PER_MINUTE < best.minutes + best.hikeMeters / HIKE_METERS_PER_MINUTE)) {
         best = leg;
       }
@@ -334,7 +453,7 @@ export function planCrewDispatch(
     (type, agency) => STATION_TYPES.has(type) && agency.startsWith("CAL FIRE"),
     "dozer_base",
   );
-  if (!bases?.available) {
+  if (kindsOnly && !bases?.available) {
     notes.push(
       "No CAL FIRE base data (tools/ca_fire_bases.json is local-only): every unit comes from the board's OSM stations, round-robin, with no off-board mutual aid.",
     );
@@ -387,29 +506,30 @@ export function planCrewDispatch(
     return k.base === "station" ? (k.line ? 0 : 1) : k.base === "crew_camp" ? 2 : 3;
   };
   const sorted = resources
-    .map((kind, index) => ({ kind, index }))
+    .map((r, index) => (typeof r === "string" ? { kind: r, unit: null, index } : { kind: r.kind, unit: r, index }))
     .sort((a, b) => order(a.kind) - order(b.kind) || a.index - b.index);
   const used = new Map<string, number>();
   const counts: Partial<Record<GroundKind, number>> = {};
   const trips: (CrewTrip | null)[] = new Array(resources.length).fill(null);
   const noAccess: NoAccess[] = [];
   const legCache = new Map<string, Leg | null>();
-  const cachedLeg = (cls: AccessClass, origin: Origin, offBoardLeg: boolean) => {
-    const key = `${cls}|${origin.origin}|${origin.name}|${origin.location.join(",")}`;
+  const cachedLeg = (cls: AccessClass, origin: Origin, offBoardLeg: boolean, maxGap: number) => {
+    const key = `${cls}|${maxGap}|${origin.origin}|${origin.name}|${origin.location.join(",")}`;
     if (!legCache.has(key)) {
-      legCache.set(key, offBoardLeg ? legFromOffBoard(cls, origin) : legFromBoard(cls, origin));
+      legCache.set(key, offBoardLeg ? legFromOffBoard(cls, origin, maxGap) : legFromBoard(cls, origin, maxGap));
     }
     return legCache.get(key) ?? null;
   };
   let fellBack = false;
 
-  for (const { kind, index } of sorted) {
+  for (const { kind, unit, index } of sorted) {
     const spec = GROUND_APPARATUS[kind];
     const cls = spec.access;
     counts[kind] = (counts[kind] ?? 0) + 1;
     const label = `${spec.short} ${counts[kind]}`;
-    const candidates: { origin: Origin; offBoard: boolean }[] =
-      spec.base === "crew_camp" && crewCamps.length > 0
+    const candidates: { origin: Origin; offBoard: boolean }[] = unit
+      ? [{ origin: { name: unit.baseName, origin: unit.origin, node: null, location: unit.location, approachMeters: 0 }, offBoard: true }]
+      : spec.base === "crew_camp" && crewCamps.length > 0
         ? crewCamps.map((origin) => ({ origin, offBoard: true }))
         : spec.base === "dozer_base" && dozerBases.length > 0
           ? dozerBases.map((origin) => ({ origin, offBoard: true }))
@@ -417,9 +537,24 @@ export function planCrewDispatch(
               ...boardOrigins.map((origin) => ({ origin, offBoard: false })),
               ...mutualAid.map((origin) => ({ origin, offBoard: true })),
             ];
-    const options = candidates
-      .map(({ origin, offBoard: off }) => ({ origin, leg: cachedLeg(cls, origin, off) }))
-      .filter((o): o is { origin: Origin; leg: Leg } => o.leg !== null)
+    // Engines, tenders and chiefs park within MAX_ROAD_GAP_METERS; crews and dozers anywhere.
+    const family = spec.line ? vehicleFamily(kind) : null;
+    const walksIn = family === "hand_crew" || family === "dozer";
+    const maxWalkMinutes = family === "hand_crew" ? HAND_CREW_MAX_HIKE_MINUTES : family === "dozer" ? DOZER_MAX_WALK_MINUTES : Infinity;
+    const optionsWithin = (maxGap: number) =>
+      candidates
+        .map(({ origin, offBoard: off }) => ({ origin, leg: cachedLeg(cls, origin, off, maxGap) }))
+        .filter((o): o is { origin: Origin; leg: Leg } => o.leg !== null);
+    // An engine's crew leaves its engine for the edge only within ENGINE_CREW_MAX_HIKE_M
+    // (response/reach.ts planWork); tenders and chiefs keep the board's road-gap limit.
+    let options = optionsWithin(walksIn ? Infinity : family === "engine" ? ENGINE_CREW_MAX_HIKE_M : MAX_ROAD_GAP_METERS);
+    // A line builder too far to attack directly holds the nearest road it can reach (indirect).
+    let indirect = walksIn && options.length > 0 && options.every((o) => o.leg.hikeMeters / HIKE_METERS_PER_MINUTE > maxWalkMinutes);
+    if (options.length === 0 && family !== null && !walksIn) {
+      options = optionsWithin(Infinity);
+      indirect = options.length > 0;
+    }
+    options
       .sort(
         (a, b) =>
           a.leg.minutes + a.leg.hikeMeters / HIKE_METERS_PER_MINUTE -
@@ -434,14 +569,14 @@ export function planCrewDispatch(
         rule: limit?.rule ?? null,
         why: limit
           ? `${RULE_TEXT[limit.rule]}: ${limit.why}`
-          : "no road route from any base to within 1.5 km of the fire",
+          : "no road route from any base",
         road: limit?.road ?? null,
       });
       continue;
     }
     // Camps and dozer bases are not depleted (ASSUMPTION); stations give one unit per kind,
     // and without base data units round-robin over the board's stations.
-    const perStation = spec.base === "station" || !bases?.available;
+    const perStation = !unit && (spec.base === "station" || !bases?.available);
     let pick = options[0];
     if (perStation) {
       const free = options.find(
@@ -457,21 +592,27 @@ export function planCrewDispatch(
     }
     // Engines from a base whose staffing the layer gives: 80 s paid, 120 s otherwise (response/fleet.ts,
     // as livecore/apparatus.py); board OSM stations (staffing unknown) keep the kind's turnout.
-    const turnout =
-      spec.line?.kind === "engine" && pick.origin.staffing != null ? engineTurnoutMinutes(pick.origin.staffing) : spec.turnoutMinutes;
+    const turnout = unit
+      ? unit.turnoutMinutes + unit.leadMinutes
+      : spec.line?.kind === "engine" && pick.origin.staffing != null
+        ? engineTurnoutMinutes(pick.origin.staffing)
+        : spec.turnoutMinutes;
     const departMinute = reportMinute + turnout;
     const leg = pick.leg;
     const limit = leg.node !== fireNode ? limitOf(cls, sourceOf(pick.origin)) : null;
+    const atRoadMinute = departMinute + leg.minutes;
     trips[index] = {
       kind,
       label,
       stationName: pick.origin.name,
-      origin: !bases?.available && spec.base !== "station" ? "fallback" : pick.origin.origin,
+      origin: unit ? unit.origin : !bases?.available && spec.base !== "station" ? "fallback" : pick.origin.origin,
       departMinute,
-      atRoadMinute: departMinute + leg.minutes,
-      arriveMinute: departMinute + leg.minutes + leg.hikeMeters / HIKE_METERS_PER_MINUTE,
+      atRoadMinute,
+      arriveMinute: indirect ? atRoadMinute : atRoadMinute + leg.hikeMeters / HIKE_METERS_PER_MINUTE,
       roadPoint: area.nodes[leg.node],
-      hikeMeters: leg.hikeMeters,
+      hikeMeters: indirect ? 0 : leg.hikeMeters,
+      tactic: indirect ? "indirect" : "direct",
+      holdingRoad: indirect ? roadNameAt(area, leg.node) : null,
       stoppedShortBy: limit,
       path: leg.path,
       pathMinutes: leg.pathMinutes,
@@ -490,11 +631,13 @@ export function planCrewDispatch(
         trips: [],
         noAccess,
         notes,
+        helitack: helitackPlan(bases, fire, reportMinute),
       },
       note: "No ground resource can reach the fire by road.",
     };
   }
-  const closest = sent.reduce((a, b) => (b.hikeMeters < a.hikeMeters ? b : a));
+  const direct = sent.filter((t) => t.tactic === "direct");
+  const closest = (direct.length > 0 ? direct : sent).reduce((a, b) => (b.hikeMeters < a.hikeMeters ? b : a));
   return {
     dispatch: {
       reportMinute,
@@ -505,8 +648,97 @@ export function planCrewDispatch(
       trips: sent,
       noAccess,
       notes,
+      helitack: helitackPlan(bases, fire, reportMinute),
     },
     note: null,
+  };
+}
+
+/**
+ * Plain language for a fire beyond engine reach of every road: "Remote fire: air tankers from
+ * Chico (~25 min), helitack crew landing 0.5 km away (~40 min), hand crew hiking 4.1 km
+ * (~1 h 22 min), 2 engines indirect: holding Grizzly Peak Blvd." Times are from the report.
+ */
+export function remoteFireText(
+  dispatch: CrewDispatch,
+  aircraft: readonly { kind: string; baseName: string | null; overFireMinute: number | null }[],
+): string {
+  const after = (minute: number) => formatDuration(minute - dispatch.reportMinute);
+  const parts: string[] = [];
+  const firstAir = (prefix: string, noun: string) => {
+    const rows = aircraft.filter((a) => a.kind.startsWith(prefix) && a.overFireMinute !== null);
+    if (rows.length === 0) return;
+    const first = rows.reduce((a, b) => (b.overFireMinute! < a.overFireMinute! ? b : a));
+    parts.push(`${noun} from ${first.baseName} (~${after(first.overFireMinute!)})`);
+  };
+  firstAir("airtanker", "air tankers");
+  firstAir("helicopter", "helicopters");
+  const h = dispatch.helitack;
+  if (h) parts.push(`helitack crew from ${h.baseName} landing ~${(h.walkMeters / 1000).toFixed(1)} km away (~${after(h.landMinute)}, not in the line model)`);
+  for (const trip of [...dispatch.trips].sort((a, b) => a.arriveMinute - b.arriveMinute)) {
+    if (trip.tactic === "indirect") {
+      parts.push(`${trip.label} indirect: holding ${trip.holdingRoad ?? "the nearest road"}`);
+    } else if (trip.hikeMeters >= 50) {
+      const verb = GROUND_APPARATUS[trip.kind].line?.kind === "dozer" ? "walking in" : "hiking";
+      parts.push(`${trip.label} ${verb} ${(trip.hikeMeters / 1000).toFixed(1)} km (on the line ~${after(trip.arriveMinute)})`);
+    }
+  }
+  return `Remote fire: ${parts.length > 0 ? parts.join(", ") : "no resource reaches it"}.`;
+}
+
+/** Name of a road meeting `node` (the first named edge), or null. */
+function roadNameAt(area: DispatchArea, node: number): string | null {
+  for (const edge of area.edges) if ((edge.from === node || edge.to === node) && edge.name) return edge.name;
+  return null;
+}
+
+/**
+ * Helitack from the nearest helitack base (HB) in the facility layer, or null without one. With
+ * `daylight` (T+0 and the horizon) the flight keeps the helicopter's daylight window, 30 min
+ * before sunrise to 30 min after sunset (IASG p.42; PMS 508 p.46; studio/aircraft.ts
+ * `aviationWindows`), as the helicopter drops do: a crew reported at night lands after first
+ * light, or not at all within the run (null). `exclude` holds bases whose crew is already
+ * committed to another incident.
+ */
+export function helitackPlan(
+  bases: SuppressionBases | null,
+  fire: LonLat,
+  reportMinute: number,
+  daylight: { startMs: number; horizonMinutes: number } | null = null,
+  exclude: ReadonlySet<string> | null = null,
+): HelitackPlan | null {
+  if (!bases?.available) return null;
+  let best: { id: string; name: string; km: number } | null = null;
+  for (const b of bases.bases) {
+    if (b.type !== "HB" || exclude?.has(b.id)) continue;
+    const km = groundMeters([b.lon, b.lat], fire) / 1000;
+    if (!best || km < best.km) best = { id: b.id, name: b.name, km };
+  }
+  if (!best) return null;
+  const flightMinutes = (best.km / (HELI_CRUISE_KT * KMH_PER_KNOT)) * 60;
+  let takeoffMinute = reportMinute + HELI_TAKEOFF_MIN;
+  if (daylight) {
+    const windows = aviationWindows(daylight.startMs, daylight.horizonMinutes, fire).helicopter;
+    const toMs = (minute: number) => daylight.startMs + minute * 60_000;
+    // Takeoff and landing both inside one window.
+    for (;;) {
+      const next = nextInWindow(windows, toMs(takeoffMinute));
+      if (next === null) return null;
+      takeoffMinute = (next - daylight.startMs) / 60_000;
+      const window = windows.find((w) => next >= w.startMs && next <= w.endMs);
+      if (!window || toMs(takeoffMinute + flightMinutes) <= window.endMs) break;
+      takeoffMinute = (window.endMs - daylight.startMs) / 60_000 + 1;
+    }
+    if (takeoffMinute + flightMinutes > daylight.horizonMinutes) return null;
+  }
+  const landMinute = takeoffMinute + flightMinutes;
+  return {
+    baseId: best.id,
+    baseName: best.name,
+    baseKm: Math.round(best.km * 10) / 10,
+    landMinute,
+    walkMeters: HELITACK_LZ_WALK_M,
+    arriveMinute: landMinute + HELITACK_LZ_WALK_M / HIKE_METERS_PER_MINUTE,
   };
 }
 

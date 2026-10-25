@@ -488,6 +488,8 @@ export interface Station {
   agency?: string;
   unit?: string | null;
   staffing?: string | null;
+  /** What it fields, for the map: "Paradise FS · CAL FIRE · 2 engines, 1 dozer" (response/fleet.ts). */
+  label?: string;
 }
 
 /** One engine of a snapshot station (docs/scenario-snapshots.md `snapshot_stations.engines`). Synthetic. */
@@ -551,7 +553,7 @@ export interface DemoEnvironment {
     localStations: Station[];
     crewCamps: Station[];
     /** Every facility with its layer metadata (stations, camps, air bases): the response fleet's input. */
-    all?: Station[];
+    all: Station[];
   } | null;
   /** Where `bases` came from: the CAL FIRE layer, the drill package's OSM stations, or none. */
   basesSource: "calfire" | "package" | null;
@@ -1527,6 +1529,11 @@ export const NO_SNAPSHOT_FLEET_LABEL = "No resource snapshot for this drill — 
 
 const isEngineKind = (k: DemoApparatusKind) => k === "engine_t3" || k === "engine_t1";
 
+/** Centre of the board's landscape grid [lon, lat]: where the fleet measures air bases' dispatch radius (response/fleet.ts buildFleet). */
+function boardCentre(grid: LandscapeGrid): LonLat {
+  return mercatorToLonLat(grid.originX + (grid.width / 2) * grid.cellSizeX, grid.originY + (grid.height / 2) * grid.cellSizeY);
+}
+
 /**
  * The board's units, stations, departments, mutual-aid pool and aircraft (filled into `board`):
  * - the response fleet (response/fleet.ts buildFleet) from the CAL FIRE facilities layer
@@ -1544,11 +1551,15 @@ function buildBoardUnits(board: Board, zones: BaseZone[], env: DemoEnvironment, 
   const grid = env.landscape;
   const onBoard = (p: LonLat) => cellAt(grid, { longitude: p[0], latitude: p[1] }) >= 0;
   const all = env.bases?.all ?? [];
-  const stationOf = new Map(all.map((s) => [s.id, s] as const));
   const fleet = buildFleet(
     all.map((s): BaseInput => ({ id: s.id, name: s.name, type: s.type, location: s.location, agency: s.agency, unit: s.unit, staffing: s.staffing })),
     onBoard,
+    boardCentre(grid),
   );
+  // Each facility labelled with what it fields (response/fleet.ts), for the map.
+  const labelOf = new Map(fleet.facilities.map((f) => [f.id, f.label]));
+  const stationOf = new Map(all.map((s) => [s.id, { ...s, label: labelOf.get(s.id) }] as const));
+  board.response.facilities = fleet.facilities;
   const hasFleet = all.length > 0;
   const departments: Department[] = [];
   const pool: UnitSeed[] = [...fleet.offBoardUnits];
@@ -1647,6 +1658,7 @@ export function createBoard(zones: BaseZone[], seed: number, env: DemoEnvironmen
   const fleetAircraft = buildFleet(
     (env.bases?.all ?? []).map((s): BaseInput => ({ id: s.id, name: s.name, type: s.type, location: s.location, agency: s.agency, unit: s.unit, staffing: s.staffing })),
     onBoard,
+    boardCentre(grid),
   ).aircraft;
   const board: Board = {
     seed,
@@ -4037,7 +4049,7 @@ export function workOf(board: Board, team: Team, fire: Fire): UnitWork {
   // A unit on scene works as its reach plan says (out of reach: no line; engine crew on foot: hand line).
   if (team.fireId === fire.id && team.workMode !== null) {
     const lineMPerMin = tacticLineRate(board, fire, [{ ...team, workStartAt: null }], "direct");
-    return { lineMPerMin, holdsFt: team.workMode === "out_of_reach" ? 0 : holdsFlameFeet(team.kind) };
+    return { lineMPerMin, holdsFt: team.workMode === "out_of_reach" || team.workMode === "indirect" ? 0 : holdsFlameFeet(team.kind) };
   }
   return { lineMPerMin: unitLineOn(board, team, fire), holdsFt: holdsFlameFeet(team.kind), kind: team.kind };
 }

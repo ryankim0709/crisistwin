@@ -1,7 +1,7 @@
 import { MAX_BOARD_RADIUS_METERS } from "../boardSize";
 
 /** How wide a square of ground the board covers, chosen independently of the horizon. */
-export type AreaSizeId = "local" | "city" | "region" | "bay";
+export type AreaSizeId = "local" | "city" | "metro" | "region" | "bay";
 
 export const AREA_SIZES: readonly {
   id: AreaSizeId;
@@ -9,13 +9,14 @@ export const AREA_SIZES: readonly {
   /** Minimum grid half-width in metres; null lets the horizon decide. */
   radiusMeters: number | null;
 }[] = [
-  { id: "local", label: "Local (fits the horizon)", radiusMeters: null },
-  { id: "city", label: "10 km radius", radiusMeters: 10_000 },
-  { id: "region", label: "25 km radius", radiusMeters: 25_000 },
-  { id: "bay", label: "Largest (60 km radius)", radiusMeters: MAX_BOARD_RADIUS_METERS },
+  { id: "local", label: "Fits the run length", radiusMeters: null },
+  { id: "city", label: "About 20 × 20 km", radiusMeters: 10_000 },
+  { id: "metro", label: "About 30 × 30 km", radiusMeters: 15_000 },
+  { id: "region", label: "About 50 × 50 km", radiusMeters: 25_000 },
+  { id: "bay", label: "Largest (about 120 × 120 km)", radiusMeters: MAX_BOARD_RADIUS_METERS },
 ];
 
-export const DEFAULT_AREA_SIZE: AreaSizeId = "local";
+export const DEFAULT_AREA_SIZE: AreaSizeId = "metro";
 
 /** Largest grid half-width the page will request. */
 export const MAX_RADIUS_METERS = MAX_BOARD_RADIUS_METERS;

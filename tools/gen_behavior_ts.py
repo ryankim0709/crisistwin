@@ -1,6 +1,6 @@
-"""Generate app/src/studio/behaviorParams.generated.ts from sim/behavior_params.json.
+"""Generate app/src/population/behaviorParams.generated.ts from sim/behavior_params.json.
 
-Simulation Studio draws per-household evacuation behaviour (studio/householdBehavior.ts) from
+Simulation Studio draws per-household evacuation behaviour (population/householdBehavior.ts) from
 the `grounded` profile of sim/behavior_params.json (docs/people-data.md "Behaviour evidence").
 Only the parameters the Studio uses are emitted, each with its label and the evidence entries
 (locator and source ids) behind it, so the numbers are never hand-typed in TypeScript.
@@ -18,7 +18,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "sim" / "behavior_params.json"
-OUT = ROOT / "app" / "src" / "studio" / "behaviorParams.generated.ts"
+OUT = ROOT / "app" / "src" / "population" / "behaviorParams.generated.ts"
 
 PROFILE = "grounded"
 # Parameters of the profile the Studio reads (or documents as not modelled).

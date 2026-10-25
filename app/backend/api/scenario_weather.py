@@ -1,7 +1,7 @@
 """GET /api/weather/scenario: hourly scenario wind from `sim/weather.py`, with provenance.
 
 Query: ``lon``, ``lat`` (WGS84 degrees), ``start`` (ISO 8601 UTC with Z; optional and defaulting to
-the current UTC hour for ``forecast``), ``hours`` (1-72, default 24), ``mode``
+the current UTC hour for ``forecast``), ``hours`` (1-169, default 24), ``mode``
 (``historical_replay`` | ``climatology_percentile`` | ``forecast``), ``percentile`` (50-99.9,
 ``climatology_percentile`` only, default 95), ``station`` (``historical_replay`` only: an IEM
 station id such as ``OAK``/``KOAK`` or ``JBGC1``, or ``reanalysis``; default: the best-ranked
@@ -39,7 +39,9 @@ from .live.twin_service import REPO_ROOT
 
 logger = logging.getLogger(__name__)
 
-MAX_HOURS = 72
+# 7 days plus one hour, so a run of up to 168 h (app/src/fire/horizon.ts) is covered. NWS gridpoint
+# forecasts reach about 7 days; hours past their end come back without values.
+MAX_HOURS = 169
 DEFAULT_HOURS = 24
 MPH_PER_MS = 1 / 0.44704  # international mile 1609.344 m / 3600 s
 
