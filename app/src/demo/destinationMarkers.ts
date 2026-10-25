@@ -4,6 +4,10 @@
  * arrived vs the destination's capacity) and a short label. Scaled with camera distance like the
  * station markers (fire/diorama/stationMarkers.ts) so they stay visible zoomed out. Display only;
  * the counts are the board's simulated traffic (model.ts zoneCounts x vehiclesPerHousehold).
+ * The label (name and count) shows only when the camera is zoomed in, the destination is in use
+ * (cars there or on the way, or an evacuation order targets it) or it is emphasised (the selected
+ * zone's destination); otherwise just the flag and gauge. Shown labels yield to higher-priority
+ * labels (fires, leave-now zones, units) by LabelLayer.setPriority.
  */
 
 import * as THREE from "three";
@@ -25,6 +29,8 @@ export interface DestinationMark {
   /** Simulated vehicles arrived there / still driving there. */
   arrivedVeh: number;
   enRouteVeh: number;
+  /** Cars there or on the way, or a zone under an evacuation order is sent here. */
+  inUse: boolean;
 }
 
 /** Every destination the zones' route options reach (a dedicated board list, when present, wins for name/coord/capacity). */
@@ -32,7 +38,7 @@ export function destinationMarks(board: Board): DestinationMark[] {
   const marks = new Map<string, DestinationMark>();
   const listed = (board as { destinations?: { id: string; name: string; coord: LonLat; capacityVeh?: number | null; kind?: string }[] }).destinations;
   for (const d of listed ?? []) {
-    marks.set(d.id, { id: d.id, name: d.name, kind: d.kind ?? "safe_area", coord: d.coord, capacityVeh: d.capacityVeh ?? null, arrivedVeh: 0, enRouteVeh: 0 });
+    marks.set(d.id, { id: d.id, name: d.name, kind: d.kind ?? "safe_area", coord: d.coord, capacityVeh: d.capacityVeh ?? null, arrivedVeh: 0, enRouteVeh: 0, inUse: false });
   }
   for (const options of board.routes.values()) {
     for (const o of options) {
@@ -45,6 +51,7 @@ export function destinationMarks(board: Board): DestinationMark[] {
         capacityVeh: o.destination_capacity_veh,
         arrivedVeh: 0,
         enRouteVeh: 0,
+        inUse: false,
       });
     }
   }
@@ -56,8 +63,13 @@ export function destinationMarks(board: Board): DestinationMark[] {
     const vph = vehiclesPerHousehold(zone);
     mark.arrivedVeh += Math.max(0, c.out) * vph;
     mark.enRouteVeh += Math.max(0, c.enRoute) * vph;
+    if (zone.orderedAt !== null) mark.inUse = true;
   }
-  return [...marks.values()].map((m) => ({ ...m, arrivedVeh: Math.round(m.arrivedVeh), enRouteVeh: Math.round(m.enRouteVeh) }));
+  return [...marks.values()].map((m) => {
+    const arrivedVeh = Math.round(m.arrivedVeh);
+    const enRouteVeh = Math.round(m.enRouteVeh);
+    return { ...m, arrivedVeh, enRouteVeh, inUse: m.inUse || arrivedVeh > 0 || enRouteVeh > 0 };
+  });
 }
 
 const LABEL_CSS = `
@@ -74,12 +86,26 @@ const BUSY = 0.7;
 const NEAR_FULL = 0.95;
 /** Gauge shown when the capacity is unknown (a share of the frame). */
 const UNKNOWN_FILL = 0.15;
+/** Camera distance over the fit-the-board distance below which every safe-area label shows (hysteresis: back to flags only above OUT). */
+const ZOOM_IN_RATIO = 0.5;
+const ZOOM_OUT_RATIO = 0.6;
+/** Label ranks for LabelLayer.setPriority: emphasised (selected) > used > the rest. Units, zones and fires rank above "used" (DemoBoardOverlay). */
+const RANK_EMPHASISED = 100;
+const RANK_USED = 50;
+const RANK_IDLE = 10;
 
 function shortName(name: string): string {
-  return name.length > 22 ? `${name.slice(0, 21)}…` : name;
+  return name.length > 26 ? `${name.slice(0, 25)}…` : name;
 }
 
-type Item = { id: string; root: THREE.Group; fill: THREE.Mesh; label: { obj: CSS2DObject; el: HTMLDivElement } };
+type Item = {
+  id: string;
+  root: THREE.Group;
+  fill: THREE.Mesh;
+  label: { obj: CSS2DObject; el: HTMLDivElement };
+  inUse: boolean;
+  emphasised: boolean;
+};
 
 export class DestinationMarkers {
   private group: THREE.Group | null = null;
@@ -88,11 +114,13 @@ export class DestinationMarkers {
   private items: Item[] = [];
   private key = "";
   private scale = 0;
+  private zoomedIn = false;
   private readonly materials: THREE.Material[] = [];
   private readonly geometries: THREE.BufferGeometry[] = [];
   private fillMats: Record<"ok" | "busy" | "full" | "unknown", THREE.MeshStandardMaterial> | null = null;
 
-  update(frame: BoardFrame, parent: THREE.Object3D, labels: LabelLayer, marks: readonly DestinationMark[]): void {
+  /** `emphasis`: destination ids whose label always shows at top rank (the selected zone's destination). */
+  update(frame: BoardFrame, parent: THREE.Object3D, labels: LabelLayer, marks: readonly DestinationMark[], emphasis: ReadonlySet<string> = new Set()): void {
     const key = marks.map((m) => `${m.id}@${m.coord.join(",")}`).join("|");
     if (key !== this.key || !this.group || this.group.parent !== parent) {
       this.dispose();
@@ -111,7 +139,7 @@ export class DestinationMarkers {
       const count =
         m.capacityVeh && m.capacityVeh > 0 ? `${m.arrivedVeh} of ${m.capacityVeh} cars` : `${m.arrivedVeh} cars · capacity unknown`;
       const text = `${count}${m.enRouteVeh > 0 ? ` (+${m.enRouteVeh} on the way)` : ""}`;
-      const title = `Safe area · ${shortName(m.name)}`;
+      const title = shortName(m.name);
       const full = share !== null && share >= 1;
       if (item.label.el.dataset.text !== `${title}|${text}|${full}`) {
         item.label.el.dataset.text = `${title}|${text}|${full}`;
@@ -123,7 +151,24 @@ export class DestinationMarkers {
         item.label.el.title = m.name;
         labels.invalidate();
       }
+      item.inUse = m.inUse;
+      item.emphasised = emphasis.has(m.id);
     }
+    this.applyVisibility();
+  }
+
+  /** Label shown only when zoomed in, in use or emphasised; ranked so higher-priority labels win overlaps. */
+  private applyVisibility(): void {
+    let changed = false;
+    for (const item of this.items) {
+      const show = this.zoomedIn || item.inUse || item.emphasised;
+      if (item.label.obj.visible !== show) {
+        item.label.obj.visible = show;
+        changed = true;
+      }
+      this.labels?.setPriority(item.label.obj, item.emphasised ? RANK_EMPHASISED : item.inUse ? RANK_USED : RANK_IDLE);
+    }
+    if (changed) this.labels?.invalidate();
   }
 
   private build(frame: BoardFrame, parent: THREE.Object3D, labels: LabelLayer, marks: readonly DestinationMark[]): void {
@@ -175,7 +220,8 @@ export class DestinationMarkers {
       for (const c of root.children) c.castShadow = true;
       group.add(root);
       const label = labels.add(root, "fdx-dmdest", new THREE.Vector3(0, POLE_H + 1.2, 0), new THREE.Vector2(0.5, 1));
-      this.items.push({ id: m.id, root, fill, label });
+      label.obj.visible = false;
+      this.items.push({ id: m.id, root, fill, label, inUse: false, emphasised: false });
     }
     this.scale = 0;
   }
@@ -183,6 +229,12 @@ export class DestinationMarkers {
   /** Scale with camera distance (as StationMarkers.tick) so the markers stay readable zoomed out. */
   tick(distance: number, fit: number): void {
     if (!this.group || fit <= 0) return;
+    const ratio = distance / fit;
+    const zoomedIn = this.zoomedIn ? ratio < ZOOM_OUT_RATIO : ratio < ZOOM_IN_RATIO;
+    if (zoomedIn !== this.zoomedIn) {
+      this.zoomedIn = zoomedIn;
+      this.applyVisibility();
+    }
     const scale = THREE.MathUtils.clamp((distance / fit) * 1.6, 0.7, 4);
     if (Math.abs(scale - this.scale) <= 0.02) return;
     this.scale = scale;

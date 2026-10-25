@@ -13,7 +13,7 @@ import {
   type InputDigest,
   type ResourceRow,
 } from "./agentInputsDigest";
-import { simClock } from "./format";
+import { minutesText, simClock } from "./format";
 import type { Board } from "./model";
 import type { DecisionUsage, DemoObservation } from "./contracts";
 import type { AgentInputSnapshot } from "./runContracts";
@@ -354,7 +354,7 @@ function CallBody({
         <p className="ais-urgency">
           <Tag tone={d.urgency === "urgent" ? "warning" : "neutral"}>{d.urgency === "urgent" ? "Urgent: needs a decision now" : "Routine review"}</Tag>
           <span className="ais-meta">
-            {d.firstCall ? "First call of this run." : `${d.minutesSincePrevious} board min after the previous call.`}
+            {d.firstCall ? "First call of this run." : `${minutesText(d.minutesSincePrevious ?? 0).replace(/ min$/, "")} board min after the previous call.`}
           </span>
         </p>
         {d.wake.reasons.length > 0 ? (
@@ -510,7 +510,7 @@ export default function AgentInputsPanel({
         {board && newest ? (
           <p className="ais-meta">
             {inputs?.length} call{inputs?.length === 1 ? "" : "s"} kept. Board is at {simClock(board.minute)}
-            {board.minute > newest.minute ? `, ${board.minute - newest.minute} min after the last call.` : "."}
+            {board.minute > newest.minute ? `, ${minutesText(board.minute - newest.minute)} after the last call.` : "."}
           </p>
         ) : null}
       </header>

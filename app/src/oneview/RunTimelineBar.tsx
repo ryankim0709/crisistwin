@@ -72,6 +72,8 @@ export interface RunTimelineBarProps {
   onAutoSpeed: ((on: boolean) => void) | null;
   baseline: RunTimeline | null;
   ai: RunTimeline | null;
+  /** The baseline run has reached the run length (header says "recorded" instead of "in progress"). */
+  baselineDone?: boolean;
 }
 
 export default function RunTimelineBar({
@@ -88,6 +90,7 @@ export default function RunTimelineBar({
   onAutoSpeed,
   baseline,
   ai,
+  baselineDone = false,
 }: RunTimelineBarProps) {
   const horizon = Math.max(1, horizonMinutes);
   const now = minute ?? 0;
@@ -126,7 +129,13 @@ export default function RunTimelineBar({
         <div className="ov-score-head">
           <h2>Scoreboard</h2>
           <span className="ov-dim">
-            {phase === "ai" ? `Both runs compared at ${formatClock(minute)}` : phase === "baseline" ? "Baseline run in progress" : "Waiting for the baseline"}
+            {phase === "ai"
+              ? `Both runs compared at ${formatClock(minute)}`
+              : phase === "baseline"
+                ? baselineDone
+                  ? `Baseline recorded to ${formatClock(baseline?.points.at(-1)?.minute ?? minute)}`
+                  : "Baseline run in progress"
+                : "Waiting for the baseline"}
           </span>
           <EvidenceTag kind="simulated" />
           <span className="ov-legend" aria-hidden="true">

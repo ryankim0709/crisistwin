@@ -30,6 +30,19 @@ export const TEAM_STATUS: Record<TeamStatus, string> = {
 
 export const nf = (n: number) => Math.round(n).toLocaleString("en-US");
 
+/** Minutes for people: whole minutes ("5 min"), "<1 min" under one, never a raw float. */
+export function minutesText(n: number): string {
+  if (n > 0 && n < 1) return "<1 min";
+  return `${nf(n)} min`;
+}
+
+/** Whole minutes inside prose: "0.8669 min after" -> "<1 min after", "2.4 min" -> "2 min"; any other long decimal is shortened to one place. */
+export function tidyMinutes(text: string): string {
+  return text
+    .replace(/(\d+\.\d+)(\s*)min\b/g, (_m, n: string, space: string) => `${minutesText(Number(n)).replace(/ min$/, "")}${space}min`)
+    .replace(/\d+\.\d{3,}/g, (n) => String(Math.round(Number(n) * 10) / 10));
+}
+
 const STATION_WORDS = /\b(fire|department|dept\.?|station|stn\.?|number|no\.?|engine|company|house|headquarters|hq)\b|#/gi;
 
 /**

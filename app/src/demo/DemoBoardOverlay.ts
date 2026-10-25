@@ -50,9 +50,10 @@ import {
 } from "./apparatusGlyphs";
 import { APPARATUS_COLORS, DEMO_3D_COLORS, FOLLOW_COLORS } from "./board3dPalette";
 import { DestinationMarkers, destinationMarks } from "./destinationMarkers";
+import type { Selection } from "./DemoMap";
 import { fireOuterRings } from "./fireFootprint";
 import { crewWork, type CrewWork } from "./fireState";
-import { EVACUEE_MARKERS_MAX, distanceM, evacueeMarkers, lineBuiltExtent, type Board, type ZoneForecast } from "./model";
+import { EVACUEE_MARKERS_MAX, activeRoute, distanceM, evacueeMarkers, lineBuiltExtent, type Board, type ZoneForecast } from "./model";
 import { BoardMotion, aircraftPoses, offsetKm, teamSubjects, type AirPose } from "./unitMotion";
 import { unitActivity, unitSpotLabel } from "./unitActivity";
 
@@ -85,6 +86,9 @@ export interface DemoOverlayApi {
   setFollowed(people: readonly FollowedPersonLike[]): void;
   setPredictedFire(rings: readonly PredictedFireRings[]): void;
 }
+
+/** How often the label layer redoes its collision culling while labels move, ms. */
+const LABEL_POKE_MS = 300;
 
 /** Firefighter figures per crew at work (fireState.crewWork), the cap on all of them, and their spacing along the work path. */
 const CREW_FIGURES = 4;
@@ -159,7 +163,7 @@ const AIR_PHASE_TEXT: Record<AirPose["phase"], string> = {
 };
 
 const LABEL_CSS = `
-.fdx-dmunit { font-size: 10.5px; padding: 2px 8px; background: rgba(36, 30, 64, 0.88); color: #fff; border-color: rgba(20, 16, 40, 0.6); font-weight: 700; }
+.fdx-dmunit { display: block; font-size: 10.5px; padding: 2px 8px; background: rgba(36, 30, 64, 0.88); color: #fff; border-color: rgba(20, 16, 40, 0.6); font-weight: 700; max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
 .fdx-dmair { font-size: 10px; padding: 1px 7px; background: rgba(255, 255, 255, 0.92); color: #3a3f45; font-weight: 700; }
 .fdx-dmzone { font-size: 10px; padding: 2px 7px; font-weight: 700; letter-spacing: 0.02em; }
 .fdx-dmzone-overrun { color: #fff; background: rgba(122, 10, 5, 0.9); }
@@ -171,6 +175,14 @@ const LABEL_CSS = `
 `;
 
 type Label = { obj: CSS2DObject; el: HTMLDivElement };
+
+/**
+ * Label ranks for LabelLayer.setPriority (a label that overlaps a higher-ranked one is hidden):
+ * fires (the layer's own ignition pills, never culled) > selected > leave-now / overrun zones >
+ * followed people > units en route > other working units, aircraft > used safe areas (50,
+ * destinationMarkers.ts) > at-risk zones > forecast labels > idle safe areas.
+ */
+const RANK = { selected: 100, zone: 80, followed: 65, unitEnRoute: 60, unit: 55, air: 55, atRisk: 35, forecast: 20 } as const;
 type World = { x: number; y: number; z: number };
 
 function zoneState(zone: Board["zones"][number], forecast: ZoneForecast | undefined): ZoneState | null {
@@ -252,7 +264,7 @@ export class DemoBoardOverlay implements BoardOverlay, DemoOverlayApi {
   private routeKey = "";
   private fireLines: THREE.Group | null = null;
   private fireLineKey = "";
-  private zones: { group: THREE.Group; labels: Label[] } | null = null;
+  private zones: { group: THREE.Group; labels: Label[]; meta: { id: string; state: ZoneState }[] } | null = null;
   private zoneKey = "";
   /** Evacuating vehicles: one instanced car per marker (model.evacueeMarkers). */
   private evacuees: THREE.InstancedMesh | null = null;
@@ -283,7 +295,10 @@ export class DemoBoardOverlay implements BoardOverlay, DemoOverlayApi {
   /** Unit labels by group lead (or unit) id, kept per id so a label never jumps to another unit. */
   private unitLabels = new Map<string, Label>();
   /** What each unit label says and how high it floats; rebuilt on board updates. */
-  private labelPlan: { lead: string; text: string; lift: number }[] = [];
+  private labelPlan: { lead: string; ids: string[]; text: string; lift: number; rank: number }[] = [];
+  /** What the page has selected (zone / team / fire), to rank its labels first and show its safe area. */
+  private selected: Selection | null = null;
+  private lastLabelPoke = 0;
   /** Units drawn smoothly between board updates (unitMotion.ts); `moving` while frames still change them. */
   private readonly motion = new BoardMotion();
   private unitsMoving = false;
@@ -343,6 +358,43 @@ export class DemoBoardOverlay implements BoardOverlay, DemoOverlayApi {
     this.placeHikers(time, reducedMotion);
     this.placeAircraft(time);
     if (view) this.destinations.tick(view.distance, view.fit);
+    // Labels ride moving units and aircraft: redo the layer's collision culling a few times a second, not each frame.
+    if ((this.unitsMoving || flying) && this.labels) {
+      const now = performance.now();
+      if (now - this.lastLabelPoke > LABEL_POKE_MS) {
+        this.lastLabelPoke = now;
+        this.labels.invalidate();
+      }
+    }
+  }
+
+  /** What the page has selected: its labels rank first and the safe area its zone is sent to always shows its label. */
+  setSelected(selected: Selection | null): void {
+    if (this.selected?.kind === selected?.kind && this.selected?.id === selected?.id) return;
+    this.selected = selected;
+    this.planUnitLabels();
+    this.rankZoneLabels();
+    this.updateDestinations();
+  }
+
+  private rankZoneLabels(): void {
+    const zones = this.zones;
+    if (!zones || !this.labels) return;
+    zones.labels.forEach((label, i) => {
+      const m = zones.meta[i];
+      const selected = this.selected?.kind === "zone" && this.selected.id === m.id;
+      this.labels?.setPriority(label.obj, selected ? RANK.selected : m.state === "threatened" ? RANK.atRisk : RANK.zone);
+    });
+  }
+
+  private updateDestinations(): void {
+    const { board, frame, group, labels } = this;
+    if (!frame || !group || !labels) return;
+    const emphasis = new Set<string>();
+    const zone = this.selected?.kind === "zone" ? board?.zones.find((z) => z.id === this.selected?.id) : undefined;
+    const route = zone ? activeRoute(zone) : undefined;
+    if (route) emphasis.add(route.destination_id);
+    this.destinations.update(frame, group, labels, board ? destinationMarks(board) : [], emphasis);
   }
 
   /** The board as it is now (mutated in place by the page; call again after every change). */
@@ -409,7 +461,7 @@ export class DemoBoardOverlay implements BoardOverlay, DemoOverlayApi {
     this.labels?.invalidate();
     this.placeEvacuees();
     this.updateCrews();
-    if (this.frame && this.labels) this.destinations.update(this.frame, this.group, this.labels, board ? destinationMarks(board) : []);
+    this.updateDestinations();
   }
 
   // ---- geometry helpers ----
@@ -544,7 +596,7 @@ export class DemoBoardOverlay implements BoardOverlay, DemoOverlayApi {
     const { board, motion } = this;
     const teams = board?.teams ?? [];
     const byId = new Map(teams.map((t) => [t.id, t]));
-    const plan: { lead: string; text: string; lift: number }[] = [];
+    const plan: { lead: string; ids: string[]; text: string; lift: number; rank: number }[] = [];
     const done = new Set<string>();
     for (const team of teams) {
       const d = motion.get(team.id);
@@ -563,7 +615,9 @@ export class DemoBoardOverlay implements BoardOverlay, DemoOverlayApi {
       // What the units here are doing and how far from their fire (unitActivity.ts), so a unit
       // standing away from the fire says why ("building S1-F1 head_60 line 830 m ahead of the head").
       const text = board ? unitSpotLabel(board, members) : members.map((t) => t.id).join(" ");
-      plan.push({ lead, text, lift: members.length > 1 ? 5 : 4 });
+      const selected = this.selected?.kind === "team" && members.some((t) => t.id === this.selected?.id);
+      const enRoute = members.some((t) => t.status === "en_route");
+      plan.push({ lead, ids: members.map((t) => t.id), text, lift: members.length > 1 ? 5 : 4, rank: selected ? RANK.selected : enRoute ? RANK.unitEnRoute : RANK.unit });
     }
     this.labelPlan = plan;
     const keep = new Set(plan.map((p) => p.lead));
@@ -574,7 +628,9 @@ export class DemoBoardOverlay implements BoardOverlay, DemoOverlayApi {
     }
     for (const p of plan) {
       const label = this.unitLabel(p.lead);
-      if (label) setText(label, p.text);
+      if (!label) continue;
+      setText(label, p.text);
+      this.labels?.setPriority(label.obj, p.rank);
     }
   }
 
@@ -846,6 +902,7 @@ export class DemoBoardOverlay implements BoardOverlay, DemoOverlayApi {
         let label = this.airLabels.get(p.id);
         if (!label) {
           label = this.labels.add(this.group, "fdx-dmair", new THREE.Vector3(), new THREE.Vector2(0.5, 1));
+          this.labels.setPriority(label.obj, RANK.air);
           this.airLabels.set(p.id, label);
         }
         setText(label, `${p.id} · ${AIR_PHASE_TEXT[p.phase]}${p.fireId && p.phase !== "returning" ? ` ${p.fireId}` : ""}`);
@@ -939,7 +996,8 @@ export class DemoBoardOverlay implements BoardOverlay, DemoOverlayApi {
     group.name = "demo-zones";
     parent.add(group);
     const zoneLabels: Label[] = [];
-    this.zones = { group, labels: zoneLabels };
+    const zoneMeta: { id: string; state: ZoneState }[] = [];
+    this.zones = { group, labels: zoneLabels, meta: zoneMeta };
     for (const zone of board?.zones ?? []) {
       const state = zoneState(zone, this.forecasts.get(zone.id));
       if (!state || zone.ring.length < 3) continue;
@@ -950,8 +1008,10 @@ export class DemoBoardOverlay implements BoardOverlay, DemoOverlayApi {
         const label = labels.add(group, `fdx-dmzone fdx-dmzone-${state}`, new THREE.Vector3(core.x, core.y + 3, core.z), new THREE.Vector2(0.5, 1));
         label.el.textContent = `${ZONE_TAG[state]} · ${zone.name}`;
         zoneLabels.push(label);
+        zoneMeta.push({ id: zone.id, state });
       }
     }
+    this.rankZoneLabels();
   }
 
   // ---- followed people (/run) ----
@@ -997,6 +1057,7 @@ export class DemoBoardOverlay implements BoardOverlay, DemoOverlayApi {
       const who = person.followers > 0 ? ` · ${person.followers} following` : "";
       const to = person.destination ? ` → ${person.destination.name}` : "";
       label.el.textContent = `${person.label} (simulated) · ${person.status}${to}${who}`;
+      labels.setPriority(label.obj, RANK.followed);
       followLabels.push(label);
     }
     labels.invalidate();
@@ -1037,6 +1098,7 @@ export class DemoBoardOverlay implements BoardOverlay, DemoOverlayApi {
       if (at) {
         const label = labels.add(group, "fdx-dmforecast", new THREE.Vector3(at.x, at.y + 2, at.z), new THREE.Vector2(0.5, 1));
         label.el.textContent = `forecast +${Math.round(horizon.minutes)} min`;
+        labels.setPriority(label.obj, RANK.forecast);
         forecastLabels.push(label);
       }
     });

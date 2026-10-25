@@ -10,7 +10,7 @@
  */
 
 import type { DemoObservation, EvacBalanceObservation, EvacBalanceTotals, PredictedObservation } from "./contracts";
-import { nf, simClock } from "./format";
+import { minutesText, nf, simClock, tidyMinutes } from "./format";
 import type { AgentDecision } from "./useDemoAgent";
 import type { AgentInputSnapshot, CommsChannel, InjuryEvent, SimCommsItem } from "./runContracts";
 
@@ -223,7 +223,8 @@ const MPH_PER_M_S = 3600 / 1609.344;
 
 const ha = (n: number) => `${n < 10 ? n.toFixed(1) : nf(n)} ha`;
 const plural = (n: number, one: string, many = `${one}s`) => `${nf(n)} ${n === 1 ? one : many}`;
-const min = (n: number) => `${nf(n)} min`;
+/** Whole minutes, "<1 min" under one (format.ts minutesText); never a raw float. */
+const min = minutesText;
 
 const KIND_LABEL: Record<string, string> = {
   engine_t3: "Type 3 engines",
@@ -511,7 +512,7 @@ function commsRows(obs: DemoObservation, prev: DemoObservation | null): CommsRow
     rows.push({
       key,
       minute: m.min_ago !== null ? Math.max(0, now - m.min_ago) : now,
-      timeLabel: m.min_ago !== null ? `${m.min_ago} min before this call` : "time not given",
+      timeLabel: m.min_ago !== null ? `${min(m.min_ago)} before this call` : "time not given",
       channel: "civilian_report",
       channelLabel: CHANNEL_LABEL.civilian_report,
       glyph: CHANNEL_GLYPH.civilian_report,
@@ -527,12 +528,12 @@ function commsRows(obs: DemoObservation, prev: DemoObservation | null): CommsRow
     rows.push({
       key: "pic-911-window",
       minute: now,
-      timeLabel: `last ${calls.window_min ?? "few"} min`,
+      timeLabel: `last ${calls.window_min === null ? "few" : nf(calls.window_min)} min`,
       channel: "911",
       channelLabel: CHANNEL_LABEL["911"],
       glyph: CHANNEL_GLYPH["911"],
       from: "Dispatch",
-      text: `${plural(calls.in_window["911"], "call")} in the last ${calls.window_min ?? "few"} min across the drill (${nf(calls.total_so_far["911"])} so far).`,
+      text: `${plural(calls.in_window["911"], "call")} in the last ${calls.window_min === null ? "few" : nf(calls.window_min)} min across the drill (${nf(calls.total_so_far["911"])} so far).`,
       severity: "info",
       origin: "2018 record",
       isNew: false,
@@ -854,7 +855,7 @@ export function digestInput(snapshot: AgentInputSnapshot, previous: AgentInputSn
     sizeLabel: formatBytes(snapshot.bytes),
     firstCall: previous === null,
     minutesSincePrevious: previous ? snapshot.minute - previous.minute : null,
-    wake: { urgency: snapshot.urgency, reasons: reasons.filter((r) => r !== sinceLast), sinceLast },
+    wake: { urgency: snapshot.urgency, reasons: reasons.filter((r) => r !== sinceLast).map(tidyMinutes), sinceLast: sinceLast === null ? null : tidyMinutes(sinceLast) },
     changes: previous ? changeBullets(snapshot, previous, partial) : [],
     clock: {
       headline: simClock(obs.clock.minute),

@@ -204,6 +204,10 @@ export default function DemoDiorama({ board, version, field, landscape, regionNa
     overlay.setBoard(board, forecasts);
   }, [scene, overlay, board, version, forecasts]);
   useEffect(() => () => overlay.setBoard(null, new Map()), [overlay]);
+  // The selected zone / unit ranks first among the 3D labels and its safe area always shows its label.
+  useEffect(() => {
+    overlay.setSelected(selected);
+  }, [overlay, selected]);
 
   // /run: followed people and the predicted perimeters (props), and the imperative API (onOverlay).
   // A page driving the overlay through onOverlay only leaves these props undefined (no effect then).

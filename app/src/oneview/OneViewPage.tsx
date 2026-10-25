@@ -37,6 +37,9 @@ const ACTIVE_POLL_MS = 5_000;
 const BASELINE_SPEED: BoardSpeed = 120;
 /** The server drill clock's limit (app/backend/livecore/drill.py MAX_DRILL_SPEED). */
 const MAX_DRILL_SPEED = 60;
+/** A change of the wanted drill clock (running / speed) is posted only after it has held this long (Auto speed flips every time the agent starts or stops deciding); the first start goes out at once. */
+const DRILL_DEBOUNCE_MS = 2_000;
+const DRILL_START_DELAY_MS = 300;
 
 const snapshotOf = (t: RunTimeline | null): RunTimeline | null => (t ? { ...t, points: t.points.slice() } : null);
 
@@ -242,7 +245,7 @@ export default function OneViewPage() {
         d.speed = drillWanted;
         drillAction(token, incidentId, { action: "set_speed", speed: drillWanted }).catch(fail);
       }
-    }, 500);
+    }, drill.current.started ? DRILL_DEBOUNCE_MS : DRILL_START_DELAY_MS);
     return () => window.clearTimeout(id);
   }, [drillWanted, token, unauthorized, incidentId]);
   // A new AI run (or Start over) re-anchors the drill clock at T+0 with "start".
@@ -497,6 +500,7 @@ export default function OneViewPage() {
           onAutoSpeed={phase === "ai" ? cb.setAutoSpeed : null}
           baseline={baselineShown}
           ai={aiShown}
+          baselineDone={baselineDone}
         />
       </Panel>
     </main>

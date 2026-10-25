@@ -41,6 +41,8 @@ const LABEL_CSS = `
 
 /** Clear space kept between a place label and any higher-priority rect (CSS px). */
 const LABEL_MARGIN_PX = 8;
+/** Clear space kept between two ranked pills (see `setPriority`), CSS px. */
+const PILL_MARGIN_PX = 3;
 /** Camera/time changes smaller than this do not retrigger a declutter pass. */
 const TIME_EPSILON_MIN = 0.25;
 
@@ -100,6 +102,15 @@ export class LabelLayer {
 
   /** Labels excluded from overlap checks against each other only after the other pills. */
   private readonly places = new Set<CSS2DObject>();
+  /** Pills that yield to each other (and to the unranked pills) by priority, higher first; ties keep add order. */
+  private readonly ranks = new Map<CSS2DObject, number>();
+
+  /** Ranks a pill for screen-space collision culling in `clip`: it is hidden when it overlaps a higher-ranked pill. Call `invalidate` after changing ranks. */
+  setPriority(obj: CSS2DObject, priority: number): void {
+    if (this.ranks.get(obj) === priority) return;
+    this.ranks.set(obj, priority);
+    this.lastKey = [];
+  }
 
   /** A small reference-place label (decluttered in `clip`); earlier adds win overlaps. */
   addPlace(
@@ -124,6 +135,7 @@ export class LabelLayer {
 
   remove(obj: CSS2DObject) {
     this.places.delete(obj);
+    this.ranks.delete(obj);
     this.cells.delete(obj);
     this.sizes.delete(obj);
     this.lastKey = [];
@@ -206,15 +218,28 @@ export class LabelLayer {
     };
     const wind: CSS2DObject[] = [];
     const furniture: CSS2DObject[] = [];
+    const ranked: CSS2DObject[] = [];
     for (const o of this.objects) {
       if (!o.visible || this.places.has(o)) continue;
-      (o.element.classList.contains("fdx-wind") ? wind : furniture).push(o);
+      if (this.ranks.has(o)) ranked.push(o);
+      else (o.element.classList.contains("fdx-wind") ? wind : furniture).push(o);
     }
+    ranked.sort((a, b) => this.ranks.get(b)! - this.ranks.get(a)!);
     // Priority: pin (fixed) and wind label, then scale, then places.
     for (const o of [...wind, ...furniture]) {
       const { inside, rect } = project(o);
       pills.push({ o, inside });
       if (inside) taken.push(rect);
+    }
+    // Ranked pills (overlay labels): kept in priority order unless they overlap one already kept.
+    const pm = PILL_MARGIN_PX;
+    for (const o of ranked) {
+      const { inside, rect } = project(o);
+      const clear =
+        inside &&
+        !taken.some((t) => rect.left < t.right + pm && rect.right + pm > t.left && rect.top < t.bottom + pm && rect.bottom + pm > t.top);
+      if (clear) taken.push(rect);
+      pills.push({ o, inside: clear });
     }
     for (const o of this.objects) {
       if (!o.visible || !this.places.has(o)) continue;
