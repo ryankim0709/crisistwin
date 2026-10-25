@@ -4,8 +4,9 @@ Serves tools/ca_fire_bases.json (CAL FIRE Facilities for Wildland Fire Protectio
 `python -m tools.suppression_data --refresh-bases`). The file has no open licence, so it is
 local-only: never committed. Without it the endpoint answers 200 with `available: false`.
 
-Observed: base locations, types and agencies from the CAL FIRE layer (retrieved date in the
-response). Not observed: apparatus or staffing per base (the layer has none). Distances are
+Observed: base locations, types, agencies, unit codes and the layer's staffing class (`staffing`:
+P paid, C combination, V volunteer; null when the layer has none) from the CAL FIRE layer
+(retrieved date in the response). Not observed: apparatus per base (the layer has none). Distances are
 great-circle kilometres from the query point, not driving distance.
 
 Caps (assumed, to keep the payload small): every helitack base (HB) and air attack base (AAB)
@@ -96,7 +97,8 @@ def select_bases(bases: list[dict], lon: float, lat: float, radius_km: float) ->
             continue
         rows.append({
             "id": base.get("id"), "name": base.get("name"), "type": kind, "agency": base.get("agency"),
-            "unit": base.get("unit"), "lon": blon, "lat": blat, "distanceKm": round(distance, 1),
+            "unit": base.get("unit"), "staffing": base.get("staffing"), "lon": blon, "lat": blat,
+            "distanceKm": round(distance, 1),
         })
     rows.sort(key=lambda r: r["distanceKm"])
     out = [r for r in rows if r["type"] in AIR_TYPES]

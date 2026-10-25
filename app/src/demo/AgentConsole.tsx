@@ -8,6 +8,7 @@ type Agent = ReturnType<typeof useDemoAgent>;
 function orderText(order: DemoOrder, name: (id: string) => string): string {
   if (order.type === "send_crew") return `Send ${order.crew_id} to ${order.fire_id}`;
   if (order.type === "release_crew") return `Release ${order.crew_id}`;
+  if (order.type === "order_resources") return `Order ${order.count} ${order.resource.replace(/_/g, " ")} for ${order.fire_id}`;
   return `Evacuate ${name(order.zone_id)} to ${name(order.destination_id)}`;
 }
 

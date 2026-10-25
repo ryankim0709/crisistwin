@@ -16,6 +16,8 @@
 | [live-reports.md](live-reports.md) | Contract for the live drill API: field reports, road state, guidance, check-ins (`/api/live/…`). |
 | [ground-data-calibration.md](ground-data-calibration.md) | Empirical 911, radio and rescue rates from the 2018 Camp Fire record (`sim/ground_rates.py`) and the seeded comms generator calibrated on them (`sim/gen_comms.py`). |
 | [twin-api.md](twin-api.md) | Contract for the real-time traffic twin behind `/live`'s what-if. |
+| [command-demo-realism.md](command-demo-realism.md) | What the `/live` command board models (fire, units, travel, households), with evidence labels. |
+| [response-model.md](response-model.md) | The shared fire response and resource-management model (`app/src/response/`): run cards, containment tactics, escalation, departments and mutual aid, unit states, sources and measured outcomes. |
 | [strategy-evaluation.md](strategy-evaluation.md) | Protocol for comparing response strategies across scenarios and seeds: paired design, metrics, statistics, prompt/tool A/B. |
 | [iteration-log.md](iteration-log.md) | Round-by-round log of the live-drill iteration work. |
 

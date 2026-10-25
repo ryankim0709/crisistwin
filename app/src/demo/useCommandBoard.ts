@@ -217,6 +217,16 @@ export function useCommandBoard({ token, incidentId, data: commandData }: Comman
     setIgniteMode(false);
   };
 
+  /** Rule-based response (run cards on new fires, extended-attack orders on IA failure); on by default. */
+  const ruleResponse = board?.response.autoDispatch ?? true;
+  const setRuleResponse = (on: boolean) => {
+    const b = boardRef.current;
+    if (!b) return;
+    b.response.autoDispatch = on;
+    b.response.autoEscalate = on;
+    bump();
+  };
+
   const changeActivity = (value: Activity) => {
     setActivityState(value);
     const b = boardRef.current;
@@ -270,6 +280,9 @@ export function useCommandBoard({ token, incidentId, data: commandData }: Comman
     hold,
     setHold,
     agent,
+    // Rule-based dispatch and escalation (demo/boardResponse.ts)
+    ruleResponse,
+    setRuleResponse,
     // Map interaction
     igniteMode,
     setIgniteMode,

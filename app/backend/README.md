@@ -172,8 +172,10 @@ browser; nothing here is stored.
   `livecore.routing` over the drill road graph. Distances are metres, `eta_min` minutes.
 - `POST /api/demo/decide[?incident=]` `{observation}` (at most 200 kB; 40/min) streams `application/x-ndjson`
   like `/api/dispatch/decide`: `thinking`/`text` lines, then one `orders` or `error` line. Claude
-  can `send_crew`, `release_crew` or `order_evacuation`; each order is validated against the ids
-  in the observation (at most 20 per decision). Needs `ANTHROPIC_API_KEY` (else 503
+  can `send_crew`, `release_crew`, `order_evacuation` or `order_resources` (`fire_id`, `resource`
+  one of `engine_strike_team`, `crew_strike_team`, `dozer_strike_team`, `airtanker`, `helicopter`,
+  integer `count` up to 5/5/2/4/2; burning fires only); each order is validated against the ids
+  in the observation (at most 20 per decision). See [docs/response-model.md](../../docs/response-model.md). Needs `ANTHROPIC_API_KEY` (else 503
   `ai_unavailable`) and reuses `DISPATCH_AGENT_MODEL` and `DISPATCH_AGENT_EFFORT`.
 
 ### Live drill API (`/api/live/…`)

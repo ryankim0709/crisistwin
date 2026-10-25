@@ -171,17 +171,28 @@ async function landscapeGround(
 
 export function stationsFrom(bases: SuppressionBases | null): DemoEnvironment["bases"] {
   if (!bases?.available || bases.bases.length === 0) return null;
-  const toStation = (b: SuppressionBases["bases"][number]): Station => ({ id: b.id, name: b.name, location: [b.lon, b.lat], type: b.type });
+  const toStation = (b: SuppressionBases["bases"][number]): Station => ({
+    id: b.id,
+    name: b.name,
+    location: [b.lon, b.lat],
+    type: b.type,
+    agency: b.agency,
+    unit: b.unit,
+    staffing: b.staffing ?? null,
+  });
   const near = [...bases.bases].sort((a, b) => a.distanceKm - b.distanceKm || a.id.localeCompare(b.id));
   const calfireStations = near.filter((b) => STATION_TYPES.has(b.type) && b.agency.startsWith("CAL FIRE")).map(toStation);
   const localStations = near.filter((b) => b.type === "FSA").map(toStation);
   const crewCamps = near.filter((b) => CREW_TYPES.has(b.type)).map(toStation);
   if (calfireStations.length === 0 || localStations.length === 0 || crewCamps.length === 0) return null;
-  return { calfireStations, localStations, crewCamps };
+  // Every facility with its metadata (stations, camps, helitack and air attack bases): the response fleet (response/fleet.ts).
+  return { calfireStations, localStations, crewCamps, all: near.map(toStation) };
 }
 
 const OSM_STATION_TYPE = "osm_fire_station";
 const OSM_CREW_CAMPS = 2;
+/** Most OSM stations the response fleet staffs (the CAL FIRE path is capped at 40 by the bases endpoint). */
+const OSM_FLEET_STATIONS = 40;
 
 /**
  * Bases from a drill package's OpenStreetMap fire stations when the CAL FIRE bases are unavailable.
@@ -194,7 +205,10 @@ export function stationsFromPackage(stations: EnvironmentResponse["stations"], c
   const d2 = (s: { lon: number; lat: number }) => (center ? ((s.lon - center[0]) * cos) ** 2 + (s.lat - center[1]) ** 2 : 0);
   const near = [...stations].sort((a, b) => d2(a) - d2(b) || a.id.localeCompare(b.id));
   const all: Station[] = near.map((s) => ({ id: s.id, name: s.name, location: [s.lon, s.lat], type: OSM_STATION_TYPE }));
-  return { calfireStations: all, localStations: all, crewCamps: all.slice(0, OSM_CREW_CAMPS) };
+  // Response fleet input: the stations (one Type 3 engine each, ASSUMPTION) and, as crew bases, the
+  // nearest OSM_CREW_CAMPS stations again (ASSUMPTION; OSM has no conservation camps).
+  const camps: Station[] = all.slice(0, OSM_CREW_CAMPS).map((s) => ({ ...s, id: `${s.id}-crew`, name: `${s.name} (crew base, assumed)`, type: "CC", agency: "Unknown" }));
+  return { calfireStations: all, localStations: all, crewCamps: all.slice(0, OSM_CREW_CAMPS), all: [...all.slice(0, OSM_FLEET_STATIONS), ...camps] };
 }
 
 export async function loadEnvironment(

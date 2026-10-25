@@ -274,7 +274,7 @@ export function andersonModel(fuelCode: number): number | null {
 }
 
 /** Broyles 2011 column for an Anderson model; the table has grass, chaparral, brush, timber. */
-function broylesColumn(model: number): number {
+export function broylesColumn(model: number): number {
   // Columns: fm1_2_grass, fm4_chaparral, fm5_6_brush, fm8_9_10_timber.
   if (model <= 3) return 0; // ASSUMPTION: FM3 tall grass uses the grass column.
   if (model === 4) return 1;

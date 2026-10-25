@@ -24,6 +24,11 @@ export const TEAM_STATUS: Record<TeamStatus, string> = {
   available: "Available",
   en_route: "En route",
   on_scene: "On scene",
+  refilling: "Refilling water",
+  returning: "Returning",
+  moving_up: "Moving up to cover",
+  resting: "Resting (work/rest)",
+  out_of_service: "Out of service",
 };
 
 export const nf = (n: number) => Math.round(n).toLocaleString("en-US");
