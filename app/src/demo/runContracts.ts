@@ -132,6 +132,15 @@ export interface DemoSeedPreset {
   wind: { speedMph: number; fromDeg: number };
   moisturePreset: "critical" | "dry" | "moderate" | "wet";
   horizonMinutes: number;
+  /**
+   * Optional weather that changes over the run: piecewise-constant segments by board minute from
+   * the scenario's T+0, ascending `fromMinute`, the first at 0 (`wind` and `moisturePreset` above
+   * then label the opening segment). Sent as the publish's weather series (oneview/presetWeather.ts);
+   * the board re-solves the fire from its burned state at each change (model.ts fireSolveDue
+   * "wind or fuel moisture changed"). Units: open 20 ft wind mph, FROM degrees true.
+   * Absent: one wind and moisture for the whole run.
+   */
+  weatherSchedule?: { fromMinute: number; windSpeedMph: number; fromDeg: number; moisturePreset: "critical" | "dry" | "moderate" | "wet" }[];
   /** Measured outcomes of the no-action run (eval harness --policy none), for the blurb and sanity checks. */
   measured: { homesBurned: number; caughtPeople: number; atMinute: number } | null;
 }

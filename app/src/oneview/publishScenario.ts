@@ -16,6 +16,7 @@ import { postLiveFire, type LiveFirePayload } from "../studio/liveFire";
 import { fetchLiveDrill, liveToken, packageRegionId } from "../studio/liveSync";
 import type { DemoSeedPreset } from "../demo/runContracts";
 import { buildPresetPackage } from "./studioPackage";
+import { presetLiveWeatherSeries } from "./presetWeather";
 import type { PrepareState, ScenarioDraft } from "./types";
 
 export const BERKELEY_REGION = "berkeley-hills-tilden";
@@ -64,7 +65,8 @@ export function buildPresetPayload(draft: ScenarioDraft, preset: DemoSeedPreset,
       values: { ...moisture.moisture },
     },
     horizon_minutes: Math.round(draft.horizonMinutes),
-    weather_series: null,
+    // The preset's weather schedule (wind easing, evening moisture recovery), when it has one.
+    weather_series: presetLiveWeatherSeries(preset),
   };
 }
 

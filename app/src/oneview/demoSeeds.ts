@@ -15,6 +15,11 @@
  * feat/one-view 386b101 (SPREAD_MODEL 5.1.1, after the fire-resume fix: numbers taken before
  * that fix are superseded); re-measure after outcome-changing board or fire-solver changes.
  *
+ * STALE: `measured`, DEMO_SEED_EVIDENCE and the blurbs were measured with wind and moisture held
+ * constant for 6 h. The presets now carry an easing offshore event (easingOffshoreEvent) and the
+ * board closes fires that burn themselves out; neither is re-measured yet, so these figures
+ * overstate harm after the wind eases. Re-measure with the harness before quoting them.
+ *
  * Order: the first preset is the most convincing and least variable one (the decision aids cut
  * both homes and people in every seed tested, and the no-action figures sit in a narrow band).
  */
@@ -28,6 +33,29 @@ const HORIZON_MINUTES = 360;
 /** Dispatch is told of the fire 4 board minutes after ignition (ASSUMPTION; harness `--report 4`). */
 const REPORT_DELAY_MINUTES = 4;
 
+/** Board minute the offshore wind eases (ASSUMPTION: about 2.5 h of strong wind; no source tied to this scenario). */
+export const WIND_EASES_AT_MINUTE = 150;
+/** Open 20 ft wind after it eases, mph (ASSUMPTION: a light-to-moderate evening wind, not a weather record). */
+export const EASED_WIND_MPH = 12;
+/** Board minute the fuel moisture recovers from "critical" to "dry" in the evening (ASSUMPTION). */
+export const MOISTURE_RECOVERS_AT_MINUTE = 240;
+
+/**
+ * An offshore wind event that eases: the preset's strong wind until WIND_EASES_AT_MINUTE, then
+ * EASED_WIND_MPH from the same direction; "critical" fuel moisture until
+ * MOISTURE_RECOVERS_AT_MINUTE, then "dry". ASSUMPTION throughout: the shape (a strong Diablo-type
+ * wind for a few hours that drops off, humidity recovering in the evening) is the usual pattern
+ * of these events, but the times and speeds are scenario choices, not from a weather record or a
+ * cited study.
+ */
+function easingOffshoreEvent(speedMph: number, fromDeg: number): NonNullable<DemoSeedPreset["weatherSchedule"]> {
+  return [
+    { fromMinute: 0, windSpeedMph: speedMph, fromDeg, moisturePreset: "critical" },
+    { fromMinute: WIND_EASES_AT_MINUTE, windSpeedMph: EASED_WIND_MPH, fromDeg, moisturePreset: "critical" },
+    { fromMinute: MOISTURE_RECOVERS_AT_MINUTE, windSpeedMph: EASED_WIND_MPH, fromDeg, moisturePreset: "dry" },
+  ];
+}
+
 export const DEMO_SEEDS: DemoSeedPreset[] = [
   {
     id: "berkeley-grizzly-peak-ene",
@@ -38,6 +66,7 @@ export const DEMO_SEEDS: DemoSeedPreset[] = [
     seed: 1,
     ignitions: [{ lon: -122.218, lat: 37.876, startMinute: 0, reportMinute: REPORT_DELAY_MINUTES }],
     wind: { speedMph: 40, fromDeg: 60 },
+    weatherSchedule: easingOffshoreEvent(40, 60),
     moisturePreset: "critical",
     horizonMinutes: HORIZON_MINUTES,
     measured: { homesBurned: 730, caughtPeople: 371, atMinute: HORIZON_MINUTES },
@@ -51,6 +80,7 @@ export const DEMO_SEEDS: DemoSeedPreset[] = [
     seed: 1,
     ignitions: [{ lon: -122.218, lat: 37.86, startMinute: 0, reportMinute: REPORT_DELAY_MINUTES }],
     wind: { speedMph: 40, fromDeg: 60 },
+    weatherSchedule: easingOffshoreEvent(40, 60),
     moisturePreset: "critical",
     horizonMinutes: HORIZON_MINUTES,
     measured: { homesBurned: 1118, caughtPeople: 807, atMinute: HORIZON_MINUTES },
@@ -67,6 +97,7 @@ export const DEMO_SEEDS: DemoSeedPreset[] = [
       { lon: -122.226, lat: 37.876, startMinute: 0, reportMinute: REPORT_DELAY_MINUTES },
     ],
     wind: { speedMph: 35, fromDeg: 60 },
+    weatherSchedule: easingOffshoreEvent(35, 60),
     moisturePreset: "critical",
     horizonMinutes: HORIZON_MINUTES,
     measured: { homesBurned: 1034, caughtPeople: 1115, atMinute: HORIZON_MINUTES },
@@ -80,6 +111,7 @@ export const DEMO_SEEDS: DemoSeedPreset[] = [
     seed: 1,
     ignitions: [{ lon: -122.234, lat: 37.868, startMinute: 0, reportMinute: REPORT_DELAY_MINUTES }],
     wind: { speedMph: 40, fromDeg: 80 },
+    weatherSchedule: easingOffshoreEvent(40, 80),
     moisturePreset: "critical",
     horizonMinutes: HORIZON_MINUTES,
     measured: { homesBurned: 1038, caughtPeople: 777, atMinute: HORIZON_MINUTES },
