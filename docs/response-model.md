@@ -524,11 +524,14 @@ clock, which sets aviation daylight), and the /live board has no fixed roster.
   Kensington, El Cerrito, Moraga-Orinda, Con Fire, Richmond, Alameda County FD, Alameda FD,
   Emeryville, SFFD; three untagged OSM elements are aliased by id) joins that department, so
   drawdown works on the whole department. Its units come from the department's published
-  per-station roster where one was found (Berkeley FD: berkeleyca.gov Fire Stations page;
-  Oakland FD: Wikipedia station table, secondary), else one Type 1 engine (**ASSUMPTION**, as a
-  layer local station). Career departments (BFD, OFD) turn out at the paid 80 s.
+  per-station roster where one was found (Berkeley FD, El Cerrito FD, Piedmont FD, Alameda FD,
+  EBRPD Station 1 from their own pages; Oakland FD from the Wikipedia station table, secondary),
+  else one Type 1 engine (**ASSUMPTION**, as a layer local station). Units are staffed crews: a
+  station housing a Type I and a cross-staffed Type III fields one crew, on the Type III
+  (**ASSUMPTION** that it takes the wildland engine). Career departments (BFD, OFD) turn out at
+  the paid 80 s.
 - **Ambulances** (`Fleet.ems`, `board.response.ems`): ALS medic units from published rosters
-  only: Berkeley FD Medic 1, 2, 3 and 5 at Stations 1, 2, 3 and 5. Turnout 60 s (NFPA 1710
+  only: Berkeley FD Medic 1, 2, 3 and 5, Piedmont Medic 1, Alameda FD Medic 1-4. Turnout 60 s (NFPA 1710
   4.1.2.1.2 EMS turnout, as cited). Oakland and most of Alameda County are served by Falck under
   the county exclusive operating area (Albany, Berkeley, Piedmont and Alameda fire departments
   transport themselves), whose units are not station-based, so none are placed. They are not fire
@@ -576,9 +579,13 @@ no source ties counts to staffing.
 | CAL FIRE unit | 1 Type 2 dozer at its first (nearest) station | ASSUMPTION |
 | Local, Schedule A or contract county station | 1 Type 1 engine | ASSUMPTION, as `livecore/apparatus.py` |
 | Federal station | 1 Type 3 engine | ASSUMPTION |
-| OSM station, Berkeley FD | Its listed engines: 1 Type 1 engine each; Station 5 also its Type III (Type 3) engine; Medic 1/2/3/5 ambulances | City of Berkeley Fire Stations page and Fire Department page ("seven Type I fire engines, two aerial ladder trucks, four ALS ambulances"), fetched 2026-10-25 |
-| OSM station, Oakland FD | 1 engine each (Type 1, type not stated: ASSUMPTION); wildland units 306/307/323/324/325 as Type 3 engines (ASSUMPTION on type); Station 22 (airport) none | Wikipedia "Oakland Fire Department" station table (secondary; 25 engines, 7 trucks, 8 wildland) |
-| OSM station of another named department (`response/departments.ts`) | 1 Type 1 engine (EBRPD: 1 Type 3) | ASSUMPTION, no roster retrieved |
+| OSM station, Berkeley FD | 1 Type 1 engine each; Station 5's crew on its Type III (Type 3) engine; Medic 1/2/3/5 ambulances | City of Berkeley Fire Stations page and Fire Department page ("seven Type I fire engines, two aerial ladder trucks, four ALS ambulances"), fetched 2026-10-25; the Type III is cross-staffed (not in the staffed list), the crew taking it is an ASSUMPTION |
+| OSM station, Oakland FD | 1 engine each (Type 1, type not stated: ASSUMPTION); at Stations 6, 7, 23, 24, 25 the crew on its wildland unit, as a Type 3 (ASSUMPTION on type and cross-staffing); Station 22 (airport) none | Wikipedia "Oakland Fire Department" station table (secondary; 25 engines, 7 trucks, 8 wildland) |
+| OSM station, El Cerrito FD (incl. Kensington's Station 55) | Station 51: 1 Type 1; Stations 52 and 55: the crew on the Type III | elcerrito.gov Stations & Apparatus; OES 413 not counted; cross-staffing ASSUMPTION |
+| OSM station, Piedmont FD | 1 Type 1 engine, Medic 1 | piedmont.ca.gov Apparatus ("We staff 3 apparatus at all times") |
+| OSM station, Alameda FD | Stations 1-4: 1 engine (Type 1 ASSUMPTION), 1 medic unit each | alamedaca.gov station pages |
+| OSM station, EBRPD | Station 1 (Tilden): 1 Type 3 (two housed, staffing not published: one crew ASSUMPTION); others the generic OSM row | ebparks.org Equipment and Stations |
+| OSM station of another named department (`response/departments.ts`) | 1 Type 1 engine | ASSUMPTION, no verified roster (Moraga-Orinda, Con Fire, Albany, Richmond: sources blocked or not per station) |
 | OSM station, department unknown | 1 Type 3 engine | ASSUMPTION, as `dispatch/stationApparatus.ts` |
 | Conservation camp or crew fire centre (CC, FCFFC) | 2 Type 1 crews | ASSUMPTION |
 | Air attack base (AAB) | 1 air attack + 2 S-2T | Derived: 12 air tactical and 22 airtankers at 13 bases (calfire_house_2019) |

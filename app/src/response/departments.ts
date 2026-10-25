@@ -26,6 +26,29 @@
  *   paramedics", career firefighters) and Oakland FD (Wikipedia: about 420 employees) are career
  *   departments; the others are not marked (turnout as unknown staffing).
  *
+ * - PIEDMONT: piedmont.ca.gov Fire "Apparatus" page: "We staff 3 apparatus at all times" (Engine 1,
+ *   Truck 1, Medic 1); Engine 601 (Type 6) not modelled.
+ * - EL_CERRITO: elcerrito.gov "Stations & Apparatus" (https://www.elcerrito.gov/168/Stations-Apparatus):
+ *   Station 51 (was 71) Engine 51 (Type I), Truck 51, OES 413; Station 52 (was 72) Engine 52 (Type I)
+ *   and Engine 352 (Type III); Station 55 (was 65, Kensington FPD's station, staffed by El Cerrito
+ *   under contract since 1995) Engine 55 (Type I) and Engine 355 (Type III). Renumbering per the
+ *   Kensington FPD Fire Chief's report, April 2023.
+ * - ALAMEDA_FD: alamedaca.gov Fire Station 1-4 pages: one engine (type not stated) and one medic
+ *   unit each; citywide "four fire engines, two fire trucks, four ambulances".
+ * - EBRPD: ebparks.org Fire "Equipment and Stations": Station 1 (Tilden) houses "two Type 3
+ *   Engines, one Water Tender, a Type 6 Engine, and a Rescue Gator"; staffing not published.
+ *
+ * Units are staffed crews, not parked apparatus. A station that houses a Type I engine and a
+ * wildland Type III with no separate staffing published has one crew, modelled on the Type III
+ * (it can use the narrow hill roads; ASSUMPTION that the crew takes the wildland engine to a
+ * vegetation fire). Berkeley FD's staffed list is "seven Type I fire engines, two aerial ladder
+ * trucks, four ALS ambulances", so its Type III is cross-staffed. Reserve and state-owned (OES)
+ * engines are not counted (staffed only on a state mutual-aid request).
+ * Not verified, so not used: Moraga-Orinda FD (mofd.org blocked; search summaries only), Con
+ * Fire per-station engines, Albany FD counts (only its Type 6 is in the 2023 hazard plan),
+ * Richmond FD per-station engines. Con Fire/AMR (Contra Costa) and Falck (Alameda County) publish
+ * no station-based ambulance counts.
+ *
  * Not modelled (the board has no unit kind for them): ladder trucks, Type 6 patrols, the BFD
  * quick-response vehicle, the seasonal EBRPD engine at BFD Station 7, OFD airport crash rigs.
  */
@@ -64,6 +87,11 @@ const BFD_EVIDENCE =
 const OFD_EVIDENCE =
   "Wikipedia 'Oakland Fire Department' station table (secondary, sources 2012-2015; fetched 2026-10-25). Engine type not stated: Type 1 (structure) ASSUMPTION; wildland units' type not stated: modelled as Type 3 engines, ASSUMPTION";
 const ASSUMED_EVIDENCE = "Department from the OSM name/operator; units: ASSUMPTION, one Type 1 structure engine per station (as livecore/apparatus.py local stations); no published roster retrieved";
+const CROSS_STAFFED = "one crew: the Type III is cross-staffed, modelled as the crew's engine (ASSUMPTION)";
+const PIEDMONT_EVIDENCE = "piedmont.ca.gov Fire Apparatus page (fetched 2026-10-25 by a research subagent): staffs Engine 1 (Type 1), Truck 1, Medic 1";
+const EL_CERRITO_EVIDENCE = `elcerrito.gov Stations & Apparatus page (fetched 2026-10-25 by a research subagent); ${CROSS_STAFFED} at Stations 52 and 55; OES 413 not counted`;
+const ALAMEDA_EVIDENCE = "alamedaca.gov Fire Station 1-4 pages (fetched 2026-10-25 by a research subagent): one engine and one medic unit per station; engine type not stated, Type 1 ASSUMPTION";
+const EBRPD_EVIDENCE = "ebparks.org Fire Equipment and Stations page (fetched 2026-10-25 by a research subagent): Station 1 houses two Type 3 engines; staffing not published, one crew ASSUMPTION";
 
 /** Berkeley FD (official). Station 5's "Type III" is a Type 3 wildland engine (Wikipedia names it Wildland Engine 305). */
 const BFD_STATIONS: Record<string, StationRoster> = {
@@ -71,7 +99,7 @@ const BFD_STATIONS: Record<string, StationRoster> = {
   "2": { units: { engine_t1: 1 }, ambulances: 1, names: "Engine 2, Truck 2, Medic 2, Type VI 4x4" },
   "3": { units: { engine_t1: 1 }, ambulances: 1, names: "Engine 3, Medic 3" },
   "4": { units: { engine_t1: 1 }, names: "Engine 4" },
-  "5": { units: { engine_t1: 1, engine_t3: 1 }, ambulances: 1, names: "Engine 5, Truck 5, Type III, Medic 5" },
+  "5": { units: { engine_t3: 1 }, ambulances: 1, names: `Engine 5, Truck 5, Type III, Medic 5 (${CROSS_STAFFED})` },
   "6": { units: { engine_t1: 1 }, names: "Engine 6" },
   "7": { units: { engine_t1: 1 }, names: "Engine 7, quick response vehicle, seasonal EBRPD engine" },
 };
@@ -80,8 +108,8 @@ function ofd(n: number, wildland: number | null, extra = ""): [string, StationRo
   return [
     String(n),
     {
-      units: wildland ? { engine_t1: 1, engine_t3: 1 } : { engine_t1: 1 },
-      names: `Engine ${n}${wildland ? `, Wildland Unit ${wildland}` : ""}${extra}`,
+      units: wildland ? { engine_t3: 1 } : { engine_t1: 1 },
+      names: `Engine ${n}${wildland ? `, Wildland Unit ${wildland} (one crew: the wildland unit is modelled as the crew's engine, ASSUMPTION)` : ""}${extra}`,
     },
   ];
 }
@@ -118,20 +146,42 @@ const OFD_STATIONS: Record<string, StationRoster> = Object.fromEntries([
 
 const LOCAL_T1: StationUnits = { engine_t1: 1 };
 
+const PIEDMONT_STATIONS: Record<string, StationRoster> = {
+  "1": { units: { engine_t1: 1 }, ambulances: 1, names: "Engine 1, Truck 1, Medic 1, Engine 601 (Type 6)" },
+};
+
+/** El Cerrito FD stations, under their current numbers and the pre-2023 ones OSM still uses. */
+const EL_CERRITO_51: StationRoster = { units: { engine_t1: 1 }, names: "Engine 51, Truck 51, Battalion 5, OES 413" };
+const EL_CERRITO_52: StationRoster = { units: { engine_t3: 1 }, names: "Engine 52 (Type I), Engine 352 (Type III)" };
+const EL_CERRITO_55: StationRoster = { units: { engine_t3: 1 }, names: "Engine 55 (Type I), Engine 355 (Type III); Kensington FPD station" };
+const EL_CERRITO_STATIONS: Record<string, StationRoster> = {
+  "51": EL_CERRITO_51, "71": EL_CERRITO_51,
+  "52": EL_CERRITO_52, "72": EL_CERRITO_52,
+  "55": EL_CERRITO_55, "65": EL_CERRITO_55,
+};
+
+const ALAMEDA_STATIONS: Record<string, StationRoster> = Object.fromEntries(
+  [1, 2, 3, 4].map((n) => [String(n), { units: { engine_t1: 1 }, ambulances: 1, names: `Engine ${n}, Medic ${n}${n <= 2 ? `, Truck ${n}` : ""}` }]),
+);
+
+const EBRPD_STATIONS: Record<string, StationRoster> = {
+  "1": { units: { engine_t3: 1 }, names: "Two Type 3 engines, water tender, Type 6 engine, Rescue Gator (Tilden)" },
+};
+
 /** Checked in order: "Alameda County Fire" before "Alameda Fire". */
 export const DEPARTMENTS: readonly LocalDepartmentSpec[] = [
-  { id: "berkeley_fd", name: "Berkeley Fire Department", short: "Berkeley FD", match: /berkeley fire/i, stations: BFD_STATIONS, defaultUnits: LOCAL_T1, evidence: BFD_EVIDENCE, paid: true },
+  { id: "berkeley_fd", name: "Berkeley Fire Department", short: "Berkeley FD", match: /berkeley fire/i, stations: BFD_STATIONS, defaultUnits: LOCAL_T1, evidence: `${BFD_EVIDENCE}; ${CROSS_STAFFED} at Station 5`, paid: true },
   { id: "oakland_fd", name: "Oakland Fire Department", short: "Oakland FD", match: /oakland fire/i, stations: OFD_STATIONS, defaultUnits: LOCAL_T1, evidence: OFD_EVIDENCE, paid: true },
-  { id: "ebrpd_fd", name: "East Bay Regional Park District Fire Department", short: "EBRPD Fire", match: /east bay regional park|ebrpd/i, defaultUnits: null, evidence: "Department from the OSM name/operator; units: the generic OSM row (one Type 3 engine, ASSUMPTION); no published roster retrieved" },
+  { id: "ebrpd_fd", name: "East Bay Regional Park District Fire Department", short: "EBRPD Fire", match: /east bay regional park|ebrpd/i, stations: EBRPD_STATIONS, defaultUnits: null, evidence: EBRPD_EVIDENCE },
   { id: "albany_fd", name: "Albany Fire Department", short: "Albany FD", match: /albany fire/i, defaultUnits: LOCAL_T1, evidence: ASSUMED_EVIDENCE },
-  { id: "piedmont_fd", name: "Piedmont Fire Department", short: "Piedmont FD", match: /piedmont/i, defaultUnits: LOCAL_T1, evidence: ASSUMED_EVIDENCE },
+  { id: "piedmont_fd", name: "Piedmont Fire Department", short: "Piedmont FD", match: /piedmont/i, stations: PIEDMONT_STATIONS, defaultUnits: LOCAL_T1, evidence: PIEDMONT_EVIDENCE },
   { id: "kensington_fpd", name: "Kensington Fire Protection District", short: "Kensington FPD", match: /kensington/i, defaultUnits: LOCAL_T1, evidence: ASSUMED_EVIDENCE },
-  { id: "el_cerrito_fd", name: "El Cerrito Fire Department", short: "El Cerrito FD", match: /el cerrito/i, defaultUnits: LOCAL_T1, evidence: ASSUMED_EVIDENCE },
+  { id: "el_cerrito_fd", name: "El Cerrito Fire Department", short: "El Cerrito FD", match: /el cerrito/i, stations: EL_CERRITO_STATIONS, defaultUnits: LOCAL_T1, evidence: EL_CERRITO_EVIDENCE },
   { id: "mofd", name: "Moraga-Orinda Fire District", short: "Moraga-Orinda FD", match: /moraga.?orinda/i, defaultUnits: LOCAL_T1, evidence: ASSUMED_EVIDENCE },
   { id: "confire", name: "Contra Costa County Fire Protection District", short: "Con Fire", match: /contra costa/i, defaultUnits: LOCAL_T1, evidence: ASSUMED_EVIDENCE },
   { id: "richmond_fd", name: "Richmond Fire Department", short: "Richmond FD", match: /richmond fire/i, defaultUnits: LOCAL_T1, evidence: ASSUMED_EVIDENCE },
   { id: "acfd", name: "Alameda County Fire Department", short: "Alameda County FD", match: /alameda county fire/i, defaultUnits: LOCAL_T1, evidence: ASSUMED_EVIDENCE },
-  { id: "alameda_fd", name: "Alameda Fire Department", short: "Alameda FD", match: /alameda fire/i, defaultUnits: LOCAL_T1, evidence: ASSUMED_EVIDENCE },
+  { id: "alameda_fd", name: "Alameda Fire Department", short: "Alameda FD", match: /alameda fire/i, stations: ALAMEDA_STATIONS, defaultUnits: LOCAL_T1, evidence: ALAMEDA_EVIDENCE },
   { id: "emeryville", name: "Emeryville fire stations", short: "Emeryville", match: /emeryville/i, defaultUnits: LOCAL_T1, evidence: ASSUMED_EVIDENCE },
   { id: "sffd", name: "San Francisco Fire Department", short: "SFFD", match: /san francisco fire/i, defaultUnits: LOCAL_T1, evidence: ASSUMED_EVIDENCE },
 ];
@@ -144,6 +194,8 @@ const OSM_ALIASES: Record<string, { department: string; station: string }> = {
   "osm/way/227634068": { department: "berkeley_fd", station: "2" }, // "Fire Station Number 2", 2029 Berkeley Way
   "osm/way/295968637": { department: "oakland_fd", station: "25" }, // "Fire Station #25", 2795 Butters Dr
   "osm/way/376587064": { department: "oakland_fd", station: "16" }, // "Fire Station Number 16", 3600 13th Ave
+  "osm/node/3281243658": { department: "el_cerrito_fd", station: "51" }, // "El Cerrito Fire Department", San Pablo Ave
+  "osm/way/694455393": { department: "el_cerrito_fd", station: "55" }, // "Kensington District Fire Department", 217 Arlington Ave
 };
 
 export interface LocalStationMatch {
@@ -172,7 +224,8 @@ export function matchLocalStation(
   const department = alias ? DEPARTMENTS.find((d) => d.id === alias.department) : DEPARTMENTS.find((d) => d.match.test(text));
   if (!department) return null;
   const numbers = base.name.match(/\d+/g);
-  const station = alias?.station ?? (numbers ? String(Number(numbers[numbers.length - 1])) : null);
+  const keys = department.stations ? Object.keys(department.stations) : [];
+  const station = alias?.station ?? (numbers ? String(Number(numbers[numbers.length - 1])) : keys.length === 1 ? keys[0] : null);
   const seen = used.get(department.id) ?? new Set<string>();
   used.set(department.id, seen);
   const fresh = station !== null && !seen.has(station);
