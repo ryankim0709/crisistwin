@@ -521,12 +521,16 @@ cases have their nearest homes 7.9 km away and every road ending 1.5 km short of
   board. Water tenders are not units.
 - **Studio incidents**: there is no release and re-dispatch of a unit after its fire is out,
   no move-up or cover, no escalation or extended-attack orders, and no aircraft fuel cycle.
-  Held drops never expire in the solver, so an air-supported fire stays held until its ground
-  units catch it, provided they tie in within the window.
-- **Retardant that expires**: the solver has no hold-until minute on a control line, so an
-  untied drop is left out of the line rather than holding for a while and then expiring. The
-  solver change is an optional `holdUntilMinute` on `ControlLines`, plus re-queueing blocked
-  steps at that minute, as weather-delayed arrivals are re-queued.
+- **Drops expire** (solver 5.1.0, `ControlLines.holdUntilMinute`).
+  - A held drop stops holding `DROP_HOLD_MINUTES` after it lands: water 30 min, retardant
+    120 min. These are the tie-in windows, an ASSUMPTION with no published effective-life
+    figure.
+  - A step the drop held is re-tried at expiry, as weather-delayed arrivals are.
+  - Untied drops still do not hold at all.
+  - Check on a synthetic grass ring (GR2, dry, 6 mph): the free run reaches outside the ring at
+    T+48.7. A ring that never expires holds the fire to 10.7 ha. A ring expiring at T+120 lets
+    the fire out at T+120.2, for 136.1 ha against 141.9 ha free.
+  - A drop and ground line on the same cell count as one hold window (ASSUMPTION).
 - **Report delays**: the 3 min doorstep median, the 250 m scale, the anchor distances, the
   camera coverage of 60% and the camera and satellite times are assumptions. There is no camera
   or road-traffic map, Studio has no road lines, and the 911 load of a large fire (queued
