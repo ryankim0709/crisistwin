@@ -47,6 +47,8 @@ export interface ViewConfig {
   otherRoute: { href: string; label: string };
   /** "Town, ST" from the incidents index, used to name the distance reference; null if unknown. */
   place: string | null;
+  /** The incidents-index id (also the historical-fire id for the 3D view); null for simulations. */
+  incidentId: string | null;
 }
 
 export const REPLAY_VIEW: ViewConfig = {
@@ -58,6 +60,7 @@ export const REPLAY_VIEW: ViewConfig = {
   generateHint: BUNDLE_GENERATE_HINT,
   otherRoute: { href: "/simulate", label: "Agent simulation →" },
   place: "Paradise, CA",
+  incidentId: "camp-2018",
 };
 
 /** A fire the replay picker offers. Its bundle may not be generated yet; the picker checks. */
@@ -109,6 +112,7 @@ export function replayViewFor(incident: ReplayIncident): ViewConfig {
     variantsUrl: incident.variantsUrl,
     generateHint: incident.generateHint,
     place: incident.place,
+    incidentId: incident.id,
   };
 }
 
@@ -179,4 +183,5 @@ export const SIMULATION_VIEW: ViewConfig = {
   generateHint: "app/public/simulations/camp-2018.agents.json",
   otherRoute: { href: "/replay", label: "Historical replay →" },
   place: "Paradise, CA",
+  incidentId: null,
 };

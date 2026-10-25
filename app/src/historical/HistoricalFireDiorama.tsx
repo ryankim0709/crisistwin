@@ -3,8 +3,6 @@ import { useMediaQuery } from "../diorama/ui/format";
 import { BurnedGlyph, FireEdgeGlyph } from "../diorama/ui/glyphs";
 import { FireDioramaScene } from "../fire/diorama/FireDioramaScene";
 import type { DioramaRun, FireDioramaSceneApi } from "../fire/diorama/types";
-import { type LandscapeGrid } from "../fire/landscape";
-import { loadLandscapeCached } from "../fire/landscapeCache";
 import { formatDuration } from "../fire/ui/format";
 import {
   PLAYBACK_SPEEDS,
@@ -21,10 +19,9 @@ import {
   Spinner,
   type SegmentedOption,
 } from "../ui";
-import { OBSERVED_ARRIVAL_LABEL, arrivalFromPerimeters } from "./arrivalFromPerimeters";
-import { fetchHistoricalFire, fetchHistoricalFireSimulated, useHistoricalFireIndex } from "./data";
-import { simulatedArrivalOnGrid } from "./simulatedArrival";
-import type { HistoricalFire, HistoricalFireSimulated } from "./types";
+import { OBSERVED_ARRIVAL_LABEL } from "./arrivalFromPerimeters";
+import { useHistoricalFireIndex } from "./data";
+import { errorMessage, useHistoricalFireData, type FireLayer } from "./useHistoricalFireData";
 import "./historical.css";
 
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
@@ -35,27 +32,13 @@ const SEEK_STEP_MINUTES = 30;
 /** `DioramaRun.scenario.stepMinutes`: only sizes the glow band of the burning edge. */
 const DIORAMA_STEP_MINUTES = 60;
 
-type Layer = "observed" | "simulated";
+type Layer = FireLayer;
 type Window = "day" | "three-days" | "all";
 
 const SPEED_OPTIONS: readonly SegmentedOption<string>[] = PLAYBACK_SPEEDS.map((value) => ({
   value: String(value),
   label: `${value}×`,
 }));
-
-type Load<T> =
-  | { status: "loading" }
-  | { status: "ready"; value: T }
-  | { status: "error"; message: string };
-
-/** Landscapes already loaded this session, by fire id (they take a while to fetch). */
-const landscapeCache = new Map<string, LandscapeGrid>();
-/** Simulated-run files by name, fetched once. */
-const simulatedCache = new Map<string, Promise<HistoricalFireSimulated>>();
-
-function message(cause: unknown, fallback: string): string {
-  return cause instanceof Error ? cause.message : fallback;
-}
 
 function formatLocal(t0: string, minutes: number, timeZone: string): string {
   const at = new Date(Date.parse(t0) + minutes * 60_000);
@@ -99,12 +82,8 @@ type Props = {
 export default function HistoricalFireDiorama({ fireId, onSelectFire, onExit }: Props) {
   const reducedMotion = useMediaQuery(REDUCED_MOTION_QUERY);
   const index = useHistoricalFireIndex();
-  const [fire, setFire] = useState<Load<HistoricalFire>>({ status: "loading" });
-  const [landscape, setLandscape] = useState<Load<LandscapeGrid>>({ status: "loading" });
-  const [simulated, setSimulated] = useState<Load<HistoricalFireSimulated> | null>(null);
   const [layer, setLayer] = useState<Layer>("observed");
   const [windowChoice, setWindowChoice] = useState<Window>("three-days");
-  const [attempt, setAttempt] = useState(0);
   const [scene, setScene] = useState<FireDioramaSceneApi | null>(null);
   const [sceneError, setSceneError] = useState<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(true);
@@ -112,85 +91,15 @@ export default function HistoricalFireDiorama({ fireId, onSelectFire, onExit }: 
   const stageRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<FireDioramaSceneApi | null>(null);
 
-  // Fire file, then the landscape for its board.
-  useEffect(() => {
-    const controller = new AbortController();
-    setFire({ status: "loading" });
-    setLandscape({ status: "loading" });
-    setSimulated(null);
-    setLayer("observed");
-    fetchHistoricalFire(fireId, controller.signal)
-      .then(async (value) => {
-        setFire({ status: "ready", value });
-        const cached = landscapeCache.get(value.id);
-        if (cached) {
-          setLandscape({ status: "ready", value: cached });
-          return;
-        }
-        const { center, radius_m, cell_m } = value.board;
-        const { grid } = await loadLandscapeCached(center[0], center[1], radius_m, controller.signal, {
-          cellMeters: cell_m,
-        });
-        landscapeCache.set(value.id, grid);
-        if (!controller.signal.aborted) setLandscape({ status: "ready", value: grid });
-      })
-      .catch((cause: unknown) => {
-        if (controller.signal.aborted) return;
-        const text = message(cause, "The fire could not be loaded.");
-        setFire((current) =>
-          current.status === "ready" ? current : { status: "error", message: text },
-        );
-        setLandscape({ status: "error", message: text });
-      });
-    return () => controller.abort();
-  }, [fireId, attempt]);
-
-  // Simulated layer: fetched only when asked for.
+  const { fire, landscape, simulated, observed, simulatedArrival, retry } = useHistoricalFireData(
+    fireId,
+    layer,
+  );
   const simulatedFile = fire.status === "ready" ? fire.value.simulated_file : null;
-  useEffect(() => {
-    if (layer !== "simulated" || !simulatedFile) return;
-    let live = true;
-    let request = simulatedCache.get(simulatedFile);
-    if (!request) {
-      request = fetchHistoricalFireSimulated(simulatedFile);
-      simulatedCache.set(simulatedFile, request);
-      request.catch(() => simulatedCache.delete(simulatedFile));
-    }
-    setSimulated({ status: "loading" });
-    request.then(
-      (value) => live && setSimulated({ status: "ready", value }),
-      (cause: unknown) =>
-        live &&
-        setSimulated({ status: "error", message: message(cause, "Simulated run unavailable.") }),
-    );
-    return () => {
-      live = false;
-    };
-  }, [layer, simulatedFile]);
-
   const grid = landscape.status === "ready" ? landscape.value : null;
   const fireData = fire.status === "ready" ? fire.value : null;
-
-  const observed = useMemo(() => {
-    if (!grid || !fireData) return null;
-    return arrivalFromPerimeters(
-      grid,
-      fireData.perimeters.snapshots.map((s) => ({ minute: s.minute, geometry: s.geometry })),
-      fireData.ignitions.map((ig) => ({
-        longitude: ig.coord[0],
-        latitude: ig.coord[1],
-        minute: ig.minute,
-      })),
-    );
-  }, [grid, fireData]);
-
-  const simulatedArrival = useMemo(() => {
-    if (!grid || simulated?.status !== "ready") return null;
-    const arrival = simulatedArrivalOnGrid(grid, simulated.value.arrival_grid);
-    let last = 0;
-    for (const value of arrival) if (Number.isFinite(value) && value > last) last = value;
-    return { arrival, lastMinute: last };
-  }, [grid, simulated]);
+  // Another fire starts on the observed layer.
+  useEffect(() => setLayer("observed"), [fireId]);
 
   const windowOptions = useMemo((): SegmentedOption<Window>[] => {
     const full = observed?.horizonMinutes ?? Infinity;
@@ -238,7 +147,7 @@ export default function HistoricalFireDiorama({ fireId, onSelectFire, onExit }: 
     try {
       created = new FireDioramaScene(host, { reducedMotion });
     } catch (cause) {
-      setSceneError(message(cause, "WebGL could not be initialised."));
+      setSceneError(errorMessage(cause, "WebGL could not be initialised."));
       return;
     }
     sceneRef.current = created;
@@ -391,7 +300,7 @@ export default function HistoricalFireDiorama({ fireId, onSelectFire, onExit }: 
                 : ""}
           </p>
           <div className="fr-error-actions">
-            <Button onClick={() => setAttempt((v) => v + 1)}>Retry</Button>
+            <Button onClick={retry}>Retry</Button>
             <Button variant="secondary" onClick={onExit}>
               Back to simulator
             </Button>
