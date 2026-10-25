@@ -176,7 +176,14 @@
 }
 .studio-diorama__buttons {
   display: flex;
+  align-items: center;
   gap: var(--ct-space-1);
+}
+.studio-diorama__zoom-label {
+  font-size: var(--ct-text-sm, 13px);
+  font-weight: 600;
+  color: var(--ct-ink-muted, inherit);
+  margin-right: var(--ct-space-1);
 }
 .studio-region.ui-panel {
   display: grid;
