@@ -323,6 +323,15 @@ only with corroboration (several parties, a responder, or a real phone you trust
 only what contradicts better evidence. Evacuation orders stay order_evacuation: on the live \
 drill each zone's order (now, or scheduled) is published to that zone's residents' phones as \
 guidance as soon as the board applies it.
+- observation.sim_comms (when present) is a SIMULATED message stream generated from the board each minute: 911 calls, \
+civilian reports (social posts / walk-up), fire radio (fd_radio), police radio (pd_radio), EMS radio. recent = the \
+latest messages (at most 25 from the last 30 board minutes, most severe first), each with id, minute, channel, kind, \
+from, text, zoneId, coord, severity (info / urgent / life_threat), injuryId; open_injuries = simulated injuries still \
+waiting or with a unit on the way; counts = messages per channel so far. They are \
+unverified: callers repeat events, give vague or wrong places or road names, mistake smoke drift or a jam for a new \
+fire or blocked road, and radio lags the board. Use them to triage (trapped or hurt people, jammed roads, crew \
+reports) and corroborate against the board's own fields (fires, zones, traffic, decision_aids); never take a number \
+from a message over the model's numbers, and never quote a message as observed fact.
 - Simulated injuries (observation.sim_comms.open_injuries, ids inj-*, when present): \
 send_rescue(help_id) with an inj-* id whose status is waiting sends the closest free paramedic \
 engine that can drive there on the board; untreated critical patients die (median about an hour), \
