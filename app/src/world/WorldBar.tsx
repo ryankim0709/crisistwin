@@ -6,6 +6,7 @@ import type { Scenario, WorldWriter } from "./contracts";
 import { ScenarioMenu } from "./ScenarioMenu";
 import { useWorld } from "./useWorld";
 import { WRITER_LABEL, type WorldSync } from "./useWorldSync";
+import { RANDOM_NOTE_KEY, readRandomNote, type RandomNote } from "./randomScenario";
 import "./world.css";
 
 function ago(iso: string | null, now: number): string {
@@ -19,14 +20,14 @@ function ago(iso: string | null, now: number): string {
   return h < 48 ? `${h} h ago` : `${Math.round(h / 24)} d ago`;
 }
 
-function syncStatusText(sync: WorldSync, now: number): string {
+function syncStatusText(sync: WorldSync, now: number, random: string | null): string {
   if (!sync.enabled) return "Not synced: changes here stay in this tab";
   if (!sync.loaded) return sync.status === "error" ? "Shared world unavailable" : "Connecting to the shared world…";
   if (sync.status === "saving") return "Synced with other tabs · saving…";
   if (sync.error) return sync.error;
   const { updatedBy, updatedAt, revision } = sync.world;
   if (revision === 0 || !updatedBy) return "Synced with other tabs";
-  return `Synced with other tabs · changed by ${WRITER_LABEL[updatedBy]} ${ago(updatedAt, now)}`;
+  return `Synced with other tabs${random ? ` · ${random}` : ""} · changed by ${WRITER_LABEL[updatedBy]} ${ago(updatedAt, now)}`;
 }
 
 const utcDay = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeZone: "UTC" });
@@ -76,6 +77,19 @@ export function WorldBar({ tab, sync, getExtras, onLoaded, placement, align, cla
     const id = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(id);
   }, []);
+  // A random scenario another tab drew (world/randomScenario.ts), while the world still holds its seed.
+  const [note, setNote] = useState<RandomNote | null>(() => readRandomNote());
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === RANDOM_NOTE_KEY) setNote(readRandomNote());
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+  const random =
+    note && note.by !== tab && sync.world.seed === note.seed
+      ? `Random scenario from ${WRITER_LABEL[note.by]} · seed ${note.seed}`
+      : null;
   const failing = sync.enabled && (sync.status === "error" || !!sync.error);
   return (
     <div className={cx("wld-bar", className)}>
@@ -88,7 +102,7 @@ export function WorldBar({ tab, sync, getExtras, onLoaded, placement, align, cla
         syncEnabled={sync.enabled}
       />
       <span className="wld-bar__status" data-state={failing ? "error" : undefined}>
-        {syncStatusText(sync, now)}
+        {syncStatusText(sync, now, random)}
       </span>
       <label className="wld-bar__toggle">
         <input type="checkbox" checked={!sync.enabled} onChange={(e) => sync.setEnabled(!e.target.checked)} />

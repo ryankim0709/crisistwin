@@ -87,6 +87,7 @@ import { firstLoadSeconds, readinessLabel, useCachedBoards } from "../fire/useCa
 import { boardCellMetersFor } from "../fire/boardSize";
 import { WorldBar } from "../world/WorldBar";
 import { useStudioWorldSync } from "./useStudioWorldSync";
+import { announceRandom } from "../world/randomScenario";
 import { CALIFORNIA_REGIONS, REGION_AREAS } from "../fire/regions";
 import type { DioramaIgnition, DioramaRun, FireDioramaSceneApi } from "../fire/diorama/types";
 import "./studio.css";
@@ -730,11 +731,12 @@ export default function SimulationStudioPage({
       applyScenario(built.scenario);
       setSelectedId(null);
       setRandomSummary(built.summary);
+      announceRandom(worldTab, job.seed);
       setRecenterKey(built.scenario.id);
       showNotice("Random scenario built (simulated).");
       setPendingRun({ scenario: built.scenario, waited: false });
     });
-  }, [randomJob, regionId, regionGrid, streets.status, area, placement, applyScenario, showNotice, noteRandom]);
+  }, [randomJob, regionId, regionGrid, streets.status, area, placement, applyScenario, showNotice, noteRandom, worldTab]);
 
   // Run once the first fire's crew bases are in (or after a short wait).
   useEffect(() => {
@@ -749,7 +751,7 @@ export default function SimulationStudioPage({
     return () => window.clearTimeout(handle);
   }, [pendingRun, scenario, suppressionBases, handleRun]);
 
-  const randomControls = !Aside ? (
+  const randomControls = (
     <div className="studio-random">
       <div className="studio-row">
         <Button
@@ -793,7 +795,7 @@ export default function SimulationStudioPage({
       </label>
       {randomSummary && <p className="studio-hint">{randomSummary} (simulated)</p>}
     </div>
-  ) : null;
+  );
 
   const toggleClosure = useCallback(
     (edge: number) => {
