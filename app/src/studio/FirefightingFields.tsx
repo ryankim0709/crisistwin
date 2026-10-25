@@ -50,7 +50,10 @@ function Details({ resources }: { resources: MapResources }) {
   for (const u of [...fleet.units, ...fleet.aircraft]) counts.set(u.kind, (counts.get(u.kind) ?? 0) + 1);
   const order = (f: MapResources["fleet"]["facilities"][number]) =>
     f.facility === "air_attack_base" || f.facility === "helitack_base" ? 2 : f.tier === "closest" ? 0 : 1;
-  const facilities = [...fleet.facilities].sort((a, b) => order(a) - order(b) || (a.km ?? 0) - (b.km ?? 0));
+  // Stations in the area and air bases in reach; mutual aid is counted in the summary above.
+  const facilities = fleet.facilities
+    .filter((f) => order(f) !== 1)
+    .sort((a, b) => order(a) - order(b) || (a.km ?? 0) - (b.km ?? 0));
   return (
     <>
       <p className="studio-hint">{summary.local}.</p>
