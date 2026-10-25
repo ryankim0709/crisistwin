@@ -7,15 +7,24 @@ import type { StudioScenario } from "./contracts";
 import { parseScenario } from "./scenario";
 
 export const DRAFT_STORAGE_KEY = "crisistwin.simulationStudio.draft.v1";
+/**
+ * Version of the Studio's defaults a draft was saved under. 2: firefighting (the first-alarm
+ * package from real stations) is on by default. A draft saved before (no version) is migrated
+ * once by the page; after that the user's own choice is kept.
+ */
+export const DRAFT_DEFAULTS_VERSION = 2;
 
 interface StoredDraft {
   savedAtIso: string;
   scenario: unknown;
+  defaults?: number;
 }
 
 export interface LoadedDraft {
   scenario: StudioScenario;
   savedAt: Date;
+  /** DRAFT_DEFAULTS_VERSION it was saved under (1 for drafts saved before versions existed). */
+  defaultsVersion: number;
 }
 
 /** The saved draft, or null when none exists, storage is unavailable or the data is invalid. */
@@ -28,7 +37,11 @@ export function loadDraft(key: string = DRAFT_STORAGE_KEY): LoadedDraft | null {
     const { scenario } = parseScenario(stored.scenario);
     if (!scenario) return null;
     const savedAt = new Date(typeof stored.savedAtIso === "string" ? stored.savedAtIso : NaN);
-    return { scenario, savedAt: Number.isNaN(savedAt.getTime()) ? new Date(0) : savedAt };
+    return {
+      scenario,
+      savedAt: Number.isNaN(savedAt.getTime()) ? new Date(0) : savedAt,
+      defaultsVersion: typeof stored.defaults === "number" ? stored.defaults : 1,
+    };
   } catch {
     return null;
   }
@@ -41,7 +54,11 @@ export function saveDraft(
 ): Date | null {
   try {
     const savedAt = new Date();
-    const stored: StoredDraft = { savedAtIso: savedAt.toISOString(), scenario };
+    const stored: StoredDraft = {
+      savedAtIso: savedAt.toISOString(),
+      scenario,
+      defaults: DRAFT_DEFAULTS_VERSION,
+    };
     window.localStorage.setItem(key, JSON.stringify(stored));
     return savedAt;
   } catch {
