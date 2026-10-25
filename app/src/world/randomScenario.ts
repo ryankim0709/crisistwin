@@ -15,6 +15,7 @@
  *   test choice, not a claim about typical starts.
  *   No ignition lies within EDGE_MARGIN_METERS of the board edge (roads beyond the edge are not
  *   loaded, so "away" cannot be checked there either).
+ *   Extra fires lie within the run's fire-spacing limit (studio/bounds.ts) of the earlier ones.
  * - Date: the region's typical peak-season date (from /api/conditions/presets) plus or minus three
  *   weeks.
  */
@@ -25,6 +26,7 @@ import { CALIFORNIA_REGIONS } from "../fire/regions";
 import { DEVELOPED_FUEL_CODE, type GeoPoint } from "../fire/spread";
 import type { FireWeatherSeries } from "../fire/weatherSeries";
 import { MAX_WEATHER_HOURS } from "../fire/horizon";
+import { MAX_IGNITION_EXTENT_METERS, pointsExtentMeters } from "../studio/bounds";
 import { MAX_WIND_SPEED_MPH } from "../studio/contracts";
 import {
   fetchConditionPresets,
@@ -99,6 +101,13 @@ const AWAY_METERS = 1000;
  * on boards too small to leave any ground inside it.
  */
 const EDGE_MARGIN_METERS = 3000;
+/**
+ * Fires drawn together stay within the spacing one Studio run can cover (`spanProblem` refuses
+ * more), less this slack for the box's snapping and latitude scaling; the generator must never
+ * draw a scenario the page rejects. A loaded region board is not exempt: validation is
+ * board-independent, so the limit applies there too.
+ */
+const SPACING_SLACK_METERS = 300;
 
 interface Candidate {
   cell: number;
@@ -284,7 +293,14 @@ export async function drawRandomScenario(input: RandomDrawInput): Promise<Random
   const ignitions: RandomIgnition[] = [];
   const picked: Candidate[] = [];
   for (let i = 0; i < count; i++) {
-    const pool = picked.length ? candidates.filter((c) => !picked.some((p) => p.cell === c.cell)) : candidates;
+    const pool = picked.length
+      ? candidates.filter(
+          (c) =>
+            !picked.some((p) => p.cell === c.cell) &&
+            pointsExtentMeters([...picked.map((p) => p.point), c.point]) <=
+              MAX_IGNITION_EXTENT_METERS - SPACING_SLACK_METERS,
+        )
+      : candidates;
     if (pool.length === 0) break;
     const choice = choose(pool, placement, rand);
     picked.push(choice);
