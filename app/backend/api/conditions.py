@@ -40,7 +40,7 @@ from rest_framework.throttling import AnonRateThrottle
 
 from .dispatch_area import _error
 from .live.twin_service import REPO_ROOT
-from .mongodb import get_database
+from .mongodb import get_cache_database
 from .scenario_weather import DEFAULT_HOURS, MAX_HOURS, _number, _parse_start, add_20ft_wind
 
 logger = logging.getLogger(__name__)
@@ -83,7 +83,7 @@ def _iso(t: datetime) -> str:
 
 def _cache_get(key: str) -> dict | None:
     try:
-        doc = get_database()[COLLECTION].find_one({"_id": key, "schema": CACHE_SCHEMA})
+        doc = get_cache_database()[COLLECTION].find_one({"_id": key, "schema": CACHE_SCHEMA})
     except _MONGO_ERRORS:
         logger.warning("conditions cache read failed; computing without it")
         return None
@@ -103,7 +103,7 @@ def _cache_put(key: str, body: dict, forecast: bool) -> None:
     if forecast:
         doc["expiresAt"] = now + timedelta(seconds=FORECAST_CACHE_SECONDS)
     try:
-        get_database()[COLLECTION].replace_one({"_id": key}, doc, upsert=True)
+        get_cache_database()[COLLECTION].replace_one({"_id": key}, doc, upsert=True)
     except _MONGO_ERRORS:
         logger.warning("conditions cache write failed; continuing without it")
 

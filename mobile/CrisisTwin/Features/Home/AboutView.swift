@@ -33,6 +33,8 @@ struct AboutView: View {
                 }
                 .ctPanel()
 
+                ProfileCard()
+
                 ServerSettingsCard { retry() }
             }
             .ctScreenPadding()
@@ -107,5 +109,113 @@ struct AboutView: View {
             }
             connection = .failed(message: message)
         }
+    }
+}
+
+/// Nickname, kind and location sharing for the drill's controller. Short on purpose.
+@MainActor
+private struct ProfileCard: View {
+    @Environment(LiveStore.self) private var store
+    @Environment(LocationProvider.self) private var location
+
+    var body: some View {
+        @Bindable var store = store
+        VStack(alignment: .leading, spacing: 12) {
+            PlanCardHeader("You")
+            TextField("Name (optional)", text: $store.displayName)
+                .textInputAutocapitalization(.words)
+                .submitLabel(.done)
+                .onSubmit { store.syncProfile() }
+                .onChange(of: store.displayName) { _, name in
+                    if name.count > 24 { store.displayName = String(name.prefix(24)) }
+                }
+                .frame(minHeight: 44)
+            Picker("I am", selection: kindBinding) {
+                ForEach(ParticipantKind.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            Toggle("Share my location", isOn: $store.shareResponderLocation)
+                .tint(Color.ctBrand)
+                .frame(minHeight: 44)
+            if store.shareResponderLocation, !location.isAuthorized, location.authorization != .notDetermined {
+                Text("Location is off for this app.")
+                    .font(.subheadline)
+                    .foregroundStyle(Color.ctInkMuted)
+            }
+        }
+        .font(.subheadline)
+        .foregroundStyle(Color.ctInk)
+        .ctPanel()
+        .onDisappear { store.syncProfile() }
+    }
+
+    private var kindBinding: Binding<ParticipantKind> {
+        Binding(
+            get: { store.participantKind ?? (store.role == .responder ? .firefighter : .resident) },
+            set: { store.participantKind = $0; store.syncProfile() })
+    }
+}
+
+/// Shown once when the phone first joins: nickname, kind and location consent.
+@MainActor
+struct FirstJoinSheet: View {
+    @Environment(LiveStore.self) private var store
+    @Environment(LocationProvider.self) private var location
+    @State private var name = ""
+    @State private var kind: ParticipantKind?
+
+    private var automatic: ParticipantKind { store.role == .responder ? .firefighter : .resident }
+    private var selected: ParticipantKind { kind ?? automatic }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("What should we call you?").font(.ctTitle)
+                    TextField("Name (optional)", text: $name)
+                        .textInputAutocapitalization(.words)
+                        .padding(12)
+                        .background(Color.ctBrandSoft, in: .rect(cornerRadius: 12))
+                        .onChange(of: name) { _, value in
+                            if value.count > 24 { name = String(value.prefix(24)) }
+                        }
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("I'm a…").font(.ctTitle)
+                    Picker("I'm a", selection: Binding(get: { selected }, set: { kind = $0 })) {
+                        ForEach(ParticipantKind.allCases) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Share my location with the drill?").font(.ctTitle)
+                    Text("So the controller can see where people are.")
+                        .font(.subheadline)
+                        .foregroundStyle(Color.ctInkMuted)
+                    HStack(spacing: 12) {
+                        Button("Not now") { finish(share: false) }
+                            .buttonStyle(FieldPill(minHeight: 50))
+                        Button("Yes") {
+                            location.requestPermission()
+                            finish(share: true)
+                        }
+                        .buttonStyle(FieldPill(primary: true, minHeight: 50))
+                    }
+                }
+                Button("Skip") { finish(share: false, skip: true) }
+                    .font(.subheadline)
+                    .foregroundStyle(Color.ctInkMuted)
+                    .frame(maxWidth: .infinity, minHeight: 44)
+            }
+            .foregroundStyle(Color.ctInk)
+            .ctScreenPadding()
+            .padding(.top, 24)
+        }
+        .ctScreenBackground()
+        .presentationDetents([.large])
+    }
+
+    private func finish(share: Bool, skip: Bool = false) {
+        store.completeProfileSetup(name: skip ? "" : name, kind: skip ? automatic : selected, shareLocation: share)
     }
 }

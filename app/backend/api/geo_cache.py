@@ -33,7 +33,7 @@ from django.http import HttpResponse
 from django.views.decorators.http import require_GET
 from pymongo.errors import PyMongoError
 
-from .mongodb import get_database
+from .mongodb import get_cache_database
 
 logger = logging.getLogger(__name__)
 
@@ -197,7 +197,7 @@ def _serve(request, kind: str, key: str, fetch, accept, default_type: str) -> Ht
         return HttpResponse(status=304, headers={"ETag": etag, "Cache-Control": CACHE_CONTROL})
     collection = None
     try:
-        collection = get_database()[COLLECTION]
+        collection = get_cache_database()[COLLECTION]
         doc = collection.find_one({"_id": key}, projection={"body": 1, "contentType": 1})
         if doc is not None:
             return _binary(bytes(doc["body"]), doc.get("contentType") or default_type, etag, "HIT")
