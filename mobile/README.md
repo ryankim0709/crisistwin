@@ -259,6 +259,13 @@ location on that screen; it is saved on the phone and the zone is worked out loc
 says it is a simulation drill, not an emergency service. Needs the Docker stack and a web
 page broadcasting.
 
+**Your address (Home) and Address (About):** the phone can check a simulated home of the live drill
+instead of its GPS position (`GET /api/live/incidents/<id>/homes`, see
+[`docs/app-integration.md`](../docs/app-integration.md) "Homes"). Home then shows the live order and
+route for that home's zone, plus the household and its simulated story. A fresh install picks a home in
+a zone with an order; About → Address → My location goes back to GPS. Code: `Features/Home/HomeHero.swift`
+(`HomeAddressPanel`, `HomeAddressCard`, `HomeAddressPicker`) and `LiveStore.home`.
+
 A **Your home** section at the top of the screen shows the per-home advice from Simulation
 Studio's published evacuation run (`GET /api/sim-state/advice?lon=&lat=`, see
 [`docs/sim-state-api.md`](../docs/sim-state-api.md)): leave now, leave at T+h:mm (in N min),

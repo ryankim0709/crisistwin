@@ -354,3 +354,31 @@ for help is still a departing vehicle in the twin: at most 200 households agains
 
 `GET /api/live/participants` (devices seen in the last hour) also lists their devices, with
 `simulated: true`, `name: "Simulated N"` and no location; merge by `party_key` = `id`.
+
+## Homes
+
+`GET /api/live/incidents/<id>/homes?q=&id=&limit=` (any role; a phone's civilian token is enough) lists
+the incident's simulated people as homes, for the phone's address setting. Read-only; `404 unknown_home`
+for an unknown `id`; `limit` 1-200 (default 50); `q` is a case-insensitive substring of the address.
+
+```json
+{"incident_id": "camp-2018-drill", "label": "Simulated people ...", "evidence_class": "simulated",
+ "notice": "Simulated households of the drill. Addresses are made up from the nearest road; household and story are simulated.",
+ "total": 60,
+ "homes": [{"id": "sim_48db3ea34b8b4add", "address": "806 Green Ridge Place", "address_basis": "synthetic",
+            "coord": [-121.59102, 39.87472], "zone": {"id": "bg:060070017042", "name": "Block Group 2, Census Tract 17.04"},
+            "household": {"has_vehicle": true, "vehicles_taken": 1, "has_pets": true, "needs_assistance": false},
+            "story": ["first heard of the fire: saw fire", "left before any official warning", "..."],
+            "status": "Helping neighbours", "flags": ["Went back"], "evidence_class": "simulated"}]}
+```
+
+`coord` is WGS84 `[lon, lat]`, the person's home point. `story` is the person's `narrative`, `status` and
+`flags` are what the participants list shows now (the call advances the people to the drill clock). The
+address is made up on read: the nearest named road of the drill's road network within 1 km, and an even
+house number from a hash of the person's id (deduplicated); with no road that close, "Home <n>, <zone>".
+Code: `app/backend/api/live/homes.py`.
+
+The phone (Home "Your address", About "Address") uses the picked home's point in place of its GPS fix to
+find its zone on the device, so the order, route and fire it shows are the live `situation`'s for that
+address. The home point is never posted as the device's location. A fresh install picks the first home
+whose zone has an order (else the first home) until the person chooses a home or "My location".

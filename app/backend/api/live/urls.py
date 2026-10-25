@@ -2,6 +2,7 @@ from django.urls import path
 
 from . import (
     events,
+    homes,
     injects,
     packages,
     participants,
@@ -57,6 +58,7 @@ urlpatterns = [
     path("incidents/<str:incident_id>/people", views.twin_people, name="live-people"),
     path("incidents/<str:incident_id>/participants", participants.incident_participants, name="live-incident-participants"),
     path("incidents/<str:incident_id>/virtual-people", virtual_people.virtual_people, name="live-virtual-people"),
+    path("incidents/<str:incident_id>/homes", homes.homes, name="live-homes"),
     path(
         "incidents/<str:incident_id>/participants/<str:participant_id>/phone-view",
         phone_view.phone_view,

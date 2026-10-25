@@ -35,6 +35,8 @@ struct AboutView: View {
 
                 ProfileCard()
 
+                HomeAddressCard()
+
                 ServerSettingsCard { retry() }
             }
             .ctScreenPadding()

@@ -752,3 +752,48 @@ enum LiveJSON {
         return d
     }()
 }
+
+// MARK: - Simulated homes
+
+/// `GET incidents/<id>/homes`: simulated households of the drill, each with a made-up address.
+struct DrillHomes: Decodable {
+    var notice: String
+    var total: Int
+    var homes: [DrillHome]
+}
+
+/// One simulated household (a simulated person of the live drill). Everything is simulated: the
+/// address is made up from the nearest road, the household and its story are drawn by the model.
+struct DrillHome: Codable, Equatable, Identifiable {
+    struct Zone: Codable, Equatable {
+        var id: String
+        var name: String?
+    }
+    struct Household: Codable, Equatable {
+        var hasVehicle: Bool
+        var vehiclesTaken: Int?
+        var hasPets: Bool?
+        var needsAssistance: Bool?
+    }
+    var id: String
+    var address: String
+    var coord: LonLat
+    var zone: Zone
+    var household: Household
+    var story: [String]
+    var status: String?
+    var flags: [String]
+
+    /// "2 cars · pets · needs help leaving"
+    var householdLine: String {
+        var parts: [String] = []
+        if !household.hasVehicle {
+            parts.append("No car")
+        } else if let n = household.vehiclesTaken, n > 0 {
+            parts.append(n == 1 ? "1 car" : "\(n) cars")
+        }
+        if household.hasPets == true { parts.append("pets") }
+        if household.needsAssistance == true { parts.append("needs help leaving") }
+        return parts.joined(separator: " · ")
+    }
+}
