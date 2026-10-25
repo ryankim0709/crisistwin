@@ -1,5 +1,6 @@
 from django.urls import include, path, re_path
 
+from .conditions import conditions, conditions_presets
 from .demo import demo_decide, demo_routes
 from .demo_realism import demo_crew_routes, demo_environment, demo_wind
 from .dispatch import decide
@@ -38,6 +39,8 @@ urlpatterns = [
     path("dispatch/decide", decide, name="dispatch-decide"),
     path("dispatch/area", dispatch_area, name="dispatch-area"),
     path("weather/scenario", scenario_weather, name="weather-scenario"),
+    path("conditions", conditions, name="conditions"),
+    path("conditions/presets", conditions_presets, name="conditions-presets"),
     path("suppression/bases", suppression_bases, name="suppression-bases"),
     path("demo/routes", demo_routes, name="demo-routes"),
     path("demo/decide", demo_decide, name="demo-decide"),
